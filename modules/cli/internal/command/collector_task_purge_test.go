@@ -346,10 +346,6 @@ func (f *fakeCollectorStorageMetadataClient) DeleteView(_ context.Context, req *
 	return &storagepb.DeleteViewRsp{RetInfo: storageOKForCollectorPurge()}, nil
 }
 
-func (f *fakeCollectorStorageMetadataClient) DeleteDatasetRows(_ context.Context, _ *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	return &storagepb.PrimaryDeleteDatasetRowsRsp{RetInfo: storageOKForCollectorPurge()}, nil
-}
-
 func storageOKForCollectorPurge() *storagepb.RetInfo {
 	return &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}
 }

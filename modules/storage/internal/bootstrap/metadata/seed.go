@@ -147,7 +147,7 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, DataSourceId: item.DataSourceID,
 			Name: item.Name, Description: item.Description, DataKind: parseDataKind(item.DataKind),
 			Freq: item.Freq, Attributes: item.Attributes,
-			DataNodeId: item.DataNodeID, SubjectTags: subjectTags,
+			SubjectTags: subjectTags,
 		}); err != nil {
 			return result, seedErr("dataset", item.DatasetID, err)
 		}
@@ -389,18 +389,15 @@ type seedTag struct {
 
 // seedDataset 描述待初始化的 Dataset 元数据。
 type seedDataset struct {
-	SpaceID      string `yaml:"space_id"`
-	DatasetID    string `yaml:"dataset_id"`
-	DataSourceID string `yaml:"data_source_id"`
-	// DataNodeID 已不再使用：Storage 只原样保存，种子去掉 data_node_id 后删除。
-	DataNodeID  string            `yaml:"data_node_id"`
-	Name        string            `yaml:"name"`
-	Description string            `yaml:"description"`
-	DataKind    string            `yaml:"data_kind"`
-	Freq        string            `yaml:"freq"`
-	SubjectTags []string          `yaml:"subject_tags"`
-	Status      string            `yaml:"status"`
-	Attributes  map[string]string `yaml:"attributes"`
+	SpaceID      string            `yaml:"space_id"`
+	DatasetID    string            `yaml:"dataset_id"`
+	DataSourceID string            `yaml:"data_source_id"`
+	Name         string            `yaml:"name"`
+	Description  string            `yaml:"description"`
+	DataKind     string            `yaml:"data_kind"`
+	Freq         string            `yaml:"freq"`
+	SubjectTags  []string          `yaml:"subject_tags"`
+	Attributes   map[string]string `yaml:"attributes"`
 }
 
 // seedField 描述待初始化的字段定义。

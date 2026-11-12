@@ -190,7 +190,7 @@ func TestHostMaterialSeparatesTargetAndOperatorIdentities(t *testing.T) {
 		operator   bool
 	}{
 		{"control", []string{"admin", "console-proxy", "access"}, true},
-		{"storage", []string{"storage-primary", "storage-node", "storage-view"}, false},
+		{"storage", []string{"storage-primary", "storage-view"}, false},
 		{"compute1", []string{"access", "egress-proxy", "trade"}, false},
 		{"host-only", nil, false},
 	} {

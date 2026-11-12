@@ -78,7 +78,7 @@ func TestImportEntitiesCreatesActiveDatasetsAndKeepsStatusOnReimport(t *testing.
 		DataSources: []seedDataSource{{SpaceID: "space", DataSourceID: "source", Name: "Source", Status: "active"}},
 		Datasets: []seedDataset{{
 			SpaceID: "space", DatasetID: "dataset", DataSourceID: "source", Name: "Dataset",
-			DataKind: "time_series", Freq: "1m", Status: "active",
+			DataKind: "time_series", Freq: "1m",
 		}},
 	}
 	result, err := importEntities(ctx, store, seed)

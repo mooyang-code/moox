@@ -898,8 +898,8 @@ func TestBuilderReturnsBoundedEmptyOverviewWhenSourcesAreDisabled(t *testing.T) 
 func TestOverviewReportsStorageOutboxBacklogBeforeDatasetWatermarkStalls(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-node", "storage-node@storage", "moox_storage_outbox_pending_entries", `{}`, 42, now)
-		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-node", "storage-node@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 181, now)
+		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-primary", "storage-primary@storage", "moox_storage_outbox_pending_entries", `{}`, 42, now)
+		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-primary", "storage-primary@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 181, now)
 	})
 	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	if err != nil {
@@ -920,8 +920,8 @@ func TestOverviewReportsStorageOutboxBacklogBeforeDatasetWatermarkStalls(t *test
 func TestOverviewKeepsShortStorageOutboxBacklogHealthy(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-node", "storage-node@storage", "moox_storage_outbox_pending_entries", `{}`, 3, now)
-		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-node", "storage-node@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 20, now)
+		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-primary", "storage-primary@storage", "moox_storage_outbox_pending_entries", `{}`, 3, now)
+		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-primary", "storage-primary@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 20, now)
 	})
 	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	if err != nil {

@@ -1,6 +1,6 @@
 package command
 
-// 空间与元数据：空间、数据来源、标的、标签、数据集、字段、View、设备、存储节点，以及行与记录的读取。
+// 空间与元数据：空间、数据来源、标的、标签、数据集、字段、View、设备，以及行与记录的读取。
 
 const (
 	spaceMgr    = "trpc.moox.admin.SpaceMgr"
@@ -37,7 +37,6 @@ func init() {
 		strFlag("data-kind", "dataset.data_kind", "数据类型，如 DATA_KIND_TIME_SERIES"),
 		strFlag("frequency", "dataset.freq", "频率"),
 		strFlag("status", "dataset.status", "状态"),
-		strFlag("data-node-id", "dataset.data_node_id", "绑定的存储节点"),
 	}
 	datasetFlagsRequiringName := func() []rpcFlag {
 		flags := append([]rpcFlag{}, datasetFlags...)
@@ -100,25 +99,19 @@ func init() {
 			Flags: []rpcFlag{reqFlag("tag-id", "tag_id", "标签 ID"), listFlag("subject-id", "subject_ids", "标的，可重复"), reqFlag("status", "status", "状态：active、inactive")}},
 
 		rpcSpec{Path: []string{"metadata", "dataset", "list"}, Short: "列出数据集", Service: metadataSvc, Method: "ListDatasets", SpaceField: "space_id", Page: rpcPageSize,
-			Flags: []rpcFlag{strFlag("data-source-id", "data_source_id", "按数据来源过滤"), strFlag("data-kind", "data_kind", "按数据类型过滤"), strFlag("frequency", "freq", "按频率过滤"), strFlag("data-node-id", "data_node_id", "按存储节点过滤")}},
+			Flags: []rpcFlag{strFlag("data-source-id", "data_source_id", "按数据来源过滤"), strFlag("data-kind", "data_kind", "按数据类型过滤"), strFlag("frequency", "freq", "按频率过滤")}},
 		rpcSpec{Path: []string{"metadata", "dataset", "show"}, Short: "查看数据集", Service: metadataSvc, Method: "GetDataset", SpaceField: "space_id",
 			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID")}},
 		rpcSpec{Path: []string{"metadata", "dataset", "columns"}, Short: "列出数据集的列", Service: metadataSvc, Method: "ListDatasetColumns", SpaceField: "space_id", Page: rpcPageSize,
 			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID")}},
 		rpcSpec{Path: []string{"metadata", "dataset", "subjects"}, Short: "列出数据集里有数据的标的", Service: metadataSvc, Method: "ListDatasetSubjects", SpaceField: "space_id", Page: rpcPageSize,
 			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID"), strFlag("subject-id", "subject_id", "只看这个标的")}},
-		rpcSpec{Path: []string{"metadata", "dataset", "activation"}, Short: "检查数据集能否激活", Service: metadataSvc, Method: "CheckDatasetActivation", SpaceField: "space_id",
-			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID")}},
 		rpcSpec{Path: []string{"metadata", "dataset", "create"}, Short: "创建数据集（保留期不在这里设：由 Storage 的保留策略文件按空间与频率决定）", Service: metadataSvc, Method: "CreateDataset", SpaceField: "dataset.space_id", Flags: datasetFlagsRequiringName},
-		rpcSpec{Path: []string{"metadata", "dataset", "update"}, Merge: mergeViaGet("GetDataset", map[string]string{"space_id": "dataset.space_id", "dataset_id": "dataset.dataset_id"}, "dataset", "dataset", "space_id", "dataset_id", "name", "description", "attributes", "subject_tags"), Short: "修改数据集的名称、说明与状态（数据来源、类型、频率、存储节点创建后不可变，换节点用 rebind）", Service: metadataSvc, Method: "UpdateDataset", SpaceField: "dataset.space_id", Flags: datasetFlags},
+		rpcSpec{Path: []string{"metadata", "dataset", "update"}, Merge: mergeViaGet("GetDataset", map[string]string{"space_id": "dataset.space_id", "dataset_id": "dataset.dataset_id"}, "dataset", "dataset", "space_id", "dataset_id", "name", "description", "attributes", "subject_tags"), Short: "修改数据集的名称、说明与状态（数据来源、类型、频率创建后不可变）", Service: metadataSvc, Method: "UpdateDataset", SpaceField: "dataset.space_id", Flags: datasetFlags},
 		rpcSpec{Path: []string{"metadata", "dataset", "add-column"}, Short: "给数据集加列（或修改列）", Service: metadataSvc, Method: "UpsertDatasetColumn", SpaceField: "column.space_id",
 			Flags: []rpcFlag{reqFlag("dataset-id", "column.dataset_id", "数据集 ID"), reqFlag("column-name", "column.column_name", "列名"), strFlag("origin-type", "column.origin_type", "来源类型"),
 				strFlag("origin-id", "column.origin_id", "来源 ID（字段 ID）"), strFlag("value-type", "column.value_type", "值类型"), boolFlag("required", "column.required", "是否必填"), strFlag("status", "column.status", "状态")}},
-		rpcSpec{Path: []string{"metadata", "dataset", "activate"}, Short: "激活数据集", Service: metadataSvc, Method: "ActivateDataset", SpaceField: "space_id",
-			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID"), intFlag("expected-revision", "expected_revision", "期望的版本号（乐观锁）")}},
-		rpcSpec{Path: []string{"metadata", "dataset", "rebind"}, Short: "把数据集换绑到另一个存储节点（默认只预览，--yes 才执行）", Service: metadataSvc, Method: "RebindDatasetDataNode", SpaceField: "space_id", Destructive: true,
-			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID"), reqFlag("data-node-id", "data_node_id", "目标存储节点"), intFlag("expected-revision", "expected_revision", "期望的版本号（乐观锁）")}},
-		rpcSpec{Path: []string{"metadata", "dataset", "delete"}, Short: "删除数据集的元数据（默认只预览，--yes 才执行；删除采集结果用 collector task delete-result）", Service: metadataSvc, Method: "DeleteDataset", SpaceField: "space_id", Destructive: true,
+		rpcSpec{Path: []string{"metadata", "dataset", "delete"}, Short: "删除数据集（服务端先删元数据再删行；默认只预览，--yes 才执行；删除采集结果用 collector task delete-result）", Service: metadataSvc, Method: "DeleteDataset", SpaceField: "space_id", Destructive: true,
 			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID")}},
 
 		rpcSpec{Path: []string{"metadata", "field", "list"}, Short: "列出字段", Service: metadataSvc, Method: "ListFields", SpaceField: "space_id", Page: rpcPageSize,
@@ -170,11 +163,6 @@ func init() {
 			Flags: []rpcFlag{reqFlag("device-id", "device.device_id", "设备 ID"), strFlag("name", "device.name", "名称"), strFlag("engine", "device.engine", "引擎"), strFlag("endpoint", "device.endpoint", "地址"), strFlag("status", "device.status", "状态")}},
 		rpcSpec{Path: []string{"metadata", "device", "update"}, Merge: mergeViaGet("GetDevice", map[string]string{"device_id": "device.device_id"}, "device", "device"), Short: "修改存储设备", Service: metadataSvc, Method: "UpdateDevice", NoSpace: true,
 			Flags: []rpcFlag{reqFlag("device-id", "device.device_id", "设备 ID"), strFlag("name", "device.name", "名称"), strFlag("engine", "device.engine", "引擎"), strFlag("endpoint", "device.endpoint", "地址"), strFlag("status", "device.status", "状态")}},
-
-		rpcSpec{Path: []string{"storage", "node", "list"}, Short: "列出存储节点登记", Service: metadataSvc, Method: "ListDataNodes", NoSpace: true, Page: rpcPageSize,
-			Flags: []rpcFlag{strFlag("status", "status", "按状态过滤")}},
-		rpcSpec{Path: []string{"storage", "node", "show"}, Short: "查看存储节点登记", Service: metadataSvc, Method: "GetDataNode", NoSpace: true,
-			Flags: []rpcFlag{reqFlag("node-id", "node_id", "存储节点 ID")}},
 
 		rpcSpec{Path: []string{"data", "records", "search"}, Short: "检索记录型 View（Bleve）的数据", Service: dataViewSvc, Method: "SearchRecordRows", SpaceField: "space_id", Page: rpcPageSize,
 			Flags: []rpcFlag{reqFlag("view-id", "view_id", "View ID"), strFlag("text-query", "text_query", "全文检索语句"), listFlag("column", "column_names", "返回的列，可重复"), jsonFlag("filter", "filter", "过滤条件 JSON")}},

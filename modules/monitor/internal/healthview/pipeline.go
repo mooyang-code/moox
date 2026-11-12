@@ -15,7 +15,7 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 	}{
 		{"collection", []string{"collector"}},
 		// 入库与视图分成两个环节：入库是 Storage 写入水位，视图是 View 提交水位，同一数据可能一边正常一边落后。
-		{"storage", []string{"storage-primary", "storage-node"}},
+		{"storage", []string{"storage-primary"}},
 		{"view", []string{"storage-view"}},
 		{"factor", []string{"factor-mgr"}},
 		{"strategy", []string{"strategy"}},

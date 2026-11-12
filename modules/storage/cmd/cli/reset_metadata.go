@@ -161,7 +161,7 @@ func resetMetadata(ctx context.Context, opts resetMetadataOptions) (resetMetadat
 		Fields: result.Fields, DatasetColumns: result.DatasetColumns, Views: result.Views, ViewColumns: result.ViewColumns, Devices: result.Devices,
 	}
 	summary.Status = "ok"
-	summary.NextSteps = []string{"启动 Storage", "activate-datasets 激活数据集", "Collector 重新登记（fetch-plan reregister）"}
+	summary.NextSteps = []string{"启动 Storage", "Collector 重新登记（fetch-plan reregister）"}
 	return summary, nil
 }
 

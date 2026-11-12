@@ -122,28 +122,6 @@ message PrimaryReadRowsRsp {
   repeated RowFieldValues rows = 2;
 }
 
-message PrimaryDeleteDatasetRowsReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string dataset_id = 3;
-}
-
-message PrimaryDeleteDatasetRowsRsp {
-  common.RetInfo ret_info = 1;
-  uint64 deleted_ranges = 2;
-}
-
-// PrimaryRestoreDatasetRowsReq 已无作用（删除墓碑已去掉），只为调用方在 T3 改造前还能编译而保留。
-message PrimaryRestoreDatasetRowsReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string dataset_id = 3;
-}
-
-message PrimaryRestoreDatasetRowsRsp {
-  common.RetInfo ret_info = 1;
-}
-
 message ReportDatasetPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -199,8 +177,6 @@ service PrimaryStore {
   rpc RegisterSeriesSnapshot(PrimaryRegisterSeriesSnapshotReq) returns (PrimaryRegisterSeriesSnapshotRsp);
   rpc CommitTimeSeriesBatch(PrimaryCommitTimeSeriesBatchReq) returns (PrimaryCommitTimeSeriesBatchRsp);
   rpc ReadRows(PrimaryReadRowsReq) returns (PrimaryReadRowsRsp);
-  rpc DeleteDatasetRows(PrimaryDeleteDatasetRowsReq) returns (PrimaryDeleteDatasetRowsRsp);
-  rpc RestoreDatasetRows(PrimaryRestoreDatasetRowsReq) returns (PrimaryRestoreDatasetRowsRsp);
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
   rpc CountTimeSeriesRows(CountTimeSeriesRowsReq) returns (CountTimeSeriesRowsRsp);
   // ReadDatasetChanges 按序读取持久化的行变更日志，因子机的本地副本据此同步修正。

@@ -131,7 +131,6 @@ func (r systemResetOptions) externalSteps(scope string) []sysctl.ExternalStep {
 		storageCommands = append(storageCommands,
 			fmt.Sprintf("moox-cli storage reset-metadata --package-root %s --storage-conf %s --seed %s --yes", r.StoragePkg, r.StorageConf, r.StorageSeed),
 			fmt.Sprintf("启动 Storage（%s/start.sh）并等就绪", r.StoragePkg),
-			"moox-storage-cli activate-datasets --metadata-target ip://127.0.0.1:20100",
 		)
 		describe = "Storage：清行数据、事件流、View 消费者和元数据定义，重新导入种子（在 Storage 主机上执行）"
 	}

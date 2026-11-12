@@ -98,7 +98,7 @@ func TestLoadValidManifest(t *testing.T) {
 func TestLoadRoleSpecificStorageAndViewHosts(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
-storage = ["storage-primary", "storage-node", "storage-view"]
+storage = ["storage-primary", "storage-view"]
 [hosts.storage]
 address = "192.0.2.20"
 provider = "Tencent"

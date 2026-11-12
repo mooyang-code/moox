@@ -32,7 +32,6 @@ type StorageConfig struct {
 	Roles      []string        `yaml:"roles"`
 	Metadata   StorageMetadata `yaml:"metadata"`
 	Devices    StorageDevices  `yaml:"devices"`
-	Primary    StoragePrimary  `yaml:"primary"`
 	EventBus   StorageEventBus `yaml:"eventbus"`
 	View       StorageView     `yaml:"view"`
 	Health     StorageHealth   `yaml:"health"`
@@ -83,11 +82,6 @@ func (v StorageView) ValidateConsumer() error {
 		return fmt.Errorf("storage view fetch_batch %d exceeds max_ack_pending %d", v.FetchBatch, v.MaxAckPending)
 	}
 	return nil
-}
-
-// StoragePrimary 保存主存服务访问配置。
-type StoragePrimary struct {
-	ServiceName string `yaml:"service_name"`
 }
 
 // StorageHealth controls the lightweight HTTP health endpoint.

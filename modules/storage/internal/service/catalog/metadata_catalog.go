@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/proto"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
@@ -225,55 +224,6 @@ func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*p
 		return &pb.ListDatasetsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListDatasetsRsp{RetInfo: retinfo.Success("success"), Datasets: s.withRetentions(items), PageResult: page}, nil
-}
-
-// CheckDatasetActivation 已无作用：数据集建好即可用，总是返回就绪。只为调用方改造前还能编译而保留。
-func (s *Service) CheckDatasetActivation(ctx context.Context, req *pb.CheckDatasetActivationReq) (*pb.CheckDatasetActivationRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
-		return &pb.CheckDatasetActivationRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
-	}
-	dataset, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
-	if err != nil {
-		return &pb.CheckDatasetActivationRsp{RetInfo: datasetReadRetInfo(err)}, nil
-	}
-	return &pb.CheckDatasetActivationRsp{RetInfo: retinfo.Success("success"), DatasetRevision: dataset.GetRevision(), Ready: true}, nil
-}
-
-// ActivateDataset 已无作用：数据集建好即可用，停用的数据集在这里重新启用。只为调用方改造前还能编译而保留；
-// 响应里的 binding_locked 总为真，因为调用方仍按它判断激活完成。
-func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetReq) (*pb.ActivateDatasetRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
-		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
-	}
-	dataset, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
-	if err != nil {
-		return &pb.ActivateDatasetRsp{RetInfo: datasetReadRetInfo(err)}, nil
-	}
-	if dataset.GetStatus() != "active" {
-		enabled := proto.Clone(dataset).(*pb.Dataset)
-		enabled.Status = "active"
-		if dataset, err = s.metadata.UpsertDataset(ctx, enabled); err != nil {
-			return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-		}
-	}
-	// 调用方在激活成功后立即写入：无论是否改了状态，都先把之前补的列等元数据发布到缓存。
-	if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
-		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("数据集已启用，但元数据缓存尚未发布，请重试"))}, nil
-	}
-	out := s.withRetention(dataset)
-	out.BindingLocked = true
-	return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: out}, nil
-}
-
-func datasetReadRetInfo(err error) *pb.RetInfo {
-	if errors.Is(err, sql.ErrNoRows) {
-		return retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, errors.New("Dataset not found"))
-	}
-	code := retinfo.MetadataStoreCode(err)
-	if code == pb.ErrorCode_NOT_FOUND {
-		code = pb.ErrorCode_INNER_ERR
-	}
-	return retinfo.Error(code, errors.New("Dataset metadata could not be read"))
 }
 
 func (s *Service) ListDatasetSubjects(ctx context.Context, req *pb.ListDatasetSubjectsReq) (*pb.ListDatasetSubjectsRsp, error) {

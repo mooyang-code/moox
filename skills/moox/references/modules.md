@@ -19,7 +19,7 @@
 | Space（空间） | 一组相互隔离的业务数据，默认有 `crypto`（加密货币）、`stockcn`（A 股，默认停用）等 |
 | DataSource（数据来源） | 一个上游，如币安现货、币安合约 |
 | Subject（标的） | 空间里的对象，如 `BTC-USDT`；Tag（标签）是一组标的，采集任务按标签选标的 |
-| Dataset（数据集） | 某来源的一类数据（某频率的 K 线、因子结果等），绑定到 Storage 的 DataNode |
+| Dataset（数据集） | 某来源的一类数据（某频率的 K 线、因子结果等），存在 Storage 主服务（storage-primary）的 Pebble 库里 |
 | Field / 列 | 数据集的字段；因子结果是结果数据集的列 |
 | View | 面向查询的宽表，由 Storage 异步构建，可重建 |
 
@@ -75,13 +75,13 @@
 
 ## 存储（Storage）
 
-- **做什么**：元数据目录（primary，SQLite）、字段级事实（node，Pebble）、可重建的 View（view，DuckDB/Bleve）。
-- **在哪**：存储机，三个角色同机，DataNode ID 固定 `storage-node-0`（`setup init` 自动登记）。
+- **做什么**：storage-primary 管元数据目录（SQLite）和字段级事实（Pebble，含 Outbox、周期账本、保留期清理）；storage-view 管可重建的 View（DuckDB/Bleve）。
+- **在哪**：存储机，两个角色同机。数据集建好即可写入，不需要激活。
 - **常用**：
   - 元数据：`metadata source|subject|tag|dataset|field|field-group|view|device list|show|create|update|delete`；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。
   - 读数据：`data kline get`、`data rows export|count`、`data view query`、`data records search`。
   - 维护：`storage repair-view|force-rebuild-view|reset-view-consumers|reset-metadata|delete-view|purge-dataset-events|period-inventory`
-    （经 SSH 在存储机上执行，不带 `--yes` 只预览；见 [`cli-operations.md`](cli-operations.md)、[`view-catchup.md`](view-catchup.md)）；节点登记 `storage node list|show|update|delete`。
+    （经 SSH 在存储机上执行，不带 `--yes` 只预览；见 [`cli-operations.md`](cli-operations.md)、[`view-catchup.md`](view-catchup.md)）。
 - **其他**：`metadata spaces` 列出一份种子文件里可导入的业务空间；`setup storage-auth` 经 SSH 从存储机读一次 Primary 角色密钥存到本机操作员目录（`import`、`data rows export` 要用，只需一次，不打印）。
 - **注意**：新建 View、加标的、调大 `view_rows_per_series` 都会增加存储机内存，按 [`storage.md`](storage.md) 估算并提醒用户。保留期等配置改在 `moox.toml` 后要重装对应单元才生效。
 - 协议与命名规则：[`protocol.md`](protocol.md)。

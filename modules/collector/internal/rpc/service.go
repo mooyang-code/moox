@@ -38,7 +38,6 @@ type Dependencies struct {
 	DatasetSource     datasetSource
 	RealtimeInventory RealtimeInventory
 	ResultManager     *taskresult.Manager
-	ResultDataNodeID  string
 	// FieldOffers 是行情源目录里可用的附加字段（由 marketwiring 注入）；为空表示没有。
 	FieldOffers marketdata.FieldOffers
 }
@@ -57,7 +56,6 @@ type Service struct {
 	datasetSrc              datasetSource
 	inventory               RealtimeInventory
 	resultManager           *taskresult.Manager
-	resultDataNodeID        string
 	inventorySnapshotMu     sync.Mutex
 	inventorySnapshots      map[string]*taskResultInventorySnapshot
 	inventorySnapshotBuilds map[string]int
@@ -147,13 +145,12 @@ type datasetSource interface {
 // New creates a collector management service.
 func New(persistence *store.Store, deps Dependencies) *Service {
 	return &Service{
-		persistence:      persistence,
-		taskRepo:         persistence.Tasks(),
-		datasetSrc:       deps.DatasetSource,
-		inventory:        deps.RealtimeInventory,
-		resultManager:    deps.ResultManager,
-		resultDataNodeID: strings.TrimSpace(deps.ResultDataNodeID),
-		fieldOffers:      deps.FieldOffers,
+		persistence:   persistence,
+		taskRepo:      persistence.Tasks(),
+		datasetSrc:    deps.DatasetSource,
+		inventory:     deps.RealtimeInventory,
+		resultManager: deps.ResultManager,
+		fieldOffers:   deps.FieldOffers,
 	}
 }
 
@@ -411,15 +408,9 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	resultConfig := req.GetResultConfig()
-	dataNodeID := s.resultDataNodeID
 	description := task.Description
-	if resultConfig != nil {
-		if strings.TrimSpace(resultConfig.GetDataNodeId()) != "" {
-			dataNodeID = strings.TrimSpace(resultConfig.GetDataNodeId())
-		}
-		if strings.TrimSpace(resultConfig.GetDescription()) != "" {
-			description = strings.TrimSpace(resultConfig.GetDescription())
-		}
+	if strings.TrimSpace(resultConfig.GetDescription()) != "" {
+		description = strings.TrimSpace(resultConfig.GetDescription())
 	}
 	var cleanupResult func(context.Context) error
 	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
@@ -436,7 +427,7 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
 		}
 		var err error
-		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, task.SpaceID, task.TaskID, task.DataType, "", taskresult.Config{ViewID: resultIDs.ViewID, DataNodeID: dataNodeID, Name: task.TaskName, Description: description, Frequency: firstTaskFrequency(params), SubjectTags: subjectTags, OutputFields: params.OutputFields})
+		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, task.SpaceID, task.TaskID, task.DataType, "", taskresult.Config{ViewID: resultIDs.ViewID, Name: task.TaskName, Description: description, Frequency: firstTaskFrequency(params), SubjectTags: subjectTags, OutputFields: params.OutputFields})
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "already exists") {
 				return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -932,11 +923,7 @@ func inheritCollectionTaskResultDatasetID(raw, datasetID string) (string, error)
 }
 
 func validateTaskResultConfigUpdate(config *pb.ResultConfig) error {
-	if config == nil {
-		return nil
-	}
-	if strings.TrimSpace(config.GetDataNodeId()) != "" ||
-		strings.TrimSpace(config.GetDescription()) != "" {
+	if strings.TrimSpace(config.GetDescription()) != "" {
 		return fmt.Errorf("result_config cannot change an existing task result")
 	}
 	return nil

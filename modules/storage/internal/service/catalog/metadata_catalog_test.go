@@ -72,32 +72,6 @@ func testDataset(status string) *pb.Dataset {
 	return &pb.Dataset{SpaceId: "space-a", DatasetId: "dataset_a", Name: "数据集", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: status, Revision: 7}
 }
 
-// 激活已无作用：检查总是就绪，激活对启用的数据集不写库，对停用的数据集重新启用；响应总带 binding_locked。
-func TestDatasetActivationIsANoOpForActiveDatasets(t *testing.T) {
-	svc, store := newDatasetService(t, testDataset("active"))
-	check, err := svc.CheckDatasetActivation(context.Background(), &pb.CheckDatasetActivationReq{SpaceId: "space-a", DatasetId: "dataset_a"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, check.GetRetInfo().GetCode())
-	require.True(t, check.GetReady())
-	require.Equal(t, uint64(7), check.GetDatasetRevision())
-
-	rsp, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a", ExpectedRevision: 1})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.True(t, rsp.GetDataset().GetBindingLocked())
-	require.Equal(t, uint64(7), rsp.GetDataset().GetRevision())
-	require.Zero(t, store.upsertCalls)
-}
-
-func TestActivateDatasetReenablesDisabledDataset(t *testing.T) {
-	svc, store := newDatasetService(t, testDataset("disabled"))
-	rsp, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, "active", rsp.GetDataset().GetStatus())
-	require.Equal(t, 1, store.upsertCalls)
-}
-
 func TestCreateSpaceSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {
 	store := &createSpaceMetadataStore{}
 	service, err := NewMetadataService(store, &metacache.Store{}, Options{})
@@ -125,30 +99,6 @@ func TestGetSpaceDistinguishesMissingFromStoreFailure(t *testing.T) {
 	missing, err := service.GetSpace(context.Background(), &pb.GetSpaceReq{SpaceId: "space"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SPACE_NOT_FOUND, missing.GetRetInfo().GetCode())
-}
-
-func TestDatasetActivationReadErrorsAreSafeAndDistinguishedFromMissing(t *testing.T) {
-	svc, store := newDatasetService(t, testDataset("disabled"))
-	store.datasetErr = fmt.Errorf("wrapped metadata read: %w", errors.New("sqlite: secret=do-not-leak"))
-
-	checkRsp, err := svc.CheckDatasetActivation(context.Background(), &pb.CheckDatasetActivationReq{SpaceId: "space-a", DatasetId: "dataset_a"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_INNER_ERR, checkRsp.GetRetInfo().GetCode())
-	require.Equal(t, "Dataset metadata could not be read", checkRsp.GetRetInfo().GetMsg())
-
-	activateRsp, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_INNER_ERR, activateRsp.GetRetInfo().GetCode())
-	require.NotContains(t, activateRsp.GetRetInfo().GetMsg(), "secret")
-
-	store.datasetErr = fmt.Errorf("wrapped missing Dataset: %w", sql.ErrNoRows)
-	missingRsp, err := svc.CheckDatasetActivation(context.Background(), &pb.CheckDatasetActivationReq{SpaceId: "space-a", DatasetId: "dataset_a"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_DATASET_NOT_FOUND, missingRsp.GetRetInfo().GetCode())
-
-	activateMissingRsp, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_DATASET_NOT_FOUND, activateMissingRsp.GetRetInfo().GetCode())
 }
 
 func TestTimeSeriesViewGrainIncludesSeriesTag(t *testing.T) {
@@ -277,6 +227,50 @@ func TestDeleteDatasetRemovesMetadataThenRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, retry.GetRetInfo().GetCode())
 	require.Len(t, rows.deleted, 2, "重试删除仍要删行")
+}
+
+type deleteSpaceMetadataStore struct {
+	metadata.Store
+	datasets []*pb.Dataset
+	deleted  bool
+}
+
+func (s *deleteSpaceMetadataStore) ListDatasets(_ context.Context, query metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
+	if s.deleted || query.SpaceID != "crypto" {
+		return nil, &pb.PageResult{}, nil
+	}
+	return s.datasets, &pb.PageResult{Total: uint32(len(s.datasets))}, nil
+}
+
+func (s *deleteSpaceMetadataStore) DeleteSpace(context.Context, string) error {
+	s.deleted = true
+	return nil
+}
+
+type spaceRows struct {
+	store   *deleteSpaceMetadataStore
+	deleted []string
+}
+
+func (r *spaceRows) DeleteDatasetRows(_ context.Context, spaceID, datasetID string) (uint64, error) {
+	if !r.store.deleted {
+		return 0, errors.New("删行时空间元数据必须已经删掉")
+	}
+	r.deleted = append(r.deleted, spaceID+"/"+datasetID)
+	return 1, nil
+}
+
+// 删除空间先删元数据（级联删数据集），再逐个删掉这些数据集的行。
+func TestDeleteSpaceRemovesMetadataThenRowsOfEveryDataset(t *testing.T) {
+	store := &deleteSpaceMetadataStore{datasets: []*pb.Dataset{{SpaceId: "crypto", DatasetId: "a"}, {SpaceId: "crypto", DatasetId: "b"}}}
+	rows := &spaceRows{store: store}
+	svc, err := NewMetadataService(store, nil, Options{Rows: rows})
+	require.NoError(t, err)
+	rsp, err := svc.DeleteSpace(context.Background(), &pb.DeleteSpaceReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	require.True(t, store.deleted)
+	require.Equal(t, []string{"crypto/a", "crypto/b"}, rows.deleted)
 }
 
 // 列只能追加：数据集列被禁用后 View 里的这一列要留着，更新 View 时只校验新列。

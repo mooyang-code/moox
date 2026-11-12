@@ -57,8 +57,6 @@ require_text modules/storage/proto/metadata.proto 'int64 revision = 20;' 'Datase
 [[ ! -e modules/storage/config/storage.node.yaml ]] || fail 'storage.node.yaml must be removed'
 [[ ! -e modules/storage/internal/service/datanode/service.go ]] || fail 'DataNode RPC service must be removed'
 forbid_text modules/storage/schema/metadata.sql 't_data_nodes' 'DataNode table'
-forbid_text modules/storage/schema/metadata.sql 'c_data_node_id' 'Dataset DataNode column'
-forbid_text modules/storage/schema/metadata.sql 'c_binding_locked' 'Dataset binding lock column'
 forbid_text modules/storage/cmd/server/main.go 'runDataNodeRole' 'DataNode process role'
 forbid_text modules/storage/internal/service/primarystore/service.go 'Resolver' 'PrimaryStore DataNode resolver'
 

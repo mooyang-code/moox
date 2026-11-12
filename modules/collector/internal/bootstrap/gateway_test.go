@@ -173,20 +173,6 @@ func (w *collectorGatewayWire) UpsertViewColumn(ctx context.Context, request *st
 	return &storagepb.UpsertViewColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w *collectorGatewayWire) CheckDatasetActivation(ctx context.Context, request *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "CheckDatasetActivation", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.CheckDatasetActivationRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) ActivateDataset(ctx context.Context, request *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "ActivateDataset", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.ActivateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func (w *collectorGatewayWire) ResolveSubjects(ctx context.Context, request *storagepb.ResolveSubjectsReq) (*storagepb.ResolveSubjectsRsp, error) {
 	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "ResolveSubjects", request); err != nil {
 		return nil, err
@@ -262,20 +248,6 @@ func (w *collectorGatewayWire) WaitViewSyncPoint(ctx context.Context, request *s
 		return nil, err
 	}
 	return &storagepb.WaitViewSyncPointRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) DeleteDatasetRows(ctx context.Context, request *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "DeleteDatasetRows", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.PrimaryDeleteDatasetRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) RestoreDatasetRows(ctx context.Context, request *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "RestoreDatasetRows", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.PrimaryRestoreDatasetRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *testing.T) {
@@ -371,14 +343,6 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.UpsertViewColumn(t.Context(), &storagepb.UpsertViewColumnReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
-	t.Run("CheckDatasetActivation", func(t *testing.T) {
-		_, err := adapter.CheckDatasetActivation(t.Context(), &storagepb.CheckDatasetActivationReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
-	t.Run("ActivateDataset", func(t *testing.T) {
-		_, err := adapter.ActivateDataset(t.Context(), &storagepb.ActivateDatasetReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
 	t.Run("ResolveSubjects", func(t *testing.T) {
 		_, err := adapter.ResolveSubjects(t.Context(), &storagepb.ResolveSubjectsReq{AuthInfo: auth})
 		require.NoError(t, err)
@@ -423,18 +387,10 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.WaitViewSyncPoint(t.Context(), &storagepb.WaitViewSyncPointReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
-	t.Run("DeleteDatasetRows", func(t *testing.T) {
-		_, err := adapter.DeleteDatasetRows(t.Context(), &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
-	t.Run("RestoreDatasetRows", func(t *testing.T) {
-		_, err := adapter.RestoreDatasetRows(t.Context(), &storagepb.PrimaryRestoreDatasetRowsReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.calls["GetDataset"])
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
-	require.Len(t, wire.calls, 26)
+	require.Len(t, wire.calls, 22)
 	wire.mu.Unlock()
 	invoker := scfinvoker.New(scfinvoker.Config{Gateway: gateway})
 	lease, err := invoker.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")

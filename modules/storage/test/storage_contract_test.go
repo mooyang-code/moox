@@ -13,7 +13,7 @@ import (
 // 两个空间里的同名数据集互不干扰；记录写入必须带版本。
 func TestStorageSeparatesSpacesAndRejectsEmptyRecordVersion(t *testing.T) {
 	ctx := context.Background()
-	store, err := pebble.Open(pebble.Options{NodeID: "storage-node-0", Path: filepath.Join(t.TempDir(), "pebble")})
+	store, err := pebble.Open(pebble.Options{NodeID: "storage-primary", Path: filepath.Join(t.TempDir(), "pebble")})
 	if err != nil {
 		t.Fatal(err)
 	}

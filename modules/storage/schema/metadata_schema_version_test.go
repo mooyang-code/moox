@@ -63,8 +63,6 @@ func TestMetadataSchemaContract(t *testing.T) {
 		"t_view_index_builds",
 		"t_view_rebuild_logs",
 		"t_data_nodes",
-		"c_data_node_id",
-		"c_binding_locked",
 	}, removedTables...) {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("metadata schema contains removed schema element %q", forbidden)

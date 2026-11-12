@@ -12,9 +12,6 @@ database:
   conn_max_lifetime: 1h
   conn_max_idle_time: 10m
 
-storage:
-  result_data_node_id: storage-node-0
-
 collector_retention:
   maintenance_interval: 1m
   # 每分钟整点由 K 线调度占用唯一的 SQLite 连接；清理从第 35 秒开始，并在下一个整点前结束。

@@ -1366,7 +1366,6 @@ components:
     protected: false
     ports:
       - 20101
-      - 20106
     health:
       kind: readyz
       port: 20210
@@ -1419,9 +1418,6 @@ components:
           - DeleteDataset
           - GetDataset
           - ListDatasets
-          - RebindDatasetDataNode
-          - CheckDatasetActivation
-          - ActivateDataset
           - ListDatasetSubjects
           - CreateFieldGroup
           - UpdateFieldGroup
@@ -1435,11 +1431,6 @@ components:
           - DeleteFieldGroup
           - UpsertDatasetColumn
           - ListDatasetColumns
-          - RegisterDataNode
-          - UpdateDataNode
-          - GetDataNode
-          - ListDataNodes
-          - DeleteDataNode
           - CreateDevice
           - UpdateDevice
           - GetDevice
@@ -1461,15 +1452,12 @@ components:
           - ResolveSubjects
           - GetDataset
           - ListDatasets
-          - CheckDatasetActivation
           - ListDatasetSubjects
           - GetFieldGroup
           - ListFieldGroups
           - GetField
           - ListFields
           - ListDatasetColumns
-          - GetDataNode
-          - ListDataNodes
           - GetDevice
           - ListDevices
         acl:
@@ -1508,9 +1496,6 @@ components:
               - DeleteDataset
               - GetDataset
               - ListDatasets
-              - RebindDatasetDataNode
-              - CheckDatasetActivation
-              - ActivateDataset
               - ListDatasetSubjects
               - CreateFieldGroup
               - UpdateFieldGroup
@@ -1524,15 +1509,10 @@ components:
               - DeleteFieldGroup
               - UpsertDatasetColumn
               - ListDatasetColumns
-              - GetDataNode
-              - ListDataNodes
             callers:
               - console
               - moox-cli
           - methods:
-              - UpdateDataNode
-              - DeleteDataNode
-              - RegisterDataNode
               - CreateDevice
               - UpdateDevice
               - GetDevice
@@ -1560,15 +1540,12 @@ components:
               - ResolveSubjects
               - GetDataset
               - ListDatasets
-              - CheckDatasetActivation
               - ListDatasetSubjects
               - GetFieldGroup
               - ListFieldGroups
               - GetField
               - ListFields
               - ListDatasetColumns
-              - GetDataNode
-              - ListDataNodes
             callers:
               - collector
               - factor-mgr
@@ -1596,11 +1573,6 @@ components:
             callers:
               - factor-mgr
           - methods:
-              - ActivateDataset
-            callers:
-              - factor-mgr
-              - collector
-          - methods:
               - GetDataset
             callers:
               - archive-mgr
@@ -1617,8 +1589,6 @@ components:
           - RegisterSeriesSnapshot
           - CommitTimeSeriesBatch
           - ReadRows
-          - DeleteDatasetRows
-          - RestoreDatasetRows
           - ReadTimeSeriesRows
           - CountTimeSeriesRows
           - ReadDatasetChanges
@@ -1644,8 +1614,6 @@ components:
               - UpsertFields
               - CommitTimeSeriesBatch
               - ReadRows
-              - DeleteDatasetRows
-              - RestoreDatasetRows
               - ReadTimeSeriesRows
               - CountTimeSeriesRows
               - ReadDatasetChanges
@@ -1659,8 +1627,6 @@ components:
               - RegisterSeriesSnapshot
               - CommitTimeSeriesBatch
               - AppendDatasetSyncPoint
-              - DeleteDatasetRows
-              - RestoreDatasetRows
               - UpsertFields
             callers:
               - collector
@@ -1684,20 +1650,20 @@ components:
           - methods:
               - UpsertFields
               - ReportDatasetPeriodCompleted
-              - DeleteDatasetRows
-              - RestoreDatasetRows
             callers:
               - factor-mgr
     doctor:
       role: storage-primary
-      description: Storage 元数据与写入路由主服务
+      description: Storage 元数据与事实数据主服务
       duties:
-        - 管理空间、数据集、字段、视图与数据节点
-        - 将数据读写路由到对应的数据节点
+        - 管理空间、数据集、字段与视图
+        - 持久化数据集字段、周期完成状态与发件箱
+        - 向 EventBus 发布周期完成等跨机事件
       inputs:
         - 元数据管理与数据读写请求
       outputs:
         - 元数据与主存储响应
+        - 数据变更事件
       dependencies:
         - eventbus
       transport: reporter
@@ -1707,41 +1673,6 @@ components:
         - storage-primary/config/trpc_go.yaml
       writable_paths:
         - data/storage-primary
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: true
-  - id: storage-node
-    name: 存储数据节点
-    binary: moox-storage-node
-    scope: any
-    replicas: single
-    protected: false
-    ports:
-      - 20107
-    health:
-      kind: readyz
-      port: 20212
-      ready_body: '"ready":true'
-    doctor:
-      role: storage-node
-      description: Storage 事实数据与事务发件箱节点
-      duties:
-        - 持久化数据集字段、周期完成状态与发件箱
-        - 向派生视图发布数据变更
-      inputs:
-        - 主服务转发的数据读写请求
-      outputs:
-        - 事实数据与数据变更事件
-      dependencies:
-        - eventbus
-        - storage-primary
-      transport: reporter
-      functional_observability: deferred
-      config_paths:
-        - storage-node/config/app.yaml
-        - storage-node/config/trpc_go.yaml
-      writable_paths:
-        - data/storage-node
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: true

@@ -122,7 +122,7 @@ func TestStorageEventBusProjectionUsesRoleCredentialWithoutAppConfig(t *testing.
 	root, err := fsutil.OpenPhysicalRoot(destination, true)
 	require.NoError(t, err)
 	defer root.Close()
-	components := []string{"storage-primary", "storage-node", "storage-view"}
+	components := []string{"storage-primary", "storage-view"}
 	require.NoError(t, projectEventBus(root, &options, components, destination))
 	for _, id := range components {
 		values := options.Environment[id]

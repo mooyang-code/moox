@@ -194,3 +194,14 @@ func TestArchiveAndSyncDeploymentsCommandsAreRegistered(t *testing.T) {
 	require.NotNil(t, sync.Flags().Lookup("host"))
 	require.NotNil(t, sync.Flags().Lookup("file"))
 }
+
+func TestArchiveWorkerRetireRequiresWorkerAndConfirmation(t *testing.T) {
+	g := &archiveFakeGateway{rsp: &archivepb.RetireArchiveWorkerRsp{RetInfo: ok(), Retired: true}}
+	useArchiveGateway(t, g)
+	var out bytes.Buffer
+	require.ErrorContains(t, runArchiveWorkerRetire(context.Background(), &out, archiveFlags{Yes: true}), "--worker")
+	require.ErrorContains(t, runArchiveWorkerRetire(context.Background(), &out, archiveFlags{WorkerID: "factor-old"}), "--yes")
+	require.NoError(t, runArchiveWorkerRetire(context.Background(), &out, archiveFlags{WorkerID: " archive-worker@old ", Yes: true}))
+	assert.Equal(t, "RetireArchiveWorker", g.method)
+	assert.Contains(t, out.String(), `"retired": true`)
+}

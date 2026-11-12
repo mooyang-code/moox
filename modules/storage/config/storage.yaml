@@ -16,8 +16,6 @@ storage:
     view_index_root: ./var/storage/view-indexes
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-  primary:
-    service_name: ""
   view:
     batch_size: 500
     # View 只有一种消费方式：每个数据集一个动态消费者（view_<数据集哈希>），共用这组全局并发参数。

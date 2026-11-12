@@ -37,7 +37,7 @@ func newBootstrapFixture(t *testing.T) bootstrapOptions {
 	opts := bootstrapOptions{topologyFile: filepath.Join(dir, "topology.json"), dbPath: filepath.Join(dir, "data", "admin.db"), masterFile: filepath.Join(dir, "secrets", "admin-encryption.key"), pkiDir: filepath.Join(dir, "secrets", "pki"), outputDir: filepath.Join(dir, "bundles")}
 	writeBootstrapTopology(t, opts, hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{
 		{HostID: "control", Address: "192.0.2.1", PrivateAddress: "control.internal.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
-		{HostID: "storage", Address: "192.0.2.2", Components: []string{"storage-primary", "storage-node", "storage-view"}},
+		{HostID: "storage", Address: "192.0.2.2", Components: []string{"storage-primary", "storage-view"}},
 		{HostID: "overseas", Address: "192.0.2.3", Components: []string{"access", "trade"}},
 	}})
 	return opts
@@ -105,7 +105,7 @@ func TestBootstrapEmptyEnvironmentExportsWorkingCredentialsCertificateAndConfig(
 	hosts, deployments, err := dao.Read(context.Background())
 	require.NoError(t, err)
 	require.Len(t, hosts, 3)
-	require.Len(t, deployments, 15)
+	require.Len(t, deployments, 14)
 	_, snapshot, err := dao.CompileSnapshot(context.Background(), "control", strings.TrimSpace(string(master)))
 	require.NoError(t, err)
 	require.Equal(t, result.ExpectedHash, snapshot.Hash)

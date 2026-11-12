@@ -39,15 +39,12 @@ func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {
 	path := writeCollectorConfig(t, `
 database:
   path: ./original/collector.db
-storage:
-  result_data_node_id: result-test
 `)
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "./override/collector.db", cfg.Database.Path)
 	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
-	assert.Equal(t, "result-test", cfg.Storage.ResultDataNodeID)
 	assert.Equal(t, "collector", cfg.GatewayClient.Caller)
 }
 

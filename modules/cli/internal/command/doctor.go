@@ -2,7 +2,6 @@ package command
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,14 +11,10 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/config"
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
-	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
-	"google.golang.org/protobuf/proto"
 )
 
 type doctorExitError struct{ code int }
@@ -28,16 +23,14 @@ func (e doctorExitError) Error() string { return fmt.Sprintf("doctor exited with
 func (e doctorExitError) ExitCode() int { return e.code }
 
 type doctorCommandDeps struct {
-	loadConfig        func() (*config.Config, error)
-	newClient         func(gatewayclient.Invoker) *doctorcli.Client
-	newMetadataClient func(gatewayclient.Invoker, string) doctorcli.StorageActivationClient
+	loadConfig func() (*config.Config, error)
+	newClient  func(gatewayclient.Invoker) *doctorcli.Client
 }
 
 func init() {
 	rootCmd.AddCommand(newDoctorCommand(doctorCommandDeps{
-		loadConfig:        config.LoadConfig,
-		newClient:         doctorcli.New,
-		newMetadataClient: newSignedStorageMetadataClient,
+		loadConfig: config.LoadConfig,
+		newClient:  doctorcli.New,
 	}))
 }
 
@@ -127,11 +120,6 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			}
 			defer gateway.Close()
 			client := deps.newClient(gateway)
-			metadataClientFactory := deps.newMetadataClient
-			if metadataClientFactory == nil {
-				metadataClientFactory = newSignedStorageMetadataClient
-			}
-			storageActivation := metadataClientFactory(gateway, os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"))
 			auth, err := loadDoctorHealthAuth(doctorCfg.ReleaseRoot)
 			if err != nil {
 				return err
@@ -152,7 +140,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 				reportValue, err = doctorcli.RunBootstrap(cmd.Context(), doctorcli.BootstrapOptions{
 					NodeID: nodeID, LocalNodeID: doctorCfg.NodeID, ReleaseRoot: doctorCfg.ReleaseRoot,
 					DatasetHealthPolicyPath: resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.DatasetHealthPolicyPath),
-					CheckIDs:                checks, Client: client, MonitorClient: client, StorageActivation: storageActivation, Prober: prober,
+					CheckIDs:                checks, Client: client, MonitorClient: client, Prober: prober,
 					Systemd: systemd, DeployRoot: deployRoot,
 				})
 			case "diagnose":
@@ -190,46 +178,6 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "json", "report format: json, text, or markdown")
 	cmd.Flags().StringVar(&output, "output", "", "atomically write the report to this path")
 	return cmd
-}
-
-type signedStorageMetadataClient struct {
-	gateway gatewayclient.Invoker
-	auth    *commonpb.AuthInfo
-}
-
-func newSignedStorageMetadataClient(gateway gatewayclient.Invoker, secret string) doctorcli.StorageActivationClient {
-	return &signedStorageMetadataClient{
-		gateway: gateway,
-		auth:    &commonpb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
-	}
-}
-
-func (c *signedStorageMetadataClient) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*pb.ListDatasetsRsp, error) {
-	if c == nil || c.gateway == nil {
-		return nil, errors.New("storage metadata client is unavailable")
-	}
-	request := &pb.ListDatasetsReq{}
-	if req != nil {
-		request = proto.Clone(req).(*pb.ListDatasetsReq)
-	}
-	request.AuthInfo = c.auth
-	rsp := &pb.ListDatasetsRsp{}
-	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListDatasets", request, rsp)
-	return rsp, err
-}
-
-func (c *signedStorageMetadataClient) CheckDatasetActivation(ctx context.Context, req *pb.CheckDatasetActivationReq) (*pb.CheckDatasetActivationRsp, error) {
-	if c == nil || c.gateway == nil {
-		return nil, errors.New("storage metadata client is unavailable")
-	}
-	request := &pb.CheckDatasetActivationReq{}
-	if req != nil {
-		request = proto.Clone(req).(*pb.CheckDatasetActivationReq)
-	}
-	request.AuthInfo = c.auth
-	rsp := &pb.CheckDatasetActivationRsp{}
-	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CheckDatasetActivation", request, rsp)
-	return rsp, err
 }
 
 func validateDoctorFlags(format, output string, checks []string) error {

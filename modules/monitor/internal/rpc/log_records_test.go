@@ -22,8 +22,8 @@ func TestQueryLogRecordsPagesAndValidates(t *testing.T) {
 	repos := db.Repositories()
 	base := time.Date(2026, 11, 12, 4, 0, 0, 0, time.UTC)
 	_, err = repos.Logs.InsertBatch(t.Context(), []domain.LogRecord{
-		{RecordKey: "k1", HostID: "storage", Component: "storage-node", Level: "error", Message: "第一条", Caller: "a.go:1", Fields: `{"view":"v1"}`, MergedCount: 2, LoggedAt: base},
-		{RecordKey: "k2", HostID: "storage", Component: "storage-node", Level: "info", Event: "process_started", Message: "第二条", Fields: "{}", LoggedAt: base.Add(time.Minute)},
+		{RecordKey: "k1", HostID: "storage", Component: "storage-primary", Level: "error", Message: "第一条", Caller: "a.go:1", Fields: `{"view":"v1"}`, MergedCount: 2, LoggedAt: base},
+		{RecordKey: "k2", HostID: "storage", Component: "storage-primary", Level: "info", Event: "process_started", Message: "第二条", Fields: "{}", LoggedAt: base.Add(time.Minute)},
 		{RecordKey: "k3", HostID: "control", Component: "monitor", Level: "error", Message: "第三条", Fields: "{}", LoggedAt: base.Add(2 * time.Minute)},
 	})
 	require.NoError(t, err)
@@ -44,11 +44,11 @@ func TestQueryLogRecordsPagesAndValidates(t *testing.T) {
 	record := next.GetRecords()[0]
 	require.Equal(t, "第一条", record.GetMessage())
 	require.Equal(t, "storage", record.GetHostId())
-	require.Equal(t, "storage-node", record.GetComponent())
+	require.Equal(t, "storage-primary", record.GetComponent())
 	require.Equal(t, "v1", record.GetFields()["view"])
 	require.Equal(t, int32(2), record.GetMergedCount())
 
-	filtered, err := service.QueryLogRecords(t.Context(), &monitorpb.QueryLogRecordsReq{Component: "storage-node", Level: "ERROR", StartAt: "2026-11-12T03:00:00Z", EndAt: "2026-11-12T05:00:00+00:00"})
+	filtered, err := service.QueryLogRecords(t.Context(), &monitorpb.QueryLogRecordsReq{Component: "storage-primary", Level: "ERROR", StartAt: "2026-11-12T03:00:00Z", EndAt: "2026-11-12T05:00:00+00:00"})
 	require.NoError(t, err)
 	require.Len(t, filtered.GetRecords(), 1)
 

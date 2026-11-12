@@ -20,7 +20,7 @@ import json,os,pathlib,subprocess,sys
 root=pathlib.Path(sys.argv[1]); root.mkdir(mode=0o700)
 hosts=[
     dict(host_id='control',address='192.0.2.1',private_address='control.internal.example.test',components=['admin','console-proxy','web-host','collector']),
-    dict(host_id='storage',address='192.0.2.2',private_address='10.0.0.2',components=['storage-primary','storage-node','storage-view']),
+    dict(host_id='storage',address='192.0.2.2',private_address='10.0.0.2',components=['storage-primary','storage-view']),
     dict(host_id='compute1',address='192.0.2.3',private_address='10.0.0.3',components=['access','egress-proxy','trade']),
 ]
 topology=root/'topology.json'

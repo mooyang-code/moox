@@ -131,7 +131,6 @@ func main() {
 		{"sysdeploy/ListDeployments", "/api/admin/sysdeploy/ListDeployments", "", `{"page":{"page":1,"size":100}}`},
 		{"sysdeploy/ListHosts", "/api/admin/sysdeploy/ListHosts", "", `{"page":{"page":1,"size":20}}`},
 		{"storage/ListDatasets(crypto)", "/api/admin/storage/ListDatasets", "crypto", `{"space_id":"crypto","page":{"page":1,"size":5}}`},
-		{"storage/ListDataNodes", "/api/admin/storage/ListDataNodes", "", `{"page":{"page":1,"size":5}}`},
 		{"storage/ListViews(stockus)", "/api/admin/storage/ListViews", "stockus", `{"space_id":"stockus","page":{"page":1,"size":5}}`},
 		{"collector/GetTaskList(crypto)", "/api/admin/collector/GetTaskList", "crypto", `{"space_id":"crypto","page":{"page":1,"size":5}}`},
 		{"monitor/GetHealthOverview", "/api/admin/monitor/GetHealthOverview", "", `{}`},

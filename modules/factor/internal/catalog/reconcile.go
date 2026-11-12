@@ -86,8 +86,7 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorTask
 		return fmt.Errorf("get factor result dataset: %w", err)
 	}
 	if result.SpaceID != set.SpaceID || result.DatasetID != set.ResultDatasetID ||
-		result.DataSourceID != source.DataSourceID || result.DataNodeID != source.DataNodeID ||
-		result.DataKind != storageio.DataKindTimeSeries ||
+		result.DataSourceID != source.DataSourceID || result.DataKind != storageio.DataKindTimeSeries ||
 		result.Freq != set.Freq ||
 		result.Attributes["owner_module"] != "factor" || result.Attributes["dataset_role"] != storageio.DatasetRoleFactorResult ||
 		result.Attributes["source_dataset_id"] != set.SourceDatasetID {
@@ -207,8 +206,8 @@ func (s *Service) sourceDataset(ctx context.Context, set domain.FactorTask) (sto
 	if source.Freq != set.Freq {
 		return storageio.DatasetInfo{}, nil, fmt.Errorf("source dataset freq is %q, not %q", source.Freq, set.Freq)
 	}
-	if source.SpaceID != set.SpaceID || source.DatasetID != set.SourceDatasetID || source.DataNodeID == "" || source.DataSourceID == "" {
-		return storageio.DatasetInfo{}, nil, errors.New("source dataset identity or DataNode is invalid")
+	if source.SpaceID != set.SpaceID || source.DatasetID != set.SourceDatasetID || source.DataSourceID == "" {
+		return storageio.DatasetInfo{}, nil, errors.New("source dataset identity or data source is invalid")
 	}
 	columns, err := s.metadata.ListColumns(ctx, set.SpaceID, set.SourceDatasetID)
 	if err != nil {

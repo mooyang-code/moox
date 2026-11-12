@@ -139,7 +139,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target sto
 
 输出（每个文件的 `tail_from`、`tail_rows`）存成 `storage-import.json`，第 10 步的逐标的校验要用它。
 
-只写每个文件最后 6000 行中仍在 Primary 保留期内的部分。输出的 `tail_from` / `tail_rows` 是 Primary 导入窗口，未包含 View 消费时按当前时钟进行的年龄过滤。Storage 写入在 DataNode 内串行，单进程即可；要并发也不超过 2～4 路（再多只是排队）。
+只写每个文件最后 6000 行中仍在 Primary 保留期内的部分。输出的 `tail_from` / `tail_rows` 是 Primary 导入窗口，未包含 View 消费时按当前时钟进行的年龄过滤。Storage 写入在 storage-primary 的 Pebble 库内串行，单进程即可；要并发也不超过 2～4 路（再多只是排队）。
 `--job-db` 保留着，中断后原样重跑自动续传。失败的批（Storage 写超时）重跑即可。
 
 ## 9. 等本数据集的 View 追平

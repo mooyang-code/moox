@@ -19,8 +19,8 @@ func TestLogRecordsInsertIsIdempotentAndQueryFilters(t *testing.T) {
 	batch := []domain.LogRecord{
 		logRow("a|b1|1", "control", "monitor", "error", "写库失败 100%_done", base),
 		logRow("a|b1|2", "control", "monitor", "info", "进程启动", base.Add(time.Minute)),
-		logRow("s|b1|1", "storage", "storage-node", "error", "磁盘写满", base.Add(2*time.Minute)),
-		logRow("s|b1|2", "storage", "storage-node", "fatal", "退出", base.Add(3*time.Minute)),
+		logRow("s|b1|1", "storage", "storage-primary", "error", "磁盘写满", base.Add(2*time.Minute)),
+		logRow("s|b1|2", "storage", "storage-primary", "fatal", "退出", base.Add(3*time.Minute)),
 	}
 	batch[1].Event = "process_started"
 	stored, err := repo.InsertBatch(ctx, batch)
@@ -53,7 +53,7 @@ func TestLogRecordsInsertIsIdempotentAndQueryFilters(t *testing.T) {
 		}
 	}
 	equal("全部（新的在前）", query(LogRecordFilter{}), "重启后的第一条", "退出", "磁盘写满", "进程启动", "写库失败 100%_done")
-	equal("按组件", query(LogRecordFilter{Component: "storage-node"}), "退出", "磁盘写满")
+	equal("按组件", query(LogRecordFilter{Component: "storage-primary"}), "退出", "磁盘写满")
 	equal("按主机", query(LogRecordFilter{HostID: "control"}), "重启后的第一条", "进程启动", "写库失败 100%_done")
 	equal("最低级别 error 不含关键事件", query(LogRecordFilter{Level: "error", HostID: "control"}), "重启后的第一条", "写库失败 100%_done")
 	equal("最低级别 fatal", query(LogRecordFilter{Level: "fatal"}), "退出")
@@ -102,9 +102,9 @@ func TestLogRecordsBucketsByHour(t *testing.T) {
 	rows := []domain.LogRecord{
 		logRow("k1", "control", "monitor", "error", "a", base),
 		logRow("k2", "control", "monitor", "info", "b", base.Add(20*time.Minute)),
-		logRow("k3", "storage", "storage-node", "fatal", "c", base.Add(30*time.Minute)),
-		logRow("k4", "storage", "storage-node", "error", "d", base.Add(55*time.Minute)),
-		logRow("k5", "storage", "storage-node", "info", "e", base.Add(3*time.Hour)),
+		logRow("k3", "storage", "storage-primary", "fatal", "c", base.Add(30*time.Minute)),
+		logRow("k4", "storage", "storage-primary", "error", "d", base.Add(55*time.Minute)),
+		logRow("k5", "storage", "storage-primary", "info", "e", base.Add(3*time.Hour)),
 	}
 	if _, err := repo.InsertBatch(ctx, rows); err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestLogRecordsBucketsByHour(t *testing.T) {
 	if got, want := buckets(LogRecordFilter{BeforeID: 2, Limit: 1}), "[{2026-11-12T04:00:00Z 2 1} {2026-11-12T05:00:00Z 1 0} {2026-11-12T07:00:00Z 0 1}]"; got != want {
 		t.Fatalf("全部：%s，应为 %s", got, want)
 	}
-	if got, want := buckets(LogRecordFilter{Component: "storage-node", End: base.Add(2 * time.Hour)}), "[{2026-11-12T04:00:00Z 1 0} {2026-11-12T05:00:00Z 1 0}]"; got != want {
+	if got, want := buckets(LogRecordFilter{Component: "storage-primary", End: base.Add(2 * time.Hour)}), "[{2026-11-12T04:00:00Z 1 0} {2026-11-12T05:00:00Z 1 0}]"; got != want {
 		t.Fatalf("按组件和终点：%s，应为 %s", got, want)
 	}
 	if got := buckets(LogRecordFilter{HostID: "none"}); got != "[]" {

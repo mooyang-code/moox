@@ -37,7 +37,7 @@ func TestDingTalkSenderSignsAndSendsMarkdown(t *testing.T) {
 		t.Fatalf("newDingTalkSender() error = %v", err)
 	}
 	sender.now = func() time.Time { return time.UnixMilli(signTimestamp) }
-	message := Message{Key: "deployment:storage:storage-node", Severity: SeverityCritical, Title: "storage-node 不可用", Body: "第一行\n第二行", Labels: map[string]string{"host": "storage"}}
+	message := Message{Key: "deployment:storage:storage-primary", Severity: SeverityCritical, Title: "storage-primary 不可用", Body: "第一行\n第二行", Labels: map[string]string{"host": "storage"}}
 	if err := sender.Send(context.Background(), message); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
@@ -60,10 +60,10 @@ func TestDingTalkSenderSignsAndSendsMarkdown(t *testing.T) {
 	markdown, _ := gotBody["markdown"].(map[string]any)
 	title, _ := markdown["title"].(string)
 	text, _ := markdown["text"].(string)
-	if gotBody["msgtype"] != "markdown" || !strings.HasPrefix(title, "MooX [严重] ") || !strings.HasPrefix(text, "**MooX [严重] storage-node 不可用**") {
+	if gotBody["msgtype"] != "markdown" || !strings.HasPrefix(title, "MooX [严重] ") || !strings.HasPrefix(text, "**MooX [严重] storage-primary 不可用**") {
 		t.Fatalf("payload = %v", gotBody)
 	}
-	for _, want := range []string{"第一行\n\n第二行", "> host: storage", "告警标识：deployment:storage:storage-node"} {
+	for _, want := range []string{"第一行\n\n第二行", "> host: storage", "告警标识：deployment:storage:storage-primary"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text %q does not contain %q", text, want)
 		}

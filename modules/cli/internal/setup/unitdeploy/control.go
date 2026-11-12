@@ -167,17 +167,6 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 				return nil, err
 			}
 			metrics["dataset_health_policy_path"] = "config/dataset-health-policy.yaml"
-		case "collector":
-			storage, err := mapping("storage")
-			if err != nil {
-				return nil, err
-			}
-			node := snapshot.Manifest.ComponentHost("storage-node")
-			if node == "" {
-				return nil, errors.New("Collector requires a registered Storage node deployment")
-			}
-			// 与 unit.go 里 Storage 节点的固定 ID 一致（元数据种子也使用该 ID）。
-			storage["result_data_node_id"] = storageNodeID
 		}
 		result[name], err = yaml.Marshal(configuration)
 		if err != nil {

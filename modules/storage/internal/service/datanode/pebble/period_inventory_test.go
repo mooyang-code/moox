@@ -300,7 +300,7 @@ func TestInspectPeriodLedgerCrossChecksFailedSubjectsAgainstFailureBitmap(t *tes
 }
 
 func TestInspectPeriodLedgerRequiresDataNodeLayoutAndIdentity(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "not-a-storage-node")
+	path := filepath.Join(t.TempDir(), "not-a-pebble-store")
 	db, err := cpebble.Open(path, &cpebble.Options{Merger: BitmapORMerger})
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
@@ -318,12 +318,12 @@ func TestInspectPeriodLedgerReportsVerifiedSourceIdentity(t *testing.T) {
 	scope := PeriodLedgerScope{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTimeMin: 1, PeriodTimeMax: 1}
 	got, err := InspectPeriodLedger(path, "node-a", scope)
 	require.NoError(t, err)
-	require.Equal(t, "node-a", got.SourceDataNodeID)
+	require.Equal(t, "node-a", got.SourceNodeID)
 	require.Equal(t, storeID, got.SourceStoreID)
 	require.Equal(t, strings.TrimSpace(layoutVersion), got.SourceLayoutVersion)
 	require.Equal(t, path, got.SourcePath)
 	_, err = InspectPeriodLedger(path, "other-node", scope)
-	require.ErrorContains(t, err, "does not match requested DataNode ID")
+	require.ErrorContains(t, err, "does not match requested node ID")
 }
 
 func TestInspectPeriodLedgerRejectsMarkerAndOutboxPayloadDivergence(t *testing.T) {

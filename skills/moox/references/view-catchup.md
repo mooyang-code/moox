@@ -25,7 +25,7 @@
 - 包根 `--package-root /data/moox/storage/current`（`moox-cli storage …` 缺省自动补上），其中包含 `start.sh` / `stop.sh` / `status.sh`。
 - 业务配置 `--storage-conf /data/moox/storage/current/storage-view/config/storage.yaml`（同样缺省自动补上）；不要传 `trpc_go.yaml`。
 - View 的消费者是按数据集动态创建的 `view_<12 位十六进制>`（每个数据集一个）；并发参数是 View 的 `storage.view.fetch_batch` / `max_workers` / `max_ack_pending`（全局，默认都是 1）
-- 元数据库与 Pebble 分别属于 `storage-primary` 与 `storage-node` 组件。不要把旧平铺目录或操作机的路径当作当前主机路径。
+- 元数据库与 Pebble 都属于 `storage-primary` 组件，View 索引属于 `storage-view`。不要把旧平铺目录或操作机的路径当作当前主机路径。
 
 控制面：`/data/moox/prod`；Storage 单元在 Storage 主机的 `/data/moox/storage/current`，不要往其他主机发 Storage。
 

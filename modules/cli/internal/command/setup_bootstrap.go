@@ -86,10 +86,10 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 // deploySetupControl 部署 control：确认元数据和配置没问题，部署后装看护再写完成记录，setup install 共用。
 func deploySetupControl(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, control unitdeploy.ControlOptions) (unitdeploy.BootstrapResult, error) {
 	var result unitdeploy.BootstrapResult
-	// 已经装好过管理台的环境重跑这一步是修复，元数据早就激活了。
+	// 已经装好过管理台的环境重跑这一步是修复，元数据早就导入了。
 	local := unitdeploy.ReadLocalState(control.StateDirectory, control.OperatorDirectory, setupBinding(snapshot))
 	if control.Release == "" && !local.InitStorage && !local.ControlReady {
-		return result, errors.New("init_storage_required: 管理台的服务要等系统元数据激活才能就绪，先运行 setup init --stage storage；运行 setup validate 看下一步")
+		return result, errors.New("init_storage_required: 管理台的服务要等系统元数据导入后才能就绪，先运行 setup init --stage storage；运行 setup validate 看下一步")
 	}
 	// 改通知、Collector 这些配置后可以重跑；主机、账号这类改了就不是原来那次安装。
 	if control.Release == "" && !local.ControlReady && local.StaleBinding {

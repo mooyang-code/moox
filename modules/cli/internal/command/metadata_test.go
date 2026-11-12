@@ -133,28 +133,20 @@ func TestBuildMetadataImportCalls_AcceptsEmptySeed(t *testing.T) {
 	}
 }
 
-func TestBuildMetadataImportCallsRequiresDatasetBinding(t *testing.T) {
-	_, err := buildMetadataImportCalls(metadataSeed{Datasets: []seedDataset{{DatasetID: "missing-node"}}})
-	require.ErrorContains(t, err, "data_node_id is required")
-}
-
-func TestSeedDatasetToPBAlwaysStartsDisabled(t *testing.T) {
+func TestSeedDatasetToPBDefaultsToActive(t *testing.T) {
 	dataset, err := (seedDataset{
-		SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "Kline",
-		DataKind: "TIME_SERIES", DataNodeID: " storage-node-0 ",
-		seedCommon: seedCommon{Status: "active"},
+		SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "Kline", DataKind: "TIME_SERIES",
 	}).toPB()
 	require.NoError(t, err)
-	assert.Equal(t, "storage-node-0", dataset.GetDataNodeId())
-	assert.Equal(t, "disabled", dataset.GetStatus())
+	assert.Equal(t, "active", dataset.GetStatus())
 }
 
 func TestBuildMetadataImportCallsCanonicalizesViewAsStorage(t *testing.T) {
 	calls, err := buildMetadataImportCalls(metadataSeed{
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "TIME_SERIES", DataNodeID: "storage-node-0",
-			Freq: "1h",
+			DataKind: "TIME_SERIES",
+			Freq:     "1h",
 		}},
 		Views: []seedView{{
 			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
@@ -221,7 +213,7 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 		DataSources:    []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance"}},
 		Subjects:       []seedSubject{{SpaceID: "crypto", SubjectID: "BTC", Name: "Bitcoin"}},
 		Tags:           []seedTag{{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance Spot", Mode: "auto", Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}}},
-		Datasets:       []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", Freq: "1m", SubjectTags: []string{"binance_spot"}}},
+		Datasets:       []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", Freq: "1m", SubjectTags: []string{"binance_spot"}}},
 		Fields:         []seedField{{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}},
 		DatasetColumns: []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}},
 		Views: []seedView{{
@@ -329,23 +321,6 @@ func TestMetadataContractsEqualTreatsNilAndEmptyAttributesAsEqual(t *testing.T) 
 	))
 }
 
-func TestMetadataContractsEqualAcceptsActivatedLockedDataset(t *testing.T) {
-	expected := &pb.Dataset{
-		SpaceId: "crypto", DatasetId: "kline", DataSourceId: "binance",
-		Name: "行情", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
-		DataNodeId: "storage-node-0",
-		Freq:       "1h", Status: "disabled",
-	}
-	actual := proto.Clone(expected).(*pb.Dataset)
-	actual.Status = "active"
-	actual.BindingLocked = true
-	actual.Revision = 8
-	assert.True(t, metadataContractsEqual("datasets", expected, actual))
-
-	actual.BindingLocked = false
-	assert.False(t, metadataContractsEqual("datasets", expected, actual))
-}
-
 func TestApplyProbeResultOtherResources(t *testing.T) {
 	ds := &pb.DataSource{SpaceId: "crypto", DataSourceId: "binance"}
 	probe := &metadataExistsProbe{
@@ -437,7 +412,7 @@ func TestMetadataNotFoundAcceptsGenericNotFound(t *testing.T) {
 func TestProtoMessageSpaceIDFindsNestedMetadataResource(t *testing.T) {
 	req := &pb.CreateFieldReq{Field: &pb.Field{SpaceId: "stockcn", FieldId: "close"}}
 	assert.Equal(t, "stockcn", protoMessageSpaceID(req.ProtoReflect()))
-	assert.Empty(t, protoMessageSpaceID((&pb.ListDataNodesReq{}).ProtoReflect()))
+	assert.Empty(t, protoMessageSpaceID((&pb.ListSpacesReq{}).ProtoReflect()))
 }
 
 func TestSeedToPBAllTypes(t *testing.T) {
@@ -730,7 +705,7 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 		}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "行情",
-			Description: "小时行情", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", Freq: "1h",
+			Description: "小时行情", DataKind: "TIME_SERIES", Freq: "1h",
 		}},
 		FieldGroups: []seedFieldGroup{{
 			SpaceID: "crypto", GroupID: "quote", Name: "行情", Description: "行情字段", SortOrder: 1,

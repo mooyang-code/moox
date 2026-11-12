@@ -122,8 +122,6 @@ type metadataAPI interface {
 	ListViews(context.Context, *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
 	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error)
-	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error)
-	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error)
 }
 
 type MetadataClient interface {
@@ -139,13 +137,6 @@ type MetadataClient interface {
 	ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq, ...client.Option) (*storagepb.UpsertViewColumnRsp, error)
-	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq, ...client.Option) (*storagepb.CheckDatasetActivationRsp, error)
-	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq, ...client.Option) (*storagepb.ActivateDatasetRsp, error)
-}
-
-type PrimaryCleaner interface {
-	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq, ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
-	RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq, ...client.Option) (*storagepb.PrimaryRestoreDatasetRowsRsp, error)
 }
 
 type metadataProxy struct{ client MetadataClient }
@@ -188,16 +179,9 @@ func (p metadataProxy) UpsertDatasetColumn(ctx context.Context, req *storagepb.U
 func (p metadataProxy) UpsertViewColumn(ctx context.Context, req *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
 	return p.client.UpsertViewColumn(ctx, req)
 }
-func (p metadataProxy) CheckDatasetActivation(ctx context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
-	return p.client.CheckDatasetActivation(ctx, req)
-}
-func (p metadataProxy) ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
-	return p.client.ActivateDataset(ctx, req)
-}
 
 type Manager struct {
 	metadata metadataAPI
-	cleaner  datasetRowsCleaner
 	auth     *storagepb.AuthInfo
 	// fields 是行情源目录里可用的附加字段：结果数据集里它们的列（类型、显示名、fill 属性）按字段定义生成。
 	fields marketdata.FieldOffers
@@ -230,28 +214,12 @@ func extraColumnAttributes(spec marketdata.FieldSpec) map[string]string {
 	return attributes
 }
 
-type datasetRowsCleaner interface {
-	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
-	RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error)
-}
-
-type primaryDatasetRowsCleaner struct {
-	client PrimaryCleaner
-}
-
-func (c primaryDatasetRowsCleaner) DeleteDatasetRows(ctx context.Context, req *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	return c.client.DeleteDatasetRows(ctx, req)
-}
-
-func (c primaryDatasetRowsCleaner) RestoreDatasetRows(ctx context.Context, req *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
-	return c.client.RestoreDatasetRows(ctx, req)
-}
-
-func NewManagerWithCleaner(client MetadataClient, cleaner PrimaryCleaner, auth *storagepb.AuthInfo) *Manager {
-	if client == nil || cleaner == nil || auth == nil {
+// NewManager 用 Storage 元数据客户端构造结果管理器；删除数据集时 Storage 服务端会一并删掉行。
+func NewManager(client MetadataClient, auth *storagepb.AuthInfo) *Manager {
+	if client == nil || auth == nil {
 		return nil
 	}
-	return &Manager{metadata: metadataProxy{client: client}, cleaner: primaryDatasetRowsCleaner{client: cleaner}, auth: auth}
+	return &Manager{metadata: metadataProxy{client: client}, auth: auth}
 }
 
 func NewManagerWithAPI(metadata metadataAPI, auth *storagepb.AuthInfo) *Manager {
@@ -263,7 +231,6 @@ func NewManagerWithAPI(metadata metadataAPI, auth *storagepb.AuthInfo) *Manager 
 
 type Config struct {
 	ViewID       string
-	DataNodeID   string
 	Name         string
 	Description  string
 	Frequency    string
@@ -567,8 +534,8 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		return IDs{}, fmt.Errorf("task result metadata manager is not configured")
 	}
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
-	if spaceID == "" || taskID == "" || strings.TrimSpace(cfg.DataNodeID) == "" {
-		return IDs{}, fmt.Errorf("space_id, task_id and result data_node_id are required")
+	if spaceID == "" || taskID == "" {
+		return IDs{}, fmt.Errorf("space_id and task_id are required")
 	}
 	ids := configuredResultIDs(spaceID, taskID, dataType, cfg)
 	kind := storagepb.DataKind_DATA_KIND_TIME_SERIES
@@ -608,10 +575,15 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		return IDs{}, metadataError("get result dataset", nil, nil)
 	}
 	if get.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || get.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
+		columns, columnsErr := m.resultDatasetColumns(spaceID, kind, cfg.OutputFields)
+		if columnsErr != nil {
+			return IDs{}, columnsErr
+		}
+		// 数据集连同列在一次调用里建好，建好即可写入。
 		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: m.auth, Dataset: &storagepb.Dataset{
-			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: dataSourceID, DataNodeId: cfg.DataNodeID,
-			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", Freq: datasetFrequency(kind, cfg.Frequency), Attributes: attrs, SubjectTags: subjectTags,
-		}})
+			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: dataSourceID,
+			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Freq: datasetFrequency(kind, cfg.Frequency), Attributes: attrs, SubjectTags: subjectTags,
+		}, Columns: columns})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return IDs{}, metadataError("create result dataset", createErr, retInfoDataset(created))
 		}
@@ -667,42 +639,10 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		}
 		return IDs{}, original
 	}
-	if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, ids.ViewID, kind, cfg.OutputFields); err != nil {
-		return cleanupCreated(err)
-	}
-	check, err := m.metadata.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
-	if err != nil {
-		return cleanupCreated(fmt.Errorf("check result dataset activation: %w", err))
-	}
-	if check.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || !check.GetReady() {
-		return cleanupCreated(metadataError("check result dataset activation", nil, check.GetRetInfo()))
-	}
-	get, err = m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
-	if err != nil {
-		return cleanupCreated(fmt.Errorf("get result dataset: %w", err))
-	}
-	if get.GetDataset() == nil {
-		return cleanupCreated(metadataError("get result dataset", nil, nil))
-	}
-	if get.GetDataset().GetStatus() != "active" {
-		activated, activateErr := m.metadata.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID, ExpectedRevision: get.GetDataset().GetRevision()})
-		if activateErr != nil || activated == nil || activated.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-			return cleanupCreated(metadataError("activate result dataset", activateErr, retInfoActivate(activated)))
-		}
-	}
-	// CreateDataset intentionally starts disabled. Restore must run only after
-	// activation because Primary resolves the DataNode from active metadata.
-	// For an existing result this also clears a prior physical-delete tombstone
-	// before the next collection batch is allowed to write.
-	if m.cleaner != nil {
-		restored, restoreErr := m.cleaner.RestoreDatasetRows(ctx, &storagepb.PrimaryRestoreDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
-		if restoreErr != nil || restored == nil || restored.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-			return cleanupCreated(metadataError("restore result dataset rows", restoreErr, func() *storagepb.RetInfo {
-				if restored == nil {
-					return nil
-				}
-				return restored.GetRetInfo()
-			}()))
+	if !createdDataset {
+		// 已有的结果数据集按同一份列定义补齐：上一轮建数据集时缓存没发布成功，这里也会让 Storage 重新发布。
+		if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, kind, cfg.OutputFields); err != nil {
+			return IDs{}, err
 		}
 	}
 	if err := m.ensureView(ctx, spaceID, taskID, ids, kind, cfg); err != nil {
@@ -832,7 +772,7 @@ func (m *Manager) EnsureOutputFields(ctx context.Context, spaceID, taskID, datas
 	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
 		kind = storagepb.DataKind_DATA_KIND_RECORD
 	}
-	if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, ids.ViewID, kind, outputFields); err != nil {
+	if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, kind, outputFields); err != nil {
 		return err
 	}
 	// View 的列只能追加：已有列原样保留（任务收窄输出后，旧列在新行里为空），只补上这次新增的字段。
@@ -862,27 +802,10 @@ func (m *Manager) EnsureOutputFields(ctx context.Context, spaceID, taskID, datas
 	return nil
 }
 
+// cleanupCreatedDataset 删掉本轮刚建的结果数据集；Storage 服务端一并删掉它的行。
 func (m *Manager) cleanupCreatedDataset(ctx context.Context, spaceID, datasetID string) error {
-	// A newly-created Dataset is disabled until the activation step. Remove its
-	// metadata first so compensation also works when activation never happened;
-	// the collector has not published any rows before Ensure returns.
 	dataset, err := m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
-	if err == nil && dataset != nil && (dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS || dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND) {
-		return nil
-	}
-	if m.cleaner != nil {
-		physical, err := m.cleaner.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
-		if err != nil || physical == nil || !resultDeleteAccepted(physical.GetRetInfo()) {
-			return metadataError("delete newly-created result dataset rows", err, func() *storagepb.RetInfo {
-				if physical == nil {
-					return nil
-				}
-				return physical.GetRetInfo()
-			}())
-		}
-	}
-	dataset, err = m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
-	if err != nil || (dataset != nil && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
+	if err != nil || !resultDeleteAccepted(retInfoDatasetDelete(dataset)) {
 		return metadataError("delete newly-created result dataset", err, retInfoDatasetDelete(dataset))
 	}
 	return nil
@@ -938,17 +861,6 @@ func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataTy
 			if current.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && current.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && current.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
 				return metadataError("recheck result dataset ownership before cleanup", nil, current.GetRetInfo())
 			}
-			if m.cleaner != nil {
-				physical, cleanErr := m.cleaner.DeleteDatasetRows(cleanupCtx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
-				if cleanErr != nil || physical == nil || !resultDeleteAccepted(physical.GetRetInfo()) {
-					return metadataError("cleanup result dataset rows", cleanErr, func() *storagepb.RetInfo {
-						if physical == nil {
-							return nil
-						}
-						return physical.GetRetInfo()
-					}())
-				}
-			}
 			dataset, deleteErr := m.metadata.DeleteDataset(cleanupCtx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 			if deleteErr != nil || !resultDeleteAccepted(retInfoDatasetDelete(dataset)) {
 				return metadataError("cleanup result dataset", deleteErr, retInfoDatasetDelete(dataset))
@@ -998,7 +910,24 @@ func (m *Manager) resultMetadataState(ctx context.Context, spaceID, taskID strin
 	return datasetExists, viewExists, nil
 }
 
-func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID string, kind storagepb.DataKind, outputFields []string) error {
+// ensureColumns 把结果数据集的列逐个补齐（已有的列按同一定义覆盖）。
+func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID string, kind storagepb.DataKind, outputFields []string) error {
+	columns, err := m.resultDatasetColumns(spaceID, kind, outputFields)
+	if err != nil {
+		return err
+	}
+	for _, column := range columns {
+		column.SpaceId, column.DatasetId = spaceID, datasetID
+		resp, err := m.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: m.auth, Column: column})
+		if err != nil || resp == nil || resp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return metadataError("create result dataset column", err, retInfoDatasetColumn(resp))
+		}
+	}
+	return nil
+}
+
+// resultDatasetColumns 返回结果数据集的列定义：按数据类型取默认字段；指定了输出字段时只取选中的那些，并校验字段都受支持。
+func (m *Manager) resultDatasetColumns(spaceID string, kind storagepb.DataKind, outputFields []string) ([]*storagepb.DatasetColumn, error) {
 	fields := []struct {
 		name string
 		kind storagepb.FieldValueType
@@ -1124,24 +1053,22 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID 
 				unknown = append(unknown, name)
 			}
 			sort.Strings(unknown)
-			return fmt.Errorf("%w: %s", ErrUnsupportedOutputFields, strings.Join(unknown, ", "))
+			return nil, fmt.Errorf("%w: %s", ErrUnsupportedOutputFields, strings.Join(unknown, ", "))
 		}
 		if len(filtered) == 0 {
-			return fmt.Errorf("%w: at least one supported output field is required", ErrUnsupportedOutputFields)
+			return nil, fmt.Errorf("%w: at least one supported output field is required", ErrUnsupportedOutputFields)
 		}
 		fields = filtered
 	}
+	columns := make([]*storagepb.DatasetColumn, 0, len(fields))
 	for _, field := range fields {
 		attributes := map[string]string{"display_name": resultColumnDisplayName(field.name)}
 		if spec, ok := extra[field.name]; ok {
 			attributes = extraColumnAttributes(spec)
 		}
-		resp, err := m.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: m.auth, Column: &storagepb.DatasetColumn{SpaceId: spaceID, DatasetId: datasetID, ColumnName: field.name, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name, ValueType: field.kind, Required: true, Status: "active", Attributes: attributes}})
-		if err != nil || resp == nil || resp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-			return metadataError("create result dataset column", err, retInfoDatasetColumn(resp))
-		}
+		columns = append(columns, &storagepb.DatasetColumn{ColumnName: field.name, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name, ValueType: field.kind, Required: true, Status: "active", Attributes: attributes})
 	}
-	return nil
+	return columns, nil
 }
 
 func (m *Manager) ensureViewColumns(ctx context.Context, spaceID string, ids IDs, outputFields []string) error {
@@ -1347,21 +1274,11 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 	if _, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID}); err != nil {
 		return fmt.Errorf("get result dataset: %w", err)
 	}
-	// 物理清理不可逆：先确认没有结果自身 View 之外的引用，否则数据清空后元数据删除会被外键拒绝
+	// 先确认没有结果自身 View 之外的引用：否则删掉自身 View 之后，删数据集会被外键拒绝，留下没有 View 的结果。
 	if err := m.ensureNoExtraViews(ctx, spaceID, ids); err != nil {
 		return err
 	}
-	if m.cleaner != nil {
-		physical, err := m.cleaner.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
-		if err != nil || physical == nil || !resultDeleteAccepted(physical.GetRetInfo()) {
-			return metadataError("delete result dataset rows", err, func() *storagepb.RetInfo {
-				if physical == nil {
-					return nil
-				}
-				return physical.GetRetInfo()
-			}())
-		}
-	}
+	// 删数据集时 Storage 服务端先删元数据再删行，这里不用单独删行。
 	view, err := m.metadata.DeleteView(ctx, &storagepb.DeleteViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil || !resultDeleteAccepted(retInfoViewDelete(view)) {
 		return metadataError("delete result view", err, retInfoViewDelete(view))
@@ -1504,13 +1421,6 @@ func metadataError(action string, callErr error, ret *storagepb.RetInfo) error {
 }
 
 func retInfoDataset(resp *storagepb.CreateDatasetRsp) *storagepb.RetInfo {
-	if resp == nil {
-		return nil
-	}
-	return resp.GetRetInfo()
-}
-
-func retInfoActivate(resp *storagepb.ActivateDatasetRsp) *storagepb.RetInfo {
 	if resp == nil {
 		return nil
 	}

@@ -61,7 +61,7 @@ func TestStorageViewStateReadsRuntimeStatusJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "running", state)
 
-	_, err = storageViewState([]byte(`{"components":[{"id":"storage-node","state":"stopped"}]}`))
+	_, err = storageViewState([]byte(`{"components":[{"id":"storage-primary","state":"stopped"}]}`))
 	require.ErrorContains(t, err, "no storage-view")
 	_, err = storageViewState([]byte("storage-view: stopped"))
 	require.ErrorContains(t, err, "decode status output", "旧的文本格式不再识别")

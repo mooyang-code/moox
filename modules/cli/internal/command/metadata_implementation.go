@@ -53,9 +53,6 @@ func loadMetadataSeed(path string) (metadataSeed, error) {
 }
 
 func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
-	if err := validateSeedDatasets(seed.Datasets); err != nil {
-		return nil, err
-	}
 	var err error
 	seed, err = normalizeMetadataSeedViews(seed)
 	if err != nil {
@@ -227,15 +224,6 @@ func metadataDisplayNameKey(spaceID, originType, originID string) string {
 		normalizeEnum(originType),
 		strings.TrimSpace(originID),
 	}, "\x00")
-}
-
-func validateSeedDatasets(datasets []seedDataset) error {
-	for _, item := range datasets {
-		if strings.TrimSpace(item.DataNodeID) == "" {
-			return fmt.Errorf("dataset %q data_node_id is required", item.DatasetID)
-		}
-	}
-	return nil
 }
 
 func normalizeFieldGroups(seed metadataSeed) (metadataSeed, error) {
@@ -630,8 +618,6 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 	}
 	if resource == "datasets" {
 		x, y := a.(*pb.Dataset), b.(*pb.Dataset)
-		statusMatches := x.GetStatus() == y.GetStatus() ||
-			(x.GetStatus() == "disabled" && y.GetStatus() == "active" && y.GetBindingLocked())
 		return x.GetSpaceId() == y.GetSpaceId() &&
 			x.GetDatasetId() == y.GetDatasetId() &&
 			x.GetDataSourceId() == y.GetDataSourceId() &&
@@ -639,8 +625,7 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetDescription() == y.GetDescription() &&
 			x.GetDataKind() == y.GetDataKind() &&
 			x.GetFreq() == y.GetFreq() &&
-			statusMatches &&
-			x.GetDataNodeId() == y.GetDataNodeId() &&
+			x.GetStatus() == y.GetStatus() &&
 			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "fields" {
@@ -802,12 +787,13 @@ func (s seedTag) toPB() *pb.Tag {
 	return &pb.Tag{SpaceId: s.SpaceID, TagId: s.TagID, TagName: s.TagName, Description: s.Description, Mode: s.Mode, Builtin: s.Builtin, Attributes: s.Attributes}
 }
 
+// toPB 生成的数据集总是 active：Storage 建好数据集就启用，种子里数据集的 status 不起作用。
 func (s seedDataset) toPB() (*pb.Dataset, error) {
 	dataKind, err := parseDataKind(s.DataKind)
 	if err != nil {
 		return nil, err
 	}
-	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, DataNodeId: strings.TrimSpace(s.DataNodeID), Freq: s.Freq, SubjectTags: s.SubjectTags, Status: "disabled", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, Freq: s.Freq, SubjectTags: s.SubjectTags, Status: "active", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
 func (s seedField) toPB() (*pb.Field, error) {

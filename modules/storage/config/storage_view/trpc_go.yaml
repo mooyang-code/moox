@@ -102,8 +102,6 @@ storage:
   devices:
     pebble_path: ./var/storage/pebble
     view_index_root: ./var/storage/view-indexes
-  primary:
-    service_name: trpc.moox.storage.DataNode
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
   view:

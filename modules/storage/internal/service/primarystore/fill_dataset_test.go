@@ -33,7 +33,7 @@ func (activeSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.Datase
 // openTestStore 打开一个临时 Pebble 库，测试结束时关闭。
 func openTestStore(t *testing.T) *pebble.Store {
 	t.Helper()
-	store, err := pebble.Open(pebble.Options{NodeID: "storage-node-0", Path: filepath.Join(t.TempDir(), "pebble")})
+	store, err := pebble.Open(pebble.Options{NodeID: "storage-primary", Path: filepath.Join(t.TempDir(), "pebble")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,6 @@ type hookStore struct {
 	readChanges  func(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error)
 	commit       func(ctx context.Context, exp pebble.DatasetPeriodExpectation, items []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error)
 	appendMarker func(ctx context.Context, raw []byte) (string, error)
-	deleteRows   func(ctx context.Context, spaceID, datasetID string) (uint64, error)
 }
 
 func (s *hookStore) UpsertFields(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) ([]*pebble.OutboxEntry, error) {
@@ -101,13 +100,6 @@ func (s *hookStore) AppendDatasetMarker(ctx context.Context, raw []byte) (string
 		return s.appendMarker(ctx, raw)
 	}
 	return s.Store.AppendDatasetMarker(ctx, raw)
-}
-
-func (s *hookStore) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string) (uint64, error) {
-	if s.deleteRows != nil {
-		return s.deleteRows(ctx, spaceID, datasetID)
-	}
-	return s.Store.DeleteDatasetRows(ctx, spaceID, datasetID)
 }
 
 func newHookStore(t *testing.T) *hookStore {

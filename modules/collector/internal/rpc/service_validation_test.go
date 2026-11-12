@@ -92,6 +92,7 @@ func (f *taskResultMetadataFake) CreateDataset(_ context.Context, req *storagepb
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	dataset := req.GetDataset()
+	dataset.Status = "active"
 	f.datasets[dataset.GetDatasetId()] = dataset
 	return &storagepb.CreateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
@@ -161,14 +162,6 @@ func (f *taskResultMetadataFake) UpsertDatasetColumn(context.Context, *storagepb
 
 func (f *taskResultMetadataFake) UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
 	return &storagepb.UpsertViewColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (f *taskResultMetadataFake) CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
-	return &storagepb.CheckDatasetActivationRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Ready: true}, nil
-}
-
-func (f *taskResultMetadataFake) ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
-	return &storagepb.ActivateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func TestValidateCollectionTaskDatasetsRejectsMarketAndFrequencyMismatch(t *testing.T) {
@@ -527,7 +520,7 @@ func TestCreateTasksWithDifferentIDsOwnDifferentResultDatasets(t *testing.T) {
 	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
 	service := &Service{
 		taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
-		datasetSrc: acceptingKlineDatasetSource{}, resultDataNodeID: "node-collector",
+		datasetSrc: acceptingKlineDatasetSource{},
 	}
 	var datasets []string
 	var taskIDs []string
@@ -679,10 +672,9 @@ func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 	})
 	require.NoError(t, err)
 	service := &Service{
-		taskRepo:         db.Tasks(),
-		resultManager:    taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
-		datasetSrc:       acceptingKlineDatasetSource{},
-		resultDataNodeID: "node-collector",
+		taskRepo:      db.Tasks(),
+		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		datasetSrc:    acceptingKlineDatasetSource{},
 	}
 
 	rsp, callErr := service.CreateTask(context.Background(), &pb.CreateTaskReq{
@@ -768,10 +760,9 @@ func TestCreateTaskCompensatesResultWhenDatasetValidationFails(t *testing.T) {
 	})
 	require.NoError(t, err)
 	service := &Service{
-		taskRepo:         db.Tasks(),
-		resultManager:    taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
-		datasetSrc:       failingDatasetSource{},
-		resultDataNodeID: "node-collector",
+		taskRepo:      db.Tasks(),
+		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		datasetSrc:    failingDatasetSource{},
 	}
 
 	rsp, callErr := service.CreateTask(context.Background(), &pb.CreateTaskReq{

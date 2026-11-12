@@ -38,8 +38,6 @@ type metadataAPI interface {
 	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq, ...client.Option) (*storagepb.UpsertViewColumnRsp, error)
-	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq, ...client.Option) (*storagepb.CheckDatasetActivationRsp, error)
-	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq, ...client.Option) (*storagepb.ActivateDatasetRsp, error)
 }
 
 // Catalog is the narrow Metadata API needed to provision a task-owned target
@@ -129,15 +127,15 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if target.GetRetInfo() == nil {
 		return errors.New("get target Dataset: empty ret_info")
 	}
+	columns := targetDatasetColumns(tradeCount, params.OutputFields)
 	if target.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || target.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
+		// 数据集连同列在一次调用里建好，建好即可写入。
 		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: c.Auth, Dataset: &storagepb.Dataset{
-			SpaceId: task.SpaceID, DatasetId: targetDatasetID, DataNodeId: source.DataNodeID,
-			// Dataset names are unique within a space and must contain Chinese
-			// display text. Derive a short stable suffix from the target ID so
-			// independent resample targets do not collide on metadata creation.
+			SpaceId: task.SpaceID, DatasetId: targetDatasetID,
+			// 数据集名称在空间内唯一且必须含中文：用目标 ID 派生一个稳定的短后缀，避免不同合成目标重名。
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-			Freq: targetFreq.Storage, Status: "draft", Attributes: withLateness(attrs), SubjectTags: append([]string(nil), source.SubjectTags...),
-		}})
+			Freq: targetFreq.Storage, Attributes: withLateness(attrs), SubjectTags: append([]string(nil), source.SubjectTags...),
+		}, Columns: columns})
 		if createErr != nil {
 			return fmt.Errorf("create target Dataset: %w", createErr)
 		}
@@ -152,43 +150,21 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if target.GetDataset() == nil {
 		return compensate(errors.New("target Dataset is empty"))
 	}
-	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage, source.DataNodeID); err != nil {
+	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage); err != nil {
 		return compensate(err)
 	}
 	_ = subjects
-	for _, field := range fieldsFor(tradeCount) {
-		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
-			continue
-		}
-		resp, callErr := c.Metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: c.Auth, Column: &storagepb.DatasetColumn{
-			SpaceId: task.SpaceID, DatasetId: targetDatasetID, ColumnName: field.name,
-			OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name,
-			ValueType: field.type_, Required: field.required, Status: "active", Attributes: map[string]string{"display_name": field.label},
-		}})
-		if callErr != nil {
-			return compensate(fmt.Errorf("upsert target column %s: %w", field.name, callErr))
-		}
-		if err := ensureMetadataSuccess("upsert target column", resp.GetRetInfo()); err != nil {
-			return compensate(err)
-		}
-	}
-	check, err := c.Metadata.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, DatasetId: targetDatasetID})
-	if err != nil {
-		return compensate(fmt.Errorf("check target Dataset activation: %w", err))
-	}
-	if err := ensureMetadataSuccess("check target Dataset activation", check.GetRetInfo()); err != nil {
-		return compensate(err)
-	}
-	if !check.GetReady() {
-		return compensate(fmt.Errorf("target Dataset activation is not ready"))
-	}
-	if strings.ToLower(strings.TrimSpace(target.GetDataset().GetStatus())) != "active" {
-		activated, activateErr := c.Metadata.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, DatasetId: targetDatasetID, ExpectedRevision: target.GetDataset().GetRevision()})
-		if activateErr != nil {
-			return compensate(fmt.Errorf("activate target Dataset: %w", activateErr))
-		}
-		if err := ensureMetadataSuccess("activate target Dataset", activated.GetRetInfo()); err != nil {
-			return compensate(err)
+	if !createdDataset {
+		// 已有的目标数据集按同一份列定义补齐：上一轮建数据集时缓存没发布成功，这里也会让 Storage 重新发布。
+		for _, column := range columns {
+			column.SpaceId, column.DatasetId = task.SpaceID, targetDatasetID
+			resp, callErr := c.Metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: c.Auth, Column: column})
+			if callErr != nil {
+				return fmt.Errorf("upsert target column %s: %w", column.GetColumnName(), callErr)
+			}
+			if err := ensureMetadataSuccess("upsert target column", resp.GetRetInfo()); err != nil {
+				return err
+			}
 		}
 	}
 	viewResp, viewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, ViewId: targetViewID})
@@ -283,6 +259,21 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return compensate(err)
 	}
 	return nil
+}
+
+// targetDatasetColumns 返回目标数据集的列定义：市场的合成字段，指定了输出字段时只取选中的那些。
+func targetDatasetColumns(tradeCount bool, outputFields []string) []*storagepb.DatasetColumn {
+	var columns []*storagepb.DatasetColumn
+	for _, field := range fieldsFor(tradeCount) {
+		if len(outputFields) > 0 && !containsOutputField(outputFields, field.name) {
+			continue
+		}
+		columns = append(columns, &storagepb.DatasetColumn{
+			ColumnName: field.name, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name,
+			ValueType: field.type_, Required: field.required, Status: "active", Attributes: map[string]string{"display_name": field.label},
+		})
+	}
+	return columns
 }
 
 func containsOutputField(fields []string, name string) bool {
@@ -465,15 +456,12 @@ func cloneStringMap(input map[string]string) map[string]string {
 	return output
 }
 
-func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, frequency, dataNodeID string) error {
+func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, frequency string) error {
 	if dataset.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES {
 		return errors.New("target Dataset must be time_series")
 	}
 	if strings.TrimSpace(dataset.GetDataSourceId()) != "" {
 		return fmt.Errorf("collector-owned target Dataset must not declare a single data source: got %q", dataset.GetDataSourceId())
-	}
-	if strings.TrimSpace(dataNodeID) != "" && strings.TrimSpace(dataset.GetDataNodeId()) != strings.TrimSpace(dataNodeID) {
-		return fmt.Errorf("target Dataset data node does not match source: got %q want %q", dataset.GetDataNodeId(), dataNodeID)
 	}
 	for key, expected := range want {
 		if dataset.GetAttributes()[key] != expected {

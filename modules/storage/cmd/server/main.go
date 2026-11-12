@@ -59,7 +59,7 @@ func main() {
 }
 
 // pebbleStoreID 是主服务 Pebble 库的身份，写进变更日志游标与 Outbox 事件。
-const pebbleStoreID = "storage-node-0"
+const pebbleStoreID = "storage-primary"
 
 func runPrimaryRole() error {
 	root := os.Getenv("MOOX_STORAGE_HOME")

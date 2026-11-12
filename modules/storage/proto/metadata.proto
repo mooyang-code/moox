@@ -206,13 +206,9 @@ message Dataset {
   string updated_at = 10;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 11;
-  // data_node_id 已不再使用：Storage 只原样保存，调用方去掉节点后删除。
-  string data_node_id = 17;
   // retention 是只读的生效保留期，由 Storage 策略文件按 (space_id, freq) 解析，取值为 "<n>h" 或
   // "forever"；记录型 Dataset 为 "forever"。写接口忽略该字段。
   string retention = 18;
-  // binding_locked 已不再使用：Storage 只原样保存，调用方去掉激活后删除。
-  bool binding_locked = 19;
   // revision 是 Dataset 元数据的单调递增修订号，用于并发控制。
   uint64 revision = 20;
   // subject_tags 是数据集标的范围，取值为 tag_id。
@@ -314,47 +310,6 @@ message DatasetColumn {
   string updated_at = 11;
   // attributes 是扩展属性；factor_result 的因子输出列（column_kind=output）display_name 必须等于列名，其他业务列（包括参数列 __params）必须包含中文且不超过 10 个字符。
   map<string, string> attributes = 12;
-}
-
-// DataNode 表示一个可被 storage-primary 直接调用的数据存储节点。
-message DataNode {
-  // node_id 是部署生成的稳定节点标识。
-  string node_id = 1;
-  // name 是管理台展示名称。
-  string name = 2;
-  // service_target 是 DataNode 内部 tRPC 地址。
-  string service_target = 3;
-  // status 表示 active 或 disabled。
-  string status = 4;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 5;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 6;
-}
-
-// DatasetSummary 是 DataNode 列表中携带的数据集摘要。
-message DatasetSummary {
-  string space_id = 1;
-  string dataset_id = 2;
-  string name = 3;
-  DataKind data_kind = 4;
-  // retention 与 retention_source 同 Dataset 中的只读字段。
-  string retention = 5;
-  string status = 6;
-  string retention_source = 7;
-}
-
-// DataNodeListItem 是 DataNode 及其全部 Dataset 摘要的组合视图。
-message DataNodeListItem {
-  DataNode node = 1;
-  repeated DatasetSummary datasets = 2;
-}
-
-// DatasetActivationCheck 是一次 Dataset 激活自检的单项结果。
-message DatasetActivationCheck {
-  string check_id = 1;
-  bool ready = 2;
-  string summary = 3;
 }
 
 // Device 是底层具体存储组件，例如 Pebble、DuckDB、Bleve 或 Parquet 归档。
@@ -836,8 +791,6 @@ message ListDatasetsReq {
   string freq = 5;
   // page 是分页参数。
   common.Page page = 6;
-  // data_node_id 是可选 DataNode 过滤条件。
-  string data_node_id = 7;
 }
 
 // ListDatasetsRsp 表示列出数据集的响应。
@@ -1075,103 +1028,6 @@ message ListDatasetColumnsRsp {
   common.PageResult page_result = 3;
 }
 
-// RegisterDataNodeReq 表示部署流程注册或刷新 DataNode。
-message RegisterDataNodeReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  string service_target = 3;
-  string initial_name = 4;
-}
-
-message RegisterDataNodeRsp {
-  common.RetInfo ret_info = 1;
-  DataNode node = 2;
-}
-
-// UpdateDataNodeReq 表示管理员更新 DataNode 的可编辑字段。
-message UpdateDataNodeReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  string name = 3;
-  string status = 4;
-}
-
-message UpdateDataNodeRsp {
-  common.RetInfo ret_info = 1;
-  DataNode node = 2;
-}
-
-message GetDataNodeReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-}
-
-message GetDataNodeRsp {
-  common.RetInfo ret_info = 1;
-  DataNode node = 2;
-}
-
-message ListDataNodesReq {
-  common.AuthInfo auth_info = 1;
-  string status = 2;
-  common.Page page = 3;
-}
-
-message ListDataNodesRsp {
-  common.RetInfo ret_info = 1;
-  repeated DataNodeListItem items = 2;
-  common.PageResult page_result = 3;
-}
-
-message DeleteDataNodeReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-}
-
-message DeleteDataNodeRsp {
-  common.RetInfo ret_info = 1;
-  DataNode node = 2;
-}
-
-message RebindDatasetDataNodeReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string dataset_id = 3;
-  string data_node_id = 4;
-  uint64 expected_revision = 5;
-}
-
-message RebindDatasetDataNodeRsp {
-  common.RetInfo ret_info = 1;
-  Dataset dataset = 2;
-}
-
-message CheckDatasetActivationReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string dataset_id = 3;
-}
-
-message CheckDatasetActivationRsp {
-  common.RetInfo ret_info = 1;
-  uint64 dataset_revision = 2;
-  repeated DatasetActivationCheck checks = 3;
-  bool ready = 4;
-}
-
-message ActivateDatasetReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string dataset_id = 3;
-  uint64 expected_revision = 4;
-}
-
-message ActivateDatasetRsp {
-  common.RetInfo ret_info = 1;
-  Dataset dataset = 2;
-  repeated DatasetActivationCheck checks = 3;
-}
-
 // CreateDeviceReq 表示创建设备的请求。
 message CreateDeviceReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -1379,12 +1235,6 @@ service Metadata {
   rpc GetDataset(GetDatasetReq) returns (GetDatasetRsp);
   // 列出数据集。
   rpc ListDatasets(ListDatasetsReq) returns (ListDatasetsRsp);
-  // 已无作用：节点已并入主服务，返回未实现；调用方改造后删除。
-  rpc RebindDatasetDataNode(RebindDatasetDataNodeReq) returns (RebindDatasetDataNodeRsp);
-  // 已无作用：数据集建好即可用，总是返回就绪；调用方改造后删除。
-  rpc CheckDatasetActivation(CheckDatasetActivationReq) returns (CheckDatasetActivationRsp);
-  // 已无作用：数据集建好即可用，停用的数据集在这里重新启用；调用方改造后删除。
-  rpc ActivateDataset(ActivateDatasetReq) returns (ActivateDatasetRsp);
   // 列出 Dataset 覆盖的 Subject。
   rpc ListDatasetSubjects(ListDatasetSubjectsReq) returns (ListDatasetSubjectsRsp);
 
@@ -1414,13 +1264,6 @@ service Metadata {
   rpc UpsertDatasetColumn(UpsertDatasetColumnReq) returns (UpsertDatasetColumnRsp);
   // 列出数据集列。
   rpc ListDatasetColumns(ListDatasetColumnsReq) returns (ListDatasetColumnsRsp);
-
-  // 以下五个节点接口已无作用：节点已并入主服务，返回未实现；调用方改造后删除。
-  rpc RegisterDataNode(RegisterDataNodeReq) returns (RegisterDataNodeRsp);
-  rpc UpdateDataNode(UpdateDataNodeReq) returns (UpdateDataNodeRsp);
-  rpc GetDataNode(GetDataNodeReq) returns (GetDataNodeRsp);
-  rpc ListDataNodes(ListDataNodesReq) returns (ListDataNodesRsp);
-  rpc DeleteDataNode(DeleteDataNodeReq) returns (DeleteDataNodeRsp);
 
   // 创建设备。
   rpc CreateDevice(CreateDeviceReq) returns (CreateDeviceRsp);

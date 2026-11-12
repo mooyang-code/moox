@@ -38,6 +38,9 @@ type catalogMetadataFake struct {
 	failAt      string
 	failCleanup bool
 	deleteOrder []string
+	// createColumns 是随 CreateDataset 一起写入的列；upsertColumns 是单独补列的次数。
+	createColumns []string
+	upsertColumns int
 }
 
 func newCatalogMetadataFake(failAt string) *catalogMetadataFake {
@@ -70,7 +73,12 @@ func (f *catalogMetadataFake) CreateDataset(_ context.Context, req *storagepb.Cr
 	if err := f.fail("create_dataset"); err != nil {
 		return nil, err
 	}
+	// 和 Storage 一样：数据集建好即启用，列随数据集一起写入。
 	dataset := req.GetDataset()
+	dataset.Status = "active"
+	for _, column := range req.GetColumns() {
+		f.createColumns = append(f.createColumns, column.GetColumnName())
+	}
 	f.datasets[dataset.GetDatasetId()] = dataset
 	return &storagepb.CreateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
@@ -103,6 +111,8 @@ func (f *catalogMetadataFake) CreateView(_ context.Context, req *storagepb.Creat
 		return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
 	}
 	view := req.GetView()
+	// 和 Storage 一样：View 的频率取自它的数据集。
+	view.Freq = f.datasets[view.GetDatasetId()].GetFreq()
 	if f.failAt == "update_view" {
 		view.Attributes = cloneStringMap(view.GetAttributes())
 		delete(view.Attributes, "route_ready_request_id")
@@ -124,27 +134,11 @@ func (f *catalogMetadataFake) DeleteView(_ context.Context, req *storagepb.Delet
 }
 
 func (f *catalogMetadataFake) UpsertDatasetColumn(_ context.Context, _ *storagepb.UpsertDatasetColumnReq, _ ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {
+	f.upsertColumns++
 	if err := f.fail("dataset_column"); err != nil {
 		return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
 	}
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (f *catalogMetadataFake) CheckDatasetActivation(_ context.Context, _ *storagepb.CheckDatasetActivationReq, _ ...client.Option) (*storagepb.CheckDatasetActivationRsp, error) {
-	if err := f.fail("check_activation"); err != nil {
-		return &storagepb.CheckDatasetActivationRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
-	}
-	return &storagepb.CheckDatasetActivationRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Ready: true}, nil
-}
-
-func (f *catalogMetadataFake) ActivateDataset(_ context.Context, req *storagepb.ActivateDatasetReq, _ ...client.Option) (*storagepb.ActivateDatasetRsp, error) {
-	if err := f.fail("activate_dataset"); err != nil {
-		return &storagepb.ActivateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
-	}
-	if dataset := f.datasets[req.GetDatasetId()]; dataset != nil {
-		dataset.Status = "active"
-	}
-	return &storagepb.ActivateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func (f *catalogMetadataFake) UpdateView(_ context.Context, req *storagepb.UpdateViewReq, _ ...client.Option) (*storagepb.UpdateViewRsp, error) {
@@ -189,9 +183,23 @@ func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, dom
 		SourceDatasetID: "source-bars", SourceFrequency: "1m", SourceSeriesTag: "venue:binance",
 		TargetDatasetID: "caller-selected-target", TargetFrequency: "5m", Alignment: "epoch_utc",
 	}
-	source := storagesource.DatasetInfo{DataSourceID: "crypto", DataNodeID: "node-1"}
+	source := storagesource.DatasetInfo{DataSourceID: "crypto"}
 	subjects := []domain.Subject{{SubjectID: "BTC", Status: "active"}}
 	return metadata, catalog, rule, params, source, subjects
+}
+
+// 新建目标数据集时列随 CreateDataset 一次写入；已有的目标数据集按同一份列定义补列，不再新建。
+func TestPrepareTargetCreatesDatasetWithColumnsInOneCall(t *testing.T) {
+	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("")
+
+	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
+	want := []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num"}
+	require.Equal(t, want, metadata.createColumns)
+	require.Zero(t, metadata.upsertColumns)
+
+	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
+	require.Equal(t, want, metadata.createColumns, "已有的目标数据集不再新建")
+	require.Equal(t, len(want), metadata.upsertColumns)
 }
 
 func TestPrepareTargetCompensatesCreatedDatasetWhenViewCreationFails(t *testing.T) {
@@ -210,9 +218,6 @@ func TestPrepareTargetCompensatesNewResourcesInReverseOrderAfterLaterFailure(t *
 		failAt      string
 		deleteOrder []string
 	}{
-		{failAt: "dataset_column", deleteOrder: []string{"dataset"}},
-		{failAt: "check_activation", deleteOrder: []string{"dataset"}},
-		{failAt: "activate_dataset", deleteOrder: []string{"dataset"}},
 		{failAt: "update_view", deleteOrder: []string{"view", "dataset"}},
 		{failAt: "view_column", deleteOrder: []string{"view", "dataset"}},
 		{failAt: "view_sync", deleteOrder: []string{"view", "dataset"}},
@@ -233,7 +238,7 @@ func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("view_column")
 	ids := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
 	metadata.datasets[ids.DatasetID] = &storagepb.Dataset{
-		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID, DataNodeId: source.DataNodeID,
+		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID,
 		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active",
 		Attributes: map[string]string{
 			"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID,
@@ -292,7 +297,7 @@ func TestWaitTargetViewRevisionReturnsNotReadyWhenTimeoutExpires(t *testing.T) {
 	assert.ErrorIs(t, err, ErrTargetViewNotReady)
 }
 
-func TestValidateTargetDatasetChecksImmutableLineageAndPlacement(t *testing.T) {
+func TestValidateTargetDatasetChecksImmutableLineage(t *testing.T) {
 	want := map[string]string{
 		"owner_module":          "collector",
 		"managed_by":            "collector",
@@ -308,30 +313,26 @@ func TestValidateTargetDatasetChecksImmutableLineageAndPlacement(t *testing.T) {
 		"alignment":             "epoch_utc",
 	}
 	dataset := &storagepb.Dataset{
-		DataNodeId: "storage-node-0",
 		DataKind:   storagepb.DataKind_DATA_KIND_TIME_SERIES,
 		Freq:       "5m",
 		Attributes: cloneStringMap(want),
 	}
-	require.NoError(t, validateTargetDataset(dataset, want, "5m", "storage-node-0"))
+	require.NoError(t, validateTargetDataset(dataset, want, "5m"))
 
 	for key, value := range want {
 		t.Run("attribute/"+key, func(t *testing.T) {
 			copy := proto.Clone(dataset).(*storagepb.Dataset)
 			copy.Attributes = cloneStringMap(dataset.Attributes)
 			copy.Attributes[key] = value + "-drift"
-			require.ErrorContains(t, validateTargetDataset(copy, want, "5m", "storage-node-0"), "immutable lineage attribute")
+			require.ErrorContains(t, validateTargetDataset(copy, want, "5m"), "immutable lineage attribute")
 		})
 	}
 	wrongSource := proto.Clone(dataset).(*storagepb.Dataset)
 	wrongSource.DataSourceId = "binance"
-	require.ErrorContains(t, validateTargetDataset(wrongSource, want, "5m", "storage-node-0"), "must not declare a single data source")
-	wrongNode := proto.Clone(dataset).(*storagepb.Dataset)
-	wrongNode.DataNodeId = "storage-node-1"
-	require.ErrorContains(t, validateTargetDataset(wrongNode, want, "5m", "storage-node-0"), "data node")
+	require.ErrorContains(t, validateTargetDataset(wrongSource, want, "5m"), "must not declare a single data source")
 	monthly := proto.Clone(dataset).(*storagepb.Dataset)
 	monthly.Freq = "1mo"
-	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m", "storage-node-0"), `freq is "1mo", not 5m`)
+	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m"), `freq is "1mo", not 5m`)
 }
 
 func TestPrepareTargetViewContractUsesDatasetFrequency(t *testing.T) {

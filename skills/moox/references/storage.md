@@ -1,9 +1,9 @@
 # Storage 职责与边界
 
-当前 `modules/storage` 有 primary、node、view 三个角色；外部 RPC 入口是独立的 `modules/access`。
+当前 `modules/storage` 有 primary、view 两个角色；外部 RPC 入口是独立的 `modules/access`。
 
 - SQLite：primary 保存空间、标的、标签、数据集、字段和 View 元数据。
-- Pebble：node 保存字段级时序/记录事实、Outbox、采集周期账本与行变更日志。
+- Pebble：primary 在同一进程内保存字段级时序/记录事实、Outbox、采集周期账本与行变更日志。
 - DuckDB：view 保存可重建的时序宽表；每个 View 一个物理索引：首次从 Primary 回填建成，之后原地加列、定时删除最旧数据。
 - Bleve：view 为记录数据提供全文索引。
 

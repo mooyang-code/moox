@@ -1380,7 +1380,7 @@ func TestDuckDBEquivalentPhysicalTimesCollapseInOneWrite(t *testing.T) {
 }
 
 func TestNormalizeColumnValueDropsMalformedJSONOnlyDuringBackfill(t *testing.T) {
-	value := "map[CalleeContainerName:storage CalleeMethod:GetDataNode]"
+	value := "map[CalleeContainerName:storage CalleeMethod:GetDataset]"
 	got, err := normalizeColumnValue(value, pb.FieldValueType_FIELD_VALUE_TYPE_JSON, viewindex.Backfill)
 	if err != nil || got != nil {
 		t.Fatalf("backfill malformed JSON = (%v, %v), want (nil, nil)", got, err)

@@ -29,12 +29,9 @@ var (
 	servicePathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
 )
 
+// storageInternalMethods 是 Storage 进程内部使用的方法，任何路由都不能放行。
 var storageInternalMethods = map[string]struct{}{
 	"CompleteViewInitialBuild": {},
-	"MergePrimaryRows":         {},
-	"ScanPrimaryRows":          {},
-	"DeletePrimaryRows":        {},
-	"DeleteTimeSeriesRows":     {},
 	"PrepareViewIndex":         {},
 	"ApplyViewIndex":           {},
 	"StatViewIndex":            {},
@@ -42,17 +39,6 @@ var storageInternalMethods = map[string]struct{}{
 	"ListViewIndexes":          {},
 	"QueryTimeSeriesIndex":     {},
 	"SearchRecordIndex":        {},
-	"GetShardState":            {},
-}
-
-var storagePrivilegedMethods = map[string]map[string]struct{}{
-	"trpc.moox.storage.DataShard": {
-		"MergeRows":     {},
-		"ReadRows":      {},
-		"ScanRows":      {},
-		"DeleteRows":    {},
-		"GetShardState": {},
-	},
 }
 
 type Route struct {
@@ -113,55 +99,18 @@ func ValidateRoute(route Route) error {
 	if len(route.AllowedCallers) == 0 {
 		return fmt.Errorf("route requires a nonempty allowed_callers list")
 	}
-	isStoragePath := strings.HasPrefix(route.ServicePath, "trpc.moox.storage.")
-	if isStoragePath {
-		for _, method := range route.AllowedMethods {
-			if method == "*" {
-				return fmt.Errorf("storage routes cannot use wildcard allowed_methods")
-			}
-		}
-		for _, caller := range route.AllowedCallers {
-			if caller == "*" {
-				return fmt.Errorf("storage routes cannot use wildcard allowed_callers")
-			}
-		}
-	}
-	if route.ServiceID == "storage" || route.ServiceID == "storage-primary" || route.ServiceID == "storage-view" {
-		for _, method := range route.AllowedMethods {
-			if method == "*" {
-				return fmt.Errorf("storage routes cannot use wildcard allowed_methods")
-			}
-			_, internal := storageInternalMethods[method]
-			_, dataShardPrivileged := storagePrivilegedMethods[route.ServicePath][method]
-			if internal && !dataShardPrivileged {
-				return fmt.Errorf("storage method %q is internal and cannot be routed", method)
-			}
-		}
-	}
-	if route.ServicePath == "trpc.moox.storage.DataShard" {
-		for _, method := range route.AllowedMethods {
-			if method == "*" {
-				return fmt.Errorf("DataShard routes cannot use wildcard allowed_methods")
-			}
-			if _, ok := storagePrivilegedMethods[route.ServicePath][method]; !ok {
-				return fmt.Errorf("DataShard method %q is not routable", method)
-			}
-		}
-		for _, caller := range route.AllowedCallers {
-			if caller != "storage-primary" {
-				return fmt.Errorf("DataShard routes only allow storage-primary caller")
-			}
-		}
-	}
+	isStorage := strings.HasPrefix(route.ServicePath, "trpc.moox.storage.") ||
+		route.ServiceID == "storage" || route.ServiceID == "storage-primary" || route.ServiceID == "storage-view"
 	for _, method := range route.AllowedMethods {
-		_, internal := storageInternalMethods[method]
-		_, dataShardPrivileged := storagePrivilegedMethods[route.ServicePath][method]
-		if internal && !dataShardPrivileged {
+		if isStorage && method == "*" {
+			return fmt.Errorf("storage routes cannot use wildcard allowed_methods")
+		}
+		if _, internal := storageInternalMethods[method]; internal {
 			return fmt.Errorf("storage method %q is internal and cannot be routed", method)
 		}
 	}
 	for _, caller := range route.AllowedCallers {
-		if isStoragePath && caller == "*" {
+		if isStorage && caller == "*" {
 			return fmt.Errorf("storage routes cannot use wildcard allowed_callers")
 		}
 		if caller != "*" && !serviceIDPattern.MatchString(caller) {

@@ -164,9 +164,7 @@ datasets:
   data_source_id: quantclass_stock
   name: 财报指标明细
   data_kind: record
-  data_node_id: storage-node-0
   freq: quarter
-  status: disabled
   attributes:
     source_directories: 邢不行财务数据
     storage_model: long_form
@@ -175,9 +173,7 @@ datasets:
   data_source_id: quantclass_stock
   name: 财务摘要
   data_kind: record
-  data_node_id: storage-node-0
   freq: quarter
-  status: disabled
   attributes:
     source_directories: 财务预处理数据
     storage_model: wide_common_metrics
@@ -187,9 +183,7 @@ datasets:
   data_source_id: market_data
   name: 美股行情
   data_kind: time_series
-  data_node_id: storage-node-0
   freq: 1d
-  status: disabled
   attributes:
     market_id: stockus
     instrument_type: equity

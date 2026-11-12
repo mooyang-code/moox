@@ -245,17 +245,14 @@
 | 命令 | 说明 |
 | --- | --- |
 | `metadata apply` | 创建并校验存储元数据 seed |
-| `metadata dataset activate` | 激活数据集 |
-| `metadata dataset activation` | 检查数据集能否激活 |
 | `metadata dataset add-column` | 给数据集加列（或修改列） |
 | `metadata dataset columns` | 列出数据集的列 |
 | `metadata dataset create` | 创建数据集（保留期不在这里设：由 Storage 的保留策略文件按空间与频率决定） |
-| `metadata dataset delete` | 删除数据集的元数据（默认只预览，--yes 才执行；删除采集结果用 collector task delete-result） |
+| `metadata dataset delete` | 删除数据集（服务端先删元数据再删行，默认只预览，--yes 才执行；删除采集结果用 collector task delete-result） |
 | `metadata dataset list` | 列出数据集 |
-| `metadata dataset rebind` | 把数据集换绑到另一个存储节点（默认只预览，--yes 才执行） |
 | `metadata dataset show` | 查看数据集 |
 | `metadata dataset subjects` | 列出数据集里有数据的标的 |
-| `metadata dataset update` | 修改数据集的名称、说明与状态（数据来源、类型、频率、存储节点创建后不可变，换节点用 rebind） |
+| `metadata dataset update` | 修改数据集的名称、说明与状态（数据来源、类型、频率创建后不可变） |
 | `metadata device create` | 登记存储设备 |
 | `metadata device list` | 列出存储设备 |
 | `metadata device show` | 查看存储设备 |
@@ -386,17 +383,13 @@
 | `space show` | 查看 Storage 里一个空间的元数据 |
 | `space update` | 修改空间 |
 
-## storage：存储节点登记、View 维护与元数据重置
+## storage：View 维护与元数据重置
 
 | 命令 | 说明 |
 | --- | --- |
 | `storage delete-view` | 离线删除一个 View 的元数据（不带 --yes 时存储机上的程序会拒绝执行） |
 | `storage force-rebuild-view` | 删除旧 View、清空 durable consumer 状态并从头重建（默认只预览，--yes 才执行） |
-| `storage node delete` | 删除一个存储节点登记 |
-| `storage node list` | 列出存储节点登记 |
-| `storage node show` | 查看存储节点登记 |
-| `storage node update` | 修改存储节点的名称或状态 |
-| `storage period-inventory` | 只读盘点 DataNode 的周期完成标记（要求 DataNode 没有打开该数据库） |
+| `storage period-inventory` | 只读盘点 Pebble 库里的周期完成标记（要求 storage-primary 没有打开该数据库；`--node-id` 填 `storage-primary`） |
 | `storage purge-dataset-events` | 精确清理一个数据集在 EventBus 里的历史事件（默认只预览，--yes 才执行） |
 | `storage repair-view` | 清理 View 消费积压并重建索引（默认只预览，--yes 才执行） |
 | `storage reset-metadata` | 备份后清空全部业务定义并重新导入种子（Storage 必须已停止；默认只预览，--yes 才执行） |

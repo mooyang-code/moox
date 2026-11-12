@@ -192,13 +192,13 @@ cd moox-${VER}
 - `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。`reasons` 不为空时把缺的步骤告诉用户：安装中途换了配置或版本的，换回原配置和原版本后补上；装好后有意新增主机或组件的，按 [`host-registry.md`](host-registry.md) 部署，不要清空。
 - 输出里有 `warnings` 时先告诉用户。`disk_insufficient` 不拦清除，但部署会拒绝，要先腾出空间或换大磁盘。
 
-元数据必须在管理台之前激活：Monitor 要等系统数据集就绪才算启动成功。
+元数据必须在管理台之前导入：Monitor 要等系统数据集就绪才算启动成功。
 
 ## 5. 初始化
 
 启用 SCF 采集（`[scf_plan] enabled = true`）时，先按 `references/private-network.md` 为每个采集地域配置同地域的 Access 主机与 VPC。
 
-`setup init --stage storage` 只写业务空间、登记存储节点、导入并激活元数据。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、业务空间、云账户、日志服务、元数据核对，已经做过的不会重复写入。因子任务和默认策略在 `setup start` 里按空间导入。
+`setup init --stage storage` 只写业务空间、导入元数据（数据集建好即为 active，不需要另外激活）。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、业务空间、云账户、日志服务、元数据核对，已经做过的不会重复写入。因子任务和默认策略在 `setup start` 里按空间导入。
 
 管理台用内部证书。信任要这台电脑的管理员授权，Agent 做不了，也不阻塞安装：`setup validate` 把它放在 `manual_steps`，安装结束时把下面的命令交给用户在自己的终端运行，不要替用户清理钥匙串里的这张证书。
 
@@ -279,7 +279,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `strategy_not_running` | 启用的策略实例没有运行会话 | 看 `strategy instance show` 和 `setup logs --component strategy` |
 | `admin_not_ready`、`host_not_ready` | admin 或这台主机的主机服务还没完成，或这台电脑没有部署状态 | 回到 `setup validate`，按 `next_steps` 走 |
 | `logs_unavailable` | 读不到目标机的日志 | 检查 SSH 连接；读不到就向用户说明，不要上机 |
-| `init_storage_required` | 系统元数据还没激活 | 先运行 `setup init --stage storage` |
+| `init_storage_required` | 系统元数据还没导入 | 先运行 `setup init --stage storage` |
 | `deployment_not_fresh` | 目标机不是空机，`bootstrap` 没有动手 | 回到第 3 节 |
 | `…operator bootstrap pin`、`full control requires…` | 这台电脑没有部署状态 | 回到 `setup validate`，不要手动恢复 |
 | `wipe_scope_changed` | 清除范围和预览不一致，没有清除任何主机 | 重新预览并确认 |

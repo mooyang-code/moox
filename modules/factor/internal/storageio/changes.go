@@ -40,7 +40,7 @@ type Changes struct {
 	Gap bool
 }
 
-// ReadDatasetChanges 从游标之后读取数据集所在 DataNode 的行变更日志；fromHead 为真时只返回头部位点（取基线）。
+// ReadDatasetChanges 从游标之后读取数据集的行变更日志；fromHead 为真时只返回头部位点（取基线）。
 func (c *Client) ReadDatasetChanges(ctx context.Context, spaceID, datasetID string, cursor *ChangeCursor, fromHead bool, limit int) (Changes, error) {
 	if err := c.primaryReady("read dataset changes"); err != nil {
 		return Changes{}, err

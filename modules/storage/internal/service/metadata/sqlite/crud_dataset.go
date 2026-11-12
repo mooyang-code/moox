@@ -138,8 +138,6 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 		status = candidate
 	}
 	item.DataSourceId = dataSourceID
-	// data_node_id、binding_locked 已不再使用，只原样保留，调用方去掉后删除。
-	item.DataNodeId = existing.GetDataNodeId()
 	item.DataKind = existing.GetDataKind()
 	item.Freq = existing.GetFreq()
 	item.Retention, item.RetentionSource = "", ""
@@ -148,7 +146,6 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 		return nil, err
 	}
 	item.Status = status
-	item.BindingLocked = existing.GetBindingLocked()
 	item.Revision = existing.GetRevision() + 1
 	item.CreatedAt = existing.GetCreatedAt()
 	item.UpdatedAt = s.nowUTC().Format(time.RFC3339Nano)

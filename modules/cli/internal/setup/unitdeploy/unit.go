@@ -48,9 +48,6 @@ func unitConfiguration(snapshot *setupconfig.Snapshot, profile string) ([]byte, 
 	return nil, nil
 }
 
-// storageNodeID 是单个存储节点的固定 ID：元数据种子、Collector 与 Storage 的默认值都使用它。
-const storageNodeID = "storage-node-0"
-
 // defaultSpaceID 是 Collector 行情调度的默认空间。
 const defaultSpaceID = "crypto"
 
@@ -60,7 +57,7 @@ const collectorStorageAppID = "moox-collector"
 // serviceLogComponents 是接入了重要日志与 CLS 上报的组件，和 docs/模块/监控.md 的接入范围一致。
 var serviceLogComponents = []string{
 	"admin", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy", "eventbus",
-	"storage-primary", "storage-node", "storage-view", "trade", "collector-stream", "callback-dispatcher",
+	"storage-primary", "storage-view", "trade", "collector-stream", "callback-dispatcher",
 }
 
 func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, hostID string, components []string) (map[string]map[string]string, error) {
@@ -122,36 +119,27 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"] = string(keys)
 			values["MOOX_SPACE_ID"] = defaultSpaceID
 		}
-		if !slices.Contains([]string{"storage-primary", "storage-node", "storage-view"}, id) {
+		if id != "storage-primary" && id != "storage-view" {
 			continue
 		}
-		if len(identity.StorageNodeSecret) < 32 || len(identity.StoragePrimarySecret) < 32 || len(identity.StorageViewSecret) < 32 {
+		if len(identity.StoragePrimarySecret) < 32 || len(identity.StorageViewSecret) < 32 {
 			return nil, errors.New("Storage requires its original complete private admin identity; missing credentials cannot be regenerated during deployment")
 		}
 		values["MOOX_STORAGE_HOME"] = "./var/storage"
 		values["MOOX_STORAGE_ROLE"] = strings.TrimPrefix(id, "storage-")
 		values["MOOX_STORAGE_CONFIG"] = "config/storage.yaml"
 		values["MOOX_STORAGE_EVENTBUS_URL"] = manifest.EventBusURLFor(hostID)
-		if id != "storage-view" {
-			values["MOOX_STORAGE_NODE_AUTH_SECRET"] = identity.StorageNodeSecret
-		}
-		if id != "storage-node" {
-			values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"] = identity.StoragePrimarySecret
-			values["MOOX_STORAGE_VIEW_AUTH_SECRET"] = identity.StorageViewSecret
-			values["MOOX_STORAGE_PRIMARY_TARGET"] = "ip://127.0.0.1:20102"
-			values["MOOX_STORAGE_METADATA_TARGET"] = "ip://127.0.0.1:20100"
-			values["MOOX_STORAGE_VIEW_TARGET"] = "ip://127.0.0.1:20103"
-		}
+		values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"] = identity.StoragePrimarySecret
+		values["MOOX_STORAGE_VIEW_AUTH_SECRET"] = identity.StorageViewSecret
+		values["MOOX_STORAGE_PRIMARY_TARGET"] = "ip://127.0.0.1:20102"
+		values["MOOX_STORAGE_METADATA_TARGET"] = "ip://127.0.0.1:20100"
+		values["MOOX_STORAGE_VIEW_TARGET"] = "ip://127.0.0.1:20103"
 		// The prebuilt Storage templates bind internal RPC to loopback. Until
 		// split-role routing is supplied, never report readiness for an
 		// installation whose peers cannot reach one another.
 		primary := manifest.ComponentHost("storage-primary")
-		if primary == "" || manifest.HostByID(primary).Name == "" || primary != manifest.ComponentHost("storage-node") || primary != manifest.ComponentHost("storage-view") {
-			return nil, errors.New("native Storage requires primary, node and view on one host; split-role RPC routing is not configured")
-		}
-		if id == "storage-node" {
-			// 元数据种子、Collector 与 Storage 默认值都使用 storage-node-0；单个存储节点沿用该 ID。
-			values["MOOX_STORAGE_NODE_ID"] = storageNodeID
+		if primary == "" || manifest.HostByID(primary).Name == "" || primary != manifest.ComponentHost("storage-view") {
+			return nil, errors.New("native Storage requires primary and view on one host; split-role RPC routing is not configured")
 		}
 	}
 	return environment, nil

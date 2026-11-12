@@ -1,24 +1,18 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/metadata"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	storagepebble "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	trpc "trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/client"
-	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type cliResult struct {
@@ -43,67 +37,11 @@ type importSummary struct {
 	Devices        int `json:"devices"`
 }
 
-const storageDeployerAppID = "storage-deployer"
-
-type metadataDeploymentClient interface {
-	ListDatasets(context.Context, *storagepb.ListDatasetsReq) (*storagepb.ListDatasetsRsp, error)
-	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error)
-	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error)
-}
-
-type metadataDeploymentProxy struct {
-	proxy   storagepb.MetadataClientProxy
-	options []client.Option
-}
-
-func (c *metadataDeploymentProxy) ListDatasets(ctx context.Context, req *storagepb.ListDatasetsReq) (*storagepb.ListDatasetsRsp, error) {
-	return c.proxy.ListDatasets(ctx, req, c.options...)
-}
-
-func (c *metadataDeploymentProxy) CheckDatasetActivation(ctx context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
-	return c.proxy.CheckDatasetActivation(ctx, req, c.options...)
-}
-
-func (c *metadataDeploymentProxy) ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
-	return c.proxy.ActivateDataset(ctx, req, c.options...)
-}
-
-var newMetadataDeploymentClient = func(target string) metadataDeploymentClient {
-	options := []client.Option{
-		client.WithTarget(target),
-		client.WithNetwork("tcp"),
-		client.WithProtocol("trpc"),
-		client.WithTransport(transport.DefaultClientTransport),
-	}
-	return &metadataDeploymentProxy{
-		proxy:   storagepb.NewMetadataClientProxy(options...),
-		options: options,
-	}
-}
-
 type operationResult struct {
 	Module  string      `json:"module"`
 	Action  string      `json:"action"`
 	Status  string      `json:"status"`
 	Summary interface{} `json:"summary"`
-}
-
-type activationResult struct {
-	Datasets []datasetActivationResult `json:"datasets"`
-}
-
-type datasetActivationResult struct {
-	SpaceID   string                  `json:"space_id"`
-	DatasetID string                  `json:"dataset_id"`
-	Revision  uint64                  `json:"revision"`
-	Status    string                  `json:"status"`
-	Checks    []activationCheckResult `json:"checks,omitempty"`
-}
-
-type activationCheckResult struct {
-	CheckID string `json:"check_id"`
-	Ready   bool   `json:"ready"`
-	Summary string `json:"summary"`
 }
 
 func main() {
@@ -121,15 +59,13 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		stderr = io.Discard
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("expected command: init, import-seed, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory")
+		return fmt.Errorf("expected command: init, import-seed, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory")
 	}
 	switch args[0] {
 	case "init":
 		return runInit(args[1:], stdout, stderr)
 	case "import-seed":
 		return runImportSeed(args[1:], stdout, stderr)
-	case "activate-datasets":
-		return runActivateDatasets(trpc.BackgroundContext(), args[1:], stdout, newMetadataDeploymentClient)
 	case "repair-view":
 		return runRepairView(args[1:], stdout, stderr)
 	case "force-rebuild-view":
@@ -145,7 +81,7 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 	case "period-inventory":
 		return runPeriodInventory(args[1:], stdout)
 	default:
-		return fmt.Errorf("unknown command %q: use init, import-seed, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory", args[0])
+		return fmt.Errorf("unknown command %q: use init, import-seed, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory", args[0])
 	}
 }
 
@@ -155,8 +91,8 @@ func runPeriodInventory(args []string, stdout io.Writer) error {
 	var path string
 	var nodeID string
 	var scope storagepebble.PeriodLedgerScope
-	fs.StringVar(&path, "path", "", "Existing Pebble database path; must not be open by a DataNode")
-	fs.StringVar(&nodeID, "node-id", "", "Expected DataNode ID; must match the store identity")
+	fs.StringVar(&path, "path", "", "Existing Pebble database path; must not be open by storage-primary")
+	fs.StringVar(&nodeID, "node-id", "", "Expected Pebble store node ID; must match the store identity")
 	fs.StringVar(&scope.SpaceID, "space", "", "Exact Space ID")
 	fs.StringVar(&scope.DatasetID, "dataset", "", "Exact Dataset ID")
 	fs.StringVar(&scope.Frequency, "frequency", "", "Exact period frequency")
@@ -184,183 +120,6 @@ func runPeriodInventory(args []string, stdout io.Writer) error {
 		if len(period.IntegrityErrors) > 0 {
 			return fmt.Errorf("period inventory contains period-level integrity errors; do not use it to authorize cleanup")
 		}
-	}
-	return nil
-}
-
-func deploymentAuth() (*storagepb.AuthInfo, error) {
-	secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"))
-	if secret == "" {
-		return nil, fmt.Errorf("MOOX_STORAGE_NODE_AUTH_SECRET is required")
-	}
-	return &storagepb.AuthInfo{
-		AppId:  storageDeployerAppID,
-		AppKey: serviceauth.Key(secret, storageDeployerAppID),
-	}, nil
-}
-
-func runActivateDatasets(ctx context.Context, args []string, stdout io.Writer, factory func(string) metadataDeploymentClient) error {
-	fs := flag.NewFlagSet("activate-datasets", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	var metadataTarget string
-	fs.StringVar(&metadataTarget, "metadata-target", "", "Metadata tRPC target")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected activate-datasets arguments: %s", strings.Join(fs.Args(), " "))
-	}
-	if strings.TrimSpace(metadataTarget) == "" {
-		return fmt.Errorf("--metadata-target is required")
-	}
-	auth, err := deploymentAuth()
-	if err != nil {
-		return err
-	}
-	client := factory(metadataTarget)
-	datasets, err := listAllDatasets(ctx, client, auth)
-	if err != nil {
-		return err
-	}
-	sort.Slice(datasets, func(i, j int) bool {
-		if datasets[i].GetSpaceId() != datasets[j].GetSpaceId() {
-			return datasets[i].GetSpaceId() < datasets[j].GetSpaceId()
-		}
-		return datasets[i].GetDatasetId() < datasets[j].GetDatasetId()
-	})
-
-	result := activationResult{Datasets: make([]datasetActivationResult, 0)}
-	failed := false
-	for _, dataset := range datasets {
-		if dataset == nil || dataset.GetStatus() != "disabled" {
-			continue
-		}
-		item := datasetActivationResult{
-			SpaceID:   dataset.GetSpaceId(),
-			DatasetID: dataset.GetDatasetId(),
-			Revision:  dataset.GetRevision(),
-			Status:    "checking",
-		}
-		checkRsp, checkErr := client.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{
-			AuthInfo:  auth,
-			SpaceId:   item.SpaceID,
-			DatasetId: item.DatasetID,
-		})
-		if checkErr != nil || checkRsp == nil {
-			item.Status = "check_failed"
-			failed = true
-			result.Datasets = append(result.Datasets, item)
-			continue
-		}
-		item.Revision = checkRsp.GetDatasetRevision()
-		item.Checks = sanitizeActivationChecks(checkRsp.GetChecks())
-		if err := requireSuccess("check Dataset activation", checkRsp.GetRetInfo()); err != nil {
-			item.Status = "check_failed"
-			failed = true
-			result.Datasets = append(result.Datasets, item)
-			continue
-		}
-		if !checkRsp.GetReady() {
-			item.Status = "not_ready"
-			failed = true
-			result.Datasets = append(result.Datasets, item)
-			continue
-		}
-		activateRsp, activateErr := client.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{
-			AuthInfo:         auth,
-			SpaceId:          item.SpaceID,
-			DatasetId:        item.DatasetID,
-			ExpectedRevision: item.Revision,
-		})
-		if activateErr != nil || activateRsp == nil {
-			item.Status = "activation_failed"
-			failed = true
-			result.Datasets = append(result.Datasets, item)
-			continue
-		}
-		if err := requireSuccess("activate Dataset", activateRsp.GetRetInfo()); err != nil {
-			if activateRsp.GetRetInfo() != nil && activateRsp.GetRetInfo().GetCode() == storagepb.ErrorCode_CONFLICT {
-				item.Status = "conflict"
-			} else {
-				item.Status = "activation_failed"
-			}
-			failed = true
-			result.Datasets = append(result.Datasets, item)
-			continue
-		}
-		item.Status = "active"
-		if activateRsp.GetDataset() != nil {
-			item.Revision = activateRsp.GetDataset().GetRevision()
-		}
-		result.Datasets = append(result.Datasets, item)
-	}
-
-	status := "ok"
-	if failed {
-		status = "failed"
-	}
-	if err := writeOperationResult(stdout, operationResult{
-		Module:  "storage",
-		Action:  "activate-datasets",
-		Status:  status,
-		Summary: result,
-	}); err != nil {
-		return err
-	}
-	if failed {
-		return fmt.Errorf("one or more Datasets could not be activated")
-	}
-	return nil
-}
-
-func listAllDatasets(ctx context.Context, client metadataDeploymentClient, auth *storagepb.AuthInfo) ([]*storagepb.Dataset, error) {
-	const pageSize uint32 = 100
-	const maxPages uint32 = 10000
-	all := make([]*storagepb.Dataset, 0)
-	for page := uint32(1); page <= maxPages; page++ {
-		rsp, err := client.ListDatasets(ctx, &storagepb.ListDatasetsReq{
-			AuthInfo: auth,
-			Page:     &storagepb.Page{Page: page, Size: pageSize},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("list Datasets RPC failed")
-		}
-		if rsp == nil {
-			return nil, fmt.Errorf("list Datasets returned no response")
-		}
-		if err := requireSuccess("list Datasets", rsp.GetRetInfo()); err != nil {
-			return nil, err
-		}
-		all = append(all, rsp.GetDatasets()...)
-		pageResult := rsp.GetPageResult()
-		if pageResult == nil || !pageResult.GetHasMore() {
-			return all, nil
-		}
-	}
-	return nil, fmt.Errorf("list Datasets exceeded %d pages", maxPages)
-}
-
-func sanitizeActivationChecks(checks []*storagepb.DatasetActivationCheck) []activationCheckResult {
-	result := make([]activationCheckResult, 0, len(checks))
-	for _, check := range checks {
-		if check == nil {
-			continue
-		}
-		result = append(result, activationCheckResult{
-			CheckID: check.GetCheckId(),
-			Ready:   check.GetReady(),
-			Summary: check.GetSummary(),
-		})
-	}
-	return result
-}
-
-func requireSuccess(action string, ret interface{ GetCode() storagepb.ErrorCode }) error {
-	if ret == nil || ret.GetCode() != storagepb.ErrorCode_SUCCESS {
-		if ret == nil {
-			return fmt.Errorf("%s returned no status", action)
-		}
-		return fmt.Errorf("%s returned %s", action, ret.GetCode().String())
 	}
 	return nil
 }

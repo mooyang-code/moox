@@ -335,8 +335,8 @@ func TestMigrateAddDeploymentRejectsUnknownHostAndComponent(t *testing.T) {
 func TestMigrateAddDeploymentReadsSingleQuotedAndMultilineArrays(t *testing.T) {
 	line := regexp.MustCompile(`(?m)^storage = \[.*\]\n`)
 	for name, replacement := range map[string]string{
-		"单引号": "storage = ['storage-primary', 'storage-node', 'storage-view', 'access'] # 单引号\n",
-		"多行":  "storage = [\n  'storage-primary',\n  \"storage-node\",\n  'storage-view',\n  'access',\n]\n",
+		"单引号": "storage = ['storage-primary', 'storage-view', 'access'] # 单引号\n",
+		"多行":  "storage = [\n  'storage-primary',\n  \"storage-view\",\n  'access',\n]\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			text := sampleText(t)
@@ -354,7 +354,7 @@ func TestMigrateAddDeploymentReadsSingleQuotedAndMultilineArrays(t *testing.T) {
 			require.NoError(t, err)
 			snapshot, err := setupconfig.Parse(plain)
 			require.NoError(t, err)
-			require.Equal(t, []string{"storage-primary", "storage-node", "storage-view", "access", "eventbus"}, snapshot.Deployments["storage"])
+			require.Equal(t, []string{"storage-primary", "storage-view", "access", "eventbus"}, snapshot.Deployments["storage"])
 		})
 	}
 }
@@ -510,7 +510,7 @@ func TestMigrateRewriteKeepsTrailingComments(t *testing.T) {
 	})
 	t.Run("多行条目首行末行保留、中间几行提示", func(t *testing.T) {
 		line := regexp.MustCompile(`(?m)^storage = \[.*\]\n`)
-		text := line.ReplaceAllString(sampleText(t), "storage = [ # 存储机\n  'storage-primary', # 主库\n  'storage-node',\n  'storage-view',\n  'access',\n] # 末行\n")
+		text := line.ReplaceAllString(sampleText(t), "storage = [ # 存储机\n  'storage-primary', # 主库\n  'storage-view',\n  'access',\n] # 末行\n")
 		path, root, keys := migrateFixture(t, text)
 		report, err := MigrateFile(path, MigrateOptions{
 			RepoRoot: root, Keys: keys, Write: true,
@@ -519,7 +519,7 @@ func TestMigrateRewriteKeepsTrailingComments(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []string{"[deployments] storage：该条目中间几行的注释已去掉"}, report.DroppedComments)
 		plain := decrypt(t, path, keys)
-		require.Contains(t, plain, `storage = ["storage-primary", "storage-node", "storage-view", "access", "eventbus"]   # 存储机 # 末行`)
+		require.Contains(t, plain, `storage = ["storage-primary", "storage-view", "access", "eventbus"]   # 存储机 # 末行`)
 		require.NotContains(t, plain, "# 主库")
 	})
 	t.Run("井号在字符串里不算注释", func(t *testing.T) {

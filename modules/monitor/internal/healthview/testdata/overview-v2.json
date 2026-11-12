@@ -305,7 +305,7 @@
         }
       ],
       "id": "storage",
-      "name": "存储主服务 / 存储数据节点",
+      "name": "存储主服务",
       "status": "disabled"
     },
     {

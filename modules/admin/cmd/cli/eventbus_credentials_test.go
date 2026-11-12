@@ -621,7 +621,7 @@ func TestEventBusCredentialsRotateTLSAfterEventBusMoves(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, topology.SyncHosts(t.Context(), []sysdeploy.HostSpec{
 		{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "console-proxy", "web-host"}},
-		{HostID: "storage-node-1", Address: "203.0.113.20", Components: []string{"eventbus"}},
+		{HostID: "storage-1", Address: "203.0.113.20", Components: []string{"eventbus"}},
 	}))
 	closeAdminCLIDB(db)
 

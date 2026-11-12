@@ -31,14 +31,14 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 	for id, template := range map[string]string{
 		"console-proxy": "public: {host: localhost, port: 9527, http3: true}\ntls: {storage_root: ../data/caddy/caddy}\nlifecycle: {drain_timeout: 91s}\n",
 		"monitor":       "deployment: {enabled: true, https: {}}\nmetrics: {enabled: true, no_data_intervals: 7}\n",
-		"collector":     "database: {path: ./data/collector.db}\nstorage: {result_data_node_id: obsolete-node}\nscf_access: {key_id: original-scf-id}\nperiod_readiness: {grace: 7m}\n",
+		"collector":     "database: {path: ./data/collector.db}\nscf_access: {key_id: original-scf-id}\nperiod_readiness: {grace: 7m}\n",
 		"factor-mgr":    "engine: {lease_ttl: 73s}\n",
 	} {
 		parent := filepath.Join(directory, id, "config")
 		require.NoError(t, os.MkdirAll(parent, 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(parent, "app.yaml"), []byte(template), 0o600))
 	}
-	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "2001:db8::10"}, "storage1": {Address: "192.0.2.20"}}, Deployments: map[string][]string{"control": {"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr"}, "storage1": {"storage-primary", "storage-node", "storage-view"}}, CollectorRetention: setupconfig.CollectorRetention{MaintenanceInterval: "2m", MaxRowsPerPass: 19}}}
+	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "2001:db8::10"}, "storage1": {Address: "192.0.2.20"}}, Deployments: map[string][]string{"control": {"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr"}, "storage1": {"storage-primary", "storage-view"}}, CollectorRetention: setupconfig.CollectorRetention{MaintenanceInterval: "2m", MaxRowsPerPass: 19}}}
 	components := []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr"}
 	rendered, err := controlConfigurations(snapshot, directory, components)
 	require.NoError(t, err)
@@ -59,14 +59,13 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 	require.Equal(t, "../../console-proxy/data/caddy/internal-ca.sha256", https["ca_baseline"])
 	require.Equal(t, 7, monitor["metrics"].(map[string]any)["no_data_intervals"])
 	require.Equal(t, "config/dataset-health-policy.yaml", monitor["metrics"].(map[string]any)["dataset_health_policy_path"])
-	require.Equal(t, "storage-node-0", collector["storage"].(map[string]any)["result_data_node_id"])
 	require.Equal(t, "", collector["scf_access"].(map[string]any)["key_id"], "scf-collector 的 key_id 在安装时由主机材料填入，不从旧配置继承")
 	require.Equal(t, "7m", collector["period_readiness"].(map[string]any)["grace"])
 	require.Equal(t, 19, collector["collector_retention"].(map[string]any)["max_rows_per_pass"])
 }
 
 func TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets(t *testing.T) {
-	identity := runtimeIdentity{StoragePrimarySecret: strings.Repeat("p", 32), StorageViewSecret: strings.Repeat("v", 32), StorageNodeSecret: strings.Repeat("n", 32)}
+	identity := runtimeIdentity{StoragePrimarySecret: strings.Repeat("p", 32), StorageViewSecret: strings.Repeat("v", 32)}
 	components := []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr", "strategy"}
 	// 没配置告警推送地址也能部署 Monitor，渠道由用户稍后在管理台添加。
 	empty, err := unitEnvironment(setupconfig.Manifest{}, identity, "control", components)
@@ -85,10 +84,8 @@ func TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets(t *testing.
 	// Admin 的 Console 代浏览器调用 Storage，需要 Primary 与 View 两个角色密钥。
 	require.Equal(t, identity.StoragePrimarySecret, env["admin"]["MOOX_STORAGE_PRIMARY_AUTH_SECRET"])
 	require.Equal(t, identity.StorageViewSecret, env["admin"]["MOOX_STORAGE_VIEW_AUTH_SECRET"])
-	require.NotContains(t, env["admin"], "MOOX_STORAGE_NODE_AUTH_SECRET")
 	for _, id := range []string{"monitor", "collector", "factor-mgr", "strategy"} {
 		require.Equal(t, identity.StoragePrimarySecret, env[id]["MOOX_STORAGE_PRIMARY_AUTH_SECRET"])
-		require.NotContains(t, env[id], "MOOX_STORAGE_NODE_AUTH_SECRET")
 	}
 	require.Equal(t, "crypto", env["collector"]["MOOX_SPACE_ID"])
 	require.Equal(t, "crypto", env["collector"]["MOOX_SPACE_IDS"])
@@ -127,7 +124,7 @@ func TestControlDependenciesReadReadyRecords(t *testing.T) {
 	defer root.Close()
 	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{
 		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "192.0.2.1"}, "storage": {Address: "192.0.2.2"}},
-		Deployments: map[string][]string{"control": {"admin", "monitor"}, "storage": {"storage-node"}},
+		Deployments: map[string][]string{"control": {"admin", "monitor"}, "storage": {"storage-primary"}},
 	}}
 	require.ErrorContains(t, checkControlDependencies(snapshot, root, []string{"monitor"}), "control_dependency_not_ready")
 	state := filepath.Join(directory, "units", "storage", "storage")

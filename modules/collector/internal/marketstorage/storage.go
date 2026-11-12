@@ -39,9 +39,8 @@ type ResampleViewSyncWaiter interface {
 }
 
 type ResampleMetadataClient struct {
-	Client  storageio.Metadata
-	Primary storageio.Primary
-	Auth    *storagepb.AuthInfo
+	Client storageio.Metadata
+	Auth   *storagepb.AuthInfo
 }
 
 type storageWriter struct {
@@ -76,7 +75,7 @@ func NewGatewayResampleMetadataClient(gateway gatewayclient.Invoker, instType st
 	if err != nil {
 		return nil, err
 	}
-	return &ResampleMetadataClient{Client: writer.metadata, Primary: writer.access, Auth: writer.authInfo}, nil
+	return &ResampleMetadataClient{Client: writer.metadata, Auth: writer.authInfo}, nil
 }
 
 func (w *storageWriter) runRPC(ctx context.Context, operation func() error) error {

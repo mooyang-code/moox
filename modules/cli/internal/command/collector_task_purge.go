@@ -82,7 +82,6 @@ type collectorStorageMetadataClient interface {
 	ListViews(context.Context, *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error)
-	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
 }
 
 type collectorStorageMetadataProxy struct {
@@ -158,20 +157,6 @@ func (c *collectorStorageMetadataProxy) DeleteView(ctx context.Context, req *sto
 	request.AuthInfo = c.auth
 	rsp := &storagepb.DeleteViewRsp{}
 	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteView", request, rsp)
-	return rsp, err
-}
-
-func (c *collectorStorageMetadataProxy) DeleteDatasetRows(ctx context.Context, req *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	if c == nil || c.gateway == nil {
-		return nil, fmt.Errorf("storage primary client is unavailable")
-	}
-	request := &storagepb.PrimaryDeleteDatasetRowsReq{}
-	if req != nil {
-		request = proto.Clone(req).(*storagepb.PrimaryDeleteDatasetRowsReq)
-	}
-	request.AuthInfo = c.auth
-	rsp := &storagepb.PrimaryDeleteDatasetRowsRsp{}
-	err := postStorageRaw(ctx, c.gateway, accessServiceName, "DeleteDatasetRows", request, rsp)
 	return rsp, err
 }
 
@@ -673,12 +658,6 @@ func deleteCollectorOwnedMetadata(ctx context.Context, metadata collectorStorage
 		summary.CompletedStages = append(summary.CompletedStages, "collector_owned_views_deleted")
 	}
 	for _, object := range summary.storageDatasetRefs {
-		physical, physicalErr := metadata.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{
-			SpaceId: object.SpaceID, DatasetId: object.ObjectID,
-		})
-		if physicalErr != nil || !collectorDeleteDatasetRowsAccepted(physical) {
-			return fmt.Errorf("delete Collector-owned Dataset rows %s/%s: %w", object.SpaceID, object.ObjectID, collectorDeleteRowsResponseError(physicalErr, physical))
-		}
 		response, err := metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{
 			SpaceId:   object.SpaceID,
 			DatasetId: object.ObjectID,
@@ -691,28 +670,6 @@ func deleteCollectorOwnedMetadata(ctx context.Context, metadata collectorStorage
 		summary.CompletedStages = append(summary.CompletedStages, "collector_owned_datasets_deleted")
 	}
 	return nil
-}
-
-func collectorDeleteDatasetRowsAccepted(response *storagepb.PrimaryDeleteDatasetRowsRsp) bool {
-	if response == nil || response.GetRetInfo() == nil {
-		return false
-	}
-	switch response.GetRetInfo().GetCode() {
-	case storagepb.ErrorCode_SUCCESS, storagepb.ErrorCode_DATASET_NOT_FOUND, storagepb.ErrorCode_NOT_FOUND:
-		return true
-	default:
-		return false
-	}
-}
-
-func collectorDeleteRowsResponseError(callErr error, response *storagepb.PrimaryDeleteDatasetRowsRsp) error {
-	if callErr != nil {
-		return callErr
-	}
-	if response == nil || response.GetRetInfo() == nil {
-		return fmt.Errorf("empty response")
-	}
-	return fmt.Errorf("%s", response.GetRetInfo().GetMsg())
 }
 
 func collectorDeleteViewAccepted(response *storagepb.DeleteViewRsp) bool {

@@ -34,7 +34,7 @@ func TestPeriodInventoryCommandEmitsScopedJSON(t *testing.T) {
 	var got storagepebble.PeriodLedgerInventory
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &got))
 	require.Equal(t, 1, got.PeriodCount)
-	require.Equal(t, "node-a", got.SourceDataNodeID)
+	require.Equal(t, "node-a", got.SourceNodeID)
 	require.Equal(t, "series_snapshot", got.Periods[0].SnapshotFormat)
 	require.Equal(t, "waiting", got.Periods[0].Status)
 	require.NotContains(t, stdout.String(), "BTC-USDT", "the report must not export snapshot subjects")

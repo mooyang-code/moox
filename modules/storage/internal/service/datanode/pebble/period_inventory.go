@@ -68,7 +68,7 @@ type PeriodLedgerInventory struct {
 	CapturedAt           time.Time           `json:"captured_at"`
 	SourcePath           string              `json:"source_path"`
 	SourceLayoutVersion  string              `json:"source_layout_version"`
-	SourceDataNodeID     string              `json:"source_data_node_id"`
+	SourceNodeID         string              `json:"source_node_id"`
 	SourceStoreID        string              `json:"source_store_id"`
 	Scope                PeriodLedgerScope   `json:"scope"`
 	PeriodCount          int                 `json:"period_count"`
@@ -104,8 +104,8 @@ type periodInventoryMarker struct {
 
 // InspectPeriodLedger opens an existing Pebble DB read-only. Pebble's directory
 // lock deliberately makes the call fail while the DataNode owns the database.
-func InspectPeriodLedger(path, expectedDataNodeID string, scope PeriodLedgerScope) (inventory PeriodLedgerInventory, retErr error) {
-	if err := validatePeriodLedgerScope(path, expectedDataNodeID, scope); err != nil {
+func InspectPeriodLedger(path, expectedNodeID string, scope PeriodLedgerScope) (inventory PeriodLedgerInventory, retErr error) {
+	if err := validatePeriodLedgerScope(path, expectedNodeID, scope); err != nil {
 		return PeriodLedgerInventory{}, err
 	}
 	absPath, err := filepath.Abs(path)
@@ -148,12 +148,12 @@ func InspectPeriodLedger(path, expectedDataNodeID string, scope PeriodLedgerScop
 	if sourceIdentity.Node == "" || sourceIdentity.ID == "" {
 		return PeriodLedgerInventory{}, errors.New("DataNode source identity is incomplete")
 	}
-	if sourceIdentity.Node != expectedDataNodeID {
-		return PeriodLedgerInventory{}, fmt.Errorf("DataNode store identity %q does not match requested DataNode ID %q", sourceIdentity.Node, expectedDataNodeID)
+	if sourceIdentity.Node != expectedNodeID {
+		return PeriodLedgerInventory{}, fmt.Errorf("Pebble store identity %q does not match requested node ID %q", sourceIdentity.Node, expectedNodeID)
 	}
 	result := PeriodLedgerInventory{
 		CapturedAt: time.Now().UTC(), SourcePath: absPath, SourceLayoutVersion: strings.TrimSpace(string(layoutData)),
-		SourceDataNodeID: sourceIdentity.Node, SourceStoreID: sourceIdentity.ID,
+		SourceNodeID: sourceIdentity.Node, SourceStoreID: sourceIdentity.ID,
 		Scope: scope, Periods: make([]PeriodLedgerEntry, 0),
 	}
 	records := make(map[string]*periodInventoryRecord)
@@ -192,11 +192,11 @@ func InspectPeriodLedger(path, expectedDataNodeID string, scope PeriodLedgerScop
 	return result, nil
 }
 
-func validatePeriodLedgerScope(path, expectedDataNodeID string, scope PeriodLedgerScope) error {
+func validatePeriodLedgerScope(path, expectedNodeID string, scope PeriodLedgerScope) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("Pebble path is required")
 	}
-	if strings.TrimSpace(expectedDataNodeID) == "" || strings.TrimSpace(expectedDataNodeID) != expectedDataNodeID {
+	if strings.TrimSpace(expectedNodeID) == "" || strings.TrimSpace(expectedNodeID) != expectedNodeID {
 		return errors.New("expected DataNode ID is required and must not have surrounding whitespace")
 	}
 	for _, field := range []struct{ name, value string }{{"space_id", scope.SpaceID}, {"dataset_id", scope.DatasetID}, {"frequency", scope.Frequency}} {

@@ -62,7 +62,7 @@ func newPrimaryViewEnv(t *testing.T, datasets []readyBenchDataset) readyBenchEnv
 	}
 	t.Cleanup(func() { _ = cache.Close() })
 	store, err := pebble.Open(pebble.Options{
-		NodeID: "storage-node-0", Path: filepath.Join(t.TempDir(), "pebble"), MaxEventBytes: legacyBenchMaxBytes,
+		NodeID: "storage-primary", Path: filepath.Join(t.TempDir(), "pebble"), MaxEventBytes: legacyBenchMaxBytes,
 		PeriodNow: func() time.Time { return time.Unix(0, env.clock.Load()).UTC() },
 		DatasetExists: func(spaceID, datasetID string) bool {
 			_, err := cache.GetDataset(context.Background(), spaceID, datasetID)

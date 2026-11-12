@@ -44,7 +44,6 @@ type Store interface {
 	CommitTimeSeriesBatch(ctx context.Context, exp pebble.DatasetPeriodExpectation, items []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error)
 	AppendDatasetMarker(ctx context.Context, raw []byte) (string, error)
 	GetDatasetPeriodCompletedMarker(ctx context.Context, spaceID, datasetID, causeEventID string, periodTime int64) (*eventpb.EventMessage, bool, error)
-	DeleteDatasetRows(ctx context.Context, spaceID, datasetID string) (uint64, error)
 }
 
 type Authorizer func(*pb.AuthInfo) error

@@ -61,7 +61,7 @@ func TestBuildAlertsReportCollectsEveryUnhealthySource(t *testing.T) {
 		&monitorpb.HealthDataset{Producer: "collector", DatasetId: "ds_d", Freq: "1m", Status: "degraded", Reason: "success stale"},
 	)
 	overview.BusinessChecks = append(overview.BusinessChecks, &monitorpb.HealthBusinessCheck{CheckId: "c3", Name: "行情采集", Status: "down", Reason: "Collector 采集计划指标已停止上报"})
-	overview.Components = append(overview.Components, &monitorpb.HealthComponent{HostId: "storage", ComponentId: "storage-node", Status: "unknown", Reason: "从未收到监控上报"})
+	overview.Components = append(overview.Components, &monitorpb.HealthComponent{HostId: "storage", ComponentId: "storage-primary", Status: "unknown", Reason: "从未收到监控上报"})
 	overview.Hosts = append(overview.Hosts, &monitorpb.HealthHost{HostId: "overseas", Status: "down", Reason: "主机采集代理停止上报"})
 
 	report := BuildAlertsReport(overview)

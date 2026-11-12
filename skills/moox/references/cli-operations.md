@@ -139,7 +139,7 @@ rows、period 和 sync-point 事件；不会删除 durable consumer，也不会�
 
 Storage 服务的时序 View 每个序列保留最近 `10000` 根，由每分钟的定时任务删除更旧的行（偶数分钟第 10 秒执行，每批行数见 `storage.view.delete_oldest_batch_size`）。
 可在根目录 `moox.toml` 的 `[storage_retention] view_rows_per_series` 统一调整；调大后已有索引的行不会变多，要 `force-rebuild-view` 才回填到新根数。
-回填按游标分页，同一标的可以跨页；DataNode 在每个序列内倒序读到目标根数即跳到下一个序列，扫描量按
+回填按游标分页，同一标的可以跨页；storage-primary 在每个序列内倒序读到目标根数即跳到下一个序列，扫描量按
 「序列数 × 根数」增长，不扫描全部历史。Primary 历史不足配置根数，或回填行被 `[storage_view.max_age]` 过滤时，以实际留下的数据建成；后续实时事件继续更新，但不保证填满 N 根。
 年龄过滤以处理批次时的时钟为准，早于截止点的行被丢弃，等于截止点保留；全部被过滤仍返回成功，不代表这些行已进入 View。此过滤不主动清理已有索引行，不改变 Primary 或因子机本地存储的保留行为。
 记录型 View（Bleve）不按根数。

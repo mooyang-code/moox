@@ -137,7 +137,7 @@ func newReadyBenchEnv(t *testing.T, datasets []readyBenchDataset) readyBenchEnv 
 	// PrimaryStore 与它的 Pebble 库；写入时按数据集点查确认它仍在，与生产 primary 一致。
 	snapshot := newLegacyBenchSnapshot(datasets)
 	store, err := pebble.Open(pebble.Options{
-		NodeID: "storage-node-0", Path: filepath.Join(t.TempDir(), "pebble"), MaxEventBytes: legacyBenchMaxBytes,
+		NodeID: "storage-primary", Path: filepath.Join(t.TempDir(), "pebble"), MaxEventBytes: legacyBenchMaxBytes,
 		PeriodNow: func() time.Time { return time.Unix(0, env.clock.Load()).UTC() },
 		DatasetExists: func(spaceID, datasetID string) bool {
 			_, ok := snapshot.GetDataset(spaceID, datasetID)

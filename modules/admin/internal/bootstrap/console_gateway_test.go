@@ -30,7 +30,7 @@ func TestConsoleGatewayStartsFromDatabaseWhileHostGatewayIsOffline(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, topology.SyncHosts(ctx, []sysdeploy.HostSpec{
 		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
-		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-node", "storage-view"}},
+		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
 	}))
 	store, err := keys.NewStore(db, "fixture-console-master")
 	require.NoError(t, err)

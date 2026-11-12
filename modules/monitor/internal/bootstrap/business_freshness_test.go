@@ -636,10 +636,10 @@ func TestBusinessFreshnessReporterCreatesStorageOutboxAlert(t *testing.T) {
 			{"outbox-pending", "moox_storage_outbox_pending_entries", 12},
 			{"outbox-age", "moox_storage_outbox_oldest_age_seconds", 240},
 		} {
-			if err := db.Create(&monmetrics.MetricSeries{ServiceName: "storage-node", InstanceID: "storage-node@storage", SeriesID: metric.id, MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, LastSeenAt: now}).Error; err != nil {
+			if err := db.Create(&monmetrics.MetricSeries{ServiceName: "storage-primary", InstanceID: "storage-primary@storage", SeriesID: metric.id, MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, LastSeenAt: now}).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := db.Create(&monmetrics.MetricLatest{SeriesID: metric.id, ServiceName: "storage-node", InstanceID: "storage-node@storage", MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, Value: metric.value, ObservedAt: now}).Error; err != nil {
+			if err := db.Create(&monmetrics.MetricLatest{SeriesID: metric.id, ServiceName: "storage-primary", InstanceID: "storage-primary@storage", MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, Value: metric.value, ObservedAt: now}).Error; err != nil {
 				t.Fatal(err)
 			}
 		}

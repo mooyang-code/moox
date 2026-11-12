@@ -43,7 +43,7 @@ func TestPrimaryRejectsMissingOrDisabledDataset(t *testing.T) {
 				t.Fatal("write reached the store")
 				return nil, nil
 			}
-			svc, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return factorDatasetAdminSnapshot{dataset: dataset} }})
+			svc, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return singleDatasetSnapshot{dataset: dataset} }})
 			require.NoError(t, err)
 			key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
 			rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "v", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "x"}}}}}}}))
