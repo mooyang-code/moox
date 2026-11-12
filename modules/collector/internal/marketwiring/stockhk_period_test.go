@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func hkTime(t *testing.T, value string) time.Time {
+func hkPeriodTime(t *testing.T, value string) time.Time {
 	t.Helper()
 	parsed, err := time.ParseInLocation("2006-01-02 15:04", value, time.FixedZone("HKT", 8*3600))
 	require.NoError(t, err)
@@ -40,7 +40,7 @@ func TestPlanPeriodValidStockHK(t *testing.T) {
 		"2026-12-25 10:00": false,
 		"2026-11-14 10:00": false,
 	} {
-		require.Equal(t, want, planPeriodValid(market, "5m", hkTime(t, period)), period)
+		require.Equal(t, want, planPeriodValid(market, "5m", hkPeriodTime(t, period)), period)
 	}
 }
 
@@ -61,7 +61,7 @@ func TestStockHKTimerReturnsNoWorkOutsideSessions(t *testing.T) {
 		name, plan = functionName, function.Plan
 	}
 	// 计划份的生效起点设在这些时刻之前，返回 no_work 只可能是因为周期不是交易桶。
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkTime(t, "2026-11-10 09:30").Unix(), nil })
+	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkPeriodTime(t, "2026-11-10 09:30").Unix(), nil })
 	require.NoError(t, err)
 	plan = content.FinalPlan(content.Functions[name])
 	require.NotNil(t, plan)
@@ -75,14 +75,14 @@ func TestStockHKTimerReturnsNoWorkOutsideSessions(t *testing.T) {
 		"2026-12-25 10:00", "2026-12-25 16:00", // 假期
 		"2026-11-14 10:00", // 周末
 	} {
-		at := hkTime(t, scheduled)
+		at := hkPeriodTime(t, scheduled)
 		response, err := handler.RunPlan(context.Background(), plan, marketfetch.PlanRun{RequestID: "req", FunctionName: name, Scheduled: at, Entry: at})
 		require.NoError(t, err, scheduled)
 		require.True(t, response.Success, scheduled)
 		require.Equal(t, "no_work", response.Message, scheduled)
 	}
 	// 对照：交易时段内的触发（12:00 触发采 11:55 那根）计划里有这一期，周期判定也放行，不会返回 no_work。
-	planned, err := plan.BuildRequests("stockhk", name, "req", hkTime(t, "2026-11-12 12:00"), nil)
+	planned, err := plan.BuildRequests("stockhk", name, "req", hkPeriodTime(t, "2026-11-12 12:00"), nil)
 	require.NoError(t, err)
 	require.Len(t, planned, 1)
 	require.True(t, planPeriodValid(plan.Market, planned[0].Frequency, planned[0].Period))
