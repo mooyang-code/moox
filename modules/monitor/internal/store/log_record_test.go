@@ -93,3 +93,37 @@ func TestLogRecordsPruneByAgeAndRowLimit(t *testing.T) {
 		t.Fatalf("没有可清理的行时应删除 0 行：%d, %v", deleted, err)
 	}
 }
+
+// 按小时的分布：Error 及以上算错误，其余算事件；用同样的筛选条件，不受翻页影响。入库的时间统一是 UTC。
+func TestLogRecordsBucketsByHour(t *testing.T) {
+	repo := openNotificationTestDB(t).Repositories().Logs
+	ctx := t.Context()
+	base := time.Date(2026, 11, 12, 4, 10, 0, 0, time.UTC)
+	rows := []domain.LogRecord{
+		logRow("k1", "control", "monitor", "error", "a", base),
+		logRow("k2", "control", "monitor", "info", "b", base.Add(20*time.Minute)),
+		logRow("k3", "storage", "storage-node", "fatal", "c", base.Add(30*time.Minute)),
+		logRow("k4", "storage", "storage-node", "error", "d", base.Add(55*time.Minute)),
+		logRow("k5", "storage", "storage-node", "info", "e", base.Add(3*time.Hour)),
+	}
+	if _, err := repo.InsertBatch(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	buckets := func(filter LogRecordFilter) string {
+		t.Helper()
+		got, err := repo.Buckets(ctx, filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprint(got)
+	}
+	if got, want := buckets(LogRecordFilter{BeforeID: 2, Limit: 1}), "[{2026-11-12T04:00:00Z 2 1} {2026-11-12T05:00:00Z 1 0} {2026-11-12T07:00:00Z 0 1}]"; got != want {
+		t.Fatalf("全部：%s，应为 %s", got, want)
+	}
+	if got, want := buckets(LogRecordFilter{Component: "storage-node", End: base.Add(2 * time.Hour)}), "[{2026-11-12T04:00:00Z 1 0} {2026-11-12T05:00:00Z 1 0}]"; got != want {
+		t.Fatalf("按组件和终点：%s，应为 %s", got, want)
+	}
+	if got := buckets(LogRecordFilter{HostID: "none"}); got != "[]" {
+		t.Fatalf("没有记录时应为空：%s", got)
+	}
+}

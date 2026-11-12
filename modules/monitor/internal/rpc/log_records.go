@@ -15,7 +15,7 @@ import (
 
 const defaultLogRecordPage = 100
 
-// keywordSearchWindow 是带关键字、又没有指定起点的查询默认回看的时间。
+// keywordSearchWindow 是带关键字、或要按小时分布、又没有指定起点的查询默认回看的时间。
 const keywordSearchWindow = 7 * 24 * time.Hour
 
 // QueryLogRecords 查询各服务上报的重要日志（Error 及以上、关键事件），新的在前，用 before_id 向更早翻页。
@@ -64,6 +64,19 @@ func (s *Service) QueryLogRecords(ctx context.Context, req *monitorpb.QueryLogRe
 	rsp.Records = make([]*monitorpb.LogRecord, 0, len(records))
 	for _, record := range records {
 		rsp.Records = append(rsp.Records, logRecordPB(record))
+	}
+	if req.GetWithBuckets() {
+		// 分布要扫整个时间范围：没有给起点时只统计最近 7 天，和关键字查询同样的考虑。
+		if filter.Start.IsZero() {
+			filter.Start = time.Now().Add(-keywordSearchWindow)
+		}
+		buckets, err := s.logs.Buckets(ctx, filter)
+		if err != nil {
+			return &monitorpb.QueryLogRecordsRsp{RetInfo: inner(err)}, nil
+		}
+		for _, bucket := range buckets {
+			rsp.Buckets = append(rsp.Buckets, &monitorpb.LogBucket{StartAt: bucket.Hour, Errors: int32(bucket.Errors), Events: int32(bucket.Events)})
+		}
 	}
 	return rsp, nil
 }
