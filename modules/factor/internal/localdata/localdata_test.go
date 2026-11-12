@@ -2,6 +2,7 @@ package localdata
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"testing"
@@ -38,6 +39,8 @@ type fakeStorage struct {
 	retention string
 	// marketType 是源数据集的 market_type 属性；统一数据集为 "multi"。
 	marketType string
+	// readErr 不为空时 ReadWindow 一律失败。
+	readErr error
 }
 
 func newFakeStorage() *fakeStorage {
@@ -93,6 +96,9 @@ func (f *fakeStorage) GetDataset(context.Context, string, string) (storageio.Dat
 func (f *fakeStorage) ReadWindow(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
 	out := map[string]*storageio.Frame{}
 	for _, subject := range req.Subjects {
 		frame := &storageio.Frame{SubjectID: subject, Columns: append([]string{"data_time", "series_tag"}, req.Columns...)}
@@ -544,4 +550,173 @@ func TestCoverageDoesNotExemptWhenLookbackExceedsRetention(t *testing.T) {
 	short, err = fx.data.Coverage(context.Background(), src)
 	require.NoError(t, err)
 	require.Empty(t, short)
+}
+
+// 强制补采把比本地最新一根更晚的周期写进了 Storage（不发实时事件）：补算只读本地，不先拉一次就读不到这些周期。
+// CatchUp 把本地拉到补算区间的终点（不超过最新已收盘的一根），并同时反映到内存窗口。
+func TestCatchUpPullsNewerBarsForRecalcAndKeepsWindowInSync(t *testing.T) {
+	fx := newFixture(t, mean5())
+	subjects := []string{"BTC"}
+	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
+
+	// Storage 里多了第 10、11、12 根；现在是第 12 根收盘之后。
+	fx.st.put("BTC", 100, 10, 11, 12)
+	fx.now = at(13)
+	recalc := func(m int) pipeline.Outcome {
+		plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, TargetStart: at(m), TargetEnd: at(m + 1),
+			Expected: subjects, Available: subjects, CarryColumns: []string{"close", "volume"}, WriteCarry: true}
+		outcome, err := fx.runner.Run(context.Background(), plan)
+		require.NoError(t, err)
+		return outcome
+	}
+	// 不拉：本地没有第 10 根，补算写不出这一期。
+	require.Zero(t, recalc(10).RowsWritten)
+
+	// 拉到补算区间的终点（第 11 根的起点，不含）：只多出第 10 根。
+	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(11))
+	require.NoError(t, err)
+	require.Equal(t, 1, pulled)
+	require.Equal(t, 1, recalc(10).RowsWritten)
+	require.InDelta(t, 108.0, fx.result("BTC", 10).Fields["mean5"], 1e-9)
+	require.Zero(t, recalc(11).RowsWritten, "终点之后的周期不拉")
+
+	// 终点晚于现在时只拉到最新已收盘的一根；已经拉过的不重复写。
+	pulled, err = fx.data.CatchUp(context.Background(), fx.set, nil, at(100))
+	require.NoError(t, err)
+	require.Equal(t, 1, pulled)
+	require.Equal(t, 1, recalc(12).RowsWritten)
+	pulled, err = fx.data.CatchUp(context.Background(), fx.set, subjects, at(100))
+	require.NoError(t, err)
+	require.Zero(t, pulled)
+
+	// 窗口与本地存储一致：下一期实时计算用到了补算时拉进来的第 10～12 根，而且新的一根能直接追加进窗口（走热路径）。
+	// 窗口没有跟上的话，这一根接不上窗口里的第 9 根，只能退回从磁盘重载。
+	fx.st.put("BTC", 100, 13)
+	fx.now = at(14)
+	hotBefore := fx.data.hotWrites.Load()
+	outcome := fx.live(t, at(13), subjects)
+	require.Equal(t, "complete", outcome.Status)
+	require.Equal(t, int64(1), fx.data.hotWrites.Load()-hotBefore, "窗口已经有第 10～12 根")
+	require.InDelta(t, 111.0, fx.result("BTC", 13).Fields["mean5"], 1e-9)
+}
+
+// 数据源还没有准备过时 CatchUp 不拉：补算读不到没准备的数据源，而同步基线还没取，先写数据会漏掉之后的修正。
+func TestCatchUpSkipsUnpreparedSource(t *testing.T) {
+	fx := newFixture(t, mean5())
+	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	pulled, err := fx.data.CatchUp(context.Background(), fx.set, []string{"BTC"}, at(8))
+	require.NoError(t, err)
+	require.Zero(t, pulled)
+	local, err := fx.data.Store().Subjects(seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"})
+	require.NoError(t, err)
+	require.Empty(t, local)
+}
+
+// 终点晚于现在时只拉到最新已收盘的一根：还没收盘的那一根不进本地。
+func TestCatchUpStopsAtTheLatestClosedBar(t *testing.T) {
+	fx := newFixture(t, mean5())
+	subjects := []string{"BTC"}
+	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
+	fx.st.put("BTC", 100, 10, 11)
+	fx.now = at(11).Add(30 * time.Second) // 第 11 根还没收盘
+	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(100))
+	require.NoError(t, err)
+	require.Equal(t, 1, pulled)
+	require.Equal(t, at(10), fx.tagLatest(t, "BTC", ""))
+}
+
+// 有标的从 Storage 读取失败时要报出来：否则补算照样写出 0 行、作业成功，而且没有任何日志。
+func TestCatchUpReportsReadFailures(t *testing.T) {
+	fx := newFixture(t, mean5())
+	subjects := []string{"BTC"}
+	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
+	fx.st.put("BTC", 100, 10)
+	fx.now = at(11)
+	fx.st.mu.Lock()
+	fx.st.readErr = errors.New("storage unavailable")
+	fx.st.mu.Unlock()
+	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(11))
+	require.ErrorIs(t, err, storageio.ErrInfra)
+	require.Zero(t, pulled)
+	require.Equal(t, at(9), fx.tagLatest(t, "BTC", ""))
+}
+
+// 只拉任务范围内的标的：任务收窄之后，本地还留着的其他标的不拉，也不会被加回窗口。
+func TestCatchUpPullsOnlySubjectsInTheTask(t *testing.T) {
+	fx := newFixture(t, mean5())
+	for _, s := range []string{"BTC", "ETH"} {
+		fx.st.put(s, 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	}
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC", "ETH"}))
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
+	for _, s := range []string{"BTC", "ETH"} {
+		fx.st.put(s, 100, 10)
+	}
+	fx.now = at(11)
+	pulled, err := fx.data.CatchUp(context.Background(), fx.set, nil, at(11))
+	require.NoError(t, err)
+	require.Equal(t, 1, pulled)
+	require.Equal(t, at(10), fx.tagLatest(t, "BTC", ""))
+	require.Equal(t, at(9), fx.tagLatest(t, "ETH", ""))
+	// 显式给出的标的同样限定在任务范围内。
+	pulled, err = fx.data.CatchUp(context.Background(), fx.set, []string{"ETH", "SOL"}, at(11))
+	require.NoError(t, err)
+	require.Zero(t, pulled)
+}
+
+// 统一数据集按各序列自己的进度拉：永续晚到时，它落后的那几根按 Storage 里的真实行拉进来，不会被现货的最新时间盖住而写成填充行。
+func TestCatchUpPullsLaggingSeriesOfUnifiedDatasetAsRealRows(t *testing.T) {
+	fx := newFixture(t, mean3())
+	fx.st.marketType = "multi"
+	subjects := []string{"BTC"}
+	fx.st.putTag("BTC", spotTag, 100, 5, 6, 7, 8, 9)
+	fx.st.putTag("BTC", swapTag, 200, 5, 6, 7, 8, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
+
+	// 第 10 根：现货到了、永续没到，实时算过这一期，本地现货到第 10 根、永续停在第 9 根。
+	fx.st.putTag("BTC", spotTag, 100, 10)
+	fx.now = at(11)
+	fx.liveSeries(t, at(10), subjects)
+	require.Equal(t, at(9), fx.tagLatest(t, "BTC", swapTag))
+
+	// 永续补上第 10、11 根，现货到第 11 根；补算把本地拉到第 12 根之前。
+	fx.st.putTag("BTC", swapTag, 200, 10, 11)
+	fx.st.putTag("BTC", spotTag, 100, 11)
+	fx.now = at(12)
+	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(12))
+	require.NoError(t, err)
+	require.Equal(t, 1, pulled)
+	require.Equal(t, at(11), fx.tagLatest(t, "BTC", swapTag))
+
+	// 下一期实时：永续第 10 根是真实行（210），不是沿用第 9 根的填充值。
+	fx.st.putTag("BTC", swapTag, 200, 12)
+	fx.st.putTag("BTC", spotTag, 100, 12)
+	fx.now = at(13)
+	outcome := fx.liveSeries(t, at(12), subjects)
+	require.Equal(t, "complete", outcome.Status)
+	value, ok := fx.resultTag("BTC", swapTag, 12)
+	require.True(t, ok)
+	require.InDelta(t, (210+211+212)/3.0, value, 1e-9)
+}
+
+// 第一次准备在取同步基线之前就失败（这里是窗口内存超限）：数据源已经登记，但本地没有数据、也没有同步位点。
+// CatchUp 只拉本地已有数据的标的，所以这时什么都不拉，不会在没有基线的情况下把数据写进本地。
+func TestCatchUpPullsNothingWhenFirstPrepareFailedBeforeBaseline(t *testing.T) {
+	fx := newFixture(t, mean3())
+	fx.data.cfg.WindowMax = 100
+	fx.st.put("BTC", 100, 7, 8, 9)
+	require.Error(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
+	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}
+	pulled, err := fx.data.CatchUp(context.Background(), fx.set, []string{"BTC"}, at(10))
+	require.NoError(t, err)
+	require.Zero(t, pulled)
+	local, err := fx.data.Store().Subjects(src)
+	require.NoError(t, err)
+	require.Empty(t, local)
+	_, hasCursor, err := fx.data.Syncer().Cursor(src)
+	require.NoError(t, err)
+	require.False(t, hasCursor)
 }
