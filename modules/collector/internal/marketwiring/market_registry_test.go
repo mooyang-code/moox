@@ -43,14 +43,14 @@ func TestResolveSymbolUsesSubjectRules(t *testing.T) {
 
 	_, err = ResolveSymbol("binance", "crypto", "swap", "BTC-USDT-SPOT")
 	require.Error(t, err, "后缀与品种不符")
-	_, err = ResolveSymbol("binance", "stockhk", "equity", "00700.XHKG")
+	_, err = ResolveSymbol("binance", "stockus", "equity", "AAPL.XNAS")
 	require.ErrorIs(t, err, markets.ErrUnknownMarket)
 }
 
 // 指标标签的允许取值来自已登记市场、行情源目录和路由；现有路由 ID 都在里面，通达信也在数据源里。
 func TestFeedLabelsCoverExistingValues(t *testing.T) {
 	labels := FeedLabels()
-	require.Equal(t, []string{"crypto", "stockcn"}, labels.Markets)
+	require.Equal(t, []string{"crypto", "stockcn", "stockhk"}, labels.Markets)
 	for _, provider := range []string{"binance", "sina", "tencent", "eastmoney", "baidu", "tdx"} {
 		require.Contains(t, labels.Providers, provider)
 	}
@@ -76,12 +76,14 @@ func TestSubjectListersAreKeyedByMarket(t *testing.T) {
 		{MarketID: "stockcn", Source: "sina", InstrumentType: "equity"},
 		{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"},
 	}, keys)
-	require.Len(t, indexes, 1)
+	// 港股的腾讯只取指数成分：进指数成分表，不进全部标的表。
+	require.Len(t, indexes, 2)
 	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockcn", Source: "eastmoney", Index: "000300"})
+	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockhk", Source: "tencent", Index: "HSI"})
 }
 
 // 环境变量指向不存在的目录时，回落到编进二进制的内容：
-// lister 仍是 4 个加 1 个指数，候选链、每函数并发推导都与内置配置一致。
+// lister 仍是 4 个加 2 个指数，候选链、每函数并发推导都与内置配置一致。
 func TestMissingOverrideFallsBackToEmbeddedFiles(t *testing.T) {
 	wantPipeline, err := NewKlinePipeline(timerHandlerStorage{}, "stockcn", marketdata.InstrumentEquity, "5m", "", nil)
 	require.NoError(t, err)
@@ -94,7 +96,7 @@ func TestMissingOverrideFallsBackToEmbeddedFiles(t *testing.T) {
 	listers, indexes, err := NewSubjectListers()
 	require.NoError(t, err)
 	require.Len(t, listers, 4)
-	require.Len(t, indexes, 1)
+	require.Len(t, indexes, 2)
 
 	pipeline, err := NewKlinePipeline(timerHandlerStorage{}, "stockcn", marketdata.InstrumentEquity, "5m", "", nil)
 	require.NoError(t, err)

@@ -3,6 +3,7 @@ package subjectsync
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,5 +192,46 @@ func TestSyncTagsUsesIndexListersForIndexTags(t *testing.T) {
 	results, _ = runner.SyncTags(context.Background(), Filter{SpaceID: "stockcn", TagID: "cn_hs300"})
 	if results[0].Status != StatusFailed {
 		t.Fatalf("unknown index must fail: %v", results)
+	}
+}
+
+// 指数成分来源：不写 sync.index_source 时按 sync.source 查成分表（cn_hs300 的现有行为）；
+// 写了就按它查，sync.source 仍是采集用的行情源，不参与查成分表；全部标的那条路径只看 sync.source。
+func TestSyncTagsReadsIndexSourceForIndexTags(t *testing.T) {
+	hs300 := autoTag("stockcn", "cn_hs300", "auto", "eastmoney", "equity")
+	hs300.Attributes["sync.index"] = "000300"
+	other := autoTag("stockcn", "other_index", "auto", "eastmoney", "equity")
+	other.Attributes["sync.index"] = "HSI"
+	other.Attributes["sync.index_source"] = " Tencent "
+	// 没有 sync.index 的标签写了 sync.index_source 也不起作用。
+	all := autoTag("stockcn", "cn_a_share", "auto", "eastmoney", "equity")
+	all.Attributes["sync.index_source"] = "tencent"
+	store := &fakeTagStore{tags: []*pb.Tag{hs300, other, all}, applied: map[string]int{}}
+	runner := &TagRunner{
+		Store: store, FetchTimeout: time.Second, RetryDelays: []time.Duration{},
+		Listers: Listers{{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "600000.XSHG"}, {SubjectID: "600519.XSHG"}, {SubjectID: "000001.XSHE"}, {SubjectID: "000002.XSHE"}}}},
+		IndexListers: IndexListers{
+			{MarketID: "stockcn", Source: "eastmoney", Index: "000300"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "600519.XSHG"}, {SubjectID: "000001.XSHE"}}},
+			{MarketID: "stockcn", Source: "tencent", Index: "HSI"}:      fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "600000.XSHG"}}},
+		},
+	}
+	results, err := runner.SyncTags(context.Background(), Filter{SpaceID: "stockcn"})
+	if err != nil || len(results) != 3 {
+		t.Fatalf("results=%v err=%v", results, err)
+	}
+	for _, result := range results {
+		if result.Status != StatusSuccess {
+			t.Fatalf("results=%v", results)
+		}
+	}
+	if store.applied["cn_hs300"] != 2 || store.applied["other_index"] != 1 || store.applied["cn_a_share"] != 4 {
+		t.Fatalf("applied=%v", store.applied)
+	}
+
+	// 成分来源没有登记这个指数：报错里写的是成分来源，不回落到 sync.source。
+	other.Attributes["sync.index_source"] = "sina"
+	results, _ = runner.SyncTags(context.Background(), Filter{SpaceID: "stockcn", TagID: "other_index"})
+	if results[0].Status != StatusFailed || !strings.Contains(results[0].Message, "sina") {
+		t.Fatalf("unknown index source must fail: %v", results)
 	}
 }

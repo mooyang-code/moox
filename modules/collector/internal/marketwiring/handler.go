@@ -14,6 +14,7 @@ import (
 	// 所以在这里显式引用；新增市场时加一行。
 	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/crypto"
 	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
+	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/stockhk"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
 )
 

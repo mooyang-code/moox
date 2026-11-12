@@ -201,10 +201,11 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 	return subjects, nil
 }
 
-// fetchSnapshot 取标签的成员快照：配置了 sync.index 时取该指数的成分股，否则取数据源的全部标的。
+// fetchSnapshot 取标签的成员快照：配置了 sync.index 时取该指数的成分股（来源是 sync.index_source，不写时等于
+// sync.source），否则取 sync.source 的全部标的。
 func (r *TagRunner) fetchSnapshot(ctx context.Context, tag *pb.Tag) ([]marketdata.Instrument, error) {
 	if index := tagattr.Index(tag); index != "" {
-		return FetchIndexSnapshot(ctx, r.IndexListers, tag.GetSpaceId(), tagattr.Source(tag), index)
+		return FetchIndexSnapshot(ctx, r.IndexListers, tag.GetSpaceId(), tagattr.IndexSource(tag), index)
 	}
 	return FetchSnapshot(ctx, r.Listers, tag.GetSpaceId(), []string{tagattr.Source(tag)}, tagattr.MarketType(tag))
 }
