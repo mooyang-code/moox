@@ -57,7 +57,7 @@ func TestCreateTaskCanonicalizesUppercaseFrequency(t *testing.T) {
 func TestCreateTaskRejectsSpaceWithoutCalendar(t *testing.T) {
 	svc := NewService(openCatalogStore(t), newMetadataFake())
 	set := newTask()
-	set.SpaceID = "stockhk"
+	set.SpaceID = "stockus"
 
 	_, err := svc.CreateTask(context.Background(), set)
 

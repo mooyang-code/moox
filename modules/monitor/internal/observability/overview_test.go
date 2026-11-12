@@ -934,7 +934,7 @@ func TestOverviewKeepsShortStorageOutboxBacklogHealthy(t *testing.T) {
 	}
 }
 
-func TestBuilderAlertsOnStockCNProviderFeedFailureRate(t *testing.T) {
+func TestBuilderAlertsOnProviderFeedFailureRate(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
 		labels := `{"market_id":"stockcn","route_id":"stockcn_equity_kline_1m_v4","provider_id":"sina","feed_kind":"kline","group_id":"0","batch_kind":"realtime","result":"success"}`
@@ -956,28 +956,33 @@ func TestBuilderAlertsOnStockCNProviderFeedFailureRate(t *testing.T) {
 	require.Contains(t, found.Reason, "失败率")
 }
 
-func TestBuilderAcceptsCompleteStockCNInstrumentSnapshot(t *testing.T) {
+// 数据源健康按指标的 market_id 标签分组：每个市场各出一组结果，指定空间时只看这个空间，没上报过的市场不出结果。
+func TestBuilderGroupsProviderFeedHealthByMarket(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
-		base := `{"market_id":"stockcn","route_id":"stockcn_instrument_v1","provider_id":"sina","result":"success"}`
-		seedOverviewMetricForInstance(t, db, "instrument-snapshot", "scf-collector", "stock-instrument", "moox_collector_market_instrument_last_snapshot_timestamp_seconds", base, float64(now.Unix()), now)
-		seedOverviewMetricForInstance(t, db, "instrument-active", "scf-collector", "stock-instrument", "moox_collector_market_instrument_active", base, 5180, now)
-		for _, exchange := range []string{"XSHG", "XSHE", "XBSE"} {
-			labels := `{"market_id":"stockcn","route_id":"stockcn_instrument_v1","provider_id":"sina","exchange":"` + exchange + `"}`
-			seedOverviewMetricForInstance(t, db, "instrument-"+exchange, "scf-collector", "stock-instrument", "moox_collector_market_instrument_exchange", labels, 1, now)
+		seed := func(id, marketID, provider, result string, value float64) {
+			labels := `{"market_id":"` + marketID + `","provider_id":"` + provider + `","feed_kind":"kline","group_id":"0","batch_kind":"realtime","result":"` + result + `"}`
+			seedOverviewMetricForInstance(t, db, id, "scf-collector", "fetch-"+marketID, "moox_collector_market_feed_results_total", labels, value, now)
 		}
+		seed("cn-success", "stockcn", "sina", "success", 10)
+		seed("hk-success", "stockhk", "eastmoney", "success", 5)
+		seed("hk-failure", "stockhk", "eastmoney", "timeout", 5)
 	})
-	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "stockcn")
-	require.NoError(t, err)
-	var found *BusinessStatus
-	for index := range overview.BusinessChecks {
-		if overview.BusinessChecks[index].Module == "instrument_snapshot:sina" {
-			found = &overview.BusinessChecks[index]
-			break
+	feeds := func(spaceID string) map[string]string {
+		overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), spaceID)
+		require.NoError(t, err)
+		out := map[string]string{}
+		for _, item := range overview.BusinessChecks {
+			if item.Kind == "market_fetch" && strings.HasPrefix(item.Module, "provider_feed:") {
+				out[item.SpaceID+"/"+item.Module] = item.Status
+			}
 		}
+		return out
 	}
-	require.NotNil(t, found)
-	require.Equal(t, "healthy", found.Status)
+	require.Equal(t, map[string]string{"stockcn/provider_feed:sina": "healthy", "stockhk/provider_feed:eastmoney": "down"}, feeds(""))
+	require.Equal(t, map[string]string{"stockcn/provider_feed:sina": "healthy"}, feeds("stockcn"))
+	require.Equal(t, map[string]string{"stockhk/provider_feed:eastmoney": "down"}, feeds("stockhk"))
+	require.Empty(t, feeds("crypto"))
 }
 
 func openOverviewMetrics(t *testing.T, seed func(*gorm.DB)) *monmetrics.QueryService {

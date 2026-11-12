@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -25,15 +26,16 @@ const (
 	fieldAmount      = "amount"
 )
 
-// hasTradeCount 判断市场的 K 线是否带报价成交量和成交笔数（加密货币）；A 股只有成交额 amount。
-func hasTradeCount(spaceID string) bool {
-	return !strings.EqualFold(strings.TrimSpace(spaceID), "stockcn")
+// hasTradeCount 判断空间的 K 线是否带报价成交量和成交笔数（现货、永续）；股票等只有成交额 amount。
+// 按空间默认品种的行形状判断（markets.HasTradeCount）；空间未登记时报错，不猜。
+func hasTradeCount(spaceID string) (bool, error) {
+	return markets.HasTradeCount(spaceID, "")
 }
 
 // sourceFields 是读取源 K 线的字段。
-func sourceFields(spaceID string) []string {
+func sourceFields(tradeCount bool) []string {
 	fields := []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume}
-	if hasTradeCount(spaceID) {
+	if tradeCount {
 		return append(fields, fieldQuoteVolume, fieldTradeNum)
 	}
 	return append(fields, fieldAmount)
@@ -64,13 +66,13 @@ func rowKey(spaceID, datasetID, subjectID, frequency string, at time.Time, serie
 	}}}
 }
 
-func resultRow(result Result) *storagepb.RowFieldUpsert {
+func resultRow(result Result, tradeCount bool) *storagepb.RowFieldUpsert {
 	fields := []*storagepb.FieldValue{
 		doubleField(fieldOpen, result.Open), doubleField(fieldHigh, result.High), doubleField(fieldLow, result.Low),
 		doubleField(fieldClose, result.Close), doubleField(fieldVolume, result.Volume),
 	}
 	switch {
-	case hasTradeCount(result.SpaceID):
+	case tradeCount:
 		fields = append(fields, doubleField(fieldQuoteVolume, result.QuoteVolume), intField(fieldTradeNum, result.TradeNum))
 	case result.Amount != nil:
 		fields = append(fields, doubleField(fieldAmount, *result.Amount))
@@ -91,8 +93,8 @@ func resultRow(result Result) *storagepb.RowFieldUpsert {
 	}
 }
 
-func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
-	row := resultRow(result)
+func resultRowWithSpec(result Result, spec TaskSpec, tradeCount bool) *storagepb.RowFieldUpsert {
+	row := resultRow(result, tradeCount)
 	if len(spec.OutputFields) > 0 {
 		selected := make(map[string]struct{}, len(spec.OutputFields))
 		for _, name := range spec.OutputFields {
@@ -170,7 +172,11 @@ func decodeSourceBar(row *storagepb.RowFieldValues) (SourceBar, error) {
 		return SourceBar{}, err
 	}
 	bar := SourceBar{SpaceID: row.GetKey().GetSpaceId(), DatasetID: row.GetKey().GetDatasetId(), SubjectID: k.GetSubjectId(), Frequency: k.GetFreq(), DataTime: at.UTC(), SeriesTag: k.GetSeriesTag(), Open: &open, High: &high, Low: &low, Close: &closeValue, Volume: &volume}
-	if hasTradeCount(bar.SpaceID) {
+	tradeCount, err := hasTradeCount(bar.SpaceID)
+	if err != nil {
+		return SourceBar{}, err
+	}
+	if tradeCount {
 		quote, err := requiredDouble(row, fieldQuoteVolume)
 		if err != nil {
 			return SourceBar{}, err

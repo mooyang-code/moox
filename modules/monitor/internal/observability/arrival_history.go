@@ -20,7 +20,7 @@ type ArrivalHistoryQuery struct {
 	SpaceID, DatasetID, Freq string
 	// TaskID 选定因子任务：给了就查它的结果数据集；没给且源数据集上只有一个任务，就查这个任务；有多个任务时只给任务列表和源数据集这一段。
 	TaskID string
-	// Day 是 YYYY-MM-DD，按市场时区（加密货币 UTC，A 股 Asia/Shanghai）的自然日；为空取市场时区的今天。
+	// Day 是 YYYY-MM-DD，按市场时区（连续市场 UTC，交易时段市场是交易所时区）的自然日；为空取市场时区的今天。
 	Day string
 }
 

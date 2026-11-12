@@ -33,7 +33,7 @@ func TestResampleSourceOfUnifiedDataset(t *testing.T) {
 		"bars_unified": storagesource.DatasetInfo{SubjectTags: []string{"binance_spot", "binance_swap"}},
 		"bars_swap":    storagesource.DatasetInfo{SubjectTags: []string{"binance_swap"}},
 	}, tags: tags}}
-	service.sourceIDResolver = func(provider, instrumentType string) string {
+	service.sourceIDResolver = func(_, provider, instrumentType string) string {
 		if provider == "binance" && instrumentType == "perpetual" {
 			return "swap_http"
 		}

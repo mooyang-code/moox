@@ -1,0 +1,1825 @@
+{
+  "route_ids": {
+    "crypto/spot/ 1D ": "binance_spot_kline_1d",
+    "crypto/spot/1d": "binance_spot_kline_1d",
+    "crypto/spot/1h": "binance_spot_kline_1h",
+    "crypto/spot/1m": "binance_spot_kline_1m",
+    "crypto/spot/5M": "binance_spot_kline_5m",
+    "crypto/spot/5m": "binance_spot_kline_5m",
+    "crypto/spot/bogus": "binance_spot_kline_bogus",
+    "crypto/swap/ 1D ": "binance_swap_kline_1d",
+    "crypto/swap/1d": "binance_swap_kline_1d",
+    "crypto/swap/1h": "binance_swap_kline_1h",
+    "crypto/swap/1m": "binance_swap_kline_1m",
+    "crypto/swap/5M": "binance_swap_kline_5m",
+    "crypto/swap/5m": "binance_swap_kline_5m",
+    "crypto/swap/bogus": "binance_swap_kline_bogus",
+    "crypto/swap/推送/ 1D ": "binance_swap_kline_1d",
+    "crypto/swap/推送/1d": "binance_swap_kline_1d",
+    "crypto/swap/推送/1h": "binance_swap_kline_1h",
+    "crypto/swap/推送/1m": "binance_swap_kline_1m",
+    "crypto/swap/推送/5M": "binance_swap_kline_5m",
+    "crypto/swap/推送/5m": "binance_swap_kline_5m",
+    "crypto/swap/推送/bogus": "binance_swap_kline_bogus",
+    "stockcn/(未写品种)/ 1D ": "stockcn_equity_kline_1d",
+    "stockcn/(未写品种)/1d": "stockcn_equity_kline_1d",
+    "stockcn/(未写品种)/1h": "stockcn_equity_kline_1h",
+    "stockcn/(未写品种)/1m": "stockcn_equity_kline_1m",
+    "stockcn/(未写品种)/5M": "stockcn_equity_kline_5m",
+    "stockcn/(未写品种)/5m": "stockcn_equity_kline_5m",
+    "stockcn/(未写品种)/bogus": "stockcn_equity_kline_bogus",
+    "stockcn/convertible_bond/ 1D ": "stockcn_convertible_bond_kline",
+    "stockcn/convertible_bond/1d": "stockcn_convertible_bond_kline",
+    "stockcn/convertible_bond/1h": "stockcn_convertible_bond_kline",
+    "stockcn/convertible_bond/1m": "stockcn_convertible_bond_kline",
+    "stockcn/convertible_bond/5M": "stockcn_convertible_bond_kline",
+    "stockcn/convertible_bond/5m": "stockcn_convertible_bond_kline",
+    "stockcn/convertible_bond/bogus": "stockcn_convertible_bond_kline",
+    "stockcn/equity/ 1D ": "stockcn_equity_kline_1d",
+    "stockcn/equity/1d": "stockcn_equity_kline_1d",
+    "stockcn/equity/1h": "stockcn_equity_kline_1h",
+    "stockcn/equity/1m": "stockcn_equity_kline_1m",
+    "stockcn/equity/5M": "stockcn_equity_kline_5m",
+    "stockcn/equity/5m": "stockcn_equity_kline_5m",
+    "stockcn/equity/bogus": "stockcn_equity_kline_bogus",
+    "stockcn/index/ 1D ": "stockcn_index_kline",
+    "stockcn/index/1d": "stockcn_index_kline",
+    "stockcn/index/1h": "stockcn_index_kline",
+    "stockcn/index/1m": "stockcn_index_kline",
+    "stockcn/index/5M": "stockcn_index_kline",
+    "stockcn/index/5m": "stockcn_index_kline",
+    "stockcn/index/bogus": "stockcn_index_kline",
+    "stockcn/index/推送/ 1D ": "",
+    "stockcn/index/推送/1d": "",
+    "stockcn/index/推送/1h": "",
+    "stockcn/index/推送/1m": "",
+    "stockcn/index/推送/5M": "",
+    "stockcn/index/推送/5m": "",
+    "stockcn/index/推送/bogus": ""
+  },
+  "assignments": {
+    "1d": {
+      "000001.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "000002.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "000333.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "000651.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "000858.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "002415.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "002594.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "300059.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "300750.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "301236.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "430047.XBSE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600000.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600036.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600100.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600107.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600114.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600121.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600128.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600135.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600142.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600149.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600156.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600163.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600170.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600177.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600184.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600191.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600198.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600205.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600212.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600219.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600226.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600233.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600519.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600900.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "601318.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "601398.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "601899.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "603259.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "688041.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "688981.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "832735.XBSE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "920118.XBSE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney"
+        ]
+      }
+    },
+    "1m": {
+      "000001.XSHE": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "000002.XSHE": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "000333.XSHE": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "000651.XSHE": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "000858.XSHE": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "002415.XSHE": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "002594.XSHE": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "300059.XSHE": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "300750.XSHE": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "301236.XSHE": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "430047.XBSE": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600000.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600036.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600100.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600107.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600114.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600121.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600128.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600135.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600142.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600149.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600156.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600163.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600170.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600177.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600184.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600191.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600198.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600205.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600212.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600219.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600226.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600233.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600519.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "600900.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "601318.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "601398.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "601899.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "603259.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "688041.XSHG": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "688981.XSHG": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "832735.XBSE": {
+        "provider": "tencent",
+        "source_id": "stockcn_http",
+        "chain": [
+          "tencent",
+          "sina",
+          "tdx",
+          "eastmoney"
+        ]
+      },
+      "920118.XBSE": {
+        "provider": "sina",
+        "source_id": "stockcn_minute_http",
+        "chain": [
+          "sina",
+          "tencent",
+          "tdx",
+          "eastmoney"
+        ]
+      }
+    },
+    "5m": {
+      "000001.XSHE": {
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "chain": [
+          "eastmoney",
+          "tdx",
+          "sina",
+          "tencent"
+        ]
+      },
+      "000002.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "000333.XSHE": {
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "chain": [
+          "eastmoney",
+          "tdx",
+          "sina",
+          "tencent"
+        ]
+      },
+      "000651.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "000858.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "002415.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "002594.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "300059.XSHE": {
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "chain": [
+          "eastmoney",
+          "tdx",
+          "sina",
+          "tencent"
+        ]
+      },
+      "300750.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "301236.XSHE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "430047.XBSE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600000.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600036.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600100.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600107.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600114.XSHG": {
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "chain": [
+          "eastmoney",
+          "tdx",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600121.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600128.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600135.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600142.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600149.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600156.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600163.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600170.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600177.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600184.XSHG": {
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "chain": [
+          "eastmoney",
+          "tdx",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600191.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600198.XSHG": {
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "chain": [
+          "eastmoney",
+          "tdx",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600205.XSHG": {
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "chain": [
+          "eastmoney",
+          "tdx",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600212.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600219.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600226.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600233.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600519.XSHG": {
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "chain": [
+          "eastmoney",
+          "tdx",
+          "sina",
+          "tencent"
+        ]
+      },
+      "600900.XSHG": {
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "chain": [
+          "eastmoney",
+          "tdx",
+          "sina",
+          "tencent"
+        ]
+      },
+      "601318.XSHG": {
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "chain": [
+          "eastmoney",
+          "tdx",
+          "sina",
+          "tencent"
+        ]
+      },
+      "601398.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "601899.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "603259.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "688041.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "688981.XSHG": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "832735.XBSE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      },
+      "920118.XBSE": {
+        "provider": "tdx",
+        "source_id": "normal_7709",
+        "chain": [
+          "tdx",
+          "eastmoney",
+          "sina",
+          "tencent"
+        ]
+      }
+    }
+  },
+  "fleet_sizes": {
+    "15m/1000": 0,
+    "15m/300": 0,
+    "15m/50": 0,
+    "15m/5400": 0,
+    "1d/1000": 53,
+    "1d/300": 38,
+    "1d/50": 7,
+    "1d/5400": 53,
+    "1m/1000": 6,
+    "1m/300": 6,
+    "1m/50": 6,
+    "1m/5400": 6,
+    "5m/1000": 80,
+    "5m/300": 38,
+    "5m/50": 7,
+    "5m/5400": 80
+  },
+  "fetch_limits": {
+    "15m": {
+      "concurrency": 50,
+      "rps": 50,
+      "burst": 50,
+      "feed_concurrency": 50,
+      "request_timeout_ms": 3000,
+      "storage_timeout_ms": 2000,
+      "not_before_ms": 800
+    },
+    "1d": {
+      "concurrency": 16,
+      "rps": 0,
+      "burst": 0,
+      "feed_concurrency": 16,
+      "request_timeout_ms": 3000,
+      "storage_timeout_ms": 2000,
+      "not_before_ms": 800
+    },
+    "1m": {
+      "concurrency": 17,
+      "rps": 0,
+      "burst": 0,
+      "feed_concurrency": 16,
+      "request_timeout_ms": 3000,
+      "storage_timeout_ms": 2000,
+      "not_before_ms": 800
+    },
+    "5m": {
+      "concurrency": 32,
+      "rps": 0,
+      "burst": 0,
+      "feed_concurrency": 16,
+      "request_timeout_ms": 3000,
+      "storage_timeout_ms": 2000,
+      "not_before_ms": 800
+    },
+    "5m/指数分组": {
+      "concurrency": 32,
+      "rps": 0,
+      "burst": 0,
+      "feed_concurrency": 16,
+      "request_timeout_ms": 3000,
+      "storage_timeout_ms": 2000,
+      "not_before_ms": 800
+    }
+  },
+  "datasets": {
+    "crypto/ds_spot_1m|1m": {
+      "dataset_id": "ds_spot_1m",
+      "frequency": "1m",
+      "hash": "343ef947415fcd45b1f1a8a548d9dbeeccab55d294d6e73995b584076b7deb14",
+      "count": 5,
+      "lateness_s": 15,
+      "ingest": "scf"
+    },
+    "crypto/ds_swap_1h|1h": {
+      "dataset_id": "ds_swap_1h",
+      "frequency": "1h",
+      "hash": "97c5741b1c3434126925d80aa036f95b33a276d3ab1988f933c84748cf473e55",
+      "count": 3,
+      "lateness_s": 20,
+      "ingest": "scf"
+    },
+    "crypto/ds_swap_1m|1m": {
+      "dataset_id": "ds_swap_1m",
+      "frequency": "1m",
+      "hash": "4a1626c88b63296c1b234f5c54e382e39bd304fecfa70bd4f85729d689c0015e",
+      "count": 5,
+      "lateness_s": 20,
+      "ingest": "scf"
+    },
+    "stockcn/ds_cn_1d|1d": {
+      "dataset_id": "ds_cn_1d",
+      "frequency": "1d",
+      "hash": "51006078c3ad3d2301d9d13b781c67b0c1c05127e2594b46edea07708012767d",
+      "count": 300,
+      "lateness_s": 90,
+      "output_fields": [
+        "amount",
+        "close",
+        "open",
+        "volume"
+      ],
+      "ingest": "scf"
+    },
+    "stockcn/ds_cn_5m|5m": {
+      "dataset_id": "ds_cn_5m",
+      "frequency": "5m",
+      "hash": "51006078c3ad3d2301d9d13b781c67b0c1c05127e2594b46edea07708012767d",
+      "count": 300,
+      "lateness_s": 90,
+      "ingest": "scf"
+    },
+    "stockcn/ds_cn_index_5m|5m": {
+      "dataset_id": "ds_cn_index_5m",
+      "frequency": "5m",
+      "hash": "a057579c60f09826e11d0aa6918af9f9d0ec5e0dc8587290b7956f8f7af1b514",
+      "count": 3,
+      "lateness_s": 90,
+      "ingest": "scf"
+    }
+  },
+  "functions": {
+    "moox-fetch-plan-crypto-spot-hongkong-000": {
+      "region": "ap-hongkong",
+      "cron": "0 * * * * * *",
+      "market": {
+        "market_id": "crypto",
+        "instrument_type": "spot",
+        "provider": "binance",
+        "source_id": "spot_http",
+        "market_type": "spot"
+      },
+      "fetch": {
+        "concurrency": 20,
+        "rps": 40,
+        "burst": 80,
+        "feed_concurrency": 10,
+        "request_timeout_ms": 2000,
+        "not_before_ms": 3000
+      },
+      "subjects": 2,
+      "plan_sha256": "0203cc3fcf4a135a994903e2a8916b06d17633873bccaa9d6d9e9d483782accf",
+      "requests": [
+        "1m provider=\"binance\" source=\"spot_http\" market=crypto instrument=spot market_type=spot items=2 first=1000PEPE-USDT/1000PEPEUSDT deadline=2026-11-11T00:00:15Z sha=f4c223270d3d094c142029d5a889493cece5a78610ba6c97a01e86c779fbb31e"
+      ]
+    },
+    "moox-fetch-plan-crypto-spot-hongkong-001": {
+      "region": "ap-hongkong",
+      "cron": "0 * * * * * *",
+      "market": {
+        "market_id": "crypto",
+        "instrument_type": "spot",
+        "provider": "binance",
+        "source_id": "spot_http",
+        "market_type": "spot"
+      },
+      "fetch": {
+        "concurrency": 20,
+        "rps": 40,
+        "burst": 80,
+        "feed_concurrency": 10,
+        "request_timeout_ms": 2000,
+        "not_before_ms": 3000
+      },
+      "subjects": 2,
+      "plan_sha256": "0ade7461577a268981fd76e4fca8163c5e4759cf590c0a7a18c779de299643a5",
+      "requests": [
+        "1m provider=\"binance\" source=\"spot_http\" market=crypto instrument=spot market_type=spot items=2 first=DOGE-USDT/DOGEUSDT deadline=2026-11-11T00:00:15Z sha=82c80c723992def7e2c94097879d67984691b3e1d360709cd1756a67626a8d73"
+      ]
+    },
+    "moox-fetch-plan-crypto-spot-hongkong-002": {
+      "region": "ap-hongkong",
+      "cron": "0 * * * * * *",
+      "market": {
+        "market_id": "crypto",
+        "instrument_type": "spot",
+        "provider": "binance",
+        "source_id": "spot_http",
+        "market_type": "spot"
+      },
+      "fetch": {
+        "concurrency": 20,
+        "rps": 40,
+        "burst": 80,
+        "feed_concurrency": 10,
+        "request_timeout_ms": 2000,
+        "not_before_ms": 3000
+      },
+      "subjects": 1,
+      "plan_sha256": "0c67dcd46faac065259a05c19a63cc0385e37d560c8d917aad3fec9ca74eb1ba",
+      "requests": [
+        "1m provider=\"binance\" source=\"spot_http\" market=crypto instrument=spot market_type=spot items=1 first=SOL-USDT/SOLUSDT deadline=2026-11-11T00:00:15Z sha=5e7fd7b4ce45072a064255d246eb0a6c7c663b614b2e227d86999b91f77f505f"
+      ]
+    },
+    "moox-fetch-plan-crypto-swap-hongkong-000": {
+      "region": "ap-hongkong",
+      "cron": "0 * * * * * *",
+      "market": {
+        "market_id": "crypto",
+        "instrument_type": "swap",
+        "provider": "binance",
+        "source_id": "swap_http",
+        "market_type": "swap"
+      },
+      "fetch": {
+        "concurrency": 20,
+        "rps": 40,
+        "burst": 80,
+        "feed_concurrency": 10,
+        "request_timeout_ms": 2000,
+        "not_before_ms": 8000
+      },
+      "subjects": 2,
+      "plan_sha256": "4bcbe92e3f2d6188bda76ef4d9bb2e39d8d2047bd7f792c29028a19a5e518294",
+      "requests": [
+        "1h provider=\"binance\" source=\"swap_http\" market=crypto instrument=swap market_type=swap items=1 first=BTC-USDT/BTCUSDT deadline=2026-11-11T00:00:20Z sha=673622aee4e998731d01bb306ffb50a5cfab99e45f18bb0415e44e3bad7ba146",
+        "1m provider=\"binance\" source=\"swap_http\" market=crypto instrument=swap market_type=swap items=2 first=1000PEPE-USDT/1000PEPEUSDT deadline=2026-11-11T00:00:20Z sha=25f69442630fb0a4641f95553685756abd675806d2998c78ed6b7d6b267c3409"
+      ]
+    },
+    "moox-fetch-plan-crypto-swap-hongkong-002": {
+      "region": "ap-hongkong",
+      "cron": "0 * * * * * *",
+      "market": {
+        "market_id": "crypto",
+        "instrument_type": "swap",
+        "provider": "binance",
+        "source_id": "swap_http",
+        "market_type": "swap"
+      },
+      "fetch": {
+        "concurrency": 20,
+        "rps": 40,
+        "burst": 80,
+        "feed_concurrency": 10,
+        "request_timeout_ms": 2000,
+        "not_before_ms": 8000
+      },
+      "subjects": 1,
+      "plan_sha256": "fc1135c230dca1cbeae8cd66ede054d02bcf01a6429775b6339cdd86faa0800f",
+      "requests": [
+        "1h provider=\"binance\" source=\"swap_http\" market=crypto instrument=swap market_type=swap items=1 first=SOL-USDT/SOLUSDT deadline=2026-11-11T00:00:20Z sha=dfec697c5f2892e644e327902482dacef2b536046dbfa629c2a8cd0620954fc3",
+        "1m provider=\"binance\" source=\"swap_http\" market=crypto instrument=swap market_type=swap items=1 first=SOL-USDT/SOLUSDT deadline=2026-11-11T00:00:20Z sha=c425ad9b6e055fd403053baf5dcdab1a26ca8624023794cf33386ee9d6f5dc4a"
+      ]
+    },
+    "moox-fetch-plan-crypto-swap-singapore-001": {
+      "region": "ap-singapore",
+      "cron": "0 * * * * * *",
+      "market": {
+        "market_id": "crypto",
+        "instrument_type": "swap",
+        "provider": "binance",
+        "source_id": "swap_http",
+        "market_type": "swap"
+      },
+      "fetch": {
+        "concurrency": 20,
+        "rps": 40,
+        "burst": 80,
+        "feed_concurrency": 10,
+        "request_timeout_ms": 2000,
+        "not_before_ms": 8000
+      },
+      "subjects": 2,
+      "plan_sha256": "5c56cfa733edc36a70556588dd6f7b285fe66daada4caa843942a501048888fd",
+      "requests": [
+        "1h provider=\"binance\" source=\"swap_http\" market=crypto instrument=swap market_type=swap items=1 first=ETH-USDT/ETHUSDT deadline=2026-11-11T00:00:20Z sha=ccacfe12b1b7656ef02f7f0aff49a99d148736fca161b19e48888e21b9ab8177",
+        "1m provider=\"binance\" source=\"swap_http\" market=crypto instrument=swap market_type=swap items=2 first=DOGE-USDT/DOGEUSDT deadline=2026-11-11T00:00:20Z sha=fb1fb5a34f98328c309ea407372c8c1f186cb3998cf8e60c3f0c05c55b12b7d4"
+      ]
+    },
+    "moox-fetch-plan-stockcn-equity-nanjing-000": {
+      "region": "ap-nanjing",
+      "cron": "0 */5 * * * * *",
+      "market": {
+        "market_id": "stockcn",
+        "instrument_type": "equity",
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "market_type": "equity"
+      },
+      "fetch": {
+        "concurrency": 32,
+        "rps": 0,
+        "burst": 0,
+        "feed_concurrency": 16,
+        "request_timeout_ms": 3000,
+        "storage_timeout_ms": 2000,
+        "not_before_ms": 800
+      },
+      "subjects": 38,
+      "plan_sha256": "33c50d3cf7bfe145bb70cf0b010c55850b9d69ad2cf0da32e3d69a45d0d044c7",
+      "requests": [
+        "1d provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600000.XSHG/600000.XSHG deadline=2026-11-11T00:01:30Z sha=4425774a6c224142663a6eed75aabe8e8ce3b438367cf27b042cc6409ec13406",
+        "5m provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600000.XSHG/600000.XSHG deadline=2026-11-11T00:01:30Z sha=b728521bc4f81910bf8191740507a484825fc4c8b426cc07c615cf57dddb0f46"
+      ]
+    },
+    "moox-fetch-plan-stockcn-equity-nanjing-001": {
+      "region": "ap-nanjing",
+      "cron": "0 */5 * * * * *",
+      "market": {
+        "market_id": "stockcn",
+        "instrument_type": "equity",
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "market_type": "equity"
+      },
+      "fetch": {
+        "concurrency": 32,
+        "rps": 0,
+        "burst": 0,
+        "feed_concurrency": 16,
+        "request_timeout_ms": 3000,
+        "storage_timeout_ms": 2000,
+        "not_before_ms": 800
+      },
+      "subjects": 38,
+      "plan_sha256": "c34b157f3537ac9b1756ac71a6c0d6e0d4bf960099339930b125b44297cf613c",
+      "requests": [
+        "1d provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600038.XSHG/600038.XSHG deadline=2026-11-11T00:01:30Z sha=549a82b69ff7c61a81df36eff97ce6d9ec29c2504d8662cc9e40b16c7326e839",
+        "5m provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600038.XSHG/600038.XSHG deadline=2026-11-11T00:01:30Z sha=acdbe8f1366b98968eb40b5734d91c9a54ee6a29b211c243721c694c3c9e7705"
+      ]
+    },
+    "moox-fetch-plan-stockcn-equity-nanjing-002": {
+      "region": "ap-nanjing",
+      "cron": "0 */5 * * * * *",
+      "market": {
+        "market_id": "stockcn",
+        "instrument_type": "equity",
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "market_type": "equity"
+      },
+      "fetch": {
+        "concurrency": 32,
+        "rps": 0,
+        "burst": 0,
+        "feed_concurrency": 16,
+        "request_timeout_ms": 3000,
+        "storage_timeout_ms": 2000,
+        "not_before_ms": 800
+      },
+      "subjects": 38,
+      "plan_sha256": "86f5c7710a94e2446300d1cae0f1613ac154c325b369fb4a78a0c3e1619b7aef",
+      "requests": [
+        "1d provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600076.XSHG/600076.XSHG deadline=2026-11-11T00:01:30Z sha=b04f6427a1232e5b618b17a93e4ab8476f674c7a48c2d7f2af5ebe4c3e083731",
+        "5m provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600076.XSHG/600076.XSHG deadline=2026-11-11T00:01:30Z sha=698b266477fde4d0e7a24fc18d0a2de8c9fe3ce90f6087d8904ec5671aad50da"
+      ]
+    },
+    "moox-fetch-plan-stockcn-equity-nanjing-003": {
+      "region": "ap-nanjing",
+      "cron": "0 */5 * * * * *",
+      "market": {
+        "market_id": "stockcn",
+        "instrument_type": "equity",
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "market_type": "equity"
+      },
+      "fetch": {
+        "concurrency": 32,
+        "rps": 0,
+        "burst": 0,
+        "feed_concurrency": 16,
+        "request_timeout_ms": 3000,
+        "storage_timeout_ms": 2000,
+        "not_before_ms": 800
+      },
+      "subjects": 38,
+      "plan_sha256": "ba90ad97c3da16e24d749f2db5db18bd0aae0d71fe0d9dd9b5cc33e8a0e7c631",
+      "requests": [
+        "1d provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600114.XSHG/600114.XSHG deadline=2026-11-11T00:01:30Z sha=ea202c119bf944f342bd05e841000d60615fef63b4a0fbd50931670717064ec2",
+        "5m provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600114.XSHG/600114.XSHG deadline=2026-11-11T00:01:30Z sha=b1f3093d6f5b9a2cecb716a2b8642c21e05a9ca60bdc7905f39f06bb4ea318cb"
+      ]
+    },
+    "moox-fetch-plan-stockcn-equity-nanjing-004": {
+      "region": "ap-nanjing",
+      "cron": "0 */5 * * * * *",
+      "market": {
+        "market_id": "stockcn",
+        "instrument_type": "equity",
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "market_type": "equity"
+      },
+      "fetch": {
+        "concurrency": 32,
+        "rps": 0,
+        "burst": 0,
+        "feed_concurrency": 16,
+        "request_timeout_ms": 3000,
+        "storage_timeout_ms": 2000,
+        "not_before_ms": 800
+      },
+      "subjects": 38,
+      "plan_sha256": "e145ac34cc33228de704807cc7503a5481c58ee54ae1053adb7dc1b5c0726aa5",
+      "requests": [
+        "1d provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600152.XSHG/600152.XSHG deadline=2026-11-11T00:01:30Z sha=f0f9b14691903f79baa2b09d05bda3996b6dd51d73ca0019d679963a0660a0f4",
+        "5m provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600152.XSHG/600152.XSHG deadline=2026-11-11T00:01:30Z sha=cfc2279321566c0e398b94c014432b34975b966d4703f1c77f9262ae4a846e40"
+      ]
+    },
+    "moox-fetch-plan-stockcn-equity-nanjing-005": {
+      "region": "ap-nanjing",
+      "cron": "0 */5 * * * * *",
+      "market": {
+        "market_id": "stockcn",
+        "instrument_type": "equity",
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "market_type": "equity"
+      },
+      "fetch": {
+        "concurrency": 32,
+        "rps": 0,
+        "burst": 0,
+        "feed_concurrency": 16,
+        "request_timeout_ms": 3000,
+        "storage_timeout_ms": 2000,
+        "not_before_ms": 800
+      },
+      "subjects": 38,
+      "plan_sha256": "5ae6ac10697351a7803ef8f07146bb5f564f063a951c9c4853d5c64cc8234788",
+      "requests": [
+        "1d provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600190.XSHG/600190.XSHG deadline=2026-11-11T00:01:30Z sha=0638e8d19d45b93a373319e897aad33c7c3c11be7ada0e6aef8f398b9ab25250",
+        "5m provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600190.XSHG/600190.XSHG deadline=2026-11-11T00:01:30Z sha=1494f1215d4e4185047777f2e1e283a2491eb91398cd664fe73585ef143d3251"
+      ]
+    },
+    "moox-fetch-plan-stockcn-equity-nanjing-006": {
+      "region": "ap-nanjing",
+      "cron": "0 */5 * * * * *",
+      "market": {
+        "market_id": "stockcn",
+        "instrument_type": "equity",
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "market_type": "equity"
+      },
+      "fetch": {
+        "concurrency": 32,
+        "rps": 0,
+        "burst": 0,
+        "feed_concurrency": 16,
+        "request_timeout_ms": 3000,
+        "storage_timeout_ms": 2000,
+        "not_before_ms": 800
+      },
+      "subjects": 38,
+      "plan_sha256": "508e96d31305a9897b55a99a183663ba155c6f2aaf28beb501f37182039c43a5",
+      "requests": [
+        "1d provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600228.XSHG/600228.XSHG deadline=2026-11-11T00:01:30Z sha=dfefbd89e363b433e9cf7b77180c57529e6d65e2418d764040d119014c7b60cc",
+        "5m provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=38 first=600228.XSHG/600228.XSHG deadline=2026-11-11T00:01:30Z sha=e3c5501ed236e1422f826035491da045eefcd4e3eec658f1b78bb8f63042b599"
+      ]
+    },
+    "moox-fetch-plan-stockcn-equity-nanjing-007": {
+      "region": "ap-nanjing",
+      "cron": "0 */5 * * * * *",
+      "market": {
+        "market_id": "stockcn",
+        "instrument_type": "equity",
+        "provider": "eastmoney",
+        "source_id": "stockcn_http",
+        "market_type": "equity"
+      },
+      "fetch": {
+        "concurrency": 32,
+        "rps": 0,
+        "burst": 0,
+        "feed_concurrency": 16,
+        "request_timeout_ms": 3000,
+        "storage_timeout_ms": 2000,
+        "not_before_ms": 800
+      },
+      "subjects": 34,
+      "plan_sha256": "8d5b162e589a2b3d94eac9c48d703d272785ef39a0e004465c4c94a9d7822608",
+      "requests": [
+        "1d provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=34 first=600266.XSHG/600266.XSHG deadline=2026-11-11T00:01:30Z sha=477c48626ebcdaf77f9bdce3ee98dd67e8fba40cf3a08164e464be7fb77816b1",
+        "5m provider=\"\" source=\"\" market=stockcn instrument=equity market_type=equity items=34 first=600266.XSHG/600266.XSHG deadline=2026-11-11T00:01:30Z sha=2c300be9eab197996f39a2b78282fc47d31426b96fb4de9b58c57cec7290a8d4"
+      ]
+    },
+    "moox-fetch-plan-stockcn-index-nanjing-000": {
+      "region": "ap-nanjing",
+      "cron": "0 */5 * * * * *",
+      "market": {
+        "market_id": "stockcn",
+        "instrument_type": "index",
+        "provider": "eastmoney",
+        "source_id": "index_http",
+        "market_type": "index"
+      },
+      "fetch": {
+        "concurrency": 32,
+        "rps": 0,
+        "burst": 0,
+        "feed_concurrency": 16,
+        "request_timeout_ms": 3000,
+        "storage_timeout_ms": 2000,
+        "not_before_ms": 800
+      },
+      "subjects": 1,
+      "plan_sha256": "fd789623295b3be45195ab8bb0c811fa3d6116da7a87cc01d119f2a5f2e3d763",
+      "requests": [
+        "5m provider=\"eastmoney\" source=\"index_http\" market=stockcn instrument=index market_type=index items=1 first=000300.XSHG/000300.XSHG deadline=2026-11-11T00:01:30Z sha=efcd19cf2aa9021ee4e52383fb7d5d267661de38860487edb7f9b71def22c601"
+      ]
+    },
+    "moox-fetch-plan-stockcn-index-nanjing-001": {
+      "region": "ap-nanjing",
+      "cron": "0 */5 * * * * *",
+      "market": {
+        "market_id": "stockcn",
+        "instrument_type": "index",
+        "provider": "eastmoney",
+        "source_id": "index_http",
+        "market_type": "index"
+      },
+      "fetch": {
+        "concurrency": 32,
+        "rps": 0,
+        "burst": 0,
+        "feed_concurrency": 16,
+        "request_timeout_ms": 3000,
+        "storage_timeout_ms": 2000,
+        "not_before_ms": 800
+      },
+      "subjects": 1,
+      "plan_sha256": "a50a6ba958955a04f2da5cada0d4975fdb27882fee3e3944903b379a42228643",
+      "requests": [
+        "5m provider=\"eastmoney\" source=\"index_http\" market=stockcn instrument=index market_type=index items=1 first=000905.XSHG/000905.XSHG deadline=2026-11-11T00:01:30Z sha=d4e991b2dc36e33176226fa9b76dcb5469d9af5ffd312d717fe130bf8aea0707"
+      ]
+    },
+    "moox-fetch-plan-stockcn-index-nanjing-002": {
+      "region": "ap-nanjing",
+      "cron": "0 */5 * * * * *",
+      "market": {
+        "market_id": "stockcn",
+        "instrument_type": "index",
+        "provider": "eastmoney",
+        "source_id": "index_http",
+        "market_type": "index"
+      },
+      "fetch": {
+        "concurrency": 32,
+        "rps": 0,
+        "burst": 0,
+        "feed_concurrency": 16,
+        "request_timeout_ms": 3000,
+        "storage_timeout_ms": 2000,
+        "not_before_ms": 800
+      },
+      "subjects": 1,
+      "plan_sha256": "2e6603621264874a6ea1458c2460c99f827037f913317bd18f2dc70a551bd63b",
+      "requests": [
+        "5m provider=\"eastmoney\" source=\"index_http\" market=stockcn instrument=index market_type=index items=1 first=399006.XSHE/399006.XSHE deadline=2026-11-11T00:01:30Z sha=be1db6a41d775571f74dbc442e8ceb527523230bd6a6c88cebe0d22f5638dac7"
+      ]
+    }
+  }
+}

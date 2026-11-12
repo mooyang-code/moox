@@ -3,8 +3,6 @@ package marketfetch
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -199,7 +197,7 @@ func TestKlineRowsCarryExtraFields(t *testing.T) {
 
 	start := time.Date(2026, 11, 10, 1, 30, 0, 0, time.UTC)
 	stock := marketdata.NormalizedKline{SubjectID: "600519.XSHG", ProviderID: "tdx", ProviderSymbol: "sh600519", Frequency: "5m",
-		BarStart: start, BarEnd: start.Add(5 * time.Minute), Open: 10, High: 11, Low: 9, Close: 10.5, VolumeShares: 100, AmountCNY: 1050,
+		BarStart: start, BarEnd: start.Add(5 * time.Minute), Open: 10, High: 11, Low: 9, Close: 10.5, Volume: 100, Amount: 1050,
 		ProviderTimestamp: start.Add(5 * time.Minute), FetchedAt: start.Add(6 * time.Minute), RequestID: "r", Extra: extra}
 	row, err = stockKlineRow(stock, "bars", "route", 1, "贵州茅台")
 	require.NoError(t, err)
@@ -221,9 +219,8 @@ func TestFundingFetchFieldsRejectsBarOutsideQueriedRange(t *testing.T) {
 }
 
 // 字段来源的运行参数按提供方 ID 从数据源配置文件加载，不要求它出现在路由里；没有配置文件的来源用默认值。
-func TestLoadStockCNSourceRuntimeByProviderID(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "fake_hfq.yaml"), []byte(`provider:
+func TestLoadSourceRuntimeByProviderID(t *testing.T) {
+	writeMarketFile(t, t.TempDir(), "stockcn/sources/fake_hfq.yaml", `provider:
   id: fake_hfq
   market: stockcn
   hosts: [finance.example.com]
@@ -234,16 +231,15 @@ func TestLoadStockCNSourceRuntimeByProviderID(t *testing.T) {
     max_concurrent: 2
     cooldown: 1s
     request_timeout: 4s
-`), 0o600))
-	t.Setenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR", dir)
-	config, found, err := LoadStockCNSourceRuntime("fake_hfq")
+`)
+	config, found, err := LoadSourceRuntime("stockcn", "fake_hfq")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, 3.0, config.RateLimit.RequestsPerSecond)
 	require.Equal(t, 4*time.Second, config.RateLimit.RequestTimeout)
 	require.Equal(t, []string{"finance.example.com"}, config.Hosts)
 
-	_, found, err = LoadStockCNSourceRuntime("no_such_source")
+	_, found, err = LoadSourceRuntime("stockcn", "no_such_source")
 	require.NoError(t, err)
 	require.False(t, found)
 }

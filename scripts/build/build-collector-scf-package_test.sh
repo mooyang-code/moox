@@ -163,15 +163,11 @@ stock_listing_path="${TMP_ROOT}/stock-listing.txt"
 unzip -l "${stock_package_path}" >"${stock_listing_path}"
 grep -q ' main$' "${stock_listing_path}"
 grep -q ' sources/market/binance.yaml$' "${stock_listing_path}"
-grep -q ' sources/market/sina.yaml$' "${stock_listing_path}"
-grep -q ' sources/market/tencent.yaml$' "${stock_listing_path}"
-grep -q ' sources/market/eastmoney.yaml$' "${stock_listing_path}"
-grep -q ' sources/market/baidu.yaml$' "${stock_listing_path}"
-if grep -q 'calendar.yaml' "${stock_listing_path}"; then
-  echo "stockcn SCF package must not contain calendar.yaml (trading calendar is embedded)" >&2
+# 市场数据文件（路由、数据源运行参数）和交易日历都编在二进制里，代码包不带。
+if grep -Eq 'calendar.yaml|route.yaml|market.yaml|sources/market/(sina|tencent|eastmoney|baidu|tdx).yaml' "${stock_listing_path}"; then
+  echo "stockcn SCF package must not contain market files (they are embedded in the binary)" >&2
   exit 1
 fi
-grep -q ' markets/stockcn/route.yaml$' "${stock_listing_path}"
 ! grep -q 'trpc_go.yaml' "${stock_listing_path}"
 unzip -p "${stock_package_path}" sources/market/binance.yaml >"${TMP_ROOT}/stock-binance.yaml"
 ! grep -Eq 'binance-spot-collector|binance-swap-collector|test-storage-secret|test-eventbus-password' "${TMP_ROOT}/stock-binance.yaml"

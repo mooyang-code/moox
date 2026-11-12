@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
@@ -64,7 +67,7 @@ type Service struct {
 	fieldOffers             marketdata.FieldOffers
 	klineOps                KlineOps
 	fetchPlanControl        FetchPlanControl
-	sourceIDResolver        func(provider, instrumentType string) string
+	sourceIDResolver        marketfetch.SourceIDResolver
 	stream                  *StreamService
 	activity                activityLogger
 	delistRegistrar         DelistRegistrar
@@ -1386,11 +1389,16 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain
 			"low": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "close": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 			"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		}
-		if strings.EqualFold(task.SpaceID, "stockcn") {
-			expected["amount"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
-		} else {
+		// 与合成读源 K 线用同一个判断（resample 包按空间默认品种的行形状取列）。
+		hasTradeCount, err := markets.HasTradeCount(task.SpaceID, "")
+		if err != nil {
+			return err
+		}
+		if hasTradeCount {
 			expected["quote_volume"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
 			expected["trade_num"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
+		} else {
+			expected["amount"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
 		}
 		missing := make([]string, 0)
 		for column, expectedType := range expected {
@@ -1430,8 +1438,9 @@ func (s *Service) validateDataset(
 		return fmt.Errorf("%s Dataset %s must be active", role, datasetID)
 	}
 	if exchange = strings.TrimSpace(exchange); exchange != "" {
+		// 共享数据集的数据源 ID 是空间名（不属于某一家数据源）。
 		sourceMatches := strings.EqualFold(info.DataSourceID, exchange) ||
-			(allowSharedMarket && strings.EqualFold(info.DataSourceID, "crypto"))
+			(allowSharedMarket && strings.EqualFold(info.DataSourceID, spaceID))
 		if !sourceMatches {
 			return fmt.Errorf(
 				"%s Dataset %s data_source_id=%s does not match collector exchange=%s",

@@ -6,6 +6,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -584,4 +585,11 @@ func TestEnsureColumnsCreatesFundingRateOnlyWhenSelected(t *testing.T) {
 	require.Equal(t, "funding_rate", columns[1].GetColumnName())
 	require.Equal(t, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, columns[1].GetValueType())
 	require.Equal(t, "资金费率", columns[1].GetAttributes()["display_name"])
+}
+
+// 未登记的市场报错，不当成连续交易的市场悄悄跳过 calendar、alignment。
+func TestEnsureRejectsUnregisteredMarket(t *testing.T) {
+	manager := NewManagerWithAPI(newResultMetadataFake(), &storagepb.AuthInfo{AppId: "collector"})
+	_, err := manager.Ensure(context.Background(), "no_such_space", "task-unknown-5m", "kline", "equity", Config{DataNodeID: "node-1", Frequency: "5m"})
+	require.ErrorIs(t, err, barclock.ErrUnknownMarket)
 }

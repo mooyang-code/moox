@@ -7,7 +7,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 )
 
-// SourceSettings 是数据源自身的运行参数（A 股按路由与数据源配置文件给出），没有配置的数据源取零值用默认。
+// SourceSettings 是数据源自身的运行参数（按路由分配的数据源由路由与数据源配置文件给出），没有配置的数据源取零值用默认。
 type SourceSettings struct {
 	BaseURL           string
 	KlineEndpoint     string
@@ -21,7 +21,7 @@ type SourceSettings struct {
 // collector-stream（接收）各自给出自己的 HTTP 客户端与配置，数据源的构造只在目录里写一处。
 type Deps struct {
 	HTTPClient *httpclient.HTTPClient
-	// SourceID 为空时取登记的 source_id；A 股按路由配置给出。
+	// SourceID 为空时取登记的 source_id；按路由分配的数据源由路由配置给出。
 	SourceID string
 	Settings SourceSettings
 }
@@ -36,7 +36,7 @@ type CatalogEntry struct {
 	Key        SourceKey
 	MarketID   MarketID
 	Instrument InstrumentType
-	// RouteSource 表示 source_id 由路由配置决定（A 股），查找时只按 provider 匹配。
+	// RouteSource 表示这个（市场，品种）的 K 线来源按路由文件分配：source_id 由路由配置决定，查找时只按 provider 匹配。
 	RouteSource bool
 	New         Factory
 }
@@ -133,27 +133,13 @@ func (e CatalogEntry) Build(deps Deps) (MarketProvider, error) {
 	return provider, nil
 }
 
-// InstrumentSource 是能提供标的快照的一个数据源。
-type InstrumentSource struct {
-	Entry   CatalogEntry
-	Fetcher InstrumentFetcher
-}
-
-// Instruments 构造全部实现了 InstrumentFetcher 的数据源；deps 返回 false 的登记项跳过（例如路由里未启用）。
-func (c *Catalog) Instruments(deps func(CatalogEntry) (Deps, bool)) ([]InstrumentSource, error) {
-	var out []InstrumentSource
+// Routed 报告这个市场与品种的 K 线来源是否按路由分配（目录里有 RouteSource 登记项）；否则是任务或标签指定的单一来源。
+func (c *Catalog) Routed(marketID MarketID, instrument InstrumentType) bool {
+	want := normalizeEntry(CatalogEntry{MarketID: marketID, Instrument: instrument})
 	for _, entry := range c.entries {
-		values, ok := deps(entry)
-		if !ok {
-			continue
-		}
-		provider, err := entry.Build(values)
-		if err != nil {
-			return nil, err
-		}
-		if fetcher, ok := provider.(InstrumentFetcher); ok {
-			out = append(out, InstrumentSource{Entry: entry, Fetcher: fetcher})
+		if entry.RouteSource && entry.MarketID == want.MarketID && entry.Instrument == want.Instrument {
+			return true
 		}
 	}
-	return out, nil
+	return false
 }

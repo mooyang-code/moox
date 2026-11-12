@@ -9,7 +9,7 @@ import (
 )
 
 func TestPlanPeriodValidFollowsTheMarketClock(t *testing.T) {
-	stock := marketfetch.PlanMarket{MarketID: marketfetch.StockCNSpaceID}
+	stock := marketfetch.PlanMarket{MarketID: "stockcn"}
 	shanghai := time.FixedZone("CST", 8*3600)
 	at := func(day, hour, minute int) time.Time {
 		return time.Date(2026, 10, day, hour, minute, 0, 0, shanghai).UTC()

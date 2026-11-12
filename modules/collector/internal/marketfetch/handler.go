@@ -27,12 +27,10 @@ type Handler struct {
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the market-specific common pipeline; tests can prove the Timer
 	// contract without making an external exchange request.
-	Execute                func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
-	NewMarketKlinePipeline func(Storage, string, marketdata.InstrumentType, string, string) (*KlinePipeline, error)
-	NewCryptoKlinePipeline func(Storage, marketdata.InstrumentType, *FeedLimits) (*KlinePipeline, error)
-	NewStockKlinePipeline  func(Storage, string) (*KlinePipeline, error)
-	ResolveSourceID        func(string, string) string
-	ResolveSymbol          SymbolResolver
+	Execute func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
+	// NewKlinePipeline 由组合根提供：按请求的（市场，品种，频率，数据源，限速）装一条 K 线流水线。
+	NewKlinePipeline PipelineFactory
+	ResolveSymbol    SymbolResolver
 	// SpaceID 是执行端所属空间；为空时读 MOOX_SPACE_ID（SCF 函数）。本地执行端显式设置，不依赖进程环境。
 	SpaceID string
 	Now     func() time.Time
@@ -43,6 +41,10 @@ type Handler struct {
 	Metrics         *Metrics
 	MetricsReporter MetricsReporter
 }
+
+// PipelineFactory 装一条 K 线流水线。来源按路由分配的（市场，品种）按 frequency 取路由的候选链，不看 provider、limits；
+// 其余的用 provider 指定的那一个数据源（source_id 取行情源目录里登记的），limits 非空时按它设置数据源限流与熔断阈值。
+type PipelineFactory func(storage Storage, marketID string, instrumentType marketdata.InstrumentType, frequency, provider string, limits *FeedLimits) (*KlinePipeline, error)
 
 // MetricsReporter is the common one-shot observability sink used by long-lived
 // Collector and short-lived SCF runtimes. It is intentionally optional: market
@@ -227,45 +229,28 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 	var payload *marketfetchpb.MarketFetchBatchCompleted
 	if h.Execute != nil {
 		payload, err = h.Execute(budgetCtx, req, storage)
-	} else if req.SpaceID == StockCNSpaceID &&
-		(req.InstrumentType == "" || strings.EqualFold(req.InstrumentType, string(marketdata.InstrumentEquity))) {
-		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
-		defer workCancel()
-		newPipeline := h.NewStockKlinePipeline
-		if newPipeline == nil {
-			return nil, fmt.Errorf("stock kline pipeline factory is not configured")
-		}
-		pipeline, pipelineErr := newPipeline(storage, req.Frequency)
-		if pipelineErr != nil {
-			return nil, pipelineErr
-		}
-		pipeline.DatasetID = strings.TrimSpace(req.DatasetID)
-		pipeline.Now = h.Now
-		pipeline.Metrics = h.Metrics
-		pipeline.Reporter = h.Reporter
-		pipeline.FunctionName = req.FunctionName
-		payload, err = pipeline.Execute(workCtx, req)
 	} else {
-		marketID := firstNonEmptyString(req.MarketID, req.SpaceID)
-		instrumentType := marketdata.InstrumentType(firstNonEmptyString(req.InstrumentType, req.MarketType))
-		var (
-			pipeline    *KlinePipeline
-			pipelineErr error
-		)
-		if cryptoProduct, ok := cryptoKlineProduct(req.SpaceID, marketID, req.MarketType, instrumentType, req.DatasetID); ok {
-			if h.NewCryptoKlinePipeline == nil {
-				return nil, fmt.Errorf("crypto kline pipeline factory is not configured")
-			}
-			alignCryptoRequest(&req, cryptoProduct)
-			pipeline, pipelineErr = h.NewCryptoKlinePipeline(storage, cryptoProduct, req.FetchLimits)
-		} else {
-			if h.NewMarketKlinePipeline == nil {
-				return nil, fmt.Errorf("market kline pipeline factory is not configured")
-			}
-			pipeline, pipelineErr = h.NewMarketKlinePipeline(storage, marketID, instrumentType, req.Provider, req.SourceID)
+		if h.NewKlinePipeline == nil {
+			return nil, fmt.Errorf("没有配置 K 线流水线的装配函数")
 		}
+		// 品种以请求写明的为准；没写时由市场的标的规则按 market_type 决定。
+		marketID := firstNonEmptyString(req.MarketID, req.SpaceID)
+		instrumentType := marketdata.InstrumentType(strings.ToLower(strings.TrimSpace(req.InstrumentType)))
+		if instrumentType == "" {
+			if instrumentType, err = defaultInstrumentType(marketID, req.MarketType); err != nil {
+				return nil, err
+			}
+		}
+		pipeline, pipelineErr := h.NewKlinePipeline(storage, marketID, instrumentType, req.Frequency, req.Provider, req.FetchLimits)
 		if pipelineErr != nil {
 			return nil, pipelineErr
+		}
+		// 单一来源的 source_id 以行情源目录登记的为准：请求和取数项里带的值（可能是登记变更前生成的）对齐到流水线绑定的那一个。
+		if pipeline.SourceID != "" {
+			req.SourceID = pipeline.SourceID
+			for index := range req.Items {
+				req.Items[index].SourceID = pipeline.SourceID
+			}
 		}
 		pipeline.DatasetID = strings.TrimSpace(req.DatasetID)
 		pipeline.Now = h.Now
@@ -477,32 +462,4 @@ func decodeRequest(data map[string]interface{}, request *Request) error {
 		return fmt.Errorf("decode market_fetch data: %w", err)
 	}
 	return request.validate()
-}
-
-func alignCryptoRequest(req *Request, product marketdata.InstrumentType) {
-	if req == nil {
-		return
-	}
-	sourceID, marketType, instrumentType := "spot_http", "spot", string(marketdata.InstrumentSpot)
-	if product == marketdata.InstrumentSwap {
-		sourceID, marketType, instrumentType = "swap_http", "swap", string(marketdata.InstrumentSwap)
-	}
-	req.SourceID = sourceID
-	req.MarketType = marketType
-	req.InstrumentType = instrumentType
-	for index := range req.Items {
-		req.Items[index].SourceID = sourceID
-		req.Items[index].MarketType = marketType
-	}
-}
-
-func cryptoKlineProduct(spaceID, marketID, marketType string, instrumentType marketdata.InstrumentType, datasetID string) (marketdata.InstrumentType, bool) {
-	if !strings.EqualFold(strings.TrimSpace(spaceID), "crypto") && !strings.EqualFold(strings.TrimSpace(marketID), "crypto") {
-		return "", false
-	}
-	dataset := strings.ToLower(strings.TrimSpace(datasetID))
-	if strings.EqualFold(strings.TrimSpace(marketType), "swap") || strings.EqualFold(string(instrumentType), string(marketdata.InstrumentSwap)) || strings.Contains(dataset, "_swap_") || strings.Contains(dataset, "swap_kline") {
-		return marketdata.InstrumentSwap, true
-	}
-	return marketdata.InstrumentSpot, true
 }

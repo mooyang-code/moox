@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/barclock"
@@ -272,7 +273,14 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 		return nil, fmt.Errorf("task result frequency is required")
 	}
 	marketID := firstTaskResultInventoryValue(params.MarketID, task.SpaceID)
-	calendarID, timezone, sessions := taskResultMarketCalendar(marketID)
+	calendarID, timezone, sessions, err := taskResultMarketCalendar(marketID)
+	if err != nil {
+		return nil, err
+	}
+	latenessSeconds, err := allowedLatenessSeconds(params, task.SpaceID)
+	if err != nil {
+		return nil, err
+	}
 	ids, err := collectionTaskResultIDs(task)
 	if err != nil {
 		return nil, err
@@ -281,7 +289,7 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 		SpaceId: task.SpaceID, TaskId: task.TaskID, DatasetId: ids.DatasetID, ViewId: ids.ViewID,
 		Frequency: frequency, MarketId: marketID, CalendarId: calendarID, Timezone: timezone,
 		Sessions: sessions, ObservedAt: observed.Format(time.RFC3339Nano), Enabled: task.Enabled,
-		ResultStatus: "pending", AllowedLatenessSeconds: int32(allowedLatenessSeconds(params, task.SpaceID)),
+		ResultStatus: "pending", AllowedLatenessSeconds: int32(latenessSeconds),
 	}
 	if !task.Enabled {
 		if err := s.inspectDisabledTaskResult(ctx, entry, task, params, ids); err != nil {
@@ -368,24 +376,29 @@ func (s *Service) setCanaryCandidate(entry *pb.TaskResultInventoryEntry, task do
 	entry.OutputFields = append([]string(nil), params.OutputFields...)
 }
 
-// allowedLatenessSeconds 返回任务结果数据集的允许迟到时间：任务参数优先，否则取空间默认值。
-func allowedLatenessSeconds(params *domain.CollectParams, spaceID string) int {
+// allowedLatenessSeconds 返回任务结果数据集的允许迟到时间：任务参数优先，否则取市场 market.yaml 里的默认值；市场未登记时报错。
+func allowedLatenessSeconds(params *domain.CollectParams, spaceID string) (int, error) {
 	if params != nil && params.AllowedLatenessSeconds > 0 {
-		return params.AllowedLatenessSeconds
+		return params.AllowedLatenessSeconds, nil
 	}
-	return domain.DefaultAllowedLatenessSeconds(spaceID)
+	market, err := markets.ConfigFor(spaceID)
+	if err != nil {
+		return 0, err
+	}
+	return market.AllowedLatenessSeconds, nil
 }
 
-// taskResultMarketCalendar 返回市场的交易日历、时区与交易时段（取自 barclock 的市场登记），Monitor 据此判断应收的 K 线。
-func taskResultMarketCalendar(marketID string) (calendarID, timezone string, sessions []string) {
+// taskResultMarketCalendar 返回市场的交易日历、时区与交易时段（取自 barclock 的市场登记），Monitor 据此判断应收的 K 线；
+// 市场未登记时报错，不当成连续交易。
+func taskResultMarketCalendar(marketID string) (calendarID, timezone string, sessions []string, err error) {
 	market, err := barclock.MarketFor(marketID)
 	if err != nil {
-		return "", "", nil
+		return "", "", nil, err
 	}
 	if market.Alignment == barclock.AlignmentEpochUTC {
-		return "", "UTC", nil
+		return "", "UTC", nil, nil
 	}
-	return market.CalendarID, market.Timezone, append([]string(nil), market.Sessions...)
+	return market.CalendarID, market.Timezone, append([]string(nil), market.Sessions...), nil
 }
 
 func firstTaskResultInventoryValue(values ...string) string {

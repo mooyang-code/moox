@@ -41,7 +41,7 @@ func swapTestPlan(period time.Time) *Plan {
 
 func testSwapBar(subject, symbol string, period time.Time, close float64) marketdata.NormalizedKline {
 	return marketdata.NormalizedKline{SubjectID: subject, ProviderID: "binance", SourceID: "swap_http", ProviderSymbol: symbol, Frequency: "1m",
-		BarStart: period, BarEnd: period.Add(time.Minute), Open: 1, High: close + 1, Low: 0.5, Close: close, VolumeShares: 10, AmountCNY: 100, TradeCount: 7, ProviderTimestamp: period, FetchedAt: period.Add(time.Minute), RequestID: "r"}
+		BarStart: period, BarEnd: period.Add(time.Minute), Open: 1, High: close + 1, Low: 0.5, Close: close, Volume: 10, Amount: 100, TradeCount: 7, ProviderTimestamp: period, FetchedAt: period.Add(time.Minute), RequestID: "r"}
 }
 
 // 同一组 K 线经 SCF 的 Execute 与经 KlineCommitter.CommitPeriod 写出的周期提交逐字节相同。

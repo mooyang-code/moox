@@ -17,7 +17,7 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05,
-		VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "handler-metrics",
+		Volume: 1000, Amount: 9050, ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "handler-metrics",
 	}
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}}))
@@ -26,10 +26,13 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, CandidateChain: []string{"sina", "tencent"}, MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Now: func() time.Time { return now }}
-	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics := NewMetrics(prometheus.NewRegistry(), testFeedLabels)
 	handler := &Handler{
 		NewStorage: func(string) (Storage, error) { return storage, nil },
-		NewStockKlinePipeline: func(s Storage, _ string) (*KlinePipeline, error) {
+		NewKlinePipeline: func(s Storage, marketID string, instrument marketdata.InstrumentType, frequency, _ string, _ *FeedLimits) (*KlinePipeline, error) {
+			require.Equal(t, StockCNSpaceID, marketID)
+			require.Equal(t, marketdata.InstrumentEquity, instrument, "请求没写品种时按市场的标的规则由 market_type 决定")
+			require.Equal(t, "1m", frequency)
 			pipeline.Storage = s
 			return pipeline, nil
 		},
@@ -64,17 +67,15 @@ func TestHandleRequestUsesCryptoSwapPipeline(t *testing.T) {
 	var gotLimits *FeedLimits
 	handler := &Handler{
 		NewStorage: func(string) (Storage, error) { return storage, nil },
-		NewCryptoKlinePipeline: func(s Storage, got marketdata.InstrumentType, limits *FeedLimits) (*KlinePipeline, error) {
+		NewKlinePipeline: func(s Storage, marketID string, got marketdata.InstrumentType, _, provider string, limits *FeedLimits) (*KlinePipeline, error) {
+			require.Equal(t, "crypto", marketID)
+			require.Equal(t, "binance", provider)
 			product, gotLimits = got, limits
 			return &KlinePipeline{
 				Router: router, Storage: s, CandidateChain: []string{"binance"}, MarketID: "crypto",
 				InstrumentType: got, DatasetID: "dataset_binance_kline_1m",
 				SourceID: "swap_http", Now: func() time.Time { return now },
 			}, nil
-		},
-		NewMarketKlinePipeline: func(Storage, string, marketdata.InstrumentType, string, string) (*KlinePipeline, error) {
-			t.Fatal("crypto swap must not use the generic market pipeline")
-			return nil, nil
 		},
 		Now: func() time.Time { return now },
 	}
@@ -106,7 +107,7 @@ func TestHandleRequestAlignsStaleSpotSourceOntoSwapPipeline(t *testing.T) {
 	storage := &pipelineStorage{}
 	handler := &Handler{
 		NewStorage: func(string) (Storage, error) { return storage, nil },
-		NewCryptoKlinePipeline: func(s Storage, got marketdata.InstrumentType, _ *FeedLimits) (*KlinePipeline, error) {
+		NewKlinePipeline: func(s Storage, _ string, got marketdata.InstrumentType, _, _ string, _ *FeedLimits) (*KlinePipeline, error) {
 			return &KlinePipeline{
 				Router: router, Storage: s, CandidateChain: []string{"binance"}, MarketID: "crypto",
 				InstrumentType: got, DatasetID: "dataset_binance_kline_1m",

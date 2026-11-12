@@ -75,7 +75,11 @@ func (s *Service) resampleSourceOf(ctx context.Context, spaceID, sourceTaskID st
 				return resampleSource{}, fmt.Errorf("load source tag %s: %v", tagID, tagErr)
 			}
 			route := sourceRoute{provider: tagattr.Source(tag), marketType: tagattr.MarketType(tag)}
-			route.seriesTag = marketfetch.TaskSeriesTag(task.SpaceID, params, route.provider, route.marketType, s.sourceIDResolver)
+			seriesTag, tagErr := marketfetch.TaskSeriesTag(task.SpaceID, params, route.provider, route.marketType, s.sourceIDResolver)
+			if tagErr != nil {
+				return resampleSource{}, fmt.Errorf("源任务 %q 的序列标签：%w", sourceTaskID, tagErr)
+			}
+			route.seriesTag = seriesTag
 			routes[route.provider+"/"+route.marketType] = route
 			markets[route.marketType] = struct{}{}
 			out.Provider, out.MarketType, out.SeriesTag = route.provider, route.marketType, route.seriesTag

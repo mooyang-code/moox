@@ -7,12 +7,6 @@ import (
 	"time"
 )
 
-// The composition root consumes the same validated route configuration as the
-// assignment planner, without placing concrete provider constructors here.
-type StockCNRoute = stockCNRoute
-type StockCNProviderRuntime = stockCNProviderRuntime
-type StockCNProviderKlineConfig = stockCNProviderKlineFile
-
 const KlineProviderAttemptBudget = klineProviderAttemptBudget
 
 // RuntimeKlineProviderAttemptBudget reads the SCF-owned HTTP attempt budget.
@@ -35,17 +29,6 @@ func RuntimeKlineProviderAttemptBudget() int {
 // 且在途请求被压到只有几个，慢响应会把整批拖过窗口。
 func RuntimeKlineBreakerThreshold() int {
 	return RuntimeKlineProviderAttemptBudget() * max(1, envInt("MOOX_FETCH_FEED_CONCURRENCY", 1))
-}
-
-func LoadStockCNRoute() (StockCNRoute, error) { return loadStockCNRoute() }
-
-func LoadStockCNProviderRuntime(route StockCNRoute) (map[string]StockCNProviderRuntime, error) {
-	return loadStockCNProviderRuntime(route)
-}
-
-// LoadStockCNSourceRuntime 按提供方 ID 读 A 股数据源的运行参数；没有配置文件时第二个返回值为 false。
-func LoadStockCNSourceRuntime(providerID string) (StockCNProviderRuntime, bool, error) {
-	return loadStockCNSourceRuntime(providerID)
 }
 
 // attemptTimeoutFloor 是单次行情请求的最短超时，来自计划下发的 MOOX_FETCH_REQUEST_TIMEOUT_MS；未配置时为 0（不设下限）。

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,12 +52,69 @@ func TestTradingBarStockCN1mAndCrypto(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got, at)
 	}
-	// 连续交易的市场每根都是交易桶，未登记的市场也按连续交易处理。
-	for _, market := range []string{"crypto", "unknown"} {
-		got, err := TradingBar(market, "5m", cst("2026-10-11", "12:55"))
-		require.NoError(t, err)
-		require.True(t, got, market)
+	// 连续交易的市场每根都是交易桶。
+	got, err := TradingBar("crypto", "5m", cst("2026-10-11", "12:55"))
+	require.NoError(t, err)
+	require.True(t, got)
+}
+
+// 未登记的市场一律报错，不当成连续交易。
+func TestUnknownMarketIsAnError(t *testing.T) {
+	at := cst("2026-10-11", "12:55")
+	_, err := TradingBar("unknown", "5m", at)
+	require.ErrorIs(t, err, barclock.ErrUnknownMarket)
+	_, err = Clock("unknown", "5m")
+	require.ErrorIs(t, err, barclock.ErrUnknownMarket)
+	_, err = Location("unknown")
+	require.ErrorIs(t, err, barclock.ErrUnknownMarket)
+	require.ErrorIs(t, CheckCalendarHorizon("unknown", at, 14), barclock.ErrUnknownMarket)
+	_, err = ConfigFor("unknown")
+	require.ErrorIs(t, err, ErrUnknownMarket)
+	_, err = RulesFor("unknown")
+	require.ErrorIs(t, err, ErrUnknownMarket)
+}
+
+// 现有两个市场的参数：允许迟到时间与序列标签是线上行为，不能变。
+func TestMarketConfigs(t *testing.T) {
+	require.Equal(t, []string{"crypto", "stockcn", "stockhk"}, IDs())
+
+	crypto, err := ConfigFor("crypto")
+	require.NoError(t, err)
+	require.Equal(t, 15, crypto.AllowedLatenessSeconds)
+	require.Empty(t, crypto.SeriesTag, "crypto 的序列标签按数据源生成")
+	require.Empty(t, crypto.Currency)
+	require.False(t, crypto.RealtimeBatchNoCap)
+	require.Equal(t, "binance", crypto.EgressProbe)
+	require.Equal(t, SubjectEgressProxy, crypto.SubjectEgress)
+	require.Equal(t, &SubjectSync{Sources: []string{"binance"}, InstrumentType: "spot", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"}, crypto.SubjectSync)
+
+	stockcn, err := ConfigFor(" StockCN ")
+	require.NoError(t, err)
+	require.Equal(t, 90, stockcn.AllowedLatenessSeconds)
+	require.Equal(t, "default", stockcn.SeriesTag)
+	require.Equal(t, "cny", stockcn.AmountUnit())
+	require.True(t, stockcn.RealtimeBatchNoCap)
+	require.Equal(t, EgressProbePublicIP, stockcn.EgressProbe)
+	require.Equal(t, SubjectEgressDirect, stockcn.SubjectEgress)
+	require.Equal(t, &SubjectSync{Sources: []string{"eastmoney"}, InstrumentType: "equity", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"}, stockcn.SubjectSync)
+}
+
+func TestParseConfigRejectsIncompleteFiles(t *testing.T) {
+	for name, raw := range map[string]string{
+		"市场不符":     "market_id: other\nallowed_lateness_seconds: 60\nsubject_egress: direct\n",
+		"缺允许迟到时间":  "market_id: demo\nsubject_egress: direct\n",
+		"缺出口方式":    "market_id: demo\nallowed_lateness_seconds: 60\n",
+		"未知字段":     "market_id: demo\nallowed_lateness_seconds: 60\nsubject_egress: direct\ntimezone: UTC\n",
+		"标的同步没有来源": "market_id: demo\nallowed_lateness_seconds: 60\nsubject_egress: direct\nsubject_sync: {cron: \"0 8 * * *\"}\n",
+	} {
+		_, err := parseConfig("demo", []byte(raw))
+		require.Error(t, err, name)
 	}
+	// subject_sync、scf_plan 都可以不写。
+	config, err := parseConfig("demo", []byte("market_id: demo\nallowed_lateness_seconds: 60\nsubject_egress: direct\n"))
+	require.NoError(t, err)
+	require.Nil(t, config.SubjectSync)
+	require.True(t, config.SCFPlan.IsZero())
 }
 
 func TestTradingBarReportsCalendarCoverageErrors(t *testing.T) {

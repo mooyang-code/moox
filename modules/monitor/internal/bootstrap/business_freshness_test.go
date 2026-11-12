@@ -610,7 +610,7 @@ func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.
 	}
 }
 
-func TestBusinessFreshnessReporterStoresBalanceCheckInCryptoMarket(t *testing.T) {
+func TestBusinessFreshnessReporterStoresBalanceCheckInSystemSpace(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -656,7 +656,7 @@ func TestBusinessFreshnessReporterStoresBalanceCheckInCryptoMarket(t *testing.T)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	results, err := repositories.Results.Recent(t.Context(), "crypto", "balance:trade", 1)
+	results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, "balance:trade", 1)
 	if err != nil {
 		t.Fatal(err)
 	}

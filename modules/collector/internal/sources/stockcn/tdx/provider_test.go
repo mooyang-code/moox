@@ -70,8 +70,8 @@ func TestNormalizeBarsUsesCloseLabelsAndSourceIdentity(t *testing.T) {
 	require.Equal(t, "normal_7709", rows[0].SourceID)
 	require.Equal(t, cst("2026-09-01", "09:30").UTC(), rows[0].BarStart, "标签 09:31 是 09:30 开盘那根")
 	require.Equal(t, rows[0].BarStart.Add(time.Minute), rows[0].BarEnd)
-	require.Equal(t, float64(1200), rows[0].VolumeShares)
-	require.Equal(t, float64(12000), rows[0].AmountCNY)
+	require.Equal(t, float64(1200), rows[0].Volume)
+	require.Equal(t, float64(12000), rows[0].Amount)
 }
 
 func TestNormalizeBarsMapsLunchLabelToMorningLastBar(t *testing.T) {
@@ -122,11 +122,11 @@ func TestRecordedTDX5mMatchesEastMoney(t *testing.T) {
 		left, right := tdxRows[i], eastRows[i]
 		require.Equal(t, right.BarStart, left.BarStart, "第 %d 根", i)
 		require.Equal(t, right.BarEnd, left.BarEnd, "第 %d 根", i)
-		tdxVolume += left.VolumeShares
-		eastVolume += right.VolumeShares
-		if left.Open == right.Open && left.High == right.High && left.Low == right.Low && left.Close == right.Close && left.VolumeShares == right.VolumeShares {
+		tdxVolume += left.Volume
+		eastVolume += right.Volume
+		if left.Open == right.Open && left.High == right.High && left.Low == right.Low && left.Close == right.Close && left.Volume == right.Volume {
 			identical++
-			require.InEpsilon(t, right.AmountCNY, left.AmountCNY, 1e-6, "第 %d 根成交额只差 float32 精度", i)
+			require.InEpsilon(t, right.Amount, left.Amount, 1e-6, "第 %d 根成交额只差 float32 精度", i)
 		}
 	}
 	require.InEpsilon(t, eastVolume, tdxVolume, 1e-3)
@@ -137,10 +137,10 @@ func TestRecordedTDX5mMatchesEastMoney(t *testing.T) {
 	require.Equal(t, eastRows[36], marketdata.NormalizedKline{
 		SubjectID: first.SubjectID, ProviderID: "eastmoney", SourceID: "stockcn_http", ProviderSymbol: first.ProviderSymbol, Frequency: "5m",
 		BarStart: first.BarStart, BarEnd: first.BarEnd, Open: first.Open, High: first.High, Low: first.Low, Close: first.Close,
-		VolumeShares: first.VolumeShares, AmountCNY: eastRows[36].AmountCNY, ProviderTimestamp: first.BarEnd,
+		Volume: first.Volume, Amount: eastRows[36].Amount, ProviderTimestamp: first.BarEnd,
 		FetchedAt: eastRows[36].FetchedAt, RequestID: "east",
 	})
-	require.Equal(t, 673500.0, first.VolumeShares)
+	require.Equal(t, 673500.0, first.Volume)
 	require.Equal(t, cst("2026-11-04", "11:25").UTC(), tdxRows[59].BarStart)
 }
 
@@ -267,7 +267,7 @@ func TestNormalizeBarsDailyUsesDateKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC), rows[0].BarEnd, "日线的 bar_end 是键加 24 小时")
 	require.Equal(t, cst("2026-11-10", "15:00").UTC(), rows[0].ProviderTimestamp)
-	require.Equal(t, 2303784.0, rows[0].VolumeShares)
+	require.Equal(t, 2303784.0, rows[0].Volume)
 }
 
 // 2026-11-11 从 shtdx.gtjas.com:7709 实际取回的 600519 日线（category 4，2025-11-03～2025-11-14 共 10 个交易日），
@@ -315,8 +315,8 @@ func TestTDXDailyMatchesRecordedEastMoney(t *testing.T) {
 		require.Equal(t, right.BarStart, left.BarStart, "第 %d 根", i)
 		require.Equal(t, right.BarEnd, left.BarEnd, "第 %d 根", i)
 		require.Equal(t, []float64{right.Open, right.High, right.Low, right.Close}, []float64{left.Open, left.High, left.Low, left.Close}, "第 %d 根", i)
-		require.InDelta(t, right.VolumeShares, left.VolumeShares, 100, "第 %d 根成交量差在一手以内", i)
-		require.InEpsilon(t, right.AmountCNY, left.AmountCNY, 1e-6, "第 %d 根成交额只差 float32 精度", i)
+		require.InDelta(t, right.Volume, left.Volume, 100, "第 %d 根成交量差在一手以内", i)
+		require.InEpsilon(t, right.Amount, left.Amount, 1e-6, "第 %d 根成交额只差 float32 精度", i)
 	}
 	require.Equal(t, time.Date(2025, 11, 3, 0, 0, 0, 0, time.UTC), tdxRows[0].BarStart)
 }

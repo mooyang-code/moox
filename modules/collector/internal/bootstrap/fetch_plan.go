@@ -141,18 +141,21 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			return running, nil
 		},
 		Factory: func(spaceID string) (*marketfetch.PlanReconciler, error) {
+			latenessSeconds, err := defaultLatenessSeconds(spaceID)
+			if err != nil {
+				return nil, err
+			}
 			options := marketfetch.PlanOptions{
 				StreamLatenessS: cfg.Stream.LatenessS,
 				SpaceID:         spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
 				Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
-				DefaultLatenessS: defaultLatenessSeconds(spaceID), MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
+				DefaultLatenessS: latenessSeconds, MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
 			}
-			if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
-				// A 股的函数内并发等 fetch 参数由各源的限速配置推导，不再在计划配置里手填。
-				options.DeriveFetch = marketfetch.StockCNFetchLimits()
-				if sizing := cfg.SCFPlan.autoSizing(spaceID); sizing != nil {
-					options.AutoSize = marketfetch.StockCNAutoSize(*sizing)
-				}
+			// 有路由文件的市场，函数内并发等 fetch 参数由各源的限速配置推导，不在计划配置里手填；没有路由文件的市场保持配置值。
+			options.DeriveFetch = marketfetch.RouteFetchLimits(spaceID)
+			// 每函数标的数的估算看 market.yaml 的 scf_plan.auto_size 配没配；同样只对有路由文件的市场算得出来。
+			if sizing := cfg.SCFPlan.autoSizing(spaceID); sizing != nil {
+				options.AutoSize = marketfetch.RouteAutoSize(spaceID, *sizing)
 			}
 			deploy, err := cfg.fetchPlanDeploy(spaceID)
 			if err != nil {

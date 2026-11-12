@@ -57,7 +57,7 @@ func TestStockKlineRowWritesDailyBarAtTheDateKey(t *testing.T) {
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600519.XSHG", ProviderID: "tdx", SourceID: "normal_7709", ProviderSymbol: "sh600519", Frequency: "1d",
 		BarStart: key, BarEnd: key.Add(24 * time.Hour), Open: 1438.23, High: 1444.5, Low: 1431.26, Close: 1439,
-		VolumeShares: 2303784, AmountCNY: 3316078848,
+		Volume: 2303784, Amount: 3316078848,
 		ProviderTimestamp: key.Add(7 * time.Hour), FetchedAt: key.Add(24 * time.Hour), RequestID: "req",
 	}
 	row, err := stockKlineRow(bar, testStockDatasetID, StockCNRouteID("1d"), 1, "贵州茅台")

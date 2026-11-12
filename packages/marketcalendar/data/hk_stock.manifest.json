@@ -1,0 +1,9 @@
+{
+  "calendar_id": "hk_stock",
+  "source": "香港联交所证券市场假期通告：2026 年 CT/075/25 https://www.hkex.com.hk/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2025/SEHK_CT_075_2025?sc_lang=en ；2027 年 CT/077/26 https://www.hkex.com.hk/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2026/SEHK_CT_077_2026Jun01162846?sc_lang=en",
+  "version": 1,
+  "data_version": "2026-11-12",
+  "valid_from": "2026-01-02",
+  "valid_through": "2027-12-31",
+  "sha256": "sha256:1d0b873a71e02e9dfefbaa1686e67191ca8111d835b30c9cc9898ea86109a3f6"
+}

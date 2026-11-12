@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	"github.com/mooyang-code/moox/packages/timerjob"
@@ -37,11 +38,15 @@ func registerSubjectSyncRuntime(s *server.Server, cfg *Config, process *Runtime,
 	for _, job := range cfg.SubjectSync.Attributes {
 		kind := job.InstrumentType
 		if kind == "" {
-			kind = map[string]string{"crypto": "spot", "stockcn": "equity"}[job.SpaceID]
+			rules, err := markets.RulesFor(job.SpaceID)
+			if err != nil {
+				return nil, fmt.Errorf("subject_sync: %w", err)
+			}
+			kind = string(rules.DefaultInstrumentType(""))
 		}
 		for _, source := range job.Sources {
-			if listers[subjectsync.ListerKey{Source: source, InstrumentType: kind}] == nil {
-				return nil, fmt.Errorf("subject_sync source %s does not support %s subject listing", source, kind)
+			if listers[subjectsync.ListerKey{MarketID: job.SpaceID, Source: source, InstrumentType: kind}] == nil {
+				return nil, fmt.Errorf("subject_sync source %s does not support %s %s subject listing", source, job.SpaceID, kind)
 			}
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/barclock"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -276,7 +277,8 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			reports = append(reports, report)
 			continue
 		}
-		e.evaluateViewSummary(&report, rule, clock, freq, expected, summary, activeSubjects, newSubjects, now)
+		suffix := expectedKlineSubjectSuffix(e.query.DatasetMarketType(ctx, rule.SpaceID, rule.DatasetID))
+		e.evaluateViewSummary(&report, rule, clock, freq, expected, summary, activeSubjects, suffix, newSubjects, now)
 		reports = append(reports, report)
 	}
 	sort.Slice(reports, func(i, j int) bool { return reports[i].CheckID < reports[j].CheckID })
@@ -329,7 +331,7 @@ func klineClockReason(err error) string {
 	switch {
 	case errors.Is(err, ErrCalendarNotCovered):
 		return "calendar_not_covered"
-	case errors.Is(err, ErrNoTradingCalendar):
+	case errors.Is(err, ErrNoTradingCalendar), errors.Is(err, barclock.ErrUnknownMarket):
 		return "calendar_unknown"
 	case errors.Is(err, ErrAlignmentUnconfirmed):
 		return "alignment_unconfirmed"
@@ -404,13 +406,13 @@ func activeSubjectAliases(active map[string]struct{}) map[string][]string {
 	return aliases
 }
 
-func expectedKlineSubjectSuffix(datasetID string) string {
-	datasetID = strings.ToLower(strings.TrimSpace(datasetID))
-	if strings.Contains(datasetID, "swap") || strings.Contains(datasetID, "perpetual") {
-		return "SWAP"
-	}
-	if strings.Contains(datasetID, "spot") {
+// expectedKlineSubjectSuffix 按数据集的品种属性给出标的 ID 应带的品种后缀；其他品种（股票等）的标的 ID 不带后缀。
+func expectedKlineSubjectSuffix(marketType string) string {
+	switch marketType {
+	case "spot":
 		return "SPOT"
+	case "swap":
+		return "SWAP"
 	}
 	return ""
 }
@@ -611,7 +613,7 @@ func parseViewSummaryLabels(rawLabels string, withSubject bool) (viewSummaryIden
 // whole once the bar after its latest bar is overdue. Otherwise its lagging
 // subjects, and active subjects with no output once the View has moved a bar
 // past the start of tracking, are stale.
-func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessReport, rule KlineFreshnessRule, clock MarketClock, freq frequencypkg.Frequency, expected Bar, summary viewSummary, active map[string]struct{}, newSubjects map[string]time.Time, now time.Time) {
+func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessReport, rule KlineFreshnessRule, clock MarketClock, freq frequencypkg.Frequency, expected Bar, summary viewSummary, active map[string]struct{}, suffix string, newSubjects map[string]time.Time, now time.Time) {
 	report.ObservedCount = summary.subjects
 	report.OldestDataTime = summary.latest
 	// 摘要是 Storage View 上报快照那一刻的状态（每 30 秒上报一次，整分与半分对齐）：逾期按快照时刻算。按当前时间算会把
@@ -635,7 +637,6 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 	}
 	report.StaleAge = 0
 	aliases := activeSubjectAliases(active)
-	suffix := expectedKlineSubjectSuffix(rule.DatasetID)
 	stale := make(map[string]struct{})
 	inactive, withinGrace := 0, 0
 	// 重新上架的对象在 Storage 里还留着下架前的水位，会出现在落后名单里：它在宽限期内，同样不算过期。

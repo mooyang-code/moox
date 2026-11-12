@@ -54,14 +54,6 @@ if find "${CONFIG_DIR}/sources" -type l -print -quit | grep -q .; then
   echo "SCF source symlinks are not permitted" >&2
   exit 1
 fi
-if [[ "${SCF_SPACE_ID}" == "stockcn" ]]; then
-  # 交易日历内嵌在二进制里（packages/marketcalendar），包里只带路由。
-  source="${ROOT}/modules/collector/config/markets/stockcn/route.yaml"
-  [[ -f "${source}" && ! -L "${source}" ]] || {
-    echo "SCF stockcn route must be a regular non-symlink file" >&2
-    exit 1
-  }
-fi
 
 cleanup() {
   rm -rf "${BUILD_DIR}"
@@ -79,12 +71,9 @@ echo "==> build moox-collector-scf for linux/amd64"
     -o "${BUILD_DIR}/package/main" "./cmd/scf/${SCF_ENTRYPOINT}"
 )
 
+# 市场数据文件（market.yaml、route.yaml、数据源运行参数）和交易日历都编在二进制里，包里只带存储访问配置。
 echo "==> copy ${SCF_SPACE_ID} SCF runtime configs"
 cp -R "${CONFIG_DIR}/sources" "${BUILD_DIR}/package/sources"
-if [[ "${SCF_SPACE_ID}" == "stockcn" ]]; then
-  mkdir -p "${BUILD_DIR}/package/markets/stockcn"
-  cp "${ROOT}/modules/collector/config/markets/stockcn/route.yaml" "${BUILD_DIR}/package/markets/stockcn/route.yaml"
-fi
 
 echo "==> check SCF package is credential-free"
 scf_check check "${BUILD_DIR}/package"

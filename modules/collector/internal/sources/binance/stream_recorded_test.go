@@ -56,7 +56,7 @@ func TestDecodeRecordedBinanceMessages(t *testing.T) {
 			require.Equal(t, int64(k["t"].(float64)), event.Kline.BarStart.UnixMilli(), name)
 			require.Equal(t, time.Minute, event.Kline.BarEnd.Sub(event.Kline.BarStart), name)
 			require.Equal(t, []float64{num("o"), num("h"), num("l"), num("c"), num("v"), num("q")},
-				[]float64{event.Kline.Open, event.Kline.High, event.Kline.Low, event.Kline.Close, event.Kline.VolumeShares, event.Kline.AmountCNY}, name)
+				[]float64{event.Kline.Open, event.Kline.High, event.Kline.Low, event.Kline.Close, event.Kline.Volume, event.Kline.Amount}, name)
 			require.Equal(t, int64(k["n"].(float64)), event.Kline.TradeCount, name)
 		default:
 			t.Fatalf("unexpected fixture %s", name)

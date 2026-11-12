@@ -1,5 +1,6 @@
 // Package catalog 登记 Collector 内置的全部行情源：标的同步、SCF 与本地取数、collector-stream 接收都从这里按能力取用。
 // 新增一个交易所：实现 marketdata.MarketProvider 与所需能力接口，在 Default 里加一项登记。
+// 新增一个市场：另外实现它的标的规则包（markets/<市场>）并在 marketwiring 里引用，加上 config/markets/<市场>/market.yaml。
 package catalog
 
 import (
@@ -26,11 +27,13 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/swsresearch"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tdx"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent"
+	hktencent "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/tencent"
 )
 
 const (
 	crypto  = marketdata.MarketID("crypto")
 	stockcn = marketdata.MarketID("stockcn")
+	stockhk = marketdata.MarketID("stockhk")
 )
 
 // stockCNInstrumentTimeout 是 A 股标的快照单次请求超时（全市场快照分页多）。
@@ -51,9 +54,10 @@ func entry(market marketdata.MarketID, instrument marketdata.InstrumentType, pro
 	return marketdata.CatalogEntry{Key: marketdata.SourceKey{ProviderID: provider, SourceID: source}, MarketID: market, Instrument: instrument, New: factory}
 }
 
-// stockCNEntry 是 A 股股票数据源：source_id 由路由配置给出，运行参数来自数据源配置文件。
-func stockCNEntry(provider, source string, factory marketdata.Factory) marketdata.CatalogEntry {
-	item := entry(stockcn, marketdata.InstrumentEquity, provider, source, factory)
+// routedEntry 是按路由分配的 K 线数据源：这个（市场，品种）的来源由市场的路由文件（route.yaml）按标的分配，
+// source_id 由路由给出，运行参数来自数据源配置文件。
+func routedEntry(market marketdata.MarketID, instrument marketdata.InstrumentType, provider, source string, factory marketdata.Factory) marketdata.CatalogEntry {
+	item := entry(market, instrument, provider, source, factory)
 	item.RouteSource = true
 	return item
 }
@@ -73,23 +77,23 @@ func build() *marketdata.Catalog {
 		// 加密：币安现货与 U 本位永续（REST K 线、标的快照、WS 推送）。
 		entry(crypto, marketdata.InstrumentSpot, "binance", "spot_http", binanceFactory(marketdata.InstrumentSpot)),
 		entry(crypto, marketdata.InstrumentSwap, "binance", "swap_http", binanceFactory(marketdata.InstrumentSwap)),
-		// A 股股票。
-		stockCNEntry("sina", "stockcn_minute_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+		// A 股股票：K 线来源按 config/markets/stockcn/route.yaml 分配。
+		routedEntry(stockcn, marketdata.InstrumentEquity, "sina", "stockcn_minute_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
 			return sina.New(sina.Config{BaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, InstrumentRequestTimeout: stockCNInstrumentTimeout, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
 		}),
-		stockCNEntry("tencent", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+		routedEntry(stockcn, marketdata.InstrumentEquity, "tencent", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
 			return tencent.New(tencent.Config{BaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
 		}),
-		stockCNEntry("eastmoney", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+		routedEntry(stockcn, marketdata.InstrumentEquity, "eastmoney", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
 			return eastmoney.New(eastmoney.Config{KlineBaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, InstrumentRequestTimeout: stockCNInstrumentTimeout, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
 		}),
-		stockCNEntry("baidu", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+		routedEntry(stockcn, marketdata.InstrumentEquity, "baidu", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			return baidu.New(baidu.Config{SourceID: deps.SourceID, RateLimit: deps.Settings.RateLimit}), nil
 		}),
-		stockCNEntry("tdx", "normal_7709", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+		routedEntry(stockcn, marketdata.InstrumentEquity, "tdx", "normal_7709", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
 			host := ""
 			if len(s.Hosts) > 0 {
@@ -127,6 +131,8 @@ func build() *marketdata.Catalog {
 		entry(stockcn, marketdata.InstrumentIndex, "cni", "index_cni_http", fixed(func() marketdata.MarketProvider { return cni.New(cni.Config{}) })),
 		entry(stockcn, marketdata.InstrumentIndex, "sw", "index_sw_http", fixed(func() marketdata.MarketProvider { return indexsw.New(indexsw.Config{}) })),
 		entry(stockcn, marketdata.InstrumentIndex, "csindex", "index_http", fixed(func() marketdata.MarketProvider { return csindex.New(csindex.Config{}) })),
+		// 港股：恒生指数成分来源（腾讯），只取指数成分，不取 K 线、不取全部标的。
+		entry(stockhk, marketdata.InstrumentEquity, "tencent", hktencent.DefaultSourceID, fixed(func() marketdata.MarketProvider { return hktencent.New(hktencent.Config{}) })),
 	)
 }
 

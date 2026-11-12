@@ -75,15 +75,8 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 					h.NewStorage = func(string) (marketfetch.Storage, error) { return storage, nil }
 					// Replace only the network-bound registry. Production factory
 					// selection, pipeline configuration, handler and writes remain real.
-					h.NewMarketKlinePipeline = func(s marketfetch.Storage, market string, instrument marketdata.InstrumentType, provider, source string) (*marketfetch.KlinePipeline, error) {
-						pipeline, err := NewMarketKlinePipeline(s, market, instrument, provider, source)
-						if err == nil {
-							pipeline.Router = router
-						}
-						return pipeline, err
-					}
-					h.NewCryptoKlinePipeline = func(s marketfetch.Storage, productType marketdata.InstrumentType, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
-						pipeline, err := NewCryptoKlinePipeline(s, productType, limits)
+					h.NewKlinePipeline = func(s marketfetch.Storage, market string, instrument marketdata.InstrumentType, frequency, provider string, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
+						pipeline, err := NewKlinePipeline(s, market, instrument, frequency, provider, limits)
 						if err == nil {
 							pipeline.Router = router
 						}
@@ -115,12 +108,8 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 	}
 }
 
-func TestCompositionRejectsUnknownAndCrossProductSources(t *testing.T) {
-	for _, source := range []string{"unknown", "spot_http"} {
-		_, err := NewMarketKlinePipeline(timerHandlerStorage{}, "crypto", marketdata.InstrumentSwap, "binance", source)
-		require.Error(t, err)
-	}
-	_, err := NewMarketKlinePipeline(timerHandlerStorage{}, "crypto", marketdata.InstrumentSwap, "unknown", "swap_http")
+func TestCompositionRejectsUnknownSources(t *testing.T) {
+	_, err := NewKlinePipeline(timerHandlerStorage{}, "crypto", marketdata.InstrumentSwap, "1m", "unknown", nil)
 	require.Error(t, err)
 	_, err = ResolveSymbol("unknown", "crypto", "swap", "BTC-USDT-SWAP")
 	require.Error(t, err)

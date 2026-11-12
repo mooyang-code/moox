@@ -20,10 +20,21 @@ type Market struct {
 	Sessions   []string
 }
 
-// 当前登记的市场：空间 ID 即市场 ID。港股、美股补上交易日历后在此登记。
+// 当前登记的市场：空间 ID 即市场 ID。美股补上交易日历后在此登记。
 var markets = map[string]Market{
 	"crypto":  {ID: "crypto", Alignment: AlignmentEpochUTC},
 	"stockcn": {ID: "stockcn", Alignment: AlignmentSession, CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}},
+	"stockhk": {ID: "stockhk", Alignment: AlignmentSession, CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: []string{"09:30-12:00", "13:00-16:00"}},
+}
+
+// Markets 返回全部已登记的市场，按 ID 排序。
+func Markets() []Market {
+	out := make([]Market, 0, len(markets))
+	for _, market := range markets {
+		out = append(out, market)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // MarketFor 返回市场的分桶方式；未登记的市场返回 ErrUnknownMarket（没有交易日历的市场不能合成）。

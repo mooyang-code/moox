@@ -29,9 +29,9 @@ func newTestSyncer(t *testing.T) (*Syncer, *fakeTagStore, *fakeRunStore, *fakeAt
 	}
 	tagStore := &fakeTagStore{tags: tags, applied: map[string]int{}}
 	listers := Listers{
-		{Source: "binance", InstrumentType: "spot"}:     fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}, {SubjectID: "ETH-USDT"}}},
-		{Source: "binance", InstrumentType: "swap"}:     fakeSubjectLister{err: errors.New("HTTP status 302")},
-		{Source: "eastmoney", InstrumentType: "equity"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "600000.SH", Exchange: "SH"}}},
+		{MarketID: "crypto", Source: "binance", InstrumentType: "spot"}:      fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}, {SubjectID: "ETH-USDT"}}},
+		{MarketID: "crypto", Source: "binance", InstrumentType: "swap"}:      fakeSubjectLister{err: errors.New("HTTP status 302")},
+		{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "600000.SH", Exchange: "SH"}}},
 	}
 	now := func() time.Time { return time.Date(2026, 9, 25, 10, 30, 0, 0, time.UTC) }
 	attributes := &fakeAttributeStore{}
