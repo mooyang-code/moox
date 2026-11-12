@@ -88,13 +88,13 @@ manifest = {
 }
 
 os.makedirs(output_dir, exist_ok=True)
-with open(os.path.join(output_dir, "cn_trading_days.json"), "wb") as stream:
+with open(os.path.join(output_dir, "cn_stock.json"), "wb") as stream:
     stream.write(data_bytes)
-with open(os.path.join(output_dir, "manifest.json"), "w", encoding="utf-8") as stream:
+with open(os.path.join(output_dir, "cn_stock.manifest.json"), "w", encoding="utf-8") as stream:
     json.dump(manifest, stream, ensure_ascii=False, indent=2)
     stream.write("\n")
 PY
 
-mv "${TMP_DIR}/cn_trading_days.json" "${DATA_DIR}/cn_trading_days.json"
-mv "${TMP_DIR}/manifest.json" "${DATA_DIR}/manifest.json"
+mv "${TMP_DIR}/cn_stock.json" "${DATA_DIR}/cn_stock.json"
+mv "${TMP_DIR}/cn_stock.manifest.json" "${DATA_DIR}/cn_stock.manifest.json"
 printf 'updated %s through %s\n' "${DATA_DIR}" "${VALID_THROUGH}"

@@ -1,4 +1,4 @@
-// gencn 按国务院办公厅公布的节假日安排，给内嵌的 A 股交易日历追加一整年的交易日，并重写清单。
+// gencn 按国务院办公厅公布的节假日安排，给内嵌的 A 股交易日历追加一整年的交易日，并重写 A 股的清单（别的日历的文件不动）。
 //
 // AkShare 的日历要等交易所公告后才更新，而 Strategy 会提前两个交易日判定日历过期，等不起；
 // 国办通知每年 11 月前后发布，交易所休市安排与之一致：节假日的工作日休市，调休补班的周末照样休市。
@@ -69,8 +69,8 @@ func run(year int, dir string) error {
 	if !ok {
 		return fmt.Errorf("没有登记 %d 年的休市日，先把国办通知里的节假日写进 closures", year)
 	}
-	dataPath := filepath.Join(dir, "cn_trading_days.json")
-	manifestPath := filepath.Join(dir, "manifest.json")
+	dataPath := filepath.Join(dir, "cn_stock.json")
+	manifestPath := filepath.Join(dir, "cn_stock.manifest.json")
 
 	var data calendarFile
 	if err := readJSON(dataPath, &data); err != nil {
