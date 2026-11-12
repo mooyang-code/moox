@@ -19,5 +19,5 @@ func TestNewSubjectListersCoversBuiltInTagSources(t *testing.T) {
 	supported := listers.Supported()
 	require.ElementsMatch(t, []string{"spot", "swap"}, supported["binance"])
 	require.Contains(t, supported["eastmoney"], "equity", "the built-in cn_a_share tag must be listed by a subject lister")
-	require.Contains(t, indexes, subjectsync.IndexListerKey{Source: "eastmoney", Index: "000300"}, "内置 cn_hs300 标签要有成分股 lister")
+	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockcn", Source: "eastmoney", Index: "000300"}, "内置 cn_hs300 标签要有成分股 lister")
 }

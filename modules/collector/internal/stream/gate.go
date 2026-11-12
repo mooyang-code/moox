@@ -443,5 +443,5 @@ func (s *periodSlot) cancelFundingWait() {
 
 func sameKline(left, right marketdata.NormalizedKline) bool {
 	return left.Open == right.Open && left.High == right.High && left.Low == right.Low && left.Close == right.Close &&
-		left.VolumeShares == right.VolumeShares && left.AmountCNY == right.AmountCNY && left.TradeCount == right.TradeCount
+		left.Volume == right.Volume && left.Amount == right.Amount && left.TradeCount == right.TradeCount
 }

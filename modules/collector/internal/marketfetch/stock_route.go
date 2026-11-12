@@ -1,21 +1,24 @@
 package marketfetch
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"hash/fnv"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"gopkg.in/yaml.v3"
 )
 
-// stockCNRoute 是 A 股的路由配置（config/markets/stockcn/route.yaml）：标的快照来源，以及按频率分开的 K 线候选链。
+// stockCNRoute 是 A 股的路由配置（config/markets/stockcn/route.yaml，编在二进制里）：标的快照来源，以及按频率分开的 K 线候选链。
 // 由 SCF 组合根加载，数据源代码里不重复登记。
 type stockCNRoute struct {
 	MarketID string `yaml:"market_id"`
@@ -52,6 +55,10 @@ func loadStockCNRouteFile(path string) (stockCNRoute, error) {
 	if err != nil {
 		return stockCNRoute{}, err
 	}
+	return parseStockCNRoute(raw)
+}
+
+func parseStockCNRoute(raw []byte) (stockCNRoute, error) {
 	var route stockCNRoute
 	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
 	decoder.KnownFields(true)
@@ -200,31 +207,16 @@ func (k stockCNKlineRoute) sources(primaryOnly bool) []stockCNSource {
 	return sources
 }
 
-func stockCNRoutePathCandidates() []string {
-	candidates := []string{
-		strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_ROUTE_PATH")),
-		"markets/stockcn/route.yaml",
-		"config/markets/stockcn/route.yaml",
-		"modules/collector/config/markets/stockcn/route.yaml",
-	}
-	if _, sourceFile, _, ok := runtime.Caller(0); ok {
-		collectorDir := filepath.Dir(sourceFile)
-		candidates = append(candidates, filepath.Join(collectorDir, "..", "..", "config", "markets", "stockcn", "route.yaml"))
-	}
-	return candidates
-}
-
+// loadStockCNRoute 读 A 股的路由：环境变量 MOOX_STOCK_CN_ROUTE_PATH 指定了文件就读它，否则读编进二进制的 route.yaml。
 func loadStockCNRoute() (stockCNRoute, error) {
-	for _, candidate := range stockCNRoutePathCandidates() {
-		if candidate == "" {
-			continue
-		}
-		if _, err := os.Stat(filepath.Clean(candidate)); err != nil {
-			continue
-		}
-		return loadStockCNRouteFile(candidate)
+	if path := strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_ROUTE_PATH")); path != "" {
+		return loadStockCNRouteFile(path)
 	}
-	return stockCNRoute{}, fmt.Errorf("stockcn route config was not found")
+	raw, err := markets.ReadFile(StockCNSpaceID, "route.yaml")
+	if err != nil {
+		return stockCNRoute{}, fmt.Errorf("读取 stockcn 路由：%w", err)
+	}
+	return parseStockCNRoute(raw)
 }
 
 type stockCNProviderFile struct {
@@ -288,31 +280,31 @@ func loadStockCNProviderRuntime(route stockCNRoute) (map[string]stockCNProviderR
 	return result, nil
 }
 
-// loadStockCNSourceRuntime 按提供方 ID 读 A 股数据源配置文件（sources/market/<id>.yaml）：路由里的 K 线来源和
-// 只提供附加字段的来源都用它。文件不存在时 found 为 false。
+// loadStockCNSourceRuntime 按提供方 ID 读 A 股数据源的运行参数（sources/<id>.yaml）：路由里的 K 线来源和
+// 只提供附加字段的来源都用它。环境变量 MOOX_STOCK_CN_SOURCE_CONFIG_DIR 指定了目录就读目录，否则读编进二进制的内容；
+// 文件不存在时 found 为 false。
 func loadStockCNSourceRuntime(id string) (stockCNProviderRuntime, bool, error) {
 	id = strings.ToLower(strings.TrimSpace(id))
-	var file stockCNProviderFile
-	var path string
-	for _, dir := range stockCNProviderConfigPaths() {
-		candidate := filepath.Join(dir, id+".yaml")
-		if _, statErr := os.Stat(candidate); statErr != nil {
-			continue
-		}
-		raw, readErr := os.ReadFile(candidate)
-		if readErr != nil {
-			return stockCNProviderRuntime{}, false, readErr
-		}
-		decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
-		decoder.KnownFields(true)
-		if err := decoder.Decode(&file); err != nil {
-			return stockCNProviderRuntime{}, false, fmt.Errorf("decode provider config %s: %w", candidate, err)
-		}
-		path = candidate
-		break
+	path := "stockcn/sources/" + id + ".yaml"
+	var raw []byte
+	var err error
+	if dir := strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR")); dir != "" {
+		path = filepath.Join(dir, id+".yaml")
+		raw, err = os.ReadFile(path)
+	} else {
+		raw, err = markets.ReadFile(StockCNSpaceID, "sources/"+id+".yaml")
 	}
-	if path == "" {
+	if errors.Is(err, fs.ErrNotExist) {
 		return stockCNProviderRuntime{}, false, nil
+	}
+	if err != nil {
+		return stockCNProviderRuntime{}, false, err
+	}
+	var file stockCNProviderFile
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&file); err != nil {
+		return stockCNProviderRuntime{}, false, fmt.Errorf("decode provider config %s: %w", path, err)
 	}
 	if err := validateStockCNProviderFile(id, file); err != nil {
 		return stockCNProviderRuntime{}, false, fmt.Errorf("validate provider config %s: %w", path, err)
@@ -401,23 +393,6 @@ func (r stockCNProviderRateLimitFile) Policy() (marketdata.RateLimitPolicy, erro
 		return marketdata.RateLimitPolicy{}, err
 	}
 	return policy, nil
-}
-
-func stockCNProviderConfigPaths() []string {
-	paths := []string{
-		strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR")),
-		"sources/market",
-		"config/sources/market",
-		"configs/scf/stockcn/sources/market",
-		"configs/sources/market",
-		"modules/collector/configs/scf/stockcn/sources/market",
-		"modules/collector/configs/sources/market",
-	}
-	if _, sourceFile, _, ok := runtime.Caller(0); ok {
-		collectorDir := filepath.Dir(sourceFile)
-		paths = append(paths, filepath.Join(collectorDir, "..", "..", "configs", "scf", "stockcn", "sources", "market"))
-	}
-	return paths
 }
 
 func containsStringFold(values []string, want string) bool {

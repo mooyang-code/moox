@@ -16,12 +16,14 @@ import (
 )
 
 func TestTaskResultMarketCalendarContract(t *testing.T) {
-	calendarID, timezone, sessions := taskResultMarketCalendar("crypto")
+	calendarID, timezone, sessions, err := taskResultMarketCalendar("crypto")
+	require.NoError(t, err)
 	require.Empty(t, calendarID)
 	require.Equal(t, "UTC", timezone)
 	require.Empty(t, sessions)
 
-	calendarID, timezone, sessions = taskResultMarketCalendar("stockcn")
+	calendarID, timezone, sessions, err = taskResultMarketCalendar("stockcn")
+	require.NoError(t, err)
 	require.Equal(t, "cn_stock", calendarID)
 	require.Equal(t, "Asia/Shanghai", timezone)
 	require.Equal(t, []string{"09:30-11:30", "13:00-15:00"}, sessions)
@@ -412,4 +414,18 @@ func (f *taskResultInventoryConcurrentMetadataFake) requestCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.requests
+}
+
+// 未登记的市场报错：不当成连续交易，也没有允许迟到时间的默认值。
+func TestTaskResultRejectsUnregisteredMarket(t *testing.T) {
+	_, _, _, err := taskResultMarketCalendar("no_such_space")
+	require.Error(t, err)
+	_, err = allowedLatenessSeconds(nil, "no_such_space")
+	require.Error(t, err)
+	seconds, err := allowedLatenessSeconds(nil, "stockcn")
+	require.NoError(t, err)
+	require.Equal(t, 90, seconds)
+	seconds, err = allowedLatenessSeconds(nil, "crypto")
+	require.NoError(t, err)
+	require.Equal(t, 15, seconds)
 }

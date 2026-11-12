@@ -38,7 +38,7 @@ func TestFetchKlinesParsesFixture(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	require.Equal(t, 300.0, rows[0].VolumeShares)
+	require.Equal(t, 300.0, rows[0].Volume)
 	require.Equal(t, time.Date(2026, 8, 29, 1, 29, 0, 0, time.UTC), rows[0].BarStart)
 	require.Equal(t, time.Date(2026, 8, 29, 1, 30, 0, 0, time.UTC), rows[0].BarEnd)
 	require.Equal(t, marketdata.TimestampModeClose, provider.KlineSpec().TimestampMode)
@@ -365,8 +365,8 @@ func TestFetchKlines5mParsesRecordedResponse(t *testing.T) {
 	require.False(t, lunch)
 	// 首根含 09:25 集合竞价；成交量单位是股，有成交额。
 	first := byStart[cst("2026-11-04", "09:30")]
-	require.Equal(t, 674643.0, first.VolumeShares)
-	require.Equal(t, 993156836.1729, first.AmountCNY)
+	require.Equal(t, 674643.0, first.Volume)
+	require.Equal(t, 993156836.1729, first.Amount)
 	require.Equal(t, 1470.0, first.Open)
 }
 
@@ -401,9 +401,9 @@ func TestRecorded5mAlignsWithTencentAndEastMoney(t *testing.T) {
 			continue
 		}
 		overlap++
-		eastVolume += east.VolumeShares
-		sinaVolume += sina.VolumeShares
-		tencentVolume += tencentByStart[east.BarStart].VolumeShares
+		eastVolume += east.Volume
+		sinaVolume += sina.Volume
+		tencentVolume += tencentByStart[east.BarStart].Volume
 	}
 	require.Equal(t, 36, overlap, "11-03 14:00～14:55 与 11-04 09:30～11:25")
 	require.InEpsilon(t, eastVolume, sinaVolume, 2e-3)

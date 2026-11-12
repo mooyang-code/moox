@@ -25,7 +25,7 @@ const klineRowsGoldenFile = "testdata/kline_rows.golden"
 type goldenProvider struct {
 	id        string
 	sourceID  string
-	fail     map[string]bool
+	fail      map[string]bool
 	estimated bool
 }
 
@@ -61,7 +61,7 @@ func (p goldenProvider) FetchKlines(_ context.Context, req marketdata.KlineReque
 		bars = append(bars, marketdata.NormalizedKline{
 			SubjectID: req.SubjectID, ProviderID: p.id, SourceID: req.SourceID, ProviderSymbol: req.ProviderSymbol, Frequency: req.Frequency,
 			BarStart: start, BarEnd: start.Add(step), Open: price, High: price + 0.05, Low: price - 0.05, Close: price + 0.02,
-			VolumeShares: volume, AmountCNY: volume * price, AmountEstimated: p.estimated,
+			Volume: volume, Amount: volume * price, AmountEstimated: p.estimated,
 			ProviderTimestamp: start.Add(step), FetchedAt: start.Add(step + time.Second),
 			RequestID: strings.Join([]string{req.RequestID, string(req.ExchangeID), req.SourceID, req.ProviderSymbol}, "|"),
 		})
@@ -186,7 +186,7 @@ func TestKlineRowsMatchGolden(t *testing.T) {
 		return marketdata.NormalizedKline{
 			SubjectID: subject, ProviderID: provider, SourceID: source, ProviderSymbol: symbol, Frequency: "5m",
 			BarStart: period, BarEnd: period.Add(5 * time.Minute), Open: 10, High: 10.5, Low: 9.5, Close: 10.2,
-			VolumeShares: 12345, AmountCNY: 125919, TradeCount: 678,
+			Volume: 12345, Amount: 125919, TradeCount: 678,
 			ProviderTimestamp: period.Add(5 * time.Minute), FetchedAt: period.Add(6 * time.Minute), RequestID: "golden-direct",
 			Extra: map[string]marketdata.FieldValue{"funding_rate": {Type: marketdata.FieldTypeDouble, Double: 0.0001}},
 		}

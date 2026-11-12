@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -25,9 +26,11 @@ const (
 	fieldAmount      = "amount"
 )
 
-// hasTradeCount 判断市场的 K 线是否带报价成交量和成交笔数（加密货币）；A 股只有成交额 amount。
+// hasTradeCount 判断空间的 K 线是否带报价成交量和成交笔数（现货、永续）；股票等只有成交额 amount。
+// 按空间默认品种的行形状判断（markets.HasTradeCount）。合成任务建目标时已校验空间登记过，这里查不到时按只有成交额处理。
 func hasTradeCount(spaceID string) bool {
-	return !strings.EqualFold(strings.TrimSpace(spaceID), "stockcn")
+	has, err := markets.HasTradeCount(spaceID, "")
+	return err == nil && has
 }
 
 // sourceFields 是读取源 K 线的字段。

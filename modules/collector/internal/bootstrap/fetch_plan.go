@@ -141,11 +141,15 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			return running, nil
 		},
 		Factory: func(spaceID string) (*marketfetch.PlanReconciler, error) {
+			latenessSeconds, err := defaultLatenessSeconds(spaceID)
+			if err != nil {
+				return nil, err
+			}
 			options := marketfetch.PlanOptions{
 				StreamLatenessS: cfg.Stream.LatenessS,
 				SpaceID:         spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
 				Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
-				DefaultLatenessS: defaultLatenessSeconds(spaceID), MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
+				DefaultLatenessS: latenessSeconds, MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
 			}
 			if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
 				// A 股的函数内并发等 fetch 参数由各源的限速配置推导，不再在计划配置里手填。

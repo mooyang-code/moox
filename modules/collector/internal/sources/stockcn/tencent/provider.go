@@ -183,7 +183,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 			return nil, err
 		}
 		row.SourceID = p.sourceID
-		row.AmountCNY = row.Close * row.VolumeShares
+		row.Amount = row.Close * row.Volume
 		row.AmountEstimated = true
 		if !now.Before(row.BarEnd) {
 			rows = append(rows, row)

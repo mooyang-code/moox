@@ -42,7 +42,7 @@ type CollectParams struct {
 	SourceTaskID string `json:"source_task_id,omitempty"`
 	// SymbolsPerFunction 是定时模式下每个函数负责的标的数；0 表示使用默认值。
 	SymbolsPerFunction int `json:"symbols_per_function,omitempty"`
-	// AllowedLatenessSeconds 是结果数据集的允许迟到时间；0 表示使用空间默认值（crypto 15 秒，stockcn 90 秒）。
+	// AllowedLatenessSeconds 是结果数据集的允许迟到时间；0 表示使用市场 market.yaml 里的默认值。
 	AllowedLatenessSeconds int `json:"allowed_lateness_seconds,omitempty"`
 	// Ingest、Executor 是结果数据集采集方式的初值（stream / pull，scf / local）：数据集第一次出现时代替空间默认值写入，
 	// 之后以 Collector 库为准，由 moox-cli collector ingest-mode set 切换。为空表示用空间默认值。
@@ -316,16 +316,4 @@ func normalizeOutputFields(fields []string) []string {
 		fields[i] = strings.ToLower(strings.TrimSpace(fields[i]))
 	}
 	return normalizeTags(fields)
-}
-
-// DefaultAllowedLatenessSeconds 返回空间的允许迟到时间默认值：crypto 15 秒，stockcn 90 秒，其余 60 秒。
-func DefaultAllowedLatenessSeconds(spaceID string) int {
-	switch strings.ToLower(strings.TrimSpace(spaceID)) {
-	case "crypto":
-		return 15
-	case "stockcn":
-		return 90
-	default:
-		return 60
-	}
 }

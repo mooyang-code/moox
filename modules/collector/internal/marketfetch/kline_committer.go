@@ -250,35 +250,48 @@ func (p *KlineCommitter) rowFor(bar marketdata.NormalizedKline, req Request, rou
 		}
 		bar.Frequency = strings.TrimSpace(req.Frequency)
 	}
-	if (p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID) &&
-		(p.InstrumentType == "" || p.InstrumentType == marketdata.InstrumentEquity) {
+	// 行的形状按品种定：equity 是股票行，spot、swap 带报价成交量和成交笔数，其余（指数、可转债）是普通行。
+	// 行里随市场变的几项（成交额单位、交易日期的时区、固定的序列标签）从市场取。
+	marketID := firstNonEmptyString(p.MarketID, req.SpaceID)
+	instrumentType := p.InstrumentType
+	if instrumentType == "" {
+		fallback, err := defaultInstrumentType(marketID, "")
+		if err != nil {
+			return nil, err
+		}
+		instrumentType = fallback
+	}
+	// 市场配了固定序列标签的用它；否则用流水线指定的，再否则按数据源生成。
+	seriesTag := fixedSeriesTag(marketID)
+	if seriesTag == "" {
+		seriesTag = strings.TrimSpace(p.SeriesTag)
+	}
+	if seriesTag == "" {
+		seriesTag = defaultMarketSeriesTag(bar.ProviderID, firstNonEmptyString(bar.SourceID, req.SourceID), req.MarketType)
+	}
+	if instrumentType == marketdata.InstrumentEquity {
 		name := ""
 		if len(instrumentName) > 0 {
 			name = instrumentName[0]
 		}
-		return stockKlineRow(bar, firstNonEmptyString(p.DatasetID, req.DatasetID), routeID, routeRank, name)
+		return equityKlineRow(bar, equityRowKey{
+			SpaceID: firstNonEmptyString(req.SpaceID, marketID), MarketID: marketID,
+			DatasetID: firstNonEmptyString(p.DatasetID, req.DatasetID), SeriesTag: seriesTag,
+		}, routeID, routeRank, name)
 	}
 	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
 		return nil, err
 	}
-	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
-		bar.SubjectID = strings.ToUpper(strings.TrimSpace(bar.SubjectID))
-	}
-	seriesTag := strings.TrimSpace(p.SeriesTag)
-	if p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID {
-		seriesTag = "default"
-	} else if seriesTag == "" {
-		seriesTag = defaultMarketSeriesTag(bar.ProviderID, firstNonEmptyString(bar.SourceID, req.SourceID), req.MarketType)
-	}
 	fields := []*storagepb.FieldValue{
 		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
-		doubleValue("volume", bar.VolumeShares),
+		doubleValue("volume", bar.Volume),
 	}
-	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
-		fields = append(fields, doubleValue("quote_volume", bar.AmountCNY), intValue("trade_num", bar.TradeCount))
+	if instrumentType.HasTradeCount() {
+		bar.SubjectID = strings.ToUpper(strings.TrimSpace(bar.SubjectID))
+		fields = append(fields, doubleValue("quote_volume", bar.Amount), intValue("trade_num", bar.TradeCount))
 	} else {
-		fields = append(fields, doubleValue("amount", bar.AmountCNY))
-		if p.InstrumentType == marketdata.InstrumentIndex {
+		fields = append(fields, doubleValue("amount", bar.Amount))
+		if instrumentType == marketdata.InstrumentIndex {
 			fields = append(fields, stringValue("index_code", bar.ProviderSymbol))
 		}
 	}

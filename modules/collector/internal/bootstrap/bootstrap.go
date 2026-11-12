@@ -132,6 +132,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
+	marketFetchMetrics.FeedLabels = marketwiring.FeedLabels()
 	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
 	dnsDomains := append([]string(nil), cfg.DNS.Domains...)
 	if cfg.EgressProxy.DNS.Enabled() {

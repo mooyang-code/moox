@@ -37,7 +37,7 @@ type tagRouteSource interface {
 // GroupBuilder 把启用的 K 线采集任务按标签路由展开成采集组（数据集×频率×路由，含标的与交易所符号）。
 // 采集计划对账据此算出期望状态；它不接触云端。
 type GroupBuilder struct {
-	ResolveSourceID func(string, string) string
+	ResolveSourceID SourceIDResolver
 	ResolveSymbol   SymbolResolver
 	Tasks           taskSource
 	Symbols         datasetSource
@@ -150,12 +150,12 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 	if provider == "" || marketType == "" {
 		return nil, fmt.Errorf("provider and market_type are required")
 	}
-	marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, task.SpaceID), params.InstrumentType, params.Target.DatasetID)
-	if instrumentType == "" {
-		instrumentType = defaultInstrumentTypeForMarket(marketID, marketType)
+	marketID, instrumentType, err := marketIdentity(firstNonEmpty(params.MarketID, task.SpaceID), params.InstrumentType, marketType)
+	if err != nil {
+		return nil, err
 	}
 	if sourceID = strings.TrimSpace(sourceID); sourceID == "" && r.ResolveSourceID != nil {
-		sourceID = r.ResolveSourceID(provider, instrumentType)
+		sourceID = r.ResolveSourceID(marketID, provider, instrumentType)
 	}
 	if sourceID == "" {
 		sourceID = provider
@@ -207,40 +207,35 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 
 // TaskSeriesTag 返回 kline 采集任务按标签路由（provider、market_type）写入行时用的 series_tag，
 // 与 taskGroupsForRoute 生成的计划使用同一套推导（含 source_id 的解析）。
-func TaskSeriesTag(spaceID string, params *domain.CollectParams, provider, marketType string, resolveSourceID func(string, string) string) string {
+func TaskSeriesTag(spaceID string, params *domain.CollectParams, provider, marketType string, resolveSourceID SourceIDResolver) (string, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	marketType = strings.ToLower(strings.TrimSpace(marketType))
-	marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, spaceID), params.InstrumentType, params.Target.DatasetID)
-	if instrumentType == "" {
-		instrumentType = defaultInstrumentTypeForMarket(marketID, marketType)
+	marketID, instrumentType, err := marketIdentity(firstNonEmpty(params.MarketID, spaceID), params.InstrumentType, marketType)
+	if err != nil {
+		return "", err
 	}
 	sourceID := ""
 	if resolveSourceID != nil {
-		sourceID = resolveSourceID(provider, instrumentType)
+		sourceID = resolveSourceID(marketID, provider, instrumentType)
 	}
 	if sourceID == "" {
 		sourceID = provider
 	}
-	return collectionItemSeriesTag(spaceID, domain.CollectionItem{Provider: provider, SourceID: sourceID, MarketType: marketType})
+	return collectionItemSeriesTag(spaceID, domain.CollectionItem{Provider: provider, SourceID: sourceID, MarketType: marketType}), nil
 }
 
-func marketIdentity(marketID, instrumentType, datasetID string) (string, string) {
+// marketIdentity 规范化任务的市场与品种：任务没写品种时由市场的标的规则按标签的 market_type 决定。
+func marketIdentity(marketID, instrumentType, marketType string) (string, string, error) {
 	marketID = strings.ToLower(strings.TrimSpace(marketID))
 	instrumentType = strings.ToLower(strings.TrimSpace(instrumentType))
-	if marketID != "" && instrumentType != "" {
-		return marketID, instrumentType
+	if instrumentType != "" {
+		return marketID, instrumentType, nil
 	}
-	datasetID = strings.ToLower(strings.TrimSpace(datasetID))
-	switch {
-	case strings.HasPrefix(datasetID, "dataset_stockcn_index"):
-		return "stockcn", "index"
-	case strings.HasPrefix(datasetID, "dataset_stockcn_bond"):
-		return "stockcn", "convertible_bond"
-	case strings.HasPrefix(datasetID, "dataset_stockcn"):
-		return "stockcn", "equity"
-	default:
-		return marketID, instrumentType
+	fallback, err := defaultInstrumentType(marketID, marketType)
+	if err != nil {
+		return "", "", err
 	}
+	return marketID, string(fallback), nil
 }
 
 func mergeGroups(groups []TaskGroup) []TaskGroup {

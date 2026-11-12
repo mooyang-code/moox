@@ -12,12 +12,13 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 )
 
-// StockEgressIdentityProbe is an optional diagnostic. Provider reachability is
+// PublicIPProbe 是云函数出口探测里“只取出口公网 IP”的那一种（market.yaml 的 egress_probe: public_ip）。
+// It is an optional diagnostic. Provider reachability is
 // exercised by the market canary; a blocked IP reflector must not block a
 // release or turn into a false statement about function identity.
-func StockEgressIdentityProbe(ctx context.Context) (*model.Response, error) {
+func PublicIPProbe(ctx context.Context, marketID string) (*model.Response, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
-	return stockEgressIdentityProbeWithClient(ctx, client, []string{
+	return publicIPProbeWithClient(ctx, client, marketID, []string{
 		"https://api.ipify.org?format=text",
 		"https://ifconfig.me/ip",
 		"https://checkip.amazonaws.com/",
@@ -25,7 +26,7 @@ func StockEgressIdentityProbe(ctx context.Context) (*model.Response, error) {
 	}...)
 }
 
-func stockEgressIdentityProbeWithClient(ctx context.Context, client *http.Client, reflectors ...string) (*model.Response, error) {
+func publicIPProbeWithClient(ctx context.Context, client *http.Client, marketID string, reflectors ...string) (*model.Response, error) {
 	var failures []string
 	for _, endpoint := range reflectors {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -53,8 +54,8 @@ func stockEgressIdentityProbeWithClient(ctx context.Context, client *http.Client
 			failures = append(failures, fmt.Sprintf("%s: %v", endpoint, err))
 			continue
 		}
-		return &model.Response{Success: true, Message: "stockcn egress identity probe ok", Data: map[string]interface{}{
-			"provider": "multi", "market": "stockcn", "details": map[string]string{"public_ip": strings.TrimSpace(string(body))},
+		return &model.Response{Success: true, Message: marketID + " egress identity probe ok", Data: map[string]interface{}{
+			"provider": "multi", "market": marketID, "details": map[string]string{"public_ip": strings.TrimSpace(string(body))},
 		}, Timestamp: time.Now().UTC()}, nil
 	}
 	return nil, fmt.Errorf("public_ip reflectors unavailable: %s", strings.Join(failures, "; "))

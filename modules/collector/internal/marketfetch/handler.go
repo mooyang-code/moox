@@ -31,7 +31,6 @@ type Handler struct {
 	NewMarketKlinePipeline func(Storage, string, marketdata.InstrumentType, string, string) (*KlinePipeline, error)
 	NewCryptoKlinePipeline func(Storage, marketdata.InstrumentType, *FeedLimits) (*KlinePipeline, error)
 	NewStockKlinePipeline  func(Storage, string) (*KlinePipeline, error)
-	ResolveSourceID        func(string, string) string
 	ResolveSymbol          SymbolResolver
 	// SpaceID 是执行端所属空间；为空时读 MOOX_SPACE_ID（SCF 函数）。本地执行端显式设置，不依赖进程环境。
 	SpaceID string

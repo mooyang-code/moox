@@ -589,7 +589,9 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	// （策略按 calendar 选交易日历，缺省按 crypto_24x7；按 alignment 校验行键）。
 	derived := map[string]string{}
 	if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-		derived = sessionAttributes(spaceID)
+		if derived, err = sessionAttributes(spaceID); err != nil {
+			return IDs{}, err
+		}
 	}
 	if marketType != "" {
 		derived["market_type"] = marketType
@@ -1544,11 +1546,14 @@ func retInfoDatasetDelete(resp *storagepb.DeleteDatasetRsp) *storagepb.RetInfo {
 }
 
 // sessionAttributes 返回交易时段市场时序结果数据集的 calendar 与 alignment（stockcn 为 cn_stock、session），取自 barclock 的市场登记。
-// 连续交易的市场（crypto）不写：策略缺省按 crypto_24x7。
-func sessionAttributes(spaceID string) map[string]string {
+// 连续交易的市场（crypto）不写：策略缺省按 crypto_24x7。市场未登记时报错，不当成连续交易。
+func sessionAttributes(spaceID string) (map[string]string, error) {
 	market, err := barclock.MarketFor(spaceID)
-	if err != nil || market.Alignment != barclock.AlignmentSession {
-		return map[string]string{}
+	if err != nil {
+		return nil, err
 	}
-	return map[string]string{"calendar": market.CalendarID, "alignment": market.Alignment}
+	if market.Alignment != barclock.AlignmentSession {
+		return map[string]string{}, nil
+	}
+	return map[string]string{"calendar": market.CalendarID, "alignment": market.Alignment}, nil
 }

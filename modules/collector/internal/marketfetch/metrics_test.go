@@ -64,6 +64,7 @@ func TestOperationalMetricsZeroResetBoundedLabelsAndFailedRefresh(t *testing.T) 
 
 func TestMetricsClearAssignmentPending(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.FeedLabels = testFeedLabels
 	metrics.ObserveAssignmentPending("crypto", true, time.Unix(1722652200, 0))
 	metrics.ObserveAssignmentPending("crypto", false, time.Time{})
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
@@ -73,6 +74,7 @@ func TestMetricsClearAssignmentPending(t *testing.T) {
 func TestMetricsUseFixedErrorReasons(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
+	metrics.FeedLabels = testFeedLabels
 	for _, reason := range []string{"capacity", "rules", "symbols", "dns", "cloudfunction", "environment"} {
 		metrics.ObserveAssignmentError("crypto", reason)
 	}
@@ -99,6 +101,7 @@ func TestMetricsUseFixedErrorReasons(t *testing.T) {
 
 func TestMetricsRecoveryCanSucceedWithoutAssignmentScopes(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.FeedLabels = testFeedLabels
 	metrics.ObserveAssignmentFailure("crypto", "rules")
 	metrics.ObserveAssignmentSuccess("crypto", 1722772800)
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
@@ -106,6 +109,7 @@ func TestMetricsRecoveryCanSucceedWithoutAssignmentScopes(t *testing.T) {
 
 func TestMetricsKeepOnlyCurrentCoordinationFailureReason(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.FeedLabels = testFeedLabels
 	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", ReasonPublishLeaseHeld)))
 
@@ -120,6 +124,7 @@ func TestMetricsKeepOnlyCurrentCoordinationFailureReason(t *testing.T) {
 func TestMetricsExposeLowCardinalityFeedDimensions(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
+	metrics.FeedLabels = testFeedLabels
 
 	metrics.ObserveFeedResult(FeedMetric{
 		MarketID: "stockcn", RouteID: StockCNRouteID("1m"), ProviderID: "sina",
@@ -143,17 +148,18 @@ func TestMetricsExposeLowCardinalityFeedDimensions(t *testing.T) {
 
 func TestMetricsAllowConfiguredCryptoKlineFrequencies(t *testing.T) {
 	for _, route := range []string{"binance_spot_kline_1h", "binance_swap_kline_1w"} {
-		marketID, bounded := boundedMarketRoute("crypto", route)
+		marketID, bounded := testFeedLabels.marketRoute("crypto", route)
 		require.Equal(t, "crypto", marketID)
 		require.Equal(t, route, bounded)
 	}
-	_, bounded := boundedMarketRoute("crypto", "binance_spot_kline_2m")
+	_, bounded := testFeedLabels.marketRoute("crypto", "binance_spot_kline_2m")
 	require.Equal(t, "unknown", bounded)
 }
 
 func TestMetricsRejectFeedGroupOutsideConfiguredRange(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
+	metrics.FeedLabels = testFeedLabels
 	metrics.ObserveFeedResult(FeedMetric{MarketID: "stockcn", RouteID: StockCNRouteID("1m"), ProviderID: "sina", FeedKind: "kline", GroupID: 200, GroupCount: 200, BatchKind: "realtime", Result: "success"})
 	families, err := registry.Gather()
 	require.NoError(t, err)
@@ -191,6 +197,7 @@ func TestMetricsFailureReasonWhitelist(t *testing.T) {
 
 func TestMetricsFailureSinceTracksTheFirstAppearanceOfTheCurrentReason(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.FeedLabels = testFeedLabels
 	clock := time.Unix(1_700_000_000, 0)
 	metrics.now = func() time.Time { return clock }
 	since := func() float64 { return testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")) }
@@ -218,6 +225,7 @@ func TestMetricsFailureSinceTracksTheFirstAppearanceOfTheCurrentReason(t *testin
 
 func TestMetricsRoundOKRestoresHealthAndClearsFailureWithoutTouchingLastSuccess(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.FeedLabels = testFeedLabels
 	metrics.ObserveAssignmentSuccess("crypto", 1_700_000_000)
 	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))

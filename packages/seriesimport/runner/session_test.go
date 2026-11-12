@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,4 +39,14 @@ func TestStockCNContinuityFollowsTradingSessions(t *testing.T) {
 	lunch := writeCSV(t, dir, "600002.SH.csv", "data_time,close,volume", []string{"2026-10-12 04:00:00,1,1"})
 	_, err = Run(context.Background(), stockRequest(lunch), Meta{Fields: fields}, []Target{target}, nil)
 	require.ErrorContains(t, err, "不是交易时段内")
+}
+
+// 未登记的空间报错，不当成 7×24 按固定步长检查。
+func TestUnknownSpaceIsRejected(t *testing.T) {
+	axis, err := newSessionAxis("crypto", 5*time.Minute)
+	require.NoError(t, err)
+	require.Nil(t, axis)
+
+	_, err = newSessionAxis("no_such_space", 5*time.Minute)
+	require.ErrorIs(t, err, barclock.ErrUnknownMarket)
 }

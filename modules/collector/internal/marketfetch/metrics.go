@@ -38,6 +38,19 @@ type Metrics struct {
 	periodReportRetry        *prometheus.CounterVec
 	feedResults              *prometheus.CounterVec
 	feedObservations         *prometheus.CounterVec
+	// FeedLabels 是 feed 指标里市场、数据源、路由标签允许的取值；由组合根设置（marketwiring.FeedLabels）。
+	FeedLabels FeedLabels
+}
+
+// FeedLabels 是 feed 指标里市场、数据源、路由三个标签允许的取值，其余取值一律记为 unknown，避免标签取值无限增长。
+// 取值来自已登记的市场、行情源目录和路由，marketfetch 不直接引用目录，所以由组合根给出。
+type FeedLabels struct {
+	Markets   []string
+	Providers []string
+	// Routes 是不带频率的路由 ID（标的快照）。
+	Routes []string
+	// KlineRoutePrefixes 是 K 线路由 ID 的前缀，后面接规范频率才是合法的路由 ID。
+	KlineRoutePrefixes []string
 }
 
 // failureRecord 记录一个空间当前协调失败原因的首次出现时间：同一原因连续出现时不重置，原因变化时重置。
@@ -357,8 +370,8 @@ func (m *Metrics) ObserveFeedResult(value FeedMetric) {
 	if m == nil || value.GroupCount <= 0 || value.GroupID < 0 || value.GroupID >= value.GroupCount {
 		return
 	}
-	marketID, routeID := boundedMarketRoute(value.MarketID, value.RouteID)
-	providerID := boundedValue(value.ProviderID, []string{"sina", "tencent", "eastmoney", "baidu", "binance", "none"}, "unknown")
+	marketID, routeID := m.FeedLabels.marketRoute(value.MarketID, value.RouteID)
+	providerID := boundedValue(value.ProviderID, append([]string{"none"}, m.FeedLabels.Providers...), "unknown")
 	feedKind := boundedValue(value.FeedKind, []string{"kline", "instrument", "egress"}, "unknown")
 	batchKind := boundedValue(value.BatchKind, []string{"realtime", "backfill", "gap_repair", "catchup", "instrument_snapshot"}, "unknown")
 	result := boundedValue(value.Result, []string{"success", "fallback", "http_429", "http_5xx", "timeout", "rate_limited", "invalid", "storage_error", "no_candidate"}, "unknown")
@@ -395,13 +408,14 @@ func boundedMetricField(value, fallback string) string {
 	return value
 }
 
-func boundedMarketRoute(marketID, routeID string) (string, string) {
-	marketID = boundedValue(marketID, []string{"stockcn", "crypto"}, "unknown")
+// marketRoute 把市场与路由标签限制在允许的取值内。
+func (l FeedLabels) marketRoute(marketID, routeID string) (string, string) {
+	marketID = boundedValue(marketID, l.Markets, "unknown")
 	routeID = strings.TrimSpace(routeID)
-	allowed := routeID == "stockcn_instrument_v1" || routeID == "binance_spot_instrument_v1" || routeID == "binance_swap_instrument_v1"
+	allowed := boundedValue(routeID, l.Routes, "") != ""
 	if !allowed {
 		// K 线路由 ID 是“前缀 + 规范频率”。
-		for _, prefix := range []string{stockCNKlineRoutePrefix, "binance_spot_kline_", "binance_swap_kline_"} {
+		for _, prefix := range l.KlineRoutePrefixes {
 			if strings.HasPrefix(routeID, prefix) {
 				frequency := strings.TrimPrefix(routeID, prefix)
 				if parsed, err := marketdata.ParseFrequency(frequency); err == nil && string(parsed) == frequency {

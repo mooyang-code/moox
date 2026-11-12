@@ -39,5 +39,5 @@ func TestNormalizeIntradayKlineConvertsCloseLabeledMinute(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, time.Date(2026, 8, 29, 1, 30, 0, 0, time.UTC), row.BarStart)
 	require.Equal(t, time.Date(2026, 8, 29, 1, 31, 0, 0, time.UTC), row.BarEnd)
-	require.Equal(t, 200.0, row.VolumeShares)
+	require.Equal(t, 200.0, row.Volume)
 }

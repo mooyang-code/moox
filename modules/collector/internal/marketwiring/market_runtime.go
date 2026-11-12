@@ -24,7 +24,7 @@ func newMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 	providerID = strings.ToLower(strings.TrimSpace(providerID))
 	sourceID = strings.ToLower(strings.TrimSpace(sourceID))
 	if sourceID == "" {
-		sourceID = DefaultSourceID(providerID, string(instrumentType))
+		sourceID = DefaultSourceID(marketID, providerID, string(instrumentType))
 	}
 	if marketID == "" || providerID == "" || sourceID == "" {
 		return nil, fmt.Errorf("market, provider and source are required")

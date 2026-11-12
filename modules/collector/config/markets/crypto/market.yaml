@@ -1,0 +1,26 @@
+# 加密货币的市场参数，只有 Collector 读，编进二进制（见 config/markets/embed.go）。
+market_id: crypto
+# 一个市场有多种计价币，不写 currency；标的属性里的币种取各标的的计价币。
+# 结果数据集的允许迟到时间默认值（秒），任务没写时用它。
+allowed_lateness_seconds: 15
+# 不写 series_tag：序列标签按数据源生成（venue:<数据源>|market:<品种>|source:<source_id>）。
+# 云函数出口探测：探测币安的行情接口。
+egress_probe: binance
+# 标的同步的请求走出口代理。
+subject_egress: proxy
+# 标的属性同步的默认任务。
+subject_sync:
+  sources: [binance]
+  instrument_type: spot
+  cron: "10 8 * * *"
+  timezone: Asia/Shanghai
+# 采集计划的默认参数，moox.toml 的 [scf_plan] 里同名项优先。
+scf_plan:
+  # 新数据集默认 WS 推送，补采走香港机的本地执行端。
+  default_ingest: stream
+  default_executor: local
+  # 币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按品种推迟取数；
+  # 合约 8 秒起取数，再加整点可能的停顿，SCF 模式下合约数据集的截止放宽到 20 秒。
+  markets:
+    spot: {fetch: {not_before_ms: 3000}}
+    swap: {fetch: {not_before_ms: 8000}, lateness_s: 20}

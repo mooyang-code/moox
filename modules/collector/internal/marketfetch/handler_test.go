@@ -17,7 +17,7 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05,
-		VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "handler-metrics",
+		Volume: 1000, Amount: 9050, ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "handler-metrics",
 	}
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}}))
@@ -27,6 +27,7 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, CandidateChain: []string{"sina", "tencent"}, MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Now: func() time.Time { return now }}
 	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.FeedLabels = testFeedLabels
 	handler := &Handler{
 		NewStorage: func(string) (Storage, error) { return storage, nil },
 		NewStockKlinePipeline: func(s Storage, _ string) (*KlinePipeline, error) {

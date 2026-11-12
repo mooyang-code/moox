@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/tencentyun/scf-go-lib/cloudfunction"
@@ -66,6 +67,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	if metricsErr != nil {
 		log.WarnContextf(ctx, "market_data_metrics_setup_failed error=%v", metricsErr)
 	} else {
+		invocationMetrics.Metrics.FeedLabels = marketwiring.FeedLabels()
 		runtimeHandler.Metrics = invocationMetrics.Metrics
 		runtimeHandler.MetricsReporter = invocationMetrics.Reporter
 	}
@@ -126,10 +128,19 @@ func Execute(ctx context.Context, raw json.RawMessage, env Env) (*model.Response
 		// 手动调用与补采：只写行，不涉及周期状态。
 		return handler.HandleWithFunctionName(ctx, event, env.FunctionName)
 	case model.EventActionEgressProbe:
-		if env.SpaceID == "stockcn" {
-			return marketfetch.StockEgressIdentityProbe(ctx)
+		// 探测方式看市场 market.yaml 的 egress_probe：只取出口公网 IP，或探测写明的数据源；没写就不探测。
+		market, err := markets.ConfigFor(env.SpaceID)
+		if err != nil {
+			return failure("invalid_space", err.Error()), nil
 		}
-		return marketwiring.EgressProbe(ctx, "binance", "spot")
+		switch market.EgressProbe {
+		case "":
+			return failure("egress_probe_disabled", fmt.Sprintf("市场 %s 没有配置出口探测", env.SpaceID)), nil
+		case markets.EgressProbePublicIP:
+			return marketfetch.PublicIPProbe(ctx, env.SpaceID)
+		default:
+			return marketwiring.EgressProbe(ctx, market.EgressProbe, "spot")
+		}
 	default:
 		return failure("unknown_event_type", "unsupported market_data SCF action"), nil
 	}

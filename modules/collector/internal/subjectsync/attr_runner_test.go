@@ -55,7 +55,7 @@ func TestAttributeRunnerUsesTimezoneAndStatelessMinuteWindow(t *testing.T) {
 	store := &fakeAttributeStore{}
 	runner := &AttributeRunner{
 		Store:   store,
-		Listers: Listers{{Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Name: "BTC"}}}},
+		Listers: Listers{{MarketID: "crypto", Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Name: "BTC"}}}},
 		Jobs:    []AttributeJob{{SpaceID: "crypto", Sources: []string{"binance"}, Cron: "10 8 * * *", Timezone: "Asia/Shanghai"}},
 		Now:     func() time.Time { return now.In(time.Local) },
 	}
@@ -90,7 +90,7 @@ func TestAttributeRunnerFirstTriggerAndWindowBoundaries(t *testing.T) {
 			store := &fakeAttributeStore{}
 			runner := &AttributeRunner{
 				Store:   store,
-				Listers: Listers{{Source: "binance", InstrumentType: "spot"}: contextAwareSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}}},
+				Listers: Listers{{MarketID: "crypto", Source: "binance", InstrumentType: "spot"}: contextAwareSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}}},
 				Jobs:    []AttributeJob{{SpaceID: "crypto", Sources: []string{"binance"}, Cron: "10 8 * * *", Timezone: "Asia/Shanghai"}},
 				Now:     func() time.Time { return time.Date(2026, 10, 9, 0, tt.minute, tt.second, 0, time.UTC) },
 			}
