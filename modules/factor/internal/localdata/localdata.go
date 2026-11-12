@@ -1653,8 +1653,12 @@ func (d *Data) BackfillTask(ctx context.Context, set domain.EngineTask, subjects
 //
 // 补算只读本地存储。Storage 里比本地最新一根更晚的数据平时留给实时计算去拉，但它不一定会来：强制补采写入的周期不发实时事件，
 // 新建的任务也可能还没跑过实时周期。补算区间落在这段上时不先拉一次，就会读不到源数据、写出 0 行而作业仍然成功。
-// 数据源已经载入内存窗口时，新写入的行同时反映到窗口，实时计算看到的数据与本地存储保持一致。
-// subjects 为空表示本地有数据的全部标的。
+//
+//   - 只在数据源已经准备好之后拉（数据源锁内，与变更跟进串行），新写入的行同时反映到窗口。没准备过的数据源不拉：
+//     补算本来就读不到它，而且同步基线还没取，先写数据会漏掉之后的修正；Prepare 自己会拉到最新。
+//   - 只拉数据源上登记的标的范围内、本地已有数据的标的（subjects 为空表示这个范围内的全部标的）。
+//   - 统一数据集按各序列自己的进度拉，与实时路径相同：落后的序列不会被另一条序列的最新时间盖住而写成填充行。
+//   - 有标的读取失败时返回错误（已经拉到的照常写入）。
 func (d *Data) CatchUp(ctx context.Context, set domain.EngineTask, subjects []string, end time.Time) (int, error) {
 	src := sourceOf(set.Set)
 	limit, err := d.axisNow(src)
@@ -1664,39 +1668,54 @@ func (d *Data) CatchUp(ctx context.Context, set domain.EngineTask, subjects []st
 	if end.After(limit) {
 		end = limit
 	}
-	if len(subjects) == 0 {
-		if subjects, err = d.cfg.Store.Subjects(src); err != nil {
-			return 0, err
-		}
-	}
 	st := d.lookup(src)
 	if st == nil {
-		// 数据源还没有准备过（没有窗口）：只写本地存储。
-		columns, err := d.cfg.Storage.ListColumns(ctx, src.SpaceID, src.DatasetID)
-		if err != nil {
-			return 0, fmt.Errorf("读取源数据集字段：%w", err)
-		}
-		spec := seriessync.Spec{Source: src, Fields: seriessync.FieldsFromColumns(columns), Lookback: d.lookbackFor(src, set.Members)}
-		pull, err := d.syncer.Pull(ctx, spec, subjects, end)
-		return len(pull.Written), err
+		return 0, nil
 	}
 	d.lockSource(st, "补算前同步")
 	defer st.mu.Unlock()
-	// 上一期的热路径写盘必须先落完：拉取按本地最新一根决定从哪里拉。
-	d.settleFlush(st)
-	pull, err := d.syncer.Pull(ctx, st.spec, subjects, end)
+	// Prepare 刚登记数据源、还没写入同步规格时可能先被这里拿到锁。
+	if st.spec.Source.DatasetID == "" {
+		return 0, nil
+	}
+	// 限定在数据源上登记的标的范围内：范围之外的标的不在变更跟进里，拉进来也不会再被修正。
+	if len(subjects) == 0 {
+		subjects = st.subjects
+	} else {
+		subjects = intersect(subjects, st.subjects)
+	}
+	local, err := d.cfg.Store.Subjects(src)
 	if err != nil {
 		return 0, err
 	}
-	if st.window == nil {
-		return len(pull.Written), nil
+	if subjects = intersect(subjects, local); len(subjects) == 0 {
+		return 0, nil
 	}
-	for subject, res := range pull.Written {
-		if err := d.syncWindow(ctx, st, subject, res); err != nil {
-			return len(pull.Written), err
+	// 上一期的热路径写盘必须先落完：拉取按本地最新一根决定从哪里拉。
+	d.settleFlush(st)
+	plan := pipeline.Plan{Set: set.Set, Expected: subjects, TargetStart: end, TargetEnd: end}
+	if plan.ExpectedSeries, err = d.ExpectedSeries(ctx, plan); err != nil {
+		return 0, err
+	}
+	staged, err := d.syncer.PullStagedTags(ctx, st.spec, subjects, plan.TagsBySubject(), end)
+	if err != nil {
+		return 0, err
+	}
+	written, err := staged.Commit(ctx, staged.Writes)
+	if err != nil {
+		return 0, err
+	}
+	if st.window != nil {
+		for subject, res := range written {
+			if err := d.syncWindow(ctx, st, subject, res); err != nil {
+				return len(written), err
+			}
 		}
 	}
-	return len(pull.Written), nil
+	if len(staged.Failed) > 0 {
+		return len(written), fmt.Errorf("%w：%d 个标的拉取失败", storageio.ErrInfra, len(staged.Failed))
+	}
+	return len(written), nil
 }
 
 // syncWindow 把 CatchUp 的一次写入反映到窗口。数据集字段变了时窗口要按新字段重建，重建完成之前按预热处理（与实时路径相同）。
