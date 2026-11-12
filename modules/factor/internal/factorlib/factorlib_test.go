@@ -18,6 +18,8 @@ func TestRepositoryLibrariesCompile(t *testing.T) {
 			"volume_mean_q": 239, "zf_abs_mean": 240, "zf_mean_q": 239, "zf_std": 121, "zscore_abs_mean_q": 358,
 			// 常用技术指标（common.yaml）：EMA、MACD、RSI 带指数衰减，回看按截断到起点权重低于 1e-9 的根数推导。
 			"ma": 120, "ema": 50000, "macd": 362, "rsi": 2478, "roc": 121, "boll": 120, "atr": 121, "atr_pct": 121, "return_std": 121, "vwap": 120,
+			// A 股日线因子（stockcn_daily.yaml）：读复权因子与财务列。
+			"mom_adj": 251, "roe_ttm": 1,
 		},
 		"../../../../examples/factors": {"bias": 120, "cci": 239, "ma_fast": 60, "ma_slow": 240, "channel": 120},
 	}

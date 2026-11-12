@@ -47,6 +47,7 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
 | `--add-egress-domain <域名>`（可重复） | 把域名追加到 `[egress_proxy] http_domains`（已在名单里或被 `*.` 后缀覆盖的不重复；没写这项时从默认名单开始追加）；**生效要重新渲染并发布出口代理与 Collector** |
 | `--rename-host 旧ID=新ID` | 主机改名（主机表、`[deployments]`、引用一起改） |
 | `--import-scf <JSON>` | 整体替换 `[scf_plan]` |
+| `--add-factor-task <任务ID>`（可重复），可选 `--example-file <样例>` | 从配置样例（默认仓库根的 `moox.toml.example`）复制这个 `[[factors.tasks]]`，成员用到而配置里没有的 `[[factors.definitions]]` 一并复制；已有同 ID 的任务时报错。样例里没有的任务（例如线上手工建的）先写一份只含这个任务和所需定义的样例文件，用 `--example-file` 指过去 |
 | `--remove-factor-task <任务ID>`、`--remove-factor <因子ID>`（都可重复） | 删除因子任务、因子定义；因子仍被留下的任务引用时报错。只改本机配置，线上已有的任务不动 |
 
 不带任何参数的 `migrate` 把旧格式改成当前格式（因子定义、主机中文名、旧组件名）。

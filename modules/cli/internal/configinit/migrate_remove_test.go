@@ -89,3 +89,20 @@ func TestAddFactorTasksFromExample(t *testing.T) {
 	_, err = addFactorTasksFromExample([]byte(plain), []byte(addExample), []string{"missing"}, &MigrateReport{})
 	require.ErrorContains(t, err, "没有")
 }
+
+// 任务成员用到、配置里没有的因子定义随任务一起从样例复制；已有的定义不重复。
+func TestAddFactorTasksCopiesMissingDefinitions(t *testing.T) {
+	example := "[[factors.tasks]]\nid = \"daily\"\nmembers = [\n  { factor = \"ma\" },\n  { factor = \"mom_adj\" },\n]\n\n" +
+		"[[factors.definitions]]\nfactor_id = \"mom_adj\"\nfile = \"stockcn_daily.yaml\"\n\n[[factors.definitions]]\nfactor_id = \"ma\"\nfile = \"other.yaml\"\n"
+	plain := "[factors]\nenabled = true\n\n[[factors.tasks]]\nid = \"keep\"\n\n[[factors.definitions]]\nfactor_id = \"ma\"\nfile = \"common.yaml\"\n\n[admin]\nusername = \"a\"\n"
+	var report MigrateReport
+	out, err := addFactorTasksFromExample([]byte(plain), []byte(example), []string{"daily"}, &report)
+	require.NoError(t, err)
+	text := string(out)
+	require.Equal(t, []string{"mom_adj"}, report.AddedFactors)
+	require.Contains(t, text, "[[factors.definitions]]\nfactor_id = \"mom_adj\"\nfile = \"stockcn_daily.yaml\"\n")
+	require.NotContains(t, text, "other.yaml", "已有的定义不覆盖")
+	require.Less(t, strings.Index(text, `id = "daily"`), strings.Index(text, `factor_id = "ma"`))
+	require.Less(t, strings.Index(text, `file = "common.yaml"`), strings.Index(text, `factor_id = "mom_adj"`), "接在最后一个定义之后")
+	require.Less(t, strings.Index(text, `factor_id = "mom_adj"`), strings.Index(text, "[admin]"))
+}

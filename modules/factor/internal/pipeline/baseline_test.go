@@ -55,6 +55,10 @@ func baselineDefinitions(t *testing.T) (library, cross []domain.FactorDef) {
 	entries, err := factorlib.LoadDir(filepath.Join("..", "..", "factors"))
 	require.NoError(t, err)
 	for _, entry := range entries {
+		// A 股日线因子要读复权、财务列，合成 K 线里没有这些列，不进金样；它们的编译由 factorlib 的测试覆盖。
+		if filepath.Base(entry.File) == "stockcn_daily.yaml" {
+			continue
+		}
 		def, err := domain.NormalizeFactorDefinition(domain.FactorDef{
 			FactorID: entry.FactorID, Name: entry.Name, CategoryID: entry.CategoryID, Spec: entry.Spec, AllowPartialUniverse: entry.AllowPartialUniverse,
 		})

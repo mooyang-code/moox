@@ -135,11 +135,13 @@ type MigrateReport struct {
 	RemovedFactors     []string `json:"removed_factors,omitempty"`
 	// AddedFactorTasks 记录 --add-factor-task 从配置样例复制进来的任务 ID。
 	AddedFactorTasks []string `json:"added_factor_tasks,omitempty"`
-	Changed          bool     `json:"changed"`
-	Valid            bool     `json:"valid"`
-	Written          bool     `json:"written"`
-	Backup           string   `json:"backup,omitempty"`
-	NextAction       string   `json:"next_action,omitempty"`
+	// AddedFactors 记录随 --add-factor-task 一起从配置样例复制进来的因子定义 ID。
+	AddedFactors []string `json:"added_factors,omitempty"`
+	Changed      bool     `json:"changed"`
+	Valid        bool     `json:"valid"`
+	Written      bool     `json:"written"`
+	Backup       string   `json:"backup,omitempty"`
+	NextAction   string   `json:"next_action,omitempty"`
 }
 
 // MigrateFile 在本机解密 moox.toml，把它改写成当前格式并校验；Write 时备份原文件、重新加密写回。
@@ -918,23 +920,32 @@ func removeFactorEntries(plain []byte, tasks, factors []string, report *MigrateR
 
 // addFactorTasksFromExample 把配置样例里指定 id 的 [[factors.tasks]] 原样复制到最后一个因子任务之后（没有因子任务时放在第一个
 // [[factors.definitions]] 之前，再没有就追加到末尾）。样例里没有、或配置里已有同 id 的任务时报错。
+// 任务成员用到、配置里还没有的因子定义，也从样例里把对应的 [[factors.definitions]] 复制到最后一个定义之后；样例里没有就不管，
+// 留给后面的校验报错。
 func addFactorTasksFromExample(plain, example []byte, ids []string, report *MigrateReport) ([]byte, error) {
-	exampleTasks := map[string]block{}
+	exampleTasks, exampleDefinitions := map[string]block{}, map[string]block{}
 	for _, b := range splitBlocks(strings.Split(string(example), "\n")) {
-		if b.array && b.header == "factors.tasks" {
+		switch {
+		case b.array && b.header == "factors.tasks":
 			exampleTasks[blockValue(b, "id")] = b
+		case b.array && b.header == "factors.definitions":
+			exampleDefinitions[blockValue(b, "factor_id")] = b
 		}
 	}
 	blocks := splitBlocks(strings.Split(string(plain), "\n"))
-	existing := map[string]bool{}
-	insertAt, firstDefinition := -1, -1
+	existing, defined := map[string]bool{}, map[string]bool{}
+	insertAt, firstDefinition, lastDefinition := -1, -1, -1
 	for i, b := range blocks {
 		switch {
 		case b.array && b.header == "factors.tasks":
 			existing[blockValue(b, "id")] = true
 			insertAt = i + 1
-		case b.array && b.header == "factors.definitions" && firstDefinition < 0:
-			firstDefinition = i
+		case b.array && b.header == "factors.definitions":
+			defined[blockValue(b, "factor_id")] = true
+			if firstDefinition < 0 {
+				firstDefinition = i
+			}
+			lastDefinition = i
 		}
 	}
 	if insertAt < 0 {
@@ -943,7 +954,7 @@ func addFactorTasksFromExample(plain, example []byte, ids []string, report *Migr
 			insertAt = firstDefinition
 		}
 	}
-	var added []block
+	var added, addedDefinitions []block
 	for _, raw := range ids {
 		id := strings.TrimSpace(raw)
 		if existing[id] {
@@ -960,6 +971,31 @@ func addFactorTasksFromExample(plain, example []byte, ids []string, report *Migr
 		added = append(added, block{header: task.header, array: true, lines: append(lines, "")})
 		existing[id] = true
 		report.AddedFactorTasks = append(report.AddedFactorTasks, id)
+		for _, match := range memberFactorPattern.FindAllStringSubmatch(strings.Join(lines, "\n"), -1) {
+			factorID := match[1]
+			definition, ok := exampleDefinitions[factorID]
+			if defined[factorID] || !ok {
+				continue
+			}
+			definitionLines := append([]string(nil), definition.lines...)
+			for len(definitionLines) > 0 && strings.TrimSpace(definitionLines[len(definitionLines)-1]) == "" {
+				definitionLines = definitionLines[:len(definitionLines)-1]
+			}
+			addedDefinitions = append(addedDefinitions, block{header: definition.header, array: true, lines: append(definitionLines, "")})
+			defined[factorID] = true
+			report.AddedFactors = append(report.AddedFactors, factorID)
+		}
+	}
+	// 先插定义（位置靠后），任务的插入位置不受影响。
+	if len(addedDefinitions) > 0 {
+		definitionAt := lastDefinition + 1
+		if lastDefinition < 0 {
+			definitionAt = len(blocks)
+		}
+		if last := definitionAt - 1; last >= 0 {
+			blocks[last].lines = ensureTrailingBlank(blocks[last].lines)
+		}
+		blocks = append(blocks[:definitionAt], append(addedDefinitions, blocks[definitionAt:]...)...)
 	}
 	blocks = append(blocks[:insertAt], append(added, blocks[insertAt:]...)...)
 	var lines []string
@@ -1201,4 +1237,15 @@ func addHostDeployments(plain []byte, host string, components []string, droppedC
 		out = append(out, b.lines...)
 	}
 	return []byte(strings.Join(out, "\n")), added, nil
+}
+
+// memberFactorPattern 取因子任务成员里的 factor = "…"。
+var memberFactorPattern = regexp.MustCompile(`\bfactor\s*=\s*"([^"]+)"`)
+
+// ensureTrailingBlank 保证一段配置以一个空行结尾，后面接新的段时不会粘在一起。
+func ensureTrailingBlank(lines []string) []string {
+	if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		return lines
+	}
+	return append(lines, "")
 }
