@@ -84,6 +84,8 @@ type scenario struct {
 	visitErr string // 非空时 visit 在读到该代码时返回错误
 	// cancelOnVisit 非空时，visit 在读到该代码时取消 ctx。
 	cancelOnVisit string
+	// allowedDiff 为真的场景在接入限流器之后的结果与金样不同（见场景 31），单独对照 testdata/clist_scenarios_diff.golden。
+	allowedDiff bool
 }
 
 func scenarioHosts(actions map[string]string) func(string, string, int) string {
@@ -198,25 +200,39 @@ func clistScenarios() []scenario {
 		{name: "28 回退后备用地址第三页失败再重试", query: ClistQuery{PageRetries: 1, RetryBackoff: 4 * ms}, script: scenarioHosts(map[string]string{push2 + "/*/*": "reset", test + "/3/1": "s500"})},
 		{name: "29 读完一页后取消 ctx 且无重试", cancelOnVisit: "A2"},
 		{name: "30 读完一页后取消 ctx 且有重试", cancelOnVisit: "A2", query: ClistQuery{PageRetries: 2}},
+		// 31 是唯一允许的差别：同一页在同一主机上连续失败到第 5 次时进入冷却，第 6 次请求不再发出，错误由“重试 5 次后仍失败（超时类）”
+		// 变成 ErrCoolingDown。接入之前的代码是 6 次请求，错误是 clist 第 2 页重试 5 次后仍失败。线上 A 股 PageRetries 为 0、美股为 2，单页最多 3 次，到不了。
+		{name: "31 第二页一直被断开且重试 5 次", allowedDiff: true, query: ClistQuery{PageRetries: 5, RetryBackoff: 3 * ms}, script: scenarioHosts(map[string]string{push2 + "/2/*": "reset"})},
 	}
 }
 
 func TestFetchClistScenarios(t *testing.T) {
-	var transcript bytes.Buffer
+	var main, diff bytes.Buffer
 	for _, sc := range clistScenarios() {
-		transcript.WriteString(runScenario(t, sc))
+		if sc.allowedDiff {
+			diff.WriteString(runScenario(t, sc))
+		} else {
+			main.WriteString(runScenario(t, sc))
+		}
 	}
+	// 文件以单个换行结尾（git diff --check 不允许末尾空行）。
+	mainText := strings.TrimRight(main.String(), "\n") + "\n"
+	diffText := strings.TrimRight(diff.String(), "\n") + "\n"
 	if path := os.Getenv("CLIST_SCENARIO_WRITE"); path != "" {
-		if err := os.WriteFile(path, transcript.Bytes(), 0o644); err != nil {
-			t.Fatal(err)
+		for name, text := range map[string]string{path: mainText, path + ".diff": diffText} {
+			if err := os.WriteFile(name, []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return
 	}
-	golden, err := os.ReadFile("testdata/clist_scenarios.golden")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := transcript.String(); got != string(golden) {
-		t.Fatalf("FetchClist 的行为与接入限流器之前的金样不一致。\n--- 现在 ---\n%s\n--- 金样 ---\n%s", got, string(golden))
+	for name, got := range map[string]string{"testdata/clist_scenarios.golden": mainText, "testdata/clist_scenarios_diff.golden": diffText} {
+		golden, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != string(golden) {
+			t.Fatalf("FetchClist 的行为与 %s 不一致。\n--- 现在 ---\n%s\n--- 金样 ---\n%s", name, got, string(golden))
+		}
 	}
 }

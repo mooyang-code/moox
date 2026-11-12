@@ -14,6 +14,8 @@ import (
 const (
 	host1 = "push2.eastmoney.com"
 	host2 = "push2test.eastmoney.com"
+	// bothCooling 是两个主机都在冷却时关注项的 detail。
+	bothCooling = "push2.eastmoney.com 与 push2test.eastmoney.com 都在冷却，东方财富标的列表同步暂缓"
 )
 
 func attentionValue(a *attention.Attention, detail string) float64 {
@@ -33,22 +35,30 @@ func TestObserverMetricsAndAttention(t *testing.T) {
 	require.Equal(t, 1.0, testutil.ToFloat64(observer.rejected.WithLabelValues(host1)))
 	require.Equal(t, 0.0, testutil.ToFloat64(observer.cooling.WithLabelValues(host1)))
 
+	// push2 单独冷却：FetchClist 会回退 push2test，同步照常，只记日志与指标，不上报关注项。
 	observer.Observe(cnstock.LimitEvent{Kind: cnstock.EventCooldownStarted, Host: host1, Cooldown: 10 * time.Minute, Level: 1, Reason: cnstock.ReasonTransportFailure, Failures: 5})
 	require.Equal(t, 1.0, testutil.ToFloat64(observer.cooldowns.WithLabelValues(host1)))
 	require.Equal(t, 1.0, testutil.ToFloat64(observer.cooling.WithLabelValues(host1)))
-	require.Equal(t, 1.0, attentionValue(attn, host1+" 冷却 10m0s（第 1 次，连续传输层失败）"))
+	require.Equal(t, 0.0, attentionValue(attn, bothCooling), "push2 单独冷却不上报")
+	require.Equal(t, 0.0, attentionValue(attn, ""))
 
-	// 第二个主机也进入冷却：详情合并在同一条关注项里。
+	// push2test 也进入冷却（探测失败的 429，Failures 为 0）：同步真的做不了，上报；detail 是固定文字，不含时长与次数。
 	observer.Observe(cnstock.LimitEvent{Kind: cnstock.EventCooldownStarted, Host: host2, Cooldown: 20 * time.Minute, Level: 2, Reason: cnstock.ReasonRateLimited})
-	merged := host1 + " 冷却 10m0s（第 1 次，连续传输层失败）；" + host2 + " 冷却 20m0s（第 2 次，HTTP 429）"
-	require.Equal(t, 1.0, attentionValue(attn, merged))
+	require.Equal(t, 1.0, attentionValue(attn, bothCooling))
 
+	// 任一恢复后清零。
 	observer.Observe(cnstock.LimitEvent{Kind: cnstock.EventProbe, Host: host1, Level: 1})
 	observer.Observe(cnstock.LimitEvent{Kind: cnstock.EventRecovered, Host: host1})
 	require.Equal(t, 0.0, testutil.ToFloat64(observer.cooling.WithLabelValues(host1)))
-	require.Equal(t, 1.0, attentionValue(attn, host2+" 冷却 20m0s（第 2 次，HTTP 429）"))
+	require.Equal(t, 0.0, attentionValue(attn, bothCooling))
+
+	// push2 再次冷却时又是两个都冷却，恢复 push2test 同样清零；push2his 的冷却不影响关注项。
+	observer.Observe(cnstock.LimitEvent{Kind: cnstock.EventCooldownStarted, Host: host1, Cooldown: 10 * time.Minute, Level: 1, Reason: cnstock.ReasonForbidden})
+	require.Equal(t, 1.0, attentionValue(attn, bothCooling))
 	observer.Observe(cnstock.LimitEvent{Kind: cnstock.EventRecovered, Host: host2})
-	require.Equal(t, 0.0, attentionValue(attn, ""), "全部恢复后关注项回到 0")
+	require.Equal(t, 0.0, attentionValue(attn, bothCooling))
+	observer.Observe(cnstock.LimitEvent{Kind: cnstock.EventCooldownStarted, Host: "push2his.eastmoney.com", Cooldown: time.Minute, Level: 1, Reason: cnstock.ReasonForbidden})
+	require.Equal(t, 0.0, attentionValue(attn, bothCooling))
 }
 
 // 主机标签只取已知的几个，其余记为 other，不会因为意外的主机名产生新的时间序列。
@@ -90,5 +100,13 @@ func TestObserverWithRealLimiter(t *testing.T) {
 	require.Equal(t, 5.0, testutil.ToFloat64(observer.requests.WithLabelValues(host1)))
 	require.Equal(t, 1.0, testutil.ToFloat64(observer.rejected.WithLabelValues(host1)))
 	require.Equal(t, 1.0, testutil.ToFloat64(observer.cooling.WithLabelValues(host1)))
-	require.Equal(t, 1.0, attentionValue(attn, host1+" 冷却 10m0s（第 1 次，连续传输层失败）"))
+	require.Equal(t, 0.0, attentionValue(attn, bothCooling), "push2 单独冷却不上报")
+
+	// push2test 也连续失败 5 次：两个都冷却，上报。
+	for i := 0; i < 5; i++ {
+		release, err := limiter.Acquire(t.Context(), host2)
+		require.NoError(t, err)
+		release(cnstock.Outcome{Kind: cnstock.OutcomeTransportFailure})
+	}
+	require.Equal(t, 1.0, attentionValue(attn, bothCooling))
 }

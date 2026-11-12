@@ -459,10 +459,10 @@ func TestLookupWaitsPageInterval(t *testing.T) {
 	}
 }
 
-// 默认值：页间隔 200 毫秒、重试 2 次、页数上限 80。
+// 默认值：页间隔 0（节奏由限流器管）、重试 2 次、页数上限 80。
 func TestConfigDefaults(t *testing.T) {
 	cfg := Config{}.withDefaults()
-	require.Equal(t, 200*time.Millisecond, cfg.PageInterval)
+	require.Zero(t, cfg.PageInterval)
 	require.Equal(t, 2, cfg.PageRetries)
 	require.Equal(t, 80, cfg.MaxPages)
 	require.NotNil(t, cfg.HTTPClient)

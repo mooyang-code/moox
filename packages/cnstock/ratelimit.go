@@ -186,7 +186,8 @@ type LimitEvent struct {
 	Failures int
 }
 
-// LimitObserver 接收限流器的事件，用于日志与指标；在限流器的锁之外同步调用，实现必须并发安全且不能阻塞。
+// LimitObserver 接收限流器的事件，用于日志与指标；在限流器的互斥锁之外同步调用（但此时并发名额可能还没归还），
+// 实现必须并发安全、不能阻塞，也不能回调限流器。
 type LimitObserver func(LimitEvent)
 
 type hostState struct {
