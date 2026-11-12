@@ -42,14 +42,14 @@ func TestResolveSymbolUsesSubjectRules(t *testing.T) {
 
 	_, err = ResolveSymbol("binance", "crypto", "swap", "BTC-USDT-SPOT")
 	require.Error(t, err, "后缀与品种不符")
-	_, err = ResolveSymbol("binance", "stockhk", "equity", "00700.XHKG")
+	_, err = ResolveSymbol("binance", "stockus", "equity", "AAPL.XNAS")
 	require.ErrorIs(t, err, markets.ErrUnknownMarket)
 }
 
 // 指标标签的允许取值来自已登记市场、行情源目录和路由；现有路由 ID 都在里面，通达信也在数据源里。
 func TestFeedLabelsCoverExistingValues(t *testing.T) {
 	labels := FeedLabels()
-	require.Equal(t, []string{"crypto", "stockcn"}, labels.Markets)
+	require.Equal(t, []string{"crypto", "stockcn", "stockhk"}, labels.Markets)
 	for _, provider := range []string{"binance", "sina", "tencent", "eastmoney", "baidu", "tdx"} {
 		require.Contains(t, labels.Providers, provider)
 	}
