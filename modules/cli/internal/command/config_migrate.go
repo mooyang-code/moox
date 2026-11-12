@@ -86,7 +86,7 @@ func newConfigMigrateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&reachability, "set-reachability", "", "设置主机的可达性，写成 主机ID=direct|outbound（只能出站的内网机器用 outbound）")
 	cmd.Flags().StringArrayVar(&removeTasks, "remove-factor-task", nil, "删除这个因子任务（[[factors.tasks]] 的 id），可重复")
 	cmd.Flags().StringArrayVar(&removeFactors, "remove-factor", nil, "删除这个因子定义（[[factors.definitions]] 的 factor_id），可重复；仍被任务引用时报错")
-	cmd.Flags().StringArrayVar(&addTasks, "add-factor-task", nil, "从仓库根 moox.toml.example 复制这个因子任务（[[factors.tasks]] 的 id），可重复；已有同 ID 时报错")
+	cmd.Flags().StringArrayVar(&addTasks, "add-factor-task", nil, "从仓库根 moox.toml.example 复制这个因子任务（[[factors.tasks]] 的 id），可重复；已有同 ID 时报错；成员用到而配置里没有的因子定义一并复制")
 	cmd.Flags().StringVar(&exampleFile, "example-file", "", "--add-factor-task 读取的配置样例（默认仓库根的 moox.toml.example）")
 	cmd.Flags().StringVar(&addDeployment, "add-deployment", "", "把组件加进主机的 [deployments]，写成 主机ID=组件ID[,组件ID]，例如 factor=factor-engine,archive-worker")
 	cmd.Flags().StringArrayVar(&addEgressDomains, "add-egress-domain", nil, "把域名追加到 [egress_proxy] http_domains，例如 openapi.okx.com，可重复；已在名单里的不重复")

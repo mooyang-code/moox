@@ -168,7 +168,34 @@ output: fin_net_profit_parent_ttm / fin_equity_parent
 - 成员加入时是停用的，`factor member enable` 之后才计算。启用不会自动补算历史，需要历史因子值时用 `factor recalc submit --space-id stockcn --task-id <任务> --from 2025-11-01T00:00:00Z --to 2026-11-11T00:00:00Z`（`--from`、`--to` 只接受 RFC3339，左闭右开，不能只写日期）。
 - 前复权价本身（以当前这一根为基准）：k 根之前的前复权收盘价是 `delay(close, k) * delay(adj_factor, k) / adj_factor`。只算涨幅、偏离这类比值时用后复权价即可，结果相同。
 - 财务字段为空（金融类公司没有的科目、缺上年数据的滚动值）时因子值也为空。
-- 提醒用户把这个因子任务和成员同步写进 `moox.toml` 的 `[[factors.tasks]]`（用户自己运行 `./bin/moox-cli config edit`），以后重装时 `setup factors` 才会带上它。
+- 把这个因子任务和成员同步写进 `moox.toml`，以后重装时 `setup factors` 才会带上它。`mom_adj`、`roe_ttm` 已在内置因子库 `modules/factor/factors/stockcn_daily.yaml` 里。写一份只含这个任务和两个定义的样例文件，再用 `config migrate` 复制进去（先不带 `--yes` 预览）：
+
+  ```toml
+  [[factors.tasks]]
+  id = "<日线因子任务>"
+  name = "A股日线"
+  space_id = "stockcn"
+  source_dataset_id = "dataset_<task_id>"
+  freq = "1d"
+  members = [
+    { factor = "mom_adj" },
+    { factor = "roe_ttm" },
+  ]
+
+  [[factors.definitions]]
+  factor_id = "mom_adj"
+  file = "stockcn_daily.yaml"
+
+  [[factors.definitions]]
+  factor_id = "roe_ttm"
+  file = "stockcn_daily.yaml"
+  ```
+
+  ```bash
+  ./bin/moox-cli config migrate --add-factor-task <日线因子任务> --example-file daily-task.toml --yes
+  ```
+
+  自己写的因子不在因子库里时，先把它加进 `factors.source_dir` 下的库文件，否则校验报“因子库里没有因子”。
 
 ## 5. 在策略里用
 

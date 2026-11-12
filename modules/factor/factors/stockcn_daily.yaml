@@ -1,0 +1,22 @@
+# 因子库（表达式写法）：A 股日线因子，用到日线附加字段（后复权因子 adj_factor、fin_ 开头的财务字段）。
+# 只能用在带这些字段的日线数据集上（内置任务“A 股日线（复权、行业、财务）”的结果），字段口径见 docs/模块/采集.md 第 4a、4b 节。
+# 格式同 xbx.yaml。分类：动量类（momentum）、基本面类（fundamental）。
+- factor_id: mom_adj
+  name: 复权涨幅
+  category_id: momentum
+  category_name: 动量类
+  # K 线是不复权价，close * adj_factor 是后复权价；window 是回看的交易日数。
+  spec: |
+    params:
+      window: {type: int, min: 2, max: 250, default: 20}
+    let:
+      adj_close: close * adj_factor
+    output: adj_close / delay(adj_close, window) - 1
+
+- factor_id: roe_ttm
+  name: 净资产收益率（滚动十二个月）
+  category_id: fundamental
+  category_name: 基本面类
+  # 金融类公司缺的科目、缺上年数据的滚动值为空时，因子值也为空。
+  spec: |
+    output: fin_net_profit_parent_ttm / fin_equity_parent
