@@ -68,6 +68,9 @@ func TestDefaultSourceIDComesFromCatalog(t *testing.T) {
 		{"stockhk", "eastmoney", "equity", "stockhk_http"},
 		{"stockhk", "tencent", "equity", "index_constituent_http"},
 		{"stockhk", "sina", "equity", ""},
+		// 美股的纳斯达克、datahub 只取指数成分，登记的 source_id 与港股腾讯相同。
+		{"stockus", "nasdaq", "equity", "index_constituent_http"},
+		{"stockus", "datahub", "equity", "index_constituent_http"},
 		{"stockcn", "unknown", "equity", ""},
 	} {
 		require.Equal(t, tc.want, DefaultSourceID(tc.market, tc.provider, tc.instrument), "%s/%s/%s", tc.market, tc.provider, tc.instrument)
@@ -118,14 +121,16 @@ func TestSubjectListersAreKeyedByMarket(t *testing.T) {
 		{MarketID: "stockcn", Source: "sina", InstrumentType: "equity"},
 		{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"},
 	}, keys)
-	// 港股的腾讯只取指数成分：进指数成分表，不进全部标的表。
-	require.Len(t, indexes, 2)
+	// 港股的腾讯、美股的纳斯达克与 datahub 只取指数成分：进指数成分表，不进全部标的表。
+	require.Len(t, indexes, 4)
 	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockcn", Source: "eastmoney", Index: "000300"})
 	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockhk", Source: "tencent", Index: "HSI"})
+	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockus", Source: "nasdaq", Index: "NDX"})
+	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockus", Source: "datahub", Index: "SPX"})
 }
 
 // 环境变量指向不存在的目录时，回落到编进二进制的内容：
-// lister 仍是 4 个加 2 个指数，候选链、每函数并发推导都与内置配置一致。
+// lister 仍是 4 个加 4 个指数，候选链、每函数并发推导都与内置配置一致。
 func TestMissingOverrideFallsBackToEmbeddedFiles(t *testing.T) {
 	wantPipeline, err := NewKlinePipeline(timerHandlerStorage{}, "stockcn", marketdata.InstrumentEquity, "5m", "", nil)
 	require.NoError(t, err)
@@ -138,7 +143,7 @@ func TestMissingOverrideFallsBackToEmbeddedFiles(t *testing.T) {
 	listers, indexes, err := NewSubjectListers()
 	require.NoError(t, err)
 	require.Len(t, listers, 4)
-	require.Len(t, indexes, 2)
+	require.Len(t, indexes, 4)
 
 	pipeline, err := NewKlinePipeline(timerHandlerStorage{}, "stockcn", marketdata.InstrumentEquity, "5m", "", nil)
 	require.NoError(t, err)

@@ -29,12 +29,15 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent"
 	hkeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney"
 	hktencent "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/tencent"
+	usdatahub "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/datahub"
+	usnasdaq "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/nasdaq"
 )
 
 const (
 	crypto  = marketdata.MarketID("crypto")
 	stockcn = marketdata.MarketID("stockcn")
 	stockhk = marketdata.MarketID("stockhk")
+	stockus = marketdata.MarketID("stockus")
 )
 
 // stockCNInstrumentTimeout 是 A 股标的快照单次请求超时（全市场快照分页多）。
@@ -139,6 +142,9 @@ func build() *marketdata.Catalog {
 		}),
 		// 港股：恒生指数成分来源（腾讯），只取指数成分，不取 K 线、不取全部标的。
 		entry(stockhk, marketdata.InstrumentEquity, "tencent", hktencent.DefaultSourceID, fixed(func() marketdata.MarketProvider { return hktencent.New(hktencent.Config{}) })),
+		// 美股：纳斯达克 100（纳斯达克官网）和标普 500（datahub 的 CSV）的成分来源，只取指数成分，不取 K 线、不取全部标的。
+		entry(stockus, marketdata.InstrumentEquity, "nasdaq", usnasdaq.DefaultSourceID, fixed(func() marketdata.MarketProvider { return usnasdaq.New(usnasdaq.Config{}) })),
+		entry(stockus, marketdata.InstrumentEquity, "datahub", usdatahub.DefaultSourceID, fixed(func() marketdata.MarketProvider { return usdatahub.New(usdatahub.Config{}) })),
 	)
 }
 
