@@ -9,12 +9,13 @@ import (
 func TestParseProcStatHandlesSpacesAndParenthesesInComm(t *testing.T) {
 	// 字段：pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime
 	// priority nice threads itrealvalue starttime vsize rss ...
-	line := []byte("4242 (my (odd) proc) S 1 4242 4242 0 -1 4194560 100 0 0 0 700 300 0 0 20 0 5 0 123456 104857600 2560 18446744073709551615 1 1 0 0\n")
+	// cutime、cstime（已被 wait 的子进程的时间）填了非零值：它们不算进进程自己的 CPU 时间。
+	line := []byte("4242 (my (odd)\nproc) S 1 4242 4242 0 -1 4194560 100 0 0 0 700 300 9000 8000 20 0 5 0 123456 104857600 2560 18446744073709551615 1 1 0 0\n")
 	stat, err := ParseProcStat(line)
 	if err != nil {
 		t.Fatalf("ParseProcStat() error = %v", err)
 	}
-	want := ProcStat{PID: 4242, Comm: "my (odd) proc", StartTime: 123456, CPUTicks: 1000, RSSPages: 2560}
+	want := ProcStat{PID: 4242, Comm: "my (odd)\nproc", StartTime: 123456, CPUTicks: 1000, RSSPages: 2560}
 	if stat != want {
 		t.Fatalf("stat = %+v, want %+v", stat, want)
 	}
@@ -25,18 +26,48 @@ func TestParseProcStatHandlesSpacesAndParenthesesInComm(t *testing.T) {
 	}
 }
 
-func TestProcessNameUsesFirstArgumentOnly(t *testing.T) {
+// 名字优先取可执行文件的文件名；读不到时用 comm。两种来源都只取第一段、去掉控制字符：
+// 进程可以改写自己的名字（sshd、postgres、Node 的 process.title），改写后的内容可能带参数、密钥或换行。
+func TestProcessNameNeverCarriesArgumentsOrControlCharacters(t *testing.T) {
 	for _, tt := range []struct {
-		cmdline, comm, want string
+		exe, comm, want string
 	}{
-		{"/data/moox/storage/current/bin/moox-storage-node\x00--token=secret\x00", "moox-storage-no", "moox-storage-node"},
-		{"python3\x00/opt/engine/main.py\x00", "python3", "python3"},
+		{"/data/moox/storage/current/bin/moox-storage-node", "moox-storage-no", "moox-storage-node"},
+		{"/data/moox/prod/releases/old/bin/moox-monitor (deleted)", "moox-monitor", "moox-monitor"},
+		{"/usr/bin/python3.12", "python3", "python3.12"},
 		{"", "kswapd0", "kswapd0"},
-		{"nginx: worker process\x00", "nginx", "nginx: worker process"},
+		{"", "myworker --pass", "myworker"},
+		{"", "sshd: ubuntu@pt", "sshd"},
+		{"", "postgres: 16/ma", "postgres"},
+		{"", "evil\n## 已恢复", "evil"},
+		{"", "tab\x07name", "tab?name"},
+		{"", "   ", "?"},
 	} {
-		if got := ProcessName([]byte(tt.cmdline), tt.comm); got != tt.want {
-			t.Fatalf("ProcessName(%q) = %q, want %q", tt.cmdline, got, tt.want)
+		if got := ProcessName(tt.exe, tt.comm); got != tt.want {
+			t.Fatalf("ProcessName(%q, %q) = %q, want %q", tt.exe, tt.comm, got, tt.want)
 		}
+	}
+}
+
+func TestCountCPUs(t *testing.T) {
+	stat := []byte("cpu  10 2 3 40 5 6 7 8 9 10\ncpu0 1 1 1 1\ncpu1 1 1 1 1\ncpu15 1 1 1 1\nintr 1 2 3\ncpufreq 1\n")
+	if got := CountCPUs(stat); got != 3 {
+		t.Fatalf("CountCPUs = %d, want 3", got)
+	}
+	if got := CountCPUs([]byte("cpu 1 2 3\n")); got != 0 {
+		t.Fatalf("只有汇总行时应为 0：%d", got)
+	}
+}
+
+// 某一轮没读到进程数据后，下一轮不能拿更早的基准来算 CPU。
+func TestProcessTrackerResetDropsTheBaseline(t *testing.T) {
+	tracker := &processTracker{}
+	name := func(stat ProcStat) string { return stat.Comm }
+	tracker.top([]ProcStat{{PID: 1, Comm: "a", StartTime: 1, CPUTicks: 100, RSSPages: 1}}, 0, false, 2, 4096, name)
+	tracker.reset()
+	got := tracker.top([]ProcStat{{PID: 1, Comm: "a", StartTime: 1, CPUTicks: 900, RSSPages: 1}}, 1000, true, 2, 4096, name)
+	if len(got) != 1 || got[0].CpuAvailable {
+		t.Fatalf("重置基准后不应有 CPU 值：%+v", got)
 	}
 }
 
@@ -57,12 +88,12 @@ func TestProcessTrackerRanksByCPUAndMemory(t *testing.T) {
 	}
 
 	// 整机 4 核、两次采样之间共 6000 个滴答（每核 1500）。storage 用了 5100 → 340%；duckdb 用了 600 → 40%；
-	// idle 没有变化；PID 4 的启动时刻变了（PID 被新进程复用），不能相减；PID 5 是新进程。
+	// idle 没有变化；PID 4 的启动时刻变了（PID 被新进程复用），累计时间比上次还大也不能相减；PID 5 是新进程。
 	second := []ProcStat{
 		{PID: 1, Comm: "storage", StartTime: 10, CPUTicks: 6100, RSSPages: 1000},
 		{PID: 2, Comm: "duckdb", StartTime: 20, CPUTicks: 1100, RSSPages: 3000},
 		{PID: 3, Comm: "idle", StartTime: 30, CPUTicks: 50, RSSPages: 0},
-		{PID: 4, Comm: "reused", StartTime: 99, CPUTicks: 20, RSSPages: 10},
+		{PID: 4, Comm: "reused", StartTime: 99, CPUTicks: 9500, RSSPages: 10},
 		{PID: 5, Comm: "fresh", StartTime: 100, CPUTicks: 400, RSSPages: 20},
 	}
 	got = tracker.top(second, 6000, true, 4, page, name)

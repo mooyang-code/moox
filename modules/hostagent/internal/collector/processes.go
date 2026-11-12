@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
@@ -24,7 +25,7 @@ type ProcStat struct {
 	Comm string
 	// StartTime 是进程启动时刻（开机以来的时钟滴答数），与 PID 一起区分“同一个 PID 换了进程”。
 	StartTime uint64
-	// CPUTicks 是用户态加内核态的累计 CPU 时间（时钟滴答数）。
+	// CPUTicks 是进程自己用户态加内核态的累计 CPU 时间（时钟滴答数），含全部线程，不含子进程。
 	CPUTicks uint64
 	RSSPages uint64
 }
@@ -53,10 +54,6 @@ func ParseProcStat(data []byte) (ProcStat, error) {
 	}{{utime, &user}, {stime, &system}, {starttime, &stat.StartTime}, {rss, &stat.RSSPages}} {
 		parsed, err := strconv.ParseUint(fields[item.index], 10, 64)
 		if err != nil {
-			// rss 在个别内核上可能是负数（内核线程记账），按 0 处理；其余字段出错就是格式不对。
-			if item.index == rss {
-				continue
-			}
 			return ProcStat{}, fmt.Errorf("proc stat: invalid field %d", item.index+3)
 		}
 		*item.value = parsed
@@ -65,18 +62,39 @@ func ParseProcStat(data []byte) (ProcStat, error) {
 	return stat, nil
 }
 
-// ProcessName 取命令行第一个参数的文件名；/proc/<pid>/comm 最多 15 个字符，长的进程名会被截断。
-// 内核线程没有命令行，用 comm。只取第一个参数：后面的参数里可能有密钥。
-func ProcessName(cmdline []byte, comm string) string {
-	first, _, _ := bytes.Cut(cmdline, []byte{0})
-	name := strings.TrimSpace(string(first))
-	if name != "" {
-		name = filepath.Base(name)
+// ProcessName 给出进程在告警和页面上的名字：优先用可执行文件的文件名（exe 是 /proc/<pid>/exe 指向的路径），
+// 读不到时（别的用户的进程、内核线程）用 comm。
+//
+// 不读 /proc/<pid>/cmdline，原因有两个：进程可以改写自己的命令行（sshd、postgres、nginx、Node 的 process.title 都会），
+// 改写后的内容可能带参数甚至密钥；而且内核读 cmdline 要拿目标进程的内存映射锁，目标进程卡住时会把采集一起卡住。
+// comm 同样可以被进程改写，所以两种来源都只取第一段、去掉控制字符：名字会进告警正文，不能带换行或排版符号以外的控制字符。
+func ProcessName(exe, comm string) string {
+	// 二进制被替换后（发布换版），链接目标末尾会带 " (deleted)"。
+	name := cleanProcessName(strings.TrimSuffix(exe, " (deleted)"))
+	if name == "" {
+		name = cleanProcessName(comm)
 	}
-	if name == "" || name == "." || name == "/" {
-		name = comm
+	if name == "" {
+		name = "?"
 	}
-	name = strings.ToValidUTF8(name, "?")
+	return name
+}
+
+func cleanProcessName(raw string) string {
+	fields := strings.Fields(raw)
+	if len(fields) == 0 {
+		return ""
+	}
+	name := strings.TrimSuffix(filepath.Base(fields[0]), ":")
+	if name == "." || name == "/" {
+		return ""
+	}
+	name = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == utf8.RuneError {
+			return '?'
+		}
+		return r
+	}, strings.ToValidUTF8(name, "?"))
 	if utf8.RuneCountInString(name) > maxProcessNameRune {
 		name = string([]rune(name)[:maxProcessNameRune])
 	}
@@ -97,7 +115,7 @@ type processTracker struct {
 //
 // cpuTotalDelta 是两次采样之间整机 CPU 时间的增量（/proc/stat 各项之和，时钟滴答数），与进程的 CPU 时间同一个单位，
 // 所以“进程增量 ÷ 整机增量 × 核数”就是占单核的百分比，不需要知道时钟频率。cpuDeltaOK 为 false（第一次采样、计数回绕）时只报内存。
-// name 只对入选的进程调用。
+// cores 是 /proc/stat 里的核数（全部在线的核，与整机增量同一口径）。name 只对入选的进程调用。
 func (t *processTracker) top(stats []ProcStat, cpuTotalDelta uint64, cpuDeltaOK bool, cores int, pageSize uint64, name func(ProcStat) string) []*hostmetricpb.ProcessMetric {
 	type candidate struct {
 		stat         ProcStat
@@ -162,4 +180,19 @@ func (t *processTracker) top(stats []ProcStat, cpuTotalDelta uint64, cpuDeltaOK 
 		return out[i].Pid < out[j].Pid
 	})
 	return out
+}
+
+// reset 丢掉上一次采样的基准。某一轮没能读到进程数据时调用：否则下一轮会拿两轮之前的进程 CPU 时间去除一轮的整机增量，
+// 算出的占用会偏大。
+func (t *processTracker) reset() { t.previous = nil }
+
+// CountCPUs 数 /proc/stat 里 cpu0、cpu1… 的行数，即全部在线的核。数不出来时返回 0，由调用方退回别的办法。
+func CountCPUs(procStat []byte) int {
+	count := 0
+	for _, line := range bytes.Split(procStat, []byte{'\n'}) {
+		if len(line) > 3 && bytes.HasPrefix(line, []byte("cpu")) && line[3] >= '0' && line[3] <= '9' {
+			count++
+		}
+	}
+	return count
 }
