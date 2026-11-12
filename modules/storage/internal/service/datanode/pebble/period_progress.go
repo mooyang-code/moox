@@ -348,7 +348,7 @@ func (s *Store) finalizePeriodLocked(ctx context.Context, exp DatasetPeriodExpec
 		return record, err
 	}
 	if written {
-		s.noteOutboxCommitted(1, now.UTC())
+		s.noteMarkerCommitted(now.UTC())
 	}
 	return finalized, nil
 }

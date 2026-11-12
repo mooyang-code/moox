@@ -627,22 +627,28 @@ func TestCarriedTimeAndJSONFieldsKeepTheirStorageType(t *testing.T) {
 func TestReadDatasetChangesMapsRequestAndResponse(t *testing.T) {
 	primary := &primaryFake{changesRsp: &storagepb.ReadDatasetChangesRsp{
 		RetInfo: successRet(), HasMore: true,
-		NextCursor: &storagepb.DatasetChangeCursor{NodeId: "n1", StoreId: "s1", Sequence: 9},
-		Changes: []*storagepb.DatasetChange{{Sequence: 8, DatasetId: "d", Ranges: []*storagepb.DatasetChangeRange{
-			{SubjectId: "BTC", Freq: "1m", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-01T00:05:00Z"},
-		}}},
+		NextCursor: &storagepb.DatasetChangeCursor{StoreId: "s1", Sequence: 9},
+		// 完成标记与记录型行条目被忽略，只留时间序列行条目。
+		Changes: []*storagepb.DatasetChange{
+			{Sequence: 6, DatasetId: "d", Marker: []byte("marker")},
+			{Sequence: 7, DatasetId: "d", Records: []*storagepb.RecordRowKey{{RecordId: "r", Version: "1"}}},
+			{Sequence: 8, DatasetId: "d", Ranges: []*storagepb.DatasetChangeRange{
+				{SubjectId: "BTC", Freq: "1m", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-01T00:05:00.5Z"},
+			}},
+		},
 	}}
 	c := NewClient(primary, &metadataFake{}, &commonpb.AuthInfo{AppId: "factor"})
-	got, err := c.ReadDatasetChanges(context.Background(), "crypto", "d", &ChangeCursor{NodeID: "n1", StoreID: "s1", Sequence: 7}, false, 100)
+	got, err := c.ReadDatasetChanges(context.Background(), "crypto", "d", &ChangeCursor{StoreID: "s1", Sequence: 7}, false, 100)
 	require.NoError(t, err)
 	require.Equal(t, uint32(100), primary.changeRequests[0].GetLimit())
 	require.Equal(t, uint64(7), primary.changeRequests[0].GetCursor().GetSequence())
 	require.False(t, primary.changeRequests[0].GetFromHead())
 	require.True(t, got.HasMore)
-	require.Equal(t, ChangeCursor{NodeID: "n1", StoreID: "s1", Sequence: 9}, got.Next)
+	require.Equal(t, ChangeCursor{StoreID: "s1", Sequence: 9}, got.Next)
 	require.Len(t, got.Changes, 1)
+	require.Equal(t, uint64(8), got.Changes[0].Sequence)
 	require.Equal(t, "BTC", got.Changes[0].Ranges[0].Subject)
-	require.Equal(t, time.Date(2026, 10, 1, 0, 5, 0, 0, time.UTC), got.Changes[0].Ranges[0].End)
+	require.Equal(t, time.Date(2026, 10, 1, 0, 5, 0, 500_000_000, time.UTC), got.Changes[0].Ranges[0].End)
 
 	_, err = c.ReadDatasetChanges(context.Background(), "crypto", "d", nil, true, 0)
 	require.NoError(t, err)

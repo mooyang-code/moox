@@ -64,7 +64,10 @@ type Store struct {
 	outboxPending           atomic.Int64
 	outboxRevision          atomic.Uint64
 	// outboxWake 在 outbox 有新条目提交后收到一个信号（容量 1，合并），转发协程据此立即发布，不等轮询。
-	outboxWake             chan struct{}
+	outboxWake chan struct{}
+	// changeSignal 在下一次变更日志提交时被关闭并换新，唤醒等待新变更的读取，见 noteChangeCommitted。
+	changeSignalMu         sync.Mutex
+	changeSignal           chan struct{}
 	outboxHintKnown        atomic.Bool
 	outboxHintMayHaveMore  atomic.Bool
 	outboxOldestEventNanos atomic.Int64
@@ -116,7 +119,7 @@ func Open(opts Options) (*Store, error) {
 		writeOptions = cpebble.NoSync
 	}
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1), datasetExists: opts.DatasetExists}
+	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1), changeSignal: make(chan struct{}), datasetExists: opts.DatasetExists}
 	store.startPeriodFinalizer()
 	store.startCacheStats(cacheStatsFirstDelay, cacheStatsInterval)
 	return store, nil

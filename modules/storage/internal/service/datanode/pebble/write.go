@@ -141,13 +141,14 @@ func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpser
 }
 
 // preparedRowsWrite 是一次写入在锁外准备好的部分：已写入字段、属性与行索引 KV 的 batch，构造并校验过、
-// 还没绑定 outbox 编号的事件，以及变更日志的时间范围。
+// 还没绑定 outbox 编号的事件，以及变更日志的时间范围与记录键。
 type preparedRowsWrite struct {
 	batch     *cpebble.Batch
 	spaceID   string
 	datasetID string
 	payload   []byte
 	ranges    []*pb.DatasetChangeRange
+	records   []*pb.RecordRowKey
 }
 
 // prepareRowsWrite 只读 Store 的静态配置，不读写 outbox、变更序号与 commit 标记，可以在 outboxMu 之外并发执行。
@@ -214,7 +215,7 @@ func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string,
 	if err != nil {
 		return fail(err)
 	}
-	return &preparedRowsWrite{batch: batch, spaceID: spaceID, datasetID: datasetID, payload: payload, ranges: changeRanges(rows)}, nil
+	return &preparedRowsWrite{batch: batch, spaceID: spaceID, datasetID: datasetID, payload: payload, ranges: changeRanges(rows), records: changeRecords(rows)}, nil
 }
 
 // commitRowsWriteLocked 在 outboxMu 内完成写入：分配 outbox 编号并绑定到事件、追加变更日志，
@@ -242,7 +243,7 @@ func (s *Store) commitRowsWriteLocked(ctx context.Context, prepared *preparedRow
 	if err := s.setNextOutboxID(batch, id+1); err != nil {
 		return nil, err
 	}
-	if err := s.stageChangeLog(batch, prepared.spaceID, prepared.datasetID, prepared.ranges, time.Now()); err != nil {
+	if err := s.stageRowsChangeLocked(batch, prepared.spaceID, prepared.datasetID, prepared.ranges, prepared.records); err != nil {
 		return nil, err
 	}
 	if decorate != nil {
@@ -255,6 +256,7 @@ func (s *Store) commitRowsWriteLocked(ctx context.Context, prepared *preparedRow
 	}
 	entry := &OutboxEntry{ID: id, Data: payload, CreatedAt: time.Now().UTC()}
 	s.noteOutboxCommitted(1, entry.CreatedAt)
+	s.noteChangeCommitted()
 	return []*OutboxEntry{entry}, nil
 }
 

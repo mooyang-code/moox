@@ -70,9 +70,9 @@ type Syncer struct {
 
 // pulledSpan 是一次拉取覆盖的区间 [from, to)：拉取读到的行至少反映了序号不超过 h0 的全部变更。
 type pulledSpan struct {
-	from, to    time.Time
-	h0          uint64
-	node, store string
+	from, to time.Time
+	h0       uint64
+	store    string
 }
 
 // maxPulledPerSubject 限制每个标的保留的拉取记录数（跟进正常推进时每次都会清理，这只是防止跟进长期停摆时无限增长）。
@@ -102,7 +102,7 @@ func (s *Syncer) coveredByPull(src seriesstore.Source, subject string, seq uint6
 	s.pulledMu.Lock()
 	defer s.pulledMu.Unlock()
 	for _, sp := range s.pulled[src][subject] {
-		if sp.node == cursor.NodeID && sp.store == cursor.StoreID && sp.h0 >= seq && !sp.from.After(from) && !sp.to.Before(to) {
+		if sp.store == cursor.StoreID && sp.h0 >= seq && !sp.from.After(from) && !sp.to.Before(to) {
 			return true
 		}
 	}
@@ -117,7 +117,7 @@ func (s *Syncer) prunePulled(src seriesstore.Source, cursor storageio.ChangeCurs
 	for subject, list := range bySubject {
 		kept := list[:0]
 		for _, sp := range list {
-			if sp.node == cursor.NodeID && sp.store == cursor.StoreID && sp.h0 > cursor.Sequence {
+			if sp.store == cursor.StoreID && sp.h0 > cursor.Sequence {
 				kept = append(kept, sp)
 			}
 		}
@@ -222,7 +222,7 @@ func (sp *StagedPull) Commit(ctx context.Context, writes []seriesstore.SubjectWr
 	}
 	if sp.h0 != nil {
 		for _, w := range writes {
-			sp.syncer.notePulled(sp.spec.Source, w.Subject, pulledSpan{from: w.From, to: sp.end, h0: sp.h0.Sequence, node: sp.h0.NodeID, store: sp.h0.StoreID})
+			sp.syncer.notePulled(sp.spec.Source, w.Subject, pulledSpan{from: w.From, to: sp.end, h0: sp.h0.Sequence, store: sp.h0.StoreID})
 		}
 	}
 	return out, nil
@@ -377,19 +377,19 @@ func (s *Syncer) PullStagedTags(ctx context.Context, spec Spec, subjects []strin
 // ---------------------------------------------------------------- 变更日志
 
 func encodeCursor(c storageio.ChangeCursor) []byte {
-	return []byte(c.NodeID + "\x00" + c.StoreID + "\x00" + strconv.FormatUint(c.Sequence, 10))
+	return []byte(c.StoreID + "\x00" + strconv.FormatUint(c.Sequence, 10))
 }
 
 func decodeCursor(raw []byte) (storageio.ChangeCursor, error) {
 	parts := strings.Split(string(raw), "\x00")
-	if len(parts) != 3 {
+	if len(parts) != 2 {
 		return storageio.ChangeCursor{}, errors.New("同步位点已损坏")
 	}
-	seq, err := strconv.ParseUint(parts[2], 10, 64)
+	seq, err := strconv.ParseUint(parts[1], 10, 64)
 	if err != nil {
 		return storageio.ChangeCursor{}, errors.New("同步位点已损坏")
 	}
-	return storageio.ChangeCursor{NodeID: parts[0], StoreID: parts[1], Sequence: seq}, nil
+	return storageio.ChangeCursor{StoreID: parts[0], Sequence: seq}, nil
 }
 
 // Cursor 返回数据源当前的同步位点。

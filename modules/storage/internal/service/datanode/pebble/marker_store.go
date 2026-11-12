@@ -10,6 +10,7 @@ import (
 	"time"
 
 	cpebble "github.com/cockroachdb/pebble"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
@@ -100,15 +101,16 @@ func (s *Store) AppendDatasetMarker(ctx context.Context, raw []byte) (string, er
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return "", err
 	}
-	s.noteOutboxCommitted(1, time.Now().UTC())
+	s.noteMarkerCommitted(time.Now().UTC())
 	return message.GetEventId(), nil
 }
 
 // stageDatasetMarkerLocked 是两个标记写入点（写入方上报的 AppendDatasetMarker、账本判定的 finalizePeriodLocked）
-// 共用的写入：把标记记录与一条 Outbox 条目放进调用方的 batch。key 为 nil 表示同步点，不存标记记录、只进 Outbox。
+// 共用的写入：把标记记录、一条 Outbox 条目和一条变更日志的完成标记条目（内嵌整条标记消息）放进调用方的 batch。
+// key 为 nil 表示同步点，不存标记记录、不进变更日志，只进 Outbox。
 // key 上已有内容相同的标记时什么都不写、返回 written=false；内容不同返回 ConflictError。
-// 它从数据库（不是 batch）读下一个 Outbox 编号，所以传入的 batch 里不能已有 Outbox 或变更日志条目，否则编号会撞车。
-// 调用方持有 outboxMu，负责提交 batch，并在提交成功且 written 时调 noteOutboxCommitted。
+// 它从数据库（不是 batch）读下一个 Outbox 编号与变更序号，所以传入的 batch 里不能已有 Outbox 或变更日志条目，否则编号会撞车。
+// 调用方持有 outboxMu，负责提交 batch，并在提交成功且 written 时调 noteMarkerCommitted。
 func (s *Store) stageDatasetMarkerLocked(batch *cpebble.Batch, key []byte, message *eventpb.EventMessage, raw []byte) (bool, error) {
 	if key != nil {
 		existing, found, err := s.readMarkerRecord(key)
@@ -140,7 +142,18 @@ func (s *Store) stageDatasetMarkerLocked(batch *cpebble.Batch, key []byte, messa
 	if err := s.setNextOutboxID(batch, nextID+1); err != nil {
 		return false, err
 	}
+	if key != nil {
+		if err := s.stageChangeLocked(batch, &pb.DatasetChange{SpaceId: message.GetSpaceId(), DatasetId: message.GetSubjectId(), Marker: raw}); err != nil {
+			return false, err
+		}
+	}
 	return true, nil
+}
+
+// noteMarkerCommitted 在含标记的 batch 提交成功后更新 Outbox 提示，并唤醒等待新变更的读取。
+func (s *Store) noteMarkerCommitted(at time.Time) {
+	s.noteOutboxCommitted(1, at)
+	s.noteChangeCommitted()
 }
 
 // GetDatasetPeriodCompletedMarker 按“触发事件 + 周期”查询写入方上报的周期完成。

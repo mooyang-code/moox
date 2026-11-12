@@ -31,7 +31,7 @@ type PrimaryStoreService interface {
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
 
 	CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq) (*CountTimeSeriesRowsRsp, error)
-	// ReadDatasetChanges ReadDatasetChanges 按序读取持久化的行变更日志，因子机的本地副本据此同步修正。
+	// ReadDatasetChanges ReadDatasetChanges 按序读取持久化的变更日志（行写入与完成标记）：因子机的本地副本据此同步修正，View 据此跟随写入。
 	ReadDatasetChanges(ctx context.Context, req *ReadDatasetChangesReq) (*ReadDatasetChangesRsp, error)
 
 	ReportDatasetPeriodCompleted(ctx context.Context, req *ReportDatasetPeriodCompletedReq) (*ReportDatasetPeriodCompletedRsp, error)
@@ -324,7 +324,7 @@ func (s *UnimplementedPrimaryStore) CountTimeSeriesRows(ctx context.Context, req
 	return nil, errors.New("rpc CountTimeSeriesRows of service PrimaryStore is not implemented")
 }
 
-// ReadDatasetChanges ReadDatasetChanges 按序读取持久化的行变更日志，因子机的本地副本据此同步修正。
+// ReadDatasetChanges ReadDatasetChanges 按序读取持久化的变更日志（行写入与完成标记）：因子机的本地副本据此同步修正，View 据此跟随写入。
 func (s *UnimplementedPrimaryStore) ReadDatasetChanges(ctx context.Context, req *ReadDatasetChangesReq) (*ReadDatasetChangesRsp, error) {
 	return nil, errors.New("rpc ReadDatasetChanges of service PrimaryStore is not implemented")
 }
@@ -361,7 +361,7 @@ type PrimaryStoreClientProxy interface {
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
 
 	CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq, opts ...client.Option) (rsp *CountTimeSeriesRowsRsp, err error)
-	// ReadDatasetChanges ReadDatasetChanges 按序读取持久化的行变更日志，因子机的本地副本据此同步修正。
+	// ReadDatasetChanges ReadDatasetChanges 按序读取持久化的变更日志（行写入与完成标记）：因子机的本地副本据此同步修正，View 据此跟随写入。
 	ReadDatasetChanges(ctx context.Context, req *ReadDatasetChangesReq, opts ...client.Option) (rsp *ReadDatasetChangesRsp, err error)
 
 	ReportDatasetPeriodCompleted(ctx context.Context, req *ReportDatasetPeriodCompletedReq, opts ...client.Option) (rsp *ReportDatasetPeriodCompletedRsp, err error)

@@ -158,7 +158,7 @@ service PrimaryStore {
   rpc ReadRows(PrimaryReadRowsReq) returns (PrimaryReadRowsRsp);
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
   rpc CountTimeSeriesRows(CountTimeSeriesRowsReq) returns (CountTimeSeriesRowsRsp);
-  // ReadDatasetChanges 按序读取持久化的行变更日志，因子机的本地副本据此同步修正。
+  // ReadDatasetChanges 按序读取持久化的变更日志（行写入与完成标记）：因子机的本地副本据此同步修正，View 据此跟随写入。
   rpc ReadDatasetChanges(ReadDatasetChangesReq) returns (ReadDatasetChangesRsp);
   rpc ReportDatasetPeriodCompleted(ReportDatasetPeriodCompletedReq) returns (ReportDatasetPeriodCompletedRsp);
   rpc AppendDatasetSyncPoint(AppendDatasetSyncPointReq) returns (AppendDatasetSyncPointRsp);

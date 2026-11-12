@@ -22,7 +22,7 @@ func newRangeStore(t *testing.T) *rangeStore {
 	s := &rangeStore{hookStore: newHookStore(t)}
 	s.readChanges = func(_ context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error) {
 		s.changes = req
-		return &pb.ReadDatasetChangesRsp{NextCursor: &pb.DatasetChangeCursor{NodeId: "n", StoreId: "s", Sequence: 7}}, nil
+		return &pb.ReadDatasetChangesRsp{NextCursor: &pb.DatasetChangeCursor{StoreId: "s", Sequence: 7}}, nil
 	}
 	s.readSeries = func(_ context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 		s.read = req
@@ -192,7 +192,7 @@ func TestReadRowsOmitsMissingRowsAndKeepsRequestOrder(t *testing.T) {
 func TestReadDatasetChangesReachesTheStore(t *testing.T) {
 	node := newRangeStore(t)
 	svc := newRangeService(t, node)
-	cursor := &pb.DatasetChangeCursor{NodeId: "n", StoreId: "s", Sequence: 3}
+	cursor := &pb.DatasetChangeCursor{StoreId: "s", Sequence: 3}
 	rsp, err := svc.ReadDatasetChanges(context.Background(), &pb.ReadDatasetChangesReq{
 		AuthInfo: &pb.AuthInfo{AppId: "factor", AppKey: "key"}, SpaceId: "space", DatasetId: "market", Cursor: cursor, Limit: 100,
 	})

@@ -51,7 +51,7 @@ func TestConcurrentWritesKeepOutboxIDsAndChangeSequencesInCommitOrder(t *testing
 	}
 
 	// 变更序号恰好是 1..N，且每条变更对应的标的与 outbox 编号同序。
-	got, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: &pb.DatasetChangeCursor{NodeId: "node-1", StoreId: s.sourceStoreID}, Limit: 2000})
+	got, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: &pb.DatasetChangeCursor{StoreId: s.sourceStoreID}, Limit: 2000})
 	require.NoError(t, err)
 	require.False(t, got.GetGap())
 	require.Len(t, got.GetChanges(), writers*perWriter)

@@ -9,9 +9,8 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// ChangeCursor 是 Storage 行变更日志的读取位点；序号只在 (NodeID, StoreID) 内可比较。
+// ChangeCursor 是 Storage 变更日志的读取位点；序号只在同一个 StoreID 内可比较。
 type ChangeCursor struct {
-	NodeID   string
 	StoreID  string
 	Sequence uint64
 }
@@ -24,7 +23,7 @@ type ChangeRange struct {
 	End     time.Time
 }
 
-// Change 是一次写入对一个数据集的变更。
+// Change 是一次时间序列行写入对一个数据集的变更。
 type Change struct {
 	Sequence  uint64
 	DatasetID string
@@ -51,7 +50,7 @@ func (c *Client) ReadDatasetChanges(ctx context.Context, spaceID, datasetID stri
 	}
 	req := &storagepb.ReadDatasetChangesReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, FromHead: fromHead, Limit: uint32(max(limit, 0))}
 	if cursor != nil {
-		req.Cursor = &storagepb.DatasetChangeCursor{NodeId: cursor.NodeID, StoreId: cursor.StoreID, Sequence: cursor.Sequence}
+		req.Cursor = &storagepb.DatasetChangeCursor{StoreId: cursor.StoreID, Sequence: cursor.Sequence}
 	}
 	rsp, err := c.primary.ReadDatasetChanges(ctx, req)
 	if err != nil {
@@ -65,9 +64,13 @@ func (c *Client) ReadDatasetChanges(ctx context.Context, spaceID, datasetID stri
 	}
 	out := Changes{HasMore: rsp.GetHasMore(), Gap: rsp.GetGap()}
 	if next := rsp.GetNextCursor(); next != nil {
-		out.Next = ChangeCursor{NodeID: next.GetNodeId(), StoreID: next.GetStoreId(), Sequence: next.GetSequence()}
+		out.Next = ChangeCursor{StoreID: next.GetStoreId(), Sequence: next.GetSequence()}
 	}
 	for _, change := range rsp.GetChanges() {
+		// 只跟进时间序列行条目；完成标记与记录型行条目不影响本地 K 线（游标照样随 Next 越过它们）。
+		if len(change.GetRanges()) == 0 {
+			continue
+		}
 		item := Change{Sequence: change.GetSequence(), DatasetID: change.GetDatasetId()}
 		for _, r := range change.GetRanges() {
 			start, startErr := time.Parse(time.RFC3339Nano, r.GetStartTime())

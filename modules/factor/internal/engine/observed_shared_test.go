@@ -73,7 +73,7 @@ func (s *sharedStorage) ReadWindow(_ context.Context, req storageio.ReadRequest)
 }
 
 func (s *sharedStorage) ReadDatasetChanges(_ context.Context, _, _ string, cursor *storageio.ChangeCursor, _ bool, _ int) (storageio.Changes, error) {
-	head := storageio.ChangeCursor{NodeID: "n1", StoreID: "s1"}
+	head := storageio.ChangeCursor{StoreID: "s1"}
 	if cursor != nil {
 		head = *cursor
 	}
