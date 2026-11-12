@@ -357,7 +357,7 @@ var functionList = []*Function{
 	// 时序：筹码分布（用最近 n 根的开高低收与换手率推算持仓成本的分布，价格要用复权价）
 	{Name: "chip_profit", Category: CategoryTimeSeries, Args: append(chipSeries(), chipWindow),
 		Result: ResultNumber, Lookback: "各参数回看的最大值+n−1", back: windowBack,
-		Doc:     "筹码分布的获利比例（0～1）：最近 n 根推算出的持仓里，成本不高于当根收盘价的占比。turnover 是换手率（百分比）；价格用复权价；窗口内价格没有波动或全程没有换手时为 NaN",
+		Doc:     "筹码分布的获利比例（0～1）：最近 n 根推算出的持仓里，成本不高于当根收盘价的占比。turnover 是换手率（百分比）；价格用复权价；窗口内价格没有波动、全程没有换手、价格不是正数或最高价低于最低价时为 NaN",
 		Example: "chip_profit(open, high, low, close, turnover_rate, 120)"},
 	{Name: "chip_cost", Category: CategoryTimeSeries,
 		Args:   append(chipSeries(), chipWindow, ArgSpec{Name: "q", Kind: ArgConstant, Min: 0.01, Max: 0.99}),

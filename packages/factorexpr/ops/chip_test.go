@@ -97,6 +97,53 @@ func TestChipBarBetweenGridPoints(t *testing.T) {
 	}
 }
 
+// 振幅不到一档的 K 线：加入的量仍然等于 换手率/档宽，既不放大也不丢。
+func TestChipNarrowBars(t *testing.T) {
+	// 档宽 1：价格档是 10、11、…、159。
+	wide := [5]float64{10, 159, 10, 100, 0}
+	cases := map[string]struct {
+		bar   [5]float64
+		index int
+	}{
+		// 只碰到最高档，而最高档正好是三角形的端点（高度为 0）：放进均价所在的档。
+		"贴着窗口最高价": {[5]float64{158.99, 159, 158.98, 158.99, 30}, 148},
+		// 跨过一个档点：全部放进这一档。
+		"跨过一个档点": {[5]float64{20.02, 20.05, 19.95, 20, 30}, 10},
+	}
+	for name, c := range cases {
+		var index int
+		total := chipBars{wide, c.bar}.value(func(grid []float64, total, _, _, _ float64) float64 {
+			for j, chips := range grid {
+				if chips > 0 {
+					index = j
+				}
+			}
+			return total
+		})
+		if !near(total, 0.3, 1e-12) || index != c.index {
+			t.Errorf("%s：筹码合计 = %v、所在档 = %d，应为 0.3、第 %d 档", name, total, index, c.index)
+		}
+	}
+}
+
+// 每根加入的量都等于 换手率/档宽：随机 K 线逐根累计的结果与按定义递推的总量一致。
+func TestChipTotalMatchesTurnover(t *testing.T) {
+	rng := rand.New(rand.NewSource(13))
+	for round := 0; round < 20; round++ {
+		bars := randomChipBars(rng, 120)
+		_, high, low, _, turnover := bars.columns()
+		width := (windowMax(high) - windowMin(low)) / (chipBuckets - 1)
+		want := 0.0
+		for _, rate := range turnover {
+			want = want*(1-rate/100) + rate/100
+		}
+		total := bars.value(func(_ []float64, total, _, _, _ float64) float64 { return total })
+		if !near(total*width, want, 1e-9) {
+			t.Fatalf("第 %d 组：各档之和 × 档宽 = %v，按换手率递推应为 %v", round, total*width, want)
+		}
+	}
+}
+
 func TestChipInvalidWindows(t *testing.T) {
 	cases := map[string]chipBars{
 		"价格没有波动":   {flat(10, 5), flat(10, 5)},
