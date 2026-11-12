@@ -382,7 +382,7 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 					// 分块执行完（成功或失败）后立刻补位认领下一块，不等下一次定时调度：
 					// 否则吞吐被限制为每次调度一批（每分钟约 5 块），大窗口要排很久。
 					// 退回名额、结果不明的分块不触发补位，避免函数未就绪时空转。
-					if b.runChunk(b.baseContext(), spaceID, chunk) && b.Refill {
+					if b.runChunk(b.baseContext(), spaceID, chunk, job.Kind == store.BackfillKindForce) && b.Refill {
 						if err := b.Tick(b.baseContext(), spaceID); err != nil {
 							log.WarnContextf(b.baseContext(), "collector backfill refill failed space=%s: %v", spaceID, err)
 						}
@@ -546,8 +546,9 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 	}, nil
 }
 
-// runChunk 调用补采函数执行一个分块，随后复查该块的缺口。
-func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk) (finished bool) {
+// runChunk 调用补采函数执行一个分块，随后复查该块的缺口。force 表示分块属于强制重拉作业：函数报失败时退回重试
+// （见下文），而不是直接记失败。
+func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk, force bool) (finished bool) {
 	fail := func(err error) {
 		finished = true
 		log.WarnContextf(ctx, "collector backfill chunk failed space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
@@ -628,8 +629,19 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 	}
 	if success, _ := result.Result["success"].(bool); !success && !sourceReportedEmpty(result) {
 		// 函数只因“行情源没有已收盘 K 线”失败时不算执行失败，继续走下面的复查与缺失判定。
-		fail(fmt.Errorf("function reported failure: code=%d message=%q result=%v", result.Code, result.Message, result.Result))
-		return
+		failure := fmt.Errorf("function reported failure: code=%d message=%q result=%v", result.Code, result.Message, result.Result)
+		if !force {
+			fail(failure)
+			return
+		}
+		// 强制重拉的行已经在库里，失败后没有缺口可让自动补采重新发现：退回待执行，由后面的认领重试，
+		// 尝试次数照常累计，超过 maxChunkAttempts 后下一次认领时记失败。这里不触发补位（返回 false），
+		// 重试等到同一空间别的分块执行完、或下一轮对账（每分钟一次）才被认领，不在原地连续重试。
+		log.WarnContextf(ctx, "collector forced backfill chunk failed and is requeued space=%s chunk=%s attempt=%d: %v", spaceID, chunk.ChunkID, chunk.Attempts, failure)
+		if err := b.Store.RequeueChunk(ctx, chunk.ID, chunk.Attempts, chunk.Missing, failure.Error()); err != nil {
+			log.WarnContextf(ctx, "collector backfill chunk requeue failed chunk=%s: %v", chunk.ChunkID, err)
+		}
+		return false
 	}
 	// 复查带上 BeforeFirstPlan：强制重拉早于计划生效点的分块要真的读回来确认；范围在计划内的分块不受影响。
 	check, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, DatasetID: chunk.DatasetID, SubjectID: chunk.SubjectID, SeriesTag: chunk.SeriesTag, From: chunk.From, To: chunk.To, BeforeFirstPlan: true})
