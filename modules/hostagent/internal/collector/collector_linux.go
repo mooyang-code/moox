@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,11 +31,15 @@ type Collector struct {
 	prevDisk   map[string]DiskStat
 	prevNetAt  time.Time
 	prevNet    map[string]NetworkStat
+	// listPIDs 列出 /proc 下的进程号；processes 记住上一次采样的进程 CPU 时间。
+	listPIDs  func() ([]int, error)
+	readLink  func(string) (string, error)
+	processes processTracker
 }
 
 func New() *Collector {
 	return &Collector{
-		readFile: os.ReadFile, collectFS: filesystemMetrics, now: time.Now,
+		readFile: os.ReadFile, collectFS: filesystemMetrics, now: time.Now, listPIDs: listProcPIDs, readLink: os.Readlink,
 		prevDisk: map[string]DiskStat{}, prevNet: map[string]NetworkStat{},
 	}
 }
@@ -49,7 +54,7 @@ func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []
 	now := c.now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	statuses := make([]*hostmetricpb.CollectorStatus, 0, 5)
+	statuses := make([]*hostmetricpb.CollectorStatus, 0, 6)
 	read := func(name, path string) ([]byte, error) {
 		b, err := c.readFile(path)
 		if err != nil {
@@ -78,12 +83,15 @@ func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []
 	}
 	totalCPU := cpuTotal(currentCPU)
 	busyCPU := cpuBusy(currentCPU)
+	// 两次采样之间整机 CPU 时间的增量，进程的 CPU 占用按它折算。
+	var cpuDelta uint64
 	if c.prevCPUOK {
 		previousTotal := cpuTotal(c.prevCPU)
 		previousBusy := cpuBusy(c.prevCPU)
 		if cpuMonotonic(currentCPU, c.prevCPU) && totalCPU >= previousTotal && busyCPU >= previousBusy && totalCPU > previousTotal {
 			snap.Cpu.UsagePercent = float64(busyCPU-previousBusy) * 100 / float64(totalCPU-previousTotal)
 			snap.Cpu.UsageAvailable = true
+			cpuDelta = totalCPU - previousTotal
 		}
 	}
 	c.prevCPU, c.prevCPUOK = currentCPU, true
@@ -173,6 +181,15 @@ func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []
 		snap.Filesystems = fs
 		statuses = append(statuses, status("filesystem", nil))
 	}
+	// 进程排行只是告警时的辅助信息：读不到就空着，不影响其他指标。
+	// 核数取 /proc/stat 里的行数：整机增量汇总的是全部在线的核，runtime.NumCPU 在限制了 CPU 亲和性时会偏小。
+	cores := CountCPUs(cpuData)
+	if cores == 0 {
+		cores = runtime.NumCPU()
+	}
+	processes, processErr := c.topProcesses(cpuDelta, cores)
+	snap.TopProcesses = processes
+	statuses = append(statuses, status("process", processErr))
 	sort.Slice(snap.Disks, func(i, j int) bool { return snap.Disks[i].Device < snap.Disks[j].Device })
 	sort.Slice(snap.Networks, func(i, j int) bool { return snap.Networks[i].Device < snap.Networks[j].Device })
 	sort.Slice(snap.Filesystems, func(i, j int) bool { return snap.Filesystems[i].Mountpoint < snap.Filesystems[j].Mountpoint })
@@ -269,4 +286,52 @@ func excludedFS(fs string) bool {
 		return true
 	}
 	return strings.HasPrefix(fs, "nfs") || strings.HasPrefix(fs, "fuse")
+}
+
+// topProcesses 读 /proc 下每个进程的 stat，返回 CPU 与内存占用最高的几个。
+// 采样期间退出的进程读不到是正常的，跳过；只对入选的进程再读一次 exe 链接取进程名。
+// 这里只用 stat 和 readlink：都不需要目标进程的内存映射锁，目标进程卡住时不会把采集一起卡住。
+func (c *Collector) topProcesses(cpuDelta uint64, cores int) ([]*hostmetricpb.ProcessMetric, error) {
+	pids, err := c.listPIDs()
+	if err != nil {
+		c.processes.reset()
+		return nil, fmt.Errorf("process: %w", err)
+	}
+	stats := make([]ProcStat, 0, len(pids))
+	for _, pid := range pids {
+		data, err := c.readFile("/proc/" + strconv.Itoa(pid) + "/stat")
+		if err != nil {
+			continue
+		}
+		stat, err := ParseProcStat(data)
+		if err != nil {
+			continue
+		}
+		stats = append(stats, stat)
+	}
+	if len(stats) == 0 && len(pids) > 0 {
+		c.processes.reset()
+		return nil, errors.New("process: no readable /proc/<pid>/stat")
+	}
+	name := func(stat ProcStat) string {
+		// 别的用户的进程、内核线程读不到 exe，退回 comm。
+		exe, _ := c.readLink("/proc/" + strconv.Itoa(stat.PID) + "/exe")
+		return ProcessName(exe, stat.Comm)
+	}
+	return c.processes.top(stats, cpuDelta, cores, uint64(os.Getpagesize()), name), nil
+}
+
+// listProcPIDs 列出 /proc 下以数字命名的目录。
+func listProcPIDs() ([]int, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	pids := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		if pid, err := strconv.Atoi(entry.Name()); err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids, nil
 }

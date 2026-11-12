@@ -20,6 +20,19 @@ message HostSnapshot {
   repeated DiskMetric disks = 4;
   repeated NetworkMetric networks = 5;
   repeated CollectorStatus collectors = 6;
+  // 占用最高的进程：CPU 前 5 与内存前 5 合并去重，最多 10 个。只用于告警与页面展示，不写入 Storage。
+  repeated ProcessMetric top_processes = 7;
+}
+// ProcessMetric 是一个进程在两次采样之间的 CPU 占用与当前常驻内存。
+message ProcessMetric {
+  uint32 pid = 1;
+  // 进程名：可执行文件的文件名，读不到时是内核里的进程名（comm，用户进程最多 15 个字符，只取空白之前的第一段）；不带参数和控制字符。
+  string name = 2;
+  // 占单核的百分比，与 top 一致：340 表示占了 3.4 个核。
+  double cpu_percent = 3;
+  // 进程在上一次采样时还不存在、或整机 CPU 采样不可比时为 false。
+  bool cpu_available = 4;
+  uint64 rss_bytes = 5;
 }
 message CpuMetric {
   uint32 logical_cores = 1;
