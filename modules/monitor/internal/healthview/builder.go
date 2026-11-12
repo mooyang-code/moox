@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/events"
 )
 
 type Builder struct {
@@ -64,7 +65,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (*Overview, error) {
 	active := make(map[incidentKey]bool)
 	for _, alert := range out.Alerts {
 		// 主机失联由主机事实投影，不在告警状态表里。
-		active[incidentKey{space: hostmetrics.SpaceID, check: hostmetrics.PresenceCheckID(alert.Object.AgentId)}] = true
+		active[incidentKey{space: events.SystemSpaceID, check: hostmetrics.PresenceCheckID(alert.Object.AgentId)}] = true
 	}
 	if b.Alerts != nil {
 		states, err := b.Alerts.ListEnabledFiringStates(ctx, spaceID, 1501)
@@ -115,7 +116,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (*Overview, error) {
 
 // decorateHostThresholds 给主机补上 CPU、内存、磁盘的告警阈值，页面据此画出阈值刻度。
 func (b Builder) decorateHostThresholds(ctx context.Context, hosts []*pb.HealthHost) error {
-	rules, err := b.Alerts.ListRules(ctx, hostmetrics.SpaceID)
+	rules, err := b.Alerts.ListRules(ctx, events.SystemSpaceID)
 	if err != nil {
 		return err
 	}

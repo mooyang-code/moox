@@ -23,6 +23,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -97,7 +98,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		defer func() { cancel(); presenceFailureMu.Unlock() }()
 		err := runtime.Repositories.Alerts.CreateEvent(auditCtx, &domain.AlertEvent{
 			EventID:   uuid.NewString(),
-			SpaceID:   hostmetrics.SpaceID,
+			SpaceID:   events.SystemSpaceID,
 			RuleID:    hostmetrics.PresenceRuleID,
 			CheckID:   hostmetrics.PresenceCheckID(transition.AgentID),
 			EventType: domain.AlertEventSendFailed,
@@ -129,33 +130,26 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	observation := func(now time.Time) observationState { return runtime.observationState(cfg.Observability.Enabled, now) }
 	hostSilence.SetSuspended(func(now time.Time) bool { return observation(now).Suspended })
 
-	var hostStore *hostmetrics.Store
-	var hostReader *hostmetrics.StorageReader
-	var hostGate *hostmetrics.StorageGate
-	var hostRuleCache *hostmetrics.RuleCache
-	if cfg.Metrics.HostStorage.Enabled {
-		hostAccess, hostMetadata := runtime.StorageGateway, runtime.StorageGateway
-		hostWriter := hostmetrics.NewStorageWriter(hostAccess, cfg.Metrics.HostStorage)
-		hostReader = hostmetrics.NewStorageReader(hostAccess, cfg.Metrics.HostStorage)
-		hostGate = hostmetrics.NewStorageGate(hostMetadata, cfg.Metrics.HostStorage)
-		hostStore = hostmetrics.NewStore(hostWriter, hostReader)
-		hostStore.SetStorageReady(hostGate.Ready)
-		hostRuleCache, err = hostmetrics.NewRuleCache(hostmetrics.RuleCacheOptions{Repository: runtime.Repositories.Alerts, RefreshInterval: cfg.Metrics.HostStorage.RuleRefreshInterval})
-		if err != nil {
-			_ = runtime.Close()
-			return nil, err
-		}
-		runtime.HostRuleCache = hostRuleCache
-		if err := hostRuleCache.Start(runtimeCtx); err != nil {
-			log.WarnContextf(ctx, "host alert rule cache unavailable: %v", err)
-		}
-		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{
-			Cache: hostRuleCache, Repository: runtime.Repositories.Alerts,
-			Notification: runtime.alertSender,
-		})
-	} else {
-		hostStore = hostmetrics.NewStore(nil, nil)
+	hostSamples, err := store.WithDatabase(mgr, hostmetrics.NewSampleStore)
+	if err != nil {
+		_ = runtime.Close()
+		return nil, err
 	}
+	runtime.HostSamples = hostSamples
+	hostStore := hostmetrics.NewStore(hostSamples)
+	hostRuleCache, err := hostmetrics.NewRuleCache(hostmetrics.RuleCacheOptions{Repository: runtime.Repositories.Alerts})
+	if err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	runtime.HostRuleCache = hostRuleCache
+	if err := hostRuleCache.Start(runtimeCtx); err != nil {
+		log.WarnContextf(ctx, "host alert rule cache unavailable: %v", err)
+	}
+	hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{
+		Cache: hostRuleCache, Repository: runtime.Repositories.Alerts,
+		Notification: runtime.alertSender,
+	})
 	hostStore.SetRegistry(hostRegistry)
 	hostStore.SetPresenceTransitionSink(presenceSink)
 	hostStore.SetPresenceTransitionFailureSink(presenceNotificationFailure)
@@ -176,7 +170,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		metricsQuery = monmetrics.NewQueryService(metricStores.Messages, storageMetadata)
 		metricsQuery.Catalog().SetNoDataAfter(time.Duration(maxInt(cfg.Metrics.NoDataIntervals, 1)) * monmetrics.ServiceReportInterval)
 	}
-	if err := registerHealth(runtimeCtx, s, cfg, runtime, hostStore); err != nil {
+	if err := registerHealth(runtimeCtx, s, cfg, runtime); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
@@ -217,10 +211,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	syncSystem := monitorSyncFunc(runtimeCtx, s, cfg, runtime)
-	hostReady := func() bool { return false }
-	if hostGate != nil {
-		hostReady = hostGate.Ready
-	}
 	datasetHealthPolicy, policyErr := loadMonitorDatasetHealthPolicy(cfg)
 	if policyErr != nil {
 		_ = runtime.Close()
@@ -277,7 +267,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return errors.Join(marketErr, freshnessErr)
 	}
 	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold, MarketFetchThresholds: marketFetchThresholds, Inventory: inventorySource(klineInventory), Datasets: archivableDatasets(storageMetadata)}, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
-	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, doctorContext, health)
+	registerMonitorService(s, cfg, runtime, hostStore, probeRunner, resultHook, syncSystem, metricsQuery, doctorContext, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()
@@ -293,7 +283,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	startHostStorageGate(runtimeCtx, cfg, runtime, hostGate)
 	startObservabilityConsumer(runtimeCtx, cfg, runtime, hostStore, klineInventory)
 	if done := ctx.Done(); done != nil {
 		go func() {

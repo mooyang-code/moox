@@ -724,9 +724,9 @@ func TestRuntimeLinuxStartupFailureNamesTheCause(t *testing.T) {
 	require.Equal(t, failure.TargetPortInUse, got)
 	require.Contains(t, detail, "port=12926")
 
-	got, detail = code(state.startupFailure(component, false, []string{"host_storage_schema_ready"}, info.Size()))
+	got, detail = code(state.startupFailure(component, false, []string{"evaluation_ready"}, info.Size()))
 	require.Equal(t, failure.TargetNotReady, got)
-	require.Contains(t, detail, "not_ready=host_storage_schema_ready")
+	require.Contains(t, detail, "not_ready=evaluation_ready")
 
 	many := strings.Split(strings.Repeat("trpc.moox.some.ServiceNameThatIsLong,", 30), ",")
 	_, detail = code(state.startupFailure(component, false, many, info.Size()))

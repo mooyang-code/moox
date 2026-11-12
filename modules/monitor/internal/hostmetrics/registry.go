@@ -67,8 +67,8 @@ type RegistryAgent struct {
 	StaleSeconds int64
 }
 
-// Registry persists only host presence. Full snapshots and history remain in
-// Storage; this small SQLite table is enough to survive Monitor restarts.
+// Registry 只持久化主机在线登记，快照历史在 t_monitor_host_samples（SampleStore）里；
+// 这张小表足以让 Monitor 重启后恢复在线状态。
 type Registry struct {
 	db *gorm.DB
 	mu sync.Mutex

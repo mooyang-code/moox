@@ -27,7 +27,7 @@ const (
 	DelistScopePaperOnly = "PAPER_ONLY"
 
 	// DelistSystemSpaceID 是下架事件的信封空间：下架是交易所层面的事实，不属于任何业务空间，沿用系统事件的空间。
-	DelistSystemSpaceID = "mooxsys"
+	DelistSystemSpaceID = SystemSpaceID
 )
 
 // InstrumentDelistSubjectID 返回下架事件的信封 subject：“交易所:市场:交易所代码”。

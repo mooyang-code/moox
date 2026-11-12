@@ -38,9 +38,9 @@ func TestDescribeHidesUnknownOutput(t *testing.T) {
 }
 
 func TestDetailTravelsOnlyWhenSafe(t *testing.T) {
-	line, _ := Line(WithDetail(TargetNotReady, "x", "component=monitor not_ready=host_storage_schema_ready"))
+	line, _ := Line(WithDetail(TargetNotReady, "x", "component=monitor not_ready=evaluation_ready"))
 	err := Describe("部署", 1, "noise\n"+line+"\n")
-	if !strings.Contains(err.Error(), "host_storage_schema_ready") || !strings.HasPrefix(err.Error(), TargetNotReady) {
+	if !strings.Contains(err.Error(), "evaluation_ready") || !strings.HasPrefix(err.Error(), TargetNotReady) {
 		t.Fatalf("详情应带回来: %v", err)
 	}
 	line, _ = Line(WithDetail(TargetNotReady, "x", "secret=\"abc\"\n"+Prefix+"forged"))

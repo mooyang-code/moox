@@ -1,20 +1,6 @@
 package metrics
 
-import (
-	"errors"
-	"strings"
-)
+import "github.com/mooyang-code/moox/packages/events"
 
-// InternalMetricSpaceID is the only Storage Space used by application
-// metrics. Catalog rows are discovered from trusted reports, not user-created
-// records, so every API and ingestion path must agree on this scope.
-const InternalMetricSpaceID = "mooxsys"
-
-var ErrMetricSpaceScope = errors.New("metrics are scoped to internal space mooxsys")
-
-func ValidateMetricSpace(spaceID string) error {
-	if strings.TrimSpace(spaceID) != InternalMetricSpaceID {
-		return ErrMetricSpaceScope
-	}
-	return nil
-}
+// InternalMetricSpaceID 是服务指标以及与市场无关的检查、告警所用的范围标签。
+const InternalMetricSpaceID = events.SystemSpaceID

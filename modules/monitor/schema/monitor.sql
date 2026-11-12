@@ -93,6 +93,18 @@ CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 主机快照历史：每台主机每分钟一行（同一分钟内后到的覆盖先到的），c_snapshot 是 HostSnapshot 的 protobuf 编码。
+-- 按采样时间保留 7 天，由数据清理定时任务删除。时间均为 UTC。
+CREATE TABLE IF NOT EXISTS t_monitor_host_samples (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_agent_id TEXT NOT NULL,
+    c_observed_at DATETIME NOT NULL,
+    c_snapshot BLOB NOT NULL,
+    UNIQUE (c_agent_id, c_observed_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_host_samples_observed ON t_monitor_host_samples (c_observed_at);
+
 -- 告警推送渠道（企业微信、飞书、钉钉群机器人或通用 Webhook），告警发给全部渠道；首次建库时按部署配置写入一个，之后在监控页增删
 -- c_secret 选填：飞书的签名校验密钥、钉钉的加签密钥或通用 Webhook 的签名密钥，只写不读
 CREATE TABLE IF NOT EXISTS t_monitor_notification_channels (

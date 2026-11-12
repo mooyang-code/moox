@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/events"
 )
 
 func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
@@ -88,7 +89,7 @@ func TestEnsureDefaultHostAlertRulesCoversRegisteredAgent(t *testing.T) {
 	if err := ensureDefaultHostAlertRules(t.Context(), repositories, registry); err != nil {
 		t.Fatal(err)
 	}
-	rules, err := repositories.Alerts.ListRules(t.Context(), hostmetrics.SpaceID)
+	rules, err := repositories.Alerts.ListRules(t.Context(), events.SystemSpaceID)
 	if err != nil {
 		t.Fatal(err)
 	}

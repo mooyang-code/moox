@@ -16,7 +16,7 @@ func TestRegistryKeepsExplicitDeploymentHostIdentityWithoutHostnameGuessing(t *t
 	_, err = registry.Observe(t.Context(), HostObservation{AgentID: "STANDALONE", Hostname: "control", BootID: "boot", EventID: "second", OccurredAt: now})
 	require.NoError(t, err)
 	restarted := NewRegistry(db)
-	store := NewStore(nil, nil)
+	store := NewStore(nil)
 	store.SetRegistry(restarted)
 	rows, err := store.ListAgentsAt(t.Context(), now)
 	require.NoError(t, err)

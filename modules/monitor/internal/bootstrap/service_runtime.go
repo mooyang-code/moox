@@ -21,21 +21,19 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, doctorContext *monitordoctor.Builder, health *healthview.Builder) {
+func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, doctorContext *monitordoctor.Builder, health *healthview.Builder) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
 		return
 	}
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(runtime.Repositories, monitorrpc.Options{
-		InstanceID:       cfg.Instance.InstanceID,
-		HostStore:        hostStore,
-		HostReader:       hostReader,
-		HostStorageReady: hostReady,
-		DoctorContext:    doctorContext,
-		HealthView:       health,
-		HostWatchdog:     cfg.HostPolicy.Watchdog,
-		Lifecycle:        runtime.life.Load,
+		InstanceID:    cfg.Instance.InstanceID,
+		HostStore:     hostStore,
+		DoctorContext: doctorContext,
+		HealthView:    health,
+		HostWatchdog:  cfg.HostPolicy.Watchdog,
+		Lifecycle:     runtime.life.Load,
 	}))
 }
 

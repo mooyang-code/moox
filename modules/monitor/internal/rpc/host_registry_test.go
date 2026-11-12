@@ -33,7 +33,7 @@ func TestListHostAgentsReadsPersistedPresenceAfterRestart(t *testing.T) {
 
 	restartedRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
 	require.NoError(t, err)
-	restartedStore := hostmetrics.NewStore(nil, nil)
+	restartedStore := hostmetrics.NewStore(nil)
 	restartedStore.SetRegistry(restartedRegistry)
 	service := New(mgr.Repositories(), Options{HostStore: restartedStore})
 	rsp, err := service.ListHostAgents(ctx, &monitorpb.ListHostAgentsReq{})

@@ -17,12 +17,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/notification"
 	"gorm.io/gorm"
 )
 
-// AlertEvaluator computes host threshold transitions after Storage accepts a sample.
+// AlertEvaluator 在主机快照登记在线后计算阈值告警的状态变化，按事件编号去重。
 // Alert failures never participate in the EventBus ACK decision.
 type AlertEvaluator struct {
 	Cache      *RuleCache
@@ -191,12 +192,12 @@ func alertPayload(sample hostSample, eventType string) []byte {
 }
 
 func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, sample hostSample, messageID string, failing bool, recovery float64, now time.Time) error {
-	state, err := e.Repository.GetState(ctx, SpaceID, rule.RuleID, rule.CheckID)
+	state, err := e.Repository.GetState(ctx, events.SystemSpaceID, rule.RuleID, rule.CheckID)
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return err
 	}
 	if state == nil {
-		state = &domain.AlertState{SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, Status: domain.AlertStatusOK, DedupeKey: rule.RuleID + ":" + rule.CheckID}
+		state = &domain.AlertState{SpaceID: events.SystemSpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, Status: domain.AlertStatusOK, DedupeKey: rule.RuleID + ":" + rule.CheckID}
 	} else if strings.TrimSpace(state.DedupeKey) == "" {
 		state.DedupeKey = rule.RuleID + ":" + rule.CheckID
 	}
@@ -246,7 +247,7 @@ func reminderDue(last *time.Time, now time.Time, intervalSeconds int) bool {
 func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, sample hostSample, messageID string, state *domain.AlertState, eventType string, now time.Time, persistBeforeSend bool) error {
 	title, message := hostAlertText(sample, eventType, now)
 	payload := alertPayload(sample, eventType)
-	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, Message: message, Payload: string(payload), CreatedAt: now}); err != nil {
+	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: events.SystemSpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, Message: message, Payload: string(payload), CreatedAt: now}); err != nil {
 		return err
 	}
 	if persistBeforeSend {
@@ -261,7 +262,7 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, samp
 				state.LastReminderAt = nil
 				_ = e.Repository.UpsertState(ctx, state)
 			}
-			_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
+			_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: events.SystemSpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
 			return err
 		}
 		if sender == nil {
@@ -278,7 +279,7 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, samp
 			// 已有渠道送达：只记录失败的渠道，不按未送达重试；发送可能已耗尽父 context，记录用不受取消影响的短期限 context。
 			recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
-			_ = e.Repository.CreateEvent(recordCtx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
+			_ = e.Repository.CreateEvent(recordCtx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: events.SystemSpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
 			return nil
 		}
 		if err != nil {
@@ -286,7 +287,7 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, samp
 				state.LastReminderAt = nil
 				_ = e.Repository.UpsertState(ctx, state)
 			}
-			_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
+			_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: events.SystemSpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
 			return err
 		}
 		return nil

@@ -13,12 +13,10 @@ import (
 // Checks, raw metric catalogs, webhook CRUD and custom rule engines are
 // intentionally absent: those are internal implementation details now.
 type Options struct {
-	InstanceID       string
-	HostStore        *hostmetrics.Store
-	HostReader       *hostmetrics.StorageReader
-	HostStorageReady func() bool
-	DoctorContext    *doctor.Builder
-	HealthView       *healthview.Builder
+	InstanceID    string
+	HostStore     *hostmetrics.Store
+	DoctorContext *doctor.Builder
+	HealthView    *healthview.Builder
 	// HostWatchdog 是 GetHostPolicy 下发的主机守护参数。
 	HostWatchdog config.HostWatchdogConfig
 	// Lifecycle 返回 Monitor 的生命周期控制器（健康检查注册时才创建，之前为 nil）：告警屏蔽复用它的暂停。
@@ -26,16 +24,14 @@ type Options struct {
 }
 
 type Service struct {
-	alerts           *store.AlertRepository
-	notifications    *store.NotificationRepository
-	logs             *store.LogRecordRepository
-	hostWatchdog     config.HostWatchdogConfig
-	hostStore        *hostmetrics.Store
-	hostReader       *hostmetrics.StorageReader
-	hostStorageReady func() bool
-	doctorContext    *doctor.Builder
-	healthView       *healthview.Builder
-	lifecycle        func() *lifecycle.Controller
+	alerts        *store.AlertRepository
+	notifications *store.NotificationRepository
+	logs          *store.LogRecordRepository
+	hostWatchdog  config.HostWatchdogConfig
+	hostStore     *hostmetrics.Store
+	doctorContext *doctor.Builder
+	healthView    *healthview.Builder
+	lifecycle     func() *lifecycle.Controller
 }
 
 func New(repos *store.Repositories, opts Options) *Service {
@@ -43,15 +39,13 @@ func New(repos *store.Repositories, opts Options) *Service {
 		repos = store.NewRepositories(nil)
 	}
 	return &Service{
-		alerts:           repos.Alerts,
-		notifications:    repos.Notifications,
-		logs:             repos.Logs,
-		hostWatchdog:     opts.HostWatchdog,
-		hostStore:        opts.HostStore,
-		hostReader:       opts.HostReader,
-		hostStorageReady: opts.HostStorageReady,
-		doctorContext:    opts.DoctorContext,
-		healthView:       opts.HealthView,
-		lifecycle:        opts.Lifecycle,
+		alerts:        repos.Alerts,
+		notifications: repos.Notifications,
+		logs:          repos.Logs,
+		hostWatchdog:  opts.HostWatchdog,
+		hostStore:     opts.HostStore,
+		doctorContext: opts.DoctorContext,
+		healthView:    opts.HealthView,
+		lifecycle:     opts.Lifecycle,
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/notifier"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/notification"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -203,7 +204,7 @@ func presenceEvent(transition hostmetrics.PresenceTransition) *domain.AlertEvent
 	observed := transition.ObservedAt.UTC()
 	sum := sha256.Sum256([]byte(transition.AgentID + "\x00" + transition.To + "\x00" + observed.Format(time.RFC3339Nano)))
 	return &domain.AlertEvent{
-		EventID: "host-presence-" + hex.EncodeToString(sum[:16]), SpaceID: hostmetrics.SpaceID,
+		EventID: "host-presence-" + hex.EncodeToString(sum[:16]), SpaceID: events.SystemSpaceID,
 		RuleID: hostmetrics.PresenceRuleID, CheckID: hostmetrics.PresenceCheckID(transition.AgentID),
 		EventType: eventType, Status: status, Message: reason, Payload: string(payload), CreatedAt: observed,
 	}

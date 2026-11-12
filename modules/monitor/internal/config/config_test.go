@@ -70,9 +70,6 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Alert.SendTimeoutSeconds != 10 {
 		t.Fatalf("alert send timeout = %d", cfg.Alert.SendTimeoutSeconds)
 	}
-	if !cfg.Metrics.HostStorage.Enabled || cfg.Metrics.HostStorage.SpaceID != "mooxsys" || cfg.Metrics.HostStorage.Frequency != "1m" {
-		t.Fatalf("host storage defaults = %+v", cfg.Metrics.HostStorage)
-	}
 	if cfg.Metrics.MaxNewSeriesPerHour != 2000 || cfg.Metrics.MaxNewSeriesPerDay != 10000 {
 		t.Fatalf("new series limits = %d/%d", cfg.Metrics.MaxNewSeriesPerHour, cfg.Metrics.MaxNewSeriesPerDay)
 	}
@@ -342,14 +339,6 @@ func TestMonitorConfigRejectsLegacyEventBusFields(t *testing.T) {
 	}
 }
 
-func TestMonitorConfigValidatesHostStorageContract(t *testing.T) {
-	cfg := Default()
-	cfg.Metrics.HostStorage.SpaceID = "crypto"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want reserved host space error")
-	}
-}
-
 func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
 	cfg := Default()
 	cfg.Deployment.Enabled = false
@@ -480,10 +469,11 @@ func TestMonitorConfigFillsTheLeaseGraceDefaultWhenTheFileOmitsIt(t *testing.T) 
 	}
 }
 
-func TestMonitorConfigRejectsLegacyHostRetention(t *testing.T) {
-	_, err := Load(writeConfig(t, "metrics:\n  host_storage:\n    retention: 72h\n"))
+// 主机快照已改存 Monitor 自己的库，写 Storage 的 host_storage 配置段整段删除，再写就报错。
+func TestMonitorConfigRejectsRemovedHostStorage(t *testing.T) {
+	_, err := Load(writeConfig(t, "metrics:\n  host_storage:\n    enabled: true\n"))
 	if err == nil {
-		t.Fatal("Load() error = nil, want unknown host retention field")
+		t.Fatal("Load() error = nil, want unknown host_storage field")
 	}
 }
 

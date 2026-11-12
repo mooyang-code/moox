@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/notification"
 	"gorm.io/gorm"
 )
@@ -139,7 +140,7 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 			failureThreshold := hostFailureThresholds[metric]
 			checkID := hostmetrics.HostRuleKey(agent.AgentID, metric)
 			rule := &domain.AlertRule{
-				SpaceID: hostmetrics.SpaceID, RuleID: "default:" + checkID, CheckID: checkID,
+				SpaceID: events.SystemSpaceID, RuleID: "default:" + checkID, CheckID: checkID,
 				FailureThreshold: failureThreshold, SuccessThreshold: 1,
 				MinimumReminderIntervalSeconds: 300, SendOnResolved: true, Enabled: true,
 				Description: definition,

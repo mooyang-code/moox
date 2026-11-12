@@ -182,7 +182,7 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"monitor", "trpc.moox.collector.CollectMgr", "UpdateTask", false},
 		{"monitor", "trpc.moox.collector.CollectMgr", "DisableTask", false},
 		{"monitor", "trpc.moox.collector.CollectMgr", "DeleteTask", false},
-		{"monitor", "trpc.moox.storage.PrimaryStore", "UpsertFields", true},
+		{"monitor", "trpc.moox.storage.PrimaryStore", "UpsertFields", false},
 		{"monitor", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
 		{"monitor", "trpc.moox.storage.PrimaryStore", "DeleteDatasetRows", false},
 		{"monitor", "trpc.moox.ops.SysDeploy", "ListHosts", true},

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 )
 
@@ -25,8 +26,7 @@ func (s *Service) ListHostAgents(ctx context.Context, _ *monitorpb.ListHostAgent
 			Reachable: row.Reachable, StaleSeconds: row.StaleSeconds,
 		})
 	}
-	available := s.hostStorageReady == nil || s.hostStorageReady()
-	return &monitorpb.ListHostAgentsRsp{RetInfo: success(), Agents: out, StorageAvailable: available, DataGap: !available}, nil
+	return &monitorpb.ListHostAgentsRsp{RetInfo: success(), Agents: out, StorageAvailable: true}, nil
 }
 
 func (s *Service) QueryHostMetricHistory(ctx context.Context, req *monitorpb.QueryHostMetricHistoryReq) (*monitorpb.QueryHostMetricHistoryRsp, error) {
@@ -51,27 +51,25 @@ func (s *Service) QueryHostMetricHistory(ctx context.Context, req *monitorpb.Que
 	if end.Before(start) {
 		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: invalid(errors.New("end_at must not precede start_at"))}, nil
 	}
+	// 可查范围是快照历史的保留期（最近 7 天）；超出的部分截掉，并在 data_gap 里标明。
 	requestedStart, requestedEnd := start, end
 	now := time.Now().UTC()
-	windowStart := now.Add(-72 * time.Hour)
-	truncated := requestedEnd.Sub(requestedStart) > 72*time.Hour || requestedStart.Before(windowStart) || requestedEnd.After(now)
+	window := hostmetrics.SampleRetention
+	windowStart := now.Add(-window)
+	truncated := requestedEnd.Sub(requestedStart) > window || requestedStart.Before(windowStart) || requestedEnd.After(now)
 	if end.After(now) {
 		end = now
 	}
 	if start.Before(windowStart) {
 		start = windowStart
 	}
-	if end.Sub(start) > 72*time.Hour {
-		start = end.Add(-72 * time.Hour)
-	}
-	if s.hostReader == nil {
-		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: inner(errors.New("host history storage is unavailable")), StorageAvailable: false}, nil
+	if s.hostStore == nil {
+		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: inner(errors.New("host monitor is unavailable")), StorageAvailable: false}, nil
 	}
 	if end.Before(start) {
-		available := s.hostStorageReady == nil || s.hostStorageReady()
-		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: success(), StorageAvailable: available, DataGap: true}, nil
+		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: success(), StorageAvailable: true, DataGap: true}, nil
 	}
-	rows, err := s.hostReader.History(ctx, req.GetAgentId(), start, end, int(req.GetLimit()))
+	rows, err := s.hostStore.History(ctx, req.GetAgentId(), start, end, int(req.GetLimit()))
 	if err != nil {
 		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: inner(err), StorageAvailable: false}, nil
 	}
@@ -79,6 +77,5 @@ func (s *Service) QueryHostMetricHistory(ctx context.Context, req *monitorpb.Que
 	for _, row := range rows {
 		out = append(out, &monitorpb.HostMetricHistoryPoint{AgentId: row.AgentID, ObservedAt: row.ObservedAt, Snapshot: row.Snapshot})
 	}
-	available := s.hostStorageReady == nil || s.hostStorageReady()
-	return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: success(), Points: out, StorageAvailable: available, DataGap: !available || truncated || len(out) == 0}, nil
+	return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: success(), Points: out, StorageAvailable: true, DataGap: truncated || len(out) == 0}, nil
 }

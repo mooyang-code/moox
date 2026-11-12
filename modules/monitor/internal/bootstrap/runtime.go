@@ -31,6 +31,7 @@ type Runtime struct {
 	Repositories   *store.Repositories
 	MetricStores   *monmetrics.Stores
 	HostRuleCache  *hostmetrics.RuleCache
+	HostSamples    *hostmetrics.SampleStore
 	Scheduler      *scheduler.Scheduler
 	// klineFreshness 是 K 线新鲜度评估器（没有评估器时为空）；清理失效检查时用它识别会被补建的 K 线检查。
 	klineFreshness *monmetrics.KlineFreshnessEvaluator

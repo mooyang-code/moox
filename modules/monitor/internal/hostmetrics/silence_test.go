@@ -73,7 +73,8 @@ func TestSilenceScannerRetriesFailedTransitionDelivery(t *testing.T) {
 
 func TestStorePublishesRecoveryTransitionAndDoesNotRegressLatestView(t *testing.T) {
 	ctx := context.Background()
-	registry := NewRegistry(openRegistryTestDB(t))
+	db := openRegistryTestDB(t)
+	registry := NewRegistry(db)
 	t0 := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
 	_, err := registry.Observe(ctx, HostObservation{
 		AgentID: validHostMetric().GetAgentId(), Hostname: "host", BootID: "boot",
@@ -84,7 +85,7 @@ func TestStorePublishesRecoveryTransitionAndDoesNotRegressLatestView(t *testing.
 	require.NoError(t, err)
 
 	var got []PresenceTransition
-	store := NewStore(&fakeSnapshotWriter{}, nil)
+	store := NewStore(NewSampleStore(db))
 	store.SetRegistry(registry)
 	store.SetPresenceTransitionSink(PresenceTransitionFunc(func(_ context.Context, transition PresenceTransition) error {
 		got = append(got, transition)

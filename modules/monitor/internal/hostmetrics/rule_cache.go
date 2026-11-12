@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/snapshotcache"
 )
 
@@ -73,13 +74,13 @@ func (s hostRuleSource) Fetch(ctx context.Context) ([]domain.AlertRule, error) {
 	if s.repository == nil {
 		return nil, errors.New("host alert rule repository is nil")
 	}
-	rules, err := s.repository.ListRules(ctx, SpaceID)
+	rules, err := s.repository.ListRules(ctx, events.SystemSpaceID)
 	if err != nil {
 		return nil, err
 	}
 	filtered := make([]domain.AlertRule, 0, len(rules))
 	for _, rule := range rules {
-		if rule.SpaceID != SpaceID || !rule.Enabled {
+		if rule.SpaceID != events.SystemSpaceID || !rule.Enabled {
 			continue
 		}
 		if _, _, ok := ParseHostRuleKey(rule.CheckID); !ok {
@@ -100,7 +101,7 @@ type RuleCacheOptions struct {
 	InitialLoadTimeout time.Duration
 }
 
-// RuleCache keeps enabled mooxsys host rules out of the HostMetric hot
+// RuleCache keeps enabled host rules out of the HostMetric hot
 // path.  Each published snapshot is immutable from the consumer's point of
 // view; callers receive values or freshly allocated slices.
 type RuleCache struct {

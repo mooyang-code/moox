@@ -1675,10 +1675,6 @@ components:
               - factor-mgr
               - monitor
               - strategy
-          - methods:
-              - UpsertFields
-            callers:
-              - monitor
           # collector-stream 的周期提交与补采写入。
           - methods:
               - CommitTimeSeriesBatch

@@ -49,7 +49,7 @@ func TestRuntimeHealthUsesSharedAuthenticationAndBindsResponseToRunningBinary(t 
 }
 
 func TestNotReadyReasonsTakeNamesOnly(t *testing.T) {
-	raw := []byte(`{"ready":false,"details":{"host_storage_schema_ready":false,"database_ready":true,"deployment_enabled":false,"metrics_reporter_error":"password=abc","missing_services":["trpc.moox.archive.ArchiveWorker"]}}`)
-	require.Equal(t, []string{"host_storage_schema_ready", "trpc.moox.archive.ArchiveWorker"}, notReadyReasons(raw))
+	raw := []byte(`{"ready":false,"details":{"evaluation_ready":false,"database_ready":true,"deployment_enabled":false,"metrics_reporter_error":"password=abc","missing_services":["trpc.moox.archive.ArchiveWorker"]}}`)
+	require.Equal(t, []string{"evaluation_ready", "trpc.moox.archive.ArchiveWorker"}, notReadyReasons(raw))
 	require.Empty(t, notReadyReasons([]byte("not json")))
 }
