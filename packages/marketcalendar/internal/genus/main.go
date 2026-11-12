@@ -30,7 +30,9 @@ const (
 	// source 是休市日与半日市的出处，写进清单。
 	source = "纽约证券交易所假期与提前收市日 https://www.nyse.com/trade/hours-calendars ；" +
 		"2026 年另与纳斯达克交易所公告 https://www.nasdaqtrader.com/Trader.aspx?id=Calendar 核对一致，" +
-		"2027 年另与 https://upstox.com/learning-center/us-stocks/us-stock-market-holidays/article-1947/ 核对一致"
+		"2027 年的休市日另与 https://upstox.com/learning-center/us-stocks/us-stock-market-holidays/article-1947/ 、" +
+		"https://www.heygotrade.com/en/news/us-stock-market-holidays-2027/ 核对一致，" +
+		"2027-11-26 半日市与 2027-12-31 照常交易另与后者核对一致（纳斯达克尚未公布 2027 年日历）"
 )
 
 // closures 是各年份落在工作日（周一到周五）上的休市日。
