@@ -61,6 +61,9 @@ type recalcLoop struct {
 	moduleOpen func() bool
 	// history 在补算前把本地时序存储的历史延长到能覆盖补算区间加回看（可为 nil：只读已有的本地数据）。
 	history historyExtender
+	// catchUp 在补算前把本地时序存储往后拉到补算区间的终点（可为 nil）：Storage 里比本地更新的数据平时留给实时计算去拉，
+	// 补算区间落在这段上时要自己先拉，否则读不到源数据。
+	catchUp func(ctx context.Context, set domain.EngineTask, subjects []string, end time.Time) (int, error)
 	// now 取当前时间（测试可替换）。
 	now func() time.Time
 	// gateWait、gateRetry：任务还没放行（刚建立、自动 init/start 还没走完）时任务会被门禁挡住；等放行的最长时间与重试间隔，
@@ -215,6 +218,7 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob, axis periodcloc
 		defer release()
 	}
 	l.extendHistory(ctx, job, axis)
+	l.catchUpLatest(ctx, job)
 	lastNote := ""
 	step, stepErr := seriesstore.Step(set.Set.Freq)
 	if stepErr != nil {
@@ -322,6 +326,21 @@ func (l *recalcLoop) extendHistory(ctx context.Context, job *PulledJob, axis per
 	log.InfoContextf(ctx, "factor_recalc_extend_history job_id=%s task_id=%s bars=%d", job.JobID, job.Set.Set.TaskID, bars)
 	if err := l.history(ctx, job.Set, job.Subjects, bars); err != nil {
 		log.WarnContextf(ctx, "factor_recalc_extend_history_failed job_id=%s task_id=%s error=%v", job.JobID, job.Set.Set.TaskID, err)
+	}
+}
+
+// catchUpLatest 把本地时序存储往后拉到补算区间的终点。失败不终止作业（只有已有的本地数据可算），记日志。
+func (l *recalcLoop) catchUpLatest(ctx context.Context, job *PulledJob) {
+	if l.catchUp == nil {
+		return
+	}
+	pulled, err := l.catchUp(ctx, job.Set, job.Subjects, job.Window.End)
+	if err != nil {
+		log.WarnContextf(ctx, "factor_recalc_catch_up_failed job_id=%s task_id=%s error=%v", job.JobID, job.Set.Set.TaskID, err)
+		return
+	}
+	if pulled > 0 {
+		log.InfoContextf(ctx, "factor_recalc_catch_up job_id=%s task_id=%s subjects=%d", job.JobID, job.Set.Set.TaskID, pulled)
 	}
 }
 

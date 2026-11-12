@@ -1648,3 +1648,63 @@ func (d *Data) BackfillTask(ctx context.Context, set domain.EngineTask, subjects
 	written, err := d.syncer.Backfill(ctx, spec, subjects, bars, progress)
 	return len(written), err
 }
+
+// CatchUp 把任务源数据的本地存储从 Storage 往后拉到 end（不含；不超过最新已收盘的一根），返回有新写入的标的数。
+//
+// 补算只读本地存储。Storage 里比本地最新一根更晚的数据平时留给实时计算去拉，但它不一定会来：强制补采写入的周期不发实时事件，
+// 新建的任务也可能还没跑过实时周期。补算区间落在这段上时不先拉一次，就会读不到源数据、写出 0 行而作业仍然成功。
+// 数据源已经载入内存窗口时，新写入的行同时反映到窗口，实时计算看到的数据与本地存储保持一致。
+// subjects 为空表示本地有数据的全部标的。
+func (d *Data) CatchUp(ctx context.Context, set domain.EngineTask, subjects []string, end time.Time) (int, error) {
+	src := sourceOf(set.Set)
+	limit, err := d.axisNow(src)
+	if err != nil {
+		return 0, err
+	}
+	if end.After(limit) {
+		end = limit
+	}
+	if len(subjects) == 0 {
+		if subjects, err = d.cfg.Store.Subjects(src); err != nil {
+			return 0, err
+		}
+	}
+	st := d.lookup(src)
+	if st == nil {
+		// 数据源还没有准备过（没有窗口）：只写本地存储。
+		columns, err := d.cfg.Storage.ListColumns(ctx, src.SpaceID, src.DatasetID)
+		if err != nil {
+			return 0, fmt.Errorf("读取源数据集字段：%w", err)
+		}
+		spec := seriessync.Spec{Source: src, Fields: seriessync.FieldsFromColumns(columns), Lookback: d.lookbackFor(src, set.Members)}
+		pull, err := d.syncer.Pull(ctx, spec, subjects, end)
+		return len(pull.Written), err
+	}
+	d.lockSource(st, "补算前同步")
+	defer st.mu.Unlock()
+	// 上一期的热路径写盘必须先落完：拉取按本地最新一根决定从哪里拉。
+	d.settleFlush(st)
+	pull, err := d.syncer.Pull(ctx, st.spec, subjects, end)
+	if err != nil {
+		return 0, err
+	}
+	if st.window == nil {
+		return len(pull.Written), nil
+	}
+	for subject, res := range pull.Written {
+		if err := d.syncWindow(ctx, st, subject, res); err != nil {
+			return len(pull.Written), err
+		}
+	}
+	return len(pull.Written), nil
+}
+
+// syncWindow 把 CatchUp 的一次写入反映到窗口。数据集字段变了时窗口要按新字段重建，重建完成之前按预热处理（与实时路径相同）。
+func (d *Data) syncWindow(ctx context.Context, st *source, subject string, res seriesstore.WriteResult) error {
+	err := d.applyToWindow(ctx, st, subject, res)
+	if errors.Is(err, serieswindow.ErrSchemaChanged) {
+		st.ready.Store(false)
+		return nil
+	}
+	return err
+}

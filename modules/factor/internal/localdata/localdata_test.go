@@ -545,3 +545,64 @@ func TestCoverageDoesNotExemptWhenLookbackExceedsRetention(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, short)
 }
+
+// 强制补采把比本地最新一根更晚的周期写进了 Storage（不发实时事件）：补算只读本地，不先拉一次就读不到这些周期。
+// CatchUp 把本地拉到补算区间的终点（不超过最新已收盘的一根），并同时反映到内存窗口。
+func TestCatchUpPullsNewerBarsForRecalcAndKeepsWindowInSync(t *testing.T) {
+	fx := newFixture(t, mean5())
+	subjects := []string{"BTC"}
+	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
+
+	// Storage 里多了第 10、11、12 根；现在是第 12 根收盘之后。
+	fx.st.put("BTC", 100, 10, 11, 12)
+	fx.now = at(13)
+	recalc := func(m int) pipeline.Outcome {
+		plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, TargetStart: at(m), TargetEnd: at(m + 1),
+			Expected: subjects, Available: subjects, CarryColumns: []string{"close", "volume"}, WriteCarry: true}
+		outcome, err := fx.runner.Run(context.Background(), plan)
+		require.NoError(t, err)
+		return outcome
+	}
+	// 不拉：本地没有第 10 根，补算写不出这一期。
+	require.Zero(t, recalc(10).RowsWritten)
+
+	// 拉到补算区间的终点（第 11 根的起点，不含）：只多出第 10 根。
+	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(11))
+	require.NoError(t, err)
+	require.Equal(t, 1, pulled)
+	require.Equal(t, 1, recalc(10).RowsWritten)
+	require.InDelta(t, 108.0, fx.result("BTC", 10).Fields["mean5"], 1e-9)
+	require.Zero(t, recalc(11).RowsWritten, "终点之后的周期不拉")
+
+	// 终点晚于现在时只拉到最新已收盘的一根；已经拉过的不重复写。
+	pulled, err = fx.data.CatchUp(context.Background(), fx.set, nil, at(100))
+	require.NoError(t, err)
+	require.Equal(t, 1, pulled)
+	require.Equal(t, 1, recalc(12).RowsWritten)
+	pulled, err = fx.data.CatchUp(context.Background(), fx.set, subjects, at(100))
+	require.NoError(t, err)
+	require.Zero(t, pulled)
+
+	// 窗口与本地存储一致：下一期实时计算用到了补算时拉进来的第 10～12 根，而且新的一根能直接追加进窗口（走热路径）。
+	// 窗口没有跟上的话，这一根接不上窗口里的第 9 根，只能退回从磁盘重载。
+	fx.st.put("BTC", 100, 13)
+	fx.now = at(14)
+	hotBefore := fx.data.hotWrites.Load()
+	outcome := fx.live(t, at(13), subjects)
+	require.Equal(t, "complete", outcome.Status)
+	require.Equal(t, int64(1), fx.data.hotWrites.Load()-hotBefore, "窗口已经有第 10～12 根")
+	require.InDelta(t, 111.0, fx.result("BTC", 13).Fields["mean5"], 1e-9)
+}
+
+// 数据源还没有准备过（没有窗口）时，CatchUp 只写本地存储。
+func TestCatchUpWithoutPreparedSourceWritesLocalStoreOnly(t *testing.T) {
+	fx := newFixture(t, mean5())
+	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	pulled, err := fx.data.CatchUp(context.Background(), fx.set, []string{"BTC"}, at(8))
+	require.NoError(t, err)
+	require.Equal(t, 1, pulled)
+	local, err := fx.data.Store().Subjects(seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"BTC"}, local)
+}
