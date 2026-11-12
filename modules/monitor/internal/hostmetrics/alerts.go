@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,10 @@ func (e *AlertEvaluator) Evaluate(ctx context.Context, agentID, hostname, messag
 				continue
 			}
 			sample := hostSample{agentID: agentID, hostname: hostname, metric: metric, value: value.value, threshold: threshold}
+			// CPU、内存告警带上进程排行；磁盘空间看不出是哪个进程占的，不带。
+			if metric == HostMetricCPU || metric == HostMetricMemory {
+				sample.processes = topProcesses(snapshot)
+			}
 			if err := e.transition(ctx, rule, sample, messageID, value.value >= threshold, recovery, now); err != nil {
 				if firstErr == nil {
 					firstErr = err
@@ -134,6 +139,50 @@ func RuleThresholds(rule domain.AlertRule) (float64, float64) {
 type hostSample struct {
 	agentID, hostname, metric string
 	value, threshold          float64
+	// processes 是这次采样里占用最高的进程（只有 CPU、内存告警带）。
+	processes []alerttext.Process
+}
+
+// alertProcessLimit 是告警正文里列出的进程数；事件里保留完整的排行。
+const alertProcessLimit = 3
+
+// maxAlertProcesses 是从一份快照里最多取用的进程数；HostAgent 最多上报 10 个，这里只防异常数据。
+const maxAlertProcesses = 20
+
+// topProcesses 取出快照里的进程排行。排行只是辅助信息：不合理的条目（没有名字、CPU 不是有限的非负数）就地忽略，
+// 不因此拒收整份主机快照。
+func topProcesses(snapshot *hostmetricpb.HostSnapshot) []alerttext.Process {
+	items := make([]alerttext.Process, 0, len(snapshot.GetTopProcesses()))
+	for _, process := range snapshot.GetTopProcesses() {
+		name := strings.TrimSpace(process.GetName())
+		if name == "" || len(items) == maxAlertProcesses {
+			continue
+		}
+		item := alerttext.Process{Name: name, RSSBytes: process.GetRssBytes()}
+		if cpu := process.GetCpuPercent(); process.GetCpuAvailable() && cpu >= 0 && !math.IsInf(cpu, 0) && !math.IsNaN(cpu) {
+			item.CPUPercent, item.CPUAvailable = cpu, true
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+// alertPayload 是告警事件里记录的结构化内容。触发和提醒时带上当时的进程排行：进程事后退出或被杀掉，仍能查到当时是谁占的。
+func alertPayload(sample hostSample, eventType string) []byte {
+	fields := map[string]any{"agent_id": sample.agentID, "hostname": sample.hostname, "value": sample.value, "metric": sample.metric, "threshold": sample.threshold}
+	if len(sample.processes) > 0 && eventType != domain.AlertEventResolved {
+		processes := make([]map[string]any, 0, len(sample.processes))
+		for _, process := range sample.processes {
+			item := map[string]any{"name": process.Name, "rss_bytes": process.RSSBytes}
+			if process.CPUAvailable {
+				item["cpu_percent"] = process.CPUPercent
+			}
+			processes = append(processes, item)
+		}
+		fields["top_processes"] = processes
+	}
+	payload, _ := json.Marshal(fields)
+	return payload
 }
 
 func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, sample hostSample, messageID string, failing bool, recovery float64, now time.Time) error {
@@ -190,9 +239,8 @@ func reminderDue(last *time.Time, now time.Time, intervalSeconds int) bool {
 }
 
 func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, sample hostSample, messageID string, state *domain.AlertState, eventType string, now time.Time, persistBeforeSend bool) error {
-	agentID := sample.agentID
 	title, message := hostAlertText(sample, eventType, now)
-	payload, _ := json.Marshal(map[string]any{"agent_id": agentID, "hostname": sample.hostname, "value": sample.value, "metric": sample.metric, "threshold": sample.threshold})
+	payload := alertPayload(sample, eventType)
 	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, Message: message, Payload: string(payload), CreatedAt: now}); err != nil {
 		return err
 	}
@@ -282,6 +330,11 @@ func hostAlertText(sample hostSample, eventType string, now time.Time) (string, 
 		lines = append(lines, "状态：仍未恢复", fmt.Sprintf("问题：%s %s，超过阈值 %s", label, value(sample.value), value(sample.threshold)))
 	default:
 		lines = append(lines, "状态：新告警", fmt.Sprintf("问题：%s %s，超过阈值 %s", label, value(sample.value), value(sample.threshold)))
+	}
+	if eventType != domain.AlertEventResolved {
+		if top := alerttext.TopProcesses(sample.processes, sample.metric == HostMetricMemory, alertProcessLimit); top != "" {
+			lines = append(lines, "占用最高："+top)
+		}
 	}
 	lines = append(lines, "时间："+alerttext.Time(now)+"（北京时间）")
 	return "主机 " + host + " · " + label, strings.Join(lines, "\n")

@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -141,7 +143,8 @@ func TestCollectorOptionalFailuresPreserveCPUAndMemory(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, snapshot.GetCpu())
 	assert.Equal(t, uint64(1024*1024), snapshot.GetMemory().GetTotalBytes())
-	require.Len(t, statuses, 5)
+	require.Len(t, statuses, 6)
+	assert.True(t, findStatus(t, statuses, "process").GetSuccess())
 	for _, collector := range []string{"disk", "network", "filesystem"} {
 		status := findStatus(t, statuses, collector)
 		assert.False(t, status.GetSuccess())
@@ -222,6 +225,7 @@ func testLinuxCollector(files map[string]string) *Collector {
 		return []byte(value), nil
 	}
 	c.collectFS = func() ([]*hostmetricpb.FilesystemMetric, error) { return nil, nil }
+	c.listPIDs = func() ([]int, error) { return nil, nil }
 	return c
 }
 
@@ -240,4 +244,62 @@ func networkData(receiveBytes, receiveErrors, transmitBytes, transmitErrors uint
 	return "Inter-| Receive | Transmit\n face | fields\neth0: " +
 		fmt.Sprintf("%d 0 %d 0 0 0 0 0 %d 0 %d 0 0 0 0 0\n",
 			receiveBytes, receiveErrors, transmitBytes, transmitErrors)
+}
+
+// 两次采样之间，进程的 CPU 占用按整机 CPU 时间的增量折算；采样期间退出的进程（读不到 stat）跳过，
+// 进程名取命令行第一个参数的文件名，不带后面的参数。
+func TestCollectorReportsTopProcesses(t *testing.T) {
+	files := map[string]string{
+		"/proc/stat":       "cpu 100 0 100 800 0 0 0 0\n",
+		"/proc/meminfo":    "MemTotal: 1024 kB\nMemAvailable: 512 kB\n",
+		"/proc/diskstats":  "",
+		"/proc/net/dev":    "",
+		"/proc/11/stat":    "11 (moox-storage-no) S 1 11 11 0 -1 0 0 0 0 0 100 50 0 0 20 0 9 0 500 0 2000 0\n",
+		"/proc/11/cmdline": "/data/moox/bin/moox-storage-node\x00--secret=abc\x00",
+		"/proc/12/stat":    "12 (kswapd0) S 2 0 0 0 -1 0 0 0 0 0 0 10 0 0 20 0 1 0 5 0 0 0\n",
+		"/proc/12/cmdline": "",
+	}
+	c := testLinuxCollector(files)
+	c.listPIDs = func() ([]int, error) { return []int{11, 12, 13}, nil } // 13 已经退出
+
+	first, statuses, err := c.Collect(context.Background())
+	require.NoError(t, err)
+	assert.True(t, findStatus(t, statuses, "process").GetSuccess())
+	require.Len(t, first.GetTopProcesses(), 1) // 第一次只有内存排行，kswapd0 没有常驻内存
+	assert.Equal(t, "moox-storage-node", first.GetTopProcesses()[0].GetName())
+	assert.False(t, first.GetTopProcesses()[0].GetCpuAvailable())
+	assert.Equal(t, uint64(2000*os.Getpagesize()), first.GetTopProcesses()[0].GetRssBytes())
+
+	// 整机 CPU 时间增加 1000 个滴答；storage 增加 500、kswapd0 增加 100。
+	files["/proc/stat"] = "cpu 600 0 200 1200 0 0 0 0\n"
+	files["/proc/11/stat"] = "11 (moox-storage-no) S 1 11 11 0 -1 0 0 0 0 0 500 150 0 0 20 0 9 0 500 0 2000 0\n"
+	files["/proc/12/stat"] = "12 (kswapd0) S 2 0 0 0 -1 0 0 0 0 0 0 110 0 0 20 0 1 0 5 0 0 0\n"
+	second, _, err := c.Collect(context.Background())
+	require.NoError(t, err)
+	require.Len(t, second.GetTopProcesses(), 2)
+	cores := float64(runtime.NumCPU())
+	top := second.GetTopProcesses()
+	assert.Equal(t, "moox-storage-node", top[0].GetName())
+	assert.InDelta(t, 50*cores, top[0].GetCpuPercent(), 1e-9)
+	assert.True(t, top[0].GetCpuAvailable())
+	assert.Equal(t, "kswapd0", top[1].GetName())
+	assert.InDelta(t, 10*cores, top[1].GetCpuPercent(), 1e-9)
+	for _, process := range top {
+		assert.NotContains(t, process.GetName(), "secret")
+	}
+}
+
+func TestCollectorProcessFailureKeepsOtherMetrics(t *testing.T) {
+	c := testLinuxCollector(map[string]string{
+		"/proc/stat":      "cpu 1 2 3 40 5 6 7 8\n",
+		"/proc/meminfo":   "MemTotal: 1024 kB\nMemAvailable: 512 kB\n",
+		"/proc/diskstats": "",
+		"/proc/net/dev":   "",
+	})
+	c.listPIDs = func() ([]int, error) { return nil, errors.New("proc unavailable") }
+	snapshot, statuses, err := c.Collect(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, snapshot.GetTopProcesses())
+	assert.False(t, findStatus(t, statuses, "process").GetSuccess())
+	assert.Equal(t, uint64(1024*1024), snapshot.GetMemory().GetTotalBytes())
 }

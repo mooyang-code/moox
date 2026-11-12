@@ -59,6 +59,16 @@ export interface NetworkSpeed {
   rate_available: boolean;
 }
 
+/** 占用最高的进程之一：CPU 是占单核的百分比（340 即 3.4 个核），内存是常驻内存字节数。 */
+export interface ProcessUsage {
+  pid: number;
+  name: string;
+  cpu_percent: number;
+  /** 进程在上一次采样时还不存在时没有 CPU 值。 */
+  cpu_available: boolean;
+  rss: number;
+}
+
 export interface HostMetrics {
   /** 采集器 ID：同一台主机重装后会换新的采集器 */
   agent_id: string;
@@ -72,6 +82,8 @@ export interface HostMetrics {
   filesystems: FilesystemMetrics[];
   disks: DiskMetrics[];
   networks: NetworkSpeed[];
+  /** 最新一次采样里 CPU 与内存占用最高的进程；历史点没有这一项。 */
+  processes: ProcessUsage[];
   storage_available: boolean;
 }
 
@@ -118,6 +130,13 @@ interface HostSnapshot {
     receive_errors_total?: WireNumber;
     transmit_errors_total?: WireNumber;
     rate_available?: boolean;
+  }>;
+  top_processes?: Array<{
+    pid?: number;
+    name?: string;
+    cpu_percent?: number;
+    cpu_available?: boolean;
+    rss_bytes?: WireNumber;
   }>;
 }
 
@@ -219,6 +238,13 @@ export const toHostMetrics = (agent: HostAgent, storageAvailable = true): HostMe
       receive_errors_total: toNumber(item.receive_errors_total),
       transmit_errors_total: toNumber(item.transmit_errors_total),
       rate_available: item.rate_available === true
+    })),
+    processes: (snapshot.top_processes ?? []).map(item => ({
+      pid: item.pid ?? 0,
+      name: item.name ?? "",
+      cpu_percent: item.cpu_percent ?? 0,
+      cpu_available: item.cpu_available === true,
+      rss: toNumber(item.rss_bytes)
     })),
     storage_available: storageAvailable
   };
