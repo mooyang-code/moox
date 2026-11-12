@@ -57,14 +57,14 @@ type usRefetchCase struct {
 	name string
 	// universe 是上游有的全部标签：目标日前后各带一个交易日，beg、end 规则多带的根要有东西可带。
 	universe []usDay
-	// day 是目标交易日（纽约日期），closeClock 是它的收市时刻。
-	day, closeClock string
-	bars            int
+	// day 是目标交易日（纽约日期），bars 是它应有的根数。
+	day  string
+	bars int
 	// closeLabel 是收盘那一根的标签（北京时间），closeBar 是它的开始时刻（UTC，Storage 里的行键）。
 	closeLabel, closeBar string
 	// beg、end 是整天重取发给东方财富的日期区间（日期区间规则：beg 取首根标签减 22:30 的日期，end 取末根标签的日期加一天）。
 	beg, end string
-	// refetchAt 是重取那一轮的时刻（收市后 15 分钟）与收市时刻，UTC。
+	// closeAt 是收市时刻（UTC）；重取那一轮在它之后 15 分钟。
 	closeAt time.Time
 }
 
@@ -73,7 +73,7 @@ func usRefetchCases() []usRefetchCase {
 		{
 			name:     "冬令时周三",
 			universe: []usDay{{"2026-11-10", "16:00"}, {"2026-11-11", "16:00"}, {"2026-11-12", "16:00"}},
-			day:      "2026-11-11", closeClock: "16:00", bars: 78,
+			day:      "2026-11-11", bars: 78,
 			closeLabel: "2026-11-12 05:00", closeBar: "2026-11-11T20:55:00Z", beg: "20261111", end: "20261113",
 			closeAt: time.Date(2026, 11, 11, 21, 0, 0, 0, time.UTC),
 		},
@@ -81,7 +81,7 @@ func usRefetchCases() []usRefetchCase {
 			// 夏令时的首根标签是 21:35，减 22:30 落在前一天：beg 要提前一天才取得到前 11 根。
 			name:     "夏令时周四",
 			universe: []usDay{{"2026-10-28", "16:00"}, {"2026-10-29", "16:00"}, {"2026-10-30", "16:00"}},
-			day:      "2026-10-29", closeClock: "16:00", bars: 78,
+			day:      "2026-10-29", bars: 78,
 			closeLabel: "2026-10-30 04:00", closeBar: "2026-10-29T19:55:00Z", beg: "20261028", end: "20261031",
 			closeAt: time.Date(2026, 10, 29, 20, 0, 0, 0, time.UTC),
 		},
@@ -89,7 +89,7 @@ func usRefetchCases() []usRefetchCase {
 			// 感恩节次日 13:00 收市：42 根，末根标签是北京时间次日 02:00；前一天（11-26）全天休市，后一个交易日是周一。
 			name:     "半日市",
 			universe: []usDay{{"2026-11-25", "16:00"}, {"2026-11-27", "13:00"}, {"2026-11-30", "16:00"}},
-			day:      "2026-11-27", closeClock: "13:00", bars: 42,
+			day:      "2026-11-27", bars: 42,
 			closeLabel: "2026-11-28 02:00", closeBar: "2026-11-27T17:55:00Z", beg: "20261127", end: "20261129",
 			closeAt: time.Date(2026, 11, 27, 18, 0, 0, 0, time.UTC),
 		},
@@ -287,8 +287,6 @@ func TestStockUSRefetchAfterCloseDoesNotStickOnASuspendedSubject(t *testing.T) {
 		for _, cutoff := range usModelCutoffs {
 			t.Run(tc.name+"/"+cutoff.name, func(t *testing.T) {
 				universe := usUniverse(tc.universe...)
-				dayStart, dayEnd := usTime(tc.day+" 00:00:00"), usTime(tc.day+" 00:00:00")
-				_, _ = dayStart, dayEnd
 				suspended := func(label time.Time) bool {
 					// 目标交易日的全部根：标签落在 [目标日首根, 目标日末根] 之内。
 					return !label.Before(usTime(firstLabel(universe, tc.closeLabel, tc.bars)+":00")) && !label.After(usTime(tc.closeLabel+":00"))
