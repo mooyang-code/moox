@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -218,12 +219,12 @@ func TestCollectorTaskPurgeMetadataDeleteFailureKeepsLocalRetryState(t *testing.
 	require.Equal(t, []string{"stop"}, readCollectorPurgeOrder(t, orderPath))
 	require.Contains(t, summary.CompletedStages, "collector_database_backed_up")
 	require.Contains(t, summary.CompletedStages, "collector_writes_stopped")
-	require.Contains(t, summary.CompletedStages, "collector_runtime_deleted")
+	require.NotContains(t, summary.CompletedStages, "collector_runtime_deleted", "Storage 删除失败时不删本地任务记录")
 	require.NotContains(t, summary.CompletedStages, "collector_owned_views_deleted")
 
 	var count int64
 	require.NoError(t, db.Raw(`SELECT count(*) FROM t_collector_tasks`).Scan(&count).Error)
-	require.Zero(t, count)
+	require.EqualValues(t, 2, count, "任务记录保留，重跑能带上它们的结果数据集")
 }
 
 func TestCollectorTaskPurgeStorageInventoryCountsOnlyCollectorOwnedObjects(t *testing.T) {
@@ -308,6 +309,8 @@ type fakeCollectorStorageMetadataClient struct {
 	viewCalls    int
 	failViewID   string
 	deletedIDs   []string
+	// failDatasetOnce 模拟服务端删完元数据后删行失败：第一次删除返回错误，数据集已从列表中消失。
+	failDatasetOnce string
 }
 
 func (f *fakeCollectorStorageMetadataClient) ListDatasets(_ context.Context, req *storagepb.ListDatasetsReq) (*storagepb.ListDatasetsRsp, error) {
@@ -337,6 +340,11 @@ func (f *fakeCollectorStorageMetadataClient) ListViews(_ context.Context, req *s
 }
 
 func (f *fakeCollectorStorageMetadataClient) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
+	if f.failDatasetOnce != "" && req.GetDatasetId() == f.failDatasetOnce {
+		f.failDatasetOnce = ""
+		f.datasets = slices.DeleteFunc(f.datasets, func(d *storagepb.Dataset) bool { return d.GetDatasetId() == req.GetDatasetId() })
+		return &storagepb.DeleteDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "数据集元数据已删除，删行失败，请重试删除"}}, nil
+	}
 	f.deletedIDs = append(f.deletedIDs, req.GetSpaceId()+"/"+req.GetDatasetId())
 	return &storagepb.DeleteDatasetRsp{RetInfo: storageOKForCollectorPurge()}, nil
 }
@@ -400,4 +408,46 @@ func TestCollectorPurgeDeletesTaskResultDatasetMissingFromMetadata(t *testing.T)
 	require.NoError(t, inspectCollectorStorageInventory(context.Background(), metadata, summary))
 	require.NoError(t, deleteCollectorOwnedMetadata(context.Background(), metadata, summary))
 	require.Equal(t, []string{"crypto/dataset_task_1"}, metadata.deletedIDs)
+}
+
+// 第一次删除时 Storage 删完元数据后删行失败：本地任务记录保留，重跑时 ListDatasets 已查不到该数据集，
+// 仍按任务记录再调一次 DeleteDataset，预览也把它算进去。
+func TestCollectorTaskPurgeRerunDeletesDatasetAfterStorageFailure(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE t_collector_tasks (c_id INTEGER PRIMARY KEY, c_space_id TEXT, c_task_id TEXT, c_task_name TEXT, c_result_view_id TEXT, c_result_dataset_id TEXT)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO t_collector_tasks VALUES (1, 'crypto', 'task-1', 'BTC', 'view-1', 'dataset-1')`).Error)
+
+	originalFactory := newCollectorStorageMetadataClient
+	t.Cleanup(func() { newCollectorStorageMetadataClient = originalFactory })
+	fake := &fakeCollectorStorageMetadataClient{
+		datasets: []*storagepb.Dataset{
+			{SpaceId: "crypto", DatasetId: "dataset-1", Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-1"}},
+		},
+		failDatasetOnce: "dataset-1",
+	}
+	newCollectorStorageMetadataClient = func(context.Context, string, *setupconfig.Snapshot, string) (collectorStorageMetadataClient, io.Closer, error) {
+		return fake, nil, nil
+	}
+	flags := collectorTaskPurgeFlags{DBPath: dbPath, SpaceID: "crypto", Apply: true, StopCommand: "true"}
+
+	_, err = runCollectorTaskPurge(context.Background(), flags)
+	require.ErrorContains(t, err, "dataset-1")
+	require.Empty(t, fake.datasets, "服务端已删掉元数据")
+	var count int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM t_collector_tasks`).Scan(&count).Error)
+	require.EqualValues(t, 1, count)
+
+	preview, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{DBPath: dbPath, SpaceID: "crypto"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"dataset-1"}, preview.StorageDatasetIDs)
+	require.Equal(t, 1, preview.StorageOwnedDatasetCount)
+
+	flags.BackupDir = t.TempDir() // 备份文件名精确到秒，重跑换一个目录
+	_, err = runCollectorTaskPurge(context.Background(), flags)
+	require.NoError(t, err)
+	require.Equal(t, []string{"crypto/dataset-1"}, fake.deletedIDs)
+	require.NoError(t, db.Raw(`SELECT count(*) FROM t_collector_tasks`).Scan(&count).Error)
+	require.Zero(t, count)
 }

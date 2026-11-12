@@ -414,7 +414,12 @@ func inspectCollectorStorageInventory(ctx context.Context, metadata collectorSto
 		if datasetID == "" || !collectorStorageObjectMatchesSpace(task.SpaceID, summary.SpaceID) {
 			continue
 		}
+		before := len(summary.storageDatasetRefs)
 		summary.storageDatasetRefs = appendUniqueStorageObject(summary.storageDatasetRefs, task.SpaceID, datasetID)
+		if len(summary.storageDatasetRefs) > before {
+			summary.StorageOwnedDatasetCount++
+			summary.StorageDatasetIDs = appendUniqueString(summary.StorageDatasetIDs, datasetID)
+		}
 	}
 
 	for page := uint32(1); page <= maxPages; page++ {
@@ -575,16 +580,17 @@ func applyCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags,
 	}
 	summary.CompletedStages = append(summary.CompletedStages, "collector_writes_stopped")
 
+	// 先删 Storage 再删本地任务记录：Storage 中途失败时任务记录还在，重跑能带上它们的结果数据集。
+	if metadata != nil {
+		if err := deleteCollectorOwnedMetadata(ctx, metadata, summary); err != nil {
+			return err
+		}
+	}
 	if err := deleteCollectorTaskData(ctx, summary.DBPath, summary.TaskIDs, flags.SpaceID); err != nil {
 		return fmt.Errorf("delete Collector task runtime data: %w", err)
 	}
 	if len(summary.TaskIDs) > 0 {
 		summary.CompletedStages = append(summary.CompletedStages, "collector_runtime_deleted")
-	}
-	if metadata != nil {
-		if err := deleteCollectorOwnedMetadata(ctx, metadata, summary); err != nil {
-			return err
-		}
 	}
 	if strings.TrimSpace(flags.SpaceID) != "" {
 		summary.CompletedStages = append(summary.CompletedStages, "collector_space_purged")
