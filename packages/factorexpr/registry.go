@@ -205,6 +205,15 @@ var (
 	argGroup  = ArgSpec{Name: "g", Kind: ArgGroup}
 )
 
+// chipWindow 是筹码分布算子的窗口：每个输出点都要重算整个窗口，所以上限比通用窗口小得多。
+var chipWindow = ArgSpec{Name: "n", Kind: ArgWindow, Min: 20, Max: 500}
+
+// chipSeries 是筹码分布算子的五个序列参数。
+func chipSeries() []ArgSpec {
+	return []ArgSpec{{Name: "open", Kind: ArgSeries}, {Name: "high", Kind: ArgSeries}, {Name: "low", Kind: ArgSeries},
+		{Name: "close", Kind: ArgSeries}, {Name: "turnover", Kind: ArgSeries}}
+}
+
 func window(min int) ArgSpec {
 	return ArgSpec{Name: "n", Kind: ArgWindow, Min: float64(min), Max: MaxWindow}
 }
@@ -344,6 +353,17 @@ var functionList = []*Function{
 		"最近 n 根里 c 最后一次为真距今的根数，当根为真记 0；c 为 NaN 不算为真；没有为 NaN", "ts_bars_since(close > ts_max(high, 20) * 0.99, 100)"),
 	rolling("ts_value_when", []ArgSpec{{Name: "c", Kind: ArgBoolSeries}, {Name: "x", Kind: ArgSeries}, window(1)},
 		"最近 n 根里 c 最后一次为真那一根的 x；没有为 NaN", "ts_value_when(volume > ts_mean(volume, 20) * 3, close, 100)"),
+
+	// 时序：筹码分布（用最近 n 根的开高低收与换手率推算持仓成本的分布，价格要用复权价）
+	{Name: "chip_profit", Category: CategoryTimeSeries, Args: append(chipSeries(), chipWindow),
+		Result: ResultNumber, Lookback: "各参数回看的最大值+n−1", back: windowBack,
+		Doc:     "筹码分布的获利比例（0～1）：最近 n 根推算出的持仓里，成本不高于当根收盘价的占比。turnover 是换手率（百分比）；价格用复权价；窗口内价格没有波动、全程没有换手、价格不是正数或最高价低于最低价时为 NaN",
+		Example: "chip_profit(open, high, low, close, turnover_rate, 120)"},
+	{Name: "chip_cost", Category: CategoryTimeSeries,
+		Args:   append(chipSeries(), chipWindow, ArgSpec{Name: "q", Kind: ArgConstant, Min: 0.01, Max: 0.99}),
+		Result: ResultNumber, Lookback: "各参数回看的最大值+n−1", back: windowBack,
+		Doc:     "筹码分布的分位成本价：从低价往上累计到全部筹码的 q 时的价格，q=0.5 是平均成本。参数与口径同 chip_profit，结果与输入价格同一复权口径",
+		Example: "chip_cost(open, high, low, close, turnover_rate, 120, 0.5)"},
 
 	// 时序：递归平滑（截断到 K 根）
 	{Name: "ema", Category: CategoryTimeSeries,

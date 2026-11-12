@@ -20,6 +20,8 @@ func TestRepositoryLibrariesCompile(t *testing.T) {
 			"ma": 120, "ema": 50000, "macd": 362, "rsi": 2478, "roc": 121, "boll": 120, "atr": 121, "atr_pct": 121, "return_std": 121, "vwap": 120,
 			// A 股日线因子（stockcn_daily.yaml）：读复权因子与财务列。
 			"mom_adj": 251, "roe_ttm": 1,
+			// 筹码类：回看按 window 上限 500 推导。
+			"chip_profit_ratio": 500, "chip_avg_cost": 500, "chip_concentration": 500,
 		},
 		"../../../../examples/factors": {"bias": 120, "cci": 239, "ma_fast": 60, "ma_slow": 240, "channel": 120},
 	}
