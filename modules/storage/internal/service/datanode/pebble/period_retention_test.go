@@ -2,6 +2,7 @@ package pebble
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -129,4 +130,37 @@ func TestPeriodFinalizerWindowSkipsOldWaitingPeriods(t *testing.T) {
 	keys, err = store.duePeriodKeys(ctx, now, false)
 	require.NoError(t, err)
 	require.Len(t, keys, 2, "全量扫描找到全部到期周期")
+}
+
+// 行与位图已提交、判定之前进程退出：记录位图已满但仍在等待。重开后截止扫描（窗口与全量都一样）找到它并判定为完成，只发一个标记。
+func TestPeriodFinalizerRecoversFullBitmapLeftWaiting(t *testing.T) {
+	ctx := context.Background()
+	clock := newGoldenClock(goldenPeriod.Add(61 * time.Second))
+	store := newGoldenStore(t, clock)
+	store.backgroundCancel() // 停掉后台判定，只看扫描本身
+	series := goldenSeries(t, goldenDefaultSeries())
+	exp := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, series, goldenPeriod, goldenLateness)
+	raw, err := json.Marshal(periodRecord{Status: periodWaiting, SeriesHash: exp.SeriesHash, ExpectedCount: 2, DeadlineAt: goldenPeriod.Add(goldenDeadline).Unix(), Success: []byte{0b11}})
+	require.NoError(t, err)
+	key := periodKey(goldenSpace, goldenDataset, goldenFreq, goldenPeriod.Unix())
+	require.NoError(t, store.db.Set(key, raw, store.writeOptions))
+	// 一条损坏的记录不挡住其他周期。
+	require.NoError(t, store.db.Set(periodKey(goldenSpace, "broken", goldenFreq, goldenPeriod.Unix()), []byte("{"), store.writeOptions))
+
+	now := clock.now()
+	for _, windowed := range []bool{true, false} {
+		keys, err := store.duePeriodKeys(ctx, now, windowed)
+		require.Error(t, err)
+		require.Equal(t, [][]byte{key}, keys, "windowed=%t", windowed)
+	}
+	finalized, err := store.FinalizeWaitingDatasetPeriods(ctx, now)
+	require.ErrorContains(t, err, "已损坏")
+	require.Equal(t, 1, finalized)
+	require.Equal(t, "complete", goldenPeriodStatus(t, store, goldenSpace, goldenDataset, goldenFreq, goldenPeriod.Unix()))
+	markers := goldenMarkers(t, store, goldenSpace, goldenDataset)
+	require.Len(t, markers, 1)
+	require.Equal(t, "complete", markers[0].payload.GetStatus())
+	_, err = store.FinalizeWaitingDatasetPeriods(ctx, now.Add(time.Minute))
+	require.ErrorContains(t, err, "已损坏")
+	require.Len(t, goldenMarkers(t, store, goldenSpace, goldenDataset), 1)
 }

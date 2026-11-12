@@ -442,11 +442,11 @@ func (s *Store) finalizeDuePeriods(ctx context.Context, now time.Time, windowed 
 		now = s.periodNow().UTC()
 	}
 	keys, err := s.duePeriodKeys(ctx, now, windowed)
-	if err != nil {
+	if err != nil && len(keys) == 0 {
 		return 0, err
 	}
 	finalized := 0
-	var finalizeErrors []error
+	finalizeErrors := []error{err}
 	for _, key := range keys {
 		status, err := s.finalizePeriod(ctx, key, now)
 		if err != nil {
@@ -468,6 +468,7 @@ func (s *Store) duePeriodKeys(ctx context.Context, now time.Time, windowed bool)
 	}
 	defer iter.Close()
 	var due [][]byte
+	var decodeErrors []error
 	scope := ""
 	for valid := iter.First(); valid; {
 		if err := ctx.Err(); err != nil {
@@ -484,16 +485,18 @@ func (s *Store) duePeriodKeys(ctx context.Context, now time.Time, windowed bool)
 			}
 		}
 		scope = keyScope
-		record, err := decodePeriodRecord(iter.Value())
-		if err != nil {
-			return nil, fmt.Errorf("周期 %q: %w", key, err)
-		}
-		if record.due(now) {
+		// 一条坏记录只记错误，不挡住其他周期的判定。
+		if record, err := decodePeriodRecord(iter.Value()); err != nil {
+			decodeErrors = append(decodeErrors, fmt.Errorf("周期 %q: %w", key, err))
+		} else if record.due(now) {
 			due = append(due, append([]byte(nil), key...))
 		}
 		valid = iter.Next()
 	}
-	return due, iter.Error()
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return due, errors.Join(decodeErrors...)
 }
 
 // periodWindowLower 返回窗口扫描在一个（数据集、频率）下的起点：更早的周期截止时间早已过去，已经判定过。
