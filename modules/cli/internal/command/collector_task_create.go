@@ -40,8 +40,20 @@ var collectorTaskCreateCmd = &cobra.Command{
 		if collectorTaskCreateFlagsValue.AllFields && cmd.Flags().Changed("output-field") {
 			return errors.New("--all-output-fields 不能与 --output-field 同时用")
 		}
+		if hint := collectorTaskCreateFieldsHint(collectorTaskCreateFlagsValue, cmd.Flags().Changed("output-field")); hint != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), hint)
+		}
 		return runCollectorTaskCreate(cmd.Context(), cmd.OutOrStdout(), collectorTaskCreateFlagsValue)
 	},
+}
+
+// collectorTaskCreateFieldsHint 在既没显式给 --output-field、也没带 --all-output-fields 时返回一句提示：
+// 这时用的是默认字段清单，不一定是这个品种行的字段。
+func collectorTaskCreateFieldsHint(flags collectorTaskCreateFlags, fieldsGiven bool) string {
+	if flags.AllFields || fieldsGiven {
+		return ""
+	}
+	return "提示：没有指定输出字段，用的是默认字段清单（" + strings.Join(flags.Fields, ",") + "）；要输出该品种行的全部字段请加 --all-output-fields。"
 }
 
 func init() {

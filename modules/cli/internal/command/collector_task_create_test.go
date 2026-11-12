@@ -22,3 +22,14 @@ func TestCollectorTaskCreateParamsOutputFields(t *testing.T) {
 
 	require.NotNil(t, collectorTaskCreateCmd.Flags().Lookup("all-output-fields"))
 }
+
+// 两个字段参数都没给时提示用的是默认字段清单；给了任意一个就不提示。不看空间和市场。
+func TestCollectorTaskCreateFieldsHint(t *testing.T) {
+	flags := collectorTaskCreateFlags{Fields: []string{"close", "volume"}}
+	hint := collectorTaskCreateFieldsHint(flags, false)
+	require.Contains(t, hint, "默认字段清单（close,volume）")
+	require.Contains(t, hint, "--all-output-fields")
+	require.Empty(t, collectorTaskCreateFieldsHint(flags, true))
+	flags.AllFields = true
+	require.Empty(t, collectorTaskCreateFieldsHint(flags, false))
+}
