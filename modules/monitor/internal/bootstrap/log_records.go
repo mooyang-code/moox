@@ -65,14 +65,27 @@ func attachOwnLogs(repository *store.LogRecordRepository) {
 		// 没有部署环境变量时（本地运行）用启动时刻区分每次启动，保证记录号不重复。
 		identity.BootID = "local-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	}
-	logsink.Attach(identity, func(ctx context.Context, identity logsink.Identity, batch []logsink.Record) error {
+	logsink.Attach(identity, ownLogDeliver(repository))
+}
+
+// ownLogWriteTimeout 是 Monitor 把自己的重要日志写进库的最长等待。
+const ownLogWriteTimeout = 30 * time.Second
+
+// ownLogDeliver 把 Monitor 自己的一批重要日志直接写库。
+//
+// 不沿用日志输出包给的 5 秒期限：Monitor 只有一条数据库连接，刚启动时它被一批启动查询占着（线上实测 6.5 秒），
+// 5 秒一到这批日志就被丢掉，启动记录因此进不了库。这里等得久一些；等待期间新的日志留在输出包的队列里。
+func ownLogDeliver(repository *store.LogRecordRepository) logsink.Deliver {
+	return func(ctx context.Context, identity logsink.Identity, batch []logsink.Record) error {
 		records := make([]domain.LogRecord, 0, len(batch))
 		now := time.Now()
 		for _, item := range batch {
 			records = append(records, logRecordRow(identity, item, now))
 		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ownLogWriteTimeout)
+		defer cancel()
 		return storeLogRecords(ctx, repository, records)
-	})
+	}
 }
 
 func storeLogRecords(ctx context.Context, repository *store.LogRecordRepository, records []domain.LogRecord) error {
