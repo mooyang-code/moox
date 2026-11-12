@@ -64,7 +64,7 @@ type usRefetchCase struct {
 	closeLabel, closeBar string
 	// beg、end 是整天重取发给东方财富的日期区间（日期区间规则：beg 取首根标签减 22:30 的日期，end 取末根标签的日期加一天）。
 	beg, end string
-	// closeAt 是收市时刻（UTC）；重取那一轮在它之后 15 分钟。
+	// closeAt 是收市时刻（UTC）；重取那一轮在它之后 20 分钟。
 	closeAt time.Time
 }
 
@@ -208,7 +208,7 @@ var usModelCutoffs = []struct {
 
 // 收市后整天重取，从“到点提交”到“行被覆盖”走一遍（冬令时、夏令时、半日市各一天，切点取两个极端）：
 //  1. 库里先有当天整天的根，收盘那根是连续交易时段的值，补采的整天范围只有 1 个分块；
-//  2. 收市后 15 分钟那一轮提交强制补采作业，分块经云函数的处理器取数、写入，发给上游的 beg、end 符合日期区间规则；
+//  2. 收市后 20 分钟那一轮提交强制补采作业，分块经云函数的处理器取数、写入，发给上游的 beg、end 符合日期区间规则；
 //  3. 收盘那根被覆盖成含收盘竞价的值，其余各根重写后开高低收量额与原来相同，上游多带的前后日的根没有写进来。
 //
 // 上游返回的是模型（合成内容），收盘那一根的“最终值”是构造的：只把成交量、成交额、收盘价改成另一组合法的值。
@@ -254,8 +254,8 @@ func TestStockUSRefetchAfterCloseOverwritesTheCloseBar(t *testing.T) {
 				require.Contains(t, before, closeKey)
 				closeBefore := before[closeKey]
 
-				// 第 2 步：收市后 15 分钟那一轮，上游这时返回的收盘那根已并入收盘竞价的成交。
-				h.setNow(tc.closeAt.Add(15*time.Minute + 10*time.Second))
+				// 第 2 步：收市后 20 分钟那一轮，上游这时返回的收盘那根已并入收盘竞价的成交。
+				h.setNow(tc.closeAt.Add(20*time.Minute + 10*time.Second))
 				finalMu.Lock()
 				final = true
 				finalMu.Unlock()
@@ -311,7 +311,7 @@ func TestStockUSRefetchAfterCloseDoesNotStickOnASuspendedSubject(t *testing.T) {
 					return usModelUpstream(t, universe, cutoff.offset, cutoff.inclusive, nil, nil)
 				})
 				ctx := context.Background()
-				h.setNow(tc.closeAt.Add(15*time.Minute + 10*time.Second))
+				h.setNow(tc.closeAt.Add(20*time.Minute + 10*time.Second))
 				require.NoError(t, h.backfiller.RefetchAfterClose(ctx, "stockus"))
 				jobs, _, err := h.db.Backfill().ListJobs(ctx, "stockus", store.BackfillJobFilter{}, 1, 10)
 				require.NoError(t, err)

@@ -80,7 +80,7 @@ func nyt(day, clock string) time.Time {
 	return parsed.UTC()
 }
 
-// 美股配了收市后 15 分钟：每个交易日只有纽约 16:15 那一轮命中，范围是纽约当天零点到次日零点（换算成 UTC）。
+// 美股配了收市后 20 分钟：每个交易日只有纽约 16:20 那一轮命中，范围是纽约当天零点到次日零点（换算成 UTC）。
 // 冬令时（UTC-5）零点是 05:00Z，夏令时（UTC-4）是 04:00Z；夏令时开始、结束后的第一个交易日也各验一天。
 func TestCloseRefetchDayForStockUSUsesNewYorkMidnights(t *testing.T) {
 	for _, tc := range []struct {
@@ -95,8 +95,8 @@ func TestCloseRefetchDayForStockUSUsesNewYorkMidnights(t *testing.T) {
 		{"夏令时开始后的周一", "2026-03-09", time.Date(2026, 3, 9, 4, 0, 0, 0, time.UTC), time.Date(2026, 3, 10, 4, 0, 0, 0, time.UTC)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, []time.Time{nyt(tc.day, "16:15")}, dueRounds(t, "stockus", nyt(tc.day, "00:00"), nyt(tc.day, "00:00").AddDate(0, 0, 1)))
-			from, to, due, err := CloseRefetchDay("stockus", nyt(tc.day, "16:10"), nyt(tc.day, "16:15"))
+			require.Equal(t, []time.Time{nyt(tc.day, "16:20")}, dueRounds(t, "stockus", nyt(tc.day, "00:00"), nyt(tc.day, "00:00").AddDate(0, 0, 1)))
+			from, to, due, err := CloseRefetchDay("stockus", nyt(tc.day, "16:15"), nyt(tc.day, "16:20"))
 			require.NoError(t, err)
 			require.True(t, due)
 			require.Equal(t, tc.from, from)
@@ -105,11 +105,11 @@ func TestCloseRefetchDayForStockUSUsesNewYorkMidnights(t *testing.T) {
 	}
 }
 
-// 美股的半日市（2026-11-27，13:00 收市）：13:15 那一轮命中，16:15 不再命中，范围仍是纽约当天整天。
+// 美股的半日市（2026-11-27，13:00 收市）：13:20 那一轮命中，16:20 不再命中，范围仍是纽约当天整天。
 // 周末、感恩节（11-26）全天休市，没有一轮命中。
 func TestCloseRefetchDayForStockUSFollowsTheEarlyCloseAndHolidays(t *testing.T) {
-	require.Equal(t, []time.Time{nyt("2026-11-27", "13:15")}, dueRounds(t, "stockus", nyt("2026-11-27", "00:00"), nyt("2026-11-28", "00:00")))
-	from, to, due, err := CloseRefetchDay("stockus", nyt("2026-11-27", "13:10"), nyt("2026-11-27", "13:15"))
+	require.Equal(t, []time.Time{nyt("2026-11-27", "13:20")}, dueRounds(t, "stockus", nyt("2026-11-27", "00:00"), nyt("2026-11-28", "00:00")))
+	from, to, due, err := CloseRefetchDay("stockus", nyt("2026-11-27", "13:15"), nyt("2026-11-27", "13:20"))
 	require.NoError(t, err)
 	require.True(t, due)
 	require.Equal(t, time.Date(2026, 11, 27, 5, 0, 0, 0, time.UTC), from)
@@ -121,10 +121,11 @@ func TestCloseRefetchDayForStockUSFollowsTheEarlyCloseAndHolidays(t *testing.T) 
 }
 
 func TestParseConfigRefetchAfterClose(t *testing.T) {
-	for _, marketID := range []string{"stockhk", "stockus"} {
+	// 港股 15 分钟、美股 20 分钟：各自有实测依据，见两个市场的 market.yaml。
+	for marketID, minutes := range map[string]int{"stockhk": 15, "stockus": 20} {
 		config, err := ConfigFor(marketID)
 		require.NoError(t, err)
-		require.Equal(t, 15, config.RefetchAfterCloseMinutes, marketID)
+		require.Equal(t, minutes, config.RefetchAfterCloseMinutes, marketID)
 	}
 	var err error
 	_, err = parseConfig("demo", []byte("market_id: demo\nallowed_lateness_seconds: 60\nsubject_egress: direct\nrefetch_after_close_minutes: -1\n"))
