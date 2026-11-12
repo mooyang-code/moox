@@ -402,6 +402,10 @@ func validateResetPrimaryPath(path, packageRoot string) (string, error) {
 		return "", fmt.Errorf("refusing to delete Primary path outside package root: %s", cleanPath)
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
+	// 只删 Pebble 目录本身：误配成 ./var/storage 这类上级目录会连元数据库、View 索引一起删掉。
+	if filepath.Base(cleanPath) != "pebble" {
+		return "", fmt.Errorf("refusing to delete Primary path %s; the Pebble directory must be named pebble", cleanPath)
+	}
 	switch {
 	case cleanPath == cleanRoot:
 	case len(parts) >= 2 && parts[0] == "data":

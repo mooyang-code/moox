@@ -123,6 +123,7 @@ func TestValidateResetPrimaryPathRequiresPackageDataChild(t *testing.T) {
 		root, filepath.Dir(root), filepath.Join(root, "config"), filepath.Join(root, "data"),
 		filepath.Join(root, "storage-primary"), filepath.Join(root, "storage-primary", "var"), filepath.Join(root, "storage-primary", "config"),
 		filepath.Join(root, "storage-node", "var", "storage", "pebble"),
+		filepath.Join(root, "storage-primary", "var", "storage"), filepath.Join(root, "data", "storage"),
 		filepath.Join(root, "other", "var", "storage"), filepath.Join(root, "data", "..", "..", "etc"),
 	} {
 		if _, err := validateResetPrimaryPath(path, root); err == nil {

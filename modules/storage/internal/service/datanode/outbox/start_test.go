@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -43,7 +44,7 @@ func TestStartWithEventBusStartsWithoutEventBus(t *testing.T) {
 	}
 }
 
-// EventBus 先不可用、后来起来：之前积压在 Outbox 里的事件随后发出并从 Outbox 删除。
+// EventBus 先不可用、后来起来：启动时的首次连接失败后，积压由转发协程在连续发布失败后的重连发出，并从 Outbox 删除。
 func TestStartWithEventBusDrainsBacklogAfterEventBusComesUp(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -64,12 +65,15 @@ func TestStartWithEventBusDrainsBacklogAfterEventBusComesUp(t *testing.T) {
 	if _, err := store.UpsertFields(ctx, "quant", "prices", "", []*pb.RowFieldUpsert{row}); err != nil {
 		t.Fatal(err)
 	}
-	stop, err := StartWithEventBus(ctx, store, jetstream.Config{URLs: []string{fmt.Sprintf("nats://127.0.0.1:%d", port)}, Name: "storage-primary-test"})
+	reconnectsBefore := observability.DefaultViewMetrics.Snapshot().OutboxReconnectSuccesses
+	config := jetstream.Config{URLs: []string{fmt.Sprintf("nats://127.0.0.1:%d", port)}, Name: "storage-primary-test", ConnectTimeout: 200 * time.Millisecond}
+	stop, err := StartWithEventBus(ctx, store, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stop()
-	time.Sleep(500 * time.Millisecond)
+	// 等启动时的那次连接超时失败，之后能连上只可能靠转发协程的重连。
+	time.Sleep(time.Second)
 	if entries, err := store.ListOutbox(ctx, 0, 10); err != nil || len(entries) != 1 {
 		t.Fatalf("outbox before EventBus is up = %d entries, err=%v; want the backlog kept", len(entries), err)
 	}
@@ -112,5 +116,8 @@ func TestStartWithEventBusDrainsBacklogAfterEventBusComesUp(t *testing.T) {
 	info, err := js.StreamInfo("MOOX_STORAGE")
 	if err != nil || info.State.Msgs != 1 {
 		t.Fatalf("stream messages=%v err=%v, want 1", info, err)
+	}
+	if got := observability.DefaultViewMetrics.Snapshot().OutboxReconnectSuccesses; got <= reconnectsBefore {
+		t.Fatalf("outbox reconnect successes=%d before=%d, want the relay to reconnect", got, reconnectsBefore)
 	}
 }
