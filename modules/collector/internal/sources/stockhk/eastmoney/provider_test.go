@@ -123,8 +123,11 @@ func TestFetchKlinesParsesRecordedDay(t *testing.T) {
 }
 
 // 只按时间选目标那根，不等下一根出现。冷门股 00836 在 14:50 这个边界后一分多钟没有成交，新一根（14:55）不出现，
-// 刚收盘的 14:50 一直是返回里的最后一根（docs/计划/港股C0实测数据/轮询/poll_1450.json：14:49:57 起返回的最后两根是
-// 14:45、14:50，下一次取到数是 14:51:09，这时 14:55 才第一次出现，14:50 那根的内容没有变）。
+// 刚收盘的 14:50 仍是返回里的最后一根。
+//
+// 两段返回内容都是实测的（docs/计划/港股C0实测数据/轮询/poll_1450.json）：第一段是 14:49:57 取到的最后两根（14:45、14:50），
+// 第二段是 14:51:09 取到的（14:55 第一次出现，14:50 那根的内容与 14:49:57 时相同）。这两次之间实测没有取样，
+// 所以“14:50:05”这个时刻是构造的：用 14:49:57 的返回内容，把时钟拨到边界后 5 秒。
 func TestFetchKlinesReturnsTheJustClosedBarWhileItIsStillTheLastOne(t *testing.T) {
 	request := marketdata.KlineRequest{
 		MarketID: "stockhk", ExchangeID: "XHKG", InstrumentType: marketdata.InstrumentEquity, SubjectID: "00836.XHKG", ProviderSymbol: "00836",
@@ -145,11 +148,11 @@ func TestFetchKlinesReturnsTheJustClosedBarWhileItIsStillTheLastOne(t *testing.T
 		require.Equal(t, 20.42, last.Close)
 		require.Equal(t, 24000.0, last.Volume)
 	}
-	// 边界后 5 秒：新一根还没出现。
+	// 边界后 5 秒（时刻是构造的，内容取自 14:49:57 的取样）：新一根还没出现。
 	check(hkt("2026-11-12", "14:50:05"),
 		"2026-11-12 14:45,20.420,20.460,20.460,20.400,212000,4330480.000",
 		"2026-11-12 14:50,20.460,20.420,20.460,20.420,24000,490280.000")
-	// 边界后 69 秒：新一根出现了但没收盘，不返回，目标那根照常取到。
+	// 边界后 69 秒（实测的时刻与内容）：新一根出现了但没收盘，不返回，目标那根照常取到。
 	check(hkt("2026-11-12", "14:51:09"),
 		"2026-11-12 14:50,20.460,20.420,20.460,20.420,24000,490280.000",
 		"2026-11-12 14:55,20.420,20.400,20.420,20.400,2000,40800.000")

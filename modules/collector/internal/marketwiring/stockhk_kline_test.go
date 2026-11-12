@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,17 +49,22 @@ func TestStockHKKlinePipelineComesFromTheRouteFiles(t *testing.T) {
 	require.Equal(t, "stockhk_equity_kline_5m", marketfetch.KlineRouteID("stockhk", marketdata.InstrumentEquity, "5m"))
 }
 
-// stockHKPipeline 装一条港股 5m 流水线，只把连网的那一段换掉：数据源仍是港股的东方财富，请求交给 handler，时钟固定在 now。
-func stockHKPipeline(t *testing.T, storage marketfetch.Storage, now time.Time, handler http.HandlerFunc) *marketfetch.KlinePipeline {
+// stockHKPipeline 装一条港股 5m 流水线，只把连网的那一段换掉：数据源仍是港股的东方财富（限速、单次根数与装配出来的相同），
+// 熔断阈值沿用装配出来的，请求交给 handler，时钟固定在 now。limits 是请求带的限速，可以为空。
+func stockHKPipeline(t *testing.T, storage marketfetch.Storage, now time.Time, limits *marketfetch.FeedLimits, handler http.HandlerFunc) *marketfetch.KlinePipeline {
 	t.Helper()
-	pipeline, err := NewKlinePipeline(storage, "stockhk", marketdata.InstrumentEquity, "5m", "", nil)
+	pipeline, err := NewKlinePipeline(storage, "stockhk", marketdata.InstrumentEquity, "5m", "", limits)
+	require.NoError(t, err)
+	spec, err := pipeline.Router.NewSession().KlineSpec("eastmoney")
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	clock := func() time.Time { return now }
 	registry := marketdata.NewRegistry()
-	require.NoError(t, registry.Register(hkeastmoney.New(hkeastmoney.Config{BaseURL: server.URL, HTTPClient: server.Client(), Now: clock})))
-	router, err := marketdata.NewRouter(registry, 3, nil, nil)
+	require.NoError(t, registry.Register(hkeastmoney.New(hkeastmoney.Config{
+		BaseURL: server.URL, HTTPClient: server.Client(), Now: clock, RateLimit: spec.RateLimit, MaxBarsPerRequest: spec.MaxBarsPerRequest,
+	})))
+	router, err := marketdata.NewRouter(registry, pipeline.Router.BreakerThreshold(), nil, nil)
 	require.NoError(t, err)
 	pipeline.Router, pipeline.Now = router, clock
 	return pipeline
@@ -72,8 +78,9 @@ func hkTime(value string) time.Time {
 	return parsed.UTC()
 }
 
-// 定时请求（只要目标那一根）：冷门股 00836 在 14:50 这个边界之后新一根迟迟不出现，刚收盘的 14:50 仍是返回的最后一根
-// （样例是 2026-11-12 的实际返回，见 sources/stockhk/eastmoney 的测试），按开始时刻 14:45 挑出来写入。
+// 定时请求（只要目标那一根）：冷门股 00836 在 14:50 这个边界之后新一根迟迟不出现，刚收盘的 14:50 仍是返回的最后一根，
+// 按开始时刻 14:45 挑出来写入。返回内容是 2026-11-12 14:49:57 实际取到的；14:50:05 这个时刻是构造的，
+// 那次实测在 14:49:57 到 14:51:09 之间没有取样（见 sources/stockhk/eastmoney 的测试）。
 func TestStockHKScheduledRequestWritesTheTargetBar(t *testing.T) {
 	const dataset = "dataset_stockhk_equity_kline_5m"
 	target := hkTime("2026-11-12 14:45:00")
@@ -98,7 +105,7 @@ func TestStockHKScheduledRequestWritesTheTargetBar(t *testing.T) {
 
 	storage := &capturedStorage{}
 	var query string
-	pipeline := stockHKPipeline(t, storage, hkTime("2026-11-12 14:50:05"), func(w http.ResponseWriter, r *http.Request) {
+	pipeline := stockHKPipeline(t, storage, hkTime("2026-11-12 14:50:05"), nil, func(w http.ResponseWriter, r *http.Request) {
 		query = r.URL.RawQuery
 		_, _ = w.Write(body)
 	})
@@ -125,7 +132,7 @@ func TestStockHKScheduledRequestWritesTheTargetBar(t *testing.T) {
 
 	// 没等够结算延迟（收盘后 5 秒）就取：目标那根不写，这一项失败，等下一次。
 	early := &capturedStorage{}
-	pipeline = stockHKPipeline(t, early, hkTime("2026-11-12 14:50:04"), func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
+	pipeline = stockHKPipeline(t, early, hkTime("2026-11-12 14:50:04"), nil, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
 	payload, err = pipeline.Execute(context.Background(), request())
 	require.NoError(t, err)
 	require.Equal(t, "failed", payload.GetStatus())
@@ -138,7 +145,7 @@ func TestStockHKBackfillRequestWritesEveryBarInTheRange(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("..", "sources", "stockhk", "eastmoney", "testdata", "kline_5m_00700_20261111.json"))
 	require.NoError(t, err)
 	storage := &capturedStorage{}
-	pipeline := stockHKPipeline(t, storage, hkTime("2026-11-12 10:00:00"), func(w http.ResponseWriter, r *http.Request) {
+	pipeline := stockHKPipeline(t, storage, hkTime("2026-11-12 10:00:00"), nil, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "116.00700", r.URL.Query().Get("secid"))
 		require.Equal(t, "20261111", r.URL.Query().Get("beg"))
 		require.Equal(t, "20261111", r.URL.Query().Get("end"))
@@ -175,4 +182,78 @@ func TestStockHKBackfillRequestWritesEveryBarInTheRange(t *testing.T) {
 
 	// 区间只有下午的一段：接口仍返回整天，写入时按区间截取。
 	require.Equal(t, []string{"2026-11-11T05:00:00Z", "2026-11-11T05:05:00Z", "2026-11-11T05:10:00Z"}, run("2026-11-11 13:00:00", "2026-11-11 13:15:00"))
+}
+
+// 候选链只有一个数据源时没有别家可换，熔断阈值（同时是在途请求上限）按单一来源的口径算：每源尝试次数 × 并发。
+// 港股的采集计划按东方财富的 max_concurrent 给出并发 16，阈值是 3 × 16 = 48；实际同时在途的请求数由数据源自己的
+// max_concurrent（16）限制。候选链有多个数据源的（A 股）仍是候选链长度 × 每源尝试次数，不随并发变。
+func TestSingleSourceRouteUsesTheSingleSourceBreakerThreshold(t *testing.T) {
+	t.Setenv("MOOX_FETCH_HTTP_MAX_ATTEMPTS", "")
+	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
+	threshold := func(marketID, frequency string, limits *marketfetch.FeedLimits) int {
+		pipeline, err := NewKlinePipeline(timerHandlerStorage{}, marketID, marketdata.InstrumentEquity, frequency, "", limits)
+		require.NoError(t, err)
+		return pipeline.Router.BreakerThreshold()
+	}
+	planned := marketfetch.RouteFetchLimits("stockhk")(marketfetch.TaskGroup{Frequency: "5m"}, marketfetch.PlanFetch{})
+	require.Equal(t, 16, planned.FeedConcurrency, "采集计划给港股的源并发")
+	require.Equal(t, 16, planned.Concurrency, "一个函数内同时处理的标的数")
+	limits := &marketfetch.FeedLimits{FeedConcurrency: planned.FeedConcurrency}
+	require.Equal(t, 48, threshold("stockhk", "5m", limits))
+	require.Equal(t, 3, threshold("stockhk", "5m", nil), "请求没带限速、进程环境也没设并发时按 1")
+	// A 股各周期的候选链都不止一个数据源，阈值与请求带不带限速无关。
+	for frequency, want := range map[string]int{"1m": 12, "5m": 12, "1d": 6} {
+		require.Equal(t, want, threshold("stockcn", frequency, limits), frequency)
+		require.Equal(t, want, threshold("stockcn", frequency, nil), frequency)
+	}
+	// 云函数里并发来自计划下发的环境变量。
+	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "16")
+	require.Equal(t, 48, threshold("stockhk", "5m", nil))
+	require.Equal(t, 12, threshold("stockcn", "5m", nil))
+}
+
+// 一期 25 只、开头 3 次请求被对端断开：断连的 3 只在本次调用内重试后取到，其余标的不受影响，25 只全部写入。
+// （阈值按候选链长度算时是 3：这 3 次断连就会让其余标的不发请求直接失败。）
+func TestStockHKDisconnectsAtTheStartDoNotFailTheWholeBatch(t *testing.T) {
+	const dataset = "dataset_stockhk_equity_kline_5m"
+	body := []byte(`{"data":{"klines":[` +
+		`"2026-11-12 14:45,20.420,20.460,20.460,20.400,212000,4330480.000",` +
+		`"2026-11-12 14:50,20.460,20.420,20.460,20.420,24000,490280.000"]}}`)
+	var requests atomic.Int64
+	storage := &capturedStorage{}
+	limits := &marketfetch.FeedLimits{FeedConcurrency: 16}
+	pipeline := stockHKPipeline(t, storage, hkTime("2026-11-12 14:50:05"), limits, func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) <= 3 {
+			// 不回任何内容直接断开连接，与实测里东方财富断开新建连接的表现相同。
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		_, _ = w.Write(body)
+	})
+	require.Equal(t, 48, pipeline.Router.BreakerThreshold())
+	target := hkTime("2026-11-12 14:45:00")
+	items := make([]domain.CollectionItem, 0, 25)
+	for index := 0; index < 25; index++ {
+		code := fmt.Sprintf("%05d", 800+index)
+		items = append(items, domain.CollectionItem{
+			SubjectID: code + ".XHKG", Symbol: code, Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
+			StartTime: target.Format(time.RFC3339Nano), EndTime: target.Add(5 * time.Minute).Format(time.RFC3339Nano), BarLimit: 1,
+		})
+	}
+	payload, err := pipeline.Execute(context.Background(), marketfetch.Request{
+		BatchID: "disconnect", BatchKind: domain.BatchKindRealtime, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
+		DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "disconnect", Concurrency: 16, FetchLimits: limits, Items: items,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+	subjects := map[string]bool{}
+	for _, row := range storage.rows {
+		subjects[row.GetKey().GetTimeSeries().GetSubjectId()] = true
+		require.Equal(t, "2026-11-12T06:45:00Z", row.GetKey().GetTimeSeries().GetDataTime())
+	}
+	require.Len(t, subjects, 25, "25 只都取到")
+	require.EqualValues(t, 28, requests.Load(), "25 只各一次，加上断连的 3 次重试")
 }
