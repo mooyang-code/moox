@@ -96,7 +96,7 @@ func TestDefaultSetupSeedDeclaresArchiveDevice(t *testing.T) {
 	t.Fatal("default setup metadata does not declare parquet-local")
 }
 
-func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
+func TestDefaultSetupSeedHasNoCollectorDatasetsAndKeepsTheOthers(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml")
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)

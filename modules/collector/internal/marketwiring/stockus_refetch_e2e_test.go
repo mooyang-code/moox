@@ -180,6 +180,19 @@ func (h *usRefetchHarness) runJobs(rounds int) {
 	}
 }
 
+// requestsFor 返回发给上游的、某个 secid 的请求次数。
+func (h *usRefetchHarness) requestsFor(secid string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	count := 0
+	for _, query := range h.queries {
+		if query["secid"] == secid {
+			count++
+		}
+	}
+	return count
+}
+
 func (h *usRefetchHarness) lastQuery() map[string]string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -310,6 +323,11 @@ func TestStockUSRefetchAfterCloseDoesNotStickOnASuspendedSubject(t *testing.T) {
 				require.Equal(t, store.BackfillSucceeded, status.Job.Status, "%+v", status.Failed)
 				require.Empty(t, status.Failed)
 
+				// 停牌的分块执行两次：第一次复查仍缺，记下缺的退回再跑；第二次缺的完全一样，才认定是行情源没有。
+				// 每次执行里流水线对“没有已收盘的 K 线”最多请求 3 次，所以是 2 × 3；去掉这一步复查（第一次就记成没有）时只有 3。
+				// 正常的 AAPL 一次就取全。
+				require.Equal(t, 6, h.requestsFor("105.HALT"))
+				require.Equal(t, 1, h.requestsFor("105.AAPL"))
 				after := h.storage.snapshot()
 				require.Len(t, after, tc.bars, "只有 AAPL 的整天写入了，HALT 一根都没有")
 				for key := range after {
