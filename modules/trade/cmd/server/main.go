@@ -6,10 +6,10 @@ import (
 	_ "trpc.group/trpc-go/trpc-filter/masking"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
-	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/bootstrap"
+	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"

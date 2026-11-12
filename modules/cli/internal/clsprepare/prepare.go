@@ -31,6 +31,8 @@ type Factory func(secretID, secretKey string) (tencent.CLSAPI, error)
 type Options struct {
 	CloudAccountID    string
 	CredentialsOutput string
+	// RetentionDays 是新建日志主题时的保留天数；不大于 0 时用默认值。已有的主题不会被改动。
+	RetentionDays int64
 }
 
 type Result struct {
@@ -52,7 +54,7 @@ func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Op
 	if strings.TrimSpace(opts.CredentialsOutput) == "" {
 		return Result{}, fmt.Errorf("credentials output is required")
 	}
-	result, secret, err := provision(ctx, source, factory, opts.CloudAccountID)
+	result, secret, err := provision(ctx, source, factory, opts.CloudAccountID, opts.RetentionDays)
 	if err != nil {
 		return Result{}, err
 	}
@@ -63,12 +65,16 @@ func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Op
 }
 
 // Provision 幂等开通 CLS（服务、日志集、主题、索引字段），不写任何凭证文件：系统初始化用它保证日志服务开箱可用。
-func Provision(ctx context.Context, source AccountSource, factory Factory, cloudAccountID string) (Result, error) {
-	result, _, err := provision(ctx, source, factory, cloudAccountID)
+// retentionDays 是新建日志主题时的保留天数（来自配置的 [logging] retention_days），不大于 0 时用默认值。
+func Provision(ctx context.Context, source AccountSource, factory Factory, cloudAccountID string, retentionDays int64) (Result, error) {
+	result, _, err := provision(ctx, source, factory, cloudAccountID, retentionDays)
 	return result, err
 }
 
-func provision(ctx context.Context, source AccountSource, factory Factory, cloudAccountID string) (Result, *adminclient.SecretMaterial, error) {
+func provision(ctx context.Context, source AccountSource, factory Factory, cloudAccountID string, retentionDays int64) (Result, *adminclient.SecretMaterial, error) {
+	if retentionDays <= 0 {
+		retentionDays = RetentionDays
+	}
 	if source == nil {
 		return Result{}, nil, fmt.Errorf("account source is required")
 	}
@@ -101,7 +107,7 @@ func provision(ctx context.Context, source AccountSource, factory Factory, cloud
 		return Result{}, nil, safeUpstreamError("create CLS client", err)
 	}
 	resources, err := tencent.BootstrapCLS(ctx, api, tencent.CLSBootstrapOptions{
-		LogsetName: LogsetName, TopicName: TopicName, RetentionDays: RetentionDays, Partitions: Partitions,
+		LogsetName: LogsetName, TopicName: TopicName, RetentionDays: retentionDays, Partitions: Partitions,
 		IndexFields: tencent.MarketFetchLogIndexFields,
 	})
 	if err != nil {

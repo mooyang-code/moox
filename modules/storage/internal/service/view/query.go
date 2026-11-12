@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -14,6 +13,8 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func (s *Service) QueryTimeSeriesIndex(ctx context.Context, req *pb.QueryTimeSeriesIndexReq) (*pb.QueryTimeSeriesIndexRsp, error) {
@@ -96,7 +97,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	engineDone := time.Now()
 	currentRevision, revisionErr := s.readIndexRevision(ctx, indexID, nil)
 	if elapsed := time.Since(queryStarted); elapsed > time.Second {
-		log.Printf("storage view slow query space=%s view=%s index=%s total=%s resolve=%s start_revision=%s prepare=%s engine=%s end_revision=%s",
+		log.Warnf("storage view slow query space=%s view=%s index=%s total=%s resolve=%s start_revision=%s prepare=%s engine=%s end_revision=%s",
 			req.GetSpaceId(), req.GetViewId(), indexID, elapsed.Round(time.Millisecond), resolvedAt.Sub(queryStarted).Round(time.Millisecond),
 			startRevisionAt.Sub(resolvedAt).Round(time.Millisecond), engineStarted.Sub(startRevisionAt).Round(time.Millisecond),
 			engineDone.Sub(engineStarted).Round(time.Millisecond), time.Since(engineDone).Round(time.Millisecond))
@@ -118,7 +119,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 		var statsErr error
 		stats, statsErr = engine.Stat(ctx, indexID)
 		if statsErr != nil {
-			log.Printf("storage view query stat failed space=%s view=%s index=%s: %v", req.GetSpaceId(), req.GetViewId(), indexID, statsErr)
+			log.Warnf("storage view query stat failed space=%s view=%s index=%s: %v", req.GetSpaceId(), req.GetViewId(), indexID, statsErr)
 		} else {
 			hasStats = true
 			s.cacheActiveIndexStats(runtime, indexID, stats)

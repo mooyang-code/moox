@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +12,8 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var ErrViewDataReadyPending = errors.New("View 就绪事件等待对应的行写入")
@@ -121,10 +122,10 @@ func (s *Service) persistAppliedFenceLogged() {
 func setAsideCorrupt(path string, cause error) {
 	aside := fmt.Sprintf("%s.corrupt-%d", path, time.Now().UnixNano())
 	if err := os.Rename(path, aside); err != nil {
-		log.Printf("无法解析 %s（%v），改名保留失败：%v", path, cause, err)
+		log.Errorf("无法解析 %s（%v），改名保留失败：%v", path, cause, err)
 		return
 	}
-	log.Printf("无法解析 %s（%v），已改名为 %s，按空状态启动", path, cause, aside)
+	log.Errorf("无法解析 %s（%v），已改名为 %s，按空状态启动", path, cause, aside)
 }
 
 func (s *Service) loadAppliedFence() error {
@@ -204,7 +205,7 @@ func (s *Service) loadPendingReady() error {
 	for _, item := range items {
 		payload := &storagepb.ViewDataReady{}
 		if err := proto.Unmarshal(item.Payload, payload); err != nil {
-			log.Printf("View 就绪队列丢弃无法解析的事件 %s（%s/%s）：%v", item.EventID, item.SpaceID, item.ViewID, err)
+			log.Errorf("View 就绪队列丢弃无法解析的事件 %s（%s/%s）：%v", item.EventID, item.SpaceID, item.ViewID, err)
 			continue
 		}
 		required := make([]*storagepb.CommittedPosition, 0, len(item.Required))

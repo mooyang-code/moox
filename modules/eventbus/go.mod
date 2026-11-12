@@ -1,15 +1,16 @@
 module github.com/mooyang-code/moox/modules/eventbus
 
-go 1.26.0
+go 1.27.3
 
 require (
 	github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/clsreporter v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.17
 	github.com/nats-io/nats.go v1.51.0
 	github.com/stretchr/testify v1.12.1
@@ -18,36 +19,18 @@ require (
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
-	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )
 
 require (
-	github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op // indirect
-	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/molecule-man/go-brrr v1.3.0 // indirect
-	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
-	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
-	github.com/pierrec/lz4/v4 v4.1.26 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.67.5 // indirect
-	github.com/smartystreets/assertions v1.2.0 // indirect
-	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
-)
-
-require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
-	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/go-playground/form/v4 v4.2.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
@@ -60,16 +43,30 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
+	github.com/molecule-man/go-brrr v1.3.0 // indirect
+	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/jwt/v2 v2.8.1 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/panjf2000/ants/v2 v2.8.1 // indirect
+	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
+	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/prometheus/client_golang v1.23.2 // indirect
+	github.com/prometheus/client_model v0.6.2 // indirect
+	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
+	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
+	github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.11 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.77.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
@@ -77,12 +74,14 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.25.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
@@ -106,3 +105,13 @@ replace github.com/mooyang-code/moox/packages/frequency => ../../packages/freque
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 
 replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
+
+replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter
+
+replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
+
+replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
+
+replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
+
+replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb

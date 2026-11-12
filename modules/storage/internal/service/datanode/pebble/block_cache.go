@@ -2,12 +2,13 @@ package pebble
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/hostmem"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Pebble 块缓存。
@@ -34,7 +35,7 @@ const (
 var hostMemoryBytes = hostmem.TotalBytes
 
 // cacheLogf 是缓存用量日志的输出函数，测试里替换它来收集日志。
-var cacheLogf = log.Printf
+var cacheLogf = log.Infof
 
 // autoBlockCacheBytes 按主机内存推算块缓存大小。
 func autoBlockCacheBytes(totalBytes int64) int64 {

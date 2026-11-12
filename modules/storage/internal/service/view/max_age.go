@@ -1,11 +1,12 @@
 package view
 
 import (
-	"log"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // SetMaxAge 设置 View 按空间 × 频率的最长保留历史：data_time 早于“当前时间 − 期限”的行不写入 View。
@@ -76,6 +77,6 @@ func (s *Service) dropExpiredWrites(indexID string, writes []viewindex.RowWrite)
 		total += count
 		s.metrics.ObserveViewExpiredRowsDropped(key.space, key.freq, count)
 	}
-	log.Printf("storage view 丢弃超过最长保留期的行 index=%s 丢弃=%d 保留=%d", indexID, total, len(kept))
+	log.Warnf("storage view 丢弃超过最长保留期的行 index=%s 丢弃=%d 保留=%d", indexID, total, len(kept))
 	return kept
 }

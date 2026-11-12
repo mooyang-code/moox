@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -12,6 +11,8 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/nats-io/nats.go"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // A View event must stay pending until its row/marker application succeeds.
@@ -119,7 +120,7 @@ func (c Config) withDefaults() (Config, error) {
 	}
 	if c.ErrorReporter == nil {
 		c.ErrorReporter = jetstream.ErrorReporterFunc(func(err error) {
-			log.Printf("storage view event consumer error: %v", err)
+			log.Warnf("storage view event consumer error: %v", err)
 		})
 	}
 	return c, nil

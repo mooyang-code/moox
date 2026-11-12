@@ -10,7 +10,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/notification"
-	"trpc.group/trpc-go/trpc-go/log"
+	"github.com/mooyang-code/moox/packages/report/logsink"
 )
 
 // Monitor 的生命周期：模块级，没有对象。暂停 = **告警静默**：探测、入库、首页聚合照常，只是告警只记录、不推送
@@ -29,7 +29,7 @@ func (r *Runtime) alertSender(ctx context.Context) (notification.Sender, error) 
 
 func newMonitorLifecycle(db *store.Store, dbPath string, onChange func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string)) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
-		Audit:     func(event string) { log.Infof("%s", event) },
+		Audit:     logsink.Audit,
 		Module:    "monitor",
 		StateFile: filepath.Join(filepath.Dir(dbPath), "lifecycle.json"),
 		Hooks: lifecycle.Hooks{

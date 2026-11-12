@@ -144,6 +144,27 @@ channel_type = "wecom"
 webhook_url = ""
 secret = ""
 
+# 腾讯云日志服务里日志保留的天数（初始化时建的采集日志主题用它；服务日志的主题手工创建时填同样的天数），默认 2 天；保留越久存储费越高。
+# 只在创建日志主题时生效，已经建好的主题要到腾讯云控制台改。
+[logging]
+retention_days = 2
+
+# 服务日志上报腾讯云日志服务（CLS），可选。重要日志（Error 及以上、关键事件）总是发给 Monitor、在管理台“重要日志”里看，不需要这一段；
+# 这里配的是把各服务警告及以上的日志和关键事件另外上报到 CLS，方便检索。
+# 费用（腾讯云按量计费，中国大陆地域）：每个日志主题每天 0.04 元（约 1.2 元/月）是固定的，其余按量；按 MooX 的日志量、保留 2 天，每月合计几元以内。
+# endpoint 是上报域名（例如 ap-guangzhou.cls.tencentcs.com）；topic_id 是主题 moox-service 的 ID，
+# 用 moox-cli ops tencent cls bootstrap --topic-name moox-service --retention-days <[logging] 的 retention_days> 创建并取得。
+# writer_secret_id / writer_secret_key 填只有这个主题上传权限的子账号密钥：它会下发到每台主机，不要填云账号的管理密钥。
+# 上报走明文 HTTP，日志里不要写密钥。min_level 是上报的最低级别：info、warn、error，默认 warn；
+# 调成 info 会把各服务逐条处理的日志也报上去，量大约是 10 倍。关键事件（进程启动、暂停与恢复等）不论级别都上报。
+[logging.cls]
+enabled = false
+endpoint = ""
+topic_id = ""
+writer_secret_id = ""
+writer_secret_key = ""
+min_level = "warn"
+
 # 归档对象存储：归档 worker 导出分区后传一份到标准 S3 接口的对象存储。不写这一段时用因子机上内置的 SeaweedFS
 # （随 archive-worker 部署，只听 127.0.0.1，密钥在机器上生成；和归档文件同盘，不防整盘故障）。
 # 写这一段就改用外部 S3（COS、R2 等，可放到别的机器或云上）。这里不写密钥：secret_id 是管理台“设置 › 密钥”里那条（分类 其他、提供方 s3、类型 API 密钥对）的 ID，

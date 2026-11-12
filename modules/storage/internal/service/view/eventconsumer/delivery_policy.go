@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -13,6 +12,8 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/nats-io/nats.go"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func (c *Consumer) processDeliveryWithPolicy(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int) error {
@@ -131,7 +132,7 @@ func (c *Consumer) processDeliveryBatchWithPolicy(ctx context.Context, deliverie
 				}
 			}
 			if wait, took := applyStart.Sub(oldest), time.Since(applyStart); !oldest.IsZero() && (wait >= time.Second || took >= 200*time.Millisecond) {
-				log.Printf("storage view 行事件批次 事件=%d 最早入流至开始处理=%s 处理=%s", len(deliveries), wait.Round(time.Millisecond), took.Round(time.Millisecond))
+				log.Infof("storage view 行事件批次 事件=%d 最早入流至开始处理=%s 处理=%s", len(deliveries), wait.Round(time.Millisecond), took.Round(time.Millisecond))
 			}
 			settled = true
 			acked := make([]bool, len(deliveries))
@@ -277,7 +278,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 			(strings.Contains(delivery.Subject, "period") || wait >= time.Second || took >= 200*time.Millisecond) {
 			// 分段耗时：入流到开始处理是消费者排队与拉取的时间，处理是 apply 本身。周期事件总是记录，
 			// 其余事件（如行写入）只记录排队或处理较久的。
-			log.Printf("storage view 事件 consumer=%s subject=%s 入流至开始处理=%s 处理=%s 开始于=%s",
+			log.Infof("storage view 事件 consumer=%s subject=%s 入流至开始处理=%s 处理=%s 开始于=%s",
 				delivery.Consumer, delivery.Subject, wait.Round(time.Millisecond), took.Round(time.Millisecond), applyStart.Format("15:04:05.000"))
 		}
 		if err == nil || IsDeferred(err) {
@@ -288,7 +289,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 			// waiting for row positions); ACK so later dataset-queue rows can
 			// satisfy the fence instead of blocking behind this marker.
 			if IsDeferred(err) {
-				log.Printf("storage view delivery deferred ack after %v: consumer=%s event_id=%s subject=%s",
+				log.Warnf("storage view delivery deferred ack after %v: consumer=%s event_id=%s subject=%s",
 					err, delivery.Consumer, delivery.RawMessageID, delivery.Subject)
 			}
 			for ctx.Err() == nil {
@@ -296,7 +297,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 					metrics.ObserveDelivery("ack", "success")
 					return heartbeat.err()
 				} else {
-					log.Printf("storage view delivery ack failed: %v", ackErr)
+					log.Warnf("storage view delivery ack failed: %v", ackErr)
 					metrics.IncAckError()
 					metrics.ObserveDelivery("ack", "error")
 					heartbeat.report(ackErr)
@@ -338,7 +339,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 					metrics.ObserveDelivery("term", "success")
 					return heartbeat.err()
 				} else {
-					log.Printf("storage view delivery term failed after permanent error %v: %v", err, termErr)
+					log.Warnf("storage view delivery term failed after permanent error %v: %v", err, termErr)
 					metrics.IncAckError()
 					metrics.ObserveDelivery("term", "error")
 					heartbeat.report(termErr)
@@ -355,7 +356,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 		retryCount++
 		if maxRetryAttempts > 0 && retryCount >= maxRetryAttempts {
 			metrics.IncRetryExhausted()
-			log.Printf("storage view delivery retry exhausted: consumer=%s event_id=%s subject=%s delivery_count=%d decision=TERM reason=%v",
+			log.Errorf("storage view delivery retry exhausted: consumer=%s event_id=%s subject=%s delivery_count=%d decision=TERM reason=%v",
 				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount, err)
 			if termErr := actions.term(ctx); termErr != nil {
 				metrics.IncAckError()
@@ -369,7 +370,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 		// Keep the delivery pending while retrying. NAK would release
 		// MaxAckPending and allow a later event to overtake it.
 		if progressErr := actions.progress(ctx); progressErr != nil {
-			log.Printf("storage view delivery progress failed after %v: %v", err, progressErr)
+			log.Warnf("storage view delivery progress failed after %v: %v", err, progressErr)
 			metrics.IncInProgressError()
 			metrics.ObserveDelivery("in_progress", "error")
 			heartbeat.report(progressErr)

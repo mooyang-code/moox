@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +15,8 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"trpc.group/trpc-go/trpc-go/client"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type MetadataClient interface {
@@ -94,8 +95,9 @@ func (s *Service) StartViewMaintainerAsync(ctx context.Context, opts Maintenance
 	go func() {
 		defer close(done)
 		run := func() {
-			if err := s.maintainOnce(loopCtx, opts); err != nil {
-				log.Printf("storage view maintenance failed: %v", err)
+			// 停服时上下文被取消，这一轮没做完不算错误；逐个 View 的失败已经各记了一条，这里的汇总只按警告记。
+			if err := s.maintainOnce(loopCtx, opts); err != nil && loopCtx.Err() == nil {
+				log.Warnf("storage view maintenance failed: %v", err)
 			}
 		}
 		run()
@@ -154,7 +156,7 @@ func (s *Service) observeViewFileSize(view *pb.View, stats viewindex.ViewIndexSt
 	s.fileOverLimitMu.Unlock()
 	s.metrics.SetViewFileOverLimitCount(int64(count))
 	if exceeded && !wasExceeded {
-		log.Printf("storage view 索引文件超过告警线 space=%s view=%s index=%s 文件=%d 告警线=%d", view.GetSpaceId(), view.GetViewId(), view.GetActiveIndexId(), stats.PhysicalBytes, opts.MaxViewFileBytes)
+		log.Warnf("storage view 索引文件超过告警线 space=%s view=%s index=%s 文件=%d 告警线=%d", view.GetSpaceId(), view.GetViewId(), view.GetActiveIndexId(), stats.PhysicalBytes, opts.MaxViewFileBytes)
 	}
 }
 
@@ -183,8 +185,8 @@ func (s *Service) startViewMaintenanceLoop(ctx context.Context, opts Maintenance
 			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
-				if err := s.maintainOnce(loopCtx, opts); err != nil {
-					log.Printf("storage view maintenance failed: %v", err)
+				if err := s.maintainOnce(loopCtx, opts); err != nil && loopCtx.Err() == nil {
+					log.Warnf("storage view maintenance failed: %v", err)
 				}
 			}
 		}
@@ -235,7 +237,7 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 					continue
 				}
 				// 一个索引对不上不能拖垮整个进程：这个 View 不挂接，其他 View 继续恢复。
-				log.Printf("storage view 启动时没能挂接活动索引 space=%s view=%s 契约=%v 补提交=%v", view.GetSpaceId(), view.GetViewId(), err, recoverErr)
+				log.Errorf("storage view 启动时没能挂接活动索引 space=%s view=%s 契约=%v 补提交=%v", view.GetSpaceId(), view.GetViewId(), err, recoverErr)
 				s.holdUnattachedView(view)
 				continue
 			}
@@ -280,9 +282,13 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 		// 冷启动时先建业务 K 线 View：所有 View 这一轮都会处理，顺序只避免大的派生 View 先占住 Primary。
 		sortViewsForMaintenance(rsp.GetViews())
 		for _, view := range rsp.GetViews() {
+			// 停服时不再处理剩下的 View，也不为每个 View 各记一条“上下文已取消”。
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if err := s.maintainView(ctx, opts, auth, view); err != nil {
-				if view != nil {
-					log.Printf("storage view maintenance %s/%s failed: %v", view.GetSpaceId(), view.GetViewId(), err)
+				if view != nil && ctx.Err() == nil {
+					log.Errorf("storage view maintenance %s/%s failed: %v", view.GetSpaceId(), view.GetViewId(), err)
 				}
 				if firstErr == nil {
 					firstErr = err
@@ -376,7 +382,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 				stats = fullStats
 				metadataOnly = false
 			} else if fullErr != nil {
-				log.Printf("storage view coverage refresh deferred space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), fullErr)
+				log.Warnf("storage view coverage refresh deferred space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), fullErr)
 			}
 		}
 	}
@@ -449,7 +455,7 @@ func (s *Service) observeActivatedViewWatermark(view *pb.View, indexID string) {
 	}
 	engine, err := s.engineFor(indexID)
 	if err != nil {
-		log.Printf("storage view activation metric probe skipped space=%s view=%s index=%s: %v", view.GetSpaceId(), view.GetViewId(), indexID, err)
+		log.Infof("storage view activation metric probe skipped space=%s view=%s index=%s: %v", view.GetSpaceId(), view.GetViewId(), indexID, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -459,7 +465,7 @@ func (s *Service) observeActivatedViewWatermark(view *pb.View, indexID string) {
 		Order: pb.SortOrder_SORT_ORDER_DESC, Limit: 5000, TotalMode: pb.TotalMode_NONE,
 	})
 	if err != nil {
-		log.Printf("storage view activation metric probe failed space=%s view=%s index=%s: %v", view.GetSpaceId(), view.GetViewId(), indexID, err)
+		log.Warnf("storage view activation metric probe failed space=%s view=%s index=%s: %v", view.GetSpaceId(), view.GetViewId(), indexID, err)
 		return
 	}
 	keys := make([]*pb.RowFieldUpsert, 0, len(rows))

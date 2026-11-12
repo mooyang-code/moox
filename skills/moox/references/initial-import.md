@@ -192,7 +192,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor unmute --file ./moox.toml
 
 ## 常见问题
 
-- **导入后 View 长时间追不平**：先看 `storage-view` 慢日志（storage 主机 `/data/moox/run/logs/storage-view.log`，关键词“较慢”）与 CPU profile
+- **导入后 View 长时间追不平**：先看 `storage-view` 慢日志（storage 主机 `/data/moox/storage/current/storage-view/logs/trpc.log`，关键词“较慢”；这个文件只留最近 10MB×5，更早的在 CLS 里查）与 CPU profile
   （storage-view 的 admin 端口 `localhost:20001/debug/pprof/profile`，只监听本机）。积压的主要原因是写进 View 的行数太多——所以 Storage 只写尾部窗口。
 - **Storage 写入超时**：Storage 主机只有 4 核时，同时有补算或大批量导入会超时；降低并发或错开。重跑是幂等的。
 - **保留期**：Storage 只需装下“尾部窗口 + 缺口 + 实时”，默认保留期够用，不必为导入临时调大。

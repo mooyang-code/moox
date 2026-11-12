@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
@@ -23,6 +25,10 @@ type Request struct {
 		WebhookURL  string `json:"webhook_url"`
 		Secret      string `json:"secret"`
 	} `json:"notification"`
+	// Logging 是日志服务的设置；保留天数为 0 时用默认的 2 天。
+	Logging struct {
+		RetentionDays int64 `json:"retention_days"`
+	} `json:"logging"`
 	// Servers 按用途收集服务器；海外服务器和因子机可选（nil 表示不配置）。
 	Servers struct {
 		Storage  *Server    `json:"storage"`
@@ -109,6 +115,12 @@ func (r *Request) normalize(ctx context.Context, env Environment) error {
 		if err := checkText(field.name, field.value, field.required); err != nil {
 			return err
 		}
+	}
+	if r.Logging.RetentionDays == 0 {
+		r.Logging.RetentionDays = setupconfig.DefaultLogRetentionDays
+	}
+	if r.Logging.RetentionDays < 1 || r.Logging.RetentionDays > 3600 {
+		return errors.New("日志保留天数要在 1 到 3600 之间")
 	}
 	exchangeKeys, err := normalizeExchangeKeyEntries(r.ExchangeKeys)
 	if err != nil {

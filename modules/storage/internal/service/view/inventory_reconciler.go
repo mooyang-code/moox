@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +14,8 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const routeReadyRequestIDAttribute = "route_ready_request_id"
@@ -128,7 +129,7 @@ func (r *InventoryReconciler) Start(ctx context.Context) (func(), error) {
 		defer close(done)
 		run := func() {
 			if err := r.Reconcile(loopCtx); err != nil && loopCtx.Err() == nil {
-				log.Printf("View 清单对账失败：%v", err)
+				log.Errorf("View 清单对账失败：%v", err)
 			}
 		}
 		run()

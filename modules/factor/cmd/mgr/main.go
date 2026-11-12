@@ -4,24 +4,23 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
-	"os"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/bootstrap"
+	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
-	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		// Fatalf 写完会先把日志队列发出去再退出，这最后一条错误才进得了重要日志。
+		log.Fatalf("factor-mgr exited: %v", err)
 	}
 }
 

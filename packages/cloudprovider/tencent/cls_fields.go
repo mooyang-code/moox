@@ -32,3 +32,13 @@ var MarketFetchLogIndexFields = []CLSIndexField{
 	{Key: "fail_in_connect_phase", Numeric: true}, {Key: "fail_in_wait_response", Numeric: true}, {Key: "fail_in_io_phase", Numeric: true},
 	{Key: "fail_on_reused_conn", Numeric: true}, {Key: "fail_ms_p50", Numeric: true}, {Key: "fail_ms_max", Numeric: true},
 }
+
+// ServiceLogTopicName 是各服务日志（Info 及以上）上报的日志主题，和云函数采集日志的 moox-application 分开。
+const ServiceLogTopicName = "moox-service"
+
+// ServiceLogIndexFields 是服务日志的键值索引字段，由 packages/clsreporter/logcls 写入；增删字段时两处一起改。
+var ServiceLogIndexFields = []CLSIndexField{
+	{Key: "level"}, {Key: "component"}, {Key: "host"}, {Key: "instance"}, {Key: "boot_id"},
+	{Key: "caller"}, {Key: "event"}, {Key: "message"}, {Key: "service_name"},
+	{Key: "merged_count", Numeric: true},
+}

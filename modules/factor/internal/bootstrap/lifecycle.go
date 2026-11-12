@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
+	"github.com/mooyang-code/moox/packages/report/logsink"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -20,7 +21,7 @@ const lifecycleRefreshEvery = 30 * time.Second
 
 func newMgrLifecycle(db *store.Store, dbPath string) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
-		Audit:     func(event string) { log.Infof("%s", event) },
+		Audit:     logsink.Audit,
 		Module:    "factor-mgr",
 		StateFile: filepath.Join(filepath.Dir(dbPath), "lifecycle.json"),
 		Hooks: lifecycle.Hooks{

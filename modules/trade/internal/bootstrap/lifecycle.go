@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/lifecycle"
+	"github.com/mooyang-code/moox/packages/report/logsink"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -104,7 +105,7 @@ func tradeCatchup(accounts accountLister, worker interface{ Quiesce(context.Cont
 
 func newLifecycle(dbPath string, readiness health.Readiness, quiesce func(context.Context) error, catchup func(context.Context, lifecycle.Ref, time.Time) (lifecycle.Catchup, error), reset *lifecycle.ResetSpec) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
-		Audit:     func(event string) { log.Infof("%s", event) },
+		Audit:     logsink.Audit,
 		Module:    "trade",
 		StateFile: filepath.Join(filepath.Dir(dbPath), lifecycleStateFileName),
 		Hooks: lifecycle.Hooks{

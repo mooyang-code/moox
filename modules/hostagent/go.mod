@@ -23,7 +23,6 @@ require (
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
-	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )
 
@@ -34,7 +33,6 @@ require (
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/go-playground/form/v4 v4.2.0 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
@@ -60,7 +58,6 @@ require (
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/panjf2000/ants/v2 v2.8.1 // indirect
-	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
@@ -69,7 +66,6 @@ require (
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
-	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.77.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
@@ -123,3 +119,9 @@ replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tra
 replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
 
 replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
+
+replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter
+
+replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency

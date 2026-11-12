@@ -13,7 +13,7 @@ import (
 func newConfigMigrateCommand() *cobra.Command {
 	var file, renameHost, importSCF, addDeployment, reachability, factorsEnabled, retention, exampleFile string
 	var removeTasks, removeFactors, addTasks, addEgressDomains []string
-	var yes bool
+	var yes, addLoggingCLS bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
 		Short: "把 moox.toml 改写成当前格式（默认只预览）",
@@ -38,6 +38,7 @@ func newConfigMigrateCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			opts := configinit.MigrateOptions{Write: yes, SCFImport: importSCF, RemoveFactorTasks: removeTasks, RemoveFactors: removeFactors, AddFactorTasks: addTasks, AddEgressDomains: addEgressDomains, ExampleFile: exampleFile}
 			opts.FactorsEnabled = strings.TrimSpace(factorsEnabled)
+			opts.AddLoggingCLS = addLoggingCLS
 			if retention != "" {
 				target, value, ok := strings.Cut(retention, "=")
 				if !ok {
@@ -90,6 +91,7 @@ func newConfigMigrateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&exampleFile, "example-file", "", "--add-factor-task 读取的配置样例（默认仓库根的 moox.toml.example）")
 	cmd.Flags().StringVar(&addDeployment, "add-deployment", "", "把组件加进主机的 [deployments]，写成 主机ID=组件ID[,组件ID]，例如 factor=factor-engine,archive-worker")
 	cmd.Flags().StringArrayVar(&addEgressDomains, "add-egress-domain", nil, "把域名追加到 [egress_proxy] http_domains，例如 openapi.okx.com，可重复；已在名单里的不重复")
+	cmd.Flags().BoolVar(&addLoggingCLS, "add-logging-cls", false, "补上一段没有启用的 [logging.cls]（服务日志上报 CLS），之后用 config set logging.cls.<键>=<值> 填写；已经有这一段时不动")
 	cmd.Flags().BoolVar(&yes, "yes", false, "校验通过后写回（备份原文件并重新加密）")
 	return cmd
 }

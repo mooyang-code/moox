@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudfunction/internal/clsprovision"
@@ -114,6 +116,12 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) applyEnv() {
+	// 日志保留天数由部署工具按 moox.toml 的 [logging] retention_days 下发；只在创建日志主题时生效。
+	if v := strings.TrimSpace(os.Getenv("MOOX_CLS_RETENTION_DAYS")); v != "" {
+		if days, err := strconv.ParseInt(v, 10, 64); err == nil && days > 0 {
+			c.CLS.RetentionDays = days
+		}
+	}
 	if v := os.Getenv("MOOX_CLOUDFUNCTION_DB_PATH"); v != "" {
 		c.Database.Path = v
 	}

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -235,6 +236,68 @@ func (m Manifest) RequireNotification() error {
 	return nil
 }
 
+// Logging 是 [logging]：服务日志的去向。重要日志（Error 及以上、关键事件）总是发给 Monitor，不需要配置。
+type Logging struct {
+	// RetentionDays 是腾讯云日志服务里日志保留的天数（初始化时建的采集日志主题用它；服务日志的主题手工创建时填同样的天数），默认 2。
+	// 只在创建日志主题时生效；已经建好的主题要到腾讯云控制台改。1～3600，3640 表示永久。
+	RetentionDays int64      `toml:"retention_days"`
+	CLS           LoggingCLS `toml:"cls"`
+}
+
+// DefaultLogRetentionDays 是日志服务里日志默认保留的天数。
+const DefaultLogRetentionDays = 2
+
+func (l *Logging) validate() error {
+	if l.RetentionDays == 0 {
+		l.RetentionDays = DefaultLogRetentionDays
+	}
+	if l.RetentionDays < 1 || (l.RetentionDays > 3600 && l.RetentionDays != 3640) {
+		return fmt.Errorf("config_invalid: logging.retention_days must be 1..3600, or 3640 for permanent")
+	}
+	return l.CLS.validate()
+}
+
+// LoggingCLS 是 [logging.cls]：把各服务警告及以上的日志和关键事件上报到腾讯云日志服务。
+// 上报走明文 HTTP（SDK 写死），所以日志里不要写密钥和完整的 Webhook 地址。
+type LoggingCLS struct {
+	Enabled bool `toml:"enabled"`
+	// Endpoint 是日志服务的上报域名，例如 ap-guangzhou.cls.tencentcs.com。
+	Endpoint string `toml:"endpoint"`
+	// TopicID 是日志主题 moox-service 的 ID（moox-cli ops tencent cls bootstrap --topic-name moox-service 创建并输出）。
+	TopicID string `toml:"topic_id"`
+	// WriterSecretID / WriterSecretKey 是只有这个主题上传权限的子账号密钥，会下发到每台主机；不要填云账号的管理密钥。
+	WriterSecretID  string `toml:"writer_secret_id"`
+	WriterSecretKey string `toml:"writer_secret_key"`
+	// MinLevel 是上报的最低级别：info、warn（默认）、error。关键事件（进程启动、暂停与恢复等）不论级别都上报。
+	// 没有 debug：服务的日志输出本身从 info 起。
+	MinLevel string `toml:"min_level"`
+}
+
+// validate 规整并检查 [logging.cls]。没有启用时不检查其余字段。
+func (c *LoggingCLS) validate() error {
+	c.Endpoint, c.TopicID = strings.TrimSpace(c.Endpoint), strings.TrimSpace(c.TopicID)
+	c.WriterSecretID, c.WriterSecretKey = strings.TrimSpace(c.WriterSecretID), strings.TrimSpace(c.WriterSecretKey)
+	c.MinLevel = strings.ToLower(strings.TrimSpace(c.MinLevel))
+	if c.MinLevel == "" {
+		c.MinLevel = "warn"
+	}
+	if !slices.Contains([]string{"info", "warn", "error"}, c.MinLevel) {
+		return fmt.Errorf("config_invalid: logging.cls.min_level must be info, warn or error")
+	}
+	if !c.Enabled {
+		return nil
+	}
+	for name, value := range map[string]string{"endpoint": c.Endpoint, "topic_id": c.TopicID, "writer_secret_id": c.WriterSecretID, "writer_secret_key": c.WriterSecretKey} {
+		if value == "" {
+			return fmt.Errorf("config_invalid: logging.cls.%s is required when logging.cls.enabled is true", name)
+		}
+	}
+	if strings.Contains(c.Endpoint, "/") || strings.ContainsAny(c.Endpoint, " \t") {
+		return fmt.Errorf("config_invalid: logging.cls.endpoint 只填域名，例如 ap-guangzhou.cls.tencentcs.com")
+	}
+	return nil
+}
+
 type Notification struct {
 	ChannelType string `toml:"channel_type"`
 	WebhookURL  string `toml:"webhook_url"`
@@ -409,6 +472,7 @@ type Manifest struct {
 	LocalLogs          LocalLogs                 `toml:"local_logs"`
 	Observability      Observability             `toml:"observability"`
 	Notification       Notification              `toml:"notification"`
+	Logging            Logging                   `toml:"logging"`
 	ExchangeKeys       []ExchangeKey             `toml:"exchange_keys"`
 	Factors            FactorSetup               `toml:"factors"`
 	SCFPlan            SCFPlan                   `toml:"scf_plan"`
@@ -740,6 +804,9 @@ func validate(manifest *Manifest) error {
 	}
 	if !manifest.EventBus.TLSEnabled {
 		return fmt.Errorf("config_invalid: eventbus.tls_enabled must be true")
+	}
+	if err := manifest.Logging.validate(); err != nil {
+		return err
 	}
 	manifest.Notification.ChannelType = strings.TrimSpace(manifest.Notification.ChannelType)
 	if manifest.Notification.ChannelType == "" {

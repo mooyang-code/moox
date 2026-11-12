@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -16,6 +15,8 @@ import (
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type pendingViewReady struct {
@@ -89,7 +90,7 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 	defer func() {
 		if removed {
 			if err := s.persistPendingReady(); err != nil {
-				log.Printf("View 就绪队列落盘失败：%v", err)
+				log.Errorf("View 就绪队列落盘失败：%v", err)
 			}
 		}
 	}()
@@ -100,7 +101,7 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 		view := s.viewSnapshot(item.spaceID, item.viewID)
 		if view == nil {
 			if !item.opts.OccurredAt.IsZero() && time.Since(item.opts.OccurredAt) > orphanReadyAge {
-				log.Printf("View 就绪队列隔离所属 View 已不存在的事件 %s（%s/%s）", item.opts.EventID, item.spaceID, item.viewID)
+				log.Warnf("View 就绪队列隔离所属 View 已不存在的事件 %s（%s/%s）", item.opts.EventID, item.spaceID, item.viewID)
 				s.removePending(item.opts.EventID)
 				removed = true
 			}
@@ -110,7 +111,7 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 			continue
 		}
 		if _, err := registry.Encode(events.ViewDataReady, item.payload, item.opts); err != nil {
-			log.Printf("View 就绪队列隔离无法通过契约校验的事件 %s（%s/%s）：%v", item.opts.EventID, item.spaceID, item.viewID, err)
+			log.Errorf("View 就绪队列隔离无法通过契约校验的事件 %s（%s/%s）：%v", item.opts.EventID, item.spaceID, item.viewID, err)
 			s.removePending(item.opts.EventID)
 			removed = true
 			continue
@@ -127,7 +128,7 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 				s.metrics.ObserveReadyPublishRetry(item.viewID, "view_data_ready")
 			}
 			if permanentReadyPublishError(err) {
-				log.Printf("View 就绪队列隔离无法发布的事件 %s（%s/%s）：%v", item.opts.EventID, item.spaceID, item.viewID, err)
+				log.Errorf("View 就绪队列隔离无法发布的事件 %s（%s/%s）：%v", item.opts.EventID, item.spaceID, item.viewID, err)
 				s.removePending(item.opts.EventID)
 				removed = true
 				continue
@@ -165,7 +166,7 @@ func (s *Service) readyIssue(kind, format string, args ...any) {
 	s.readyIssues[kind] = message
 	s.readyLogMu.Unlock()
 	if !repeated {
-		log.Print(message)
+		log.Error(message)
 	}
 }
 
@@ -176,7 +177,7 @@ func (s *Service) readyResolved(kind, message string) {
 	delete(s.readyIssues, kind)
 	s.readyLogMu.Unlock()
 	if had {
-		log.Print(message)
+		log.Info(message)
 	}
 }
 

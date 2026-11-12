@@ -337,3 +337,26 @@ CREATE TABLE IF NOT EXISTS t_monitor_subject_first_seen (
     PRIMARY KEY (c_space_id, c_dataset_id, c_subject_id),
     CHECK (c_baseline IN (0, 1))
 );
+
+-- 各服务上报的重要日志：Error 及以上级别，以及代码里显式标出的关键事件。按日志时间保留 30 天，并有行数上限。
+-- c_record_key 是“实例 | 启动号 | 序号”，重复投递靠它去重；必须带启动号，进程重启后序号从头开始。
+CREATE TABLE IF NOT EXISTS t_monitor_log_records (
+    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    c_record_key TEXT NOT NULL,
+    c_host_id TEXT NOT NULL DEFAULT '',
+    c_component TEXT NOT NULL,
+    c_instance_id TEXT NOT NULL DEFAULT '',
+    c_level TEXT NOT NULL,
+    c_event TEXT NOT NULL DEFAULT '',
+    c_message TEXT NOT NULL DEFAULT '',
+    c_caller TEXT NOT NULL DEFAULT '',
+    c_fields TEXT NOT NULL DEFAULT '{}',
+    c_merged_count INTEGER NOT NULL DEFAULT 0,
+    c_logged_at DATETIME NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (c_record_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_monitor_log_records_logged_at ON t_monitor_log_records (c_logged_at);
+CREATE INDEX IF NOT EXISTS idx_t_monitor_log_records_component
+ON t_monitor_log_records (c_component, c_logged_at);

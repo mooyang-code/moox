@@ -304,6 +304,7 @@
 | `monitor arrival` | 数据到达历史：某天每个周期何时到达 |
 | `monitor health` | 健康总览：各模块、数据新鲜度与待处理项（排障先看 doctor alerts） |
 | `monitor host-metrics` | 主机资源指标的历史曲线 |
+| `monitor logs` | 重要日志：各服务的 Error 及以上日志和关键事件，新的在前；`--component`、`--host-id`、`--level`、`--keyword`、`--from`、`--to` 筛选，`--before-id` 向更早翻页（普通日志在 CLS 里查） |
 | `monitor hosts` | 列出已上报资源的主机代理 |
 | `monitor mute` | 屏蔽告警推送一段时间（到期自动恢复，最长 24 小时） |
 | `monitor mute-status` | 查看告警屏蔽状态 |

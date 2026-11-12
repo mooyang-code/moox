@@ -522,6 +522,58 @@ func TestLoadNotificationDingTalkAndWebhook(t *testing.T) {
 	}
 }
 
+// [logging.cls] 没写或没启用时不要求其余字段；启用时四项连接信息缺一不可，最低级别默认 warn。
+func TestLoadLoggingCLS(t *testing.T) {
+	section := func(body string) string { return validManifest + "\n[logging.cls]\n" + body }
+	root := t.TempDir()
+	snapshot, err := Load(writeManifest(t, root, validManifest, 0o600), root)
+	require.NoError(t, err)
+	assert.False(t, snapshot.Manifest.Logging.CLS.Enabled)
+	assert.Equal(t, "warn", snapshot.Manifest.Logging.CLS.MinLevel)
+	// 没写 [logging] 时日志保留 2 天。
+	assert.Equal(t, int64(2), snapshot.Manifest.Logging.RetentionDays)
+
+	root = t.TempDir()
+	snapshot, err = Load(writeManifest(t, root, validManifest+"\n[logging]\nretention_days = 7\n", 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), snapshot.Manifest.Logging.RetentionDays)
+	for _, days := range []string{"-1", "3601", "5000"} {
+		root := t.TempDir()
+		_, err := Load(writeManifest(t, root, validManifest+"\n[logging]\nretention_days = "+days+"\n", 0o600), root)
+		require.Error(t, err, days)
+		assert.Contains(t, err.Error(), "logging.retention_days", days)
+	}
+
+	root = t.TempDir()
+	snapshot, err = Load(writeManifest(t, root, section("enabled = false\nendpoint = \"\"\n"), 0o600), root)
+	require.NoError(t, err)
+	assert.False(t, snapshot.Manifest.Logging.CLS.Enabled)
+
+	full := "enabled = true\nendpoint = \" ap-guangzhou.cls.tencentcs.com \"\ntopic_id = \"topic-1\"\nwriter_secret_id = \"AKIDwriter\"\nwriter_secret_key = \"writer-key\"\nmin_level = \"ERROR\"\n"
+	root = t.TempDir()
+	snapshot, err = Load(writeManifest(t, root, section(full), 0o600), root)
+	require.NoError(t, err)
+	cls := snapshot.Manifest.Logging.CLS
+	assert.True(t, cls.Enabled)
+	assert.Equal(t, "ap-guangzhou.cls.tencentcs.com", cls.Endpoint)
+	assert.Equal(t, "error", cls.MinLevel)
+
+	for name, body := range map[string]string{
+		"缺主题":       strings.Replace(full, `topic_id = "topic-1"`, `topic_id = ""`, 1),
+		"缺密钥":       strings.Replace(full, `writer_secret_key = "writer-key"`, `writer_secret_key = ""`, 1),
+		"端点带协议":     strings.Replace(full, " ap-guangzhou.cls.tencentcs.com ", "https://ap-guangzhou.cls.tencentcs.com", 1),
+		"级别不认识":     strings.Replace(full, "ERROR", "verbose", 1),
+		"未启用但级别错":   "enabled = false\nmin_level = \"verbose\"\n",
+		"debug 不支持": strings.Replace(full, "ERROR", "debug", 1),
+	} {
+		root := t.TempDir()
+		_, err := Load(writeManifest(t, root, section(body), 0o600), root)
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), "logging.cls", name)
+		assert.NotContains(t, err.Error(), "writer-key", name)
+	}
+}
+
 func TestLoadDefaultsEventBusPort(t *testing.T) {
 	root := t.TempDir()
 	body := strings.Replace(validManifest, "port = 4222\n", "", 1)

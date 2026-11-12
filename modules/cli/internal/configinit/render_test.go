@@ -521,3 +521,22 @@ func TestRenderPrefersStorageRegionForCloudFunctions(t *testing.T) {
 		t.Fatalf("存储服务器不可用时应退到海外服务器：%+v", manifest.SCFPlan)
 	}
 }
+
+// 初始化时没填日志保留天数就是默认的 2 天；填了就写进 [logging]；超出范围的拒绝。
+func TestRenderWritesLogRetentionDays(t *testing.T) {
+	if got := render(t, sampleRequest()).Logging.RetentionDays; got != 2 {
+		t.Fatalf("默认保留天数 = %d，应为 2", got)
+	}
+	request := sampleRequest()
+	request.Logging.RetentionDays = 7
+	if got := render(t, request).Logging.RetentionDays; got != 7 {
+		t.Fatalf("保留天数 = %d，应为 7", got)
+	}
+	for _, days := range []int64{-1, 3601} {
+		request := sampleRequest()
+		request.Logging.RetentionDays = days
+		if err := renderErr(request, nil); err == nil {
+			t.Fatalf("保留天数 %d 应被拒绝", days)
+		}
+	}
+}

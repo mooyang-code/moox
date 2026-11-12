@@ -291,6 +291,27 @@ export interface NotificationChannel {
   has_secret?: boolean;
 }
 
+/** 一条重要日志：某个服务的 Error 及以上级别日志，或它显式标出的关键事件。 */
+export interface LogRecord {
+  /** 随写入递增；int64，JSON 里可能是字符串。 */
+  id?: number | string;
+  host_id?: string;
+  component?: string;
+  instance_id?: string;
+  /** info（关键事件）、error、fatal 等。 */
+  level?: string;
+  /** 关键事件的名称；普通的错误日志为空。 */
+  event?: string;
+  message?: string;
+  /** 打日志的代码位置（包/文件:行号）。 */
+  caller?: string;
+  fields?: Record<string, string>;
+  /** 大于 0 表示在这条之前，同一代码位置另有这么多条日志因为太密被合并掉了。 */
+  merged_count?: number | string;
+  /** 日志时间（UTC，RFC 3339）。 */
+  logged_at?: string;
+}
+
 /** 数据链路逐根到达历史的一个点：收线时间（UTC）、到达延迟、与上一条记录之间跳过的根数。 */
 export interface ArrivalHistoryPoint {
   close_at?: string;

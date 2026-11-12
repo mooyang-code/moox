@@ -126,6 +126,7 @@ export const systemMenu = [
   }),
   menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/nodes", 4),
   menu("0608", "06", "/ops/activity", "ops-activity", "ops-activity", "ops/activity/index", 5),
+  menu("0609", "06", "/ops/logs", "ops-logs", "ops-logs", "ops/log-records/index", 6),
 
   directory("07", "0", "/settings/spaces", "settings", "settings", 9, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "settings-spaces", "settings/spaces/index", 1),

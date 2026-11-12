@@ -8,6 +8,7 @@ require (
 	github.com/matoous/go-nanoid/v2 v2.1.0
 	github.com/mooyang-code/moox/modules/trade/proto/tradegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/barclock v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/clsreporter v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cnstock v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
@@ -29,12 +30,12 @@ require (
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
+	trpc.group/trpc-go/tnet v1.0.1
 	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	trpc.group/trpc-go/trpc-filter/masking v1.0.0
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
-	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )
 
@@ -91,7 +92,7 @@ require (
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
-	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
+	github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.11 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.77.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
@@ -110,7 +111,6 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.45.0 // indirect
-	trpc.group/trpc-go/tnet v1.0.1 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
 
@@ -161,3 +161,5 @@ replace github.com/mooyang-code/moox/packages/barclock => ../../packages/barcloc
 replace github.com/mooyang-code/moox/packages/cnstock => ../../packages/cnstock
 
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
+
+replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter

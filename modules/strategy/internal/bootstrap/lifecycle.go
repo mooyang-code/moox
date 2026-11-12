@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/warmup"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
+	"github.com/mooyang-code/moox/packages/report/logsink"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -59,7 +60,7 @@ const catchupGrace = time.Minute
 
 func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
-		Audit:     func(event string) { log.Infof("%s", event) },
+		Audit:     logsink.Audit,
 		Module:    "strategy",
 		StateFile: filepath.Join(filepath.Dir(dbPath), lifecycleStateFileName),
 		Hooks: lifecycle.Hooks{

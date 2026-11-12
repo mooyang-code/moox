@@ -207,6 +207,12 @@ export const staticRoutes = [
         meta: { title: "ops-monitor", reuseOnQuery: true }
       },
       {
+        path: "/ops/logs",
+        name: "ops-logs",
+        component: () => import("@/views/ops/log-records/index.vue"),
+        meta: { title: "ops-logs" }
+      },
+      {
         path: "/ops/deployments",
         name: "ops-deployments",
         component: () => import("@/views/ops/deployments/index.vue"),

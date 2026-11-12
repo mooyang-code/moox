@@ -527,3 +527,36 @@ func TestMigrateRewriteKeepsTrailingComments(t *testing.T) {
 		require.Equal(t, "# 真注释", lineComment(`a = ["x\"#y"] # 真注释`))
 	})
 }
+
+// --add-logging-cls 补上一段没有启用的 [logging.cls]；已经有这一段时不动。补完的整份配置能通过校验。
+func TestAddLoggingCLSOnce(t *testing.T) {
+	plain := []byte("[admin]\nusername = \"admin\"\n\n\n")
+	added, changed := addLoggingCLS(plain)
+	require.True(t, changed)
+	require.Equal(t, 1, strings.Count(string(added), "[logging.cls]"))
+	require.Equal(t, 1, strings.Count(string(added), "[logging]\nretention_days = 2"))
+	require.Contains(t, string(added), "enabled = false")
+	// 已经有 [logging] 的文件只补 [logging.cls]。
+	partial, changed := addLoggingCLS([]byte("[logging]\nretention_days = 7\n"))
+	require.True(t, changed)
+	require.Equal(t, 1, strings.Count(string(partial), "[logging]\n"))
+	require.Contains(t, string(partial), "retention_days = 7")
+	again, changed := addLoggingCLS(added)
+	require.False(t, changed)
+	require.Equal(t, string(added), string(again))
+}
+
+func TestMigrateWithLoggingCLSStaysValid(t *testing.T) {
+	path, root, keys := migrateFixture(t, legacyFactorText(t, "factor"))
+	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true, AddLoggingCLS: true})
+	require.NoError(t, err)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(string(plain), "[logging.cls]"))
+	snapshot, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.False(t, snapshot.Logging.CLS.Enabled)
+	require.Equal(t, "warn", snapshot.Logging.CLS.MinLevel)
+}

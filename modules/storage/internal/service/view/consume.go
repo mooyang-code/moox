@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +11,8 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type EventConsumerOptions = eventconsumer.Config
@@ -212,7 +213,8 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 				continue
 			}
 			if err := s.FlushViewDataReady(retryCtx, "", ""); err != nil && retryCtx.Err() == nil {
-				log.Printf("View 就绪队列后台重试失败：%v", err)
+				// 每 5 秒重试一次；真正的异常由 readyIssue 去重后按 Error 记一次，这里的逐次失败只按警告记。
+				log.Warnf("View 就绪队列后台重试失败：%v", err)
 			}
 		}
 	}()
@@ -254,7 +256,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	// 补发落盘的就绪事件：失败（EventBus 尚未恢复、发布超时）只记日志，交给退避与后台重试，不能让 View 角色退出、
 	// 行事件因此完全停止消费。
 	if err := s.FlushViewDataReady(ctx, "", ""); err != nil {
-		log.Printf("启动时补发落盘的 View 就绪事件失败，稍后由后台重试：%v", err)
+		log.Warnf("启动时补发落盘的 View 就绪事件失败，稍后由后台重试：%v", err)
 	}
 	return stop, nil
 }

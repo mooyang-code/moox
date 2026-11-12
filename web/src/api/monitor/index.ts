@@ -1,5 +1,5 @@
 import { callControl } from "@/api/admin/http";
-import type { ArrivalHistory, HealthOverview, NotificationChannel } from "./types";
+import type { ArrivalHistory, HealthOverview, LogRecord, NotificationChannel } from "./types";
 
 const SERVICE = "monitor";
 
@@ -21,6 +21,19 @@ export const monitorApi = {
   /** 一条数据链路（源数据集 + 周期）某一天各环节逐根 K 线的到达延迟；day 按市场时区，空为今天。 */
   queryArrivalHistory(req: { space_id: string; dataset_id: string; freq: string; day?: string; task_id?: string }) {
     return callControl<typeof req, ArrivalHistory>(SERVICE, "QueryPipelineArrivalHistory", req);
+  },
+  /** 重要日志（各服务的 Error 及以上日志和关键事件），新的在前；before_id 传上一页最后一条的 id 向更早翻页。 */
+  queryLogRecords(req: {
+    host_id?: string;
+    component?: string;
+    level?: string;
+    keyword?: string;
+    start_at?: string;
+    end_at?: string;
+    before_id?: number | string;
+    limit?: number;
+  }) {
+    return callControl<typeof req, { records?: LogRecord[]; has_more?: boolean }>(SERVICE, "QueryLogRecords", req);
   }
 };
 

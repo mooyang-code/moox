@@ -76,3 +76,44 @@ func TestCollectorStreamGetsOnlyTheDerivedCollectorAppKey(t *testing.T) {
 	_, err = unitEnvironment(manifest, runtimeIdentity{}, "overseas", components)
 	require.Error(t, err)
 }
+
+// 启用了服务日志上报 CLS 时，接入了日志上报的组件带上 MOOX_LOG_CLS_*，没接入的（access 等）不拿密钥；没有启用时一个都不带。
+// 变量名不能是 MOOX_CLS_*：那一组是云函数采集日志用的，指向另一个主题和另一把密钥。
+func TestUnitEnvironmentCarriesServiceLogCLS(t *testing.T) {
+	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"overseas": {Address: "192.0.2.9"}}}
+	components := []string{"trade", "access"}
+	disabled, err := unitEnvironment(manifest, runtimeIdentity{}, "overseas", components)
+	require.NoError(t, err)
+	for key := range disabled["trade"] {
+		require.NotContains(t, key, "CLS")
+	}
+	manifest.Logging.CLS = setupconfig.LoggingCLS{Enabled: true, Endpoint: "ap-guangzhou.cls.tencentcs.com", TopicID: "topic-1", WriterSecretID: "AKIDwriter", WriterSecretKey: "writer-key", MinLevel: "warn"}
+	enabled, err := unitEnvironment(manifest, runtimeIdentity{}, "overseas", components)
+	require.NoError(t, err)
+	for key := range enabled["access"] {
+		require.NotContains(t, key, "CLS")
+	}
+	for _, component := range []string{"trade"} {
+		values := enabled[component]
+		require.Equal(t, "true", values["MOOX_LOG_CLS_ENABLED"])
+		require.Equal(t, "ap-guangzhou.cls.tencentcs.com", values["MOOX_LOG_CLS_ENDPOINT"])
+		require.Equal(t, "topic-1", values["MOOX_LOG_CLS_TOPIC_ID"])
+		require.Equal(t, "AKIDwriter", values["MOOX_LOG_CLS_SECRET_ID"])
+		require.Equal(t, "writer-key", values["MOOX_LOG_CLS_SECRET_KEY"])
+		require.Equal(t, "warn", values["MOOX_LOG_CLS_MIN_LEVEL"])
+		require.Equal(t, "overseas", values["MOOX_LOG_CLS_SOURCE"])
+		for key := range values {
+			require.False(t, strings.HasPrefix(key, "MOOX_CLS_"), key)
+		}
+	}
+}
+
+// CloudFunction 开通采集日志主题时的保留天数来自 moox.toml；别的组件不带这个变量。
+func TestUnitEnvironmentCarriesLogRetentionForCloudFunction(t *testing.T) {
+	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "192.0.2.1"}}}
+	manifest.Logging.RetentionDays = 7
+	environment, err := unitEnvironment(manifest, runtimeIdentity{}, "control", []string{"cloudfunction", "web-host"})
+	require.NoError(t, err)
+	require.Equal(t, "7", environment["cloudfunction"]["MOOX_CLS_RETENTION_DAYS"])
+	require.NotContains(t, environment["web-host"], "MOOX_CLS_RETENTION_DAYS")
+}

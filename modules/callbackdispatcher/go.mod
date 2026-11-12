@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mooyang-code/moox/modules/callbackdispatcher/proto/callbackdispatchergen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/trade/proto/tradegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/clsreporter v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
@@ -25,7 +26,6 @@ require (
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
-	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )
 
@@ -85,7 +85,7 @@ require (
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
-	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
+	github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.11 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.77.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
@@ -152,3 +152,5 @@ replace github.com/mooyang-code/moox/modules/callbackdispatcher/proto/callbackdi
 replace github.com/mooyang-code/moox/packages/netguard => ../../packages/netguard
 
 replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
+
+replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter

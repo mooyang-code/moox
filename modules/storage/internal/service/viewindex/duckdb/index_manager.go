@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,6 +21,8 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/encoding/protojson"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type IndexManagerOptions struct{ Root string }
@@ -398,7 +399,7 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	}
 	if total := time.Since(writeStart); total >= 200*time.Millisecond {
 		// 分段耗时：开事务 = 取连接与 BeginTx；序列行 = view_rows/计数的去重插入；写入 = 行数据 UPSERT；提交 = 事务提交落盘。
-		log.Printf("storage view DuckDB 写入较慢 index=%s 行=%d 开事务=%s 序列行=%s 写入=%s 提交=%s 合计=%s",
+		log.Warnf("storage view DuckDB 写入较慢 index=%s 行=%d 开事务=%s 序列行=%s 写入=%s 提交=%s 合计=%s",
 			id, len(batch.RowWrites), beginTook.Round(time.Millisecond), seriesTook.Round(time.Millisecond),
 			upsertTook.Round(time.Millisecond), time.Since(commitStart).Round(time.Millisecond), total.Round(time.Millisecond))
 	}
@@ -1253,7 +1254,7 @@ func open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("configure duckdb resource limits: %w", err)
 	}
 	logMemoryLimitOnce.Do(func() {
-		log.Printf("storage view DuckDB 单个索引内存上限 %s（%s）", memoryLimit, memorySource)
+		log.Infof("storage view DuckDB 单个索引内存上限 %s（%s）", memoryLimit, memorySource)
 	})
 	return db, nil
 }
@@ -1349,7 +1350,7 @@ func duckType(valueType pb.FieldValueType) string {
 	case pb.FieldValueType_FIELD_VALUE_TYPE_STRING:
 		return "VARCHAR"
 	default:
-		log.Printf("duckdb view index: unknown field value type %s, falling back to VARCHAR", valueType)
+		log.Warnf("duckdb view index: unknown field value type %s, falling back to VARCHAR", valueType)
 		return "VARCHAR"
 	}
 }

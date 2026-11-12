@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math/bits"
 	"sort"
 	"strconv"
@@ -22,6 +21,8 @@ import (
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -638,7 +639,7 @@ func (s *Store) logPeriodFinalizeError(err error) {
 		return
 	}
 	s.periodFinalizeLastError = message
-	log.Printf("DataNode period finalizer failed: %v", err)
+	log.Errorf("DataNode period finalizer failed: %v", err)
 }
 
 func (s *Store) clearPeriodFinalizeError() {

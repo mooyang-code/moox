@@ -151,7 +151,7 @@ func runCLSBootstrap(cmd *cobra.Command, opts clsBootstrapOptions) error {
 	result, err := tencent.BootstrapCLS(ctx, api, tencent.CLSBootstrapOptions{
 		LogsetName: opts.LogsetName, TopicName: opts.TopicName,
 		RetentionDays: opts.RetentionDays, Partitions: opts.Partitions,
-		IndexFields: tencent.MarketFetchLogIndexFields,
+		IndexFields: clsIndexFields(opts.TopicName),
 	})
 	if err != nil {
 		return err
@@ -171,4 +171,12 @@ func runCLSBootstrap(cmd *cobra.Command, opts clsBootstrapOptions) error {
 
 func clsIngestHost(region string) string {
 	return strings.TrimSpace(region) + ".cls.tencentyun.com"
+}
+
+// clsIndexFields 按主题选择要建的键值索引：服务日志的主题用服务日志的字段，其余（云函数采集日志）用采集日志的字段。
+func clsIndexFields(topicName string) []tencent.CLSIndexField {
+	if strings.TrimSpace(topicName) == tencent.ServiceLogTopicName {
+		return tencent.ServiceLogIndexFields
+	}
+	return tencent.MarketFetchLogIndexFields
 }

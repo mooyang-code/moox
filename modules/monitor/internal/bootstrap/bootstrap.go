@@ -58,6 +58,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 monitor schema 失败: %v", err)
 		return nil, err
 	}
+	// Monitor 自己的重要日志直接写库，不绕 EventBus；要赶在创建指标上报之前接上（先接入者生效）。
+	attachOwnLogs(mgr.Repositories().Logs)
 	if !channelsExisted {
 		if err := seedNotificationChannel(ctx, mgr.Repositories()); err != nil {
 			_ = mgr.Close()

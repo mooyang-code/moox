@@ -70,6 +70,10 @@ var (
 	ObservabilityHostSnapshotReported = declareEvent("event.observability.host.snapshot.reported", 1, "MOOX_OBSERVABILITY", "hostagent", func() proto.Message {
 		return &hostmetricpb.HostMetric{}
 	}, validateObservabilityHostSnapshotReported)
+	// ObservabilityLogReported 是各服务上报的一批重要日志（Error 及以上、关键事件），Monitor 收到后写进自己的库。
+	ObservabilityLogReported = declareEvent("event.observability.log.reported", 1, "MOOX_OBSERVABILITY", "service", func() proto.Message {
+		return &metricspb.LogReport{}
+	}, validateObservabilityLogReported)
 	DatasetRowsUpserted = declareEvent("event.storage.dataset.rows.upserted", 2, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetRowsUpserted{}
 	}, validateDatasetRowsUpserted)

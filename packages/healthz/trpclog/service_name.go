@@ -30,25 +30,34 @@ func InstallServiceName(serviceName string) {
 		base = tagged.base
 	}
 
-	log.SetLogger(newServiceNameLogger(base, serviceName, -1))
+	log.SetLogger(newServiceNameLogger(base, serviceName))
 }
 
+// serviceNameLogger 给进程的默认日志对象加上 service_name 字段。
+//
+// 日志里的代码位置靠“跳过几层调用”算出来，包装多了一层调用，所以要分两种用法：
+//   - 直接调用包装对象的方法（log.Errorf 等最终走到这里）：比原来多一层，用 tagged，它多跳一层。
+//   - 经 With 取出的对象（log.With、log.WithContextFields 之后的调用）：tRPC 直接调用取出的对象，没有多出来的那一层，
+//     所以 With 必须从没有多跳的 plain 派生。
+//
+// 这两处原来搞反了（tagged 少跳一层、With 又从 tagged 派生），线上日志里的代码位置因此全都指向本文件。
 type serviceNameLogger struct {
 	base        log.Logger
+	plain       log.Logger
 	tagged      log.Logger
 	serviceName string
 }
 
-func newServiceNameLogger(base log.Logger, serviceName string, additionalCallerSkip int) *serviceNameLogger {
-	taggedBase := base
-	if additionalCallerSkip != 0 {
-		if optionLogger, ok := base.(log.OptionLogger); ok {
-			taggedBase = optionLogger.WithOptions(log.WithAdditionalCallerSkip(additionalCallerSkip))
-		}
+func newServiceNameLogger(base log.Logger, serviceName string) *serviceNameLogger {
+	field := log.Field{Key: ServiceNameField, Value: serviceName}
+	wrapped := base
+	if optionLogger, ok := base.(log.OptionLogger); ok {
+		wrapped = optionLogger.WithOptions(log.WithAdditionalCallerSkip(1))
 	}
 	return &serviceNameLogger{
 		base:        base,
-		tagged:      taggedBase.With(log.Field{Key: ServiceNameField, Value: serviceName}),
+		plain:       base.With(field),
+		tagged:      wrapped.With(field),
 		serviceName: serviceName,
 	}
 }
@@ -88,7 +97,7 @@ func (l *serviceNameLogger) With(fields ...log.Field) log.Logger {
 			filtered = append(filtered, field)
 		}
 	}
-	return l.tagged.With(filtered...)
+	return l.plain.With(filtered...)
 }
 
 // WithOptions preserves tRPC's caller-skip adjustment when log.With or
@@ -99,5 +108,5 @@ func (l *serviceNameLogger) WithOptions(opts ...log.Option) log.Logger {
 		return l
 	}
 	base := optionLogger.WithOptions(opts...)
-	return newServiceNameLogger(base, l.serviceName, 0)
+	return newServiceNameLogger(base, l.serviceName)
 }
