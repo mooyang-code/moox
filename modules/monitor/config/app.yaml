@@ -70,15 +70,9 @@ market_health:
   timer_coordination_lease_grace: 10m
   feed_failure_rate_window: 5m
   feed_failure_rate_threshold: 0.2
-  instrument_snapshot_max_age: 36h
-  instrument_minimum_count: 4000
-  instrument_required_exchanges: [XSHG, XSHE, XBSE]
 
 kline_freshness:
   enabled: true
-  space_ids:
-    - crypto
-    - stockcn
   evaluation_interval: 30s
   inventory_refresh_interval: 1m
   inventory_page_size: 100

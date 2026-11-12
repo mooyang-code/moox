@@ -77,6 +77,14 @@ func (q *QueryService) DatasetDisplayName(ctx context.Context, spaceID, datasetI
 	return q.storage.DatasetDisplayName(ctx, spaceID, datasetID)
 }
 
+// DatasetMarketType 返回数据集的品种属性（spot、swap、equity……）；没有配置元数据或读不到时为空。
+func (q *QueryService) DatasetMarketType(ctx context.Context, spaceID, datasetID string) string {
+	if q == nil || q.storage == nil {
+		return ""
+	}
+	return q.storage.DatasetMarketType(ctx, spaceID, datasetID)
+}
+
 // ListFactorResultDatasets 列出源数据集 + 周期上的全部因子任务；没有配置元数据时没有任务。
 func (q *QueryService) ListFactorResultDatasets(ctx context.Context, spaceID, sourceDatasetID, freq string) ([]FactorResultDataset, error) {
 	if q == nil || q.storage == nil {

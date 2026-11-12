@@ -86,7 +86,7 @@ type DatasetFrequencyStatus struct {
 	LatenessLimitSeconds int64
 	// ClockIssue 说明无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”；为空表示已按日历判断。
 	ClockIssue string
-	// Timezone 是市场时区（IANA 名称）：加密货币 UTC，A 股 Asia/Shanghai；没有交易日历时为 UTC。
+	// Timezone 是市场时区（IANA 名称）：连续市场是 UTC，交易时段市场是交易所时区；没有交易日历时为 UTC。
 	Timezone string
 }
 
@@ -131,14 +131,11 @@ type InventorySource interface {
 }
 
 type MarketFetchThresholds struct {
-	CoordinationStaleAfter      time.Duration
-	PendingGrace                time.Duration
-	LeaseGrace                  time.Duration
-	FeedFailureRateWindow       time.Duration
-	FeedFailureRateThreshold    float64
-	InstrumentSnapshotMaxAge    time.Duration
-	InstrumentMinimumCount      int
-	InstrumentRequiredExchanges []string
+	CoordinationStaleAfter   time.Duration
+	PendingGrace             time.Duration
+	LeaseGrace               time.Duration
+	FeedFailureRateWindow    time.Duration
+	FeedFailureRateThreshold float64
 }
 
 func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
@@ -1084,6 +1081,10 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 			out = append(out, item)
 		}
 	}
+	// 余额对账和各模块的关注项与空间无关，归在 mooxsys 下。
+	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+		return out, nil
+	}
 	balances, err := b.buildBalanceStatuses(ctx)
 	if err != nil {
 		return nil, err
@@ -1199,7 +1200,7 @@ func (b Builder) buildAttentionStatuses(ctx context.Context, source attentionSou
 			continue
 		}
 		status := BusinessStatus{
-			SpaceID: "crypto", Kind: source.check, Module: kind, Status: "healthy", Reason: "正常",
+			SpaceID: monmetrics.InternalMetricSpaceID, Kind: source.check, Module: kind, Status: "healthy", Reason: "正常",
 			LastCheckedAt: latest.ObservedAt,
 		}
 		if latest.Value > 0 {
@@ -1276,7 +1277,7 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 			status, reason = "down", "balance sync stale"
 		}
 		out = append(out, BusinessStatus{
-			SpaceID: "crypto", Kind: "balance", Module: successValue.serviceName, Status: status,
+			SpaceID: monmetrics.InternalMetricSpaceID, Kind: "balance", Module: successValue.serviceName, Status: status,
 			Reason: reason, LastCheckedAt: lastCheckedAt,
 		})
 	}
@@ -1301,38 +1302,97 @@ type timerCoordinationState struct {
 
 type marketFeedHealthState struct {
 	requests, failures, rateLimited, noCandidate float64
-	lastObserved                                 time.Time
-}
-
-type marketInstrumentHealthState struct {
-	provider, route, result string
-	active                  float64
-	lastObserved, fetchedAt time.Time
-	exchanges               map[string]float64
 }
 
 const maxMarketSignalSeries = 5000
 
-// buildMarketFetchSignalHealth consumes the bounded facts emitted by short-lived
-// Collector invocations. It intentionally does not
-// infer health from missing rows unless a stock signal family has already been
-// observed; an uninstalled market must not page forever.
+// buildMarketFetchSignalHealth 按 Collector 云函数上报的 K 线数据源结果指标判断各市场的数据源健康：按指标的 market_id
+// 标签分组，每个市场各出一组结果；请求指定了空间就只看这个空间。某个市场从没上报过这个指标就不出结果，
+// 没启用的市场不会一直告警。
 func (b Builder) buildMarketFetchSignalHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil, nil
 	}
-	if spaceID != "" && spaceID != "stockcn" && spaceID != monmetrics.InternalMetricSpaceID {
-		return nil, nil
-	}
-	feed, err := b.buildStockCNFeedHealth(ctx, now)
+	thresholds := b.marketFetchThresholds()
+	window, threshold := thresholds.FeedFailureRateWindow, thresholds.FeedFailureRateThreshold
+	series, err := b.marketMetricSeries(ctx, "moox_collector_market_feed_results_total")
 	if err != nil {
 		return nil, err
 	}
-	instrument, err := b.buildStockCNInstrumentHealth(ctx, now)
-	if err != nil {
-		return nil, err
+	// 市场 → 数据源 → 窗口内的累计结果。
+	markets := map[string]map[string]*marketFeedHealthState{}
+	for _, item := range series {
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("market feed labels for %s: %w", item.SeriesID, err)
+		}
+		marketID := strings.TrimSpace(labels["market_id"])
+		if marketID == "" || (spaceID != "" && marketID != spaceID) || strings.TrimSpace(labels["feed_kind"]) != "kline" {
+			continue
+		}
+		states := markets[marketID]
+		if states == nil {
+			states = map[string]*marketFeedHealthState{}
+			markets[marketID] = states
+		}
+		provider := strings.TrimSpace(labels["provider_id"])
+		if provider == "" {
+			provider = "unknown"
+		}
+		state := states[provider]
+		if state == nil {
+			state = &marketFeedHealthState{}
+			states[provider] = state
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		if latest == nil || item.IsStale || !isFreshMetric(now, latest.ObservedAt.UTC(), window) {
+			continue
+		}
+		value := maxFloat(latest.Value, 0)
+		state.requests += value
+		switch strings.TrimSpace(labels["result"]) {
+		case "http_429", "rate_limited":
+			state.failures += value
+			state.rateLimited += value
+		case "http_5xx", "timeout", "invalid", "storage_error":
+			state.failures += value
+		case "no_candidate":
+			state.failures += value
+			state.noCandidate += value
+		}
 	}
-	return append(feed, instrument...), nil
+	marketIDs := make([]string, 0, len(markets))
+	for marketID := range markets {
+		marketIDs = append(marketIDs, marketID)
+	}
+	sort.Strings(marketIDs)
+	var out []BusinessStatus
+	for _, marketID := range marketIDs {
+		states := markets[marketID]
+		providers := make([]string, 0, len(states))
+		for provider := range states {
+			providers = append(providers, provider)
+		}
+		sort.Strings(providers)
+		for _, provider := range providers {
+			state := states[provider]
+			status, reason := "healthy", fmt.Sprintf("%s Provider Feed 正常", provider)
+			if state.requests <= 0 {
+				status, reason = "down", fmt.Sprintf("%s Provider Feed 在最近 %s 无有效结果", provider, window)
+			} else if state.noCandidate > 0 {
+				status, reason = "down", fmt.Sprintf("%s Provider Feed 候选池为空", provider)
+			} else if state.rateLimited > 0 {
+				status, reason = "down", fmt.Sprintf("%s Provider Feed 最近 %s 持续触发 429/限频", provider, window)
+			} else if rate := state.failures / state.requests; rate > threshold {
+				status, reason = "down", fmt.Sprintf("%s Provider Feed 最近 %s 失败率 %.1f%%，超过 %.1f%%", provider, window, rate*100, threshold*100)
+			}
+			out = append(out, BusinessStatus{SpaceID: marketID, Kind: "market_fetch", Module: "provider_feed:" + provider, Status: status, Reason: reason, LastCheckedAt: now})
+		}
+	}
+	return out, nil
 }
 
 func (b Builder) marketMetricSeries(ctx context.Context, metricName string) ([]monmetrics.MetricSeries, error) {
@@ -1358,207 +1418,6 @@ func isFreshMetric(now, observed time.Time, window time.Duration) bool {
 		return false
 	}
 	return now.Sub(observed) <= window
-}
-
-func (b Builder) buildStockCNFeedHealth(ctx context.Context, now time.Time) ([]BusinessStatus, error) {
-	window := b.marketFetchThresholds().FeedFailureRateWindow
-	if window <= 0 {
-		window = 5 * time.Minute
-	}
-	series, err := b.marketMetricSeries(ctx, "moox_collector_market_feed_results_total")
-	if err != nil {
-		return nil, err
-	}
-	states := map[string]*marketFeedHealthState{}
-	sawStock := false
-	for _, item := range series {
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("market feed labels for %s: %w", item.SeriesID, err)
-		}
-		if strings.TrimSpace(labels["market_id"]) != "stockcn" || strings.TrimSpace(labels["feed_kind"]) != "kline" {
-			continue
-		}
-		sawStock = true
-		provider := strings.TrimSpace(labels["provider_id"])
-		if provider == "" {
-			provider = "unknown"
-		}
-		state := states[provider]
-		if state == nil {
-			state = &marketFeedHealthState{}
-			states[provider] = state
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		if latest == nil || item.IsStale || !isFreshMetric(now, latest.ObservedAt.UTC(), window) {
-			continue
-		}
-		value := maxFloat(latest.Value, 0)
-		state.requests += value
-		state.lastObserved = maxTime(state.lastObserved, latest.ObservedAt.UTC())
-		switch strings.TrimSpace(labels["result"]) {
-		case "http_429", "rate_limited":
-			state.failures += value
-			state.rateLimited += value
-		case "http_5xx", "timeout", "invalid", "storage_error", "no_candidate":
-			state.failures += value
-			if strings.TrimSpace(labels["result"]) == "no_candidate" {
-				state.noCandidate += value
-			}
-		}
-	}
-	if !sawStock {
-		return nil, nil
-	}
-	threshold := b.marketFetchThresholds().FeedFailureRateThreshold
-	if threshold <= 0 {
-		threshold = 0.2
-	}
-	providers := make([]string, 0, len(states))
-	for provider := range states {
-		providers = append(providers, provider)
-	}
-	sort.Strings(providers)
-	out := make([]BusinessStatus, 0, len(providers))
-	for _, provider := range providers {
-		state := states[provider]
-		status, reason := "healthy", fmt.Sprintf("%s Provider Feed 正常", provider)
-		if state.requests <= 0 {
-			status, reason = "down", fmt.Sprintf("%s Provider Feed 在最近 %s 无有效结果", provider, window)
-		} else if state.noCandidate > 0 {
-			status, reason = "down", fmt.Sprintf("%s Provider Feed 候选池为空", provider)
-		} else if state.rateLimited > 0 {
-			status, reason = "down", fmt.Sprintf("%s Provider Feed 最近 %s 持续触发 429/限频", provider, window)
-		} else if rate := state.failures / state.requests; rate > threshold {
-			status, reason = "down", fmt.Sprintf("%s Provider Feed 最近 %s 失败率 %.1f%%，超过 %.1f%%", provider, window, rate*100, threshold*100)
-		}
-		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "provider_feed:" + provider, Status: status, Reason: reason, LastCheckedAt: now})
-	}
-	if len(out) == 0 {
-		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "provider_feed", Status: "down", Reason: fmt.Sprintf("stockcn Provider Feed 最近 %s 没有新指标", window), LastCheckedAt: now})
-	}
-	return out, nil
-}
-
-func (b Builder) buildStockCNInstrumentHealth(ctx context.Context, now time.Time) ([]BusinessStatus, error) {
-	thresholds := b.marketFetchThresholds()
-	maxAge := thresholds.InstrumentSnapshotMaxAge
-	if maxAge <= 0 {
-		maxAge = 36 * time.Hour
-	}
-	series, err := b.marketMetricSeries(ctx, "moox_collector_market_instrument_last_snapshot_timestamp_seconds")
-	if err != nil {
-		return nil, err
-	}
-	states := map[string]*marketInstrumentHealthState{}
-	for _, item := range series {
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("instrument snapshot labels for %s: %w", item.SeriesID, err)
-		}
-		if labels["market_id"] != "stockcn" || item.IsStale {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		if latest == nil {
-			continue
-		}
-		provider := nonEmptyString(labels["provider_id"], "unknown")
-		key := strings.Join([]string{labels["route_id"], provider}, "\x00")
-		state := states[key]
-		if state == nil || latest.ObservedAt.After(state.lastObserved) {
-			active := float64(0)
-			exchanges := map[string]float64{}
-			if state != nil {
-				active = state.active
-				exchanges = state.exchanges
-			}
-			states[key] = &marketInstrumentHealthState{provider: provider, route: labels["route_id"], result: labels["result"], active: active, exchanges: exchanges, fetchedAt: unixTime(latest.Value), lastObserved: latest.ObservedAt.UTC()}
-		}
-	}
-	loadInstrumentFacts := func(metricName string, apply func(*marketInstrumentHealthState, map[string]string, float64)) error {
-		facts, err := b.marketMetricSeries(ctx, metricName)
-		if err != nil {
-			return err
-		}
-		for _, item := range facts {
-			labels, err := datasetLabels(item.LabelsJSON)
-			if err != nil {
-				return fmt.Errorf("instrument metric labels for %s: %w", item.SeriesID, err)
-			}
-			if labels["market_id"] != "stockcn" || item.IsStale {
-				continue
-			}
-			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-			if err != nil {
-				return err
-			}
-			if latest == nil {
-				continue
-			}
-			provider := nonEmptyString(labels["provider_id"], "unknown")
-			key := strings.Join([]string{labels["route_id"], provider}, "\x00")
-			state := states[key]
-			if state == nil {
-				state = &marketInstrumentHealthState{provider: provider, route: labels["route_id"], exchanges: map[string]float64{}}
-				states[key] = state
-			}
-			if !latest.ObservedAt.Before(state.lastObserved) || state.lastObserved.IsZero() {
-				apply(state, labels, latest.Value)
-				state.lastObserved = latest.ObservedAt.UTC()
-			}
-		}
-		return nil
-	}
-	if err := loadInstrumentFacts("moox_collector_market_instrument_active", func(state *marketInstrumentHealthState, _ map[string]string, value float64) {
-		state.active = maxFloat(value, 0)
-	}); err != nil {
-		return nil, err
-	}
-	if err := loadInstrumentFacts("moox_collector_market_instrument_exchange", func(state *marketInstrumentHealthState, labels map[string]string, value float64) {
-		if state.exchanges == nil {
-			state.exchanges = map[string]float64{}
-		}
-		state.exchanges[labels["exchange"]] = maxFloat(value, 0)
-	}); err != nil {
-		return nil, err
-	}
-	if len(states) == 0 {
-		return nil, nil
-	}
-	out := make([]BusinessStatus, 0, len(states))
-	for _, state := range states {
-		status, reason := "healthy", fmt.Sprintf("%s Instrument 快照正常", state.provider)
-		if state.result != "success" {
-			status, reason = "down", fmt.Sprintf("%s Instrument 快照结果为 %s", state.provider, nonEmptyString(state.result, "unknown"))
-		} else if state.fetchedAt.IsZero() || now.Sub(state.fetchedAt) > maxAge {
-			status, reason = "down", fmt.Sprintf("%s Instrument 快照已超过 %s 未更新", state.provider, maxAge)
-		} else if state.active < float64(max(1, thresholds.InstrumentMinimumCount)) {
-			status, reason = "down", fmt.Sprintf("%s Instrument active 数 %.0f 低于下限 %d", state.provider, state.active, thresholds.InstrumentMinimumCount)
-		} else {
-			for _, exchange := range thresholds.InstrumentRequiredExchanges {
-				if state.exchanges[strings.TrimSpace(exchange)] <= 0 {
-					status, reason = "down", fmt.Sprintf("%s Instrument 快照缺少交易所 %s", state.provider, strings.TrimSpace(exchange))
-					break
-				}
-			}
-		}
-		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "instrument_snapshot:" + state.provider, Status: status, Reason: reason, LastCheckedAt: now})
-	}
-	return out, nil
-}
-
-func nonEmptyString(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return strings.TrimSpace(value)
 }
 
 // A full Tencent runtime-config batch may touch dozens of functions. The
@@ -1593,15 +1452,6 @@ func (b Builder) marketFetchThresholds() MarketFetchThresholds {
 	}
 	if thresholds.FeedFailureRateThreshold <= 0 {
 		thresholds.FeedFailureRateThreshold = 0.2
-	}
-	if thresholds.InstrumentSnapshotMaxAge <= 0 {
-		thresholds.InstrumentSnapshotMaxAge = 36 * time.Hour
-	}
-	if thresholds.InstrumentMinimumCount <= 0 {
-		thresholds.InstrumentMinimumCount = 4000
-	}
-	if len(thresholds.InstrumentRequiredExchanges) == 0 {
-		thresholds.InstrumentRequiredExchanges = []string{"XSHG", "XSHE", "XBSE"}
 	}
 	return thresholds
 }

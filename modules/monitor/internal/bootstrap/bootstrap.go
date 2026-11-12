@@ -232,14 +232,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
 	}
 	marketFetchThresholds := monitorobservability.MarketFetchThresholds{
-		CoordinationStaleAfter:      cfg.MarketHealth.TimerCoordinationStaleAfter,
-		PendingGrace:                cfg.MarketHealth.TimerCoordinationPendingGrace,
-		LeaseGrace:                  cfg.MarketHealth.TimerCoordinationLeaseGrace,
-		FeedFailureRateWindow:       cfg.MarketHealth.FeedFailureRateWindow,
-		FeedFailureRateThreshold:    cfg.MarketHealth.FeedFailureRateThreshold,
-		InstrumentSnapshotMaxAge:    cfg.MarketHealth.InstrumentSnapshotMaxAge,
-		InstrumentMinimumCount:      cfg.MarketHealth.InstrumentMinimumCount,
-		InstrumentRequiredExchanges: append([]string(nil), cfg.MarketHealth.InstrumentRequiredExchanges...),
+		CoordinationStaleAfter:   cfg.MarketHealth.TimerCoordinationStaleAfter,
+		PendingGrace:             cfg.MarketHealth.TimerCoordinationPendingGrace,
+		LeaseGrace:               cfg.MarketHealth.TimerCoordinationLeaseGrace,
+		FeedFailureRateWindow:    cfg.MarketHealth.FeedFailureRateWindow,
+		FeedFailureRateThreshold: cfg.MarketHealth.FeedFailureRateThreshold,
 	}
 	klineInventory, err := buildTaskResultInventory(cfg, runtime.Gateway)
 	if err != nil {

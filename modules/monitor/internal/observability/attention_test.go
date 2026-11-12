@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -37,7 +38,7 @@ func TestEventCenterAndCollectorAttentionBecomeBusinessChecks(t *testing.T) {
 	failed := checks["event_center_attention:execution_failed"]
 	require.Equal(t, "down", failed.Status)
 	require.Equal(t, "币安下架通知：对方返回状态码 500", failed.Reason)
-	require.Equal(t, "crypto", failed.SpaceID)
+	require.Equal(t, monmetrics.InternalMetricSpaceID, failed.SpaceID)
 	require.Equal(t, "healthy", checks["event_center_attention:delist_detected"].Status)
 	require.Equal(t, "down", checks["event_center_attention:action_failed"].Status)
 

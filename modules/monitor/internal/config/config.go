@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	watchdogpkg "github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
@@ -132,9 +133,6 @@ type MarketHealthConfig struct {
 	TimerCoordinationLeaseGrace time.Duration `yaml:"timer_coordination_lease_grace"`
 	FeedFailureRateWindow       time.Duration `yaml:"feed_failure_rate_window"`
 	FeedFailureRateThreshold    float64       `yaml:"feed_failure_rate_threshold"`
-	InstrumentSnapshotMaxAge    time.Duration `yaml:"instrument_snapshot_max_age"`
-	InstrumentMinimumCount      int           `yaml:"instrument_minimum_count"`
-	InstrumentRequiredExchanges []string      `yaml:"instrument_required_exchanges"`
 }
 
 type KlineFreshnessConfig struct {
@@ -238,9 +236,9 @@ func Default() *Config {
 		// Canary subjects name concrete collection results, so they come only
 		// from deployment config; without subjects the canary stays disabled.
 		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
-		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, TimerCoordinationLeaseGrace: 10 * time.Minute, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
+		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, TimerCoordinationLeaseGrace: 10 * time.Minute, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2},
 		KlineFreshness: KlineFreshnessConfig{
-			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
+			Enabled: false, SpaceIDs: registeredMarketIDs(), EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
 		},
 		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, MaxNewSeriesPerHour: 2000, MaxNewSeriesPerDay: 10000, HostStorage: HostStorageConfig{Enabled: true, SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
@@ -325,15 +323,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MarketHealth.FeedFailureRateThreshold == 0 {
 		c.MarketHealth.FeedFailureRateThreshold = marketHealthDefaults.FeedFailureRateThreshold
-	}
-	if c.MarketHealth.InstrumentSnapshotMaxAge == 0 {
-		c.MarketHealth.InstrumentSnapshotMaxAge = marketHealthDefaults.InstrumentSnapshotMaxAge
-	}
-	if c.MarketHealth.InstrumentMinimumCount == 0 {
-		c.MarketHealth.InstrumentMinimumCount = marketHealthDefaults.InstrumentMinimumCount
-	}
-	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
-		c.MarketHealth.InstrumentRequiredExchanges = append([]string(nil), marketHealthDefaults.InstrumentRequiredExchanges...)
 	}
 	klineDefaults := Default().KlineFreshness
 	if c.KlineFreshness.EvaluationInterval == 0 {
@@ -511,12 +500,6 @@ func (c *Config) Validate() error {
 	if c.MarketHealth.FeedFailureRateWindow <= 0 || c.MarketHealth.FeedFailureRateThreshold <= 0 || c.MarketHealth.FeedFailureRateThreshold > 1 {
 		return fmt.Errorf("market_health feed failure window and threshold are invalid")
 	}
-	if c.MarketHealth.InstrumentSnapshotMaxAge <= 0 || c.MarketHealth.InstrumentMinimumCount <= 0 {
-		return fmt.Errorf("market_health instrument snapshot age and minimum count must be positive")
-	}
-	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
-		return fmt.Errorf("market_health.instrument_required_exchanges must not be empty")
-	}
 	for id, target := range c.Deployment.HTTPS {
 		if err := target.Validate(); err != nil {
 			return fmt.Errorf("deployment.https.%s: %w", id, err)
@@ -550,6 +533,16 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// registeredMarketIDs 返回 barclock 登记的全部市场 ID（空间即市场），是 K 线新鲜度默认检查的空间。
+func registeredMarketIDs() []string {
+	markets := barclock.Markets()
+	ids := make([]string, 0, len(markets))
+	for _, market := range markets {
+		ids = append(ids, market.ID)
+	}
+	return ids
 }
 
 func (c *Config) validateKlineFreshness() error {

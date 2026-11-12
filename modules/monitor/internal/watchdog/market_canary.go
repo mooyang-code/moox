@@ -198,16 +198,14 @@ func ValidateMarketCanary(config MarketCanaryConfig) error {
 	return nil
 }
 
-// newMarketCanaryClock 构造市场某个频率的时钟；未登记交易日历的市场按 24 小时连续交易处理（与采集一致）。
+// newMarketCanaryClock 构造市场某个频率的时钟；市场没有在 barclock 登记时报错。
 func newMarketCanaryClock(marketID, frequency string) (marketCanaryClock, error) {
 	parsed, err := frequencypkg.Parse(frequency)
 	if err != nil {
 		return marketCanaryClock{}, fmt.Errorf("频率 %q 无效：%w", frequency, err)
 	}
 	market, err := barclock.MarketFor(marketID)
-	if errors.Is(err, barclock.ErrUnknownMarket) {
-		market = barclock.Market{ID: marketID, Alignment: barclock.AlignmentEpochUTC}
-	} else if err != nil {
+	if err != nil {
 		return marketCanaryClock{}, err
 	}
 	clock, err := market.Clock(parsed.Duration())
