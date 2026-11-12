@@ -14,7 +14,7 @@
 部署、材料导出与恢复统一采用 `paths.control_root`，可位于部署根下的嵌套目录。host 与
 control 必须相互独立，且不能占用 `bootstrap`、`bootstrap-input`、`identity`、`run` 状态
 命名空间；使用自定义路径不会额外创建硬编码的 `control/`。Storage 根仍须位于部署根下，
-当前安装器不支持 Storage 跨部署根或三个角色分散到多台主机。
+当前安装器不支持 Storage 跨部署根或两个角色分散到多台主机。
 
 核心阶段保留全部主机、部署和签名身份，只安装控制机的 Admin、Host Gateway、Host Agent。EventBus 的身份在 admin 阶段签发，
 broker 通过独立 `eventbus` profile 安装到拓扑指定的主机。输出 `stage=admin-ready`，不能据此认定完整部署成功。待 Storage、Access、
@@ -70,14 +70,14 @@ PID 保持、暂停保留、缺失进程修复、激活完成窗口接管及回�
 
 Access、出口代理和 Trade 默认在本机关闭 CGO 构建。Storage 必须先执行
 `setup build-linux --module storage --source-dir /path/to/worktree`，再以 `--binary-dir` 提供
-三个 CGO Linux 服务制品和本机关闭 CGO 编译的 Storage CLI。新建 admin 的私有运行身份保存独立的 node、primary、view 认证密钥，
+两个 CGO Linux 服务制品（`moox-storage-primary`、`moox-storage-view`）和本机关闭 CGO 编译的 Storage CLI。新建 admin 的私有运行身份保存独立的 primary、view 认证密钥，
 按 Storage 角色分发；旧 admin 身份缺少这些密钥时拒绝 Storage 部署，不在重试中补生成。
-当前模板的内部 RPC 只监听 loopback，原生入口要求三个 Storage 角色位于同一主机；跨主机角色路由未接通时，在远端操作前拒绝部署。Storage 主库初始化在旧写入者退出、候选独立复制完成后执行，强制候选内的相对数据根，
+当前模板的内部 RPC 只监听 loopback，原生入口要求两个 Storage 角色位于同一主机；跨主机角色路由未接通时，在远端操作前拒绝部署。Storage 主库初始化在旧写入者退出、候选独立复制完成后执行，强制候选内的相对数据根，
 子进程继承维护锁并在父进程死亡时退出；取消后先等待写入者退出，再释放维护锁。
 初始化关闭数据库后只同步元数据树和祖先目录，不扫描全部数据集，也不输出子进程私密日志。
 
 业务单元只有实际就绪才返回 `<profile>-ready`；暂停返回 `<profile>-paused`。Linux 场景在
-隔离网络内启动四类实际业务单元（包括 Storage 三个角色及首次建库），核验重复执行保持
+隔离网络内启动四类实际业务单元（包括 Storage 两个角色及首次建库），核验重复执行保持
 发布/PID、签名身份范围和核心服务 PID。全部服务集中在合成控制主机，另外两台只参与拓扑；
 独立主机运行、跨架构运行和真实业务读写仍须验收。此入口负责一次部署操作的恢复；版本升级通过同包的 release 流程与 `--release` 接入，整个多单元发布回滚仍需外层编排。
 
