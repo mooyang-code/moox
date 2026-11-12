@@ -53,10 +53,7 @@ func (e *AlertEvaluator) Evaluate(ctx context.Context, agentID, hostname, messag
 				continue
 			}
 			sample := hostSample{agentID: agentID, hostname: hostname, metric: metric, value: value.value, threshold: threshold}
-			// CPU、内存告警带上进程排行；磁盘空间看不出是哪个进程占的，不带。
-			if metric == HostMetricCPU || metric == HostMetricMemory {
-				sample.processes = topProcesses(snapshot)
-			}
+			sample.processes = alertProcesses(metric, snapshot)
 			if err := e.transition(ctx, rule, sample, messageID, value.value >= threshold, recovery, now); err != nil {
 				if firstErr == nil {
 					firstErr = err
@@ -146,6 +143,14 @@ type hostSample struct {
 // alertProcessLimit 是告警正文里列出的进程数；事件里保留完整的排行。
 const alertProcessLimit = 3
 
+// alertProcesses 返回这类告警要附带的进程排行：CPU、内存告警带；磁盘空间看不出是哪个进程占的，不带。
+func alertProcesses(metric string, snapshot *hostmetricpb.HostSnapshot) []alerttext.Process {
+	if metric != HostMetricCPU && metric != HostMetricMemory {
+		return nil
+	}
+	return topProcesses(snapshot)
+}
+
 // maxAlertProcesses 是从一份快照里最多取用的进程数；HostAgent 最多上报 10 个，这里只防异常数据。
 const maxAlertProcesses = 20
 
@@ -158,7 +163,7 @@ func topProcesses(snapshot *hostmetricpb.HostSnapshot) []alerttext.Process {
 		if name == "" || len(items) == maxAlertProcesses {
 			continue
 		}
-		item := alerttext.Process{Name: name, RSSBytes: process.GetRssBytes()}
+		item := alerttext.Process{PID: process.GetPid(), Name: name, RSSBytes: process.GetRssBytes()}
 		if cpu := process.GetCpuPercent(); process.GetCpuAvailable() && cpu >= 0 && !math.IsInf(cpu, 0) && !math.IsNaN(cpu) {
 			item.CPUPercent, item.CPUAvailable = cpu, true
 		}
@@ -173,7 +178,7 @@ func alertPayload(sample hostSample, eventType string) []byte {
 	if len(sample.processes) > 0 && eventType != domain.AlertEventResolved {
 		processes := make([]map[string]any, 0, len(sample.processes))
 		for _, process := range sample.processes {
-			item := map[string]any{"name": process.Name, "rss_bytes": process.RSSBytes}
+			item := map[string]any{"pid": process.PID, "name": process.Name, "rss_bytes": process.RSSBytes}
 			if process.CPUAvailable {
 				item["cpu_percent"] = process.CPUPercent
 			}
@@ -333,7 +338,8 @@ func hostAlertText(sample hostSample, eventType string, now time.Time) (string, 
 	}
 	if eventType != domain.AlertEventResolved {
 		if top := alerttext.TopProcesses(sample.processes, sample.metric == HostMetricMemory, alertProcessLimit); top != "" {
-			lines = append(lines, "占用最高："+top)
+			// 整机的使用率是全部核的百分比，进程的 CPU 按单核计（和 top 一样），这里注明，免得两个数对不上。
+			lines = append(lines, "占用最高（进程 CPU 按单核计）："+top)
 		}
 	}
 	lines = append(lines, "时间："+alerttext.Time(now)+"（北京时间）")

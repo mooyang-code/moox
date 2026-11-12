@@ -8,6 +8,8 @@ import (
 
 // Process 是主机上一个进程的占用，来自 HostAgent 上报的进程排行。
 type Process struct {
+	// PID 用来区分同名的进程（例如几个 python）；只记在告警事件里，正文不写。
+	PID          uint32
 	Name         string
 	CPUPercent   float64
 	CPUAvailable bool

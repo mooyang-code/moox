@@ -247,7 +247,7 @@ func networkData(receiveBytes, receiveErrors, transmitBytes, transmitErrors uint
 }
 
 // 两次采样之间，进程的 CPU 占用按整机 CPU 时间的增量折算；采样期间退出的进程（读不到 stat）跳过，
-// 进程名取命令行第一个参数的文件名，不带后面的参数。
+// 进程名取可执行文件的文件名，读不到时用 comm。
 func TestCollectorReportsTopProcesses(t *testing.T) {
 	files := map[string]string{
 		"/proc/stat":      "cpu 100 0 100 800 0 0 0 0\ncpu0 1 0 1 8 0 0 0 0\ncpu1 1 0 1 8 0 0 0 0\ncpu2 1 0 1 8 0 0 0 0\ncpu3 1 0 1 8 0 0 0 0\ncpu4 1 0 1 8 0 0 0 0\ncpu5 1 0 1 8 0 0 0 0\ncpu6 1 0 1 8 0 0 0 0\n",
@@ -291,7 +291,8 @@ func TestCollectorReportsTopProcesses(t *testing.T) {
 	assert.True(t, top[0].GetCpuAvailable())
 	assert.Equal(t, "kswapd0", top[1].GetName())
 	assert.InDelta(t, 10*cores, top[1].GetCpuPercent(), 1e-9)
-	// 进程名只来自 exe 链接和 comm，不读 cmdline（testLinuxCollector 对没登记的文件报错，读了就取不到名字）。
+	// 进程名只来自 exe 链接和 comm，不读 cmdline（testLinuxCollector 对没登记的文件报错，读了就取不到名字）；
+	// 读取顺序就是排行的顺序：第一轮只有 11，第二轮先 11 后 12。
 	assert.Equal(t, []string{"/proc/11/exe", "/proc/11/exe", "/proc/12/exe"}, linksRead)
 }
 
@@ -308,4 +309,42 @@ func TestCollectorProcessFailureKeepsOtherMetrics(t *testing.T) {
 	assert.Empty(t, snapshot.GetTopProcesses())
 	assert.False(t, findStatus(t, statuses, "process").GetSuccess())
 	assert.Equal(t, uint64(1024*1024), snapshot.GetMemory().GetTotalBytes())
+}
+
+// 某一轮列不出进程后，下一轮不能拿更早的基准算 CPU：否则进程两轮的 CPU 时间除以一轮的整机增量，占用会被放大。
+func TestCollectorDropsProcessBaselineAfterFailure(t *testing.T) {
+	files := map[string]string{
+		"/proc/stat":      "cpu 100 0 100 800 0 0 0 0\ncpu0 100 0 100 800 0 0 0 0\n",
+		"/proc/meminfo":   "MemTotal: 1024 kB\nMemAvailable: 512 kB\n",
+		"/proc/diskstats": "",
+		"/proc/net/dev":   "",
+		"/proc/11/stat":   "11 (worker) S 1 11 11 0 -1 0 0 0 0 0 100 0 0 0 20 0 1 0 500 0 2000 0\n",
+	}
+	c := testLinuxCollector(files)
+	listErr := error(nil)
+	c.listPIDs = func() ([]int, error) { return []int{11}, listErr }
+
+	_, _, err := c.Collect(context.Background())
+	require.NoError(t, err)
+
+	listErr = errors.New("proc unavailable")
+	files["/proc/stat"] = "cpu 600 0 100 1300 0 0 0 0\ncpu0 600 0 100 1300 0 0 0 0\n"
+	failed, statuses, err := c.Collect(context.Background())
+	require.NoError(t, err)
+	assert.False(t, findStatus(t, statuses, "process").GetSuccess())
+	assert.Empty(t, failed.GetTopProcesses())
+
+	listErr = nil
+	files["/proc/stat"] = "cpu 1100 0 100 1800 0 0 0 0\ncpu0 1100 0 100 1800 0 0 0 0\n"
+	files["/proc/11/stat"] = "11 (worker) S 1 11 11 0 -1 0 0 0 0 0 1100 0 0 0 20 0 1 0 500 0 2000 0\n"
+	recovered, _, err := c.Collect(context.Background())
+	require.NoError(t, err)
+	require.Len(t, recovered.GetTopProcesses(), 1)
+	assert.False(t, recovered.GetTopProcesses()[0].GetCpuAvailable(), "恢复后的第一轮没有可比的基准")
+
+	files["/proc/stat"] = "cpu 1600 0 100 2300 0 0 0 0\ncpu0 1600 0 100 2300 0 0 0 0\n"
+	files["/proc/11/stat"] = "11 (worker) S 1 11 11 0 -1 0 0 0 0 0 1600 0 0 0 20 0 1 0 500 0 2000 0\n"
+	steady, _, err := c.Collect(context.Background())
+	require.NoError(t, err)
+	assert.InDelta(t, 50.0, steady.GetTopProcesses()[0].GetCpuPercent(), 1e-9)
 }

@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
@@ -26,8 +27,8 @@ func TestParseProcStatHandlesSpacesAndParenthesesInComm(t *testing.T) {
 	}
 }
 
-// 名字优先取可执行文件的文件名；读不到时用 comm。两种来源都只取第一段、去掉控制字符：
-// 进程可以改写自己的名字（sshd、postgres、Node 的 process.title），改写后的内容可能带参数、密钥或换行。
+// 名字优先取可执行文件的文件名；读不到时用 comm。进程可以改写自己的 comm（sshd、postgres、Node 的 process.title），
+// 改写后的内容可能带参数、密钥或换行，所以 comm 只取第一段；内核线程的 comm 本身带斜杠，不能当路径取文件名。
 func TestProcessNameNeverCarriesArgumentsOrControlCharacters(t *testing.T) {
 	for _, tt := range []struct {
 		exe, comm, want string
@@ -35,7 +36,12 @@ func TestProcessNameNeverCarriesArgumentsOrControlCharacters(t *testing.T) {
 		{"/data/moox/storage/current/bin/moox-storage-node", "moox-storage-no", "moox-storage-node"},
 		{"/data/moox/prod/releases/old/bin/moox-monitor (deleted)", "moox-monitor", "moox-monitor"},
 		{"/usr/bin/python3.12", "python3", "python3.12"},
+		{"/tmp/my app/sle ep", "sle ep", "sle ep"},
+		{"/opt/odd/bin\x1b[31mname", "x", "bin?[31mname"},
 		{"", "kswapd0", "kswapd0"},
+		{"", "ksoftirqd/0", "ksoftirqd/0"},
+		{"", "kworker/1:2-events", "kworker/1:2-events"},
+		{"", "jbd2/vda1-8", "jbd2/vda1-8"},
 		{"", "myworker --pass", "myworker"},
 		{"", "sshd: ubuntu@pt", "sshd"},
 		{"", "postgres: 16/ma", "postgres"},
@@ -45,6 +51,21 @@ func TestProcessNameNeverCarriesArgumentsOrControlCharacters(t *testing.T) {
 	} {
 		if got := ProcessName(tt.exe, tt.comm); got != tt.want {
 			t.Fatalf("ProcessName(%q, %q) = %q, want %q", tt.exe, tt.comm, got, tt.want)
+		}
+	}
+}
+
+// 取名字要读 /proc：按排好的顺序逐个取，顺序是确定的（不随 map 的遍历顺序变）。
+func TestProcessTrackerNamesInRankOrder(t *testing.T) {
+	stats := []ProcStat{
+		{PID: 5, Comm: "e", StartTime: 1, RSSPages: 10}, {PID: 3, Comm: "c", StartTime: 1, RSSPages: 30},
+		{PID: 4, Comm: "d", StartTime: 1, RSSPages: 20}, {PID: 1, Comm: "a", StartTime: 1, RSSPages: 50}, {PID: 2, Comm: "b", StartTime: 1, RSSPages: 40},
+	}
+	for round := 0; round < 50; round++ {
+		var order []int
+		(&processTracker{}).top(stats, 0, 2, 4096, func(stat ProcStat) string { order = append(order, stat.PID); return stat.Comm })
+		if fmt.Sprint(order) != "[1 2 3 4 5]" {
+			t.Fatalf("第 %d 轮取名字的顺序 = %v", round, order)
 		}
 	}
 }
@@ -63,9 +84,9 @@ func TestCountCPUs(t *testing.T) {
 func TestProcessTrackerResetDropsTheBaseline(t *testing.T) {
 	tracker := &processTracker{}
 	name := func(stat ProcStat) string { return stat.Comm }
-	tracker.top([]ProcStat{{PID: 1, Comm: "a", StartTime: 1, CPUTicks: 100, RSSPages: 1}}, 0, false, 2, 4096, name)
+	tracker.top([]ProcStat{{PID: 1, Comm: "a", StartTime: 1, CPUTicks: 100, RSSPages: 1}}, 0, 2, 4096, name)
 	tracker.reset()
-	got := tracker.top([]ProcStat{{PID: 1, Comm: "a", StartTime: 1, CPUTicks: 900, RSSPages: 1}}, 1000, true, 2, 4096, name)
+	got := tracker.top([]ProcStat{{PID: 1, Comm: "a", StartTime: 1, CPUTicks: 900, RSSPages: 1}}, 1000, 2, 4096, name)
 	if len(got) != 1 || got[0].CpuAvailable {
 		t.Fatalf("重置基准后不应有 CPU 值：%+v", got)
 	}
@@ -82,7 +103,7 @@ func TestProcessTrackerRanksByCPUAndMemory(t *testing.T) {
 		{PID: 4, Comm: "reused", StartTime: 40, CPUTicks: 9000, RSSPages: 10},
 	}
 	// 第一次采样没有可比的上一次：只按内存排，CPU 一律不可用。
-	got := tracker.top(first, 0, false, 4, page, name)
+	got := tracker.top(first, 0, 4, page, name)
 	if len(got) != 3 || got[0].Name != "duckdb" || got[0].CpuAvailable || got[0].RssBytes != 3000*page {
 		t.Fatalf("first sample = %+v", got)
 	}
@@ -96,7 +117,7 @@ func TestProcessTrackerRanksByCPUAndMemory(t *testing.T) {
 		{PID: 4, Comm: "reused", StartTime: 99, CPUTicks: 9500, RSSPages: 10},
 		{PID: 5, Comm: "fresh", StartTime: 100, CPUTicks: 400, RSSPages: 20},
 	}
-	got = tracker.top(second, 6000, true, 4, page, name)
+	got = tracker.top(second, 6000, 4, page, name)
 	byName := map[string]*hostmetricpb.ProcessMetric{}
 	for _, item := range got {
 		byName[item.Name] = item
@@ -121,13 +142,13 @@ func TestProcessTrackerCapsEachRankingAtFive(t *testing.T) {
 	for pid := 1; pid <= 30; pid++ {
 		stats = append(stats, ProcStat{PID: pid, Comm: "p", StartTime: uint64(pid), CPUTicks: 0, RSSPages: uint64(pid)})
 	}
-	tracker.top(stats, 0, false, 2, 4096, func(ProcStat) string { return "p" })
+	tracker.top(stats, 0, 2, 4096, func(ProcStat) string { return "p" })
 	// 第二次：CPU 占用与内存排名相反，两个排行各取 5 个，没有重叠 → 10 个。
 	for i := range stats {
 		stats[i].CPUTicks = uint64(100 * (31 - stats[i].PID))
 	}
 	named := 0
-	got := tracker.top(stats, 100000, true, 2, 4096, func(ProcStat) string { named++; return "p" })
+	got := tracker.top(stats, 100000, 2, 4096, func(ProcStat) string { named++; return "p" })
 	if len(got) != 10 || named != 10 {
 		t.Fatalf("len = %d, named = %d, want 10 each", len(got), named)
 	}

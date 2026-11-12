@@ -187,7 +187,7 @@ func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []
 	if cores == 0 {
 		cores = runtime.NumCPU()
 	}
-	processes, processErr := c.topProcesses(cpuDelta, snap.Cpu.UsageAvailable, cores)
+	processes, processErr := c.topProcesses(cpuDelta, cores)
 	snap.TopProcesses = processes
 	statuses = append(statuses, status("process", processErr))
 	sort.Slice(snap.Disks, func(i, j int) bool { return snap.Disks[i].Device < snap.Disks[j].Device })
@@ -291,7 +291,7 @@ func excludedFS(fs string) bool {
 // topProcesses 读 /proc 下每个进程的 stat，返回 CPU 与内存占用最高的几个。
 // 采样期间退出的进程读不到是正常的，跳过；只对入选的进程再读一次 exe 链接取进程名。
 // 这里只用 stat 和 readlink：都不需要目标进程的内存映射锁，目标进程卡住时不会把采集一起卡住。
-func (c *Collector) topProcesses(cpuDelta uint64, cpuDeltaOK bool, cores int) ([]*hostmetricpb.ProcessMetric, error) {
+func (c *Collector) topProcesses(cpuDelta uint64, cores int) ([]*hostmetricpb.ProcessMetric, error) {
 	pids, err := c.listPIDs()
 	if err != nil {
 		c.processes.reset()
@@ -318,7 +318,7 @@ func (c *Collector) topProcesses(cpuDelta uint64, cpuDeltaOK bool, cores int) ([
 		exe, _ := c.readLink("/proc/" + strconv.Itoa(stat.PID) + "/exe")
 		return ProcessName(exe, stat.Comm)
 	}
-	return c.processes.top(stats, cpuDelta, cpuDeltaOK, cores, uint64(os.Getpagesize()), name), nil
+	return c.processes.top(stats, cpuDelta, cores, uint64(os.Getpagesize()), name), nil
 }
 
 // listProcPIDs 列出 /proc 下以数字命名的目录。

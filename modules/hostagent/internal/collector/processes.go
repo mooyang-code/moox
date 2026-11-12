@@ -67,34 +67,34 @@ func ParseProcStat(data []byte) (ProcStat, error) {
 //
 // 不读 /proc/<pid>/cmdline，原因有两个：进程可以改写自己的命令行（sshd、postgres、nginx、Node 的 process.title 都会），
 // 改写后的内容可能带参数甚至密钥；而且内核读 cmdline 要拿目标进程的内存映射锁，目标进程卡住时会把采集一起卡住。
-// comm 同样可以被进程改写，所以两种来源都只取第一段、去掉控制字符：名字会进告警正文，不能带换行或排版符号以外的控制字符。
+//
+// 两种来源的处理不同：
+//   - exe 是一个真实的路径：去掉发布换版后内核加的 " (deleted)" 后缀，取文件名。路径里的空格是文件名的一部分，不切。
+//   - comm 可以被进程改写成任意内容（例如 "sshd: user@pts/0"），只取空白之前的第一段并去掉结尾的冒号。
+//     它不是路径，不取文件名：内核线程的名字本身带斜杠（ksoftirqd/0、kworker/1:2-events）。
+//
+// 名字会进告警正文，最后统一把控制字符换成问号。
 func ProcessName(exe, comm string) string {
-	// 二进制被替换后（发布换版），链接目标末尾会带 " (deleted)"。
-	name := cleanProcessName(strings.TrimSuffix(exe, " (deleted)"))
-	if name == "" {
-		name = cleanProcessName(comm)
+	name := ""
+	if exe = strings.TrimSuffix(exe, " (deleted)"); exe != "" {
+		if base := filepath.Base(exe); base != "." && base != "/" {
+			name = base
+		}
 	}
 	if name == "" {
-		name = "?"
+		if fields := strings.Fields(comm); len(fields) > 0 {
+			name = strings.TrimSuffix(fields[0], ":")
+		}
 	}
-	return name
-}
-
-func cleanProcessName(raw string) string {
-	fields := strings.Fields(raw)
-	if len(fields) == 0 {
-		return ""
-	}
-	name := strings.TrimSuffix(filepath.Base(fields[0]), ":")
-	if name == "." || name == "/" {
-		return ""
-	}
-	name = strings.Map(func(r rune) rune {
+	name = strings.TrimSpace(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || r == utf8.RuneError {
 			return '?'
 		}
 		return r
-	}, strings.ToValidUTF8(name, "?"))
+	}, strings.ToValidUTF8(name, "?")))
+	if name == "" {
+		return "?"
+	}
 	if utf8.RuneCountInString(name) > maxProcessNameRune {
 		name = string([]rune(name)[:maxProcessNameRune])
 	}
@@ -114,9 +114,9 @@ type processTracker struct {
 // top 返回 CPU 前几名与内存前几名（合并去重），并把本次采样记为下一次的基准。
 //
 // cpuTotalDelta 是两次采样之间整机 CPU 时间的增量（/proc/stat 各项之和，时钟滴答数），与进程的 CPU 时间同一个单位，
-// 所以“进程增量 ÷ 整机增量 × 核数”就是占单核的百分比，不需要知道时钟频率。cpuDeltaOK 为 false（第一次采样、计数回绕）时只报内存。
+// 所以“进程增量 ÷ 整机增量 × 核数”就是占单核的百分比，不需要知道时钟频率。cpuTotalDelta 为 0（第一次采样、计数回绕）时只报内存。
 // cores 是 /proc/stat 里的核数（全部在线的核，与整机增量同一口径）。name 只对入选的进程调用。
-func (t *processTracker) top(stats []ProcStat, cpuTotalDelta uint64, cpuDeltaOK bool, cores int, pageSize uint64, name func(ProcStat) string) []*hostmetricpb.ProcessMetric {
+func (t *processTracker) top(stats []ProcStat, cpuTotalDelta uint64, cores int, pageSize uint64, name func(ProcStat) string) []*hostmetricpb.ProcessMetric {
 	type candidate struct {
 		stat         ProcStat
 		cpu          float64
@@ -129,7 +129,7 @@ func (t *processTracker) top(stats []ProcStat, cpuTotalDelta uint64, cpuDeltaOK 
 		next[stat.PID] = processPrevious{startTime: stat.StartTime, cpuTicks: stat.CPUTicks}
 		item := candidate{stat: stat, rss: stat.RSSPages * pageSize}
 		// 启动时刻不同说明 PID 被新进程复用了，不能和上一次的值相减。
-		if previous, ok := t.previous[stat.PID]; ok && cpuDeltaOK && cpuTotalDelta > 0 &&
+		if previous, ok := t.previous[stat.PID]; ok && cpuTotalDelta > 0 &&
 			previous.startTime == stat.StartTime && stat.CPUTicks >= previous.cpuTicks {
 			item.cpu = float64(stat.CPUTicks-previous.cpuTicks) * 100 * float64(cores) / float64(cpuTotalDelta)
 			item.cpuAvailable = true
@@ -163,22 +163,27 @@ func (t *processTracker) top(stats []ProcStat, cpuTotalDelta uint64, cpuDeltaOK 
 		return a.stat.PID < b.stat.PID
 	}, func(item candidate) bool { return item.rss > 0 })
 
-	out := make([]*hostmetricpb.ProcessMetric, 0, len(selected))
+	chosen := make([]candidate, 0, len(selected))
 	for _, item := range selected {
+		chosen = append(chosen, item)
+	}
+	sort.Slice(chosen, func(i, j int) bool {
+		if chosen[i].cpu != chosen[j].cpu {
+			return chosen[i].cpu > chosen[j].cpu
+		}
+		if chosen[i].rss != chosen[j].rss {
+			return chosen[i].rss > chosen[j].rss
+		}
+		return chosen[i].stat.PID < chosen[j].stat.PID
+	})
+	// 先排好序再取名字：取名字要读 /proc，按固定的顺序读，结果和读取顺序都是确定的。
+	out := make([]*hostmetricpb.ProcessMetric, 0, len(chosen))
+	for _, item := range chosen {
 		out = append(out, &hostmetricpb.ProcessMetric{
 			Pid: uint32(item.stat.PID), Name: name(item.stat),
 			CpuPercent: item.cpu, CpuAvailable: item.cpuAvailable, RssBytes: item.rss,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].CpuPercent != out[j].CpuPercent {
-			return out[i].CpuPercent > out[j].CpuPercent
-		}
-		if out[i].RssBytes != out[j].RssBytes {
-			return out[i].RssBytes > out[j].RssBytes
-		}
-		return out[i].Pid < out[j].Pid
-	})
 	return out
 }
 

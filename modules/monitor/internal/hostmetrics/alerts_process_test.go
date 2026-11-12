@@ -30,13 +30,14 @@ func TestHostAlertTextListsTopProcesses(t *testing.T) {
 	}
 	cpu := hostSample{agentID: "a", hostname: "storage", metric: HostMetricCPU, value: 91, threshold: 80, processes: processes}
 	_, body := hostAlertText(cpu, domain.AlertEventTriggered, now)
-	if !strings.Contains(body, "占用最高：storage-node CPU 340%、内存 5.0 GB；duckdb CPU 45%、内存 7.0 GB") || strings.Contains(body, "broken") {
+	if !strings.Contains(body, "占用最高（进程 CPU 按单核计）：storage-node CPU 340%、内存 5.0 GB；duckdb CPU 45%、内存 7.0 GB\n") || strings.Contains(body, "broken") {
 		t.Fatalf("CPU 告警正文：%s", body)
 	}
 	memory := cpu
 	memory.metric = HostMetricMemory
 	_, body = hostAlertText(memory, domain.AlertEventReminder, now)
-	if !strings.Contains(body, "占用最高：duckdb CPU 45%、内存 7.0 GB；storage-node CPU 340%、内存 5.0 GB；fresh 内存 1.0 GB") {
+	// 内存排行有 4 个进程，正文只列前 3 个（第 4 个是 broken）。
+	if !strings.Contains(body, "占用最高（进程 CPU 按单核计）：duckdb CPU 45%、内存 7.0 GB；storage-node CPU 340%、内存 5.0 GB；fresh 内存 1.0 GB\n") || strings.Contains(body, "broken") {
 		t.Fatalf("内存告警正文：%s", body)
 	}
 	if _, body = hostAlertText(cpu, domain.AlertEventResolved, now); strings.Contains(body, "占用最高") {
@@ -53,6 +54,7 @@ func TestAlertPayloadKeepsTheFullRanking(t *testing.T) {
 		Metric       string  `json:"metric"`
 		Value        float64 `json:"value"`
 		TopProcesses []struct {
+			PID        uint32   `json:"pid"`
 			Name       string   `json:"name"`
 			CPUPercent *float64 `json:"cpu_percent"`
 			RSSBytes   uint64   `json:"rss_bytes"`
@@ -65,10 +67,23 @@ func TestAlertPayloadKeepsTheFullRanking(t *testing.T) {
 		t.Fatalf("payload = %+v", payload)
 	}
 	// NaN 的 CPU 值不能进 JSON（会让整条事件内容序列化失败），按“没有 CPU 值”记录。
+	if payload.TopProcesses[0].PID != 11 || payload.TopProcesses[3].PID != 15 {
+		t.Fatalf("事件里要带 PID，用来区分同名进程：%+v", payload.TopProcesses)
+	}
 	if payload.TopProcesses[0].Name != "storage-node" || *payload.TopProcesses[0].CPUPercent != 340 || payload.TopProcesses[3].Name != "broken" || payload.TopProcesses[3].CPUPercent != nil {
 		t.Fatalf("top_processes = %+v", payload.TopProcesses)
 	}
 	if strings.Contains(string(alertPayload(sample, domain.AlertEventResolved)), "top_processes") {
 		t.Fatal("恢复事件不应带进程排行")
+	}
+}
+
+// 只有 CPU、内存告警附带进程排行；磁盘空间告警不带。
+func TestAlertProcessesOnlyForCPUAndMemory(t *testing.T) {
+	snapshot := processSnapshot()
+	for metric, want := range map[string]int{HostMetricCPU: 4, HostMetricMemory: 4, HostMetricFilesystemUsage: 0} {
+		if got := len(alertProcesses(metric, snapshot)); got != want {
+			t.Fatalf("%s 告警附带 %d 个进程，应为 %d", metric, got, want)
+		}
 	}
 }

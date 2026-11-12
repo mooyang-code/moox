@@ -211,7 +211,7 @@ type ProcessMetric struct {
 	unknownFields protoimpl.UnknownFields
 
 	Pid uint32 `protobuf:"varint,1,opt,name=pid,proto3" json:"pid,omitempty"`
-	// 进程名：可执行文件的文件名，读不到时是内核里的进程名（comm，最多 15 个字符）；只取第一段，不带参数和控制字符。
+	// 进程名：可执行文件的文件名，读不到时是内核里的进程名（comm，最多 15 个字符，只取空白之前的第一段）；不带参数和控制字符。
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// 占单核的百分比，与 top 一致：340 表示占了 3.4 个核。
 	CpuPercent float64 `protobuf:"fixed64,3,opt,name=cpu_percent,json=cpuPercent,proto3" json:"cpu_percent,omitempty"`
