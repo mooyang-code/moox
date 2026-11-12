@@ -219,18 +219,15 @@ func TestStockUSScheduledRequestWritesTheTargetBar(t *testing.T) {
 	require.Empty(t, early.committed)
 }
 
-// 目标那一根取不到时的两种失败（已知差别，见 sources/stockus/eastmoney/daterange.go）：
-//   - 冬令时首根：beg 与目标同一天，目标还没出来时返回是空的，ErrNoClosedBar，这一项失败等重试；
-//   - 夏令时首根：beg 取前一天，返回里带着前一时段的根，非空但没有一根在请求区间内，按“区间内没有行情”失败。
-//
-// 两种都不写数据。
+// 目标那一根取不到时（上游晚于结算延迟才出新一根）：冬令时首根返回空、夏令时首根返回里只有 beg 取前一天多带的前一时段的根，
+// 两种都是“没有已收盘的 K 线”（ErrNoClosedBar），这一项失败等重试或补采，不写数据。
 func TestStockUSScheduledRequestFailsWhenTheTargetBarIsMissing(t *testing.T) {
 	winter := &capturedStorage{}
 	pipeline := stockUSPipeline(t, winter, usTime("2026-11-11 22:35:05"), nil, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"data":{"klines":[]}}`)) })
 	payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", "2026-11-11 22:30:00"))
 	require.NoError(t, err)
 	require.Equal(t, "failed", payload.GetStatus())
-	t.Log("冬令时首根取不到：", payload.GetErrorSummary())
+	require.Contains(t, payload.GetErrorSummary(), "no closed bar")
 	require.Empty(t, winter.committed)
 
 	// 夏令时首根取不到：返回的是前一时段 10-28 22:30 到 10-29 04:00 的根。
@@ -249,7 +246,8 @@ func TestStockUSScheduledRequestFailsWhenTheTargetBarIsMissing(t *testing.T) {
 	payload, err = pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", "2026-10-29 21:30:00"))
 	require.NoError(t, err)
 	require.Equal(t, "failed", payload.GetStatus())
-	t.Log("夏令时首根取不到：", payload.GetErrorSummary())
+	require.Contains(t, payload.GetErrorSummary(), "no closed bar", "不是回看覆盖错误")
+	require.NotContains(t, payload.GetErrorSummary(), "coverage")
 	require.Empty(t, summer.committed)
 }
 
@@ -257,6 +255,11 @@ func TestStockUSScheduledRequestFailsWhenTheTargetBarIsMissing(t *testing.T) {
 // 不早于 beg 日 22:30、在 end 日某个时刻之前的根。cutoff 是那个时刻（05:00 含，或 21:30 不含两个极端）；
 // 根的内容是合成的（开高低收量额按序号造，合法），标签取自同日 AAPL 全量返回的 1412 根。
 func usUpstream(t *testing.T, cutoff time.Duration, inclusive bool) http.HandlerFunc {
+	return usUpstreamDropping(t, cutoff, inclusive, nil)
+}
+
+// usUpstreamDropping 同 usUpstream，drop 返回真的标签上游没有这一根（标的停牌、退市）。
+func usUpstreamDropping(t *testing.T, cutoff time.Duration, inclusive bool, drop func(label time.Time) bool) http.HandlerFunc {
 	t.Helper()
 	var recorded struct {
 		Universe []string `json:"universe"`
@@ -273,7 +276,7 @@ func usUpstream(t *testing.T, cutoff time.Duration, inclusive bool) http.Handler
 		for index, label := range recorded.Universe {
 			at, err := time.ParseInLocation("2006-01-02 15:04", label, beijing)
 			require.NoError(t, err)
-			if at.Before(from) || at.After(to) || (!inclusive && at.Equal(to)) {
+			if at.Before(from) || at.After(to) || (!inclusive && at.Equal(to)) || (drop != nil && drop(at)) {
 				continue
 			}
 			price := 100 + float64(index%50)
@@ -419,4 +422,74 @@ func TestStockUSSingleSourceBreakerThreshold(t *testing.T) {
 	require.Equal(t, 3, threshold(nil), "请求没带限速、进程环境也没设并发时按 1")
 	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "16")
 	require.Equal(t, 48, threshold(nil), "云函数里并发来自计划下发的环境变量")
+}
+
+// 夏令时前 11 根里最后一根（标签 22:25）和后面的 22:30、冬令时首根 22:35，各自单独作为定时请求的目标：上游模型下 beg 少算一天就取不到
+// （beg 的偏移从 22:30 改成 22:25 时，22:25 这一根的 beg 会落在当天、返回里没有它）。实测样例的返回是整段，盖不住这一点，所以用上游模型。
+func TestStockUSScheduledRequestForTheFirstBarsOfADaylightSavingDay(t *testing.T) {
+	for _, cutoff := range []struct {
+		name      string
+		offset    time.Duration
+		inclusive bool
+	}{{"切点 05:00 含", 5 * time.Hour, true}, {"切点 21:30 不含", 21*time.Hour + 30*time.Minute, false}} {
+		for _, label := range []string{
+			"2026-10-29 21:35", "2026-10-29 21:40", "2026-10-29 22:20", "2026-10-29 22:25", "2026-10-29 22:30", "2026-10-29 22:35", // 夏令时：前 11 根是 21:35～22:25
+			"2026-10-26 22:25",                     // 夏令时周一，beg 是周日
+			"2026-11-11 22:35", "2026-11-11 22:40", // 冬令时首根
+		} {
+			t.Run(cutoff.name+"/"+label, func(t *testing.T) {
+				closeAt := usTime(label + ":00")
+				storage := &capturedStorage{}
+				pipeline := stockUSPipeline(t, storage, closeAt.Add(5*time.Second), nil, usUpstream(t, cutoff.offset, cutoff.inclusive))
+				target := closeAt.Add(-5 * time.Minute).In(time.FixedZone("CST", 8*3600)).Format("2006-01-02 15:04:05")
+				payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", target))
+				require.NoError(t, err)
+				require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+				require.Len(t, storage.committed, 1)
+				require.Equal(t, closeAt.Add(-5*time.Minute).Format(time.RFC3339), storage.committed[0].GetRow().GetKey().GetTimeSeries().GetDataTime())
+			})
+		}
+	}
+}
+
+// 标的当天一根都没有（全天停牌，或已退市而标签还没同步掉）：补采分块报“没有已收盘的 K 线”（ErrNoClosedBar），
+// 补采把它当成行情源确认没有；不能报回看覆盖错误（那会让整个数据集的自动补采卡在同一个水位）。
+// 用上游模型去掉某个交易日的全部根：返回里只剩 beg、end 规则多带回的前后一天的根（或空）。
+// 夏令时 10-29（标签 10-29 21:35～10-30 04:00）和冬令时 11-11（标签 11-11 22:35～11-12 05:00）各取首根单根、整天、其他分块。
+// 盘中部分停牌（区间内有根、缺开头几根）报覆盖错误是港股、A 股原有的行为，不在这里改。
+func TestStockUSSuspendedDayBackfillReportsNoClosedBar(t *testing.T) {
+	cst := time.FixedZone("CST", 8*3600)
+	dropDay := func(from, to string) func(time.Time) bool {
+		start, end := usTime(from+":00"), usTime(to+":00")
+		return func(label time.Time) bool { return !label.Before(start) && !label.After(end) }
+	}
+	for _, tc := range []struct {
+		name, start, end string
+		drop             func(time.Time) bool
+	}{
+		{"夏令时首根单根分块", "2026-10-29 21:30:00", "2026-10-29 21:35:00", dropDay("2026-10-29 21:35", "2026-10-30 04:00")},
+		{"夏令时 22:30 那一根", "2026-10-29 22:25:00", "2026-10-29 22:30:00", dropDay("2026-10-29 21:35", "2026-10-30 04:00")},
+		{"夏令时整天分块", "2026-10-29 21:30:00", "2026-10-30 04:00:00", dropDay("2026-10-29 21:35", "2026-10-30 04:00")},
+		{"夏令时凌晨段分块", "2026-10-30 00:00:00", "2026-10-30 04:00:00", dropDay("2026-10-29 21:35", "2026-10-30 04:00")},
+		{"冬令时首根单根分块", "2026-11-11 22:30:00", "2026-11-11 22:35:00", dropDay("2026-11-11 22:35", "2026-11-12 05:00")},
+		{"冬令时整天分块", "2026-11-11 22:30:00", "2026-11-12 05:00:00", dropDay("2026-11-11 22:35", "2026-11-12 05:00")},
+		{"冬令时凌晨段分块（下一时段 11-12 晚上已有数据）", "2026-11-12 00:00:00", "2026-11-12 05:00:00", dropDay("2026-11-11 22:35", "2026-11-12 05:00")},
+	} {
+		for _, cutoff := range []struct {
+			name      string
+			offset    time.Duration
+			inclusive bool
+		}{{"切点 05:00 含", 5 * time.Hour, true}, {"切点 21:30 不含", 21*time.Hour + 30*time.Minute, false}} {
+			t.Run(tc.name+"/"+cutoff.name, func(t *testing.T) {
+				storage := &capturedStorage{}
+				pipeline := stockUSPipeline(t, storage, usTime("2026-11-12 23:00:00").In(cst), nil, usUpstreamDropping(t, cutoff.offset, cutoff.inclusive, tc.drop))
+				payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", "AAPL", tc.start, tc.end))
+				require.NoError(t, err)
+				require.Equal(t, "failed", payload.GetStatus())
+				require.Contains(t, payload.GetErrorSummary(), "no closed bar")
+				require.NotContains(t, payload.GetErrorSummary(), "coverage")
+				require.Empty(t, storage.rows)
+			})
+		}
+	}
 }

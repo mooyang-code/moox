@@ -2,6 +2,12 @@
 // （东方财富的美股列表有一万多个代码，含大量 ETF 与退市股，登记成“取全部标的”会把它们都当成标的；成分另有来源）。
 // 请求、解析、收盘标签换开盘键是与 A 股、港股共用的代码（见 eastmoneykline），这里只有美股自己的部分：
 // secid 的写法、成交量单位、时区、支持的周期，以及日期区间规则（与 A 股、港股不同）。
+//
+// 已知差别：
+//   - 上游晚于结算延迟（5 秒）才出新一根时，那一期的实时请求取不到目标根，这一期缺数，由自动补采补上；
+//   - 请求区间内一根都没有时报 ErrNoClosedBar，补采会把它当成“行情源确认没有”（全天停牌、已退市的标的因此不会卡住补采）；
+//   - 测试里假服务的 handler 用了 require：断言失败时在 HTTP 服务的 goroutine 里调用 FailNow，测试照样失败，
+//     但只终止那个请求的 goroutine，调用方先看到的是请求错误，不是断言信息（港股的测试同样如此）。
 package eastmoney
 
 import (
@@ -128,6 +134,19 @@ func (p *Provider) KlineSpec() marketdata.KlineSpec {
 }
 
 // FetchKlines 取 K 线：请求、解析、收盘标签换开盘键都在共用代码里（见 eastmoneykline）。
+//
+// 按区间取时，上游按日期规则多带前后的根，区间内一根都没有时（标的全天停牌、已退市、新一根还没出）返回里只有这些多带的根，
+// 这里按“没有已收盘的 K 线”返回 ErrNoClosedBar：否则流水线的回看覆盖核对会报 ErrHistoryCoverage，补采把它当成执行失败、
+// 整个数据集的自动补采卡在同一个水位。区间内有根但缺开头几根（盘中部分停牌）仍是覆盖错误，与 A 股、港股一致。
 func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
-	return p.klines.FetchKlines(ctx, req)
+	rows, err := p.klines.FetchKlines(ctx, req)
+	if err != nil || (req.StartTime.IsZero() && req.EndTime.IsZero()) {
+		return rows, err
+	}
+	for _, row := range rows {
+		if (req.StartTime.IsZero() || !row.BarStart.Before(req.StartTime)) && (req.EndTime.IsZero() || row.BarStart.Before(req.EndTime)) {
+			return rows, nil
+		}
+	}
+	return nil, marketdata.ErrNoClosedBar
 }

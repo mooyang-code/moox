@@ -109,22 +109,30 @@ type upstream struct {
 	labels []time.Time
 }
 
-func (u upstream) fetch(beg, end string, cutoff time.Duration, inclusive bool) []time.Time {
-	begDay, err := time.ParseInLocation("20060102", beg, beijing)
-	if err != nil {
-		panic(err)
-	}
+// fetch 按 beg、end 取；beg 为空时不带起点，取 end 之前最近 lmt 根。22:30 在这里写死，不引用生产代码的常量，
+// 否则生产代码改错了（比如改成 22:25）模型跟着错，测试发现不了。
+func (u upstream) fetch(beg, end string, lmt int, cutoff time.Duration, inclusive bool) []time.Time {
 	endDay, err := time.ParseInLocation("20060102", end, beijing)
 	if err != nil {
 		panic(err)
 	}
-	from, to := begDay.Add(beginOffset), endDay.Add(cutoff)
+	from, to := time.Time{}, endDay.Add(cutoff)
+	if beg != "" {
+		begDay, err := time.ParseInLocation("20060102", beg, beijing)
+		if err != nil {
+			panic(err)
+		}
+		from = begDay.Add(22*time.Hour + 30*time.Minute)
+	}
 	var rows []time.Time
 	for _, label := range u.labels {
 		if label.Before(from) || label.After(to) || (!inclusive && label.Equal(to)) {
 			continue
 		}
 		rows = append(rows, label)
+	}
+	if beg == "" && len(rows) > lmt {
+		rows = rows[len(rows)-lmt:]
 	}
 	return rows
 }
@@ -146,6 +154,7 @@ type recordedRequests struct {
 		Name   string `json:"name"`
 		Beg    string `json:"beg"`
 		End    string `json:"end"`
+		Lmt    int    `json:"lmt"`
 		N      int    `json:"n"`
 		First  string `json:"first"`
 		Last   string `json:"last"`
@@ -165,14 +174,14 @@ func loadRecordedRequests(t *testing.T) (upstream, recordedRequests) {
 	return model, recorded
 }
 
-// 上游模型能解释实测的 39 组请求：返回的根数、首根、末根都与实测一致（两个极端的切点结果相同）。
+// 上游模型能解释实测的 48 组请求：返回的根数、首根、末根都与实测一致（两个极端的切点结果相同）。
 func TestUpstreamModelExplainsRecordedRequests(t *testing.T) {
 	model, recorded := loadRecordedRequests(t)
 	require.Len(t, model.labels, 1412)
-	require.Len(t, recorded.Requests, 39)
+	require.Len(t, recorded.Requests, 48)
 	for _, request := range recorded.Requests {
 		for _, cutoff := range cutoffs {
-			rows := model.fetch(request.Beg, request.End, cutoff.offset, cutoff.inclusive)
+			rows := model.fetch(request.Beg, request.End, request.Lmt, cutoff.offset, cutoff.inclusive)
 			label := request.Source + " " + request.Name + " " + cutoff.name
 			require.Len(t, rows, request.N, label)
 			if request.N == 0 {
@@ -206,7 +215,7 @@ func TestDateRangeCoversTargetBars(t *testing.T) {
 	for _, label := range model.labels {
 		beg, end := dateRange(marketdata.KlineRequest{StartTime: label.Add(-5 * time.Minute), EndTime: label}, five)
 		for _, cutoff := range cutoffs {
-			require.True(t, covers(model.fetch(beg, end, cutoff.offset, cutoff.inclusive), label), "%s 单根 %s", label.In(beijing), cutoff.name)
+			require.True(t, covers(model.fetch(beg, end, 0, cutoff.offset, cutoff.inclusive), label), "%s 单根 %s", label.In(beijing), cutoff.name)
 		}
 	}
 
@@ -224,7 +233,7 @@ func TestDateRangeCoversTargetBars(t *testing.T) {
 		first, last := session[0], session[len(session)-1]
 		beg, end := dateRange(marketdata.KlineRequest{StartTime: first.Add(-5 * time.Minute), EndTime: last}, five)
 		for _, cutoff := range cutoffs {
-			require.True(t, covers(model.fetch(beg, end, cutoff.offset, cutoff.inclusive), session...), "%s 整天 %s", first.In(beijing), cutoff.name)
+			require.True(t, covers(model.fetch(beg, end, 0, cutoff.offset, cutoff.inclusive), session...), "%s 整天 %s", first.In(beijing), cutoff.name)
 		}
 	}
 }

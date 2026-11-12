@@ -20,7 +20,7 @@ func TestDateRangeKeepsHistoryCoverage(t *testing.T) {
 		beg, end := dateRange(req, five)
 		for _, cutoff := range cutoffs {
 			var rows []marketdata.NormalizedKline
-			for _, label := range model.fetch(beg, end, cutoff.offset, cutoff.inclusive) {
+			for _, label := range model.fetch(beg, end, 0, cutoff.offset, cutoff.inclusive) {
 				rows = append(rows, marketdata.NormalizedKline{BarStart: label.Add(-5 * time.Minute), BarEnd: label})
 			}
 			require.NoError(t, history.ValidateCoverage(rows, req.StartTime), "%s～%s %s", first.In(beijing), last.In(beijing), cutoff.name)

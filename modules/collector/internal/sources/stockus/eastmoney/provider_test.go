@@ -144,7 +144,7 @@ func TestFetchKlinesParsesRecordedWinterDay(t *testing.T) {
 
 // 夏令时的一个交易日：首根标签 21:35、末根次日 04:00，开始时刻从 13:30 UTC 起。
 // testdata/kline_5m_AAPL_20261029_dst.json 的 78 根是 2026-11-12 同一次全量返回（lmt=100000，1412 根）里纽约 10-29 的那一段。
-// 真实请求的返回在前后还会多带别的根（见 date_range_requests.json 里的 39 组、下面两个用 out11 实测返回的测试），
+// 真实请求的返回在前后还会多带别的根（见 date_range_requests.json 里的 48 组、下面两个用 out11 实测返回的测试），
 // 这里只用这一段验证夏令时的键与区间换算。
 func TestFetchKlinesDaylightSavingDay(t *testing.T) {
 	body := readTestdata(t, "kline_5m_AAPL_20261029_dst.json")
@@ -276,6 +276,59 @@ func TestFetchKlinesInvalidBarOutsideTheRequestedRangeIsTolerated(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, time.Date(2026, 10, 29, 19, 55, 0, 0, time.UTC), rows[0].BarStart)
+}
+
+// 请求区间内一根都没有（标的当天全天停牌、已退市）时，返回里只有日期规则多带回的前后的根：按“没有已收盘的 K 线”返回 ErrNoClosedBar，
+// 不让流水线的回看覆盖核对报 ErrHistoryCoverage。区间内有根、只缺开头几根（盘中部分停牌）不改：照常返回区间内的根，
+// 缺开头的覆盖错误由流水线报（与 A 股、港股一致）。样例是 out11 的 10-28 22:30～10-31 04:00 共 223 根，去掉请求那一天的根。
+func TestFetchKlinesReturnsNoClosedBarWhenNothingIsInTheRange(t *testing.T) {
+	var lines []string
+	for _, line := range strings.Split(string(readTestdata(t, "kline_5m_AAPL_20261028_20261031.json")), "\n") {
+		if line = strings.TrimSuffix(strings.TrimSpace(line), ","); strings.HasPrefix(line, `"2026-`) {
+			lines = append(lines, strings.Trim(line, `"`))
+		}
+	}
+	require.Len(t, lines, 223)
+	without := func(from, to string) []byte {
+		var kept []string
+		for _, line := range lines {
+			if label := line[:16]; label < from || label > to {
+				kept = append(kept, line)
+			}
+		}
+		return klinesBody(kept...)
+	}
+	now := cst("2026-11-12", "12:00:00")
+	fetch := func(body []byte, start, end time.Time) ([]marketdata.NormalizedKline, error) {
+		provider := fixtureProvider(now, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
+		return provider.FetchKlines(context.Background(), aaplRequest(start, end, now, 100))
+	}
+	suspended := without("2026-10-29 21:35", "2026-10-30 04:00")
+	for name, tc := range map[string]struct{ start, end time.Time }{
+		"夏令时整天":        {cst("2026-10-29", "21:30:00"), cst("2026-10-30", "04:00:00")},
+		"夏令时首根单根":      {cst("2026-10-29", "21:30:00"), cst("2026-10-29", "21:35:00")},
+		"夏令时 22:25 那根": {cst("2026-10-29", "22:20:00"), cst("2026-10-29", "22:25:00")},
+		"夏令时凌晨段":       {cst("2026-10-30", "00:00:00"), cst("2026-10-30", "04:00:00")},
+	} {
+		rows, err := fetch(suspended, tc.start, tc.end)
+		require.ErrorIs(t, err, marketdata.ErrNoClosedBar, name)
+		require.Nil(t, rows, name)
+	}
+	// 返回是空列表时同样。
+	_, err := fetch([]byte(`{"data":{"klines":[]}}`), cst("2026-10-29", "21:30:00"), cst("2026-10-30", "04:00:00"))
+	require.ErrorIs(t, err, marketdata.ErrNoClosedBar)
+
+	// 盘中部分停牌：10-29 开盘后前 11 根缺（21:35～22:25），区间内还有后面的根，照常返回区间内的根（连同多带的根）。
+	partial := without("2026-10-29 21:35", "2026-10-29 22:25")
+	rows, err := fetch(partial, cst("2026-10-29", "21:30:00"), cst("2026-10-30", "04:00:00"))
+	require.NoError(t, err)
+	require.Equal(t, 67, len(inRequest(rows, cst("2026-10-29", "21:30:00"), cst("2026-10-30", "04:00:00"))))
+
+	// 不带区间（取最近若干根）不受影响。
+	provider := fixtureProvider(now, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(suspended) })
+	rows, err = provider.FetchKlines(context.Background(), aaplRequest(time.Time{}, time.Time{}, now, 5))
+	require.NoError(t, err)
+	require.Len(t, rows, 5)
 }
 
 // 半日市（2026-11-27 感恩节次日，13:00 收市）没有真实样例（计划 U0 第 3 项要等当天实测），用构造的 42 根：
