@@ -13,6 +13,8 @@ type Hours struct {
 	loc   *time.Location
 	days  TradingDays
 	spans []span
+	// early 是交易日历的提前收市日；日历没有这项能力时为 nil。
+	early EarlyCloses
 }
 
 // NewHours 用交易日历、时区和交易时段（形如 "09:30-11:30"）构造交易时段判断。
@@ -24,7 +26,8 @@ func NewHours(days TradingDays, location *time.Location, sessions []string) (*Ho
 	if err != nil {
 		return nil, err
 	}
-	return &Hours{loc: location, days: days, spans: spans}, nil
+	early, _ := days.(EarlyCloses)
+	return &Hours{loc: location, days: days, spans: spans, early: early}, nil
 }
 
 // Hours 返回 session 市场的交易时段判断；24 小时连续市场没有交易时段，返回错误。
@@ -71,13 +74,14 @@ func (h *Hours) isTradingDay(date marketcalendar.CivilDate) (bool, error) {
 }
 
 // InSession 报告 t 是否在某个交易时段内：含开盘时刻，不含收盘时刻（11:30、15:00 已休市）。
+// 提前收市日按当天实际的时段算，下同。
 func (h *Hours) InSession(t time.Time) (bool, error) {
 	date := h.dateOf(t)
 	trading, err := h.isTradingDay(date)
 	if err != nil || !trading {
 		return false, err
 	}
-	for _, item := range h.spans {
+	for _, item := range spansOn(h.early, h.spans, date) {
 		if !t.Before(h.at(date, item.open)) && t.Before(h.at(date, item.close)) {
 			return true, nil
 		}
@@ -96,7 +100,7 @@ func (h *Hours) NextOpen(t time.Time) (time.Time, error) {
 		if !trading {
 			continue
 		}
-		for _, item := range h.spans {
+		for _, item := range spansOn(h.early, h.spans, date) {
 			if open := h.at(date, item.open); open.After(t) {
 				return open, nil
 			}
@@ -125,11 +129,12 @@ func (h *Hours) lastClose(t time.Time, dailyOnly bool) (time.Time, error) {
 		if !trading {
 			continue
 		}
-		for j := len(h.spans) - 1; j >= 0; j-- {
-			if dailyOnly && j != len(h.spans)-1 {
+		spans := spansOn(h.early, h.spans, date)
+		for j := len(spans) - 1; j >= 0; j-- {
+			if dailyOnly && j != len(spans)-1 {
 				break
 			}
-			if closeAt := h.at(date, h.spans[j].close); !closeAt.After(t) {
+			if closeAt := h.at(date, spans[j].close); !closeAt.After(t) {
 				return closeAt, nil
 			}
 		}

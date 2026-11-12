@@ -2,8 +2,8 @@
 //
 // 两种分桶方式：
 //   - epoch_utc：24 小时连续市场（加密货币），从 Unix 零点起按周期切分，1d 为 UTC 自然日；
-//   - session：交易时段市场（A 股），每个交易日的每个交易时段从开盘起按周期切分，不跨午休，不截短，
-//     休市日没有桶；1d 为交易日，一天一根（桶的键是交易日期的 UTC 零点，区间是首个时段开盘到末个时段收盘）。
+//   - session：交易时段市场（A 股、港股），每个交易日的每个交易时段从开盘起按周期切分，不跨午休，不截短，
+//     休市日没有桶，提前收市日（半日市）收市之后没有桶；1d 为交易日，一天一根（桶的键是交易日期的 UTC 零点，区间是首个时段开盘到当天收市）。
 //
 // session 的日内周期必须整除每个交易时段的长度，除不尽的周期在构造时直接拒绝。
 package barclock
@@ -62,7 +62,7 @@ type Clock interface {
 	// SourceTimes 返回桶内应有的源 K 线开盘时刻（升序），不含午休与休市。
 	SourceTimes(b Bucket, source time.Duration) ([]time.Time, error)
 	// Ordinal 返回桶的交易序号：相邻两个桶的序号相差 1，休市不占序号。按桶的 Key（data_time）定位，只需要 Key。
-	// epoch_utc 是自 Unix 零点起的周期数；session 是“交易日序号 × 每日根数 + 日内序号”。
+	// epoch_utc 是自 Unix 零点起的周期数；session 是“交易日序号 × 每日根数 + 日内序号”，再减去此前各提前收市日少掉的根数。
 	Ordinal(b Bucket) (int64, error)
 	// BucketAtOrdinal 是 Ordinal 的反向。超出交易日历覆盖范围时返回 ErrOutOfCoverage。
 	BucketAtOrdinal(n int64) (Bucket, error)

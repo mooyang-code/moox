@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/marketcalendar"
@@ -26,6 +27,15 @@ type IndexedTradingDays interface {
 	TradingDays
 	TradingDayIndex(marketcalendar.CivilDate) (int, error)
 	TradingDayAt(int) (marketcalendar.CivilDate, error)
+}
+
+// EarlyCloses 是交易日历的可选能力：提前收市日（半日市）当天收市时刻之后没有桶。
+// 交易日历实现了它才生效，没实现的按每个交易日时段相同处理。marketcalendar.TradingCalendar 实现它。
+type EarlyCloses interface {
+	// EarlyClose 返回提前收市日当天的收市时刻（距本地零点的时长）；不是提前收市日时 ok 为假。
+	EarlyClose(marketcalendar.CivilDate) (closeAt time.Duration, ok bool)
+	// EarlyCloseDates 返回全部提前收市日，按日期升序。
+	EarlyCloseDates() []marketcalendar.CivilDate
 }
 
 // span 是一个交易时段，用距本地零点的时长表示。
@@ -54,6 +64,32 @@ func parseSpans(sessions []string) ([]span, error) {
 	return spans, nil
 }
 
+// spansOn 返回交易日 date 当天实际的交易时段：提前收市日只到收市时刻为止，其余日子就是 spans 本身（不分配内存）。
+func spansOn(early EarlyCloses, spans []span, date marketcalendar.CivilDate) []span {
+	if early == nil {
+		return spans
+	}
+	closeAt, ok := early.EarlyClose(date)
+	if !ok {
+		return spans
+	}
+	out := make([]span, 0, len(spans))
+	for _, item := range spans {
+		if item.open >= closeAt {
+			break
+		}
+		if item.close > closeAt {
+			item.close = closeAt
+		}
+		out = append(out, item)
+	}
+	if len(out) == 0 {
+		// 收市时刻早于开盘，是日历数据的错误：按普通交易日处理，不让当天变成没有时段。
+		return spans
+	}
+	return out
+}
+
 func clockOfDay(value string) (time.Duration, error) {
 	parsed, err := time.Parse("15:04", strings.TrimSpace(value))
 	if err != nil {
@@ -67,10 +103,26 @@ type sessionClock struct {
 	days   TradingDays
 	spans  []span
 	period time.Duration
-	// perDay 是每个交易日的桶数（A 股没有半日市，每个交易日相同）；before[i] 是第 i 个交易时段之前的桶数。
+	// perDay 是普通交易日的桶数；before[i] 是第 i 个交易时段之前的桶数。
 	// 交易序号直接按它们计算，热路径不建当天的桶列表。
 	perDay int64
 	before []int64
+	// early 是交易日历的提前收市日；日历没有这项能力时为 nil。
+	early EarlyCloses
+	// short 是提前收市日的累计序号表，第一次算交易序号时才建（Monitor 每次都新建时钟，但从不算交易序号）。
+	shortOnce sync.Once
+	short     []shortDay
+}
+
+// shortDay 是一个提前收市日在交易序号里的位置。普通交易日每天 perDay 根，所以累计序号表只需要记提前收市日：
+// 没有提前收市日的日历（A 股）这张表是空的，交易序号就是“交易日序号 × 每日根数 + 日内序号”。
+type shortDay struct {
+	// day 是这一天的交易日序号。
+	day int64
+	// missing 是到这一天为止（含）比“每天 perDay 根”累计少掉的根数。
+	missing int64
+	// next 是下一个交易日第一根的交易序号。
+	next int64
 }
 
 // NewSession 返回按交易时段切分的时钟。日内周期必须整除每个交易时段的长度；1d 一个交易日一根。
@@ -93,6 +145,7 @@ func NewSession(days TradingDays, location *time.Location, sessions []string, pe
 		}
 	}
 	c := &sessionClock{loc: location, days: days, spans: spans, period: period, perDay: 1, before: make([]int64, len(spans))}
+	c.early, _ = days.(EarlyCloses)
 	if period < 24*time.Hour {
 		c.perDay = 0
 		for i, item := range spans {
@@ -134,14 +187,20 @@ func (c *sessionClock) isTradingDay(date marketcalendar.CivilDate) (bool, error)
 	return status == marketcalendar.TradingDay, nil
 }
 
-// dayBuckets 返回交易日 date 的全部桶；非交易日由调用方先排除。
+// daily 返回交易日 date 的 1d 桶：首个时段开盘到当天实际收市。
+func (c *sessionClock) daily(date marketcalendar.CivilDate) Bucket {
+	spans := spansOn(c.early, c.spans, date)
+	key := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
+	return Bucket{Key: key, Start: c.at(date, spans[0].open), End: c.at(date, spans[len(spans)-1].close)}
+}
+
+// dayBuckets 返回交易日 date 的全部桶，按当天实际的交易时段切分（提前收市日收市之后没有桶）；非交易日由调用方先排除。
 func (c *sessionClock) dayBuckets(date marketcalendar.CivilDate) []Bucket {
 	if c.period == 24*time.Hour {
-		key := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
-		return []Bucket{{Key: key, Start: c.at(date, c.spans[0].open), End: c.at(date, c.spans[len(c.spans)-1].close)}}
+		return []Bucket{c.daily(date)}
 	}
 	var out []Bucket
-	for _, item := range c.spans {
+	for _, item := range spansOn(c.early, c.spans, date) {
 		for offset := item.open; offset+c.period <= item.close; offset += c.period {
 			start := c.at(date, offset)
 			out = append(out, Bucket{Key: start, Start: start, End: start.Add(c.period)})
@@ -256,8 +315,35 @@ func (c *sessionClock) indexed() (IndexedTradingDays, error) {
 	return indexed, nil
 }
 
+// shortDays 返回提前收市日的累计序号表，第一次调用时建。1d 一天一根，提前收市日不少根，表是空的。
+func (c *sessionClock) shortDays(indexed IndexedTradingDays) []shortDay {
+	c.shortOnce.Do(func() {
+		if c.early == nil || c.period == 24*time.Hour {
+			return
+		}
+		var missing int64
+		for _, date := range c.early.EarlyCloseDates() {
+			day, err := indexed.TradingDayIndex(date)
+			if err != nil {
+				continue
+			}
+			var count int64
+			for _, item := range spansOn(c.early, c.spans, date) {
+				count += int64(item.length() / c.period)
+			}
+			if count >= c.perDay {
+				continue
+			}
+			missing += c.perDay - count
+			c.short = append(c.short, shortDay{day: int64(day), missing: missing, next: (int64(day)+1)*c.perDay - missing})
+		}
+	})
+	return c.short
+}
+
 // Ordinal 按桶的 Key 定位（日内桶的 Key 是开盘时刻，1d 桶的 Key 是交易日期的 UTC 零点），直接计算：
-// 交易日序号 × 每日根数 + 所在时段之前的根数 + (本地时刻 − 时段开盘) / 周期。不分配内存（出错时除外）。
+// 交易日序号 × 每日根数 + 所在时段之前的根数 + (本地时刻 − 时段开盘) / 周期 − 此前各提前收市日少掉的根数。
+// 表建好后不分配内存（出错时除外）。
 func (c *sessionClock) Ordinal(b Bucket) (int64, error) {
 	indexed, err := c.indexed()
 	if err != nil {
@@ -290,6 +376,11 @@ func (c *sessionClock) Ordinal(b Bucket) (int64, error) {
 		if !found {
 			return 0, c.notBucket(b.Key)
 		}
+		if c.early != nil {
+			if closeAt, ok := c.early.EarlyClose(date); ok && offset+c.period > closeAt {
+				return 0, c.notBucket(b.Key)
+			}
+		}
 	}
 	day, err := indexed.TradingDayIndex(date)
 	if errors.Is(err, marketcalendar.ErrNotTradingDay) {
@@ -298,14 +389,22 @@ func (c *sessionClock) Ordinal(b Bucket) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w：%s：%v", ErrOutOfCoverage, date, err)
 	}
-	return int64(day)*c.perDay + intra, nil
+	ordinal := int64(day)*c.perDay + intra
+	short := c.shortDays(indexed)
+	for i := len(short) - 1; i >= 0; i-- {
+		if short[i].day < int64(day) {
+			ordinal -= short[i].missing
+			break
+		}
+	}
+	return ordinal, nil
 }
 
 func (c *sessionClock) notBucket(t time.Time) error {
 	return fmt.Errorf("%w：%s 不是 %s 的交易桶", ErrNoBucket, t.UTC().Format(time.RFC3339), c.period)
 }
 
-// BucketAtOrdinal 是 Ordinal 的反向，同样直接计算、不分配内存。
+// BucketAtOrdinal 是 Ordinal 的反向，同样直接计算，表建好后不分配内存（1d 的提前收市日除外）。
 func (c *sessionClock) BucketAtOrdinal(n int64) (Bucket, error) {
 	indexed, err := c.indexed()
 	if err != nil {
@@ -314,13 +413,20 @@ func (c *sessionClock) BucketAtOrdinal(n int64) (Bucket, error) {
 	if n < 0 {
 		return Bucket{}, fmt.Errorf("%w：交易序号 %d 为负", ErrOutOfCoverage, n)
 	}
+	// 把序号换成“每天 perDay 根”下的序号：补回此前各提前收市日少掉的根数。
+	short := c.shortDays(indexed)
+	for i := len(short) - 1; i >= 0; i-- {
+		if n >= short[i].next {
+			n += short[i].missing
+			break
+		}
+	}
 	date, err := indexed.TradingDayAt(int(n / c.perDay))
 	if err != nil {
 		return Bucket{}, fmt.Errorf("%w：%v", ErrOutOfCoverage, err)
 	}
 	if c.period == 24*time.Hour {
-		key := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
-		return Bucket{Key: key, Start: c.at(date, c.spans[0].open), End: c.at(date, c.spans[len(c.spans)-1].close)}, nil
+		return c.daily(date), nil
 	}
 	intra := n % c.perDay
 	i := len(c.spans) - 1
@@ -352,7 +458,7 @@ func (c *sessionClock) SourceTimes(b Bucket, source time.Duration) ([]time.Time,
 	}
 	date := c.dateOf(b.Start)
 	var out []time.Time
-	for _, item := range c.spans {
+	for _, item := range spansOn(c.early, c.spans, date) {
 		for offset := item.open; offset+source <= item.close; offset += source {
 			at := c.at(date, offset)
 			if !at.Before(b.Start) && at.Before(b.End) {
