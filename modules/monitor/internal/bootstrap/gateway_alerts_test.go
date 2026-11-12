@@ -8,10 +8,10 @@ import (
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -37,10 +37,10 @@ func TestGatewayAlertsFreezeDuringUncertaintyAndRetireWhenHostDisabled(t *testin
 		require.NoError(t, run(t.Context()))
 	}
 	id := "gateway:control:status" // 三项网关信号合并成一条检查
-	state, err := repos.Alerts.GetState(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+id, id)
+	state, err := repos.Alerts.GetState(t.Context(), events.SystemSpaceID, "default:"+id, id)
 	require.NoError(t, err)
 	require.Equal(t, domain.AlertStatusFiring, state.Status)
-	results, err := repos.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, id, 10)
+	results, err := repos.Results.Recent(t.Context(), events.SystemSpaceID, id, 10)
 	require.NoError(t, err)
 	require.Len(t, results, samples)
 	require.Contains(t, results[0].RawError, "conflict_instance_id=old")
@@ -48,28 +48,28 @@ func TestGatewayAlertsFreezeDuringUncertaintyAndRetireWhenHostDisabled(t *testin
 	failed := domain.GatewayObservation{HostID: "control", ReadError: "GetHostRoutes unavailable", HostEnabledAt: row.HostEnabledAt}
 	require.NoError(t, repos.Gateways.Reconcile(t.Context(), []domain.GatewayObservation{failed}, now.Add(time.Second)))
 	require.NoError(t, run(t.Context()))
-	state, err = repos.Alerts.GetState(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+id, id)
+	state, err = repos.Alerts.GetState(t.Context(), events.SystemSpaceID, "default:"+id, id)
 	require.NoError(t, err)
 	require.Equal(t, domain.AlertStatusFiring, state.Status, "unknown gateway status cannot resolve an existing conflict")
-	results, err = repos.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, id, 10)
+	results, err = repos.Results.Recent(t.Context(), events.SystemSpaceID, id, 10)
 	require.NoError(t, err)
 	require.Len(t, results, samples, "unknown status cannot synthesize a healthy probe")
 
 	require.NoError(t, repos.Gateways.Reconcile(t.Context(), nil, now.Add(2*time.Second)))
 	require.NoError(t, run(t.Context()))
-	check, err := repos.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, id)
+	check, err := repos.Checks.Get(t.Context(), events.SystemSpaceID, id)
 	require.NoError(t, err)
 	require.False(t, check.Enabled)
-	_, err = repos.Alerts.GetRule(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+id)
+	_, err = repos.Alerts.GetRule(t.Context(), events.SystemSpaceID, "default:"+id)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 
 	row.StatusJSON = `{"instance_id":"replacement","previous_instance_id":"old","last_seen_at":"` + now.Format(time.RFC3339Nano) + `"}`
 	require.NoError(t, repos.Gateways.Reconcile(t.Context(), []domain.GatewayObservation{row}, now))
 	require.NoError(t, run(t.Context()))
-	check, err = repos.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, id)
+	check, err = repos.Checks.Get(t.Context(), events.SystemSpaceID, id)
 	require.NoError(t, err)
 	require.True(t, check.Enabled, "re-enabled hosts must restore gateway checks")
-	state, err = repos.Alerts.GetState(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+id, id)
+	state, err = repos.Alerts.GetState(t.Context(), events.SystemSpaceID, "default:"+id, id)
 	require.NoError(t, err)
 	require.NotEqual(t, domain.AlertStatusFiring, state.Status, "normal replacement is not a conflict")
 }
@@ -85,8 +85,8 @@ func TestGatewayAlertsMigrateLegacyPerSignalChecks(t *testing.T) {
 	now := time.Now().UTC()
 	for _, kind := range []string{"heartbeat", "instance_conflict", "route_sync"} {
 		id := "gateway:control:" + kind
-		require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{SpaceID: monmetrics.InternalMetricSpaceID, CheckID: id, Name: id, GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}))
-		require.NoError(t, repos.Alerts.CreateRule(t.Context(), &domain.AlertRule{SpaceID: monmetrics.InternalMetricSpaceID, RuleID: "default:" + id, CheckID: id, FailureThreshold: 1, SuccessThreshold: 1, Enabled: true}))
+		require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{SpaceID: events.SystemSpaceID, CheckID: id, Name: id, GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}))
+		require.NoError(t, repos.Alerts.CreateRule(t.Context(), &domain.AlertRule{SpaceID: events.SystemSpaceID, RuleID: "default:" + id, CheckID: id, FailureThreshold: 1, SuccessThreshold: 1, Enabled: true}))
 	}
 	// 心跳从未上报且路由已同步：合并后的检查按"有异常"处理，原因里带出异常的那一项。
 	raw, err := json.Marshal(&adminpb.HostGatewayRuntimeStatus{InstanceId: "new"})
@@ -101,17 +101,17 @@ func TestGatewayAlertsMigrateLegacyPerSignalChecks(t *testing.T) {
 
 	for _, kind := range []string{"heartbeat", "instance_conflict", "route_sync"} {
 		id := "gateway:control:" + kind
-		check, err := repos.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, id)
+		check, err := repos.Checks.Get(t.Context(), events.SystemSpaceID, id)
 		require.NoError(t, err)
 		require.False(t, check.Enabled, id)
-		_, err = repos.Alerts.GetRule(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+id)
+		_, err = repos.Alerts.GetRule(t.Context(), events.SystemSpaceID, "default:"+id)
 		require.ErrorIs(t, err, gorm.ErrRecordNotFound, id)
 	}
 	merged := "gateway:control:status"
-	state, err := repos.Alerts.GetState(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+merged, merged)
+	state, err := repos.Alerts.GetState(t.Context(), events.SystemSpaceID, "default:"+merged, merged)
 	require.NoError(t, err)
 	require.Equal(t, domain.AlertStatusFiring, state.Status)
-	results, err := repos.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, merged, 1)
+	results, err := repos.Results.Recent(t.Context(), events.SystemSpaceID, merged, 1)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.False(t, results[0].Success)

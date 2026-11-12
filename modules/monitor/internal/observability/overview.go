@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -236,7 +237,7 @@ const storageOutboxBacklogGrace = 2 * time.Minute
 // buildSeriesLimitHealth 检查指标目录的新序列增长：新序列被限额丢弃，或近 1 小时 / 24 小时的新增数接近上限，都视为异常。
 // 这通常是某个上报方的标签失控（例如把标的、请求 ID 放进了标签），不处理会撑大目录并让真正的指标被挤掉。
 func (b Builder) buildSeriesLimitHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return nil, nil
 	}
 	if b.Metrics == nil {
@@ -259,7 +260,7 @@ func (b Builder) buildSeriesLimitHealth(ctx context.Context, spaceID string, now
 		}
 	}
 	return []BusinessStatus{{
-		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "metrics_ingest", Module: "series_limit",
+		SpaceID: events.SystemSpaceID, Kind: "metrics_ingest", Module: "series_limit",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }
@@ -275,7 +276,7 @@ func seriesQuota(current, max int64) string {
 // buildStorageOutboxHealth detects an interrupted Primary-to-View delivery
 // path before a Dataset output watermark has had time to become stale.
 func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return nil, nil
 	}
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
@@ -323,7 +324,7 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 		reason = fmt.Sprintf("正在投递 %.0f 条数据变更", pending)
 	}
 	return []BusinessStatus{{
-		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "data_delivery", Module: "storage_outbox",
+		SpaceID: events.SystemSpaceID, Kind: "data_delivery", Module: "storage_outbox",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }
@@ -331,7 +332,7 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 // buildViewFileLimitHealth 把 Storage View 上报的索引文件超限数量转成告警：超过 max_view_file_bytes 只告警，数据不动，
 // 由人判断是调大告警线、调小保留根数还是减列。
 func (b Builder) buildViewFileLimitHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return nil, nil
 	}
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
@@ -363,7 +364,7 @@ func (b Builder) buildViewFileLimitHealth(ctx context.Context, spaceID string, n
 		reason = fmt.Sprintf("%.0f 个 View 的索引文件超过 max_view_file_bytes；数据不受影响，日志里有具体的 View，确认后调大告警线或减少保留根数", overLimit)
 	}
 	return []BusinessStatus{{
-		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "view_file", Module: "storage_view",
+		SpaceID: events.SystemSpaceID, Kind: "view_file", Module: "storage_view",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }
@@ -1084,7 +1085,7 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 		}
 	}
 	// 余额对账和各模块的关注项与空间无关，归在 mooxsys 下。
-	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return out, nil
 	}
 	balances, err := b.buildBalanceStatuses(ctx)
@@ -1202,7 +1203,7 @@ func (b Builder) buildAttentionStatuses(ctx context.Context, source attentionSou
 			continue
 		}
 		status := BusinessStatus{
-			SpaceID: monmetrics.InternalMetricSpaceID, Kind: source.check, Module: kind, Status: "healthy", Reason: "正常",
+			SpaceID: events.SystemSpaceID, Kind: source.check, Module: kind, Status: "healthy", Reason: "正常",
 			LastCheckedAt: latest.ObservedAt,
 		}
 		if latest.Value > 0 {
@@ -1279,7 +1280,7 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 			status, reason = "down", "balance sync stale"
 		}
 		out = append(out, BusinessStatus{
-			SpaceID: monmetrics.InternalMetricSpaceID, Kind: "balance", Module: successValue.serviceName, Status: status,
+			SpaceID: events.SystemSpaceID, Kind: "balance", Module: successValue.serviceName, Status: status,
 			Reason: reason, LastCheckedAt: lastCheckedAt,
 		})
 	}

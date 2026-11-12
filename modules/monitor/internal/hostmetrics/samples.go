@@ -46,7 +46,10 @@ func (s *SampleStore) Write(ctx context.Context, agentID string, observedAt time
 	if agentID == "" || snapshot == nil {
 		return errors.New("主机快照缺少采集代理编号或内容")
 	}
-	encoded, err := proto.Marshal(snapshot)
+	// 进程排行和采集器状态只用于当前快照（告警正文、详情页），历史里不存，行也更小。
+	stored := proto.Clone(snapshot).(*hostmetricpb.HostSnapshot)
+	stored.TopProcesses, stored.Collectors = nil, nil
+	encoded, err := proto.Marshal(stored)
 	if err != nil {
 		return fmt.Errorf("编码主机快照: %w", err)
 	}
@@ -57,7 +60,8 @@ func (s *SampleStore) Write(ctx context.Context, agentID string, observedAt time
 	}).Create(&record).Error
 }
 
-// History 返回 [start, end] 内最新的 limit 份快照，按时间升序。limit 不大于 0 时取默认值，最多 ForecastHistoryLimit。
+// History 返回 [start, end] 内的快照，按时间升序，最多 limit 份：行数超过 limit 时在整个范围内等间隔抽取
+// （首尾两行一定在内），曲线覆盖所选的整段时间。limit 不大于 0 时取默认值，最多 ForecastHistoryLimit。
 func (s *SampleStore) History(ctx context.Context, agentID string, start, end time.Time, limit int) ([]HistoryPoint, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("主机快照库未初始化")
@@ -69,22 +73,45 @@ func (s *SampleStore) History(ctx context.Context, agentID string, start, end ti
 		limit = defaultHistoryLimit
 	}
 	limit = min(limit, ForecastHistoryLimit)
-	var records []hostSampleRecord
-	if err := s.db.WithContext(ctx).
+	// 先只读行号，抽好要返回的行再读快照内容。
+	var ids []int64
+	if err := s.db.WithContext(ctx).Model(&hostSampleRecord{}).
 		Where("c_agent_id = ? AND c_observed_at >= ? AND c_observed_at <= ?", agentID, start.UTC(), end.UTC()).
-		Order("c_observed_at DESC").Limit(limit).Find(&records).Error; err != nil {
+		Order("c_observed_at").Pluck("c_id", &ids).Error; err != nil {
 		return nil, fmt.Errorf("读取主机快照历史: %w", err)
 	}
-	out := make([]HistoryPoint, len(records))
-	for i, record := range records {
+	ids = evenlySpaced(ids, limit)
+	if len(ids) == 0 {
+		return []HistoryPoint{}, nil
+	}
+	var records []hostSampleRecord
+	if err := s.db.WithContext(ctx).Where("c_id IN ?", ids).Order("c_observed_at").Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("读取主机快照历史: %w", err)
+	}
+	out := make([]HistoryPoint, 0, len(records))
+	for _, record := range records {
 		snapshot := new(hostmetricpb.HostSnapshot)
 		if err := proto.Unmarshal(record.Snapshot, snapshot); err != nil {
 			return nil, fmt.Errorf("解码主机快照 agent_id=%s observed_at=%s: %w", agentID, record.ObservedAt.UTC().Format(time.RFC3339), err)
 		}
-		// 查询按时间倒序取最新的 limit 行，这里反过来按升序返回。
-		out[len(records)-1-i] = HistoryPoint{AgentID: agentID, ObservedAt: record.ObservedAt.UTC().Format(time.RFC3339Nano), Snapshot: snapshot}
+		out = append(out, HistoryPoint{AgentID: agentID, ObservedAt: record.ObservedAt.UTC().Format(time.RFC3339Nano), Snapshot: snapshot})
 	}
 	return out, nil
+}
+
+// evenlySpaced 从按时间排好的行里等间隔取 limit 行，保留首尾；不超过 limit 时原样返回。
+func evenlySpaced(ids []int64, limit int) []int64 {
+	if len(ids) <= limit {
+		return ids
+	}
+	if limit == 1 {
+		return ids[len(ids)-1:]
+	}
+	out := make([]int64, limit)
+	for i := range limit {
+		out[i] = ids[i*(len(ids)-1)/(limit-1)]
+	}
+	return out
 }
 
 // DeleteBefore 删除采样时间早于 cutoff 的快照。

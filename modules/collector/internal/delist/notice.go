@@ -95,11 +95,11 @@ func (r *Registrar) Register(ctx context.Context, notice Notice) (created bool, 
 		raw, err := r.Registry.MarshalMessage(events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
 			Exchange: notice.Exchange, Market: notice.Market, ExchangeSymbol: notice.Symbol, DelistAt: timestamppb.New(delistAt),
 			Source: notice.Source, FirstSeenAt: timestamppb.New(now), Scope: notice.Scope,
-		}, events.PublishOptions{EventID: eventID, OccurredAt: now, SpaceID: events.DelistSystemSpaceID, SubjectID: subject})
+		}, events.PublishOptions{EventID: eventID, OccurredAt: now, SpaceID: events.SystemSpaceID, SubjectID: subject})
 		if err != nil {
 			return store.OutboxEvent{}, fmt.Errorf("生成下架事件失败: %w", err)
 		}
-		return store.OutboxEvent{EventID: eventID, SpaceID: events.DelistSystemSpaceID, EventName: events.InstrumentDelistScheduled.Name(), SubjectToken: subject, Payload: raw}, nil
+		return store.OutboxEvent{EventID: eventID, SpaceID: events.SystemSpaceID, EventName: events.InstrumentDelistScheduled.Name(), SubjectToken: subject, Payload: raw}, nil
 	}
 	created, eventID, err = r.Repo.Register(ctx, store.DelistNotice{
 		Exchange: notice.Exchange, Market: notice.Market, Symbol: notice.Symbol, Scope: notice.Scope, DelistAt: delistAt,

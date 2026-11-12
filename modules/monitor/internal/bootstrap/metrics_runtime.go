@@ -188,7 +188,7 @@ func metricsObservabilityRoute(
 		if messageStore == nil {
 			return errors.New("metrics catalog is unavailable")
 		}
-		if message.GetSpaceId() != monmetrics.InternalMetricSpaceID {
+		if message.GetSpaceId() != events.SystemSpaceID {
 			messageStore.RecordIngestRejected(moduleMetrics, metricReport.GetServiceName(), monmetrics.RejectSpace)
 			return observabilityconsumer.Permanent(fmt.Errorf("unsupported metric space %q", message.GetSpaceId()))
 		}

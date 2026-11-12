@@ -3,9 +3,15 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,4 +56,25 @@ func TestRunMonitorDataCleanupAttemptsEveryStore(t *testing.T) {
 
 func TestRunMonitorDataCleanupAllowsUnavailableStores(t *testing.T) {
 	require.NoError(t, runMonitorDataCleanup(context.Background(), monitorDataCleanupOps{}))
+}
+
+// 数据清理定时任务接上了主机快照历史的清理：早于 7 天的快照被删掉，7 天内的保留。
+func TestMonitorDataCleanupPrunesHostSamples(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	samples, err := store.WithDatabase(mgr, hostmetrics.NewSampleStore)
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	for _, at := range []time.Time{now.Add(-8 * 24 * time.Hour), now.Add(-time.Hour)} {
+		require.NoError(t, samples.Write(t.Context(), "agent-a", at, &hostmetricpb.HostSnapshot{}))
+	}
+
+	ops := buildMonitorDataCleanupOps(config.Default(), &Runtime{Store: mgr, Repositories: mgr.Repositories(), HostSamples: samples})
+	require.NotNil(t, ops.pruneHostSamples)
+	require.NoError(t, runMonitorDataCleanup(t.Context(), ops))
+	left, err := samples.History(t.Context(), "agent-a", now.Add(-30*24*time.Hour), now, 0)
+	require.NoError(t, err)
+	require.Len(t, left, 1)
 }

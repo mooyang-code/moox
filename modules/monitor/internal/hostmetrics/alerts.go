@@ -24,7 +24,7 @@ import (
 )
 
 // AlertEvaluator 在主机快照登记在线后计算阈值告警的状态变化，按事件编号去重。
-// Alert failures never participate in the EventBus ACK decision.
+// 告警处理失败不影响 EventBus 消息的确认。
 type AlertEvaluator struct {
 	Cache      *RuleCache
 	Repository *store.AlertRepository

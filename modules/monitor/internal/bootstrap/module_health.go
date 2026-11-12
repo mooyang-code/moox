@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
@@ -50,7 +51,7 @@ func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, chec
 			name = check.ID
 		}
 		item := businessFreshnessItem{
-			spaceID: monmetrics.InternalMetricSpaceID, checkID: "module:" + check.ID, name: name,
+			spaceID: events.SystemSpaceID, checkID: "module:" + check.ID, name: name,
 			success: true, reason: "最近一次运行成功",
 		}
 		if lastError.After(lastSuccess) && now.Sub(lastSuccess) > check.MaxLag {

@@ -84,7 +84,6 @@ export interface HostMetrics {
   networks: NetworkSpeed[];
   /** 最新一次采样里 CPU 与内存占用最高的进程；历史点没有这一项。 */
   processes: ProcessUsage[];
-  storage_available: boolean;
 }
 
 export interface HistoryPoint {
@@ -158,37 +157,35 @@ interface HostHistoryPoint {
 }
 
 export const getCurrentMetrics = (options: { silentError?: boolean } = {}) => {
-  return callControl<Record<string, never>, { agents?: HostAgent[]; storage_available?: boolean; data_gap?: boolean }>(
-    "monitor",
-    "ListHostAgents",
-    {},
-    options
-  ).then(response => ({
-    metrics: (response.agents ?? []).map(agent => toHostMetrics(agent, response.storage_available !== false)),
-    storage_available: response.storage_available !== false,
-    data_gap: response.data_gap === true
-  }));
+  return callControl<Record<string, never>, { agents?: HostAgent[] }>("monitor", "ListHostAgents", {}, options).then(
+    response => ({
+      metrics: (response.agents ?? []).map(agent => toHostMetrics(agent))
+    })
+  );
 };
+
+/** 历史曲线最多取的点数：1 小时是原始的每分钟一点，更长的范围由服务端等间隔抽取。 */
+const HISTORY_POINT_LIMIT = 500;
 
 export const getHistoryMetrics = (agentID: string, duration = "1h") => {
   const end = new Date();
   const start = new Date(end.getTime() - durationMilliseconds(duration));
   return callControl<
     { agent_id: string; start_at: string; end_at: string; limit: number },
-    { points?: HostHistoryPoint[]; storage_available?: boolean; data_gap?: boolean }
+    { points?: HostHistoryPoint[]; data_gap?: boolean }
   >("monitor", "QueryHostMetricHistory", {
     agent_id: agentID,
     start_at: start.toISOString(),
     end_at: end.toISOString(),
-    limit: 500
+    // 服务端在所选范围内等间隔抽取最多这么多点，曲线总是覆盖整段时间。
+    limit: HISTORY_POINT_LIMIT
   }).then(response => ({
     history: (response.points ?? []).map(toHistoryPoint),
-    storage_available: response.storage_available !== false,
     data_gap: response.data_gap === true
   }));
 };
 
-export const toHostMetrics = (agent: HostAgent, storageAvailable = true): HostMetrics => {
+export const toHostMetrics = (agent: HostAgent): HostMetrics => {
   const snapshot = agent.snapshot ?? {};
   const cpu = snapshot.cpu ?? {};
   const memory = snapshot.memory ?? {};
@@ -245,8 +242,7 @@ export const toHostMetrics = (agent: HostAgent, storageAvailable = true): HostMe
       cpu_percent: item.cpu_percent ?? 0,
       cpu_available: item.cpu_available === true,
       rss: toNumber(item.rss_bytes)
-    })),
-    storage_available: storageAvailable
+    }))
   };
 };
 

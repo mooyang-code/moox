@@ -102,11 +102,13 @@ func TestStoreKeepsPresenceAndAlertsWhenHistoryWriteFails(t *testing.T) {
 	assert.Equal(t, 1, state.FailureCount, "同一条消息只评估一次")
 }
 
-func TestSampleStoreHistoryReturnsLatestRowsAscendingAndPrunes(t *testing.T) {
+// 超过条数时在整个范围内等间隔抽取（保留首尾）；进程排行与采集器状态不进历史；按采样时间清理。
+func TestSampleStoreHistorySpansTheRangeAndPrunes(t *testing.T) {
 	samples := NewSampleStore(openRegistryTestDB(t))
 	base := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
 	for i := range 5 {
-		snapshot := &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: 1, UsagePercent: float64(i)}, Memory: &hostmetricpb.MemoryMetric{}}
+		snapshot := &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: 1, UsagePercent: float64(i)}, Memory: &hostmetricpb.MemoryMetric{},
+			TopProcesses: []*hostmetricpb.ProcessMetric{{Pid: 1, Name: "storage"}}, Collectors: []*hostmetricpb.CollectorStatus{{}}}
 		require.NoError(t, samples.Write(context.Background(), "agent", base.Add(time.Duration(i)*time.Minute+10*time.Second), snapshot))
 	}
 	require.NoError(t, samples.Write(context.Background(), "other", base, &hostmetricpb.HostSnapshot{}))
@@ -115,9 +117,14 @@ func TestSampleStoreHistoryReturnsLatestRowsAscendingAndPrunes(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, history, 3)
 	for i, point := range history {
-		assert.Equal(t, base.Add(time.Duration(i+2)*time.Minute).Format(time.RFC3339Nano), point.ObservedAt)
-		assert.EqualValues(t, i+2, point.Snapshot.GetCpu().GetUsagePercent())
+		assert.Equal(t, base.Add(time.Duration(2*i)*time.Minute).Format(time.RFC3339Nano), point.ObservedAt)
+		assert.EqualValues(t, 2*i, point.Snapshot.GetCpu().GetUsagePercent())
+		assert.Empty(t, point.Snapshot.GetTopProcesses())
+		assert.Empty(t, point.Snapshot.GetCollectors())
 	}
+	all, err := samples.History(context.Background(), "agent", base, base.Add(time.Hour), 0)
+	require.NoError(t, err)
+	assert.Len(t, all, 5, "不超过条数时原样返回")
 
 	deleted, err := samples.DeleteBefore(context.Background(), base.Add(2*time.Minute))
 	require.NoError(t, err)

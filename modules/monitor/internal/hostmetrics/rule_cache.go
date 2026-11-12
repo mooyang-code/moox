@@ -101,9 +101,8 @@ type RuleCacheOptions struct {
 	InitialLoadTimeout time.Duration
 }
 
-// RuleCache keeps enabled host rules out of the HostMetric hot
-// path.  Each published snapshot is immutable from the consumer's point of
-// view; callers receive values or freshly allocated slices.
+// RuleCache 缓存已启用的主机阈值规则，处理主机快照时不查库。发布出去的规则快照不再修改，
+// 调用方拿到的是值或新分配的切片。
 type RuleCache struct {
 	cache *snapshotcache.Cache[domain.AlertRule]
 }

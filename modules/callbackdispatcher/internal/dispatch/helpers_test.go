@@ -21,7 +21,7 @@ func mustEntry(t *testing.T) catalog.Entry {
 func messageFor(t *testing.T) *eventpb.EventMessage {
 	t.Helper()
 	return &eventpb.EventMessage{
-		EventId: "event-1", EventName: delistEvent, EventVersion: 1, SpaceId: events.DelistSystemSpaceID,
+		EventId: "event-1", EventName: delistEvent, EventVersion: 1, SpaceId: events.SystemSpaceID,
 		SubjectId: "binance:SPOT:FOOUSDT", OccurredAt: timestamppb.New(baseTime),
 	}
 }

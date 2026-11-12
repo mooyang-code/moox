@@ -11,6 +11,7 @@ import (
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
@@ -85,7 +86,7 @@ func buildBusinessFreshnessReporterWithInterval(
 		for _, signal := range overview.GatewaySignals {
 			if signal.Kind == monitorobservability.RelaySignalKind {
 				relaySeen[signal.HostID] = true
-				key := monmetrics.InternalMetricSpaceID + "\x00" + relayCheckID(signal.HostID)
+				key := events.SystemSpaceID + "\x00" + relayCheckID(signal.HostID)
 				item, frozen := relayItem(signal, relayDownSince, overview.GeneratedAt)
 				if frozen {
 					frozenGateway[key] = true
@@ -117,7 +118,7 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		for hostID, host := range gatewayHosts {
 			checkID := "gateway:" + hostID + ":status"
-			key := monmetrics.InternalMetricSpaceID + "\x00" + checkID
+			key := events.SystemSpaceID + "\x00" + checkID
 			// 没有任何异常信号、但有信号无法确认时保持原状态，不伪造成功去恢复既有告警。
 			if host.unknown && !host.unhealthy {
 				frozenGateway[key] = true
@@ -127,7 +128,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			if host.unhealthy {
 				reason = strings.Join(host.reasons, "；")
 			}
-			items[key] = businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: checkID, name: "主机网关（" + hostID + "）", success: !host.unhealthy, reason: reason, rawError: strings.Join(host.raws, "；")}
+			items[key] = businessFreshnessItem{spaceID: events.SystemSpaceID, checkID: checkID, name: "主机网关（" + hostID + "）", success: !host.unhealthy, reason: reason, rawError: strings.Join(host.raws, "；")}
 		}
 		klineEvaluationRan := len(klineEvaluators) == 0 || klineEvaluators[0] == nil
 		klineEvaluated := make(map[string]struct{})
@@ -156,8 +157,8 @@ func buildBusinessFreshnessReporterWithInterval(
 				coveredDatasets, coveredViews = nil, nil
 				state := inventoryErr.State
 				diagnostic := fmt.Sprintf("cache_available=%t cache_age_seconds=%.0f last_success_timestamp_seconds=%.0f error=%s", state.Available, state.Age.Seconds(), unixSeconds(state.LastSuccess), inventoryErr.Cause)
-				items[monmetrics.InternalMetricSpaceID+"\x00"+monmetrics.TaskResultInventoryCheckID] = businessFreshnessItem{
-					spaceID: monmetrics.InternalMetricSpaceID, checkID: monmetrics.TaskResultInventoryCheckID,
+				items[events.SystemSpaceID+"\x00"+monmetrics.TaskResultInventoryCheckID] = businessFreshnessItem{
+					spaceID: events.SystemSpaceID, checkID: monmetrics.TaskResultInventoryCheckID,
 					name: "采集任务清单", success: false,
 					reason: "无法获取采集任务清单：采集服务接口异常，K线结果检查暂停", diagnostic: diagnostic,
 				}
@@ -206,7 +207,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 			checkID := strings.Join([]string{"reporter", service.NodeID, service.ServiceName}, ":")
 			item := businessFreshnessItem{
-				spaceID: monmetrics.InternalMetricSpaceID,
+				spaceID: events.SystemSpaceID,
 				checkID: checkID,
 				name:    reporterCheckName(service.ServiceName, service.NodeID),
 				success: service.ReporterStatus == "healthy",
@@ -292,7 +293,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 			spaceID := business.SpaceID
 			if spaceID == "" {
-				spaceID = monmetrics.InternalMetricSpaceID
+				spaceID = events.SystemSpaceID
 			}
 			checkID, name := businessCheckIdentity(business)
 			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}
@@ -399,7 +400,7 @@ func buildBusinessFreshnessReporterWithInterval(
 					}
 				}
 			}
-			ingest := businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: observationIngestCheckID, name: "观测输入", success: true, reason: "观测输入正常"}
+			ingest := businessFreshnessItem{spaceID: events.SystemSpaceID, checkID: observationIngestCheckID, name: "观测输入", success: true, reason: "观测输入正常"}
 			if !state.Ready {
 				ingest.success, ingest.reason = false, "观测输入中断：Monitor 的 EventBus 观测消费者没有连上，依赖服务指标与主机快照的检查已冻结"
 				if state.Reason != "" {
@@ -566,7 +567,7 @@ func relayCheckID(hostID string) string { return "gateway:" + hostID + ":relay" 
 
 // relayItem 把一台出站主机的反向连接信号转换成检查结果；frozen 表示保持原状态（无法确认，或断开还没到告警时长）。
 func relayItem(signal monitorobservability.GatewaySignal, downSince map[string]time.Time, now time.Time) (businessFreshnessItem, bool) {
-	item := businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: relayCheckID(signal.HostID), name: "主机网关反向连接（" + signal.HostID + "）"}
+	item := businessFreshnessItem{spaceID: events.SystemSpaceID, checkID: relayCheckID(signal.HostID), name: "主机网关反向连接（" + signal.HostID + "）"}
 	switch signal.Status {
 	case "healthy":
 		delete(downSince, signal.HostID)

@@ -7,7 +7,7 @@ import type { Space } from "@/api/admin/types";
 
 /**
  * 系统空间：mooxsys 是“不属于任何市场”的范围标签（系统告警、系统事件归在它下面），不是交易市场。
- * 首页把归在它下面的告警标为“系统”，设置页不允许把它设为当前空间。
+ * 首页把归在它下面的告警标为“系统”。
  */
 export function isSystemSpace(spaceId: string | undefined): boolean {
   return (spaceId || "").trim().toLowerCase().startsWith("mooxsys");

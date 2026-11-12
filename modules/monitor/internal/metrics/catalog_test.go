@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,7 +85,7 @@ func TestListServicesCountsLogicalInstancesInsteadOfBootHistory(t *testing.T) {
 	}
 	require.NoError(t, messageStore.db.CreateInBatches(boots, 100).Error)
 
-	rows, total, err := NewCatalog(messageStore).ListServices(context.Background(), InternalMetricSpaceID, 0, 10)
+	rows, total, err := NewCatalog(messageStore).ListServices(context.Background(), events.SystemSpaceID, 0, 10)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
 	require.Len(t, rows, 1)

@@ -91,6 +91,19 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 	if service == nil {
 		return fmt.Errorf("monitor data cleanup timer service %q is not configured", monitorDataCleanupTimerService)
 	}
+	ops := buildMonitorDataCleanupOps(cfg, runtime)
+	job, err := timerjob.New("monitor_data_cleanup", 2*time.Minute, func(ctx context.Context) error {
+		return runMonitorDataCleanup(ctx, ops)
+	})
+	if err != nil {
+		return err
+	}
+	timer.RegisterHandlerService(service, timerjob.KeepRunning("monitor_data_cleanup", job.Handle))
+	return nil
+}
+
+// buildMonitorDataCleanupOps 按运行时里已有的存储接上各项清理。
+func buildMonitorDataCleanupOps(cfg *config.Config, runtime *Runtime) monitorDataCleanupOps {
 	ops := monitorDataCleanupOps{
 		now: func() time.Time { return time.Now().UTC() },
 	}
@@ -152,12 +165,5 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 			return err
 		}
 	}
-	job, err := timerjob.New("monitor_data_cleanup", 2*time.Minute, func(ctx context.Context) error {
-		return runMonitorDataCleanup(ctx, ops)
-	})
-	if err != nil {
-		return err
-	}
-	timer.RegisterHandlerService(service, timerjob.KeepRunning("monitor_data_cleanup", job.Handle))
-	return nil
+	return ops
 }

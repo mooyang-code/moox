@@ -213,7 +213,7 @@ func percent(v float64, available bool) error {
 
 func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *hostmetricpb.HostMetric) error {
 	if s == nil {
-		return errors.New("host metric store is nil")
+		return errors.New("主机快照处理未初始化")
 	}
 	if msg == nil || metric == nil {
 		return errors.New("host metric event is incomplete")
@@ -292,7 +292,7 @@ func (s *Store) ListAgentsAt(ctx context.Context, now time.Time) ([]AgentView, e
 		return nil, err
 	}
 	if s == nil {
-		return nil, errors.New("host metric store is nil")
+		return nil, errors.New("主机快照处理未初始化")
 	}
 	if s.registry != nil {
 		presence, err := s.registry.List(ctx, now)
@@ -334,7 +334,7 @@ func (s *Store) ListAgentsAt(ctx context.Context, now time.Time) ([]AgentView, e
 // History 返回 [start, end] 内最新的 limit 份快照，按时间升序；可查范围由调用方按 SampleRetention 截取。
 func (s *Store) History(ctx context.Context, agentID string, start, end time.Time, limit int) ([]HistoryPoint, error) {
 	if s == nil {
-		return nil, errors.New("host metric store is nil")
+		return nil, errors.New("主机快照处理未初始化")
 	}
 	return s.samples.History(ctx, agentID, start, end, limit)
 }

@@ -32,9 +32,6 @@
       <div>
         <span>未上报</span><strong :class="{ warning: unmonitoredCount > 0 }">{{ unmonitoredCount }}</strong>
       </div>
-      <div>
-        <span>历史存储</span><strong :class="storageAvailable && !dataGap ? 'healthy' : 'danger'">{{ storageStatus }}</strong>
-      </div>
     </section>
 
     <a-alert v-if="loadError" type="warning" show-icon class="monitor-alert">{{ loadError }}</a-alert>
@@ -86,8 +83,6 @@ const loading = ref(false);
 const autoRefresh = ref(true);
 const monitors = ref<HostMetrics[]>([]);
 const hosts = ref<DeploymentHost[]>([]);
-const storageAvailable = ref(true);
-const dataGap = ref(false);
 const loadError = ref("");
 const selectedKey = ref("");
 const historyRefreshKey = ref(0);
@@ -100,7 +95,6 @@ const selectedRow = computed(() => rows.value.find(row => row.key === selectedKe
 const onlineCount = computed(() => rows.value.filter(row => row.state === "online").length);
 const attentionCount = computed(() => rows.value.filter(row => row.attention || row.state === "offline").length);
 const unmonitoredCount = computed(() => rows.value.filter(row => row.state === "unmonitored").length);
-const storageStatus = computed(() => (!storageAvailable.value ? "不可用" : dataGap.value ? "存在缺口" : "正常"));
 
 /** background：自动刷新，不弹全局提示，失败写在页面上并保留上次的数据。 */
 async function refreshData(refreshHistory = false, background = false) {
@@ -113,8 +107,6 @@ async function refreshData(refreshHistory = false, background = false) {
   const errors: string[] = [];
   if (monitorResult.status === "fulfilled") {
     monitors.value = monitorResult.value.metrics;
-    storageAvailable.value = monitorResult.value.storage_available;
-    dataGap.value = monitorResult.value.data_gap;
   } else {
     errors.push("Monitor 实时数据加载失败，继续显示上次成功结果");
   }

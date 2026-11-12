@@ -14,24 +14,20 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/mooyang-code/moox/packages/events"
 	"gorm.io/gorm"
 )
 
 // moox-admin-cli reset-business：系统重置里 Admin 的业务部分（设计 5.2）。
 //
-// 清掉业务空间（默认空间除外）、采集发布租约与操作、活动日志（含登录记录）；
+// 清掉活动日志（含登录记录）、采集发布租约与操作，--scope all 再清业务空间（由 setup init 重建）；
 // 保留引导身份层——用户、密钥、主机与部署（含 SSH 信息）、主机网关状态——它们决定谁能进来、能连哪些机器，
-// 清掉后重置自己就无法继续。默认空间由 setup init 重建，所以这里也保留它。
+// 清掉后重置自己就无法继续。
 // 重置前用 VACUUM INTO 备份整个库到数据库所在目录的 reset-backups/（保留最近 3 份），这个命令不依赖 Admin 进程是否在运行。
-
-// defaultSpaceID 是随系统创建的默认空间，业务重置保留它。
-const defaultSpaceID = events.SystemSpaceID
 
 // businessResetData 是运行数据：重置的两个范围都清。
 var businessResetData = []string{"t_activity_logs", "t_collector_publish_leases", "t_collector_publish_operations"}
 
-// businessResetConfig 是业务配置：只有 --scope all 清（默认空间除外）。
+// businessResetConfig 是业务配置：只有 --scope all 清。
 var businessResetConfig = []string{"t_spaces"}
 
 // businessKeep 是引导身份层：任何范围都不清。
@@ -64,7 +60,7 @@ func runResetBusinessCommand(args []string, stdout io.Writer, stderr io.Writer) 
 	dbPath, scope := defaultInitDBPath, "data"
 	var dryRun, yes bool
 	fs.StringVar(&dbPath, "db-path", dbPath, "Admin 的 SQLite 数据库路径")
-	fs.StringVar(&scope, "scope", scope, "重置范围：data（活动日志、采集发布租约）| all（再加业务空间及成员，默认空间保留）")
+	fs.StringVar(&scope, "scope", scope, "重置范围：data（活动日志、采集发布租约）| all（再加业务空间）")
 	fs.BoolVar(&dryRun, "dry-run", false, "只列出会删除的行数，不改动")
 	fs.BoolVar(&yes, "yes", false, "确认执行（会删除数据；执行前先备份）")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -138,20 +134,12 @@ func resetBusiness(ctx context.Context, db *sql.DB, dbPath, scope string, dryRun
 		return result, err
 	}
 	for _, t := range tables {
-		query := "DELETE FROM " + t
-		var args []any
-		if t == "t_spaces" {
-			query += " WHERE c_space_id <> ?"
-			args = append(args, defaultSpaceID)
-		}
-		res, err := tx.ExecContext(ctx, query, args...)
+		res, err := tx.ExecContext(ctx, "DELETE FROM "+t)
 		if err != nil {
 			return result, fmt.Errorf("清理 %s：%w", t, err)
 		}
 		result.Deleted[t], _ = res.RowsAffected()
-		if len(args) == 0 {
-			_, _ = tx.ExecContext(ctx, "DELETE FROM sqlite_sequence WHERE name = ?", t)
-		}
+		_, _ = tx.ExecContext(ctx, "DELETE FROM sqlite_sequence WHERE name = ?", t)
 	}
 	if err := tx.Commit(); err != nil {
 		return result, err
@@ -193,14 +181,8 @@ func checkBusinessTables(ctx context.Context, db *sql.DB) error {
 }
 
 func countBusinessRows(ctx context.Context, db *sql.DB, table string) (int64, error) {
-	query := "SELECT COUNT(*) FROM " + table
-	var args []any
-	if table == "t_spaces" {
-		query += " WHERE c_space_id <> ?"
-		args = append(args, defaultSpaceID)
-	}
 	var n int64
-	err := db.QueryRowContext(ctx, query, args...).Scan(&n)
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&n)
 	return n, err
 }
 
