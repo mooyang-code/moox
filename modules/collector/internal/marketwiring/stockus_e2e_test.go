@@ -11,15 +11,32 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/stretchr/testify/require"
 )
 
-// 美股的采集计划参数（每函数 50 只、收盘后等 5 秒）目前还没写进 market.yaml 的 scf_plan（U5 才加），这里用测试夹具构造：
-// 与 Collector 装配采集计划时相同——函数内并发由美股的路由与东方财富的限速配置推导。
+// usPlanOptions 与 Collector 装配采集计划时相同：每函数标的数、收盘后等待时间读编进二进制的 config/markets/stockus/market.yaml
+// 的 scf_plan（部署配置只写代码包与命名空间时的默认值），函数内并发由美股的路由与东方财富的限速配置推导。
 func usPlanOptions() marketfetch.PlanOptions {
-	return marketfetch.PlanOptions{SpaceID: "stockus", Markets: map[string][]string{"equity": {"ap-nanjing"}}, DefaultLatenessS: 90,
-		SymbolsPerFunction: 50, Fetch: marketfetch.PlanFetch{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 5000},
-		DeriveFetch: marketfetch.RouteFetchLimits("stockus")}
+	config, err := markets.ConfigFor("stockus")
+	if err != nil {
+		panic(err)
+	}
+	var plan struct {
+		SymbolsPerFunction int `yaml:"symbols_per_function"`
+		Fetch              struct {
+			RequestTimeoutMS int `yaml:"request_timeout_ms"`
+			StorageTimeoutMS int `yaml:"storage_timeout_ms"`
+			NotBeforeMS      int `yaml:"not_before_ms"`
+		} `yaml:"fetch"`
+	}
+	if err := config.SCFPlan.Decode(&plan); err != nil {
+		panic(err)
+	}
+	return marketfetch.PlanOptions{SpaceID: "stockus", Markets: map[string][]string{"equity": {"ap-nanjing"}}, DefaultLatenessS: config.AllowedLatenessSeconds,
+		SymbolsPerFunction: plan.SymbolsPerFunction,
+		Fetch:              marketfetch.PlanFetch{RequestTimeoutMS: plan.Fetch.RequestTimeoutMS, StorageTimeoutMS: plan.Fetch.StorageTimeoutMS, NotBeforeMS: plan.Fetch.NotBeforeMS},
+		DeriveFetch:        marketfetch.RouteFetchLimits("stockus")}
 }
 
 // usGroup 按 Collector 由任务和标签成员拼分组的做法造一个美股分组：source_id 取行情源目录的登记，
@@ -37,12 +54,12 @@ func usGroup(subjects ...string) marketfetch.TaskGroup {
 		DatasetID: usDataset, Frequency: "5m", Subjects: subjects, ExternalSymbols: symbols}
 }
 
-// 从采集计划到云函数入参再到写入：120 只标的（含带点的 BRK.B、ETF 的 XASE）、每函数 50 只，得到 3 个函数（50、50、20），都在南京，收盘后等 5 秒。
+// 从采集计划到云函数入参再到写入：标普 500 的 503 只标的（含带点的 BRK.B、ETF 的 XASE）、每函数 50 只，得到 11 个函数（10 个 50 只、1 个 3 只），都在南京，收盘后等 5 秒。
 // 美股的来源按路由分配，所以函数的请求里不带 provider、source_id；请求交给流水线后由路由选中东方财富，写出的行上是 eastmoney、stockus_http；
 // 发给东方财富的 secid 由标的的交易所与代码换出。
 func TestStockUSPlanToFunctionRequests(t *testing.T) {
 	subjects := []string{"BRK.B.XNYS", "SPY.XASE"}
-	for i := 0; len(subjects) < 120; i++ {
+	for i := 0; len(subjects) < 503; i++ {
 		subjects = append(subjects, fmt.Sprintf("A%c%c.XNAS", 'A'+i/26, 'A'+i%26))
 	}
 	group := usGroup(subjects...)
@@ -52,7 +69,7 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 	require.NoError(t, err)
 	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return usTime("2026-11-10 22:30:00").Unix(), nil })
 	require.NoError(t, err)
-	require.Len(t, content.Functions, 3)
+	require.Len(t, content.Functions, 11)
 
 	scheduled := usTime("2026-11-12 22:50:00")
 	body := usTestdata(t, "kline_5m_AAPL_boundary_2250.json")
@@ -97,9 +114,9 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 		require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(sizes)))
-	require.Equal(t, []int{50, 50, 20}, sizes)
+	require.Equal(t, []int{50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 3}, sizes)
 
-	require.Len(t, storage.rows, 120, "三个函数合起来把 120 只都写了")
+	require.Len(t, storage.rows, 503, "11 个函数合起来把 503 只都写了")
 	for _, subject := range subjects {
 		fields := storage.rows[hkRowKey(subject, "2026-11-12T14:45:00Z")]
 		require.NotNil(t, fields, subject)

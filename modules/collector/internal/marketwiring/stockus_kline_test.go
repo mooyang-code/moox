@@ -265,6 +265,13 @@ func usUpstreamDropping(t *testing.T, cutoff time.Duration, inclusive bool, drop
 		Universe []string `json:"universe"`
 	}
 	require.NoError(t, json.Unmarshal(usTestdata(t, "date_range_requests.json"), &recorded))
+	return usModelUpstream(t, recorded.Universe, cutoff, inclusive, drop, nil)
+}
+
+// usModelUpstream 是日期区间规则模型的本体：universe 是上游有的全部收盘标签（北京时间，"2006-01-02 15:04"），
+// line 为空时按序号合成一根合法的 K 线，否则由它按（序号，标签）给出这一根的内容（不带外层引号）。
+func usModelUpstream(t *testing.T, universe []string, cutoff time.Duration, inclusive bool, drop func(label time.Time) bool, line func(index int, label string) string) http.HandlerFunc {
+	t.Helper()
 	beijing := time.FixedZone("CST", 8*3600)
 	return func(w http.ResponseWriter, r *http.Request) {
 		beg, err := time.ParseInLocation("20060102", r.URL.Query().Get("beg"), beijing)
@@ -273,10 +280,14 @@ func usUpstreamDropping(t *testing.T, cutoff time.Duration, inclusive bool, drop
 		require.NoError(t, err)
 		from, to := beg.Add(22*time.Hour+30*time.Minute), end.Add(cutoff)
 		lines := []string{}
-		for index, label := range recorded.Universe {
+		for index, label := range universe {
 			at, err := time.ParseInLocation("2006-01-02 15:04", label, beijing)
 			require.NoError(t, err)
 			if at.Before(from) || at.After(to) || (!inclusive && at.Equal(to)) || (drop != nil && drop(at)) {
+				continue
+			}
+			if line != nil {
+				lines = append(lines, `"`+line(index, label)+`"`)
 				continue
 			}
 			price := 100 + float64(index%50)

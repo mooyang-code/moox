@@ -44,7 +44,6 @@ func TestDefaultViewInventory(t *testing.T) {
 		"mooxsys/view_mooxsys_host_fs",
 		"mooxsys/view_mooxsys_host_net",
 		"mooxsys/view_mooxsys_host_resource",
-		"stockus/view_stockus_equity_kline_1d",
 	}
 	sort.Strings(want)
 	require.Equal(t, want, got)

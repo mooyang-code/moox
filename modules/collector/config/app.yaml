@@ -73,7 +73,9 @@ delist:
   auto_detect: true
 
 subject_sync:
-  fetch_timeout: 2m
+  # 一次标签同步（含失败后的重试）的总时限。标普 500 的成分同步要翻东方财富列表约 140 页，2 分钟留给重试的余量不大；
+  # 手工同步经网关，服务端 170 秒后返回失败，所以取 150 秒，留出写入快照的时间，不要再大。
+  fetch_timeout: 150s
   attributes:
     - space_id: stockcn
       sources: [eastmoney]

@@ -403,6 +403,14 @@ enabled = false
 # [scf_plan.spaces.markets]
 # equity = ["ap-nanjing"]
 
+# 美股：标普 500 或纳斯达克 100 成分股 5m K 线（东方财富），与 A 股、港股共用南京的 [scf_plan.regions.ap-nanjing]。
+# 命名空间默认 moox-stockus-plan，代码包默认 moox-collector-stockus-plan；固定每函数 50 只标的（标普 500 共 11 个函数），
+# 每 5 分钟触发一次，盘前、收市后、非交易日（含半日市 13:00 之后）函数直接返回不采集。
+# [[scf_plan.spaces]]
+# space_id = "stockus"
+# [scf_plan.spaces.markets]
+# equity = ["ap-nanjing"]
+
 # 主机命名：英文 ID 全小写、按角色命名（control 控制机、storage 存储机、overseas 海外机、factor 因子机），
 # 同一角色有多台时才加序号（overseas-2）；label 是中文名，登记到管理台用于界面展示，不写时按 ID 生成（overseas-2 → 海外机 2）。
 # 机器的新增、部署、启停都通过 moox skill 完成，管理台只展示。

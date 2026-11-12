@@ -12,3 +12,21 @@ realtime_batch_no_cap: true
 # 标的同步（指数成分）的请求直连。
 subject_egress: direct
 # 不写 subject_sync：美股没有全市场标的同步，标的由指数成分的标签同步创建。
+# 云函数出口探测：只取出口公网 IP（与 A 股、港股共用南京出口，不绑定数据源）。
+egress_probe: public_ip
+# 收市后多久把当天整天强制重取一遍（分钟）；不写就不重取。
+# 纽约 16:00 收盘那一根的收盘竞价成交何时并入、何时定稿，要等今晚（冬令时北京时间 04:55～05:12）实测，
+# 15 分钟是占位值，依据待定，实测后可能改；半日市按当天实际的收市时刻（13:00）算。
+refetch_after_close_minutes: 15
+# 采集计划的默认参数，moox.toml 的 [scf_plan] 里同名项优先。
+scf_plan:
+  # 固定每函数 50 只标的（标普 500 共 503 只、11 个函数）。美股只有一个数据源，每只每期一个请求，
+  # 函数内并发 16（等于东方财富限速的 max_concurrent），50 只 1 秒内取完。不按负载估算函数个数（不写 auto_size），
+  # 也不做出口 IP 去重（不写 egress_balance）。
+  symbols_per_function: 50
+  default_ingest: pull
+  default_executor: scf
+  # 收盘后固定等 5 秒再取数（not_before_ms），与 route.yaml 的结算延迟 5 秒一致，生成计划时校验前者不小于后者。
+  # 2026-11-12 实测两个边界（22:50、22:55）边界后 0.5～1.4 秒看到新一根、目标那根定稿；样本只有这两个边界，所以留足余量；
+  # 截止时间是收盘后 90 秒，多等没有代价。边界实测后可调小，调小前先同步改 route.yaml 的 settle_delay_ms。
+  fetch: {request_timeout_ms: 3000, storage_timeout_ms: 2000, not_before_ms: 5000}
