@@ -400,3 +400,36 @@ func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
 	require.Empty(t, runner2.plans)
 	require.Empty(t, client2.reports, "被门禁挡住不报失败")
 }
+
+// 补算在算第一个周期之前先把本地数据拉到作业区间的终点：Storage 里比本地更新的周期（例如强制补采写入的）才读得到。
+// 拉取失败不终止作业。
+func TestRecalcLoopCatchesUpLocalDataBeforeComputing(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop := newTestLoop(client, runner, &sourceFake{})
+	var ends []time.Time
+	var plansAtCatchUp int
+	loop.catchUp = func(_ context.Context, set domain.EngineTask, subjects []string, end time.Time) (int, error) {
+		require.Equal(t, "ftask_a", set.Set.TaskID)
+		require.Equal(t, []string{"BTC"}, subjects)
+		ends, plansAtCatchUp = append(ends, end), len(runner.plans)
+		return 1, nil
+	}
+	found, err := loop.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, []time.Time{client.job.Window.End}, ends)
+	require.Zero(t, plansAtCatchUp, "要在第一个周期开始计算之前拉")
+	require.Len(t, runner.plans, 3)
+
+	failing := &jobClientFake{job: testJob("BTC"), found: true}
+	runner2 := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop2 := newTestLoop(failing, runner2, &sourceFake{})
+	loop2.catchUp = func(context.Context, domain.EngineTask, []string, time.Time) (int, error) {
+		return 0, errors.New("storage unavailable")
+	}
+	found, err = loop2.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, jobStatusSucceeded, failing.reports[len(failing.reports)-1].status)
+}
