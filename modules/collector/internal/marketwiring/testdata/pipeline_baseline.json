@@ -1,0 +1,579 @@
+{
+  "crypto/spot/不带限速": {
+    "candidate_chain": [
+      "binance"
+    ],
+    "route_id": "crypto_spot_kline",
+    "space_id": "crypto",
+    "market_id": "crypto",
+    "instrument_type": "spot",
+    "dataset_id": "",
+    "source_id": "spot_http",
+    "auto_bind_source": false,
+    "series_tag": "",
+    "settle_delay_ms": 0,
+    "breaker_threshold": 12,
+    "field_sources": 0,
+    "extra_field_ids": [
+      "funding_rate"
+    ],
+    "sources": {
+      "binance": {
+        "source_id": "spot_http",
+        "rate_limit": {
+          "RequestsPerSecond": 5,
+          "Burst": 5,
+          "MaxConcurrent": 4,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 1000
+      }
+    }
+  },
+  "crypto/spot/带限速": {
+    "candidate_chain": [
+      "binance"
+    ],
+    "route_id": "crypto_spot_kline",
+    "space_id": "crypto",
+    "market_id": "crypto",
+    "instrument_type": "spot",
+    "dataset_id": "",
+    "source_id": "spot_http",
+    "auto_bind_source": false,
+    "series_tag": "",
+    "settle_delay_ms": 0,
+    "breaker_threshold": 24,
+    "field_sources": 0,
+    "extra_field_ids": [
+      "funding_rate"
+    ],
+    "sources": {
+      "binance": {
+        "source_id": "spot_http",
+        "rate_limit": {
+          "RequestsPerSecond": 20,
+          "Burst": 40,
+          "MaxConcurrent": 8,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 2500000000
+        },
+        "max_bars_per_request": 1000
+      }
+    }
+  },
+  "crypto/swap/不带限速": {
+    "candidate_chain": [
+      "binance"
+    ],
+    "route_id": "crypto_swap_kline",
+    "space_id": "crypto",
+    "market_id": "crypto",
+    "instrument_type": "swap",
+    "dataset_id": "",
+    "source_id": "swap_http",
+    "auto_bind_source": false,
+    "series_tag": "",
+    "settle_delay_ms": 0,
+    "breaker_threshold": 12,
+    "field_sources": 1,
+    "extra_field_ids": [
+      "funding_rate"
+    ],
+    "sources": {
+      "binance": {
+        "source_id": "swap_http",
+        "rate_limit": {
+          "RequestsPerSecond": 5,
+          "Burst": 5,
+          "MaxConcurrent": 4,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 1000
+      }
+    }
+  },
+  "crypto/swap/带限速": {
+    "candidate_chain": [
+      "binance"
+    ],
+    "route_id": "crypto_swap_kline",
+    "space_id": "crypto",
+    "market_id": "crypto",
+    "instrument_type": "swap",
+    "dataset_id": "",
+    "source_id": "swap_http",
+    "auto_bind_source": false,
+    "series_tag": "",
+    "settle_delay_ms": 0,
+    "breaker_threshold": 24,
+    "field_sources": 1,
+    "extra_field_ids": [
+      "funding_rate"
+    ],
+    "sources": {
+      "binance": {
+        "source_id": "swap_http",
+        "rate_limit": {
+          "RequestsPerSecond": 20,
+          "Burst": 40,
+          "MaxConcurrent": 8,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 2500000000
+        },
+        "max_bars_per_request": 1000
+      }
+    }
+  },
+  "stockcn/convertible_bond/sina": {
+    "candidate_chain": [
+      "sina"
+    ],
+    "route_id": "stockcn_convertible_bond_kline",
+    "space_id": "stockcn",
+    "market_id": "stockcn",
+    "instrument_type": "convertible_bond",
+    "dataset_id": "",
+    "source_id": "convertible_bond_http",
+    "auto_bind_source": false,
+    "series_tag": "",
+    "settle_delay_ms": 0,
+    "breaker_threshold": 12,
+    "field_sources": 0,
+    "extra_field_ids": [
+      "adj_factor",
+      "sw_l1",
+      "sw_l2",
+      "sw_l3",
+      "fin_report_period",
+      "fin_total_revenue",
+      "fin_revenue",
+      "fin_operating_profit",
+      "fin_net_profit",
+      "fin_net_profit_parent",
+      "fin_eps_basic",
+      "fin_total_assets",
+      "fin_total_liabilities",
+      "fin_equity_parent",
+      "fin_operating_cash_flow",
+      "fin_total_revenue_ttm",
+      "fin_revenue_ttm",
+      "fin_operating_profit_ttm",
+      "fin_net_profit_ttm",
+      "fin_net_profit_parent_ttm",
+      "fin_eps_basic_ttm",
+      "fin_operating_cash_flow_ttm",
+      "turnover_rate",
+      "total_shares",
+      "float_shares",
+      "dividend_per_share",
+      "is_st"
+    ],
+    "sources": {
+      "sina": {
+        "source_id": "convertible_bond_http",
+        "rate_limit": {
+          "RequestsPerSecond": 1,
+          "Burst": 1,
+          "MaxConcurrent": 1,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 10000000000
+        },
+        "max_bars_per_request": 1200
+      }
+    }
+  },
+  "stockcn/equity/15m（没有这个频率的路由）": {
+    "candidate_chain": null,
+    "route_id": "",
+    "space_id": "",
+    "market_id": "",
+    "instrument_type": "",
+    "dataset_id": "",
+    "source_id": "",
+    "auto_bind_source": false,
+    "series_tag": "",
+    "settle_delay_ms": 0,
+    "breaker_threshold": 0,
+    "field_sources": 0,
+    "extra_field_ids": null,
+    "sources": null,
+    "error": "stockcn 没有 15m 的 K 线路由"
+  },
+  "stockcn/equity/1d": {
+    "candidate_chain": [
+      "tdx",
+      "eastmoney"
+    ],
+    "route_id": "",
+    "space_id": "stockcn",
+    "market_id": "stockcn",
+    "instrument_type": "equity",
+    "dataset_id": "",
+    "source_id": "",
+    "auto_bind_source": true,
+    "series_tag": "",
+    "settle_delay_ms": 800,
+    "breaker_threshold": 6,
+    "field_sources": 5,
+    "extra_field_ids": [
+      "adj_factor",
+      "sw_l1",
+      "sw_l2",
+      "sw_l3",
+      "fin_report_period",
+      "fin_total_revenue",
+      "fin_revenue",
+      "fin_operating_profit",
+      "fin_net_profit",
+      "fin_net_profit_parent",
+      "fin_eps_basic",
+      "fin_total_assets",
+      "fin_total_liabilities",
+      "fin_equity_parent",
+      "fin_operating_cash_flow",
+      "fin_total_revenue_ttm",
+      "fin_revenue_ttm",
+      "fin_operating_profit_ttm",
+      "fin_net_profit_ttm",
+      "fin_net_profit_parent_ttm",
+      "fin_eps_basic_ttm",
+      "fin_operating_cash_flow_ttm",
+      "turnover_rate",
+      "total_shares",
+      "float_shares",
+      "dividend_per_share",
+      "is_st"
+    ],
+    "sources": {
+      "eastmoney": {
+        "source_id": "stockcn_http",
+        "rate_limit": {
+          "RequestsPerSecond": 50,
+          "Burst": 20,
+          "MaxConcurrent": 16,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 1205
+      },
+      "tdx": {
+        "source_id": "normal_7709",
+        "rate_limit": {
+          "RequestsPerSecond": 60,
+          "Burst": 16,
+          "MaxConcurrent": 16,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 800
+      }
+    }
+  },
+  "stockcn/equity/1m": {
+    "candidate_chain": [
+      "sina",
+      "tencent",
+      "tdx",
+      "eastmoney"
+    ],
+    "route_id": "",
+    "space_id": "stockcn",
+    "market_id": "stockcn",
+    "instrument_type": "equity",
+    "dataset_id": "",
+    "source_id": "",
+    "auto_bind_source": true,
+    "series_tag": "",
+    "settle_delay_ms": 800,
+    "breaker_threshold": 12,
+    "field_sources": 5,
+    "extra_field_ids": [
+      "adj_factor",
+      "sw_l1",
+      "sw_l2",
+      "sw_l3",
+      "fin_report_period",
+      "fin_total_revenue",
+      "fin_revenue",
+      "fin_operating_profit",
+      "fin_net_profit",
+      "fin_net_profit_parent",
+      "fin_eps_basic",
+      "fin_total_assets",
+      "fin_total_liabilities",
+      "fin_equity_parent",
+      "fin_operating_cash_flow",
+      "fin_total_revenue_ttm",
+      "fin_revenue_ttm",
+      "fin_operating_profit_ttm",
+      "fin_net_profit_ttm",
+      "fin_net_profit_parent_ttm",
+      "fin_eps_basic_ttm",
+      "fin_operating_cash_flow_ttm",
+      "turnover_rate",
+      "total_shares",
+      "float_shares",
+      "dividend_per_share",
+      "is_st"
+    ],
+    "sources": {
+      "eastmoney": {
+        "source_id": "stockcn_http",
+        "rate_limit": {
+          "RequestsPerSecond": 50,
+          "Burst": 20,
+          "MaxConcurrent": 16,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 1205
+      },
+      "sina": {
+        "source_id": "stockcn_minute_http",
+        "rate_limit": {
+          "RequestsPerSecond": 50,
+          "Burst": 20,
+          "MaxConcurrent": 16,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 1023
+      },
+      "tdx": {
+        "source_id": "normal_7709",
+        "rate_limit": {
+          "RequestsPerSecond": 60,
+          "Burst": 16,
+          "MaxConcurrent": 16,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 800
+      },
+      "tencent": {
+        "source_id": "stockcn_http",
+        "rate_limit": {
+          "RequestsPerSecond": 5,
+          "Burst": 2,
+          "MaxConcurrent": 1,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 320
+      }
+    }
+  },
+  "stockcn/equity/5m": {
+    "candidate_chain": [
+      "tdx",
+      "eastmoney",
+      "sina",
+      "tencent"
+    ],
+    "route_id": "",
+    "space_id": "stockcn",
+    "market_id": "stockcn",
+    "instrument_type": "equity",
+    "dataset_id": "",
+    "source_id": "",
+    "auto_bind_source": true,
+    "series_tag": "",
+    "settle_delay_ms": 800,
+    "breaker_threshold": 12,
+    "field_sources": 5,
+    "extra_field_ids": [
+      "adj_factor",
+      "sw_l1",
+      "sw_l2",
+      "sw_l3",
+      "fin_report_period",
+      "fin_total_revenue",
+      "fin_revenue",
+      "fin_operating_profit",
+      "fin_net_profit",
+      "fin_net_profit_parent",
+      "fin_eps_basic",
+      "fin_total_assets",
+      "fin_total_liabilities",
+      "fin_equity_parent",
+      "fin_operating_cash_flow",
+      "fin_total_revenue_ttm",
+      "fin_revenue_ttm",
+      "fin_operating_profit_ttm",
+      "fin_net_profit_ttm",
+      "fin_net_profit_parent_ttm",
+      "fin_eps_basic_ttm",
+      "fin_operating_cash_flow_ttm",
+      "turnover_rate",
+      "total_shares",
+      "float_shares",
+      "dividend_per_share",
+      "is_st"
+    ],
+    "sources": {
+      "eastmoney": {
+        "source_id": "stockcn_http",
+        "rate_limit": {
+          "RequestsPerSecond": 50,
+          "Burst": 20,
+          "MaxConcurrent": 16,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 1205
+      },
+      "sina": {
+        "source_id": "stockcn_minute_http",
+        "rate_limit": {
+          "RequestsPerSecond": 50,
+          "Burst": 20,
+          "MaxConcurrent": 16,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 1023
+      },
+      "tdx": {
+        "source_id": "normal_7709",
+        "rate_limit": {
+          "RequestsPerSecond": 60,
+          "Burst": 16,
+          "MaxConcurrent": 16,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 800
+      },
+      "tencent": {
+        "source_id": "stockcn_http",
+        "rate_limit": {
+          "RequestsPerSecond": 5,
+          "Burst": 2,
+          "MaxConcurrent": 1,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 5000000000
+        },
+        "max_bars_per_request": 320
+      }
+    }
+  },
+  "stockcn/index/cni（source_id 取登记值）": {
+    "candidate_chain": [
+      "cni"
+    ],
+    "route_id": "stockcn_index_kline",
+    "space_id": "stockcn",
+    "market_id": "stockcn",
+    "instrument_type": "index",
+    "dataset_id": "",
+    "source_id": "index_cni_http",
+    "auto_bind_source": false,
+    "series_tag": "",
+    "settle_delay_ms": 0,
+    "breaker_threshold": 12,
+    "field_sources": 0,
+    "extra_field_ids": [
+      "adj_factor",
+      "sw_l1",
+      "sw_l2",
+      "sw_l3",
+      "fin_report_period",
+      "fin_total_revenue",
+      "fin_revenue",
+      "fin_operating_profit",
+      "fin_net_profit",
+      "fin_net_profit_parent",
+      "fin_eps_basic",
+      "fin_total_assets",
+      "fin_total_liabilities",
+      "fin_equity_parent",
+      "fin_operating_cash_flow",
+      "fin_total_revenue_ttm",
+      "fin_revenue_ttm",
+      "fin_operating_profit_ttm",
+      "fin_net_profit_ttm",
+      "fin_net_profit_parent_ttm",
+      "fin_eps_basic_ttm",
+      "fin_operating_cash_flow_ttm",
+      "turnover_rate",
+      "total_shares",
+      "float_shares",
+      "dividend_per_share",
+      "is_st"
+    ],
+    "sources": {
+      "cni": {
+        "source_id": "index_cni_http",
+        "rate_limit": {
+          "RequestsPerSecond": 1,
+          "Burst": 1,
+          "MaxConcurrent": 1,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 10000000000
+        },
+        "max_bars_per_request": 1200
+      }
+    }
+  },
+  "stockcn/index/eastmoney": {
+    "candidate_chain": [
+      "eastmoney"
+    ],
+    "route_id": "stockcn_index_kline",
+    "space_id": "stockcn",
+    "market_id": "stockcn",
+    "instrument_type": "index",
+    "dataset_id": "",
+    "source_id": "index_http",
+    "auto_bind_source": false,
+    "series_tag": "",
+    "settle_delay_ms": 0,
+    "breaker_threshold": 12,
+    "field_sources": 0,
+    "extra_field_ids": [
+      "adj_factor",
+      "sw_l1",
+      "sw_l2",
+      "sw_l3",
+      "fin_report_period",
+      "fin_total_revenue",
+      "fin_revenue",
+      "fin_operating_profit",
+      "fin_net_profit",
+      "fin_net_profit_parent",
+      "fin_eps_basic",
+      "fin_total_assets",
+      "fin_total_liabilities",
+      "fin_equity_parent",
+      "fin_operating_cash_flow",
+      "fin_total_revenue_ttm",
+      "fin_revenue_ttm",
+      "fin_operating_profit_ttm",
+      "fin_net_profit_ttm",
+      "fin_net_profit_parent_ttm",
+      "fin_eps_basic_ttm",
+      "fin_operating_cash_flow_ttm",
+      "turnover_rate",
+      "total_shares",
+      "float_shares",
+      "dividend_per_share",
+      "is_st"
+    ],
+    "sources": {
+      "eastmoney": {
+        "source_id": "index_http",
+        "rate_limit": {
+          "RequestsPerSecond": 1,
+          "Burst": 1,
+          "MaxConcurrent": 1,
+          "Cooldown": 1000000000,
+          "RequestTimeout": 10000000000
+        },
+        "max_bars_per_request": 1200
+      }
+    }
+  }
+}

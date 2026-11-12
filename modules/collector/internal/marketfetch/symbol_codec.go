@@ -2,66 +2,34 @@ package marketfetch
 
 import (
 	"encoding/json"
-	"fmt"
 	"net"
 	"strings"
-	"unicode"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	stocksource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-func defaultInstrumentTypeForMarket(marketID, marketType string) string {
-	switch strings.ToLower(strings.TrimSpace(marketID)) {
-	case "stockcn":
-		return "equity"
-	case "crypto":
-		if strings.EqualFold(strings.TrimSpace(marketType), "swap") {
-			return "swap"
-		}
-		return "spot"
-	default:
-		return strings.ToLower(strings.TrimSpace(marketType))
+// defaultInstrumentType 返回市场在任务或标签没写品种时用的品种（标的规则给出）；未登记的市场报错。
+func defaultInstrumentType(marketID, marketType string) (marketdata.InstrumentType, error) {
+	rules, err := markets.RulesFor(marketID)
+	if err != nil {
+		return "", err
 	}
+	return rules.DefaultInstrumentType(marketType), nil
 }
 
-func stockProviderSymbol(subjectID string) (string, error) {
-	return stocksource.ProviderSymbol(subjectID)
-}
-
-func marketProviderSymbolForMarket(marketID, marketType, subjectID string) (string, error) {
-	marketID = strings.ToLower(strings.TrimSpace(marketID))
-	if strings.EqualFold(strings.TrimSpace(marketType), "equity") {
-		return stockProviderSymbol(subjectID)
+// parseSubject 调市场的标的规则，把标的 ID 换成传给数据源的代码和交易所；instrumentType 为空时用市场的默认品种。
+func parseSubject(marketID string, instrumentType marketdata.InstrumentType, subjectID string) (markets.Subject, error) {
+	rules, err := markets.RulesFor(marketID)
+	if err != nil {
+		return markets.Subject{}, err
 	}
-	if marketID == "crypto" && (strings.EqualFold(strings.TrimSpace(marketType), "spot") || strings.EqualFold(strings.TrimSpace(marketType), "swap")) {
-		value := strings.ToUpper(strings.TrimSpace(subjectID))
-		wantSuffix := "-" + strings.ToUpper(strings.TrimSpace(marketType))
-		for _, suffix := range []string{"-SPOT", "-SWAP"} {
-			if strings.HasSuffix(value, suffix) && suffix != wantSuffix {
-				return "", fmt.Errorf("subject %s has product suffix %s incompatible with market %s", subjectID, suffix, marketType)
-			}
-		}
-		canonical := strings.TrimSuffix(strings.TrimSuffix(value, "-SPOT"), "-SWAP")
-		parts := strings.Split(canonical, "-")
-		if len(parts) == 2 && validCryptoAssetPart(parts[0]) && validCryptoAssetPart(parts[1]) {
-			return strings.ToUpper(parts[0] + parts[1]), nil
-		}
+	if instrumentType == "" {
+		instrumentType = rules.DefaultInstrumentType("")
 	}
-	return "", fmt.Errorf("subject %s has no provider symbol codec for market %s", subjectID, marketID)
-}
-
-func validCryptoAssetPart(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && !unicode.Is(unicode.Han, r) {
-			return false
-		}
-	}
-	return true
+	return rules.ParseSubject(instrumentType, subjectID)
 }
 
 func parseDNSRoutes(raw string) (map[string]sources.DNSResolution, error) {

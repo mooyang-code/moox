@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 	"github.com/stretchr/testify/require"
@@ -388,6 +389,18 @@ func TestMarketCanaryStockCNRejectsPeriodThatDoesNotDivideSessions(t *testing.T)
 	withoutProviders := stockCanaryConfig("5m")
 	withoutProviders.EligibleKlineProviders = nil
 	require.ErrorContains(t, ValidateMarketCanary(withoutProviders), "eligible_kline_providers")
+}
+
+// 没有在 barclock 登记的市场不按连续市场处理：配置校验和运行都报错。
+func TestMarketCanaryRejectsUnregisteredMarket(t *testing.T) {
+	seriesTag := "default"
+	config := MarketCanaryConfig{SpaceID: "nomarket", DatasetID: "dataset", SubjectID: "X", Frequency: "1m", SeriesTag: &seriesTag, Freshness: 3 * time.Minute, ReturnThreshold: 0.05}
+	require.ErrorIs(t, ValidateMarketCanary(config), barclock.ErrUnknownMarket)
+	reader := &canaryReader{}
+	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return time.Now().UTC() }}).Run(t.Context())
+	require.False(t, result.Success)
+	require.Equal(t, "invalid_config", result.ErrorMessage)
+	require.Nil(t, reader.request)
 }
 
 func TestMarketCanaryStockCNReportsCalendarAndDataReasons(t *testing.T) {

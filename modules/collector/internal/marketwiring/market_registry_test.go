@@ -1,0 +1,151 @@
+package marketwiring
+
+import (
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
+	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
+	"github.com/mooyang-code/moox/packages/barclock"
+	"github.com/stretchr/testify/require"
+)
+
+// 新增一个市场要登记五处：行情源目录、本包对规则包的显式引用（handler.go）、barclock 市场表、marketcalendar 内嵌日历、
+// config/markets/<市场>/market.yaml。行情源目录里出现的每个市场，其余四处都必须登记齐，漏一处在这里就报出来。
+func TestEveryCatalogMarketIsFullyRegistered(t *testing.T) {
+	routed := map[string]bool{}
+	for _, entry := range catalog.Default().Entries() {
+		marketID := string(entry.MarketID)
+		routed[marketID] = routed[marketID] || entry.RouteSource
+	}
+	require.Contains(t, routed, "crypto")
+	require.Contains(t, routed, "stockcn")
+	require.Contains(t, routed, "stockhk")
+	for marketID, hasRouteSource := range routed {
+		market, err := barclock.MarketFor(marketID)
+		require.NoError(t, err, "%s 没有登记在 barclock 市场表", marketID)
+		_, err = markets.ConfigFor(marketID)
+		require.NoError(t, err, "%s 没有 market.yaml", marketID)
+		_, err = markets.RulesFor(marketID)
+		require.NoError(t, err, "%s 的标的规则没有登记（handler.go 里要显式引用规则包）", marketID)
+		if market.Alignment == barclock.AlignmentSession {
+			// 日历加载不了，或覆盖期剩余不足 14 天（与生成采集计划时的检查一致）都算没登记好。
+			require.NoError(t, markets.CheckCalendarHorizon(marketID, time.Now(), 14), "%s 的交易日历", marketID)
+			_, err = market.Clock(5 * time.Minute)
+			require.NoError(t, err, "%s 的交易时段", marketID)
+		}
+		if hasRouteSource {
+			_, found, err := marketfetch.LoadRoute(marketID)
+			require.NoError(t, err, marketID)
+			require.True(t, found, "%s 有按路由分配来源的登记项，但没有 route.yaml", marketID)
+		}
+	}
+	// 反过来：有 market.yaml 的市场也都在行情源目录里。
+	for _, marketID := range markets.IDs() {
+		require.Contains(t, routed, marketID, "%s 有 market.yaml，但行情源目录里没有它的数据源", marketID)
+	}
+}
+
+// 默认 source_id 查行情源目录：现有任务用到的取值不变。
+func TestDefaultSourceIDComesFromCatalog(t *testing.T) {
+	for _, tc := range []struct{ market, provider, instrument, want string }{
+		{"crypto", "binance", "spot", "spot_http"},
+		{"crypto", "binance", "swap", "swap_http"},
+		{"stockcn", "sina", "equity", "stockcn_minute_http"},
+		{"stockcn", "eastmoney", "equity", "stockcn_http"},
+		{"stockcn", "tencent", "equity", "stockcn_http"},
+		{"stockcn", "baidu", "equity", "stockcn_http"},
+		// 目录里登记的是 index_http；原来写死的表给的是股票的 stockcn_http。
+		{"stockcn", "eastmoney", "index", "index_http"},
+		{"stockcn", "sina", "convertible_bond", "convertible_bond_http"},
+		// 同一个数据源在别的市场没有登记。
+		{"crypto", "eastmoney", "equity", ""},
+		// 港股的东方财富只取 K 线，登记的 source_id 与 A 股的不同。
+		{"stockhk", "eastmoney", "equity", "stockhk_http"},
+		{"stockhk", "tencent", "equity", "index_constituent_http"},
+		{"stockhk", "sina", "equity", ""},
+		{"stockcn", "unknown", "equity", ""},
+	} {
+		require.Equal(t, tc.want, DefaultSourceID(tc.market, tc.provider, tc.instrument), "%s/%s/%s", tc.market, tc.provider, tc.instrument)
+	}
+}
+
+func TestResolveSymbolUsesSubjectRules(t *testing.T) {
+	got, err := ResolveSymbol("eastmoney", "stockcn", "equity", "600000.XSHG")
+	require.NoError(t, err)
+	require.Equal(t, "sh600000", got)
+	// A 股股票的来源按路由分配，不看标签的数据源。
+	got, err = ResolveSymbol("manual", "stockcn", "equity", "000001.XSHE")
+	require.NoError(t, err)
+	require.Equal(t, "sz000001", got)
+
+	_, err = ResolveSymbol("binance", "crypto", "swap", "BTC-USDT-SPOT")
+	require.Error(t, err, "后缀与品种不符")
+	_, err = ResolveSymbol("binance", "stockus", "equity", "AAPL.XNAS")
+	require.ErrorIs(t, err, markets.ErrUnknownMarket)
+}
+
+// 指标标签的允许取值来自已登记市场、行情源目录和路由；现有路由 ID 都在里面，通达信也在数据源里。
+func TestFeedLabelsCoverExistingValues(t *testing.T) {
+	labels := FeedLabels()
+	require.Equal(t, []string{"crypto", "stockcn", "stockhk"}, labels.Markets)
+	for _, provider := range []string{"binance", "sina", "tencent", "eastmoney", "baidu", "tdx"} {
+		require.Contains(t, labels.Providers, provider)
+	}
+	for _, route := range []string{"stockcn_instrument_v1", "binance_spot_instrument_v1", "binance_swap_instrument_v1"} {
+		require.Contains(t, labels.Routes, route)
+	}
+	for _, prefix := range []string{"stockcn_equity_kline_", "binance_spot_kline_", "binance_swap_kline_"} {
+		require.Contains(t, labels.KlineRoutePrefixes, prefix)
+	}
+}
+
+// 两张表的键都带市场；指数成分表不依赖全部标的表；A 股只启用路由里列为标的来源的数据源。
+func TestSubjectListersAreKeyedByMarket(t *testing.T) {
+	listers, indexes, err := NewSubjectListers()
+	require.NoError(t, err)
+	keys := make([]subjectsync.ListerKey, 0, len(listers))
+	for key := range listers {
+		keys = append(keys, key)
+	}
+	require.ElementsMatch(t, []subjectsync.ListerKey{
+		{MarketID: "crypto", Source: "binance", InstrumentType: "spot"},
+		{MarketID: "crypto", Source: "binance", InstrumentType: "swap"},
+		{MarketID: "stockcn", Source: "sina", InstrumentType: "equity"},
+		{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"},
+	}, keys)
+	// 港股的腾讯只取指数成分：进指数成分表，不进全部标的表。
+	require.Len(t, indexes, 2)
+	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockcn", Source: "eastmoney", Index: "000300"})
+	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockhk", Source: "tencent", Index: "HSI"})
+}
+
+// 环境变量指向不存在的目录时，回落到编进二进制的内容：
+// lister 仍是 4 个加 2 个指数，候选链、每函数并发推导都与内置配置一致。
+func TestMissingOverrideFallsBackToEmbeddedFiles(t *testing.T) {
+	wantPipeline, err := NewKlinePipeline(timerHandlerStorage{}, "stockcn", marketdata.InstrumentEquity, "5m", "", nil)
+	require.NoError(t, err)
+	sample := marketfetch.TaskGroup{Frequency: "5m"}
+	wantFetch := marketfetch.RouteFetchLimits("stockcn")(sample, marketfetch.PlanFetch{})
+	wantSize := marketfetch.RouteAutoSize("stockcn", marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})(sample, 300)
+
+	t.Setenv(marketfetch.MarketConfigDirEnv, filepath.Join(t.TempDir(), "no_such_dir"))
+
+	listers, indexes, err := NewSubjectListers()
+	require.NoError(t, err)
+	require.Len(t, listers, 4)
+	require.Len(t, indexes, 2)
+
+	pipeline, err := NewKlinePipeline(timerHandlerStorage{}, "stockcn", marketdata.InstrumentEquity, "5m", "", nil)
+	require.NoError(t, err)
+	require.Equal(t, wantPipeline.CandidateChain, pipeline.CandidateChain)
+	require.Equal(t, []string{"tdx", "eastmoney", "sina", "tencent"}, pipeline.CandidateChain)
+	require.Equal(t, wantFetch, marketfetch.RouteFetchLimits("stockcn")(sample, marketfetch.PlanFetch{}))
+	require.NotZero(t, wantFetch.Concurrency)
+	require.Equal(t, wantSize, marketfetch.RouteAutoSize("stockcn", marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})(sample, 300))
+	require.NotZero(t, wantSize)
+}

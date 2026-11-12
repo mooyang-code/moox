@@ -331,6 +331,12 @@ type RouterSession struct {
 	breaker *InvocationBreakerSession
 }
 
+// BreakerThreshold 返回路由器的熔断阈值（单次调用内同一数据源的连续失败上限）。
+func (r *Router) BreakerThreshold() int { return r.breaker.threshold }
+
+// Provider 返回路由器里登记的数据源。
+func (r *Router) Provider(id string) (MarketProvider, error) { return r.registry.Provider(id) }
+
 func (r *Router) NewSession() *RouterSession {
 	return &RouterSession{router: r, breaker: r.breaker.NewSession()}
 }

@@ -2,18 +2,16 @@ package eastmoney
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/eastmoneykline"
 	commonsrc "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
 	"github.com/mooyang-code/moox/packages/cnstock"
 )
@@ -32,26 +30,18 @@ type Config struct {
 }
 
 type Provider struct {
-	baseURL             string
-	klineBaseURL        string
-	klineEndpoint       string
-	sourceID            string
-	client              *http.Client
-	now                 func() time.Time
+	baseURL string
+	client  *http.Client
+	now     func() time.Time
+	// klines 是东方财富 K 线的共用代码，这里只给出 A 股自己的部分：secid 的写法、成交量单位、时区、支持的周期。
+	klines              *eastmoneykline.Client
 	rateLimit           marketdata.RateLimitPolicy
 	instrumentRateLimit marketdata.RateLimitPolicy
-	maxBars             int
 }
 
 func New(cfg Config) *Provider {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = cnstock.EastMoneyPushBase
-	}
-	if cfg.KlineBaseURL == "" {
-		cfg.KlineBaseURL = eastMoneyKlineBase
-	}
-	if cfg.KlineEndpoint == "" {
-		cfg.KlineEndpoint = "/api/qt/stock/kline/get"
 	}
 	if strings.TrimSpace(cfg.SourceID) == "" {
 		cfg.SourceID = "stockcn_http"
@@ -60,7 +50,7 @@ func New(cfg Config) *Provider {
 		cfg.Now = time.Now
 	}
 	if cfg.RateLimit.RequestsPerSecond <= 0 {
-		cfg.RateLimit = marketdata.RateLimitPolicy{RequestsPerSecond: 5, Burst: 2, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
+		cfg.RateLimit = eastmoneykline.DefaultRateLimit()
 	}
 	if cfg.InstrumentRequestTimeout <= 0 {
 		cfg.InstrumentRequestTimeout = 15 * time.Second
@@ -70,26 +60,29 @@ func New(cfg Config) *Provider {
 		// guard; otherwise a configured 15-second guard is silently truncated.
 		cfg.HTTPClient = &http.Client{Timeout: cfg.InstrumentRequestTimeout}
 	}
-	if cfg.MaxBarsPerRequest <= 0 {
-		cfg.MaxBarsPerRequest = 1205
-	}
 	instrumentRateLimit := cfg.RateLimit
 	instrumentRateLimit.RequestTimeout = cfg.InstrumentRequestTimeout
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineBaseURL: strings.TrimRight(cfg.KlineBaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, sourceID: strings.ToLower(strings.TrimSpace(cfg.SourceID)), client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, instrumentRateLimit: instrumentRateLimit, maxBars: cfg.MaxBarsPerRequest}
+	klines := eastmoneykline.New(eastmoneykline.Config{
+		BaseURL: cfg.KlineBaseURL, Endpoint: cfg.KlineEndpoint, ProviderID: providerID, SourceID: cfg.SourceID,
+		HTTPClient: cfg.HTTPClient, Now: cfg.Now, MaxBarsPerRequest: cfg.MaxBarsPerRequest,
+		Frequencies: klineFrequencies, SecID: commonsrc.EastMoneySecID, VolumeMultiplier: volumeMultiplier,
+		Location: klineLocation, DailyClose: 15 * time.Hour,
+	})
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now, klines: klines, rateLimit: cfg.RateLimit, instrumentRateLimit: instrumentRateLimit}
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "eastmoney", SourceID: p.sourceID, DisplayName: "EastMoney", Hosts: []string{eastMoneyPushHost, eastMoneyKlineHost}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: providerID, SourceID: p.klines.SourceID(), DisplayName: "EastMoney", Hosts: []string{eastMoneyPushHost, eastmoneykline.Host}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
 }
 
 func (p *Provider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
 		Markets:           []string{"stockcn"},
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
-		Frequencies:       []string{"1m", "5m", "1d"},
+		Frequencies:       slices.Clone(klineFrequencies),
 		CompleteOHLCV:     true,
 		HasAmount:         true,
-		MaxBarsPerRequest: p.maxBars,
+		MaxBarsPerRequest: p.klines.MaxBarsPerRequest(),
 		// 时间标签是 K 线的收盘时刻（2026-11-04 实测：1m 首根 09:31、5m 首根 09:35，末根 11:30、15:00，
 		// 午后首根 13:01 / 13:05），首根含 09:25 开盘集合竞价的成交。
 		TimestampMode: marketdata.TimestampModeClose,
@@ -115,124 +108,9 @@ func (p *Provider) InstrumentSpec() marketdata.InstrumentSpec {
 	}
 }
 
-type eastMoneyResponse struct {
-	Data struct {
-		Klines []string `json:"klines"`
-	} `json:"data"`
-}
-
+// FetchKlines 取 K 线：请求、解析、收盘标签换开盘键都在共用代码里（见 eastmoneykline）。
 func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
-	frequency, _ := req.FrequencyValue() // Validate 已校验
-	klt, ok := eastMoneyKlt[frequency]
-	if !ok {
-		return nil, fmt.Errorf("%w: eastmoney 不支持 %s", marketdata.ErrUnsupportedFrequency, req.Frequency)
-	}
-	secid, err := commonsrc.EastMoneySecID(req.SubjectID)
-	if err != nil {
-		return nil, err
-	}
-	endDate := "20500101"
-	if !req.EndTime.IsZero() {
-		endDate = req.EndTime.UTC().Format("20060102")
-	} else if !req.Now.IsZero() {
-		endDate = req.Now.UTC().Format("20060102")
-	}
-	requestLimit := req.Limit
-	historicalRequest := !req.StartTime.IsZero() || !req.EndTime.IsZero()
-	if historicalRequest {
-		requestLimit = p.maxBars
-	}
-	// 带 beg 时上游忽略 lmt、返回 [beg, end] 内的全部 K 线；实时请求不带 beg，只取 end 之前最近 lmt 根。
-	query := "secid=" + url.QueryEscape(secid) + "&klt=" + klt + "&fqt=0"
-	if !req.StartTime.IsZero() {
-		query += "&beg=" + url.QueryEscape(req.StartTime.UTC().Format("20060102"))
-	}
-	query += "&end=" + url.QueryEscape(endDate) + "&lmt=" + strconv.Itoa(requestLimit) +
-		"&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13" +
-		"&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.klineBaseURL+p.klineEndpoint+"?"+query, nil)
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("User-Agent", "Mozilla/5.0")
-	httpReq.Header.Set("Accept", "*/*")
-	httpReq.Header.Set("Referer", "https://quote.eastmoney.com/")
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, marketdata.ErrRateLimited
-	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, err)
-	}
-	var payload eastMoneyResponse
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
-	}
-	lines := payload.Data.Klines
-	if !historicalRequest && len(lines) > req.Limit {
-		lines = lines[len(lines)-req.Limit:]
-	}
-	rows := make([]marketdata.NormalizedKline, 0, len(lines))
-	now := p.now().UTC()
-	for _, line := range lines {
-		fields := strings.Split(line, ",")
-		if len(fields) < 7 {
-			return nil, fmt.Errorf("%w: eastmoney kline columns", marketdata.ErrProtocol)
-		}
-		openValue, err := commonsrc.ParseFloat(fields[1])
-		if err != nil {
-			return nil, err
-		}
-		closeValue, err := commonsrc.ParseFloat(fields[2])
-		if err != nil {
-			return nil, err
-		}
-		highValue, err := commonsrc.ParseFloat(fields[3])
-		if err != nil {
-			return nil, err
-		}
-		lowValue, err := commonsrc.ParseFloat(fields[4])
-		if err != nil {
-			return nil, err
-		}
-		volumeValue, err := commonsrc.ParseFloat(fields[5])
-		if err != nil {
-			return nil, err
-		}
-		amountValue, err := commonsrc.ParseFloat(fields[6])
-		if err != nil {
-			return nil, err
-		}
-		var row marketdata.NormalizedKline
-		if frequency == marketdata.FrequencyDay {
-			// 日线的时间标签是交易日期（2026-11-10），成交量单位同样是手。
-			row, err = commonsrc.NormalizeDailyKline(req.SubjectID, "eastmoney", req.ProviderSymbol, fields[0], openValue, highValue, lowValue, closeValue, volumeValue, amountValue, eastMoneyVolumeMultiplier, now, req.RequestID)
-		} else {
-			row, err = commonsrc.NormalizeIntradayKline(req.SubjectID, "eastmoney", req.ProviderSymbol, frequency, marketdata.TimestampModeClose, fields[0], openValue, highValue, lowValue, closeValue, volumeValue, amountValue, eastMoneyVolumeMultiplier, now, req.RequestID)
-		}
-		if err != nil {
-			return nil, err
-		}
-		row.SourceID = p.sourceID
-		if !now.Before(row.BarEnd) {
-			rows = append(rows, row)
-		}
-	}
-	if len(rows) == 0 {
-		return nil, marketdata.ErrNoClosedBar
-	}
-	return rows, nil
+	return p.klines.FetchKlines(ctx, req)
 }
 
 func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error) {
@@ -318,23 +196,28 @@ func collectorError(err error) error {
 }
 
 const (
+	providerID        = "eastmoney"
 	eastMoneyPushHost = "push2.eastmoney.com"
-	// 5m K 线只在 push2his 有数据（push2 返回空列表），1m 两边一致：K 线统一走 push2his。
-	eastMoneyKlineHost = "push2his.eastmoney.com"
-	eastMoneyKlineBase = "https://" + eastMoneyKlineHost
 	// eastMoneyAShareFilter 是全部 A 股的 clist 筛选条件：深主板、创业板、沪主板。
 	eastMoneyAShareFilter = "m:0 t:6,m:0 t:80,m:1 t:2"
 	// 成交量单位是手：同一根 5m 东方财富 6735、通达信 673500 股（2026-11-04 实测 600519），乘 100 换成股。
-	eastMoneyVolumeMultiplier = 100
+	volumeMultiplier = 100
 )
+
+// klineFrequencies 是 A 股支持的 K 线周期。
+var klineFrequencies = []string{"1m", "5m", "1d"}
+
+// klineLocation 是 K 线时间标签的时区。
+var klineLocation = mustLoadLocation("Asia/Shanghai")
+
+func mustLoadLocation(name string) *time.Location {
+	location, err := time.LoadLocation(name)
+	if err != nil {
+		panic(err)
+	}
+	return location
+}
 
 // eastMoneyIndexBoards 是指数代码到东方财富成分板块的对照：沪深 300 是 BK0500（板块名 HS300_，
 // 2026-11-04 实测 clist fs=b:BK0500 返回 total=300、三页各 100 条）。
 var eastMoneyIndexBoards = map[string]string{"000300": "BK0500"}
-
-// eastMoneyKlt 是 K 线接口的 klt 参数：日内是周期分钟数，日线是 101。
-var eastMoneyKlt = map[marketdata.Frequency]string{
-	marketdata.FrequencyMinute: "1",
-	marketdata.Frequency5Min:   "5",
-	marketdata.FrequencyDay:    "101",
-}

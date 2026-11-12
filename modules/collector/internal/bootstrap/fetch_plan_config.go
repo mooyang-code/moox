@@ -1,17 +1,20 @@
 package bootstrap
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"gopkg.in/yaml.v3"
+
 	"github.com/mooyang-code/moox/modules/collector/internal/egressbalance"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/packages/security"
 )
 
@@ -273,26 +276,46 @@ func defaultSCFPlan() SCFPlanConfig {
 		// 写入阶段预算 4 秒：行情请求 3 秒 + 写入 4 秒仍在 1m 数据集 10 秒的迟到窗口内；2 秒太紧，
 		// 跨境建连稍慢或整分钟突发时存储端稍慢就超时，也没有时间重试。
 		Fetch: SCFPlanFetchConfig{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000, StorageTimeoutMS: 4000},
-		// stockcn：每函数标的数按各源的权重与限速、标的数估算（auto_size；沪深300 约 8 个函数，只用通达信和东方财富，多拆函数让出口 IP 分散、避开单 IP 频控），收盘后固定等 0.8 秒再取数（not_before_ms；2026-11-06 实测三个主源 0.1～0.5 秒就出定稿的那根，与代码里的定稿窗口 0.8 秒一致），各函数同时起跑。
-		// 标的按权重哈希分到通达信、东方财富、新浪三个主源（腾讯只做备源）；函数内同时处理的标的数（concurrency）、熔断并发（feed_concurrency）
-		// 由各源的限速配置推导（configs/scf/stockcn/sources/market/*.yaml），rps、burst 只给币安用、A 股不用，所以这里不配。
-		// 2026-11-06 实测 15 个函数同时起跑没有命中频控，起跑 1 秒后 10:40 那期 1.7 秒取完、策略产出 3.2 秒（原来 8 个函数、起跑错开 5～20 秒时要 23 秒）。
-		// crypto：币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按市场推迟取数；
-		// 合约 8 秒起取数，再加整点可能的停顿，SCF 模式下合约数据集的截止放宽到 20 秒。
-		// stockcn 的出口 IP 去重只在 15:10～次日 07:50 删除重建函数：避开日内交易时段，也避开 08:00 的日线采集。
-		Spaces: map[string]SCFPlanSpaceConfig{
-			"stockcn": {EgressBalance: &SCFPlanEgressBalance{MaxPerIP: 1, Rounds: 5, IdleStart: "15:10", IdleEnd: "07:50", Timezone: "Asia/Shanghai"}, AutoSize: &SCFPlanAutoSize{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 800}},
-			// crypto 的新数据集默认 WS 推送，补采走香港机的本地执行端。
-			"crypto": {DefaultIngest: "stream", DefaultExecutor: "local", Markets: map[string]SCFPlanMarketConfig{
-				"spot": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 3000}},
-				"swap": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 8000}, LatenessS: 20},
-			}},
-		},
+		// 各空间的默认值写在市场的数据文件里（config/markets/<市场>/market.yaml 的 scf_plan 段）。
+		Spaces: marketSCFPlanDefaults(),
 	}
 }
 
-// defaultLatenessSeconds 是空间的允许迟到时间默认值。
-func defaultLatenessSeconds(spaceID string) int { return domain.DefaultAllowedLatenessSeconds(spaceID) }
+// marketSCFPlanDefaults 读各市场 market.yaml 的 scf_plan 段作为空间的默认值；没写这一段的市场没有空间默认值。
+// market.yaml 编在二进制里，解析失败是编码错误，直接 panic。
+func marketSCFPlanDefaults() map[string]SCFPlanSpaceConfig {
+	spaces := map[string]SCFPlanSpaceConfig{}
+	for _, marketID := range markets.IDs() {
+		market, err := markets.ConfigFor(marketID)
+		if err != nil {
+			panic(err)
+		}
+		if market.SCFPlan.IsZero() {
+			continue
+		}
+		raw, err := yaml.Marshal(&market.SCFPlan)
+		if err != nil {
+			panic(fmt.Errorf("市场 %s 的 scf_plan：%w", marketID, err))
+		}
+		var space SCFPlanSpaceConfig
+		decoder := yaml.NewDecoder(bytes.NewReader(raw))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&space); err != nil {
+			panic(fmt.Errorf("市场 %s 的 scf_plan：%w", marketID, err))
+		}
+		spaces[marketID] = space
+	}
+	return spaces
+}
+
+// defaultLatenessSeconds 是空间的允许迟到时间默认值（market.yaml 的 allowed_lateness_seconds）；市场未登记时报错。
+func defaultLatenessSeconds(spaceID string) (int, error) {
+	market, err := markets.ConfigFor(spaceID)
+	if err != nil {
+		return 0, err
+	}
+	return market.AllowedLatenessSeconds, nil
+}
 
 // scfSpaces 返回配置了云函数市场地域的空间（排序）。它只代表云函数空间：不用云函数的空间由启用的任务决定，见 managedSpaces。
 func (c *Config) scfSpaces() []string {

@@ -87,8 +87,8 @@ func TestStreamDecodeKeepsCaseSensitiveKeysApart(t *testing.T) {
 	require.NoError(t, err)
 	kline := events[0].Kline
 	require.Equal(t, stream.EventKlineUpdate, events[0].Kind)
-	require.Equal(t, 100.5, kline.VolumeShares, "v 不能被 V（50.25）覆盖")
-	require.Equal(t, 392000.1, kline.AmountCNY, "q 不能被 Q 覆盖")
+	require.Equal(t, 100.5, kline.Volume, "v 不能被 V（50.25）覆盖")
+	require.Equal(t, 392000.1, kline.Amount, "q 不能被 Q 覆盖")
 	require.Equal(t, 3899.5, kline.Low, "l 不能被 L（成交 ID）覆盖")
 	require.Equal(t, time.UnixMilli(1761033540000).UTC(), kline.BarStart, "t 是开盘时间")
 	require.Equal(t, time.UnixMilli(1761033599999).UTC(), kline.ProviderTimestamp, "T 是收盘时间")

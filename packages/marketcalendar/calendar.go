@@ -1,4 +1,7 @@
-// Package marketcalendar 提供内嵌的交易日历（目前只有 A 股 cn_stock）：按日期判断交易日、前后推交易日。
+// Package marketcalendar 提供内嵌的交易日历（A 股 cn_stock、港股 hk_stock）：按日期判断交易日、前后推交易日、查提前收市日。
+//
+// 每份日历两个文件：data/<日历 ID>.json（交易日与提前收市日）和 data/<日历 ID>.manifest.json（来源、覆盖期、校验和），
+// 各自更新，互不影响。
 package marketcalendar
 
 import (
@@ -10,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -134,11 +138,17 @@ type calendarManifest struct {
 type calendarFile struct {
 	CalendarID  string   `json:"calendar_id"`
 	TradingDays []string `json:"trading_days"`
+	// EarlyCloses 是提前收市日（半日市）：日期 → 当天的收市时刻（本地时间 HH:MM）。没有半日市的日历不写这一项。
+	EarlyCloses map[string]string `json:"early_closes,omitempty"`
 }
 
 type calendarData struct {
+	calendarID    string
 	tradingDays   []CivilDate
 	tradingDaySet map[CivilDate]struct{}
+	// earlyCloses 是提前收市日当天的收市时刻（距本地零点的时长）；earlyCloseDates 是这些日期的升序列表。
+	earlyCloses     map[CivilDate]time.Duration
+	earlyCloseDates []CivilDate
 }
 
 // TradingCalendar 是内嵌交易日历的不可变视图。
@@ -146,25 +156,45 @@ type TradingCalendar struct {
 	data *calendarData
 }
 
-//go:embed data/cn_trading_days.json
+//go:embed data/cn_stock.json
 var embeddedTradingDays []byte
 
-//go:embed data/manifest.json
+//go:embed data/cn_stock.manifest.json
 var embeddedManifest []byte
 
-var (
-	loadOnce       sync.Once
-	loadedStock    TradingCalendar
-	loadedStockErr error
-)
+//go:embed data/hk_stock.json
+var embeddedHKTradingDays []byte
 
-// Load 按 ID 加载内嵌日历。内嵌日历不可变，解析与校验（约 1 毫秒、1.5 MB）只做一次，之后的调用复用同一份数据。
+//go:embed data/hk_stock.manifest.json
+var embeddedHKManifest []byte
+
+// embeddedCalendar 是一份内嵌日历和它的加载结果。
+type embeddedCalendar struct {
+	data, manifest []byte
+	once           sync.Once
+	calendar       TradingCalendar
+	err            error
+}
+
+var embeddedCalendars = map[string]*embeddedCalendar{
+	"cn_stock": {data: embeddedTradingDays, manifest: embeddedManifest},
+	"hk_stock": {data: embeddedHKTradingDays, manifest: embeddedHKManifest},
+}
+
+// Load 按 ID 加载内嵌日历，未知的 ID 报错。内嵌日历不可变，每份的解析与校验（cn_stock 约 1 毫秒、1.5 MB）只做一次，
+// 之后的调用复用同一份数据。
 func Load(id string) (TradingCalendar, error) {
-	if id != "cn_stock" {
+	entry, ok := embeddedCalendars[id]
+	if !ok {
 		return TradingCalendar{}, fmt.Errorf("%w：%q", ErrUnknownCalendar, id)
 	}
-	loadOnce.Do(func() { loadedStock, loadedStockErr = loadCalendar(embeddedTradingDays, embeddedManifest) })
-	return loadedStock, loadedStockErr
+	entry.once.Do(func() {
+		entry.calendar, entry.err = loadCalendar(entry.data, entry.manifest)
+		if entry.err == nil && entry.calendar.data.calendarID != id {
+			entry.err = fmt.Errorf("%w：日历 %q 的数据文件写的是 %q", ErrInvalidCalendarData, id, entry.calendar.data.calendarID)
+		}
+	})
+	return entry.calendar, entry.err
 }
 
 func (c TradingCalendar) FirstDate() CivilDate {
@@ -226,6 +256,23 @@ func (c TradingCalendar) NextTradingDay(date CivilDate) (CivilDate, error) {
 	}
 }
 
+// EarlyClose 返回提前收市日（半日市）当天的收市时刻，用距本地零点的时长表示；不是提前收市日时 ok 为假。
+func (c TradingCalendar) EarlyClose(date CivilDate) (time.Duration, bool) {
+	if c.data == nil {
+		return 0, false
+	}
+	closeAt, ok := c.data.earlyCloses[date]
+	return closeAt, ok
+}
+
+// EarlyCloseDates 返回全部提前收市日，按日期升序；没有半日市的日历返回空。
+func (c TradingCalendar) EarlyCloseDates() []CivilDate {
+	if c.data == nil {
+		return nil
+	}
+	return append([]CivilDate(nil), c.data.earlyCloseDates...)
+}
+
 // TradingDayIndex 返回交易日在日历中的序号（首个交易日为 0），不复制交易日列表；非交易日返回 ErrNotTradingDay。
 func (c TradingCalendar) TradingDayIndex(date CivilDate) (int, error) {
 	if err := c.checkCovered(date); err != nil {
@@ -283,15 +330,20 @@ func loadCalendar(dataRaw, manifestRaw []byte) (TradingCalendar, error) {
 		return TradingCalendar{}, fmt.Errorf("%w：清单为 %q，数据为 %q", ErrCalendarChecksum, manifest.SHA256, wantHash)
 	}
 	return TradingCalendar{data: &calendarData{
-		tradingDays:   append([]CivilDate(nil), data.dates...),
-		tradingDaySet: data.set,
+		calendarID:      data.calendarID,
+		tradingDays:     append([]CivilDate(nil), data.dates...),
+		tradingDaySet:   data.set,
+		earlyCloses:     data.earlyCloses,
+		earlyCloseDates: data.earlyCloseDates,
 	}}, nil
 }
 
 type parsedCalendarData struct {
-	calendarID string
-	dates      []CivilDate
-	set        map[CivilDate]struct{}
+	calendarID      string
+	dates           []CivilDate
+	set             map[CivilDate]struct{}
+	earlyCloses     map[CivilDate]time.Duration
+	earlyCloseDates []CivilDate
 }
 
 func parseCalendarData(raw []byte) (parsedCalendarData, error) {
@@ -321,7 +373,25 @@ func parseCalendarData(raw []byte) (parsedCalendarData, error) {
 		dates = append(dates, date)
 		set[date] = struct{}{}
 	}
-	return parsedCalendarData{calendarID: file.CalendarID, dates: dates, set: set}, nil
+	earlyCloses := make(map[CivilDate]time.Duration, len(file.EarlyCloses))
+	earlyCloseDates := make([]CivilDate, 0, len(file.EarlyCloses))
+	for text, clock := range file.EarlyCloses {
+		date, err := ParseCivilDate(text)
+		if err != nil {
+			return parsedCalendarData{}, fmt.Errorf("%w：early_closes 的日期 %q：%v", ErrInvalidCalendarData, text, err)
+		}
+		if _, trading := set[date]; !trading {
+			return parsedCalendarData{}, fmt.Errorf("%w：提前收市日 %q 不是交易日", ErrInvalidCalendarData, text)
+		}
+		parsed, err := time.Parse("15:04", clock)
+		if err != nil || parsed.Hour() == 0 && parsed.Minute() == 0 {
+			return parsedCalendarData{}, fmt.Errorf("%w：提前收市日 %q 的收市时刻 %q 必须写成 HH:MM", ErrInvalidCalendarData, text, clock)
+		}
+		earlyCloses[date] = time.Duration(parsed.Hour())*time.Hour + time.Duration(parsed.Minute())*time.Minute
+		earlyCloseDates = append(earlyCloseDates, date)
+	}
+	sort.Slice(earlyCloseDates, func(i, j int) bool { return earlyCloseDates[i].Before(earlyCloseDates[j]) })
+	return parsedCalendarData{calendarID: file.CalendarID, dates: dates, set: set, earlyCloses: earlyCloses, earlyCloseDates: earlyCloseDates}, nil
 }
 
 func parseCalendarManifest(raw []byte) (calendarManifest, error) {

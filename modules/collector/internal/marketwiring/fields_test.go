@@ -27,7 +27,7 @@ func TestFundingRateFieldComesFromTheSourceCatalog(t *testing.T) {
 	require.Same(t, swap, FundingCacheForMarket(swapMarket), "没写 source_id 时按默认来源")
 	require.Nil(t, FundingCacheForMarket(marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"}))
 
-	swapPipeline, err := NewCryptoKlinePipeline(timerHandlerStorage{}, marketdata.InstrumentSwap, nil)
+	swapPipeline, err := NewKlinePipeline(timerHandlerStorage{}, "crypto", marketdata.InstrumentSwap, "1m", "binance", nil)
 	require.NoError(t, err)
 	source, ok := marketdata.FindFieldSource(swapPipeline.Fields, "funding_rate")
 	require.True(t, ok)
@@ -35,7 +35,7 @@ func TestFundingRateFieldComesFromTheSourceCatalog(t *testing.T) {
 		FundingCache() *marketfetch.FundingCache
 	}).FundingCache(), "拉取管线的资金费率来源用的是同一份缓存")
 	require.Equal(t, []string{"funding_rate"}, swapPipeline.ExtraFieldIDs)
-	spotPipeline, err := NewCryptoKlinePipeline(timerHandlerStorage{}, marketdata.InstrumentSpot, nil)
+	spotPipeline, err := NewKlinePipeline(timerHandlerStorage{}, "crypto", marketdata.InstrumentSpot, "1m", "binance", nil)
 	require.NoError(t, err)
 	require.Empty(t, spotPipeline.Fields)
 	require.Equal(t, []string{"funding_rate"}, spotPipeline.ExtraFieldIDs, "现货管线没有来源，选了资金费率按配置错误处理")
@@ -48,7 +48,7 @@ func TestStockFieldSourcesComeFromTheSourceCatalog(t *testing.T) {
 	providers := make([]string, 0, len(sources))
 	for _, source := range sources {
 		providers = append(providers, source.Descriptor().ID)
-		_, found, err := marketfetch.LoadStockCNSourceRuntime(source.Descriptor().ID)
+		_, found, err := marketfetch.LoadSourceRuntime("stockcn", source.Descriptor().ID)
 		require.NoError(t, err)
 		require.True(t, found, "%s 要有数据源配置文件", source.Descriptor().ID)
 	}

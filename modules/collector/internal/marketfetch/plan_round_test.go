@@ -15,7 +15,7 @@ import (
 
 // roundMetrics 给对账器挂上指标，并让失败起始时间跟随测试时钟。
 func roundMetrics(h *planHarness, r *PlanReconciler) *Metrics {
-	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics := NewMetrics(prometheus.NewRegistry(), testFeedLabels)
 	metrics.now = func() time.Time { return h.now }
 	r.Metrics = metrics
 	return metrics

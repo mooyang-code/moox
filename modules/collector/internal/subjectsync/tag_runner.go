@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -175,11 +177,11 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 		instruments, err = r.fetchSnapshot(fetchCtx, tag)
 	}
 	subjects := 0
+	var items []*pb.TagSnapshotItem
 	if err == nil {
-		items := make([]*pb.TagSnapshotItem, 0, len(instruments))
-		for _, item := range instruments {
-			items = append(items, snapshotItem(tag, item))
-		}
+		items, err = snapshotItems(tag, instruments)
+	}
+	if err == nil {
 		log.InfoContextf(ctx, "tag %s/%s applying snapshot subjects=%d", tag.GetSpaceId(), tag.GetTagId(), len(items))
 		err = r.Store.ApplyTagSnapshot(ctx, tag.GetSpaceId(), tag.GetTagId(), items)
 		subjects = len(items)
@@ -199,12 +201,13 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 	return subjects, nil
 }
 
-// fetchSnapshot 取标签的成员快照：配置了 sync.index 时取该指数的成分股，否则取数据源的全部标的。
+// fetchSnapshot 取标签的成员快照：配置了 sync.index 时取该指数的成分股（来源是 sync.index_source，不写时等于
+// sync.source），否则取 sync.source 的全部标的。
 func (r *TagRunner) fetchSnapshot(ctx context.Context, tag *pb.Tag) ([]marketdata.Instrument, error) {
 	if index := tagattr.Index(tag); index != "" {
-		return FetchIndexSnapshot(ctx, r.IndexListers, tagattr.Source(tag), index)
+		return FetchIndexSnapshot(ctx, r.IndexListers, tag.GetSpaceId(), tagattr.IndexSource(tag), index)
 	}
-	return FetchSnapshot(ctx, r.Listers, []string{tagattr.Source(tag)}, tagattr.MarketType(tag))
+	return FetchSnapshot(ctx, r.Listers, tag.GetSpaceId(), []string{tagattr.Source(tag)}, tagattr.MarketType(tag))
 }
 
 // SyncTags synchronizes the matching auto tags right now, whether or not they
@@ -246,13 +249,19 @@ func (r *TagRunner) SyncTags(ctx context.Context, filter Filter) ([]TagResult, e
 	return results, nil
 }
 
-func snapshotItem(tag *pb.Tag, item marketdata.Instrument) *pb.TagSnapshotItem {
-	out := &pb.TagSnapshotItem{SubjectId: item.SubjectID, Name: item.Name, Attributes: subjectAttributes(tag.GetSpaceId(), item)}
-	switch tag.GetSpaceId() {
-	case "crypto":
-		out.Timezone = "UTC"
-	case "stockcn":
-		out.Timezone = "Asia/Shanghai"
+// snapshotItems 把标的快照换成标签成员：属性由市场的标的规则给出，时区取市场登记的时区。
+func snapshotItems(tag *pb.Tag, instruments []marketdata.Instrument) ([]*pb.TagSnapshotItem, error) {
+	rules, err := markets.RulesFor(tag.GetSpaceId())
+	if err != nil {
+		return nil, err
 	}
-	return out
+	location, err := markets.Location(tag.GetSpaceId())
+	if err != nil {
+		return nil, err
+	}
+	items := make([]*pb.TagSnapshotItem, 0, len(instruments))
+	for _, item := range instruments {
+		items = append(items, &pb.TagSnapshotItem{SubjectId: item.SubjectID, Name: item.Name, Attributes: rules.SubjectAttributes(item), Timezone: location.String()})
+	}
+	return items, nil
 }

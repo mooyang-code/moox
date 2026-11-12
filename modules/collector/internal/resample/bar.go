@@ -88,7 +88,10 @@ func Aggregate(spec TaskSpec, subjectID string, bucket barclock.Bucket, expected
 	})
 
 	var result Result
-	crypto := hasTradeCount(spec.SpaceID)
+	crypto, err := hasTradeCount(spec.SpaceID)
+	if err != nil {
+		return Result{}, err
+	}
 	amount, amountKnown := 0.0, true
 	for index := range ordered {
 		row := &ordered[index]
@@ -174,7 +177,10 @@ func validateSourceBar(spec TaskSpec, subjectID string, expectedTime time.Time, 
 		{name: "close", value: row.Close},
 		{name: "volume", value: row.Volume},
 	}
-	crypto := hasTradeCount(spec.SpaceID)
+	crypto, err := hasTradeCount(spec.SpaceID)
+	if err != nil {
+		return err
+	}
 	if crypto {
 		values = append(values, struct {
 			name  string

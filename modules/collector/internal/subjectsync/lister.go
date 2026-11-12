@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -15,27 +16,30 @@ type Lister interface {
 	List(context.Context) ([]marketdata.Instrument, error)
 }
 
+// ListerKey 定位一个市场里某个数据源某个品种的全部标的列表。同一个数据源可以服务多个市场，所以键带市场。
 type ListerKey struct {
+	MarketID       string
 	Source         string
 	InstrumentType string
 }
 
 type Listers map[ListerKey]Lister
 
-// IndexListerKey 定位一个数据源上某个指数的成分股列表。
+// IndexListerKey 定位一个市场里某个数据源上某个指数的成分股列表。
 type IndexListerKey struct {
-	Source string
-	Index  string
+	MarketID string
+	Source   string
+	Index    string
 }
 
-// IndexListers 是指数成分股的 lister：与 Listers 分开，Listers 只表示数据源的全部标的。
+// IndexListers 是指数成分股的 lister：与 Listers 分开，互不依赖（数据源可以只提供其中一种）。
 type IndexListers map[IndexListerKey]Lister
 
 // FetchIndexSnapshot 取指数的成分股快照；为空时返回 ErrEmptySnapshot。
-func FetchIndexSnapshot(ctx context.Context, listers IndexListers, source, index string) ([]marketdata.Instrument, error) {
-	lister, ok := listers[IndexListerKey{Source: source, Index: index}]
+func FetchIndexSnapshot(ctx context.Context, listers IndexListers, marketID, source, index string) ([]marketdata.Instrument, error) {
+	lister, ok := listers[IndexListerKey{MarketID: marketID, Source: source, Index: index}]
 	if !ok {
-		return nil, fmt.Errorf("数据源 %s 不支持指数 %s 的成分股", source, index)
+		return nil, fmt.Errorf("市场 %s 的数据源 %s 不支持指数 %s 的成分股", marketID, source, index)
 	}
 	items, err := lister.List(ctx)
 	if err != nil {
@@ -49,12 +53,12 @@ func FetchIndexSnapshot(ctx context.Context, listers IndexListers, source, index
 	return out, nil
 }
 
-func FetchSnapshot(ctx context.Context, listers Listers, sources []string, instrumentType string) ([]marketdata.Instrument, error) {
+func FetchSnapshot(ctx context.Context, listers Listers, marketID string, sources []string, instrumentType string) ([]marketdata.Instrument, error) {
 	merged := make(map[string]marketdata.Instrument)
 	for _, source := range sources {
-		lister, ok := listers[ListerKey{Source: source, InstrumentType: instrumentType}]
+		lister, ok := listers[ListerKey{MarketID: marketID, Source: source, InstrumentType: instrumentType}]
 		if !ok {
-			return nil, fmt.Errorf("source %s does not support %s subject listing", source, instrumentType)
+			return nil, fmt.Errorf("source %s does not support %s %s subject listing", source, marketID, instrumentType)
 		}
 		items, err := lister.List(ctx)
 		if err != nil {
@@ -85,7 +89,9 @@ func FetchSnapshot(ctx context.Context, listers Listers, sources []string, instr
 func (l Listers) Supported() map[string][]string {
 	out := map[string][]string{}
 	for key := range l {
-		out[key.Source] = append(out[key.Source], key.InstrumentType)
+		if !slices.Contains(out[key.Source], key.InstrumentType) {
+			out[key.Source] = append(out[key.Source], key.InstrumentType)
+		}
 	}
 	for source := range out {
 		sort.Strings(out[source])

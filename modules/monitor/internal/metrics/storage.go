@@ -33,7 +33,7 @@ type StorageAdapter struct {
 	subjectRefreshMu sync.Mutex
 	subjects         map[string]cachedSubjectCatalog
 	nameMu           sync.Mutex
-	datasetNames     map[string]cachedDatasetName
+	datasetInfos     map[string]cachedDatasetInfo
 	goneMu           sync.Mutex
 	datasetGone      map[string]cachedDatasetGone
 }
@@ -43,16 +43,18 @@ type cachedDatasetGone struct {
 	gone     bool
 }
 
-type cachedDatasetName struct {
-	loadedAt time.Time
-	name     string
+// cachedDatasetInfo 是数据集的展示名称和品种属性（market_type：spot、swap、equity……）。
+type cachedDatasetInfo struct {
+	loadedAt   time.Time
+	name       string
+	marketType string
 }
 
 const (
 	datasetSubjectPageSize = 1000
 	maxDatasetSubjects     = 100000
 	subjectCatalogTTL      = time.Minute
-	datasetNameTTL         = 10 * time.Minute
+	datasetInfoTTL         = 10 * time.Minute
 	datasetGoneTTL         = time.Minute
 )
 
@@ -62,7 +64,7 @@ type cachedSubjectCatalog struct {
 }
 
 func NewStorageAdapter(metadata MetadataClient) *StorageAdapter {
-	return &StorageAdapter{metadata: metadata, auth: storageauth.Primary("monitor"), subjects: make(map[string]cachedSubjectCatalog), datasetNames: make(map[string]cachedDatasetName), datasetGone: make(map[string]cachedDatasetGone)}
+	return &StorageAdapter{metadata: metadata, auth: storageauth.Primary("monitor"), subjects: make(map[string]cachedSubjectCatalog), datasetInfos: make(map[string]cachedDatasetInfo), datasetGone: make(map[string]cachedDatasetGone)}
 }
 
 func isActive(status string) bool { return strings.EqualFold(strings.TrimSpace(status), "active") }
@@ -138,29 +140,41 @@ func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID,
 }
 
 // DatasetDisplayName returns the name people gave a dataset, such as
-// "现货小时K线", for alert text. It returns "" when the name is unknown, and
-// caches names for datasetNameTTL.
+// "现货小时K线", for alert text. It returns "" when the name is unknown.
 func (a *StorageAdapter) DatasetDisplayName(ctx context.Context, spaceID, datasetID string) string {
+	return a.datasetInfo(ctx, spaceID, datasetID).name
+}
+
+// DatasetMarketType 返回数据集的品种属性 market_type（小写）；没有这个属性或读不到时为空。
+func (a *StorageAdapter) DatasetMarketType(ctx context.Context, spaceID, datasetID string) string {
+	return a.datasetInfo(ctx, spaceID, datasetID).marketType
+}
+
+// datasetInfo 读数据集的名称和品种属性，缓存 datasetInfoTTL；读取失败时返回上一次读到的值（没有则为空）。
+func (a *StorageAdapter) datasetInfo(ctx context.Context, spaceID, datasetID string) cachedDatasetInfo {
 	if a == nil || a.metadata == nil || strings.TrimSpace(datasetID) == "" {
-		return ""
+		return cachedDatasetInfo{}
 	}
 	key := strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(datasetID)
 	now := time.Now()
 	a.nameMu.Lock()
-	cached, ok := a.datasetNames[key]
+	cached, ok := a.datasetInfos[key]
 	a.nameMu.Unlock()
-	if ok && now.Sub(cached.loadedAt) < datasetNameTTL {
-		return cached.name
+	if ok && now.Sub(cached.loadedAt) < datasetInfoTTL {
+		return cached
 	}
 	rsp, err := a.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID})
-	if err != nil || storageOK("get dataset name", rsp.GetRetInfo()) != nil {
-		return cached.name
+	if err != nil || storageOK("get dataset", rsp.GetRetInfo()) != nil {
+		return cached
 	}
-	name := strings.TrimSpace(rsp.GetDataset().GetName())
+	info := cachedDatasetInfo{
+		loadedAt: now, name: strings.TrimSpace(rsp.GetDataset().GetName()),
+		marketType: strings.ToLower(strings.TrimSpace(rsp.GetDataset().GetAttributes()["market_type"])),
+	}
 	a.nameMu.Lock()
-	a.datasetNames[key] = cachedDatasetName{loadedAt: now, name: name}
+	a.datasetInfos[key] = info
 	a.nameMu.Unlock()
-	return name
+	return info
 }
 
 // DatasetGone 报告数据集在 Storage 里已经不存在（被删除）。只有 Storage 明确回答“数据集不存在”才为真：

@@ -130,8 +130,8 @@ func (p *Provider) FetchShadowKlines(ctx context.Context, req marketdata.KlineRe
 			ProviderSymbol: req.ProviderSymbol,
 			BarStart:       barStart.UTC(),
 			Price:          result.Price,
-			VolumeShares:   result.Volume,
-			AmountCNY:      result.Amount,
+			Volume:         result.Volume,
+			Amount:         result.Amount,
 			FetchedAt:      p.now().UTC(),
 			RequestID:      req.RequestID,
 		})

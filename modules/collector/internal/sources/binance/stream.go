@@ -241,7 +241,7 @@ func (s *streamSource) Decode(raw []byte, receivedAt time.Time) ([]stream.Event,
 	return []stream.Event{{Kind: kind, Symbol: symbol, Kline: kline, EventAt: eventAt}}, nil
 }
 
-// normalize 与 REST 适配器的字段含义一致：VolumeShares=v、AmountCNY=q、TradeCount=n、ProviderTimestamp=收盘时间 T。
+// normalize 与 REST 适配器的字段含义一致：Volume=v、Amount=q、TradeCount=n、ProviderTimestamp=收盘时间 T。
 func (s *streamSource) normalize(k *streamKline, receivedAt time.Time) (marketdata.NormalizedKline, error) {
 	frequency, err := marketdata.ParseFrequency(k.Interval)
 	if err != nil {
@@ -258,7 +258,7 @@ func (s *streamSource) normalize(k *streamKline, receivedAt time.Time) (marketda
 	start := normalizeBarStart(time.UnixMilli(k.Start).UTC(), frequency)
 	return marketdata.NormalizedKline{
 		ProviderID: "binance", SourceID: s.Key().SourceID, Frequency: string(frequency), BarStart: start, BarEnd: frequency.BarEnd(start),
-		Open: values[0], High: values[1], Low: values[2], Close: values[3], VolumeShares: values[4], AmountCNY: values[5], TradeCount: k.Trades,
+		Open: values[0], High: values[1], Low: values[2], Close: values[3], Volume: values[4], Amount: values[5], TradeCount: k.Trades,
 		ProviderTimestamp: time.UnixMilli(k.End).UTC(), FetchedAt: receivedAt.UTC(),
 	}, nil
 }

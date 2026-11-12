@@ -126,6 +126,30 @@ func TestKlineFreshnessEvaluatorMatchesMarketSuffixDuringSubjectMigration(t *tes
 	require.Zero(t, reports[0].MissingCount)
 }
 
+// 品种后缀取数据集的 market_type 属性：现货数据集里 OPG-USDT 只对应 OPG-USDT-SPOT，不因为同名永续标的而有歧义。
+func TestKlineFreshnessEvaluatorTakesSubjectSuffixFromDatasetMarketType(t *testing.T) {
+	now := time.Date(2026, 9, 10, 11, 2, 30, 0, time.UTC)
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
+		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OPG-USDT-SWAP", DataTime: now.Add(-20 * time.Minute), ObservedAt: now}},
+	}})
+	metadata := &fakeMetadata{
+		dataset: &storagepb.Dataset{DatasetId: "dataset", Attributes: map[string]string{"market_type": "spot"}},
+		subjects: []*storagepb.DatasetSubject{
+			{SubjectId: "OPG-USDT", Status: "active"},
+			{SubjectId: "ETH-USDT", Status: "active"},
+		},
+	}
+	query.storage = NewStorageAdapter(metadata)
+
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Empty(t, reports[0].StaleSubjects, "a swap subject is not attributed to a spot dataset's catalog subject")
+	require.Equal(t, "spot", query.DatasetMarketType(context.Background(), "crypto", "dataset"))
+}
+
 func TestKlineFreshnessEvaluatorRejectsAmbiguousMarketSuffix(t *testing.T) {
 	now := time.Date(2026, 9, 10, 11, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}

@@ -141,39 +141,9 @@ func NormalizeIntradayKline(subjectID, providerID, providerSymbol string, freque
 		High:              high,
 		Low:               low,
 		Close:             close,
-		VolumeShares:      volume * volumeMultiplier,
-		AmountCNY:         amount,
+		Volume:            volume * volumeMultiplier,
+		Amount:            amount,
 		ProviderTimestamp: barEnd.UTC(),
-		FetchedAt:         fetchedAt.UTC(),
-		RequestID:         requestID,
-	}
-	if err := marketdata.ValidateNormalizedKline(row); err != nil {
-		return marketdata.NormalizedKline{}, err
-	}
-	return row, nil
-}
-
-// NormalizeDailyKline 把一根日线归一化：rawDate 是上游的交易日期标签（2006-01-02），键是交易日期的 UTC 零点
-// （与 barclock 的 1d 键一致），bar_end 是键加 24 小时；上游时间戳记当日 15:00 收盘。
-func NormalizeDailyKline(subjectID, providerID, providerSymbol, rawDate string, open, high, low, close, volume, amount float64, volumeMultiplier float64, fetchedAt time.Time, requestID string) (marketdata.NormalizedKline, error) {
-	barStart, err := time.Parse(time.DateOnly, strings.TrimSpace(rawDate))
-	if err != nil {
-		return marketdata.NormalizedKline{}, fmt.Errorf("%w: invalid trade date %q", marketdata.ErrProtocol, rawDate)
-	}
-	row := marketdata.NormalizedKline{
-		SubjectID:         subjectID,
-		ProviderID:        providerID,
-		ProviderSymbol:    providerSymbol,
-		Frequency:         string(marketdata.FrequencyDay),
-		BarStart:          barStart,
-		BarEnd:            marketdata.FrequencyDay.BarEnd(barStart),
-		Open:              open,
-		High:              high,
-		Low:               low,
-		Close:             close,
-		VolumeShares:      volume * volumeMultiplier,
-		AmountCNY:         amount,
-		ProviderTimestamp: time.Date(barStart.Year(), barStart.Month(), barStart.Day(), 15, 0, 0, 0, shanghaiLocation).UTC(),
 		FetchedAt:         fetchedAt.UTC(),
 		RequestID:         requestID,
 	}

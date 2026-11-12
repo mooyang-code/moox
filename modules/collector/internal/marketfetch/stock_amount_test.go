@@ -14,7 +14,7 @@ func TestStockKlineRowWritesEstimatedAmountWithQualityMark(t *testing.T) {
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: start, BarEnd: start.Add(time.Minute), Open: 10, High: 11, Low: 9, Close: 10.5,
-		VolumeShares: 1000, AmountCNY: 10500, AmountEstimated: true,
+		Volume: 1000, Amount: 10500, AmountEstimated: true,
 		ProviderTimestamp: start, FetchedAt: start.Add(time.Minute), RequestID: "req",
 	}
 	fields := func(bar marketdata.NormalizedKline) map[string]*storagepb.FieldValue {

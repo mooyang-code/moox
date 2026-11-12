@@ -58,8 +58,8 @@ type FetchPlanControl interface {
 // SetFetchPlanControl 注入采集计划管理器。
 func (s *Service) SetFetchPlanControl(control FetchPlanControl) { s.fetchPlanControl = control }
 
-// SetSourceIDResolver 注入 provider 与品种到 source_id 的解析，合成任务据此推导源任务写入时用的 series_tag。
-func (s *Service) SetSourceIDResolver(resolve func(provider, instrumentType string) string) {
+// SetSourceIDResolver 注入（市场，数据源，品种）到 source_id 的解析，合成任务据此推导源任务写入时用的 series_tag。
+func (s *Service) SetSourceIDResolver(resolve marketfetch.SourceIDResolver) {
 	s.sourceIDResolver = resolve
 }
 
