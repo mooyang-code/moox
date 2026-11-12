@@ -59,7 +59,7 @@ func TestChipTurnoverIsCapped(t *testing.T) {
 	}
 }
 
-// 普通 K 线按三角形分布：对称的一根，平均成本在中点，一半筹码获利；各档之和约等于 换手率/档宽，与一字板同一个单位。
+// 普通 K 线按三角形分布：对称的一根，平均成本在中点，一半筹码获利；各档之和等于 换手率/档宽，与一字板同一个单位。
 func TestChipTriangleBar(t *testing.T) {
 	bars := chipBars{{15, 20, 10, 15, 40}}
 	width := 10.0 / (chipBuckets - 1)
@@ -70,8 +70,8 @@ func TestChipTriangleBar(t *testing.T) {
 		t.Fatalf("获利比例 = %v，应在 0.5 附近", got)
 	}
 	total := bars.value(func(_ []float64, total, _, _, _ float64) float64 { return total })
-	if !near(total*width, 0.4, 0.004) {
-		t.Fatalf("各档之和 × 档宽 = %v，应约等于换手率 0.4", total*width)
+	if !near(total*width, 0.4, 1e-12) {
+		t.Fatalf("各档之和 × 档宽 = %v，应等于换手率 0.4", total*width)
 	}
 	limit := chipBars{{15, 20, 10, 15, 0}, flat(15, 40)}.value(func(_ []float64, total, _, _, _ float64) float64 { return total })
 	if !near(limit*width, 0.4, 1e-12) {
@@ -105,8 +105,8 @@ func TestChipNarrowBars(t *testing.T) {
 		bar   [5]float64
 		index int
 	}{
-		// 只碰到最高档，而最高档正好是三角形的端点（高度为 0）：放进均价所在的档。
-		"贴着窗口最高价": {[5]float64{158.99, 159, 158.98, 158.99, 30}, 148},
+		// 只碰到最高档，而最高档正好是三角形的端点（高度为 0）：放进碰到的这一档。
+		"贴着窗口最高价": {[5]float64{158.99, 159, 158.98, 158.99, 30}, 149},
 		// 跨过一个档点：全部放进这一档。
 		"跨过一个档点": {[5]float64{20.02, 20.05, 19.95, 20, 30}, 10},
 	}

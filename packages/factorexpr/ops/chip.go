@@ -85,8 +85,12 @@ func chipValue(open, high, low, closes, turnover, grid []float64, result chipRes
 			}
 			continue
 		}
-		// 一字板、最高最低价都落在两档之间、或只碰到三角形端点的根：全部放进均价所在的档。
+		// 一档也没覆盖到（一字板、最高最低价都落在两档之间）：全部放进均价所在的档。
+		// 覆盖到的档都在三角形的端点上：放进覆盖到的档里离均价最近的一档，与权重极小时的结果一致。
 		j := min(max(int(math.Floor((average-lowest)/width+chipEpsilon)), 0), chipBuckets-1)
+		if first <= last {
+			j = min(max(j, first), last)
+		}
 		grid[j] += amount
 	}
 	total := exactSum(grid)
