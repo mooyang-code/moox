@@ -52,7 +52,7 @@ type ClistQuery struct {
 	//
 	// PageInterval 是相邻两页请求之间的最小间隔（第一页之前不等）。
 	PageInterval time.Duration
-	// PageRetries 是某一页请求失败（超时、连接失败、5xx）后最多再试的次数；429 不重试，直接失败。
+	// PageRetries 是某一页请求失败（超时、连接失败、5xx）后最多再试的次数，负数按 0 处理；429 不重试，直接失败。
 	// 第 k 次重试前等 k×RetryBackoff（RetryBackoff 不大于 0 时按 1 秒）。重试只包住一次 HTTP 请求，
 	// 页内的行只在请求成功后才交给 visit，不会重复访问。
 	PageRetries  int
@@ -215,7 +215,8 @@ func FetchClist(ctx context.Context, query ClistQuery, visit func(ClistItem) err
 // 零重试时只走一遍主备地址，行为与加重试之前一致。返回响应内容和成功的那个地址。
 func fetchClistPageWithRetry(ctx context.Context, query ClistQuery, activeBase string, page int, values url.Values) ([]byte, string, error) {
 	var lastErr error
-	for attempt := 0; attempt <= query.PageRetries; attempt++ {
+	retries := max(query.PageRetries, 0) // 负数按 0 处理，至少请求一次
+	for attempt := 0; attempt <= retries; attempt++ {
 		if attempt > 0 {
 			backoff := query.RetryBackoff
 			if backoff <= 0 {
@@ -240,14 +241,14 @@ func fetchClistPageWithRetry(ctx context.Context, query ClistQuery, activeBase s
 			}
 		}
 		// 取消后 client.Do 的错误会被包成 ErrTimeout，必须先看 ctx，否则会把取消当成可重试的超时。
-		if ctxErr := ctx.Err(); ctxErr != nil && query.PageRetries > 0 {
+		if ctxErr := ctx.Err(); ctxErr != nil && retries > 0 {
 			return nil, "", fmt.Errorf("读 clist 第 %d 页时已取消（%v）：%w", page, lastErr, ctxErr)
 		}
-		if query.PageRetries == 0 || !clistHostRetryable(lastErr) {
+		if retries == 0 || !clistHostRetryable(lastErr) {
 			return nil, "", lastErr
 		}
 	}
-	return nil, "", fmt.Errorf("clist 第 %d 页重试 %d 次后仍失败：%w", page, query.PageRetries, lastErr)
+	return nil, "", fmt.Errorf("clist 第 %d 页重试 %d 次后仍失败：%w", page, retries, lastErr)
 }
 
 // sleep 等 d；ctx 先结束时立即返回 ctx 的错误。

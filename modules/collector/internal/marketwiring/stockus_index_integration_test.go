@@ -28,7 +28,7 @@ var (
 	spxKey = subjectsync.IndexListerKey{MarketID: "stockus", Source: "datahub", Index: "SPX"}
 )
 
-func usTestdata(t *testing.T, parts ...string) []byte {
+func usIndexTestdata(t *testing.T, parts ...string) []byte {
 	t.Helper()
 	body, err := os.ReadFile(filepath.Join(append([]string{"..", "sources", "stockus"}, parts...)...))
 	require.NoError(t, err)
@@ -131,7 +131,7 @@ func usIndexListers(t *testing.T, web *usFakeWeb) (subjectsync.Listers, subjects
 }
 
 func newUSWeb(t *testing.T) *usFakeWeb {
-	return &usFakeWeb{ndx: usTestdata(t, "nasdaq", "testdata", "ndx.json"), csv: usTestdata(t, "datahub", "testdata", "sp500.csv")}
+	return &usFakeWeb{ndx: usIndexTestdata(t, "nasdaq", "testdata", "ndx.json"), csv: usIndexTestdata(t, "datahub", "testdata", "sp500.csv")}
 }
 
 // usTag 是美股指数标签的写法：sync.source 是采集用的行情源（东方财富），成分来源另写 sync.index_source。

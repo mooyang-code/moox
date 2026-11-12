@@ -8,8 +8,9 @@
 // 是已接受的取舍（与 markets/stockus 的包注释一致）。
 //
 // 对照规则：
-//   - 单向查找：对每个成分代码，候选写法依次是原样、点换成下划线、横线换成下划线
-//     （BRK.B→BRK_B、BF.B→BF_B），先按候选的顺序、再按 105、106、107 的顺序，第一个命中的取它的市场。
+//   - 单向查找：对每个成分代码，候选写法依次是原样、点换成下划线（BRK.B→BRK_B、BF.B→BF_B），
+//     先按候选的顺序、再按 105、106、107 的顺序，第一个命中的取它的市场。
+//     横线写法不做：美股标的规则不允许代码里有横线，带横线的代码在到这里之前就被拒掉了。
 //     不会把整张列表反过来逐个校验：列表里有 SUPN_、XFLHr、AAPL42 这类代码，与成分无关。
 //   - 同一代码出现在两个市场时，取 105、106、107 顺序里的第一个。
 //   - 没有对上的代码不在返回值里，由调用方决定怎么处理。
@@ -17,10 +18,18 @@
 // 请求的节奏与上限（东方财富对本机出口 IP 做过限流，翻页必须有节制）：
 //   - 相邻两页（含相邻两个市场之间）最少间隔 PageInterval，默认 200 毫秒；
 //   - 每个市场取到的行数必须等于接口自报的 total（total 为 0 也算失败），否则整次报错，不会悄悄跳过失败页；
-//   - 每个市场最多读 MaxPages 页（默认 80，当前最大的 105 市场约 61 页），三个市场的请求总数不超过
-//     3 × MaxPages × (PageRetries + 1)，没有无界循环；
+//   - 每个市场最多读 MaxPages 页（默认 80，当前最大的 105 市场约 61 页），没有无界循环。请求总数的最坏值：
+//     每个市场每页最多 PageRetries+1 次，每个市场的第一页还会在主备两个地址上各试一遍（多 PageRetries+1 次），
+//     默认值下三个市场合计 3 × (80 × 3 + 3) = 729 次；
 //   - 某页失败（超时、连接失败、5xx）最多重试 PageRetries 次（默认 2），每次重试前等的时间逐次增加；429 不重试；
 //   - ctx 取消或到期立即退出，错误里带 ctx 的错误；整个对照的时间预算由调用方通过 ctx 给定。
+//
+// 已知差别（不处理）：
+//   - 429 限流在这里只是带 cnstock 错误类别的普通错误，没有映射成 marketdata.ErrRateLimited。
+//   - 标签同步（subjectsync.TagRunner）遇到确定性失败（例如有成分对不上交易所）也会整次重跑 3 遍，
+//     每遍重新翻一次三个市场的列表（约 140 页），重跑期间的请求量与失败原因无关。
+//   - 标签的 sync.cron 缺省是 0 * * * *（UTC，每小时一次）：美股标签的种子必须写成 sync.timezone
+//     America/New_York、sync.cron 纽约 08:00，否则每小时都会翻一遍东方财富列表。
 package exchangelist
 
 import (
@@ -102,24 +111,12 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
-// candidates 返回一个成分代码在东方财富列表里可能的写法，按优先顺序、去重。
+// candidates 返回一个成分代码在东方财富列表里可能的写法，按优先顺序：原样；带点时换成下划线。
 func candidates(code string) []string {
-	list := []string{code}
-	for _, alt := range []string{strings.ReplaceAll(code, ".", "_"), strings.ReplaceAll(code, "-", "_")} {
-		if !contains(list, alt) {
-			list = append(list, alt)
-		}
+	if alt := strings.ReplaceAll(code, ".", "_"); alt != code {
+		return []string{code, alt}
 	}
-	return list
-}
-
-func contains(list []string, value string) bool {
-	for _, item := range list {
-		if item == value {
-			return true
-		}
-	}
-	return false
+	return []string{code}
 }
 
 // Lookup 给每个成分代码对上交易所，返回 {代码: MIC}，只含对上的代码；对不上的由调用方处理。

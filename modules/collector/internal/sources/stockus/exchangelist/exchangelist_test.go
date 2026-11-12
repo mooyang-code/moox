@@ -191,8 +191,7 @@ func TestCandidatesOrder(t *testing.T) {
 	require.Equal(t, []string{"AAPL"}, candidates("AAPL"))
 	require.Equal(t, []string{"BRK.B", "BRK_B"}, candidates("BRK.B"))
 	require.Equal(t, []string{"BF.B", "BF_B"}, candidates("BF.B"))
-	require.Equal(t, []string{"A-B", "A_B"}, candidates("A-B"))
-	require.Equal(t, []string{"A.B-C", "A_B-C", "A.B_C"}, candidates("A.B-C"))
+	require.Equal(t, []string{"A-B"}, candidates("A-B"), "横线不换写法")
 }
 
 // 标普 500 全部 503 只和纳指 100 的 101 只都能对上交易所；带点的代码用下划线写法对上；CBOE 在 107。
@@ -235,19 +234,18 @@ func TestLookupPriorityAndOneWayMatch(t *testing.T) {
 	fake := newFakeClist(map[string][]string{
 		"m:105": {"BOTH1", "DOT_X", "ZZZ_"},
 		"m:106": {"BOTH1", "BOTH2", "DOT.X"},
-		"m:107": {"BOTH2", "ONLY7", "DOT_Y", "DASH_Z"},
+		"m:107": {"BOTH2", "ONLY7", "DOT_Y"},
 	})
 	server := httptest.NewServer(fake)
 	defer server.Close()
-	exchanges, err := Lookup(context.Background(), testConfig(server.URL), []string{"BOTH1", "BOTH2", "ONLY7", "DOT.X", "DOT.Y", "DASH-Z", "ZZZ", "MISSING"})
+	exchanges, err := Lookup(context.Background(), testConfig(server.URL), []string{"BOTH1", "BOTH2", "ONLY7", "DOT.X", "DOT.Y", "ZZZ", "MISSING"})
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"BOTH1":  "XNAS", // 105、106 都有，取 105
-		"BOTH2":  "XNYS", // 106、107 都有，取 106
-		"ONLY7":  "XASE",
-		"DOT.X":  "XNYS", // 原样写法 DOT.X 在 106，优先于下划线写法 DOT_X（在 105）
-		"DOT.Y":  "XASE", // 点换下划线
-		"DASH-Z": "XASE", // 横线换下划线
+		"BOTH1": "XNAS", // 105、106 都有，取 105
+		"BOTH2": "XNYS", // 106、107 都有，取 106
+		"ONLY7": "XASE",
+		"DOT.X": "XNYS", // 原样写法 DOT.X 在 106，优先于下划线写法 DOT_X（在 105）
+		"DOT.Y": "XASE", // 点换下划线
 	}, exchanges, "ZZZ、MISSING 对不上，不在结果里")
 }
 
@@ -336,13 +334,20 @@ func TestLookupRejectsRowsNotEqualToTotal(t *testing.T) {
 	require.ErrorContains(t, err, "m:105")
 	require.LessOrEqual(t, fake.count(), 3+1, "3 页读完后多读一页空页就结束")
 
-	// 自报的 total 为 0：也算失败。
-	zero := newFakeClist(map[string][]string{"m:105": {"A", "B"}, "m:106": {"B"}, "m:107": {"C"}})
+	// 自报的 total 为 0、行数是两个满页（200 行，第三页为空）：cnstock 的翻页规则放行（没有“不满一页”可拒），
+	// 只有 Lookup 自己的 total 检查能拦住；total 判断被去掉时这里会成功返回。
+	var twoPages []string
+	for i := range 200 {
+		twoPages = append(twoPages, fmt.Sprintf("T%03d", i))
+	}
+	zero := newFakeClist(map[string][]string{"m:105": twoPages, "m:106": {"B"}, "m:107": {"C"}})
 	zero.totalOf = func(string, int) int { return 0 }
 	zeroServer := httptest.NewServer(zero)
 	defer zeroServer.Close()
-	_, err = Lookup(context.Background(), testConfig(zeroServer.URL), []string{"A"})
+	_, err = Lookup(context.Background(), testConfig(zeroServer.URL), []string{"T001"})
 	require.Error(t, err)
+	require.ErrorContains(t, err, "接口自报总数 0")
+	require.Equal(t, 3, zero.count(), "两个满页加一个空页")
 
 	// 总数在翻页中途变了：报错。
 	shifting := newFakeClist(map[string][]string{"m:105": codes, "m:106": {"B"}, "m:107": {"C"}})
