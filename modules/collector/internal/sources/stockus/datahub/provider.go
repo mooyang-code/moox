@@ -57,6 +57,9 @@ type Config struct {
 	Now        func() time.Time
 	// RequestTimeout 是读 CSV 的单次请求超时，默认 30 秒。
 	RequestTimeout time.Duration
+	// ExchangeListBaseURL 是默认交易所对照用的东方财富列表地址，空则用主地址（测试用假服务）；
+	// 给了自定义的 Exchanges 时不用它。
+	ExchangeListBaseURL string
 	// Exchanges 是交易所对照，默认用 exchangelist 连东方财富；测试里换成假的。
 	Exchanges ExchangeLookup
 }
@@ -87,7 +90,7 @@ func New(cfg Config) *Provider {
 	}
 	if cfg.Exchanges == nil {
 		cfg.Exchanges = func(ctx context.Context, codes []string) (map[string]string, error) {
-			return exchangelist.Lookup(ctx, exchangelist.Config{}, codes)
+			return exchangelist.Lookup(ctx, exchangelist.Config{BaseURL: cfg.ExchangeListBaseURL}, codes)
 		}
 	}
 	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), sourceID: strings.ToLower(strings.TrimSpace(cfg.SourceID)), client: cfg.HTTPClient, now: cfg.Now, exchanges: cfg.Exchanges}
