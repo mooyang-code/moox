@@ -4766,7 +4766,7 @@ type UpsertTagReq struct {
 	AuthInfo   *commonpb.AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
 	Tag        *Tag               `protobuf:"bytes,2,opt,name=tag,proto3" json:"tag,omitempty"`
 	CreateOnly bool               `protobuf:"varint,3,opt,name=create_only,json=createOnly,proto3" json:"create_only,omitempty"`
-	// seed 标记种子导入（setup init、metadata import/apply）：新建标签时保留 tag.builtin。
+	// seed 标记种子导入（setup init、metadata import/apply）：新建标签（含 create_only）时保留 tag.builtin。
 	// 不带它新建的标签一律不是内置标签；已有标签的 builtin 无论带不带都不改。
 	Seed bool `protobuf:"varint,4,opt,name=seed,proto3" json:"seed,omitempty"`
 }

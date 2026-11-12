@@ -733,7 +733,7 @@ message UpsertTagReq {
   common.AuthInfo auth_info = 1;
   Tag tag = 2;
   bool create_only = 3;
-  // seed 标记种子导入（setup init、metadata import/apply）：新建标签时保留 tag.builtin。
+  // seed 标记种子导入（setup init、metadata import/apply）：新建标签（含 create_only）时保留 tag.builtin。
   // 不带它新建的标签一律不是内置标签；已有标签的 builtin 无论带不带都不改。
   bool seed = 4;
 }

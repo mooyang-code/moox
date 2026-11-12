@@ -82,7 +82,6 @@ func (s *Store) CreateTag(ctx context.Context, item *pb.Tag) (*pb.Tag, error) {
 	if err != nil {
 		return nil, err
 	}
-	item.Builtin = false
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO t_tags (c_space_id, c_tag_id, c_tag_name, c_description, c_mode, c_builtin, c_attrs_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -147,7 +146,7 @@ func (s *Store) ListTags(ctx context.Context, spaceID string, page *pb.Page) ([]
 		}
 		items = append(items, item)
 	}
-	return items, &pb.PageResult{Page: pageNo, Size: size, Total: uint32(total)}, rows.Err()
+	return items, &pb.PageResult{Page: pageNo, Size: size, Total: uint32(total), HasMore: uint64(offset)+uint64(len(items)) < total}, rows.Err()
 }
 
 func (s *Store) DeleteTag(ctx context.Context, spaceID, tagID string) error {
