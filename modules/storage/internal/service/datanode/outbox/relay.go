@@ -38,8 +38,6 @@ type RelayOptions struct {
 	BatchSize      int
 	PublishTimeout time.Duration
 	Metrics        *observability.ViewMetrics
-	// ChangeLogCleanupInterval 是清理过期行变更日志的间隔，默认 1 小时。
-	ChangeLogCleanupInterval time.Duration
 	// ReconnectAfterFailures lets a long-lived relay replace a stale NATS
 	// connection after EventBus restarts instead of waiting for the process to
 	// be restarted manually. It is ignored when the publisher does not expose
@@ -88,9 +86,6 @@ func NewRelay(store *pebble.Store, publisher Publisher, opts RelayOptions) (*Rel
 		// view stale even though the broker is reachable.
 		opts.PublishTimeout = 30 * time.Second
 	}
-	if opts.ChangeLogCleanupInterval <= 0 {
-		opts.ChangeLogCleanupInterval = time.Hour
-	}
 	if opts.ReconnectAfterFailures <= 0 {
 		opts.ReconnectAfterFailures = 3
 	}
@@ -115,11 +110,6 @@ func (r *Relay) Start(ctx context.Context) {
 			defer close(r.done)
 			ticker := time.NewTicker(r.options.PollInterval)
 			defer ticker.Stop()
-			cleanupTicker := time.NewTicker(r.options.ChangeLogCleanupInterval)
-			defer cleanupTicker.Stop()
-			if err := r.cleanupChangeLog(ctx); err != nil {
-				r.report(fmt.Errorf("cleanup change log: %w", err))
-			}
 			for {
 				if err := r.flush(ctx); err != nil {
 					r.report(err)
@@ -152,19 +142,10 @@ func (r *Relay) Start(ctx context.Context) {
 					return
 				case <-ctx.Done():
 					return
-				case <-cleanupTicker.C:
-					if err := r.cleanupChangeLog(ctx); err != nil {
-						r.report(fmt.Errorf("cleanup change log: %w", err))
-					}
 				}
 			}
 		}()
 	})
-}
-
-func (r *Relay) cleanupChangeLog(ctx context.Context) error {
-	_, err := r.store.CleanupChangeLog(ctx, time.Now().UTC().Add(-r.store.ChangeLogRetention()))
-	return err
 }
 
 func (r *Relay) report(err error) {
