@@ -199,3 +199,5 @@ replace github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen => ../e
 replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
 
 replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
+
+replace github.com/mooyang-code/moox/packages/netguard => ../../packages/netguard

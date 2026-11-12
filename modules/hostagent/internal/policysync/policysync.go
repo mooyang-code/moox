@@ -120,7 +120,7 @@ func (s *Syncer) syncOnce(ctx context.Context) (Result, error) {
 func fromResponse(rsp *monitorpb.GetHostPolicyRsp, now time.Time) hostpolicy.Policy {
 	policy := hostpolicy.Policy{Source: hostpolicy.SourceMonitor, FetchedAt: now, NotificationChannels: []hostpolicy.Channel{}}
 	for _, channel := range rsp.GetChannels() {
-		policy.NotificationChannels = append(policy.NotificationChannels, hostpolicy.Channel{Type: channel.GetChannelType(), WebhookURL: channel.GetWebhookUrl()})
+		policy.NotificationChannels = append(policy.NotificationChannels, hostpolicy.Channel{Type: channel.GetChannelType(), WebhookURL: channel.GetWebhookUrl(), Secret: channel.GetSecret()})
 	}
 	if w := rsp.GetWatchdog(); w != nil {
 		policy.Watchdog = hostpolicy.Watchdog{

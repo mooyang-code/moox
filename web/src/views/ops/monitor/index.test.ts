@@ -48,12 +48,21 @@ function render(overview: HealthOverview) {
         "a-modal": hidden,
         "a-form": box,
         "a-form-item": box,
-        "a-select": box,
-        "a-option": box,
+        "a-select": {
+          props: ["modelValue"],
+          emits: ["update:modelValue"],
+          template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><slot /></select>'
+        },
+        "a-option": { props: ["value"], template: '<option :value="value"><slot /></option>' },
         "a-input": {
           props: ["modelValue"],
           emits: ["update:modelValue", "press-enter"],
           template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />'
+        },
+        "a-input-password": {
+          props: ["modelValue"],
+          emits: ["update:modelValue", "press-enter"],
+          template: '<input type="password" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />'
         },
         "a-checkbox": box,
         "icon-arrow-right": true,
@@ -441,6 +450,46 @@ describe("monitor page", () => {
         .map(item => item.text())
     ).toEqual([feishu]);
     expect(page.text()).toContain("告警推送：飞书（已配置）");
+  });
+
+  it("adds a DingTalk channel with its signing secret and never shows the secret", async () => {
+    vi.spyOn(Message, "success").mockImplementation(() => ({ close: () => undefined }));
+    const dingtalk = "https://oapi.dingtalk.com/robot/send?access_token=0f6c3c1e";
+    const page = render(healthy);
+    await flushPromises();
+    mockedCallControl.mockResolvedValueOnce({ channels: [] });
+    await page
+      .findAll("button")
+      .find(button => button.text() === "消息通知设置")!
+      .trigger("click");
+    await flushPromises();
+    const section = () => page.find('[aria-label="添加通知渠道"]');
+    // 企业微信的群机器人没有密钥，输入框不出现。
+    expect(section().find('input[type="password"]').exists()).toBe(false);
+
+    await section().find("select").setValue("dingtalk");
+    expect(section().text()).toContain("加签");
+    await section().find('input:not([type="password"])').setValue(dingtalk);
+    await section().find('input[type="password"]').setValue(" SECabc ");
+
+    mockedCallControl.mockResolvedValueOnce({
+      channel: { channel_id: "nc_3", channel_type: "dingtalk", webhook_url: dingtalk, has_secret: true }
+    });
+    await page
+      .findAll("button")
+      .find(button => button.text() === "添加")!
+      .trigger("click");
+    await flushPromises();
+    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "AddNotificationChannel", {
+      channel_type: "dingtalk",
+      webhook_url: dingtalk,
+      secret: "SECabc"
+    });
+    const list = page.find('[aria-label="通知渠道"]');
+    expect(list.text()).toContain("钉钉");
+    expect(list.text()).toContain("已设置密钥");
+    expect(list.text()).not.toContain("SECabc");
+    expect((section().find('input[type="password"]').element as HTMLInputElement).value).toBe("");
   });
 
   it("always labels component chips with their names", async () => {

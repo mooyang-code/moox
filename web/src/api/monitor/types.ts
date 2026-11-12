@@ -281,12 +281,14 @@ export interface NotificationSummary {
   /** 各渠道的平台（wecom / feishu），按添加顺序，可重复。 */
   channel_types?: string[];
 }
-/** 一个告警推送渠道；告警发给全部渠道。 */
+/** 一个告警推送渠道；告警发给全部渠道。channel_type：wecom、feishu、dingtalk、webhook。 */
 export interface NotificationChannel {
   channel_id?: string;
   channel_type?: string;
   webhook_url?: string;
   created_at?: string;
+  /** 是否设置了密钥（飞书签名校验、钉钉加签或通用 Webhook 签名）；密钥本身不返回。 */
+  has_secret?: boolean;
 }
 
 /** 数据链路逐根到达历史的一个点：收线时间（UTC）、到达延迟、与上一条记录之间跳过的根数。 */

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"time"
 )
@@ -36,10 +37,12 @@ type Policy struct {
 	Watchdog             Watchdog  `json:"watchdog"`
 }
 
-// Channel 是一个告警渠道：企业微信或飞书群机器人。
+// Channel 是一个告警渠道：企业微信、飞书、钉钉群机器人或通用 Webhook。
+// Secret 是渠道密钥（飞书的签名校验密钥、钉钉的加签密钥、通用 Webhook 的签名密钥），没有时为空；它参与摘要，改了密钥会重新下发。
 type Channel struct {
 	Type       string `json:"type"`
 	WebhookURL string `json:"webhook_url"`
+	Secret     string `json:"secret,omitempty"`
 }
 
 // Watchdog 是主机守护参数，空值表示使用守护自己的默认值。时长用 Go 的时长写法，例如 "10m"。
@@ -67,13 +70,16 @@ func Duration(value string) (time.Duration, error) {
 	return parsed, nil
 }
 
+// channelTypes 与 packages/notification 支持的渠道类型一致。
+var channelTypes = []string{"wecom", "feishu", "dingtalk", "webhook"}
+
 // Validate 检查渠道与参数是否可用。
 func (p Policy) Validate() error {
 	if p.Source != SourceSeed && p.Source != SourceMonitor {
 		return fmt.Errorf("unknown host policy source %q", p.Source)
 	}
 	for i, channel := range p.NotificationChannels {
-		if channel.Type != "wecom" && channel.Type != "feishu" {
+		if !slices.Contains(channelTypes, channel.Type) {
 			return fmt.Errorf("channel %d: unknown type %q", i, channel.Type)
 		}
 		if channel.WebhookURL == "" {

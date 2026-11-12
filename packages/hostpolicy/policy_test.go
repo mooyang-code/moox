@@ -74,6 +74,20 @@ func TestHashIgnoresChannelOrderAndMetadata(t *testing.T) {
 	b.NotificationChannels = b.NotificationChannels[:1]
 	if a.Hash() == b.Hash() {
 		t.Fatal("渠道变化应改变摘要")
+	} // 只改密钥也要改变摘要，否则主机上的策略缓存不会重写；四种渠道类型都能通过校验。
+	c := samplePolicy()
+	c.NotificationChannels = []Channel{{Type: "dingtalk", WebhookURL: "https://oapi.dingtalk.com/robot/send?access_token=x", Secret: "SEC1"}, {Type: "webhook", WebhookURL: "https://alerts.example.com/moox"}}
+	d := c
+	d.NotificationChannels = []Channel{{Type: "dingtalk", WebhookURL: "https://oapi.dingtalk.com/robot/send?access_token=x", Secret: "SEC2"}, c.NotificationChannels[1]}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if c.Hash() == d.Hash() {
+		t.Fatal("密钥变化应改变摘要")
+	}
+	c.NotificationChannels[0].Type = "sms"
+	if err := c.Validate(); err == nil {
+		t.Fatal("未知渠道类型应被拒绝")
 	}
 }
 

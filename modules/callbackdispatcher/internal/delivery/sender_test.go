@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/notification"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,8 +78,8 @@ func TestSendFormatAndSignatureVerifiableByExampleCode(t *testing.T) {
 	mac := hmac.New(sha256.New, []byte("whsec_test"))
 	mac.Write([]byte(timestamp + "." + string(captured.body)))
 	require.Equal(t, "sha256="+hex.EncodeToString(mac.Sum(nil)), captured.header.Get("X-MooX-Signature"))
-	require.Equal(t, Sign("whsec_test", timestamp, captured.body), captured.header.Get("X-MooX-Signature"))
-	require.NotEqual(t, Sign("other", timestamp, captured.body), captured.header.Get("X-MooX-Signature"))
+	require.Equal(t, notification.WebhookSignature("whsec_test", timestamp, captured.body), captured.header.Get("X-MooX-Signature"))
+	require.NotEqual(t, notification.WebhookSignature("other", timestamp, captured.body), captured.header.Get("X-MooX-Signature"))
 	issued, err := strconv.ParseInt(timestamp, 10, 64)
 	require.NoError(t, err)
 	require.WithinDuration(t, time.Now(), time.UnixMilli(issued), 10*time.Second, "时间戳是毫秒")

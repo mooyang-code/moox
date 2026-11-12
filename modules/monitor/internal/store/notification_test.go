@@ -47,21 +47,21 @@ func TestTableExistsDistinguishesFreshDatabase(t *testing.T) {
 func TestNotificationChannelsAddListDelete(t *testing.T) {
 	repos := openNotificationTestDB(t).Repositories()
 	ctx := t.Context()
-	first, err := repos.Notifications.Add(ctx, "wecom", "https://example.com/first")
+	first, err := repos.Notifications.Add(ctx, "wecom", "https://example.com/first", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := repos.Notifications.Add(ctx, "feishu", " https://example.com/second ")
+	second, err := repos.Notifications.Add(ctx, "feishu", " https://example.com/second ", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.ChannelID == "" || first.ChannelID == second.ChannelID {
 		t.Fatalf("channels need distinct ids: %q %q", first.ChannelID, second.ChannelID)
 	}
-	if _, err := repos.Notifications.Add(ctx, "feishu", "https://example.com/first"); !errors.Is(err, ErrNotificationChannelExists) {
+	if _, err := repos.Notifications.Add(ctx, "feishu", "https://example.com/first", ""); !errors.Is(err, ErrNotificationChannelExists) {
 		t.Fatalf("duplicate URL accepted: %v", err)
 	}
-	if _, err := repos.Notifications.Add(ctx, "sms", "https://example.com/third"); err == nil {
+	if _, err := repos.Notifications.Add(ctx, "sms", "https://example.com/third", ""); err == nil {
 		t.Fatal("unknown channel type accepted")
 	}
 	channels, err := repos.Notifications.List(ctx)

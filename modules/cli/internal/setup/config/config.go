@@ -9,7 +9,6 @@ import (
 	"io"
 	"math"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,6 +24,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/factorname"
+	"github.com/mooyang-code/moox/packages/notification"
 	"github.com/mooyang-code/moox/packages/security/domainpolicy"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
@@ -230,7 +230,7 @@ type CollectorRetention struct {
 // 初始化和部署不要求（用户可以稍后在管理台添加渠道），只有把 moox.toml 的渠道同步到 Monitor 的命令需要它。
 func (m Manifest) RequireNotification() error {
 	if strings.TrimSpace(m.Notification.WebhookURL) == "" {
-		return fmt.Errorf("config_invalid: notification.webhook_url is required: moox.toml 的 [notification] 没有配置 %s 群机器人 webhook；可以先用 config set 填写，或直接在管理台“监控 › 告警渠道”里添加", m.Notification.ChannelType)
+		return fmt.Errorf("config_invalid: notification.webhook_url is required: moox.toml 的 [notification] 没有配置%s的 webhook 地址；可以先用 config set 填写，或直接在管理台“监控 › 告警渠道”里添加", notification.ChannelLabel(m.Notification.ChannelType))
 	}
 	return nil
 }
@@ -238,6 +238,8 @@ func (m Manifest) RequireNotification() error {
 type Notification struct {
 	ChannelType string `toml:"channel_type"`
 	WebhookURL  string `toml:"webhook_url"`
+	// Secret 选填：飞书机器人的签名校验密钥、钉钉机器人的加签密钥，或通用 Webhook 的签名密钥。
+	Secret string `toml:"secret"`
 }
 
 // ExchangeKey 是一条 [[exchange_keys]]：交易所 API 密钥。setup apply 把它写进 SecretMgr（只建不改，见 ID）。
@@ -743,12 +745,14 @@ func validate(manifest *Manifest) error {
 	if manifest.Notification.ChannelType == "" {
 		manifest.Notification.ChannelType = "wecom"
 	}
-	if manifest.Notification.ChannelType != "wecom" && manifest.Notification.ChannelType != "feishu" {
-		return fmt.Errorf("config_invalid: notification.channel_type must be wecom or feishu")
+	if !notification.ValidChannelType(manifest.Notification.ChannelType) {
+		return fmt.Errorf("config_invalid: notification.channel_type must be wecom, feishu, dingtalk or webhook")
 	}
 	manifest.Notification.WebhookURL = strings.TrimSpace(manifest.Notification.WebhookURL)
-	if manifest.Notification.WebhookURL != "" && !validNotificationWebhook(manifest.Notification.ChannelType, manifest.Notification.WebhookURL) {
-		return fmt.Errorf("config_invalid: notification.webhook_url must use HTTPS and match an approved %s platform host", manifest.Notification.ChannelType)
+	manifest.Notification.Secret = strings.TrimSpace(manifest.Notification.Secret)
+	channel := notification.ChannelConfig{Type: notification.ChannelType(manifest.Notification.ChannelType), WebhookURL: manifest.Notification.WebhookURL, Secret: manifest.Notification.Secret}
+	if err := channel.Validate(); err != nil {
+		return fmt.Errorf("config_invalid: notification.webhook_url 必须是%s的 HTTPS 地址（通用 Webhook 不限域名）；notification.secret 企业微信不能填: %v", notification.ChannelLabel(manifest.Notification.ChannelType), err)
 	}
 	if err := validateExchangeKeys(manifest.ExchangeKeys); err != nil {
 		return err
@@ -1061,31 +1065,6 @@ func validateFactorTaskName(name string) error {
 // It intentionally covers the standard Tencent Cloud SCF regions used by MooX.
 func supportedSCFRegion(region string) bool {
 	return tencent.IsSCFRegion(region)
-}
-
-func validHTTPSWebhook(rawURL string) bool {
-	parsed, err := url.ParseRequestURI(rawURL)
-	return err == nil && parsed.Scheme == "https" && parsed.Host != "" &&
-		parsed.User == nil && parsed.Fragment == ""
-}
-
-func validNotificationWebhook(channelType, rawURL string) bool {
-	if !validHTTPSWebhook(rawURL) {
-		return false
-	}
-	parsed, err := url.ParseRequestURI(rawURL)
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
-	switch channelType {
-	case "wecom":
-		return host == "qyapi.weixin.qq.com"
-	case "feishu":
-		return host == "open.feishu.cn" || strings.HasSuffix(host, ".feishu.cn") || strings.HasSuffix(host, ".larksuite.com")
-	default:
-		return false
-	}
 }
 
 var providerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)

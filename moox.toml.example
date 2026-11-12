@@ -135,11 +135,14 @@ maintenance_offset = "35s"
 maintenance_timeout = "20s"
 max_rows_per_pass = 50000
 
-# 告警推送渠道，初始化前必填：没有推送地址时监控只展示不通知，等于没有告警。
-# channel_type 为 wecom 或 feishu，webhook_url 是对应群机器人的地址；Monitor 首次建库时据此写入。
+# 告警推送渠道。webhook_url 可以先留空，部署后在管理台「监控 › 告警渠道」里添加；没有推送地址时监控只展示不通知。
+# channel_type：wecom（企业微信）、feishu（飞书）、dingtalk（钉钉）、webhook（通用 Webhook，任意公网 HTTPS 地址）。
+# webhook_url 是对应群机器人的地址；Monitor 首次建库时据此写入。
+# secret 选填：飞书机器人启用“签名校验”、钉钉机器人启用“加签”时填它的密钥；通用 Webhook 填了就带签名请求头。企业微信留空。
 [notification]
 channel_type = "wecom"
 webhook_url = ""
+secret = ""
 
 # 归档对象存储：归档 worker 导出分区后传一份到标准 S3 接口的对象存储。不写这一段时用因子机上内置的 SeaweedFS
 # （随 archive-worker 部署，只听 127.0.0.1，密钥在机器上生成；和归档文件同盘，不防整盘故障）。

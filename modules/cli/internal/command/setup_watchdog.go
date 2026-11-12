@@ -82,7 +82,7 @@ func watchdogSeed(manifest setupconfig.Manifest) ([]byte, error) {
 	}
 	seed := hostpolicy.Policy{Source: hostpolicy.SourceSeed, FetchedAt: time.Now().UTC()}
 	if url := strings.TrimSpace(manifest.Notification.WebhookURL); url != "" {
-		seed.NotificationChannels = []hostpolicy.Channel{{Type: channel, WebhookURL: url}}
+		seed.NotificationChannels = []hostpolicy.Channel{{Type: channel, WebhookURL: url, Secret: strings.TrimSpace(manifest.Notification.Secret)}}
 	}
 	if err := seed.Validate(); err != nil {
 		return nil, err

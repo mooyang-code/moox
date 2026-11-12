@@ -76,6 +76,7 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			// 告警推送渠道来自 moox.toml 的 [notification]；Monitor 首次建库时据此写入全局渠道，没填地址就不写，用户稍后在管理台添加。
 			values["MOOX_NOTIFICATION_CHANNEL_TYPE"] = manifest.Notification.ChannelType
 			values["MOOX_NOTIFICATION_WEBHOOK_URL"] = manifest.Notification.WebhookURL
+			values["MOOX_NOTIFICATION_SECRET"] = manifest.Notification.Secret
 		}
 		if id == "admin" {
 			// 证书巡检每次从本机主机策略缓存读取告警渠道（HostAgent 从 Monitor 同步）。

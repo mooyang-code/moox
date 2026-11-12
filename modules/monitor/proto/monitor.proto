@@ -326,17 +326,20 @@ message NotificationSummary {
   int32 channel_count = 1;
   repeated string channel_types = 2;
 }
-// NotificationChannel 是一个告警推送渠道（企业微信或飞书群机器人）。告警发给全部渠道。
-// Webhook URL 本身就是推送凭据，控制台只允许全局管理员列出渠道。
+// NotificationChannel 是一个告警推送渠道。告警发给全部渠道。
+// channel_type：wecom（企业微信）、feishu（飞书）、dingtalk（钉钉）、webhook（通用 Webhook）。
+// Webhook URL 本身就是推送凭据，控制台只允许全局管理员列出渠道。密钥不返回，has_secret 只说明是否设置。
 message NotificationChannel {
   string channel_id = 1;
   string channel_type = 2;
   string webhook_url = 3;
   string created_at = 4;
+  bool has_secret = 5;
 }
 message ListNotificationChannelsReq {}
 message ListNotificationChannelsRsp { common.RetInfo ret_info = 1; repeated NotificationChannel channels = 2; }
-message AddNotificationChannelReq { string channel_type = 1; string webhook_url = 2; }
+// secret 选填：飞书机器人的签名校验密钥、钉钉机器人的加签密钥，或通用 Webhook 的签名密钥；企业微信不接受。
+message AddNotificationChannelReq { string channel_type = 1; string webhook_url = 2; string secret = 3; }
 message AddNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannel channel = 2; }
 message DeleteNotificationChannelReq { string channel_id = 1; }
 message DeleteNotificationChannelRsp { common.RetInfo ret_info = 1; }
@@ -344,10 +347,11 @@ message DeleteNotificationChannelRsp { common.RetInfo ret_info = 1; }
 // GetHostPolicyReq 由每台主机的 HostAgent 定期调用，拉取主机策略并缓存到 <部署根>/run/host-policy.json，
 // 供主机守护（moox-runtime watch）与证书巡检直接推送告警。只允许调用方 host-agent。
 message GetHostPolicyReq {}
-// HostPolicyChannel 是一个告警渠道；Webhook URL 本身就是推送凭据。
+// HostPolicyChannel 是一个告警渠道；Webhook URL 本身就是推送凭据。secret 是渠道密钥（没有时为空）。
 message HostPolicyChannel {
   string channel_type = 1;
   string webhook_url = 2;
+  string secret = 3;
 }
 // HostWatchdogPolicy 是主机守护参数，空值表示各主机使用守护自己的默认值；时长用 Go 的写法，例如 "10m"。
 message HostWatchdogPolicy {

@@ -164,6 +164,7 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 }
 
 // seedNotificationChannel 在首次建库时按部署配置（MOOX_NOTIFICATION_*）写入第一个推送渠道；没有配置推送地址时不写入。
+// MOOX_NOTIFICATION_SECRET 选填，企业微信不使用。
 func seedNotificationChannel(ctx context.Context, repositories *store.Repositories) error {
 	if repositories == nil || repositories.Notifications == nil {
 		return fmt.Errorf("notification repository is unavailable")
@@ -176,9 +177,10 @@ func seedNotificationChannel(ctx context.Context, repositories *store.Repositori
 	if url == "" {
 		return nil
 	}
-	if _, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(typ), WebhookURL: url}); err != nil {
+	secret := strings.TrimSpace(os.Getenv("MOOX_NOTIFICATION_SECRET"))
+	if _, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(typ), WebhookURL: url, Secret: secret}); err != nil {
 		return fmt.Errorf("notification channel: %w", err)
 	}
-	_, err := repositories.Notifications.Add(ctx, typ, url)
+	_, err := repositories.Notifications.Add(ctx, typ, url, secret)
 	return err
 }

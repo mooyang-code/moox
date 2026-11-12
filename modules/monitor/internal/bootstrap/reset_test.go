@@ -41,7 +41,7 @@ func TestMonitorResetClassifiesEveryTable(t *testing.T) {
 func TestMonitorPauseSilencesAlertsAndResetKeepsChannels(t *testing.T) {
 	life, db, runtime := newMonitorResetEnv(t)
 	ctx := context.Background()
-	_, err := runtime.Repositories.Notifications.Add(ctx, "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abcd1234")
+	_, err := runtime.Repositories.Notifications.Add(ctx, "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abcd1234", "")
 	require.NoError(t, err)
 
 	sender, err := runtime.alertSender(ctx)

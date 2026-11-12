@@ -84,7 +84,7 @@ func hostPolicySenders(path string) []notification.Sender {
 	}
 	var senders []notification.Sender
 	for _, channel := range policy.NotificationChannels {
-		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.Type), WebhookURL: channel.WebhookURL})
+		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.Type), WebhookURL: channel.WebhookURL, Secret: channel.Secret})
 		if err != nil {
 			log.Warn("certificate watch skipped an invalid notification channel")
 			continue

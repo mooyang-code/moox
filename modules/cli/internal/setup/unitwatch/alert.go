@@ -254,7 +254,7 @@ func sendAlerts(ctx context.Context, messages []notification.Message, policy hos
 		delivered := false
 		var failures []string
 		for _, channel := range policy.NotificationChannels {
-			sender, err := newSender(notification.ChannelConfig{Type: notification.ChannelType(channel.Type), WebhookURL: channel.WebhookURL})
+			sender, err := newSender(notification.ChannelConfig{Type: notification.ChannelType(channel.Type), WebhookURL: channel.WebhookURL, Secret: channel.Secret})
 			if err == nil {
 				sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 				err = sender.Send(sendCtx, msg)

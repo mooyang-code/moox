@@ -12,6 +12,7 @@ require (
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/netguard v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats.go v1.51.0 // test fixture only
@@ -149,3 +150,5 @@ replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wir
 replace github.com/mooyang-code/moox/modules/callbackdispatcher/proto/callbackdispatchergen => ./proto/callbackdispatchergen
 
 replace github.com/mooyang-code/moox/packages/netguard => ../../packages/netguard
+
+replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification

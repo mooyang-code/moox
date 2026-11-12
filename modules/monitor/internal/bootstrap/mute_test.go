@@ -19,7 +19,7 @@ import (
 func TestMuteAlertsSilencesPushesUntilUnmuted(t *testing.T) {
 	_, _, runtime := newMonitorResetEnv(t)
 	ctx := context.Background()
-	_, err := runtime.Repositories.Notifications.Add(ctx, "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abcd1234")
+	_, err := runtime.Repositories.Notifications.Add(ctx, "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abcd1234", "")
 	require.NoError(t, err)
 	service := monitorrpc.New(runtime.Repositories, monitorrpc.Options{Lifecycle: runtime.life.Load})
 

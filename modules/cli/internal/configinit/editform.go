@@ -26,6 +26,7 @@ type ConfigForm struct {
 	Notification struct {
 		ChannelType string `json:"channel_type"`
 		WebhookURL  string `json:"webhook_url"`
+		Secret      string `json:"secret"`
 	} `json:"notification"`
 	// ArchiveObjectStore 是 [archive_object_store]：关闭时整段删除。
 	ArchiveObjectStore FormObjectStore `json:"archive_object_store"`
@@ -103,7 +104,7 @@ func formFrom(m setupconfig.Manifest) ConfigForm {
 	var form ConfigForm
 	form.Admin.Username, form.Admin.Password = m.Admin.Username, m.Admin.Password
 	form.Tencent.SecretID, form.Tencent.SecretKey = m.TencentCloud.SecretID, m.TencentCloud.SecretKey
-	form.Notification.ChannelType, form.Notification.WebhookURL = m.Notification.ChannelType, m.Notification.WebhookURL
+	form.Notification.ChannelType, form.Notification.WebhookURL, form.Notification.Secret = m.Notification.ChannelType, m.Notification.WebhookURL, m.Notification.Secret
 	// 没配时给出常用的默认值（低频存储、虚拟主机风格、HTTPS），开关关着。
 	form.ArchiveObjectStore = FormObjectStore{Prefix: "moox-archive/", URLStyle: "virtual", UseTLS: true, StorageClass: "STANDARD_IA"}
 	if s := m.ArchiveObjectStore; s != nil {
@@ -178,6 +179,7 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 		{"管理员用户名", form.Admin.Username}, {"管理员密码", form.Admin.Password},
 		{"腾讯云 SecretId", form.Tencent.SecretID}, {"腾讯云 SecretKey", form.Tencent.SecretKey},
 		{"告警渠道", form.Notification.ChannelType}, {"告警 Webhook 地址", form.Notification.WebhookURL},
+		{"告警渠道的密钥", form.Notification.Secret},
 	} {
 		if err := checkText(field.name, field.value, false); err != nil {
 			return nil, err
@@ -191,6 +193,7 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 	set("tencent_cloud", "secret_key", tomlString(form.Tencent.SecretKey))
 	set("notification", "channel_type", tomlString(strings.TrimSpace(form.Notification.ChannelType)))
 	set("notification", "webhook_url", tomlString(strings.TrimSpace(form.Notification.WebhookURL)))
+	set("notification", "secret", tomlString(strings.TrimSpace(form.Notification.Secret)))
 	var err error
 	if lines, err = applyObjectStore(lines, form.ArchiveObjectStore); err != nil {
 		return nil, err

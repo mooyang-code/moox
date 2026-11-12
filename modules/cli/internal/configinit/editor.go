@@ -61,6 +61,8 @@ type Overview struct {
 	Admin      string       `json:"admin"`
 	Channel    string       `json:"channel"`
 	HasWebhook bool         `json:"has_webhook"`
+	// HasNotifySecret 表示告警渠道配了密钥（飞书签名校验、钉钉加签或通用 Webhook 签名）。
+	HasNotifySecret bool `json:"has_notify_secret"`
 	// ExchangeKeys 是 [[exchange_keys]] 的概览，顺序与配置里一致；明文只在 reveal 时按序号给出。
 	ExchangeKeys []ExchangeKeyView `json:"exchange_keys"`
 }
@@ -256,6 +258,8 @@ func (e *editorSession) reveal(w http.ResponseWriter, r *http.Request) {
 		value = m.TencentCloud.SecretKey
 	case field == "notification.webhook_url":
 		value = m.Notification.WebhookURL
+	case field == "notification.secret":
+		value = m.Notification.Secret
 	case strings.HasPrefix(field, "exchange_keys."):
 		// 按序号取：exchange_keys.<序号>.api_key | secret_key | passphrase。
 		parts := strings.Split(field, ".")
@@ -439,12 +443,15 @@ func EncryptFile(path string, keys configcrypt.KeyStore) (alreadyEncrypted bool,
 	return false, replaceFile(path, sealed)
 }
 
+// channelNames 是告警渠道类型在页面上的称呼，与录入页、编辑页的下拉选项一致。
+var channelNames = map[string]string{"wecom": "企业微信群机器人", "feishu": "飞书群机器人", "dingtalk": "钉钉群机器人", "webhook": "通用 Webhook"}
+
 // describe 把配置整理成给人看的概览，不含任何秘密值。
 func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
 	view := Overview{
 		Encrypted: encrypted, KeyStore: where, SecretID: maskID(m.TencentCloud.SecretID),
 		Region: regionName(m.TencentCloud.Region), Admin: m.Admin.Username,
-		Channel: map[string]string{"wecom": "企业微信群机器人", "feishu": "飞书群机器人"}[m.Notification.ChannelType], HasWebhook: m.Notification.WebhookURL != "",
+		Channel: channelNames[m.Notification.ChannelType], HasWebhook: m.Notification.WebhookURL != "", HasNotifySecret: m.Notification.Secret != "",
 	}
 	view.ExchangeKeys = make([]ExchangeKeyView, 0, len(m.ExchangeKeys))
 	for i, key := range m.ExchangeKeys {

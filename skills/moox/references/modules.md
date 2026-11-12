@@ -137,7 +137,7 @@
 
 ## 监控
 
-- **做什么**：组件健康、数据新鲜度、主机资源、告警推送（企业微信 / 飞书）。管理台首页的“需要处理”来自这里。
+- **做什么**：组件健康、数据新鲜度、主机资源、告警推送（企业微信、飞书、钉钉、通用 Webhook）。管理台首页的“需要处理”来自这里。
 - **常用**：`./bin/moox-cli doctor alerts`（[`monitor-attention.md`](monitor-attention.md)）、`doctor bootstrap`、`doctor diagnose`；
   `monitor health|arrival|hosts|host-metrics` 看总览、数据到达历史与主机资源曲线；`monitor mute|unmute|mute-status` 临时屏蔽推送；
   告警渠道以 `moox.toml` 为准，`config notification` 同步。
