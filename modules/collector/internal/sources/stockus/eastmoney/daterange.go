@@ -26,7 +26,7 @@ const (
 // beg=20261028&end=20261031 返回 223 根，末根 10-31 04:00；beg=end 为空。
 //
 // 已知差别：夏令时首根（21:35）实时取时，目标根还没出来，beg 取前一天会带回前一时段的根，返回非空但没有一根在请求区间内，
-// 流水线报 ErrHistoryCoverage（hasRowsWithinCoverage），本源不重试（冬令时首根与港股此时返回空，是 ErrNoClosedBar，会重试）；
+// 流水线按回看覆盖核对（最新一根早于请求起点）报 ErrHistoryCoverage，本源不重试（冬令时首根与港股此时返回空，是 ErrNoClosedBar，会重试）；
 // 请求区间内一根都没有、区间外的根又全被跳过时报 ErrNoClosedBar，补采会把它当成“行情源确认没有”。
 // 请求的区间是 [StartTime, EndTime)（按开始时刻）：L1 是首根的收盘标签 StartTime+周期，L2 是末根的收盘标签 EndTime。
 // 不带起点时不带 beg；终点没写时取请求时刻；都没有时取一个远期日期。日期都按北京时间。

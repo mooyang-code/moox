@@ -29,12 +29,14 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent"
 	hkeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney"
 	hktencent "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/tencent"
+	useastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/eastmoney"
 )
 
 const (
 	crypto  = marketdata.MarketID("crypto")
 	stockcn = marketdata.MarketID("stockcn")
 	stockhk = marketdata.MarketID("stockhk")
+	stockus = marketdata.MarketID("stockus")
 )
 
 // stockCNInstrumentTimeout 是 A 股标的快照单次请求超时（全市场快照分页多）。
@@ -139,6 +141,12 @@ func build() *marketdata.Catalog {
 		}),
 		// 港股：恒生指数成分来源（腾讯），只取指数成分，不取 K 线、不取全部标的。
 		entry(stockhk, marketdata.InstrumentEquity, "tencent", hktencent.DefaultSourceID, fixed(func() marketdata.MarketProvider { return hktencent.New(hktencent.Config{}) })),
+		// 美股股票：K 线来源按 config/markets/stockus/route.yaml 分配，只有东方财富一家，只取 K 线；
+		// 指数成分（标普 500、纳斯达克 100）的来源另行登记。
+		routedEntry(stockus, marketdata.InstrumentEquity, "eastmoney", useastmoney.DefaultSourceID, func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+			s := deps.Settings
+			return useastmoney.New(useastmoney.Config{BaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
+		}),
 	)
 }
 
