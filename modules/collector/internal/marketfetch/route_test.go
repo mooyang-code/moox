@@ -140,8 +140,8 @@ func TestStockCNSubjectsKeepTheirPrimarySource(t *testing.T) {
 	}
 }
 
-// 路由 ID 的三种现有取值：按路由分配的带市场、品种、频率；单一来源、市场写了按数据源命名的带数据源、品种、频率；
-// 其余单一来源用流水线自带的（不带频率），推送路径没有流水线，是空串。
+// 路由 ID 的三种现有取值：按路由分配的带市场、品种、频率；市场没有路由文件的带数据源、品种、频率；
+// 市场有路由文件但品种不归路由管的，用流水线自带的（不带频率），推送路径没有流水线，是空串。
 func TestKlineRouteIDKeepsTheThreeExistingForms(t *testing.T) {
 	for _, tc := range []struct {
 		marketID   string
@@ -166,8 +166,12 @@ func TestKlineRouteIDKeepsTheThreeExistingForms(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tc.want, got, "%+v", tc)
 	}
-	_, err := klineRouteID("stockus", marketdata.InstrumentEquity, "x", "", "5m")
-	require.Error(t, err, "未登记的市场报错")
+	// 没有路由文件的市场一律按数据源命名，不要求市场登记过；没写品种时才要查市场的默认品种。
+	got, err := klineRouteID("stockus", marketdata.InstrumentEquity, "x", "", "5m")
+	require.NoError(t, err)
+	require.Equal(t, "x_equity_kline_5m", got)
+	_, err = klineRouteID("stockus", "", "x", "", "5m")
+	require.Error(t, err, "未登记的市场没有默认品种")
 }
 
 // 路由只管它写明的品种：同一个市场的其他品种、没有路由文件的市场，来源都是任务或标签指定的那一个。
@@ -208,24 +212,27 @@ func TestRouteForOnlyCoversItsInstrument(t *testing.T) {
 }
 
 func TestRouteValidation(t *testing.T) {
+	ms := func(value int) *int { return &value }
 	provider := RouteProvider{ID: "eastmoney", SourceID: "stockcn_http", Weight: 1, Role: "primary"}
 	klines := []KlineRoute{{Frequency: "5m", Providers: []RouteProvider{provider}}}
 	cases := map[string]struct {
 		route Route
 		want  string
 	}{
-		"没有 primary": {Route{MarketID: "stockcn", InstrumentType: "equity", Klines: []KlineRoute{{Frequency: "5m", Providers: []RouteProvider{{ID: "tdx", Weight: 1, Role: "fallback"}}}}}, "至少要有一个 primary"},
-		"频率重复":       {Route{MarketID: "stockcn", InstrumentType: "equity", Klines: []KlineRoute{{Frequency: "5m", Providers: []RouteProvider{provider}}, {Frequency: "5m", Providers: []RouteProvider{provider}}}}, "重复"},
-		"频率不规范":      {Route{MarketID: "stockcn", InstrumentType: "equity", Klines: []KlineRoute{{Frequency: "5min", Providers: []RouteProvider{provider}}}}, "无效"},
-		"角色无效":       {Route{MarketID: "stockcn", InstrumentType: "equity", Klines: []KlineRoute{{Frequency: "5m", Providers: []RouteProvider{{ID: "eastmoney", Weight: 1, Role: "shadow"}}}}}, "role"},
-		"市场不是所在目录的":  {Route{MarketID: "crypto", InstrumentType: "equity", Klines: klines}, "market_id"},
-		"没写品种":       {Route{MarketID: "stockcn", Klines: klines}, "instrument_type"},
-		"结算延迟为负":     {Route{MarketID: "stockcn", InstrumentType: "equity", SettleDelayMS: -1, Klines: klines}, "settle_delay_ms"},
+		"没有 primary": {Route{MarketID: "stockcn", InstrumentType: "equity", SettleDelayMS: ms(800), Klines: []KlineRoute{{Frequency: "5m", Providers: []RouteProvider{{ID: "tdx", Weight: 1, Role: "fallback"}}}}}, "至少要有一个 primary"},
+		"频率重复":       {Route{MarketID: "stockcn", InstrumentType: "equity", SettleDelayMS: ms(800), Klines: []KlineRoute{{Frequency: "5m", Providers: []RouteProvider{provider}}, {Frequency: "5m", Providers: []RouteProvider{provider}}}}, "重复"},
+		"频率不规范":      {Route{MarketID: "stockcn", InstrumentType: "equity", SettleDelayMS: ms(800), Klines: []KlineRoute{{Frequency: "5min", Providers: []RouteProvider{provider}}}}, "无效"},
+		"角色无效":       {Route{MarketID: "stockcn", InstrumentType: "equity", SettleDelayMS: ms(800), Klines: []KlineRoute{{Frequency: "5m", Providers: []RouteProvider{{ID: "eastmoney", Weight: 1, Role: "shadow"}}}}}, "role"},
+		"市场不是所在目录的":  {Route{MarketID: "crypto", InstrumentType: "equity", SettleDelayMS: ms(800), Klines: klines}, "market_id"},
+		"没写品种":       {Route{MarketID: "stockcn", SettleDelayMS: ms(800), Klines: klines}, "instrument_type"},
+		"结算延迟为负":     {Route{MarketID: "stockcn", InstrumentType: "equity", SettleDelayMS: ms(-1), Klines: klines}, "settle_delay_ms"},
+		"没写结算延迟":     {Route{MarketID: "stockcn", InstrumentType: "equity", Klines: klines}, "settle_delay_ms 必填"},
 	}
 	for name, tc := range cases {
 		require.ErrorContains(t, tc.route.validate("stockcn"), tc.want, name)
 	}
-	require.NoError(t, Route{MarketID: "stockhk", InstrumentType: "equity", SettleDelayMS: 5000, Klines: klines}.validate("stockhk"), "路由的市场等于所在目录的市场即可")
+	require.NoError(t, Route{MarketID: "stockcn", InstrumentType: "equity", SettleDelayMS: ms(0), Klines: klines}.validate("stockcn"), "不需要等待时写 0")
+	require.NoError(t, Route{MarketID: "stockhk", InstrumentType: "equity", SettleDelayMS: ms(5000), Klines: klines}.validate("stockhk"), "路由的市场等于所在目录的市场即可")
 }
 
 // 数据源配置里的 market 必须等于所在目录的市场。
@@ -241,6 +248,7 @@ func TestSourceFileMustBelongToItsMarketDirectory(t *testing.T) {
 }
 
 // 生成采集计划时校验实际生效的 not_before_ms 不小于路由的结算延迟：小了目标那根每期都被丢掉，直接报错。
+// 路由文件漏写结算延迟时加载就报错，不会悄悄跳过这项校验。
 // 来源不按路由分配的分组（指数、crypto）没有结算延迟，不校验。
 func TestBuildDesiredStateRejectsNotBeforeShorterThanSettleDelay(t *testing.T) {
 	options := func(notBeforeMS int) PlanOptions {
@@ -255,6 +263,13 @@ func TestBuildDesiredStateRejectsNotBeforeShorterThanSettleDelay(t *testing.T) {
 	require.NoError(t, err)
 	_, err = BuildDesiredState(options(5000), equity, nil)
 	require.NoError(t, err)
+
+	// 本地执行端与云函数走同一个起跑等待，同样校验；推送不拉取，不校验。
+	local, stream := options(0), options(0)
+	local.Modes = map[string]DatasetMode{"ds_cn_5m": {Mode: IngestPull, Executor: PlanExecutorLocal}}
+	stream.Modes = map[string]DatasetMode{"ds_cn_5m": {Mode: IngestStreaming}}
+	_, err = BuildDesiredState(local, equity, nil)
+	require.ErrorContains(t, err, "小于路由文件的结算延迟 800 毫秒")
 
 	index := []TaskGroup{{Provider: "eastmoney", SourceID: "index_http", MarketType: "index", MarketID: "stockcn", InstrumentType: "index",
 		DatasetID: "ds_cn_index", Frequency: "5m", Subjects: []string{"000300.XSHG"}}}
@@ -274,4 +289,8 @@ klines:
 	require.ErrorContains(t, err, "小于路由文件的结算延迟 5000 毫秒")
 	_, err = BuildDesiredState(options(5000), equity, nil)
 	require.NoError(t, err)
+
+	writeMarketFile(t, t.TempDir(), "stockcn/route.yaml", "market_id: stockcn\ninstrument_type: equity\nklines:\n  - frequency: 5m\n    providers:\n      - {id: eastmoney, source_id: stockcn_http, weight: 1, role: primary}\n")
+	_, err = BuildDesiredState(options(800), equity, nil)
+	require.ErrorContains(t, err, "settle_delay_ms 必填")
 }

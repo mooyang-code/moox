@@ -30,7 +30,7 @@ type KlinePipeline struct {
 	Router         *marketdata.Router
 	Storage        Storage
 	CandidateChain []string
-	// RouteID 是单一来源流水线自带的路由 ID（<市场>_<品种>_kline），见 klineRouteID。
+	// RouteID 是单一来源流水线自带的路由 ID（<市场>_<品种>_kline）；只有市场有路由文件、而这个品种不归路由管时才用到，见 klineRouteID。
 	RouteID        string
 	SpaceID        string
 	MarketID       string
@@ -649,38 +649,32 @@ func (p *KlinePipeline) observeFeed(req Request, routeID, providerID, feedKind, 
 
 // klineRouteID 返回写进行（股票行的 route_id）与指标标签的 K 线路由 ID。三条规则，取值都不许变：
 //  1. 来源按路由分配的（市场，品种）：<市场>_<品种>_kline_<频率>（见 KlineRouteID），它同时是按标的分配来源的哈希种子；
-//  2. 单一来源、market.yaml 写了 kline_route_by_source 的市场：<数据源>_<品种>_kline_<频率>，频率只规范化；
-//  3. 其余单一来源：流水线自带的 fixed（<市场>_<品种>_kline，不带频率）；推送路径没有流水线，是空串。
+//  2. 市场没有路由文件：<数据源>_<品种>_kline_<频率>，频率只规范化；
+//  3. 市场有路由文件、但路由管的是别的品种：流水线自带的 fixed（<市场>_<品种>_kline，不带频率）；推送路径没有流水线，是空串。
 //
 // instrumentType 为空时按市场的默认品种；provider 是单一来源的数据源名。
 func klineRouteID(marketID string, instrumentType marketdata.InstrumentType, provider, fixed, frequency string) (string, error) {
+	route, found, err := LoadRoute(marketID)
+	if err != nil {
+		return "", err
+	}
 	if instrumentType == "" {
-		fallback, err := defaultInstrumentType(marketID, "")
-		if err != nil {
+		if instrumentType, err = defaultInstrumentType(marketID, ""); err != nil {
 			return "", err
 		}
-		instrumentType = fallback
 	}
-	_, routed, err := RouteFor(marketID, instrumentType)
-	if err != nil {
-		return "", err
+	if !found {
+		if parsed, err := marketdata.ParseFrequency(frequency); err == nil {
+			frequency = string(parsed)
+		} else {
+			frequency = strings.ToLower(strings.TrimSpace(frequency))
+		}
+		return strings.ToLower(strings.TrimSpace(provider)) + "_" + string(instrumentType) + "_kline_" + frequency, nil
 	}
-	if routed {
+	if route.Instrument() == instrumentType {
 		return KlineRouteID(marketID, instrumentType, frequency), nil
 	}
-	market, err := markets.ConfigFor(marketID)
-	if err != nil {
-		return "", err
-	}
-	if !market.KlineRouteBySource {
-		return fixed, nil
-	}
-	if parsed, err := marketdata.ParseFrequency(frequency); err == nil {
-		frequency = string(parsed)
-	} else {
-		frequency = strings.ToLower(strings.TrimSpace(frequency))
-	}
-	return strings.ToLower(strings.TrimSpace(provider)) + "_" + string(instrumentType) + "_kline_" + frequency, nil
+	return fixed, nil
 }
 
 func metricKlineResult(err error) string {

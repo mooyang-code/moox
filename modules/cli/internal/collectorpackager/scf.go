@@ -32,10 +32,8 @@ type BuildSCFPackageResult struct {
 	Entries []string
 }
 
-// BuildSCFPackage creates a zip containing only the short-lived runtime binary,
-// configuration, source definitions, and the stock route when the stockcn
-// profile is packaged（交易日历内嵌在二进制里，不随包分发）. CLS credentials are injected as SCF environment
-// variables and never rendered into the package.
+// BuildSCFPackage 打出只含云函数运行二进制、运行配置与行情源定义的 zip。各市场的 market.yaml、route.yaml、
+// 数据源运行参数和交易日历都编在二进制里，不随包分发。CLS 凭据以云函数环境变量注入，不写进包里。
 func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error) {
 	if opts.BinaryPath == "" {
 		return nil, fmt.Errorf("binary path is required")

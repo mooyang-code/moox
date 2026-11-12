@@ -20,8 +20,9 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// MarketConfigDirEnv 指定一个目录来覆盖编进二进制的市场数据文件，布局与 config/markets 相同：
+// MarketConfigDirEnv 指定一个目录来覆盖编进二进制的路由与数据源运行参数，布局与 config/markets 相同：
 // <目录>/<市场>/route.yaml、<目录>/<市场>/sources/<数据源>.yaml。目录里没有的文件仍读编进去的内容。
+// market.yaml 不在覆盖范围内，始终读编进去的。
 const MarketConfigDirEnv = "MOOX_MARKET_CONFIG_DIR"
 
 // Route 是一个市场的路由文件（config/markets/<市场>/route.yaml，编在二进制里）：一个品种的 K 线来源按它分配——
@@ -32,8 +33,8 @@ type Route struct {
 	// InstrumentType 是这份路由管的品种；行情源目录里这个（市场，品种）的 K 线数据源登记为按路由分配。
 	InstrumentType string `yaml:"instrument_type"`
 	// SettleDelayMS 是结算延迟（毫秒）：实时采集只写“收盘时刻 + 结算延迟”已经过去的 K 线，数据源在这之前给的可能是未定稿值。
-	// 采集计划的 not_before_ms 不能小于它，否则目标那根每期都被丢掉。
-	SettleDelayMS int `yaml:"settle_delay_ms"`
+	// 采集计划的 not_before_ms 不能小于它，否则目标那根每期都被丢掉。必填：漏写会悄悄跳过这一过滤和校验。
+	SettleDelayMS *int `yaml:"settle_delay_ms"`
 	// InstrumentProviderIDs 是完整标的快照的来源，多家并发取数后按 SubjectID 合并。
 	InstrumentProviderIDs []string     `yaml:"instrument_providers"`
 	Klines                []KlineRoute `yaml:"klines"`
@@ -94,8 +95,8 @@ func (r Route) validate(marketID string) error {
 	if strings.TrimSpace(r.InstrumentType) == "" || strings.TrimSpace(r.InstrumentType) != string(r.Instrument()) {
 		return fmt.Errorf("instrument_type 必填，写小写的品种名")
 	}
-	if r.SettleDelayMS < 0 {
-		return fmt.Errorf("settle_delay_ms 不能为负")
+	if r.SettleDelayMS == nil || *r.SettleDelayMS < 0 {
+		return fmt.Errorf("settle_delay_ms 必填且不能为负（不需要等待时写 0）")
 	}
 	if len(r.Klines) == 0 {
 		return fmt.Errorf("至少要配置一个频率的 K 线路由")
@@ -142,7 +143,12 @@ func (r Route) Instrument() marketdata.InstrumentType {
 }
 
 // SettleDelay 返回结算延迟。
-func (r Route) SettleDelay() time.Duration { return time.Duration(r.SettleDelayMS) * time.Millisecond }
+func (r Route) SettleDelay() time.Duration {
+	if r.SettleDelayMS == nil {
+		return 0
+	}
+	return time.Duration(*r.SettleDelayMS) * time.Millisecond
+}
 
 // Kline 返回某个频率的 K 线路由；没有配置该频率时报错。
 func (r Route) Kline(frequency string) (KlineRoute, error) {

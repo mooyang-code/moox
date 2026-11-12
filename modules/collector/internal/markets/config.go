@@ -34,9 +34,6 @@ type Config struct {
 	AllowedLatenessSeconds int `yaml:"allowed_lateness_seconds"`
 	// SeriesTag 是固定的序列标签；不写表示按数据源生成。
 	SeriesTag string `yaml:"series_tag"`
-	// KlineRouteBySource 为真时，单一来源 K 线在指标里的路由标签按数据源命名（<数据源>_<品种>_kline_<频率>）；
-	// 不写是 <市场>_<品种>_kline。来源按路由分配的品种不看它。
-	KlineRouteBySource bool `yaml:"kline_route_by_source"`
 	// RealtimeBatchNoCap 为真时实时批次不限标的数。
 	RealtimeBatchNoCap bool `yaml:"realtime_batch_no_cap"`
 	// EgressProbe 是云函数出口探测的方式：public_ip，或数据源名；不写就不探测。

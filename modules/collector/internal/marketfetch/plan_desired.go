@@ -290,6 +290,12 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 			}
 			datasetKeys := append([]string(nil), info.datasetIDs[executor]...)
 			sort.Strings(datasetKeys)
+			// 云函数与本地执行端都按 not_before_ms 起跑（同一个 StartDelay），都要校验；推送不拉取，不校验。
+			if executor != PlanExecutorStreaming {
+				if err := checkSettleDelay(info.sample, opts.planFetch(info.sample)); err != nil {
+					return nil, err
+				}
+			}
 			if executor != PlanExecutorSCF {
 				name := PlanItemName(executor, spaceID, info.sample.MarketType)
 				plan := newPlan(executor, universe, datasetKeys)
@@ -297,9 +303,6 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 					state.Functions[name] = &PlanFunction{Name: name, Market: key, Executor: executor, Plan: plan}
 				}
 				continue
-			}
-			if err := checkSettleDelay(info.sample, opts.planFetch(info.sample)); err != nil {
-				return nil, err
 			}
 			regions := opts.Markets[strings.ToLower(info.sample.MarketType)]
 			if len(regions) == 0 {
@@ -406,7 +409,7 @@ func (o PlanOptions) planFetch(sample TaskGroup) PlanFetch {
 	return fetch
 }
 
-// checkSettleDelay 校验云函数计划实际生效的 not_before_ms 不小于路由的结算延迟。函数被定时器触发后等到“收盘 + not_before_ms”
+// checkSettleDelay 校验拉取计划（云函数、本地执行端）实际生效的 not_before_ms 不小于路由的结算延迟。执行端等到“收盘 + not_before_ms”
 // 才开始取数，而流水线只写“收盘 + 结算延迟”已经过去的 K 线：前者更小的话，目标那根每期都被丢掉。
 // 来源不按路由分配的分组没有结算延迟，不校验。
 func checkSettleDelay(sample TaskGroup, fetch PlanFetch) error {
@@ -414,11 +417,12 @@ func checkSettleDelay(sample TaskGroup, fetch PlanFetch) error {
 	if err != nil {
 		return err
 	}
-	if !routed || fetch.NotBeforeMS >= route.SettleDelayMS {
+	settleMS := int(route.SettleDelay() / time.Millisecond)
+	if !routed || fetch.NotBeforeMS >= settleMS {
 		return nil
 	}
 	return fmt.Errorf("%s 的 %s 采集计划 not_before_ms 是 %d 毫秒，小于路由文件的结算延迟 %d 毫秒，目标 K 线每期都会被丢掉；请把 [scf_plan] 里这个市场的 fetch.not_before_ms 调到不小于结算延迟",
-		sample.MarketID, sample.InstrumentType, fetch.NotBeforeMS, route.SettleDelayMS)
+		sample.MarketID, sample.InstrumentType, fetch.NotBeforeMS, settleMS)
 }
 
 // fetchFor 返回某市场类型的拉取参数：有按市场的覆盖就用覆盖，否则用空间值。

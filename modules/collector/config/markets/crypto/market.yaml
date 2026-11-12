@@ -4,8 +4,6 @@ market_id: crypto
 # 结果数据集的允许迟到时间默认值（秒），任务没写时用它。
 allowed_lateness_seconds: 15
 # 不写 series_tag：序列标签按数据源生成（venue:<数据源>|market:<品种>|source:<source_id>）。
-# K 线在指标里的路由标签按数据源命名：binance_spot_kline_1m、binance_swap_kline_1h。
-kline_route_by_source: true
 # 云函数出口探测：探测币安的行情接口。
 egress_probe: binance
 # 标的同步的请求走出口代理。

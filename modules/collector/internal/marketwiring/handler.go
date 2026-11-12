@@ -53,7 +53,7 @@ func DefaultSourceID(marketID, provider, instrumentType string) string {
 
 // FeedLabels 返回 feed 指标里市场、数据源、路由标签允许的取值：市场取已登记的市场，数据源取行情源目录，
 // 路由按目录生成——按路由分配的是 <市场>_<品种>_kline_<频率>，单一来源的是 <数据源>_<品种>_kline_<频率>
-// （market.yaml 没写 kline_route_by_source 的市场，单一来源的路由 ID 不带频率，不在允许的取值里，标签记为 unknown）；
+// （有路由文件的市场里不归路由管的品种，路由 ID 不带频率，不在允许的取值里，标签记为 unknown）；
 // 标的快照的路由 ID 一并保留。
 func FeedLabels() marketfetch.FeedLabels {
 	labels := marketfetch.FeedLabels{Markets: markets.IDs()}

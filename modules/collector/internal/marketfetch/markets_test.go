@@ -62,7 +62,7 @@ func TestMarketFilesAreEmbedded(t *testing.T) {
 
 // 环境变量仍然可以覆盖编进去的内容：目录里有这个市场的路由文件就读它；没有路由文件的市场不受影响。
 func TestMarketConfigDirOverridesEmbedded(t *testing.T) {
-	writeMarketFile(t, t.TempDir(), "stockcn/route.yaml", "market_id: stockcn\ninstrument_type: equity\nklines:\n  - frequency: 5m\n    providers:\n      - {id: eastmoney, source_id: stockcn_http, weight: 1, role: primary}\n")
+	writeMarketFile(t, t.TempDir(), "stockcn/route.yaml", "market_id: stockcn\ninstrument_type: equity\nsettle_delay_ms: 800\nklines:\n  - frequency: 5m\n    providers:\n      - {id: eastmoney, source_id: stockcn_http, weight: 1, role: primary}\n")
 	route, found, err := LoadRoute(StockCNSpaceID)
 	require.NoError(t, err)
 	require.True(t, found)
