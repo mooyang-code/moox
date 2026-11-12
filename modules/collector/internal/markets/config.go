@@ -42,6 +42,8 @@ type Config struct {
 	SubjectEgress string `yaml:"subject_egress"`
 	// SubjectSync 是标的属性同步的默认任务；不写表示没有全市场标的同步。
 	SubjectSync *SubjectSync `yaml:"subject_sync"`
+	// RefetchAfterCloseMinutes 是收市后多久把当天整天强制重取一遍（分钟）；不写就不重取。只对有交易时段的市场有意义。
+	RefetchAfterCloseMinutes int `yaml:"refetch_after_close_minutes"`
 	// SCFPlan 是采集计划的默认参数，由 bootstrap 按它的配置结构解析。
 	SCFPlan yaml.Node `yaml:"scf_plan"`
 }
@@ -106,6 +108,9 @@ func parseConfig(marketID string, raw []byte) (Config, error) {
 	}
 	if job := config.SubjectSync; job != nil && len(job.Sources) == 0 {
 		return Config{}, fmt.Errorf("subject_sync.sources 不能为空")
+	}
+	if config.RefetchAfterCloseMinutes < 0 {
+		return Config{}, fmt.Errorf("refetch_after_close_minutes 不能为负")
 	}
 	return config, nil
 }

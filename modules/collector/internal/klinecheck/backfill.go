@@ -128,9 +128,16 @@ type Backfiller struct {
 	// MaxInFlightFor 非空时按空间决定并发上限（返回值不大于 0 表示用 MaxInFlight / 默认值）。
 	MaxInFlightFor func(ctx context.Context, spaceID string) int
 	Now            func() time.Time
+	// CloseRefetch 非空时启用收市后整天重取（见 RefetchAfterClose）：空间的重取时刻落在 (after, until] 之内时
+	// 返回 due 为真和当天整天的范围 [from, to)（K 线开始时刻）。不需要重取的市场返回 due 为假。
+	CloseRefetch func(spaceID string, after, until time.Time) (from, to time.Time, due bool, err error)
+	// RefetchFrequency 非空时，收市后整天重取只对它返回真的周期提交（市场的数据源声明支持的周期）。
+	RefetchFrequency func(spaceID, frequency string) bool
 
 	mu       sync.Mutex
 	lastScan map[string]time.Time
+	// refetchedDay 是每个空间最近一次已提交收市后整天重取的那天（范围起点），只在内存里，防止同一轮里重复提交。
+	refetchedDay map[string]time.Time
 	// lastHistoryRun 是每个空间最近一次历史缺口扫描的时间（见 ScanHistory）；每个数据集的扫描记录保存在库里。
 	lastHistoryRun map[string]time.Time
 	workers        sync.WaitGroup

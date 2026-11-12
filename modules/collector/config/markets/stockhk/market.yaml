@@ -12,3 +12,17 @@ realtime_batch_no_cap: true
 # 标的同步（指数成分）的请求直连。
 subject_egress: direct
 # 不写 subject_sync：港股没有全市场标的同步，标的由指数成分的标签同步创建。
+# 收市后多久把当天整天强制重取一遍（分钟）；不写就不重取。
+# 16:00 这根在 16:10 前才并入收市竞价的成交，16:00:05 取到的是连续交易时段的值，所以收市 15 分钟后整天重取一次；
+# 半日市按当天实际的收市时刻（12:00）算。
+refetch_after_close_minutes: 15
+# 采集计划的默认参数，moox.toml 的 [scf_plan] 里同名项优先。
+scf_plan:
+  # 固定每函数 25 只标的（恒指 95 只共 4 个函数）。不按负载估算函数个数（不写 auto_size），
+  # 也不做出口 IP 去重（不写 egress_balance）：95 只标的用不上这两样。
+  symbols_per_function: 25
+  default_ingest: pull
+  default_executor: scf
+  # 收盘后固定等 5 秒再取数（not_before_ms），与 route.yaml 的结算延迟 5 秒一致，生成计划时校验前者不小于后者。
+  # 2026-11-12 实测普通边界最晚 0.5 秒定稿，取样有空档时看到的上限是 5.8 秒；截止时间是收盘后 90 秒，等 5 秒没有影响。
+  fetch: {request_timeout_ms: 3000, storage_timeout_ms: 2000, not_before_ms: 5000}
