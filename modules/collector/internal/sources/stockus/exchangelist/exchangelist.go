@@ -21,6 +21,9 @@
 //   - 每个市场最多读 MaxPages 页（默认 80，当前最大的 105 市场约 61 页），没有无界循环。请求总数的最坏值：
 //     每个市场每页最多 PageRetries+1 次，每个市场的第一页还会在主备两个地址上各试一遍（多 PageRetries+1 次），
 //     默认值下三个市场合计 3 × (80 × 3 + 3) = 729 次；
+//   - 主备地址的选择带到后面的市场：第一个市场读完后，实际用的地址（push2 或 push2test）就是后两个市场的起点，
+//     不会每个市场都从 push2 起步、各自在第 1 页先失败一次或白等一个超时。起点是 push2test 时后面的市场只用它，
+//     不再回退 push2（已知差别：中途 push2test 也坏了就整次失败，下一轮同步重试）。上面的 729 仍是上限；
 //   - 某页失败（超时、连接失败、5xx）最多重试 PageRetries 次（默认 2），每次重试前等的时间逐次增加；429 不重试；
 //   - ctx 取消或到期立即退出，错误里带 ctx 的错误；整个对照的时间预算由调用方通过 ctx 给定。
 //
@@ -67,6 +70,7 @@ var markets = []market{
 // Config 是对照的请求参数，零值都有默认值。
 type Config struct {
 	// BaseURL 是 clist 的地址，默认东方财富主地址（超时或 5xx 时 cnstock 会改用备用地址）。
+	// 只是第一个市场的起点：之后每个市场都从上一个市场实际用的地址起步。
 	BaseURL    string
 	HTTPClient *http.Client
 	// RequestTimeout 是单次 HTTP 请求的超时，默认 15 秒；只在没有传 HTTPClient 时用。
@@ -134,6 +138,8 @@ func Lookup(ctx context.Context, cfg Config, codes []string) (map[string]string,
 		}
 	}
 	found := make(map[string]string, len(codes))
+	// baseURL 是当前市场读第 1 页的起点；每读完一个市场就换成它实际在用的地址。
+	baseURL := cfg.BaseURL
 	sleep := cfg.Sleep
 	if sleep == nil {
 		sleep = sleepContext
@@ -149,7 +155,7 @@ func Lookup(ctx context.Context, cfg Config, codes []string) (map[string]string,
 		}
 		rows := 0
 		result, err := cnstock.FetchClist(ctx, cnstock.ClistQuery{
-			BaseURL:      cfg.BaseURL,
+			BaseURL:      baseURL,
 			Filter:       m.filter,
 			PageSize:     cnstock.EastMoneyClistMaxPageSize,
 			HTTPClient:   cfg.HTTPClient,
@@ -176,6 +182,9 @@ func Lookup(ctx context.Context, cfg Config, codes []string) (map[string]string,
 		}
 		if result.Total <= 0 || rows != result.Total {
 			return nil, fmt.Errorf("对照交易所：东方财富美股列表 %s 取到 %d 行，接口自报总数 %d，列表不完整", m.filter, rows, result.Total)
+		}
+		if result.Base != "" {
+			baseURL = result.Base
 		}
 	}
 	exchanges := make(map[string]string, len(codes))

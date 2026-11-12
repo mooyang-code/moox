@@ -63,10 +63,12 @@ type ClistQuery struct {
 	Sleep func(ctx context.Context, d time.Duration) error
 }
 
-// ClistResult 是翻页结束后的统计：Total 是接口自报的总数（没报时为 0），Pages 是读过的页数（含收尾的空页）。
+// ClistResult 是翻页结束后的统计：Total 是接口自报的总数（没报时为 0），Pages 是读过的页数（含收尾的空页），
+// Base 是最后一次读页成功的地址（主备回退之后实际在用的那个），调用方连续读多个列表时可拿它当下一个列表的 BaseURL。
 type ClistResult struct {
 	Total int
 	Pages int
+	Base  string
 }
 
 // FetchClist 按筛选条件翻页读完整的列表，每条交给 visit；visit 返回错误时立即停止并返回这个错误。
@@ -207,6 +209,7 @@ func FetchClist(ctx context.Context, query ClistQuery, visit func(ClistItem) err
 		// 不满一页本身不能证明是最后一页，除非响应里还有总数、页数或“还有下一页”标记：继续读下一页，要求以空结果收尾。
 	}
 	result.Total = declaredTotal
+	result.Base = activeBase
 	return result, nil
 }
 
