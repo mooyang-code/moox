@@ -403,13 +403,16 @@ button.ghost.away { visibility: hidden; }
 
   // ---------- 步骤条 ----------
   function exchangeVisible() { return cloudEnabled('overseas'); }
-  // 告警渠道的密钥只有钉钉（加签）和通用 Webhook（签名请求头）使用，其余类型不显示、提交空值。
-  function notifySecretVisible() { var type = $('notify-type').value; return type === 'dingtalk' || type === 'webhook'; }
+  // 告警渠道的密钥：飞书（签名校验）、钉钉（加签）、通用 Webhook（签名请求头）可以填；企业微信没有密钥，不显示、提交空值。
+  function notifySecretVisible() { return $('notify-type').value !== 'wecom'; }
   function syncNotifySecret() {
     $('notify-secret-row').hidden = !notifySecretVisible();
-    $('notify-secret-hint').textContent = $('notify-type').value === 'dingtalk'
+    var type = $('notify-type').value;
+    $('notify-secret-hint').textContent = type === 'dingtalk'
       ? '机器人安全设置选了“加签”时填它的密钥（SEC 开头）；选的是“自定义关键词”就不用填，关键词设成 MooX。'
-      : '填了以后每次推送都带签名请求头，接收方可以据此校验来源；不需要就留空。';
+      : type === 'feishu'
+        ? '机器人安全设置开了“签名校验”时填它的密钥；没开就留空。'
+        : '填了以后每次推送都带签名请求头，接收方可以据此校验来源；不需要就留空。';
   }
   $('notify-type').addEventListener('change', syncNotifySecret);
   syncNotifySecret();

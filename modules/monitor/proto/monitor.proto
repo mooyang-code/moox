@@ -338,7 +338,7 @@ message NotificationChannel {
 }
 message ListNotificationChannelsReq {}
 message ListNotificationChannelsRsp { common.RetInfo ret_info = 1; repeated NotificationChannel channels = 2; }
-// secret 选填：钉钉机器人的加签密钥，或通用 Webhook 的签名密钥；企业微信、飞书不接受。
+// secret 选填：飞书机器人的签名校验密钥、钉钉机器人的加签密钥，或通用 Webhook 的签名密钥；企业微信不接受。
 message AddNotificationChannelReq { string channel_type = 1; string webhook_url = 2; string secret = 3; }
 message AddNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannel channel = 2; }
 message DeleteNotificationChannelReq { string channel_id = 1; }

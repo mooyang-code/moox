@@ -287,7 +287,7 @@ export interface NotificationChannel {
   channel_type?: string;
   webhook_url?: string;
   created_at?: string;
-  /** 是否设置了密钥（钉钉加签或通用 Webhook 签名）；密钥本身不返回。 */
+  /** 是否设置了密钥（飞书签名校验、钉钉加签或通用 Webhook 签名）；密钥本身不返回。 */
   has_secret?: boolean;
 }
 

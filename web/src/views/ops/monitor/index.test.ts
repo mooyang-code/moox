@@ -464,7 +464,7 @@ describe("monitor page", () => {
       .trigger("click");
     await flushPromises();
     const section = () => page.find('[aria-label="添加通知渠道"]');
-    // 企业微信、飞书不使用密钥，输入框不出现。
+    // 企业微信的群机器人没有密钥，输入框不出现。
     expect(section().find('input[type="password"]').exists()).toBe(false);
 
     await section().find("select").setValue("dingtalk");

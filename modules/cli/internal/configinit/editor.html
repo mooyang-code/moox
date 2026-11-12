@@ -345,9 +345,9 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     ctl.channel.value = form.notification.channel_type || 'wecom';
     var webhook = secretInput(form.notification.webhook_url); ctl.webhook = webhook.input;
     var notifySecret = secretInput(form.notification.secret || ''); ctl.notifySecret = notifySecret.input;
-    var notifySecretField = field('密钥（可选）', notifySecret.node, '钉钉机器人启用“加签”时填它的密钥；通用 Webhook 填了就带签名请求头。');
-    // 企业微信、飞书不使用密钥：隐藏输入框，保存时按空值提交。
-    var syncNotifySecret = function () { notifySecretField.hidden = ctl.channel.value !== 'dingtalk' && ctl.channel.value !== 'webhook'; };
+    var notifySecretField = field('密钥（可选）', notifySecret.node, '飞书机器人启用“签名校验”、钉钉机器人启用“加签”时填它的密钥；通用 Webhook 填了就带签名请求头。');
+    // 企业微信的群机器人没有密钥：隐藏输入框，保存时按空值提交。
+    var syncNotifySecret = function () { notifySecretField.hidden = ctl.channel.value === 'wecom'; };
     ctl.channel.addEventListener('change', function () { state.dirty = true; syncNotifySecret(); });
     syncNotifySecret();
     root.append(block('告警通知', '行情中断、服务异常时推送到群机器人或 Webhook 地址。',
@@ -484,7 +484,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     return {
       admin: { username: ctl.adminUser.value.trim(), password: ctl.adminPass.value },
       tencent: { secret_id: ctl.secretId.value.trim(), secret_key: ctl.secretKey.value },
-      notification: { channel_type: ctl.channel.value, webhook_url: ctl.webhook.value.trim(), secret: (ctl.channel.value === 'dingtalk' || ctl.channel.value === 'webhook') ? ctl.notifySecret.value.trim() : '' },
+      notification: { channel_type: ctl.channel.value, webhook_url: ctl.webhook.value.trim(), secret: ctl.channel.value !== 'wecom' ? ctl.notifySecret.value.trim() : '' },
       archive_object_store: {
         enabled: ctl.os.enabled.checked, endpoint: ctl.os.endpoint.value.trim(), region: ctl.os.region.value.trim(), bucket: ctl.os.bucket.value.trim(),
         prefix: ctl.os.prefix.value.trim(), url_style: ctl.os.urlStyle.value, use_tls: ctl.os.useTLS.value === 'true',

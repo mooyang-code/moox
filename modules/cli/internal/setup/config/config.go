@@ -238,7 +238,7 @@ func (m Manifest) RequireNotification() error {
 type Notification struct {
 	ChannelType string `toml:"channel_type"`
 	WebhookURL  string `toml:"webhook_url"`
-	// Secret 选填：钉钉机器人的加签密钥，或通用 Webhook 的签名密钥。
+	// Secret 选填：飞书机器人的签名校验密钥、钉钉机器人的加签密钥，或通用 Webhook 的签名密钥。
 	Secret string `toml:"secret"`
 }
 
@@ -752,7 +752,7 @@ func validate(manifest *Manifest) error {
 	manifest.Notification.Secret = strings.TrimSpace(manifest.Notification.Secret)
 	channel := notification.ChannelConfig{Type: notification.ChannelType(manifest.Notification.ChannelType), WebhookURL: manifest.Notification.WebhookURL, Secret: manifest.Notification.Secret}
 	if err := channel.Validate(); err != nil {
-		return fmt.Errorf("config_invalid: notification.webhook_url 必须是%s的 HTTPS 地址（通用 Webhook 不限域名）；notification.secret 只有钉钉和通用 Webhook 可以填: %v", notification.ChannelLabel(manifest.Notification.ChannelType), err)
+		return fmt.Errorf("config_invalid: notification.webhook_url 必须是%s的 HTTPS 地址（通用 Webhook 不限域名）；notification.secret 企业微信不能填: %v", notification.ChannelLabel(manifest.Notification.ChannelType), err)
 	}
 	if err := validateExchangeKeys(manifest.ExchangeKeys); err != nil {
 		return err

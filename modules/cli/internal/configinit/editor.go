@@ -61,7 +61,7 @@ type Overview struct {
 	Admin      string       `json:"admin"`
 	Channel    string       `json:"channel"`
 	HasWebhook bool         `json:"has_webhook"`
-	// HasNotifySecret 表示告警渠道配了密钥（钉钉加签或通用 Webhook 签名）。
+	// HasNotifySecret 表示告警渠道配了密钥（飞书签名校验、钉钉加签或通用 Webhook 签名）。
 	HasNotifySecret bool `json:"has_notify_secret"`
 	// ExchangeKeys 是 [[exchange_keys]] 的概览，顺序与配置里一致；明文只在 reveal 时按序号给出。
 	ExchangeKeys []ExchangeKeyView `json:"exchange_keys"`

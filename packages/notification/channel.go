@@ -56,15 +56,21 @@ func ChannelLabel(value string) string {
 	}
 }
 
-// SupportsSecret 报告该类型的渠道是否可以配置密钥（钉钉的加签密钥、通用 Webhook 的签名密钥）。
+// SupportsSecret 报告该类型的渠道是否可以配置密钥：飞书的签名校验密钥、钉钉的加签密钥、通用 Webhook 的签名密钥。
+// 企业微信的群机器人没有密钥。
 func SupportsSecret(value string) bool {
-	return ChannelType(value) == ChannelTypeDingTalk || ChannelType(value) == ChannelTypeWebhook
+	switch ChannelType(value) {
+	case ChannelTypeFeishu, ChannelTypeDingTalk, ChannelTypeWebhook:
+		return true
+	default:
+		return false
+	}
 }
 
 type ChannelConfig struct {
 	Type       ChannelType
 	WebhookURL string
-	// Secret 选填：钉钉机器人的加签密钥，或通用 Webhook 的签名密钥。企业微信、飞书不使用。
+	// Secret 选填：飞书机器人的签名校验密钥、钉钉机器人的加签密钥，或通用 Webhook 的签名密钥。企业微信不使用。
 	Secret string
 }
 
@@ -134,7 +140,7 @@ func NewSender(config ChannelConfig) (Sender, error) {
 	case ChannelTypeWeCom:
 		return NewWeComSender(config.WebhookURL)
 	case ChannelTypeFeishu:
-		return NewFeishuSender(config.WebhookURL)
+		return NewFeishuSender(config.WebhookURL, config.Secret)
 	case ChannelTypeDingTalk:
 		return newDingTalkSender(config.WebhookURL, config.Secret, nil)
 	case ChannelTypeWebhook:

@@ -461,13 +461,14 @@ const selected = ref<HealthComponent | null>(null);
 const notificationVisible = ref(false);
 const channels = ref<NotificationChannel[]>([]);
 const draft = reactive({ channel_type: "wecom", webhook_url: "", secret: "" });
-// 只有钉钉（加签）和通用 Webhook（签名请求头）可以带密钥；密钥只写不读，要改就删掉渠道重加。
-const draftSecretAllowed = computed(() => draft.channel_type === "dingtalk" || draft.channel_type === "webhook");
-const draftSecretHint = computed(() =>
-  draft.channel_type === "dingtalk"
-    ? "机器人的安全设置选了“加签”就填它的密钥（SEC 开头）；选的是“自定义关键词”不用填，把关键词设成 MooX。"
-    : "推送的是固定格式的 JSON，地址必须是公网 HTTPS。填了密钥，请求会带 X-MooX-Timestamp 和 X-MooX-Signature 两个请求头，接收方可以据此校验来源。"
-);
+// 飞书（签名校验）、钉钉（加签）、通用 Webhook（签名请求头）可以带密钥，企业微信没有；密钥只写不读，要改就删掉渠道重加。
+const draftSecretAllowed = computed(() => draft.channel_type !== "wecom");
+const draftSecretHint = computed(() => {
+  if (draft.channel_type === "feishu") return "机器人的安全设置开了“签名校验”就填它的密钥；没开就留空。";
+  if (draft.channel_type === "dingtalk")
+    return "机器人的安全设置选了“加签”就填它的密钥（SEC 开头）；选的是“自定义关键词”不用填，把关键词设成 MooX。";
+  return "推送的是固定格式的 JSON，地址必须是公网 HTTPS。填了密钥，请求会带 X-MooX-Timestamp 和 X-MooX-Signature 两个请求头，接收方可以据此校验来源。";
+});
 const adding = ref(false);
 const removing = ref("");
 const refreshGuard = createLatestRequestGuard();

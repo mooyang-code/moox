@@ -2868,7 +2868,7 @@ func (x *ListNotificationChannelsRsp) GetChannels() []*NotificationChannel {
 	return nil
 }
 
-// secret 选填：钉钉机器人的加签密钥，或通用 Webhook 的签名密钥；企业微信、飞书不接受。
+// secret 选填：飞书机器人的签名校验密钥、钉钉机器人的加签密钥，或通用 Webhook 的签名密钥；企业微信不接受。
 type AddNotificationChannelReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

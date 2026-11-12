@@ -38,7 +38,7 @@ type Policy struct {
 }
 
 // Channel 是一个告警渠道：企业微信、飞书、钉钉群机器人或通用 Webhook。
-// Secret 是渠道密钥（钉钉的加签密钥、通用 Webhook 的签名密钥），没有时为空；它参与摘要，改了密钥会重新下发。
+// Secret 是渠道密钥（飞书的签名校验密钥、钉钉的加签密钥、通用 Webhook 的签名密钥），没有时为空；它参与摘要，改了密钥会重新下发。
 type Channel struct {
 	Type       string `json:"type"`
 	WebhookURL string `json:"webhook_url"`
