@@ -217,7 +217,7 @@ func TestMarketForAndAllowedIntraday(t *testing.T) {
 	require.Equal(t, AlignmentSession, stock.Alignment)
 	require.Equal(t, []string{"1m", "2m", "3m", "4m", "5m", "6m", "8m", "10m", "12m", "15m", "20m", "24m", "30m", "40m", "1h", "2h"}, stock.AllowedIntraday())
 
-	_, err = MarketFor("stockhk")
+	_, err = MarketFor("stockus")
 	require.ErrorIs(t, err, ErrUnknownMarket)
 }
 
