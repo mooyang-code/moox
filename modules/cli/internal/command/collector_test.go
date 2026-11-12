@@ -147,7 +147,7 @@ func TestDefaultStockCNCollectorTasksRequireExplicitActivation(t *testing.T) {
 		assert.False(t, task.Enabled)
 	}
 	assert.Equal(t, []string{"kline/cn_hs300/5m/", "kline/cn_hs300/1d/manual", "kline/cn_hs300/1d/manual"}, stock,
-		"A 股有沪深 300 的 5m 任务、纯日线任务和带复权、行业、财务、股本的日线任务，都默认停用；两条日线任务 setup start 不启用")
+		"A 股有沪深 300 的 5m 任务、纯日线任务和带复权、行业、财务、换手率、股本的日线任务，都默认停用；两条日线任务 setup start 不启用")
 
 	// Skill 的日线读纯日线任务的结果；setup start 跳过两条日线任务。
 	path := filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml")

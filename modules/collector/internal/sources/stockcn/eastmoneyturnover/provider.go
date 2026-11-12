@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -88,7 +89,7 @@ func (p *Provider) FetchFields(ctx context.Context, req marketdata.FieldRequest)
 }
 
 // parseTurnover 解析日线响应，返回各交易日（UTC 零点）的换手率。
-// 来源没有这只股票时 data 是 null，返回空；行的列数不足或日期无效是结构性错误；换手率不是数字的行跳过。
+// 来源没有这只股票时 data 是 null，返回空；行的列数不足或日期无效是结构性错误；换手率不是有限的非负数的行跳过。
 func parseTurnover(body []byte) (map[time.Time]float64, error) {
 	var payload struct {
 		Data *struct {
@@ -112,7 +113,7 @@ func parseTurnover(body []byte) (map[time.Time]float64, error) {
 			return nil, fmt.Errorf("交易日期 %q 无效", columns[0])
 		}
 		rate, err := strconv.ParseFloat(strings.TrimSpace(columns[turnoverColumn]), 64)
-		if err != nil || rate < 0 {
+		if err != nil || rate < 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
 			continue
 		}
 		rates[day] = rate

@@ -98,9 +98,9 @@ func TestFetchFieldsHasNoValueForUnknownOrUnsupportedStock(t *testing.T) {
 // 换手率不是数字的行跳过，其余的行照常出值；整个响应不因此失败。
 func TestFetchFieldsSkipsRowsWithoutNumericTurnover(t *testing.T) {
 	provider := serve(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"rc":0,"data":{"klines":["2026-11-10,1,1,1,1,0,0,0,0,0,-","2026-11-11,1,1,1,1,5,5,0,0,0,0.37"]}}`))
+		_, _ = w.Write([]byte(`{"rc":0,"data":{"klines":["2026-11-06,1,1,1,1,0,0,0,0,0,NaN","2026-11-09,1,1,1,1,0,0,0,0,0,Inf","2026-11-10,1,1,1,1,0,0,0,0,0,-","2026-11-11,1,1,1,1,5,5,0,0,0,0.37"]}}`))
 	})
-	values, err := provider.FetchFields(context.Background(), marketdata.FieldRequest{SubjectID: "000752.XSHE", Frequency: "1d", Start: day("2026-11-10"), End: day("2026-11-12")})
+	values, err := provider.FetchFields(context.Background(), marketdata.FieldRequest{SubjectID: "000752.XSHE", Frequency: "1d", Start: day("2026-11-06"), End: day("2026-11-12")})
 	require.NoError(t, err)
 	assert.Equal(t, map[time.Time]map[string]marketdata.FieldValue{day("2026-11-11"): rate(0.37)}, values)
 }

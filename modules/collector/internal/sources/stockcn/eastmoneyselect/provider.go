@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -71,7 +72,7 @@ type record struct {
 	TradeDate   string `json:"MAX_TRADE_DATE"`
 }
 
-// number 是接口里的一个数值字段：数字或写成字符串的数字有值；null、"-" 等其他写法按没有值处理，不让整条响应解析失败。
+// number 是接口里的一个数值字段：数字或写成字符串的数字有值；null、"-"、非有限值等其他写法按没有值处理，不让整条响应解析失败。
 type number struct {
 	value float64
 	ok    bool
@@ -80,12 +81,13 @@ type number struct {
 func (n *number) UnmarshalJSON(raw []byte) error {
 	text := strings.Trim(strings.TrimSpace(string(raw)), `"`)
 	value, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
-	*n = number{value: value, ok: err == nil}
+	*n = number{value: value, ok: err == nil && !math.IsNaN(value) && !math.IsInf(value, 0)}
 	return nil
 }
 
 // FetchFields 取这只股票当前的一条记录，按接口标注的交易日与请求区间 [Start, End) 的关系处理：
-// 落在区间内，写到那一个交易日上；晚于区间（补历史、隔天补采），没有值；早于区间起点，接口还没更新到这一天，返回错误等下次重试。
+// 落在区间内，写到那一个交易日上；晚于区间（补历史、隔天补采），没有值；早于区间起点，接口还没更新到这一天，返回错误：
+// 这次不写出一行空值。实时采集没有当天的重试，下一次是隔天的自动补采，那时接口多半已经是下一个交易日，这一天的股本补不回来。
 // 返回的记录不是请求的这只股票时按协议错误处理（接口不认筛选条件时会返回别的股票）。
 func (p *Provider) FetchFields(ctx context.Context, req marketdata.FieldRequest) (map[time.Time]map[string]marketdata.FieldValue, error) {
 	symbol, ok := commonsrc.FieldSymbol(req.SubjectID)

@@ -128,10 +128,10 @@ func TestFetchFieldsHasNoValueForUnknownOrUnsupportedStock(t *testing.T) {
 	assert.Equal(t, 1, requests, "不支持的标的不发请求")
 }
 
-// 单个字段没有值时其余字段照写：null、"-" 都按没有值处理，写成字符串的数字照常取值，整条响应不因此失败。
+// 单个字段没有值时其余字段照写：null、"-"、非有限值都按没有值处理，写成字符串的数字照常取值，整条响应不因此失败。
 func TestFetchFieldsKeepsOtherFieldsWhenOneIsNull(t *testing.T) {
 	provider := serve(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"result":{"data":[{"SECURITY_CODE":"600519","SECURITY_NAME_ABBR":"贵州茅台","NEW_PRICE":"-","TOTAL_SHARES":"1250081601","FREE_SHARES":null,"ZXGXL":3.5,"MAX_TRADE_DATE":"2026-11-11 00:00:00"}]},"success":true}`))
+		_, _ = w.Write([]byte(`{"result":{"data":[{"SECURITY_CODE":"600519","SECURITY_NAME_ABBR":"贵州茅台","NEW_PRICE":"-","TOTAL_SHARES":"1250081601","FREE_SHARES":"Inf","ZXGXL":3.5,"MAX_TRADE_DATE":"2026-11-11 00:00:00"}]},"success":true}`))
 	})
 	values, err := provider.FetchFields(context.Background(), request("600519.XSHG", "2026-11-11", "2026-11-12"))
 	require.NoError(t, err)
