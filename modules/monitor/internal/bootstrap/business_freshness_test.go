@@ -610,7 +610,7 @@ func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.
 	}
 }
 
-func TestBusinessFreshnessReporterStoresBalanceCheckInCryptoMarket(t *testing.T) {
+func TestBusinessFreshnessReporterStoresBalanceCheckInSystemSpace(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)

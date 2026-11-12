@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/packages/barclock"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 )
 
@@ -38,9 +39,19 @@ func (b Builder) spaceClocks(ctx context.Context, now time.Time) map[string]spac
 	}
 	for spaceID, entry := range chosen {
 		clock, err := monmetrics.MarketClockFor(entry.MarketID, entry.CalendarID, entry.Timezone, entry.Sessions)
+		if errors.Is(err, barclock.ErrUnknownMarket) {
+			err = fmt.Errorf("%w：%w", unknownMarketError{marketID: entry.MarketID}, err)
+		}
 		out[spaceID] = spaceClock{clock: clock, err: err}
 	}
 	return out
+}
+
+// unknownMarketError 是采集任务声明的市场没有在 barclock 登记时给人看的提示。
+type unknownMarketError struct{ marketID string }
+
+func (e unknownMarketError) Error() string {
+	return fmt.Sprintf("市场 %s 没有登记，无法判断交易时段", e.marketID)
 }
 
 // barFacts 是一个数据集最新一根 K 线的到达情况。
@@ -149,6 +160,10 @@ func clockIssueText(err error) string {
 	case errors.Is(err, monmetrics.ErrAlignmentUnconfirmed):
 		return "周期对齐未确认，暂不判断"
 	default:
+		var unknown unknownMarketError
+		if errors.As(err, &unknown) {
+			return unknown.Error()
+		}
 		return err.Error()
 	}
 }

@@ -49,6 +49,40 @@ func TestEventCenterAndCollectorAttentionBecomeBusinessChecks(t *testing.T) {
 	require.Empty(t, checks["trade_attention:target_rejected"].Kind, "Trade 的关注项不受影响")
 }
 
+// 余额对账和三类关注项与空间无关，归在 mooxsys 下：不指定空间或按 mooxsys 查询时带出，按业务空间查询时不带。
+func TestBalanceAndAttentionChecksBelongToSystemSpace(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		seedOverviewMetricForInstance(t, db, "balance-success", "trade", "trade@control", "moox_trade_balance_sync_last_success_timestamp_seconds", `{}`, float64(now.Unix()), now)
+		seedOverviewMetricForInstance(t, db, "tr-rejected", "trade", "trade@control", "moox_trade_attention_active", `{"kind":"target_rejected","detail":"x"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "ec-failed", "callbackdispatcher", "callback-dispatcher@overseas", "moox_callbackdispatcher_attention_active", `{"kind":"execution_failed","detail":"x"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "co-source", "collector", "collector@control", "moox_collector_attention_active", `{"kind":"delist_source_failed","detail":"x"}`, 1, now)
+	})
+	kinds := func(spaceID string) map[string]string {
+		overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), spaceID)
+		require.NoError(t, err)
+		out := map[string]string{}
+		for _, item := range overview.BusinessChecks {
+			out[item.Kind] = item.SpaceID
+		}
+		return out
+	}
+	want := map[string]string{
+		"balance": monmetrics.InternalMetricSpaceID, "trade_attention": monmetrics.InternalMetricSpaceID,
+		"event_center_attention": monmetrics.InternalMetricSpaceID, "collector_attention": monmetrics.InternalMetricSpaceID,
+	}
+	for _, spaceID := range []string{"", monmetrics.InternalMetricSpaceID} {
+		got := kinds(spaceID)
+		for kind, space := range want {
+			require.Equal(t, space, got[kind], "space %q kind %s", spaceID, kind)
+		}
+	}
+	got := kinds("crypto")
+	for kind := range want {
+		require.NotContains(t, got, kind)
+	}
+}
+
 // 缺币安只读 Key 触发时是 degraded（需关注），不是 down：安装验收只把 down 当成故障。
 func TestReadonlyKeyMissingIsDegradedNotDown(t *testing.T) {
 	checks := attentionChecks(t, func(db *gorm.DB, now time.Time) {
