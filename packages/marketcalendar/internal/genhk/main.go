@@ -4,7 +4,7 @@
 // （圣诞前夕、新年前夕、农历新年前夕，12:00 收市）。台风、暴雨等临时停市不登记。
 // 数据从 firstYear 年的第一个交易日到 closures 里登记的最后一年年底，每次整份重新生成。
 //
-// 每年港交所公布下一年的假期表后（来源见 source），把休市日和半日市补进下面两张表，
+// 每年联交所发出下一年的证券市场假期通告后（来源见 source），把休市日和半日市补进下面两张表，
 // 在 packages/marketcalendar 目录下运行：go run ./internal/genhk
 //
 // 补登或改动半日市会让之后的交易序号整体平移，因子本地存储要重建。
@@ -26,10 +26,10 @@ const (
 	calendarID = "hk_stock"
 	firstYear  = 2026
 	// source 是休市日与半日市的出处，写进清单。
-	source = "港交所 Trading Calendar and Holiday Schedule 的 Holiday Schedule 表（2026、2027 年，2026-11-12 取）" +
-		" https://www.hkex.com.hk/Services/Trading/Derivatives/Overview/Trading-Calendar-and-Holiday-Schedule?sc_lang=en ；" +
-		"半日市只开上午市（09:30～12:00）见" +
-		" https://www.hkex.com.hk/Services/Trading-hours-and-Severe-Weather-Arrangements/Trading-Hours/Securities-Market?sc_lang=en"
+	source = "香港联交所证券市场假期通告：2026 年 CT/075/25" +
+		" https://www.hkex.com.hk/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2025/SEHK_CT_075_2025?sc_lang=en ；" +
+		"2027 年 CT/077/26" +
+		" https://www.hkex.com.hk/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2026/SEHK_CT_077_2026Jun01162846?sc_lang=en"
 )
 
 // closures 是各年份落在工作日（周一到周五）上的休市日。
@@ -149,9 +149,10 @@ func run(dir string) error {
 	}
 	dataPath := filepath.Join(dir, calendarID+".json")
 	manifestPath := filepath.Join(dir, calendarID+".manifest.json")
-	// 数据没有变化时不动清单，免得只改了生成日期。
+	// 数据和来源都没有变化时不动清单，免得只改了生成日期。
 	if existing, err := os.ReadFile(dataPath); err == nil && string(existing) == string(dataRaw) {
-		if _, err := os.Stat(manifestPath); err == nil {
+		var old manifest
+		if raw, err := os.ReadFile(manifestPath); err == nil && json.Unmarshal(raw, &old) == nil && old.Source == source {
 			fmt.Printf("%s 没有变化\n", dataPath)
 			return nil
 		}

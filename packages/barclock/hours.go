@@ -27,6 +27,9 @@ func NewHours(days TradingDays, location *time.Location, sessions []string) (*Ho
 		return nil, err
 	}
 	early, _ := days.(EarlyCloses)
+	if err := checkEarlyCloses(early, spans, time.Minute); err != nil {
+		return nil, err
+	}
 	return &Hours{loc: location, days: days, spans: spans, early: early}, nil
 }
 

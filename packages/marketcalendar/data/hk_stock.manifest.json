@@ -1,6 +1,6 @@
 {
   "calendar_id": "hk_stock",
-  "source": "港交所 Trading Calendar and Holiday Schedule 的 Holiday Schedule 表（2026、2027 年，2026-11-12 取） https://www.hkex.com.hk/Services/Trading/Derivatives/Overview/Trading-Calendar-and-Holiday-Schedule?sc_lang=en ；半日市只开上午市（09:30～12:00）见 https://www.hkex.com.hk/Services/Trading-hours-and-Severe-Weather-Arrangements/Trading-Hours/Securities-Market?sc_lang=en",
+  "source": "香港联交所证券市场假期通告：2026 年 CT/075/25 https://www.hkex.com.hk/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2025/SEHK_CT_075_2025?sc_lang=en ；2027 年 CT/077/26 https://www.hkex.com.hk/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2026/SEHK_CT_077_2026Jun01162846?sc_lang=en",
   "version": 1,
   "data_version": "2026-11-12",
   "valid_from": "2026-01-02",

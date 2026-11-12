@@ -64,7 +64,22 @@ func parseSpans(sessions []string) ([]span, error) {
 	return spans, nil
 }
 
+// checkEarlyCloses 拒绝坏的日历数据：提前收市日从开盘到收市至少要有 minOpen 这么长（日内周期是一根的长度）。
+// 构造时钟时检查一次，之后按当天时段切分时不再处理“当天没有时段”的情况。
+func checkEarlyCloses(early EarlyCloses, spans []span, minOpen time.Duration) error {
+	if early == nil {
+		return nil
+	}
+	for _, date := range early.EarlyCloseDates() {
+		if closeAt, ok := early.EarlyClose(date); ok && closeAt < spans[0].open+minOpen {
+			return fmt.Errorf("%w：提前收市日 %s 的收市时刻 %s 不晚于开盘 %s 或开盘后不足一根", ErrNoCalendar, date, formatClock(closeAt), formatClock(spans[0].open))
+		}
+	}
+	return nil
+}
+
 // spansOn 返回交易日 date 当天实际的交易时段：提前收市日只到收市时刻为止，其余日子就是 spans 本身（不分配内存）。
+// 收市时刻早于开盘的日历数据在构造时已由 checkEarlyCloses 拒绝，这里至少留下一个时段。
 func spansOn(early EarlyCloses, spans []span, date marketcalendar.CivilDate) []span {
 	if early == nil {
 		return spans
@@ -82,10 +97,6 @@ func spansOn(early EarlyCloses, spans []span, date marketcalendar.CivilDate) []s
 			item.close = closeAt
 		}
 		out = append(out, item)
-	}
-	if len(out) == 0 {
-		// 收市时刻早于开盘，是日历数据的错误：按普通交易日处理，不让当天变成没有时段。
-		return spans
 	}
 	return out
 }
@@ -146,6 +157,13 @@ func NewSession(days TradingDays, location *time.Location, sessions []string, pe
 	}
 	c := &sessionClock{loc: location, days: days, spans: spans, period: period, perDay: 1, before: make([]int64, len(spans))}
 	c.early, _ = days.(EarlyCloses)
+	minOpen := period
+	if period == 24*time.Hour {
+		minOpen = time.Minute
+	}
+	if err := checkEarlyCloses(c.early, spans, minOpen); err != nil {
+		return nil, err
+	}
 	if period < 24*time.Hour {
 		c.perDay = 0
 		for i, item := range spans {
