@@ -34,7 +34,7 @@ func TestOpenInitializesLayoutMarkerForNewAndEmptyPaths(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(data) != "4\n" {
+			if string(data) != layoutVersion {
 				t.Fatalf("layout marker = %q", data)
 			}
 		})
@@ -59,7 +59,7 @@ func TestOpenRejectsNonEmptyStoreWithoutLayoutMarker(t *testing.T) {
 }
 
 func TestOpenRejectsUnsupportedOrDamagedLayoutMarkerWithoutCleanup(t *testing.T) {
-	for _, content := range []string{"1\n", "2\n", "3\n", "2", "garbage\n"} {
+	for _, content := range []string{"1\n", "2\n", "3\n", "4\n", "2", "garbage\n"} {
 		t.Run(strings.TrimSpace(content), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "db")
 			if err := os.Mkdir(path, 0o755); err != nil {

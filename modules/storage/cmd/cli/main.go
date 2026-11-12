@@ -11,7 +11,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/metadata"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	storagepebble "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
@@ -59,7 +58,7 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		stderr = io.Discard
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("expected command: init, import-seed, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory")
+		return fmt.Errorf("expected command: init, import-seed, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, or purge-dataset-events")
 	}
 	switch args[0] {
 	case "init":
@@ -78,50 +77,9 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		return runDeleteView(args[1:], stdout, stderr)
 	case "purge-dataset-events":
 		return runPurgeDatasetEvents(trpc.BackgroundContext(), args[1:], stdout)
-	case "period-inventory":
-		return runPeriodInventory(args[1:], stdout)
 	default:
-		return fmt.Errorf("unknown command %q: use init, import-seed, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory", args[0])
+		return fmt.Errorf("unknown command %q: use init, import-seed, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, or purge-dataset-events", args[0])
 	}
-}
-
-func runPeriodInventory(args []string, stdout io.Writer) error {
-	fs := flag.NewFlagSet("period-inventory", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	var path string
-	var nodeID string
-	var scope storagepebble.PeriodLedgerScope
-	fs.StringVar(&path, "path", "", "Existing Pebble database path; must not be open by storage-primary")
-	fs.StringVar(&nodeID, "node-id", "", "Expected Pebble store node ID; must match the store identity")
-	fs.StringVar(&scope.SpaceID, "space", "", "Exact Space ID")
-	fs.StringVar(&scope.DatasetID, "dataset", "", "Exact Dataset ID")
-	fs.StringVar(&scope.Frequency, "frequency", "", "Exact period frequency")
-	fs.Int64Var(&scope.PeriodTimeMin, "period-time-min", 0, "Inclusive Unix-seconds lower bound")
-	fs.Int64Var(&scope.PeriodTimeMax, "period-time-max", 0, "Inclusive Unix-seconds upper bound")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected period-inventory arguments: %s", strings.Join(fs.Args(), " "))
-	}
-	inventory, err := storagepebble.InspectPeriodLedger(path, nodeID, scope)
-	if err != nil {
-		return err
-	}
-	encoder := json.NewEncoder(stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(inventory); err != nil {
-		return fmt.Errorf("encode period inventory: %w", err)
-	}
-	if len(inventory.IntegrityErrors) > 0 {
-		return fmt.Errorf("period inventory contains %d integrity errors; do not use it to authorize cleanup", len(inventory.IntegrityErrors))
-	}
-	for _, period := range inventory.Periods {
-		if len(period.IntegrityErrors) > 0 {
-			return fmt.Errorf("period inventory contains period-level integrity errors; do not use it to authorize cleanup")
-		}
-	}
-	return nil
 }
 
 func writeOperationResult(stdout io.Writer, result operationResult) error {

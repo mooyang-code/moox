@@ -31,12 +31,18 @@ func (cleanupDatasetReader) ListDatasets(context.Context, metadata.DatasetQuery)
 
 // recordingCleaner 记录每个数据集的清理截止时间。
 type recordingCleaner struct {
-	cutoffs map[string]time.Time
+	cutoffs   map[string]time.Time
+	commitsAt time.Time
 }
 
 func (c *recordingCleaner) CleanupExpiredBuckets(_ context.Context, spaceID, datasetID string, before time.Time) (uint64, error) {
 	c.cutoffs[spaceID+"/"+datasetID] = before
 	return 3, nil
+}
+
+func (c *recordingCleaner) CleanupExpiredCommits(_ context.Context, now time.Time) error {
+	c.commitsAt = now
+	return nil
 }
 
 func TestDatasetCleanupUsesPolicyRetentionBySpaceAndFrequency(t *testing.T) {
@@ -64,6 +70,9 @@ func TestDatasetCleanupUsesPolicyRetentionBySpaceAndFrequency(t *testing.T) {
 		if got := cleaner.cutoffs[key]; !got.Equal(cutoff) {
 			t.Fatalf("%s cutoff = %s, want %s", key, got, cutoff)
 		}
+	}
+	if !cleaner.commitsAt.Equal(now) {
+		t.Fatalf("commit 标记清理时间 = %s, want %s", cleaner.commitsAt, now)
 	}
 }
 

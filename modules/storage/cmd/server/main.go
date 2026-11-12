@@ -180,9 +180,10 @@ type datasetReader interface {
 	ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error)
 }
 
-// bucketCleaner 删除一个数据集早于给定日桶的行，即主服务的 Pebble 库。
+// bucketCleaner 是主服务 Pebble 库的保留期清理：按数据集删早于给定日桶的行、账本与完成标记，另按 7 天删 commit 标记。
 type bucketCleaner interface {
 	CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID string, beforeBucket time.Time) (uint64, error)
+	CleanupExpiredCommits(ctx context.Context, now time.Time) error
 }
 
 func runCleanupLoop(ctx context.Context, cleanup datasetCleanup, interval time.Duration) {
@@ -258,11 +259,15 @@ type datasetCleanup struct {
 }
 
 func (c datasetCleanup) run(ctx context.Context, now time.Time) error {
+	// commit 标记按写入日固定保留 7 天，与各数据集的保留期无关，全库一次删除。
 	var result error
+	if err := c.store.CleanupExpiredCommits(ctx, now); err != nil {
+		result = fmt.Errorf("清理 commit 标记: %w", err)
+	}
 	for pageNo := uint32(1); ; pageNo++ {
 		datasets, page, err := c.reader.ListDatasets(ctx, metadata.DatasetQuery{DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Page: &pb.Page{Page: pageNo, Size: 1000}})
 		if err != nil {
-			return err
+			return errors.Join(result, err)
 		}
 		for _, dataset := range datasets {
 			if dataset == nil || (dataset.GetStatus() != "" && dataset.GetStatus() != "active") {

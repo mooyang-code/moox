@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"sort"
 	"strings"
@@ -16,9 +17,13 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// commitMarkerPrefix 下按数据集存放 commit 标记：键为 __commit/<space>/<dataset>/<sha256(commit_id)>，值为内容摘要。
-// 标记永久有效，只随删除数据集清理：若按时间过期，同一 commit_id 的旧内容重放会覆盖期间补算写入的新结果。
-const commitMarkerPrefix = "__commit/"
+// commit 标记按写入日分桶：键为 __commit/{写入日 YYYYMMDD（UTC）}/{hex 空间}/{hex 数据集}/{hex sha256(commit_id)}，值为内容摘要。
+// 标记固定保留 7 天，与数据集保留期无关：按保留期清理的话，同一 commit_id 的旧内容重放会盖掉期间补算写入的新结果；
+// 最长的重投来源是 MOOX_STORAGE 的 72 小时，7 天足够。查重时读今天和前 7 天共 8 个日桶，超过 7 天的同一 commit_id 当作新提交。
+const (
+	commitMarkerPrefix  = "__commit/"
+	commitRetentionDays = 7
+)
 
 // writeLogThreshold 是写入分段耗时日志的阈值。
 const writeLogThreshold = 50 * time.Millisecond
@@ -82,8 +87,9 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID s
 	lockedAt = time.Now()
 	var markerKey []byte
 	if commitID != "" {
-		markerKey = commitMarkerKey(spaceID, datasetID, commitID)
-		existing, found, err := s.readCommitMarker(markerKey)
+		now := s.periodNow().UTC()
+		markerKey = commitMarkerKey(commitDay(now), spaceID, datasetID, commitID)
+		existing, found, err := s.findCommitMarker(spaceID, datasetID, commitID, now)
 		if err != nil {
 			return nil, err
 		}
@@ -293,15 +299,66 @@ func validateCommitID(commitID string) error {
 	return nil
 }
 
-func datasetCommitPrefix(spaceID, datasetID string) []byte {
-	key := []byte(commitMarkerPrefix)
-	key = appendRawPart(key, []byte(spaceID))
-	return appendRawPart(key, []byte(datasetID))
+func commitDay(at time.Time) string { return at.UTC().Format("20060102") }
+
+func commitMarkerKey(day, spaceID, datasetID, commitID string) []byte {
+	sum := sha256.Sum256([]byte(commitID))
+	return []byte(commitMarkerPrefix + day + "/" + datasetScope(spaceID, datasetID) + hex.EncodeToString(sum[:]))
 }
 
-func commitMarkerKey(spaceID, datasetID, commitID string) []byte {
-	sum := sha256.Sum256([]byte(commitID))
-	return appendRawPart(datasetCommitPrefix(spaceID, datasetID), sum[:])
+// findCommitMarker 在今天和前 7 天共 8 个日桶里查同一 commit_id。
+func (s *Store) findCommitMarker(spaceID, datasetID, commitID string, now time.Time) ([]byte, bool, error) {
+	for days := 0; days <= commitRetentionDays; days++ {
+		digest, found, err := s.readCommitMarker(commitMarkerKey(commitDay(now.AddDate(0, 0, -days)), spaceID, datasetID, commitID))
+		if err != nil || found {
+			return digest, found, err
+		}
+	}
+	return nil, false, nil
+}
+
+// CleanupExpiredCommits 删掉写入日早于“今天减 7 天”的 commit 标记日桶，与数据集保留期无关。
+func (s *Store) CleanupExpiredCommits(ctx context.Context, now time.Time) error {
+	if s == nil || s.db == nil {
+		return errors.New("pebble store is closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	lower := []byte(commitMarkerPrefix)
+	upper := []byte(commitMarkerPrefix + commitDay(now.AddDate(0, 0, -commitRetentionDays)))
+	if err := s.db.DeleteRange(lower, upper, s.writeOptions); err != nil {
+		return err
+	}
+	s.compactAsync(lower, upper)
+	return nil
+}
+
+// stageDeleteDatasetCommits 在 batch 里删掉一个数据集在各日桶下的 commit 标记。
+func (s *Store) stageDeleteDatasetCommits(batch *cpebble.Batch, spaceID, datasetID string) ([][2][]byte, error) {
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(commitMarkerPrefix), UpperBound: nextPrefix([]byte(commitMarkerPrefix))})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	var ranges [][2][]byte
+	for valid := iter.First(); valid; {
+		rest := iter.Key()[len(commitMarkerPrefix):]
+		slash := bytes.IndexByte(rest, '/')
+		if slash < 0 {
+			valid = iter.Next()
+			continue
+		}
+		dayPrefix := commitMarkerPrefix + string(rest[:slash+1])
+		lower := []byte(dayPrefix + datasetScope(spaceID, datasetID))
+		upper := nextPrefix(lower)
+		if err := batch.DeleteRange(lower, upper, s.writeOptions); err != nil {
+			return nil, err
+		}
+		ranges = append(ranges, [2][]byte{lower, upper})
+		valid = iter.SeekGE(nextPrefix([]byte(dayPrefix)))
+	}
+	return ranges, iter.Error()
 }
 
 func (s *Store) readCommitMarker(key []byte) ([]byte, bool, error) {

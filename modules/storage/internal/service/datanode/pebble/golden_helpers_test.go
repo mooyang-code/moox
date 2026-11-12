@@ -49,19 +49,19 @@ func newGoldenStore(t *testing.T, clock *goldenClock) *Store {
 // goldenFinalize 跑一次截止判定（与后台每秒一次的判定相同），返回错误。
 func goldenFinalize(t *testing.T, store *Store, now time.Time) error {
 	t.Helper()
-	_, err := store.FinalizeWaitingDatasetPeriods(context.Background(), now, periodFinalizeBatch)
+	_, err := store.FinalizeWaitingDatasetPeriods(context.Background(), now)
 	return err
 }
 
 // goldenPeriodStatus 返回账本里一期的状态；周期不存在时返回空串。
 func goldenPeriodStatus(t *testing.T, store *Store, spaceID, datasetID, frequency string, periodTime int64) string {
 	t.Helper()
-	progress, found, err := store.PeriodStatusByKey(context.Background(), spaceID, datasetID, frequency, periodTime, false)
+	record, found, err := store.readPeriodRecord(periodKey(spaceID, datasetID, frequency, periodTime))
 	require.NoError(t, err)
 	if !found {
 		return ""
 	}
-	return progress.Status
+	return record.Status
 }
 
 // goldenSeries 规整序列名单，返回规范顺序（序号即规范顺序下的位置）。

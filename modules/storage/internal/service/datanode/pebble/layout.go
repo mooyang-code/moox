@@ -12,9 +12,10 @@ import (
 const (
 	layoutMarkerName       = "storage_layout_version"
 	layoutMarkerTempPrefix = "." + layoutMarkerName + ".tmp-"
-	// 版本 4：字段/属性命名空间之外，同批写入按时间排序的历史行索引与按标的排序的序列历史索引。
+	// 版本 5：在版本 4（字段、属性、按时间与按标的排序的两种历史行索引）之上，周期账本改为每期一条记录（__period/），
+	// 完成标记按“数据集/频率/周期/来源/触发事件”存放（__marker/），commit 标记按写入日分桶（__commit/）。
 	// 其他版本的数据都要显式重置后再用，不做原地升级。
-	layoutVersion = "4\n"
+	layoutVersion = "5\n"
 )
 
 func ensureLayout(path string) error {

@@ -24,7 +24,6 @@ message DatasetPeriodExpectation {
   uint32 expected_count = 6;
   int64 deadline_at = 7;
   repeated DatasetPeriodSeries series_snapshot = 8;
-  string reservation_id = 9;
 }
 
 // SeriesSnapshotEntry 是快照中一条序列的身份（标的加 series_tag），Storage 用它重算 series_hash。
@@ -36,18 +35,6 @@ message SeriesSnapshotEntry {
 message TimeSeriesBatchRow {
   uint32 series_index = 1;
   RowFieldUpsert row = 2;
-}
-
-enum PeriodFailureDisposition {
-  PERIOD_FAILURE_DISPOSITION_UNSPECIFIED = 0;
-  PERIOD_FAILURE_DISPOSITION_RECORDED = 1;
-  PERIOD_FAILURE_DISPOSITION_ALREADY_SUCCEEDED = 2;
-  PERIOD_FAILURE_DISPOSITION_MISSED_DEADLINE = 3;
-}
-
-message DatasetPeriodFailureResult {
-  uint32 series_index = 1;
-  PeriodFailureDisposition disposition = 2;
 }
 
 // RowsCursor 是 ReadTimeSeriesRows 游标的内容，只在服务端编码与解码，不出现在公开请求中。

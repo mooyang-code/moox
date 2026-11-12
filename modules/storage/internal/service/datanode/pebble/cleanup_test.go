@@ -7,9 +7,7 @@ import (
 	"testing"
 	"time"
 
-	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/events"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -113,60 +111,11 @@ func TestDeleteDatasetRowsRemovesCommitMarkersMarkersAndOutbox(t *testing.T) {
 	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := store.readCommitMarker(commitMarkerKey("s", "delete-me", "receipt-1")); err != nil || found {
+	if _, found, err := store.findCommitMarker("s", "delete-me", "receipt-1", time.Now()); err != nil || found {
 		t.Fatalf("commit marker survived dataset deletion: found=%v err=%v", found, err)
 	}
 	if entries, err := store.ListOutbox(context.Background(), 0, 20); err != nil || len(entries) != 0 {
 		t.Fatalf("outbox after cleanup entries=%d err=%v", len(entries), err)
-	}
-}
-
-func TestDeleteDatasetRowsClearsPeriodProgressAndIndexes(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	ctx := context.Background()
-	deadline := time.Now().UTC().Add(time.Minute).Unix()
-	exp := periodExpectationForTest(time.Now().UTC().Truncate(time.Minute), 1, "BTC-USDT")
-	exp.SpaceID = "s"
-	exp.DatasetID = "delete-me"
-	exp.DeadlineAt = deadline
-	keep := exp
-	keep.DatasetID = "keep-me"
-	if _, err := store.EnsureDatasetPeriod(ctx, exp); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.EnsureDatasetPeriod(ctx, keep); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := store.DeleteDatasetRows(ctx, exp.SpaceID, exp.DatasetID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.GetDatasetPeriodProgress(ctx, exp); !errors.Is(err, cpebble.ErrNotFound) {
-		t.Fatalf("deleted period progress err=%v, want not found", err)
-	}
-
-	finalized, err := store.FinalizeWaitingDatasetPeriods(ctx, time.Unix(deadline+1, 0).UTC(), 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if finalized != 1 {
-		t.Fatalf("finalized periods=%d, want only unrelated dataset", finalized)
-	}
-	if got := countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()); got != 1 {
-		t.Fatalf("collector period markers=%d, want only unrelated dataset marker", got)
-	}
-
-	result, err := store.EnsureDatasetPeriod(ctx, exp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "waiting" {
-		t.Fatalf("recreated period status=%q, want waiting", result.Status)
 	}
 }
 

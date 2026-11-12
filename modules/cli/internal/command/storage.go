@@ -20,7 +20,7 @@ var storageCmd = &cobra.Command{
 	Use:     "storage",
 	Aliases: []string{"存储"},
 	Short:   "View 维护与元数据重置",
-	Long: "Storage 的维护命令。维护命令（repair-view、force-rebuild-view、reset-view-consumers、reset-metadata、delete-view、purge-dataset-events、period-inventory）" +
+	Long: "Storage 的维护命令。维护命令（repair-view、force-rebuild-view、reset-view-consumers、reset-metadata、delete-view、purge-dataset-events）" +
 		"按 --file（moox.toml）经 SSH 在存储机上执行部署包里的 moox-storage-cli，不需要本机装存储程序。历史数据导入请使用 moox-cli import。",
 	Run: func(cmd *cobra.Command, args []string) {
 		_ = cmd.Help()
@@ -96,11 +96,6 @@ var storageMaintenanceActions = []storageMaintenanceAction{
 		Action: "purge-dataset-events", Defaults: storageConfDefaults, DryRun: true,
 		Short: "精确清理一个数据集在 EventBus 里的历史事件（默认只预览，--yes 才执行）",
 		Long:  "参数：--space、--dataset（必填）。只用于可由后续采样重新生成的运维数据，行情、交易和因子业务数据集不得使用。",
-	},
-	{
-		Action: "period-inventory", Defaults: func(string) map[string]string { return nil },
-		Short: "只读盘点 Pebble 库里的周期完成标记（要求 storage-primary 没有打开该数据库）",
-		Long:  "参数：--path（Pebble 数据库路径，存储机上的路径）、--node-id、--space、--dataset、--frequency、--period-time-min、--period-time-max。",
 	},
 }
 

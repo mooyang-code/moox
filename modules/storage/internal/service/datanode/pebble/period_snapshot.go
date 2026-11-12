@@ -59,7 +59,7 @@ type StaleEffectiveFromError struct{ Reason string }
 func (e StaleEffectiveFromError) Error() string { return "effective_from_stale: " + e.Reason }
 
 func snapshotScope(spaceID, datasetID, frequency string) string {
-	return hex.EncodeToString([]byte(spaceID)) + "/" + hex.EncodeToString([]byte(datasetID)) + "/" + hex.EncodeToString([]byte(frequency)) + "/"
+	return datasetScope(spaceID, datasetID) + hex.EncodeToString([]byte(frequency)) + "/"
 }
 
 func seriesSnapshotKey(spaceID, datasetID, frequency, hash string) []byte {
@@ -230,8 +230,8 @@ func prefixUpperBound(prefix string) []byte {
 
 // hasPeriodAtOrAfter 判断该数据集该频率在 from 及之后是否已有周期记录。
 func (s *Store) hasPeriodAtOrAfter(spaceID, datasetID, frequency string, from int64) (bool, error) {
-	prefix := periodProgressPrefix + hex.EncodeToString([]byte(spaceID)) + "/" + hex.EncodeToString([]byte(datasetID)) + "/" + hex.EncodeToString([]byte(frequency)) + "/"
-	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(fmt.Sprintf("%s%020d/", prefix, from)), UpperBound: prefixUpperBound(prefix)})
+	prefix := periodScopePrefix(spaceID, datasetID, frequency)
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(prefix + periodTimePart(from)), UpperBound: prefixUpperBound(prefix)})
 	if err != nil {
 		return false, err
 	}
@@ -294,47 +294,4 @@ func (s *Store) planLazyPeriod(exp DatasetPeriodExpectation, allowedLatenessSeco
 	exp.DeadlineAt = deadline
 	exp.SeriesSnapshot = snapshot
 	return exp, nil
-}
-
-// PeriodMissingIndexes 返回期望集合减去成功位图后的序号。
-func PeriodMissingIndexes(expected uint32, success []byte) []uint32 {
-	missing := make([]uint32, 0)
-	for index := uint32(0); index < expected; index++ {
-		if !bitmapBitSet(success, index) {
-			missing = append(missing, index)
-		}
-	}
-	return missing
-}
-
-// PeriodStatusByKey 只按周期键查询，不要求调用方提供 hash；周期不存在时 found=false。
-func (s *Store) PeriodStatusByKey(ctx context.Context, spaceID, datasetID, frequency string, periodTime int64, includeProgress bool) (*DatasetPeriodProgress, bool, error) {
-	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" || strings.TrimSpace(frequency) == "" || periodTime <= 0 {
-		return nil, false, invalid("space_id, dataset_id, frequency and period_time are required")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, false, err
-	}
-	s.datasetWriteMu.RLock()
-	defer s.datasetWriteMu.RUnlock()
-	s.periodMu.Lock()
-	defer s.periodMu.Unlock()
-	base := periodBase(spaceID, datasetID, frequency, periodTime)
-	status, found, err := s.readPeriodStatus(base)
-	if err != nil || !found {
-		return nil, false, err
-	}
-	current, err := s.readPeriodExpectation(base)
-	if err != nil {
-		return nil, false, err
-	}
-	progress := &DatasetPeriodProgress{DatasetPeriodExpectation: current, Status: status}
-	if includeProgress {
-		bitmap, err := s.readPeriodBitmap(base)
-		if err != nil {
-			return nil, false, err
-		}
-		progress.Bitmap = bitmap
-	}
-	return progress, true, nil
 }

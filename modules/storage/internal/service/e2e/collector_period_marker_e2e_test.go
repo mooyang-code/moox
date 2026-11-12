@@ -6,6 +6,7 @@ import (
 	"context"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -26,9 +28,11 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	defer cancel()
 
 	period := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	var now atomic.Int64
+	now.Store(period.Add(5 * time.Second).UnixNano())
 	store, err := pebble.Open(pebble.Options{
 		Path: filepath.Join(t.TempDir(), "pebble"), NodeID: "period-marker-e2e",
-		PeriodNow: func() time.Time { return period.Add(5 * time.Second) },
+		PeriodNow: func() time.Time { return time.Unix(0, now.Load()).UTC() },
 	})
 	require.NoError(t, err)
 	defer store.Close()
@@ -79,34 +83,33 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 		relay.Close()
 	}()
 
-	deadline := period.Add(time.Minute)
+	// 截止时间 = 收盘（+1m）+ 允许迟到 15s。
+	deadline := period.Add(time.Minute + 15*time.Second)
+	set, err := seriesset.Canonicalize([]seriesset.Series{{SubjectID: "BTC-USDT"}, {SubjectID: "ETH-USDT"}})
+	require.NoError(t, err)
+	now.Store(period.Add(-time.Minute).UnixNano())
+	snapshot, err := store.RegisterSeriesSnapshot(ctx, "crypto", "dataset-period-marker-e2e", "1m", set.Series, period.Unix())
+	require.NoError(t, err)
+	now.Store(period.Add(5 * time.Second).UnixNano())
 	expectation := pebble.DatasetPeriodExpectation{
 		SpaceID: "crypto", DatasetID: "dataset-period-marker-e2e", Frequency: "1m",
-		PeriodTime: period.Unix(), SeriesHash: "period-marker-e2e-scope", ExpectedCount: 2,
-		DeadlineAt: deadline.Unix(),
-		SeriesSnapshot: []pebble.DatasetPeriodSeries{
-			{SeriesIndex: 0, SubjectID: "BTC-USDT"},
-			{SeriesIndex: 1, SubjectID: "ETH-USDT"},
-		},
+		PeriodTime: period.Unix(), SeriesHash: snapshot.SeriesHash, ExpectedCount: snapshot.ExpectedCount,
+		AllowedLatenessSeconds: 15,
 	}
-	_, err = store.EnsureDatasetPeriod(ctx, expectation)
-	require.NoError(t, err)
 	row := &storagegen.RowFieldUpsert{
 		Key: &storagegen.RowKey{SpaceId: expectation.SpaceID, DatasetId: expectation.DatasetID, Kind: &storagegen.RowKey_TimeSeries{TimeSeries: &storagegen.TimeSeriesRowKey{
 			SubjectId: "BTC-USDT", Freq: expectation.Frequency, DataTime: period.Format(time.RFC3339Nano),
 		}}},
 		Fields: []*storagegen.FieldValue{{FieldId: "close", Value: &storagegen.TypedValue{Value: &storagegen.TypedValue_DoubleValue{DoubleValue: 68000}}}},
 	}
-	_, err = store.CommitTimeSeriesBatch(ctx, expectation, []pebble.TimeSeriesBatchItem{{SeriesIndex: 0, Row: row}})
+	result, err := store.CommitTimeSeriesBatch(ctx, expectation, []pebble.TimeSeriesBatchItem{{SeriesIndex: 0, Row: row}})
 	require.NoError(t, err)
-	failures, err := store.RecordDatasetPeriodFailures(ctx, expectation, []uint32{1})
+	require.Equal(t, "waiting", result.Status)
+	require.Equal(t, deadline.Unix(), result.DeadlineAt)
+	// 后台判定和这里抢同一期，只断言最终只发出一个标记，不断言是谁判定的。
+	now.Store(deadline.UnixNano())
+	_, err = store.FinalizeWaitingDatasetPeriods(ctx, deadline)
 	require.NoError(t, err)
-	require.Equal(t, "waiting", failures.Status)
-	require.Len(t, failures.FailureResults, 1)
-	require.Equal(t, storagegen.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_RECORDED, failures.FailureResults[0].GetDisposition())
-	finalized, err := store.FinalizeWaitingDatasetPeriods(ctx, deadline, 10)
-	require.NoError(t, err)
-	require.Equal(t, 1, finalized)
 	select {
 	case <-publisher.entered:
 	case <-ctx.Done():

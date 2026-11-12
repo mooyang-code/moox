@@ -77,9 +77,6 @@ type CollectionItem struct {
 	SeriesIndex   uint32 `json:"series_index,omitempty"`
 	SeriesHash    string `json:"series_hash,omitempty"`
 	ExpectedCount uint32 `json:"expected_count,omitempty"`
-	// PeriodReservationID fences deployment canary writes from other publishers
-	// while the target Storage period is waiting.
-	PeriodReservationID string `json:"period_reservation_id,omitempty"`
 }
 
 type ItemResult struct {

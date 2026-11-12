@@ -45,11 +45,6 @@ type OutboxEntry struct {
 	CreatedAt time.Time
 }
 
-type OutboxStats struct {
-	Pending       int
-	OldestEventAt time.Time
-}
-
 type Store struct {
 	db                      *cpebble.DB
 	writeOptions            *cpebble.WriteOptions
@@ -63,7 +58,6 @@ type Store struct {
 	outboxPublicationMu     sync.Mutex
 	outboxPublicationLocks  map[outboxDatasetScope]*outboxPublicationLock
 	periodMu                sync.Mutex
-	periodFinalizeMu        sync.Mutex
 	periodNow               func() time.Time
 	periodFinalizeErrorMu   sync.Mutex
 	periodFinalizeLastError string
@@ -107,7 +101,7 @@ func Open(opts Options) (*Store, error) {
 	cache := cpebble.NewCache(cacheBytes)
 	// Open 会自己持有一份引用；这里放掉创建时的那份，DB 关闭时缓存随之释放。
 	defer cache.Unref()
-	db, err := cpebble.Open(opts.Path, &cpebble.Options{Merger: BitmapORMerger, Cache: cache})
+	db, err := cpebble.Open(opts.Path, &cpebble.Options{Cache: cache})
 	if err != nil {
 		return nil, err
 	}
@@ -466,44 +460,6 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*Outbo
 	return result, nil
 }
 
-// OutboxStats 扫描已提交 outbox 记录，供 relay 汇报完整等待数量，而非仅汇报
-// 单次发布批次。时间戳解码失败不改变 relay 行为；下一条记录仍由
-// PrepareOutboxPublication 负责权威校验。
-func (s *Store) OutboxStats(ctx context.Context) (OutboxStats, error) {
-	if err := ctx.Err(); err != nil {
-		return OutboxStats{}, err
-	}
-	revision := s.outboxRevision.Load()
-	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(outboxPrefix), UpperBound: []byte(outboxPrefix + "\xff")})
-	if err != nil {
-		return OutboxStats{}, err
-	}
-	defer iter.Close()
-	stats := OutboxStats{}
-	for valid := iter.First(); valid; valid = iter.Next() {
-		if err := ctx.Err(); err != nil {
-			return OutboxStats{}, err
-		}
-		stats.Pending++
-		message := &eventpb.EventMessage{}
-		if err := proto.Unmarshal(iter.Value(), message); err != nil {
-			continue
-		}
-		var eventAt time.Time
-		if occurred := message.GetOccurredAt(); occurred != nil && occurred.CheckValid() == nil {
-			eventAt = occurred.AsTime()
-		}
-		if !eventAt.IsZero() && (stats.OldestEventAt.IsZero() || eventAt.Before(stats.OldestEventAt)) {
-			stats.OldestEventAt = eventAt
-		}
-	}
-	if err := iter.Error(); err != nil {
-		return OutboxStats{}, err
-	}
-	s.applyOutboxHintIfUnchanged(revision, func() { s.setOutboxHintFromStats(stats) })
-	return stats, nil
-}
-
 // InsertOutboxPayloadForTest writes raw EventMessage bytes without validating
 // the current outbox contract. Tests use it to stage retired event types.
 func (s *Store) InsertOutboxPayloadForTest(raw []byte) (uint64, error) {
@@ -659,17 +615,6 @@ func (s *Store) setOutboxHintFromList(count int, mayHaveMore bool, oldestEventAt
 		s.outboxOldestEventNanos.Store(0)
 	} else if !oldestEventAt.IsZero() {
 		s.outboxOldestEventNanos.Store(oldestEventAt.UTC().UnixNano())
-	}
-}
-
-func (s *Store) setOutboxHintFromStats(stats OutboxStats) {
-	s.outboxPending.Store(int64(stats.Pending))
-	s.outboxHintKnown.Store(true)
-	s.outboxHintMayHaveMore.Store(false)
-	if stats.OldestEventAt.IsZero() {
-		s.outboxOldestEventNanos.Store(0)
-	} else {
-		s.outboxOldestEventNanos.Store(stats.OldestEventAt.UTC().UnixNano())
 	}
 }
 

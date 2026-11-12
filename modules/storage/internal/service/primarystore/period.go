@@ -120,7 +120,7 @@ func periodExpectation(in *pb.DatasetPeriodExpectation) pebble.DatasetPeriodExpe
 	}
 	return pebble.DatasetPeriodExpectation{
 		SpaceID: in.GetSpaceId(), DatasetID: in.GetDatasetId(), Frequency: in.GetFrequency(), PeriodTime: in.GetPeriodTime(),
-		SeriesHash: in.GetSeriesHash(), ExpectedCount: in.GetExpectedCount(), DeadlineAt: in.GetDeadlineAt(), ReservationID: in.GetReservationId(), SeriesSnapshot: seriesSnapshot,
+		SeriesHash: in.GetSeriesHash(), ExpectedCount: in.GetExpectedCount(), DeadlineAt: in.GetDeadlineAt(), SeriesSnapshot: seriesSnapshot,
 	}
 }
 
