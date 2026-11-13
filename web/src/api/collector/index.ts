@@ -53,7 +53,6 @@ export interface CollectionTaskPayload {
 }
 
 export interface CollectionTaskResultConfig {
-  data_node_id?: string;
   description?: string;
 }
 

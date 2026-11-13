@@ -55,17 +55,22 @@ func TestResultDisplayNameUsesShortChinese(t *testing.T) {
 }
 
 type resultMetadataFake struct {
-	datasets       map[string]*storagepb.Dataset
-	views          map[string]*storagepb.View
+	datasets map[string]*storagepb.Dataset
+	views    map[string]*storagepb.View
+	// viewStates 是 storage-view 里各 View 的已建状态；没有的按 VIEW_NOT_FOUND 回答。
+	viewStates     map[string]*storagepb.GetViewStateRsp
 	createDatasets int
 	createViews    int
+	updateViews    int
 	failView       bool
 	columnNames    []string
 	columns        []*storagepb.DatasetColumn
+	// upsertColumns 只统计单独补列的调用，随 CreateDataset 一起写入的列不算。
+	upsertColumns int
 }
 
 func newResultMetadataFake() *resultMetadataFake {
-	return &resultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
+	return &resultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}, viewStates: map[string]*storagepb.GetViewStateRsp{}}
 }
 
 func resultOK() *storagepb.RetInfo { return &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS} }
@@ -95,8 +100,16 @@ func (f *resultMetadataFake) GetDataset(_ context.Context, req *storagepb.GetDat
 
 func (f *resultMetadataFake) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
 	f.createDatasets++
-	f.datasets[req.GetDataset().GetDatasetId()] = req.GetDataset()
-	return &storagepb.CreateDatasetRsp{RetInfo: resultOK(), Dataset: req.GetDataset()}, nil
+	// 和 Storage 一样：数据集建好即启用，列随数据集一起写入。
+	dataset := req.GetDataset()
+	dataset.Status = "active"
+	f.datasets[dataset.GetDatasetId()] = dataset
+	for _, column := range req.GetColumns() {
+		column.SpaceId, column.DatasetId = dataset.GetSpaceId(), dataset.GetDatasetId()
+		f.columnNames = append(f.columnNames, column.GetColumnName())
+		f.columns = append(f.columns, column)
+	}
+	return &storagepb.CreateDatasetRsp{RetInfo: resultOK(), Dataset: dataset}, nil
 }
 
 func (f *resultMetadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
@@ -126,43 +139,29 @@ func (f *resultMetadataFake) CreateView(_ context.Context, req *storagepb.Create
 	return &storagepb.CreateViewRsp{RetInfo: resultOK(), View: req.GetView()}, nil
 }
 
-func (f *resultMetadataFake) UpdateView(_ context.Context, req *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
-	view := req.GetView()
-	f.views[view.GetViewId()] = view
-	return &storagepb.UpdateViewRsp{RetInfo: resultOK(), View: view}, nil
-}
-
 func (f *resultMetadataFake) DeleteView(_ context.Context, req *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
 	delete(f.views, req.GetViewId())
 	return &storagepb.DeleteViewRsp{RetInfo: resultOK()}, nil
 }
 
 func (f *resultMetadataFake) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
+	f.upsertColumns++
 	f.columnNames = append(f.columnNames, req.GetColumn().GetColumnName())
 	f.columns = append(f.columns, req.GetColumn())
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: resultOK()}, nil
 }
 
-func (f *resultMetadataFake) UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
-	return &storagepb.UpsertViewColumnRsp{RetInfo: resultOK()}, nil
-}
-
-func (f *resultMetadataFake) CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
-	return &storagepb.CheckDatasetActivationRsp{RetInfo: resultOK(), Ready: true}, nil
-}
-
-func (f *resultMetadataFake) ActivateDataset(_ context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
-	dataset := f.datasets[req.GetDatasetId()]
-	if dataset != nil {
-		dataset.Status = "active"
+func (f *resultMetadataFake) GetViewState(_ context.Context, req *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
+	if state := f.viewStates[req.GetViewId()]; state != nil {
+		return state, nil
 	}
-	return &storagepb.ActivateDatasetRsp{RetInfo: resultOK(), Dataset: dataset}, nil
+	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
 }
 
 func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 	fake := newResultMetadataFake()
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-	config := Config{DataNodeID: "node-1", Frequency: "1h", SubjectTags: []string{"binance_spot"}, OutputFields: []string{"close"}}
+	config := Config{Frequency: "1h", SubjectTags: []string{"binance_spot"}, OutputFields: []string{"close"}}
 	first, err := manager.Ensure(context.Background(), "crypto", "task-1", "kline", "spot", config)
 	require.NoError(t, err)
 	second, err := manager.Ensure(context.Background(), "crypto", "task-1", "kline", "spot", config)
@@ -175,11 +174,14 @@ func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 	require.Equal(t, "task-1", fake.datasets[first.DatasetID].GetAttributes()["collector_task_id"])
 	require.Equal(t, "task-1", fake.views[first.ViewID].GetAttributes()["collector_task_id"])
 	require.Equal(t, []string{"binance_spot"}, fake.datasets[first.DatasetID].GetSubjectTags())
+	// 首次建数据集时列随 CreateDataset 一起写入；第二次走已有数据集，按同一定义补一遍列。
 	require.Equal(t, []string{"close", "close"}, fake.columnNames)
+	require.Equal(t, 1, fake.upsertColumns)
 	require.Equal(t, "view_task_1_kline_1h", first.ViewID)
 }
 
-func TestEnsureOutputFieldsAppendsToExplicitViewProjection(t *testing.T) {
+// 改输出字段只补数据集的列：View 的列跟着数据集走，不再改 View；不支持的字段照旧拒绝。
+func TestEnsureOutputFieldsOnlyAddsDatasetColumns(t *testing.T) {
 	fake := newResultMetadataFake()
 	ids := ResultIDs("crypto", "task-projection")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
@@ -188,21 +190,16 @@ func TestEnsureOutputFieldsAppendsToExplicitViewProjection(t *testing.T) {
 	}
 	fake.views[ids.ViewID] = &storagepb.View{
 		SpaceId: "crypto", ViewId: ids.ViewID, Name: "任务结果", DatasetId: ids.DatasetID, Status: "active",
-		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-projection", "moox.columns_explicit": "true"},
-		Columns: []*storagepb.ViewColumn{
-			{ColumnName: "close", OriginId: "close"},
-			{ColumnName: "provider_id", OriginId: "provider_id"},
-		},
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-projection"},
 	}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 	require.NoError(t, manager.EnsureOutputFields(context.Background(), "crypto", "task-projection", ids.DatasetID, ids.ViewID, "kline", []string{"open", "close"}))
 
-	// View 的列只能追加：任务收窄输出后旧列留着（新行里为空），只补上新增的字段。
-	got := fake.views[ids.ViewID].GetColumns()
-	require.Len(t, got, 3)
-	require.Equal(t, "close", got[0].GetColumnName())
-	require.Equal(t, "provider_id", got[1].GetColumnName())
-	require.Equal(t, "open", got[2].GetColumnName())
+	require.Equal(t, []string{"open", "close"}, fake.columnNames)
+	require.Zero(t, fake.updateViews, "不再改 View")
+
+	err := manager.EnsureOutputFields(context.Background(), "crypto", "task-projection", ids.DatasetID, ids.ViewID, "kline", []string{"no_such_field"})
+	require.ErrorIs(t, err, ErrUnsupportedOutputFields)
 }
 
 func TestEnsurePreservesExistingSubjectTagsWhenConfigOmitsTags(t *testing.T) {
@@ -216,7 +213,7 @@ func TestEnsurePreservesExistingSubjectTagsWhenConfigOmitsTags(t *testing.T) {
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 
 	_, err := manager.Ensure(context.Background(), "crypto", "task-existing-tags", "kline", "spot", Config{
-		DataNodeID: "node-1", Frequency: "1h",
+		Frequency: "1h",
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"binance_spot"}, fake.datasets[ids.DatasetID].GetSubjectTags())
@@ -233,7 +230,7 @@ func TestEnsureUpdatesExistingSubjectTagsWithRequestedScope(t *testing.T) {
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 
 	_, err := manager.Ensure(context.Background(), "crypto", "task-update-tags", "kline", "spot", Config{
-		DataNodeID: "node-1", Frequency: "1h", SubjectTags: []string{"new_tag"},
+		Frequency: "1h", SubjectTags: []string{"new_tag"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"new_tag"}, fake.datasets[ids.DatasetID].GetSubjectTags())
@@ -242,12 +239,12 @@ func TestEnsureUpdatesExistingSubjectTagsWithRequestedScope(t *testing.T) {
 func TestEnsureDeclaresTheTaskFrequency(t *testing.T) {
 	fake := newResultMetadataFake()
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-	ids, err := manager.Ensure(context.Background(), "crypto", "task-5m", "kline", "spot", Config{DataNodeID: "node-1", Frequency: "5m"})
+	ids, err := manager.Ensure(context.Background(), "crypto", "task-5m", "kline", "spot", Config{Frequency: "5m"})
 	require.NoError(t, err)
 	require.Equal(t, "5m", fake.datasets[ids.DatasetID].GetFreq())
 	require.Empty(t, fake.views[ids.ViewID].GetFreq(), "Storage fills the View freq from its Dataset")
 
-	ids, err = manager.Ensure(context.Background(), "crypto", "task-1h", "kline", "spot", Config{DataNodeID: "node-1", Frequency: "1H"})
+	ids, err = manager.Ensure(context.Background(), "crypto", "task-1h", "kline", "spot", Config{Frequency: "1H"})
 	require.NoError(t, err)
 	require.Equal(t, "1h", fake.datasets[ids.DatasetID].GetFreq(), "a frequency alias is declared in canonical form")
 }
@@ -255,19 +252,18 @@ func TestEnsureDeclaresTheTaskFrequency(t *testing.T) {
 func TestEnsureWritesTheMarketCalendarAndAlignment(t *testing.T) {
 	fake := newResultMetadataFake()
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-	stock, err := manager.Ensure(context.Background(), "stockcn", "task-stock-5m", "kline", "equity", Config{DataNodeID: "node-1", Frequency: "5m"})
+	stock, err := manager.Ensure(context.Background(), "stockcn", "task-stock-5m", "kline", "equity", Config{Frequency: "5m"})
 	require.NoError(t, err)
 	attrs := fake.datasets[stock.DatasetID].GetAttributes()
 	require.Equal(t, "cn_stock", attrs["calendar"])
-	require.Equal(t, "session", attrs["alignment"])
+	require.Equal(t, "session", fake.datasets[stock.DatasetID].GetAlignment())
 	require.Equal(t, "equity", attrs["market_type"])
 
-	crypto, err := manager.Ensure(context.Background(), "crypto", "task-crypto-5m", "kline", "spot", Config{DataNodeID: "node-1", Frequency: "5m"})
+	crypto, err := manager.Ensure(context.Background(), "crypto", "task-crypto-5m", "kline", "spot", Config{Frequency: "5m"})
 	require.NoError(t, err)
 	attrs = fake.datasets[crypto.DatasetID].GetAttributes()
 	_, hasCalendar := attrs["calendar"]
-	_, hasAlignment := attrs["alignment"]
-	require.False(t, hasCalendar || hasAlignment, "crypto 不写 calendar、alignment，策略缺省按 crypto_24x7")
+	require.False(t, hasCalendar || fake.datasets[crypto.DatasetID].GetAlignment() != "", "crypto 不写 calendar、alignment，策略缺省按 crypto_24x7")
 	require.Equal(t, "spot", attrs["market_type"])
 
 	// 已有的结果数据集缺这两项时补上，已有的值不改。
@@ -276,18 +272,18 @@ func TestEnsureWritesTheMarketCalendarAndAlignment(t *testing.T) {
 		SpaceId: "stockcn", DatasetId: ids.DatasetID, Status: "active",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-existing", "market_type": "equity"},
 	}
-	_, err = manager.Ensure(context.Background(), "stockcn", "task-existing", "kline", "equity", Config{DataNodeID: "node-1", Frequency: "5m"})
+	_, err = manager.Ensure(context.Background(), "stockcn", "task-existing", "kline", "equity", Config{Frequency: "5m"})
 	require.NoError(t, err)
 	attrs = fake.datasets[ids.DatasetID].GetAttributes()
 	require.Equal(t, "cn_stock", attrs["calendar"])
-	require.Equal(t, "session", attrs["alignment"])
+	require.Equal(t, "session", fake.datasets[ids.DatasetID].GetAlignment())
 }
 
 func TestEnsureCompensatesDatasetWhenViewCreationFails(t *testing.T) {
 	fake := newResultMetadataFake()
 	fake.failView = true
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-	_, err := manager.Ensure(context.Background(), "crypto", "task-view-failure", "kline", "spot", Config{DataNodeID: "node-1", Frequency: "1h"})
+	_, err := manager.Ensure(context.Background(), "crypto", "task-view-failure", "kline", "spot", Config{Frequency: "1h"})
 	require.Error(t, err)
 	ids := ResultIDs("crypto", "task-view-failure")
 	_, datasetExists := fake.datasets[ids.DatasetID]
@@ -311,9 +307,9 @@ func TestInspectReportsTaskOwnedReadyResultAndLastDataTime(t *testing.T) {
 		ViewId:     ids.ViewID,
 		DatasetId:  ids.DatasetID,
 		Status:     "active",
-		IndexedTo:  "2026-09-20T04:00:00Z",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-inspect"},
 	}
+	fake.viewStates[ids.ViewID] = &storagepb.GetViewStateRsp{RetInfo: resultOK(), IndexId: "idx", IndexedFrom: "2026-09-01T00:00:00Z", IndexedTo: "2026-09-20T04:00:00Z"}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 
 	inspection, err := manager.Inspect(context.Background(), "crypto", "task-inspect")
@@ -321,6 +317,8 @@ func TestInspectReportsTaskOwnedReadyResultAndLastDataTime(t *testing.T) {
 	require.Equal(t, ids, inspection.IDs)
 	require.Equal(t, "ready", inspection.Status)
 	require.Equal(t, "2026-09-20T04:00:00Z", inspection.LastDataTime)
+	require.Equal(t, "2026-09-01T00:00:00Z", inspection.CoverageStart)
+	require.Equal(t, "2026-09-20T04:00:00Z", inspection.CoverageEnd)
 	require.Equal(t, ids.ViewID, inspection.View.GetViewId())
 }
 
@@ -330,7 +328,7 @@ func TestInspectReportsPendingWhenResultMetadataIsIncomplete(t *testing.T) {
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: ids.DatasetID,
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-pending"},
-		Status:     "draft",
+		Status:     "active",
 	}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 
@@ -442,7 +440,7 @@ func TestEnsureRejectsUnownedDatasetCollision(t *testing.T) {
 	}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 	_, err := manager.Ensure(context.Background(), "crypto", "builtin-binance-spot-kline-1m", "kline", "spot", Config{
-		DataNodeID: "node-1", Frequency: "1m",
+		Frequency: "1m",
 	})
 	require.ErrorContains(t, err, "owned by another task")
 }
@@ -485,7 +483,7 @@ func TestEnsureRecordsTheTagsSharedDataSource(t *testing.T) {
 	fake := taggedResultMetadataFake{newResultMetadataFake(), map[string]string{"binance_spot": "binance", "binance_swap": "binance", "okx_spot": "okx"}, nil}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 	ensure := func(taskID string, tags ...string) *storagepb.Dataset {
-		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{DataNodeID: "node-1", Frequency: "1m", SubjectTags: tags})
+		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{Frequency: "1m", SubjectTags: tags})
 		require.NoError(t, err)
 		return fake.datasets[ResultIDs("crypto", taskID).DatasetID]
 	}
@@ -500,7 +498,7 @@ func TestEnsureRecordsTheTagsSharedDataSource(t *testing.T) {
 	}
 	require.Equal(t, "binance", ensure("unsourced", "binance_swap").GetDataSourceId(), "an existing result without a data source gets it assigned")
 
-	_, err := manager.Ensure(context.Background(), "crypto", "missing-tag", "kline", "", Config{DataNodeID: "node-1", Frequency: "1m", SubjectTags: []string{"unknown"}})
+	_, err := manager.Ensure(context.Background(), "crypto", "missing-tag", "kline", "", Config{Frequency: "1m", SubjectTags: []string{"unknown"}})
 	require.Error(t, err)
 }
 
@@ -522,23 +520,12 @@ func TestDeleteRefusesWhenExtraViewReferencesResultDatasetAndKeepsData(t *testin
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: attrs}
 	fake.views[ids.ViewID] = &storagepb.View{ViewId: ids.ViewID, DatasetId: ids.DatasetID, Attributes: attrs}
 	fake.views["manual-view"] = &storagepb.View{ViewId: "manual-view", DatasetId: ids.DatasetID}
-	cleaner := &countingCleaner{}
-	manager := &Manager{metadata: fake, cleaner: cleaner, auth: &storagepb.AuthInfo{AppId: "collector"}}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 	err := manager.Delete(context.Background(), "crypto", ids)
 	require.ErrorIs(t, err, ErrResultContract)
 	require.Contains(t, err.Error(), "manual-view")
-	require.Zero(t, cleaner.calls, "存在额外 View 时不得物理清理数据")
-}
-
-type countingCleaner struct{ calls int }
-
-func (c *countingCleaner) DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	c.calls++
-	return &storagepb.PrimaryDeleteDatasetRowsRsp{RetInfo: resultOK()}, nil
-}
-
-func (c *countingCleaner) RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
-	return &storagepb.PrimaryRestoreDatasetRowsRsp{RetInfo: resultOK()}, nil
+	require.Contains(t, fake.datasets, ids.DatasetID, "存在额外 View 时不得删除结果数据集")
+	require.Contains(t, fake.views, ids.ViewID, "存在额外 View 时不得删除结果自身的 View")
 }
 
 // 同一数据源的现货、永续两个标签：统一数据集，market_type 为 multi，数据源保留；单市场的标签写它自己的市场。
@@ -548,7 +535,7 @@ func TestEnsureMarksSpotSwapTagsAsUnifiedDataset(t *testing.T) {
 		map[string]string{"binance_spot": "spot", "binance_swap": "swap", "okx_swap": "swap"}}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 	ensure := func(taskID string, tags ...string) *storagepb.Dataset {
-		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{DataNodeID: "node-1", Frequency: "1m", SubjectTags: tags})
+		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{Frequency: "1m", SubjectTags: tags})
 		require.NoError(t, err)
 		return fake.datasets[ResultIDs("crypto", taskID).DatasetID]
 	}
@@ -569,27 +556,52 @@ func TestEnsureColumnsCreatesFundingRateOnlyWhenSelected(t *testing.T) {
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 	manager.SetFieldOffers(marketdata.FieldOffers{{MarketID: "crypto", Instrument: "swap", ProviderID: "binance",
 		Spec: marketdata.FieldSpec{ID: "funding_rate", Name: "资金费率", Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}}})
-	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", "view", storagepb.DataKind_DATA_KIND_TIME_SERIES, nil))
+	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", storagepb.DataKind_DATA_KIND_TIME_SERIES, nil))
 	require.NotContains(t, fake.columnNames, "funding_rate", "默认字段不含资金费率")
 
 	fake.columnNames, fake.columns = nil, nil
-	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", "view", storagepb.DataKind_DATA_KIND_TIME_SERIES, []string{"close", "funding_rate"}))
+	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", storagepb.DataKind_DATA_KIND_TIME_SERIES, []string{"close", "funding_rate"}))
 	require.Equal(t, []string{"close", "funding_rate"}, fake.columnNames)
 	funding := fake.columns[1]
 	require.Equal(t, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, funding.GetValueType())
 	require.Equal(t, "zero", funding.GetAttributes()["fill"])
 	require.Equal(t, "资金费率", funding.GetAttributes()["display_name"])
 
-	columns, err := manager.resultViewColumns("crypto", IDs{ViewID: "view"}, []string{"close", "funding_rate"})
-	require.NoError(t, err)
-	require.Equal(t, "funding_rate", columns[1].GetColumnName())
-	require.Equal(t, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, columns[1].GetValueType())
-	require.Equal(t, "资金费率", columns[1].GetAttributes()["display_name"])
 }
 
 // 未登记的市场报错，不当成连续交易的市场悄悄跳过 calendar、alignment。
 func TestEnsureRejectsUnregisteredMarket(t *testing.T) {
 	manager := NewManagerWithAPI(newResultMetadataFake(), &storagepb.AuthInfo{AppId: "collector"})
-	_, err := manager.Ensure(context.Background(), "no_such_space", "task-unknown-5m", "kline", "equity", Config{DataNodeID: "node-1", Frequency: "5m"})
+	_, err := manager.Ensure(context.Background(), "no_such_space", "task-unknown-5m", "kline", "equity", Config{Frequency: "5m"})
 	require.ErrorIs(t, err, barclock.ErrUnknownMarket)
+}
+
+// 覆盖范围只取已建好的索引：索引还在建时退回属性；storage-view 报别的错照常返回错误，不当成覆盖范围未知。
+func TestInspectCoverageComesFromBuiltViewIndex(t *testing.T) {
+	fake := newResultMetadataFake()
+	ids := ResultIDs("crypto", "task-coverage")
+	attrs := map[string]string{"owner_module": "collector", "collector_task_id": "task-coverage"}
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: attrs}
+	fake.views[ids.ViewID] = &storagepb.View{
+		SpaceId: "crypto", ViewId: ids.ViewID, DatasetId: ids.DatasetID, Status: "active",
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-coverage", "indexed_to": "2026-09-19T00:00:00Z"},
+	}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+
+	fake.viewStates[ids.ViewID] = &storagepb.GetViewStateRsp{RetInfo: resultOK(), IndexedTo: "2026-09-20T04:00:00Z"}
+	inspection, err := manager.Inspect(context.Background(), "crypto", "task-coverage")
+	require.NoError(t, err)
+	require.Equal(t, "2026-09-19T00:00:00Z", inspection.LastDataTime, "索引还没建好，退回 View 属性")
+	require.Equal(t, "2026-09-19T00:00:00Z", inspection.CoverageEnd)
+
+	// storage-view 暂时不可用：覆盖范围按未知，退回属性，清单不失败。
+	fake.viewStates[ids.ViewID] = &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "storage-view 不可用"}}
+	inspection, err = manager.Inspect(context.Background(), "crypto", "task-coverage")
+	require.NoError(t, err)
+	require.Equal(t, "2026-09-19T00:00:00Z", inspection.CoverageEnd)
+
+	// 调用契约错误照常上报。
+	fake.viewStates[ids.ViewID] = &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_NO_PERMISSION, Msg: "无权限"}}
+	_, err = manager.Inspect(context.Background(), "crypto", "task-coverage")
+	require.ErrorIs(t, err, ErrResultContract)
 }

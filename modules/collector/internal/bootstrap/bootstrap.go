@@ -127,16 +127,15 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if resultMetadataErr != nil {
 		return nil, fmt.Errorf("initialize collector result metadata client: %w", resultMetadataErr)
 	}
-	resultManager := collectorresult.NewManagerWithCleaner(resultMetadata.Client, resultMetadata.Primary, resultMetadata.Auth)
+	resultManager := collectorresult.NewManager(resultMetadata.Client, resultMetadata.View, resultMetadata.Auth)
 	resultManager.SetFieldOffers(marketwiring.FieldOffers())
-	if err := ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager, cfg.Storage.ResultDataNodeID); err != nil {
+	if err := ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager); err != nil {
 		return nil, fmt.Errorf("initialize collector task results: %w", err)
 	}
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
 		DatasetSource:     storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway)),
 		RealtimeInventory: realtimeInventory,
 		ResultManager:     resultManager,
-		ResultDataNodeID:  cfg.Storage.ResultDataNodeID,
 		// 附加字段由行情源目录里的来源提供：建任务、改任务、任务表单都按目录判断。
 		FieldOffers: marketwiring.FieldOffers(),
 	})
@@ -212,7 +211,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	return process, nil
 }
 
-func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, manager *collectorresult.Manager, dataNodeID string) error {
+func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, manager *collectorresult.Manager) error {
 	if repo == nil || manager == nil {
 		return fmt.Errorf("task result metadata dependencies are not configured")
 	}
@@ -243,7 +242,6 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 				logicalIDs := collectorresult.ResultIDsForTask(task.SpaceID, task.TaskID, task.DataType, params.Frequency)
 				ids, err = manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, "", collectorresult.Config{
 					ViewID:       firstNonEmptyResultID(task.ResultViewID, logicalIDs.ViewID),
-					DataNodeID:   dataNodeID,
 					Name:         task.TaskName,
 					Description:  task.Description,
 					Frequency:    taskResultFrequency(*params),

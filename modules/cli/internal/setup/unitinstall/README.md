@@ -49,4 +49,4 @@ Linux 完整门禁 `make test-unit-install-linux` 必须提供本机预先构建
 
 `Deploy` / `moox-runtime deploy --request PATH` 负责 host、EventBus、Access、出口代理、Trade、Collector Stream 和 Storage 单元。请求摘要绑定软件、实际身份与 EventBus 清单以及配置覆盖字节；`deployment.json` 在准备和激活前持久记录候选。中断激活先恢复旧快照，回滚后以同一原始请求准备新候选，保留退役候选。完成请求修复缺失进程，保留用户暂停；旧完成请求不能重新接管已变更的 current。原生 `setup deploy-host` 和 `setup deploy-unit` 已调用此流程，整个发布的回滚仍须外层编排。
 
-包含 storage-primary 的候选在旧进程停止、独立复制/导入状态之后执行预构建的 `moox-storage-cli init`，再核验候选并切换 current。子进程只接受私有 MOOX 环境，数据根强制为候选内 `./var/storage`，继承维护锁并设置 Linux 父进程死亡信号；失败输出省略，取消先等待其退出。关闭 SQLite 后同步元数据文件与目录，不遍历全部数据集。初始化失败沿用激活恢复，旧快照不被改写。只有 View 或 Node 的 Storage 部署不初始化主库。
+包含 storage-primary 的候选在旧进程停止、独立复制/导入状态之后执行预构建的 `moox-storage-cli init`，再核验候选并切换 current。子进程只接受私有 MOOX 环境，数据根强制为候选内 `./var/storage`，继承维护锁并设置 Linux 父进程死亡信号；失败输出省略，取消先等待其退出。关闭 SQLite 后同步元数据文件与目录，不遍历全部数据集。初始化失败沿用激活恢复，旧快照不被改写。只有 View 的 Storage 部署不初始化主库。

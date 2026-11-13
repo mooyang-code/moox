@@ -16,7 +16,7 @@ import (
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/report/logsink"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_model/go"
+	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"google.golang.org/protobuf/proto"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -81,12 +81,7 @@ func (h *Handler) FlushOnOutputAdvance() (cancel func()) {
 }
 
 // NotifyOutputAdvanced 由数据集输出水位前进的地方调用（DatasetMetrics、Storage View），通知已订阅的处理器补报。
-// 系统数据（mooxsys：主机指标）不补报：Monitor 把每份主机快照写进系统数据集，水位因此前进，
-// 若再触发补报就会形成每秒一份快照的循环。
-func NotifyOutputAdvanced(spaceID string) {
-	if spaceID == DefaultSpace {
-		return
-	}
+func NotifyOutputAdvanced() {
 	advanceSubscribersMu.Lock()
 	handlers := append([]*Handler(nil), advanceSubscribers...)
 	advanceSubscribersMu.Unlock()

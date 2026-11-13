@@ -27,15 +27,12 @@ const (
 const (
 	kindSpace         = "space"
 	kindView          = "view"
-	kindViewColumn    = "view_column"
 	kindDataSource    = "data_source"
 	kindSubject       = "subject"
 	kindDataset       = "dataset"
 	kindFieldGroup    = "field_group"
 	kindField         = "field"
 	kindDatasetColumn = "dataset_column"
-	kindDataNode      = "data_node"
-	kindDevice        = "device"
 )
 
 // Options 保存元数据缓存包装器配置。
@@ -68,10 +65,7 @@ type entry struct {
 	DatasetIDs    []string `json:"dataset_ids,omitempty"`
 	DataKind      int32    `json:"data_kind,omitempty"`
 	Freq          string   `json:"freq,omitempty"`
-	DataNodeID    string   `json:"data_node_id,omitempty"`
-	BindingLocked bool     `json:"binding_locked,omitempty"`
 	Revision      uint64   `json:"revision,omitempty"`
-	ViewID        string   `json:"view_id,omitempty"`
 	ValueType     int32    `json:"value_type,omitempty"`
 	Engine        string   `json:"engine,omitempty"`
 	Payload       []byte   `json:"payload"`
@@ -201,28 +195,11 @@ func (s *requestSnapshot) GetDataset(spaceID string, datasetID string) (*pb.Data
 	return item, err == nil
 }
 
-func (s *requestSnapshot) GetDataNode(nodeID string) (*pb.DataNode, bool) {
-	if s == nil || s.snapshot == nil {
-		return nil, false
-	}
-	item, err := s.snapshot.getDataNode(trpc.BackgroundContext(), nodeID)
-	return item, err == nil
-}
-
 func (s *requestSnapshot) ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	if s == nil || s.snapshot == nil {
 		return nil, nil, errors.New("metadata snapshot is unavailable")
 	}
 	return s.snapshot.ListDatasetColumns(trpc.BackgroundContext(), spaceID, datasetID, page)
-}
-
-func (s *MetadataSnapshot) getDataNode(ctx context.Context, nodeID string) (*pb.DataNode, error) {
-	return snapshotGetProto(s, ctx, kindDataNode, "", nodeID, func() *pb.DataNode { return &pb.DataNode{} })
-}
-
-func (s *MetadataSnapshot) GetDataNode(nodeID string) (*pb.DataNode, bool) {
-	item, err := s.getDataNode(trpc.BackgroundContext(), nodeID)
-	return item, err == nil
 }
 
 func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {
@@ -239,17 +216,9 @@ func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]
 	return pageItems(items, page)
 }
 
+// GetView 返回缓存的 View；列与隐藏列在刷新缓存时已由底层按数据集列推出。
 func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
-	view, err := getProto(s, ctx, kindView, spaceID, viewID, func() *pb.View { return &pb.View{} })
-	if err != nil {
-		return nil, err
-	}
-	columns, _, err := s.ListViewColumns(ctx, spaceID, viewID, nil)
-	if err != nil {
-		return nil, err
-	}
-	view.Columns = columns
-	return view, nil
+	return getProto(s, ctx, kindView, spaceID, viewID, func() *pb.View { return &pb.View{} })
 }
 
 func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error) {
@@ -294,12 +263,17 @@ func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetI
 	}
 }
 
+// ListViewColumns 取缓存 View 里推出的列，顺序与底层一致。
 func (s *Store) ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindViewColumn, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) && (viewID == "" || item.ViewID == viewID)
-	}), func() *pb.ViewColumn { return &pb.ViewColumn{} })
+	views, err := decodeEntries(s.list(kindView, func(item entry) bool {
+		return (spaceID == "" || item.SpaceID == spaceID) && (viewID == "" || item.ID == viewID)
+	}), func() *pb.View { return &pb.View{} })
 	if err != nil {
 		return nil, nil, err
+	}
+	var items []*pb.ViewColumn
+	for _, view := range views {
+		items = append(items, view.GetColumns()...)
 	}
 	return pageItems(items, page)
 }
@@ -354,12 +328,6 @@ func (s *Store) ListDatasets(ctx context.Context, query metadata.DatasetQuery) (
 			return false
 		}
 		if query.DataSourceID != "" && item.DataSourceID != query.DataSourceID {
-			return false
-		}
-		if query.DataNodeID != "" && item.DataNodeID != query.DataNodeID {
-			return false
-		}
-		if len(query.DataNodeIDs) > 0 && !containsString(query.DataNodeIDs, item.DataNodeID) {
 			return false
 		}
 		return (query.DataKind == pb.DataKind_DATA_KIND_UNSPECIFIED || item.DataKind == int32(query.DataKind)) &&
@@ -489,31 +457,6 @@ func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetI
 	return pageItems(items, page)
 }
 
-func (s *Store) GetDataNode(ctx context.Context, nodeID string) (*pb.DataNode, error) {
-	return getProto(s, ctx, kindDataNode, "", nodeID, func() *pb.DataNode { return &pb.DataNode{} })
-}
-
-func (s *Store) ListDataNodes(ctx context.Context, page *pb.Page) ([]*pb.DataNode, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindDataNode, nil), func() *pb.DataNode { return &pb.DataNode{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
-func (s *Store) GetDevice(ctx context.Context, deviceID string) (*pb.Device, error) {
-	return getProto(s, ctx, kindDevice, "", deviceID, func() *pb.Device { return &pb.Device{} })
-}
-
-func (s *Store) ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	raw := s.list(kindDevice, func(item entry) bool { return engine == "" || item.Engine == engine })
-	items, err := decodeEntries(raw, func() *pb.Device { return &pb.Device{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
 func getProto[T proto.Message](s *Store, ctx context.Context, kind string, spaceID string, id string, newMessage func() T) (T, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -627,15 +570,6 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	if out, err = s.fetchViews(ctx, out); err != nil {
 		return nil, err
 	}
-	if out, err = s.fetchViewColumns(ctx, out); err != nil {
-		return nil, err
-	}
-	if out, err = s.fetchDataNodes(ctx, out); err != nil {
-		return nil, err
-	}
-	if out, err = s.fetchDevices(ctx, out); err != nil {
-		return nil, err
-	}
 	return out, nil
 }
 
@@ -695,7 +629,7 @@ func (s *Store) fetchDatasets(ctx context.Context, out []entry) ([]entry, error)
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freq: item.GetFreq(), DataNodeID: item.GetDataNodeId(), BindingLocked: item.GetBindingLocked(), Revision: item.GetRevision(), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freq: item.GetFreq(), Revision: item.GetRevision(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}
@@ -760,54 +694,6 @@ func (s *Store) fetchViews(ctx context.Context, out []entry) ([]entry, error) {
 	}
 	for _, item := range items {
 		out, err = appendEntry(out, entry{Kind: kindView, SpaceID: item.GetSpaceId(), ID: item.GetViewId(), DatasetID: item.GetDatasetId(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) fetchViewColumns(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
-		return s.base.ListViewColumns(ctx, "", "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindViewColumn, SpaceID: item.GetSpaceId(), ViewID: item.GetViewId(), ID: compositeID(item.GetViewId(), item.GetColumnName()), ValueType: int32(item.GetValueType())}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) fetchDataNodes(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.DataNode, *pb.PageResult, error) {
-		return s.base.ListDataNodes(ctx, page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDataNode, ID: item.GetNodeId(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) fetchDevices(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-		return s.base.ListDevices(ctx, "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDevice, ID: item.GetDeviceId(), Engine: item.GetEngine(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}
@@ -892,15 +778,6 @@ func pageItems[T any](items []T, page *pb.Page) ([]T, *pb.PageResult, error) {
 
 func notFound(kind string, spaceID string, id string) error {
 	return fmt.Errorf("metadata row not found: %s/%s/%s: %w", kind, spaceID, id, sql.ErrNoRows)
-}
-
-func containsString(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
 }
 
 func compositeID(owner, name string) string {

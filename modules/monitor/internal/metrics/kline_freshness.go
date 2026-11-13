@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/barclock"
+	"github.com/mooyang-code/moox/packages/events"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -191,7 +192,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 	if inventoryEvaluated {
 		state := e.inventory.State(now)
 		inventoryReport := KlineFreshnessReport{
-			Rule:    KlineFreshnessRule{SpaceID: InternalMetricSpaceID, ViewID: "task-result-inventory"},
+			Rule:    KlineFreshnessRule{SpaceID: events.SystemSpaceID, ViewID: "task-result-inventory"},
 			CheckID: TaskResultInventoryCheckID, Success: true, Reason: "inventory_fresh",
 			Diagnostic: fmt.Sprintf("cache_age_seconds=%.0f", state.Age.Seconds()),
 		}

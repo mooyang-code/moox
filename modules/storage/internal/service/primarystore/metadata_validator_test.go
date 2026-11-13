@@ -119,28 +119,23 @@ func (validatorSnapshot) GetDataset(string, string) (*pb.Dataset, bool) {
 	return &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"}, true
 }
 
-func (validatorSnapshot) GetDataNode(string) (*pb.DataNode, bool) {
-	return &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://127.0.0.1:20107"}, true
-}
-
 func (validatorSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return []*pb.DatasetColumn{{ColumnName: "value", OriginId: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"}}, &pb.PageResult{Page: 1, Size: 1000}, nil
 }
 
 func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 	var writes, reads int
-	node := &recordingNode{
-		write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-			writes++
-			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
-		},
-		read: func(_ context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
-			reads++
-			return &pb.ReadRowsRsp{RetInfo: successRetInfo(), Rows: []*pb.RowFieldValues{{Key: req.GetKeys()[0]}}}, nil
-		},
+	store := newHookStore(t)
+	store.upsert = func(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error) {
+		writes++
+		return store.Store.UpsertFields(ctx, spaceID, datasetID, commitID, rows)
+	}
+	store.readRows = func(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error) {
+		reads++
+		return store.Store.ReadRows(ctx, keys, columns, attributeKeys)
 	}
 	validator := NewMetadataValidator(&snapshotOnlyMetadataReader{snapshot: validatorSnapshot{}})
-	svc, err := New(Options{Snapshot: func() metadata.RequestSnapshot { return validatorSnapshot{} }, Node: node, Validator: validator})
+	svc, err := New(Options{Snapshot: func() metadata.RequestSnapshot { return validatorSnapshot{} }, Store: store, Validator: validator})
 	if err != nil {
 		t.Fatal(err)
 	}

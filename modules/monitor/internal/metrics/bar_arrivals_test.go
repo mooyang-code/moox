@@ -37,11 +37,9 @@ func TestDetectBarArrivalsOnlyForAdvancedPipelineWatermarks(t *testing.T) {
 	storage := arrivalSnapshot("storage-primary", "moox_storage_dataset", storageLabelsJSON, storageLabels, bar, bar.Add(time.Minute+time.Second), observed)
 	view := arrivalSnapshot("storage-view", "moox_storage_view", viewLabelsJSON, viewLabels, bar, bar.Add(time.Minute+2*time.Second), observed)
 	collector := arrivalSnapshot("collector", "moox_collector_dataset", storageLabelsJSON, storageLabels, bar, bar.Add(time.Minute), observed)
-	system := arrivalSnapshot("storage-view", "moox_storage_view", `{"dataset_id":"dataset_mooxsys_host_resource","freq":"1m","space_id":"mooxsys","view_id":"view_mooxsys_host_resource"}`,
-		map[string]string{"space_id": "mooxsys", "view_id": "view_mooxsys_host_resource", "dataset_id": "dataset_mooxsys_host_resource", "freq": "1m"}, bar, bar, observed)
-	samples := append(append(append(append([]Sample(nil), storage...), view...), collector...), system...)
+	samples := append(append(append([]Sample(nil), storage...), view...), collector...)
 
-	// 第一次见到：入库与视图各记一根；采集不是数据链路的环节，mooxsys 系统数据没有交易日历，都不记。
+	// 第一次见到：入库与视图各记一根；采集不是数据链路的环节，不记。
 	first := detectBarArrivals(samples, nil)
 	require.Len(t, first, 2)
 	require.Equal(t, "storage", first[0].Producer)

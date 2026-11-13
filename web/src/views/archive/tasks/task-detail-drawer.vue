@@ -47,9 +47,7 @@
         <a-descriptions-item label="定稿至">{{ formatInstant(task.final_until, zone) }}</a-descriptions-item>
         <a-descriptions-item label="回补起点">{{ formatInstant(task.backfill_from, zone) }}</a-descriptions-item>
         <a-descriptions-item v-if="task.consecutive_skips" label="连续跳过">{{ task.consecutive_skips }} 次</a-descriptions-item>
-        <a-descriptions-item label="线上保留 / DataNode"
-          >{{ formatRetention(task.retention) }} / {{ task.data_node_id || "—" }}</a-descriptions-item
-        >
+        <a-descriptions-item label="线上保留">{{ formatRetention(task.retention) }}</a-descriptions-item>
         <a-descriptions-item label="归档目录">
           <span class="mono">{{ taskDir(task) }}</span>
         </a-descriptions-item>

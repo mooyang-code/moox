@@ -22,7 +22,6 @@ vi.mock("@/api/collector", async importOriginal => ({
 vi.mock("@/api/storage/metadata", () => ({
   getDataset: vi.fn(),
   getView: vi.fn(),
-  listDataNodes: vi.fn(async () => ({ data_nodes: [], page_result: {} })),
   listFieldGroups: vi.fn(async () => ({ field_groups: [], page_result: {} })),
   listFields: vi.fn(async () => ({ fields: [], page_result: {} })),
   listTags: vi.fn(async () => ({ tags: [], page_result: {} }))

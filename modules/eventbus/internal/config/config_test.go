@@ -112,11 +112,10 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 		}
 		if stream.Name == "MOOX_STORAGE" {
 			assert.Equal(t, []string{
-				"moox.event.storage.dataset.rows.upserted.v2.>",
 				"moox.event.storage.dataset.period.completed.v1.>",
 				"moox.event.storage.view.data.ready.v2.>",
-				"moox.event.storage.dataset.sync_point.v1.>",
 			}, stream.Subjects)
+			assert.Equal(t, int64(2147483648), stream.MaxBytes)
 		}
 		delete(want, stream.Name)
 	}

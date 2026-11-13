@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/dispatch"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/store"
 	pb "github.com/mooyang-code/moox/modules/callbackdispatcher/proto/callbackdispatchergen"
+	"github.com/mooyang-code/moox/packages/events"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -127,7 +128,7 @@ func sampleRequest(entry catalog.Entry, ruleID, eventID string, at time.Time) (d
 	}
 	return delivery.Request{
 		RuleID: ruleID, EventID: eventID, EventName: entry.Name(), EventVersion: entry.Event.Version(),
-		SpaceID: "mooxsys", SubjectID: "test", OccurredAt: at, PayloadJSON: payload,
+		SpaceID: events.SystemSpaceID, SubjectID: "test", OccurredAt: at, PayloadJSON: payload,
 	}, nil
 }
 

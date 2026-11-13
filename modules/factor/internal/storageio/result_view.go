@@ -11,14 +11,9 @@ import (
 )
 
 // 默认 View 由 factor-mgr 自己建、改、删：Storage 不再替因子结果数据集托管 View。
-// 这些属性告诉 Storage 怎么维护它，Storage 不认识“因子”：
-//   - follow_dataset_columns：数据集加列后 View 跟着加列；
-//   - maintenance_priority：维护顺序，数字越小越先，因子结果排在采集结果之后。
-const (
-	ViewAttrFollowColumns       = "follow_dataset_columns"
-	ViewAttrMaintenancePriority = "maintenance_priority"
-	defaultResultViewPriority   = "10"
-)
+// View 的列由 Storage 按数据集启用的列推出（只读），数据集加列后 View 自动带上，storage-view 原地把它加进索引。
+// resultViewMaintenancePriority 告诉 Storage 维护顺序：数字越小越先，因子结果排在采集结果（0）之后；Storage 不认识“因子”。
+const resultViewMaintenancePriority = 10
 
 // DefaultResultViewID 是结果数据集的默认 View ID：view_<数据集 ID 去掉 dataset_ 前缀>。
 func DefaultResultViewID(datasetID string) string {
@@ -29,8 +24,8 @@ func isViewNotFound(code commonpb.ErrorCode) bool {
 	return code == commonpb.ErrorCode_NOT_FOUND || code == commonpb.ErrorCode_VIEW_NOT_FOUND
 }
 
-// EnsureResultView 保证结果数据集有默认 View：没有就按数据集当前的有效列建一个，已有就确认它属于这个数据集。
-// 之后数据集再加列，Storage 按 follow_dataset_columns 自动扩展它。
+// EnsureResultView 保证结果数据集有默认 View：没有就建一个，已有就确认它属于这个数据集。
+// 建 View 时不带列：View 的列由 Storage 从数据集推出。
 func (c *Client) EnsureResultView(ctx context.Context, spaceID, datasetID string) error {
 	if err := c.metadataReady("ensure result view"); err != nil {
 		return err
@@ -59,31 +54,13 @@ func (c *Client) EnsureResultView(ctx context.Context, spaceID, datasetID string
 	if dataset.DataKind != DataKindTimeSeries || dataset.Freq == "" {
 		return errors.New("结果数据集必须是带频率的时序数据集才能建默认 View")
 	}
-	columns, err := c.ListColumns(ctx, spaceID, datasetID)
-	if err != nil {
-		return err
-	}
-	viewColumns := make([]*storagepb.ViewColumn, 0, len(columns))
-	for _, column := range columns {
-		if column.Status != "" && column.Status != ColumnStatusActive {
-			continue
-		}
-		viewColumns = append(viewColumns, &storagepb.ViewColumn{
-			SpaceId: spaceID, ViewId: viewID, ColumnName: column.ColumnName,
-			OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: column.ColumnName,
-			ValueType: columnTypeToProto(column.ValueType), SortOrder: uint32(len(viewColumns)),
-			Attributes: cloneStringMap(column.Attributes),
-		})
-	}
 	created, err := c.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.auth, CreateOnly: true, View: &storagepb.View{
 		SpaceId: spaceID, ViewId: viewID, Name: dataset.Name, DatasetId: datasetID,
 		GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Freq: dataset.Freq,
-		Engine: "duckdb", Status: "active", Columns: viewColumns,
+		Engine: "duckdb", Status: "active", MaintenancePriority: resultViewMaintenancePriority,
 		Attributes: map[string]string{
-			"owner_module":              "factor",
-			"view_role":                 "factor_result", // 页面按它找到结果 View；Storage 不读
-			ViewAttrFollowColumns:       "true",
-			ViewAttrMaintenancePriority: defaultResultViewPriority,
+			"owner_module": "factor",
+			"view_role":    "factor_result", // 页面按它找到结果 View；Storage 不读
 		},
 	}})
 	if err != nil {

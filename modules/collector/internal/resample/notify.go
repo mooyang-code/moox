@@ -19,18 +19,12 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// DatasetSyncPoints 在数据集的有序 outbox 里追加同步点：View 处理到它，之前的行都已写入索引。
-type DatasetSyncPoints interface {
-	AppendDatasetSyncPoint(ctx context.Context, spaceID, datasetID, requestID, source string) error
-}
-
-// NoticePublisher 把补写通知合并成批，对源数据集追加同步点，再写入本地发件箱；发件箱里的事件由 Collector 级的中继
+// NoticePublisher 把补写通知合并成批写入本地发件箱；发件箱里的事件由 Collector 级的中继
 // （eventbus.Relay）发布 event.collector.kline.backfilled。
 //
-// 一批通知的 ID 由通知 ID 确定性算出：崩溃后重放得到同一个同步点与事件 ID，JetStream 用 Msg-Id 去重。
+// 一批通知的 ID 由通知 ID 确定性算出：崩溃后重放得到同一个事件 ID，JetStream 用 Msg-Id 去重。
 type NoticePublisher struct {
 	State    *store.ResampleStateRepository
-	Sync     DatasetSyncPoints
 	Registry *events.Registry
 	// Enabled 为假表示没有配置事件总线：通知只保留到保留期，不成批。
 	Enabled bool
@@ -130,12 +124,6 @@ func batchID(ids []int64) string {
 
 func (p *NoticePublisher) sealGroup(ctx context.Context, group *noticeGroup) error {
 	id := batchID(group.ids)
-	// 先追加同步点：事件发出时，读 View 的消费者可以等 View 追上它。同一批重放得到同一个 request_id。
-	if p.Sync != nil {
-		if err := p.Sync.AppendDatasetSyncPoint(ctx, group.spaceID, group.datasetID, id, "catchup"); err != nil {
-			return fmt.Errorf("append sync point: %w", err)
-		}
-	}
 	subjects := make([]string, 0, len(group.subjects))
 	for subject := range group.subjects {
 		subjects = append(subjects, subject)
@@ -151,7 +139,7 @@ func (p *NoticePublisher) sealGroup(ctx context.Context, group *noticeGroup) err
 	payload := &storagepb.CollectorKlineBackfilled{
 		DatasetId: group.datasetID, Frequency: group.frequency, SubjectIds: subjects,
 		Start: timestamppb.New(group.start), End: timestamppb.New(group.end), Origin: group.origin, JobId: group.jobID,
-		SyncRequestId: id, ConfirmedAt: timestamppb.New(now), SeriesTags: seriesTags,
+		ConfirmedAt: timestamppb.New(now), SeriesTags: seriesTags,
 	}
 	raw, err := p.Registry.MarshalMessage(events.CollectorKlineBackfilled, payload, events.PublishOptions{
 		EventID: id, OccurredAt: now, SpaceID: group.spaceID, SubjectID: group.datasetID,

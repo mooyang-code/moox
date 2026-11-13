@@ -24,7 +24,6 @@ type Config struct {
 	GatewayClient gatewayclient.FileConfig         `yaml:"gateway_client"`
 	sourcePath    string                           `yaml:"-"`
 	Database      DatabaseConfig                   `yaml:"database"`
-	Storage       StorageConfig                    `yaml:"storage"`
 	SCFAccess     gatewayclient.ExternalFileConfig `yaml:"scf_access"`
 	// SCFRegions 是各地域的函数网络；SCFMarkets 是每个空间、市场使用的地域；SCFPlan 是函数部署参数。
 	SCFRegions         map[string]marketfetch.PlanNetwork `yaml:"scf_regions"`
@@ -85,11 +84,6 @@ type DatabaseConfig struct {
 	MaxOpenConns    int           `yaml:"max_open_conns"`
 	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`
 	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
-}
-
-// StorageConfig identifies the node used for collected results.
-type StorageConfig struct {
-	ResultDataNodeID string `yaml:"result_data_node_id"`
 }
 
 // SCFAccessEndpoint is the fixed endpoint selected for one function region.
@@ -239,9 +233,6 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_DB_PATH"); v != "" {
 		c.Database.Path = v
 	}
-	if v := os.Getenv("MOOX_COLLECTOR_RESULT_DATA_NODE_ID"); v != "" {
-		c.Storage.ResultDataNodeID = v
-	}
 	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
 	}
@@ -343,7 +334,6 @@ func Default() *Config {
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
-		Storage:      StorageConfig{ResultDataNodeID: "storage-node-0"},
 		SCFPlan:      defaultSCFPlan(),
 		SubjectSync:  subjectsync.DefaultConfig(),
 		EgressLimits: EgressLimitsConfig{Eastmoney: cnstock.DefaultRequestLimitConfig()},

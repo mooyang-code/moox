@@ -50,7 +50,6 @@ type monitorGatewayWire struct {
 	mu          sync.Mutex
 	nonces      map[string]bool
 	reads       int
-	writes      int
 	refreshes   int
 }
 
@@ -93,11 +92,11 @@ func (w *monitorGatewayWire) verify(ctx context.Context, service, method string,
 	return nil
 }
 
-func (w *monitorGatewayWire) GetSpace(ctx context.Context, req *storagepb.GetSpaceReq) (*storagepb.GetSpaceRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "GetSpace", req); err != nil {
+func (w *monitorGatewayWire) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "GetDataset", req); err != nil {
 		return nil, err
 	}
-	if req.GetSpaceId() != "mooxsys" {
+	if req.GetSpaceId() != "crypto" {
 		return nil, errors.New("monitor space changed")
 	}
 	w.mu.Lock()
@@ -107,20 +106,17 @@ func (w *monitorGatewayWire) GetSpace(ctx context.Context, req *storagepb.GetSpa
 	if reads == 1 {
 		return nil, errs.NewFrameError(errs.RetServerNoService, "refresh this read")
 	}
-	return &storagepb.GetSpaceRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}}, nil
+	return &storagepb.GetDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: &storagepb.Dataset{SpaceId: "crypto", DatasetId: req.GetDatasetId()}}, nil
 }
 
-func (w *monitorGatewayWire) UpsertFields(ctx context.Context, req *storagepb.PrimaryUpsertFieldsReq) (*storagepb.PrimaryUpsertFieldsRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "UpsertFields", req); err != nil {
+func (w *monitorGatewayWire) ReadRows(ctx context.Context, req *storagepb.PrimaryReadRowsReq) (*storagepb.PrimaryReadRowsRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "ReadRows", req); err != nil {
 		return nil, err
 	}
 	if !proto.Equal(req.GetAuthInfo(), storageauth.Primary("monitor")) {
 		return nil, errors.New("Storage role authentication changed")
 	}
-	w.mu.Lock()
-	w.writes++
-	w.mu.Unlock()
-	return nil, errs.NewFrameError(errs.RetServerNoService, "writes must not retry")
+	return &storagepb.PrimaryReadRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func (w *monitorGatewayWire) GetTaskResultInventory(ctx context.Context, req *collectorpb.GetTaskResultInventoryReq) (*collectorpb.GetTaskResultInventoryRsp, error) {
@@ -184,11 +180,12 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	require.NoError(t, err)
 	runtime := &Runtime{Gateway: gateway, StorageGateway: storagegateway.New(gateway)}
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
-	rsp, err := runtime.StorageGateway.GetSpace(t.Context(), &storagepb.GetSpaceReq{SpaceId: "mooxsys"})
+	rsp, err := runtime.StorageGateway.GetDataset(t.Context(), &storagepb.GetDatasetReq{SpaceId: "crypto", DatasetId: "dataset_crypto_kline_1m"})
 	require.NoError(t, err)
-	require.Equal(t, "mooxsys", rsp.GetSpace().GetSpaceId())
-	_, err = runtime.StorageGateway.UpsertFields(t.Context(), &storagepb.PrimaryUpsertFieldsReq{AuthInfo: storageauth.Primary("monitor")})
-	require.Equal(t, int(errs.RetServerNoService), int(errs.Code(err)), "%v", err)
+	require.Equal(t, "crypto", rsp.GetDataset().GetSpaceId())
+	rows, err := runtime.StorageGateway.ReadRows(t.Context(), &storagepb.PrimaryReadRowsReq{AuthInfo: storageauth.Primary("monitor")})
+	require.NoError(t, err)
+	require.Equal(t, storagepb.ErrorCode_SUCCESS, rows.GetRetInfo().GetCode())
 	inventory, err := monmetrics.NewCollectorInventoryGatewayClient(runtime.Gateway)
 	require.NoError(t, err)
 	inventoryResponse, err := inventory.GetTaskResultInventory(t.Context(), &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto", SnapshotId: "generation-1"})
@@ -205,22 +202,21 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	var forbidden adminpb.SetDeploymentStatusRsp
 	require.Error(t, runtime.Gateway.Invoke(t.Context(), "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", &adminpb.SetDeploymentStatusReq{}, &forbidden))
 	wire.mu.Lock()
-	reads, writes, nonces, refreshes := wire.reads, wire.writes, len(wire.nonces), wire.refreshes
+	reads, nonces, refreshes := wire.reads, len(wire.nonces), wire.refreshes
 	wire.mu.Unlock()
 	require.Equal(t, 2, reads)
-	require.Equal(t, 1, writes)
 	require.Equal(t, 8, nonces)
 	require.GreaterOrEqual(t, refreshes, 2)
-	_, err = runtime.StorageGateway.GetSpace(t.Context(), &storagepb.GetSpaceReq{SpaceId: "mooxsys"}, client.WithTarget("ip://192.0.2.99:20200"))
+	_, err = runtime.StorageGateway.GetDataset(t.Context(), &storagepb.GetDatasetReq{SpaceId: "crypto"}, client.WithTarget("ip://192.0.2.99:20200"))
 	require.ErrorContains(t, err, "instead of tRPC client options")
 	cache, err := os.Stat(filepath.Join(data, "gatewayclient", "directory.json"))
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), cache.Mode().Perm())
 	require.NoError(t, runtime.Close())
 	require.NoError(t, runtime.Close())
-	_, err = runtime.StorageGateway.GetSpace(t.Context(), &storagepb.GetSpaceReq{SpaceId: "mooxsys"})
+	_, err = runtime.StorageGateway.GetDataset(t.Context(), &storagepb.GetDatasetReq{SpaceId: "crypto"})
 	require.Error(t, err)
-	_, err = storagegateway.New(nil).GetSpace(t.Context(), &storagepb.GetSpaceReq{})
+	_, err = storagegateway.New(nil).GetDataset(t.Context(), &storagepb.GetDatasetReq{})
 	require.ErrorContains(t, err, "unavailable")
 }
 

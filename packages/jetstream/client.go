@@ -119,6 +119,12 @@ func (c *Client) maxPayload() int {
 	return c.cfg.MaxPayload
 }
 
+// NewDisconnected 返回一个尚未连接的客户端：发布直接返回连接错误，调用 Reconnect 连上后照常使用。
+// 给 EventBus 不可用时也要先启动、之后再连的发布方用。
+func NewDisconnected(cfg Config) *Client {
+	return &Client{cfg: cfg.normalized()}
+}
+
 // Connect establishes a NATS connection and creates a JetStream context.
 func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if ctx == nil {

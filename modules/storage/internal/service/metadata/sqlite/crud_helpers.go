@@ -38,22 +38,6 @@ var (
 	unmarshalOptions = protojson.UnmarshalOptions{DiscardUnknown: true}
 )
 
-// ErrViewIndexConflict 表示活动索引的状态与这次提交的预期不一致。
-var ErrViewIndexConflict = errors.New("View 索引状态与这次提交的预期不一致")
-
-const sqliteBuildTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
-
-func requireChangedRow(result sql.Result) error {
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return ErrViewIndexConflict
-	}
-	return nil
-}
-
 func getMessage[T proto.Message](ctx context.Context, db queryRower, query string, args []any, newMessage func() T) (T, error) {
 	row := db.QueryRowContext(ctx, query, args...)
 	return scanMessage(row, newMessage)
@@ -211,13 +195,6 @@ func defaultStatus(status string) string {
 	return status
 }
 
-func defaultJSON(raw string) string {
-	if strings.TrimSpace(raw) == "" {
-		return "{}"
-	}
-	return raw
-}
-
 func boolInt(value bool) int {
 	if value {
 		return 1
@@ -276,16 +253,4 @@ func datasetOriginSQL(origin pb.DatasetColumnOriginType) string {
 	default:
 		return "field"
 	}
-}
-
-func mapsEqual(left map[string]string, right map[string]string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for key, leftValue := range left {
-		if right[key] != leftValue {
-			return false
-		}
-	}
-	return true
 }

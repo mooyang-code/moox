@@ -269,7 +269,7 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance <策略名
   - 必须在这台机器上拉时，只拉增量，压缩后用 `rsync --bwlimit=200` 限速传输。
   - REST 请求控制在交易所的权重上限以内（币安合约每分钟 2400），每请求一次停 0.25 秒。
 - 长时间的远程任务用 `nohup … &` 放到后台，再轮询它的日志，不要依赖一条长 SSH 连接。
-- 结果 View 和 Storage 节点都不能被验收脚本直接读取：View 需要调用方身份；Pebble 被运行中的进程占用，不能只读打开。策略库（SQLite）可以只读打开，`strategy_check.py` 用的就是这条路径。
+- 结果 View 和 Storage 的 Pebble 库都不能被验收脚本直接读取：View 需要调用方身份；Pebble 被运行中的 storage-primary 占用，不能只读打开。策略库（SQLite）可以只读打开，`strategy_check.py` 用的就是这条路径。
 
 ## 8. 陷阱清单（实际遇到过的）
 

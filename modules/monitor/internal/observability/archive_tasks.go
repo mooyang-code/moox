@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
@@ -29,7 +29,7 @@ const ArchiveCoverageCheckName = "未归档的数据集"
 // 另有一项比对 Storage 的数据集清单，有限保留期的时序数据集还没有归档任务时失败。
 // archive-mgr 没有部署或停止上报（没有新鲜的 worker 在线状态序列）时两类都不生成，免得把它的故障报成“全部未归档”；它自身的故障由服务检查告警。
 func (b Builder) buildArchiveHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return nil, nil
 	}
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
@@ -96,7 +96,7 @@ func (b Builder) buildArchiveHealth(ctx context.Context, spaceID string, now tim
 		}
 	}
 	sort.Strings(missing)
-	coverage := BusinessStatus{SpaceID: monmetrics.InternalMetricSpaceID, Kind: "archive_coverage", Module: "archive", Status: "healthy",
+	coverage := BusinessStatus{SpaceID: events.SystemSpaceID, Kind: "archive_coverage", Module: "archive", Status: "healthy",
 		Reason: "有限保留期的时序数据集都有归档任务", LastCheckedAt: now}
 	if len(missing) > 0 {
 		shown := missing

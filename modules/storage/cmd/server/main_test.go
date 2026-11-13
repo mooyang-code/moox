@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,22 +10,17 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
-	storagepebble "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
-	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
-	"trpc.group/trpc-go/trpc-go/server"
-	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type cleanupDatasetReader struct{}
 
 func (cleanupDatasetReader) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
 	dataset := func(spaceID, datasetID, freq string) *pb.Dataset {
-		return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataNodeId: "node-a", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: freq, Status: "active"}
+		return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: freq, Status: "active"}
 	}
 	return []*pb.Dataset{
 		dataset("crypto", "prices_1m", "1m"),
@@ -35,55 +29,61 @@ func (cleanupDatasetReader) ListDatasets(context.Context, metadata.DatasetQuery)
 	}, &pb.PageResult{Page: 1, Size: 1000}, nil
 }
 
-type cleanupNode struct {
-	requests map[string]*pb.CleanupExpiredBucketsReq
+// recordingCleaner 记录每个数据集的清理截止时间。
+type recordingCleaner struct {
+	cutoffs         map[string]time.Time
+	commitsAt       time.Time
+	changeLogCutoff time.Time
 }
 
-func (*cleanupNode) UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-	return nil, nil
+func (c *recordingCleaner) CleanupChangeLog(_ context.Context, cutoff time.Time) (int, error) {
+	c.changeLogCutoff = cutoff
+	return 0, nil
 }
-func (*cleanupNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
-	return nil, nil
+
+func (c *recordingCleaner) ChangeLogRetention() time.Duration { return 7 * 24 * time.Hour }
+
+func (c *recordingCleaner) CleanupExpiredBuckets(_ context.Context, spaceID, datasetID string, before time.Time) (uint64, error) {
+	c.cutoffs[spaceID+"/"+datasetID] = before
+	return 3, nil
 }
-func (*cleanupNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
-	return nil, nil
-}
-func (n *cleanupNode) CleanupExpiredBuckets(_ context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
-	n.requests[req.GetSpaceId()+"/"+req.GetDatasetId()] = req
-	return &pb.CleanupExpiredBucketsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, DeletedRanges: 3}, nil
+
+func (c *recordingCleaner) CleanupExpiredCommits(_ context.Context, now time.Time) error {
+	c.commitsAt = now
+	return nil
 }
 
 func TestDatasetCleanupUsesPolicyRetentionBySpaceAndFrequency(t *testing.T) {
-	node := &cleanupNode{requests: map[string]*pb.CleanupExpiredBucketsReq{}}
+	cleaner := &recordingCleaner{cutoffs: map[string]time.Time{}}
 	metrics, err := observability.NewCleanupMetrics(prometheus.NewRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
 	retention := storagepolicy.Default().Retention
 	retention.Spaces = map[string]map[string]string{"stockcn": {"1m": "60d"}}
-	cleanup := datasetCleanup{
-		reader: cleanupDatasetReader{},
-		resolver: func(context.Context, string, string) (pb.DataNodeRuntimeService, error) {
-			return node, nil
-		},
-		auth: &pb.AuthInfo{AppId: "primary", AppKey: "key"}, retention: retention, metrics: metrics,
-	}
+	cleanup := datasetCleanup{reader: cleanupDatasetReader{}, store: cleaner, retention: retention, metrics: metrics}
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	if err := cleanup.run(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{
+	want := map[string]time.Time{
 		// crypto 1m keeps 35 days（默认），stockcn 1m 60 days（空间覆盖）; whole day buckets.
-		"crypto/prices_1m":  "2026-06-15T00:00:00.000000000Z",
-		"stockcn/equity_1m": "2026-05-21T00:00:00.000000000Z",
+		"crypto/prices_1m":  time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC),
+		"stockcn/equity_1m": time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC),
 	}
-	if len(node.requests) != len(want) {
-		t.Fatalf("cleanup requests = %v; a forever (1d) Dataset must not be cleaned", node.requests)
+	if len(cleaner.cutoffs) != len(want) {
+		t.Fatalf("cleanup cutoffs = %v; a forever (1d) Dataset must not be cleaned", cleaner.cutoffs)
 	}
 	for key, cutoff := range want {
-		if got := node.requests[key].GetBeforeBucketStart(); got != cutoff {
-			t.Fatalf("%s cutoff = %q, want %q", key, got, cutoff)
+		if got := cleaner.cutoffs[key]; !got.Equal(cutoff) {
+			t.Fatalf("%s cutoff = %s, want %s", key, got, cutoff)
 		}
+	}
+	if !cleaner.commitsAt.Equal(now) {
+		t.Fatalf("commit 标记清理时间 = %s, want %s", cleaner.commitsAt, now)
+	}
+	if want := now.Add(-7 * 24 * time.Hour); !cleaner.changeLogCutoff.Equal(want) {
+		t.Fatalf("变更日志清理截止时间 = %s, want %s", cleaner.changeLogCutoff, want)
 	}
 }
 
@@ -251,249 +251,12 @@ func TestStorageEventBusConfigLoadsCredentialFromStorageConfig(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE", "")
 	t.Setenv("MOOX_STORAGE_CONFIG", configFile)
 
-	got, err := storageEventBusConfig([]string{"nats://127.0.0.1:4222"}, "storage-node")
+	got, err := storageEventBusConfig([]string{"nats://127.0.0.1:4222"}, "storage-primary")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Username != "storage-eventbus" || got.Password != "storage-secret" {
 		t.Fatalf("credential config = username %q/password %q", got.Username, got.Password)
-	}
-}
-
-// 所有数据集的动态消费者共用同一个投递模板：全局并发参数来自配置，新建的 durable 回放完整历史。
-func TestStorageViewConsumerTemplateUsesTheGlobalSettings(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    credential_file: \"\"\n  view:\n    fetch_batch: 4\n    max_workers: 2\n    max_ack_pending: 16\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	opts, err := storageViewConsumerTemplate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opts.FetchBatch != 4 || opts.MaxWorkers != 2 || opts.MaxAckPending != 16 || opts.Ordering != "dataset" || opts.DeliverPolicy != "all" || opts.MaxRetryAttempts != -1 {
-		t.Fatalf("consumer template = %+v", opts)
-	}
-	if len(opts.FilterSubjects) != 0 || len(opts.DatasetRoutes) != 0 {
-		t.Fatalf("模板不带任何数据集路由：%+v", opts)
-	}
-}
-
-func TestStorageViewConsumerTemplateRejectsInvalidSettings(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    fetch_batch: 8\n    max_ack_pending: 4\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	if _, err := storageViewConsumerTemplate(); err == nil {
-		t.Fatal("fetch_batch 超过 max_ack_pending 的配置被接受")
-	}
-}
-
-func TestStorageViewConfigFilesUseSerialDelivery(t *testing.T) {
-	for _, path := range []string{
-		filepath.Join("..", "..", "config", "storage.yaml"),
-		filepath.Join("..", "..", "config", "storage_view", "trpc_go.yaml"),
-	} {
-		t.Run(path, func(t *testing.T) {
-			t.Setenv("MOOX_STORAGE_CONFIG", path)
-			opts, err := storageViewConsumerTemplate()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if opts.FetchBatch != 1 || opts.MaxWorkers != 1 || opts.MaxAckPending != 1 {
-				t.Fatalf("delivery budget = %d/%d/%d, want the serialized 1/1/1", opts.FetchBatch, opts.MaxWorkers, opts.MaxAckPending)
-			}
-		})
-	}
-}
-
-type resolverSnapshot struct {
-	dataset *pb.Dataset
-	node    *pb.DataNode
-}
-
-func (s resolverSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
-	if s.dataset == nil || s.dataset.GetSpaceId() != spaceID || s.dataset.GetDatasetId() != datasetID {
-		return nil, false
-	}
-	return s.dataset, true
-}
-
-func (s resolverSnapshot) GetDataNode(nodeID string) (*pb.DataNode, bool) {
-	if s.node == nil || s.node.GetNodeId() != nodeID {
-		return nil, false
-	}
-	return s.node, true
-}
-
-func (resolverSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return nil, nil, nil
-}
-
-type resolverRuntime struct {
-	target string
-	writes int
-	reads  int
-}
-
-func (r *resolverRuntime) UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-	r.writes++
-	return &pb.UpsertFieldsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
-}
-func (r *resolverRuntime) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
-	r.reads++
-	return &pb.ReadRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
-}
-func (*resolverRuntime) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
-	return &pb.GetNodeStateRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
-}
-func (*resolverRuntime) CleanupExpiredBuckets(context.Context, *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
-	return &pb.CleanupExpiredBucketsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
-}
-func TestDataNodeClientTimeoutCoversMaintenanceRPCs(t *testing.T) {
-	if dataNodeClientTimeout != 5*time.Minute {
-		t.Fatalf("dataNodeClientTimeout = %s, want 5m", dataNodeClientTimeout)
-	}
-}
-
-func TestDataNodeProxyAdapterIncludesPeriodRuntime(t *testing.T) {
-	proxy := newDataNodeProxyAdapter()
-	if proxy.proxy == nil || proxy.adminProxy == nil || proxy.markerProxy == nil || proxy.periodProxy == nil || proxy.rangeProxy == nil {
-		t.Fatalf("data node proxy adapter is missing a runtime proxy: %+v", proxy)
-	}
-}
-
-func startPeriodRuntimeNode(t *testing.T, nodeID, secret string) (*datanode.Service, string) {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	node, err := datanode.NewService(datanode.Options{NodeID: nodeID, AuthSecret: secret, Pebble: storagepebble.Options{
-		NodeID: nodeID, Path: filepath.Join(t.TempDir(), nodeID),
-	}})
-	if err != nil {
-		_ = listener.Close()
-		t.Fatal(err)
-	}
-	dn := server.New(
-		server.WithTransport(transport.NewServerTransport()),
-		server.WithServiceName("trpc.moox.storage.DataNodePeriodRuntime"),
-		server.WithProtocol("trpc"),
-		server.WithNetwork("tcp"),
-		server.WithListener(listener),
-		server.WithServerAsync(false),
-	)
-	pb.RegisterDataNodePeriodRuntimeService(dn, node)
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- dn.Serve() }()
-	t.Cleanup(func() {
-		done := make(chan struct{}, 1)
-		if err := dn.Close(done); err != nil {
-			t.Errorf("close DataNode %s test service: %v", nodeID, err)
-		}
-		<-done
-		if err := <-serveErr; err != nil {
-			t.Errorf("serve DataNode %s test service: %v", nodeID, err)
-		}
-		if err := node.Close(); err != nil {
-			t.Errorf("close DataNode %s store: %v", nodeID, err)
-		}
-	})
-	return node, listener.Addr().String()
-}
-
-func TestResolveDataNodeUsesActiveDatasetNodeAndTargetOnly(t *testing.T) {
-	base := resolverSnapshot{
-		dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataNodeId: "node-a", Status: "active"},
-		node:    &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://127.0.0.1:20107"},
-	}
-	resolver := newDataNodeResolver(func() metadata.RequestSnapshot { return base }, func(target string) pb.DataNodeRuntimeService { return &resolverRuntime{target: target} })
-	if _, err := resolver(context.Background(), "space", "dataset"); err != nil {
-		t.Fatal(err)
-	}
-
-	cases := []struct {
-		name    string
-		dataset *pb.Dataset
-		node    *pb.DataNode
-	}{
-		{name: "unknown dataset", dataset: nil, node: base.node},
-		{name: "disabled dataset", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataNodeId: "node-a", Status: "disabled"}, node: base.node},
-		{name: "missing node", dataset: base.dataset, node: nil},
-		{name: "disabled node", dataset: base.dataset, node: &pb.DataNode{NodeId: "node-a", Status: "disabled", ServiceTarget: "ip://127.0.0.1:20107"}},
-		{name: "empty target", dataset: base.dataset, node: &pb.DataNode{NodeId: "node-a", Status: "active"}},
-		{name: "malformed target", dataset: base.dataset, node: &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "http://127.0.0.1:20107"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := resolveDataNodeFromSnapshot(resolverSnapshot{dataset: tc.dataset, node: tc.node}, "space", "dataset")
-			if err == nil {
-				t.Fatal("expected routing failure")
-			}
-		})
-	}
-}
-
-func TestDataNodeResolverReplacesProxyWhenTargetChanges(t *testing.T) {
-	first := resolverSnapshot{
-		dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataNodeId: "node-a", Status: "active"},
-		node:    &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://127.0.0.1:20107"},
-	}
-	second := resolverSnapshot{dataset: first.dataset, node: &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://127.0.0.1:20108"}}
-	current := metadata.RequestSnapshot(first)
-	var targets []string
-	resolver := newDataNodeResolver(func() metadata.RequestSnapshot { return current }, func(target string) pb.DataNodeRuntimeService {
-		targets = append(targets, target)
-		return &resolverRuntime{target: target}
-	})
-	firstProxy, err := resolver(context.Background(), "space", "dataset")
-	if err != nil {
-		t.Fatal(err)
-	}
-	current = second
-	secondProxy, err := resolver(context.Background(), "space", "dataset")
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstRuntime := firstProxy.(*resolverRuntime)
-	secondRuntime := secondProxy.(*resolverRuntime)
-	if firstRuntime.target == secondRuntime.target || fmt.Sprint(targets) != "[ip://127.0.0.1:20107 ip://127.0.0.1:20108]" {
-		t.Fatalf("proxy refresh failed: first=%p second=%p targets=%v", firstProxy, secondProxy, targets)
-	}
-}
-
-func TestPrimaryReadWriteUsePublishedSnapshotAndFakeRuntime(t *testing.T) {
-	snapshot := resolverSnapshot{
-		dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataNodeId: "node-a", Status: "active"},
-		node:    &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://127.0.0.1:20107"},
-	}
-	var runtime *resolverRuntime
-	resolver := newDataNodeResolver(func() metadata.RequestSnapshot { return snapshot }, func(target string) pb.DataNodeRuntimeService {
-		runtime = &resolverRuntime{target: target}
-		return runtime
-	})
-	svc, err := primarystore.New(primarystore.Options{Snapshot: func() metadata.RequestSnapshot { return snapshot }, Resolver: resolver.primaryStore()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}}
-	write, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller"},
-		Rows:     []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}}}},
-	}))
-	if err != nil || write.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("write=%v err=%v", write, err)
-	}
-	read, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}, ColumnNames: []string{"close"}})
-	if err != nil || read.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("read=%v err=%v", read, err)
-	}
-	if runtime == nil || runtime.writes != 1 || runtime.reads != 1 || runtime.target != "ip://127.0.0.1:20107" {
-		t.Fatalf("runtime=%+v", runtime)
 	}
 }
 
@@ -507,7 +270,7 @@ func TestStorageViewDeleteOldestBatchSizeDefaultsAndBounds(t *testing.T) {
 		want    int
 		wantErr bool
 	}{
-		{yaml: "storage:\n  view:\n    batch_size: 500\n", want: 2000},
+		{yaml: "storage:\n  view:\n    backfill_page_size: 500\n", want: 2000},
 		{yaml: "storage:\n  view:\n    delete_oldest_batch_size: 500\n", want: 500},
 		{yaml: "storage:\n  view:\n    delete_oldest_batch_size: 20001\n", wantErr: true},
 		{yaml: "storage:\n  view:\n    delete_oldest_batch_size: -1\n", wantErr: true},

@@ -82,7 +82,7 @@ func TestGeneratedACLLetsCallbackDispatcherConsumeEveryItsEventAndPublishNothing
 		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(delistAt.Add(-time.Hour)), Scope: events.DelistScopeAll,
 	}, events.PublishOptions{
 		EventID:    events.InstrumentDelistEventID("binance", events.DelistMarketSpot, "FOOUSDT", events.DelistScopeAll, delistAt),
-		OccurredAt: delistAt.Add(-time.Hour), SpaceID: events.DelistSystemSpaceID, SubjectID: events.InstrumentDelistSubjectID("binance", events.DelistMarketSpot, "FOOUSDT"),
+		OccurredAt: delistAt.Add(-time.Hour), SpaceID: events.SystemSpaceID, SubjectID: events.InstrumentDelistSubjectID("binance", events.DelistMarketSpot, "FOOUSDT"),
 	})
 	require.NoError(t, err)
 

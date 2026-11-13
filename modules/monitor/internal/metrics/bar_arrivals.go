@@ -56,7 +56,7 @@ func outputArrivalMetric(metricName string) (producer, arrivalMetric string, ok 
 }
 
 // detectBarArrivals 从一份快照里找出前进了的输出水位：previous 是入库前各水位序列已提交的值（没有记录表示第一次见到）。
-// 没有交易日历的系统数据（mooxsys）不记录；缺到达时间的不记录，不推算。
+// 缺空间、数据集、周期或到达时间的不记录，不推算。
 func detectBarArrivals(samples []Sample, previous map[string]float64) []BarArrival {
 	type arrivalKey struct{ service, instance, metric, labels string }
 	arrivals := make(map[arrivalKey]float64)
@@ -79,7 +79,7 @@ func detectBarArrivals(samples []Sample, previous map[string]float64) []BarArriv
 		if producer == "storage_view" {
 			datasetID, primaryDatasetID = sample.Labels["view_id"], sample.Labels["dataset_id"]
 		}
-		if spaceID == "" || spaceID == InternalMetricSpaceID || datasetID == "" || freq == "" {
+		if spaceID == "" || datasetID == "" || freq == "" {
 			continue
 		}
 		before, seen := previous[sample.SeriesID]

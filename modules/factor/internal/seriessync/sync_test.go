@@ -38,13 +38,12 @@ type fakeStorage struct {
 	trimmed  uint64
 	readErr  map[string]error // 按标的注入读取失败
 	reads    int
-	nodeID   string
 	storeID  string
 	earliest map[string]time.Time // 覆盖 Storage 的保留起点（模拟保留期清理）
 }
 
 func newFakeStorage() *fakeStorage {
-	return &fakeStorage{rows: map[string][]remoteRow{}, readErr: map[string]error{}, nodeID: "n1", storeID: "s1", earliest: map[string]time.Time{}}
+	return &fakeStorage{rows: map[string][]remoteRow{}, readErr: map[string]error{}, storeID: "s1", earliest: map[string]time.Time{}}
 }
 
 // put 写入若干分钟的行（close=分钟序号+base），并记一条变更日志。
@@ -127,11 +126,11 @@ func (f *fakeStorage) head() uint64 { return uint64(len(f.changes)) }
 func (f *fakeStorage) ReadDatasetChanges(_ context.Context, _, _ string, cursor *storageio.ChangeCursor, fromHead bool, limit int) (storageio.Changes, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	next := storageio.ChangeCursor{NodeID: f.nodeID, StoreID: f.storeID, Sequence: f.head()}
+	next := storageio.ChangeCursor{StoreID: f.storeID, Sequence: f.head()}
 	if fromHead {
 		return storageio.Changes{Next: next}, nil
 	}
-	if cursor.NodeID != f.nodeID || cursor.StoreID != f.storeID || cursor.Sequence > f.head() || cursor.Sequence < f.trimmed {
+	if cursor.StoreID != f.storeID || cursor.Sequence > f.head() || cursor.Sequence < f.trimmed {
 		return storageio.Changes{Gap: true, Next: next}, nil
 	}
 	out := storageio.Changes{}
@@ -147,7 +146,7 @@ func (f *fakeStorage) ReadDatasetChanges(_ context.Context, _, _ string, cursor 
 		out.Changes = append(out.Changes, c)
 		last = c.Sequence
 	}
-	out.Next = storageio.ChangeCursor{NodeID: f.nodeID, StoreID: f.storeID, Sequence: last}
+	out.Next = storageio.ChangeCursor{StoreID: f.storeID, Sequence: last}
 	return out, nil
 }
 
@@ -350,7 +349,7 @@ func TestFollowReportsGap(t *testing.T) {
 	st.put("A", 100, 2)
 	st.put("A", 100, 3)
 	st.trimmed = 2 // 日志被清理到序号 2：位点 2 之前的游标都断档。
-	require.NoError(t, s.Store.SetSyncCursor(src, encodeCursor(storageio.ChangeCursor{NodeID: "n1", StoreID: "s1", Sequence: 1})))
+	require.NoError(t, s.Store.SetSyncCursor(src, encodeCursor(storageio.ChangeCursor{StoreID: "s1", Sequence: 1})))
 	res, err = s.Follow(context.Background(), spec)
 	require.NoError(t, err)
 	require.True(t, res.Gap)
@@ -387,7 +386,7 @@ func TestReconcileRebuildsBaselineAndKeepsOutOfRetentionHistory(t *testing.T) {
 	cur, ok, err := s.Cursor(src)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, storageio.ChangeCursor{NodeID: "n1", StoreID: "s2", Sequence: st.head()}, cur)
+	require.Equal(t, storageio.ChangeCursor{StoreID: "s2", Sequence: st.head()}, cur)
 
 	// 对账期间发生的修正由 C0 之后的跟进补上。
 	again, err := s.Follow(context.Background(), spec)

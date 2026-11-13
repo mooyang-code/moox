@@ -125,7 +125,7 @@ describe("未归档的数据集", () => {
   const dataset = (id: string, over: Partial<Dataset> = {}) =>
     ({ dataset_id: id, data_kind: "DATA_KIND_TIME_SERIES", status: "active", retention: "840h", ...over }) as Dataset;
 
-  it("和 Monitor 同口径：时序、active（不分大小写）、有限保留期、不是系统空间，再减去已有任务", () => {
+  it("和 Monitor 同口径：时序、active（不分大小写）、有限保留期，再减去已有任务", () => {
     const datasets = [
       dataset("a"),
       dataset("b", { data_kind: 2 }),
@@ -136,8 +136,7 @@ describe("未归档的数据集", () => {
       dataset("g", { retention: "" }),
       dataset("h")
     ];
-    expect(unarchivedDatasets(datasets, [{ dataset_id: "h" }], "crypto").map(item => item.dataset_id)).toEqual(["a", "b", "c"]);
-    expect(unarchivedDatasets(datasets, [], "mooxsys")).toEqual([]);
+    expect(unarchivedDatasets(datasets, [{ dataset_id: "h" }]).map(item => item.dataset_id)).toEqual(["a", "b", "c"]);
   });
 
   it("提醒里只去掉和任务健康原因完全相同的（任务表已显示），其余以任务 ID 开头的照常显示", () => {

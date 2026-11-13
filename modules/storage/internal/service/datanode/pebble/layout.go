@@ -12,14 +12,15 @@ import (
 const (
 	layoutMarkerName       = "storage_layout_version"
 	layoutMarkerTempPrefix = "." + layoutMarkerName + ".tmp-"
-	// 版本 4：字段/属性命名空间之外，同批写入按时间排序的历史行索引与按标的排序的序列历史索引。
+	// 版本 5：在版本 4（字段、属性、按时间与按标的排序的两种历史行索引）之上，周期账本改为每期一条记录（__period/），
+	// 完成标记按“数据集/频率/周期/来源/触发事件”存放（__marker/），commit 标记按写入日分桶（__commit/）。
 	// 其他版本的数据都要显式重置后再用，不做原地升级。
-	layoutVersion = "4\n"
+	layoutVersion = "5\n"
 )
 
 func ensureLayout(path string) error {
 	if err := os.MkdirAll(path, 0o755); err != nil {
-		return fmt.Errorf("create DataNode store directory: %w", err)
+		return fmt.Errorf("创建 Pebble 库目录：%w", err)
 	}
 
 	markerPath := filepath.Join(path, layoutMarkerName)
@@ -33,12 +34,12 @@ func ensureLayout(path string) error {
 			return validateLayoutMarker(data)
 		}
 	case !errors.Is(err, os.ErrNotExist):
-		return fmt.Errorf("read DataNode storage layout marker: %w", err)
+		return fmt.Errorf("读取 Pebble 库的布局版本文件：%w", err)
 	}
 
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return fmt.Errorf("inspect DataNode store directory: %w", err)
+		return fmt.Errorf("检查 Pebble 库目录：%w", err)
 	}
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), layoutMarkerTempPrefix) {
@@ -48,18 +49,18 @@ func ensureLayout(path string) error {
 				}
 				return cleanupLayoutMarkerTemps(path)
 			}
-			return errors.New("DataNode store has data without a storage layout marker; reset DataNode store")
+			return errors.New("Pebble 库目录里有数据却没有布局版本文件；需要清空 Pebble 库后重建")
 		}
 	}
 	if err := createLayoutMarker(path, markerPath); err != nil {
-		return fmt.Errorf("create DataNode storage layout marker: %w", err)
+		return fmt.Errorf("创建 Pebble 库的布局版本文件：%w", err)
 	}
 	return cleanupLayoutMarkerTemps(path)
 }
 
 func validateLayoutMarker(data []byte) error {
 	if string(data) != layoutVersion {
-		return fmt.Errorf("unsupported or damaged DataNode storage layout marker %q; reset DataNode store", string(data))
+		return fmt.Errorf("Pebble 库的布局版本 %q 不受支持或已损坏；需要清空 Pebble 库后重建", string(data))
 	}
 	return nil
 }
@@ -67,14 +68,14 @@ func validateLayoutMarker(data []byte) error {
 func cleanupLayoutMarkerTemps(dirPath string) error {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		return fmt.Errorf("inspect DataNode store directory: %w", err)
+		return fmt.Errorf("检查 Pebble 库目录：%w", err)
 	}
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), layoutMarkerTempPrefix) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dirPath, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove stale DataNode layout marker temp %q: %w", entry.Name(), err)
+			return fmt.Errorf("删除残留的布局版本临时文件 %q：%w", entry.Name(), err)
 		}
 	}
 	return nil

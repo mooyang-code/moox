@@ -15,7 +15,7 @@ import (
 func productionDatasets() map[string]Dataset {
 	active := func(space, id, source, freq string, tags []string, attrs map[string]string) Dataset {
 		return Dataset{SpaceID: space, DatasetID: id, DataSourceID: source, Freq: freq, SubjectTags: tags, Attributes: attrs,
-			DataKind: "time_series", Status: "active", DataNodeID: "node-0", Retention: "840h"}
+			DataKind: "time_series", Status: "active", Retention: "840h"}
 	}
 	list := []Dataset{
 		active("crypto", "dataset_dasftksvjhj2jom4vhd0", "binance", "1m", []string{"binance_spot"},

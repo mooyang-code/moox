@@ -158,7 +158,6 @@ type CollectionTaskResultSummary struct {
 // ResultConfig contains optional storage settings for a newly created task
 // result. It cannot select an existing Dataset or View.
 type ResultConfig struct {
-	DataNodeID  string `json:"data_node_id,omitempty"`
 	Description string `json:"description,omitempty"`
 }
 

@@ -31,7 +31,6 @@ type datasetColumnClient interface {
 // DatasetInfo is the minimal Dataset contract required by Collector rules.
 type DatasetInfo struct {
 	DataSourceID string
-	DataNodeID   string
 	DataKind     storagepb.DataKind
 	Status       string
 	Freq         string
@@ -103,7 +102,6 @@ func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID strin
 	}
 	info := DatasetInfo{
 		DataSourceID: strings.TrimSpace(dataset.GetDataSourceId()),
-		DataNodeID:   strings.TrimSpace(dataset.GetDataNodeId()),
 		DataKind:     dataset.GetDataKind(),
 		Status:       strings.ToLower(strings.TrimSpace(dataset.GetStatus())),
 		Freq:         dataset.GetFreq(),

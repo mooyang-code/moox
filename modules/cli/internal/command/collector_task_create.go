@@ -21,13 +21,12 @@ type collectorTaskCreateFlags struct {
 	Frequency   string
 	Fields      []string
 	// AllFields 为真时不指定 output_fields：输出该品种行的全部字段，与内置任务不写 output_fields 相同。
-	AllFields  bool
-	Symbols    int
-	Lateness   int
-	Disabled   bool
-	DataNodeID string
-	Ingest     string
-	Executor   string
+	AllFields bool
+	Symbols   int
+	Lateness  int
+	Disabled  bool
+	Ingest    string
+	Executor  string
 }
 
 var collectorTaskCreateFlagsValue collectorTaskCreateFlags
@@ -70,7 +69,6 @@ func init() {
 	flags.IntVar(&collectorTaskCreateFlagsValue.Symbols, "symbols-per-function", 0, "定时模式下每个函数负责的标的数（0 为默认 50）")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Lateness, "allowed-lateness-seconds", 0, "结果数据集的允许迟到时间（0 为空间默认）")
 	flags.BoolVar(&collectorTaskCreateFlagsValue.Disabled, "disabled", false, "创建后保持停用")
-	flags.StringVar(&collectorTaskCreateFlagsValue.DataNodeID, "data-node-id", "", "结果数据节点；留空使用默认")
 	flags.StringVar(&collectorTaskCreateFlagsValue.Ingest, "ingest", "", "结果数据集的采集方式初值：stream（WS 推送）或 pull（拉取）；留空用空间默认")
 	flags.StringVar(&collectorTaskCreateFlagsValue.Executor, "executor", "", "结果数据集的执行端初值：scf 或 local；留空用空间默认")
 }
@@ -91,8 +89,7 @@ func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorT
 	defer gateway.Close()
 	rsp := &collectorpb.CreateTaskRsp{}
 	req := &collectorpb.CreateTaskReq{
-		Task:         &collectorpb.CollectionTask{SpaceId: flags.SpaceID, TaskName: flags.Name, Description: flags.Description, DataType: "kline", TagIds: flags.TagIDs, CollectParams: structured, Enabled: &enabled, Creator: "moox-cli"},
-		ResultConfig: &collectorpb.ResultConfig{DataNodeId: flags.DataNodeID},
+		Task: &collectorpb.CollectionTask{SpaceId: flags.SpaceID, TaskName: flags.Name, Description: flags.Description, DataType: "kline", TagIds: flags.TagIDs, CollectParams: structured, Enabled: &enabled, Creator: "moox-cli"},
 	}
 	if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "CreateTask", req, rsp); err != nil {
 		return fmt.Errorf("create task: %w", err)

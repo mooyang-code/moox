@@ -31,7 +31,6 @@ type BootstrapOptions struct {
 	CheckIDs                                                  []string
 	Client                                                    DeploymentClient
 	MonitorClient                                             DoctorContextClient
-	StorageActivation                                         StorageActivationClient
 	Prober                                                    HTTPProber
 	Now                                                       func() time.Time
 	ProbeWritable                                             func(context.Context, string, string) error
@@ -113,7 +112,6 @@ func bootstrapSpecs(manifest core.Manifest, nodeID string) []core.CheckSpec {
 	specs := []core.CheckSpec{
 		{ID: "bootstrap.release_contract"},
 		{ID: "bootstrap.inventory", RequiredDependencies: []string{"bootstrap.release_contract"}},
-		{ID: storageDatasetActivationCheckID, Timeout: storageActivationCheckTimeout},
 	}
 	healthChecks := map[string]string{}
 	for _, component := range manifest.Components {
@@ -191,9 +189,6 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			}
 		}
 		return checkResult(spec.ID, core.StatusUnknown, "Monitor Reporter delivery fact is missing", nil, "verify_eventbus_credentials")
-	}
-	if spec.ID == storageDatasetActivationCheckID {
-		return r.runStorageDatasetActivation(ctx, spec)
 	}
 	component, kind, ok := r.componentForCheck(spec.ID)
 	if !ok {

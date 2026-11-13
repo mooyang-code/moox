@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,20 +24,6 @@ func (f fakeSource) ResolveSubjects(context.Context, string, []string) ([]domain
 		out[i] = domain.Subject{SubjectID: id}
 	}
 	return out, nil
-}
-
-type fakeSync struct {
-	appended []string
-	ready    bool
-}
-
-func (f *fakeSync) AppendDatasetSyncPoint(_ context.Context, _, _, requestID, _ string) error {
-	f.appended = append(f.appended, requestID)
-	return nil
-}
-
-func (f *fakeSync) WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error) {
-	return &storagepb.WaitViewSyncPointRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Ready: f.ready}, nil
 }
 
 // seedTask 在库里建一个就绪的合成任务，并给源数据集铺好 [from, to) 内每根 5m。
@@ -136,9 +121,8 @@ func TestJobRunnerBackfillsRangeWithCursorSyncAndSkips(t *testing.T) {
 	delete(storage.rows, keyText(rowKey("crypto", "dataset_src", "ETH", "5m", utc("2026-10-21T10:25:00Z"), "venue:binance")))
 	now := utc("2026-10-21T12:00:00Z")
 	engine := &Engine{Primary: storage, State: mgr.Resample(), Now: func() time.Time { return now }}
-	sync := &fakeSync{ready: true}
 	flushed := 0
-	runner := &JobRunner{State: mgr.Resample(), Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC", "ETH"}}, Engine: engine, Sync: sync,
+	runner := &JobRunner{State: mgr.Resample(), Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC", "ETH"}}, Engine: engine,
 		Flush: func(context.Context) error { flushed++; return nil }, Config: JobRunnerConfig{BucketsPerRound: 2}}
 	task := makeTask(t, "crypto", "5m", "15m")
 	job := submit(t, mgr, task, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T11:00:00Z"), nil, now)
@@ -163,7 +147,6 @@ func TestJobRunnerBackfillsRangeWithCursorSyncAndSkips(t *testing.T) {
 	require.NoError(t, runner.Tick(context.Background(), now))
 	progress, _ = mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
 	require.Equal(t, store.ResampleJobSucceeded, progress.Status)
-	require.Equal(t, []string{job.JobID}, sync.appended, "同步点的 request_id 是作业 ID")
 	require.GreaterOrEqual(t, flushed, 1)
 
 	// 历史作业的普通写入都记为补写通知，作业 ID 在通知里。

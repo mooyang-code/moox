@@ -38,8 +38,6 @@ type RelayOptions struct {
 	BatchSize      int
 	PublishTimeout time.Duration
 	Metrics        *observability.ViewMetrics
-	// ChangeLogCleanupInterval 是清理过期行变更日志的间隔，默认 1 小时。
-	ChangeLogCleanupInterval time.Duration
 	// ReconnectAfterFailures lets a long-lived relay replace a stale NATS
 	// connection after EventBus restarts instead of waiting for the process to
 	// be restarted manually. It is ignored when the publisher does not expose
@@ -82,14 +80,9 @@ func NewRelay(store *pebble.Store, publisher Publisher, opts RelayOptions) (*Rel
 		opts.BatchSize = 100
 	}
 	if opts.PublishTimeout <= 0 {
-		// A remote DataNode may traverse a low-bandwidth public path to the
-		// control EventBus.  A 1 MiB event can legitimately take several
-		// seconds; timing out at 5s causes an endless retry loop and leaves the
-		// view stale even though the broker is reachable.
+		// 到 EventBus 的链路可能带宽很小：1 MiB 的事件正常也要几秒，5 秒超时会让发布无限重试，
+		// broker 明明可达，事件却一直发不出去。
 		opts.PublishTimeout = 30 * time.Second
-	}
-	if opts.ChangeLogCleanupInterval <= 0 {
-		opts.ChangeLogCleanupInterval = time.Hour
 	}
 	if opts.ReconnectAfterFailures <= 0 {
 		opts.ReconnectAfterFailures = 3
@@ -115,11 +108,6 @@ func (r *Relay) Start(ctx context.Context) {
 			defer close(r.done)
 			ticker := time.NewTicker(r.options.PollInterval)
 			defer ticker.Stop()
-			cleanupTicker := time.NewTicker(r.options.ChangeLogCleanupInterval)
-			defer cleanupTicker.Stop()
-			if err := r.cleanupChangeLog(ctx); err != nil {
-				r.report(fmt.Errorf("cleanup change log: %w", err))
-			}
 			for {
 				if err := r.flush(ctx); err != nil {
 					r.report(err)
@@ -152,19 +140,10 @@ func (r *Relay) Start(ctx context.Context) {
 					return
 				case <-ctx.Done():
 					return
-				case <-cleanupTicker.C:
-					if err := r.cleanupChangeLog(ctx); err != nil {
-						r.report(fmt.Errorf("cleanup change log: %w", err))
-					}
 				}
 			}
 		}()
 	})
-}
-
-func (r *Relay) cleanupChangeLog(ctx context.Context) error {
-	_, err := r.store.CleanupChangeLog(ctx, time.Now().UTC().Add(-r.store.ChangeLogRetention()))
-	return err
 }
 
 func (r *Relay) report(err error) {
@@ -175,7 +154,11 @@ func (r *Relay) report(err error) {
 		r.options.ErrorReporter(err)
 		return
 	}
-	// 每 100 毫秒重试一次，逐次失败只按警告记；积压由 moox_storage_outbox_oldest_age_seconds 的检查告警。
+	// 每 100 毫秒重试一次：偶发失败按警告记，连续失败到需要重连时升为错误；积压由 moox_storage_outbox_oldest_age_seconds 的检查告警。
+	if r.publishFailures >= r.options.ReconnectAfterFailures {
+		log.Errorf("storage outbox relay flush failed %d times in a row: %v", r.publishFailures, err)
+		return
+	}
 	log.Warnf("storage outbox relay flush failed: %v", err)
 }
 

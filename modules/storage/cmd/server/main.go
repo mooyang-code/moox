@@ -2,16 +2,12 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	storagebootstrap "github.com/mooyang-code/moox/modules/storage/internal/bootstrap"
@@ -19,7 +15,6 @@ import (
 	storagehealth "github.com/mooyang-code/moox/modules/storage/internal/health"
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	metadataservice "github.com/mooyang-code/moox/modules/storage/internal/service/catalog"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	storageoutbox "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/outbox"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -27,15 +22,16 @@ import (
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/protobuf/proto"
 	_ "trpc.group/trpc-go/trpc-database/timer"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
@@ -50,20 +46,21 @@ import (
 func main() {
 	var err error
 	switch os.Getenv("MOOX_STORAGE_ROLE") {
-	case "", "node":
-		err = runDataNodeRole()
 	case "primary":
 		err = runPrimaryRole()
 	case "view":
 		err = runViewRole()
 	default:
-		err = fmt.Errorf("unknown storage role %q", os.Getenv("MOOX_STORAGE_ROLE"))
+		err = fmt.Errorf("未知的 Storage 角色 %q，只支持 primary 和 view", os.Getenv("MOOX_STORAGE_ROLE"))
 	}
 	if err != nil {
 		// Fatalf 写完会先把日志队列发出去再退出，这最后一条错误才进得了重要日志。
 		tlog.Fatalf("storage exited: %v", err)
 	}
 }
+
+// pebbleDirName 是主服务 Pebble 库在数据目录下的子目录名。库的实例标识另由 Pebble 库首次打开时随机分配，见 pebble.Open。
+const pebbleDirName = "storage-primary"
 
 func runPrimaryRole() error {
 	root := os.Getenv("MOOX_STORAGE_HOME")
@@ -73,6 +70,18 @@ func runPrimaryRole() error {
 	metadataPath := os.Getenv("MOOX_STORAGE_METADATA_PATH")
 	if metadataPath == "" {
 		metadataPath = filepath.Join(root, "metadata", "storage_metadata.db")
+	}
+	primarySecret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+	if primarySecret == "" {
+		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for primary role")
+	}
+	rawURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL")
+	if rawURL == "" {
+		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for primary role")
+	}
+	eventConfig, err := storageEventBusConfig([]string{rawURL}, "storage-primary")
+	if err != nil {
+		return err
 	}
 	meta, err := metasqlite.Open(trpc.BackgroundContext(), metasqlite.Options{Path: metadataPath})
 	if err != nil {
@@ -87,18 +96,22 @@ func runPrimaryRole() error {
 		return fmt.Errorf("open metadata cache: %w", err)
 	}
 	defer cached.Close()
-	secret := os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
-	if secret == "" {
-		return errors.New("MOOX_STORAGE_NODE_AUTH_SECRET is required for primary role")
-	}
-	primarySecret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
-	if primarySecret == "" {
-		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for primary role")
-	}
-	resolver := newDataNodeResolver(cached.RequestSnapshot, func(target string) pb.DataNodeRuntimeService {
-		opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport)}
-		return newDataNodeProxyAdapter(opts...)
+	store, err := pebble.Open(pebble.Options{
+		Path:          filepath.Join(root, "pebble", pebbleDirName),
+		MaxEventBytes: eventConfig.MaxPayloadBytes(), BucketDuration: cleanupBucketDuration(),
+		// 写入拿到数据集读锁后按最新的元数据缓存确认数据集仍在（按索引点查），见 Metadata.DeleteDataset。
+		DatasetExists: func(spaceID, datasetID string) bool {
+			_, err := cached.GetDataset(trpc.BackgroundContext(), spaceID, datasetID)
+			return err == nil
+		},
 	})
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if err := observability.RegisterPebbleDiskUsage(prometheus.DefaultRegisterer, store.DiskSpaceUsage); err != nil {
+		return err
+	}
 	datasetMetrics, err := observability.NewDatasetMetrics(prometheus.DefaultRegisterer)
 	if err != nil {
 		return fmt.Errorf("initialize storage dataset metrics: %w", err)
@@ -107,20 +120,16 @@ func runPrimaryRole() error {
 	if err != nil {
 		return fmt.Errorf("initialize storage deadline rejection metrics: %w", err)
 	}
-	svc, err := primarystore.New(primarystore.Options{DeadlineRejections: deadlineRejections, Resolver: resolver.primaryStore(), Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
-		if auth == nil || auth.GetAppId() == "" ||
-			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
-			return errors.New("invalid primary auth")
-		}
-		return nil
-	}, AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) {
-		if auth == nil {
-			return nil, errors.New("auth_info is required")
-		}
-		clone := proto.Clone(auth).(*pb.AuthInfo)
-		clone.AppKey = datanode.ServiceAuthKey(secret, clone.GetAppId())
-		return clone, nil
-	}, DatasetMetrics: datasetMetrics})
+	svc, err := primarystore.New(primarystore.Options{
+		Store: store, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot,
+		DatasetMetrics: datasetMetrics, DeadlineRejections: deadlineRejections,
+		Authorizer: func(auth *pb.AuthInfo) error {
+			if auth == nil || auth.GetAppId() == "" || !serviceauth.Valid(primarySecret, auth.GetAppId(), auth.GetAppKey()) {
+				return errors.New("invalid primary auth")
+			}
+			return nil
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -128,7 +137,7 @@ func runPrimaryRole() error {
 	if err != nil {
 		return err
 	}
-	metadataSvc, err := metadataservice.NewMetadataService(meta, cached, metadataservice.Options{AuthSecret: secret, Retention: policy.Retention})
+	metadataSvc, err := metadataservice.NewMetadataService(meta, cached, metadataservice.Options{Rows: store, Retention: policy.Retention})
 	if err != nil {
 		return err
 	}
@@ -136,11 +145,15 @@ func runPrimaryRole() error {
 	if err != nil {
 		return err
 	}
-	cleanupCtx, stopCleanup := context.WithCancel(trpc.BackgroundContext())
-	defer stopCleanup()
-	cleanupAuth := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(secret, "storage-primary")}
-	go runCleanupLoop(cleanupCtx, datasetCleanup{reader: cached, resolver: resolver, auth: cleanupAuth, retention: policy.Retention, metrics: cleanupMetrics}, time.Hour)
-	go runViewPeriodCleanupLoop(cleanupCtx, meta, time.Hour, storageViewPeriodRetention())
+	backgroundCtx, stopBackground := context.WithCancel(trpc.BackgroundContext())
+	defer stopBackground()
+	go runCleanupLoop(backgroundCtx, datasetCleanup{reader: cached, store: store, retention: policy.Retention, metrics: cleanupMetrics}, time.Hour)
+	// EventBus 不可用时主服务照常启动：转发协程照常运行，连上 EventBus 后再转发 Outbox 里积压的事件。
+	stopRelay, err := storageoutbox.StartWithEventBus(backgroundCtx, store, eventConfig)
+	if err != nil {
+		return err
+	}
+	defer stopRelay()
 	s := trpc.NewServer()
 	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
 	trpclog.InstallServiceName("storage")
@@ -167,6 +180,15 @@ type datasetReader interface {
 	ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error)
 }
 
+// bucketCleaner 是主服务 Pebble 库的保留期清理：按数据集删早于给定日桶的行、账本与完成标记，
+// 另按 7 天删 commit 标记，按变更日志的保留期（默认 7 天）删变更日志。
+type bucketCleaner interface {
+	CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID string, beforeBucket time.Time) (uint64, error)
+	CleanupExpiredCommits(ctx context.Context, now time.Time) error
+	CleanupChangeLog(ctx context.Context, cutoff time.Time) (int, error)
+	ChangeLogRetention() time.Duration
+}
+
 func runCleanupLoop(ctx context.Context, cleanup datasetCleanup, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Hour
@@ -188,64 +210,29 @@ func runCleanupLoop(ctx context.Context, cleanup datasetCleanup, interval time.D
 	}
 }
 
-func runViewPeriodCleanupLoop(ctx context.Context, store metadata.ViewPeriodStateStore, interval, retention time.Duration) {
-	if store == nil {
-		return
-	}
-	if interval <= 0 {
-		interval = time.Hour
-	}
-	if retention <= 0 {
-		retention = 7 * 24 * time.Hour
-	}
-	cleanup := func() {
-		before := time.Now().UTC().Add(-retention)
-		if _, err := store.DeleteViewPeriodDatasetStatesBefore(ctx, before); err != nil {
-			tlog.Errorf("storage View period state cleanup failed: %v", err)
-		}
-		if _, err := store.DeleteViewSyncPointsBefore(ctx, before); err != nil {
-			tlog.Errorf("storage View sync point cleanup failed: %v", err)
-		}
-	}
-	cleanup()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			cleanup()
-		}
-	}
-}
-
-func storageViewPeriodRetention() time.Duration {
-	if raw := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_PERIOD_RETENTION")); raw != "" {
-		if retention, err := time.ParseDuration(raw); err == nil && retention > 0 {
-			return retention
-		}
-		tlog.Warnf("invalid MOOX_STORAGE_VIEW_PERIOD_RETENTION=%q; using 168h", raw)
-	}
-	return 7 * 24 * time.Hour
-}
-
 // datasetCleanup deletes the rows of each active time-series Dataset that
 // are older than its retention in the Storage policy.
 type datasetCleanup struct {
 	reader    datasetReader
-	resolver  dataNodeResolver
-	auth      *pb.AuthInfo
+	store     bucketCleaner
 	retention storagepolicy.Retention
 	metrics   *observability.CleanupMetrics
 }
 
 func (c datasetCleanup) run(ctx context.Context, now time.Time) error {
+	// commit 标记按写入日固定保留 7 天，与各数据集的保留期无关，全库一次删除。
 	var result error
+	if err := c.store.CleanupExpiredCommits(ctx, now); err != nil {
+		result = fmt.Errorf("清理 commit 标记: %w", err)
+	}
+	// 变更日志按创建时间清理，同样与各数据集的保留期无关。
+	if _, err := c.store.CleanupChangeLog(ctx, now.Add(-c.store.ChangeLogRetention())); err != nil {
+		result = errors.Join(result, fmt.Errorf("清理变更日志: %w", err))
+	}
 	for pageNo := uint32(1); ; pageNo++ {
 		datasets, page, err := c.reader.ListDatasets(ctx, metadata.DatasetQuery{DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Page: &pb.Page{Page: pageNo, Size: 1000}})
 		if err != nil {
-			return err
+			return errors.Join(result, err)
 		}
 		for _, dataset := range datasets {
 			if dataset == nil || (dataset.GetStatus() != "" && dataset.GetStatus() != "active") {
@@ -270,27 +257,18 @@ func (c datasetCleanup) cleanupDataset(ctx context.Context, dataset *pb.Dataset,
 	if period.Forever {
 		return nil
 	}
-	node, err := c.resolver(ctx, dataset.GetSpaceId(), dataset.GetDatasetId())
-	if err != nil {
-		return err
-	}
 	// Rows are deleted by whole day buckets, so a Dataset keeps between its
 	// retention and one more bucket of history.
 	cutoff := now.UTC().Add(-period.Duration).Truncate(cleanupBucketDuration())
 	started := time.Now()
-	rsp, err := node.CleanupExpiredBuckets(ctx, &pb.CleanupExpiredBucketsReq{
-		AuthInfo: c.auth, SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), BeforeBucketStart: cutoff.Format("2006-01-02T15:04:05.000000000Z"),
-	})
+	deleted, err := c.store.CleanupExpiredBuckets(ctx, dataset.GetSpaceId(), dataset.GetDatasetId(), cutoff)
 	if err != nil {
 		return err
 	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return errors.New(rsp.GetRetInfo().GetMsg())
-	}
 	elapsed := time.Since(started)
-	c.metrics.ObserveCleanup(dataset.GetSpaceId(), dataset.GetDatasetId(), cutoff, elapsed, rsp.GetDeletedRanges())
+	c.metrics.ObserveCleanup(dataset.GetSpaceId(), dataset.GetDatasetId(), cutoff, elapsed, deleted)
 	tlog.Infof("storage cleanup space=%s dataset=%s freq=%s retention=%s cutoff=%s deleted_ranges=%d elapsed=%s",
-		dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetFreq(), period, cutoff.Format(time.RFC3339), rsp.GetDeletedRanges(), elapsed.Round(time.Millisecond))
+		dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetFreq(), period, cutoff.Format(time.RFC3339), deleted, elapsed.Round(time.Millisecond))
 	return nil
 }
 
@@ -349,7 +327,8 @@ func runViewRole() error {
 		client.WithTransport(transport.DefaultClientTransport),
 		client.WithTimeout(5*time.Minute),
 	)
-	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
+	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: serviceauth.Key(primarySecret, "storage-view")})
+	svc.SetWriterAuthSecret(primarySecret)
 	svc.SetPrimaryReader(primaryProxy)
 	backfillPageSize, backfillRequestInterval, err := storageViewBackfillSettings()
 	if err != nil {
@@ -377,22 +356,19 @@ func runViewRole() error {
 		BackfillPageSize:        backfillPageSize,
 		BackfillRequestInterval: backfillRequestInterval,
 	}
-	// Bind the listeners before opening/validating historical indexes. View
-	// restoration can still take time on a large deployment; keeping the
-	// process reachable lets liveness probes observe the process while
-	// readiness remains false until the consumer is bound.
+	// 先绑定监听再恢复已建的索引：部署大时恢复要一段时间，进程先可达，存活检查能看到它。
 	s := trpc.NewServer()
 	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
 	trpclog.InstallServiceName("storage")
-	indexListener := s.Service("trpc.moox.storage.ViewIndex")
-	if indexListener == nil {
-		return errors.New("ViewIndex listener is not configured")
-	}
-	pb.RegisterViewIndexService(indexListener, svc)
+	registered := false
 	for _, name := range []string{"trpc.moox.storage.DataView", "trpc.moox.storage.DataView.trpc"} {
 		if listener := s.Service(name); listener != nil {
 			pb.RegisterDataViewService(listener, svc)
+			registered = true
 		}
+	}
+	if !registered {
+		return errors.New("DataView 监听没有配置")
 	}
 	if err := storagebootstrap.RegisterMetricsReporter(s, "view"); err != nil {
 		return err
@@ -421,37 +397,33 @@ func runViewRole() error {
 	if err != nil {
 		return err
 	}
-	eventClient, err := connectStorageViewEventBus(eventConfig)
+	eventClient, err := connectStorageViewEventBus(trpc.BackgroundContext(), eventConfig)
 	if err != nil {
 		return err
 	}
 	defer eventClient.Close()
-	consumerTemplate, err := storageViewConsumerTemplate()
+	// 就绪事件用专用连接发布：发布超时（确认丢失）后只重连这条连接。
+	readyClient, err := eventClient.Fork(trpc.BackgroundContext(), "storage-view-ready")
+	if err != nil {
+		return fmt.Errorf("为 View 就绪事件发布器建立 EventBus 连接失败：%w", err)
+	}
+	defer readyClient.Close()
+	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return err
 	}
-	// 没有静态消费者：每个数据集的消费者（view_<数据集哈希>）都由下面的清单对账动态创建；
-	// 这里只启动就绪事件发布、写入围栏落盘等运行时。
-	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient)
+	readyPublisher, err := events.NewPublisher(readyClient, registry)
 	if err != nil {
 		return err
 	}
-	defer stopConsumer()
-	dynamicReconciler, err := svc.NewInventoryReconciler(viewservice.InventoryReconcilerOptions{
-		Metadata: metadataProxy, Primary: primaryProxy, EventClient: eventClient, Consumer: consumerTemplate, Interval: 30 * time.Second,
+	// 每个已建好索引的 View 一个协程跟随 PrimaryStore 的变更日志；单次读取的超时由跟随器按等待时长另设。
+	stopFollowing, err := svc.StartFollowing(trpc.BackgroundContext(), viewservice.FollowOptions{
+		Changes: primaryProxy, Range: primaryProxy, Publisher: readyPublisher, Reconnect: readyClient.Reconnect,
 	})
 	if err != nil {
-		return fmt.Errorf("create storage view dynamic inventory reconciler: %w", err)
+		return err
 	}
-	// Bind the current inventory before starting the periodic reconciler.
-	if err := dynamicReconciler.Reconcile(trpc.BackgroundContext()); err != nil {
-		return fmt.Errorf("initial storage view dynamic inventory reconcile: %w", err)
-	}
-	stopDynamicConsumer, err := dynamicReconciler.Start(trpc.BackgroundContext())
-	if err != nil {
-		return fmt.Errorf("start storage view dynamic inventory reconciler: %w", err)
-	}
-	defer stopDynamicConsumer()
+	defer stopFollowing()
 	if storageViewMaintenanceDisabled() {
 		// 运维主动暂停建索引时（Storage 主机过载），实时消费照常工作。
 		tlog.Warnf("storage view historical maintenance disabled by MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED=1")
@@ -467,15 +439,12 @@ func runViewRole() error {
 	return <-serveErr
 }
 
-// connectStorageViewEventBus keeps the process alive across a transient
-// control-plane/NATS outage. The watchdog should recover a crashed binary,
-// not repeatedly restart a healthy View while the public EventBus path is
-// reconnecting. Once the connection is established, the normal consumer
-// rebind logic continues to handle later disconnects.
-func connectStorageViewEventBus(config jetstream.Config) (*jetstream.Client, error) {
+// connectStorageViewEventBus 连上 EventBus 为止：临时故障按退避重试，其他错误直接返回。看门狗负责重启崩溃的进程，
+// 不该在公网 EventBus 重连期间反复重启一个健康的 View；连上之后的断线由就绪事件发布器的重连处理。
+func connectStorageViewEventBus(ctx context.Context, config jetstream.Config) (*jetstream.Client, error) {
 	backoff := time.Second
 	for {
-		client, err := jetstream.Connect(trpc.BackgroundContext(), config)
+		client, err := jetstream.Connect(ctx, config)
 		if err == nil {
 			return client, nil
 		}
@@ -483,7 +452,13 @@ func connectStorageViewEventBus(config jetstream.Config) (*jetstream.Client, err
 			return nil, err
 		}
 		tlog.Warnf("storage view EventBus unavailable; retrying in %s: %v", backoff, err)
-		time.Sleep(backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 		if backoff < 30*time.Second {
 			backoff *= 2
 		}
@@ -538,30 +513,6 @@ func loadStoragePolicy() (storagepolicy.Policy, error) {
 	return storagepolicy.Load(policyPath)
 }
 
-// storageViewConsumerTemplate 读取 View 的全局消费参数，作为每个数据集的动态消费者共用的投递模板。
-func storageViewConsumerTemplate() (viewservice.EventConsumerOptions, error) {
-	var runtimeConfig storageconfig.RuntimeConfig
-	if path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG")); path == "" {
-		runtimeConfig.ApplyDefaults()
-	} else {
-		loader := storageconfig.NewConfigLoader(filepath.Dir(path))
-		if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-			return viewservice.EventConsumerOptions{}, fmt.Errorf("load storage view consumer config: %w", err)
-		}
-	}
-	return buildStorageViewConsumerTemplate(runtimeConfig.Storage.View)
-}
-
-func buildStorageViewConsumerTemplate(view storageconfig.StorageView) (viewservice.EventConsumerOptions, error) {
-	if err := view.ValidateConsumer(); err != nil {
-		return viewservice.EventConsumerOptions{}, err
-	}
-	return viewservice.EventConsumerOptions{
-		AckWaitMS: view.AckWaitMS, FetchBatch: view.FetchBatch, MaxWorkers: view.MaxWorkers, MaxAckPending: view.MaxAckPending,
-		Ordering: "dataset", DeliverPolicy: "all", MaxRetryAttempts: -1,
-	}, nil
-}
-
 // storageViewDeleteOldestBatchSize 读取定时删除最旧数据时每批最多删除的行数（storage.view.delete_oldest_batch_size）。
 func storageViewDeleteOldestBatchSize() (int, error) {
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
@@ -610,277 +561,6 @@ func envOrDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
-}
-
-const dataNodeClientTimeout = 5 * time.Minute
-
-type dataNodeProxyKey struct {
-	NodeID        string
-	ServiceTarget string
-}
-
-// dataNodeResolver 按空间与数据集找到负责的 DataNode 完整服务（清理等维护任务需要全部接口）。
-type dataNodeResolver func(ctx context.Context, spaceID, datasetID string) (pb.DataNodeRuntimeService, error)
-
-func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newProxy func(string) pb.DataNodeRuntimeService) dataNodeResolver {
-	if newProxy == nil {
-		newProxy = func(target string) pb.DataNodeRuntimeService {
-			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport), client.WithTimeout(dataNodeClientTimeout)}
-			return newDataNodeProxyAdapter(opts...)
-		}
-	}
-	proxies := make(map[dataNodeProxyKey]pb.DataNodeRuntimeService)
-	var proxiesMu sync.Mutex
-	return func(ctx context.Context, spaceID, datasetID string) (pb.DataNodeRuntimeService, error) {
-		snapshot := metadata.RequestSnapshotFromContext(ctx)
-		if snapshot == nil && snapshotProvider != nil {
-			snapshot = snapshotProvider()
-		}
-		nodeID, target, err := resolveDataNodeFromSnapshot(snapshot, spaceID, datasetID)
-		if err != nil {
-			return nil, err
-		}
-		key := dataNodeProxyKey{NodeID: nodeID, ServiceTarget: target}
-		proxiesMu.Lock()
-		defer proxiesMu.Unlock()
-		if proxy := proxies[key]; proxy != nil {
-			return proxy, nil
-		}
-		for existing := range proxies {
-			if existing.NodeID == nodeID {
-				delete(proxies, existing)
-			}
-		}
-		proxy := newProxy(target)
-		if proxy == nil {
-			return nil, errors.New("data node proxy is unavailable")
-		}
-		if identityBound, ok := proxy.(interface{ bindNodeID(string) }); ok {
-			identityBound.bindNodeID(nodeID)
-		}
-		proxies[key] = proxy
-		return proxy, nil
-	}
-}
-
-func resolveDataNodeFromSnapshot(snapshot metadata.RequestSnapshot, spaceID, datasetID string) (string, string, error) {
-	if snapshot == nil {
-		return "", "", errors.New("metadata cache snapshot is unavailable")
-	}
-	dataset, ok := snapshot.GetDataset(spaceID, datasetID)
-	if !ok || dataset == nil {
-		return "", "", fmt.Errorf("dataset %s/%s is not found", spaceID, datasetID)
-	}
-	if dataset.GetStatus() != "active" {
-		return "", "", fmt.Errorf("dataset %s/%s is not active", spaceID, datasetID)
-	}
-	nodeID := strings.TrimSpace(dataset.GetDataNodeId())
-	if nodeID == "" {
-		return "", "", fmt.Errorf("dataset %s/%s has no data_node_id", spaceID, datasetID)
-	}
-	node, ok := snapshot.GetDataNode(nodeID)
-	if !ok || node == nil {
-		return "", "", fmt.Errorf("data node %q is not found", nodeID)
-	}
-	if node.GetNodeId() != nodeID || node.GetStatus() != "active" {
-		return "", "", fmt.Errorf("data node %q is not active", nodeID)
-	}
-	target, err := normalizeServiceTarget(node.GetServiceTarget())
-	if err != nil {
-		return "", "", fmt.Errorf("data node %q has invalid service_target: %w", nodeID, err)
-	}
-	return nodeID, target, nil
-}
-
-func normalizeServiceTarget(raw string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Scheme != "ip" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-		return "", errors.New("service_target must be an ip://host:port address")
-	}
-	host, portText, err := net.SplitHostPort(u.Host)
-	if err != nil || host == "" {
-		return "", errors.New("service_target must include host and port")
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 {
-		return "", errors.New("service_target port is invalid")
-	}
-	return "ip://" + net.JoinHostPort(host, strconv.Itoa(port)), nil
-}
-
-type dataNodeProxyAdapter struct {
-	proxy       pb.DataNodeRuntimeClientProxy
-	adminProxy  pb.DataNodeDatasetAdminRuntimeClientProxy
-	markerProxy pb.DataNodeMarkerRuntimeClientProxy
-	periodProxy pb.DataNodePeriodRuntimeClientProxy
-	rangeProxy  pb.DataNodeRangeRuntimeClientProxy
-	nodeID      string
-}
-
-var (
-	_ pb.DataNodePeriodRuntimeService = (*dataNodeProxyAdapter)(nil)
-	_ pb.DataNodeRangeRuntimeService  = (*dataNodeProxyAdapter)(nil)
-)
-
-func newDataNodeProxyAdapter(opts ...client.Option) *dataNodeProxyAdapter {
-	return &dataNodeProxyAdapter{
-		proxy:       pb.NewDataNodeRuntimeClientProxy(opts...),
-		adminProxy:  pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),
-		markerProxy: pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
-		periodProxy: pb.NewDataNodePeriodRuntimeClientProxy(opts...),
-		rangeProxy:  pb.NewDataNodeRangeRuntimeClientProxy(opts...),
-	}
-}
-
-func (a *dataNodeProxyAdapter) bindNodeID(nodeID string) {
-	a.nodeID = nodeID
-}
-
-func (a *dataNodeProxyAdapter) RegisterSeriesSnapshot(ctx context.Context, req *pb.RegisterSeriesSnapshotReq) (*pb.RegisterSeriesSnapshotRsp, error) {
-	if a == nil || a.periodProxy == nil {
-		return nil, errors.New("DataNode period runtime is unavailable")
-	}
-	if req != nil {
-		bound := proto.Clone(req).(*pb.RegisterSeriesSnapshotReq)
-		bound.NodeId = a.nodeID
-		req = bound
-	}
-	return a.periodProxy.RegisterSeriesSnapshot(ctx, req)
-}
-
-func (a *dataNodeProxyAdapter) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
-	if a == nil || a.periodProxy == nil {
-		return nil, errors.New("DataNode period runtime is unavailable")
-	}
-	if req != nil {
-		bound := proto.Clone(req).(*pb.CommitTimeSeriesBatchReq)
-		bound.NodeId = a.nodeID
-		req = bound
-	}
-	return a.periodProxy.CommitTimeSeriesBatch(ctx, req)
-}
-
-func (a *dataNodeProxyAdapter) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
-	if a == nil || a.rangeProxy == nil {
-		return nil, errors.New("DataNode range runtime is unavailable")
-	}
-	return a.rangeProxy.ReadTimeSeriesRows(ctx, req)
-}
-
-func (a *dataNodeProxyAdapter) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
-	if a == nil || a.rangeProxy == nil {
-		return nil, errors.New("DataNode range runtime is unavailable")
-	}
-	return a.rangeProxy.CountTimeSeriesRows(ctx, req)
-}
-
-func (a *dataNodeProxyAdapter) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error) {
-	if a == nil || a.rangeProxy == nil {
-		return nil, errors.New("DataNode range runtime is unavailable")
-	}
-	return a.rangeProxy.ReadDatasetChanges(ctx, req)
-}
-
-func (a *dataNodeProxyAdapter) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-	return a.proxy.UpsertFields(ctx, req)
-}
-func (a *dataNodeProxyAdapter) ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
-	return a.proxy.ReadRows(ctx, req)
-}
-func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
-	return a.proxy.GetNodeState(ctx, req)
-}
-func (a *dataNodeProxyAdapter) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
-	return a.proxy.CleanupExpiredBuckets(ctx, req)
-}
-func (a *dataNodeProxyAdapter) DeleteDatasetRows(ctx context.Context, req *pb.DeleteDatasetRowsReq) (*pb.DeleteDatasetRowsRsp, error) {
-	if a == nil || a.adminProxy == nil {
-		return nil, errors.New("DataNode dataset admin runtime is unavailable")
-	}
-	return a.adminProxy.DeleteDatasetRows(ctx, req)
-}
-func (a *dataNodeProxyAdapter) RestoreDatasetRows(ctx context.Context, req *pb.RestoreDatasetRowsReq) (*pb.RestoreDatasetRowsRsp, error) {
-	if a == nil || a.adminProxy == nil {
-		return nil, errors.New("DataNode dataset admin runtime is unavailable")
-	}
-	return a.adminProxy.RestoreDatasetRows(ctx, req)
-}
-func (a *dataNodeProxyAdapter) AppendDatasetPeriodCompleted(ctx context.Context, req *pb.AppendDatasetPeriodCompletedReq) (*pb.AppendDatasetPeriodCompletedRsp, error) {
-	return a.markerProxy.AppendDatasetPeriodCompleted(ctx, req)
-}
-func (a *dataNodeProxyAdapter) AppendDatasetSyncPointMarker(ctx context.Context, req *pb.AppendDatasetSyncPointMarkerReq) (*pb.AppendDatasetSyncPointMarkerRsp, error) {
-	return a.markerProxy.AppendDatasetSyncPointMarker(ctx, req)
-}
-func (a *dataNodeProxyAdapter) GetDatasetPeriodCompletedMarker(ctx context.Context, req *pb.GetDatasetPeriodCompletedMarkerReq) (*pb.GetDatasetPeriodCompletedMarkerRsp, error) {
-	return a.markerProxy.GetDatasetPeriodCompletedMarker(ctx, req)
-}
-
-// This small role entrypoint intentionally keeps the DataNode process
-// independent from PrimaryStore and View. Deployment selects the role through
-// its tRPC listener configuration; one process owns exactly one Pebble node.
-func runDataNodeRole() error {
-	root := os.Getenv("MOOX_STORAGE_HOME")
-	if root == "" {
-		root = "./var/storage"
-	}
-	nodeID := os.Getenv("MOOX_STORAGE_NODE_ID")
-	if nodeID == "" {
-		nodeID = "storage-node-0"
-	}
-	authSecret := os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
-	rawURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL")
-	if rawURL == "" {
-		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for node role")
-	}
-	eventConfig, err := storageEventBusConfig([]string{rawURL}, "storage-node")
-	if err != nil {
-		return err
-	}
-	svc, err := datanode.NewService(datanode.Options{
-		NodeID: nodeID, AuthSecret: authSecret,
-		Pebble: pebble.Options{
-			NodeID: nodeID, Path: filepath.Join(root, "pebble", nodeID),
-			MaxEventBytes: eventConfig.MaxPayloadBytes(), BucketDuration: cleanupBucketDuration(),
-		},
-	})
-	if err != nil {
-		return err
-	}
-	defer svc.Close()
-	if err := observability.RegisterPebbleDiskUsage(prometheus.DefaultRegisterer, nodeID, svc.Store().DiskSpaceUsage); err != nil {
-		return err
-	}
-	client, err := jetstream.Connect(trpc.BackgroundContext(), eventConfig)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	publisher := storageoutbox.NewJetStreamPublisher(client)
-	relay, err := storageoutbox.NewRelay(svc.Store(), publisher, storageoutbox.RelayOptions{})
-	if err != nil {
-		return err
-	}
-	relay.Start(trpc.BackgroundContext())
-	defer relay.Close()
-	s := trpc.NewServer()
-	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
-	trpclog.InstallServiceName("storage")
-	listener := s.Service("trpc.moox.storage.DataNodeRuntime")
-	if listener == nil {
-		return errors.New("DataNode listener is not configured")
-	}
-	pb.RegisterDataNodeRuntimeService(listener, svc)
-	pb.RegisterDataNodePeriodRuntimeService(listener, svc)
-	pb.RegisterDataNodeDatasetAdminRuntimeService(listener, svc)
-	pb.RegisterDataNodeMarkerRuntimeService(listener, svc)
-	pb.RegisterDataNodeRangeRuntimeService(listener, svc)
-	if err := storagebootstrap.RegisterMetricsReporter(s, "node"); err != nil {
-		return err
-	}
-	if err := registerRoleHealth(s, "storage-node"); err != nil {
-		return err
-	}
-	return s.Serve()
 }
 
 const storageEventBusReconnectBufferBytes = 32 * 1024 * 1024
@@ -945,11 +625,4 @@ func registerRoleHealth(s *server.Server, instance string) error {
 		return fmt.Errorf("register storage health: %w", err)
 	}
 	return nil
-}
-
-// primaryStore 把完整服务解析器交给 PrimaryStore 使用。
-func (r dataNodeResolver) primaryStore() primarystore.Resolver {
-	return func(ctx context.Context, spaceID, datasetID string) (primarystore.DataNodeClient, error) {
-		return r(ctx, spaceID, datasetID)
-	}
 }

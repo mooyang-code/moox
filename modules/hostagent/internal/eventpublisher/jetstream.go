@@ -55,7 +55,7 @@ func (p *JetStreamPublisher) PublishHostMetric(ctx context.Context, messageID st
 		return errors.New("host metric publisher is not initialized")
 	}
 	_, err := p.publisher.Publish(ctx, events.ObservabilityHostSnapshotReported, metric, events.PublishOptions{
-		EventID: messageID, OccurredAt: occurredAt, SpaceID: "mooxsys", SubjectID: metric.GetAgentId(),
+		EventID: messageID, OccurredAt: occurredAt, SpaceID: events.SystemSpaceID, SubjectID: metric.GetAgentId(),
 	})
 	return err
 }

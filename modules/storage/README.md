@@ -1,6 +1,6 @@
 # moox-storage
 
-数据存储：元数据与路由（primary）、字段级事实与 Outbox（node）、可重建 View（view）三个角色。外部访问由独立的 `modules/access` 模块代理。
+数据存储：primary（元数据、字段级事实与 Outbox、周期账本、保留期清理）与 view（可重建 View）两个角色。外部访问由独立的 `modules/access` 模块代理。
 
 设计文档：[存储](../../docs/模块/存储.md)
 

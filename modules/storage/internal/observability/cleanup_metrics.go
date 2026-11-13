@@ -66,13 +66,11 @@ func (m *CleanupMetrics) ObserveFailure(spaceID, datasetID string) {
 	m.failures.WithLabelValues(spaceID, datasetID).Inc()
 }
 
-// RegisterPebbleDiskUsage exports the on-disk size of a DataNode's Pebble
-// store, read on every scrape.
-func RegisterPebbleDiskUsage(registerer prometheus.Registerer, nodeID string, usage func() uint64) error {
+// RegisterPebbleDiskUsage 上报主服务 Pebble 库占用的磁盘大小，每次抓取时读取。
+func RegisterPebbleDiskUsage(registerer prometheus.Registerer, usage func() uint64) error {
 	_, err := registerOrReuse(registerer, prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Namespace: "moox", Subsystem: "storage_node", Name: "pebble_disk_bytes",
-		Help:        "On-disk size of the DataNode Pebble store, including obsolete files awaiting deletion.",
-		ConstLabels: prometheus.Labels{"node_id": nodeID},
+		Namespace: "moox", Subsystem: "storage", Name: "pebble_disk_bytes",
+		Help: "主服务 Pebble 库占用的磁盘大小，含压缩后待删除的文件。",
 	}, func() float64 { return float64(usage()) }))
 	return err
 }

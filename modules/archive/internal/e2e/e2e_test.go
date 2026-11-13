@@ -64,7 +64,7 @@ func (datasets) GetDataset(_ context.Context, space, dataset string) (service.Da
 	if dataset != "ds_1m" {
 		return service.Dataset{}, fmt.Errorf("%w: %s", service.ErrDatasetNotFound, dataset)
 	}
-	return service.Dataset{SpaceID: space, DatasetID: dataset, Name: "现货分钟K线", DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "forever",
+	return service.Dataset{SpaceID: space, DatasetID: dataset, Name: "现货分钟K线", DataKind: "time_series", Freq: "1m", Status: "active", Retention: "forever",
 		DataSourceID: "binance", Attributes: map[string]string{"dataset_role": "raw_collection", "market_type": "spot"}}, nil
 }
 

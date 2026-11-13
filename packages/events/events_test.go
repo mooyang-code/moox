@@ -24,8 +24,6 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.observability.log.reported@1",
 		"event.observability.metrics.snapshot.reported@1",
 		"event.storage.dataset.period.completed@1",
-		"event.storage.dataset.rows.upserted@2",
-		"event.storage.dataset.sync_point@1",
 		"event.storage.view.data.ready@2",
 		"event.trade.target.weight_requested@1",
 	}
@@ -36,8 +34,6 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.observability.log.reported@1":              "service",
 		"event.observability.metrics.snapshot.reported@1": "service",
 		"event.storage.dataset.period.completed@1":        "storage",
-		"event.storage.dataset.rows.upserted@2":           "storage",
-		"event.storage.dataset.sync_point@1":              "storage",
 		"event.storage.view.data.ready@2":                 "storage",
 		"event.trade.target.weight_requested@1":           "strategy",
 	}
@@ -63,14 +59,14 @@ func TestBuiltInEvents(t *testing.T) {
 
 func TestRegistryRejectsEventWithoutPrefix(t *testing.T) {
 	_, err := newRegistry([]Event{{
-		name:       "storage.dataset.rows.upserted",
+		name:       "storage.dataset.period.completed",
 		version:    1,
 		stream:     "MOOX_STORAGE",
 		owner:      "storage",
-		newPayload: func() proto.Message { return &storagepb.DatasetSyncPoint{} },
+		newPayload: func() proto.Message { return &storagepb.DatasetPeriodCompleted{} },
 		validate:   func(*eventpb.EventMessage, proto.Message) error { return nil },
 	}})
-	require.EqualError(t, err, "event name \"storage.dataset.rows.upserted\" must start with event.")
+	require.EqualError(t, err, "event name \"storage.dataset.period.completed\" must start with event.")
 }
 
 func TestStorageCompletionEventsRoundTrip(t *testing.T) {
@@ -108,15 +104,6 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 			subjectID: "dataset_result",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
 				_, payload, err := DecodeDatasetPeriodCompleted(registry, raw, subject, id)
-				return payload, err
-			},
-		},
-		{
-			name: "dataset sync point", event: DatasetSyncPoint,
-			payload:   &storagepb.DatasetSyncPoint{SyncPointId: "sync-1", RequestId: "request-1", DatasetId: "dataset", Source: "import"},
-			subjectID: "dataset",
-			decode: func(raw []byte, subject, id string) (proto.Message, error) {
-				_, payload, err := DecodeDatasetSyncPoint(registry, raw, subject, id)
 				return payload, err
 			},
 		},
@@ -165,37 +152,9 @@ func TestRegistryEventsReturnsCopy(t *testing.T) {
 	}
 }
 
-func TestDatasetRowsRoundTrip(t *testing.T) {
-	registry, _ := DefaultRegistry()
-	payload := &storagepb.DatasetRowsUpserted{NodeId: "node", StoreId: "store", Sequence: 1,
-		SpaceId: "space", DatasetId: "dataset",
-		Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{
-			SpaceId: "space", DatasetId: "dataset",
-			Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}},
-		}}},
-	}
-	encoded, err := registry.Encode(DatasetRowsUpserted, payload, PublishOptions{
-		EventID: "event-1", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "dataset",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := proto.Marshal(encoded.Message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	message, decoded, err := DecodeDatasetRowsUpserted(registry, raw, encoded.Subject, "event-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if message.GetEventId() != "event-1" || decoded.GetDatasetId() != "dataset" {
-		t.Fatalf("decoded = %v / %v", message, decoded)
-	}
-}
-
 func TestEncodeRejectsWrongPayload(t *testing.T) {
 	registry, _ := DefaultRegistry()
-	_, err := registry.Encode(DatasetRowsUpserted, LogicalAccountTargetWeightRequested.NewPayload(), PublishOptions{
+	_, err := registry.Encode(DatasetPeriodCompleted, LogicalAccountTargetWeightRequested.NewPayload(), PublishOptions{
 		EventID: "event-1", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "dataset",
 	})
 	if err == nil {
@@ -240,7 +199,6 @@ func validLedgerPeriodCompleted(now *timestamppb.Timestamp) *storagepb.DatasetPe
 		DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "ledger",
 		SnapshotRef:        "series-hash-1",
 		UniverseSubjectIds: []string{"BTC-USDT"},
-		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 1}},
 		CompletedAt:        now,
 	}
 }
@@ -250,8 +208,7 @@ func validViewDataReady(now *timestamppb.Timestamp) *storagepb.ViewDataReady {
 		ViewId: "view-1", ViewConfigId: "view-config-1", CompletionEventId: "period-completed-1",
 		DatasetId: "dataset", Status: "complete", VisibleScope: "universe:dataset:1m",
 		Frequency: "1m", PeriodTime: 1786032000,
-		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 2}},
-		ReadyAt:            now,
+		ReadyAt: now,
 	}
 }
 
@@ -271,7 +228,7 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 	payload := &storagepb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC", "ETH"},
 		Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Hour)),
-		Origin: "auto", JobId: "job-1", SyncRequestId: "batch-1", ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
+		Origin: "auto", JobId: "job-1", ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
 	}
 	raw, err := registry.MarshalMessage(CollectorKlineBackfilled, payload, PublishOptions{EventID: "batch-1", OccurredAt: start, SpaceID: "crypto", SubjectID: "dataset_src"})
 	require.NoError(t, err)
@@ -287,7 +244,6 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 		"no subjects":      func(p *storagepb.CollectorKlineBackfilled) { p.SubjectIds = nil },
 		"empty range":      func(p *storagepb.CollectorKlineBackfilled) { p.End = p.Start },
 		"bad origin":       func(p *storagepb.CollectorKlineBackfilled) { p.Origin = "other" },
-		"no sync request":  func(p *storagepb.CollectorKlineBackfilled) { p.SyncRequestId = "" },
 	} {
 		broken := proto.Clone(payload).(*storagepb.CollectorKlineBackfilled)
 		mutate(broken)

@@ -10,7 +10,6 @@ type datasetMeta struct {
 	Freq            string            `json:"freq"`
 	Status          string            `json:"status"`
 	DataSourceID    string            `json:"data_source_id,omitempty"`
-	DataNodeID      string            `json:"data_node_id,omitempty"`
 	Retention       string            `json:"online_retention"`
 	RetentionSource string            `json:"online_retention_source,omitempty"`
 	SubjectTags     []string          `json:"subject_tags,omitempty"`
@@ -24,7 +23,7 @@ type datasetMeta struct {
 func metaJSON(ds Dataset) string {
 	raw, err := json.Marshal(datasetMeta{
 		Name: ds.Name, Description: ds.Description, DataKind: ds.DataKind, Freq: ds.Freq, Status: ds.Status, DataSourceID: ds.DataSourceID,
-		DataNodeID: ds.DataNodeID, Retention: ds.Retention, RetentionSource: ds.RetentionSource, SubjectTags: ds.SubjectTags,
+		Retention: ds.Retention, RetentionSource: ds.RetentionSource, SubjectTags: ds.SubjectTags,
 		Attributes: ds.Attributes, CreatedAt: ds.CreatedAt, UpdatedAt: ds.UpdatedAt, Revision: ds.Revision,
 	})
 	if err != nil {

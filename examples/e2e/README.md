@@ -13,7 +13,7 @@ go test -race -count=1 ./modules/collector/test -run '^TestKlineResample.*E2E$'
 
 第一组验证采集计划、取数、补采与推送组件；第二组是当前实际存在的重采样 E2E（45m 历史作业、A 股小时线），使用 Collector SQLite 与内存 Primary 替身。它不启动真实 SCF、Access、EventBus 或 Storage View，因此不能代替云端验收。旧 `-run ShortLivedMarketFetch` 已没有匹配测试，不能用它的退出成功证明采集闭环通过。
 
-Storage 的跨组件事件消费验证入口为 `make test-storage-view-event-pipeline`；需要 DuckDB/CGO 的测试环境见[构建手册](../../docs/构建手册.md)。
+Storage 的端到端验证（View 跟随变更日志）在 `modules/storage/internal/service/e2e`；需要 DuckDB/CGO 的测试环境见[构建手册](../../docs/构建手册.md)。
 
 ## 真实 SCF 验收
 

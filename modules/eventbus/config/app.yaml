@@ -34,21 +34,17 @@ health:
 streams:
   - name: MOOX_STORAGE
     subjects:
-      - "moox.event.storage.dataset.rows.upserted.v2.>"
       - "moox.event.storage.dataset.period.completed.v1.>"
       - "moox.event.storage.view.data.ready.v2.>"
-      - "moox.event.storage.dataset.sync_point.v1.>"
     retention: limits
     discard: old
     storage: file
     replicas: 1
     max_age: 72h
     duplicates: 2m
-    # Storage events include high-cardinality view/metric deliveries. Keep an
-    # 8 GiB cap so a rebuild backlog cannot stall publishers at the old 2 GiB
-    # limit; the 72h age bound and disk-pressure monitoring still provide the
-    # retention guardrail.
-    max_bytes: 8589934592
+    # 只剩周期完成与 View 就绪两种事件，不再有行数据：每条带标的全集，几 KB 到十几 KB（发布时压缩），
+    # 按每天几万条估，72 小时在几百 MB 量级；上限 2 GiB 留足余量，超出时丢最旧的。
+    max_bytes: 2147483648
   - name: MOOX_OBSERVABILITY
     subjects:
       - "moox.event.observability.>"

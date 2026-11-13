@@ -19,8 +19,8 @@ import (
 var storageCmd = &cobra.Command{
 	Use:     "storage",
 	Aliases: []string{"存储"},
-	Short:   "存储节点登记、View 维护与元数据重置",
-	Long: "存储节点登记（node）与 Storage 的维护命令。维护命令（repair-view、force-rebuild-view、reset-view-consumers、reset-metadata、delete-view、purge-dataset-events、period-inventory）" +
+	Short:   "View 维护与元数据重置",
+	Long: "Storage 的维护命令。维护命令（repair-view、reset-metadata、delete-view）" +
 		"按 --file（moox.toml）经 SSH 在存储机上执行部署包里的 moox-storage-cli，不需要本机装存储程序。历史数据导入请使用 moox-cli import。",
 	Run: func(cmd *cobra.Command, args []string) {
 		_ = cmd.Help()
@@ -32,7 +32,6 @@ func init() {
 	for _, action := range storageMaintenanceActions {
 		storageCmd.AddCommand(action.command())
 	}
-	storageCmd.AddCommand(newStorageNodeCommand())
 }
 
 // storageMaintenanceAction 描述一个在存储机上执行的维护动作。参数交给存储机上的 moox-storage-cli 解析
@@ -66,42 +65,19 @@ func storageMetadataDefaults(root string) map[string]string {
 var storageMaintenanceActions = []storageMaintenanceAction{
 	{
 		Action: "repair-view", Aliases: []string{"修复视图", "repair"}, Defaults: storageConfDefaults, DryRun: true,
-		Short: "清理 View 消费积压并重建索引（默认只预览，--yes 才执行）",
-		Long: "停止 storage-view、备份元数据、删除目标数据集的 durable consumer、重启。常用参数：--space-id、--view-id、--consumer（必填，view_<12 位十六进制>）、\n" +
-			"--reset-view-indexes --deliver-policy=all（高风险：删除物理索引后从 Primary 重建）、--restart=false。",
+		Short: "重建指定 View 的索引（默认只预览，--yes 才执行）",
+		Long:  "暂停 storage-view、删除 View 的索引文件，恢复后从 Primary 重新建索引，元数据不用改。常用参数：--space-id、--view-id、--restart=false。\n记录型 View 重建后为空，只跟随新写入。",
 	},
 	{
-		Action: "force-rebuild-view", Aliases: []string{"强制重建视图", "重建视图"}, Defaults: storageConfDefaults, DryRun: true,
-		Short: "删除旧 View、清空 durable consumer 状态并从头重建（默认只预览，--yes 才执行）",
-		Long:  "停止整个 Storage 生命周期、备份元数据、清空 View 状态与物理索引，重启后从 Primary 回填。常用参数：--space-id、--view-id、--lookback。新建或重建 View 前先估算存储机内存。",
-	},
-	{
-		Action: "reset-view-consumers", Aliases: []string{"重置视图消费", "清理视图队列"}, Defaults: storageConfDefaults, DryRun: true,
-		Short: "删除所有 View durable/历史消息/索引并按回溯窗口重新构建（默认只预览，--yes 才执行）",
-		Long:  "常用参数：--lookback、--reset-all-storage-data（连 Primary 数据一起删，系统重置用）、--restart=false。",
-	},
-	{
-		Action: "reset-metadata", Aliases: []string{"重置元数据"}, Defaults: func(root string) map[string]string {
-			return map[string]string{"--package-root": root}
-		}, DryRun: true,
+		Action: "reset-metadata", Aliases: []string{"重置元数据"}, Defaults: storageConfDefaults, DryRun: true,
 		Short: "备份后清空全部业务定义并重新导入种子（Storage 必须已停止；默认只预览，--yes 才执行）",
 		Long:  "常用参数：--seed（种子文件，在存储机上的路径）。",
 	},
 	{
 		Action: "delete-view", Defaults: storageMetadataDefaults,
 		Short: "离线删除一个 View 的元数据（不带 --yes 时存储机上的程序会拒绝执行）",
-		Long: "参数：--view <空间/视图 ID>（必填）、--yes。要先暂停 storage-view（直接 stop 会被主机守护拉起，用 moox-runtime pause）。" +
-			"物理索引文件由 storage-view 的清理定时器回收。删除前先备份元数据库。",
-	},
-	{
-		Action: "purge-dataset-events", Defaults: storageConfDefaults, DryRun: true,
-		Short: "精确清理一个数据集在 EventBus 里的历史事件（默认只预览，--yes 才执行）",
-		Long:  "参数：--space、--dataset（必填）。只用于可由后续采样重新生成的运维数据，行情、交易和因子业务数据集不得使用。",
-	},
-	{
-		Action: "period-inventory", Defaults: func(string) map[string]string { return nil },
-		Short: "只读盘点 DataNode 的周期完成标记（要求 DataNode 没有打开该数据库）",
-		Long:  "参数：--path（Pebble 数据库路径，存储机上的路径）、--node-id、--space、--dataset、--frequency、--period-time-min、--period-time-max。",
+		Long: "参数：--view <空间/视图 ID>（必填）、--yes。要先在存储机上暂停 storage-view：<包根>/pause.sh --components storage-view（直接 stop 会被主机守护拉起），" +
+			"删完后 <包根>/resume.sh --components storage-view。物理索引文件由 storage-view 的清理定时器回收。删除前先备份元数据库。",
 	},
 }
 
@@ -160,7 +136,7 @@ func storageRemoteArgs(action storageMaintenanceAction, storageRoot string, args
 	return remote
 }
 
-// storageRemoteScript 在存储机上执行动作：输出先落到维护日志再回显，SSH 中断时结果（如 backup_path）不会丢；退出码原样返回。
+// storageRemoteScript 在存储机上执行动作：输出先落到维护日志再回显，SSH 中断时结果（如 reset-metadata 的 backup）不会丢；退出码原样返回。
 const storageRemoteScript = `umask 077; dir="$1"; name="$2"; shift 2; mkdir -p "$dir" || exit 125; log="$dir/$name-$(date -u +%Y%m%dT%H%M%SZ).log"; "$@" >"$log" 2>&1; code=$?; cat "$log"; echo "（输出已保存在存储机 $log）" >&2; exit $code`
 
 func runStorageMaintenance(cmd *cobra.Command, action storageMaintenanceAction, args []string) error {

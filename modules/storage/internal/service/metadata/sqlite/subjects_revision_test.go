@@ -28,7 +28,6 @@ func TestSubjectsRevisionTracksSubjectScopeChanges(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
 
 	expectChange := func(name string, change func()) {
 		t.Helper()
@@ -60,7 +59,7 @@ func TestSubjectsRevisionTracksSubjectScopeChanges(t *testing.T) {
 		execRevisionSQL(t, ctx, store, `UPDATE t_subjects SET c_name = 'renamed' WHERE c_subject_id = 'AAA'`)
 	})
 	expectChange("subject attrs", func() {
-		execRevisionSQL(t, ctx, store, `UPDATE t_subjects SET c_attrs_json = '{"series_tag":"x"}' WHERE c_subject_id = 'AAA'`)
+		execRevisionSQL(t, ctx, store, `UPDATE t_subjects SET c_item_json = '{"series_tag":"x"}' WHERE c_subject_id = 'AAA'`)
 	})
 	expectChange("member insert alone", func() {
 		execRevisionSQL(t, ctx, store, `INSERT INTO t_subject_tags (c_space_id, c_tag_id, c_subject_id) VALUES ('space', 'assets', 'AAA')`)
@@ -78,27 +77,27 @@ func TestSubjectsRevisionTracksSubjectScopeChanges(t *testing.T) {
 	expectChange("member inactive", func() {
 		execRevisionSQL(t, ctx, store, `UPDATE t_subject_tags SET c_status = 'inactive' WHERE c_subject_id = 'BTC-USDT'`)
 	})
-	expectSame("tag description only", func() {
-		execRevisionSQL(t, ctx, store, `UPDATE t_tags SET c_description = 'x' WHERE c_tag_id = 'assets'`)
+	expectSame("tag name only", func() {
+		execRevisionSQL(t, ctx, store, `UPDATE t_tags SET c_tag_name = 'x' WHERE c_tag_id = 'assets'`)
 	})
 	expectChange("tag attributes", func() {
-		execRevisionSQL(t, ctx, store, `UPDATE t_tags SET c_attrs_json = '{"market_type":"swap"}' WHERE c_tag_id = 'assets'`)
+		execRevisionSQL(t, ctx, store, `UPDATE t_tags SET c_item_json = '{"market_type":"swap"}' WHERE c_tag_id = 'assets'`)
 	})
 
 	// 数据集：创建、改标的范围、删除后以同 ID 重建，都必须递增（缓存键是 space+dataset）。
-	expectChange("dataset insert", func() { createTestDataset(t, ctx, store, "dataset", "node-a") })
+	expectChange("dataset insert", func() { createTestDataset(t, ctx, store, "dataset") })
 	expectChange("dataset subject tags", func() {
 		execRevisionSQL(t, ctx, store, `UPDATE t_datasets SET c_subject_tags_json = '["assets"]' WHERE c_dataset_id = 'dataset'`)
 	})
-	expectSame("dataset description only", func() {
-		execRevisionSQL(t, ctx, store, `UPDATE t_datasets SET c_description = 'x' WHERE c_dataset_id = 'dataset'`)
+	expectSame("dataset item only", func() {
+		execRevisionSQL(t, ctx, store, `UPDATE t_datasets SET c_item_json = json_set(c_item_json, '$.description', 'x') WHERE c_dataset_id = 'dataset'`)
 	})
 	expectChange("dataset delete", func() {
 		if err := store.DeleteDataset(ctx, "space", "dataset"); err != nil {
 			t.Fatal(err)
 		}
 	})
-	expectChange("dataset recreate", func() { createTestDataset(t, ctx, store, "dataset", "node-a") })
+	expectChange("dataset recreate", func() { createTestDataset(t, ctx, store, "dataset") })
 
 	// 回滚的事务不改变修订号。
 	before := subjectsRevision(t, ctx, store)

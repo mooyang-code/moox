@@ -59,7 +59,7 @@ func publishDelist(t *testing.T, server *testkit.Server, symbol string, delistAt
 		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(seen), Scope: events.DelistScopeAll,
 	}, events.PublishOptions{
 		EventID: events.InstrumentDelistEventID("binance", events.DelistMarketSpot, symbol, events.DelistScopeAll, delistAt), OccurredAt: seen,
-		SpaceID: events.DelistSystemSpaceID, SubjectID: events.InstrumentDelistSubjectID("binance", events.DelistMarketSpot, symbol),
+		SpaceID: events.SystemSpaceID, SubjectID: events.InstrumentDelistSubjectID("binance", events.DelistMarketSpot, symbol),
 	})
 	require.NoError(t, err)
 }

@@ -41,15 +41,3 @@ func (s *Service) SyncHostDeployments(ctx context.Context, req *pb.SyncHostDeplo
 func (s *Service) DeleteHost(ctx context.Context, req *pb.DeleteDeploymentHostReq) (*pb.DeleteDeploymentHostRsp, error) {
 	return s.svc.DeleteHost(ctx, req)
 }
-
-func (s *Service) InspectEventBus(ctx context.Context, req *pb.InspectEventBusReq) (*pb.InspectEventBusRsp, error) {
-	return s.svc.InspectEventBus(ctx, req)
-}
-
-func (s *Service) DeleteEventBusConsumers(ctx context.Context, req *pb.DeleteEventBusConsumersReq) (*pb.DeleteEventBusConsumersRsp, error) {
-	return s.svc.DeleteEventBusConsumers(ctx, req)
-}
-
-func (s *Service) PurgeEventBusSubjects(ctx context.Context, req *pb.PurgeEventBusSubjectsReq) (*pb.PurgeEventBusSubjectsRsp, error) {
-	return s.svc.PurgeEventBusSubjects(ctx, req)
-}

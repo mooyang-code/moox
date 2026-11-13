@@ -149,7 +149,7 @@ func waitingSinceRun(sc spaceClock, freqRaw string, output, lastRun time.Time, f
 	return facts
 }
 
-// clockIssueText 是无法按交易日历判断时给人看的原因。没有交易日历的空间（例如 mooxsys 的主机、服务指标）不是行情 K 线，
+// clockIssueText 是无法按交易日历判断时给人看的原因。没有交易日历的空间（没有采集任务声明市场）不是行情 K 线，
 // 本来就不判断到达延迟，不给提示。
 func clockIssueText(err error) string {
 	switch {

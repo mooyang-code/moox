@@ -23,19 +23,6 @@ func TestValidateRouteRejectsStorageAliasWildcards(t *testing.T) {
 	}
 }
 
-func TestValidateRouteAllowsStorageDataShardMethodsForPrimary(t *testing.T) {
-	route := Route{
-		ServiceID:      "storage-primary",
-		Address:        "127.0.0.1:20106",
-		ServicePath:    "trpc.moox.storage.DataShard",
-		AllowedMethods: []string{"MergeRows", "ReadRows", "ScanRows", "DeleteRows", "GetShardState"},
-		AllowedCallers: []string{"storage-primary"},
-	}
-	if err := ValidateRoute(route); err != nil {
-		t.Fatalf("ValidateRoute rejected DataShard route: %v", err)
-	}
-}
-
 func TestValidateRouteRejectsUnsafeRoutes(t *testing.T) {
 	valid := Route{ServiceID: "storage-api", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Storage", TimeoutMS: 1, MaxBodyBytes: 1, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}
 	tests := []struct {
@@ -126,24 +113,17 @@ func TestNormalizeAndHashAppliesDefaultsSortsAndIsStable(t *testing.T) {
 	}
 }
 
-func TestValidateStorageRouteRequiresAllowlistAndRejectsInternalMethods(t *testing.T) {
+func TestValidateStorageRouteRequiresAllowlist(t *testing.T) {
 	base := Route{ServiceID: "storage", Address: "127.0.0.1:8002", ServicePath: "trpc.moox.storage.DataView"}
 	if err := ValidateRoute(base); err == nil {
 		t.Fatal("ValidateRoute accepted an unrestricted storage route")
 	}
 
-	for _, method := range []string{
-		"CompleteViewInitialBuild",
-		"MergePrimaryRows",
-		"DeletePrimaryRows",
-		"ApplyViewIndex",
-	} {
-		route := base
-		route.AllowedMethods = []string{method}
-		route.AllowedCallers = []string{"storage-view"}
-		if err := ValidateRoute(route); err == nil {
-			t.Fatalf("ValidateRoute accepted internal storage method %q", method)
-		}
+	wildcard := base
+	wildcard.AllowedMethods = []string{"*"}
+	wildcard.AllowedCallers = []string{"admin-gateway"}
+	if err := ValidateRoute(wildcard); err == nil {
+		t.Fatal("ValidateRoute accepted a wildcard storage method list")
 	}
 
 	public := base

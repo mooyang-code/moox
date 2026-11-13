@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -27,8 +25,6 @@ type JobRunnerConfig struct {
 	BucketsPerRound int
 	// MaxJobsPerRound 是每轮最多推进的作业数（每个任务一个）。
 	MaxJobsPerRound int
-	// SyncTimeout 是作业结束时等待 View 追上同步点的时间。
-	SyncTimeout time.Duration
 }
 
 func (c JobRunnerConfig) withDefaults() JobRunnerConfig {
@@ -37,9 +33,6 @@ func (c JobRunnerConfig) withDefaults() JobRunnerConfig {
 	}
 	if c.MaxJobsPerRound <= 0 {
 		c.MaxJobsPerRound = 8
-	}
-	if c.SyncTimeout <= 0 {
-		c.SyncTimeout = 5 * time.Second
 	}
 	return c
 }
@@ -51,8 +44,6 @@ type JobRunner struct {
 	Tasks  *store.TaskRepository
 	Source subjectSource
 	Engine *Engine
-	// Sync 非空时，作业结束前先对目标数据集追加同步点并等 View 追上，作业成功即 View 可读。
-	Sync SyncPointStorage
 	// Flush 非空时，作业结束时立即冲刷它的补写通知（不等发布协程的下一轮）。
 	Flush  func(ctx context.Context) error
 	Config JobRunnerConfig
@@ -284,42 +275,15 @@ func (r *JobRunner) jobMembers(ctx context.Context, task *Task, job store.Resamp
 	return out, nil
 }
 
-// finish 冲刷作业的补写通知，追加同步点并等目标 View 追上，然后标记成功。
+// finish 冲刷作业的补写通知，然后标记成功（不等 View：读 View 的消费方按补写通知自己处理）。
 func (r *JobRunner) finish(ctx context.Context, job store.ResampleJob, task *Task, cfg JobRunnerConfig) error {
 	if r.Flush != nil {
 		if err := r.Flush(ctx); err != nil {
 			return r.fail(ctx, job, fmt.Errorf("flush backfill notices: %w", err), false)
 		}
 	}
-	if r.Sync != nil {
-		if err := r.waitViewSync(ctx, task, job.JobID, cfg.SyncTimeout); err != nil {
-			return r.fail(ctx, job, err, false)
-		}
-	}
 	r.clearFailures(job.JobID)
 	return r.State.SetJobStatus(ctx, job.JobID, store.ResampleJobSucceeded, "")
-}
-
-// waitViewSync 对目标数据集追加同步点并等默认 View 追上：同步点和行写在同一个有序 outbox 里，View 处理到它，之前的行都已入索引。
-func (r *JobRunner) waitViewSync(ctx context.Context, task *Task, requestID string, timeout time.Duration) error {
-	ids := taskresult.PersistedResultIDs(task.Spec.SpaceID, task.Spec.TaskID, task.Collection.ResultDatasetID, task.Collection.ResultViewID)
-	if err := r.Sync.AppendDatasetSyncPoint(ctx, task.Spec.SpaceID, task.Spec.TargetDatasetID, requestID, "catchup"); err != nil {
-		return fmt.Errorf("append resample sync point: %w", err)
-	}
-	response, err := r.Sync.WaitViewSyncPoint(ctx, &storagepb.WaitViewSyncPointReq{
-		SpaceId: task.Spec.SpaceID, ViewId: ids.ViewID, RequestId: requestID,
-		DatasetIds: []string{task.Spec.TargetDatasetID}, WaitTimeoutMs: uint32(timeout / time.Millisecond),
-	})
-	if err != nil {
-		return fmt.Errorf("wait resample View sync point: %w", err)
-	}
-	if response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-		return fmt.Errorf("resample View sync point rejected")
-	}
-	if !response.GetReady() {
-		return fmt.Errorf("resample View sync point is not ready")
-	}
-	return nil
 }
 
 // fail 记录一次失败；permanent 或连续失败达到上限时把作业标为失败，否则保留状态下一轮重试。

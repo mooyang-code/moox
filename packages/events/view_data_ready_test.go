@@ -42,16 +42,15 @@ func TestViewDataReadyContract(t *testing.T) {
 
 	now := timestamppb.Now()
 	validReady := &storagepb.ViewDataReady{
-		ViewId:             "view-1",
-		ViewConfigId:       "view-config-1",
-		CompletionEventId:  "collector-completed-1",
-		DatasetId:          "dataset_kline_1m",
-		Status:             "complete",
-		VisibleScope:       "universe:crypto:usdt",
-		Frequency:          "1m",
-		PeriodTime:         1786032000,
-		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}},
-		ReadyAt:            now,
+		ViewId:            "view-1",
+		ViewConfigId:      "view-config-1",
+		CompletionEventId: "collector-completed-1",
+		DatasetId:         "dataset_kline_1m",
+		Status:            "complete",
+		VisibleScope:      "universe:crypto:usdt",
+		Frequency:         "1m",
+		PeriodTime:        1786032000,
+		ReadyAt:           now,
 	}
 
 	t.Run("missing identity fields are rejected", func(t *testing.T) {
@@ -63,9 +62,6 @@ func TestViewDataReadyContract(t *testing.T) {
 			{name: "detail_type", mutate: func(v *storagepb.ViewDataReady) { v.Detail = []byte("x") }},
 			{name: "view_id", mutate: func(v *storagepb.ViewDataReady) { v.ViewId = "" }},
 			{name: "dataset_id", mutate: func(v *storagepb.ViewDataReady) { v.DatasetId = "" }},
-			{name: "committed_positions", mutate: func(v *storagepb.ViewDataReady) {
-				v.CommittedPositions = []*storagepb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 0}}
-			}},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {

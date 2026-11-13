@@ -191,7 +191,7 @@ func newHarness(t *testing.T) *harness {
 
 func assignment(runID string, mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: runID, LeaseToken: "tok-" + runID, Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
+		RunId: runID, LeaseToken: "tok-" + runID, Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day",
 		Retention: "168h", IntervalSeconds: 3600, MinLookbackSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: "2026-10-17T01:04:43Z", ScheduledAt: "2026-10-17T01:04:43Z",
 	}
@@ -365,11 +365,11 @@ func TestHeartbeatConflictAndFailuresStopPulling(t *testing.T) {
 	}
 }
 
-// 运行中的导入不读 Storage，不计入上报给 mgr 的 DataNode 占用。
-func TestPullDoesNotCountImportRunsAgainstDataNode(t *testing.T) {
+// 运行中的导入不读 Storage，不计入上报给 mgr 的读 Storage 占用。
+func TestPullDoesNotCountImportRunsAgainstStorageRuns(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxRunsPerDataNode = 3, 2
+	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxStorageRuns = 3, 2
 	h.app.heartbeatOnce(ctx)
 	h.app.mu.Lock()
 	h.app.running["a"] = &activeRun{assignment: assignment("a", nil), cancel: func() {}}
@@ -380,12 +380,8 @@ func TestPullDoesNotCountImportRunsAgainstDataNode(t *testing.T) {
 		t.Fatalf("pulls = %d", len(h.mgr.pulls))
 	}
 	req := h.mgr.pulls[0]
-	loads := map[string]uint32{}
-	for _, l := range req.GetBusyDataNodes() {
-		loads[l.GetDataNodeId()] = l.GetRunning()
-	}
-	// 导入仍占一个并发槽，但 node-0 只算普通运行 a。
-	if req.GetFreeSlots() != 1 || loads["node-0"] != 1 {
+	// 导入仍占一个并发槽，但读 Storage 的占用只算普通运行 a。
+	if req.GetFreeSlots() != 1 || req.GetBusyStorageRuns() != 1 {
 		t.Fatalf("pull = %v", req)
 	}
 }
@@ -393,7 +389,7 @@ func TestPullDoesNotCountImportRunsAgainstDataNode(t *testing.T) {
 func TestPullHonorsSlotsLeaseMaintenanceAndDisk(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxRunsPerDataNode = 3, 2
+	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxStorageRuns = 3, 2
 	h.app.pullOnce(ctx)
 	if len(h.mgr.pulls) != 0 {
 		t.Fatal("没有取得租约不领取")
@@ -401,18 +397,14 @@ func TestPullHonorsSlotsLeaseMaintenanceAndDisk(t *testing.T) {
 	h.app.heartbeatOnce(ctx)
 	h.app.mu.Lock()
 	h.app.running["a"] = &activeRun{assignment: assignment("a", nil), cancel: func() {}}
-	h.app.running["b"] = &activeRun{assignment: assignment("b", func(x *archivepb.RunAssignment) { x.DataNodeId = "node-1" }), cancel: func() {}}
+	h.app.running["b"] = &activeRun{assignment: assignment("b", nil), cancel: func() {}}
 	h.app.mu.Unlock()
 	h.app.pullOnce(ctx)
 	if len(h.mgr.pulls) != 1 {
 		t.Fatalf("pulls = %d", len(h.mgr.pulls))
 	}
 	req := h.mgr.pulls[0]
-	loads := map[string]uint32{}
-	for _, l := range req.GetBusyDataNodes() {
-		loads[l.GetDataNodeId()] = l.GetRunning()
-	}
-	if req.GetFreeSlots() != 1 || req.GetMaxRunsPerDataNode() != 2 || req.GetWorkerId() != "w1" || req.GetInstanceId() != "i1" || loads["node-0"] != 1 || loads["node-1"] != 1 {
+	if req.GetFreeSlots() != 1 || req.GetMaxStorageRuns() != 2 || req.GetWorkerId() != "w1" || req.GetInstanceId() != "i1" || req.GetBusyStorageRuns() != 2 {
 		t.Fatalf("pull = %v", req)
 	}
 	// 槽满：不拉取。

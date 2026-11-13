@@ -153,45 +153,6 @@ message DeleteDeploymentHostRsp {
   trpc.moox.common.RetInfo ret_info = 1;
 }
 
-// EventBus 维护：由 Admin 持管理员令牌代为执行，调用方不需要在本机放管理员凭据文件。
-// 只允许 Storage View 的流、消费者和数据事件主题（服务端另有白名单校验）。
-message EventBusConsumerState {
-  string durable = 1;
-  bool exists = 2;
-  // 多主题过滤；旧式单主题过滤放在 filter_subject。
-  repeated string filter_subjects = 3;
-  string filter_subject = 4;
-}
-message InspectEventBusReq {
-  string stream = 1;
-  repeated string durables = 2;
-}
-message InspectEventBusRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-  repeated EventBusConsumerState consumers = 2;
-}
-message DeleteEventBusConsumersReq {
-  string stream = 1;
-  repeated string durables = 2;
-}
-message DeleteEventBusConsumersRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-  // 实际删除的消费者；本来就不存在的不计入。
-  repeated string deleted = 2;
-  // 是否已向 EventBus 发出过删除请求。为 false 表示失败发生在发出之前（参数不合规、连不上 EventBus），EventBus 上没有任何改动；
-  // 为 true 时即使出错，也可能已经改动，调用方不能当作“什么都没发生”。
-  bool attempted = 3;
-}
-message PurgeEventBusSubjectsReq {
-  string stream = 1;
-  repeated string subjects = 2;
-}
-message PurgeEventBusSubjectsRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-  // 是否已向 EventBus 发出过清除请求，含义同 DeleteEventBusConsumersRsp.attempted。
-  bool attempted = 2;
-}
-
 service SysDeploy {
   rpc GetCatalog(GetCatalogReq) returns (GetCatalogRsp);
   rpc ListHosts(ListDeploymentHostsReq) returns (ListDeploymentHostsRsp);
@@ -202,7 +163,4 @@ service SysDeploy {
   rpc SetDeploymentStatus(SetDeploymentStatusReq) returns (SetDeploymentStatusRsp);
   rpc SyncHostDeployments(SyncHostDeploymentsReq) returns (SyncHostDeploymentsRsp);
   rpc DeleteHost(DeleteDeploymentHostReq) returns (DeleteDeploymentHostRsp);
-  rpc InspectEventBus(InspectEventBusReq) returns (InspectEventBusRsp);
-  rpc DeleteEventBusConsumers(DeleteEventBusConsumersReq) returns (DeleteEventBusConsumersRsp);
-  rpc PurgeEventBusSubjects(PurgeEventBusSubjectsReq) returns (PurgeEventBusSubjectsRsp);
 }

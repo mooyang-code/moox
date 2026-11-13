@@ -311,7 +311,7 @@ func TestConsoleStorageAndFactorAreSpaceAuthorized(t *testing.T) {
 		{"body space without header is authorized", "/api/admin/storage/ListDatasets", "", `{"space_id":"space-2"}`, true, http.StatusForbidden},
 		{"header and body mismatch", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-2"}`, false, http.StatusBadRequest},
 		{"space method without space", "/api/admin/storage/ListDatasets", "", `{}`, false, http.StatusBadRequest},
-		{"global storage method without space", "/api/admin/storage/ListDataNodes", "", `{}`, false, http.StatusOK},
+		{"global storage method without space", "/api/admin/storage/ListSpaces", "", `{}`, false, http.StatusOK},
 		{"factor blocked by authorizer", "/api/admin/factor-mgr/DeleteFactorTask", "space-1", `{}`, true, http.StatusForbidden},
 		{"factor global request without space", "/api/admin/factor-mgr/ListFactors", "", `{}`, false, http.StatusOK},
 	} {
@@ -472,15 +472,13 @@ func TestStorageTopLevelSpaceMethodsMatchProto(t *testing.T) {
 	}
 }
 
-// 部署、数据节点与归档 worker 的写操作只留给 moox-cli：控制台没有这些路由，一律 404。
+// 部署与归档 worker 的写操作只留给 moox-cli：控制台没有这些路由，一律 404。
 func TestConsoleHasNoDeploymentWriteRoutes(t *testing.T) {
 	for _, path := range []string{
 		"/api/admin/sysdeploy/SetHostStatus",
 		"/api/admin/sysdeploy/SetDeploymentStatus",
 		"/api/admin/sysdeploy/SyncHostDeployments",
 		"/api/admin/sysdeploy/DeleteHost",
-		"/api/admin/storage/UpdateDataNode",
-		"/api/admin/storage/DeleteDataNode",
 		"/api/admin/archive/RetireArchiveWorker",
 		"/api/admin/archive/PrepareArchiveImport",
 		"/api/admin/archive/ImportArchiveFile",

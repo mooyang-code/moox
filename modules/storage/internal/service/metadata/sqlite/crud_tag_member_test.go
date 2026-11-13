@@ -178,7 +178,6 @@ func TestListDatasetSubjectsUsesTagUnion(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node")
 	if _, err := store.UpsertTag(ctx, testAutoTag("tag_a")); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +193,7 @@ func TestListDatasetSubjectsUsesTagUnion(t *testing.T) {
 	if _, err := store.ApplyTagSnapshot(ctx, "space", "tag_b", []*pb.TagSnapshotItem{{SubjectId: "B"}}); err != nil {
 		t.Fatal(err)
 	}
-	dataset := createTestDataset(t, ctx, store, "dataset_ab", "node")
+	dataset := createTestDataset(t, ctx, store, "dataset_ab")
 	dataset.SubjectTags = []string{"tag_a", "tag_b"}
 	if _, err := store.UpdateDataset(ctx, dataset); err != nil {
 		t.Fatal(err)

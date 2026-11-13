@@ -3,7 +3,6 @@ package primarystore
 import (
 	"context"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
@@ -12,19 +11,13 @@ import (
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
-type snapshotDataNodeClient interface {
-	RegisterSeriesSnapshot(context.Context, *pb.RegisterSeriesSnapshotReq) (*pb.RegisterSeriesSnapshotRsp, error)
-}
-
-type periodDataNodeClient interface {
-	CommitTimeSeriesBatch(context.Context, *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error)
-}
-
-// RegisterSeriesSnapshot 把数据集的完整标的列表与生效周期转发给所属 DataNode。
+// RegisterSeriesSnapshot 登记数据集的完整标的列表与生效周期。
 func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.PrimaryRegisterSeriesSnapshotReq) (*pb.PrimaryRegisterSeriesSnapshotRsp, error) {
 	if req == nil || len(req.GetSeries()) == 0 {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("series snapshot is required"))}, nil
@@ -43,29 +36,18 @@ func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.PrimaryReg
 	if err := validateSnapshotAlignment(ctx, req); err != nil {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
-	if err != nil {
+	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	periodNode, ok := node.(snapshotDataNodeClient)
-	if !ok {
-		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode period RPC is unavailable"))}, nil
+	series := make([]seriesset.Series, len(req.GetSeries()))
+	for i, entry := range req.GetSeries() {
+		series[i] = seriesset.Series{SubjectID: entry.GetSubjectId(), SeriesTag: entry.GetSeriesTag()}
 	}
-	auth, err := s.signAuth(req.GetAuthInfo())
+	result, err := s.store.RegisterSeriesSnapshot(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetFrequency(), series, req.GetEffectiveFrom())
 	if err != nil {
-		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	rsp, err := periodNode.RegisterSeriesSnapshot(ctx, &pb.RegisterSeriesSnapshotReq{
-		AuthInfo: auth, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Frequency: req.GetFrequency(),
-		Series: req.GetSeries(), EffectiveFrom: req.GetEffectiveFrom(),
-	})
-	if err != nil {
-		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
-	}
-	if rsp == nil || rsp.GetRetInfo() == nil {
-		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode returned no snapshot response"))}, nil
-	}
-	return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: rsp.GetRetInfo(), SeriesHash: rsp.GetSeriesHash(), ExpectedCount: rsp.GetExpectedCount(), AlreadyRegistered: rsp.GetAlreadyRegistered()}, nil
+	return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Success("success"), SeriesHash: result.SeriesHash, ExpectedCount: result.ExpectedCount, AlreadyRegistered: result.AlreadyRegistered}, nil
 }
 
 func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryCommitTimeSeriesBatchReq) (*pb.PrimaryCommitTimeSeriesBatchRsp, error) {
@@ -104,40 +86,37 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 	}
 	// 周期提交是 Collector 每个周期写入行情的主路径：数据集的最近运行、最近成功与输出水位都要在这里记录，
 	// 否则 Monitor 只能看到旧的 UpsertFields（补采、导入）留下的指标，把数据误判成“入库落后”。
-	node, err := s.resolve(ctx, exp.GetSpaceId(), exp.GetDatasetId())
-	if err != nil {
-		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+	if err := requireActiveDataset(ctx, exp.GetSpaceId(), exp.GetDatasetId()); err != nil {
+		s.observeTimeSeriesRows(ctx, rows, "error", false)
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	periodNode, ok := node.(periodDataNodeClient)
-	if !ok {
-		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode period RPC is unavailable"))}, nil
-	}
-	auth, err := s.signAuth(req.GetAuthInfo())
-	if err != nil {
-		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	items := make([]*pb.TimeSeriesBatchRow, 0, len(rows))
+	items := make([]pebble.TimeSeriesBatchItem, 0, len(rows))
+	keys := make([]*pb.RowKey, 0, len(rows))
 	for i, row := range rows {
-		items = append(items, &pb.TimeSeriesBatchRow{SeriesIndex: req.GetItems()[i].GetSeriesIndex(), Row: row})
+		items = append(items, pebble.TimeSeriesBatchItem{SeriesIndex: req.GetItems()[i].GetSeriesIndex(), Row: row})
+		keys = append(keys, row.GetKey())
 	}
-	rsp, err := periodNode.CommitTimeSeriesBatch(ctx, &pb.CommitTimeSeriesBatchReq{
-		AuthInfo: auth, Expectation: exp, Items: items,
-		AllowedLatenessSeconds: datasetAllowedLateness(ctx, exp),
-	})
+	commitExp := periodExpectation(exp)
+	commitExp.AllowedLatenessSeconds = datasetAllowedLateness(ctx, exp)
+	result, err := s.store.CommitTimeSeriesBatch(ctx, commitExp, items)
 	if err != nil {
-		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		s.observeTimeSeriesRows(ctx, rows, "error", false)
+		var deadlinePassed pebble.PeriodDeadlinePassedError
+		if s.rejection != nil && errors.As(err, &deadlinePassed) {
+			s.rejection.ObserveDeadlineRejection(exp.GetSpaceId(), exp.GetDatasetId(), exp.GetFrequency(), time.Now())
+		}
+		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	if rsp == nil || rsp.GetRetInfo() == nil {
-		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode returned no period response"))}, nil
+	s.observeTimeSeriesRows(ctx, rows, "success", true)
+	return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Success("success"), Keys: keys, PeriodStatus: result.Status, AcceptedSeriesIndexes: result.AcceptedSeriesIndexes}, nil
+}
+
+// periodExpectation 把请求里的周期期望转成存储层的结构。
+func periodExpectation(in *pb.DatasetPeriodExpectation) pebble.DatasetPeriodExpectation {
+	return pebble.DatasetPeriodExpectation{
+		SpaceID: in.GetSpaceId(), DatasetID: in.GetDatasetId(), Frequency: in.GetFrequency(), PeriodTime: in.GetPeriodTime(),
+		SeriesHash: in.GetSeriesHash(), ExpectedCount: in.GetExpectedCount(),
 	}
-	s.observePeriodCommit(ctx, rows, rsp)
-	s.observeDeadlineRejection(exp, rsp)
-	return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: rsp.GetRetInfo(), Keys: rsp.GetKeys(), PeriodStatus: rsp.GetPeriodStatus(), AcceptedSeriesIndexes: rsp.GetAcceptedSeriesIndexes()}, nil
 }
 
 // datasetAlignment 是数据集声明的分桶方式：session 表示按交易时段从开盘起切分，其余（含未声明）按 epoch UTC。
@@ -150,22 +129,22 @@ func datasetAlignment(ctx context.Context, spaceID, datasetID string) string {
 	if !ok || dataset == nil {
 		return ""
 	}
-	return strings.TrimSpace(dataset.GetAttributes()["alignment"])
+	return strings.TrimSpace(dataset.GetAlignment())
 }
 
 // validateSnapshotAlignment 检查快照生效点与频率边界对齐：epoch 数据集的日内周期按 epoch 对齐；
-// session 数据集（A 股等）的桶从各交易时段开盘起切分，不在 epoch 边界上，DataNode 只要求整分钟。
+// session 数据集（A 股等）的桶从各交易时段开盘起切分，不在 epoch 边界上，存储层只要求整分钟。
 func validateSnapshotAlignment(ctx context.Context, req *pb.PrimaryRegisterSeriesSnapshotReq) error {
 	if datasetAlignment(ctx, req.GetSpaceId(), req.GetDatasetId()) == "session" {
 		return nil
 	}
 	parsed, err := frequencypkg.Parse(req.GetFrequency())
 	if err != nil {
-		return nil // 频率本身的校验在 DataNode
+		return nil // 频率本身的校验在存储层
 	}
 	step := int64(parsed.Duration() / time.Second)
 	if step <= 0 || step >= 24*60*60 {
-		return nil // 日、周、月的边界取决于市场时区，DataNode 只要求整分钟
+		return nil // 日、周、月的边界取决于市场时区，存储层只要求整分钟
 	}
 	if at := req.GetEffectiveFrom(); at > 0 && at%step != 0 {
 		return errors.New("effective_from must be aligned to the frequency boundary")
@@ -199,7 +178,7 @@ func validatePeriodDataset(ctx context.Context, expectation *pb.DatasetPeriodExp
 	return nil
 }
 
-// datasetAllowedLateness 读取数据集属性 allowed_lateness_seconds；缺失或非法时返回 0，由 DataNode 采用默认值。
+// datasetAllowedLateness 读取数据集的 allowed_lateness_seconds；没有设置时返回 0，由存储层采用默认值。
 func datasetAllowedLateness(ctx context.Context, exp *pb.DatasetPeriodExpectation) int64 {
 	snapshot := metadata.RequestSnapshotFromContext(ctx)
 	if snapshot == nil {
@@ -209,33 +188,8 @@ func datasetAllowedLateness(ctx context.Context, exp *pb.DatasetPeriodExpectatio
 	if !ok || dataset == nil {
 		return 0
 	}
-	seconds, err := strconv.ParseInt(strings.TrimSpace(dataset.GetAttributes()["allowed_lateness_seconds"]), 10, 64)
-	if err != nil || seconds <= 0 {
-		log.WarnContextf(ctx, "dataset %s/%s has no valid allowed_lateness_seconds; DataNode falls back to its default", exp.GetSpaceId(), exp.GetDatasetId())
-		return 0
+	if dataset.GetAllowedLatenessSeconds() == 0 {
+		log.WarnContextf(ctx, "dataset %s/%s has no allowed_lateness_seconds; the store falls back to its default", exp.GetSpaceId(), exp.GetDatasetId())
 	}
-	return seconds
-}
-
-// periodDeadlinePassedText 是 DataNode 拒绝“周期建立前截止已过”时的错误文本（pebble.PeriodDeadlinePassedError）。
-const periodDeadlinePassedText = "has passed before the period was created"
-
-func (s *Service) observeDeadlineRejection(exp *pb.DatasetPeriodExpectation, rsp *pb.CommitTimeSeriesBatchRsp) {
-	if s.rejection == nil || rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS || !strings.Contains(rsp.GetRetInfo().GetMsg(), periodDeadlinePassedText) {
-		return
-	}
-	s.rejection.ObserveDeadlineRejection(exp.GetSpaceId(), exp.GetDatasetId(), exp.GetFrequency(), time.Now())
-}
-
-// observePeriodCommit 按 DataNode 的提交结果记录数据集观测：提交了行记为 success 并推进输出水位；
-// 没有行被接受（全部重复或被拒）记为 empty，只更新最近运行；DataNode 返回失败记为 error。
-func (s *Service) observePeriodCommit(ctx context.Context, rows []*pb.RowFieldUpsert, rsp *pb.CommitTimeSeriesBatchRsp) {
-	switch {
-	case rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS:
-		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-	case len(rsp.GetKeys()) > 0:
-		s.observeTimeSeriesRows(ctx, rows, "success", true, len(rsp.GetKeys()) == len(rows))
-	default:
-		s.observeTimeSeriesRows(ctx, rows, "empty", false, false)
-	}
+	return int64(dataset.GetAllowedLatenessSeconds())
 }

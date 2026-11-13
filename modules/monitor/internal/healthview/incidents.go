@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/events"
 )
 
 // IncidentWindow 是概览回看告警经过的时间窗口。
@@ -42,7 +42,7 @@ func (b Builder) incidents(ctx context.Context, spaceID string, facts observabil
 	since := now.Add(-IncidentWindow)
 	var spaces []string
 	if spaceID != "" {
-		spaces = []string{spaceID, "", hostmetrics.SpaceID}
+		spaces = []string{spaceID, "", events.SystemSpaceID}
 	}
 	events, err := b.Alerts.ListEventsSince(ctx, spaces, since, maxIncidentEvents)
 	if err != nil {

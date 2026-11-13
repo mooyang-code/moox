@@ -56,7 +56,7 @@ func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-test"
 	cfg.Metrics.Enabled = false
-	rsp := monitorHealthSnapshot(cfg, runtime, nil)(context.Background())
+	rsp := monitorHealthSnapshot(cfg, runtime)(context.Background())
 	if rsp.Ready {
 		t.Fatalf("health response = %+v, want not ready", rsp)
 	}
@@ -120,25 +120,22 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	cfg := config.Default()
 	rt := &Runtime{}
 
-	startHostStorageGate(ctx, nil, rt, nil)
-	startHostStorageGate(ctx, cfg, rt, nil)
 	disabled := *cfg
-	disabled.Metrics.HostStorage.Enabled = false
-	startHostStorageGate(ctx, &disabled, rt, &hostmetrics.StorageGate{})
+	disabled.Observability.Enabled = false
 
 	startObservabilityConsumer(ctx, nil, rt, nil, nil)
-	startObservabilityConsumer(ctx, &disabled, rt, hostmetrics.NewStore(nil, nil), nil)
+	startObservabilityConsumer(ctx, &disabled, rt, hostmetrics.NewStore(nil), nil)
 	cfg.Observability.Enabled = false
-	startObservabilityConsumer(ctx, cfg, rt, hostmetrics.NewStore(nil, nil), nil)
+	startObservabilityConsumer(ctx, cfg, rt, hostmetrics.NewStore(nil), nil)
 	cfg.Observability.Enabled = true
 	startObservabilityConsumer(ctx, cfg, nil, nil, nil)
-	startObservabilityConsumer(ctx, cfg, &Runtime{}, hostmetrics.NewStore(nil, nil), nil)
+	startObservabilityConsumer(ctx, cfg, &Runtime{}, hostmetrics.NewStore(nil), nil)
 
 	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{Deployment: config.DeploymentConfig{Enabled: false}}, rt))
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
 
 	registerMetricsReporter(nil, nil)
-	assert.NoError(t, registerHealth(context.Background(), nil, nil, rt, nil))
+	assert.NoError(t, registerHealth(context.Background(), nil, nil, rt))
 }
 
 func TestMonitorSyncHandlerPropagatesTimerFailure(t *testing.T) {
@@ -266,14 +263,13 @@ func TestMonitorHealthSnapshotMetricsBranches(t *testing.T) {
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-ready"
 	cfg.Metrics.Enabled = false
-	cfg.Metrics.HostStorage.Enabled = false
 	cfg.Observability.Enabled = false
-	rsp := monitorHealthSnapshot(cfg, rt, nil)(context.Background())
+	rsp := monitorHealthSnapshot(cfg, rt)(context.Background())
 	assert.True(t, rsp.Ready)
 
 	cfg.Metrics.Enabled = true
 	cfg.Observability.Enabled = true
-	rsp = monitorHealthSnapshot(cfg, rt, nil)(context.Background())
+	rsp = monitorHealthSnapshot(cfg, rt)(context.Background())
 	assert.False(t, rsp.Ready)
 	assert.Equal(t, "degraded", rsp.Status)
 	assert.NotContains(t, rsp.Details, "metrics_schema_ready", "服务指标不写 Storage，就绪不再依赖其表结构")
@@ -311,25 +307,6 @@ func TestStoreWriteStateSequenceDoesNotRegress(t *testing.T) {
 	storeWriteStateSequence(&sequence, 2)
 	storeWriteStateSequence(&sequence, 1)
 	assert.EqualValues(t, 2, sequence.Load())
-}
-
-func TestMonitorHealthSnapshotRequiresHostStorageSchema(t *testing.T) {
-	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = mgr.Close() })
-	require.NoError(t, mgr.ApplySchema(schema.SQL()))
-
-	cfg := config.Default()
-	cfg.Metrics.Enabled = false
-	cfg.Observability.Enabled = false
-	cfg.Metrics.HostStorage.Enabled = true
-	rt := &Runtime{StartedAt: time.Now().UTC(), Store: mgr, Repositories: mgr.Repositories(), Scheduler: scheduler.New(mgr.Repositories(), scheduler.Options{})}
-	hostStore := hostmetrics.NewStore(nil, nil)
-	hostStore.SetStorageReady(func() bool { return false })
-
-	rsp := monitorHealthSnapshot(cfg, rt, hostStore)(context.Background())
-	assert.False(t, rsp.Ready)
-	assert.Equal(t, false, rsp.Details["host_storage_schema_ready"])
 }
 
 func TestFailureReasonNamesTheFailingStepWithoutTheRawError(t *testing.T) {

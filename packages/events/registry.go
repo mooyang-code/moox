@@ -74,9 +74,6 @@ var (
 	ObservabilityLogReported = declareEvent("event.observability.log.reported", 1, "MOOX_OBSERVABILITY", "service", func() proto.Message {
 		return &metricspb.LogReport{}
 	}, validateObservabilityLogReported)
-	DatasetRowsUpserted = declareEvent("event.storage.dataset.rows.upserted", 2, "MOOX_STORAGE", "storage", func() proto.Message {
-		return &storagepb.DatasetRowsUpserted{}
-	}, validateDatasetRowsUpserted)
 	// DatasetPeriodCompleted 是数据集一期完成的统一事件：来源（ledger 账本判定 / producer 写入方报告）只描述怎么判定的，不是业务分类。
 	DatasetPeriodCompleted = declareEvent("event.storage.dataset.period.completed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetPeriodCompleted{}
@@ -93,9 +90,6 @@ var (
 	ViewDataReady = declareEvent("event.storage.view.data.ready", 2, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.ViewDataReady{}
 	}, validateViewDataReady)
-	DatasetSyncPoint = declareEvent("event.storage.dataset.sync_point", 1, "MOOX_STORAGE", "storage", func() proto.Message {
-		return &storagepb.DatasetSyncPoint{}
-	}, validateDatasetSyncPoint)
 	LogicalAccountTargetWeightRequested = declareEvent("event.trade.target.weight_requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
 		return &tradeeventpb.LogicalAccountTargetWeightRequested{}
 	}, validateLogicalAccountTargetWeightRequested)

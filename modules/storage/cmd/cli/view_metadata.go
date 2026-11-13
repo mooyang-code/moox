@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	_ "modernc.org/sqlite"
 )
 
@@ -70,10 +71,10 @@ func storageViewState(output []byte) (string, error) {
 }
 
 // viewRow 是 t_views 里和删除有关的几列。
-type viewRow struct{ spaceID, viewID, engine, status, activeIndexID string }
+type viewRow struct{ spaceID, viewID, engine, status string }
 
 // withMetadataTx 在 Metadata SQLite 的一个 BEGIN IMMEDIATE 事务里执行 fn：fn 返回 nil 就提交，否则回滚。
-// 外键级联打开，删除 t_views 的行会连带删除它的列与周期状态。
+// 外键级联打开。
 func withMetadataTx(ctx context.Context, metadataDB string, fn func(conn *sql.Conn) error) error {
 	db, err := sql.Open("sqlite", metadataDB)
 	if err != nil {
@@ -108,7 +109,7 @@ func withMetadataTx(ctx context.Context, metadataDB string, fn func(conn *sql.Co
 }
 
 func listViewRows(ctx context.Context, conn *sql.Conn) ([]viewRow, error) {
-	rows, err := conn.QueryContext(ctx, `SELECT c_space_id, c_view_id, c_engine, c_status, c_active_index_id FROM t_views`)
+	rows, err := conn.QueryContext(ctx, `SELECT c_space_id, c_view_id, c_engine, c_status FROM t_views`)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +117,7 @@ func listViewRows(ctx context.Context, conn *sql.Conn) ([]viewRow, error) {
 	var all []viewRow
 	for rows.Next() {
 		var item viewRow
-		if err := rows.Scan(&item.spaceID, &item.viewID, &item.engine, &item.status, &item.activeIndexID); err != nil {
+		if err := rows.Scan(&item.spaceID, &item.viewID, &item.engine, &item.status); err != nil {
 			return nil, err
 		}
 		all = append(all, item)
@@ -124,12 +125,10 @@ func listViewRows(ctx context.Context, conn *sql.Conn) ([]viewRow, error) {
 	return all, rows.Err()
 }
 
-// deleteViewMetadata 删除一个 View 的元数据，并把它占用的活动索引记进 summary，
-// 供之后由 Storage View 的清理定时器回收物理文件。
+// deleteViewMetadata 删除一个 View 的元数据，并把它唯一的索引记进 summary，
+// 供之后由 Storage View 的清理定时器回收物理文件（索引文件不存在时清理什么都不做）。
 func deleteViewMetadata(ctx context.Context, conn *sql.Conn, item viewRow, summary *removedViewsSummary) error {
-	if strings.TrimSpace(item.activeIndexID) != "" {
-		summary.RetiredIndexes = append(summary.RetiredIndexes, retainedIndex{Engine: item.engine, IndexID: item.activeIndexID})
-	}
+	summary.RetiredIndexes = append(summary.RetiredIndexes, retainedIndex{Engine: item.engine, IndexID: viewindex.ViewIndexID(item.spaceID, item.viewID)})
 	if _, err := conn.ExecContext(ctx, `DELETE FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, item.spaceID, item.viewID); err != nil {
 		return err
 	}

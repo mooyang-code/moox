@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,13 +27,12 @@ func TestValidateColumnDisplayNameOnlyRequiresPresence(t *testing.T) {
 	require.Error(t, validateColumnDisplayName("display_name", nil))
 }
 
-func TestDatasetViewColumnUsesTheBareColumnName(t *testing.T) {
-	column := &pb.ViewColumn{ColumnName: "close", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "close"}
-	require.NoError(t, validateViewColumnName(column))
-	column.ColumnName, column.OriginId = "dataset_prices.close", "dataset_prices.close"
-	require.ErrorContains(t, validateViewColumnName(column), "bare Dataset column name")
-	column.ColumnName, column.OriginId = "close", "open"
-	require.ErrorContains(t, validateViewColumnName(column), "column_name must equal origin_id")
-	column.ColumnName, column.OriginId = "data_time", "data_time"
-	require.ErrorContains(t, validateViewColumnName(column), "reserved system column")
+// 数据集列名会原样成为 View 索引里的列：系统列名与非标识符被拒绝。
+func TestDatasetColumnNameRules(t *testing.T) {
+	for _, name := range []string{"close", "bias__20", "__params", "Close_1"} {
+		require.NoError(t, validateDatasetColumnName(name), name)
+	}
+	for _, name := range []string{"subject_id", "Data_Time", "series_tag", "freq", "__moox_attributes", "1close", "a.b", "a-b", ""} {
+		require.Error(t, validateDatasetColumnName(name), name)
+	}
 }

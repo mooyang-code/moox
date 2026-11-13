@@ -92,7 +92,7 @@ var unitProfiles = map[string][]string{
 	"control": {"console-proxy", "web-host", "admin", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"},
 	// EventBus 是独立单元：由 [deployments] 决定装在哪台主机（与 Storage 同机最省跨机流量），不再属于控制单元。
 	"eventbus":     {"eventbus"},
-	"storage":      {"storage-primary", "storage-node", "storage-view"},
+	"storage":      {"storage-primary", "storage-view"},
 	"access":       {"access"},
 	"egress-proxy": {"egress-proxy"},
 	"trade":        {"trade"},
@@ -159,10 +159,6 @@ var unitSpecs = map[string]unitComponentSpec{
 		{"modules/storage/config/trpc_go.primary.yaml", "storage-primary/config/trpc_go.yaml", false},
 		{"modules/storage/config/storage.primary.yaml", "storage-primary/config/storage.yaml", false},
 		schemaAsset("storage", "storage-primary"),
-	}},
-	"storage-node": {assets: []unitAsset{
-		{"modules/storage/config/trpc_go.node.yaml", "storage-node/config/trpc_go.yaml", false},
-		{"modules/storage/config/storage.node.yaml", "storage-node/config/storage.yaml", false},
 	}},
 	"storage-view": {assets: []unitAsset{
 		{"modules/storage/config/storage_view/trpc_go.yaml", "storage-view/config/trpc_go.yaml", false},

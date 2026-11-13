@@ -98,7 +98,7 @@ func TestLoadValidManifest(t *testing.T) {
 func TestLoadRoleSpecificStorageAndViewHosts(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
-storage = ["storage-primary", "storage-node", "storage-view"]
+storage = ["storage-primary", "storage-view"]
 [hosts.storage]
 address = "192.0.2.20"
 provider = "Tencent"
@@ -706,7 +706,8 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{"missing eventbus deployment", strings.Replace(validManifest, `, "eventbus"`, "", 1), "deployments must include eventbus"},
 		{"protected component missing", strings.Replace(validManifest, `"console-proxy", `, "", 1), "protected component"},
 		{"unknown deployment", validManifest + "unknown = [\"trade\"]\n", "deployments host ID"},
-		{"automatic component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "automatic component"},
+		{"automatic component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "由系统自动部署"},
+		{"retired component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "storage-node"`, 1), "config migrate --yes"},
 		{"unknown field", "unexpected = true\n" + validManifest, "unknown field"},
 		{"retired factor engine section", validManifest + "[factor_engine]\nhost = \"missing\"\n", "[factor_engine] 已取消"},
 		{"duplicate address", validManifest + "[hosts.compute]\naddress = \"192.0.2.10\"\nssh = { username = \"ubuntu\" }\n", "duplicates hosts."},

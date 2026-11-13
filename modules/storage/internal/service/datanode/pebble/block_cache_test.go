@@ -69,7 +69,7 @@ func TestOpenAppliesTheBlockCacheAndLogsItsUsage(t *testing.T) {
 		logged = append(logged, strings.TrimSpace(fmt.Sprintf(format, args...)))
 	}
 
-	store, err := Open(Options{Path: t.TempDir(), NodeID: "node-test", BlockCacheBytes: 32 << 20})
+	store, err := Open(Options{Path: t.TempDir(), BlockCacheBytes: 32 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestOpenAppliesTheBlockCacheAndLogsItsUsage(t *testing.T) {
 	}
 
 	// 定时日志按间隔持续输出，Close 之后协程退出。
-	loop, err := Open(Options{Path: t.TempDir(), NodeID: "node-loop", BlockCacheBytes: 16 << 20})
+	loop, err := Open(Options{Path: t.TempDir(), BlockCacheBytes: 16 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}

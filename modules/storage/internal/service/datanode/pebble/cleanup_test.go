@@ -7,14 +7,12 @@ import (
 	"testing"
 	"time"
 
-	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/events"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestDeleteDatasetRowsRemovesRowsAndHistoryWithoutTouchingOtherDataset(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,30 +44,29 @@ func TestDeleteDatasetRowsRemovesRowsAndHistoryWithoutTouchingOtherDataset(t *te
 	}
 }
 
-// 删除数据集会清掉它的 commit 标记：恢复后同一 commit_id 作为新写入重新生效。
+// 删除数据集会清掉它的 commit 标记：重建后同一 commit_id 作为新写入重新生效。
 func TestDeleteDatasetRowsClearsCommitMarkers(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "s", DatasetId: "delete-me", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-16T00:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
-	if entries, err := store.UpsertFields(context.Background(), "s", "delete-me", "commit-1", []*pb.RowFieldUpsert{row}); err != nil || len(entries) != 1 {
-		t.Fatalf("first commit write entries=%d err=%v", len(entries), err)
+	if written, err := store.UpsertFields(context.Background(), "s", "delete-me", "commit-1", []*pb.RowFieldUpsert{row}); err != nil || !written {
+		t.Fatalf("first commit write written=%v err=%v", written, err)
 	}
 	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RestoreDatasetRows(context.Background(), "s", "delete-me"); err != nil {
-		t.Fatal(err)
-	}
-	if entries, err := store.UpsertFields(context.Background(), "s", "delete-me", "commit-1", []*pb.RowFieldUpsert{row}); err != nil || len(entries) != 1 {
-		t.Fatalf("recreated commit write entries=%d err=%v", len(entries), err)
+	if written, err := store.UpsertFields(context.Background(), "s", "delete-me", "commit-1", []*pb.RowFieldUpsert{row}); err != nil || !written {
+		t.Fatalf("recreated commit write written=%v err=%v", written, err)
 	}
 }
 
-func TestDeleteDatasetRowsTombstoneBlocksWritesUntilRestore(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+// 元数据里已经没有的数据集，写入在拿到读锁后被拒绝；重建元数据后照常写入。
+func TestWriteRejectedWhileDatasetIsMissingFromMetadata(t *testing.T) {
+	exists := true
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), DatasetExists: func(string, string) bool { return exists }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,22 +75,21 @@ func TestDeleteDatasetRowsTombstoneBlocksWritesUntilRestore(t *testing.T) {
 	if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
 		t.Fatal(err)
 	}
+	exists = false
 	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
 		t.Fatal(err)
 	}
 	if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{row}); err != ErrDatasetDeleted {
 		t.Fatalf("write after delete err=%v, want ErrDatasetDeleted", err)
 	}
-	if err := store.RestoreDatasetRows(context.Background(), "s", "delete-me"); err != nil {
-		t.Fatal(err)
-	}
+	exists = true
 	if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
-		t.Fatalf("write after restore: %v", err)
+		t.Fatalf("write after recreate: %v", err)
 	}
 }
 
 func TestDeleteDatasetRowsRemovesCommitMarkersMarkersAndOutbox(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,13 +105,13 @@ func TestDeleteDatasetRowsRemovesCommitMarkersMarkersAndOutbox(t *testing.T) {
 	if _, err := store.AppendDatasetMarker(context.Background(), marker); err != nil {
 		t.Fatal(err)
 	}
-	if entries, err := store.ListOutbox(context.Background(), 0, 20); err != nil || len(entries) != 2 {
+	if entries, err := store.ListOutbox(context.Background(), 0, 20); err != nil || len(entries) != 1 {
 		t.Fatalf("outbox before cleanup entries=%d err=%v", len(entries), err)
 	}
 	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := store.readCommitMarker(commitMarkerKey("s", "delete-me", "receipt-1")); err != nil || found {
+	if _, found, err := store.findCommitMarker("s", "delete-me", "receipt-1", time.Now()); err != nil || found {
 		t.Fatalf("commit marker survived dataset deletion: found=%v err=%v", found, err)
 	}
 	if entries, err := store.ListOutbox(context.Background(), 0, 20); err != nil || len(entries) != 0 {
@@ -123,110 +119,8 @@ func TestDeleteDatasetRowsRemovesCommitMarkersMarkersAndOutbox(t *testing.T) {
 	}
 }
 
-func TestDeleteDatasetRowsClearsPeriodProgressAndIndexes(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	ctx := context.Background()
-	deadline := time.Now().UTC().Add(time.Minute).Unix()
-	exp := periodExpectationForTest(time.Now().UTC().Truncate(time.Minute), 1, "BTC-USDT")
-	exp.SpaceID = "s"
-	exp.DatasetID = "delete-me"
-	exp.DeadlineAt = deadline
-	keep := exp
-	keep.DatasetID = "keep-me"
-	if _, err := store.EnsureDatasetPeriod(ctx, exp); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.EnsureDatasetPeriod(ctx, keep); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := store.DeleteDatasetRows(ctx, exp.SpaceID, exp.DatasetID); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RestoreDatasetRows(ctx, exp.SpaceID, exp.DatasetID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.GetDatasetPeriodProgress(ctx, exp); !errors.Is(err, cpebble.ErrNotFound) {
-		t.Fatalf("deleted period progress err=%v, want not found", err)
-	}
-
-	finalized, err := store.FinalizeWaitingDatasetPeriods(ctx, time.Unix(deadline+1, 0).UTC(), 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if finalized != 1 {
-		t.Fatalf("finalized periods=%d, want only unrelated dataset", finalized)
-	}
-	if got := countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()); got != 1 {
-		t.Fatalf("collector period markers=%d, want only unrelated dataset marker", got)
-	}
-
-	result, err := store.EnsureDatasetPeriod(ctx, exp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "waiting" {
-		t.Fatalf("recreated period status=%q, want waiting", result.Status)
-	}
-}
-
-func TestRestoreDatasetRowsWithoutTombstonePreservesPeriodProgress(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	ctx := context.Background()
-	period := time.Now().UTC().Truncate(time.Minute)
-	exp := periodExpectationForTest(period, 2, "BTC-USDT", "ETH-USDT")
-	exp.SpaceID = "s"
-	exp.DatasetID = "active"
-	deadline := time.Now().UTC().Add(time.Minute).Unix()
-	exp.DeadlineAt = deadline
-	if _, err := store.EnsureDatasetPeriod(ctx, exp); err != nil {
-		t.Fatal(err)
-	}
-	row := periodRowForTest(period, "BTC-USDT")
-	row.GetKey().SpaceId = exp.SpaceID
-	row.GetKey().DatasetId = exp.DatasetID
-	if _, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: row}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.RecordDatasetPeriodFailures(ctx, exp, []uint32{1}); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := store.RestoreDatasetRows(ctx, exp.SpaceID, exp.DatasetID); err != nil {
-		t.Fatal(err)
-	}
-	progress, err := store.GetDatasetPeriodProgress(ctx, exp)
-	if err != nil {
-		t.Fatalf("period progress after no-op restore: %v", err)
-	}
-	if progress.Status != "waiting" || bitmapCount(progress.Bitmap) != 1 || len(progress.FailedSeriesIndexes) != 1 || progress.FailedSeriesIndexes[0] != 1 {
-		t.Fatalf("period progress after no-op restore=%+v, want bitmap and failure progress preserved", progress)
-	}
-
-	finalized, err := store.FinalizeWaitingDatasetPeriods(ctx, time.Unix(deadline+1, 0).UTC(), 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if finalized != 1 {
-		t.Fatalf("finalized periods=%d after no-op restore, want 1", finalized)
-	}
-	if got := countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()); got != 1 {
-		t.Fatalf("collector period markers=%d after no-op restore, want 1", got)
-	}
-}
-
 func TestDeleteDatasetRowsWaitingForPublicationLockHonorsCancellation(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}

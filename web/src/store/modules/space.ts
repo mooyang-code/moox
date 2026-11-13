@@ -6,8 +6,8 @@ import { setSpaceInitializer } from "@/api/admin/signed-client";
 import type { Space } from "@/api/admin/types";
 
 /**
- * 系统内部空间：以 mooxsys 开头的空间存放主机指标及其视图，不是交易市场，
- * 不出现在全局空间选择里，也不能设为当前空间。
+ * 系统空间：mooxsys 是“不属于任何市场”的范围标签（系统告警、系统事件归在它下面），不是交易市场。
+ * 首页把归在它下面的告警标为“系统”。
  */
 export function isSystemSpace(spaceId: string | undefined): boolean {
   return (spaceId || "").trim().toLowerCase().startsWith("mooxsys");
@@ -39,7 +39,7 @@ export const useSpaceStore = defineStore(
       loading.value = true;
       try {
         const rsp = await listSpaces({ status: "active", page: { page: 1, size: 200 } });
-        spaces.value = (rsp.spaces || []).filter(space => !isSystemSpace(space.space_id));
+        spaces.value = rsp.spaces || [];
         if (!selectedSpaceId.value && spaces.value.length > 0) {
           selectedSpaceId.value = spaces.value[0].space_id;
         }

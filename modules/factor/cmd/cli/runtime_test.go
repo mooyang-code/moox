@@ -32,7 +32,7 @@ func TestLoadRuntimeConfigEnvironmentOverridesConfig(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("database:\n  path: ./configured.db\n"), 0o600))
 	t.Setenv("MOOX_FACTOR_DB_PATH", "/env/factor.db")
 	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_TARGET", "ip://127.0.0.1:11003")
-	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID", "storage-node-0")
+	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
 
 	cfg, err := loadRuntimeConfig(path)
 	require.NoError(t, err)

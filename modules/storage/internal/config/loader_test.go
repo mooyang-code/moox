@@ -48,69 +48,6 @@ func TestCheckedInStorageRoleConfigsShareThePolicyFile(t *testing.T) {
 	}
 }
 
-// View 只有一种消费方式：全局并发参数默认都是 1（同一数据集内按顺序处理）。
-func TestStorageViewConsumerDefaults(t *testing.T) {
-	var cfg RuntimeConfig
-	cfg.ApplyDefaults()
-	view := cfg.Storage.View
-	if view.FetchBatch != 1 || view.MaxWorkers != 1 || view.MaxAckPending != 1 || view.AckWaitMS != StorageViewAckWaitMS {
-		t.Fatalf("view consumer defaults = %+v", view)
-	}
-	if err := view.ValidateConsumer(); err != nil {
-		t.Fatalf("default consumer settings: %v", err)
-	}
-}
-
-func TestStorageViewMaxAckPendingFollowsFetchBatchWhenOmitted(t *testing.T) {
-	var cfg RuntimeConfig
-	cfg.Storage.View.FetchBatch = 4
-	cfg.ApplyDefaults()
-	if cfg.Storage.View.MaxAckPending != 4 {
-		t.Fatalf("max_ack_pending = %d, want fetch_batch 4", cfg.Storage.View.MaxAckPending)
-	}
-	if err := cfg.Storage.View.ValidateConsumer(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestStorageViewConsumerRejectsInvalidLimits(t *testing.T) {
-	var cfg RuntimeConfig
-	cfg.ApplyDefaults()
-	view := cfg.Storage.View
-	view.FetchBatch, view.MaxAckPending = 8, 4
-	if err := view.ValidateConsumer(); err == nil {
-		t.Fatal("fetch_batch exceeding max_ack_pending was accepted")
-	}
-	view = cfg.Storage.View
-	view.MaxWorkers = 0
-	if err := view.ValidateConsumer(); err == nil {
-		t.Fatal("non-positive max_workers was accepted")
-	}
-}
-
-// 仓库里的两份配置（Storage 主机与 View 组件）都使用全局默认的串行消费。
-func TestCheckedInViewConsumerProfilesAreSerial(t *testing.T) {
-	for _, path := range []string{
-		filepath.Join("..", "..", "config", "storage.yaml"),
-		filepath.Join("..", "..", "config", "storage_view", "trpc_go.yaml"),
-	} {
-		t.Run(path, func(t *testing.T) {
-			var cfg RuntimeConfig
-			loader := NewConfigLoader(filepath.Dir(path))
-			if err := loader.LoadConfigWithDefaults(filepath.Base(path), &cfg, cfg.ApplyDefaults); err != nil {
-				t.Fatalf("LoadConfigWithDefaults(%s): %v", path, err)
-			}
-			view := cfg.Storage.View
-			if err := view.ValidateConsumer(); err != nil {
-				t.Fatalf("ValidateConsumer(): %v", err)
-			}
-			if view.FetchBatch != 1 || view.MaxAckPending != 1 || view.MaxWorkers != 1 {
-				t.Fatalf("delivery budget = fetch_batch:%d max_ack_pending:%d max_workers:%d, want all 1", view.FetchBatch, view.MaxAckPending, view.MaxWorkers)
-			}
-		})
-	}
-}
-
 func TestStorageConfigApplyHomeRootRebasesDefaultPaths(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
@@ -209,10 +146,8 @@ func TestStorageDeploymentEventBusConfigOwnsOnlyConnectionAndDeliverySettings(t 
 	allowed := map[string]bool{
 		"credential_file": true,
 		"consumer":        true,
-		"max_ack_pending": true,
-		"ack_wait_ms":     true,
 	}
-	files := []string{"storage.yaml", "storage.primary.yaml", "storage.node.yaml", "storage_view/trpc_go.yaml"}
+	files := []string{"storage.yaml", "storage.primary.yaml", "storage_view/trpc_go.yaml"}
 	for _, file := range files {
 		t.Run(file, func(t *testing.T) {
 			raw, err := os.ReadFile("../../config/" + file)
@@ -264,16 +199,9 @@ func TestStorageConfigsContainNoLegacyPathsOrRotationAndDependentsDoNotOwnIndexR
 	}
 }
 
-func TestRuntimeGatewayDefaultsAndRemovedStorageRPC(t *testing.T) {
-	var cfg RuntimeConfig
-	cfg.ApplyDefaults()
-	if cfg.GatewayClient.Caller != "storage-view" || cfg.GatewayClient.KeyFile != "../../secrets/caller-storage-view.key" {
-		t.Fatal("invalid storage-view gateway defaults")
-	}
+func TestRuntimeConfigRejectsRemovedStorageRPC(t *testing.T) {
 	for _, raw := range []string{
 		"storage:\n  view:\n    storage_rpc:\n      gateway_target: legacy\n",
-		"gateway_client:\n  caller: storage-view\n  target: legacy\n",
-		"gateway_client:\n  caller: storage-view\n  key_id: first\n  key_id: second\n",
 		"storage:\n  view:\n    metadata_service_name: legacy\n",
 		"storage:\n  view:\n    primary_store_service_name: legacy\n",
 		"storage:\n  view:\n    index_service_name: legacy\n",
@@ -284,7 +212,7 @@ func TestRuntimeGatewayDefaultsAndRemovedStorageRPC(t *testing.T) {
 		}
 		var loaded RuntimeConfig
 		if err := NewConfigLoader(filepath.Dir(path)).LoadConfig(filepath.Base(path), &loaded); err == nil {
-			t.Fatal("accepted removed gateway configuration")
+			t.Fatal("accepted removed configuration")
 		}
 	}
 }

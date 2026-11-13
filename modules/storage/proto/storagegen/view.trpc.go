@@ -29,6 +29,11 @@ type DataViewService interface {
 	//  View 索引是可重建的近期派生结果，不是完整事实存储。
 	//  完整历史以 PrimaryStore KV/Pebble 为准。
 	SearchRecordRows(ctx context.Context, req *SearchRecordRowsReq) (*SearchRecordRowsRsp, error)
+	// GetViewState GetViewState 返回 View 当前的索引状态：索引标识、代次、已建列、覆盖范围与跟随变更日志已扫描到的位置。
+	GetViewState(ctx context.Context, req *GetViewStateReq) (*GetViewStateRsp, error)
+	// WaitViewApplied WaitViewApplied 等 View 跟上调用这一刻的变更日志头部：View 在服务端取头部序号，
+	//  等自己扫描到不小于它时返回。调用方在写入返回后调用它，就能确认写入已经在 View 里可查。
+	WaitViewApplied(ctx context.Context, req *WaitViewAppliedReq) (*WaitViewAppliedRsp, error)
 }
 
 func DataViewService_QueryTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -85,6 +90,42 @@ func DataViewService_SearchRecordRows_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
+func DataViewService_GetViewState_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetViewStateReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataViewService).GetViewState(ctx, reqbody.(*GetViewStateReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataViewService_WaitViewApplied_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &WaitViewAppliedReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataViewService).WaitViewApplied(ctx, reqbody.(*WaitViewAppliedReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // DataViewServer_ServiceDesc descriptor for server.RegisterService.
 var DataViewServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.DataView",
@@ -101,6 +142,14 @@ var DataViewServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.DataView/SearchRecordRows",
 			Func: DataViewService_SearchRecordRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataView/GetViewState",
+			Func: DataViewService_GetViewState_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataView/WaitViewApplied",
+			Func: DataViewService_WaitViewApplied_Handler,
 		},
 	},
 }
@@ -137,6 +186,18 @@ func (s *UnimplementedDataView) SearchRecordRows(ctx context.Context, req *Searc
 	return nil, errors.New("rpc SearchRecordRows of service DataView is not implemented")
 }
 
+// GetViewState GetViewState 返回 View 当前的索引状态：索引标识、代次、已建列、覆盖范围与跟随变更日志已扫描到的位置。
+func (s *UnimplementedDataView) GetViewState(ctx context.Context, req *GetViewStateReq) (*GetViewStateRsp, error) {
+	return nil, errors.New("rpc GetViewState of service DataView is not implemented")
+}
+
+// WaitViewApplied WaitViewApplied 等 View 跟上调用这一刻的变更日志头部：View 在服务端取头部序号，
+//
+//	等自己扫描到不小于它时返回。调用方在写入返回后调用它，就能确认写入已经在 View 里可查。
+func (s *UnimplementedDataView) WaitViewApplied(ctx context.Context, req *WaitViewAppliedReq) (*WaitViewAppliedRsp, error) {
+	return nil, errors.New("rpc WaitViewApplied of service DataView is not implemented")
+}
+
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -155,6 +216,11 @@ type DataViewClientProxy interface {
 	//  View 索引是可重建的近期派生结果，不是完整事实存储。
 	//  完整历史以 PrimaryStore KV/Pebble 为准。
 	SearchRecordRows(ctx context.Context, req *SearchRecordRowsReq, opts ...client.Option) (rsp *SearchRecordRowsRsp, err error)
+	// GetViewState GetViewState 返回 View 当前的索引状态：索引标识、代次、已建列、覆盖范围与跟随变更日志已扫描到的位置。
+	GetViewState(ctx context.Context, req *GetViewStateReq, opts ...client.Option) (rsp *GetViewStateRsp, err error)
+	// WaitViewApplied WaitViewApplied 等 View 跟上调用这一刻的变更日志头部：View 在服务端取头部序号，
+	//  等自己扫描到不小于它时返回。调用方在写入返回后调用它，就能确认写入已经在 View 里可查。
+	WaitViewApplied(ctx context.Context, req *WaitViewAppliedReq, opts ...client.Option) (rsp *WaitViewAppliedRsp, err error)
 }
 
 type DataViewClientProxyImpl struct {
@@ -220,6 +286,46 @@ func (c *DataViewClientProxyImpl) SearchRecordRows(ctx context.Context, req *Sea
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SearchRecordRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataViewClientProxyImpl) GetViewState(ctx context.Context, req *GetViewStateReq, opts ...client.Option) (*GetViewStateRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataView/GetViewState")
+	msg.WithCalleeServiceName(DataViewServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataView")
+	msg.WithCalleeMethod("GetViewState")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetViewStateRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataViewClientProxyImpl) WaitViewApplied(ctx context.Context, req *WaitViewAppliedReq, opts ...client.Option) (*WaitViewAppliedRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataView/WaitViewApplied")
+	msg.WithCalleeServiceName(DataViewServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataView")
+	msg.WithCalleeMethod("WaitViewApplied")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &WaitViewAppliedRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

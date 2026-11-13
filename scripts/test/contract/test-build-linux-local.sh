@@ -137,7 +137,7 @@ grep -q "^BUILT:moox-storage-primary:$(sha "${OUT}/moox-storage-primary")\$" "${
 
 # 镜像已存在时不再构建。
 : >"${DOCKER_LOG}"
-bash "${SCRIPT}" --out "${OUT}" storage-node >/dev/null 2>&1 || fail "第二次 CGO 构建应成功"
+bash "${SCRIPT}" --out "${OUT}" storage-primary >/dev/null 2>&1 || fail "第二次 CGO 构建应成功"
 ! grep -q '^docker build ' "${DOCKER_LOG}" || fail "镜像已存在时不该重新构建"
 
 # 混合目标：纯 Go 的本机编、CGO 的进 Docker，两类产物都要列出。

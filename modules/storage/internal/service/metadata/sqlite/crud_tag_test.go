@@ -104,7 +104,6 @@ func TestDeleteTagProtection(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node")
 
 	builtin := testAutoTag("builtin_tag")
 	builtin.Builtin = true
@@ -118,7 +117,7 @@ func TestDeleteTagProtection(t *testing.T) {
 	if _, err := store.UpsertTag(ctx, testAutoTag("used_tag")); err != nil {
 		t.Fatal(err)
 	}
-	dataset := createTestDataset(t, ctx, store, "dataset_used", "node")
+	dataset := createTestDataset(t, ctx, store, "dataset_used")
 	dataset.SubjectTags = []string{"used_tag"}
 	if _, err := store.UpdateDataset(ctx, dataset); err != nil {
 		t.Fatal(err)

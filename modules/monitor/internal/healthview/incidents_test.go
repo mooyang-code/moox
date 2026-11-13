@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,8 +58,8 @@ func TestIncidentsPairTriggerAndRecoveryWithinWindow(t *testing.T) {
 	// 检查停用后告警被撤销，没有恢复记录
 	event("crypto", fetch, domain.AlertEventTriggered, now.Add(-2*time.Hour), "")
 	// 主机失联与恢复
-	event(hostmetrics.SpaceID, presence, domain.AlertEventTriggered, now.Add(-3*time.Hour), `{"reason":"主机采集代理停止上报"}`)
-	event(hostmetrics.SpaceID, presence, domain.AlertEventResolved, now.Add(-3*time.Hour+10*time.Minute), "")
+	event(events.SystemSpaceID, presence, domain.AlertEventTriggered, now.Add(-3*time.Hour), `{"reason":"主机采集代理停止上报"}`)
+	event(events.SystemSpaceID, presence, domain.AlertEventResolved, now.Add(-3*time.Hour+10*time.Minute), "")
 	// 完全在窗口外
 	event("crypto", "dataset:factor:f1:1m", domain.AlertEventTriggered, now.Add(-60*time.Hour), "")
 	event("crypto", "dataset:factor:f1:1m", domain.AlertEventResolved, now.Add(-59*time.Hour), "")
@@ -172,7 +173,7 @@ func TestHostThresholdsComeFromEnabledDefaultRules(t *testing.T) {
 	ctx := t.Context()
 	for metric, definition := range map[string]string{hostmetrics.HostMetricCPU: `{"threshold":80,"recovery_threshold":70}`, hostmetrics.HostMetricMemory: `{"threshold":90}`, hostmetrics.HostMetricFilesystemUsage: `{"threshold":85}`} {
 		checkID := hostmetrics.HostRuleKey("AGENT01", metric)
-		require.NoError(t, repos.Alerts.CreateRule(ctx, &domain.AlertRule{SpaceID: hostmetrics.SpaceID, RuleID: "default:" + checkID, CheckID: checkID, Description: definition, Enabled: metric != hostmetrics.HostMetricMemory}))
+		require.NoError(t, repos.Alerts.CreateRule(ctx, &domain.AlertRule{SpaceID: events.SystemSpaceID, RuleID: "default:" + checkID, CheckID: checkID, Description: definition, Enabled: metric != hostmetrics.HostMetricMemory}))
 	}
 	hosts := []*pb.HealthHost{{HostId: "control", AgentId: "AGENT01"}, {HostId: "storage"}}
 	require.NoError(t, (Builder{Alerts: repos.Alerts}).decorateHostThresholds(ctx, hosts))
@@ -207,7 +208,7 @@ func TestIncidentsCarryProcessesRecordedAtTrigger(t *testing.T) {
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
 	cpu, memory, old, other := "host:AGENT01:cpu", "host:AGENT01:memory", "host:AGENT02:cpu", "deployment:control:web-host"
 	create := func(id, check, eventType, payload string, at time.Time) {
-		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: id, SpaceID: hostmetrics.SpaceID, RuleID: "default:" + check, CheckID: check, EventType: eventType, Payload: payload, CreatedAt: at}))
+		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: id, SpaceID: events.SystemSpaceID, RuleID: "default:" + check, CheckID: check, EventType: eventType, Payload: payload, CreatedAt: at}))
 	}
 	const top = `"top_processes":[{"pid":4321,"name":"busy","rss_bytes":50331648,"cpu_percent":182.5},{"pid":88,"name":"big","rss_bytes":8589934592,"cpu_percent":3},{"pid":77,"name":"kswapd0","rss_bytes":0}]`
 	create("t1", cpu, domain.AlertEventTriggered, `{"metric":"cpu","value":95,"threshold":90,`+top+`}`, now.Add(-3*time.Hour))
@@ -225,7 +226,7 @@ func TestIncidentsCarryProcessesRecordedAtTrigger(t *testing.T) {
 	names := map[string][]string{}
 	incidents := map[string]*pb.AlertIncident{}
 	for _, incident := range view.Incidents {
-		check := incident.Id[len(hostmetrics.SpaceID)+1 : len(incident.Id)-len("@"+incident.TriggeredAt)]
+		check := incident.Id[len(events.SystemSpaceID)+1 : len(incident.Id)-len("@"+incident.TriggeredAt)]
 		incidents[check] = incident
 		for _, process := range incident.Processes {
 			names[check] = append(names[check], process.Name)

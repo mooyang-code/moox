@@ -55,6 +55,8 @@ type taskResultMetadataFake struct {
 	deleteViews       int
 	failDeleteDataset bool
 	failGetDataset    error
+	// indexedTo 是 storage-view 里各 View 已建索引的上界；没有的 View 按 VIEW_NOT_FOUND 回答。
+	indexedTo map[string]string
 }
 
 func newTaskResultMetadataFake(ids taskresult.IDs, taskID string) *taskResultMetadataFake {
@@ -92,6 +94,7 @@ func (f *taskResultMetadataFake) CreateDataset(_ context.Context, req *storagepb
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	dataset := req.GetDataset()
+	dataset.Status = "active"
 	f.datasets[dataset.GetDatasetId()] = dataset
 	return &storagepb.CreateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
@@ -136,14 +139,6 @@ func (f *taskResultMetadataFake) CreateView(_ context.Context, req *storagepb.Cr
 	return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
 }
 
-func (f *taskResultMetadataFake) UpdateView(_ context.Context, req *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	view := req.GetView()
-	f.views[view.GetViewId()] = view
-	return &storagepb.UpdateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
-}
-
 func (f *taskResultMetadataFake) DeleteView(_ context.Context, req *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -159,16 +154,14 @@ func (f *taskResultMetadataFake) UpsertDatasetColumn(context.Context, *storagepb
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (f *taskResultMetadataFake) UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
-	return &storagepb.UpsertViewColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (f *taskResultMetadataFake) CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
-	return &storagepb.CheckDatasetActivationRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Ready: true}, nil
-}
-
-func (f *taskResultMetadataFake) ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
-	return &storagepb.ActivateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+func (f *taskResultMetadataFake) GetViewState(_ context.Context, req *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	indexedTo, ok := f.indexedTo[req.GetViewId()]
+	if !ok {
+		return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
+	}
+	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, IndexId: "idx", IndexedTo: indexedTo}, nil
 }
 
 func TestValidateCollectionTaskDatasetsRejectsMarketAndFrequencyMismatch(t *testing.T) {
@@ -527,7 +520,7 @@ func TestCreateTasksWithDifferentIDsOwnDifferentResultDatasets(t *testing.T) {
 	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
 	service := &Service{
 		taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
-		datasetSrc: acceptingKlineDatasetSource{}, resultDataNodeID: "node-collector",
+		datasetSrc: acceptingKlineDatasetSource{},
 	}
 	var datasets []string
 	var taskIDs []string
@@ -679,10 +672,9 @@ func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 	})
 	require.NoError(t, err)
 	service := &Service{
-		taskRepo:         db.Tasks(),
-		resultManager:    taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
-		datasetSrc:       acceptingKlineDatasetSource{},
-		resultDataNodeID: "node-collector",
+		taskRepo:      db.Tasks(),
+		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		datasetSrc:    acceptingKlineDatasetSource{},
 	}
 
 	rsp, callErr := service.CreateTask(context.Background(), &pb.CreateTaskReq{
@@ -768,10 +760,9 @@ func TestCreateTaskCompensatesResultWhenDatasetValidationFails(t *testing.T) {
 	})
 	require.NoError(t, err)
 	service := &Service{
-		taskRepo:         db.Tasks(),
-		resultManager:    taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
-		datasetSrc:       failingDatasetSource{},
-		resultDataNodeID: "node-collector",
+		taskRepo:      db.Tasks(),
+		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		datasetSrc:    failingDatasetSource{},
 	}
 
 	rsp, callErr := service.CreateTask(context.Background(), &pb.CreateTaskReq{

@@ -57,7 +57,7 @@ func entry(level zapcore.Level, caller, message string, at time.Time) zapcore.En
 	return e
 }
 
-var identity = Identity{ServiceName: "storage-node", InstanceID: "storage-node@storage", NodeID: "storage", BootID: "boot-1"}
+var identity = Identity{ServiceName: "storage-primary", InstanceID: "storage-primary@storage", NodeID: "storage", BootID: "boot-1"}
 
 // Error 和带事件名的日志进重要日志；Info、Warn 不进。累积的字段和单次调用的字段都带上，事件名单独取出。
 func TestImportantLaneTakesErrorsAndEvents(t *testing.T) {
@@ -67,7 +67,7 @@ func TestImportantLaneTakesErrorsAndEvents(t *testing.T) {
 		t.Fatal("attach failed")
 	}
 	now := time.Unix(1700000000, 0)
-	scoped := c.With([]zapcore.Field{zap.String("service_name", "storage-node")})
+	scoped := c.With([]zapcore.Field{zap.String("service_name", "storage-primary")})
 	_ = scoped.Write(entry(zapcore.InfoLevel, "view/a.go:10", "普通信息", now), nil)
 	_ = scoped.Write(entry(zapcore.WarnLevel, "view/a.go:11", "警告", now), nil)
 	_ = scoped.Write(entry(zapcore.ErrorLevel, "view/a.go:12", "写入失败", now), []zapcore.Field{zap.Int("rows", 42)})
@@ -78,7 +78,7 @@ func TestImportantLaneTakesErrorsAndEvents(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("重要日志 = %+v，应为 2 条", got)
 	}
-	if got[0].Message != "写入失败" || got[0].Level != "error" || got[0].Caller != "view/a.go:12" || got[0].Fields["rows"] != "42" || got[0].Fields["service_name"] != "storage-node" || got[0].Sequence != 1 {
+	if got[0].Message != "写入失败" || got[0].Level != "error" || got[0].Caller != "view/a.go:12" || got[0].Fields["rows"] != "42" || got[0].Fields["service_name"] != "storage-primary" || got[0].Sequence != 1 {
 		t.Fatalf("错误日志 = %+v", got[0])
 	}
 	if got[1].Event != "process_started" || got[1].Level != "info" || got[1].Sequence != 2 {

@@ -25,7 +25,7 @@ func seededAdminDB(t *testing.T) (string, *sql.DB) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	for _, q := range []string{
-		"INSERT INTO t_spaces (c_space_id, c_name) VALUES ('mooxsys', '系统'), ('team-a', '甲组')",
+		"INSERT INTO t_spaces (c_space_id, c_name) VALUES ('crypto', '加密货币市场'), ('team-a', '甲组')",
 		"INSERT INTO t_activity_logs (c_source, c_category, c_title) VALUES ('x', 'y', 'z'), ('x', 'y', 'w')",
 		"INSERT INTO t_collector_publish_leases (c_space_id) VALUES ('team-a')",
 	} {
@@ -72,10 +72,7 @@ func TestBusinessResetScopes(t *testing.T) {
 
 	out.Reset()
 	require.NoError(t, runResetBusinessCommand([]string{"reset-business", "--db-path", path, "--scope", "all", "--yes"}, &out, nil))
-	require.Equal(t, 1, countRows(t, db, "t_spaces"), "默认空间保留")
-	var space string
-	require.NoError(t, db.QueryRow("SELECT c_space_id FROM t_spaces").Scan(&space))
-	require.Equal(t, "mooxsys", space)
+	require.Equal(t, 0, countRows(t, db, "t_spaces"), "all 范围清掉全部业务空间")
 
 	entries, err := os.ReadDir(filepath.Join(filepath.Dir(path), "reset-backups"))
 	require.NoError(t, err)

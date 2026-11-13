@@ -93,7 +93,6 @@ func TestSubscribableEventsCatalog(t *testing.T) {
 	}
 	require.Contains(t, names, delistEvent)
 	require.NotContains(t, names, "event.trade.target.weight_requested", "工作队列里的事件不开放")
-	require.NotContains(t, names, "event.storage.dataset.rows.upserted")
 	var fields []string
 	for _, field := range names[delistEvent].ScopeFields {
 		fields = append(fields, field.Field)

@@ -16,7 +16,7 @@ import (
 
 func openReadStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	return store

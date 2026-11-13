@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -276,7 +278,7 @@ func (s *Store) UpdateSubjectAttributes(ctx context.Context, spaceID string, ite
 			continue
 		}
 		var raw string
-		if err := tx.QueryRowContext(ctx, `SELECT c_attrs_json FROM t_subjects WHERE c_space_id = ? AND c_subject_id = ?`, spaceID, item.GetSubjectId()).Scan(&raw); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT c_item_json FROM t_subjects WHERE c_space_id = ? AND c_subject_id = ?`, spaceID, item.GetSubjectId()).Scan(&raw); err != nil {
 			if err == sql.ErrNoRows {
 				skipped++
 				continue
@@ -300,7 +302,7 @@ func (s *Store) UpdateSubjectAttributes(ctx context.Context, spaceID string, ite
 		if err != nil {
 			return 0, 0, err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE t_subjects SET c_name = ?, c_attrs_json = ? WHERE c_space_id = ? AND c_subject_id = ?`, subject.GetName(), encoded, spaceID, item.GetSubjectId()); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE t_subjects SET c_name = ?, c_item_json = ? WHERE c_space_id = ? AND c_subject_id = ?`, subject.GetName(), encoded, spaceID, item.GetSubjectId()); err != nil {
 			return 0, 0, err
 		}
 		updated++
@@ -335,7 +337,7 @@ func (s *Store) ResolveSubjects(ctx context.Context, spaceID string, tagIDs []st
 
 func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID, datasetID, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
-		return nil, nil, fmt.Errorf("space_id and dataset_id are required")
+		return nil, nil, storeerr.Invalidf("space_id and dataset_id are required")
 	}
 	const from = `
 		FROM t_datasets d
@@ -402,12 +404,12 @@ const (
 
 	queryTagMembersCount = `SELECT COUNT(1) FROM t_subject_tags m JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id WHERE ` + tagMembersFilter
 	queryTagMembersList  = `
-		SELECT m.c_space_id, m.c_tag_id, m.c_status, m.c_inactive_at, s.c_attrs_json
+		SELECT m.c_space_id, m.c_tag_id, m.c_status, m.c_inactive_at, s.c_item_json
 		FROM t_subject_tags m
 		JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id
 		WHERE ` + tagMembersFilter + ` ORDER BY m.c_tag_id, m.c_subject_id LIMIT ? OFFSET ?`
 	queryAllSubjectsCount = `SELECT COUNT(1) FROM t_subjects s WHERE ` + allSubjectsFilter
-	queryAllSubjectsList  = `SELECT s.c_attrs_json FROM t_subjects s WHERE ` + allSubjectsFilter + ` ORDER BY s.c_subject_id LIMIT ? OFFSET ?`
+	queryAllSubjectsList  = `SELECT s.c_item_json FROM t_subjects s WHERE ` + allSubjectsFilter + ` ORDER BY s.c_subject_id LIMIT ? OFFSET ?`
 )
 
 // 按成员列表批量操作的语句：成员 ID 以 JSON 数组传入，用 json_each 展开。
@@ -416,5 +418,20 @@ const (
 	setTagMembersStatusSQL      = `UPDATE t_subject_tags SET c_status = ?, c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (SELECT value FROM json_each(?))`
 	activateSnapshotMembersSQL  = `UPDATE t_subject_tags SET c_status = 'active', c_inactive_at = '' WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (SELECT value FROM json_each(?)) AND c_status <> 'active'`
 	inactivateMissingMembersSQL = `UPDATE t_subject_tags SET c_status = 'inactive', c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_status = 'active' AND c_subject_id NOT IN (SELECT value FROM json_each(?))`
-	resolveSubjectsSQL          = `SELECT s.c_attrs_json FROM t_subjects s JOIN t_subject_tags m ON m.c_space_id = s.c_space_id AND m.c_subject_id = s.c_subject_id WHERE s.c_space_id = ? AND s.c_status = 'active' AND m.c_status = 'active' AND m.c_tag_id IN (SELECT value FROM json_each(?)) GROUP BY s.c_subject_id, s.c_attrs_json ORDER BY s.c_subject_id`
+	resolveSubjectsSQL          = `SELECT s.c_item_json FROM t_subjects s JOIN t_subject_tags m ON m.c_space_id = s.c_space_id AND m.c_subject_id = s.c_subject_id WHERE s.c_space_id = ? AND s.c_status = 'active' AND m.c_status = 'active' AND m.c_tag_id IN (SELECT value FROM json_each(?)) GROUP BY s.c_subject_id, s.c_item_json ORDER BY s.c_subject_id`
 )
+
+func uniqueStrings(values []string) []string {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			set[value] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for value := range set {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}

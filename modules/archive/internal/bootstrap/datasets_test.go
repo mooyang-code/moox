@@ -33,13 +33,13 @@ func TestGatewayDatasetsMapsStorageDatasets(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "s3cret-s3cret-s3cret-s3cret-s3cret")
 	inv := &fakeInvoker{rsp: &storagepb.GetDatasetRsp{
 		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
-		Dataset: &storagepb.Dataset{SpaceId: "crypto", DatasetId: "ds", Name: "K线", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", DataNodeId: "node-0", Retention: "168h"},
+		Dataset: &storagepb.Dataset{SpaceId: "crypto", DatasetId: "ds", Name: "K线", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", Retention: "168h"},
 	}}
 	ds, err := newGatewayDatasets(inv).GetDataset(context.Background(), "crypto", "ds")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ds.Freq != "1m" || ds.DataKind != "time_series" || ds.Status != "active" || ds.DataNodeID != "node-0" || ds.Retention != "168h" || ds.Name != "K线" {
+	if ds.Freq != "1m" || ds.DataKind != "time_series" || ds.Status != "active" || ds.Retention != "168h" || ds.Name != "K线" {
 		t.Fatalf("dataset = %+v", ds)
 	}
 	if inv.svc != "trpc.moox.storage.Metadata" || inv.meth != "GetDataset" || inv.last.GetSpaceId() != "crypto" || inv.last.GetDatasetId() != "ds" {

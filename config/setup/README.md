@@ -9,15 +9,14 @@
 | `dataset-health-policy.yaml` | Monitor | 实时 Dataset 健康阈值 |
 | `collection-tasks.yaml` | Collector | 默认采集任务 |
 
-`metadata.yaml` 的业务 Space 包含 `stockcn`、`stockhk`、`stockus` 和 `crypto`。`mooxsys` 带
-`attributes.scope: internal`，只进入 Storage，不显示在管理台业务空间选择器中。
+`metadata.yaml` 的 Space 包含 `stockcn`、`stockhk`、`stockus` 和 `crypto`，都是业务空间；主机快照存在 Monitor 自己的库里，Storage 没有系统空间。
 
 SCF 采集函数的云账号、地域网络与空间在根目录 `moox.toml` 的 `[scf_plan]` 声明；函数数量由 Collector 按标的数与每函数标的数自动计算，每个空间使用独立 namespace。
 发布校验会拒绝包含辅助函数后超过配额的配置。
 
 初始化可重复执行。已有资源与声明一致时报告 unchanged；契约不一致时失败，不覆盖已有
-配置和数据。Dataset 先以 disabled 创建，通过 Storage 激活检查后由 `setup init`
-显式激活。
+配置和数据。Dataset 建好即为 active，可以直接写入，
+不需要另外激活。
 
 需要清空全部行情与因子数据时，按 `docs/部署与运维.md`「清空全部数据重新积累」的顺序操作；
 数据集、View、标的等定义保留，不需要重新导入本目录。

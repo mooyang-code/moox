@@ -12,7 +12,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// TestImportUpsertThroughput 复现历史导入时 DataNode 的写入：每次请求 1000 行、每行 7 个字段，带 rows.upserted 事件，
+// TestImportUpsertThroughput 复现历史导入时 storage-primary 的写入：每次请求 1000 行、每行 7 个字段，带变更日志条目，
 // 同步落盘（与线上一致）。按不同并发数各写一遍，看串行锁下并发是否有收益。
 // 默认跳过；MOOX_PEBBLE_BENCH=1 时运行，MOOX_PEBBLE_BENCH_REQUESTS 指定每种并发写多少个请求。
 func TestImportUpsertThroughput(t *testing.T) {
@@ -43,7 +43,7 @@ func TestImportUpsertThroughput(t *testing.T) {
 		return rows
 	}
 	for _, workers := range []int{1, 4, 8} {
-		store, err := Open(Options{Path: t.TempDir(), NodeID: "bench"})
+		store, err := Open(Options{Path: t.TempDir()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -65,7 +65,7 @@ func TestImportUpsertThroughput(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for n := range queue {
-					if _, err := upsertTestRowsEntries(store, context.Background(), prepared[n]); err != nil {
+					if err := upsertTestRows(store, context.Background(), prepared[n]); err != nil {
 						mu.Lock()
 						failed = err
 						mu.Unlock()

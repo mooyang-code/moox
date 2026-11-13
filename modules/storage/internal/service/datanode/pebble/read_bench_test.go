@@ -34,7 +34,7 @@ func benchData(b *testing.B) *Store {
 			b.Fatal(err)
 		}
 		benchDir = dir
-		store, err := Open(Options{Path: dir, NodeID: "bench", DisableSyncWrites: true})
+		store, err := Open(Options{Path: dir, DisableSyncWrites: true})
 		if err != nil {
 			b.Fatal(err)
 		}

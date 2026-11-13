@@ -248,7 +248,7 @@ async function load() {
     const listTasks = await fetchAllTasks(spaceId);
     if (sequence !== loadSequence || spaceId !== selectedSpaceId.value) return;
     tasks.value = listTasks;
-    // 没有指定 resultTask 时，?dataset=&freq=（告警、存储节点等处跳进来）按结果数据集选任务
+    // 没有指定 resultTask 时，?dataset=&freq=（告警等处跳进来）按结果数据集选任务
     const requestedTaskId =
       queryTaskId(route.query.resultTask) || taskIdForDataset(listTasks, route.query.dataset, route.query.freq);
     // 地址里指定的任务不在列表里（例如别处的深链接）时照样选它，由下面单独读详情确认；否则按列表选

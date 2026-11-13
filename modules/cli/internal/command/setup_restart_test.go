@@ -14,7 +14,7 @@ func restartManifest() setupconfig.Manifest {
 	return setupconfig.Manifest{
 		Paths:       setupconfig.Paths{DeployRoot: "/data/moox", ControlRoot: "/data/moox/prod", StorageRoot: "/data/moox/storage"},
 		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "192.0.2.1"}, "storage": {Address: "192.0.2.2"}, "factor": {Address: "192.0.2.3"}},
-		Deployments: map[string][]string{"control": {"admin", "monitor"}, "storage": {"storage-node", "collector-stream"}, "factor": {"factor-engine"}},
+		Deployments: map[string][]string{"control": {"admin", "monitor"}, "storage": {"storage-primary", "collector-stream"}, "factor": {"factor-engine"}},
 	}
 }
 
@@ -27,7 +27,7 @@ func TestSetupRestartLocatesUnitDirectory(t *testing.T) {
 		{"control", "host-agent", "/data/moox/host", false},
 		{"storage", "host-gateway", "/data/moox/host", false},
 		{"control", "monitor", "/data/moox/prod", false},
-		{"storage", "storage-node", "/data/moox/storage", false},
+		{"storage", "storage-primary", "/data/moox/storage", false},
 		{"storage", "collector-stream", "/data/moox/collector-stream", false},
 		{"factor", "factor-engine", "/data/moox", true},
 	} {

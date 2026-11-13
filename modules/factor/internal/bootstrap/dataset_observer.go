@@ -32,7 +32,7 @@ type factorDatasetObserver struct {
 	clock   periodclock.Clock
 	now     func() time.Time
 	// notify 触发一次补报，默认 report.NotifyOutputAdvanced，测试可替换。
-	notify func(spaceID string)
+	notify func()
 	// observed is the latest period recorded per set, so a heartbeat repeating
 	// the same period is not counted as another run. Timer ticks may overlap.
 	mu       sync.Mutex
@@ -162,7 +162,7 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		// 同一期在产出水位已推进之后才升级为成功（空洞跳过的项补齐了）：水位不再前进，ObserveRun 不会补报，
 		// 这里主动补报一次，Monitor 立刻看到成功，不等 30 秒的定时上报。到达时间仍是第一次正式产出的时刻。
 		if seen && next.period == previous.period && previous.rank > 0 {
-			o.notify(key.SpaceID)
+			o.notify()
 		}
 	}
 	return nil

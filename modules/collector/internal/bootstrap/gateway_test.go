@@ -55,6 +55,7 @@ func (w *collectorGatewayWire) GetDirectory(_ context.Context, req *directorypb.
 	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version, Services: map[string]*directorypb.ServiceHosts{
 		"trpc.moox.storage.Metadata":               {HostIds: []string{"control"}},
 		"trpc.moox.storage.PrimaryStore":           {HostIds: []string{"control"}},
+		"trpc.moox.storage.DataView":               {HostIds: []string{"control"}},
 		"trpc.moox.cloudfunction.CloudFunctionMgr": {HostIds: []string{"control"}},
 		"trpc.moox.admin.CollectorPublishLease":    {HostIds: []string{"control"}},
 	}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
@@ -145,13 +146,6 @@ func (w *collectorGatewayWire) CreateView(ctx context.Context, request *storagep
 	return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w *collectorGatewayWire) UpdateView(ctx context.Context, request *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "UpdateView", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.UpdateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func (w *collectorGatewayWire) DeleteView(ctx context.Context, request *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
 	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "DeleteView", request); err != nil {
 		return nil, err
@@ -164,27 +158,6 @@ func (w *collectorGatewayWire) UpsertDatasetColumn(ctx context.Context, request 
 		return nil, err
 	}
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) UpsertViewColumn(ctx context.Context, request *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "UpsertViewColumn", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.UpsertViewColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) CheckDatasetActivation(ctx context.Context, request *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "CheckDatasetActivation", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.CheckDatasetActivationRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) ActivateDataset(ctx context.Context, request *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "ActivateDataset", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.ActivateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func (w *collectorGatewayWire) ResolveSubjects(ctx context.Context, request *storagepb.ResolveSubjectsReq) (*storagepb.ResolveSubjectsRsp, error) {
@@ -257,25 +230,17 @@ func (w *collectorGatewayWire) ReadRows(ctx context.Context, request *storagepb.
 	return &storagepb.PrimaryReadRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w *collectorGatewayWire) WaitViewSyncPoint(ctx context.Context, request *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "WaitViewSyncPoint", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.WaitViewSyncPointRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+// collectorDataViewWire 单独实现 DataView：它和 PrimaryStore 都有 CountTimeSeriesRows，放进同一个类型会有歧义。
+type collectorDataViewWire struct {
+	storagepb.UnimplementedDataView
+	wire *collectorGatewayWire
 }
 
-func (w *collectorGatewayWire) DeleteDatasetRows(ctx context.Context, request *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "DeleteDatasetRows", request); err != nil {
+func (w collectorDataViewWire) GetViewState(ctx context.Context, request *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
+	if err := w.wire.verify(ctx, "trpc.moox.storage.DataView", "GetViewState", request); err != nil {
 		return nil, err
 	}
-	return &storagepb.PrimaryDeleteDatasetRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) RestoreDatasetRows(ctx context.Context, request *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "RestoreDatasetRows", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.PrimaryRestoreDatasetRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *testing.T) {
@@ -303,13 +268,14 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	encoded, err := hostgatewayconfig.Encode(host)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(hostPath, encoded, 0600))
-	directory := servicecatalog.Directory{Services: map[string][]string{"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.cloudfunction.CloudFunctionMgr": {"control"}, "trpc.moox.admin.CollectorPublishLease": {"control"}}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
+	directory := servicecatalog.Directory{Services: map[string][]string{"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.storage.DataView": {"control"}, "trpc.moox.cloudfunction.CloudFunctionMgr": {"control"}, "trpc.moox.admin.CollectorPublishLease": {"control"}}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
 	wire := &collectorGatewayWire{credentials: credentials, directory: directory, nonces: map[string]bool{}, calls: map[string]int{}}
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	storagepb.RegisterMetadataService(svc, wire)
 	storagepb.RegisterPrimaryStoreService(svc, wire)
+	storagepb.RegisterDataViewService(svc, &collectorDataViewWire{wire: wire})
 	cloudfunctionpb.RegisterCloudFunctionMgrService(svc, wire)
 	adminpb.RegisterCollectorPublishLeaseService(svc, wire)
 	directorypb.RegisterDirectoryService(svc, wire)
@@ -355,28 +321,12 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.CreateView(t.Context(), &storagepb.CreateViewReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
-	t.Run("UpdateView", func(t *testing.T) {
-		_, err := adapter.UpdateView(t.Context(), &storagepb.UpdateViewReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
 	t.Run("DeleteView", func(t *testing.T) {
 		_, err := adapter.DeleteView(t.Context(), &storagepb.DeleteViewReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
 	t.Run("UpsertDatasetColumn", func(t *testing.T) {
 		_, err := adapter.UpsertDatasetColumn(t.Context(), &storagepb.UpsertDatasetColumnReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
-	t.Run("UpsertViewColumn", func(t *testing.T) {
-		_, err := adapter.UpsertViewColumn(t.Context(), &storagepb.UpsertViewColumnReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
-	t.Run("CheckDatasetActivation", func(t *testing.T) {
-		_, err := adapter.CheckDatasetActivation(t.Context(), &storagepb.CheckDatasetActivationReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
-	t.Run("ActivateDataset", func(t *testing.T) {
-		_, err := adapter.ActivateDataset(t.Context(), &storagepb.ActivateDatasetReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
 	t.Run("ResolveSubjects", func(t *testing.T) {
@@ -419,22 +369,14 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.ReadRows(t.Context(), &storagepb.PrimaryReadRowsReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
-	t.Run("WaitViewSyncPoint", func(t *testing.T) {
-		_, err := adapter.WaitViewSyncPoint(t.Context(), &storagepb.WaitViewSyncPointReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
-	t.Run("DeleteDatasetRows", func(t *testing.T) {
-		_, err := adapter.DeleteDatasetRows(t.Context(), &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
-	t.Run("RestoreDatasetRows", func(t *testing.T) {
-		_, err := adapter.RestoreDatasetRows(t.Context(), &storagepb.PrimaryRestoreDatasetRowsReq{AuthInfo: auth})
+	t.Run("GetViewState", func(t *testing.T) {
+		_, err := adapter.GetViewState(t.Context(), &storagepb.GetViewStateReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.calls["GetDataset"])
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
-	require.Len(t, wire.calls, 26)
+	require.Len(t, wire.calls, 20)
 	wire.mu.Unlock()
 	invoker := scfinvoker.New(scfinvoker.Config{Gateway: gateway})
 	lease, err := invoker.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")

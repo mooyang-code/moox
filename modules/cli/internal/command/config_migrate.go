@@ -21,6 +21,7 @@ func newConfigMigrateCommand() *cobra.Command {
 - [[factors.definitions]] 只保留 factor_id，file 指向因子库（factors.source_dir）里包含该因子的 YAML 文件，删除其余旧字段；
 - 给 control、storage、overseas、factor 主机补上中文名 label（已有的不动）；
 - 把 [deployments] 里已改名的旧组件身份改成当前名字（cloudnode → cloudfunction）；
+- 从 [deployments] 删掉已下线的组件（storage-node，已并入 storage-primary），输出 removed_components；
 - 加 --rename-host 旧ID=新ID 时把主机 ID 改名（主机表、[deployments]、access_host 与 host 引用）；
 - 加 --set-factors-enabled true|false 时设置 [factors] enabled；
 - 加 --set-retention defaults.<频率>=<时长> 或 <空间>.<频率>=<时长> 时设置该频率的保留期（生效要重装 Storage 单元）；

@@ -32,3 +32,6 @@ func (*IndexManager) Stat(context.Context, string) (viewindex.ViewIndexStats, er
 func (*IndexManager) Exists(context.Context, string) (bool, error) { return false, ErrUnavailable }
 func (*IndexManager) Remove(context.Context, string) error         { return ErrUnavailable }
 func (*IndexManager) Close() error                                 { return nil }
+func (*IndexManager) SaveFollowState(context.Context, string, viewindex.FollowState) error {
+	return ErrUnavailable
+}

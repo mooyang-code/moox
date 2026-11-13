@@ -36,10 +36,7 @@ const (
 // Fetching and persistence are implemented by the common market pipelines;
 // this type only carries the bounded invocation contract.
 type Request struct {
-	BatchID string `json:"batch_id"`
-	// SyncPointID is the stable logical catchup fence identity. Retry batches
-	// get a new BatchID for outbox/write idempotency, but keep the same fence.
-	SyncPointID         string           `json:"sync_point_id,omitempty"`
+	BatchID             string           `json:"batch_id"`
 	ScheduleID          string           `json:"schedule_id,omitempty"`
 	BatchKind           domain.BatchKind `json:"batch_kind"`
 	SpaceID             string           `json:"space_id"`

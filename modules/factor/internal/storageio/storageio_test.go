@@ -247,13 +247,14 @@ func TestCreateResultDatasetUsesSourceOwnershipAndRetention(t *testing.T) {
 	require.Len(t, metadata.createRequests, 1)
 	dataset := metadata.createRequests[0].GetDataset()
 	require.Equal(t, spec.DataSourceID, dataset.GetDataSourceId())
-	require.Equal(t, spec.DataNodeID, dataset.GetDataNodeId())
+	require.Equal(t, DatasetStatusActive, dataset.GetStatus())
 	require.Equal(t, spec.Frequency, dataset.GetFreq())
 	require.Equal(t, []string{"tag-b", "tag-a"}, dataset.GetSubjectTags())
 	require.Equal(t, DatasetRoleFactorResult, dataset.GetAttributes()["dataset_role"])
 	require.Equal(t, spec.SourceDatasetID, dataset.GetAttributes()["source_dataset_id"])
-	require.Len(t, metadata.upsertRequests, 1)
-	require.Equal(t, "close", metadata.upsertRequests[0].GetColumn().GetColumnName())
+	require.Len(t, metadata.createRequests[0].GetColumns(), 1, "列随数据集一次建好")
+	require.Equal(t, "close", metadata.createRequests[0].GetColumns()[0].GetColumnName())
+	require.Empty(t, metadata.upsertRequests)
 }
 
 func TestCreateResultDatasetTreatsDatasetNotFoundAsCreateable(t *testing.T) {
@@ -265,21 +266,21 @@ func TestCreateResultDatasetTreatsDatasetNotFoundAsCreateable(t *testing.T) {
 	require.Len(t, metadata.createRequests, 1)
 }
 
-func TestDeleteFactorResultDatasetPurgesRowsBeforeMetadata(t *testing.T) {
+// 行由 Storage 随数据集一起删，客户端只调一次 DeleteDataset。
+func TestDeleteFactorResultDatasetIsOneStorageCall(t *testing.T) {
 	dataset := &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: "factor_result", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
 	}
 	metadata := &metadataFake{getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}}}
-	primary := &primaryFake{}
-	client := NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+	client := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
 
 	require.NoError(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
-	require.Len(t, primary.deleteRowsRequests, 1)
 	require.Len(t, metadata.deleteRequests, 1)
-	require.Equal(t, "factor", primary.deleteRowsRequests[0].GetAuthInfo().GetAppId())
+	require.Equal(t, "factor", metadata.deleteRequests[0].GetAuthInfo().GetAppId())
 }
 
-func TestDeleteFactorResultDatasetKeepsTombstoneWhenMetadataDeleteFails(t *testing.T) {
+// 删除中途失败时重试同一个调用即可完成。
+func TestDeleteFactorResultDatasetRetriesAfterFailure(t *testing.T) {
 	dataset := &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: "factor_result", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
 	}
@@ -290,18 +291,45 @@ func TestDeleteFactorResultDatasetKeepsTombstoneWhenMetadataDeleteFails(t *testi
 			{RetInfo: successRet()},
 		},
 	}
-	primary := &primaryFake{}
-	client := NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+	client := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
 
 	err := client.DeleteDataset(context.Background(), "crypto", "factor_result")
 	require.ErrorContains(t, err, "metadata unavailable")
-	require.Len(t, primary.deleteRowsRequests, 1)
-	require.Empty(t, primary.restoreRowsRequests)
-	// The DataNode's durable tombstone makes the purge idempotent: retrying the
-	// still-present metadata deletion can complete after the transient failure.
 	require.NoError(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
-	require.Len(t, primary.deleteRowsRequests, 2)
 	require.Len(t, metadata.deleteRequests, 2)
+}
+
+// 元数据已经不在时仍要调 DeleteDataset：上一次可能删完元数据后删行失败，Storage 对不存在的数据集也会删行。
+func TestDeleteDatasetStillCallsStorageWhenMetadataIsGone(t *testing.T) {
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND}}},
+		deleteRsp:      &storagepb.DeleteDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND}},
+	}
+	client := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+	require.NoError(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
+	require.Len(t, metadata.deleteRequests, 1)
+	require.Empty(t, metadata.viewCalls, "元数据已不在，不再删默认 View")
+}
+
+// 第一次删完元数据后失败（缓存发布或删行出错），重试时 GetDataset 已是不存在，仍要再发一次 DeleteDataset。
+func TestDeleteDatasetRetryAfterMetadataDeletedStillDeletesRows(t *testing.T) {
+	dataset := &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "factor_result", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
+	}
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{
+			{RetInfo: successRet(), Dataset: dataset},
+			{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND}},
+		},
+		deleteRsps: []*storagepb.DeleteDatasetRsp{
+			{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "数据集元数据已删除，删行失败，请重试删除"}},
+			{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND}},
+		},
+	}
+	client := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+	require.Error(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
+	require.NoError(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
+	require.Len(t, metadata.deleteRequests, 2, "重试必须再调一次 DeleteDataset 删掉行")
 }
 
 func TestCreateResultDatasetRetryIsIdempotent(t *testing.T) {
@@ -312,14 +340,6 @@ func TestCreateResultDatasetRetryIsIdempotent(t *testing.T) {
 	require.NoError(t, NewClient(nil, metadata, nil).CreateResultDataset(context.Background(), spec))
 	require.Empty(t, metadata.createRequests)
 	require.Len(t, metadata.upsertRequests, 1)
-}
-
-func TestActivateDatasetUsesCurrentRevision(t *testing.T) {
-	metadata := &metadataFake{dataset: &storagepb.Dataset{
-		SpaceId: "crypto", DatasetId: "factor_result", Revision: 12, Status: "disabled",
-	}}
-	require.NoError(t, NewClient(nil, metadata, nil).ActivateDataset(context.Background(), "crypto", "factor_result"))
-	require.Equal(t, uint64(12), metadata.activateRequests[0].GetExpectedRevision())
 }
 
 func TestSetDatasetSubjectTagsKeepsOtherFieldsAndRevision(t *testing.T) {
@@ -336,17 +356,6 @@ func TestSetDatasetSubjectTagsKeepsOtherFieldsAndRevision(t *testing.T) {
 	require.Empty(t, metadata.dataset.GetSubjectTags(), "the read dataset is not mutated in place")
 }
 
-func TestActivateFactorResultClearsDeletionTombstone(t *testing.T) {
-	metadata := &metadataFake{dataset: &storagepb.Dataset{
-		SpaceId: "crypto", DatasetId: "factor_result", Revision: 12, Status: "disabled",
-		Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
-	}}
-	primary := &primaryFake{}
-	require.NoError(t, NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor"}).ActivateDataset(context.Background(), "crypto", "factor_result"))
-	require.Len(t, primary.restoreRowsRequests, 1)
-	require.Equal(t, "factor_result", primary.restoreRowsRequests[0].GetDatasetId())
-}
-
 func validReadRequest() ReadRequest {
 	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	return ReadRequest{SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Subjects: []string{"BTC"}, Start: now, End: now.Add(time.Minute), Columns: []string{"close"}}
@@ -355,7 +364,7 @@ func validReadRequest() ReadRequest {
 func resultDatasetSpec() ResultDatasetSpec {
 	return ResultDatasetSpec{
 		SpaceID: "crypto", DatasetID: "factor_result", SourceDatasetID: "bars", Name: "因子结果",
-		Description: "derived factors", DataSourceID: "binance", DataNodeID: "storage-node-0",
+		Description: "derived factors", DataSourceID: "binance",
 		DataKind: DataKindTimeSeries, Frequency: "1m",
 		SubjectTags: []string{"tag-b", "tag-a"}, Attributes: map[string]string{"owner": "factor"},
 		Columns: []ColumnInfo{{ColumnName: "close", OriginType: ColumnOriginField, OriginID: "close", ValueType: ColumnTypeDouble}},
@@ -363,42 +372,39 @@ func resultDatasetSpec() ResultDatasetSpec {
 }
 
 type primaryFake struct {
-	changeRequests      []*storagepb.ReadDatasetChangesReq
-	changesRsp          *storagepb.ReadDatasetChangesRsp
-	pages               []*storagepb.ReadTimeSeriesRowsRsp
-	readRequests        []*storagepb.ReadTimeSeriesRowsReq
-	readErr             error
-	readRet             *commonpb.RetInfo
-	writeRequests       []*storagepb.PrimaryUpsertFieldsReq
-	writeErr            error
-	writeRet            *commonpb.RetInfo
-	reportIDs           []string
-	computedRsp         *storagepb.GetDatasetPeriodCompletedRsp
-	computedReq         *storagepb.GetDatasetPeriodCompletedReq
-	deleteRowsRequests  []*storagepb.PrimaryDeleteDatasetRowsReq
-	restoreRowsRequests []*storagepb.PrimaryRestoreDatasetRowsReq
-	readDeadlines       []time.Duration
+	changeRequests []*storagepb.ReadDatasetChangesReq
+	changesRsp     *storagepb.ReadDatasetChangesRsp
+	pages          []*storagepb.ReadTimeSeriesRowsRsp
+	readRequests   []*storagepb.ReadTimeSeriesRowsReq
+	readErr        error
+	readRet        *commonpb.RetInfo
+	writeRequests  []*storagepb.PrimaryUpsertFieldsReq
+	writeErr       error
+	writeRet       *commonpb.RetInfo
+	reportIDs      []string
+	computedRsp    *storagepb.GetDatasetPeriodCompletedRsp
+	computedReq    *storagepb.GetDatasetPeriodCompletedReq
+	readDeadlines  []time.Duration
 }
 
 type metadataFake struct {
-	dataset          *storagepb.Dataset
-	getDatasetRsps   []*storagepb.GetDatasetRsp
-	columnPages      []*storagepb.ListDatasetColumnsRsp
-	columnRequests   []*storagepb.ListDatasetColumnsReq
-	createRequests   []*storagepb.CreateDatasetReq
-	createRsp        *storagepb.CreateDatasetRsp
-	upsertRequests   []*storagepb.UpsertDatasetColumnReq
-	activateRequests []*storagepb.ActivateDatasetReq
-	deleteRequests   []*storagepb.DeleteDatasetReq
-	deleteRsp        *storagepb.DeleteDatasetRsp
-	deleteRsps       []*storagepb.DeleteDatasetRsp
-	subjectPages     []*storagepb.ListDatasetSubjectsRsp
-	updateRequests   []*storagepb.UpdateDatasetReq
-	views            []*storagepb.View
-	viewCalls        []string
-	createViewReqs   []*storagepb.CreateViewReq
-	createViewRsp    *storagepb.CreateViewRsp
-	getViewRsp       *storagepb.GetViewRsp
+	dataset        *storagepb.Dataset
+	getDatasetRsps []*storagepb.GetDatasetRsp
+	columnPages    []*storagepb.ListDatasetColumnsRsp
+	columnRequests []*storagepb.ListDatasetColumnsReq
+	createRequests []*storagepb.CreateDatasetReq
+	createRsp      *storagepb.CreateDatasetRsp
+	upsertRequests []*storagepb.UpsertDatasetColumnReq
+	deleteRequests []*storagepb.DeleteDatasetReq
+	deleteRsp      *storagepb.DeleteDatasetRsp
+	deleteRsps     []*storagepb.DeleteDatasetRsp
+	subjectPages   []*storagepb.ListDatasetSubjectsRsp
+	updateRequests []*storagepb.UpdateDatasetReq
+	views          []*storagepb.View
+	viewCalls      []string
+	createViewReqs []*storagepb.CreateViewReq
+	createViewRsp  *storagepb.CreateViewRsp
+	getViewRsp     *storagepb.GetViewRsp
 }
 
 func (f *metadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq, _ ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
@@ -453,11 +459,6 @@ func (f *metadataFake) CreateDataset(_ context.Context, req *storagepb.CreateDat
 func (f *metadataFake) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq, _ ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {
 	f.upsertRequests = append(f.upsertRequests, proto.Clone(req).(*storagepb.UpsertDatasetColumnReq))
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: successRet(), Column: req.GetColumn()}, nil
-}
-
-func (f *metadataFake) ActivateDataset(_ context.Context, req *storagepb.ActivateDatasetReq, _ ...client.Option) (*storagepb.ActivateDatasetRsp, error) {
-	f.activateRequests = append(f.activateRequests, proto.Clone(req).(*storagepb.ActivateDatasetReq))
-	return &storagepb.ActivateDatasetRsp{RetInfo: successRet()}, nil
 }
 
 func (f *metadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq, _ ...client.Option) (*storagepb.DeleteDatasetRsp, error) {
@@ -537,16 +538,6 @@ func (f *primaryFake) GetDatasetPeriodCompleted(_ context.Context, req *storagep
 	return &storagepb.GetDatasetPeriodCompletedRsp{RetInfo: successRet()}, nil
 }
 
-func (f *primaryFake) DeleteDatasetRows(_ context.Context, req *storagepb.PrimaryDeleteDatasetRowsReq, _ ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	f.deleteRowsRequests = append(f.deleteRowsRequests, proto.Clone(req).(*storagepb.PrimaryDeleteDatasetRowsReq))
-	return &storagepb.PrimaryDeleteDatasetRowsRsp{RetInfo: successRet()}, nil
-}
-
-func (f *primaryFake) RestoreDatasetRows(_ context.Context, req *storagepb.PrimaryRestoreDatasetRowsReq, _ ...client.Option) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
-	f.restoreRowsRequests = append(f.restoreRowsRequests, proto.Clone(req).(*storagepb.PrimaryRestoreDatasetRowsReq))
-	return &storagepb.PrimaryRestoreDatasetRowsRsp{RetInfo: successRet()}, nil
-}
-
 func readRow(subject string, at time.Time, tag string, fields map[string]*storagepb.TypedValue) *storagepb.TimeSeriesRow {
 	values := make([]*storagepb.FieldValue, 0, len(fields))
 	for name, value := range fields {
@@ -604,8 +595,7 @@ func TestDeleteFactorResultDatasetRefusesExtraViewsAndKeepsRows(t *testing.T) {
 	err := c.DeleteDataset(context.Background(), "crypto", "dataset_x")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "manual-view")
-	require.Empty(t, primary.deleteRowsRequests, "存在额外 View 时不得物理清理数据")
-	require.Empty(t, metadata.deleteRequests)
+	require.Empty(t, metadata.deleteRequests, "存在额外 View 时不得删除数据集")
 }
 
 // 周期明细里成员的失败标的去重排序后写出。
@@ -637,22 +627,28 @@ func TestCarriedTimeAndJSONFieldsKeepTheirStorageType(t *testing.T) {
 func TestReadDatasetChangesMapsRequestAndResponse(t *testing.T) {
 	primary := &primaryFake{changesRsp: &storagepb.ReadDatasetChangesRsp{
 		RetInfo: successRet(), HasMore: true,
-		NextCursor: &storagepb.DatasetChangeCursor{NodeId: "n1", StoreId: "s1", Sequence: 9},
-		Changes: []*storagepb.DatasetChange{{Sequence: 8, DatasetId: "d", Ranges: []*storagepb.DatasetChangeRange{
-			{SubjectId: "BTC", Freq: "1m", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-01T00:05:00Z"},
-		}}},
+		NextCursor: &storagepb.DatasetChangeCursor{StoreId: "s1", Sequence: 9},
+		// 完成标记与记录型行条目被忽略，只留时间序列行条目。
+		Changes: []*storagepb.DatasetChange{
+			{Sequence: 6, DatasetId: "d", Marker: []byte("marker")},
+			{Sequence: 7, DatasetId: "d", Records: []*storagepb.RecordRowKey{{RecordId: "r", Version: "1"}}},
+			{Sequence: 8, DatasetId: "d", Ranges: []*storagepb.DatasetChangeRange{
+				{SubjectId: "BTC", Freq: "1m", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-01T00:05:00.5Z"},
+			}},
+		},
 	}}
 	c := NewClient(primary, &metadataFake{}, &commonpb.AuthInfo{AppId: "factor"})
-	got, err := c.ReadDatasetChanges(context.Background(), "crypto", "d", &ChangeCursor{NodeID: "n1", StoreID: "s1", Sequence: 7}, false, 100)
+	got, err := c.ReadDatasetChanges(context.Background(), "crypto", "d", &ChangeCursor{StoreID: "s1", Sequence: 7}, false, 100)
 	require.NoError(t, err)
 	require.Equal(t, uint32(100), primary.changeRequests[0].GetLimit())
 	require.Equal(t, uint64(7), primary.changeRequests[0].GetCursor().GetSequence())
 	require.False(t, primary.changeRequests[0].GetFromHead())
 	require.True(t, got.HasMore)
-	require.Equal(t, ChangeCursor{NodeID: "n1", StoreID: "s1", Sequence: 9}, got.Next)
+	require.Equal(t, ChangeCursor{StoreID: "s1", Sequence: 9}, got.Next)
 	require.Len(t, got.Changes, 1)
+	require.Equal(t, uint64(8), got.Changes[0].Sequence)
 	require.Equal(t, "BTC", got.Changes[0].Ranges[0].Subject)
-	require.Equal(t, time.Date(2026, 10, 1, 0, 5, 0, 0, time.UTC), got.Changes[0].Ranges[0].End)
+	require.Equal(t, time.Date(2026, 10, 1, 0, 5, 0, 500_000_000, time.UTC), got.Changes[0].Ranges[0].End)
 
 	_, err = c.ReadDatasetChanges(context.Background(), "crypto", "d", nil, true, 0)
 	require.NoError(t, err)
@@ -695,11 +691,6 @@ func TestEnsureResultViewCreatesTheDefaultViewWithMaintenanceAttributes(t *testi
 	}
 	metadata := &metadataFake{
 		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}},
-		columnPages: []*storagepb.ListDatasetColumnsRsp{{RetInfo: successRet(), Columns: []*storagepb.DatasetColumn{
-			{ColumnName: "close", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", Attributes: map[string]string{"display_name": "收盘"}},
-			{ColumnName: "old", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "disabled"},
-			{ColumnName: "ema__20", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", Attributes: map[string]string{"member_key": "ema__20"}},
-		}}},
 	}
 	c := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "k"})
 	require.NoError(t, c.EnsureResultView(t.Context(), "crypto", "dataset_factor_btc_1m"))
@@ -711,16 +702,10 @@ func TestEnsureResultViewCreatesTheDefaultViewWithMaintenanceAttributes(t *testi
 	require.Equal(t, "dataset_factor_btc_1m", view.GetDatasetId())
 	require.Equal(t, "1m", view.GetFreq())
 	require.Equal(t, "duckdb", view.GetEngine())
-	require.Equal(t, map[string]string{
-		"owner_module": "factor", "view_role": "factor_result", "follow_dataset_columns": "true", "maintenance_priority": "10",
-	}, view.GetAttributes())
-	var names []string
-	for _, column := range view.GetColumns() {
-		names = append(names, column.GetColumnName())
-		require.Equal(t, column.GetColumnName(), column.GetOriginId())
-	}
-	require.Equal(t, []string{"close", "ema__20"}, names, "只带数据集的有效列，保持顺序")
-	require.Equal(t, "ema__20", view.GetColumns()[1].GetAttributes()["member_key"], "列属性随列带进 View")
+	require.Equal(t, uint32(10), view.GetMaintenancePriority())
+	require.Equal(t, map[string]string{"owner_module": "factor", "view_role": "factor_result"}, view.GetAttributes())
+	require.Empty(t, view.GetColumns(), "建 View 不带列：列由 Storage 从数据集推出")
+	require.Empty(t, metadata.columnRequests, "不再为建 View 读数据集的列")
 }
 
 func TestEnsureResultViewLeavesAnExistingViewAloneButRejectsAnotherDatasetsView(t *testing.T) {
@@ -733,8 +718,8 @@ func TestEnsureResultViewLeavesAnExistingViewAloneButRejectsAnotherDatasetsView(
 	require.ErrorContains(t, c.EnsureResultView(t.Context(), "crypto", "dataset_factor_btc_1m"), "另一个数据集")
 }
 
-// 删除结果数据集的顺序：先删默认 View，再清空行，最后删数据集（View 外键要求先删 View）。
-func TestDeleteFactorResultDatasetDeletesTheDefaultViewBeforeRowsAndDataset(t *testing.T) {
+// 删除结果数据集的顺序：先删默认 View，再删数据集（View 外键要求先删 View；行由 Storage 随数据集一起删）。
+func TestDeleteFactorResultDatasetDeletesTheDefaultViewBeforeDataset(t *testing.T) {
 	dataset := &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: "dataset_factor_x", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
 	}

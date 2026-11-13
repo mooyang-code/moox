@@ -10,7 +10,7 @@ import (
 )
 
 func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
-	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 
 func TestCleanupExpiredBucketsDoesNotCreateOutboxEvent(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,11 +56,11 @@ func TestCleanupExpiredBucketsDoesNotCreateOutboxEvent(t *testing.T) {
 		},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
 	}
-	if _, err := upsertTestRowsEntries(store, ctx, []*pb.RowFieldUpsert{row}); err != nil {
+	if err := upsertTestRows(store, ctx, []*pb.RowFieldUpsert{row}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := store.ListOutbox(ctx, 0, 10)
-	if err != nil || len(before) != 1 {
+	if err != nil || len(before) != 0 {
 		t.Fatalf("outbox before cleanup = %v, %v", before, err)
 	}
 
@@ -78,7 +78,7 @@ func TestCleanupExpiredBucketsDoesNotCreateOutboxEvent(t *testing.T) {
 }
 
 func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
-	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
 }
 
 func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1", BucketDuration: time.Hour})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), BucketDuration: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.
 }
 
 func TestUpsertFieldsExplicitNullReplacesStoredValue(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestUpsertFieldsExplicitNullReplacesStoredValue(t *testing.T) {
 }
 
 func TestSeriesTagsKeepSameTimestampRowsDistinct(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestSeriesTagsKeepSameTimestampRowsDistinct(t *testing.T) {
 }
 
 func TestSeriesTagSymbolsRoundTripWithoutRewriting(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestSeriesTagSymbolsRoundTripWithoutRewriting(t *testing.T) {
 }
 
 func TestReadRowsReturnsOnlyExistingRowsEvenWithoutRequestedField(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestReadRowsReturnsOnlyExistingRowsEvenWithoutRequestedField(t *testing.T) 
 }
 
 func TestRecordEmptyVersionResolvesCharacterMaximum(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,25 +267,5 @@ func TestRecordEmptyVersionResolvesCharacterMaximum(t *testing.T) {
 	rows, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"value"}, nil)
 	if err != nil || len(rows) != 1 || rows[0].GetKey().GetRecord().GetVersion() != "2" {
 		t.Fatalf("rows=%v err=%v", rows, err)
-	}
-}
-
-func TestWriteRejectsEventLargerThanPublisherLimitBeforeCommit(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1", MaxEventBytes: 32})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-	row := &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "value"}}}}}
-	if _, err := upsertTestRowsEntries(store, context.Background(), []*pb.RowFieldUpsert{row}); err == nil {
-		t.Fatal("expected oversized event to be rejected")
-	}
-	rows, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"value"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 0 {
-		t.Fatalf("fact committed despite oversized event: %v", rows)
 	}
 }

@@ -15,41 +15,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func TestDatasetRowsUpsertedV1IsRejectedByV2Consumer(t *testing.T) {
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := DatasetRowsUpserted.Version(); got != 2 {
-		t.Fatalf("storage event version = %d, want 2", got)
-	}
-	if _, ok := registry.Lookup(DatasetRowsUpserted.Name(), 1); ok {
-		t.Fatal("v1 storage event remains registered")
-	}
-	encoded, err := registry.Encode(
-		DatasetRowsUpserted,
-		validRowsEvent(),
-		validationOptions("storage-event-1", "space", "dataset"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded.Message.EventVersion = 1
-	raw, err := proto.Marshal(encoded.Message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := DecodeDatasetRowsUpserted(
-		registry,
-		raw,
-		"moox.event.storage.dataset.rows.upserted.v2.space.dataset",
-		"storage-event-1",
-	); err == nil {
-		t.Fatal("v1 storage event was accepted by v2 consumer")
-	}
-}
-
-func TestDatasetRowsUpsertedValidatesSeriesTagShape(t *testing.T) {
+// series_tag 的形状校验：补写事件的 series_tags 按同一规则检查。
+func TestSeriesTagShapeValidation(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)
@@ -69,23 +36,15 @@ func TestDatasetRowsUpsertedValidatesSeriesTagShape(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := &storagepb.DatasetRowsUpserted{NodeId: "node", StoreId: "store", Sequence: 1,
-				SpaceId: "space", DatasetId: "dataset",
-				Rows: []*storagepb.RowUpsert{{
-					Key: &storagepb.RowKey{
-						SpaceId: "space", DatasetId: "dataset",
-						Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-							SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-29T00:00:00Z",
-							SeriesTag: tt.tag,
-						}},
-					},
-				}},
+			start := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+			payload := &storagepb.CollectorKlineBackfilled{
+				DatasetId: "dataset", Frequency: "1m", SubjectIds: []string{"BTC-USDT"}, Origin: "auto",
+				Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Hour)), ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
 			}
-			_, err := registry.Encode(
-				DatasetRowsUpserted,
-				payload,
-				validationOptions("storage-event-1", "space", "dataset"),
-			)
+			if tt.tag != "" {
+				payload.SeriesTags = []string{tt.tag}
+			}
+			_, err := registry.Encode(CollectorKlineBackfilled, payload, validationOptions("backfill-event-1", "space", "dataset"))
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Encode() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -146,11 +105,6 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 			payload: validViewDataReady(now),
 			mutate:  func(value proto.Message) { value.(*storagepb.ViewDataReady).ViewId = "other" },
 		},
-		{
-			name: "sync point source", event: DatasetSyncPoint, subjectID: "dataset",
-			payload: &storagepb.DatasetSyncPoint{SyncPointId: "sync-1", RequestId: "request-1", DatasetId: "dataset", Source: "import"},
-			mutate:  func(value proto.Message) { value.(*storagepb.DatasetSyncPoint).Source = "manual" },
-		},
 	}
 
 	for _, tt := range tests {
@@ -209,18 +163,6 @@ func validationOptions(eventID, spaceID, subjectID string) PublishOptions {
 	}
 }
 
-func validRowsEvent() *storagepb.DatasetRowsUpserted {
-	return &storagepb.DatasetRowsUpserted{NodeId: "node", StoreId: "store", Sequence: 1,
-		SpaceId: "space", DatasetId: "dataset",
-		Rows: []*storagepb.RowUpsert{{
-			Key: &storagepb.RowKey{
-				SpaceId: "space", DatasetId: "dataset",
-				Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}},
-			},
-		}},
-	}
-}
-
 func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -240,26 +182,6 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 			payload: &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage-1", Snapshot: &metricspb.MetricSnapshot{}},
 			opts:    validationOptions("metric-event-1", "mooxsys", "storage/storage-1"),
 			mutate:  func(value proto.Message) { value.(*metricspb.MetricReport).InstanceId = "other" },
-		},
-		{
-			name: "storage dataset", event: DatasetRowsUpserted,
-			payload: validRowsEvent(),
-			opts:    validationOptions("storage-event-1", "space", "dataset"),
-			mutate:  func(value proto.Message) { value.(*storagepb.DatasetRowsUpserted).DatasetId = "other" },
-		},
-		{
-			name: "storage space", event: DatasetRowsUpserted,
-			payload: validRowsEvent(),
-			opts:    validationOptions("storage-event-1", "space", "dataset"),
-			mutate:  func(value proto.Message) { value.(*storagepb.DatasetRowsUpserted).SpaceId = "other" },
-		},
-		{
-			name: "storage row", event: DatasetRowsUpserted,
-			payload: validRowsEvent(),
-			opts:    validationOptions("storage-event-1", "space", "dataset"),
-			mutate: func(value proto.Message) {
-				value.(*storagepb.DatasetRowsUpserted).Rows[0].Key.DatasetId = "other"
-			},
 		},
 	}
 	registry, err := DefaultRegistry()

@@ -172,7 +172,4 @@ func TestViewNotFoundIsNeutral(t *testing.T) {
 	if !errors.Is(err, ErrViewNotFound) || err.Error() != "View view_gone 已不存在" {
 		t.Fatalf("View 被删除应报 ErrViewNotFound：%v", err)
 	}
-	if _, err := client.ViewGeneration(context.Background(), "space", "view_gone"); !errors.Is(err, ErrViewNotFound) {
-		t.Fatalf("只读代次时同样报 ErrViewNotFound：%v", err)
-	}
 }

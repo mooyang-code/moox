@@ -2,16 +2,17 @@ package sqlite
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 
+	"google.golang.org/protobuf/proto"
 	sqlite "modernc.org/sqlite"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -40,34 +41,30 @@ func normalizeTag(item *pb.Tag) error {
 	return nil
 }
 
-func tagAttributesJSON(item *pb.Tag) (string, error) {
-	raw, err := json.Marshal(item.GetAttributes())
-	if err != nil {
-		return "", err
-	}
-	if string(raw) == "null" {
-		return "{}", nil
-	}
-	return string(raw), nil
+// tagItemJSON 是写进 c_item_json 的整条标签：成员计数与时间由查询时算出，不落库。
+func tagItemJSON(item *pb.Tag) (string, error) {
+	stored := proto.Clone(item).(*pb.Tag)
+	stored.ActiveCount, stored.InactiveCount = 0, 0
+	stored.CreatedAt, stored.UpdatedAt = "", ""
+	return marshal(stored)
 }
 
 func (s *Store) UpsertTag(ctx context.Context, item *pb.Tag) (*pb.Tag, error) {
 	if err := normalizeTag(item); err != nil {
 		return nil, err
 	}
-	attrs, err := tagAttributesJSON(item)
+	raw, err := tagItemJSON(item)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO t_tags (c_space_id, c_tag_id, c_tag_name, c_description, c_mode, c_builtin, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO t_tags (c_space_id, c_tag_id, c_tag_name, c_mode, c_builtin, c_item_json)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_tag_id) DO UPDATE SET
 			c_tag_name = excluded.c_tag_name,
-			c_description = excluded.c_description,
 			c_mode = excluded.c_mode,
-			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetTagId(), item.GetTagName(), item.GetDescription(), item.GetMode(), boolInt(item.GetBuiltin()), attrs); err != nil {
+			c_item_json = excluded.c_item_json
+	`, item.GetSpaceId(), item.GetTagId(), item.GetTagName(), item.GetMode(), boolInt(item.GetBuiltin()), raw); err != nil {
 		return nil, err
 	}
 	return s.GetTag(ctx, item.GetSpaceId(), item.GetTagId())
@@ -78,21 +75,21 @@ func (s *Store) CreateTag(ctx context.Context, item *pb.Tag) (*pb.Tag, error) {
 	if err := normalizeTag(item); err != nil {
 		return nil, err
 	}
-	attrs, err := tagAttributesJSON(item)
+	item.Builtin = false
+	raw, err := tagItemJSON(item)
 	if err != nil {
 		return nil, err
 	}
-	item.Builtin = false
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO t_tags (c_space_id, c_tag_id, c_tag_name, c_description, c_mode, c_builtin, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, item.GetSpaceId(), item.GetTagId(), item.GetTagName(), item.GetDescription(), item.GetMode(), boolInt(item.GetBuiltin()), attrs); err != nil {
+		INSERT INTO t_tags (c_space_id, c_tag_id, c_tag_name, c_mode, c_builtin, c_item_json)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetTagId(), item.GetTagName(), item.GetMode(), boolInt(item.GetBuiltin()), raw); err != nil {
 		var sqliteErr *sqlite.Error
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == 2067 {
 			if strings.Contains(strings.ToLower(sqliteErr.Error()), "c_tag_name") {
-				return nil, fmt.Errorf("tag name %q already exists in space %s: %w", item.GetTagName(), item.GetSpaceId(), err)
+				return nil, storeerr.Conflictf("tag name %q already exists in space %s: %w", item.GetTagName(), item.GetSpaceId(), err)
 			}
-			return nil, fmt.Errorf("tag %s/%s already exists: %w", item.GetSpaceId(), item.GetTagId(), err)
+			return nil, storeerr.Conflictf("tag %s/%s already exists: %w", item.GetSpaceId(), item.GetTagId(), err)
 		}
 		return nil, err
 	}
@@ -100,26 +97,27 @@ func (s *Store) CreateTag(ctx context.Context, item *pb.Tag) (*pb.Tag, error) {
 }
 
 const tagSelect = `
-	SELECT t.c_space_id, t.c_tag_id, t.c_tag_name, t.c_description, t.c_mode, t.c_builtin,
-	       t.c_attrs_json, t.c_ctime, t.c_mtime,
+	SELECT t.c_builtin, t.c_item_json, t.c_ctime, t.c_mtime,
 	       (SELECT COUNT(1) FROM t_subject_tags m WHERE m.c_space_id = t.c_space_id AND m.c_tag_id = t.c_tag_id AND m.c_status = 'active'),
 	       (SELECT COUNT(1) FROM t_subject_tags m WHERE m.c_space_id = t.c_space_id AND m.c_tag_id = t.c_tag_id AND m.c_status = 'inactive')
 	FROM t_tags t`
 
+// scanTag 读出整条标签；内置标记以 c_builtin 为准（更新标签时不改它），成员计数与时间由查询算出。
 func scanTag(row rowScanner) (*pb.Tag, error) {
-	item := &pb.Tag{}
 	var builtin int
-	var attrs string
-	if err := row.Scan(&item.SpaceId, &item.TagId, &item.TagName, &item.Description, &item.Mode, &builtin,
-		&attrs, &item.CreatedAt, &item.UpdatedAt, &item.ActiveCount, &item.InactiveCount); err != nil {
+	var raw string
+	item := &pb.Tag{}
+	var createdAt, updatedAt string
+	var active, inactive uint32
+	if err := row.Scan(&builtin, &raw, &createdAt, &updatedAt, &active, &inactive); err != nil {
 		return nil, err
 	}
-	item.Builtin = builtin == 1
-	if attrs != "" && attrs != "{}" {
-		if err := json.Unmarshal([]byte(attrs), &item.Attributes); err != nil {
-			return nil, fmt.Errorf("decode tag attributes: %w", err)
-		}
+	if err := unmarshalOptions.Unmarshal([]byte(raw), item); err != nil {
+		return nil, fmt.Errorf("解析标签：%w", err)
 	}
+	item.Builtin = builtin == 1
+	item.CreatedAt, item.UpdatedAt = createdAt, updatedAt
+	item.ActiveCount, item.InactiveCount = active, inactive
 	return item, nil
 }
 
@@ -164,7 +162,7 @@ func (s *Store) DeleteTag(ctx context.Context, spaceID, tagID string) error {
 		return fmt.Errorf("%w: %s", metadatastore.ErrTagBuiltin, tagID)
 	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT d.c_dataset_id, d.c_name, COALESCE(json_extract(d.c_attrs_json, '$.attributes.collector_task_id'), '')
+		SELECT d.c_dataset_id, d.c_name, COALESCE(json_extract(d.c_item_json, '$.attributes.collector_task_id'), '')
 		FROM t_datasets d
 		WHERE d.c_space_id = ? AND EXISTS (SELECT 1 FROM json_each(d.c_subject_tags_json) j WHERE j.value = ?)
 		ORDER BY d.c_dataset_id`, spaceID, tagID)

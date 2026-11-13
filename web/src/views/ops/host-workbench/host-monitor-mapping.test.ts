@@ -38,7 +38,6 @@ function monitor(overrides: Partial<HostMetrics> = {}): HostMetrics {
       }
     ],
     processes: [],
-    storage_available: true,
     ...overrides
   };
 }

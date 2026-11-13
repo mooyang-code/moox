@@ -12,6 +12,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testing.T) {
@@ -74,9 +75,9 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 		t.Fatal(err)
 	}
 	consumers := make(map[string]*events.Consumer, 3)
-	for _, durable := range []string{"view_0123456789ab", "factor_calc", "moox_archive_kline_v2"} {
+	for _, durable := range []string{"factor_collector_period_v1", "collector_resample_period_crypto_v1", "factor_calc"} {
 		consumer, err := events.NewConsumer(context.Background(), client, registry, events.ConsumerConfig{
-			Name: durable, Event: events.DatasetRowsUpserted, AckWait: time.Minute,
+			Name: durable, Event: events.DatasetPeriodCompleted, AckWait: time.Minute,
 			MaxDeliver: 5, MaxAckPending: 256, FetchMaxWait: 100 * time.Millisecond,
 		})
 		if err != nil {
@@ -87,12 +88,15 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 	}
 
 	occurredAt := time.Now().UTC()
-	payload := &storagepb.DatasetRowsUpserted{NodeId: "node-e2e", StoreId: "store-e2e", Sequence: 1, SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}}
-	first, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "dataset_binance_kline_1m"})
+	payload := &storagepb.DatasetPeriodCompleted{
+		DatasetId: "dataset_binance_kline_1m", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
+		CauseEventId: "cause-e2e", CompletedAt: timestamppb.New(occurredAt),
+	}
+	first, err := publisher.Publish(context.Background(), events.DatasetPeriodCompleted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "dataset_binance_kline_1m"})
 	if err != nil || first == nil || first.Duplicate {
 		t.Fatalf("first publish ack=%+v err=%v", first, err)
 	}
-	second, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "dataset_binance_kline_1m"})
+	second, err := publisher.Publish(context.Background(), events.DatasetPeriodCompleted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "dataset_binance_kline_1m"})
 	if err != nil || second == nil || !second.Duplicate {
 		t.Fatalf("duplicate publish ack=%+v err=%v", second, err)
 	}
@@ -112,7 +116,7 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 		if err != nil {
 			t.Fatalf("decode %s: %v", durable, err)
 		}
-		if message.GetEventId() != "storage-e2e-1" || message.GetEventName() != events.DatasetRowsUpserted.Name() || message.GetSpaceId() != "crypto" || message.GetSubjectId() != "dataset_binance_kline_1m" {
+		if message.GetEventId() != "storage-e2e-1" || message.GetEventName() != events.DatasetPeriodCompleted.Name() || message.GetSpaceId() != "crypto" || message.GetSubjectId() != "dataset_binance_kline_1m" {
 			t.Fatalf("decoded envelope %s=%+v", durable, message)
 		}
 		if err := delivery.Ack(ctx); err != nil {

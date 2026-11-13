@@ -229,7 +229,7 @@ ssh = {username="fixture",password="synthetic-ssh-password"}
 address = "127.0.0.3"
 ssh = {username="fixture",password="synthetic-ssh-password"}
 [deployments]
-control = ["admin","eventbus","console-proxy","web-host","monitor","collector","cloudfunction","factor-mgr","strategy","access","egress-proxy","trade","storage-primary","storage-node","storage-view"]
+control = ["admin","eventbus","console-proxy","web-host","monitor","collector","cloudfunction","factor-mgr","strategy","access","egress-proxy","trade","storage-primary","storage-view"]
 storage = ["access"]
 compute1 = ["access"]
 `, deployment, filepath.Join(deployment, "units", "prod"), filepath.Join(deployment, "storage"), target.Port)
@@ -420,7 +420,7 @@ compute1 = ["access"]
 	require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
 	t.Log("activation checkpoint recovery and fresh candidate after rollback passed")
 	if directory := os.Getenv("MOOX_BUSINESS_BINARY_DIRECTORY"); directory != "" {
-		for _, binary := range []string{"moox-access", "moox-egress-proxy", "moox-trade", "moox-trade-cli", "moox-storage-primary", "moox-storage-node", "moox-storage-view", "moox-storage-cli"} {
+		for _, binary := range []string{"moox-access", "moox-egress-proxy", "moox-trade", "moox-trade-cli", "moox-storage-primary", "moox-storage-view", "moox-storage-cli"} {
 			copyArtifact(t, filepath.Join(directory, binary), filepath.Join(root, "bin", binary), 0o700)
 		}
 		options.RepositoryRoot, options.BinaryDirectory = os.Getenv("MOOX_ADMIN_SOURCE_ROOT"), filepath.Join(root, "bin")

@@ -3,6 +3,7 @@ package events
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type captureClient struct {
@@ -23,16 +25,16 @@ func (c *captureClient) PublishRaw(_ context.Context, subject, _ string, body []
 	return &jetstream.PublishAck{}, nil
 }
 
-// rowsPayload 构造包含 count 行记录的行事件；行内容高度重复，和线上因子结果行类似，压缩收益明显。
-func rowsPayload(count int) *storagepb.DatasetRowsUpserted {
-	rows := make([]*storagepb.RowUpsert, 0, count)
+// periodPayload 构造标的全集有 count 个标的的周期完成事件；标的名高度重复，压缩收益明显。
+func periodPayload(count int) *storagepb.DatasetPeriodCompleted {
+	subjects := make([]string, 0, count)
 	for i := 0; i < count; i++ {
-		rows = append(rows, &storagepb.RowUpsert{Key: &storagepb.RowKey{
-			SpaceId: "space", DatasetId: "dataset",
-			Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-" + strings.Repeat("x", 40), Version: "v1"}},
-		}})
+		subjects = append(subjects, fmt.Sprintf("SUBJECT-%s-%04d", strings.Repeat("x", 40), i))
 	}
-	return &storagepb.DatasetRowsUpserted{NodeId: "node", StoreId: "store", Sequence: 1, SpaceId: "space", DatasetId: "dataset", Rows: rows}
+	return &storagepb.DatasetPeriodCompleted{
+		DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
+		UniverseSubjectIds: subjects, CauseEventId: "cause-1", CompletedAt: timestamppb.New(time.Unix(1_786_032_060, 0)),
+	}
 }
 
 // 发布器默认压缩：压缩发布的信封经 DecodeRaw 透明解压，与未压缩的解码结果一致；低于阈值的小信封保持原样。
@@ -48,8 +50,8 @@ func TestPublisherCompressionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := rowsPayload(200)
-	if _, err := publisher.Publish(context.Background(), DatasetRowsUpserted, payload, opts); err != nil {
+	payload := periodPayload(200)
+	if _, err := publisher.Publish(context.Background(), DatasetPeriodCompleted, payload, opts); err != nil {
 		t.Fatal(err)
 	}
 	if packed.contentType != ContentTypeZstd {
@@ -74,14 +76,14 @@ func TestPublisherCompressionRoundTrip(t *testing.T) {
 	// 小于阈值的信封保持原样。
 	small := &captureClient{}
 	smallPublisher, _ := NewPublisher(small, registry)
-	if _, err := smallPublisher.Publish(context.Background(), DatasetRowsUpserted, rowsPayload(1), opts); err != nil || small.contentType != ContentType {
+	if _, err := smallPublisher.Publish(context.Background(), DatasetPeriodCompleted, periodPayload(1), opts); err != nil || small.contentType != ContentType {
 		t.Fatalf("低于阈值不压缩：%v %s", err, small.contentType)
 	}
 }
 
 func mustEncode(t *testing.T, registry *Registry, payload proto.Message, opts PublishOptions) *eventpb.EventMessage {
 	t.Helper()
-	encoded, err := registry.Encode(DatasetRowsUpserted, payload, opts)
+	encoded, err := registry.Encode(DatasetPeriodCompleted, payload, opts)
 	if err != nil {
 		t.Fatal(err)
 	}

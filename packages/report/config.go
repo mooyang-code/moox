@@ -6,10 +6,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/events"
 )
 
 const (
-	DefaultSpace  = "mooxsys"
+	DefaultSpace  = events.SystemSpaceID
 	DefaultBusURL = "nats://127.0.0.1:4222"
 )
 

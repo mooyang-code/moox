@@ -254,7 +254,7 @@ func TestCollectorReportsTopProcesses(t *testing.T) {
 		"/proc/meminfo":   "MemTotal: 1024 kB\nMemAvailable: 512 kB\n",
 		"/proc/diskstats": "",
 		"/proc/net/dev":   "",
-		"/proc/11/stat":   "11 (moox-storage-no) S 1 11 11 0 -1 0 0 0 0 0 100 50 7000 6000 20 0 9 0 500 0 2000 0\n",
+		"/proc/11/stat":   "11 (moox-storage-pr) S 1 11 11 0 -1 0 0 0 0 0 100 50 7000 6000 20 0 9 0 500 0 2000 0\n",
 		"/proc/12/stat":   "12 (kswapd0) S 2 0 0 0 -1 0 0 0 0 0 0 10 0 0 20 0 1 0 5 0 0 0\n",
 	}
 	c := testLinuxCollector(files)
@@ -263,7 +263,7 @@ func TestCollectorReportsTopProcesses(t *testing.T) {
 	c.readLink = func(path string) (string, error) {
 		linksRead = append(linksRead, path)
 		if path == "/proc/11/exe" {
-			return "/data/moox/bin/moox-storage-node", nil
+			return "/data/moox/bin/moox-storage-primary", nil
 		}
 		return "", errors.New("permission denied") // 内核线程、别的用户的进程
 	}
@@ -272,13 +272,13 @@ func TestCollectorReportsTopProcesses(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, findStatus(t, statuses, "process").GetSuccess())
 	require.Len(t, first.GetTopProcesses(), 1) // 第一次只有内存排行，kswapd0 没有常驻内存
-	assert.Equal(t, "moox-storage-node", first.GetTopProcesses()[0].GetName())
+	assert.Equal(t, "moox-storage-primary", first.GetTopProcesses()[0].GetName())
 	assert.False(t, first.GetTopProcesses()[0].GetCpuAvailable())
 	assert.Equal(t, uint64(2000*os.Getpagesize()), first.GetTopProcesses()[0].GetRssBytes())
 
 	// 整机 CPU 时间增加 1000 个滴答；storage 增加 500、kswapd0 增加 100。
 	files["/proc/stat"] = "cpu 600 0 200 1200 0 0 0 0\ncpu0 1 0 1 8 0 0 0 0\ncpu1 1 0 1 8 0 0 0 0\ncpu2 1 0 1 8 0 0 0 0\ncpu3 1 0 1 8 0 0 0 0\ncpu4 1 0 1 8 0 0 0 0\ncpu5 1 0 1 8 0 0 0 0\ncpu6 1 0 1 8 0 0 0 0\n"
-	files["/proc/11/stat"] = "11 (moox-storage-no) S 1 11 11 0 -1 0 0 0 0 0 500 150 7000 6000 20 0 9 0 500 0 2000 0\n"
+	files["/proc/11/stat"] = "11 (moox-storage-pr) S 1 11 11 0 -1 0 0 0 0 0 500 150 7000 6000 20 0 9 0 500 0 2000 0\n"
 	files["/proc/12/stat"] = "12 (kswapd0) S 2 0 0 0 -1 0 0 0 0 0 0 110 0 0 20 0 1 0 5 0 0 0\n"
 	second, _, err := c.Collect(context.Background())
 	require.NoError(t, err)
@@ -286,7 +286,7 @@ func TestCollectorReportsTopProcesses(t *testing.T) {
 	// 核数取 /proc/stat 里 cpuN 的行数（这里是 7），不看本机实际有几个核。
 	const cores = 7.0
 	top := second.GetTopProcesses()
-	assert.Equal(t, "moox-storage-node", top[0].GetName())
+	assert.Equal(t, "moox-storage-primary", top[0].GetName())
 	assert.InDelta(t, 50*cores, top[0].GetCpuPercent(), 1e-9)
 	assert.True(t, top[0].GetCpuAvailable())
 	assert.Equal(t, "kswapd0", top[1].GetName())

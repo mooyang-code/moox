@@ -62,7 +62,6 @@ export interface ArchiveTask {
   freq?: string;
   /** day：按空间本地日；month：按月 */
   partition_unit?: "day" | "month" | string;
-  data_node_id?: string;
   retention?: string;
   /** 每收盘多少根拉取一次（1～1440）；1d 及以上每天一次 */
   pull_every_bars?: number;
@@ -203,7 +202,6 @@ export interface PrepareArchiveTaskRsp {
   partition_unit?: string;
   retention?: string;
   earliest_backfill_from?: string;
-  data_node_id?: string;
   recommended_pull_every_bars?: number;
   exists?: boolean;
   purpose?: string;

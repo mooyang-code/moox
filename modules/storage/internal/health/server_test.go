@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,122 +45,35 @@ func TestHandler_MetricsEndpoint_ShouldExposePrometheusMetrics(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "moox_storage_outbox_pending_entries 2")
 }
 
-func TestSnapshotForRole_ViewRequiresBoundConsumer(t *testing.T) {
-	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
-	require.NoError(t, err)
-	state := New("storage", "storage-view", "", "")
-	state.SetReady(true)
-	state.SnapshotFunc = SnapshotForRole("storage-view", metrics)
-
-	metrics.SetConsumerBound(false)
-	assert.False(t, state.Snapshot(context.Background()).Ready)
-	metrics.SetConsumerBound(true)
-	assert.True(t, state.Snapshot(context.Background()).Ready)
-}
-
-func TestSnapshotForRole_ViewBacklogDoesNotBlockReadiness(t *testing.T) {
+// View 恢复完活动索引并开始跟随变更日志才就绪，两者缺一不可。
+func TestSnapshotForRole_ViewReadyAfterRestoreAndFollowing(t *testing.T) {
 	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
 	require.NoError(t, err)
 	state := New("storage", InstanceStorageView, "", "")
 	state.SetReady(true)
-	state.SnapshotFunc = SnapshotForRoleWithOptions(InstanceStorageView, metrics, RoleOptions{OldestPendingThreshold: time.Minute})
-	metrics.SetConsumerBound(true)
+	state.SnapshotFunc = SnapshotForRole(InstanceStorageView, metrics)
 
-	delivery := &jetstream.Delivery{}
-	metrics.ObservePendingDelivery(delivery, time.Now().Add(-2*time.Minute))
-	rsp := state.Snapshot(context.Background())
-
-	assert.True(t, rsp.Ready)
-	assert.Equal(t, true, rsp.Details["consumer_draining"])
-	metrics.CompletePendingDelivery(delivery, time.Now())
+	assert.False(t, state.Snapshot(context.Background()).Ready)
+	metrics.ObserveRestore(true, time.Second)
+	assert.False(t, state.Snapshot(context.Background()).Ready, "恢复完但还没开始跟随")
+	metrics.SetFollowing(true)
 	assert.True(t, state.Snapshot(context.Background()).Ready)
-}
-
-func TestSnapshotForRole_NodeRejectsOldOutbox(t *testing.T) {
-	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
-	require.NoError(t, err)
-	state := New("storage", "storage-node", "", "")
-	state.SetReady(true)
-	state.SnapshotFunc = SnapshotForRole("storage-node", metrics)
-	metrics.SetOutboxPublisherReady(true)
-
-	metrics.SetOutboxSnapshotAt(1, time.Now().Add(-6*time.Minute))
-	rsp := state.Snapshot(context.Background())
-	assert.False(t, rsp.Ready)
-	assert.Equal(t, false, rsp.Details["outbox_draining"])
-	metrics.SetOutboxSnapshotAt(0, time.Time{})
-	assert.True(t, state.Snapshot(context.Background()).Ready)
-}
-
-func TestSnapshotForRole_NodeTreatsUnobservedOutboxAsInitializing(t *testing.T) {
-	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
-	require.NoError(t, err)
-	state := New("storage", InstanceStorageNode, "", "")
-	state.SetReady(true)
-	state.SnapshotFunc = SnapshotForRole(InstanceStorageNode, metrics)
-
-	rsp := state.Snapshot(context.Background())
-	assert.True(t, rsp.Ready)
-	assert.Equal(t, true, rsp.Details["outbox_draining"])
-	assert.Equal(t, true, rsp.Details["outbox_publisher_healthy"])
-}
-
-func TestSnapshotForRole_NodeRejectsUnobservedOutboxAfterInitializationDeadline(t *testing.T) {
-	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
-	require.NoError(t, err)
-	state := New("storage", InstanceStorageNode, "", "")
-	state.SetReady(true)
-	state.SnapshotFunc = SnapshotForRoleWithOptions(InstanceStorageNode, metrics, RoleOptions{
-		InitializationThreshold: time.Millisecond,
-	})
-	time.Sleep(2 * time.Millisecond)
-
-	rsp := state.Snapshot(context.Background())
-	assert.False(t, rsp.Ready)
-	assert.Equal(t, false, rsp.Details["outbox_initializing"])
-}
-
-func TestSnapshotForRoleWithOptionsUsesConfiguredThreshold(t *testing.T) {
-	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
-	require.NoError(t, err)
-	state := New("storage", InstanceStorageNode, "", "")
-	state.SetReady(true)
-	state.SnapshotFunc = SnapshotForRoleWithOptions(InstanceStorageNode, metrics, RoleOptions{OldestPendingThreshold: time.Second})
-	metrics.SetOutboxSnapshotAt(1, time.Now().Add(-2*time.Second))
+	metrics.SetFollowing(false)
 	assert.False(t, state.Snapshot(context.Background()).Ready)
 }
 
-func TestSnapshotForRole_NodeToleratesBriefPublisherDisconnect(t *testing.T) {
+// 主服务的 Outbox 积压与 EventBus 断连只上报、不影响就绪：EventBus 故障时 primary 照常服务。
+func TestSnapshotForRole_PrimaryStaysReadyWithOutboxBacklog(t *testing.T) {
 	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
 	require.NoError(t, err)
-	state := New("storage", InstanceStorageNode, "", "")
+	state := New("storage", "storage-primary", "", "")
 	state.SetReady(true)
-	state.SnapshotFunc = SnapshotForRoleWithOptions(InstanceStorageNode, metrics, RoleOptions{
-		OldestPendingThreshold:        time.Minute,
-		PublisherUnavailableThreshold: time.Minute,
-	})
-	metrics.SetOutboxSnapshotAt(0, time.Time{})
+	state.SnapshotFunc = SnapshotForRole("storage-primary", metrics)
 	metrics.SetOutboxPublisherReady(false)
+	metrics.SetOutboxSnapshotAt(1, time.Now().Add(-6*time.Minute))
 
 	rsp := state.Snapshot(context.Background())
 	assert.True(t, rsp.Ready)
 	assert.Equal(t, false, rsp.Details["outbox_publisher_ready"])
-	assert.Equal(t, true, rsp.Details["outbox_publisher_healthy"])
-}
-
-func TestSnapshotForRole_NodeRejectsLongPublisherDisconnect(t *testing.T) {
-	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
-	require.NoError(t, err)
-	state := New("storage", InstanceStorageNode, "", "")
-	state.SnapshotFunc = SnapshotForRoleWithOptions(InstanceStorageNode, metrics, RoleOptions{
-		OldestPendingThreshold:        time.Minute,
-		PublisherUnavailableThreshold: 10 * time.Millisecond,
-	})
-	metrics.SetOutboxSnapshotAt(0, time.Time{})
-	metrics.SetOutboxPublisherReady(false)
-	time.Sleep(15 * time.Millisecond)
-
-	rsp := state.Snapshot(context.Background())
-	assert.False(t, rsp.Ready)
-	assert.Equal(t, false, rsp.Details["outbox_publisher_healthy"])
+	assert.EqualValues(t, 1, rsp.Details["outbox_pending_entries"])
 }

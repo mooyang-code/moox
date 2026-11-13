@@ -82,7 +82,6 @@ type collectorStorageMetadataClient interface {
 	ListViews(context.Context, *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error)
-	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
 }
 
 type collectorStorageMetadataProxy struct {
@@ -158,20 +157,6 @@ func (c *collectorStorageMetadataProxy) DeleteView(ctx context.Context, req *sto
 	request.AuthInfo = c.auth
 	rsp := &storagepb.DeleteViewRsp{}
 	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteView", request, rsp)
-	return rsp, err
-}
-
-func (c *collectorStorageMetadataProxy) DeleteDatasetRows(ctx context.Context, req *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	if c == nil || c.gateway == nil {
-		return nil, fmt.Errorf("storage primary client is unavailable")
-	}
-	request := &storagepb.PrimaryDeleteDatasetRowsReq{}
-	if req != nil {
-		request = proto.Clone(req).(*storagepb.PrimaryDeleteDatasetRowsReq)
-	}
-	request.AuthInfo = c.auth
-	rsp := &storagepb.PrimaryDeleteDatasetRowsRsp{}
-	err := postStorageRaw(ctx, c.gateway, accessServiceName, "DeleteDatasetRows", request, rsp)
 	return rsp, err
 }
 
@@ -384,6 +369,8 @@ func inspectCollectorStorageInventory(ctx context.Context, metadata collectorSto
 		pageSize = uint32(500)
 		maxPages = 10000
 	)
+	// listedOwners 是元数据里现有的数据集及其所属任务（不归 Collector 任务管的为空串），用来核对任务记录里的结果数据集。
+	listedOwners := map[string]string{}
 	for page := uint32(1); page <= maxPages; page++ {
 		response, err := metadata.ListDatasets(ctx, &storagepb.ListDatasetsReq{
 			SpaceId: strings.TrimSpace(summary.SpaceID),
@@ -403,6 +390,7 @@ func inspectCollectorStorageInventory(ctx context.Context, metadata collectorSto
 				continue
 			}
 			taskID, ok := collectorStorageObjectTaskID(dataset.GetAttributes())
+			listedOwners[collectorTaskPurgeKey(dataset.GetSpaceId(), dataset.GetDatasetId())] = taskID
 			if !ok {
 				continue
 			}
@@ -419,6 +407,24 @@ func inspectCollectorStorageInventory(ctx context.Context, metadata collectorSto
 		}
 		if page == maxPages {
 			return fmt.Errorf("ListDatasets exceeded %d pages", maxPages)
+		}
+	}
+
+	// 待删任务记录里的结果数据集也要删：上一次清理可能已删掉元数据但删行失败，ListDatasets 里就没有它了，
+	// 而 Storage 对元数据已不在的数据集仍会删行。元数据还在、却不属于这个任务（同 ID 被别的对象占用）的不删。
+	for _, task := range summary.TaskIDs {
+		datasetID := strings.TrimSpace(task.ResultDatasetID)
+		if datasetID == "" || !collectorStorageObjectMatchesSpace(task.SpaceID, summary.SpaceID) {
+			continue
+		}
+		if owner, listed := listedOwners[collectorTaskPurgeKey(task.SpaceID, datasetID)]; listed && owner != task.TaskID {
+			continue
+		}
+		before := len(summary.storageDatasetRefs)
+		summary.storageDatasetRefs = appendUniqueStorageObject(summary.storageDatasetRefs, task.SpaceID, datasetID)
+		if len(summary.storageDatasetRefs) > before {
+			summary.StorageOwnedDatasetCount++
+			summary.StorageDatasetIDs = appendUniqueString(summary.StorageDatasetIDs, datasetID)
 		}
 	}
 
@@ -580,16 +586,17 @@ func applyCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags,
 	}
 	summary.CompletedStages = append(summary.CompletedStages, "collector_writes_stopped")
 
+	// 先删 Storage 再删本地任务记录：Storage 中途失败时任务记录还在，重跑能带上它们的结果数据集。
+	if metadata != nil {
+		if err := deleteCollectorOwnedMetadata(ctx, metadata, summary); err != nil {
+			return err
+		}
+	}
 	if err := deleteCollectorTaskData(ctx, summary.DBPath, summary.TaskIDs, flags.SpaceID); err != nil {
 		return fmt.Errorf("delete Collector task runtime data: %w", err)
 	}
 	if len(summary.TaskIDs) > 0 {
 		summary.CompletedStages = append(summary.CompletedStages, "collector_runtime_deleted")
-	}
-	if metadata != nil {
-		if err := deleteCollectorOwnedMetadata(ctx, metadata, summary); err != nil {
-			return err
-		}
 	}
 	if strings.TrimSpace(flags.SpaceID) != "" {
 		summary.CompletedStages = append(summary.CompletedStages, "collector_space_purged")
@@ -673,12 +680,6 @@ func deleteCollectorOwnedMetadata(ctx context.Context, metadata collectorStorage
 		summary.CompletedStages = append(summary.CompletedStages, "collector_owned_views_deleted")
 	}
 	for _, object := range summary.storageDatasetRefs {
-		physical, physicalErr := metadata.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{
-			SpaceId: object.SpaceID, DatasetId: object.ObjectID,
-		})
-		if physicalErr != nil || !collectorDeleteDatasetRowsAccepted(physical) {
-			return fmt.Errorf("delete Collector-owned Dataset rows %s/%s: %w", object.SpaceID, object.ObjectID, collectorDeleteRowsResponseError(physicalErr, physical))
-		}
 		response, err := metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{
 			SpaceId:   object.SpaceID,
 			DatasetId: object.ObjectID,
@@ -691,28 +692,6 @@ func deleteCollectorOwnedMetadata(ctx context.Context, metadata collectorStorage
 		summary.CompletedStages = append(summary.CompletedStages, "collector_owned_datasets_deleted")
 	}
 	return nil
-}
-
-func collectorDeleteDatasetRowsAccepted(response *storagepb.PrimaryDeleteDatasetRowsRsp) bool {
-	if response == nil || response.GetRetInfo() == nil {
-		return false
-	}
-	switch response.GetRetInfo().GetCode() {
-	case storagepb.ErrorCode_SUCCESS, storagepb.ErrorCode_DATASET_NOT_FOUND, storagepb.ErrorCode_NOT_FOUND:
-		return true
-	default:
-		return false
-	}
-}
-
-func collectorDeleteRowsResponseError(callErr error, response *storagepb.PrimaryDeleteDatasetRowsRsp) error {
-	if callErr != nil {
-		return callErr
-	}
-	if response == nil || response.GetRetInfo() == nil {
-		return fmt.Errorf("empty response")
-	}
-	return fmt.Errorf("%s", response.GetRetInfo().GetMsg())
 }
 
 func collectorDeleteViewAccepted(response *storagepb.DeleteViewRsp) bool {

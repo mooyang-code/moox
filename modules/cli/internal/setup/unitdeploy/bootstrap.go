@@ -59,7 +59,6 @@ type runtimeIdentity struct {
 	HealthAccessKey      string `json:"health_access_key"`
 	HealthSecret         string `json:"health_secret"`
 	JWTSecret            string `json:"jwt_secret"`
-	StorageNodeSecret    string `json:"storage_node_secret,omitempty"`
 	StoragePrimarySecret string `json:"storage_primary_secret,omitempty"`
 	StorageViewSecret    string `json:"storage_view_secret,omitempty"`
 }
@@ -89,7 +88,7 @@ func loadIdentity(root *os.Root, host setupconfig.Host, deployment string) (runt
 	identity := runtimeIdentity{Version: 1, HostID: host.Name, Address: host.Address, DeploymentRoot: deployment}
 	if _, err := root.Lstat("runtime-identity.json"); os.IsNotExist(err) {
 		identity.HealthAccessKey, identity.HealthSecret, identity.JWTSecret = "monitor-"+rand.Text(), rand.Text()+rand.Text(), rand.Text()+rand.Text()
-		identity.StorageNodeSecret, identity.StoragePrimarySecret, identity.StorageViewSecret = rand.Text()+rand.Text(), rand.Text()+rand.Text(), rand.Text()+rand.Text()
+		identity.StoragePrimarySecret, identity.StorageViewSecret = rand.Text()+rand.Text(), rand.Text()+rand.Text()
 		raw, err := json.Marshal(identity)
 		if err != nil {
 			return identity, err
@@ -110,7 +109,7 @@ func loadIdentity(root *os.Root, host setupconfig.Host, deployment string) (runt
 	if decoder.Decode(&stored) != nil || decoder.Decode(new(any)) != io.EOF || stored.Version != 1 || stored.HostID != host.Name || stored.Address != host.Address || stored.DeploymentRoot != deployment || len(stored.HealthAccessKey) < 16 || len(stored.HealthSecret) < 32 || len(stored.JWTSecret) < 32 {
 		return identity, errors.New("private runtime identity does not match this deployment")
 	}
-	if (stored.StorageNodeSecret != "" || stored.StoragePrimarySecret != "" || stored.StorageViewSecret != "") && (len(stored.StorageNodeSecret) < 32 || len(stored.StoragePrimarySecret) < 32 || len(stored.StorageViewSecret) < 32) {
+	if (stored.StoragePrimarySecret != "" || stored.StorageViewSecret != "") && (len(stored.StoragePrimarySecret) < 32 || len(stored.StorageViewSecret) < 32) {
 		return identity, errors.New("private Storage identity is incomplete")
 	}
 	return stored, nil

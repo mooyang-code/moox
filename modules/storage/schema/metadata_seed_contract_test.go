@@ -29,15 +29,6 @@ type metadataSeedGrainContract struct {
 		PrimaryDatasetID string   `yaml:"dataset_id"`
 		GrainKeys        []string `yaml:"grain_keys"`
 	} `yaml:"views"`
-	ViewColumns []struct {
-		SpaceID    string `yaml:"space_id"`
-		ViewID     string `yaml:"view_id"`
-		ColumnName string `yaml:"column_name"`
-	} `yaml:"view_columns"`
-	Devices []struct {
-		DeviceID string `yaml:"device_id"`
-		Engine   string `yaml:"engine"`
-	} `yaml:"devices"`
 }
 
 func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
@@ -81,21 +72,6 @@ func TestDefaultSetupSeedTimeSeriesDatasetsDeclareCanonicalFreq(t *testing.T) {
 	}
 }
 
-func TestDefaultSetupSeedDeclaresArchiveDevice(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml")
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err)
-	var seed metadataSeedGrainContract
-	require.NoError(t, yaml.Unmarshal(raw, &seed))
-	for _, device := range seed.Devices {
-		if device.DeviceID == "parquet-local" {
-			require.Equal(t, "parquet", device.Engine)
-			return
-		}
-	}
-	t.Fatal("default setup metadata does not declare parquet-local")
-}
-
 func TestDefaultSetupSeedHasNoCollectorDatasetsAndKeepsTheOthers(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml")
 	raw, err := os.ReadFile(path)
@@ -115,10 +91,6 @@ func TestDefaultSetupSeedHasNoCollectorDatasetsAndKeepsTheOthers(t *testing.T) {
 	preserved := map[string]struct{ kind, role string }{
 		"stockcn/dataset_stockcn_financial_statement_metric": {"record", ""},
 		"stockcn/dataset_stockcn_financial_summary":          {"record", ""},
-		"mooxsys/dataset_mooxsys_host_resource":              {"time_series", ""},
-		"mooxsys/dataset_mooxsys_host_filesystem":            {"time_series", ""},
-		"mooxsys/dataset_mooxsys_host_disk":                  {"time_series", ""},
-		"mooxsys/dataset_mooxsys_host_network":               {"time_series", ""},
 	}
 	for key, want := range preserved {
 		t.Run(key, func(t *testing.T) {

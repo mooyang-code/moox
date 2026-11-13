@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"sort"
 	"strings"
@@ -16,61 +17,67 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// commitMarkerPrefix 下按数据集存放 commit 标记：键为 __commit/<space>/<dataset>/<sha256(commit_id)>，值为内容摘要。
-// 标记永久有效，只随删除数据集清理：若按时间过期，同一 commit_id 的旧内容重放会覆盖期间补算写入的新结果。
-const commitMarkerPrefix = "__commit/"
+// commit 标记按写入日分桶：键为 __commit/{写入日 YYYYMMDD（UTC）}/{hex 空间}/{hex 数据集}/{hex sha256(commit_id)}，值为内容摘要。
+// 标记固定保留 7 天，与数据集保留期无关：按保留期清理的话，同一 commit_id 的旧内容重放会盖掉期间补算写入的新结果；
+// 最长的重投来源是 MOOX_STORAGE 的 72 小时，7 天足够。查重时读今天和前 7 天共 8 个日桶，超过 7 天的同一 commit_id 当作新提交。
+const (
+	commitMarkerPrefix  = "__commit/"
+	commitRetentionDays = 7
+)
 
 // writeLogThreshold 是写入分段耗时日志的阈值。
 const writeLogThreshold = 50 * time.Millisecond
 
-// UpsertFields 写入一个数据集的行：字段、属性、行索引、一条行变更事件与变更日志在同一个 Pebble 批次里提交。
+// UpsertFields 写入一个数据集的行：字段、属性、行索引与变更日志在同一个 Pebble 批次里提交，返回是否写入了。
 //
-// commitID 可选。非空时同一数据集内同一 commitID 只生效一次：内容相同返回成功（不再写入，返回的条目为空），
+// commitID 可选。非空时同一数据集内同一 commitID 只生效一次：内容相同返回成功（不再写入，written 为假），
 // 内容不同返回 CommitConflictError。
-func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) ([]*OutboxEntry, error) {
+func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (written bool, err error) {
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
-		return nil, invalid("space_id and dataset_id are required")
+		return false, invalid("space_id and dataset_id are required")
 	}
 	if commitID != "" {
 		if err := validateCommitID(commitID); err != nil {
-			return nil, err
+			return false, err
 		}
 	}
-	// 分段计时：规整、准备（字段、行索引、事件与变更范围）、等写锁、提交；达到阈值时记一行。
+	// 分段计时：规整、准备（字段、行索引与变更范围）、等写锁、提交；达到阈值时记一行。
 	started := time.Now()
 	var normalizedAt, preparedAt, lockedAt, committedAt time.Time
 	defer func() {
 		if committedAt.IsZero() || time.Since(started) < writeLogThreshold {
 			return
 		}
-		log.Infof("storage node 写入 dataset=%s 行=%d commit=%t 规整=%s 准备=%s 等锁=%s 提交=%s 合计=%s",
+		log.Infof("storage 写入 dataset=%s 行=%d commit=%t 规整=%s 准备=%s 等锁=%s 提交=%s 合计=%s",
 			datasetID, len(rows), commitID != "", normalizedAt.Sub(started).Round(time.Millisecond), preparedAt.Sub(normalizedAt).Round(time.Millisecond),
 			lockedAt.Sub(preparedAt).Round(time.Millisecond), committedAt.Sub(lockedAt).Round(time.Millisecond), time.Since(started).Round(time.Millisecond))
 	}()
 	normalized, err := s.normalizeWriteRows(ctx, rows)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	for _, row := range normalized {
 		if row.GetKey().GetSpaceId() != spaceID || row.GetKey().GetDatasetId() != datasetID {
-			return nil, invalid("row dataset identity does not match request")
+			return false, invalid("row dataset identity does not match request")
 		}
 	}
 	var digest []byte
 	if commitID != "" {
 		if digest, err = commitDigest(spaceID, datasetID, normalized); err != nil {
-			return nil, err
+			return false, err
 		}
 	}
 	normalizedAt = time.Now()
 
 	s.datasetWriteMu.RLock()
 	defer s.datasetWriteMu.RUnlock()
-	// 编码 KV、构造并校验事件、整理变更范围与锁无关，放在 outboxMu 之外：并发写入、完成标记与 outbox 转发
-	// 不必排在这一步后面。锁内只查 commit 标记并提交；重复提交白做一次准备，丢弃即可。
+	if err := s.requireDataset(spaceID, datasetID); err != nil {
+		return false, err
+	}
+	// 编码 KV、整理变更范围与锁无关，放在 outboxMu 之外：并发写入与完成标记不必排在这一步后面。锁内只查 commit 标记并提交；重复提交白做一次准备，丢弃即可。
 	write, err := s.prepareRowsWrite(ctx, spaceID, datasetID, normalized)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	defer write.batch.Close()
 	preparedAt = time.Now()
@@ -79,30 +86,30 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID s
 	lockedAt = time.Now()
 	var markerKey []byte
 	if commitID != "" {
-		markerKey = commitMarkerKey(spaceID, datasetID, commitID)
-		existing, found, err := s.readCommitMarker(markerKey)
+		now := s.periodNow().UTC()
+		markerKey = commitMarkerKey(commitDay(now), spaceID, datasetID, commitID)
+		existing, found, err := s.findCommitMarker(spaceID, datasetID, commitID, now)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
 		if found {
 			if !bytes.Equal(existing, digest) {
-				return nil, CommitConflictError{CommitID: commitID}
+				return false, CommitConflictError{CommitID: commitID}
 			}
 			committedAt = time.Now()
-			return nil, nil
+			return false, nil
 		}
 	}
-	entries, err := s.commitRowsWriteLocked(ctx, write, func(batch *cpebble.Batch) error {
+	if err := s.commitRowsWriteLocked(ctx, write, func(batch *cpebble.Batch) error {
 		if markerKey == nil {
 			return nil
 		}
 		return batch.Set(markerKey, digest, s.writeOptions)
-	})
-	if err != nil {
-		return nil, err
+	}); err != nil {
+		return false, err
 	}
 	committedAt = time.Now()
-	return entries, nil
+	return true, nil
 }
 
 func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpsert) ([]*pb.RowFieldUpsert, error) {
@@ -131,20 +138,19 @@ func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpser
 	return normalizedRows, nil
 }
 
-// preparedRowsWrite 是一次写入在锁外准备好的部分：已写入字段、属性与行索引 KV 的 batch，构造并校验过、
-// 还没绑定 outbox 编号的事件，以及变更日志的时间范围。
+// preparedRowsWrite 是一次写入在锁外准备好的部分：已写入字段、属性与行索引 KV 的 batch，以及变更日志的时间范围与记录键。
 type preparedRowsWrite struct {
 	batch     *cpebble.Batch
 	spaceID   string
 	datasetID string
-	payload   []byte
 	ranges    []*pb.DatasetChangeRange
+	records   []*pb.RecordRowKey
 }
 
-// prepareRowsWrite 只读 Store 的静态配置，不读写 outbox、变更序号与 commit 标记，可以在 outboxMu 之外并发执行。
+// prepareRowsWrite 只读 Store 的静态配置，不读写变更序号与 commit 标记，可以在 outboxMu 之外并发执行。
 func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) (*preparedRowsWrite, error) {
-	// One batch preserves all field changes from a request. The dataset event
-	// payload, change log and commit marker are staged into the same batch.
+	// One batch preserves all field changes from a request. The change log and
+	// commit marker are staged into the same batch.
 	batch := s.db.NewBatch()
 	fail := func(err error) (*preparedRowsWrite, error) {
 		_ = batch.Close()
@@ -201,59 +207,30 @@ func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string,
 			}
 		}
 	}
-	payload, err := BuildDatasetRowsUpsertedMessage(spaceID, datasetID, rows)
-	if err != nil {
-		return fail(err)
-	}
-	return &preparedRowsWrite{batch: batch, spaceID: spaceID, datasetID: datasetID, payload: payload, ranges: changeRanges(rows)}, nil
+	return &preparedRowsWrite{batch: batch, spaceID: spaceID, datasetID: datasetID, ranges: changeRanges(rows), records: changeRecords(rows)}, nil
 }
 
-// commitRowsWriteLocked 在 outboxMu 内完成写入：检查数据集未删除、分配 outbox 编号并绑定到事件、追加变更日志，
-// 由 decorate 补充同一批次里的其他键（commit 标记、周期位图），然后提交。调用方必须持有 outboxMu。
-func (s *Store) commitRowsWriteLocked(ctx context.Context, prepared *preparedRowsWrite, decorate func(*cpebble.Batch) error) ([]*OutboxEntry, error) {
-	// 等锁期间请求可能已超时或取消：此时不再提交，避免客户端重试后写出重复事件。
+// commitRowsWriteLocked 在 outboxMu 内完成写入：追加变更日志，由 decorate 补充同一批次里的其他键
+// （commit 标记、周期账本），然后提交。调用方必须持有 outboxMu（它同时保护变更日志的序号）。
+func (s *Store) commitRowsWriteLocked(ctx context.Context, prepared *preparedRowsWrite, decorate func(*cpebble.Batch) error) error {
+	// 等锁期间请求可能已超时或取消：此时不再提交，客户端重试时不会重复写入。
 	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	deleted, err := s.isDatasetDeleted(prepared.spaceID, prepared.datasetID)
-	if err != nil {
-		return nil, err
-	}
-	if deleted {
-		return nil, ErrDatasetDeleted
+		return err
 	}
 	batch := prepared.batch
-	id, err := s.nextOutboxID()
-	if err != nil {
-		return nil, err
-	}
-	payload, err := BindOutboxID(prepared.payload, s.nodeID, s.sourceStoreID, id)
-	if err != nil {
-		return nil, err
-	}
-	if s.maxEventBytes > 0 && len(payload) > s.maxEventBytes {
-		return nil, invalidf("event payload size %d exceeds limit %d", len(payload), s.maxEventBytes)
-	}
-	if err := batch.Set([]byte(outboxKey(id)), payload, s.writeOptions); err != nil {
-		return nil, err
-	}
-	if err := s.setNextOutboxID(batch, id+1); err != nil {
-		return nil, err
-	}
-	if err := s.stageChangeLog(batch, prepared.spaceID, prepared.datasetID, prepared.ranges, time.Now()); err != nil {
-		return nil, err
+	if err := s.stageRowsChangeLocked(batch, prepared.spaceID, prepared.datasetID, prepared.ranges, prepared.records); err != nil {
+		return err
 	}
 	if decorate != nil {
 		if err := decorate(batch); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {
-		return nil, err
+		return err
 	}
-	entry := &OutboxEntry{ID: id, Data: payload, CreatedAt: time.Now().UTC()}
-	s.noteOutboxCommitted(1, entry.CreatedAt)
-	return []*OutboxEntry{entry}, nil
+	s.noteChangeCommitted()
+	return nil
 }
 
 // commitDigest 是一次提交内容的摘要：行键不得重复，行与字段按规范顺序排列，与请求里的顺序无关。
@@ -297,15 +274,66 @@ func validateCommitID(commitID string) error {
 	return nil
 }
 
-func datasetCommitPrefix(spaceID, datasetID string) []byte {
-	key := []byte(commitMarkerPrefix)
-	key = appendRawPart(key, []byte(spaceID))
-	return appendRawPart(key, []byte(datasetID))
+func commitDay(at time.Time) string { return at.UTC().Format("20060102") }
+
+func commitMarkerKey(day, spaceID, datasetID, commitID string) []byte {
+	sum := sha256.Sum256([]byte(commitID))
+	return []byte(commitMarkerPrefix + day + "/" + datasetScope(spaceID, datasetID) + hex.EncodeToString(sum[:]))
 }
 
-func commitMarkerKey(spaceID, datasetID, commitID string) []byte {
-	sum := sha256.Sum256([]byte(commitID))
-	return appendRawPart(datasetCommitPrefix(spaceID, datasetID), sum[:])
+// findCommitMarker 在今天和前 7 天共 8 个日桶里查同一 commit_id。
+func (s *Store) findCommitMarker(spaceID, datasetID, commitID string, now time.Time) ([]byte, bool, error) {
+	for days := 0; days <= commitRetentionDays; days++ {
+		digest, found, err := s.readCommitMarker(commitMarkerKey(commitDay(now.AddDate(0, 0, -days)), spaceID, datasetID, commitID))
+		if err != nil || found {
+			return digest, found, err
+		}
+	}
+	return nil, false, nil
+}
+
+// CleanupExpiredCommits 删掉写入日早于“今天减 7 天”的 commit 标记日桶，与数据集保留期无关。
+func (s *Store) CleanupExpiredCommits(ctx context.Context, now time.Time) error {
+	if s == nil || s.db == nil {
+		return errors.New("pebble store is closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	lower := []byte(commitMarkerPrefix)
+	upper := []byte(commitMarkerPrefix + commitDay(now.AddDate(0, 0, -commitRetentionDays)))
+	if err := s.db.DeleteRange(lower, upper, s.writeOptions); err != nil {
+		return err
+	}
+	s.compactAsync(lower, upper)
+	return nil
+}
+
+// stageDeleteDatasetCommits 在 batch 里删掉一个数据集在各日桶下的 commit 标记。
+func (s *Store) stageDeleteDatasetCommits(batch *cpebble.Batch, spaceID, datasetID string) ([][2][]byte, error) {
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(commitMarkerPrefix), UpperBound: nextPrefix([]byte(commitMarkerPrefix))})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	var ranges [][2][]byte
+	for valid := iter.First(); valid; {
+		rest := iter.Key()[len(commitMarkerPrefix):]
+		slash := bytes.IndexByte(rest, '/')
+		if slash < 0 {
+			valid = iter.Next()
+			continue
+		}
+		dayPrefix := commitMarkerPrefix + string(rest[:slash+1])
+		lower := []byte(dayPrefix + datasetScope(spaceID, datasetID))
+		upper := nextPrefix(lower)
+		if err := batch.DeleteRange(lower, upper, s.writeOptions); err != nil {
+			return nil, err
+		}
+		ranges = append(ranges, [2][]byte{lower, upper})
+		valid = iter.SeekGE(nextPrefix([]byte(dayPrefix)))
+	}
+	return ranges, iter.Error()
 }
 
 func (s *Store) readCommitMarker(key []byte) ([]byte, bool, error) {

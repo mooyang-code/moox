@@ -5,6 +5,7 @@ import (
 	"time"
 
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
@@ -15,7 +16,7 @@ const ArchiveObjectStoreCheckName = "归档对象存储"
 // 不可用未满 5 分钟只写在原因里。没有新鲜序列（未配置对象存储、worker 心跳不新鲜或 archive-mgr 停报）时不生成，
 // 已有的检查随之按“不再需要”恢复；worker 与 archive-mgr 自身的故障由在线状态与服务检查告警。
 func (b Builder) buildArchiveObjectStore(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return nil, nil
 	}
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
@@ -51,7 +52,7 @@ func (b Builder) buildArchiveObjectStore(ctx context.Context, spaceID string, no
 		reason = worker + " 的对象存储暂时不可用（未满 5 分钟）：" + probeError
 	}
 	return []BusinessStatus{{
-		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "archive_object_store", Module: "archive-worker",
+		SpaceID: events.SystemSpaceID, Kind: "archive_object_store", Module: "archive-worker",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }

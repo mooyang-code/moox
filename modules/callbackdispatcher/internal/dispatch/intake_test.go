@@ -80,7 +80,7 @@ func delistDeliveryFull(t *testing.T, exchange, market, symbol string, delistAt 
 		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(baseTime), Scope: scope,
 	}
 	raw, err := registry.MarshalMessage(events.InstrumentDelistScheduled, payload, events.PublishOptions{
-		EventID: eventID, OccurredAt: occurredAt, SpaceID: events.DelistSystemSpaceID, SubjectID: events.InstrumentDelistSubjectID(exchange, market, symbol),
+		EventID: eventID, OccurredAt: occurredAt, SpaceID: events.SystemSpaceID, SubjectID: events.InstrumentDelistSubjectID(exchange, market, symbol),
 	})
 	require.NoError(t, err)
 	message, err := registry.UnmarshalMessage(raw)
@@ -159,7 +159,7 @@ func TestIntakeCreatesOneExecutionPerMatchingRuleAndIsIdempotent(t *testing.T) {
 	require.Equal(t, store.StatusPending, execution.Status)
 	require.Equal(t, baseTime.UnixMilli(), execution.NextRunAt)
 	require.Equal(t, "binance:SPOT:FOOUSDT", execution.SubjectID)
-	require.Equal(t, events.DelistSystemSpaceID, execution.SpaceID)
+	require.Equal(t, events.SystemSpaceID, execution.SpaceID)
 	require.Equal(t, delistEvent, execution.EventName)
 	require.Contains(t, execution.PayloadJSON, `"exchange_symbol":"FOOUSDT"`, "payload 转成蛇形命名的紧凑 JSON")
 	require.Contains(t, execution.PayloadJSON, `"delist_at":"2026-11-11T08:00:00Z"`)

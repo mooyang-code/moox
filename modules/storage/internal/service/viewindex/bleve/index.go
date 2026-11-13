@@ -39,12 +39,20 @@ type handle struct {
 }
 
 type indexMeta struct {
-	SpaceID          string                       `json:"space_id"`
-	ViewVersion      uint64                       `json:"view_version"`
-	SchemaHash       string                       `json:"schema_hash"`
-	PrimaryDatasetID string                       `json:"primary_dataset_id"`
-	UpdatedAt        string                       `json:"updated_at"`
-	Columns          map[string]pb.FieldValueType `json:"columns"`
+	SpaceID          string `json:"space_id"`
+	ViewVersion      uint64 `json:"view_version"`
+	SchemaHash       string `json:"schema_hash"`
+	PrimaryDatasetID string `json:"primary_dataset_id"`
+	// ViewCreatedAt 是建索引时 View 的创建时间，见 viewindex.ViewIndexSchema.ViewCreatedAt。
+	ViewCreatedAt string                       `json:"view_created_at"`
+	UpdatedAt     string                       `json:"updated_at"`
+	Columns       map[string]pb.FieldValueType `json:"columns"`
+	// BuiltColumns 是已建列的完整契约（含排序），重启后由它还原写入契约。
+	BuiltColumns []viewindex.BuiltColumn `json:"built_columns"`
+	// ChangeStoreID、ChangeSequence、BuiltSequence 是跟随变更日志的进度，见 viewindex.FollowState。
+	ChangeStoreID  string `json:"change_store_id,omitempty"`
+	ChangeSequence uint64 `json:"change_seq,omitempty"`
+	BuiltSequence  uint64 `json:"built_change_seq,omitempty"`
 }
 
 func Open(opts Options) (*Index, error) {
@@ -71,7 +79,7 @@ func (i *Index) Prepare(_ context.Context, id string, schema viewindex.ViewIndex
 	if err := os.RemoveAll(path); err != nil {
 		return err
 	}
-	meta := indexMeta{SpaceID: schema.SpaceID, ViewVersion: schema.ViewVersion, SchemaHash: schema.SchemaHash, PrimaryDatasetID: schema.PrimaryDatasetID, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Columns: schemaColumns(schema.Columns)}
+	meta := indexMeta{SpaceID: schema.SpaceID, ViewVersion: schema.ViewVersion, SchemaHash: schema.SchemaHash, PrimaryDatasetID: schema.PrimaryDatasetID, ViewCreatedAt: schema.ViewCreatedAt, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Columns: schemaColumns(schema.Columns), BuiltColumns: viewindex.EncodeBuiltColumns(schema.Columns)}
 	index, err := blevelib.New(path, buildMapping(meta.Columns))
 	if err != nil {
 		return err
@@ -102,14 +110,15 @@ func (i *Index) ExtendColumns(_ context.Context, id string, current, next viewin
 	if h.meta.ViewVersion == next.ViewVersion && h.meta.SchemaHash == next.SchemaHash {
 		return nil
 	}
-	if h.meta.ViewVersion < current.ViewVersion || h.meta.ViewVersion > next.ViewVersion || h.meta.PrimaryDatasetID != current.PrimaryDatasetID {
-		return fmt.Errorf("%w：Bleve 物理状态在修订号 %d 上不是追加前缀", viewindex.ErrSchemaExtensionConflict, h.meta.ViewVersion)
+	if h.meta.ViewVersion != current.ViewVersion || h.meta.SchemaHash != current.SchemaHash || h.meta.PrimaryDatasetID != current.PrimaryDatasetID {
+		return fmt.Errorf("%w：Bleve 物理状态（修订号 %d）不是这次加列的起点", viewindex.ErrSchemaExtensionConflict, h.meta.ViewVersion)
 	}
 	meta := h.meta
 	meta.ViewVersion = next.ViewVersion
 	meta.SchemaHash = next.SchemaHash
 	meta.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	meta.Columns = schemaColumns(next.Columns)
+	meta.BuiltColumns = viewindex.EncodeBuiltColumns(next.Columns)
 	if err := i.writeMeta(id, meta); err != nil {
 		return err
 	}
@@ -166,7 +175,43 @@ func (i *Index) Write(ctx context.Context, id string, batch viewindex.ViewIndexW
 		return err
 	}
 	h.meta.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if batch.Cursor != nil {
+		// 跟随位置写在索引旁的元数据里，与这批行一起落盘。
+		h.meta.advanceCursor(*batch.Cursor)
+	}
 	return i.writeMeta(id, h.meta)
+}
+
+// advanceCursor 记下跟随位置：同一个存储下只前进不后退，存储换了直接覆盖。
+func (m *indexMeta) advanceCursor(cursor viewindex.ChangeCursor) {
+	if m.ChangeStoreID == cursor.StoreID && m.ChangeSequence > cursor.Sequence {
+		return
+	}
+	m.ChangeStoreID, m.ChangeSequence = cursor.StoreID, cursor.Sequence
+}
+
+func (m indexMeta) followState() viewindex.FollowState {
+	return viewindex.FollowState{Cursor: viewindex.ChangeCursor{StoreID: m.ChangeStoreID, Sequence: m.ChangeSequence}, BuiltSequence: m.BuiltSequence}
+}
+
+// SaveFollowState 实现 viewindex.FollowStateWriter。
+func (i *Index) SaveFollowState(_ context.Context, id string, state viewindex.FollowState) error {
+	h, err := i.get(id)
+	if err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	meta := h.meta
+	meta.advanceCursor(state.Cursor)
+	if state.BuiltSequence > 0 {
+		meta.BuiltSequence = state.BuiltSequence
+	}
+	if err := i.writeMeta(id, meta); err != nil {
+		return err
+	}
+	h.meta = meta
+	return nil
 }
 
 func (i *Index) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
@@ -239,6 +284,9 @@ func (i *Index) Stat(ctx context.Context, id string) (viewindex.ViewIndexStats, 
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return viewindex.ViewIndexStats{}, nil
 	}
+	if halfPrepared(path) {
+		return viewindex.ViewIndexStats{Exists: true}, nil
+	}
 	h, err := i.get(id)
 	if err != nil {
 		return viewindex.ViewIndexStats{}, err
@@ -249,7 +297,8 @@ func (i *Index) Stat(ctx context.Context, id string) (viewindex.ViewIndexStats, 
 	if err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
-	stats := viewindex.ViewIndexStats{Exists: true, ViewVersion: h.meta.ViewVersion, SchemaHash: h.meta.SchemaHash, UpdatedAt: h.meta.UpdatedAt, EntryCount: int64(count)}
+	stats := h.meta.stats()
+	stats.EntryCount = int64(count)
 	return stats, nil
 }
 
@@ -265,13 +314,28 @@ func (i *Index) StatMetadata(ctx context.Context, id string) (viewindex.ViewInde
 	} else if err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
+	if halfPrepared(path) {
+		return viewindex.ViewIndexStats{Exists: true}, nil
+	}
 	h, err := i.get(id)
 	if err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return viewindex.ViewIndexStats{Exists: true, ViewVersion: h.meta.ViewVersion, SchemaHash: h.meta.SchemaHash, UpdatedAt: h.meta.UpdatedAt}, nil
+	return h.meta.stats(), nil
+}
+
+// halfPrepared 报告索引目录在、meta.json 却不在：Prepare 先建目录后写 meta.json，进程在两步之间退出就会这样。
+// 这样的索引按半成品处理（存在、没有数据集与跟随进度），由维护流程删掉重建。
+func halfPrepared(path string) bool {
+	_, err := os.Stat(filepath.Join(path, "meta.json"))
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// stats 返回索引自身记录的契约与进度（不含行数）。
+func (m indexMeta) stats() viewindex.ViewIndexStats {
+	return viewindex.ViewIndexStats{Exists: true, DatasetID: m.PrimaryDatasetID, ViewCreatedAt: m.ViewCreatedAt, Columns: viewindex.DecodeBuiltColumns(m.BuiltColumns), ViewVersion: m.ViewVersion, SchemaHash: m.SchemaHash, UpdatedAt: m.UpdatedAt, Follow: m.followState()}
 }
 
 func (i *Index) Exists(_ context.Context, id string) (bool, error) {
