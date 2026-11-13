@@ -80,20 +80,19 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	view, err := viewservice.New(filepath.Join(t.TempDir(), "view"), secret)
+	viewRoot := filepath.Join(t.TempDir(), "view")
+	columns := []*pb.ViewColumn{
+		{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "volume", OriginId: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+	}
+	prebuildViewIndex(t, ctx, viewRoot, viewindex.ViewIndexSchema{SpaceID: "quant", ViewID: "prices-view", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "schema-1", Columns: columns}, nil)
+	view, err := viewservice.New(viewRoot, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
 	viewAuth := &pb.AuthInfo{AppId: "storage-primary", AppKey: serviceauth.Key(secret, "storage-primary")}
 	view.SetPrimaryAuth(auth)
 	view.SetPrimaryReader(primaryFieldReader{service: primary})
-	columns := []*pb.ViewColumn{
-		{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-		{ColumnName: "volume", OriginId: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-	}
-	if rsp, err := view.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: viewAuth, IndexId: viewindex.ViewIndexID("quant", "prices-view"), Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("view prepare: rsp=%v err=%v", rsp, err)
-	}
 	if err := view.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", Freq: "1m", Status: "active"},
 		viewindex.ViewIndexStats{Exists: true, DatasetID: "prices", ViewVersion: 1, SchemaHash: "schema-1", Columns: columns}); err != nil {
 		t.Fatal(err)

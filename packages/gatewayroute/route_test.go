@@ -113,23 +113,17 @@ func TestNormalizeAndHashAppliesDefaultsSortsAndIsStable(t *testing.T) {
 	}
 }
 
-func TestValidateStorageRouteRequiresAllowlistAndRejectsInternalMethods(t *testing.T) {
+func TestValidateStorageRouteRequiresAllowlist(t *testing.T) {
 	base := Route{ServiceID: "storage", Address: "127.0.0.1:8002", ServicePath: "trpc.moox.storage.DataView"}
 	if err := ValidateRoute(base); err == nil {
 		t.Fatal("ValidateRoute accepted an unrestricted storage route")
 	}
 
-	for _, method := range []string{
-		"PrepareViewIndex",
-		"ApplyViewIndex",
-		"QueryTimeSeriesIndex",
-	} {
-		route := base
-		route.AllowedMethods = []string{method}
-		route.AllowedCallers = []string{"storage-view"}
-		if err := ValidateRoute(route); err == nil {
-			t.Fatalf("ValidateRoute accepted internal storage method %q", method)
-		}
+	wildcard := base
+	wildcard.AllowedMethods = []string{"*"}
+	wildcard.AllowedCallers = []string{"admin-gateway"}
+	if err := ValidateRoute(wildcard); err == nil {
+		t.Fatal("ValidateRoute accepted a wildcard storage method list")
 	}
 
 	public := base

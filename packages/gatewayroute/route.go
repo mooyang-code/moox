@@ -29,17 +29,6 @@ var (
 	servicePathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
 )
 
-// storageInternalMethods 是 Storage 进程内部使用的方法，任何路由都不能放行。
-var storageInternalMethods = map[string]struct{}{
-	"PrepareViewIndex":     {},
-	"ApplyViewIndex":       {},
-	"StatViewIndex":        {},
-	"RemoveViewIndex":      {},
-	"ListViewIndexes":      {},
-	"QueryTimeSeriesIndex": {},
-	"SearchRecordIndex":    {},
-}
-
 type Route struct {
 	ServiceID      string   `json:"service_id,omitempty"`
 	Address        string   `json:"address,omitempty"`
@@ -103,9 +92,6 @@ func ValidateRoute(route Route) error {
 	for _, method := range route.AllowedMethods {
 		if isStorage && method == "*" {
 			return fmt.Errorf("storage routes cannot use wildcard allowed_methods")
-		}
-		if _, internal := storageInternalMethods[method]; internal {
-			return fmt.Errorf("storage method %q is internal and cannot be routed", method)
 		}
 	}
 	for _, caller := range route.AllowedCallers {

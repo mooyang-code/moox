@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -408,38 +407,5 @@ func TestCleanupRetiredIndexesRediscoveryAfterRestart(t *testing.T) {
 	sort.Strings(engine.removeCalls)
 	if !reflect.DeepEqual(engine.removeCalls, []string{id}) {
 		t.Fatalf("remove calls = %v, want [%s]", engine.removeCalls, id)
-	}
-}
-
-// 删除挂在 View 上的当前索引：整个过程持有运行时锁，结束时清掉 active 并释放锁（不能在已持有时再次加锁）。
-func TestRemoveViewIndexClearsActiveOfAttachedView(t *testing.T) {
-	id := cleanupIndexID("prices")
-	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
-	svc := newCleanupService(t, engine)
-	key := viewRef{spaceID: "space", viewID: "prices"}
-	runtime := &viewRuntime{active: id}
-	svc.views[key] = runtime
-	svc.indexEngine[id] = "fake"
-	svc.indexView[id] = key
-	auth := &pb.AuthInfo{AppId: "test", AppKey: serviceauth.Key("view-secret", "test")}
-	done := make(chan *pb.RemoveViewIndexRsp, 1)
-	go func() {
-		rsp, _ := svc.RemoveViewIndex(context.Background(), &pb.RemoveViewIndexReq{AuthInfo: auth, IndexId: id})
-		done <- rsp
-	}()
-	select {
-	case rsp := <-done:
-		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			t.Fatalf("remove attached index: %v", rsp.GetRetInfo())
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("RemoveViewIndex 在成功路径上卡死")
-	}
-	if !runtime.mu.TryLock() {
-		t.Fatal("RemoveViewIndex 返回后仍持有运行时锁")
-	}
-	defer runtime.mu.Unlock()
-	if runtime.active != "" {
-		t.Fatalf("active 未清空：%q", runtime.active)
 	}
 }

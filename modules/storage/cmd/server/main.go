@@ -363,15 +363,15 @@ func runViewRole() error {
 	s := trpc.NewServer()
 	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
 	trpclog.InstallServiceName("storage")
-	indexListener := s.Service("trpc.moox.storage.ViewIndex")
-	if indexListener == nil {
-		return errors.New("ViewIndex listener is not configured")
-	}
-	pb.RegisterViewIndexService(indexListener, svc)
+	registered := false
 	for _, name := range []string{"trpc.moox.storage.DataView", "trpc.moox.storage.DataView.trpc"} {
 		if listener := s.Service(name); listener != nil {
 			pb.RegisterDataViewService(listener, svc)
+			registered = true
 		}
+	}
+	if !registered {
+		return errors.New("DataView 监听没有配置")
 	}
 	if err := storagebootstrap.RegisterMetricsReporter(s, "view"); err != nil {
 		return err

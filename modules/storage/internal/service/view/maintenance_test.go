@@ -58,10 +58,8 @@ func TestMaintainerCreatesAndActivatesInitialView(t *testing.T) {
 	}
 	stop()
 	indexID := viewindex.ViewIndexID("space", "records")
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
-	list, err := svc.ListViewIndexes(context.Background(), &pb.ListViewIndexesReq{AuthInfo: auth})
-	if err != nil || len(list.GetIndexes()) != 1 {
-		t.Fatalf("indexes=%v err=%v", list, err)
+	if len(svc.views) != 1 {
+		t.Fatalf("views=%v", svc.views)
 	}
 	runtime := svc.views[viewRef{spaceID: "space", viewID: "records"}]
 	if runtime.active != indexID || runtime.building != "" {
@@ -96,7 +94,7 @@ func TestInitialBuildFailureDiscardsPartialIndexAndRetries(t *testing.T) {
 		historyRow("A", "2026-08-18T00:00:00Z", ""), historyRow("B", "2026-08-18T00:00:00Z", ""),
 	}}
 	opts := MaintenanceOptions{Metadata: metadata, PrimaryRange: reader, Bars: 10, BackfillPageSize: 100}
-	if err := svc.maintainView(context.Background(), opts, svc.internalAuth(), metadata.view); err == nil {
+	if err := svc.maintainView(context.Background(), opts, metadata.view); err == nil {
 		t.Fatal("回填失败应当返回错误")
 	}
 	indexID := viewindex.ViewIndexID("space", "prices")
@@ -109,7 +107,7 @@ func TestInitialBuildFailureDiscardsPartialIndexAndRetries(t *testing.T) {
 	}
 	reader.failPage = 0
 	reader.requests = nil
-	if err := svc.maintainView(context.Background(), opts, svc.internalAuth(), metadata.view); err != nil {
+	if err := svc.maintainView(context.Background(), opts, metadata.view); err != nil {
 		t.Fatalf("下一轮重建：%v", err)
 	}
 	if runtime.active != indexID {
@@ -125,7 +123,7 @@ func TestInitialBuildClearsStaleRuntimeActive(t *testing.T) {
 	indexID := viewindex.ViewIndexID("space", "prices")
 	svc.views[viewRef{spaceID: "space", viewID: "prices"}] = &viewRuntime{active: indexID}
 	opts := MaintenanceOptions{Metadata: metadata, PrimaryRange: &pagedRangeReader{}, Bars: 10}
-	if err := svc.maintainView(context.Background(), opts, svc.internalAuth(), metadata.view); err != nil {
+	if err := svc.maintainView(context.Background(), opts, metadata.view); err != nil {
 		t.Fatal(err)
 	}
 	if engine.removes != 1 {
@@ -148,7 +146,7 @@ func TestMaintenanceRebuildsMissingIndex(t *testing.T) {
 	indexID := viewindex.ViewIndexID("space", "prices")
 	svc.views[viewRef{spaceID: "space", viewID: "prices"}] = newViewRuntime()
 	svc.views[viewRef{spaceID: "space", viewID: "prices"}].active = indexID
-	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadata}, svc.internalAuth(), metadata.view); err != nil {
+	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadata}, metadata.view); err != nil {
 		t.Fatalf("索引缺失 err=%v", err)
 	}
 	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
@@ -170,13 +168,13 @@ func TestMaintenanceLeavesRebuildToFollower(t *testing.T) {
 	svc.engines["duckdb"] = engine
 	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "prices"}
 	runtime := newViewRuntime()
-	runtime.rebuilding = true
+	runtime.building = viewindex.ViewIndexID("space", "prices")
 	svc.views[viewRef{spaceID: "space", viewID: "prices"}] = runtime
-	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: &maintenanceMetadata{view: view}}, svc.internalAuth(), view); err != nil {
+	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: &maintenanceMetadata{view: view}}, view); err != nil {
 		t.Fatal(err)
 	}
-	if engine.statCalls != 0 || runtime.building != "" {
-		t.Fatalf("不应查看或另建索引：stat=%d building=%q", engine.statCalls, runtime.building)
+	if engine.statCalls != 0 || runtime.building != viewindex.ViewIndexID("space", "prices") || runtime.active != "" {
+		t.Fatalf("不应查看或另建索引：stat=%d building=%q active=%q", engine.statCalls, runtime.building, runtime.active)
 	}
 }
 
@@ -292,7 +290,7 @@ func TestMaintenanceStatsActiveIndexBeforeAttachingIt(t *testing.T) {
 	engine := &queryEngine{statErr: statErr}
 	svc.engines["duckdb"] = engine
 	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "prices"}
-	err = svc.maintainView(context.Background(), MaintenanceOptions{}, svc.internalAuth(), view)
+	err = svc.maintainView(context.Background(), MaintenanceOptions{}, view)
 	if !errors.Is(err, statErr) {
 		t.Fatalf("maintenance error=%v want=%v", err, statErr)
 	}
@@ -364,7 +362,7 @@ func TestHalfPreparedBleveIndexIsRebuiltAfterRestart(t *testing.T) {
 	if active, runtime := svc.activeIndex("space", "records"); runtime != nil && active != "" {
 		t.Fatalf("半成品不应挂接：%q", active)
 	}
-	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadata}, svc.internalAuth(), metadata.view); err != nil {
+	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadata}, metadata.view); err != nil {
 		t.Fatalf("维护应当重建：%v", err)
 	}
 	if active, _ := svc.activeIndex("space", "records"); active != indexID {
@@ -420,5 +418,46 @@ func TestMaintenanceForgetsDeletedViews(t *testing.T) {
 	}
 	if cleanupIndexProtected(protected, managedIndexRef{engine: "bleve", indexID: viewindex.ViewIndexID("space", "prices")}) {
 		t.Fatal("已删除 View 的索引不应再受保护")
+	}
+}
+
+// pageMetadata 按页返回固定的列表响应，用来构造分页信息不完整的元数据。
+type pageMetadata struct{ pages []*pb.ListViewsRsp }
+
+func (m *pageMetadata) ListViews(_ context.Context, req *pb.ListViewsReq, _ ...client.Option) (*pb.ListViewsRsp, error) {
+	index := int(req.GetPage().GetPage()) - 1
+	if index < 0 || index >= len(m.pages) {
+		return &pb.ListViewsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{}}, nil
+	}
+	return m.pages[index], nil
+}
+
+// 列出全部 View 时没有分页信息，或说还有下一页、这一页却是空的：不能断定已经列全，这一轮不摘任何 View。
+func TestForgetDeletedViewsKeepsViewsOnIncompletePages(t *testing.T) {
+	other := &pb.View{SpaceId: "space", ViewId: "other"}
+	cases := map[string][]*pb.ListViewsRsp{
+		"没有分页信息":    {{RetInfo: successRetInfo(), Views: []*pb.View{other}}},
+		"有下一页但这页为空": {{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 100, HasMore: true}}},
+		"第二页为空却说还有": {
+			{RetInfo: successRetInfo(), Views: []*pb.View{other}, PageResult: &pb.PageResult{Page: 1, Size: 100, HasMore: true}},
+			{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 2, Size: 100, HasMore: true}},
+		},
+	}
+	for name, pages := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.engines["bleve"] = &queryEngine{stats: builtStats("prices", 1, "hash")}
+			view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices", Status: "active"}
+			if err := svc.AttachActiveView(context.Background(), view, builtStats("prices", 1, "hash")); err != nil {
+				t.Fatal(err)
+			}
+			svc.forgetDeletedViews(context.Background(), &pageMetadata{pages: pages}, svc.internalAuth())
+			if active, _ := svc.activeIndex("space", "prices"); active == "" {
+				t.Fatal("分页信息不完整时不应摘掉 View")
+			}
+		})
 	}
 }

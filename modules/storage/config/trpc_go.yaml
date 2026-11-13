@@ -34,13 +34,6 @@ server:
       protocol: trpc
       transport: go-net
       timeout: 35000 # WaitViewApplied 最多等 30 秒
-    - name: trpc.moox.storage.ViewIndex
-      ip: 127.0.0.1
-      port: 20104
-      network: tcp
-      protocol: trpc
-      transport: go-net
-      timeout: 30000
     - name: trpc.moox.storage.PrimaryStore
       ip: 127.0.0.1
       port: 20101
@@ -76,12 +69,6 @@ client:
       protocol: trpc
       transport: go-net
       timeout: 3000
-    - name: trpc.moox.storage.ViewIndex
-      target: ip://127.0.0.1:20104
-      network: tcp
-      protocol: trpc
-      transport: go-net
-      timeout: 30000
 
 plugins:
   metrics:

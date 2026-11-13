@@ -30,6 +30,31 @@ func (r recoveryFieldReader) ReadRows(_ context.Context, req *pb.PrimaryReadRows
 	return &pb.PrimaryReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 }
 
+// prepareActiveIndex 在进程内准备空索引并把它转为 View 的活动索引，与建索引完成时相同。
+func prepareActiveIndex(t *testing.T, svc *Service, view *pb.View, schema viewindex.ViewIndexSchema) string {
+	t.Helper()
+	indexID := viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId())
+	if err := svc.prepareIndex(context.Background(), indexID, schema); err != nil {
+		t.Fatalf("prepare %s: %v", indexID, err)
+	}
+	if err := svc.activateBuiltIndex(view, schema, indexID); err != nil {
+		t.Fatalf("activate %s: %v", indexID, err)
+	}
+	return indexID
+}
+
+// writeTestRows 按 schema 的契约实时写入索引。
+func writeTestRows(t *testing.T, svc *Service, indexID string, schema viewindex.ViewIndexSchema, rows []viewindex.RowWrite) {
+	t.Helper()
+	engine, err := svc.engineFor(indexID)
+	if err == nil {
+		err = svc.writeIndex(context.Background(), indexID, engine, viewindex.ViewIndexWriteBatch{RowWrites: rows, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite})
+	}
+	if err != nil {
+		t.Fatalf("write %s: %v", indexID, err)
+	}
+}
+
 func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
@@ -38,20 +63,11 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	ctx := context.Background()
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
 	columns := []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
-	indexID := viewindex.ViewIndexID("quant", "prices-view")
-	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: indexID, Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("prepare: rsp=%v err=%v", rsp, err)
-	}
-	if err := svc.AttachActiveView(context.Background(), &pb.View{
-		SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", Status: "active",
-	}, viewindex.ViewIndexStats{Exists: true, DatasetID: "prices", ViewVersion: 1, SchemaHash: "schema-1", Columns: columns}); err != nil {
-		t.Fatalf("attach active view: %v", err)
-	}
+	schema := viewindex.ViewIndexSchema{SpaceID: "quant", ViewID: "prices-view", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "schema-1", Columns: columns}
+	indexID := prepareActiveIndex(t, svc, &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", Status: "active"}, schema)
 	key := &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-20T00:00:00Z", SeriesTag: "venue:okx"}}}
 	value := &pb.FieldValue{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}
-	if rsp, err := svc.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: auth, IndexId: indexID, Batch: &pb.ViewIndexWriteBatch{ViewRevision: 1, ViewSchemaHash: "schema-1", WriteMode: "LIVE_WRITE", RowWrites: []*pb.ViewIndexRowWrite{{Key: &pb.ViewIndexRowKey{RowKey: key}, Fields: []*pb.FieldValue{value}}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("apply: rsp=%v err=%v", rsp, err)
-	}
+	writeTestRows(t, svc, indexID, schema, []viewindex.RowWrite{{Key: viewindex.RowKey{Key: key}, Fields: []*pb.FieldValue{value}}})
 	tag := "venue:okx"
 	rsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 		AuthInfo: auth, SpaceId: "quant", ViewId: "prices-view",
@@ -74,10 +90,7 @@ func TestViewServiceRequiresSecretAndAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rsp, err := svc.PrepareViewIndex(context.Background(), &pb.PrepareViewIndexReq{
-		IndexId: "idx",
-		Schema:  &pb.ViewIndexSchema{SpaceId: "s", ViewId: "v", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash"},
-	})
+	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{SpaceId: "s", ViewId: "v"})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
 	}
@@ -123,32 +136,23 @@ func TestDataViewSupportsTimeRangeAndTextOnlyQueries(t *testing.T) {
 	}
 	ctx := context.Background()
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
-	prepare := func(id string) {
+	columns := []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}
+	prepare := func(id string) (string, viewindex.ViewIndexSchema) {
 		t.Helper()
-		rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
-			AuthInfo: auth, IndexId: viewindex.ViewIndexID("space", id),
-			Schema: &pb.ViewIndexSchema{SpaceId: "space", ViewId: id, ViewVersion: 1, Engine: map[string]string{"times": "duckdb", "records": "bleve"}[id], ViewSchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}},
-		})
-		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			t.Fatalf("prepare rsp=%v err=%v", rsp, err)
-		}
+		engine := map[string]string{"times": "duckdb", "records": "bleve"}[id]
 		dataset := map[string]string{"times": "prices", "records": "records"}[id]
-		stats := viewindex.ViewIndexStats{Exists: true, DatasetID: dataset, ViewVersion: 1, SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}}
-		if err := svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "space", ViewId: id, DatasetId: dataset, Engine: map[string]string{"times": "duckdb", "records": "bleve"}[id], Status: "active"}, stats); err != nil {
-			t.Fatalf("attach %s: %v", id, err)
-		}
+		schema := viewindex.ViewIndexSchema{SpaceID: "space", ViewID: id, PrimaryDatasetID: dataset, ViewVersion: 1, Engine: engine, SchemaHash: "hash", Columns: columns}
+		return prepareActiveIndex(t, svc, &pb.View{SpaceId: "space", ViewId: id, DatasetId: dataset, Engine: engine, Status: "active"}, schema), schema
 	}
-	prepare("times")
-	timeRows := []*pb.ViewIndexRowWrite{}
+	timesID, timesSchema := prepare("times")
+	timeRows := []viewindex.RowWrite{}
 	for _, at := range []string{"2026-07-19T00:00:00Z", "2026-07-20T00:00:00Z"} {
-		timeRows = append(timeRows, &pb.ViewIndexRowWrite{
-			Key:    &pb.ViewIndexRowKey{RowKey: &pb.RowKey{SpaceId: "space", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1d", DataTime: at}}}},
+		timeRows = append(timeRows, viewindex.RowWrite{
+			Key:    viewindex.RowKey{Key: &pb.RowKey{SpaceId: "space", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1d", DataTime: at}}}},
 			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
 		})
 	}
-	if rsp, err := svc.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: auth, IndexId: viewindex.ViewIndexID("space", "times"), Batch: &pb.ViewIndexWriteBatch{ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: "LIVE_WRITE", RowWrites: timeRows}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("apply time rows rsp=%v err=%v", rsp, err)
-	}
+	writeTestRows(t, svc, timesID, timesSchema, timeRows)
 	timeRsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 		AuthInfo: auth, SpaceId: "space", ViewId: "times",
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z", EndTime: "2026-07-20T23:59:59Z"},
@@ -157,14 +161,9 @@ func TestDataViewSupportsTimeRangeAndTextOnlyQueries(t *testing.T) {
 		t.Fatalf("time rsp=%v err=%v", timeRsp, err)
 	}
 
-	prepare("records")
+	recordsID, recordsSchema := prepare("records")
 	recordKey := &pb.RowKey{SpaceId: "space", DatasetId: "records", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-	if rsp, err := svc.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: auth, IndexId: viewindex.ViewIndexID("space", "records"), Batch: &pb.ViewIndexWriteBatch{
-		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: "LIVE_WRITE",
-		RowWrites: []*pb.ViewIndexRowWrite{{Key: &pb.ViewIndexRowKey{RowKey: recordKey}, Fields: []*pb.FieldValue{{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "market research"}}}}}},
-	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("apply record rsp=%v err=%v", rsp, err)
-	}
+	writeTestRows(t, svc, recordsID, recordsSchema, []viewindex.RowWrite{{Key: viewindex.RowKey{Key: recordKey}, Fields: []*pb.FieldValue{{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "market research"}}}}}})
 	recordRsp, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{AuthInfo: auth, SpaceId: "space", ViewId: "records", TextQuery: "research"})
 	if err != nil || recordRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(recordRsp.GetRows()) != 1 {
 		t.Fatalf("record rsp=%v err=%v", recordRsp, err)

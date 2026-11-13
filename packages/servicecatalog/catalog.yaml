@@ -1641,8 +1641,6 @@ components:
     scope: any
     replicas: single
     protected: false
-    ports:
-      - 20104
     health:
       kind: readyz
       port: 20211

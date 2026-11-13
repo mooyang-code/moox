@@ -179,7 +179,7 @@ func (s *Service) rebuildFollowIndex(ctx context.Context, ref viewRef) (viewinde
 	schema.RowsPerSeries = min(bars, maxLatestPerSeries)
 	// 建成之前不可读：查询、加列、删除最旧数据都只看活动索引；维护流程看到 building 时不会把它挂回去。
 	runtime.clearActiveLocked()
-	runtime.building, runtime.rebuilding = indexID, true
+	runtime.building = indexID
 	release, err := s.indexWriteGate(indexID).lock(ctx)
 	if err == nil {
 		err = engine.Remove(ctx, indexID)

@@ -244,10 +244,6 @@ func indexBuiltFor(view *pb.View, stats viewindex.ViewIndexStats) bool {
 	return stats.Exists && stats.DatasetID == view.GetDatasetId() && stats.Follow.Cursor.StoreID != ""
 }
 
-func isPrimaryHistoryIndexNotReady(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "primary history index is still being materialized")
-}
-
 func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) error {
 	auth := s.internalAuth()
 	var firstErr error
@@ -272,7 +268,7 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := s.maintainView(ctx, opts, auth, view); err != nil {
+			if err := s.maintainView(ctx, opts, view); err != nil {
 				if view != nil && ctx.Err() == nil {
 					log.Errorf("storage view maintenance %s/%s failed: %v", view.GetSpaceId(), view.GetViewId(), err)
 				}
@@ -314,8 +310,18 @@ func (s *Service) forgetDeletedViews(ctx context.Context, metadata MetadataClien
 		for _, view := range rsp.GetViews() {
 			existing[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}] = struct{}{}
 		}
-		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
+		// 与退役清理一样：分页信息不完整时不能断定已经列全，这一轮不摘。
+		page := rsp.GetPageResult()
+		if page == nil {
+			log.Warnf("storage view 列出全部 View 没有分页信息，这一轮不回收已删除的 View")
+			return
+		}
+		if !page.GetHasMore() {
 			break
+		}
+		if len(rsp.GetViews()) == 0 {
+			log.Warnf("storage view 列出全部 View 时第 %d 页为空却说还有下一页，这一轮不回收已删除的 View", pageNo)
+			return
 		}
 	}
 	s.mu.RLock()
@@ -330,7 +336,7 @@ func (s *Service) forgetDeletedViews(ctx context.Context, metadata MetadataClien
 		s.followManager().Stop(ref.spaceID, ref.viewID)
 		runtime.mu.Lock()
 		runtime.clearActiveLocked()
-		runtime.building, runtime.rebuilding = "", false
+		runtime.building = ""
 		s.mu.Lock()
 		if s.views[ref] == runtime {
 			delete(s.views, ref)
@@ -358,7 +364,7 @@ func sortViewsForMaintenance(views []*pb.View) {
 }
 
 // maintainView 处理一个 View：没有建好的索引时建索引；有索引时挂接并刷新覆盖统计。加列由每分钟的定时任务处理。
-func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View) error {
+func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, view *pb.View) error {
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
 		return nil
 	}
@@ -384,7 +390,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	}
 	// 本进程刚建好、还没有跟随器记进度的索引（没起跟随时）同样算建好。
 	if !indexBuiltFor(view, stats) && !(active == indexID && stats.Exists && stats.DatasetID == view.GetDatasetId()) {
-		return s.buildInitialIndex(ctx, opts, auth, view)
+		return s.buildInitialIndex(ctx, opts, view)
 	}
 	s.observeViewFileSize(view, indexID, stats, opts)
 	// 元数据级统计不含覆盖字段：保留上一次完整统计，不能用空值覆盖，否则 TotalMode=NONE 的查询会丢掉完整性信息。

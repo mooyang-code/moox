@@ -61,7 +61,7 @@ func (l *backfillRequestLimiter) wait(ctx context.Context) error {
 // H_done 与 H_start 一起记进索引（记下跟随进度的索引才算建好），View 从此可读，跟随器从 H_start 接着应用（重放的行是幂等写入），
 // (H_start, H_done] 之间的完成标记只推进游标、不发布。建索引期间 View 不可读，读取方等待。
 // 半成品不续建：失败或进程退出后，下一轮删掉重建。
-func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View) error {
+func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions, view *pb.View) error {
 	ref := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
 	manager := s.followManager()
 	// 索引文件不存在或没建完（新建、文件被删、删除后同名重建）：残留的跟随器先停掉。要在取 buildMu 之前停：
@@ -98,26 +98,11 @@ func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions
 	}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	indexID := viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId())
-	prepared, err := s.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
-		AuthInfo: auth, IndexId: indexID, Engine: engine,
-		Schema: &pb.ViewIndexSchema{
-			SpaceId: schema.SpaceID, ViewId: schema.ViewID, ViewVersion: schema.ViewVersion,
-			Engine: engine, Columns: columns, ViewSchemaHash: schema.SchemaHash, DatasetId: schema.PrimaryDatasetID,
-			RowsPerSeries: schema.RowsPerSeries,
-		},
-	})
-	if err == nil {
-		err = requireSuccess(prepared.GetRetInfo())
-	}
-	if err != nil {
+	if err := s.prepareIndex(ctx, indexID, schema); err != nil {
 		return fmt.Errorf("准备 View 索引：%w", err)
 	}
 	if err := s.backfillInitialIndex(ctx, view, schema, indexID, opts, bars); err != nil {
 		s.discardInitialBuild(ctx, ref, indexID)
-		if isPrimaryHistoryIndexNotReady(err) {
-			// Primary 的历史索引是首次使用时异步物化的：这是正常的预热等待，下一轮再建。
-			return nil
-		}
 		return err
 	}
 	if manager != nil {
@@ -365,7 +350,7 @@ func (s *Service) attachRuntime(view *pb.View, runtime *viewRuntime, indexID str
 		schema = attached
 	}
 	// 断档重建进行中：索引建成前不能挂回去。
-	if runtime.rebuilding {
+	if runtime.active == "" && runtime.building != "" {
 		return false
 	}
 	s.attachActiveViewLocked(view, runtime, indexID, schema, engineName)
@@ -386,7 +371,6 @@ func (s *Service) attachActiveViewLocked(view *pb.View, runtime *viewRuntime, in
 	}
 	runtime.active = indexID
 	runtime.building = ""
-	runtime.rebuilding = false
 	runtime.hiddenColumns = make(map[string]struct{}, len(view.GetHiddenColumns()))
 	for _, name := range view.GetHiddenColumns() {
 		runtime.hiddenColumns[name] = struct{}{}

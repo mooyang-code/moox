@@ -30,13 +30,6 @@ server:
       protocol: trpc
       transport: go-net
       timeout: 35000 # WaitViewApplied 最多等 30 秒
-    - name: trpc.moox.storage.ViewIndex
-      ip: 127.0.0.1
-      port: 20104
-      network: tcp
-      protocol: trpc
-      transport: go-net
-      timeout: 30000
     - name: trpc.moox.storage.view.metrics.timer
       port: 20307
       network: "*/30 * * * * *"

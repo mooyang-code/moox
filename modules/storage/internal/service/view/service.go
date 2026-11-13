@@ -6,14 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
-	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/follow"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	viewbleve "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/bleve"
@@ -74,11 +72,8 @@ type viewRef struct{ spaceID, viewID string }
 type viewRuntime struct {
 	mu     sync.Mutex
 	active string
-	// building 是首次建索引期间的写入目标，建成后转为 active。任何时刻只写一个索引。
-	building string
-	// rebuilding 为真表示要原地重建或正在重建（断档、重建中途失败或退出、活动索引文件不见了）：
-	// 元数据仍说索引是活动的，维护流程不能在建成前把它挂回去，跟随器据此接着重建。
-	rebuilding       bool
+	// building 是正在建的索引（首次建索引或断档重建），建成后转为 active，期间 active 为空。任何时刻只写一个索引。
+	building         string
 	statsIndexID     string
 	stats            viewindex.ViewIndexStats
 	statsRefreshedAt time.Time
@@ -108,11 +103,16 @@ func newViewRuntime() *viewRuntime {
 	return runtime
 }
 
-// needsRebuild 报告 View 是否要原地重建或正在重建。
+// needsRebuild 报告 View 是否要原地重建或正在重建（断档、重建中途失败或退出、活动索引文件不见了）：此时元数据仍说
+// View 是活动的，维护流程不能在建成前把它挂回去，跟随器据此接着重建。
+//
+// 首次建索引期间同样是“没有活动索引、有建索引目标”，但它只在维护协程里、持有 buildMu 一次做完：开头先停掉跟随器，
+// 失败时 discardInitialBuild 清掉 building，建成后转为 active，这段时间里没有别的调用方读这个判断。所以长期保持
+// 这个状态的只有未完成的重建。
 func (r *viewRuntime) needsRebuild() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.rebuilding
+	return r.active == "" && r.building != ""
 }
 
 // publishReadStateLocked republishes the query-path copy; call it with mu held
@@ -252,26 +252,14 @@ func (s *Service) HasEngine(name string) bool {
 	return s.engines[strings.ToLower(strings.TrimSpace(name))] != nil
 }
 
-var _ pb.ViewIndexService = (*Service)(nil)
 var _ pb.DataViewService = (*Service)(nil)
 
-func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndexReq) (*pb.PrepareViewIndexRsp, error) {
-	if req == nil || req.GetSchema() == nil || req.GetIndexId() == "" {
-		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id and schema are required"))}, nil
-	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
-		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	sch := req.GetSchema()
-	engineName := strings.ToLower(strings.TrimSpace(sch.GetEngine()))
-	if engineName == "" {
-		engineName = strings.ToLower(strings.TrimSpace(req.GetEngine()))
-	}
-	engine := s.engines[engineName]
+// prepareIndex 删掉同名的半成品后按 schema 建一个空索引，并把它记为 View 的建索引目标。建索引只在进程内进行，View 不对外提供索引写入接口。
+func (s *Service) prepareIndex(ctx context.Context, indexID string, schema viewindex.ViewIndexSchema) error {
+	engine := s.engines[schema.Engine]
 	if engine == nil {
-		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("view engine %q is unavailable", engineName))}, nil
+		return fmt.Errorf("view engine %q is unavailable", schema.Engine)
 	}
-	schema := viewindex.ViewIndexSchema{SpaceID: sch.GetSpaceId(), ViewID: sch.GetViewId(), PrimaryDatasetID: sch.GetDatasetId(), ViewVersion: sch.GetViewVersion(), Engine: engineName, Columns: sch.GetColumns(), SchemaHash: sch.GetViewSchemaHash(), RowsPerSeries: sch.GetRowsPerSeries()}
 	viewKey := viewRef{spaceID: schema.SpaceID, viewID: schema.ViewID}
 	s.mu.Lock()
 	runtime := s.views[viewKey]
@@ -283,169 +271,31 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	// 持有运行时锁准备：实时写入、删除和清理都在运行时锁下看 active 与 building，不会碰到准备了一半的文件。
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.active == req.GetIndexId() {
-		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("View 索引 %q 是活动索引，不能重新准备", req.GetIndexId()))}, nil
+	if runtime.active == indexID {
+		return fmt.Errorf("View 索引 %q 是活动索引，不能重新准备", indexID)
 	}
-	release, err := s.indexWriteGate(req.GetIndexId()).lock(ctx)
+	release, err := s.indexWriteGate(indexID).lock(ctx)
 	if err != nil {
-		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		return err
 	}
 	defer release()
 	// 上次没建完的半成品（含 DuckDB 的 WAL）先删干净。
-	if err := engine.Remove(ctx, req.GetIndexId()); err != nil {
-		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	if err := engine.Remove(ctx, indexID); err != nil {
+		return err
 	}
-	if err := engine.Prepare(ctx, req.GetIndexId(), schema); err != nil {
-		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	if err := engine.Prepare(ctx, indexID, schema); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.indexEngine[req.GetIndexId()] = engineName
-	s.schemas[req.GetIndexId()] = schema
+	s.indexEngine[indexID] = schema.Engine
+	s.schemas[indexID] = schema
 	if s.catalogViews[viewKey] == nil {
-		s.catalogViews[viewKey] = &pb.View{SpaceId: schema.SpaceID, ViewId: schema.ViewID, DatasetId: schema.PrimaryDatasetID, Engine: engineName}
+		s.catalogViews[viewKey] = &pb.View{SpaceId: schema.SpaceID, ViewId: schema.ViewID, DatasetId: schema.PrimaryDatasetID, Engine: schema.Engine}
 	}
-	if runtime.active == "" {
-		runtime.building = req.GetIndexId()
-	}
-	s.indexView[req.GetIndexId()] = viewKey
-	return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
-}
-
-func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq) (*pb.ApplyViewIndexRsp, error) {
-	if req == nil || req.GetBatch() == nil || req.GetIndexId() == "" {
-		return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id and batch are required"))}, nil
-	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
-		return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	b := req.GetBatch()
-	writes := make([]viewindex.RowWrite, 0, len(b.GetRowWrites()))
-	for _, w := range b.GetRowWrites() {
-		if w == nil || w.GetKey() == nil || w.GetKey().GetRowKey() == nil {
-			return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row key is required"))}, nil
-		}
-		writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: w.GetKey().GetRowKey()}, Fields: w.GetFields(), Attributes: w.GetAttributes()})
-	}
-	mode := viewindex.LiveWrite
-	switch b.GetWriteMode() {
-	case "BACKFILL":
-		mode = viewindex.Backfill
-	case "LIVE_WRITE":
-	default:
-		return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("unsupported write mode %q", b.GetWriteMode()))}, nil
-	}
-	s.mu.RLock()
-	viewKey, hasView := s.indexView[req.GetIndexId()]
-	runtime := s.views[viewKey]
-	if !hasView {
-		runtime = nil
-	}
-	s.mu.RUnlock()
-	if hasView && runtime != nil {
-		runtime.mu.Lock()
-		defer runtime.mu.Unlock()
-	}
-	engine, err := s.engineFor(req.GetIndexId())
-	if err == nil {
-		err = s.writeIndex(ctx, req.GetIndexId(), engine, viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: b.GetViewRevision(), ViewSchemaHash: b.GetViewSchemaHash(), WriteMode: mode})
-	}
-	if err != nil {
-		return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
-	}
-	return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
-}
-
-func (s *Service) StatViewIndex(ctx context.Context, req *pb.StatViewIndexReq) (*pb.StatViewIndexRsp, error) {
-	if req == nil || req.GetIndexId() == "" {
-		return &pb.StatViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id is required"))}, nil
-	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
-		return &pb.StatViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	engine, err := s.engineFor(req.GetIndexId())
-	if err != nil {
-		return &pb.StatViewIndexRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
-	}
-	st, err := engine.Stat(ctx, req.GetIndexId())
-	if err != nil {
-		return &pb.StatViewIndexRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
-	}
-	return &pb.StatViewIndexRsp{RetInfo: retinfo.Success("success"), Stats: &pb.ViewIndexStats{Exists: st.Exists, EntryCount: uint64(st.EntryCount), ViewSchemaHash: st.SchemaHash, ViewVersion: st.ViewVersion, IndexedFrom: st.IndexedFrom, IndexedTo: st.IndexedTo, UpdatedAt: st.UpdatedAt}}, nil
-}
-
-func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexReq) (*pb.RemoveViewIndexRsp, error) {
-	if req == nil || req.GetIndexId() == "" {
-		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id 不能为空"))}, nil
-	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
-		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	indexID := req.GetIndexId()
-	// 先取所属 View 的运行时锁、再取写锁（与挂接、清理的锁顺序一致）：删除与挂接、准备串行，不会删掉刚准备好或正在挂接的索引。
-	runtime, release, err := s.lockIndexForRemoval(ctx, indexID)
-	if err != nil {
-		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
-	}
-	defer release()
-	engine, err := s.engineFor(indexID)
-	if err != nil {
-		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
-	}
-	s.mu.RLock()
-	engineName := normalizedEngine(s.indexEngine[indexID])
-	s.mu.RUnlock()
-	if err := engine.Remove(ctx, indexID); err != nil {
-		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
-	}
-	s.mu.Lock()
-	s.forgetIndexLocked(indexID)
-	delete(s.cleanupCandidates, managedIndexRef{engine: engineName, indexID: indexID})
-	s.mu.Unlock()
-	// 运行时锁由 lockIndexForRemoval 持有：清掉指向该索引的 active 与 building。
-	if runtime != nil {
-		if runtime.active == indexID {
-			runtime.clearActiveLocked()
-		}
-		if runtime.building == indexID {
-			runtime.building = ""
-		}
-	}
-	return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
-}
-
-// maxRemovalLockAttempts 是 lockIndexForRemoval 在运行时于取锁期间被创建时的重试次数。
-const maxRemovalLockAttempts = 3
-
-// lockIndexForRemoval 按“运行时锁 → 写锁”的顺序锁住索引所属 View，返回运行时（可能为空）与释放函数。运行时是
-// 首次准备索引时才创建的：取写锁期间它被创建了，就放开重来，保证总是先取运行时锁再取写锁。
-func (s *Service) lockIndexForRemoval(ctx context.Context, indexID string) (*viewRuntime, func(), error) {
-	for attempt := 0; attempt < maxRemovalLockAttempts; attempt++ {
-		runtime := s.runtimeOfIndex(indexID)
-		if runtime != nil {
-			runtime.mu.Lock()
-		}
-		releaseGate, err := s.indexWriteGate(indexID).lock(ctx)
-		if err != nil {
-			if runtime != nil {
-				runtime.mu.Unlock()
-			}
-			return nil, nil, err
-		}
-		if s.runtimeOfIndex(indexID) == runtime {
-			return runtime, func() {
-				releaseGate()
-				if runtime != nil {
-					runtime.mu.Unlock()
-				}
-			}, nil
-		}
-		releaseGate()
-		if runtime != nil {
-			runtime.mu.Unlock()
-		}
-	}
-	return nil, nil, fmt.Errorf("View 索引 %q 所属的 View 正在初始化，请稍后重试", indexID)
+	runtime.building = indexID
+	s.indexView[indexID] = viewKey
+	return nil
 }
 
 // runtimeOfIndex 返回索引所属 View 的运行时：先按索引 ID 解析所属 View（与清理路径一致），解析不了的退回索引到
@@ -460,58 +310,6 @@ func (s *Service) runtimeOfIndex(indexID string) *viewRuntime {
 		return s.views[key]
 	}
 	return nil
-}
-
-func (s *Service) ListViewIndexes(ctx context.Context, req *pb.ListViewIndexesReq) (*pb.ListViewIndexesRsp, error) {
-	if req == nil {
-		return &pb.ListViewIndexesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
-	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
-		return &pb.ListViewIndexesRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	s.mu.RLock()
-	ids := make([]string, 0, len(s.views))
-	for key, runtime := range s.views {
-		if req.GetSpaceId() != "" && req.GetSpaceId() != key.spaceID || req.GetViewId() != "" && req.GetViewId() != key.viewID {
-			continue
-		}
-		if active := runtime.queryState().active; active != "" {
-			ids = append(ids, active)
-		}
-	}
-	s.mu.RUnlock()
-	ids = uniqueSorted(ids)
-	sort.Strings(ids)
-	out := make([]*pb.ViewIndexDescriptor, 0, len(ids))
-	for _, id := range ids {
-		engine, err := s.engineFor(id)
-		if err != nil {
-			continue
-		}
-		if req.GetEngine() != "" && !strings.EqualFold(req.GetEngine(), engine.Engine()) {
-			continue
-		}
-		descriptor := &pb.ViewIndexDescriptor{IndexId: id, Engine: engine.Engine()}
-		if req.GetIncludeStats() {
-			st, _ := engine.Stat(ctx, id)
-			descriptor.Stats = &pb.ViewIndexStats{Exists: st.Exists, EntryCount: uint64(st.EntryCount), ViewSchemaHash: st.SchemaHash, ViewVersion: st.ViewVersion, IndexedFrom: st.IndexedFrom, IndexedTo: st.IndexedTo, UpdatedAt: st.UpdatedAt}
-		}
-		out = append(out, descriptor)
-	}
-	return &pb.ListViewIndexesRsp{RetInfo: retinfo.Success("success"), Indexes: out}, nil
-}
-
-func uniqueSorted(ids []string) []string {
-	seen := make(map[string]struct{}, len(ids))
-	out := ids[:0]
-	for _, id := range ids {
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
-	return out
 }
 
 func (s *Service) SetPrimaryAuth(auth *pb.AuthInfo) {
