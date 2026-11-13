@@ -1604,13 +1604,6 @@ components:
               - ReportDatasetPeriodCompleted
             callers:
               - factor-mgr
-          # View 跟随变更日志：按游标读取行写入与完成标记，再回读整行。
-          - methods:
-              - ReadRows
-              - ReadTimeSeriesRows
-              - ReadDatasetChanges
-            callers:
-              - storage-view
     doctor:
       role: storage-primary
       description: Storage 元数据与事实数据主服务

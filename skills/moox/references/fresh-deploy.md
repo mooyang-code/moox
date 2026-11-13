@@ -57,6 +57,8 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 中途失败后再运行一次会接着清。CLI 不清理云函数，见第 8 节。
 
+从批 1（Storage 合并与 View 跟随变更日志）之前的版本重装时，还要按 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 1 全新部署注意”核对 `moox.toml`（去掉 `storage-node` 与两段 `mooxsys` 保留期）和归档 worker 配置；因子机本地库被清空后要重新做初始数据导入。
+
 ### 本机状态
 
 `setup wipe` 把操作员身份和这台控制机的旧管理台证书移到 `~/.config/moox/.bak-<时间>/`，`config.key` 和 `known_hosts` 留在原处；状态目录 `~/.local/state/moox/setup/<摘要>` 改名为 `<摘要>.bak-<时间>`。
