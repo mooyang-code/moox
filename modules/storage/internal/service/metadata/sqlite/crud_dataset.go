@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 	"time"
 
@@ -467,7 +466,7 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 	return item, nil
 }
 
-// upsertDatasetColumnTx 在事务内写入一列，并让跟随数据集列的 View 同步加列或更新列属性。
+// upsertDatasetColumnTx 在事务内写入一列。View 的列由数据集列推出，不用同步。
 func upsertDatasetColumnTx(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) (*pb.DatasetColumn, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
 		return nil, errors.New("space_id, dataset_id and column_name are required")
@@ -486,17 +485,13 @@ func upsertDatasetColumnTx(ctx context.Context, tx *sql.Tx, item *pb.DatasetColu
 	}
 	existing, getErr := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`,
 		[]any{item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName()}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
-	newColumn := errors.Is(getErr, sql.ErrNoRows)
 	if getErr == nil {
 		if existing.GetOriginType() != item.GetOriginType() || existing.GetOriginId() != item.GetOriginId() || existing.GetValueType() != item.GetValueType() {
 			return nil, errors.New("dataset column identity and value_type are immutable")
 		}
-	} else if !newColumn {
+	} else if !errors.Is(getErr, sql.ErrNoRows) {
 		return nil, getErr
 	}
-	wasActive := getErr == nil && (existing.GetStatus() == "" || existing.GetStatus() == "active")
-	isActive := item.GetStatus() == "active"
-	projectionChanged := wasActive != isActive
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_aliases_json, c_status, c_attrs_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -511,97 +506,7 @@ func upsertDatasetColumnTx(ctx context.Context, tx *sql.Tx, item *pb.DatasetColu
 	if err != nil {
 		return nil, err
 	}
-	if (newColumn || projectionChanged) && isActive {
-		if err := addColumnToFollowingViews(ctx, tx, item); err != nil {
-			return nil, err
-		}
-	} else if isActive && wasActive && getErr == nil && !maps.Equal(existing.GetAttributes(), item.GetAttributes()) {
-		// 已有列只改了属性：跟随它的 View 的列要带上新属性。
-		if err := refreshFollowingViewColumnAttributes(ctx, tx, item); err != nil {
-			return nil, err
-		}
-	}
 	return item, nil
-}
-
-// followingViewIDs 返回数据集上声明了 follow_dataset_columns=true 的活动 View：这些 View 跟随数据集加列。
-func followingViewIDs(ctx context.Context, tx *sql.Tx, spaceID, datasetID string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT c_view_id FROM t_views
-		WHERE c_space_id = ? AND c_dataset_id = ? AND c_status = 'active'
-		  AND json_extract(c_attrs_json, '$.attributes.follow_dataset_columns') = 'true'
-		ORDER BY c_view_id`, spaceID, datasetID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
-
-// addColumnToFollowingViews 把数据集的新列（或重新启用的列）加进跟随它的 View，由定时任务原地追加到索引。
-func addColumnToFollowingViews(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) error {
-	viewIDs, err := followingViewIDs(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
-	if err != nil {
-		return err
-	}
-	for _, viewID := range viewIDs {
-		if err := upsertViewColumn(ctx, tx, &pb.ViewColumn{
-			SpaceId: item.GetSpaceId(), ViewId: viewID, ColumnName: item.GetColumnName(),
-			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: item.GetColumnName(),
-			ValueType: item.GetValueType(), Attributes: cloneMetadataStringMap(item.GetAttributes()),
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// refreshFollowingViewColumnAttributes 把数据集列的新属性同步到跟随它的 View 的同名列：只改属性，排序与其他字段不动；
-// View 里还没有这一列（没有加进 View）时什么都不做。
-func refreshFollowingViewColumnAttributes(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) error {
-	viewIDs, err := followingViewIDs(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
-	if err != nil {
-		return err
-	}
-	for _, viewID := range viewIDs {
-		column, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? AND c_column_name = ?`,
-			[]any{item.GetSpaceId(), viewID, item.GetColumnName()}, func() *pb.ViewColumn { return &pb.ViewColumn{} })
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		column.Attributes = cloneMetadataStringMap(item.GetAttributes())
-		raw, err := marshal(column)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE t_view_columns SET c_attrs_json = ? WHERE c_space_id = ? AND c_view_id = ? AND c_column_name = ?`,
-			raw, item.GetSpaceId(), viewID, item.GetColumnName()); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func cloneMetadataStringMap(input map[string]string) map[string]string {
-	if len(input) == 0 {
-		return nil
-	}
-	output := make(map[string]string, len(input))
-	for key, value := range input {
-		output[key] = value
-	}
-	return output
 }
 
 func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {

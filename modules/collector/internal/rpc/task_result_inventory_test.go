@@ -60,14 +60,14 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 		ProviderSymbol: "SOLUSDT", SeriesTag: "venue:binance|market:spot|source:spot_http",
 	}})
 	require.NoError(t, err)
-	metadata := &taskResultMetadataFake{datasets: make(map[string]*storagepb.Dataset), views: make(map[string]*storagepb.View)}
+	metadata := &taskResultMetadataFake{datasets: make(map[string]*storagepb.Dataset), views: make(map[string]*storagepb.View), indexedTo: make(map[string]string)}
 	for taskID, ids := range map[string]taskresult.IDs{
 		"task-active":   activeIDs,
 		"task-resample": resampleIDs,
 		"task-disabled": disabledIDs,
 	} {
 		owned := newTaskResultMetadataFake(ids, taskID)
-		owned.views[ids.ViewID].IndexedTo = now.Add(-time.Minute).Format(time.RFC3339)
+		metadata.indexedTo[ids.ViewID] = now.Add(-time.Minute).Format(time.RFC3339)
 		metadata.datasets[ids.DatasetID] = owned.datasets[ids.DatasetID]
 		metadata.views[ids.ViewID] = owned.views[ids.ViewID]
 	}

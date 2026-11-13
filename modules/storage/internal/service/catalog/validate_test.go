@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,15 +25,4 @@ func TestValidateColumnDisplayNameOnlyRequiresPresence(t *testing.T) {
 	require.Error(t, validateColumnDisplayName("display_name", map[string]string{}))
 	require.Error(t, validateColumnDisplayName("display_name", map[string]string{"display_name": "  "}))
 	require.Error(t, validateColumnDisplayName("display_name", nil))
-}
-
-func TestDatasetViewColumnUsesTheBareColumnName(t *testing.T) {
-	column := &pb.ViewColumn{ColumnName: "close", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "close"}
-	require.NoError(t, validateViewColumnName(column))
-	column.ColumnName, column.OriginId = "dataset_prices.close", "dataset_prices.close"
-	require.ErrorContains(t, validateViewColumnName(column), "bare Dataset column name")
-	column.ColumnName, column.OriginId = "close", "open"
-	require.ErrorContains(t, validateViewColumnName(column), "column_name must equal origin_id")
-	column.ColumnName, column.OriginId = "data_time", "data_time"
-	require.ErrorContains(t, validateViewColumnName(column), "reserved system column")
 }

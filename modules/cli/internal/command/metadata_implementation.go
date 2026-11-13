@@ -189,13 +189,6 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 			},
 		})
 	}
-	for _, item := range seed.ViewColumns {
-		column, err := item.toPB()
-		if err != nil {
-			return nil, err
-		}
-		calls = append(calls, metadataImportCall{Resource: "view_columns", Method: "UpsertViewColumn", Request: &pb.UpsertViewColumnReq{Column: column}, Response: &pb.UpsertViewColumnRsp{}})
-	}
 	return calls, nil
 }
 
@@ -317,7 +310,7 @@ func runMetadataApply(ctx context.Context, gateway gatewayclient.Invoker, calls 
 		group.SetLimit(metadataApplyConcurrency)
 		for _, batch := range stage {
 			group.Go(func() error {
-				if batch[0].Resource == "dataset_columns" || batch[0].Resource == "view_columns" {
+				if batch[0].Resource == "dataset_columns" {
 					return applyMetadataColumns(groupCtx, gateway, batch, record)
 				}
 				return applyMetadataCall(groupCtx, gateway, batch[0], record)
@@ -341,7 +334,7 @@ func metadataApplyStages(calls []metadataImportCall) [][][]metadataImportCall {
 		same := calls[start:end]
 		start = end
 		switch same[0].Resource {
-		case "dataset_columns", "view_columns":
+		case "dataset_columns":
 			index := map[string]int{}
 			var stage [][]metadataImportCall
 			for _, call := range same {
@@ -379,13 +372,10 @@ func metadataApplyStages(calls []metadataImportCall) [][][]metadataImportCall {
 	return stages
 }
 
-// metadataColumnOwner 返回列所属的数据集或 View；格式不对的请求返回空，到执行时报错。
+// metadataColumnOwner 返回列所属的数据集；格式不对的请求返回空，到执行时报错。
 func metadataColumnOwner(call metadataImportCall) string {
-	switch request := call.Request.(type) {
-	case *pb.UpsertDatasetColumnReq:
+	if request, ok := call.Request.(*pb.UpsertDatasetColumnReq); ok {
 		return request.GetColumn().GetSpaceId() + "\x00" + request.GetColumn().GetDatasetId()
-	case *pb.UpsertViewColumnReq:
-		return request.GetColumn().GetSpaceId() + "\x00" + request.GetColumn().GetViewId()
 	}
 	return ""
 }
@@ -451,12 +441,6 @@ func listMetadataColumns(ctx context.Context, gateway gatewayclient.Invoker, cal
 			}
 			current.Method, current.Response = "ListDatasetColumns", &pb.ListDatasetColumnsRsp{}
 			current.Request = &pb.ListDatasetColumnsReq{SpaceId: request.GetColumn().GetSpaceId(), DatasetId: request.GetColumn().GetDatasetId(), Page: number}
-		case *pb.UpsertViewColumnReq:
-			if request.GetColumn() == nil {
-				return nil, errors.New("invalid view column apply call")
-			}
-			current.Method, current.Response = "ListViewColumns", &pb.ListViewColumnsRsp{}
-			current.Request = &pb.ListViewColumnsReq{SpaceId: request.GetColumn().GetSpaceId(), ViewId: request.GetColumn().GetViewId(), Page: number}
 		default:
 			return nil, fmt.Errorf("invalid %s apply call", call.Resource)
 		}
@@ -496,8 +480,6 @@ func inspectMetadataApplyPage(
 	switch response := probe.Response.(type) {
 	case *pb.ListDatasetColumnsRsp:
 		return found, actual, response.GetPageResult().GetHasMore(), nil
-	case *pb.ListViewColumnsRsp:
-		return found, actual, response.GetPageResult().GetHasMore(), nil
 	default:
 		return found, actual, false, nil
 	}
@@ -515,21 +497,6 @@ func applyProbeResult(resource string, probe *metadataExistsProbe, expectedReque
 		for _, c := range rsp.GetColumns() {
 			if c.GetColumnName() == expected.GetColumnName() && c.GetSpaceId() == req.GetSpaceId() && c.GetDatasetId() == req.GetDatasetId() {
 				return true, c
-			}
-		}
-		return false, nil
-	case "view_columns":
-		rsp, _ := probe.Response.(*pb.ListViewColumnsRsp)
-		if rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			return false, nil
-		}
-		req := probe.Request.(*pb.ListViewColumnsReq)
-		expected := expectedRequest.(*pb.UpsertViewColumnReq).GetColumn()
-		for _, column := range rsp.GetColumns() {
-			if column.GetColumnName() == expected.GetColumnName() &&
-				column.GetSpaceId() == req.GetSpaceId() &&
-				column.GetViewId() == req.GetViewId() {
-				return true, column
 			}
 		}
 		return false, nil
@@ -581,8 +548,6 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 		expected = req.GetDevice()
 	case *pb.CreateViewReq:
 		expected = req.GetView()
-	case *pb.UpsertViewColumnReq:
-		expected = req.GetColumn()
 	default:
 		return fmt.Errorf("unsupported apply resource request %T", request)
 	}
@@ -590,10 +555,6 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 		if resource == "views" {
 			view := expected.(*pb.View)
 			return fmt.Errorf("metadata views %s/%s exists but contract differs", view.GetSpaceId(), view.GetViewId())
-		}
-		if resource == "view_columns" {
-			column := expected.(*pb.ViewColumn)
-			return fmt.Errorf("metadata view_columns %s/%s/%s exists but contract differs", column.GetSpaceId(), column.GetViewId(), column.GetColumnName())
 		}
 		if source, ok := expected.(*pb.DataSource); ok {
 			return fmt.Errorf("metadata data_sources %s/%s exists but contract differs", source.GetSpaceId(), source.GetDataSourceId())
@@ -687,33 +648,9 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			slices.Equal(x.GetGrainKeys(), y.GetGrainKeys()) &&
 			x.GetEngine() == y.GetEngine() &&
 			x.GetStatus() == y.GetStatus() &&
-			metadataViewAttributesEqual(x.GetAttributes(), y.GetAttributes())
-	}
-	if resource == "view_columns" {
-		x, y := a.(*pb.ViewColumn), b.(*pb.ViewColumn)
-		return x.GetSpaceId() == y.GetSpaceId() &&
-			x.GetViewId() == y.GetViewId() &&
-			x.GetColumnName() == y.GetColumnName() &&
-			x.GetOriginType() == y.GetOriginType() &&
-			x.GetOriginId() == y.GetOriginId() &&
-			x.GetValueType() == y.GetValueType() &&
-			x.GetOnlineTime() == y.GetOnlineTime() &&
-			x.GetSortOrder() == y.GetSortOrder() &&
 			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	return proto.Equal(a, b)
-}
-
-func metadataViewAttributesEqual(expected, actual map[string]string) bool {
-	// Storage records the active index contract under moox.* attributes after a
-	// View is activated. Those values are operational state, not setup contract.
-	actualContract := make(map[string]string, len(actual))
-	for key, value := range actual {
-		if !strings.HasPrefix(key, "moox.") {
-			actualContract[key] = value
-		}
-	}
-	return maps.Equal(expected, actualContract)
 }
 
 func metadataResourceExists(ctx context.Context, gateway gatewayclient.Invoker, probe *metadataExistsProbe) (bool, error) {
@@ -828,15 +765,6 @@ func (s seedView) toPB() *pb.View {
 	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, DatasetId: s.PrimaryDatasetID, GrainKeys: s.GrainKeys, Engine: s.Engine, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
-func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {
-	originType, valueType, err := parseColumnAndValueTypes(s.OriginType, s.ValueType)
-	if err != nil {
-		return nil, err
-	}
-	attributes := cloneStringMap(s.Attributes)
-	return &pb.ViewColumn{SpaceId: s.SpaceID, ViewId: s.ViewID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, OnlineTime: s.OnlineTime, SortOrder: s.SortOrder, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: attributes}, nil
-}
-
 func (s seedDevice) toPB() *pb.Device {
 	return &pb.Device{DeviceId: s.DeviceID, Name: s.Name, Engine: s.Engine, Endpoint: s.Endpoint, ConfigJson: s.ConfigJSON, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
@@ -892,35 +820,8 @@ func parseDatasetColumnOriginType(value string) (pb.DatasetColumnOriginType, err
 	}
 }
 
-func parseColumnOriginType(value string) (pb.ColumnOriginType, error) {
-	switch normalizeEnum(value) {
-	case "", "UNSPECIFIED":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_UNSPECIFIED, nil
-	case "DATASET_COLUMN":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, nil
-	case "EXPRESSION":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION, nil
-	case "SYSTEM":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM, nil
-	default:
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_UNSPECIFIED, fmt.Errorf("unsupported column origin_type %q", value)
-	}
-}
-
 func parseDatasetColumnAndValueTypes(origin string, value string) (pb.DatasetColumnOriginType, pb.FieldValueType, error) {
 	originType, err := parseDatasetColumnOriginType(origin)
-	if err != nil {
-		return originType, pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, err
-	}
-	valueType, err := parseFieldValueType(value)
-	if err != nil {
-		return originType, valueType, err
-	}
-	return originType, valueType, nil
-}
-
-func parseColumnAndValueTypes(origin string, value string) (pb.ColumnOriginType, pb.FieldValueType, error) {
-	originType, err := parseColumnOriginType(origin)
 	if err != nil {
 		return originType, pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, err
 	}

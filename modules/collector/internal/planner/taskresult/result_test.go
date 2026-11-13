@@ -55,10 +55,13 @@ func TestResultDisplayNameUsesShortChinese(t *testing.T) {
 }
 
 type resultMetadataFake struct {
-	datasets       map[string]*storagepb.Dataset
-	views          map[string]*storagepb.View
+	datasets map[string]*storagepb.Dataset
+	views    map[string]*storagepb.View
+	// viewStates 是 storage-view 里各 View 的已建状态；没有的按 VIEW_NOT_FOUND 回答。
+	viewStates     map[string]*storagepb.GetViewStateRsp
 	createDatasets int
 	createViews    int
+	updateViews    int
 	failView       bool
 	columnNames    []string
 	columns        []*storagepb.DatasetColumn
@@ -67,7 +70,7 @@ type resultMetadataFake struct {
 }
 
 func newResultMetadataFake() *resultMetadataFake {
-	return &resultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
+	return &resultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}, viewStates: map[string]*storagepb.GetViewStateRsp{}}
 }
 
 func resultOK() *storagepb.RetInfo { return &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS} }
@@ -137,6 +140,7 @@ func (f *resultMetadataFake) CreateView(_ context.Context, req *storagepb.Create
 }
 
 func (f *resultMetadataFake) UpdateView(_ context.Context, req *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
+	f.updateViews++
 	view := req.GetView()
 	f.views[view.GetViewId()] = view
 	return &storagepb.UpdateViewRsp{RetInfo: resultOK(), View: view}, nil
@@ -154,8 +158,11 @@ func (f *resultMetadataFake) UpsertDatasetColumn(_ context.Context, req *storage
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: resultOK()}, nil
 }
 
-func (f *resultMetadataFake) UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
-	return &storagepb.UpsertViewColumnRsp{RetInfo: resultOK()}, nil
+func (f *resultMetadataFake) GetViewState(_ context.Context, req *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
+	if state := f.viewStates[req.GetViewId()]; state != nil {
+		return state, nil
+	}
+	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
 }
 
 func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
@@ -180,7 +187,8 @@ func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 	require.Equal(t, "view_task_1_kline_1h", first.ViewID)
 }
 
-func TestEnsureOutputFieldsAppendsToExplicitViewProjection(t *testing.T) {
+// 改输出字段只补数据集的列：View 的列跟着数据集走，不再改 View；不支持的字段照旧拒绝。
+func TestEnsureOutputFieldsOnlyAddsDatasetColumns(t *testing.T) {
 	fake := newResultMetadataFake()
 	ids := ResultIDs("crypto", "task-projection")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
@@ -189,21 +197,16 @@ func TestEnsureOutputFieldsAppendsToExplicitViewProjection(t *testing.T) {
 	}
 	fake.views[ids.ViewID] = &storagepb.View{
 		SpaceId: "crypto", ViewId: ids.ViewID, Name: "任务结果", DatasetId: ids.DatasetID, Status: "active",
-		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-projection", "moox.columns_explicit": "true"},
-		Columns: []*storagepb.ViewColumn{
-			{ColumnName: "close", OriginId: "close"},
-			{ColumnName: "provider_id", OriginId: "provider_id"},
-		},
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-projection"},
 	}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 	require.NoError(t, manager.EnsureOutputFields(context.Background(), "crypto", "task-projection", ids.DatasetID, ids.ViewID, "kline", []string{"open", "close"}))
 
-	// View 的列只能追加：任务收窄输出后旧列留着（新行里为空），只补上新增的字段。
-	got := fake.views[ids.ViewID].GetColumns()
-	require.Len(t, got, 3)
-	require.Equal(t, "close", got[0].GetColumnName())
-	require.Equal(t, "provider_id", got[1].GetColumnName())
-	require.Equal(t, "open", got[2].GetColumnName())
+	require.Equal(t, []string{"open", "close"}, fake.columnNames)
+	require.Zero(t, fake.updateViews, "不再改 View")
+
+	err := manager.EnsureOutputFields(context.Background(), "crypto", "task-projection", ids.DatasetID, ids.ViewID, "kline", []string{"no_such_field"})
+	require.ErrorIs(t, err, ErrUnsupportedOutputFields)
 }
 
 func TestEnsurePreservesExistingSubjectTagsWhenConfigOmitsTags(t *testing.T) {
@@ -312,9 +315,9 @@ func TestInspectReportsTaskOwnedReadyResultAndLastDataTime(t *testing.T) {
 		ViewId:     ids.ViewID,
 		DatasetId:  ids.DatasetID,
 		Status:     "active",
-		IndexedTo:  "2026-09-20T04:00:00Z",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-inspect"},
 	}
+	fake.viewStates[ids.ViewID] = &storagepb.GetViewStateRsp{RetInfo: resultOK(), IndexId: "idx", IndexedFrom: "2026-09-01T00:00:00Z", IndexedTo: "2026-09-20T04:00:00Z"}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 
 	inspection, err := manager.Inspect(context.Background(), "crypto", "task-inspect")
@@ -322,6 +325,8 @@ func TestInspectReportsTaskOwnedReadyResultAndLastDataTime(t *testing.T) {
 	require.Equal(t, ids, inspection.IDs)
 	require.Equal(t, "ready", inspection.Status)
 	require.Equal(t, "2026-09-20T04:00:00Z", inspection.LastDataTime)
+	require.Equal(t, "2026-09-01T00:00:00Z", inspection.CoverageStart)
+	require.Equal(t, "2026-09-20T04:00:00Z", inspection.CoverageEnd)
 	require.Equal(t, ids.ViewID, inspection.View.GetViewId())
 }
 
@@ -570,11 +575,6 @@ func TestEnsureColumnsCreatesFundingRateOnlyWhenSelected(t *testing.T) {
 	require.Equal(t, "zero", funding.GetAttributes()["fill"])
 	require.Equal(t, "资金费率", funding.GetAttributes()["display_name"])
 
-	columns, err := manager.resultViewColumns("crypto", IDs{ViewID: "view"}, []string{"close", "funding_rate"})
-	require.NoError(t, err)
-	require.Equal(t, "funding_rate", columns[1].GetColumnName())
-	require.Equal(t, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, columns[1].GetValueType())
-	require.Equal(t, "资金费率", columns[1].GetAttributes()["display_name"])
 }
 
 // 未登记的市场报错，不当成连续交易的市场悄悄跳过 calendar、alignment。
@@ -582,4 +582,28 @@ func TestEnsureRejectsUnregisteredMarket(t *testing.T) {
 	manager := NewManagerWithAPI(newResultMetadataFake(), &storagepb.AuthInfo{AppId: "collector"})
 	_, err := manager.Ensure(context.Background(), "no_such_space", "task-unknown-5m", "kline", "equity", Config{Frequency: "5m"})
 	require.ErrorIs(t, err, barclock.ErrUnknownMarket)
+}
+
+// 覆盖范围只取已建好的索引：索引还在建时退回属性；storage-view 报别的错照常返回错误，不当成覆盖范围未知。
+func TestInspectCoverageComesFromBuiltViewIndex(t *testing.T) {
+	fake := newResultMetadataFake()
+	ids := ResultIDs("crypto", "task-coverage")
+	attrs := map[string]string{"owner_module": "collector", "collector_task_id": "task-coverage"}
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: attrs}
+	fake.views[ids.ViewID] = &storagepb.View{
+		SpaceId: "crypto", ViewId: ids.ViewID, DatasetId: ids.DatasetID, Status: "active",
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-coverage", "indexed_to": "2026-09-19T00:00:00Z"},
+	}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+
+	fake.viewStates[ids.ViewID] = &storagepb.GetViewStateRsp{RetInfo: resultOK(), IndexedTo: "2026-09-20T04:00:00Z"}
+	inspection, err := manager.Inspect(context.Background(), "crypto", "task-coverage")
+	require.NoError(t, err)
+	require.Equal(t, "2026-09-19T00:00:00Z", inspection.LastDataTime, "索引还没建好，退回 View 属性")
+	require.Equal(t, "2026-09-19T00:00:00Z", inspection.CoverageEnd)
+
+	fake.viewStates[ids.ViewID] = &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "storage-view 不可用"}}
+	_, err = manager.Inspect(context.Background(), "crypto", "task-coverage")
+	require.ErrorContains(t, err, "inspect result view state")
+	require.NotErrorIs(t, err, ErrResultContract)
 }

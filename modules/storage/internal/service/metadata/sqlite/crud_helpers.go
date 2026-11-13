@@ -38,22 +38,6 @@ var (
 	unmarshalOptions = protojson.UnmarshalOptions{DiscardUnknown: true}
 )
 
-// ErrViewIndexConflict 表示活动索引的状态与这次提交的预期不一致。
-var ErrViewIndexConflict = errors.New("View 索引状态与这次提交的预期不一致")
-
-const sqliteBuildTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
-
-func requireChangedRow(result sql.Result) error {
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return ErrViewIndexConflict
-	}
-	return nil
-}
-
 func getMessage[T proto.Message](ctx context.Context, db queryRower, query string, args []any, newMessage func() T) (T, error) {
 	row := db.QueryRowContext(ctx, query, args...)
 	return scanMessage(row, newMessage)

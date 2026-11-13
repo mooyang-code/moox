@@ -181,7 +181,7 @@ func TestCleanupRetiredIndexesRequiresContinuousUnreferencedAge(t *testing.T) {
 }
 
 func TestCleanupRetiredIndexesProtectsMetadataAndRuntimeIndexes(t *testing.T) {
-	active := cleanupIndexID("active")
+	active := cleanupIndexID("metadata")
 	runtimeActive := cleanupIndexID("runtime-active")
 	building := cleanupIndexID("building")
 	orphan := cleanupIndexID("orphan")
@@ -189,7 +189,7 @@ func TestCleanupRetiredIndexesProtectsMetadataAndRuntimeIndexes(t *testing.T) {
 	svc := newCleanupService(t, engine)
 	svc.views[viewRef{spaceID: "space", viewID: "runtime-active"}] = &viewRuntime{active: runtimeActive}
 	svc.views[viewRef{spaceID: "space", viewID: "building"}] = &viewRuntime{building: building}
-	metadata := &cleanupMetadata{views: []*pb.View{{SpaceId: "space", ViewId: "metadata", ActiveIndexId: active}}}
+	metadata := &cleanupMetadata{views: []*pb.View{{SpaceId: "space", ViewId: "metadata"}}}
 	now := time.Date(2026, 8, 19, 2, 0, 0, 0, time.UTC)
 	opts := RetiredIndexCleanupOptions{Metadata: metadata, MinUnreferencedAge: time.Minute, Now: func() time.Time { return now }}
 
@@ -327,7 +327,7 @@ func TestCleanupRetiredIndexesRevalidatesMetadataInsideIndexGate(t *testing.T) {
 	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
 	svc := newCleanupService(t, engine)
 	metadata := &cleanupMetadata{
-		views: []*pb.View{{SpaceId: "space", ViewId: "prices", Engine: "fake", ActiveIndexId: id}},
+		views: []*pb.View{{SpaceId: "space", ViewId: "prices", Engine: "fake"}},
 		// First discovery is call 1. The due run performs the run-wide reads on
 		// calls 2 and 3; call 4 is the revalidation under the per-index gate.
 		protectOnCall: 4,
@@ -357,7 +357,7 @@ func TestCleanupRetiredIndexesProtectsOnlyMatchingEngine(t *testing.T) {
 	svc.schemas[id] = viewindex.ViewIndexSchema{Engine: "duckdb"}
 	svc.indexView[id] = viewRef{spaceID: "space", viewID: "prices"}
 	metadata := &cleanupMetadata{views: []*pb.View{{
-		SpaceId: "space", ViewId: "prices", Engine: "duckdb", ActiveIndexId: id,
+		SpaceId: "space", ViewId: "prices", Engine: "duckdb",
 	}}}
 	now := time.Date(2026, 8, 19, 2, 0, 0, 0, time.UTC)
 	opts := RetiredIndexCleanupOptions{Metadata: metadata, MinUnreferencedAge: time.Minute, Now: func() time.Time { return now }}

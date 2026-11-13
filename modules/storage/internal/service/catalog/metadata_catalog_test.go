@@ -126,46 +126,7 @@ func TestReservedTimeSeriesSystemColumnNamesAreRejected(t *testing.T) {
 			require.Equal(t, pb.ErrorCode_INVALID_PARAM, updateRsp.GetRetInfo().GetCode())
 			require.Contains(t, updateRsp.GetRetInfo().GetMsg(), "reserved system column")
 		})
-		t.Run("view_column/"+name, func(t *testing.T) {
-			column := &pb.ViewColumn{
-				SpaceId:    "mooxsys",
-				ViewId:     "view_test",
-				ColumnName: name,
-				OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION,
-				Attributes: map[string]string{"display_name": name},
-			}
-			rsp, err := svc.UpsertViewColumn(context.Background(), &pb.UpsertViewColumnReq{Column: column})
-			require.NoError(t, err)
-			require.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-			require.Contains(t, rsp.GetRetInfo().GetMsg(), "reserved system column")
-		})
 	}
-}
-
-func TestCreateAndUpdateViewRejectEmbeddedReservedColumns(t *testing.T) {
-	svc := &Service{}
-	newView := func() *pb.View {
-		return &pb.View{
-			SpaceId:   "space",
-			ViewId:    "view_test",
-			Name:      "测试视图",
-			DatasetId: "dataset",
-			Columns: []*pb.ViewColumn{
-				nil,
-				{ColumnName: "Series_Tag", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION},
-			},
-		}
-	}
-
-	createRsp, err := svc.CreateView(context.Background(), &pb.CreateViewReq{View: newView()})
-	require.NoError(t, err)
-	require.NotEqual(t, pb.ErrorCode_SUCCESS, createRsp.GetRetInfo().GetCode())
-	require.Contains(t, createRsp.GetRetInfo().GetMsg(), "reserved system column")
-
-	updateRsp, err := svc.UpdateView(context.Background(), &pb.UpdateViewReq{View: newView()})
-	require.NoError(t, err)
-	require.NotEqual(t, pb.ErrorCode_SUCCESS, updateRsp.GetRetInfo().GetCode())
-	require.Contains(t, updateRsp.GetRetInfo().GetMsg(), "reserved system column")
 }
 
 func TestDatasetMetadataHasNoSeriesTagRegistry(t *testing.T) {
@@ -271,26 +232,6 @@ func TestDeleteSpaceRemovesMetadataThenRowsOfEveryDataset(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.True(t, store.deleted)
 	require.Equal(t, []string{"crypto/a", "crypto/b"}, rows.deleted)
-}
-
-// 列只能追加：数据集列被禁用后 View 里的这一列要留着，更新 View 时只校验新列。
-func TestNewViewColumnsSkipsDeclaredAndBuiltColumns(t *testing.T) {
-	view := &pb.View{
-		Columns:       []*pb.ViewColumn{{ColumnName: "declared"}},
-		ActiveColumns: []*pb.ViewColumn{{ColumnName: "built"}},
-	}
-	added := newViewColumns(view, []*pb.ViewColumn{{ColumnName: "declared"}, {ColumnName: "built"}, {ColumnName: "new"}})
-	require.Len(t, added, 1)
-	require.Equal(t, "new", added[0].GetColumnName())
-	require.Len(t, newViewColumns(nil, []*pb.ViewColumn{{ColumnName: "new"}}), 1, "新建 View 时所有列都是新列")
-}
-
-func TestVisibleViewColumnsHidesLogicallyDeletedColumns(t *testing.T) {
-	columns := []*pb.ViewColumn{{ColumnName: "close"}, {ColumnName: "old"}}
-	visible := visibleViewColumns(columns, []string{"old"})
-	require.Len(t, visible, 1)
-	require.Equal(t, "close", visible[0].GetColumnName())
-	require.Len(t, visibleViewColumns(columns, nil), 2)
 }
 
 // GetDataset 只在数据集确实不存在时返回 DATASET_NOT_FOUND：读取出错是内部错误，调用方不能把它当成“已经删掉”。

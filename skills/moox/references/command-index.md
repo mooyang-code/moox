@@ -288,13 +288,12 @@
 | `metadata tag members` | 给手动标签增删成员（用于验证标的变更对采集计划的影响） |
 | `metadata tag show` | 查看标签 |
 | `metadata tag upsert` | 新建或修改标签 |
-| `metadata view add-column` | 给 View 加列（会增加存储机内存占用） |
-| `metadata view columns` | 列出 View 的列 |
+| `metadata view columns` | 列出 View 的列（由数据集启用的列推出） |
 | `metadata view create` | 创建 View（会增加存储机内存占用，先按 skill 的 storage.md 估算） |
 | `metadata view delete` | 删除 View（默认只预览，--yes 才执行；离线删除用 storage delete-view） |
 | `metadata view list` | 列出 View |
 | `metadata view show` | 查看 View |
-| `metadata view update` | 修改 View 定义 |
+| `metadata view update` | 修改 View 定义（列等于数据集启用的列，不能单独改） |
 
 ## monitor：Monitor：健康总览、数据到达历史、主机指标与告警屏蔽
 

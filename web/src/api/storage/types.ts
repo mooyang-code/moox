@@ -247,15 +247,13 @@ export interface View {
   /** 所属 Dataset 的频率，由 Storage 填写。 */
   freq?: string;
   engine?: string;
-  retention_window?: string;
-  active_index_id?: string;
   status: string;
+  /** 只读：等于所属数据集里启用的列；已建进索引的列见 DataView.GetViewState。 */
   columns?: ViewColumn[];
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
-  view_revision?: number | string;
-  active_columns?: ViewColumn[];
+  /** 由所属数据集里已停用的列推出。 */
   hidden_columns?: string[];
 }
 
@@ -266,7 +264,6 @@ export interface ViewColumn {
   origin_type: ColumnOriginType;
   origin_id: string;
   value_type: FieldValueType;
-  online_time?: string;
   sort_order?: number;
   created_at?: string;
   updated_at?: string;

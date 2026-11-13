@@ -150,7 +150,7 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorTask
 			return fmt.Errorf("upsert factor result columns: %w", err)
 		}
 	}
-	// 默认 View 由 factor-mgr 自己维护：启动对账补齐缺失的 View（已有的由 Storage 按 follow_dataset_columns 跟随加列）。
+	// 默认 View 由 factor-mgr 自己维护：启动对账补齐缺失的 View；View 的列由 Storage 按数据集的列推出，上面补的列会自动出现在 View 里。
 	if err := s.metadata.EnsureResultView(ctx, set.SpaceID, set.ResultDatasetID); err != nil {
 		return fmt.Errorf("ensure factor result default View: %w", err)
 	}

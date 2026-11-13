@@ -31,14 +31,13 @@ var (
 
 // storageInternalMethods 是 Storage 进程内部使用的方法，任何路由都不能放行。
 var storageInternalMethods = map[string]struct{}{
-	"CompleteViewInitialBuild": {},
-	"PrepareViewIndex":         {},
-	"ApplyViewIndex":           {},
-	"StatViewIndex":            {},
-	"RemoveViewIndex":          {},
-	"ListViewIndexes":          {},
-	"QueryTimeSeriesIndex":     {},
-	"SearchRecordIndex":        {},
+	"PrepareViewIndex":     {},
+	"ApplyViewIndex":       {},
+	"StatViewIndex":        {},
+	"RemoveViewIndex":      {},
+	"ListViewIndexes":      {},
+	"QueryTimeSeriesIndex": {},
+	"SearchRecordIndex":    {},
 }
 
 type Route struct {

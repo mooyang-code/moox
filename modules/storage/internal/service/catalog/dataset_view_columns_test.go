@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
@@ -49,26 +50,13 @@ type noopRows struct{}
 
 func (noopRows) DeleteDatasetRows(context.Context, string, string) (uint64, error) { return 0, nil }
 
-// createView 在数据集上建一个 View；follow 为真时声明 follow_dataset_columns。
-func createView(t *testing.T, store *sqlite.Store, dataset *pb.Dataset, viewID string, follow bool) *pb.View {
+// createView 在数据集上建一个 View。View 的列由数据集列推出，这里传入的列会被忽略。
+func createView(t *testing.T, store *sqlite.Store, dataset *pb.Dataset, viewID string) *pb.View {
 	t.Helper()
-	attrs := map[string]string{}
-	if follow {
-		attrs["follow_dataset_columns"] = "true"
-	}
-	columns := []*pb.ViewColumn{}
-	for index, name := range []string{"close", "bias_20"} {
-		columns = append(columns, &pb.ViewColumn{
-			SpaceId: dataset.GetSpaceId(), ViewId: viewID, ColumnName: name,
-			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: name,
-			ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: uint32(index),
-			Attributes: map[string]string{"display_name": name},
-		})
-	}
 	view, err := store.CreateView(context.Background(), &pb.View{
 		SpaceId: dataset.GetSpaceId(), ViewId: viewID, Name: dataset.GetName(), DatasetId: dataset.GetDatasetId(),
 		GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Freq: "1m", Engine: "duckdb", Status: "active",
-		Columns: columns, Attributes: attrs,
+		Columns: []*pb.ViewColumn{{ColumnName: "ignored"}},
 	})
 	require.NoError(t, err)
 	return view
@@ -92,76 +80,61 @@ func newDatasetColumn(dataset *pb.Dataset, name string, attrs map[string]string)
 	}
 }
 
-func TestFollowingViewExtendsWhenDatasetGainsColumn(t *testing.T) {
+// View 的列就是数据集里启用的列：数据集加列后 View 自动有这一列，不需要任何 View 侧的调用；
+// 列按数据集列的创建顺序排列，属性取自数据集列；停用的列进隐藏列。
+func TestViewColumnsFollowDatasetColumns(t *testing.T) {
 	ctx := context.Background()
-	store, _, dataset := newDatasetFixture(t)
-	view := createView(t, store, dataset, "view_factor_btc_1m", true)
+	store, service, dataset := newDatasetFixture(t)
+	view := createView(t, store, dataset, "view_factor_btc_1m")
+	require.Equal(t, []string{"close", "bias_20"}, viewColumnNames(view.GetColumns()), "写入时传的列被忽略")
 
-	column := newDatasetColumn(dataset, "momentum_5", map[string]string{"display_name": "momentum_5"})
-	_, err := store.UpsertDatasetColumn(ctx, column)
+	rsp, err := service.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: newDatasetColumn(dataset, "momentum_5", map[string]string{"display_name": "momentum_5", "factor_id": "Momentum"})})
 	require.NoError(t, err)
-	view, err = store.GetView(ctx, dataset.GetSpaceId(), view.GetViewId())
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	listed, err := service.ListViewColumns(ctx, &pb.ListViewColumnsReq{SpaceId: dataset.GetSpaceId(), ViewId: view.GetViewId()})
 	require.NoError(t, err)
-	require.Contains(t, viewColumnNames(view.GetColumns()), "momentum_5")
-	columns := len(view.GetColumns())
+	require.Equal(t, pb.ErrorCode_SUCCESS, listed.GetRetInfo().GetCode(), listed.GetRetInfo().GetMsg())
+	require.Equal(t, []string{"close", "bias_20", "momentum_5"}, viewColumnNames(listed.GetColumns()))
+	added := listed.GetColumns()[2]
+	require.Equal(t, uint32(2), added.GetSortOrder())
+	require.Equal(t, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, added.GetOriginType())
+	require.Equal(t, "momentum_5", added.GetOriginId())
+	require.Equal(t, "Momentum", added.GetAttributes()["factor_id"], "属性取自数据集列")
 
-	_, err = store.UpsertDatasetColumn(ctx, column)
+	disabled := newDatasetColumn(dataset, "bias_20", map[string]string{"display_name": "偏离"})
+	disabled.OriginType, disabled.OriginId, disabled.Status = pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED, "bias_20", "disabled"
+	_, err = store.UpsertDatasetColumn(ctx, disabled)
 	require.NoError(t, err)
-	view, err = store.GetView(ctx, dataset.GetSpaceId(), view.GetViewId())
+	got, err := service.GetView(ctx, &pb.GetViewReq{SpaceId: dataset.GetSpaceId(), ViewId: view.GetViewId()})
 	require.NoError(t, err)
-	require.Len(t, view.GetColumns(), columns, "重复 upsert 不重复加列")
+	require.Equal(t, []string{"close", "momentum_5"}, viewColumnNames(got.GetView().GetColumns()))
+	require.Equal(t, []string{"bias_20"}, got.GetView().GetHiddenColumns())
 }
 
-func TestViewWithoutFollowAttributeIsNotExtended(t *testing.T) {
+// 元数据缓存里的 View 与底层推出的列一致。
+func TestCachedViewCarriesDerivedColumns(t *testing.T) {
 	ctx := context.Background()
 	store, _, dataset := newDatasetFixture(t)
-	view := createView(t, store, dataset, "view_plain", false)
-
-	_, err := store.UpsertDatasetColumn(ctx, newDatasetColumn(dataset, "momentum_5", map[string]string{"display_name": "momentum_5"}))
+	createView(t, store, dataset, "view_factor_btc_1m")
+	cached, err := metacache.New(ctx, store, metacache.Options{})
 	require.NoError(t, err)
-	view, err = store.GetView(ctx, dataset.GetSpaceId(), view.GetViewId())
+	t.Cleanup(func() { _ = cached.Close() })
+	_, err = store.UpsertDatasetColumn(ctx, newDatasetColumn(dataset, "momentum_5", map[string]string{"display_name": "momentum_5"}))
 	require.NoError(t, err)
-	require.NotContains(t, viewColumnNames(view.GetColumns()), "momentum_5")
-}
-
-func TestFollowingViewColumnAttributeChangeRefreshes(t *testing.T) {
-	ctx := context.Background()
-	store, _, dataset := newDatasetFixture(t)
-	createView(t, store, dataset, "view_factor_btc_1m", true)
-	column := func(factorID string) *pb.DatasetColumn {
-		return newDatasetColumn(dataset, "fast_bias", map[string]string{"display_name": "fast_bias", "factor_id": factorID})
-	}
-	_, err := store.UpsertDatasetColumn(ctx, column("BiasA"))
+	require.NoError(t, cached.Refresh(ctx))
+	view, err := cached.GetView(ctx, dataset.GetSpaceId(), "view_factor_btc_1m")
 	require.NoError(t, err)
-	view, err := store.GetView(ctx, dataset.GetSpaceId(), "view_factor_btc_1m")
+	require.Equal(t, []string{"close", "bias_20", "momentum_5"}, viewColumnNames(view.GetColumns()))
+	columns, _, err := cached.ListViewColumns(ctx, dataset.GetSpaceId(), "view_factor_btc_1m", nil)
 	require.NoError(t, err)
-	find := func(view *pb.View) *pb.ViewColumn {
-		for _, item := range view.GetColumns() {
-			if item.GetColumnName() == "fast_bias" {
-				return item
-			}
-		}
-		return nil
-	}
-	before := find(view)
-	require.NotNil(t, before)
-	require.Equal(t, "BiasA", before.GetAttributes()["factor_id"])
-
-	_, err = store.UpsertDatasetColumn(ctx, column("BiasB"))
-	require.NoError(t, err)
-	view, err = store.GetView(ctx, dataset.GetSpaceId(), "view_factor_btc_1m")
-	require.NoError(t, err)
-	after := find(view)
-	require.NotNil(t, after)
-	require.Equal(t, "BiasB", after.GetAttributes()["factor_id"])
-	require.Equal(t, before.GetSortOrder(), after.GetSortOrder(), "只刷新属性，排序不动")
+	require.Equal(t, []string{"close", "bias_20", "momentum_5"}, viewColumnNames(columns))
 }
 
 // 数据集的 View 由创建它的模块自己管理：Storage 不再替它删除，有 View 引用的数据集不能删。
 func TestDatasetWithViewCannotBeDeletedUntilViewIsRemoved(t *testing.T) {
 	ctx := context.Background()
 	store, service, dataset := newDatasetFixture(t)
-	createView(t, store, dataset, "view_factor_btc_1m", true)
+	createView(t, store, dataset, "view_factor_btc_1m")
 
 	rsp, err := service.DeleteDataset(ctx, &pb.DeleteDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
 	require.NoError(t, err)

@@ -13,8 +13,6 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 func TestValidateRepairViewRequiresConfirmation(t *testing.T) {
@@ -46,59 +44,6 @@ func TestResolveRepairPackageRootWalksUpFromStorageConfig(t *testing.T) {
 	}
 }
 
-func TestResetRepairViewMetadataClearsActiveIndex(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "metadata.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Exec(`
-CREATE TABLE t_views (
-  c_space_id TEXT, c_view_id TEXT, c_active_index_id TEXT,
-  c_view_revision INTEGER, c_active_columns_json TEXT, c_active_view_schema_hash TEXT,
-  c_indexed_from TEXT, c_indexed_to TEXT, c_attrs_json TEXT, c_mtime TEXT,
-  PRIMARY KEY(c_space_id,c_view_id));`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	view := &storagepb.View{
-		SpaceId:       "space",
-		ViewId:        "view",
-		ActiveIndexId: "view_s7370616365_v76696577",
-		ViewRevision:  3,
-		ActiveColumns: []*storagepb.ViewColumn{{ColumnName: "close"}},
-		IndexedFrom:   "2026-08-01T00:00:00Z",
-		IndexedTo:     "2026-08-02T00:00:00Z",
-	}
-	raw, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(view)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO t_views VALUES (?,?,?,?,?,?,?,?,?,?)`, "space", "view", view.GetActiveIndexId(), 3, `[{"column_name":"close"}]`, "hash", view.GetIndexedFrom(), view.GetIndexedTo(), string(raw), ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := resetRepairViewMetadata(context.Background(), dbPath, "space", "view"); err != nil {
-		t.Fatal(err)
-	}
-	db, err = sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var active string
-	var revision uint64
-	if err := db.QueryRow(`SELECT c_active_index_id,c_view_revision FROM t_views WHERE c_space_id='space' AND c_view_id='view'`).Scan(&active, &revision); err != nil {
-		t.Fatal(err)
-	}
-	if active != "" || revision != 0 {
-		t.Fatalf("reset state = active %q revision %d", active, revision)
-	}
-}
-
 func TestPurgeRepairViewIndexesRemovesIndexAndWAL(t *testing.T) {
 	root := t.TempDir()
 	duckRoot := filepath.Join(root, "duckdb")
@@ -123,7 +68,7 @@ func TestPurgeRepairViewIndexesRemovesIndexAndWAL(t *testing.T) {
 	}
 }
 
-// repair-view 按顺序暂停 storage-view、备份元数据、清掉活动索引指针、删物理索引、再恢复。
+// repair-view 按顺序暂停 storage-view、删索引文件、再恢复；元数据不动。
 func TestRepairViewRebuildsTheNamedView(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "metadata.db")
@@ -141,14 +86,10 @@ func TestRepairViewRebuildsTheNamedView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`CREATE TABLE t_views (
-  c_space_id TEXT, c_view_id TEXT, c_engine TEXT, c_active_index_id TEXT,
-  c_view_revision INTEGER, c_active_columns_json TEXT, c_active_view_schema_hash TEXT,
-  c_indexed_from TEXT, c_indexed_to TEXT, c_attrs_json TEXT, c_mtime TEXT,
-  PRIMARY KEY(c_space_id,c_view_id))`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE t_views (c_space_id TEXT, c_view_id TEXT, c_engine TEXT, PRIMARY KEY(c_space_id,c_view_id))`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO t_views VALUES ('space','view','duckdb',?,1,'[]','h','','','{"space_id":"space","view_id":"view"}','')`, id); err != nil {
+	if _, err := db.Exec(`INSERT INTO t_views VALUES ('space','view','duckdb')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -178,7 +119,7 @@ func TestRepairViewRebuildsTheNamedView(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(indexRoot, "duckdb", id+".duckdb")); !os.IsNotExist(err) {
 		t.Fatalf("索引文件应已删除，stat err=%v", err)
 	}
-	if !strings.Contains(out.String(), `"backup_path"`) {
-		t.Fatalf("输出应带备份路径：%s", out.String())
+	if !strings.Contains(out.String(), id) {
+		t.Fatalf("输出应带索引标识：%s", out.String())
 	}
 }

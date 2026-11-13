@@ -127,8 +127,41 @@ type ViewIndexSchema struct {
 	RowsPerSeries uint64
 }
 
+// BuiltColumn 是索引文件里记下的一列已建列，只含列契约（schema 哈希）用到的字段。
+// View 的已建状态只以索引文件为准，重启后由它还原写入契约。
+type BuiltColumn struct {
+	Name       string `json:"name"`
+	OriginType int32  `json:"origin_type"`
+	OriginID   string `json:"origin_id"`
+	ValueType  int32  `json:"value_type"`
+	SortOrder  uint32 `json:"sort_order"`
+}
+
+// EncodeBuiltColumns 取出要记进索引文件的列契约。
+func EncodeBuiltColumns(columns []*pb.ViewColumn) []BuiltColumn {
+	built := make([]BuiltColumn, 0, len(columns))
+	for _, column := range columns {
+		if column != nil {
+			built = append(built, BuiltColumn{Name: column.GetColumnName(), OriginType: int32(column.GetOriginType()), OriginID: column.GetOriginId(), ValueType: int32(column.GetValueType()), SortOrder: column.GetSortOrder()})
+		}
+	}
+	return built
+}
+
+// DecodeBuiltColumns 把索引文件里的列契约还原成 View 列。
+func DecodeBuiltColumns(built []BuiltColumn) []*pb.ViewColumn {
+	columns := make([]*pb.ViewColumn, 0, len(built))
+	for _, column := range built {
+		columns = append(columns, &pb.ViewColumn{ColumnName: column.Name, OriginType: pb.ColumnOriginType(column.OriginType), OriginId: column.OriginID, ValueType: pb.FieldValueType(column.ValueType), SortOrder: column.SortOrder})
+	}
+	return columns
+}
+
 type ViewIndexStats struct {
-	Exists        bool
+	Exists bool
+	// DatasetID 与 Columns 是索引建成时记下的数据集与已建列（StatMetadata 与 Stat 都返回）。
+	DatasetID     string
+	Columns       []*pb.ViewColumn
 	ViewVersion   uint64
 	EntryCount    int64
 	PhysicalBytes uint64
@@ -184,8 +217,8 @@ type QuerySpec struct {
 	TotalMode    pb.TotalMode
 }
 
-// Engine is the single physical View index contract. Index existence is owned
-// by metadata catalog state; an engine only prepares, writes, queries, stats,
+// Engine is the single physical View index contract. The index file is the only
+// record of a View's built state; an engine prepares, writes, queries, stats,
 // and removes an explicitly named index.
 type Engine interface {
 	Engine() string
@@ -276,10 +309,9 @@ type ExistenceChecker interface {
 }
 
 // MetadataStatReader returns the persisted schema contract without scanning
-// all rows. Startup and restore only need to verify that an active index is
-// present and matches Metadata; the full Stat operation may execute COUNT/MIN
-// and MAX over a large DuckDB file and must remain on the periodic View Maintainer
-// path.
+// all rows. Startup and restore only need the built contract recorded in the
+// index; the full Stat operation may execute COUNT/MIN and MAX over a large
+// DuckDB file and must remain on the periodic View Maintainer path.
 type MetadataStatReader interface {
 	StatMetadata(context.Context, string) (ViewIndexStats, error)
 }

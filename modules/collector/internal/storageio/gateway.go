@@ -24,7 +24,6 @@ type Metadata interface {
 	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
 	ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
-	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq, ...client.Option) (*storagepb.UpsertViewColumnRsp, error)
 	ResolveSubjects(context.Context, *storagepb.ResolveSubjectsReq, ...client.Option) (*storagepb.ResolveSubjectsRsp, error)
 	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
 	ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error)
@@ -43,7 +42,7 @@ type Primary interface {
 	ReadRows(context.Context, *storagepb.PrimaryReadRowsReq, ...client.Option) (*storagepb.PrimaryReadRowsRsp, error)
 }
 
-// View 是 Collector 用到的 DataView 方法：建合成目标时等 View 的列建好。
+// View 是 Collector 用到的 DataView 方法：建合成目标时等 View 的列建好，任务结果读 View 的覆盖范围。
 type View interface {
 	GetViewState(context.Context, *storagepb.GetViewStateReq, ...client.Option) (*storagepb.GetViewStateRsp, error)
 }
@@ -117,10 +116,6 @@ func (c *Client) ListViews(ctx context.Context, request *storagepb.ListViewsReq,
 
 func (c *Client) UpsertDatasetColumn(ctx context.Context, request *storagepb.UpsertDatasetColumnReq, options ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {
 	return invoke[storagepb.UpsertDatasetColumnRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpsertDatasetColumn", request, options)
-}
-
-func (c *Client) UpsertViewColumn(ctx context.Context, request *storagepb.UpsertViewColumnReq, options ...client.Option) (*storagepb.UpsertViewColumnRsp, error) {
-	return invoke[storagepb.UpsertViewColumnRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpsertViewColumn", request, options)
 }
 
 func (c *Client) ResolveSubjects(ctx context.Context, request *storagepb.ResolveSubjectsReq, options ...client.Option) (*storagepb.ResolveSubjectsRsp, error) {

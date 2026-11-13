@@ -311,7 +311,7 @@ func TestSetupInitAllowsFactorColumnOriginWithoutStorageFactorMetadata(t *testin
 	require.NoError(t, validateSetupMetadataDependencies(seed))
 }
 
-func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
+func TestSetupInitRejectsDuplicateDatasetColumns(t *testing.T) {
 	base := metadataSeed{
 		Spaces:      []seedSpace{{SpaceID: "crypto"}},
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
@@ -326,53 +326,6 @@ func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
 		},
 	}
 	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata dataset_column")
-
-	base.DatasetColumns = base.DatasetColumns[:1]
-	base.Views = []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline")}
-	base.ViewColumns = []seedViewColumn{
-		{SpaceID: "crypto", ViewID: "kline", ColumnName: "close", OriginType: "dataset_column", OriginID: "close"},
-		{SpaceID: "crypto", ViewID: "kline", ColumnName: "close", OriginType: "dataset_column", OriginID: "close"},
-	}
-	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata view_column")
-}
-
-func TestSetupInitRejectsMissingViewColumnOrigin(t *testing.T) {
-	err := validateSetupMetadataDependencies(metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
-		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freq: "1h",
-		}},
-		Views: []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline")},
-		ViewColumns: []seedViewColumn{{
-			SpaceID: "crypto", ViewID: "kline", ColumnName: "close",
-			OriginType: "dataset_column", OriginID: "close",
-		}},
-	})
-	require.ErrorContains(t, err, `references undefined dataset_column "close"`)
-}
-
-func TestSetupInitRejectsDatasetPrefixedViewColumn(t *testing.T) {
-	err := validateSetupMetadataDependencies(metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
-		Datasets: []seedDataset{
-			{SpaceID: "crypto", DatasetID: "spot", DataSourceID: "market", DataKind: "time_series", Freq: "1h"},
-			{SpaceID: "crypto", DatasetID: "perpetual", DataSourceID: "market", DataKind: "time_series", Freq: "1h"},
-		},
-		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
-		DatasetColumns: []seedDatasetColumn{
-			{SpaceID: "crypto", DatasetID: "spot", ColumnName: "close", OriginType: "field", OriginID: "close"},
-			{SpaceID: "crypto", DatasetID: "perpetual", ColumnName: "close", OriginType: "field", OriginID: "close"},
-		},
-		Views: []seedView{testCanonicalTimeSeriesView("crypto", "spot_view", "spot")},
-		ViewColumns: []seedViewColumn{{
-			SpaceID: "crypto", ViewID: "spot_view", ColumnName: "perpetual.close",
-			OriginType: "dataset_column", OriginID: "perpetual.close",
-		}},
-	})
-	require.ErrorContains(t, err, `invalid dataset_column origin "perpetual.close"; use the bare column name`)
 }
 
 func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {

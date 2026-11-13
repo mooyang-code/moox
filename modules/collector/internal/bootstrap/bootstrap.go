@@ -117,7 +117,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if resultMetadataErr != nil {
 		return nil, fmt.Errorf("initialize collector result metadata client: %w", resultMetadataErr)
 	}
-	resultManager := collectorresult.NewManager(resultMetadata.Client, resultMetadata.Auth)
+	resultManager := collectorresult.NewManager(resultMetadata.Client, resultMetadata.View, resultMetadata.Auth)
 	resultManager.SetFieldOffers(marketwiring.FieldOffers())
 	if err := ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager); err != nil {
 		return nil, fmt.Errorf("initialize collector task results: %w", err)

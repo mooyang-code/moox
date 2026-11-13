@@ -50,9 +50,29 @@ func (s *metadataStub) GetTag(_ context.Context, req *storagepb.GetTagReq, _ ...
 	return &storagepb.GetTagRsp{RetInfo: success(), Tag: &storagepb.Tag{TagId: req.GetTagId(), Attributes: map[string]string{"market_type": "spot"}}}, nil
 }
 
+// viewStateStub 让 GetViewState 返回预设的已建状态；rsp 为空时报 VIEW_NOT_FOUND（storage-view 还没登记该 View）。
+type viewStateStub struct {
+	storagepb.DataViewClientProxy
+	rsp      *storagepb.GetViewStateRsp
+	stateReq []*storagepb.GetViewStateReq
+}
+
+func (s *viewStateStub) GetViewState(_ context.Context, req *storagepb.GetViewStateReq, _ ...client.Option) (*storagepb.GetViewStateRsp, error) {
+	s.stateReq = append(s.stateReq, req)
+	if s.rsp == nil {
+		return &storagepb.GetViewStateRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_FOUND, Msg: "view not found"}}, nil
+	}
+	return s.rsp, nil
+}
+
+// builtState 是索引已建好的 GetViewState 响应。
+func builtState(indexID, storeID string, generation uint64) *storagepb.GetViewStateRsp {
+	return &storagepb.GetViewStateRsp{RetInfo: success(), IndexId: indexID, Generation: generation, AppliedCursor: &storagepb.DatasetChangeCursor{StoreId: storeID, Sequence: generation + 10}}
+}
+
 // coverageStub 按探测请求的 TotalMode 返回覆盖范围：NONE 时只有已缓存才返回。
 type coverageStub struct {
-	storagepb.DataViewClientProxy
+	viewStateStub
 	cached   bool
 	requests []*storagepb.QueryTimeSeriesRowsReq
 }
@@ -66,19 +86,19 @@ func (s *coverageStub) QueryTimeSeriesRows(_ context.Context, req *storagepb.Que
 	return rsp, nil
 }
 
-// Metadata 的 View 记录不维护覆盖范围（生产上恒为空）：GetView 只读元数据、不探测，也不采信 Metadata 的覆盖字段；
+// GetView 只读元数据与活动索引状态、不探测覆盖范围；
 // 覆盖统计由 ViewCoverage 按需向 DataView 读取该 View 活动索引的统计。探测查询固定活动索引、只带时间范围、
 // 不命中任何行；非精确读取只用已缓存的统计，精确读取在未缓存时再要求现算一次。
 func TestViewCoverageProbesDataViewOnDemand(t *testing.T) {
-	metadata := &metadataStub{view: &storagepb.View{ViewId: "view", DatasetId: "ds", Freq: "1h", Status: "active", ActiveIndexId: "idx_a", IndexedFrom: "2001-01-01T00:00:00Z"}}
-	cached := &coverageStub{cached: true}
+	metadata := &metadataStub{view: &storagepb.View{ViewId: "view", DatasetId: "ds", Freq: "1h", Status: "active"}}
+	cached := &coverageStub{viewStateStub: viewStateStub{rsp: builtState("idx_a", "store", 1)}, cached: true}
 	client := &RPCClient{Metadata: metadata, DataView: cached}
 	info, err := client.GetView(context.Background(), "space", "view")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !info.IndexedFrom.IsZero() || !info.IndexedTo.IsZero() || info.SeriesBars != 0 || len(cached.requests) != 0 {
-		t.Fatalf("GetView 不应探测覆盖范围、不应采信 Metadata 的覆盖字段：%+v requests=%d", info, len(cached.requests))
+		t.Fatalf("GetView 不应探测覆盖范围：%+v requests=%d", info, len(cached.requests))
 	}
 	coverage, err := client.ViewCoverage(context.Background(), "space", info, false)
 	if err != nil {

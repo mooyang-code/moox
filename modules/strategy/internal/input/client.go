@@ -33,16 +33,12 @@ func (c *RPCClient) pageSize() uint32 {
 	return 500
 }
 
-// indexGenerationAttribute 是 Storage 建成索引时记录代次的内部属性。
-const indexGenerationAttribute = "moox.index_generation"
-
-// viewGeneration 组合索引的代次：索引 ID 加上建成时记录的代次；没有代次时只有索引 ID。
-func viewGeneration(activeIndexID, generation string) string {
-	activeIndexID, generation = strings.TrimSpace(activeIndexID), strings.TrimSpace(generation)
-	if activeIndexID == "" || generation == "" {
-		return activeIndexID
+// viewAuth 是 DataView 的调用身份，没有单独配置时沿用 Metadata 的身份。
+func (c *RPCClient) viewAuth() *commonpb.AuthInfo {
+	if c.ViewAuth != nil {
+		return c.ViewAuth
 	}
-	return activeIndexID + "@" + generation
+	return c.Auth
 }
 
 // viewNotFound 是 View 已被删除的跳过：实时求值记 config_error（实例需要重新绑定），回放与启用直接报错。
@@ -50,26 +46,35 @@ func viewNotFound(viewID string) error {
 	return &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 已不存在", viewID), Cause: ErrViewNotFound}
 }
 
-// ViewGeneration 只读取 View 的活动索引代次（不读列）。
-func (c *RPCClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
-	if c == nil || c.Metadata == nil {
-		return "", errors.New("Storage Metadata 客户端未配置")
+// viewState 向 DataView 读取 View 已建好的活动索引，返回索引 ID 与代次。代次由索引 ID、变更日志的 store_id 与建成那一刻的
+// 序号组成（形如 index@store#seq），只做相等比较：原地重建后索引 ID 不变而序号变，存储重建后 store_id 变。
+// 索引还没建好（断档或原地重建中）时两者为空；storage-view 还没登记该 View（VIEW_NOT_FOUND，可能刚重启）时同样当作
+// 还没建好，View 是否被删以 Metadata 为准。
+func (c *RPCClient) viewState(ctx context.Context, spaceID, viewID string) (string, string, error) {
+	if c == nil || c.DataView == nil {
+		return "", "", errors.New("Storage DataView 客户端未配置")
 	}
-	rsp, err := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID})
+	rsp, err := c.DataView.GetViewState(ctx, &storagepb.GetViewStateReq{AuthInfo: c.viewAuth(), SpaceId: spaceID, ViewId: viewID})
 	if err != nil {
-		return "", transport("读取 View "+viewID, err)
+		return "", "", transport("读取 View "+viewID+" 的索引状态", err)
 	}
-	if code := rsp.GetRetInfo().GetCode(); code == commonpb.ErrorCode_VIEW_NOT_FOUND || code == commonpb.ErrorCode_NOT_FOUND {
-		return "", viewNotFound(viewID)
+	if rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_VIEW_NOT_FOUND {
+		return "", "", nil
 	}
-	if err := retError("读取 View "+viewID, rsp.GetRetInfo()); err != nil {
-		return "", err
+	if err := retError("读取 View "+viewID+" 的索引状态", rsp.GetRetInfo()); err != nil {
+		return "", "", err
 	}
-	view := rsp.GetView()
-	if view == nil {
-		return "", viewNotFound(viewID)
+	indexID := strings.TrimSpace(rsp.GetIndexId())
+	if indexID == "" {
+		return "", "", nil
 	}
-	return viewGeneration(view.GetActiveIndexId(), view.GetAttributes()[indexGenerationAttribute]), nil
+	return indexID, fmt.Sprintf("%s@%s#%d", indexID, rsp.GetAppliedCursor().GetStoreId(), rsp.GetGeneration()), nil
+}
+
+// ViewGeneration 只读取 View 的活动索引代次（不读列、不读 Metadata）；索引还没建好时返回空串。
+func (c *RPCClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
+	_, generation, err := c.viewState(ctx, spaceID, viewID)
+	return generation, err
 }
 
 // GetView 读取 View 及其全部列（不含覆盖范围，见 ViewCoverage）。
@@ -91,8 +96,10 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 	if view == nil {
 		return ViewInfo{}, viewNotFound(viewID)
 	}
-	info := ViewInfo{ViewID: view.GetViewId(), DatasetID: view.GetDatasetId(), Frequency: view.GetFreq(), Status: view.GetStatus(), ActiveIndexID: strings.TrimSpace(view.GetActiveIndexId())}
-	info.Generation = viewGeneration(info.ActiveIndexID, view.GetAttributes()[indexGenerationAttribute])
+	info := ViewInfo{ViewID: view.GetViewId(), DatasetID: view.GetDatasetId(), Frequency: view.GetFreq(), Status: view.GetStatus()}
+	if info.ActiveIndexID, info.Generation, err = c.viewState(ctx, spaceID, viewID); err != nil {
+		return ViewInfo{}, err
+	}
 	for page := uint32(1); ; page++ {
 		columns, err := c.Metadata.ListViewColumns(ctx, &storagepb.ListViewColumnsReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {
@@ -128,10 +135,7 @@ func (c *RPCClient) ViewCoverage(ctx context.Context, spaceID string, view ViewI
 	if view.ActiveIndexID == "" || (view.Status != "" && view.Status != "active") {
 		return Coverage{}, nil
 	}
-	auth := c.ViewAuth
-	if auth == nil {
-		auth = c.Auth
-	}
+	auth := c.viewAuth()
 	modes := []commonpb.TotalMode{commonpb.TotalMode_NONE}
 	if exact {
 		modes = append(modes, commonpb.TotalMode_FORCE_EXACT)
@@ -329,10 +333,7 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 		}
 		selectors = append(selectors, selector)
 	}
-	auth := c.ViewAuth
-	if auth == nil {
-		auth = c.Auth
-	}
+	auth := c.viewAuth()
 	rows := make([]Row, 0, len(selectors))
 	revision := query.ExpectedRevision
 	size := c.pageSize()

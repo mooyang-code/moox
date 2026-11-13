@@ -29,7 +29,6 @@ type metadataAPI interface {
 	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
-	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq, ...client.Option) (*storagepb.UpsertViewColumnRsp, error)
 }
 
 // Catalog is the narrow Metadata API needed to provision a task-owned target
@@ -186,34 +185,17 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	} else if err := validateTargetView(viewResp.GetView(), task, params, targetFreq.Storage); err != nil {
 		return compensate(err)
 	}
-	viewColumnIndex := 0
-	for _, field := range fieldsFor(tradeCount) {
-		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
-			continue
-		}
-		viewColumnIndex++
-		resp, callErr := c.Metadata.UpsertViewColumn(ctx, &storagepb.UpsertViewColumnReq{AuthInfo: c.Auth, Column: &storagepb.ViewColumn{
-			SpaceId: task.SpaceID, ViewId: targetViewID, ColumnName: field.name, OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-			OriginId: field.name, ValueType: field.type_, SortOrder: uint32(viewColumnIndex), Attributes: map[string]string{"display_name": field.label},
-		}})
-		if callErr != nil {
-			return compensate(fmt.Errorf("upsert target View column %s: %w", field.name, callErr))
-		}
-		if err := ensureMetadataSuccess("upsert target View column", resp.GetRetInfo()); err != nil {
-			return compensate(err)
-		}
-	}
-	// 写完全部列之后重新读一次 View：之前的 GetView 响应可能还是旧定义，要按完整的声明列等待。
+	// View 的列由 Storage 按目标数据集启用的列推出；重新读一次 View，按它现在的列（即目标数据集的列）等列建进索引。
 	finalViewResp, finalViewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, ViewId: targetViewID})
 	if finalViewErr != nil {
-		return compensate(fmt.Errorf("get target View after columns: %w", finalViewErr))
+		return compensate(fmt.Errorf("reread target View: %w", finalViewErr))
 	}
-	if err := ensureMetadataSuccess("get target View after columns", finalViewResp.GetRetInfo()); err != nil {
+	if err := ensureMetadataSuccess("reread target View", finalViewResp.GetRetInfo()); err != nil {
 		return compensate(err)
 	}
 	finalView := finalViewResp.GetView()
 	if finalView == nil {
-		return compensate(errors.New("target View after columns is empty"))
+		return compensate(errors.New("reread target View is empty"))
 	}
 	if err := waitTargetViewColumns(ctx, c.View, c.Auth, task.SpaceID, targetViewID, finalView.GetColumns(), 5*time.Second); err != nil {
 		return compensate(err)

@@ -30,11 +30,6 @@ type metadataSeedGrainContract struct {
 		PrimaryDatasetID string   `yaml:"dataset_id"`
 		GrainKeys        []string `yaml:"grain_keys"`
 	} `yaml:"views"`
-	ViewColumns []struct {
-		SpaceID    string `yaml:"space_id"`
-		ViewID     string `yaml:"view_id"`
-		ColumnName string `yaml:"column_name"`
-	} `yaml:"view_columns"`
 	Devices []struct {
 		DeviceID string `yaml:"device_id"`
 		Engine   string `yaml:"engine"`

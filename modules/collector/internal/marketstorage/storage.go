@@ -36,7 +36,9 @@ type ResampleStorage interface {
 
 type ResampleMetadataClient struct {
 	Client storageio.Metadata
-	Auth   *storagepb.AuthInfo
+	// View 读 storage-view 里 View 的已建状态（任务结果的覆盖范围取自这里）。
+	View storageio.View
+	Auth *storagepb.AuthInfo
 }
 
 type storageWriter struct {
@@ -72,7 +74,7 @@ func NewGatewayResampleMetadataClient(gateway gatewayclient.Invoker, instType st
 	if err != nil {
 		return nil, err
 	}
-	return &ResampleMetadataClient{Client: writer.metadata, Auth: writer.authInfo}, nil
+	return &ResampleMetadataClient{Client: writer.metadata, View: writer.view, Auth: writer.authInfo}, nil
 }
 
 func (w *storageWriter) runRPC(ctx context.Context, operation func() error) error {

@@ -132,7 +132,6 @@ type metadataSeed struct {
 	Fields         []seedField         `yaml:"fields"`
 	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
 	Views          []seedView          `yaml:"views"`
-	ViewColumns    []seedViewColumn    `yaml:"view_columns"`
 	Devices        []seedDevice        `yaml:"devices"`
 }
 
@@ -236,18 +235,6 @@ type seedView struct {
 	GrainKeys        []string `yaml:"grain_keys"`
 	Engine           string   `yaml:"engine"`
 	seedCommon       `yaml:",inline"`
-}
-
-type seedViewColumn struct {
-	SpaceID    string `yaml:"space_id"`
-	ViewID     string `yaml:"view_id"`
-	ColumnName string `yaml:"column_name"`
-	OriginType string `yaml:"origin_type"`
-	OriginID   string `yaml:"origin_id"`
-	ValueType  string `yaml:"value_type"`
-	OnlineTime string `yaml:"online_time"`
-	SortOrder  uint32 `yaml:"sort_order"`
-	seedCommon `yaml:",inline"`
 }
 
 type seedDevice struct {

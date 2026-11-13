@@ -118,5 +118,5 @@ var storageTopLevelSpaceMethods = map[string]bool{
 	"GetTag": true, "ListTags": true, "ListTagMembers": true, "ResolveSubjects": true,
 	"GetDataset": true, "ListDatasets": true, "ListDatasetSubjects": true,
 	"GetFieldGroup": true, "ListFieldGroups": true, "GetField": true, "ListFields": true,
-	"ListDatasetColumns": true, "QueryTimeSeriesRows": true, "SearchRecordRows": true,
+	"ListDatasetColumns": true, "QueryTimeSeriesRows": true, "SearchRecordRows": true, "GetViewState": true,
 }

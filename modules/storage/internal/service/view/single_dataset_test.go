@@ -83,7 +83,7 @@ func TestSingleDatasetView(t *testing.T) {
 		require.Len(t, listed.GetViews(), 2)
 	})
 
-	t.Run("a column of another dataset is rejected", func(t *testing.T) {
+	t.Run("columns come only from the view's own dataset", func(t *testing.T) {
 		rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 			SpaceId: "space", ViewId: "view_joined", Name: "多源视图",
 			DatasetId: "dataset_prices",
@@ -98,8 +98,12 @@ func TestSingleDatasetView(t *testing.T) {
 			},
 		}})
 		require.NoError(t, err)
-		require.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), "a View may only index columns of its own dataset")
-		require.Contains(t, rsp.GetRetInfo().GetMsg(), `view column "pe" is not an active column of dataset dataset_prices`)
+		require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+		var names []string
+		for _, column := range rsp.GetView().GetColumns() {
+			names = append(names, column.GetColumnName())
+		}
+		require.Equal(t, []string{"close", "volume"}, names, "View 的列就是自己数据集的列，传入的列被忽略")
 	})
 
 	t.Run("deleting one view keeps dataset and the other view", func(t *testing.T) {

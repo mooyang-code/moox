@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
-	sqlitemetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -21,12 +20,6 @@ func MetadataStoreCode(err error) pb.ErrorCode {
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return pb.ErrorCode_NOT_FOUND
-	}
-	if errors.Is(err, sqlitemetadata.ErrViewIndexConflict) {
-		return pb.ErrorCode_CONFLICT
-	}
-	if errors.Is(err, metadatastore.ErrViewSchemaExtensionConflict) {
-		return pb.ErrorCode_CONFLICT
 	}
 	if errors.Is(err, metadatastore.ErrTagInvalid) || errors.Is(err, metadatastore.ErrTagBuiltin) ||
 		errors.Is(err, metadatastore.ErrTagReferenced) || errors.Is(err, metadatastore.ErrTagAutoMembers) ||

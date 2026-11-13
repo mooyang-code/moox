@@ -39,7 +39,7 @@ type fakeClient struct {
 	// failQuery 返回非空错误时本次读取失败；unknownCoverage 模拟索引统计暂时未知。
 	failQuery       func(query input.Query) error
 	unknownCoverage bool
-	// activeIndex 是 View 当前的活动索引，为空时是 idx；build 是激活它的构建 ID（为空时代次只有活动索引）；
+	// activeIndex 是 View 当前的活动索引，为空时是 idx；build 是索引建成序号（为空时代次只有活动索引）；
 	// coverageCalls 统计读取覆盖统计的次数。
 	activeIndex   string
 	build         string

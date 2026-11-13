@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"errors"
-	"os"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -26,14 +25,11 @@ type Service struct {
 	metadataCache *metacache.Store
 	// refreshOverride 仅供测试替换缓存刷新实现
 	refreshOverride func(context.Context) error
-	viewAuthSecret  string
 	rows            DatasetRows
 	retention       storagepolicy.Retention
 }
 
 type Options struct {
-	// ViewAuthSecret authenticates the View role's append-only active-schema CAS.
-	ViewAuthSecret string
 	// Rows 删除数据集时一并删行；只读元数据的工具可以不给，此时 DeleteDataset 报错。
 	Rows DatasetRows
 	// Retention resolves the read-only Dataset retention. Tools and tests
@@ -45,14 +41,10 @@ func NewMetadataService(store metadata.Store, cache *metacache.Store, options Op
 	if store == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	viewSecret := options.ViewAuthSecret
-	if viewSecret == "" {
-		viewSecret = os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")
-	}
 	if options.Retention.Defaults == nil {
 		options.Retention = storagepolicy.Default().Retention
 	}
-	return &Service{metadata: store, metadataCache: cache, viewAuthSecret: viewSecret, rows: options.Rows, retention: options.Retention}, nil
+	return &Service{metadata: store, metadataCache: cache, rows: options.Rows, retention: options.Retention}, nil
 }
 
 // withRetention returns a copy of dataset carrying its effective retention.

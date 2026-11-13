@@ -7,11 +7,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
 
-// newDeleteViewFixture 用真实的 metadata.sql 建库，放两个 View：目标 View 带列与构建中的索引，另一个作为旁证。
+// newDeleteViewFixture 用真实的 metadata.sql 建库，放两个 View：目标 View 与一个旁证。
 // 夹具写入时不开外键，避免为了插 t_views 而铺满数据集、数据源等父表；工具自己会打开外键并依赖级联删除。
 func newDeleteViewFixture(t *testing.T) string {
 	t.Helper()
@@ -26,13 +27,11 @@ func newDeleteViewFixture(t *testing.T) string {
 	require.NoError(t, err)
 	_, err = db.Exec(`PRAGMA foreign_keys = OFF`)
 	require.NoError(t, err)
-	for _, v := range []struct{ space, view, active string }{
-		{"mooxsys", "view_mooxsys_service_metrics", "idx-service-b"},
-		{"crypto", "view_factor_1h", "idx-factor"},
+	for _, v := range []struct{ space, view string }{
+		{"stockcn", "view_stockcn_kline_5m"},
+		{"crypto", "view_factor_1h"},
 	} {
-		_, err = db.Exec(`INSERT INTO t_views (c_space_id, c_view_id, c_name, c_dataset_id, c_active_index_id) VALUES (?, ?, ?, 'ds', ?)`, v.space, v.view, v.view, v.active)
-		require.NoError(t, err)
-		_, err = db.Exec(`INSERT INTO t_view_columns (c_space_id, c_view_id, c_column_name, c_origin_type, c_origin_id, c_value_type) VALUES (?, ?, 'value', 'dataset_column', 'value', 'double')`, v.space, v.view)
+		_, err = db.Exec(`INSERT INTO t_views (c_space_id, c_view_id, c_name, c_dataset_id) VALUES (?, ?, ?, 'ds')`, v.space, v.view, v.view)
 		require.NoError(t, err)
 	}
 	return path
@@ -50,20 +49,18 @@ func countRows(t *testing.T, path, query string, args ...any) int {
 
 func TestDeleteViewRemovesOnlyTheNamedView(t *testing.T) {
 	path := newDeleteViewFixture(t)
-	summary, err := deleteView(context.Background(), deleteViewOptions{metadataDB: path, view: "mooxsys/view_mooxsys_service_metrics"})
+	summary, err := deleteView(context.Background(), deleteViewOptions{metadataDB: path, view: "stockcn/view_stockcn_kline_5m"})
 	require.NoError(t, err)
 	require.Equal(t, 1, summary.DeletedViews)
-	require.Equal(t, []retainedIndex{{Engine: "duckdb", IndexID: "idx-service-b"}}, summary.RetiredIndexes, "活动索引要交给清理定时器")
+	require.Equal(t, []retainedIndex{{Engine: "duckdb", IndexID: viewindex.ViewIndexID("stockcn", "view_stockcn_kline_5m")}}, summary.RetiredIndexes, "View 的索引要交给清理定时器")
 
-	require.Zero(t, countRows(t, path, `SELECT COUNT(*) FROM t_views WHERE c_view_id = 'view_mooxsys_service_metrics'`))
-	require.Zero(t, countRows(t, path, `SELECT COUNT(*) FROM t_view_columns WHERE c_view_id = 'view_mooxsys_service_metrics'`), "列随 View 级联删除")
+	require.Zero(t, countRows(t, path, `SELECT COUNT(*) FROM t_views WHERE c_view_id = 'view_stockcn_kline_5m'`))
 	require.Equal(t, 1, countRows(t, path, `SELECT COUNT(*) FROM t_views WHERE c_view_id = 'view_factor_1h'`), "其他 View 不受影响")
-	require.Equal(t, 1, countRows(t, path, `SELECT COUNT(*) FROM t_view_columns WHERE c_view_id = 'view_factor_1h'`))
 }
 
 func TestDeleteViewMissingViewChangesNothing(t *testing.T) {
 	path := newDeleteViewFixture(t)
-	_, err := deleteView(context.Background(), deleteViewOptions{metadataDB: path, view: "mooxsys/view_not_there"})
+	_, err := deleteView(context.Background(), deleteViewOptions{metadataDB: path, view: "stockcn/view_not_there"})
 	require.ErrorContains(t, err, "does not exist")
 	require.Equal(t, 2, countRows(t, path, `SELECT COUNT(*) FROM t_views`))
 }

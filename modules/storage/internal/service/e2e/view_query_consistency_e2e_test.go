@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -23,7 +24,7 @@ func TestViewQueryFilterSortPageAndTotalE2E(t *testing.T) {
 	auth := &pb.AuthInfo{AppId: "e2e", AppKey: serviceauth.Key(secret, "e2e")}
 	if rsp, err := service.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
 		AuthInfo: auth,
-		IndexId:  "prices-view",
+		IndexId:  viewindex.ViewIndexID("quant", "prices-view"),
 		Schema: &pb.ViewIndexSchema{
 			SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 1,
 			Engine: "duckdb", ViewSchemaHash: "schema-1",
@@ -40,10 +41,11 @@ func TestViewQueryFilterSortPageAndTotalE2E(t *testing.T) {
 		viewRow("ETH", "2026-07-20T00:01:00Z", 200, 20),
 		viewRow("SOL", "2026-07-20T00:02:00Z", 50, 5),
 	}
-	if rsp, err := service.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: auth, IndexId: "prices-view", Batch: &pb.ViewIndexWriteBatch{ViewRevision: 1, ViewSchemaHash: "schema-1", WriteMode: "LIVE_WRITE", RowWrites: rows}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	if rsp, err := service.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: auth, IndexId: viewindex.ViewIndexID("quant", "prices-view"), Batch: &pb.ViewIndexWriteBatch{ViewRevision: 1, ViewSchemaHash: "schema-1", WriteMode: "LIVE_WRITE", RowWrites: rows}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write: rsp=%v err=%v", rsp, err)
 	}
-	if err := service.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", ActiveIndexId: "prices-view", ViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT}}, Status: "active"}); err != nil {
+	if err := service.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", Status: "active"},
+		viewindex.ViewIndexStats{Exists: true, DatasetID: "prices", ViewVersion: 1, SchemaHash: "schema-1", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT}}}); err != nil {
 		t.Fatal(err)
 	}
 

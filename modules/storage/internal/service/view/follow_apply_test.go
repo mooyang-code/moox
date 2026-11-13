@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -94,15 +95,18 @@ func (p *readyPublisherFake) Publish(_ context.Context, event events.Event, payl
 func TestFollowReadyEventFromMarker(t *testing.T) {
 	occurredAt := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
 	cases := []struct {
-		name    string
-		view    *pb.View
+		name string
+		view *pb.View
+		// hash 是活动索引的列契约哈希，为空表示没有活动索引。
+		hash    string
 		payload *storageeventpb.DatasetPeriodCompleted
 		want    *storageeventpb.ViewDataReady
 		eventID string
 	}{
 		{
 			name: "账本判定",
-			view: &pb.View{SpaceId: "quant", ViewId: "kline-view", DatasetId: "kline", Freq: "1m", ActiveIndexId: "kline-a", ActiveViewSchemaHash: "hash-k"},
+			view: &pb.View{SpaceId: "quant", ViewId: "kline-view", DatasetId: "kline", Freq: "1m"},
+			hash: "hash-k",
 			payload: &storageeventpb.DatasetPeriodCompleted{
 				DatasetId: "kline", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded", Source: "ledger", SnapshotRef: "universe:kline:1m",
 				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, FailedSubjects: []string{"ETH-USDT"}, CompletedAt: timestamppb.New(occurredAt),
@@ -116,14 +120,14 @@ func TestFollowReadyEventFromMarker(t *testing.T) {
 		},
 		{
 			name: "写入方上报",
-			view: &pb.View{SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results", ActiveIndexId: "result-a", ViewRevision: 3},
+			view: &pb.View{SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results"},
 			payload: &storageeventpb.DatasetPeriodCompleted{
 				DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
 				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, CompletedAt: timestamppb.New(occurredAt), CauseEventId: "cause-1",
 				DetailType: "test.Detail.v1", Detail: []byte("detail"),
 			},
 			want: &storageeventpb.ViewDataReady{
-				ViewId: "result-view", ViewConfigId: "result-view@3", CompletionEventId: "marker-producer", DatasetId: "factor-results", Status: "complete",
+				ViewId: "result-view", ViewConfigId: "result-view", CompletionEventId: "marker-producer", DatasetId: "factor-results", Status: "complete",
 				VisibleScope: "view:result-view", Frequency: "1m", PeriodTime: 1786032000, ReadyAt: timestamppb.New(occurredAt),
 				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, DetailType: "test.Detail.v1", Detail: []byte("detail"),
 			},
@@ -138,8 +142,16 @@ func TestFollowReadyEventFromMarker(t *testing.T) {
 			require.NoError(t, err)
 			publisher := &readyPublisherFake{}
 			ref := viewRef{spaceID: "quant", viewID: tc.view.GetViewId()}
+			runtime := newViewRuntime()
+			schemas := map[string]viewindex.ViewIndexSchema{}
+			if tc.hash != "" {
+				runtime.active = "index-a"
+				runtime.publishReadStateLocked()
+				schemas["index-a"] = viewindex.ViewIndexSchema{SchemaHash: tc.hash}
+			}
 			svc := &Service{
-				views:          map[viewRef]*viewRuntime{ref: newViewRuntime()},
+				views:          map[viewRef]*viewRuntime{ref: runtime},
+				schemas:        schemas,
 				catalogViews:   map[viewRef]*pb.View{ref: tc.view},
 				readyPublisher: publisher,
 			}
@@ -163,7 +175,7 @@ func (p *errPublisher) Publish(context.Context, events.Event, proto.Message, eve
 
 // 就绪事件发布超时：返回错误让跟随器停在这条标记上重试，并在后台重连发布器；超过消息上限这类确定性错误记日志跳过。
 func TestFollowReadyPublishErrors(t *testing.T) {
-	view := &pb.View{SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results", ActiveIndexId: "result-a", ViewRevision: 1}
+	view := &pb.View{SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results"}
 	ref := viewRef{spaceID: "quant", viewID: view.GetViewId()}
 	raw, err := proto.Marshal(&storageeventpb.DatasetPeriodCompleted{
 		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",

@@ -33,7 +33,6 @@ type ImportResult struct {
 	Fields         int
 	DatasetColumns int
 	Views          int
-	ViewColumns    int
 	Devices        int
 }
 
@@ -199,18 +198,6 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 		result.Views++
 	}
 
-	for _, item := range seed.ViewColumns {
-		if _, err := store.UpsertViewColumn(ctx, &pb.ViewColumn{
-			SpaceId: item.SpaceID, ViewId: item.ViewID, ColumnName: item.ColumnName,
-			OriginType: parseColumnOriginType(item.OriginType), OriginId: item.OriginID,
-			ValueType: parseValueType(item.ValueType), OnlineTime: item.OnlineTime, SortOrder: item.SortOrder,
-			Attributes: item.Attributes,
-		}); err != nil {
-			return result, seedErr("view_column", item.ViewID+"."+item.ColumnName, err)
-		}
-		result.ViewColumns++
-	}
-
 	for _, item := range seed.Devices {
 		if _, err := store.UpsertDevice(ctx, &pb.Device{
 			DeviceId: item.DeviceID, Name: item.Name, Engine: item.Engine,
@@ -315,19 +302,6 @@ func parseDatasetColumnOriginType(value string) pb.DatasetColumnOriginType {
 	}
 }
 
-func parseColumnOriginType(value string) pb.ColumnOriginType {
-	switch value {
-	case "dataset_column":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN
-	case "expression":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION
-	case "system":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM
-	default:
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_UNSPECIFIED
-	}
-}
-
 // ---- seed 文件结构（领域型，与显式传入的 metadata YAML 对应）----
 
 // seedFile 对应 metadata YAML 的顶层配置。
@@ -341,7 +315,6 @@ type seedFile struct {
 	Fields         []seedField         `yaml:"fields"`
 	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
 	Views          []seedView          `yaml:"views"`
-	ViewColumns    []seedViewColumn    `yaml:"view_columns"`
 	Devices        []seedDevice        `yaml:"devices"`
 }
 
@@ -449,19 +422,6 @@ type seedView struct {
 	GrainKeys        []string `yaml:"grain_keys"`
 	Engine           string   `yaml:"engine"`
 	Status           string   `yaml:"status"`
-}
-
-// seedViewColumn 描述 View 中对外可查询的结果列。
-type seedViewColumn struct {
-	SpaceID    string            `yaml:"space_id"`
-	ViewID     string            `yaml:"view_id"`
-	ColumnName string            `yaml:"column_name"`
-	OriginType string            `yaml:"origin_type"`
-	OriginID   string            `yaml:"origin_id"`
-	ValueType  string            `yaml:"value_type"`
-	OnlineTime string            `yaml:"online_time"`
-	SortOrder  uint32            `yaml:"sort_order"`
-	Attributes map[string]string `yaml:"attributes"`
 }
 
 // seedDevice 描述待初始化的物理存储设备。

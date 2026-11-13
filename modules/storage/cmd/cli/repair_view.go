@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,8 +18,6 @@ import (
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const defaultRepairTimeout = 2 * time.Minute
@@ -41,24 +38,18 @@ type repairViewSummary struct {
 	SpaceID            string   `json:"space_id"`
 	ViewID             string   `json:"view_id"`
 	DBPath             string   `json:"db_path"`
-	BackupPath         string   `json:"backup_path,omitempty"`
-	ActiveIndexID      string   `json:"active_index_id,omitempty"`
+	IndexID            string   `json:"index_id"`
 	ViewIndexesRemoved []string `json:"view_indexes_removed,omitempty"`
 	Restarted          bool     `json:"restarted"`
 	DryRun             bool     `json:"dry_run"`
 	Warnings           []string `json:"warnings,omitempty"`
 }
 
-type repairViewRecord struct {
-	Engine        string
-	ActiveIndexID string
-}
-
 // runRepairLifecycle 暂停、恢复 storage-view（pause / resume：stop 之后主机守护会把它拉起）；测试替换它，不真的启动服务。
 var runRepairLifecycle = runStorageViewLifecycle
 
-// runRepairView 重建指定 View：暂停 storage-view、备份元数据、清掉 View 的活动索引指针、删除物理索引，
-// 恢复后由维护流程从 Primary 重新建索引并跟随变更日志。
+// runRepairView 重建指定 View：暂停 storage-view、删除 View 的索引文件，恢复后由维护流程从 Primary 重新建索引并跟随变更日志。
+// View 的已建状态只在索引文件里，元数据不用改。
 func runRepairView(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs := flag.NewFlagSet("repair-view", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -107,7 +98,7 @@ func writeRepairViewUsage(fs *flag.FlagSet, stdout io.Writer) {
 		stdout = io.Discard
 	}
 	fmt.Fprintln(stdout, "用法: moox-cli storage repair-view --space-id <space> --view-id <view> --yes")
-	fmt.Fprintln(stdout, "操作: 暂停 storage-view、备份元数据、清掉 View 的活动索引指针并删除物理索引，恢复后从 Primary 重新建索引")
+	fmt.Fprintln(stdout, "操作: 暂停 storage-view、删除 View 的索引文件，恢复后从 Primary 重新建索引")
 	fs.SetOutput(stdout)
 	fs.PrintDefaults()
 }
@@ -120,17 +111,18 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 	packageRoot := resolveRepairPackageRoot(opts.packageRoot, opts.storageConf)
 	storage = resolveRepairStoragePaths(storage, packageRoot, opts.storageConf)
 	dbPath := metadataDBPath(storage)
-	record, err := inspectRepairView(ctx, dbPath, opts.spaceID, opts.viewID)
+	engine, err := inspectRepairView(ctx, dbPath, opts.spaceID, opts.viewID)
 	if err != nil {
 		return err
 	}
+	indexID := viewindex.ViewIndexID(opts.spaceID, opts.viewID)
 	summary := repairViewSummary{
-		SpaceID:       opts.spaceID,
-		ViewID:        opts.viewID,
-		DBPath:        dbPath,
-		ActiveIndexID: record.ActiveIndexID,
-		DryRun:        opts.dryRun,
-		Warnings:      []string{"删除索引后 View 不可读，直到从 Primary 重新建完；记录型 View 重建后为空，只跟随新写入"},
+		SpaceID:  opts.spaceID,
+		ViewID:   opts.viewID,
+		DBPath:   dbPath,
+		IndexID:  indexID,
+		DryRun:   opts.dryRun,
+		Warnings: []string{"删除索引后 View 不可读，直到从 Primary 重新建完；记录型 View 重建后为空，只跟随新写入"},
 	}
 	if opts.dryRun {
 		return writeOperationResult(stdout, operationResult{Module: "storage", Action: "repair-view", Status: "dry_run", Summary: summary})
@@ -144,15 +136,7 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 			_ = runRepairLifecycle(context.Background(), packageRoot, "resume", stderr)
 		}
 	}()
-	backupPath, err := backupRepairDB(dbPath)
-	if err != nil {
-		return fmt.Errorf("备份 Storage 元数据：%w", err)
-	}
-	summary.BackupPath = backupPath
-	if err := resetRepairViewMetadata(ctx, dbPath, opts.spaceID, opts.viewID); err != nil {
-		return fmt.Errorf("清掉 View 的活动索引指针：%w", err)
-	}
-	removed, err := purgeRepairViewIndexes(storage.Devices.ViewIndexRoot, record.Engine, viewindex.ViewIndexID(opts.spaceID, opts.viewID))
+	removed, err := purgeRepairViewIndexes(storage.Devices.ViewIndexRoot, engine, indexID)
 	if err != nil {
 		return fmt.Errorf("删除 View 索引：%w", err)
 	}
@@ -271,139 +255,28 @@ func resolveSingleDirStoragePaths(storage storageconfig.StorageConfig, packageRo
 	return storage
 }
 
-func inspectRepairView(ctx context.Context, dbPath, spaceID, viewID string) (repairViewRecord, error) {
+// inspectRepairView 确认 View 存在并返回它的引擎。
+func inspectRepairView(ctx context.Context, dbPath, spaceID, viewID string) (string, error) {
 	if _, err := os.Stat(dbPath); err != nil {
-		return repairViewRecord{}, fmt.Errorf("metadata DB %s: %w", dbPath, err)
+		return "", fmt.Errorf("metadata DB %s: %w", dbPath, err)
 	}
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		return repairViewRecord{}, err
+		return "", err
 	}
 	defer db.Close()
-	var record repairViewRecord
-	var attrs string
-	err = db.QueryRowContext(ctx, `SELECT c_engine, c_active_index_id, c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID).Scan(&record.Engine, &record.ActiveIndexID, &attrs)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return repairViewRecord{}, fmt.Errorf("View %s/%s was not found", spaceID, viewID)
-		}
-		return repairViewRecord{}, err
+	var engine string
+	err = db.QueryRowContext(ctx, `SELECT c_engine FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID).Scan(&engine)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("View %s/%s 不存在", spaceID, viewID)
 	}
-	if record.Engine == "" {
-		record.Engine = "duckdb"
-	}
-	if strings.TrimSpace(attrs) == "" || !json.Valid([]byte(attrs)) {
-		return repairViewRecord{}, errors.New("View metadata attributes are empty or invalid JSON")
-	}
-	return record, nil
-}
-
-func backupRepairDB(path string) (string, error) {
-	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
-	backup := path + ".repair-" + stamp + ".bak"
-	src, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	defer src.Close()
-	if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
-		return "", err
+	if engine == "" {
+		engine = "duckdb"
 	}
-	dst, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return "", err
-	}
-	_, copyErr := io.Copy(dst, src)
-	closeErr := dst.Close()
-	if copyErr != nil {
-		_ = os.Remove(backup)
-		return "", copyErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(backup)
-		return "", closeErr
-	}
-	// SQLite may keep committed metadata in sidecar files while the database
-	// is in WAL mode. Preserve those files alongside the main backup so a
-	// recovery copy cannot silently lose the latest View state.
-	for _, suffix := range []string{"-wal", "-shm"} {
-		if err := copyOptionalFile(path+suffix, backup+suffix); err != nil {
-			_ = os.Remove(backup)
-			_ = os.Remove(backup + "-wal")
-			_ = os.Remove(backup + "-shm")
-			return "", err
-		}
-	}
-	return backup, nil
-}
-
-func copyOptionalFile(source, target string) error {
-	input, err := os.Open(source)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer input.Close()
-	output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(output, input)
-	closeErr := output.Close()
-	if copyErr != nil {
-		_ = os.Remove(target)
-		return copyErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(target)
-		return closeErr
-	}
-	return nil
-}
-
-func resetRepairViewMetadata(ctx context.Context, dbPath, spaceID, viewID string) error {
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var attrs string
-	if err := tx.QueryRowContext(ctx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID).Scan(&attrs); err != nil {
-		return err
-	}
-	view := &storagepb.View{}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(attrs), view); err != nil {
-		return fmt.Errorf("decode View attributes: %w", err)
-	}
-	view.ActiveIndexId = ""
-	view.ViewRevision = 0
-	view.ActiveColumns = nil
-	view.ActiveViewSchemaHash = ""
-	view.IndexedFrom = ""
-	view.IndexedTo = ""
-	raw, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(view)
-	if err != nil {
-		return err
-	}
-	result, err := tx.ExecContext(ctx, `UPDATE t_views SET c_active_index_id = '', c_view_revision = 0, c_active_columns_json = '[]', c_active_view_schema_hash = '', c_indexed_from = '', c_indexed_to = '', c_attrs_json = ?, c_mtime = CURRENT_TIMESTAMP WHERE c_space_id = ? AND c_view_id = ?`, string(raw), spaceID, viewID)
-	if err != nil {
-		return err
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if changed != 1 {
-		return fmt.Errorf("View %s/%s disappeared while resetting metadata", spaceID, viewID)
-	}
-	return tx.Commit()
+	return engine, nil
 }
 
 func purgeRepairViewIndexes(root, engine string, indexIDs ...string) ([]string, error) {
@@ -447,7 +320,7 @@ func purgeRepairViewIndexes(root, engine string, indexIDs ...string) ([]string, 
 	return removed, nil
 }
 
-// lifecycleScriptArgs 是传给 start.sh / stop.sh 的参数。原生部署的脚本转给 moox-runtime，它不接受位置参数：
+// lifecycleScriptArgs 是传给 pause.sh / resume.sh 的参数。原生部署的脚本转给 moox-runtime，它不接受位置参数：
 // 整个 Storage 单元（serviceName 为 "storage"）不带参数，单个组件用 --components 选择。
 func lifecycleScriptArgs(serviceName string) []string {
 	serviceName = strings.TrimSpace(serviceName)

@@ -27,7 +27,6 @@ const (
 const (
 	kindSpace         = "space"
 	kindView          = "view"
-	kindViewColumn    = "view_column"
 	kindDataSource    = "data_source"
 	kindSubject       = "subject"
 	kindDataset       = "dataset"
@@ -68,7 +67,6 @@ type entry struct {
 	DataKind      int32    `json:"data_kind,omitempty"`
 	Freq          string   `json:"freq,omitempty"`
 	Revision      uint64   `json:"revision,omitempty"`
-	ViewID        string   `json:"view_id,omitempty"`
 	ValueType     int32    `json:"value_type,omitempty"`
 	Engine        string   `json:"engine,omitempty"`
 	Payload       []byte   `json:"payload"`
@@ -219,17 +217,9 @@ func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]
 	return pageItems(items, page)
 }
 
+// GetView 返回缓存的 View；列与隐藏列在刷新缓存时已由底层按数据集列推出。
 func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
-	view, err := getProto(s, ctx, kindView, spaceID, viewID, func() *pb.View { return &pb.View{} })
-	if err != nil {
-		return nil, err
-	}
-	columns, _, err := s.ListViewColumns(ctx, spaceID, viewID, nil)
-	if err != nil {
-		return nil, err
-	}
-	view.Columns = columns
-	return view, nil
+	return getProto(s, ctx, kindView, spaceID, viewID, func() *pb.View { return &pb.View{} })
 }
 
 func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error) {
@@ -274,12 +264,17 @@ func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetI
 	}
 }
 
+// ListViewColumns 取缓存 View 里推出的列，顺序与底层一致。
 func (s *Store) ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindViewColumn, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) && (viewID == "" || item.ViewID == viewID)
-	}), func() *pb.ViewColumn { return &pb.ViewColumn{} })
+	views, err := decodeEntries(s.list(kindView, func(item entry) bool {
+		return (spaceID == "" || item.SpaceID == spaceID) && (viewID == "" || item.ID == viewID)
+	}), func() *pb.View { return &pb.View{} })
 	if err != nil {
 		return nil, nil, err
+	}
+	var items []*pb.ViewColumn
+	for _, view := range views {
+		items = append(items, view.GetColumns()...)
 	}
 	return pageItems(items, page)
 }
@@ -589,9 +584,6 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	if out, err = s.fetchViews(ctx, out); err != nil {
 		return nil, err
 	}
-	if out, err = s.fetchViewColumns(ctx, out); err != nil {
-		return nil, err
-	}
 	if out, err = s.fetchDevices(ctx, out); err != nil {
 		return nil, err
 	}
@@ -719,22 +711,6 @@ func (s *Store) fetchViews(ctx context.Context, out []entry) ([]entry, error) {
 	}
 	for _, item := range items {
 		out, err = appendEntry(out, entry{Kind: kindView, SpaceID: item.GetSpaceId(), ID: item.GetViewId(), DatasetID: item.GetDatasetId(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) fetchViewColumns(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
-		return s.base.ListViewColumns(ctx, "", "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindViewColumn, SpaceID: item.GetSpaceId(), ViewID: item.GetViewId(), ID: compositeID(item.GetViewId(), item.GetColumnName()), ValueType: int32(item.GetValueType())}, item)
 		if err != nil {
 			return nil, err
 		}

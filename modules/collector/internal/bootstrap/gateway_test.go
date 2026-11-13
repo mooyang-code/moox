@@ -167,13 +167,6 @@ func (w *collectorGatewayWire) UpsertDatasetColumn(ctx context.Context, request 
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w *collectorGatewayWire) UpsertViewColumn(ctx context.Context, request *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "UpsertViewColumn", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.UpsertViewColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func (w *collectorGatewayWire) ResolveSubjects(ctx context.Context, request *storagepb.ResolveSubjectsReq) (*storagepb.ResolveSubjectsRsp, error) {
 	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "ResolveSubjects", request); err != nil {
 		return nil, err
@@ -347,10 +340,6 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.UpsertDatasetColumn(t.Context(), &storagepb.UpsertDatasetColumnReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
-	t.Run("UpsertViewColumn", func(t *testing.T) {
-		_, err := adapter.UpsertViewColumn(t.Context(), &storagepb.UpsertViewColumnReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
 	t.Run("ResolveSubjects", func(t *testing.T) {
 		_, err := adapter.ResolveSubjects(t.Context(), &storagepb.ResolveSubjectsReq{AuthInfo: auth})
 		require.NoError(t, err)
@@ -398,7 +387,7 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.calls["GetDataset"])
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
-	require.Len(t, wire.calls, 22)
+	require.Len(t, wire.calls, 21)
 	wire.mu.Unlock()
 	invoker := scfinvoker.New(scfinvoker.Config{Gateway: gateway})
 	lease, err := invoker.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")

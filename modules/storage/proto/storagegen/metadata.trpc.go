@@ -39,14 +39,8 @@ type MetadataService interface {
 	GetView(ctx context.Context, req *GetViewReq) (*GetViewRsp, error)
 	// ListViews 列出查询视图。
 	ListViews(ctx context.Context, req *ListViewsReq) (*ListViewsRsp, error)
-	// UpsertViewColumn 创建或更新视图列。
-	UpsertViewColumn(ctx context.Context, req *UpsertViewColumnReq) (*UpsertViewColumnRsp, error)
-	// ListViewColumns 列出视图列。
+	// ListViewColumns 列出视图列：由数据集里启用的列推出。
 	ListViewColumns(ctx context.Context, req *ListViewColumnsReq) (*ListViewColumnsRsp, error)
-	// CompleteViewInitialBuild 首次建索引完成：写入活动索引与已建列，View 从此可读。
-	CompleteViewInitialBuild(ctx context.Context, req *CompleteViewInitialBuildReq) (*CompleteViewInitialBuildRsp, error)
-	// CommitViewSchemaExtension 索引原地追加列之后，提交新的已建列。
-	CommitViewSchemaExtension(ctx context.Context, req *CommitViewSchemaExtensionReq) (*CommitViewSchemaExtensionRsp, error)
 	// CreateDataSource 创建数据来源。
 	CreateDataSource(ctx context.Context, req *CreateDataSourceReq) (*CreateDataSourceRsp, error)
 	// UpdateDataSource 更新数据来源。
@@ -311,24 +305,6 @@ func MetadataService_ListViews_Handler(svr interface{}, ctx context.Context, f s
 	return rsp, nil
 }
 
-func MetadataService_UpsertViewColumn_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpsertViewColumnReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).UpsertViewColumn(ctx, reqbody.(*UpsertViewColumnReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func MetadataService_ListViewColumns_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ListViewColumnsReq{}
 	filters, err := f(req)
@@ -337,42 +313,6 @@ func MetadataService_ListViewColumns_Handler(svr interface{}, ctx context.Contex
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).ListViewColumns(ctx, reqbody.(*ListViewColumnsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_CompleteViewInitialBuild_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CompleteViewInitialBuildReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).CompleteViewInitialBuild(ctx, reqbody.(*CompleteViewInitialBuildReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_CommitViewSchemaExtension_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CommitViewSchemaExtensionReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).CommitViewSchemaExtension(ctx, reqbody.(*CommitViewSchemaExtensionReq))
 	}
 
 	var rsp interface{}
@@ -1167,20 +1107,8 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_ListViews_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.Metadata/UpsertViewColumn",
-			Func: MetadataService_UpsertViewColumn_Handler,
-		},
-		{
 			Name: "/trpc.moox.storage.Metadata/ListViewColumns",
 			Func: MetadataService_ListViewColumns_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/CompleteViewInitialBuild",
-			Func: MetadataService_CompleteViewInitialBuild_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/CommitViewSchemaExtension",
-			Func: MetadataService_CommitViewSchemaExtension_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.Metadata/CreateDataSource",
@@ -1410,24 +1338,9 @@ func (s *UnimplementedMetadata) ListViews(ctx context.Context, req *ListViewsReq
 	return nil, errors.New("rpc ListViews of service Metadata is not implemented")
 }
 
-// UpsertViewColumn 创建或更新视图列。
-func (s *UnimplementedMetadata) UpsertViewColumn(ctx context.Context, req *UpsertViewColumnReq) (*UpsertViewColumnRsp, error) {
-	return nil, errors.New("rpc UpsertViewColumn of service Metadata is not implemented")
-}
-
-// ListViewColumns 列出视图列。
+// ListViewColumns 列出视图列：由数据集里启用的列推出。
 func (s *UnimplementedMetadata) ListViewColumns(ctx context.Context, req *ListViewColumnsReq) (*ListViewColumnsRsp, error) {
 	return nil, errors.New("rpc ListViewColumns of service Metadata is not implemented")
-}
-
-// CompleteViewInitialBuild 首次建索引完成：写入活动索引与已建列，View 从此可读。
-func (s *UnimplementedMetadata) CompleteViewInitialBuild(ctx context.Context, req *CompleteViewInitialBuildReq) (*CompleteViewInitialBuildRsp, error) {
-	return nil, errors.New("rpc CompleteViewInitialBuild of service Metadata is not implemented")
-}
-
-// CommitViewSchemaExtension 索引原地追加列之后，提交新的已建列。
-func (s *UnimplementedMetadata) CommitViewSchemaExtension(ctx context.Context, req *CommitViewSchemaExtensionReq) (*CommitViewSchemaExtensionRsp, error) {
-	return nil, errors.New("rpc CommitViewSchemaExtension of service Metadata is not implemented")
 }
 
 // CreateDataSource 创建数据来源。
@@ -1641,14 +1554,8 @@ type MetadataClientProxy interface {
 	GetView(ctx context.Context, req *GetViewReq, opts ...client.Option) (rsp *GetViewRsp, err error)
 	// ListViews 列出查询视图。
 	ListViews(ctx context.Context, req *ListViewsReq, opts ...client.Option) (rsp *ListViewsRsp, err error)
-	// UpsertViewColumn 创建或更新视图列。
-	UpsertViewColumn(ctx context.Context, req *UpsertViewColumnReq, opts ...client.Option) (rsp *UpsertViewColumnRsp, err error)
-	// ListViewColumns 列出视图列。
+	// ListViewColumns 列出视图列：由数据集里启用的列推出。
 	ListViewColumns(ctx context.Context, req *ListViewColumnsReq, opts ...client.Option) (rsp *ListViewColumnsRsp, err error)
-	// CompleteViewInitialBuild 首次建索引完成：写入活动索引与已建列，View 从此可读。
-	CompleteViewInitialBuild(ctx context.Context, req *CompleteViewInitialBuildReq, opts ...client.Option) (rsp *CompleteViewInitialBuildRsp, err error)
-	// CommitViewSchemaExtension 索引原地追加列之后，提交新的已建列。
-	CommitViewSchemaExtension(ctx context.Context, req *CommitViewSchemaExtensionReq, opts ...client.Option) (rsp *CommitViewSchemaExtensionRsp, err error)
 	// CreateDataSource 创建数据来源。
 	CreateDataSource(ctx context.Context, req *CreateDataSourceReq, opts ...client.Option) (rsp *CreateDataSourceRsp, err error)
 	// UpdateDataSource 更新数据来源。
@@ -1942,26 +1849,6 @@ func (c *MetadataClientProxyImpl) ListViews(ctx context.Context, req *ListViewsR
 	return rsp, nil
 }
 
-func (c *MetadataClientProxyImpl) UpsertViewColumn(ctx context.Context, req *UpsertViewColumnReq, opts ...client.Option) (*UpsertViewColumnRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertViewColumn")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("UpsertViewColumn")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &UpsertViewColumnRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *MetadataClientProxyImpl) ListViewColumns(ctx context.Context, req *ListViewColumnsReq, opts ...client.Option) (*ListViewColumnsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -1976,46 +1863,6 @@ func (c *MetadataClientProxyImpl) ListViewColumns(ctx context.Context, req *List
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListViewColumnsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) CompleteViewInitialBuild(ctx context.Context, req *CompleteViewInitialBuildReq, opts ...client.Option) (*CompleteViewInitialBuildRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CompleteViewInitialBuild")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("CompleteViewInitialBuild")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &CompleteViewInitialBuildRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) CommitViewSchemaExtension(ctx context.Context, req *CommitViewSchemaExtensionReq, opts ...client.Option) (*CommitViewSchemaExtensionRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CommitViewSchemaExtension")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("CommitViewSchemaExtension")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &CommitViewSchemaExtensionRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

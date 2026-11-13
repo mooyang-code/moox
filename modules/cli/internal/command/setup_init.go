@@ -619,51 +619,6 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		}
 		viewDatasets[viewKey] = primaryDatasetID
 	}
-	viewColumns := make(map[string]struct{}, len(seed.ViewColumns))
-	for _, item := range seed.ViewColumns {
-		if _, ok := views[setupMetadataKey(item.SpaceID, item.ViewID)]; !ok {
-			return fmt.Errorf("view_column references undefined view %s/%s", item.SpaceID, item.ViewID)
-		}
-		columnKey := setupMetadataColumnKey(item.SpaceID, item.ViewID, item.ColumnName)
-		if _, ok := viewColumns[columnKey]; ok {
-			return fmt.Errorf(
-				"duplicate metadata view_column %s/%s/%s",
-				item.SpaceID,
-				item.ViewID,
-				item.ColumnName,
-			)
-		}
-		viewColumns[columnKey] = struct{}{}
-		originType, err := parseColumnOriginType(item.OriginType)
-		if err != nil {
-			return err
-		}
-		if originType != storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
-			continue
-		}
-		// A View indexes exactly one Dataset, so a dataset column is the bare
-		// column name of the View's Dataset.
-		origin := strings.TrimSpace(item.OriginID)
-		if origin == "" || strings.Contains(origin, ".") || origin != strings.TrimSpace(item.ColumnName) {
-			return fmt.Errorf(
-				"view_column %s/%s/%s has invalid dataset_column origin %q; use the bare column name",
-				item.SpaceID,
-				item.ViewID,
-				item.ColumnName,
-				item.OriginID,
-			)
-		}
-		datasetID := viewDatasets[setupMetadataKey(item.SpaceID, item.ViewID)]
-		if _, ok := datasetColumns[setupMetadataColumnKey(item.SpaceID, datasetID, origin)]; !ok {
-			return fmt.Errorf(
-				"view_column %s/%s/%s references undefined dataset_column %q",
-				item.SpaceID,
-				item.ViewID,
-				item.ColumnName,
-				item.OriginID,
-			)
-		}
-	}
 	return nil
 }
 

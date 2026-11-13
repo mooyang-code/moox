@@ -22,7 +22,7 @@
 | 数据 › 来源 | 数据来源 | `metadata source list|show|create|update|delete` |
 | 数据 › 标的 | 标的、标签与成员 | `metadata subject list|show|upsert|resolve`、`metadata tag list|show|upsert|delete|list-members|member-status`、`metadata tag members|clone` |
 | 数据 › 字段 | 字段与分组 | `metadata field list|show|create|update|batch-update`、`metadata field-group list|show|create|update|delete` |
-| 数据 › 数据集、View | 数据集、列、View | `metadata dataset list|show|columns|subjects|create|update|add-column|delete`、`metadata view list|show|columns|create|update|add-column|delete`、`metadata device list|show|create|update` |
+| 数据 › 数据集、View | 数据集、列、View | `metadata dataset list|show|columns|subjects|create|update|add-column|delete`、`metadata view list|show|columns|create|update|delete`、`metadata device list|show|create|update` |
 | 数据 › 浏览、导入 | 读数据、导入历史 | `data kline get`、`data rows export|count`、`data view query`、`data records search`、`import` |
 | 采集 › 采集任务 | 任务、结果清单、数据类型 | `collector task list|show|create|update|disable|delete|delete-result|inventory`、`collector data-type list|show` |
 | 采集 › 运行状态 | 状态、缺口、补采、合成、标的、采集方式 | `collector status`、`collector kline …`、`collector resample preview|backfill|jobs|cancel`、`collector subjects status|listers|sync|exclude|unexclude|exclusions`、`collector ingest-mode get|set`、`collector fetch-plan …` |

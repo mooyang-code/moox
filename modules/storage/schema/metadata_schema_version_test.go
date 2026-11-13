@@ -30,7 +30,6 @@ func TestMetadataSchemaContract(t *testing.T) {
 		"c_freq TEXT NOT NULL DEFAULT '',",
 		"c_revision INTEGER NOT NULL DEFAULT 1 CHECK (c_revision > 0)",
 		"c_status TEXT NOT NULL DEFAULT 'active' CHECK (c_status IN ('active', 'disabled'))",
-		"c_view_revision INTEGER NOT NULL DEFAULT 0",
 		"c_dataset_id TEXT NOT NULL",
 		"CREATE INDEX IF NOT EXISTS idx_t_views_dataset ON t_views (c_space_id, c_dataset_id, c_status)",
 	} {
@@ -63,6 +62,13 @@ func TestMetadataSchemaContract(t *testing.T) {
 		"t_data_nodes",
 		"t_view_period_dataset_states",
 		"t_view_sync_points",
+		"t_view_columns",
+		"c_active_index_id",
+		"c_view_revision",
+		"c_active_columns_json",
+		"c_active_view_schema_hash",
+		"c_indexed_from",
+		"c_indexed_to",
 	}, removedTables...) {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("metadata schema contains removed schema element %q", forbidden)

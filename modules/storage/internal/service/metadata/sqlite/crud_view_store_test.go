@@ -30,71 +30,10 @@ func TestCreateViewIsAtomicAndDoesNotReplaceExistingIdentity(t *testing.T) {
 	}
 }
 
-func TestUpsertViewMergesPartialColumnsAndReplaceKeepsExplicitMarker(t *testing.T) {
+func TestUpsertViewRejectsEngineAndDatasetChange(t *testing.T) {
 	ctx := context.Background()
 	store := openViewTestStore(t, ctx)
 	view, err := store.GetView(ctx, "space", "source-view")
-	if err != nil {
-		t.Fatal(err)
-	}
-	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "close"}, {SpaceId: "space", ViewId: "source-view", ColumnName: "old"}}
-	if _, err := store.UpsertView(ctx, view); err != nil {
-		t.Fatal(err)
-	}
-	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "close"}}
-	if _, err := store.UpsertView(ctx, view); err != nil {
-		t.Fatal(err)
-	}
-	columns, _, err := store.ListViewColumns(ctx, "space", "source-view", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(columns) != 2 {
-		t.Fatalf("columns after partial update = %v", columns)
-	}
-	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "close"}, {SpaceId: "space", ViewId: "source-view", ColumnName: "old"}}
-	if _, err := store.ReplaceViewColumns(ctx, view); err != nil {
-		t.Fatal(err)
-	}
-	stored, err := store.GetView(ctx, "space", "source-view")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.GetAttributes()["moox.columns_explicit"] != "true" {
-		t.Fatalf("empty replacement lost explicit-column marker: attrs=%v", stored.GetAttributes())
-	}
-	stored.Attributes = nil
-	stored.Description = "ordinary metadata update"
-	if _, err := store.UpsertView(ctx, stored); err != nil {
-		t.Fatal(err)
-	}
-	stored, err = store.GetView(ctx, "space", "source-view")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.GetAttributes()["moox.columns_explicit"] != "true" {
-		t.Fatalf("ordinary update cleared explicit-column marker: attrs=%v", stored.GetAttributes())
-	}
-}
-
-func TestUpsertViewRejectsEngineAndPrimaryChangeWithActiveIndex(t *testing.T) {
-	ctx := context.Background()
-	store := openViewTestStore(t, ctx)
-	view, err := store.GetView(ctx, "space", "source-view")
-	if err != nil {
-		t.Fatal(err)
-	}
-	view.ActiveIndexId = "source-a"
-	view.Engine = "duckdb"
-	view.DatasetId = "prices"
-	raw, err := marshal(view)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE t_views SET c_active_index_id = ?, c_engine = ?, c_dataset_id = ?, c_attrs_json = ? WHERE c_space_id = ? AND c_view_id = ?`, "source-a", "duckdb", "prices", raw, "space", "source-view"); err != nil {
-		t.Fatal(err)
-	}
-	view, err = store.GetView(ctx, "space", "source-view")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,14 +44,14 @@ func TestUpsertViewRejectsEngineAndPrimaryChangeWithActiveIndex(t *testing.T) {
 	view.Engine = "duckdb"
 	view.DatasetId = "fundamentals"
 	if _, err := store.UpsertView(ctx, view); err == nil || !strings.Contains(err.Error(), "数据集不能修改") {
-		t.Fatalf("primary change error = %v", err)
+		t.Fatalf("dataset change error = %v", err)
 	}
 	unchanged, err := store.GetView(ctx, "space", "source-view")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unchanged.GetActiveIndexId() != "source-a" || unchanged.GetEngine() != "duckdb" || unchanged.GetDatasetId() != "prices" {
-		t.Fatalf("active view mutated after rejected update: %v", unchanged)
+	if unchanged.GetEngine() != "duckdb" || unchanged.GetDatasetId() != "prices" {
+		t.Fatalf("view mutated after rejected update: %v", unchanged)
 	}
 }
 
@@ -151,35 +90,33 @@ func openViewTestStore(t *testing.T, ctx context.Context) *Store {
 	return store
 }
 
-func TestUpsertViewRejectsColumnsOwnedByAnotherView(t *testing.T) {
+// View 的列由数据集列推出：写入 View 时带的列被忽略，跨 View 的 ListViewColumns 每个 View 各自从 0 编号。
+func TestViewColumnsAreDerivedFromDatasetColumns(t *testing.T) {
 	ctx := context.Background()
 	store := openViewTestStore(t, ctx)
+	for _, name := range []string{"open", "close"} {
+		if _, err := store.UpsertDatasetColumn(ctx, &pb.DatasetColumn{SpaceId: "space", DatasetId: "prices", ColumnName: name, OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Attributes: map[string]string{"display_name": name}}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := store.UpsertView(ctx, &pb.View{
 		SpaceId: "space", ViewId: "other-view", Name: "Other view", DatasetId: "prices",
-		Columns: []*pb.ViewColumn{{ColumnName: "close"}},
+		Columns: []*pb.ViewColumn{{ColumnName: "ignored"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := store.GetView(ctx, "space", "other-view")
+	view, err := store.GetView(ctx, "space", "other-view")
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := store.GetView(ctx, "space", "source-view")
+	if len(view.GetColumns()) != 2 || view.GetColumns()[0].GetColumnName() != "open" || view.GetColumns()[1].GetColumnName() != "close" {
+		t.Fatalf("View 列应按数据集列的创建顺序：%v", view.GetColumns())
+	}
+	columns, page, err := store.ListViewColumns(ctx, "space", "", &pb.Page{Page: 2, Size: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	source.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "other-view", ColumnName: "close", SortOrder: 99}}
-	if _, err := store.UpsertView(ctx, source); err == nil {
-		t.Fatal("期望拒绝携带其他 view_id 的列")
-	}
-	if _, err := store.ReplaceViewColumns(ctx, source); err == nil {
-		t.Fatal("ReplaceViewColumns 期望拒绝携带其他 view_id 的列")
-	}
-	after, err := store.GetView(ctx, "space", "other-view")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GetColumns()[0].GetSortOrder() == 99 {
-		t.Fatalf("另一个 View 被改动: before=%v after=%v", before, after)
+	if page.GetTotal() != 4 || len(columns) != 2 || columns[0].GetViewId() != "source-view" || columns[0].GetSortOrder() != 0 || columns[1].GetSortOrder() != 1 {
+		t.Fatalf("分页列出全部 View 的列：page=%v columns=%v", page, columns)
 	}
 }

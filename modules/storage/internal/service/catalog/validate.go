@@ -77,19 +77,6 @@ func validateColumnDisplayName(field string, attrs map[string]string) error {
 	return nil
 }
 
-// isDatasetViewColumn reports whether a View column reads a Dataset column.
-// Metadata stores an unspecified origin type as a dataset column.
-func isDatasetViewColumn(column *pb.ViewColumn) bool {
-	if column == nil {
-		return false
-	}
-	switch column.GetOriginType() {
-	case pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION:
-		return false
-	}
-	return true
-}
-
 func validateLowerSnakeID(field string, value string, maxLen int) error {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -104,41 +91,10 @@ func validateLowerSnakeID(field string, value string, maxLen int) error {
 	return nil
 }
 
-func validateViewColumnName(column *pb.ViewColumn) error {
-	if err := validateUserColumnName("view column_name", column.GetColumnName()); err != nil {
-		return err
-	}
-	if !isDatasetViewColumn(column) {
-		return nil
-	}
-	// A View indexes exactly one Dataset, so a dataset column is the bare
-	// Dataset column name; View.dataset_id already names the source Dataset.
-	originID := strings.TrimSpace(column.GetOriginId())
-	if originID == "" || strings.Contains(originID, ".") {
-		return errors.New("dataset view column origin_id must be the bare Dataset column name")
-	}
-	if strings.TrimSpace(column.GetColumnName()) != originID {
-		return errors.New("dataset view column column_name must equal origin_id")
-	}
-	return nil
-}
-
 func validateUserColumnName(field string, name string) error {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if _, reserved := reservedTimeSeriesSystemColumns[name]; reserved {
 		return fmt.Errorf("%s %q is a reserved system column", field, name)
-	}
-	return nil
-}
-
-func validateViewColumns(columns []*pb.ViewColumn) error {
-	for _, column := range columns {
-		if column == nil {
-			continue
-		}
-		if err := validateViewColumnName(column); err != nil {
-			return err
-		}
 	}
 	return nil
 }

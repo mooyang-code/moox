@@ -134,7 +134,7 @@ func (r systemResetOptions) externalSteps(scope string) []sysctl.ExternalStep {
 			fmt.Sprintf("moox-cli storage reset-metadata --package-root %s --storage-conf %s --seed %s --yes", r.StoragePkg, r.StorageConf, r.StorageSeed))
 		describe = "Storage：暂停后删除行数据（Pebble）与 View 索引，清空元数据定义并重新导入种子，再恢复（在 Storage 主机上执行）"
 	}
-	storageCommands = append(storageCommands, fmt.Sprintf("恢复 Storage（%s/resume.sh）并等就绪", r.StoragePkg))
+	storageCommands = append(storageCommands, fmt.Sprintf("恢复 Storage（%s/resume.sh）并等就绪；resume 失败时组件保持暂停、主机守护不会拉起，查明原因后重跑 resume.sh", r.StoragePkg))
 	return []sysctl.ExternalStep{
 		// 暂存库记着每个归档任务的水位和永久分区状态；不清的话重建同名任务会沿用旧水位，甚至重新载入旧文件。
 		{Name: "archive-worker", Describe: "归档 worker：停止并删除暂存库（在 archive-worker 所在主机上执行）", After: sysctl.Archive, Commands: []string{

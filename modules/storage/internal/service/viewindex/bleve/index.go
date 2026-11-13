@@ -45,6 +45,8 @@ type indexMeta struct {
 	PrimaryDatasetID string                       `json:"primary_dataset_id"`
 	UpdatedAt        string                       `json:"updated_at"`
 	Columns          map[string]pb.FieldValueType `json:"columns"`
+	// BuiltColumns 是已建列的完整契约（含排序），重启后由它还原写入契约。
+	BuiltColumns []viewindex.BuiltColumn `json:"built_columns"`
 	// ChangeStoreID、ChangeSequence、BuiltSequence 是跟随变更日志的进度，见 viewindex.FollowState。
 	ChangeStoreID  string `json:"change_store_id,omitempty"`
 	ChangeSequence uint64 `json:"change_seq,omitempty"`
@@ -75,7 +77,7 @@ func (i *Index) Prepare(_ context.Context, id string, schema viewindex.ViewIndex
 	if err := os.RemoveAll(path); err != nil {
 		return err
 	}
-	meta := indexMeta{SpaceID: schema.SpaceID, ViewVersion: schema.ViewVersion, SchemaHash: schema.SchemaHash, PrimaryDatasetID: schema.PrimaryDatasetID, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Columns: schemaColumns(schema.Columns)}
+	meta := indexMeta{SpaceID: schema.SpaceID, ViewVersion: schema.ViewVersion, SchemaHash: schema.SchemaHash, PrimaryDatasetID: schema.PrimaryDatasetID, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Columns: schemaColumns(schema.Columns), BuiltColumns: viewindex.EncodeBuiltColumns(schema.Columns)}
 	index, err := blevelib.New(path, buildMapping(meta.Columns))
 	if err != nil {
 		return err
@@ -106,14 +108,15 @@ func (i *Index) ExtendColumns(_ context.Context, id string, current, next viewin
 	if h.meta.ViewVersion == next.ViewVersion && h.meta.SchemaHash == next.SchemaHash {
 		return nil
 	}
-	if h.meta.ViewVersion < current.ViewVersion || h.meta.ViewVersion > next.ViewVersion || h.meta.PrimaryDatasetID != current.PrimaryDatasetID {
-		return fmt.Errorf("%w：Bleve 物理状态在修订号 %d 上不是追加前缀", viewindex.ErrSchemaExtensionConflict, h.meta.ViewVersion)
+	if h.meta.ViewVersion != current.ViewVersion || h.meta.SchemaHash != current.SchemaHash || h.meta.PrimaryDatasetID != current.PrimaryDatasetID {
+		return fmt.Errorf("%w：Bleve 物理状态（修订号 %d）不是这次加列的起点", viewindex.ErrSchemaExtensionConflict, h.meta.ViewVersion)
 	}
 	meta := h.meta
 	meta.ViewVersion = next.ViewVersion
 	meta.SchemaHash = next.SchemaHash
 	meta.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	meta.Columns = schemaColumns(next.Columns)
+	meta.BuiltColumns = viewindex.EncodeBuiltColumns(next.Columns)
 	if err := i.writeMeta(id, meta); err != nil {
 		return err
 	}
@@ -289,7 +292,8 @@ func (i *Index) Stat(ctx context.Context, id string) (viewindex.ViewIndexStats, 
 	if err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
-	stats := viewindex.ViewIndexStats{Exists: true, ViewVersion: h.meta.ViewVersion, SchemaHash: h.meta.SchemaHash, UpdatedAt: h.meta.UpdatedAt, EntryCount: int64(count), Follow: h.meta.followState()}
+	stats := h.meta.stats()
+	stats.EntryCount = int64(count)
 	return stats, nil
 }
 
@@ -311,7 +315,12 @@ func (i *Index) StatMetadata(ctx context.Context, id string) (viewindex.ViewInde
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return viewindex.ViewIndexStats{Exists: true, ViewVersion: h.meta.ViewVersion, SchemaHash: h.meta.SchemaHash, UpdatedAt: h.meta.UpdatedAt, Follow: h.meta.followState()}, nil
+	return h.meta.stats(), nil
+}
+
+// stats 返回索引自身记录的契约与进度（不含行数）。
+func (m indexMeta) stats() viewindex.ViewIndexStats {
+	return viewindex.ViewIndexStats{Exists: true, DatasetID: m.PrimaryDatasetID, Columns: viewindex.DecodeBuiltColumns(m.BuiltColumns), ViewVersion: m.ViewVersion, SchemaHash: m.SchemaHash, UpdatedAt: m.UpdatedAt, Follow: m.followState()}
 }
 
 func (i *Index) Exists(_ context.Context, id string) (bool, error) {

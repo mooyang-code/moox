@@ -30,7 +30,6 @@ import (
 
 // metadataResetClear 是要清空的表，子表在前（外键 RESTRICT 的父表在后）。
 var metadataResetClear = []string{
-	"t_view_columns",
 	"t_views", "t_dataset_columns", "t_datasets", "t_fields", "t_field_groups",
 	"t_subject_tags", "t_tags", "t_subjects", "t_data_sources", "t_spaces",
 }
@@ -157,7 +156,7 @@ func resetMetadata(ctx context.Context, opts resetMetadataOptions) (resetMetadat
 	}
 	summary.Imported = &importSummary{
 		Spaces: result.Spaces, DataSources: result.DataSources, Subjects: result.Subjects, Tags: result.Tags, Datasets: result.Datasets,
-		Fields: result.Fields, DatasetColumns: result.DatasetColumns, Views: result.Views, ViewColumns: result.ViewColumns, Devices: result.Devices,
+		Fields: result.Fields, DatasetColumns: result.DatasetColumns, Views: result.Views, Devices: result.Devices,
 	}
 	summary.Status = "ok"
 	summary.NextSteps = []string{"启动 Storage", "Collector 重新登记（fetch-plan reregister）"}

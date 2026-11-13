@@ -25,6 +25,7 @@ type MetadataClient interface {
 // DataViewClient 是策略读取 Storage DataView 用到的最小方法集合。
 type DataViewClient interface {
 	QueryTimeSeriesRows(context.Context, *storagepb.QueryTimeSeriesRowsReq, ...client.Option) (*storagepb.QueryTimeSeriesRowsRsp, error)
+	GetViewState(context.Context, *storagepb.GetViewStateReq, ...client.Option) (*storagepb.GetViewStateRsp, error)
 }
 
 // FactorClient 是策略读取 FactorMgr 用到的最小方法集合。
@@ -112,6 +113,10 @@ func (a *gatewayAdapter) ListTagMembers(ctx context.Context, request *storagepb.
 
 func (a *gatewayAdapter) QueryTimeSeriesRows(ctx context.Context, request *storagepb.QueryTimeSeriesRowsReq, options ...client.Option) (*storagepb.QueryTimeSeriesRowsRsp, error) {
 	return invokeGateway[storagepb.QueryTimeSeriesRowsRsp](ctx, a.gateway, a.storageTimeout, storageDataViewService, "QueryTimeSeriesRows", request, options)
+}
+
+func (a *gatewayAdapter) GetViewState(ctx context.Context, request *storagepb.GetViewStateReq, options ...client.Option) (*storagepb.GetViewStateRsp, error) {
+	return invokeGateway[storagepb.GetViewStateRsp](ctx, a.gateway, a.storageTimeout, storageDataViewService, "GetViewState", request, options)
 }
 
 func (a *gatewayAdapter) GetFactor(ctx context.Context, request *factorpb.GetFactorReq, options ...client.Option) (*factorpb.GetFactorRsp, error) {

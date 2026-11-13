@@ -83,7 +83,7 @@ func TestReplayWithMinAgeAndUnknownCoverage(t *testing.T) {
 	}
 }
 
-// A/B 槽位名在重建时交替复用：排队期间经历 A→B→A，槽位名相同、构建 ID 不同，必须按新一代复查区间。
+// 原地重建时索引 ID 不变：排队期间重建过两次，索引 ID 相同、建成序号不同，必须按新一代复查区间。
 func TestReplayDetectsSameSlotRebuild(t *testing.T) {
 	repo := openStore(t)
 	job := submitReplay(t, repo, replayDSL, "idx@b1", origin.Add(2*time.Hour), 4)

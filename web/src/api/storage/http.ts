@@ -37,7 +37,8 @@ const storageReadMethods = new Set([
   "ListViews",
   "ListViewColumns",
   "QueryTimeSeriesRows",
-  "SearchRecordRows"
+  "SearchRecordRows",
+  "GetViewState"
 ]);
 
 function storageCacheKey(method: string, req: object): string {
@@ -67,7 +68,8 @@ function assertSuccess(retInfo: RetInfo | undefined, silent: boolean) {
     throw error;
   }
   if (!isRetInfoSuccess(retInfo.code)) {
-    const error = new Error(retInfo.msg || `Storage 请求失败: ${retInfo.code}`);
+    // 带上 retCode，调用方据此区分具体错误（如 VIEW_NOT_FOUND）。
+    const error = Object.assign(new Error(retInfo.msg || `Storage 请求失败: ${retInfo.code}`), { retCode: retInfo.code });
     if (!silent) Message.error(error.message);
     throw error;
   }

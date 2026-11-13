@@ -470,13 +470,13 @@ func (s *Service) ListViewIndexes(ctx context.Context, req *pb.ListViewIndexesRe
 		return &pb.ListViewIndexesRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	s.mu.RLock()
-	ids := make([]string, 0, len(s.catalogViews)*2)
-	for key, view := range s.catalogViews {
+	ids := make([]string, 0, len(s.views))
+	for key, runtime := range s.views {
 		if req.GetSpaceId() != "" && req.GetSpaceId() != key.spaceID || req.GetViewId() != "" && req.GetViewId() != key.viewID {
 			continue
 		}
-		if view.GetActiveIndexId() != "" {
-			ids = append(ids, view.GetActiveIndexId())
+		if active := runtime.queryState().active; active != "" {
+			ids = append(ids, active)
 		}
 	}
 	s.mu.RUnlock()

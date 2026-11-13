@@ -19,14 +19,10 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+// MetadataClient 是 storage-view 读 View 声明用的元数据接口：View 的列由数据集列推出，随 View 一起返回；
+// 已建好的索引状态只在索引文件里，不写回元数据。
 type MetadataClient interface {
 	ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error)
-	GetView(context.Context, *pb.GetViewReq, ...client.Option) (*pb.GetViewRsp, error)
-	GetDataset(context.Context, *pb.GetDatasetReq, ...client.Option) (*pb.GetDatasetRsp, error)
-	ListDatasetSubjects(context.Context, *pb.ListDatasetSubjectsReq, ...client.Option) (*pb.ListDatasetSubjectsRsp, error)
-	ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error)
-	CompleteViewInitialBuild(context.Context, *pb.CompleteViewInitialBuildReq, ...client.Option) (*pb.CompleteViewInitialBuildRsp, error)
-	CommitViewSchemaExtension(context.Context, *pb.CommitViewSchemaExtensionReq, ...client.Option) (*pb.CommitViewSchemaExtensionRsp, error)
 }
 
 type FieldReader interface {
@@ -65,11 +61,6 @@ const initialViewRevision uint64 = 1
 // every maintenance tick.
 const coverageRefreshInterval = 5 * time.Minute
 const coverageStatTimeout = 5 * time.Second
-
-// viewColumnsExplicitAttr distinguishes a view that intentionally exposes no
-// columns from a view without an explicit projection, whose empty definition
-// follows all primary dataset columns.
-const viewColumnsExplicitAttr = "moox.columns_explicit"
 
 func (s *Service) StartViewMaintainer(ctx context.Context, opts MaintenanceOptions) (func(), error) {
 	var err error
@@ -134,8 +125,8 @@ func (s *Service) normalizeMaintenanceOptions(opts MaintenanceOptions) (Maintena
 }
 
 // observeViewFileSize 更新超过文件大小告警线的 View：只告警，不动数据。
-func (s *Service) observeViewFileSize(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions) {
-	if view == nil || view.GetActiveIndexId() == "" {
+func (s *Service) observeViewFileSize(view *pb.View, indexID string, stats viewindex.ViewIndexStats, opts MaintenanceOptions) {
+	if view == nil {
 		return
 	}
 	ref := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
@@ -154,7 +145,7 @@ func (s *Service) observeViewFileSize(view *pb.View, stats viewindex.ViewIndexSt
 	s.fileOverLimitMu.Unlock()
 	s.metrics.SetViewFileOverLimitCount(int64(count))
 	if exceeded && !wasExceeded {
-		log.Warnf("storage view 索引文件超过告警线 space=%s view=%s index=%s 文件=%d 告警线=%d", view.GetSpaceId(), view.GetViewId(), view.GetActiveIndexId(), stats.PhysicalBytes, opts.MaxViewFileBytes)
+		log.Warnf("storage view 索引文件超过告警线 space=%s view=%s index=%s 文件=%d 告警线=%d", view.GetSpaceId(), view.GetViewId(), indexID, stats.PhysicalBytes, opts.MaxViewFileBytes)
 	}
 }
 
@@ -192,7 +183,8 @@ func (s *Service) startViewMaintenanceLoop(ctx context.Context, opts Maintenance
 	return func() { cancel(); <-done }
 }
 
-// RestoreActiveViews 只挂接元数据声明的活动索引，不建新索引，可以在启动 EventBus 消费之前运行，不拖住实时流。
+// RestoreActiveViews 只挂接已经建好的索引文件，不建新索引，可以在连 EventBus 之前运行，不拖住实时流。
+// 没有文件、没建完（没记下跟随进度）或属于另一个数据集（删除后同名重建）的 View 不挂接，由维护流程重新建。
 func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOptions) error {
 	if opts.Metadata == nil {
 		return errors.New("metadata client is required")
@@ -213,7 +205,7 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 		}
 		sortViewsForMaintenance(rsp.GetViews())
 		for _, view := range rsp.GetViews() {
-			if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" || view.GetActiveIndexId() == "" {
+			if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
 				continue
 			}
 			engineName := strings.ToLower(strings.TrimSpace(view.GetEngine()))
@@ -221,26 +213,14 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 			if engine == nil {
 				return fmt.Errorf("view engine %q is unavailable", engineName)
 			}
-			stats, err := restoreIndexStats(ctx, engine, view.GetActiveIndexId())
+			stats, err := restoreIndexStats(ctx, engine, viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId()))
 			if err != nil {
 				return err
 			}
-			if !stats.Exists {
-				// 一个索引不见了不能让整个进程起不来：这个 View 不可读，由跟随器重建。
-				s.holdForRebuild(view, engineName)
+			if !indexBuiltFor(view, stats) {
 				continue
 			}
-			if err := validatePhysicalViewContract(view, stats); err != nil {
-				recovered, recoverErr := s.recoverViewSchemaExtension(ctx, opts.Metadata, auth, view, engine, stats)
-				if recovered && recoverErr == nil {
-					continue
-				}
-				// 一个索引对不上不能拖垮整个进程：这个 View 不挂接，其他 View 继续恢复。
-				log.Errorf("storage view 启动时没能挂接活动索引 space=%s view=%s 契约=%v 补提交=%v", view.GetSpaceId(), view.GetViewId(), err, recoverErr)
-				s.holdUnattachedView(view)
-				continue
-			}
-			if err := s.AttachActiveView(ctx, view); err != nil {
+			if err := s.AttachActiveView(ctx, view, stats); err != nil {
 				return err
 			}
 		}
@@ -255,6 +235,12 @@ func restoreIndexStats(ctx context.Context, engine viewindex.Engine, indexID str
 		return reader.StatMetadata(ctx, indexID)
 	}
 	return engine.Stat(ctx, indexID)
+}
+
+// indexBuiltFor 报告索引文件是否是这个 View 建好的索引：文件存在、属于 View 当前的数据集、记下了跟随进度
+// （建索引的最后一步才记，没记的是半成品）。
+func indexBuiltFor(view *pb.View, stats viewindex.ViewIndexStats) bool {
+	return stats.Exists && stats.DatasetID == view.GetDatasetId() && stats.Follow.Cursor.StoreID != ""
 }
 
 func isPrimaryHistoryIndexNotReady(err error) bool {
@@ -338,7 +324,7 @@ func sortViewsForMaintenance(views []*pb.View) {
 	})
 }
 
-// maintainView 处理一个 View：没有索引时建索引；有索引时挂接、校验契约并刷新覆盖统计。加列由每分钟的定时任务处理。
+// maintainView 处理一个 View：没有建好的索引时建索引；有索引时挂接并刷新覆盖统计。加列由每分钟的定时任务处理。
 func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View) error {
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
 		return nil
@@ -346,31 +332,31 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	if opts.Metadata != nil {
 		s.setMetadataClient(opts.Metadata)
 	}
-	if view.GetActiveIndexId() == "" {
-		return s.buildInitialIndex(ctx, opts, auth, view)
+	active, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())
+	if runtime != nil && runtime.needsRebuild() {
+		// 原地重建由跟随器做（期间文件可能暂时不存在），不在这里另建；跟随器被停过（View 停用后再启用）时重新起它，接着重建。
+		s.ensureFollower(viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()})
+		return nil
 	}
 	engineName := strings.ToLower(strings.TrimSpace(view.GetEngine()))
 	engine := s.engines[engineName]
 	if engine == nil {
 		return fmt.Errorf("view engine %q is unavailable", engineName)
 	}
-	// 维护每轮都会跑：DuckDB 的完整 Stat 要对全表做 COUNT/MIN/MAX，这里只做元数据级的契约检查，文件大小也在其中。
-	stats, metadataOnly, err := maintainIndexStats(ctx, engine, view.GetActiveIndexId())
+	indexID := viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId())
+	// 维护每轮都会跑：DuckDB 的完整 Stat 要对全表做 COUNT/MIN/MAX，这里只做元数据级的检查，文件大小也在其中。
+	stats, metadataOnly, err := maintainIndexStats(ctx, engine, indexID)
 	if err != nil {
 		return err
 	}
-	s.observeViewFileSize(view, stats, opts)
-	if !stats.Exists {
-		// 活动索引文件不见了（例如原地重建时删掉旧文件后准备新文件失败）：交给跟随器重建。
-		if _, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId()); runtime == nil || !runtime.needsRebuild() {
-			s.holdForRebuild(view, engineName)
-		}
-		return nil
+	// 本进程刚建好、还没有跟随器记进度的索引（没起跟随时）同样算建好。
+	if !indexBuiltFor(view, stats) && !(active == indexID && stats.Exists && stats.DatasetID == view.GetDatasetId()) {
+		return s.buildInitialIndex(ctx, opts, auth, view)
 	}
+	s.observeViewFileSize(view, indexID, stats, opts)
 	// 元数据级统计不含覆盖字段：保留上一次完整统计，不能用空值覆盖，否则 TotalMode=NONE 的查询会丢掉完整性信息。
-	_, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())
 	if metadataOnly {
-		if cached, ok := cachedActiveIndexStats(runtime, view.GetActiveIndexId()); ok {
+		if cached, ok := cachedActiveIndexStats(runtime, indexID); ok {
 			if stats.EntryCount == 0 {
 				stats.EntryCount = cached.EntryCount
 			}
@@ -383,7 +369,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		}
 		if shouldRefreshCoverage(runtime) {
 			coverageCtx, cancel := context.WithTimeout(ctx, coverageStatTimeout)
-			fullStats, fullErr := engine.Stat(coverageCtx, view.GetActiveIndexId())
+			fullStats, fullErr := engine.Stat(coverageCtx, indexID)
 			cancel()
 			markCoverageRefresh(runtime)
 			if fullErr == nil && fullStats.Exists {
@@ -394,22 +380,12 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 			}
 		}
 	}
-	if err := validatePhysicalViewContract(view, stats); err != nil {
-		recovered, recoverErr := s.recoverViewSchemaExtension(ctx, opts.Metadata, auth, view, engine, stats)
-		if recoverErr != nil {
-			return fmt.Errorf("补提交加列：%w", recoverErr)
-		}
-		if recovered {
-			return nil
-		}
-		return err
-	}
-	if err := s.AttachActiveView(ctx, view); err != nil {
+	if err := s.AttachActiveView(ctx, view, stats); err != nil {
 		return err
 	}
 	_, runtime = s.activeIndex(view.GetSpaceId(), view.GetViewId())
 	if !metadataOnly || stats.IndexedFrom != "" || stats.IndexedTo != "" || stats.EntryCount != 0 {
-		s.cacheActiveIndexStats(runtime, view.GetActiveIndexId(), stats)
+		s.cacheActiveIndexStats(runtime, indexID, stats)
 	}
 	return nil
 }
@@ -483,80 +459,6 @@ func (s *Service) observeActivatedViewWatermark(view *pb.View, indexID string) {
 		}
 	}
 	s.observeViewWatermark(indexID, view.GetDatasetId(), keys, true)
-}
-
-func (s *Service) readView(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, spaceID, viewID string) (*pb.View, error) {
-	rsp, err := metadata.GetView(ctx, &pb.GetViewReq{AuthInfo: auth, SpaceId: spaceID, ViewId: viewID})
-	if err != nil {
-		return nil, err
-	}
-	if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-		return nil, err
-	}
-	return rsp.GetView(), nil
-}
-
-// holdUnattachedView 给没能挂接的 View 占住运行时与索引映射：它不可读、也不跟随，维护流程下一轮照常再试挂接。
-func (s *Service) holdUnattachedView(view *pb.View) {
-	key := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.views[key] == nil {
-		s.views[key] = newViewRuntime()
-	}
-	s.indexView[view.GetActiveIndexId()] = key
-}
-
-// validatePhysicalViewContract 防止挂接到对不上元数据的物理索引：修订号和 schema 哈希以元数据为准。
-func validatePhysicalViewContract(view *pb.View, stats viewindex.ViewIndexStats) error {
-	if view == nil {
-		return errors.New("active view metadata is required")
-	}
-	if expected := view.GetViewRevision(); expected > 0 && stats.ViewVersion != expected {
-		return fmt.Errorf("active view index contract mismatch: metadata revision=%d physical revision=%d", expected, stats.ViewVersion)
-	}
-	if expected := strings.TrimSpace(view.GetActiveViewSchemaHash()); expected != "" && expected != strings.TrimSpace(stats.SchemaHash) {
-		return fmt.Errorf("active view index contract mismatch: metadata schema_hash=%q physical schema_hash=%q", expected, stats.SchemaHash)
-	}
-	return nil
-}
-
-// desiredViewColumns 返回 View 声明的列；没有显式投影时取数据集全部启用的列。
-func desiredViewColumns(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, view *pb.View) ([]*pb.ViewColumn, error) {
-	if len(view.GetColumns()) > 0 || view.GetAttributes()[viewColumnsExplicitAttr] == "true" {
-		return view.GetColumns(), nil
-	}
-	return loadDefaultViewColumns(ctx, metadata, auth, view)
-}
-
-func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, view *pb.View) ([]*pb.ViewColumn, error) {
-	var columns []*pb.ViewColumn
-	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := metadata.ListDatasetColumns(ctx, &pb.ListDatasetColumnsReq{
-			AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(),
-			Page: &pb.Page{Page: pageNo, Size: 1000},
-		})
-		if err != nil {
-			return nil, err
-		}
-		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-			return nil, err
-		}
-		for _, column := range rsp.GetColumns() {
-			if column == nil || (column.GetStatus() != "" && column.GetStatus() != "active") {
-				continue
-			}
-			columns = append(columns, &pb.ViewColumn{
-				SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), ColumnName: column.GetColumnName(),
-				OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-				OriginId:   column.GetColumnName(),
-				ValueType:  column.GetValueType(),
-			})
-		}
-		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetColumns()) == 0 {
-			return columns, nil
-		}
-	}
 }
 
 func (s *Service) internalAuth() *pb.AuthInfo {

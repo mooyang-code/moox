@@ -691,11 +691,6 @@ func TestEnsureResultViewCreatesTheDefaultViewWithMaintenanceAttributes(t *testi
 	}
 	metadata := &metadataFake{
 		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}},
-		columnPages: []*storagepb.ListDatasetColumnsRsp{{RetInfo: successRet(), Columns: []*storagepb.DatasetColumn{
-			{ColumnName: "close", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", Attributes: map[string]string{"display_name": "收盘"}},
-			{ColumnName: "old", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "disabled"},
-			{ColumnName: "ema__20", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", Attributes: map[string]string{"member_key": "ema__20"}},
-		}}},
 	}
 	c := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "k"})
 	require.NoError(t, c.EnsureResultView(t.Context(), "crypto", "dataset_factor_btc_1m"))
@@ -708,15 +703,10 @@ func TestEnsureResultViewCreatesTheDefaultViewWithMaintenanceAttributes(t *testi
 	require.Equal(t, "1m", view.GetFreq())
 	require.Equal(t, "duckdb", view.GetEngine())
 	require.Equal(t, map[string]string{
-		"owner_module": "factor", "view_role": "factor_result", "follow_dataset_columns": "true", "maintenance_priority": "10",
+		"owner_module": "factor", "view_role": "factor_result", "maintenance_priority": "10",
 	}, view.GetAttributes())
-	var names []string
-	for _, column := range view.GetColumns() {
-		names = append(names, column.GetColumnName())
-		require.Equal(t, column.GetColumnName(), column.GetOriginId())
-	}
-	require.Equal(t, []string{"close", "ema__20"}, names, "只带数据集的有效列，保持顺序")
-	require.Equal(t, "ema__20", view.GetColumns()[1].GetAttributes()["member_key"], "列属性随列带进 View")
+	require.Empty(t, view.GetColumns(), "建 View 不带列：列由 Storage 从数据集推出")
+	require.Empty(t, metadata.columnRequests, "不再为建 View 读数据集的列")
 }
 
 func TestEnsureResultViewLeavesAnExistingViewAloneButRejectsAnotherDatasetsView(t *testing.T) {

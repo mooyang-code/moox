@@ -42,11 +42,11 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref viewRef, change *
 		log.Errorf("storage view 跳过无法解析的完成标记 view=%s/%s 序号=%d 事件=%s：%v", ref.spaceID, ref.viewID, change.GetSequence(), message.GetEventId(), err)
 		return nil
 	}
-	view := s.viewSnapshot(ref.spaceID, ref.viewID)
+	view, schema := s.viewSnapshot(ref.spaceID, ref.viewID)
 	if view == nil {
 		return fmt.Errorf("View %s/%s 不在目录中", ref.spaceID, ref.viewID)
 	}
-	ready, eventID, ok := followReadyEvent(view, message, payload)
+	ready, eventID, ok := followReadyEvent(view, viewConfigID(view.GetViewId(), schema), message, payload)
 	if !ok {
 		log.Errorf("storage view 跳过来源不认识的完成标记 view=%s/%s 序号=%d 来源=%q", ref.spaceID, ref.viewID, change.GetSequence(), payload.GetSource())
 		return nil
@@ -90,9 +90,9 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref viewRef, change *
 
 // followReadyEvent 由完成标记组装 ViewDataReady 与它的事件 ID（下游按事件 ID 去重）。
 // View 只读一个数据集，账本判定的完成直接就是 View 的就绪，不再查各输入数据集的状态。
-func followReadyEvent(view *pb.View, message *eventpb.EventMessage, payload *storageeventpb.DatasetPeriodCompleted) (*storageeventpb.ViewDataReady, string, bool) {
+func followReadyEvent(view *pb.View, configID string, message *eventpb.EventMessage, payload *storageeventpb.DatasetPeriodCompleted) (*storageeventpb.ViewDataReady, string, bool) {
 	ready := &storageeventpb.ViewDataReady{
-		ViewId: view.GetViewId(), ViewConfigId: viewConfigID(view), CompletionEventId: message.GetEventId(),
+		ViewId: view.GetViewId(), ViewConfigId: configID, CompletionEventId: message.GetEventId(),
 		DatasetId: payload.GetDatasetId(), Status: payload.GetStatus(),
 		Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
 		FailedScopeRef: degradedScopeRef(payload.GetStatus(), payload.GetFailedSubjects()),
@@ -135,7 +135,7 @@ func (s *Service) reconnectReadyPublisher(ctx context.Context) {
 }
 
 // rebuildFollowIndex 在断档（View 停机超过日志保留期，或存储已重建）或索引没有跟随进度时原地重建索引：
-// 沿用当前活动索引的列契约（修订号、哈希不变，元数据不用改），先取开始建时的头部 H_start、读存量，建成时记下 H_done。
+// 沿用当前活动索引的列契约（修订号、哈希不变），先取开始建时的头部 H_start、读存量，建成时记下 H_done。
 // 重建期间 View 不可读；记录型 View 重建后为空，只跟随之后的写入。
 func (s *Service) rebuildFollowIndex(ctx context.Context, ref viewRef) (viewindex.FollowState, error) {
 	s.buildMu.Lock()
@@ -209,7 +209,7 @@ func (s *Service) rebuildFollowIndex(ctx context.Context, ref viewRef) (viewinde
 		runtime.mu.Unlock()
 		return viewindex.FollowState{}, errViewBuildCancelled
 	}
-	s.attachActiveViewLocked(view, runtime, schema, engineName)
+	s.attachActiveViewLocked(view, runtime, indexID, schema, engineName)
 	runtime.mu.Unlock()
 	s.observeActivatedViewWatermark(view, indexID)
 	return state, nil
@@ -238,22 +238,24 @@ func (s *Service) SetSeriesBars(bars uint64) {
 	s.mu.Unlock()
 }
 
-// viewSnapshot 返回目录里 View 的副本，活动索引取查询路径的无锁副本，不等运行时锁。
-func (s *Service) viewSnapshot(spaceID, viewID string) *pb.View {
+// viewSnapshot 返回目录里 View 的副本与活动索引的契约；活动索引取查询路径的无锁副本，不等运行时锁。
+func (s *Service) viewSnapshot(spaceID, viewID string) (*pb.View, viewindex.ViewIndexSchema) {
 	s.mu.RLock()
 	view := s.catalogViews[viewRef{spaceID: spaceID, viewID: viewID}]
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
 	if view == nil {
-		return nil
+		return nil, viewindex.ViewIndexSchema{}
 	}
-	clone := proto.Clone(view).(*pb.View)
+	var schema viewindex.ViewIndexSchema
 	if runtime != nil {
 		if active := runtime.queryState().active; active != "" {
-			clone.ActiveIndexId = active
+			s.mu.RLock()
+			schema = s.schemas[active]
+			s.mu.RUnlock()
 		}
 	}
-	return clone
+	return proto.Clone(view).(*pb.View), schema
 }
 
 func (s *Service) readyPublisherLocked() ReadyEventPublisher {
@@ -269,17 +271,12 @@ func viewVisibleScope(view *pb.View, fallback string) string {
 	return firstNonEmpty(fallback, "view:"+view.GetViewId())
 }
 
-func viewConfigID(view *pb.View) string {
-	if view == nil {
-		return ""
-	}
-	if hash := strings.TrimSpace(view.GetActiveViewSchemaHash()); hash != "" {
+// viewConfigID 是就绪事件里的 View 配置标识：活动索引的列契约哈希，没有时退回 View ID。
+func viewConfigID(viewID string, schema viewindex.ViewIndexSchema) string {
+	if hash := strings.TrimSpace(schema.SchemaHash); hash != "" {
 		return hash
 	}
-	if view.GetViewRevision() > 0 {
-		return fmt.Sprintf("%s@%d", view.GetViewId(), view.GetViewRevision())
-	}
-	return view.GetViewId()
+	return viewID
 }
 
 func firstNonEmpty(values ...string) string {

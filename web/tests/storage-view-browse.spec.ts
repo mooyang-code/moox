@@ -30,7 +30,6 @@ describe("storage view browse workflows", () => {
 
     expect(source).not.toContain("频率: {{ currentViewFrequency }}");
     expect(source).not.toContain("{{ buildTimeText }}");
-    expect(source).not.toContain("活跃版本 {{ activeView.active_view_revision }}");
   });
 
   it("uses dataset columns for filters and keeps the query pane within the window", () => {

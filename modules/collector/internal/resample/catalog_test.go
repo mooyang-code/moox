@@ -38,13 +38,18 @@ type catalogMetadataFake struct {
 	// createColumns 是随 CreateDataset 一起写入的列；upsertColumns 是单独补列的次数。
 	createColumns []string
 	upsertColumns int
+	// datasetColumns 是各数据集启用的列，View 的列按它推出（和 Storage 一样）。
+	datasetColumns map[string][]*storagepb.DatasetColumn
+	// buildingPolls 是 GetViewState 先回答"索引还在建"的次数。
+	buildingPolls int
 }
 
 func newCatalogMetadataFake(failAt string) *catalogMetadataFake {
 	return &catalogMetadataFake{
-		datasets: make(map[string]*storagepb.Dataset),
-		views:    make(map[string]*storagepb.View),
-		failAt:   failAt,
+		datasets:       make(map[string]*storagepb.Dataset),
+		views:          make(map[string]*storagepb.View),
+		datasetColumns: make(map[string][]*storagepb.DatasetColumn),
+		failAt:         failAt,
 	}
 }
 
@@ -76,6 +81,7 @@ func (f *catalogMetadataFake) CreateDataset(_ context.Context, req *storagepb.Cr
 	for _, column := range req.GetColumns() {
 		f.createColumns = append(f.createColumns, column.GetColumnName())
 	}
+	f.datasetColumns[dataset.GetDatasetId()] = append([]*storagepb.DatasetColumn(nil), req.GetColumns()...)
 	f.datasets[dataset.GetDatasetId()] = dataset
 	return &storagepb.CreateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
@@ -100,7 +106,7 @@ func (f *catalogMetadataFake) GetView(_ context.Context, req *storagepb.GetViewR
 	if view == nil {
 		return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
 	}
-	return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
+	return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: f.withDatasetColumns(view)}, nil
 }
 
 func (f *catalogMetadataFake) CreateView(_ context.Context, req *storagepb.CreateViewReq, _ ...client.Option) (*storagepb.CreateViewRsp, error) {
@@ -111,7 +117,7 @@ func (f *catalogMetadataFake) CreateView(_ context.Context, req *storagepb.Creat
 	// 和 Storage 一样：View 的频率取自它的数据集。
 	view.Freq = f.datasets[view.GetDatasetId()].GetFreq()
 	f.views[view.GetViewId()] = view
-	return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
+	return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: f.withDatasetColumns(view)}, nil
 }
 
 func (f *catalogMetadataFake) DeleteView(_ context.Context, req *storagepb.DeleteViewReq, _ ...client.Option) (*storagepb.DeleteViewRsp, error) {
@@ -126,29 +132,39 @@ func (f *catalogMetadataFake) DeleteView(_ context.Context, req *storagepb.Delet
 	return &storagepb.DeleteViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (f *catalogMetadataFake) UpsertDatasetColumn(_ context.Context, _ *storagepb.UpsertDatasetColumnReq, _ ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {
+func (f *catalogMetadataFake) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq, _ ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {
 	f.upsertColumns++
 	if err := f.fail("dataset_column"); err != nil {
 		return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
 	}
+	column := req.GetColumn()
+	existing := f.datasetColumns[column.GetDatasetId()]
+	found := false
+	for _, current := range existing {
+		found = found || current.GetColumnName() == column.GetColumnName()
+	}
+	if !found {
+		f.datasetColumns[column.GetDatasetId()] = append(existing, column)
+	}
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (f *catalogMetadataFake) UpsertViewColumn(_ context.Context, req *storagepb.UpsertViewColumnReq, _ ...client.Option) (*storagepb.UpsertViewColumnRsp, error) {
-	if err := f.fail("view_column"); err != nil {
-		return &storagepb.UpsertViewColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
+// withDatasetColumns 返回 View 的副本，列按所属数据集启用的列推出（和 Storage 一样，View 的列只读）。
+func (f *catalogMetadataFake) withDatasetColumns(view *storagepb.View) *storagepb.View {
+	out := proto.Clone(view).(*storagepb.View)
+	out.Columns = nil
+	for i, column := range f.datasetColumns[view.GetDatasetId()] {
+		out.Columns = append(out.Columns, &storagepb.ViewColumn{
+			SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), ColumnName: column.GetColumnName(),
+			OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: column.GetColumnName(),
+			ValueType: column.GetValueType(), SortOrder: uint32(i + 1),
+		})
 	}
-	view := f.views[req.GetColumn().GetViewId()]
-	if view != nil {
-		view.ActiveColumns = append(view.ActiveColumns, req.GetColumn())
-		view.Columns = append(view.Columns, req.GetColumn())
-		view.ActiveIndexId = "idx"
-		view.Status = "active"
-	}
-	return &storagepb.UpsertViewColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+	return out
 }
 
-// catalogViewStateFake 按元数据假实现里的 View 回答索引状态：View 不存在时是 VIEW_NOT_FOUND，否则活动索引已建好、列取已建列。
+// catalogViewStateFake 按元数据假实现里的 View 回答索引状态：View 不存在时是 VIEW_NOT_FOUND；
+// 先按 buildingPolls 回答几次"索引还在建"，之后索引建好、已建列就是数据集的列。
 type catalogViewStateFake struct {
 	metadata *catalogMetadataFake
 }
@@ -161,7 +177,11 @@ func (f catalogViewStateFake) GetViewState(_ context.Context, req *storagepb.Get
 	if view == nil {
 		return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
 	}
-	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, IndexId: view.GetActiveIndexId(), Columns: view.GetActiveColumns()}, nil
+	if f.metadata.buildingPolls > 0 {
+		f.metadata.buildingPolls--
+		return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+	}
+	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, IndexId: "idx", Columns: f.metadata.withDatasetColumns(view).GetColumns()}, nil
 }
 
 func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, domain.CollectionTask, *domain.CollectParams, storagesource.DatasetInfo, []domain.Subject) {
@@ -192,6 +212,21 @@ func TestPrepareTargetCreatesDatasetWithColumnsInOneCall(t *testing.T) {
 	require.Equal(t, len(want), metadata.upsertColumns)
 }
 
+// 不再单独写 View 列：View 的列就是目标数据集的列，准备目标时等这些列都建进索引才放行。
+func TestPrepareTargetWaitsUntilDatasetColumnsAreIndexed(t *testing.T) {
+	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("")
+	metadata.buildingPolls = 2
+
+	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
+	require.Zero(t, metadata.buildingPolls, "索引建好之前一直在等")
+	view := metadata.withDatasetColumns(metadata.views[taskresult.ResultIDs(rule.SpaceID, rule.TaskID).ViewID])
+	require.Len(t, view.GetColumns(), 7, "View 的列由目标数据集的列推出")
+
+	// 索引已建好但还缺一列时不放行。
+	state := &storagepb.GetViewStateRsp{IndexId: "idx", Columns: view.GetColumns()[:6]}
+	assert.False(t, targetViewColumnsReady(state, view.GetColumns()))
+}
+
 func TestPrepareTargetCompensatesCreatedDatasetWhenViewCreationFails(t *testing.T) {
 	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("create_view")
 
@@ -208,7 +243,6 @@ func TestPrepareTargetCompensatesNewResourcesInReverseOrderAfterLaterFailure(t *
 		failAt      string
 		deleteOrder []string
 	}{
-		{failAt: "view_column", deleteOrder: []string{"view", "dataset"}},
 		{failAt: "view_state", deleteOrder: []string{"view", "dataset"}},
 	} {
 		t.Run(testCase.failAt, func(t *testing.T) {
@@ -224,7 +258,7 @@ func TestPrepareTargetCompensatesNewResourcesInReverseOrderAfterLaterFailure(t *
 }
 
 func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
-	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("view_column")
+	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("view_state")
 	ids := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
 	metadata.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID,

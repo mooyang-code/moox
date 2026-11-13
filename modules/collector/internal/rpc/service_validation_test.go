@@ -55,6 +55,8 @@ type taskResultMetadataFake struct {
 	deleteViews       int
 	failDeleteDataset bool
 	failGetDataset    error
+	// indexedTo 是 storage-view 里各 View 已建索引的上界；没有的 View 按 VIEW_NOT_FOUND 回答。
+	indexedTo map[string]string
 }
 
 func newTaskResultMetadataFake(ids taskresult.IDs, taskID string) *taskResultMetadataFake {
@@ -160,8 +162,14 @@ func (f *taskResultMetadataFake) UpsertDatasetColumn(context.Context, *storagepb
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (f *taskResultMetadataFake) UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
-	return &storagepb.UpsertViewColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+func (f *taskResultMetadataFake) GetViewState(_ context.Context, req *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	indexedTo, ok := f.indexedTo[req.GetViewId()]
+	if !ok {
+		return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
+	}
+	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, IndexId: "idx", IndexedTo: indexedTo}, nil
 }
 
 func TestValidateCollectionTaskDatasetsRejectsMarketAndFrequencyMismatch(t *testing.T) {

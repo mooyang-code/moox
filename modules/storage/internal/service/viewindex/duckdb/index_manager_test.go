@@ -77,9 +77,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		t.Fatalf("first schema extension: %v", err)
 	}
 
-	// Simulate a process exit after the DuckDB transaction committed but before
-	// Metadata's active-schema CAS. On restart the physical schema is an
-	// intermediate append-only revision and must converge to the latest target.
+	// 重启后，加列后的契约（列、修订号、哈希）全部从索引文件还原，可以接着加列。
 	if err := manager.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -97,10 +95,19 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		Columns: append(append(append([]*pb.ViewColumn(nil), current.Columns...), v2), v3),
 	}
 	version3.SchemaHash = viewindex.HashViewIndexSchema(version3)
-	if err := manager.ExtendColumns(ctx, "factor-view-a", current, version3); err != nil {
-		t.Fatalf("restart recovery extension: %v", err)
+	restored, err := manager.StatMetadata(ctx, "factor-view-a")
+	if err != nil || restored.ViewVersion != 2 || restored.DatasetID != current.PrimaryDatasetID || len(restored.Columns) != 2 {
+		t.Fatalf("restored contract = %#v err=%v", restored, err)
 	}
-	if err := manager.ExtendColumns(ctx, "factor-view-a", current, version3); err != nil {
+	restoredSchema := version2
+	restoredSchema.Columns = restored.Columns
+	if viewindex.HashViewIndexSchema(restoredSchema) != restored.SchemaHash {
+		t.Fatalf("还原的列算出的哈希与记下的不一致：%v", restored.Columns)
+	}
+	if err := manager.ExtendColumns(ctx, "factor-view-a", restoredSchema, version3); err != nil {
+		t.Fatalf("extension after restart: %v", err)
+	}
+	if err := manager.ExtendColumns(ctx, "factor-view-a", restoredSchema, version3); err != nil {
 		t.Fatalf("idempotent retry: %v", err)
 	}
 
@@ -109,21 +116,6 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		t.Fatalf("final physical schema = %#v err=%v, want revision 3", stats, err)
 	}
 
-	// 修订号每次只加 1：上次加列没提交时，补提交的目标修订号与物理修订号相同，只是多了这期间新声明的列。
-	v4 := proto.Clone(&pb.ViewColumn{ColumnName: "turnover", OriginId: "turnover",
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 3}).(*pb.ViewColumn)
-	v4.SpaceId, v4.ViewId = current.SpaceID, current.ViewID
-	sameRevision := viewindex.ViewIndexSchema{
-		SpaceID: current.SpaceID, ViewID: current.ViewID, PrimaryDatasetID: current.PrimaryDatasetID,
-		ViewVersion: 3, Engine: current.Engine, Columns: append(append([]*pb.ViewColumn(nil), version3.Columns...), v4),
-	}
-	sameRevision.SchemaHash = viewindex.HashViewIndexSchema(sameRevision)
-	if err := manager.ExtendColumns(ctx, "factor-view-a", version2, sameRevision); err != nil {
-		t.Fatalf("同修订号补列：%v", err)
-	}
-	if stats, err := manager.StatMetadata(ctx, "factor-view-a"); err != nil || stats.ViewVersion != 3 || stats.SchemaHash != sameRevision.SchemaHash {
-		t.Fatalf("同修订号补列后 = %#v err=%v", stats, err)
-	}
 	rows, _, err := manager.Query(ctx, "factor-view-a", viewindex.QuerySpec{
 		Selectors: []viewindex.TimeSeriesSelector{{SpaceID: "space", DatasetID: current.PrimaryDatasetID, SubjectID: "BTC-USDT", Freq: "1m"}},
 		Includes:  []string{"bias_20", "volume"},
@@ -138,7 +130,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 	}
 }
 
-func TestExtendColumnsRejectsCorruptIntermediatePhysicalContract(t *testing.T) {
+func TestExtendColumnsRejectsCorruptPhysicalContract(t *testing.T) {
 	ctx := context.Background()
 	manager, err := OpenIndexManager(IndexManagerOptions{Root: t.TempDir()})
 	if err != nil {
@@ -187,8 +179,8 @@ func TestExtendColumnsRejectsCorruptIntermediatePhysicalContract(t *testing.T) {
 		ViewVersion: 3, Engine: current.Engine, Columns: append(append(append([]*pb.ViewColumn(nil), current.Columns...), bias), volume),
 	}
 	target.SchemaHash = viewindex.HashViewIndexSchema(target)
-	if err := manager.ExtendColumns(ctx, "factor-view-a", current, target); !errors.Is(err, viewindex.ErrSchemaExtensionConflict) {
-		t.Fatalf("corrupt intermediate schema error = %v, want schema extension conflict", err)
+	if err := manager.ExtendColumns(ctx, "factor-view-a", intermediate, target); !errors.Is(err, viewindex.ErrSchemaExtensionConflict) {
+		t.Fatalf("corrupt schema error = %v, want schema extension conflict", err)
 	}
 }
 

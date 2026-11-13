@@ -127,10 +127,5 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 			out.Views = append(out.Views, item)
 		}
 	}
-	for _, item := range seed.ViewColumns {
-		if keep(item.SpaceID) {
-			out.ViewColumns = append(out.ViewColumns, item)
-		}
-	}
 	return out, nil
 }

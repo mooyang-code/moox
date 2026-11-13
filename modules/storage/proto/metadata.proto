@@ -28,7 +28,7 @@ message Space {
   map<string, string> attributes = 8;
 }
 
-// View 是 Space 内的用户查询入口，也是可异步构建的近期派生索引定义。
+// View 是 Space 内的用户查询入口，只存声明；已建好的索引状态只在 View 的索引文件里，由 DataView.GetViewState 提供。
 message View {
   // space_id 是 View 所属 Space。
   string space_id = 1;
@@ -46,11 +46,9 @@ message View {
   string freq = 8;
   // engine 是视图查询执行引擎标识，由控制面配置。
   string engine = 9;
-  // active_index_id 是 View 唯一的物理索引标识；为空表示首次建索引还没完成，View 暂不可读。
-  string active_index_id = 11;
   // status 表示启用、停用、构建中、归档或删除等状态。
   string status = 12;
-  // columns 是视图对用户暴露的查询列。
+  // columns 是视图对用户暴露的查询列（只读）：等于数据集里启用的列，按数据集列的创建顺序；写接口忽略该字段。
   repeated ViewColumn columns = 13;
   // created_at 是创建时间，使用项目统一时间字符串格式。
   string created_at = 14;
@@ -58,21 +56,11 @@ message View {
   string updated_at = 15;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 16;
-  // view_revision 是当前索引的列修订号：建成时为 1，每原地加一次列加 1。
-  uint64 view_revision = 18;
-  // active_columns 是当前索引已经建好的列，只会追加。
-  repeated ViewColumn active_columns = 19;
-  // active_view_schema_hash 是当前索引的列形态哈希。
-  string active_view_schema_hash = 20;
-  // indexed_from 是当前索引实际覆盖的最小业务时间或版本。
-  string indexed_from = 24;
-  // indexed_to 是当前索引实际覆盖的最大业务时间或版本。
-  string indexed_to = 25;
   // hidden_columns 是数据集里被禁用或所引用字段已停用、删除的列，由 Storage 计算：列和数据都保留，只在返回结果和列清单时隐藏。
   repeated string hidden_columns = 26;
 }
 
-// ViewColumn 定义 View 对用户暴露的一列。
+// ViewColumn 是 View 对用户暴露的一列，由所属数据集的列推出（来源恒为 DatasetColumn）。
 message ViewColumn {
   // space_id 是 ViewColumn 所属 Space。
   string space_id = 1;
@@ -80,21 +68,19 @@ message ViewColumn {
   string view_id = 2;
   // column_name 是视图内稳定技术列名；DatasetColumn 来源直接使用 Dataset 列名，不带数据集前缀。
   string column_name = 3;
-  // origin_type 表示列来源，可为 DatasetColumn、表达式或系统列。
+  // origin_type 表示列来源，View 列恒为 DatasetColumn。
   ColumnOriginType origin_type = 4;
-  // origin_id 是来源 ID；DatasetColumn 为 View 所属 Dataset 的列名，并与 column_name 保持一致。
+  // origin_id 是来源 ID：View 所属 Dataset 的列名，与 column_name 相同。
   string origin_id = 5;
   // value_type 是列值的逻辑类型。
   FieldValueType value_type = 6;
-  // online_time 是该列进入视图的上线时间，用于解释列可见性。
-  string online_time = 7;
-  // sort_order 是视图列展示和物化构建时的稳定排序。
+  // sort_order 是视图列的展示顺序：元数据里按数据集列的创建顺序；索引里是建进索引的先后。
   uint32 sort_order = 8;
   // created_at 是创建时间，使用项目统一时间字符串格式。
   string created_at = 9;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
   string updated_at = 10;
-  // attributes 是扩展属性；factor_result 的因子输出列（column_kind=output）display_name 必须等于列名，其他业务列（包括参数列 __params）必须包含中文且不超过 10 个字符。
+  // attributes 取自数据集列的属性。
   map<string, string> attributes = 11;
 }
 
@@ -449,9 +435,6 @@ message UpdateViewReq {
   common.AuthInfo auth_info = 1;
   // view 是更新后的查询视图元数据。
   View view = 2;
-  // replace_columns 为 true 时，columns 表示完整的显式投影：已有列必须都在里面（列只能追加，不能删除或改名），
-  // 不在已有列里的是新列，排在最后；为 false 时仅执行普通视图元数据更新。
-  bool replace_columns = 3;
 }
 
 // UpdateViewRsp 表示更新查询视图的响应。
@@ -502,22 +485,6 @@ message ListViewsRsp {
   repeated View views = 2;
   // page_result 是分页结果。
   common.PageResult page_result = 3;
-}
-
-// UpsertViewColumnReq 表示创建或更新视图列的请求。
-message UpsertViewColumnReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // column 是待写入的视图列元数据。
-  ViewColumn column = 2;
-}
-
-// UpsertViewColumnRsp 表示创建或更新视图列的响应。
-message UpsertViewColumnRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // column 是写入后的视图列元数据。
-  ViewColumn column = 2;
 }
 
 // ListViewColumnsReq 表示列出视图列的请求。
@@ -1096,38 +1063,6 @@ message ListDevicesRsp {
   common.PageResult page_result = 3;
 }
 
-// CompleteViewInitialBuildReq 在首次建索引（含回填）完成后提交活动索引与已建列。
-message CompleteViewInitialBuildReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string view_id = 3;
-  string index_id = 4;
-  repeated ViewColumn columns = 5;
-  string view_schema_hash = 6;
-}
-
-message CompleteViewInitialBuildRsp {
-  common.RetInfo ret_info = 1;
-  View view = 2;
-}
-
-// CommitViewSchemaExtensionReq 在索引原地追加列之后提交新的已建列。
-message CommitViewSchemaExtensionReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string view_id = 3;
-  string active_index_id = 4;
-  uint64 expected_view_revision = 5;
-  string expected_schema_hash = 6;
-  repeated ViewColumn columns = 7;
-  string view_schema_hash = 8;
-}
-
-message CommitViewSchemaExtensionRsp {
-  common.RetInfo ret_info = 1;
-  View view = 2;
-}
-
 // Metadata 管理量化存储系统的核心元数据。
 service Metadata {
   // 创建使用空间。
@@ -1151,14 +1086,8 @@ service Metadata {
   rpc GetView(GetViewReq) returns (GetViewRsp);
   // 列出查询视图。
   rpc ListViews(ListViewsReq) returns (ListViewsRsp);
-  // 创建或更新视图列。
-  rpc UpsertViewColumn(UpsertViewColumnReq) returns (UpsertViewColumnRsp);
-  // 列出视图列。
+  // 列出视图列：由数据集里启用的列推出。
   rpc ListViewColumns(ListViewColumnsReq) returns (ListViewColumnsRsp);
-  // 首次建索引完成：写入活动索引与已建列，View 从此可读。
-  rpc CompleteViewInitialBuild(CompleteViewInitialBuildReq) returns (CompleteViewInitialBuildRsp);
-  // 索引原地追加列之后，提交新的已建列。
-  rpc CommitViewSchemaExtension(CommitViewSchemaExtensionReq) returns (CommitViewSchemaExtensionRsp);
 
   // 创建数据来源。
   rpc CreateDataSource(CreateDataSourceReq) returns (CreateDataSourceRsp);

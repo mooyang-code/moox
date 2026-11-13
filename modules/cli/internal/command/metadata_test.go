@@ -87,7 +87,6 @@ func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 		Datasets:       []seedDataset{{SpaceID: "stockcn", DatasetID: "kline"}, {SpaceID: "crypto", DatasetID: "kline"}},
 		DatasetColumns: []seedDatasetColumn{{SpaceID: "stockcn", DatasetID: "kline", ColumnName: "close"}, {SpaceID: "crypto", DatasetID: "kline", ColumnName: "close"}},
 		Views:          []seedView{{SpaceID: "stockcn", ViewID: "kline"}, {SpaceID: "crypto", ViewID: "kline"}},
-		ViewColumns:    []seedViewColumn{{SpaceID: "stockcn", ViewID: "kline", ColumnName: "close"}, {SpaceID: "crypto", ViewID: "kline", ColumnName: "close"}},
 		Devices:        []seedDevice{{DeviceID: "duckdb"}},
 	}
 
@@ -101,7 +100,6 @@ func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 	require.Len(t, selected.Datasets, 1)
 	require.Len(t, selected.DatasetColumns, 1)
 	require.Len(t, selected.Views, 1)
-	require.Len(t, selected.ViewColumns, 1)
 	require.Len(t, selected.Devices, 1, "global devices are preserved")
 }
 
@@ -185,26 +183,10 @@ func TestParseDatasetColumnOriginType(t *testing.T) {
 	assert.Equal(t, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM, typ)
 }
 
-func TestParseColumnOriginType(t *testing.T) {
-	typ, err := parseColumnOriginType("SYSTEM")
-	require.NoError(t, err)
-	assert.Equal(t, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM, typ)
-	typ, err = parseColumnOriginType("DATASET_COLUMN")
-	require.NoError(t, err)
-	assert.Equal(t, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, typ)
-}
-
 func TestNormalizeEnum(t *testing.T) {
 	assert.Equal(t, "TIME_SERIES", normalizeEnum("data_kind_time_series"))
 	assert.Equal(t, "DOUBLE", normalizeEnum("FIELD_VALUE_TYPE_DOUBLE"))
 	assert.Equal(t, "FIELD_VALUE_TYPE_DOUBLE", normalizeEnum("field-value-type-double"))
-}
-
-func TestParseColumnAndValueTypes(t *testing.T) {
-	origin, value, err := parseColumnAndValueTypes("DATASET_COLUMN", "DOUBLE")
-	require.NoError(t, err)
-	assert.Equal(t, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, origin)
-	assert.Equal(t, pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, value)
 }
 
 func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
@@ -220,8 +202,7 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 			SpaceID: "crypto", ViewID: "v1", Name: "View", PrimaryDatasetID: "kline", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
 			Engine: "duckdb",
 		}},
-		ViewColumns: []seedViewColumn{{SpaceID: "crypto", ViewID: "v1", ColumnName: "close", OriginType: "DATASET_COLUMN", ValueType: "DOUBLE"}},
-		Devices:     []seedDevice{{DeviceID: "dev-1", Name: "Device"}},
+		Devices: []seedDevice{{DeviceID: "dev-1", Name: "Device"}},
 	}
 	calls, err := buildMetadataImportCalls(seed)
 	require.NoError(t, err)
@@ -376,9 +357,6 @@ func TestParseEnumsAllValues(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, tc.typ, got)
 	}
-	origin2, err := parseColumnOriginType("EXPRESSION")
-	require.NoError(t, err)
-	assert.Equal(t, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION, origin2)
 }
 
 func TestBuildMetadataImportCallsRejectsUndefinedExplicitFieldGroup(t *testing.T) {
@@ -429,9 +407,6 @@ func TestSeedToPBAllTypes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"binance_spot"}, dataset.GetSubjectTags())
 	assert.Equal(t, "v1", (seedView{SpaceID: "crypto", ViewID: "v1"}).toPB().GetViewId())
-	viewCol, err := (seedViewColumn{SpaceID: "crypto", ViewID: "v1", ColumnName: "close", OriginType: "DATASET_COLUMN", ValueType: "DOUBLE"}).toPB()
-	require.NoError(t, err)
-	assert.Equal(t, "close", viewCol.GetColumnName())
 	assert.Equal(t, "dev-1", (seedDevice{DeviceID: "dev-1"}).toPB().GetDeviceId())
 }
 
@@ -653,47 +628,6 @@ func TestRunMetadataApplyFindsDatasetColumnOnLaterPage(t *testing.T) {
 	require.Equal(t, 1, summary.Unchanged)
 }
 
-func TestRunMetadataApplyFindsViewColumnOnLaterPage(t *testing.T) {
-	column := &pb.ViewColumn{
-		SpaceId: "crypto", ViewId: "kline_view", ColumnName: "close",
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-		OriginId:   "close",
-		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-	}
-	createCalled := false
-	server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-		"ListViewColumns": func(w http.ResponseWriter, r *http.Request) {
-			raw, err := io.ReadAll(r.Body)
-			require.NoError(t, err)
-			req := &pb.ListViewColumnsReq{}
-			require.NoError(t, protojson.Unmarshal(raw, req))
-			if req.GetPage().GetPage() == 1 {
-				writeProtoJSON(w, &pb.ListViewColumnsRsp{
-					RetInfo: storageOK(), PageResult: &commonpb.PageResult{Page: 1, Size: 500, HasMore: true},
-				})
-				return
-			}
-			writeProtoJSON(w, &pb.ListViewColumnsRsp{
-				RetInfo: storageOK(), Columns: []*pb.ViewColumn{column},
-				PageResult: &commonpb.PageResult{Page: 2, Size: 500},
-			})
-		},
-		"UpsertViewColumn": func(w http.ResponseWriter, _ *http.Request) {
-			createCalled = true
-			writeProtoJSON(w, &pb.UpsertViewColumnRsp{RetInfo: storageOK()})
-		},
-	})
-	defer server.Close()
-
-	summary, err := runMetadataApply(context.Background(), server, []metadataImportCall{{
-		Resource: "view_columns", Method: "UpsertViewColumn",
-		Request: &pb.UpsertViewColumnReq{Column: column}, Response: &pb.UpsertViewColumnRsp{},
-	}})
-	require.NoError(t, err)
-	require.False(t, createCalled)
-	require.Equal(t, 1, summary.Unchanged)
-}
-
 func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 	seed := metadataSeed{
 		Spaces: []seedSpace{{
@@ -730,12 +664,6 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 			GrainKeys:        []string{"subject_id", "freq", "data_time", "series_tag"},
 			Engine:           "duckdb",
 		}},
-		ViewColumns: []seedViewColumn{{
-			SpaceID: "crypto", ViewID: "kline", ColumnName: "close",
-			OriginType: "DATASET_COLUMN", OriginID: "close", ValueType: "DOUBLE",
-			OnlineTime: "2026-01-01T00:00:00Z", SortOrder: 1,
-			seedCommon: seedCommon{Attributes: map[string]string{"display_name": "收盘价"}},
-		}},
 	}
 	calls, err := buildMetadataImportCalls(seed)
 	require.NoError(t, err)
@@ -744,8 +672,6 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 	field, err := seed.Fields[0].toPB()
 	require.NoError(t, err)
 	datasetColumn, err := seed.DatasetColumns[0].toPB()
-	require.NoError(t, err)
-	viewColumn, err := seed.ViewColumns[0].toPB()
 	require.NoError(t, err)
 
 	server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
@@ -773,9 +699,6 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 		"GetView": func(w http.ResponseWriter, _ *http.Request) {
 			writeProtoJSON(w, &pb.GetViewRsp{RetInfo: storageOK(), View: seed.Views[0].toPB()})
 		},
-		"ListViewColumns": func(w http.ResponseWriter, _ *http.Request) {
-			writeProtoJSON(w, &pb.ListViewColumnsRsp{RetInfo: storageOK(), Columns: []*pb.ViewColumn{viewColumn}})
-		},
 	})
 	defer server.Close()
 
@@ -783,29 +706,6 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, summary.Applied)
 	assert.Equal(t, len(calls), summary.Unchanged)
-}
-
-func TestRunMetadataApplyRejectsViewColumnConflict(t *testing.T) {
-	expected := &pb.ViewColumn{
-		SpaceId: "crypto", ViewId: "kline", ColumnName: "close",
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-		OriginId:   "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		Attributes: map[string]string{"display_name": "收盘价"},
-	}
-	actual := proto.Clone(expected).(*pb.ViewColumn)
-	actual.ValueType = pb.FieldValueType_FIELD_VALUE_TYPE_STRING
-	server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-		"ListViewColumns": func(w http.ResponseWriter, _ *http.Request) {
-			writeProtoJSON(w, &pb.ListViewColumnsRsp{RetInfo: storageOK(), Columns: []*pb.ViewColumn{actual}})
-		},
-	})
-	defer server.Close()
-
-	_, err := runMetadataApply(context.Background(), server, []metadataImportCall{{
-		Resource: "view_columns", Method: "UpsertViewColumn",
-		Request: &pb.UpsertViewColumnReq{Column: expected}, Response: &pb.UpsertViewColumnRsp{},
-	}})
-	require.ErrorContains(t, err, "contract differs")
 }
 
 func TestRunMetadataApplyRejectsUnsupportedResource(t *testing.T) {

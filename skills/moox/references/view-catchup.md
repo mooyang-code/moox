@@ -22,7 +22,7 @@
 
 原生 Storage 单元的路径按部署清单解析，常见示例：
 
-- 包根 `--package-root /data/moox/storage/current`（`moox-cli storage …` 缺省自动补上），其中包含 `start.sh` / `stop.sh` / `status.sh`。
+- 包根 `--package-root /data/moox/storage/current`（`moox-cli storage …` 缺省自动补上），其中包含 `pause.sh` / `resume.sh` / `status.sh`。
 - 业务配置 `--storage-conf /data/moox/storage/current/storage-view/config/storage.yaml`（同样缺省自动补上）；不要传 `trpc_go.yaml`。
 - 每个 View 一个跟随协程读 Primary 的变更日志，没有 View 的 JetStream 消费者，也没有消费并发参数。
 - 元数据库与 Pebble 都属于 `storage-primary` 组件，View 索引属于 `storage-view`。不要把旧平铺目录或操作机的路径当作当前主机路径。

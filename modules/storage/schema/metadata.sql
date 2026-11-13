@@ -4,9 +4,9 @@
 -- 1. Space 是业务命名空间；DataSource、Subject、Dataset、Field 和 View 都归属 Space。
 -- 2. Dataset 描述可写事实数据集，并且只绑定一个 DataSource。
 -- 3. Subject 是 Space 内业务对象，不归属 DataSource；来源侧代码由抓取适配器换算。
--- 4. View 是查询入口，使用 keep_duration 控制 TimeSeries 行保留。
+-- 4. View 是查询入口，只存声明：列等于数据集启用的列，已建索引的状态只在 View 的索引文件里。
 -- 5. Dataset 的行全部存放在主服务的 Pebble 库里，元数据不记录存储位置。
--- 6. DuckDB、Bleve 和 Parquet 均从 Pebble 主存变更异步派生。
+-- 6. DuckDB、Bleve 索引跟随 Pebble 主存的变更日志异步派生。
 
 PRAGMA foreign_keys = ON;
 
@@ -56,12 +56,6 @@ CREATE TABLE IF NOT EXISTS t_views (
     c_dataset_id TEXT NOT NULL,
     c_grain_keys_json TEXT NOT NULL DEFAULT '[]',
     c_engine TEXT NOT NULL DEFAULT 'duckdb',
-    c_active_index_id TEXT NOT NULL DEFAULT '',
-    c_view_revision INTEGER NOT NULL DEFAULT 0,
-    c_active_columns_json TEXT NOT NULL DEFAULT '[]',
-    c_active_view_schema_hash TEXT NOT NULL DEFAULT '',
-    c_indexed_from TEXT NOT NULL DEFAULT '',
-    c_indexed_to TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'active',
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -83,37 +77,6 @@ FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_views SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
-CREATE TABLE IF NOT EXISTS t_view_columns (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
-    c_column_name TEXT NOT NULL,
-    c_origin_type TEXT NOT NULL,
-    c_origin_id TEXT NOT NULL,
-    c_value_type TEXT NOT NULL,
-    c_online_time DATETIME NOT NULL DEFAULT '',
-    c_sort_order INTEGER NOT NULL DEFAULT 0,
-    c_attrs_json TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_origin_type IN ('dataset_column', 'system', 'expression')),
-    CHECK (c_value_type IN ('string', 'int', 'double', 'bool', 'time', 'json', 'bytes')),
-    CHECK (c_sort_order >= 0),
-    FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views (c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    UNIQUE (c_space_id, c_view_id, c_column_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_view_columns_view ON t_view_columns (c_space_id, c_view_id, c_sort_order);
-CREATE INDEX IF NOT EXISTS idx_t_view_columns_origin ON t_view_columns (c_space_id, c_origin_type, c_origin_id);
-
-CREATE TRIGGER IF NOT EXISTS trg_t_view_columns_mtime
-AFTER UPDATE ON t_view_columns
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_view_columns SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
 -- ************ 数据来源与数据对象 ************

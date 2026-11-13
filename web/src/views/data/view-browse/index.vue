@@ -24,9 +24,9 @@
             <span v-if="currentDatasetUnified">{{ datasetMarketText("multi") }}</span>
             <span v-if="currentDatasetRetention">保留期: {{ currentDatasetRetention }}</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
-            <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
-              {{ activeView?.active_index_id ? "已构建" : "未构建" }}
-            </a-tag>
+            <a-tag size="small" :color="viewIndexTag.color">{{ viewIndexTag.text }}</a-tag>
+            <span v-if="viewIndexColumnsText">{{ viewIndexColumnsText }}</span>
+            <span v-if="viewIndexCoverageText">覆盖: {{ viewIndexCoverageText }}</span>
             <slot name="status-extra" />
           </section>
 
@@ -394,7 +394,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { listAllDatasets, listAllViews, listDatasetColumns, listAllViewColumns, listFields } from "@/api/storage/metadata";
-import { queryTimeSeriesRows, searchRecordRows } from "@/api/storage/view";
+import {
+  getViewState,
+  isViewNotFoundError,
+  queryTimeSeriesRows,
+  searchRecordRows,
+  type GetViewStateRsp
+} from "@/api/storage/view";
 import type {
   Dataset,
   DatasetColumn,
@@ -546,6 +552,34 @@ function viewQueryErrorMessage(error: unknown, fallback: string) {
   queryErrorIsPreparing.value = isViewIndexNotReadyError(message);
   return queryErrorIsPreparing.value ? "视图创建中，索引就绪后请刷新查看。" : message;
 }
+
+/** View 索引状态：读不到时按“未知”显示，不影响查询。 */
+const viewIndex = ref<{ status: "unknown" | "ready" | "building" | "unregistered"; state?: GetViewStateRsp }>({
+  status: "unknown"
+});
+const viewIndexTag = computed(() => {
+  switch (viewIndex.value.status) {
+    case "ready":
+      return { color: "green", text: "已构建" };
+    case "building":
+      return { color: "orange", text: "构建中" };
+    case "unregistered":
+      return { color: "orange", text: "未构建" };
+    default:
+      return { color: "gray", text: "索引状态未知" };
+  }
+});
+const viewIndexColumnsText = computed(() => {
+  const built = viewIndex.value.status === "ready" ? viewIndex.value.state?.columns?.length : undefined;
+  if (built === undefined) return "";
+  const declared = viewColumns.value.length;
+  return declared && declared !== built ? `已建列: ${built}/${declared}` : `已建列: ${built}`;
+});
+const viewIndexCoverageText = computed(() => {
+  const state = viewIndex.value.status === "ready" ? viewIndex.value.state : undefined;
+  if (!state?.indexed_from && !state?.indexed_to) return "";
+  return `${formatInstant(state.indexed_from, props.zone)} ~ ${formatInstant(state.indexed_to, props.zone)}`;
+});
 
 const hasQueried = ref(false);
 const previewHasMore = ref(false);
@@ -784,6 +818,23 @@ function clearViewState() {
   hasQueried.value = false;
   previewHasMore.value = false;
   pagination.current = 1;
+  viewIndex.value = { status: "unknown" };
+}
+
+/** 读取当前 View 的索引状态；尽力而为，失败只把状态记为未知。 */
+async function refreshViewIndex() {
+  const space_id = selectedSpaceId.value;
+  const view_id = activeView.value?.view_id;
+  if (!space_id || !view_id) return;
+  const isCurrent = () => selectedSpaceId.value === space_id && activeView.value?.view_id === view_id;
+  try {
+    const state = await getViewState({ space_id, view_id }, { silentError: true });
+    if (isCurrent()) viewIndex.value = { status: state.index_id ? "ready" : "building", state };
+  } catch (error) {
+    if (!isCurrent()) return;
+    viewIndex.value = { status: isViewNotFoundError(error) ? "unregistered" : "unknown" };
+    if (!isViewNotFoundError(error)) console.warn("读取视图索引状态失败", error);
+  }
 }
 
 async function loadViewContext() {
@@ -798,6 +849,7 @@ async function loadViewContext() {
   contextLoading.value = true;
   try {
     const contextViewId = view.view_id;
+    void refreshViewIndex();
     const isCurrent = () =>
       requestSequence === viewContextSequence &&
       selectedSpaceId.value === space_id &&
@@ -855,12 +907,14 @@ async function reloadRows(retainRowsOnError = false, options: ReloadOptions = {}
 
 async function refreshRowsInBackground() {
   pendingRowsRefresh.value = true;
+  void refreshViewIndex();
   if (!activeView.value && !metaLoading.value) await loadMeta();
 }
 
 /** 自动刷新的一轮：正在读取时跳过，不排队；视图元数据没读到时不自动重试（会弹提示），等用户点“刷新”。 */
 async function pollRows() {
   if (loading.value || contextLoading.value || metaLoading.value || !activeView.value) return;
+  void refreshViewIndex();
   await reloadRows(true, { background: true });
 }
 

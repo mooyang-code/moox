@@ -1371,10 +1371,7 @@ components:
           - DeleteView
           - GetView
           - ListViews
-          - UpsertViewColumn
           - ListViewColumns
-          - CompleteViewInitialBuild
-          - CommitViewSchemaExtension
           - CreateDataSource
           - UpdateDataSource
           - DeleteDataSource
@@ -1452,7 +1449,6 @@ components:
               - DeleteView
               - GetView
               - ListViews
-              - UpsertViewColumn
               - ListViewColumns
               - CreateDataSource
               - UpdateDataSource
@@ -1540,7 +1536,6 @@ components:
               - UpdateView
               - DeleteView
               - UpsertDatasetColumn
-              - UpsertViewColumn
             callers:
               - collector
           - methods:

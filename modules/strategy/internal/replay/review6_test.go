@@ -17,7 +17,7 @@ func TestReplayCountsIndexSwitchesPerReplay(t *testing.T) {
 	repo := openStore(t)
 	job := submitReplay(t, repo, replayDSL, "idx", origin.Add(2*time.Hour), 12)
 	client := &fakeClient{marketType: "spot"}
-	// 每段的第一次读取前都换一代（槽位名不变、构建 ID 变），切换后的重读不再换代。
+	// 每段的第一次读取前都换一代（索引 ID 不变、建成序号变），切换后的重读不再换代。
 	client.onQuery = func(input.Query) {
 		if client.queries%2 == 1 {
 			client.build = fmt.Sprintf("b%d", client.queries)

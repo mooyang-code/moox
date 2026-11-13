@@ -7,10 +7,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-var (
-	ErrViewExists                  = errors.New("view already exists")
-	ErrViewSchemaExtensionConflict = errors.New("view schema extension conflict")
-)
+var ErrViewExists = errors.New("view already exists")
 
 // FieldQuery contains the supported server-side field filters and ordering.
 type FieldQuery struct {
@@ -102,10 +99,6 @@ type Reader interface {
 	ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error)
 }
 
-// IndexGenerationAttribute 记录 View 当前索引的代次，首次建成时写入。索引标识对一个 View 是固定的，不能区分代次；
-// View 重建（删除后重新建索引）时代次变化，调用方（例如策略回放）据此判断旧的行是否已不存在。
-const IndexGenerationAttribute = "moox.index_generation"
-
 // Writer 定义元数据存储的写入与状态变更接口。
 type Writer interface {
 	UpsertSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
@@ -114,11 +107,7 @@ type Writer interface {
 	DeleteSpace(ctx context.Context, spaceID string) error
 	UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	CreateView(ctx context.Context, item *pb.View) (*pb.View, error)
-	ReplaceViewColumns(ctx context.Context, item *pb.View) (*pb.View, error)
 	DeleteView(ctx context.Context, spaceID string, viewID string) error
-	UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.ViewColumn, error)
-	CompleteViewInitialBuild(ctx context.Context, req *pb.CompleteViewInitialBuildReq) (*pb.View, error)
-	CommitViewSchemaExtension(ctx context.Context, req *pb.CommitViewSchemaExtensionReq) (*pb.View, error)
 	UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
 	DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error
 	UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error)

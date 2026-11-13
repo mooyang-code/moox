@@ -48,7 +48,7 @@ type followEnv struct {
 	auth    *pb.AuthInfo
 	clock   atomic.Int64
 	watcher *readyWatcher
-	// views 是 View 的元数据：建索引模式下 CompleteViewInitialBuild 填上活动索引。
+	// metadata 是 View 的元数据：只有 View 的声明，已建状态在索引文件里。
 	metadata *followEnvMetadata
 	datasets map[string]string
 	// follow 是启动跟随时的参数，stopFollowing 停掉跟随（模拟 View 停机）。
@@ -268,8 +268,7 @@ func followEnvView(dataset readyBenchDataset) *pb.View {
 	return &pb.View{SpaceId: readyBenchSpace, ViewId: dataset.viewID, DatasetId: dataset.datasetID, Engine: "duckdb", Freq: readyBenchFreq, Columns: columns, Status: "active"}
 }
 
-// prebuildFollowEnvIndex 在 View 进程启动前直接建好索引、按 prefillBars 写入历史，并把当前日志头部记为跟随起点与建成序号；
-// 把 view 改成已建好的元数据。
+// prebuildFollowEnvIndex 在 View 进程启动前直接建好索引、按 prefillBars 写入历史，并把当前日志头部记为跟随起点与建成序号。
 func prebuildFollowEnvIndex(t *testing.T, ctx context.Context, root string, store *pebble.Store, view *pb.View, dataset readyBenchDataset) {
 	t.Helper()
 	manager, err := viewduckdb.OpenIndexManager(viewduckdb.IndexManagerOptions{Root: filepath.Join(root, "duckdb")})
@@ -313,7 +312,6 @@ func prebuildFollowEnvIndex(t *testing.T, ctx context.Context, root string, stor
 	if err := manager.SaveFollowState(ctx, indexID, viewindex.FollowState{Cursor: viewindex.ChangeCursor{StoreID: head.GetStoreId(), Sequence: head.GetSequence()}, BuiltSequence: head.GetSequence()}); err != nil {
 		t.Fatal(err)
 	}
-	view.ActiveIndexId, view.ViewRevision, view.ActiveViewSchemaHash, view.ActiveColumns = indexID, 1, followEnvSchemaHash, view.GetColumns()
 }
 
 // followEnvSnapshot 是 PrimaryStore 的请求快照：周期提交与完成标记要求数据集在快照里、是时序数据且已启用。
@@ -355,7 +353,7 @@ func (s *followEnvSnapshot) ListDatasetColumns(spaceID, datasetID string, _ *pb.
 	return columns, &pb.PageResult{Total: uint32(len(columns))}, nil
 }
 
-// followEnvMetadata 是 View 用到的元数据：View 列表与首次建成的提交，其余方法不应被调用（调用即 panic）。
+// followEnvMetadata 是 View 用到的元数据：只有 View 列表，其余方法不应被调用（调用即 panic）。
 type followEnvMetadata struct {
 	pb.MetadataClientProxy
 	mu    sync.Mutex
@@ -374,28 +372,4 @@ func (m *followEnvMetadata) ListViews(_ context.Context, req *pb.ListViewsReq, _
 		}
 	}
 	return &pb.ListViewsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}, Views: views, PageResult: &pb.PageResult{Total: uint32(len(views))}}, nil
-}
-
-func (m *followEnvMetadata) GetView(_ context.Context, req *pb.GetViewReq, _ ...client.Option) (*pb.GetViewRsp, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, view := range m.views {
-		if view.GetSpaceId() == req.GetSpaceId() && view.GetViewId() == req.GetViewId() {
-			return &pb.GetViewRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}, View: proto.Clone(view).(*pb.View)}, nil
-		}
-	}
-	return &pb.GetViewRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NOT_FOUND, Msg: "view not found"}}, nil
-}
-
-// CompleteViewInitialBuild 与 SQLite 实现一致：记下活动索引、修订号 1、已建列与哈希。
-func (m *followEnvMetadata) CompleteViewInitialBuild(_ context.Context, req *pb.CompleteViewInitialBuildReq, _ ...client.Option) (*pb.CompleteViewInitialBuildRsp, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, view := range m.views {
-		if view.GetSpaceId() == req.GetSpaceId() && view.GetViewId() == req.GetViewId() {
-			view.ActiveIndexId, view.ViewRevision, view.ActiveColumns, view.ActiveViewSchemaHash = req.GetIndexId(), 1, req.GetColumns(), req.GetViewSchemaHash()
-			return &pb.CompleteViewInitialBuildRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}, View: proto.Clone(view).(*pb.View)}, nil
-		}
-	}
-	return &pb.CompleteViewInitialBuildRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NOT_FOUND, Msg: "view not found"}}, nil
 }
