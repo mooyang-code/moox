@@ -20,7 +20,7 @@ const (
 
 func ensureLayout(path string) error {
 	if err := os.MkdirAll(path, 0o755); err != nil {
-		return fmt.Errorf("create DataNode store directory: %w", err)
+		return fmt.Errorf("创建 Pebble 库目录：%w", err)
 	}
 
 	markerPath := filepath.Join(path, layoutMarkerName)
@@ -34,12 +34,12 @@ func ensureLayout(path string) error {
 			return validateLayoutMarker(data)
 		}
 	case !errors.Is(err, os.ErrNotExist):
-		return fmt.Errorf("read DataNode storage layout marker: %w", err)
+		return fmt.Errorf("读取 Pebble 库的布局版本文件：%w", err)
 	}
 
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return fmt.Errorf("inspect DataNode store directory: %w", err)
+		return fmt.Errorf("检查 Pebble 库目录：%w", err)
 	}
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), layoutMarkerTempPrefix) {
@@ -49,18 +49,18 @@ func ensureLayout(path string) error {
 				}
 				return cleanupLayoutMarkerTemps(path)
 			}
-			return errors.New("DataNode store has data without a storage layout marker; reset DataNode store")
+			return errors.New("Pebble 库目录里有数据却没有布局版本文件；需要清空 Pebble 库后重建")
 		}
 	}
 	if err := createLayoutMarker(path, markerPath); err != nil {
-		return fmt.Errorf("create DataNode storage layout marker: %w", err)
+		return fmt.Errorf("创建 Pebble 库的布局版本文件：%w", err)
 	}
 	return cleanupLayoutMarkerTemps(path)
 }
 
 func validateLayoutMarker(data []byte) error {
 	if string(data) != layoutVersion {
-		return fmt.Errorf("unsupported or damaged DataNode storage layout marker %q; reset DataNode store", string(data))
+		return fmt.Errorf("Pebble 库的布局版本 %q 不受支持或已损坏；需要清空 Pebble 库后重建", string(data))
 	}
 	return nil
 }
@@ -68,14 +68,14 @@ func validateLayoutMarker(data []byte) error {
 func cleanupLayoutMarkerTemps(dirPath string) error {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		return fmt.Errorf("inspect DataNode store directory: %w", err)
+		return fmt.Errorf("检查 Pebble 库目录：%w", err)
 	}
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), layoutMarkerTempPrefix) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dirPath, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove stale DataNode layout marker temp %q: %w", entry.Name(), err)
+			return fmt.Errorf("删除残留的布局版本临时文件 %q：%w", entry.Name(), err)
 		}
 	}
 	return nil

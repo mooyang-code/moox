@@ -31,7 +31,7 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	var now atomic.Int64
 	now.Store(period.Add(5 * time.Second).UnixNano())
 	store, err := pebble.Open(pebble.Options{
-		Path: filepath.Join(t.TempDir(), "pebble"), NodeID: "period-marker-e2e",
+		Path:      filepath.Join(t.TempDir(), "pebble"),
 		PeriodNow: func() time.Time { return time.Unix(0, now.Load()).UTC() },
 	})
 	require.NoError(t, err)

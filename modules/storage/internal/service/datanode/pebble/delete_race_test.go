@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	cpebble "github.com/cockroachdb/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -22,7 +21,7 @@ func TestDeleteDatasetRowsRemovesRowsOfAWriteAdmittedBeforeIt(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1", DatasetExists: func(string, string) bool {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), DatasetExists: func(string, string) bool {
 		ok := exists.Load()
 		once.Do(func() {
 			close(entered)
@@ -92,7 +91,6 @@ func TestErrorCodeClassifiesStorageErrors(t *testing.T) {
 		{"stale effective_from", StaleEffectiveFromError{}, pb.ErrorCode_CONFLICT},
 		{"hash mismatch", PeriodHashMismatchError{}, pb.ErrorCode_CONFLICT},
 		{"snapshot missing", SeriesSnapshotMissingError{}, pb.ErrorCode_NOT_FOUND},
-		{"pebble not found", cpebble.ErrNotFound, pb.ErrorCode_NOT_FOUND},
 	} {
 		if got := retinfo.Code(tc.err); got != tc.want {
 			t.Errorf("%s: Code=%s want %s", tc.name, got, tc.want)

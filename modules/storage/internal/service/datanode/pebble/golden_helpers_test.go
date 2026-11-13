@@ -34,7 +34,7 @@ func (c *goldenClock) now() time.Time    { return time.Unix(0, c.nanos.Load()).U
 // openGoldenStore 在 path 打开库；maxEventBytes 为 0 表示不限事件大小。
 func openGoldenStore(t *testing.T, path string, clock *goldenClock, maxEventBytes int) *Store {
 	t.Helper()
-	store, err := Open(Options{Path: path, NodeID: "storage-primary", PeriodNow: clock.now, MaxEventBytes: maxEventBytes})
+	store, err := Open(Options{Path: path, PeriodNow: clock.now, MaxEventBytes: maxEventBytes})
 	require.NoError(t, err)
 	return store
 }

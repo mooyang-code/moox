@@ -27,7 +27,7 @@ func (r storeReader) ReadDatasetChanges(ctx context.Context, req *pb.ReadDataset
 
 func openStore(t *testing.T, path string) *pebble.Store {
 	t.Helper()
-	store, err := pebble.Open(pebble.Options{Path: path, NodeID: "storage-primary"})
+	store, err := pebble.Open(pebble.Options{Path: path})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	return store

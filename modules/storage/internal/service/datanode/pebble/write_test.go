@@ -142,7 +142,7 @@ func TestUpsertFieldsThenMarkerOrdering(t *testing.T) {
 
 func openFactorRowsStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-owner"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestUpsertFieldsCommitMarkerSurvivesReopen(t *testing.T) {
 	rows := func(value float64) []*pb.RowFieldUpsert {
 		return []*pb.RowFieldUpsert{{Key: factorRowsKey("row-reopen"), Fields: []*pb.FieldValue{doubleField("close", value)}}}
 	}
-	store, err := Open(Options{Path: path, NodeID: "node-owner"})
+	store, err := Open(Options{Path: path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestUpsertFieldsCommitMarkerSurvivesReopen(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err = Open(Options{Path: path, NodeID: "node-owner"})
+	store, err = Open(Options{Path: path})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,7 +26,6 @@ const (
 // Options 控制主服务的 Pebble 库。库里存放全部数据集，数据集身份是每个物理键的一部分。
 type Options struct {
 	Path           string
-	NodeID         string
 	BucketDuration time.Duration
 	MaxEventBytes  int
 	// ChangeLogRetention 是变更日志的保留期（由保留期清理循环按它删除）；为 0 时取 DefaultChangeLogRetention。
@@ -48,7 +47,6 @@ type OutboxEntry struct {
 type Store struct {
 	db                      *cpebble.DB
 	writeOptions            *cpebble.WriteOptions
-	nodeID                  string
 	sourceStoreID           string
 	bucketDuration          time.Duration
 	maxEventBytes           int
@@ -88,9 +86,6 @@ func Open(opts Options) (*Store, error) {
 	if strings.TrimSpace(opts.Path) == "" {
 		return nil, errors.New("pebble path is required")
 	}
-	if strings.TrimSpace(opts.NodeID) == "" || strings.TrimSpace(opts.NodeID) != opts.NodeID {
-		return nil, errors.New("node_id is required")
-	}
 	if opts.BucketDuration <= 0 {
 		opts.BucketDuration = 24 * time.Hour
 	}
@@ -109,7 +104,7 @@ func Open(opts Options) (*Store, error) {
 		return nil, err
 	}
 	cacheLogf("storage Pebble 块缓存 %dMB（%s）", cacheBytes>>20, cacheSource)
-	sourceStoreID, err := bindSourceStore(db, opts.NodeID)
+	sourceStoreID, err := bindSourceStore(db)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -119,7 +114,7 @@ func Open(opts Options) (*Store, error) {
 		writeOptions = cpebble.NoSync
 	}
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1), changeSignal: make(chan struct{}), datasetExists: opts.DatasetExists}
+	store := &Store{db: db, writeOptions: writeOptions, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1), changeSignal: make(chan struct{}), datasetExists: opts.DatasetExists}
 	store.startPeriodFinalizer()
 	store.startCacheStats(cacheStatsFirstDelay, cacheStatsInterval)
 	return store, nil
@@ -165,13 +160,6 @@ func (s *Store) compactAsync(start, end []byte) {
 		defer s.maintenanceWG.Done()
 		_ = s.db.Compact(start, end, true)
 	}()
-}
-
-func (s *Store) NodeID() string {
-	if s == nil {
-		return ""
-	}
-	return s.nodeID
 }
 
 func validateUpsert(row *pb.RowFieldUpsert) error {
@@ -414,7 +402,7 @@ func (s *Store) prepareOutboxPublicationLocked(ctx context.Context, id uint64) (
 	if err := proto.Unmarshal(raw, message); err != nil {
 		return nil, fmt.Errorf("unmarshal outbox entry %d: %w", id, err)
 	}
-	if _, err := validateDataNodeMarkerMessage(raw); err != nil {
+	if _, err := validateMarkerMessage(raw); err != nil {
 		return nil, fmt.Errorf("%w %d: %v", ErrInvalidOutboxEvent, id, err)
 	}
 	return raw, nil

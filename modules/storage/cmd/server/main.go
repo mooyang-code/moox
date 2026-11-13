@@ -59,8 +59,8 @@ func main() {
 	}
 }
 
-// pebbleStoreID 是主服务 Pebble 库的身份，写进变更日志游标与 Outbox 事件。
-const pebbleStoreID = "storage-primary"
+// pebbleDirName 是主服务 Pebble 库在数据目录下的子目录名。库的实例标识另由 Pebble 库首次打开时随机分配，见 pebble.Open。
+const pebbleDirName = "storage-primary"
 
 func runPrimaryRole() error {
 	root := os.Getenv("MOOX_STORAGE_HOME")
@@ -97,7 +97,7 @@ func runPrimaryRole() error {
 	}
 	defer cached.Close()
 	store, err := pebble.Open(pebble.Options{
-		NodeID: pebbleStoreID, Path: filepath.Join(root, "pebble", pebbleStoreID),
+		Path:          filepath.Join(root, "pebble", pebbleDirName),
 		MaxEventBytes: eventConfig.MaxPayloadBytes(), BucketDuration: cleanupBucketDuration(),
 		// 写入拿到数据集读锁后按最新的元数据缓存确认数据集仍在（按索引点查），见 Metadata.DeleteDataset。
 		DatasetExists: func(spaceID, datasetID string) bool {
@@ -356,10 +356,7 @@ func runViewRole() error {
 		BackfillPageSize:        backfillPageSize,
 		BackfillRequestInterval: backfillRequestInterval,
 	}
-	// Bind the listeners before opening/validating historical indexes. View
-	// restoration can still take time on a large deployment; keeping the
-	// process reachable lets liveness probes observe the process while
-	// readiness remains false until the consumer is bound.
+	// 先绑定监听再恢复已建的索引：部署大时恢复要一段时间，进程先可达，存活检查能看到它。
 	s := trpc.NewServer()
 	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
 	trpclog.InstallServiceName("storage")

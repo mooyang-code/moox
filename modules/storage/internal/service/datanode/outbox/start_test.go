@@ -17,7 +17,7 @@ import (
 
 // EventBus 连不上时 Outbox 转发照常启动、能随时停下，启动不被连接挡住。
 func TestStartWithEventBusStartsWithoutEventBus(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{NodeID: "storage-primary", Path: filepath.Join(t.TempDir(), "pebble")})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "pebble")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestStartWithEventBusDrainsBacklogAfterEventBusComesUp(t *testing.T) {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	store, err := pebble.Open(pebble.Options{NodeID: "storage-primary", Path: filepath.Join(t.TempDir(), "pebble")})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "pebble")})
 	if err != nil {
 		t.Fatal(err)
 	}

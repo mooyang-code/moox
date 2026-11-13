@@ -17,7 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// LedgerPeriodCompleted 是序列账本判定出的周期完成结果（source=ledger），由 DataNode 自己在周期封口时生成。
+// LedgerPeriodCompleted 是序列账本判定出的周期完成结果（source=ledger），由 storage-primary 自己在周期封口时生成。
 type LedgerPeriodCompleted struct {
 	DatasetID          string
 	Frequency          string
@@ -160,7 +160,7 @@ func markerSeriesToEvent(values []*pb.SeriesRef) []*storageeventpb.SeriesRef {
 	return out
 }
 
-func validateDataNodeMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
+func validateMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
 	message := &eventpb.EventMessage{}
 	if err := proto.Unmarshal(raw, message); err != nil {
 		return nil, fmt.Errorf("unmarshal dataset marker: %w", err)
@@ -170,8 +170,8 @@ func validateDataNodeMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
 		return nil, err
 	}
 	event, ok := registry.Lookup(message.GetEventName(), message.GetEventVersion())
-	if !ok || !isDataNodeOutboxEvent(event) {
-		return nil, fmt.Errorf("event %s@%d is not a DataNode outbox event", message.GetEventName(), message.GetEventVersion())
+	if !ok || !isMarkerEvent(event) {
+		return nil, fmt.Errorf("事件 %s@%d 不是周期完成标记", message.GetEventName(), message.GetEventVersion())
 	}
 	subject, err := registry.RenderSubject(event, message.GetSpaceId(), message.GetSubjectId())
 	if err != nil {
@@ -183,6 +183,6 @@ func validateDataNodeMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
 	return message, nil
 }
 
-func isDataNodeOutboxEvent(event events.Event) bool {
+func isMarkerEvent(event events.Event) bool {
 	return event.Name() == events.DatasetPeriodCompleted.Name() && event.Version() == events.DatasetPeriodCompleted.Version()
 }

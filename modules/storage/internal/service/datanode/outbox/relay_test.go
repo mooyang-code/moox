@@ -115,7 +115,7 @@ func (p *retryDuplicatePublisher) PublishMessageWithAck(ctx context.Context, dat
 }
 
 func TestRelayDropsUnsupportedLegacyOutboxEventsAndPublishesTheRest(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestRelayDropsUnsupportedLegacyOutboxEventsAndPublishesTheRest(t *testing.T
 }
 
 func TestRelayPublicationIsSerializedWithDatasetPurge(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestRelayPublicationIsSerializedWithDatasetPurge(t *testing.T) {
 }
 
 func TestPurgeWinningOutboxLockPreventsPublication(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func insertRecordOutboxEvent(t *testing.T, store *pebble.Store, spaceID, dataset
 }
 
 func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 }
 
 func TestRelayBoundsPublishAttempt(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +346,7 @@ func TestRelayBoundsPublishAttempt(t *testing.T) {
 }
 
 func TestRelayReconnectsPublisherAfterRepeatedFailures(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestRelayReconnectsPublisherAfterRepeatedFailures(t *testing.T) {
 }
 
 func TestRelayKeepsPublisherUnreadyWhenReconnectVerificationFails(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +418,7 @@ func TestRelayKeepsPublisherUnreadyWhenReconnectVerificationFails(t *testing.T) 
 }
 
 func TestRelayRecordsOutboxSnapshotAndDuplicateAcknowledgement(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestRelayRecordsOutboxSnapshotAndDuplicateAcknowledgement(t *testing.T) {
 
 func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "db")
-	store, err := pebble.Open(pebble.Options{Path: storePath, NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: storePath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +486,7 @@ func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
 	if err := firstStore.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err = pebble.Open(pebble.Options{Path: storePath, NodeID: "node"})
+	store, err = pebble.Open(pebble.Options{Path: storePath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,9 +513,9 @@ func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
 }
 
 // 无法通过当前契约校验的记录（例如旧版本写入、缺少 definition_hash 的因子周期标记）永远发不出去：
-// relay 隔离它并继续投递其后的事件，不能堵住整个 DataNode 的出站队列。
+// relay 隔离它并继续投递其后的事件，不能堵住整个出站队列。
 func TestRelayQuarantinesInvalidOutboxEventsAndPublishesTheRest(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,7 +580,7 @@ func (p *stopAfterFirstPublisher) PublishMessage(_ context.Context, _ []byte) er
 }
 
 func TestRelayStopsStartingNewPublishesAfterClose(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}

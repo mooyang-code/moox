@@ -12,7 +12,7 @@ import (
 )
 
 func TestDeleteDatasetRowsRemovesRowsAndHistoryWithoutTouchingOtherDataset(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestDeleteDatasetRowsRemovesRowsAndHistoryWithoutTouchingOtherDataset(t *te
 
 // 删除数据集会清掉它的 commit 标记：重建后同一 commit_id 作为新写入重新生效。
 func TestDeleteDatasetRowsClearsCommitMarkers(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestDeleteDatasetRowsClearsCommitMarkers(t *testing.T) {
 // 元数据里已经没有的数据集，写入在拿到读锁后被拒绝；重建元数据后照常写入。
 func TestWriteRejectedWhileDatasetIsMissingFromMetadata(t *testing.T) {
 	exists := true
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1", DatasetExists: func(string, string) bool { return exists }})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), DatasetExists: func(string, string) bool { return exists }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestWriteRejectedWhileDatasetIsMissingFromMetadata(t *testing.T) {
 }
 
 func TestDeleteDatasetRowsRemovesCommitMarkersMarkersAndOutbox(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestDeleteDatasetRowsRemovesCommitMarkersMarkersAndOutbox(t *testing.T) {
 }
 
 func TestDeleteDatasetRowsWaitingForPublicationLockHonorsCancellation(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}

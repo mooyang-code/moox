@@ -40,7 +40,7 @@ func TestRecordViewFollowsRecordWrites(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	snapshot := recordSnapshot{dataset: &pb.Dataset{SpaceId: readyBenchSpace, DatasetId: "notes", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"}}
-	store, err := pebble.Open(pebble.Options{NodeID: "storage-primary", Path: filepath.Join(t.TempDir(), "pebble")})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "pebble")})
 	if err != nil {
 		t.Fatal(err)
 	}

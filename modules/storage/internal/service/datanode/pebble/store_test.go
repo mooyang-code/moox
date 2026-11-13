@@ -10,7 +10,7 @@ import (
 )
 
 func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
-	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 
 func TestCleanupExpiredBucketsDoesNotCreateOutboxEvent(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestCleanupExpiredBucketsDoesNotCreateOutboxEvent(t *testing.T) {
 }
 
 func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
-	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
 }
 
 func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1", BucketDuration: time.Hour})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), BucketDuration: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.
 }
 
 func TestUpsertFieldsExplicitNullReplacesStoredValue(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestUpsertFieldsExplicitNullReplacesStoredValue(t *testing.T) {
 }
 
 func TestSeriesTagsKeepSameTimestampRowsDistinct(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestSeriesTagsKeepSameTimestampRowsDistinct(t *testing.T) {
 }
 
 func TestSeriesTagSymbolsRoundTripWithoutRewriting(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestSeriesTagSymbolsRoundTripWithoutRewriting(t *testing.T) {
 }
 
 func TestReadRowsReturnsOnlyExistingRowsEvenWithoutRequestedField(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestReadRowsReturnsOnlyExistingRowsEvenWithoutRequestedField(t *testing.T) 
 }
 
 func TestRecordEmptyVersionResolvesCharacterMaximum(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}

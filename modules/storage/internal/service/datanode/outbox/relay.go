@@ -80,10 +80,8 @@ func NewRelay(store *pebble.Store, publisher Publisher, opts RelayOptions) (*Rel
 		opts.BatchSize = 100
 	}
 	if opts.PublishTimeout <= 0 {
-		// A remote DataNode may traverse a low-bandwidth public path to the
-		// control EventBus.  A 1 MiB event can legitimately take several
-		// seconds; timing out at 5s causes an endless retry loop and leaves the
-		// view stale even though the broker is reachable.
+		// 到 EventBus 的链路可能带宽很小：1 MiB 的事件正常也要几秒，5 秒超时会让发布无限重试，
+		// broker 明明可达，事件却一直发不出去。
 		opts.PublishTimeout = 30 * time.Second
 	}
 	if opts.ReconnectAfterFailures <= 0 {

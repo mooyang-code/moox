@@ -39,7 +39,7 @@ func waitPublished(t *testing.T, publisher *countingPublisher, want int32, withi
 
 // 写入 outbox 后立即发布，不等轮询间隔（轮询设成 1 小时）。
 func TestRelayPublishesRightAfterCommitWithoutWaitingForThePoll(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestRelayPublishesRightAfterCommitWithoutWaitingForThePoll(t *testing.T) {
 
 // 启动前积压超过一批：启动后连续排空，不等轮询。
 func TestRelayDrainsABacklogLargerThanOneBatch(t *testing.T) {
-	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}

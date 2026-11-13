@@ -40,7 +40,7 @@ func (r primaryFieldReader) ReadDatasetChanges(ctx context.Context, req *pb.Read
 func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	ctx := context.Background()
 	const secret = "e2e-secret"
-	store, err := pebble.Open(pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node-a")})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "node-a")})
 	if err != nil {
 		t.Fatal(err)
 	}

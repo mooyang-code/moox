@@ -20,7 +20,7 @@ import (
 
 func openChangeLogStore(t *testing.T, retention time.Duration) *Store {
 	t.Helper()
-	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1", ChangeLogRetention: retention})
+	s, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), ChangeLogRetention: retention})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	return s
@@ -643,7 +643,7 @@ func TestReadDatasetChangesWaitEndings(t *testing.T) {
 	})
 
 	t.Run("Store 关闭", func(t *testing.T) {
-		closing, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+		closing, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 		require.NoError(t, err)
 		closingHead := mustHead(t, closing)
 		done := make(chan error, 1)

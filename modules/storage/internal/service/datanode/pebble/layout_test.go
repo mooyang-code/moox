@@ -23,7 +23,7 @@ func TestOpenInitializesLayoutMarkerForNewAndEmptyPaths(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			store, err := Open(Options{Path: path, NodeID: "node-1"})
+			store, err := Open(Options{Path: path})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -49,8 +49,8 @@ func TestOpenRejectsNonEmptyStoreWithoutLayoutMarker(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(path, "CURRENT"), []byte("legacy"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Open(Options{Path: path, NodeID: "node-1"})
-	if err == nil || !strings.Contains(err.Error(), "reset DataNode store") {
+	_, err := Open(Options{Path: path})
+	if err == nil || !strings.Contains(err.Error(), "清空 Pebble 库") {
 		t.Fatalf("Open() error = %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(path, "CURRENT")); statErr != nil {
@@ -73,7 +73,7 @@ func TestOpenRejectsUnsupportedOrDamagedLayoutMarkerWithoutCleanup(t *testing.T)
 			if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Open(Options{Path: path, NodeID: "node-1"}); err == nil {
+			if _, err := Open(Options{Path: path}); err == nil {
 				t.Fatalf("marker %q accepted", content)
 			}
 			if data, err := os.ReadFile(marker); err != nil || string(data) != content {
@@ -88,14 +88,14 @@ func TestOpenRejectsUnsupportedOrDamagedLayoutMarkerWithoutCleanup(t *testing.T)
 
 func TestOpenReopensCurrentLayout(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db")
-	store, err := Open(Options{Path: path, NodeID: "node-1"})
+	store, err := Open(Options{Path: path})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(Options{Path: path, NodeID: "node-1"})
+	reopened, err := Open(Options{Path: path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestOpenRecoversWhenMarkerLandedBeforePebbleInitialization(t *testing.T) {
 	if err := createLayoutMarker(path, filepath.Join(path, layoutMarkerName)); err != nil {
 		t.Fatal(err)
 	}
-	store, err := Open(Options{Path: path, NodeID: "node-1"})
+	store, err := Open(Options{Path: path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestEnsureLayoutDoesNotIgnoreSimilarTemporaryNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := ensureLayout(path)
-	if err == nil || !strings.Contains(err.Error(), "reset DataNode store") {
+	if err == nil || !strings.Contains(err.Error(), "清空 Pebble 库") {
 		t.Fatalf("ensureLayout() error = %v", err)
 	}
 	if data, readErr := os.ReadFile(sentinel); readErr != nil || string(data) != "keep" {

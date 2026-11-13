@@ -33,7 +33,7 @@ func (activeSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.Datase
 // openTestStore 打开一个临时 Pebble 库，测试结束时关闭。
 func openTestStore(t *testing.T) *pebble.Store {
 	t.Helper()
-	store, err := pebble.Open(pebble.Options{NodeID: "storage-primary", Path: filepath.Join(t.TempDir(), "pebble")})
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "pebble")})
 	if err != nil {
 		t.Fatal(err)
 	}

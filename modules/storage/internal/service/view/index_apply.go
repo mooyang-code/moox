@@ -127,10 +127,6 @@ func viewColumnField(column *pb.ViewColumn) string {
 	if column == nil {
 		return ""
 	}
-	switch column.GetOriginType() {
-	case pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION:
-		return ""
-	}
 	return strings.TrimSpace(column.GetOriginId())
 }
 

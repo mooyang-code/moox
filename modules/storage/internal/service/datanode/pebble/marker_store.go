@@ -54,7 +54,7 @@ func (s *Store) AppendDatasetMarker(ctx context.Context, raw []byte) (string, er
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	message, err := validateDataNodeMarkerMessage(raw)
+	message, err := validateMarkerMessage(raw)
 	if err != nil {
 		return "", err
 	}

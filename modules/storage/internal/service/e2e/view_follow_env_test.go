@@ -166,7 +166,7 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 		}
 	}
 	env.store, err = pebble.Open(pebble.Options{
-		NodeID: "storage-primary", Path: filepath.Join(t.TempDir(), "pebble"), MaxEventBytes: followEnvMaxBytes,
+		Path: filepath.Join(t.TempDir(), "pebble"), MaxEventBytes: followEnvMaxBytes,
 		PeriodNow:     func() time.Time { return time.Unix(0, env.clock.Load()).UTC() },
 		DatasetExists: datasetExists,
 	})
