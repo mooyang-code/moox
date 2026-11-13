@@ -58,6 +58,20 @@ func TestStorageDeleteViewHasNoImplicitDryRun(t *testing.T) {
 	require.Contains(t, args, "/data/moox/storage/current/storage-primary/var/storage/metadata/storage_metadata.db")
 }
 
+// reset-metadata 与 repair-view 一样补上 --storage-conf：存储机上的程序按它找元数据库。
+func TestStorageResetMetadataAddsStorageConf(t *testing.T) {
+	for _, action := range storageMaintenanceActions {
+		if action.Action != "reset-metadata" {
+			continue
+		}
+		args := storageRemoteArgs(action, "/data/moox/storage/current", []string{"--seed", "/seed.yaml", "--yes"})
+		require.Contains(t, args, "/data/moox/storage/current/storage-view/config/storage.yaml")
+		require.Contains(t, args, "--package-root")
+		return
+	}
+	t.Fatal("没有 reset-metadata 动作")
+}
+
 func TestStorageMaintenanceRunsOnStorageHostWithLogScript(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_CLI", "")
 	fake := &hostFakeSSH{result: setupssh.Result{Stdout: "{\"status\":\"dry_run\"}\n"}}

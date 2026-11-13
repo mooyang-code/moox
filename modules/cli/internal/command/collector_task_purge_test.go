@@ -410,6 +410,24 @@ func TestCollectorPurgeDeletesTaskResultDatasetMissingFromMetadata(t *testing.T)
 	require.Equal(t, []string{"crypto/dataset_task_1"}, metadata.deletedIDs)
 }
 
+// 任务记录里的结果数据集在元数据里还在、却不属于这个任务（被手工建的或别的任务的对象占用）：不删。
+func TestCollectorPurgeSkipsTaskResultDatasetOwnedByOthers(t *testing.T) {
+	metadata := &fakeCollectorStorageMetadataClient{datasets: []*storagepb.Dataset{
+		{SpaceId: "crypto", DatasetId: "dataset_manual"},
+		{SpaceId: "crypto", DatasetId: "dataset_other", Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-2"}},
+	}}
+	summary := &collectorTaskPurgeSummary{
+		SpaceID: "crypto",
+		TaskIDs: []collectorTaskResultRef{
+			{SpaceID: "crypto", TaskID: "task-1", ResultDatasetID: "dataset_manual"},
+			{SpaceID: "crypto", TaskID: "task-3", ResultDatasetID: "dataset_other"},
+		},
+	}
+	require.NoError(t, inspectCollectorStorageInventory(context.Background(), metadata, summary))
+	require.Equal(t, []string{"dataset_other"}, summary.StorageDatasetIDs, "只有 Collector 任务的对象会被列为待删（task-2 的孤儿），手工建的不删")
+	require.NotContains(t, summary.StorageDatasetIDs, "dataset_manual")
+}
+
 // 第一次删除时 Storage 删完元数据后删行失败：本地任务记录保留，重跑时 ListDatasets 已查不到该数据集，
 // 仍按任务记录再调一次 DeleteDataset，预览也把它算进去。
 func TestCollectorTaskPurgeRerunDeletesDatasetAfterStorageFailure(t *testing.T) {

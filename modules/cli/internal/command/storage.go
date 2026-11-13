@@ -69,17 +69,15 @@ var storageMaintenanceActions = []storageMaintenanceAction{
 		Long:  "暂停 storage-view、删除 View 的索引文件，恢复后从 Primary 重新建索引，元数据不用改。常用参数：--space-id、--view-id、--restart=false。\n记录型 View 重建后为空，只跟随新写入。",
 	},
 	{
-		Action: "reset-metadata", Aliases: []string{"重置元数据"}, Defaults: func(root string) map[string]string {
-			return map[string]string{"--package-root": root}
-		}, DryRun: true,
+		Action: "reset-metadata", Aliases: []string{"重置元数据"}, Defaults: storageConfDefaults, DryRun: true,
 		Short: "备份后清空全部业务定义并重新导入种子（Storage 必须已停止；默认只预览，--yes 才执行）",
 		Long:  "常用参数：--seed（种子文件，在存储机上的路径）。",
 	},
 	{
 		Action: "delete-view", Defaults: storageMetadataDefaults,
 		Short: "离线删除一个 View 的元数据（不带 --yes 时存储机上的程序会拒绝执行）",
-		Long: "参数：--view <空间/视图 ID>（必填）、--yes。要先暂停 storage-view（直接 stop 会被主机守护拉起，用 moox-runtime pause）。" +
-			"物理索引文件由 storage-view 的清理定时器回收。删除前先备份元数据库。",
+		Long: "参数：--view <空间/视图 ID>（必填）、--yes。要先在存储机上暂停 storage-view：<包根>/pause.sh --components storage-view（直接 stop 会被主机守护拉起），" +
+			"删完后 <包根>/resume.sh --components storage-view。物理索引文件由 storage-view 的清理定时器回收。删除前先备份元数据库。",
 	},
 }
 

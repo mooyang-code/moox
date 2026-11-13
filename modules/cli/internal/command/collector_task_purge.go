@@ -369,6 +369,8 @@ func inspectCollectorStorageInventory(ctx context.Context, metadata collectorSto
 		pageSize = uint32(500)
 		maxPages = 10000
 	)
+	// listedOwners 是元数据里现有的数据集及其所属任务（不归 Collector 任务管的为空串），用来核对任务记录里的结果数据集。
+	listedOwners := map[string]string{}
 	for page := uint32(1); page <= maxPages; page++ {
 		response, err := metadata.ListDatasets(ctx, &storagepb.ListDatasetsReq{
 			SpaceId: strings.TrimSpace(summary.SpaceID),
@@ -388,6 +390,7 @@ func inspectCollectorStorageInventory(ctx context.Context, metadata collectorSto
 				continue
 			}
 			taskID, ok := collectorStorageObjectTaskID(dataset.GetAttributes())
+			listedOwners[collectorTaskPurgeKey(dataset.GetSpaceId(), dataset.GetDatasetId())] = taskID
 			if !ok {
 				continue
 			}
@@ -408,10 +411,13 @@ func inspectCollectorStorageInventory(ctx context.Context, metadata collectorSto
 	}
 
 	// 待删任务记录里的结果数据集也要删：上一次清理可能已删掉元数据但删行失败，ListDatasets 里就没有它了，
-	// 而 Storage 对元数据已不在的数据集仍会删行。
+	// 而 Storage 对元数据已不在的数据集仍会删行。元数据还在、却不属于这个任务（同 ID 被别的对象占用）的不删。
 	for _, task := range summary.TaskIDs {
 		datasetID := strings.TrimSpace(task.ResultDatasetID)
 		if datasetID == "" || !collectorStorageObjectMatchesSpace(task.SpaceID, summary.SpaceID) {
+			continue
+		}
+		if owner, listed := listedOwners[collectorTaskPurgeKey(task.SpaceID, datasetID)]; listed && owner != task.TaskID {
 			continue
 		}
 		before := len(summary.storageDatasetRefs)
