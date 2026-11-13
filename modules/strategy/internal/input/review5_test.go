@@ -167,7 +167,7 @@ func TestRangeLoaderReportsIndexChange(t *testing.T) {
 
 // View 的活动索引与代次取自 DataView.GetViewState（用 DataView 的身份）：代次由索引 ID、store_id 与建成序号组成。
 // 原地重建后索引 ID 不变、建成序号变，存储重建后 store_id 变，两种情况都算换代。索引还没建好或 storage-view 还没登记
-// 该 View 时活动索引与代次为空，不当作 View 被删。
+// 该 View 时活动索引与代次为空，不当作 View 被删；复核代次遇到还没登记返回可重试错误。
 func TestGetViewReadsGenerationFromViewState(t *testing.T) {
 	metadata := &metadataStub{view: &storagepb.View{ViewId: "view", DatasetId: "ds", Freq: "1h", Status: "active"}}
 	state := &viewStateStub{rsp: builtState("idx_a", "store_1", 7)}
@@ -197,16 +197,19 @@ func TestGetViewReadsGenerationFromViewState(t *testing.T) {
 	if info, err := client.GetView(context.Background(), "space", "view"); err != nil || info.ActiveIndexID != "" || info.Generation != "" {
 		t.Fatalf("索引还没建好时活动索引与代次应为空：%+v err=%v", info, err)
 	}
-	// storage-view 还没登记：当作还没建好，不报 View 已删除。
+	// storage-view 还没登记（重启后正在恢复）：复核代次返回可重试的传输错误，不能当成空代次误判换代；
+	// GetView 仍以 Metadata 为准，不报 View 已删除。
 	state.rsp = nil
-	if generation, err := client.ViewGeneration(context.Background(), "space", "view"); err != nil || generation != "" {
-		t.Fatalf("VIEW_NOT_FOUND 应返回空代次：%q err=%v", generation, err)
+	var transportErr *TransportError
+	if generation, err := client.ViewGeneration(context.Background(), "space", "view"); !errors.As(err, &transportErr) || generation != "" {
+		t.Fatalf("VIEW_NOT_FOUND 应返回可重试的传输错误：%q err=%v", generation, err)
 	}
 	if info, err := client.GetView(context.Background(), "space", "view"); err != nil || info.ActiveIndexID != "" || info.DatasetID != "ds" {
 		t.Fatalf("VIEW_NOT_FOUND 时 GetView 仍以 Metadata 为准：%+v err=%v", info, err)
 	}
 	// 没有单独的 DataView 身份时沿用 Metadata 的身份。
 	client.ViewAuth = nil
+	state.rsp = builtState("idx_a", "store_1", 7)
 	if _, err := client.ViewGeneration(context.Background(), "space", "view"); err != nil || state.stateReq[len(state.stateReq)-1].GetAuthInfo().GetAppId() != "meta" {
 		t.Fatalf("应回退到 Metadata 的身份：err=%v", err)
 	}

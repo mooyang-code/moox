@@ -48,8 +48,8 @@ func viewNotFound(viewID string) error {
 
 // viewState 向 DataView 读取 View 已建好的活动索引，返回索引 ID 与代次。代次由索引 ID、变更日志的 store_id 与建成那一刻的
 // 序号组成（形如 index@store#seq），只做相等比较：原地重建后索引 ID 不变而序号变，存储重建后 store_id 变。
-// 索引还没建好（断档或原地重建中）时两者为空；storage-view 还没登记该 View（VIEW_NOT_FOUND，可能刚重启）时同样当作
-// 还没建好，View 是否被删以 Metadata 为准。
+// 索引还没建好（断档或原地重建中）时两者为空。storage-view 还没登记该 View（VIEW_NOT_FOUND，可能刚重启、正在恢复）时
+// 返回 errViewNotRegistered，View 是否被删以 Metadata 为准。
 func (c *RPCClient) viewState(ctx context.Context, spaceID, viewID string) (string, string, error) {
 	if c == nil || c.DataView == nil {
 		return "", "", errors.New("Storage DataView 客户端未配置")
@@ -59,7 +59,7 @@ func (c *RPCClient) viewState(ctx context.Context, spaceID, viewID string) (stri
 		return "", "", transport("读取 View "+viewID+" 的索引状态", err)
 	}
 	if rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_VIEW_NOT_FOUND {
-		return "", "", nil
+		return "", "", errViewNotRegistered
 	}
 	if err := retError("读取 View "+viewID+" 的索引状态", rsp.GetRetInfo()); err != nil {
 		return "", "", err
@@ -71,9 +71,16 @@ func (c *RPCClient) viewState(ctx context.Context, spaceID, viewID string) (stri
 	return indexID, fmt.Sprintf("%s@%s#%d", indexID, rsp.GetAppliedCursor().GetStoreId(), rsp.GetGeneration()), nil
 }
 
+// errViewNotRegistered 表示 storage-view 还没登记这个 View（刚重启、正在恢复已建的索引）。
+var errViewNotRegistered = errors.New("storage-view 还没登记这个 View")
+
 // ViewGeneration 只读取 View 的活动索引代次（不读列、不读 Metadata）；索引还没建好时返回空串。
+// storage-view 还没登记该 View 时返回可重试的传输错误：恢复期间不能当成空代次，否则复核代次会误判换代。
 func (c *RPCClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
 	_, generation, err := c.viewState(ctx, spaceID, viewID)
+	if errors.Is(err, errViewNotRegistered) {
+		return "", transport("读取 View "+viewID+" 的索引状态", err)
+	}
 	return generation, err
 }
 
@@ -97,7 +104,8 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 		return ViewInfo{}, viewNotFound(viewID)
 	}
 	info := ViewInfo{ViewID: view.GetViewId(), DatasetID: view.GetDatasetId(), Frequency: view.GetFreq(), Status: view.GetStatus()}
-	if info.ActiveIndexID, info.Generation, err = c.viewState(ctx, spaceID, viewID); err != nil {
+	// storage-view 还没登记时当作索引还没建好：View 是否被删以上面的 Metadata 为准。
+	if info.ActiveIndexID, info.Generation, err = c.viewState(ctx, spaceID, viewID); err != nil && !errors.Is(err, errViewNotRegistered) {
 		return ViewInfo{}, err
 	}
 	for page := uint32(1); ; page++ {
