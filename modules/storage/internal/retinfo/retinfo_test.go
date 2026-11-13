@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"testing"
 
-	cpebble "github.com/cockroachdb/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
@@ -38,7 +37,6 @@ func TestCodeMapsStoreErrorKinds(t *testing.T) {
 		{name: "包装后的参数错误", err: fmt.Errorf("upsert: %w", storeerr.Invalidf("数据集的 alignment 设置后不能修改")), want: pb.ErrorCode_INVALID_PARAM},
 		{name: "不存在", err: storeerr.NotFoundf("dataset %s does not exist", "d"), want: pb.ErrorCode_NOT_FOUND},
 		{name: "数据库未找到", err: fmt.Errorf("metadata row not found: %w", sql.ErrNoRows), want: pb.ErrorCode_NOT_FOUND},
-		{name: "Pebble 未找到", err: fmt.Errorf("read: %w", cpebble.ErrNotFound), want: pb.ErrorCode_NOT_FOUND},
 		{name: "冲突", err: storeerr.Conflictf("view already exists"), want: pb.ErrorCode_CONFLICT},
 		// 没有标类别的错误不看文字：即使写着 is required 也是内部错误。
 		{name: "未标类别", err: errors.New("space_id is required"), want: pb.ErrorCode_INNER_ERR},

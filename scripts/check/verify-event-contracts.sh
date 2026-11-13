@@ -41,12 +41,9 @@ reject 'NewPullConsumer|EnsurePullConsumer|BindPullConsumer|BindManagedPullConsu
   "legacy Consumer lifecycle API remains" --glob '*.go' modules packages
 reject '^consumers:|^consumer_templates:|ConsumerTemplates' \
   "EventBus still owns Consumer declarations" --glob '*.go' --glob '*.yaml' modules/eventbus
-# Storage owns these static consumer partitions, whose durable identities are
-# part of the Storage runtime topology rather than business YAML contracts.
 reject '(^|[[:space:]])([A-Za-z0-9_]*_durable|durable):' \
   "business YAML still uses durable as a configuration name" \
-  --glob '*.yaml' --glob '!modules/storage/config/storage.yaml' \
-  --glob '!modules/storage/config/storage_view/trpc_go.yaml' modules
+  --glob '*.yaml' modules
 reject 'PublishRaw\(|Client\.Publish\(' \
   "business modules bypass the typed Event API" --glob '*.go' --glob '!**/*_test.go' modules
 reject '\.NewConsumer\(' \
@@ -108,8 +105,6 @@ reject 'NATSURL|EmbeddedJetStreamConfig|yaml:"nats_url"|yaml:"embedded"' \
 reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_wait_ms):' \
   "code-owned Consumer identity or ack settings remain in business YAML" \
   --glob '*.yaml' \
-  --glob '!modules/storage/config/storage.yaml' \
-  --glob '!modules/storage/config/storage_view/trpc_go.yaml' \
   modules/monitor/config modules/trade/config modules/storage/config
 
 (cd packages/events && go test ./...)

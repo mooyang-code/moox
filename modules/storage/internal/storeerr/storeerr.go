@@ -6,8 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-
-	cpebble "github.com/cockroachdb/pebble"
 )
 
 // Kind 是错误类别；没有标类别的错误一律按内部错误处理。
@@ -53,13 +51,14 @@ func Invalidf(format string, args ...any) error  { return Errorf(Invalid, format
 func NotFoundf(format string, args ...any) error { return Errorf(NotFound, format, args...) }
 func Conflictf(format string, args ...any) error { return Errorf(Conflict, format, args...) }
 
-// KindOf 返回错误链上最外层标注的类别；数据库与 Pebble 的“未找到”哨兵算作不存在，其余没有类别的错误算内部错误。
+// KindOf 返回错误链上最外层标注的类别；元数据库的“未找到”哨兵算作不存在，其余没有类别的错误算内部错误。
+// Pebble 的“未找到”在 datanode 内部各自处理，不会到这里：只有 datanode 认识 Pebble。
 func KindOf(err error) Kind {
 	var kinded Kinded
 	if errors.As(err, &kinded) {
 		return kinded.StoreErrorKind()
 	}
-	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, cpebble.ErrNotFound) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return NotFound
 	}
 	return Internal

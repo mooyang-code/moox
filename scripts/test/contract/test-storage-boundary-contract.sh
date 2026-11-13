@@ -102,14 +102,14 @@ assert_no_legacy_series_identity
 while IFS= read -r match; do
   file="${match%%:*}"
   [[ "${file}" == modules/storage/internal/service/datanode/* ]] || fail "Pebble import outside DataNode: ${match}"
-done < <(rg -n 'cockroachdb/pebble' modules/storage/internal/service/datanode --glob '*.go' || true)
+done < <(rg -n 'cockroachdb/pebble' modules/storage --glob '*.go' --glob '!**/*_test.go' || true)
 
 while IFS= read -r match; do
   file="${match%%:*}"
   [[ "${file}" == modules/storage/internal/service/viewindex/* ]] || fail "DuckDB/Bleve import outside ViewIndex: ${match}"
 done < <(rg -n 'go-duckdb|blevesearch/bleve' modules/storage --glob '*.go' --glob '!**/*_test.go' || true)
 
-rg -n 'RowKey|ViewIndexApplyBatch|ViewSchemaHash|ViewRevision|indexed_from|indexed_to' modules/storage/internal/service/viewindex modules/storage/proto >/dev/null || fail 'ViewIndex write contract is not present'
+rg -n 'RowKey|ViewIndexWriteBatch|ViewSchemaHash|ViewRevision|indexed_from|indexed_to' modules/storage/internal/service/viewindex modules/storage/proto >/dev/null || fail 'ViewIndex write contract is not present'
 rg -n 'AllowedCallers|allowed_callers|AllowsCaller' packages/gatewayroute modules/admin/internal/service/sysdeploy modules/hostgateway/internal >/dev/null || fail 'Gateway caller ACL is not present'
 
 echo 'storage boundary contract passed'
