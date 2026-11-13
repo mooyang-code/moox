@@ -10,7 +10,7 @@
 - 不要把任何 token、HMAC 写进命令、脚本、日志或 Skill。
 - `--yes` 才会执行修改；不带 `--yes` 时 `moox-cli storage …` 自动加 `--dry-run` 只预览（`delete-view` 没有预览，不带 `--yes` 会被拒绝）。
 - 路径参数（`--storage-conf`、`--package-root`、`--metadata-db`）缺省时按部署目录补齐（`<storage_root>/current/…`），不要再手写路径。
-- 命令输出 sanitized JSON，同时保存在存储机 `<storage_root>/maintenance/<动作>-<时间>.log`；应保留 `backup_path`、`view_indexes_removed` 和 `restarted` 等字段用于运维记录。退出码与存储机上的程序一致。
+- 命令输出 sanitized JSON，同时保存在存储机 `<storage_root>/maintenance/<动作>-<时间>.log`；应保留 `backup`（reset-metadata 的元数据备份）、`view_indexes_removed` 和 `restarted` 等字段用于运维记录。退出码与存储机上的程序一致。
 - 用 `--host <主机 ID>` 可以指定在哪台主机上执行（默认 `storage-primary` 所在主机）；`--help` 只显示本地说明，不连接主机。
 
 ## Factor 周期诊断与补算
@@ -51,9 +51,8 @@ View 自己跟随 Primary 的变更日志，落后时先按 [`view-catchup.md`](
 确认目标后在同一条命令末尾加 `--yes` 才执行。流程：
 
 1. 暂停 `storage-view`（pause：主机守护不会拉起）。
-2. 备份 Metadata SQLite（输出中的 `backup_path` 是回滚和问题复盘所需的关键证据）。
-3. 清掉这个 View 的活动索引指针并删除物理索引。
-4. 恢复 `storage-view`（resume），从 Primary 回填每个序列最近的行后接着跟随变更日志。
+2. 删除这个 View 的索引文件（输出 `view_indexes_removed`）。View 的已建状态只在索引文件里，元数据不用改，也不备份。
+3. 恢复 `storage-view`（resume），维护流程从 Primary 回填每个序列最近的行后接着跟随变更日志。
 
 重建完成前 View 不可读；Primary 已不保留的行不可恢复；记录型 View（Bleve）没有可读的 Primary 历史，重建后为空，只跟随新写入。
 
@@ -85,7 +84,7 @@ View 自己跟随 Primary 的变更日志，落后时先按 [`view-catchup.md`](
 ./bin/moox-cli storage delete-view --view <空间>/<View ID> --yes
 ```
 
-命令只删指定的一个 View 及其列（外键级联），输出待回收的 `engine/index_id`；物理文件由 `storage-view` 的清理定时器在确认无引用后回收。
+命令只删指定的一个 View（View 的列由数据集列推出，不单独存储），输出待回收的 `engine/index_id`；物理文件由 `storage-view` 的清理定时器在确认无引用后回收。
 删除前先备份元数据库。在线删除（不需要暂停）也可以用 `moox-cli metadata view delete --view-id <View>`（默认只预览，`--yes` 执行），它走 Metadata 接口，物理索引同样由清理定时器回收。
 
 Storage 服务的时序 View 每个序列保留最近 `10000` 根，由每分钟的定时任务删除更旧的行（偶数分钟第 10 秒执行，每批行数见 `storage.view.delete_oldest_batch_size`）。

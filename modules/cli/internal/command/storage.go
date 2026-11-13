@@ -138,7 +138,7 @@ func storageRemoteArgs(action storageMaintenanceAction, storageRoot string, args
 	return remote
 }
 
-// storageRemoteScript 在存储机上执行动作：输出先落到维护日志再回显，SSH 中断时结果（如 backup_path）不会丢；退出码原样返回。
+// storageRemoteScript 在存储机上执行动作：输出先落到维护日志再回显，SSH 中断时结果（如 reset-metadata 的 backup）不会丢；退出码原样返回。
 const storageRemoteScript = `umask 077; dir="$1"; name="$2"; shift 2; mkdir -p "$dir" || exit 125; log="$dir/$name-$(date -u +%Y%m%dT%H%M%SZ).log"; "$@" >"$log" 2>&1; code=$?; cat "$log"; echo "（输出已保存在存储机 $log）" >&2; exit $code`
 
 func runStorageMaintenance(cmd *cobra.Command, action storageMaintenanceAction, args []string) error {
