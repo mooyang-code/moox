@@ -1541,9 +1541,9 @@ components:
         port: 20102
         console_name: storage
         timeout_ms: 5000
-        # max_body_bytes 是网关逐方法的请求/响应上限。Storage 进程收帧上限是 tRPC 默认的 10 MiB，
-        # 经网关发给 Storage 的请求实际受它限制；响应由网关接收（帧上限 64 MiB），按这里的 32 MiB 限制。
-        # Storage 进程之间的调用（View 跟随器读变更日志、回填读行）受 10 MiB 限制，变更日志单页约 4 MiB。
+        # max_body_bytes 只是网关侧逐方法的请求/响应上限。Storage 进程没有调大 tRPC 帧上限（默认 10 MiB）：
+        # 发给 Storage 的请求帧和 Storage 自己编码的响应帧都受 10 MiB 限制，网关放行到 32 MiB 也过不去。
+        # 所以 Storage 的读取接口要自己把单页控制在 10 MiB 以内（例如变更日志单页约 4 MiB）。
         max_body_bytes: 33554432
         methods:
           - UpsertFields

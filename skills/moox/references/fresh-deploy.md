@@ -57,7 +57,7 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 中途失败后再运行一次会接着清。CLI 不清理云函数，见第 8 节。
 
-从批 1（Storage 合并与 View 跟随变更日志）之前的版本重装时，还要按 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 1 全新部署注意”核对 `moox.toml`（`[deployments]` 里的 `storage-node` 用 `moox-cli config migrate --yes` 删掉，两段 `mooxsys` 保留期可删）和归档 worker 配置；因子机本地库被清空后要重新做初始数据导入。
+从批 1（Storage 合并与 View 跟随变更日志）之前的版本重装时，**先**运行 `moox-cli config migrate --yes` 删掉 `[deployments]` 里的 `storage-node`（留着它 `setup wipe` 也会拒绝配置），**再** `setup wipe`；然后按 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 1 全新部署注意”核对其余项（两段 `mooxsys` 保留期可删）和归档 worker 配置；因子机本地库被清空后要重新做初始数据导入。
 
 ### 本机状态
 
