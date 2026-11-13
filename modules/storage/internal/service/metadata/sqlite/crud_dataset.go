@@ -128,6 +128,19 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if freq := strings.TrimSpace(item.GetFreq()); freq != "" && freq != existing.GetFreq() {
 		return nil, errors.New("dataset freq is immutable")
 	}
+	// alignment 设置后不能修改，没有设置过的可以补上；请求里为空、allowed_lateness_seconds 为 0 时沿用已有值，
+	// 只改名称、说明的更新不会把它们清掉。
+	alignment := existing.GetAlignment()
+	if candidate := strings.TrimSpace(item.GetAlignment()); candidate != "" && candidate != alignment {
+		if alignment != "" {
+			return nil, errors.New("dataset alignment is immutable")
+		}
+		alignment = candidate
+	}
+	item.Alignment = alignment
+	if item.GetAllowedLatenessSeconds() == 0 {
+		item.AllowedLatenessSeconds = existing.GetAllowedLatenessSeconds()
+	}
 	status := existing.GetStatus()
 	if candidate := strings.TrimSpace(item.GetStatus()); candidate != "" {
 		if err := validateDatasetStatus(candidate); err != nil {

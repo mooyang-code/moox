@@ -108,6 +108,39 @@ func TestDatasetMayOmitDataSource(t *testing.T) {
 	}
 }
 
+// 只改名称的更新不会清掉 alignment 与 allowed_lateness_seconds；alignment 设置后不能改，没设置过的可以补上。
+func TestDatasetUpdateKeepsAlignmentAndLateness(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	if _, err := store.CreateDataset(ctx, &pb.Dataset{
+		SpaceId: "space", DatasetId: "dataset_session", Name: "Session",
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Alignment: "session", AllowedLatenessSeconds: 120,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_session", Name: "Renamed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetDataset(ctx, "space", "dataset_session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.GetAlignment() != "session" || got.GetAlignment() != "session" || got.GetAllowedLatenessSeconds() != 120 || got.GetName() != "Renamed" {
+		t.Fatalf("更新后 = %v", got)
+	}
+	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_session", Name: "Renamed", Alignment: "epoch_utc"}); err == nil {
+		t.Fatal("alignment 设置后不能修改")
+	}
+	if _, err := store.CreateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_plain", Name: "Plain", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m"}); err != nil {
+		t.Fatal(err)
+	}
+	if filled, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_plain", Name: "Plain", Alignment: "session", AllowedLatenessSeconds: 90}); err != nil || filled.GetAlignment() != "session" || filled.GetAllowedLatenessSeconds() != 90 {
+		t.Fatalf("补上 alignment 与迟到时间 = %v err=%v", filled, err)
+	}
+}
+
 func TestDatasetUpdateRevisionAndStatusInvariants(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
