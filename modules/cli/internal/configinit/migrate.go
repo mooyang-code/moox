@@ -93,8 +93,17 @@ type ComponentRename struct {
 	Changes int    `json:"changes"`
 }
 
+// ComponentRemoval 记录从 [deployments] 删掉的一个已下线组件涉及的位置数。
+type ComponentRemoval struct {
+	Component string `json:"component"`
+	Changes   int    `json:"changes"`
+}
+
 // legacyComponents 是已经改名的组件身份：旧名字不再出现在服务目录里，[deployments] 里还写旧名字会让所有命令拒绝配置。
 var legacyComponents = map[string]string{"cloudnode": "cloudfunction"}
+
+// retiredComponents 是已经下线的组件身份：服务目录里没有它，也没有接替的名字，migrate 从 [deployments] 里删掉。
+var retiredComponents = []string{"storage-node"}
 
 // SCFImportReport 记录导入的 SCF 计划概要（地域、空间与市场、更新了网络信息的主机），不含任何配置值。
 type SCFImportReport struct {
@@ -114,6 +123,8 @@ type MigrateReport struct {
 	FactorEngine *FactorEngineMigration `json:"factor_engine,omitempty"`
 	// Components 记录 [deployments] 里被改成当前名字的旧组件身份（例如 cloudnode → cloudfunction）及位置数。
 	Components []ComponentRename `json:"components,omitempty"`
+	// RemovedComponents 记录从 [deployments] 删掉的已下线组件（例如 storage-node，已并入 storage-primary）及位置数。
+	RemovedComponents []ComponentRemoval `json:"removed_components,omitempty"`
 	// Deployments 为 true 表示旧的 [placements] 表被改名为 [deployments]。
 	Deployments bool             `json:"deployments,omitempty"`
 	SCF         *SCFImportReport `json:"scf,omitempty"`
@@ -441,6 +452,7 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 		}
 	}
 	renameDeploymentComponents(blocks, report)
+	removeRetiredComponents(blocks, report)
 	for i := range blocks {
 		if blocks[i].header == "factors.definitions" && blocks[i].array {
 			change, err := migrateFactorBlock(&blocks[i], library)
@@ -619,6 +631,45 @@ func renameDeploymentComponents(blocks []block, report *MigrateReport) {
 	sort.Strings(froms)
 	for _, from := range froms {
 		report.Components = append(report.Components, ComponentRename{From: from, To: legacyComponents[from], Changes: counts[from]})
+	}
+}
+
+// removeRetiredComponents 从 [deployments] 各主机的组件列表里删掉已下线的组件：单行数组删掉这一项及相邻的逗号，
+// 多行数组里只剩它的一行整行删掉；注释行不动。
+func removeRetiredComponents(blocks []block, report *MigrateReport) {
+	counts := map[string]int{}
+	for i := range blocks {
+		if blocks[i].header != "deployments" {
+			continue
+		}
+		lines := []string{blocks[i].lines[0]}
+		for _, line := range blocks[i].lines[1:] {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				lines = append(lines, line)
+				continue
+			}
+			original := line
+			for _, id := range retiredComponents {
+				item := `["']` + regexp.QuoteMeta(id) + `["']`
+				// 先删“前一项, 这一项”里的逗号，删不到再删“这一项, 后一项”里的逗号。
+				for _, pattern := range []*regexp.Regexp{regexp.MustCompile(`,\s*` + item), regexp.MustCompile(item + `\s*,?\s*`)} {
+					if pattern.MatchString(line) {
+						counts[id] += len(pattern.FindAllString(line, -1))
+						line = pattern.ReplaceAllString(line, "")
+					}
+				}
+			}
+			if line != original && strings.TrimSpace(line) == "" {
+				continue
+			}
+			lines = append(lines, line)
+		}
+		blocks[i].lines = lines
+	}
+	for _, id := range retiredComponents {
+		if counts[id] > 0 {
+			report.RemovedComponents = append(report.RemovedComponents, ComponentRemoval{Component: id, Changes: counts[id]})
+		}
 	}
 }
 

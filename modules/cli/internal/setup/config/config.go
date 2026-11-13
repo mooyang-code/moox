@@ -990,8 +990,11 @@ func validateDeployments(m *Manifest) error {
 		}
 		for _, id := range m.Deployments[host] {
 			component, ok := catalog.Component(id)
-			if !ok || component.Scope == servicecatalog.ScopeHost {
-				return fmt.Errorf("config_invalid: deployments contains an unknown or automatic component")
+			if !ok {
+				return fmt.Errorf("config_invalid: [deployments] 主机 %s 的组件 %q 不在服务目录里；已下线或改名的组件运行 moox-cli config migrate --yes 处理", host, id)
+			}
+			if component.Scope == servicecatalog.ScopeHost {
+				return fmt.Errorf("config_invalid: [deployments] 主机 %s 的组件 %q 由系统自动部署到每台主机，不要写在 [deployments] 里", host, id)
 			}
 		}
 	}
