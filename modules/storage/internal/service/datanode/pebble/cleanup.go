@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,6 +117,9 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 		}
 		ranges = append(ranges, periodRanges...)
 	}
+	if err := s.stageTrimSeriesSnapshots(batch, spaceID, datasetID, beforeBucket.UTC().Unix()); err != nil {
+		return 0, err
+	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return 0, err
 	}
@@ -133,6 +138,62 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 		s.compactAsync(seriesCompactPrefix, nextPrefix(seriesCompactPrefix))
 	}
 	return uint64(len(ranges)), nil
+}
+
+// stageTrimSeriesSnapshots 删掉只覆盖截止时间之前周期的生效条目，以及不再被剩余条目引用的快照。
+// 生效条目覆盖从它的起点到下一条起点之前的周期：下一条起点不晚于 before 时，它覆盖的周期都随账本一起删了。
+// 每个频率的最后一条总是保留。调用方持有 datasetWriteMu 的写锁，登记快照与按快照建周期不会穿插。
+func (s *Store) stageTrimSeriesSnapshots(batch *cpebble.Batch, spaceID, datasetID string, before int64) error {
+	return s.eachFrequencyPrefix(seriesEffectivePrefix+datasetScope(spaceID, datasetID), func(effectivePrefix string) error {
+		type effective struct {
+			key  []byte
+			from int64
+			hash string
+		}
+		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(effectivePrefix), UpperBound: prefixUpperBound(effectivePrefix)})
+		if err != nil {
+			return err
+		}
+		var entries []effective
+		for valid := iter.First(); valid; valid = iter.Next() {
+			from, err := strconv.ParseInt(strings.TrimPrefix(string(iter.Key()), effectivePrefix), 10, 64)
+			if err != nil {
+				_ = iter.Close()
+				return fmt.Errorf("解析生效条目 %q：%w", iter.Key(), err)
+			}
+			entries = append(entries, effective{key: append([]byte(nil), iter.Key()...), from: from, hash: string(iter.Value())})
+		}
+		if err := errors.Join(iter.Error(), iter.Close()); err != nil {
+			return err
+		}
+		expired := 0
+		for expired+1 < len(entries) && entries[expired+1].from <= before {
+			expired++
+		}
+		if expired == 0 {
+			return nil
+		}
+		referenced := make(map[string]struct{}, len(entries)-expired)
+		for _, entry := range entries[expired:] {
+			referenced[entry.hash] = struct{}{}
+		}
+		// 快照与生效条目在同一个（空间, 数据集, 频率）范围下，只是前缀不同。
+		snapshotPrefix := seriesSnapshotPrefix + strings.TrimPrefix(effectivePrefix, seriesEffectivePrefix)
+		for _, entry := range entries[:expired] {
+			if err := batch.Delete(entry.key, s.writeOptions); err != nil {
+				return err
+			}
+			if _, ok := referenced[entry.hash]; ok {
+				continue
+			}
+			// 同一个快照可能被多条过期条目引用，删一次后记为已处理。
+			referenced[entry.hash] = struct{}{}
+			if err := batch.Delete([]byte(snapshotPrefix+entry.hash), s.writeOptions); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // DeleteDatasetRows physically removes every row and materialized history

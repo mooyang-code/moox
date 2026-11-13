@@ -13,6 +13,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // 变更日志：每次行写入、每条周期完成标记，都在同一个 Pebble batch 里追加一条日志记录，占一个全局递增的序号。
@@ -418,7 +419,12 @@ func (s *Store) cleanupChangeLogBatch(ctx context.Context, cutoff time.Time) (in
 	// 与写入共用 outboxMu：删除和追加互不穿插，序号元数据保持一致。
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
-	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(changeLogPrefix), UpperBound: []byte(changeLogPrefix + "\xff")})
+	// 只从头删：已清理到的序号之前没有条目，从它之后开始迭代，不必每批跨过已删条目留下的删除标记。
+	trimmed, err := readUint64Meta(s.db, metaChangeTrimmed)
+	if err != nil {
+		return 0, err
+	}
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: changeLogKey(trimmed + 1), UpperBound: []byte(changeLogPrefix + "\xff")})
 	if err != nil {
 		return 0, err
 	}
@@ -433,7 +439,10 @@ func (s *Store) cleanupChangeLogBatch(ctx context.Context, cutoff time.Time) (in
 			return 0, fmt.Errorf("decode change log %s: %w", iter.Key(), err)
 		}
 		created, err := time.Parse(time.RFC3339Nano, head.createdAt)
-		if err != nil || !created.Before(cutoff) {
+		if err != nil {
+			// 创建时间读不出来就当作已过期删掉：停在这里会让之后的条目永远清不掉。
+			log.Warnf("storage 变更日志序号 %d 的创建时间 %q 无法解析，按已过期删除：%v", head.sequence, head.createdAt, err)
+		} else if !created.Before(cutoff) {
 			break
 		}
 		if err := batch.Delete(append([]byte(nil), iter.Key()...), s.writeOptions); err != nil {

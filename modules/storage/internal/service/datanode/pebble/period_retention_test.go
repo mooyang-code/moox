@@ -189,3 +189,62 @@ func TestDeleteDatasetRowsClearsSeriesSnapshots(t *testing.T) {
 	require.Len(t, markers, 1)
 	require.Equal(t, []string{"SOL-USDT"}, markers[0].payload.GetUniverseSubjectIds())
 }
+
+// 保留期清理删掉只覆盖截止时间之前周期的生效条目，以及不再被剩余条目引用的快照；每个频率的最后一条总是保留。
+func TestCleanupExpiredBucketsTrimsSeriesSnapshots(t *testing.T) {
+	ctx := context.Background()
+	clock := newGoldenClock(goldenPeriod.Add(-time.Hour))
+	store := newGoldenStore(t, clock)
+	seriesA := goldenSeries(t, []seriesset.Series{{SubjectID: "BTC-USDT"}})
+	seriesB := goldenSeries(t, []seriesset.Series{{SubjectID: "ETH-USDT"}})
+	seriesC := goldenSeries(t, []seriesset.Series{{SubjectID: "SOL-USDT"}})
+	periods := []time.Time{goldenPeriod, goldenPeriod.Add(time.Hour), goldenPeriod.Add(2 * time.Hour), goldenPeriod.Add(3 * time.Hour)}
+	// A → B → A → C：快照 A 被一条过期条目和一条保留的条目同时引用。
+	hashA := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, seriesA, periods[0], goldenLateness).SeriesHash
+	hashB := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, seriesB, periods[1], goldenLateness).SeriesHash
+	goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, seriesA, periods[2], goldenLateness)
+	hashC := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, seriesC, periods[3], goldenLateness).SeriesHash
+	// 另一个数据集的生效表不受影响。
+	goldenRegister(t, store, clock, goldenSpace, "other", goldenFreq, seriesB, periods[0], goldenLateness)
+	goldenRegister(t, store, clock, goldenSpace, "other", goldenFreq, seriesC, periods[1], goldenLateness)
+
+	effective := func(datasetID string, period time.Time) bool {
+		_, found, err := store.readEffectiveHash(goldenSpace, datasetID, goldenFreq, period.Unix())
+		require.NoError(t, err)
+		return found
+	}
+	snapshot := func(hash string) bool {
+		_, err := store.loadSeriesSnapshot(goldenSpace, goldenDataset, goldenFreq, hash)
+		if err == nil {
+			return true
+		}
+		var missing SeriesSnapshotMissingError
+		require.ErrorAs(t, err, &missing)
+		return false
+	}
+
+	// 截止在第三、四条之间：前两条只覆盖截止之前的周期。
+	_, err := store.CleanupExpiredBuckets(ctx, goldenSpace, goldenDataset, periods[2].Add(30*time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, []bool{false, false, true, true}, []bool{effective(goldenDataset, periods[0]), effective(goldenDataset, periods[1]), effective(goldenDataset, periods[2]), effective(goldenDataset, periods[3])})
+	require.True(t, snapshot(hashA), "仍被保留的条目引用")
+	require.False(t, snapshot(hashB))
+	require.True(t, snapshot(hashC))
+	hash, found, err := store.effectiveHashFor(goldenSpace, goldenDataset, goldenFreq, periods[2].Add(time.Minute).Unix())
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, hashA, hash)
+	require.True(t, effective("other", periods[0]))
+
+	// 截止晚于所有生效点：只留最后一条。
+	_, err = store.CleanupExpiredBuckets(ctx, goldenSpace, goldenDataset, periods[3].Add(time.Hour))
+	require.NoError(t, err)
+	require.False(t, effective(goldenDataset, periods[2]))
+	require.True(t, effective(goldenDataset, periods[3]))
+	require.False(t, snapshot(hashA))
+	require.True(t, snapshot(hashC))
+	clock.set(periods[3].Add(-time.Minute))
+	replay, err := store.RegisterSeriesSnapshot(ctx, goldenSpace, goldenDataset, goldenFreq, seriesC, periods[3].Unix())
+	require.NoError(t, err)
+	require.True(t, replay.AlreadyRegistered, "最后一条保留，同 P 的重放仍然成功")
+}
