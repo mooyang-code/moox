@@ -127,7 +127,7 @@ func TestNewKlinePipelineRejectsSourcesMissingFromTheCatalog(t *testing.T) {
 		{"crypto", marketdata.InstrumentIndex, "sina"},
 		{"stockcn", marketdata.InstrumentConvertibleBond, "tencent"},
 		{"stockcn", "futures", "eastmoney"},
-		{"stockus", marketdata.InstrumentEquity, "eastmoney"},
+		{"stockjp", marketdata.InstrumentEquity, "eastmoney"},
 	} {
 		_, err := NewKlinePipeline(timerHandlerStorage{}, tc.marketID, tc.instrument, "1d", tc.provider, nil)
 		require.ErrorContains(t, err, "行情源目录里没有", "%+v", tc)

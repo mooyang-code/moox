@@ -1,0 +1,21 @@
+provider:
+  id: eastmoney
+  market: stockus
+  # 只取 K 线：东方财富的美股列表有一万多个代码（含大量 ETF），不当作标的来源；美股的标的由指数成分的标签同步创建。
+  enabled_feeds: [kline]
+  hosts: [push2his.eastmoney.com]
+  kline:
+    endpoint: /api/qt/stock/kline/get
+    # 带 beg 时上游返回区间内的全部根（2026-11-12 实测全量 1412 根、18 个交易日一次返回）；沿用 A 股的 1205，补采按区间分批。
+    max_bars_per_request: 1205
+    volume_unit: shares
+    amount_unit: USD
+  rate_limit:
+    scope: egress_ip
+    # 沿用 A 股东方财富的值：同一个域名，2026-11-06 南京实测单个出口 IP 512 并发突发、每秒 640 次持续都没有触顶。
+    # 美股没有单独测限速；美股交易时段（北京时间 21:30～05:00）与 A 股、港股不重叠，云函数共用南京的出口 IP。
+    requests_per_second: 50
+    burst: 20
+    max_concurrent: 16
+    cooldown: 1s
+    request_timeout: 5s

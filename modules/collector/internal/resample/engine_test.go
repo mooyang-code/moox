@@ -398,7 +398,7 @@ func TestNewTaskRejectsPeriodsThatDoNotDivideTheSession(t *testing.T) {
 	params := `{"provider":"eastmoney","market_type":"equity","source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:x","target_dataset_id":"dataset_task","target_frequency":"45m"}`
 	_, err := NewTask(domain.CollectionTask{SpaceID: "stockcn", TaskID: "task", DataType: "kline_resample", CollectParams: params, ResultDatasetID: "dataset_task", ResultViewID: "view_task"})
 	require.ErrorContains(t, err, "不能整除")
-	_, err = NewTask(domain.CollectionTask{SpaceID: "stockus", TaskID: "task", DataType: "kline_resample", CollectParams: params, ResultDatasetID: "dataset_task", ResultViewID: "view_task"})
+	_, err = NewTask(domain.CollectionTask{SpaceID: "stockjp", TaskID: "task", DataType: "kline_resample", CollectParams: params, ResultDatasetID: "dataset_task", ResultViewID: "view_task"})
 	require.ErrorContains(t, err, "没有登记交易日历")
 }
 

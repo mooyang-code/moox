@@ -157,6 +157,34 @@ tags:
     sync.index: HSI
     sync.cron: "40 8 * * *"
     sync.timezone: Asia/Hong_Kong
+# 美股标普 500 与纳斯达克 100：行情源是东方财富（sync.source），成分名单分别来自 datahub 的开源数据集与纳斯达克官网接口（sync.index_source）。
+# 成分在纽约开盘前（08:00，周一到周五）同步；sync.cron 不写时是每小时一次（UTC），所以必须写 cron 和时区。
+- space_id: stockus
+  tag_id: us_spx
+  tag_name: 标普500
+  description: 标普 500 成分股，每个交易日开盘前按 datahub 的开源成分名单同步
+  mode: auto
+  builtin: true
+  attributes:
+    market_type: equity
+    sync.source: eastmoney
+    sync.index_source: datahub
+    sync.index: SPX
+    sync.cron: "0 8 * * 1-5"
+    sync.timezone: America/New_York
+- space_id: stockus
+  tag_id: us_ndx
+  tag_name: 纳斯达克100
+  description: 纳斯达克 100 成分股，每个交易日开盘前按纳斯达克官网的成分接口同步
+  mode: auto
+  builtin: true
+  attributes:
+    market_type: equity
+    sync.source: eastmoney
+    sync.index_source: nasdaq
+    sync.index: NDX
+    sync.cron: "0 8 * * 1-5"
+    sync.timezone: America/New_York
 
 datasets:
 - space_id: stockcn
@@ -177,19 +205,6 @@ datasets:
   attributes:
     source_directories: 财务预处理数据
     storage_model: wide_common_metrics
-
-- space_id: stockus
-  dataset_id: dataset_stockus_equity_kline_1d
-  data_source_id: market_data
-  name: 美股行情
-  data_kind: time_series
-  freq: 1d
-  attributes:
-    market_id: stockus
-    instrument_type: equity
-    storage_model: wide_common_metrics
-    owner_module: collector
-    dataset_role: raw_collection
 
 field_groups:
 - space_id: stockcn
@@ -1077,83 +1092,6 @@ fields:
 
 dataset_columns:
 
-- space_id: stockus
-  dataset_id: dataset_stockus_equity_kline_1d
-  column_name: open
-  origin_type: field
-  origin_id: open
-  value_type: double
-  status: active
-  attributes:
-    display_name: 开盘价
-- space_id: stockus
-  dataset_id: dataset_stockus_equity_kline_1d
-  column_name: high
-  origin_type: field
-  origin_id: high
-  value_type: double
-  status: active
-  attributes:
-    display_name: 最高价
-- space_id: stockus
-  dataset_id: dataset_stockus_equity_kline_1d
-  column_name: low
-  origin_type: field
-  origin_id: low
-  value_type: double
-  status: active
-  attributes:
-    display_name: 最低价
-- space_id: stockus
-  dataset_id: dataset_stockus_equity_kline_1d
-  column_name: close
-  origin_type: field
-  origin_id: close
-  value_type: double
-  required: true
-  status: active
-  attributes:
-    display_name: 收盘价
-- space_id: stockus
-  dataset_id: dataset_stockus_equity_kline_1d
-  column_name: volume
-  origin_type: field
-  origin_id: volume
-  value_type: double
-  status: active
-  attributes:
-    display_name: 成交量
-- space_id: stockus
-  dataset_id: dataset_stockus_equity_kline_1d
-  column_name: amount
-  origin_type: field
-  origin_id: amount
-  value_type: double
-  status: active
-  attributes:
-    display_name: 成交额
-- space_id: stockus
-  dataset_id: dataset_stockus_equity_kline_1d
-  column_name: provider_id
-  origin_type: field
-  origin_id: provider_id
-  value_type: string
-  status: active
-- space_id: stockus
-  dataset_id: dataset_stockus_equity_kline_1d
-  column_name: source_id
-  origin_type: field
-  origin_id: source_id
-  value_type: string
-  status: active
-- space_id: stockus
-  dataset_id: dataset_stockus_equity_kline_1d
-  column_name: provider_symbol
-  origin_type: field
-  origin_id: provider_symbol
-  value_type: string
-  status: active
-
 - space_id: stockcn
   dataset_id: dataset_stockcn_financial_statement_metric
   column_name: report_date
@@ -1263,15 +1201,4 @@ dataset_columns:
   value_type: json
   status: active
 
-views:
-- space_id: stockus
-  view_id: view_stockus_equity_kline_1d
-  name: 美股行情视图
-  dataset_id: dataset_stockus_equity_kline_1d
-  grain_keys:
-  - subject_id
-  - freq
-  - data_time
-  - series_tag
-  engine: duckdb
-  status: active
+views: []

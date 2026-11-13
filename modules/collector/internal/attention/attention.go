@@ -21,9 +21,12 @@ const (
 	KindOutboxStuck = "event_outbox_stuck"
 	// KindConsumerFailed 是连上 EventBus 之后的初始化（例如 K 线合成的消费者）连续失败，一直没有成功。
 	KindConsumerFailed = "eventbus_consumer_failed"
+	// KindEastMoneyCooling 是标的列表同步用到的东方财富主机（push2 与 push2test）都被限流、Collector 已主动冷却，同步暂缓；
+	// push2 单独冷却时回退 push2test，同步照常，不上报。任一主机探测成功即恢复；冷却结束后若一直没有新请求，值会保持 1，直到下一次探测成功。
+	KindEastMoneyCooling = "eastmoney_cooling_down"
 )
 
-var kinds = []string{KindSourceFailed, KindReadonlyKeyMissing, KindOutboxStuck, KindConsumerFailed}
+var kinds = []string{KindSourceFailed, KindReadonlyKeyMissing, KindOutboxStuck, KindConsumerFailed, KindEastMoneyCooling}
 
 // maxDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
 const maxDetail = 480

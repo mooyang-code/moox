@@ -12,9 +12,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/attention"
 	"github.com/mooyang-code/moox/modules/collector/internal/dnscache"
 	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/eastmoneylimit"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
@@ -28,6 +30,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
+	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -85,6 +88,13 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	process.gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "collector directory refresh failed: %v", err) })
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector gateway: %w", err)
+	}
+
+	// 东方财富的主动限流与冷却：进程内所有直连 *.eastmoney.com 的请求（A 股标的列表、美股交易所对照等）共用，
+	// 要早于标签同步等任何会访问东方财富的后台任务启动。关注项与 EventBus 的关注项合并上报，所以共用一个实例。
+	attn := attention.New(prometheus.DefaultRegisterer)
+	if err := cnstock.ConfigureRequestLimit(cfg.EgressLimits.Eastmoney, eastmoneylimit.New(prometheus.DefaultRegisterer, attn).Observe); err != nil {
+		return nil, fmt.Errorf("初始化东方财富限流器: %w", err)
 	}
 
 	datasetMetrics, err := report.NewDatasetMetrics(prometheus.DefaultRegisterer, "collector")
@@ -178,7 +188,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	}
 	collectorpb.RegisterStreamCollectorService(streamServer, streamService)
 	svc.SetStreamService(streamService)
-	bus, err := newEventBusRuntime(cfg, dbm)
+	bus, err := newEventBusRuntime(cfg, dbm, attn)
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector event bus: %w", err)
 	}

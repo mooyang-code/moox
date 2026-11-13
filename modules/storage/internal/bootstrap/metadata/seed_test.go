@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
@@ -35,16 +34,8 @@ func TestDefaultViewInventory(t *testing.T) {
 	// seed importer. Decode permissively here because this test only asserts the
 	// View inventory.
 	require.NoError(t, yaml.Unmarshal(raw, &seed))
-	got := make([]string, 0, len(seed.Views))
-	for _, view := range seed.Views {
-		got = append(got, view.SpaceID+"/"+view.ViewID)
-	}
-	sort.Strings(got)
-	want := []string{
-		"stockus/view_stockus_equity_kline_1d",
-	}
-	sort.Strings(want)
-	require.Equal(t, want, got)
+	// 默认种子不再声明 View：采集结果的 View 由采集任务派生，主机快照改存 Monitor。
+	require.Empty(t, seed.Views)
 }
 
 func TestDefaultSeedImportsIntoEmptyStoreWithDatasetFrequencies(t *testing.T) {

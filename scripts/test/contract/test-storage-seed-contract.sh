@@ -47,8 +47,9 @@ for file in modules/storage/proto/metadata.proto modules/storage/schema/metadata
 done
 
 require_text config/setup/metadata.yaml 'data_source_id: crypto' 'shared crypto logical DataSource binding'
-require_text config/setup/metadata.yaml 'dataset_id: dataset_stockus_equity_kline_1d' 'seeded stockus equity Dataset'
-require_text config/setup/metadata.yaml 'series_tag' 'tagged time-series grain'
+require_text config/setup/metadata.yaml 'dataset_id: dataset_stockcn_financial_summary' 'seeded stockcn financial Dataset'
+# 行情数据集与 View 由采集任务派生，种子里不再手工声明。
+forbid_text config/setup/metadata.yaml 'dataset_stockus_equity_kline_1d' 'manually seeded stockus market Dataset'
 require_text modules/storage/proto/metadata.proto 'int64 revision = 20;' 'Dataset revision CAS'
 [[ ! -e modules/storage/config/metadata.seed.yaml ]] || fail 'duplicate storage metadata seed remains outside config/setup'
 

@@ -54,7 +54,7 @@ func TestMarketFilesAreEmbedded(t *testing.T) {
 		require.NoError(t, err, source)
 		require.True(t, found, source)
 	}
-	for _, marketID := range []string{"crypto", "stockcn", "stockhk"} {
+	for _, marketID := range []string{"crypto", "stockcn", "stockhk", "stockus"} {
 		_, err := markets.ConfigFor(marketID)
 		require.NoError(t, err, marketID)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/eventbus"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
+	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/security/domainpolicy"
 	"gopkg.in/yaml.v3"
@@ -38,8 +39,15 @@ type Config struct {
 	// Delist 是下架检测的开关，安装时按拓扑渲染：没有出口代理（没配海外机）时关掉自动检测。
 	Delist      DelistConfig       `yaml:"delist"`
 	SubjectSync subjectsync.Config `yaml:"subject_sync"`
+	// EgressLimits 是 Collector 进程直连外部数据源时的主动限流与冷却；目前只有东方财富，都有代码默认值，配置里可以不写。
+	EgressLimits EgressLimitsConfig `yaml:"egress_limits"`
 	// Stream 是 WS 推送采集的 Collector 侧参数（截止、提交预留随计划下发给 collector-stream）。
 	Stream StreamConfig `yaml:"stream"`
+}
+
+// EgressLimitsConfig 是各外部数据源的限流参数。
+type EgressLimitsConfig struct {
+	Eastmoney cnstock.RequestLimitConfig `yaml:"eastmoney"`
 }
 
 // StreamConfig 是推送采集的参数。没有 REST 兜底，也没有兜底相关的配置。
@@ -200,6 +208,9 @@ func Load(path string) (*Config, error) {
 	if err := cfg.SubjectSync.Validate(); err != nil {
 		return nil, fmt.Errorf("subject_sync: %w", err)
 	}
+	if err := cfg.EgressLimits.Eastmoney.Validate(); err != nil {
+		return nil, fmt.Errorf("egress_limits.eastmoney: %w", err)
+	}
 	if err := cfg.validateSCFAccess(); err != nil {
 		return nil, err
 	}
@@ -323,11 +334,12 @@ func Default() *Config {
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
-		SCFPlan:     defaultSCFPlan(),
-		SubjectSync: subjectsync.DefaultConfig(),
-		Stream:      defaultStreamConfig(),
-		Delist:      DelistConfig{AutoDetect: true},
-		SCFAccess:   gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
+		SCFPlan:      defaultSCFPlan(),
+		SubjectSync:  subjectsync.DefaultConfig(),
+		EgressLimits: EgressLimitsConfig{Eastmoney: cnstock.DefaultRequestLimitConfig()},
+		Stream:       defaultStreamConfig(),
+		Delist:       DelistConfig{AutoDetect: true},
+		SCFAccess:    gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
 		CollectorRetention: CollectorRetentionConfig{
 			MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000,
 		},

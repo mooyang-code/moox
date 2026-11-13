@@ -73,5 +73,5 @@ func TestValidateTaskParamsStockSessionMarketRejectsPeriodsThatDoNotDivideSessio
 }
 
 func TestValidateTaskParamsRejectsMarketsWithoutCalendar(t *testing.T) {
-	require.ErrorContains(t, ValidateTaskParams("stockus", parseResampleParams(t, "1m", "5m", "")), "没有登记交易日历")
+	require.ErrorContains(t, ValidateTaskParams("stockjp", parseResampleParams(t, "1m", "5m", "")), "没有登记交易日历")
 }

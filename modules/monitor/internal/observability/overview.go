@@ -1201,13 +1201,16 @@ var CollectorAttentionNames = map[string]string{
 	"delist_readonly_key_missing": "下架检测缺少币安只读 Key",
 	"event_outbox_stuck":          "Collector 事件发件箱积压",
 	"eventbus_consumer_failed":    "Collector EventBus 消费者启动失败",
+	"eastmoney_cooling_down":      "东方财富请求被限流，Collector 已暂停访问",
 }
 
 // warningAttention 是只需提醒、不算故障的关注项（检查 ID）：功能还在，只少了一部分。
-// 例如缺币安只读 Key 时只是现货下架改为手工登记，不能挡住安装验收。
+// 例如缺币安只读 Key 时只是现货下架改为手工登记，不能挡住安装验收；
+// 东方财富冷却时只是标的列表同步暂缓（云函数采集不受影响），冷却结束探测成功后自动恢复。
 // 这些关注项触发时业务检查是 degraded（需关注），告警级别是 warning；其余关注项是 down 和 critical。
 var warningAttention = map[string]bool{
 	"collector_attention:delist_readonly_key_missing": true,
+	"collector_attention:eastmoney_cooling_down":      true,
 }
 
 // AttentionIsWarning 报告关注项触发时是否只算提醒（warning），不算故障。

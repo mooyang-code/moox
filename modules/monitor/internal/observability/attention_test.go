@@ -95,6 +95,9 @@ func TestReadonlyKeyMissingIsDegradedNotDown(t *testing.T) {
 	require.Equal(t, "down", checks["collector_attention:delist_source_failed"].Status)
 	require.True(t, AttentionIsWarning("collector_attention", "delist_readonly_key_missing"))
 	require.False(t, AttentionIsWarning("collector_attention", "delist_source_failed"))
+	// 东方财富冷却同样只是提醒：云函数采集不受影响，探测成功后自动恢复。
+	require.True(t, AttentionIsWarning("collector_attention", "eastmoney_cooling_down"))
+	require.NotEmpty(t, AttentionCheckName("collector_attention", "eastmoney_cooling_down"))
 }
 
 func TestAttentionCheckNames(t *testing.T) {
