@@ -29,6 +29,7 @@ func TestFollowStatePersistsWithRowsAndOnlyAdvances(t *testing.T) {
 	stats, err := m.StatMetadata(ctx, "idx")
 	require.NoError(t, err)
 	require.Equal(t, viewindex.FollowState{}, stats.Follow, "新建的索引没有跟随进度")
+	require.Equal(t, "2026-11-01 00:00:00", stats.ViewCreatedAt, "建索引时记下 View 的创建时间")
 
 	require.NoError(t, m.SaveFollowState(ctx, "idx", viewindex.FollowState{Cursor: viewindex.ChangeCursor{StoreID: "store-a", Sequence: 10}, BuiltSequence: 15}))
 	write := func(seq uint64) {

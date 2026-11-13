@@ -177,6 +177,7 @@ func (s *Service) rebuildFollowIndex(ctx context.Context, ref viewRef) (viewinde
 	}
 	bars := viewBars(view, opts)
 	schema.RowsPerSeries = min(bars, maxLatestPerSeries)
+	schema.ViewCreatedAt = view.GetCreatedAt()
 	// 建成之前不可读：查询、加列、删除最旧数据都只看活动索引；维护流程看到 building 时不会把它挂回去。
 	runtime.clearActiveLocked()
 	runtime.building = indexID

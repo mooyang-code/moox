@@ -21,6 +21,7 @@ func deleteOldestTestIndex(t *testing.T) (*IndexManager, time.Time) {
 	t.Cleanup(func() { _ = m.Close() })
 	require.NoError(t, m.Prepare(ctx, "idx", viewindex.ViewIndexSchema{
 		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
+		ViewCreatedAt: "2026-11-01 00:00:00",
 		Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
 	}))
 	base := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)

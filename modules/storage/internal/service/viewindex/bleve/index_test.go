@@ -242,7 +242,7 @@ func TestBleveFollowStatePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", Columns: []*pb.ViewColumn{
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", ViewCreatedAt: "2026-11-01 00:00:00", Columns: []*pb.ViewColumn{
 		{ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
 	}}
 	if err := index.Prepare(ctx, "idx", schema); err != nil {
@@ -275,6 +275,9 @@ func TestBleveFollowStatePersists(t *testing.T) {
 	want := viewindex.FollowState{Cursor: viewindex.ChangeCursor{StoreID: "store", Sequence: 9}, BuiltSequence: 7}
 	if stats.Follow != want {
 		t.Fatalf("跟随进度=%+v，应为 %+v", stats.Follow, want)
+	}
+	if stats.ViewCreatedAt != "2026-11-01 00:00:00" {
+		t.Fatalf("重新打开后 View 创建时间=%q", stats.ViewCreatedAt)
 	}
 }
 

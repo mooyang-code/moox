@@ -255,14 +255,18 @@ func TestRestoreActiveViewsAttachesBuiltIndexFile(t *testing.T) {
 	}
 }
 
-// 没有文件、没建完（没记下跟随进度）或属于另一个数据集的索引都不挂接，也不让启动失败，由维护流程重新建。
+// 没有文件、没建完（没记下跟随进度）、属于另一个数据集或另一个同 ID 的 View 的索引都不挂接，也不让启动失败，由维护流程重新建。
 func TestRestoreActiveViewsSkipsUnbuiltIndexFiles(t *testing.T) {
 	half := builtStats("prices", 1, "hash")
 	half.Follow = viewindex.FollowState{}
+	// 删除后按同样 ID 重建的 View：数据集相同，创建时间不同。
+	recreated := builtStats("prices", 1, "hash")
+	recreated.ViewCreatedAt = "2026-11-01 00:00:00"
 	for name, stats := range map[string]viewindex.ViewIndexStats{
-		"missing":       {},
-		"half_built":    half,
-		"other_dataset": builtStats("fundamentals", 1, "hash"),
+		"missing":        {},
+		"half_built":     half,
+		"other_dataset":  builtStats("fundamentals", 1, "hash"),
+		"recreated_view": recreated,
 	} {
 		t.Run(name, func(t *testing.T) {
 			svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")

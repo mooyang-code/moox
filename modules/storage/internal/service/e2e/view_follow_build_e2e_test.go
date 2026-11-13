@@ -374,3 +374,61 @@ func TestFollowRebuildsWhenActiveIndexFileRemoved(t *testing.T) {
 	env.WaitApplied(t, ctx, kline.viewID)
 	requireViewRows(t, ctx, env, kline.viewID, next, next.Add(readyBenchStep), uint64(len(kline.subjects)))
 }
+
+// 删掉数据集与 View 后按同样的 ID 重建（Collector 的结果数据集与 View 由任务 ID 推出）：索引标识不变，
+// 新 View 不能挂上旧索引、查出已删数据集的行；维护流程按创建时间认出旧索引并重建。建好的索引在之后的维护轮次里不重复重建。
+func TestRecreatedViewDoesNotReuseOldIndex(t *testing.T) {
+	ctx := context.Background()
+	kline := readyBenchDataset{datasetID: "bench_kline_recreate", viewID: "bench_kline_recreate_view", subjects: []string{"BTC-USDT", "ETH-USDT"}, columns: readyBenchKlineColumns}
+	env := newFollowEnv(t, []readyBenchDataset{kline}, followEnvOptions{})
+	env.WaitBuilt(t, ctx, kline.viewID)
+	write := func(period time.Time, round int) {
+		rows := make([]*pb.RowFieldUpsert, len(kline.subjects))
+		for i, subject := range kline.subjects {
+			rows[i] = readyBenchRow(kline, subject, period, round)
+		}
+		writeRowsInBatches(t, ctx, env, kline, rows, "")
+	}
+	write(readyBenchBase, 0)
+	env.WaitApplied(t, ctx, kline.viewID)
+	requireViewRows(t, ctx, env, kline.viewID, readyBenchBase, readyBenchBase.Add(readyBenchStep), uint64(len(kline.subjects)))
+	// 建成之后日志头部已前进：维护（每 100 毫秒一轮）若重复重建，建成序号就会变。
+	before := env.WaitBuilt(t, ctx, kline.viewID)
+	time.Sleep(600 * time.Millisecond)
+	if again := env.WaitBuilt(t, ctx, kline.viewID); again.GetGeneration() != before.GetGeneration() {
+		t.Fatalf("建好的索引不应在维护轮次里重建：before=%d after=%d", before.GetGeneration(), again.GetGeneration())
+	}
+
+	// 删除数据集的行，并在两轮维护之间按同样的 ID 重建 View：只有创建时间不同。
+	if _, err := env.store.DeleteDatasetRows(ctx, readyBenchSpace, kline.datasetID); err != nil {
+		t.Fatal(err)
+	}
+	env.metadata.mu.Lock()
+	env.metadata.views[0].CreatedAt = "2026-11-02 00:00:00"
+	env.metadata.mu.Unlock()
+	next := readyBenchBase.Add(readyBenchStep)
+	write(next, 1)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		state := env.WaitBuilt(t, ctx, kline.viewID)
+		if state.GetGeneration() != before.GetGeneration() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("30 秒内重建的 View 没有重建索引：%v", state)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// 重建刚完成时跟随器可能还没起来（WaitViewApplied 返回未就绪），等新写入的行出现。
+	for {
+		got, err := env.CountViewRows(ctx, kline.viewID, "", next, next.Add(readyBenchStep))
+		if err == nil && got == uint64(len(kline.subjects)) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("30 秒内重建后的 View 没有新写入的行：got=%d err=%v", got, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	requireViewRows(t, ctx, env, kline.viewID, readyBenchBase, next, 0)
+}

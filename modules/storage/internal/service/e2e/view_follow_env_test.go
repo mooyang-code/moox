@@ -38,6 +38,8 @@ const (
 	// followEnvPrefillBatch 是预填 View 时每次直接写入索引的行数。
 	followEnvPrefillBatch = 20000
 	followEnvSchemaHash   = "follow-env-schema-1"
+	// followEnvViewCreatedAt 是 View 元数据的创建时间（与 SQLite 的 c_ctime 同一格式）。
+	followEnvViewCreatedAt = "2026-11-01 00:00:00"
 )
 
 // followEnv 是一套装配好的 Storage：Primary、跟随变更日志的 View、EventBus。实现 readyBenchEnv。
@@ -265,7 +267,7 @@ func followEnvView(dataset readyBenchDataset) *pb.View {
 		columns[i] = &pb.ViewColumn{SpaceId: readyBenchSpace, ViewId: dataset.viewID, ColumnName: column.name, OriginId: column.name, ValueType: column.kind,
 			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, SortOrder: uint32(i)}
 	}
-	return &pb.View{SpaceId: readyBenchSpace, ViewId: dataset.viewID, DatasetId: dataset.datasetID, Engine: "duckdb", Freq: readyBenchFreq, Columns: columns, Status: "active"}
+	return &pb.View{SpaceId: readyBenchSpace, ViewId: dataset.viewID, DatasetId: dataset.datasetID, Engine: "duckdb", Freq: readyBenchFreq, Columns: columns, Status: "active", CreatedAt: followEnvViewCreatedAt}
 }
 
 // prebuildFollowEnvIndex 在 View 进程启动前直接建好索引、按 prefillBars 写入历史，并把当前日志头部记为跟随起点与建成序号。
@@ -277,7 +279,7 @@ func prebuildFollowEnvIndex(t *testing.T, ctx context.Context, root string, stor
 	}
 	defer manager.Close()
 	indexID := viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId())
-	schema := viewindex.ViewIndexSchema{SpaceID: readyBenchSpace, ViewID: view.GetViewId(), PrimaryDatasetID: dataset.datasetID, ViewVersion: 1, Engine: "duckdb", SchemaHash: followEnvSchemaHash, Columns: view.GetColumns()}
+	schema := viewindex.ViewIndexSchema{SpaceID: readyBenchSpace, ViewID: view.GetViewId(), PrimaryDatasetID: dataset.datasetID, ViewVersion: 1, Engine: "duckdb", SchemaHash: followEnvSchemaHash, Columns: view.GetColumns(), ViewCreatedAt: view.GetCreatedAt()}
 	if err := manager.Prepare(ctx, indexID, schema); err != nil {
 		t.Fatal(err)
 	}

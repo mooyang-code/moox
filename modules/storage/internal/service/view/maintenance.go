@@ -183,7 +183,7 @@ func (s *Service) startViewMaintenanceLoop(ctx context.Context, opts Maintenance
 }
 
 // RestoreActiveViews 只挂接已经建好的索引文件，不建新索引，可以在连 EventBus 之前运行，不拖住实时流。
-// 没有文件、没建完（没记下跟随进度）或属于另一个数据集（删除后同名重建）的 View 不挂接，由维护流程重新建。
+// 没有文件、没建完（没记下跟随进度）或不属于它（删除后同 ID 重建）的 View 不挂接，由维护流程重新建。
 func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOptions) error {
 	if opts.Metadata == nil {
 		return errors.New("metadata client is required")
@@ -238,10 +238,16 @@ func restoreIndexStats(ctx context.Context, engine viewindex.Engine, indexID str
 	return engine.Stat(ctx, indexID)
 }
 
-// indexBuiltFor 报告索引文件是否是这个 View 建好的索引：文件存在、属于 View 当前的数据集、记下了跟随进度
+// indexOwnedBy 报告索引文件是否属于这个 View：文件存在、数据集与 View 的创建时间都和元数据一致。
+// 索引标识只由空间与 View 决定，删除后按同样 ID 重建的 View（数据集 ID 也可能相同）靠创建时间认出旧索引。
+func indexOwnedBy(view *pb.View, stats viewindex.ViewIndexStats) bool {
+	return stats.Exists && stats.DatasetID == view.GetDatasetId() && stats.ViewCreatedAt == view.GetCreatedAt()
+}
+
+// indexBuiltFor 报告索引文件是否是这个 View 建好的索引：属于这个 View，且记下了跟随进度
 // （建索引的最后一步才记，没记的是半成品）。
 func indexBuiltFor(view *pb.View, stats viewindex.ViewIndexStats) bool {
-	return stats.Exists && stats.DatasetID == view.GetDatasetId() && stats.Follow.Cursor.StoreID != ""
+	return indexOwnedBy(view, stats) && stats.Follow.Cursor.StoreID != ""
 }
 
 func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) error {
@@ -389,7 +395,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, vie
 		return err
 	}
 	// 本进程刚建好、还没有跟随器记进度的索引（没起跟随时）同样算建好。
-	if !indexBuiltFor(view, stats) && !(active == indexID && stats.Exists && stats.DatasetID == view.GetDatasetId()) {
+	if !indexBuiltFor(view, stats) && !(active == indexID && indexOwnedBy(view, stats)) {
 		return s.buildInitialIndex(ctx, opts, view)
 	}
 	s.observeViewFileSize(view, indexID, stats, opts)

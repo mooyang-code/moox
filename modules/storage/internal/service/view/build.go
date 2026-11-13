@@ -95,6 +95,7 @@ func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: initialViewRevision,
 		PrimaryDatasetID: view.GetDatasetId(), Engine: engine, Columns: columns, RowsPerSeries: min(bars, maxLatestPerSeries),
+		ViewCreatedAt: view.GetCreatedAt(),
 	}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	indexID := viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId())
@@ -308,6 +309,7 @@ func builtSchema(view *pb.View, engineName string, stats viewindex.ViewIndexStat
 	return viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetDatasetId(), ViewVersion: stats.ViewVersion,
 		Engine: engineName, Columns: stats.Columns, SchemaHash: stats.SchemaHash, RowsPerSeries: stats.RowsPerSeries,
+		ViewCreatedAt: view.GetCreatedAt(),
 	}
 }
 

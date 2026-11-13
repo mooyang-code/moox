@@ -138,7 +138,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		createColumns = append(createColumns, quote(name)+" "+duckType(valueType))
 	}
 	statement := fmt.Sprintf(`
-		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '', rows_per_series UBIGINT NOT NULL DEFAULT 0, change_store_id VARCHAR NOT NULL DEFAULT '', change_seq UBIGINT NOT NULL DEFAULT 0, built_change_seq UBIGINT NOT NULL DEFAULT 0, columns_json VARCHAR NOT NULL DEFAULT '[]');
+		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '', rows_per_series UBIGINT NOT NULL DEFAULT 0, change_store_id VARCHAR NOT NULL DEFAULT '', change_seq UBIGINT NOT NULL DEFAULT 0, built_change_seq UBIGINT NOT NULL DEFAULT 0, columns_json VARCHAR NOT NULL DEFAULT '[]', view_created_at VARCHAR NOT NULL DEFAULT '');
 		CREATE TABLE view_columns (column_name VARCHAR PRIMARY KEY, value_type INTEGER NOT NULL);
 		CREATE TABLE view_series_counts (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, series_tag VARCHAR NOT NULL, row_count UBIGINT NOT NULL, PRIMARY KEY (subject_id, freq, series_tag));
 		CREATE TABLE view_rows (%s, PRIMARY KEY (subject_id, freq, data_time, series_tag));
@@ -152,7 +152,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		cleanupTemp()
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta (singleton, view_version, schema_hash, primary_dataset_id, space_id, updated_at, rows_per_series, columns_json) VALUES (1, ?, ?, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano), schema.RowsPerSeries, string(builtColumns)); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta (singleton, view_version, schema_hash, primary_dataset_id, space_id, updated_at, rows_per_series, columns_json, view_created_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano), schema.RowsPerSeries, string(builtColumns), schema.ViewCreatedAt); err != nil {
 		cleanupTemp()
 		return err
 	}
@@ -914,7 +914,7 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 	}
 	var stats viewindex.ViewIndexStats
 	var builtColumns string
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series, change_store_id, change_seq, built_change_seq, primary_dataset_id, columns_json FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries, &stats.Follow.Cursor.StoreID, &stats.Follow.Cursor.Sequence, &stats.Follow.BuiltSequence, &stats.DatasetID, &builtColumns); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series, change_store_id, change_seq, built_change_seq, primary_dataset_id, columns_json, view_created_at FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries, &stats.Follow.Cursor.StoreID, &stats.Follow.Cursor.Sequence, &stats.Follow.BuiltSequence, &stats.DatasetID, &builtColumns, &stats.ViewCreatedAt); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	if stats.Columns, err = decodeBuiltColumns(builtColumns); err != nil {
@@ -1030,7 +1030,7 @@ func (m *IndexManager) StatMetadata(ctx context.Context, id string) (viewindex.V
 	}
 	var stats viewindex.ViewIndexStats
 	var builtColumns string
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series, change_store_id, change_seq, built_change_seq, primary_dataset_id, columns_json FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries, &stats.Follow.Cursor.StoreID, &stats.Follow.Cursor.Sequence, &stats.Follow.BuiltSequence, &stats.DatasetID, &builtColumns); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series, change_store_id, change_seq, built_change_seq, primary_dataset_id, columns_json, view_created_at FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries, &stats.Follow.Cursor.StoreID, &stats.Follow.Cursor.Sequence, &stats.Follow.BuiltSequence, &stats.DatasetID, &builtColumns, &stats.ViewCreatedAt); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	if stats.Columns, err = decodeBuiltColumns(builtColumns); err != nil {

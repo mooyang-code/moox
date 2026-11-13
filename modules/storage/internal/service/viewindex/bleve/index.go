@@ -39,12 +39,14 @@ type handle struct {
 }
 
 type indexMeta struct {
-	SpaceID          string                       `json:"space_id"`
-	ViewVersion      uint64                       `json:"view_version"`
-	SchemaHash       string                       `json:"schema_hash"`
-	PrimaryDatasetID string                       `json:"primary_dataset_id"`
-	UpdatedAt        string                       `json:"updated_at"`
-	Columns          map[string]pb.FieldValueType `json:"columns"`
+	SpaceID          string `json:"space_id"`
+	ViewVersion      uint64 `json:"view_version"`
+	SchemaHash       string `json:"schema_hash"`
+	PrimaryDatasetID string `json:"primary_dataset_id"`
+	// ViewCreatedAt 是建索引时 View 的创建时间，见 viewindex.ViewIndexSchema.ViewCreatedAt。
+	ViewCreatedAt string                       `json:"view_created_at"`
+	UpdatedAt     string                       `json:"updated_at"`
+	Columns       map[string]pb.FieldValueType `json:"columns"`
 	// BuiltColumns 是已建列的完整契约（含排序），重启后由它还原写入契约。
 	BuiltColumns []viewindex.BuiltColumn `json:"built_columns"`
 	// ChangeStoreID、ChangeSequence、BuiltSequence 是跟随变更日志的进度，见 viewindex.FollowState。
@@ -77,7 +79,7 @@ func (i *Index) Prepare(_ context.Context, id string, schema viewindex.ViewIndex
 	if err := os.RemoveAll(path); err != nil {
 		return err
 	}
-	meta := indexMeta{SpaceID: schema.SpaceID, ViewVersion: schema.ViewVersion, SchemaHash: schema.SchemaHash, PrimaryDatasetID: schema.PrimaryDatasetID, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Columns: schemaColumns(schema.Columns), BuiltColumns: viewindex.EncodeBuiltColumns(schema.Columns)}
+	meta := indexMeta{SpaceID: schema.SpaceID, ViewVersion: schema.ViewVersion, SchemaHash: schema.SchemaHash, PrimaryDatasetID: schema.PrimaryDatasetID, ViewCreatedAt: schema.ViewCreatedAt, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Columns: schemaColumns(schema.Columns), BuiltColumns: viewindex.EncodeBuiltColumns(schema.Columns)}
 	index, err := blevelib.New(path, buildMapping(meta.Columns))
 	if err != nil {
 		return err
@@ -333,7 +335,7 @@ func halfPrepared(path string) bool {
 
 // stats 返回索引自身记录的契约与进度（不含行数）。
 func (m indexMeta) stats() viewindex.ViewIndexStats {
-	return viewindex.ViewIndexStats{Exists: true, DatasetID: m.PrimaryDatasetID, Columns: viewindex.DecodeBuiltColumns(m.BuiltColumns), ViewVersion: m.ViewVersion, SchemaHash: m.SchemaHash, UpdatedAt: m.UpdatedAt, Follow: m.followState()}
+	return viewindex.ViewIndexStats{Exists: true, DatasetID: m.PrimaryDatasetID, ViewCreatedAt: m.ViewCreatedAt, Columns: viewindex.DecodeBuiltColumns(m.BuiltColumns), ViewVersion: m.ViewVersion, SchemaHash: m.SchemaHash, UpdatedAt: m.UpdatedAt, Follow: m.followState()}
 }
 
 func (i *Index) Exists(_ context.Context, id string) (bool, error) {
