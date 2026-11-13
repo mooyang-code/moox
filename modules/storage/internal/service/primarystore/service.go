@@ -35,7 +35,7 @@ func requestValidator(ctx context.Context, v Validator) Validator {
 
 // Store 是 PrimaryStore 读写的事实存储，即同进程的 Pebble 库。
 type Store interface {
-	UpsertFields(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) ([]*pebble.OutboxEntry, error)
+	UpsertFields(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error)
 	ReadRows(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error)
 	ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
 	CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesRowsReq) ([]*pb.SubjectRowCount, error)
@@ -48,9 +48,6 @@ type Store interface {
 
 type Authorizer func(*pb.AuthInfo) error
 type SnapshotProvider func() metadata.RequestSnapshot
-type ViewSyncPointReader interface {
-	MissingViewSyncPointDatasets(context.Context, string, string, string, []string) ([]string, error)
-}
 type routeKey struct{ spaceID, datasetID string }
 type DatasetRunObserver interface {
 	ObserveRun(report.DatasetObservation) error
@@ -69,7 +66,6 @@ type Service struct {
 	snapshot  SnapshotProvider
 	metrics   DatasetRunObserver
 	rejection DeadlineRejectionObserver
-	syncPoint ViewSyncPointReader
 }
 
 type Options struct {
@@ -80,7 +76,6 @@ type Options struct {
 	DatasetMetrics DatasetRunObserver
 	// DeadlineRejections 为空时不记录截止拒绝。
 	DeadlineRejections DeadlineRejectionObserver
-	SyncPoints         ViewSyncPointReader
 }
 
 func New(opts Options) (*Service, error) {
@@ -89,7 +84,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		store: opts.Store, validate: opts.Validator, authorize: opts.Authorizer,
-		snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, rejection: opts.DeadlineRejections, syncPoint: opts.SyncPoints,
+		snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, rejection: opts.DeadlineRejections,
 	}, nil
 }
 

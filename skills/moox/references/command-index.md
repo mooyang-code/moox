@@ -390,11 +390,8 @@
 | 命令 | 说明 |
 | --- | --- |
 | `storage delete-view` | 离线删除一个 View 的元数据（不带 --yes 时存储机上的程序会拒绝执行） |
-| `storage force-rebuild-view` | 删除旧 View、清空 durable consumer 状态并从头重建（默认只预览，--yes 才执行） |
-| `storage purge-dataset-events` | 精确清理一个数据集在 EventBus 里的历史事件（默认只预览，--yes 才执行） |
-| `storage repair-view` | 清理 View 消费积压并重建索引（默认只预览，--yes 才执行） |
+| `storage repair-view` | 重建指定 View 的索引（默认只预览，--yes 才执行） |
 | `storage reset-metadata` | 备份后清空全部业务定义并重新导入种子（Storage 必须已停止；默认只预览，--yes 才执行） |
-| `storage reset-view-consumers` | 删除所有 View durable/历史消息/索引并按回溯窗口重新构建（默认只预览，--yes 才执行） |
 
 ## strategy：策略定义、实例、结果、历史回放与模板（调用 StrategyMgr）
 

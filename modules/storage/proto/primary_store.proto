@@ -110,17 +110,6 @@ message ReportDatasetPeriodCompletedRsp {
   common.RetInfo ret_info = 1;
   string event_id = 2;
 }
-message AppendDatasetSyncPointReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  DatasetSyncPointMarker sync_point = 3;
-}
-
-message AppendDatasetSyncPointRsp {
-  common.RetInfo ret_info = 1;
-  string event_id = 2;
-}
-
 message GetDatasetPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -134,21 +123,6 @@ message GetDatasetPeriodCompletedRsp {
   string event_id = 3;
   DatasetPeriodCompletedMarker marker = 4;
 }
-message WaitViewSyncPointReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string view_id = 3;
-  string request_id = 4;
-  repeated string dataset_ids = 5;
-  uint32 wait_timeout_ms = 6;
-}
-
-message WaitViewSyncPointRsp {
-  common.RetInfo ret_info = 1;
-  bool ready = 2;
-  repeated string pending_dataset_ids = 3;
-}
-
 // PrimaryStore 是带元数据校验的读写入口，直接读写同进程的 Pebble 存储。
 service PrimaryStore {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
@@ -161,7 +135,5 @@ service PrimaryStore {
   // ReadDatasetChanges 按序读取持久化的变更日志（行写入与完成标记）：因子机的本地副本据此同步修正，View 据此跟随写入。
   rpc ReadDatasetChanges(ReadDatasetChangesReq) returns (ReadDatasetChangesRsp);
   rpc ReportDatasetPeriodCompleted(ReportDatasetPeriodCompletedReq) returns (ReportDatasetPeriodCompletedRsp);
-  rpc AppendDatasetSyncPoint(AppendDatasetSyncPointReq) returns (AppendDatasetSyncPointRsp);
   rpc GetDatasetPeriodCompleted(GetDatasetPeriodCompletedReq) returns (GetDatasetPeriodCompletedRsp);
-  rpc WaitViewSyncPoint(WaitViewSyncPointReq) returns (WaitViewSyncPointRsp);
 }

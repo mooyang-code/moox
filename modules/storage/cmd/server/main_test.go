@@ -260,56 +260,6 @@ func TestStorageEventBusConfigLoadsCredentialFromStorageConfig(t *testing.T) {
 	}
 }
 
-// 所有数据集的动态消费者共用同一个投递模板：全局并发参数来自配置，新建的 durable 回放完整历史。
-func TestStorageViewConsumerTemplateUsesTheGlobalSettings(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    credential_file: \"\"\n  view:\n    fetch_batch: 4\n    max_workers: 2\n    max_ack_pending: 16\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	opts, err := storageViewConsumerTemplate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opts.FetchBatch != 4 || opts.MaxWorkers != 2 || opts.MaxAckPending != 16 || opts.Ordering != "dataset" || opts.DeliverPolicy != "all" || opts.MaxRetryAttempts != -1 {
-		t.Fatalf("consumer template = %+v", opts)
-	}
-	if len(opts.FilterSubjects) != 0 || len(opts.DatasetRoutes) != 0 {
-		t.Fatalf("模板不带任何数据集路由：%+v", opts)
-	}
-}
-
-func TestStorageViewConsumerTemplateRejectsInvalidSettings(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    fetch_batch: 8\n    max_ack_pending: 4\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	if _, err := storageViewConsumerTemplate(); err == nil {
-		t.Fatal("fetch_batch 超过 max_ack_pending 的配置被接受")
-	}
-}
-
-func TestStorageViewConfigFilesUseSerialDelivery(t *testing.T) {
-	for _, path := range []string{
-		filepath.Join("..", "..", "config", "storage.yaml"),
-		filepath.Join("..", "..", "config", "storage_view", "trpc_go.yaml"),
-	} {
-		t.Run(path, func(t *testing.T) {
-			t.Setenv("MOOX_STORAGE_CONFIG", path)
-			opts, err := storageViewConsumerTemplate()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if opts.FetchBatch != 1 || opts.MaxWorkers != 1 || opts.MaxAckPending != 1 {
-				t.Fatalf("delivery budget = %d/%d/%d, want the serialized 1/1/1", opts.FetchBatch, opts.MaxWorkers, opts.MaxAckPending)
-			}
-		})
-	}
-}
-
 func TestStorageViewDeleteOldestBatchSizeDefaultsAndBounds(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_CONFIG", "")
 	if size, err := storageViewDeleteOldestBatchSize(); err != nil || size != 2000 {
@@ -320,7 +270,7 @@ func TestStorageViewDeleteOldestBatchSizeDefaultsAndBounds(t *testing.T) {
 		want    int
 		wantErr bool
 	}{
-		{yaml: "storage:\n  view:\n    batch_size: 500\n", want: 2000},
+		{yaml: "storage:\n  view:\n    backfill_page_size: 500\n", want: 2000},
 		{yaml: "storage:\n  view:\n    delete_oldest_batch_size: 500\n", want: 500},
 		{yaml: "storage:\n  view:\n    delete_oldest_batch_size: 20001\n", wantErr: true},
 		{yaml: "storage:\n  view:\n    delete_oldest_batch_size: -1\n", wantErr: true},

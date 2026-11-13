@@ -50,7 +50,7 @@ func completeTestBuild(t *testing.T, ctx context.Context, store *Store) *pb.View
 
 func TestCompleteViewInitialBuildIsIdempotentAndWritesGeneration(t *testing.T) {
 	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
+	store := openViewTestStore(t, ctx)
 	view := completeTestBuild(t, ctx, store)
 	indexID := coreviewindex.ViewIndexID("space", "source-view")
 	if view.GetActiveIndexId() != indexID || view.GetViewRevision() != 1 || len(view.GetActiveColumns()) != 1 {
@@ -78,7 +78,7 @@ func TestCompleteViewInitialBuildIsIdempotentAndWritesGeneration(t *testing.T) {
 
 func TestCompleteViewInitialBuildRejectsMismatchedIdentity(t *testing.T) {
 	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
+	store := openViewTestStore(t, ctx)
 	view, err := store.GetView(ctx, "space", "source-view")
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestCompleteViewInitialBuildRejectsMismatchedIdentity(t *testing.T) {
 
 func TestViewEditsKeepIndexStateAndCannotForgeGeneration(t *testing.T) {
 	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
+	store := openViewTestStore(t, ctx)
 	built := completeTestBuild(t, ctx, store)
 	generation := built.GetAttributes()[metadatastore.IndexGenerationAttribute]
 	edited := proto.Clone(built).(*pb.View)
@@ -121,7 +121,7 @@ func TestViewEditsKeepIndexStateAndCannotForgeGeneration(t *testing.T) {
 
 func TestCommitViewSchemaExtensionCASAndRetry(t *testing.T) {
 	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
+	store := openViewTestStore(t, ctx)
 	built := completeTestBuild(t, ctx, store)
 	columns := []*pb.ViewColumn{testViewColumn("close", 0), testViewColumn("bias_20", 1)}
 	req := &pb.CommitViewSchemaExtensionReq{
@@ -159,7 +159,7 @@ func TestCommitViewSchemaExtensionCASAndRetry(t *testing.T) {
 
 func TestViewColumnsAreAppendOnly(t *testing.T) {
 	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
+	store := openViewTestStore(t, ctx)
 	if _, err := store.UpsertViewColumn(ctx, testViewColumn("close", 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestViewColumnsAreAppendOnly(t *testing.T) {
 
 func TestReplaceViewColumnsMustKeepBuiltColumns(t *testing.T) {
 	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
+	store := openViewTestStore(t, ctx)
 	built := completeTestBuild(t, ctx, store)
 	view := proto.Clone(built).(*pb.View)
 	view.Columns = []*pb.ViewColumn{testViewColumn("volume", 0)}
@@ -211,7 +211,7 @@ func TestReplaceViewColumnsMustKeepBuiltColumns(t *testing.T) {
 
 func TestViewDefinitionIsImmutable(t *testing.T) {
 	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
+	store := openViewTestStore(t, ctx)
 	view, err := store.GetView(ctx, "space", "source-view")
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestViewDefinitionIsImmutable(t *testing.T) {
 // 列被禁用，或引用的字段不再启用，都算逻辑上已删除：随 View 下发，View 的列定义不变。
 func TestViewReportsHiddenDatasetColumns(t *testing.T) {
 	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
+	store := openViewTestStore(t, ctx)
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO t_field_groups (c_space_id, c_group_id, c_name) VALUES ('space', 'hidden-group', '分组')`); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestViewReportsHiddenDatasetColumns(t *testing.T) {
 // 删除字段是逻辑上的：引用它的列被隐藏，重新启用后恢复。
 func TestBatchDeleteFieldHidesColumnUntilReEnabled(t *testing.T) {
 	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
+	store := openViewTestStore(t, ctx)
 	if _, err := store.UpsertFieldGroup(ctx, &pb.FieldGroup{SpaceId: "space", GroupId: "hidden-group", Name: "分组"}); err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestBatchDeleteFieldHidesColumnUntilReEnabled(t *testing.T) {
 // 初始化时元数据并发导入：同类资源并发写，不能出现忙错误或丢写。
 func TestConcurrentFieldAndColumnUpserts(t *testing.T) {
 	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
+	store := openViewTestStore(t, ctx)
 	if _, err := store.UpsertFieldGroup(ctx, &pb.FieldGroup{SpaceId: "space", GroupId: "concurrent", Name: "分组"}); err != nil {
 		t.Fatal(err)
 	}

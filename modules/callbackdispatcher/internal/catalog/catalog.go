@@ -75,9 +75,6 @@ func (e Entry) ScopeValue(message *eventpb.EventMessage, key string) (string, bo
 
 var spaceField = Field{Key: FieldSpaceID, Title: "空间"}
 
-// samplePosition 是示例里的写入位置（uint64 按 protojson 写成字符串）。
-var samplePosition = map[string]any{"node_id": "node-1", "store_id": "store-1", "sequence": "128"}
-
 var entries = []Entry{
 	{
 		Event: events.DatasetPeriodCompleted, Title: "数据集一期完成", Description: "数据集的某一个周期数据已经写完整",
@@ -85,8 +82,8 @@ var entries = []Entry{
 		DeliverPolicy: nats.DeliverNewPolicy,
 		Sample: map[string]any{
 			"dataset_id": "示例数据集", "frequency": "5m", "period_time": "1786032000", "status": "complete", "source": "producer",
-			"universe_subject_ids": []string{"BTCUSDT", "ETHUSDT"}, "committed_positions": []map[string]any{samplePosition},
-			"cause_event_id": "示例事件", "completed_at": "2026-08-06T00:05:03Z",
+			"universe_subject_ids": []string{"BTCUSDT", "ETHUSDT"},
+			"cause_event_id":       "示例事件", "completed_at": "2026-08-06T00:05:03Z",
 		},
 		PayloadFields: []Field{
 			{Key: "dataset_id", Title: "数据集 ID"},
@@ -101,7 +98,6 @@ var entries = []Entry{
 			{Key: "completed_at", Title: "判定完成的时刻（UTC）"},
 			{Key: "cause_event_id", Title: "触发这次计算的事件 ID（source 为 producer 时）"},
 			{Key: "snapshot_ref", Title: "内部字段（source 为 ledger 时的快照引用），可以忽略"},
-			{Key: "committed_positions", Title: "内部字段（写入位置），可以忽略"},
 			{Key: "detail_type", Title: "写入方自定义的明细类型，一般用不到"},
 			{Key: "detail", Title: "写入方自定义的明细内容（base64），一般用不到"},
 		},
@@ -112,7 +108,7 @@ var entries = []Entry{
 		DeliverPolicy: nats.DeliverNewPolicy,
 		Sample: map[string]any{
 			"view_id": "示例 View", "view_config_id": "示例配置", "completion_event_id": "示例事件", "dataset_id": "示例数据集",
-			"status": "complete", "frequency": "5m", "period_time": "1786032000", "committed_positions": []map[string]any{samplePosition},
+			"status": "complete", "frequency": "5m", "period_time": "1786032000",
 			"ready_at": "2026-08-06T00:05:04Z", "universe_subject_ids": []string{"BTCUSDT", "ETHUSDT"},
 		},
 		PayloadFields: []Field{
@@ -127,7 +123,6 @@ var entries = []Entry{
 			{Key: "view_config_id", Title: "内部字段，可以忽略"},
 			{Key: "visible_scope", Title: "内部字段，可以忽略"},
 			{Key: "failed_scope_ref", Title: "内部字段，可以忽略"},
-			{Key: "committed_positions", Title: "内部字段（写入位置），可以忽略"},
 			{Key: "detail_type", Title: "原样透传一期完成事件里的明细类型，一般用不到"},
 			{Key: "detail", Title: "原样透传一期完成事件里的明细内容（base64），一般用不到"},
 		},

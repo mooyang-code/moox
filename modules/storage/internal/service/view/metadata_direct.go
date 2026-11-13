@@ -18,11 +18,7 @@ type directMetadataClient struct {
 	authSecret string
 }
 
-var (
-	_ MetadataClient       = (*directMetadataClient)(nil)
-	_ PeriodMetadataClient = (*directMetadataClient)(nil)
-	_ ViewInventoryClient  = (*directMetadataClient)(nil)
-)
+var _ MetadataClient = (*directMetadataClient)(nil)
 
 // NewDirectMetadataClient 包装 Metadata 的 tRPC 客户端，请求体里统一补上 storage-view 的服务签名。
 func NewDirectMetadataClient(proxy pb.MetadataClientProxy, authSecret string) *directMetadataClient {
@@ -71,19 +67,4 @@ func (c *directMetadataClient) CompleteViewInitialBuild(ctx context.Context, req
 func (c *directMetadataClient) CommitViewSchemaExtension(ctx context.Context, request *pb.CommitViewSchemaExtensionReq, options ...client.Option) (*pb.CommitViewSchemaExtensionRsp, error) {
 	request.AuthInfo = c.auth()
 	return c.proxy.CommitViewSchemaExtension(ctx, request, options...)
-}
-
-func (c *directMetadataClient) UpsertViewPeriodDatasetState(ctx context.Context, request *pb.UpsertViewPeriodDatasetStateReq, options ...client.Option) (*pb.UpsertViewPeriodDatasetStateRsp, error) {
-	request.AuthInfo = c.auth()
-	return c.proxy.UpsertViewPeriodDatasetState(ctx, request, options...)
-}
-
-func (c *directMetadataClient) ListViewPeriodDatasetStates(ctx context.Context, request *pb.ListViewPeriodDatasetStatesReq, options ...client.Option) (*pb.ListViewPeriodDatasetStatesRsp, error) {
-	request.AuthInfo = c.auth()
-	return c.proxy.ListViewPeriodDatasetStates(ctx, request, options...)
-}
-
-func (c *directMetadataClient) RecordViewSyncPoint(ctx context.Context, request *pb.RecordViewSyncPointReq, options ...client.Option) (*pb.RecordViewSyncPointRsp, error) {
-	request.AuthInfo = c.auth()
-	return c.proxy.RecordViewSyncPoint(ctx, request, options...)
 }

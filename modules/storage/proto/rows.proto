@@ -51,8 +51,7 @@ message RowFieldValues {
 	map<string, TypedValue> attributes = 3;
 }
 
-// RowsUpserted is the Storage module's local write result model. The public
-// EventBus contract is packages/storagepb.DatasetRowsUpserted.
+// RowsUpserted 是一个数据集的一批行写入：commit_id 的内容摘要按它的规范编码计算。
 message RowsUpserted {
   string space_id = 1;
   string dataset_id = 2;

@@ -31,8 +31,6 @@ func TestMetadataSchemaContract(t *testing.T) {
 		"c_revision INTEGER NOT NULL DEFAULT 1 CHECK (c_revision > 0)",
 		"c_status TEXT NOT NULL DEFAULT 'active' CHECK (c_status IN ('active', 'disabled'))",
 		"c_view_revision INTEGER NOT NULL DEFAULT 0",
-		"CREATE TABLE IF NOT EXISTS t_view_period_dataset_states",
-		"CREATE TABLE IF NOT EXISTS t_view_sync_points",
 		"c_dataset_id TEXT NOT NULL",
 		"CREATE INDEX IF NOT EXISTS idx_t_views_dataset ON t_views (c_space_id, c_dataset_id, c_status)",
 	} {
@@ -63,6 +61,8 @@ func TestMetadataSchemaContract(t *testing.T) {
 		"t_view_index_builds",
 		"t_view_rebuild_logs",
 		"t_data_nodes",
+		"t_view_period_dataset_states",
+		"t_view_sync_points",
 	}, removedTables...) {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("metadata schema contains removed schema element %q", forbidden)

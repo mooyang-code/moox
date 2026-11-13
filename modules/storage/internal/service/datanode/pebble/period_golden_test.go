@@ -734,18 +734,14 @@ func TestGoldenCommitIDReplay(t *testing.T) {
 					require.NoError(t, store.Close())
 					store = openGoldenStore(t, path, clock, 0)
 				}
-				entries, err := store.UpsertFields(ctx, goldenSpace, item.dataset, item.commitID, item.rows)
+				written, err := store.UpsertFields(ctx, goldenSpace, item.dataset, item.commitID, item.rows)
 				if item.wantErr {
 					var conflict CommitConflictError
 					require.ErrorAs(t, err, &conflict, "write %d", i)
 					continue
 				}
 				require.NoError(t, err, "write %d", i)
-				if item.wantWrite {
-					require.Len(t, entries, 1, "write %d", i)
-				} else {
-					require.Empty(t, entries, "write %d", i)
-				}
+				require.Equal(t, item.wantWrite, written, "write %d", i)
 			}
 			for name, want := range tc.want {
 				var dataset, record string
@@ -777,9 +773,9 @@ func TestGoldenDeleteDatasetClearsLedgerMarkersAndCommits(t *testing.T) {
 		_, err = store.AppendDatasetMarker(ctx, raw)
 		require.NoError(t, err)
 		record := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
-		entries, err := store.UpsertFields(ctx, goldenSpace, dataset, "commit-1", []*pb.RowFieldUpsert{record})
+		written, err := store.UpsertFields(ctx, goldenSpace, dataset, "commit-1", []*pb.RowFieldUpsert{record})
 		require.NoError(t, err)
-		require.Len(t, entries, 1)
+		require.True(t, written)
 	}
 
 	_, err := store.DeleteDatasetRows(ctx, goldenSpace, "delete-me")
@@ -803,9 +799,9 @@ func TestGoldenDeleteDatasetClearsLedgerMarkersAndCommits(t *testing.T) {
 
 	// 重建后同一 commit_id 作为新提交写入，同一触发事件可以重新上报。
 	record := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: "delete-me", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}}
-	entries, err := store.UpsertFields(ctx, goldenSpace, "delete-me", "commit-1", []*pb.RowFieldUpsert{record})
+	written, err := store.UpsertFields(ctx, goldenSpace, "delete-me", "commit-1", []*pb.RowFieldUpsert{record})
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
+	require.True(t, written)
 	marker := goldenProducerMarker("source-ready", goldenPeriod.Unix(), "degraded")
 	marker.DatasetId = "delete-me"
 	raw, _, err := BuildProducerPeriodCompletedMessage(goldenSpace, marker)

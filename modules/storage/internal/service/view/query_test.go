@@ -63,31 +63,6 @@ func (e *queryEngine) Stat(context.Context, string) (viewindex.ViewIndexStats, e
 }
 func (*queryEngine) Remove(context.Context, string) error { return nil }
 
-func TestLiveIndexReadyUsesLightweightExistenceCheck(t *testing.T) {
-	engine := &existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}
-	svc, _ := queryTestService(engine, true)
-	ready, err := svc.liveIndexReady(context.Background(), "prices-index")
-	if err != nil || !ready {
-		t.Fatalf("liveIndexReady ready=%v err=%v", ready, err)
-	}
-	if engine.existsCalls != 1 || engine.statCalls != 0 {
-		t.Fatalf("exists calls=%d stat calls=%d, want 1 and 0", engine.existsCalls, engine.statCalls)
-	}
-}
-
-type deadlineAwareEngine struct {
-	*existenceQueryEngine
-	sawLiveContext bool
-}
-
-func (e *deadlineAwareEngine) Write(ctx context.Context, indexID string, batch viewindex.ViewIndexWriteBatch) error {
-	if ctx != nil && ctx.Err() != nil {
-		return ctx.Err()
-	}
-	e.sawLiveContext = true
-	return e.queryEngine.Write(ctx, indexID, batch)
-}
-
 func TestPrimaryPointReadChunkSizeStaysUnderPebbleBudget(t *testing.T) {
 	if got := primaryPointReadChunkSize(6, 400); got != 400 {
 		t.Fatalf("small batch chunk=%d, want 400", got)
@@ -120,38 +95,6 @@ func TestLiveIndexWriteContextKeepsDeadlineButHonorsCancel(t *testing.T) {
 	}
 }
 
-func TestLiveIndexWriteUsesDedicatedBudgetAfterDeliveryDeadline(t *testing.T) {
-	engine := &deadlineAwareEngine{existenceQueryEngine: &existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}}
-	svc, _ := queryTestService(engine, true)
-	key := viewRef{spaceID: "space", viewID: "prices"}
-	svc.schemas["prices-index"] = viewindex.ViewIndexSchema{
-		SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market",
-		Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}},
-	}
-	svc.indexView = map[string]viewRef{"prices-index": key}
-	svc.byData = map[datasetRef]map[string]struct{}{
-		{spaceID: "space", datasetID: "market"}: {"prices-index": {}},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
-	defer cancel()
-	time.Sleep(time.Millisecond)
-
-	err := svc.applyDatasetEvent(ctx, "space", "market", []*pb.RowFieldUpsert{{
-		Key: timeSeriesTestRowKey("venue:binance"),
-		Fields: []*pb.FieldValue{{
-			FieldId: "close",
-			Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}},
-		}},
-	}})
-	if err != nil {
-		t.Fatalf("apply expired delivery ctx: %v", err)
-	}
-	if !engine.sawLiveContext || engine.writes["prices-index"] != 1 {
-		t.Fatalf("writes=%v live=%v, want one write on a live context", engine.writes, engine.sawLiveContext)
-	}
-}
-
 func TestActiveViewDatasetFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := observability.NewViewMetrics(registry)
@@ -169,46 +112,30 @@ func TestActiveViewDatasetFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T
 		viewFreshnessRow("SOL-USDT", "1m", "venue:binance", "2026-09-08T09:50:00Z"),
 		viewFreshnessRow("ETH-USDT", "5m", "", newer),
 	}
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", rows); err != nil {
-		t.Fatal(err)
-	}
+	svc.observeViewWatermark("prices-index", "market_prices", rows, true)
 	// SOL trails the View's latest 1m bar by more than one bar plus the lag
 	// tolerance; BTC is current.
 	assertViewSubjects(t, registry, "1m", 2, map[string]string{"SOL-USDT": "2026-09-08T09:50:00Z"})
 	assertViewSubjects(t, registry, "5m", 1, map[string]string{})
 
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:03:00Z")}); err != nil {
-		t.Fatal(err)
-	}
+	svc.observeViewWatermark("prices-index", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:03:00Z")}, true)
 	assertViewSubjects(t, registry, "1m", 2, map[string]string{"SOL-USDT": "2026-09-08T09:50:00Z"})
 }
 
-func TestViewDatasetFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *testing.T) {
+// 首次建索引期间（写入的是 building 索引）不发布水位；没有标的的行不计入。
+func TestViewDatasetFreshnessIgnoresBuildingIndexAndMissingIdentity(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := observability.NewViewMetrics(registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := &existenceQueryEngine{queryEngine: &queryEngine{writeErrs: map[string]error{"prices-next": errors.New("replacement failed")}}, exists: true}
-	svc, _ := queryTestService(engine, false)
+	svc, _ := queryTestService(&existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}, false)
 	configureDatasetFreshnessView(svc, metrics, "prices-next", "prices-next")
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
-		t.Fatal("replacement write unexpectedly succeeded")
-	}
+	svc.observeViewWatermark("prices-next", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}, true)
 	assertNoViewSubjects(t, registry)
 
-	engine.writeErrs = map[string]error{"prices-index": errors.New("active failed")}
 	configureDatasetFreshnessView(svc, metrics, "prices-index", "")
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
-		t.Fatal("active write unexpectedly succeeded")
-	}
-	assertNoViewSubjects(t, registry)
-
-	engine.writeErrs = nil
-	configureDatasetFreshnessView(svc, metrics, "prices-index", "")
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err != nil {
-		t.Fatal(err)
-	}
+	svc.observeViewWatermark("prices-index", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("", "1m", "venue:binance", "2026-09-08T10:05:00Z")}, true)
 	assertNoViewSubjects(t, registry)
 }
 
@@ -223,7 +150,6 @@ func configureDatasetFreshnessView(svc *Service, metrics *observability.ViewMetr
 	svc.indexView = map[string]viewRef{"prices-index": key, indexID: key}
 	svc.indexEngine[indexID] = "query-test"
 	svc.schemas[indexID] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices_view", PrimaryDatasetID: "market_prices", Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}}}
-	svc.byData = map[datasetRef]map[string]struct{}{{spaceID: "space", datasetID: "market_prices"}: {indexID: {}}}
 }
 
 func viewFreshnessRow(subject, frequency, seriesTag, dataTime string) *pb.RowFieldUpsert {

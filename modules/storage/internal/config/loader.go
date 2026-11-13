@@ -2,7 +2,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,35 +52,13 @@ type StorageEventBus struct {
 	CredentialFile string `yaml:"credential_file"`
 }
 
-// StorageViewAckWaitMS 是 View 消费者未配置 ack_wait_ms 时的默认值。
-const StorageViewAckWaitMS = 120000
-
-// StorageView 保存 View 服务消费与批处理配置。
-//
-// View 只有一种消费方式：每个数据集一个动态 durable（view_<数据集哈希>），所有 durable 用同一套全局并发参数
-// （fetch_batch、max_workers、max_ack_pending，默认都是 1：同一数据集内按顺序处理，避免同一行的两次更新先后颠倒）。
+// StorageView 保存 View 服务建索引与定时删除的配置。
 type StorageView struct {
-	BatchSize     int `yaml:"batch_size"`
-	FetchBatch    int `yaml:"fetch_batch"`
-	MaxWorkers    int `yaml:"max_workers"`
-	MaxAckPending int `yaml:"max_ack_pending"`
-	AckWaitMS     int `yaml:"ack_wait_ms"`
 	// BackfillPageSize 限制首次建索引时每页读取的 Primary 历史行数，页越小点读和写索引的突发越小。
 	BackfillPageSize        uint32 `yaml:"backfill_page_size"`
 	BackfillRequestInterval string `yaml:"backfill_request_interval"`
 	// DeleteOldestBatchSize 是定时删除最旧数据时每批最多删除的行数；未配置时取默认值 2000。
 	DeleteOldestBatchSize int `yaml:"delete_oldest_batch_size"`
-}
-
-// ValidateConsumer 校验全局消费参数：都为正数，且单次拉取数不超过未确认上限。
-func (v StorageView) ValidateConsumer() error {
-	if v.FetchBatch < 1 || v.MaxWorkers < 1 || v.MaxAckPending < 1 || v.AckWaitMS < 1 {
-		return errors.New("storage view fetch_batch, max_workers, max_ack_pending and ack_wait_ms must be positive")
-	}
-	if v.FetchBatch > v.MaxAckPending {
-		return fmt.Errorf("storage view fetch_batch %d exceeds max_ack_pending %d", v.FetchBatch, v.MaxAckPending)
-	}
-	return nil
 }
 
 // StorageHealth controls the lightweight HTTP health endpoint.
@@ -114,21 +91,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.Devices.ViewIndexRoot == "" {
 		c.Devices.ViewIndexRoot = filepath.Join(c.Root, "view-indexes")
-	}
-	if c.View.BatchSize <= 0 {
-		c.View.BatchSize = 500
-	}
-	if c.View.FetchBatch <= 0 {
-		c.View.FetchBatch = 1
-	}
-	if c.View.MaxWorkers <= 0 {
-		c.View.MaxWorkers = 1
-	}
-	if c.View.MaxAckPending <= 0 {
-		c.View.MaxAckPending = c.View.FetchBatch
-	}
-	if c.View.AckWaitMS <= 0 {
-		c.View.AckWaitMS = StorageViewAckWaitMS
 	}
 	if c.View.BackfillPageSize == 0 {
 		c.View.BackfillPageSize = 2000

@@ -128,9 +128,6 @@ func (s *Service) normalizeMaintenanceOptions(opts MaintenanceOptions) (Maintena
 	s.SetSeriesBars(opts.Bars)
 	s.mu.Lock()
 	s.maintenance = opts
-	if periodMetadata, ok := opts.Metadata.(PeriodMetadataClient); ok {
-		s.periodMetadata = periodMetadata
-	}
 	s.mu.Unlock()
 	s.setMetadataClient(opts.Metadata)
 	return opts, nil
@@ -203,9 +200,6 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 	s.mu.Lock()
 	// 断档重建沿用维护参数（回填页大小、请求间隔、保留根数）：跟随器可能先于维护循环启动，维护也可能被禁用。
 	s.maintenance = opts
-	if periodMetadata, ok := opts.Metadata.(PeriodMetadataClient); ok {
-		s.periodMetadata = periodMetadata
-	}
 	s.mu.Unlock()
 	s.setMetadataClient(opts.Metadata)
 	auth := s.internalAuth()
@@ -502,8 +496,7 @@ func (s *Service) readView(ctx context.Context, metadata MetadataClient, auth *p
 	return rsp.GetView(), nil
 }
 
-// holdUnattachedView 让没能挂接的 View 继续占着数据集映射。它的运行时没有写入目标，这个数据集的行事件保持未确认；
-// 否则同数据集上已挂接的 View 会把事件确认掉，这个 View 恢复后也补不回这些行。
+// holdUnattachedView 给没能挂接的 View 占住运行时与索引映射：它不可读、也不跟随，维护流程下一轮照常再试挂接。
 func (s *Service) holdUnattachedView(view *pb.View) {
 	key := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
 	s.mu.Lock()
@@ -512,7 +505,6 @@ func (s *Service) holdUnattachedView(view *pb.View) {
 		s.views[key] = newViewRuntime()
 	}
 	s.indexView[view.GetActiveIndexId()] = key
-	s.attachOwnedDatasetMappingLocked(view.GetSpaceId(), view.GetDatasetId(), view.GetActiveIndexId())
 }
 
 // validatePhysicalViewContract 防止挂接到对不上元数据的物理索引：修订号和 schema 哈希以元数据为准。

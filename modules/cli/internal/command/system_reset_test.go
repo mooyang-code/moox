@@ -62,7 +62,7 @@ func TestSystemResetEndToEnd(t *testing.T) {
 	require.NoError(t, runSystemResetPlan(ctx, opts, reset, &out))
 	require.Contains(t, out.String(), "[strategy]")
 	require.Contains(t, out.String(), "[外部步骤 storage]")
-	require.Contains(t, out.String(), "reset-view-consumers --reset-all-storage-data")
+	require.Contains(t, out.String(), "rm -rf /pkg/storage-primary/var/storage/pebble /pkg/storage-view/var/storage/view-indexes")
 	m := regexp.MustCompile(`令牌（[^）]*）：(\w+)`).FindStringSubmatch(out.String())
 	require.Len(t, m, 2, out.String())
 	token := m[1]

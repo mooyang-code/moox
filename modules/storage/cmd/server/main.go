@@ -121,7 +121,7 @@ func runPrimaryRole() error {
 		return fmt.Errorf("initialize storage deadline rejection metrics: %w", err)
 	}
 	svc, err := primarystore.New(primarystore.Options{
-		Store: store, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, SyncPoints: meta,
+		Store: store, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot,
 		DatasetMetrics: datasetMetrics, DeadlineRejections: deadlineRejections,
 		Authorizer: func(auth *pb.AuthInfo) error {
 			if auth == nil || auth.GetAppId() == "" || !serviceauth.Valid(primarySecret, auth.GetAppId(), auth.GetAppKey()) {
@@ -148,7 +148,6 @@ func runPrimaryRole() error {
 	backgroundCtx, stopBackground := context.WithCancel(trpc.BackgroundContext())
 	defer stopBackground()
 	go runCleanupLoop(backgroundCtx, datasetCleanup{reader: cached, store: store, retention: policy.Retention, metrics: cleanupMetrics}, time.Hour)
-	go runViewPeriodCleanupLoop(backgroundCtx, meta, time.Hour, storageViewPeriodRetention())
 	// EventBus 不可用时主服务照常启动：转发协程照常运行，连上 EventBus 后再转发 Outbox 里积压的事件。
 	stopRelay, err := storageoutbox.StartWithEventBus(backgroundCtx, store, eventConfig)
 	if err != nil {
@@ -209,48 +208,6 @@ func runCleanupLoop(ctx context.Context, cleanup datasetCleanup, interval time.D
 			}
 		}
 	}
-}
-
-func runViewPeriodCleanupLoop(ctx context.Context, store metadata.ViewPeriodStateStore, interval, retention time.Duration) {
-	if store == nil {
-		return
-	}
-	if interval <= 0 {
-		interval = time.Hour
-	}
-	if retention <= 0 {
-		retention = 7 * 24 * time.Hour
-	}
-	cleanup := func() {
-		before := time.Now().UTC().Add(-retention)
-		if _, err := store.DeleteViewPeriodDatasetStatesBefore(ctx, before); err != nil {
-			tlog.Errorf("storage View period state cleanup failed: %v", err)
-		}
-		if _, err := store.DeleteViewSyncPointsBefore(ctx, before); err != nil {
-			tlog.Errorf("storage View sync point cleanup failed: %v", err)
-		}
-	}
-	cleanup()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			cleanup()
-		}
-	}
-}
-
-func storageViewPeriodRetention() time.Duration {
-	if raw := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_PERIOD_RETENTION")); raw != "" {
-		if retention, err := time.ParseDuration(raw); err == nil && retention > 0 {
-			return retention
-		}
-		tlog.Warnf("invalid MOOX_STORAGE_VIEW_PERIOD_RETENTION=%q; using 168h", raw)
-	}
-	return 7 * 24 * time.Hour
 }
 
 // datasetCleanup deletes the rows of each active time-series Dataset that
@@ -486,7 +443,7 @@ func runViewRole() error {
 }
 
 // connectStorageViewEventBus 连上 EventBus 为止：临时故障按退避重试，其他错误直接返回。看门狗负责重启崩溃的进程，
-// 不该在公网 EventBus 重连期间反复重启一个健康的 View；连上之后的断线由消费者的重连逻辑处理。
+// 不该在公网 EventBus 重连期间反复重启一个健康的 View；连上之后的断线由就绪事件发布器的重连处理。
 func connectStorageViewEventBus(ctx context.Context, config jetstream.Config) (*jetstream.Client, error) {
 	backoff := time.Second
 	for {
@@ -557,30 +514,6 @@ func loadStoragePolicy() (storagepolicy.Policy, error) {
 		policyPath = filepath.Join(filepath.Dir(filepath.Dir(path)), policyPath)
 	}
 	return storagepolicy.Load(policyPath)
-}
-
-// storageViewConsumerTemplate 读取 View 的全局消费参数，作为每个数据集的动态消费者共用的投递模板。
-func storageViewConsumerTemplate() (viewservice.EventConsumerOptions, error) {
-	var runtimeConfig storageconfig.RuntimeConfig
-	if path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG")); path == "" {
-		runtimeConfig.ApplyDefaults()
-	} else {
-		loader := storageconfig.NewConfigLoader(filepath.Dir(path))
-		if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-			return viewservice.EventConsumerOptions{}, fmt.Errorf("load storage view consumer config: %w", err)
-		}
-	}
-	return buildStorageViewConsumerTemplate(runtimeConfig.Storage.View)
-}
-
-func buildStorageViewConsumerTemplate(view storageconfig.StorageView) (viewservice.EventConsumerOptions, error) {
-	if err := view.ValidateConsumer(); err != nil {
-		return viewservice.EventConsumerOptions{}, err
-	}
-	return viewservice.EventConsumerOptions{
-		AckWaitMS: view.AckWaitMS, FetchBatch: view.FetchBatch, MaxWorkers: view.MaxWorkers, MaxAckPending: view.MaxAckPending,
-		Ordering: "dataset", DeliverPolicy: "all", MaxRetryAttempts: -1,
-	}, nil
 }
 
 // storageViewDeleteOldestBatchSize 读取定时删除最旧数据时每批最多删除的行数（storage.view.delete_oldest_batch_size）。

@@ -4,7 +4,7 @@
 而不是上线后再等实时数据慢慢积累。
 
 **两层写入：** 因子机本地存储写**全量**历史（不自动淘汰，显式 reset 可清空）；Storage Primary 只写每个文件**最后 6000 根**中仍在 Primary 保留期内的部分，
-之后由实时采集与补采接上。View 消费时还会按自己的 `[storage_view.max_age]` 丢弃超期行，因此可能只包含导入尾部的一部分，甚至为空；默认 crypto 1m 的 View 上限为 7d，Primary 为 35d。导入**不触发**历史因子与策略结果的计算，也**不推送告警**（导入期间屏蔽 Monitor 告警推送）。
+之后由实时采集与补采接上。View 写入时还会按自己的 `[storage_view.max_age]` 丢弃超期行，因此可能只包含导入尾部的一部分，甚至为空；默认 crypto 1m 的 View 上限为 7d，Primary 为 35d。导入**不触发**历史因子与策略结果的计算，也**不推送告警**（导入期间屏蔽 Monitor 告警推送）。
 
 Agent 按下面的步骤逐步执行，每一步的输出都要核对再进入下一步；任何一步出错先停下来向用户汇报，不要跳步。
 
@@ -139,7 +139,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target sto
 
 输出（每个文件的 `tail_from`、`tail_rows`）存成 `storage-import.json`，第 10 步的逐标的校验要用它。
 
-只写每个文件最后 6000 行中仍在 Primary 保留期内的部分。输出的 `tail_from` / `tail_rows` 是 Primary 导入窗口，未包含 View 消费时按当前时钟进行的年龄过滤。Storage 写入在 storage-primary 的 Pebble 库内串行，单进程即可；要并发也不超过 2～4 路（再多只是排队）。
+只写每个文件最后 6000 行中仍在 Primary 保留期内的部分。输出的 `tail_from` / `tail_rows` 是 Primary 导入窗口，未包含 View 写入时按当前时钟进行的年龄过滤。Storage 写入在 storage-primary 的 Pebble 库内串行，单进程即可；要并发也不超过 2～4 路（再多只是排队）。
 `--job-db` 保留着，中断后原样重跑自动续传。失败的批（Storage 写超时）重跑即可。
 
 ## 9. 等本数据集的 View 追平

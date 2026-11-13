@@ -221,27 +221,12 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_weight_v1")
 	assert.Contains(t, tradeACL, "$JS.ACK.MOOX_TRADE.trade_target_weight_v1.>")
 	storageACL := eventBusACLBlock(yaml, "storage-eventbus")
-	for _, subject := range []string{
-		"moox.event.storage.dataset.rows.upserted.v2.>",
-		"moox.event.storage.dataset.period.completed.v1.>",
-		"moox.event.storage.view.data.ready.v2.>",
-		"moox.event.storage.dataset.sync_point.v1.>",
-	} {
-		assert.Contains(t, storageACL, subject)
-	}
+	// Storage 只发布周期完成（Outbox 转发）与 View 就绪；不消费任何事件，没有 JetStream 消费者接口。
+	assert.Contains(t, aclLine(storageACL, "publish:"), `["moox.event.storage.dataset.period.completed.v1.>", "moox.event.storage.view.data.ready.v2.>"]`)
 	assert.NotContains(t, storageACL, "moox.dlq.")
 	assert.NotContains(t, storageACL, "moox.event.storage.rows_committed")
-	assert.NotContains(t, storageACL, "storage_view_", "View 消费者按数据集动态创建（view_<哈希>），ACL 不再列固定名字")
-	// NATS 通配符只能整段匹配，不能按名字前缀放行：View 消费者的创建、拉取与确认只能限定到 MOOX_STORAGE 流。
-	for _, subject := range []string{
-		"$JS.API.CONSUMER.INFO.*.*",
-		"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.>",
-		"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.>",
-		"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.>",
-		"$JS.ACK.MOOX_STORAGE.>",
-	} {
-		assert.Contains(t, storageACL, subject)
-	}
+	assert.NotContains(t, storageACL, "$JS.API")
+	assert.NotContains(t, storageACL, "$JS.ACK")
 	assert.NotContains(t, storageACL, "storage_view_period_v1")
 	assert.Contains(t, storageACL, `subscribe: {allow: ["_INBOX.>"]}`)
 	assert.NotContains(t, aclLine(storageACL, "subscribe:"), "$JS.API")

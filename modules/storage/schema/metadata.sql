@@ -85,39 +85,6 @@ BEGIN
     UPDATE t_views SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
-CREATE TABLE IF NOT EXISTS t_view_period_dataset_states (
-    c_space_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_frequency TEXT NOT NULL,
-    c_period_time INTEGER NOT NULL,
-    c_event_id TEXT NOT NULL,
-    c_status TEXT NOT NULL CHECK (c_status IN ('complete', 'degraded')),
-    c_subject_ids_json TEXT NOT NULL DEFAULT '[]',
-    c_failed_subjects_json TEXT NOT NULL DEFAULT '[]',
-    c_occurred_at TEXT NOT NULL,
-    c_updated_at TEXT NOT NULL,
-    PRIMARY KEY (c_space_id, c_view_id, c_dataset_id, c_frequency, c_period_time),
-    FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views (c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_view_period_dataset_states_period
-ON t_view_period_dataset_states (c_space_id, c_view_id, c_frequency, c_period_time);
-
-CREATE TABLE IF NOT EXISTS t_view_sync_points (
-    c_space_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_request_id TEXT NOT NULL,
-    c_sync_point_id TEXT NOT NULL,
-    c_applied_at TEXT NOT NULL,
-    PRIMARY KEY (c_space_id, c_view_id, c_dataset_id, c_request_id),
-    FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views (c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_view_sync_points_request
-ON t_view_sync_points (c_space_id, c_view_id, c_request_id);
-
 CREATE TABLE IF NOT EXISTS t_view_columns (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,

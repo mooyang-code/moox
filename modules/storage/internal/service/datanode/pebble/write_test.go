@@ -60,13 +60,12 @@ func TestUpsertFieldsSameCommitIDIsIdempotent(t *testing.T) {
 	if _, err := store.UpsertFields(context.Background(), "space", "factor_result", "commit-factor", reordered); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := store.ListOutbox(context.Background(), 0, 10)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("outbox entries=%v err=%v", entries, err)
+	if changes := readAllChanges(t, store, "space", "factor_result"); len(changes) != 1 {
+		t.Fatalf("同一 commit_id 只写一次变更日志：changes=%d", len(changes))
 	}
 }
 
-// 准备在 outboxMu 之外：同一 commitID 并发写入只提交一次，其余按回执判为成功；不同 commitID 并发写入各占一个 outbox 位置。
+// 准备在 outboxMu 之外：同一 commitID 并发写入只提交一次，其余按回执判为成功；不同 commitID 并发写入各占一个变更序号。
 func TestUpsertFieldsConcurrentWritesCommitOncePerCommitID(t *testing.T) {
 	store := openFactorRowsStore(t)
 	rows := func(value float64) []*pb.RowFieldUpsert {
@@ -93,13 +92,13 @@ func TestUpsertFieldsConcurrentWritesCommitOncePerCommitID(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	entries, err := store.ListOutbox(context.Background(), 0, 100)
-	if err != nil || len(entries) != 9 {
-		t.Fatalf("outbox entries=%d err=%v", len(entries), err)
+	changes := readAllChanges(t, store, "space", "factor_result")
+	if len(changes) != 9 {
+		t.Fatalf("changes=%d, want 9", len(changes))
 	}
-	for i := 1; i < len(entries); i++ {
-		if entries[i].ID != entries[i-1].ID+1 {
-			t.Fatalf("outbox ids not contiguous: %d then %d", entries[i-1].ID, entries[i].ID)
+	for i := 1; i < len(changes); i++ {
+		if changes[i].GetSequence() != changes[i-1].GetSequence()+1 {
+			t.Fatalf("变更序号不连续：%d 之后是 %d", changes[i-1].GetSequence(), changes[i].GetSequence())
 		}
 	}
 	if _, err := store.UpsertFields(context.Background(), "space", "factor_result", "commit-same", rows(99)); !errors.As(err, new(CommitConflictError)) {
@@ -123,22 +122,21 @@ func TestUpsertFieldsThenMarkerOrdering(t *testing.T) {
 	if _, err := store.AppendDatasetMarker(context.Background(), message); err != nil {
 		t.Fatal(err)
 	}
+	// 变更日志里行在前、完成标记在后；Outbox 只有完成标记。
+	changes := readAllChanges(t, store, "space", "factor_result")
+	if len(changes) != 2 || len(changes[0].GetRecords()) == 0 || len(changes[1].GetMarker()) == 0 {
+		t.Fatalf("changes=%v", changes)
+	}
 	entries, err := store.ListOutbox(context.Background(), 0, 10)
-	if err != nil || len(entries) != 2 {
+	if err != nil || len(entries) != 1 {
 		t.Fatalf("outbox entries=%v err=%v", entries, err)
 	}
-	if entries[0].ID >= entries[1].ID {
-		t.Fatalf("row event id=%d marker id=%d", entries[0].ID, entries[1].ID)
-	}
-	first, second := &eventpb.EventMessage{}, &eventpb.EventMessage{}
-	if err := proto.Unmarshal(entries[0].Data, first); err != nil {
+	markerMessage := &eventpb.EventMessage{}
+	if err := proto.Unmarshal(entries[0].Data, markerMessage); err != nil {
 		t.Fatal(err)
 	}
-	if err := proto.Unmarshal(entries[1].Data, second); err != nil {
-		t.Fatal(err)
-	}
-	if first.GetEventName() != events.DatasetRowsUpserted.Name() || second.GetEventName() != events.DatasetPeriodCompleted.Name() {
-		t.Fatalf("event order=%q, %q", first.GetEventName(), second.GetEventName())
+	if markerMessage.GetEventName() != events.DatasetPeriodCompleted.Name() {
+		t.Fatalf("outbox event=%q", markerMessage.GetEventName())
 	}
 }
 
@@ -182,8 +180,8 @@ func TestUpsertFieldsRejectsRowsOfAnotherDataset(t *testing.T) {
 	if _, err := store.UpsertFields(context.Background(), "space", "another", "", []*pb.RowFieldUpsert{row}); err == nil {
 		t.Fatal("row of another dataset: err = nil")
 	}
-	if entries, err := store.ListOutbox(context.Background(), 0, 10); err != nil || len(entries) != 0 {
-		t.Fatalf("outbox entries=%d err=%v", len(entries), err)
+	if head, err := store.ChangeCursor(); err != nil || head.GetSequence() != 0 {
+		t.Fatalf("rejected write left changes: head=%v err=%v", head, err)
 	}
 }
 
@@ -208,8 +206,8 @@ func TestUpsertFieldsCommitMarkerSurvivesReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if entries, err := store.UpsertFields(context.Background(), "space", "factor_result", "commit-reopen", rows(1)); err != nil || len(entries) != 0 {
-		t.Fatalf("same commit after reopen entries=%d err=%v", len(entries), err)
+	if written, err := store.UpsertFields(context.Background(), "space", "factor_result", "commit-reopen", rows(1)); err != nil || written {
+		t.Fatalf("same commit after reopen written=%v err=%v", written, err)
 	}
 	if _, err := store.UpsertFields(context.Background(), "space", "factor_result", "commit-reopen", rows(2)); !errors.As(err, new(CommitConflictError)) {
 		t.Fatalf("different content after reopen err=%v", err)

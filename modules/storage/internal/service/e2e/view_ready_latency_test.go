@@ -16,12 +16,9 @@ package e2e
 //	MOOX_VIEW_READY_BENCH_FACTOR_COLS   因子结果的列数，默认 20（501 标的时每期写入约 300KB，与线上因子结果行事件的实测量级一致）
 //	MOOX_VIEW_READY_BENCH_IMPORT_BARS   导入场景单标的写入的根数，默认 5000
 //	MOOX_VIEW_READY_BENCH_PREFILL_BARS  每个序列预先直接写进 View 索引的历史根数，默认 10000（生产 View 每序列保留 1 万根）
-//	MOOX_VIEW_READY_BENCH_IDLE_VIEWS    另建多少个没有写入的数据集与 View（只用于新路径），默认 0
-//	MOOX_VIEW_READY_BENCH_LEGACY        为 1 时测旧路径（Outbox → JetStream → View 消费者）
+//	MOOX_VIEW_READY_BENCH_IDLE_VIEWS    另建多少个没有写入的数据集与 View，默认 0
 //
-// 本文件只放场景、数据和统计，与传输方式无关；装配（写入如何到达 View）在 readyBenchEnv 的实现里：
-// 新路径（View 跟随变更日志）见 view_follow_env_test.go，旧路径（Outbox → JetStream → View 消费者）见
-// view_ready_latency_legacy_test.go。两边只有装配不同，场景、规模和计时口径相同，数字可以直接比较。
+// 本文件只放场景、数据和统计；装配（View 跟随变更日志）在 readyBenchEnv 的实现 view_follow_env_test.go 里。
 
 import (
 	"context"
@@ -164,18 +161,12 @@ func TestViewReadyLatencyBench(t *testing.T) {
 
 	ctx := context.Background()
 	setupStart := time.Now()
-	// 默认测跟随变更日志的新路径；MOOX_VIEW_READY_BENCH_LEGACY=1 测旧路径（T7 随旧路径删除）。
-	// 新路径另建 idleViews 个没有写入的数据集与 View，它们的跟随器一直在服务端等待新变更，看几十个空闲跟随器的开销。
+	// 另建 idleViews 个没有写入的数据集与 View，它们的跟随器一直在服务端等待新变更，看几十个空闲跟随器的开销。
 	idle := make([]readyBenchDataset, params.idleViews)
 	for i := range idle {
 		idle[i] = readyBenchDataset{datasetID: fmt.Sprintf("bench_idle_%02d", i), viewID: fmt.Sprintf("bench_idle_%02d_view", i), columns: readyBenchKlineColumns[:1]}
 	}
-	var env readyBenchEnv
-	if os.Getenv("MOOX_VIEW_READY_BENCH_LEGACY") == "1" {
-		env = newLegacyReadyBenchEnv(t, []readyBenchDataset{kline, factor})
-	} else {
-		env = newFollowEnv(t, append([]readyBenchDataset{kline, factor}, idle...), followEnvOptions{prebuilt: true})
-	}
+	var env readyBenchEnv = newFollowEnv(t, append([]readyBenchDataset{kline, factor}, idle...), followEnvOptions{prebuilt: true})
 	t.Logf("装配与预填耗时 %s（空闲 View %d 个）", time.Since(setupStart).Round(time.Millisecond), len(idle))
 
 	results := []struct {
@@ -277,8 +268,7 @@ func runFactorPeriodBench(t *testing.T, ctx context.Context, env readyBenchEnv, 
 // runImportBench：导入或补算一个标的的长区间。写进 K 线数据集（索引已有全市场历史），每轮一个新标的，
 // 区间在第一期之前、与预填不重叠，按 CLI 导入的批大小用 UpsertFields 写入，最后追加一条 producer 完成标记，
 // 以它的 ViewDataReady 作为“全部行已应用”的终点（数据集内按顺序应用，标记在全部行之后）。
-// 注：CLI 导入实际等的是同步点（AppendDatasetSyncPoint + WaitViewSyncPoint，50ms 轮询）；同步点在新路径里删除，
-// 这里统一用就绪事件作终点，新旧两边口径一致。
+// 注：CLI 导入等的是 WaitViewApplied；这里统一用就绪事件作终点，与 T0 基线口径一致。
 func runImportBench(t *testing.T, ctx context.Context, env readyBenchEnv, kline readyBenchDataset, params readyBenchParams) []readyBenchSample {
 	t.Helper()
 	samples := make([]readyBenchSample, 0, params.rounds)

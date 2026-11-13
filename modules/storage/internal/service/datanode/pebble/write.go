@@ -28,20 +28,20 @@ const (
 // writeLogThreshold 是写入分段耗时日志的阈值。
 const writeLogThreshold = 50 * time.Millisecond
 
-// UpsertFields 写入一个数据集的行：字段、属性、行索引、一条行变更事件与变更日志在同一个 Pebble 批次里提交。
+// UpsertFields 写入一个数据集的行：字段、属性、行索引与变更日志在同一个 Pebble 批次里提交，返回是否写入了。
 //
-// commitID 可选。非空时同一数据集内同一 commitID 只生效一次：内容相同返回成功（不再写入，返回的条目为空），
+// commitID 可选。非空时同一数据集内同一 commitID 只生效一次：内容相同返回成功（不再写入，written 为假），
 // 内容不同返回 CommitConflictError。
-func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) ([]*OutboxEntry, error) {
+func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (written bool, err error) {
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
-		return nil, invalid("space_id and dataset_id are required")
+		return false, invalid("space_id and dataset_id are required")
 	}
 	if commitID != "" {
 		if err := validateCommitID(commitID); err != nil {
-			return nil, err
+			return false, err
 		}
 	}
-	// 分段计时：规整、准备（字段、行索引、事件与变更范围）、等写锁、提交；达到阈值时记一行。
+	// 分段计时：规整、准备（字段、行索引与变更范围）、等写锁、提交；达到阈值时记一行。
 	started := time.Now()
 	var normalizedAt, preparedAt, lockedAt, committedAt time.Time
 	defer func() {
@@ -54,17 +54,17 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID s
 	}()
 	normalized, err := s.normalizeWriteRows(ctx, rows)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	for _, row := range normalized {
 		if row.GetKey().GetSpaceId() != spaceID || row.GetKey().GetDatasetId() != datasetID {
-			return nil, invalid("row dataset identity does not match request")
+			return false, invalid("row dataset identity does not match request")
 		}
 	}
 	var digest []byte
 	if commitID != "" {
 		if digest, err = commitDigest(spaceID, datasetID, normalized); err != nil {
-			return nil, err
+			return false, err
 		}
 	}
 	normalizedAt = time.Now()
@@ -72,13 +72,12 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID s
 	s.datasetWriteMu.RLock()
 	defer s.datasetWriteMu.RUnlock()
 	if err := s.requireDataset(spaceID, datasetID); err != nil {
-		return nil, err
+		return false, err
 	}
-	// 编码 KV、构造并校验事件、整理变更范围与锁无关，放在 outboxMu 之外：并发写入、完成标记与 outbox 转发
-	// 不必排在这一步后面。锁内只查 commit 标记并提交；重复提交白做一次准备，丢弃即可。
+	// 编码 KV、整理变更范围与锁无关，放在 outboxMu 之外：并发写入与完成标记不必排在这一步后面。锁内只查 commit 标记并提交；重复提交白做一次准备，丢弃即可。
 	write, err := s.prepareRowsWrite(ctx, spaceID, datasetID, normalized)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	defer write.batch.Close()
 	preparedAt = time.Now()
@@ -91,27 +90,26 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID s
 		markerKey = commitMarkerKey(commitDay(now), spaceID, datasetID, commitID)
 		existing, found, err := s.findCommitMarker(spaceID, datasetID, commitID, now)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
 		if found {
 			if !bytes.Equal(existing, digest) {
-				return nil, CommitConflictError{CommitID: commitID}
+				return false, CommitConflictError{CommitID: commitID}
 			}
 			committedAt = time.Now()
-			return nil, nil
+			return false, nil
 		}
 	}
-	entries, err := s.commitRowsWriteLocked(ctx, write, func(batch *cpebble.Batch) error {
+	if err := s.commitRowsWriteLocked(ctx, write, func(batch *cpebble.Batch) error {
 		if markerKey == nil {
 			return nil
 		}
 		return batch.Set(markerKey, digest, s.writeOptions)
-	})
-	if err != nil {
-		return nil, err
+	}); err != nil {
+		return false, err
 	}
 	committedAt = time.Now()
-	return entries, nil
+	return true, nil
 }
 
 func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpsert) ([]*pb.RowFieldUpsert, error) {
@@ -140,21 +138,19 @@ func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpser
 	return normalizedRows, nil
 }
 
-// preparedRowsWrite 是一次写入在锁外准备好的部分：已写入字段、属性与行索引 KV 的 batch，构造并校验过、
-// 还没绑定 outbox 编号的事件，以及变更日志的时间范围与记录键。
+// preparedRowsWrite 是一次写入在锁外准备好的部分：已写入字段、属性与行索引 KV 的 batch，以及变更日志的时间范围与记录键。
 type preparedRowsWrite struct {
 	batch     *cpebble.Batch
 	spaceID   string
 	datasetID string
-	payload   []byte
 	ranges    []*pb.DatasetChangeRange
 	records   []*pb.RecordRowKey
 }
 
-// prepareRowsWrite 只读 Store 的静态配置，不读写 outbox、变更序号与 commit 标记，可以在 outboxMu 之外并发执行。
+// prepareRowsWrite 只读 Store 的静态配置，不读写变更序号与 commit 标记，可以在 outboxMu 之外并发执行。
 func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) (*preparedRowsWrite, error) {
-	// One batch preserves all field changes from a request. The dataset event
-	// payload, change log and commit marker are staged into the same batch.
+	// One batch preserves all field changes from a request. The change log and
+	// commit marker are staged into the same batch.
 	batch := s.db.NewBatch()
 	fail := func(err error) (*preparedRowsWrite, error) {
 		_ = batch.Close()
@@ -211,53 +207,30 @@ func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string,
 			}
 		}
 	}
-	payload, err := BuildDatasetRowsUpsertedMessage(spaceID, datasetID, rows)
-	if err != nil {
-		return fail(err)
-	}
-	return &preparedRowsWrite{batch: batch, spaceID: spaceID, datasetID: datasetID, payload: payload, ranges: changeRanges(rows), records: changeRecords(rows)}, nil
+	return &preparedRowsWrite{batch: batch, spaceID: spaceID, datasetID: datasetID, ranges: changeRanges(rows), records: changeRecords(rows)}, nil
 }
 
-// commitRowsWriteLocked 在 outboxMu 内完成写入：分配 outbox 编号并绑定到事件、追加变更日志，
-// 由 decorate 补充同一批次里的其他键（commit 标记、周期位图），然后提交。调用方必须持有 outboxMu。
-func (s *Store) commitRowsWriteLocked(ctx context.Context, prepared *preparedRowsWrite, decorate func(*cpebble.Batch) error) ([]*OutboxEntry, error) {
-	// 等锁期间请求可能已超时或取消：此时不再提交，避免客户端重试后写出重复事件。
+// commitRowsWriteLocked 在 outboxMu 内完成写入：追加变更日志，由 decorate 补充同一批次里的其他键
+// （commit 标记、周期账本），然后提交。调用方必须持有 outboxMu（它同时保护变更日志的序号）。
+func (s *Store) commitRowsWriteLocked(ctx context.Context, prepared *preparedRowsWrite, decorate func(*cpebble.Batch) error) error {
+	// 等锁期间请求可能已超时或取消：此时不再提交，客户端重试时不会重复写入。
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	batch := prepared.batch
-	id, err := s.nextOutboxID()
-	if err != nil {
-		return nil, err
-	}
-	payload, err := BindOutboxID(prepared.payload, s.nodeID, s.sourceStoreID, id)
-	if err != nil {
-		return nil, err
-	}
-	if s.maxEventBytes > 0 && len(payload) > s.maxEventBytes {
-		return nil, invalidf("event payload size %d exceeds limit %d", len(payload), s.maxEventBytes)
-	}
-	if err := batch.Set([]byte(outboxKey(id)), payload, s.writeOptions); err != nil {
-		return nil, err
-	}
-	if err := s.setNextOutboxID(batch, id+1); err != nil {
-		return nil, err
-	}
 	if err := s.stageRowsChangeLocked(batch, prepared.spaceID, prepared.datasetID, prepared.ranges, prepared.records); err != nil {
-		return nil, err
+		return err
 	}
 	if decorate != nil {
 		if err := decorate(batch); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {
-		return nil, err
+		return err
 	}
-	entry := &OutboxEntry{ID: id, Data: payload, CreatedAt: time.Now().UTC()}
-	s.noteOutboxCommitted(1, entry.CreatedAt)
 	s.noteChangeCommitted()
-	return []*OutboxEntry{entry}, nil
+	return nil
 }
 
 // commitDigest 是一次提交内容的摘要：行键不得重复，行与字段按规范顺序排列，与请求里的顺序无关。

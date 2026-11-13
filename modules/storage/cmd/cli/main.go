@@ -58,7 +58,7 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		stderr = io.Discard
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("expected command: init, import-seed, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, or purge-dataset-events")
+		return fmt.Errorf("expected command: init, import-seed, repair-view, reset-metadata, or delete-view")
 	}
 	switch args[0] {
 	case "init":
@@ -67,18 +67,12 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		return runImportSeed(args[1:], stdout, stderr)
 	case "repair-view":
 		return runRepairView(args[1:], stdout, stderr)
-	case "force-rebuild-view":
-		return runForceRebuildView(args[1:], stdout, stderr)
-	case "reset-view-consumers":
-		return runResetViewConsumers(args[1:], stdout, stderr)
 	case "reset-metadata":
 		return runResetMetadata(args[1:], stdout, stderr)
 	case "delete-view":
 		return runDeleteView(args[1:], stdout, stderr)
-	case "purge-dataset-events":
-		return runPurgeDatasetEvents(trpc.BackgroundContext(), args[1:], stdout)
 	default:
-		return fmt.Errorf("unknown command %q: use init, import-seed, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, or purge-dataset-events", args[0])
+		return fmt.Errorf("unknown command %q: use init, import-seed, repair-view, reset-metadata, or delete-view", args[0])
 	}
 }
 
@@ -252,4 +246,16 @@ func exitCode(err error) int {
 		return 0
 	}
 	return 1
+}
+
+func loadRuntimeConfig(configPath string) (storageconfig.RuntimeConfig, error) {
+	var cfg storageconfig.RuntimeConfig
+	if configPath == "" {
+		cfg.ApplyDefaults()
+		return cfg, nil
+	}
+	if err := storageconfig.NewConfigLoader(filepath.Dir(configPath)).LoadConfigWithDefaults(filepath.Base(configPath), &cfg, cfg.ApplyDefaults); err != nil {
+		return cfg, fmt.Errorf("load storage config %s: %w", configPath, err)
+	}
+	return cfg, nil
 }

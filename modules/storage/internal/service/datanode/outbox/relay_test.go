@@ -13,7 +13,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -131,8 +130,7 @@ func TestRelayDropsUnsupportedLegacyOutboxEventsAndPublishesTheRest(t *testing.T
 	if _, err := store.InsertOutboxPayloadForTest(legacy); err != nil {
 		t.Fatal(err)
 	}
-	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
+	if _, err := appendTestMarker(context.Background(), store, "s", "d"); err != nil {
 		t.Fatal(err)
 	}
 	publisher := &testPublisher{}
@@ -144,14 +142,14 @@ func TestRelayDropsUnsupportedLegacyOutboxEventsAndPublishesTheRest(t *testing.T
 		t.Fatal(err)
 	}
 	if len(publisher.values) != 1 {
-		t.Fatalf("published %d events, want 1 valid rows.upserted", len(publisher.values))
+		t.Fatalf("published %d events, want 1 valid period.completed", len(publisher.values))
 	}
 	published := &eventpb.EventMessage{}
 	if err := proto.Unmarshal(publisher.values[0], published); err != nil {
 		t.Fatal(err)
 	}
-	if published.GetEventName() != "event.storage.dataset.rows.upserted" {
-		t.Fatalf("published event %q, want rows.upserted", published.GetEventName())
+	if published.GetEventName() != "event.storage.dataset.period.completed" {
+		t.Fatalf("published event %q, want period.completed", published.GetEventName())
 	}
 	entries, err := store.ListOutbox(context.Background(), 0, 10)
 	if err != nil || len(entries) != 0 {
@@ -181,11 +179,7 @@ func TestRelayPublicationIsSerializedWithDatasetPurge(t *testing.T) {
 
 	otherDatasetWrite := make(chan error, 1)
 	go func() {
-		row := &pb.RowFieldUpsert{
-			Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset-other", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
-			Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "value"}}}},
-		}
-		_, err := store.UpsertFields(context.Background(), "space", "dataset-other", "", []*pb.RowFieldUpsert{row})
+		_, err := appendTestMarker(context.Background(), store, "space", "dataset-other")
 		otherDatasetWrite <- err
 	}()
 	select {
@@ -256,13 +250,10 @@ func TestPurgeWinningOutboxLockPreventsPublication(t *testing.T) {
 	}
 }
 
+// insertRecordOutboxEvent 在 Outbox 里留一条数据集的周期完成事件。
 func insertRecordOutboxEvent(t *testing.T, store *pebble.Store, spaceID, datasetID string) {
 	t.Helper()
-	rows := []*pb.RowFieldUpsert{{
-		Key:    &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
-		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "value"}}}},
-	}}
-	if _, err := store.UpsertFields(context.Background(), spaceID, datasetID, "", rows); err != nil {
+	if _, err := appendTestMarker(context.Background(), store, spaceID, datasetID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -273,12 +264,11 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	_, err = store.UpsertFields(context.Background(), "s", "d", "", rows)
+	_, err = appendTestMarker(context.Background(), store, "s", "d")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.UpsertFields(context.Background(), "s", "d", "", rows)
+	_, err = appendTestMarker(context.Background(), store, "s", "d")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,8 +325,7 @@ func TestRelayBoundsPublishAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
+	if _, err := appendTestMarker(context.Background(), store, "s", "d"); err != nil {
 		t.Fatal(err)
 	}
 	relay, err := NewRelay(store, blockingPublisher{}, RelayOptions{PublishTimeout: 10 * time.Millisecond})
@@ -362,8 +351,7 @@ func TestRelayReconnectsPublisherAfterRepeatedFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
+	if _, err := appendTestMarker(context.Background(), store, "s", "d"); err != nil {
 		t.Fatal(err)
 	}
 	publisher := &reconnectPublisher{unavailable: true}
@@ -405,8 +393,7 @@ func TestRelayKeepsPublisherUnreadyWhenReconnectVerificationFails(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer store.Close()
-	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
+	if _, err := appendTestMarker(context.Background(), store, "s", "d"); err != nil {
 		t.Fatal(err)
 	}
 	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
@@ -436,8 +423,7 @@ func TestRelayRecordsOutboxSnapshotAndDuplicateAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
+	if _, err := appendTestMarker(context.Background(), store, "s", "d"); err != nil {
 		t.Fatal(err)
 	}
 	registry := prometheus.NewRegistry()
@@ -468,8 +454,7 @@ func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
+	if _, err := appendTestMarker(context.Background(), store, "s", "d"); err != nil {
 		t.Fatal(err)
 	}
 	publisher := &retryDuplicatePublisher{}
@@ -561,8 +546,7 @@ func TestRelayQuarantinesInvalidOutboxEventsAndPublishesTheRest(t *testing.T) {
 	if _, err := store.InsertOutboxPayloadForTest(legacy); err != nil {
 		t.Fatal(err)
 	}
-	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
+	if _, err := appendTestMarker(context.Background(), store, "s", "d"); err != nil {
 		t.Fatal(err)
 	}
 	publisher := &testPublisher{}
@@ -601,9 +585,8 @@ func TestRelayStopsStartingNewPublishesAfterClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
 	for i := 0; i < 3; i++ {
-		if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
+		if _, err := appendTestMarker(context.Background(), store, "s", "d"); err != nil {
 			t.Fatal(err)
 		}
 	}

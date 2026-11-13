@@ -65,18 +65,6 @@ func TestViewOnlyMetadataMethodsRequireViewServiceSignature(t *testing.T) {
 			rsp, _ := service.CompleteViewInitialBuild(ctx, &pb.CompleteViewInitialBuildReq{AuthInfo: a})
 			return rsp.GetRetInfo()
 		},
-		"UpsertViewPeriodDatasetState": func(a *pb.AuthInfo) *pb.RetInfo {
-			rsp, _ := service.UpsertViewPeriodDatasetState(ctx, &pb.UpsertViewPeriodDatasetStateReq{AuthInfo: a})
-			return rsp.GetRetInfo()
-		},
-		"ListViewPeriodDatasetStates": func(a *pb.AuthInfo) *pb.RetInfo {
-			rsp, _ := service.ListViewPeriodDatasetStates(ctx, &pb.ListViewPeriodDatasetStatesReq{AuthInfo: a})
-			return rsp.GetRetInfo()
-		},
-		"RecordViewSyncPoint": func(a *pb.AuthInfo) *pb.RetInfo {
-			rsp, _ := service.RecordViewSyncPoint(ctx, &pb.RecordViewSyncPointReq{AuthInfo: a})
-			return rsp.GetRetInfo()
-		},
 	}
 	for name, call := range calls {
 		require.Equal(t, pb.ErrorCode_NO_PERMISSION, call(nil).GetCode(), name+" without auth")

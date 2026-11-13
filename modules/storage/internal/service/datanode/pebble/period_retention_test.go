@@ -72,15 +72,15 @@ func TestCommitMarkerKeepsSevenDays(t *testing.T) {
 			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}}}},
 		}}
 	}
-	entries, err := store.UpsertFields(ctx, goldenSpace, "factor_result", "commit-1", row(1))
+	written, err := store.UpsertFields(ctx, goldenSpace, "factor_result", "commit-1", row(1))
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
+	require.True(t, written)
 
 	for _, offset := range []time.Duration{time.Hour, 3 * 24 * time.Hour, 7 * 24 * time.Hour} {
 		clock.set(day.Add(offset))
-		entries, err = store.UpsertFields(ctx, goldenSpace, "factor_result", "commit-1", row(1))
+		written, err = store.UpsertFields(ctx, goldenSpace, "factor_result", "commit-1", row(1))
 		require.NoError(t, err)
-		require.Empty(t, entries, "%s 后的同内容重放是重复提交", offset)
+		require.False(t, written, "%s 后的同内容重放是重复提交", offset)
 		_, err = store.UpsertFields(ctx, goldenSpace, "factor_result", "commit-1", row(2))
 		var conflict CommitConflictError
 		require.ErrorAs(t, err, &conflict, "%s 后内容不同仍是冲突", offset)
@@ -98,9 +98,9 @@ func TestCommitMarkerKeepsSevenDays(t *testing.T) {
 	_, err = store.readPeriodValue(commitMarkerKey(commitDay(day), goldenSpace, "factor_result", "commit-1"))
 	require.Error(t, err, "8 天前的日桶已删除")
 	clock.set(later)
-	entries, err = store.UpsertFields(ctx, goldenSpace, "factor_result", "commit-1", row(2))
+	written, err = store.UpsertFields(ctx, goldenSpace, "factor_result", "commit-1", row(2))
 	require.NoError(t, err)
-	require.Len(t, entries, 1, "超过 7 天的同一 commit_id 当作新提交")
+	require.True(t, written, "超过 7 天的同一 commit_id 当作新提交")
 	value, found := goldenStoredClose(t, store, row(0)[0].GetKey())
 	require.True(t, found)
 	require.Equal(t, 2.0, value)

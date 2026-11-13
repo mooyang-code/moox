@@ -2,9 +2,13 @@ package view
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
@@ -13,7 +17,10 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -81,7 +88,7 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref viewRef, change *
 	return nil
 }
 
-// followReadyEvent 由完成标记组装 ViewDataReady 与它的事件 ID（与旧路径相同，下游按它去重）。
+// followReadyEvent 由完成标记组装 ViewDataReady 与它的事件 ID（下游按事件 ID 去重）。
 // View 只读一个数据集，账本判定的完成直接就是 View 的就绪，不再查各输入数据集的状态。
 func followReadyEvent(view *pb.View, message *eventpb.EventMessage, payload *storageeventpb.DatasetPeriodCompleted) (*storageeventpb.ViewDataReady, string, bool) {
 	ready := &storageeventpb.ViewDataReady{
@@ -206,4 +213,117 @@ func (s *Service) rebuildFollowIndex(ctx context.Context, ref viewRef) (viewinde
 	runtime.mu.Unlock()
 	s.observeActivatedViewWatermark(view, indexID)
 	return state, nil
+}
+
+// ReadyEventPublisher 发布 ViewDataReady。
+type ReadyEventPublisher interface {
+	Publish(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
+}
+
+// readyPublishTimeout 限制单条就绪事件的发布等待：不设截止时间的 JetStream 发布在确认丢失（EventBus 重启、断网）时会一直挂起。
+var readyPublishTimeout = 10 * time.Second
+
+// permanentReadyPublishError 报告发布错误是否是确定性的：消息无法通过发布前校验或超过 EventBus 的最大消息长度，原样重试不会成功。
+func permanentReadyPublishError(err error) bool {
+	return errors.Is(err, jetstream.ErrInvalidMessage) || errors.Is(err, nats.ErrMaxPayload)
+}
+
+// SetSeriesBars 设置时序 View 每个序列保留的根数（0 表示默认值），随查询响应告知调用方；关闭维护时也要设置。
+func (s *Service) SetSeriesBars(bars uint64) {
+	if bars == 0 {
+		bars = storagepolicy.DefaultViewBars
+	}
+	s.mu.Lock()
+	s.seriesBars = bars
+	s.mu.Unlock()
+}
+
+// viewSnapshot 返回目录里 View 的副本，活动索引取查询路径的无锁副本，不等运行时锁。
+func (s *Service) viewSnapshot(spaceID, viewID string) *pb.View {
+	s.mu.RLock()
+	view := s.catalogViews[viewRef{spaceID: spaceID, viewID: viewID}]
+	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
+	s.mu.RUnlock()
+	if view == nil {
+		return nil
+	}
+	clone := proto.Clone(view).(*pb.View)
+	if runtime != nil {
+		if active := runtime.queryState().active; active != "" {
+			clone.ActiveIndexId = active
+		}
+	}
+	return clone
+}
+
+func (s *Service) readyPublisherLocked() ReadyEventPublisher {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.readyPublisher
+}
+
+func viewVisibleScope(view *pb.View, fallback string) string {
+	if view.GetFreq() != "" {
+		return "view:" + view.GetViewId()
+	}
+	return firstNonEmpty(fallback, "view:"+view.GetViewId())
+}
+
+func viewConfigID(view *pb.View) string {
+	if view == nil {
+		return ""
+	}
+	if hash := strings.TrimSpace(view.GetActiveViewSchemaHash()); hash != "" {
+		return hash
+	}
+	if view.GetViewRevision() > 0 {
+		return fmt.Sprintf("%s@%d", view.GetViewId(), view.GetViewRevision())
+	}
+	return view.GetViewId()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func degradedScopeRef(status string, failed []string) string {
+	if status != "degraded" {
+		return ""
+	}
+	if refs := uniqueSortedStrings(failed); len(refs) > 0 {
+		return strings.Join(refs, ",")
+	}
+	return "degraded"
+}
+
+func stableViewEventID(parts ...string) string {
+	hash := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return "storage-view-" + hex.EncodeToString(hash[:16])
+}
+
+func cloneTimestamp(value *timestamppb.Timestamp) *timestamppb.Timestamp {
+	if value == nil {
+		return nil
+	}
+	return timestamppb.New(value.AsTime().UTC())
+}
+
+func uniqueSortedStrings(values []string) []string {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			set[value] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(set))
+	for value := range set {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }

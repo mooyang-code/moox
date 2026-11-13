@@ -52,14 +52,14 @@ func TestDeleteDatasetRowsClearsCommitMarkers(t *testing.T) {
 	}
 	defer store.Close()
 	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "s", DatasetId: "delete-me", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-16T00:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
-	if entries, err := store.UpsertFields(context.Background(), "s", "delete-me", "commit-1", []*pb.RowFieldUpsert{row}); err != nil || len(entries) != 1 {
-		t.Fatalf("first commit write entries=%d err=%v", len(entries), err)
+	if written, err := store.UpsertFields(context.Background(), "s", "delete-me", "commit-1", []*pb.RowFieldUpsert{row}); err != nil || !written {
+		t.Fatalf("first commit write written=%v err=%v", written, err)
 	}
 	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
 		t.Fatal(err)
 	}
-	if entries, err := store.UpsertFields(context.Background(), "s", "delete-me", "commit-1", []*pb.RowFieldUpsert{row}); err != nil || len(entries) != 1 {
-		t.Fatalf("recreated commit write entries=%d err=%v", len(entries), err)
+	if written, err := store.UpsertFields(context.Background(), "s", "delete-me", "commit-1", []*pb.RowFieldUpsert{row}); err != nil || !written {
+		t.Fatalf("recreated commit write written=%v err=%v", written, err)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestDeleteDatasetRowsRemovesCommitMarkersMarkersAndOutbox(t *testing.T) {
 	if _, err := store.AppendDatasetMarker(context.Background(), marker); err != nil {
 		t.Fatal(err)
 	}
-	if entries, err := store.ListOutbox(context.Background(), 0, 20); err != nil || len(entries) != 2 {
+	if entries, err := store.ListOutbox(context.Background(), 0, 20); err != nil || len(entries) != 1 {
 		t.Fatalf("outbox before cleanup entries=%d err=%v", len(entries), err)
 	}
 	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {

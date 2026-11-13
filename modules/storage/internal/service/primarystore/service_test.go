@@ -39,9 +39,9 @@ func TestPrimaryRejectsMissingOrDisabledDataset(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := newHookStore(t)
-			store.upsert = func(context.Context, string, string, string, []*pb.RowFieldUpsert) ([]*pebble.OutboxEntry, error) {
+			store.upsert = func(context.Context, string, string, string, []*pb.RowFieldUpsert) (bool, error) {
 				t.Fatal("write reached the store")
-				return nil, nil
+				return false, nil
 			}
 			svc, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return singleDatasetSnapshot{dataset: dataset} }})
 			require.NoError(t, err)
@@ -80,16 +80,9 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	if err != nil || completed.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("completed rsp=%v err=%v", completed, err)
 	}
-	syncPoint, err := svc.AppendDatasetSyncPoint(context.Background(), &pb.AppendDatasetSyncPointReq{
-		AuthInfo: &pb.AuthInfo{AppId: "storage-view"}, SpaceId: "space",
-		SyncPoint: &pb.DatasetSyncPointMarker{DatasetId: "dataset", RequestId: "request", Source: "import"},
-	})
-	if err != nil || syncPoint.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("sync point rsp=%v err=%v", syncPoint, err)
-	}
 	entries, err := store.ListOutbox(context.Background(), 0, 10)
 	require.NoError(t, err)
-	require.Len(t, entries, 3, "行事件、周期完成与同步点各进一条 Outbox")
+	require.Len(t, entries, 1, "Outbox 只有周期完成，行写入不进 Outbox")
 }
 
 type factorResultSnapshot struct{}
@@ -249,7 +242,7 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 func TestPrimaryWritesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 	var written []string
 	store := newHookStore(t)
-	store.upsert = func(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) ([]*pebble.OutboxEntry, error) {
+	store.upsert = func(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error) {
 		written = append(written, spaceID+"/"+datasetID)
 		return store.Store.UpsertFields(ctx, spaceID, datasetID, commitID, rows)
 	}
@@ -332,8 +325,8 @@ func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 
 func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
 	store := newHookStore(t)
-	store.upsert = func(context.Context, string, string, string, []*pb.RowFieldUpsert) ([]*pebble.OutboxEntry, error) {
-		return nil, errors.New("write failed")
+	store.upsert = func(context.Context, string, string, string, []*pb.RowFieldUpsert) (bool, error) {
+		return false, errors.New("write failed")
 	}
 	metrics := &recordingDatasetMetrics{}
 	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: store, DatasetMetrics: metrics})
@@ -460,9 +453,9 @@ func TestPrimaryReadRowsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
 
 func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 	store := newHookStore(t)
-	store.upsert = func(context.Context, string, string, string, []*pb.RowFieldUpsert) ([]*pebble.OutboxEntry, error) {
+	store.upsert = func(context.Context, string, string, string, []*pb.RowFieldUpsert) (bool, error) {
 		t.Fatal("write should not reach the store")
-		return nil, nil
+		return false, nil
 	}
 	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: store})
 	if err != nil {

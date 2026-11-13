@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunStorageMaintenanceBinaryDelegatesForceRebuildView(t *testing.T) {
+func TestRunStorageMaintenanceBinaryDelegatesRepairView(t *testing.T) {
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args")
 	script := filepath.Join(dir, "storage-cli")
@@ -21,32 +21,18 @@ func TestRunStorageMaintenanceBinaryDelegatesForceRebuildView(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_CLI", script)
 
 	var stdout, stderr bytes.Buffer
-	require.NoError(t, runStorageMaintenanceBinaryAction(context.Background(), nil, &stdout, &stderr, "force-rebuild-view", []string{"--lookback", "72h", "--yes"}))
+	require.NoError(t, runStorageMaintenanceBinaryAction(context.Background(), nil, &stdout, &stderr, "repair-view", []string{"--space-id", "crypto", "--yes"}))
 	raw, err := os.ReadFile(argsFile)
 	require.NoError(t, err)
-	require.Equal(t, "force-rebuild-view\n--lookback\n72h\n--yes\n", string(raw))
-}
-
-func TestRunStorageMaintenanceBinaryDelegatesResetViewConsumers(t *testing.T) {
-	dir := t.TempDir()
-	argsFile := filepath.Join(dir, "args")
-	script := filepath.Join(dir, "storage-cli")
-	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \""+argsFile+"\"\n"), 0o755))
-	t.Setenv("MOOX_STORAGE_CLI", script)
-
-	var stdout, stderr bytes.Buffer
-	require.NoError(t, runStorageMaintenanceBinaryAction(context.Background(), nil, &stdout, &stderr, "reset-view-consumers", []string{"--lookback", "72h", "--dry-run"}))
-	raw, err := os.ReadFile(argsFile)
-	require.NoError(t, err)
-	require.Equal(t, "reset-view-consumers\n--lookback\n72h\n--dry-run\n", string(raw))
+	require.Equal(t, "repair-view\n--space-id\ncrypto\n--yes\n", string(raw))
 }
 
 func TestStorageRemoteArgsAddPathDefaultsAndDefaultToPreview(t *testing.T) {
 	repair := storageMaintenanceActions[0]
 	require.Equal(t, "repair-view", repair.Action)
-	args := storageRemoteArgs(repair, "/data/moox/storage/current", []string{"--space-id", "crypto", "--view-id", "v1", "--consumer", "view_0123456789ab"})
+	args := storageRemoteArgs(repair, "/data/moox/storage/current", []string{"--space-id", "crypto", "--view-id", "v1"})
 	require.Equal(t, []string{
-		"--space-id", "crypto", "--view-id", "v1", "--consumer", "view_0123456789ab",
+		"--space-id", "crypto", "--view-id", "v1",
 		"--package-root", "/data/moox/storage/current",
 		"--storage-conf", "/data/moox/storage/current/storage-view/config/storage.yaml",
 		"--dry-run",

@@ -86,7 +86,7 @@ $S rollback --host control --unit prod --backup /data/moox/prod/binary-backup-co
 - Storage 两个名字：构建 `storage-primary`，再用 `--name moox-storage-primary|moox-storage-view` 各装一次保持一致；
   只重启需要的那个（例如只改 View 逻辑就只给 `storage-view` 加 `--restart storage-view`，`storage-primary` 用 `--no-restart`）。
   重启 `storage-primary` 会让这一刻的周期提交失败，监控可能出一条几十秒的行情探针告警并自动恢复。
-- 发布 Storage 前确认没有正在跑的 `reset-view-consumers` 或 View 首次建索引。
+- 发布 Storage 前确认没有正在跑的 `repair-view` 或 View 首次建索引。
 
 ## 发布清单的重新封存
 

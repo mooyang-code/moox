@@ -1096,39 +1096,6 @@ message ListDevicesRsp {
   common.PageResult page_result = 3;
 }
 
-message UpsertViewPeriodDatasetStateReq {
-  common.AuthInfo auth_info = 1;
-  ViewPeriodDatasetState state = 2;
-}
-
-message UpsertViewPeriodDatasetStateRsp {
-  common.RetInfo ret_info = 1;
-  ViewPeriodDatasetState state = 2;
-}
-
-message ListViewPeriodDatasetStatesReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string view_id = 3;
-  string frequency = 4;
-  int64 period_time = 5;
-}
-
-message ListViewPeriodDatasetStatesRsp {
-  common.RetInfo ret_info = 1;
-  repeated ViewPeriodDatasetState states = 2;
-}
-
-message RecordViewSyncPointReq {
-  common.AuthInfo auth_info = 1;
-  ViewSyncPoint sync_point = 2;
-}
-
-message RecordViewSyncPointRsp {
-  common.RetInfo ret_info = 1;
-  ViewSyncPoint sync_point = 2;
-}
-
 // CompleteViewInitialBuildReq 在首次建索引（含回填）完成后提交活动索引与已建列。
 message CompleteViewInitialBuildReq {
   common.AuthInfo auth_info = 1;
@@ -1192,9 +1159,6 @@ service Metadata {
   rpc CompleteViewInitialBuild(CompleteViewInitialBuildReq) returns (CompleteViewInitialBuildRsp);
   // 索引原地追加列之后，提交新的已建列。
   rpc CommitViewSchemaExtension(CommitViewSchemaExtensionReq) returns (CommitViewSchemaExtensionRsp);
-  rpc UpsertViewPeriodDatasetState(UpsertViewPeriodDatasetStateReq) returns (UpsertViewPeriodDatasetStateRsp);
-  rpc ListViewPeriodDatasetStates(ListViewPeriodDatasetStatesReq) returns (ListViewPeriodDatasetStatesRsp);
-  rpc RecordViewSyncPoint(RecordViewSyncPointReq) returns (RecordViewSyncPointRsp);
 
   // 创建数据来源。
   rpc CreateDataSource(CreateDataSourceReq) returns (CreateDataSourceRsp);

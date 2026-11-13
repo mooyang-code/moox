@@ -199,14 +199,9 @@ func TestChangeLogRecordsBothMarkerWriters(t *testing.T) {
 		_, err = store.AppendDatasetMarker(ctx, raw)
 		require.NoError(t, err)
 	}
-	// 同步点只进 Outbox。
-	syncRaw, _, err := BuildDatasetSyncPointMessage(goldenSpace, &pb.DatasetSyncPointMarker{RequestId: "req-1", DatasetId: goldenDataset, Source: "import"})
-	require.NoError(t, err)
-	_, err = store.AppendDatasetMarker(ctx, syncRaw)
-	require.NoError(t, err)
 
 	changes := readAllChanges(t, store, goldenSpace, goldenDataset)
-	require.Len(t, changes, 3, "一次行写入 + 两条标记；重报与同步点不记")
+	require.Len(t, changes, 3, "一次行写入 + 两条标记；重报不记")
 	require.NotEmpty(t, changes[0].GetRanges())
 	outbox := goldenMarkers(t, store, goldenSpace, goldenDataset)
 	require.Len(t, outbox, 2)

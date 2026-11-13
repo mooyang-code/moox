@@ -81,13 +81,9 @@ func validateDatasetEvent(data []byte) (string, string, error) {
 	return subject, message.GetEventId(), nil
 }
 
+// dataNodeOutboxEvent 报告事件能否经 Outbox 转发：Outbox 只承载周期完成事件。
 func dataNodeOutboxEvent(event events.Event) bool {
-	for _, allowed := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCompleted, events.DatasetSyncPoint} {
-		if event.Name() == allowed.Name() && event.Version() == allowed.Version() {
-			return true
-		}
-	}
-	return false
+	return event.Name() == events.DatasetPeriodCompleted.Name() && event.Version() == events.DatasetPeriodCompleted.Version()
 }
 
 func NewJetStreamPublisher(client *jetstream.Client) *JetStreamPublisher {

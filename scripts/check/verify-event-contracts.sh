@@ -34,6 +34,9 @@ reject 'TradeOrder|\bTradeExecution\b|TradeFill|TradeReconciliation|TradeRebalan
   "Trade self-consumption contract remains" "${production[@]}" modules/trade modules/strategy packages/events packages/tradeeventpb
 reject 'events\.EventType|EventDefinition|EventSchema|AllEventTypes' \
   "legacy event registry API remains" "${production[@]}" modules packages
+# View 跟随 PrimaryStore 的变更日志，不再有行事件、同步点和已提交位置。
+reject 'rows[.]upserted|sync[_]point|Sync[P]oint|committed[_]positions|Committed[P]ositions' \
+  "retired Storage row-event pipeline remains" "${production[@]}" modules packages
 reject 'NewPullConsumer|EnsurePullConsumer|BindPullConsumer|BindManagedPullConsumer|ConsumerBindRef|ConsumerRef|PullConsumer|PullConsumerAPI|NewConsumerFromPull' \
   "legacy Consumer lifecycle API remains" --glob '*.go' modules packages
 reject '^consumers:|^consumer_templates:|ConsumerTemplates' \
@@ -113,7 +116,7 @@ reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_w
 (cd packages/jetstream && go test ./...)
 (cd modules/eventbus && go test ./...)
 (cd modules/collector && go test ./internal/sources/binance)
-(cd modules/storage && CGO_ENABLED=1 go test ./internal/config ./cmd/server ./internal/eventmapper ./internal/service/datanode/... ./internal/service/view/... ./internal/service/e2e)
+(cd modules/storage && CGO_ENABLED=1 go test ./internal/config ./cmd/server ./internal/service/datanode/... ./internal/service/view/... ./internal/service/e2e)
 (cd modules/monitor && go test ./internal/config ./internal/metrics/... ./internal/hostmetrics/... ./test)
 (cd modules/factor && CGO_ENABLED=1 go test ./internal/store ./internal/bootstrap ./internal/catalog ./internal/periodclock ./internal/trigger ./internal/pipeline ./internal/recalc ./internal/storageio)
 (cd modules/cloudfunction && CGO_ENABLED=1 go test ./internal/config ./internal/rpc)

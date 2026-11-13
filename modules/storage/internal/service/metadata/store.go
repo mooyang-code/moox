@@ -3,7 +3,6 @@ package metadata
 import (
 	"context"
 	"errors"
-	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -137,15 +136,6 @@ type Writer interface {
 	UpsertDevice(ctx context.Context, item *pb.Device) (*pb.Device, error)
 }
 
-type ViewPeriodStateStore interface {
-	ListViewPeriodDatasetStates(ctx context.Context, spaceID, viewID, frequency string, periodTime int64) ([]*pb.ViewPeriodDatasetState, error)
-	MissingViewSyncPointDatasets(ctx context.Context, spaceID, viewID, requestID string, datasetIDs []string) ([]string, error)
-	UpsertViewPeriodDatasetState(ctx context.Context, item *pb.ViewPeriodDatasetState) (*pb.ViewPeriodDatasetState, error)
-	RecordViewSyncPoint(ctx context.Context, item *pb.ViewSyncPoint) (*pb.ViewSyncPoint, error)
-	DeleteViewPeriodDatasetStatesBefore(ctx context.Context, before time.Time) (int64, error)
-	DeleteViewSyncPointsBefore(ctx context.Context, before time.Time) (int64, error)
-}
-
 // Store 组合元数据读写能力与生命周期管理能力。
 type Store interface {
 	Close() error
@@ -154,5 +144,4 @@ type Store interface {
 	Reader
 	TagStore
 	Writer
-	ViewPeriodStateStore
 }

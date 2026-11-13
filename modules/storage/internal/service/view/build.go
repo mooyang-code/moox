@@ -387,7 +387,6 @@ func (s *Service) holdForRebuild(view *pb.View, engineName string) {
 		PrimaryDatasetID: view.GetDatasetId(), Engine: engineName, Columns: view.GetActiveColumns(), SchemaHash: view.GetActiveViewSchemaHash(),
 	}
 	s.indexView[indexID] = key
-	s.attachOwnedDatasetMappingLocked(view.GetSpaceId(), view.GetDatasetId(), indexID)
 	s.mu.Unlock()
 	runtime.mu.Lock()
 	if runtime.active == indexID {
@@ -443,5 +442,4 @@ func (s *Service) attachActiveViewLocked(view *pb.View, runtime *viewRuntime, sc
 	}
 	runtime.publishReadStateLocked()
 	s.indexView[view.GetActiveIndexId()] = viewKey
-	s.attachOwnedDatasetMappingLocked(view.GetSpaceId(), view.GetDatasetId(), view.GetActiveIndexId())
 }

@@ -19,7 +19,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
 	"trpc.group/trpc-go/trpc-go/transport"
@@ -38,10 +37,7 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.False(t, db.Migrator().HasTable("t_service_deployments"))
 	require.False(t, db.Migrator().HasTable("t_gateway_nodes"))
 	methods := pb.File_sysdeploy_service_proto.Services().ByName("SysDeploy").Methods()
-	require.Equal(t, 12, methods.Len())
-	for _, name := range []protoreflect.Name{"InspectEventBus", "DeleteEventBusConsumers", "PurgeEventBusSubjects"} {
-		require.NotNil(t, methods.ByName(name), name)
-	}
+	require.Equal(t, 9, methods.Len())
 	require.Nil(t, methods.ByName("ListServiceDeployments"))
 
 	service := sysdeploy.NewService(manager, "control")

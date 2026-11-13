@@ -146,8 +146,7 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 	if _, err := js.AddStream(&nats.StreamConfig{
 		Name: "MOOX_STORAGE",
 		Subjects: []string{
-			"moox.event.storage.dataset.rows.upserted.v2.>", "moox.event.storage.dataset.period.completed.v1.>",
-			"moox.event.storage.view.data.ready.v2.>", "moox.event.storage.dataset.sync_point.v1.>",
+			"moox.event.storage.dataset.period.completed.v1.>", "moox.event.storage.view.data.ready.v2.>",
 		},
 		Retention: nats.LimitsPolicy, Discard: nats.DiscardOld, Storage: nats.FileStorage, Duplicates: 2 * time.Minute,
 	}); err != nil {

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -127,7 +126,7 @@ func (validatorSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.Dat
 func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 	var writes, reads int
 	store := newHookStore(t)
-	store.upsert = func(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) ([]*pebble.OutboxEntry, error) {
+	store.upsert = func(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error) {
 		writes++
 		return store.Store.UpsertFields(ctx, spaceID, datasetID, commitID, rows)
 	}

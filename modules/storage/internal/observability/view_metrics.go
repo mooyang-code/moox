@@ -3,37 +3,17 @@ package observability
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/protobuf/proto"
 )
 
-// ViewMetrics contains bounded projection and delivery metrics.
+// ViewMetrics 是 View 与 Outbox 的指标：输出水位、就绪事件发布、删除最旧数据、恢复与跟随落后。
 type ViewMetrics struct {
-	deriveTotal     *prometheus.CounterVec
-	batchDuration   *prometheus.HistogramVec
-	deriveInFlight  prometheus.Gauge
-	deliveryTotal   *prometheus.CounterVec
-	redeliveryTotal prometheus.Counter
-
-	consumerLagMessages           prometheus.Gauge
-	consumerBound                 prometheus.Gauge
-	consumerPartitionLag          *prometheus.GaugeVec
-	consumerPartitionBound        *prometheus.GaugeVec
-	oldestPendingEventAge         prometheus.GaugeFunc
-	deliveryDuration              prometheus.Histogram
-	ackErrorsTotal                prometheus.Counter
-	inProgressErrorsTotal         prometheus.Counter
-	retryExhaustedTotal           prometheus.Counter
-	laneActive                    prometheus.Gauge
 	outboxPendingEntries          prometheus.Gauge
 	outboxOldestAge               prometheus.Gauge
 	outboxPublishErrorsTotal      prometheus.Counter
@@ -43,7 +23,6 @@ type ViewMetrics struct {
 	outboxLastPublishSuccess      prometheus.Gauge
 	outboxLastReconnect           prometheus.Gauge
 	outboxReconnectAttempts       *prometheus.CounterVec
-	periodWaitingDatasets         *prometheus.GaugeVec
 	viewOutputWatermark           *prometheus.GaugeVec
 	// viewOutputArrival 是 View 输出水位最近一次前进时的墙上时间，Monitor 用它算最新一根 K 线的到达延迟。
 	viewOutputArrival *prometheus.GaugeVec
@@ -55,32 +34,20 @@ type ViewMetrics struct {
 	oldestRowsDeleted       *prometheus.CounterVec
 	oldestDeleteLockSeconds prometheus.Histogram
 	oldestDeleteLastRound   prometheus.Gauge
-	readyQueuePending       prometheus.Gauge
-	readyQueueOldestAge     prometheus.GaugeFunc
-	readyPublishBackoff     prometheus.Gauge
 	restoreDuration         prometheus.Gauge
 	restoreReady            prometheus.Gauge
 	restoreFailures         prometheus.Counter
 	viewFileOverLimit       prometheus.Gauge
 	// followLag 是各 View 跟随变更日志的落后情况，采集时现算。
 	followLag                        *viewFollowLagCollector
-	consumerLagSnapshot              atomic.Int64
-	consumerBoundSnapshot            atomic.Bool
 	followingSnapshot                atomic.Bool
-	partitionMu                      sync.RWMutex
-	partitionStates                  map[string]ConsumerPartitionSnapshot
 	viewWatermarkMu                  sync.Mutex
 	viewWatermarks                   map[string]int64
 	outboxObservedSnapshot           atomic.Bool
 	outboxDynamicAge                 atomic.Bool
 	outboxOldestEventAt              atomic.Int64
-	laneActiveSnapshot               atomic.Int64
 	outboxPendingSnapshot            atomic.Int64
 	outboxOldestAgeSnapshot          atomic.Int64
-	oldestPendingAgeSnapshot         atomic.Int64
-	ackErrorsSnapshot                atomic.Int64
-	inProgressErrorsSnapshot         atomic.Int64
-	retryExhaustedSnapshot           atomic.Int64
 	outboxPublishErrorsSnapshot      atomic.Int64
 	outboxDuplicateSnapshot          atomic.Int64
 	outboxPublisherObservedSnapshot  atomic.Bool
@@ -94,29 +61,17 @@ type ViewMetrics struct {
 	restoreDurationSnapshot          atomic.Int64
 	restoreReadySnapshot             atomic.Bool
 	restoreFailuresSnapshot          atomic.Int64
-	pendingMu                        sync.Mutex
-	pendingDeliveries                map[*jetstream.Delivery]time.Time
-	readyQueuePendingSnapshot        atomic.Int64
-	readyQueueOldestAtSnapshot       atomic.Int64
-	readyPublishBackoffSnapshot      atomic.Bool
 }
 
 // ViewMetricsSnapshot is the aggregate runtime state exported by the view and
 // outbox instrumentation. It intentionally has no subject, symbol, or message
 // identity fields.
 type ViewMetricsSnapshot struct {
-	ConsumerLagMessages int64
-	ConsumerBound       bool
 	// Following 表示 View 已开始跟随变更日志。
 	Following                     bool
-	LaneActive                    int64
 	OutboxPendingEntries          int64
 	OutboxObserved                bool
 	OutboxOldestAge               time.Duration
-	OldestPendingAge              time.Duration
-	AckErrorsTotal                int64
-	InProgressErrorsTotal         int64
-	RetryExhaustedTotal           int64
 	OutboxPublishErrorsTotal      int64
 	OutboxDuplicatePublishTotal   int64
 	OutboxPublisherObserved       bool
@@ -130,20 +85,6 @@ type ViewMetricsSnapshot struct {
 	RestoreDuration               time.Duration
 	RestoreReady                  bool
 	RestoreFailures               int64
-	ReadyQueuePending             int64
-	ReadyQueueOldestAge           time.Duration
-	ReadyPublishBackoff           bool
-}
-
-// ConsumerPartitionSnapshot is a low-cardinality status projection for one
-// Storage View durable. It is intentionally keyed only by configured
-// partition id, never by dataset or subject.
-type ConsumerPartitionSnapshot struct {
-	PartitionID    string
-	Durable        string
-	Bound          bool
-	LagMessages    int64
-	LastDeliveryAt time.Time
 }
 
 func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
@@ -151,62 +92,6 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, fmt.Errorf("storage view metrics registerer is nil")
 	}
 	metrics := &ViewMetrics{
-		deriveTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "derive_events_total",
-			Help: "Terminal result of Storage view derivation events.",
-		}, []string{"kind", "result"}),
-		batchDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "derive_batch_duration_seconds",
-			Help: "Storage view derivation batch latency.",
-		}, []string{"engine", "result"}),
-		deriveInFlight: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "derive_events_in_flight",
-			Help: "Storage events waiting for all derived rows to complete.",
-		}),
-		deliveryTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "delivery_actions_total",
-			Help: "JetStream delivery terminal and heartbeat actions.",
-		}, []string{"action", "result"}),
-		redeliveryTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "redeliveries_total",
-			Help: "Storage view deliveries observed more than once.",
-		}),
-		consumerLagMessages: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "consumer_lag_messages",
-			Help: "Storage view deliveries fetched but not finished.",
-		}),
-		consumerBound: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "consumer_bound",
-			Help: "Whether the Storage view durable consumer is currently bound.",
-		}),
-		consumerPartitionLag: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "consumer_partition_lag_messages",
-			Help: "Storage view deliveries fetched but not finished, by configured partition.",
-		}, []string{"partition", "durable"}),
-		consumerPartitionBound: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "consumer_partition_bound",
-			Help: "Whether a configured Storage view durable is currently bound.",
-		}, []string{"partition", "durable"}),
-		deliveryDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "delivery_duration_seconds",
-			Help: "Storage view delivery processing duration.",
-		}),
-		ackErrorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "ack_errors_total",
-			Help: "Storage view ACK and TERM errors.",
-		}),
-		inProgressErrorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "in_progress_errors_total",
-			Help: "Storage view InProgress errors.",
-		}),
-		retryExhaustedTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "retry_exhausted_total",
-			Help: "Storage view deliveries that reached the client-side retry limit.",
-		}),
-		laneActive: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "lane_active",
-			Help: "Number of active aggregate Storage view subject lanes.",
-		}),
 		outboxPendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_outbox", Name: "pending_entries",
 			Help: "Number of pending Storage outbox entries.",
@@ -239,10 +124,6 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_outbox", Name: "reconnect_attempts_total",
 			Help: "Storage outbox publisher reconnect attempts by result.",
 		}, []string{"result"}),
-		periodWaitingDatasets: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "period_waiting_datasets",
-			Help: "Number of datasets still missing before a View source period can be published.",
-		}, []string{"view", "frequency"}),
 		viewOutputWatermark: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "output_watermark_timestamp_seconds",
 			Help: "Latest business timestamp successfully committed to an active Storage View.",
@@ -274,14 +155,6 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "oldest_delete_last_round_timestamp_seconds",
 			Help: "Wall time when the last oldest-row delete round finished, whether or not it deleted anything.",
 		}),
-		readyQueuePending: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "ready_queue_pending",
-			Help: "View ready events waiting to be published.",
-		}),
-		readyPublishBackoff: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_backoff",
-			Help: "Whether View ready event publishing is backing off after a connection failure (1) or not (0).",
-		}),
 		restoreDuration: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "restore_duration_seconds",
 			Help: "Duration of the latest active View restore pass.",
@@ -298,69 +171,14 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "file_over_limit",
 			Help: "Number of active Views whose index file is at or above max_view_file_bytes; alert only, no data is touched.",
 		}),
-		followLag:         newViewFollowLagCollector(),
-		pendingDeliveries: make(map[*jetstream.Delivery]time.Time),
-		partitionStates:   make(map[string]ConsumerPartitionSnapshot),
-		viewWatermarks:    make(map[string]int64),
+		followLag:      newViewFollowLagCollector(),
+		viewWatermarks: make(map[string]int64),
 	}
-	metrics.oldestPendingEventAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Namespace: "moox", Subsystem: "storage_view", Name: "oldest_pending_event_age_seconds",
-		Help: "Age of the oldest pending Storage view delivery.",
-	}, func() float64 { return metrics.currentOldestPendingAge(time.Now().UTC()).Seconds() })
 	metrics.outboxPublisherUnavailableAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: "moox", Subsystem: "storage_outbox", Name: "publisher_unavailable_age_seconds",
 		Help: "Continuous time the Storage outbox EventBus publisher has been unavailable.",
 	}, func() float64 { return metrics.currentOutboxPublisherUnavailableAge(time.Now().UTC()).Seconds() })
-	metrics.readyQueueOldestAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Namespace: "moox", Subsystem: "storage_view", Name: "ready_queue_oldest_age_seconds",
-		Help: "Age of the oldest View ready event waiting to be published.",
-	}, func() float64 { return metrics.currentReadyQueueOldestAge(time.Now()).Seconds() })
 	var err error
-	if metrics.deriveTotal, err = registerOrReuse(registerer, metrics.deriveTotal); err != nil {
-		return nil, err
-	}
-	if metrics.batchDuration, err = registerOrReuse(registerer, metrics.batchDuration); err != nil {
-		return nil, err
-	}
-	if metrics.deriveInFlight, err = registerOrReuse(registerer, metrics.deriveInFlight); err != nil {
-		return nil, err
-	}
-	if metrics.deliveryTotal, err = registerOrReuse(registerer, metrics.deliveryTotal); err != nil {
-		return nil, err
-	}
-	if metrics.redeliveryTotal, err = registerOrReuse(registerer, metrics.redeliveryTotal); err != nil {
-		return nil, err
-	}
-	if metrics.consumerLagMessages, err = registerOrReuse(registerer, metrics.consumerLagMessages); err != nil {
-		return nil, err
-	}
-	if metrics.consumerBound, err = registerOrReuse(registerer, metrics.consumerBound); err != nil {
-		return nil, err
-	}
-	if metrics.consumerPartitionLag, err = registerOrReuse(registerer, metrics.consumerPartitionLag); err != nil {
-		return nil, err
-	}
-	if metrics.consumerPartitionBound, err = registerOrReuse(registerer, metrics.consumerPartitionBound); err != nil {
-		return nil, err
-	}
-	if metrics.oldestPendingEventAge, err = registerOrReuse(registerer, metrics.oldestPendingEventAge); err != nil {
-		return nil, err
-	}
-	if metrics.deliveryDuration, err = registerOrReuse(registerer, metrics.deliveryDuration); err != nil {
-		return nil, err
-	}
-	if metrics.ackErrorsTotal, err = registerOrReuse(registerer, metrics.ackErrorsTotal); err != nil {
-		return nil, err
-	}
-	if metrics.inProgressErrorsTotal, err = registerOrReuse(registerer, metrics.inProgressErrorsTotal); err != nil {
-		return nil, err
-	}
-	if metrics.retryExhaustedTotal, err = registerOrReuse(registerer, metrics.retryExhaustedTotal); err != nil {
-		return nil, err
-	}
-	if metrics.laneActive, err = registerOrReuse(registerer, metrics.laneActive); err != nil {
-		return nil, err
-	}
 	if metrics.outboxPendingEntries, err = registerOrReuse(registerer, metrics.outboxPendingEntries); err != nil {
 		return nil, err
 	}
@@ -394,9 +212,6 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.outboxReconnectAttempts, err = registerOrReuse(registerer, metrics.outboxReconnectAttempts); err != nil {
 		return nil, err
 	}
-	if metrics.periodWaitingDatasets, err = registerOrReuse(registerer, metrics.periodWaitingDatasets); err != nil {
-		return nil, err
-	}
 	if metrics.viewOutputWatermark, err = registerOrReuse(registerer, metrics.viewOutputWatermark); err != nil {
 		return nil, err
 	}
@@ -419,15 +234,6 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	if metrics.oldestDeleteLastRound, err = registerOrReuse(registerer, metrics.oldestDeleteLastRound); err != nil {
-		return nil, err
-	}
-	if metrics.readyQueuePending, err = registerOrReuse(registerer, metrics.readyQueuePending); err != nil {
-		return nil, err
-	}
-	if metrics.readyQueueOldestAge, err = registerOrReuse(registerer, metrics.readyQueueOldestAge); err != nil {
-		return nil, err
-	}
-	if metrics.readyPublishBackoff, err = registerOrReuse(registerer, metrics.readyPublishBackoff); err != nil {
 		return nil, err
 	}
 	if metrics.restoreDuration, err = registerOrReuse(registerer, metrics.restoreDuration); err != nil {
@@ -519,18 +325,6 @@ func (m *ViewMetrics) RetainViews(active map[ViewKey]struct{}) {
 	m.viewSubjects.retain(active)
 }
 
-// ObservePeriodWaiting records the current missing-dataset count for a View
-// period. View and frequency are the only labels so this remains bounded.
-func (m *ViewMetrics) ObservePeriodWaiting(view, frequency string, waiting int) {
-	if m == nil {
-		return
-	}
-	if waiting < 0 {
-		waiting = 0
-	}
-	m.periodWaitingDatasets.WithLabelValues(view, frequency).Set(float64(waiting))
-}
-
 func (m *ViewMetrics) ObserveReadyPublishRetry(view, event string) {
 	if m == nil {
 		return
@@ -565,47 +359,6 @@ func (m *ViewMetrics) ObserveViewOldestDeleteRound(finished time.Time) {
 	m.oldestDeleteLastRound.Set(float64(finished.UnixNano()) / 1e9)
 }
 
-// SetReadyQueue 记录就绪队列的深度与最老事件的时间（队列为空时 oldest 为零值）。
-func (m *ViewMetrics) SetReadyQueue(pending int, oldest time.Time) {
-	if m == nil {
-		return
-	}
-	m.readyQueuePending.Set(float64(pending))
-	m.readyQueuePendingSnapshot.Store(int64(pending))
-	if pending == 0 || oldest.IsZero() {
-		m.readyQueueOldestAtSnapshot.Store(0)
-		return
-	}
-	m.readyQueueOldestAtSnapshot.Store(oldest.UnixNano())
-}
-
-// SetReadyPublishBackoff 记录就绪事件发布是否处于连接失败后的退避期。
-func (m *ViewMetrics) SetReadyPublishBackoff(backoff bool) {
-	if m == nil {
-		return
-	}
-	if backoff {
-		m.readyPublishBackoff.Set(1)
-	} else {
-		m.readyPublishBackoff.Set(0)
-	}
-	m.readyPublishBackoffSnapshot.Store(backoff)
-}
-
-func (m *ViewMetrics) currentReadyQueueOldestAge(now time.Time) time.Duration {
-	if m == nil {
-		return 0
-	}
-	at := m.readyQueueOldestAtSnapshot.Load()
-	if at == 0 {
-		return 0
-	}
-	if age := now.Sub(time.Unix(0, at)); age > 0 {
-		return age
-	}
-	return 0
-}
-
 // ObserveRestore records the latest startup restore result without adding
 // View- or dataset-level labels. A failed pass leaves readiness false while
 // the liveness endpoint remains available for diagnostics.
@@ -636,72 +389,6 @@ func (m *ViewMetrics) SetFollowing(following bool) {
 	}
 }
 
-func (m *ViewMetrics) SetConsumerBound(bound bool) {
-	if m == nil {
-		return
-	}
-	m.consumerBoundSnapshot.Store(bound)
-	if bound {
-		m.consumerBound.Set(1)
-	} else {
-		m.consumerBound.Set(0)
-	}
-}
-
-func (m *ViewMetrics) SetConsumerPartitionBound(partition, durable string, bound bool) {
-	if m == nil || strings.TrimSpace(partition) == "" {
-		return
-	}
-	partition = strings.TrimSpace(partition)
-	durable = strings.TrimSpace(durable)
-	m.partitionMu.Lock()
-	state := m.partitionStates[partition]
-	state.PartitionID = partition
-	state.Durable = durable
-	state.Bound = bound
-	m.partitionStates[partition] = state
-	m.partitionMu.Unlock()
-	value := float64(0)
-	if bound {
-		value = 1
-	}
-	m.consumerPartitionBound.WithLabelValues(partition, durable).Set(value)
-}
-
-func (m *ViewMetrics) AddConsumerPartitionLag(partition, durable string, delta int64) {
-	if m == nil || strings.TrimSpace(partition) == "" {
-		return
-	}
-	partition = strings.TrimSpace(partition)
-	durable = strings.TrimSpace(durable)
-	m.partitionMu.Lock()
-	state := m.partitionStates[partition]
-	state.PartitionID = partition
-	state.Durable = durable
-	state.LagMessages += delta
-	if state.LagMessages < 0 {
-		state.LagMessages = 0
-	}
-	m.partitionStates[partition] = state
-	lag := state.LagMessages
-	m.partitionMu.Unlock()
-	m.consumerPartitionLag.WithLabelValues(partition, durable).Set(float64(lag))
-}
-
-func (m *ViewMetrics) ConsumerPartitionsSnapshot() []ConsumerPartitionSnapshot {
-	if m == nil {
-		return nil
-	}
-	m.partitionMu.RLock()
-	result := make([]ConsumerPartitionSnapshot, 0, len(m.partitionStates))
-	for _, state := range m.partitionStates {
-		result = append(result, state)
-	}
-	m.partitionMu.RUnlock()
-	sort.Slice(result, func(i, j int) bool { return result[i].PartitionID < result[j].PartitionID })
-	return result
-}
-
 func registerOrReuse[T prometheus.Collector](registerer prometheus.Registerer, collector T) (T, error) {
 	if err := registerer.Register(collector); err == nil {
 		return collector, nil
@@ -725,169 +412,6 @@ func mustDefaultViewMetrics() *ViewMetrics {
 }
 
 var DefaultViewMetrics = mustDefaultViewMetrics()
-
-func (m *ViewMetrics) IncDeriveInFlight() {
-	if m != nil {
-		m.deriveInFlight.Inc()
-	}
-}
-
-func (m *ViewMetrics) DecDeriveInFlight() {
-	if m != nil {
-		m.deriveInFlight.Dec()
-	}
-}
-
-func (m *ViewMetrics) ObserveDerive(kind, result string) {
-	if m != nil {
-		m.deriveTotal.WithLabelValues(deriveKind(kind), outcome(result)).Inc()
-	}
-}
-
-func (m *ViewMetrics) ObserveBatch(engine, result string, elapsed time.Duration) {
-	if m != nil {
-		m.batchDuration.WithLabelValues(viewEngine(engine), outcome(result)).Observe(elapsed.Seconds())
-	}
-}
-
-func (m *ViewMetrics) ObserveDelivery(action, result string) {
-	if m != nil {
-		m.deliveryTotal.WithLabelValues(deliveryAction(action), outcome(result)).Inc()
-	}
-}
-
-func (m *ViewMetrics) IncRedelivery() {
-	if m != nil {
-		m.redeliveryTotal.Inc()
-	}
-}
-
-func (m *ViewMetrics) AddConsumerLagMessages(delta int64) {
-	if m == nil {
-		return
-	}
-	value := m.consumerLagSnapshot.Add(delta)
-	if value < 0 {
-		m.consumerLagSnapshot.Store(0)
-		value = 0
-	}
-	m.consumerLagMessages.Set(float64(value))
-}
-
-func (m *ViewMetrics) ObserveLaneSubmit() {
-	if m == nil {
-		return
-	}
-	m.consumerLagMessages.Set(float64(m.consumerLagSnapshot.Load()))
-}
-
-func (m *ViewMetrics) ObservePendingDelivery(delivery *jetstream.Delivery, now time.Time) {
-	if m == nil || delivery == nil {
-		return
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	eventAt := now
-	message := new(eventpb.EventMessage)
-	if err := proto.Unmarshal(delivery.RawData, message); err == nil && message.GetOccurredAt() != nil && message.GetOccurredAt().CheckValid() == nil {
-		eventAt = message.GetOccurredAt().AsTime()
-	}
-	m.pendingMu.Lock()
-	m.pendingDeliveries[delivery] = eventAt
-	m.updateOldestPendingLocked(now)
-	m.pendingMu.Unlock()
-}
-
-func (m *ViewMetrics) CompletePendingDelivery(delivery *jetstream.Delivery, now time.Time) {
-	if m == nil || delivery == nil {
-		return
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	m.pendingMu.Lock()
-	delete(m.pendingDeliveries, delivery)
-	m.updateOldestPendingLocked(now)
-	m.pendingMu.Unlock()
-}
-
-func (m *ViewMetrics) updateOldestPendingLocked(now time.Time) {
-	age := m.oldestPendingAgeLocked(now)
-	m.oldestPendingAgeSnapshot.Store(age.Nanoseconds())
-}
-
-func (m *ViewMetrics) currentOldestPendingAge(now time.Time) time.Duration {
-	if m == nil {
-		return 0
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	m.pendingMu.Lock()
-	defer m.pendingMu.Unlock()
-	age := m.oldestPendingAgeLocked(now)
-	m.oldestPendingAgeSnapshot.Store(age.Nanoseconds())
-	return age
-}
-
-func (m *ViewMetrics) oldestPendingAgeLocked(now time.Time) time.Duration {
-	oldest := time.Time{}
-	for _, eventAt := range m.pendingDeliveries {
-		if oldest.IsZero() || eventAt.Before(oldest) {
-			oldest = eventAt
-		}
-	}
-	if oldest.IsZero() || !now.After(oldest) {
-		return 0
-	}
-	return now.Sub(oldest)
-}
-
-func (m *ViewMetrics) IncLaneActive() {
-	if m != nil {
-		m.laneActive.Set(float64(m.laneActiveSnapshot.Add(1)))
-	}
-}
-
-func (m *ViewMetrics) DecLaneActive() {
-	if m == nil {
-		return
-	}
-	value := m.laneActiveSnapshot.Add(-1)
-	if value < 0 {
-		m.laneActiveSnapshot.Store(0)
-		value = 0
-	}
-	m.laneActive.Set(float64(value))
-}
-
-func (m *ViewMetrics) ObserveDeliveryDuration(elapsed time.Duration) {
-	if m != nil {
-		m.deliveryDuration.Observe(elapsed.Seconds())
-	}
-}
-
-func (m *ViewMetrics) IncAckError() {
-	if m != nil {
-		m.ackErrorsTotal.Inc()
-		m.ackErrorsSnapshot.Add(1)
-	}
-}
-
-func (m *ViewMetrics) IncInProgressError() {
-	if m != nil {
-		m.inProgressErrorsTotal.Inc()
-		m.inProgressErrorsSnapshot.Add(1)
-	}
-}
-
-func (m *ViewMetrics) IncRetryExhausted() {
-	if m != nil {
-		m.retryExhaustedTotal.Inc()
-		m.retryExhaustedSnapshot.Add(1)
-	}
-}
 
 // SetOutboxSnapshotAt records the source timestamp of the oldest pending
 // entry. Health checks can then observe an increasing age even if the relay
@@ -1034,22 +558,14 @@ func (m *ViewMetrics) Snapshot() ViewMetricsSnapshot {
 		return ViewMetricsSnapshot{}
 	}
 	now := time.Now().UTC()
-	oldestPendingAge := m.currentOldestPendingAge(now)
 	oldestOutboxAge := m.currentOutboxOldestAge(now)
 	m.outboxOldestAge.Set(oldestOutboxAge.Seconds())
 	m.outboxOldestAgeSnapshot.Store(oldestOutboxAge.Nanoseconds())
 	return ViewMetricsSnapshot{
-		ConsumerLagMessages:           m.consumerLagSnapshot.Load(),
-		ConsumerBound:                 m.consumerBoundSnapshot.Load(),
 		Following:                     m.followingSnapshot.Load(),
-		LaneActive:                    m.laneActiveSnapshot.Load(),
 		OutboxPendingEntries:          m.outboxPendingSnapshot.Load(),
 		OutboxObserved:                m.outboxObservedSnapshot.Load(),
 		OutboxOldestAge:               oldestOutboxAge,
-		OldestPendingAge:              oldestPendingAge,
-		AckErrorsTotal:                m.ackErrorsSnapshot.Load(),
-		InProgressErrorsTotal:         m.inProgressErrorsSnapshot.Load(),
-		RetryExhaustedTotal:           m.retryExhaustedSnapshot.Load(),
 		OutboxPublishErrorsTotal:      m.outboxPublishErrorsSnapshot.Load(),
 		OutboxDuplicatePublishTotal:   m.outboxDuplicateSnapshot.Load(),
 		OutboxPublisherObserved:       m.outboxPublisherObservedSnapshot.Load(),
@@ -1063,42 +579,5 @@ func (m *ViewMetrics) Snapshot() ViewMetricsSnapshot {
 		RestoreDuration:               time.Duration(m.restoreDurationSnapshot.Load()),
 		RestoreReady:                  m.restoreReadySnapshot.Load(),
 		RestoreFailures:               m.restoreFailuresSnapshot.Load(),
-		ReadyQueuePending:             m.readyQueuePendingSnapshot.Load(),
-		ReadyQueueOldestAge:           m.currentReadyQueueOldestAge(now),
-		ReadyPublishBackoff:           m.readyPublishBackoffSnapshot.Load(),
 	}
-}
-
-func deriveKind(value string) string {
-	switch value {
-	case "time_series", "record":
-		return value
-	default:
-		return "unknown"
-	}
-}
-
-func viewEngine(value string) string {
-	switch value {
-	case "duckdb", "bleve":
-		return value
-	default:
-		return "unknown"
-	}
-}
-
-func deliveryAction(value string) string {
-	switch value {
-	case "ack", "nak", "term", "in_progress":
-		return value
-	default:
-		return "unknown"
-	}
-}
-
-func outcome(value string) string {
-	if value == "success" {
-		return value
-	}
-	return "error"
 }

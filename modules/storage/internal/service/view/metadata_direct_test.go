@@ -20,9 +20,9 @@ func (c *authCapturingMetadata) ListViews(_ context.Context, req *pb.ListViewsRe
 	return &pb.ListViewsRsp{}, nil
 }
 
-func (c *authCapturingMetadata) RecordViewSyncPoint(_ context.Context, req *pb.RecordViewSyncPointReq, _ ...client.Option) (*pb.RecordViewSyncPointRsp, error) {
+func (c *authCapturingMetadata) GetView(_ context.Context, req *pb.GetViewReq, _ ...client.Option) (*pb.GetViewRsp, error) {
 	c.auth = req.GetAuthInfo()
-	return &pb.RecordViewSyncPointRsp{}, nil
+	return &pb.GetViewRsp{}, nil
 }
 
 // 直连 Metadata 的客户端无论调用方传入什么身份，都改用 storage-view 的服务签名（View 密钥）。
@@ -35,7 +35,7 @@ func TestDirectMetadataClientSignsEveryRequestWithViewSecret(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want.GetAppKey(), proxy.auth.GetAppKey(), "启动校验与调度循环不再使用 Primary 密钥")
 	proxy.auth = nil
-	_, err = metadata.RecordViewSyncPoint(context.Background(), &pb.RecordViewSyncPointReq{})
+	_, err = metadata.GetView(context.Background(), &pb.GetViewReq{})
 	require.NoError(t, err)
 	require.Equal(t, want.GetAppId(), proxy.auth.GetAppId())
 	require.Equal(t, want.GetAppKey(), proxy.auth.GetAppKey())

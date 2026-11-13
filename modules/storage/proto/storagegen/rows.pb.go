@@ -432,8 +432,7 @@ func (x *RowFieldValues) GetAttributes() map[string]*TypedValue {
 	return nil
 }
 
-// RowsUpserted is the Storage module's local write result model. The public
-// EventBus contract is packages/storagepb.DatasetRowsUpserted.
+// RowsUpserted 是一个数据集的一批行写入：commit_id 的内容摘要按它的规范编码计算。
 type RowsUpserted struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

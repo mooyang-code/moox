@@ -29,8 +29,8 @@ func readArgs(t *testing.T, path string) string {
 }
 
 // 原生部署的 start.sh / stop.sh 转给 moox-runtime，后者拒绝位置参数（“no positional arguments”）：
-// 整个 Storage 单元不带参数，单个组件用 --components。以前把组件名当位置参数传，所有靠它停启服务的维护命令
-// （reset-view-consumers、repair-view、force-rebuild-view）在“停止服务”这一步就失败。
+// 整个 Storage 单元不带参数，单个组件用 --components。以前把组件名当位置参数传，靠它停启服务的维护命令
+// （repair-view）在“停止服务”这一步就失败。
 func TestLifecycleScriptsAreCalledWithTheNativeRuntimeInterface(t *testing.T) {
 	root := t.TempDir()
 	stopArgs := writeLifecycleScript(t, root, "stop")
@@ -39,10 +39,10 @@ func TestLifecycleScriptsAreCalledWithTheNativeRuntimeInterface(t *testing.T) {
 	require.NoError(t, runStorageComponentLifecycle(context.Background(), root, "stop", "storage", io.Discard))
 	require.Equal(t, "", readArgs(t, stopArgs), "整个 Storage 单元不带参数")
 
-	require.NoError(t, runStorageViewLifecycle(context.Background(), root, "stop", "new", io.Discard))
+	require.NoError(t, runStorageViewLifecycle(context.Background(), root, "stop", io.Discard))
 	require.Equal(t, "--components storage-view", readArgs(t, stopArgs), "只停 View 用 --components")
 
-	require.NoError(t, runStorageViewLifecycle(context.Background(), root, "start", "new", io.Discard))
+	require.NoError(t, runStorageViewLifecycle(context.Background(), root, "start", io.Discard))
 	require.Equal(t, "--components storage-view", readArgs(t, startArgs))
 
 	require.Nil(t, lifecycleScriptArgs(""))
@@ -111,30 +111,4 @@ func TestNativeLayoutResolvesEachDataPathAgainstItsOwningComponent(t *testing.T)
 	require.NoError(t, os.MkdirAll(filepath.Join(single, "config"), 0o755))
 	got := resolveRepairStoragePaths(storage, single, filepath.Join(single, "config", "storage.yaml"))
 	require.Equal(t, filepath.Join(single, "var/storage/pebble"), got.Devices.PebblePath)
-}
-
-// 就绪检查用 healthcheck.sh 的 ready 字段（凭据由运行助手持有）；脚本不存在时退回 HTTP 探测；未就绪时脚本可能非零退出。
-func TestNativeStorageViewReadyReadsHealthcheckOutput(t *testing.T) {
-	root := t.TempDir()
-	_, available := nativeStorageViewReady(context.Background(), root)
-	require.False(t, available, "没有 healthcheck.sh 时不可用")
-
-	write := func(body string) {
-		require.NoError(t, os.WriteFile(filepath.Join(root, "healthcheck.sh"), []byte("#!/bin/sh\n"+body+"\n"), 0o755))
-	}
-	write(`[ "$1" = "--components" ] && [ "$2" = "storage-view" ] || exit 2
-printf '{"components":[{"id":"storage-view","state":"running","ready":true}]}'`)
-	ready, available := nativeStorageViewReady(context.Background(), root)
-	require.True(t, available)
-	require.True(t, ready)
-
-	write(`printf '{"components":[{"id":"storage-view","state":"running","ready":false}]}'; exit 1`)
-	ready, available = nativeStorageViewReady(context.Background(), root)
-	require.True(t, available)
-	require.False(t, ready, "未就绪时即使非零退出也能读到 ready=false")
-
-	write(`echo garbage; exit 1`)
-	ready, available = nativeStorageViewReady(context.Background(), root)
-	require.True(t, available)
-	require.False(t, ready)
 }

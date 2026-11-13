@@ -27,10 +27,9 @@ type LedgerPeriodCompleted struct {
 	UniverseSubjectIDs []string
 	FailedSubjects     []string
 	// UniverseSeries、FailedSeries 是按序列的全集与失败名单，只有快照含多个 series_tag（统一数据集）时才有。
-	UniverseSeries     []*storageeventpb.SeriesRef
-	FailedSeries       []*storageeventpb.SeriesRef
-	CommittedPositions []*pb.CommittedPosition
-	CompletedAt        *timestamppb.Timestamp
+	UniverseSeries []*storageeventpb.SeriesRef
+	FailedSeries   []*storageeventpb.SeriesRef
+	CompletedAt    *timestamppb.Timestamp
 }
 
 // BuildLedgerPeriodCompletedMessage 把账本的判定结果构造成 DatasetPeriodCompleted（source=ledger）事件。
@@ -45,7 +44,6 @@ func BuildLedgerPeriodCompletedMessage(spaceID string, completed *LedgerPeriodCo
 		FailedSubjects:     normalizedIDs(completed.FailedSubjects),
 		UniverseSeries:     normalizedSeries(completed.UniverseSeries),
 		FailedSeries:       normalizedSeries(completed.FailedSeries),
-		CommittedPositions: eventPositions(completed.CommittedPositions),
 		CompletedAt:        completed.CompletedAt,
 	}
 	encodedPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
@@ -75,20 +73,6 @@ func BuildProducerPeriodCompletedMessage(spaceID string, marker *pb.DatasetPerio
 	}
 	eventID := stableMarkerID("producer-period", spaceID, payload.GetDatasetId(), payload.GetCauseEventId(), strconv.FormatInt(payload.GetPeriodTime(), 10))
 	return buildMarkerMessage(events.DatasetPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCompletedAt()), payload)
-}
-
-func BuildDatasetSyncPointMessage(spaceID string, marker *pb.DatasetSyncPointMarker) ([]byte, string, error) {
-	if marker == nil {
-		return nil, "", invalid("dataset sync point is required")
-	}
-	syncPointID := stableMarkerID("sync-point", marker.GetRequestId(), marker.GetDatasetId())
-	if marker.GetSyncPointId() != "" && marker.GetSyncPointId() != syncPointID {
-		return nil, "", invalid("sync_point_id does not match request_id and dataset_id")
-	}
-	payload := &storageeventpb.DatasetSyncPoint{
-		SyncPointId: syncPointID, RequestId: marker.GetRequestId(), DatasetId: marker.GetDatasetId(), Source: marker.GetSource(),
-	}
-	return buildMarkerMessage(events.DatasetSyncPoint, syncPointID, spaceID, payload.GetDatasetId(), time.Now().UTC(), payload)
 }
 
 func buildMarkerMessage(event events.Event, eventID, spaceID, subjectID string, occurredAt time.Time, payload proto.Message) ([]byte, string, error) {
@@ -176,19 +160,6 @@ func markerSeriesToEvent(values []*pb.SeriesRef) []*storageeventpb.SeriesRef {
 	return out
 }
 
-func eventPositions(values []*pb.CommittedPosition) []*storageeventpb.CommittedPosition {
-	out := make([]*storageeventpb.CommittedPosition, 0, len(values))
-	for _, value := range values {
-		if value == nil {
-			continue
-		}
-		out = append(out, &storageeventpb.CommittedPosition{
-			NodeId: value.GetNodeId(), StoreId: value.GetStoreId(), Sequence: value.GetSequence(),
-		})
-	}
-	return out
-}
-
 func validateDataNodeMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
 	message := &eventpb.EventMessage{}
 	if err := proto.Unmarshal(raw, message); err != nil {
@@ -213,14 +184,5 @@ func validateDataNodeMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
 }
 
 func isDataNodeOutboxEvent(event events.Event) bool {
-	for _, allowed := range []events.Event{
-		events.DatasetRowsUpserted,
-		events.DatasetPeriodCompleted,
-		events.DatasetSyncPoint,
-	} {
-		if event.Name() == allowed.Name() && event.Version() == allowed.Version() {
-			return true
-		}
-	}
-	return false
+	return event.Name() == events.DatasetPeriodCompleted.Name() && event.Version() == events.DatasetPeriodCompleted.Version()
 }

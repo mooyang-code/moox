@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 type countingPublisher struct{ published atomic.Int32 }
@@ -19,10 +18,10 @@ func (p *countingPublisher) PublishMessage(context.Context, []byte) error {
 	return nil
 }
 
-func upsertTestRow(t *testing.T, store *pebble.Store, id string) {
+// upsertTestRow 在 Outbox 里留一条待转发的事件（周期完成标记）。
+func upsertTestRow(t *testing.T, store *pebble.Store, _ string) {
 	t.Helper()
-	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: id, Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
+	if _, err := appendTestMarker(context.Background(), store, "s", "d"); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -7,7 +7,9 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -75,48 +77,75 @@ func TestPlanFollowReads(t *testing.T) {
 	})
 }
 
-// 跟随路径组装的就绪事件与旧路径逐字段一致（旧路径额外带的 committed_positions 由 T7 删除）。
-func TestFollowReadyEventMatchesLegacy(t *testing.T) {
+// readyPublisherFake 记下每次发布的就绪事件。
+type readyPublisherFake struct {
+	payloads []*storageeventpb.ViewDataReady
+	opts     []events.PublishOptions
+}
+
+func (p *readyPublisherFake) Publish(_ context.Context, event events.Event, payload proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
+	p.payloads = append(p.payloads, proto.Clone(payload).(*storageeventpb.ViewDataReady))
+	p.opts = append(p.opts, opts)
+	return &jetstream.PublishAck{Stream: event.Stream(), Sequence: uint64(len(p.payloads))}, nil
+}
+
+// 跟随路径由完成标记组装的就绪事件：账本判定与写入方上报两种来源的各字段与事件 ID。
+func TestFollowReadyEventFromMarker(t *testing.T) {
 	occurredAt := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
 	cases := []struct {
 		name    string
 		view    *pb.View
 		payload *storageeventpb.DatasetPeriodCompleted
+		want    *storageeventpb.ViewDataReady
+		eventID string
 	}{
-		{"账本判定", &pb.View{SpaceId: "quant", ViewId: "kline-view", DatasetId: "kline", Freq: "1m", ActiveIndexId: "kline-a", ActiveViewSchemaHash: "hash-k"},
-			collectorCompleted("kline", "degraded", []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, []string{"ETH-USDT"}, occurredAt, 1786032000)},
-		{"写入方上报", &pb.View{SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results", ActiveIndexId: "result-a", ViewRevision: 3},
-			&storageeventpb.DatasetPeriodCompleted{
+		{
+			name: "账本判定",
+			view: &pb.View{SpaceId: "quant", ViewId: "kline-view", DatasetId: "kline", Freq: "1m", ActiveIndexId: "kline-a", ActiveViewSchemaHash: "hash-k"},
+			payload: &storageeventpb.DatasetPeriodCompleted{
+				DatasetId: "kline", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded", Source: "ledger", SnapshotRef: "universe:kline:1m",
+				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, FailedSubjects: []string{"ETH-USDT"}, CompletedAt: timestamppb.New(occurredAt),
+			},
+			want: &storageeventpb.ViewDataReady{
+				ViewId: "kline-view", ViewConfigId: "hash-k", CompletionEventId: "marker-ledger", DatasetId: "kline", Status: "degraded",
+				VisibleScope: "view:kline-view", Frequency: "1m", PeriodTime: 1786032000, FailedScopeRef: "ETH-USDT", ReadyAt: timestamppb.New(occurredAt),
+				UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
+			},
+			eventID: stableViewEventID("data-ready", "quant", "kline-view", "1m", "1786032000"),
+		},
+		{
+			name: "写入方上报",
+			view: &pb.View{SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results", ActiveIndexId: "result-a", ViewRevision: 3},
+			payload: &storageeventpb.DatasetPeriodCompleted{
 				DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
 				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, CompletedAt: timestamppb.New(occurredAt), CauseEventId: "cause-1",
 				DetailType: "test.Detail.v1", Detail: []byte("detail"),
-			}},
+			},
+			want: &storageeventpb.ViewDataReady{
+				ViewId: "result-view", ViewConfigId: "result-view@3", CompletionEventId: "marker-producer", DatasetId: "factor-results", Status: "complete",
+				VisibleScope: "view:result-view", Frequency: "1m", PeriodTime: 1786032000, ReadyAt: timestamppb.New(occurredAt),
+				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, DetailType: "test.Detail.v1", Detail: []byte("detail"),
+			},
+			eventID: stableViewEventID("data-ready", "marker-producer", "result-view"),
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// 旧路径要等已提交位置都写进索引才发布；新路径按日志顺序保证，不看这个字段。
-			tc.payload.CommittedPositions = nil
-			message := &eventpb.EventMessage{EventId: "marker-" + tc.payload.GetSource(), SpaceId: "quant", OccurredAt: timestamppb.New(occurredAt)}
-			legacy := newReadyPublisherFake()
-			legacyService := newPeriodTestService(newPeriodMetadataFake(), legacy, tc.view)
-			require.NoError(t, legacyService.HandleDatasetPeriodCompleted(context.Background(), message, tc.payload))
-			require.Len(t, legacy.attempts, 1)
-
 			raw, err := proto.Marshal(tc.payload)
 			require.NoError(t, err)
-			embedded := proto.Clone(message).(*eventpb.EventMessage)
-			embedded.Payload = raw
-			marker, err := proto.Marshal(embedded)
+			marker, err := proto.Marshal(&eventpb.EventMessage{EventId: "marker-" + tc.payload.GetSource(), SpaceId: "quant", OccurredAt: timestamppb.New(occurredAt), Payload: raw})
 			require.NoError(t, err)
-			current := newReadyPublisherFake()
-			followService := newPeriodTestService(nil, current, tc.view)
-			require.NoError(t, followService.publishFollowMarker(context.Background(), viewRef{spaceID: "quant", viewID: tc.view.GetViewId()}, &pb.DatasetChange{Sequence: 9, Marker: marker}))
-			require.Len(t, current.attempts, 1)
-
-			want := proto.Clone(legacy.attempts[0].payload).(*storageeventpb.ViewDataReady)
-			want.CommittedPositions = nil
-			require.True(t, proto.Equal(want, current.attempts[0].payload), "旧=%v\n新=%v", want, current.attempts[0].payload)
-			require.Equal(t, legacy.attempts[0].opts, current.attempts[0].opts)
+			publisher := &readyPublisherFake{}
+			ref := viewRef{spaceID: "quant", viewID: tc.view.GetViewId()}
+			svc := &Service{
+				views:          map[viewRef]*viewRuntime{ref: newViewRuntime()},
+				catalogViews:   map[viewRef]*pb.View{ref: tc.view},
+				readyPublisher: publisher,
+			}
+			require.NoError(t, svc.publishFollowMarker(context.Background(), ref, &pb.DatasetChange{Sequence: 9, Marker: marker}))
+			require.Len(t, publisher.payloads, 1)
+			require.True(t, proto.Equal(tc.want, publisher.payloads[0]), "想要=%v\n实际=%v", tc.want, publisher.payloads[0])
+			require.Equal(t, events.PublishOptions{EventID: tc.eventID, OccurredAt: occurredAt, SpaceID: "quant", SubjectID: tc.view.GetViewId()}, publisher.opts[0])
 		})
 	}
 }

@@ -294,12 +294,6 @@ components:
         port: 11109
         console_name: sysdeploy
         timeout_ms: 5000
-        # EventBus 维护由 Admin 代为连接 EventBus：连接最多等 15 秒，繁忙的流上清除、删除消费者单次最多 2 分钟，
-        # 服务端（Admin 的 trpc_go.yaml）的超时要不小于这里。
-        method_timeouts_ms:
-          InspectEventBus: 60000
-          DeleteEventBusConsumers: 180000
-          PurgeEventBusSubjects: 300000
         max_body_bytes: 4194304
         methods:
           - GetCatalog
@@ -311,16 +305,12 @@ components:
           - SetDeploymentStatus
           - SyncHostDeployments
           - DeleteHost
-          - InspectEventBus
-          - DeleteEventBusConsumers
-          - PurgeEventBusSubjects
         read_only_methods:
           - GetCatalog
           - ListHosts
           - ListDeployments
           - GetHostRoutes
           - GetDirectory
-          - InspectEventBus
         acl:
           - methods:
               - GetCatalog
@@ -345,12 +335,6 @@ components:
               - GetHostRoutes
             callers:
               - monitor
-          - methods:
-              - InspectEventBus
-              - DeleteEventBusConsumers
-              - PurgeEventBusSubjects
-            callers:
-              - storage-view
       - path: trpc.moox.admin.Setup
         port: 11110
         console_name: setup
@@ -1391,9 +1375,6 @@ components:
           - ListViewColumns
           - CompleteViewInitialBuild
           - CommitViewSchemaExtension
-          - UpsertViewPeriodDatasetState
-          - ListViewPeriodDatasetStates
-          - RecordViewSyncPoint
           - CreateDataSource
           - UpdateDataSource
           - DeleteDataSource
@@ -1441,7 +1422,6 @@ components:
           - GetView
           - ListViews
           - ListViewColumns
-          - ListViewPeriodDatasetStates
           - GetDataSource
           - ListDataSources
           - GetSubject
@@ -1580,9 +1560,6 @@ components:
         port: 20102
         console_name: storage
         timeout_ms: 5000
-        # WaitViewSyncPoint 服务端最多等待 30 秒，路由预算要大于它并留出传输余量。
-        method_timeouts_ms:
-          WaitViewSyncPoint: 35000
         max_body_bytes: 33554432
         methods:
           - UpsertFields
@@ -1593,9 +1570,7 @@ components:
           - CountTimeSeriesRows
           - ReadDatasetChanges
           - ReportDatasetPeriodCompleted
-          - AppendDatasetSyncPoint
           - GetDatasetPeriodCompleted
-          - WaitViewSyncPoint
         read_only_methods:
           - ReadRows
           - ReadTimeSeriesRows
@@ -1618,15 +1593,12 @@ components:
               - CountTimeSeriesRows
               - ReadDatasetChanges
               - ReportDatasetPeriodCompleted
-              - AppendDatasetSyncPoint
               - GetDatasetPeriodCompleted
-              - WaitViewSyncPoint
             callers:
               - moox-cli
           - methods:
               - RegisterSeriesSnapshot
               - CommitTimeSeriesBatch
-              - AppendDatasetSyncPoint
               - UpsertFields
             callers:
               - collector
@@ -1634,7 +1606,6 @@ components:
               - ReadRows
               - ReadTimeSeriesRows
               - CountTimeSeriesRows
-              - WaitViewSyncPoint
               - GetDatasetPeriodCompleted
             callers:
               - collector

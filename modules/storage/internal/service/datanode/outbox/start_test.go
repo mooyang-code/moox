@@ -10,7 +10,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -58,11 +57,7 @@ func TestStartWithEventBusDrainsBacklogAfterEventBusComesUp(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	row := &pb.RowFieldUpsert{
-		Key:    &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}},
-		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}},
-	}
-	if _, err := store.UpsertFields(ctx, "quant", "prices", "", []*pb.RowFieldUpsert{row}); err != nil {
+	if _, err := appendTestMarker(ctx, store, "quant", "prices"); err != nil {
 		t.Fatal(err)
 	}
 	reconnectsBefore := observability.DefaultViewMetrics.Snapshot().OutboxReconnectSuccesses

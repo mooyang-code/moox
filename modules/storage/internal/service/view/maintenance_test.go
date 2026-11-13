@@ -412,26 +412,6 @@ func TestMaintenanceStatsActiveIndexBeforeAttachingIt(t *testing.T) {
 	}
 }
 
-// 共用数据集时，没能挂接的 View 要让行事件保持未确认：否则已挂接的 View 把事件确认掉，这个 View 恢复后补不回这些行。
-func TestUnattachedViewHoldsDatasetEvents(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, SchemaHash: "old"}}
-	metadata := &maintenanceMetadata{view: &pb.View{
-		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "market",
-		ActiveIndexId: "prices-a", ViewRevision: 2, ActiveViewSchemaHash: "new",
-	}}
-	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
-		t.Fatal(err)
-	}
-	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err == nil || !strings.Contains(err.Error(), "尚未就绪") {
-		t.Fatalf("未挂接的 View 应当让事件保持未确认，err=%v", err)
-	}
-}
-
 // 列禁用只是逻辑上的：行里的值还在，只在返回时过滤；重新启用后恢复。
 func TestHiddenColumnsAreFilteredFromResults(t *testing.T) {
 	key := timeSeriesTestRowKey("")
@@ -458,7 +438,6 @@ func TestHiddenColumnsAreFilteredFromResults(t *testing.T) {
 	}
 	svc.catalogViews = make(map[viewRef]*pb.View)
 	svc.indexView = make(map[string]viewRef)
-	svc.byData = make(map[datasetRef]map[string]struct{})
 	attach()
 	if fields := query(); len(fields) != 1 || fields[0].GetFieldId() != "close" {
 		t.Fatalf("隐藏的列应当被过滤：%v", fields)

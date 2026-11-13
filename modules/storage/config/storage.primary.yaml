@@ -10,8 +10,5 @@ storage:
     pebble_path: ./var/storage/pebble
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-  view:
-    batch_size: 500
-    max_workers: 2
   health:
     addr: ":20210"

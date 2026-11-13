@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
@@ -32,29 +31,6 @@ func (s *Service) ReportDatasetPeriodCompleted(ctx context.Context, req *pb.Repo
 		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: storeError(err)}, nil
 	}
 	return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: retinfo.Success("success"), EventId: eventID}, nil
-}
-
-func (s *Service) AppendDatasetSyncPoint(ctx context.Context, req *pb.AppendDatasetSyncPointReq) (*pb.AppendDatasetSyncPointRsp, error) {
-	marker := req.GetSyncPoint()
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), marker.GetDatasetId()); err != nil {
-		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil
-	}
-	if marker.GetRequestId() == "" || (marker.GetSource() != "import" && marker.GetSource() != "catchup") {
-		return &pb.AppendDatasetSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request_id and source import|catchup are required"))}, nil
-	}
-	ctx = s.requestContext(ctx)
-	if err := requireActiveDataset(ctx, req.GetSpaceId(), marker.GetDatasetId()); err != nil {
-		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil
-	}
-	raw, _, err := pebble.BuildDatasetSyncPointMessage(req.GetSpaceId(), marker)
-	if err != nil {
-		return &pb.AppendDatasetSyncPointRsp{RetInfo: storeError(err)}, nil
-	}
-	eventID, err := s.store.AppendDatasetMarker(ctx, raw)
-	if err != nil {
-		return &pb.AppendDatasetSyncPointRsp{RetInfo: storeError(err)}, nil
-	}
-	return &pb.AppendDatasetSyncPointRsp{RetInfo: retinfo.Success("success"), EventId: eventID}, nil
 }
 
 func (s *Service) GetDatasetPeriodCompleted(ctx context.Context, req *pb.GetDatasetPeriodCompletedReq) (*pb.GetDatasetPeriodCompletedRsp, error) {
@@ -106,43 +82,6 @@ func markerSeries(values []*storageeventpb.SeriesRef) []*pb.SeriesRef {
 // storeError 把存储层错误转成带错误码的返回信息。
 func storeError(err error) *pb.RetInfo {
 	return retinfo.Error(pebble.ErrorCode(err), err)
-}
-
-func (s *Service) WaitViewSyncPoint(ctx context.Context, req *pb.WaitViewSyncPointReq) (*pb.WaitViewSyncPointRsp, error) {
-	if req == nil || req.GetSpaceId() == "" || req.GetViewId() == "" || req.GetRequestId() == "" || len(req.GetDatasetIds()) == 0 {
-		return &pb.WaitViewSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, view_id, request_id and dataset_ids are required"))}, nil
-	}
-	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
-		return &pb.WaitViewSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	if s.syncPoint == nil {
-		return &pb.WaitViewSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("view sync point reader is unavailable"))}, nil
-	}
-	datasetIDs := uniqueSorted(req.GetDatasetIds())
-	wait := time.Duration(req.GetWaitTimeoutMs()) * time.Millisecond
-	if wait > 30*time.Second {
-		wait = 30 * time.Second
-	}
-	deadline := time.Now().Add(wait)
-	for {
-		missing, err := s.syncPoint.MissingViewSyncPointDatasets(ctx, req.GetSpaceId(), req.GetViewId(), req.GetRequestId(), datasetIDs)
-		if err != nil {
-			return &pb.WaitViewSyncPointRsp{RetInfo: markerError(err)}, nil
-		}
-		if len(missing) == 0 {
-			return &pb.WaitViewSyncPointRsp{RetInfo: retinfo.Success("success"), Ready: true}, nil
-		}
-		if wait == 0 || !time.Now().Before(deadline) {
-			return &pb.WaitViewSyncPointRsp{RetInfo: retinfo.Success("pending"), PendingDatasetIds: missing}, nil
-		}
-		timer := time.NewTimer(50 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return &pb.WaitViewSyncPointRsp{RetInfo: markerError(ctx.Err()), PendingDatasetIds: missing}, nil
-		case <-timer.C:
-		}
-	}
 }
 
 func (s *Service) validateMarkerCaller(auth *pb.AuthInfo, spaceID, datasetID string) error {

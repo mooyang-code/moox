@@ -77,18 +77,6 @@ func TestFollowingViewColumnAddDoesNotRebuild(t *testing.T) {
 	if err := svc.AttachActiveView(ctx, metadata.view); err != nil {
 		t.Fatalf("attach active view: %v", err)
 	}
-	newFieldEvent := &pb.RowFieldUpsert{
-		Key: rowKey,
-		Fields: []*pb.FieldValue{
-			{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}},
-			{FieldId: "bias_20", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 0.5}}},
-		},
-	}
-	// 事件里 View 还没扩展出来的新列直接裁掉：不阻塞消费，扩展完成后这一行的新列为空（系统边界，见设计 3.4）。
-	if _, err := svc.applyEventToIndex(ctx, indexID, datasetID, []*pb.RowFieldUpsert{newFieldEvent}); err != nil {
-		t.Fatalf("event with a not-yet-active column must be applied with the new column trimmed: %v", err)
-	}
-
 	svc.setMetadataClient(metadata)
 	svc.extendViewSchemasRound(ctx)
 	if metadata.completes != 0 || metadata.extensions != 1 {
@@ -112,9 +100,6 @@ func TestFollowingViewColumnAddDoesNotRebuild(t *testing.T) {
 	})
 	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 || rows[0].GetFields()[0].GetValue().GetNullValue() != pb.NullValue_NULL_VALUE_NULL {
 		t.Fatalf("existing row after extension = %v err=%v, want NULL bias_20", rows, err)
-	}
-	if _, err := svc.applyEventToIndex(ctx, indexID, datasetID, []*pb.RowFieldUpsert{newFieldEvent}); err != nil {
-		t.Fatalf("event after extension: %v", err)
 	}
 }
 

@@ -5,7 +5,6 @@ package e2e
 import (
 	"context"
 	"path/filepath"
-	"sort"
 	"testing"
 	"time"
 
@@ -15,30 +14,14 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type primaryFieldReader struct {
 	service *primarystore.Service
-}
-
-func exactDatasetEventSubjects(t *testing.T, registry *events.Registry, spaceID, datasetID string) []string {
-	t.Helper()
-	filters := make([]string, 0, 5)
-	for _, event := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCompleted, events.DatasetSyncPoint} {
-		filter, err := registry.RenderSubject(event, spaceID, datasetID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		filters = append(filters, filter)
-	}
-	sort.Strings(filters)
-	return filters
 }
 
 func (r primaryFieldReader) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
@@ -87,33 +70,13 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	}
 	assertSeriesTagRows(t, read.GetRows(), tags, closes)
 
-	entries, err := store.ListOutbox(ctx, 0, 10)
-	if err != nil || len(entries) != 1 {
+	// 行写入只进变更日志，不进 Outbox。
+	if entries, err := store.ListOutbox(ctx, 0, 10); err != nil || len(entries) != 0 {
 		t.Fatalf("outbox entries=%v err=%v", entries, err)
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)
-	}
-	subject, err := registry.RenderSubject(events.DatasetRowsUpserted, "quant", "prices")
-	if err != nil {
-		t.Fatal(err)
-	}
-	envelope := new(eventpb.EventMessage)
-	if err := proto.Unmarshal(entries[0].Data, envelope); err != nil {
-		t.Fatal(err)
-	}
-	message, eventRows, err := events.DecodeDatasetRowsUpserted(registry, entries[0].Data, subject, envelope.GetEventId())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if message.GetEventVersion() != 2 || len(eventRows.GetRows()) != 3 {
-		t.Fatalf("DatasetRowsUpserted@2 message=%v rows=%v", message, eventRows.GetRows())
-	}
-	for i, row := range eventRows.GetRows() {
-		if row.GetKey().GetTimeSeries().GetSeriesTag() != tags[i] {
-			t.Fatalf("event row %d series_tag=%q want=%q", i, row.GetKey().GetTimeSeries().GetSeriesTag(), tags[i])
-		}
 	}
 
 	view, err := viewservice.New(filepath.Join(t.TempDir(), "view"), secret)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
@@ -47,7 +46,7 @@ func factorRowsRecord(field string) *pb.RowFieldUpsert {
 func newFactorResultService(t *testing.T, snapshot func() metadata.RequestSnapshot, calls *[]factorRowsCall) *Service {
 	t.Helper()
 	store := newHookStore(t)
-	store.upsert = func(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) ([]*pebble.OutboxEntry, error) {
+	store.upsert = func(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error) {
 		*calls = append(*calls, factorRowsCall{spaceID: spaceID, datasetID: datasetID, commitID: commitID, rows: rows})
 		return store.Store.UpsertFields(ctx, spaceID, datasetID, commitID, rows)
 	}

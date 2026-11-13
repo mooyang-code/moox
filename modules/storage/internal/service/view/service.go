@@ -27,27 +27,23 @@ import (
 )
 
 type Service struct {
-	engines                    map[string]viewindex.Engine
-	indexEngine                map[string]string
-	schemas                    map[string]viewindex.ViewIndexSchema
-	views                      map[viewRef]*viewRuntime
-	catalogViews               map[viewRef]*pb.View
-	indexView                  map[string]viewRef
-	authSecret                 string
+	engines      map[string]viewindex.Engine
+	indexEngine  map[string]string
+	schemas      map[string]viewindex.ViewIndexSchema
+	views        map[viewRef]*viewRuntime
+	catalogViews map[viewRef]*pb.View
+	indexView    map[string]viewRef
+	authSecret   string
 	// writerAuthSecret 是 Primary 角色密钥：持写入身份的调用方（Collector、moox-cli 导入）也能查 View 状态、等 View 跟上自己的写入。
-	writerAuthSecret           string
-	primaryAuth                *pb.AuthInfo
-	primary                    FieldReader
-	mu                         sync.RWMutex
-	byData                     map[datasetRef]map[string]struct{}
-	metrics                    *observability.ViewMetrics
-	periodMetadata             PeriodMetadataClient
-	metadataClient             MetadataClient
-	readyPublisher             ReadyEventPublisher
-	consumerBounds             map[string]func() bool
-	consumerPartitionByDataset map[datasetRef]string
-	indexGatesMu               sync.Mutex
-	indexGates                 map[string]*indexWriteGate
+	writerAuthSecret string
+	primaryAuth      *pb.AuthInfo
+	primary          FieldReader
+	mu               sync.RWMutex
+	metrics          *observability.ViewMetrics
+	metadataClient   MetadataClient
+	readyPublisher   ReadyEventPublisher
+	indexGatesMu     sync.Mutex
+	indexGates       map[string]*indexWriteGate
 	// indexRevision advances after every successful write to an index, so a
 	// reader that is paginating detects in-place corrections and deletions.
 	indexRevision     map[string]uint64
@@ -55,24 +51,10 @@ type Service struct {
 	cleanupCandidates map[managedIndexRef]retiredIndexCandidate
 	fileOverLimitMu   sync.Mutex
 	fileOverLimit     map[viewRef]struct{}
-	pendingReadyMu    sync.Mutex
-	pendingReady      []pendingViewReady
-	readyFlushMu      sync.Mutex
-	readyFenceDir     string
-	appliedFenceMu    sync.Mutex
-	appliedFence      map[appliedFenceKey]uint64
-
-	// readyReconnect 替换就绪事件发布器的专用连接；发布超时或连接被关闭后在刷新锁之外异步调用。
-	readyReconnect func(context.Context) error
-	// readyBackoffUntil 之前不再尝试发布就绪事件（上一次发布因连接问题失败）；readyReconnecting 保证同一时刻只有一个重连。
-	readyBackoffUntil time.Time
+	// readyReconnect 替换就绪事件发布器的专用连接；发布超时或连接被关闭后异步调用，readyReconnecting 保证同一时刻只有一个重连。
+	readyReconnect    func(context.Context) error
 	readyReconnecting atomic.Bool
-	// readyIssues 是就绪队列每类异常最近的一条日志，用于去重；appliedPersistMu 串行化写入围栏的落盘；
-	// appliedDirty 表示写入围栏有尚未落盘的更新（受 appliedFenceMu 保护）。
-	readyLogMu       sync.Mutex
-	readyIssues      map[string]string
-	appliedPersistMu sync.Mutex
-	appliedDirty     bool
+
 	// seriesBars 是时序 View 每个序列保留的根数，随查询响应告知调用方。
 	seriesBars uint64
 	// maxAge 是 View 按空间 × 频率的最长保留历史，超期的行不写入；maxAgeEnabled 为假时不限制。now 只供测试替换时钟。
@@ -88,7 +70,6 @@ type Service struct {
 	buildMu sync.Mutex
 }
 
-type datasetRef struct{ spaceID, datasetID string }
 type viewRef struct{ spaceID, viewID string }
 type viewRuntime struct {
 	mu     sync.Mutex
@@ -103,7 +84,7 @@ type viewRuntime struct {
 	statsRefreshedAt time.Time
 	// hiddenColumns 是逻辑上已删除的列（元数据随 View 下发）：只在返回结果时过滤，索引和已写入的值都不动。
 	hiddenColumns map[string]struct{}
-	// readState is a lock-free copy of what queries need. A delivery holds mu
+	// readState is a lock-free copy of what queries need. An index write holds mu
 	// for its whole index write (seconds for a large factor batch), so queries
 	// that took mu to read the active index waited behind every write.
 	readState atomic.Pointer[runtimeReadState]
@@ -148,14 +129,6 @@ func (r *viewRuntime) clearActiveLocked() {
 	r.publishReadStateLocked()
 }
 
-// writeTargetLocked 返回实时写入的目标索引：活动索引，或首次建索引期间的 building（调用方持有 mu）。
-func (r *viewRuntime) writeTargetLocked() string {
-	if r.active != "" {
-		return r.active
-	}
-	return r.building
-}
-
 // queryState returns the query-path copy without waiting for mu. A runtime
 // that never published one (built directly in tests) falls back to mu.
 func (r *viewRuntime) queryState() runtimeReadState {
@@ -165,20 +138,6 @@ func (r *viewRuntime) queryState() runtimeReadState {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return runtimeReadState{active: r.active, statsIndexID: r.statsIndexID, stats: r.stats, hiddenColumns: r.hiddenColumns}
-}
-
-func (s *Service) attachOwnedDatasetMappingLocked(spaceID, datasetID, indexID string) {
-	spaceID = strings.TrimSpace(spaceID)
-	datasetID = strings.TrimSpace(datasetID)
-	indexID = strings.TrimSpace(indexID)
-	if spaceID == "" || datasetID == "" || indexID == "" {
-		return
-	}
-	ref := datasetRef{spaceID: spaceID, datasetID: datasetID}
-	if s.byData[ref] == nil {
-		s.byData[ref] = make(map[string]struct{})
-	}
-	s.byData[ref][indexID] = struct{}{}
 }
 
 func New(root, authSecret string) (*Service, error) {
@@ -197,25 +156,17 @@ func New(root, authSecret string) (*Service, error) {
 		return nil, fmt.Errorf("open duckdb view indexes: %w", err)
 	}
 	service := &Service{
-		engines:                    engines,
-		indexEngine:                make(map[string]string),
-		schemas:                    make(map[string]viewindex.ViewIndexSchema),
-		views:                      make(map[viewRef]*viewRuntime),
-		catalogViews:               make(map[viewRef]*pb.View),
-		indexView:                  make(map[string]viewRef),
-		authSecret:                 authSecret,
-		byData:                     make(map[datasetRef]map[string]struct{}),
-		indexGates:                 make(map[string]*indexWriteGate),
-		indexRevision:              make(map[string]uint64),
-		cleanupCandidates:          make(map[managedIndexRef]retiredIndexCandidate),
-		consumerBounds:             make(map[string]func() bool),
-		consumerPartitionByDataset: make(map[datasetRef]string),
-		metrics:                    observability.DefaultViewMetrics,
-		readyFenceDir:              filepath.Join(root, "view-data-ready"),
-		appliedFence:               make(map[appliedFenceKey]uint64),
-	}
-	if err := service.loadReadyFence(); err != nil {
-		return nil, err
+		engines:           engines,
+		indexEngine:       make(map[string]string),
+		schemas:           make(map[string]viewindex.ViewIndexSchema),
+		views:             make(map[viewRef]*viewRuntime),
+		catalogViews:      make(map[viewRef]*pb.View),
+		indexView:         make(map[string]viewRef),
+		authSecret:        authSecret,
+		indexGates:        make(map[string]*indexWriteGate),
+		indexRevision:     make(map[string]uint64),
+		cleanupCandidates: make(map[managedIndexRef]retiredIndexCandidate),
+		metrics:           observability.DefaultViewMetrics,
 	}
 	return service, nil
 }
@@ -349,7 +300,6 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.removeIndexMappingsLocked(req.GetIndexId())
 	s.indexEngine[req.GetIndexId()] = engineName
 	s.schemas[req.GetIndexId()] = schema
 	if s.catalogViews[viewKey] == nil {
@@ -359,7 +309,6 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 		runtime.building = req.GetIndexId()
 	}
 	s.indexView[req.GetIndexId()] = viewKey
-	s.attachOwnedDatasetMappingLocked(sch.GetSpaceId(), sch.GetDatasetId(), req.GetIndexId())
 	return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
@@ -606,48 +555,6 @@ func (s *Service) metadataClientSnapshot() MetadataClient {
 	return metadata
 }
 
-// datasetHasActiveView distinguishes an unprojected Dataset (whose row event
-// can be ACKed) from a managed Dataset whose View mapping is temporarily
-// missing during discovery/recovery. The latter must remain pending so a
-// newly-created View cannot miss rows before the next maintenance tick.
-func (s *Service) datasetHasActiveView(ctx context.Context, spaceID, datasetID string) (bool, error) {
-	managed, _, err := s.datasetViewIndexState(ctx, spaceID, datasetID)
-	return managed, err
-}
-
-// datasetViewIndexState 按元数据报告数据集有没有活动状态的 View（managed），以及其中有没有已建好索引的（built）。
-func (s *Service) datasetViewIndexState(ctx context.Context, spaceID, datasetID string) (managed, built bool, err error) {
-	metadata := s.metadataClientSnapshot()
-	if metadata == nil {
-		// Lightweight embedders may not configure MetadataClient. In production
-		// the maintainer installs it before readiness is advertised; without it
-		// there is no managed-view contract to protect and unrelated rows may ACK.
-		return false, false, nil
-	}
-	auth := s.internalAuth()
-	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, SpaceId: spaceID, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
-		if err != nil {
-			return false, false, err
-		}
-		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-			return false, false, err
-		}
-		for _, view := range rsp.GetViews() {
-			if view == nil || view.GetSpaceId() != spaceID || strings.TrimSpace(view.GetDatasetId()) != datasetID {
-				continue
-			}
-			managed = true
-			if strings.TrimSpace(view.GetActiveIndexId()) != "" {
-				return true, true, nil
-			}
-		}
-		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
-			return managed, false, nil
-		}
-	}
-}
-
 func (s *Service) engineFor(id string) (viewindex.Engine, error) {
 	s.mu.RLock()
 	name := s.indexEngine[id]
@@ -698,19 +605,9 @@ func cachedActiveIndexStats(runtime *viewRuntime, indexID string) (viewindex.Vie
 
 // forgetIndexLocked 去掉索引的全部内存映射（调用方持有 s.mu）。
 func (s *Service) forgetIndexLocked(id string) {
-	s.removeIndexMappingsLocked(id)
 	delete(s.indexEngine, id)
 	delete(s.schemas, id)
 	delete(s.indexView, id)
-}
-
-func (s *Service) removeIndexMappingsLocked(id string) {
-	for ref, ids := range s.byData {
-		delete(ids, id)
-		if len(ids) == 0 {
-			delete(s.byData, ref)
-		}
-	}
 }
 
 func (s *Service) authorize(auth *pb.AuthInfo) error {
@@ -750,11 +647,4 @@ func (s *Service) authorizeViewOrWriter(auth *pb.AuthInfo) error {
 		return nil
 	}
 	return viewErr
-}
-
-func viewDatasetIDs(view *pb.View) []string {
-	if id := strings.TrimSpace(view.GetDatasetId()); id != "" {
-		return []string{id}
-	}
-	return nil
 }
