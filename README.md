@@ -74,7 +74,7 @@ Agent 会按 [安装与初始化](skills/moox/references/install.md) 执行部�
 
 - **多模式行情采集**：支持常驻 WebSocket 流式接收（加密货币默认）与无状态云函数（SCF）定时拉取，控制面负责任务分片、序列快照登记与周期对账，执行端重启不影响采集计划。
 - **缺口检测与自动补采**：以 Storage 主服务（storage-primary）作为周期完成的唯一权威；当上游延迟或中断导致缺口时，自动触发补采并通知下游沿连续水位补算。
-- **事实与视图分离**：storage-primary 基于 Pebble 持久化字段级时序事实并通过 Outbox 发布变更；storage-view 基于 DuckDB 与 Bleve 构建可随时重建的查询索引。
+- **事实与视图分离**：storage-primary 基于 Pebble 持久化字段级时序事实并记录变更日志；storage-view 基于 DuckDB 与 Bleve 构建可随时重建的查询索引，跟随变更日志更新。
 
 ### 因子与策略
 

@@ -21,7 +21,7 @@ Dataset 不再记录所属节点；数据集建好即为 active，可以直接�
 由 storage-primary 的 Pebble 库回答，调用方身份不会把读取切换成 View。区间读取使用 `[start_time, end_time)`
 和 `page.size` / `page.cursor`，不使用旧 `after_key`。
 
-`DataView` 查询可重建的 View 索引。一个 View 只绑定一个 Dataset；列来源是 Dataset 列、表达式或系统列，
+`DataView` 查询可重建的 View 索引。一个 View 只绑定一个 Dataset；View 的列就是该 Dataset 启用的列（由 Storage 推出，不单独声明），
 不跨 Dataset 拼宽表，也不直接引用旧因子实例。因子值先作为任务结果写入 Dataset，再由 View 索引。
 查询方使用当前激活的索引与列快照，不把待构建定义当作已激活版本。
 

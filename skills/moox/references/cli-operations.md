@@ -78,7 +78,7 @@ View 自己跟随 Primary 的变更日志，落后时先按 [`view-catchup.md`](
 ## 下线单个 View
 
 控制台没有删除 View 的入口。要下线某一个 View（例如已不再有读取方的 View），先暂停 `storage-view`
-（直接 stop 会在一分钟内被主机守护拉起，用 `moox-runtime pause`，可经 `moox-cli host exec --host <存储机> -- …` 执行），再离线删除这一个 View 的元数据：
+（直接 stop 会在一分钟内被主机守护拉起；在存储机上运行 `<包根>/pause.sh --components storage-view`，可经 `moox-cli host exec --host <存储机> -- …` 执行），再离线删除这一个 View 的元数据，删完后 `<包根>/resume.sh --components storage-view` 恢复：
 
 ```bash
 ./bin/moox-cli storage delete-view --view <空间>/<View ID> --yes
@@ -99,5 +99,5 @@ Storage 服务的时序 View 每个序列保留最近 `10000` 根，由每分钟
 1. 按 [`view-catchup.md`](view-catchup.md) 先确认卡在 Primary、View 跟随、还是 Factor 读超时；不要看到结果停滞就直接删除数据。
 2. 对目标命令先预览（不带 `--yes`），确认 Space、View 和 package root。
 3. Factor durable 积压时恢复服务并检查重投，不删除 consumer；历史数据修正使用有界 Recalc（`factor recalc submit`）。View 索引损坏或要按新根数回填时 `storage repair-view`。
-4. 记录 JSON 中的删除结果、备份路径和重启状态。`repair-view` 在暂停之后失败时必须用 `resume.sh --components storage-view` 恢复。
+4. 记录 JSON 中删除的索引（`view_indexes_removed`）和重启状态（`restarted`）。`repair-view` 在暂停之后失败时必须用 `resume.sh --components storage-view` 恢复。
 5. 等 View 重建完成并跟上后（`moox-cli data view state` 有活动索引、`moox-cli data view wait-applied` 返回），再查询 View/Factor 最新 `output_watermark`；不要用“进程已启动”代替数据已追赶的验收。

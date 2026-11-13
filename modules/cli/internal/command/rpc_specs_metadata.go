@@ -1,6 +1,6 @@
 package command
 
-// 空间与元数据：空间、数据来源、标的、标签、数据集、字段、View、设备，以及行与记录的读取。
+// 空间与元数据：空间、数据来源、标的、标签、数据集、字段、View，以及行与记录的读取。
 
 const (
 	spaceMgr    = "trpc.moox.admin.SpaceMgr"

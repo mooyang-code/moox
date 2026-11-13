@@ -57,7 +57,7 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 中途失败后再运行一次会接着清。CLI 不清理云函数，见第 8 节。
 
-从批 1（Storage 合并与 View 跟随变更日志）之前的版本重装时，还要按 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 1 全新部署注意”核对 `moox.toml`（去掉 `storage-node` 与两段 `mooxsys` 保留期）和归档 worker 配置；因子机本地库被清空后要重新做初始数据导入。
+从批 1（Storage 合并与 View 跟随变更日志）之前的版本重装时，还要按 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 1 全新部署注意”核对 `moox.toml`（`[deployments]` 里的 `storage-node` 用 `moox-cli config migrate --yes` 删掉，两段 `mooxsys` 保留期可删）和归档 worker 配置；因子机本地库被清空后要重新做初始数据导入。
 
 ### 本机状态
 
@@ -75,7 +75,7 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 | 2 | `$CLI setup deploy-host --host storage`，再 `overseas`、`factor` | 因子机要求 `[hosts.factor] reachability = "outbound"`，且已有 `/data/moox`（可写） |
 | 3 | `$CLI setup deploy-unit --host storage --profile eventbus` | EventBus 装在 `[deployments]` 登记它的主机（默认存储机） |
 | 4 | `$CLI setup deploy-unit --host storage --profile storage --binary-dir $WT/bin` | Storage 必须带第 2 节构建的 Linux CGO 制品 |
-| 5 | `$CLI setup init --stage storage --config-dir $WT/config/setup --storage-host storage` | 业务空间、导入元数据（数据集建好即可写入）。必须在 control 之前：Monitor 要等系统数据集就绪 |
+| 5 | `$CLI setup init --stage storage --config-dir $WT/config/setup --storage-host storage` | 业务空间、导入元数据（数据集建好即可写入）。必须在 control 之前 |
 | 6 | `$CLI setup deploy-unit --host storage --profile access`，再 `--host overseas --profile access`，再 `--host overseas --profile egress-proxy` | **存储机和海外机都要装 Access**，漏了海外机会出现“外接入（overseas）连接被拒绝”告警 |
 | 7 | `$CLI setup bootstrap --stage control` | 首次安装自动创建管理台内部 CA；失败的发布目录由下一次尝试自动清理 |
 | 8 | `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 云账户、日志服务和默认因子任务；业务空间和元数据第 5 步已写入，这里只核对 |

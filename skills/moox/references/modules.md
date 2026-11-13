@@ -78,7 +78,7 @@
 - **做什么**：storage-primary 管元数据目录（SQLite）和字段级事实（Pebble，含 Outbox、周期账本、保留期清理）；storage-view 管可重建的 View（DuckDB/Bleve）。
 - **在哪**：存储机，两个角色同机。数据集建好即可写入，不需要激活。
 - **常用**：
-  - 元数据：`metadata source|subject|tag|dataset|field|field-group|view|device list|show|create|update|delete`；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。
+  - 元数据：`metadata source|subject|tag|dataset|field|field-group|view list|show|create|update|delete`；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。
   - 读数据：`data kline get`、`data rows export|count`、`data view query|state|wait-applied`、`data records search`。
   - 维护：`storage repair-view|reset-metadata|delete-view`
     （经 SSH 在存储机上执行，不带 `--yes` 只预览；见 [`cli-operations.md`](cli-operations.md)、[`view-catchup.md`](view-catchup.md)）。

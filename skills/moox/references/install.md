@@ -192,7 +192,7 @@ cd moox-${VER}
 - `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。`reasons` 不为空时把缺的步骤告诉用户：安装中途换了配置或版本的，换回原配置和原版本后补上；装好后有意新增主机或组件的，按 [`host-registry.md`](host-registry.md) 部署，不要清空。
 - 输出里有 `warnings` 时先告诉用户。`disk_insufficient` 不拦清除，但部署会拒绝，要先腾出空间或换大磁盘。
 
-元数据必须在管理台之前导入：Monitor 要等系统数据集就绪才算启动成功。
+元数据必须在管理台（control 阶段）之前导入。
 
 ## 5. 初始化
 
