@@ -246,6 +246,57 @@ func TestChangeLogPagingAndHasMore(t *testing.T) {
 	require.Equal(t, []uint64{1, 2, 3, 4, 5}, seen)
 }
 
+// stageTestChange 直接追加一条变更条目，用来构造任意大小的完成标记条目。
+func stageTestChange(t *testing.T, s *Store, change *pb.DatasetChange) {
+	t.Helper()
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	require.NoError(t, s.stageChangeLocked(batch, change))
+	require.NoError(t, batch.Commit(cpebble.Sync))
+	s.noteChangeCommitted()
+}
+
+// 大的完成标记条目按字节分页：一页放进响应的条目不超过 maxChangePageBytes（单条超过时单独成页），
+// 游标停在最后一条放进响应的条目上，逐页读完不漏不重；别的数据集的条目不占本页字节。
+func TestChangeLogPagingLimitsBytes(t *testing.T) {
+	ctx := context.Background()
+	s := openChangeLogStore(t, 0)
+	marker := func(datasetID string, size int) *pb.DatasetChange {
+		return &pb.DatasetChange{SpaceId: "s", DatasetId: datasetID, Marker: make([]byte, size)}
+	}
+	part := maxChangePageBytes * 3 / 8
+	stageTestChange(t, s, marker("d", part))                 // 1
+	stageTestChange(t, s, marker("other", part))             // 2：别的数据集，不计字节
+	stageTestChange(t, s, marker("d", part))                 // 3
+	stageTestChange(t, s, marker("d", part))                 // 4：放进第一页会超过上限
+	stageTestChange(t, s, marker("d", maxChangePageBytes+1)) // 5：单条就超过上限，单独成页
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 1)})) // 6
+
+	cursor := &pb.DatasetChangeCursor{StoreId: mustHead(t, s).GetStoreId()}
+	var pages [][]uint64
+	var cursors []uint64
+	for {
+		rsp, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: cursor, Limit: maxChangeLimit})
+		require.NoError(t, err)
+		require.False(t, rsp.GetGap())
+		var page []uint64
+		for _, change := range rsp.GetChanges() {
+			page = append(page, change.GetSequence())
+		}
+		pages = append(pages, page)
+		cursor = rsp.GetNextCursor()
+		cursors = append(cursors, cursor.GetSequence())
+		if !rsp.GetHasMore() {
+			break
+		}
+	}
+	require.Equal(t, [][]uint64{{1, 3}, {4}, {5}, {6}}, pages)
+	require.Equal(t, []uint64{3, 4, 5, 6}, cursors)
+}
+
 // 等待中的读取在下一次提交后立即返回：行写入和完成标记都能唤醒；别的数据集的写入只推进游标、继续等。
 func TestReadDatasetChangesWaitReturnsAfterCommit(t *testing.T) {
 	ctx := context.Background()

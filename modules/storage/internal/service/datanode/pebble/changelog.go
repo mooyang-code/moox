@@ -27,6 +27,9 @@ const (
 	metaChangeTrimmed  = "__meta/changelog_trimmed_through"
 	defaultChangeLimit = 500
 	maxChangeLimit     = 2000
+	// maxChangePageBytes 限制一页放进响应的条目总字节：完成标记条目内嵌整条标记消息，全集大的数据集一条就有几十 KB，
+	// 只按条数截会超过 tRPC 默认 10 MiB 的收帧上限，读取方永远卡在同一页。单条超过它时仍单独返回。
+	maxChangePageBytes = 4 << 20
 	maxChangeWait      = 30 * time.Second
 	// changeWaitMargin 是等待离请求截止时间留的余量，留给返回响应。
 	changeWaitMargin   = 200 * time.Millisecond
@@ -296,6 +299,7 @@ func (s *Store) scanDatasetChanges(ctx context.Context, spaceID, datasetID strin
 	defer iter.Close()
 	last := cursor.GetSequence()
 	scanned := 0
+	pageBytes := 0
 	for ok := iter.First(); ok; ok = iter.Next() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -314,15 +318,23 @@ func (s *Store) scanDatasetChanges(ctx context.Context, spaceID, datasetID strin
 			// 日志序号连续、只从头清理：游标之后的第一条不是 cursor+1，说明中间的条目已被删除。
 			return &pb.ReadDatasetChangesRsp{NextCursor: head, Gap: true}, nil
 		}
-		last = entry.sequence
 		if entry.spaceID != spaceID || entry.datasetID != datasetID {
+			last = entry.sequence
 			continue
+		}
+		// 本页已有条目、再放这条就超过字节上限：停在这里，游标记到上一条已放进响应的位置。
+		size := len(iter.Value())
+		if len(rsp.Changes) > 0 && pageBytes+size > maxChangePageBytes {
+			rsp.HasMore = true
+			break
 		}
 		change := &pb.DatasetChange{}
 		if err := proto.Unmarshal(iter.Value(), change); err != nil {
 			return nil, fmt.Errorf("decode change log %s: %w", iter.Key(), err)
 		}
 		rsp.Changes = append(rsp.Changes, change)
+		pageBytes += size
+		last = entry.sequence
 	}
 	if err := iter.Error(); err != nil {
 		return nil, err
