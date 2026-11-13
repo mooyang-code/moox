@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/packages/barclock"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var ErrTargetViewNotReady = errors.New("target View is not ready")
@@ -201,10 +202,14 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if finalView == nil {
 		return compensate(errors.New("reread target View is empty"))
 	}
-	if err := waitTargetViewColumns(ctx, c.View, c.Auth, task.SpaceID, targetViewID, finalView.GetColumns(), 5*time.Second); err != nil {
-		return compensate(err)
+	err = waitTargetViewColumns(ctx, c.View, c.Auth, task.SpaceID, targetViewID, finalView.GetColumns(), 5*time.Second)
+	if err != nil && ctx.Err() == nil && task.PrepareState == domain.PrepareStateReady && !createdDataset && !createdView {
+		// 已经 Ready 的任务只在这里复核列：storage-view 不可达、恢复或重建期间 View 暂时查不到，不能让任务掉出 Ready，
+		// 否则触发、历史作业与兜底都停下，恢复后更早的桶补不回来。只记日志，下一轮再看。
+		log.Warnf("collector 合成任务 %s/%s 的目标 View %s 暂不可用，保持就绪：%v", task.SpaceID, task.TaskID, targetViewID, err)
+		return nil
 	}
-	return nil
+	return compensate(err)
 }
 
 // targetDatasetColumns 返回目标数据集的列定义：市场的合成字段，指定了输出字段时只取选中的那些。

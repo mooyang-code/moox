@@ -371,3 +371,19 @@ func TestPrepareTargetViewContractUsesDatasetFrequency(t *testing.T) {
 	view := &storagepb.View{DatasetId: "dataset_spot_kline_derived_5m", Freq: "5m", Engine: "duckdb", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}}
 	require.NoError(t, validateTargetView(view, domain.CollectionTask{}, &domain.CollectParams{TargetDatasetID: "dataset_spot_kline_derived_5m"}, "5m"))
 }
+
+// 已经 Ready 的任务复核列时 storage-view 不可达（恢复、重建期间同理）：保持 Ready、只记日志；
+// 还没 Ready 的任务照常报错，等下一轮准备。
+func TestPrepareTargetKeepsReadyTaskWhenViewStateUnavailable(t *testing.T) {
+	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("")
+	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
+	metadata.failAt = "view_state"
+
+	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
+	require.ErrorContains(t, err, "view_state failed", "还没 Ready 的任务要等列建好")
+
+	rule.PrepareState = domain.PrepareStateReady
+	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
+	require.NotEmpty(t, metadata.views, "目标 View 保留")
+	require.NotEmpty(t, metadata.datasets, "目标数据集保留")
+}
