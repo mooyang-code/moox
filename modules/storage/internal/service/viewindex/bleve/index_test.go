@@ -2,6 +2,7 @@ package bleve
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -274,5 +275,31 @@ func TestBleveFollowStatePersists(t *testing.T) {
 	want := viewindex.FollowState{Cursor: viewindex.ChangeCursor{StoreID: "store", Sequence: 9}, BuiltSequence: 7}
 	if stats.Follow != want {
 		t.Fatalf("跟随进度=%+v，应为 %+v", stats.Follow, want)
+	}
+}
+
+// Prepare 先建目录后写 meta.json：进程在两步之间退出时，统计按半成品返回（存在、没有数据集与跟随进度），不报错。
+func TestStatTreatsDirectoryWithoutMetaAsHalfPrepared(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "bleve")
+	index, err := Open(Options{Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer index.Close()
+	id := viewindex.ViewIndexID("space", "records")
+	if err := os.MkdirAll(filepath.Join(root, id), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, stat := range map[string]func(context.Context, string) (viewindex.ViewIndexStats, error){"StatMetadata": index.StatMetadata, "Stat": index.Stat} {
+		stats, err := stat(context.Background(), id)
+		if err != nil || !stats.Exists || stats.DatasetID != "" || stats.Follow.Cursor.StoreID != "" {
+			t.Fatalf("%s = %+v err=%v，想要存在的半成品", name, stats, err)
+		}
+	}
+	if err := index.Remove(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, id)); !os.IsNotExist(err) {
+		t.Fatalf("半成品应能删除，stat err=%v", err)
 	}
 }

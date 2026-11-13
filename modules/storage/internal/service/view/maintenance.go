@@ -214,7 +214,9 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 			}
 			stats, err := restoreIndexStats(ctx, engine, viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId()))
 			if err != nil {
-				return err
+				// 一个索引读不出来不能让整个进程起不来：这个 View 不挂接，由维护流程处理，其他 View 照常恢复。
+				log.Errorf("storage view 启动时读取索引失败，跳过挂接 space=%s view=%s：%v", view.GetSpaceId(), view.GetViewId(), err)
+				continue
 			}
 			if !indexBuiltFor(view, stats) {
 				continue
@@ -290,8 +292,54 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 				_, ok := activeViews[observability.ViewKey{SpaceID: spaceID, ViewID: viewID}]
 				return ok
 			})
+			s.forgetDeletedViews(ctx, opts.Metadata, auth)
 			return firstErr
 		}
+	}
+}
+
+// forgetDeletedViews 摘掉元数据里已经不存在的 View（停用的不算）：清掉运行时里的活动索引并从目录里去掉，
+// GetViewState 随之返回 VIEW_NOT_FOUND，索引文件不再受保护，由退役清理回收。列出元数据失败时这一轮不动。
+func (s *Service) forgetDeletedViews(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo) {
+	existing := make(map[viewRef]struct{})
+	for pageNo := uint32(1); ; pageNo++ {
+		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Page: &pb.Page{Page: pageNo, Size: 100}})
+		if err == nil {
+			err = requireSuccess(rsp.GetRetInfo())
+		}
+		if err != nil {
+			log.Warnf("storage view 列出全部 View 失败，这一轮不回收已删除的 View：%v", err)
+			return
+		}
+		for _, view := range rsp.GetViews() {
+			existing[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}] = struct{}{}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
+			break
+		}
+	}
+	s.mu.RLock()
+	removed := make(map[viewRef]*viewRuntime)
+	for ref, runtime := range s.views {
+		if _, ok := existing[ref]; !ok {
+			removed[ref] = runtime
+		}
+	}
+	s.mu.RUnlock()
+	for ref, runtime := range removed {
+		s.followManager().Stop(ref.spaceID, ref.viewID)
+		runtime.mu.Lock()
+		runtime.clearActiveLocked()
+		runtime.building, runtime.rebuilding = "", false
+		s.mu.Lock()
+		if s.views[ref] == runtime {
+			delete(s.views, ref)
+			delete(s.catalogViews, ref)
+			s.forgetIndexLocked(viewindex.ViewIndexID(ref.spaceID, ref.viewID))
+		}
+		s.mu.Unlock()
+		runtime.mu.Unlock()
+		log.Infof("storage view 已删除的 View 不再挂接 space=%s view=%s", ref.spaceID, ref.viewID)
 	}
 }
 

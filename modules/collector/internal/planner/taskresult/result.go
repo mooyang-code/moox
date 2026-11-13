@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/log"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/barclock"
@@ -117,7 +118,6 @@ type metadataAPI interface {
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error)
 	GetView(context.Context, *storagepb.GetViewReq) (*storagepb.GetViewRsp, error)
 	CreateView(context.Context, *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error)
-	UpdateView(context.Context, *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error)
 	ListViews(context.Context, *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
@@ -133,7 +133,6 @@ type MetadataClient interface {
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
 	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
 	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
-	UpdateView(context.Context, *storagepb.UpdateViewReq, ...client.Option) (*storagepb.UpdateViewRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
 	ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
@@ -174,9 +173,6 @@ func (p metadataProxy) GetView(ctx context.Context, req *storagepb.GetViewReq) (
 }
 func (p metadataProxy) CreateView(ctx context.Context, req *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
 	return p.client.CreateView(ctx, req)
-}
-func (p metadataProxy) UpdateView(ctx context.Context, req *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
-	return p.client.UpdateView(ctx, req)
 }
 func (p metadataProxy) DeleteView(ctx context.Context, req *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
 	return p.client.DeleteView(ctx, req)
@@ -481,21 +477,28 @@ func classifyInspectionMetadataError(action string, ret *storagepb.RetInfo) erro
 }
 
 // viewIndexedRange 从 storage-view 读结果 View 已建索引的覆盖范围（两端都含）。
-// storage-view 还没登记这个 View，或索引还没建好（首次建索引、断档重建中）时返回空，表示覆盖范围未知；其他失败照常报错。
+// storage-view 还没登记这个 View、索引还没建好（首次建索引、断档重建中），或 storage-view 暂时不可用（传输失败、内部错误）时
+// 记日志后返回空，表示覆盖范围未知：storage-view 暂停或重启不能让任务结果清单整份失败。只有调用契约错误照常上报。
 func (m *Manager) viewIndexedRange(ctx context.Context, spaceID, viewID string) (string, string, error) {
 	state, err := m.metadata.GetViewState(ctx, &storagepb.GetViewStateReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: viewID})
 	if err != nil {
-		return "", "", fmt.Errorf("inspect result view state: %w", err)
+		log.WarnContextf(ctx, "读取结果 View 索引状态失败，覆盖范围按未知处理 space=%s view=%s：%v", spaceID, viewID, err)
+		return "", "", nil
 	}
 	if state == nil || state.GetRetInfo() == nil {
-		return "", "", fmt.Errorf("%w: %v", ErrResultContract, metadataError("inspect result view state", nil, nil))
+		return "", "", fmt.Errorf("%w: %v", ErrResultContract, metadataError("读取结果 View 的索引状态", nil, nil))
 	}
 	switch state.GetRetInfo().GetCode() {
 	case storagepb.ErrorCode_SUCCESS:
 	case storagepb.ErrorCode_VIEW_NOT_FOUND:
 		return "", "", nil
 	default:
-		return "", "", classifyInspectionMetadataError("inspect result view state", state.GetRetInfo())
+		classified := classifyInspectionMetadataError("读取结果 View 的索引状态", state.GetRetInfo())
+		if errors.Is(classified, ErrResultContract) {
+			return "", "", classified
+		}
+		log.WarnContextf(ctx, "读取结果 View 索引状态失败，覆盖范围按未知处理 space=%s view=%s：%v", spaceID, viewID, classified)
+		return "", "", nil
 	}
 	if strings.TrimSpace(state.GetIndexId()) == "" {
 		return "", "", nil

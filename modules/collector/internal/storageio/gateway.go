@@ -20,7 +20,6 @@ type Metadata interface {
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
 	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
 	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
-	UpdateView(context.Context, *storagepb.UpdateViewReq, ...client.Option) (*storagepb.UpdateViewRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
 	ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
@@ -100,10 +99,6 @@ func (c *Client) GetView(ctx context.Context, request *storagepb.GetViewReq, opt
 
 func (c *Client) CreateView(ctx context.Context, request *storagepb.CreateViewReq, options ...client.Option) (*storagepb.CreateViewRsp, error) {
 	return invoke[storagepb.CreateViewRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "CreateView", request, options)
-}
-
-func (c *Client) UpdateView(ctx context.Context, request *storagepb.UpdateViewReq, options ...client.Option) (*storagepb.UpdateViewRsp, error) {
-	return invoke[storagepb.UpdateViewRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpdateView", request, options)
 }
 
 func (c *Client) DeleteView(ctx context.Context, request *storagepb.DeleteViewReq, options ...client.Option) (*storagepb.DeleteViewRsp, error) {

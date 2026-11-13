@@ -1514,13 +1514,12 @@ components:
               - factor-mgr
               - monitor
               - strategy
-          # 写方法按各模块实际的调用点放行：Collector 建改删数据集与浏览 View；factor-mgr 建删结果数据集、列与默认 View。
+          # 写方法按各模块实际的调用点放行：Collector 建改删数据集、建删浏览 View；factor-mgr 建删结果数据集、列与默认 View。
           - methods:
               - CreateDataset
               - UpdateDataset
               - DeleteDataset
               - CreateView
-              - UpdateView
               - DeleteView
               - UpsertDatasetColumn
             callers:

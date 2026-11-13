@@ -3,6 +3,7 @@ package view
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -334,5 +335,90 @@ func TestHiddenColumnsAreFilteredFromResults(t *testing.T) {
 	attach()
 	if fields := query(); len(fields) != 2 {
 		t.Fatalf("重新启用后应当恢复：%v", fields)
+	}
+}
+
+// Bleve 索引建到一半进程退出（目录在、meta.json 不在）：启动不失败、不挂接，维护流程删掉重建。
+func TestHalfPreparedBleveIndexIsRebuiltAfterRestart(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "views")
+	svc, err := New(root, "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, engine := range svc.engines {
+			if closer, ok := engine.(interface{ Close() error }); ok {
+				_ = closer.Close()
+			}
+		}
+	}()
+	indexID := viewindex.ViewIndexID("space", "records")
+	if err := os.MkdirAll(filepath.Join(root, "bleve", indexID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "records", Engine: "bleve", DatasetId: "records", Status: "active",
+		Columns: []*pb.ViewColumn{{ColumnName: "title", OriginId: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}}}
+	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
+		t.Fatalf("半成品不能让启动失败：%v", err)
+	}
+	if active, runtime := svc.activeIndex("space", "records"); runtime != nil && active != "" {
+		t.Fatalf("半成品不应挂接：%q", active)
+	}
+	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadata}, svc.internalAuth(), metadata.view); err != nil {
+		t.Fatalf("维护应当重建：%v", err)
+	}
+	if active, _ := svc.activeIndex("space", "records"); active != indexID {
+		t.Fatalf("重建后 active=%q", active)
+	}
+	if _, err := os.Stat(filepath.Join(root, "bleve", indexID, "meta.json")); err != nil {
+		t.Fatalf("重建后应有 meta.json：%v", err)
+	}
+}
+
+// 一个 View 的索引读不出来：启动不失败，跳过这个 View。
+func TestRestoreActiveViewsSkipsUnreadableIndex(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.engines["bleve"] = &queryEngine{statErr: errors.New("坏的索引")}
+	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices"}}
+	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
+		t.Fatalf("restore error = %v", err)
+	}
+}
+
+// 元数据里已删除的 View：维护后不再挂接，GetViewState 返回 VIEW_NOT_FOUND，索引不再受保护（由退役清理回收）。
+func TestMaintenanceForgetsDeletedViews(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.engines["bleve"] = &queryEngine{stats: builtStats("prices", 1, "hash")}
+	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices", Status: "active"}
+	if err := svc.AttachActiveView(context.Background(), view, builtStats("prices", 1, "hash")); err != nil {
+		t.Fatal(err)
+	}
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
+	state, _ := svc.GetViewState(context.Background(), &pb.GetViewStateReq{AuthInfo: auth, SpaceId: "space", ViewId: "prices"})
+	if state.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("删除前 = %v", state.GetRetInfo())
+	}
+	// 停用的 View 仍在元数据里：不摘掉。
+	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", Status: "disabled"}}, svc.internalAuth())
+	if active, _ := svc.activeIndex("space", "prices"); active == "" {
+		t.Fatal("停用的 View 不应摘掉")
+	}
+	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "other"}}, svc.internalAuth())
+	state, _ = svc.GetViewState(context.Background(), &pb.GetViewStateReq{AuthInfo: auth, SpaceId: "space", ViewId: "prices"})
+	if state.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_FOUND {
+		t.Fatalf("删除后 = %v，想要 VIEW_NOT_FOUND", state.GetRetInfo())
+	}
+	protected, err := svc.cleanupProtectedIndexes(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "other"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanupIndexProtected(protected, managedIndexRef{engine: "bleve", indexID: viewindex.ViewIndexID("space", "prices")}) {
+		t.Fatal("已删除 View 的索引不应再受保护")
 	}
 }

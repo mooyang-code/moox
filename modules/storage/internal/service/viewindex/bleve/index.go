@@ -282,6 +282,9 @@ func (i *Index) Stat(ctx context.Context, id string) (viewindex.ViewIndexStats, 
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return viewindex.ViewIndexStats{}, nil
 	}
+	if halfPrepared(path) {
+		return viewindex.ViewIndexStats{Exists: true}, nil
+	}
 	h, err := i.get(id)
 	if err != nil {
 		return viewindex.ViewIndexStats{}, err
@@ -309,6 +312,9 @@ func (i *Index) StatMetadata(ctx context.Context, id string) (viewindex.ViewInde
 	} else if err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
+	if halfPrepared(path) {
+		return viewindex.ViewIndexStats{Exists: true}, nil
+	}
 	h, err := i.get(id)
 	if err != nil {
 		return viewindex.ViewIndexStats{}, err
@@ -316,6 +322,13 @@ func (i *Index) StatMetadata(ctx context.Context, id string) (viewindex.ViewInde
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.meta.stats(), nil
+}
+
+// halfPrepared 报告索引目录在、meta.json 却不在：Prepare 先建目录后写 meta.json，进程在两步之间退出就会这样。
+// 这样的索引按半成品处理（存在、没有数据集与跟随进度），由维护流程删掉重建。
+func halfPrepared(path string) bool {
+	_, err := os.Stat(filepath.Join(path, "meta.json"))
+	return errors.Is(err, os.ErrNotExist)
 }
 
 // stats 返回索引自身记录的契约与进度（不含行数）。

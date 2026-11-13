@@ -147,7 +147,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return compensate(err)
 	}
 	if target.GetDataset().GetAlignment() != market.Alignment {
-		return compensate(fmt.Errorf("target Dataset alignment %q does not match market alignment %q", target.GetDataset().GetAlignment(), market.Alignment))
+		return compensate(fmt.Errorf("目标数据集的 alignment %q 与市场的 %q 不一致", target.GetDataset().GetAlignment(), market.Alignment))
 	}
 	_ = subjects
 	if !createdDataset {

@@ -146,13 +146,6 @@ func (w *collectorGatewayWire) CreateView(ctx context.Context, request *storagep
 	return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w *collectorGatewayWire) UpdateView(ctx context.Context, request *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "UpdateView", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.UpdateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func (w *collectorGatewayWire) DeleteView(ctx context.Context, request *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
 	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "DeleteView", request); err != nil {
 		return nil, err
@@ -328,10 +321,6 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.CreateView(t.Context(), &storagepb.CreateViewReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
-	t.Run("UpdateView", func(t *testing.T) {
-		_, err := adapter.UpdateView(t.Context(), &storagepb.UpdateViewReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
 	t.Run("DeleteView", func(t *testing.T) {
 		_, err := adapter.DeleteView(t.Context(), &storagepb.DeleteViewReq{AuthInfo: auth})
 		require.NoError(t, err)
@@ -387,7 +376,7 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.calls["GetDataset"])
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
-	require.Len(t, wire.calls, 21)
+	require.Len(t, wire.calls, 20)
 	wire.mu.Unlock()
 	invoker := scfinvoker.New(scfinvoker.Config{Gateway: gateway})
 	lease, err := invoker.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")

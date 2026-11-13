@@ -139,13 +139,6 @@ func (f *resultMetadataFake) CreateView(_ context.Context, req *storagepb.Create
 	return &storagepb.CreateViewRsp{RetInfo: resultOK(), View: req.GetView()}, nil
 }
 
-func (f *resultMetadataFake) UpdateView(_ context.Context, req *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
-	f.updateViews++
-	view := req.GetView()
-	f.views[view.GetViewId()] = view
-	return &storagepb.UpdateViewRsp{RetInfo: resultOK(), View: view}, nil
-}
-
 func (f *resultMetadataFake) DeleteView(_ context.Context, req *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
 	delete(f.views, req.GetViewId())
 	return &storagepb.DeleteViewRsp{RetInfo: resultOK()}, nil
@@ -601,8 +594,14 @@ func TestInspectCoverageComesFromBuiltViewIndex(t *testing.T) {
 	require.Equal(t, "2026-09-19T00:00:00Z", inspection.LastDataTime, "索引还没建好，退回 View 属性")
 	require.Equal(t, "2026-09-19T00:00:00Z", inspection.CoverageEnd)
 
+	// storage-view 暂时不可用：覆盖范围按未知，退回属性，清单不失败。
 	fake.viewStates[ids.ViewID] = &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "storage-view 不可用"}}
+	inspection, err = manager.Inspect(context.Background(), "crypto", "task-coverage")
+	require.NoError(t, err)
+	require.Equal(t, "2026-09-19T00:00:00Z", inspection.CoverageEnd)
+
+	// 调用契约错误照常上报。
+	fake.viewStates[ids.ViewID] = &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_NO_PERMISSION, Msg: "无权限"}}
 	_, err = manager.Inspect(context.Background(), "crypto", "task-coverage")
-	require.ErrorContains(t, err, "inspect result view state")
-	require.NotErrorIs(t, err, ErrResultContract)
+	require.ErrorIs(t, err, ErrResultContract)
 }

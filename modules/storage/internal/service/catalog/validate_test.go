@@ -26,3 +26,13 @@ func TestValidateColumnDisplayNameOnlyRequiresPresence(t *testing.T) {
 	require.Error(t, validateColumnDisplayName("display_name", map[string]string{"display_name": "  "}))
 	require.Error(t, validateColumnDisplayName("display_name", nil))
 }
+
+// 数据集列名会原样成为 View 索引里的列：系统列名与非标识符被拒绝。
+func TestDatasetColumnNameRules(t *testing.T) {
+	for _, name := range []string{"close", "bias__20", "__params", "Close_1"} {
+		require.NoError(t, validateDatasetColumnName(name), name)
+	}
+	for _, name := range []string{"subject_id", "Data_Time", "series_tag", "freq", "__moox_attributes", "1close", "a.b", "a-b", ""} {
+		require.Error(t, validateDatasetColumnName(name), name)
+	}
+}

@@ -131,6 +131,9 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 		if column == nil || strings.TrimSpace(column.GetColumnName()) == "" {
 			return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("column_name is required"))}, nil
 		}
+		if err := validateDatasetColumnName(column.GetColumnName()); err != nil {
+			return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
 		if err := validateColumnDisplayName("dataset column display_name", column.GetAttributes()); err != nil {
 			return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 		}
@@ -432,6 +435,9 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 	item := req.GetColumn()
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and column_name are required"))}, nil
+	}
+	if err := validateDatasetColumnName(item.GetColumnName()); err != nil {
+		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if _, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil

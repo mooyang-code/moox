@@ -20,6 +20,20 @@ var reservedTimeSeriesSystemColumns = map[string]struct{}{
 	"freq":       {},
 	"data_time":  {},
 	"series_tag": {},
+	// DuckDB View 索引内部存行属性的列。
+	"__moox_attributes": {},
+}
+
+// datasetColumnNamePattern 是数据集列名的标识符规则：列名会原样成为 View 索引里的列名。
+var datasetColumnNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validateDatasetColumnName 拒绝系统列名与不是标识符的列名：View 的列等于数据集的列，
+// 系统列名不会建进索引，记下的已建列就会和实际建出的列对不上，之后再也加不了列。
+func validateDatasetColumnName(name string) error {
+	if !datasetColumnNamePattern.MatchString(strings.TrimSpace(name)) {
+		return fmt.Errorf("数据集列名 %q 只能由字母、数字和下划线组成，且不能以数字开头", name)
+	}
+	return validateUserColumnName("dataset column_name", name)
 }
 
 func defaultViewGrainKeys(kind pb.DataKind) []string {

@@ -133,7 +133,7 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	alignment := existing.GetAlignment()
 	if candidate := strings.TrimSpace(item.GetAlignment()); candidate != "" && candidate != alignment {
 		if alignment != "" {
-			return nil, errors.New("dataset alignment is immutable")
+			return nil, errors.New("数据集的 alignment 设置后不能修改")
 		}
 		alignment = candidate
 	}
