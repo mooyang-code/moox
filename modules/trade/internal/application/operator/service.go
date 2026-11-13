@@ -62,6 +62,7 @@ type OrderService interface {
 	Cancel(context.Context, string, string) (orderdomain.Order, error)
 	DiscardPending(context.Context, string, string) (orderdomain.Order, error)
 	ResolveUnknown(context.Context, string, string) (orderdomain.Order, error)
+	ExpireUnknown(context.Context, string, string, string) (orderdomain.Order, error)
 	RecoverCancel(context.Context, string, string) (orderdomain.Order, error)
 }
 

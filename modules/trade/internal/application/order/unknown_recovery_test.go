@@ -83,3 +83,31 @@ func TestUnknownRecoveryDefaultWindowIsTwoMinutes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, orderdomain.Pending, resolved.State)
 }
+
+// 提交结果一直查不出来的订单：不满 10 分钟不能强制结束；满 10 分钟后人工强制结束，记为已过期并释放预留。
+func TestExpireUnknownAfterTenMinutes(t *testing.T) {
+	service, _, adapter := newTestService(t)
+	adapter.placeErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown}
+	base := time.Unix(1_700_000_000, 0)
+	service.Now = func() time.Time { return base }
+	pending, err := service.Place(context.Background(), "space-1", testSpec(base))
+	require.NoError(t, err)
+	_, err = service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.Error(t, err)
+
+	service.Now = func() time.Time { return base.Add(9 * time.Minute) }
+	current, err := service.ExpireUnknown(context.Background(), "space-1", string(pending.ID), "人工确认")
+	require.ErrorIs(t, err, ErrUnknownTooRecent)
+	require.Equal(t, orderdomain.SubmitUnknown, current.State)
+
+	service.Now = func() time.Time { return base.Add(11 * time.Minute) }
+	expired, err := service.ExpireUnknown(context.Background(), "space-1", string(pending.ID), "人工确认")
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Expired, expired.State)
+	stored, err := service.Store.GetOrder(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Expired, orderdomain.State(stored.State))
+	require.Equal(t, "0", stored.RemainingReservedQuantity)
+	require.Contains(t, stored.RejectReason, "人工确认")
+	require.NotZero(t, stored.FinishedAt)
+}
