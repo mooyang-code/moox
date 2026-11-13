@@ -61,6 +61,8 @@ type ClistQuery struct {
 	MaxPages int
 	// Sleep 替换等待的实现，测试用；为空时按真实时间等待，ctx 结束时立即返回错误。
 	Sleep func(ctx context.Context, d time.Duration) error
+	// Limiter 是发往 *.eastmoney.com 的请求要过的限流器，为空时用进程内的限流器（ConfigureRequestLimit），测试用。
+	Limiter *RequestLimiter
 }
 
 // ClistResult 是翻页结束后的统计：Total 是接口自报的总数（没报时为 0），Pages 是读过的页数（含收尾的空页），
@@ -239,7 +241,8 @@ func fetchClistPageWithRetry(ctx context.Context, query ClistQuery, activeBase s
 				return body, base, nil
 			}
 			lastErr = err
-			if i == len(bases)-1 || !clistHostRetryable(err) {
+			// 主地址在冷却（请求没有发出去）也当作不可用，直接换备用地址。
+			if i == len(bases)-1 || !(clistHostRetryable(err) || errors.Is(err, ErrCoolingDown)) {
 				break
 			}
 		}
@@ -295,16 +298,37 @@ func fetchClistPage(ctx context.Context, query ClistQuery, base string, values u
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
 	}
+	limiter := query.Limiter
+	if limiter == nil {
+		limiter = processRequestLimiter()
+	}
+	release, err := limiter.Acquire(ctx, request.URL.Hostname())
+	if err != nil {
+		// 冷却中：请求没有发出去，原样返回（不可重试）；等待时 ctx 结束与请求被取消同类，保持原有的错误类别。
+		if errors.Is(err, ErrCoolingDown) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %v", ErrTimeout, &url.Error{Op: "Get", URL: request.URL.String(), Err: err})
+	}
+	outcome := Outcome{Kind: OutcomeNeutral}
+	defer func() { release(outcome) }()
 	response, err := client.Do(request)
 	if err != nil {
+		if ctx.Err() == nil {
+			outcome = Outcome{Kind: OutcomeTransportFailure}
+		}
 		return nil, fmt.Errorf("%w: %v", ErrTimeout, err)
 	}
 	defer response.Body.Close()
+	outcome = outcomeOfResponse(response.StatusCode, response.Header, limiter.now())
 	if err := statusError(response.StatusCode); err != nil {
 		return nil, err
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
+		if ctx.Err() == nil {
+			outcome = Outcome{Kind: OutcomeTransportFailure}
+		}
 		return nil, fmt.Errorf("%w: read response body: %v", ErrProtocol, err)
 	}
 	return body, nil

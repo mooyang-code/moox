@@ -13,6 +13,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/robfig/cron"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -168,7 +169,7 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 		delays = defaultSnapshotRetryDelays
 	}
 	instruments, err := r.fetchSnapshot(fetchCtx, tag)
-	for attempt := 0; err != nil && attempt < len(delays) && fetchCtx.Err() == nil; attempt++ {
+	for attempt := 0; err != nil && snapshotRetryable(err) && attempt < len(delays) && fetchCtx.Err() == nil; attempt++ {
 		log.WarnContextf(ctx, "tag %s/%s snapshot attempt %d failed, retrying: %v", tag.GetSpaceId(), tag.GetTagId(), attempt+1, err)
 		select {
 		case <-time.After(delays[attempt]):
@@ -200,6 +201,10 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 	}
 	return subjects, nil
 }
+
+// snapshotRetryable 判断取快照失败后本次同步内是否值得再试：东方财富主机冷却中（主动停手）时请求根本没有发出去，
+// 立即重试只会得到同样的错误，也违背冷却的本意，所以不重试，等下一轮调度。
+func snapshotRetryable(err error) bool { return !errors.Is(err, cnstock.ErrCoolingDown) }
 
 // fetchSnapshot 取标签的成员快照：配置了 sync.index 时取该指数的成分股（来源是 sync.index_source，不写时等于
 // sync.source），否则取 sync.source 的全部标的。

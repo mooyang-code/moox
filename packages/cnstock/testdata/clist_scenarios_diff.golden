@@ -1,0 +1,11 @@
+== 31 第二页一直被断开且重试 5 次
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> reset
+req push2.eastmoney.com pn=2 try=2 -> reset
+req push2.eastmoney.com pn=2 try=3 -> reset
+req push2.eastmoney.com pn=2 try=4 -> reset
+req push2.eastmoney.com pn=2 try=5 -> reset
+sleeps [3ms 6ms 9ms 12ms 15ms]
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=other msg=cnstock: 东方财富主机冷却中：push2.eastmoney.com 还要冷却 10m0s，期间不发请求

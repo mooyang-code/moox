@@ -16,7 +16,9 @@
 //   - 没有对上的代码不在返回值里，由调用方决定怎么处理。
 //
 // 请求的节奏与上限（东方财富对本机出口 IP 做过限流，翻页必须有节制）：
-//   - 相邻两页（含相邻两个市场之间）最少间隔 PageInterval，默认 200 毫秒；
+//   - 请求节奏由 packages/cnstock 的进程级限流器保证（所有 *.eastmoney.com 的请求合计每秒 2 个、顺序发出，
+//     连续失败或 429、403 会让主机冷却，见 docs/模块/采集.md 6a），所以相邻两页之间默认不再额外等待；
+//     PageInterval 仍可设置（相邻两页含相邻两个市场之间最少间隔，默认 0），再叠加只会变慢；
 //   - 每个市场取到的行数必须等于接口自报的 total（total 为 0 也算失败），否则整次报错，不会悄悄跳过失败页；
 //   - 每个市场最多读 MaxPages 页（默认 80，当前最大的 105 市场约 61 页），没有无界循环。请求总数的最坏值：
 //     每个市场每页最多 PageRetries+1 次，每个市场的第一页还会在主备两个地址上各试一遍（多 PageRetries+1 次），
@@ -47,7 +49,6 @@ import (
 )
 
 const (
-	defaultPageInterval   = 200 * time.Millisecond
 	defaultPageRetries    = 2
 	defaultRetryBackoff   = time.Second
 	defaultMaxPages       = 80
@@ -75,7 +76,8 @@ type Config struct {
 	HTTPClient *http.Client
 	// RequestTimeout 是单次 HTTP 请求的超时，默认 15 秒；只在没有传 HTTPClient 时用。
 	RequestTimeout time.Duration
-	// PageInterval 是相邻两页之间的最小间隔，默认 200 毫秒；负数表示不等待（只给测试用）。
+	// PageInterval 是相邻两页之间额外的最小间隔，默认 0：请求节奏由 cnstock 的进程级限流器保证（每秒 2 个、顺序发出），
+	// 再叠加间隔只会变慢。限流器只管 *.eastmoney.com，测试里换成本地服务时没有节奏，要自己设间隔；负数按 0 处理。
 	PageInterval time.Duration
 	// PageRetries 是单页失败后最多再试的次数，默认 2；负数表示不重试。
 	PageRetries int
@@ -94,10 +96,7 @@ func (c Config) withDefaults() Config {
 	if c.HTTPClient == nil {
 		c.HTTPClient = &http.Client{Timeout: c.RequestTimeout}
 	}
-	switch {
-	case c.PageInterval == 0:
-		c.PageInterval = defaultPageInterval
-	case c.PageInterval < 0:
+	if c.PageInterval < 0 {
 		c.PageInterval = 0
 	}
 	switch {

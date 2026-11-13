@@ -12,7 +12,6 @@ import (
 	binanceclient "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -28,7 +27,8 @@ type eventBusRuntime struct {
 const relayInterval = 10 * time.Second
 
 // newEventBusRuntime 在配置了 event_bus 时创建 EventBus 接入，否则返回 nil（不发布任何事件）。
-func newEventBusRuntime(cfg *Config, dbm *store.Store) (*eventBusRuntime, error) {
+// attn 是进程内共用的关注项上报实例（东方财富冷却等其他来源也往里报）。
+func newEventBusRuntime(cfg *Config, dbm *store.Store, attn *attention.Attention) (*eventBusRuntime, error) {
 	if !cfg.EventBus.Enabled() {
 		return nil, nil
 	}
@@ -37,7 +37,6 @@ func newEventBusRuntime(cfg *Config, dbm *store.Store) (*eventBusRuntime, error)
 		return nil, err
 	}
 	hub := eventbus.NewHub(cfg.EventBus, registry)
-	attn := attention.New(prometheus.DefaultRegisterer)
 	hub.Attention = attn
 	relay := eventbus.NewRelay(dbm.Resample(), registry, hub, relayInterval)
 	relay.Attention = attn

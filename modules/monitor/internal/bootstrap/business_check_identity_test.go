@@ -20,6 +20,7 @@ func TestBusinessCheckIdentityForAttentionChecks(t *testing.T) {
 		{"collector_attention", "delist_readonly_key_missing", "collector_attention:delist_readonly_key_missing", "下架检测缺少币安只读 Key"},
 		{"collector_attention", "event_outbox_stuck", "collector_attention:event_outbox_stuck", "Collector 事件发件箱积压"},
 		{"collector_attention", "eventbus_consumer_failed", "collector_attention:eventbus_consumer_failed", "Collector EventBus 消费者启动失败"},
+		{"collector_attention", "eastmoney_cooling_down", "collector_attention:eastmoney_cooling_down", "东方财富请求被限流，Collector 已暂停访问"},
 		{"worker_presence", "factor-engine", "worker_presence:factor-engine", monitorobservability.WorkerPresenceName("factor-engine")},
 	} {
 		id, name := businessCheckIdentity(monitorobservability.BusinessStatus{Kind: test.kind, Module: test.module})
