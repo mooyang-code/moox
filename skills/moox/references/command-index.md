@@ -255,10 +255,6 @@
 | `metadata dataset show` | 查看数据集 |
 | `metadata dataset subjects` | 列出数据集里有数据的标的 |
 | `metadata dataset update` | 修改数据集的名称、说明与状态（数据来源、类型、频率创建后不可变） |
-| `metadata device create` | 登记存储设备 |
-| `metadata device list` | 列出存储设备 |
-| `metadata device show` | 查看存储设备 |
-| `metadata device update` | 修改存储设备 |
 | `metadata field batch-update` | 批量调整字段的分组或状态 |
 | `metadata field create` | 创建字段 |
 | `metadata field list` | 列出字段 |

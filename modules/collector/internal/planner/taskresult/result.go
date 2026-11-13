@@ -4,14 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"sort"
-	"strconv"
 	"strings"
-	"trpc.group/trpc-go/trpc-go/client"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
+	"trpc.group/trpc-go/trpc-go/client"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/barclock"
@@ -587,11 +587,12 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if marketType = strings.TrimSpace(marketType); marketType == "" {
 		marketType = tagMarketType
 	}
-	// derived 是由市场决定、已有结果数据集缺了要补上的属性：market_type，以及交易时段市场时序结果的 calendar、alignment
-	// （策略按 calendar 选交易日历，缺省按 crypto_24x7；按 alignment 校验行键）。
+	// derived 是由市场决定、已有结果数据集缺了要补上的属性：market_type，以及交易时段市场时序结果的 calendar
+	// （策略按 calendar 选交易日历，缺省按 crypto_24x7）；alignment 是数据集的正式字段（策略按它校验行键）。
 	derived := map[string]string{}
+	alignment := ""
 	if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-		if derived, err = sessionAttributes(spaceID); err != nil {
+		if derived, alignment, err = sessionAttributes(spaceID); err != nil {
 			return IDs{}, err
 		}
 	}
@@ -617,7 +618,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		// 数据集连同列在一次调用里建好，建好即可写入。
 		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: m.auth, Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: dataSourceID,
-			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Freq: datasetFrequency(kind, cfg.Frequency), Attributes: attrs, SubjectTags: subjectTags,
+			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Freq: datasetFrequency(kind, cfg.Frequency), Alignment: alignment, Attributes: attrs, SubjectTags: subjectTags,
 		}, Columns: columns})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return IDs{}, metadataError("create result dataset", createErr, retInfoDataset(created))
@@ -641,9 +642,13 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 				missing[key] = value
 			}
 		}
-		if !sameSubjectTags(get.GetDataset().GetSubjectTags(), subjectTags) || assignSource || len(missing) > 0 {
+		assignAlignment := alignment != "" && get.GetDataset().GetAlignment() == ""
+		if !sameSubjectTags(get.GetDataset().GetSubjectTags(), subjectTags) || assignSource || assignAlignment || len(missing) > 0 {
 			updated := proto.Clone(get.GetDataset()).(*storagepb.Dataset)
 			updated.SubjectTags = subjectTags
+			if assignAlignment {
+				updated.Alignment = alignment
+			}
 			if assignSource {
 				updated.DataSourceId = dataSourceID
 			}
@@ -725,10 +730,7 @@ func (m *Manager) UpdateSubjectTags(ctx context.Context, spaceID, datasetID stri
 	return nil
 }
 
-// AllowedLatenessAttribute 是数据集属性名：周期的允许迟到时间（秒），由 Storage 在建立周期时读取。
-const AllowedLatenessAttribute = "allowed_lateness_seconds"
-
-// EnsureAllowedLateness 保证结果数据集的允许迟到时间属性与任务设置一致；没有变化时不更新。
+// EnsureAllowedLateness 保证结果数据集的允许迟到时间（Storage 建立周期时读取）与任务设置一致；没有变化时不更新。
 func (m *Manager) EnsureAllowedLateness(ctx context.Context, spaceID, datasetID string, seconds int) error {
 	if m == nil || m.metadata == nil || m.auth == nil {
 		return fmt.Errorf("task result metadata manager is not configured")
@@ -747,15 +749,11 @@ func (m *Manager) EnsureAllowedLateness(ctx context.Context, spaceID, datasetID 
 		}
 		return metadataError("get result dataset for allowed lateness", nil, ret)
 	}
-	value := strconv.Itoa(seconds)
-	if rsp.GetDataset().GetAttributes()[AllowedLatenessAttribute] == value {
+	if rsp.GetDataset().GetAllowedLatenessSeconds() == uint32(seconds) {
 		return nil
 	}
 	updated := proto.Clone(rsp.GetDataset()).(*storagepb.Dataset)
-	if updated.Attributes == nil {
-		updated.Attributes = map[string]string{}
-	}
-	updated.Attributes[AllowedLatenessAttribute] = value
+	updated.AllowedLatenessSeconds = uint32(seconds)
 	result, err := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
 	if err != nil {
 		return fmt.Errorf("update result dataset allowed lateness: %w", err)
@@ -1089,7 +1087,7 @@ func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids ID
 		if kind == storagepb.DataKind_DATA_KIND_RECORD {
 			engine, grain = "bleve", []string{"subject_id", "version"}
 		}
-		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "maintenance_priority": "0", "collector_task_id": taskID}}, CreateOnly: true})
+		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}, CreateOnly: true})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return metadataError("create result view", createErr, retInfoView(created))
 		}
@@ -1365,15 +1363,15 @@ func retInfoDatasetDelete(resp *storagepb.DeleteDatasetRsp) *storagepb.RetInfo {
 	return resp.GetRetInfo()
 }
 
-// sessionAttributes 返回交易时段市场时序结果数据集的 calendar 与 alignment（stockcn 为 cn_stock、session），取自 barclock 的市场登记。
-// 连续交易的市场（crypto）不写：策略缺省按 crypto_24x7。市场未登记时报错，不当成连续交易。
-func sessionAttributes(spaceID string) (map[string]string, error) {
+// sessionAttributes 返回交易时段市场时序结果数据集的 calendar 属性与 alignment（stockcn 为 cn_stock、session），取自 barclock 的市场登记。
+// 连续交易的市场（crypto）都不写：策略缺省按 crypto_24x7。市场未登记时报错，不当成连续交易。
+func sessionAttributes(spaceID string) (map[string]string, string, error) {
 	market, err := barclock.MarketFor(spaceID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if market.Alignment != barclock.AlignmentSession {
-		return map[string]string{}, nil
+		return map[string]string{}, "", nil
 	}
-	return map[string]string{"calendar": market.CalendarID, "alignment": market.Alignment}, nil
+	return map[string]string{"calendar": market.CalendarID}, market.Alignment, nil
 }

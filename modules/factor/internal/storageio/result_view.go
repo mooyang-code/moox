@@ -12,11 +12,8 @@ import (
 
 // 默认 View 由 factor-mgr 自己建、改、删：Storage 不再替因子结果数据集托管 View。
 // View 的列由 Storage 按数据集启用的列推出（只读），数据集加列后 View 自动带上，storage-view 原地把它加进索引。
-// maintenance_priority 告诉 Storage 维护顺序：数字越小越先，因子结果排在采集结果之后；Storage 不认识“因子”。
-const (
-	ViewAttrMaintenancePriority = "maintenance_priority"
-	defaultResultViewPriority   = "10"
-)
+// resultViewMaintenancePriority 告诉 Storage 维护顺序：数字越小越先，因子结果排在采集结果（0）之后；Storage 不认识“因子”。
+const resultViewMaintenancePriority = 10
 
 // DefaultResultViewID 是结果数据集的默认 View ID：view_<数据集 ID 去掉 dataset_ 前缀>。
 func DefaultResultViewID(datasetID string) string {
@@ -60,11 +57,10 @@ func (c *Client) EnsureResultView(ctx context.Context, spaceID, datasetID string
 	created, err := c.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.auth, CreateOnly: true, View: &storagepb.View{
 		SpaceId: spaceID, ViewId: viewID, Name: dataset.Name, DatasetId: datasetID,
 		GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Freq: dataset.Freq,
-		Engine: "duckdb", Status: "active",
+		Engine: "duckdb", Status: "active", MaintenancePriority: resultViewMaintenancePriority,
 		Attributes: map[string]string{
-			"owner_module":              "factor",
-			"view_role":                 "factor_result", // 页面按它找到结果 View；Storage 不读
-			ViewAttrMaintenancePriority: defaultResultViewPriority,
+			"owner_module": "factor",
+			"view_role":    "factor_result", // 页面按它找到结果 View；Storage 不读
 		},
 	}})
 	if err != nil {

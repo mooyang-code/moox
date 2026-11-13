@@ -195,13 +195,6 @@ func defaultStatus(status string) string {
 	return status
 }
 
-func defaultJSON(raw string) string {
-	if strings.TrimSpace(raw) == "" {
-		return "{}"
-	}
-	return raw
-}
-
 func boolInt(value bool) int {
 	if value {
 		return 1
@@ -260,16 +253,4 @@ func datasetOriginSQL(origin pb.DatasetColumnOriginType) string {
 	default:
 		return "field"
 	}
-}
-
-func mapsEqual(left map[string]string, right map[string]string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for key, leftValue := range left {
-		if right[key] != leftValue {
-			return false
-		}
-	}
-	return true
 }

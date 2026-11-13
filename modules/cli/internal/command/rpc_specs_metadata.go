@@ -16,7 +16,6 @@ func init() {
 	rpcGroupShort["metadata field"] = "字段"
 	rpcGroupShort["metadata field-group"] = "字段分组"
 	rpcGroupShort["metadata view"] = "View（面向查询的宽表，由 Storage 异步构建）"
-	rpcGroupShort["metadata device"] = "View 使用的存储设备"
 	rpcGroupShort["data records"] = "记录型数据读取"
 	rpcGroupShort["data view"] = "按 View 查询数据"
 
@@ -151,15 +150,6 @@ func init() {
 			Flags: append([]rpcFlag{}, viewFlags...)},
 		rpcSpec{Path: []string{"metadata", "view", "delete"}, Short: "删除 View（默认只预览，--yes 才执行；离线删除用 storage delete-view）", Service: metadataSvc, Method: "DeleteView", SpaceField: "space_id", Destructive: true,
 			Flags: []rpcFlag{reqFlag("view-id", "view_id", "View ID")}},
-
-		rpcSpec{Path: []string{"metadata", "device", "list"}, Short: "列出存储设备", Service: metadataSvc, Method: "ListDevices", NoSpace: true, Page: rpcPageSize,
-			Flags: []rpcFlag{strFlag("engine", "engine", "按引擎过滤")}},
-		rpcSpec{Path: []string{"metadata", "device", "show"}, Short: "查看存储设备", Service: metadataSvc, Method: "GetDevice", NoSpace: true,
-			Flags: []rpcFlag{reqFlag("device-id", "device_id", "设备 ID")}},
-		rpcSpec{Path: []string{"metadata", "device", "create"}, Short: "登记存储设备", Service: metadataSvc, Method: "CreateDevice", NoSpace: true,
-			Flags: []rpcFlag{reqFlag("device-id", "device.device_id", "设备 ID"), strFlag("name", "device.name", "名称"), strFlag("engine", "device.engine", "引擎"), strFlag("endpoint", "device.endpoint", "地址"), strFlag("status", "device.status", "状态")}},
-		rpcSpec{Path: []string{"metadata", "device", "update"}, Merge: mergeViaGet("GetDevice", map[string]string{"device_id": "device.device_id"}, "device", "device"), Short: "修改存储设备", Service: metadataSvc, Method: "UpdateDevice", NoSpace: true,
-			Flags: []rpcFlag{reqFlag("device-id", "device.device_id", "设备 ID"), strFlag("name", "device.name", "名称"), strFlag("engine", "device.engine", "引擎"), strFlag("endpoint", "device.endpoint", "地址"), strFlag("status", "device.status", "状态")}},
 
 		rpcSpec{Path: []string{"data", "records", "search"}, Short: "检索记录型 View（Bleve）的数据", Service: dataViewSvc, Method: "SearchRecordRows", SpaceField: "space_id", Page: rpcPageSize,
 			Flags: []rpcFlag{reqFlag("view-id", "view_id", "View ID"), strFlag("text-query", "text_query", "全文检索语句"), listFlag("column", "column_names", "返回的列，可重复"), jsonFlag("filter", "filter", "过滤条件 JSON")}},

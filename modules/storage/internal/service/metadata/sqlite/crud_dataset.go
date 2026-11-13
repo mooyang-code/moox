@@ -74,12 +74,11 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset, columns ...
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO t_datasets (
-			c_space_id, c_dataset_id, c_data_source_id, c_name,
-			c_description, c_data_kind, c_freq,
-			c_revision, c_status, c_attrs_json, c_subject_tags_json, c_ctime, c_mtime
+			c_space_id, c_dataset_id, c_data_source_id, c_name, c_data_kind, c_freq,
+			c_revision, c_status, c_item_json, c_subject_tags_json, c_ctime, c_mtime
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, item.GetSpaceId(), item.GetDatasetId(), nullableDatasetSource(item.GetDataSourceId()), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), item.GetFreq(), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetDatasetId(), nullableDatasetSource(item.GetDataSourceId()), item.GetName(), dataKindSQL(item.GetDataKind()), item.GetFreq(), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -158,10 +157,10 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE t_datasets SET
-			c_data_source_id = ?, c_name = ?, c_description = ?,
-			c_status = ?, c_attrs_json = ?, c_subject_tags_json = ?, c_revision = c_revision + 1, c_mtime = ?
+			c_data_source_id = ?, c_name = ?,
+			c_status = ?, c_item_json = ?, c_subject_tags_json = ?, c_revision = c_revision + 1, c_mtime = ?
 		WHERE c_space_id = ? AND c_dataset_id = ? AND c_revision = ?
-	`, nullableDatasetSource(dataSourceID), item.GetName(), item.GetDescription(), item.GetStatus(), raw, subjectTags, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
+	`, nullableDatasetSource(dataSourceID), item.GetName(), item.GetStatus(), raw, subjectTags, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +177,7 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 
 func (s *Store) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
 	return scanMessageWithSQLTimestamps(s.queryDB(ctx).QueryRowContext(ctx, `
-		SELECT c_attrs_json, c_ctime, c_mtime FROM t_datasets
+		SELECT c_item_json, c_ctime, c_mtime FROM t_datasets
 		WHERE c_space_id = ? AND c_dataset_id = ?
 	`, spaceID, datasetID), func() *pb.Dataset { return &pb.Dataset{} })
 }
@@ -206,20 +205,8 @@ func (s *Store) DeleteDataset(ctx context.Context, spaceID string, datasetID str
 	return tx.Commit()
 }
 
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
 func (s *Store) GetDatasetColumn(ctx context.Context, spaceID string, datasetID string, columnName string) (*pb.DatasetColumn, error) {
-	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`, []any{spaceID, datasetID, columnName}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_item_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`, []any{spaceID, datasetID, columnName}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
 }
 
 type DatasetQuery = coremetadata.DatasetQuery
@@ -245,7 +232,7 @@ func (s *Store) ListDatasets(ctx context.Context, query coremetadata.DatasetQuer
 	}
 	whereSQL := strings.Join(where, " AND ")
 	return queryPagedMessages(ctx, s.queryDB(ctx),
-		`SELECT c_attrs_json FROM t_datasets WHERE `+whereSQL+` ORDER BY c_space_id, c_dataset_id`,
+		`SELECT c_item_json FROM t_datasets WHERE `+whereSQL+` ORDER BY c_space_id, c_dataset_id`,
 		`SELECT COUNT(1) FROM t_datasets WHERE `+whereSQL,
 		args, query.Page, func() *pb.Dataset { return &pb.Dataset{} },
 	)
@@ -291,7 +278,7 @@ func validateDatasetStatus(status string) error {
 
 func getDatasetTx(ctx context.Context, tx queryRower, spaceID, datasetID string) (*pb.Dataset, error) {
 	return scanMessageWithSQLTimestamps(tx.QueryRowContext(ctx, `
-		SELECT c_attrs_json, c_ctime, c_mtime FROM t_datasets
+		SELECT c_item_json, c_ctime, c_mtime FROM t_datasets
 		WHERE c_space_id = ? AND c_dataset_id = ?
 	`, spaceID, datasetID), func() *pb.Dataset { return &pb.Dataset{} })
 }
@@ -309,20 +296,17 @@ func (s *Store) UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, err
 		return nil, getErr
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_fields (c_space_id, c_field_id, c_group_id, c_name, c_description, c_value_type, c_unit, c_validation_rule_json, c_write_example, c_sort_order, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO t_fields (c_space_id, c_field_id, c_group_id, c_name, c_description, c_value_type, c_sort_order, c_status, c_item_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_field_id) DO UPDATE SET
 			c_group_id = excluded.c_group_id,
 			c_name = excluded.c_name,
 			c_description = excluded.c_description,
 			c_value_type = excluded.c_value_type,
-			c_unit = excluded.c_unit,
-			c_validation_rule_json = excluded.c_validation_rule_json,
-			c_write_example = excluded.c_write_example,
 			c_sort_order = excluded.c_sort_order,
 			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetFieldId(), item.GetGroupId(), item.GetName(), item.GetDescription(), valueTypeSQL(item.GetValueType()), item.GetUnit(), defaultJSON(item.GetValidationRuleJson()), item.GetWriteExample(), item.GetSortOrder(), item.GetStatus(), raw)
+			c_item_json = excluded.c_item_json
+	`, item.GetSpaceId(), item.GetFieldId(), item.GetGroupId(), item.GetName(), item.GetDescription(), valueTypeSQL(item.GetValueType()), item.GetSortOrder(), item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
@@ -335,9 +319,9 @@ func (s *Store) CreateField(ctx context.Context, item *pb.Field) (*pb.Field, err
 		return nil, err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_fields (c_space_id, c_field_id, c_group_id, c_name, c_description, c_value_type, c_unit, c_validation_rule_json, c_write_example, c_sort_order, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, item.GetSpaceId(), item.GetFieldId(), item.GetGroupId(), item.GetName(), item.GetDescription(), valueTypeSQL(item.GetValueType()), item.GetUnit(), defaultJSON(item.GetValidationRuleJson()), item.GetWriteExample(), item.GetSortOrder(), item.GetStatus(), raw)
+		INSERT INTO t_fields (c_space_id, c_field_id, c_group_id, c_name, c_description, c_value_type, c_sort_order, c_status, c_item_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetFieldId(), item.GetGroupId(), item.GetName(), item.GetDescription(), valueTypeSQL(item.GetValueType()), item.GetSortOrder(), item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
@@ -355,10 +339,10 @@ func (s *Store) UpdateField(ctx context.Context, item *pb.Field) (*pb.Field, err
 		return nil, errors.New("field value_type is immutable")
 	}
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE t_fields SET c_group_id = ?, c_name = ?, c_description = ?, c_value_type = ?, c_unit = ?,
-			c_validation_rule_json = ?, c_write_example = ?, c_sort_order = ?, c_status = ?, c_attrs_json = ?
+		UPDATE t_fields SET c_group_id = ?, c_name = ?, c_description = ?, c_value_type = ?,
+			c_sort_order = ?, c_status = ?, c_item_json = ?
 		WHERE c_space_id = ? AND c_field_id = ?
-	`, item.GetGroupId(), item.GetName(), item.GetDescription(), valueTypeSQL(item.GetValueType()), item.GetUnit(), defaultJSON(item.GetValidationRuleJson()), item.GetWriteExample(), item.GetSortOrder(), item.GetStatus(), raw, item.GetSpaceId(), item.GetFieldId())
+	`, item.GetGroupId(), item.GetName(), item.GetDescription(), valueTypeSQL(item.GetValueType()), item.GetSortOrder(), item.GetStatus(), raw, item.GetSpaceId(), item.GetFieldId())
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +367,7 @@ func (s *Store) prepareField(ctx context.Context, item *pb.Field) (string, error
 }
 
 func (s *Store) GetField(ctx context.Context, spaceID string, fieldID string) (*pb.Field, error) {
-	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_fields WHERE c_space_id = ? AND c_field_id = ?`, []any{spaceID, fieldID}, func() *pb.Field { return &pb.Field{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_item_json FROM t_fields WHERE c_space_id = ? AND c_field_id = ?`, []any{spaceID, fieldID}, func() *pb.Field { return &pb.Field{} })
 }
 
 func (s *Store) ListFields(ctx context.Context, query coremetadata.FieldQuery) ([]*pb.Field, *pb.PageResult, error) {
@@ -439,7 +423,7 @@ func (s *Store) ListFields(ctx context.Context, query coremetadata.FieldQuery) (
 
 	whereSQL := strings.Join(where, " AND ")
 	return queryPagedMessages(ctx, s.queryDB(ctx),
-		`SELECT c_attrs_json FROM t_fields WHERE `+whereSQL+` ORDER BY `+sortColumn+` `+direction+`, c_field_id `+direction,
+		`SELECT c_item_json FROM t_fields WHERE `+whereSQL+` ORDER BY `+sortColumn+` `+direction+`, c_field_id `+direction,
 		`SELECT COUNT(1) FROM t_fields WHERE `+whereSQL,
 		args, query.Page, func() *pb.Field { return &pb.Field{} },
 	)
@@ -479,11 +463,7 @@ func upsertDatasetColumnTx(ctx context.Context, tx *sql.Tx, item *pb.DatasetColu
 	if err != nil {
 		return nil, err
 	}
-	aliases, err := marshalJSON(item.GetAliases())
-	if err != nil {
-		return nil, err
-	}
-	existing, getErr := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`,
+	existing, getErr := getMessage(ctx, tx, `SELECT c_item_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`,
 		[]any{item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName()}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
 	if getErr == nil {
 		if existing.GetOriginType() != item.GetOriginType() || existing.GetOriginId() != item.GetOriginId() || existing.GetValueType() != item.GetValueType() {
@@ -493,16 +473,14 @@ func upsertDatasetColumnTx(ctx context.Context, tx *sql.Tx, item *pb.DatasetColu
 		return nil, getErr
 	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_aliases_json, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_status, c_item_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_dataset_id, c_column_name) DO UPDATE SET
 			c_origin_type = excluded.c_origin_type,
 			c_origin_id = excluded.c_origin_id,
-			c_value_type = excluded.c_value_type,
-			c_aliases_json = excluded.c_aliases_json,
 			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName(), datasetOriginSQL(item.GetOriginType()), item.GetOriginId(), valueTypeSQL(item.GetValueType()), aliases, item.GetStatus(), raw)
+			c_item_json = excluded.c_item_json
+	`, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName(), datasetOriginSQL(item.GetOriginType()), item.GetOriginId(), item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
@@ -516,12 +494,12 @@ func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetI
 		  AND (? = '' OR c_dataset_id = ?)`
 	args := []any{spaceID, spaceID, datasetID, datasetID}
 	return queryPagedMessages(ctx, s.queryDB(ctx),
-		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_dataset_id, c_column_name`,
+		`SELECT c_item_json `+where+` ORDER BY c_space_id, c_dataset_id, c_column_name`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.DatasetColumn { return &pb.DatasetColumn{} },
 	)
 }
 
 func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
-	return queryMessages(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_views WHERE (? = '' OR c_space_id = ?) AND (? = '' OR c_dataset_id = ?) AND c_status = 'active' ORDER BY c_space_id, c_view_id`, []any{spaceID, spaceID, datasetID, datasetID}, func() *pb.View { return &pb.View{} })
+	return queryMessages(ctx, s.queryDB(ctx), `SELECT c_item_json FROM t_views WHERE (? = '' OR c_space_id = ?) AND (? = '' OR c_dataset_id = ?) AND c_status = 'active' ORDER BY c_space_id, c_view_id`, []any{spaceID, spaceID, datasetID, datasetID}, func() *pb.View { return &pb.View{} })
 }

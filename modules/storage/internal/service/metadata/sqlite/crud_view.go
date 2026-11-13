@@ -14,7 +14,7 @@ import (
 	sqlite "modernc.org/sqlite"
 )
 
-const viewWithTimestampsSQL = `json_set(c_attrs_json, '$.created_at', c_ctime, '$.updated_at', c_mtime)`
+const viewWithTimestampsSQL = `json_set(c_item_json, '$.created_at', c_ctime, '$.updated_at', c_mtime)`
 
 // visibleDatasetColumnSQL 是数据集里启用的列：列本身启用，且它引用的字段（如果有）也启用。View 的列就是这些列。
 const visibleDatasetColumnSQL = `dc.c_status = 'active' AND COALESCE(f.c_status, 'active') = 'active'`
@@ -63,10 +63,6 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, createOnly bool) 
 	} else {
 		next.Engine = strings.ToLower(strings.TrimSpace(next.Engine))
 	}
-	grainKeys, err := marshalJSON(next.GetGrainKeys())
-	if err != nil {
-		return nil, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -76,7 +72,7 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, createOnly bool) 
 		return nil, err
 	}
 	if !createOnly {
-		existing, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
+		existing, err := getMessage(ctx, tx, `SELECT c_item_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
@@ -91,20 +87,18 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, createOnly bool) 
 		return nil, err
 	}
 	insertSQL := `
-		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_engine, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_dataset_id, c_engine, c_status, c_item_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`
 	if !createOnly {
 		insertSQL += `
 		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
 			c_name = excluded.c_name,
-			c_description = excluded.c_description,
 			c_dataset_id = excluded.c_dataset_id,
-			c_grain_keys_json = excluded.c_grain_keys_json,
 			c_engine = excluded.c_engine,
 			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json`
+			c_item_json = excluded.c_item_json`
 	}
-	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, next.GetEngine(), next.GetStatus(), raw)
+	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDatasetId(), next.GetEngine(), next.GetStatus(), raw)
 	if err != nil {
 		var sqliteErr *sqlite.Error
 		if createOnly && errors.As(err, &sqliteErr) && (sqliteErr.Code() == 2067 || sqliteErr.Code() == 1555) {
@@ -243,7 +237,7 @@ func (s *Store) ListViewColumns(ctx context.Context, spaceID string, viewID stri
 	pageNo, size, offset := normalizePage(page)
 	db := s.queryDB(ctx)
 	rows, err := db.QueryContext(ctx, `
-		SELECT v.c_space_id, v.c_view_id, dc.c_attrs_json,
+		SELECT v.c_space_id, v.c_view_id, dc.c_item_json,
 			ROW_NUMBER() OVER (PARTITION BY v.c_space_id, v.c_view_id ORDER BY dc.c_id) - 1
 		`+from+`
 		ORDER BY v.c_space_id, v.c_view_id, dc.c_id

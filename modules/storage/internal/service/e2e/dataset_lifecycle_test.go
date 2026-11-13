@@ -317,13 +317,5 @@ func (s *countingPanicStore) ListDatasetColumns(ctx context.Context, space, data
 	s.guard("ListDatasetColumns")
 	return s.Store.ListDatasetColumns(ctx, space, dataset, page)
 }
-func (s *countingPanicStore) GetDevice(ctx context.Context, device string) (*pb.Device, error) {
-	s.guard("GetDevice")
-	return s.Store.GetDevice(ctx, device)
-}
-func (s *countingPanicStore) ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	s.guard("ListDevices")
-	return s.Store.ListDevices(ctx, engine, page)
-}
 
 var _ coremetadata.Reader = (*countingPanicStore)(nil)

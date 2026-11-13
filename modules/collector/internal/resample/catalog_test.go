@@ -262,13 +262,13 @@ func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 	ids := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
 	metadata.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID,
-		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active",
+		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active", Alignment: params.Alignment,
 		Attributes: map[string]string{
 			"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID,
 			"market_type": "spot", "storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 			"source_dataset_id": params.SourceDatasetID, "source_data_source_id": source.DataSourceID,
 			"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
-			"target_freq": "5m", "alignment": params.Alignment,
+			"target_freq": "5m",
 		},
 	}
 	metadata.views[ids.ViewID] = &storagepb.View{
@@ -343,7 +343,6 @@ func TestValidateTargetDatasetChecksImmutableLineage(t *testing.T) {
 		"source_freq":           "1m",
 		"source_series_tag":     "venue:binance",
 		"target_freq":           "5m",
-		"alignment":             "epoch_utc",
 	}
 	dataset := &storagepb.Dataset{
 		DataKind:   storagepb.DataKind_DATA_KIND_TIME_SERIES,

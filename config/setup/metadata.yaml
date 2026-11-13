@@ -1263,13 +1263,6 @@ dataset_columns:
   value_type: json
   status: active
 
-devices:
-- device_id: parquet-local
-  name: market-parquet-archive
-  engine: parquet
-  endpoint: ../data/archive
-  status: active
-
 views:
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d

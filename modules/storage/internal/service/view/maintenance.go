@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -296,26 +295,12 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 	}
 }
 
-// defaultViewMaintenancePriority 是 View 没有声明 maintenance_priority 时的维护顺序。
-const defaultViewMaintenancePriority = 50
-
-// viewMaintenancePriority 读取 View 属性 maintenance_priority（整数，越小越先维护）；缺失或非法取默认值。
-func viewMaintenancePriority(view *pb.View) int {
-	if view == nil {
-		return 100
-	}
-	priority, err := strconv.Atoi(strings.TrimSpace(view.GetAttributes()["maintenance_priority"]))
-	if err != nil {
-		return defaultViewMaintenancePriority
-	}
-	return priority
-}
-
+// sortViewsForMaintenance 按 maintenance_priority（越小越先）排维护顺序，相同时按空间与 View ID。
 func sortViewsForMaintenance(views []*pb.View) {
 	sort.SliceStable(views, func(i, j int) bool {
 		left, right := views[i], views[j]
-		if viewMaintenancePriority(left) != viewMaintenancePriority(right) {
-			return viewMaintenancePriority(left) < viewMaintenancePriority(right)
+		if left.GetMaintenancePriority() != right.GetMaintenancePriority() {
+			return left.GetMaintenancePriority() < right.GetMaintenancePriority()
 		}
 		if left.GetSpaceId() != right.GetSpaceId() {
 			return left.GetSpaceId() < right.GetSpaceId()

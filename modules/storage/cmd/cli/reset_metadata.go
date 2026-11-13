@@ -22,7 +22,7 @@ import (
 // storage reset-metadata：系统重置里 Storage 的元数据部分（设计 5.2，`--scope all`）。
 //
 // 备份元数据库后清空全部业务定义——空间、数据源、标的与标签、数据集与字段、View——再用 --seed 重新导入种子，
-// 回到刚完成部署的状态。保留：库结构（t_schema_meta）、存储设备、
+// 回到刚完成部署的状态。保留：库结构（t_schema_meta）、
 // 标的修订号（按空间单调递增，策略等调用方靠它判断缓存是否过期，不能回退）。
 //
 // 必须先暂停 Storage（`<包根>/pause.sh`；元数据库由 Primary 进程持有，stop 会被主机守护拉起）。行数据与 View 索引不在这里：
@@ -35,7 +35,7 @@ var metadataResetClear = []string{
 }
 
 // metadataResetKeep 是不清的表。
-var metadataResetKeep = []string{"t_schema_meta", "t_space_revisions", "t_storage_devices"}
+var metadataResetKeep = []string{"t_schema_meta", "t_space_revisions"}
 
 type resetMetadataOptions struct {
 	Storage    storageconfig.StorageConfig
@@ -156,7 +156,7 @@ func resetMetadata(ctx context.Context, opts resetMetadataOptions) (resetMetadat
 	}
 	summary.Imported = &importSummary{
 		Spaces: result.Spaces, DataSources: result.DataSources, Subjects: result.Subjects, Tags: result.Tags, Datasets: result.Datasets,
-		Fields: result.Fields, DatasetColumns: result.DatasetColumns, Views: result.Views, Devices: result.Devices,
+		Fields: result.Fields, DatasetColumns: result.DatasetColumns, Views: result.Views,
 	}
 	summary.Status = "ok"
 	summary.NextSteps = []string{"启动 Storage", "Collector 重新登记（fetch-plan reregister）"}

@@ -187,6 +187,10 @@ export interface Dataset {
   retention_source?: string;
   revision?: number | string;
   subject_tags?: string[];
+  /** 周期对齐方式：epoch_utc 或 session。 */
+  alignment?: string;
+  /** 周期截止前允许迟到的秒数；0 或缺省表示用 Storage 的默认值。 */
+  allowed_lateness_seconds?: number;
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
@@ -253,6 +257,8 @@ export interface View {
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
+  /** 维护顺序：越小越先，0（缺省）最先。 */
+  maintenance_priority?: number;
   /** 由所属数据集里已停用的列推出。 */
   hidden_columns?: string[];
 }

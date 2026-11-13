@@ -87,7 +87,6 @@ func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 		Datasets:       []seedDataset{{SpaceID: "stockcn", DatasetID: "kline"}, {SpaceID: "crypto", DatasetID: "kline"}},
 		DatasetColumns: []seedDatasetColumn{{SpaceID: "stockcn", DatasetID: "kline", ColumnName: "close"}, {SpaceID: "crypto", DatasetID: "kline", ColumnName: "close"}},
 		Views:          []seedView{{SpaceID: "stockcn", ViewID: "kline"}, {SpaceID: "crypto", ViewID: "kline"}},
-		Devices:        []seedDevice{{DeviceID: "duckdb"}},
 	}
 
 	selected, err := selectMetadataSpaces(seed, []string{" A股市场 "})
@@ -100,7 +99,6 @@ func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 	require.Len(t, selected.Datasets, 1)
 	require.Len(t, selected.DatasetColumns, 1)
 	require.Len(t, selected.Views, 1)
-	require.Len(t, selected.Devices, 1, "global devices are preserved")
 }
 
 func TestSelectMetadataSpacesRejectsUnknownAndDuplicateSelection(t *testing.T) {
@@ -202,7 +200,6 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 			SpaceID: "crypto", ViewID: "v1", Name: "View", PrimaryDatasetID: "kline", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
 			Engine: "duckdb",
 		}},
-		Devices: []seedDevice{{DeviceID: "dev-1", Name: "Device"}},
 	}
 	calls, err := buildMetadataImportCalls(seed)
 	require.NoError(t, err)
@@ -407,7 +404,6 @@ func TestSeedToPBAllTypes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"binance_spot"}, dataset.GetSubjectTags())
 	assert.Equal(t, "v1", (seedView{SpaceID: "crypto", ViewID: "v1"}).toPB().GetViewId())
-	assert.Equal(t, "dev-1", (seedDevice{DeviceID: "dev-1"}).toPB().GetDeviceId())
 }
 
 func metadataTestServer(t *testing.T, handlers map[string]func(w http.ResponseWriter, r *http.Request)) *testfixture.HandlerGateway {
@@ -654,10 +650,6 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 			OriginType: "FIELD", OriginID: "close", ValueType: "DOUBLE", Required: true,
 			Aliases: []string{"收盘"}, seedCommon: seedCommon{Attributes: map[string]string{"display_name": "收盘价"}},
 		}},
-		Devices: []seedDevice{{
-			DeviceID: "primary", Name: "主存储", Engine: "pebble", Endpoint: "/data",
-			ConfigJSON: "{}",
-		}},
 		Views: []seedView{{
 			SpaceID: "crypto", ViewID: "kline", Name: "行情视图", Description: "默认行情",
 			PrimaryDatasetID: "kline",
@@ -692,9 +684,6 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 		},
 		"ListDatasetColumns": func(w http.ResponseWriter, _ *http.Request) {
 			writeProtoJSON(w, &pb.ListDatasetColumnsRsp{RetInfo: storageOK(), Columns: []*pb.DatasetColumn{datasetColumn}})
-		},
-		"GetDevice": func(w http.ResponseWriter, _ *http.Request) {
-			writeProtoJSON(w, &pb.GetDeviceRsp{RetInfo: storageOK(), Device: seed.Devices[0].toPB()})
 		},
 		"GetView": func(w http.ResponseWriter, _ *http.Request) {
 			writeProtoJSON(w, &pb.GetViewRsp{RetInfo: storageOK(), View: seed.Views[0].toPB()})

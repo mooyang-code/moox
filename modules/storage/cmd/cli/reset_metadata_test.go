@@ -47,8 +47,8 @@ func TestMetadataResetClassifiesEveryTable(t *testing.T) {
 	require.ErrorContains(t, checkMetadataTables(context.Background(), db), "t_new_thing")
 }
 
-// 清空业务定义后重新导入种子，回到部署后的状态；设备、修订号保留（修订号不回退）。
-func TestMetadataResetRestoresSeedAndKeepsNodes(t *testing.T) {
+// 清空业务定义后重新导入种子，回到部署后的状态；修订号保留（不回退）。
+func TestMetadataResetRestoresSeedAndKeepsRevisions(t *testing.T) {
 	storage, db := seededStorage(t)
 	ctx := context.Background()
 	spacesBefore, viewsBefore := rowCount(t, db, "t_spaces"), rowCount(t, db, "t_views")

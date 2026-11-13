@@ -3,7 +3,6 @@ package primarystore
 import (
 	"context"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
@@ -130,7 +129,7 @@ func datasetAlignment(ctx context.Context, spaceID, datasetID string) string {
 	if !ok || dataset == nil {
 		return ""
 	}
-	return strings.TrimSpace(dataset.GetAttributes()["alignment"])
+	return strings.TrimSpace(dataset.GetAlignment())
 }
 
 // validateSnapshotAlignment 检查快照生效点与频率边界对齐：epoch 数据集的日内周期按 epoch 对齐；
@@ -179,7 +178,7 @@ func validatePeriodDataset(ctx context.Context, expectation *pb.DatasetPeriodExp
 	return nil
 }
 
-// datasetAllowedLateness 读取数据集属性 allowed_lateness_seconds；缺失或非法时返回 0，由存储层采用默认值。
+// datasetAllowedLateness 读取数据集的 allowed_lateness_seconds；没有设置时返回 0，由存储层采用默认值。
 func datasetAllowedLateness(ctx context.Context, exp *pb.DatasetPeriodExpectation) int64 {
 	snapshot := metadata.RequestSnapshotFromContext(ctx)
 	if snapshot == nil {
@@ -189,10 +188,8 @@ func datasetAllowedLateness(ctx context.Context, exp *pb.DatasetPeriodExpectatio
 	if !ok || dataset == nil {
 		return 0
 	}
-	seconds, err := strconv.ParseInt(strings.TrimSpace(dataset.GetAttributes()["allowed_lateness_seconds"]), 10, 64)
-	if err != nil || seconds <= 0 {
-		log.WarnContextf(ctx, "dataset %s/%s has no valid allowed_lateness_seconds; the store falls back to its default", exp.GetSpaceId(), exp.GetDatasetId())
-		return 0
+	if dataset.GetAllowedLatenessSeconds() == 0 {
+		log.WarnContextf(ctx, "dataset %s/%s has no allowed_lateness_seconds; the store falls back to its default", exp.GetSpaceId(), exp.GetDatasetId())
 	}
-	return seconds
+	return int64(dataset.GetAllowedLatenessSeconds())
 }

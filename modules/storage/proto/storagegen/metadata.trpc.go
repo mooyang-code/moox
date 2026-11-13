@@ -115,14 +115,6 @@ type MetadataService interface {
 	UpsertDatasetColumn(ctx context.Context, req *UpsertDatasetColumnReq) (*UpsertDatasetColumnRsp, error)
 	// ListDatasetColumns 列出数据集列。
 	ListDatasetColumns(ctx context.Context, req *ListDatasetColumnsReq) (*ListDatasetColumnsRsp, error)
-	// CreateDevice 创建设备。
-	CreateDevice(ctx context.Context, req *CreateDeviceReq) (*CreateDeviceRsp, error)
-	// UpdateDevice 更新设备。
-	UpdateDevice(ctx context.Context, req *UpdateDeviceReq) (*UpdateDeviceRsp, error)
-	// GetDevice 按 ID 获取设备。
-	GetDevice(ctx context.Context, req *GetDeviceReq) (*GetDeviceRsp, error)
-	// ListDevices 列出设备。
-	ListDevices(ctx context.Context, req *ListDevicesReq) (*ListDevicesRsp, error)
 }
 
 func MetadataService_CreateSpace_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -989,78 +981,6 @@ func MetadataService_ListDatasetColumns_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
-func MetadataService_CreateDevice_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateDeviceReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).CreateDevice(ctx, reqbody.(*CreateDeviceReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_UpdateDevice_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateDeviceReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).UpdateDevice(ctx, reqbody.(*UpdateDeviceReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_GetDevice_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetDeviceReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).GetDevice(ctx, reqbody.(*GetDeviceReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_ListDevices_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListDevicesReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).ListDevices(ctx, reqbody.(*ListDevicesReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // MetadataServer_ServiceDesc descriptor for server.RegisterService.
 var MetadataServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.Metadata",
@@ -1257,22 +1177,6 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.Metadata/ListDatasetColumns",
 			Func: MetadataService_ListDatasetColumns_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/CreateDevice",
-			Func: MetadataService_CreateDevice_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/UpdateDevice",
-			Func: MetadataService_UpdateDevice_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/GetDevice",
-			Func: MetadataService_GetDevice_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/ListDevices",
-			Func: MetadataService_ListDevices_Handler,
 		},
 	},
 }
@@ -1506,26 +1410,6 @@ func (s *UnimplementedMetadata) ListDatasetColumns(ctx context.Context, req *Lis
 	return nil, errors.New("rpc ListDatasetColumns of service Metadata is not implemented")
 }
 
-// CreateDevice 创建设备。
-func (s *UnimplementedMetadata) CreateDevice(ctx context.Context, req *CreateDeviceReq) (*CreateDeviceRsp, error) {
-	return nil, errors.New("rpc CreateDevice of service Metadata is not implemented")
-}
-
-// UpdateDevice 更新设备。
-func (s *UnimplementedMetadata) UpdateDevice(ctx context.Context, req *UpdateDeviceReq) (*UpdateDeviceRsp, error) {
-	return nil, errors.New("rpc UpdateDevice of service Metadata is not implemented")
-}
-
-// GetDevice 按 ID 获取设备。
-func (s *UnimplementedMetadata) GetDevice(ctx context.Context, req *GetDeviceReq) (*GetDeviceRsp, error) {
-	return nil, errors.New("rpc GetDevice of service Metadata is not implemented")
-}
-
-// ListDevices 列出设备。
-func (s *UnimplementedMetadata) ListDevices(ctx context.Context, req *ListDevicesReq) (*ListDevicesRsp, error) {
-	return nil, errors.New("rpc ListDevices of service Metadata is not implemented")
-}
-
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -1630,14 +1514,6 @@ type MetadataClientProxy interface {
 	UpsertDatasetColumn(ctx context.Context, req *UpsertDatasetColumnReq, opts ...client.Option) (rsp *UpsertDatasetColumnRsp, err error)
 	// ListDatasetColumns 列出数据集列。
 	ListDatasetColumns(ctx context.Context, req *ListDatasetColumnsReq, opts ...client.Option) (rsp *ListDatasetColumnsRsp, err error)
-	// CreateDevice 创建设备。
-	CreateDevice(ctx context.Context, req *CreateDeviceReq, opts ...client.Option) (rsp *CreateDeviceRsp, err error)
-	// UpdateDevice 更新设备。
-	UpdateDevice(ctx context.Context, req *UpdateDeviceReq, opts ...client.Option) (rsp *UpdateDeviceRsp, err error)
-	// GetDevice 按 ID 获取设备。
-	GetDevice(ctx context.Context, req *GetDeviceReq, opts ...client.Option) (rsp *GetDeviceRsp, err error)
-	// ListDevices 列出设备。
-	ListDevices(ctx context.Context, req *ListDevicesReq, opts ...client.Option) (rsp *ListDevicesRsp, err error)
 }
 
 type MetadataClientProxyImpl struct {
@@ -2603,86 +2479,6 @@ func (c *MetadataClientProxyImpl) ListDatasetColumns(ctx context.Context, req *L
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListDatasetColumnsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) CreateDevice(ctx context.Context, req *CreateDeviceReq, opts ...client.Option) (*CreateDeviceRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateDevice")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("CreateDevice")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &CreateDeviceRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) UpdateDevice(ctx context.Context, req *UpdateDeviceReq, opts ...client.Option) (*UpdateDeviceRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateDevice")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("UpdateDevice")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &UpdateDeviceRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) GetDevice(ctx context.Context, req *GetDeviceReq, opts ...client.Option) (*GetDeviceRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetDevice")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("GetDevice")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetDeviceRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) ListDevices(ctx context.Context, req *ListDevicesReq, opts ...client.Option) (*ListDevicesRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListDevices")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("ListDevices")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListDevicesRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

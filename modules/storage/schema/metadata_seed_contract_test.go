@@ -30,10 +30,6 @@ type metadataSeedGrainContract struct {
 		PrimaryDatasetID string   `yaml:"dataset_id"`
 		GrainKeys        []string `yaml:"grain_keys"`
 	} `yaml:"views"`
-	Devices []struct {
-		DeviceID string `yaml:"device_id"`
-		Engine   string `yaml:"engine"`
-	} `yaml:"devices"`
 }
 
 func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
@@ -75,21 +71,6 @@ func TestDefaultSetupSeedTimeSeriesDatasetsDeclareCanonicalFreq(t *testing.T) {
 			require.True(t, frequencypkg.IsCanonical(dataset.Freq), "%s/%s freq %q", dataset.SpaceID, dataset.DatasetID, dataset.Freq)
 		}
 	}
-}
-
-func TestDefaultSetupSeedDeclaresArchiveDevice(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml")
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err)
-	var seed metadataSeedGrainContract
-	require.NoError(t, yaml.Unmarshal(raw, &seed))
-	for _, device := range seed.Devices {
-		if device.DeviceID == "parquet-local" {
-			require.Equal(t, "parquet", device.Engine)
-			return
-		}
-	}
-	t.Fatal("default setup metadata does not declare parquet-local")
 }
 
 func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {

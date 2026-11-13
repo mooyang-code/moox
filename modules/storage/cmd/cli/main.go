@@ -32,7 +32,6 @@ type importSummary struct {
 	Fields         int `json:"fields"`
 	DatasetColumns int `json:"dataset_columns"`
 	Views          int `json:"views"`
-	Devices        int `json:"devices"`
 }
 
 type operationResult struct {
@@ -149,7 +148,6 @@ func runImportSeed(args []string, stdout io.Writer, stderr io.Writer) error {
 			Fields:         result.Fields,
 			DatasetColumns: result.DatasetColumns,
 			Views:          result.Views,
-			Devices:        result.Devices,
 		},
 	})
 }

@@ -99,7 +99,7 @@ func (markerRoutingSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset,
 	case "factor-data":
 		attrs = map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}
 	}
-	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Status: "active", Attributes: attrs}, true
+	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Status: "active", Alignment: attrs["alignment"], Attributes: attrs}, true
 }
 
 func (markerRoutingSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
@@ -564,7 +564,7 @@ func (s attrsSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool)
 	if !ok {
 		return nil, false
 	}
-	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Status: "active", Attributes: attrs}, true
+	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Status: "active", Alignment: attrs["alignment"], Attributes: attrs}, true
 }
 
 func (attrsSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {

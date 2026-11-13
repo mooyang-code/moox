@@ -702,9 +702,8 @@ func TestEnsureResultViewCreatesTheDefaultViewWithMaintenanceAttributes(t *testi
 	require.Equal(t, "dataset_factor_btc_1m", view.GetDatasetId())
 	require.Equal(t, "1m", view.GetFreq())
 	require.Equal(t, "duckdb", view.GetEngine())
-	require.Equal(t, map[string]string{
-		"owner_module": "factor", "view_role": "factor_result", "maintenance_priority": "10",
-	}, view.GetAttributes())
+	require.Equal(t, uint32(10), view.GetMaintenancePriority())
+	require.Equal(t, map[string]string{"owner_module": "factor", "view_role": "factor_result"}, view.GetAttributes())
 	require.Empty(t, view.GetColumns(), "建 View 不带列：列由 Storage 从数据集推出")
 	require.Empty(t, metadata.columnRequests, "不再为建 View 读数据集的列")
 }

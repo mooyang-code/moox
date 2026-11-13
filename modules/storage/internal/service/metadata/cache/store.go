@@ -33,7 +33,6 @@ const (
 	kindFieldGroup    = "field_group"
 	kindField         = "field"
 	kindDatasetColumn = "dataset_column"
-	kindDevice        = "device"
 )
 
 // Options 保存元数据缓存包装器配置。
@@ -458,19 +457,6 @@ func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetI
 	return pageItems(items, page)
 }
 
-func (s *Store) GetDevice(ctx context.Context, deviceID string) (*pb.Device, error) {
-	return getProto(s, ctx, kindDevice, "", deviceID, func() *pb.Device { return &pb.Device{} })
-}
-
-func (s *Store) ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	raw := s.list(kindDevice, func(item entry) bool { return engine == "" || item.Engine == engine })
-	items, err := decodeEntries(raw, func() *pb.Device { return &pb.Device{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
 func getProto[T proto.Message](s *Store, ctx context.Context, kind string, spaceID string, id string, newMessage func() T) (T, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -582,9 +568,6 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 		return nil, err
 	}
 	if out, err = s.fetchViews(ctx, out); err != nil {
-		return nil, err
-	}
-	if out, err = s.fetchDevices(ctx, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -711,22 +694,6 @@ func (s *Store) fetchViews(ctx context.Context, out []entry) ([]entry, error) {
 	}
 	for _, item := range items {
 		out, err = appendEntry(out, entry{Kind: kindView, SpaceID: item.GetSpaceId(), ID: item.GetViewId(), DatasetID: item.GetDatasetId(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) fetchDevices(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-		return s.base.ListDevices(ctx, "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDevice, ID: item.GetDeviceId(), Engine: item.GetEngine(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}

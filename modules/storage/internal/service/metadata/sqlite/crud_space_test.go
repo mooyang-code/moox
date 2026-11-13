@@ -40,7 +40,6 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 	store := openTestStore(t, ctx)
 	_, err := store.db.ExecContext(ctx, `
 		INSERT INTO t_spaces(c_space_id,c_name) VALUES ('target','Target'),('keep','Keep');
-		INSERT INTO t_storage_devices(c_device_id,c_name,c_engine) VALUES ('device','Device','duckdb');
 		INSERT INTO t_data_sources(c_space_id,c_data_source_id,c_name) VALUES ('target','source','Source');
 		INSERT INTO t_subjects(c_space_id,c_subject_id,c_name) VALUES ('target','subject','Subject');
 		INSERT INTO t_tags(c_space_id,c_tag_id,c_tag_name,c_mode) VALUES ('target','tag','Tag','manual');
@@ -51,8 +50,8 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 		INSERT INTO t_datasets(c_space_id,c_dataset_id,c_data_source_id,c_name,c_data_kind,c_freq)
 			VALUES ('target','dataset','source','Dataset','time_series','1m');
 		UPDATE t_datasets SET c_subject_tags_json = '["tag"]' WHERE c_space_id = 'target' AND c_dataset_id = 'dataset';
-		INSERT INTO t_dataset_columns(c_space_id,c_dataset_id,c_column_name,c_origin_type,c_origin_id,c_value_type)
-			VALUES ('target','dataset','value','field','value','double');
+		INSERT INTO t_dataset_columns(c_space_id,c_dataset_id,c_column_name,c_origin_type,c_origin_id)
+			VALUES ('target','dataset','value','field','value');
 		INSERT INTO t_views(c_space_id,c_view_id,c_name,c_dataset_id) VALUES ('target','view','View','dataset');
 	`)
 	if err != nil {

@@ -18,7 +18,7 @@ func TestMetadataSchemaContract(t *testing.T) {
 	}
 	text := string(sql)
 	for _, want := range []string{
-		"VALUES ('schema_version', '17')",
+		"VALUES ('schema_version', '18')",
 		"CREATE TABLE IF NOT EXISTS t_tags (",
 		"CREATE TABLE IF NOT EXISTS t_subject_tags (",
 		"c_subject_tags_json TEXT NOT NULL DEFAULT '[]'",
@@ -69,21 +69,14 @@ func TestMetadataSchemaContract(t *testing.T) {
 		"c_active_view_schema_hash",
 		"c_indexed_from",
 		"c_indexed_to",
+		"t_storage_devices",
+		"c_attrs_json",
+		"'building'",
+		"'archived'",
 	}, removedTables...) {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("metadata schema contains removed schema element %q", forbidden)
 		}
-	}
-	deviceStart := strings.Index(text, "CREATE TABLE IF NOT EXISTS t_storage_devices")
-	if deviceStart < 0 {
-		t.Fatal("metadata schema missing t_storage_devices")
-	}
-	deviceEnd := strings.Index(text[deviceStart:], ");")
-	if deviceEnd < 0 {
-		t.Fatal("metadata schema has unterminated t_storage_devices")
-	}
-	if strings.Contains(text[deviceStart:deviceStart+deviceEnd], "c_node_id") {
-		t.Error("t_storage_devices still contains the removed c_node_id relation")
 	}
 }
 
@@ -106,8 +99,8 @@ func TestMetadataSchemaDDLExecutes(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "17" {
-		t.Fatalf("persisted schema version = %q, want 17", version)
+	if version != "18" {
+		t.Fatalf("persisted schema version = %q, want 18", version)
 	}
 	var foreignKeysEnabled int
 	if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeysEnabled); err != nil {
@@ -117,20 +110,20 @@ func TestMetadataSchemaDDLExecutes(t *testing.T) {
 		t.Fatal("metadata schema did not enable foreign keys")
 	}
 
-	for _, table := range []string{"t_datasets", "t_storage_devices"} {
-		var count int
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
-			t.Fatal(err)
-		}
-		if count != 1 {
-			t.Fatalf("table %q count = %d, want 1", table, count)
-		}
+	var tables int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name LIKE 't\_%' ESCAPE '\'`).Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 12 {
+		t.Fatalf("metadata tables = %d, want 12", tables)
 	}
 	for _, table := range []string{
 		"t_" + "primary" + "_" + "store" + "_" + "nodes",
 		"t_" + "primary" + "_" + "store" + "_" + "routes",
 		"t_dataset_" + "topology" + "_locks",
 		"t_data_nodes",
+		"t_storage_devices",
+		"t_view_columns",
 	} {
 		var count int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
@@ -166,27 +159,6 @@ func TestMetadataSchemaDDLExecutes(t *testing.T) {
 		VALUES ('space', 'dataset', 'source', 'Dataset', 'record');
 	`); err != nil {
 		t.Fatalf("insert dataset: %v", err)
-	}
-
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info('t_storage_devices')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, columnType string
-		var notNull, primaryKey int
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			t.Fatal(err)
-		}
-		if name == "c_node_id" {
-			t.Fatal("t_storage_devices contains removed c_node_id")
-		}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
 	}
 }
 

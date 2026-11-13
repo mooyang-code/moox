@@ -161,20 +161,6 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 		}
 		calls = append(calls, metadataImportCall{Resource: "dataset_columns", Method: "UpsertDatasetColumn", Request: &pb.UpsertDatasetColumnReq{Column: column}, Response: &pb.UpsertDatasetColumnRsp{}})
 	}
-	for _, item := range seed.Devices {
-		device := item.toPB()
-		calls = append(calls, metadataImportCall{
-			Resource: "devices",
-			Method:   "CreateDevice",
-			Request:  &pb.CreateDeviceReq{Device: device},
-			Response: &pb.CreateDeviceRsp{},
-			Exists: &metadataExistsProbe{
-				Method:   "GetDevice",
-				Request:  &pb.GetDeviceReq{DeviceId: device.GetDeviceId()},
-				Response: &pb.GetDeviceRsp{},
-			},
-		})
-	}
 	for _, item := range seed.Views {
 		view := item.toPB()
 		calls = append(calls, metadataImportCall{
@@ -516,8 +502,6 @@ func applyProbeResult(resource string, probe *metadataExistsProbe, expectedReque
 		return true, rsp.GetFieldGroup()
 	case *pb.GetFieldRsp:
 		return true, rsp.GetField()
-	case *pb.GetDeviceRsp:
-		return true, rsp.GetDevice()
 	case *pb.GetViewRsp:
 		return true, rsp.GetView()
 	case *pb.GetTagRsp:
@@ -544,8 +528,6 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 		expected = req.GetField()
 	case *pb.UpsertDatasetColumnReq:
 		expected = req.GetColumn()
-	case *pb.CreateDeviceReq:
-		expected = req.GetDevice()
 	case *pb.CreateViewReq:
 		expected = req.GetView()
 	default:
@@ -625,16 +607,6 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetValueType() == y.GetValueType() &&
 			x.GetRequired() == y.GetRequired() &&
 			slices.Equal(x.GetAliases(), y.GetAliases()) &&
-			x.GetStatus() == y.GetStatus() &&
-			maps.Equal(x.GetAttributes(), y.GetAttributes())
-	}
-	if resource == "devices" {
-		x, y := a.(*pb.Device), b.(*pb.Device)
-		return x.GetDeviceId() == y.GetDeviceId() &&
-			x.GetName() == y.GetName() &&
-			x.GetEngine() == y.GetEngine() &&
-			x.GetEndpoint() == y.GetEndpoint() &&
-			x.GetConfigJson() == y.GetConfigJson() &&
 			x.GetStatus() == y.GetStatus() &&
 			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
@@ -763,10 +735,6 @@ func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
 
 func (s seedView) toPB() *pb.View {
 	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, DatasetId: s.PrimaryDatasetID, GrainKeys: s.GrainKeys, Engine: s.Engine, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
-}
-
-func (s seedDevice) toPB() *pb.Device {
-	return &pb.Device{DeviceId: s.DeviceID, Name: s.Name, Engine: s.Engine, Endpoint: s.Endpoint, ConfigJson: s.ConfigJSON, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func parseDataKind(value string) (pb.DataKind, error) {

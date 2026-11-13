@@ -1409,10 +1409,6 @@ components:
           - DeleteFieldGroup
           - UpsertDatasetColumn
           - ListDatasetColumns
-          - CreateDevice
-          - UpdateDevice
-          - GetDevice
-          - ListDevices
         read_only_methods:
           - GetSpace
           - ListSpaces
@@ -1435,8 +1431,6 @@ components:
           - GetField
           - ListFields
           - ListDatasetColumns
-          - GetDevice
-          - ListDevices
         acl:
           - methods:
               - CreateSpace
@@ -1487,13 +1481,6 @@ components:
               - ListDatasetColumns
             callers:
               - console
-              - moox-cli
-          - methods:
-              - CreateDevice
-              - UpdateDevice
-              - GetDevice
-              - ListDevices
-            callers:
               - moox-cli
           - methods:
               - ApplyTagSnapshot

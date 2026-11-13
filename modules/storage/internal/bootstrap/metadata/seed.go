@@ -33,7 +33,6 @@ type ImportResult struct {
 	Fields         int
 	DatasetColumns int
 	Views          int
-	Devices        int
 }
 
 // ImportSeed 读取显式指定的 metadata seed 文件，并按依赖顺序通过元数据控制面写入。
@@ -198,16 +197,6 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 		result.Views++
 	}
 
-	for _, item := range seed.Devices {
-		if _, err := store.UpsertDevice(ctx, &pb.Device{
-			DeviceId: item.DeviceID, Name: item.Name, Engine: item.Engine,
-			Endpoint: item.Endpoint, ConfigJson: item.ConfigJSON, Status: item.Status, Attributes: item.Attributes,
-		}); err != nil {
-			return result, seedErr("device", item.DeviceID, err)
-		}
-		result.Devices++
-	}
-
 	return result, nil
 }
 
@@ -315,7 +304,6 @@ type seedFile struct {
 	Fields         []seedField         `yaml:"fields"`
 	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
 	Views          []seedView          `yaml:"views"`
-	Devices        []seedDevice        `yaml:"devices"`
 }
 
 // seedSpace 描述待初始化的 Space 元数据。
@@ -422,15 +410,4 @@ type seedView struct {
 	GrainKeys        []string `yaml:"grain_keys"`
 	Engine           string   `yaml:"engine"`
 	Status           string   `yaml:"status"`
-}
-
-// seedDevice 描述待初始化的物理存储设备。
-type seedDevice struct {
-	DeviceID   string            `yaml:"device_id"`
-	Name       string            `yaml:"name"`
-	Engine     string            `yaml:"engine"`
-	Endpoint   string            `yaml:"endpoint"`
-	ConfigJSON string            `yaml:"config_json"`
-	Status     string            `yaml:"status"`
-	Attributes map[string]string `yaml:"attributes"`
 }

@@ -132,7 +132,6 @@ type metadataSeed struct {
 	Fields         []seedField         `yaml:"fields"`
 	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
 	Views          []seedView          `yaml:"views"`
-	Devices        []seedDevice        `yaml:"devices"`
 }
 
 type seedCommon struct {
@@ -235,15 +234,6 @@ type seedView struct {
 	GrainKeys        []string `yaml:"grain_keys"`
 	Engine           string   `yaml:"engine"`
 	seedCommon       `yaml:",inline"`
-}
-
-type seedDevice struct {
-	DeviceID   string `yaml:"device_id"`
-	Name       string `yaml:"name"`
-	Engine     string `yaml:"engine"`
-	Endpoint   string `yaml:"endpoint"`
-	ConfigJSON string `yaml:"config_json"`
-	seedCommon `yaml:",inline"`
 }
 
 type metadataImportCall struct {

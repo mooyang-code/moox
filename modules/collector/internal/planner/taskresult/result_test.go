@@ -263,15 +263,14 @@ func TestEnsureWritesTheMarketCalendarAndAlignment(t *testing.T) {
 	require.NoError(t, err)
 	attrs := fake.datasets[stock.DatasetID].GetAttributes()
 	require.Equal(t, "cn_stock", attrs["calendar"])
-	require.Equal(t, "session", attrs["alignment"])
+	require.Equal(t, "session", fake.datasets[stock.DatasetID].GetAlignment())
 	require.Equal(t, "equity", attrs["market_type"])
 
 	crypto, err := manager.Ensure(context.Background(), "crypto", "task-crypto-5m", "kline", "spot", Config{Frequency: "5m"})
 	require.NoError(t, err)
 	attrs = fake.datasets[crypto.DatasetID].GetAttributes()
 	_, hasCalendar := attrs["calendar"]
-	_, hasAlignment := attrs["alignment"]
-	require.False(t, hasCalendar || hasAlignment, "crypto 不写 calendar、alignment，策略缺省按 crypto_24x7")
+	require.False(t, hasCalendar || fake.datasets[crypto.DatasetID].GetAlignment() != "", "crypto 不写 calendar、alignment，策略缺省按 crypto_24x7")
 	require.Equal(t, "spot", attrs["market_type"])
 
 	// 已有的结果数据集缺这两项时补上，已有的值不改。
@@ -284,7 +283,7 @@ func TestEnsureWritesTheMarketCalendarAndAlignment(t *testing.T) {
 	require.NoError(t, err)
 	attrs = fake.datasets[ids.DatasetID].GetAttributes()
 	require.Equal(t, "cn_stock", attrs["calendar"])
-	require.Equal(t, "session", attrs["alignment"])
+	require.Equal(t, "session", fake.datasets[ids.DatasetID].GetAlignment())
 }
 
 func TestEnsureCompensatesDatasetWhenViewCreationFails(t *testing.T) {

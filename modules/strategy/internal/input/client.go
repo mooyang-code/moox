@@ -186,7 +186,7 @@ func (c *RPCClient) GetDataset(ctx context.Context, spaceID, datasetID string) (
 	for key, value := range dataset.GetAttributes() {
 		attributes[key] = value
 	}
-	return DatasetInfo{DatasetID: dataset.GetDatasetId(), Status: dataset.GetStatus(), Frequency: dataset.GetFreq(), Retention: dataset.GetRetention(), Attributes: attributes, SubjectTags: append([]string(nil), dataset.GetSubjectTags()...), SubjectsRevision: rsp.GetSubjectsRevision()}, nil
+	return DatasetInfo{DatasetID: dataset.GetDatasetId(), Status: dataset.GetStatus(), Frequency: dataset.GetFreq(), Retention: dataset.GetRetention(), Alignment: dataset.GetAlignment(), Attributes: attributes, SubjectTags: append([]string(nil), dataset.GetSubjectTags()...), SubjectsRevision: rsp.GetSubjectsRevision()}, nil
 }
 
 // GetTag 读取标签的市场类型。

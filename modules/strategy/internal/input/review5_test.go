@@ -69,23 +69,23 @@ func TestCoverageBoundsSnapToTradingDays(t *testing.T) {
 // 只有因子结果沿用源数据集的行键、可以继承源数据集的日历；按 UTC 零点对齐的重采样数据集不能用 A 股日历。
 func TestResolveCalendarInheritance(t *testing.T) {
 	strategy := parseStrategy(t, "name: x\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\n")
-	build := func(datasetAttributes map[string]string) *fakeClient {
+	build := func(datasetAttributes map[string]string, alignment string) *fakeClient {
 		client := newFakeClient("spot")
 		client.views["view_factor_1d"] = ViewInfo{ViewID: "view_factor_1d", DatasetID: "ds_1d", Frequency: "1d", Status: "active", ActiveIndexID: "idx", Columns: []ViewColumn{plainColumn("close")}}
-		client.datasets["ds_1d"] = DatasetInfo{DatasetID: "ds_1d", Status: "active", Frequency: "1d", Retention: "forever", Attributes: datasetAttributes}
+		client.datasets["ds_1d"] = DatasetInfo{DatasetID: "ds_1d", Status: "active", Frequency: "1d", Retention: "forever", Alignment: alignment, Attributes: datasetAttributes}
 		client.datasets["ds_source"] = DatasetInfo{DatasetID: "ds_source", Status: "active", Frequency: "1m", Retention: "forever", Attributes: map[string]string{"calendar": "cn_stock", "market_type": "spot"}}
 		return client
 	}
-	resample := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "kline_resample_result", "alignment": "epoch_utc"})
+	resample := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "kline_resample_result"}, "epoch_utc")
 	resolved, _, err := Resolve(context.Background(), resample, "space", []string{"ftask_1d"}, strategy)
 	if err != nil || resolved.Calendar != DefaultCalendar {
 		t.Fatalf("重采样数据集不应继承源数据集的 A 股日历：%+v err=%v", resolved, err)
 	}
-	factor := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "factor_result"})
+	factor := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "factor_result"}, "")
 	if resolved, _, err := Resolve(context.Background(), factor, "space", []string{"ftask_1d"}, strategy); err != nil || resolved.Calendar != "cn_stock" {
 		t.Fatalf("因子结果应继承源数据集的日历：%+v err=%v", resolved, err)
 	}
-	misaligned := build(map[string]string{"source_dataset_id": "ds_source", "calendar": "cn_stock", "alignment": "epoch_utc"})
+	misaligned := build(map[string]string{"source_dataset_id": "ds_source", "calendar": "cn_stock"}, "epoch_utc")
 	if _, _, err := Resolve(context.Background(), misaligned, "space", []string{"ftask_1d"}, strategy); err == nil || !strings.Contains(err.Error(), "epoch_utc") {
 		t.Fatalf("按 UTC 零点对齐的数据集不能使用 A 股日历：%v", err)
 	}

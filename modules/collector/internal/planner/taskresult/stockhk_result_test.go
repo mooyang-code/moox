@@ -40,7 +40,7 @@ func TestEnsureStockHKResultUsesTheTagQuoteSourceAndStockColumns(t *testing.T) {
 	require.Equal(t, "5m", hk.GetFreq())
 	require.Equal(t, "equity", hk.GetAttributes()["market_type"])
 	require.Equal(t, "hk_stock", hk.GetAttributes()["calendar"])
-	require.Equal(t, "session", hk.GetAttributes()["alignment"])
+	require.Equal(t, "session", hk.GetAlignment())
 
 	_, cnColumns := ensure("stockcn", "task-cn-5m", "cn_a_share", map[string]string{"market_type": "equity", "sync.source": "eastmoney"})
 	require.Equal(t, cnColumns, hkColumns, "港股结果数据集的列与 A 股 5m 任务相同")

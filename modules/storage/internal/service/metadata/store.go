@@ -94,9 +94,6 @@ type Reader interface {
 	ListFields(ctx context.Context, query FieldQuery) ([]*pb.Field, *pb.PageResult, error)
 	CountFieldsByGroup(ctx context.Context, spaceID string) (FieldGroupCounts, error)
 	ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
-
-	GetDevice(ctx context.Context, deviceID string) (*pb.Device, error)
-	ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error)
 }
 
 // Writer 定义元数据存储的写入与状态变更接口。
@@ -122,7 +119,6 @@ type Writer interface {
 	BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs []string, targetGroupID string, targetStatus string) (uint32, error)
 	DeleteFieldGroup(ctx context.Context, spaceID string, groupID string) error
 	UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error)
-	UpsertDevice(ctx context.Context, item *pb.Device) (*pb.Device, error)
 }
 
 // Store 组合元数据读写能力与生命周期管理能力。

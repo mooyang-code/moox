@@ -18,7 +18,7 @@ message Space {
   string description = 3;
   // owner 是空间拥有者，可以是用户、团队或系统任务。
   string owner = 4;
-  // status 表示启用、停用、构建中、归档或删除等状态。
+  // status 取值 active、disabled 或 deleted。
   string status = 5;
   // created_at 是创建时间，使用项目统一时间字符串格式。
   string created_at = 6;
@@ -46,7 +46,7 @@ message View {
   string freq = 8;
   // engine 是视图查询执行引擎标识，由控制面配置。
   string engine = 9;
-  // status 表示启用、停用、构建中、归档或删除等状态。
+  // status 取值 active、disabled 或 deleted。
   string status = 12;
   // columns 是视图对用户暴露的查询列（只读）：等于数据集里启用的列，按数据集列的创建顺序；写接口忽略该字段。
   repeated ViewColumn columns = 13;
@@ -54,8 +54,10 @@ message View {
   string created_at = 14;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
   string updated_at = 15;
-  // attributes 是扩展属性，默认不作为索引字段使用。
+  // attributes 是调用方自用的扩展属性，Storage 不解释。
   map<string, string> attributes = 16;
+  // maintenance_priority 是建索引等维护的先后：越小越先，0（默认）最先。
+  uint32 maintenance_priority = 27;
   // hidden_columns 是数据集里被禁用或所引用字段已停用、删除的列，由 Storage 计算：列和数据都保留，只在返回结果和列清单时隐藏。
   repeated string hidden_columns = 26;
 }
@@ -92,7 +94,7 @@ message DataSource {
   string data_source_id = 2;
   // name 是数据来源名称，通常用于管理台展示。
   string name = 3;
-  // status 表示启用、停用、构建中、归档或删除等状态。
+  // status 取值 active、disabled 或 deleted。
   string status = 4;
   // created_at 是创建时间，使用项目统一时间字符串格式。
   string created_at = 5;
@@ -184,13 +186,13 @@ message Dataset {
   // freq 是时序 Dataset 的唯一频率，必须是规范值（见 packages/frequency），创建后不可修改；
   // 记录型 Dataset 可以为空或使用描述性取值。
   string freq = 7;
-  // status 表示启用、停用、构建中、归档或删除等状态。
+  // status 取值 active 或 disabled。
   string status = 8;
   // created_at 是创建时间，使用项目统一时间字符串格式。
   string created_at = 9;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
   string updated_at = 10;
-  // attributes 是扩展属性，默认不作为索引字段使用。
+  // attributes 是调用方自用的扩展属性，Storage 不解释。
   map<string, string> attributes = 11;
   // retention 是只读的生效保留期，由 Storage 策略文件按 (space_id, freq) 解析，取值为 "<n>h" 或
   // "forever"；记录型 Dataset 为 "forever"。写接口忽略该字段。
@@ -201,6 +203,10 @@ message Dataset {
   repeated string subject_tags = 21;
   // retention_source 是 retention 的来源（只读）：default、space 或 record。
   string retention_source = 22;
+  // alignment 是周期对齐方式：epoch_utc 按 epoch 边界切分；session 按各交易时段开盘切分（A 股等），快照生效点只要求整分钟。
+  string alignment = 23;
+  // allowed_lateness_seconds 是周期截止前允许迟到的秒数；0 表示使用 Storage 的默认值。
+  uint32 allowed_lateness_seconds = 24;
 }
 
 // DatasetSubject 表示 Dataset 覆盖的 Subject 集合。
@@ -256,7 +262,7 @@ message Field {
   string validation_rule_json = 7;
   // write_example 是示例写入值，便于管理台展示和文档生成。
   string write_example = 8;
-  // status 表示启用、停用、构建中、归档或删除等状态。
+  // status 取值 active、disabled 或 deleted。
   string status = 9;
   // created_at 是创建时间，使用项目统一时间字符串格式。
   string created_at = 10;
@@ -288,7 +294,7 @@ message DatasetColumn {
   bool required = 7;
   // aliases 是导入数据时可识别的列名别名。
   repeated string aliases = 8;
-  // status 表示启用、停用、构建中、归档或删除等状态。
+  // status 取值 active、disabled 或 deleted。
   string status = 9;
   // created_at 是创建时间，使用项目统一时间字符串格式。
   string created_at = 10;
@@ -296,28 +302,6 @@ message DatasetColumn {
   string updated_at = 11;
   // attributes 是扩展属性；factor_result 的因子输出列（column_kind=output）display_name 必须等于列名，其他业务列（包括参数列 __params）必须包含中文且不超过 10 个字符。
   map<string, string> attributes = 12;
-}
-
-// Device 是底层具体存储组件，例如 Pebble、DuckDB、Bleve 或 Parquet 归档。
-message Device {
-  // device_id 是设备 ID。
-  string device_id = 1;
-  // name 是设备名称，通常用于管理台展示。
-  string name = 2;
-  // engine 是存储引擎，例如 pebble、duckdb、bleve 或 parquet。
-  string engine = 3;
-  // endpoint 是连接地址、文件路径或 URI。
-  string endpoint = 4;
-  // config_json 是设备专用配置。
-  string config_json = 5;
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 6;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 7;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 8;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 9;
 }
 
 // CreateSpaceReq 表示创建使用空间的请求。
@@ -995,74 +979,6 @@ message ListDatasetColumnsRsp {
   common.PageResult page_result = 3;
 }
 
-// CreateDeviceReq 表示创建设备的请求。
-message CreateDeviceReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // device 是待创建的设备元数据。
-  Device device = 2;
-}
-
-// CreateDeviceRsp 表示创建设备的响应。
-message CreateDeviceRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // device 是创建后的设备元数据。
-  Device device = 2;
-}
-
-// UpdateDeviceReq 表示更新设备的请求。
-message UpdateDeviceReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // device 是更新后的设备元数据。
-  Device device = 2;
-}
-
-// UpdateDeviceRsp 表示更新设备的响应。
-message UpdateDeviceRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // device 是更新后的设备元数据。
-  Device device = 2;
-}
-
-// GetDeviceReq 表示获取设备的请求。
-message GetDeviceReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // device_id 是设备 ID。
-  string device_id = 2;
-}
-
-// GetDeviceRsp 表示获取设备的响应。
-message GetDeviceRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // device 是设备元数据。
-  Device device = 2;
-}
-
-// ListDevicesReq 表示列出设备的请求。
-message ListDevicesReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // engine 是可选存储引擎过滤条件。
-  string engine = 2;
-  // page 是分页参数。
-  common.Page page = 3;
-}
-
-// ListDevicesRsp 表示列出设备的响应。
-message ListDevicesRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // devices 是设备列表。
-  repeated Device devices = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
-
 // Metadata 管理量化存储系统的核心元数据。
 service Metadata {
   // 创建使用空间。
@@ -1157,14 +1073,4 @@ service Metadata {
   rpc UpsertDatasetColumn(UpsertDatasetColumnReq) returns (UpsertDatasetColumnRsp);
   // 列出数据集列。
   rpc ListDatasetColumns(ListDatasetColumnsReq) returns (ListDatasetColumnsRsp);
-
-  // 创建设备。
-  rpc CreateDevice(CreateDeviceReq) returns (CreateDeviceRsp);
-  // 更新设备。
-  rpc UpdateDevice(UpdateDeviceReq) returns (UpdateDeviceRsp);
-  // 按 ID 获取设备。
-  rpc GetDevice(GetDeviceReq) returns (GetDeviceRsp);
-  // 列出设备。
-  rpc ListDevices(ListDevicesReq) returns (ListDevicesRsp);
-
 }

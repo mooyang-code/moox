@@ -326,7 +326,7 @@ func newFollowEnvSnapshot(datasets []readyBenchDataset) *followEnvSnapshot {
 		snapshot.datasets[dataset.datasetID] = &pb.Dataset{
 			SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Name: dataset.datasetID,
 			DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: readyBenchFreq, Status: "active",
-			Attributes: map[string]string{"allowed_lateness_seconds": fmt.Sprint(readyBenchLatenessSeconds)},
+			AllowedLatenessSeconds: uint32(readyBenchLatenessSeconds),
 		}
 		for _, column := range dataset.columns {
 			snapshot.columns[dataset.datasetID] = append(snapshot.columns[dataset.datasetID], &pb.DatasetColumn{

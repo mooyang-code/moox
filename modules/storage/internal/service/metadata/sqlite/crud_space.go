@@ -22,15 +22,14 @@ func (s *Store) UpsertSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 		return nil, err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_spaces (c_space_id, c_name, c_description, c_owner, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO t_spaces (c_space_id, c_name, c_owner, c_status, c_item_json)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id) DO UPDATE SET
 			c_name = excluded.c_name,
-			c_description = excluded.c_description,
 			c_owner = excluded.c_owner,
 			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetName(), item.GetDescription(), item.GetOwner(), item.GetStatus(), raw)
+			c_item_json = excluded.c_item_json
+	`, item.GetSpaceId(), item.GetName(), item.GetOwner(), item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
@@ -53,9 +52,9 @@ func (s *Store) CreateSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 		return nil, err
 	}
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO t_spaces (c_space_id, c_name, c_description, c_owner, c_status, c_attrs_json, c_ctime, c_mtime)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, item.GetSpaceId(), item.GetName(), item.GetDescription(), item.GetOwner(), item.GetStatus(), raw, now, now); err != nil {
+		INSERT INTO t_spaces (c_space_id, c_name, c_owner, c_status, c_item_json, c_ctime, c_mtime)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetName(), item.GetOwner(), item.GetStatus(), raw, now, now); err != nil {
 		return nil, err
 	}
 	// The INSERT is committed by the SQLite connection. Do not perform a
@@ -65,7 +64,7 @@ func (s *Store) CreateSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 }
 
 func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {
-	return scanMessageWithSQLTimestamps(s.queryDB(ctx).QueryRowContext(ctx, `SELECT c_attrs_json, c_ctime, c_mtime FROM t_spaces WHERE c_space_id = ?`, spaceID), func() *pb.Space { return &pb.Space{} })
+	return scanMessageWithSQLTimestamps(s.queryDB(ctx).QueryRowContext(ctx, `SELECT c_item_json, c_ctime, c_mtime FROM t_spaces WHERE c_space_id = ?`, spaceID), func() *pb.Space { return &pb.Space{} })
 }
 
 func (s *Store) DeleteSpace(ctx context.Context, spaceID string) error {
@@ -97,7 +96,7 @@ func (s *Store) DeleteSpace(ctx context.Context, spaceID string) error {
 
 func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
 	pageNo, size, offset := normalizePage(page)
-	rows, err := s.queryDB(ctx).QueryContext(ctx, `SELECT c_attrs_json, c_ctime, c_mtime FROM t_spaces WHERE (? = '' OR c_owner = ?) ORDER BY c_space_id LIMIT ? OFFSET ?`, owner, owner, size, offset)
+	rows, err := s.queryDB(ctx).QueryContext(ctx, `SELECT c_item_json, c_ctime, c_mtime FROM t_spaces WHERE (? = '' OR c_owner = ?) ORDER BY c_space_id LIMIT ? OFFSET ?`, owner, owner, size, offset)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -130,12 +129,12 @@ func (s *Store) UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.
 		return nil, err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_data_sources (c_space_id, c_data_source_id, c_name, c_status, c_attrs_json)
+		INSERT INTO t_data_sources (c_space_id, c_data_source_id, c_name, c_status, c_item_json)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_data_source_id) DO UPDATE SET
 			c_name = excluded.c_name,
 			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json
+			c_item_json = excluded.c_item_json
 	`, item.GetSpaceId(), item.GetDataSourceId(), item.GetName(), item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
@@ -144,7 +143,7 @@ func (s *Store) UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.
 }
 
 func (s *Store) GetDataSource(ctx context.Context, spaceID string, dataSourceID string) (*pb.DataSource, error) {
-	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_data_sources WHERE c_space_id = ? AND c_data_source_id = ?`, []any{spaceID, dataSourceID}, func() *pb.DataSource { return &pb.DataSource{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_item_json FROM t_data_sources WHERE c_space_id = ? AND c_data_source_id = ?`, []any{spaceID, dataSourceID}, func() *pb.DataSource { return &pb.DataSource{} })
 }
 
 func (s *Store) DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error {
@@ -170,7 +169,7 @@ func (s *Store) ListDataSources(ctx context.Context, spaceID string, keyword str
 		  AND (? = '' OR instr(lower(c_data_source_id), lower(?)) > 0 OR instr(lower(c_name), lower(?)) > 0)`
 	args := []any{spaceID, spaceID, keyword, keyword, keyword}
 	return queryPagedMessages(ctx, s.queryDB(ctx),
-		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_data_source_id`,
+		`SELECT c_item_json `+where+` ORDER BY c_space_id, c_data_source_id`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.DataSource { return &pb.DataSource{} },
 	)

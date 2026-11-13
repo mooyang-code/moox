@@ -6,7 +6,6 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -96,7 +95,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": source.DataSourceID,
 		"source_freq": params.SourceFrequency, "source_series_tag": strings.Join(params.SourceTags(), ","),
-		"target_freq": targetFreq.Storage, "alignment": market.Alignment,
+		"target_freq": targetFreq.Storage,
 	}
 	createdDataset, createdView := false, false
 	compensate := func(original error) error {
@@ -126,7 +125,9 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			SpaceId: task.SpaceID, DatasetId: targetDatasetID,
 			// 数据集名称在空间内唯一且必须含中文：用目标 ID 派生一个稳定的短后缀，避免不同合成目标重名。
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-			Freq: targetFreq.Storage, Attributes: withLateness(attrs), SubjectTags: append([]string(nil), source.SubjectTags...),
+			// 周期的迟到容忍（收盘后 2 分钟）：Storage 据此算周期截止，写入目标与引擎的截止判断一致。
+			Freq: targetFreq.Storage, Alignment: market.Alignment, AllowedLatenessSeconds: TargetLatenessSeconds,
+			Attributes: attrs, SubjectTags: append([]string(nil), source.SubjectTags...),
 		}, Columns: columns})
 		if createErr != nil {
 			return fmt.Errorf("create target Dataset: %w", createErr)
@@ -144,6 +145,9 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	}
 	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage); err != nil {
 		return compensate(err)
+	}
+	if target.GetDataset().GetAlignment() != market.Alignment {
+		return compensate(fmt.Errorf("target Dataset alignment %q does not match market alignment %q", target.GetDataset().GetAlignment(), market.Alignment))
 	}
 	_ = subjects
 	if !createdDataset {
@@ -170,7 +174,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, CreateOnly: true, View: &storagepb.View{
 			SpaceId: task.SpaceID, ViewId: targetViewID, Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: targetDatasetID,
 			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb", Status: "active",
-			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse", "maintenance_priority": "0"},
+			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse"},
 		}})
 		if createErr != nil {
 			return compensate(fmt.Errorf("create target View: %w", createErr))
@@ -370,14 +374,6 @@ func validateTargetView(view *storagepb.View, task domain.CollectionTask, params
 		}
 	}
 	return nil
-}
-
-// withLateness 在创建目标数据集时声明周期的迟到容忍（收盘后 2 分钟）：Storage 据此算周期截止，写入目标与引擎的截止判断一致。
-// 它不属于创建后校验的不可变契约（attrs），已有的目标数据集没有它时 Storage 用默认值，周期提交失败会自动改用普通写入。
-func withLateness(attrs map[string]string) map[string]string {
-	out := cloneStringMap(attrs)
-	out["allowed_lateness_seconds"] = strconv.Itoa(TargetLatenessSeconds)
-	return out
 }
 
 func cloneStringMap(input map[string]string) map[string]string {

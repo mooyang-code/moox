@@ -82,12 +82,6 @@ func (stubMetadataReader) CountFieldsByGroup(context.Context, string) (metadata.
 func (stubMetadataReader) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return nil, nil, nil
 }
-func (stubMetadataReader) GetDevice(context.Context, string) (*pb.Device, error) {
-	return nil, nil
-}
-func (stubMetadataReader) ListDevices(context.Context, string, *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	return nil, nil, nil
-}
 
 var _ metadata.Reader = stubMetadataReader{}
 

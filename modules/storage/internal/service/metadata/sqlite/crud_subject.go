@@ -25,19 +25,18 @@ func upsertSubject(ctx context.Context, store execQueryRower, item *pb.Subject) 
 		return err
 	}
 	_, err = store.ExecContext(ctx, `
-		INSERT INTO t_subjects (c_space_id, c_subject_id, c_name, c_timezone, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO t_subjects (c_space_id, c_subject_id, c_name, c_status, c_item_json)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_subject_id) DO UPDATE SET
 			c_name = excluded.c_name,
-			c_timezone = excluded.c_timezone,
 			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetSubjectId(), item.GetName(), item.GetTimezone(), item.GetStatus(), raw)
+			c_item_json = excluded.c_item_json
+	`, item.GetSpaceId(), item.GetSubjectId(), item.GetName(), item.GetStatus(), raw)
 	return err
 }
 
 func (s *Store) GetSubject(ctx context.Context, spaceID string, subjectID string) (*pb.Subject, error) {
-	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_subjects WHERE c_space_id = ? AND c_subject_id = ?`, []any{spaceID, subjectID}, func() *pb.Subject { return &pb.Subject{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_item_json FROM t_subjects WHERE c_space_id = ? AND c_subject_id = ?`, []any{spaceID, subjectID}, func() *pb.Subject { return &pb.Subject{} })
 }
 
 func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectIDs []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
@@ -60,7 +59,7 @@ func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectIDs []s
 		keyword, keyword, keyword,
 	}
 	return queryPagedMessages(ctx, s.queryDB(ctx),
-		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_subject_id`,
+		`SELECT c_item_json `+where+` ORDER BY c_space_id, c_subject_id`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.Subject { return &pb.Subject{} },
 	)

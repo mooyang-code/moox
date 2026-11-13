@@ -18,16 +18,15 @@ func (s *Store) UpsertFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.
 		return nil, err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_field_groups (c_space_id, c_group_id, c_name, c_description, c_parent_group_id, c_sort_order, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?)
+		INSERT INTO t_field_groups (c_space_id, c_group_id, c_name, c_parent_group_id, c_sort_order, c_status, c_item_json)
+		VALUES (?, ?, ?, NULLIF(?, ''), ?, ?, ?)
 		ON CONFLICT(c_space_id, c_group_id) DO UPDATE SET
 			c_name = excluded.c_name,
-			c_description = excluded.c_description,
 			c_parent_group_id = excluded.c_parent_group_id,
 			c_sort_order = excluded.c_sort_order,
 			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetGroupId(), item.GetName(), item.GetDescription(), item.GetParentGroupId(), item.GetSortOrder(), item.GetStatus(), raw)
+			c_item_json = excluded.c_item_json
+	`, item.GetSpaceId(), item.GetGroupId(), item.GetName(), item.GetParentGroupId(), item.GetSortOrder(), item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
@@ -40,9 +39,9 @@ func (s *Store) CreateFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.
 		return nil, err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_field_groups (c_space_id, c_group_id, c_name, c_description, c_parent_group_id, c_sort_order, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?)
-	`, item.GetSpaceId(), item.GetGroupId(), item.GetName(), item.GetDescription(), item.GetParentGroupId(), item.GetSortOrder(), item.GetStatus(), raw)
+		INSERT INTO t_field_groups (c_space_id, c_group_id, c_name, c_parent_group_id, c_sort_order, c_status, c_item_json)
+		VALUES (?, ?, ?, NULLIF(?, ''), ?, ?, ?)
+	`, item.GetSpaceId(), item.GetGroupId(), item.GetName(), item.GetParentGroupId(), item.GetSortOrder(), item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
@@ -55,10 +54,10 @@ func (s *Store) UpdateFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.
 		return nil, err
 	}
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE t_field_groups SET c_name = ?, c_description = ?, c_parent_group_id = NULLIF(?, ''),
-			c_sort_order = ?, c_status = ?, c_attrs_json = ?
+		UPDATE t_field_groups SET c_name = ?, c_parent_group_id = NULLIF(?, ''),
+			c_sort_order = ?, c_status = ?, c_item_json = ?
 		WHERE c_space_id = ? AND c_group_id = ?
-	`, item.GetName(), item.GetDescription(), item.GetParentGroupId(), item.GetSortOrder(), item.GetStatus(), raw, item.GetSpaceId(), item.GetGroupId())
+	`, item.GetName(), item.GetParentGroupId(), item.GetSortOrder(), item.GetStatus(), raw, item.GetSpaceId(), item.GetGroupId())
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +97,7 @@ func (s *Store) prepareFieldGroup(ctx context.Context, item *pb.FieldGroup) (str
 }
 
 func (s *Store) GetFieldGroup(ctx context.Context, spaceID string, groupID string) (*pb.FieldGroup, error) {
-	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_field_groups WHERE c_space_id = ? AND c_group_id = ?`, []any{spaceID, groupID}, func() *pb.FieldGroup { return &pb.FieldGroup{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_item_json FROM t_field_groups WHERE c_space_id = ? AND c_group_id = ?`, []any{spaceID, groupID}, func() *pb.FieldGroup { return &pb.FieldGroup{} })
 }
 
 func (s *Store) ListFieldGroups(ctx context.Context, spaceID string, parentGroupID string, page *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error) {
@@ -108,7 +107,7 @@ func (s *Store) ListFieldGroups(ctx context.Context, spaceID string, parentGroup
 		  AND (? = '' OR COALESCE(c_parent_group_id, '') = ?)`
 	args := []any{spaceID, spaceID, parentGroupID, parentGroupID}
 	return queryPagedMessages(ctx, s.queryDB(ctx),
-		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, COALESCE(c_parent_group_id, ''), c_sort_order, c_group_id`,
+		`SELECT c_item_json `+where+` ORDER BY c_space_id, COALESCE(c_parent_group_id, ''), c_sort_order, c_group_id`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.FieldGroup { return &pb.FieldGroup{} },
 	)
@@ -228,7 +227,7 @@ func (s *Store) BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs 
 		if err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE t_fields SET c_group_id = ?, c_status = ?, c_attrs_json = ? WHERE c_space_id = ? AND c_field_id = ?`, field.GetGroupId(), field.GetStatus(), raw, spaceID, field.GetFieldId()); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE t_fields SET c_group_id = ?, c_status = ?, c_item_json = ? WHERE c_space_id = ? AND c_field_id = ?`, field.GetGroupId(), field.GetStatus(), raw, spaceID, field.GetFieldId()); err != nil {
 			return 0, err
 		}
 	}
@@ -274,4 +273,4 @@ func (s *Store) DeleteFieldGroup(ctx context.Context, spaceID string, groupID st
 }
 
 // 按字段 ID 批量读取：ID 以 JSON 数组传入，用 json_each 展开。
-const selectFieldsByIDsSQL = `SELECT c_attrs_json FROM t_fields WHERE c_space_id = ? AND c_field_id IN (SELECT value FROM json_each(?))`
+const selectFieldsByIDsSQL = `SELECT c_item_json FROM t_fields WHERE c_space_id = ? AND c_field_id IN (SELECT value FROM json_each(?))`
