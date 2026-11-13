@@ -24,11 +24,11 @@ func (s *Service) ReportDatasetPeriodCompleted(ctx context.Context, req *pb.Repo
 	}
 	raw, _, err := pebble.BuildProducerPeriodCompletedMessage(req.GetSpaceId(), req.GetMarker())
 	if err != nil {
-		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: storeError(err)}, nil
+		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	eventID, err := s.store.AppendDatasetMarker(ctx, raw)
 	if err != nil {
-		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: storeError(err)}, nil
+		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: retinfo.Success("success"), EventId: eventID}, nil
 }
@@ -46,7 +46,7 @@ func (s *Service) GetDatasetPeriodCompleted(ctx context.Context, req *pb.GetData
 	}
 	message, found, err := s.store.GetDatasetPeriodCompletedMarker(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetCauseEventId(), req.GetPeriodTime())
 	if err != nil {
-		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: storeError(err)}, nil
+		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	if !found {
 		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: retinfo.Success("success")}, nil
@@ -77,11 +77,6 @@ func markerSeries(values []*storageeventpb.SeriesRef) []*pb.SeriesRef {
 		return nil
 	}
 	return out
-}
-
-// storeError 把存储层错误转成带错误码的返回信息。
-func storeError(err error) *pb.RetInfo {
-	return retinfo.Error(pebble.ErrorCode(err), err)
 }
 
 func (s *Service) validateMarkerCaller(auth *pb.AuthInfo, spaceID, datasetID string) error {

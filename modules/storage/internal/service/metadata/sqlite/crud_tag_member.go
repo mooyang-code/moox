@@ -11,6 +11,7 @@ import (
 	"time"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -336,7 +337,7 @@ func (s *Store) ResolveSubjects(ctx context.Context, spaceID string, tagIDs []st
 
 func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID, datasetID, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
-		return nil, nil, fmt.Errorf("space_id and dataset_id are required")
+		return nil, nil, storeerr.Invalidf("space_id and dataset_id are required")
 	}
 	const from = `
 		FROM t_datasets d

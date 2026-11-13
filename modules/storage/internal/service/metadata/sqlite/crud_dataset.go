@@ -4,11 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"google.golang.org/protobuf/proto"
@@ -19,7 +19,7 @@ import (
 // UpsertDataset 创建或更新数据集。新建的数据集直接启用，columns 与数据集在同一事务内写入；已存在时逐列更新。
 func (s *Store) UpsertDataset(ctx context.Context, item *pb.Dataset, columns ...*pb.DatasetColumn) (*pb.Dataset, error) {
 	if item == nil {
-		return nil, errors.New("dataset is required")
+		return nil, storeerr.Invalidf("dataset is required")
 	}
 	if _, err := s.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err == nil {
 		updated, err := s.UpdateDataset(ctx, item)
@@ -95,7 +95,7 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset, columns ...
 
 func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error) {
 	if item == nil || strings.TrimSpace(item.GetSpaceId()) == "" || strings.TrimSpace(item.GetDatasetId()) == "" || strings.TrimSpace(item.GetName()) == "" {
-		return nil, errors.New("space_id, dataset_id and name are required")
+		return nil, storeerr.Invalidf("space_id, dataset_id and name are required")
 	}
 	item = proto.Clone(item).(*pb.Dataset)
 	item.SpaceId = strings.TrimSpace(item.GetSpaceId())
@@ -118,22 +118,22 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	dataSourceID := existing.GetDataSourceId()
 	if candidate := strings.TrimSpace(item.GetDataSourceId()); candidate != "" && candidate != dataSourceID {
 		if dataSourceID != "" {
-			return nil, errors.New("dataset data_source_id is immutable")
+			return nil, storeerr.Invalidf("dataset data_source_id is immutable")
 		}
 		dataSourceID = candidate
 	}
 	if item.GetDataKind() != pb.DataKind_DATA_KIND_UNSPECIFIED && item.GetDataKind() != existing.GetDataKind() {
-		return nil, errors.New("dataset data_kind is immutable")
+		return nil, storeerr.Invalidf("dataset data_kind is immutable")
 	}
 	if freq := strings.TrimSpace(item.GetFreq()); freq != "" && freq != existing.GetFreq() {
-		return nil, errors.New("dataset freq is immutable")
+		return nil, storeerr.Invalidf("dataset freq is immutable")
 	}
 	// alignment 设置后不能修改，没有设置过的可以补上；请求里为空、allowed_lateness_seconds 为 0 时沿用已有值，
 	// 只改名称、说明的更新不会把它们清掉。
 	alignment := existing.GetAlignment()
 	if candidate := strings.TrimSpace(item.GetAlignment()); candidate != "" && candidate != alignment {
 		if alignment != "" {
-			return nil, errors.New("数据集的 alignment 设置后不能修改")
+			return nil, storeerr.Invalidf("数据集的 alignment 设置后不能修改")
 		}
 		alignment = candidate
 	}
@@ -253,7 +253,7 @@ func (s *Store) ListDatasets(ctx context.Context, query coremetadata.DatasetQuer
 
 func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, error) {
 	if item == nil {
-		return nil, errors.New("dataset is required")
+		return nil, storeerr.Invalidf("dataset is required")
 	}
 	item = proto.Clone(item).(*pb.Dataset)
 	item.SpaceId = strings.TrimSpace(item.GetSpaceId())
@@ -261,16 +261,16 @@ func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, error) {
 	item.DataSourceId = strings.TrimSpace(item.GetDataSourceId())
 	item.Name = strings.TrimSpace(item.GetName())
 	if item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetName() == "" {
-		return nil, errors.New("space_id, dataset_id and name are required")
+		return nil, storeerr.Invalidf("space_id, dataset_id and name are required")
 	}
 	if item.GetDataKind() != pb.DataKind_DATA_KIND_RECORD && item.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
-		return nil, errors.New("data_kind must be record or time_series")
+		return nil, storeerr.Invalidf("data_kind must be record or time_series")
 	}
 	// Retention is resolved from the Storage policy on read, never stored.
 	item.Retention, item.RetentionSource = "", ""
 	item.Freq = strings.TrimSpace(item.GetFreq())
 	if item.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES && !frequencypkg.IsCanonical(item.GetFreq()) {
-		return nil, fmt.Errorf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.StandardStrings(), ", "), item.GetFreq())
+		return nil, storeerr.Invalidf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.StandardStrings(), ", "), item.GetFreq())
 	}
 	return item, nil
 }
@@ -284,7 +284,7 @@ func nullableDatasetSource(sourceID string) any {
 
 func validateDatasetStatus(status string) error {
 	if status != "active" && status != "disabled" {
-		return fmt.Errorf("dataset status must be active or disabled: %q", status)
+		return storeerr.Invalidf("dataset status must be active or disabled: %q", status)
 	}
 	return nil
 }
@@ -303,7 +303,7 @@ func (s *Store) UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, err
 	}
 	if existing, getErr := s.GetField(ctx, item.GetSpaceId(), item.GetFieldId()); getErr == nil {
 		if existing.GetValueType() != item.GetValueType() {
-			return nil, errors.New("field value_type is immutable")
+			return nil, storeerr.Invalidf("field value_type is immutable")
 		}
 	} else if !errors.Is(getErr, sql.ErrNoRows) {
 		return nil, getErr
@@ -349,7 +349,7 @@ func (s *Store) UpdateField(ctx context.Context, item *pb.Field) (*pb.Field, err
 	if existing, getErr := s.GetField(ctx, item.GetSpaceId(), item.GetFieldId()); getErr != nil {
 		return nil, getErr
 	} else if existing.GetValueType() != item.GetValueType() {
-		return nil, errors.New("field value_type is immutable")
+		return nil, storeerr.Invalidf("field value_type is immutable")
 	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE t_fields SET c_group_id = ?, c_name = ?, c_description = ?, c_value_type = ?,
@@ -369,7 +369,7 @@ func (s *Store) UpdateField(ctx context.Context, item *pb.Field) (*pb.Field, err
 
 func (s *Store) prepareField(ctx context.Context, item *pb.Field) (string, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetFieldId() == "" || item.GetName() == "" || item.GetGroupId() == "" {
-		return "", errors.New("space_id, field_id, name and group_id are required")
+		return "", storeerr.Invalidf("space_id, field_id, name and group_id are required")
 	}
 	if _, err := s.GetFieldGroup(ctx, item.GetSpaceId(), item.GetGroupId()); err != nil {
 		return "", err
@@ -385,7 +385,7 @@ func (s *Store) GetField(ctx context.Context, spaceID string, fieldID string) (*
 
 func (s *Store) ListFields(ctx context.Context, query coremetadata.FieldQuery) ([]*pb.Field, *pb.PageResult, error) {
 	if query.GroupID != "" && query.UngroupedOnly {
-		return nil, nil, errors.New("group_id and ungrouped_only cannot be used together")
+		return nil, nil, storeerr.Invalidf("group_id and ungrouped_only cannot be used together")
 	}
 	sortColumns := map[string]string{
 		"":           "c_sort_order",
@@ -395,14 +395,14 @@ func (s *Store) ListFields(ctx context.Context, query coremetadata.FieldQuery) (
 	}
 	sortColumn, ok := sortColumns[query.SortBy]
 	if !ok {
-		return nil, nil, fmt.Errorf("unsupported field sort %q", query.SortBy)
+		return nil, nil, storeerr.Invalidf("unsupported field sort %q", query.SortBy)
 	}
 	direction := strings.ToUpper(query.SortOrder)
 	if direction == "" {
 		direction = "ASC"
 	}
 	if direction != "ASC" && direction != "DESC" {
-		return nil, nil, fmt.Errorf("unsupported field sort order %q", query.SortOrder)
+		return nil, nil, storeerr.Invalidf("unsupported field sort order %q", query.SortOrder)
 	}
 
 	where := []string{"1 = 1"}
@@ -466,10 +466,10 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 // upsertDatasetColumnTx 在事务内写入一列。View 的列由数据集列推出，不用同步。
 func upsertDatasetColumnTx(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) (*pb.DatasetColumn, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
-		return nil, errors.New("space_id, dataset_id and column_name are required")
+		return nil, storeerr.Invalidf("space_id, dataset_id and column_name are required")
 	}
 	if item.GetValueType() == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED {
-		return nil, errors.New("dataset column value_type must be declared")
+		return nil, storeerr.Invalidf("dataset column value_type must be declared")
 	}
 	item.Status = defaultStatus(item.GetStatus())
 	raw, err := marshal(item)
@@ -480,7 +480,7 @@ func upsertDatasetColumnTx(ctx context.Context, tx *sql.Tx, item *pb.DatasetColu
 		[]any{item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName()}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
 	if getErr == nil {
 		if existing.GetOriginType() != item.GetOriginType() || existing.GetOriginId() != item.GetOriginId() || existing.GetValueType() != item.GetValueType() {
-			return nil, errors.New("dataset column identity and value_type are immutable")
+			return nil, storeerr.Invalidf("dataset column identity and value_type are immutable")
 		}
 	} else if !errors.Is(getErr, sql.ErrNoRows) {
 		return nil, getErr

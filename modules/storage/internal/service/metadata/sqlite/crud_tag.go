@@ -12,6 +12,7 @@ import (
 	sqlite "modernc.org/sqlite"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -86,9 +87,9 @@ func (s *Store) CreateTag(ctx context.Context, item *pb.Tag) (*pb.Tag, error) {
 		var sqliteErr *sqlite.Error
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == 2067 {
 			if strings.Contains(strings.ToLower(sqliteErr.Error()), "c_tag_name") {
-				return nil, fmt.Errorf("tag name %q already exists in space %s: %w", item.GetTagName(), item.GetSpaceId(), err)
+				return nil, storeerr.Conflictf("tag name %q already exists in space %s: %w", item.GetTagName(), item.GetSpaceId(), err)
 			}
-			return nil, fmt.Errorf("tag %s/%s already exists: %w", item.GetSpaceId(), item.GetTagId(), err)
+			return nil, storeerr.Conflictf("tag %s/%s already exists: %w", item.GetSpaceId(), item.GetTagId(), err)
 		}
 		return nil, err
 	}

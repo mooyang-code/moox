@@ -45,7 +45,7 @@ func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.PrimaryReg
 	}
 	result, err := s.store.RegisterSeriesSnapshot(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetFrequency(), series, req.GetEffectiveFrom())
 	if err != nil {
-		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pebble.ErrorCode(err), err)}, nil
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Success("success"), SeriesHash: result.SeriesHash, ExpectedCount: result.ExpectedCount, AlreadyRegistered: result.AlreadyRegistered}, nil
 }
@@ -105,7 +105,7 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 		if s.rejection != nil && errors.As(err, &deadlinePassed) {
 			s.rejection.ObserveDeadlineRejection(exp.GetSpaceId(), exp.GetDatasetId(), exp.GetFrequency(), time.Now())
 		}
-		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pebble.ErrorCode(err), err)}, nil
+		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	s.observeTimeSeriesRows(ctx, rows, "success", true)
 	return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Success("success"), Keys: keys, PeriodStatus: result.Status, AcceptedSeriesIndexes: result.AcceptedSeriesIndexes}, nil

@@ -3,10 +3,10 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -14,7 +14,7 @@ import (
 
 func (s *Store) UpsertSpace(ctx context.Context, item *pb.Space) (*pb.Space, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetName() == "" {
-		return nil, errors.New("space_id and name are required")
+		return nil, storeerr.Invalidf("space_id and name are required")
 	}
 	item.Status = defaultStatus(item.GetStatus())
 	raw, err := marshal(item)
@@ -41,7 +41,7 @@ func (s *Store) UpsertSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 // race through an existence check and then delete each other's metadata.
 func (s *Store) CreateSpace(ctx context.Context, item *pb.Space) (*pb.Space, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetName() == "" {
-		return nil, errors.New("space_id and name are required")
+		return nil, storeerr.Invalidf("space_id and name are required")
 	}
 	item.Status = defaultStatus(item.GetStatus())
 	now := s.nowUTC().Format(time.RFC3339Nano)
@@ -121,7 +121,7 @@ func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]
 
 func (s *Store) UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetDataSourceId() == "" || item.GetName() == "" {
-		return nil, errors.New("space_id, data_source_id and name are required")
+		return nil, storeerr.Invalidf("space_id, data_source_id and name are required")
 	}
 	item.Status = defaultStatus(item.GetStatus())
 	raw, err := marshal(item)

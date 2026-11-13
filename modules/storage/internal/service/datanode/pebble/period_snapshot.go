@@ -11,6 +11,7 @@ import (
 
 	cpebble "github.com/cockroachdb/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/rowidentity"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
@@ -35,6 +36,8 @@ type SeriesSnapshotMissingError struct{ Reason string }
 
 func (e SeriesSnapshotMissingError) Error() string { return e.Reason }
 
+func (SeriesSnapshotMissingError) StoreErrorKind() storeerr.Kind { return storeerr.NotFound }
+
 // PeriodHashMismatchError 表示提交带来的 hash 与生效表规定的该周期 hash 不一致。
 type PeriodHashMismatchError struct{ Want, Got string }
 
@@ -42,12 +45,16 @@ func (e PeriodHashMismatchError) Error() string {
 	return fmt.Sprintf("series hash %s does not match the effective snapshot %s for this period", e.Got, e.Want)
 }
 
+func (PeriodHashMismatchError) StoreErrorKind() storeerr.Kind { return storeerr.Conflict }
+
 // PeriodDeadlinePassedError 表示周期尚未建立且截止时间已过，迟到的数据交给补采。
 type PeriodDeadlinePassedError struct{ Deadline int64 }
 
 func (e PeriodDeadlinePassedError) Error() string {
 	return fmt.Sprintf("dataset period deadline %d has passed before the period was created", e.Deadline)
 }
+
+func (PeriodDeadlinePassedError) StoreErrorKind() storeerr.Kind { return storeerr.Invalid }
 
 // maxEffectiveFromLead 限制生效周期 P 最远能登记到多久之后：生效表只追加，误登记的远期 P 会让该数据集无法再变更标的。
 const maxEffectiveFromLead = 7 * 24 * time.Hour
@@ -57,6 +64,8 @@ const maxEffectiveFromLead = 7 * 24 * time.Hour
 type StaleEffectiveFromError struct{ Reason string }
 
 func (e StaleEffectiveFromError) Error() string { return "effective_from_stale: " + e.Reason }
+
+func (StaleEffectiveFromError) StoreErrorKind() storeerr.Kind { return storeerr.Conflict }
 
 func snapshotScope(spaceID, datasetID, frequency string) string {
 	return datasetScope(spaceID, datasetID) + hex.EncodeToString([]byte(frequency)) + "/"

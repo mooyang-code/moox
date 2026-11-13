@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 )
@@ -291,5 +292,29 @@ func TestViewTakesItsDatasetFreq(t *testing.T) {
 	}
 	if _, err := store.UpsertView(ctx, &pb.View{SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "dataset", Engine: "duckdb", Freq: "1h"}); err == nil || !strings.Contains(err.Error(), "a View takes its Dataset's freq") {
 		t.Fatalf("mismatched view freq error = %v", err)
+	}
+}
+
+// 元数据库的错误带类别，由 retinfo.Code 统一映射：参数错误、不存在、冲突，与错误文字无关。
+func TestMetadataStoreErrorsCarryKinds(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	created := createTestDataset(t, ctx, store, "dataset")
+	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "Dataset", Freq: "5m"}); retinfo.Code(err) != pb.ErrorCode_INVALID_PARAM {
+		t.Fatalf("改频率 = %v（%v），想要 INVALID_PARAM", retinfo.Code(err), err)
+	}
+	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "stale", Revision: created.GetRevision() + 5}); retinfo.Code(err) != pb.ErrorCode_CONFLICT {
+		t.Fatalf("修订号不符 = %v（%v），想要 CONFLICT", retinfo.Code(err), err)
+	}
+	if _, err := store.GetDataset(ctx, "space", "missing"); retinfo.Code(err) != pb.ErrorCode_NOT_FOUND {
+		t.Fatalf("不存在的数据集 = %v（%v），想要 NOT_FOUND", retinfo.Code(err), err)
+	}
+	view := &pb.View{SpaceId: "space", ViewId: "view_dup", Name: "视图", DatasetId: "dataset"}
+	if _, err := store.CreateView(ctx, view); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateView(ctx, proto.Clone(view).(*pb.View)); retinfo.Code(err) != pb.ErrorCode_CONFLICT {
+		t.Fatalf("重复建 View = %v（%v），想要 CONFLICT", retinfo.Code(err), err)
 	}
 }

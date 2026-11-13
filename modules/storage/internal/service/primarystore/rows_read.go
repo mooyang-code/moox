@@ -35,11 +35,11 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
-		return nil, err
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	rsp, err := s.store.ReadTimeSeriesRows(ctx, req)
 	if err != nil {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: storeError(err)}, nil
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	rsp.RetInfo = retinfo.Success("success")
 	return rsp, nil
@@ -64,11 +64,11 @@ func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeri
 		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
-		return nil, err
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	counts, err := s.store.CountTimeSeriesRows(ctx, req)
 	if err != nil {
-		return &pb.CountTimeSeriesRowsRsp{RetInfo: storeError(err)}, nil
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Counts: counts}, nil
 }
@@ -87,11 +87,11 @@ func (s *Service) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetCha
 	}
 	ctx = s.requestContext(ctx)
 	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
-		return nil, err
+		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	rsp, err := s.store.ReadDatasetChanges(ctx, req)
 	if err != nil {
-		return &pb.ReadDatasetChangesRsp{RetInfo: storeError(err)}, nil
+		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	rsp.RetInfo = retinfo.Success("success")
 	return rsp, nil

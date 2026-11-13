@@ -2,12 +2,12 @@ package metadata
 
 import (
 	"context"
-	"errors"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-var ErrViewExists = errors.New("view already exists")
+var ErrViewExists = storeerr.New(storeerr.Conflict, "view already exists")
 
 // FieldQuery contains the supported server-side field filters and ordering.
 type FieldQuery struct {

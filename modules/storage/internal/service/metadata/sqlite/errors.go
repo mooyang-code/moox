@@ -1,5 +1,5 @@
 package sqlite
 
-import "errors"
+import "github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 
-var ErrRevisionConflict = errors.New("dataset revision conflict")
+var ErrRevisionConflict = storeerr.New(storeerr.Conflict, "dataset revision conflict")

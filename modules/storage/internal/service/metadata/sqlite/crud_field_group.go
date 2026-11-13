@@ -3,12 +3,11 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
 	"strings"
 	"time"
 
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -71,10 +70,10 @@ func (s *Store) UpdateFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.
 
 func (s *Store) prepareFieldGroup(ctx context.Context, item *pb.FieldGroup) (string, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetGroupId() == "" || item.GetName() == "" {
-		return "", errors.New("space_id, group_id and name are required")
+		return "", storeerr.Invalidf("space_id, group_id and name are required")
 	}
 	if item.GetParentGroupId() == item.GetGroupId() {
-		return "", errors.New("field group cannot be its own parent")
+		return "", storeerr.Invalidf("field group cannot be its own parent")
 	}
 	if item.GetParentGroupId() != "" {
 		parent, err := s.GetFieldGroup(ctx, item.GetSpaceId(), item.GetParentGroupId())
@@ -82,14 +81,14 @@ func (s *Store) prepareFieldGroup(ctx context.Context, item *pb.FieldGroup) (str
 			return "", err
 		}
 		if parent.GetParentGroupId() != "" {
-			return "", errors.New("field groups support at most two levels")
+			return "", storeerr.Invalidf("field groups support at most two levels")
 		}
 		children, _, err := s.ListFieldGroups(ctx, item.GetSpaceId(), item.GetGroupId(), nil)
 		if err != nil {
 			return "", err
 		}
 		if len(children) > 0 {
-			return "", errors.New("a field group with children cannot become a child group")
+			return "", storeerr.Invalidf("a field group with children cannot become a child group")
 		}
 	}
 	item.Status = defaultStatus(item.GetStatus())
@@ -154,24 +153,24 @@ func (s *Store) CountFieldsByGroup(ctx context.Context, spaceID string) (coremet
 
 func (s *Store) BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs []string, targetGroupID string, targetStatus string) (uint32, error) {
 	if spaceID == "" || len(fieldIDs) == 0 {
-		return 0, errors.New("space_id and field_ids are required")
+		return 0, storeerr.Invalidf("space_id and field_ids are required")
 	}
 	if len(fieldIDs) > 100 {
-		return 0, errors.New("at most 100 fields can be updated at once")
+		return 0, storeerr.Invalidf("at most 100 fields can be updated at once")
 	}
 	if targetGroupID == "" && targetStatus == "" {
-		return 0, errors.New("target_group_id or target_status is required")
+		return 0, storeerr.Invalidf("target_group_id or target_status is required")
 	}
 	if targetStatus != "" && targetStatus != "active" && targetStatus != "disabled" && targetStatus != "deleted" {
-		return 0, errors.New("target_status 只能是 active、disabled 或 deleted")
+		return 0, storeerr.Invalidf("target_status 只能是 active、disabled 或 deleted")
 	}
 	seen := make(map[string]struct{}, len(fieldIDs))
 	for _, fieldID := range fieldIDs {
 		if strings.TrimSpace(fieldID) == "" {
-			return 0, errors.New("field_ids cannot contain empty values")
+			return 0, storeerr.Invalidf("field_ids cannot contain empty values")
 		}
 		if _, ok := seen[fieldID]; ok {
-			return 0, fmt.Errorf("duplicate field_id %q", fieldID)
+			return 0, storeerr.Invalidf("duplicate field_id %q", fieldID)
 		}
 		seen[fieldID] = struct{}{}
 	}
@@ -187,7 +186,7 @@ func (s *Store) BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs 
 			return 0, err
 		}
 		if exists != 1 {
-			return 0, fmt.Errorf("target field group %q does not exist", targetGroupID)
+			return 0, storeerr.NotFoundf("target field group %q does not exist", targetGroupID)
 		}
 	}
 
@@ -213,7 +212,7 @@ func (s *Store) BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs 
 		return 0, err
 	}
 	if len(fields) != len(fieldIDs) {
-		return 0, errors.New("one or more fields do not exist in the requested space")
+		return 0, storeerr.NotFoundf("one or more fields do not exist in the requested space")
 	}
 	for _, field := range fields {
 		if targetGroupID != "" {
@@ -239,7 +238,7 @@ func (s *Store) BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs 
 
 func (s *Store) DeleteFieldGroup(ctx context.Context, spaceID string, groupID string) error {
 	if spaceID == "" || groupID == "" {
-		return errors.New("space_id and group_id are required")
+		return storeerr.Invalidf("space_id and group_id are required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -251,20 +250,20 @@ func (s *Store) DeleteFieldGroup(ctx context.Context, spaceID string, groupID st
 		return err
 	}
 	if exists == 0 {
-		return fmt.Errorf("field group %q not found: %w", groupID, sql.ErrNoRows)
+		return storeerr.NotFoundf("field group %q not found: %w", groupID, sql.ErrNoRows)
 	}
 	var children, fields int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_field_groups WHERE c_space_id = ? AND c_parent_group_id = ?`, spaceID, groupID).Scan(&children); err != nil {
 		return err
 	}
 	if children > 0 {
-		return errors.New("field group has child groups")
+		return storeerr.Conflictf("field group has child groups")
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_fields WHERE c_space_id = ? AND c_group_id = ?`, spaceID, groupID).Scan(&fields); err != nil {
 		return err
 	}
 	if fields > 0 {
-		return errors.New("field group contains fields")
+		return storeerr.Conflictf("field group contains fields")
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM t_field_groups WHERE c_space_id = ? AND c_group_id = ?`, spaceID, groupID); err != nil {
 		return err

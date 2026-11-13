@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 )
@@ -30,10 +31,10 @@ func (s *Service) CreateDataSource(ctx context.Context, req *pb.CreateDataSource
 	}
 	created, err := s.metadata.UpsertDataSource(ctx, item)
 	if err != nil {
-		return &pb.CreateDataSourceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreateDataSourceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.CreateDataSourceRsp{RetInfo: retinfo.Success("success"), DataSource: created}, nil
 }
@@ -41,10 +42,10 @@ func (s *Service) CreateDataSource(ctx context.Context, req *pb.CreateDataSource
 func (s *Service) UpdateDataSource(ctx context.Context, req *pb.UpdateDataSourceReq) (*pb.UpdateDataSourceRsp, error) {
 	updated, err := s.metadata.UpsertDataSource(ctx, req.GetDataSource())
 	if err != nil {
-		return &pb.UpdateDataSourceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpdateDataSourceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.UpdateDataSourceRsp{RetInfo: retinfo.Success("success"), DataSource: updated}, nil
 }
@@ -54,7 +55,7 @@ func (s *Service) DeleteDataSource(ctx context.Context, req *pb.DeleteDataSource
 		return &pb.DeleteDataSourceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and data_source_id are required"))}, nil
 	}
 	if err := s.metadata.DeleteDataSource(ctx, req.GetSpaceId(), req.GetDataSourceId()); err != nil {
-		return &pb.DeleteDataSourceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.DeleteDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "DeleteDataSource")
 	return &pb.DeleteDataSourceRsp{RetInfo: retinfo.Success("success")}, nil
@@ -63,7 +64,7 @@ func (s *Service) DeleteDataSource(ctx context.Context, req *pb.DeleteDataSource
 func (s *Service) GetDataSource(ctx context.Context, req *pb.GetDataSourceReq) (*pb.GetDataSourceRsp, error) {
 	item, err := s.metadata.GetDataSource(ctx, req.GetSpaceId(), req.GetDataSourceId())
 	if err != nil {
-		return &pb.GetDataSourceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.GetDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.GetDataSourceRsp{RetInfo: retinfo.Success("success"), DataSource: item}, nil
 }
@@ -71,7 +72,7 @@ func (s *Service) GetDataSource(ctx context.Context, req *pb.GetDataSourceReq) (
 func (s *Service) ListDataSources(ctx context.Context, req *pb.ListDataSourcesReq) (*pb.ListDataSourcesRsp, error) {
 	items, page, err := s.metadata.ListDataSources(ctx, req.GetSpaceId(), req.GetKeyword(), req.GetPage())
 	if err != nil {
-		return &pb.ListDataSourcesRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ListDataSourcesRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ListDataSourcesRsp{RetInfo: retinfo.Success("success"), DataSources: items, PageResult: page}, nil
 }
@@ -86,10 +87,10 @@ func (s *Service) UpsertSubject(ctx context.Context, req *pb.UpsertSubjectReq) (
 	}
 	created, err := s.metadata.UpsertSubject(ctx, item)
 	if err != nil {
-		return &pb.UpsertSubjectRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpsertSubjectRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpsertSubjectRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpsertSubjectRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.UpsertSubjectRsp{RetInfo: retinfo.Success("success"), Subject: created}, nil
 }
@@ -105,7 +106,7 @@ func (s *Service) GetSubject(ctx context.Context, req *pb.GetSubjectReq) (*pb.Ge
 func (s *Service) ListSubjects(ctx context.Context, req *pb.ListSubjectsReq) (*pb.ListSubjectsRsp, error) {
 	items, page, err := s.metadata.ListSubjects(ctx, req.GetSpaceId(), req.GetSubjectIds(), req.GetKeyword(), req.GetPage())
 	if err != nil {
-		return &pb.ListSubjectsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ListSubjectsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ListSubjectsRsp{RetInfo: retinfo.Success("success"), Subjects: items, PageResult: page}, nil
 }
@@ -122,10 +123,10 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 		}
 	}
 	if err := validateChineseDisplayName("dataset name", item.GetName()); err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	for _, column := range req.GetColumns() {
 		if column == nil || strings.TrimSpace(column.GetColumnName()) == "" {
@@ -135,12 +136,12 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 			return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 		if err := validateColumnDisplayName("dataset column display_name", column.GetAttributes()); err != nil {
-			return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+			return &pb.CreateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 		}
 	}
 	created, err := s.metadata.UpsertDataset(ctx, item, req.GetColumns()...)
 	if err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	// 建好即可写入：返回前把元数据缓存发布出去，写入方紧接着的写入才能在缓存里查到数据集和列。
 	if err := s.refreshMetadataCacheSynchronously(ctx, "CreateDataset"); err != nil {
@@ -155,20 +156,20 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id is required"))}, nil
 	}
 	if err := validateChineseDisplayName("dataset name", item.GetName()); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	if _, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	updated, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.UpdateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(updated)}, nil
 }
@@ -184,7 +185,7 @@ func (s *Service) DeleteDataset(ctx context.Context, req *pb.DeleteDatasetReq) (
 	// 元数据已经不在时照样删行，让中途失败的删除可以重试完成，返回的仍是“不存在”。
 	metadataErr := s.metadata.DeleteDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if metadataErr != nil && !errors.Is(metadataErr, sql.ErrNoRows) {
-		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(metadataErr), metadataErr)}, nil
+		return &pb.DeleteDatasetRsp{RetInfo: retinfo.FromError(metadataErr)}, nil
 	}
 	if err := s.refreshMetadataCacheSynchronously(ctx, "DeleteDataset"); err != nil {
 		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("数据集元数据已删除，但缓存尚未发布，请重试删除"))}, nil
@@ -193,7 +194,7 @@ func (s *Service) DeleteDataset(ctx context.Context, req *pb.DeleteDatasetReq) (
 		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("数据集元数据已删除，删除行失败，请重试删除：%w", err))}, nil
 	}
 	if metadataErr != nil {
-		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(metadataErr), metadataErr)}, nil
+		return &pb.DeleteDatasetRsp{RetInfo: retinfo.FromError(metadataErr)}, nil
 	}
 	return &pb.DeleteDatasetRsp{RetInfo: retinfo.Success("success")}, nil
 }
@@ -209,7 +210,7 @@ func (s *Service) GetDataset(ctx context.Context, req *pb.GetDatasetReq) (*pb.Ge
 	}
 	revision, err := s.metadata.SubjectsRevision(ctx, req.GetSpaceId())
 	if err != nil {
-		return &pb.GetDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.GetDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.GetDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(item), SubjectsRevision: revision}, nil
 }
@@ -224,7 +225,7 @@ func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*p
 	}
 	items, page, err := s.metadata.ListDatasets(ctx, query)
 	if err != nil {
-		return &pb.ListDatasetsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ListDatasetsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ListDatasetsRsp{RetInfo: retinfo.Success("success"), Datasets: s.withRetentions(items), PageResult: page}, nil
 }
@@ -232,7 +233,7 @@ func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*p
 func (s *Service) ListDatasetSubjects(ctx context.Context, req *pb.ListDatasetSubjectsReq) (*pb.ListDatasetSubjectsRsp, error) {
 	items, page, err := s.metadata.ListDatasetSubjects(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetSubjectId(), req.GetPage())
 	if err != nil {
-		return &pb.ListDatasetSubjectsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ListDatasetSubjectsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ListDatasetSubjectsRsp{RetInfo: retinfo.Success("success"), DatasetSubjects: items, PageResult: page}, nil
 }
@@ -250,7 +251,7 @@ func (s *Service) CreateFieldGroup(ctx context.Context, req *pb.CreateFieldGroup
 	}
 	created, err := s.metadata.CreateFieldGroup(ctx, item)
 	if err != nil {
-		return &pb.CreateFieldGroupRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateFieldGroupRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "create field group")
 	return &pb.CreateFieldGroupRsp{RetInfo: retinfo.Success("success"), FieldGroup: created}, nil
@@ -266,7 +267,7 @@ func (s *Service) UpdateFieldGroup(ctx context.Context, req *pb.UpdateFieldGroup
 	}
 	updated, err := s.metadata.UpdateFieldGroup(ctx, item)
 	if err != nil {
-		return &pb.UpdateFieldGroupRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateFieldGroupRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "update field group")
 	return &pb.UpdateFieldGroupRsp{RetInfo: retinfo.Success("success"), FieldGroup: updated}, nil
@@ -278,7 +279,7 @@ func (s *Service) GetFieldGroup(ctx context.Context, req *pb.GetFieldGroupReq) (
 	}
 	item, err := s.metadata.GetFieldGroup(ctx, req.GetSpaceId(), req.GetGroupId())
 	if err != nil {
-		return &pb.GetFieldGroupRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.GetFieldGroupRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.GetFieldGroupRsp{RetInfo: retinfo.Success("success"), FieldGroup: item}, nil
 }
@@ -289,11 +290,11 @@ func (s *Service) ListFieldGroups(ctx context.Context, req *pb.ListFieldGroupsRe
 	}
 	items, page, err := s.metadata.ListFieldGroups(ctx, req.GetSpaceId(), req.GetParentGroupId(), req.GetPage())
 	if err != nil {
-		return &pb.ListFieldGroupsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ListFieldGroupsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	counts, err := s.metadata.CountFieldsByGroup(ctx, req.GetSpaceId())
 	if err != nil {
-		return &pb.ListFieldGroupsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ListFieldGroupsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ListFieldGroupsRsp{
 		RetInfo: retinfo.Success("success"), FieldGroups: items, PageResult: page,
@@ -314,7 +315,7 @@ func (s *Service) CreateField(ctx context.Context, req *pb.CreateFieldReq) (*pb.
 	}
 	created, err := s.metadata.CreateField(ctx, item)
 	if err != nil {
-		return &pb.CreateFieldRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.CreateFieldRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "create field")
 	return &pb.CreateFieldRsp{RetInfo: retinfo.Success("success"), Field: created}, nil
@@ -333,7 +334,7 @@ func (s *Service) UpdateField(ctx context.Context, req *pb.UpdateFieldReq) (*pb.
 	}
 	updated, err := s.metadata.UpdateField(ctx, item)
 	if err != nil {
-		return &pb.UpdateFieldRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateFieldRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "update field")
 	return &pb.UpdateFieldRsp{RetInfo: retinfo.Success("success"), Field: updated}, nil
@@ -369,7 +370,7 @@ func (s *Service) ListFields(ctx context.Context, req *pb.ListFieldsReq) (*pb.Li
 		UngroupedOnly: req.GetUngroupedOnly(), SortBy: req.GetSortBy(), SortOrder: req.GetSortOrder(), Page: req.GetPage(),
 	})
 	if err != nil {
-		return &pb.ListFieldsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ListFieldsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ListFieldsRsp{RetInfo: retinfo.Success("success"), Fields: items, PageResult: page}, nil
 }
@@ -396,7 +397,7 @@ func (s *Service) BatchUpdateFields(ctx context.Context, req *pb.BatchUpdateFiel
 	}
 	updated, err := s.metadata.BatchUpdateFields(ctx, req.GetSpaceId(), req.GetFieldIds(), req.GetTargetGroupId(), req.GetTargetStatus())
 	if err != nil {
-		return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "batch update fields")
 	return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.Success("success"), UpdatedCount: updated}, nil
@@ -410,7 +411,7 @@ func (s *Service) DeleteFieldGroup(ctx context.Context, req *pb.DeleteFieldGroup
 		return &pb.DeleteFieldGroupRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := s.metadata.DeleteFieldGroup(ctx, req.GetSpaceId(), req.GetGroupId()); err != nil {
-		return &pb.DeleteFieldGroupRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.DeleteFieldGroupRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "delete field group")
 	return &pb.DeleteFieldGroupRsp{RetInfo: retinfo.Success("success")}, nil
@@ -423,10 +424,10 @@ func validateFieldSpaceContext(ctx context.Context, requestSpaceID string) error
 	}
 	headerSpaceID := strings.TrimSpace(head.Request.Header.Get("X-Space-Id"))
 	if headerSpaceID == "" {
-		return fmt.Errorf("%s header is required", http.CanonicalHeaderKey("X-Space-Id"))
+		return storeerr.Invalidf("%s header is required", http.CanonicalHeaderKey("X-Space-Id"))
 	}
 	if requestSpaceID == "" || requestSpaceID != headerSpaceID {
-		return fmt.Errorf("request space_id does not match %s header", http.CanonicalHeaderKey("X-Space-Id"))
+		return storeerr.Invalidf("request space_id does not match %s header", http.CanonicalHeaderKey("X-Space-Id"))
 	}
 	return nil
 }
@@ -440,14 +441,14 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if _, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
-		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	if err := validateColumnDisplayName("dataset column display_name", item.GetAttributes()); err != nil {
-		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	created, err := s.metadata.UpsertDatasetColumn(ctx, item)
 	if err != nil {
-		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	// 写入方补完列就会写行：返回前把列发布到缓存，否则首次写入可能因未登记的列被拒。
 	if err := s.refreshMetadataCacheSynchronously(ctx, "UpsertDatasetColumn"); err != nil {
@@ -459,7 +460,7 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 func (s *Service) ListDatasetColumns(ctx context.Context, req *pb.ListDatasetColumnsReq) (*pb.ListDatasetColumnsRsp, error) {
 	items, page, err := s.metadata.ListDatasetColumns(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetPage())
 	if err != nil {
-		return &pb.ListDatasetColumnsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ListDatasetColumnsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ListDatasetColumnsRsp{RetInfo: retinfo.Success("success"), Columns: items, PageResult: page}, nil
 }

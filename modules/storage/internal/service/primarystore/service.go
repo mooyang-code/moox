@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/report"
@@ -137,7 +138,7 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 	}
 	if _, err := s.store.UpsertFields(ctx, spaceID, datasetID, req.GetCommitId(), rows); err != nil {
 		s.observeTimeSeriesRows(ctx, rows, "error", false)
-		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pebble.ErrorCode(err), err)}, nil
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	// 写入已持久化，事件由 Outbox 转发协程异步发布。重复提交命中时同样返回全部行键。
 	keys := make([]*pb.RowKey, 0, len(rows))
@@ -152,7 +153,8 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
 }
 
-// requireActiveDataset 确认请求快照里有这个数据集且处于启用状态。
+// requireActiveDataset 确认请求快照里有这个数据集且处于启用状态。读取按错误类别返回错误码；写入与完成标记照旧返回 INNER_ERR，
+// 让写入方（Factor 只把 INNER_ERR 当基础设施错误）稍后重试，而不是丢掉这次写入。
 func requireActiveDataset(ctx context.Context, spaceID, datasetID string) error {
 	snapshot := metadata.RequestSnapshotFromContext(ctx)
 	if snapshot == nil {
@@ -160,10 +162,10 @@ func requireActiveDataset(ctx context.Context, spaceID, datasetID string) error 
 	}
 	dataset, ok := snapshot.GetDataset(spaceID, datasetID)
 	if !ok || dataset == nil {
-		return fmt.Errorf("dataset %s/%s is not found", spaceID, datasetID)
+		return storeerr.NotFoundf("dataset %s/%s is not found", spaceID, datasetID)
 	}
 	if dataset.GetStatus() != "active" {
-		return fmt.Errorf("dataset %s/%s is not active", spaceID, datasetID)
+		return storeerr.Invalidf("dataset %s/%s is not active", spaceID, datasetID)
 	}
 	return nil
 }
@@ -268,11 +270,11 @@ func (s *Service) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq) (*pb
 	for _, group := range order {
 		keys := groups[group]
 		if err := requireActiveDataset(ctx, group.spaceID, group.datasetID); err != nil {
-			return nil, err
+			return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.FromError(err)}, nil
 		}
 		found, err := s.store.ReadRows(ctx, keys, req.GetColumnNames(), req.GetAttributeKeys())
 		if err != nil {
-			return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.Error(pebble.ErrorCode(err), err)}, nil
+			return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.FromError(err)}, nil
 		}
 		for _, row := range found {
 			id := rowKeyIdentity(row.GetKey())

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 	sqlite "modernc.org/sqlite"
@@ -52,7 +53,7 @@ func (s *Store) DeleteView(ctx context.Context, spaceID, viewID string) error {
 
 func (s *Store) upsertView(ctx context.Context, item *pb.View, createOnly bool) (*pb.View, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetViewId() == "" || item.GetName() == "" || item.GetDatasetId() == "" {
-		return nil, errors.New("space_id, view_id, name and dataset_id are required")
+		return nil, storeerr.Invalidf("space_id, view_id, name and dataset_id are required")
 	}
 	next := proto.Clone(item).(*pb.View)
 	next.Columns = nil
@@ -115,13 +116,13 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, createOnly bool) 
 // validateViewDefinitionChange 拒绝建成后不能修改的定义：数据集、引擎、主键维度。要改就新建 View。
 func validateViewDefinitionChange(existing, next *pb.View) error {
 	if existing.GetDatasetId() != "" && existing.GetDatasetId() != next.GetDatasetId() {
-		return errors.New("View 的数据集不能修改，请新建 View")
+		return storeerr.Invalidf("View 的数据集不能修改，请新建 View")
 	}
 	if existing.GetEngine() != "" && existing.GetEngine() != next.GetEngine() {
-		return errors.New("View 的引擎不能修改，请新建 View")
+		return storeerr.Invalidf("View 的引擎不能修改，请新建 View")
 	}
 	if len(existing.GetGrainKeys()) > 0 && !slices.Equal(existing.GetGrainKeys(), next.GetGrainKeys()) {
-		return errors.New("View 的主键维度不能修改，请新建 View")
+		return storeerr.Invalidf("View 的主键维度不能修改，请新建 View")
 	}
 	return nil
 }
@@ -141,13 +142,13 @@ func deriveViewFreq(ctx context.Context, tx *sql.Tx, view *pb.View) error {
 	err := tx.QueryRowContext(ctx, `SELECT c_freq FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`,
 		view.GetSpaceId(), view.GetDatasetId()).Scan(&freq)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("dataset %s/%s does not exist", view.GetSpaceId(), view.GetDatasetId())
+		return storeerr.NotFoundf("dataset %s/%s does not exist", view.GetSpaceId(), view.GetDatasetId())
 	}
 	if err != nil {
 		return err
 	}
 	if candidate := strings.TrimSpace(view.GetFreq()); candidate != "" && candidate != freq {
-		return fmt.Errorf("view freq %q differs from dataset %s freq %q; a View takes its Dataset's freq", candidate, view.GetDatasetId(), freq)
+		return storeerr.Invalidf("view freq %q differs from dataset %s freq %q; a View takes its Dataset's freq", candidate, view.GetDatasetId(), freq)
 	}
 	view.Freq = freq
 	return nil

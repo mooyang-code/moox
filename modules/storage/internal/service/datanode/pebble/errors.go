@@ -4,9 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	cpebble "github.com/cockroachdb/pebble"
-
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 )
 
 type ValidationError struct{ cause error }
@@ -60,33 +58,8 @@ func (e PeriodConflictError) Error() string {
 	return fmt.Sprintf("dataset period %s/%s/%s/%d already exists with a different expectation", e.SpaceID, e.DatasetID, e.Frequency, e.PeriodTime)
 }
 
-// ErrorCode 把存储层错误映射成对外错误码：参数错误、不存在、冲突，其余都是内部错误。
-func ErrorCode(err error) pb.ErrorCode {
-	if err == nil {
-		return pb.ErrorCode_SUCCESS
-	}
-	if errors.Is(err, cpebble.ErrNotFound) {
-		return pb.ErrorCode_NOT_FOUND
-	}
-	var (
-		validation         ValidationError
-		conflict           ConflictError
-		commitConflict     CommitConflictError
-		periodConflict     PeriodConflictError
-		staleEffectiveFrom StaleEffectiveFromError
-		hashMismatch       PeriodHashMismatchError
-		snapshotMissing    SeriesSnapshotMissingError
-		deadlinePassed     PeriodDeadlinePassedError
-	)
-	switch {
-	case errors.As(err, &validation), errors.As(err, &deadlinePassed):
-		return pb.ErrorCode_INVALID_PARAM
-	case errors.As(err, &conflict), errors.As(err, &commitConflict), errors.As(err, &periodConflict),
-		errors.As(err, &staleEffectiveFrom), errors.As(err, &hashMismatch):
-		return pb.ErrorCode_CONFLICT
-	case errors.As(err, &snapshotMissing):
-		return pb.ErrorCode_NOT_FOUND
-	default:
-		return pb.ErrorCode_INNER_ERR
-	}
-}
+// 存储层错误的类别，由 retinfo.Code 统一映射成错误码。
+func (ValidationError) StoreErrorKind() storeerr.Kind     { return storeerr.Invalid }
+func (ConflictError) StoreErrorKind() storeerr.Kind       { return storeerr.Conflict }
+func (CommitConflictError) StoreErrorKind() storeerr.Kind { return storeerr.Conflict }
+func (PeriodConflictError) StoreErrorKind() storeerr.Kind { return storeerr.Conflict }

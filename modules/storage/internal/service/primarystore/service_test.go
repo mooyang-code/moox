@@ -49,8 +49,14 @@ func TestPrimaryRejectsMissingOrDisabledDataset(t *testing.T) {
 			rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "v", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "x"}}}}}}}))
 			require.NoError(t, err)
 			require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
-			_, err = svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}, ColumnNames: []string{"v"}})
-			require.Error(t, err)
+			// 读取按错误类别返回：不存在是 NOT_FOUND，已停用是参数错误，都不走框架错误。
+			read, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}, ColumnNames: []string{"v"}})
+			require.NoError(t, err)
+			want := pb.ErrorCode_NOT_FOUND
+			if dataset != nil {
+				want = pb.ErrorCode_INVALID_PARAM
+			}
+			require.Equal(t, want, read.GetRetInfo().GetCode())
 		})
 	}
 }

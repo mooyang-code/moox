@@ -2,15 +2,15 @@ package sqlite
 
 import (
 	"context"
-	"errors"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 func (s *Store) UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetSubjectId() == "" {
-		return nil, errors.New("space_id and subject_id are required")
+		return nil, storeerr.Invalidf("space_id and subject_id are required")
 	}
 	item.Status = defaultStatus(item.GetStatus())
 	if err := upsertSubject(ctx, s.db, item); err != nil {

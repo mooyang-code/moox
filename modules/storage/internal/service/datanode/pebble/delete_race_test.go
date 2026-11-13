@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	cpebble "github.com/cockroachdb/pebble"
+	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -90,9 +92,10 @@ func TestErrorCodeClassifiesStorageErrors(t *testing.T) {
 		{"stale effective_from", StaleEffectiveFromError{}, pb.ErrorCode_CONFLICT},
 		{"hash mismatch", PeriodHashMismatchError{}, pb.ErrorCode_CONFLICT},
 		{"snapshot missing", SeriesSnapshotMissingError{}, pb.ErrorCode_NOT_FOUND},
+		{"pebble not found", cpebble.ErrNotFound, pb.ErrorCode_NOT_FOUND},
 	} {
-		if got := ErrorCode(tc.err); got != tc.want {
-			t.Errorf("%s: ErrorCode=%s want %s", tc.name, got, tc.want)
+		if got := retinfo.Code(tc.err); got != tc.want {
+			t.Errorf("%s: Code=%s want %s", tc.name, got, tc.want)
 		}
 	}
 }
