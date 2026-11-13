@@ -1,7 +1,3 @@
-gateway_client:
-  caller: storage-view
-  key_id: "" # Admin 分配，部署时填入。
-  key_file: ../../secrets/caller-storage-view.key
 global:
   namespace: Development
   env_name: test

@@ -81,7 +81,7 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 		runtime.publisher.Enabled, runtime.publisher.Wake = true, bus.relay.Wake
 	}
 	jobs := &collectorresample.JobRunner{
-		State: dbm.Resample(), Tasks: dbm.Tasks(), Source: source, Engine: engine, View: view,
+		State: dbm.Resample(), Tasks: dbm.Tasks(), Source: source, Engine: engine,
 		Flush:  runtime.publisher.Flush,
 		Config: collectorresample.JobRunnerConfig{BucketsPerRound: k.HistoryBucketsPerRound, MaxJobsPerRound: k.HistoryMaxJobs},
 	}

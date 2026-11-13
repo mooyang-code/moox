@@ -177,6 +177,11 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 			}
 			return storageImportSubjectBound(subjects, subject), nil
 		}}
+		if opts.ViewID != "" {
+			if err := checkImportView(ctx, metaClient, opts.Space, opts.ViewID, opts.Dataset); err != nil {
+				return err
+			}
+		}
 		if !opts.DryRun {
 			auth, err := storagePrimaryRoleAuth(opts.AuthFile, "moox-cli-data-import")
 			if err != nil {
@@ -511,6 +516,28 @@ func (c gatewayStorageImportMetadataClient) GetDataset(ctx context.Context, spac
 		return nil, err
 	}
 	return rsp.GetDataset(), nil
+}
+
+func (c gatewayStorageImportMetadataClient) GetView(ctx context.Context, spaceID, viewID string) (*pb.View, error) {
+	rsp := &pb.GetViewRsp{}
+	if err := postStorage(ctx, c.Gateway, metadataServiceName, "GetView", &pb.GetViewReq{SpaceId: spaceID, ViewId: viewID}, rsp); err != nil {
+		return nil, err
+	}
+	return rsp.GetView(), nil
+}
+
+// checkImportView 确认 --view 指定的 View 读的就是导入的数据集：否则等它跟上变更日志也证明不了导入的行已可查。
+func checkImportView(ctx context.Context, meta interface {
+	GetView(context.Context, string, string) (*pb.View, error)
+}, spaceID, viewID, datasetID string) error {
+	view, err := meta.GetView(ctx, spaceID, viewID)
+	if err != nil {
+		return fmt.Errorf("读取 View %s：%w", viewID, err)
+	}
+	if view.GetDatasetId() != datasetID {
+		return fmt.Errorf("View %s 读的是数据集 %q，不是导入的数据集 %q", viewID, view.GetDatasetId(), datasetID)
+	}
+	return nil
 }
 
 func (c gatewayStorageImportMetadataClient) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string) ([]*pb.DatasetColumn, error) {

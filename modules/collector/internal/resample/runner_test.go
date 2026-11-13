@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,23 +24,6 @@ func (f fakeSource) ResolveSubjects(context.Context, string, []string) ([]domain
 		out[i] = domain.Subject{SubjectID: id}
 	}
 	return out, nil
-}
-
-// fakeViewWaiter 记下每次等待的 View；第一次回答 VIEW_NOT_READY（View 正在建索引），之后回答已跟上。
-type fakeViewWaiter struct {
-	waited []string
-}
-
-func (f *fakeViewWaiter) GetViewState(context.Context, *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
-	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, IndexId: "idx"}, nil
-}
-
-func (f *fakeViewWaiter) WaitViewApplied(_ context.Context, req *storagepb.WaitViewAppliedReq) (*storagepb.WaitViewAppliedRsp, error) {
-	f.waited = append(f.waited, req.GetViewId())
-	if len(f.waited) == 1 {
-		return &storagepb.WaitViewAppliedRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_READY}}, nil
-	}
-	return &storagepb.WaitViewAppliedRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Applied: true}, nil
 }
 
 // seedTask 在库里建一个就绪的合成任务，并给源数据集铺好 [from, to) 内每根 5m。
@@ -139,9 +121,8 @@ func TestJobRunnerBackfillsRangeWithCursorSyncAndSkips(t *testing.T) {
 	delete(storage.rows, keyText(rowKey("crypto", "dataset_src", "ETH", "5m", utc("2026-10-21T10:25:00Z"), "venue:binance")))
 	now := utc("2026-10-21T12:00:00Z")
 	engine := &Engine{Primary: storage, State: mgr.Resample(), Now: func() time.Time { return now }}
-	view := &fakeViewWaiter{}
 	flushed := 0
-	runner := &JobRunner{State: mgr.Resample(), Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC", "ETH"}}, Engine: engine, View: view,
+	runner := &JobRunner{State: mgr.Resample(), Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC", "ETH"}}, Engine: engine,
 		Flush: func(context.Context) error { flushed++; return nil }, Config: JobRunnerConfig{BucketsPerRound: 2}}
 	task := makeTask(t, "crypto", "5m", "15m")
 	job := submit(t, mgr, task, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T11:00:00Z"), nil, now)
@@ -166,9 +147,6 @@ func TestJobRunnerBackfillsRangeWithCursorSyncAndSkips(t *testing.T) {
 	require.NoError(t, runner.Tick(context.Background(), now))
 	progress, _ = mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
 	require.Equal(t, store.ResampleJobSucceeded, progress.Status)
-	require.Len(t, view.waited, 2, "View 正在建索引时在超时内再等一次")
-	require.Equal(t, view.waited[0], view.waited[1])
-	require.NotEmpty(t, view.waited[0])
 	require.GreaterOrEqual(t, flushed, 1)
 
 	// 历史作业的普通写入都记为补写通知，作业 ID 在通知里。

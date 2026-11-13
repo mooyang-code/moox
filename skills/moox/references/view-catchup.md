@@ -55,7 +55,7 @@ moox-cli storage repair-view \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m
 ```
 
-核对目标与备份路径后，按既有授权执行对应 `--yes` 命令。它停止 storage-view、备份元数据、清掉该 View 的活动索引指针并删除物理索引，重启后从 Primary 重新建索引，期间 View 不可读；记录型 View 重建后为空，只跟随新写入。
+核对目标与备份路径后，按既有授权执行对应 `--yes` 命令。它暂停 storage-view、备份元数据、清掉该 View 的活动索引指针并删除物理索引，恢复后从 Primary 重新建索引，期间 View 不可读；记录型 View 重建后为空，只跟随新写入。
 
 ## Factor 周期诊断
 

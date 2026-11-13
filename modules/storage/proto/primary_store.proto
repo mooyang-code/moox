@@ -71,7 +71,7 @@ message PrimaryCommitTimeSeriesBatchRsp {
   repeated uint32 accepted_series_indexes = 4;
 }
 
-// PrimaryUpsertFieldsReq 写入一个数据集的行：每行的数据集必须与 space_id、dataset_id 一致；一次写入只产生一条行变更事件。
+// PrimaryUpsertFieldsReq 写入一个数据集的行：每行的数据集必须与 space_id、dataset_id 一致；一次写入在变更日志里记一条行条目。
 message PrimaryUpsertFieldsReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;

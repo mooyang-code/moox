@@ -25,8 +25,8 @@ import (
 // 回到刚完成部署的状态。保留：库结构（t_schema_meta）、存储设备、
 // 标的修订号（按空间单调递增，策略等调用方靠它判断缓存是否过期，不能回退）。
 //
-// 必须先停掉 Storage（元数据库由 Primary 进程持有）。行数据与 View 索引不在这里：停服后先删掉 Pebble 目录与 View 索引目录，
-// 再执行本命令，然后启动 Storage，并让 Collector 重新登记（见部署与运维文档）。
+// 必须先暂停 Storage（`<包根>/pause.sh`；元数据库由 Primary 进程持有，stop 会被主机守护拉起）。行数据与 View 索引不在这里：
+// 暂停后先删掉 Pebble 目录与 View 索引目录，再执行本命令，然后 `<包根>/resume.sh` 恢复 Storage，并让 Collector 重新登记（见部署与运维文档）。
 
 // metadataResetClear 是要清空的表，子表在前（外键 RESTRICT 的父表在后）。
 var metadataResetClear = []string{

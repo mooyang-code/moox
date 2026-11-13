@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -148,4 +149,54 @@ func TestFollowReadyEventFromMarker(t *testing.T) {
 			require.Equal(t, events.PublishOptions{EventID: tc.eventID, OccurredAt: occurredAt, SpaceID: "quant", SubjectID: tc.view.GetViewId()}, publisher.opts[0])
 		})
 	}
+}
+
+type errPublisher struct {
+	err   error
+	calls int
+}
+
+func (p *errPublisher) Publish(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error) {
+	p.calls++
+	return nil, p.err
+}
+
+// 就绪事件发布超时：返回错误让跟随器停在这条标记上重试，并在后台重连发布器；超过消息上限这类确定性错误记日志跳过。
+func TestFollowReadyPublishErrors(t *testing.T) {
+	view := &pb.View{SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results", ActiveIndexId: "result-a", ViewRevision: 1}
+	ref := viewRef{spaceID: "quant", viewID: view.GetViewId()}
+	raw, err := proto.Marshal(&storageeventpb.DatasetPeriodCompleted{
+		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
+		CauseEventId: "cause-1", CompletedAt: timestamppb.New(time.Unix(1786032060, 0)),
+	})
+	require.NoError(t, err)
+	marker, err := proto.Marshal(&eventpb.EventMessage{EventId: "marker-1", SpaceId: "quant", OccurredAt: timestamppb.New(time.Unix(1786032060, 0)), Payload: raw})
+	require.NoError(t, err)
+	newService := func(publisher ReadyEventPublisher) *Service {
+		return &Service{views: map[viewRef]*viewRuntime{ref: newViewRuntime()}, catalogViews: map[viewRef]*pb.View{ref: view}, readyPublisher: publisher}
+	}
+
+	timeout := &errPublisher{err: fmt.Errorf("发布：%w", jetstream.ErrPublishTimeout)}
+	svc := newService(timeout)
+	reconnected := make(chan struct{}, 1)
+	svc.readyReconnect = func(context.Context) error {
+		reconnected <- struct{}{}
+		return nil
+	}
+	err = svc.publishFollowMarker(context.Background(), ref, &pb.DatasetChange{Sequence: 7, Marker: marker})
+	require.ErrorIs(t, err, jetstream.ErrPublishTimeout, "超时要返回错误，跟随器停在这条标记上重试")
+	select {
+	case <-reconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("发布超时后没有重连发布器")
+	}
+
+	tooLarge := &errPublisher{err: fmt.Errorf("发布：%w", nats.ErrMaxPayload)}
+	svc = newService(tooLarge)
+	svc.readyReconnect = func(context.Context) error {
+		t.Error("确定性错误不应重连")
+		return nil
+	}
+	require.NoError(t, svc.publishFollowMarker(context.Background(), ref, &pb.DatasetChange{Sequence: 8, Marker: marker}), "确定性错误跳过这条标记")
+	require.Equal(t, 1, tooLarge.calls)
 }

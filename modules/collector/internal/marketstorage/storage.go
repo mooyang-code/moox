@@ -228,18 +228,6 @@ func (w *storageWriter) GetViewState(ctx context.Context, req *storagepb.GetView
 	return w.view.GetViewState(ctx, copyReq)
 }
 
-// WaitViewApplied 等 View 跟上调用这一刻的变更日志头部，没带身份时补上写入身份。
-func (w *storageWriter) WaitViewApplied(ctx context.Context, req *storagepb.WaitViewAppliedReq) (*storagepb.WaitViewAppliedRsp, error) {
-	if req == nil {
-		return nil, fmt.Errorf("等待 View 跟上写入：请求不能为空")
-	}
-	copyReq := proto.Clone(req).(*storagepb.WaitViewAppliedReq)
-	if copyReq.AuthInfo == nil {
-		copyReq.AuthInfo = w.authInfo
-	}
-	return w.view.WaitViewApplied(ctx, copyReq)
-}
-
 type storageResponseError struct{ message string }
 
 func (e *storageResponseError) Error() string { return e.message }

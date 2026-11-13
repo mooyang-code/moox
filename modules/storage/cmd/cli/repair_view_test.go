@@ -123,7 +123,7 @@ func TestPurgeRepairViewIndexesRemovesIndexAndWAL(t *testing.T) {
 	}
 }
 
-// repair-view 按顺序停 storage-view、备份元数据、清掉活动索引指针、删物理索引、再启动。
+// repair-view 按顺序暂停 storage-view、备份元数据、清掉活动索引指针、删物理索引、再恢复。
 func TestRepairViewRebuildsTheNamedView(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "metadata.db")
@@ -172,7 +172,7 @@ func TestRepairViewRebuildsTheNamedView(t *testing.T) {
 	if err := runRepairView([]string{"--space-id", "space", "--view-id", "view", "--storage-conf", confPath, "--package-root", root, "--yes"}, &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(calls, ",") != "stop,start" {
+	if strings.Join(calls, ",") != "pause,resume" {
 		t.Fatalf("lifecycle calls = %v", calls)
 	}
 	if _, err := os.Stat(filepath.Join(indexRoot, "duckdb", id+".duckdb")); !os.IsNotExist(err) {

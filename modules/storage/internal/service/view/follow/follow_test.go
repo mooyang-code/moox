@@ -237,3 +237,67 @@ func TestFollowerRebuildsOnGap(t *testing.T) {
 	require.Equal(t, 1, rebuilds)
 	require.NotContains(t, events, "rows:OLD")
 }
+
+// 一个 View 的完成标记发布一直失败，只卡住它自己：另一个 View 照常发布、照常跟上。
+func TestFailingFollowerDoesNotBlockOthers(t *testing.T) {
+	store := openStore(t, filepath.Join(t.TempDir(), "db"))
+	stuck := &fakeTarget{head: func() viewindex.ChangeCursor { return headOf(t, store) }, publishOK: func() bool { return false }}
+	healthy := &fakeTarget{head: func() viewindex.ChangeCursor { return headOf(t, store) }}
+	m := newManager(t, store, time.Hour)
+	m.Ensure(Key{SpaceID: "s", ViewID: "stuck", DatasetID: "a"}, stuck)
+	m.Ensure(Key{SpaceID: "s", ViewID: "healthy", DatasetID: "b"}, healthy)
+	waitApplied(t, m, "stuck")
+	waitApplied(t, m, "healthy")
+
+	for i := 0; i < 3; i++ {
+		period := testBase.Add(time.Duration(i) * 5 * time.Minute)
+		writeRow(t, store, "a", "A", period)
+		writeMarker(t, store, "a", period)
+		writeRow(t, store, "b", "B", period)
+		writeMarker(t, store, "b", period)
+	}
+	waitApplied(t, m, "healthy")
+	events, _, _ := healthy.snapshot()
+	require.Equal(t, []string{"rows:B", "marker:4", "rows:B", "marker:8", "rows:B", "marker:12"}, events)
+	ok, _, _, err := m.WaitApplied(context.Background(), "s", "stuck", 200*time.Millisecond)
+	require.NoError(t, err)
+	require.False(t, ok, "发布一直失败的 View 停在第一条标记上")
+	events, _, _ = stuck.snapshot()
+	require.Equal(t, []string{"rows:A"}, events)
+}
+
+// blockingReader 在 block 打开后让按游标的读取一直等到调用方的截止时间，模拟预扫描很慢。
+type blockingReader struct {
+	inner storeReader
+	block *sync.Map
+}
+
+func (r blockingReader) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq, opts ...client.Option) (*pb.ReadDatasetChangesRsp, error) {
+	if on, _ := r.block.Load("on"); on == true && !req.GetFromHead() {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return r.inner.ReadDatasetChanges(ctx, req, opts...)
+}
+
+// 等待时长用完时预扫描还没扫到头部：回答“还没跟上”，不是错误。
+func TestWaitAppliedTimeoutDuringScanIsNotAnError(t *testing.T) {
+	store := openStore(t, filepath.Join(t.TempDir(), "db"))
+	block := &sync.Map{}
+	m, err := NewManager(context.Background(), Options{
+		Reader: blockingReader{inner: storeReader{store}, block: block}, Auth: func() *pb.AuthInfo { return &pb.AuthInfo{AppId: "storage-view"} },
+		Wait: 2 * time.Second, PersistInterval: time.Hour,
+	})
+	require.NoError(t, err)
+	t.Cleanup(m.Close)
+	target := &fakeTarget{head: func() viewindex.ChangeCursor { return headOf(t, store) }}
+	m.Ensure(Key{SpaceID: "s", ViewID: "v", DatasetID: "d"}, target)
+	waitApplied(t, m, "v")
+
+	block.Store("on", true)
+	writeRow(t, store, "d", "A", testBase)
+	ok, _, _, err := m.WaitApplied(context.Background(), "s", "v", 200*time.Millisecond)
+	require.NoError(t, err)
+	require.False(t, ok)
+	block.Store("on", false)
+}

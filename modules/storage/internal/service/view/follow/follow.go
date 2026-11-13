@@ -240,10 +240,17 @@ func (m *Manager) WaitApplied(ctx context.Context, spaceID, viewID string, timeo
 	defer cancel()
 	head, err := m.readHead(waitCtx, f.key)
 	if err != nil {
+		if ctx.Err() == nil && waitCtx.Err() != nil {
+			return false, viewindex.ChangeCursor{}, f.status().State.Cursor, nil
+		}
 		return false, viewindex.ChangeCursor{}, f.status().State.Cursor, err
 	}
 	need, err := f.lastChangeBefore(waitCtx, head)
 	if err != nil {
+		if ctx.Err() == nil && waitCtx.Err() != nil {
+			// 等待时长用完时预扫描还没扫到头部：是“还没跟上”，不是错误，调用方可以再等。
+			return false, head, f.status().State.Cursor, nil
+		}
 		return false, head, f.status().State.Cursor, err
 	}
 	reached, current := f.waitScanned(waitCtx, need)

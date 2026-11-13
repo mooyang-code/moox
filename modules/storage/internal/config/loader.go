@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v2"
 )
 
@@ -18,8 +17,7 @@ type ConfigLoader struct {
 
 // RuntimeConfig 保存运行时加载出的完整业务配置。
 type RuntimeConfig struct {
-	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
-	Storage       StorageConfig            `yaml:"storage"`
+	Storage StorageConfig `yaml:"storage"`
 }
 
 // StorageConfig 保存 storage.yaml 中的业务配置。
@@ -67,12 +65,6 @@ type StorageHealth struct {
 }
 
 func (c *RuntimeConfig) ApplyDefaults() {
-	if c.GatewayClient.Caller == "" {
-		c.GatewayClient.Caller = "storage-view"
-	}
-	if c.GatewayClient.KeyFile == "" {
-		c.GatewayClient.KeyFile = "../../secrets/caller-storage-view.key"
-	}
 	c.Storage.ApplyDefaults()
 }
 
@@ -207,7 +199,7 @@ func validateStorageSubtreeStrict(raw []byte, config interface{}) error {
 		return err
 	}
 	public := map[interface{}]interface{}{}
-	for _, key := range []string{"storage", "gateway_client"} {
+	for _, key := range []string{"storage"} {
 		if value, exists := document[key]; exists {
 			public[key] = value
 		}

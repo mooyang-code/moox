@@ -54,11 +54,11 @@ type repairViewRecord struct {
 	ActiveIndexID string
 }
 
-// runRepairLifecycle 停启 storage-view；测试替换它，不真的启动服务。
+// runRepairLifecycle 暂停、恢复 storage-view（pause / resume：stop 之后主机守护会把它拉起）；测试替换它，不真的启动服务。
 var runRepairLifecycle = runStorageViewLifecycle
 
-// runRepairView 重建指定 View：停止 storage-view、备份元数据、清掉 View 的活动索引指针、删除物理索引，
-// 重启后由维护流程从 Primary 重新建索引并跟随变更日志。
+// runRepairView 重建指定 View：暂停 storage-view、备份元数据、清掉 View 的活动索引指针、删除物理索引，
+// 恢复后由维护流程从 Primary 重新建索引并跟随变更日志。
 func runRepairView(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs := flag.NewFlagSet("repair-view", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -66,11 +66,11 @@ func runRepairView(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.StringVar(&opts.spaceID, "space-id", "", "View 所在空间 ID")
 	fs.StringVar(&opts.viewID, "view-id", "", "View ID")
 	fs.StringVar(&opts.storageConf, "storage-conf", defaultRepairStorageConfigPath(), "storage.yaml 路径")
-	fs.StringVar(&opts.packageRoot, "package-root", "", "含 start.sh、stop.sh 的 Storage 部署包根目录")
+	fs.StringVar(&opts.packageRoot, "package-root", "", "含 pause.sh、resume.sh 的 Storage 部署包根目录")
 	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "整个操作的超时")
 	fs.BoolVar(&opts.yes, "yes", false, "确认删除 View 的索引并重建")
-	fs.BoolVar(&opts.dryRun, "dry-run", false, "只查看 View，不停服务、不改状态")
-	fs.BoolVar(&opts.restart, "restart", opts.restart, "完成后重启 storage-view")
+	fs.BoolVar(&opts.dryRun, "dry-run", false, "只查看 View，不暂停服务、不改状态")
+	fs.BoolVar(&opts.restart, "restart", opts.restart, "完成后恢复 storage-view")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			writeRepairViewUsage(fs, stdout)
@@ -107,7 +107,7 @@ func writeRepairViewUsage(fs *flag.FlagSet, stdout io.Writer) {
 		stdout = io.Discard
 	}
 	fmt.Fprintln(stdout, "用法: moox-cli storage repair-view --space-id <space> --view-id <view> --yes")
-	fmt.Fprintln(stdout, "操作: 停止 storage-view、备份元数据、清掉 View 的活动索引指针并删除物理索引，重启后从 Primary 重新建索引")
+	fmt.Fprintln(stdout, "操作: 暂停 storage-view、备份元数据、清掉 View 的活动索引指针并删除物理索引，恢复后从 Primary 重新建索引")
 	fs.SetOutput(stdout)
 	fs.PrintDefaults()
 }
@@ -135,13 +135,13 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 	if opts.dryRun {
 		return writeOperationResult(stdout, operationResult{Module: "storage", Action: "repair-view", Status: "dry_run", Summary: summary})
 	}
-	if err := runRepairLifecycle(ctx, packageRoot, "stop", stderr); err != nil {
-		return fmt.Errorf("停止 storage-view：%w", err)
+	if err := runRepairLifecycle(ctx, packageRoot, "pause", stderr); err != nil {
+		return fmt.Errorf("暂停 storage-view：%w", err)
 	}
 	started := false
 	defer func() {
 		if !started && opts.restart {
-			_ = runRepairLifecycle(context.Background(), packageRoot, "start", stderr)
+			_ = runRepairLifecycle(context.Background(), packageRoot, "resume", stderr)
 		}
 	}()
 	backupPath, err := backupRepairDB(dbPath)
@@ -158,8 +158,8 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 	}
 	summary.ViewIndexesRemoved = removed
 	if opts.restart {
-		if err := runRepairLifecycle(ctx, packageRoot, "start", stderr); err != nil {
-			return fmt.Errorf("启动 storage-view：%w", err)
+		if err := runRepairLifecycle(ctx, packageRoot, "resume", stderr); err != nil {
+			return fmt.Errorf("恢复 storage-view：%w", err)
 		}
 		started = true
 		summary.Restarted = true

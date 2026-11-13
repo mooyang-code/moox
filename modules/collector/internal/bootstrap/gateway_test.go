@@ -257,13 +257,6 @@ func (w collectorDataViewWire) GetViewState(ctx context.Context, request *storag
 	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w collectorDataViewWire) WaitViewApplied(ctx context.Context, request *storagepb.WaitViewAppliedReq) (*storagepb.WaitViewAppliedRsp, error) {
-	if err := w.wire.verify(ctx, "trpc.moox.storage.DataView", "WaitViewApplied", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.WaitViewAppliedRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "collector", "config", "app.yaml")
@@ -402,14 +395,10 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.GetViewState(t.Context(), &storagepb.GetViewStateReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
-	t.Run("WaitViewApplied", func(t *testing.T) {
-		_, err := adapter.WaitViewApplied(t.Context(), &storagepb.WaitViewAppliedReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.calls["GetDataset"])
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
-	require.Len(t, wire.calls, 23)
+	require.Len(t, wire.calls, 22)
 	wire.mu.Unlock()
 	invoker := scfinvoker.New(scfinvoker.Config{Gateway: gateway})
 	lease, err := invoker.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")

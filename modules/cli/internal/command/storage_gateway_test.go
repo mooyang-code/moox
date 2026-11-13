@@ -111,3 +111,17 @@ func TestManagementConfigurationsRemoveHTTPAndKeepNativeListeners(t *testing.T) 
 		})
 	}
 }
+
+// --view 指向别的数据集的 View 时直接报错，不去等它。
+func TestImportViewMustReadTheImportedDataset(t *testing.T) {
+	gateway := storageGatewayCall(func(_ context.Context, service, method string, request, response any) error {
+		require.Equal(t, metadataServiceName, service)
+		require.Equal(t, "GetView", method)
+		require.Equal(t, "bars_view", request.(*pb.GetViewReq).GetViewId())
+		proto.Merge(response.(*pb.GetViewRsp), &pb.GetViewRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, View: &pb.View{ViewId: "bars_view", DatasetId: "bars"}})
+		return nil
+	})
+	meta := gatewayStorageImportMetadataClient{Gateway: gateway}
+	require.NoError(t, checkImportView(t.Context(), meta, "crypto", "bars_view", "bars"))
+	require.ErrorContains(t, checkImportView(t.Context(), meta, "crypto", "bars_view", "factors"), "不是导入的数据集")
+}

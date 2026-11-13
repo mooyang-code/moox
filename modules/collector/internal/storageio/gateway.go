@@ -43,10 +43,9 @@ type Primary interface {
 	ReadRows(context.Context, *storagepb.PrimaryReadRowsReq, ...client.Option) (*storagepb.PrimaryReadRowsRsp, error)
 }
 
-// View 是 Collector 用到的 DataView 方法：建合成目标时等 View 的列建好，历史合成作业结束时等 View 跟上写入。
+// View 是 Collector 用到的 DataView 方法：建合成目标时等 View 的列建好。
 type View interface {
 	GetViewState(context.Context, *storagepb.GetViewStateReq, ...client.Option) (*storagepb.GetViewStateRsp, error)
-	WaitViewApplied(context.Context, *storagepb.WaitViewAppliedReq, ...client.Option) (*storagepb.WaitViewAppliedRsp, error)
 }
 
 type Client struct{ gateway gatewayclient.Invoker }
@@ -179,10 +178,6 @@ func (c *Client) ReadRows(ctx context.Context, request *storagepb.PrimaryReadRow
 
 func (c *Client) GetViewState(ctx context.Context, request *storagepb.GetViewStateReq, options ...client.Option) (*storagepb.GetViewStateRsp, error) {
 	return invoke[storagepb.GetViewStateRsp](ctx, c.gateway, "trpc.moox.storage.DataView", "GetViewState", request, options)
-}
-
-func (c *Client) WaitViewApplied(ctx context.Context, request *storagepb.WaitViewAppliedReq, options ...client.Option) (*storagepb.WaitViewAppliedRsp, error) {
-	return invoke[storagepb.WaitViewAppliedRsp](ctx, c.gateway, "trpc.moox.storage.DataView", "WaitViewApplied", request, options)
 }
 
 var _ Metadata = (*Client)(nil)

@@ -66,7 +66,7 @@ var storageMaintenanceActions = []storageMaintenanceAction{
 	{
 		Action: "repair-view", Aliases: []string{"修复视图", "repair"}, Defaults: storageConfDefaults, DryRun: true,
 		Short: "重建指定 View 的索引（默认只预览，--yes 才执行）",
-		Long:  "停止 storage-view、备份元数据、清掉 View 的活动索引指针并删除物理索引，重启后从 Primary 重新建索引。常用参数：--space-id、--view-id、--restart=false。\n记录型 View 重建后为空，只跟随新写入。",
+		Long:  "暂停 storage-view、备份元数据、清掉 View 的活动索引指针并删除物理索引，恢复后从 Primary 重新建索引。常用参数：--space-id、--view-id、--restart=false。\n记录型 View 重建后为空，只跟随新写入。",
 	},
 	{
 		Action: "reset-metadata", Aliases: []string{"重置元数据"}, Defaults: func(root string) map[string]string {

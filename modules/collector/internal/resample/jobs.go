@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -26,8 +25,6 @@ type JobRunnerConfig struct {
 	BucketsPerRound int
 	// MaxJobsPerRound 是每轮最多推进的作业数（每个任务一个）。
 	MaxJobsPerRound int
-	// SyncTimeout 是作业结束时等待目标 View 跟上写入的时间。
-	SyncTimeout time.Duration
 }
 
 func (c JobRunnerConfig) withDefaults() JobRunnerConfig {
@@ -36,9 +33,6 @@ func (c JobRunnerConfig) withDefaults() JobRunnerConfig {
 	}
 	if c.MaxJobsPerRound <= 0 {
 		c.MaxJobsPerRound = 8
-	}
-	if c.SyncTimeout <= 0 {
-		c.SyncTimeout = 5 * time.Second
 	}
 	return c
 }
@@ -50,8 +44,6 @@ type JobRunner struct {
 	Tasks  *store.TaskRepository
 	Source subjectSource
 	Engine *Engine
-	// View 非空时，作业结束前先等目标 View 跟上写入，作业成功即 View 可读。
-	View ViewWaiter
 	// Flush 非空时，作业结束时立即冲刷它的补写通知（不等发布协程的下一轮）。
 	Flush  func(ctx context.Context) error
 	Config JobRunnerConfig
@@ -283,17 +275,11 @@ func (r *JobRunner) jobMembers(ctx context.Context, task *Task, job store.Resamp
 	return out, nil
 }
 
-// finish 冲刷作业的补写通知，等目标 View 跟上写入，然后标记成功。
+// finish 冲刷作业的补写通知，然后标记成功（不等 View：读 View 的消费方按补写通知自己处理）。
 func (r *JobRunner) finish(ctx context.Context, job store.ResampleJob, task *Task, cfg JobRunnerConfig) error {
 	if r.Flush != nil {
 		if err := r.Flush(ctx); err != nil {
 			return r.fail(ctx, job, fmt.Errorf("flush backfill notices: %w", err), false)
-		}
-	}
-	if r.View != nil {
-		ids := taskresult.PersistedResultIDs(task.Spec.SpaceID, task.Spec.TaskID, task.Collection.ResultDatasetID, task.Collection.ResultViewID)
-		if err := waitViewApplied(ctx, r.View, task.Spec.SpaceID, ids.ViewID, cfg.SyncTimeout); err != nil {
-			return r.fail(ctx, job, err, false)
 		}
 	}
 	r.clearFailures(job.JobID)

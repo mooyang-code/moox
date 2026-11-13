@@ -602,7 +602,7 @@ func (x *PrimaryCommitTimeSeriesBatchRsp) GetAcceptedSeriesIndexes() []uint32 {
 	return nil
 }
 
-// PrimaryUpsertFieldsReq 写入一个数据集的行：每行的数据集必须与 space_id、dataset_id 一致；一次写入只产生一条行变更事件。
+// PrimaryUpsertFieldsReq 写入一个数据集的行：每行的数据集必须与 space_id、dataset_id 一致；一次写入在变更日志里记一条行条目。
 type PrimaryUpsertFieldsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

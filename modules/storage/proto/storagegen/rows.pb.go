@@ -1292,7 +1292,7 @@ func (x *DatasetChangeRange) GetEndTime() string {
 //   - 行条目（marker 为空）：一次行写入对一个数据集造成的变更。时间序列行记在 ranges（按标的、频率合并成时间范围），
 //     记录型行记在 records（被写入的记录键，去重后按 record_id、version 排序）；一次写入里两者可以同时非空。
 //   - 完成标记条目（marker 非空）：一条周期完成标记（写入方上报或账本判定），marker 是整条 EventMessage 的字节，
-//     与标记本体在同一个 batch 里提交；ranges、records 为空。同步点不进日志。
+//     与标记本体在同一个 batch 里提交；ranges、records 为空。
 //
 // 同一数据集的条目按序号先后对应提交先后：标记条目之前的行条目都已提交。
 type DatasetChange struct {

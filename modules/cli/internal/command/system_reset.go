@@ -122,18 +122,19 @@ func defaultResetStateDir() string {
 
 // externalSteps 是 Storage 与 Admin 业务部分的外部步骤；命令只作提示，编排器不会替用户登录那些主机。
 func (r systemResetOptions) externalSteps(scope string) []sysctl.ExternalStep {
-	// Storage 的行数据、账本与变更日志都在 Pebble 目录里，View 的索引在索引目录里：停服后整个删掉，启动时重新建。
+	// Storage 的行数据、账本与变更日志都在 Pebble 目录里，View 的索引在索引目录里：暂停后整个删掉，恢复时重新建。
+	// 要用 pause.sh 而不是 stop.sh：主机守护会把 stopped 的组件拉起，paused 的不会。
 	storageCommands := []string{
-		fmt.Sprintf("停止 Storage（%s/stop.sh）", r.StoragePkg),
+		fmt.Sprintf("暂停 Storage（%s/pause.sh）", r.StoragePkg),
 		fmt.Sprintf("删除 Pebble 目录与 View 索引目录：rm -rf %s/storage-primary/var/storage/pebble %s/storage-view/var/storage/view-indexes", r.StoragePkg, r.StoragePkg),
 	}
-	describe := "Storage：停服后删除行数据（Pebble）与 View 索引，再启动（在 Storage 主机上执行）"
+	describe := "Storage：暂停后删除行数据（Pebble）与 View 索引，再恢复（在 Storage 主机上执行）"
 	if scope == string(lifecycle.ResetAll) {
 		storageCommands = append(storageCommands,
 			fmt.Sprintf("moox-cli storage reset-metadata --package-root %s --storage-conf %s --seed %s --yes", r.StoragePkg, r.StorageConf, r.StorageSeed))
-		describe = "Storage：停服后删除行数据（Pebble）与 View 索引，清空元数据定义并重新导入种子，再启动（在 Storage 主机上执行）"
+		describe = "Storage：暂停后删除行数据（Pebble）与 View 索引，清空元数据定义并重新导入种子，再恢复（在 Storage 主机上执行）"
 	}
-	storageCommands = append(storageCommands, fmt.Sprintf("启动 Storage（%s/start.sh）并等就绪", r.StoragePkg))
+	storageCommands = append(storageCommands, fmt.Sprintf("恢复 Storage（%s/resume.sh）并等就绪", r.StoragePkg))
 	return []sysctl.ExternalStep{
 		// 暂存库记着每个归档任务的水位和永久分区状态；不清的话重建同名任务会沿用旧水位，甚至重新载入旧文件。
 		{Name: "archive-worker", Describe: "归档 worker：停止并删除暂存库（在 archive-worker 所在主机上执行）", After: sysctl.Archive, Commands: []string{

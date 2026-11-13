@@ -199,16 +199,9 @@ func TestStorageConfigsContainNoLegacyPathsOrRotationAndDependentsDoNotOwnIndexR
 	}
 }
 
-func TestRuntimeGatewayDefaultsAndRemovedStorageRPC(t *testing.T) {
-	var cfg RuntimeConfig
-	cfg.ApplyDefaults()
-	if cfg.GatewayClient.Caller != "storage-view" || cfg.GatewayClient.KeyFile != "../../secrets/caller-storage-view.key" {
-		t.Fatal("invalid storage-view gateway defaults")
-	}
+func TestRuntimeConfigRejectsRemovedStorageRPC(t *testing.T) {
 	for _, raw := range []string{
 		"storage:\n  view:\n    storage_rpc:\n      gateway_target: legacy\n",
-		"gateway_client:\n  caller: storage-view\n  target: legacy\n",
-		"gateway_client:\n  caller: storage-view\n  key_id: first\n  key_id: second\n",
 		"storage:\n  view:\n    metadata_service_name: legacy\n",
 		"storage:\n  view:\n    primary_store_service_name: legacy\n",
 		"storage:\n  view:\n    index_service_name: legacy\n",
@@ -219,7 +212,7 @@ func TestRuntimeGatewayDefaultsAndRemovedStorageRPC(t *testing.T) {
 		}
 		var loaded RuntimeConfig
 		if err := NewConfigLoader(filepath.Dir(path)).LoadConfig(filepath.Base(path), &loaded); err == nil {
-			t.Fatal("accepted removed gateway configuration")
+			t.Fatal("accepted removed configuration")
 		}
 	}
 }

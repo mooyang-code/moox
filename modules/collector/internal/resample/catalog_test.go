@@ -29,10 +29,6 @@ func (f *fakeViewState) GetViewState(context.Context, *storagepb.GetViewStateReq
 	return state, nil
 }
 
-func (f *fakeViewState) WaitViewApplied(context.Context, *storagepb.WaitViewAppliedReq) (*storagepb.WaitViewAppliedRsp, error) {
-	return &storagepb.WaitViewAppliedRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Applied: true}, nil
-}
-
 type catalogMetadataFake struct {
 	datasets    map[string]*storagepb.Dataset
 	views       map[string]*storagepb.View
@@ -166,10 +162,6 @@ func (f catalogViewStateFake) GetViewState(_ context.Context, req *storagepb.Get
 		return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
 	}
 	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, IndexId: view.GetActiveIndexId(), Columns: view.GetActiveColumns()}, nil
-}
-
-func (f catalogViewStateFake) WaitViewApplied(context.Context, *storagepb.WaitViewAppliedReq) (*storagepb.WaitViewAppliedRsp, error) {
-	return &storagepb.WaitViewAppliedRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Applied: true}, nil
 }
 
 func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, domain.CollectionTask, *domain.CollectParams, storagesource.DatasetInfo, []domain.Subject) {

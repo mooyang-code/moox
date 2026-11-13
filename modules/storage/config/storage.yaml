@@ -1,7 +1,3 @@
-gateway_client:
-  caller: storage-view
-  key_id: "" # Admin 分配，部署时填入。
-  key_file: ../../secrets/caller-storage-view.key
 storage:
   root: ./var/storage
   # Dataset retention and View limits rendered by moox-cli from moox.toml.

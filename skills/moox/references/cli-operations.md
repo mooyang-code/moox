@@ -50,10 +50,10 @@ View 自己跟随 Primary 的变更日志，落后时先按 [`view-catchup.md`](
 
 确认目标后在同一条命令末尾加 `--yes` 才执行。流程：
 
-1. 停止 `storage-view`。
+1. 暂停 `storage-view`（pause：主机守护不会拉起）。
 2. 备份 Metadata SQLite（输出中的 `backup_path` 是回滚和问题复盘所需的关键证据）。
 3. 清掉这个 View 的活动索引指针并删除物理索引。
-4. 重启 `storage-view`，从 Primary 回填每个序列最近的行后接着跟随变更日志。
+4. 恢复 `storage-view`（resume），从 Primary 回填每个序列最近的行后接着跟随变更日志。
 
 重建完成前 View 不可读；Primary 已不保留的行不可恢复；记录型 View（Bleve）没有可读的 Primary 历史，重建后为空，只跟随新写入。
 
@@ -64,11 +64,11 @@ View 自己跟随 Primary 的变更日志，落后时先按 [`view-catchup.md`](
 | `--space-id` | 无，必填 | View 所属 Space |
 | `--view-id` | 无，必填 | 要重建的 View |
 | `--storage-conf` | `<storage_root>/current/storage-view/config/storage.yaml` | Storage 配置 |
-| `--package-root` | `<storage_root>/current` | `start.sh`/`stop.sh` 所在根目录 |
+| `--package-root` | `<storage_root>/current` | `pause.sh`/`resume.sh` 所在根目录 |
 | `--timeout` | `2m` | 总操作超时 |
-| `--restart` | `true` | 完成后重启 `storage-view` |
+| `--restart` | `true` | 完成后恢复 `storage-view` |
 | `--yes` | `false` | 执行变更确认 |
-| `--dry-run` | 不带 `--yes` 时自动加上 | 只检查，不停止服务、不改状态 |
+| `--dry-run` | 不带 `--yes` 时自动加上 | 只检查，不暂停服务、不改状态 |
 
 不要手工删除 DuckDB/Bleve 文件；已删除 View 的索引由 Storage View 的清理定时器回收。
 **新建 View、给 View 加标的、调大 `view_rows_per_series` 或放宽 `[storage_view.max_age]` 前要核对内存余量**：`storage-view` 没有代码配置的进程级总预算，单索引 `memory_limit` 也不是进程 RSS 的硬上界。
@@ -100,5 +100,5 @@ Storage 服务的时序 View 每个序列保留最近 `10000` 根，由每分钟
 1. 按 [`view-catchup.md`](view-catchup.md) 先确认卡在 Primary、View 跟随、还是 Factor 读超时；不要看到结果停滞就直接删除数据。
 2. 对目标命令先预览（不带 `--yes`），确认 Space、View 和 package root。
 3. Factor durable 积压时恢复服务并检查重投，不删除 consumer；历史数据修正使用有界 Recalc（`factor recalc submit`）。View 索引损坏或要按新根数回填时 `storage repair-view`。
-4. 记录 JSON 中的删除结果、备份路径和重启状态。`repair-view` 在 stop 之后失败时必须把 `storage-view` 拉起来。
+4. 记录 JSON 中的删除结果、备份路径和重启状态。`repair-view` 在暂停之后失败时必须用 `resume.sh --components storage-view` 恢复。
 5. 等 View 重建完成并跟上后（`moox-cli data view state` 有活动索引、`moox-cli data view wait-applied` 返回），再查询 View/Factor 最新 `output_watermark`；不要用“进程已启动”代替数据已追赶的验收。
