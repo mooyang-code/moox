@@ -243,6 +243,17 @@ type SchemaExtender interface {
 // ErrSchemaExtensionConflict means the physical index cannot satisfy the requested append-only contract.
 var ErrSchemaExtensionConflict = errors.New("view schema extension conflicts with physical index")
 
+// ErrColumnNotProjected 表示查询请求的列不在 View 的已建列里；DataView 据此返回 VIEW_COLUMN_NOT_FOUND。
+var ErrColumnNotProjected = errors.New("view column is not projected")
+
+// ColumnNotProjectedError 带上缺的列名，错误文字保持“View column "x" is not projected”。
+type ColumnNotProjectedError struct{ Column string }
+
+func (e ColumnNotProjectedError) Error() string {
+	return fmt.Sprintf("View column %q is not projected", e.Column)
+}
+func (e ColumnNotProjectedError) Is(target error) bool { return target == ErrColumnNotProjected }
+
 // IsAppendOnlyViewColumns reports whether desired preserves every physical
 // column in active and appends at least one new column after its sort order.
 func IsAppendOnlyViewColumns(active, desired []*pb.ViewColumn) bool {

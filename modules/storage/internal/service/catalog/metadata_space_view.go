@@ -217,6 +217,10 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 func (s *Service) GetView(ctx context.Context, req *pb.GetViewReq) (*pb.GetViewRsp, error) {
 	view, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
 	if err != nil {
+		// 只有确实不存在才报 VIEW_NOT_FOUND：Collector 据此认为 View 已经删掉，读取出错不能混进来。
+		if !errors.Is(err, sql.ErrNoRows) {
+			return &pb.GetViewRsp{RetInfo: retinfo.FromError(err)}, nil
+		}
 		return &pb.GetViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
 	}
 	return &pb.GetViewRsp{RetInfo: retinfo.Success("success"), View: view}, nil

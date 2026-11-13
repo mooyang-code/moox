@@ -294,17 +294,15 @@ func queryErrorCode(err error) pb.ErrorCode {
 	if err == nil {
 		return pb.ErrorCode_SUCCESS
 	}
-	if errors.Is(err, errViewIndexNotReady) || errors.Is(err, os.ErrNotExist) {
+	// 只按哨兵错误判断，不看错误文字：DuckDB 的列绑定等错误是内部错误，不能当成“还没就绪”让调用方无限重试。
+	switch {
+	case errors.Is(err, errViewIndexNotReady), errors.Is(err, os.ErrNotExist):
 		return pb.ErrorCode_VIEW_NOT_READY
-	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "view column") && (strings.Contains(msg, "not projected") || strings.Contains(msg, "ambiguous")) {
+	case errors.Is(err, viewindex.ErrColumnNotProjected):
 		return pb.ErrorCode_VIEW_COLUMN_NOT_FOUND
+	default:
+		return pb.ErrorCode_INNER_ERR
 	}
-	if strings.Contains(msg, "is not prepared") || strings.Contains(msg, "no such file") || strings.Contains(msg, "not found") {
-		return pb.ErrorCode_VIEW_NOT_READY
-	}
-	return pb.ErrorCode_INNER_ERR
 }
 
 func queryCoverageComplete(rng *pb.TimeRange, stats viewindex.ViewIndexStats) bool {

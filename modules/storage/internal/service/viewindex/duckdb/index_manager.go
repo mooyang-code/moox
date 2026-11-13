@@ -881,7 +881,7 @@ func resolveIncludedColumns(columns map[string]pb.FieldValueType, includes []str
 	selected := make(map[string]struct{}, len(includes))
 	for _, include := range includes {
 		if _, ok := columns[include]; !ok || isSystemColumn(include) {
-			return nil, fmt.Errorf("View column %q is not projected", include)
+			return nil, viewindex.ColumnNotProjectedError{Column: include}
 		}
 		selected[include] = struct{}{}
 	}

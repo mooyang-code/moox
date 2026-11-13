@@ -98,6 +98,9 @@ func (s *Service) UpsertSubject(ctx context.Context, req *pb.UpsertSubjectReq) (
 func (s *Service) GetSubject(ctx context.Context, req *pb.GetSubjectReq) (*pb.GetSubjectRsp, error) {
 	item, err := s.metadata.GetSubject(ctx, req.GetSpaceId(), req.GetSubjectId())
 	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return &pb.GetSubjectRsp{RetInfo: retinfo.FromError(err)}, nil
+		}
 		return &pb.GetSubjectRsp{RetInfo: retinfo.Error(pb.ErrorCode_SUBJECT_NOT_FOUND, err)}, nil
 	}
 	return &pb.GetSubjectRsp{RetInfo: retinfo.Success("success"), Subject: item}, nil
@@ -346,6 +349,9 @@ func (s *Service) GetField(ctx context.Context, req *pb.GetFieldReq) (*pb.GetFie
 	}
 	item, err := s.metadata.GetField(ctx, req.GetSpaceId(), req.GetFieldId())
 	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return &pb.GetFieldRsp{RetInfo: retinfo.FromError(err)}, nil
+		}
 		return &pb.GetFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_FIELD_NOT_FOUND, err)}, nil
 	}
 	return &pb.GetFieldRsp{RetInfo: retinfo.Success("success"), Field: item}, nil

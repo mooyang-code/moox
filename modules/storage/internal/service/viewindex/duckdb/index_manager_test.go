@@ -674,7 +674,7 @@ func TestResolveIncludedColumnsRequiresExactProjectedNames(t *testing.T) {
 		t.Fatalf("resolve exact name = %v err=%v, want [close]", got, err)
 	}
 	for _, include := range []string{"prices.close", "data_time", "open"} {
-		if _, err := resolveIncludedColumns(columns, []string{include}); err == nil || !strings.Contains(err.Error(), "is not projected") {
+		if _, err := resolveIncludedColumns(columns, []string{include}); !errors.Is(err, viewindex.ErrColumnNotProjected) {
 			t.Fatalf("include %q error = %v, want not projected", include, err)
 		}
 	}

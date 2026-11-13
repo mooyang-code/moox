@@ -109,6 +109,9 @@ func newViewRuntime() *viewRuntime {
 // 首次建索引期间同样是“没有活动索引、有建索引目标”，但它只在维护协程里、持有 buildMu 一次做完：开头先停掉跟随器，
 // 失败时 discardInitialBuild 清掉 building，建成后转为 active，这段时间里没有别的调用方读这个判断。所以长期保持
 // 这个状态的只有未完成的重建。
+//
+// 这个推断依赖启动顺序：RestoreActiveViews 与 StartFollowing 都在维护循环启动之前做完，首次建索引期间只有维护协程自己
+// 会调 ensureFollower 和挂接（AttachActiveView）。以后若有别的协程在维护运行期间起跟随器或挂接 View，要重新加上单独的标记。
 func (r *viewRuntime) needsRebuild() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
