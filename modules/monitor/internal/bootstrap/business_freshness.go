@@ -11,6 +11,7 @@ import (
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
@@ -85,7 +86,7 @@ func buildBusinessFreshnessReporterWithInterval(
 		for _, signal := range overview.GatewaySignals {
 			if signal.Kind == monitorobservability.RelaySignalKind {
 				relaySeen[signal.HostID] = true
-				key := monmetrics.InternalMetricSpaceID + "\x00" + relayCheckID(signal.HostID)
+				key := events.SystemSpaceID + "\x00" + relayCheckID(signal.HostID)
 				item, frozen := relayItem(signal, relayDownSince, overview.GeneratedAt)
 				if frozen {
 					frozenGateway[key] = true
@@ -117,7 +118,7 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		for hostID, host := range gatewayHosts {
 			checkID := "gateway:" + hostID + ":status"
-			key := monmetrics.InternalMetricSpaceID + "\x00" + checkID
+			key := events.SystemSpaceID + "\x00" + checkID
 			// 没有任何异常信号、但有信号无法确认时保持原状态，不伪造成功去恢复既有告警。
 			if host.unknown && !host.unhealthy {
 				frozenGateway[key] = true
@@ -127,7 +128,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			if host.unhealthy {
 				reason = strings.Join(host.reasons, "；")
 			}
-			items[key] = businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: checkID, name: "主机网关（" + hostID + "）", success: !host.unhealthy, reason: reason, rawError: strings.Join(host.raws, "；")}
+			items[key] = businessFreshnessItem{spaceID: events.SystemSpaceID, checkID: checkID, name: "主机网关（" + hostID + "）", success: !host.unhealthy, reason: reason, rawError: strings.Join(host.raws, "；")}
 		}
 		klineEvaluationRan := len(klineEvaluators) == 0 || klineEvaluators[0] == nil
 		klineEvaluated := make(map[string]struct{})
@@ -156,8 +157,8 @@ func buildBusinessFreshnessReporterWithInterval(
 				coveredDatasets, coveredViews = nil, nil
 				state := inventoryErr.State
 				diagnostic := fmt.Sprintf("cache_available=%t cache_age_seconds=%.0f last_success_timestamp_seconds=%.0f error=%s", state.Available, state.Age.Seconds(), unixSeconds(state.LastSuccess), inventoryErr.Cause)
-				items[monmetrics.InternalMetricSpaceID+"\x00"+monmetrics.TaskResultInventoryCheckID] = businessFreshnessItem{
-					spaceID: monmetrics.InternalMetricSpaceID, checkID: monmetrics.TaskResultInventoryCheckID,
+				items[events.SystemSpaceID+"\x00"+monmetrics.TaskResultInventoryCheckID] = businessFreshnessItem{
+					spaceID: events.SystemSpaceID, checkID: monmetrics.TaskResultInventoryCheckID,
 					name: "采集任务清单", success: false,
 					reason: "无法获取采集任务清单：采集服务接口异常，K线结果检查暂停", diagnostic: diagnostic,
 				}
@@ -206,7 +207,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 			checkID := strings.Join([]string{"reporter", service.NodeID, service.ServiceName}, ":")
 			item := businessFreshnessItem{
-				spaceID: monmetrics.InternalMetricSpaceID,
+				spaceID: events.SystemSpaceID,
 				checkID: checkID,
 				name:    reporterCheckName(service.ServiceName, service.NodeID),
 				success: service.ReporterStatus == "healthy",
@@ -233,10 +234,6 @@ func buildBusinessFreshnessReporterWithInterval(
 				if _, exists := storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+strings.ToLower(dataset.Freq)]; exists {
 					continue
 				}
-			}
-			if systemMonitoringDataset(dataset) {
-				// mooxsys 是系统监控数据（主机快照）：主机失联与阈值规则已覆盖主机停报，不做数据集新鲜度检查。
-				continue
 			}
 			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
 			// Storage 写入水位按结果数据集匹配，View 水位按确切的视图 ID 匹配：同一主数据集上另有独立视图时，它仍要自己的检查。
@@ -286,7 +283,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		for _, business := range overview.BusinessChecks {
-			if business.Kind != "balance" && business.Kind != "trade_attention" && business.Kind != "event_center_attention" && business.Kind != "collector_attention" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "view_file" && business.Kind != "worker_presence" && business.Kind != "archive_object_store" && business.Kind != "archive_task" && business.Kind != "archive_coverage" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" && business.Kind != "factor_params" && business.Kind != "storage_rejection" {
+			if business.Kind != "balance" && business.Kind != "trade_attention" && business.Kind != "event_center_attention" && business.Kind != "collector_attention" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "view_file" && business.Kind != "view_follow" && business.Kind != "worker_presence" && business.Kind != "archive_object_store" && business.Kind != "archive_task" && business.Kind != "archive_coverage" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" && business.Kind != "factor_params" && business.Kind != "storage_rejection" {
 				continue
 			}
 			// 概览从库里已有检查读回来的上一次结果不是本轮新算出的事实：不能拿它再写一次结果（它的状态值是 ok，会被记成失败）。
@@ -296,7 +293,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 			spaceID := business.SpaceID
 			if spaceID == "" {
-				spaceID = monmetrics.InternalMetricSpaceID
+				spaceID = events.SystemSpaceID
 			}
 			checkID, name := businessCheckIdentity(business)
 			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}
@@ -403,7 +400,7 @@ func buildBusinessFreshnessReporterWithInterval(
 					}
 				}
 			}
-			ingest := businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: observationIngestCheckID, name: "观测输入", success: true, reason: "观测输入正常"}
+			ingest := businessFreshnessItem{spaceID: events.SystemSpaceID, checkID: observationIngestCheckID, name: "观测输入", success: true, reason: "观测输入正常"}
 			if !state.Ready {
 				ingest.success, ingest.reason = false, "观测输入中断：Monitor 的 EventBus 观测消费者没有连上，依赖服务指标与主机快照的检查已冻结"
 				if state.Reason != "" {
@@ -562,10 +559,6 @@ func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepo
 // noLongerExpected resolves a check whose subject was disabled or removed.
 const noLongerExpected = domain.CheckReasonRetired
 
-func systemMonitoringDataset(dataset monitorobservability.DatasetFrequencyStatus) bool {
-	return strings.EqualFold(strings.TrimSpace(dataset.SpaceID), monmetrics.InternalMetricSpaceID)
-}
-
 // relayAlertAfter 是反向连接断开多久后告警。
 const relayAlertAfter = 3 * time.Minute
 
@@ -574,7 +567,7 @@ func relayCheckID(hostID string) string { return "gateway:" + hostID + ":relay" 
 
 // relayItem 把一台出站主机的反向连接信号转换成检查结果；frozen 表示保持原状态（无法确认，或断开还没到告警时长）。
 func relayItem(signal monitorobservability.GatewaySignal, downSince map[string]time.Time, now time.Time) (businessFreshnessItem, bool) {
-	item := businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: relayCheckID(signal.HostID), name: "主机网关反向连接（" + signal.HostID + "）"}
+	item := businessFreshnessItem{spaceID: events.SystemSpaceID, checkID: relayCheckID(signal.HostID), name: "主机网关反向连接（" + signal.HostID + "）"}
 	switch signal.Status {
 	case "healthy":
 		delete(downSince, signal.HostID)
@@ -620,6 +613,8 @@ func businessCheckIdentity(business monitorobservability.BusinessStatus) (checkI
 		checkID, name = "data_delivery:"+business.Module, "数据投递队列"
 	} else if business.Kind == "view_file" {
 		checkID, name = "view_file:"+business.Module, "View 索引文件大小"
+	} else if business.Kind == "view_follow" {
+		checkID, name = "view_follow:"+business.Module, "View 跟随数据变更"
 	} else if business.Kind == "metrics_ingest" {
 		checkID, name = "metrics_ingest:"+business.Module, "指标序列数量保护"
 	} else if business.Kind == "worker_presence" {

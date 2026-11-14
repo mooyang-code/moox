@@ -20,13 +20,9 @@ type Metadata interface {
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
 	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
 	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
-	UpdateView(context.Context, *storagepb.UpdateViewReq, ...client.Option) (*storagepb.UpdateViewRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
 	ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
-	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq, ...client.Option) (*storagepb.UpsertViewColumnRsp, error)
-	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq, ...client.Option) (*storagepb.CheckDatasetActivationRsp, error)
-	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq, ...client.Option) (*storagepb.ActivateDatasetRsp, error)
 	ResolveSubjects(context.Context, *storagepb.ResolveSubjectsReq, ...client.Option) (*storagepb.ResolveSubjectsRsp, error)
 	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
 	ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error)
@@ -43,9 +39,11 @@ type Primary interface {
 	CommitTimeSeriesBatch(context.Context, *storagepb.PrimaryCommitTimeSeriesBatchReq, ...client.Option) (*storagepb.PrimaryCommitTimeSeriesBatchRsp, error)
 	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
 	ReadRows(context.Context, *storagepb.PrimaryReadRowsReq, ...client.Option) (*storagepb.PrimaryReadRowsRsp, error)
-	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq, ...client.Option) (*storagepb.WaitViewSyncPointRsp, error)
-	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq, ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
-	RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq, ...client.Option) (*storagepb.PrimaryRestoreDatasetRowsRsp, error)
+}
+
+// View 是 Collector 用到的 DataView 方法：建合成目标时等 View 的列建好，任务结果读 View 的覆盖范围。
+type View interface {
+	GetViewState(context.Context, *storagepb.GetViewStateReq, ...client.Option) (*storagepb.GetViewStateRsp, error)
 }
 
 type Client struct{ gateway gatewayclient.Invoker }
@@ -103,10 +101,6 @@ func (c *Client) CreateView(ctx context.Context, request *storagepb.CreateViewRe
 	return invoke[storagepb.CreateViewRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "CreateView", request, options)
 }
 
-func (c *Client) UpdateView(ctx context.Context, request *storagepb.UpdateViewReq, options ...client.Option) (*storagepb.UpdateViewRsp, error) {
-	return invoke[storagepb.UpdateViewRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpdateView", request, options)
-}
-
 func (c *Client) DeleteView(ctx context.Context, request *storagepb.DeleteViewReq, options ...client.Option) (*storagepb.DeleteViewRsp, error) {
 	return invoke[storagepb.DeleteViewRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "DeleteView", request, options)
 }
@@ -117,18 +111,6 @@ func (c *Client) ListViews(ctx context.Context, request *storagepb.ListViewsReq,
 
 func (c *Client) UpsertDatasetColumn(ctx context.Context, request *storagepb.UpsertDatasetColumnReq, options ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {
 	return invoke[storagepb.UpsertDatasetColumnRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpsertDatasetColumn", request, options)
-}
-
-func (c *Client) UpsertViewColumn(ctx context.Context, request *storagepb.UpsertViewColumnReq, options ...client.Option) (*storagepb.UpsertViewColumnRsp, error) {
-	return invoke[storagepb.UpsertViewColumnRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpsertViewColumn", request, options)
-}
-
-func (c *Client) CheckDatasetActivation(ctx context.Context, request *storagepb.CheckDatasetActivationReq, options ...client.Option) (*storagepb.CheckDatasetActivationRsp, error) {
-	return invoke[storagepb.CheckDatasetActivationRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "CheckDatasetActivation", request, options)
-}
-
-func (c *Client) ActivateDataset(ctx context.Context, request *storagepb.ActivateDatasetReq, options ...client.Option) (*storagepb.ActivateDatasetRsp, error) {
-	return invoke[storagepb.ActivateDatasetRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "ActivateDataset", request, options)
 }
 
 func (c *Client) ResolveSubjects(ctx context.Context, request *storagepb.ResolveSubjectsReq, options ...client.Option) (*storagepb.ResolveSubjectsRsp, error) {
@@ -184,17 +166,10 @@ func (c *Client) ReadRows(ctx context.Context, request *storagepb.PrimaryReadRow
 	return invoke[storagepb.PrimaryReadRowsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "ReadRows", request, options)
 }
 
-func (c *Client) WaitViewSyncPoint(ctx context.Context, request *storagepb.WaitViewSyncPointReq, options ...client.Option) (*storagepb.WaitViewSyncPointRsp, error) {
-	return invoke[storagepb.WaitViewSyncPointRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "WaitViewSyncPoint", request, options)
-}
-
-func (c *Client) DeleteDatasetRows(ctx context.Context, request *storagepb.PrimaryDeleteDatasetRowsReq, options ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	return invoke[storagepb.PrimaryDeleteDatasetRowsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "DeleteDatasetRows", request, options)
-}
-
-func (c *Client) RestoreDatasetRows(ctx context.Context, request *storagepb.PrimaryRestoreDatasetRowsReq, options ...client.Option) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
-	return invoke[storagepb.PrimaryRestoreDatasetRowsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "RestoreDatasetRows", request, options)
+func (c *Client) GetViewState(ctx context.Context, request *storagepb.GetViewStateReq, options ...client.Option) (*storagepb.GetViewStateRsp, error) {
+	return invoke[storagepb.GetViewStateRsp](ctx, c.gateway, "trpc.moox.storage.DataView", "GetViewState", request, options)
 }
 
 var _ Metadata = (*Client)(nil)
 var _ Primary = (*Client)(nil)
+var _ View = (*Client)(nil)

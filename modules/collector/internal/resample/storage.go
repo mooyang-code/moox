@@ -49,13 +49,23 @@ type PrimaryStorage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 }
 
-// SyncPointStorage is the optional catch-up fence used after a historical
-// resample. Primary rows are written first, then a stable catch-up marker is
-// appended and the target View is waited on before the backfill is reported
-// complete.
-type SyncPointStorage interface {
-	AppendDatasetSyncPoint(context.Context, string, string, string, string) error
-	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error)
+// ViewWaiter 是合成用到的 DataView 方法：建目标时等 View 的列建好。
+type ViewWaiter interface {
+	GetViewState(context.Context, *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error)
+}
+
+// viewRetryInterval 是 View 还没准备好（还没开始建索引、正在建索引）时再问一次的间隔。
+const viewRetryInterval = 100 * time.Millisecond
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // BucketStorage reads one source bucket and writes its target row only when the

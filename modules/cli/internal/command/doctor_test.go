@@ -1,7 +1,6 @@
 package command
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -32,15 +31,6 @@ func TestValidateDoctorFlagsAndExitCodes(t *testing.T) {
 	require.Equal(t, 1, doctorExitCode(core.ConclusionDegraded))
 	require.Equal(t, 2, doctorExitCode(core.ConclusionUnhealthy))
 	require.Equal(t, 3, doctorExitCode(core.ConclusionInconclusive))
-}
-
-func TestStorageMetadataClientUsesReadOnlySignedIdentity(t *testing.T) {
-	client := newSignedStorageMetadataClient(storageGatewayCall(func(context.Context, string, string, any, any) error { return nil }), "storage-secret")
-	signed, ok := client.(*signedStorageMetadataClient)
-	require.True(t, ok)
-	require.Equal(t, "storage-metadata", signed.auth.GetAppId())
-	require.Len(t, signed.auth.GetAppKey(), 64)
-	require.NotNil(t, signed.gateway)
 }
 
 func TestDoctorRejectsInvalidLocalConfigBeforeOpeningGateway(t *testing.T) {

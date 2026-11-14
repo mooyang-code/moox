@@ -232,9 +232,9 @@ const taskIds = computed(() => tasks.value.map(task => task.dataset_id || ""));
 // worker 报告启用了对象存储时才显示远端副本的列
 const remoteEnabled = computed(() => Boolean(overview.value?.worker?.object_store?.endpoint));
 const datasetNames = computed(() => Object.fromEntries(datasets.value.map(item => [item.dataset_id, item.name || ""])));
-const archivableList = computed(() => datasets.value.filter(item => archivableDataset(item, spaceId.value)));
+const archivableList = computed(() => datasets.value.filter(item => archivableDataset(item)));
 const unarchived = computed(() =>
-  mainLoaded.value && datasetsLoaded.value ? unarchivedDatasets(datasets.value, tasks.value, spaceId.value) : []
+  mainLoaded.value && datasetsLoaded.value ? unarchivedDatasets(datasets.value, tasks.value) : []
 );
 // 两路读取任一失败都不能当成“全部已归档”：首次读取任务失败也算
 const unarchivedError = computed(() => datasetsError.value || (!mainLoaded.value ? mainError.value : ""));

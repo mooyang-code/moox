@@ -21,23 +21,21 @@ import (
 
 // storage reset-metadata：系统重置里 Storage 的元数据部分（设计 5.2，`--scope all`）。
 //
-// 备份元数据库后清空全部业务定义——空间、数据源、标的与标签、数据集与字段、View 及其构建/同步状态——再用 --seed 重新导入种子，
-// 回到刚完成部署、尚未激活数据集的状态。保留：库结构（t_schema_meta）、DataNode 登记与存储设备、
+// 备份元数据库后清空全部业务定义——空间、数据源、标的与标签、数据集与字段、View——再用 --seed 重新导入种子，
+// 回到刚完成部署的状态。保留：库结构（t_schema_meta）、
 // 标的修订号（按空间单调递增，策略等调用方靠它判断缓存是否过期，不能回退）。
 //
-// 必须先停掉 Storage（元数据库由 Primary 进程持有）。行数据与事件流不在这里：先用
-// `reset-view-consumers --reset-all-storage-data --restart=false` 清 Pebble、事件流和 View 消费者，再执行本命令，
-// 然后启动 Storage，执行 activate-datasets，并让 Collector 重新登记（见部署与运维文档）。
+// 必须先暂停 Storage（`<包根>/pause.sh`；元数据库由 Primary 进程持有，stop 会被主机守护拉起）。行数据与 View 索引不在这里：
+// 暂停后先删掉 Pebble 目录与 View 索引目录，再执行本命令，然后 `<包根>/resume.sh` 恢复 Storage，并让 Collector 重新登记（见部署与运维文档）。
 
 // metadataResetClear 是要清空的表，子表在前（外键 RESTRICT 的父表在后）。
 var metadataResetClear = []string{
-	"t_view_columns", "t_view_sync_points", "t_view_period_dataset_states",
 	"t_views", "t_dataset_columns", "t_datasets", "t_fields", "t_field_groups",
 	"t_subject_tags", "t_tags", "t_subjects", "t_data_sources", "t_spaces",
 }
 
 // metadataResetKeep 是不清的表。
-var metadataResetKeep = []string{"t_data_nodes", "t_schema_meta", "t_space_revisions", "t_storage_devices"}
+var metadataResetKeep = []string{"t_schema_meta", "t_space_revisions"}
 
 type resetMetadataOptions struct {
 	Storage    storageconfig.StorageConfig
@@ -67,7 +65,7 @@ func runResetMetadata(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&opts.seedPath, "seed", "", "metadata seed yaml path")
 	var yes, dryRun bool
 	var packageRoot string
-	fs.StringVar(&packageRoot, "package-root", "", "storage package root（配置里的相对路径据此解析，和 reset-view-consumers 一致）")
+	fs.StringVar(&packageRoot, "package-root", "", "storage package root（配置里的相对路径据此解析，和 repair-view 一致）")
 	fs.BoolVar(&yes, "yes", false, "确认清空全部业务定义（执行前先备份）；Storage 必须已停止")
 	fs.BoolVar(&dryRun, "dry-run", false, "只列出会删除的行数，不改动")
 	if err := fs.Parse(args); err != nil {
@@ -158,10 +156,10 @@ func resetMetadata(ctx context.Context, opts resetMetadataOptions) (resetMetadat
 	}
 	summary.Imported = &importSummary{
 		Spaces: result.Spaces, DataSources: result.DataSources, Subjects: result.Subjects, Tags: result.Tags, Datasets: result.Datasets,
-		Fields: result.Fields, DatasetColumns: result.DatasetColumns, Views: result.Views, ViewColumns: result.ViewColumns, Devices: result.Devices,
+		Fields: result.Fields, DatasetColumns: result.DatasetColumns, Views: result.Views,
 	}
 	summary.Status = "ok"
-	summary.NextSteps = []string{"启动 Storage", "activate-datasets 激活数据集", "Collector 重新登记（fetch-plan reregister）"}
+	summary.NextSteps = []string{"启动 Storage", "Collector 重新登记（fetch-plan reregister）"}
 	return summary, nil
 }
 

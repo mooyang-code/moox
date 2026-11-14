@@ -77,12 +77,10 @@ func effectiveSpaceID(header string, body []byte) (string, error) {
 	return space, nil
 }
 
-// storageGlobalMethods 没有空间归属（节点、归档、空间目录本身），不做空间授权，
+// storageGlobalMethods 没有空间归属（空间目录本身），不做空间授权，
 // 也不会用请求头声明的空间回填请求体。
 var storageGlobalMethods = map[string]bool{
 	"CreateSpace": true, "UpdateSpace": true, "DeleteSpace": true, "ListSpaces": true,
-	"UpdateDataNode": true, "DeleteDataNode": true, "GetDataNode": true, "ListDataNodes": true,
-	"RebindDatasetDataNode": true,
 }
 
 // requestBodySpace 是空间内 Storage 方法实际作用的空间。请求体声明的空间必须唯一且与请求头一致；
@@ -114,11 +112,11 @@ func requestBodySpace(header string, body []byte, canInject bool) (space string,
 var storageTopLevelSpaceMethods = map[string]bool{
 	"DeleteView": true, "DeleteDataSource": true, "DeleteTag": true,
 	"AddTagMembers": true, "RemoveTagMembers": true, "SetTagMemberStatus": true, "DeleteDataset": true,
-	"ActivateDataset": true, "BatchUpdateFields": true, "DeleteFieldGroup": true, "GetSpace": true,
+	"BatchUpdateFields": true, "DeleteFieldGroup": true, "GetSpace": true,
 	"GetView": true, "ListViews": true, "ListViewColumns": true,
 	"GetDataSource": true, "ListDataSources": true, "GetSubject": true, "ListSubjects": true,
 	"GetTag": true, "ListTags": true, "ListTagMembers": true, "ResolveSubjects": true,
-	"GetDataset": true, "ListDatasets": true, "CheckDatasetActivation": true, "ListDatasetSubjects": true,
+	"GetDataset": true, "ListDatasets": true, "ListDatasetSubjects": true,
 	"GetFieldGroup": true, "ListFieldGroups": true, "GetField": true, "ListFields": true,
-	"ListDatasetColumns": true, "QueryTimeSeriesRows": true, "SearchRecordRows": true,
+	"ListDatasetColumns": true, "QueryTimeSeriesRows": true, "SearchRecordRows": true, "GetViewState": true,
 }

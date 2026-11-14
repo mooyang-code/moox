@@ -70,7 +70,7 @@ func TestCollectorKlineBackfilledSeriesTags(t *testing.T) {
 	payload := &storagepb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"},
 		Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Hour)),
-		Origin: "auto", JobId: "job-1", SyncRequestId: "batch-1", ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
+		Origin: "auto", JobId: "job-1", ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
 		SeriesTags: []string{"venue:binance|market:swap|source:swap_http"},
 	}
 	options := PublishOptions{EventID: "batch-1", OccurredAt: start, SpaceID: "crypto", SubjectID: "dataset_src"}

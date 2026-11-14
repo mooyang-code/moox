@@ -2,16 +2,12 @@ package metadata
 
 import (
 	"context"
-	"errors"
-	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-var (
-	ErrViewExists                  = errors.New("view already exists")
-	ErrViewSchemaExtensionConflict = errors.New("view schema extension conflict")
-)
+var ErrViewExists = storeerr.New(storeerr.Conflict, "view already exists")
 
 // FieldQuery contains the supported server-side field filters and ordering.
 type FieldQuery struct {
@@ -39,8 +35,6 @@ type FieldGroupCounts struct {
 type DatasetQuery struct {
 	SpaceID      string
 	DataSourceID string
-	DataNodeID   string
-	DataNodeIDs  []string
 	Freq         string
 	DataKind     pb.DataKind
 	Page         *pb.Page
@@ -53,11 +47,9 @@ type SnapshotReader interface {
 	ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
 }
 
-// RequestSnapshot is the immutable metadata generation shared by validation
-// and direct Dataset -> DataNode resolution for one request.
+// RequestSnapshot 是一次请求内校验与读写共用的不可变元数据版本。
 type RequestSnapshot interface {
 	GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool)
-	GetDataNode(nodeID string) (*pb.DataNode, bool)
 	ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
 }
 
@@ -102,16 +94,7 @@ type Reader interface {
 	ListFields(ctx context.Context, query FieldQuery) ([]*pb.Field, *pb.PageResult, error)
 	CountFieldsByGroup(ctx context.Context, spaceID string) (FieldGroupCounts, error)
 	ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
-
-	GetDataNode(ctx context.Context, nodeID string) (*pb.DataNode, error)
-	ListDataNodes(ctx context.Context, page *pb.Page) ([]*pb.DataNode, *pb.PageResult, error)
-	GetDevice(ctx context.Context, deviceID string) (*pb.Device, error)
-	ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error)
 }
-
-// IndexGenerationAttribute 记录 View 当前索引的代次，首次建成时写入。索引标识对一个 View 是固定的，不能区分代次；
-// View 重建（删除后重新建索引）时代次变化，调用方（例如策略回放）据此判断旧的行是否已不存在。
-const IndexGenerationAttribute = "moox.index_generation"
 
 // Writer 定义元数据存储的写入与状态变更接口。
 type Writer interface {
@@ -121,15 +104,11 @@ type Writer interface {
 	DeleteSpace(ctx context.Context, spaceID string) error
 	UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	CreateView(ctx context.Context, item *pb.View) (*pb.View, error)
-	ReplaceViewColumns(ctx context.Context, item *pb.View) (*pb.View, error)
 	DeleteView(ctx context.Context, spaceID string, viewID string) error
-	UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.ViewColumn, error)
-	CompleteViewInitialBuild(ctx context.Context, req *pb.CompleteViewInitialBuildReq) (*pb.View, error)
-	CommitViewSchemaExtension(ctx context.Context, req *pb.CommitViewSchemaExtensionReq) (*pb.View, error)
 	UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
 	DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error
 	UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error)
-	UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error)
+	UpsertDataset(ctx context.Context, item *pb.Dataset, columns ...*pb.DatasetColumn) (*pb.Dataset, error)
 	DeleteDataset(ctx context.Context, spaceID string, datasetID string) error
 	UpsertFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
 	CreateFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
@@ -140,21 +119,6 @@ type Writer interface {
 	BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs []string, targetGroupID string, targetStatus string) (uint32, error)
 	DeleteFieldGroup(ctx context.Context, spaceID string, groupID string) error
 	UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error)
-	RegisterDataNode(ctx context.Context, nodeID string, serviceTarget string, initialName string) (*pb.DataNode, error)
-	UpdateDataNode(ctx context.Context, nodeID string, name string, status string) (*pb.DataNode, error)
-	DeleteDataNode(ctx context.Context, nodeID string) error
-	RebindDatasetDataNode(ctx context.Context, spaceID string, datasetID string, dataNodeID string, expectedRevision uint64) (*pb.Dataset, error)
-	CommitDatasetActivation(ctx context.Context, spaceID string, datasetID string, expectedRevision uint64) (*pb.Dataset, error)
-	UpsertDevice(ctx context.Context, item *pb.Device) (*pb.Device, error)
-}
-
-type ViewPeriodStateStore interface {
-	ListViewPeriodDatasetStates(ctx context.Context, spaceID, viewID, frequency string, periodTime int64) ([]*pb.ViewPeriodDatasetState, error)
-	MissingViewSyncPointDatasets(ctx context.Context, spaceID, viewID, requestID string, datasetIDs []string) ([]string, error)
-	UpsertViewPeriodDatasetState(ctx context.Context, item *pb.ViewPeriodDatasetState) (*pb.ViewPeriodDatasetState, error)
-	RecordViewSyncPoint(ctx context.Context, item *pb.ViewSyncPoint) (*pb.ViewSyncPoint, error)
-	DeleteViewPeriodDatasetStatesBefore(ctx context.Context, before time.Time) (int64, error)
-	DeleteViewSyncPointsBefore(ctx context.Context, before time.Time) (int64, error)
 }
 
 // Store 组合元数据读写能力与生命周期管理能力。
@@ -165,5 +129,4 @@ type Store interface {
 	Reader
 	TagStore
 	Writer
-	ViewPeriodStateStore
 }

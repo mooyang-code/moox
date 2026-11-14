@@ -26,7 +26,7 @@ features:
   - title: 云函数采集
     details: Collector 下发采集计划，执行端通过 WS 推送或 SCF Timer 拉取收盘 K 线并提交到 Storage，缺口由检查与补采修复。
   - title: 字段级事实存储
-    details: DataNode 以 Pebble 保存字段级事实并通过 Outbox 发布变更；DuckDB / Bleve View 是可重建的查询索引。
+    details: storage-primary 以 Pebble 保存字段级事实并记录变更日志；DuckDB / Bleve View 跟随变更日志，是可重建的查询索引。
   - title: 因子与策略
     details: 表达式因子按采集周期增量计算并写回 Storage；策略用声明式 DSL 产出组合账户的目标权重。
   - title: 交易执行

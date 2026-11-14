@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -28,6 +29,8 @@ type monitorDataCleanupOps struct {
 	pruneChecks func(context.Context, time.Time) error
 	// pruneLogs 清理重要日志：超过保留期的，以及超出行数上限的最旧记录。
 	pruneLogs func(context.Context, time.Time) error
+	// pruneHostSamples 按 hostmetrics.SampleRetention 清理主机快照历史（按采样时间）。
+	pruneHostSamples func(context.Context, time.Time) error
 }
 
 func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error {
@@ -72,6 +75,11 @@ func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error
 			errs = append(errs, fmt.Errorf("prune log records: %w", err))
 		}
 	}
+	if ops.pruneHostSamples != nil {
+		if err := ops.pruneHostSamples(ctx, now.Add(-hostmetrics.SampleRetention)); err != nil {
+			errs = append(errs, fmt.Errorf("清理主机快照历史: %w", err))
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -83,6 +91,19 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 	if service == nil {
 		return fmt.Errorf("monitor data cleanup timer service %q is not configured", monitorDataCleanupTimerService)
 	}
+	ops := buildMonitorDataCleanupOps(cfg, runtime)
+	job, err := timerjob.New("monitor_data_cleanup", 2*time.Minute, func(ctx context.Context) error {
+		return runMonitorDataCleanup(ctx, ops)
+	})
+	if err != nil {
+		return err
+	}
+	timer.RegisterHandlerService(service, timerjob.KeepRunning("monitor_data_cleanup", job.Handle))
+	return nil
+}
+
+// buildMonitorDataCleanupOps 按运行时里已有的存储接上各项清理。
+func buildMonitorDataCleanupOps(cfg *config.Config, runtime *Runtime) monitorDataCleanupOps {
 	ops := monitorDataCleanupOps{
 		now: func() time.Time { return time.Now().UTC() },
 	}
@@ -102,6 +123,12 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 	if runtime != nil && runtime.Repositories != nil && runtime.Repositories.Logs != nil {
 		ops.pruneLogs = func(ctx context.Context, now time.Time) error {
 			_, err := runtime.Repositories.Logs.Prune(ctx, now.Add(-logRecordRetention), logRecordMaxRows)
+			return err
+		}
+	}
+	if runtime != nil && runtime.HostSamples != nil {
+		ops.pruneHostSamples = func(ctx context.Context, cutoff time.Time) error {
+			_, err := runtime.HostSamples.DeleteBefore(ctx, cutoff)
 			return err
 		}
 	}
@@ -138,12 +165,5 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 			return err
 		}
 	}
-	job, err := timerjob.New("monitor_data_cleanup", 2*time.Minute, func(ctx context.Context) error {
-		return runMonitorDataCleanup(ctx, ops)
-	})
-	if err != nil {
-		return err
-	}
-	timer.RegisterHandlerService(service, timerjob.KeepRunning("monitor_data_cleanup", job.Handle))
-	return nil
+	return ops
 }

@@ -7,20 +7,19 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/health"
-	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store) error {
+func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, runtime *Runtime) error {
 	if cfg == nil {
 		return nil
 	}
 	state := health.New("monitor", cfg.Instance.InstanceID, "", "")
 	state.SetReady(true)
-	state.SnapshotFunc = monitorHealthSnapshot(cfg, runtime, hostStore)
+	state.SnapshotFunc = monitorHealthSnapshot(cfg, runtime)
 	var life *lifecycle.Controller
 	if runtime != nil && runtime.Store != nil {
 		var err error
@@ -62,7 +61,7 @@ func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, r
 	return nil
 }
 
-func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store) healthz.SnapshotFunc {
+func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		var activeChecks int64
 		var checksErr error
@@ -83,8 +82,6 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, hostStore *host
 			"active_checks":      activeChecks,
 			"deployment_enabled": cfg.Deployment.Enabled,
 		}
-		hostStorageReady := !cfg.Metrics.HostStorage.Enabled || (hostStore != nil && hostStore.StorageReady())
-		rsp.Details["host_storage_schema_ready"] = hostStorageReady
 		reporterReady := !cfg.Metrics.Enabled || (runtime != nil && runtime.MetricsReporterReady.Load())
 		rsp.Details["metrics_reporter_ready"] = reporterReady
 		if runtime != nil && runtime.metricsReporterErrorMessage() != "" {
@@ -109,7 +106,7 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, hostStore *host
 		if evaluationReason != "" {
 			rsp.Details["evaluation_error"] = evaluationReason
 		}
-		ready = databaseReady && schedulerReady && hostStorageReady && ingestReady && reporterReady && evaluationReady
+		ready = databaseReady && schedulerReady && ingestReady && reporterReady && evaluationReady
 		rsp.Ready = ready
 		if ready {
 			rsp.Status = "ok"

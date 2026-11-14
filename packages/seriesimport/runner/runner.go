@@ -42,7 +42,7 @@ type TailTarget interface {
 	TailOnly() bool
 }
 
-// Finisher 是可选的目标能力：所有文件写完之后调用一次（例如 Storage 目标追加同步点、等 View 追平）。
+// Finisher 是可选的目标能力：所有文件写完之后调用一次（例如 Storage 目标等 View 跟上写入）。
 type Finisher interface {
 	Finish(ctx context.Context) error
 }

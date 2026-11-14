@@ -10,6 +10,7 @@
         <a-radio value="1h">1小时</a-radio>
         <a-radio value="24h">24小时</a-radio>
         <a-radio value="3d">3天</a-radio>
+        <a-radio value="7d">7天</a-radio>
       </a-radio-group>
     </header>
 
@@ -293,11 +294,7 @@ async function loadHistory() {
     const response = await getHistoryMetrics(monitor.agent_id, duration.value);
     if (requestID !== historyRequestID) return;
     historyData.value = response.history;
-    historyNotice.value = !response.storage_available
-      ? "历史存储暂不可用"
-      : response.data_gap
-        ? "当前时间范围存在历史数据缺口"
-        : "";
+    historyNotice.value = response.data_gap ? "当前时间范围存在历史数据缺口" : "";
     await nextTick();
     renderChart();
   } catch {

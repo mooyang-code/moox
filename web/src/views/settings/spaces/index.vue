@@ -48,8 +48,7 @@
                 <a-button
                   size="mini"
                   type="text"
-                  :disabled="record.status !== 'active' || isSystemSpace(record.space_id)"
-                  :title="isSystemSpace(record.space_id) ? '系统内部空间，不是交易市场，不能设为当前' : ''"
+                  :disabled="record.status !== 'active'"
                   @click="spaceStore.setSelectedSpace(record.space_id)"
                 >
                   设为当前
@@ -104,7 +103,7 @@ import { reportControlError } from "@/api/admin/http";
 import { SPACE_TIMEZONES, uncommonZoneHint } from "@/utils/space-zones";
 import { createSpace, listSpaces, updateSpace } from "@/api/admin/spaces";
 import type { Space } from "@/api/admin/types";
-import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
+import { useSpaceStore } from "@/store/modules/space";
 import { applyPageResult, defaultPagination, formatTime, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "SettingsSpaces" });

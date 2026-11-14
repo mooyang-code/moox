@@ -22,7 +22,7 @@ message RecordRowKey {
   string version = 2;
 }
 
-// RowKey is the only key accepted by DataNode field operations.
+// RowKey is the only key accepted by Pebble field operations.
 message RowKey {
   string space_id = 1;
   string dataset_id = 2;
@@ -51,15 +51,14 @@ message RowFieldValues {
 	map<string, TypedValue> attributes = 3;
 }
 
-// RowsUpserted is the Storage module's local write result model. The public
-// EventBus contract is packages/storagepb.DatasetRowsUpserted.
+// RowsUpserted 是一个数据集的一批行写入：commit_id 的内容摘要按它的规范编码计算。
 message RowsUpserted {
   string space_id = 1;
   string dataset_id = 2;
   repeated RowFieldUpsert rows = 3;
 }
 
-// Query key views are retained as read-only query contracts. DataNode writes
+// Query key views are retained as read-only query contracts. Pebble writes
 // use RowKey above and never accept these request wrappers.
 message TimeSeriesKey {
   string space_id = 1;
@@ -96,7 +95,7 @@ message RecordRow {
   map<string, string> attributes = 3;
 }
 
-// ReadTimeSeriesRowsReq 读取时序事实，由 DataNode（Pebble）回答，所有调用方的结果一致。
+// ReadTimeSeriesRowsReq 读取时序事实，由主服务的 Pebble 存储回答，所有调用方的结果一致。
 // 两种形态二选一：time_range（时间区间，左闭右开）或 latest_per_series（每个序列最近 N 根）。
 // 不带 selector 表示数据集的全部标的。精确键读取用 PrimaryStore.ReadRows。
 // 分页只用 page.size 与 page.cursor（顺序翻页，不能跳页）。
@@ -117,7 +116,7 @@ message ReadTimeSeriesRowsReq {
 
 // CountTimeSeriesRowsReq 按标的统计时间范围内已存在的行数，不回传行：同一时间点有多个 series_tag 只计一次。
 // Collector 的完整性检查先用它比对“应有根数”，只有根数不够的标的才读行定位缺口，读取量随缺口而不是随标的数增长。
-// 由 DataNode 回答。
+// 由主服务的 Pebble 存储回答。
 message CountTimeSeriesRowsReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -138,16 +137,15 @@ message CountTimeSeriesRowsRsp {
   repeated SubjectRowCount counts = 2;
 }
 
-// DatasetChangeCursor 是行变更日志的读取位点：序号只在 (node_id, store_id) 内可比较，
-// 节点更换或存储重建后身份对不上，读取方会收到「断档」。
+// DatasetChangeCursor 是变更日志的读取位点：序号只在同一个 store_id 内可比较，
+// 存储重建后 store_id 变化，读取方会收到「断档」。
 message DatasetChangeCursor {
-  string node_id = 1;
-  string store_id = 2;
-  // sequence 是已处理到的序号；0 表示还没有处理过任何变更（配合 from_head 取基线）。
-  uint64 sequence = 3;
+  string store_id = 1;
+  // sequence 是已扫描到的序号；0 表示还没有扫描过任何变更（配合 from_head 取基线）。
+  uint64 sequence = 2;
 }
 
-// DatasetChangeRange 是一个标的在一次写入里受影响的时间点范围（含两端，RFC3339 UTC）。
+// DatasetChangeRange 是一个时间序列标的在一次写入里受影响的时间点范围（含两端，RFC3339Nano UTC）。
 message DatasetChangeRange {
   string subject_id = 1;
   string freq = 2;
@@ -155,36 +153,46 @@ message DatasetChangeRange {
   string end_time = 4;
 }
 
-// DatasetChange 是一次写入对一个数据集造成的变更。本地副本据此得知哪些区间被写入或修正。
+// DatasetChange 是变更日志里的一条，占一个序号。按 marker 是否为空分两种：
+//   - 行条目（marker 为空）：一次行写入对一个数据集造成的变更。时间序列行记在 ranges（按标的、频率合并成时间范围），
+//     记录型行记在 records（被写入的记录键，去重后按 record_id、version 排序）；一次写入里两者可以同时非空。
+//   - 完成标记条目（marker 非空）：一条周期完成标记（写入方上报或账本判定），marker 是整条 EventMessage 的字节，
+//     与标记本体在同一个 batch 里提交；ranges、records 为空。
+// 同一数据集的条目按序号先后对应提交先后：标记条目之前的行条目都已提交。
 message DatasetChange {
   uint64 sequence = 1;
   string space_id = 2;
   string dataset_id = 3;
   repeated DatasetChangeRange ranges = 4;
   string created_at = 5;
+  repeated RecordRowKey records = 6;
+  bytes marker = 7;
 }
 
-// ReadDatasetChangesReq 从持久化的变更日志里按序读取变更。日志与行写入在同一个 Pebble batch 里提交，
-// 保留一段时间（默认 7 天）；游标早于保留起点或身份对不上时返回 gap。
+// ReadDatasetChangesReq 从持久化的变更日志里按序读取变更。日志与写入在同一个 Pebble batch 里提交，
+// 保留一段时间（默认 7 天）；游标早于保留起点、比头部还新或 store_id 对不上时返回 gap。
 message ReadDatasetChangesReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
-  // dataset_id 必填：PrimaryStore 据此找到数据集所在的 DataNode；只返回这个数据集的变更，游标仍按该节点的全部变更推进。
+  // dataset_id 必填：只返回这个数据集的变更，游标仍按全部变更推进。
   string dataset_id = 3;
   DatasetChangeCursor cursor = 4;
   // from_head 为真时不返回变更，只返回当前日志头部的位点：基线先取位点、再读数据，之后从这个位点继续读。
   bool from_head = 5;
   // limit 是最多扫描的日志条数，默认 500，最大 2000。
   uint32 limit = 6;
+  // wait_ms 大于 0 时，没有本数据集的新变更就在服务端等到下一次提交再读，最多等这么久（上限 30000；请求带截止时间时截到截止前 200 毫秒）；
+  // 到期仍没有时返回空的 changes，next_cursor 照样前进到已扫描的位置。from_head 与 gap 不等待。
+  uint32 wait_ms = 7;
 }
 
 message ReadDatasetChangesRsp {
   common.RetInfo ret_info = 1;
   repeated DatasetChange changes = 2;
-  // next_cursor 是读完本批之后的位点，原样放进下一次请求。
+  // next_cursor 是已扫描到的位点（没有命中本数据集的条目也会前进），原样放进下一次请求。
   DatasetChangeCursor next_cursor = 3;
   bool has_more = 4;
-  // gap 为真表示游标早于日志保留起点，或游标身份与当前存储对不上，调用方要走对账。
+  // gap 为真表示游标早于日志保留起点、比头部还新，或 store_id 与当前存储对不上，调用方要重建基线。
   bool gap = 5;
 }
 

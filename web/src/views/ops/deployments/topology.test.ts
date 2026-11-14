@@ -27,7 +27,7 @@ const hosts: DeploymentHost[] = [
 ];
 const layout: Record<string, string[]> = {
   control: ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"],
-  storage: ["storage-primary", "storage-node", "storage-view", "access", "archive-worker"],
+  storage: ["storage-primary", "storage-view", "access", "archive-worker"],
   overseas: ["trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"],
   factor: ["factor-engine"]
 };
@@ -110,7 +110,7 @@ describe("service topology", () => {
     expect(shown.nodes.find(node => node.id === key("control", "strategy"))?.status).toBe("disabled");
     const near = neighborhood(build().edges, key("overseas", "trade"));
     expect(near.nodes.has(key("control", "strategy"))).toBe(true);
-    expect(near.nodes.has(key("storage", "storage-node"))).toBe(false);
+    expect(near.nodes.has(key("storage", "storage-view"))).toBe(false);
   });
 
   it("lays the collection data flow onto placed nodes and skips steps whose components are not deployed", () => {
@@ -126,16 +126,15 @@ describe("service topology", () => {
       [key("storage", "access"), key("storage", "storage-primary")],
       ["ext:market", key("overseas", "collector-stream")],
       [key("overseas", "collector-stream"), key("storage", "storage-primary")],
-      [key("storage", "storage-primary"), key("storage", "storage-node")],
-      [key("storage", "storage-node"), key("storage", "storage-view")],
-      [key("storage", "storage-node"), key("factor", "factor-engine")],
+      [key("storage", "storage-primary"), key("storage", "storage-view")],
+      [key("storage", "storage-primary"), key("factor", "factor-engine")],
       [key("factor", "factor-engine"), key("storage", "access")],
       [key("storage", "storage-view"), key("control", "strategy")],
       [key("control", "strategy"), key("overseas", "trade")]
     ]);
     const withoutStream = build(deployments.filter(item => item.component_id !== "collector-stream"));
     const steps = buildDataFlow(withoutStream);
-    expect(steps).toHaveLength(11);
+    expect(steps).toHaveLength(10);
     expect(steps.map(item => item.step)).toEqual(steps.map((_, index) => index + 1));
   });
 

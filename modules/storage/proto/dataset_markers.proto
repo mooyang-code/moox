@@ -6,12 +6,6 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 
 import "google/protobuf/timestamp.proto";
 
-message CommittedPosition {
-  string node_id = 1;
-  string store_id = 2;
-  uint64 sequence = 3;
-}
-
 // SeriesRef 是一条时间序列的身份：标的加 series_tag，与行键一致。
 message SeriesRef {
   string subject_id = 1;
@@ -35,39 +29,4 @@ message DatasetPeriodCompletedMarker {
   // Storage 原样保存并带进周期完成事件。
   repeated SeriesRef universe_series = 11;
   repeated SeriesRef failed_series = 12;
-}
-
-// DatasetSyncPointMarker orders an import/catchup request after its row writes.
-message DatasetSyncPointMarker {
-  string sync_point_id = 1;
-  string request_id = 2;
-  string dataset_id = 3;
-  string source = 4;
-}
-
-// ViewPeriodDatasetState is the durable per-input state used to confirm a
-// View period after a completion marker is applied.
-message ViewPeriodDatasetState {
-  string space_id = 1;
-  string view_id = 2;
-  string dataset_id = 3;
-  string frequency = 4;
-  int64 period_time = 5;
-  string event_id = 6;
-  string status = 7;
-  repeated string subject_ids = 8;
-  repeated string failed_subjects = 9;
-  google.protobuf.Timestamp occurred_at = 10;
-  google.protobuf.Timestamp updated_at = 11;
-}
-
-// ViewSyncPoint records that one View has applied all events preceding a
-// dataset sync-point marker.
-message ViewSyncPoint {
-  string space_id = 1;
-  string view_id = 2;
-  string dataset_id = 3;
-  string request_id = 4;
-  string sync_point_id = 5;
-  google.protobuf.Timestamp applied_at = 6;
 }

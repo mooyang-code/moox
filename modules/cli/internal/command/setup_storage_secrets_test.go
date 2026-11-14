@@ -17,7 +17,6 @@ import (
 )
 
 const (
-	testStorageNodeSecret    = "NODESECRETNODESECRETNODESECRET0001"
 	testStoragePrimarySecret = "PRIMARYSECRETPRIMARYSECRETPRIMARY01"
 	testStorageViewSecret    = "VIEWSECRETVIEWSECRETVIEWSECRETVIEW01"
 )
@@ -41,7 +40,6 @@ func nativeStoragePrimaryEnvironment() map[string]string {
 		"MOOX_HEALTH_AUTH_VERSION":         "moox-health-v1",
 		"MOOX_STORAGE_ROLE":                "primary",
 		"MOOX_STORAGE_HOME":                "./var/storage",
-		"MOOX_STORAGE_NODE_AUTH_SECRET":    testStorageNodeSecret,
 		"MOOX_STORAGE_PRIMARY_AUTH_SECRET": testStoragePrimarySecret,
 		"MOOX_STORAGE_VIEW_AUTH_SECRET":    testStorageViewSecret,
 	}
@@ -51,7 +49,7 @@ func TestReadRemoteStorageRoleSecretsUsesNativeUnitLayout(t *testing.T) {
 	root := writeNativeStorageUnit(t, nativeStoragePrimaryEnvironment())
 	secrets, err := readRemoteStorageRoleSecrets(context.Background(), localSkillSSH{}, root)
 	require.NoError(t, err)
-	require.Equal(t, storageRoleSecrets{Node: testStorageNodeSecret, Primary: testStoragePrimarySecret, View: testStorageViewSecret}, secrets)
+	require.Equal(t, storageRoleSecrets{Primary: testStoragePrimarySecret}, secrets)
 	// 格式化输出不得泄露密钥。
 	for _, rendered := range []string{fmt.Sprint(secrets), fmt.Sprintf("%v %+v %#v", secrets, secrets, secrets)} {
 		require.NotContains(t, rendered, "SECRET")
@@ -59,24 +57,18 @@ func TestReadRemoteStorageRoleSecretsUsesNativeUnitLayout(t *testing.T) {
 }
 
 func TestReadRemoteStorageRoleSecretsRejectsMissingOrIncompleteEnvironment(t *testing.T) {
-	// 没有原生单元（例如只有旧布局 secrets/storage-node-auth.env）时明确报不可用。
-	legacy := filepath.Join(t.TempDir(), "storage")
-	require.NoError(t, os.MkdirAll(filepath.Join(legacy, "secrets"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(legacy, "secrets", "storage-node-auth.env"), []byte("MOOX_STORAGE_NODE_AUTH_SECRET="+testStorageNodeSecret+"\n"), 0o600))
-	_, err := readRemoteStorageRoleSecrets(context.Background(), localSkillSSH{}, legacy)
+	// 没有原生单元时明确报不可用。
+	_, err := readRemoteStorageRoleSecrets(context.Background(), localSkillSSH{}, filepath.Join(t.TempDir(), "storage"))
 	require.ErrorContains(t, err, "storage_verification_auth_unavailable")
 
-	for _, key := range []string{"MOOX_STORAGE_NODE_AUTH_SECRET", "MOOX_STORAGE_PRIMARY_AUTH_SECRET", "MOOX_STORAGE_VIEW_AUTH_SECRET"} {
-		values := nativeStoragePrimaryEnvironment()
-		delete(values, key)
-		root := writeNativeStorageUnit(t, values)
-		_, err := readRemoteStorageRoleSecrets(context.Background(), localSkillSSH{}, root)
-		require.ErrorContains(t, err, "storage_role_secrets_invalid", key)
-		require.NotContains(t, err.Error(), "SECRET", key)
-	}
-
 	values := nativeStoragePrimaryEnvironment()
-	values["MOOX_STORAGE_VIEW_AUTH_SECRET"] = "short"
+	delete(values, "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+	_, err = readRemoteStorageRoleSecrets(context.Background(), localSkillSSH{}, writeNativeStorageUnit(t, values))
+	require.ErrorContains(t, err, "storage_role_secrets_invalid")
+	require.NotContains(t, err.Error(), "SECRET")
+
+	values = nativeStoragePrimaryEnvironment()
+	values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"] = "short"
 	_, err = readRemoteStorageRoleSecrets(context.Background(), localSkillSSH{}, writeNativeStorageUnit(t, values))
 	require.ErrorContains(t, err, "storage_role_secrets_invalid")
 
@@ -87,7 +79,7 @@ func TestReadRemoteStorageRoleSecretsRejectsMissingOrIncompleteEnvironment(t *te
 }
 
 func TestParseNativeStorageRoleSecretsRejectsMalformedJSON(t *testing.T) {
-	for _, raw := range [][]byte{nil, []byte("MOOX_STORAGE_NODE_AUTH_SECRET=x\n"), []byte(`{"MOOX_STORAGE_NODE_AUTH_SECRET": 1}`)} {
+	for _, raw := range [][]byte{nil, []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=x\n"), []byte(`{"MOOX_STORAGE_PRIMARY_AUTH_SECRET": 1}`)} {
 		_, err := parseNativeStorageRoleSecrets(raw)
 		require.ErrorContains(t, err, "storage_role_secrets_invalid")
 	}

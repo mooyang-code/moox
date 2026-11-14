@@ -40,7 +40,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 | 主机 | 单元 | 组件 id（二进制名 `moox-<id>`） |
 | --- | --- | --- |
 | 控制机 | `prod` | `admin` `monitor` `collector` `cloudfunction` `factor-mgr` `archive-mgr` `strategy` `web-host` `console-proxy` |
-| Storage 主机 | `storage` | `storage-primary` `storage-node` `storage-view`（**同一份二进制，三个文件名**） |
+| Storage 主机 | `storage` | `storage-primary` `storage-view`（**同一份二进制，两个文件名**） |
 | 每台主机 | `host` | `host-gateway` `host-agent` |
 | 存储机 | `eventbus` | `eventbus`（2026-10-27 起在存储机，见下） |
 | 存储机、海外机 | `access` | `access` |
@@ -54,7 +54,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 
 构建目标是 `scripts/build/build.sh` 的参数，和组件 id 基本一致（`host-gateway` 目标同时产出 server、cli 和 `moox-runtime`；`admin`、`monitor`、`collector`、
 `factor-mgr`、`strategy`、`trade`、`cloudfunction`、`callback-dispatcher` 目标同时产出对应的 `-cli`；`storage-cli`、`factor-engine`、`hostagent` 是独立目标）。
-CGO 只有 Storage 需要（DuckDB），脚本对 `storage`、`storage-cgo`、`storage-primary`、`storage-node` 目标自动在 Docker 编译镜像里开启 CGO 构建（`storage-cli` 仍是纯 Go），其余一律在本机交叉编译且关闭 CGO；**不要在宿主机上直接 `CGO_ENABLED=1` 交叉编译 Storage**，需要先启动 Docker（macOS：`colima start`）。
+CGO 只有 Storage 需要（DuckDB），脚本对 `storage`、`storage-cgo`、`storage-primary` 目标自动在 Docker 编译镜像里开启 CGO 构建（`storage-cli` 仍是纯 Go），其余一律在本机交叉编译且关闭 CGO；**不要在宿主机上直接 `CGO_ENABLED=1` 交叉编译 Storage**，需要先启动 Docker（macOS：`colima start`）。
 
 ## 标准流程（单个或几个组件）
 
@@ -83,10 +83,10 @@ $S rollback --host control --unit prod --backup /data/moox/prod/binary-backup-co
 
 - 一次只动一个组件、一台主机；每步看到 `RESULT:...ready=True` 和 `READY:` 再继续。
 - 装 cli 之类没有对应组件的二进制用 `--no-restart`；`--restart` 的组件必须是真正使用这个二进制的那个，否则 sha 核对会失败（这是有意的）。
-- Storage 三个名字：构建 `storage-primary`，再用 `--name moox-storage-primary|moox-storage-node|moox-storage-view` 各装一次保持一致；
-  只重启需要的那个（例如只改 View 逻辑就只给 `storage-view` 加 `--restart storage-view`，前两个用 `--no-restart`）。
-  重启 `storage-primary`、`storage-node` 会让这一刻的周期提交失败，监控可能出一条几十秒的行情探针告警并自动恢复。
-- 发布 Storage 前确认没有正在跑的 `reset-view-consumers` 或 View 首次建索引。
+- Storage 两个名字：构建 `storage-primary`，再用 `--name moox-storage-primary|moox-storage-view` 各装一次保持一致；
+  只重启需要的那个（例如只改 View 逻辑就只给 `storage-view` 加 `--restart storage-view`，`storage-primary` 用 `--no-restart`）。
+  重启 `storage-primary` 会让这一刻的周期提交失败，监控可能出一条几十秒的行情探针告警并自动恢复。
+- 发布 Storage 前确认没有正在跑的 `repair-view` 或 View 首次建索引。
 
 ## 发布清单的重新封存
 
@@ -211,7 +211,7 @@ EOF
 - **本二进制替换流程只用 SSH 公钥**：`native-release.sh` 不读 `moox.toml`。需要版本制品、配置和身份一起更新时，使用 `moox-cli setup ... --release`；该入口按用户配置选择 SSH 私钥或密码。
 - **不要把中转文件、备份目录留在 `/tmp`**：脚本会清理上传的临时文件；备份目录保留在单元根下，隔几天清理旧的，别删最近一次。
 - **同一秒内连续安装**：备份目录名带时间戳，脚本保证每次都新建，不会覆盖前一次的备份。
-- **重启代价**：Storage 的 primary/node 重启会让周期提交失败片刻；因子引擎重启丢一个整点周期并要预热；`factor-mgr` 重启时如果引擎正在上报补算进度，这次上报会失败（任务租约 15 分钟后重领，从已上报的进度续跑）。
+- **重启代价**：Storage 的 primary 重启会让周期提交失败片刻；因子引擎重启丢一个整点周期并要预热；`factor-mgr` 重启时如果引擎正在上报补算进度，这次上报会失败（任务租约 15 分钟后重领，从已上报的进度续跑）。
 - **发布不是迁移**：数据库结构变化要先确认旧二进制不认新表时的影响，必要时先执行对应的 `init`/迁移再换二进制；不确定就问用户。
 
 ## 回滚

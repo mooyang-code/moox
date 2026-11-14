@@ -2,11 +2,9 @@ package pebble
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
@@ -23,17 +21,9 @@ func snapshotSeries(subjects ...string) []seriesset.Series {
 	return set.Series
 }
 
-func snapshotExpectation(period time.Time, subjects ...string) DatasetPeriodExpectation {
-	set, err := seriesset.Canonicalize(snapshotSeries(subjects...))
-	if err != nil {
-		panic(err)
-	}
-	return DatasetPeriodExpectation{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period.Unix(), SeriesHash: set.Hash, ExpectedCount: uint32(len(set.Series)), AllowedLatenessSeconds: 15}
-}
-
 func TestRegisterSeriesSnapshotIsIdempotentAndOrdered(t *testing.T) {
-	clock := newPeriodReceiptClock(time.Date(2026, 10, 11, 12, 0, 30, 0, time.UTC))
-	store := newPeriodReceiptStore(t, clock)
+	clock := newGoldenClock(time.Date(2026, 10, 11, 12, 0, 30, 0, time.UTC))
+	store := newGoldenStore(t, clock)
 	ctx := context.Background()
 	first := time.Date(2026, 10, 11, 12, 5, 0, 0, time.UTC).Unix()
 	series := snapshotSeries("BTC-USDT", "ETH-USDT")
@@ -72,172 +62,27 @@ func TestRegisterSeriesSnapshotIsIdempotentAndOrdered(t *testing.T) {
 }
 
 func TestRegisterSeriesSnapshotRejectsWhenLaterPeriodExists(t *testing.T) {
-	clock := newPeriodReceiptClock(time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC))
-	store := newPeriodReceiptStore(t, clock)
+	clock := newGoldenClock(time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC))
+	store := newGoldenStore(t, clock)
 	ctx := context.Background()
 	period := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
-	err := registerAtPeriod(store, clock, snapshotSeries("BTC-USDT"), period)
+	exp := goldenRegister(t, store, clock, "crypto", "bars", "1m", snapshotSeries("BTC-USDT"), period, 15)
+	// 提前建立 P+5m 那一期，再登记从 P+4m 起生效的新快照：P+4m 之后已有周期，不允许登记。
+	clock.set(period.Add(2 * time.Minute))
+	later := exp
+	later.PeriodTime = period.Add(5 * time.Minute).Unix()
+	_, err := store.CommitTimeSeriesBatch(ctx, later, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: goldenRow("crypto", "bars", "1m", seriesset.Series{SubjectID: "BTC-USDT"}, period.Add(5*time.Minute), 1)}})
 	require.NoError(t, err)
-	clock.set(period.Add(61 * time.Second))
-	exp := snapshotExpectation(period, "BTC-USDT")
-	_, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
-	require.NoError(t, err)
-	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT", "ETH-USDT"), period.Unix()-60)
-	require.Error(t, err, "P 之后已有周期时不允许登记")
-}
-
-func TestCommitCreatesPeriodFromRegisteredSnapshot(t *testing.T) {
-	period := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
-	clock := newPeriodReceiptClock(period.Add(61 * time.Second))
-	store := newPeriodReceiptStore(t, clock)
-	ctx := context.Background()
-	err := registerAtPeriod(store, clock, snapshotSeries("BTC-USDT", "ETH-USDT"), period)
-	require.NoError(t, err)
-	exp := snapshotExpectation(period, "BTC-USDT", "ETH-USDT")
-
-	result, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
-	require.NoError(t, err)
-	require.Equal(t, "waiting", result.Status)
-	require.Equal(t, period.Add(time.Minute+15*time.Second).Unix(), result.DeadlineAt, "截止时间 = 收盘 + 允许迟到时间，由 Storage 计算")
-
-	progress, found, err := store.PeriodStatusByKey(ctx, "crypto", "bars", "1m", period.Unix(), true)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, exp.SeriesHash, progress.SeriesHash)
-	require.Equal(t, []uint32{1}, PeriodMissingIndexes(progress.ExpectedCount, progress.Bitmap))
-
-	result, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}})
-	require.NoError(t, err)
-	require.Equal(t, "complete", result.Status)
-	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
-}
-
-func TestLazyCommitRejectionsAndMissingList(t *testing.T) {
-	period := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
-	clock := newPeriodReceiptClock(period.Add(61 * time.Second))
-	store := newPeriodReceiptStore(t, clock)
-	ctx := context.Background()
-	exp := snapshotExpectation(period, "BTC-USDT", "ETH-USDT")
-	row := []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}
-
-	_, err := store.CommitTimeSeriesBatch(ctx, exp, row)
-	var missing SeriesSnapshotMissingError
-	require.ErrorAs(t, err, &missing, "快照未登记必须拒绝")
-
-	err = registerAtPeriod(store, clock, snapshotSeries("BTC-USDT", "ETH-USDT"), period)
-	require.NoError(t, err)
-	wrong := exp
-	wrong.SeriesHash = "not-the-effective-hash"
-	_, err = store.CommitTimeSeriesBatch(ctx, wrong, row)
-	var mismatch PeriodHashMismatchError
-	require.ErrorAs(t, err, &mismatch, "与生效表不符的 hash 必须拒绝")
-
-	// 之前的周期没有任何生效项，不能凭空建周期。
-	early := snapshotExpectation(period.Add(-time.Minute), "BTC-USDT", "ETH-USDT")
-	_, err = store.CommitTimeSeriesBatch(ctx, early, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period.Add(-time.Minute), "BTC-USDT")}})
-	require.ErrorAs(t, err, &missing)
-
-	// 已过截止时间：拒绝且不建立周期。
-	clock.set(period.Add(time.Minute + 15*time.Second))
-	_, err = store.CommitTimeSeriesBatch(ctx, exp, row)
-	var late PeriodDeadlinePassedError
-	require.ErrorAs(t, err, &late)
-	_, found, err := store.PeriodStatusByKey(ctx, "crypto", "bars", "1m", period.Unix(), false)
-	require.NoError(t, err)
-	require.False(t, found, "迟到拒绝不得建立周期")
-
-	// 另一个周期：只提交一半，到点后 degraded，缺失列表包含从未提交的标的。
-	next := period.Add(time.Minute)
-	clock.set(next.Add(61 * time.Second))
-	exp2 := snapshotExpectation(next, "BTC-USDT", "ETH-USDT")
-	_, err = store.CommitTimeSeriesBatch(ctx, exp2, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(next, "BTC-USDT")}})
-	require.NoError(t, err)
-	clock.set(next.Add(time.Minute + 20*time.Second))
-	status, err := store.FinalizeDatasetPeriod(ctx, exp2, clock.now())
-	require.NoError(t, err)
-	require.Equal(t, "degraded", status)
-	marker := collectorPeriodMarkerFromOutbox(t, store)
-	require.Equal(t, []string{"ETH-USDT"}, marker.GetFailedSubjects(), "从未提交的标的同样列为缺失")
-}
-
-func TestConcurrentLazyCommitsCreateOnePeriod(t *testing.T) {
-	period := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
-	clock := newPeriodReceiptClock(period.Add(61 * time.Second))
-	store := newPeriodReceiptStore(t, clock)
-	ctx := context.Background()
-	subjects := []string{"A-USDT", "B-USDT", "C-USDT", "D-USDT"}
-	err := registerAtPeriod(store, clock, snapshotSeries(subjects...), period)
-	require.NoError(t, err)
-	exp := snapshotExpectation(period, subjects...)
-	var wg sync.WaitGroup
-	errs := make([]error, len(subjects))
-	for i, subject := range subjects {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, errs[i] = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: uint32(i), Row: periodRowForTest(period, subject)}})
-		}()
-	}
-	wg.Wait()
-	for _, err := range errs {
-		require.NoError(t, err)
-	}
-	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
-}
-
-func TestLegacyEnsureAndCommitStillWorkAlongsideLazyPeriods(t *testing.T) {
-	period := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
-	clock := newPeriodReceiptClock(period.Add(10 * time.Second))
-	store := newPeriodReceiptStore(t, clock)
-	ctx := context.Background()
-	exp := periodExpectationForTest(period, 2)
-	exp.DeadlineAt = period.Add(time.Hour).Unix()
-	_, err := store.EnsureDatasetPeriod(ctx, exp)
-	require.NoError(t, err)
-	got, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
-	require.NoError(t, err)
-	require.Equal(t, "waiting", got.Status)
-	// 旧周期内嵌快照，读取不依赖共享快照存储。
-	progress, found, err := store.PeriodStatusByKey(ctx, "crypto", "bars", "1m", period.Unix(), true)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, progress.SeriesSnapshot, 2)
-}
-
-func TestLazyPeriodSurvivesReopen(t *testing.T) {
-	dir := t.TempDir()
-	period := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
-	clock := newPeriodReceiptClock(period.Add(61 * time.Second))
-	open := func() *Store {
-		store, err := Open(Options{Path: dir + "/node", NodeID: "node-a", PeriodNow: clock.now})
-		require.NoError(t, err)
-		return store
-	}
-	store := open()
-	ctx := context.Background()
-	err := registerAtPeriod(store, clock, snapshotSeries("BTC-USDT", "ETH-USDT"), period)
-	require.NoError(t, err)
-	exp := snapshotExpectation(period, "BTC-USDT", "ETH-USDT")
-	_, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
-	require.NoError(t, err)
-	require.NoError(t, store.Close())
-
-	store = open()
-	defer store.Close()
-	progress, found, err := store.PeriodStatusByKey(ctx, "crypto", "bars", "1m", period.Unix(), true)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, []uint32{1}, PeriodMissingIndexes(progress.ExpectedCount, progress.Bitmap))
-	// 截止 worker 能找到懒建立的周期。
-	clock.set(period.Add(time.Minute + 30*time.Second))
-	n, err := store.FinalizeWaitingDatasetPeriods(ctx, clock.now(), 100)
-	require.NoError(t, err)
-	require.Equal(t, 1, n)
+	var stale StaleEffectiveFromError
+	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT", "ETH-USDT"), period.Add(4*time.Minute).Unix())
+	require.ErrorAs(t, err, &stale, "P 之后已有周期时不允许登记")
+	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT", "ETH-USDT"), period.Add(6*time.Minute).Unix())
+	require.NoError(t, err, "已有周期之后的生效点可以登记")
 }
 
 func TestRegisterSeriesSnapshotRejectsFarFutureAndAmbiguousSeries(t *testing.T) {
-	clock := newPeriodReceiptClock(time.Date(2026, 10, 11, 12, 0, 30, 0, time.UTC))
-	store := newPeriodReceiptStore(t, clock)
+	clock := newGoldenClock(time.Date(2026, 10, 11, 12, 0, 30, 0, time.UTC))
+	store := newGoldenStore(t, clock)
 	ctx := context.Background()
 	soon := time.Date(2026, 10, 11, 12, 5, 0, 0, time.UTC).Unix()
 	_, err := store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT"), soon)
@@ -255,13 +100,4 @@ func TestRegisterSeriesSnapshotRejectsFarFutureAndAmbiguousSeries(t *testing.T) 
 	dup := append(snapshotSeries("BTC-USDT"), seriesset.Series{SubjectID: "btc-usdt"})
 	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", dup, soon+600)
 	require.Error(t, err)
-}
-
-// registerAtPeriod 在 P 之前登记快照：首次登记同样要求 P 晚于 Storage 当前时间，登记后恢复时钟。
-func registerAtPeriod(store *Store, clock *periodReceiptClock, series []seriesset.Series, period time.Time) error {
-	restore := clock.now()
-	clock.set(period.Add(-time.Minute))
-	defer clock.set(restore)
-	_, err := store.RegisterSeriesSnapshot(context.Background(), "crypto", "bars", "1m", series, period.Unix())
-	return err
 }

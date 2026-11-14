@@ -47,7 +47,7 @@ func (s *Service) Trigger(ctx context.Context) error {
 	return nil
 }
 
-// Maintain 是维护定时器（每分钟一次）：回收过期租约；每小时刷新各任务的保留期与 DataNode、清理运行记录；每天回收空闲页；
+// Maintain 是维护定时器（每分钟一次）：回收过期租约；每小时刷新各任务的保留期与数据集元数据、清理运行记录；每天回收空闲页；
 // 最后在距上次成功满 10 分钟时刷新避让规则（读取各空间的采集频率，合计不超过 20 秒）。
 func (s *Service) Maintain(ctx context.Context) error {
 	now := s.clock()
@@ -102,7 +102,7 @@ func (s *Service) Maintain(ctx context.Context) error {
 	return firstErr
 }
 
-// refreshDatasets 从 Storage 读取各任务数据集的线上保留期与 DataNode。单个数据集失败不影响其他数据集。
+// refreshDatasets 从 Storage 读取各任务数据集的线上保留期与元数据。单个数据集失败不影响其他数据集。
 func (s *Service) refreshDatasets(ctx context.Context) error {
 	tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)
 	if err != nil {
@@ -116,7 +116,7 @@ func (s *Service) refreshDatasets(ctx context.Context) error {
 			log.WarnContextf(ctx, "archive maintain: refresh dataset %s/%s: %v", task.SpaceID, task.DatasetID, err)
 			continue
 		}
-		if err := s.store.UpdateTaskDataset(ctx, task.SpaceID, task.DatasetID, ds.DataNodeID, ds.Retention, metaJSON(ds)); err != nil {
+		if err := s.store.UpdateTaskDataset(ctx, task.SpaceID, task.DatasetID, ds.Retention, metaJSON(ds)); err != nil {
 			return err
 		}
 	}

@@ -335,7 +335,7 @@ pacing:
   request_interval: 200ms
   max_bytes_per_second: 512KB
   max_concurrent_runs: 4
-  max_runs_per_data_node: 2
+  max_storage_runs: 2
   page_rows: ${PAGE_ROWS}
 
 health:

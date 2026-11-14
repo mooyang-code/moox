@@ -34,8 +34,8 @@ type Store interface {
 const (
 	DefaultEngineLeaseTTL = 45 * time.Second
 	DefaultJobLeaseTTL    = 15 * time.Minute
-	// DefaultMaxRunningJobs 同时只跑一个补算作业：补算整窗口读取源数据，DataNode 通常只有几个核，
-	// 并发的回填会让在线计算也读不动（2026-10-14 两个 1h 因子任务同时回填把 storage-node 打到 330% CPU）。
+	// DefaultMaxRunningJobs 同时只跑一个补算作业：补算整窗口读取源数据，存储机通常只有几个核，
+	// 并发的回填会让在线计算也读不动（2026-10-14 两个 1h 因子任务同时回填把存储进程打到 330% CPU）。
 	DefaultMaxRunningJobs = 1
 )
 

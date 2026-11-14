@@ -28,32 +28,12 @@ func invoke[T any](ctx context.Context, c *Client, service, method string, reque
 	return response, nil
 }
 
-func (c *Client) UpsertFields(ctx context.Context, request *storagepb.PrimaryUpsertFieldsReq, options ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
-	return invoke[storagepb.PrimaryUpsertFieldsRsp](ctx, c, "PrimaryStore", "UpsertFields", request, options)
-}
-
-func (c *Client) ReadTimeSeriesRows(ctx context.Context, request *storagepb.ReadTimeSeriesRowsReq, options ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
-	return invoke[storagepb.ReadTimeSeriesRowsRsp](ctx, c, "PrimaryStore", "ReadTimeSeriesRows", request, options)
-}
-
 func (c *Client) ReadRows(ctx context.Context, request *storagepb.PrimaryReadRowsReq, options ...client.Option) (*storagepb.PrimaryReadRowsRsp, error) {
 	return invoke[storagepb.PrimaryReadRowsRsp](ctx, c, "PrimaryStore", "ReadRows", request, options)
 }
 
-func (c *Client) GetSpace(ctx context.Context, request *storagepb.GetSpaceReq, options ...client.Option) (*storagepb.GetSpaceRsp, error) {
-	return invoke[storagepb.GetSpaceRsp](ctx, c, "Metadata", "GetSpace", request, options)
-}
-
 func (c *Client) GetDataset(ctx context.Context, request *storagepb.GetDatasetReq, options ...client.Option) (*storagepb.GetDatasetRsp, error) {
 	return invoke[storagepb.GetDatasetRsp](ctx, c, "Metadata", "GetDataset", request, options)
-}
-
-func (c *Client) GetDataNode(ctx context.Context, request *storagepb.GetDataNodeReq, options ...client.Option) (*storagepb.GetDataNodeRsp, error) {
-	return invoke[storagepb.GetDataNodeRsp](ctx, c, "Metadata", "GetDataNode", request, options)
-}
-
-func (c *Client) ListDatasetColumns(ctx context.Context, request *storagepb.ListDatasetColumnsReq, options ...client.Option) (*storagepb.ListDatasetColumnsRsp, error) {
-	return invoke[storagepb.ListDatasetColumnsRsp](ctx, c, "Metadata", "ListDatasetColumns", request, options)
 }
 
 func (c *Client) ListDatasetSubjects(ctx context.Context, request *storagepb.ListDatasetSubjectsReq, options ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {

@@ -125,13 +125,13 @@ func earliestBackfill(retention string, now time.Time) (time.Time, bool, error) 
 	return now.Add(-limit).Add(24 * time.Hour), true, nil
 }
 
-// ErrInvalidDataset 表示数据集不能归档（不是时序数据集、未激活或 ID 为空）。
+// ErrInvalidDataset 表示数据集不能归档（不是时序数据集、状态不是 active 或 ID 为空）。
 var ErrInvalidDataset = errors.New("数据集不能归档")
 
 // ErrInvalidBackfill 表示回补起点不合法。
 var ErrInvalidBackfill = errors.New("回补起点不合法")
 
-// loadArchivableDataset 读取数据集并确认它是已激活的时序数据集。
+// loadArchivableDataset 读取数据集并确认它是状态为 active 的时序数据集。
 func (s *Service) loadArchivableDataset(ctx context.Context, spaceID, datasetID string) (Dataset, error) {
 	if strings.TrimSpace(datasetID) == "" {
 		return Dataset{}, fmt.Errorf("%w：dataset_id 不能为空", ErrInvalidDataset)
@@ -144,7 +144,7 @@ func (s *Service) loadArchivableDataset(ctx context.Context, spaceID, datasetID 
 		return Dataset{}, fmt.Errorf("%w：数据集 %s 不是时序数据集", ErrInvalidDataset, datasetID)
 	}
 	if strings.ToLower(ds.Status) != datasetActive {
-		return Dataset{}, fmt.Errorf("%w：数据集 %s 尚未激活（状态 %q）", ErrInvalidDataset, datasetID, ds.Status)
+		return Dataset{}, fmt.Errorf("%w：数据集 %s 状态不是 active（当前 %q）", ErrInvalidDataset, datasetID, ds.Status)
 	}
 	return ds, nil
 }
@@ -186,7 +186,7 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 	}
 	task := store.Task{
 		MetaJSON: metaJSON(ds), Purpose: purposeOf(ds), DirName: dirName,
-		SpaceID: space, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, DataNodeID: ds.DataNodeID, Retention: ds.Retention,
+		SpaceID: space, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention,
 		PullEveryBars: n, IntervalSeconds: int(interval / time.Second), BackfillFrom: backfill, Status: store.StatusEnabled, Creator: "console",
 	}
 	if req.GetPaused() {
@@ -457,7 +457,7 @@ func (m *MgrService) PrepareArchiveTask(ctx context.Context, req *archivepb.Prep
 		return &archivepb.PrepareArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
 	rsp := &archivepb.PrepareArchiveTaskRsp{
-		RetInfo: success(), Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention, DataNodeId: ds.DataNodeID,
+		RetInfo: success(), Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention,
 		RecommendedPullEveryBars: schedule.DefaultPullEveryBars,
 	}
 	if earliest, ok, _ := earliestBackfill(ds.Retention, s.clock()); ok {

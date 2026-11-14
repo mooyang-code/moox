@@ -124,6 +124,8 @@
 | `data rows export` | 导出 Dataset 行为 JSON |
 | `data skill kline get` | 获取 K 线数据 |
 | `data view query` | 按 View 查询时序行（管理台“数据浏览”用的接口；selectors、过滤与排序写在 --data 或对应参数里） |
+| `data view state` | 查看 View 的索引状态：活动索引、代次、已建列、覆盖范围与跟随变更日志的进度 |
+| `data view wait-applied` | 等 View 跟上此刻的变更日志头部（之前的写入都已可查） |
 
 ## doctor：部署与运行诊断：告警、新部署检查、按监控事实诊断模块
 
@@ -245,21 +247,14 @@
 | 命令 | 说明 |
 | --- | --- |
 | `metadata apply` | 创建并校验存储元数据 seed |
-| `metadata dataset activate` | 激活数据集 |
-| `metadata dataset activation` | 检查数据集能否激活 |
 | `metadata dataset add-column` | 给数据集加列（或修改列） |
 | `metadata dataset columns` | 列出数据集的列 |
 | `metadata dataset create` | 创建数据集（保留期不在这里设：由 Storage 的保留策略文件按空间与频率决定） |
-| `metadata dataset delete` | 删除数据集的元数据（默认只预览，--yes 才执行；删除采集结果用 collector task delete-result） |
+| `metadata dataset delete` | 删除数据集（服务端先删元数据再删行，默认只预览，--yes 才执行；删除采集结果用 collector task delete-result） |
 | `metadata dataset list` | 列出数据集 |
-| `metadata dataset rebind` | 把数据集换绑到另一个存储节点（默认只预览，--yes 才执行） |
 | `metadata dataset show` | 查看数据集 |
 | `metadata dataset subjects` | 列出数据集里有数据的标的 |
-| `metadata dataset update` | 修改数据集的名称、说明与状态（数据来源、类型、频率、存储节点创建后不可变，换节点用 rebind） |
-| `metadata device create` | 登记存储设备 |
-| `metadata device list` | 列出存储设备 |
-| `metadata device show` | 查看存储设备 |
-| `metadata device update` | 修改存储设备 |
+| `metadata dataset update` | 修改数据集的名称、说明与状态（数据来源、类型、频率创建后不可变） |
 | `metadata field batch-update` | 批量调整字段的分组或状态 |
 | `metadata field create` | 创建字段 |
 | `metadata field list` | 列出字段 |
@@ -289,13 +284,12 @@
 | `metadata tag members` | 给手动标签增删成员（用于验证标的变更对采集计划的影响） |
 | `metadata tag show` | 查看标签 |
 | `metadata tag upsert` | 新建或修改标签 |
-| `metadata view add-column` | 给 View 加列（会增加存储机内存占用） |
-| `metadata view columns` | 列出 View 的列 |
+| `metadata view columns` | 列出 View 的列（由数据集启用的列推出） |
 | `metadata view create` | 创建 View（会增加存储机内存占用，先按 skill 的 storage.md 估算） |
 | `metadata view delete` | 删除 View（默认只预览，--yes 才执行；离线删除用 storage delete-view） |
 | `metadata view list` | 列出 View |
 | `metadata view show` | 查看 View |
-| `metadata view update` | 修改 View 定义 |
+| `metadata view update` | 修改 View 定义（列等于数据集启用的列，不能单独改） |
 
 ## monitor：Monitor：健康总览、数据到达历史、主机指标与告警屏蔽
 
@@ -386,21 +380,13 @@
 | `space show` | 查看 Storage 里一个空间的元数据 |
 | `space update` | 修改空间 |
 
-## storage：存储节点登记、View 维护与元数据重置
+## storage：View 维护与元数据重置
 
 | 命令 | 说明 |
 | --- | --- |
 | `storage delete-view` | 离线删除一个 View 的元数据（不带 --yes 时存储机上的程序会拒绝执行） |
-| `storage force-rebuild-view` | 删除旧 View、清空 durable consumer 状态并从头重建（默认只预览，--yes 才执行） |
-| `storage node delete` | 删除一个存储节点登记 |
-| `storage node list` | 列出存储节点登记 |
-| `storage node show` | 查看存储节点登记 |
-| `storage node update` | 修改存储节点的名称或状态 |
-| `storage period-inventory` | 只读盘点 DataNode 的周期完成标记（要求 DataNode 没有打开该数据库） |
-| `storage purge-dataset-events` | 精确清理一个数据集在 EventBus 里的历史事件（默认只预览，--yes 才执行） |
-| `storage repair-view` | 清理 View 消费积压并重建索引（默认只预览，--yes 才执行） |
+| `storage repair-view` | 重建指定 View 的索引（默认只预览，--yes 才执行） |
 | `storage reset-metadata` | 备份后清空全部业务定义并重新导入种子（Storage 必须已停止；默认只预览，--yes 才执行） |
-| `storage reset-view-consumers` | 删除所有 View durable/历史消息/索引并按回溯窗口重新构建（默认只预览，--yes 才执行） |
 
 ## strategy：策略定义、实例、结果、历史回放与模板（调用 StrategyMgr）
 

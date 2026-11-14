@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/notification"
 	"gorm.io/gorm"
 )
@@ -110,8 +111,7 @@ func listAllMonitorChecks(ctx context.Context, repositories *store.Repositories)
 }
 
 // 主机资源告警需要连续超过阈值的采样次数。HostAgent 每分钟采样一次（整分 0 秒），
-// CPU 3 次约 3 分钟、内存 5 次约 5 分钟、磁盘 3 次约 3 分钟。不改成更密的采样：
-// mooxsys 视图每个序列只保留最近 5000 根，每分钟采样约能保留 3.5 天的主机指标历史。
+// CPU 3 次约 3 分钟、内存 5 次约 5 分钟、磁盘 3 次约 3 分钟。
 var hostFailureThresholds = map[string]int{
 	hostmetrics.HostMetricCPU:             3,
 	hostmetrics.HostMetricMemory:          5,
@@ -127,7 +127,7 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 		return err
 	}
 	definitions := map[string]string{
-		// CPU 阈值取 80%、连续约 3 分钟：2026-10-14 两个 1h 因子任务回填，storage-node 吃掉 4 核主机的
+		// CPU 阈值取 80%、连续约 3 分钟：2026-10-14 两个 1h 因子任务回填，Storage 吃掉 4 核主机的
 		// 330%–380% CPU（整机 82%–95%），读窗口一再超时，却没有一次连续 5 分钟都不低于 90%，原来的规则一条告警也没出。
 		hostmetrics.HostMetricCPU:    `{"threshold":80,"recovery_threshold":70}`,
 		hostmetrics.HostMetricMemory: `{"threshold":90,"recovery_threshold":80}`,
@@ -139,7 +139,7 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 			failureThreshold := hostFailureThresholds[metric]
 			checkID := hostmetrics.HostRuleKey(agent.AgentID, metric)
 			rule := &domain.AlertRule{
-				SpaceID: hostmetrics.SpaceID, RuleID: "default:" + checkID, CheckID: checkID,
+				SpaceID: events.SystemSpaceID, RuleID: "default:" + checkID, CheckID: checkID,
 				FailureThreshold: failureThreshold, SuccessThreshold: 1,
 				MinimumReminderIntervalSeconds: 300, SendOnResolved: true, Enabled: true,
 				Description: definition,

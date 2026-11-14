@@ -3,7 +3,6 @@ package schema
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -30,15 +29,6 @@ type metadataSeedGrainContract struct {
 		PrimaryDatasetID string   `yaml:"dataset_id"`
 		GrainKeys        []string `yaml:"grain_keys"`
 	} `yaml:"views"`
-	ViewColumns []struct {
-		SpaceID    string `yaml:"space_id"`
-		ViewID     string `yaml:"view_id"`
-		ColumnName string `yaml:"column_name"`
-	} `yaml:"view_columns"`
-	Devices []struct {
-		DeviceID string `yaml:"device_id"`
-		Engine   string `yaml:"engine"`
-	} `yaml:"devices"`
 }
 
 func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
@@ -82,22 +72,7 @@ func TestDefaultSetupSeedTimeSeriesDatasetsDeclareCanonicalFreq(t *testing.T) {
 	}
 }
 
-func TestDefaultSetupSeedDeclaresArchiveDevice(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml")
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err)
-	var seed metadataSeedGrainContract
-	require.NoError(t, yaml.Unmarshal(raw, &seed))
-	for _, device := range seed.Devices {
-		if device.DeviceID == "parquet-local" {
-			require.Equal(t, "parquet", device.Engine)
-			return
-		}
-	}
-	t.Fatal("default setup metadata does not declare parquet-local")
-}
-
-func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
+func TestDefaultSetupSeedHasNoCollectorDatasetsAndKeepsTheOthers(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml")
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -109,27 +84,13 @@ func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
 		require.NotContains(t, indexes, key, "duplicate Dataset identity")
 		indexes[key] = i
 	}
-	owners := []string{
-		"stockus/dataset_stockus_equity_kline_1d",
-	}
-	for _, key := range owners {
-		t.Run(key, func(t *testing.T) {
-			index, found := indexes[key]
-			require.True(t, found, "raw market Dataset is missing")
-			dataset := seed.Datasets[index]
-			require.Equal(t, "time_series", dataset.DataKind)
-			require.True(t, strings.HasSuffix(dataset.DatasetID, "_"+dataset.Freq), "market Dataset ID must end with its freq %q", dataset.Freq)
-			require.Equal(t, "collector", dataset.Attributes["owner_module"])
-			require.Equal(t, "raw_collection", dataset.Attributes["dataset_role"])
-		})
+	// 采集的结果数据集由采集任务派生，种子里不再放原始行情数据集。
+	for _, dataset := range seed.Datasets {
+		require.NotEqual(t, "collector", dataset.Attributes["owner_module"], "种子里不放采集的行情数据集：%s/%s", dataset.SpaceID, dataset.DatasetID)
 	}
 	preserved := map[string]struct{ kind, role string }{
 		"stockcn/dataset_stockcn_financial_statement_metric": {"record", ""},
 		"stockcn/dataset_stockcn_financial_summary":          {"record", ""},
-		"mooxsys/dataset_mooxsys_host_resource":              {"time_series", ""},
-		"mooxsys/dataset_mooxsys_host_filesystem":            {"time_series", ""},
-		"mooxsys/dataset_mooxsys_host_disk":                  {"time_series", ""},
-		"mooxsys/dataset_mooxsys_host_network":               {"time_series", ""},
 	}
 	for key, want := range preserved {
 		t.Run(key, func(t *testing.T) {

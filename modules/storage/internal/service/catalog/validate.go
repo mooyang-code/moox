@@ -1,13 +1,12 @@
 package catalog
 
 import (
-	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -20,6 +19,20 @@ var reservedTimeSeriesSystemColumns = map[string]struct{}{
 	"freq":       {},
 	"data_time":  {},
 	"series_tag": {},
+	// DuckDB View 索引内部存行属性的列。
+	"__moox_attributes": {},
+}
+
+// datasetColumnNamePattern 是数据集列名的标识符规则：列名会原样成为 View 索引里的列名。
+var datasetColumnNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validateDatasetColumnName 拒绝系统列名与不是标识符的列名：View 的列等于数据集的列，
+// 系统列名不会建进索引，记下的已建列就会和实际建出的列对不上，之后再也加不了列。
+func validateDatasetColumnName(name string) error {
+	if !datasetColumnNamePattern.MatchString(strings.TrimSpace(name)) {
+		return storeerr.Invalidf("数据集列名 %q 只能由字母、数字和下划线组成，且不能以数字开头", name)
+	}
+	return validateUserColumnName("dataset column_name", name)
 }
 
 func defaultViewGrainKeys(kind pb.DataKind) []string {
@@ -38,32 +51,14 @@ func defaultViewEngine(kind pb.DataKind) string {
 
 func validateDatasetID(datasetID string) error {
 	if !strings.HasPrefix(datasetID, "dataset_") {
-		return errors.New("dataset_id must start with dataset_")
+		return storeerr.Invalidf("dataset_id must start with dataset_")
 	}
 	return validateLowerSnakeID("dataset_id", datasetID, 50)
 }
 
-func validateDatasetDataNodeID(dataNodeID string) error {
-	if strings.TrimSpace(dataNodeID) == "" {
-		return errors.New("data_node_id is required")
-	}
-	return nil
-}
-
-func validateDatasetDataNodeUpdate(existing *pb.Dataset, dataNodeID string) error {
-	dataNodeID = strings.TrimSpace(dataNodeID)
-	if dataNodeID == "" || existing.GetDataNodeId() == dataNodeID {
-		return nil
-	}
-	if existing.GetStatus() == "active" {
-		return errors.New("active dataset data_node_id is immutable")
-	}
-	return errors.New("dataset data_node_id is immutable; use RebindDatasetDataNode while disabled")
-}
-
 func validateViewID(viewID string) error {
 	if !strings.HasPrefix(viewID, "view_") {
-		return errors.New("view_id must start with view_")
+		return storeerr.Invalidf("view_id must start with view_")
 	}
 	// Collector View IDs include the complete tag, task type, and frequency.
 	// Tag IDs may be 64 characters, so the View limit must leave room for those
@@ -74,69 +69,37 @@ func validateViewID(viewID string) error {
 func validateChineseDisplayName(field string, value string) error {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return fmt.Errorf("%s is required", field)
+		return storeerr.Invalidf("%s is required", field)
 	}
 	if utf8.RuneCountInString(value) > maxChineseDisplayNameRunes {
-		return fmt.Errorf("%s must be <= %d characters", field, maxChineseDisplayNameRunes)
+		return storeerr.Invalidf("%s must be <= %d characters", field, maxChineseDisplayNameRunes)
 	}
 	for _, r := range value {
 		if unicode.Is(unicode.Han, r) {
 			return nil
 		}
 	}
-	return fmt.Errorf("%s must contain Chinese characters", field)
+	return storeerr.Invalidf("%s must contain Chinese characters", field)
 }
 
 // validateColumnDisplayName 要求列带显示名；显示名由建列的模块写入，Storage 不推断、不按业务规则校验。
 func validateColumnDisplayName(field string, attrs map[string]string) error {
 	if strings.TrimSpace(attrs["display_name"]) == "" {
-		return fmt.Errorf("%s is required", field)
+		return storeerr.Invalidf("%s is required", field)
 	}
 	return nil
-}
-
-// isDatasetViewColumn reports whether a View column reads a Dataset column.
-// Metadata stores an unspecified origin type as a dataset column.
-func isDatasetViewColumn(column *pb.ViewColumn) bool {
-	if column == nil {
-		return false
-	}
-	switch column.GetOriginType() {
-	case pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION:
-		return false
-	}
-	return true
 }
 
 func validateLowerSnakeID(field string, value string, maxLen int) error {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return fmt.Errorf("%s is required", field)
+		return storeerr.Invalidf("%s is required", field)
 	}
 	if len(value) > maxLen {
-		return fmt.Errorf("%s length must be <= %d", field, maxLen)
+		return storeerr.Invalidf("%s length must be <= %d", field, maxLen)
 	}
 	if !lowerSnakeIDPattern.MatchString(value) {
-		return fmt.Errorf("%s must use lower snake case letters, digits and underscores", field)
-	}
-	return nil
-}
-
-func validateViewColumnName(column *pb.ViewColumn) error {
-	if err := validateUserColumnName("view column_name", column.GetColumnName()); err != nil {
-		return err
-	}
-	if !isDatasetViewColumn(column) {
-		return nil
-	}
-	// A View indexes exactly one Dataset, so a dataset column is the bare
-	// Dataset column name; View.dataset_id already names the source Dataset.
-	originID := strings.TrimSpace(column.GetOriginId())
-	if originID == "" || strings.Contains(originID, ".") {
-		return errors.New("dataset view column origin_id must be the bare Dataset column name")
-	}
-	if strings.TrimSpace(column.GetColumnName()) != originID {
-		return errors.New("dataset view column column_name must equal origin_id")
+		return storeerr.Invalidf("%s must use lower snake case letters, digits and underscores", field)
 	}
 	return nil
 }
@@ -144,19 +107,7 @@ func validateViewColumnName(column *pb.ViewColumn) error {
 func validateUserColumnName(field string, name string) error {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if _, reserved := reservedTimeSeriesSystemColumns[name]; reserved {
-		return fmt.Errorf("%s %q is a reserved system column", field, name)
-	}
-	return nil
-}
-
-func validateViewColumns(columns []*pb.ViewColumn) error {
-	for _, column := range columns {
-		if column == nil {
-			continue
-		}
-		if err := validateViewColumnName(column); err != nil {
-			return err
-		}
+		return storeerr.Invalidf("%s %q is a reserved system column", field, name)
 	}
 	return nil
 }

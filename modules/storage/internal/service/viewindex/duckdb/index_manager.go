@@ -138,7 +138,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		createColumns = append(createColumns, quote(name)+" "+duckType(valueType))
 	}
 	statement := fmt.Sprintf(`
-		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '', rows_per_series UBIGINT NOT NULL DEFAULT 0);
+		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '', rows_per_series UBIGINT NOT NULL DEFAULT 0, change_store_id VARCHAR NOT NULL DEFAULT '', change_seq UBIGINT NOT NULL DEFAULT 0, built_change_seq UBIGINT NOT NULL DEFAULT 0, columns_json VARCHAR NOT NULL DEFAULT '[]', view_created_at VARCHAR NOT NULL DEFAULT '');
 		CREATE TABLE view_columns (column_name VARCHAR PRIMARY KEY, value_type INTEGER NOT NULL);
 		CREATE TABLE view_series_counts (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, series_tag VARCHAR NOT NULL, row_count UBIGINT NOT NULL, PRIMARY KEY (subject_id, freq, series_tag));
 		CREATE TABLE view_rows (%s, PRIMARY KEY (subject_id, freq, data_time, series_tag));
@@ -147,7 +147,12 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		cleanupTemp()
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta (singleton, view_version, schema_hash, primary_dataset_id, space_id, updated_at, rows_per_series) VALUES (1, ?, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano), schema.RowsPerSeries); err != nil {
+	builtColumns, err := json.Marshal(viewindex.EncodeBuiltColumns(schema.Columns))
+	if err != nil {
+		cleanupTemp()
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta (singleton, view_version, schema_hash, primary_dataset_id, space_id, updated_at, rows_per_series, columns_json, view_created_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano), schema.RowsPerSeries, string(builtColumns), schema.ViewCreatedAt); err != nil {
 		cleanupTemp()
 		return err
 	}
@@ -229,17 +234,9 @@ func (m *IndexManager) ExtendColumns(ctx context.Context, id string, current, ne
 	if version == next.ViewVersion && schemaHash == next.SchemaHash && samePhysicalColumns(physicalColumns, targetColumns) {
 		return nil
 	}
-	if version < current.ViewVersion || version > next.ViewVersion ||
-		!isPhysicalAppendOnlyState(physicalColumns, oldColumns, targetColumns) {
-		return fmt.Errorf("%w: DuckDB physical state is not an append-only prefix at revision %d", viewindex.ErrSchemaExtensionConflict, version)
-	}
-	if version == current.ViewVersion {
-		if schemaHash != current.SchemaHash || !samePhysicalColumns(physicalColumns, oldColumns) {
-			return fmt.Errorf("%w: DuckDB active schema differs from the expected current contract", viewindex.ErrSchemaExtensionConflict)
-		}
-		// 物理修订号比当前大：上次加列后元数据没提交，这期间又声明了新列时，在上次的列之后继续追加。
-	} else if !matchesAppendOnlyPhysicalPrefix(physicalColumns, next, version, schemaHash) {
-		return fmt.Errorf("%w: DuckDB intermediate schema is not an append-only target prefix", viewindex.ErrSchemaExtensionConflict)
+	// 加列与列契约在同一个事务里提交：物理状态只会是加列之前或之后，不会停在中间。
+	if version != current.ViewVersion || schemaHash != current.SchemaHash || !samePhysicalColumns(physicalColumns, oldColumns) {
+		return fmt.Errorf("%w: DuckDB active schema differs from the expected current contract at revision %d", viewindex.ErrSchemaExtensionConflict, version)
 	}
 	for _, column := range next.Columns {
 		name := column.GetColumnName()
@@ -253,8 +250,12 @@ func (m *IndexManager) ExtendColumns(ctx context.Context, id string, current, ne
 			return err
 		}
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE view_meta SET view_version = ?, schema_hash = ?, updated_at = ?
-		WHERE singleton = 1 AND view_version = ? AND schema_hash = ?`, next.ViewVersion, next.SchemaHash,
+	builtColumns, err := json.Marshal(viewindex.EncodeBuiltColumns(next.Columns))
+	if err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE view_meta SET view_version = ?, schema_hash = ?, columns_json = ?, updated_at = ?
+		WHERE singleton = 1 AND view_version = ? AND schema_hash = ?`, next.ViewVersion, next.SchemaHash, string(builtColumns),
 		time.Now().UTC().Format(time.RFC3339Nano), version, schemaHash)
 	if err != nil {
 		return err
@@ -271,6 +272,15 @@ func (m *IndexManager) ExtendColumns(ctx context.Context, id string, current, ne
 	m.schema[id] = targetColumns
 	m.mu.Unlock()
 	return nil
+}
+
+// decodeBuiltColumns 解析 view_meta 里记下的已建列。
+func decodeBuiltColumns(raw string) ([]*pb.ViewColumn, error) {
+	var built []viewindex.BuiltColumn
+	if err := json.Unmarshal([]byte(raw), &built); err != nil {
+		return nil, fmt.Errorf("解析 View 索引记下的已建列：%w", err)
+	}
+	return viewindex.DecodeBuiltColumns(built), nil
 }
 
 func readViewColumns(ctx context.Context, tx *sql.Tx) (map[string]pb.FieldValueType, error) {
@@ -304,38 +314,6 @@ func samePhysicalColumns(left, right map[string]pb.FieldValueType) bool {
 		}
 	}
 	return true
-}
-
-func isPhysicalAppendOnlyState(physical, current, target map[string]pb.FieldValueType) bool {
-	if len(physical) < len(current) || len(physical) > len(target) {
-		return false
-	}
-	for name, valueType := range current {
-		if physical[name] != valueType {
-			return false
-		}
-	}
-	for name, valueType := range physical {
-		if target[name] != valueType {
-			return false
-		}
-	}
-	return true
-}
-
-func matchesAppendOnlyPhysicalPrefix(physical map[string]pb.FieldValueType, target viewindex.ViewIndexSchema, version uint64, schemaHash string) bool {
-	if len(physical) == 0 || len(physical) > len(target.Columns) {
-		return false
-	}
-	columns := target.Columns[:len(physical)]
-	if !samePhysicalColumns(physical, schemaColumns(columns)) {
-		return false
-	}
-	prefix := viewindex.ViewIndexSchema{
-		SpaceID: target.SpaceID, ViewID: target.ViewID, PrimaryDatasetID: target.PrimaryDatasetID,
-		ViewVersion: version, Engine: target.Engine, Columns: columns,
-	}
-	return viewindex.HashViewIndexSchema(prefix) == schemaHash
 }
 
 func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.ViewIndexWriteBatch) error {
@@ -393,6 +371,12 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET updated_at = ? WHERE singleton = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
+	if batch.Cursor != nil {
+		// 行与跟随位置同一个事务提交：崩溃后不会出现“行已写入、位置没记”或反过来。
+		if err := advanceChangeCursor(ctx, tx, *batch.Cursor); err != nil {
+			return err
+		}
+	}
 	commitStart := time.Now()
 	if err := tx.Commit(); err != nil {
 		return err
@@ -404,6 +388,39 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 			upsertTook.Round(time.Millisecond), time.Since(commitStart).Round(time.Millisecond), total.Round(time.Millisecond))
 	}
 	return nil
+}
+
+// advanceChangeCursor 记下跟随位置：同一个存储下只前进不后退，存储换了（重建后）直接覆盖。
+func advanceChangeCursor(ctx context.Context, tx *sql.Tx, cursor viewindex.ChangeCursor) error {
+	_, err := tx.ExecContext(ctx, `UPDATE view_meta SET change_store_id = ?, change_seq = ?
+		WHERE singleton = 1 AND NOT (change_store_id = ? AND change_seq > ?)`, cursor.StoreID, cursor.Sequence, cursor.StoreID, cursor.Sequence)
+	return err
+}
+
+// SaveFollowState 实现 viewindex.FollowStateWriter。调用方持有该索引的写锁（view_meta 只有一行，并发更新会冲突）。
+func (m *IndexManager) SaveFollowState(ctx context.Context, id string, state viewindex.FollowState) error {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return err
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := advanceChangeCursor(ctx, tx, state.Cursor); err != nil {
+		return err
+	}
+	if state.BuiltSequence > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET built_change_seq = ? WHERE singleton = 1`, state.BuiltSequence); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func batchCoverage(writes []viewindex.RowWrite) (string, string, bool) {
@@ -864,7 +881,7 @@ func resolveIncludedColumns(columns map[string]pb.FieldValueType, includes []str
 	selected := make(map[string]struct{}, len(includes))
 	for _, include := range includes {
 		if _, ok := columns[include]; !ok || isSystemColumn(include) {
-			return nil, fmt.Errorf("View column %q is not projected", include)
+			return nil, viewindex.ColumnNotProjectedError{Column: include}
 		}
 		selected[include] = struct{}{}
 	}
@@ -896,7 +913,11 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 		return viewindex.ViewIndexStats{}, err
 	}
 	var stats viewindex.ViewIndexStats
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries); err != nil {
+	var builtColumns string
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series, change_store_id, change_seq, built_change_seq, primary_dataset_id, columns_json, view_created_at FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries, &stats.Follow.Cursor.StoreID, &stats.Follow.Cursor.Sequence, &stats.Follow.BuiltSequence, &stats.DatasetID, &builtColumns, &stats.ViewCreatedAt); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	if stats.Columns, err = decodeBuiltColumns(builtColumns); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM view_rows`).Scan(&stats.EntryCount); err != nil {
@@ -1008,7 +1029,11 @@ func (m *IndexManager) StatMetadata(ctx context.Context, id string) (viewindex.V
 		return viewindex.ViewIndexStats{}, err
 	}
 	var stats viewindex.ViewIndexStats
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries); err != nil {
+	var builtColumns string
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series, change_store_id, change_seq, built_change_seq, primary_dataset_id, columns_json, view_created_at FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries, &stats.Follow.Cursor.StoreID, &stats.Follow.Cursor.Sequence, &stats.Follow.BuiltSequence, &stats.DatasetID, &builtColumns, &stats.ViewCreatedAt); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	if stats.Columns, err = decodeBuiltColumns(builtColumns); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	stats.Exists = true

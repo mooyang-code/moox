@@ -46,7 +46,7 @@ ssh = { port = 22, username = "ubuntu" }
 
 [deployments]
 control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"]
-storage = ["storage-primary", "storage-node", "storage-view", "access"]
+storage = ["storage-primary", "storage-view", "access"]
 overseas = ["trade", "egress-proxy"]
 
 [egress_proxy]

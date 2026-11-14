@@ -8,9 +8,13 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -30,26 +34,21 @@ func requestValidator(ctx context.Context, v Validator) Validator {
 	return v
 }
 
-type DataNodeClient interface {
-	UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error)
-	ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error)
+// Store 是 PrimaryStore 读写的事实存储，即同进程的 Pebble 库。
+type Store interface {
+	UpsertFields(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error)
+	ReadRows(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error)
+	ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
+	CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesRowsReq) ([]*pb.SubjectRowCount, error)
+	ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error)
+	RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, frequency string, series []seriesset.Series, effectiveFrom int64) (pebble.RegisterSnapshotResult, error)
+	CommitTimeSeriesBatch(ctx context.Context, exp pebble.DatasetPeriodExpectation, items []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error)
+	AppendDatasetMarker(ctx context.Context, raw []byte) (string, error)
+	GetDatasetPeriodCompletedMarker(ctx context.Context, spaceID, datasetID, causeEventID string, periodTime int64) (*eventpb.EventMessage, bool, error)
 }
 
-// rangeDataNodeClient 是 DataNode 的区间读取与计数入口；PrimaryStore 对所有调用方都转给它。
-type rangeDataNodeClient interface {
-	ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
-	CountTimeSeriesRows(context.Context, *pb.CountTimeSeriesRowsReq) (*pb.CountTimeSeriesRowsRsp, error)
-	ReadDatasetChanges(context.Context, *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error)
-}
-
-// Resolver 按空间与数据集找到负责的 DataNode。区间读取等能力通过类型断言发现。
-type Resolver func(ctx context.Context, spaceID, datasetID string) (DataNodeClient, error)
-type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
 type Authorizer func(*pb.AuthInfo) error
 type SnapshotProvider func() metadata.RequestSnapshot
-type ViewSyncPointReader interface {
-	MissingViewSyncPointDatasets(context.Context, string, string, string, []string) ([]string, error)
-}
 type routeKey struct{ spaceID, datasetID string }
 type DatasetRunObserver interface {
 	ObserveRun(report.DatasetObservation) error
@@ -62,41 +61,31 @@ type DeadlineRejectionObserver interface {
 }
 
 type Service struct {
-	resolve   Resolver
+	store     Store
 	validate  Validator
-	sign      AuthSigner
 	authorize Authorizer
 	snapshot  SnapshotProvider
 	metrics   DatasetRunObserver
 	rejection DeadlineRejectionObserver
-	syncPoint ViewSyncPointReader
 }
 
 type Options struct {
-	Node DataNodeClient
-	// Resolver 为空时使用固定的 Node。
-	Resolver       Resolver
+	Store          Store
 	Validator      Validator
-	AuthSigner     AuthSigner
 	Authorizer     Authorizer
 	Snapshot       SnapshotProvider
 	DatasetMetrics DatasetRunObserver
 	// DeadlineRejections 为空时不记录截止拒绝。
 	DeadlineRejections DeadlineRejectionObserver
-	SyncPoints         ViewSyncPointReader
 }
 
 func New(opts Options) (*Service, error) {
-	resolve := opts.Resolver
-	if resolve == nil && opts.Node != nil {
-		resolve = func(context.Context, string, string) (DataNodeClient, error) { return opts.Node, nil }
-	}
-	if resolve == nil {
-		return nil, errors.New("data node resolver is required")
+	if opts.Store == nil {
+		return nil, errors.New("store is required")
 	}
 	return &Service{
-		resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer,
-		snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, rejection: opts.DeadlineRejections, syncPoint: opts.SyncPoints,
+		store: opts.Store, validate: opts.Validator, authorize: opts.Authorizer,
+		snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, rejection: opts.DeadlineRejections,
 	}, nil
 }
 
@@ -143,34 +132,49 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 	}
-	node, err := s.resolve(ctx, spaceID, datasetID)
-	if err != nil {
-		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("route %s/%s: %w", spaceID, datasetID, err))}, nil
+	if err := requireActiveDataset(ctx, spaceID, datasetID); err != nil {
+		s.observeTimeSeriesRows(ctx, rows, "error", false)
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	auth, err := s.signAuth(req.GetAuthInfo())
-	if err != nil {
-		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	if _, err := s.store.UpsertFields(ctx, spaceID, datasetID, req.GetCommitId(), rows); err != nil {
+		s.observeTimeSeriesRows(ctx, rows, "error", false)
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	rsp, err := node.UpsertFields(ctx, &pb.UpsertFieldsReq{AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID, Rows: rows, CommitId: req.GetCommitId()})
-	if err != nil {
-		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("write %s/%s: %w", spaceID, datasetID, err))}, nil
+	// 写入已持久化，事件由 Outbox 转发协程异步发布。重复提交命中时同样返回全部行键。
+	keys := make([]*pb.RowKey, 0, len(rows))
+	for _, row := range rows {
+		key, err := pebble.NormalizeRowKey(row.GetKey())
+		if err != nil {
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		keys = append(keys, key)
 	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-		return &pb.PrimaryUpsertFieldsRsp{RetInfo: rsp.GetRetInfo()}, nil
+	s.observeTimeSeriesRows(ctx, rows, "success", true)
+	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
+}
+
+// requireActiveDataset 确认请求快照里有这个数据集且处于启用状态。读取按错误类别返回错误码；写入与完成标记照旧返回 INNER_ERR，
+// 让写入方（Factor 只把 INNER_ERR 当基础设施错误）稍后重试，而不是丢掉这次写入。
+func requireActiveDataset(ctx context.Context, spaceID, datasetID string) error {
+	snapshot := metadata.RequestSnapshotFromContext(ctx)
+	if snapshot == nil {
+		return errors.New("metadata cache snapshot is unavailable")
 	}
-	s.observeTimeSeriesRows(ctx, rows, "success", true, len(rsp.GetKeys()) == len(rows))
-	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: rsp.GetKeys()}, nil
+	dataset, ok := snapshot.GetDataset(spaceID, datasetID)
+	if !ok || dataset == nil {
+		return storeerr.NotFoundf("dataset %s/%s is not found", spaceID, datasetID)
+	}
+	if dataset.GetStatus() != "active" {
+		return storeerr.Invalidf("dataset %s/%s is not active", spaceID, datasetID)
+	}
+	return nil
 }
 
 func attrEquals(attrs map[string]string, key, want string) bool {
 	return strings.EqualFold(strings.TrimSpace(attrs[key]), want)
 }
 
-func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowFieldUpsert, result string, committed, accepted bool) {
+func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowFieldUpsert, result string, committed bool) {
 	if s == nil || s.metrics == nil {
 		return
 	}
@@ -265,22 +269,14 @@ func (s *Service) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq) (*pb
 	latestRecordRows := make(map[string][]*pb.RowFieldValues)
 	for _, group := range order {
 		keys := groups[group]
-		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
+		if err := requireActiveDataset(ctx, group.spaceID, group.datasetID); err != nil {
+			return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.FromError(err)}, nil
+		}
+		found, err := s.store.ReadRows(ctx, keys, req.GetColumnNames(), req.GetAttributeKeys())
 		if err != nil {
-			return nil, err
+			return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.FromError(err)}, nil
 		}
-		auth, err := s.signAuth(req.GetAuthInfo())
-		if err != nil {
-			return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-		}
-		rsp, err := node.ReadRows(ctx, &pb.ReadRowsReq{AuthInfo: auth, DatasetId: group.datasetID, Keys: keys, ColumnNames: req.GetColumnNames(), AttributeKeys: req.GetAttributeKeys()})
-		if err != nil {
-			return nil, err
-		}
-		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			return &pb.PrimaryReadRowsRsp{RetInfo: rsp.GetRetInfo()}, nil
-		}
-		for _, row := range rsp.GetRows() {
+		for _, row := range found {
 			id := rowKeyIdentity(row.GetKey())
 			rowsByKey[id] = append(rowsByKey[id], row)
 			if row.GetKey().GetRecord() != nil {
@@ -361,16 +357,6 @@ func validateRow(ctx context.Context, row *pb.RowFieldUpsert, validator Validato
 		return validator.ValidateRow(ctx, row)
 	}
 	return nil
-}
-
-func (s *Service) signAuth(auth *pb.AuthInfo) (*pb.AuthInfo, error) {
-	if auth == nil {
-		return nil, errors.New("auth_info is required")
-	}
-	if s.sign == nil {
-		return auth, nil
-	}
-	return s.sign(auth)
 }
 
 func rowKeyIdentity(key *pb.RowKey) string {

@@ -18,9 +18,6 @@ type metadataSpaceChoice struct {
 func metadataSpaceCatalog(seed metadataSeed) []metadataSpaceChoice {
 	choices := make([]metadataSpaceChoice, 0, len(seed.Spaces))
 	for _, item := range seed.Spaces {
-		if item.Attributes["scope"] == "internal" {
-			continue
-		}
 		choices = append(choices, metadataSpaceChoice{SpaceID: item.SpaceID, Name: item.Name, Description: item.Description})
 	}
 	return choices
@@ -38,9 +35,6 @@ func businessSetupSpaces(seed metadataSeed) ([]setupclient.Space, error) {
 			return nil, fmt.Errorf("duplicate metadata space %q", spaceID)
 		}
 		seen[spaceID] = struct{}{}
-		if item.Attributes["scope"] == "internal" {
-			continue
-		}
 		if strings.TrimSpace(item.Name) == "" || strings.TrimSpace(item.Market) == "" || strings.TrimSpace(item.Timezone) == "" {
 			return nil, fmt.Errorf("metadata space %q requires name, market, and timezone", spaceID)
 		}
@@ -87,7 +81,7 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 		selected[spaceID] = struct{}{}
 	}
 	keep := func(spaceID string) bool { _, ok := selected[spaceID]; return ok }
-	out := metadataSeed{Devices: seed.Devices}
+	out := metadataSeed{}
 	for _, item := range seed.Spaces {
 		if keep(item.SpaceID) {
 			out.Spaces = append(out.Spaces, item)
@@ -131,11 +125,6 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 	for _, item := range seed.Views {
 		if keep(item.SpaceID) {
 			out.Views = append(out.Views, item)
-		}
-	}
-	for _, item := range seed.ViewColumns {
-		if keep(item.SpaceID) {
-			out.ViewColumns = append(out.ViewColumns, item)
 		}
 	}
 	return out, nil

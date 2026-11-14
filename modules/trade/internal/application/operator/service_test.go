@@ -878,6 +878,15 @@ func (s *operatorOrderStub) ResolveUnknown(
 	return s.Cancel(ctx, spaceID, orderID)
 }
 
+func (s *operatorOrderStub) ExpireUnknown(
+	ctx context.Context,
+	spaceID string,
+	orderID string,
+	_ string,
+) (orderdomain.Order, error) {
+	return s.Cancel(ctx, spaceID, orderID)
+}
+
 func (s *operatorOrderStub) RecoverCancel(
 	ctx context.Context,
 	spaceID string,

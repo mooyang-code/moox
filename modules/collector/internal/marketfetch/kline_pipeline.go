@@ -421,18 +421,17 @@ func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row
 		return nil, nil, false, nil
 	}
 	type binding struct {
-		index         uint32
-		hash          string
-		count         uint32
-		targetTime    string
-		reservationID string
+		index      uint32
+		hash       string
+		count      uint32
+		targetTime string
 	}
 	bindings := make(map[string]binding)
 	for _, item := range req.Items {
 		seriesTag := collectionItemSeriesTag(req.SpaceID, item)
 		if len(req.Targets) == 0 {
 			if item.DatasetID == datasetID && item.SeriesHash != "" && item.ExpectedCount > 0 {
-				bindings[periodRowBindingKey(datasetID, item.SubjectID, seriesTag)] = binding{index: item.SeriesIndex, hash: item.SeriesHash, count: item.ExpectedCount, targetTime: item.TargetDataTime, reservationID: item.PeriodReservationID}
+				bindings[periodRowBindingKey(datasetID, item.SubjectID, seriesTag)] = binding{index: item.SeriesIndex, hash: item.SeriesHash, count: item.ExpectedCount, targetTime: item.TargetDataTime}
 			}
 			continue
 		}
@@ -443,7 +442,7 @@ func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row
 			if target.InstanceID != "" && item.InstanceID != "" && target.InstanceID != item.InstanceID {
 				continue
 			}
-			bindings[periodRowBindingKey(datasetID, item.SubjectID, seriesTag)] = binding{index: target.SeriesIndex, hash: target.SeriesHash, count: target.ExpectedCount, targetTime: item.TargetDataTime, reservationID: item.PeriodReservationID}
+			bindings[periodRowBindingKey(datasetID, item.SubjectID, seriesTag)] = binding{index: target.SeriesIndex, hash: target.SeriesHash, count: target.ExpectedCount, targetTime: item.TargetDataTime}
 		}
 	}
 	if len(bindings) == 0 {
@@ -477,8 +476,8 @@ func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row
 			if _, err := marketdata.ParseFrequency(req.Frequency); err != nil {
 				return nil, nil, false, fmt.Errorf("dataset %s period frequency is invalid: %w", datasetID, err)
 			}
-			expectation = &storagepb.DatasetPeriodExpectation{SpaceId: req.SpaceID, DatasetId: datasetID, Frequency: strings.TrimSpace(req.Frequency), PeriodTime: target.UTC().Unix(), SeriesHash: binding.hash, ExpectedCount: binding.count, ReservationId: binding.reservationID}
-		} else if expectation.GetSeriesHash() != binding.hash || expectation.GetExpectedCount() != binding.count || expectation.GetPeriodTime() != target.UTC().Unix() || expectation.GetReservationId() != binding.reservationID {
+			expectation = &storagepb.DatasetPeriodExpectation{SpaceId: req.SpaceID, DatasetId: datasetID, Frequency: strings.TrimSpace(req.Frequency), PeriodTime: target.UTC().Unix(), SeriesHash: binding.hash, ExpectedCount: binding.count}
+		} else if expectation.GetSeriesHash() != binding.hash || expectation.GetExpectedCount() != binding.count || expectation.GetPeriodTime() != target.UTC().Unix() {
 			return nil, nil, false, fmt.Errorf("dataset %s has mixed period expectation in one SCF request", datasetID)
 		}
 		items = append(items, &storagepb.TimeSeriesBatchRow{SeriesIndex: binding.index, Row: row})

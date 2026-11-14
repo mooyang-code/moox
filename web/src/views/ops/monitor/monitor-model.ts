@@ -166,7 +166,7 @@ export function barDelay(item: HealthDataset, nowMs: number): BarDelay {
       ratio: ratioOf(delaySeconds)
     };
   }
-  // 已按交易日历识别出最新一根、只是生产者没上报到达时间时说明原因；没有交易日历的系统数据（mooxsys）不判断到达延迟，不提示。
+  // 已按交易日历识别出最新一根、只是生产者没上报到达时间时说明原因；没有交易日历的空间不判断到达延迟，不提示。
   if (item.latest_bar_close_at) return { text: "—", tone: "idle", title: "生产者没有上报到达时间", ratio: 0 };
   return { text: "—", tone: "idle", title: "", ratio: 0 };
 }
@@ -683,6 +683,7 @@ const KIND_LABELS: Record<string, string> = {
   market_fetch: "采集计划对账",
   data_delivery: "数据投递",
   view_file: "View 索引文件",
+  view_follow: "View 跟随数据变更",
   metrics_ingest: "指标入库",
   module: "模块运行",
   balance: "账户余额同步",

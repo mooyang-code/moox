@@ -20,7 +20,7 @@ EventBus TLS CA、server 证书和每个 NATS role token 是**一份权威材料
 生成与轮换只通过 `skills/moox/scripts/eventbus-credentials.sh`（Admin CLI）。
 不要把 token 或私钥写进命令行、聊天、git 或任何制品。
 
-`internal-admin.yaml` 是 EventBus 自身的内部管理凭据，随 `eventbus` 单元安装到 EventBus 所在主机；Admin 另从数据库读取同一角色令牌代执行维护。Storage 上删除 JetStream consumer、清除数据集事件等维护操作经网关调用 Admin，不向 Storage 单元分发管理员角色，见 [`view-catchup.md`](view-catchup.md)。
+`internal-admin.yaml` 是 EventBus 自身的内部管理凭据，只随 `eventbus` 单元安装到 EventBus 所在主机，不分发给其他组件。Storage 不再消费 JetStream（View 跟随 Primary 的变更日志），没有要代为维护的 consumer。
 
 `rotate --credential <NATS用户名> --confirm` 立即替换 Admin 中该角色的 token，不保留双 token 过渡期；运行中的 broker 仍使用已加载的用户表，新 token 要在导出并安装新的 `users.yaml`、重启 EventBus 后才实际生效。因此必须同时安排 broker 与使用方更新。TLS CA 变化时所有客户端的 CA 都必须换。
 

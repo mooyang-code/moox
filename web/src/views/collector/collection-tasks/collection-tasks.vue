@@ -348,19 +348,6 @@
 
         <a-collapse v-if="!editing" :default-active-key="[]">
           <a-collapse-item key="advanced" header="高级设置">
-            <a-form-item label="结果 DataNode">
-              <a-select
-                v-model="resultConfig.data_node_id"
-                placeholder="留空使用系统默认节点"
-                :loading="loadingDataNodes"
-                allow-search
-                allow-clear
-              >
-                <a-option v-for="node in dataNodes" :key="node.node_id" :value="node.node_id">
-                  {{ node.name || node.node_id }}
-                </a-option>
-              </a-select>
-            </a-form-item>
             <a-form-item label="结果描述">
               <a-textarea v-model="resultConfig.description" :max-length="200" show-word-limit allow-clear />
             </a-form-item>
@@ -590,8 +577,8 @@ import {
   type ExtraFieldOption,
   type ResampleSourcePreview
 } from "@/api/collector";
-import { getDataset, getView, listDataNodes, listFieldGroups, listFields, listTags } from "@/api/storage/metadata";
-import type { DataNode, Field, FieldGroup, Tag } from "@/api/storage/types";
+import { getDataset, getView, listFieldGroups, listFields, listTags } from "@/api/storage/metadata";
+import type { Field, FieldGroup, Tag } from "@/api/storage/types";
 import { tagMarketType, tagSource } from "@/views/data/shared/catalog-attributes";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
@@ -646,7 +633,6 @@ const loading = ref(false);
 const submitLoading = ref(false);
 const loadingSourceTasks = ref(false);
 const loadingTags = ref(false);
-const loadingDataNodes = ref(false);
 const taskList = ref<CollectionTaskRecord[]>([]);
 const dataTypeConfigs = ref<DataTypeConfig[]>([]);
 const sourceTasks = ref<CollectionTaskRecord[]>([]);
@@ -655,7 +641,6 @@ const resamplePreview = ref<ResampleSourcePreview | null>(null);
 const resampleError = ref("");
 const tags = ref<Tag[]>([]);
 const taskTypeFields = ref<import("@/api/collector").DataTypeFieldConfig[]>([]);
-const dataNodes = ref<DataNode[]>([]);
 const editorVisible = ref(false);
 const editorMode = ref<EditorMode>("create");
 const formRef = ref<{ validate?: () => Promise<unknown>; clearValidate?: () => void }>();
@@ -753,7 +738,6 @@ const detailOutputFieldLabels = computed(() => {
   });
 });
 const resultConfig = reactive({
-  data_node_id: "",
   description: ""
 });
 
@@ -1045,7 +1029,6 @@ function resetEditor() {
   selectedOutputFields.value = [];
   originalOutputFields.value = [];
   taskTypeFields.value = [];
-  resultConfig.data_node_id = "";
   resultConfig.description = "";
 }
 
@@ -1331,10 +1314,7 @@ async function saveEditor() {
         try {
           await CreateTask({
             task,
-            result_config: {
-              data_node_id: resultSnapshot.data_node_id.trim(),
-              description: resultSnapshot.description.trim()
-            }
+            result_config: { description: resultSnapshot.description.trim() }
           });
         } catch (error) {
           // 拆成两个任务时，后一个失败要保留已建好的前一个，并告诉用户补建哪个。
@@ -1561,24 +1541,6 @@ function buildCollectionTaskParamsForUpdate(input: CollectionTaskInput) {
   return { ...preserved, ...buildCollectionTaskParams(input) };
 }
 
-async function loadDataNodes() {
-  loadingDataNodes.value = true;
-  try {
-    const nodes: DataNode[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await listDataNodes({ status: "active", page: { page, size: 500 } });
-      nodes.push(...(response.items || []).map(item => item.node).filter(node => node?.node_id));
-      if (!response.page_result?.has_more || (response.items || []).length === 0) break;
-    }
-    dataNodes.value = nodes;
-  } catch (error) {
-    dataNodes.value = [];
-    Message.warning(error instanceof Error ? error.message : "获取结果 DataNode 失败");
-  } finally {
-    loadingDataNodes.value = false;
-  }
-}
-
 function search() {
   pagination.current = 1;
   syncListQuery();
@@ -1762,10 +1724,7 @@ watch(selectedSpaceId, () => {
   detailRequestToken += 1;
   detailVisible.value = false;
   // 空间初始化完成或切换后重新加载；数据类型配置同样按空间授权，不能只在挂载时请求一次。
-  if (selectedSpaceId.value) {
-    void getDataTypeConfigs();
-    void loadDataNodes();
-  }
+  if (selectedSpaceId.value) void getDataTypeConfigs();
   void getTaskList();
   void loadSourceTasks();
   void loadTags();
@@ -1783,7 +1742,6 @@ onMounted(() => {
   void getDataTypeConfigs();
   void loadSourceTasks();
   void loadTags();
-  void loadDataNodes();
 });
 
 // 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：编辑窗口打开/关闭都会使进行中的保存失效

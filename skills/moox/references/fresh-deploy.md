@@ -57,6 +57,8 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 中途失败后再运行一次会接着清。CLI 不清理云函数，见第 8 节。
 
+从批 1（Storage 合并与 View 跟随变更日志）之前的版本重装时，**先**运行 `moox-cli config migrate --yes` 删掉 `[deployments]` 里的 `storage-node`（留着它 `setup wipe` 也会拒绝配置），**再** `setup wipe`；然后按 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 1 全新部署注意”核对其余项（两段 `mooxsys` 保留期可删）和归档 worker 配置；因子机本地库被清空后要重新做初始数据导入。
+
 ### 本机状态
 
 `setup wipe` 把操作员身份和这台控制机的旧管理台证书移到 `~/.config/moox/.bak-<时间>/`，`config.key` 和 `known_hosts` 留在原处；状态目录 `~/.local/state/moox/setup/<摘要>` 改名为 `<摘要>.bak-<时间>`。
@@ -73,7 +75,7 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 | 2 | `$CLI setup deploy-host --host storage`，再 `overseas`、`factor` | 因子机要求 `[hosts.factor] reachability = "outbound"`，且已有 `/data/moox`（可写） |
 | 3 | `$CLI setup deploy-unit --host storage --profile eventbus` | EventBus 装在 `[deployments]` 登记它的主机（默认存储机） |
 | 4 | `$CLI setup deploy-unit --host storage --profile storage --binary-dir $WT/bin` | Storage 必须带第 2 节构建的 Linux CGO 制品 |
-| 5 | `$CLI setup init --stage storage --config-dir $WT/config/setup --storage-host storage` | 业务空间、登记存储节点、导入并激活元数据。必须在 control 之前：Monitor 要等系统数据集就绪 |
+| 5 | `$CLI setup init --stage storage --config-dir $WT/config/setup --storage-host storage` | 业务空间、导入元数据（数据集建好即可写入）。必须在 control 之前 |
 | 6 | `$CLI setup deploy-unit --host storage --profile access`，再 `--host overseas --profile access`，再 `--host overseas --profile egress-proxy` | **存储机和海外机都要装 Access**，漏了海外机会出现“外接入（overseas）连接被拒绝”告警 |
 | 7 | `$CLI setup bootstrap --stage control` | 首次安装自动创建管理台内部 CA；失败的发布目录由下一次尝试自动清理 |
 | 8 | `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 云账户、日志服务和默认因子任务；业务空间和元数据第 5 步已写入，这里只核对 |
@@ -122,11 +124,12 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 
 ### 交易日历的年度更新
 
-交易日历内嵌在 `packages/marketcalendar/data/`（采集、因子、策略、Monitor、CLI 共用），每份日历两个文件、各自更新：A 股是 `cn_stock.json` 与 `cn_stock.manifest.json`，港股是 `hk_stock.json` 与 `hk_stock.manifest.json`。A 股覆盖期到当年 12 月 31 日，每年 11 月前后国务院公布下一年节假日安排后：
+交易日历内嵌在 `packages/marketcalendar/data/`（采集、因子、策略、Monitor、CLI 共用），每份日历两个文件、各自更新：A 股是 `cn_stock.json` 与 `cn_stock.manifest.json`，港股是 `hk_stock.json` 与 `hk_stock.manifest.json`，美股是 `us_stock.json` 与 `us_stock.manifest.json`。A 股覆盖期到当年 12 月 31 日，每年 11 月前后国务院公布下一年节假日安排后：
 
-1. 把落在工作日上的休市日写进 `packages/marketcalendar/internal/gencn/main.go` 的 `closures`，在 `packages/marketcalendar` 下运行 `go run ./internal/gencn -year <下一年>`（调休补班的周末照样休市）；它同时重写 `cn_stock.manifest.json` 的 `valid_through` 与 `sha256`，`go test ./packages/marketcalendar/` 校验。交易所 12 月公布休市安排后核对一遍，有出入就改 `closures` 用同一条命令重新生成；交易所日历已进 AkShare 时也可以用 `scripts/marketdata/update-calendar.sh` 整体替换；
+1. 把落在工作日上的休市日写进 `packages/marketcalendar/internal/gencn/main.go` 的 `closures`，在 `packages/marketcalendar` 下运行 `go run ./internal/gencn -year <下一年>`（调休补班的周末照样休市）；它同时重写 `cn_stock.manifest.json` 的 `valid_through` 与 `sha256`，`go test ./packages/marketcalendar/` 校验。交易所 12 月公布休市安排后核对一遍，有出入就改 `closures` 用同一条命令重新生成；交易所日历已进 AkShare 时也可以用 `scripts/marketdata/update-calendar.sh` 整体替换（这个脚本只管 A 股 `cn_stock`；港股、美股没有对应脚本，只用下面第 2、3 项的 `genhk`、`genus`，更新时分别执行）；
 2. 港股：联交所发出下一年的证券市场假期通告后（2026 年是 [CT/075/25](https://www.hkex.com.hk/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2025/SEHK_CT_075_2025?sc_lang=en)，2027 年是 [CT/077/26](https://www.hkex.com.hk/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2026/SEHK_CT_077_2026Jun01162846?sc_lang=en)），把落在工作日上的休市日和半日市（圣诞前夕、新年前夕、农历新年前夕，只开上午市）写进 `packages/marketcalendar/internal/genhk/main.go` 的 `closures`、`earlyCloses`，通告网址写进 `source`，在 `packages/marketcalendar` 下运行 `go run ./internal/genhk`（整份重新生成，只写港股的两个文件）。补登或改动半日市会让之后的交易序号整体平移，因子本地存储要重建；
-3. `scripts/marketdata/validate-calendar.sh` 校验全部日历后，重新构建并发布 Collector、因子引擎、Strategy、Monitor、CLI，并重新上传 stockcn、stockhk 两个 SCF 代码包（`moox-cli collector function upload`，每个空间各传一次）。日历编在代码包里：漏传港股包，旧日历的覆盖期一过，港股函数每期都返回 `no_work`，不报错。
+3. 美股：纽交所公布下一年的假期表后（[假期与提前收市日](https://www.nyse.com/trade/hours-calendars)），把落在工作日上的休市日和半日市（感恩节次日、平安夜等，13:00 收市）写进 `packages/marketcalendar/internal/genus/main.go` 的 `closures`、`earlyCloses`，网址写进 `source`，在 `packages/marketcalendar` 下运行 `go run ./internal/genus`（整份重新生成，只写美股的两个文件）。不套“节假日逢周六提前一天补休”之类的规则，一律照假期页逐日登记；夏令时不用管，`barclock` 按纽约时区换算。补登或改动半日市会让之后的交易序号整体平移，因子本地存储要重建；
+4. `scripts/marketdata/validate-calendar.sh` 校验全部日历后，重新构建并发布 Collector、因子引擎、Strategy、Monitor、CLI，并重新上传 stockcn、stockhk、stockus 三个 SCF 代码包（`moox-cli collector function upload`，每个空间各传一次）。日历编在代码包里：漏传港股或美股包，旧日历的覆盖期一过，对应函数每期都返回 `no_work`，不报错。
 
 **必须在 12 月中旬前完成**：采集计划预检要求日历覆盖期至少还剩 14 天，否则拒绝新计划；到期前 60 天起每天告警。
 

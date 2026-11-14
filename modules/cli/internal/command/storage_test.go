@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunStorageMaintenanceBinaryDelegatesForceRebuildView(t *testing.T) {
+func TestRunStorageMaintenanceBinaryDelegatesRepairView(t *testing.T) {
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args")
 	script := filepath.Join(dir, "storage-cli")
@@ -21,32 +21,18 @@ func TestRunStorageMaintenanceBinaryDelegatesForceRebuildView(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_CLI", script)
 
 	var stdout, stderr bytes.Buffer
-	require.NoError(t, runStorageMaintenanceBinaryAction(context.Background(), nil, &stdout, &stderr, "force-rebuild-view", []string{"--lookback", "72h", "--yes"}))
+	require.NoError(t, runStorageMaintenanceBinaryAction(context.Background(), nil, &stdout, &stderr, "repair-view", []string{"--space-id", "crypto", "--yes"}))
 	raw, err := os.ReadFile(argsFile)
 	require.NoError(t, err)
-	require.Equal(t, "force-rebuild-view\n--lookback\n72h\n--yes\n", string(raw))
-}
-
-func TestRunStorageMaintenanceBinaryDelegatesResetViewConsumers(t *testing.T) {
-	dir := t.TempDir()
-	argsFile := filepath.Join(dir, "args")
-	script := filepath.Join(dir, "storage-cli")
-	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \""+argsFile+"\"\n"), 0o755))
-	t.Setenv("MOOX_STORAGE_CLI", script)
-
-	var stdout, stderr bytes.Buffer
-	require.NoError(t, runStorageMaintenanceBinaryAction(context.Background(), nil, &stdout, &stderr, "reset-view-consumers", []string{"--lookback", "72h", "--dry-run"}))
-	raw, err := os.ReadFile(argsFile)
-	require.NoError(t, err)
-	require.Equal(t, "reset-view-consumers\n--lookback\n72h\n--dry-run\n", string(raw))
+	require.Equal(t, "repair-view\n--space-id\ncrypto\n--yes\n", string(raw))
 }
 
 func TestStorageRemoteArgsAddPathDefaultsAndDefaultToPreview(t *testing.T) {
 	repair := storageMaintenanceActions[0]
 	require.Equal(t, "repair-view", repair.Action)
-	args := storageRemoteArgs(repair, "/data/moox/storage/current", []string{"--space-id", "crypto", "--view-id", "v1", "--consumer", "view_0123456789ab"})
+	args := storageRemoteArgs(repair, "/data/moox/storage/current", []string{"--space-id", "crypto", "--view-id", "v1"})
 	require.Equal(t, []string{
-		"--space-id", "crypto", "--view-id", "v1", "--consumer", "view_0123456789ab",
+		"--space-id", "crypto", "--view-id", "v1",
 		"--package-root", "/data/moox/storage/current",
 		"--storage-conf", "/data/moox/storage/current/storage-view/config/storage.yaml",
 		"--dry-run",
@@ -70,6 +56,20 @@ func TestStorageDeleteViewHasNoImplicitDryRun(t *testing.T) {
 	args := storageRemoteArgs(deleteView, "/data/moox/storage/current", []string{"--view", "crypto/v1"})
 	require.NotContains(t, args, "--dry-run", "delete-view 没有 --dry-run，不带 --yes 由存储机上的程序拒绝")
 	require.Contains(t, args, "/data/moox/storage/current/storage-primary/var/storage/metadata/storage_metadata.db")
+}
+
+// reset-metadata 与 repair-view 一样补上 --storage-conf：存储机上的程序按它找元数据库。
+func TestStorageResetMetadataAddsStorageConf(t *testing.T) {
+	for _, action := range storageMaintenanceActions {
+		if action.Action != "reset-metadata" {
+			continue
+		}
+		args := storageRemoteArgs(action, "/data/moox/storage/current", []string{"--seed", "/seed.yaml", "--yes"})
+		require.Contains(t, args, "/data/moox/storage/current/storage-view/config/storage.yaml")
+		require.Contains(t, args, "--package-root")
+		return
+	}
+	t.Fatal("没有 reset-metadata 动作")
 }
 
 func TestStorageMaintenanceRunsOnStorageHostWithLogScript(t *testing.T) {

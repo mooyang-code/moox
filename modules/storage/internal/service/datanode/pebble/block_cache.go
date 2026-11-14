@@ -13,14 +13,14 @@ import (
 
 // Pebble 块缓存。
 //
-// Pebble 默认只有 8MiB 块缓存，而 DataNode 的数据是 GB 级（线上约 1.6GB）。读窗口时每一行、每一列都是一次点查，
+// Pebble 默认只有 8MiB 块缓存，而 storage-primary 的数据是 GB 级（线上约 1.6GB）。读窗口时每一行、每一列都是一次点查，
 // 缓存装不下时，每次点查都要把包含它的数据块和索引块重新读出并 snappy 解压：
-// 2026-10-14 对 1h K 线因子集做回填，DataNode 的 CPU 被打到 330% 以上，profile 里 52% 的时间在 snappy.decode，
+// 2026-10-14 对 1h K 线因子集做回填，当时的 storage-node 进程 CPU 被打到 330% 以上，profile 里 52% 的时间在 snappy.decode，
 // 其中 72% 是在解压索引块，读单个窗口要 15 秒以上并超时重试。
 // 缓存放大到能装下热点的索引块和数据块后，这部分解压就不再重复。
 const (
-	blockCacheEnv = "MOOX_STORAGE_NODE_BLOCK_CACHE"
-	// 取主机内存的 1/32：16GB 的主机约 500MB，比 DataNode 进程本身的占用（约 100MB）大，但远小于主机内存。
+	blockCacheEnv = "MOOX_STORAGE_BLOCK_CACHE"
+	// 取主机内存的 1/32：16GB 的主机约 500MB，比 storage-primary 进程本身的占用（约 100MB）大，但远小于主机内存。
 	blockCacheDivisor = 32
 	minBlockCacheMB   = 64
 	maxBlockCacheMB   = 2048
@@ -53,7 +53,7 @@ func resolveBlockCache(explicit int64) (bytes int64, source string) {
 		if bytes := hostmem.ParseSize(text); bytes > 0 {
 			return bytes, "环境变量 " + blockCacheEnv
 		}
-		cacheLogf("storage node 环境变量 %s=%q 不是有效的内存值（正整数加 KB/MB/GB/TB），改用按主机内存推算的值", blockCacheEnv, text)
+		cacheLogf("storage 环境变量 %s=%q 不是有效的内存值（正整数加 KB/MB/GB/TB），改用按主机内存推算的值", blockCacheEnv, text)
 	}
 	total := hostMemoryBytes()
 	if total <= 0 {
@@ -78,7 +78,7 @@ func (s *Store) cacheStatsLine(previous *cacheStats) string {
 		}
 		return fmt.Sprintf("%.1f%%", 100*float64(hits)/float64(hits+misses))
 	}
-	return fmt.Sprintf("storage node Pebble 块缓存 占用=%dMB/%dMB 条目=%d 近期命中率=%s（命中 %d、未命中 %d）累计命中率=%s",
+	return fmt.Sprintf("storage Pebble 块缓存 占用=%dMB/%dMB 条目=%d 近期命中率=%s（命中 %d、未命中 %d）累计命中率=%s",
 		metrics.Size>>20, s.blockCacheBytes>>20, metrics.Count, rate(deltaHits, deltaMisses), deltaHits, deltaMisses, rate(metrics.Hits, metrics.Misses))
 }
 

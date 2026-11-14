@@ -94,7 +94,7 @@ func TestUnitPackagesHaveExactComponentBoundariesAndRepeatableDigests(t *testing
 					assert.NotContains(t, ids, "host-agent")
 				}
 				if profile == "storage" {
-					assert.Equal(t, []string{"storage-primary", "storage-node", "storage-view"}, ids)
+					assert.Equal(t, []string{"storage-primary", "storage-view"}, ids)
 				}
 				if profile == "control" {
 					assert.Contains(t, ids, "console-proxy")

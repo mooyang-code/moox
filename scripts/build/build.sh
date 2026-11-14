@@ -60,7 +60,7 @@ build_storage() {
 	    local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
 	    local tags=()
 	    if [[ -n "${STORAGE_BUILD_TAGS:-}" ]]; then tags=(-tags "${STORAGE_BUILD_TAGS}"); fi
-	    for role in primary node view; do
+	    for role in primary view; do
 	      if ((${#tags[@]})); then
 	        GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build "${tags[@]}" \
 	          -ldflags "${LDFLAGS}" \
@@ -72,16 +72,6 @@ build_storage() {
 	      fi
 	    done
 	  )
-}
-
-build_storage_node() {
-	local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
-	(
-		cd "${ROOT}/modules/storage"
-		GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build \
-			-ldflags "${LDFLAGS}" \
-			-o "${BIN_DIR}/$(binary_name moox-storage-node)" ./cmd/server
-	)
 }
 
 build_storage_cli() {
@@ -277,9 +267,6 @@ case "${TARGET_MODULE}" in
     ;;
   storage-primary)
     build_go modules/storage ./cmd/server moox-storage-primary 1
-    ;;
-  storage-node)
-    build_storage_node
     ;;
   storage-cli)
     build_storage_cli

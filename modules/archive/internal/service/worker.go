@@ -68,18 +68,14 @@ func (w *WorkerService) PullArchiveRun(ctx context.Context, req *archivepb.PullA
 		// 备用 worker 或租约已过期的实例什么都领不到，等心跳重新取得租约。
 		return &archivepb.PullArchiveRunRsp{RetInfo: success()}, nil
 	}
-	busy := map[string]int{}
-	for _, load := range req.GetBusyDataNodes() {
-		busy[load.GetDataNodeId()] += int(load.GetRunning())
-	}
 	// 先取对象存储是否启用：放在领取之后出错，已领取的运行就只能等租约过期。
 	status, err := s.workerStatus(ctx, now)
 	if err != nil {
 		return &archivepb.PullArchiveRunRsp{RetInfo: inner(err)}, nil
 	}
 	claimed, err := s.store.ClaimRuns(ctx, store.ClaimRequest{
-		WorkerID: req.GetWorkerId(), InstanceID: req.GetInstanceId(), FreeSlots: int(req.GetFreeSlots()), MaxPerDataNode: int(req.GetMaxRunsPerDataNode()),
-		BusyByDataNode: busy, Now: now, LeaseTTL: s.cfg.Run.LeaseTTL,
+		WorkerID: req.GetWorkerId(), InstanceID: req.GetInstanceId(), FreeSlots: int(req.GetFreeSlots()), MaxStorageRuns: int(req.GetMaxStorageRuns()),
+		BusyStorageRuns: int(req.GetBusyStorageRuns()), Now: now, LeaseTTL: s.cfg.Run.LeaseTTL,
 	})
 	if err != nil {
 		return &archivepb.PullArchiveRunRsp{RetInfo: inner(err)}, nil
@@ -113,7 +109,7 @@ func (s *Service) assignment(c store.Claimed, registered []store.Partition) *arc
 	return &archivepb.RunAssignment{
 		RunId: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Kind: c.Run.Kind, SpaceId: c.Task.SpaceID, DatasetId: c.Task.DatasetID,
 		Purpose: c.Task.Purpose, DirName: c.Task.DirName,
-		Freq: c.Task.Freq, PartitionUnit: c.Task.PartitionUnit, DataNodeId: c.Task.DataNodeID, Retention: c.Task.Retention,
+		Freq: c.Task.Freq, PartitionUnit: c.Task.PartitionUnit, Retention: c.Task.Retention,
 		IntervalSeconds: uint32(c.Task.IntervalSeconds), MinLookbackSeconds: uint32(s.cfg.Schedule.MinLookback / time.Second),
 		SpaceTz: spaceCfg.TZ, LocalClose: spaceCfg.LocalClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),
 		ScheduledAt: fmtRFC(c.Run.ScheduledAt), StartedAt: fmtRFC(c.Run.StartedAt), RangeStart: fmtRFC(c.Run.RangeStart), RangeEnd: fmtRFC(c.Run.RangeEnd),

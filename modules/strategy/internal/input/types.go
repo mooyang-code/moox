@@ -102,10 +102,12 @@ type ViewColumn struct {
 
 // DatasetInfo 是数据集元数据。SubjectTags 是数据集的标的范围（标签 ID）。
 type DatasetInfo struct {
-	DatasetID   string
-	Status      string
-	Frequency   string
-	Retention   string
+	DatasetID string
+	Status    string
+	Frequency string
+	Retention string
+	// Alignment 是数据集的周期对齐方式（epoch_utc 或 session）。
+	Alignment   string
 	Attributes  map[string]string
 	SubjectTags []string
 	// SubjectsRevision 是所属空间的标的修订号，标的、标签成员或数据集标的范围变化时递增。

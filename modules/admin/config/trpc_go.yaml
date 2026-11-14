@@ -67,8 +67,7 @@ server:
       network: tcp
       protocol: trpc
       transport: go-net
-      # EventBus 维护（清除主题等）单次最多等 5 分钟，要不小于服务目录里的方法超时。
-      timeout: 300000
+      timeout: 10000
     - name: trpc.moox.admin.Setup
       ip: 127.0.0.1
       port: 11110

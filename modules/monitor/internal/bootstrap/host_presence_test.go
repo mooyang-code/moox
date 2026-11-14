@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/notification"
 )
 
@@ -117,15 +118,15 @@ func TestRecordHostPresenceWritesIdempotentAlertEvents(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	events, err := repos.Alerts.ListEventsSince(t.Context(), nil, now.Add(-time.Hour), 0)
+	recorded, err := repos.Alerts.ListEventsSince(t.Context(), nil, now.Add(-time.Hour), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 || events[0].EventType != domain.AlertEventTriggered || events[1].EventType != domain.AlertEventResolved {
-		t.Fatalf("events = %+v", events)
+	if len(recorded) != 2 || recorded[0].EventType != domain.AlertEventTriggered || recorded[1].EventType != domain.AlertEventResolved {
+		t.Fatalf("events = %+v", recorded)
 	}
-	if events[0].CheckID != hostmetrics.PresenceCheckID("agent-a") || events[0].SpaceID != hostmetrics.SpaceID || events[0].Payload != `{"reason":"`+presenceLostReason+`"}` {
-		t.Fatalf("lost event = %+v", events[0])
+	if recorded[0].CheckID != hostmetrics.PresenceCheckID("agent-a") || recorded[0].SpaceID != events.SystemSpaceID || recorded[0].Payload != `{"reason":"`+presenceLostReason+`"}` {
+		t.Fatalf("lost event = %+v", recorded[0])
 	}
 	if len(sender.messages) != 3 {
 		t.Fatalf("notifications = %d", len(sender.messages))

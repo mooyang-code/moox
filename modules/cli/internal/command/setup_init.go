@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -30,9 +29,8 @@ import (
 const defaultSetupConfigDir = "./config/setup"
 
 type setupInitBundle struct {
-	Spaces   []setupclient.Space
-	Datasets []seedDataset
-	Calls    []metadataImportCall
+	Spaces []setupclient.Space
+	Calls  []metadataImportCall
 	// ImportedSeed 是 setup init --stage storage 导入过的种子摘要，一致时不再重复导入。
 	ImportedSeed string
 }
@@ -54,15 +52,8 @@ func metadataSeedDigest(calls []metadataImportCall) (string, error) {
 
 type setupInitStorage interface {
 	Apply(context.Context, []metadataImportCall) (metadataImportSummary, error)
-	Activate(context.Context, []seedDataset) (setupDatasetActivationSummary, error)
 	Verify(context.Context, []metadataImportCall) (metadataImportSummary, error)
 	Close() error
-}
-
-type setupDatasetActivationSummary struct {
-	Total     int `json:"total"`
-	Activated int `json:"activated"`
-	Unchanged int `json:"unchanged"`
 }
 
 type setupInitMetadataCounts struct {
@@ -79,30 +70,28 @@ type setupCloudAccountSummary struct {
 }
 
 type setupInitSummary struct {
-	Status           string                        `json:"status"`
-	Firewall         setupFirewallSummary          `json:"firewall"`
-	BusinessSpaces   int                           `json:"business_spaces"`
-	BusinessSpaceIDs []string                      `json:"business_space_ids"`
-	Admin            setupclient.ApplyResult       `json:"admin"`
-	CloudAccounts    *setupCloudAccountSummary     `json:"cloud_accounts,omitempty"`
-	CLS              *setupCLSSummary              `json:"cls,omitempty"`
-	SCFPlan          *setupSCFPlanSummary          `json:"scf_plan,omitempty"`
-	AdminState       string                        `json:"admin_state"`
-	LoginAPI         string                        `json:"login_api"`
-	LoginSkipped     string                        `json:"login_skipped,omitempty"`
-	Metadata         setupInitMetadataCounts       `json:"metadata"`
-	Datasets         setupDatasetActivationSummary `json:"datasets"`
-	Verification     setupInitMetadataCounts       `json:"verification"`
-	BrowserTrust     *setupBrowserTrustSummary     `json:"browser_trust,omitempty"`
+	Status           string                    `json:"status"`
+	Firewall         setupFirewallSummary      `json:"firewall"`
+	BusinessSpaces   int                       `json:"business_spaces"`
+	BusinessSpaceIDs []string                  `json:"business_space_ids"`
+	Admin            setupclient.ApplyResult   `json:"admin"`
+	CloudAccounts    *setupCloudAccountSummary `json:"cloud_accounts,omitempty"`
+	CLS              *setupCLSSummary          `json:"cls,omitempty"`
+	SCFPlan          *setupSCFPlanSummary      `json:"scf_plan,omitempty"`
+	AdminState       string                    `json:"admin_state"`
+	LoginAPI         string                    `json:"login_api"`
+	LoginSkipped     string                    `json:"login_skipped,omitempty"`
+	Metadata         setupInitMetadataCounts   `json:"metadata"`
+	Verification     setupInitMetadataCounts   `json:"verification"`
+	BrowserTrust     *setupBrowserTrustSummary `json:"browser_trust,omitempty"`
 }
 
 // setupInitStorageSummary 是 setup init --stage storage 的结果。
 type setupInitStorageSummary struct {
-	Status           string                        `json:"status"`
-	BusinessSpaceIDs []string                      `json:"business_space_ids"`
-	Metadata         setupInitMetadataCounts       `json:"metadata"`
-	Datasets         setupDatasetActivationSummary `json:"datasets"`
-	Verification     setupInitMetadataCounts       `json:"verification"`
+	Status           string                  `json:"status"`
+	BusinessSpaceIDs []string                `json:"business_space_ids"`
+	Metadata         setupInitMetadataCounts `json:"metadata"`
+	Verification     setupInitMetadataCounts `json:"verification"`
 }
 
 func newSetupInitCommand(deps setupDeps) *cobra.Command {
@@ -111,7 +100,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "导入默认空间、数据集、字段和因子",
-		Long: `--stage storage 在装管理台之前运行：只写业务空间、登记存储节点、导入并激活元数据，管理台的服务要等这些就绪才能启动。
+		Long: `--stage storage 在装管理台之前运行：只写业务空间、导入元数据，管理台的服务要等这些就绪才能启动。
 不带 --stage 在管理台装好后运行：完成全部初始化，包括云账户和日志服务；因子任务由 setup start 导入，已经做过的步骤不会重复写入。`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if stage != "" && stage != "storage" {
@@ -164,7 +153,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
-// runSetupInitMetadata 只做不依赖管理台服务的初始化：业务空间写进 Admin，元数据写进 Storage 并激活。
+// runSetupInitMetadata 只做不依赖管理台服务的初始化：业务空间写进 Admin，元数据写进 Storage。
 // Admin 在 admin 就有，Storage 经 SSH 访问，所以这一步能排在管理台之前。
 func runSetupInitMetadata(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, storageHost string, bundle setupInitBundle) (setupInitStorageSummary, error) {
 	if _, err := deps.applySpaces(ctx, snapshot, bundle.Spaces); err != nil {
@@ -177,55 +166,45 @@ func runSetupInitMetadata(ctx context.Context, deps setupDeps, snapshot *setupco
 	if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
 		return setupInitStorageSummary{}, fmt.Errorf("setup_incomplete")
 	}
-	metadata, datasets, verification, err := applySetupMetadata(ctx, deps, snapshot, storageHost, bundle)
+	metadata, verification, err := applySetupMetadata(ctx, deps, snapshot, storageHost, bundle)
 	if err != nil {
 		return setupInitStorageSummary{}, err
 	}
 	return setupInitStorageSummary{
 		Status: "ready", BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
 		Metadata:     setupInitMetadataCounts{Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged},
-		Datasets:     datasets,
 		Verification: setupInitMetadataCounts{Planned: verification.Planned, Unchanged: verification.Unchanged},
 	}, nil
 }
 
-// applySetupMetadata 导入元数据、激活数据集并核对，重复运行结果不变。
-func applySetupMetadata(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, storageHost string, bundle setupInitBundle) (metadataImportSummary, setupDatasetActivationSummary, metadataImportSummary, error) {
+// applySetupMetadata 导入元数据并核对，重复运行结果不变；数据集建好即可写入，不用另外激活。
+func applySetupMetadata(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, storageHost string, bundle setupInitBundle) (metadataImportSummary, metadataImportSummary, error) {
 	var empty metadataImportSummary
 	storage, err := deps.openInitStorage(ctx, snapshot, storageHost)
 	if err != nil {
-		return empty, setupDatasetActivationSummary{}, empty, err
+		return empty, empty, err
 	}
 	defer storage.Close()
 	imported, err := setupMetadataImported(ctx, storage, bundle)
 	if err != nil {
-		return empty, setupDatasetActivationSummary{}, empty, err
+		return empty, empty, err
 	}
 	if imported {
-		// Activate 每次都跑：系统重置会重新导入种子，空间回来了但数据集未激活。
-		datasets, err := storage.Activate(ctx, bundle.Datasets)
-		if err != nil {
-			return empty, setupDatasetActivationSummary{}, empty, err
-		}
 		done := metadataImportSummary{Planned: len(bundle.Calls), Unchanged: len(bundle.Calls)}
-		return done, datasets, done, nil
+		return done, done, nil
 	}
 	metadata, err := storage.Apply(ctx, bundle.Calls)
 	if err != nil {
-		return empty, setupDatasetActivationSummary{}, empty, err
-	}
-	datasets, err := storage.Activate(ctx, bundle.Datasets)
-	if err != nil {
-		return empty, setupDatasetActivationSummary{}, empty, err
+		return empty, empty, err
 	}
 	verification, err := storage.Verify(ctx, bundle.Calls)
 	if err != nil {
-		return empty, setupDatasetActivationSummary{}, empty, err
+		return empty, empty, err
 	}
 	if verification.Applied != 0 || verification.Unchanged != len(bundle.Calls) {
-		return empty, setupDatasetActivationSummary{}, empty, fmt.Errorf("metadata_verification_failed")
+		return empty, empty, fmt.Errorf("metadata_verification_failed")
 	}
-	return metadata, datasets, verification, nil
+	return metadata, verification, nil
 }
 
 // setupMetadataImported 判断这份种子已经导入过，并且业务空间还在。
@@ -298,7 +277,7 @@ func runSetupInit(
 		return setupInitSummary{}, fmt.Errorf("config_changed")
 	}
 
-	metadata, datasets, verification, err := applySetupMetadata(ctx, deps, snapshot, storageHost, bundle)
+	metadata, verification, err := applySetupMetadata(ctx, deps, snapshot, storageHost, bundle)
 	if err != nil {
 		return setupInitSummary{}, err
 	}
@@ -318,7 +297,6 @@ func runSetupInit(
 		Metadata: setupInitMetadataCounts{
 			Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
 		},
-		Datasets: datasets,
 		Verification: setupInitMetadataCounts{
 			Planned: verification.Planned, Unchanged: verification.Unchanged,
 		},
@@ -505,9 +483,6 @@ func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
 	if err != nil {
 		return setupInitBundle{}, err
 	}
-	if err := validateReservedInternalSpaces(seed); err != nil {
-		return setupInitBundle{}, err
-	}
 	spaces, err := businessSetupSpaces(seed)
 	if err != nil {
 		return setupInitBundle{}, err
@@ -519,14 +494,7 @@ func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
 	if err != nil {
 		return setupInitBundle{}, err
 	}
-	datasets := append([]seedDataset(nil), seed.Datasets...)
-	sort.Slice(datasets, func(i, j int) bool {
-		if datasets[i].SpaceID == datasets[j].SpaceID {
-			return datasets[i].DatasetID < datasets[j].DatasetID
-		}
-		return datasets[i].SpaceID < datasets[j].SpaceID
-	})
-	return setupInitBundle{Spaces: spaces, Datasets: datasets, Calls: calls}, nil
+	return setupInitBundle{Spaces: spaces, Calls: calls}, nil
 }
 
 func validateSetupMetadataDependencies(seed metadataSeed) error {
@@ -651,51 +619,6 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		}
 		viewDatasets[viewKey] = primaryDatasetID
 	}
-	viewColumns := make(map[string]struct{}, len(seed.ViewColumns))
-	for _, item := range seed.ViewColumns {
-		if _, ok := views[setupMetadataKey(item.SpaceID, item.ViewID)]; !ok {
-			return fmt.Errorf("view_column references undefined view %s/%s", item.SpaceID, item.ViewID)
-		}
-		columnKey := setupMetadataColumnKey(item.SpaceID, item.ViewID, item.ColumnName)
-		if _, ok := viewColumns[columnKey]; ok {
-			return fmt.Errorf(
-				"duplicate metadata view_column %s/%s/%s",
-				item.SpaceID,
-				item.ViewID,
-				item.ColumnName,
-			)
-		}
-		viewColumns[columnKey] = struct{}{}
-		originType, err := parseColumnOriginType(item.OriginType)
-		if err != nil {
-			return err
-		}
-		if originType != storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
-			continue
-		}
-		// A View indexes exactly one Dataset, so a dataset column is the bare
-		// column name of the View's Dataset.
-		origin := strings.TrimSpace(item.OriginID)
-		if origin == "" || strings.Contains(origin, ".") || origin != strings.TrimSpace(item.ColumnName) {
-			return fmt.Errorf(
-				"view_column %s/%s/%s has invalid dataset_column origin %q; use the bare column name",
-				item.SpaceID,
-				item.ViewID,
-				item.ColumnName,
-				item.OriginID,
-			)
-		}
-		datasetID := viewDatasets[setupMetadataKey(item.SpaceID, item.ViewID)]
-		if _, ok := datasetColumns[setupMetadataColumnKey(item.SpaceID, datasetID, origin)]; !ok {
-			return fmt.Errorf(
-				"view_column %s/%s/%s references undefined dataset_column %q",
-				item.SpaceID,
-				item.ViewID,
-				item.ColumnName,
-				item.OriginID,
-			)
-		}
-	}
 	return nil
 }
 
@@ -787,7 +710,7 @@ func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seed
 
 type remoteSetupInitStorage struct {
 	transport setupssh.Client
-	session   *remoteStorageSession
+	gateway   commandGateway
 }
 
 func defaultOpenSetupInitStorage(
@@ -795,61 +718,18 @@ func defaultOpenSetupInitStorage(
 	snapshot *setupconfig.Snapshot,
 	host string,
 ) (setupInitStorage, error) {
-	_, transport, session, _, err := openRemoteStorage(ctx, snapshot, host)
+	transport, gateway, err := openRemoteStorage(ctx, snapshot, host)
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureNativeDataNode(ctx, session.metadata, session.auth, session.nodeAuth); err != nil {
-		session.Close()
-		_ = transport.Close()
-		return nil, err
-	}
-	return &remoteSetupInitStorage{transport: transport, session: session}, nil
-}
-
-// 原生安装的 Storage 只有一个 DataNode：ID 固定（种子里的数据集都绑定它），运行端口见 storage 的 trpc_go.node.yaml。
-const (
-	nativeDataNodeID     = "storage-node-0"
-	nativeDataNodeTarget = "ip://127.0.0.1:20107"
-)
-
-type dataNodeRegistry interface {
-	ListDataNodes(context.Context, *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error)
-	RegisterDataNode(context.Context, *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error)
-}
-
-// ensureNativeDataNode 在 Metadata 里登记 Storage 主机上的 DataNode，已登记则不动。
-func ensureNativeDataNode(ctx context.Context, api dataNodeRegistry, auth, nodeAuth *storagepb.AuthInfo) error {
-	list, err := api.ListDataNodes(ctx, &storagepb.ListDataNodesReq{AuthInfo: auth})
-	if err != nil || list.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-		return fmt.Errorf("data_node_list_failed")
-	}
-	for _, item := range list.GetItems() {
-		if item.GetNode().GetNodeId() == nativeDataNodeID {
-			return nil
-		}
-	}
-	rsp, err := api.RegisterDataNode(ctx, &storagepb.RegisterDataNodeReq{
-		AuthInfo: nodeAuth, NodeId: nativeDataNodeID, ServiceTarget: nativeDataNodeTarget, InitialName: "存储节点",
-	})
-	if err != nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-		return fmt.Errorf("data_node_register_failed: %s", rsp.GetRetInfo().GetMsg())
-	}
-	return nil
+	return &remoteSetupInitStorage{transport: transport, gateway: gateway}, nil
 }
 
 func (s *remoteSetupInitStorage) Apply(ctx context.Context, calls []metadataImportCall) (metadataImportSummary, error) {
-	if s == nil || s.session == nil || s.session.gateway == nil {
+	if s == nil || s.gateway == nil {
 		return metadataImportSummary{}, fmt.Errorf("storage_not_reachable")
 	}
-	return runMetadataApply(ctx, s.session.gateway, calls)
-}
-
-func (s *remoteSetupInitStorage) Activate(ctx context.Context, datasets []seedDataset) (setupDatasetActivationSummary, error) {
-	if s == nil || s.session == nil {
-		return setupDatasetActivationSummary{}, fmt.Errorf("storage_not_reachable")
-	}
-	return activateSetupDatasets(ctx, s.session.metadata, s.session.auth, datasets)
+	return runMetadataApply(ctx, s.gateway, calls)
 }
 
 func (s *remoteSetupInitStorage) Verify(ctx context.Context, calls []metadataImportCall) (metadataImportSummary, error) {
@@ -860,8 +740,8 @@ func (s *remoteSetupInitStorage) Close() error {
 	if s == nil {
 		return nil
 	}
-	if s.session != nil {
-		s.session.Close()
+	if s.gateway != nil {
+		_ = s.gateway.Close()
 	}
 	if s.transport != nil {
 		return s.transport.Close()
@@ -869,91 +749,7 @@ func (s *remoteSetupInitStorage) Close() error {
 	return nil
 }
 
-type datasetActivationAPI interface {
-	GetDataset(context.Context, *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error)
-	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error)
-	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error)
-}
-
-func activateSetupDatasets(
-	ctx context.Context,
-	api datasetActivationAPI,
-	auth *storagepb.AuthInfo,
-	datasets []seedDataset,
-) (setupDatasetActivationSummary, error) {
-	result := setupDatasetActivationSummary{Total: len(datasets)}
-	if api == nil {
-		return result, fmt.Errorf("storage_metadata_unavailable")
-	}
-	for _, item := range datasets {
-		spaceID, datasetID := strings.TrimSpace(item.SpaceID), strings.TrimSpace(item.DatasetID)
-		current, err := api.GetDataset(ctx, &storagepb.GetDatasetReq{
-			AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID,
-		})
-		if err != nil || current == nil || current.GetRetInfo() == nil ||
-			current.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || current.GetDataset() == nil {
-			return result, fmt.Errorf("dataset_activation_read_failed: %s/%s", spaceID, datasetID)
-		}
-		if current.GetDataset().GetStatus() == "active" && current.GetDataset().GetBindingLocked() {
-			result.Unchanged++
-			continue
-		}
-		check, err := api.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{
-			AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID,
-		})
-		if err != nil || check == nil || check.GetRetInfo() == nil ||
-			check.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-			return result, fmt.Errorf("dataset_activation_check_failed: %s/%s", spaceID, datasetID)
-		}
-		if !check.GetReady() {
-			return result, fmt.Errorf(
-				"dataset_activation_not_ready: %s/%s: %s",
-				spaceID, datasetID, summarizeDatasetActivationChecks(check.GetChecks()),
-			)
-		}
-		activated, err := api.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{
-			AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID,
-			ExpectedRevision: check.GetDatasetRevision(),
-		})
-		if err != nil || activated == nil || activated.GetRetInfo() == nil ||
-			activated.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS ||
-			activated.GetDataset() == nil ||
-			activated.GetDataset().GetStatus() != "active" ||
-			!activated.GetDataset().GetBindingLocked() {
-			return result, fmt.Errorf("dataset_activation_failed: %s/%s", spaceID, datasetID)
-		}
-		result.Activated++
-	}
-	return result, nil
-}
-
-func summarizeDatasetActivationChecks(checks []*storagepb.DatasetActivationCheck) string {
-	if len(checks) == 0 {
-		return "no checks returned"
-	}
-	parts := make([]string, 0, len(checks))
-	for _, check := range checks {
-		if check == nil {
-			continue
-		}
-		state := "not_ready"
-		if check.GetReady() {
-			state = "ready"
-		}
-		part := strings.TrimSpace(check.GetCheckId()) + "=" + state
-		if summary := strings.TrimSpace(check.GetSummary()); summary != "" {
-			part += "(" + summary + ")"
-		}
-		parts = append(parts, part)
-	}
-	if len(parts) == 0 {
-		return "no checks returned"
-	}
-	return strings.Join(parts, ", ")
-}
-
 var _ setupInitStorage = (*remoteSetupInitStorage)(nil)
-var _ datasetActivationAPI = (storageMetadataAPI)(nil)
 
 // setupBrowserTrustSummary 说明管理台内部 CA 的信任还要用户自己做：不做时管理台能打开，但浏览器有安全提示。
 type setupBrowserTrustSummary struct {

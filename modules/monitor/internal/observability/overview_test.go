@@ -898,8 +898,8 @@ func TestBuilderReturnsBoundedEmptyOverviewWhenSourcesAreDisabled(t *testing.T) 
 func TestOverviewReportsStorageOutboxBacklogBeforeDatasetWatermarkStalls(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-node", "storage-node@storage", "moox_storage_outbox_pending_entries", `{}`, 42, now)
-		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-node", "storage-node@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 181, now)
+		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-primary", "storage-primary@storage", "moox_storage_outbox_pending_entries", `{}`, 42, now)
+		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-primary", "storage-primary@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 181, now)
 	})
 	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	if err != nil {
@@ -920,8 +920,8 @@ func TestOverviewReportsStorageOutboxBacklogBeforeDatasetWatermarkStalls(t *test
 func TestOverviewKeepsShortStorageOutboxBacklogHealthy(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-node", "storage-node@storage", "moox_storage_outbox_pending_entries", `{}`, 3, now)
-		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-node", "storage-node@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 20, now)
+		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-primary", "storage-primary@storage", "moox_storage_outbox_pending_entries", `{}`, 3, now)
+		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-primary", "storage-primary@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 20, now)
 	})
 	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	if err != nil {
@@ -1207,6 +1207,37 @@ func TestViewFileOverLimitBecomesBusinessCheck(t *testing.T) {
 		}
 		if item := find(overview); item == nil || item.Status != tc.status {
 			t.Fatalf("超限数量 %.0f 时检查 = %+v，want %s", tc.value, item, tc.status)
+		}
+	}
+}
+
+// View 跟随变更日志落后超过 2 分钟才告警，原因里点名落后的 View；只上报了正常值时是健康。
+func TestViewFollowLagBecomesBusinessCheck(t *testing.T) {
+	find := func(overview Overview) *BusinessStatus {
+		for i := range overview.BusinessChecks {
+			if overview.BusinessChecks[i].Kind == "view_follow" {
+				return &overview.BusinessChecks[i]
+			}
+		}
+		return nil
+	}
+	for _, tc := range []struct {
+		value  float64
+		status string
+	}{{0, "healthy"}, {90, "healthy"}, {600, "down"}} {
+		now := time.Now().UTC().Truncate(time.Second)
+		query := openOverviewMetrics(t, func(db *gorm.DB) {
+			seedOverviewMetricForInstance(t, db, "view-follow-ok", "storage-view", "storage-view@storage", "moox_storage_view_follow_lag_seconds", `{"space_id":"crypto","view_id":"kline_1m"}`, 0, now)
+			seedOverviewMetricForInstance(t, db, "view-follow", "storage-view", "storage-view@storage", "moox_storage_view_follow_lag_seconds", `{"space_id":"crypto","view_id":"factor_5m"}`, tc.value, now)
+		})
+		overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+		require.NoError(t, err)
+		item := find(overview)
+		require.NotNil(t, item)
+		require.Equal(t, tc.status, item.Status, "落后 %.0f 秒", tc.value)
+		if tc.status == "down" {
+			require.Contains(t, item.Reason, "crypto/factor_5m")
+			require.NotContains(t, item.Reason, "kline_1m")
 		}
 	}
 }

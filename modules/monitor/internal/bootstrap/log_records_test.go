@@ -25,7 +25,7 @@ func TestLogObservabilityRouteStoresRecordsOnce(t *testing.T) {
 
 	at := time.Now().Add(-time.Minute)
 	report := &metricspb.LogReport{
-		ServiceName: "storage-node", InstanceId: "storage-node@storage", NodeId: "storage", BootId: "boot-1",
+		ServiceName: "storage-primary", InstanceId: "storage-primary@storage", NodeId: "storage", BootId: "boot-1",
 		Records: []*metricspb.LogRecord{
 			{Sequence: 1, TimeUnixNano: at.UnixNano(), Level: "ERROR", Message: "写入失败", Caller: "view/commit.go:120", Fields: map[string]string{"view": "v1"}, MergedCount: 4},
 			{Sequence: 2, TimeUnixNano: at.Add(time.Second).UnixNano(), Level: "info", Event: "process_started", Message: "启动"},
@@ -34,7 +34,7 @@ func TestLogObservabilityRouteStoresRecordsOnce(t *testing.T) {
 	require.NoError(t, route(t.Context(), nil, report))
 	require.NoError(t, route(t.Context(), nil, report))
 	restarted := &metricspb.LogReport{
-		ServiceName: "storage-node", InstanceId: "storage-node@storage", NodeId: "storage", BootId: "boot-2",
+		ServiceName: "storage-primary", InstanceId: "storage-primary@storage", NodeId: "storage", BootId: "boot-2",
 		Records: []*metricspb.LogRecord{{Sequence: 1, TimeUnixNano: 1, Level: "error", Message: "重启后的第一条"}},
 	}
 	require.NoError(t, route(t.Context(), nil, restarted))
@@ -47,7 +47,7 @@ func TestLogObservabilityRouteStoresRecordsOnce(t *testing.T) {
 	require.WithinDuration(t, time.Now(), rows[0].LoggedAt, time.Minute)
 	first := rows[2]
 	require.Equal(t, "storage", first.HostID)
-	require.Equal(t, "storage-node", first.Component)
+	require.Equal(t, "storage-primary", first.Component)
 	require.Equal(t, "error", first.Level)
 	require.Equal(t, "view/commit.go:120", first.Caller)
 	require.Equal(t, `{"view":"v1"}`, first.Fields)

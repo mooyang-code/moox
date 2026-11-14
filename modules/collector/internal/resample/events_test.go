@@ -2,7 +2,6 @@ package resample
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -14,19 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type recordingSync struct {
-	mu    sync.Mutex
-	calls [][2]string
-}
-
-func (r *recordingSync) AppendDatasetSyncPoint(_ context.Context, _, datasetID, requestID, _ string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls = append(r.calls, [2]string{datasetID, requestID})
-	return nil
-}
-
-func TestNoticePublisherMergesNoticesIntoOneEventPerGroupWithSyncPoint(t *testing.T) {
+func TestNoticePublisherMergesNoticesIntoOneEventPerGroup(t *testing.T) {
 	mgr := openState(t)
 	ctx := context.Background()
 	start := utc("2026-10-21T10:00:00Z")
@@ -41,16 +28,14 @@ func TestNoticePublisherMergesNoticesIntoOneEventPerGroupWithSyncPoint(t *testin
 	}))
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	sync := &recordingSync{}
 	woken := 0
-	publisher := &NoticePublisher{State: mgr.Resample(), Sync: sync, Registry: registry, Enabled: true, Wake: func() { woken++ }, Now: func() time.Time { return start.Add(3 * time.Hour) }}
+	publisher := &NoticePublisher{State: mgr.Resample(), Registry: registry, Enabled: true, Wake: func() { woken++ }, Now: func() time.Time { return start.Add(3 * time.Hour) }}
 
 	require.NoError(t, publisher.Flush(ctx))
 	require.Equal(t, 1, woken, "封存后唤醒中继")
 	pending, err := mgr.Resample().PendingEvents(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 3, "三个分组各一条事件：同数据集不同来源/作业不合并")
-	require.Len(t, sync.calls, 3, "每个分组先追加一个同步点")
 
 	byJob := map[string]*storagepb.CollectorKlineBackfilled{}
 	for _, event := range pending {
@@ -59,7 +44,6 @@ func TestNoticePublisherMergesNoticesIntoOneEventPerGroupWithSyncPoint(t *testin
 		value := decodePayload(t, registry, message)
 		byJob[value.GetJobId()] = value
 		require.Equal(t, value.GetDatasetId(), message.GetSubjectId())
-		require.Equal(t, value.GetSyncRequestId(), message.GetEventId(), "同步点 request_id 就是事件 ID")
 	}
 	merged := byJob["job-1"]
 	require.Equal(t, []string{"BTC", "ETH"}, merged.GetSubjectIds())

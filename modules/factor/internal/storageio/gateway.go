@@ -58,14 +58,6 @@ func (c *gatewayStorageClient) GetDatasetPeriodCompleted(ctx context.Context, re
 	return invokeStorage[storagepb.GetDatasetPeriodCompletedRsp](ctx, c.gateway, "PrimaryStore", "GetDatasetPeriodCompleted", request, options)
 }
 
-func (c *gatewayStorageClient) DeleteDatasetRows(ctx context.Context, request *storagepb.PrimaryDeleteDatasetRowsReq, options ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	return invokeStorage[storagepb.PrimaryDeleteDatasetRowsRsp](ctx, c.gateway, "PrimaryStore", "DeleteDatasetRows", request, options)
-}
-
-func (c *gatewayStorageClient) RestoreDatasetRows(ctx context.Context, request *storagepb.PrimaryRestoreDatasetRowsReq, options ...client.Option) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
-	return invokeStorage[storagepb.PrimaryRestoreDatasetRowsRsp](ctx, c.gateway, "PrimaryStore", "RestoreDatasetRows", request, options)
-}
-
 func (c *gatewayStorageClient) GetDataset(ctx context.Context, request *storagepb.GetDatasetReq, options ...client.Option) (*storagepb.GetDatasetRsp, error) {
 	return invokeStorage[storagepb.GetDatasetRsp](ctx, c.gateway, "Metadata", "GetDataset", request, options)
 }
@@ -80,10 +72,6 @@ func (c *gatewayStorageClient) CreateDataset(ctx context.Context, request *stora
 
 func (c *gatewayStorageClient) UpsertDatasetColumn(ctx context.Context, request *storagepb.UpsertDatasetColumnReq, options ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {
 	return invokeStorage[storagepb.UpsertDatasetColumnRsp](ctx, c.gateway, "Metadata", "UpsertDatasetColumn", request, options)
-}
-
-func (c *gatewayStorageClient) ActivateDataset(ctx context.Context, request *storagepb.ActivateDatasetReq, options ...client.Option) (*storagepb.ActivateDatasetRsp, error) {
-	return invokeStorage[storagepb.ActivateDatasetRsp](ctx, c.gateway, "Metadata", "ActivateDataset", request, options)
 }
 
 func (c *gatewayStorageClient) DeleteDataset(ctx context.Context, request *storagepb.DeleteDatasetReq, options ...client.Option) (*storagepb.DeleteDatasetRsp, error) {

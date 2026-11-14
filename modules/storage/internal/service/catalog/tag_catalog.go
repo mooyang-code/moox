@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -21,17 +22,14 @@ func (s *Service) UpsertTag(ctx context.Context, req *pb.UpsertTagReq) (*pb.Upse
 	if req.GetCreateOnly() {
 		tag, err := s.metadata.CreateTag(ctx, req.GetTag())
 		if err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "already exists") {
-				return &pb.UpsertTagRsp{RetInfo: retinfo.Error(pb.ErrorCode_CONFLICT, err)}, nil
-			}
-			return &pb.UpsertTagRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+			return &pb.UpsertTagRsp{RetInfo: retinfo.FromError(err)}, nil
 		}
 		s.refreshMetadataCacheAfterCommit(ctx, "UpsertTag")
 		return &pb.UpsertTagRsp{RetInfo: retinfo.Success("success"), Tag: tag}, nil
 	}
 	tag, err := s.metadata.UpsertTag(ctx, req.GetTag())
 	if err != nil {
-		return &pb.UpsertTagRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpsertTagRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "UpsertTag")
 	return &pb.UpsertTagRsp{RetInfo: retinfo.Success("success"), Tag: tag}, nil
@@ -43,7 +41,7 @@ func (s *Service) GetTag(ctx context.Context, req *pb.GetTagReq) (*pb.GetTagRsp,
 	}
 	tag, err := s.metadata.GetTag(ctx, req.GetSpaceId(), req.GetTagId())
 	if err != nil {
-		return &pb.GetTagRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.GetTagRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.GetTagRsp{RetInfo: retinfo.Success("success"), Tag: tag}, nil
 }
@@ -56,7 +54,7 @@ func (s *Service) ListTags(ctx context.Context, req *pb.ListTagsReq) (*pb.ListTa
 	}
 	tags, result, err := s.metadata.ListTags(ctx, spaceID, page)
 	if err != nil {
-		return &pb.ListTagsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ListTagsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ListTagsRsp{RetInfo: retinfo.Success("success"), Tags: tags, PageResult: result}, nil
 }
@@ -67,7 +65,7 @@ func (s *Service) DeleteTag(ctx context.Context, req *pb.DeleteTagReq) (*pb.Dele
 	}
 	err := s.metadata.DeleteTag(ctx, req.GetSpaceId(), req.GetTagId())
 	if err != nil {
-		rsp := &pb.DeleteTagRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}
+		rsp := &pb.DeleteTagRsp{RetInfo: retinfo.FromError(err)}
 		var referenced *metadatastore.TagReferencedError
 		if errors.As(err, &referenced) {
 			rsp.References = referenced.References
@@ -84,7 +82,7 @@ func (s *Service) ListTagMembers(ctx context.Context, req *pb.ListTagMembersReq)
 	}
 	members, result, err := s.metadata.ListTagMembers(ctx, metadatastore.TagMemberQuery{SpaceID: req.GetSpaceId(), TagID: req.GetTagId(), Status: req.GetStatus(), Keyword: req.GetKeyword(), Page: req.GetPage()})
 	if err != nil {
-		return &pb.ListTagMembersRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ListTagMembersRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ListTagMembersRsp{RetInfo: retinfo.Success("success"), Members: members, PageResult: result}, nil
 }
@@ -113,14 +111,14 @@ func (s *Service) SetTagMemberStatus(ctx context.Context, req *pb.SetTagMemberSt
 
 func (s *Service) changeTagMembers(ctx context.Context, req *pb.TagMembersReq, fn func(string, string, []string) (int, error)) (int, error) {
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetTagId()) == "" {
-		return 0, errors.New("space_id and tag_id are required")
+		return 0, storeerr.Invalidf("space_id and tag_id are required")
 	}
 	return fn(req.GetSpaceId(), req.GetTagId(), req.GetSubjectIds())
 }
 
 func tagMembersRsp(affected int, err error) *pb.TagMembersRsp {
 	if err != nil {
-		return &pb.TagMembersRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}
+		return &pb.TagMembersRsp{RetInfo: retinfo.FromError(err)}
 	}
 	return &pb.TagMembersRsp{RetInfo: retinfo.Success("success"), Affected: uint32(affected)}
 }
@@ -131,7 +129,7 @@ func (s *Service) ApplyTagSnapshot(ctx context.Context, req *pb.ApplyTagSnapshot
 	}
 	result, err := s.metadata.ApplyTagSnapshot(ctx, req.GetSpaceId(), req.GetTagId(), req.GetItems())
 	if err != nil {
-		return &pb.ApplyTagSnapshotRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ApplyTagSnapshotRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "ApplyTagSnapshot")
 	return &pb.ApplyTagSnapshotRsp{RetInfo: retinfo.Success("success"), Added: uint32(result.Added), Activated: uint32(result.Activated), Inactivated: uint32(result.Inactivated)}, nil
@@ -143,7 +141,7 @@ func (s *Service) UpdateSubjectAttributes(ctx context.Context, req *pb.UpdateSub
 	}
 	updated, skipped, err := s.metadata.UpdateSubjectAttributes(ctx, req.GetSpaceId(), req.GetItems())
 	if err != nil {
-		return &pb.UpdateSubjectAttributesRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.UpdateSubjectAttributesRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "UpdateSubjectAttributes")
 	return &pb.UpdateSubjectAttributesRsp{RetInfo: retinfo.Success("success"), Updated: uint32(updated), Skipped: uint32(skipped)}, nil
@@ -155,7 +153,7 @@ func (s *Service) ResolveSubjects(ctx context.Context, req *pb.ResolveSubjectsRe
 	}
 	items, err := s.metadata.ResolveSubjects(ctx, req.GetSpaceId(), req.GetTagIds())
 	if err != nil {
-		return &pb.ResolveSubjectsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		return &pb.ResolveSubjectsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ResolveSubjectsRsp{RetInfo: retinfo.Success("success"), Subjects: items}, nil
 }

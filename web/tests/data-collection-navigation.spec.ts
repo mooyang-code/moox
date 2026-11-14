@@ -65,7 +65,6 @@ async function mockGateway(route: Route) {
             name: "现货K线视图",
             dataset_id: "dataset_binance_kline_1m",
             status: "active",
-            active_index_id: "index-a",
             attributes: { owner_module: "collector", view_role: "collection_browse" }
           }
         ],
@@ -145,6 +144,9 @@ async function mockGateway(route: Route) {
         page_result: { page: 1, size: 20, total: 5, has_more: false }
       })
     });
+  }
+  if (method === "GetViewState") {
+    return route.fulfill({ json: ok({ index_id: "index-a", generation: "1", columns: [] }) });
   }
   if (method === "QueryTimeSeriesRows") {
     return route.fulfill({

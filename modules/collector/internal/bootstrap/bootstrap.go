@@ -12,9 +12,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/attention"
 	"github.com/mooyang-code/moox/modules/collector/internal/dnscache"
 	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/eastmoneylimit"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
@@ -28,6 +30,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
+	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -87,6 +90,13 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		return nil, fmt.Errorf("initialize collector gateway: %w", err)
 	}
 
+	// 东方财富的主动限流与冷却：进程内所有直连 *.eastmoney.com 的请求（A 股标的列表、美股交易所对照等）共用，
+	// 要早于标签同步等任何会访问东方财富的后台任务启动。关注项与 EventBus 的关注项合并上报，所以共用一个实例。
+	attn := attention.New(prometheus.DefaultRegisterer)
+	if err := cnstock.ConfigureRequestLimit(cfg.EgressLimits.Eastmoney, eastmoneylimit.New(prometheus.DefaultRegisterer, attn).Observe); err != nil {
+		return nil, fmt.Errorf("初始化东方财富限流器: %w", err)
+	}
+
 	datasetMetrics, err := report.NewDatasetMetrics(prometheus.DefaultRegisterer, "collector")
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector dataset metrics: %w", err)
@@ -117,16 +127,15 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if resultMetadataErr != nil {
 		return nil, fmt.Errorf("initialize collector result metadata client: %w", resultMetadataErr)
 	}
-	resultManager := collectorresult.NewManagerWithCleaner(resultMetadata.Client, resultMetadata.Primary, resultMetadata.Auth)
+	resultManager := collectorresult.NewManager(resultMetadata.Client, resultMetadata.View, resultMetadata.Auth)
 	resultManager.SetFieldOffers(marketwiring.FieldOffers())
-	if err := ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager, cfg.Storage.ResultDataNodeID); err != nil {
+	if err := ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager); err != nil {
 		return nil, fmt.Errorf("initialize collector task results: %w", err)
 	}
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
 		DatasetSource:     storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway)),
 		RealtimeInventory: realtimeInventory,
 		ResultManager:     resultManager,
-		ResultDataNodeID:  cfg.Storage.ResultDataNodeID,
 		// 附加字段由行情源目录里的来源提供：建任务、改任务、任务表单都按目录判断。
 		FieldOffers: marketwiring.FieldOffers(),
 	})
@@ -179,7 +188,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	}
 	collectorpb.RegisterStreamCollectorService(streamServer, streamService)
 	svc.SetStreamService(streamService)
-	bus, err := newEventBusRuntime(cfg, dbm)
+	bus, err := newEventBusRuntime(cfg, dbm, attn)
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector event bus: %w", err)
 	}
@@ -202,7 +211,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	return process, nil
 }
 
-func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, manager *collectorresult.Manager, dataNodeID string) error {
+func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, manager *collectorresult.Manager) error {
 	if repo == nil || manager == nil {
 		return fmt.Errorf("task result metadata dependencies are not configured")
 	}
@@ -233,7 +242,6 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 				logicalIDs := collectorresult.ResultIDsForTask(task.SpaceID, task.TaskID, task.DataType, params.Frequency)
 				ids, err = manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, "", collectorresult.Config{
 					ViewID:       firstNonEmptyResultID(task.ResultViewID, logicalIDs.ViewID),
-					DataNodeID:   dataNodeID,
 					Name:         task.TaskName,
 					Description:  task.Description,
 					Frequency:    taskResultFrequency(*params),

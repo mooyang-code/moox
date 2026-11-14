@@ -1,0 +1,35 @@
+# 美股的市场参数，只有 Collector 读，编进二进制（见 config/markets/embed.go）。
+# 交易时段、时区、交易日历登记在 packages/barclock，不在这里重复。
+market_id: stockus
+# 成交额的计价币种：K 线行的 amount_unit 写它的小写，标的属性 currency 写原值。
+currency: USD
+# 结果数据集的允许迟到时间默认值（秒），任务没写时用它。
+allowed_lateness_seconds: 90
+# 固定的序列标签；不写表示按数据源生成。
+series_tag: default
+# 实时批次不限标的数（每函数标的数由采集计划按容量校验）。
+realtime_batch_no_cap: true
+# 标的同步（指数成分）的请求直连。
+subject_egress: direct
+# 不写 subject_sync：美股没有全市场标的同步，标的由指数成分的标签同步创建。
+# 云函数出口探测：只取出口公网 IP（与 A 股、港股共用南京出口，不绑定数据源）。
+egress_probe: public_ip
+# 收市后多久把当天整天强制重取一遍（分钟）；不写就不重取。
+# 2026-11-13 冬令时实测纽约 16:00 那一根（10 只标的、东方财富 5m）：16:00:09 前后只有连续交易时段的成交，
+# 收盘竞价的成交在纽约 16:16:19～16:16:54 之间一次并进来（成交量变成原来的 1.6～7.6 倍，10 只同一窗口），
+# 所以重取必须在 16:17 之后；并入后这根的量仍缓慢增长到盘后（没有真正定稿的时刻），重取越晚越多混进盘后成交，
+# 取 16:20（并入之后约 3 分钟）。收盘价并入时小幅变化，没有出现收盘价超出最高、最低价。
+# 半日市（13:00 收市）并入时刻没有实测，按同样的 16 分钟推断，当天实际的收市时刻加 20 分钟即 13:20。
+refetch_after_close_minutes: 20
+# 采集计划的默认参数，moox.toml 的 [scf_plan] 里同名项优先。
+scf_plan:
+  # 固定每函数 50 只标的（标普 500 共 503 只、11 个函数）。美股只有一个数据源，每只每期一个请求，
+  # 函数内并发 16（等于东方财富限速的 max_concurrent），50 只 1 秒内取完。不按负载估算函数个数（不写 auto_size），
+  # 也不做出口 IP 去重（不写 egress_balance）。
+  symbols_per_function: 50
+  default_ingest: pull
+  default_executor: scf
+  # 收盘后固定等 5 秒再取数（not_before_ms），与 route.yaml 的结算延迟 5 秒一致，生成计划时校验前者不小于后者。
+  # 2026-11-12 实测两个边界（22:50、22:55）边界后 0.5～1.4 秒看到新一根、目标那根定稿；样本只有这两个边界，所以留足余量；
+  # 截止时间是收盘后 90 秒，多等没有代价。边界实测后可调小，调小前先同步改 route.yaml 的 settle_delay_ms。
+  fetch: {request_timeout_ms: 3000, storage_timeout_ms: 2000, not_before_ms: 5000}

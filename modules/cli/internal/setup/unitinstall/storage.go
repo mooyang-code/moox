@@ -9,7 +9,7 @@ import (
 )
 
 func storageComponent(id string) bool {
-	return slices.Contains([]string{"storage-primary", "storage-node", "storage-view"}, id)
+	return slices.Contains([]string{"storage-primary", "storage-view"}, id)
 }
 
 func configureStorageEnvironment(id string, values map[string]string) error {

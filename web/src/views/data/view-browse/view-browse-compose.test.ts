@@ -16,7 +16,12 @@ vi.mock("@/api/storage/metadata", () => ({
   listAllDatasets: vi.fn(),
   listAllViews: vi.fn()
 }));
-vi.mock("@/api/storage/view", () => ({ queryTimeSeriesRows: mocks.queryTimeSeries, searchRecordRows: vi.fn() }));
+vi.mock("@/api/storage/view", () => ({
+  getViewState: vi.fn().mockResolvedValue({ index_id: "index-a" }),
+  isViewNotFoundError: () => false,
+  queryTimeSeriesRows: mocks.queryTimeSeries,
+  searchRecordRows: vi.fn()
+}));
 vi.mock("@/store/modules/space", () => ({
   useSpaceStore: () => ({ selectedSpaceId: "crypto", requireSpaceId: () => "crypto" })
 }));

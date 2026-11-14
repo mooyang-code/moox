@@ -844,6 +844,70 @@ func (s *Service) DiscardPending(
 	return current, nil
 }
 
+// ForceExpireUnknownAfter 是提交结果未知的订单允许人工强制结束前必须经过的时间：给交易所查单和成交回报留足时间。
+const ForceExpireUnknownAfter = 10 * time.Minute
+
+// ErrUnknownTooRecent 表示订单进入结果未知的时间还不够长，不能强制结束。
+var ErrUnknownTooRecent = errors.New("订单提交结果未知的时间还不到 10 分钟，暂不能强制结束")
+
+// ExpireUnknown 由人工撤单调用：提交结果一直查不出来的订单（交易所既不返回订单、也不明确返回“没有这张单”）
+// 记为已过期并释放预留，让后续目标、清仓和减仓不再被它挡住。它不向交易所发任何请求；
+// 订单若其实已在交易所成交，持仓由账户同步的快照纠正。
+func (s *Service) ExpireUnknown(
+	ctx context.Context,
+	spaceID string,
+	orderID string,
+	reason string,
+) (orderdomain.Order, error) {
+	if s == nil || s.Store == nil {
+		return orderdomain.Order{}, ErrServiceConfig
+	}
+	record, err := s.Store.GetOrder(ctx, spaceID, orderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	if record.OwnerType == string(orderdomain.OwnerTarget) && record.LogicalAccountID != "" {
+		unlockExecution, err := s.Store.LockLogicalAccountExecutionContext(ctx, record.SpaceID, record.LogicalAccountID)
+		if err != nil {
+			return orderdomain.Order{}, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "expire_unknown_lock", Err: err}
+		}
+		defer unlockExecution()
+	}
+	unlock, err := s.Store.LockTradingAccountContext(ctx, record.TradingAccountID)
+	if err != nil {
+		return orderdomain.Order{}, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "expire_unknown_lock", Err: err}
+	}
+	defer unlock()
+	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	current, err := domainOrder(record)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	if current.State != orderdomain.SubmitUnknown {
+		return current, nil
+	}
+	if record.SubmittedAt <= 0 || s.now().Sub(time.UnixMilli(record.SubmittedAt)) < ForceExpireUnknownAfter {
+		return current, ErrUnknownTooRecent
+	}
+	expected := current.Version
+	if _, err := current.Expire(); err != nil {
+		return orderdomain.Order{}, err
+	}
+	applyAggregate(&record, current)
+	record.RemainingReservedQuantity = "0"
+	record.FinishedAt = s.now().UnixMilli()
+	record.RejectReason = "提交结果一直未知，人工强制结束：" + strings.TrimSpace(reason)
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.UpdateOrder(record, expected)
+	}); err != nil {
+		return orderdomain.Order{}, err
+	}
+	return current, nil
+}
+
 func (s *Service) ResolveUnknown(
 	ctx context.Context,
 	spaceID string,

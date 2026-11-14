@@ -37,7 +37,7 @@ func (g *gatewayDatasets) auth() *commonpb.AuthInfo {
 	return auth
 }
 
-// GetDataset 读取数据集的频率、保留期、DataNode 与激活状态。
+// GetDataset 读取数据集的频率、保留期、状态与元数据。
 func (g *gatewayDatasets) GetDataset(ctx context.Context, spaceID, datasetID string) (service.Dataset, error) {
 	if g == nil || g.gateway == nil {
 		return service.Dataset{}, errors.New("archive Storage gateway client is required")
@@ -60,7 +60,7 @@ func (g *gatewayDatasets) GetDataset(ctx context.Context, spaceID, datasetID str
 	}
 	return service.Dataset{
 		SpaceID: ds.GetSpaceId(), DatasetID: ds.GetDatasetId(), Name: ds.GetName(), DataKind: dataKind(ds.GetDataKind()), Freq: ds.GetFreq(),
-		Status: ds.GetStatus(), DataNodeID: ds.GetDataNodeId(), Retention: ds.GetRetention(),
+		Status: ds.GetStatus(), Retention: ds.GetRetention(),
 		Description: ds.GetDescription(), DataSourceID: ds.GetDataSourceId(), RetentionSource: ds.GetRetentionSource(), SubjectTags: ds.GetSubjectTags(),
 		Attributes: ds.GetAttributes(), CreatedAt: ds.GetCreatedAt(), UpdatedAt: ds.GetUpdatedAt(), Revision: ds.GetRevision(),
 	}, nil

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   columns: vi.fn(),
   queryTimeSeries: vi.fn(),
   queryRecords: vi.fn(),
+  viewState: vi.fn(),
   messageError: vi.fn()
 }));
 
@@ -18,7 +19,12 @@ vi.mock("@/api/storage/metadata", () => ({
   listAllDatasets: vi.fn(),
   listAllViews: vi.fn()
 }));
-vi.mock("@/api/storage/view", () => ({ queryTimeSeriesRows: mocks.queryTimeSeries, searchRecordRows: mocks.queryRecords }));
+vi.mock("@/api/storage/view", async importOriginal => ({
+  isViewNotFoundError: (await importOriginal<typeof import("@/api/storage/view")>()).isViewNotFoundError,
+  getViewState: mocks.viewState,
+  queryTimeSeriesRows: mocks.queryTimeSeries,
+  searchRecordRows: mocks.queryRecords
+}));
 vi.mock("@/store/modules/space", () => ({
   useSpaceStore: () => ({ selectedSpaceId: "crypto", requireSpaceId: () => "crypto" })
 }));
@@ -86,6 +92,7 @@ describe("View result refresh", () => {
     mocks.columns.mockReset().mockResolvedValue([]);
     mocks.queryTimeSeries.mockReset().mockResolvedValue({ rows: [{ key: { subject_id: "BTC", freq: "1m" } }] });
     mocks.queryRecords.mockReset().mockResolvedValue({ rows: [{ key: { record_id: "record-known" } }] });
+    mocks.viewState.mockReset().mockResolvedValue({ index_id: "index-a", columns: [] });
     mocks.messageError.mockReset();
   });
 
@@ -285,6 +292,62 @@ describe("View result refresh", () => {
     rows.resolve({ rows: [] });
     await flushPromises();
     expect(mocks.queryTimeSeries).toHaveBeenCalledTimes(3);
+    wrapper.unmount();
+  });
+});
+
+describe("View 索引状态", () => {
+  beforeEach(() => {
+    mocks.catalog.mockReset().mockResolvedValue({
+      views: [{ view_id: "view-known", dataset_id: "dataset-known" }],
+      datasets: [{ dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]
+    });
+    mocks.columns.mockReset().mockResolvedValue([{ column_name: "open" }, { column_name: "close" }]);
+    mocks.queryTimeSeries.mockReset().mockResolvedValue({ rows: [] });
+    mocks.viewState.mockReset();
+    mocks.messageError.mockReset();
+  });
+
+  function tagText(wrapper: { vm: unknown }) {
+    return (wrapper.vm as { viewIndexTag: { text: string } }).viewIndexTag.text;
+  }
+
+  it("从 GetViewState 读出已构建、已建列与覆盖范围", async () => {
+    mocks.viewState.mockResolvedValue({
+      index_id: "index-a",
+      columns: [{ column_name: "open" }],
+      indexed_from: "2026-01-01T00:00:00Z",
+      indexed_to: "2026-01-02T00:00:00Z"
+    });
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(mocks.viewState).toHaveBeenCalledWith({ space_id: "crypto", view_id: "view-known" }, { silentError: true });
+    expect(tagText(wrapper)).toBe("已构建");
+    expect(wrapper.text()).toContain("已建列: 1/2");
+    expect(wrapper.text()).toContain("覆盖: 2026-01-01 00:00:00");
+    wrapper.unmount();
+  });
+
+  it("索引为空显示构建中，VIEW_NOT_FOUND 显示未构建，其他失败显示未知且不影响查询", async () => {
+    mocks.viewState.mockResolvedValueOnce({ index_id: "" });
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(tagText(wrapper)).toBe("构建中");
+    expect(wrapper.text()).not.toContain("已建列");
+
+    mocks.viewState.mockRejectedValueOnce(Object.assign(new Error("not found"), { retCode: "VIEW_NOT_FOUND" }));
+    await wrapper.setProps({ refreshKey: 1 });
+    await flushPromises();
+    expect(tagText(wrapper)).toBe("未构建");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.viewState.mockRejectedValueOnce(new Error("Storage unavailable"));
+    await wrapper.setProps({ refreshKey: 2 });
+    await flushPromises();
+    expect(tagText(wrapper)).toBe("索引状态未知");
+    expect(mocks.queryTimeSeries).toHaveBeenCalledTimes(3);
+    expect(mocks.messageError).not.toHaveBeenCalled();
+    warn.mockRestore();
     wrapper.unmount();
   });
 });

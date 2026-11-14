@@ -1,7 +1,3 @@
-gateway_client:
-  caller: storage-view
-  key_id: "" # Admin 分配，部署时填入。
-  key_file: ../../secrets/caller-storage-view.key
 storage:
   root: ./var/storage
   # Dataset retention and View limits rendered by moox-cli from moox.toml.
@@ -16,17 +12,7 @@ storage:
     view_index_root: ./var/storage/view-indexes
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-  primary:
-    service_name: ""
-    node_id: storage-node-0
   view:
-    batch_size: 500
-    # View 只有一种消费方式：每个数据集一个动态消费者（view_<数据集哈希>），共用这组全局并发参数。
-    # 默认都是 1：同一数据集内按顺序处理，避免同一行的两次更新先后颠倒；导入历史时追平不够快再调大。
-    fetch_batch: 1
-    max_workers: 1
-    max_ack_pending: 1
-    ack_wait_ms: 120000
     # 首次建索引时按页读取主库历史并串行请求，避免对 Storage 形成突发压力。
     backfill_page_size: 2000
     backfill_request_interval: 100ms

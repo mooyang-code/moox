@@ -8,7 +8,38 @@ import "moox_common.proto";
 import "common.proto";
 import "rows.proto";
 import "dataset_markers.proto";
-import "data_node.proto";
+
+message DatasetPeriodExpectation {
+  string space_id = 1;
+  string dataset_id = 2;
+  string frequency = 3;
+  int64 period_time = 4;
+  string series_hash = 5;
+  uint32 expected_count = 6;
+}
+
+// SeriesSnapshotEntry 是快照中一条序列的身份（标的加 series_tag），Storage 用它重算 series_hash。
+message SeriesSnapshotEntry {
+  string subject_id = 1;
+  string series_tag = 2;
+}
+
+message TimeSeriesBatchRow {
+  uint32 series_index = 1;
+  RowFieldUpsert row = 2;
+}
+
+// RowsCursor 是 ReadTimeSeriesRows 游标的内容，只在服务端编码与解码，不出现在公开请求中。
+message RowsCursor {
+  // 区间读取：最后一行的键。
+  TimeSeriesRowKey last = 1;
+  // 最近 N 根：当前序列（subject_id、freq、series_tag）、续读位置（该序列已返回的最早一根的 data_time）及该序列已返回的根数。
+  string subject_id = 2;
+  string freq = 3;
+  string series_tag = 4;
+  string resume_before = 5;
+  uint32 returned = 6;
+}
 
 
 message PrimaryRegisterSeriesSnapshotReq {
@@ -40,7 +71,7 @@ message PrimaryCommitTimeSeriesBatchRsp {
   repeated uint32 accepted_series_indexes = 4;
 }
 
-// PrimaryUpsertFieldsReq 写入一个数据集的行：每行的数据集必须与 space_id、dataset_id 一致；一次写入只产生一条行变更事件。
+// PrimaryUpsertFieldsReq 写入一个数据集的行：每行的数据集必须与 space_id、dataset_id 一致；一次写入在变更日志里记一条行条目。
 message PrimaryUpsertFieldsReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -70,27 +101,6 @@ message PrimaryReadRowsRsp {
   repeated RowFieldValues rows = 2;
 }
 
-message PrimaryDeleteDatasetRowsReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string dataset_id = 3;
-}
-
-message PrimaryDeleteDatasetRowsRsp {
-  common.RetInfo ret_info = 1;
-  uint64 deleted_ranges = 2;
-}
-
-message PrimaryRestoreDatasetRowsReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string dataset_id = 3;
-}
-
-message PrimaryRestoreDatasetRowsRsp {
-  common.RetInfo ret_info = 1;
-}
-
 message ReportDatasetPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -100,17 +110,6 @@ message ReportDatasetPeriodCompletedRsp {
   common.RetInfo ret_info = 1;
   string event_id = 2;
 }
-message AppendDatasetSyncPointReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  DatasetSyncPointMarker sync_point = 3;
-}
-
-message AppendDatasetSyncPointRsp {
-  common.RetInfo ret_info = 1;
-  string event_id = 2;
-}
-
 message GetDatasetPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -124,37 +123,17 @@ message GetDatasetPeriodCompletedRsp {
   string event_id = 3;
   DatasetPeriodCompletedMarker marker = 4;
 }
-message WaitViewSyncPointReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string view_id = 3;
-  string request_id = 4;
-  repeated string dataset_ids = 5;
-  uint32 wait_timeout_ms = 6;
-}
-
-message WaitViewSyncPointRsp {
-  common.RetInfo ret_info = 1;
-  bool ready = 2;
-  repeated string pending_dataset_ids = 3;
-}
-
-// PrimaryStore is the metadata-validating user boundary and routes one Dataset
-// to its owner node.
+// PrimaryStore 是带元数据校验的读写入口，直接读写同进程的 Pebble 存储。
 service PrimaryStore {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(PrimaryUpsertFieldsReq) returns (PrimaryUpsertFieldsRsp);
   rpc RegisterSeriesSnapshot(PrimaryRegisterSeriesSnapshotReq) returns (PrimaryRegisterSeriesSnapshotRsp);
   rpc CommitTimeSeriesBatch(PrimaryCommitTimeSeriesBatchReq) returns (PrimaryCommitTimeSeriesBatchRsp);
   rpc ReadRows(PrimaryReadRowsReq) returns (PrimaryReadRowsRsp);
-  rpc DeleteDatasetRows(PrimaryDeleteDatasetRowsReq) returns (PrimaryDeleteDatasetRowsRsp);
-  rpc RestoreDatasetRows(PrimaryRestoreDatasetRowsReq) returns (PrimaryRestoreDatasetRowsRsp);
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
   rpc CountTimeSeriesRows(CountTimeSeriesRowsReq) returns (CountTimeSeriesRowsRsp);
-  // ReadDatasetChanges 按序读取持久化的行变更日志，因子机的本地副本据此同步修正。
+  // ReadDatasetChanges 按序读取持久化的变更日志（行写入与完成标记）：因子机的本地副本据此同步修正，View 据此跟随写入。
   rpc ReadDatasetChanges(ReadDatasetChangesReq) returns (ReadDatasetChangesRsp);
   rpc ReportDatasetPeriodCompleted(ReportDatasetPeriodCompletedReq) returns (ReportDatasetPeriodCompletedRsp);
-  rpc AppendDatasetSyncPoint(AppendDatasetSyncPointReq) returns (AppendDatasetSyncPointRsp);
   rpc GetDatasetPeriodCompleted(GetDatasetPeriodCompletedReq) returns (GetDatasetPeriodCompletedRsp);
-  rpc WaitViewSyncPoint(WaitViewSyncPointReq) returns (WaitViewSyncPointRsp);
 }

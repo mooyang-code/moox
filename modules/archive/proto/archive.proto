@@ -60,7 +60,6 @@ message ArchiveTask {
   string freq = 3;
   // partition_unit：day、month。
   string partition_unit = 4;
-  string data_node_id = 5;
   string retention = 6;
   // 每收盘多少根 K 线拉取一次（N，1～1440）；1d 及以上每天一次，忽略 N。
   uint32 pull_every_bars = 7;
@@ -223,7 +222,6 @@ message PrepareArchiveTaskRsp {
   string partition_unit = 3;
   string retention = 4;
   string earliest_backfill_from = 5;
-  string data_node_id = 6;
   // 推荐的拉取间隔（根数 N）。
   uint32 recommended_pull_every_bars = 7;
   bool exists = 8;
@@ -492,20 +490,14 @@ message AvoidanceRules {
   string computed_at = 7;
 }
 
-// DataNodeLoad 是 worker 当前在某个 DataNode 上占用的运行数。
-message DataNodeLoad {
-  string data_node_id = 1;
-  uint32 running = 2;
-}
-
 message PullArchiveRunReq {
   string worker_id = 1;
   string instance_id = 2;
   // 空闲的并发槽数，最多返回这么多个运行。
   uint32 free_slots = 3;
-  // 每个 DataNode 允许同时运行的上限。
-  uint32 max_runs_per_data_node = 4;
-  repeated DataNodeLoad busy_data_nodes = 5;
+  // 读 Storage 的运行（导入除外）同时运行的全局上限，以及该 worker 当前正在运行的这类运行数。
+  uint32 max_storage_runs = 4;
+  uint32 busy_storage_runs = 5;
 }
 
 // RunAssignment 是下发给 worker 的一次运行的全部参数。
@@ -517,7 +509,6 @@ message RunAssignment {
   string dataset_id = 5;
   string freq = 6;
   string partition_unit = 7;
-  string data_node_id = 8;
   string retention = 9;
   // 复核间隔（秒）；首次复核没有水位与回补起点时从「开始 − 复核间隔 − L − S」读起。
   uint32 interval_seconds = 10;

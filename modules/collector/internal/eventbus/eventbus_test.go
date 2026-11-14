@@ -39,13 +39,13 @@ func queueDelist(t *testing.T, db *store.Store, registry *events.Registry, symbo
 	raw, err := registry.MarshalMessage(events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
 		Exchange: "binance", Market: events.DelistMarketSpot, ExchangeSymbol: symbol, DelistAt: timestamppb.New(delistAt),
 		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(delistAt.Add(-time.Hour)), Scope: events.DelistScopeAll,
-	}, events.PublishOptions{EventID: eventID, OccurredAt: delistAt.Add(-time.Hour), SpaceID: events.DelistSystemSpaceID, SubjectID: subject})
+	}, events.PublishOptions{EventID: eventID, OccurredAt: delistAt.Add(-time.Hour), SpaceID: events.SystemSpaceID, SubjectID: subject})
 	require.NoError(t, err)
 	created, _, err := db.DelistNotices().Register(context.Background(), store.DelistNotice{
 		Exchange: "binance", Market: events.DelistMarketSpot, Symbol: symbol, Scope: events.DelistScopeAll, DelistAt: delistAt,
 		Source: events.DelistSourceManual, SeenAt: delistAt.Add(-time.Hour),
 	}, func(int) (store.OutboxEvent, error) {
-		return store.OutboxEvent{EventID: eventID, SpaceID: events.DelistSystemSpaceID, EventName: events.InstrumentDelistScheduled.Name(), SubjectToken: subject, Payload: raw}, nil
+		return store.OutboxEvent{EventID: eventID, SpaceID: events.SystemSpaceID, EventName: events.InstrumentDelistScheduled.Name(), SubjectToken: subject, Payload: raw}, nil
 	})
 	require.NoError(t, err)
 	require.True(t, created)
@@ -230,7 +230,7 @@ func TestInvalidOutboxEventIsParkedAndDoesNotBlockTheRest(t *testing.T) {
 	// 先放一条无法解码的事件，再放一条正常的。
 	_, _, err = db.DelistNotices().Register(ctx, store.DelistNotice{Exchange: "binance", Market: events.DelistMarketSpot, Symbol: "BROKEN", Scope: events.DelistScopeAll, DelistAt: time.Now(), Source: events.DelistSourceManual, SeenAt: time.Now()},
 		func(int) (store.OutboxEvent, error) {
-			return store.OutboxEvent{EventID: "broken", SpaceID: events.DelistSystemSpaceID, EventName: events.InstrumentDelistScheduled.Name(), SubjectToken: "x", Payload: []byte("not protobuf")}, nil
+			return store.OutboxEvent{EventID: "broken", SpaceID: events.SystemSpaceID, EventName: events.InstrumentDelistScheduled.Name(), SubjectToken: "x", Payload: []byte("not protobuf")}, nil
 		})
 	require.NoError(t, err)
 	queueDelist(t, db, registry, "GOODUSDT")

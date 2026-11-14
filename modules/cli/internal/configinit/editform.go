@@ -97,7 +97,7 @@ type FormSpace struct {
 // retentionFrequencies 是保留期表格的行（标准档，从短到长）；其他整除一天的频率沿用时长不超过它的标准档，需要单独配置时在配置文件里手写。
 var retentionFrequencies = frequencypkg.StandardStrings()
 
-var spaceNames = map[string]string{"crypto": "加密货币", "stockcn": "A 股", "stockhk": "港股", "stockus": "美股", "mooxsys": "系统数据"}
+var spaceNames = map[string]string{"crypto": "加密货币", "stockcn": "A 股", "stockhk": "港股", "stockus": "美股"}
 
 // formFrom 从当前配置读出表单的值。
 func formFrom(m setupconfig.Manifest) ConfigForm {
@@ -145,7 +145,7 @@ func formFrom(m setupconfig.Manifest) ConfigForm {
 		}
 	}
 	// 先按常见市场的顺序，其余按名称。
-	order := map[string]int{"crypto": 0, "stockcn": 1, "stockhk": 2, "stockus": 3, "mooxsys": 4}
+	order := map[string]int{"crypto": 0, "stockcn": 1, "stockhk": 2, "stockus": 3}
 	sort.Slice(ids, func(i, j int) bool {
 		oi, iok := order[ids[i]]
 		oj, jok := order[ids[j]]

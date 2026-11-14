@@ -12,9 +12,8 @@ func TestConsumerEventFiltersSupportOneDurableWithMultipleEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := ConsumerConfig{Events: []Event{
-		DatasetRowsUpserted,
 		DatasetPeriodCompleted,
-		DatasetSyncPoint,
+		ViewDataReady,
 	}}
 	stream, filters, err := consumerEventFilters(registry, cfg)
 	if err != nil {
@@ -24,9 +23,8 @@ func TestConsumerEventFiltersSupportOneDurableWithMultipleEvents(t *testing.T) {
 		t.Fatalf("stream = %q", stream)
 	}
 	want := []string{
-		"moox.event.storage.dataset.rows.upserted.v2.>",
 		"moox.event.storage.dataset.period.completed.v1.>",
-		"moox.event.storage.dataset.sync_point.v1.>",
+		"moox.event.storage.view.data.ready.v2.>",
 	}
 	if !reflect.DeepEqual(filters, want) {
 		t.Fatalf("filters = %v, want %v", filters, want)
@@ -43,9 +41,9 @@ func TestConsumerEventFiltersRejectAmbiguousOrCrossStreamEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []ConsumerConfig{
-		{Event: DatasetRowsUpserted, Events: []Event{DatasetPeriodCompleted}},
-		{Events: []Event{DatasetRowsUpserted, DatasetRowsUpserted}},
-		{Events: []Event{DatasetRowsUpserted, ObservabilityHostSnapshotReported}},
+		{Event: ViewDataReady, Events: []Event{DatasetPeriodCompleted}},
+		{Events: []Event{ViewDataReady, ViewDataReady}},
+		{Events: []Event{ViewDataReady, ObservabilityHostSnapshotReported}},
 		{},
 	}
 	for _, cfg := range tests {
@@ -60,7 +58,7 @@ func TestConsumerEventFiltersAcceptExactSubjectPartition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, err := registry.RenderSubject(DatasetRowsUpserted, "crypto", "dataset_binance_kline_1m")
+	row, err := registry.RenderSubject(ViewDataReady, "crypto", "dataset_binance_kline_1m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,12 +66,12 @@ func TestConsumerEventFiltersAcceptExactSubjectPartition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := ConsumerConfig{Stream: DatasetRowsUpserted.Stream(), FilterSubjects: []string{row, marker}}
+	cfg := ConsumerConfig{Stream: ViewDataReady.Stream(), FilterSubjects: []string{row, marker}}
 	stream, filters, err := consumerEventFilters(registry, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stream != DatasetRowsUpserted.Stream() || !reflect.DeepEqual(filters, []string{row, marker}) {
+	if stream != ViewDataReady.Stream() || !reflect.DeepEqual(filters, []string{row, marker}) {
 		t.Fatalf("exact filters = %q/%v", stream, filters)
 	}
 }
@@ -84,8 +82,8 @@ func TestConsumerEventFiltersRejectExactSubjectWithoutStreamOrMixedMode(t *testi
 		t.Fatal(err)
 	}
 	for _, cfg := range []ConsumerConfig{
-		{FilterSubjects: []string{"moox.event.storage.dataset.rows.upserted.v2.crypto.binance"}},
-		{Stream: DatasetRowsUpserted.Stream(), FilterSubjects: []string{"moox.event.storage.dataset.rows.upserted.v2.crypto.binance"}, Event: DatasetRowsUpserted},
+		{FilterSubjects: []string{"moox.event.storage.view.data.ready.v2.crypto.binance"}},
+		{Stream: ViewDataReady.Stream(), FilterSubjects: []string{"moox.event.storage.view.data.ready.v2.crypto.binance"}, Event: ViewDataReady},
 	} {
 		if _, _, err := consumerEventFilters(registry, cfg); err == nil {
 			t.Fatalf("consumerEventFilters(%+v) accepted invalid exact filter config", cfg)
@@ -99,13 +97,13 @@ func TestSpaceConsumerFilterOnlyIncludesOneSpace(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := spaceConsumerFilter(registry, SpaceConsumerConfig{
-		ConsumerConfig: ConsumerConfig{Event: DatasetRowsUpserted},
+		ConsumerConfig: ConsumerConfig{Event: ViewDataReady},
 		SpaceID:        "crypto",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := registry.SpacePattern(DatasetRowsUpserted, "crypto")
+	want, err := registry.SpacePattern(ViewDataReady, "crypto")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +117,7 @@ func TestSpaceConsumerFilterRejectsEmptySpaceID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = spaceConsumerFilter(registry, SpaceConsumerConfig{ConsumerConfig: ConsumerConfig{Event: DatasetRowsUpserted}})
+	_, err = spaceConsumerFilter(registry, SpaceConsumerConfig{ConsumerConfig: ConsumerConfig{Event: ViewDataReady}})
 	if err == nil || !strings.Contains(err.Error(), "space_id") {
 		t.Fatalf("error = %v, want space_id validation", err)
 	}

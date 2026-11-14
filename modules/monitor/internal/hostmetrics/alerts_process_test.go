@@ -13,7 +13,7 @@ import (
 
 func processSnapshot() *hostmetricpb.HostSnapshot {
 	return &hostmetricpb.HostSnapshot{TopProcesses: []*hostmetricpb.ProcessMetric{
-		{Pid: 11, Name: "storage-node", CpuPercent: 340, CpuAvailable: true, RssBytes: 5 << 30},
+		{Pid: 11, Name: "storage-primary", CpuPercent: 340, CpuAvailable: true, RssBytes: 5 << 30},
 		{Pid: 12, Name: "duckdb", CpuPercent: 45, CpuAvailable: true, RssBytes: 7 << 30},
 		{Pid: 13, Name: "fresh", RssBytes: 1 << 30},
 		{Pid: 14, Name: " ", CpuPercent: 900, CpuAvailable: true},
@@ -30,14 +30,14 @@ func TestHostAlertTextListsTopProcesses(t *testing.T) {
 	}
 	cpu := hostSample{agentID: "a", hostname: "storage", metric: HostMetricCPU, value: 91, threshold: 80, processes: processes}
 	_, body := hostAlertText(cpu, domain.AlertEventTriggered, now)
-	if !strings.Contains(body, "占用最高（进程 CPU 按单核计）：storage-node CPU 340%、内存 5.0 GB；duckdb CPU 45%、内存 7.0 GB\n") || strings.Contains(body, "broken") {
+	if !strings.Contains(body, "占用最高（进程 CPU 按单核计）：storage-primary CPU 340%、内存 5.0 GB；duckdb CPU 45%、内存 7.0 GB\n") || strings.Contains(body, "broken") {
 		t.Fatalf("CPU 告警正文：%s", body)
 	}
 	memory := cpu
 	memory.metric = HostMetricMemory
 	_, body = hostAlertText(memory, domain.AlertEventReminder, now)
 	// 内存排行有 4 个进程，正文只列前 3 个（第 4 个是 broken）。
-	if !strings.Contains(body, "占用最高（进程 CPU 按单核计）：duckdb CPU 45%、内存 7.0 GB；storage-node CPU 340%、内存 5.0 GB；fresh 内存 1.0 GB\n") || strings.Contains(body, "broken") {
+	if !strings.Contains(body, "占用最高（进程 CPU 按单核计）：duckdb CPU 45%、内存 7.0 GB；storage-primary CPU 340%、内存 5.0 GB；fresh 内存 1.0 GB\n") || strings.Contains(body, "broken") {
 		t.Fatalf("内存告警正文：%s", body)
 	}
 	if _, body = hostAlertText(cpu, domain.AlertEventResolved, now); strings.Contains(body, "占用最高") {
@@ -70,7 +70,7 @@ func TestAlertPayloadKeepsTheFullRanking(t *testing.T) {
 		t.Fatalf("事件里要带 PID，用来区分同名进程：%+v", payload.TopProcesses)
 	}
 	// NaN 的 CPU 值不能进 JSON（会让整条事件内容序列化失败），按“没有 CPU 值”记录。
-	if payload.TopProcesses[0].Name != "storage-node" || *payload.TopProcesses[0].CPUPercent != 340 || payload.TopProcesses[3].Name != "broken" || payload.TopProcesses[3].CPUPercent != nil {
+	if payload.TopProcesses[0].Name != "storage-primary" || *payload.TopProcesses[0].CPUPercent != 340 || payload.TopProcesses[3].Name != "broken" || payload.TopProcesses[3].CPUPercent != nil {
 		t.Fatalf("top_processes = %+v", payload.TopProcesses)
 	}
 	if strings.Contains(string(alertPayload(sample, domain.AlertEventResolved)), "top_processes") {

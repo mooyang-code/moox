@@ -155,7 +155,7 @@ func TestBackfillTriggerFiltersBySeriesTags(t *testing.T) {
 		return &storagepb.CollectorKlineBackfilled{
 			DatasetId: "dataset_src", Frequency: "1m", SubjectIds: []string{"BTC"}, SeriesTags: tags,
 			Start: timestamppb.New(utc("2026-10-21T10:00:00Z")), End: timestamppb.New(utc("2026-10-21T10:10:00Z")),
-			Origin: "auto", SyncRequestId: "kbf", ConfirmedAt: timestamppb.New(utc("2026-10-21T11:00:00Z")),
+			Origin: "auto", ConfirmedAt: timestamppb.New(utc("2026-10-21T11:00:00Z")),
 		}
 	}
 	ctx := context.Background()
@@ -197,8 +197,7 @@ func TestNoticePublisherCarriesSeriesTagsOnlyForUnifiedDatasets(t *testing.T) {
 	}))
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	sync := &recordingSync{}
-	publisher := &NoticePublisher{State: mgr.Resample(), Sync: sync, Registry: registry, Enabled: true, Wake: func() {}, Now: func() time.Time { return start.Add(3 * time.Hour) }}
+	publisher := &NoticePublisher{State: mgr.Resample(), Registry: registry, Enabled: true, Wake: func() {}, Now: func() time.Time { return start.Add(3 * time.Hour) }}
 	require.NoError(t, publisher.Flush(ctx))
 	pending, err := mgr.Resample().PendingEvents(ctx, 10)
 	require.NoError(t, err)

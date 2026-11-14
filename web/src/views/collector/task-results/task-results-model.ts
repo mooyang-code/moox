@@ -112,7 +112,7 @@ function queryString(value: unknown) {
 }
 
 /**
- * 按结果数据集（和周期）找任务：告警、存储节点等处带 ?dataset=&freq= 跳进来时自动选中。
+ * 按结果数据集（和周期）找任务：告警等处带 ?dataset=&freq= 跳进来时自动选中。
  * 同一个数据集有多个任务时按周期挑；找不到时返回空串。
  */
 export function taskIdForDataset(tasks: CollectorTask[], datasetId: unknown, freq: unknown): string {

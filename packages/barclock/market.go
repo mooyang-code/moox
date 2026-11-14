@@ -20,11 +20,12 @@ type Market struct {
 	Sessions   []string
 }
 
-// 当前登记的市场：空间 ID 即市场 ID。美股补上交易日历后在此登记。
+// 当前登记的市场：空间 ID 即市场 ID。
 var markets = map[string]Market{
 	"crypto":  {ID: "crypto", Alignment: AlignmentEpochUTC},
 	"stockcn": {ID: "stockcn", Alignment: AlignmentSession, CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}},
 	"stockhk": {ID: "stockhk", Alignment: AlignmentSession, CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: []string{"09:30-12:00", "13:00-16:00"}},
+	"stockus": {ID: "stockus", Alignment: AlignmentSession, CalendarID: "us_stock", Timezone: "America/New_York", Sessions: []string{"09:30-16:00"}},
 }
 
 // Markets 返回全部已登记的市场，按 ID 排序。

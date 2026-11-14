@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/packages/events"
 )
 
 type fakeHostRuleSource struct {
@@ -38,7 +39,7 @@ func (s *fakeHostRuleSource) calls() int {
 }
 
 func hostRule(ruleID, agentID, metric string, enabled bool) domain.AlertRule {
-	return domain.AlertRule{SpaceID: SpaceID, RuleID: ruleID, CheckID: HostRuleKey(agentID, metric), Enabled: enabled}
+	return domain.AlertRule{SpaceID: events.SystemSpaceID, RuleID: ruleID, CheckID: HostRuleKey(agentID, metric), Enabled: enabled}
 }
 
 func TestParseHostRuleKey(t *testing.T) {
@@ -61,7 +62,7 @@ func TestRuleCacheLoadsOnlyEnabledSystemHostRules(t *testing.T) {
 		hostRule("cpu-rule", "agent-1", HostMetricCPU, true),
 		hostRule("disabled", "agent-1", HostMetricCPU, false),
 		{SpaceID: "other", RuleID: "other", CheckID: HostRuleKey("agent-1", HostMetricCPU), Enabled: true},
-		{SpaceID: SpaceID, RuleID: "service", CheckID: "check-api", Enabled: true},
+		{SpaceID: events.SystemSpaceID, RuleID: "service", CheckID: "check-api", Enabled: true},
 	}}
 	cache, err := NewRuleCache(RuleCacheOptions{Repository: source, RefreshInterval: time.Hour})
 	if err != nil {

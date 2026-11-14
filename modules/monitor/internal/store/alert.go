@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/packages/events"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -57,7 +58,7 @@ func (r *AlertRepository) ListEnabledFiringStates(ctx context.Context, spaceID s
 		Where("s.c_check_id LIKE ? OR EXISTS (SELECT 1 FROM t_monitor_checks AS c WHERE c.c_space_id = s.c_space_id AND c.c_check_id = s.c_check_id AND c.c_enabled = 1)", "host:%").
 		Order("s.c_triggered_at DESC, s.c_id DESC")
 	if spaceID != "" {
-		query = query.Where("s.c_space_id IN ?", []string{spaceID, "", "mooxsys"})
+		query = query.Where("s.c_space_id IN ?", []string{spaceID, "", events.SystemSpaceID})
 	}
 	if limit > 0 {
 		query = query.Limit(limit)

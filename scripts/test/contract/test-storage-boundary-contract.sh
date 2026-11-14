@@ -73,10 +73,12 @@ grep -Fq '(模块/存储.md)' docs/总体设计.md || fail 'overall design does 
 [[ ! -d modules/storage/internal/errorcode ]] || fail 'storage internal/errorcode must be absent'
 [[ ! -d modules/storage/internal/rpcresult ]] || fail 'storage internal/rpcresult must be absent'
 
-assert_no_match 'trpc\.moox\.storage\.(Access|AccessScan)|Write(TimeSeries|Record)Rows|WritePrimaryRows|ReadPrimaryRows|WriteViewIndex|ViewIndexBatch\b|active_coverage_(start|end)|factkey|factvalue|DataChange|EnvelopePublisher|PublishEnvelope|RawEnvelope' modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go modules/storage/internal/service/viewindex/slots.go packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
+assert_no_match 'trpc\.moox\.storage\.(Access|AccessScan)|Write(TimeSeries|Record)Rows|WritePrimaryRows|ReadPrimaryRows|WriteViewIndex|ViewIndexBatch\b|active_coverage_(start|end)|factkey|factvalue|DataChange|EnvelopePublisher|PublishEnvelope|RawEnvelope' modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
 # 管理后台的配置备份使用“加密信封（Envelope）”字段，与存储事件信封无关，因此裸 Envelope 只在其余目录中禁止。
-assert_no_match '\bEnvelope\b' modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go modules/storage/internal/service/viewindex/slots.go packages/gatewayroute modules/hostgateway web/src/api/storage examples
-assert_no_match 'FactKey|RowMarker|content_hash|FACT_VERSION_IMMUTABLE|node_sequence|source_sequence|DatasetProgress|GetDatasetProgress|ViewIndexSourceProgress|expected_last_applied_sequence|base_progress|MergeRows|DeleteRows|ScanRows|keep_days' modules/storage/proto modules/storage/schema modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go modules/storage/internal/service/viewindex/slots.go
+assert_no_match '\bEnvelope\b' modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go packages/gatewayroute modules/hostgateway web/src/api/storage examples
+assert_no_match 'FactKey|RowMarker|content_hash|FACT_VERSION_IMMUTABLE|node_sequence|source_sequence|DatasetProgress|GetDatasetProgress|ViewIndexSourceProgress|expected_last_applied_sequence|base_progress|MergeRows|DeleteRows|ScanRows|keep_days' modules/storage/proto modules/storage/schema modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go
+# View 进程只对外提供 DataView：没有 ViewIndex 服务与监听；错误码只按存储层错误类别映射，不按错误文字推断。
+assert_no_match 'service ViewIndex|trpc\.moox\.storage\.ViewIndex|MetadataStoreCode' modules/storage packages/gatewayroute packages/servicecatalog
 assert_no_match 'ProjectionReader|internal/(core|infra)/' modules/storage packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
 assert_no_match 'storage[_-]access|moox-access|internal/accessproxy|cmd/access' modules/storage/cmd modules/storage/internal packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
 # Standalone Admin/Storage CLIs and Storage's long-lived maintenance loops intentionally
@@ -100,14 +102,19 @@ assert_no_legacy_series_identity
 while IFS= read -r match; do
   file="${match%%:*}"
   [[ "${file}" == modules/storage/internal/service/datanode/* ]] || fail "Pebble import outside DataNode: ${match}"
-done < <(rg -n 'cockroachdb/pebble' modules/storage/internal/service/datanode --glob '*.go' || true)
+done < <(rg -n 'cockroachdb/pebble' modules/storage --glob '*.go' --glob '!**/*_test.go' || true)
 
 while IFS= read -r match; do
   file="${match%%:*}"
   [[ "${file}" == modules/storage/internal/service/viewindex/* ]] || fail "DuckDB/Bleve import outside ViewIndex: ${match}"
 done < <(rg -n 'go-duckdb|blevesearch/bleve' modules/storage --glob '*.go' --glob '!**/*_test.go' || true)
 
-rg -n 'RowKey|ViewIndexApplyBatch|ViewSchemaHash|ViewRevision|indexed_from|indexed_to' modules/storage/internal/service/viewindex modules/storage/proto >/dev/null || fail 'ViewIndex write contract is not present'
+# ViewIndex 写入契约：批次带修订号与列契约哈希，按这两项拒绝过期的写入。
+write_batch=$(awk '/^type ViewIndexWriteBatch struct \{/{inside=1; next} inside && /^\}/{exit} inside' modules/storage/internal/service/viewindex/model.go)
+[[ -n "${write_batch}" ]] || fail 'ViewIndexWriteBatch is not present'
+for field in 'ViewRevision +uint64' 'ViewSchemaHash +string'; do
+  grep -Eq "^[[:space:]]+${field}$" <<<"${write_batch}" || fail "ViewIndexWriteBatch field is missing: ${field}"
+done
 rg -n 'AllowedCallers|allowed_callers|AllowsCaller' packages/gatewayroute modules/admin/internal/service/sysdeploy modules/hostgateway/internal >/dev/null || fail 'Gateway caller ACL is not present'
 
 echo 'storage boundary contract passed'

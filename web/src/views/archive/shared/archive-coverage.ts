@@ -46,7 +46,7 @@ export async function loadArchiveCoverage(spaceId: string, nowMs = Date.now()): 
       spaceId,
       loadedAt: nowMs,
       tasks: new Map((taskRsp.tasks || []).map(task => [task.dataset_id || "", task])),
-      archivable: new Set(datasets.filter(item => archivableDataset(item, spaceId)).map(item => item.dataset_id))
+      archivable: new Set(datasets.filter(item => archivableDataset(item)).map(item => item.dataset_id))
     };
   } catch {
     return null;

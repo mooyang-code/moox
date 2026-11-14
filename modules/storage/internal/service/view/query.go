@@ -17,33 +17,6 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-func (s *Service) QueryTimeSeriesIndex(ctx context.Context, req *pb.QueryTimeSeriesIndexReq) (*pb.QueryTimeSeriesIndexRsp, error) {
-	if req == nil {
-		return &pb.QueryTimeSeriesIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
-	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
-		return &pb.QueryTimeSeriesIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	rows, err := s.query(ctx, req.GetIndexId(), req.GetKeys(), req.GetFieldIds())
-	if err != nil {
-		return &pb.QueryTimeSeriesIndexRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
-	}
-	return &pb.QueryTimeSeriesIndexRsp{RetInfo: retinfo.Success("success"), Rows: rows}, nil
-}
-func (s *Service) SearchRecordIndex(ctx context.Context, req *pb.SearchRecordIndexReq) (*pb.SearchRecordIndexRsp, error) {
-	if req == nil {
-		return &pb.SearchRecordIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
-	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
-		return &pb.SearchRecordIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	rows, err := s.query(ctx, req.GetIndexId(), req.GetKeys(), req.GetFieldIds())
-	if err != nil {
-		return &pb.SearchRecordIndexRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
-	}
-	return &pb.SearchRecordIndexRsp{RetInfo: retinfo.Success("success"), Rows: rows}, nil
-}
-
 // QueryTimeSeriesRows pushes the complete predicate, ordering, and pagination
 // into the DuckDB engine. The service only owns routing and response shaping.
 func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
@@ -317,39 +290,19 @@ func rowToRecordKey(k *pb.RowKey) *pb.RecordKey {
 	}
 	return &pb.RecordKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), RecordId: k.GetRecord().GetRecordId(), Version: k.GetRecord().GetVersion()}
 }
-func (s *Service) query(ctx context.Context, id string, keys []*pb.RowKey, fields []string) ([]*pb.RowFieldValues, error) {
-	if id == "" || len(keys) == 0 {
-		return nil, errors.New("index_id and keys are required")
-	}
-	engine, err := s.engineFor(id)
-	if err != nil {
-		return nil, err
-	}
-	rows, _, err := engine.Query(ctx, id, viewindex.QuerySpec{Keys: keys, Includes: fields, TotalMode: pb.TotalMode_NONE})
-	if err != nil {
-		return nil, fmt.Errorf("query view index: %w", err)
-	}
-	return rows, nil
-}
-
-// StartEventConsumer binds the configured managed durable and applies field
-// events to prepared indexes. It deliberately uses one Fetch(1) loop; the
-
 func queryErrorCode(err error) pb.ErrorCode {
 	if err == nil {
 		return pb.ErrorCode_SUCCESS
 	}
-	if errors.Is(err, errViewIndexNotReady) || errors.Is(err, os.ErrNotExist) {
+	// 只按哨兵错误判断，不看错误文字：DuckDB 的列绑定等错误是内部错误，不能当成“还没就绪”让调用方无限重试。
+	switch {
+	case errors.Is(err, errViewIndexNotReady), errors.Is(err, os.ErrNotExist):
 		return pb.ErrorCode_VIEW_NOT_READY
-	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "view column") && (strings.Contains(msg, "not projected") || strings.Contains(msg, "ambiguous")) {
+	case errors.Is(err, viewindex.ErrColumnNotProjected):
 		return pb.ErrorCode_VIEW_COLUMN_NOT_FOUND
+	default:
+		return pb.ErrorCode_INNER_ERR
 	}
-	if strings.Contains(msg, "is not prepared") || strings.Contains(msg, "no such file") || strings.Contains(msg, "not found") {
-		return pb.ErrorCode_VIEW_NOT_READY
-	}
-	return pb.ErrorCode_INNER_ERR
 }
 
 func queryCoverageComplete(rng *pb.TimeRange, stats viewindex.ViewIndexStats) bool {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -158,7 +159,17 @@ func (s *Service) CancelOrder(
 	}
 	orderRecord = current
 	if !orderdomain.State(orderRecord.State).Terminal() {
-		if err := s.stopOrder(ctx, orderRecord); err != nil {
+		err := s.stopOrder(ctx, orderRecord)
+		// 提交结果查了很久仍未知的订单没有别的出口：人工撤单时强制结束它，否则它会一直挡住后续目标、清仓和减仓。
+		// 只在人工撤单这里做，自动流程（清仓、目标收敛）遇到未知订单仍然等待。
+		if errors.Is(err, ErrCancelUnconfirmed) {
+			if _, expireErr := s.Orders.ExpireUnknown(ctx, command.SpaceID, command.OrderID, command.Reason); expireErr == nil {
+				err = nil
+			} else if errors.Is(expireErr, orderapp.ErrUnknownTooRecent) {
+				err = fmt.Errorf("%w：%v", ErrCancelUnconfirmed, expireErr)
+			}
+		}
+		if err != nil {
 			return s.failCancelAction(ctx, action, orderRecord, err)
 		}
 		if err := s.Syncer.SyncAccount(

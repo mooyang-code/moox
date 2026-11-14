@@ -17,34 +17,22 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const SpaceID = "mooxsys"
-
 var ErrInvalidHostMetric = errors.New("invalid host metric")
 
-// SnapshotWriter 是主机指标写入链路唯一的持久化依赖。Monitor 不在 SQLite
-// 保存主机样本；Storage 保存短期历史，本组件仅保留最新的内存视图。
-type SnapshotWriter interface {
-	WriteSnapshot(context.Context, *hostmetricpb.HostSnapshot, string, time.Time, string) error
-}
-
-type HistoryReader interface {
-	History(context.Context, string, time.Time, time.Time, int) ([]HistoryPoint, error)
-}
-
+// Store 处理主机快照：登记在线、评估阈值、写本地快照历史，并在内存里保留每台主机的最新快照。
+// 历史只存在 Monitor 自己的库里（t_monitor_host_samples），不依赖 Storage。
 type Store struct {
-	writer          SnapshotWriter
-	reader          HistoryReader
+	samples         *SampleStore
 	alert           *AlertEvaluator
 	registry        *Registry
 	presence        PresenceTransitionSink
 	presenceFailure func(context.Context, PresenceTransition, error)
-	ready           func() bool
 	mu              sync.RWMutex
 	latest          map[string]AgentView
 }
 
-func NewStore(writer SnapshotWriter, reader HistoryReader) *Store {
-	return &Store{writer: writer, reader: reader, latest: make(map[string]AgentView)}
+func NewStore(samples *SampleStore) *Store {
+	return &Store{samples: samples, latest: make(map[string]AgentView)}
 }
 
 func (s *Store) SetAlertEvaluator(evaluator *AlertEvaluator) {
@@ -73,14 +61,6 @@ func (s *Store) SetPresenceTransitionFailureSink(sink func(context.Context, Pres
 	}
 }
 
-func (s *Store) SetStorageReady(ready func() bool) {
-	if s != nil {
-		s.ready = ready
-	}
-}
-
-func (s *Store) StorageReady() bool { return s != nil && (s.ready == nil || s.ready()) }
-
 func ValidateMessage(msg *eventpb.EventMessage) (*hostmetricpb.HostMetric, error) {
 	if msg == nil {
 		return nil, errors.New("message is nil")
@@ -88,7 +68,7 @@ func ValidateMessage(msg *eventpb.EventMessage) (*hostmetricpb.HostMetric, error
 	if msg.GetEventName() != events.ObservabilityHostSnapshotReported.Name() || msg.GetEventVersion() != events.ObservabilityHostSnapshotReported.Version() {
 		return nil, errors.New("host metric envelope contract mismatch")
 	}
-	if msg.GetSpaceId() != SpaceID || strings.TrimSpace(msg.GetSubjectId()) == "" {
+	if msg.GetSpaceId() != events.SystemSpaceID || strings.TrimSpace(msg.GetSubjectId()) == "" {
 		return nil, errors.New("host metric space or sequence mismatch")
 	}
 	if parsed, err := uuid.Parse(msg.GetEventId()); err != nil || parsed.Version() != 7 {
@@ -233,7 +213,7 @@ func percent(v float64, available bool) error {
 
 func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *hostmetricpb.HostMetric) error {
 	if s == nil {
-		return errors.New("host metric store is nil")
+		return errors.New("主机快照处理未初始化")
 	}
 	if msg == nil || metric == nil {
 		return errors.New("host metric event is incomplete")
@@ -263,15 +243,8 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 	if !current {
 		return nil
 	}
-	if !s.StorageReady() {
-		return errors.New("host storage schema is not ready")
-	}
-	if s.writer == nil {
-		return errors.New("host metric storage writer is not configured")
-	}
-	if err := s.writer.WriteSnapshot(ctx, metric.GetSnapshot(), canonicalAgentID, occurredAt, msg.GetEventId()); err != nil {
-		return fmt.Errorf("write host metric snapshot: %w", err)
-	}
+	// 顺序：登记在线（上面）→ 更新最新快照并评估阈值 → 写本地历史。历史写失败只让这条消息重投，
+	// 在线状态与阈值告警不受影响；重投时登记与评估都按事件编号去重。
 	view := AgentView{
 		HostID: metric.GetHostId(), AgentID: canonicalAgentID, Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
 		LastSeenAt: occurredAt.Format(time.RFC3339Nano), Reachable: true,
@@ -289,6 +262,9 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 	s.mu.Unlock()
 	if s.alert != nil {
 		_ = s.alert.Evaluate(ctx, canonicalAgentID, metric.GetHostname(), msg.GetEventId(), metric.GetSnapshot(), occurredAt)
+	}
+	if err := s.samples.Write(ctx, canonicalAgentID, occurredAt, metric.GetSnapshot()); err != nil {
+		return fmt.Errorf("写入主机快照历史: %w", err)
 	}
 	return nil
 }
@@ -316,7 +292,7 @@ func (s *Store) ListAgentsAt(ctx context.Context, now time.Time) ([]AgentView, e
 		return nil, err
 	}
 	if s == nil {
-		return nil, errors.New("host metric store is nil")
+		return nil, errors.New("主机快照处理未初始化")
 	}
 	if s.registry != nil {
 		presence, err := s.registry.List(ctx, now)
@@ -355,31 +331,13 @@ func (s *Store) ListAgentsAt(ctx context.Context, now time.Time) ([]AgentView, e
 	return out, nil
 }
 
+// History 返回 [start, end] 内的快照，按时间升序，最多 limit 份：超过时在整段范围内等间隔抽取，保留首尾；
+// 可查范围由调用方按 SampleRetention 截取。
 func (s *Store) History(ctx context.Context, agentID string, start, end time.Time, limit int) ([]HistoryPoint, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	if s == nil {
+		return nil, errors.New("主机快照处理未初始化")
 	}
-	if s != nil && s.reader != nil {
-		return s.reader.History(ctx, agentID, start, end, limit)
-	}
-	// History now belongs to Storage. A missing reader is a degraded startup
-	// state; return an empty result rather than reading removed SQLite tables.
-	return []HistoryPoint{}, nil
-}
-
-func (s *Store) HistoryAt(ctx context.Context, agentID string, start, end, now time.Time, limit int) ([]HistoryPoint, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if s != nil && s.reader != nil {
-		if reader, ok := s.reader.(interface {
-			HistoryAt(context.Context, string, time.Time, time.Time, time.Time, int) ([]HistoryPoint, error)
-		}); ok {
-			return reader.HistoryAt(ctx, agentID, start, end, now, limit)
-		}
-		return s.reader.History(ctx, agentID, start, end, limit)
-	}
-	return []HistoryPoint{}, nil
+	return s.samples.History(ctx, agentID, start, end, limit)
 }
 
 func cloneSnapshot(snapshot *hostmetricpb.HostSnapshot) *hostmetricpb.HostSnapshot {

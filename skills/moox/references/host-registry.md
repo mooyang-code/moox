@@ -1,7 +1,7 @@
 # 主机登记与外部程序
 
 Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达性、中文名和控制台终端用的 SSH 信息都在这里。
-**机器的新增、部署、启停、移除只通过 `moox-cli`（本 skill）完成**；管理台的主机列表、“服务”、“存储节点”页面全部只读，
+**机器的新增、部署、启停、移除只通过 `moox-cli`（本 skill）完成**；管理台的主机列表、“服务”页面全部只读，
 页面上的提示就是指向这里。不要手改 Admin 数据库，也不要在管理台找新增或编辑入口。
 
 ## 命名
@@ -12,7 +12,7 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 | 主机 ID | 中文名 | 运行 |
 | --- | --- | --- |
 | `control` | 控制机 | Admin、Monitor、Collector、CloudFunction、因子管理、策略、控制台 |
-| `storage` | 存储机 | Storage primary/node/view、EventBus、Access |
+| `storage` | 存储机 | Storage primary/view、EventBus、Access |
 | `overseas` | 海外机 | Trade、Access、EgressProxy、Collector Stream |
 | `factor` | 因子机 | 因子引擎、归档 Worker（外部程序，原生部署使用 Linux，可以是内网机器） |
 

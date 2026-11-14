@@ -9,7 +9,7 @@ import (
 func validStorageExpectation(period time.Time) *storagepb.DatasetPeriodExpectation {
 	return &storagepb.DatasetPeriodExpectation{
 		SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(),
-		SeriesHash: "abc", ExpectedCount: 2, DeadlineAt: period.Add(time.Minute).Unix(),
+		SeriesHash: "abc", ExpectedCount: 2,
 	}
 }
 

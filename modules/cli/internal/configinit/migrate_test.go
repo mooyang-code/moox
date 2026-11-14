@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/require"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -335,8 +336,8 @@ func TestMigrateAddDeploymentRejectsUnknownHostAndComponent(t *testing.T) {
 func TestMigrateAddDeploymentReadsSingleQuotedAndMultilineArrays(t *testing.T) {
 	line := regexp.MustCompile(`(?m)^storage = \[.*\]\n`)
 	for name, replacement := range map[string]string{
-		"单引号": "storage = ['storage-primary', 'storage-node', 'storage-view', 'access'] # 单引号\n",
-		"多行":  "storage = [\n  'storage-primary',\n  \"storage-node\",\n  'storage-view',\n  'access',\n]\n",
+		"单引号": "storage = ['storage-primary', 'storage-view', 'access'] # 单引号\n",
+		"多行":  "storage = [\n  'storage-primary',\n  \"storage-view\",\n  'access',\n]\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			text := sampleText(t)
@@ -354,7 +355,7 @@ func TestMigrateAddDeploymentReadsSingleQuotedAndMultilineArrays(t *testing.T) {
 			require.NoError(t, err)
 			snapshot, err := setupconfig.Parse(plain)
 			require.NoError(t, err)
-			require.Equal(t, []string{"storage-primary", "storage-node", "storage-view", "access", "eventbus"}, snapshot.Deployments["storage"])
+			require.Equal(t, []string{"storage-primary", "storage-view", "access", "eventbus"}, snapshot.Deployments["storage"])
 		})
 	}
 }
@@ -510,7 +511,7 @@ func TestMigrateRewriteKeepsTrailingComments(t *testing.T) {
 	})
 	t.Run("多行条目首行末行保留、中间几行提示", func(t *testing.T) {
 		line := regexp.MustCompile(`(?m)^storage = \[.*\]\n`)
-		text := line.ReplaceAllString(sampleText(t), "storage = [ # 存储机\n  'storage-primary', # 主库\n  'storage-node',\n  'storage-view',\n  'access',\n] # 末行\n")
+		text := line.ReplaceAllString(sampleText(t), "storage = [ # 存储机\n  'storage-primary', # 主库\n  'storage-view',\n  'access',\n] # 末行\n")
 		path, root, keys := migrateFixture(t, text)
 		report, err := MigrateFile(path, MigrateOptions{
 			RepoRoot: root, Keys: keys, Write: true,
@@ -519,7 +520,7 @@ func TestMigrateRewriteKeepsTrailingComments(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []string{"[deployments] storage：该条目中间几行的注释已去掉"}, report.DroppedComments)
 		plain := decrypt(t, path, keys)
-		require.Contains(t, plain, `storage = ["storage-primary", "storage-node", "storage-view", "access", "eventbus"]   # 存储机 # 末行`)
+		require.Contains(t, plain, `storage = ["storage-primary", "storage-view", "access", "eventbus"]   # 存储机 # 末行`)
 		require.NotContains(t, plain, "# 主库")
 	})
 	t.Run("井号在字符串里不算注释", func(t *testing.T) {
@@ -559,4 +560,70 @@ func TestMigrateWithLoggingCLSStaysValid(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, snapshot.Logging.CLS.Enabled)
 	require.Equal(t, "warn", snapshot.Logging.CLS.MinLevel)
+}
+
+// 已下线的 storage-node 留在 [deployments] 里会让所有命令拒绝配置：校验报错写出组件名并提示 migrate，
+// migrate 把它删掉并写进报告，之后配置通过校验，重复执行不再变化。
+func TestMigrateRemovesRetiredDeploymentComponent(t *testing.T) {
+	text := legacyText(t)
+	require.Contains(t, text, `"storage-primary"`)
+	text = strings.Replace(text, `"storage-primary"`, `"storage-primary", "storage-node"`, 1)
+	_, err := setupconfig.Parse([]byte(strings.Replace(sampleText(t), `"storage-primary"`, `"storage-primary", "storage-node"`, 1)))
+	require.ErrorContains(t, err, `"storage-node"`)
+	require.ErrorContains(t, err, "config migrate --yes")
+	path, root, keys := migrateFixture(t, text)
+
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "legacy-1", RenameTo: "overseas", Write: true})
+	require.NoError(t, err)
+	require.Equal(t, []ComponentRemoval{{Component: "storage-node", Changes: 1}}, report.RemovedComponents)
+	require.True(t, report.Valid && report.Written)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	require.NotContains(t, string(plain), `"storage-node"`)
+	require.Contains(t, string(plain), `"storage-primary"`)
+
+	again, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys})
+	require.NoError(t, err)
+	require.False(t, again.Changed)
+	require.Empty(t, again.RemovedComponents)
+}
+
+// 单行数组的开头、中间、结尾，多行数组里独占一行的已下线组件都删掉，逗号保持合法；注释行不动。
+func TestRemoveRetiredComponentsHandlesArrayPositions(t *testing.T) {
+	blocks := splitBlocks(strings.Split(strings.Join([]string{
+		"[deployments]",
+		"# \"storage-node\" 已并入 storage-primary",
+		"a = ['storage-node', 'admin']",
+		"b = [\"access\", \"storage-node\", \"eventbus\"]",
+		"c = [\"storage-primary\", \"storage-node\"]",
+		"d = [\"storage-node\"]",
+		"e = [",
+		"  \"access\",",
+		"  \"storage-node\",",
+		"]",
+		"",
+	}, "\n"), "\n"))
+	var report MigrateReport
+	removeRetiredComponents(blocks, &report)
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	require.Equal(t, strings.Join([]string{
+		"[deployments]",
+		"# \"storage-node\" 已并入 storage-primary",
+		"a = ['admin']",
+		"b = [\"access\", \"eventbus\"]",
+		"c = [\"storage-primary\"]",
+		"d = []",
+		"e = [",
+		"  \"access\",",
+		"]",
+		"",
+	}, "\n"), strings.Join(out, "\n"))
+	require.Equal(t, []ComponentRemoval{{Component: "storage-node", Changes: 5}}, report.RemovedComponents)
+	_, err := toml.Decode(strings.Join(out, "\n"), &map[string]any{})
+	require.NoError(t, err)
 }

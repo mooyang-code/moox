@@ -19,24 +19,23 @@ import (
 )
 
 const (
-	outboxPrefix         = "__outbox/"
-	datasetDeletedPrefix = "__dataset_deleted/"
-	metaNextID           = "__meta/next_outbox_id"
+	outboxPrefix = "__outbox/"
+	metaNextID   = "__meta/next_outbox_id"
 )
 
-// Options controls one DataNode Pebble database. A node can host multiple
-// datasets; the dataset identity is part of every physical key.
+// Options 控制主服务的 Pebble 库。库里存放全部数据集，数据集身份是每个物理键的一部分。
 type Options struct {
 	Path           string
-	NodeID         string
 	BucketDuration time.Duration
 	MaxEventBytes  int
-	// ChangeLogRetention 是行变更日志的保留期；为 0 时取 DefaultChangeLogRetention。
+	// ChangeLogRetention 是变更日志的保留期（由保留期清理循环按它删除）；为 0 时取 DefaultChangeLogRetention。
 	ChangeLogRetention time.Duration
 	DisableSyncWrites  bool
 	PeriodNow          func() time.Time
 	// BlockCacheBytes 是 Pebble 块缓存大小；为 0 时由环境变量或主机内存推算，见 resolveBlockCache。
 	BlockCacheBytes int64
+	// DatasetExists 在写入拿到数据集读锁后确认数据集仍在元数据里，必须读当前最新的元数据；为空时不检查。
+	DatasetExists func(spaceID, datasetID string) bool
 }
 
 type OutboxEntry struct {
@@ -45,15 +44,9 @@ type OutboxEntry struct {
 	CreatedAt time.Time
 }
 
-type OutboxStats struct {
-	Pending       int
-	OldestEventAt time.Time
-}
-
 type Store struct {
 	db                      *cpebble.DB
 	writeOptions            *cpebble.WriteOptions
-	nodeID                  string
 	sourceStoreID           string
 	bucketDuration          time.Duration
 	maxEventBytes           int
@@ -63,14 +56,16 @@ type Store struct {
 	outboxPublicationMu     sync.Mutex
 	outboxPublicationLocks  map[outboxDatasetScope]*outboxPublicationLock
 	periodMu                sync.Mutex
-	periodFinalizeMu        sync.Mutex
 	periodNow               func() time.Time
 	periodFinalizeErrorMu   sync.Mutex
 	periodFinalizeLastError string
 	outboxPending           atomic.Int64
 	outboxRevision          atomic.Uint64
 	// outboxWake 在 outbox 有新条目提交后收到一个信号（容量 1，合并），转发协程据此立即发布，不等轮询。
-	outboxWake             chan struct{}
+	outboxWake chan struct{}
+	// changeSignal 在下一次变更日志提交时被关闭并换新，唤醒等待新变更的读取，见 noteChangeCommitted。
+	changeSignalMu         sync.Mutex
+	changeSignal           chan struct{}
 	outboxHintKnown        atomic.Bool
 	outboxHintMayHaveMore  atomic.Bool
 	outboxOldestEventNanos atomic.Int64
@@ -83,14 +78,13 @@ type Store struct {
 	// statsStop 通知缓存用量日志协程退出，由 Close 关闭。
 	statsStop chan struct{}
 	statsOnce sync.Once
+	// datasetExists 见 Options.DatasetExists。
+	datasetExists func(spaceID, datasetID string) bool
 }
 
 func Open(opts Options) (*Store, error) {
 	if strings.TrimSpace(opts.Path) == "" {
 		return nil, errors.New("pebble path is required")
-	}
-	if strings.TrimSpace(opts.NodeID) == "" || strings.TrimSpace(opts.NodeID) != opts.NodeID {
-		return nil, errors.New("node_id is required")
 	}
 	if opts.BucketDuration <= 0 {
 		opts.BucketDuration = 24 * time.Hour
@@ -105,12 +99,12 @@ func Open(opts Options) (*Store, error) {
 	cache := cpebble.NewCache(cacheBytes)
 	// Open 会自己持有一份引用；这里放掉创建时的那份，DB 关闭时缓存随之释放。
 	defer cache.Unref()
-	db, err := cpebble.Open(opts.Path, &cpebble.Options{Merger: BitmapORMerger, Cache: cache})
+	db, err := cpebble.Open(opts.Path, &cpebble.Options{Cache: cache})
 	if err != nil {
 		return nil, err
 	}
-	cacheLogf("storage node Pebble 块缓存 %dMB（%s）", cacheBytes>>20, cacheSource)
-	sourceStoreID, err := bindSourceStore(db, opts.NodeID)
+	cacheLogf("storage Pebble 块缓存 %dMB（%s）", cacheBytes>>20, cacheSource)
+	sourceStoreID, err := bindSourceStore(db)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -120,7 +114,7 @@ func Open(opts Options) (*Store, error) {
 		writeOptions = cpebble.NoSync
 	}
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1)}
+	store := &Store{db: db, writeOptions: writeOptions, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1), changeSignal: make(chan struct{}), datasetExists: opts.DatasetExists}
 	store.startPeriodFinalizer()
 	store.startCacheStats(cacheStatsFirstDelay, cacheStatsInterval)
 	return store, nil
@@ -166,13 +160,6 @@ func (s *Store) compactAsync(start, end []byte) {
 		defer s.maintenanceWG.Done()
 		_ = s.db.Compact(start, end, true)
 	}()
-}
-
-func (s *Store) NodeID() string {
-	if s == nil {
-		return ""
-	}
-	return s.nodeID
 }
 
 func validateUpsert(row *pb.RowFieldUpsert) error {
@@ -415,7 +402,7 @@ func (s *Store) prepareOutboxPublicationLocked(ctx context.Context, id uint64) (
 	if err := proto.Unmarshal(raw, message); err != nil {
 		return nil, fmt.Errorf("unmarshal outbox entry %d: %w", id, err)
 	}
-	if _, err := validateDataNodeMarkerMessage(raw); err != nil {
+	if _, err := validateMarkerMessage(raw); err != nil {
 		return nil, fmt.Errorf("%w %d: %v", ErrInvalidOutboxEvent, id, err)
 	}
 	return raw, nil
@@ -462,44 +449,6 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*Outbo
 	// repeated every poll when the outbox is empty. Do not overwrite a concurrent write.
 	s.applyOutboxHintIfUnchanged(revision, func() { s.setOutboxHintFromList(len(result), len(result) == max, oldestEventAt) })
 	return result, nil
-}
-
-// OutboxStats 扫描已提交 outbox 记录，供 relay 汇报完整等待数量，而非仅汇报
-// 单次发布批次。时间戳解码失败不改变 relay 行为；下一条记录仍由
-// PrepareOutboxPublication 负责权威校验。
-func (s *Store) OutboxStats(ctx context.Context) (OutboxStats, error) {
-	if err := ctx.Err(); err != nil {
-		return OutboxStats{}, err
-	}
-	revision := s.outboxRevision.Load()
-	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(outboxPrefix), UpperBound: []byte(outboxPrefix + "\xff")})
-	if err != nil {
-		return OutboxStats{}, err
-	}
-	defer iter.Close()
-	stats := OutboxStats{}
-	for valid := iter.First(); valid; valid = iter.Next() {
-		if err := ctx.Err(); err != nil {
-			return OutboxStats{}, err
-		}
-		stats.Pending++
-		message := &eventpb.EventMessage{}
-		if err := proto.Unmarshal(iter.Value(), message); err != nil {
-			continue
-		}
-		var eventAt time.Time
-		if occurred := message.GetOccurredAt(); occurred != nil && occurred.CheckValid() == nil {
-			eventAt = occurred.AsTime()
-		}
-		if !eventAt.IsZero() && (stats.OldestEventAt.IsZero() || eventAt.Before(stats.OldestEventAt)) {
-			stats.OldestEventAt = eventAt
-		}
-	}
-	if err := iter.Error(); err != nil {
-		return OutboxStats{}, err
-	}
-	s.applyOutboxHintIfUnchanged(revision, func() { s.setOutboxHintFromStats(stats) })
-	return stats, nil
 }
 
 // InsertOutboxPayloadForTest writes raw EventMessage bytes without validating
@@ -657,17 +606,6 @@ func (s *Store) setOutboxHintFromList(count int, mayHaveMore bool, oldestEventAt
 		s.outboxOldestEventNanos.Store(0)
 	} else if !oldestEventAt.IsZero() {
 		s.outboxOldestEventNanos.Store(oldestEventAt.UTC().UnixNano())
-	}
-}
-
-func (s *Store) setOutboxHintFromStats(stats OutboxStats) {
-	s.outboxPending.Store(int64(stats.Pending))
-	s.outboxHintKnown.Store(true)
-	s.outboxHintMayHaveMore.Store(false)
-	if stats.OldestEventAt.IsZero() {
-		s.outboxOldestEventNanos.Store(0)
-	} else {
-		s.outboxOldestEventNanos.Store(stats.OldestEventAt.UTC().UnixNano())
 	}
 }
 

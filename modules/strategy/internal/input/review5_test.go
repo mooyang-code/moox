@@ -9,6 +9,7 @@ import (
 	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 )
 
 // stockDay 返回 A 股日线某个交易日期的行键：该日期的 UTC 零点（日期键）。
@@ -68,23 +69,23 @@ func TestCoverageBoundsSnapToTradingDays(t *testing.T) {
 // 只有因子结果沿用源数据集的行键、可以继承源数据集的日历；按 UTC 零点对齐的重采样数据集不能用 A 股日历。
 func TestResolveCalendarInheritance(t *testing.T) {
 	strategy := parseStrategy(t, "name: x\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\n")
-	build := func(datasetAttributes map[string]string) *fakeClient {
+	build := func(datasetAttributes map[string]string, alignment string) *fakeClient {
 		client := newFakeClient("spot")
 		client.views["view_factor_1d"] = ViewInfo{ViewID: "view_factor_1d", DatasetID: "ds_1d", Frequency: "1d", Status: "active", ActiveIndexID: "idx", Columns: []ViewColumn{plainColumn("close")}}
-		client.datasets["ds_1d"] = DatasetInfo{DatasetID: "ds_1d", Status: "active", Frequency: "1d", Retention: "forever", Attributes: datasetAttributes}
+		client.datasets["ds_1d"] = DatasetInfo{DatasetID: "ds_1d", Status: "active", Frequency: "1d", Retention: "forever", Alignment: alignment, Attributes: datasetAttributes}
 		client.datasets["ds_source"] = DatasetInfo{DatasetID: "ds_source", Status: "active", Frequency: "1m", Retention: "forever", Attributes: map[string]string{"calendar": "cn_stock", "market_type": "spot"}}
 		return client
 	}
-	resample := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "kline_resample_result", "alignment": "epoch_utc"})
+	resample := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "kline_resample_result"}, "epoch_utc")
 	resolved, _, err := Resolve(context.Background(), resample, "space", []string{"ftask_1d"}, strategy)
 	if err != nil || resolved.Calendar != DefaultCalendar {
 		t.Fatalf("重采样数据集不应继承源数据集的 A 股日历：%+v err=%v", resolved, err)
 	}
-	factor := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "factor_result"})
+	factor := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "factor_result"}, "")
 	if resolved, _, err := Resolve(context.Background(), factor, "space", []string{"ftask_1d"}, strategy); err != nil || resolved.Calendar != "cn_stock" {
 		t.Fatalf("因子结果应继承源数据集的日历：%+v err=%v", resolved, err)
 	}
-	misaligned := build(map[string]string{"source_dataset_id": "ds_source", "calendar": "cn_stock", "alignment": "epoch_utc"})
+	misaligned := build(map[string]string{"source_dataset_id": "ds_source", "calendar": "cn_stock"}, "epoch_utc")
 	if _, _, err := Resolve(context.Background(), misaligned, "space", []string{"ftask_1d"}, strategy); err == nil || !strings.Contains(err.Error(), "epoch_utc") {
 		t.Fatalf("按 UTC 零点对齐的数据集不能使用 A 股日历：%v", err)
 	}
@@ -164,15 +165,52 @@ func TestRangeLoaderReportsIndexChange(t *testing.T) {
 	}
 }
 
-// View 的代次由活动索引与激活它的构建 ID 组成；没有构建 ID 时退化为活动索引。
-func TestGetViewReadsGeneration(t *testing.T) {
-	metadata := &metadataStub{view: &storagepb.View{ViewId: "view", DatasetId: "ds", Freq: "1h", Status: "active", ActiveIndexId: "idx_a", Attributes: map[string]string{"moox.index_generation": "build-7"}}}
-	info, err := (&RPCClient{Metadata: metadata}).GetView(context.Background(), "space", "view")
-	if err != nil || info.Generation != "idx_a@build-7" {
-		t.Fatalf("代次应带构建 ID：%q err=%v", info.Generation, err)
+// View 的活动索引与代次取自 DataView.GetViewState（用 DataView 的身份）：代次由索引 ID、store_id 与建成序号组成。
+// 原地重建后索引 ID 不变、建成序号变，存储重建后 store_id 变，两种情况都算换代。索引还没建好或 storage-view 还没登记
+// 该 View 时活动索引与代次为空，不当作 View 被删；复核代次遇到还没登记返回可重试错误。
+func TestGetViewReadsGenerationFromViewState(t *testing.T) {
+	metadata := &metadataStub{view: &storagepb.View{ViewId: "view", DatasetId: "ds", Freq: "1h", Status: "active"}}
+	state := &viewStateStub{rsp: builtState("idx_a", "store_1", 7)}
+	client := &RPCClient{Metadata: metadata, DataView: state, Auth: &commonpb.AuthInfo{AppId: "meta"}, ViewAuth: &commonpb.AuthInfo{AppId: "view"}}
+	info, err := client.GetView(context.Background(), "space", "view")
+	if err != nil || info.ActiveIndexID != "idx_a" || info.Generation != "idx_a@store_1#7" {
+		t.Fatalf("活动索引与代次应取自 GetViewState：%+v err=%v", info, err)
 	}
-	metadata.view.Attributes = nil
-	if info, err := (&RPCClient{Metadata: metadata}).GetView(context.Background(), "space", "view"); err != nil || info.Generation != "idx_a" {
-		t.Fatalf("没有构建 ID 时代次是活动索引：%q err=%v", info.Generation, err)
+	if got := state.stateReq[0]; got.GetAuthInfo().GetAppId() != "view" || got.GetSpaceId() != "space" || got.GetViewId() != "view" {
+		t.Fatalf("GetViewState 应带 DataView 的身份：%+v", got)
+	}
+
+	// 原地重建：索引 ID 不变，建成序号变。
+	state.rsp = builtState("idx_a", "store_1", 9)
+	rebuilt, err := client.ViewGeneration(context.Background(), "space", "view")
+	if err != nil || rebuilt == info.Generation || rebuilt != "idx_a@store_1#9" {
+		t.Fatalf("原地重建后应识别为换代：%q err=%v", rebuilt, err)
+	}
+	// 存储重建：序号从头开始，store_id 变。
+	state.rsp = builtState("idx_a", "store_2", 7)
+	if moved, err := client.ViewGeneration(context.Background(), "space", "view"); err != nil || moved == info.Generation {
+		t.Fatalf("store_id 变化后应识别为换代：%q err=%v", moved, err)
+	}
+
+	// 原地重建中：索引 ID 为空，不可读。
+	state.rsp = &storagepb.GetViewStateRsp{RetInfo: success()}
+	if info, err := client.GetView(context.Background(), "space", "view"); err != nil || info.ActiveIndexID != "" || info.Generation != "" {
+		t.Fatalf("索引还没建好时活动索引与代次应为空：%+v err=%v", info, err)
+	}
+	// storage-view 还没登记（重启后正在恢复）：复核代次返回可重试的传输错误，不能当成空代次误判换代；
+	// GetView 仍以 Metadata 为准，不报 View 已删除。
+	state.rsp = nil
+	var transportErr *TransportError
+	if generation, err := client.ViewGeneration(context.Background(), "space", "view"); !errors.As(err, &transportErr) || generation != "" {
+		t.Fatalf("VIEW_NOT_FOUND 应返回可重试的传输错误：%q err=%v", generation, err)
+	}
+	if info, err := client.GetView(context.Background(), "space", "view"); err != nil || info.ActiveIndexID != "" || info.DatasetID != "ds" {
+		t.Fatalf("VIEW_NOT_FOUND 时 GetView 仍以 Metadata 为准：%+v err=%v", info, err)
+	}
+	// 没有单独的 DataView 身份时沿用 Metadata 的身份。
+	client.ViewAuth = nil
+	state.rsp = builtState("idx_a", "store_1", 7)
+	if _, err := client.ViewGeneration(context.Background(), "space", "view"); err != nil || state.stateReq[len(state.stateReq)-1].GetAuthInfo().GetAppId() != "meta" {
+		t.Fatalf("应回退到 Metadata 的身份：err=%v", err)
 	}
 }

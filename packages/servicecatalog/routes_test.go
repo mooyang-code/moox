@@ -23,7 +23,7 @@ func productionTopology() Topology {
 	}
 	for host, ids := range map[string][]string{
 		"control":  {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"},
-		"storage":  {"storage-primary", "storage-node", "storage-view", "access"},
+		"storage":  {"storage-primary", "storage-view", "access"},
 		"overseas": {"access", "egress-proxy", "trade", "collector-stream", "callback-dispatcher"},
 	} {
 		for _, id := range ids {
@@ -127,8 +127,8 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":  {199, []string{"access", "admin", "archive-mgr", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "abc20d5f67433210255b55428c33959d2aa41dc42eb9abb82db686d0b40e636b"},
-		"storage":  {80, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "d8cbc0c0358eb28b304be9024ad5b6bb269f5589e2f67b019e8243fb482968b3"},
+		"control":  {196, []string{"access", "admin", "archive-mgr", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "887a4d0b9d4169e00dcca8f984121c02a46ee23fd69a45c66ceda72175d2fafb"},
+		"storage":  {65, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "6a8447172d02fb02b4961b5a450944f7b26f8e447f5a59d829e890b6ece50abb"},
 		"overseas": {64, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "a19904225d4ffdfe0b2452d1df51328df2bfac98ab73498607850c13ad777599"},
 	}
 	for _, host := range p.Hosts {
@@ -317,15 +317,15 @@ func TestRouteTimeoutUsesMethodOverride(t *testing.T) {
 	}
 	got := map[string]int64{}
 	for _, route := range compiled.Routes {
-		if route.ServicePath == "trpc.moox.storage.PrimaryStore" && (route.Method == "WaitViewSyncPoint" || route.Method == "ReadRows") {
+		if route.ServicePath == "trpc.moox.storage.DataView" && (route.Method == "WaitViewApplied" || route.Method == "QueryTimeSeriesRows") {
 			got[route.Method] = route.TimeoutMS
 		}
 	}
-	if got["WaitViewSyncPoint"] != 35000 || got["ReadRows"] != 5000 {
+	if got["WaitViewApplied"] != 35000 || got["QueryTimeSeriesRows"] != 25000 {
 		t.Fatalf("unexpected route timeouts: %v", got)
 	}
-	service, _ := c.Service("trpc.moox.storage.PrimaryStore")
-	if service.TimeoutFor("WaitViewSyncPoint") != 35000 || service.TimeoutFor("ReadRows") != 5000 {
+	service, _ := c.Service("trpc.moox.storage.DataView")
+	if service.TimeoutFor("WaitViewApplied") != 35000 || service.TimeoutFor("QueryTimeSeriesRows") != 25000 {
 		t.Fatal("TimeoutFor does not honor the method override")
 	}
 }

@@ -95,20 +95,20 @@ func (w *factorGatewayWire) GetDataset(ctx context.Context, req *storagepb.GetDa
 	if reads == 1 {
 		return nil, errs.NewFrameError(errs.RetServerNoService, "refresh this read")
 	}
-	return &storagepb.GetDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: &storagepb.Dataset{SpaceId: "crypto", DatasetId: "bars", Status: "disabled", Revision: 7}}, nil
+	return &storagepb.GetDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: &storagepb.Dataset{SpaceId: "crypto", DatasetId: "bars", Status: "active", Revision: 7}}, nil
 }
 
-func (w *factorGatewayWire) ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "ActivateDataset", req); err != nil {
+func (w *factorGatewayWire) UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "UpsertDatasetColumn", req); err != nil {
 		return nil, err
 	}
-	if req.GetExpectedRevision() != 7 || req.GetSpaceId() != "crypto" || req.GetDatasetId() != "bars" || !proto.Equal(req.GetAuthInfo(), storageio.AuthInfo("fixture-factor-request")) {
-		return nil, errors.New("dataset activation body changed")
+	if req.GetColumn().GetSpaceId() != "crypto" || req.GetColumn().GetDatasetId() != "bars" || req.GetColumn().GetColumnName() != "close" || !proto.Equal(req.GetAuthInfo(), storageio.AuthInfo("fixture-factor-request")) {
+		return nil, errors.New("dataset column body changed")
 	}
 	w.mu.Lock()
 	w.writes++
 	w.mu.Unlock()
-	return nil, errs.NewFrameError(errs.RetServerNoService, "activation must not retry")
+	return nil, errs.NewFrameError(errs.RetServerNoService, "column upsert must not retry")
 }
 
 func (w *factorGatewayWire) ReportDatasetPeriodCompleted(ctx context.Context, req *storagepb.ReportDatasetPeriodCompletedReq) (*storagepb.ReportDatasetPeriodCompletedRsp, error) {
@@ -181,12 +181,12 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	require.Equal(t, "bars", rsp.DatasetID)
 	err = storage.ReportComputed(t.Context(), storageio.PeriodMarker{SpaceID: "crypto", ResultDatasetID: "factor-result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 60, TriggerEventID: "fixture-period"})
 	require.ErrorContains(t, err, "writes must not retry")
-	err = storage.ActivateDataset(t.Context(), "crypto", "bars")
-	require.ErrorContains(t, err, "activation must not retry")
+	err = storage.UpsertColumns(t.Context(), "crypto", "bars", []storageio.ColumnInfo{{ColumnName: "close", OriginType: storageio.ColumnOriginField, ValueType: storageio.ColumnTypeDouble}})
+	require.ErrorContains(t, err, "column upsert must not retry")
 	wire.mu.Lock()
-	require.Equal(t, 3, wire.reads)
+	require.Equal(t, 2, wire.reads)
 	require.Equal(t, 2, wire.writes)
-	require.Len(t, wire.nonces, 5)
+	require.Len(t, wire.nonces, 4)
 	require.GreaterOrEqual(t, wire.refreshes, 2)
 	wire.mu.Unlock()
 	cache, err := os.Stat(filepath.Join(data, "gatewayclient", "directory.json"))

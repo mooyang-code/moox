@@ -2,10 +2,10 @@ package metadata
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -17,11 +17,11 @@ const (
 )
 
 var (
-	ErrTagInvalid       = errors.New("invalid tag")
-	ErrTagBuiltin       = errors.New("builtin tag cannot be deleted")
-	ErrTagReferenced    = errors.New("tag is referenced by datasets")
-	ErrTagAutoMembers   = errors.New("auto tag members are maintained by moox-collector")
-	ErrTagSnapshotEmpty = errors.New("auto tag snapshot is empty")
+	ErrTagInvalid       = storeerr.New(storeerr.Invalid, "invalid tag")
+	ErrTagBuiltin       = storeerr.New(storeerr.Invalid, "builtin tag cannot be deleted")
+	ErrTagReferenced    = storeerr.New(storeerr.Invalid, "tag is referenced by datasets")
+	ErrTagAutoMembers   = storeerr.New(storeerr.Invalid, "auto tag members are maintained by moox-collector")
+	ErrTagSnapshotEmpty = storeerr.New(storeerr.Invalid, "auto tag snapshot is empty")
 )
 
 type TagReferencedError struct {
@@ -38,6 +38,9 @@ func (e *TagReferencedError) Error() string {
 }
 
 func (e *TagReferencedError) Is(target error) bool { return target == ErrTagReferenced }
+
+// StoreErrorKind 与 ErrTagReferenced 一样是参数错误。
+func (e *TagReferencedError) StoreErrorKind() storeerr.Kind { return storeerr.Invalid }
 
 type TagMemberQuery struct {
 	SpaceID string

@@ -260,12 +260,13 @@ func (s *Store) CancelRun(ctx context.Context, runID, spaceID string, now time.T
 type ClaimRequest struct {
 	WorkerID string
 	// InstanceID 非空时，领取事务内再核对该实例仍持有未过期的活动租约，避免旧实例在被接管的瞬间继续领取。
-	InstanceID     string
-	FreeSlots      int
-	MaxPerDataNode int
-	BusyByDataNode map[string]int
-	Now            time.Time
-	LeaseTTL       time.Duration
+	InstanceID string
+	FreeSlots  int
+	// MaxStorageRuns 是读 Storage 的运行（导入除外）同时运行的上限，0 表示不限；BusyStorageRuns 是该 worker 已在运行的这类运行数。
+	MaxStorageRuns  int
+	BusyStorageRuns int
+	Now             time.Time
+	LeaseTTL        time.Duration
 }
 
 // Claimed 是被领取的运行和它所属的任务。
@@ -274,7 +275,7 @@ type Claimed struct {
 	Task Task
 }
 
-// ClaimRuns 在一个事务里按计划时刻从早到晚选出不超过空闲槽数和 DataNode 并发上限的排队运行，写入运行租约后返回。
+// ClaimRuns 在一个事务里按计划时刻从早到晚选出不超过空闲槽数和读 Storage 并发上限的排队运行，写入运行租约后返回。
 // 任务派给任何持有活动租约的 worker：分区登记带着远端副本，新 worker 按登记恢复，读回时本地缺文件就从对象存储取回。
 func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, error) {
 	if req.FreeSlots <= 0 {
@@ -310,10 +311,7 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 		if err := rows.Close(); err != nil {
 			return err
 		}
-		busy := map[string]int{}
-		for node, count := range req.BusyByDataNode {
-			busy[node] = count
-		}
+		busy := req.BusyStorageRuns
 		// 同一任务同时只执行一条运行：导入可以和排队中的复核并存，领取时跳过已有运行中运行的任务（含本次刚领到的）。
 		runningTasks := map[string]bool{}
 		taskRows, err := tx.QueryContext(ctx, `SELECT DISTINCT c_space_id, c_dataset_id FROM t_archive_runs WHERE c_status = 'running'`)
@@ -345,9 +343,9 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 			if err != nil {
 				return err
 			}
-			// 导入读的是 worker 本机的 CSV，不读 Storage 时序数据（只取一次列信息），不占 DataNode 的并发名额（否则长回补期间导入要排几个小时）。
+			// 导入读的是 worker 本机的 CSV，不读 Storage 时序数据（只取一次列信息），不占读 Storage 的并发名额（否则长回补期间导入要排几个小时）。
 			readsStorage := run.Kind != KindImport
-			if readsStorage && req.MaxPerDataNode > 0 && busy[task.DataNodeID] >= req.MaxPerDataNode {
+			if readsStorage && req.MaxStorageRuns > 0 && busy >= req.MaxStorageRuns {
 				continue
 			}
 			token := newToken()
@@ -357,7 +355,7 @@ WHERE c_run_id = ? AND c_status = 'queued'`, fmtTime(req.Now), req.WorkerID, tok
 			}
 			run.Status, run.StartedAt, run.WorkerID, run.LeaseToken, run.LeaseUntil = RunRunning, req.Now, req.WorkerID, token, req.Now.Add(req.LeaseTTL)
 			if readsStorage {
-				busy[task.DataNodeID]++
+				busy++
 			}
 			runningTasks[run.SpaceID+"/"+run.DatasetID] = true
 			claimed = append(claimed, Claimed{Run: run, Task: task})

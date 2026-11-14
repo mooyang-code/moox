@@ -22,7 +22,6 @@ describe("collector task workbench", () => {
   it("keeps result storage settings in a collapsed create-only advanced section", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
     expect(source).toContain('header="高级设置"');
-    expect(source).toContain("resultConfig.data_node_id");
     expect(source).not.toContain("keep_duration");
     expect(source).toContain("resultConfig.description");
     expect(source).toContain("result_config:");

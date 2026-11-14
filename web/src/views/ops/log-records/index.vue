@@ -10,7 +10,7 @@
       </header>
 
       <form class="logs-filters" aria-label="筛选" @submit.prevent="reload">
-        <a-input v-model="filters.component" aria-label="组件" placeholder="组件，如 storage-node" allow-clear />
+        <a-input v-model="filters.component" aria-label="组件" placeholder="组件，如 storage-primary" allow-clear />
         <a-input v-model="filters.host_id" aria-label="主机" placeholder="主机 ID，如 storage" allow-clear />
         <a-select v-model="filters.level" aria-label="级别">
           <a-option value="">错误和关键事件</a-option>

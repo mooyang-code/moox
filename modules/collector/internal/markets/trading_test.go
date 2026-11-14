@@ -76,7 +76,7 @@ func TestUnknownMarketIsAnError(t *testing.T) {
 
 // 现有两个市场的参数：允许迟到时间与序列标签是线上行为，不能变。
 func TestMarketConfigs(t *testing.T) {
-	require.Equal(t, []string{"crypto", "stockcn", "stockhk"}, IDs())
+	require.Equal(t, []string{"crypto", "stockcn", "stockhk", "stockus"}, IDs())
 
 	crypto, err := ConfigFor("crypto")
 	require.NoError(t, err)

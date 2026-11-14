@@ -152,7 +152,7 @@ func TestRegisterPublishesEachNoticeOnlyOnce(t *testing.T) {
 	registry, _ := events.DefaultRegistry()
 	message, err := registry.UnmarshalMessage(pending[0].Payload)
 	require.NoError(t, err)
-	require.Equal(t, events.DelistSystemSpaceID, message.GetSpaceId())
+	require.Equal(t, events.SystemSpaceID, message.GetSpaceId())
 	require.Equal(t, "binance:SPOT:FOOUSDT", message.GetSubjectId())
 	require.Equal(t, eventID, message.GetEventId())
 	event, err := registry.ValidateMessage(message)

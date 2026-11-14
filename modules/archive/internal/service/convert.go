@@ -122,7 +122,7 @@ func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
 // taskToPB 把任务转成接口消息；启用的任务带上下一次拉取时刻（算不出时留空）。
 func (s *Service) taskToPB(t store.Task, now time.Time) *archivepb.ArchiveTask {
 	out := &archivepb.ArchiveTask{
-		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Purpose: t.Purpose, DirName: t.DirName, Freq: t.Freq, PartitionUnit: t.PartitionUnit, DataNodeId: t.DataNodeID, Retention: t.Retention,
+		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Purpose: t.Purpose, DirName: t.DirName, Freq: t.Freq, PartitionUnit: t.PartitionUnit, Retention: t.Retention,
 		PullEveryBars: uint32(t.PullEveryBars), IntervalSeconds: uint32(t.IntervalSeconds), BackfillFrom: fmtRFC(t.BackfillFrom), Status: t.Status,
 		LastBoundary: fmtRFC(t.LastBoundary), LastReview: fmtRFC(t.LastReview), ConsecutiveSkips: uint32(t.ConsecutiveSkips),
 		LastSuccessAt: fmtRFC(t.LastSuccessAt), FinalUntil: fmtRFC(t.FinalUntil), Creator: t.Creator, CreatedAt: fmtRFC(t.CreatedAt), UpdatedAt: fmtRFC(t.UpdatedAt),

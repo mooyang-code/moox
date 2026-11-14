@@ -13,6 +13,7 @@ import (
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/report"
@@ -330,7 +331,7 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	inventoryResults, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, monmetrics.TaskResultInventoryCheckID, 10)
+	inventoryResults, err := repositories.Results.Recent(t.Context(), events.SystemSpaceID, monmetrics.TaskResultInventoryCheckID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,54 +488,6 @@ func TestBusinessFreshnessReporterKeepsCollectorExpectationBeforeStorage(t *test
 	}
 }
 
-func TestBusinessFreshnessReporterSkipsSystemMonitoringDatasets(t *testing.T) {
-	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = manager.Close() })
-	require.NoError(t, manager.ApplySchema(schema.SQL()))
-	now := time.Now().UTC().Truncate(time.Second)
-	stale := float64(now.Add(-time.Hour).Unix())
-	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
-		for _, space := range []struct{ id, labels string }{
-			{"crypto", `{"dataset_id":"bars","freq":"1m","space_id":"crypto"}`},
-			{"mooxsys", `{"dataset_id":"dataset_mooxsys_probe","freq":"30s","space_id":"mooxsys"}`},
-		} {
-			for _, metric := range []struct {
-				name  string
-				value float64
-			}{
-				{"moox_storage_dataset_enabled", 1},
-				{"moox_storage_dataset_expected_interval_seconds", 60},
-				{"moox_storage_dataset_last_run_timestamp_seconds", stale},
-				{"moox_storage_dataset_last_success_timestamp_seconds", stale},
-				{"moox_storage_dataset_output_watermark_timestamp_seconds", stale},
-			} {
-				id := space.id + "-" + metric.name
-				require.NoError(t, db.Create(&monmetrics.MetricSeries{
-					ServiceName: "storage-primary", InstanceID: "storage-primary@storage", SeriesID: id,
-					MetricName: metric.name, MetricType: "gauge", LabelsJSON: space.labels, LastSeenAt: now,
-				}).Error)
-				require.NoError(t, db.Create(&monmetrics.MetricLatest{
-					SeriesID: id, ServiceName: "storage-primary", InstanceID: "storage-primary@storage",
-					MetricName: metric.name, MetricType: "gauge", LabelsJSON: space.labels, Value: metric.value, ObservedAt: now,
-				}).Error)
-			}
-		}
-		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
-	})
-	require.NoError(t, err)
-	repositories := manager.Repositories()
-	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
-		Now: func() time.Time { return now },
-	}, repositories, nil)
-	require.NoError(t, run(t.Context()))
-	_, err = repositories.Checks.Get(t.Context(), "crypto", "dataset:storage:bars:1m")
-	require.NoError(t, err, "业务数据集照常建立新鲜度检查")
-	_, err = repositories.Checks.Get(t.Context(), "mooxsys", "dataset:storage:dataset_mooxsys_probe:30s")
-	require.ErrorIs(t, err, gorm.ErrRecordNotFound, "mooxsys 系统监控数据集不做新鲜度检查")
-}
-
 func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
@@ -656,7 +609,7 @@ func TestBusinessFreshnessReporterStoresBalanceCheckInSystemSpace(t *testing.T) 
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, "balance:trade", 1)
+	results, err := repositories.Results.Recent(t.Context(), events.SystemSpaceID, "balance:trade", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -683,10 +636,10 @@ func TestBusinessFreshnessReporterCreatesStorageOutboxAlert(t *testing.T) {
 			{"outbox-pending", "moox_storage_outbox_pending_entries", 12},
 			{"outbox-age", "moox_storage_outbox_oldest_age_seconds", 240},
 		} {
-			if err := db.Create(&monmetrics.MetricSeries{ServiceName: "storage-node", InstanceID: "storage-node@storage", SeriesID: metric.id, MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, LastSeenAt: now}).Error; err != nil {
+			if err := db.Create(&monmetrics.MetricSeries{ServiceName: "storage-primary", InstanceID: "storage-primary@storage", SeriesID: metric.id, MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, LastSeenAt: now}).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := db.Create(&monmetrics.MetricLatest{SeriesID: metric.id, ServiceName: "storage-node", InstanceID: "storage-node@storage", MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, Value: metric.value, ObservedAt: now}).Error; err != nil {
+			if err := db.Create(&monmetrics.MetricLatest{SeriesID: metric.id, ServiceName: "storage-primary", InstanceID: "storage-primary@storage", MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, Value: metric.value, ObservedAt: now}).Error; err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -700,7 +653,7 @@ func TestBusinessFreshnessReporterCreatesStorageOutboxAlert(t *testing.T) {
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, "data_delivery:storage_outbox", 1)
+	results, err := repositories.Results.Recent(t.Context(), events.SystemSpaceID, "data_delivery:storage_outbox", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -740,7 +693,7 @@ func TestBusinessFreshnessReporterChecksNewSeriesGrowth(t *testing.T) {
 	latest := func() domain.CheckResult {
 		t.Helper()
 		require.NoError(t, run(t.Context()))
-		results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, "metrics_ingest:series_limit", 1)
+		results, err := repositories.Results.Recent(t.Context(), events.SystemSpaceID, "metrics_ingest:series_limit", 1)
 		require.NoError(t, err)
 		require.Len(t, results, 1)
 		return results[0]
@@ -764,7 +717,7 @@ func TestBusinessFreshnessReporterChecksNewSeriesGrowth(t *testing.T) {
 	require.False(t, result.Success)
 	require.Contains(t, result.ErrorMessage, "已丢弃 noisy 的新序列 2 条")
 
-	check, err := repositories.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, "metrics_ingest:series_limit")
+	check, err := repositories.Checks.Get(t.Context(), events.SystemSpaceID, "metrics_ingest:series_limit")
 	require.NoError(t, err)
 	require.Equal(t, "指标序列数量保护", check.Name)
 
@@ -788,7 +741,7 @@ func TestBusinessFreshnessReporterSkipsSeriesLimitCheckWhenUnlimited(t *testing.
 		Results: repositories.Results,
 	}, repositories, nil)
 	require.NoError(t, run(t.Context()))
-	_, err = repositories.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, "metrics_ingest:series_limit")
+	_, err = repositories.Checks.Get(t.Context(), events.SystemSpaceID, "metrics_ingest:series_limit")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -822,7 +775,7 @@ func TestBusinessFreshnessReporterDisablesReporterForDisabledDeployment(t *testi
 			Source: domain.CheckSourceDeployment, Enabled: false, IntervalSeconds: 30,
 		},
 		{
-			SpaceID: monmetrics.InternalMetricSpaceID,
+			SpaceID: events.SystemSpaceID,
 			CheckID: "reporter:control:factor-mgr",
 			Name:    "Reporter factor-mgr control factor-mgr@control",
 			Source:  domain.CheckSourceObservability, Kind: domain.CheckKindExternal,
@@ -842,7 +795,7 @@ func TestBusinessFreshnessReporterDisablesReporterForDisabledDeployment(t *testi
 	}
 	results, err := repositories.Results.Recent(
 		t.Context(),
-		monmetrics.InternalMetricSpaceID,
+		events.SystemSpaceID,
 		"reporter:control:factor-mgr",
 		1,
 	)
@@ -850,7 +803,7 @@ func TestBusinessFreshnessReporterDisablesReporterForDisabledDeployment(t *testi
 		t.Fatal(err)
 	}
 	require.Empty(t, results, "disabling a deployment must not fabricate recovery")
-	check, err := repositories.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, "reporter:control:factor-mgr")
+	check, err := repositories.Checks.Get(t.Context(), events.SystemSpaceID, "reporter:control:factor-mgr")
 	require.NoError(t, err)
 	require.False(t, check.Enabled)
 }
@@ -1014,7 +967,7 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 	if len(checks) != 1 || checks[0].CheckID != reporterCheckID {
 		t.Fatalf("checks = %+v", checks)
 	}
-	results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, reporterCheckID, 1)
+	results, err := repositories.Results.Recent(t.Context(), events.SystemSpaceID, reporterCheckID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1035,7 +988,7 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	results, err = repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, reporterCheckID, 1)
+	results, err = repositories.Results.Recent(t.Context(), events.SystemSpaceID, reporterCheckID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1246,7 +1199,7 @@ func TestBusinessFreshnessReporterFreezesObservationChecksWhileIngestIsDown(t *t
 	}, repositories, nil, func(time.Time) observationState { return state }, 30*time.Second)
 	const reporterCheck = "reporter:node-a:collector"
 	latest := func(checkID string) (domain.CheckResult, bool) {
-		results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, checkID, 1)
+		results, err := repositories.Results.Recent(t.Context(), events.SystemSpaceID, checkID, 1)
 		require.NoError(t, err)
 		if len(results) == 0 {
 			return domain.CheckResult{}, false
@@ -1388,7 +1341,7 @@ func TestBusinessFreshnessReporterRetiresLegacySpaceChecksAfterUpgrade(t *testin
 	require.NoError(t, err)
 	require.Zero(t, firing)
 	// 新空间下的检查照常按本轮指标判定。
-	results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, "balance:trade", rounds)
+	results, err := repositories.Results.Recent(t.Context(), events.SystemSpaceID, "balance:trade", rounds)
 	require.NoError(t, err)
 	require.Len(t, results, rounds)
 	for _, result := range results {

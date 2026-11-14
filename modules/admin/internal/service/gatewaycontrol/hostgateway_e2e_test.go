@@ -54,7 +54,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	f.service.now = time.Now
 	ctx := context.Background()
 	controlSpec := sysdeploy.HostSpec{HostID: "control", Address: "127.0.0.1", Components: []string{"admin", "console-proxy", "web-host", "collector"}}
-	storageSpec := sysdeploy.HostSpec{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-primary", "storage-node", "storage-view"}}
+	storageSpec := sysdeploy.HostSpec{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-primary", "storage-view"}}
 	require.NoError(t, f.topology.SyncHosts(ctx, []sysdeploy.HostSpec{controlSpec, storageSpec}))
 
 	opened, err := net.Listen("tcp", "127.0.0.1:11112")
@@ -182,7 +182,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		return err != nil && (strings.Contains(err.Error(), "no enabled deployment") || strings.Contains(err.Error(), "not deployed"))
 	})
 	require.NoError(t, f.topology.SyncHosts(ctx, []sysdeploy.HostSpec{
-		{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-node", "storage-view"}},
+		{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-view"}},
 		{HostID: "control", Address: "127.0.0.1", Components: append(slices.Clone(controlSpec.Components), "storage-primary")},
 	}))
 	waitForE2E(t, 15*time.Second, "existing clients automatically switch deployment target", func() bool {

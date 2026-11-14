@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
@@ -32,7 +33,7 @@ func WorkerPresenceName(object string) string {
 // buildWorkerPresence 把 factor-mgr、archive-mgr 上报的外部程序在线状态转成业务检查：离线时失败，原因写明机器与最后心跳；
 // “不需要”（没有启用的因子任务 / 归档任务）视为通过；管理端本身停止上报时视为通过并说明，管理端的故障由主机守护与服务检查告警。
 func (b Builder) buildWorkerPresence(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return nil, nil
 	}
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
@@ -77,7 +78,7 @@ func (b Builder) buildWorkerPresence(ctx context.Context, spaceID string, now ti
 			reason = source.title + " " + worker + " 在线"
 		}
 		out = append(out, BusinessStatus{
-			SpaceID: monmetrics.InternalMetricSpaceID, Kind: "worker_presence", Module: source.object,
+			SpaceID: events.SystemSpaceID, Kind: "worker_presence", Module: source.object,
 			Status: status, Reason: reason, LastCheckedAt: now,
 		})
 	}

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# 用 AkShare 格式的交易日列表整体替换 A 股日历 cn_stock，只写 cn_stock 的两个文件，不碰 hk_stock、us_stock。
+# 港股、美股的日历由 packages/marketcalendar/internal/genhk、genus 生成。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

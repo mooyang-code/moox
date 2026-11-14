@@ -209,7 +209,7 @@ func TestReportStopsJobWhenMemberOrTaskDisabledBetweenChunks(t *testing.T) {
 	}
 }
 
-// 同时只跑一个补算作业：补算整窗口读取源数据，并发的回填会让 DataNode 读不动在线计算。
+// 同时只跑一个补算作业：补算整窗口读取源数据，并发的回填会让存储读不动在线计算。
 func TestPullRunsOneRecalcJobAtATimeByDefault(t *testing.T) {
 	hub, db, clock := newTestHub(t)
 	for _, taskID := range []string{"task_a", "task_b"} {

@@ -46,7 +46,6 @@ export default {
     ["ops-monitor"]: "监控告警",
     ["ops-deployments"]: "服务",
     ["ops-hosts"]: "主机工作台",
-    ["ops-storage"]: "存储节点",
     ["ops-activity"]: "活动日志",
     ["ops-logs"]: "重要日志",
     ["settings"]: "系统设置",

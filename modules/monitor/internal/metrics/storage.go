@@ -251,8 +251,8 @@ func cloneSubjectSet(input map[string]struct{}) map[string]struct{} {
 // maxArchivableScans 是列出可归档数据集时最多翻的页数。
 const maxArchivableScans = 50
 
-// ListArchivableDatasets 列出应当有归档任务的数据集（"空间/数据集 ID"，排好序）：已激活、有限保留期的时序数据集，
-// 不含运维指标空间 mooxsys。保留期为 forever 的不会被删，不要求归档。
+// ListArchivableDatasets 列出应当有归档任务的数据集（"空间/数据集 ID"，排好序）：已激活、有限保留期的时序数据集。
+// 保留期为 forever 的不会被删，不要求归档。
 func (a *StorageAdapter) ListArchivableDatasets(ctx context.Context) ([]string, error) {
 	if a == nil || a.metadata == nil {
 		return nil, errors.New("metrics storage metadata client is not initialized")
@@ -268,7 +268,7 @@ func (a *StorageAdapter) ListArchivableDatasets(ctx context.Context) ([]string, 
 		}
 		for _, d := range rsp.GetDatasets() {
 			if d == nil || d.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES || !strings.EqualFold(d.GetStatus(), "active") ||
-				d.GetSpaceId() == InternalMetricSpaceID || d.GetRetention() == "" || d.GetRetention() == "forever" {
+				d.GetRetention() == "" || d.GetRetention() == "forever" {
 				continue
 			}
 			out = append(out, d.GetSpaceId()+"/"+d.GetDatasetId())

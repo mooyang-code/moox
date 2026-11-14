@@ -15,7 +15,7 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 	}{
 		{"collection", []string{"collector"}},
 		// 入库与视图分成两个环节：入库是 Storage 写入水位，视图是 View 提交水位，同一数据可能一边正常一边落后。
-		{"storage", []string{"storage-primary", "storage-node"}},
+		{"storage", []string{"storage-primary"}},
 		{"view", []string{"storage-view"}},
 		{"factor", []string{"factor-mgr"}},
 		{"strategy", []string{"strategy"}},
@@ -53,8 +53,7 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 		}
 		stage.Name = strings.Join(names, " / ")
 		for _, item := range facts.Datasets {
-			// mooxsys 是系统监控数据（主机快照），不属于业务数据链路。
-			if producerStage[item.Producer] != definition.id || strings.EqualFold(item.SpaceID, "mooxsys") {
+			if producerStage[item.Producer] != definition.id {
 				continue
 			}
 			if item.Producer == "collector" && storageScopes[key(item)] {

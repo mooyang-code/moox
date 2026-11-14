@@ -5,16 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 storage_worktree_before="$(git -C "${ROOT}" status --short -- modules/storage)"
 
 (cd "${ROOT}/modules/monitor" && go test -count=1 ./internal/doctor ./internal/rpc ./test)
-(cd "${ROOT}/modules/cli" && go test -count=1 ./internal/doctor ./internal/command ./test -run 'StorageDatasetActivation|DoctorBootstrap|StorageMetadataClient|TestDoctor|TestValidateDoctorFlags')
+(cd "${ROOT}/modules/cli" && go test -count=1 ./internal/doctor ./internal/command ./test -run 'DoctorBootstrap|StorageMetadataClient|TestDoctor|TestValidateDoctorFlags')
 (cd "${ROOT}/packages/doctor" && go test -count=1 ./...)
 (cd "${ROOT}/packages/report" && go test -count=1 ./...)
-
-grep -q 'bootstrap.storage_dataset_activation' "${ROOT}/modules/cli/internal/doctor/storage_activation.go"
-grep -q 'CheckDatasetActivation' "${ROOT}/modules/cli/internal/doctor/storage_activation.go"
-if rg -n 'ActivateDataset\(' "${ROOT}/modules/cli/internal/doctor/storage_activation.go"; then
-  echo "Doctor storage activation observations must not activate Datasets" >&2
-  exit 1
-fi
 
 # Catalog/Doctor and release-byte identity are checked by packages/doctor.
 # The deployment inventory migrates to HostDeployments in the gateway plan.

@@ -79,27 +79,6 @@ func DecodeRaw(registry *Registry, raw []byte, subject, messageID, contentType s
 	return message, payload, nil
 }
 
-// DecodeDatasetRowsUpserted validates the governed storage envelope and its
-// structured delta payload.
-func DecodeDatasetRowsUpserted(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.DatasetRowsUpserted, error) {
-	return DecodeDatasetRowsUpsertedWithContentType(registry, raw, subject, messageID, ContentType)
-}
-
-// DecodeDatasetRowsUpsertedWithContentType validates the broker content type
-// and the structured storage envelope. Live consumers should pass the NATS
-// Content-Type header received with the delivery.
-func DecodeDatasetRowsUpsertedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.DatasetRowsUpserted, error) {
-	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, DatasetRowsUpserted)
-	if err != nil {
-		return message, nil, err
-	}
-	storagePayload, ok := payload.(*storagepb.DatasetRowsUpserted)
-	if !ok {
-		return message, nil, fmt.Errorf("storage event payload has type %T", payload)
-	}
-	return message, storagePayload, nil
-}
-
 // DecodeDatasetPeriodCompleted validates and decodes a dataset period completion event.
 func DecodeDatasetPeriodCompleted(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.DatasetPeriodCompleted, error) {
 	return DecodeDatasetPeriodCompletedWithContentType(registry, raw, subject, messageID, ContentType)
@@ -134,24 +113,6 @@ func DecodeViewDataReadyWithContentType(registry *Registry, raw []byte, subject,
 		return message, nil, fmt.Errorf("view data ready payload has type %T", payload)
 	}
 	return message, ready, nil
-}
-
-// DecodeDatasetSyncPoint validates and decodes an ordered Dataset sync point.
-func DecodeDatasetSyncPoint(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.DatasetSyncPoint, error) {
-	return DecodeDatasetSyncPointWithContentType(registry, raw, subject, messageID, ContentType)
-}
-
-// DecodeDatasetSyncPointWithContentType also validates broker content type.
-func DecodeDatasetSyncPointWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.DatasetSyncPoint, error) {
-	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, DatasetSyncPoint)
-	if err != nil {
-		return message, nil, err
-	}
-	storagePayload, ok := payload.(*storagepb.DatasetSyncPoint)
-	if !ok {
-		return message, nil, fmt.Errorf("dataset sync point payload has type %T", payload)
-	}
-	return message, storagePayload, nil
 }
 
 func decodeStorageEvent(registry *Registry, raw []byte, subject, messageID, contentType string, event Event) (*eventpb.EventMessage, proto.Message, error) {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/security"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
@@ -39,15 +40,12 @@ func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {
 	path := writeCollectorConfig(t, `
 database:
   path: ./original/collector.db
-storage:
-  result_data_node_id: result-test
 `)
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "./override/collector.db", cfg.Database.Path)
 	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
-	assert.Equal(t, "result-test", cfg.Storage.ResultDataNodeID)
 	assert.Equal(t, "collector", cfg.GatewayClient.Caller)
 }
 
@@ -161,6 +159,44 @@ func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
 	assert.Equal(t, "35s", cfg.CollectorRetention.MaintenanceOffset)
 	assert.Equal(t, "20s", cfg.CollectorRetention.MaintenanceTimeout)
 	assert.Equal(t, 25000, cfg.CollectorRetention.MaxRowsPerPass)
+}
+
+// 东方财富限流：旧配置没有 egress_limits 这一段时用代码默认值；只写一部分项时其余保持默认；写了不合法的值启动失败。
+func TestLoadEgressLimitsEastmoney(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, "delist:\n  auto_detect: true\n"))
+	require.NoError(t, err)
+	assert.Equal(t, cnstock.DefaultRequestLimitConfig(), cfg.EgressLimits.Eastmoney, "旧配置不写这一段时默认生效")
+
+	cfg, err = Load(writeCollectorConfig(t, "egress_limits:\n  eastmoney:\n    requests_per_second: 1.5\n    cooldown_initial: 5m\n    cooldown_max: 30m\n"))
+	require.NoError(t, err)
+	want := cnstock.DefaultRequestLimitConfig()
+	want.RequestsPerSecond, want.CooldownInitial, want.CooldownMax = 1.5, 5*time.Minute, 30*time.Minute
+	assert.Equal(t, want, cfg.EgressLimits.Eastmoney, "未写的项取默认值")
+
+	for _, body := range []string{
+		"egress_limits:\n  eastmoney:\n    requests_per_second: 0\n",
+		"egress_limits:\n  eastmoney:\n    requests_per_second: 100\n",
+		"egress_limits:\n  eastmoney:\n    max_concurrent: 9\n",
+		"egress_limits:\n  eastmoney:\n    cooldown_initial: 2h\n",
+		"egress_limits:\n  eastmoney:\n    cooldown_initial: 20m\n    cooldown_max: 10m\n",
+		"egress_limits:\n  eastmoney:\n    unknown_key: 1\n",
+	} {
+		_, err := Load(writeCollectorConfig(t, body))
+		require.Error(t, err, body)
+	}
+	_, err = Load(writeCollectorConfig(t, "egress_limits:\n  eastmoney:\n    burst: 0\n"))
+	require.ErrorContains(t, err, "egress_limits.eastmoney")
+}
+
+// 模板里写出来的限流参数必须等于代码默认值：模板是给人看的说明，不能和默认值悄悄分叉。
+func TestTemplateEgressLimitsMatchCodeDefaults(t *testing.T) {
+	raw, err := os.ReadFile("../../config/app.yaml")
+	require.NoError(t, err)
+	var template struct {
+		EgressLimits EgressLimitsConfig `yaml:"egress_limits"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &template))
+	assert.Equal(t, cnstock.DefaultRequestLimitConfig(), template.EgressLimits.Eastmoney)
 }
 
 func TestLoadRejectsInvalidCollectorRetention(t *testing.T) {

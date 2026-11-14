@@ -34,34 +34,21 @@ func TestOutputAdvanceFlushesOnceWithinTheWindow(t *testing.T) {
 	_, publisher, timer := subscribedHandler(t)
 
 	// 同一时刻写完的几个数据集合并成一次补报，1 秒后发出。
-	NotifyOutputAdvanced("crypto")
-	NotifyOutputAdvanced("crypto")
-	NotifyOutputAdvanced("crypto")
+	NotifyOutputAdvanced()
+	NotifyOutputAdvanced()
+	NotifyOutputAdvanced()
 	require.Equal(t, []time.Duration{time.Second}, timer.delays)
 	timer.runs[0]()
 	require.Len(t, publisher.events, 1)
 
 	// 补报之后再前进，再安排一次。
-	NotifyOutputAdvanced("crypto")
+	NotifyOutputAdvanced()
 	require.Len(t, timer.runs, 2)
-}
-
-func TestSystemDataDoesNotTriggerFlush(t *testing.T) {
-	_, _, timer := subscribedHandler(t)
-	// Monitor 把每份主机快照写进 mooxsys 的系统数据集，水位随之前进；若再补报就会循环。
-	NotifyOutputAdvanced(DefaultSpace)
-	require.Empty(t, timer.runs)
-	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "storage")
-	require.NoError(t, err)
-	key := DatasetKey{SpaceID: DefaultSpace, DatasetID: "dataset_mooxsys_host_resource", Freq: "1m"}
-	require.NoError(t, metrics.ReplaceExpected([]DatasetExpectation{{Key: key, Interval: time.Minute}}))
-	require.NoError(t, metrics.ObserveRun(DatasetObservation{Key: key, Result: "success", Rows: 1, FinishedAt: time.Unix(100, 0), OutputWatermark: time.Unix(90, 0)}))
-	require.Empty(t, timer.runs)
 }
 
 func TestOutputAdvanceRetriesWhileTheTimerReportIsInFlight(t *testing.T) {
 	h, publisher, timer := subscribedHandler(t)
-	NotifyOutputAdvanced("crypto")
+	NotifyOutputAdvanced()
 	// 定时上报正在进行：它的快照可能早于这次前进，补报稍后再试一次。
 	h.inFlight.Store(true)
 	timer.runs[0]()
@@ -80,7 +67,7 @@ func TestOnlySubscribedHandlersFlush(t *testing.T) {
 	other.afterFunc = otherTimer.after
 	cancel := other.FlushOnOutputAdvance()
 	cancel()
-	NotifyOutputAdvanced("crypto")
+	NotifyOutputAdvanced()
 	require.Len(t, timer.runs, 1)
 	require.Empty(t, otherTimer.runs, "取消订阅后不再补报")
 }

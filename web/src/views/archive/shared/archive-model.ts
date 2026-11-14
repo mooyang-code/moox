@@ -375,24 +375,20 @@ function isTimeSeries(dataset: Pick<Dataset, "data_kind">): boolean {
 }
 
 /**
- * 应该归档的数据集：时序、active、不是系统空间、有限的线上保留期。
+ * 应该归档的数据集：时序、active、有限的线上保留期。
  * 和 Monitor 的 ListArchivableDatasets（modules/monitor/internal/metrics/storage.go）同口径。
  */
-export function archivableDataset(dataset: Dataset, spaceId: string): boolean {
+export function archivableDataset(dataset: Dataset): boolean {
   const retention = (dataset.retention || "").trim();
   return (
-    isTimeSeries(dataset) &&
-    (dataset.status || "").toLowerCase() === "active" &&
-    spaceId !== "mooxsys" &&
-    retention !== "" &&
-    retention !== "forever"
+    isTimeSeries(dataset) && (dataset.status || "").toLowerCase() === "active" && retention !== "" && retention !== "forever"
   );
 }
 
 /** 应该归档、但还没有任务的数据集。 */
-export function unarchivedDatasets(datasets: Dataset[], tasks: ArchiveTask[], spaceId: string): Dataset[] {
+export function unarchivedDatasets(datasets: Dataset[], tasks: ArchiveTask[]): Dataset[] {
   const archived = new Set(tasks.map(task => task.dataset_id));
-  return datasets.filter(dataset => archivableDataset(dataset, spaceId) && !archived.has(dataset.dataset_id));
+  return datasets.filter(dataset => archivableDataset(dataset) && !archived.has(dataset.dataset_id));
 }
 
 /**

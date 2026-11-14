@@ -19,7 +19,7 @@
 | Space（空间） | 一组相互隔离的业务数据，默认有 `crypto`（加密货币）、`stockcn`（A 股，默认停用）等 |
 | DataSource（数据来源） | 一个上游，如币安现货、币安合约 |
 | Subject（标的） | 空间里的对象，如 `BTC-USDT`；Tag（标签）是一组标的，采集任务按标签选标的 |
-| Dataset（数据集） | 某来源的一类数据（某频率的 K 线、因子结果等），绑定到 Storage 的 DataNode |
+| Dataset（数据集） | 某来源的一类数据（某频率的 K 线、因子结果等），存在 Storage 主服务（storage-primary）的 Pebble 库里 |
 | Field / 列 | 数据集的字段；因子结果是结果数据集的列 |
 | View | 面向查询的宽表，由 Storage 异步构建，可重建 |
 
@@ -53,7 +53,7 @@
 ./bin/moox-cli collector task create --help                           # 新建 K 线采集任务
 # 币安永续 1h/1d 可选资金费率：--output-field 会替换默认字段，要把默认字段一起列出，例如
 # --output-field open,high,low,close,volume,quote_volume,trade_num,funding_rate；建完用 ingest-mode get 确认是 stream 加 local
-# 股票任务（A 股、港股）不要用默认的 --output-field（那是现货、永续行的字段），带 --all-output-fields 输出股票行的全部字段
+# 股票任务（A 股、港股、美股）不要用默认的 --output-field（那是现货、永续行的字段），带 --all-output-fields 输出股票行的全部字段
 ./bin/moox-cli collector kline check|backfill|backfill-status ...     # 检查与补采
 ./bin/moox-cli collector kline backfill-cancel|backfill-retry ...     # 取消补采作业；重试失败的分块
 ./bin/moox-cli collector kline history-confirm|absences-clear ...     # 按历史扫描的缺口补采并确认“行情源本来没有”的 K 线；行情源后来补上数据时清除这些确认
@@ -71,17 +71,18 @@
 - 云函数：`cloud function list|job|invoke|create|deploy|update-config|delete`、`cloud package list|show|url|delete`、`cloud scf preview|import`、`cloud account list|regions|delete`；
   创建、部署、改配置、删除会自动持有采集发布租约；代码包上传用 `collector function upload`；云账户的新建与修改带密钥，请用户在管理台填写。
 - 附加字段（K 线行情之外的可选列：币安永续的资金费率，A 股日线的复权因子、申万行业、财务）只能在建任务时用 `--output-field` 选全，任务建好后只能减少、不能新增；`collector data-type show` 的 `extra_fields` 列出每个字段适用的市场、品种和频率。A 股日线的完整步骤见 [`ashare-daily.md`](ashare-daily.md)。
+- **东方财富限流**：控制机上 Collector 直连东方财富（A 股标的列表、美股交易所对照）默认每秒 2 个请求、顺序发出；连续 5 次传输层失败或一次 429、403 就对该主机冷却（首次 10 分钟，翻倍，最长 60 分钟），期间不发请求，结束后自动探测恢复；push2 单独冷却会回退 push2test、不告警，push2 与 push2test 都冷却才上报关注项 `collector_attention:eastmoney_cooling_down`。被限流后等冷却结束，不要手工狂打、不要重启 Collector；**禁止在生产主机上跑没有上限的临时脚本访问东方财富**，实测用临时云函数（南京出口）并设请求总数上限，或写进 Collector 复用限流器；一次性探测也要总请求数硬上限、每秒不超过 1～2 个、连续失败 3 次立即停止（`docs/模块/采集.md` 第 6a 节）。
 - 长历史导入：[`initial-import.md`](initial-import.md)。取 K 线数据：[`data-query.md`](data-query.md)。
 
 ## 存储（Storage）
 
-- **做什么**：元数据目录（primary，SQLite）、字段级事实（node，Pebble）、可重建的 View（view，DuckDB/Bleve）。
-- **在哪**：存储机，三个角色同机，DataNode ID 固定 `storage-node-0`（`setup init` 自动登记）。
+- **做什么**：storage-primary 管元数据目录（SQLite）和字段级事实（Pebble，含 Outbox、周期账本、保留期清理）；storage-view 管可重建的 View（DuckDB/Bleve）。
+- **在哪**：存储机，两个角色同机。数据集建好即可写入，不需要激活。
 - **常用**：
-  - 元数据：`metadata source|subject|tag|dataset|field|field-group|view|device list|show|create|update|delete`；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。
-  - 读数据：`data kline get`、`data rows export|count`、`data view query`、`data records search`。
-  - 维护：`storage repair-view|force-rebuild-view|reset-view-consumers|reset-metadata|delete-view|purge-dataset-events|period-inventory`
-    （经 SSH 在存储机上执行，不带 `--yes` 只预览；见 [`cli-operations.md`](cli-operations.md)、[`view-catchup.md`](view-catchup.md)）；节点登记 `storage node list|show|update|delete`。
+  - 元数据：`metadata source|subject|tag|dataset|field|field-group|view list|show|create|update|delete`；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。
+  - 读数据：`data kline get`、`data rows export|count`、`data view query|state|wait-applied`、`data records search`。
+  - 维护：`storage repair-view|reset-metadata|delete-view`
+    （经 SSH 在存储机上执行，不带 `--yes` 只预览；见 [`cli-operations.md`](cli-operations.md)、[`view-catchup.md`](view-catchup.md)）。
 - **其他**：`metadata spaces` 列出一份种子文件里可导入的业务空间；`setup storage-auth` 经 SSH 从存储机读一次 Primary 角色密钥存到本机操作员目录（`import`、`data rows export` 要用，只需一次，不打印）。
 - **注意**：新建 View、加标的、调大 `view_rows_per_series` 都会增加存储机内存，按 [`storage.md`](storage.md) 估算并提醒用户。保留期等配置改在 `moox.toml` 后要重装对应单元才生效。
 - 协议与命名规则：[`protocol.md`](protocol.md)。

@@ -16,10 +16,7 @@ func TestValidateDatasetEventRejectsInvalidEnvelopeAndPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := registry.Encode(events.DatasetRowsUpserted, &storagepb.DatasetRowsUpserted{NodeId: "node", StoreId: "store", Sequence: 1,
-		SpaceId: "space", DatasetId: "dataset",
-		Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}},
-	}, events.PublishOptions{EventID: "event-1", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "dataset"})
+	encoded, err := registry.Encode(events.DatasetPeriodCompleted, validPeriodPayload("dataset"), events.PublishOptions{EventID: "event-1", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "dataset"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +35,7 @@ func TestValidateDatasetEventRejectsInvalidEnvelopeAndPayload(t *testing.T) {
 		{name: "empty payload", mutate: func(message *eventpb.EventMessage) { message.Payload = nil }},
 		{name: "invalid occurred at", mutate: func(message *eventpb.EventMessage) { message.OccurredAt = timestamppb.New(time.Unix(1<<62, 0)) }},
 		{name: "payload identity mismatch", mutate: func(message *eventpb.EventMessage) {
-			message.Payload, _ = proto.Marshal(&storagepb.DatasetRowsUpserted{NodeId: "node", StoreId: "store", Sequence: 1, SpaceId: "other", DatasetId: "dataset", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "other", DatasetId: "dataset", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}})
+			message.Payload, _ = proto.Marshal(validPeriodPayload("other"))
 		}},
 	}
 	for _, tt := range tests {
@@ -53,5 +50,12 @@ func TestValidateDatasetEventRejectsInvalidEnvelopeAndPayload(t *testing.T) {
 				t.Fatal("invalid event was accepted")
 			}
 		})
+	}
+}
+
+func validPeriodPayload(datasetID string) *storagepb.DatasetPeriodCompleted {
+	return &storagepb.DatasetPeriodCompleted{
+		DatasetId: datasetID, Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
+		CauseEventId: "cause-1", CompletedAt: timestamppb.New(time.Unix(1786032060, 0)),
 	}
 }

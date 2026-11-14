@@ -33,7 +33,7 @@ func TestProcessNameNeverCarriesArgumentsOrControlCharacters(t *testing.T) {
 	for _, tt := range []struct {
 		exe, comm, want string
 	}{
-		{"/data/moox/storage/current/bin/moox-storage-node", "moox-storage-no", "moox-storage-node"},
+		{"/data/moox/storage/current/bin/moox-storage-primary", "moox-storage-pr", "moox-storage-primary"},
 		{"/data/moox/prod/releases/old/bin/moox-monitor (deleted)", "moox-monitor", "moox-monitor"},
 		{"/usr/bin/python3.12", "python3", "python3.12"},
 		{"/tmp/my app/sle ep", "sle ep", "sle ep"},

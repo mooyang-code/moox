@@ -26,7 +26,7 @@ const overview: HealthOverview = {
       datasets: [
         { producer: "storage", space_id: "stockcn", dataset_id: "dataset_stockcn_1m", freq: "1m", timezone: "Asia/Shanghai" },
         { producer: "storage", space_id: "crypto", dataset_id: "dataset_spot_1m", freq: "1m", timezone: "UTC" },
-        { producer: "storage", space_id: "mooxsys", dataset_id: "dataset_mooxsys_host_resource", freq: "1m" }
+        { producer: "storage", space_id: "crypto", dataset_id: "", freq: "1m" }
       ]
     },
     {
@@ -70,7 +70,7 @@ const history: ArrivalHistory = {
 };
 
 describe("arrival chains", () => {
-  it("lists ingested market datasets with their zone and leaves out system data", () => {
+  it("lists ingested datasets with their zone and skips incomplete entries", () => {
     const chains = arrivalChains(overview, names);
     expect(chains.map(chain => [chain.key, chain.label, chain.timezone])).toEqual([
       ["crypto/dataset_spot_1m/1m", "现货分钟K线 · 1m", "UTC"],

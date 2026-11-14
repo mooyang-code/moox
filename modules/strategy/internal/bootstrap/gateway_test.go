@@ -128,7 +128,7 @@ func (w *strategyGatewayWire) GetView(ctx context.Context, req *storagepb.GetVie
 	if err := w.verifyStorage(ctx, "Metadata", "GetView", req); err != nil {
 		return nil, err
 	}
-	return &storagepb.GetViewRsp{RetInfo: &commonpb.RetInfo{}, View: &storagepb.View{ViewId: req.GetViewId(), DatasetId: "bars", Status: "active", Freq: "1m", ActiveIndexId: "index-1"}}, nil
+	return &storagepb.GetViewRsp{RetInfo: &commonpb.RetInfo{}, View: &storagepb.View{ViewId: req.GetViewId(), DatasetId: "bars", Status: "active", Freq: "1m"}}, nil
 }
 
 func (w *strategyGatewayWire) ListViewColumns(ctx context.Context, req *storagepb.ListViewColumnsReq) (*storagepb.ListViewColumnsRsp, error) {
@@ -171,6 +171,13 @@ func (w *strategyGatewayWire) ListTagMembers(ctx context.Context, req *storagepb
 		return nil, err
 	}
 	return &storagepb.ListTagMembersRsp{RetInfo: &commonpb.RetInfo{}}, nil
+}
+
+func (w *strategyGatewayWire) GetViewState(ctx context.Context, req *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
+	if err := w.verifyStorage(ctx, "DataView", "GetViewState", req); err != nil {
+		return nil, err
+	}
+	return &storagepb.GetViewStateRsp{RetInfo: &commonpb.RetInfo{}, IndexId: "index-1", Generation: 3, AppliedCursor: &storagepb.DatasetChangeCursor{StoreId: "store-1", Sequence: 9}}, nil
 }
 
 func (w *strategyGatewayWire) QueryTimeSeriesRows(ctx context.Context, req *storagepb.QueryTimeSeriesRowsReq) (*storagepb.QueryTimeSeriesRowsRsp, error) {
@@ -299,6 +306,8 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	view, err := reader.GetView(ctx, "crypto", "source")
 	require.NoError(t, err)
 	require.Equal(t, "bars", view.DatasetID)
+	require.Equal(t, "index-1", view.ActiveIndexID)
+	require.Equal(t, "index-1@store-1#3", view.Generation)
 	require.Len(t, view.Columns, 1)
 	dataset, err := reader.GetDataset(ctx, "crypto", "bars")
 	require.NoError(t, err)
@@ -338,7 +347,7 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	for _, want := range []string{
 		"trpc.moox.storage.Metadata/GetView", "trpc.moox.storage.Metadata/ListViewColumns", "trpc.moox.storage.Metadata/GetDataset",
 		"trpc.moox.storage.Metadata/GetTag", "trpc.moox.storage.Metadata/ListDatasetSubjects", "trpc.moox.storage.Metadata/ListSubjects",
-		"trpc.moox.storage.Metadata/ListTagMembers", "trpc.moox.storage.DataView/QueryTimeSeriesRows", "trpc.moox.factor.FactorMgr/GetFactor",
+		"trpc.moox.storage.Metadata/ListTagMembers", "trpc.moox.storage.DataView/QueryTimeSeriesRows", "trpc.moox.storage.DataView/GetViewState", "trpc.moox.factor.FactorMgr/GetFactor",
 		"trpc.moox.trade.TradeConsoleService/GetLogicalAccount", "trpc.moox.trade.TradeConsoleService/ClaimLogicalAccountOwner",
 		"trpc.moox.trade.TradeConsoleService/ReleaseLogicalAccountOwner",
 	} {

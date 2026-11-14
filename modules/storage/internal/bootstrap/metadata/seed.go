@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -34,8 +33,6 @@ type ImportResult struct {
 	Fields         int
 	DatasetColumns int
 	Views          int
-	ViewColumns    int
-	Devices        int
 }
 
 // ImportSeed 读取显式指定的 metadata seed 文件，并按依赖顺序通过元数据控制面写入。
@@ -83,9 +80,6 @@ func ImportSeed(ctx context.Context, opts SeedOptions) (ImportResult, error) {
 func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (ImportResult, error) {
 	var result ImportResult
 	var err error
-	if err := validateSeedDatasets(ctx, store, seed.Datasets); err != nil {
-		return result, err
-	}
 	seed, err = normalizeSeedFieldGroups(seed)
 	if err != nil {
 		return result, err
@@ -150,8 +144,8 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 		if _, err := store.UpsertDataset(ctx, &pb.Dataset{
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, DataSourceId: item.DataSourceID,
 			Name: item.Name, Description: item.Description, DataKind: parseDataKind(item.DataKind),
-			Freq: item.Freq, Status: "disabled", Attributes: item.Attributes,
-			DataNodeId: item.DataNodeID, SubjectTags: subjectTags,
+			Freq: item.Freq, Attributes: item.Attributes,
+			SubjectTags: subjectTags,
 		}); err != nil {
 			return result, seedErr("dataset", item.DatasetID, err)
 		}
@@ -203,60 +197,7 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 		result.Views++
 	}
 
-	for _, item := range seed.ViewColumns {
-		if _, err := store.UpsertViewColumn(ctx, &pb.ViewColumn{
-			SpaceId: item.SpaceID, ViewId: item.ViewID, ColumnName: item.ColumnName,
-			OriginType: parseColumnOriginType(item.OriginType), OriginId: item.OriginID,
-			ValueType: parseValueType(item.ValueType), OnlineTime: item.OnlineTime, SortOrder: item.SortOrder,
-			Attributes: seedViewColumnAttributes(item),
-		}); err != nil {
-			return result, seedErr("view_column", item.ViewID+"."+item.ColumnName, err)
-		}
-		result.ViewColumns++
-	}
-
-	for _, item := range seed.Devices {
-		if _, err := store.UpsertDevice(ctx, &pb.Device{
-			DeviceId: item.DeviceID, Name: item.Name, Engine: item.Engine,
-			Endpoint: item.Endpoint, ConfigJson: item.ConfigJSON, Status: item.Status, Attributes: item.Attributes,
-		}); err != nil {
-			return result, seedErr("device", item.DeviceID, err)
-		}
-		result.Devices++
-	}
-
 	return result, nil
-}
-
-func seedViewColumnAttributes(item seedViewColumn) map[string]string {
-	attributes := make(map[string]string, len(item.Attributes)+1)
-	for key, value := range item.Attributes {
-		attributes[key] = value
-	}
-	if item.SpaceID == "mooxsys" && strings.TrimSpace(attributes["display_name"]) == "" {
-		attributes["display_name"] = item.ColumnName
-	}
-	return attributes
-}
-
-// validateSeedDatasets performs all Dataset checks before the first write.
-// DataNodes are deployment-owned, so a seed import may reference an already
-// registered active node but must never create one implicitly.
-func validateSeedDatasets(ctx context.Context, store metadata.Reader, datasets []seedDataset) error {
-	for _, item := range datasets {
-		dataNodeID := strings.TrimSpace(item.DataNodeID)
-		if dataNodeID == "" {
-			return fmt.Errorf("dataset %q data_node_id is required", item.DatasetID)
-		}
-		node, err := store.GetDataNode(ctx, dataNodeID)
-		if err != nil {
-			return seedErr("data_node", dataNodeID, err)
-		}
-		if node.GetStatus() != "active" {
-			return fmt.Errorf("data node %q must be active before metadata seed import", dataNodeID)
-		}
-	}
-	return nil
 }
 
 func normalizeSeedFieldGroups(seed seedFile) (seedFile, error) {
@@ -350,19 +291,6 @@ func parseDatasetColumnOriginType(value string) pb.DatasetColumnOriginType {
 	}
 }
 
-func parseColumnOriginType(value string) pb.ColumnOriginType {
-	switch value {
-	case "dataset_column":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN
-	case "expression":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION
-	case "system":
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM
-	default:
-		return pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_UNSPECIFIED
-	}
-}
-
 // ---- seed 文件结构（领域型，与显式传入的 metadata YAML 对应）----
 
 // seedFile 对应 metadata YAML 的顶层配置。
@@ -376,8 +304,6 @@ type seedFile struct {
 	Fields         []seedField         `yaml:"fields"`
 	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
 	Views          []seedView          `yaml:"views"`
-	ViewColumns    []seedViewColumn    `yaml:"view_columns"`
-	Devices        []seedDevice        `yaml:"devices"`
 }
 
 // seedSpace 描述待初始化的 Space 元数据。
@@ -427,13 +353,11 @@ type seedDataset struct {
 	SpaceID      string            `yaml:"space_id"`
 	DatasetID    string            `yaml:"dataset_id"`
 	DataSourceID string            `yaml:"data_source_id"`
-	DataNodeID   string            `yaml:"data_node_id"`
 	Name         string            `yaml:"name"`
 	Description  string            `yaml:"description"`
 	DataKind     string            `yaml:"data_kind"`
 	Freq         string            `yaml:"freq"`
 	SubjectTags  []string          `yaml:"subject_tags"`
-	Status       string            `yaml:"status"`
 	Attributes   map[string]string `yaml:"attributes"`
 }
 
@@ -486,28 +410,4 @@ type seedView struct {
 	GrainKeys        []string `yaml:"grain_keys"`
 	Engine           string   `yaml:"engine"`
 	Status           string   `yaml:"status"`
-}
-
-// seedViewColumn 描述 View 中对外可查询的结果列。
-type seedViewColumn struct {
-	SpaceID    string            `yaml:"space_id"`
-	ViewID     string            `yaml:"view_id"`
-	ColumnName string            `yaml:"column_name"`
-	OriginType string            `yaml:"origin_type"`
-	OriginID   string            `yaml:"origin_id"`
-	ValueType  string            `yaml:"value_type"`
-	OnlineTime string            `yaml:"online_time"`
-	SortOrder  uint32            `yaml:"sort_order"`
-	Attributes map[string]string `yaml:"attributes"`
-}
-
-// seedDevice 描述待初始化的物理存储设备。
-type seedDevice struct {
-	DeviceID   string            `yaml:"device_id"`
-	Name       string            `yaml:"name"`
-	Engine     string            `yaml:"engine"`
-	Endpoint   string            `yaml:"endpoint"`
-	ConfigJSON string            `yaml:"config_json"`
-	Status     string            `yaml:"status"`
-	Attributes map[string]string `yaml:"attributes"`
 }

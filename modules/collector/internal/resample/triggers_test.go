@@ -45,7 +45,7 @@ func TestBackfillTriggerSubmitsSourceBackfillJobWithSettleDelay(t *testing.T) {
 	}
 	payload := &storagepb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: timestamppb.New(utc("2026-10-21T10:03:00Z")), End: timestamppb.New(utc("2026-10-21T10:20:00Z")),
-		Origin: "auto", SyncRequestId: "kbf-1", ConfirmedAt: timestamppb.New(confirmed),
+		Origin: "auto", ConfirmedAt: timestamppb.New(confirmed),
 	}
 	for i := 0; i < 2; i++ { // 重复投递不重复建作业
 		require.NoError(t, trigger.OnBackfilled(context.Background(), "crypto", "kbf-1", payload))

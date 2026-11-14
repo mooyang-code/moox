@@ -65,7 +65,7 @@ func New(cfg Config) *Provider {
 	klines := eastmoneykline.New(eastmoneykline.Config{
 		BaseURL: cfg.KlineBaseURL, Endpoint: cfg.KlineEndpoint, ProviderID: providerID, SourceID: cfg.SourceID,
 		HTTPClient: cfg.HTTPClient, Now: cfg.Now, MaxBarsPerRequest: cfg.MaxBarsPerRequest,
-		Frequencies: klineFrequencies, SecID: commonsrc.EastMoneySecID, VolumeMultiplier: volumeMultiplier,
+		Frequencies: klineFrequencies, SecID: func(req marketdata.KlineRequest) (string, error) { return commonsrc.EastMoneySecID(req.SubjectID) }, VolumeMultiplier: volumeMultiplier,
 		Location: klineLocation, DailyClose: 15 * time.Hour,
 	})
 	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now, klines: klines, rateLimit: cfg.RateLimit, instrumentRateLimit: instrumentRateLimit}

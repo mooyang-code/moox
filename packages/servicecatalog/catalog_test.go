@@ -42,7 +42,7 @@ func servicePtr(c *Catalog, path string) *Service {
 
 func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 	c := mustCatalog(t)
-	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "console-proxy": 19528, "web-host": 19527, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "cloudfunction": 11411, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-node": 20212, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418}
+	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "console-proxy": 19528, "web-host": 19527, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "cloudfunction": 11411, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418}
 	if len(c.Components) != len(want) {
 		t.Fatalf("components = %d", len(c.Components))
 	}
@@ -182,9 +182,8 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"monitor", "trpc.moox.collector.CollectMgr", "UpdateTask", false},
 		{"monitor", "trpc.moox.collector.CollectMgr", "DisableTask", false},
 		{"monitor", "trpc.moox.collector.CollectMgr", "DeleteTask", false},
-		{"monitor", "trpc.moox.storage.PrimaryStore", "UpsertFields", true},
+		{"monitor", "trpc.moox.storage.PrimaryStore", "UpsertFields", false},
 		{"monitor", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
-		{"monitor", "trpc.moox.storage.PrimaryStore", "DeleteDatasetRows", false},
 		{"monitor", "trpc.moox.ops.SysDeploy", "ListHosts", true},
 		{"monitor", "trpc.moox.ops.SysDeploy", "ListDeployments", true},
 		{"monitor", "trpc.moox.ops.SysDeploy", "GetHostRoutes", true},
@@ -200,7 +199,6 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
 		{"access", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", true},
 		{"access", "trpc.moox.storage.Metadata", "DeleteDataset", false},
-		{"access", "trpc.moox.storage.PrimaryStore", "DeleteDatasetRows", false},
 		{"host-gateway@control", GatewayControlPath, "PullSnapshot", true},
 		{"host-gateway@*", GatewayControlPath, "PullSnapshot", false},
 		{"host-gateway@../escape", GatewayControlPath, "PullSnapshot", false},
@@ -369,8 +367,8 @@ func TestOnlyReadOnlyAndDeclaredIdempotentMethodsAreRetryable(t *testing.T) {
 func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 	c := mustCatalog(t)
 	for service, methods := range map[string][]string{
-		"PrimaryStore": {"ReadTimeSeriesRows", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted", "DeleteDatasetRows", "RestoreDatasetRows"},
-		"Metadata":     {"GetDataset", "ListDatasetColumns", "CreateDataset", "UpsertDatasetColumn", "ActivateDataset", "DeleteDataset", "UpdateDataset", "ListDatasetSubjects"},
+		"PrimaryStore": {"ReadTimeSeriesRows", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted"},
+		"Metadata":     {"GetDataset", "ListDatasetColumns", "CreateDataset", "UpsertDatasetColumn", "DeleteDataset", "UpdateDataset", "ListDatasetSubjects"},
 	} {
 		for _, method := range methods {
 			if !c.Allowed("factor-mgr", "trpc.moox.storage."+service, method) {
@@ -383,29 +381,12 @@ func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 	}
 	for service, methods := range map[string][]string{
 		"PrimaryStore": {"CommitTimeSeriesBatch"},
-		"Metadata":     {"RebindDatasetDataNode", "DeleteDataNode"},
+		"Metadata":     {"CreateSpace", "DeleteSpace"},
 	} {
 		for _, method := range methods {
 			if c.Allowed("factor-mgr", "trpc.moox.storage."+service, method) {
 				t.Errorf("unrelated Factor write permission: %s/%s", service, method)
 			}
-		}
-	}
-}
-
-func TestCollectorActivationPermissionRemainsBounded(t *testing.T) {
-	c := mustCatalog(t)
-	if !c.Allowed("collector", "trpc.moox.storage.Metadata", "ActivateDataset") {
-		t.Fatal("Collector must activate its task result datasets")
-	}
-	for _, caller := range []string{"scf-collector", "monitor", "strategy", "storage-view"} {
-		if c.Allowed(caller, "trpc.moox.storage.Metadata", "ActivateDataset") {
-			t.Fatalf("unexpected activation grant: %s", caller)
-		}
-	}
-	for _, method := range []string{"RebindDatasetDataNode", "DeleteDataNode", "RegisterDataNode"} {
-		if c.Allowed("collector", "trpc.moox.storage.Metadata", method) {
-			t.Fatalf("unexpected Collector administration grant: %s", method)
 		}
 	}
 }
@@ -450,7 +431,7 @@ func TestExternalProgramComponents(t *testing.T) {
 	}
 }
 
-// 部署页和控制台只读：启停、主机登记、数据节点修改与归档 worker 退役只留给 moox-cli。
+// 部署页和控制台只读：启停、主机登记与归档 worker 退役只留给 moox-cli。
 func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 	c := mustCatalog(t)
 	for _, tc := range []struct{ path, method string }{
@@ -458,8 +439,6 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 		{"trpc.moox.ops.SysDeploy", "SetDeploymentStatus"},
 		{"trpc.moox.ops.SysDeploy", "SyncHostDeployments"},
 		{"trpc.moox.ops.SysDeploy", "DeleteHost"},
-		{"trpc.moox.storage.Metadata", "UpdateDataNode"},
-		{"trpc.moox.storage.Metadata", "DeleteDataNode"},
 		{"trpc.moox.archive.ArchiveMgr", "RetireArchiveWorker"},
 		{"trpc.moox.archive.ArchiveMgr", "PrepareArchiveImport"},
 		{"trpc.moox.archive.ArchiveMgr", "ImportArchiveFile"},
@@ -475,8 +454,7 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 	for _, tc := range []struct{ path, method string }{
 		{"trpc.moox.ops.SysDeploy", "ListHosts"},
 		{"trpc.moox.ops.SysDeploy", "ListDeployments"},
-		{"trpc.moox.storage.Metadata", "ListDataNodes"},
-		{"trpc.moox.storage.Metadata", "GetDataNode"},
+		{"trpc.moox.storage.Metadata", "ListSpaces"},
 	} {
 		if !c.Allowed("console", tc.path, tc.method) {
 			t.Fatalf("console lost read access to %s/%s", tc.path, tc.method)

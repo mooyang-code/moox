@@ -243,7 +243,7 @@ describe("layers", () => {
   it("groups components by host with problems first", () => {
     const hosts = componentsByHost({
       components: [
-        { host_id: "storage", component_id: "storage-node", name: "存储数据节点", status: "healthy" },
+        { host_id: "storage", component_id: "storage-primary", name: "存储主服务", status: "healthy" },
         { host_id: "control", component_id: "admin", name: "管理后台", status: "healthy" },
         { host_id: "control", component_id: "collector", name: "行情采集服务", status: "down", reason: "健康检查失败" },
         { host_id: "control", component_id: "eventbus", name: "消息总线", status: "unchecked", reporter: { status: "degraded" } }
@@ -587,7 +587,7 @@ describe("当前告警的进程排行", () => {
             severity: "warning",
             title: "storage CPU",
             triggered_at: at(10),
-            processes: [{ pid: 9, name: "moox-storage-node", cpu_percent: 120, cpu_available: true, rss_bytes: 1048576 }]
+            processes: [{ pid: 9, name: "moox-storage-primary", cpu_percent: 120, cpu_available: true, rss_bytes: 1048576 }]
           },
           { id: "web", severity: "critical", title: "控制台前端", triggered_at: at(40) }
         ]
@@ -597,7 +597,7 @@ describe("当前告警的进程排行", () => {
     );
     const lines = groups.flatMap(group => group.lines);
     const fact = (key: string) => lines.find(line => line.key === key)?.facts.find(item => item.label === "占用最高的进程");
-    expect(fact("cpu")?.value).toBe("moox-storage-node（PID 9） CPU 120.0%、内存 1 MB");
+    expect(fact("cpu")?.value).toBe("moox-storage-primary（PID 9） CPU 120.0%、内存 1 MB");
     expect(fact("web")).toBeUndefined();
   });
 });

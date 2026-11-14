@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -203,6 +204,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, viewFiles...)
+	viewFollow, err := b.buildViewFollowLagHealth(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, viewFollow...)
 	presence, err := b.buildWorkerPresence(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err
@@ -236,7 +242,7 @@ const storageOutboxBacklogGrace = 2 * time.Minute
 // buildSeriesLimitHealth 检查指标目录的新序列增长：新序列被限额丢弃，或近 1 小时 / 24 小时的新增数接近上限，都视为异常。
 // 这通常是某个上报方的标签失控（例如把标的、请求 ID 放进了标签），不处理会撑大目录并让真正的指标被挤掉。
 func (b Builder) buildSeriesLimitHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return nil, nil
 	}
 	if b.Metrics == nil {
@@ -259,7 +265,7 @@ func (b Builder) buildSeriesLimitHealth(ctx context.Context, spaceID string, now
 		}
 	}
 	return []BusinessStatus{{
-		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "metrics_ingest", Module: "series_limit",
+		SpaceID: events.SystemSpaceID, Kind: "metrics_ingest", Module: "series_limit",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }
@@ -275,7 +281,7 @@ func seriesQuota(current, max int64) string {
 // buildStorageOutboxHealth detects an interrupted Primary-to-View delivery
 // path before a Dataset output watermark has had time to become stale.
 func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return nil, nil
 	}
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
@@ -323,7 +329,7 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 		reason = fmt.Sprintf("正在投递 %.0f 条数据变更", pending)
 	}
 	return []BusinessStatus{{
-		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "data_delivery", Module: "storage_outbox",
+		SpaceID: events.SystemSpaceID, Kind: "data_delivery", Module: "storage_outbox",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }
@@ -331,7 +337,7 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 // buildViewFileLimitHealth 把 Storage View 上报的索引文件超限数量转成告警：超过 max_view_file_bytes 只告警，数据不动，
 // 由人判断是调大告警线、调小保留根数还是减列。
 func (b Builder) buildViewFileLimitHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return nil, nil
 	}
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
@@ -363,7 +369,61 @@ func (b Builder) buildViewFileLimitHealth(ctx context.Context, spaceID string, n
 		reason = fmt.Sprintf("%.0f 个 View 的索引文件超过 max_view_file_bytes；数据不受影响，日志里有具体的 View，确认后调大告警线或减少保留根数", overLimit)
 	}
 	return []BusinessStatus{{
-		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "view_file", Module: "storage_view",
+		SpaceID: events.SystemSpaceID, Kind: "view_file", Module: "storage_view",
+		Status: status, Reason: reason, LastCheckedAt: now,
+	}}, nil
+}
+
+// viewFollowLagLimit 是 View 跟随变更日志允许的落后时长：跟随器空闲时每轮最多等 20 秒，正常应用一期在秒级以内。
+const viewFollowLagLimit = 2 * time.Minute
+
+// buildViewFollowLagHealth 把 Storage View 上报的跟随落后时长（距离上一次追上变更日志头部）转成告警。
+// 只按时长判断：空闲数据集的序号差天然会有一轮等待的量，按序号差会误报。
+func (b Builder) buildViewFollowLagHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
+		return nil, nil
+	}
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return nil, nil
+	}
+	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_storage_view_follow_lag_seconds", "", 500, now)
+	if err != nil {
+		return nil, err
+	}
+	found := false
+	var lagging []string
+	var worst float64
+	for _, item := range series {
+		if item.IsStale {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		found = true
+		if latest.Value <= viewFollowLagLimit.Seconds() {
+			continue
+		}
+		worst = max(worst, latest.Value)
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return nil, err
+		}
+		lagging = append(lagging, labels["space_id"]+"/"+labels["view_id"])
+	}
+	if !found {
+		return nil, nil
+	}
+	status, reason := "healthy", "View 跟随数据变更正常"
+	if len(lagging) > 0 {
+		sort.Strings(lagging)
+		status = "down"
+		reason = fmt.Sprintf("%d 个 View 跟随数据变更落后，最久约 %d 分钟没有追上（%s）；查询会读到旧数据，看 storage-view 日志里的跟随失败原因",
+			len(lagging), max(1, int(worst)/60), strings.Join(lagging, "、"))
+	}
+	return []BusinessStatus{{
+		SpaceID: events.SystemSpaceID, Kind: "view_follow", Module: "storage_view",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }
@@ -1084,7 +1144,7 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 		}
 	}
 	// 余额对账和各模块的关注项与空间无关，归在 mooxsys 下。
-	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return out, nil
 	}
 	balances, err := b.buildBalanceStatuses(ctx)
@@ -1141,13 +1201,16 @@ var CollectorAttentionNames = map[string]string{
 	"delist_readonly_key_missing": "下架检测缺少币安只读 Key",
 	"event_outbox_stuck":          "Collector 事件发件箱积压",
 	"eventbus_consumer_failed":    "Collector EventBus 消费者启动失败",
+	"eastmoney_cooling_down":      "东方财富请求被限流，Collector 已暂停访问",
 }
 
 // warningAttention 是只需提醒、不算故障的关注项（检查 ID）：功能还在，只少了一部分。
-// 例如缺币安只读 Key 时只是现货下架改为手工登记，不能挡住安装验收。
+// 例如缺币安只读 Key 时只是现货下架改为手工登记，不能挡住安装验收；
+// 东方财富冷却时只是标的列表同步暂缓（云函数采集不受影响），冷却结束探测成功后自动恢复。
 // 这些关注项触发时业务检查是 degraded（需关注），告警级别是 warning；其余关注项是 down 和 critical。
 var warningAttention = map[string]bool{
 	"collector_attention:delist_readonly_key_missing": true,
+	"collector_attention:eastmoney_cooling_down":      true,
 }
 
 // AttentionIsWarning 报告关注项触发时是否只算提醒（warning），不算故障。
@@ -1202,7 +1265,7 @@ func (b Builder) buildAttentionStatuses(ctx context.Context, source attentionSou
 			continue
 		}
 		status := BusinessStatus{
-			SpaceID: monmetrics.InternalMetricSpaceID, Kind: source.check, Module: kind, Status: "healthy", Reason: "正常",
+			SpaceID: events.SystemSpaceID, Kind: source.check, Module: kind, Status: "healthy", Reason: "正常",
 			LastCheckedAt: latest.ObservedAt,
 		}
 		if latest.Value > 0 {
@@ -1279,7 +1342,7 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 			status, reason = "down", "balance sync stale"
 		}
 		out = append(out, BusinessStatus{
-			SpaceID: monmetrics.InternalMetricSpaceID, Kind: "balance", Module: successValue.serviceName, Status: status,
+			SpaceID: events.SystemSpaceID, Kind: "balance", Module: successValue.serviceName, Status: status,
 			Reason: reason, LastCheckedAt: lastCheckedAt,
 		})
 	}

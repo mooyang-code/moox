@@ -17,7 +17,7 @@ type Process struct {
 }
 
 // TopProcesses 把占用最高的几个进程写成一行，例如
-// “storage-node CPU 340%、内存 5.1 GB；duckdb CPU 45%、内存 2.3 GB”。
+// “storage-primary CPU 340%、内存 5.1 GB；duckdb CPU 45%、内存 2.3 GB”。
 // byMemory 为 true 时按常驻内存排，否则按 CPU 排（只看有 CPU 值的进程）；没有可列的进程时返回空串。
 // CPU 是占单核的百分比，与 top 一致：340% 就是占了 3.4 个核。
 func TopProcesses(items []Process, byMemory bool, limit int) string {

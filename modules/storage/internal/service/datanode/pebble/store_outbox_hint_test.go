@@ -11,7 +11,7 @@ import (
 // 缓存回写必须与写入的提交互斥：扫描的 revision 已经过期（期间有事件提交）时不能用“空队列”覆盖；
 // 写入正持有 outboxMu 时，回写要等它结束再复核。
 func TestOutboxHintWritebackDoesNotOverwriteConcurrentCommit(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestOutboxHintWritebackDoesNotOverwriteConcurrentCommit(t *testing.T) {
 
 // 重复删除（或删除已被别的路径删掉的事件）不能扣减其他事件的待发计数。
 func TestDeleteOutboxCountsOnlyExistingEntries(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}

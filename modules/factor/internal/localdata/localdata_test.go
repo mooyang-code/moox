@@ -131,7 +131,7 @@ func (f *fakeStorage) ReadWindow(_ context.Context, req storageio.ReadRequest) (
 func (f *fakeStorage) ReadDatasetChanges(_ context.Context, _, _ string, cursor *storageio.ChangeCursor, fromHead bool, _ int) (storageio.Changes, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	head := storageio.ChangeCursor{NodeID: "n1", StoreID: "s1", Sequence: uint64(len(f.changes))}
+	head := storageio.ChangeCursor{StoreID: "s1", Sequence: uint64(len(f.changes))}
 	if fromHead {
 		return storageio.Changes{Next: head}, nil
 	}
@@ -419,7 +419,7 @@ func TestChangeGapBlocksSourceUntilReconciled(t *testing.T) {
 	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}
 
 	// 位点的存储身份对不上（Storage 重建）。
-	require.NoError(t, fx.data.Store().SetSyncCursor(src, []byte("n1\x00other-store\x005")))
+	require.NoError(t, fx.data.Store().SetSyncCursor(src, []byte("other-store\x005")))
 	require.ErrorIs(t, fx.data.Prepare(context.Background(), fx.set, subjects), ErrChangeGap)
 	require.ErrorIs(t, fx.data.Blocked(src), ErrChangeGap)
 	require.Equal(t, pipeline.WarmupWarming, fx.data.WindowStatuses()[0].State)

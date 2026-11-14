@@ -90,7 +90,7 @@ func init() {
 	f.StringSliceVar(&importFlags.Targets, "target", []string{"storage", "factor"}, "写入目标：storage、factor")
 	f.StringVar(&importFlags.Manifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	f.StringVar(&importFlags.AuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
-	f.StringVar(&importFlags.ViewID, "view", "", "可选 View ID；写 Storage 后等该 View 追平导入的同步点")
+	f.StringVar(&importFlags.ViewID, "view", "", "可选 View ID；写 Storage 后等该 View 跟上导入的写入")
 	f.StringVar(&importFlags.Engine, "engine", "", "因子引擎健康检查地址（本地写入接口挂在它上面）；不给时按 --file 里的 moox.toml 自动解析，没有 moox.toml 时用 http://127.0.0.1:11417")
 	f.StringVar(&importFlags.JobDB, "job-db", "./importer.db", "断点库路径")
 	f.StringVar(&importFlags.JobID, "job", "", "任务 ID；不写时按请求与文件特征生成，重跑同一请求自动续传")
@@ -177,6 +177,11 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 			}
 			return storageImportSubjectBound(subjects, subject), nil
 		}}
+		if opts.ViewID != "" {
+			if err := checkImportView(ctx, metaClient, opts.Space, opts.ViewID, opts.Dataset); err != nil {
+				return err
+			}
+		}
 		if !opts.DryRun {
 			auth, err := storagePrimaryRoleAuth(opts.AuthFile, "moox-cli-data-import")
 			if err != nil {
@@ -365,7 +370,7 @@ func importFieldType(t pb.FieldValueType) seriesformat.FieldType {
 	}
 }
 
-// importStorageTarget 把一批行以字段更新（UpsertFields）写进 Storage，写完后追加同步点（可选地等 View 追平）。
+// importStorageTarget 把一批行以字段更新（UpsertFields）写进 Storage，写完后可选地等 View 跟上。
 type importStorageTarget struct {
 	writer  gatewayStorageDataWriter
 	types   map[string]pb.FieldValueType
@@ -400,28 +405,45 @@ func (t *importStorageTarget) Write(ctx context.Context, c runner.Chunk) error {
 	return nil
 }
 
-// Finish 追加导入的同步点；指定了 View 时等它追平。
+// importViewWaitTimeout 是导入结束后等指定 View 跟上写入的总时长；View 正在建索引（VIEW_NOT_READY）时每隔 importViewRetryInterval 再问一次。
+const (
+	importViewWaitTimeout   = 30 * time.Second
+	importViewRetryInterval = 200 * time.Millisecond
+)
+
+// Finish 指定了 View 时等它跟上导入的写入：View 在服务端取当前变更日志头部，扫描到它时导入的行都已可查。
 func (t *importStorageTarget) Finish(ctx context.Context) error {
-	if !t.written {
+	if !t.written || t.view == "" {
 		return nil
 	}
-	requestID := fmt.Sprintf("import-%s-%d", t.dataset, time.Now().UnixNano())
-	if err := t.writer.AppendDatasetSyncPoint(ctx, &pb.DatasetSyncPointMarker{RequestId: requestID, DatasetId: t.dataset, Source: "import"}); err != nil {
-		return fmt.Errorf("append import sync point: %w", err)
+	deadline := time.Now().Add(importViewWaitTimeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("View %s 在 %s 内没有跟上导入的写入", t.view, importViewWaitTimeout)
+		}
+		rsp, err := t.writer.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: t.space, ViewId: t.view, WaitTimeoutMs: uint32(max(remaining/time.Millisecond, 1))})
+		if err != nil {
+			return fmt.Errorf("等待 View 跟上导入的写入：%w", err)
+		}
+		switch {
+		case rsp.GetRetInfo() == nil:
+			return errors.New("等待 View 跟上导入的写入：响应缺少 ret_info")
+		case rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS && rsp.GetApplied():
+			return nil
+		case rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS:
+			continue
+		case rsp.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_READY:
+			return fmt.Errorf("等待 View 跟上导入的写入：%s", rsp.GetRetInfo().GetMsg())
+		}
+		timer := time.NewTimer(importViewRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
-	if t.view == "" {
-		return nil
-	}
-	rsp, err := t.writer.WaitViewSyncPoint(ctx, &pb.WaitViewSyncPointReq{
-		SpaceId: t.space, ViewId: t.view, RequestId: requestID, DatasetIds: []string{t.dataset}, WaitTimeoutMs: 30000,
-	})
-	if err != nil {
-		return fmt.Errorf("wait view sync point: %w", err)
-	}
-	if rsp == nil || !rsp.GetReady() {
-		return fmt.Errorf("view %s did not apply import sync point", t.view)
-	}
-	return nil
 }
 
 // importUpserts 把一批行转成 Storage 的字段更新；空值写成显式 NULL（清除该字段，与因子机本地「整段替换」的结果一致，
@@ -496,6 +518,28 @@ func (c gatewayStorageImportMetadataClient) GetDataset(ctx context.Context, spac
 	return rsp.GetDataset(), nil
 }
 
+func (c gatewayStorageImportMetadataClient) GetView(ctx context.Context, spaceID, viewID string) (*pb.View, error) {
+	rsp := &pb.GetViewRsp{}
+	if err := postStorage(ctx, c.Gateway, metadataServiceName, "GetView", &pb.GetViewReq{SpaceId: spaceID, ViewId: viewID}, rsp); err != nil {
+		return nil, err
+	}
+	return rsp.GetView(), nil
+}
+
+// checkImportView 确认 --view 指定的 View 读的就是导入的数据集：否则等它跟上变更日志也证明不了导入的行已可查。
+func checkImportView(ctx context.Context, meta interface {
+	GetView(context.Context, string, string) (*pb.View, error)
+}, spaceID, viewID, datasetID string) error {
+	view, err := meta.GetView(ctx, spaceID, viewID)
+	if err != nil {
+		return fmt.Errorf("读取 View %s：%w", viewID, err)
+	}
+	if view.GetDatasetId() != datasetID {
+		return fmt.Errorf("View %s 读的是数据集 %q，不是导入的数据集 %q", viewID, view.GetDatasetId(), datasetID)
+	}
+	return nil
+}
+
 func (c gatewayStorageImportMetadataClient) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string) ([]*pb.DatasetColumn, error) {
 	rsp := &pb.ListDatasetColumnsRsp{}
 	if err := postStorage(ctx, c.Gateway, metadataServiceName, "ListDatasetColumns", &pb.ListDatasetColumnsReq{
@@ -533,18 +577,15 @@ func (w gatewayStorageDataWriter) UpsertFields(ctx context.Context, req *pb.Prim
 	return postStorage(ctx, w.Gateway, accessServiceName, "UpsertFields", request, &pb.PrimaryUpsertFieldsRsp{})
 }
 
-func (w gatewayStorageDataWriter) AppendDatasetSyncPoint(ctx context.Context, marker *pb.DatasetSyncPointMarker) error {
-	return postStorage(ctx, w.Gateway, accessServiceName, "AppendDatasetSyncPoint", &pb.AppendDatasetSyncPointReq{AuthInfo: w.Auth, SpaceId: w.SpaceID, SyncPoint: marker}, &pb.AppendDatasetSyncPointRsp{})
-}
-
-func (w gatewayStorageDataWriter) WaitViewSyncPoint(ctx context.Context, req *pb.WaitViewSyncPointReq) (*pb.WaitViewSyncPointRsp, error) {
+// WaitViewApplied 用写入身份调 DataView，等 View 跟上调用这一刻的变更日志头部；业务结果在响应的 ret_info 里，由调用方判断。
+func (w gatewayStorageDataWriter) WaitViewApplied(ctx context.Context, req *pb.WaitViewAppliedReq) (*pb.WaitViewAppliedRsp, error) {
 	if req == nil || w.Auth == nil {
-		return nil, fmt.Errorf("Storage view sync requires a request and role authentication")
+		return nil, errors.New("等待 View 跟上写入需要请求与写入身份")
 	}
-	rsp := &pb.WaitViewSyncPointRsp{}
-	request := proto.Clone(req).(*pb.WaitViewSyncPointReq)
+	rsp := &pb.WaitViewAppliedRsp{}
+	request := proto.Clone(req).(*pb.WaitViewAppliedReq)
 	request.AuthInfo = w.Auth
-	if err := postStorage(ctx, w.Gateway, accessServiceName, "WaitViewSyncPoint", request, rsp); err != nil {
+	if err := postStorageRaw(ctx, w.Gateway, dataViewSvc, "WaitViewApplied", request, rsp); err != nil {
 		return nil, err
 	}
 	return rsp, nil

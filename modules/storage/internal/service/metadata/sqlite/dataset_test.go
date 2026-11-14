@@ -8,44 +8,45 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 )
 
-func TestDatasetCreateDefaultsAndRequiresActiveDataNode(t *testing.T) {
+// 新建的数据集直接启用，修订号从 1 开始；随请求带来的列与数据集在同一事务内写入。
+func TestDatasetCreateIsActiveAndCarriesColumns(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	if _, err := store.RegisterDataNode(ctx, "node-a", "trpc://node-a", "Node A"); err != nil {
-		t.Fatal(err)
-	}
-	created, err := store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "dataset", DataSourceId: "source", DataNodeId: "node-a",
+	created, err := store.UpsertDataset(ctx, &pb.Dataset{
+		SpaceId: "space", DatasetId: "dataset", DataSourceId: "source",
 		Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
-		Status: "active", BindingLocked: true, Revision: 99,
-	})
+		Status: "disabled", Revision: 99,
+	}, &pb.DatasetColumn{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.GetStatus() != "disabled" || created.GetBindingLocked() || created.GetRevision() != 1 {
-		t.Fatalf("create defaults = status=%q locked=%t revision=%d", created.GetStatus(), created.GetBindingLocked(), created.GetRevision())
+	if created.GetStatus() != "active" || created.GetRevision() != 1 {
+		t.Fatalf("create defaults = status=%q revision=%d", created.GetStatus(), created.GetRevision())
 	}
 	if created.GetRetention() != "" || created.GetRetentionSource() != "" {
 		t.Fatalf("stored retention = %q/%q; retention is resolved on read, never stored", created.GetRetention(), created.GetRetentionSource())
 	}
+	columns, _, err := store.ListDatasetColumns(ctx, "space", "dataset", nil)
+	if err != nil || len(columns) != 1 || columns[0].GetColumnName() != "close" || columns[0].GetDatasetId() != "dataset" {
+		t.Fatalf("columns=%v err=%v", columns, err)
+	}
 
-	if _, err := store.RegisterDataNode(ctx, "node-disabled", "trpc://disabled", "Disabled"); err != nil {
-		t.Fatal(err)
+	// 列定义有误时数据集也不落库。
+	_, err = store.UpsertDataset(ctx, &pb.Dataset{
+		SpaceId: "space", DatasetId: "bad_columns", DataSourceId: "source",
+		Name: "Bad columns", DataKind: pb.DataKind_DATA_KIND_RECORD,
+	}, &pb.DatasetColumn{ColumnName: "untyped"})
+	if err == nil {
+		t.Fatal("dataset with an untyped column was created")
 	}
-	if _, err := store.UpdateDataNode(ctx, "node-disabled", "Disabled", "disabled"); err != nil {
-		t.Fatal(err)
-	}
-	_, err = store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "disabled_node_dataset", DataSourceId: "source", DataNodeId: "node-disabled",
-		Name: "Disabled node", DataKind: pb.DataKind_DATA_KIND_RECORD,
-	})
-	if !errors.Is(err, ErrDataNodeDisabled) {
-		t.Fatalf("create on disabled node error = %v, want %v", err, ErrDataNodeDisabled)
+	if _, err := store.GetDataset(ctx, "space", "bad_columns"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("rejected dataset persisted: err=%v", err)
 	}
 }
 
@@ -53,9 +54,8 @@ func TestDeleteDatasetRejectsReferencedOrdinaryDatasetWithoutDeletingView(t *tes
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "dataset-ordinary", DataSourceId: "source", DataNodeId: "node-a",
+		SpaceId: "space", DatasetId: "dataset-ordinary", DataSourceId: "source",
 		Name: "Ordinary", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	}); err != nil {
 		t.Fatal(err)
@@ -80,10 +80,9 @@ func TestDatasetMayOmitDataSource(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
 
 	created, err := store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "dataset_collector_result", DataNodeId: "node-a",
+		SpaceId: "space", DatasetId: "dataset_collector_result",
 		Name: "Collector Result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-1"},
 	})
@@ -103,10 +102,43 @@ func TestDatasetMayOmitDataSource(t *testing.T) {
 
 	// data_source_id 对所有数据集都是可选的。
 	if _, err = store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "dataset_missing_source", DataNodeId: "node-a",
+		SpaceId: "space", DatasetId: "dataset_missing_source",
 		Name: "Missing Source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	}); err != nil {
 		t.Fatalf("dataset without source err = %v", err)
+	}
+}
+
+// 只改名称的更新不会清掉 alignment 与 allowed_lateness_seconds；alignment 设置后不能改，没设置过的可以补上。
+func TestDatasetUpdateKeepsAlignmentAndLateness(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	if _, err := store.CreateDataset(ctx, &pb.Dataset{
+		SpaceId: "space", DatasetId: "dataset_session", Name: "Session",
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Alignment: "session", AllowedLatenessSeconds: 120,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_session", Name: "Renamed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetDataset(ctx, "space", "dataset_session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.GetAlignment() != "session" || got.GetAlignment() != "session" || got.GetAllowedLatenessSeconds() != 120 || got.GetName() != "Renamed" {
+		t.Fatalf("更新后 = %v", got)
+	}
+	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_session", Name: "Renamed", Alignment: "epoch_utc"}); err == nil {
+		t.Fatal("alignment 设置后不能修改")
+	}
+	if _, err := store.CreateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_plain", Name: "Plain", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m"}); err != nil {
+		t.Fatal(err)
+	}
+	if filled, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_plain", Name: "Plain", Alignment: "session", AllowedLatenessSeconds: 90}); err != nil || filled.GetAlignment() != "session" || filled.GetAllowedLatenessSeconds() != 90 {
+		t.Fatalf("补上 alignment 与迟到时间 = %v err=%v", filled, err)
 	}
 }
 
@@ -114,8 +146,7 @@ func TestDatasetUpdateRevisionAndStatusInvariants(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
-	created := createTestDataset(t, ctx, store, "dataset", "node-a")
+	created := createTestDataset(t, ctx, store, "dataset")
 
 	updated, err := store.UpdateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", Name: "Dataset v2", Description: "updated",
@@ -124,22 +155,22 @@ func TestDatasetUpdateRevisionAndStatusInvariants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.GetRevision() != 2 || updated.GetStatus() != "disabled" || updated.GetDataNodeId() != "node-a" || updated.GetBindingLocked() {
+	if updated.GetRevision() != 2 || updated.GetStatus() != "disabled" {
 		t.Fatalf("updated dataset = %v", updated)
+	}
+
+	// 停用的数据集可以直接改回启用。
+	reenabled, err := store.UpdateDataset(ctx, &pb.Dataset{
+		SpaceId: "space", DatasetId: "dataset", Name: "Dataset v2", Status: "active", Revision: updated.GetRevision(),
+	})
+	if err != nil || reenabled.GetStatus() != "active" || reenabled.GetRevision() != 3 {
+		t.Fatalf("re-enable dataset = %v err=%v", reenabled, err)
 	}
 
 	before, err := store.GetDataset(ctx, "space", "dataset")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.UpdateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "dataset", Name: "should fail", Status: "active", Revision: before.GetRevision(),
-	})
-	if !errors.Is(err, ErrDatasetMustBeDisabled) {
-		t.Fatalf("disabled to active error = %v, want %v", err, ErrDatasetMustBeDisabled)
-	}
-	assertDatasetUnchanged(t, ctx, store, before)
-
 	_, err = store.UpdateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", Name: "stale", Status: "disabled", Revision: before.GetRevision() - 1,
 	})
@@ -147,201 +178,6 @@ func TestDatasetUpdateRevisionAndStatusInvariants(t *testing.T) {
 		t.Fatalf("stale update error = %v, want %v", err, ErrRevisionConflict)
 	}
 	assertDatasetUnchanged(t, ctx, store, before)
-}
-
-func TestDatasetRebindUsesRevisionAndLifecycleGuards(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
-	registerActiveNode(t, ctx, store, "node-b")
-	registerActiveNode(t, ctx, store, "node-disabled")
-	if _, err := store.UpdateDataNode(ctx, "node-disabled", "Disabled", "disabled"); err != nil {
-		t.Fatal(err)
-	}
-	created := createTestDataset(t, ctx, store, "dataset", "node-a")
-
-	_, err := store.RebindDatasetDataNode(ctx, "space", "dataset", "node-b", created.GetRevision()-1)
-	if !errors.Is(err, ErrRevisionConflict) {
-		t.Fatalf("stale rebind error = %v, want %v", err, ErrRevisionConflict)
-	}
-	assertDatasetUnchanged(t, ctx, store, created)
-
-	rebound, err := store.RebindDatasetDataNode(ctx, "space", "dataset", "node-b", created.GetRevision())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rebound.GetRevision() != 2 || rebound.GetDataNodeId() != "node-b" {
-		t.Fatalf("rebound dataset = %v", rebound)
-	}
-	assertDatasetMatchesStore(t, ctx, store, rebound)
-	if _, err := store.RebindDatasetDataNode(ctx, "space", "dataset", "node-b", rebound.GetRevision()); err == nil {
-		t.Fatal("rebind to the current data node succeeded")
-	}
-	if _, err := store.RebindDatasetDataNode(ctx, "space", "dataset", "node-disabled", rebound.GetRevision()); !errors.Is(err, ErrDataNodeDisabled) {
-		t.Fatalf("rebind to disabled node error = %v, want %v", err, ErrDataNodeDisabled)
-	}
-	assertDatasetUnchanged(t, ctx, store, rebound)
-}
-
-func TestDatasetRebindRejectsLockedDatasetAndPreservesFullRow(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
-	registerActiveNode(t, ctx, store, "node-b")
-	created := createTestDataset(t, ctx, store, "dataset", "node-a")
-	active, err := store.CommitDatasetActivation(ctx, "space", "dataset", created.GetRevision())
-	if err != nil {
-		t.Fatal(err)
-	}
-	locked, err := store.UpdateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "dataset", Name: active.GetName(),
-		Description: "locked row",
-		Attributes:  map[string]string{"owner": "storage"}, Status: "disabled", Revision: active.GetRevision(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = store.RebindDatasetDataNode(ctx, "space", "dataset", "node-b", locked.GetRevision())
-	if !errors.Is(err, ErrBindingLocked) {
-		t.Fatalf("locked rebind error = %v, want %v", err, ErrBindingLocked)
-	}
-	assertDatasetUnchanged(t, ctx, store, locked)
-}
-
-func TestDatasetRebindConcurrentCASReturnsOneConflict(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
-	registerActiveNode(t, ctx, store, "node-b")
-	registerActiveNode(t, ctx, store, "node-c")
-	created := createTestDataset(t, ctx, store, "dataset", "node-a")
-
-	type result struct {
-		dataset *pb.Dataset
-		err     error
-	}
-	start := make(chan struct{})
-	results := make(chan result, 2)
-	for _, nodeID := range []string{"node-b", "node-c"} {
-		go func(nodeID string) {
-			<-start
-			item, err := store.RebindDatasetDataNode(ctx, "space", "dataset", nodeID, created.GetRevision())
-			results <- result{dataset: item, err: err}
-		}(nodeID)
-	}
-	close(start)
-
-	var success, conflict int
-	for range 2 {
-		got := <-results
-		switch {
-		case got.err == nil:
-			success++
-		case errors.Is(got.err, ErrRevisionConflict):
-			conflict++
-		default:
-			t.Fatalf("concurrent rebind error = %v, want nil or ErrRevisionConflict", got.err)
-		}
-	}
-	if success != 1 || conflict != 1 {
-		t.Fatalf("concurrent rebind outcomes = success:%d conflict:%d, want 1:1", success, conflict)
-	}
-}
-
-func TestDatasetActivationCASAndIdempotency(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
-	created := createTestDataset(t, ctx, store, "dataset", "node-a")
-
-	_, err := store.CommitDatasetActivation(ctx, "space", "dataset", created.GetRevision()-1)
-	if !errors.Is(err, ErrRevisionConflict) {
-		t.Fatalf("stale activation error = %v, want %v", err, ErrRevisionConflict)
-	}
-	assertDatasetUnchanged(t, ctx, store, created)
-
-	active, err := store.CommitDatasetActivation(ctx, "space", "dataset", created.GetRevision())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if active.GetStatus() != "active" || !active.GetBindingLocked() || active.GetRevision() != 2 {
-		t.Fatalf("activated dataset = %v", active)
-	}
-	assertDatasetMatchesStore(t, ctx, store, active)
-	retry, err := store.CommitDatasetActivation(ctx, "space", "dataset", created.GetRevision()-1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if retry.GetRevision() != active.GetRevision() || retry.GetStatus() != active.GetStatus() || retry.GetBindingLocked() != active.GetBindingLocked() {
-		t.Fatalf("activation retry = %v, first result = %v", retry, active)
-	}
-
-	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "Dataset", Status: "disabled", Revision: active.GetRevision()}); err != nil {
-		t.Fatal(err)
-	}
-	disabled, err := store.GetDataset(ctx, "space", "dataset")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !disabled.GetBindingLocked() || disabled.GetStatus() != "disabled" {
-		t.Fatalf("disabled locked dataset = %v", disabled)
-	}
-	reactivated, err := store.CommitDatasetActivation(ctx, "space", "dataset", disabled.GetRevision())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reactivated.GetRevision() != disabled.GetRevision()+1 || reactivated.GetStatus() != "active" || !reactivated.GetBindingLocked() {
-		t.Fatalf("reactivated dataset = %v", reactivated)
-	}
-	assertDatasetMatchesStore(t, ctx, store, reactivated)
-}
-
-func TestDatasetActivationRejectsActiveUnlockedState(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
-	created := createTestDataset(t, ctx, store, "dataset", "node-a")
-	activeUnlocked := proto.Clone(created).(*pb.Dataset)
-	activeUnlocked.Status = "active"
-	activeUnlocked.BindingLocked = false
-	raw, err := marshal(activeUnlocked)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE t_datasets SET c_status = 'active', c_binding_locked = 0, c_attrs_json = ? WHERE c_space_id = 'space' AND c_dataset_id = 'dataset'`, raw); err != nil {
-		t.Fatal(err)
-	}
-	before, err := store.GetDataset(ctx, "space", "dataset")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = store.CommitDatasetActivation(ctx, "space", "dataset", created.GetRevision())
-	if !errors.Is(err, ErrDatasetMustBeDisabled) {
-		t.Fatalf("active unlocked activation error = %v, want %v", err, ErrDatasetMustBeDisabled)
-	}
-	assertDatasetUnchanged(t, ctx, store, before)
-}
-
-func TestListDatasetsFiltersByDataNodeIDs(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
-	registerActiveNode(t, ctx, store, "node-b")
-	createTestDataset(t, ctx, store, "dataset_a", "node-a")
-	createTestDataset(t, ctx, store, "dataset_b", "node-b")
-	items, page, err := store.ListDatasets(ctx, DatasetQuery{DataNodeIDs: []string{" node-b ", "node-missing"}, Page: &pb.Page{Page: 1, Size: 10}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 1 || items[0].GetDatasetId() != "dataset_b" || page.GetTotal() != 1 {
-		t.Fatalf("filtered datasets=%v page=%v", items, page)
-	}
 }
 
 func assertDatasetUnchanged(t *testing.T, ctx context.Context, store *Store, want *pb.Dataset) {
@@ -360,23 +196,16 @@ func assertDatasetMatchesStore(t *testing.T, ctx context.Context, store *Store, 
 	}
 }
 
-func createTestDataset(t *testing.T, ctx context.Context, store *Store, datasetID, nodeID string) *pb.Dataset {
+func createTestDataset(t *testing.T, ctx context.Context, store *Store, datasetID string) *pb.Dataset {
 	t.Helper()
 	item, err := store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: datasetID, DataSourceId: "source", DataNodeId: nodeID,
+		SpaceId: "space", DatasetId: datasetID, DataSourceId: "source",
 		Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return item
-}
-
-func registerActiveNode(t *testing.T, ctx context.Context, store *Store, nodeID string) {
-	t.Helper()
-	if _, err := store.RegisterDataNode(ctx, nodeID, "trpc://"+nodeID, nodeID); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func openTestStore(t *testing.T, ctx context.Context) *Store {
@@ -411,10 +240,9 @@ func TestTimeSeriesDatasetRequiresOneCanonicalImmutableFreq(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
 	for _, freq := range []string{"", "1H", "60m", "quarter"} {
 		_, err := store.CreateDataset(ctx, &pb.Dataset{
-			SpaceId: "space", DatasetId: "dataset_bad", DataSourceId: "source", DataNodeId: "node-a",
+			SpaceId: "space", DatasetId: "dataset_bad", DataSourceId: "source",
 			Name: "Bad", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: freq,
 		})
 		if err == nil || !strings.Contains(err.Error(), "time_series dataset freq must be one of") {
@@ -422,14 +250,14 @@ func TestTimeSeriesDatasetRequiresOneCanonicalImmutableFreq(t *testing.T) {
 		}
 	}
 	record, err := store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "dataset_record", DataSourceId: "source", DataNodeId: "node-a",
+		SpaceId: "space", DatasetId: "dataset_record", DataSourceId: "source",
 		Name: "Record", DataKind: pb.DataKind_DATA_KIND_RECORD, Freq: "quarter",
 	})
 	if err != nil || record.GetFreq() != "quarter" {
 		t.Fatalf("record dataset = %v, %v; a record Dataset keeps a descriptive freq", record, err)
 	}
 
-	created := createTestDataset(t, ctx, store, "dataset", "node-a")
+	created := createTestDataset(t, ctx, store, "dataset")
 	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "dataset", Freq: "5m"}); err == nil || !strings.Contains(err.Error(), "freq is immutable") {
 		t.Fatalf("freq change error = %v, want immutable", err)
 	}
@@ -450,8 +278,7 @@ func TestViewTakesItsDatasetFreq(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
-	createTestDataset(t, ctx, store, "dataset", "node-a")
+	createTestDataset(t, ctx, store, "dataset")
 	view, err := store.CreateView(ctx, &pb.View{SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "dataset", Engine: "duckdb"})
 	if err != nil {
 		t.Fatal(err)
@@ -465,5 +292,29 @@ func TestViewTakesItsDatasetFreq(t *testing.T) {
 	}
 	if _, err := store.UpsertView(ctx, &pb.View{SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "dataset", Engine: "duckdb", Freq: "1h"}); err == nil || !strings.Contains(err.Error(), "a View takes its Dataset's freq") {
 		t.Fatalf("mismatched view freq error = %v", err)
+	}
+}
+
+// 元数据库的错误带类别，由 retinfo.Code 统一映射：参数错误、不存在、冲突，与错误文字无关。
+func TestMetadataStoreErrorsCarryKinds(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	created := createTestDataset(t, ctx, store, "dataset")
+	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "Dataset", Freq: "5m"}); retinfo.Code(err) != pb.ErrorCode_INVALID_PARAM {
+		t.Fatalf("改频率 = %v（%v），想要 INVALID_PARAM", retinfo.Code(err), err)
+	}
+	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "stale", Revision: created.GetRevision() + 5}); retinfo.Code(err) != pb.ErrorCode_CONFLICT {
+		t.Fatalf("修订号不符 = %v（%v），想要 CONFLICT", retinfo.Code(err), err)
+	}
+	if _, err := store.GetDataset(ctx, "space", "missing"); retinfo.Code(err) != pb.ErrorCode_NOT_FOUND {
+		t.Fatalf("不存在的数据集 = %v（%v），想要 NOT_FOUND", retinfo.Code(err), err)
+	}
+	view := &pb.View{SpaceId: "space", ViewId: "view_dup", Name: "视图", DatasetId: "dataset"}
+	if _, err := store.CreateView(ctx, view); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateView(ctx, proto.Clone(view).(*pb.View)); retinfo.Code(err) != pb.ErrorCode_CONFLICT {
+		t.Fatalf("重复建 View = %v（%v），想要 CONFLICT", retinfo.Code(err), err)
 	}
 }

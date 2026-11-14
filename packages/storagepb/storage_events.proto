@@ -6,28 +6,6 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/mooyang-code/moox/packages/storagepb;storagepb";
 
-// DatasetRowsUpserted is the public delta event for a Dataset. rows contains
-// changed rows and changed fields, not a complete Dataset snapshot.
-message DatasetRowsUpserted {
-  string space_id = 1;
-  string dataset_id = 2;
-  repeated RowUpsert rows = 3;
-  // Position assigned in the same durable DataNode outbox batch as the rows.
-  // Sequence is comparable only within (node_id, store_id).
-  string node_id = 5;
-  uint64 sequence = 6;
-  // Changes when the underlying DataNode store is recreated.
-  string store_id = 7;
-}
-
-// CommittedPosition identifies one ordered write domain. Sequence is comparable
-// only within (node_id, store_id).
-message CommittedPosition {
-  string node_id = 1;
-  string store_id = 2;
-  uint64 sequence = 3;
-}
-
 // SeriesRef 是一条时间序列的身份：标的加 series_tag，与行键一致。
 message SeriesRef {
   string subject_id = 1;
@@ -46,8 +24,6 @@ message DatasetPeriodCompleted {
   string source = 5; // ledger | producer
   repeated string universe_subject_ids = 6;
   repeated string failed_subjects = 7;
-  // committed_positions 是本期写入在 outbox 中的位置，View 用来确认数据已进入索引。
-  repeated CommittedPosition committed_positions = 8;
   // snapshot_ref：ledger 来源时是序列快照引用。
   string snapshot_ref = 9;
   // cause_event_id：producer 来源时是触发本次计算的事件 ID，用于幂等查询。
@@ -73,7 +49,6 @@ message ViewDataReady {
   string frequency = 7;
   int64 period_time = 8;
   string failed_scope_ref = 9;
-  repeated CommittedPosition committed_positions = 10;
   google.protobuf.Timestamp ready_at = 11;
   // 周期完成时复制冻结的标的全集，消费方不用再订阅一次完成事件就能锁定同一批成员。
   repeated string universe_subject_ids = 12;
@@ -86,8 +61,7 @@ message ViewDataReady {
 // Dataset were written after their period had already ended: a backfill chunk
 // was verified (origin auto, manual or force), or a resample wrote rows outside
 // period tracking (origin resample). Consumers re-derive what depends on
-// [start, end) for subject_ids. Consumers that read a View wait for
-// sync_request_id first, because the View indexes rows asynchronously.
+// [start, end) for subject_ids.
 message CollectorKlineBackfilled {
   string dataset_id = 1;
   string frequency = 2;
@@ -97,8 +71,6 @@ message CollectorKlineBackfilled {
   google.protobuf.Timestamp end = 5;
   string origin = 6;
   string job_id = 7;
-  // sync_request_id names the Dataset sync point appended before this event.
-  string sync_request_id = 8;
   google.protobuf.Timestamp confirmed_at = 9;
   // series_tags 是补采写入的序列（series_tag）；统一数据集的消费方只重算这些序列，空表示数据集的全部序列。
   repeated string series_tags = 10;
@@ -116,67 +88,4 @@ message InstrumentDelistScheduled {
   string source = 5;
   google.protobuf.Timestamp first_seen_at = 6;
   string scope = 7;
-}
-
-// DatasetSyncPoint is an ordered import/catchup fence in a Dataset outbox.
-message DatasetSyncPoint {
-  string sync_point_id = 1;
-  string request_id = 2;
-  string dataset_id = 3;
-  string source = 4;
-}
-
-message RowUpsert {
-  RowKey key = 1;
-  repeated FieldValue fields = 2;
-  map<string, TypedValue> attributes = 3;
-}
-
-message RowKey {
-  string space_id = 1;
-  string dataset_id = 2;
-  oneof kind {
-    TimeSeriesRowKey time_series = 3;
-    RecordRowKey record = 4;
-  }
-}
-
-message TimeSeriesRowKey {
-  string subject_id = 1;
-  string freq = 2;
-  string data_time = 3;
-  string series_tag = 4;
-}
-
-message RecordRowKey {
-  string record_id = 1;
-  string version = 2;
-}
-
-message FieldValue {
-  string field_id = 1;
-  TypedValue value = 2;
-}
-
-message TypedValue {
-  oneof value {
-    string string_value = 1;
-    int64 int_value = 2;
-    double double_value = 3;
-    bool bool_value = 4;
-    string time_value = 5;
-    string json_value = 6;
-    bytes bytes_value = 7;
-    ValueList list_value = 8;
-    NullValue null_value = 9;
-  }
-}
-
-message ValueList {
-  repeated TypedValue values = 1;
-}
-
-enum NullValue {
-  NULL_VALUE_UNSPECIFIED = 0;
-  NULL_VALUE_NULL = 1;
 }

@@ -3,8 +3,9 @@ package pebble
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,9 +14,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// CleanupExpiredBuckets deletes the time-series rows and history markers of
-// a Dataset older than beforeBucket and returns the number of key ranges it
-// deleted. Record versions are never removed here.
+// CleanupExpiredBuckets 删除一个数据集早于 beforeBucket 的时序行、历史行索引、周期账本与完成标记，返回删除的键范围数。
+// 记录型行的版本不在这里删除；commit 标记按自己的 7 天由 CleanupExpiredCommits 删除。
 func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID string, beforeBucket time.Time) (uint64, error) {
 	if s == nil || s.db == nil {
 		return 0, errors.New("pebble store is closed")
@@ -109,6 +109,17 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 	if iterErr != nil {
 		return 0, iterErr
 	}
+	// 周期账本与完成标记用同一个截止时间：周期早于截止时间的一并删除。
+	for _, prefix := range []string{periodDatasetPrefix(spaceID, datasetID), markerDatasetPrefix(spaceID, datasetID)} {
+		periodRanges, err := s.stageDeleteBeforePeriod(batch, prefix, beforeBucket.UTC().Unix())
+		if err != nil {
+			return 0, err
+		}
+		ranges = append(ranges, periodRanges...)
+	}
+	if err := s.stageTrimSeriesSnapshots(batch, spaceID, datasetID, beforeBucket.UTC().Unix()); err != nil {
+		return 0, err
+	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return 0, err
 	}
@@ -127,6 +138,62 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 		s.compactAsync(seriesCompactPrefix, nextPrefix(seriesCompactPrefix))
 	}
 	return uint64(len(ranges)), nil
+}
+
+// stageTrimSeriesSnapshots 删掉只覆盖截止时间之前周期的生效条目，以及不再被剩余条目引用的快照。
+// 生效条目覆盖从它的起点到下一条起点之前的周期：下一条起点不晚于 before 时，它覆盖的周期都随账本一起删了。
+// 每个频率的最后一条总是保留。调用方持有 datasetWriteMu 的写锁，登记快照与按快照建周期不会穿插。
+func (s *Store) stageTrimSeriesSnapshots(batch *cpebble.Batch, spaceID, datasetID string, before int64) error {
+	return s.eachFrequencyPrefix(seriesEffectivePrefix+datasetScope(spaceID, datasetID), func(effectivePrefix string) error {
+		type effective struct {
+			key  []byte
+			from int64
+			hash string
+		}
+		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(effectivePrefix), UpperBound: prefixUpperBound(effectivePrefix)})
+		if err != nil {
+			return err
+		}
+		var entries []effective
+		for valid := iter.First(); valid; valid = iter.Next() {
+			from, err := strconv.ParseInt(strings.TrimPrefix(string(iter.Key()), effectivePrefix), 10, 64)
+			if err != nil {
+				_ = iter.Close()
+				return fmt.Errorf("解析生效条目 %q：%w", iter.Key(), err)
+			}
+			entries = append(entries, effective{key: append([]byte(nil), iter.Key()...), from: from, hash: string(iter.Value())})
+		}
+		if err := errors.Join(iter.Error(), iter.Close()); err != nil {
+			return err
+		}
+		expired := 0
+		for expired+1 < len(entries) && entries[expired+1].from <= before {
+			expired++
+		}
+		if expired == 0 {
+			return nil
+		}
+		referenced := make(map[string]struct{}, len(entries)-expired)
+		for _, entry := range entries[expired:] {
+			referenced[entry.hash] = struct{}{}
+		}
+		// 快照与生效条目在同一个（空间, 数据集, 频率）范围下，只是前缀不同。
+		snapshotPrefix := seriesSnapshotPrefix + strings.TrimPrefix(effectivePrefix, seriesEffectivePrefix)
+		for _, entry := range entries[:expired] {
+			if err := batch.Delete(entry.key, s.writeOptions); err != nil {
+				return err
+			}
+			if _, ok := referenced[entry.hash]; ok {
+				continue
+			}
+			// 同一个快照可能被多条过期条目引用，删一次后记为已处理。
+			referenced[entry.hash] = struct{}{}
+			if err := batch.Delete([]byte(snapshotPrefix+entry.hash), s.writeOptions); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // DeleteDatasetRows physically removes every row and materialized history
@@ -186,24 +253,25 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 		}
 		ranges = append(ranges, [2][]byte{prefix, upper})
 	}
-	// commit 标记按数据集存放：随数据集一起删除，重建同名数据集后同一 commit_id 可以重新写入。
-	commitPrefix := datasetCommitPrefix(spaceID, datasetID)
-	if err := batch.DeleteRange(commitPrefix, nextPrefix(commitPrefix), s.writeOptions); err != nil {
-		return 0, err
+	// 周期账本、完成标记、序列快照与生效表按数据集前缀整段删除，重建同名数据集后从头登记快照；
+	// commit 标记在各日桶下删除，重建后同一 commit_id 可以重新写入。
+	for _, prefix := range []string{
+		periodDatasetPrefix(spaceID, datasetID), markerDatasetPrefix(spaceID, datasetID),
+		seriesSnapshotPrefix + datasetScope(spaceID, datasetID), seriesEffectivePrefix + datasetScope(spaceID, datasetID),
+	} {
+		lower, upper := []byte(prefix), nextPrefix([]byte(prefix))
+		if err := batch.DeleteRange(lower, upper, s.writeOptions); err != nil {
+			return 0, err
+		}
+		ranges = append(ranges, [2][]byte{lower, upper})
 	}
-	periodRanges, err := s.stageDatasetPeriodCleanup(batch, spaceID, datasetID)
+	commitRanges, err := s.stageDeleteDatasetCommits(batch, spaceID, datasetID)
 	if err != nil {
 		return 0, err
 	}
-	ranges = append(ranges, periodRanges...)
-	deletedOutbox, err := s.stageDatasetAuxiliaryCleanup(batch, spaceID, datasetID)
+	ranges = append(ranges, commitRanges...)
+	deletedOutbox, err := s.stageDatasetOutboxCleanup(batch, spaceID, datasetID)
 	if err != nil {
-		return 0, err
-	}
-	// Keep a persistent tombstone in the same atomic batch as the physical
-	// cleanup. A writer that was already admitted before this lock was taken
-	// can no longer publish after the delete commits.
-	if err := batch.Set(datasetDeletedKey(spaceID, datasetID), []byte("1"), s.writeOptions); err != nil {
 		return 0, err
 	}
 	// 提交前最后一次检查：批次尚未落盘时取消仍可完整放弃
@@ -219,178 +287,37 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	if deletedOutbox > 0 {
 		s.noteOutboxDeleted(deletedOutbox)
 	}
-	return uint64(len(ranges) + 1), nil
+	return uint64(len(ranges)), nil
 }
 
-func (s *Store) stageDatasetPeriodCleanup(batch *cpebble.Batch, spaceID, datasetID string) ([][2][]byte, error) {
-	progressPrefix := []byte(periodProgressPrefix + hex.EncodeToString([]byte(spaceID)) + "/" + hex.EncodeToString([]byte(datasetID)) + "/")
-	progressUpper := nextPrefix(progressPrefix)
-	ranges := [][2][]byte{{progressPrefix, progressUpper}}
-	if err := batch.DeleteRange(progressPrefix, progressUpper, s.writeOptions); err != nil {
-		return nil, err
-	}
-	baseIndexPrefix := hex.EncodeToString(progressPrefix)
-	for _, indexPrefix := range []string{periodWaitingPrefix, periodCompletePrefix} {
-		prefix := []byte(indexPrefix + baseIndexPrefix)
-		upper := nextPrefix(prefix)
-		if err := batch.DeleteRange(prefix, upper, s.writeOptions); err != nil {
-			return nil, err
-		}
-		ranges = append(ranges, [2][]byte{prefix, upper})
-	}
-
-	deadlineIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(periodDeadlinePrefix), UpperBound: nextPrefix([]byte(periodDeadlinePrefix))})
-	if err != nil {
-		return nil, err
-	}
-	for valid := deadlineIter.First(); valid; valid = deadlineIter.Next() {
-		if !bytes.HasPrefix(deadlineIter.Value(), progressPrefix) {
-			continue
-		}
-		if err := batch.Delete(append([]byte(nil), deadlineIter.Key()...), s.writeOptions); err != nil {
-			_ = deadlineIter.Close()
-			return nil, err
-		}
-	}
-	if err := deadlineIter.Error(); err != nil {
-		_ = deadlineIter.Close()
-		return nil, err
-	}
-	if err := deadlineIter.Close(); err != nil {
-		return nil, err
-	}
-	return ranges, nil
-}
-
-// stageDatasetAuxiliaryCleanup removes state that is not part of the normal
-// row prefixes. These records are part of the result's physical ownership:
-// replay receipts, marker records/indexes, and pending relay messages must not
-// survive a task result deletion.
-func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, datasetID string) (int, error) {
-	matchingOutbox := make(map[string]struct{})
-	outboxIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(outboxPrefix), UpperBound: nextPrefix([]byte(outboxPrefix))})
+// stageDatasetOutboxCleanup 删掉这个数据集还没发出的 Outbox 条目，返回删除的条数。
+func (s *Store) stageDatasetOutboxCleanup(batch *cpebble.Batch, spaceID, datasetID string) (int, error) {
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(outboxPrefix), UpperBound: nextPrefix([]byte(outboxPrefix))})
 	if err != nil {
 		return 0, err
 	}
-	for valid := outboxIter.First(); valid; valid = outboxIter.Next() {
+	defer iter.Close()
+	deleted := 0
+	for valid := iter.First(); valid; valid = iter.Next() {
 		message := &eventpb.EventMessage{}
-		if proto.Unmarshal(outboxIter.Value(), message) != nil {
+		if proto.Unmarshal(iter.Value(), message) != nil || message.GetSpaceId() != spaceID || message.GetSubjectId() != datasetID {
 			continue
 		}
-		belongs := message.GetSpaceId() == spaceID && message.GetSubjectId() == datasetID
-		if belongs {
-			key := append([]byte(nil), outboxIter.Key()...)
-			if err := batch.Delete(key, s.writeOptions); err != nil {
-				_ = outboxIter.Close()
-				return 0, err
-			}
-			matchingOutbox[string(key)] = struct{}{}
-		}
-	}
-	if iterErr := outboxIter.Error(); iterErr != nil {
-		_ = outboxIter.Close()
-		return 0, iterErr
-	}
-	if err := outboxIter.Close(); err != nil {
-		return 0, err
-	}
-
-	markerKeys := make(map[string]struct{})
-	markerIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(markerRecordPrefix), UpperBound: nextPrefix([]byte(markerRecordPrefix))})
-	if err != nil {
-		return 0, err
-	}
-	for valid := markerIter.First(); valid; valid = markerIter.Next() {
-		message := &eventpb.EventMessage{}
-		if proto.Unmarshal(markerIter.Value(), message) != nil || message.GetSpaceId() != spaceID || message.GetSubjectId() != datasetID {
-			continue
-		}
-		key := append([]byte(nil), markerIter.Key()...)
-		markerKeys[string(key)] = struct{}{}
-		if err := batch.Delete(key, s.writeOptions); err != nil {
-			_ = markerIter.Close()
+		if err := batch.Delete(append([]byte(nil), iter.Key()...), s.writeOptions); err != nil {
 			return 0, err
 		}
+		deleted++
 	}
-	if iterErr := markerIter.Error(); iterErr != nil {
-		_ = markerIter.Close()
-		return 0, iterErr
-	}
-	if err := markerIter.Close(); err != nil {
-		return 0, err
-	}
-	if len(markerKeys) > 0 {
-		factorIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(periodMarkerPrefix), UpperBound: nextPrefix([]byte(periodMarkerPrefix))})
-		if err != nil {
-			return 0, err
-		}
-		for valid := factorIter.First(); valid; valid = factorIter.Next() {
-			if _, ok := markerKeys[string(factorIter.Value())]; !ok {
-				continue
-			}
-			if err := batch.Delete(factorIter.Key(), s.writeOptions); err != nil {
-				_ = factorIter.Close()
-				return 0, err
-			}
-		}
-		if iterErr := factorIter.Error(); iterErr != nil {
-			_ = factorIter.Close()
-			return 0, iterErr
-		}
-		if err := factorIter.Close(); err != nil {
-			return 0, err
-		}
-	}
-	return len(matchingOutbox), nil
+	return deleted, iter.Error()
 }
 
-// RestoreDatasetRows clears the deletion tombstone when a new task recreates
-// the deterministic result Dataset ID. It intentionally does not restore any
-// old rows; callers must create the metadata object first and then write new
-// data through the PrimaryStore.
-func (s *Store) RestoreDatasetRows(ctx context.Context, spaceID, datasetID string) error {
-	if s == nil || s.db == nil {
-		return errors.New("pebble store is closed")
+// requireDataset 在持有数据集读锁时确认数据集仍在元数据里。删除先删元数据、再在写锁里删行，
+// 所以拿到读锁之后这里还查得到的写入一定早于删行，写入的行会被一并删掉。
+func (s *Store) requireDataset(spaceID, datasetID string) error {
+	if s.datasetExists != nil && !s.datasetExists(spaceID, datasetID) {
+		return ErrDatasetDeleted
 	}
-	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
-		return invalid("space_id and dataset_id are required")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.datasetWriteMu.Lock()
-	defer s.datasetWriteMu.Unlock()
-	s.periodMu.Lock()
-	defer s.periodMu.Unlock()
-	s.outboxMu.Lock()
-	defer s.outboxMu.Unlock()
-	deleted, err := s.isDatasetDeleted(spaceID, datasetID)
-	if err != nil {
-		return err
-	}
-	if !deleted {
-		return nil
-	}
-	batch := s.db.NewBatch()
-	defer batch.Close()
-	if _, err := s.stageDatasetPeriodCleanup(batch, spaceID, datasetID); err != nil {
-		return err
-	}
-	if err := batch.Delete(datasetDeletedKey(spaceID, datasetID), s.writeOptions); err != nil {
-		return err
-	}
-	return batch.Commit(s.writeOptions)
-}
-
-func (s *Store) isDatasetDeleted(spaceID, datasetID string) (bool, error) {
-	value, closer, err := s.db.Get(datasetDeletedKey(spaceID, datasetID))
-	if errors.Is(err, cpebble.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return len(value) > 0, closer.Close()
+	return nil
 }
 
 func decodePhysicalParts(data []byte) ([]string, bool) {

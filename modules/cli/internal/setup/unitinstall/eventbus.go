@@ -36,7 +36,7 @@ func eventBusRole(id string) string {
 		return "hostagent-publisher"
 	case "monitor":
 		return "monitor-observability"
-	case "storage-primary", "storage-node", "storage-view":
+	case "storage-primary", "storage-view":
 		return "storage-eventbus"
 	case "archive":
 		return "archive-eventbus"
@@ -208,7 +208,7 @@ func projectEventBus(root *os.Root, options *PrepareOptions, components []string
 		if id == "host-agent" {
 			continue
 		}
-		if slices.Contains([]string{"storage-primary", "storage-node", "storage-view"}, id) {
+		if slices.Contains([]string{"storage-primary", "storage-view"}, id) {
 			values["MOOX_STORAGE_EVENTBUS_URL"], values["MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE"] = options.EventBusURL, credential
 			continue
 		}

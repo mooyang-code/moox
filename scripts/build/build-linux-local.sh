@@ -51,7 +51,7 @@ fi
 cgo_targets=() plain_targets=()
 for target in "${targets[@]}"; do
   case "${target}" in
-    storage|storage-cgo|storage-primary|storage-node) cgo_targets+=("${target}") ;;
+    storage|storage-cgo|storage-primary) cgo_targets+=("${target}") ;;
     *) plain_targets+=("${target}") ;;
   esac
 done

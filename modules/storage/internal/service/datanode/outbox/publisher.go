@@ -12,7 +12,7 @@ import (
 )
 
 // JetStreamPublisher publishes one durable message to the subject owned by a
-// Dataset. The transport message id is stable for a DataNode outbox id.
+// Dataset. The transport message id is stable for an outbox id.
 type JetStreamPublisher struct {
 	publisher *events.Publisher
 	client    *jetstream.Client
@@ -69,7 +69,7 @@ func validateDatasetEvent(data []byte) (string, string, error) {
 	}
 	event, ok := registry.Lookup(message.GetEventName(), message.GetEventVersion())
 	if !ok || !dataNodeOutboxEvent(event) {
-		return "", "", fmt.Errorf("unsupported DataNode outbox event %s@%d", message.GetEventName(), message.GetEventVersion())
+		return "", "", fmt.Errorf("不支持的 Outbox 事件 %s@%d", message.GetEventName(), message.GetEventVersion())
 	}
 	subject, err := registry.RenderSubject(event, message.GetSpaceId(), message.GetSubjectId())
 	if err != nil {
@@ -81,13 +81,9 @@ func validateDatasetEvent(data []byte) (string, string, error) {
 	return subject, message.GetEventId(), nil
 }
 
+// dataNodeOutboxEvent 报告事件能否经 Outbox 转发：Outbox 只承载周期完成事件。
 func dataNodeOutboxEvent(event events.Event) bool {
-	for _, allowed := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCompleted, events.DatasetSyncPoint} {
-		if event.Name() == allowed.Name() && event.Version() == allowed.Version() {
-			return true
-		}
-	}
-	return false
+	return event.Name() == events.DatasetPeriodCompleted.Name() && event.Version() == events.DatasetPeriodCompleted.Version()
 }
 
 func NewJetStreamPublisher(client *jetstream.Client) *JetStreamPublisher {

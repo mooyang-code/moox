@@ -17,7 +17,7 @@ import (
 func topologySpecs() []HostSpec {
 	return []HostSpec{
 		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
-		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-node", "storage-view"}},
+		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
 		{HostID: "overseas", Address: "compute.example.test", Components: []string{"trade", "access"}},
 	}
 }

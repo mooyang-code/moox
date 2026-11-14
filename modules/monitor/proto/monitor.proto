@@ -395,14 +395,15 @@ message HostAgentInfo {
   string host_id = 9;
 }
 message ListHostAgentsReq {}
-message ListHostAgentsRsp { common.RetInfo ret_info = 1; repeated HostAgentInfo agents = 2; bool storage_available = 3; bool data_gap = 4; }
+message ListHostAgentsRsp { common.RetInfo ret_info = 1; repeated HostAgentInfo agents = 2; }
 message HostMetricHistoryPoint {
   string agent_id = 1;
   string observed_at = 2;
   trpc.moox.hostagent.HostSnapshot snapshot = 3;
 }
 message QueryHostMetricHistoryReq { string agent_id = 1; string start_at = 2; string end_at = 3; uint32 limit = 4; }
-message QueryHostMetricHistoryRsp { common.RetInfo ret_info = 1; repeated HostMetricHistoryPoint points = 2; bool storage_available = 3; bool data_gap = 4; }
+// data_gap：所请求的范围超出可查的最近 7 天被截掉了一部分，或这段时间没有快照。
+message QueryHostMetricHistoryRsp { common.RetInfo ret_info = 1; repeated HostMetricHistoryPoint points = 2; bool data_gap = 3; }
 
 // 数据链路逐根到达历史：一条链路（源数据集 + 周期）某一天每个环节每一根 K 线的到达延迟。
 message QueryPipelineArrivalHistoryReq {

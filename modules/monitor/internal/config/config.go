@@ -100,9 +100,8 @@ type MetricsConfig struct {
 	NoDataIntervals         int    `yaml:"no_data_intervals"`
 	// MaxNewSeriesPerHour / MaxNewSeriesPerDay 限制每小时、每天新建的指标序列数，超出的新序列被丢弃并告警；不写用默认值，负数表示不限。
 	// 现状目录约 500 条序列，全新启动时一小时内要建全，所以默认值留足余量，只拦标签失控这种成倍增长。
-	MaxNewSeriesPerHour int               `yaml:"max_new_series_per_hour"`
-	MaxNewSeriesPerDay  int               `yaml:"max_new_series_per_day"`
-	HostStorage         HostStorageConfig `yaml:"host_storage"`
+	MaxNewSeriesPerHour int `yaml:"max_new_series_per_hour"`
+	MaxNewSeriesPerDay  int `yaml:"max_new_series_per_day"`
 }
 
 type ObservabilityConfig struct {
@@ -153,21 +152,6 @@ type MarketCanarySubject struct {
 	SeriesTag              *string  `yaml:"series_tag"`
 	MarketID               string   `yaml:"market_id"`
 	EligibleKlineProviders []string `yaml:"eligible_kline_providers"`
-}
-
-// HostStorageConfig controls the Storage datasets for host snapshots.
-type HostStorageConfig struct {
-	Enabled                 bool          `yaml:"enabled"`
-	SpaceID                 string        `yaml:"space_id"`
-	Frequency               string        `yaml:"frequency"`
-	WriteTimeout            time.Duration `yaml:"write_timeout"`
-	ReadLimit               int           `yaml:"read_limit"`
-	MetadataRefreshInterval time.Duration `yaml:"metadata_refresh_interval"`
-	RuleRefreshInterval     time.Duration `yaml:"rule_refresh_interval"`
-	ResourceDatasetID       string        `yaml:"resource_dataset_id"`
-	FilesystemDatasetID     string        `yaml:"filesystem_dataset_id"`
-	DiskDatasetID           string        `yaml:"disk_dataset_id"`
-	NetworkDatasetID        string        `yaml:"network_dataset_id"`
 }
 
 func Load(path string) (*Config, error) {
@@ -241,7 +225,7 @@ func Default() *Config {
 			Enabled: false, SpaceIDs: registeredMarketIDs(), EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
 		},
-		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, MaxNewSeriesPerHour: 2000, MaxNewSeriesPerDay: 10000, HostStorage: HostStorageConfig{Enabled: true, SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
+		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, MaxNewSeriesPerHour: 2000, MaxNewSeriesPerDay: 10000},
 	}
 }
 
@@ -354,36 +338,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Metrics.MaxNewSeriesPerDay == 0 {
 		c.Metrics.MaxNewSeriesPerDay = metricsDefaults.MaxNewSeriesPerDay
-	}
-	if c.Metrics.HostStorage.SpaceID == "" {
-		c.Metrics.HostStorage.SpaceID = metricsDefaults.HostStorage.SpaceID
-	}
-	if c.Metrics.HostStorage.Frequency == "" {
-		c.Metrics.HostStorage.Frequency = metricsDefaults.HostStorage.Frequency
-	}
-	if c.Metrics.HostStorage.WriteTimeout == 0 {
-		c.Metrics.HostStorage.WriteTimeout = metricsDefaults.HostStorage.WriteTimeout
-	}
-	if c.Metrics.HostStorage.ReadLimit == 0 {
-		c.Metrics.HostStorage.ReadLimit = metricsDefaults.HostStorage.ReadLimit
-	}
-	if c.Metrics.HostStorage.MetadataRefreshInterval == 0 {
-		c.Metrics.HostStorage.MetadataRefreshInterval = metricsDefaults.HostStorage.MetadataRefreshInterval
-	}
-	if c.Metrics.HostStorage.RuleRefreshInterval == 0 {
-		c.Metrics.HostStorage.RuleRefreshInterval = metricsDefaults.HostStorage.RuleRefreshInterval
-	}
-	if c.Metrics.HostStorage.ResourceDatasetID == "" {
-		c.Metrics.HostStorage.ResourceDatasetID = metricsDefaults.HostStorage.ResourceDatasetID
-	}
-	if c.Metrics.HostStorage.FilesystemDatasetID == "" {
-		c.Metrics.HostStorage.FilesystemDatasetID = metricsDefaults.HostStorage.FilesystemDatasetID
-	}
-	if c.Metrics.HostStorage.DiskDatasetID == "" {
-		c.Metrics.HostStorage.DiskDatasetID = metricsDefaults.HostStorage.DiskDatasetID
-	}
-	if c.Metrics.HostStorage.NetworkDatasetID == "" {
-		c.Metrics.HostStorage.NetworkDatasetID = metricsDefaults.HostStorage.NetworkDatasetID
 	}
 }
 
@@ -507,23 +461,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Deployment.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
 		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when deployment monitoring is enabled")
-	}
-	if c.Metrics.HostStorage.Enabled {
-		h := c.Metrics.HostStorage
-		if h.SpaceID != "mooxsys" {
-			return fmt.Errorf("metrics.host_storage.space_id must be mooxsys")
-		}
-		if h.Frequency != "1m" {
-			return fmt.Errorf("metrics.host_storage.frequency must be 1m")
-		}
-		if h.ReadLimit <= 0 || h.ReadLimit > 500 {
-			return fmt.Errorf("metrics.host_storage.read_limit must be between 1 and 500")
-		}
-		for name, value := range map[string]string{"resource_dataset_id": h.ResourceDatasetID, "filesystem_dataset_id": h.FilesystemDatasetID, "disk_dataset_id": h.DiskDatasetID, "network_dataset_id": h.NetworkDatasetID} {
-			if strings.TrimSpace(value) == "" {
-				return fmt.Errorf("metrics.host_storage.%s must not be empty", name)
-			}
-		}
 	}
 	if c.GatewayClient.Caller != "monitor" {
 		return fmt.Errorf("gateway_client.caller must be monitor")

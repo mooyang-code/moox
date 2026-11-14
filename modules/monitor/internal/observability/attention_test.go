@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -38,7 +38,7 @@ func TestEventCenterAndCollectorAttentionBecomeBusinessChecks(t *testing.T) {
 	failed := checks["event_center_attention:execution_failed"]
 	require.Equal(t, "down", failed.Status)
 	require.Equal(t, "币安下架通知：对方返回状态码 500", failed.Reason)
-	require.Equal(t, monmetrics.InternalMetricSpaceID, failed.SpaceID)
+	require.Equal(t, events.SystemSpaceID, failed.SpaceID)
 	require.Equal(t, "healthy", checks["event_center_attention:delist_detected"].Status)
 	require.Equal(t, "down", checks["event_center_attention:action_failed"].Status)
 
@@ -68,10 +68,10 @@ func TestBalanceAndAttentionChecksBelongToSystemSpace(t *testing.T) {
 		return out
 	}
 	want := map[string]string{
-		"balance": monmetrics.InternalMetricSpaceID, "trade_attention": monmetrics.InternalMetricSpaceID,
-		"event_center_attention": monmetrics.InternalMetricSpaceID, "collector_attention": monmetrics.InternalMetricSpaceID,
+		"balance": events.SystemSpaceID, "trade_attention": events.SystemSpaceID,
+		"event_center_attention": events.SystemSpaceID, "collector_attention": events.SystemSpaceID,
 	}
-	for _, spaceID := range []string{"", monmetrics.InternalMetricSpaceID} {
+	for _, spaceID := range []string{"", events.SystemSpaceID} {
 		got := kinds(spaceID)
 		for kind, space := range want {
 			require.Equal(t, space, got[kind], "space %q kind %s", spaceID, kind)
@@ -95,6 +95,9 @@ func TestReadonlyKeyMissingIsDegradedNotDown(t *testing.T) {
 	require.Equal(t, "down", checks["collector_attention:delist_source_failed"].Status)
 	require.True(t, AttentionIsWarning("collector_attention", "delist_readonly_key_missing"))
 	require.False(t, AttentionIsWarning("collector_attention", "delist_source_failed"))
+	// 东方财富冷却同样只是提醒：云函数采集不受影响，探测成功后自动恢复。
+	require.True(t, AttentionIsWarning("collector_attention", "eastmoney_cooling_down"))
+	require.NotEmpty(t, AttentionCheckName("collector_attention", "eastmoney_cooling_down"))
 }
 
 func TestAttentionCheckNames(t *testing.T) {

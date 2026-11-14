@@ -1,6 +1,5 @@
 import { callStorage as callMetadata, type StorageCallOptions } from "./http";
 import type {
-  DataNodeListItem,
   DataSource,
   Dataset,
   DatasetColumn,
@@ -95,7 +94,6 @@ export function listDatasets(
     space_id: string;
     data_source_id?: string;
     data_kind?: string;
-    data_node_id?: string;
     page?: Page;
   },
   options?: StorageCallOptions
@@ -207,10 +205,6 @@ export function listViews(
 
 export function listViewColumns(params: { space_id: string; view_id: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { columns: ViewColumn[]; page_result: PageResult }>("ListViewColumns", params);
-}
-
-export function listDataNodes(params: { status?: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { items: DataNodeListItem[]; page_result: PageResult }>("ListDataNodes", params);
 }
 
 /** 分页读取 View 的全部列：因子结果视图会有几千列，单页 1000 列不够。 */

@@ -311,8 +311,8 @@ func resolveView(ctx context.Context, client Client, spaceID, taskID, bar string
 		}
 	}
 	if calendarOf(item) == "cn_stock" {
-		for _, attributes := range []map[string]string{item.dataset.Attributes, item.source.Attributes} {
-			if strings.EqualFold(strings.TrimSpace(attributes["alignment"]), "epoch_utc") {
+		for _, alignment := range []string{item.dataset.Alignment, item.source.Alignment} {
+			if strings.EqualFold(strings.TrimSpace(alignment), "epoch_utc") {
 				return resolvedView{}, fmt.Errorf("数据集 %s 的行按 UTC 零点对齐（alignment=epoch_utc），不能使用 A 股日历 cn_stock", view.DatasetID)
 			}
 		}

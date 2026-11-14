@@ -190,7 +190,7 @@ type StorageView struct {
 // StoragePolicy renders storage-policy.json, the file storage-primary and
 // storage-view load at startup.
 // RecommendedSpaceRetention 是各空间推荐的保留期，只用于 moox.toml 缺省与配置页的「恢复推荐值」；
-// Storage 不认识这些空间。交易时段市场同样的根数要保留更多自然天，主机资源历史（mooxsys）只留短期。
+// Storage 不认识这些空间。交易时段市场同样的根数要保留更多自然天。
 func RecommendedSpaceRetention() map[string]map[string]string {
 	sessionMarket := func(minute string) map[string]string {
 		return map[string]string{
@@ -202,7 +202,6 @@ func RecommendedSpaceRetention() map[string]map[string]string {
 		"stockcn": sessionMarket("60d"),
 		"stockhk": sessionMarket("45d"),
 		"stockus": sessionMarket("40d"),
-		"mooxsys": {"30s": "48h", "1m": "7d"},
 	}
 }
 
@@ -991,8 +990,11 @@ func validateDeployments(m *Manifest) error {
 		}
 		for _, id := range m.Deployments[host] {
 			component, ok := catalog.Component(id)
-			if !ok || component.Scope == servicecatalog.ScopeHost {
-				return fmt.Errorf("config_invalid: deployments contains an unknown or automatic component")
+			if !ok {
+				return fmt.Errorf("config_invalid: [deployments] 主机 %s 的组件 %q 不在服务目录里；已下线或改名的组件运行 moox-cli config migrate --yes 处理", host, id)
+			}
+			if component.Scope == servicecatalog.ScopeHost {
+				return fmt.Errorf("config_invalid: [deployments] 主机 %s 的组件 %q 由系统自动部署到每台主机，不要写在 [deployments] 里", host, id)
 			}
 		}
 	}

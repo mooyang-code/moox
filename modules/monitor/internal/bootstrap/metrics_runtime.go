@@ -102,7 +102,7 @@ func startObservabilityConsumer(
 	}
 	routes := observabilityconsumer.Routes{
 		Metrics: metricsObservabilityRoute(messageStore, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
-		Host:    hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
+		Host:    hostObservabilityRoute(hostStore, runtime),
 	}
 	if runtime.Repositories != nil {
 		routes.Logs = logObservabilityRoute(runtime.Repositories.Logs)
@@ -188,7 +188,7 @@ func metricsObservabilityRoute(
 		if messageStore == nil {
 			return errors.New("metrics catalog is unavailable")
 		}
-		if message.GetSpaceId() != monmetrics.InternalMetricSpaceID {
+		if message.GetSpaceId() != events.SystemSpaceID {
 			messageStore.RecordIngestRejected(moduleMetrics, metricReport.GetServiceName(), monmetrics.RejectSpace)
 			return observabilityconsumer.Permanent(fmt.Errorf("unsupported metric space %q", message.GetSpaceId()))
 		}
@@ -229,17 +229,14 @@ func metricsObservabilityRoute(
 	}
 }
 
-func hostObservabilityRoute(store *hostmetrics.Store, runtime *Runtime, enabled bool) func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
+func hostObservabilityRoute(store *hostmetrics.Store, runtime *Runtime) func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
 	return func(ctx context.Context, message *eventpb.EventMessage, _ *hostmetricpb.HostMetric) error {
-		if !enabled {
-			return nil
-		}
 		metric, err := hostmetrics.ValidateMessage(message)
 		if err != nil {
 			return observabilityconsumer.Permanent(err)
 		}
-		if store == nil || !store.StorageReady() {
-			err := errors.New("host metrics storage is unavailable")
+		if store == nil {
+			err := errors.New("主机快照处理未初始化")
 			runtime.recordHostWriteFailure(err)
 			return err
 		}

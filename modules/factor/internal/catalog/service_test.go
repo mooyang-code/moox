@@ -18,7 +18,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestCreateSetCreatesAndActivatesResultDataset(t *testing.T) {
+func TestCreateSetCreatesActiveResultDataset(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := NewService(db, meta)
@@ -28,14 +28,13 @@ func TestCreateSetCreatesAndActivatesResultDataset(t *testing.T) {
 	require.Equal(t, testTaskID(), set.TaskID)
 	require.Equal(t, "dataset_factor_prices_1m", set.ResultDatasetID)
 	require.Equal(t, domain.TaskStatusEnabled, set.Status)
-	require.Equal(t, "storage-node-0", meta.createdSpec.DataNodeID)
 	require.Equal(t, storageio.DatasetRoleFactorResult, meta.createdSpec.Attributes["dataset_role"])
 	require.Equal(t, "factor", meta.createdSpec.Attributes["owner_module"])
 	require.NotContains(t, meta.createdSpec.Attributes, "write_owner")
 	require.Equal(t, []storageio.ColumnInfo{sourceColumn("close"), paramsColumn()}, meta.createdSpec.Columns, "结果数据集创建时同时注册 __params 列")
 	require.Equal(t, "价格因子", meta.createdSpec.Name, "任务名称直接用作结果数据集的名称")
 	require.Equal(t, storageio.DatasetStatusActive, meta.datasets[resultKey("crypto", set.ResultDatasetID)].Status)
-	require.Equal(t, []string{"create", "activate", "ensure_view"}, meta.writeOps, "建结果数据集、激活后由 factor-mgr 自己建默认 View")
+	require.Equal(t, []string{"create", "ensure_view"}, meta.writeOps, "一次建好结果数据集（建好即启用），再由 factor-mgr 自己建默认 View")
 }
 
 func TestCreateTaskCanonicalizesUppercaseFrequency(t *testing.T) {
@@ -57,7 +56,7 @@ func TestCreateTaskCanonicalizesUppercaseFrequency(t *testing.T) {
 func TestCreateTaskRejectsSpaceWithoutCalendar(t *testing.T) {
 	svc := NewService(openCatalogStore(t), newMetadataFake())
 	set := newTask()
-	set.SpaceID = "stockus"
+	set.SpaceID = "stockjp"
 
 	_, err := svc.CreateTask(context.Background(), set)
 
@@ -86,11 +85,11 @@ func TestCreateTaskAcceptsStockCN5m(t *testing.T) {
 func TestCreateTaskRetryResumesFromPending(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
-	meta.activateErrs = 1
+	meta.ensureViewErrs = 1
 	svc := NewService(db, meta)
 
 	_, err := svc.CreateTask(context.Background(), newTask())
-	require.ErrorContains(t, err, "activate")
+	require.ErrorContains(t, err, "default View")
 	set, err := db.GetTask(context.Background(), testTaskID())
 	require.NoError(t, err)
 	require.Equal(t, domain.TaskStatusPending, set.Status)
@@ -599,7 +598,7 @@ func TestReconcileContinuesAfterOneTaskFailure(t *testing.T) {
 	meta := newMetadataFake()
 	secondSource := meta.datasets[resultKey("crypto", "dataset_zzz")]
 	secondSource = storageio.DatasetInfo{
-		SpaceID: "crypto", DatasetID: "dataset_zzz", DataSourceID: "other", DataNodeID: "storage-node-0",
+		SpaceID: "crypto", DatasetID: "dataset_zzz", DataSourceID: "other",
 		Name: "Other", DataKind: storageio.DataKindTimeSeries, Freq: "1m", Retention: "720h",
 		Status: storageio.DatasetStatusActive, Attributes: map[string]string{},
 	}
@@ -742,7 +741,7 @@ type metadataFake struct {
 	createdSpec            storageio.ResultDatasetSpec
 	createCalls            int
 	createdDatasets        int
-	activateErrs           int
+	ensureViewErrs         int
 	deleteErrs             int
 	getDatasetErr          error
 	writeOps               []string
@@ -753,7 +752,7 @@ type metadataFake struct {
 
 func newMetadataFake() *metadataFake {
 	source := storageio.DatasetInfo{
-		SpaceID: "crypto", DatasetID: "dataset_prices", DataSourceID: "binance", DataNodeID: "storage-node-0",
+		SpaceID: "crypto", DatasetID: "dataset_prices", DataSourceID: "binance",
 		Name: "Prices", Description: "Price bars", DataKind: storageio.DataKindTimeSeries, Freq: "1m", Status: storageio.DatasetStatusActive, Attributes: map[string]string{},
 	}
 	cols := []storageio.ColumnInfo{sourceColumn("close"), {
@@ -819,8 +818,8 @@ func (f *metadataFake) CreateResultDataset(_ context.Context, spec storageio.Res
 			attrs[name] = value
 		}
 		f.datasets[key] = storageio.DatasetInfo{
-			SpaceID: spec.SpaceID, DatasetID: spec.DatasetID, DataSourceID: spec.DataSourceID, DataNodeID: spec.DataNodeID,
-			Name: spec.Name, Description: spec.Description, DataKind: spec.DataKind, Freq: spec.Frequency, Retention: "720h", Status: storageio.DatasetStatusDisabled, Attributes: attrs,
+			SpaceID: spec.SpaceID, DatasetID: spec.DatasetID, DataSourceID: spec.DataSourceID,
+			Name: spec.Name, Description: spec.Description, DataKind: spec.DataKind, Freq: spec.Frequency, Retention: "720h", Status: storageio.DatasetStatusActive, Attributes: attrs,
 		}
 		f.columns[key] = append([]storageio.ColumnInfo(nil), spec.Columns...)
 	}
@@ -861,24 +860,14 @@ func (f *metadataFake) UpsertColumns(_ context.Context, spaceID, datasetID strin
 	return nil
 }
 
-func (f *metadataFake) ActivateDataset(_ context.Context, spaceID, datasetID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.writeOps = append(f.writeOps, "activate")
-	if f.activateErrs > 0 {
-		f.activateErrs--
-		return errors.New("activate failed")
-	}
-	dataset := f.datasets[resultKey(spaceID, datasetID)]
-	dataset.Status = storageio.DatasetStatusActive
-	f.datasets[resultKey(spaceID, datasetID)] = dataset
-	return nil
-}
-
 // EnsureResultView 只在默认 View 不存在时记一次写入，与 Storage 的“已存在就不动”一致。
 func (f *metadataFake) EnsureResultView(_ context.Context, spaceID, datasetID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.ensureViewErrs > 0 {
+		f.ensureViewErrs--
+		return errors.New("ensure view failed")
+	}
 	if f.views == nil {
 		f.views = map[string]bool{}
 	}

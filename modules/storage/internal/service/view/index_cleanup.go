@@ -156,8 +156,9 @@ func metadataProtectedIndexes(ctx context.Context, metadata MetadataClient, auth
 			if view == nil {
 				continue
 			}
-			if id := strings.TrimSpace(view.GetActiveIndexId()); id != "" {
-				protected[managedIndexRef{engine: normalizedEngine(view.GetEngine()), indexID: id}] = struct{}{}
+			// 元数据里的每个 View（含停用的）都保护它唯一的索引。
+			if view.GetSpaceId() != "" && view.GetViewId() != "" {
+				protected[managedIndexRef{engine: normalizedEngine(view.GetEngine()), indexID: viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId())}] = struct{}{}
 			}
 		}
 		pageResult := rsp.GetPageResult()

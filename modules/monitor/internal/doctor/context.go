@@ -407,7 +407,7 @@ func (b Builder) addHosts(ctx context.Context, nodeID string, now time.Time, out
 			continue
 		}
 		out.Hosts = append(out.Hosts, host)
-		history, err := b.Hosts.HistoryAt(ctx, host.AgentID, now.Add(-7*24*time.Hour), now, now, hostmetrics.ForecastHistoryLimit)
+		history, err := b.Hosts.History(ctx, host.AgentID, now.Add(-hostmetrics.SampleRetention), now, hostmetrics.ForecastHistoryLimit)
 		if err != nil {
 			return err
 		}

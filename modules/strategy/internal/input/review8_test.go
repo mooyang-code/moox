@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 // 写入冲突的退避期间回放被取消：醒来后先确认取消，不再读一次 Storage。
@@ -92,5 +96,33 @@ func TestBeyondCalendarErrorUsesShanghaiTime(t *testing.T) {
 	err := beyondCalendarError(time.Date(2026, 12, 31, 1, 0, 0, 0, time.UTC))
 	if !strings.Contains(err.Error(), "2026-12-31 09:00:00 上海时间 之后的周期") || strings.Contains(err.Error(), "T01:00:00Z") {
 		t.Fatalf("应按上海时间书写：%v", err)
+	}
+}
+
+// sequenceViewState 依次返回预设的 GetViewState 响应，最后一个重复使用。
+type sequenceViewState struct {
+	storagepb.DataViewClientProxy
+	rsps  []*storagepb.GetViewStateRsp
+	calls int
+}
+
+func (s *sequenceViewState) GetViewState(context.Context, *storagepb.GetViewStateReq, ...client.Option) (*storagepb.GetViewStateRsp, error) {
+	rsp := s.rsps[min(s.calls, len(s.rsps)-1)]
+	s.calls++
+	return rsp, nil
+}
+
+// storage-view 重启后先 Serve、后恢复已建的索引，恢复期间 GetViewState 返回 VIEW_NOT_FOUND：复核代次按传输失败重试，
+// 恢复完成后读到的仍是原来那一代，不误判换代。
+func TestCheckGenerationRetriesWhileStorageViewRestores(t *testing.T) {
+	backoff := rangeRetryBackoff
+	rangeRetryBackoff = time.Millisecond
+	t.Cleanup(func() { rangeRetryBackoff = backoff })
+	notFound := &storagepb.GetViewStateRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_FOUND}}
+	state := &sequenceViewState{rsps: []*storagepb.GetViewStateRsp{notFound, notFound, builtState("idx_a", "store_1", 7)}}
+	rpc := &RPCClient{DataView: state, Auth: &commonpb.AuthInfo{AppId: "meta"}}
+	loader := &RangeLoader{Client: rpc, SpaceID: "space", View: ViewInfo{ViewID: "view_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@store_1#7"}}
+	if err := loader.checkGeneration(context.Background()); err != nil || state.calls != 3 {
+		t.Fatalf("恢复期间应重试并确认没有换代：calls=%d err=%v", state.calls, err)
 	}
 }

@@ -5,6 +5,7 @@ package trpc.moox.storage;
 option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storagegen;storagepb";
 
 import "rows.proto";
+import "metadata.proto";
 import "moox_common.proto";
 import "common.proto";
 
@@ -150,4 +151,49 @@ service DataView {
   // View 索引是可重建的近期派生结果，不是完整事实存储。
   // 完整历史以 PrimaryStore KV/Pebble 为准。
   rpc SearchRecordRows(SearchRecordRowsReq) returns (SearchRecordRowsRsp);
+  // GetViewState 返回 View 当前的索引状态：索引标识、代次、已建列、覆盖范围与跟随变更日志已扫描到的位置。
+  rpc GetViewState(GetViewStateReq) returns (GetViewStateRsp);
+  // WaitViewApplied 等 View 跟上调用这一刻的变更日志头部：View 在服务端取头部序号，
+  // 等自己扫描到不小于它时返回。调用方在写入返回后调用它，就能确认写入已经在 View 里可查。
+  rpc WaitViewApplied(WaitViewAppliedReq) returns (WaitViewAppliedRsp);
+}
+
+message GetViewStateReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+}
+
+message GetViewStateRsp {
+  common.RetInfo ret_info = 1;
+  // index_id 是可读的活动索引；为空表示索引还没建好（首次建索引或断档重建中），View 暂不可读。
+  string index_id = 2;
+  // generation 是索引的代次：建成那一刻的变更日志头部序号，重建后会变；只在 applied_cursor.store_id 相同时可比较（存储重建后序号从头开始）。
+  uint64 generation = 3;
+  // view_revision、view_schema_hash、columns 是活动索引已建好的列契约；修订号每原地加一次列加 1。
+  uint64 view_revision = 4;
+  string view_schema_hash = 5;
+  repeated ViewColumn columns = 6;
+  // indexed_from、indexed_to 是活动索引覆盖的最早、最晚业务时间（两端都含，可能为空）。
+  string indexed_from = 7;
+  string indexed_to = 8;
+  // applied_cursor 是 View 跟随变更日志已扫描到的位置：它之前的行写入与完成标记都已应用。
+  DatasetChangeCursor applied_cursor = 9;
+}
+
+message WaitViewAppliedReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  // wait_timeout_ms 是最多等待的毫秒数，0 取 10000，上限 30000。
+  uint32 wait_timeout_ms = 4;
+}
+
+message WaitViewAppliedRsp {
+  common.RetInfo ret_info = 1;
+  // applied 为真表示 View 已经应用到请求时的日志头部；超时返回 false，调用方可以再等。
+  bool applied = 2;
+  // target 是请求时的日志头部；applied_cursor 是返回时 View 已扫描到的位置。
+  DatasetChangeCursor target = 3;
+  DatasetChangeCursor applied_cursor = 4;
 }

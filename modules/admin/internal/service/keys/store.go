@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -232,7 +233,7 @@ func (s *Store) write(tx *gorm.DB, ring keyring, create bool) error {
 	id := model.GatewayKeyringIDPrefix + ring.Caller
 	if create {
 		return tx.Create(&model.Secret{
-			SpaceID: "mooxsys", SecretID: id, Name: "Gateway caller " + ring.Caller,
+			SpaceID: events.SystemSpaceID, SecretID: id, Name: "Gateway caller " + ring.Caller,
 			Category: "gateway", Provider: "moox", SecretType: model.GatewayKeyringType,
 			KeyID: ring.Current, SecretValue: ciphertext, Status: "active", ExtraConfig: "{}",
 			Creator: "gateway-keys", CreateTime: time.Now().UTC(), ModifyTime: time.Now().UTC(),

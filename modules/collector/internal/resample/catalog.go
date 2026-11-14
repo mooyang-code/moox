@@ -6,7 +6,6 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,16 +16,10 @@ import (
 	"github.com/mooyang-code/moox/packages/barclock"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
-var ErrTargetViewNotReady = errors.New("target View route is not ready")
-
-// ViewSyncWaiter is implemented by PrimaryStore after the route-ready marker
-// has been appended. Keeping it optional makes Catalog unit-testable without a
-// live View service while production always supplies the authenticated client.
-type ViewSyncWaiter interface {
-	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error)
-}
+var ErrTargetViewNotReady = errors.New("target View is not ready")
 
 type metadataAPI interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
@@ -34,12 +27,8 @@ type metadataAPI interface {
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
 	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
 	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
-	UpdateView(context.Context, *storagepb.UpdateViewReq, ...client.Option) (*storagepb.UpdateViewRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
-	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq, ...client.Option) (*storagepb.UpsertViewColumnRsp, error)
-	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq, ...client.Option) (*storagepb.CheckDatasetActivationRsp, error)
-	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq, ...client.Option) (*storagepb.ActivateDatasetRsp, error)
 }
 
 // Catalog is the narrow Metadata API needed to provision a task-owned target
@@ -47,7 +36,8 @@ type metadataAPI interface {
 type Catalog struct {
 	Metadata metadataAPI
 	Auth     *storagepb.AuthInfo
-	ViewSync ViewSyncWaiter
+	// View 用来等目标 View 的列建好。
+	View ViewWaiter
 }
 
 type klineField struct {
@@ -106,7 +96,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": source.DataSourceID,
 		"source_freq": params.SourceFrequency, "source_series_tag": strings.Join(params.SourceTags(), ","),
-		"target_freq": targetFreq.Storage, "alignment": market.Alignment,
+		"target_freq": targetFreq.Storage,
 	}
 	createdDataset, createdView := false, false
 	compensate := func(original error) error {
@@ -129,15 +119,17 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if target.GetRetInfo() == nil {
 		return errors.New("get target Dataset: empty ret_info")
 	}
+	columns := targetDatasetColumns(tradeCount, params.OutputFields)
 	if target.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || target.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
+		// 数据集连同列在一次调用里建好，建好即可写入。
 		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: c.Auth, Dataset: &storagepb.Dataset{
-			SpaceId: task.SpaceID, DatasetId: targetDatasetID, DataNodeId: source.DataNodeID,
-			// Dataset names are unique within a space and must contain Chinese
-			// display text. Derive a short stable suffix from the target ID so
-			// independent resample targets do not collide on metadata creation.
+			SpaceId: task.SpaceID, DatasetId: targetDatasetID,
+			// 数据集名称在空间内唯一且必须含中文：用目标 ID 派生一个稳定的短后缀，避免不同合成目标重名。
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-			Freq: targetFreq.Storage, Status: "draft", Attributes: withLateness(attrs), SubjectTags: append([]string(nil), source.SubjectTags...),
-		}})
+			// 周期的迟到容忍（收盘后 2 分钟）：Storage 据此算周期截止，写入目标与引擎的截止判断一致。
+			Freq: targetFreq.Storage, Alignment: market.Alignment, AllowedLatenessSeconds: TargetLatenessSeconds,
+			Attributes: attrs, SubjectTags: append([]string(nil), source.SubjectTags...),
+		}, Columns: columns})
 		if createErr != nil {
 			return fmt.Errorf("create target Dataset: %w", createErr)
 		}
@@ -152,43 +144,24 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if target.GetDataset() == nil {
 		return compensate(errors.New("target Dataset is empty"))
 	}
-	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage, source.DataNodeID); err != nil {
+	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage); err != nil {
 		return compensate(err)
+	}
+	if target.GetDataset().GetAlignment() != market.Alignment {
+		return compensate(fmt.Errorf("目标数据集的 alignment %q 与市场的 %q 不一致", target.GetDataset().GetAlignment(), market.Alignment))
 	}
 	_ = subjects
-	for _, field := range fieldsFor(tradeCount) {
-		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
-			continue
-		}
-		resp, callErr := c.Metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: c.Auth, Column: &storagepb.DatasetColumn{
-			SpaceId: task.SpaceID, DatasetId: targetDatasetID, ColumnName: field.name,
-			OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name,
-			ValueType: field.type_, Required: field.required, Status: "active", Attributes: map[string]string{"display_name": field.label},
-		}})
-		if callErr != nil {
-			return compensate(fmt.Errorf("upsert target column %s: %w", field.name, callErr))
-		}
-		if err := ensureMetadataSuccess("upsert target column", resp.GetRetInfo()); err != nil {
-			return compensate(err)
-		}
-	}
-	check, err := c.Metadata.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, DatasetId: targetDatasetID})
-	if err != nil {
-		return compensate(fmt.Errorf("check target Dataset activation: %w", err))
-	}
-	if err := ensureMetadataSuccess("check target Dataset activation", check.GetRetInfo()); err != nil {
-		return compensate(err)
-	}
-	if !check.GetReady() {
-		return compensate(fmt.Errorf("target Dataset activation is not ready"))
-	}
-	if strings.ToLower(strings.TrimSpace(target.GetDataset().GetStatus())) != "active" {
-		activated, activateErr := c.Metadata.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, DatasetId: targetDatasetID, ExpectedRevision: target.GetDataset().GetRevision()})
-		if activateErr != nil {
-			return compensate(fmt.Errorf("activate target Dataset: %w", activateErr))
-		}
-		if err := ensureMetadataSuccess("activate target Dataset", activated.GetRetInfo()); err != nil {
-			return compensate(err)
+	if !createdDataset {
+		// 已有的目标数据集按同一份列定义补齐：上一轮建数据集时缓存没发布成功，这里也会让 Storage 重新发布。
+		for _, column := range columns {
+			column.SpaceId, column.DatasetId = task.SpaceID, targetDatasetID
+			resp, callErr := c.Metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: c.Auth, Column: column})
+			if callErr != nil {
+				return fmt.Errorf("upsert target column %s: %w", column.GetColumnName(), callErr)
+			}
+			if err := ensureMetadataSuccess("upsert target column", resp.GetRetInfo()); err != nil {
+				return err
+			}
 		}
 	}
 	viewResp, viewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, ViewId: targetViewID})
@@ -202,7 +175,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, CreateOnly: true, View: &storagepb.View{
 			SpaceId: task.SpaceID, ViewId: targetViewID, Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: targetDatasetID,
 			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb", Status: "active",
-			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse", "maintenance_priority": "0", "route_ready_request_id": "kline-resample-route:" + task.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
+			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse"},
 		}})
 		if createErr != nil {
 			return compensate(fmt.Errorf("create target View: %w", createErr))
@@ -217,72 +190,41 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	} else if err := validateTargetView(viewResp.GetView(), task, params, targetFreq.Storage); err != nil {
 		return compensate(err)
 	}
-	requestID := "kline-resample-route:" + task.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())
-	if viewResp.GetView() != nil && viewResp.GetView().GetAttributes()["route_ready_request_id"] != requestID {
-		updated := *viewResp.GetView()
-		updated.Attributes = cloneStringMap(updated.GetAttributes())
-		updated.Attributes["route_ready_request_id"] = requestID
-		updatedResp, updateErr := c.Metadata.UpdateView(ctx, &storagepb.UpdateViewReq{AuthInfo: c.Auth, View: &updated})
-		if updateErr != nil {
-			return compensate(fmt.Errorf("update target View route-ready marker: %w", updateErr))
-		}
-		if err := ensureMetadataSuccess("update target View route-ready marker", updatedResp.GetRetInfo()); err != nil {
-			return compensate(err)
-		}
-		viewResp.View = updatedResp.GetView()
-	}
-	viewColumnIndex := 0
-	for _, field := range fieldsFor(tradeCount) {
-		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
-			continue
-		}
-		viewColumnIndex++
-		resp, callErr := c.Metadata.UpsertViewColumn(ctx, &storagepb.UpsertViewColumnReq{AuthInfo: c.Auth, Column: &storagepb.ViewColumn{
-			SpaceId: task.SpaceID, ViewId: targetViewID, ColumnName: field.name, OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-			OriginId: field.name, ValueType: field.type_, SortOrder: uint32(viewColumnIndex), Attributes: map[string]string{"display_name": field.label},
-		}})
-		if callErr != nil {
-			return compensate(fmt.Errorf("upsert target View column %s: %w", field.name, callErr))
-		}
-		if err := ensureMetadataSuccess("upsert target View column", resp.GetRetInfo()); err != nil {
-			return compensate(err)
-		}
-	}
-	// 写完全部列之后重新读一次 View：之前的 GetView 响应可能还是旧定义，要按完整的声明列等待。
+	// View 的列由 Storage 按目标数据集启用的列推出；重新读一次 View，按它现在的列（即目标数据集的列）等列建进索引。
 	finalViewResp, finalViewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, ViewId: targetViewID})
 	if finalViewErr != nil {
-		return compensate(fmt.Errorf("get target View after columns: %w", finalViewErr))
+		return compensate(fmt.Errorf("reread target View: %w", finalViewErr))
 	}
-	if err := ensureMetadataSuccess("get target View after columns", finalViewResp.GetRetInfo()); err != nil {
+	if err := ensureMetadataSuccess("reread target View", finalViewResp.GetRetInfo()); err != nil {
 		return compensate(err)
 	}
 	finalView := finalViewResp.GetView()
 	if finalView == nil {
-		return compensate(errors.New("target View after columns is empty"))
+		return compensate(errors.New("reread target View is empty"))
 	}
-	if c.ViewSync == nil {
-		return compensate(errors.New("resample catalog View sync waiter is required"))
+	err = waitTargetViewColumns(ctx, c.View, c.Auth, task.SpaceID, targetViewID, finalView.GetColumns(), 5*time.Second)
+	if err != nil && ctx.Err() == nil && task.PrepareState == domain.PrepareStateReady && !createdDataset && !createdView {
+		// 已经 Ready 的任务只在这里复核列：storage-view 不可达、恢复或重建期间 View 暂时查不到，不能让任务掉出 Ready，
+		// 否则触发、历史作业与兜底都停下，恢复后更早的桶补不回来。只记日志，下一轮再看。
+		log.Warnf("collector 合成任务 %s/%s 的目标 View %s 暂不可用，保持就绪：%v", task.SpaceID, task.TaskID, targetViewID, err)
+		return nil
 	}
-	syncResp, syncErr := c.ViewSync.WaitViewSyncPoint(ctx, &storagepb.WaitViewSyncPointReq{
-		AuthInfo: c.Auth, SpaceId: task.SpaceID, ViewId: targetViewID, RequestId: requestID,
-		DatasetIds: []string{targetDatasetID}, WaitTimeoutMs: 5000,
-	})
-	if syncErr != nil {
-		return compensate(fmt.Errorf("wait target View sync point: %w", syncErr))
+	return compensate(err)
+}
+
+// targetDatasetColumns 返回目标数据集的列定义：市场的合成字段，指定了输出字段时只取选中的那些。
+func targetDatasetColumns(tradeCount bool, outputFields []string) []*storagepb.DatasetColumn {
+	var columns []*storagepb.DatasetColumn
+	for _, field := range fieldsFor(tradeCount) {
+		if len(outputFields) > 0 && !containsOutputField(outputFields, field.name) {
+			continue
+		}
+		columns = append(columns, &storagepb.DatasetColumn{
+			ColumnName: field.name, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name,
+			ValueType: field.type_, Required: field.required, Status: "active", Attributes: map[string]string{"display_name": field.label},
+		})
 	}
-	if syncResp == nil {
-		return compensate(ErrTargetViewNotReady)
-	}
-	if err := ensureMetadataSuccess("wait target View sync point", syncResp.GetRetInfo()); err != nil {
-		return compensate(err)
-	}
-	if !syncResp.GetReady() {
-		return compensate(ErrTargetViewNotReady)
-	}
-	if err := waitTargetViewColumns(ctx, c.Metadata, c.Auth, task.SpaceID, targetViewID, finalView.GetColumns(), 5*time.Second); err != nil {
-		return compensate(err)
-	}
-	return nil
+	return columns
 }
 
 func containsOutputField(fields []string, name string) bool {
@@ -352,15 +294,11 @@ func uniqueResampleDisplayName(targetDatasetID string) string {
 	return "重" + strings.ToLower(suffix[:9])
 }
 
-type viewGetter interface {
-	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
-}
-
-// waitTargetViewColumns 等到物理索引建好、声明的列都已建进索引才放行采集，只看路由就绪标记不够：
-// 标记可能先于异步的建索引或加列出现。
-func waitTargetViewColumns(ctx context.Context, getter viewGetter, auth *storagepb.AuthInfo, spaceID, viewID string, columns []*storagepb.ViewColumn, timeout time.Duration) error {
-	if getter == nil {
-		return errors.New("metadata View getter is required")
+// waitTargetViewColumns 等到 View 的活动索引建好、声明的列都已建进索引才放行采集。View 还没开始建索引
+// （VIEW_NOT_FOUND）或索引还在建（index_id 为空）都继续等，超时返回 ErrTargetViewNotReady，下一轮准备时再等。
+func waitTargetViewColumns(ctx context.Context, view ViewWaiter, auth *storagepb.AuthInfo, spaceID, viewID string, columns []*storagepb.ViewColumn, timeout time.Duration) error {
+	if view == nil {
+		return errors.New("合成需要 DataView 客户端")
 	}
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -368,7 +306,7 @@ func waitTargetViewColumns(ctx context.Context, getter viewGetter, auth *storage
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	for {
-		response, err := getter.GetView(waitCtx, &storagepb.GetViewReq{AuthInfo: auth, SpaceId: spaceID, ViewId: viewID})
+		response, err := view.GetViewState(waitCtx, &storagepb.GetViewStateReq{AuthInfo: auth, SpaceId: spaceID, ViewId: viewID})
 		if err != nil {
 			if waitCtx.Err() != nil {
 				if ctx.Err() != nil {
@@ -376,40 +314,35 @@ func waitTargetViewColumns(ctx context.Context, getter viewGetter, auth *storage
 				}
 				return ErrTargetViewNotReady
 			}
-			return fmt.Errorf("get target View: %w", err)
+			return fmt.Errorf("get target View state: %w", err)
 		}
-		if response == nil {
-			return errors.New("get target View: empty response")
+		if response.GetRetInfo() == nil {
+			return errors.New("get target View state: empty ret_info")
 		}
-		if err := ensureMetadataSuccess("get target View", response.GetRetInfo()); err != nil {
-			return err
+		switch response.GetRetInfo().GetCode() {
+		case storagepb.ErrorCode_SUCCESS:
+			if targetViewColumnsReady(response, columns) {
+				return nil
+			}
+		case storagepb.ErrorCode_VIEW_NOT_FOUND:
+		default:
+			return fmt.Errorf("get target View state: %s", response.GetRetInfo().GetMsg())
 		}
-		view := response.GetView()
-		if view == nil {
-			return errors.New("get target View: empty View")
-		}
-		if targetViewColumnsReady(view, columns) {
-			return nil
-		}
-		timer := time.NewTimer(100 * time.Millisecond)
-		select {
-		case <-waitCtx.Done():
-			timer.Stop()
+		if err := sleepContext(waitCtx, viewRetryInterval); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			return ErrTargetViewNotReady
-		case <-timer.C:
 		}
 	}
 }
 
-func targetViewColumnsReady(view *storagepb.View, columns []*storagepb.ViewColumn) bool {
-	if view == nil || strings.TrimSpace(view.GetActiveIndexId()) == "" {
+func targetViewColumnsReady(state *storagepb.GetViewStateRsp, columns []*storagepb.ViewColumn) bool {
+	if strings.TrimSpace(state.GetIndexId()) == "" {
 		return false
 	}
-	built := make(map[string]struct{}, len(view.GetActiveColumns()))
-	for _, column := range view.GetActiveColumns() {
+	built := make(map[string]struct{}, len(state.GetColumns()))
+	for _, column := range state.GetColumns() {
 		built[column.GetColumnName()] = struct{}{}
 	}
 	for _, column := range columns {
@@ -417,8 +350,7 @@ func targetViewColumnsReady(view *storagepb.View, columns []*storagepb.ViewColum
 			return false
 		}
 	}
-	status := strings.ToLower(strings.TrimSpace(view.GetStatus()))
-	return status == "" || status == "active"
+	return true
 }
 
 func validateTargetView(view *storagepb.View, task domain.CollectionTask, params *domain.CollectParams, frequency string) error {
@@ -449,14 +381,6 @@ func validateTargetView(view *storagepb.View, task domain.CollectionTask, params
 	return nil
 }
 
-// withLateness 在创建目标数据集时声明周期的迟到容忍（收盘后 2 分钟）：Storage 据此算周期截止，写入目标与引擎的截止判断一致。
-// 它不属于创建后校验的不可变契约（attrs），已有的目标数据集没有它时 Storage 用默认值，周期提交失败会自动改用普通写入。
-func withLateness(attrs map[string]string) map[string]string {
-	out := cloneStringMap(attrs)
-	out["allowed_lateness_seconds"] = strconv.Itoa(TargetLatenessSeconds)
-	return out
-}
-
 func cloneStringMap(input map[string]string) map[string]string {
 	output := make(map[string]string, len(input)+1)
 	for key, value := range input {
@@ -465,15 +389,12 @@ func cloneStringMap(input map[string]string) map[string]string {
 	return output
 }
 
-func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, frequency, dataNodeID string) error {
+func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, frequency string) error {
 	if dataset.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES {
 		return errors.New("target Dataset must be time_series")
 	}
 	if strings.TrimSpace(dataset.GetDataSourceId()) != "" {
 		return fmt.Errorf("collector-owned target Dataset must not declare a single data source: got %q", dataset.GetDataSourceId())
-	}
-	if strings.TrimSpace(dataNodeID) != "" && strings.TrimSpace(dataset.GetDataNodeId()) != strings.TrimSpace(dataNodeID) {
-		return fmt.Errorf("target Dataset data node does not match source: got %q want %q", dataset.GetDataNodeId(), dataNodeID)
 	}
 	for key, expected := range want {
 		if dataset.GetAttributes()[key] != expected {
