@@ -414,8 +414,9 @@ func eventBusRoleFiles() map[string]string {
 	}
 }
 
-// collectorEventBusSpaces 是 Collector 合成消费者按空间创建持久消费者的空间；新增空间时同步修改。
-var collectorEventBusSpaces = []string{"crypto", "stockcn"}
+// collectorEventBusSpaces 是 Collector 合成消费者按空间创建持久消费者的空间，必须与 barclock.Markets() 登记的市场一致
+// （Collector 给每个登记的市场建消费者）；新增市场时同步修改。
+var collectorEventBusSpaces = []string{"crypto", "stockcn", "stockhk", "stockus"}
 
 // collectorEventBusPublish 是 Collector 的发布权限：发布补采完成事件和标的下架事件，以及合成的两个持久消费者
 // （源周期完成在 MOOX_STORAGE、补采完成在 MOOX_COLLECTOR，每个空间各一个）所需的 JetStream 接口。

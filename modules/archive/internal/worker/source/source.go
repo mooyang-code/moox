@@ -206,6 +206,59 @@ func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
 	return page, nil
 }
 
+// ChangeCursor 是 Storage 变更日志的读取位点；序号只在同一个 StoreID 内可比较。
+type ChangeCursor struct {
+	StoreID  string
+	Sequence uint64
+}
+
+// Changes 是变更日志的一页。
+type Changes struct {
+	// Spans 是这一页里时间序列行写入涉及的时间范围（含两端，UTC），不分标的。
+	Spans [][2]time.Time
+	// Next 是已扫描到的位点，原样用作下一次读取的游标。
+	Next    ChangeCursor
+	HasMore bool
+	// Gap 为真表示游标早于日志保留起点或存储已重建，游标之后的变更读不全。
+	Gap bool
+	// Bytes 是这一页响应的字节数（用于带宽限制）。
+	Bytes int64
+}
+
+// changePageLimit 是一页最多扫描的日志条数（Storage 的上限）。
+const changePageLimit = 2000
+
+// ReadChanges 从游标之后读一页数据集的变更日志；cursor 为 nil 时只取日志头部的位点。
+func (c *Client) ReadChanges(ctx context.Context, spaceID, datasetID string, cursor *ChangeCursor) (Changes, error) {
+	req := &storagepb.ReadDatasetChangesReq{AuthInfo: c.auth(), SpaceId: spaceID, DatasetId: datasetID, FromHead: cursor == nil, Limit: changePageLimit}
+	if cursor != nil {
+		req.Cursor = &storagepb.DatasetChangeCursor{StoreId: cursor.StoreID, Sequence: cursor.Sequence}
+	}
+	rsp := &storagepb.ReadDatasetChangesRsp{}
+	if err := c.gateway.Invoke(ctx, "trpc.moox.storage.PrimaryStore", "ReadDatasetChanges", req, rsp); err != nil {
+		return Changes{}, fmt.Errorf("read dataset changes %s/%s: %w", spaceID, datasetID, err)
+	}
+	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		return Changes{}, fmt.Errorf("read dataset changes %s/%s: %s", spaceID, datasetID, rsp.GetRetInfo().GetMsg())
+	}
+	out := Changes{
+		Next:    ChangeCursor{StoreID: rsp.GetNextCursor().GetStoreId(), Sequence: rsp.GetNextCursor().GetSequence()},
+		HasMore: rsp.GetHasMore(), Gap: rsp.GetGap(), Bytes: int64(proto.Size(rsp)),
+	}
+	// 只看时间序列行条目的范围；完成标记与记录型行条目没有范围。
+	for _, change := range rsp.GetChanges() {
+		for _, r := range change.GetRanges() {
+			start, startErr := time.Parse(time.RFC3339Nano, r.GetStartTime())
+			end, endErr := time.Parse(time.RFC3339Nano, r.GetEndTime())
+			if startErr != nil || endErr != nil {
+				return Changes{}, fmt.Errorf("read dataset changes %s/%s: 无效的时间范围 %q-%q", spaceID, datasetID, r.GetStartTime(), r.GetEndTime())
+			}
+			out.Spans = append(out.Spans, [2]time.Time{start.UTC(), end.UTC()})
+		}
+	}
+	return out, nil
+}
+
 // convert 把 Storage 的值转换成暂存列类型对应的 Go 值；缺失或 null 返回 nil。
 func convert(columnType string, value *storagepb.TypedValue) (any, error) {
 	if value == nil || value.GetValue() == nil {

@@ -75,7 +75,7 @@ func (r *Runtime) resumeStartedAt(taskID string) time.Time {
 }
 
 // catchupPrecondition 返回追赶前置条件未满足的原因，满足时为空。追赶在写任何结果（推进水位、后台补算）之前都要满足：
-// 本次恢复开始之后目录至少成功同步过一次（返回已应用或未变化都算）。没有目录同步器的运行时（诊断入口、测试）不要求。
+// 本次恢复开始之后目录至少成功同步过一次（返回已应用或未变化都算）。没有目录同步器的运行时（测试）不要求。
 func (r *Runtime) catchupPrecondition(taskID string) string {
 	started := r.resumeStartedAt(taskID)
 	if started.IsZero() {

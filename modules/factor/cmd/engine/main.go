@@ -53,8 +53,6 @@ func run(args []string, out io.Writer) error {
 	switch command {
 	case "serve":
 		return serve(context.Background(), args)
-	case "run-once":
-		return runOnce(args, out)
 	case "health":
 		return health(args, out)
 	case "reset-gap-ledger":
@@ -69,7 +67,7 @@ func run(args []string, out io.Writer) error {
 		_, err := fmt.Fprintf(out, "moox-factor-engine %s %s %s\n", Version, GitCommit, BuildTime)
 		return err
 	default:
-		return fmt.Errorf("unknown command %q (serve, run-once, health, reset-gap-ledger, reconcile, backfill, tune, version)", command)
+		return fmt.Errorf("unknown command %q (serve, health, reset-gap-ledger, reconcile, backfill, tune, version)", command)
 	}
 }
 
@@ -118,40 +116,6 @@ func (v *listFlag) Set(raw string) error {
 		}
 	}
 	return nil
-}
-
-func runOnce(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("run-once", flag.ContinueOnError)
-	app := fs.String("config", "config/engine.yaml", "factor engine config")
-	taskID := fs.String("task", "", "factor task id")
-	period := fs.String("period", "", "period start timestamp RFC3339")
-	var factors, subjects listFlag
-	fs.Var(&factors, "member", "member alias (repeatable; all members when omitted)")
-	fs.Var(&subjects, "subject", "subject id (repeatable)")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if strings.TrimSpace(*taskID) == "" {
-		return errors.New("--task is required")
-	}
-	at, err := time.Parse(time.RFC3339Nano, *period)
-	if err != nil {
-		return fmt.Errorf("--period must be an RFC3339 timestamp: %w", err)
-	}
-	cfg, err := engine.Load(*app)
-	if err != nil {
-		return err
-	}
-	outcome, err := engine.RunOnce(context.Background(), cfg, engine.RunOnceRequest{
-		TaskID: *taskID, Members: factors, Subjects: subjects, Period: at.UTC(),
-	})
-	if err != nil {
-		return err
-	}
-	return json.NewEncoder(out).Encode(map[string]any{
-		"ok": true, "task_id": *taskID, "period": at.UTC().Format(time.RFC3339),
-		"status": outcome.Status, "rows_written": outcome.RowsWritten, "factors": outcome.Factors,
-	})
 }
 
 // health asks the local engine for readiness, signing the request with the

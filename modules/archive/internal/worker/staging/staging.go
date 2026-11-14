@@ -210,6 +210,18 @@ func Open(path string, opts Options) (*Store, error) {
 			return nil, fmt.Errorf("create staging state tables: %w", err)
 		}
 	}
+	// 不写迁移：旧版本建的 task_state 缺变更日志位点两列时拒绝启动。
+	have, err := s.tableColumns(context.Background(), "task_state")
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	for _, column := range []string{"change_store_id", "change_sequence"} {
+		if !have[column] {
+			_ = db.Close()
+			return nil, fmt.Errorf("暂存库 %s 是旧版本建的（task_state 缺少 %s 列）：停掉 worker，删除 staging.db 及其 -wal、-shm 文件后重启，分区登记会从 mgr 重建", path, column)
+		}
+	}
 	return s, nil
 }
 
@@ -228,6 +240,8 @@ CREATE TABLE IF NOT EXISTS task_state (
     purpose TEXT NOT NULL DEFAULT '',
     dir_name TEXT NOT NULL DEFAULT '',
     meta_remote_sha256 TEXT NOT NULL DEFAULT '',
+    change_store_id TEXT NOT NULL DEFAULT '',
+    change_sequence INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (space_id, dataset_id)
 ) WITHOUT ROWID`
 	partitionStateDDL = `

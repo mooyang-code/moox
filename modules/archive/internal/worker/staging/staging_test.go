@@ -841,3 +841,21 @@ func TestParseCellReturnsStageValuesAndSeriesTagsAreRead(t *testing.T) {
 		t.Fatalf("file tags = %q %v", tags, err)
 	}
 }
+
+func TestOpenRejectsAStagingDatabaseWithoutTheChangeCursorColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "staging.db")
+	store, err := Open(path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模拟旧版本建的库：task_state 没有位点列。
+	if _, err := store.db.Exec(`ALTER TABLE task_state DROP COLUMN change_sequence`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path, Options{}); err == nil || !strings.Contains(err.Error(), "change_sequence") || !strings.Contains(err.Error(), "删除 staging.db") {
+		t.Fatalf("err = %v", err)
+	}
+}

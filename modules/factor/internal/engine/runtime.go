@@ -539,7 +539,7 @@ func realPeriod(axis periodclock.Axis, period time.Time) time.Time {
 	return at
 }
 
-// newStorageClient 返回包装了换算边界的 Storage 客户端（引擎、诊断与离线维护命令共用）。
+// newStorageClient 返回包装了换算边界的 Storage 客户端（引擎与离线维护命令共用）。
 func newStorageClient(gateway gatewayclient.Invoker, cfg StorageConfig) (*storageio.Axis, error) {
 	secret, err := gatewayauth.ReadSigningSecret(cfg.AuthSecretFile)
 	if err != nil {

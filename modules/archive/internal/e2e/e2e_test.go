@@ -296,3 +296,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 		t.Fatal("重写后的登记要与磁盘文件一致")
 	}
 }
+
+func (f *fakeStorage) ReadChanges(context.Context, string, string, *source.ChangeCursor) (source.Changes, error) {
+	return source.Changes{Next: source.ChangeCursor{StoreID: "store"}}, nil
+}

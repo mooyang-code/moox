@@ -12,11 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type recordedPauses struct{ reasons []string }
+type recordedPauses struct {
+	reasons  []string
+	expected [][2]string
+}
 
-func (r *recordedPauses) Pause(_ context.Context, _, _ string, reason string) (store.LogicalAccountRecord, error) {
+func (r *recordedPauses) PauseIf(_ context.Context, _, _, expectedState, expectedReason, reason string) (bool, error) {
 	r.reasons = append(r.reasons, reason)
-	return store.LogicalAccountRecord{}, nil
+	r.expected = append(r.expected, [2]string{expectedState, expectedReason})
+	return true, nil
 }
 
 type scriptedReinspector struct {
@@ -71,6 +75,7 @@ func TestInspectionWorkerPausesLogicalAccountOnBlockersOrModeChange(t *testing.T
 			worker := &InspectionWorker{Store: tradeStore, Logical: pauser}
 			require.NoError(t, worker.Handle(context.Background(), "space-1", "account-1", result))
 			require.Len(t, pauser.reasons, 1)
+			require.Equal(t, [2]string{"ACTIVE", ""}, pauser.expected[0], "只在组合仍在自动执行时暂停")
 			require.True(t, store.IsAutoPauseReason(pauser.reasons[0]), "自动暂停才会告警：%s", pauser.reasons[0])
 		})
 	}

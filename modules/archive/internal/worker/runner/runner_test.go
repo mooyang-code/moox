@@ -34,6 +34,31 @@ type fakeSource struct {
 	// failFrom 非零时，起点不早于它的读取全部失败。
 	failFrom   time.Time
 	columnsErr error // 非空时 Columns 失败
+
+	// 变更日志：changeLog 的第 i 条序号为 i+1，一页只返回一条；游标早于 changeTrimmed 时断档。
+	changeLog     [][2]time.Time
+	changeTrimmed uint64
+	changesErr    error
+	changeCalls   int
+}
+
+func (f *fakeSource) ReadChanges(_ context.Context, _, _ string, cursor *source.ChangeCursor) (source.Changes, error) {
+	f.changeCalls++
+	if f.changesErr != nil {
+		return source.Changes{}, f.changesErr
+	}
+	head := source.ChangeCursor{StoreID: "store", Sequence: uint64(len(f.changeLog))}
+	if cursor == nil {
+		return source.Changes{Next: head}, nil
+	}
+	if cursor.StoreID != head.StoreID || cursor.Sequence < f.changeTrimmed || cursor.Sequence > head.Sequence {
+		return source.Changes{Next: head, Gap: true}, nil
+	}
+	if cursor.Sequence == head.Sequence {
+		return source.Changes{Next: head}, nil
+	}
+	next := source.ChangeCursor{StoreID: head.StoreID, Sequence: cursor.Sequence + 1}
+	return source.Changes{Spans: [][2]time.Time{f.changeLog[cursor.Sequence]}, Next: next, HasMore: next.Sequence < head.Sequence, Bytes: 10}, nil
 }
 
 func (f *fakeSource) Columns(context.Context, string, string) ([]staging.Column, error) {

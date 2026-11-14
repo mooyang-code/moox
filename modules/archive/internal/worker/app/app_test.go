@@ -831,3 +831,7 @@ func TestImportDirectoryIsRemovedOnlyAfterTheManagerConfirmsSuccess(t *testing.T
 		t.Fatalf("mgr 没有确认时应保留导入目录: %v", err)
 	}
 }
+
+func (f *fakeSource) ReadChanges(context.Context, string, string, *source.ChangeCursor) (source.Changes, error) {
+	return source.Changes{Next: source.ChangeCursor{StoreID: "store"}}, nil
+}

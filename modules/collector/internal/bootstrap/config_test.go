@@ -85,23 +85,10 @@ func TestCollectorRPCListenersUseNativeLoopbackOnly(t *testing.T) {
 	require.True(t, foundCollectMgr)
 }
 
-func TestMarketFetchSpaceIDUsesConfiguredMarketForScheduler(t *testing.T) {
-	t.Setenv("MOOX_SPACE_IDS", "")
-	t.Setenv("MOOX_SPACE_ID", "stockcn")
-	if got := marketFetchSpaceID(); got != "stockcn" {
-		t.Fatalf("marketFetchSpaceID() = %q, want stockcn", got)
-	}
-}
-
-func TestMarketFetchSpaceIDsSupportsMultipleSpacesAndDeduplicates(t *testing.T) {
-	got := parseMarketFetchSpaceIDs(" stockcn, crypto, STOCKCN,,crypto ")
-	assert.Equal(t, []string{"stockcn", "crypto"}, got)
-}
-
-func TestMarketFetchSpaceIDsPrefersPluralEnvironment(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "stockcn")
-	t.Setenv("MOOX_SPACE_IDS", "crypto,stockcn")
-	assert.Equal(t, []string{"crypto", "stockcn"}, marketFetchSpaceIDs())
+// 合成覆盖 barclock 登记的全部市场，不读环境变量；Admin 的 collectorEventBusSpaces 要与这份名单一致。
+func TestResampleSpaceIDsCoverAllRegisteredMarkets(t *testing.T) {
+	t.Setenv("MOOX_SPACE_IDS", "crypto")
+	assert.Equal(t, []string{"crypto", "stockcn", "stockhk", "stockus"}, resampleSpaceIDs())
 }
 
 func TestLoadKlineResampleConfig(t *testing.T) {

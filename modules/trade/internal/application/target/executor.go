@@ -1456,13 +1456,16 @@ func (e *Executor) pauseLogicalAccount(
 	if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
 		return err
 	}
+	// 只在组合仍在自动执行时暂停：收敛中途被别处（外部订单、逐仓持仓、风控）暂停的，保留它们写的原因。
 	if err := e.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation(
+		_, err := tx.PauseLogicalAccountIf(
 			logicalAccount.SpaceID,
 			logicalAccount.LogicalAccountID,
-			"PAUSED",
+			"ACTIVE",
+			"",
 			store.AutoPauseReason(reason),
 		)
+		return err
 	}); err != nil {
 		return err
 	}

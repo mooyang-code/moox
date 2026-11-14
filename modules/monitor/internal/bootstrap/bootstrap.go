@@ -192,12 +192,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		cancelProbe()
 		if probeErr != nil {
 			if watchdog.IsStorageAuthError(probeErr) {
-				_ = runtime.Close()
-				return nil, fmt.Errorf("monitor storage primary auth preflight failed; restart Monitor after synchronizing storage-internal-auth.env: %w", probeErr)
+				// 监控进程不能因为被监控对象的问题起不来：这里只记错误日志，之后周期行情探针
+				// 每轮都会产出失败的检查结果并告警。密钥只在启动时读取，修复后要重启 Monitor。
+				log.ErrorContextf(ctx, "Monitor 启动时 Storage 认证被拒绝，继续启动；请同步 storage-internal-auth.env 后重启 Monitor，在此之前行情探针会持续失败: %v", probeErr)
+			} else {
+				// Primary 可能还在启动，或数据集还是空的，这些情况由周期行情探针上报。
+				log.WarnContextf(ctx, "monitor storage primary auth preflight deferred: %v", probeErr)
 			}
-			// Primary may still be starting or the dataset may be empty. The
-			// periodic canary remains responsible for reporting those conditions.
-			log.WarnContextf(ctx, "monitor storage primary auth preflight deferred: %v", probeErr)
 		} else {
 			log.InfoContextf(ctx, "monitor storage primary auth preflight passed")
 		}

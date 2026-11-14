@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"trpc.group/trpc-go/trpc-go/log"
 
 	"github.com/mooyang-code/moox/packages/events"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -1241,6 +1244,9 @@ func AttentionCheckName(check, kind string) string {
 	return ""
 }
 
+// warnedUnknownAttention 记下已经告警过的“服务加种类”：概览每次刷新都会汇总关注项，同一组合只打一次日志。
+var warnedUnknownAttention sync.Map
+
 // buildAttentionStatuses 把一个模块的关注项变成业务检查。detail 标签带对象名和原因，
 // 内容变化后旧序列不再更新，所以只看没有过期的序列。
 func (b Builder) buildAttentionStatuses(ctx context.Context, source attentionSource) ([]BusinessStatus, error) {
@@ -1254,7 +1260,13 @@ func (b Builder) buildAttentionStatuses(ctx context.Context, source attentionSou
 	statuses := make(map[string]BusinessStatus, len(source.names))
 	for _, item := range series {
 		kind := labelValue(item.LabelsJSON, "kind")
-		if _, known := source.names[kind]; !known || item.IsStale {
+		if item.IsStale {
+			continue
+		}
+		if _, known := source.names[kind]; !known {
+			if _, warned := warnedUnknownAttention.LoadOrStore(item.ServiceName+"\x00"+kind, struct{}{}); !warned {
+				log.WarnContextf(ctx, "关注项种类未登记，已跳过: service=%s kind=%q metric=%s", item.ServiceName, kind, source.metric)
+			}
 			continue
 		}
 		latest, err := b.Metrics.Latest(ctx, item.SeriesID)

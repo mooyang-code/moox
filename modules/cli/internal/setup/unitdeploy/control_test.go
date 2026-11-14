@@ -87,8 +87,9 @@ func TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets(t *testing.
 	for _, id := range []string{"monitor", "collector", "factor-mgr", "strategy"} {
 		require.Equal(t, identity.StoragePrimarySecret, env[id]["MOOX_STORAGE_PRIMARY_AUTH_SECRET"])
 	}
-	require.Equal(t, "crypto", env["collector"]["MOOX_SPACE_ID"])
-	require.Equal(t, "crypto", env["collector"]["MOOX_SPACE_IDS"])
+	// Collector 的空间名单取自本地库的管理集合，部署不再注入空间环境变量。
+	require.NotContains(t, env["collector"], "MOOX_SPACE_ID")
+	require.NotContains(t, env["collector"], "MOOX_SPACE_IDS")
 	require.NotContains(t, env["monitor"], "MOOX_SPACE_ID")
 	require.Equal(t, identity.StorageViewSecret, env["strategy"]["MOOX_STORAGE_VIEW_AUTH_SECRET"])
 	require.NotContains(t, env["monitor"], "MOOX_STORAGE_VIEW_AUTH_SECRET")

@@ -2159,6 +2159,7 @@ principals:
       - service: trpc.moox.storage.PrimaryStore
         methods:
           - ReadTimeSeriesRows
+          - ReadDatasetChanges
       - service: trpc.moox.storage.Metadata
         methods:
           - GetDataset

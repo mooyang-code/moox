@@ -109,9 +109,11 @@ type FactorSubject struct {
 	SourcePrev  map[string]float64            `json:"source_prev,omitempty"`
 	Factors     map[string]map[string]float64 `json:"factors,omitempty"`
 	FactorsPrev map[string]map[string]float64 `json:"factors_prev,omitempty"`
-	Close       float64                       `json:"close"`
-	Exec        float64                       `json:"exec"`
-	AgeBars     int                           `json:"age_bars"`
+	// Params 是本期各成员（成员键）实际用的参数（参数名 → 值），原样转给 Strategy，params() 读它。
+	Params  map[string]map[string]float64 `json:"params,omitempty"`
+	Close   float64                       `json:"close"`
+	Exec    float64                       `json:"exec"`
+	AgeBars int                           `json:"age_bars"`
 }
 
 // FactorState 是一个因子本期的状态。
@@ -180,7 +182,9 @@ type StrategyRow struct {
 	SourcePrev  map[string]float64            `json:"source_prev,omitempty"`
 	Factors     map[string]map[string]float64 `json:"factors,omitempty"`
 	FactorsPrev map[string]map[string]float64 `json:"factors_prev,omitempty"`
-	AgeBars     int                           `json:"age_bars"`
+	// Params 是本期各成员（成员键）实际用的参数（参数名 → 值），来自因子帧。
+	Params  map[string]map[string]float64 `json:"params,omitempty"`
+	AgeBars int                           `json:"age_bars"`
 }
 
 // StrategyTarget 是决策里的一个目标。

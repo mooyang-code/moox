@@ -103,3 +103,20 @@ func TestStartDeliversPeriodAndBackfilledEventsToTriggersAndRetriesFailures(t *t
 	require.Equal(t, []string{"crypto/dataset_src"}, triggers.periods)
 	require.Equal(t, []string{"crypto/kbf-1/dataset_src"}, triggers.backfills)
 }
+
+// 任一消费者创建失败则整体失败（已建的被关闭），由 Hub 之后整体重试。
+func TestStartFailsAsAWholeWhenAnyConsumerCannotBeCreated(t *testing.T) {
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	triggers := &fakeTriggers{}
+	// 只有 MOOX_STORAGE：源周期完成消费者能建，补采完成消费者建不出来。
+	server := testkit.Start(t)
+	server.AddStream(t, &nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{"moox.event.storage.dataset.period.completed.v1.>"}, Storage: nats.MemoryStorage})
+	client, err := jetstream.Connect(context.Background(), jetstream.Config{URLs: []string{server.URL()}, Name: "test-consumers"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	consumers, err := Start(context.Background(), client, ConsumersConfig{SpaceIDs: []string{"crypto", "stockhk"}, FetchMaxWait: 100 * time.Millisecond}, registry,
+		&PeriodHandler{Registry: registry, Trigger: triggers}, &BackfilledHandler{Registry: registry, Trigger: triggers})
+	require.Error(t, err)
+	require.Nil(t, consumers)
+}

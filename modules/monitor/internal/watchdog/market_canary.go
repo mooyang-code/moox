@@ -54,10 +54,9 @@ type MarketCanary struct {
 // the same time as Monitor and the periodic canary will retry it.
 var ErrStorageUnavailable = errors.New("storage unavailable")
 
-// StorageAuthError is returned when Primary explicitly rejects the monitor's
-// authentication. Unlike a network failure, continuing to start would leave
-// a permanently noisy canary until someone restarts Monitor with the shared
-// secret, so bootstrap treats this error as fatal.
+// StorageAuthError 表示 Primary 明确拒绝了 Monitor 的认证。和网络故障不同，它不会自行恢复：
+// 要同步共享密钥并重启 Monitor，在此之前行情探针每轮都失败。启动时遇到它只记错误日志，
+// 不阻止 Monitor 启动。
 type StorageAuthError struct {
 	Code   int32
 	Detail string
@@ -422,7 +421,8 @@ func healthyIdleResult(result domain.CheckResult) domain.CheckResult {
 // ProbeStorageAuth performs the smallest possible Primary read needed to
 // validate credentials. It deliberately does not inspect returned rows, so a
 // newly started collector or an empty dataset does not make Monitor fail its
-// startup. Only an explicit auth/permission rejection is fatal to bootstrap.
+// startup. An explicit auth/permission rejection is returned as StorageAuthError
+// so bootstrap can log it distinctly; it does not stop Monitor from starting.
 func (c MarketCanary) ProbeStorageAuth(ctx context.Context) error {
 	config := c.Config
 	if c.Reader == nil || strings.TrimSpace(config.SpaceID) == "" || strings.TrimSpace(config.DatasetID) == "" ||

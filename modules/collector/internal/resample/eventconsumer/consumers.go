@@ -100,6 +100,7 @@ type Consumers struct {
 }
 
 // Start 在已有连接上启动源周期完成与补采完成两个消费者（每个空间各一个持久消费者）。
+// 任一消费者创建失败就关掉已建的并返回错误：由 Hub 整体重试，连续失败后上报关注项，不留下缺了一部分消费者的状态。
 func Start(ctx context.Context, client *jetstream.Client, cfg ConsumersConfig, registry *events.Registry, period *PeriodHandler, backfilled *BackfilledHandler) (*Consumers, error) {
 	if len(cfg.SpaceIDs) == 0 {
 		return nil, errors.New("resample consumers need at least one space")

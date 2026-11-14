@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -30,6 +29,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
@@ -61,9 +61,6 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if err != nil {
 		log.ErrorContextf(ctx, "加载 collector 配置失败: %v", err)
 		return nil, err
-	}
-	if spaceID := marketFetchSpaceID(); spaceID == "" {
-		return nil, fmt.Errorf("MOOX_SPACE_ID is required for collector market scheduling")
 	}
 	dbm, err := store.Open(&store.Options{
 		Path:            cfg.Database.Path,
@@ -452,20 +449,16 @@ func registerDNSRefreshSchedule(s *server.Server, cache dnsSnapshotter, process 
 }
 
 // registerCollectorBackground 启动 Collector 的后台任务：K 线重采样与保留期清理。
+// 维护与清理每轮现取管理集合（managedSpaces，与采集计划同一份名单）；合成覆盖 barclock 登记的全部市场。
 // 实时行情采集已全部由 SCF 定时器按采集计划触发（见 registerFetchPlanManager），这里不再有任何行情调度。
 func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, metrics *marketfetch.Metrics, process *Runtime, bus *eventBusRuntime) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
 	metadataSource := storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway))
-	spaceIDs := marketFetchSpaceIDs()
-	if len(spaceIDs) == 0 {
-		log.Warn("collector background tasks have no configured spaces")
-		return
-	}
 	var resample *resampleRuntime
 	if cfg.KlineResample.Enabled {
-		runtime, resampleErr := newResampleRuntime(process, dbm, cfg, metadataSource, spaceIDs, bus)
+		runtime, resampleErr := newResampleRuntime(process, dbm, cfg, metadataSource, resampleSpaceIDs(), bus)
 		if resampleErr != nil {
 			log.WarnContextf(process.ctx, "collector kline resample disabled: %v", resampleErr)
 		} else {
@@ -478,6 +471,20 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 	maintenanceRunner := marketfetch.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.offset(), retentionConfig.timeout(), func(passCtx context.Context) error {
 		now := time.Now().UTC()
 		var passErrors []error
+		// 合成的清理不分空间，每轮都做；即使当前没有任何空间在管理集合里。
+		if resample != nil {
+			if err := resample.cleanup(passCtx, now); err != nil {
+				passErrors = append(passErrors, err)
+			}
+		}
+		// 每轮现取管理集合（与采集计划同一份名单），任务增删、空间启停后下一轮就生效。
+		spaceIDs, err := managedSpaces(passCtx, cfg, dbm)
+		if err != nil {
+			return errors.Join(append(passErrors, fmt.Errorf("读取管理集合失败: %w", err))...)
+		}
+		if len(spaceIDs) == 0 {
+			return errors.Join(passErrors...)
+		}
 		for _, spaceID := range spaceIDs {
 			metrics.ObserveMaintenanceDeletes(spaceID, nil)
 		}
@@ -489,11 +496,6 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 			}
 			spaceID := spaceIDs[(start+offset)%len(spaceIDs)]
 			deletedRows := make(map[string]int64)
-			if resample != nil && offset == 0 {
-				if err := resample.cleanup(passCtx, now); err != nil {
-					passErrors = append(passErrors, err)
-				}
-			}
 			backfillDeleted, err := dbm.Backfill().CleanupFinishedJobs(passCtx, spaceID, now.Add(-autoBackfillRetention), now.Add(-manualBackfillRetention),
 				maintenanceBudget(retentionConfig.MaxRowsPerPass, len(spaceIDs), offset))
 			if err != nil {
@@ -566,36 +568,13 @@ func nextMaintenanceSpaceCursor(current, spaces int) int {
 	return (current + 1) % spaces
 }
 
-func marketFetchSpaceID() string {
-	spaceIDs := marketFetchSpaceIDs()
-	if len(spaceIDs) == 0 {
-		return ""
-	}
-	return spaceIDs[0]
-}
-
-func marketFetchSpaceIDs() []string {
-	raw := strings.TrimSpace(os.Getenv("MOOX_SPACE_IDS"))
-	if raw == "" {
-		raw = os.Getenv("MOOX_SPACE_ID")
-	}
-	return parseMarketFetchSpaceIDs(raw)
-}
-
-func parseMarketFetchSpaceIDs(raw string) []string {
-	seen := make(map[string]struct{})
-	spaceIDs := make([]string, 0, 2)
-	for _, value := range strings.Split(raw, ",") {
-		spaceID := strings.TrimSpace(value)
-		if spaceID == "" {
-			continue
-		}
-		key := strings.ToLower(spaceID)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		spaceIDs = append(spaceIDs, spaceID)
+// resampleSpaceIDs 返回 K 线合成的消费者与兜底检查覆盖的空间：barclock 登记的全部市场（没有登记交易日历的空间本来就不能合成）。
+// 名单是固定的，新建合成任务不需要重启；Collector 的 EventBus 凭据也按这份名单授权。
+func resampleSpaceIDs() []string {
+	markets := barclock.Markets()
+	spaceIDs := make([]string, 0, len(markets))
+	for _, market := range markets {
+		spaceIDs = append(spaceIDs, market.ID)
 	}
 	return spaceIDs
 }

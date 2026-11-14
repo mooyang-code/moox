@@ -498,6 +498,31 @@ func TestTargetExecutorOmittedTargetStillClosesPosition(t *testing.T) {
 	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
 }
 
+// 收敛中途组合已被别处暂停时，执行器的暂停不覆盖已有原因，目标仍记下本次的原因。
+func TestTargetExecutorPauseKeepsExistingPauseReason(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.target(t, nil)
+	ctx := context.Background()
+	logicalAccount, err := fixture.store.GetLogicalAccount(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "ACTIVE", logicalAccount.AutomationState)
+	target, err := fixture.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", store.MarginPauseReason())
+	}))
+
+	require.NoError(t, fixture.executor().pauseLogicalAccount(ctx, logicalAccount, target, "下单冲突"))
+
+	current, err := fixture.store.GetLogicalAccount(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "PAUSED", current.AutomationState)
+	require.Equal(t, store.MarginPauseReason(), current.PauseReason)
+	target, err = fixture.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "下单冲突", target.LastError)
+}
+
 // 旧目标的市价单挂着时等它结束，不撤单，也不下新单。
 func TestTargetExecutorFullOmissionWaitsForOldTargetOrder(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)

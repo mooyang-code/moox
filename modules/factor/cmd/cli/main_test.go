@@ -66,7 +66,7 @@ func TestStatusRequiresFactorTarget(t *testing.T) {
 }
 
 func TestLegacyCLICommandsAreRemoved(t *testing.T) {
-	for _, command := range []string{"recalc-cancel", "recalc-status", "clear-queue", "replay", "run-once"} {
+	for _, command := range []string{"recalc-cancel", "recalc-status", "clear-queue", "replay"} {
 		_, err := parseArgs([]string{command})
 		require.ErrorContains(t, err, "unknown command")
 	}

@@ -14,7 +14,7 @@ worker:
   takeover_wait: 45s
 
 schedule:
-  # 复核从水位往前回看的最少时长。
+  # 复核从水位往前回看的最少时长；更早的晚到写入由 worker 按 Storage 的变更日志找出并重读。
   min_lookback: 15m
 
 retention:
