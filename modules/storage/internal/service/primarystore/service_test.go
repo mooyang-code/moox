@@ -86,9 +86,9 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	if err != nil || completed.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("completed rsp=%v err=%v", completed, err)
 	}
-	entries, err := store.ListOutbox(context.Background(), 0, 10)
+	page, err := store.ReadMarkerChanges(context.Background(), 0, 100)
 	require.NoError(t, err)
-	require.Len(t, entries, 1, "Outbox 只有周期完成，行写入不进 Outbox")
+	require.Len(t, page.Markers, 1, "待转发的只有周期完成，行写入不产生事件")
 }
 
 type factorResultSnapshot struct{}

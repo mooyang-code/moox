@@ -123,35 +123,6 @@ func TestQuiescedAtSurvivesRestart(t *testing.T) {
 	require.True(t, self.Quiesced())
 }
 
-// 暂停代次：模块每次从放行变为不放行加一，重复查询不重复计数。
-func TestModuleGenerationAdvancesOnEachClose(t *testing.T) {
-	f := newFake()
-	c, err := New(Options{Module: "m", Hooks: f.hooks()})
-	require.NoError(t, err)
-	ctx := context.Background()
-	c.Refresh(ctx)
-	require.True(t, c.ModuleOpen())
-	g0 := c.ModuleGeneration()
-	require.Equal(t, g0, c.ModuleGeneration())
-
-	_, err = c.Command(ctx, CmdPause, Ref{})
-	require.NoError(t, err)
-	require.False(t, c.ModuleOpen())
-	g1 := c.ModuleGeneration()
-	require.Equal(t, g0+1, g1)
-	require.Equal(t, g1, c.ModuleGeneration())
-
-	_, err = c.Command(ctx, CmdResume, Ref{})
-	require.NoError(t, err)
-	c.Refresh(ctx)
-	require.True(t, c.ModuleOpen())
-	require.Equal(t, g1, c.ModuleGeneration(), "重新放行不改变代次")
-
-	_, err = c.Command(ctx, CmdPause, Ref{})
-	require.NoError(t, err)
-	require.Equal(t, g1+1, c.ModuleGeneration())
-}
-
 // 等待是针对某一轮暂停做的：上一轮的等待结果在期间恢复又暂停之后，不能把下一轮误报为已收敛。
 func TestLateQuiesceOfAnEarlierRoundDoesNotConfirmTheNextRound(t *testing.T) {
 	f := newFake()

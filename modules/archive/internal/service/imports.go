@@ -44,18 +44,16 @@ func validateImportFile(importID, fileName string) (string, error) {
 	return importID + "/" + fileName, nil
 }
 
-// activeWorker 返回持有活动租约的 worker；没有时报错。
-func (s *Service) activeWorker(ctx context.Context, now time.Time) (store.Worker, error) {
-	workers, err := s.store.ListWorkers(ctx)
+// onlineWorker 返回在线的 worker；不在线时报错。
+func (s *Service) onlineWorker(ctx context.Context) (store.Worker, error) {
+	w, ok, err := s.store.GetWorker(ctx)
 	if err != nil {
 		return store.Worker{}, err
 	}
-	for _, w := range workers {
-		if w.Active(now) {
-			return w, nil
-		}
+	if !ok || !workerOnline(w, s.clock()) {
+		return store.Worker{}, errors.New("归档 worker 不在线，无法导入")
 	}
-	return store.Worker{}, errors.New("没有活动的归档 worker，无法导入")
+	return w, nil
 }
 
 func (m *MgrService) PrepareArchiveImport(ctx context.Context, req *archivepb.PrepareArchiveImportReq) (*archivepb.PrepareArchiveImportRsp, error) {
@@ -67,7 +65,7 @@ func (m *MgrService) PrepareArchiveImport(ctx context.Context, req *archivepb.Pr
 	if _, err := s.store.GetTask(ctx, space, req.GetDatasetId()); err != nil {
 		return &archivepb.PrepareArchiveImportRsp{RetInfo: fail(err)}, nil
 	}
-	worker, err := s.activeWorker(ctx, s.clock())
+	worker, err := s.onlineWorker(ctx)
 	if err != nil {
 		return &archivepb.PrepareArchiveImportRsp{RetInfo: conflict(err)}, nil
 	}

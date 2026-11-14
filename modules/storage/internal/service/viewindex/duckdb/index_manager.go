@@ -1064,11 +1064,9 @@ func (m *IndexManager) Remove(_ context.Context, id string) error {
 	if err := m.closeIndex(id); err != nil {
 		return err
 	}
-	// DuckDB may leave a write-ahead log beside the database. Remove it with
-	// the index so it does not strand storage on disk. The
-	// WAL is removed first: if that removal fails, the main managed file remains
-	// discoverable and the cleanup Timer can retry the complete artifact.
-	// 专属临时目录最先删除，原因同上：它删不掉时主文件还在，清理定时器会整体重试。
+	// DuckDB 可能在数据库旁留下 WAL，随索引一起删。先删 WAL：它删不掉时主文件还在，
+	// 下次启动清理孤立文件时还能找到并整体重试。
+	// 专属临时目录最先删除，原因同上：它删不掉时主文件还在，下次启动清理孤立文件时整体重试。
 	if err := os.RemoveAll(indexTempDir(path)); err != nil {
 		return err
 	}

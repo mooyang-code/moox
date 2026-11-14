@@ -64,27 +64,7 @@ func (c *Controller) moduleOpen() bool {
 func (c *Controller) ModuleOpen() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.trackOpen()
 	return c.moduleOpen()
-}
-
-// ModuleGeneration 返回模块的暂停代次：模块每次从放行变为不放行加一。
-// 在途的长任务（补算作业）记下领取时的代次，代次变化说明期间发生过暂停，不能再沿用旧的执行上下文写结果。
-func (c *Controller) ModuleGeneration() uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.trackOpen()
-	return c.generation
-}
-
-// trackOpen 在模块由放行变为不放行时推进代次；调用方持有锁。每次状态变更落盘前与每次查询时都会调用，
-// 所以两次观察之间的任何一次关闭都会被计入。
-func (c *Controller) trackOpen() {
-	open := c.moduleOpen()
-	if c.wasOpen && !open {
-		c.generation++
-	}
-	c.wasOpen = open
 }
 
 // Quiesced 报告对象本次暂停是否已经收敛：处于暂停、有暂停详情，并且收敛时间不早于本次暂停的开始时间。

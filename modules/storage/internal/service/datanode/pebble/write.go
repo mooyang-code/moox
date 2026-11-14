@@ -48,15 +48,15 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID string, row
 	if err := s.requireDataset(spaceID, datasetID); err != nil {
 		return err
 	}
-	// 编码 KV、整理变更范围与锁无关，放在 outboxMu 之外：并发写入与完成标记不必排在这一步后面。锁内只提交。
+	// 编码 KV、整理变更范围与锁无关，放在 changeMu 之外：并发写入与完成标记不必排在这一步后面。锁内只提交。
 	write, err := s.prepareRowsWrite(ctx, spaceID, datasetID, normalized)
 	if err != nil {
 		return err
 	}
 	defer write.batch.Close()
 	preparedAt = time.Now()
-	s.outboxMu.Lock()
-	defer s.outboxMu.Unlock()
+	s.changeMu.Lock()
+	defer s.changeMu.Unlock()
 	lockedAt = time.Now()
 	if err := s.commitRowsWriteLocked(ctx, write, nil); err != nil {
 		return err
@@ -100,7 +100,7 @@ type preparedRowsWrite struct {
 	records   []*pb.RecordRowKey
 }
 
-// prepareRowsWrite 只读 Store 的静态配置，不读写变更序号，可以在 outboxMu 之外并发执行。
+// prepareRowsWrite 只读 Store 的静态配置，不读写变更序号，可以在 changeMu 之外并发执行。
 func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) (*preparedRowsWrite, error) {
 	// One batch preserves all field changes from a request. The change log is
 	// staged into the same batch.
@@ -163,8 +163,8 @@ func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string,
 	return &preparedRowsWrite{batch: batch, spaceID: spaceID, datasetID: datasetID, ranges: changeRanges(rows), records: changeRecords(rows)}, nil
 }
 
-// commitRowsWriteLocked 在 outboxMu 内完成写入：追加变更日志，由 decorate 补充同一批次里的其他键
-// （周期账本），然后提交。调用方必须持有 outboxMu（它同时保护变更日志的序号）。
+// commitRowsWriteLocked 在 changeMu 内完成写入：追加变更日志，由 decorate 补充同一批次里的其他键
+// （周期账本），然后提交。调用方必须持有 changeMu（它同时保护变更日志的序号）。
 func (s *Store) commitRowsWriteLocked(ctx context.Context, prepared *preparedRowsWrite, decorate func(*cpebble.Batch) error) error {
 	// 等锁期间请求可能已超时或取消：此时不再提交，客户端重试时不会重复写入。
 	if err := ctx.Err(); err != nil {

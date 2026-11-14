@@ -175,7 +175,6 @@ async function gateway(route: Route) {
             last_heartbeat_at: iso(NOW - 12_000),
             root_dir: "/data/moox/archive",
             version: "v0.6.0",
-            instance_id: "inst-1",
             disk_total_bytes: String(1800 * GiB),
             disk_used_bytes: String(137 * GiB),
             disk_free_bytes: String(1570 * GiB),

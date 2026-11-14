@@ -140,7 +140,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	files := export.Files{Root: root, Format: export.FormatCSV}
 	newWorker := func() *app.App {
 		return app.New(app.Options{
-			Config: wcfg, Manager: inProcess{svc.Worker()}, Staging: stage, Files: files, InstanceID: "i1", Version: "e2e", Now: clock,
+			Config: wcfg, Manager: inProcess{svc.Worker()}, Staging: stage, Files: files, Version: "e2e", Now: clock,
 			Runner:    &runner.Runner{Source: storage, Staging: stage, Files: files, Pace: instant{}, PageRows: 2000, Now: clock, ReadAttempts: 1},
 			DiskUsage: func(string) (uint64, uint64, uint64, error) { return 1 << 40, 1 << 38, 1 << 39, nil },
 		})
@@ -183,7 +183,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 		t.Fatalf("partitions = %v", parts.GetPartitions())
 	}
 	p := parts.GetPartitions()[0]
-	if p.GetPartitionKey() != "2026-10-16" || p.GetStatus() != "exported" || p.GetRowCount() != 2*4*60 || p.GetSubjectCount() != 2 || p.GetWorkerId() != "archive-worker@e2e" ||
+	if p.GetPartitionKey() != "2026-10-16" || p.GetStatus() != "exported" || p.GetRowCount() != 2*4*60 || p.GetSubjectCount() != 2 ||
 		p.GetFilePath() != "crypto/collect/binance-spot-kline-1m/2026/20261016.csv" || p.GetFileSha256() == "" || p.GetExportCount() != 1 || !strings.HasPrefix(p.GetPreview(), "data_time,subject_id,series_tag,close,open\n") {
 		t.Fatalf("partition = %v", p)
 	}

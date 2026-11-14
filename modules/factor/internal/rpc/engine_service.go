@@ -36,15 +36,14 @@ type ParamAPI interface {
 type EngineService struct {
 	hub    EngineHub
 	params ParamAPI
-	filled *FilledInbox
 }
 
-// NewEngineService 构造服务；filled 非空时心跳响应带上暂存的补齐通知。
-func NewEngineService(hub EngineHub, params ParamAPI, filled *FilledInbox) *EngineService {
-	return &EngineService{hub: hub, params: params, filled: filled}
+// NewEngineService 构造服务。
+func NewEngineService(hub EngineHub, params ParamAPI) *EngineService {
+	return &EngineService{hub: hub, params: params}
 }
 
-// GetTaskParams 返回任务各可变成员最近一次被接受的提交；只有持有引擎租约的进程可以调用。
+// GetTaskParams 返回任务各可变成员最近一次被接受的提交；只有当前登记的引擎进程可以调用。
 func (s *EngineService) GetTaskParams(ctx context.Context, req *factorpb.GetTaskParamsReq) (*factorpb.GetTaskParamsRsp, error) {
 	if !s.hub.HoldsLease(factorwire.EngineIdentityFromPB(req.GetEngine())) {
 		return &factorpb.GetTaskParamsRsp{RetInfo: engineError(enginehub.ErrLeaseConflict)}, nil
@@ -91,12 +90,7 @@ func (s *EngineService) EngineHeartbeat(ctx context.Context, req *factorpb.Engin
 	if err != nil {
 		return &factorpb.EngineHeartbeatRsp{RetInfo: engineError(err)}, nil
 	}
-	rsp := &factorpb.EngineHeartbeatRsp{RetInfo: success(), LeaseTtlSeconds: int64(ttl / time.Second)}
-	if s.filled != nil {
-		// 心跳成功说明对方持有租约：补齐通知只交给它。
-		rsp.Filled = s.filled.Drain()
-	}
-	return rsp, nil
+	return &factorpb.EngineHeartbeatRsp{RetInfo: success(), LeaseTtlSeconds: int64(ttl / time.Second)}, nil
 }
 
 func (s *EngineService) PullRecalcJob(ctx context.Context, req *factorpb.PullRecalcJobReq) (*factorpb.PullRecalcJobRsp, error) {
@@ -146,7 +140,7 @@ type UdfModuleAPI interface {
 	UdfModule(ctx context.Context, hash string) (string, []byte, error)
 }
 
-// GetUdfModule 按版本哈希返回一个自定义算子模块的 wasm 字节；只有持有引擎租约的进程可以调用。
+// GetUdfModule 按版本哈希返回一个自定义算子模块的 wasm 字节；只有当前登记的引擎进程可以调用。
 func (s *EngineService) GetUdfModule(ctx context.Context, req *factorpb.GetUdfModuleReq) (*factorpb.GetUdfModuleRsp, error) {
 	if !s.hub.HoldsLease(factorwire.EngineIdentityFromPB(req.GetEngine())) {
 		return &factorpb.GetUdfModuleRsp{RetInfo: engineError(enginehub.ErrLeaseConflict)}, nil

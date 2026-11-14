@@ -125,38 +125,7 @@ describe("Trade public API", () => {
     });
   });
 
-  it("keeps manual ownership fields server-controlled", async () => {
-    await trade.placeManualOrder({
-      action_id: "action-1",
-      trading_account_id: "account-1",
-      client_order_id: "client1",
-      instrument_id: "instrument-1",
-      order_type: 1,
-      fill_policy: 0,
-      side: 2,
-      position_side: 1,
-      quantity: "0.01",
-      reason: "manual risk reduction"
-    });
-    const request = callTrade.mock.calls[0][2];
-    expect(request).toEqual({
-      action_id: "action-1",
-      trading_account_id: "account-1",
-      client_order_id: "client1",
-      instrument_id: "instrument-1",
-      order_type: 1,
-      fill_policy: 0,
-      side: 2,
-      position_side: 1,
-      quantity: "0.01",
-      reason: "manual risk reduction"
-    });
-    expect(request).not.toHaveProperty("source");
-    expect(request).not.toHaveProperty("owner_id");
-    expect(request).not.toHaveProperty("reduce_position_only");
-  });
-
-  it("uses ordinary admission without the takeover endpoint", async () => {
+  it("人工下单只有 SubmitOrder 一个接口，归属字段由服务端决定", async () => {
     const request = {
       action_id: "ordinary-1",
       logical_account_id: "manual-1",
@@ -174,6 +143,11 @@ describe("Trade public API", () => {
     await trade.submitOrder(request);
     expect(callTrade).toHaveBeenCalledTimes(1);
     expect(callTrade).toHaveBeenCalledWith("console", "SubmitOrder", request, { silent: true });
+    const sent = callTrade.mock.calls[0][2];
+    expect(sent).not.toHaveProperty("source");
+    expect(sent).not.toHaveProperty("owner_id");
+    expect(sent).not.toHaveProperty("reduce_position_only");
+    expect(trade).not.toHaveProperty("placeManualOrder");
   });
 
   it("reads current quantity targets and parses per-account flatten progress", async () => {

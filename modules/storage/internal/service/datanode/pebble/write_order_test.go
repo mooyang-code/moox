@@ -47,21 +47,21 @@ func TestConcurrentWritesKeepChangeSequencesContiguous(t *testing.T) {
 	require.Len(t, subjects, writers*perWriter)
 }
 
-// 预处理完成后在等 outboxMu 期间请求被取消：拿到锁后不再提交，不留下变更日志，否则调用方超时重试会重复写入。
+// 预处理完成后在等 changeMu 期间请求被取消：拿到锁后不再提交，不留下变更日志，否则调用方超时重试会重复写入。
 func TestWriteCanceledWhileWaitingForLockIsNotCommitted(t *testing.T) {
 	s := openChangeLogStore(t, 0)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
-	s.outboxMu.Lock()
+	s.changeMu.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
 		err := upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 1)})
 		done <- err
 	}()
-	time.Sleep(100 * time.Millisecond) // 让写入完成预处理并阻塞在 outboxMu 上
+	time.Sleep(100 * time.Millisecond) // 让写入完成预处理并阻塞在 changeMu 上
 	cancel()
-	s.outboxMu.Unlock()
+	s.changeMu.Unlock()
 
 	require.ErrorIs(t, <-done, context.Canceled)
 	head, err := s.ChangeCursor()

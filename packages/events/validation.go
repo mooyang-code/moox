@@ -264,6 +264,20 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 	if payload.GetConfirmedAt() == nil || payload.GetConfirmedAt().CheckValid() != nil {
 		return fmt.Errorf("collector kline backfilled confirmed_at is invalid")
 	}
+	for _, absent := range payload.GetAbsent() {
+		if !validRequiredToken(absent.GetSubjectId()) {
+			return fmt.Errorf("collector kline backfilled absent subject_id %q is invalid", absent.GetSubjectId())
+		}
+		if tag := absent.GetSeriesTag(); tag != "" {
+			if err := validateSeriesTag(tag); err != nil {
+				return fmt.Errorf("collector kline backfilled absent series_tag %q: %w", tag, err)
+			}
+		}
+		from, to := absent.GetStart(), absent.GetEnd()
+		if from == nil || to == nil || from.CheckValid() != nil || to.CheckValid() != nil || !to.AsTime().After(from.AsTime()) {
+			return fmt.Errorf("collector kline backfilled absent range is invalid")
+		}
+	}
 	switch payload.GetOrigin() {
 	case "auto", "manual", "force", "resample":
 		return nil

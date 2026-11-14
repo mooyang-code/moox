@@ -15,7 +15,7 @@ const (
 	HealthError   = "error"
 	HealthPaused  = "paused"
 
-	// workerOfflineLimit 是有到期运行时活动 worker 离线多久之后算异常。
+	// workerOfflineLimit 是有到期运行时 worker 离线多久之后算异常。
 	workerOfflineLimit = 30 * time.Minute
 )
 
@@ -29,8 +29,7 @@ type healthInput struct {
 	OpenParts  []store.Partition
 	// OldestQueued 是最早一条排队中运行的计划时刻，没有则为零值。
 	OldestQueued time.Time
-	// WorkerOfflineSince 是活动 worker 离线的起点（最近一次心跳或从未心跳时的零值）；有活动 worker 时为 Active。
-	WorkerActive    bool
+	// WorkerLastSeen 是 worker 最近一次心跳的时间，从未心跳时为零值。
 	WorkerLastSeen  time.Time
 	Lookback        time.Duration
 	SpaceTZ         string
@@ -79,13 +78,13 @@ func evaluateHealth(in healthInput) (string, string) {
 	if len(in.Task.Unrecoverable) > 0 {
 		errs = append(errs, fmt.Sprintf("有 %d 段数据已超出线上保留期、无法补齐", len(in.Task.Unrecoverable)))
 	}
-	if !in.OldestQueued.IsZero() && !in.WorkerActive {
+	if !in.OldestQueued.IsZero() {
 		offlineSince := in.WorkerLastSeen
 		if offlineSince.IsZero() || in.OldestQueued.After(offlineSince) {
 			offlineSince = in.OldestQueued
 		}
 		if in.Now.Sub(offlineSince) > workerOfflineLimit {
-			errs = append(errs, fmt.Sprintf("有到期的运行等待，活动 worker 已离线超过 %s", workerOfflineLimit))
+			errs = append(errs, fmt.Sprintf("有到期的运行等待，worker 已离线超过 %s", workerOfflineLimit))
 		}
 	}
 	remoteErr, remoteWarn := remoteReason(in)

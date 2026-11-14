@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -390,13 +391,14 @@ func TestRestoreActiveViewsSkipsUnreadableIndex(t *testing.T) {
 	}
 }
 
-// 元数据里已删除的 View：维护后不再挂接，GetViewState 返回 VIEW_NOT_FOUND，索引不再受保护（由退役清理回收）。
+// 元数据里已删除的 View：维护后不再挂接，GetViewState 返回 VIEW_NOT_FOUND，索引文件当场删除。
 func TestMaintenanceForgetsDeletedViews(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc.engines["bleve"] = &queryEngine{stats: builtStats("prices", 1, "hash")}
+	engine := &removeRecordingEngine{queryEngine: &queryEngine{stats: builtStats("prices", 1, "hash")}}
+	svc.engines["bleve"] = engine
 	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices", Status: "active"}
 	if err := svc.AttachActiveView(context.Background(), view, builtStats("prices", 1, "hash")); err != nil {
 		t.Fatal(err)
@@ -408,21 +410,33 @@ func TestMaintenanceForgetsDeletedViews(t *testing.T) {
 	}
 	// 停用的 View 仍在元数据里：不摘掉。
 	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", Status: "disabled"}}, svc.internalAuth())
-	if active, _ := svc.activeIndex("space", "prices"); active == "" {
-		t.Fatal("停用的 View 不应摘掉")
+	if active, _ := svc.activeIndex("space", "prices"); active == "" || len(engine.removed) != 0 {
+		t.Fatalf("停用的 View 不应摘掉，也不删文件：removed=%v", engine.removed)
 	}
 	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "other"}}, svc.internalAuth())
 	state, _ = svc.GetViewState(context.Background(), &pb.GetViewStateReq{AuthInfo: auth, SpaceId: "space", ViewId: "prices"})
 	if state.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_FOUND {
 		t.Fatalf("删除后 = %v，想要 VIEW_NOT_FOUND", state.GetRetInfo())
 	}
-	protected, err := svc.cleanupProtectedIndexes(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "other"}})
-	if err != nil {
-		t.Fatal(err)
+	if want := []string{viewindex.ViewIndexID("space", "prices")}; !reflect.DeepEqual(engine.removed, want) {
+		t.Fatalf("删除的索引 = %v，期望 %v", engine.removed, want)
 	}
-	if cleanupIndexProtected(protected, managedIndexRef{engine: "bleve", indexID: viewindex.ViewIndexID("space", "prices")}) {
-		t.Fatal("已删除 View 的索引不应再受保护")
+	// 再跑一轮不重复删。
+	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "other"}}, svc.internalAuth())
+	if len(engine.removed) != 1 {
+		t.Fatalf("重复删除：%v", engine.removed)
 	}
+}
+
+// removeRecordingEngine 记下被删除的索引。
+type removeRecordingEngine struct {
+	*queryEngine
+	removed []string
+}
+
+func (e *removeRecordingEngine) Remove(_ context.Context, id string) error {
+	e.removed = append(e.removed, id)
+	return nil
 }
 
 // pageMetadata 按页返回固定的列表响应，用来构造分页信息不完整的元数据。

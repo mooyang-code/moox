@@ -52,7 +52,7 @@ func TestDeleteViewRemovesOnlyTheNamedView(t *testing.T) {
 	summary, err := deleteView(context.Background(), deleteViewOptions{metadataDB: path, view: "stockcn/view_stockcn_kline_5m"})
 	require.NoError(t, err)
 	require.Equal(t, 1, summary.DeletedViews)
-	require.Equal(t, []retainedIndex{{Engine: "duckdb", IndexID: viewindex.ViewIndexID("stockcn", "view_stockcn_kline_5m")}}, summary.RetiredIndexes, "View 的索引要交给清理定时器")
+	require.Equal(t, []retainedIndex{{Engine: "duckdb", IndexID: viewindex.ViewIndexID("stockcn", "view_stockcn_kline_5m")}}, summary.RetiredIndexes, "View 的索引留给 storage-view 启动时清理")
 
 	require.Zero(t, countRows(t, path, `SELECT COUNT(*) FROM t_views WHERE c_view_id = 'view_stockcn_kline_5m'`))
 	require.Equal(t, 1, countRows(t, path, `SELECT COUNT(*) FROM t_views WHERE c_view_id = 'view_factor_1h'`), "其他 View 不受影响")

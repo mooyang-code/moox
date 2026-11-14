@@ -2,6 +2,7 @@ package exchange
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -17,6 +18,23 @@ const (
 	// 逐个请求盘口一批 16 单要几十次往返。
 	bookBoardTTL = time.Second
 )
+
+type cachedQuotesKey struct{}
+
+// ErrQuoteNotCached 表示只读缓存的取价没有可用的缓存。
+var ErrQuoteNotCached = errors.New("报价不在缓存里")
+
+// WithCachedQuotes 返回“只读已有报价缓存”的上下文：用它取价不向交易所发请求，
+// 缓存里没有、或比 maxAge 旧时按取不到处理。管理台的查询用它，不为一次页面刷新占交易所的限频额度。
+func WithCachedQuotes(ctx context.Context, maxAge time.Duration) context.Context {
+	return context.WithValue(ctx, cachedQuotesKey{}, maxAge)
+}
+
+// CachedQuotesOnly 报告上下文是否只读报价缓存，以及可接受的最长缓存时间。
+func CachedQuotesOnly(ctx context.Context) (time.Duration, bool) {
+	maxAge, ok := ctx.Value(cachedQuotesKey{}).(time.Duration)
+	return maxAge, ok
+}
 
 // Book 是一个标的的买一卖一。
 type Book struct {
@@ -64,6 +82,14 @@ func (b *board[V]) get(
 ) (V, time.Time, bool) {
 	b.once.Do(func() { b.snapshot = cache.NewSnapshot[map[SymbolKey]V](ttl) })
 	var zero V
+	if maxAge, only := CachedQuotesOnly(ctx); only {
+		values, at, ok := b.snapshot.Peek(maxAge)
+		if !ok {
+			return zero, time.Time{}, false
+		}
+		value, ok := values[key]
+		return value, at, ok
+	}
 	values, at, err := b.snapshot.Get(ctx, fetch)
 	if err != nil {
 		return zero, time.Time{}, false

@@ -130,7 +130,6 @@ var consoleOnly = map[string]string{
 	"trpc.moox.trade.TradeConsoleService/ResumeLogicalAccount":              tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/FlattenLogicalAccount":             tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/FlattenTradingAccount":             tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/PlaceManualOrder":                  tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/SubmitOrder":                       tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/CancelOrder":                       tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/CreatePaperSimulation":             tradeWriteReason,

@@ -122,6 +122,13 @@
                 >保持</span
               >
               <span v-else-if="record.state === 'ok'" class="tx-muted">到位</span>
+              <a-tooltip
+                v-else-if="record.state === 'unknown'"
+                content="后端没有给出这个标的是否到位的结论：判断要用的报价不在缓存里（组合暂停、目标过期或休市时常见），或读取失败"
+              >
+                <span class="tx-st tx-st--warn">未知</span>
+              </a-tooltip>
+              <div v-if="record.settledReason" class="tx-muted">{{ record.settledReason }}</div>
               <div v-if="record.deferredReason" class="tx-muted">顺延：{{ record.deferredReason }}</div>
             </template>
           </template>

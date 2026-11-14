@@ -74,40 +74,14 @@ func TestPausedModuleRejectsWritesLeasesAndReplayWrites(t *testing.T) {
 
 	client := &jobClientFake{job: testJob("BTC"), found: true}
 	loop := &recalcLoop{client: client, executor: recalcexec.NewExecutor(&planRecorder{}), source: &sourceFake{}, poll: time.Millisecond,
-		leaseAllowed: r.leaseAllowed, generation: r.life.ModuleGeneration, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") }}
+		leaseAllowed: r.leaseAllowed, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") }}
 	found, err := loop.RunOnce(ctx)
 	require.NoError(t, err)
 	require.False(t, found)
 	require.Zero(t, client.pulled, "暂停期间不领取补算")
 }
 
-// 领取请求在途时暂停要等它返回；领取回来的作业带着领取时的代次，之后暂停过就不能再写。
-func TestLeaseGenerationInvalidatesOldJobContext(t *testing.T) {
-	r, _ := newLifecycleRuntime(t)
-	startRunningModule(t, r)
-	ctx := context.Background()
-
-	old := withLeaseGeneration(ctx, r.life.ModuleGeneration())
-	release, ok := r.beginWrite(old, "ftask_a", true, true)
-	require.True(t, ok)
-	release()
-
-	// 暂停、恢复进入追赶：追赶门禁放行，但旧的执行上下文代次已过期。
-	_, err := r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
-	require.NoError(t, err)
-	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, Ref: lifecycle.Ref{}, ManualRelease: true})
-	require.NoError(t, err)
-	require.True(t, r.catchupGate("ftask_a"), "追赶门禁放行（没有目录同步器时不要求前置条件）")
-
-	_, ok = r.beginWrite(old, "ftask_a", true, true)
-	require.False(t, ok, "领取之后暂停过，旧上下文不能再写")
-	fresh := withLeaseGeneration(ctx, r.life.ModuleGeneration())
-	release, ok = r.beginWrite(fresh, "ftask_a", true, true)
-	require.True(t, ok)
-	release()
-}
-
-// 模块暂停时补算作业立刻放弃，不在门禁重开后继续（作业只能重新领取）；任务级的门禁等待仍然保留。
+// 模块暂停时补算作业立刻放弃并归还，不占着作业等门禁重开（放行后重新领取）；任务级的门禁等待仍然保留。
 func TestRecalcJobIsAbandonedWhenTheModulePauses(t *testing.T) {
 	r, _ := newLifecycleRuntime(t)
 	startRunningModule(t, r)
@@ -120,7 +94,7 @@ func TestRecalcJobIsAbandonedWhenTheModulePauses(t *testing.T) {
 		}))
 	loop := &recalcLoop{client: client, executor: executor, source: &sourceFake{}, poll: time.Millisecond,
 		gateWait: 5 * time.Second, gateRetry: time.Millisecond,
-		leaseAllowed: r.leaseAllowed, generation: r.life.ModuleGeneration, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") }}
+		leaseAllowed: r.leaseAllowed, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") }}
 
 	// 第一块跑完后暂停模块，再下一块被门禁挡住；作业不能等到“门禁重开”。
 	var chunks int
@@ -147,7 +121,58 @@ func TestRecalcJobIsAbandonedWhenTheModulePauses(t *testing.T) {
 	require.Less(t, time.Since(started), 2*time.Second, "不等待门禁重开")
 	require.Len(t, runner.plans, 1, "暂停之后没有再写任何分块")
 	require.NotContains(t, reportedStatuses(client), jobStatusFailed)
+	statuses := reportedStatuses(client)
+	require.Equal(t, jobStatusAccepted, statuses[len(statuses)-1], "放弃的作业要归还，不等作业租约过期")
 	<-pauseDone // 暂停命令还会写生命周期状态文件：等它结束，临时目录才能干净清理
+}
+
+// 暂停前领取的作业还在补历史（不在在途登记里）时模块暂停、收敛、恢复进入追赶：追赶门禁放行分块，
+// 但恢复追赶期间不续跑补算作业，补历史结束后作业直接归还，一个分块都不写。
+func TestJobPulledBeforePauseDoesNotContinueDuringCatchup(t *testing.T) {
+	r, _ := newLifecycleRuntime(t)
+	startRunningModule(t, r)
+	ctx := context.Background()
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	executor := recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond),
+		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) {
+			return r.beginWrite(ctx, taskID, true, true)
+		}))
+	inHistory, unblock := make(chan struct{}), make(chan struct{})
+	loop := &recalcLoop{client: client, executor: executor, source: &sourceFake{}, poll: time.Millisecond,
+		gateWait: 5 * time.Second, gateRetry: time.Millisecond,
+		leaseAllowed: r.leaseAllowed, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") },
+		history: func(context.Context, domain.EngineTask, []string, int) error {
+			close(inHistory)
+			<-unblock
+			return nil
+		}}
+	type outcome struct {
+		found bool
+		err   error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		found, err := loop.RunOnce(ctx)
+		result <- outcome{found, err}
+	}()
+	<-inHistory
+	obj, err := r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
+	require.NoError(t, err)
+	require.True(t, obj.Quiesced(), "补历史不在在途登记里，暂停立即收敛")
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, Ref: lifecycle.Ref{}, ManualRelease: true})
+	require.NoError(t, err)
+	require.True(t, r.catchupGate("ftask_a"), "追赶门禁放行分块")
+	require.False(t, r.leaseAllowed())
+
+	started := time.Now()
+	close(unblock)
+	got := <-result
+	require.NoError(t, got.err)
+	require.False(t, got.found)
+	require.Less(t, time.Since(started), 2*time.Second, "不等门禁重开")
+	require.Empty(t, runner.plans, "恢复追赶期间不续跑暂停前领取的作业")
+	require.Equal(t, []string{jobStatusAccepted}, reportedStatuses(client), "作业被归还")
 }
 
 type hookRunner struct {

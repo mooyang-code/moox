@@ -16,7 +16,7 @@ import (
 )
 
 // 按 cmd/server 的 primary 角色装配（SQLite 元数据、元数据缓存、Metadata 服务建数据集、带 DatasetExists 的 Pebble、
-// PrimaryStore、后台连接 EventBus 的 Outbox 转发）再接一个跟随变更日志的 View：View 的维护流程从 Primary 建索引，
+// PrimaryStore、后台连接 EventBus 的完成事件转发）再接一个跟随变更日志的 View：View 的维护流程从 Primary 建索引，
 // 之后建数据集 → 写入 → 周期完成 → View 就绪，账本判定完成（K 线）与写入方上报完成（因子）两条路都走一遍。
 func TestPrimaryAndViewProcessesCompletePeriodFlow(t *testing.T) {
 	subjects := []string{"BTC-USDT", "ETH-USDT", "SOL-USDT"}

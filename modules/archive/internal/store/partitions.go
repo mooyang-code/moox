@@ -18,7 +18,6 @@ type Partition struct {
 	RangeStart    time.Time
 	RangeEnd      time.Time
 	Status        string
-	WorkerID      string
 	RowCount      uint64
 	SubjectCount  uint64
 	MinDataTime   time.Time
@@ -53,7 +52,7 @@ func (p Partition) Replicated() bool {
 	return p.FilePath != "" && p.Remote.SHA256 == p.FileSHA256 && !p.Remote.VerifiedAt.IsZero()
 }
 
-const partitionColumns = `c_space_id, c_dataset_id, c_partition_key, c_range_start, c_range_end, c_status, c_worker_id, c_row_count, c_subject_count,
+const partitionColumns = `c_space_id, c_dataset_id, c_partition_key, c_range_start, c_range_end, c_status, c_row_count, c_subject_count,
 c_min_data_time, c_max_data_time, c_file_path, c_file_bytes, c_file_sha256, c_columns_json, c_preview, c_export_count,
 c_last_changed_at, c_exported_at, c_finalized_at, c_last_run_id, c_ctime, c_mtime,
 c_remote_key, c_remote_sha256, c_remote_etag, c_remote_uploaded_at, c_remote_verified_at, c_remote_error`
@@ -62,7 +61,7 @@ func scanPartition(row rowScanner) (Partition, error) {
 	var p Partition
 	var rangeStart, rangeEnd, minTime, maxTime, changed, exported, finalized, created, updated, uploaded, verified timeValue
 	var columns string
-	err := row.Scan(&p.SpaceID, &p.DatasetID, &p.PartitionKey, &rangeStart, &rangeEnd, &p.Status, &p.WorkerID, &p.RowCount, &p.SubjectCount,
+	err := row.Scan(&p.SpaceID, &p.DatasetID, &p.PartitionKey, &rangeStart, &rangeEnd, &p.Status, &p.RowCount, &p.SubjectCount,
 		&minTime, &maxTime, &p.FilePath, &p.FileBytes, &p.FileSHA256, &columns, &p.Preview, &p.ExportCount,
 		&changed, &exported, &finalized, &p.LastRunID, &created, &updated,
 		&p.Remote.Key, &p.Remote.SHA256, &p.Remote.ETag, &uploaded, &verified, &p.Remote.Error)
@@ -170,7 +169,6 @@ FROM t_archive_partitions WHERE (? = '' OR c_space_id = ?) GROUP BY c_space_id, 
 // CompleteRequest 是 worker 上报的运行结果。
 type CompleteRequest struct {
 	RunID         string
-	WorkerID      string
 	LeaseToken    string
 	Status        string
 	Message       string
@@ -197,7 +195,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 		if err != nil {
 			return err
 		}
-		if run.LeaseToken != req.LeaseToken || run.WorkerID != req.WorkerID {
+		if run.LeaseToken != req.LeaseToken {
 			return ErrConflict
 		}
 		if run.Status != RunRunning && run.Status != RunCanceled {
@@ -238,7 +236,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 			return err
 		}
 		for _, partition := range req.Partitions {
-			partition.SpaceID, partition.DatasetID, partition.WorkerID, partition.LastRunID = run.SpaceID, run.DatasetID, req.WorkerID, req.RunID
+			partition.SpaceID, partition.DatasetID, partition.LastRunID = run.SpaceID, run.DatasetID, req.RunID
 			if err := upsertPartition(ctx, tx, partition); err != nil {
 				return err
 			}
@@ -378,15 +376,14 @@ func upsertPartition(ctx context.Context, tx *sql.Tx, p Partition) error {
 	}
 	if !found {
 		_, err = tx.ExecContext(ctx, insertPartition,
-			p.SpaceID, p.DatasetID, p.PartitionKey, fmtTime(p.RangeStart), fmtTime(p.RangeEnd), p.Status, p.WorkerID,
+			p.SpaceID, p.DatasetID, p.PartitionKey, fmtTime(p.RangeStart), fmtTime(p.RangeEnd), p.Status,
 			p.RowCount, p.SubjectCount, nullTime(p.MinDataTime), nullTime(p.MaxDataTime), p.FilePath, p.FileBytes, p.FileSHA256, columns, p.Preview, p.ExportCount,
 			nullTime(p.LastChangedAt), nullTime(p.ExportedAt), nullTime(p.FinalizedAt), p.LastRunID,
 			p.Remote.Key, p.Remote.SHA256, p.Remote.ETag, nullTime(p.Remote.UploadedAt), nullTime(p.Remote.VerifiedAt), p.Remote.Error)
 		return err
 	}
-	// c_worker_id 写成本次上报的 worker：任务可以派给任何持有活动租约的 worker，它只用于展示与排障。
 	_, err = tx.ExecContext(ctx, updatePartition,
-		fmtTime(p.RangeStart), fmtTime(p.RangeEnd), p.Status, p.WorkerID, p.RowCount, p.SubjectCount, nullTime(p.MinDataTime), nullTime(p.MaxDataTime),
+		fmtTime(p.RangeStart), fmtTime(p.RangeEnd), p.Status, p.RowCount, p.SubjectCount, nullTime(p.MinDataTime), nullTime(p.MaxDataTime),
 		p.FilePath, p.FileBytes, p.FileSHA256, columns, p.Preview, p.ExportCount, nullTime(p.LastChangedAt), nullTime(p.ExportedAt),
 		nullTime(p.FinalizedAt), p.LastRunID,
 		p.Remote.Key, p.Remote.SHA256, p.Remote.ETag, nullTime(p.Remote.UploadedAt), nullTime(p.Remote.VerifiedAt), p.Remote.Error,
@@ -483,12 +480,12 @@ ORDER BY c_partition_key`
 	completeRun = `UPDATE t_archive_runs SET c_status = ?, c_finished_at = ?, c_message = ?, c_subjects_total = ?, c_subjects_done = ?,
 c_request_count = ?, c_bytes_read = ?, c_rows_read = ?, c_rows_added = ?, c_rows_changed = ?, c_partitions_exported = ?, c_partitions_finalized = ?,
 c_partitions_uploaded = ?, c_unrecoverable_json = ?, c_lease_until = NULL, c_lease_token = '' WHERE c_run_id = ?`
-	insertPartition = `INSERT INTO t_archive_partitions (c_space_id, c_dataset_id, c_partition_key, c_range_start, c_range_end, c_status, c_worker_id,
+	insertPartition = `INSERT INTO t_archive_partitions (c_space_id, c_dataset_id, c_partition_key, c_range_start, c_range_end, c_status,
 c_row_count, c_subject_count, c_min_data_time, c_max_data_time, c_file_path, c_file_bytes, c_file_sha256, c_columns_json, c_preview, c_export_count,
 c_last_changed_at, c_exported_at, c_finalized_at, c_last_run_id,
 c_remote_key, c_remote_sha256, c_remote_etag, c_remote_uploaded_at, c_remote_verified_at, c_remote_error)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	updatePartition = `UPDATE t_archive_partitions SET c_range_start = ?, c_range_end = ?, c_status = ?, c_worker_id = ?, c_row_count = ?, c_subject_count = ?,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	updatePartition = `UPDATE t_archive_partitions SET c_range_start = ?, c_range_end = ?, c_status = ?, c_row_count = ?, c_subject_count = ?,
 c_min_data_time = ?, c_max_data_time = ?, c_file_path = ?, c_file_bytes = ?, c_file_sha256 = ?, c_columns_json = ?, c_preview = ?, c_export_count = ?,
 c_last_changed_at = ?, c_exported_at = ?, c_finalized_at = ?, c_last_run_id = ?,
 c_remote_key = ?, c_remote_sha256 = ?, c_remote_etag = ?, c_remote_uploaded_at = ?, c_remote_verified_at = ?, c_remote_error = ?

@@ -60,7 +60,7 @@ func (h *Hub) lastHeartbeat(ctx context.Context) (string, time.Time, error) {
 	return saved.EngineID, saved.At, nil
 }
 
-// Presence 评估引擎在线状态：存在启用的因子任务才要求有引擎；按最近一次被接受的心跳是否在 2 分钟内判断，与 45 秒的租约无关。
+// Presence 评估引擎在线状态：存在启用的因子任务才要求有引擎；按最近一次被接受的心跳是否在 2 分钟内判断，与 45 秒的在线判定无关。
 func (h *Hub) Presence(ctx context.Context) (state int, engineID string, lastHeartbeat time.Time, err error) {
 	sets, err := h.store.ListTasks(ctx)
 	if err != nil {

@@ -40,14 +40,8 @@ type DatasetQuery struct {
 	Page         *pb.Page
 }
 
-// SnapshotReader is the request-scoped metadata surface used by validators.
-// Implementations must expose one immutable cache generation.
-type SnapshotReader interface {
-	GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error)
-	ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
-}
-
-// RequestSnapshot 是一次请求内校验与读写共用的不可变元数据版本。
+// RequestSnapshot 是一次请求内校验与读写共用的不可变元数据版本，只含写路径用到的部分：数据集与它的列定义。
+// 返回的消息与切片由各请求共享，调用方只读。
 type RequestSnapshot interface {
 	GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool)
 	ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)

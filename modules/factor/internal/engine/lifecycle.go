@@ -119,25 +119,11 @@ func (r *Runtime) catchupModulesPending(taskID string) string {
 // 这几条路径原先只看目录与租约（active），任务暂停后仍会写结果，现在统一并入生命周期门禁。
 func (r *Runtime) writeGate(taskID string) bool { return r.gate(taskID) || r.catchupGate(taskID) }
 
-// leaseGenerationKey 是补算作业领取时记下的模块暂停代次，放在执行上下文里。
-type leaseGenerationKey struct{}
-
-// withLeaseGeneration 返回带着暂停代次的上下文：代次之后发生过暂停，这个上下文里的写结果操作一律被拒绝。
-func withLeaseGeneration(ctx context.Context, generation uint64) context.Context {
-	return context.WithValue(ctx, leaseGenerationKey{}, generation)
-}
-
 // beginWrite 是写结果操作的登记式门禁：先登记在途，再检查门禁，不允许就立刻注销并拒绝。live 表示实时门禁放行，
-// catchup 表示恢复追赶的门禁放行；上下文带着领取代次时，代次变化（期间暂停过）也拒绝。
-func (r *Runtime) beginWrite(ctx context.Context, taskID string, live, catchup bool) (func(), bool) {
+// catchup 表示恢复追赶的门禁放行。暂停先关门禁、再等登记的在途操作结束，所以暂停收敛之后不会再有结果写出。
+func (r *Runtime) beginWrite(_ context.Context, taskID string, live, catchup bool) (func(), bool) {
 	release := r.writes.enter(taskID)
-	allowed := (live && r.gate(taskID)) || (catchup && r.catchupGate(taskID))
-	if allowed {
-		if generation, ok := ctx.Value(leaseGenerationKey{}).(uint64); ok && generation != r.life.ModuleGeneration() {
-			allowed = false
-		}
-	}
-	if !allowed {
+	if allowed := (live && r.gate(taskID)) || (catchup && r.catchupGate(taskID)); !allowed {
 		release()
 		return nil, false
 	}

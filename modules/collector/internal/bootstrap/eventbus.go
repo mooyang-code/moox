@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/delist"
 	"github.com/mooyang-code/moox/modules/collector/internal/eventbus"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
+	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	binanceclient "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -18,8 +19,10 @@ import (
 // eventBusRuntime 是 Collector 级的 EventBus 接入：共享连接和独立的发件箱中继。
 // K 线合成、下架检测等事件生产者都往同一个发件箱写，由中继发布；中继不依赖 K 线合成是否开启。
 type eventBusRuntime struct {
-	hub       *eventbus.Hub
-	relay     *eventbus.Relay
+	hub   *eventbus.Hub
+	relay *eventbus.Relay
+	// notices 把补写通知封存成 event.collector.kline.backfilled：补采作业结束时、合成的定时器和历史作业都会调它。
+	notices   *collectorresample.NoticePublisher
 	attention *attention.Attention
 }
 
@@ -40,7 +43,8 @@ func newEventBusRuntime(cfg *Config, dbm *store.Store, attn *attention.Attention
 	hub.Attention = attn
 	relay := eventbus.NewRelay(dbm.Resample(), registry, hub, relayInterval)
 	relay.Attention = attn
-	return &eventBusRuntime{hub: hub, relay: relay, attention: attn}, nil
+	notices := &collectorresample.NoticePublisher{State: dbm.Resample(), Registry: registry, Absences: dbm.Backfill(), Enabled: true, Wake: relay.Wake}
+	return &eventBusRuntime{hub: hub, relay: relay, notices: notices, attention: attn}, nil
 }
 
 // start 启动中继循环（连接在循环里建立并自动重试）。必须在各生产者注册完连接成功后的回调之后调用。

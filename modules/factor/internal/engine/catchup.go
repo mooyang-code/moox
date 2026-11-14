@@ -2,18 +2,16 @@ package engine
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/seriesset"
+	"github.com/mooyang-code/moox/packages/storagepb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// runCatchup 是连续水位的追赶循环：按间隔（保底，读回 Storage）或收到补齐通知时，对落后或阻塞的任务继续推进。
+// runCatchup 是连续水位的追赶循环：按间隔（保底，读回 Storage）或收到补写事件时，对落后或阻塞的任务继续推进。
 func (r *Runtime) runCatchup(ctx context.Context) {
 	ticker := time.NewTicker(r.cfg.Watermark.PollInterval)
 	defer ticker.Stop()
@@ -57,67 +55,64 @@ func advanceAll(ctx context.Context, taskIDs []string, budget time.Duration, adv
 	wg.Wait()
 }
 
-// onFilled 处理补齐通知：记下补采确认缺失的标的，标记这段周期已补齐（上游失败的待办不再等 Settle），
-// 唤醒追赶与跳过恢复。
-func (r *Runtime) onFilled(filled []*factorpb.PeriodsFilled, kickGap func()) {
-	for _, item := range filled {
-		// 同一个源数据集上的每个任务（各策略实例的私有任务）都要知道这段周期已补齐。
-		sets, err := r.catalog.EnabledTasksByDataset(context.Background(), item.GetSpaceId(), item.GetDatasetId(), item.GetFrequency())
+// onBackfilled 处理源 K 线补写事件（event.collector.kline.backfilled：补采分块确认、合成补写）：
+// 记下补采确认行情源没有的标的或序列，标记这段周期已补齐（上游失败的待办不再等 Settle），唤醒追赶与跳过恢复。
+// 被补写的行本身由本地数据跟随 Storage 变更日志取回并触发失效重算，这里不重复做。
+func (r *Runtime) onBackfilled(spaceID string, payload *storagepb.CollectorKlineBackfilled) {
+	// 同一个源数据集上的每个任务（各策略实例的私有任务）都要知道这段周期已补齐。
+	sets, err := r.catalog.EnabledTasksByDataset(context.Background(), spaceID, payload.GetDatasetId(), payload.GetFrequency())
+	if err != nil {
+		return
+	}
+	realFrom, realTo := payload.GetStart().AsTime(), payload.GetEnd().AsTime()
+	for _, engineTask := range sets {
+		set := engineTask.Set
+		// 事件里是真实时间的 [start, end)：换到轴上再记。
+		axis, err := periodclock.AxisFor(set.SpaceID, set.Freq)
 		if err != nil {
 			continue
 		}
-		for _, engineTask := range sets {
-			set := engineTask.Set
-			// 补齐通知来自心跳响应，是真实时间的 [from, to)：换到轴上再记。
-			axis, err := periodclock.AxisFor(set.SpaceID, set.Freq)
+		from, to, err := axisRange(axis, realFrom, realTo)
+		if err != nil {
+			log.Warnf("factor_kline_backfilled_invalid task_id=%s from=%s to=%s error=%v", set.TaskID, realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339), err)
+			continue
+		}
+		r.filled.add(set.TaskID, from, to)
+		for _, absent := range payload.GetAbsent() {
+			absentFrom, absentTo, err := axisRange(axis, absent.GetStart().AsTime(), absent.GetEnd().AsTime())
 			if err != nil {
+				log.Warnf("factor_kline_backfilled_absent_invalid task_id=%s subject=%s error=%v", set.TaskID, absent.GetSubjectId(), err)
 				continue
 			}
-			realFrom, realTo := time.Unix(item.GetFrom(), 0).UTC(), time.Unix(item.GetTo(), 0).UTC()
-			from, err := axis.ToAxis(realFrom)
-			if err == nil {
-				var to time.Time
-				if to, err = axis.AxisEnd(realTo); err == nil {
-					r.noteFilled(set, axis, from, to, item.GetAbsentSubjects(), absentSeriesOf(item.GetAbsentSeries()))
-				}
-			}
-			if err != nil {
-				log.Warnf("factor_periods_filled_invalid task_id=%s from=%s to=%s error=%v", set.TaskID, realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339), err)
-				continue
-			}
-			log.Infof("factor_periods_filled task_id=%s from=%s to=%s absent=%s absent_series=%d", set.TaskID, realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339), strings.Join(item.GetAbsentSubjects(), ","), len(item.GetAbsentSeries()))
-			select {
-			case r.advanceKick <- set.TaskID:
-			default:
+			// 带 series_tag 的只扣这一条序列（统一数据集），同标的的另一个市场照常算；不带的扣整个标的。
+			if tag := absent.GetSeriesTag(); tag != "" {
+				r.continuity.NoteAbsent(set.TaskID, absentFrom, absentTo, axis.Step(), nil, []seriesset.Series{{SubjectID: absent.GetSubjectId(), SeriesTag: tag}})
+			} else {
+				r.continuity.NoteAbsent(set.TaskID, absentFrom, absentTo, axis.Step(), []string{absent.GetSubjectId()}, nil)
 			}
 		}
+		log.Infof("factor_kline_backfilled task_id=%s from=%s to=%s origin=%s absent=%d", set.TaskID, realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339), payload.GetOrigin(), len(payload.GetAbsent()))
+		select {
+		case r.advanceKick <- set.TaskID:
+		default:
+		}
 	}
-	if kickGap != nil {
-		kickGap()
+	if r.kickGap != nil {
+		r.kickGap()
 	}
 }
 
-// noteFilled 在轴上记下一段已补齐的周期 [from, to)：补采确认缺失的标的或序列、上游失败的待办不再等 Settle。
-// 按序列确认缺失的通知（统一数据集）只表示那一条序列没有，不是整段补齐，所以只记确认缺失、不记补齐范围：
-// 同一次补采的整段补齐通知（不带确认缺失）已经记过范围，只补了永续的通知不会误记现货。
-func (r *Runtime) noteFilled(set domain.FactorTask, axis periodclock.Axis, from, to time.Time, absent []string, absentSeries []seriesset.Series) {
-	r.continuity.NoteAbsent(set.TaskID, from, to, axis.Step(), absent, absentSeries)
-	if len(absentSeries) > 0 && len(absent) == 0 {
-		return
+// axisRange 把真实时间的 [from, to) 换到任务的时间轴上。
+func axisRange(axis periodclock.Axis, from, to time.Time) (time.Time, time.Time, error) {
+	axisFrom, err := axis.ToAxis(from.UTC())
+	if err != nil {
+		return time.Time{}, time.Time{}, err
 	}
-	r.filled.add(set.TaskID, from, to)
+	axisTo, err := axis.AxisEnd(to.UTC())
+	return axisFrom, axisTo, err
 }
 
-// absentSeriesOf 把通知里的序列名单转成内部类型。
-func absentSeriesOf(values []*factorpb.SeriesRef) []seriesset.Series {
-	out := make([]seriesset.Series, 0, len(values))
-	for _, value := range values {
-		out = append(out, seriesset.Series{SubjectID: value.GetSubjectId(), SeriesTag: value.GetSeriesTag()})
-	}
-	return out
-}
-
-// filledPeriods 记录收到补齐通知的周期范围（1 小时后过期）。
+// filledPeriods 记录收到补写事件的周期范围（1 小时后过期）。
 type filledPeriods struct {
 	mu     sync.Mutex
 	now    func() time.Time
@@ -138,7 +133,7 @@ func (f *filledPeriods) add(taskID string, from, to time.Time) {
 	f.ranges[taskID] = append(f.ranges[taskID], filledRange{from: from, to: to, until: f.now().Add(time.Hour)})
 }
 
-// covers 判断该任务这一期是否已收到补齐通知。
+// covers 判断该任务这一期是否已收到补写事件。
 func (f *filledPeriods) covers(taskID string, period time.Time) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -36,7 +36,6 @@ export interface ArchiveRun {
   scheduled_at?: string;
   started_at?: string;
   finished_at?: string;
-  worker_id?: string;
   lease_until?: string;
   subjects_total?: number | string;
   subjects_done?: number | string;
@@ -105,7 +104,6 @@ export interface ArchivePartition {
   range_start?: string;
   range_end?: string;
   status?: ArchivePartitionStatus;
-  worker_id?: string;
   row_count?: number | string;
   subject_count?: number | string;
   min_data_time?: string;
@@ -143,7 +141,6 @@ export interface ArchiveObjectStore {
 
 export interface ArchiveWorkerInfo {
   worker_id?: string;
-  instance_id?: string;
   version?: string;
   root_dir?: string;
   /** 磁盘总量（statfs Blocks） */
@@ -158,9 +155,8 @@ export interface ArchiveWorkerInfo {
   maintaining?: boolean;
   pacing_json?: string;
   running_run_ids?: string[];
-  lease_until?: string;
   last_heartbeat_at?: string;
-  /** 租约未过期 */
+  /** 最近 2 分钟内有心跳 */
   active?: boolean;
   object_store?: ArchiveObjectStore;
 }
@@ -182,7 +178,6 @@ export interface AvoidanceRules {
 
 export interface GetArchiveOverviewRsp {
   worker?: ArchiveWorkerInfo;
-  stale_workers?: ArchiveWorkerInfo[];
   /** 只算当前空间 */
   running_runs?: ArchiveRun[];
   task_count?: number;

@@ -4,7 +4,7 @@ package e2e
 
 // View 跟随变更日志路径的装配：PrimaryStore（直接读写 Pebble）→ 变更日志 → View 跟随器 → ViewDataReady 发布到 EventBus。
 // 各组件都在本进程内，Primary 与 View 之间是进程内调用，没有 RPC；EventBus 是内嵌的 NATS JetStream（文件存储，本机回环连接），
-// MOOX_STORAGE 的主题、2 分钟去重窗口、8MB 消息上限与生产一致，Outbox 照常转发 period.completed 等跨机事件。
+// MOOX_STORAGE 的主题、2 分钟去重窗口、8MB 消息上限与生产一致，转发协程照常把 period.completed 发到 EventBus。
 
 import (
 	"context"
@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	storageoutbox "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/outbox"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
+	storagerelay "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/relay"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
@@ -156,7 +156,7 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 	}
 	env.watcher = newReadyWatcher(t, nc)
 
-	// Primary：Pebble 与 PrimaryStore，写入时按数据集点查确认它仍在；Outbox 照常转发跨机事件。
+	// Primary：Pebble 与 PrimaryStore，写入时按数据集点查确认它仍在；转发协程照常转发周期完成事件。
 	snapshot := newFollowEnvSnapshot(datasets)
 	datasetExists := opts.datasetExists
 	if datasetExists == nil {
@@ -182,7 +182,7 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 	if err != nil {
 		t.Fatal(err)
 	}
-	stopRelay, err := storageoutbox.StartWithEventBus(ctx, env.store, jetstream.Config{URLs: []string{server.ClientURL()}, Name: "storage-primary-follow-env"})
+	stopRelay, err := storagerelay.StartWithEventBus(ctx, env.store, jetstream.Config{URLs: []string{server.ClientURL()}, Name: "storage-primary-follow-env"})
 	if err != nil {
 		t.Fatal(err)
 	}

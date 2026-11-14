@@ -170,7 +170,7 @@ func TestContinuityBlocksOnAZeroCommitPeriodUntilBackfilled(t *testing.T) {
 	require.Equal(t, "no_rows", state.BlockedReason)
 	require.Equal(t, h.now, state.BlockedSince)
 
-	// 追赶（保底轮询或补齐通知）时读回仍缺：不动。
+	// 追赶（保底轮询或K 线补写事件）时读回仍缺：不动。
 	require.NoError(t, h.handler.Advance(context.Background(), h.taskID))
 	require.Len(t, h.runner.plans, 1)
 	// 补采补齐 t0+1，t0+2 也读回齐全：按顺序补算，水位追上，阻塞清除。
@@ -291,7 +291,7 @@ func TestContinuityReusesTheInFlightTriggerAfterACrash(t *testing.T) {
 	require.Equal(t, minuteAt(1), h.state().CommittedThrough)
 }
 
-// 补齐通知（心跳线程）与推进并发时没有数据竞争（配合 -race）。
+// K 线补写事件（消费协程）与推进并发时没有数据竞争（配合 -race）。
 func TestContinuityNoteAbsentConcurrentWithAdvance(t *testing.T) {
 	h := newContinuityHarness(t)
 	universe := subjectsN(20)

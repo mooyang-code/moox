@@ -141,16 +141,10 @@ describe("未归档的数据集", () => {
 
   it("提醒里只去掉和任务健康原因完全相同的（任务表已显示），其余以任务 ID 开头的照常显示", () => {
     const tasks = [{ dataset_id: "ds_1m", health_reason: "最近一次成功运行距今 30 天" }];
-    expect(
-      systemAlerts(
-        [
-          "ds_1m：最近一次成功运行距今 30 天",
-          "ds_1m：分区登记在 worker a，当前活动 worker 是 b，运行不会派给它",
-          "没有活动的归档 worker"
-        ],
-        tasks
-      )
-    ).toEqual(["ds_1m：分区登记在 worker a，当前活动 worker 是 b，运行不会派给它", "没有活动的归档 worker"]);
+    expect(systemAlerts(["ds_1m：最近一次成功运行距今 30 天", "ds_1m：别的提醒", "归档 worker 不在线"], tasks)).toEqual([
+      "ds_1m：别的提醒",
+      "归档 worker 不在线"
+    ]);
   });
 
   it("分区预计导出时间：解析后端的文本，时刻按空间时区；读不懂时原样", () => {

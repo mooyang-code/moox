@@ -50,9 +50,8 @@ func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJ
 	return store.RecalcJob{}, domain.EngineTask{}, false, nil
 }
 
-// Report records a chunk of a leased job and returns the job's current state.
-// Only the engine holding the engine lease may report, so an engine that lost
-// the lease cannot keep a long job alive next to the new lease holder.
+// Report 记录已领取作业的一个分块并返回作业的当前状态；status 为 accepted 时是引擎归还作业（回到待领取）。
+// 只有当前登记的引擎进程可以上报：被重启后的新进程顶替的旧进程不能再给作业续租。
 func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID, leaseToken string, progress time.Time, status, errText string, defaultFilled map[string][]store.TimeRange) (store.RecalcJob, error) {
 	now := h.now().UTC()
 	if !h.holdsLease(id, now) {

@@ -1,4 +1,4 @@
-package outbox
+package relay
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 
 var testMarkerSeq atomic.Int64
 
-// appendTestMarker 追加一条写入方上报的周期完成标记，在 Outbox 里留下一条待转发的事件；每次调用的触发事件不同。
+// appendTestMarker 追加一条写入方上报的周期完成标记，在变更日志里留下一条待转发的事件；每次调用的触发事件不同。
 func appendTestMarker(ctx context.Context, store *pebble.Store, spaceID, datasetID string) (string, error) {
 	n := testMarkerSeq.Add(1)
 	raw, _, err := pebble.BuildProducerPeriodCompletedMessage(spaceID, &pb.DatasetPeriodCompletedMarker{

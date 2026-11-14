@@ -2,23 +2,24 @@ package service
 
 import (
 	"context"
-	"errors"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
-	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
-// Presence 评估归档 worker 在线状态：存在启用的归档任务才要求有 worker；按当前单活动 worker 的模型，
-// 只看最近一次心跳的那台是否在 2 分钟内有心跳，换机后留下的旧登记不影响判定。
+// workerOnline 报告 worker 在 2 分钟内是否有心跳。
+func workerOnline(w store.Worker, now time.Time) bool {
+	return report.EvaluatePresence(true, w.LastHeartbeat, now, report.DefaultPresenceTimeout) == report.PresenceOnline
+}
+
+// Presence 评估归档 worker 在线状态：存在启用的归档任务才要求有 worker，看它是否在 2 分钟内有心跳。
 func (s *Service) Presence(ctx context.Context) (state int, workerID string, lastHeartbeat time.Time, err error) {
 	required, err := s.store.HasEnabledTasks(ctx)
 	if err != nil {
 		return 0, "", time.Time{}, err
 	}
-	worker, ok, err := s.store.LatestWorker(ctx)
+	worker, ok, err := s.store.GetWorker(ctx)
 	if err != nil {
 		return 0, "", time.Time{}, err
 	}
@@ -28,16 +29,16 @@ func (s *Service) Presence(ctx context.Context) (state int, workerID string, las
 	return report.EvaluatePresence(required, lastHeartbeat, s.clock(), report.DefaultPresenceTimeout), workerID, lastHeartbeat, nil
 }
 
-// ObjectStoreState 评估最近一次心跳的 worker 的对象存储可用状态（见 report.EvaluateObjectStore）。
+// ObjectStoreState 评估 worker 的对象存储可用状态（见 report.EvaluateObjectStore）。
 // worker 没有配置对象存储、或在线状态不新鲜（2 分钟内没有心跳）时 ok 为 false，不上报。
 func (s *Service) ObjectStoreState(ctx context.Context) (workerID string, state int, probeError string, ok bool, err error) {
-	worker, found, err := s.store.LatestWorker(ctx)
+	worker, found, err := s.store.GetWorker(ctx)
 	if err != nil || !found {
 		return "", 0, "", false, err
 	}
 	now := s.clock()
 	info := objectStoreFromJSON(worker.ObjectStoreJSON)
-	if info.GetEndpoint() == "" || report.EvaluatePresence(true, worker.LastHeartbeat, now, report.DefaultPresenceTimeout) != report.PresenceOnline {
+	if info.GetEndpoint() == "" || !workerOnline(worker, now) {
 		return "", 0, "", false, nil
 	}
 	// 时间由 worker 按 RFC3339 写入；解析不了按可用处理。
@@ -69,20 +70,4 @@ func (s *Service) TaskHealthLevels(ctx context.Context) ([]report.ArchiveTaskLev
 		out = append(out, report.ArchiveTaskLevel{Space: v.GetSpaceId(), Dataset: v.GetDatasetId(), Level: level})
 	}
 	return out, nil
-}
-
-// RetireArchiveWorker 删除一条不再使用的 worker 登记；仍持有活动租约时拒绝。
-func (m *MgrService) RetireArchiveWorker(ctx context.Context, req *archivepb.RetireArchiveWorkerReq) (*archivepb.RetireArchiveWorkerRsp, error) {
-	workerID := strings.TrimSpace(req.GetWorkerId())
-	if workerID == "" {
-		return &archivepb.RetireArchiveWorkerRsp{RetInfo: invalid(errors.New("worker_id 不能为空"))}, nil
-	}
-	retired, err := m.svc.store.RetireWorker(ctx, workerID, m.svc.clock())
-	if errors.Is(err, store.ErrWorkerActive) {
-		return &archivepb.RetireArchiveWorkerRsp{RetInfo: conflict(errors.New("worker 仍持有活动租约，停止它约 1 分钟后再退役"))}, nil
-	}
-	if err != nil {
-		return &archivepb.RetireArchiveWorkerRsp{RetInfo: inner(err)}, nil
-	}
-	return &archivepb.RetireArchiveWorkerRsp{RetInfo: success(), Retired: retired}, nil
 }

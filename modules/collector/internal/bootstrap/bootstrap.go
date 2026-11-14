@@ -158,7 +158,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	}
 	bus.start(process)
 	control := &collectorControl{}
-	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control); err != nil {
+	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control, bus); err != nil {
 		return nil, err
 	}
 	if err := registerHealth(s, cfg, dbm, process, control); err != nil {
@@ -376,11 +376,9 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 	maintenanceRunner := marketfetch.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.offset(), retentionConfig.timeout(), func(passCtx context.Context) error {
 		now := time.Now().UTC()
 		var passErrors []error
-		// 合成的清理不分空间，每轮都做；即使当前没有任何空间在管理集合里。
-		if resample != nil {
-			if err := resample.cleanup(passCtx, now); err != nil {
-				passErrors = append(passErrors, err)
-			}
+		// 补写通知与发件箱的清理不分空间，每轮都做：合成关闭、当前没有任何空间在管理集合里时也一样。
+		if err := cleanupNoticeState(passCtx, dbm.Resample(), now); err != nil {
+			passErrors = append(passErrors, err)
 		}
 		// 每轮现取管理集合（与采集计划同一份名单），任务增删、空间启停后下一轮就生效。
 		spaceIDs, err := managedSpaces(passCtx, cfg, dbm)

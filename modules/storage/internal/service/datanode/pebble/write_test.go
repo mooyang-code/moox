@@ -42,7 +42,7 @@ func TestUpsertFieldsWholeRowUpsertOverwritesNullFields(t *testing.T) {
 	}
 }
 
-// 准备在 outboxMu 之外：并发写入各占一个变更序号，序号连续。
+// 准备在 changeMu 之外：并发写入各占一个变更序号，序号连续。
 func TestUpsertFieldsConcurrentWritesKeepChangeSequenceContiguous(t *testing.T) {
 	store := openFactorRowsStore(t)
 	rows := func(value float64) []*pb.RowFieldUpsert {
@@ -93,21 +93,21 @@ func TestUpsertFieldsThenMarkerOrdering(t *testing.T) {
 	if _, err := store.AppendDatasetMarker(context.Background(), message); err != nil {
 		t.Fatal(err)
 	}
-	// 变更日志里行在前、完成标记在后；Outbox 只有完成标记。
+	// 变更日志里行在前、完成标记在后；待转发的只有完成标记。
 	changes := readAllChanges(t, store, "space", "factor_result")
 	if len(changes) != 2 || len(changes[0].GetRecords()) == 0 || len(changes[1].GetMarker()) == 0 {
 		t.Fatalf("changes=%v", changes)
 	}
-	entries, err := store.ListOutbox(context.Background(), 0, 10)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("outbox entries=%v err=%v", entries, err)
+	entries := listMarkerChanges(t, store)
+	if len(entries) != 1 {
+		t.Fatalf("完成标记条目=%v", entries)
 	}
 	markerMessage := &eventpb.EventMessage{}
 	if err := proto.Unmarshal(entries[0].Data, markerMessage); err != nil {
 		t.Fatal(err)
 	}
 	if markerMessage.GetEventName() != events.DatasetPeriodCompleted.Name() {
-		t.Fatalf("outbox event=%q", markerMessage.GetEventName())
+		t.Fatalf("marker event=%q", markerMessage.GetEventName())
 	}
 }
 

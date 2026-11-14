@@ -268,6 +268,17 @@ func TestActivationPrerequisites(t *testing.T) {
 	name, _, _ := db.GetUdf(ctx, "ts_mean_udf")
 	require.Equal(t, v1.Hash, name.ActiveHash, "前提不满足时不改数据")
 
+	// 领取过又被引擎归还的作业（回到 accepted，绑定已固化）同样拒绝；从未领取过的 accepted 作业不拦。
+	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status = store.RecalcStatusAccepted; return nil })
+	require.NoError(t, err)
+	fresh, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-2", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
+	require.NoError(t, err)
+	_, err = db.SaveJobBindings(ctx, job.JobID, map[string]string{"ts_mean_udf": v1.Hash})
+	require.NoError(t, err)
+	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, false)
+	require.ErrorContains(t, err, job.JobID)
+	require.NotContains(t, err.Error(), fresh.JobID)
+
 	// 取消作业后切换成功；之后读取这些定义得到新的绑定。
 	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status = store.RecalcStatusCancelled; return nil })
 	require.NoError(t, err)

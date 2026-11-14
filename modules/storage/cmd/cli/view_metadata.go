@@ -126,7 +126,7 @@ func listViewRows(ctx context.Context, conn *sql.Conn) ([]viewRow, error) {
 }
 
 // deleteViewMetadata 删除一个 View 的元数据，并把它唯一的索引记进 summary，
-// 供之后由 Storage View 的清理定时器回收物理文件（索引文件不存在时清理什么都不做）。
+// storage-view 下次启动时会把它当作孤立文件删除（索引文件不存在时什么都不做）。
 func deleteViewMetadata(ctx context.Context, conn *sql.Conn, item viewRow, summary *removedViewsSummary) error {
 	summary.RetiredIndexes = append(summary.RetiredIndexes, retainedIndex{Engine: item.engine, IndexID: viewindex.ViewIndexID(item.spaceID, item.viewID)})
 	if _, err := conn.ExecContext(ctx, `DELETE FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, item.spaceID, item.viewID); err != nil {

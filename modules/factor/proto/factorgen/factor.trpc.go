@@ -61,8 +61,6 @@ type FactorMgrService interface {
 
 	ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq) (*ListFactorFunctionsRsp, error)
 
-	NotifyPeriodsFilled(ctx context.Context, req *NotifyPeriodsFilledReq) (*NotifyPeriodsFilledRsp, error)
-
 	ListFactorCategories(ctx context.Context, req *ListFactorCategoriesReq) (*ListFactorCategoriesRsp, error)
 
 	UpsertFactorCategory(ctx context.Context, req *UpsertFactorCategoryReq) (*UpsertFactorCategoryRsp, error)
@@ -466,24 +464,6 @@ func FactorMgrService_ListFactorFunctions_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
-func FactorMgrService_NotifyPeriodsFilled_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &NotifyPeriodsFilledReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).NotifyPeriodsFilled(ctx, reqbody.(*NotifyPeriodsFilledReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func FactorMgrService_ListFactorCategories_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ListFactorCategoriesReq{}
 	filters, err := f(req)
@@ -790,10 +770,6 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: FactorMgrService_ListFactorFunctions_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/NotifyPeriodsFilled",
-			Func: FactorMgrService_NotifyPeriodsFilled_Handler,
-		},
-		{
 			Name: "/trpc.moox.factor.FactorMgr/ListFactorCategories",
 			Func: FactorMgrService_ListFactorCategories_Handler,
 		},
@@ -1080,9 +1056,6 @@ func (s *UnimplementedFactorMgr) PreviewFactor(ctx context.Context, req *Preview
 func (s *UnimplementedFactorMgr) ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq) (*ListFactorFunctionsRsp, error) {
 	return nil, errors.New("rpc ListFactorFunctions of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) NotifyPeriodsFilled(ctx context.Context, req *NotifyPeriodsFilledReq) (*NotifyPeriodsFilledRsp, error) {
-	return nil, errors.New("rpc NotifyPeriodsFilled of service FactorMgr is not implemented")
-}
 func (s *UnimplementedFactorMgr) ListFactorCategories(ctx context.Context, req *ListFactorCategoriesReq) (*ListFactorCategoriesRsp, error) {
 	return nil, errors.New("rpc ListFactorCategories of service FactorMgr is not implemented")
 }
@@ -1194,8 +1167,6 @@ type FactorMgrClientProxy interface {
 	PreviewFactor(ctx context.Context, req *PreviewFactorReq, opts ...client.Option) (rsp *PreviewFactorRsp, err error)
 
 	ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq, opts ...client.Option) (rsp *ListFactorFunctionsRsp, err error)
-
-	NotifyPeriodsFilled(ctx context.Context, req *NotifyPeriodsFilledReq, opts ...client.Option) (rsp *NotifyPeriodsFilledRsp, err error)
 
 	ListFactorCategories(ctx context.Context, req *ListFactorCategoriesReq, opts ...client.Option) (rsp *ListFactorCategoriesRsp, err error)
 
@@ -1645,26 +1616,6 @@ func (c *FactorMgrClientProxyImpl) ListFactorFunctions(ctx context.Context, req 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListFactorFunctionsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) NotifyPeriodsFilled(ctx context.Context, req *NotifyPeriodsFilledReq, opts ...client.Option) (*NotifyPeriodsFilledRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/NotifyPeriodsFilled")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("NotifyPeriodsFilled")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &NotifyPeriodsFilledRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

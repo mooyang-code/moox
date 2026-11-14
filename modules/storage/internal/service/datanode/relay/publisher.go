@@ -1,4 +1,4 @@
-package outbox
+package relay
 
 import (
 	"context"
@@ -11,8 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// JetStreamPublisher publishes one durable message to the subject owned by a
-// Dataset. The transport message id is stable for an outbox id.
+// JetStreamPublisher 把一条完成标记发布到它所属数据集的主题。传输层的消息 ID 就是事件 ID，重发不变。
 type JetStreamPublisher struct {
 	publisher *events.Publisher
 	client    *jetstream.Client
@@ -38,9 +37,8 @@ func (p *JetStreamPublisher) PublishMessageWithAck(ctx context.Context, data []b
 	return p.publisher.PublishMessage(ctx, message)
 }
 
-// Reconnect replaces the underlying NATS connection after an EventBus
-// restart. The relay invokes this only after repeated publish failures and
-// keeps the outbox entry pending until a subsequent publish succeeds.
+// Reconnect 在 EventBus 重启后替换底层 NATS 连接。转发协程只在连续发布失败后调用它，
+// 游标不动，直到之后的发布成功。
 func (p *JetStreamPublisher) Reconnect(ctx context.Context) error {
 	if p == nil || p.client == nil {
 		return errors.New("storage eventbus client is nil")
@@ -60,16 +58,13 @@ func validateDatasetEvent(data []byte) (string, string, error) {
 	if message.GetEventId() == "" || message.GetSubjectId() == "" || message.GetSpaceId() == "" {
 		return "", "", errors.New("dataset event envelope is incomplete")
 	}
-	if message.GetEventId() == "outbox-pending" {
-		return "", "", errors.New("dataset event cannot use placeholder event id")
-	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return "", "", err
 	}
 	event, ok := registry.Lookup(message.GetEventName(), message.GetEventVersion())
-	if !ok || !dataNodeOutboxEvent(event) {
-		return "", "", fmt.Errorf("不支持的 Outbox 事件 %s@%d", message.GetEventName(), message.GetEventVersion())
+	if !ok || !relayedEvent(event) {
+		return "", "", fmt.Errorf("不支持转发的事件 %s@%d", message.GetEventName(), message.GetEventVersion())
 	}
 	subject, err := registry.RenderSubject(event, message.GetSpaceId(), message.GetSubjectId())
 	if err != nil {
@@ -81,8 +76,8 @@ func validateDatasetEvent(data []byte) (string, string, error) {
 	return subject, message.GetEventId(), nil
 }
 
-// dataNodeOutboxEvent 报告事件能否经 Outbox 转发：Outbox 只承载周期完成事件。
-func dataNodeOutboxEvent(event events.Event) bool {
+// relayedEvent 报告事件能否转发：只转发周期完成事件。
+func relayedEvent(event events.Event) bool {
 	return event.Name() == events.DatasetPeriodCompleted.Name() && event.Version() == events.DatasetPeriodCompleted.Version()
 }
 

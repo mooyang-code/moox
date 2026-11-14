@@ -74,6 +74,12 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 		"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.factor_collector_period_v1",
 		"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_collector_period_v1",
 		"$JS.ACK.MOOX_STORAGE.factor_collector_period_v1.>",
+		// K 线补写事件的消费者在 MOOX_COLLECTOR 上。
+		"$JS.API.CONSUMER.INFO.*.factor_kline_backfilled_v1",
+		"$JS.API.CONSUMER.CREATE.MOOX_COLLECTOR.factor_kline_backfilled_v1",
+		"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_COLLECTOR.factor_kline_backfilled_v1",
+		"$JS.API.CONSUMER.MSG.NEXT.MOOX_COLLECTOR.factor_kline_backfilled_v1",
+		"$JS.ACK.MOOX_COLLECTOR.factor_kline_backfilled_v1.>",
 	} {
 		require.Contains(t, aclLine(factorACL, "publish:"), permission)
 	}

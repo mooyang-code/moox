@@ -24,7 +24,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
-	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -54,10 +53,11 @@ type Runtime struct {
 	metrics  *observability.Metrics
 	locks    *setlock.Locks
 	gap      *gapledger.Ledger
-	// continuity 维护各任务的连续水位；advanceKick 唤醒追赶循环（补齐通知）。
+	// continuity 维护各任务的连续水位；advanceKick 唤醒追赶循环、kickGap 唤醒跳过恢复（收到 K 线补写事件时）。
 	continuity  *eventconsumer.Continuity
 	watermarks  *watermark.Store
 	advanceKick chan string
+	kickGap     func()
 	// appCtx 是引擎运行期的上下文；catchups 记录恢复追赶中各任务的本地数据同步进展。
 	appCtx   context.Context
 	catchups catchupTracker
@@ -194,7 +194,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	}
 	r.params.onStale = func(taskID, reason string) { r.metrics.ParamStale.WithLabelValues(taskID, reason).Inc() }
 	r.advanceKick, r.filled = make(chan string, 64), newFilledPeriods(time.Now)
-	r.manager.OnFilled = func(filled []*factorpb.PeriodsFilled) { r.onFilled(filled, kickGap) }
+	r.kickGap = kickGap
 	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, r.data, clock, pipelineConfig)
 	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
@@ -233,7 +233,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) { return r.beginWrite(ctx, taskID, true, true) }),
 		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)), recalcexec.WithHistory(r.data))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval,
-		prepare: r.prepareJobModules, leaseAllowed: r.leaseAllowed, generation: r.life.ModuleGeneration, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") },
+		prepare: r.prepareJobModules, leaseAllowed: r.leaseAllowed, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") },
 		history: func(ctx context.Context, set domain.EngineTask, subjects []string, bars int) error {
 			_, err := r.data.BackfillTask(ctx, set, subjects, bars, nil)
 			return err
@@ -310,6 +310,7 @@ func (r *Runtime) reconcileConsumer() {
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
 			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate, CatchupGate: r.catchupGate,
+			OnBackfilled: r.onBackfilled,
 			Begin: func(ctx context.Context, taskID string, live bool) (func(), bool) {
 				return r.beginWrite(ctx, taskID, true, !live)
 			},

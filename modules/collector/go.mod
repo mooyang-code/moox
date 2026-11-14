@@ -10,7 +10,6 @@ require (
 	github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/barclock v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cloudprovider v0.0.0-00010101000000-000000000000
@@ -130,8 +129,6 @@ require (
 )
 
 replace github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen => ../cloudfunction/proto/cloudfunctiongen
-
-replace github.com/mooyang-code/moox/modules/factor/proto/factorgen => ../factor/proto/factorgen
 
 replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ./proto/collectorgen
 

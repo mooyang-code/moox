@@ -140,7 +140,6 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 		s.observeTimeSeriesRows(ctx, rows, "error", false)
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	// 写入已持久化，事件由 Outbox 转发协程异步发布。
 	keys := make([]*pb.RowKey, 0, len(rows))
 	for _, row := range rows {
 		key, err := pebble.NormalizeRowKey(row.GetKey())

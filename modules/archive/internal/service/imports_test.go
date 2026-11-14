@@ -18,9 +18,9 @@ func TestPrepareArchiveImportNeedsATaskAndAnActiveWorker(t *testing.T) {
 	requireCode(t, rsp.GetRetInfo(), commonpb.ErrorCode_NOT_FOUND, "")
 	requireOK(t, h.createOnly("ds_1m", nil).GetRetInfo())
 	rsp, _ = h.mgr.PrepareArchiveImport(ctx, &archivepb.PrepareArchiveImportReq{SpaceId: "crypto", DatasetId: "ds_1m"})
-	requireCode(t, rsp.GetRetInfo(), commonpb.ErrorCode_CONFLICT, "没有活动的归档 worker")
+	requireCode(t, rsp.GetRetInfo(), commonpb.ErrorCode_CONFLICT, "归档 worker 不在线")
 
-	h.heartbeat("w1", "i1")
+	h.heartbeat("w1")
 	rsp, _ = h.mgr.PrepareArchiveImport(ctx, &archivepb.PrepareArchiveImportReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, rsp.GetRetInfo())
 	if rsp.GetRootDir() != "/data/archive" || rsp.GetWorkerId() != "w1" || !importIDPattern.MatchString(rsp.GetImportId()) ||
@@ -79,13 +79,13 @@ func TestImportRunCarriesAllPartitionsAndDoesNotAdvanceLastSuccess(t *testing.T)
 	h := newHarness(t)
 	ctx := context.Background()
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo()) // 保留期 168h
-	h.heartbeat("w1", "i1")
-	first := h.pull("w1", "i1", 1)[0]
+	h.heartbeat("w1")
+	first := h.pull(1)[0]
 	old := &archivepb.PartitionReport{PartitionKey: "2026-01-05", Status: "final", RangeStart: "2026-01-05T00:00:00Z", RangeEnd: "2026-01-06T00:00:00Z",
 		FilePath: "crypto/collect/x/2026/20260105.csv.gz", FileSha256: "old", RowCount: 5, SubjectCount: 1, FinalizedAt: "2026-02-01T00:00:00Z"}
 	recent := &archivepb.PartitionReport{PartitionKey: "2026-10-16", Status: "final", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z",
 		FilePath: "crypto/collect/x/2026/20261016.csv.gz", FileSha256: "new", RowCount: 5, SubjectCount: 1, FinalizedAt: "2026-10-17T00:30:00Z"}
-	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: first.GetRunId(), LeaseToken: first.GetLeaseToken(), Status: "succeeded",
+	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: first.GetRunId(), LeaseToken: first.GetLeaseToken(), Status: "succeeded",
 		Partitions: []*archivepb.PartitionReport{old, recent}})
 	requireOK(t, r.GetRetInfo())
 	before, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
@@ -93,26 +93,26 @@ func TestImportRunCarriesAllPartitionsAndDoesNotAdvanceLastSuccess(t *testing.T)
 	// 复核只下发保留期内的登记（没启用对象存储）。
 	now, _ := h.mgr.RunArchiveTaskNow(ctx, &archivepb.RunArchiveTaskNowReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, now.GetRetInfo())
-	review := h.pull("w1", "i1", 1)[0]
+	review := h.pull(1)[0]
 	if len(review.GetRegisteredPartitions()) != 1 {
 		t.Fatalf("复核应只带保留期内的登记: %v", review.GetRegisteredPartitions())
 	}
-	r, _ = h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: review.GetRunId(), LeaseToken: review.GetLeaseToken(), Status: "canceled"})
+	r, _ = h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: review.GetRunId(), LeaseToken: review.GetLeaseToken(), Status: "canceled"})
 	requireOK(t, r.GetRetInfo())
 
 	h.now = h.now.Add(time.Hour)
 	id := newImportID()
 	imp, _ := h.mgr.ImportArchiveFile(ctx, &archivepb.ImportArchiveFileReq{SpaceId: "crypto", DatasetId: "ds_1m", ImportId: id, FileName: "import.csv"})
 	requireOK(t, imp.GetRetInfo())
-	h.heartbeat("w1", "i1")
-	assigned := h.pull("w1", "i1", 1)
+	h.heartbeat("w1")
+	assigned := h.pull(1)
 	if len(assigned) != 1 || assigned[0].GetKind() != store.KindImport || assigned[0].GetImportFile() != id+"/import.csv" || assigned[0].GetOverwrite() {
 		t.Fatalf("assignment = %v", assigned)
 	}
 	if regs := assigned[0].GetRegisteredPartitions(); len(regs) != 2 || regs[0].GetPartitionKey() != "2026-01-05" {
 		t.Fatalf("导入应下发全部登记: %v", regs)
 	}
-	r, _ = h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: assigned[0].GetRunId(), LeaseToken: assigned[0].GetLeaseToken(),
+	r, _ = h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: assigned[0].GetRunId(), LeaseToken: assigned[0].GetLeaseToken(),
 		Status: "succeeded", Message: "导入 3 行", RowsAdded: 3})
 	requireOK(t, r.GetRetInfo())
 	after, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
@@ -129,9 +129,9 @@ func TestClearArchiveUnrecoverableRemovesOnlyWholeRangesInside(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
-	h.heartbeat("w1", "i1")
-	run := h.pull("w1", "i1", 1)[0]
-	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded",
+	h.heartbeat("w1")
+	run := h.pull(1)[0]
+	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded",
 		Unrecoverable: []*archivepb.UnrecoverableRange{
 			{StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"},
 			{StartTime: "2026-10-03T00:00:00Z", EndTime: "2026-10-05T00:00:00Z"},

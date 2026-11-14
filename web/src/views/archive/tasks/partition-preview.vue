@@ -10,7 +10,6 @@
       <div class="meta">
         <span>{{ formatInstant(partition.range_start, zone) }} ～ {{ formatInstant(partition.range_end, zone) }}</span>
         <span>最近运行 {{ partition.last_run_id || "—" }}</span>
-        <span>执行器 {{ partition.worker_id || "—" }}</span>
       </div>
       <div class="sub">列：{{ (partition.columns || []).join("、") || "—" }}</div>
       <a-table

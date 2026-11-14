@@ -24,7 +24,6 @@ message ArchiveRun {
   string scheduled_at = 8;
   string started_at = 9;
   string finished_at = 10;
-  string worker_id = 11;
   string lease_until = 12;
   uint64 subjects_total = 13;
   uint64 subjects_done = 14;
@@ -112,7 +111,6 @@ message ArchivePartition {
   string range_end = 5;
   // status：open、exported、final。
   string status = 6;
-  string worker_id = 7;
   uint64 row_count = 8;
   uint64 subject_count = 9;
   string min_data_time = 10;
@@ -141,7 +139,6 @@ message ArchivePartition {
 // ArchiveWorkerInfo 是 worker 最近一次心跳的状态。
 message ArchiveWorkerInfo {
   string worker_id = 1;
-  string instance_id = 2;
   string version = 3;
   string root_dir = 4;
   // 磁盘（statfs）：总量、可用（不含 root 保留空间，worker 按它判断）、已用；已用 + 可用小于总量，差额是 root 保留空间。
@@ -151,9 +148,8 @@ message ArchiveWorkerInfo {
   bool maintaining = 8;
   string pacing_json = 9;
   repeated string running_run_ids = 10;
-  string lease_until = 11;
   string last_heartbeat_at = 12;
-  // active：租约未过期。
+  // active：最近 2 分钟内有心跳。
   bool active = 13;
   ObjectStoreInfo object_store = 14;
   uint64 disk_used_bytes = 15;
@@ -188,8 +184,6 @@ message GetArchiveOverviewReq {}
 message GetArchiveOverviewRsp {
   common.RetInfo ret_info = 1;
   ArchiveWorkerInfo worker = 2;
-  // 其他曾经心跳过但租约已过期的 worker。
-  repeated ArchiveWorkerInfo stale_workers = 3;
   repeated ArchiveRun running_runs = 4;
   uint32 task_count = 5;
   uint32 enabled_task_count = 6;
@@ -369,24 +363,14 @@ message GetArchivePartitionRsp {
   ArchivePartition partition = 2;
 }
 
-// RetireArchiveWorkerReq 删除一条不再使用的 worker 登记（例如换机后的旧记录）；仍持有活动租约的 worker 不能退役。
-message RetireArchiveWorkerReq {
-  string worker_id = 1;
-}
-message RetireArchiveWorkerRsp {
-  common.RetInfo ret_info = 1;
-  // retired：删除了登记；为 false 表示本来就没有这条登记。
-  bool retired = 2;
-}
-
-// PrepareArchiveImportReq 为导入取上传位置：活动 worker 的归档根目录与新生成的导入 ID（只给 moox-cli）。
+// PrepareArchiveImportReq 为导入取上传位置：在线 worker 的归档根目录与新生成的导入 ID（只给 moox-cli）。
 message PrepareArchiveImportReq {
   string space_id = 1;
   string dataset_id = 2;
 }
 message PrepareArchiveImportRsp {
   common.RetInfo ret_info = 1;
-  // 活动 worker 的归档根目录与 worker ID。
+  // worker 的归档根目录与 worker ID。
   string root_dir = 2;
   string worker_id = 3;
   string import_id = 4;
@@ -438,7 +422,6 @@ service ArchiveMgr {
   rpc GetArchiveRun(GetArchiveRunReq) returns (GetArchiveRunRsp);
   rpc ListArchivePartitions(ListArchivePartitionsReq) returns (ListArchivePartitionsRsp);
   rpc GetArchivePartition(GetArchivePartitionReq) returns (GetArchivePartitionRsp);
-  rpc RetireArchiveWorker(RetireArchiveWorkerReq) returns (RetireArchiveWorkerRsp);
   rpc PrepareArchiveImport(PrepareArchiveImportReq) returns (PrepareArchiveImportRsp);
   rpc ImportArchiveFile(ImportArchiveFileReq) returns (ImportArchiveFileRsp);
   rpc ClearArchiveUnrecoverable(ClearArchiveUnrecoverableReq) returns (ClearArchiveUnrecoverableRsp);
@@ -448,7 +431,6 @@ service ArchiveMgr {
 
 message ArchiveWorkerHeartbeatReq {
   string worker_id = 1;
-  string instance_id = 2;
   string version = 3;
   string root_dir = 4;
   uint64 disk_total_bytes = 5;
@@ -465,12 +447,9 @@ message ArchiveWorkerHeartbeatReq {
 }
 message ArchiveWorkerHeartbeatRsp {
   common.RetInfo ret_info = 1;
-  // active：本实例持有活动租约。
-  bool active = 2;
-  uint32 lease_ttl_seconds = 3;
-  // 需要取消的运行（用户取消，或租约已不属于本 worker）。
+  // 需要取消的运行（用户取消，或运行已结束）。
   repeated string cancel_run_ids = 4;
-  // 当前全部任务（只在 active 为真时下发）：worker 维护时删掉不在列表里的数据集的暂存状态。
+  // 当前全部任务：worker 维护时删掉不在列表里的数据集的暂存状态。
   repeated TaskRef tasks = 5;
   // 避让规则：worker 收到后替换本地 pacing 的生效分钟、前后秒数与整点静默（pacing.minute_window=false 时仍整分钟可发）。
   AvoidanceRules avoidance = 6;
@@ -491,11 +470,9 @@ message AvoidanceRules {
 }
 
 message PullArchiveRunReq {
-  string worker_id = 1;
-  string instance_id = 2;
   // 空闲的并发槽数，最多返回这么多个运行。
   uint32 free_slots = 3;
-  // 读 Storage 的运行（导入除外）同时运行的全局上限，以及该 worker 当前正在运行的这类运行数。
+  // 读 Storage 的运行（导入除外）同时运行的全局上限，以及 worker 当前正在运行的这类运行数。
   uint32 max_storage_runs = 4;
   uint32 busy_storage_runs = 5;
 }
@@ -551,7 +528,6 @@ message PullArchiveRunRsp {
 }
 
 message ReportArchiveRunProgressReq {
-  string worker_id = 1;
   string run_id = 2;
   string lease_token = 3;
   uint64 subjects_total = 4;
@@ -596,7 +572,6 @@ message PartitionReport {
 }
 
 message CompleteArchiveRunReq {
-  string worker_id = 1;
   string run_id = 2;
   string lease_token = 3;
   // status：succeeded、failed、canceled。

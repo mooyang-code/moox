@@ -127,9 +127,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":  {196, []string{"access", "admin", "archive-mgr", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "887a4d0b9d4169e00dcca8f984121c02a46ee23fd69a45c66ceda72175d2fafb"},
+		"control":  {195, []string{"access", "admin", "archive-mgr", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "bb4dfbf17b914166e8c94517faecaa00b1803003ad0f84188a298f3a5a3f18b7"},
 		"storage":  {65, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "6a8447172d02fb02b4961b5a450944f7b26f8e447f5a59d829e890b6ece50abb"},
-		"overseas": {63, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "d84cc4977f9156b49ba840429b8e740deef2c0b1cb33349853c8c88b627a0284"},
+		"overseas": {62, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "ebedfde10149b679e88cad3f5f08ac8ddbf322e20a9f062c1954f0abfba27ea2"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -346,10 +346,10 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 			routes[route.ServicePath+"/"+route.Method] = route
 		}
 	}
-	if len(routes) != 18+4 {
-		t.Fatalf("archive-mgr routes = %d, want 22", len(routes))
+	if len(routes) != 17+4 {
+		t.Fatalf("archive-mgr routes = %d, want 21", len(routes))
 	}
-	for _, method := range []string{"RetireArchiveWorker", "PrepareArchiveImport", "ImportArchiveFile", "ClearArchiveUnrecoverable"} {
+	for _, method := range []string{"PrepareArchiveImport", "ImportArchiveFile", "ClearArchiveUnrecoverable"} {
 		if route := routes["trpc.moox.archive.ArchiveMgr/"+method]; !slices.Equal(route.Callers, []string{"moox-cli"}) || route.ReadOnly {
 			t.Fatalf("%s 只给 moox-cli: %+v", method, route)
 		}

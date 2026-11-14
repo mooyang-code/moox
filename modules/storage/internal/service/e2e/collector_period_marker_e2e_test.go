@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/outbox"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/relay"
 	storagegen "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -62,11 +62,11 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	defer eventClient.Close()
 	relayErrors := make(chan error, 1)
 	publisher := &gatedPeriodMarkerPublisher{
-		inner:   outbox.NewJetStreamPublisher(eventClient),
+		inner:   relay.NewJetStreamPublisher(eventClient),
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	relay, err := outbox.NewRelay(store, publisher, outbox.RelayOptions{
+	markerRelay, err := relay.NewRelay(store, publisher, relay.RelayOptions{
 		PollInterval: 10 * time.Millisecond,
 		BatchSize:    1,
 		ErrorReporter: func(err error) {
@@ -77,10 +77,10 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	relay.Start(ctx)
+	markerRelay.Start(ctx)
 	defer func() {
 		publisher.releasePublish()
-		relay.Close()
+		markerRelay.Close()
 	}()
 
 	// 截止时间 = 收盘（+1m）+ 允许迟到 15s。
@@ -127,7 +127,6 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, envelope.GetEventId())
-	require.NotEqual(t, "outbox-pending", envelope.GetEventId())
 	require.Equal(t, "crypto", envelope.GetSpaceId())
 	require.Equal(t, expectation.DatasetID, envelope.GetSubjectId())
 	require.Equal(t, expectation.DatasetID, marker.GetDatasetId())
@@ -144,33 +143,29 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, consumerInfo.NumAckPending, "the durable subscriber must acknowledge the delivered marker")
 	require.GreaterOrEqual(t, consumerInfo.AckFloor.Stream, metadata.Sequence.Stream)
-	entries, err := store.ListOutbox(ctx, 0, 10)
+	page, err := store.ReadMarkerChanges(ctx, 0, 1000)
 	require.NoError(t, err)
-	var markerStillPending bool
-	for _, entry := range entries {
-		pending := new(eventpb.EventMessage)
-		require.NoError(t, proto.Unmarshal(entry.Data, pending))
-		if pending.GetEventName() == events.DatasetPeriodCompleted.Name() {
-			markerStillPending = true
-		}
-	}
-	require.True(t, markerStillPending, "the marker must remain in the outbox until the relay's publisher call returns success")
+	require.Len(t, page.Markers, 1)
+	markerSequence := page.Markers[0].Sequence
+	cursor, err := store.MarkerRelayCursor()
+	require.NoError(t, err)
+	require.Less(t, cursor, markerSequence, "发布调用返回成功之前，转发游标不能越过这条标记")
 	publisher.releasePublish()
 	require.Eventually(t, func() bool {
 		select {
 		case relayErr := <-relayErrors:
-			t.Errorf("Storage outbox relay: %v", relayErr)
+			t.Errorf("Storage 完成事件转发: %v", relayErr)
 			return false
 		default:
 		}
-		entries, listErr := store.ListOutbox(ctx, 0, 10)
-		return listErr == nil && len(entries) == 0
-	}, 5*time.Second, 20*time.Millisecond, "the relay should remove entries only after JetStream publish acknowledgement")
+		cursor, cursorErr := store.MarkerRelayCursor()
+		return cursorErr == nil && cursor >= markerSequence
+	}, 5*time.Second, 20*time.Millisecond, "JetStream 确认发布之后转发游标才推进")
 	t.Log("SCENARIO PASS collector-period-marker-jetstream-ack")
 }
 
 type gatedPeriodMarkerPublisher struct {
-	inner       outbox.Publisher
+	inner       relay.Publisher
 	entered     chan struct{}
 	release     chan struct{}
 	enteredOnce sync.Once

@@ -174,7 +174,6 @@
 ./bin/moox-cli archive tasks list|preview               # 列出任务；预览接下来的拉取、复核时刻与分区导出时间
 ./bin/moox-cli archive overview | runs list|get|cancel | partitions list|get
 ./bin/moox-cli archive tasks backfill|run|update|delete ...
-./bin/moox-cli archive worker retire --worker <ID> --yes # 退役换机后遗留的旧 worker 登记
 ./bin/moox-cli archive import template --space-id crypto --dataset-id <数据集>        # 导入文件的表头
 ./bin/moox-cli archive import --space-id crypto --dataset-id <数据集> --csv <文件.csv|.csv.gz> [--overwrite] --wait --yes
 ./bin/moox-cli archive tasks clear-unrecoverable --space-id crypto --dataset-id <数据集> --start <RFC3339> --end <RFC3339> --yes

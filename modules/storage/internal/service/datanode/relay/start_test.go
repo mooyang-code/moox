@@ -1,4 +1,4 @@
-package outbox
+package relay
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// EventBus 连不上时 Outbox 转发照常启动、能随时停下，启动不被连接挡住。
+// EventBus 连不上时完成事件转发照常启动、能随时停下，启动不被连接挡住。
 func TestStartWithEventBusStartsWithoutEventBus(t *testing.T) {
 	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "pebble")})
 	if err != nil {
@@ -28,7 +28,7 @@ func TestStartWithEventBusStartsWithoutEventBus(t *testing.T) {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("startOutboxRelay blocked for %s", elapsed)
+		t.Fatalf("启动转发被挡住 %s", elapsed)
 	}
 	time.Sleep(200 * time.Millisecond)
 	stopped := make(chan struct{})
@@ -39,11 +39,11 @@ func TestStartWithEventBusStartsWithoutEventBus(t *testing.T) {
 	select {
 	case <-stopped:
 	case <-time.After(30 * time.Second):
-		t.Fatal("outbox relay did not stop while EventBus was unavailable")
+		t.Fatal("EventBus 不可用时转发协程没有停下")
 	}
 }
 
-// EventBus 先不可用、后来起来：启动时的首次连接失败后，积压由转发协程在连续发布失败后的重连发出，并从 Outbox 删除。
+// EventBus 先不可用、后来起来：启动时的首次连接失败后，积压由转发协程在连续发布失败后的重连发出，游标随之推进。
 func TestStartWithEventBusDrainsBacklogAfterEventBusComesUp(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -69,8 +69,8 @@ func TestStartWithEventBusDrainsBacklogAfterEventBusComesUp(t *testing.T) {
 	defer stop()
 	// 等启动时的那次连接超时失败，之后能连上只可能靠转发协程的重连。
 	time.Sleep(time.Second)
-	if entries, err := store.ListOutbox(ctx, 0, 10); err != nil || len(entries) != 1 {
-		t.Fatalf("outbox before EventBus is up = %d entries, err=%v; want the backlog kept", len(entries), err)
+	if cursor, err := store.MarkerRelayCursor(); err != nil || cursor != 0 {
+		t.Fatalf("EventBus 起来之前游标 = %d err=%v，期望积压还在", cursor, err)
 	}
 
 	server, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: port, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true})
@@ -96,15 +96,15 @@ func TestStartWithEventBusDrainsBacklogAfterEventBusComesUp(t *testing.T) {
 	}
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		entries, err := store.ListOutbox(ctx, 0, 10)
+		cursor, err := store.MarkerRelayCursor()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(entries) == 0 {
+		if cursor == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("EventBus 起来后 Outbox 积压没有发出")
+			t.Fatal("EventBus 起来后积压的完成事件没有发出")
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -113,6 +113,6 @@ func TestStartWithEventBusDrainsBacklogAfterEventBusComesUp(t *testing.T) {
 		t.Fatalf("stream messages=%v err=%v, want 1", info, err)
 	}
 	if got := observability.DefaultViewMetrics.Snapshot().OutboxReconnectSuccesses; got <= reconnectsBefore {
-		t.Fatalf("outbox reconnect successes=%d before=%d, want the relay to reconnect", got, reconnectsBefore)
+		t.Fatalf("重连成功次数=%d，启动前=%d，期望转发协程重连过", got, reconnectsBefore)
 	}
 }

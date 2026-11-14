@@ -191,7 +191,7 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"monitor", "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", false},
 		{"monitor", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", false},
 		{"strategy", "trpc.moox.trade.TradeConsoleService", "GetLogicalAccount", true},
-		{"strategy", "trpc.moox.trade.TradeConsoleService", "PlaceManualOrder", false},
+		{"strategy", "trpc.moox.trade.TradeConsoleService", "SubmitOrder", false},
 		{"console", "trpc.moox.trade.TradeConsoleService", "ClaimLogicalAccountOwner", false},
 		{"console", "trpc.moox.trade.TradeConsoleService", "ReleaseLogicalAccountOwner", false},
 		{"moox-cli", "trpc.moox.trade.TradeConsoleService", "ClaimLogicalAccountOwner", true},
@@ -431,7 +431,7 @@ func TestExternalProgramComponents(t *testing.T) {
 	}
 }
 
-// 部署页和控制台只读：启停、主机登记与归档 worker 退役只留给 moox-cli。
+// 部署页和控制台只读：启停、主机登记与归档导入只留给 moox-cli。
 func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 	c := mustCatalog(t)
 	for _, tc := range []struct{ path, method string }{
@@ -439,7 +439,6 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 		{"trpc.moox.ops.SysDeploy", "SetDeploymentStatus"},
 		{"trpc.moox.ops.SysDeploy", "SyncHostDeployments"},
 		{"trpc.moox.ops.SysDeploy", "DeleteHost"},
-		{"trpc.moox.archive.ArchiveMgr", "RetireArchiveWorker"},
 		{"trpc.moox.archive.ArchiveMgr", "PrepareArchiveImport"},
 		{"trpc.moox.archive.ArchiveMgr", "ImportArchiveFile"},
 		{"trpc.moox.archive.ArchiveMgr", "ClearArchiveUnrecoverable"},

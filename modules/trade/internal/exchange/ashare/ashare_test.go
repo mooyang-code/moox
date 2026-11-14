@@ -239,3 +239,30 @@ func TestMarketProtocolErrorIsNotCached(t *testing.T) {
 	_, err := missing.GetQuote(context.Background(), key)
 	require.ErrorContains(t, err, "没有标的")
 }
+
+// 只读缓存的上下文：不取新快照，只用已有的；没有或比 maxAge 旧时报“不在缓存里”。
+func TestMarketQuoteCachedOnlyNeverFetches(t *testing.T) {
+	now := cst("2026-11-07 10:00:00")
+	calls := 0
+	market := &Market{Now: func() time.Time { return now }, Quotes: func(_ context.Context, ids []string) (map[string]cnstock.Quote, error) {
+		calls++
+		return map[string]cnstock.Quote{ids[0]: {InstrumentID: ids[0], Last: "10.00", PrevClose: "10.00", Time: now}}, nil
+	}}
+	key := exchange.SymbolKey{Market: exchange.MarketTypeStock, Symbol: "600519.XSHG"}
+	cached := exchange.WithCachedQuotes(context.Background(), time.Minute)
+	if _, err := market.GetQuote(cached, key); !errors.Is(err, exchange.ErrQuoteNotCached) || calls != 0 {
+		t.Fatalf("没有快照时应报不在缓存里且不发请求：err = %v, calls = %d", err, calls)
+	}
+	if _, err := market.GetQuote(context.Background(), key); err != nil || calls != 1 {
+		t.Fatalf("普通取价：err = %v, calls = %d", err, calls)
+	}
+	// 过了 2 秒的复用时间，普通取价会重新取，只读缓存的照用旧快照。
+	now = now.Add(30 * time.Second)
+	if quote, err := market.GetQuote(cached, key); err != nil || quote.Last.String() != "10" || calls != 1 {
+		t.Fatalf("应读到已有快照：quote = %+v, err = %v, calls = %d", quote, err, calls)
+	}
+	now = now.Add(time.Minute)
+	if _, err := market.GetQuote(cached, key); !errors.Is(err, exchange.ErrQuoteNotCached) || calls != 1 {
+		t.Fatalf("比 maxAge 旧的快照不用：err = %v, calls = %d", err, calls)
+	}
+}

@@ -22,7 +22,8 @@ const leaseRecalcJobSQL = `
 
 const pullableCondition = `(c_status = 'accepted' OR (c_status = 'running' AND c_lease_expires_at <= ?))`
 
-// PullRecalcJob atomically leases the oldest pullable job to engineID. Jobs of
+// PullRecalcJob atomically leases the least recently touched pullable job to engineID
+// （按 c_mtime 排序：归还会更新 c_mtime，被门禁挡住而归还的作业排到后面，不会每轮都抢在别的作业前）。 Jobs of
 // tasks in skipTasks are left for a later pull. The returned job carries the new
 // lease token; found is false when no job is pullable.
 // maxRunning 是同时运行（租约未过期）的补算作业上限，达到上限时不再发出新任务；0 表示不限制。
@@ -54,7 +55,7 @@ func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Tim
 		}
 		var rows []recalcJobRow
 		if err := tx.Raw(`SELECT `+recalcJobColumns+` FROM t_factor_recalc_jobs WHERE `+pullableCondition+`
-			ORDER BY c_ctime, c_job_id`, nowUnix).Scan(&rows).Error; err != nil {
+			ORDER BY c_mtime, c_job_id`, nowUnix).Scan(&rows).Error; err != nil {
 			return err
 		}
 		for _, row := range rows {
@@ -89,12 +90,14 @@ func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Tim
 // lease and renews the lease. A cancelled or finished job is returned as is so
 // the engine can stop; a stale token or a progress regression is ErrConflict.
 // defaultFilled 是引擎到目前为止累计的「按默认参数新补的期次」；nil 表示这次没有变化，非 nil 时整体替换。
+// status 为 accepted 表示引擎归还作业（被门禁挡住、引擎停止）：作业回到待领取，进度保持管理端已记下的值，
+// 下一次领取立刻能拿到，不用等租约过期；旧的租约令牌随之失效。
 func (s *Store) ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress int64, status, errText string, defaultFilled map[string][]TimeRange, now time.Time, ttl time.Duration) (RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return RecalcJob{}, fmt.Errorf("factor database is not open")
 	}
 	switch status {
-	case RecalcStatusRunning, RecalcStatusSucceeded, RecalcStatusFailed:
+	case RecalcStatusAccepted, RecalcStatusRunning, RecalcStatusSucceeded, RecalcStatusFailed:
 	default:
 		return RecalcJob{}, fmt.Errorf("engine cannot report recalc status %q", status)
 	}
@@ -114,6 +117,10 @@ func (s *Store) ReportRecalcProgress(ctx context.Context, jobID, leaseToken stri
 		}
 		if current.Status != RecalcStatusRunning || current.LeaseToken != leaseToken {
 			return fmt.Errorf("%w: recalc job %q is not leased with this token", ErrConflict, jobID)
+		}
+		if status == RecalcStatusAccepted {
+			// 归还不改进度，也不清掉前面分块记下的降级说明。
+			progress, errText = current.ProgressTime, current.Error
 		}
 		if progress < current.ProgressTime {
 			return fmt.Errorf("%w: recalc job %q progress %d is behind %d", ErrConflict, jobID, progress, current.ProgressTime)

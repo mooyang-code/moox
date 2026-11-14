@@ -11,7 +11,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
-// ErrConflict 表示 mgr 返回冲突（重复实例、令牌失效或运行已结束）。
+// ErrConflict 表示 mgr 返回冲突（令牌失效或运行已结束）。
 var ErrConflict = errors.New("archive manager conflict")
 
 // Client 是 ArchiveWorker 服务的调用接口。

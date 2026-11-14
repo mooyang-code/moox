@@ -10,8 +10,6 @@ import (
 	"time"
 
 	cpebble "github.com/cockroachdb/pebble"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"google.golang.org/protobuf/proto"
 )
 
 // CleanupExpiredBuckets 删除一个数据集早于 beforeBucket 的时序行、历史行索引、周期账本与完成标记，返回删除的键范围数。
@@ -209,11 +207,6 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	unlockPublication, err := s.lockOutboxDatasetPublication(ctx, spaceID, datasetID)
-	if err != nil {
-		return 0, err
-	}
-	defer unlockPublication()
 	// Stop all writes while the dataset ranges are
 	// removed. Otherwise a concurrent write could repopulate the result after
 	// the metadata object has been deleted.
@@ -221,8 +214,8 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	defer s.datasetWriteMu.Unlock()
 	s.periodMu.Lock()
 	defer s.periodMu.Unlock()
-	s.outboxMu.Lock()
-	defer s.outboxMu.Unlock()
+	s.changeMu.Lock()
+	defer s.changeMu.Unlock()
 	// 取得全部锁后再确认请求仍然有效：等待期间到期的删除不能继续物理清理
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -254,6 +247,7 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 		ranges = append(ranges, [2][]byte{prefix, upper})
 	}
 	// 周期账本、完成标记、序列快照与生效表按数据集前缀整段删除，重建同名数据集后从头登记快照。
+	// 变更日志里这个数据集还没转发的完成标记条目不用删：转发前会确认标记本体还在，见 MarkerPublishable。
 	for _, prefix := range []string{
 		periodDatasetPrefix(spaceID, datasetID), markerDatasetPrefix(spaceID, datasetID),
 		seriesSnapshotPrefix + datasetScope(spaceID, datasetID), seriesEffectivePrefix + datasetScope(spaceID, datasetID),
@@ -263,10 +257,6 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 			return 0, err
 		}
 		ranges = append(ranges, [2][]byte{lower, upper})
-	}
-	deletedOutbox, err := s.stageDatasetOutboxCleanup(batch, spaceID, datasetID)
-	if err != nil {
-		return 0, err
 	}
 	// 提交前最后一次检查：批次尚未落盘时取消仍可完整放弃
 	if err := ctx.Err(); err != nil {
@@ -278,31 +268,7 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	for _, bounds := range ranges {
 		s.compactAsync(bounds[0], bounds[1])
 	}
-	if deletedOutbox > 0 {
-		s.noteOutboxDeleted(deletedOutbox)
-	}
 	return uint64(len(ranges)), nil
-}
-
-// stageDatasetOutboxCleanup 删掉这个数据集还没发出的 Outbox 条目，返回删除的条数。
-func (s *Store) stageDatasetOutboxCleanup(batch *cpebble.Batch, spaceID, datasetID string) (int, error) {
-	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(outboxPrefix), UpperBound: nextPrefix([]byte(outboxPrefix))})
-	if err != nil {
-		return 0, err
-	}
-	defer iter.Close()
-	deleted := 0
-	for valid := iter.First(); valid; valid = iter.Next() {
-		message := &eventpb.EventMessage{}
-		if proto.Unmarshal(iter.Value(), message) != nil || message.GetSpaceId() != spaceID || message.GetSubjectId() != datasetID {
-			continue
-		}
-		if err := batch.Delete(append([]byte(nil), iter.Key()...), s.writeOptions); err != nil {
-			return 0, err
-		}
-		deleted++
-	}
-	return deleted, iter.Error()
 }
 
 // requireDataset 在持有数据集读锁时确认数据集仍在元数据里。删除先删元数据、再在写锁里删行，

@@ -95,7 +95,7 @@ func TestAvoidanceRefreshReadsOnlySpacesWithTasks(t *testing.T) {
 	}
 
 	// 心跳与总览都带上当前规则。
-	hb := h.heartbeat("w1", "i1")
+	hb := h.heartbeat("w1")
 	if got := hb.GetAvoidance(); got.GetEveryMinutes() != 1 || got.GetBeforeSeconds() != 5 || got.GetAfterSeconds() != 25 ||
 		got.GetHourQuietFrom() != "58:00" || got.GetHourQuietUntil() != "04:00" || got.GetComputedAt() != fmtRFC(h.now) {
 		t.Fatalf("heartbeat avoidance = %v", got)

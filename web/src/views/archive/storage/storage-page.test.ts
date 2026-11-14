@@ -36,7 +36,6 @@ const overview = (over: Record<string, unknown> = {}) => ({
     object_store: { endpoint: "127.0.0.1:11473", bucket: "moox-archive", prefix: "moox-archive/" },
     ...over
   },
-  stale_workers: [{ worker_id: "archive-worker@old", last_heartbeat_at: "2026-11-01T00:00:00Z" }],
   avoidance: {
     every_minutes: 1,
     before_seconds: 5,
@@ -67,7 +66,7 @@ async function mountPage() {
 }
 
 describe("归档存储页", () => {
-  it("执行器所在主机、根目录、磁盘、内置对象存储、避让时段、过期登记", async () => {
+  it("执行器所在主机、根目录、磁盘、内置对象存储、避让时段", async () => {
     const text = await mountPage();
     expect(api.listDeployments).toHaveBeenCalledWith(
       { component_id: "archive-worker", status: "enabled", page: { page: 1, size: 100 } },
@@ -82,7 +81,6 @@ describe("归档存储页", () => {
     expect(text).toContain("每分钟只在第 25～55 秒读取");
     expect(text).toContain("每小时 :58:00～:04:00 不拉取");
     expect(text).toContain("crypto：1m、1h 等");
-    expect(text).toContain("archive-worker@old");
     expect(text).toContain("datasets.csv");
   });
 

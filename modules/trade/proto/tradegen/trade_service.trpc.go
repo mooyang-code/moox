@@ -63,8 +63,6 @@ type TradeConsoleServiceService interface {
 
 	FlattenLogicalAccount(ctx context.Context, req *FlattenLogicalAccountReq) (*FlattenLogicalAccountRsp, error)
 
-	PlaceManualOrder(ctx context.Context, req *PlaceManualOrderReq) (*PlaceManualOrderRsp, error)
-
 	SubmitOrder(ctx context.Context, req *SubmitOrderReq) (*SubmitOrderRsp, error)
 
 	CancelOrder(ctx context.Context, req *CancelOrderReq) (*CancelOrderRsp, error)
@@ -498,24 +496,6 @@ func TradeConsoleServiceService_FlattenLogicalAccount_Handler(svr interface{}, c
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(TradeConsoleServiceService).FlattenLogicalAccount(ctx, reqbody.(*FlattenLogicalAccountReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func TradeConsoleServiceService_PlaceManualOrder_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PlaceManualOrderReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeConsoleServiceService).PlaceManualOrder(ctx, reqbody.(*PlaceManualOrderReq))
 	}
 
 	var rsp interface{}
@@ -1034,10 +1014,6 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_FlattenLogicalAccount_Handler,
 		},
 		{
-			Name: "/trpc.moox.trade.TradeConsoleService/PlaceManualOrder",
-			Func: TradeConsoleServiceService_PlaceManualOrder_Handler,
-		},
-		{
 			Name: "/trpc.moox.trade.TradeConsoleService/SubmitOrder",
 			Func: TradeConsoleServiceService_SubmitOrder_Handler,
 		},
@@ -1209,9 +1185,6 @@ func (s *UnimplementedTradeConsoleService) ResumeLogicalAccount(ctx context.Cont
 func (s *UnimplementedTradeConsoleService) FlattenLogicalAccount(ctx context.Context, req *FlattenLogicalAccountReq) (*FlattenLogicalAccountRsp, error) {
 	return nil, errors.New("rpc FlattenLogicalAccount of service TradeConsoleService is not implemented")
 }
-func (s *UnimplementedTradeConsoleService) PlaceManualOrder(ctx context.Context, req *PlaceManualOrderReq) (*PlaceManualOrderRsp, error) {
-	return nil, errors.New("rpc PlaceManualOrder of service TradeConsoleService is not implemented")
-}
 func (s *UnimplementedTradeConsoleService) SubmitOrder(ctx context.Context, req *SubmitOrderReq) (*SubmitOrderRsp, error) {
 	return nil, errors.New("rpc SubmitOrder of service TradeConsoleService is not implemented")
 }
@@ -1333,8 +1306,6 @@ type TradeConsoleServiceClientProxy interface {
 	ResumeLogicalAccount(ctx context.Context, req *ResumeLogicalAccountReq, opts ...client.Option) (rsp *ResumeLogicalAccountRsp, err error)
 
 	FlattenLogicalAccount(ctx context.Context, req *FlattenLogicalAccountReq, opts ...client.Option) (rsp *FlattenLogicalAccountRsp, err error)
-
-	PlaceManualOrder(ctx context.Context, req *PlaceManualOrderReq, opts ...client.Option) (rsp *PlaceManualOrderRsp, err error)
 
 	SubmitOrder(ctx context.Context, req *SubmitOrderReq, opts ...client.Option) (rsp *SubmitOrderRsp, err error)
 
@@ -1826,26 +1797,6 @@ func (c *TradeConsoleServiceClientProxyImpl) FlattenLogicalAccount(ctx context.C
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &FlattenLogicalAccountRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *TradeConsoleServiceClientProxyImpl) PlaceManualOrder(ctx context.Context, req *PlaceManualOrderReq, opts ...client.Option) (*PlaceManualOrderRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/PlaceManualOrder")
-	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("TradeConsoleService")
-	msg.WithCalleeMethod("PlaceManualOrder")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &PlaceManualOrderRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

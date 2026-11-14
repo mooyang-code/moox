@@ -15,8 +15,8 @@ import (
 	storagehealth "github.com/mooyang-code/moox/modules/storage/internal/health"
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	metadataservice "github.com/mooyang-code/moox/modules/storage/internal/service/catalog"
-	storageoutbox "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/outbox"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
+	storagerelay "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/relay"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
@@ -148,8 +148,8 @@ func runPrimaryRole() error {
 	backgroundCtx, stopBackground := context.WithCancel(trpc.BackgroundContext())
 	defer stopBackground()
 	go runCleanupLoop(backgroundCtx, datasetCleanup{reader: cached, store: store, retention: policy.Retention, metrics: cleanupMetrics}, time.Hour)
-	// EventBus 不可用时主服务照常启动：转发协程照常运行，连上 EventBus 后再转发 Outbox 里积压的事件。
-	stopRelay, err := storageoutbox.StartWithEventBus(backgroundCtx, store, eventConfig)
+	// EventBus 不可用时主服务照常启动：转发协程照常运行，连上 EventBus 后从游标接着转发积压的周期完成事件。
+	stopRelay, err := storagerelay.StartWithEventBus(backgroundCtx, store, eventConfig)
 	if err != nil {
 		return err
 	}
@@ -347,15 +347,6 @@ func runViewRole() error {
 	}
 	pb.RegisterDataViewService(listener, svc)
 	if err := storagebootstrap.RegisterMetricsReporter(s, "view"); err != nil {
-		return err
-	}
-	cleanupOptions := viewservice.RetiredIndexCleanupOptions{
-		Metadata:           metadataProxy,
-		MinUnreferencedAge: time.Minute,
-	}
-	if err := storagebootstrap.RegisterViewIndexCleanupTimer(s, func(ctx context.Context) error {
-		return svc.CleanupRetiredIndexes(ctx, cleanupOptions)
-	}); err != nil {
 		return err
 	}
 	if err := registerRoleHealth(s, "storage-view"); err != nil {

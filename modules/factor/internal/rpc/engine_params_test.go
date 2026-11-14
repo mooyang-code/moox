@@ -23,7 +23,7 @@ func (f *paramFake) GetParams(_ context.Context, taskID string) ([]domain.Factor
 
 // 引擎读提交值只允许持有引擎租约的进程调用。
 func TestGetTaskParamsRequiresLease(t *testing.T) {
-	svc := NewEngineService(&hubFake{noLease: true}, &paramFake{}, nil)
+	svc := NewEngineService(&hubFake{noLease: true}, &paramFake{})
 	rsp, err := svc.GetTaskParams(context.Background(), &factorpb.GetTaskParamsReq{Engine: testEngine, TaskId: "s"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode())
@@ -35,7 +35,7 @@ func TestGetTaskParamsReturnsLastSubmitted(t *testing.T) {
 		TaskID: "s", MemberKey: "fast__var", LastSubmittedPeriod: 120, LastRequestID: "r1", LastSubmittedAt: &at,
 		LastSubmittedParams: domain.ParamSnapshot{"window": {Default: 30}},
 	}}}
-	svc := NewEngineService(&hubFake{}, params, nil)
+	svc := NewEngineService(&hubFake{}, params)
 	rsp, err := svc.GetTaskParams(context.Background(), &factorpb.GetTaskParamsReq{Engine: testEngine, TaskId: "s"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())

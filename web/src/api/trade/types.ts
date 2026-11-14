@@ -235,6 +235,18 @@ export interface UnblockInstrumentReq {
   exchange_symbol: string;
 }
 
+/**
+ * 执行器对目标里一条标的的结论（后端 TargetLaneState）：0 未知（要用的报价不在缓存里）、1 有差额且执行器会下单、
+ * 2 已到位、3 差额低于最小下单额、4 按市场规则暂不可交易（停牌、涨跌停、当日买入）、5 不足一手、6 下不了单要人处理。
+ */
+export type TargetLaneState = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+export interface TargetLane {
+  instrument_id: string;
+  state?: TargetLaneState;
+  reason?: string;
+}
+
 export interface LogicalAccountTarget {
   target_id: string;
   logical_account_id: string;
@@ -329,8 +341,10 @@ export interface AddLogicalAccountMemberReq {
   adopt_existing_exposure: boolean;
 }
 
-export interface PlaceManualOrderReq {
+/** 人工下单：策略驱动的组合先暂停再下单，自主下单的组合直接受理，由后端按组合的控制模式决定。 */
+export interface SubmitOrderReq {
   action_id: string;
+  logical_account_id: string;
   trading_account_id: string;
   client_order_id: string;
   instrument_id: string;
@@ -344,10 +358,6 @@ export interface PlaceManualOrderReq {
   deadline_at?: string;
   /** 订单所在市场；账户开通了多个市场时必填 */
   market_type?: MarketType;
-}
-
-export interface SubmitOrderReq extends PlaceManualOrderReq {
-  logical_account_id: string;
 }
 
 export interface ListOrdersReq {

@@ -347,73 +347,6 @@ func (e *Executor) Converge(
 	return e.finishConverge(ctx, spaceID, logicalAccount, &target, members, run, resting, orderSettings)
 }
 
-// HasDifference 判断目标和实际持仓是否还有能下单的差额，用于过期目标的告警。
-func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccountTargetRecord) (bool, error) {
-	flattens, err := e.runningDelistFlattens(ctx, target.SpaceID, target.LogicalAccountID)
-	if err != nil {
-		return false, err
-	}
-	members, err := e.loadMembers(ctx, target.SpaceID, target.LogicalAccountID, flattens)
-	if err != nil {
-		return false, err
-	}
-	desired, err := desiredTargets(target)
-	if err != nil {
-		return false, err
-	}
-	constrainDesired(desired, members)
-	logical, err := e.Store.GetLogicalAccount(ctx, target.SpaceID, target.LogicalAccountID)
-	if err != nil {
-		return false, err
-	}
-	orderSettings, err := loadOrderSettings(logical)
-	if err != nil {
-		return false, err
-	}
-	env := e.newLaneEnv(ctx, target.SpaceID, target.LogicalAccountID, orderSettings, members, desired)
-	for _, instrumentID := range laneIDs(desired, members) {
-		action, complete, reason, err := e.laneAction(env, instrumentID, desired[instrumentID], members)
-		if err != nil {
-			return false, err
-		}
-		if complete {
-			continue
-		}
-		// 差额低于设置的最小下单额的，收敛时视为已满足，这里同口径：不算还有差额，免得误报“目标过期且持仓未到位”。
-		if reason == "" && e.belowConfiguredMinimumNow(ctx, env, action) {
-			continue
-		}
-		// 顺延（停牌、涨跌停、T+1）和整手市场里不足一手的差额，收敛时同样不算未到位。
-		if reason == "" && e.settledByMarketRule(ctx, action, desired[instrumentID], members) {
-			continue
-		}
-		return true, nil
-	}
-	return false, nil
-}
-
-// settledByMarketRule 判断一条标的剩下的差额是不是按市场规则顺延或视为已满足，和 Converge 下单时的判断同口径：
-// 停牌、涨跌停、只因 T+1 卖不出（deferralReason），以及整手交易的市场里不足一手的差额。取不到报价时按“没满足”处理。
-func (e *Executor) settledByMarketRule(ctx context.Context, action laneAction, desired desiredTarget, members []memberState) bool {
-	// 先按市场规则判断：没有涨跌停、T+1、整手规则的市场（加密货币）不多取一次价。
-	if rule := exchange.RuleFor(action.instrument.MarketType); !rule.PriceLimits && !rule.T1 && !rule.BoardLot {
-		return false
-	}
-	quote, err := e.Prices.LatestPrice(ctx, action.member.account.TradingAccountID,
-		exchange.NewSymbolKey(action.instrument.MarketType, action.instrument.ExchangeSymbol))
-	if err != nil || quote.Price.Cmp(shared.Zero()) <= 0 {
-		return false
-	}
-	if deferralReason(action, quote) != "" {
-		return true
-	}
-	if !exchange.RuleFor(action.instrument.MarketType).BoardLot {
-		return false
-	}
-	_, tooSmall, err := childQuantity(action)
-	return err == nil && tooSmall != "" && laneFinished(desired, members, action.instrument.InstrumentID)
-}
-
 // spotBuyVerdict 是 spotBuyPrecheck 的结论。
 type spotBuyVerdict struct {
 	// satisfied：视为已满足，不下单、不划转。
@@ -509,17 +442,6 @@ func (e *Executor) dryRunPlacement(
 		return placement{}, err
 	}
 	return probe, nil
-}
-
-// belowConfiguredMinimumNow 判断一个动作的差额（按步长取整后）是否低于设置的最小下单额；取不到报价时按“不低于”处理。
-func (e *Executor) belowConfiguredMinimumNow(ctx context.Context, env *laneEnv, action laneAction) bool {
-	quote, err := e.Prices.LatestPrice(ctx, action.member.account.TradingAccountID,
-		exchange.NewSymbolKey(action.instrument.MarketType, action.instrument.ExchangeSymbol))
-	if err != nil || quote.Price.Cmp(shared.Zero()) <= 0 {
-		return false
-	}
-	quantity := floorToStep(action.delta.Abs(), mustBaseStep(action.instrument))
-	return env.belowConfiguredMinimum(action, quantity, quote.Price)
 }
 
 // outOfSessionReason 只读启用成员和它们的账户记录，返回第一个不在交易时段的成员的原因，都在时段内时返回空串。

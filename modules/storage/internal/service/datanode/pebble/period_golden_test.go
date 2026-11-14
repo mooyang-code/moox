@@ -398,7 +398,7 @@ func TestGoldenLedgerRejections(t *testing.T) {
 				require.NoError(t, err)
 			}
 			markersBefore := len(goldenMarkers(t, store, goldenSpace, goldenDataset))
-			outboxBefore := goldenOutboxCount(t, store)
+			allMarkersBefore := len(listMarkerChanges(t, store))
 			clock.set(goldenPeriod.Add(62 * time.Second))
 			bad := exp
 			items := []TimeSeriesBatchItem{
@@ -413,7 +413,7 @@ func TestGoldenLedgerRejections(t *testing.T) {
 			require.Empty(t, result.AcceptedSeriesIndexes)
 			require.Equal(t, tc.prepare, goldenPeriodStatus(t, store, goldenSpace, goldenDataset, freq, goldenPeriod.Unix()))
 			require.Len(t, goldenMarkers(t, store, goldenSpace, goldenDataset), markersBefore)
-			require.Equal(t, outboxBefore, goldenOutboxCount(t, store))
+			require.Len(t, listMarkerChanges(t, store), allMarkersBefore)
 			for index := range series {
 				if got, found := goldenStoredClose(t, store, goldenRow(goldenSpace, goldenDataset, freq, series[index], goldenPeriod, 0).GetKey()); found {
 					require.Equal(t, 1.0, got, "series %d must keep the prepared value", index)
@@ -584,46 +584,46 @@ func TestGoldenProducerMarkers(t *testing.T) {
 	monthly := goldenProducerMarker("source-ready", period, "complete")
 	monthly.Frequency = "1mo"
 	cases := []struct {
-		name       string
-		reports    []report
-		lookups    []lookup
-		wantOutbox int
+		name        string
+		reports     []report
+		lookups     []lookup
+		wantMarkers int
 	}{
 		{
-			name:       "首次上报可按触发事件与周期查到",
-			reports:    []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}},
-			lookups:    []lookup{{"source-ready", period, 0}, {"other-cause", period, -1}, {"source-ready", period + 60, -1}},
-			wantOutbox: 1,
+			name:        "首次上报可按触发事件与周期查到",
+			reports:     []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}},
+			lookups:     []lookup{{"source-ready", period, 0}, {"other-cause", period, -1}, {"source-ready", period + 60, -1}},
+			wantMarkers: 1,
 		},
 		{
-			name:       "相同内容重报幂等",
-			reports:    []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}, {marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: 0}},
-			lookups:    []lookup{{"source-ready", period, 0}},
-			wantOutbox: 1,
+			name:        "相同内容重报幂等",
+			reports:     []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}, {marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: 0}},
+			lookups:     []lookup{{"source-ready", period, 0}},
+			wantMarkers: 1,
 		},
 		{
-			name:       "同一触发事件与周期内容变了是冲突",
-			reports:    []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}, {marker: goldenProducerMarker("source-ready", period, "degraded"), wantErr: true}},
-			lookups:    []lookup{{"source-ready", period, 0}},
-			wantOutbox: 1,
+			name:        "同一触发事件与周期内容变了是冲突",
+			reports:     []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}, {marker: goldenProducerMarker("source-ready", period, "degraded"), wantErr: true}},
+			lookups:     []lookup{{"source-ready", period, 0}},
+			wantMarkers: 1,
 		},
 		{
-			name:       "同一周期不同触发事件各存一条",
-			reports:    []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}, {marker: goldenProducerMarker("recalc-1", period, "degraded"), wantSame: -1}},
-			lookups:    []lookup{{"source-ready", period, 0}, {"recalc-1", period, 1}},
-			wantOutbox: 2,
+			name:        "同一周期不同触发事件各存一条",
+			reports:     []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}, {marker: goldenProducerMarker("recalc-1", period, "degraded"), wantSame: -1}},
+			lookups:     []lookup{{"source-ready", period, 0}, {"recalc-1", period, 1}},
+			wantMarkers: 2,
 		},
 		{
-			name:       "同一触发事件不同周期各存一条",
-			reports:    []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}, {marker: goldenProducerMarker("source-ready", period+60, "complete"), wantSame: -1}},
-			lookups:    []lookup{{"source-ready", period, 0}, {"source-ready", period + 60, 1}},
-			wantOutbox: 2,
+			name:        "同一触发事件不同周期各存一条",
+			reports:     []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}, {marker: goldenProducerMarker("source-ready", period+60, "complete"), wantSame: -1}},
+			lookups:     []lookup{{"source-ready", period, 0}, {"source-ready", period + 60, 1}},
+			wantMarkers: 2,
 		},
 		{
-			name:       "同一触发事件与周期换了频率仍是同一个事件",
-			reports:    []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}, {marker: monthly, wantErr: true}},
-			lookups:    []lookup{{"source-ready", period, 0}},
-			wantOutbox: 1,
+			name:        "同一触发事件与周期换了频率仍是同一个事件",
+			reports:     []report{{marker: goldenProducerMarker("source-ready", period, "complete"), wantSame: -1}, {marker: monthly, wantErr: true}},
+			lookups:     []lookup{{"source-ready", period, 0}},
+			wantMarkers: 1,
 		},
 	}
 	for _, tc := range cases {
@@ -661,7 +661,7 @@ func TestGoldenProducerMarkers(t *testing.T) {
 				require.NoError(t, proto.Unmarshal(want, wantMessage))
 				require.True(t, proto.Equal(wantMessage, message), "lookup %s/%d", item.cause, item.periodTime)
 			}
-			require.Len(t, goldenMarkers(t, store, goldenSpace, "factor_result"), tc.wantOutbox)
+			require.Len(t, goldenMarkers(t, store, goldenSpace, "factor_result"), tc.wantMarkers)
 		})
 	}
 }
@@ -697,14 +697,23 @@ func TestGoldenDeleteDatasetClearsLedgerAndMarkers(t *testing.T) {
 	_, found, err = store.GetDatasetPeriodCompletedMarker(ctx, goldenSpace, "keep-me", "source-ready", goldenPeriod.Unix())
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Empty(t, goldenMarkers(t, store, goldenSpace, "delete-me"))
+	// 变更日志里的标记条目还在，但本体已删，转发时跳过；保留的数据集照常可发。
+	for dataset, publishable := range map[string]bool{"delete-me": false, "keep-me": true} {
+		markers := goldenMarkers(t, store, goldenSpace, dataset)
+		require.Len(t, markers, 1)
+		raw, err := proto.Marshal(markers[0].message)
+		require.NoError(t, err)
+		got, err := store.MarkerPublishable(raw)
+		require.NoError(t, err)
+		require.Equal(t, publishable, got, dataset)
+	}
 
 	// 截止后只有保留的数据集被判定。
 	clock.set(goldenPeriod.Add(goldenDeadline))
 	require.NoError(t, goldenFinalize(t, store, clock.now()))
 	require.Equal(t, "", goldenPeriodStatus(t, store, goldenSpace, "delete-me", goldenFreq, goldenPeriod.Unix()))
 	require.Equal(t, "degraded", goldenPeriodStatus(t, store, goldenSpace, "keep-me", goldenFreq, goldenPeriod.Unix()))
-	require.Empty(t, goldenMarkers(t, store, goldenSpace, "delete-me"))
+	require.Len(t, goldenMarkers(t, store, goldenSpace, "delete-me"), 1, "已删数据集不再产生新的完成标记")
 
 	// 重建后照常写入，同一触发事件可以重新上报。
 	record := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: "delete-me", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}}

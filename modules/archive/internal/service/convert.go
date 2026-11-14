@@ -32,7 +32,7 @@ func runToPB(r store.Run) *archivepb.ArchiveRun {
 	out := &archivepb.ArchiveRun{
 		RunId: r.RunID, SpaceId: r.SpaceID, DatasetId: r.DatasetID, Kind: r.Kind, RangeStart: fmtRFC(r.RangeStart), RangeEnd: fmtRFC(r.RangeEnd),
 		Status: r.Status, ScheduledAt: fmtRFC(r.ScheduledAt), StartedAt: fmtRFC(r.StartedAt), FinishedAt: fmtRFC(r.FinishedAt),
-		WorkerId: r.WorkerID, LeaseUntil: fmtRFC(r.LeaseUntil), SubjectsTotal: r.Stats.SubjectsTotal, SubjectsDone: r.Stats.SubjectsDone,
+		LeaseUntil: fmtRFC(r.LeaseUntil), SubjectsTotal: r.Stats.SubjectsTotal, SubjectsDone: r.Stats.SubjectsDone,
 		RequestCount: r.Stats.RequestCount, BytesRead: r.Stats.BytesRead, RowsRead: r.Stats.RowsRead, RowsAdded: r.Stats.RowsAdded,
 		RowsChanged: r.Stats.RowsChanged, PartitionsExported: r.Stats.PartitionsExported, PartitionsFinalized: r.Stats.PartitionsFinalized, Message: r.Message,
 		PartitionsUploaded: r.Stats.PartitionsUploaded, ImportFile: r.ImportFile, Overwrite: r.Overwrite,
@@ -71,7 +71,7 @@ func remoteState(p store.Partition, remoteEnabled bool) string {
 func partitionToPB(p store.Partition, remoteEnabled bool) *archivepb.ArchivePartition {
 	return &archivepb.ArchivePartition{
 		SpaceId: p.SpaceID, DatasetId: p.DatasetID, PartitionKey: p.PartitionKey, RangeStart: fmtRFC(p.RangeStart), RangeEnd: fmtRFC(p.RangeEnd),
-		Status: p.Status, WorkerId: p.WorkerID, RowCount: p.RowCount, SubjectCount: p.SubjectCount, MinDataTime: fmtRFC(p.MinDataTime), MaxDataTime: fmtRFC(p.MaxDataTime),
+		Status: p.Status, RowCount: p.RowCount, SubjectCount: p.SubjectCount, MinDataTime: fmtRFC(p.MinDataTime), MaxDataTime: fmtRFC(p.MaxDataTime),
 		FilePath: p.FilePath, FileBytes: p.FileBytes, FileSha256: p.FileSHA256, Columns: append([]string(nil), p.Columns...), Preview: p.Preview,
 		ExportCount: p.ExportCount, LastChangedAt: fmtRFC(p.LastChangedAt), ExportedAt: fmtRFC(p.ExportedAt), FinalizedAt: fmtRFC(p.FinalizedAt), LastRunId: p.LastRunID,
 		RemoteKey: p.Remote.Key, RemoteSha256: p.Remote.SHA256, RemoteEtag: p.Remote.ETag, RemoteUploadedAt: fmtRFC(p.Remote.UploadedAt),
@@ -112,9 +112,9 @@ func objectStoreFromJSON(text string) *archivepb.ObjectStoreInfo {
 
 func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
 	return &archivepb.ArchiveWorkerInfo{
-		WorkerId: w.WorkerID, InstanceId: w.InstanceID, Version: w.Version, RootDir: w.RootDir, DiskTotalBytes: w.DiskTotalBytes,
+		WorkerId: w.WorkerID, Version: w.Version, RootDir: w.RootDir, DiskTotalBytes: w.DiskTotalBytes,
 		DiskFreeBytes: w.DiskFreeBytes, DiskUsedBytes: w.DiskUsedBytes, MinFreeBytes: w.MinFreeBytes, StagingBytes: w.StagingBytes, Maintaining: w.Maintaining, PacingJson: w.PacingJSON,
-		RunningRunIds: append([]string(nil), w.RunningRunIDs...), LeaseUntil: fmtRFC(w.LeaseUntil), LastHeartbeatAt: fmtRFC(w.LastHeartbeat), Active: w.Active(now),
+		RunningRunIds: append([]string(nil), w.RunningRunIDs...), LastHeartbeatAt: fmtRFC(w.LastHeartbeat), Active: workerOnline(w, now),
 		ObjectStore: objectStoreFromJSON(w.ObjectStoreJSON),
 	}
 }

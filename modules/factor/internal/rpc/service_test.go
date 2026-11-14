@@ -280,7 +280,7 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 		"CreateFactor", "UpdateFactor", "DeleteFactor", "GetFactor", "ListFactors",
 		"AddTaskMember", "RemoveTaskMember", "SetTaskMemberStatus", "BindFactorTask", "DeleteBoundTask",
 		"RecalcFactors", "ListRecalcJobs", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
-		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions", "NotifyPeriodsFilled",
+		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions",
 		"ListFactorCategories", "UpsertFactorCategory", "DeleteFactorCategory", "SetFactorCategory",
 		"SubmitFactorParams", "GetFactorParams",
 		"PublishUdf", "ListUdfs", "GetUdf", "ActivateUdf",

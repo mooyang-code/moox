@@ -32,7 +32,6 @@
 | `archive tasks preview` | 预览接下来 5 次拉取、3 次复核、复核读取区间与分区导出时间 |
 | `archive tasks run` | 立即运行一次（同复核） |
 | `archive tasks update` | 修改拉取间隔、回补起点或启停任务 |
-| `archive worker retire` | 退役一个不再使用的 worker 登记（例如换机后的旧记录） |
 
 ## cloud：云函数：云账户、函数实例、SCF 导入与代码包（调用 CloudFunctionMgr）
 

@@ -380,9 +380,11 @@ func (r *ListAccountLedgerReq) Validate() error {
 	return nil
 }
 
-func (r *PlaceManualOrderReq) Validate() error {
-	if r == nil ||
-		strings.TrimSpace(r.ActionId) == "" ||
+func (r *SubmitOrderReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" {
+		return fmt.Errorf("logical_account_id is required")
+	}
+	if strings.TrimSpace(r.ActionId) == "" ||
 		strings.TrimSpace(r.TradingAccountId) == "" ||
 		strings.TrimSpace(r.ClientOrderId) == "" ||
 		strings.TrimSpace(r.InstrumentId) == "" ||
@@ -426,19 +428,6 @@ func (r *PlaceManualOrderReq) Validate() error {
 		return fmt.Errorf("unsupported order_type")
 	}
 	return nil
-}
-
-func (r *SubmitOrderReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" {
-		return fmt.Errorf("logical_account_id is required")
-	}
-	return (&PlaceManualOrderReq{
-		ActionId: r.ActionId, TradingAccountId: r.TradingAccountId,
-		ClientOrderId: r.ClientOrderId, InstrumentId: r.InstrumentId,
-		OrderType: r.OrderType, FillPolicy: r.FillPolicy, Side: r.Side,
-		PositionSide: r.PositionSide, Quantity: r.Quantity, LimitPrice: r.LimitPrice, MarketType: r.MarketType,
-		Reason: r.Reason, DeadlineAt: r.DeadlineAt,
-	}).Validate()
 }
 
 func (r *CancelOrderReq) Validate() error {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -15,9 +16,11 @@ import (
 // errNotLogicalMember 是查询持仓时传了不属于该组合账户的交易账户：请求参数有误。
 var errNotLogicalMember = errors.New("交易账户不是该组合账户的成员")
 
-type ManualOrderCommand struct {
+// SubmitOrderCommand 是人工下单的命令：给 LogicalAccountID 里的执行账户下一笔单。
+type SubmitOrderCommand struct {
 	SpaceID          string
 	ActionID         string
+	LogicalAccountID string
 	TradingAccountID string
 	ClientOrderID    string
 	InstrumentID     string
@@ -31,18 +34,10 @@ type ManualOrderCommand struct {
 	DeadlineAt       int64
 }
 
-type SubmitOrderCommand struct {
-	ManualOrderCommand
-	LogicalAccountID string
-}
-
 type ExecutionServer struct {
-	Store          *store.Store
-	SubmitOrdinary func(context.Context, SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error)
-	PlaceManual    func(
-		context.Context,
-		ManualOrderCommand,
-	) (store.OperatorActionRecord, store.OrderRecord, error)
+	Store *store.Store
+	// Submit 受理人工下单：按组合的控制模式决定要不要先暂停组合（见 operator.Service.PlaceOrder）。
+	Submit func(context.Context, SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error)
 	Cancel func(
 		context.Context,
 		string,
@@ -50,81 +45,38 @@ type ExecutionServer struct {
 		string,
 		string,
 	) (store.OperatorActionRecord, store.OrderRecord, error)
+	// Lanes 按标的返回执行器对目标的结论（targetapp.Executor.LaneStatuses）；为空时 GetLogicalAccountTarget 不带 lanes。
+	Lanes func(context.Context, store.LogicalAccountTargetRecord) ([]targetapp.LaneStatus, error)
 }
 
-// manualOrderRequest 是 PlaceManualOrderReq 与 SubmitOrderReq 共有的字段读取。
-type manualOrderRequest interface {
-	GetActionId() string
-	GetTradingAccountId() string
-	GetClientOrderId() string
-	GetInstrumentId() string
-	GetMarketType() tradepb.MarketType
-	GetOrderType() tradepb.OrderType
-	GetFillPolicy() tradepb.FillPolicy
-	GetSide() tradepb.OrderSide
-	GetPositionSide() tradepb.PositionSide
-	GetQuantity() string
-	GetLimitPrice() string
-	GetReason() string
-	GetDeadlineAt() int64
-}
-
-// manualOrderCommand 把下单请求转成命令。hasLimitPrice 表示请求带了 limit_price（proto 可选字段，读取器分不出“未传”和“空串”）。
-// 失败时返回写好的错误信息，调用方直接放进响应。
-func (h *ExecutionServer) manualOrderCommand(
-	ctx context.Context, spaceID string, req manualOrderRequest, hasLimitPrice bool,
-) (ManualOrderCommand, *tradepb.RetInfo) {
+// submitOrderCommand 把下单请求转成命令。失败时返回写好的错误信息，调用方直接放进响应。
+func (h *ExecutionServer) submitOrderCommand(
+	ctx context.Context, spaceID string, req *tradepb.SubmitOrderReq,
+) (SubmitOrderCommand, *tradepb.RetInfo) {
 	quantity, err := shared.ParseDecimal(req.GetQuantity())
 	if err != nil {
-		return ManualOrderCommand{}, invalidInfo(err)
+		return SubmitOrderCommand{}, invalidInfo(err)
 	}
 	var limitPrice *shared.Decimal
-	if hasLimitPrice {
+	// limit_price 是 proto 可选字段：只有请求带了才解析，读取器分不出“未传”和“空串”。
+	if req.LimitPrice != nil {
 		value, parseErr := shared.ParseDecimal(req.GetLimitPrice())
 		if parseErr != nil {
-			return ManualOrderCommand{}, invalidInfo(parseErr)
+			return SubmitOrderCommand{}, invalidInfo(parseErr)
 		}
 		limitPrice = &value
 	}
 	instrumentID, err := h.requestInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId(), req.GetMarketType())
 	if err != nil {
-		return ManualOrderCommand{}, instrumentErrorInfo(err)
+		return SubmitOrderCommand{}, instrumentErrorInfo(err)
 	}
-	return ManualOrderCommand{
-		SpaceID: spaceID, ActionID: req.GetActionId(), TradingAccountID: req.GetTradingAccountId(),
-		ClientOrderID: req.GetClientOrderId(), InstrumentID: instrumentID,
+	return SubmitOrderCommand{
+		SpaceID: spaceID, ActionID: req.GetActionId(), LogicalAccountID: req.GetLogicalAccountId(),
+		TradingAccountID: req.GetTradingAccountId(),
+		ClientOrderID:    req.GetClientOrderId(), InstrumentID: instrumentID,
 		OrderType: orderTypeFromPB(req.GetOrderType()), FillPolicy: fillPolicyFromPB(req.GetFillPolicy()),
 		Side: sideFromPB(req.GetSide()), PositionSide: positionSideFromPB(req.GetPositionSide()),
 		Quantity: quantity, LimitPrice: limitPrice, Reason: req.GetReason(), DeadlineAt: req.GetDeadlineAt(),
-	}, nil
-}
-
-func (h *ExecutionServer) PlaceManualOrder(
-	ctx context.Context,
-	req *tradepb.PlaceManualOrderReq,
-) (*tradepb.PlaceManualOrderRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.PlaceManualOrderRsp{RetInfo: invalidOrErrorInfo(err)}, nil
-	}
-	command, info := h.manualOrderCommand(ctx, spaceID, req, req.LimitPrice != nil)
-	if info != nil {
-		return &tradepb.PlaceManualOrderRsp{RetInfo: info}, nil
-	}
-	if h.PlaceManual == nil {
-		err = fmt.Errorf("人工下单服务未配置")
-	}
-	var action store.OperatorActionRecord
-	var order store.OrderRecord
-	if err == nil {
-		action, order, err = h.PlaceManual(ctx, command)
-	}
-	return &tradepb.PlaceManualOrderRsp{
-		RetInfo: errorInfo(err), Action: operatorActionToPB(action),
-		Order: orderToPB(order),
 	}, nil
 }
 
@@ -198,7 +150,44 @@ func (h *ExecutionServer) GetLogicalAccountTarget(
 	)
 	return &tradepb.GetLogicalAccountTargetRsp{
 		RetInfo: errorInfo(err), Target: logicalAccountTargetToPB(record),
+		Lanes: h.targetLanes(ctx, record, err),
 	}, nil
+}
+
+// targetLanes 按标的给出执行器的结论。目标已收敛时整页都到位，不用算；成员或设置读不出来时不给，页面按未知显示。
+func (h *ExecutionServer) targetLanes(ctx context.Context, record store.LogicalAccountTargetRecord, getErr error) []*tradepb.TargetLane {
+	if h.Lanes == nil || getErr != nil || record.TargetID == "" || record.Status == targetapp.StatusConverged {
+		return nil
+	}
+	statuses, err := h.Lanes(ctx, record)
+	if err != nil {
+		return nil
+	}
+	lanes := make([]*tradepb.TargetLane, 0, len(statuses))
+	for _, status := range statuses {
+		lanes = append(lanes, &tradepb.TargetLane{
+			InstrumentId: status.InstrumentID, State: targetLaneStateToPB(status.State), Reason: status.Reason,
+		})
+	}
+	return lanes
+}
+
+func targetLaneStateToPB(state targetapp.LaneState) tradepb.TargetLaneState {
+	switch state {
+	case targetapp.LaneWillOrder:
+		return tradepb.TargetLaneState_TARGET_LANE_STATE_WILL_ORDER
+	case targetapp.LaneInPlace:
+		return tradepb.TargetLaneState_TARGET_LANE_STATE_IN_PLACE
+	case targetapp.LaneBelowMinNotional:
+		return tradepb.TargetLaneState_TARGET_LANE_STATE_BELOW_MIN_NOTIONAL
+	case targetapp.LaneMarketDeferred:
+		return tradepb.TargetLaneState_TARGET_LANE_STATE_MARKET_DEFERRED
+	case targetapp.LaneBelowLot:
+		return tradepb.TargetLaneState_TARGET_LANE_STATE_BELOW_LOT
+	case targetapp.LaneBlocked:
+		return tradepb.TargetLaneState_TARGET_LANE_STATE_BLOCKED
+	}
+	return tradepb.TargetLaneState_TARGET_LANE_STATE_UNKNOWN
 }
 
 func (h *ExecutionServer) GetOrder(

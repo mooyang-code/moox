@@ -18,7 +18,12 @@ import (
 // reported; the job lease expires and the job resumes from its last progress.
 var errReportFailed = errors.New("recalc progress report failed")
 
+// giveBackTimeout 是归还作业的上报超时（引擎停止时上下文已取消，归还用单独的超时）。
+const giveBackTimeout = 5 * time.Second
+
 const (
+	// jobStatusAccepted 由引擎上报时表示归还：作业回到待领取，进度保留。
+	jobStatusAccepted  = "accepted"
 	jobStatusRunning   = "running"
 	jobStatusSucceeded = "succeeded"
 	jobStatusFailed    = "failed"
@@ -52,9 +57,7 @@ type recalcLoop struct {
 	prepare func(ctx context.Context, set domain.EngineTask) (release func(), err error)
 	// leaseAllowed 非空时，模块级生命周期放行才领取作业（暂停、恢复追赶、重置期间不领取，也不续跑）。
 	leaseAllowed func() bool
-	// generation 返回模块的暂停代次；作业领取时记下，代次变化后旧的执行上下文不再写任何分块。
-	generation func() uint64
-	// pulling 登记在途的领取请求：暂停的等待收敛要等它返回，领取回来的作业再按代次判断是否仍然有效。
+	// pulling 登记在途的领取请求：暂停的等待收敛要等它返回；领取回来的作业写分块时被门禁挡住，随即归还。
 	pulling func() func()
 	// moduleOpen 报告模块级生命周期是否放行；为空时视为一直放行。runWhenOpen 据此区分“任务刚建立、门禁稍后放行”（可以等）
 	// 与“模块暂停了”（立刻放弃作业）。
@@ -67,7 +70,7 @@ type recalcLoop struct {
 	// now 取当前时间（测试可替换）。
 	now func() time.Time
 	// gateWait、gateRetry：任务还没放行（刚建立、自动 init/start 还没走完）时任务会被门禁挡住；等放行的最长时间与重试间隔，
-	// 为 0 时取默认值（5 分钟、10 秒）。不等的话任务带着租约被丢下，要等租约（15 分钟）过期才会被重新领取。
+	// 为 0 时取默认值（5 分钟、10 秒）。等不到就归还作业，下一轮重新领取。
 	gateWait, gateRetry time.Duration
 }
 
@@ -89,24 +92,15 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 	if l.pulling != nil {
 		done = l.pulling()
 	}
-	// 先读代次、再查门禁：两次读取之间暂停了，代次是旧的，领取回来的作业之后任何写入都会因代次不符被拒绝；
-	// 反过来（先查门禁再读代次）会把新代次盖在一个暂停前发出的领取请求上。
-	var generation uint64
-	if l.generation != nil {
-		generation = l.generation()
-	}
 	if l.leaseAllowed != nil && !l.leaseAllowed() {
 		done()
 		return false, nil
 	}
 	job, found, err := l.client.PullRecalcJob(ctx)
-	// 领取返回就注销在途登记：作业此后的写入由分块各自登记，领取到的作业再由代次判断是否仍然有效。
+	// 领取返回就注销在途登记：作业此后的写入由分块各自登记并检查门禁。
 	done()
 	if err != nil || !found {
 		return false, err
-	}
-	if l.generation != nil {
-		ctx = withLeaseGeneration(ctx, generation)
 	}
 	log.InfoContextf(ctx, "factor_recalc_start job_id=%s task_id=%s start=%s end=%s progress=%s", job.JobID, job.Set.Set.TaskID,
 		job.Window.Start.Format(time.RFC3339), job.Window.End.Format(time.RFC3339), job.Window.Progress.Format(time.RFC3339))
@@ -122,15 +116,19 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 	err = l.runJob(ctx, &job, axis)
 	switch {
 	case errors.Is(err, recalcexec.ErrGated):
-		// 任务被暂停（或在恢复追赶、重置）：不报失败，任务租约到期后由放行后的引擎继续；按没有任务处理，避免立刻重新领取。
+		// 任务被暂停（或在恢复追赶、重置）：不报失败，归还作业，放行后重新领取并从已上报的进度续跑；
+		// 按没有任务处理，等一个轮询间隔再领取。
 		log.InfoContextf(ctx, "factor_recalc_gated job_id=%s task_id=%s", job.JobID, job.Set.Set.TaskID)
+		l.giveBack(ctx, axis, job)
 		return false, nil
 	case err == nil:
 		log.InfoContextf(ctx, "factor_recalc_done job_id=%s", job.JobID)
+	case ctx.Err() != nil:
+		// 引擎停止（排在上报失败之前：停止时正在上报的分块也会因上下文取消而失败）：归还作业，
+		// 重启后立刻重新领取并从已上报的进度续跑；归还失败则等作业租约过期。
+		l.giveBack(ctx, axis, job)
 	case errors.Is(err, ErrLeaseConflict), errors.Is(err, errReportFailed):
 		log.WarnContextf(ctx, "factor_recalc_abandoned job_id=%s error=%v", job.JobID, err)
-	case ctx.Err() != nil:
-		// Shutdown: the lease expires and the job resumes from its progress.
 	default:
 		log.ErrorContextf(ctx, "factor_recalc_failed job_id=%s error=%v", job.JobID, err)
 		if _, reportErr := l.report(ctx, axis, job, job.Window.Progress, jobStatusFailed, err.Error(), nil); reportErr != nil {
@@ -180,6 +178,16 @@ func (l *recalcLoop) report(ctx context.Context, axis periodclock.Axis, job Pull
 		return "", err
 	}
 	return l.client.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, realProgress, status, errText, realFilled)
+}
+
+// giveBack 把放弃的作业归还给管理端（回到待领取、进度保留），下一轮领取立刻能拿到，不用等作业租约过期。
+// 归还失败只记日志：作业租约过期后照旧会被重新领取。
+func (l *recalcLoop) giveBack(ctx context.Context, axis periodclock.Axis, job PulledJob) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), giveBackTimeout)
+	defer cancel()
+	if _, err := l.report(ctx, axis, job, job.Window.Progress, jobStatusAccepted, "", nil); err != nil {
+		log.WarnContextf(ctx, "factor_recalc_give_back_failed job_id=%s error=%v", job.JobID, err)
+	}
 }
 
 // convertRanges 逐个换算闭区间的两端。
@@ -258,6 +266,11 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob, axis periodcloc
 		return current != jobStatusRunning, nil
 	}
 	source := func(ctx context.Context) (recalcexec.Selection, error) {
+		// 领取之后的准备（备模块、补历史、分块重试的等待）不在在途登记里，期间模块可能已经暂停、收敛并进入恢复追赶；
+		// 恢复追赶的门禁会放行分块，所以这里按领取的条件再查一次：模块没有放行就不续跑，由调用方归还作业。
+		if l.leaseAllowed != nil && !l.leaseAllowed() {
+			return recalcexec.Selection{}, recalcexec.ErrGated
+		}
 		subjects, err := setSubjects(ctx, l.source, set, job.Subjects)
 		if err != nil {
 			return recalcexec.Selection{}, err
@@ -272,7 +285,7 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob, axis periodcloc
 }
 
 // runWhenOpen 执行补算；被生命周期门禁挡住（任务刚建立，自动 init、start 还在路上）时在限定时间内重试，等任务放行后继续，
-// 超时仍被挡住就按原样返回 ErrGated（任务被暂停等情况：不报失败，租约到期后由放行后的引擎继续）。
+// 超时仍被挡住就按原样返回 ErrGated（任务被暂停等情况：不报失败，由调用方归还作业）。
 func (l *recalcLoop) runWhenOpen(ctx context.Context, run func() error) error {
 	wait, retry := l.gateWait, l.gateRetry
 	if wait <= 0 {
@@ -287,12 +300,8 @@ func (l *recalcLoop) runWhenOpen(ctx context.Context, run func() error) error {
 		if !errors.Is(err, recalcexec.ErrGated) || !time.Now().Before(deadline) {
 			return err
 		}
-		// 模块暂停（或这个上下文领取之后暂停过）：立刻放弃，不在门禁重开后用旧的上下文继续写；
-		// 作业租约到期后只能重新领取（重新领取时用固化的绑定）。
+		// 模块暂停：立刻放弃，不占着作业等恢复；放行后重新领取（用固化的绑定）。
 		if l.moduleOpen != nil && !l.moduleOpen() {
-			return err
-		}
-		if gen, ok := ctx.Value(leaseGenerationKey{}).(uint64); ok && l.generation != nil && gen != l.generation() {
 			return err
 		}
 		select {

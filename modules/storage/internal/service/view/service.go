@@ -44,11 +44,9 @@ type Service struct {
 	indexGates       map[string]*indexWriteGate
 	// indexRevision advances after every successful write to an index, so a
 	// reader that is paginating detects in-place corrections and deletions.
-	indexRevision     map[string]uint64
-	cleanupMu         sync.Mutex
-	cleanupCandidates map[managedIndexRef]retiredIndexCandidate
-	fileOverLimitMu   sync.Mutex
-	fileOverLimit     map[viewRef]struct{}
+	indexRevision   map[string]uint64
+	fileOverLimitMu sync.Mutex
+	fileOverLimit   map[viewRef]struct{}
 	// readyReconnect 替换就绪事件发布器的专用连接；发布超时或连接被关闭后异步调用，readyReconnecting 保证同一时刻只有一个重连。
 	readyReconnect    func(context.Context) error
 	readyReconnecting atomic.Bool
@@ -159,17 +157,16 @@ func New(root, authSecret string) (*Service, error) {
 		return nil, fmt.Errorf("open duckdb view indexes: %w", err)
 	}
 	service := &Service{
-		engines:           engines,
-		indexEngine:       make(map[string]string),
-		schemas:           make(map[string]viewindex.ViewIndexSchema),
-		views:             make(map[viewRef]*viewRuntime),
-		catalogViews:      make(map[viewRef]*pb.View),
-		indexView:         make(map[string]viewRef),
-		authSecret:        authSecret,
-		indexGates:        make(map[string]*indexWriteGate),
-		indexRevision:     make(map[string]uint64),
-		cleanupCandidates: make(map[managedIndexRef]retiredIndexCandidate),
-		metrics:           observability.DefaultViewMetrics,
+		engines:       engines,
+		indexEngine:   make(map[string]string),
+		schemas:       make(map[string]viewindex.ViewIndexSchema),
+		views:         make(map[viewRef]*viewRuntime),
+		catalogViews:  make(map[viewRef]*pb.View),
+		indexView:     make(map[string]viewRef),
+		authSecret:    authSecret,
+		indexGates:    make(map[string]*indexWriteGate),
+		indexRevision: make(map[string]uint64),
+		metrics:       observability.DefaultViewMetrics,
 	}
 	return service, nil
 }
@@ -257,52 +254,53 @@ func (s *Service) HasEngine(name string) bool {
 
 var _ pb.DataViewService = (*Service)(nil)
 
-// prepareIndex 删掉同名的半成品后按 schema 建一个空索引，并把它记为 View 的建索引目标。建索引只在进程内进行，View 不对外提供索引写入接口。
-func (s *Service) prepareIndex(ctx context.Context, indexID string, schema viewindex.ViewIndexSchema) error {
-	engine := s.engines[schema.Engine]
-	if engine == nil {
-		return fmt.Errorf("view engine %q is unavailable", schema.Engine)
-	}
-	viewKey := viewRef{spaceID: schema.SpaceID, viewID: schema.ViewID}
+// prepareIndex 把 View 的索引清成一个空索引，准备回填。schemaOf 在运行时锁内给出要建的列契约，给不出时什么都不动。
+// 持有运行时锁准备：实时写入、加列、删除最旧数据都在运行时锁下看 active 与 building，不会碰到准备了一半的文件。
+// 从这里开始 View 不可读（active 清空、building 记上），直到建成后转为活动索引；中途失败时 building 留着，由调用方决定丢弃还是重试。
+func (s *Service) prepareIndex(ctx context.Context, ref viewRef, schemaOf func(*viewRuntime) (viewindex.ViewIndexSchema, error)) (viewindex.ViewIndexSchema, error) {
+	indexID := viewindex.ViewIndexID(ref.spaceID, ref.viewID)
 	s.mu.Lock()
-	runtime := s.views[viewKey]
+	runtime := s.views[ref]
 	if runtime == nil {
 		runtime = newViewRuntime()
-		s.views[viewKey] = runtime
+		s.views[ref] = runtime
 	}
 	s.mu.Unlock()
-	// 持有运行时锁准备：实时写入、删除和清理都在运行时锁下看 active 与 building，不会碰到准备了一半的文件。
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.active == indexID {
-		return fmt.Errorf("View 索引 %q 是活动索引，不能重新准备", indexID)
-	}
-	release, err := s.indexWriteGate(indexID).lock(ctx)
+	schema, err := schemaOf(runtime)
 	if err != nil {
-		return err
+		return viewindex.ViewIndexSchema{}, err
 	}
-	defer release()
-	// 上次没建完的半成品（含 DuckDB 的 WAL）先删干净。
-	if err := engine.Remove(ctx, indexID); err != nil {
-		return err
+	engine := s.engines[schema.Engine]
+	if engine == nil {
+		return viewindex.ViewIndexSchema{}, fmt.Errorf("view engine %q is unavailable", schema.Engine)
 	}
-	if err := engine.Prepare(ctx, indexID, schema); err != nil {
-		return err
-	}
+	runtime.clearActiveLocked()
+	runtime.building = indexID
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.indexEngine[indexID] = schema.Engine
 	s.schemas[indexID] = schema
-	if s.catalogViews[viewKey] == nil {
-		s.catalogViews[viewKey] = &pb.View{SpaceId: schema.SpaceID, ViewId: schema.ViewID, DatasetId: schema.PrimaryDatasetID, Engine: schema.Engine}
+	if s.catalogViews[ref] == nil {
+		s.catalogViews[ref] = &pb.View{SpaceId: schema.SpaceID, ViewId: schema.ViewID, DatasetId: schema.PrimaryDatasetID, Engine: schema.Engine}
 	}
-	runtime.building = indexID
-	s.indexView[indexID] = viewKey
-	return nil
+	s.indexView[indexID] = ref
+	s.mu.Unlock()
+	release, err := s.indexWriteGate(indexID).lock(ctx)
+	if err != nil {
+		return viewindex.ViewIndexSchema{}, err
+	}
+	defer release()
+	// 原来的索引或上次没建完的半成品（含 DuckDB 的 WAL）先删干净。
+	if err := engine.Remove(ctx, indexID); err != nil {
+		return viewindex.ViewIndexSchema{}, err
+	}
+	if err := engine.Prepare(ctx, indexID, schema); err != nil {
+		return viewindex.ViewIndexSchema{}, err
+	}
+	return schema, nil
 }
 
-// runtimeOfIndex 返回索引所属 View 的运行时：先按索引 ID 解析所属 View（与清理路径一致），解析不了的退回索引到
-// View 的映射；View 还没有运行时返回空。
 func (s *Service) runtimeOfIndex(indexID string) *viewRuntime {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

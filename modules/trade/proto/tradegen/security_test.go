@@ -21,7 +21,7 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"RemoveLogicalAccountMember", "ClaimLogicalAccountOwner",
 			"ReleaseLogicalAccountOwner", "PauseLogicalAccount",
 			"ResumeLogicalAccount", "FlattenLogicalAccount",
-			"PlaceManualOrder", "SubmitOrder", "CancelOrder", "GetOperatorAction",
+			"SubmitOrder", "CancelOrder", "GetOperatorAction",
 			"GetLogicalAccountTarget", "GetOrder", "ListOrders", "ListFills",
 			"ListPositions", "CreatePaperSimulation", "ClosePaperSimulation",
 			"GetExecutionCapabilities", "ListTradableInstruments", "QueryEquityCurve", "ListHoldings",
@@ -87,6 +87,11 @@ func TestTradeRPCUsesApprovedEnums(t *testing.T) {
 		"OrderSide": {
 			"ORDER_SIDE_UNSPECIFIED", "ORDER_SIDE_BUY", "ORDER_SIDE_SELL",
 		},
+		"TargetLaneState": {
+			"TARGET_LANE_STATE_UNKNOWN", "TARGET_LANE_STATE_WILL_ORDER", "TARGET_LANE_STATE_IN_PLACE",
+			"TARGET_LANE_STATE_BELOW_MIN_NOTIONAL", "TARGET_LANE_STATE_MARKET_DEFERRED",
+			"TARGET_LANE_STATE_BELOW_LOT", "TARGET_LANE_STATE_BLOCKED",
+		},
 	}
 	enums := File_trade_service_proto.Enums()
 	if enums.Len() != len(want) {
@@ -122,20 +127,21 @@ func TestTradeRPCUsesApprovedEnums(t *testing.T) {
 func TestManualOrderRequestHasExactApprovedShape(t *testing.T) {
 	want := map[protoreflect.Name]protoreflect.FieldNumber{
 		"action_id":          1,
-		"trading_account_id": 2,
-		"client_order_id":    3,
-		"instrument_id":      4,
-		"order_type":         5,
-		"fill_policy":        6,
-		"side":               7,
-		"position_side":      8,
-		"quantity":           9,
-		"limit_price":        10,
-		"reason":             11,
-		"deadline_at":        12,
-		"market_type":        13,
+		"logical_account_id": 2,
+		"trading_account_id": 3,
+		"client_order_id":    4,
+		"instrument_id":      5,
+		"order_type":         6,
+		"fill_policy":        7,
+		"side":               8,
+		"position_side":      9,
+		"quantity":           10,
+		"limit_price":        11,
+		"reason":             12,
+		"deadline_at":        13,
+		"market_type":        14,
 	}
-	fields := (&PlaceManualOrderReq{}).ProtoReflect().Descriptor().Fields()
+	fields := (&SubmitOrderReq{}).ProtoReflect().Descriptor().Fields()
 	if fields.Len() != len(want) {
 		t.Fatalf("field count = %d, want %d", fields.Len(), len(want))
 	}
@@ -251,7 +257,6 @@ func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
 		&FlattenLogicalAccountReq{},
 		&FlattenTradingAccountReq{},
 		&ListAccountLedgerReq{},
-		&PlaceManualOrderReq{},
 		&SubmitOrderReq{},
 		&CancelOrderReq{},
 		&GetOperatorActionReq{},
@@ -329,9 +334,10 @@ func TestCreateTradingAccountRequiresLiveConfig(t *testing.T) {
 }
 
 func TestManualOrderValidation(t *testing.T) {
-	newMarketOrder := func() *PlaceManualOrderReq {
-		return &PlaceManualOrderReq{
+	newMarketOrder := func() *SubmitOrderReq {
+		return &SubmitOrderReq{
 			ActionId:         "action-1",
+			LogicalAccountId: "logical-1",
 			TradingAccountId: "account-1",
 			ClientOrderId:    "client-1",
 			InstrumentId:     "BTCUSDT",
@@ -375,11 +381,11 @@ func TestManualOrderValidation(t *testing.T) {
 		})
 	}
 
-	for _, mutate := range []func(*PlaceManualOrderReq){
-		func(req *PlaceManualOrderReq) { req.OrderType = OrderType(99) },
-		func(req *PlaceManualOrderReq) { req.FillPolicy = FillPolicy(99) },
-		func(req *PlaceManualOrderReq) { req.Side = OrderSide(99) },
-		func(req *PlaceManualOrderReq) { req.PositionSide = PositionSide(99) },
+	for _, mutate := range []func(*SubmitOrderReq){
+		func(req *SubmitOrderReq) { req.OrderType = OrderType(99) },
+		func(req *SubmitOrderReq) { req.FillPolicy = FillPolicy(99) },
+		func(req *SubmitOrderReq) { req.Side = OrderSide(99) },
+		func(req *SubmitOrderReq) { req.PositionSide = PositionSide(99) },
 	} {
 		req := newMarketOrder()
 		mutate(req)

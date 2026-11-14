@@ -46,7 +46,7 @@ func managedSpaces(ctx context.Context, cfg *Config, dbm *store.Store) ([]string
 }
 
 // registerFetchPlanManager 启动采集计划对账：管理集合里的每个空间一个独立协程。对账器始终启动，推送采集不依赖云函数配置。
-func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl) error {
+func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl, bus *eventBusRuntime) error {
 	managed := func(ctx context.Context) ([]string, error) { return managedSpaces(ctx, cfg, dbm) }
 	// 启动时先逐个云函数空间检查部署参数，配置错误尽早暴露。
 	for _, space := range cfg.scfSpaces() {
@@ -115,10 +115,12 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			return marketfetch.PlanExecutorSCF, nil
 		},
 		Local: &localexec.Client{Gateway: process.gateway},
-		// 补采作业成功后通知因子：引擎立即推进连续水位、补算上游失败的标的。
-		Notify: klinecheck.FactorNotifier(process.gateway),
 		// 收市后整天重取：时刻取各市场 market.yaml 的 refetch_after_close_minutes，没配的市场不做。
 		CloseRefetch: markets.CloseRefetchDay, RefetchFrequency: routedFrequency,
+	}
+	if bus != nil {
+		// 补采作业结束后立刻把分块的补写通知封存成事件，不等合成的定时器：因子引擎和合成都订阅这个事件。
+		backfiller.FlushNotices = bus.notices.Flush
 	}
 	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })
 	svc.SetKlineOps(backfiller)

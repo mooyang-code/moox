@@ -585,12 +585,11 @@ func TestBackfillUsesTheSCFFunctionWhenTheExecutorIsSCF(t *testing.T) {
 	require.Len(t, scf.events, 2)
 }
 
-// 补采作业成功后按（数据集, 频率）发补齐通知，带上确认行情源没有的标的。
-func TestBackfillNotifiesFilledRangesAfterAJobSucceeds(t *testing.T) {
-	backfiller, invoker, _, base := newBackfillFixture(t)
-	invoker.noWrite = true
-	var got []FilledRange
-	backfiller.Notify = func(_ context.Context, filled []FilledRange) error { got = append(got, filled...); return nil }
+// 补采作业结束后立刻封存补写通知（发事件），不等合成的定时器。
+func TestBackfillFlushesNoticesWhenAJobEnds(t *testing.T) {
+	backfiller, _, _, base := newBackfillFixture(t)
+	flushed := 0
+	backfiller.FlushNotices = func(context.Context) error { flushed++; return nil }
 	ctx := context.Background()
 	jobID, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", DatasetID: "ds", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)}, "manual")
 	require.NoError(t, err)
@@ -599,16 +598,19 @@ func TestBackfillNotifiesFilledRangesAfterAJobSucceeds(t *testing.T) {
 	require.NoError(t, backfiller.Tick(ctx, "crypto"))
 	status, _ := backfiller.Status(ctx, jobID)
 	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
-	require.Len(t, got, 2)
-	require.Equal(t, "ds", got[0].DatasetID)
-	require.Equal(t, "1m", got[0].Frequency)
-	require.Empty(t, got[0].Absent, "整个补齐范围不带确认缺失")
-	require.False(t, got[0].From.After(base.Add(10*time.Minute)))
-	// 确认没有的标的按库里的记录带出精确区间（单根缺口复查仍缺即确认行情源没有）。
-	require.Equal(t, []string{"ETH-USDT"}, got[1].Absent)
-	require.False(t, got[1].From.Before(got[0].From))
-	require.False(t, got[1].To.After(got[0].To))
-	require.Less(t, got[1].To.Sub(got[1].From), time.Hour)
+	require.Positive(t, flushed)
+}
+
+// 取消作业时也封存一次：取消前已成功的分块的补写通知不用等下一个作业结束。
+func TestBackfillFlushesNoticesWhenAJobIsCancelled(t *testing.T) {
+	backfiller, _, _, base := newBackfillFixture(t)
+	flushed := 0
+	backfiller.FlushNotices = func(context.Context) error { flushed++; return nil }
+	ctx := context.Background()
+	jobID, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", DatasetID: "ds", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+	require.NoError(t, backfiller.Cancel(ctx, jobID))
+	require.Equal(t, 1, flushed)
 }
 
 // 恢复追赶：对暂停区间提交补采作业，补齐前没追平；补齐后追平；已确认缺失的不再补采并单独统计。

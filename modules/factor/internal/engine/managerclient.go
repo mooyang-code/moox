@@ -16,8 +16,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// ErrLeaseConflict means the manager rejected the call because another engine
-// holds the engine lease or the recalc job lease moved on.
+// ErrLeaseConflict 表示管理端拒绝了调用：本进程不是当前登记的引擎（另一个 engine_id 还在心跳，或已被重启后的新进程顶替），
+// 或者补算作业的租约令牌已经失效。
 var ErrLeaseConflict = errors.New("factor engine lease conflict")
 
 const managerServicePath = "trpc.moox.factor.FactorEngine"
@@ -27,8 +27,6 @@ type ManagerClient struct {
 	gateway  gatewayclient.Invoker
 	timeout  time.Duration
 	identity domain.EngineIdentity
-	// OnFilled 收到心跳响应里的补齐通知时调用（可为 nil）。
-	OnFilled func([]*factorpb.PeriodsFilled)
 }
 
 func NewManagerClient(gateway gatewayclient.Invoker, timeout time.Duration, identity domain.EngineIdentity) (*ManagerClient, error) {
@@ -67,9 +65,6 @@ func (c *ManagerClient) Heartbeat(ctx context.Context, status domain.EngineStatu
 	req := &factorpb.EngineHeartbeatReq{Engine: factorwire.EngineIdentityToPB(c.identity), Status: factorwire.EngineStatusToPB(status)}
 	if err := c.call(ctx, "EngineHeartbeat", req, &rsp, rsp.GetRetInfo); err != nil {
 		return 0, err
-	}
-	if handler := c.OnFilled; handler != nil && len(rsp.GetFilled()) > 0 {
-		handler(rsp.GetFilled())
 	}
 	return time.Duration(rsp.GetLeaseTtlSeconds()) * time.Second, nil
 }

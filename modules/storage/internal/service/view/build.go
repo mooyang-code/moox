@@ -57,70 +57,115 @@ func (l *backfillRequestLimiter) wait(ctx context.Context) error {
 	}
 }
 
-// buildInitialIndex 为还没有建好索引的 View 建索引：先取变更日志头部 H_start、准备空索引、从 Primary 读存量，建成时再取一次头部
-// H_done 与 H_start 一起记进索引（记下跟随进度的索引才算建好），View 从此可读，跟随器从 H_start 接着应用（重放的行是幂等写入），
-// (H_start, H_done] 之间的完成标记只推进游标、不发布。建索引期间 View 不可读，读取方等待。
-// 半成品不续建：失败或进程退出后，下一轮删掉重建。
-func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions, view *pb.View) error {
+// buildIndex 是唯一的建索引流程，首次建和断档后的重建都走它：先取变更日志头部 H_start，把索引清成空的（此后 View 不可读，
+// 读取方等待），从 Primary 读存量，建成时再取一次头部 H_done 与 H_start 一起记进索引（记下跟随进度的索引才算建好），
+// 最后转为活动索引。跟随器从 H_start 接着应用（重放的行是幂等写入），(H_start, H_done] 之间的完成标记只推进游标、不发布。
+// schemaOf 在运行时锁内给出要建的列契约：首次建用元数据里的列，重建沿用已有索引的契约。
+// 调用方持有 buildMu，并决定失败后怎么办（首次建丢弃半成品，重建留着由跟随器接着重建）。
+func (s *Service) buildIndex(ctx context.Context, opts MaintenanceOptions, view *pb.View, schemaOf func(*viewRuntime) (viewindex.ViewIndexSchema, error)) (viewindex.FollowState, error) {
 	ref := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+	indexID := viewindex.ViewIndexID(ref.spaceID, ref.viewID)
 	manager := s.followManager()
-	// 索引文件不存在或没建完（新建、文件被删、删除后同名重建）：残留的跟随器先停掉。要在取 buildMu 之前停：
-	// 它可能正等着 buildMu 做断档重建。
-	manager.Stop(ref.spaceID, ref.viewID)
-	s.buildMu.Lock()
-	defer s.buildMu.Unlock()
-	columns := numberedViewColumns(view.GetColumns())
-	var err error
-	var start viewindex.ChangeCursor
+	var state viewindex.FollowState
 	if manager != nil {
-		if start, err = manager.Head(ctx, view.GetSpaceId(), view.GetDatasetId()); err != nil {
-			return err
+		start, err := manager.Head(ctx, view.GetSpaceId(), view.GetDatasetId())
+		if err != nil {
+			return viewindex.FollowState{}, err
 		}
+		state.Cursor = start
 	}
 	s.mu.Lock()
 	s.catalogViews[ref] = proto.Clone(view).(*pb.View)
-	runtime := s.views[ref]
 	s.mu.Unlock()
-	if runtime != nil {
-		// 索引文件是权威：它不存在或没建完时，内存里残留的活动索引不再有效。
-		runtime.mu.Lock()
-		if runtime.active != "" {
-			runtime.clearActiveLocked()
-		}
-		runtime.mu.Unlock()
+	schema, err := s.prepareIndex(ctx, ref, schemaOf)
+	if err != nil {
+		return viewindex.FollowState{}, fmt.Errorf("准备 View 索引 %q：%w", indexID, err)
 	}
-	bars := viewBars(view, opts)
-	engine := strings.ToLower(strings.TrimSpace(view.GetEngine()))
-	// 回填单次最多读取 maxLatestPerSeries 行，记录的保留行数不能超过实际回填的行数。
-	schema := viewindex.ViewIndexSchema{
-		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: initialViewRevision,
-		PrimaryDatasetID: view.GetDatasetId(), Engine: engine, Columns: columns, RowsPerSeries: min(bars, maxLatestPerSeries),
-		ViewCreatedAt: view.GetCreatedAt(),
-	}
-	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
-	indexID := viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId())
-	if err := s.prepareIndex(ctx, indexID, schema); err != nil {
-		return fmt.Errorf("准备 View 索引：%w", err)
-	}
-	if err := s.backfillInitialIndex(ctx, view, schema, indexID, opts, bars); err != nil {
-		s.discardInitialBuild(ctx, ref, indexID)
-		return err
+	s.nextIndexRevision(indexID)
+	if err := s.backfillInitialIndex(ctx, view, schema, indexID, opts, viewBars(view, opts)); err != nil {
+		return viewindex.FollowState{}, err
 	}
 	if manager != nil {
 		done, err := manager.Head(ctx, view.GetSpaceId(), view.GetDatasetId())
 		if err == nil {
-			err = s.saveFollowState(ctx, indexID, viewindex.FollowState{Cursor: start, BuiltSequence: done.Sequence})
+			state.BuiltSequence = done.Sequence
+			err = s.saveFollowState(ctx, indexID, state)
 		}
 		if err != nil {
-			s.discardInitialBuild(ctx, ref, indexID)
-			return fmt.Errorf("记录索引的跟随进度：%w", err)
+			return viewindex.FollowState{}, fmt.Errorf("记录索引的跟随进度：%w", err)
 		}
 	}
 	if err := s.activateBuiltIndex(view, schema, indexID); err != nil {
+		return viewindex.FollowState{}, err
+	}
+	return state, nil
+}
+
+// buildInitialIndex 为还没有建好索引的 View 建索引（新建、文件被删、删除后同名重建）：列契约取元数据里 View 的列，修订号从头开始。
+// 半成品不续建：失败或进程退出后，下一轮删掉重建。建索引期间的周期完成不补发就绪事件。
+func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions, view *pb.View) error {
+	ref := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+	// 残留的跟随器先停掉。要在取 buildMu 之前停：它可能正等着 buildMu 做断档重建。
+	s.followManager().Stop(ref.spaceID, ref.viewID)
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	_, err := s.buildIndex(ctx, opts, view, func(*viewRuntime) (viewindex.ViewIndexSchema, error) {
+		// 回填单次最多读取 maxLatestPerSeries 行，记录的保留行数不能超过实际回填的行数。
+		schema := viewindex.ViewIndexSchema{
+			SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: initialViewRevision,
+			PrimaryDatasetID: view.GetDatasetId(), Engine: strings.ToLower(strings.TrimSpace(view.GetEngine())),
+			Columns: numberedViewColumns(view.GetColumns()), RowsPerSeries: min(viewBars(view, opts), maxLatestPerSeries),
+			ViewCreatedAt: view.GetCreatedAt(),
+		}
+		schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
+		return schema, nil
+	})
+	if err != nil {
+		s.discardInitialBuild(ctx, ref, viewindex.ViewIndexID(ref.spaceID, ref.viewID))
 		return err
 	}
 	s.ensureFollower(ref)
 	return nil
+}
+
+// rebuildFollowIndex 在断档（View 停机超过日志保留期，或存储已重建）或索引没有跟随进度时由跟随器原地重建索引：
+// 沿用当前索引的列契约（修订号、哈希不变）。重建期间 View 不可读；记录型 View 重建后为空，只跟随之后的写入。
+// 失败后不丢弃：View 留在“等待重建”的状态，由跟随器接着重建。
+func (s *Service) rebuildFollowIndex(ctx context.Context, ref viewRef) (viewindex.FollowState, error) {
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	if s.followManager() == nil {
+		return viewindex.FollowState{}, errors.New("View 没有在跟随变更日志")
+	}
+	s.mu.RLock()
+	catalogView := s.catalogViews[ref]
+	runtime := s.views[ref]
+	opts := s.maintenance
+	if opts.PrimaryRange == nil {
+		opts.PrimaryRange = s.primaryRange
+	}
+	s.mu.RUnlock()
+	if catalogView == nil || runtime == nil {
+		return viewindex.FollowState{}, fmt.Errorf("View %s/%s 不在目录中", ref.spaceID, ref.viewID)
+	}
+	view := proto.Clone(catalogView).(*pb.View)
+	return s.buildIndex(ctx, opts, view, func(runtime *viewRuntime) (viewindex.ViewIndexSchema, error) {
+		indexID := runtime.active
+		if indexID == "" {
+			// 上一次重建没有完成：接着用它的索引标识。
+			indexID = runtime.building
+		}
+		s.mu.RLock()
+		schema := s.schemas[indexID]
+		engine := s.engines[s.indexEngine[indexID]]
+		s.mu.RUnlock()
+		if indexID == "" || engine == nil || schema.SchemaHash == "" {
+			return viewindex.ViewIndexSchema{}, fmt.Errorf("View %s/%s 没有可重建的索引", ref.spaceID, ref.viewID)
+		}
+		schema.RowsPerSeries = min(viewBars(view, opts), maxLatestPerSeries)
+		schema.ViewCreatedAt = view.GetCreatedAt()
+		return schema, nil
+	})
 }
 
 // numberedViewColumns 按当前顺序给列编号（克隆后修改）：追加校验要求已建列的 sort_order 互不相同，

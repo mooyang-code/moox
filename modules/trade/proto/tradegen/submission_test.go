@@ -24,9 +24,6 @@ func TestSubmitOrderPublicContract(t *testing.T) {
 			t.Errorf("SubmitOrder exposes trusted field %s", name)
 		}
 	}
-	if (&PlaceManualOrderReq{}).ProtoReflect().Descriptor().Fields().ByName("deadline_at") == nil {
-		t.Error("takeover request must support the same absolute deadline")
-	}
 }
 
 func TestSubmitOrderValidation(t *testing.T) {
@@ -73,8 +70,9 @@ func TestSubmitOrderValidation(t *testing.T) {
 }
 
 func TestManualOrderRejectsNegativeDeadline(t *testing.T) {
-	req := &PlaceManualOrderReq{
-		ActionId: "action-1", TradingAccountId: "account-1", ClientOrderId: "client-1",
+	req := &SubmitOrderReq{
+		LogicalAccountId: "logical-1",
+		ActionId:         "action-1", TradingAccountId: "account-1", ClientOrderId: "client-1",
 		InstrumentId: "BTCUSDT", Quantity: "1", OrderType: OrderType_ORDER_TYPE_MARKET,
 		Side: OrderSide_ORDER_SIDE_BUY, Reason: "takeover", DeadlineAt: -1,
 	}

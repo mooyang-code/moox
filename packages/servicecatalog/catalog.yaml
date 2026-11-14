@@ -982,7 +982,6 @@ components:
           - ValidateFactorSpec
           - PreviewFactor
           - ListFactorFunctions
-          - NotifyPeriodsFilled
           - ListFactorCategories
           - UpsertFactorCategory
           - DeleteFactorCategory
@@ -1060,11 +1059,6 @@ components:
               - GetFactorParams
             callers:
               - strategy
-          # 补采补齐通知：因子据此立即推进连续水位并补算上游失败的标的。
-          - methods:
-              - NotifyPeriodsFilled
-            callers:
-              - collector
       - path: trpc.moox.factor.FactorEngine
         port: 11405
         timeout_ms: 120000
@@ -1131,7 +1125,6 @@ components:
           - GetArchiveRun
           - ListArchivePartitions
           - GetArchivePartition
-          - RetireArchiveWorker
           - PrepareArchiveImport
           - ImportArchiveFile
           - ClearArchiveUnrecoverable
@@ -1162,10 +1155,6 @@ components:
               - GetArchivePartition
             callers:
               - console
-              - moox-cli
-          - methods:
-              - RetireArchiveWorker
-            callers:
               - moox-cli
           # CSV 导入与清除无法补齐区间：只给 moox-cli（导入要经 SSH 把文件传到 worker 所在主机）。
           - methods:
@@ -1821,7 +1810,6 @@ components:
           - PauseLogicalAccount
           - ResumeLogicalAccount
           - FlattenLogicalAccount
-          - PlaceManualOrder
           - SubmitOrder
           - CancelOrder
           - GetOperatorAction
@@ -1888,7 +1876,6 @@ components:
               - PauseLogicalAccount
               - ResumeLogicalAccount
               - FlattenLogicalAccount
-              - PlaceManualOrder
               - SubmitOrder
               - CancelOrder
               - GetOperatorAction

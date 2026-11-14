@@ -129,8 +129,6 @@ type Service struct {
 	previewer Previewer
 	// mutationGate 是修改类接口的生命周期门禁（见 WithMutationGate）。
 	mutationGate func() error
-	// filled 暂存补齐通知。
-	filled *FilledInbox
 }
 
 func NewService(catalog CatalogAPI, recalc RecalcAPI, opts ...ServiceOption) *Service {

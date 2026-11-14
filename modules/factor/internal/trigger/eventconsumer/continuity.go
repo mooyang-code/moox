@@ -76,7 +76,7 @@ func NewContinuity(cfg ContinuityConfig) (*Continuity, error) {
 // States 返回全部任务的推进状态（心跳上报与指标用）。
 func (c *Continuity) States() []watermark.State { return c.cfg.Store.All() }
 
-// NoteAbsent 记下补采确认行情源没有的标的（补齐通知带来），30 分钟后过期。
+// NoteAbsent 记下补采确认行情源没有的标的（K 线补写事件带来），30 分钟后过期。
 // subjects 是按标的确认的（该标的的所有序列都没有），series 是按序列确认的（只有这一条序列没有）。
 func (c *Continuity) NoteAbsent(taskID string, from, to time.Time, step time.Duration, subjects []string, series []seriesset.Series) {
 	if (len(subjects) == 0 && len(series) == 0) || step <= 0 {
@@ -107,7 +107,7 @@ func (c *Continuity) NoteAbsent(taskID string, from, to time.Time, step time.Dur
 	}
 }
 
-// absentAt 返回这一期确认没有的标的与序列（复制一份：NoteAbsent 在心跳线程里会修改同一个任务）。
+// absentAt 返回这一期确认没有的标的与序列（复制一份：NoteAbsent 在补写事件的消费协程里会修改同一个任务）。
 func (c *Continuity) absentAt(taskID string, period time.Time) (map[string]struct{}, map[seriesset.Series]struct{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -182,7 +182,7 @@ func (c *Continuity) NoteTarget(taskID string, period time.Time) error {
 	return nil
 }
 
-// advanceTask 在没有事件时推进（追赶循环、补齐通知）。
+// advanceTask 在没有事件时推进（追赶循环、K 线补写事件）。
 func (c *Continuity) advanceTask(ctx context.Context, h *Handler, taskID string) error {
 	state, ok := c.cfg.Store.Get(taskID)
 	if !ok || !state.Behind() {

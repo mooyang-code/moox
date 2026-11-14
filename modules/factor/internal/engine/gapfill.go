@@ -54,7 +54,7 @@ type gapFiller struct {
 	kick <-chan struct{}
 	// warmup 返回各任务的预热状态（可为 nil）：已就绪任务里因预热中跳过的待办不再等 Settle。
 	warmup func() []pipeline.WarmupStatus
-	// filled 判断某任务某一期是否已收到补齐通知（可为 nil）。
+	// filled 判断某任务某一期是否已收到K 线补写事件（可为 nil）。
 	filled func(taskID string, period time.Time) bool
 	// lastTried 记录每个组最近一次尝试的时间：一轮只处理 MaxGroupsPerSweep 个组，按「最久没试过的优先」轮转，
 	// 前面一直补不上的组不会让后面已经补齐的组长期得不到执行机会。
@@ -148,7 +148,7 @@ func (s warmingKickSink) PeriodReported() {
 
 // settled 判断一条待办是否可以恢复了：发现后过了 Settle（给自动补采留时间）；预热中跳过的项在该任务预热就绪后即可恢复，
 // 那一期的源数据在跳过时就已入库，只是窗口还没载入。否则重启后第一期（1h 任务是整整一根）要在预热完成后再等 5～10 分钟才补齐。
-// 上游失败（截止时还没到）的项在收到覆盖该期的补齐通知后也不再等 Settle。
+// 上游失败（截止时还没到）的项在收到覆盖该期的K 线补写事件后也不再等 Settle。
 func settled(entry gapledger.Entry, cutoff time.Time, ready map[string]bool, filled func(string, time.Time) bool) bool {
 	return !entry.FirstSeen.After(cutoff) || (entry.Reason == pipeline.SkipReasonWarming && ready[entry.Set]) ||
 		(entry.Reason == pipeline.SkipReasonUpstream && filled != nil && filled(entry.Set, entry.Period))

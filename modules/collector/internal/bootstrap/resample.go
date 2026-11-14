@@ -26,7 +26,6 @@ type resampleRuntime struct {
 	fallbacks []*collectorresample.Fallback
 	jobs      *collectorresample.JobRunner
 	publisher *collectorresample.NoticePublisher
-	state     *store.ResampleStateRepository
 }
 
 // jobDrainBudget 是定时器每一轮里连续推进历史作业的预算，必须小于一分钟，让下一轮兜底检查如期开始。
@@ -64,7 +63,6 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 	runtime := &resampleRuntime{
 		cfg:      k,
 		preparer: &collectorresample.Preparer{Tasks: dbm.Tasks(), Source: source, Catalog: catalog, Limit: 50},
-		state:    dbm.Resample(),
 	}
 	for _, spaceID := range spaceIDs {
 		runtime.fallbacks = append(runtime.fallbacks, &collectorresample.Fallback{
@@ -76,9 +74,10 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 	if err != nil {
 		return nil, err
 	}
-	runtime.publisher = &collectorresample.NoticePublisher{State: dbm.Resample(), Registry: registry}
+	// 没有配置事件总线时用不成批的发布器：通知只保留到保留期。
+	runtime.publisher = &collectorresample.NoticePublisher{State: dbm.Resample()}
 	if bus != nil {
-		runtime.publisher.Enabled, runtime.publisher.Wake = true, bus.relay.Wake
+		runtime.publisher = bus.notices
 	}
 	jobs := &collectorresample.JobRunner{
 		State: dbm.Resample(), Tasks: dbm.Tasks(), Source: source, Engine: engine,
@@ -138,13 +137,14 @@ func (r *resampleRuntime) tick(ctx context.Context) {
 	}
 }
 
-// cleanup 清理过期的补写通知、已发布事件与已结束的历史作业。
-func (r *resampleRuntime) cleanup(ctx context.Context, now time.Time) error {
+// cleanupNoticeState 清理过期的补写通知、已发布事件与已结束的历史合成作业。补写通知也由补采写入，
+// 所以每个维护轮都做，不看合成开没开。
+func cleanupNoticeState(ctx context.Context, state *store.ResampleStateRepository, now time.Time) error {
 	var errs []error
-	if _, err := r.state.CleanupNotices(ctx, now.Add(-noticeRetention)); err != nil {
+	if _, err := state.CleanupNotices(ctx, now.Add(-noticeRetention)); err != nil {
 		errs = append(errs, fmt.Errorf("cleanup backfill notices: %w", err))
 	}
-	if _, err := r.state.CleanupFinishedJobs(ctx, now.Add(-resampleJobRetention)); err != nil {
+	if _, err := state.CleanupFinishedJobs(ctx, now.Add(-resampleJobRetention)); err != nil {
 		errs = append(errs, fmt.Errorf("cleanup resample jobs: %w", err))
 	}
 	return errors.Join(errs...)
