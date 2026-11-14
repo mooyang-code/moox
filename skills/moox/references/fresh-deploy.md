@@ -49,7 +49,11 @@ cd <主仓库根> && $WT/bin/moox-cli setup build-linux --module storage --sourc
 
 因子机的 `/data/moox/import` 也会被清除，要留下先挪走：`mkdir -p ~/moox-import-keep && mv /data/moox/import/* ~/moox-import-keep/`。
 
+先用新的 `moox-cli` 迁移旧配置，再清理：旧 `moox.toml` 里还有 `[egress_proxy.dns]` 等已删除的段时，`setup wipe` 第一步就会拒绝配置（`config_invalid`）。
+
 ```bash
+$CLI config migrate                                                  # 预览要删改的段
+$CLI config migrate --yes                                            # 写回
 $CLI setup wipe --file ./moox.toml                                   # 预览：主机、目录、不认识的条目、digest
 $CLI setup wipe --file ./moox.toml --yes --expect <预览里的 plan.digest>
 $CLI setup validate --file ./moox.toml                               # deployment.route 应为 fresh

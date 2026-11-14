@@ -934,57 +934,6 @@ func TestOverviewKeepsShortStorageOutboxBacklogHealthy(t *testing.T) {
 	}
 }
 
-func TestBuilderAlertsOnProviderFeedFailureRate(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	query := openOverviewMetrics(t, func(db *gorm.DB) {
-		labels := `{"market_id":"stockcn","route_id":"stockcn_equity_kline_1m_v4","provider_id":"sina","feed_kind":"kline","group_id":"0","batch_kind":"realtime","result":"success"}`
-		seedOverviewMetricForInstance(t, db, "feed-success", "scf-collector", "stock-fetch-0", "moox_collector_market_feed_results_total", labels, 8, now)
-		labels = `{"market_id":"stockcn","route_id":"stockcn_equity_kline_1m_v4","provider_id":"sina","feed_kind":"kline","group_id":"0","batch_kind":"realtime","result":"http_5xx"}`
-		seedOverviewMetricForInstance(t, db, "feed-failure", "scf-collector", "stock-fetch-0", "moox_collector_market_feed_results_total", labels, 3, now)
-	})
-	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "stockcn")
-	require.NoError(t, err)
-	var found *BusinessStatus
-	for index := range overview.BusinessChecks {
-		if overview.BusinessChecks[index].Module == "provider_feed:sina" {
-			found = &overview.BusinessChecks[index]
-			break
-		}
-	}
-	require.NotNil(t, found)
-	require.Equal(t, "down", found.Status)
-	require.Contains(t, found.Reason, "失败率")
-}
-
-// 数据源健康按指标的 market_id 标签分组：每个市场各出一组结果，指定空间时只看这个空间，没上报过的市场不出结果。
-func TestBuilderGroupsProviderFeedHealthByMarket(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	query := openOverviewMetrics(t, func(db *gorm.DB) {
-		seed := func(id, marketID, provider, result string, value float64) {
-			labels := `{"market_id":"` + marketID + `","provider_id":"` + provider + `","feed_kind":"kline","group_id":"0","batch_kind":"realtime","result":"` + result + `"}`
-			seedOverviewMetricForInstance(t, db, id, "scf-collector", "fetch-"+marketID, "moox_collector_market_feed_results_total", labels, value, now)
-		}
-		seed("cn-success", "stockcn", "sina", "success", 10)
-		seed("hk-success", "stockhk", "eastmoney", "success", 5)
-		seed("hk-failure", "stockhk", "eastmoney", "timeout", 5)
-	})
-	feeds := func(spaceID string) map[string]string {
-		overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), spaceID)
-		require.NoError(t, err)
-		out := map[string]string{}
-		for _, item := range overview.BusinessChecks {
-			if item.Kind == "market_fetch" && strings.HasPrefix(item.Module, "provider_feed:") {
-				out[item.SpaceID+"/"+item.Module] = item.Status
-			}
-		}
-		return out
-	}
-	require.Equal(t, map[string]string{"stockcn/provider_feed:sina": "healthy", "stockhk/provider_feed:eastmoney": "down"}, feeds(""))
-	require.Equal(t, map[string]string{"stockcn/provider_feed:sina": "healthy"}, feeds("stockcn"))
-	require.Equal(t, map[string]string{"stockhk/provider_feed:eastmoney": "down"}, feeds("stockhk"))
-	require.Empty(t, feeds("crypto"))
-}
-
 func openOverviewMetrics(t *testing.T, seed func(*gorm.DB)) *monmetrics.QueryService {
 	t.Helper()
 	query, _ := openOverviewState(t, seed)
@@ -1240,30 +1189,4 @@ func TestViewFollowLagBecomesBusinessCheck(t *testing.T) {
 			require.NotContains(t, item.Reason, "kline_1m")
 		}
 	}
-}
-
-// 休市时段（午休、收市后、周末）统计窗口内没有请求：不出数据源健康结果，更不能判成 down；
-// 窗口内有请求且失败率超过阈值、或全部失败的数据源照常判 down。
-func TestBuilderSkipsProviderFeedWithoutObservationInWindow(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	query := openOverviewMetrics(t, func(db *gorm.DB) {
-		seed := func(id, provider, result string, value float64, observed time.Time) {
-			labels := `{"market_id":"stockcn","provider_id":"` + provider + `","feed_kind":"kline","group_id":"0","batch_kind":"realtime","result":"` + result + `"}`
-			seedOverviewMetricForInstance(t, db, id, "scf-collector", "fetch-stockcn", "moox_collector_market_feed_results_total", labels, value, observed)
-		}
-		seed("idle-success", "sina", "success", 10, now.Add(-30*time.Minute))
-		seed("idle-failure", "sina", "timeout", 1, now.Add(-30*time.Minute))
-		seed("busy-success", "tencent", "success", 1, now)
-		seed("busy-failure", "tencent", "timeout", 9, now)
-		seed("broken-failure", "eastmoney", "http_5xx", 4, now)
-	})
-	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
-	require.NoError(t, err)
-	feeds := map[string]string{}
-	for _, item := range overview.BusinessChecks {
-		if item.Kind == "market_fetch" && strings.HasPrefix(item.Module, "provider_feed:") {
-			feeds[item.Module] = item.Status
-		}
-	}
-	require.Equal(t, map[string]string{"provider_feed:tencent": "down", "provider_feed:eastmoney": "down"}, feeds)
 }

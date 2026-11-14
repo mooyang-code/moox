@@ -133,7 +133,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		FieldOffers: marketwiring.FieldOffers(),
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
-	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer, marketwiring.FeedLabels())
+	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
 	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
 	subjectSyncer, err := registerSubjectSyncRuntime(s, cfg, process, dbm.TagSyncRuns())
 	if err != nil {
@@ -376,6 +376,13 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 	maintenanceRunner := marketfetch.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.offset(), retentionConfig.timeout(), func(passCtx context.Context) error {
 		now := time.Now().UTC()
 		var passErrors []error
+		// 先封存搁置的补写通知再清理：合成关闭时没有合成定时器来封存，补采作业结束时那一次失败的话只剩这里兜底，
+		// 否则没封存的通知过了保留期会被直接清掉。
+		if bus != nil {
+			if err := sealStaleNotices(passCtx, bus.notices, now); err != nil {
+				passErrors = append(passErrors, fmt.Errorf("封存补写通知: %w", err))
+			}
+		}
 		// 补写通知与发件箱的清理不分空间，每轮都做：合成关闭、当前没有任何空间在管理集合里时也一样。
 		if err := cleanupNoticeState(passCtx, dbm.Resample(), now); err != nil {
 			passErrors = append(passErrors, err)

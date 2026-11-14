@@ -34,6 +34,7 @@
         启用会固化会话快照，并认领这个组合账户的会话（会撤掉上一个会话留下的目标挂单）：之后的策略目标由它执行下单。
       </p>
       <p class="line">计算任务 {{ factorTaskText }} 会与本实例永久关联（已关联的不变），实例不能删除。</p>
+      <p class="line">{{ ENABLE_STATE_TIP }}</p>
       <p v-if="paused" class="line">组合账户已暂停自动执行：启用后不会下单，直到在交易页恢复自动执行。</p>
       <a-form v-if="tier.requiresName" :model="{}" layout="vertical" class="block">
         <a-form-item :label="`输入组合名称「${comboName}」确认`">
@@ -57,7 +58,13 @@ import {
   nameConfirmed,
   type Environment
 } from "@/components/trade-confirm/environment";
-import { TOGGLE_CANCELED_TIP, toggleInstance, type EnableTarget, type InstanceToggleHooks } from "./instance-toggle";
+import {
+  ENABLE_STATE_TIP,
+  TOGGLE_CANCELED_TIP,
+  toggleInstance,
+  type EnableTarget,
+  type InstanceToggleHooks
+} from "./instance-toggle";
 
 const visible = ref(false);
 const instanceId = ref("");

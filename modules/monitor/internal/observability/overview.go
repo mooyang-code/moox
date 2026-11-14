@@ -140,11 +140,9 @@ type InventorySource interface {
 }
 
 type MarketFetchThresholds struct {
-	CoordinationStaleAfter   time.Duration
-	PendingGrace             time.Duration
-	LeaseGrace               time.Duration
-	FeedFailureRateWindow    time.Duration
-	FeedFailureRateThreshold float64
+	CoordinationStaleAfter time.Duration
+	PendingGrace           time.Duration
+	LeaseGrace             time.Duration
 }
 
 func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
@@ -195,11 +193,6 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, rejections...)
-	signals, err := b.buildMarketFetchSignalHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, signals...)
 	delivery, err := b.buildStorageOutboxHealth(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err
@@ -1405,127 +1398,6 @@ type timerCoordinationState struct {
 	hasFailureSince bool
 }
 
-type marketFeedHealthState struct {
-	requests, failures, rateLimited, noCandidate float64
-}
-
-const maxMarketSignalSeries = 5000
-
-// buildMarketFetchSignalHealth 按 Collector 云函数上报的 K 线数据源结果指标判断各市场的数据源健康：按指标的 market_id
-// 标签分组，每个市场各出一组结果；请求指定了空间就只看这个空间。统计窗口内没有观测的数据源不出结果，
-// 没启用的市场、休市时段不会告警。
-func (b Builder) buildMarketFetchSignalHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	thresholds := b.marketFetchThresholds()
-	window, threshold := thresholds.FeedFailureRateWindow, thresholds.FeedFailureRateThreshold
-	series, err := b.marketMetricSeries(ctx, "moox_collector_market_feed_results_total")
-	if err != nil {
-		return nil, err
-	}
-	// 市场 → 数据源 → 窗口内的累计结果。
-	markets := map[string]map[string]*marketFeedHealthState{}
-	for _, item := range series {
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("market feed labels for %s: %w", item.SeriesID, err)
-		}
-		marketID := strings.TrimSpace(labels["market_id"])
-		if marketID == "" || (spaceID != "" && marketID != spaceID) || strings.TrimSpace(labels["feed_kind"]) != "kline" {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		// 只给统计窗口内有观测的数据源出结果：午休、收市后、周末没有请求不算故障，完全断流由 K 线新鲜度和云函数定时检查发现。
-		if latest == nil || item.IsStale || !isFreshMetric(now, latest.ObservedAt.UTC(), window) {
-			continue
-		}
-		states := markets[marketID]
-		if states == nil {
-			states = map[string]*marketFeedHealthState{}
-			markets[marketID] = states
-		}
-		provider := strings.TrimSpace(labels["provider_id"])
-		if provider == "" {
-			provider = "unknown"
-		}
-		state := states[provider]
-		if state == nil {
-			state = &marketFeedHealthState{}
-			states[provider] = state
-		}
-		value := maxFloat(latest.Value, 0)
-		state.requests += value
-		switch strings.TrimSpace(labels["result"]) {
-		case "http_429", "rate_limited":
-			state.failures += value
-			state.rateLimited += value
-		case "http_5xx", "timeout", "invalid", "storage_error":
-			state.failures += value
-		case "no_candidate":
-			state.failures += value
-			state.noCandidate += value
-		}
-	}
-	marketIDs := make([]string, 0, len(markets))
-	for marketID := range markets {
-		marketIDs = append(marketIDs, marketID)
-	}
-	sort.Strings(marketIDs)
-	var out []BusinessStatus
-	for _, marketID := range marketIDs {
-		states := markets[marketID]
-		providers := make([]string, 0, len(states))
-		for provider := range states {
-			providers = append(providers, provider)
-		}
-		sort.Strings(providers)
-		for _, provider := range providers {
-			state := states[provider]
-			status, reason := "healthy", fmt.Sprintf("%s Provider Feed 正常", provider)
-			if state.requests <= 0 {
-				status, reason = "down", fmt.Sprintf("%s Provider Feed 在最近 %s 无有效结果", provider, window)
-			} else if state.noCandidate > 0 {
-				status, reason = "down", fmt.Sprintf("%s Provider Feed 候选池为空", provider)
-			} else if state.rateLimited > 0 {
-				status, reason = "down", fmt.Sprintf("%s Provider Feed 最近 %s 持续触发 429/限频", provider, window)
-			} else if rate := state.failures / state.requests; rate > threshold {
-				status, reason = "down", fmt.Sprintf("%s Provider Feed 最近 %s 失败率 %.1f%%，超过 %.1f%%", provider, window, rate*100, threshold*100)
-			}
-			out = append(out, BusinessStatus{SpaceID: marketID, Kind: "market_fetch", Module: "provider_feed:" + provider, Status: status, Reason: reason, LastCheckedAt: now})
-		}
-	}
-	return out, nil
-}
-
-func (b Builder) marketMetricSeries(ctx context.Context, metricName string) ([]monmetrics.MetricSeries, error) {
-	const pageSize = 500
-	all := make([]monmetrics.MetricSeries, 0, pageSize)
-	for offset := 0; ; offset += pageSize {
-		rows, total, err := b.Metrics.Catalog().ListSeries(ctx, "", metricName, "", offset, pageSize)
-		if err != nil {
-			return nil, err
-		}
-		if total > maxMarketSignalSeries {
-			return nil, fmt.Errorf("market metric series exceed limit %d for %s", maxMarketSignalSeries, metricName)
-		}
-		all = append(all, rows...)
-		if len(all) >= int(total) || len(rows) == 0 {
-			return all, nil
-		}
-	}
-}
-
-func isFreshMetric(now, observed time.Time, window time.Duration) bool {
-	if observed.IsZero() || observed.After(now) {
-		return false
-	}
-	return now.Sub(observed) <= window
-}
-
 // A full Tencent runtime-config batch may touch dozens of functions. The
 // coordination timestamp measures completion of that asynchronous batch, not
 // the ten-second Collector timer callback. Keep this threshold above the
@@ -1552,12 +1424,6 @@ func (b Builder) marketFetchThresholds() MarketFetchThresholds {
 	}
 	if thresholds.LeaseGrace <= 0 {
 		thresholds.LeaseGrace = timerCoordinationLeaseGrace
-	}
-	if thresholds.FeedFailureRateWindow <= 0 {
-		thresholds.FeedFailureRateWindow = 5 * time.Minute
-	}
-	if thresholds.FeedFailureRateThreshold <= 0 {
-		thresholds.FeedFailureRateThreshold = 0.2
 	}
 	return thresholds
 }
@@ -1852,7 +1718,7 @@ func statusRank(status string) int {
 // 多个实例上报不同原因时取排在前面的。原因名与 Collector 的 assignmentFailureReasons 一一对应。
 var coordinationFailureTexts = []struct{ reason, text string }{
 	{"cloudfunction", "采集计划配置服务调用失败：请检查 FunctionInstance、网关连接和批处理队列"},
-	{"environment", "函数运行环境生成失败：请检查环境变量大小和 DNS 配置"},
+	{"environment", "函数运行环境生成失败：请检查环境变量大小"},
 	{"rules", "采集规则读取失败：请检查 Collector 规则配置和存储连接"},
 	{"store", "Collector 本地数据库读写失败：请检查 Collector 的 SQLite 数据库、磁盘空间和权限"},
 	{"storage", "标的快照登记失败：请检查 Storage 连接，以及 Collector 与 Storage 计算的快照哈希是否一致"},

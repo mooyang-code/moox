@@ -58,6 +58,16 @@ type noticeGroup struct {
 
 // Flush 合并并封存全部还没成批的通知，写入发件箱。
 func (p *NoticePublisher) Flush(ctx context.Context) error {
+	return p.flush(ctx, time.Time{})
+}
+
+// FlushOlderThan 只封存创建时间早于 before 的通知（维护轮的兜底用）：进行中的补采作业刚写下的通知留给作业结束时一并封存，
+// 不会在长的历史补采期间每轮出一个事件。
+func (p *NoticePublisher) FlushOlderThan(ctx context.Context, before time.Time) error {
+	return p.flush(ctx, before)
+}
+
+func (p *NoticePublisher) flush(ctx context.Context, before time.Time) error {
 	if p == nil || p.State == nil {
 		return errors.New("notice publisher state is required")
 	}
@@ -73,7 +83,7 @@ func (p *NoticePublisher) Flush(ctx context.Context) error {
 	// 一次取满上限说明后面可能还有：接着封存，直到取回不足上限。出错就停，留给下一次（否则封存不掉的通知会让循环停不下来）。
 	var err error
 	for taken := limit; taken == limit && err == nil; {
-		taken, err = p.seal(ctx, limit)
+		taken, err = p.seal(ctx, before, limit)
 	}
 	if p.Wake != nil {
 		p.Wake()
@@ -81,9 +91,9 @@ func (p *NoticePublisher) Flush(ctx context.Context) error {
 	return err
 }
 
-// seal 封存一批通知，返回这次取回的条数。
-func (p *NoticePublisher) seal(ctx context.Context, limit int) (int, error) {
-	notices, err := p.State.UnsealedNotices(ctx, limit)
+// seal 封存一批通知，返回这次取回的条数；before 非零时只取创建时间早于它的。
+func (p *NoticePublisher) seal(ctx context.Context, before time.Time, limit int) (int, error) {
+	notices, err := p.State.UnsealedNoticesBefore(ctx, before, limit)
 	if err != nil || len(notices) == 0 {
 		return 0, err
 	}

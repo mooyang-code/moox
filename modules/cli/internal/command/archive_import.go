@@ -249,7 +249,7 @@ func uploadArchiveImport(ctx context.Context, gateway commandGateway, f archiveF
 	defer remote.Close()
 	// worker ID 由 deploy-unit 写成 archive-worker@<主机>；对不上时传到别的主机上，worker 读不到文件。
 	if want := archiveWorkerComponent + "@" + host; prepared.GetWorkerId() != want {
-		return "", fmt.Errorf("在线的归档 worker 是 %q，而 moox.toml [deployments] 里部署 %s 的主机是 %s（对应 worker %q），两边不一致，没有上传文件；先用 moox-cli archive overview 核对活动 worker，再核对部署清单",
+		return "", fmt.Errorf("在线的归档 worker 是 %q，而 moox.toml [deployments] 里部署 %s 的主机是 %s（对应 worker %q），两边不一致，没有上传文件；先用 moox-cli archive overview 核对在线的 worker，再核对部署清单",
 			prepared.GetWorkerId(), archiveWorkerComponent, host, want)
 	}
 	// Upload 不建目录：先建好只有本用户能进的导入目录，再上传成 0600。

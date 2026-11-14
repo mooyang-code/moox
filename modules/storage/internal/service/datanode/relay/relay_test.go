@@ -159,6 +159,35 @@ func newTestMetrics(t *testing.T) *observability.ViewMetrics {
 	return metrics
 }
 
+// 排空积压期间（后面还有没扫到的条目）不再挂着上次失败时的积压年龄：这一页发完就清零。
+func TestRelayClearsBacklogAgeWhileDraining(t *testing.T) {
+	store := openTestStore(t)
+	for i := 0; i < 3; i++ {
+		mustAppendMarker(t, store, "s", "d")
+	}
+	publisher := &testPublisher{failAt: 1}
+	metrics := newTestMetrics(t)
+	relay, err := NewRelay(store, publisher, RelayOptions{BatchSize: 1, Metrics: metrics})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := relay.flush(context.Background()); err == nil {
+		t.Fatal("expected failure")
+	}
+	if failed := metrics.Snapshot(); failed.OutboxPendingEntries != 1 || failed.OutboxOldestAge <= 0 {
+		t.Fatalf("发布失败后的积压状态 = %+v", failed)
+	}
+	if err := relay.flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !relay.hasMore {
+		t.Fatal("后面应该还有没扫到的条目")
+	}
+	if after := metrics.Snapshot(); after.OutboxPendingEntries != 0 || after.OutboxOldestAge != 0 {
+		t.Fatalf("排空期间的积压状态 = %+v，期望已清零", after)
+	}
+}
+
 // 按变更日志的顺序发布；某一条失败就停在它上面，游标只推进到它前面，重试发的是同一条消息（事件 ID 不变）。
 func TestRelayStopsAtFailedMarkerAndRetriesIt(t *testing.T) {
 	store := openTestStore(t)

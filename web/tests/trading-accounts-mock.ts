@@ -238,7 +238,14 @@ async function gateway(route: Route) {
               { instrument_id: "SOL-USDT-SWAP", quantity: "-30" }
             ],
             blocked_targets: [{ instrument_id: "SOL-USDT-SWAP", quantity: "-30", reason: "低于最小下单额" }]
-          }
+          },
+          // 与真实响应同形状：目标里的标的和目标之外受管的持仓各一条（state 见 TargetLaneState）
+          lanes: [
+            { instrument_id: "BTC-USDT-SWAP", state: 1 },
+            { instrument_id: "BTC-USDT-SPOT", state: 1 },
+            { instrument_id: "SOL-USDT-SWAP", state: 3 },
+            { instrument_id: "DOGE-USDT-SWAP", state: 1 }
+          ]
         })
       });
     case "ListPositions":

@@ -76,7 +76,7 @@
 
 ## 存储（Storage）
 
-- **做什么**：storage-primary 管元数据目录（SQLite）和字段级事实（Pebble，含 Outbox、周期账本、保留期清理）；storage-view 管可重建的 View（DuckDB/Bleve）。
+- **做什么**：storage-primary 管元数据目录（SQLite）和字段级事实（Pebble，含周期账本、保留期清理，完成事件跟随变更日志转发）；storage-view 管可重建的 View（DuckDB/Bleve）。
 - **在哪**：存储机，两个角色同机。数据集建好即可写入，不需要激活。
 - **常用**：
   - 元数据：`metadata source|subject|tag|dataset|field|field-group|view list|show|create|update|delete`；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。

@@ -52,8 +52,6 @@ type Request struct {
 	FunctionName        string           `json:"function_name,omitempty"`
 	RequestID           string           `json:"request_id,omitempty"`
 	ShardIndex          int              `json:"shard_index,omitempty"`
-	GroupID             int              `json:"group_id,omitempty"`
-	GroupCount          int              `json:"group_count,omitempty"`
 	BindingHash         string           `json:"binding_hash,omitempty"`
 	RouteVersion        string           `json:"route_version,omitempty"`
 	RequirePeriodCommit bool             `json:"require_period_commit,omitempty"`

@@ -150,8 +150,16 @@ func cleanupNoticeState(ctx context.Context, state *store.ResampleStateRepositor
 	return errors.Join(errs...)
 }
 
-// 补写通知（含未成批的）与已结束历史作业的保留期。
+// sealStaleNotices 是维护轮的兜底封存：只封存创建超过 noticeSealAfter 的通知，时限就是维护轮自己的。
+// 进行中的补采作业刚写下的通知不动，等作业结束时一并封存（否则长的历史补采期间每轮出一个事件，各带一份确认缺失）；
+// 系统暂停期间新写下的通知也不会立刻发出去。
+func sealStaleNotices(ctx context.Context, publisher *collectorresample.NoticePublisher, now time.Time) error {
+	return publisher.FlushOlderThan(ctx, now.Add(-noticeSealAfter))
+}
+
+// 补写通知（含未成批的）与已结束历史作业的保留期；noticeSealAfter 是维护轮兜底封存的通知最小年龄。
 const (
+	noticeSealAfter      = time.Hour
 	noticeRetention      = 7 * 24 * time.Hour
 	resampleJobRetention = 30 * 24 * time.Hour
 )

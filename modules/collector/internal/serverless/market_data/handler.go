@@ -63,7 +63,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	if runtimeHandler == nil {
 		return failure("internal_error", "market fetch handler is not configured"), nil
 	}
-	invocationMetrics, metricsErr := marketfetch.NewInvocationMetrics(functionName, spaceID, marketwiring.FeedLabels())
+	invocationMetrics, metricsErr := marketfetch.NewInvocationMetrics(functionName, spaceID)
 	if metricsErr != nil {
 		log.WarnContextf(ctx, "market_data_metrics_setup_failed error=%v", metricsErr)
 	} else {

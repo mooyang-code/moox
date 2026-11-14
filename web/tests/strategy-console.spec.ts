@@ -210,7 +210,8 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
           targets: [{ instrument_id: "ETH-USDT-SPOT", quantity: "2" }],
           status: "CONVERGING",
           valid_until: String(Date.now() + 3_600_000)
-        }
+        },
+        lanes: [{ instrument_id: "ETH-USDT-SPOT", state: 1 }]
       })
     })
   );

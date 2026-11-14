@@ -2,7 +2,6 @@ package marketfetch
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,21 +35,6 @@ type Metrics struct {
 	periodPendingMu          sync.Mutex
 	periodPendingFrequencies map[string]map[string]struct{}
 	periodReportRetry        *prometheus.CounterVec
-	feedResults              *prometheus.CounterVec
-	feedObservations         *prometheus.CounterVec
-	// feedLabels 是 feed 指标里市场、数据源、路由标签允许的取值；构造时由组合根传入（marketwiring.FeedLabels）。
-	feedLabels FeedLabels
-}
-
-// FeedLabels 是 feed 指标里市场、数据源、路由三个标签允许的取值，其余取值一律记为 unknown，避免标签取值无限增长。
-// 取值来自已登记的市场、行情源目录和路由，marketfetch 不直接引用目录，所以由组合根给出。
-type FeedLabels struct {
-	Markets   []string
-	Providers []string
-	// Routes 是不带频率的路由 ID（标的快照）。
-	Routes []string
-	// KlineRoutePrefixes 是 K 线路由 ID 的前缀，后面接规范频率才是合法的路由 ID。
-	KlineRoutePrefixes []string
 }
 
 // failureRecord 记录一个空间当前协调失败原因的首次出现时间：同一原因连续出现时不重置，原因变化时重置。
@@ -59,26 +43,13 @@ type failureRecord struct {
 	since  time.Time
 }
 
-type FeedMetric struct {
-	MarketID, RouteID, ProviderID, FeedKind, BatchKind, Result string
-	InstrumentType, SourceID, Frequency                        string
-	SourceKind, Transport, RemoteHost, SCFRegion, EgressScope  string
-	EgressIP, Unit, ErrorKind, HistoryWindow, CalendarID       string
-	RemotePort, ConnectionAttempt, Rows, FallbackRank          int
-	GroupID, GroupCount                                        int
-}
-
 // SetDatasetRunObserver is retained as a no-op for the manual/catchup helper
 // path. Timer-triggered realtime freshness comes from Storage, not completion
 // events.
 func (m *Metrics) SetDatasetRunObserver(any) {}
 
-func NewMetrics(reg prometheus.Registerer, labels FeedLabels) *Metrics {
-	if len(labels.Markets) == 0 {
-		panic("marketfetch.NewMetrics 缺少 feed 指标的标签取值（marketwiring.FeedLabels）")
-	}
+func NewMetrics(reg prometheus.Registerer) *Metrics {
 	metrics := &Metrics{
-		feedLabels:               labels,
 		storeBytes:               prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_database_bytes", Help: "Collector SQLite database and WAL file bytes."}, []string{"kind"}),
 		storeRows:                prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_store_rows", Help: "Space-scoped Collector table rows; lower bound when store_rows_capped is one."}, []string{"space_id", "table"}),
 		storeRowsCapped:          prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_store_rows_capped", Help: "Whether the row observation exceeded its bounded scan limit."}, []string{"space_id", "table"}),
@@ -100,12 +71,6 @@ func NewMetrics(reg prometheus.Registerer, labels FeedLabels) *Metrics {
 		periodPending:            prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_period_pending_total", Help: "Collector periods waiting to be reported."}, []string{"space_id", "frequency"}),
 		periodPendingFrequencies: make(map[string]map[string]struct{}),
 		periodReportRetry:        prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_period_report_retry_total", Help: "Collector period report attempts that need retry."}, []string{"space_id", "frequency"}),
-		feedResults:              prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_feed_results_total", Help: "Bounded market feed outcomes; subject, function, IP, and candidate chain are intentionally excluded."}, []string{"market_id", "route_id", "provider_id", "feed_kind", "group_id", "batch_kind", "result"}),
-		feedObservations: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_feed_observations_total", Help: "Bounded market feed observations with source, route, and egress dimensions."}, []string{
-			"market_id", "instrument_type", "provider_id", "source_id", "frequency", "source_kind", "transport",
-			"remote_host", "remote_port", "scf_region", "egress_scope", "egress_ip", "connection_attempt",
-			"rows", "unit", "fallback_rank", "error_kind", "history_window", "calendar_id", "result",
-		}),
 	}
 	metrics.storeBytes = registerGaugeVec(reg, metrics.storeBytes)
 	metrics.storeRows = registerGaugeVec(reg, metrics.storeRows)
@@ -125,8 +90,6 @@ func NewMetrics(reg prometheus.Registerer, labels FeedLabels) *Metrics {
 	metrics.assignmentErrors = registerCounterVec(reg, metrics.assignmentErrors)
 	metrics.periodPending = registerGaugeVec(reg, metrics.periodPending)
 	metrics.periodReportRetry = registerCounterVec(reg, metrics.periodReportRetry)
-	metrics.feedResults = registerCounterVec(reg, metrics.feedResults)
-	metrics.feedObservations = registerCounterVec(reg, metrics.feedObservations)
 	return metrics
 }
 
@@ -366,83 +329,6 @@ func boundedPeriodFrequency(value string) string {
 		return "unknown"
 	}
 	return string(frequency)
-}
-
-// ObserveFeedResult exposes only dimensions with a bounded operational
-// vocabulary. Per-subject routing evidence belongs in structured logs.
-func (m *Metrics) ObserveFeedResult(value FeedMetric) {
-	if m == nil || value.GroupCount <= 0 || value.GroupID < 0 || value.GroupID >= value.GroupCount {
-		return
-	}
-	marketID, routeID := m.feedLabels.marketRoute(value.MarketID, value.RouteID)
-	providerID := boundedValue(value.ProviderID, append([]string{"none"}, m.feedLabels.Providers...), "unknown")
-	feedKind := boundedValue(value.FeedKind, []string{"kline", "instrument", "egress"}, "unknown")
-	batchKind := boundedValue(value.BatchKind, []string{"realtime", "backfill", "gap_repair", "catchup", "instrument_snapshot"}, "unknown")
-	result := boundedValue(value.Result, []string{"success", "fallback", "http_429", "http_5xx", "timeout", "rate_limited", "invalid", "storage_error", "no_candidate"}, "unknown")
-	m.feedResults.WithLabelValues(marketID, routeID, providerID, feedKind, strconv.Itoa(value.GroupID), batchKind, result).Inc()
-	m.feedObservations.WithLabelValues(
-		marketID,
-		boundedMetricField(value.InstrumentType, "unknown"),
-		providerID,
-		boundedMetricField(value.SourceID, "unknown"),
-		boundedMetricField(value.Frequency, "unknown"),
-		boundedMetricField(value.SourceKind, "provider"),
-		boundedMetricField(value.Transport, "unknown"),
-		boundedMetricField(value.RemoteHost, "unknown"),
-		strconv.Itoa(max(value.RemotePort, 0)),
-		boundedMetricField(value.SCFRegion, "unknown"),
-		boundedMetricField(value.EgressScope, "unknown"),
-		boundedMetricField(value.EgressIP, "unknown"),
-		strconv.Itoa(max(value.ConnectionAttempt, 0)),
-		strconv.Itoa(max(value.Rows, 0)),
-		boundedMetricField(value.Unit, "rows"),
-		strconv.Itoa(max(value.FallbackRank, 0)),
-		boundedMetricField(value.ErrorKind, "unknown"),
-		boundedMetricField(value.HistoryWindow, "live"),
-		boundedMetricField(value.CalendarID, "none"),
-		result,
-	).Inc()
-}
-
-func boundedMetricField(value, fallback string) string {
-	value = strings.TrimSpace(value)
-	if value == "" || len(value) > 128 {
-		return fallback
-	}
-	return value
-}
-
-// marketRoute 把市场与路由标签限制在允许的取值内。
-func (l FeedLabels) marketRoute(marketID, routeID string) (string, string) {
-	marketID = boundedValue(marketID, l.Markets, "unknown")
-	routeID = strings.TrimSpace(routeID)
-	allowed := boundedValue(routeID, l.Routes, "") != ""
-	if !allowed {
-		// K 线路由 ID 是“前缀 + 规范频率”。
-		for _, prefix := range l.KlineRoutePrefixes {
-			if strings.HasPrefix(routeID, prefix) {
-				frequency := strings.TrimPrefix(routeID, prefix)
-				if parsed, err := marketdata.ParseFrequency(frequency); err == nil && string(parsed) == frequency {
-					allowed = true
-				}
-				break
-			}
-		}
-	}
-	if !allowed {
-		routeID = "unknown"
-	}
-	return marketID, routeID
-}
-
-func boundedValue(value string, allowed []string, fallback string) string {
-	value = strings.TrimSpace(value)
-	for _, candidate := range allowed {
-		if value == candidate {
-			return value
-		}
-	}
-	return fallback
 }
 
 func (m *Metrics) ObserveAssignmentError(spaceID, reason string) {

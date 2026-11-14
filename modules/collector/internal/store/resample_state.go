@@ -576,6 +576,11 @@ func addNoticesTx(tx *gorm.DB, notices []BackfillNotice) error {
 
 // UnsealedNotices 返回还没有成批的通知，按 ID 升序。
 func (r *ResampleStateRepository) UnsealedNotices(ctx context.Context, limit int) ([]BackfillNotice, error) {
+	return r.UnsealedNoticesBefore(ctx, time.Time{}, limit)
+}
+
+// UnsealedNoticesBefore 同 UnsealedNotices，但只取创建时间早于 before 的；before 为零值时不限。
+func (r *ResampleStateRepository) UnsealedNoticesBefore(ctx context.Context, before time.Time, limit int) ([]BackfillNotice, error) {
 	if err := r.ready(); err != nil {
 		return nil, err
 	}
@@ -583,7 +588,12 @@ func (r *ResampleStateRepository) UnsealedNotices(ctx context.Context, limit int
 		limit = 5000
 	}
 	var rows []backfillNoticeRow
-	if err := r.db.WithContext(ctx).Where("c_batch_id = ''").Order("c_id").Limit(limit).Find(&rows).Error; err != nil {
+	query := r.db.WithContext(ctx).Where("c_batch_id = ''")
+	if !before.IsZero() {
+		// c_ctime 按写入进程的本地时区存成文本，直接比字符串会差出一个时区偏移；这里的阈值只有一小时，用 datetime() 归一到 UTC 再比。
+		query = query.Where("datetime(c_ctime) < datetime(?)", before.UTC())
+	}
+	if err := query.Order("c_id").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]BackfillNotice, len(rows))

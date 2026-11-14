@@ -7,7 +7,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
-	"github.com/prometheus/client_golang/prometheus"
 
 	// 生产里标的规则由装配入口（marketwiring）引用后登记；marketfetch 不引用装配层，测试里直接引用两个市场的规则包。
 	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/crypto"
@@ -15,14 +14,6 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
-
-// testFeedLabels 是测试里 feed 指标标签允许的取值，与 marketwiring.FeedLabels 对现有两个市场给出的一致。
-var testFeedLabels = FeedLabels{
-	Markets:            []string{"crypto", "stockcn"},
-	Providers:          []string{"binance", "sina", "tencent", "eastmoney", "baidu", "tdx"},
-	Routes:             []string{"stockcn_instrument_v1", "binance_spot_instrument_v1", "binance_swap_instrument_v1"},
-	KlineRoutePrefixes: []string{"stockcn_equity_kline_", "binance_spot_kline_", "binance_swap_kline_"},
-}
 
 // StockCNSpaceID 是测试里用的 A 股市场 ID。
 const StockCNSpaceID = "stockcn"
@@ -76,11 +67,6 @@ func TestMarketConfigDirOverridesEmbedded(t *testing.T) {
 	_, found, err = LoadRoute("crypto")
 	require.NoError(t, err)
 	require.False(t, found, "crypto 没有路由文件")
-}
-
-// 构造指标时必须给出标签的允许取值：漏了在启动期就 panic，不会把所有标签悄悄记成 unknown。
-func TestNewMetricsRequiresFeedLabels(t *testing.T) {
-	require.Panics(t, func() { NewMetrics(prometheus.NewRegistry(), FeedLabels{}) })
 }
 
 // 环境变量指向的目录里没有这个数据源的文件时，回落到编进二进制的内容；两处都没有才算没配置。

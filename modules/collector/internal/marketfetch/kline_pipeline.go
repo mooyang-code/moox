@@ -233,7 +233,6 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			if err != nil {
 				timings[index].Outcome = classifyError(err)
 				item.CandidateIndex = nextCandidateIndex
-				p.observeFeed(req, routeID, selectedProvider, "kline", metricKlineResult(err))
 				results[index] = failureResult(item, classifyError(err), errorType(err), err)
 				p.reportItemFailure(req, results[index], selectedProvider, attempts, time.Since(fetchStarted), coverageStart, coverageEnd, err)
 				return
@@ -296,7 +295,6 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				itemRows = append(itemRows, row)
 			}
 			if len(itemRows) == 0 {
-				p.observeFeed(req, routeID, selectedProvider, "kline", "invalid")
 				outcome := domain.ItemOutcomeInvalid
 				errorValue := error(fmt.Errorf("provider returned no bars inside the requested coverage"))
 				if req.RequirePeriodCommit {
@@ -306,11 +304,6 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				results[index] = failureResult(item, outcome, "coverage", errorValue)
 				return
 			}
-			result := "success"
-			if providerRank(itemChain, selectedProvider) > 1 {
-				result = "fallback"
-			}
-			p.observeFeed(req, routeID, selectedProvider, "kline", result)
 			expanded, missingTargets, failedTargets := expandTargetRows(req, item, itemRows, extraFields, failedFields)
 			rowsMu.Lock()
 			rows = append(rows, expanded...)
@@ -623,21 +616,6 @@ func hasRowsWithinCoverage(rows []marketdata.NormalizedKline, start, end time.Ti
 	return false
 }
 
-func (p *KlinePipeline) observeFeed(req Request, routeID, providerID, feedKind, result string) {
-	if p == nil || p.Metrics == nil {
-		return
-	}
-	p.Metrics.ObserveFeedResult(FeedMetric{
-		MarketID: firstNonEmptyString(p.MarketID, req.SpaceID), RouteID: routeID,
-		ProviderID: providerID, SourceID: firstNonEmptyString(p.SourceID, req.SourceID),
-		InstrumentType: string(p.InstrumentType), Frequency: req.Frequency, FeedKind: feedKind,
-		BatchKind: string(req.BatchKind), Result: result, SourceKind: "provider", Transport: "https",
-		SCFRegion: req.Region, EgressScope: "scf-public", Rows: 0, FallbackRank: providerRank([]string{providerID}, providerID),
-		ErrorKind: result, CalendarID: firstNonEmptyString(req.SpaceID, "none"),
-		GroupID: req.GroupID, GroupCount: req.GroupCount,
-	})
-}
-
 // klineRouteID 返回写进行（股票行的 route_id）与指标标签的 K 线路由 ID。三条规则，取值都不许变：
 //  1. 来源按路由分配的（市场，品种）：<市场>_<品种>_kline_<频率>（见 KlineRouteID），它同时是按标的分配来源的哈希种子；
 //  2. 市场没有路由文件：<数据源>_<品种>_kline_<频率>，频率只规范化；
@@ -666,24 +644,6 @@ func klineRouteID(marketID string, instrumentType marketdata.InstrumentType, pro
 		return KlineRouteID(marketID, instrumentType, frequency), nil
 	}
 	return fixed, nil
-}
-
-func metricKlineResult(err error) string {
-	if err == nil {
-		return "success"
-	}
-	switch classifyError(err) {
-	case domain.ItemOutcomeHTTP429:
-		return "http_429"
-	case domain.ItemOutcomeHTTP5xx:
-		return "http_5xx"
-	case domain.ItemOutcomeNetworkError:
-		return "timeout"
-	case domain.ItemOutcomeInvalid:
-		return "invalid"
-	default:
-		return "no_candidate"
-	}
 }
 
 // adaptiveBatch 报告这类批次是否使用自适应速率：补采、追赶、缺口修复是持续几分钟到几小时的请求，能边跑边学出安全的速率；

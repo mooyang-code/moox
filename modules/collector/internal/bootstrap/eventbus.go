@@ -21,7 +21,7 @@ import (
 type eventBusRuntime struct {
 	hub   *eventbus.Hub
 	relay *eventbus.Relay
-	// notices 把补写通知封存成 event.collector.kline.backfilled：补采作业结束时、合成的定时器和历史作业都会调它。
+	// notices 把补写通知封存成 event.collector.kline.backfilled：补采作业结束时、维护轮、合成的定时器和历史作业都会调它。
 	notices   *collectorresample.NoticePublisher
 	attention *attention.Attention
 }

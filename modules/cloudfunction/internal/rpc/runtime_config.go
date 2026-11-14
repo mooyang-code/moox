@@ -23,6 +23,13 @@ const (
 	maxSCFEnvironmentBytes = 4096
 )
 
+// retiredEnvironmentKeys 是已经废弃的受管环境变量：更新函数环境时从现有环境里删掉。
+var retiredEnvironmentKeys = []string{
+	"MOOX_MARKET_FETCH_DNS_ROUTES_JSON",
+	"MOOX_MARKET_FETCH_DNS_HASH",
+	"MOOX_MARKET_FETCH_DNS_UPDATED_AT",
+}
+
 var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_BINDING_HASH":        {},
 	"MOOX_ACCESS_ADDRESS":                   {},
@@ -216,6 +223,13 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 		environment = make(map[string]string)
 	}
 	needsEnvironmentUpdate := !managedEnvironmentMatches(environment, item.GetManagedEnvironment())
+	// 已废弃的受管键不会再出现在下发的环境里：更新以现有环境为底，不显式删掉的话会一直留在按函数名接管的旧函数上。
+	for _, key := range retiredEnvironmentKeys {
+		if _, ok := environment[key]; ok {
+			delete(environment, key)
+			needsEnvironmentUpdate = true
+		}
+	}
 	for key, value := range item.GetManagedEnvironment() {
 		environment[key] = value
 	}

@@ -5,6 +5,7 @@ import type { FactorMember, FactorTaskInfo, RecalcJob } from "@/api/factor/types
 import {
   defaultRange,
   enabledMemberIds,
+  engineText,
   estimateRecalc,
   isSessionMarket,
   jobDisplay,
@@ -55,6 +56,14 @@ describe("recalc model", () => {
     const failed = jobDisplay(job({ status: "failed", error: "storage read timeout" }));
     expect(failed).toMatchObject({ degraded: false, errorText: "storage read timeout" });
     expect(jobDisplay(job({ status: "succeeded" }))).toMatchObject({ degraded: false, errorText: "" });
+  });
+
+  it("等待领取的作业不显示引擎 ID（被归还的作业还留着上一次的引擎）", () => {
+    expect(engineText(job({ status: "accepted", engine_id: "engine-1" }))).toBe("待领取");
+    expect(engineText(job({ status: "accepted" }))).toBe("待领取");
+    expect(engineText(job({ status: "running", engine_id: "engine-1" }))).toBe("engine-1");
+    expect(engineText(job({ status: "succeeded", engine_id: "engine-1" }))).toBe("engine-1");
+    expect(engineText(job({ status: "failed" }))).toBe("—");
   });
 
   it("progress percent from progress_time within range", () => {

@@ -442,6 +442,45 @@ func TestExecuteRuntimeConfigSkipsUnchangedEnvironmentUpdate(t *testing.T) {
 	require.Empty(t, fake.configured, "unchanged managed environment must not call UpdateFunctionConfiguration")
 }
 
+// 已废弃的 DNS 环境变量留在旧函数上时，即使受管环境没有变化也要更新一次把它们删掉。
+func TestExecuteRuntimeConfigRemovesRetiredEnvironmentKeys(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{
+		SpaceID: "crypto", InstanceID: "timer-instance", CloudAccountID: "account-a", PackageID: "pkg", FunctionType: "scf-event", TriggerType: "timer", Provider: "tencent-scf",
+		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-timer", Metadata: `{"workload_type":"market_fetcher"}`,
+	}))
+	managed := completeTimerEnvironment()
+	managed["MOOX_CODE_PACKAGE_ID"] = "pkg"
+	managed["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "assignment"
+	managed["MOOX_MARKET_FETCH_SUBJECT_COUNT"] = "1"
+	managed["MOOX_MARKET_FETCH_MARKET_TYPE"] = "spot"
+	managed["MOOX_MARKET_FETCH_DATASET_ID"] = "bars"
+	managed["MOOX_MARKET_FETCH_FREQUENCY"] = "1m"
+	current := copyStringMap(managed)
+	current["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"] = "{}"
+	current["MOOX_MARKET_FETCH_DNS_HASH"] = "hash"
+	current["MOOX_MARKET_FETCH_DNS_UPDATED_AT"] = "2026-11-01T00:00:00Z"
+	current["USER_DEFINED"] = "keep"
+	fake := &fakeSCFClient{currentEnvironment: current, currentTimeout: 60}
+	svc := &Service{
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+	_, err := svc.executeRuntimeConfigItem(context.Background(), "crypto", &pb.FunctionInstanceRuntimeConfigPatch{
+		InstanceId: "timer-instance", ManagedEnvironment: managed, TimerCron: "0 * * * * * *", TimerEnabled: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, fake.configured, 1)
+	updated := fake.configured[0].Environment
+	for _, key := range retiredEnvironmentKeys {
+		assert.NotContains(t, updated, key)
+	}
+	assert.Equal(t, "keep", updated["USER_DEFINED"], "不受管的键保留")
+	assert.Equal(t, "assignment", updated["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
+}
+
 func TestExecuteRuntimeConfigDoesNotEnableTimerWithIncompleteDependencies(t *testing.T) {
 	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)

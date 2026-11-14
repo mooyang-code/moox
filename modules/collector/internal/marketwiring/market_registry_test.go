@@ -96,21 +96,6 @@ func TestResolveSymbolUsesSubjectRules(t *testing.T) {
 	require.ErrorIs(t, err, markets.ErrUnknownMarket)
 }
 
-// 指标标签的允许取值来自已登记市场、行情源目录和路由；现有路由 ID 都在里面，通达信也在数据源里。
-func TestFeedLabelsCoverExistingValues(t *testing.T) {
-	labels := FeedLabels()
-	require.Equal(t, []string{"crypto", "stockcn", "stockhk", "stockus"}, labels.Markets)
-	for _, provider := range []string{"binance", "sina", "tencent", "eastmoney", "baidu", "tdx"} {
-		require.Contains(t, labels.Providers, provider)
-	}
-	for _, route := range []string{"stockcn_instrument_v1", "binance_spot_instrument_v1", "binance_swap_instrument_v1"} {
-		require.Contains(t, labels.Routes, route)
-	}
-	for _, prefix := range []string{"stockcn_equity_kline_", "stockhk_equity_kline_", "stockus_equity_kline_", "binance_spot_kline_", "binance_swap_kline_"} {
-		require.Contains(t, labels.KlineRoutePrefixes, prefix)
-	}
-}
-
 // 两张表的键都带市场；指数成分表不依赖全部标的表；A 股只启用路由里列为标的来源的数据源。
 func TestSubjectListersAreKeyedByMarket(t *testing.T) {
 	listers, indexes, err := NewSubjectListers()

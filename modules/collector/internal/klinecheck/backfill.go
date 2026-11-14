@@ -119,7 +119,7 @@ type Backfiller struct {
 	Executor func(ctx context.Context, spaceID, datasetID string) (string, error)
 	Local    Invoker
 	// FlushNotices 在补采作业结束后调用：把分块成功时记下的补写通知封存成 event.collector.kline.backfilled
-	// （因子据此立即推进连续水位并补算，合成据此重算）。失败只记日志，通知留在库里由合成的定时器再封存。
+	// （因子据此立即推进连续水位并补算，合成据此重算）。失败只记日志，通知留在库里，由维护轮（合成开启时还有合成的定时器）再封存。
 	FlushNotices func(ctx context.Context) error
 	// Paused 报告空间是否处于采集暂停；暂停期间不再认领分块（含补位），已在执行的分块自然结束。为空表示不暂停。
 	Paused func(ctx context.Context, spaceID string) (bool, error)

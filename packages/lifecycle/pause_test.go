@@ -234,6 +234,47 @@ func TestModuleResumeMembersAndManualExclusion(t *testing.T) {
 	require.Equal(t, StagePaused, fx.c.Stage(set2))
 }
 
+// 模块恢复追赶期间暂停一个没追平的参与对象：它退出本次追赶，不再挡住模块；之后单独恢复它照常走追赶。
+func TestPauseMemberDuringModuleCatchupUnblocksModule(t *testing.T) {
+	fx := newFixture(t, "")
+	ctx := context.Background()
+	_, err := fx.c.Execute(ctx, Request{Command: CmdPause, PauseKind: PauseSystem})
+	require.NoError(t, err)
+	_, err = fx.c.Execute(ctx, Request{Command: CmdResume, PauseKind: PauseSystem, ManualRelease: true})
+	require.NoError(t, err)
+	fx.cu.set(Ref{}, true)
+	fx.cu.set(set1, true)
+	fx.c.Refresh(ctx)
+	rep := fx.c.CatchupReport(ctx)
+	require.False(t, rep.CaughtUp)
+	require.Equal(t, "factor_task/set2", rep.Self.Catchup.BlockedBy, "set2 追不平，挡住模块")
+
+	obj, err := fx.c.Command(ctx, CmdPause, set2)
+	require.NoError(t, err)
+	require.Equal(t, StagePaused, obj.Stage)
+	require.Equal(t, StageRunning, obj.Resume)
+	require.Nil(t, obj.Catchup)
+	require.False(t, fx.c.CatchupAllowed(set2), "暂停后不再参与本次追赶")
+	fx.c.Refresh(ctx)
+	rep = fx.c.CatchupReport(ctx)
+	require.True(t, rep.CaughtUp, "暂停没追平的对象后模块算追平")
+	require.Empty(t, rep.Self.Catchup.BlockedBy)
+
+	_, err = fx.c.Command(ctx, CmdRelease, Ref{})
+	require.NoError(t, err)
+	require.True(t, fx.c.Allowed(set1))
+	require.Equal(t, StagePaused, fx.c.Stage(set2))
+
+	// 放行后单独恢复 set2：进入恢复追赶，追平后回到暂停前的运行。
+	obj, err = fx.c.Command(ctx, CmdResume, set2)
+	require.NoError(t, err)
+	require.Equal(t, StageResuming, obj.Stage)
+	fx.cu.set(set2, true)
+	fx.c.Refresh(ctx)
+	require.Equal(t, StageRunning, fx.c.Stage(set2))
+	require.True(t, fx.c.Allowed(set2))
+}
+
 func TestPauseDuringCatchupKeepsEarliestPausedSince(t *testing.T) {
 	fx := newFixture(t, "")
 	ctx := context.Background()

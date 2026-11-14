@@ -119,7 +119,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		CloseRefetch: markets.CloseRefetchDay, RefetchFrequency: routedFrequency,
 	}
 	if bus != nil {
-		// 补采作业结束后立刻把分块的补写通知封存成事件，不等合成的定时器：因子引擎和合成都订阅这个事件。
+		// 补采作业结束后立刻把分块的补写通知封存成事件，不等维护轮或合成的定时器：因子引擎和合成都订阅这个事件。
 		backfiller.FlushNotices = bus.notices.Flush
 	}
 	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })

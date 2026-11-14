@@ -203,9 +203,8 @@ func (r *Relay) flush(ctx context.Context) error {
 	}
 	r.cursor = page.Scanned
 	r.hasMore = page.HasMore
-	if !page.HasMore {
-		r.metrics.SetOutboxSnapshotAt(0, time.Time{})
-	}
+	// 这一页全部发完就清零：后面还有积压时也一样，否则排空期间会一直挂着上次失败时的年龄。
+	r.metrics.SetOutboxSnapshotAt(0, time.Time{})
 	return r.saveCursor(published > 0)
 }
 
