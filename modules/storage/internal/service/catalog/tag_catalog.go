@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 
@@ -16,6 +15,10 @@ func (s *Service) UpsertTag(ctx context.Context, req *pb.UpsertTagReq) (*pb.Upse
 	if req == nil || req.GetTag() == nil {
 		return &pb.UpsertTagRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("tag is required"))}, nil
 	}
+	// 内置标签只能来自种子导入：不带 seed 新建的标签一律不是内置标签。已有标签的 builtin 由存储层保持不变。
+	if !req.GetSeed() {
+		req.GetTag().Builtin = false
+	}
 	if req.GetCreateOnly() {
 		tag, err := s.metadata.CreateTag(ctx, req.GetTag())
 		if err != nil {
@@ -23,9 +26,6 @@ func (s *Service) UpsertTag(ctx context.Context, req *pb.UpsertTagReq) (*pb.Upse
 		}
 		s.refreshMetadataCacheAfterCommit(ctx, "UpsertTag")
 		return &pb.UpsertTagRsp{RetInfo: retinfo.Success("success"), Tag: tag}, nil
-	}
-	if _, err := s.metadata.GetTag(ctx, req.GetTag().GetSpaceId(), req.GetTag().GetTagId()); errors.Is(err, sql.ErrNoRows) {
-		req.GetTag().Builtin = false
 	}
 	tag, err := s.metadata.UpsertTag(ctx, req.GetTag())
 	if err != nil {

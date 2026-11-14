@@ -75,7 +75,6 @@ func (s *Store) CreateTag(ctx context.Context, item *pb.Tag) (*pb.Tag, error) {
 	if err := normalizeTag(item); err != nil {
 		return nil, err
 	}
-	item.Builtin = false
 	raw, err := tagItemJSON(item)
 	if err != nil {
 		return nil, err
@@ -145,7 +144,7 @@ func (s *Store) ListTags(ctx context.Context, spaceID string, page *pb.Page) ([]
 		}
 		items = append(items, item)
 	}
-	return items, &pb.PageResult{Page: pageNo, Size: size, Total: uint32(total)}, rows.Err()
+	return items, &pb.PageResult{Page: pageNo, Size: size, Total: uint32(total), HasMore: uint64(offset)+uint64(len(items)) < total}, rows.Err()
 }
 
 func (s *Store) DeleteTag(ctx context.Context, spaceID, tagID string) error {

@@ -97,7 +97,7 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 	for _, item := range seed.Tags {
 		tag := item.toPB()
 		calls = append(calls, metadataImportCall{
-			Resource: "tags", Method: "UpsertTag", Request: &pb.UpsertTagReq{Tag: tag}, Response: &pb.UpsertTagRsp{},
+			Resource: "tags", Method: "UpsertTag", Request: &pb.UpsertTagReq{Tag: tag, Seed: true}, Response: &pb.UpsertTagRsp{},
 			Exists: &metadataExistsProbe{Method: "GetTag", Request: &pb.GetTagReq{SpaceId: tag.GetSpaceId(), TagId: tag.GetTagId()}, Response: &pb.GetTagRsp{}},
 		})
 	}

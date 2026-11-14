@@ -163,3 +163,22 @@ func TestTagAttributesRoundTripAndAreMutable(t *testing.T) {
 		t.Fatalf("改属性应整体替换：%v", got.GetAttributes())
 	}
 }
+
+func TestListTagsReportsHasMore(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	for _, id := range []string{"tag_a", "tag_b", "tag_c"} {
+		if _, err := store.UpsertTag(ctx, testAutoTag(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, page, err := store.ListTags(ctx, "", &pb.Page{Page: 1, Size: 2})
+	if err != nil || len(items) != 2 || !page.GetHasMore() {
+		t.Fatalf("first page: items=%d page=%v err=%v", len(items), page, err)
+	}
+	items, page, err = store.ListTags(ctx, "", &pb.Page{Page: 2, Size: 2})
+	if err != nil || len(items) != 1 || page.GetHasMore() {
+		t.Fatalf("last page: items=%d page=%v err=%v", len(items), page, err)
+	}
+}
