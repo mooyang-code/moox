@@ -106,6 +106,7 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: '代码审查与优化建议', link: '/审查/2026-10-10代码审查' },
+          { text: '设计审查（2026-11-14）', link: '/审查/2026-11-14设计审查' },
         ],
       },
     ],
