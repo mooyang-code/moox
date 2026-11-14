@@ -88,7 +88,6 @@ require (
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/routeprobe v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/jwt/v2 v2.8.1 // indirect
@@ -161,8 +160,6 @@ replace github.com/mooyang-code/moox/packages/frequency => ../../packages/freque
 replace github.com/mooyang-code/moox/packages/seriesset => ../../packages/seriesset
 
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
-
-replace github.com/mooyang-code/moox/packages/routeprobe => ../../packages/routeprobe
 
 replace github.com/mooyang-code/moox/packages/tdx => ../../packages/tdx
 

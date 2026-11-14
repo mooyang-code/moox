@@ -226,7 +226,7 @@ func TestTargetExecutorDiscardsPendingChildWhenSessionChangesAfterPlace(t *testi
 	_, accepted, err := fixture.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-session-change",
 		InstanceID: "instance-1", SessionID: "session-1", StrategyID: "strategy-1",
-		BarEndTime: now.UnixMilli(), EffectiveAt: now.UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
+		BarEndTime: now.UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
 		AcceptedAt: now.UnixMilli(), Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}}, Status: StatusPending,
 	})
 	require.NoError(t, err)
@@ -1023,7 +1023,7 @@ func (f *targetFixture) target(t *testing.T, targets []store.InstrumentTarget) {
 		store.LogicalAccountTargetRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
 			TargetID: "target-current", InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
-			BarEndTime: f.now.UnixMilli(), EffectiveAt: f.now.UnixMilli(), ValidUntil: fixtureValidUntil(f.now),
+			BarEndTime: f.now.UnixMilli(), ValidUntil: fixtureValidUntil(f.now),
 			Targets: targets, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 		},
 	)

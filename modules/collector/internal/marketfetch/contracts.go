@@ -10,7 +10,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/clsreporter"
 )
@@ -68,10 +67,9 @@ type Request struct {
 	ConnReuse bool `json:"conn_reuse,omitempty"`
 	// TimerLateMS 是函数入口时刻减去定时事件计划时间（毫秒），EntryAt 是函数入口时刻；
 	// 只用于上报，定位“收盘到开始取数”这一段花在触发、启动还是等待收盘后的取数时刻上。
-	TimerLateMS int                              `json:"timer_late_ms,omitempty"`
-	EntryAt     time.Time                        `json:"-"`
-	DNSRoutes   map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
-	Items       []domain.CollectionItem          `json:"items"`
+	TimerLateMS int                     `json:"timer_late_ms,omitempty"`
+	EntryAt     time.Time               `json:"-"`
+	Items       []domain.CollectionItem `json:"items"`
 	// Targets are the destinations attached to a shared acquisition instance.
 	// When present, one fetched result is fanned out to every target.
 	Targets []domain.WriteTarget `json:"targets,omitempty"`

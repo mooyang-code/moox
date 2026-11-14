@@ -143,18 +143,7 @@ func DefaultEgressHTTPDomains() []string {
 
 // EgressProxy separates upstream policy from service deployment.
 type EgressProxy struct {
-	HTTPDomains []string  `toml:"http_domains"`
-	DNS         EgressDNS `toml:"dns"`
-}
-type EgressDNS struct {
-	RefreshIntervalSeconds int      `toml:"refresh_interval_seconds"`
-	RequestTimeoutMS       int      `toml:"request_timeout_ms"`
-	LookupTimeoutMS        int      `toml:"lookup_timeout_ms"`
-	ProbeTimeoutMS         int      `toml:"probe_timeout_ms"`
-	ProbePort              int      `toml:"probe_port"`
-	CacheTTLSeconds        int      `toml:"cache_ttl_seconds"`
-	MaxIPsPerDomain        int      `toml:"max_ips_per_domain"`
-	Domains                []string `toml:"domains"`
+	HTTPDomains []string `toml:"http_domains"`
 }
 
 // StorageRetention is the [storage_retention] table: how long each
@@ -644,6 +633,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		if len(keys[0]) == 3 && keys[0][0] == "hosts" && keys[0][2] == "tls_mode" {
 			return fmt.Errorf("config_invalid: %s 已删除，管理台只用内部证书；运行 moox-cli config migrate --yes 去掉它", first)
 		}
+		if len(keys[0]) >= 2 && keys[0][0] == "egress_proxy" && keys[0][1] == "dns" {
+			return fmt.Errorf("config_invalid: [egress_proxy.dns] 已删除，DNS 快照不再使用；运行 moox-cli config migrate --yes 去掉它")
+		}
 		section := string(keys[0][0])
 		switch section {
 		case "control_host", "storage_host", "view_host", "strategy_host", "other_hosts":
@@ -656,8 +648,6 @@ func decodeStrict(raw []byte, out *Manifest) error {
 			if first == "eventbus.host" {
 				return fmt.Errorf("config_invalid: eventbus.host is derived from the eventbus component in [deployments]")
 			}
-		case "dns_resolver":
-			return fmt.Errorf("config_invalid: dns_resolver is retired; use [egress_proxy.dns] and remove trade_node")
 		case "compile_host":
 			return fmt.Errorf("config_invalid: [compile_host] is retired; builds run on the local machine (see docs/构建手册.md); remove [compile_host] and any host that was only used for compiling")
 		case "placements":
@@ -739,27 +729,6 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	}
 	if !md.IsDefined("egress_proxy", "http_domains") {
 		out.EgressProxy.HTTPDomains = DefaultEgressHTTPDomains()
-	}
-	if !md.IsDefined("egress_proxy", "dns", "refresh_interval_seconds") {
-		out.EgressProxy.DNS.RefreshIntervalSeconds = 300
-	}
-	if !md.IsDefined("egress_proxy", "dns", "request_timeout_ms") {
-		out.EgressProxy.DNS.RequestTimeoutMS = 3000
-	}
-	if !md.IsDefined("egress_proxy", "dns", "lookup_timeout_ms") {
-		out.EgressProxy.DNS.LookupTimeoutMS = 1500
-	}
-	if !md.IsDefined("egress_proxy", "dns", "probe_timeout_ms") {
-		out.EgressProxy.DNS.ProbeTimeoutMS = 500
-	}
-	if !md.IsDefined("egress_proxy", "dns", "probe_port") {
-		out.EgressProxy.DNS.ProbePort = 443
-	}
-	if !md.IsDefined("egress_proxy", "dns", "cache_ttl_seconds") {
-		out.EgressProxy.DNS.CacheTTLSeconds = 300
-	}
-	if !md.IsDefined("egress_proxy", "dns", "max_ips_per_domain") {
-		out.EgressProxy.DNS.MaxIPsPerDomain = 4
 	}
 	if err := resolveManifestReferences(out); err != nil {
 		return err
@@ -939,25 +908,6 @@ func validateCollectorRetention(cfg *CollectorRetention) error {
 func validateEgressProxy(cfg *EgressProxy) error {
 	if _, err := domainpolicy.New(cfg.HTTPDomains); err != nil {
 		return fmt.Errorf("config_invalid: egress_proxy.http_domains: %w", err)
-	}
-	dns := &cfg.DNS
-	if dns.RefreshIntervalSeconds <= 0 || dns.RequestTimeoutMS <= 0 || dns.RequestTimeoutMS > 60000 || dns.LookupTimeoutMS <= 0 || dns.LookupTimeoutMS > 60000 || dns.ProbeTimeoutMS <= 0 || dns.ProbeTimeoutMS > 60000 || dns.CacheTTLSeconds <= 0 {
-		return fmt.Errorf("config_invalid: egress_proxy.dns intervals must be positive and request/lookup/probe timeout at most 60000ms")
-	}
-	if dns.ProbePort < 1 || dns.ProbePort > 65535 || dns.MaxIPsPerDomain < 1 || dns.MaxIPsPerDomain > 4 {
-		return fmt.Errorf("config_invalid: egress_proxy.dns invalid probe port or IP cap")
-	}
-	if len(dns.Domains) > 16 {
-		return fmt.Errorf("config_invalid: egress_proxy.dns supports at most 16 domains")
-	}
-	seen := map[string]bool{}
-	for i, raw := range dns.Domains {
-		domain, ok := domainpolicy.Host(strings.TrimSpace(raw))
-		if !ok || seen[domain] {
-			return fmt.Errorf("config_invalid: egress_proxy.dns domain %q is invalid or duplicated", raw)
-		}
-		seen[domain] = true
-		dns.Domains[i] = domain
 	}
 	return nil
 }

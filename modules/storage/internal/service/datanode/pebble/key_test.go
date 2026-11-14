@@ -3,18 +3,17 @@ package pebble
 import (
 	"bytes"
 	"testing"
-	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 func TestFieldAndAttributeNamespacesDoNotCollide(t *testing.T) {
 	key := &pb.RowKey{SpaceId: "空间|%/\x00", DatasetId: "dataset", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-19T10:01:02Z"}}}
-	field, err := encodeFieldKey(key, "volume", 15*time.Minute)
+	field, err := encodeFieldKey(key, "volume")
 	if err != nil {
 		t.Fatal(err)
 	}
-	attribute, err := encodeAttributeKey(key, "source", 15*time.Minute)
+	attribute, err := encodeAttributeKey(key, "source")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,13 +23,13 @@ func TestFieldAndAttributeNamespacesDoNotCollide(t *testing.T) {
 }
 
 func TestTimeSeriesKeyContainsBucketStart(t *testing.T) {
-	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1m", DataTime: "2026-07-19T10:14:59Z"}}}
-	a, err := encodeFieldKey(key, "close", 15*time.Minute)
+	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1m", DataTime: "2026-07-19T23:59:59Z"}}}
+	a, err := encodeFieldKey(key, "close")
 	if err != nil {
 		t.Fatal(err)
 	}
-	key.GetTimeSeries().DataTime = "2026-07-19T10:15:01Z"
-	b, err := encodeFieldKey(key, "close", 15*time.Minute)
+	key.GetTimeSeries().DataTime = "2026-07-20T00:00:01Z"
+	b, err := encodeFieldKey(key, "close")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,11 +41,11 @@ func TestTimeSeriesKeyContainsBucketStart(t *testing.T) {
 func TestTimeSeriesKeyNormalizesEquivalentInstants(t *testing.T) {
 	first := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1m", DataTime: "2026-01-01T00:00:00Z"}}}
 	second := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1m", DataTime: "2026-01-01T08:00:00+08:00"}}}
-	a, err := encodeFieldKey(first, "close", time.Hour)
+	a, err := encodeFieldKey(first, "close")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := encodeFieldKey(second, "close", time.Hour)
+	b, err := encodeFieldKey(second, "close")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +56,7 @@ func TestTimeSeriesKeyNormalizesEquivalentInstants(t *testing.T) {
 
 func TestTimeSeriesBucketPrecedesSubjectInPhysicalKey(t *testing.T) {
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "subject", Freq: "1m", DataTime: "2026-07-19T10:14:59Z", SeriesTag: "venue:okx"}}}
-	encoded, err := encodeFieldKey(key, "close", 15*time.Minute)
+	encoded, err := encodeFieldKey(key, "close")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,13 +64,13 @@ func TestTimeSeriesBucketPrecedesSubjectInPhysicalKey(t *testing.T) {
 	if !ok || len(parts) != 8 {
 		t.Fatalf("parts=%v ok=%v", parts, ok)
 	}
-	want := []string{"s", "d", "2026-07-19T10:00:00.000000000Z", "subject", "1m", "2026-07-19T10:14:59.000000000Z", "venue:okx", "close"}
+	want := []string{"s", "d", "2026-07-19T00:00:00.000000000Z", "subject", "1m", "2026-07-19T10:14:59.000000000Z", "venue:okx", "close"}
 	for i := range want {
 		if parts[i] != want[i] {
 			t.Fatalf("physical order=%v, want %v", parts, want)
 		}
 	}
-	if parts[2] != "2026-07-19T10:00:00.000000000Z" || parts[3] != "subject" {
+	if parts[2] != "2026-07-19T00:00:00.000000000Z" || parts[3] != "subject" {
 		t.Fatalf("physical order=%v", parts)
 	}
 	if parts[6] != "venue:okx" {
@@ -83,11 +82,11 @@ func TestFieldAndAttributeKeysShareCompleteRowIdentity(t *testing.T) {
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 		SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-19T10:14:59Z", SeriesTag: "venue:binance",
 	}}}
-	field, err := encodeFieldKey(key, "close", 15*time.Minute)
+	field, err := encodeFieldKey(key, "close")
 	if err != nil {
 		t.Fatal(err)
 	}
-	attribute, err := encodeAttributeKey(key, "source", 15*time.Minute)
+	attribute, err := encodeAttributeKey(key, "source")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +110,7 @@ func TestTimeSeriesKeyAlwaysEndsWithSeriesTagComponent(t *testing.T) {
 	}
 	encoded := make([][]byte, 0, 3)
 	for _, tag := range []string{"", "venue:binance", "venue:okx"} {
-		value, err := encodeFieldKey(key(tag), "close", 15*time.Minute)
+		value, err := encodeFieldKey(key(tag), "close")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -156,12 +155,12 @@ func TestNormalizeRowKeyRejectsInvalidSeriesTag(t *testing.T) {
 
 func TestRecordVersionIsPartOfPhysicalKey(t *testing.T) {
 	base := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-	first, err := encodeFieldKey(base, "value", time.Hour)
+	first, err := encodeFieldKey(base, "value")
 	if err != nil {
 		t.Fatal(err)
 	}
 	base.GetRecord().Version = "10"
-	second, err := encodeFieldKey(base, "value", time.Hour)
+	second, err := encodeFieldKey(base, "value")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +172,7 @@ func TestRecordVersionIsPartOfPhysicalKey(t *testing.T) {
 func TestRecordVersionPhysicalOrderMatchesUTF8Order(t *testing.T) {
 	key := func(version string) []byte {
 		t.Helper()
-		value, err := encodeFieldKey(&pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: version}}}, "value", time.Hour)
+		value, err := encodeFieldKey(&pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: version}}}, "value")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -186,7 +185,7 @@ func TestRecordVersionPhysicalOrderMatchesUTF8Order(t *testing.T) {
 
 func TestRecordWriteKeyRequiresVersion(t *testing.T) {
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r"}}}
-	if _, err := encodeFieldKey(key, "value", time.Hour); err == nil {
+	if _, err := encodeFieldKey(key, "value"); err == nil {
 		t.Fatal("expected empty record version to be rejected")
 	}
 }

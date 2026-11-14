@@ -13,8 +13,8 @@ func TestNewJobDefinition_ShouldExposeKlineMetadata(t *testing.T) {
 	def := NewJobDefinition()
 	assert.Equal(t, "kline", def.DataType)
 	assert.Equal(t, "K线", def.TypeName)
-	require.Len(t, def.Fields, 2)
-	assert.Equal(t, "intervals", def.Fields[1].FieldKey)
+	require.Len(t, def.Fields, 1)
+	assert.Equal(t, "frequency", def.Fields[0].FieldKey, "键与真实参数 frequency 一致")
 }
 
 func TestBuildTaskSpecs_MultipleIntervals_ShouldExpandSubjects(t *testing.T) {

@@ -117,7 +117,7 @@ func TestChangeLogRecordsWritesInOrder(t *testing.T) {
 func TestChangeLogRecordsRecordKeys(t *testing.T) {
 	ctx := context.Background()
 	s := openChangeLogStore(t, 0)
-	_, err := s.UpsertFields(ctx, "s", "notes", "", []*pb.RowFieldUpsert{
+	err := s.UpsertFields(ctx, "s", "notes", []*pb.RowFieldUpsert{
 		recordRow("s", "notes", "b", "1"), recordRow("s", "notes", "a", "2"), recordRow("s", "notes", "a", "1"),
 	})
 	require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestChangeLogOrdersRowsMarkersAndRecords(t *testing.T) {
 	_, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, series[1], goldenPeriod, 1)}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", goldenPeriodStatus(t, store, goldenSpace, goldenDataset, goldenFreq, goldenPeriod.Unix()))
-	_, err = store.UpsertFields(ctx, goldenSpace, goldenDataset, "", []*pb.RowFieldUpsert{recordRow(goldenSpace, goldenDataset, "note", "1")})
+	err = store.UpsertFields(ctx, goldenSpace, goldenDataset, []*pb.RowFieldUpsert{recordRow(goldenSpace, goldenDataset, "note", "1")})
 	require.NoError(t, err)
 	marker := goldenProducerMarker("source-ready", goldenPeriod.Unix(), "complete")
 	marker.DatasetId = goldenDataset
@@ -412,19 +412,6 @@ func TestChangeLogCleanupKeepsRecentEntries(t *testing.T) {
 	require.Len(t, readAllChanges(t, s, "s", "d"), 1)
 }
 
-// 带 commit_id 的写入与其他时序写入一样记变更日志；同一 commit_id 的重复提交不再写入，也不多记一条。
-func TestCommitWritesAreChangeLoggedOnce(t *testing.T) {
-	ctx := context.Background()
-	s := openChangeLogStore(t, 0)
-	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	row := tsRow("BTCUSDT", "", base, 1)
-	for i := 0; i < 2; i++ {
-		_, err := s.UpsertFields(ctx, "s", "d", "commit-1", []*pb.RowFieldUpsert{row})
-		require.NoError(t, err)
-	}
-	require.Equal(t, uint64(1), mustHead(t, s).GetSequence())
-}
-
 // peekChange 读出的定位字段与完整解码一致，三种条目都能跳过其余字段。
 func TestPeekChangeMatchesFullDecode(t *testing.T) {
 	for _, change := range []*pb.DatasetChange{
@@ -524,7 +511,7 @@ func TestChangeLogConcurrentWritersKeepSequenceAndOrder(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 10; i++ {
 			row := goldenRow(goldenSpace, "plain", goldenFreq, series[0], goldenPeriod.Add(-time.Duration(i+1)*time.Minute), float64(i))
-			_, err := store.UpsertFields(ctx, goldenSpace, "plain", "", []*pb.RowFieldUpsert{row})
+			err := store.UpsertFields(ctx, goldenSpace, "plain", []*pb.RowFieldUpsert{row})
 			assert.NoError(t, err)
 		}
 	}()

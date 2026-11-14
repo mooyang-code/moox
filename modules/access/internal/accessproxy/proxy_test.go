@@ -267,11 +267,11 @@ func TestProxyReusesInboundCompressTypeForTheUpstreamHop(t *testing.T) {
 	}))
 	body := []byte{0x0a, 1, 'a'}
 	ctx := signedContext(t, credential, "access@storage", primaryService, "CommitTimeSeriesBatch", body)
-	codec.Message(ctx).WithCompressType(wirecompress.CompressType(""))
+	codec.Message(ctx).WithCompressType(wirecompress.CompressType())
 	_, err := proxy.Forward(ctx, &codec.Body{Data: body})
 	require.NoError(t, err)
 	require.True(t, seenOK)
-	require.Equal(t, wirecompress.CompressType(""), seen)
+	require.Equal(t, wirecompress.CompressType(), seen)
 
 	// 入站未压缩（类型 0）时不沿用，出站按默认字典压缩。
 	seenOK = false

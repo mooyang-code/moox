@@ -226,7 +226,7 @@ func (s *Store) readRangeByTime(ctx context.Context, snap pebbleReader, spaceID,
 	}
 	if cursor.GetLast() != nil {
 		after := &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: cursor.GetLast()}}
-		afterKey, err := encodeHistoryKey(after, s.bucketDuration)
+		afterKey, err := encodeHistoryKey(after)
 		if err != nil {
 			return nil, nil, invalidf("invalid page cursor: %w", err)
 		}
@@ -726,11 +726,11 @@ func (s *Store) readRowsAt(ctx context.Context, snap pebbleReader, keys []*pb.Ro
 				return nil, err
 			}
 		}
-		fieldPrefix, err := encodeNamespacePrefix(fieldNamespace, resolved, s.bucketDuration)
+		fieldPrefix, err := encodeNamespacePrefix(fieldNamespace, resolved)
 		if err != nil {
 			return nil, err
 		}
-		attrPrefix, err := encodeNamespacePrefix(attributeNamespace, resolved, s.bucketDuration)
+		attrPrefix, err := encodeNamespacePrefix(attributeNamespace, resolved)
 		if err != nil {
 			return nil, err
 		}

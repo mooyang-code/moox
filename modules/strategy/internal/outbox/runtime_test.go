@@ -88,7 +88,7 @@ func strategyEventData(id string) ([]byte, error) {
 	bar := timestamppb.New(now)
 	validUntil := timestamppb.New(now.Add(time.Hour))
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
-		TargetId: id, InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", LogicalAccountId: "logical-1", BarEndTime: bar, EffectiveAt: bar, ValidUntil: validUntil,
+		TargetId: id, InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: validUntil,
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "1",
 		}},

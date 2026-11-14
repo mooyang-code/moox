@@ -25,9 +25,8 @@ const (
 
 // Options 控制主服务的 Pebble 库。库里存放全部数据集，数据集身份是每个物理键的一部分。
 type Options struct {
-	Path           string
-	BucketDuration time.Duration
-	MaxEventBytes  int
+	Path          string
+	MaxEventBytes int
 	// ChangeLogRetention 是变更日志的保留期（由保留期清理循环按它删除）；为 0 时取 DefaultChangeLogRetention。
 	ChangeLogRetention time.Duration
 	DisableSyncWrites  bool
@@ -48,7 +47,6 @@ type Store struct {
 	db                      *cpebble.DB
 	writeOptions            *cpebble.WriteOptions
 	sourceStoreID           string
-	bucketDuration          time.Duration
 	maxEventBytes           int
 	changeLogRetention      time.Duration
 	datasetWriteMu          sync.RWMutex
@@ -86,9 +84,6 @@ func Open(opts Options) (*Store, error) {
 	if strings.TrimSpace(opts.Path) == "" {
 		return nil, errors.New("pebble path is required")
 	}
-	if opts.BucketDuration <= 0 {
-		opts.BucketDuration = 24 * time.Hour
-	}
 	if opts.PeriodNow == nil {
 		opts.PeriodNow = time.Now
 	}
@@ -114,7 +109,7 @@ func Open(opts Options) (*Store, error) {
 		writeOptions = cpebble.NoSync
 	}
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1), changeSignal: make(chan struct{}), datasetExists: opts.DatasetExists}
+	store := &Store{db: db, writeOptions: writeOptions, sourceStoreID: sourceStoreID, maxEventBytes: opts.MaxEventBytes, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1), changeSignal: make(chan struct{}), datasetExists: opts.DatasetExists}
 	store.startPeriodFinalizer()
 	store.startCacheStats(cacheStatsFirstDelay, cacheStatsInterval)
 	return store, nil

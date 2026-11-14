@@ -34,7 +34,7 @@ func modernExpiryTarget(t *testing.T, f *targetFixture) {
 		WHERE c_logical_account_id = 'logical-1'`).Error)
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_account_targets
 		SET c_instance_id = 'instance-1', c_session_id = 'session-1', c_strategy_id = 'strategy-1',
-		c_bar_end_time = 1000, c_effective_at = 1000, c_valid_until = 2000
+		c_bar_end_time = 1000, c_valid_until = 2000
 		WHERE c_logical_account_id = 'logical-1'`).Error)
 }
 
@@ -91,7 +91,7 @@ func TestExpiryCASMissReturnsSupersededWithoutTouchingReplacement(t *testing.T) 
 	e.Prices = expiryPriceSource{t}
 	e.Now = func() time.Time {
 		require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_account_targets
-			SET c_target_id = 'new-target', c_bar_end_time = 2000, c_effective_at = 2000, c_valid_until = 3000,
+			SET c_target_id = 'new-target', c_bar_end_time = 2000, c_valid_until = 3000,
 			c_status = 'PENDING' WHERE c_logical_account_id = 'logical-1'`).Error)
 		return time.UnixMilli(2000)
 	}
@@ -125,7 +125,7 @@ func TestExpiryDuringQuotePersistsTerminalStateWithoutPlacingOrder(t *testing.T)
 func TestExpiryCASChecksSessionAndBarIdentity(t *testing.T) {
 	for name, replacement := range map[string]string{
 		"session": "c_session_id = 'session-2'",
-		"bar":     "c_bar_end_time = 2000, c_effective_at = 2000, c_valid_until = 3000",
+		"bar":     "c_bar_end_time = 2000, c_valid_until = 3000",
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newTargetFixture(t, exchange.MarketTypeSwap)

@@ -20,10 +20,10 @@ import (
 
 // Collector 的生命周期（设计 2、2.2）：模块级，没有对象。
 //
-//	暂停      ：每个采集计划空间都置为暂停（SCF 定时器停用、collector-stream 停止订阅、不再认领补采分块），
+//	暂停      ：每个采集计划空间都置为系统暂停（SCF 定时器停用、collector-stream 停止订阅、不再认领补采分块），
 //	           并等定时器停用确认、在途补采分块结束才算停下；
 //	恢复追赶  ：空间进入「恢复模式」——补采调度运行（对暂停区间提交补采作业），实时定时器与订阅保持关闭；
-//	放行      ：暂停区间补齐后清除暂停开关，对账协程重新启用定时器，恢复实时采集。
+//	放行      ：暂停区间补齐后清除系统暂停开关（手工暂停的空间保持暂停），对账协程重新启用定时器，恢复实时采集。
 //
 // 恢复模式只在进程内存里：重启后回到暂停，再 resume 即可。
 
@@ -76,6 +76,29 @@ func (c *collectorControl) managed(ctx context.Context) []string {
 	return spaces
 }
 
+// recoverySpaces 返回恢复追赶要补采的空间：管理集合去掉手工暂停的。手工暂停的空间不补采、不计入追赶进度，
+// 否则它们的缺口永远补不上，会卡住整个系统恢复。
+func (c *collectorControl) recoverySpaces(ctx context.Context) ([]string, error) {
+	c.mu.Lock()
+	plans := c.plans
+	c.mu.Unlock()
+	spaces := c.managed(ctx)
+	if plans == nil {
+		return spaces, nil
+	}
+	manual, err := plans.ManuallyPausedSpaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("读取手工暂停的空间：%w", err)
+	}
+	out := make([]string, 0, len(spaces))
+	for _, space := range spaces {
+		if !manual[strings.ToLower(space)] {
+			out = append(out, space)
+		}
+	}
+	return out, nil
+}
+
 // Recovering 报告空间是否处于恢复模式：暂停开关仍在（实时采集关闭），但补采调度要运行。
 func (c *collectorControl) Recovering(string) bool {
 	c.mu.Lock()
@@ -93,7 +116,7 @@ func (c *collectorControl) setRecovering(on bool) {
 	c.recovering, c.recoveryTo = false, time.Time{}
 }
 
-// setPaused 保存全部采集计划空间的暂停开关。
+// setPaused 保存全部采集计划空间的系统暂停开关；手工暂停（collector fetch-plan pause）是另一列，这里不读不写。
 func (c *collectorControl) setPaused(ctx context.Context, paused bool) error {
 	c.mu.Lock()
 	plans := c.plans
@@ -102,14 +125,14 @@ func (c *collectorControl) setPaused(ctx context.Context, paused bool) error {
 		return nil
 	}
 	for _, space := range c.managed(ctx) {
-		if err := plans.SetPaused(ctx, space, paused); err != nil {
+		if err := plans.SetSystemPaused(ctx, space, paused); err != nil {
 			return fmt.Errorf("保存空间 %s 的暂停开关：%w", space, err)
 		}
 	}
 	return nil
 }
 
-// onChange 把模块阶段的变化落到采集上：进入暂停时关实时、清恢复模式；进入恢复追赶时开恢复模式；放行回到就绪时清暂停开关。
+// onChange 把模块阶段的变化落到采集上：进入暂停时关实时、清恢复模式；进入恢复追赶时开恢复模式；放行回到就绪时清系统暂停开关。
 func (c *collectorControl) onChange(ctx context.Context, from, to lifecycle.Stage) {
 	switch to {
 	case lifecycle.StagePaused:
@@ -173,8 +196,12 @@ func (c *collectorControl) catchup(ctx context.Context, since time.Time) (lifecy
 	if backfiller == nil {
 		return out, nil
 	}
+	spaces, err := c.recoverySpaces(ctx)
+	if err != nil {
+		return lifecycle.Catchup{Message: err.Error()}, err
+	}
 	var expected, missing int64
-	for _, space := range c.managed(ctx) {
+	for _, space := range spaces {
 		state, err := backfiller.Catchup(ctx, space, since, to)
 		if err != nil {
 			return lifecycle.Catchup{Message: fmt.Sprintf("空间 %s：%v", space, err)}, err
@@ -209,7 +236,12 @@ func (c *collectorControl) runRecovery(ctx context.Context) {
 		if backfiller == nil {
 			continue
 		}
-		for _, space := range c.managed(ctx) {
+		spaces, err := c.recoverySpaces(ctx)
+		if err != nil {
+			log.WarnContextf(ctx, "collector_recovery_spaces_failed error=%v", err)
+			continue
+		}
+		for _, space := range spaces {
 			if !c.Recovering(space) {
 				continue
 			}

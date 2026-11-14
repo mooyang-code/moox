@@ -3,7 +3,6 @@ package gatewayclient
 import (
 	"context"
 	"net"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -56,49 +55,15 @@ func TestCrossHostEndpointsAlwaysCompress(t *testing.T) {
 	require.True(t, ep.compress, "经 control 中转")
 }
 
-type spacedRequest struct{ Space string }
-
-func (r spacedRequest) GetSpaceId() string { return r.Space }
-
-// 压缩类型的选择：沿用入站类型 > context 里的空间 > 默认字典；Invoke 会把请求顶层的 space_id 写进 context。
+// 压缩类型的选择：沿用入站类型，否则用当前字典版本。
 func TestCompressTypeSelection(t *testing.T) {
-	defaultType := wirecompress.CompressType("")
-	require.Equal(t, defaultType, compressTypeFor(context.Background()), "没有空间用默认字典")
-	require.Equal(t, defaultType, compressTypeFor(wirecompress.WithSpace(context.Background(), "no-dedicated-dict")), "没有专用字典的空间用默认字典")
+	defaultType := wirecompress.CompressType()
+	require.Equal(t, defaultType, compressTypeFor(context.Background()))
 	require.Equal(t, defaultType, compressTypeFor(WithCompressType(context.Background(), 0)), "未压缩类型不能沿用")
 	require.Equal(t, defaultType, compressTypeFor(WithCompressType(context.Background(), codec.CompressTypeGzip)), "非本包注册的类型不能沿用")
 	require.Equal(t, defaultType, compressTypeFor(WithCompressType(context.Background(), 200)), "未注册的类型号不能沿用")
 	require.Equal(t, defaultType, compressTypeFor(WithCompressType(context.Background(), defaultType)))
 }
-
-func TestInvokePutsRequestSpaceIntoContext(t *testing.T) {
-	config := tunnelConfig(&sourceStub{directory: testDirectory(t, "a")})
-	config.Serialization = codec.SerializationTypeJSON
-	c := newTestClient(t, config)
-	var seen string
-	c.invoke = func(ctx context.Context, _ endpoint, _, _ string, _ int, _ []byte, _ http.Header) ([]byte, error) {
-		seen = wirecompress.SpaceOf(ctx, nil)
-		return []byte(`{}`), nil
-	}
-	rsp := map[string]any{}
-	require.NoError(t, c.Invoke(context.Background(), secretService, "GetSecret", map[string]any{}, &rsp))
-	require.Equal(t, "", seen, "请求不带空间字段时不设置")
-	c.invoke = func(ctx context.Context, _ endpoint, _, _ string, _ int, _ []byte, _ http.Header) ([]byte, error) {
-		seen = wirecompress.SpaceOf(ctx, nil)
-		return []byte(`{}`), nil
-	}
-	require.NoError(t, c.Invoke(context.Background(), secretService, "GetSecret", &spaceCarrier{Space: "ashare"}, &rsp))
-	require.Equal(t, "ashare", seen, "请求顶层的 space_id 决定字典")
-	require.NoError(t, c.Invoke(wirecompress.WithSpace(context.Background(), "crypto"), secretService, "GetSecret", &spaceCarrier{Space: "ashare"}, &rsp))
-	require.Equal(t, "crypto", seen, "调用点显式指定的空间优先")
-}
-
-// spaceCarrier 是可 JSON 序列化的带空间请求。
-type spaceCarrier struct {
-	Space string `json:"space_id"`
-}
-
-func (r *spaceCarrier) GetSpaceId() string { return r.Space }
 
 // 读接口的请求很小、响应很大：服务端按请求的压缩方式压缩响应，所以小请求也必须标记压缩，响应才会被压缩。
 func TestTinyRequestStillGetsACompressedResponse(t *testing.T) {

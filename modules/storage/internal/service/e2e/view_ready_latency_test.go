@@ -235,7 +235,7 @@ func runKlinePeriodBench(t *testing.T, ctx context.Context, env readyBenchEnv, d
 	return samples
 }
 
-// runFactorPeriodBench：因子引擎的写法，每期一次 UpsertFields（带 commit_id，每批最多 1000 行），
+// runFactorPeriodBench：因子引擎的写法，每期一次 UpsertFields（每批最多 1000 行），
 // 写完再上报 producer 完成标记，View 直接发布 ViewDataReady。
 func runFactorPeriodBench(t *testing.T, ctx context.Context, env readyBenchEnv, dataset readyBenchDataset, params readyBenchParams) []readyBenchSample {
 	t.Helper()
@@ -251,7 +251,7 @@ func runFactorPeriodBench(t *testing.T, ctx context.Context, env readyBenchEnv, 
 		}
 		waiter := env.Watcher().Expect(dataset.viewID, period.Unix())
 		start := time.Now()
-		writeRowsInBatches(t, ctx, env, dataset, rows, fmt.Sprintf("bench-factor-%d", period.Unix()))
+		writeRowsInBatches(t, ctx, env, dataset, rows)
 		markerAt := time.Now()
 		reportProducerCompleted(t, ctx, env, dataset, period, dataset.subjects, fmt.Sprintf("bench-factor-cause-%d", period.Unix()))
 		readyAt := waiter.Wait(t, ctx)
@@ -285,7 +285,7 @@ func runImportBench(t *testing.T, ctx context.Context, env readyBenchEnv, kline 
 		last := to.Add(-readyBenchStep)
 		waiter := env.Watcher().Expect(dataset.viewID, last.Unix())
 		start := time.Now()
-		writeRowsInBatches(t, ctx, env, dataset, rows, "")
+		writeRowsInBatches(t, ctx, env, dataset, rows)
 		markerAt := time.Now()
 		reportProducerCompleted(t, ctx, env, dataset, last, []string{subject}, fmt.Sprintf("bench-import-%s", subject))
 		readyAt := waiter.Wait(t, ctx)
@@ -302,16 +302,12 @@ func runImportBench(t *testing.T, ctx context.Context, env readyBenchEnv, kline 
 	return samples
 }
 
-func writeRowsInBatches(t *testing.T, ctx context.Context, env readyBenchEnv, dataset readyBenchDataset, rows []*pb.RowFieldUpsert, commitPrefix string) {
+func writeRowsInBatches(t *testing.T, ctx context.Context, env readyBenchEnv, dataset readyBenchDataset, rows []*pb.RowFieldUpsert) {
 	t.Helper()
 	for from := 0; from < len(rows); from += readyBenchWriteBatchRows {
 		to := min(from+readyBenchWriteBatchRows, len(rows))
-		commitID := ""
-		if commitPrefix != "" {
-			commitID = fmt.Sprintf("%s-%d", commitPrefix, from)
-		}
 		rsp, err := env.Primary().UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{
-			AuthInfo: env.Auth(), SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, CommitId: commitID, Rows: rows[from:to],
+			AuthInfo: env.Auth(), SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Rows: rows[from:to],
 		})
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			t.Fatalf("写入 %s：rsp=%v err=%v", dataset.datasetID, rsp.GetRetInfo(), err)

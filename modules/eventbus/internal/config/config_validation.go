@@ -20,12 +20,6 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Broker.ServerName) == "" {
 		return fmt.Errorf("broker.server_name must not be empty")
 	}
-	if c.Broker.Cluster.Enabled && c.Broker.ServerName == "eventbus-dev-1" {
-		return fmt.Errorf("broker.server_name must be unique when cluster is enabled")
-	}
-	if c.Broker.Cluster.Enabled && (len(c.Broker.Cluster.Routes) > 0 || !isLoopback(c.Broker.Cluster.Host)) {
-		return fmt.Errorf("non-loopback cluster routes are not supported in V1")
-	}
 	if c.Broker.MaxPayloadBytes <= 0 || c.Broker.MaxPayloadBytes > 64*1024*1024 {
 		return fmt.Errorf("broker.max_payload_bytes must be between 1 and 67108864")
 	}
@@ -72,12 +66,6 @@ func (c *Config) Validate() error {
 		}
 		if s.Duplicates < 0 {
 			return fmt.Errorf("stream %q duplicates must not be negative", s.Name)
-		}
-		if s.Replicas < 1 {
-			return fmt.Errorf("stream %q replicas must be positive", s.Name)
-		}
-		if s.Replicas > 1 {
-			return fmt.Errorf("stream %q replicas=%d are not supported in V1 standalone mode", s.Name, s.Replicas)
 		}
 		if len(s.Subjects) == 0 {
 			return fmt.Errorf("stream %q must have subjects", s.Name)

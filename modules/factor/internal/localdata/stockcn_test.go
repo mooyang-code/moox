@@ -47,8 +47,8 @@ func (b stockBackend) EarliestPeriod(ctx context.Context, spaceID, datasetID, fr
 	return b.fakeStorage.EarliestPeriod(ctx, spaceID, datasetID, freq, subjects, columns)
 }
 
-func (b stockBackend) WriteRows(ctx context.Context, spaceID, datasetID, commitID string, rows []storageio.ResultRow) error {
-	return b.fakeStorage.WriteRows(ctx, spaceID, datasetID, commitID, rows)
+func (b stockBackend) WriteRows(ctx context.Context, spaceID, datasetID string, rows []storageio.ResultRow) error {
+	return b.fakeStorage.WriteRows(ctx, spaceID, datasetID, rows)
 }
 
 func (b stockBackend) ReportComputed(ctx context.Context, marker storageio.PeriodMarker) error {

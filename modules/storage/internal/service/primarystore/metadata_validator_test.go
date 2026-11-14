@@ -126,9 +126,9 @@ func (validatorSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.Dat
 func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 	var writes, reads int
 	store := newHookStore(t)
-	store.upsert = func(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error) {
+	store.upsert = func(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
 		writes++
-		return store.Store.UpsertFields(ctx, spaceID, datasetID, commitID, rows)
+		return store.Store.UpsertFields(ctx, spaceID, datasetID, rows)
 	}
 	store.readRows = func(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error) {
 		reads++

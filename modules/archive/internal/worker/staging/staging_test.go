@@ -259,8 +259,8 @@ func TestExportWritesSortedGzipCSVThatKeepsEmptyStringsAndNulls(t *testing.T) {
 	want := strings.Join([]string{
 		`data_time,subject_id,series_tag,open,close,note,n`,
 		`2026-10-15T01:00:00Z,BTC,"",65432.12,2.0,"q""t",-1`,
-		`2026-10-15T01:01:00Z,BTC,"x,y",1.0,,,`,
 		`2026-10-15T01:00:00Z,ETH,"",3.0,4.0,"",2`,
+		`2026-10-15T01:01:00Z,BTC,"x,y",1.0,,,`,
 	}, "\n") + "\n"
 	if got := readGzip(t, dest); got != want {
 		t.Fatalf("csv =\n%s\nwant\n%s", got, want)

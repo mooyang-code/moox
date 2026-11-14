@@ -419,7 +419,7 @@ func TestDustConvertsOnlyManagedNonTargetNonExcludedBelowFiveUSDT(t *testing.T) 
 	f.markManaged("DOGE", "LTC", "XRP", "ETH", "USDC")
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "t1", InstanceID: "i1", SessionID: "s1", StrategyID: "st",
-		BarEndTime: 2_000, EffectiveAt: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
+		BarEndTime: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}}, Status: "PENDING", AcceptedAt: 2_000,
 	})
 	require.NoError(t, err)

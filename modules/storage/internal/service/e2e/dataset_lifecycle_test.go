@@ -114,7 +114,7 @@ func TestDatasetLifecycleInPrimaryProcess(t *testing.T) {
 		t.Fatal("deleted Dataset accepted a write")
 	}
 	// 绕过请求快照直接写存储层（相当于删除前就已通过校验的迟到写入）：拿到读锁后按最新元数据被拒绝。
-	if _, err := process.store.UpsertFields(ctx, "quant", "dataset_a", "", []*pb.RowFieldUpsert{row}); !errors.Is(err, pebble.ErrDatasetDeleted) {
+	if err := process.store.UpsertFields(ctx, "quant", "dataset_a", []*pb.RowFieldUpsert{row}); !errors.Is(err, pebble.ErrDatasetDeleted) {
 		t.Fatalf("late write after delete err=%v, want ErrDatasetDeleted", err)
 	}
 

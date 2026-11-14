@@ -3,8 +3,23 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 
-! rg -q 'TradeDNSResolverService' "${ROOT}/modules/trade/proto/trade_service.proto" "${ROOT}/modules/trade/config/trpc_go.yaml"
-! rg -q 'trade_dns_resolver' "${ROOT}/config/setup/service-deployments.yaml"
+# 断言文件里不含某个模式：命中或文件读不到都算失败。
+absent() {
+  local pattern="$1" status=0
+  shift
+  rg -q -- "${pattern}" "$@" || status=$?
+  if [[ "${status}" -eq 0 ]]; then
+    echo "不应出现 ${pattern}：$*" >&2
+    exit 1
+  fi
+  if [[ "${status}" -ne 1 ]]; then
+    echo "检查 ${pattern} 时读取失败：$*" >&2
+    exit 1
+  fi
+}
+
+absent 'TradeDNSResolverService' "${ROOT}/modules/trade/proto/trade_service.proto" "${ROOT}/modules/trade/config/trpc_go.yaml"
+absent 'ResolveDomains' "${ROOT}/modules/egressproxy/proto/egress.proto"
 rg -q 'service Proxy' "${ROOT}/modules/egressproxy/proto/egress.proto"
 rg -q 'RenderEgressConfig' "${ROOT}/modules/cli/internal/setup/config/runtime_config.go"
 rg -q 'RenderCollectorRuntimeConfig' "${ROOT}/modules/cli/internal/setup/config/runtime_config.go"
@@ -51,16 +66,6 @@ overseas = ["trade", "egress-proxy"]
 
 [egress_proxy]
 http_domains = ["*.binance.com", "data-api.binance.vision"]
-
-[egress_proxy.dns]
-refresh_interval_seconds = 300
-request_timeout_ms = 3000
-lookup_timeout_ms = 1500
-probe_timeout_ms = 500
-probe_port = 443
-cache_ttl_seconds = 300
-max_ips_per_domain = 4
-domains = ["data-api.binance.vision", "api.binance.com", "fapi.binance.com"]
 EOF
 chmod 600 "${tmp_root}/moox.toml"
 (cd "${tmp_root}" && ./moox-cli setup render-runtime-config \
@@ -68,7 +73,8 @@ chmod 600 "${tmp_root}/moox.toml"
   --egress-output "${tmp_root}/egress/app.yaml" \
   --collector-output "${tmp_root}/collector/app.yaml") >/dev/null
 
-rg -q 'lookup_timeout_ms: 1500' "${tmp_root}/egress/app.yaml"
+rg -q 'data-api.binance.vision' "${tmp_root}/egress/app.yaml"
+absent 'dns:' "${tmp_root}/collector/app.yaml" "${tmp_root}/egress/app.yaml"
 rg -q 'egress_proxy:' "${tmp_root}/collector/app.yaml"
-! rg -q 'target:|node_id:|dns_resolver:|secret_id:|secret_key:' "${tmp_root}/collector/app.yaml" "${tmp_root}/egress/app.yaml"
+absent 'target:|node_id:|dns_resolver:|secret_id:|secret_key:' "${tmp_root}/collector/app.yaml" "${tmp_root}/egress/app.yaml"
 printf 'Egress policy and Collector runtime configuration contract passed\n'

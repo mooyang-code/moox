@@ -46,7 +46,6 @@ type LogicalAccountTargetRecord struct {
 	SessionID      string
 	StrategyID     string
 	BarEndTime     int64
-	EffectiveAt    int64
 	ValidUntil     int64
 	Targets        []InstrumentTarget
 	Status         string
@@ -73,7 +72,6 @@ type logicalAccountTargetRow struct {
 	SessionID          string    `gorm:"column:c_session_id"`
 	StrategyID         string    `gorm:"column:c_strategy_id"`
 	BarEndTime         int64     `gorm:"column:c_bar_end_time"`
-	EffectiveAt        int64     `gorm:"column:c_effective_at"`
 	ValidUntil         int64     `gorm:"column:c_valid_until"`
 	TargetsJSON        string    `gorm:"column:c_targets_json"`
 	Status             string    `gorm:"column:c_status"`
@@ -128,7 +126,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 		return LogicalAccountTargetRecord{}, false, ErrTargetAuthorization
 	}
 	if blank(record.InstanceID) || blank(record.SessionID) || blank(record.StrategyID) ||
-		record.BarEndTime <= 0 || record.EffectiveAt != record.BarEndTime || record.ValidUntil <= record.EffectiveAt {
+		record.BarEndTime <= 0 || record.ValidUntil <= record.BarEndTime {
 		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete target session contract", ErrInvalidRecord)
 	}
 	if record.CommandSequence == 0 {
@@ -198,7 +196,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	result := tx.db.Exec(execInsertLogicalAccountTarget,
 		record.SpaceID, record.LogicalAccountID, record.TargetID, record.RunnerID,
 		record.CommandSequence, record.InstanceID, record.SessionID, record.StrategyID,
-		record.BarEndTime, record.EffectiveAt, record.ValidUntil,
+		record.BarEndTime, record.ValidUntil,
 		targetsJSON, record.Status,
 		blockedJSON, record.LastError, record.AcceptedAt,
 	)
@@ -284,7 +282,7 @@ func (s *Store) UpdateLogicalAccountTargetState(
 	query := updateTargetBySequenceSQL
 	args := []any{record.TargetID, record.CommandSequence}
 	if record.InstanceID != "" || record.SessionID != "" {
-		if record.InstanceID == "" || record.SessionID == "" || record.BarEndTime <= 0 || record.ValidUntil <= record.EffectiveAt || record.EffectiveAt != record.BarEndTime {
+		if record.InstanceID == "" || record.SessionID == "" || record.BarEndTime <= 0 || record.ValidUntil <= record.BarEndTime {
 			return false, fmt.Errorf("%w: invalid logical account target session update", ErrInvalidRecord)
 		}
 		query = updateTargetBySessionSQL
@@ -317,7 +315,7 @@ func logicalAccountTargetRecord(
 		TargetID: row.TargetID, RunnerID: row.RunnerID,
 		CommandSequence: row.CommandSequence, Targets: targets,
 		InstanceID: row.InstanceID, SessionID: row.SessionID, StrategyID: row.StrategyID,
-		BarEndTime: row.BarEndTime, EffectiveAt: row.EffectiveAt, ValidUntil: row.ValidUntil,
+		BarEndTime: row.BarEndTime, ValidUntil: row.ValidUntil,
 		Status: row.Status, BlockedTargets: blocked,
 		LastError: row.LastError, AcceptedAt: row.AcceptedAt,
 		UpdatedAt: row.UpdatedAt,
@@ -505,10 +503,10 @@ const (
 	execInsertLogicalAccountTarget = `INSERT INTO t_logical_account_targets (
 			c_space_id, c_logical_account_id, c_target_id, c_runner_id,
 			c_command_sequence, c_instance_id, c_session_id, c_strategy_id,
-			c_bar_end_time, c_effective_at, c_valid_until,
+			c_bar_end_time, c_valid_until,
 			c_targets_json, c_status,
 			c_blocked_targets_json, c_last_error, c_accepted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_logical_account_id) DO UPDATE SET
 			c_target_id = excluded.c_target_id,
 			c_runner_id = excluded.c_runner_id,
@@ -517,7 +515,6 @@ const (
 			c_session_id = excluded.c_session_id,
 			c_strategy_id = excluded.c_strategy_id,
 			c_bar_end_time = excluded.c_bar_end_time,
-			c_effective_at = excluded.c_effective_at,
 			c_valid_until = excluded.c_valid_until,
 			c_targets_json = excluded.c_targets_json,
 			c_status = excluded.c_status,

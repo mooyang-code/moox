@@ -23,6 +23,7 @@ func TestTradeEventsExposeOnlyModernWeightTargetContract(t *testing.T) {
 		{name: "command_sequence", number: 4},
 		{name: "signal_time", number: 6},
 		{name: "owner_generation", number: 7},
+		{name: "effective_at", number: 11},
 		{name: "runner_id", number: 13},
 	} {
 		t.Run(string(field.name), func(t *testing.T) {
@@ -46,7 +47,6 @@ func TestTradeEventsExposeOnlyModernWeightTargetContract(t *testing.T) {
 		{name: "session_id", number: 8},
 		{name: "strategy_id", number: 9},
 		{name: "bar_end_time", number: 10},
-		{name: "effective_at", number: 11},
 		{name: "valid_until", number: 12},
 	} {
 		t.Run(string(field.name), func(t *testing.T) {

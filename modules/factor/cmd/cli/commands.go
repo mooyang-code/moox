@@ -20,27 +20,11 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorgen "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	"github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/transport"
 )
-
-func runInit(cfg cliConfig, out io.Writer) error {
-	db, err := store.Open(&store.Options{Path: cfg.DBPath})
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	if err := db.ApplySchema(schema.AllSQL()); err != nil {
-		return fmt.Errorf("apply factor schema: %w", err)
-	}
-	return json.NewEncoder(out).Encode(map[string]any{
-		"ok": true, "database": cfg.DBPath,
-		"tables": []string{"t_factor_tasks", "t_factor_defs", "t_factor_task_members", "t_factor_recalc_jobs"},
-	})
-}
 
 // runImport registers one definition read from a YAML factor library file.
 // With --task it also attaches the definition to that factor task as a disabled

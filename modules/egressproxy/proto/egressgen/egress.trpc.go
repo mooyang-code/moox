@@ -20,8 +20,6 @@ import (
 // ProxyService defines service.
 type ProxyService interface {
 	Do(ctx context.Context, req *DoReq) (*DoRsp, error)
-
-	ResolveDomains(ctx context.Context, req *ResolveDomainsReq) (*ResolveDomainsRsp, error)
 }
 
 func ProxyService_Do_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -42,24 +40,6 @@ func ProxyService_Do_Handler(svr interface{}, ctx context.Context, f server.Filt
 	return rsp, nil
 }
 
-func ProxyService_ResolveDomains_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ResolveDomainsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(ProxyService).ResolveDomains(ctx, reqbody.(*ResolveDomainsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // ProxyServer_ServiceDesc descriptor for server.RegisterService.
 var ProxyServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.egress.Proxy",
@@ -68,10 +48,6 @@ var ProxyServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.egress.Proxy/Do",
 			Func: ProxyService_Do_Handler,
-		},
-		{
-			Name: "/trpc.moox.egress.Proxy/ResolveDomains",
-			Func: ProxyService_ResolveDomains_Handler,
 		},
 	},
 }
@@ -90,9 +66,6 @@ type UnimplementedProxy struct{}
 func (s *UnimplementedProxy) Do(ctx context.Context, req *DoReq) (*DoRsp, error) {
 	return nil, errors.New("rpc Do of service Proxy is not implemented")
 }
-func (s *UnimplementedProxy) ResolveDomains(ctx context.Context, req *ResolveDomainsReq) (*ResolveDomainsRsp, error) {
-	return nil, errors.New("rpc ResolveDomains of service Proxy is not implemented")
-}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -103,8 +76,6 @@ func (s *UnimplementedProxy) ResolveDomains(ctx context.Context, req *ResolveDom
 // ProxyClientProxy defines service client proxy
 type ProxyClientProxy interface {
 	Do(ctx context.Context, req *DoReq, opts ...client.Option) (rsp *DoRsp, err error)
-
-	ResolveDomains(ctx context.Context, req *ResolveDomainsReq, opts ...client.Option) (rsp *ResolveDomainsRsp, err error)
 }
 
 type ProxyClientProxyImpl struct {
@@ -130,26 +101,6 @@ func (c *ProxyClientProxyImpl) Do(ctx context.Context, req *DoReq, opts ...clien
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &DoRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *ProxyClientProxyImpl) ResolveDomains(ctx context.Context, req *ResolveDomainsReq, opts ...client.Option) (*ResolveDomainsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.egress.Proxy/ResolveDomains")
-	msg.WithCalleeServiceName(ProxyServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("egress")
-	msg.WithCalleeService("Proxy")
-	msg.WithCalleeMethod("ResolveDomains")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ResolveDomainsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

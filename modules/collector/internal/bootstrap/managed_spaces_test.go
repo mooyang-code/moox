@@ -49,7 +49,7 @@ func TestAfterResetClearsPauseWhenNoTasksOrPlansRemain(t *testing.T) {
 	db := openManagedDB(t)
 	ctx := context.Background()
 	cfg := &Config{}
-	require.NoError(t, db.FetchPlans().SetPaused(ctx, "crypto", true))
+	require.NoError(t, db.FetchPlans().SetSystemPaused(ctx, "crypto", true))
 	control := &collectorControl{plans: db.FetchPlans(), spaces: func(ctx context.Context) ([]string, error) { return managedSpaces(ctx, cfg, db) }}
 	control.afterReset(ctx)
 	paused, err := db.FetchPlans().PausedSpaces(ctx)

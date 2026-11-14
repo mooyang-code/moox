@@ -229,7 +229,6 @@ func TestLogicalAccountOwnerAndAutomationRoundTrip(t *testing.T) {
 	got, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "instance-1", got.OwnerInstanceID)
-	require.Equal(t, int64(1), got.OwnerGeneration)
 	require.Equal(t, "ACTIVE", got.AutomationState)
 	require.Empty(t, got.PauseReason)
 }

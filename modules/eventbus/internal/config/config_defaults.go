@@ -12,7 +12,7 @@ import (
 
 func Default() *Config {
 	return &Config{
-		Broker: BrokerConfig{Host: "127.0.0.1", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024, Cluster: ClusterConfig{Name: "MOOX_EVENTBUS", Host: "127.0.0.1", Port: 6222}},
+		Broker: BrokerConfig{Host: "127.0.0.1", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024},
 		Health: HealthConfig{Addr: "127.0.0.1:11419"},
 	}
 }
@@ -54,15 +54,6 @@ func (c *Config) applyDefaults() {
 	if c.Broker.MaxPayloadBytes == 0 {
 		c.Broker.MaxPayloadBytes = d.Broker.MaxPayloadBytes
 	}
-	if c.Broker.Cluster.Name == "" {
-		c.Broker.Cluster.Name = d.Broker.Cluster.Name
-	}
-	if c.Broker.Cluster.Host == "" {
-		c.Broker.Cluster.Host = d.Broker.Cluster.Host
-	}
-	if c.Broker.Cluster.Port == 0 {
-		c.Broker.Cluster.Port = d.Broker.Cluster.Port
-	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = d.Health.Addr
 	}
@@ -80,9 +71,6 @@ func normalizeStream(s *StreamConfig) {
 	}
 	if s.Discard == "" {
 		s.Discard = "old"
-	}
-	if s.Replicas == 0 {
-		s.Replicas = 1
 	}
 }
 

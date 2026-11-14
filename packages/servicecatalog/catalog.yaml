@@ -1348,8 +1348,6 @@ components:
     scope: any
     replicas: single
     protected: false
-    ports:
-      - 20101
     health:
       kind: readyz
       port: 20210
@@ -1751,25 +1749,20 @@ components:
         max_body_bytes: 50331648
         methods:
           - Do
-          - ResolveDomains
-        read_only_methods:
-          - ResolveDomains
         acl:
           - methods:
               - Do
-              - ResolveDomains
             callers:
               - collector
     doctor:
       role: egress-proxy
-      description: 受限网络出口与 DNS 解析服务
+      description: 受限网络出口
       duties:
         - 按域名白名单代理 Collector 请求
-        - 解析域名并返回连通性结果
       inputs:
-        - Collector 的出口请求与域名解析请求
+        - Collector 的出口请求
       outputs:
-        - 上游响应与域名地址
+        - 上游响应
       dependencies: []
       transport: reporter
       functional_observability: not_applicable

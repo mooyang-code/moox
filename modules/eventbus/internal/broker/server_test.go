@@ -141,18 +141,6 @@ func writeTestTLSBundle(t *testing.T) (string, string, string) {
 	return certFile, keyFile, caFile
 }
 
-func TestClusterServerCopiesRouteCredentials(t *testing.T) {
-	c := config.Default()
-	c.Broker.Cluster.Enabled = true
-	c.Broker.Auth.Enabled = true
-	c.Broker.Auth.Username = "route-user"
-	c.Broker.Auth.Password = "route-password"
-	username, password := clusterCredentials(c)
-	if username != "route-user" || password != "route-password" {
-		t.Fatalf("cluster credentials = %q/%q", username, password)
-	}
-}
-
 func freePort(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

@@ -86,7 +86,7 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 		require.Equal(t, 5*time.Second, plan.StartDelay(scheduled, scheduled), "定时器准点触发时等 5 秒再取数")
 		require.Contains(t, name, "nanjing", "函数名带地域")
 
-		planned, err := plan.BuildRequests("stockus", name, "req-"+name, scheduled, nil)
+		planned, err := plan.BuildRequests("stockus", name, "req-"+name, scheduled)
 		require.NoError(t, err)
 		require.Len(t, planned, 1, name)
 		require.True(t, planned[0].Period.Equal(usTime("2026-11-12 22:45:00")), "22:50 触发采 22:45 开始的那根")
@@ -206,7 +206,7 @@ func TestStockUSTimerReturnsNoWorkOutsideSessions(t *testing.T) {
 		"2026-10-27 04:00:00": "2026-10-27 03:55:00", // 夏令时末根
 		"2026-11-28 02:00:00": "2026-11-28 01:55:00", // 半日市末根
 	} {
-		planned, err := plan.BuildRequests("stockus", name, "req", usTime(scheduled), nil)
+		planned, err := plan.BuildRequests("stockus", name, "req", usTime(scheduled))
 		require.NoError(t, err, scheduled)
 		require.Len(t, planned, 1, scheduled)
 		require.True(t, planned[0].Period.Equal(usTime(period)), scheduled)

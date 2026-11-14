@@ -43,12 +43,6 @@ func (e ConflictError) Error() string {
 	return fmt.Sprintf("dataset marker event_id %q already exists with a different payload", e.EventID)
 }
 
-type CommitConflictError struct{ CommitID string }
-
-func (e CommitConflictError) Error() string {
-	return fmt.Sprintf("commit_id %q already exists with a different payload", e.CommitID)
-}
-
 type PeriodConflictError struct {
 	SpaceID, DatasetID, Frequency string
 	PeriodTime                    int64
@@ -61,5 +55,4 @@ func (e PeriodConflictError) Error() string {
 // 存储层错误的类别，由 retinfo.Code 统一映射成错误码。
 func (ValidationError) StoreErrorKind() storeerr.Kind     { return storeerr.Invalid }
 func (ConflictError) StoreErrorKind() storeerr.Kind       { return storeerr.Conflict }
-func (CommitConflictError) StoreErrorKind() storeerr.Kind { return storeerr.Conflict }
 func (PeriodConflictError) StoreErrorKind() storeerr.Kind { return storeerr.Conflict }

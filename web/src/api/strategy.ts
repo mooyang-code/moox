@@ -81,7 +81,8 @@ function normalizeItem(value: any): StrategyResultItem {
     score: value?.score ?? "",
     rank: Number(value?.rank ?? 0),
     weight: value?.weight ?? "",
-    reason: value?.reason ?? ""
+    reason: value?.reason ?? "",
+    scale: value?.scale ?? ""
   };
 }
 

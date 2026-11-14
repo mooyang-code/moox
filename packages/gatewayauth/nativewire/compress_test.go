@@ -24,11 +24,11 @@ func TestBuiltInCompressionsAreRejected(t *testing.T) {
 
 func TestZstdDictionaryCompressionIsRegistered(t *testing.T) {
 	body := bytes.Repeat([]byte(`{"subject_id":"BTC-USDT","close":1000.5},`), 200)
-	packed, err := codec.Compress(wirecompress.CompressType(""), body)
+	packed, err := codec.Compress(wirecompress.CompressType(), body)
 	if err != nil || len(packed) >= len(body) {
 		t.Fatalf("zstd 字典压缩应已注册并有效: %d -> %d, %v", len(body), len(packed), err)
 	}
-	got, err := codec.Decompress(wirecompress.CompressType(""), packed)
+	got, err := codec.Decompress(wirecompress.CompressType(), packed)
 	if err != nil || !bytes.Equal(got, body) {
 		t.Fatalf("正常数据应能往返: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestZstdDecompressIsBoundedByFrameLimit(t *testing.T) {
 	frame = append(frame, 0x63)                      // 单段、8 字节原始长度
 	frame = append(frame, 0, 0, 0, 0, 0, 0, 0, 0x10) // 声明约 1EB
 	frame = append(frame, 0x01, 0x00, 0x00)
-	if _, err := codec.Decompress(wirecompress.CompressType(""), frame); err == nil {
+	if _, err := codec.Decompress(wirecompress.CompressType(), frame); err == nil {
 		t.Fatal("声明长度超限的帧应被拒绝")
 	}
 }

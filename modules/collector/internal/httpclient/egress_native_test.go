@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/pem"
 	"fmt"
-	collectorstore "github.com/mooyang-code/moox/modules/collector/internal/store"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
+	collectorstore "github.com/mooyang-code/moox/modules/collector/internal/store"
+
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
@@ -90,13 +90,6 @@ func (f *egressFixture) Do(_ context.Context, req *egresspb.DoReq) (*egresspb.Do
 		return &egresspb.DoRsp{RetInfo: &commonpb.RetInfo{}, Status: 429, Body: []byte("retry later")}, nil
 	}
 	return &egresspb.DoRsp{RetInfo: &commonpb.RetInfo{}, Status: 200, Body: []byte(`{"symbols":[{"symbol":"BTCUSDT","status":"TRADING","contractType":"PERPETUAL","baseAsset":"BTC","quoteAsset":"USDT"}]}`)}, nil
-}
-func (*egressFixture) ResolveDomains(_ context.Context, req *egresspb.ResolveDomainsReq) (*egresspb.ResolveDomainsRsp, error) {
-	result := &egresspb.ResolveDomainsRsp{RetInfo: &commonpb.RetInfo{}}
-	for _, domain := range req.Domains {
-		result.Resolutions = append(result.Resolutions, &egresspb.DomainResolution{Domain: domain, Ips: []*egresspb.ResolvedIP{{Ip: "8.8.8.8", TcpConnectLatencyMs: 12}, {Ip: "127.0.0.1"}}})
-	}
-	return result, nil
 }
 
 type directoryFixture struct{ directory servicecatalog.Directory }
@@ -206,12 +199,8 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 			client, err := httpclient.NewEgressHTTPClient(gateway, []string{"*.binance.com", "data-api.binance.vision"})
 			require.NoError(t, err)
 			defer client.Close()
-			dns := dnsresolver.NewEgressClient(gateway, 5*time.Second)
-			resolutions, err := dns.ResolveDomains(context.Background(), []string{"api.binance.com"})
-			require.NoError(t, err)
-			require.Equal(t, []string{"8.8.8.8"}, resolutions["api.binance.com"].IPs)
 			api := binanceapi.NewSpotAPI(binanceapi.NewClient(client))
-			symbols, err := api.GetExchangeInfoWithDomainIPs(context.Background(), "api.binance.com", resolutions["api.binance.com"].IPs)
+			symbols, err := api.GetExchangeInfoWithDomainIPs(context.Background(), "api.binance.com", nil)
 			require.NoError(t, err)
 			require.Len(t, symbols, 1)
 			require.Equal(t, "BTC-USDT", symbols[0].Symbol)

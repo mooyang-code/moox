@@ -43,8 +43,6 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	switch cfg.Command {
-	case "init":
-		return runInit(cfg, out)
 	case "import":
 		return runImport(ctx, cfg, out)
 	case "import-catalog":
@@ -65,29 +63,24 @@ func parseArgs(args []string) (cliConfig, error) {
 		return cliConfig{}, errors.New("command is required")
 	}
 	cfg := cliConfig{
-		Command: args[0], DBPath: "./data/factor/factor.db",
+		Command:    args[0],
 		CatalogDir: "./factors", ConfigPath: "./config/app.yaml",
 	}
 	fs := newFlagSet(cfg.Command)
 	var start, end string
 	switch cfg.Command {
-	case "init":
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "Factor SQLite database")
 	case "import":
-		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
 		fs.StringVar(&cfg.TaskID, "task", "", "also add the definition to this factor task as a disabled member")
 		fs.StringVar(&cfg.File, "file", "", "YAML factor library file ([{factor_id, name, spec}])")
 		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id to import (required when the file has several)")
 	case "import-catalog":
-		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
 		fs.StringVar(&cfg.CatalogDir, "dir", cfg.CatalogDir, "YAML factor library directory (*.yaml)")
 		fs.StringVar(&cfg.TaskID, "task", "", "also add the definitions to this factor task as disabled members")
 	case "recalc":
-		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
 		fs.StringVar(&cfg.TaskID, "task", "", "factor task id")
@@ -97,7 +90,6 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.Var((*listFlag)(&cfg.Members), "member", "要补算的成员别名（可重复；不填为全部启用成员）")
 		fs.Var((*listFlag)(&cfg.Subjects), "subject", "subject id (repeatable)")
 	case "purge-dataset":
-		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
 		fs.StringVar(&cfg.SpaceID, "space", "", "Space of the factor result dataset")

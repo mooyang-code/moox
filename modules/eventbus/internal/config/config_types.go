@@ -18,17 +18,8 @@ type BrokerConfig struct {
 	StoreDir        string        `yaml:"store_dir"`
 	StartupTimeout  time.Duration `yaml:"startup_timeout"`
 	MaxPayloadBytes int           `yaml:"max_payload_bytes"`
-	Cluster         ClusterConfig `yaml:"cluster"`
 	Auth            AuthConfig    `yaml:"auth"`
 	TLS             TLSConfig     `yaml:"tls"`
-}
-
-type ClusterConfig struct {
-	Enabled bool     `yaml:"enabled"`
-	Name    string   `yaml:"name"`
-	Host    string   `yaml:"host"`
-	Port    int      `yaml:"port"`
-	Routes  []string `yaml:"routes"`
 }
 
 type AuthConfig struct {
@@ -60,7 +51,6 @@ type StreamConfig struct {
 	Retention   string        `yaml:"retention"`
 	Discard     string        `yaml:"discard"`
 	Storage     string        `yaml:"storage"`
-	Replicas    int           `yaml:"replicas"`
 	MaxAge      time.Duration `yaml:"max_age"`
 	Duplicates  time.Duration `yaml:"duplicates"`
 	MaxBytes    int64         `yaml:"max_bytes"`

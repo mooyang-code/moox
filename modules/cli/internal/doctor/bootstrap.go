@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
@@ -262,7 +263,15 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			state, err := r.options.Systemd(ctx, r.options.NodeID, unit)
 			return supervisorResult(spec.ID, unit, state, err)
 		}
-		pidPath := filepath.Join(r.options.ReleaseRoot, "run", component.ComponentID+".pid")
+		// 进程记录由运行助手写在部署根下，不在发布目录里；没有清单时从发布目录的 runtime.json 取部署根。
+		deployRoot := r.options.DeployRoot
+		if deployRoot == "" {
+			deployRoot, _ = unitruntime.ReleaseDeploymentRoot(r.options.ReleaseRoot)
+		}
+		if deployRoot == "" {
+			return checkResult(spec.ID, core.StatusWarn, "无法确定部署根目录，没有检查服务进程", nil, "restart_service_manually")
+		}
+		pidPath := unitruntime.PIDRecordPath(deployRoot, component.ComponentID)
 		isAlive := r.options.ProcessAlive
 		if isAlive == nil {
 			isAlive = processAlive
@@ -370,16 +379,19 @@ func checkResult(id string, status core.CheckStatus, summary string, err error, 
 	return result
 }
 
+// processAlive 读运行助手写的进程记录（JSON，pid 字段）并判断该进程是否还在。
 func processAlive(path string) bool {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return false
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || pid <= 0 {
+	var record struct {
+		PID int `json:"pid"`
+	}
+	if json.Unmarshal(raw, &record) != nil || record.PID <= 0 {
 		return false
 	}
-	return pidAlive(pid)
+	return pidAlive(record.PID)
 }
 
 func newRunID() string {

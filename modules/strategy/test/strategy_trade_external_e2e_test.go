@@ -130,7 +130,6 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	require.Equal(t, "strategy-e2e", target.GetStrategyId())
 	require.Equal(t, logical, target.GetLogicalAccountId())
 	require.True(t, target.GetBarEndTime().AsTime().Equal(barEnd))
-	require.True(t, target.GetEffectiveAt().AsTime().Equal(barEnd))
 	require.True(t, target.GetValidUntil().AsTime().Equal(barEnd.Add(2*time.Hour)))
 	t.Logf("Handler → Result → Relay → NATS：target=%s instance=%s session=%s weights=%s", result.ResultID, target.GetInstanceId(), target.GetSessionId(), result.TargetsJSON)
 }
@@ -165,6 +164,11 @@ func requireTradeAuthorization(ctx context.Context, endpoint, space, account, in
 
 // externalInput 是行情读取的替身：BTC 的 bias 高于 ETH。
 type externalInput struct{}
+
+// LoadPrices 不提供收盘价与资金费率：这条用例不走策略池估值。
+func (externalInput) LoadPrices(context.Context, string, input.Resolved, input.Bar, []string, string) (map[string]float64, map[string]float64, error) {
+	return nil, nil, nil
+}
 
 func (externalInput) LoadBar(_ context.Context, _ string, resolved input.Resolved, _ *dsl.Program, bar input.Bar) (input.Loaded, error) {
 	boundary, err := input.FromStorageStart(resolved.Calendar, resolved.Bar, bar.BarStart)

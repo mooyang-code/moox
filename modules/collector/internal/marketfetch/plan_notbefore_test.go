@@ -36,7 +36,7 @@ func TestPlanStartDelayHonoursNotBeforeFromTheClose(t *testing.T) {
 	require.Zero(t, (&Plan{}).StartDelay(scheduled.Add(time.Second), scheduled))
 	// 合约 20 秒截止：8 秒起取数，周期截止仍远在其后，留出取数与提交的窗口。
 	plan.Datasets[0].LatenessS = 20
-	requests, err := plan.BuildRequests("crypto", "fn", "req", scheduled, nil)
+	requests, err := plan.BuildRequests("crypto", "fn", "req", scheduled)
 	require.NoError(t, err)
 	require.NotEmpty(t, requests)
 	start := scheduled.Add(time.Second).Add(plan.StartDelay(scheduled.Add(time.Second), scheduled))

@@ -330,21 +330,18 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 	if strings.TrimSpace(payload.GetInstanceId()) == "" || strings.TrimSpace(payload.GetSessionId()) == "" || strings.TrimSpace(payload.GetStrategyId()) == "" {
 		return fmt.Errorf("trade target weight session identity is incomplete")
 	}
-	if payload.GetBarEndTime() == nil || payload.GetEffectiveAt() == nil || payload.GetValidUntil() == nil {
+	if payload.GetBarEndTime() == nil || payload.GetValidUntil() == nil {
 		return fmt.Errorf("trade target weight timestamps are required")
 	}
 	for name, timestamp := range map[string]*timestamppb.Timestamp{
-		"bar_end_time": payload.GetBarEndTime(), "effective_at": payload.GetEffectiveAt(), "valid_until": payload.GetValidUntil(),
+		"bar_end_time": payload.GetBarEndTime(), "valid_until": payload.GetValidUntil(),
 	} {
 		if err := timestamp.CheckValid(); err != nil {
 			return fmt.Errorf("trade target weight %s: %w", name, err)
 		}
 	}
-	if !payload.GetEffectiveAt().AsTime().Equal(payload.GetBarEndTime().AsTime()) {
-		return fmt.Errorf("trade target weight effective_at must equal bar_end_time")
-	}
-	if !payload.GetValidUntil().AsTime().After(payload.GetEffectiveAt().AsTime()) {
-		return fmt.Errorf("trade target weight valid_until must be after effective_at")
+	if !payload.GetValidUntil().AsTime().After(payload.GetBarEndTime().AsTime()) {
+		return fmt.Errorf("trade target weight valid_until must be after bar_end_time")
 	}
 	type instrumentKey struct{ instrumentID, marketType string }
 	seenInstruments := make(map[instrumentKey]struct{}, len(payload.GetTargets()))

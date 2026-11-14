@@ -3,11 +3,9 @@ package storageio
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"google.golang.org/protobuf/proto"
 	"math"
 	"reflect"
 	"sort"
@@ -17,15 +15,15 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-func (c *Client) WriteRows(ctx context.Context, spaceID, datasetID, commitID string, rows []ResultRow) error {
+func (c *Client) WriteRows(ctx context.Context, spaceID, datasetID string, rows []ResultRow) error {
 	if err := c.primaryReady("write factor rows"); err != nil {
 		return err
 	}
 	if len(rows) == 0 {
 		return nil
 	}
-	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" || strings.TrimSpace(commitID) == "" || strings.TrimSpace(commitID) != commitID {
-		return errors.New("space_id, dataset_id and commit_id are required")
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
+		return errors.New("space_id and dataset_id are required")
 	}
 	info, err := c.GetDataset(ctx, spaceID, datasetID)
 	if err != nil {
@@ -70,7 +68,7 @@ func (c *Client) WriteRows(ctx context.Context, spaceID, datasetID, commitID str
 		})
 	}
 	rsp, err := c.primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
-		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, CommitId: commitID, Rows: upserts,
+		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, Rows: upserts,
 	})
 	if err != nil {
 		return rpcError("write factor rows", err)
@@ -176,15 +174,4 @@ func doubleValue(value float64) *storagepb.TypedValue {
 
 func nullValue() *storagepb.TypedValue {
 	return &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL}}
-}
-
-func canonicalValue(value any) string {
-	encoded, err := encodeValue(value)
-	if err == nil {
-		payload, marshalErr := proto.MarshalOptions{Deterministic: true}.Marshal(encoded)
-		if marshalErr == nil {
-			return hex.EncodeToString(payload)
-		}
-	}
-	return fmt.Sprintf("%T:<invalid>", value)
 }

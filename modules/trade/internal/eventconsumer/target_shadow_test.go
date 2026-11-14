@@ -24,7 +24,7 @@ func shadowDelivery(t *testing.T, now time.Time, targetID string, targets []*tra
 	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: targetID, InstanceId: "runner-1", SessionId: "session-1", StrategyId: "strategy-1", LogicalAccountId: "logical-1",
 		Targets:    targets,
-		BarEndTime: timestamppb.New(now), EffectiveAt: timestamppb.New(now), ValidUntil: timestamppb.New(now.Add(time.Hour)),
+		BarEndTime: timestamppb.New(now), ValidUntil: timestamppb.New(now.Add(time.Hour)),
 		Shadow: true,
 	}, events.PublishOptions{EventID: targetID, OccurredAt: now, SpaceID: "space-1", SubjectID: "logical-1"})
 	require.NoError(t, err)

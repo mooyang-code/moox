@@ -257,9 +257,23 @@ func (s *runtimeState) executeComponent(ctx context.Context, component Component
 	}
 }
 
+// PIDRecordPath 返回组件进程记录的位置：<部署根>/run/pids/<组件>.json。
+func PIDRecordPath(deploymentRoot, componentID string) string {
+	return filepath.Join(deploymentRoot, "run", "pids", componentID+".json")
+}
+
+// ReleaseDeploymentRoot 从发布目录的 runtime.json 读出它所属的部署根。
+func ReleaseDeploymentRoot(releaseRoot string) (string, error) {
+	var plan Plan
+	if err := privateJSON(filepath.Join(releaseRoot, "runtime.json"), &plan); err != nil {
+		return "", err
+	}
+	return plan.DeploymentRoot, nil
+}
+
 func (s *runtimeState) record(component Component) (pidRecord, bool, error) {
 	var record pidRecord
-	err := privateJSON(filepath.Join(s.pids.Name(), component.ID+".json"), &record)
+	err := privateJSON(PIDRecordPath(s.plan.DeploymentRoot, component.ID), &record)
 	if os.IsNotExist(err) {
 		return record, false, nil
 	}

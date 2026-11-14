@@ -76,7 +76,10 @@ describe("strategy API", () => {
     });
     callControl.mockResolvedValueOnce({
       result: { result_id: "r1", status: "ok" },
-      items: [{ rule_id: "r", instrument_id: "BTC-USDT", stage: "weighted", rank: 1, weight: "0.5" }],
+      items: [
+        { rule_id: "r", instrument_id: "BTC-USDT", stage: "weighted", rank: 1, weight: "0.5", scale: "0.8" },
+        { rule_id: "r", instrument_id: "ETH-USDT", stage: "weighted", rank: 2, weight: "0.5" }
+      ],
       dsl_yaml: "name: a",
       resolved_json: '{"view_id":"v"}'
     });
@@ -84,7 +87,9 @@ describe("strategy API", () => {
     const page = await listStrategyResults("i-1", { session_id: "s1", page: 2, page_size: 10 });
     expect(page.items[0]).toMatchObject({ status: "skipped", skip_reason: "factor_missing", summary_json: "{}" });
     const detail = await getStrategyResult("r1");
-    expect(detail.items[0]).toMatchObject({ rule_id: "r", rank: 1, weight: "0.5" });
+    expect(detail.items[0]).toMatchObject({ rule_id: "r", rank: 1, weight: "0.5", scale: "0.8" });
+    // 规则没写 scale 时为空串，系数列据此隐藏
+    expect(detail.items[1].scale).toBe("");
     expect(detail.dsl_yaml).toBe("name: a");
     expect(callControl).toHaveBeenNthCalledWith(
       2,

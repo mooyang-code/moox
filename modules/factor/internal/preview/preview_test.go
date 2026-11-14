@@ -34,7 +34,7 @@ func (f *fakeSource) ReadWindow(_ context.Context, req storageio.ReadRequest) (m
 	return frames, nil
 }
 
-func (*fakeSource) WriteRows(context.Context, string, string, string, []storageio.ResultRow) error {
+func (*fakeSource) WriteRows(context.Context, string, string, []storageio.ResultRow) error {
 	return fmt.Errorf("试算不能写入")
 }
 

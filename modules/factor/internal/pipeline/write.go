@@ -35,8 +35,7 @@ func (r *Runner) Write(ctx context.Context, plan Plan, target time.Time, rows []
 			end = len(rows)
 		}
 		batch := rows[start:end]
-		commitID := storageio.CommitIDWithSalt(plan.Set.TaskID, target.Unix(), plan.CommitSalt, batch)
-		if err := r.writeBatch(ctx, plan, commitID, batch, retries); err != nil {
+		if err := r.writeBatch(ctx, plan, batch, retries); err != nil {
 			return fmt.Errorf("write factor result rows %d:%d: %w", start, end, err)
 		}
 	}
@@ -47,13 +46,13 @@ func (r *Runner) Write(ctx context.Context, plan Plan, target time.Time, rows []
 // (for example a column missing from the result dataset) would fail identically
 // on every attempt, so it is returned without the ErrInfra marker and the caller
 // does not redeliver the period indefinitely.
-func (r *Runner) writeBatch(ctx context.Context, plan Plan, commitID string, batch []storageio.ResultRow, retries int) error {
+func (r *Runner) writeBatch(ctx context.Context, plan Plan, batch []storageio.ResultRow, retries int) error {
 	var lastErr error
 	for attempt := 1; attempt <= retries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("%w: %v", storageio.ErrInfra, err)
 		}
-		lastErr = r.store.WriteRows(ctx, plan.Set.SpaceID, plan.Set.ResultDatasetID, commitID, batch)
+		lastErr = r.store.WriteRows(ctx, plan.Set.SpaceID, plan.Set.ResultDatasetID, batch)
 		if lastErr == nil {
 			return nil
 		}

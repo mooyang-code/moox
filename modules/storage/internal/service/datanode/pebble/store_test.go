@@ -103,7 +103,7 @@ func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
 }
 
 func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), BucketDuration: time.Hour})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}

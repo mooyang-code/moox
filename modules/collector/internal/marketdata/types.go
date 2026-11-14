@@ -331,7 +331,6 @@ type KlineRequest struct {
 	EndTime        time.Time
 	Now            time.Time
 	RequestID      string
-	DNSRoutes      map[string][]string
 	// Adaptive 为真时，该行情源的每秒请求数按压力信号自适应调节（补采、追赶、缺口修复用），配置里的每秒上限是最大值。
 	Adaptive bool
 	// RateBudgetRatio limits this invocation's share of the
@@ -376,7 +375,6 @@ type InstrumentRequest struct {
 	ExchangeID ExchangeID
 	SnapshotAt time.Time
 	RequestID  string
-	DNSRoutes  map[string][]string
 }
 
 type InstrumentFetcher interface {

@@ -44,25 +44,6 @@ func TestDeleteDatasetRowsRemovesRowsAndHistoryWithoutTouchingOtherDataset(t *te
 	}
 }
 
-// 删除数据集会清掉它的 commit 标记：重建后同一 commit_id 作为新写入重新生效。
-func TestDeleteDatasetRowsClearsCommitMarkers(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "s", DatasetId: "delete-me", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-16T00:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
-	if written, err := store.UpsertFields(context.Background(), "s", "delete-me", "commit-1", []*pb.RowFieldUpsert{row}); err != nil || !written {
-		t.Fatalf("first commit write written=%v err=%v", written, err)
-	}
-	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
-		t.Fatal(err)
-	}
-	if written, err := store.UpsertFields(context.Background(), "s", "delete-me", "commit-1", []*pb.RowFieldUpsert{row}); err != nil || !written {
-		t.Fatalf("recreated commit write written=%v err=%v", written, err)
-	}
-}
-
 // 元数据里已经没有的数据集，写入在拿到读锁后被拒绝；重建元数据后照常写入。
 func TestWriteRejectedWhileDatasetIsMissingFromMetadata(t *testing.T) {
 	exists := true
@@ -88,14 +69,14 @@ func TestWriteRejectedWhileDatasetIsMissingFromMetadata(t *testing.T) {
 	}
 }
 
-func TestDeleteDatasetRowsRemovesCommitMarkersMarkersAndOutbox(t *testing.T) {
+func TestDeleteDatasetRowsRemovesMarkersAndOutbox(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "delete-me", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-	if _, err := store.UpsertFields(context.Background(), "s", "delete-me", "receipt-1", []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}}); err != nil {
+	if err := store.UpsertFields(context.Background(), "s", "delete-me", []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}}); err != nil {
 		t.Fatal(err)
 	}
 	marker, _, err := BuildLedgerPeriodCompletedMessage("s", &LedgerPeriodCompleted{DatasetID: "delete-me", Frequency: "1m", PeriodTime: 1, Status: "complete", SnapshotRef: "cfg-1", CompletedAt: timestamppb.New(time.Unix(1, 0))})
@@ -110,9 +91,6 @@ func TestDeleteDatasetRowsRemovesCommitMarkersMarkersAndOutbox(t *testing.T) {
 	}
 	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
 		t.Fatal(err)
-	}
-	if _, found, err := store.findCommitMarker("s", "delete-me", "receipt-1", time.Now()); err != nil || found {
-		t.Fatalf("commit marker survived dataset deletion: found=%v err=%v", found, err)
 	}
 	if entries, err := store.ListOutbox(context.Background(), 0, 20); err != nil || len(entries) != 0 {
 		t.Fatalf("outbox after cleanup entries=%d err=%v", len(entries), err)

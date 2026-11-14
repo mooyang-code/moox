@@ -222,17 +222,9 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			if len(fieldFetches) > 0 && !coverageStart.IsZero() && !coverageEnd.IsZero() {
 				fieldResult = startFields(fieldCtx, fieldReq, fieldFetches)
 			}
-			// Each provider request owns its DNS snapshot, including the IP slices.
-			var dnsRoutes map[string][]string
-			if len(req.DNSRoutes) > 0 {
-				dnsRoutes = make(map[string][]string, len(req.DNSRoutes))
-				for host, route := range req.DNSRoutes {
-					dnsRoutes[host] = append([]string(nil), route.IPs...)
-				}
-			}
 			fetchStarted := time.Now()
 			trace := &httpclient.Trace{}
-			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithStandbyDelay(httpclient.WithTrace(ctx, trace), time.Duration(req.StandbyMS)*time.Millisecond), routerSession, marketdata.KlineRequest{MarketID: marketdata.MarketID(marketID), ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, Adaptive: adaptiveBatch(req.BatchKind), DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
+			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithStandbyDelay(httpclient.WithTrace(ctx, trace), time.Duration(req.StandbyMS)*time.Millisecond), routerSession, marketdata.KlineRequest{MarketID: marketdata.MarketID(marketID), ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, Adaptive: adaptiveBatch(req.BatchKind)}, itemChain, item.CandidateIndex)
 			timings[index] = itemTiming{
 				Recorded: true, Subject: item.SubjectID, Symbol: providerSymbol, Provider: selectedProvider,
 				Queue: fetchStarted.Sub(queueStarted), Fetch: time.Since(fetchStarted), StartedAt: fetchStarted,

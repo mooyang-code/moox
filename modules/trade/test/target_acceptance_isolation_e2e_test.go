@@ -84,7 +84,7 @@ func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: "other-target", LogicalAccountId: "logical-other",
 			InstanceId: "instance-other", SessionId: "session-other", StrategyId: "strategy-other",
-			BarEndTime: timestamppb.New(now), EffectiveAt: timestamppb.New(now),
+			BarEndTime: timestamppb.New(now),
 			ValidUntil: timestamppb.New(now.Add(time.Hour)),
 		}, events.PublishOptions{EventID: "other-target", OccurredAt: now, SpaceID: testSpace, SubjectID: "logical-other"})
 	require.NoError(t, err)

@@ -45,7 +45,7 @@ func TestJetStreamPublisherBuildsEventMessage(t *testing.T) {
 	validUntil := timestamppb.New(time.Now().UTC().Add(time.Hour))
 	bar := timestamppb.New(time.Now().UTC())
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
-		TargetId: "request-1", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", LogicalAccountId: "logical-1", BarEndTime: bar, EffectiveAt: bar, ValidUntil: validUntil,
+		TargetId: "request-1", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: validUntil,
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "1",
 		}},
@@ -68,7 +68,7 @@ func TestJetStreamPublisherAcceptsEmptyFullTargetWithoutExpiry(t *testing.T) {
 	bar := timestamppb.New(now)
 	validUntil := timestamppb.New(now.Add(time.Hour))
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
-		TargetId: "target-empty", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", LogicalAccountId: "logical-1", BarEndTime: bar, EffectiveAt: bar, ValidUntil: validUntil,
+		TargetId: "target-empty", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: validUntil,
 		Targets: []*tradeeventpb.InstrumentWeightTarget{},
 	}, events.PublishOptions{
 		EventID: "target-empty", OccurredAt: now, SpaceID: "crypto", SubjectID: "logical-1",
@@ -95,7 +95,7 @@ func TestJetStreamPublisherTimesOutWithoutAck(t *testing.T) {
 	require.NoError(t, err)
 	bar := timestamppb.New(time.Now().UTC())
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
-		TargetId: "request-1", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", LogicalAccountId: "logical-1", BarEndTime: bar, EffectiveAt: bar, ValidUntil: timestamppb.New(time.Now().UTC().Add(time.Hour)),
+		TargetId: "request-1", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: timestamppb.New(time.Now().UTC().Add(time.Hour)),
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "request-1", OccurredAt: time.Now().UTC(), SpaceID: "crypto", SubjectID: "logical-1"})
 	require.NoError(t, err)

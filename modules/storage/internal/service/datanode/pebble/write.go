@@ -1,12 +1,8 @@
 package pebble
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"sort"
 	"strings"
 	"time"
 
@@ -17,29 +13,13 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// commit 标记按写入日分桶：键为 __commit/{写入日 YYYYMMDD（UTC）}/{hex 空间}/{hex 数据集}/{hex sha256(commit_id)}，值为内容摘要。
-// 标记固定保留 7 天，与数据集保留期无关：按保留期清理的话，同一 commit_id 的旧内容重放会盖掉期间补算写入的新结果；
-// 最长的重投来源是 MOOX_STORAGE 的 72 小时，7 天足够。查重时读今天和前 7 天共 8 个日桶，超过 7 天的同一 commit_id 当作新提交。
-const (
-	commitMarkerPrefix  = "__commit/"
-	commitRetentionDays = 7
-)
-
 // writeLogThreshold 是写入分段耗时日志的阈值。
 const writeLogThreshold = 50 * time.Millisecond
 
-// UpsertFields 写入一个数据集的行：字段、属性、行索引与变更日志在同一个 Pebble 批次里提交，返回是否写入了。
-//
-// commitID 可选。非空时同一数据集内同一 commitID 只生效一次：内容相同返回成功（不再写入，written 为假），
-// 内容不同返回 CommitConflictError。
-func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (written bool, err error) {
+// UpsertFields 写入一个数据集的行：字段、属性、行索引与变更日志在同一个 Pebble 批次里提交。不去重，同一行重复写入时后写覆盖先写。
+func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
-		return false, invalid("space_id and dataset_id are required")
-	}
-	if commitID != "" {
-		if err := validateCommitID(commitID); err != nil {
-			return false, err
-		}
+		return invalid("space_id and dataset_id are required")
 	}
 	// 分段计时：规整、准备（字段、行索引与变更范围）、等写锁、提交；达到阈值时记一行。
 	started := time.Now()
@@ -48,23 +28,17 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID s
 		if committedAt.IsZero() || time.Since(started) < writeLogThreshold {
 			return
 		}
-		log.Infof("storage 写入 dataset=%s 行=%d commit=%t 规整=%s 准备=%s 等锁=%s 提交=%s 合计=%s",
-			datasetID, len(rows), commitID != "", normalizedAt.Sub(started).Round(time.Millisecond), preparedAt.Sub(normalizedAt).Round(time.Millisecond),
+		log.Infof("storage 写入 dataset=%s 行=%d 规整=%s 准备=%s 等锁=%s 提交=%s 合计=%s",
+			datasetID, len(rows), normalizedAt.Sub(started).Round(time.Millisecond), preparedAt.Sub(normalizedAt).Round(time.Millisecond),
 			lockedAt.Sub(preparedAt).Round(time.Millisecond), committedAt.Sub(lockedAt).Round(time.Millisecond), time.Since(started).Round(time.Millisecond))
 	}()
 	normalized, err := s.normalizeWriteRows(ctx, rows)
 	if err != nil {
-		return false, err
+		return err
 	}
 	for _, row := range normalized {
 		if row.GetKey().GetSpaceId() != spaceID || row.GetKey().GetDatasetId() != datasetID {
-			return false, invalid("row dataset identity does not match request")
-		}
-	}
-	var digest []byte
-	if commitID != "" {
-		if digest, err = commitDigest(spaceID, datasetID, normalized); err != nil {
-			return false, err
+			return invalid("row dataset identity does not match request")
 		}
 	}
 	normalizedAt = time.Now()
@@ -72,44 +46,23 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID s
 	s.datasetWriteMu.RLock()
 	defer s.datasetWriteMu.RUnlock()
 	if err := s.requireDataset(spaceID, datasetID); err != nil {
-		return false, err
+		return err
 	}
-	// 编码 KV、整理变更范围与锁无关，放在 outboxMu 之外：并发写入与完成标记不必排在这一步后面。锁内只查 commit 标记并提交；重复提交白做一次准备，丢弃即可。
+	// 编码 KV、整理变更范围与锁无关，放在 outboxMu 之外：并发写入与完成标记不必排在这一步后面。锁内只提交。
 	write, err := s.prepareRowsWrite(ctx, spaceID, datasetID, normalized)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer write.batch.Close()
 	preparedAt = time.Now()
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
 	lockedAt = time.Now()
-	var markerKey []byte
-	if commitID != "" {
-		now := s.periodNow().UTC()
-		markerKey = commitMarkerKey(commitDay(now), spaceID, datasetID, commitID)
-		existing, found, err := s.findCommitMarker(spaceID, datasetID, commitID, now)
-		if err != nil {
-			return false, err
-		}
-		if found {
-			if !bytes.Equal(existing, digest) {
-				return false, CommitConflictError{CommitID: commitID}
-			}
-			committedAt = time.Now()
-			return false, nil
-		}
-	}
-	if err := s.commitRowsWriteLocked(ctx, write, func(batch *cpebble.Batch) error {
-		if markerKey == nil {
-			return nil
-		}
-		return batch.Set(markerKey, digest, s.writeOptions)
-	}); err != nil {
-		return false, err
+	if err := s.commitRowsWriteLocked(ctx, write, nil); err != nil {
+		return err
 	}
 	committedAt = time.Now()
-	return true, nil
+	return nil
 }
 
 func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpsert) ([]*pb.RowFieldUpsert, error) {
@@ -147,10 +100,10 @@ type preparedRowsWrite struct {
 	records   []*pb.RecordRowKey
 }
 
-// prepareRowsWrite 只读 Store 的静态配置，不读写变更序号与 commit 标记，可以在 outboxMu 之外并发执行。
+// prepareRowsWrite 只读 Store 的静态配置，不读写变更序号，可以在 outboxMu 之外并发执行。
 func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) (*preparedRowsWrite, error) {
-	// One batch preserves all field changes from a request. The change log and
-	// commit marker are staged into the same batch.
+	// One batch preserves all field changes from a request. The change log is
+	// staged into the same batch.
 	batch := s.db.NewBatch()
 	fail := func(err error) (*preparedRowsWrite, error) {
 		_ = batch.Close()
@@ -165,14 +118,14 @@ func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string,
 		// writing it in the same batch makes a committed row immediately visible
 		// to the history reader.
 		if row.GetKey().GetTimeSeries() != nil {
-			historyKey, err := encodeHistoryKey(row.GetKey(), s.bucketDuration)
+			historyKey, err := encodeHistoryKey(row.GetKey())
 			if err != nil {
 				return fail(err)
 			}
 			if err := batch.Set(historyKey, nil, s.writeOptions); err != nil {
 				return fail(err)
 			}
-			seriesHistoryKey, err := encodeSeriesHistoryKey(row.GetKey(), s.bucketDuration)
+			seriesHistoryKey, err := encodeSeriesHistoryKey(row.GetKey())
 			if err != nil {
 				return fail(err)
 			}
@@ -181,7 +134,7 @@ func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string,
 			}
 		}
 		for _, field := range row.GetFields() {
-			key, err := encodeFieldKey(row.GetKey(), field.GetFieldId(), s.bucketDuration)
+			key, err := encodeFieldKey(row.GetKey(), field.GetFieldId())
 			if err != nil {
 				return fail(err)
 			}
@@ -194,7 +147,7 @@ func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string,
 			}
 		}
 		for name, value := range row.GetAttributes() {
-			key, err := encodeAttributeKey(row.GetKey(), name, s.bucketDuration)
+			key, err := encodeAttributeKey(row.GetKey(), name)
 			if err != nil {
 				return fail(err)
 			}
@@ -211,7 +164,7 @@ func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string,
 }
 
 // commitRowsWriteLocked 在 outboxMu 内完成写入：追加变更日志，由 decorate 补充同一批次里的其他键
-// （commit 标记、周期账本），然后提交。调用方必须持有 outboxMu（它同时保护变更日志的序号）。
+// （周期账本），然后提交。调用方必须持有 outboxMu（它同时保护变更日志的序号）。
 func (s *Store) commitRowsWriteLocked(ctx context.Context, prepared *preparedRowsWrite, decorate func(*cpebble.Batch) error) error {
 	// 等锁期间请求可能已超时或取消：此时不再提交，客户端重试时不会重复写入。
 	if err := ctx.Err(); err != nil {
@@ -231,119 +184,4 @@ func (s *Store) commitRowsWriteLocked(ctx context.Context, prepared *preparedRow
 	}
 	s.noteChangeCommitted()
 	return nil
-}
-
-// commitDigest 是一次提交内容的摘要：行键不得重复，行与字段按规范顺序排列，与请求里的顺序无关。
-func commitDigest(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-	keys := make([][]byte, len(rows))
-	seen := make(map[string]struct{}, len(rows))
-	for i, row := range rows {
-		identity, err := proto.MarshalOptions{Deterministic: true}.Marshal(row.GetKey())
-		if err != nil {
-			return nil, err
-		}
-		if _, exists := seen[string(identity)]; exists {
-			return nil, invalid("duplicate row key in commit")
-		}
-		seen[string(identity)] = struct{}{}
-		keys[i] = identity
-	}
-	order := make([]int, len(rows))
-	for i := range order {
-		order[i] = i
-	}
-	sort.Slice(order, func(a, b int) bool { return bytes.Compare(keys[order[a]], keys[order[b]]) < 0 })
-	canonical := make([]*pb.RowFieldUpsert, len(rows))
-	for i, index := range order {
-		row := proto.Clone(rows[index]).(*pb.RowFieldUpsert)
-		sort.Slice(row.Fields, func(a, b int) bool { return row.Fields[a].GetFieldId() < row.Fields[b].GetFieldId() })
-		canonical[i] = row
-	}
-	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(&pb.RowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: canonical})
-	if err != nil {
-		return nil, err
-	}
-	sum := sha256.Sum256(raw)
-	return sum[:], nil
-}
-
-func validateCommitID(commitID string) error {
-	if strings.TrimSpace(commitID) == "" || strings.TrimSpace(commitID) != commitID || strings.ContainsAny(commitID, "\x00") {
-		return invalid("commit_id is invalid")
-	}
-	return nil
-}
-
-func commitDay(at time.Time) string { return at.UTC().Format("20060102") }
-
-func commitMarkerKey(day, spaceID, datasetID, commitID string) []byte {
-	sum := sha256.Sum256([]byte(commitID))
-	return []byte(commitMarkerPrefix + day + "/" + datasetScope(spaceID, datasetID) + hex.EncodeToString(sum[:]))
-}
-
-// findCommitMarker 在今天和前 7 天共 8 个日桶里查同一 commit_id。
-func (s *Store) findCommitMarker(spaceID, datasetID, commitID string, now time.Time) ([]byte, bool, error) {
-	for days := 0; days <= commitRetentionDays; days++ {
-		digest, found, err := s.readCommitMarker(commitMarkerKey(commitDay(now.AddDate(0, 0, -days)), spaceID, datasetID, commitID))
-		if err != nil || found {
-			return digest, found, err
-		}
-	}
-	return nil, false, nil
-}
-
-// CleanupExpiredCommits 删掉写入日早于“今天减 7 天”的 commit 标记日桶，与数据集保留期无关。
-func (s *Store) CleanupExpiredCommits(ctx context.Context, now time.Time) error {
-	if s == nil || s.db == nil {
-		return errors.New("pebble store is closed")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	lower := []byte(commitMarkerPrefix)
-	upper := []byte(commitMarkerPrefix + commitDay(now.AddDate(0, 0, -commitRetentionDays)))
-	if err := s.db.DeleteRange(lower, upper, s.writeOptions); err != nil {
-		return err
-	}
-	s.compactAsync(lower, upper)
-	return nil
-}
-
-// stageDeleteDatasetCommits 在 batch 里删掉一个数据集在各日桶下的 commit 标记。
-func (s *Store) stageDeleteDatasetCommits(batch *cpebble.Batch, spaceID, datasetID string) ([][2][]byte, error) {
-	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(commitMarkerPrefix), UpperBound: nextPrefix([]byte(commitMarkerPrefix))})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-	var ranges [][2][]byte
-	for valid := iter.First(); valid; {
-		rest := iter.Key()[len(commitMarkerPrefix):]
-		slash := bytes.IndexByte(rest, '/')
-		if slash < 0 {
-			valid = iter.Next()
-			continue
-		}
-		dayPrefix := commitMarkerPrefix + string(rest[:slash+1])
-		lower := []byte(dayPrefix + datasetScope(spaceID, datasetID))
-		upper := nextPrefix(lower)
-		if err := batch.DeleteRange(lower, upper, s.writeOptions); err != nil {
-			return nil, err
-		}
-		ranges = append(ranges, [2][]byte{lower, upper})
-		valid = iter.SeekGE(nextPrefix([]byte(dayPrefix)))
-	}
-	return ranges, iter.Error()
-}
-
-func (s *Store) readCommitMarker(key []byte) ([]byte, bool, error) {
-	value, closer, err := s.db.Get(key)
-	if errors.Is(err, cpebble.ErrNotFound) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	defer closer.Close()
-	return append([]byte(nil), value...), true, nil
 }

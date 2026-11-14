@@ -82,7 +82,7 @@ func TestStockHKTimerReturnsNoWorkOutsideSessions(t *testing.T) {
 		require.Equal(t, "no_work", response.Message, scheduled)
 	}
 	// 对照：交易时段内的触发（12:00 触发采 11:55 那根）计划里有这一期，周期判定也放行，不会返回 no_work。
-	planned, err := plan.BuildRequests("stockhk", name, "req", hkPeriodTime(t, "2026-11-12 12:00"), nil)
+	planned, err := plan.BuildRequests("stockhk", name, "req", hkPeriodTime(t, "2026-11-12 12:00"))
 	require.NoError(t, err)
 	require.Len(t, planned, 1)
 	require.True(t, planPeriodValid(plan.Market, planned[0].Frequency, planned[0].Period))

@@ -77,7 +77,7 @@ func TestBuildDesiredStateUnifiedDataset(t *testing.T) {
 		for i := range function.Plan.Datasets {
 			function.Plan.Datasets[i].Copies[0].From = 100 // 生效起点由计划内容生成时填入
 		}
-		encoded, err := EncodePlan("crypto", function.Plan)
+		encoded, err := EncodePlan(function.Plan)
 		require.NoError(t, err)
 		decoded, err := DecodePlan(encoded)
 		require.NoError(t, err)

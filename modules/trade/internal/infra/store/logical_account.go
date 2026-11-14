@@ -22,7 +22,6 @@ type LogicalAccountRecord struct {
 	OwnerInstanceID string
 	OwnerSessionID  string
 	AuthFence       string
-	OwnerGeneration int64
 	ExecutionMode   string
 	SettlementAsset string
 	// OrderSettingsJSON、FundSettingsJSON 是下单设置和资金设置，空对象表示全部取默认值。
@@ -51,7 +50,6 @@ type logicalAccountRow struct {
 	SpaceID           string    `gorm:"column:c_space_id"`
 	LogicalAccountID  string    `gorm:"column:c_logical_account_id"`
 	Name              string    `gorm:"column:c_name"`
-	OwnerClaimedAt    int64     `gorm:"column:c_owner_claimed_at"`
 	OwnerInstanceID   *string   `gorm:"column:c_owner_instance_id"`
 	OwnerSessionID    *string   `gorm:"column:c_owner_session_id"`
 	AuthFence         string    `gorm:"column:c_auth_fence"`
@@ -96,7 +94,6 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 	if err := account.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, err)
 	}
-	ownerGeneration := record.OwnerGeneration
 	instanceID := record.OwnerInstanceID
 	var ownerInstance *string
 	if !blank(instanceID) {
@@ -118,7 +115,7 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 		record.FundSettingsJSON = "{}"
 	}
 	err := tx.db.Exec(execInsertLogicalAccount,
-		record.SpaceID, record.LogicalAccountID, record.Name, ownerGeneration,
+		record.SpaceID, record.LogicalAccountID, record.Name,
 		ownerInstance, ownerSession, authFence,
 		record.ControlMode, record.ExecutionMode, record.SettlementAsset,
 		record.OrderSettingsJSON, record.FundSettingsJSON,
@@ -569,7 +566,6 @@ func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
 		SpaceID:     row.SpaceID, LogicalAccountID: row.LogicalAccountID,
 		Name: row.Name, OwnerInstanceID: instanceID,
 		OwnerSessionID: sessionID, AuthFence: row.AuthFence,
-		OwnerGeneration:   row.OwnerClaimedAt,
 		ExecutionMode:     row.ExecutionMode,
 		SettlementAsset:   row.SettlementAsset,
 		OrderSettingsJSON: row.OrderSettingsJSON, FundSettingsJSON: row.FundSettingsJSON,
@@ -601,12 +597,12 @@ func logicalAccountMemberRecord(row logicalAccountMemberRow) LogicalAccountMembe
 // 以下 SQL 整条写成常量，不在调用处拼接或内联。
 const (
 	execInsertLogicalAccount = `INSERT INTO t_logical_accounts (
-			c_space_id, c_logical_account_id, c_name, c_owner_claimed_at,
+			c_space_id, c_logical_account_id, c_name,
 			c_owner_instance_id, c_owner_session_id, c_auth_fence,
 			c_control_mode, c_execution_mode, c_settlement_asset,
 			c_order_settings_json, c_fund_settings_json,
 			c_automation_state, c_pause_reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	// 改自动执行状态：从暂停恢复时记下恢复时间；只有策略控制的组合能恢复自动执行。
 	execSetLogicalAccountAutomation = `UPDATE t_logical_accounts
 		SET c_resumed_at = CASE WHEN ? = 'ACTIVE' AND c_automation_state <> 'ACTIVE' THEN ? ELSE c_resumed_at END,
@@ -625,7 +621,7 @@ const (
 		WHERE m.c_space_id = ? AND m.c_logical_account_id = ? AND m.c_enabled = 1`
 	execClaimLogicalAccountOwner = `UPDATE t_logical_accounts
 		SET c_owner_instance_id = ?, c_owner_session_id = ?,
-			c_owner_claimed_at = c_owner_claimed_at + 1, c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
+			c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND COALESCE(c_owner_instance_id, '') = ''
 		  AND c_control_mode = 'STRATEGY'
@@ -633,7 +629,6 @@ const (
 		  AND c_auth_fence = ?`
 	execReleaseLogicalAccountOwner = `UPDATE t_logical_accounts
 		SET c_owner_instance_id = NULL, c_owner_session_id = NULL,
-			c_owner_claimed_at = c_owner_claimed_at + 1,
 			c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND c_owner_instance_id = ? AND c_owner_session_id = ?

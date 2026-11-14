@@ -20,8 +20,8 @@ type observedStore struct {
 	health *Health
 }
 
-func (s *observedStore) WriteRows(ctx context.Context, spaceID, datasetID, commitID string, rows []storageio.ResultRow) error {
-	err := s.Store.WriteRows(ctx, spaceID, datasetID, commitID, rows)
+func (s *observedStore) WriteRows(ctx context.Context, spaceID, datasetID string, rows []storageio.ResultRow) error {
+	err := s.Store.WriteRows(ctx, spaceID, datasetID, rows)
 	s.health.RecordStorageWrite(err == nil)
 	return err
 }

@@ -36,7 +36,7 @@ func requestValidator(ctx context.Context, v Validator) Validator {
 
 // Store 是 PrimaryStore 读写的事实存储，即同进程的 Pebble 库。
 type Store interface {
-	UpsertFields(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error)
+	UpsertFields(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error
 	ReadRows(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error)
 	ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
 	CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesRowsReq) ([]*pb.SubjectRowCount, error)
@@ -110,7 +110,7 @@ func (s *Service) requestContext(ctx context.Context) context.Context {
 	return metadata.WithRequestSnapshot(ctx, snapshot)
 }
 
-// UpsertFields 写入一个数据集的行。每行的数据集必须与请求一致；commit_id 可选，语义见 PrimaryUpsertFieldsReq。
+// UpsertFields 写入一个数据集的行。每行的数据集必须与请求一致。
 func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) (*pb.PrimaryUpsertFieldsRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" || len(req.GetRows()) == 0 {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and rows are required"))}, nil
@@ -136,11 +136,11 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 		s.observeTimeSeriesRows(ctx, rows, "error", false)
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	if _, err := s.store.UpsertFields(ctx, spaceID, datasetID, req.GetCommitId(), rows); err != nil {
+	if err := s.store.UpsertFields(ctx, spaceID, datasetID, rows); err != nil {
 		s.observeTimeSeriesRows(ctx, rows, "error", false)
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	// 写入已持久化，事件由 Outbox 转发协程异步发布。重复提交命中时同样返回全部行键。
+	// 写入已持久化，事件由 Outbox 转发协程异步发布。
 	keys := make([]*pb.RowKey, 0, len(rows))
 	for _, row := range rows {
 		key, err := pebble.NormalizeRowKey(row.GetKey())

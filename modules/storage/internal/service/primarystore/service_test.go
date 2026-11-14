@@ -39,9 +39,9 @@ func TestPrimaryRejectsMissingOrDisabledDataset(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := newHookStore(t)
-			store.upsert = func(context.Context, string, string, string, []*pb.RowFieldUpsert) (bool, error) {
+			store.upsert = func(context.Context, string, string, []*pb.RowFieldUpsert) error {
 				t.Fatal("write reached the store")
-				return false, nil
+				return nil
 			}
 			svc, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return singleDatasetSnapshot{dataset: dataset} }})
 			require.NoError(t, err)
@@ -248,9 +248,9 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 func TestPrimaryWritesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 	var written []string
 	store := newHookStore(t)
-	store.upsert = func(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error) {
+	store.upsert = func(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
 		written = append(written, spaceID+"/"+datasetID)
-		return store.Store.UpsertFields(ctx, spaceID, datasetID, commitID, rows)
+		return store.Store.UpsertFields(ctx, spaceID, datasetID, rows)
 	}
 	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: store})
 	if err != nil {
@@ -331,8 +331,8 @@ func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 
 func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
 	store := newHookStore(t)
-	store.upsert = func(context.Context, string, string, string, []*pb.RowFieldUpsert) (bool, error) {
-		return false, errors.New("write failed")
+	store.upsert = func(context.Context, string, string, []*pb.RowFieldUpsert) error {
+		return errors.New("write failed")
 	}
 	metrics := &recordingDatasetMetrics{}
 	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: store, DatasetMetrics: metrics})
@@ -459,9 +459,9 @@ func TestPrimaryReadRowsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
 
 func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 	store := newHookStore(t)
-	store.upsert = func(context.Context, string, string, string, []*pb.RowFieldUpsert) (bool, error) {
+	store.upsert = func(context.Context, string, string, []*pb.RowFieldUpsert) error {
 		t.Fatal("write should not reach the store")
-		return false, nil
+		return nil
 	}
 	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: store})
 	if err != nil {

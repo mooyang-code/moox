@@ -15,8 +15,6 @@ import "@arco-design/web-vue/dist/arco.css";
 import ArcoVueIcon from "@arco-design/web-vue/es/icon";
 // 注册全局svg
 import "virtual:svg-icons-register";
-// 引入i18n
-import i18n from "@/lang/index";
 // 引入字体
 import "@/assets/fonts/fonts.scss";
 // 引入自定义指令
@@ -64,7 +62,6 @@ app.use(ArcoVue, {
 app.use(pinia);
 app.use(ArcoVueIcon);
 app.use(router);
-app.use(i18n);
 app.use(directives);
 
 // 挂载应用

@@ -33,7 +33,7 @@ func testPlan() *Plan {
 }
 
 func TestPlanEncodeDecodeRoundTripAndLimits(t *testing.T) {
-	encoded, err := EncodePlan("crypto", testPlan())
+	encoded, err := EncodePlan(testPlan())
 	require.NoError(t, err)
 	decoded, err := DecodePlan(encoded)
 	require.NoError(t, err)
@@ -45,15 +45,15 @@ func TestPlanEncodeDecodeRoundTripAndLimits(t *testing.T) {
 	require.Error(t, err)
 	bad := testPlan()
 	bad.V = 2
-	_, err = EncodePlan("crypto", bad)
+	_, err = EncodePlan(bad)
 	require.Error(t, err)
 	bad = testPlan()
 	bad.Datasets[0].Copies[1].From = bad.Datasets[0].Copies[0].From
-	_, err = EncodePlan("crypto", bad)
+	_, err = EncodePlan(bad)
 	require.Error(t, err, "份的生效起点必须严格递增")
 	bad = testPlan()
 	bad.Datasets[0].Copies[0].Subjects[0].Index = 99
-	_, err = EncodePlan("crypto", bad)
+	_, err = EncodePlan(bad)
 	require.Error(t, err, "序号必须小于总数")
 }
 
@@ -66,7 +66,7 @@ func TestPlanRejectsGzipAndOversizedDecoded(t *testing.T) {
 	_, err := DecodePlan(base64.StdEncoding.EncodeToString(gz.Bytes()))
 	require.Error(t, err, "旧的 gzip 编码不再受理")
 
-	huge := wirecompress.Encode(wirecompress.UsePlan, "crypto", bytes.Repeat([]byte("a"), maxPlanJSONBytes+1))
+	huge := wirecompress.Encode(wirecompress.UsePlan, bytes.Repeat([]byte("a"), maxPlanJSONBytes+1))
 	_, err = DecodePlan(base64.StdEncoding.EncodeToString(huge))
 	require.ErrorContains(t, err, "decoded size limit")
 }
@@ -88,7 +88,7 @@ func TestPlanBuildRequestsDueFrequenciesAndTargets(t *testing.T) {
 	plan := testPlan()
 	// 13:00:00 整点：1m 与 1h 都到期；目标周期是刚收盘那根的开始时间。
 	scheduled := time.Date(2026, 10, 11, 13, 0, 0, 0, time.UTC)
-	requests, err := plan.BuildRequests("crypto", "fn-1", "req-1", scheduled, nil)
+	requests, err := plan.BuildRequests("crypto", "fn-1", "req-1", scheduled)
 	require.NoError(t, err)
 	require.Len(t, requests, 2)
 	byFrequency := map[string]PlannedRequest{}
@@ -117,7 +117,7 @@ func TestPlanBuildRequestsDueFrequenciesAndTargets(t *testing.T) {
 	require.Equal(t, time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), hour.Period)
 
 	// 非整点：只有 1m 到期，秒数被截断到分钟。
-	requests, err = plan.BuildRequests("crypto", "fn-1", "req-2", time.Date(2026, 10, 11, 13, 1, 7, 0, time.UTC), nil)
+	requests, err = plan.BuildRequests("crypto", "fn-1", "req-2", time.Date(2026, 10, 11, 13, 1, 7, 0, time.UTC))
 	require.NoError(t, err)
 	require.Len(t, requests, 1)
 	require.Equal(t, "1m", requests[0].Frequency)
@@ -129,7 +129,7 @@ func TestPlanBuildRequestsUsesOldCopyBeforeEffectiveStart(t *testing.T) {
 	plan.Datasets = plan.Datasets[:1]
 	// 目标周期 1999（对齐到分钟前的旧份）：用旧份的 hash。
 	period := time.Unix(1980, 0).UTC() // 1980 = 33 分钟整，周期开始时间
-	requests, err := plan.BuildRequests("crypto", "fn", "r", period.Add(time.Minute), nil)
+	requests, err := plan.BuildRequests("crypto", "fn", "r", period.Add(time.Minute))
 	require.NoError(t, err)
 	require.Len(t, requests, 1)
 	for _, target := range requests[0].Request.Targets {
@@ -165,7 +165,7 @@ func TestPlanBuildRequestsLeavesStockSourcesToTheRoute(t *testing.T) {
 			{From: 1000, Hash: "h", Count: 2, Subjects: []PlanSubject{{ID: "600000.XSHG", Index: 0}, {ID: "600519.XSHG", Index: 1}}},
 		}}},
 	}
-	requests, err := plan.BuildRequests("stockcn", "fn", "req", time.Date(2026, 11, 4, 2, 0, 0, 0, time.UTC), nil)
+	requests, err := plan.BuildRequests("stockcn", "fn", "req", time.Date(2026, 11, 4, 2, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	require.Len(t, requests, 1)
 	request := requests[0].Request
@@ -177,7 +177,7 @@ func TestPlanBuildRequestsLeavesStockSourcesToTheRoute(t *testing.T) {
 	}
 	require.Equal(t, "eastmoney", plan.Market.Provider, "计划仍按标签的来源分组，内容不变")
 
-	crypto, err := testPlan().BuildRequests("crypto", "fn", "req", time.Date(2026, 10, 11, 13, 0, 0, 0, time.UTC), nil)
+	crypto, err := testPlan().BuildRequests("crypto", "fn", "req", time.Date(2026, 10, 11, 13, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	require.Equal(t, "binance", crypto[0].Request.Provider)
 	require.Equal(t, "spot_http", crypto[0].Request.Items[0].SourceID)

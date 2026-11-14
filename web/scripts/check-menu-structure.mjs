@@ -6,7 +6,6 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(scriptDir, "..");
 const staticMenu = fs.readFileSync(path.join(root, "src/api/modules/system/static-menu.ts"), "utf8");
 const routes = fs.readFileSync(path.join(root, "src/router/route.ts"), "utf8");
-const zhCN = fs.readFileSync(path.join(root, "src/lang/modules/zhCN.ts"), "utf8");
 const collectorTaskWorkbench = fs.readFileSync(path.join(root, "src/views/collector/task-management/index.vue"), "utf8");
 const collectorTaskResults = fs.readFileSync(path.join(root, "src/views/collector/task-results/index.vue"), "utf8");
 const collectorTaskUI = [
@@ -63,12 +62,12 @@ const trading = findDirectory("trading");
 const eventCenter = findMenu("events");
 const ops = findDirectory("ops");
 
-assert(zhCN.includes('["compute-collector"]: "数据采集"'), "compute-collector zh-CN label must be 数据采集");
-assert(zhCN.includes('["collector-tasks"]: "采集任务"'), "collector-tasks zh-CN label must be 采集任务");
-assert(zhCN.includes('["data-fields"]: "基础字段"'), "data-fields zh-CN label must be 基础字段");
-assert(zhCN.includes('["factor-overview"]: "因子总览"'), "factor-overview zh-CN label must be 因子总览");
-assert(zhCN.includes('["factor-definitions"]: "因子定义"'), "factor-definitions zh-CN label must be 因子定义");
-assert(zhCN.includes('["factor-tasks"]: "计算任务"'), "factor-tasks zh-CN label must be 计算任务");
+assert(staticMenu.includes('"compute-collector", "数据采集"'), "compute-collector 的菜单标题应为 数据采集");
+assert(staticMenu.includes('"collector-tasks", "采集任务"'), "collector-tasks 的菜单标题应为 采集任务");
+assert(staticMenu.includes('"data-fields", "基础字段"'), "data-fields 的菜单标题应为 基础字段");
+assert(staticMenu.includes('"factor-overview", "因子总览"'), "factor-overview 的菜单标题应为 因子总览");
+assert(staticMenu.includes('"factor-definitions", "因子定义"'), "factor-definitions 的菜单标题应为 因子定义");
+assert(staticMenu.includes('"factor-tasks", "计算任务"'), "factor-tasks 的菜单标题应为 计算任务");
 
 assertNotVisible("data-assets");
 assert(dataCollection.parentId === "0", "compute-collector must be a root menu");
@@ -144,9 +143,9 @@ const archive = findDirectory("archive");
 assert(archive.parentId === "0", "archive must be a root menu");
 assert(archive.path === "/archive/tasks", "archive default path must be /archive/tasks");
 assert(trading.sort < archive.sort && archive.sort < eventCenter.sort, "archive must appear after trading and before events");
-assert(zhCN.includes('["archive"]: "数据归档"'), "archive zh-CN label must be 数据归档");
-assert(zhCN.includes('["archive-tasks"]: "归档任务"'), "archive-tasks zh-CN label must be 归档任务");
-assert(zhCN.includes('["archive-storage"]: "归档存储"'), "archive-storage zh-CN label must be 归档存储");
+assert(staticMenu.includes('"archive", "数据归档"'), "archive 的菜单标题应为 数据归档");
+assert(staticMenu.includes('"archive-tasks", "归档任务"'), "archive-tasks 的菜单标题应为 归档任务");
+assert(staticMenu.includes('"archive-storage", "归档存储"'), "archive-storage 的菜单标题应为 归档存储");
 const archiveTasks = findMenu("archive-tasks");
 const archiveStorage = findMenu("archive-storage");
 for (const item of [archiveTasks, archiveStorage]) assert(item.parentId === archive.id, `${item.title} must be under archive`);
@@ -159,7 +158,7 @@ assert(
   "archive-tasks route must declare reuseOnQuery"
 );
 assert(routes.includes('path: "/archive/storage"'), "archive storage route must exist");
-assert(!zhCN.includes('["data-archive"]'), "retired data-archive label must be absent");
+assert(!staticMenu.includes('"data-archive"'), "retired data-archive menu must be absent");
 const collectorTabOrder = ["采集任务", "采集结果", "运行状态", "执行器", "补采"].map(label =>
   collectorTaskWorkbench.indexOf(`label: "${label}"`)
 );

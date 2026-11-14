@@ -839,7 +839,6 @@ func (s *replaySession) write(ctx context.Context, runner *pipeline.Runner, plan
 	if err != nil {
 		return 0, fmt.Errorf("组装 %s 的结果行：%w", s.axis.Format(period), err)
 	}
-	plan.CommitSalt = fmt.Sprintf("replay:%s", s.id)
 	if err := runner.Write(ctx, plan, period, rows, batch); err != nil {
 		return 0, err
 	}

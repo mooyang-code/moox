@@ -120,7 +120,7 @@ func MarshalTargetEvent(instance store.Instance, result store.Result, targets []
 	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: result.ResultID, InstanceId: result.InstanceID, LogicalAccountId: *instance.LogicalAccountID,
 		SessionId: result.SessionID, StrategyId: instance.StrategyID,
-		BarEndTime: timestamppb.New(result.BarEndTime), EffectiveAt: timestamppb.New(result.BarEndTime), ValidUntil: timestamppb.New(result.ValidUntil),
+		BarEndTime: timestamppb.New(result.BarEndTime), ValidUntil: timestamppb.New(result.ValidUntil),
 		Targets: payloadTargets, Shadow: shadow,
 	}
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{EventID: result.ResultID, OccurredAt: result.CreatedAt, SpaceID: instance.SpaceID, SubjectID: *instance.LogicalAccountID})

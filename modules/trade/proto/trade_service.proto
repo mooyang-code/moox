@@ -148,7 +148,6 @@ message LogicalAccount {
   repeated string readiness_reasons = 12;
   int64 created_at = 13;
   int64 updated_at = 14;
-  int64 owner_generation = 15;
   // Strategy lifecycle identity of the current owner.
   string owner_instance_id = 16;
   string owner_session_id = 17;
@@ -320,7 +319,6 @@ message LogicalAccountTarget {
   string session_id = 12;
   string strategy_id = 13;
   int64 bar_end_time = 14;
-  int64 effective_at = 15;
   int64 valid_until = 16;
 }
 

@@ -40,7 +40,7 @@ cd <主仓库根> && $WT/bin/moox-cli setup build-linux --module storage --sourc
   不用也不改仓库里提交的 `web-host/internal/statik/statik.go`。想先跑前端测试和代码检查：`cd $WT && bash scripts/build/build-web-docker.sh --check`。
   `web/dist` 缺少 `static/js` 时构建直接失败（否则会把占位页嵌进 web-host，管理台打不开）。
 - 纯 Go 组件由 bootstrap / deploy-unit 在本机交叉编译。想提前确认能编译：逐个 `go.work` 模块 `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...`，
-  **跑完立刻检查并删除模块目录里生成的二进制**（单个 main 的模块会在目录里留文件，如 `modules/replay/replay`、`tools/moox-mcp/moox-mcp`；`git add -A` 会把它们提交）。
+  **跑完立刻检查并删除模块目录里生成的二进制**（单个 main 的模块会在目录里留文件，如 `tools/zstddict/zstddict`；`git add -A` 会把它们提交）。
 - 改动已提交并推送，CI 通过；线上二进制必须能对应到一个提交。
 
 ## 3. 停机并清空

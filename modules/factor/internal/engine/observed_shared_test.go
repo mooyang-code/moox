@@ -106,7 +106,7 @@ func (*sharedStorage) DatasetColumns(context.Context, string, string) ([]string,
 	return []string{"close", "open"}, nil
 }
 
-func (s *sharedStorage) WriteRows(_ context.Context, _, datasetID, _ string, rows []storageio.ResultRow) error {
+func (s *sharedStorage) WriteRows(_ context.Context, _, datasetID string, rows []storageio.ResultRow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, row := range rows {

@@ -98,6 +98,6 @@ func NewJetStreamPublisher(client *jetstream.Client) *JetStreamPublisher {
 	if err != nil {
 		return &JetStreamPublisher{}
 	}
-	// 事件信封由发布器按空间绑定的字典默认压缩；所有消费端经 events.DecodeRaw 透明解压。
+	// 事件信封由发布器默认压缩；所有消费端经 events.DecodeRaw 透明解压。
 	return &JetStreamPublisher{publisher: publisher, client: client}
 }

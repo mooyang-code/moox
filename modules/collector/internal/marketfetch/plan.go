@@ -12,7 +12,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/packages/wirecompress"
 )
 
@@ -132,8 +131,8 @@ type PlanSubject struct {
 // planDecoder 解压环境变量里的计划：1MB 与计划 JSON 的解码上限一致，在解压过程中生效。
 var planDecoder = wirecompress.NewDecoder(wirecompress.UsePlan, maxPlanJSONBytes)
 
-// EncodePlan 把计划编码为环境变量值：JSON 经 zstd 字典压缩（空间有专用字典就用，否则用默认字典）再 base64。
-func EncodePlan(spaceID string, plan *Plan) (string, error) {
+// EncodePlan 把计划编码为环境变量值：JSON 经 zstd 字典压缩再 base64。
+func EncodePlan(plan *Plan) (string, error) {
 	if err := plan.Validate(); err != nil {
 		return "", err
 	}
@@ -141,7 +140,7 @@ func EncodePlan(spaceID string, plan *Plan) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	encoded := base64.StdEncoding.EncodeToString(wirecompress.Encode(wirecompress.UsePlan, spaceID, raw))
+	encoded := base64.StdEncoding.EncodeToString(wirecompress.Encode(wirecompress.UsePlan, raw))
 	if len(encoded) > maxPlanEncodedBytes {
 		return "", fmt.Errorf("encoded plan is %d bytes, limit %d", len(encoded), maxPlanEncodedBytes)
 	}
@@ -325,7 +324,7 @@ func PlanSeriesTag(spaceID string, market PlanMarket) string {
 }
 
 // BuildRequests 按触发时间选出到期的频率与各数据集生效的那份，构造每个频率一次的采集请求。
-func (p *Plan) BuildRequests(spaceID, functionName, requestID string, scheduled time.Time, dnsRoutes map[string]sources.DNSResolution) ([]PlannedRequest, error) {
+func (p *Plan) BuildRequests(spaceID, functionName, requestID string, scheduled time.Time) ([]PlannedRequest, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
@@ -360,7 +359,6 @@ func (p *Plan) BuildRequests(spaceID, functionName, requestID string, scheduled 
 		if !ok {
 			continue
 		}
-		planned.Request.DNSRoutes = dnsRoutes
 		requests = append(requests, planned)
 	}
 	return requests, nil

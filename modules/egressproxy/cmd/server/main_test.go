@@ -89,7 +89,7 @@ func TestProductionRuntimeAuthenticatedHealthAndShutdown(t *testing.T) {
 	_ = response.Body.Close()
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, response.StatusCode)
-	require.Contains(t, string(body), "moox_egress_dns_resolver_requests_total")
+	require.Contains(t, string(body), "go_goroutines")
 	cancel()
 	select {
 	case err := <-done:

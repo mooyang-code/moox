@@ -1357,7 +1357,7 @@ func (e *Executor) checkTargetExecutable(
 	target store.LogicalAccountTargetRecord,
 ) error {
 	if target.InstanceID == "" || target.SessionID == "" || target.StrategyID == "" ||
-		target.BarEndTime <= 0 || target.EffectiveAt != target.BarEndTime || target.ValidUntil <= target.EffectiveAt {
+		target.BarEndTime <= 0 || target.ValidUntil <= target.BarEndTime {
 		return ErrInvalidTarget
 	}
 	now := time.Now().UTC()
@@ -1367,7 +1367,7 @@ func (e *Executor) checkTargetExecutable(
 	if !now.Before(time.UnixMilli(target.ValidUntil).UTC()) {
 		return ErrTargetExpired
 	}
-	if now.Before(time.UnixMilli(target.EffectiveAt).UTC()) {
+	if now.Before(time.UnixMilli(target.BarEndTime).UTC()) {
 		return errTargetNotEffective
 	}
 	// Always re-read the authorization immediately before an order can be

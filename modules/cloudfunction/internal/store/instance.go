@@ -396,7 +396,7 @@ func (r *CatalogRepository) UpdateInstanceDeployment(ctx context.Context, spaceI
 	// republishing so the next one-minute reconciliation observes the missing
 	// or stale remote assignment and writes it back.
 	if instance.TriggerType == "timer" {
-		for _, key := range []string{"assignment_hash", "assignment_count", "dns_hash", "dns_updated_at", "timer_trigger_name", "timer_cron", "timer_enabled", "timer_available_status", "runtime_config_reconciled_at"} {
+		for _, key := range []string{"assignment_hash", "assignment_count", "timer_trigger_name", "timer_cron", "timer_enabled", "timer_available_status", "runtime_config_reconciled_at"} {
 			metadataPatch[key] = nil
 		}
 	}

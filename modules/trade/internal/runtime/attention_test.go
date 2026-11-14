@@ -28,7 +28,7 @@ func TestAttentionBlockedSpansNewTargets(t *testing.T) {
 	logical := store.LogicalAccountRecord{LogicalAccountID: "logical-1", Name: "组合"}
 	worker.blockedSince["logical-1"] = start
 	target := store.LogicalAccountTargetRecord{
-		Status: targetapp.StatusBlocked, EffectiveAt: 0, ValidUntil: 120_000,
+		Status: targetapp.StatusBlocked, ValidUntil: 120_000,
 		AcceptedAt:     start.Add(5 * time.Minute).UnixMilli(),
 		BlockedTargets: []store.BlockedTarget{{InstrumentID: "BTC-USDT-SWAP", Reason: "余额不足"}},
 	}
@@ -45,7 +45,7 @@ func TestAttentionIgnoresHourlyCapDeferral(t *testing.T) {
 	now := time.UnixMilli(1_000_000)
 	logical := store.LogicalAccountRecord{LogicalAccountID: "logical-1", Name: "组合"}
 	target := store.LogicalAccountTargetRecord{
-		Status: targetapp.StatusConverged, EffectiveAt: 0, ValidUntil: 120_000,
+		Status: targetapp.StatusConverged, ValidUntil: 120_000,
 		BlockedTargets: []store.BlockedTarget{{InstrumentID: "BTC-USDT-SWAP", Reason: "单币每小时上限已用完，顺延到下一个整点继续"}},
 	}
 	items := map[string][]string{}
@@ -64,7 +64,7 @@ func TestAttentionFundsShortageIsReportedOnlyAsTransferShortfall(t *testing.T) {
 	logical := store.LogicalAccountRecord{LogicalAccountID: "logical-1", Name: "组合"}
 	worker.blockedSince["logical-1"] = start
 	target := store.LogicalAccountTargetRecord{
-		Status: targetapp.StatusBlocked, EffectiveAt: 0, ValidUntil: 120_000,
+		Status: targetapp.StatusBlocked, ValidUntil: 120_000,
 		BlockedTargets: []store.BlockedTarget{{InstrumentID: "BTC-USDT-SPOT", Reason: "合约钱包可划转的资金不足，现货买入按现有资金缩小"}},
 	}
 	items := map[string][]string{}
@@ -84,7 +84,7 @@ func TestAttentionFundsShortageIsDerivedFromCurrentTargetState(t *testing.T) {
 	now := time.UnixMilli(1_000_000)
 	logical := store.LogicalAccountRecord{LogicalAccountID: "logical-1", Name: "组合"}
 	target := store.LogicalAccountTargetRecord{
-		Status: targetapp.StatusBlocked, EffectiveAt: 0, ValidUntil: 3_600_000,
+		Status: targetapp.StatusBlocked, ValidUntil: 3_600_000,
 		BlockedTargets: []store.BlockedTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.005", Reason: "合约钱包可划转的资金不足，现货买入按现有资金缩小"}},
 	}
 	for range 2 {

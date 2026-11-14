@@ -66,26 +66,10 @@ func TestStatusRequiresFactorTarget(t *testing.T) {
 }
 
 func TestLegacyCLICommandsAreRemoved(t *testing.T) {
-	for _, command := range []string{"recalc-cancel", "recalc-status", "clear-queue", "replay"} {
+	for _, command := range []string{"init", "recalc-cancel", "recalc-status", "clear-queue", "replay"} {
 		_, err := parseArgs([]string{command})
 		require.ErrorContains(t, err, "unknown command")
 	}
-}
-
-func TestRunInitCreatesFactorSchema(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "factor.db")
-	var output bytes.Buffer
-	require.NoError(t, runInit(cliConfig{DBPath: dbPath}, &output))
-	var result struct {
-		OK     bool     `json:"ok"`
-		Tables []string `json:"tables"`
-	}
-	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
-	require.True(t, result.OK)
-	require.Equal(t, []string{"t_factor_tasks", "t_factor_defs", "t_factor_task_members", "t_factor_recalc_jobs"}, result.Tables)
-	db, err := store.Open(&store.Options{Path: dbPath})
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
 }
 
 const testLibrary = `- factor_id: bias

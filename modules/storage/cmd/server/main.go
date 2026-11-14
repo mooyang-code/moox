@@ -98,7 +98,7 @@ func runPrimaryRole() error {
 	defer cached.Close()
 	store, err := pebble.Open(pebble.Options{
 		Path:          filepath.Join(root, "pebble", pebbleDirName),
-		MaxEventBytes: eventConfig.MaxPayloadBytes(), BucketDuration: cleanupBucketDuration(),
+		MaxEventBytes: eventConfig.MaxPayloadBytes(),
 		// 写入拿到数据集读锁后按最新的元数据缓存确认数据集仍在（按索引点查），见 Metadata.DeleteDataset。
 		DatasetExists: func(spaceID, datasetID string) bool {
 			_, err := cached.GetDataset(trpc.BackgroundContext(), spaceID, datasetID)
@@ -157,15 +157,11 @@ func runPrimaryRole() error {
 	s := trpc.NewServer()
 	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
 	trpclog.InstallServiceName("storage")
-	for _, name := range []string{"trpc.moox.storage.PrimaryStore", "trpc.moox.storage.PrimaryStore.trpc"} {
-		if listener := s.Service(name); listener != nil {
-			pb.RegisterPrimaryStoreService(listener, svc)
-		}
+	if listener := s.Service("trpc.moox.storage.PrimaryStore.trpc"); listener != nil {
+		pb.RegisterPrimaryStoreService(listener, svc)
 	}
-	for _, name := range []string{"trpc.moox.storage.Metadata", "trpc.moox.storage.Metadata.trpc"} {
-		if listener := s.Service(name); listener != nil {
-			pb.RegisterMetadataService(listener, metadataSvc)
-		}
+	if listener := s.Service("trpc.moox.storage.Metadata.trpc"); listener != nil {
+		pb.RegisterMetadataService(listener, metadataSvc)
 	}
 	if err := storagebootstrap.RegisterMetricsReporter(s, "primary"); err != nil {
 		return err
@@ -181,10 +177,9 @@ type datasetReader interface {
 }
 
 // bucketCleaner 是主服务 Pebble 库的保留期清理：按数据集删早于给定日桶的行、账本与完成标记，
-// 另按 7 天删 commit 标记，按变更日志的保留期（默认 7 天）删变更日志。
+// 另按变更日志的保留期（默认 7 天）删变更日志。
 type bucketCleaner interface {
 	CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID string, beforeBucket time.Time) (uint64, error)
-	CleanupExpiredCommits(ctx context.Context, now time.Time) error
 	CleanupChangeLog(ctx context.Context, cutoff time.Time) (int, error)
 	ChangeLogRetention() time.Duration
 }
@@ -220,12 +215,8 @@ type datasetCleanup struct {
 }
 
 func (c datasetCleanup) run(ctx context.Context, now time.Time) error {
-	// commit 标记按写入日固定保留 7 天，与各数据集的保留期无关，全库一次删除。
 	var result error
-	if err := c.store.CleanupExpiredCommits(ctx, now); err != nil {
-		result = fmt.Errorf("清理 commit 标记: %w", err)
-	}
-	// 变更日志按创建时间清理，同样与各数据集的保留期无关。
+	// 变更日志按创建时间清理，与各数据集的保留期无关。
 	if _, err := c.store.CleanupChangeLog(ctx, now.Add(-c.store.ChangeLogRetention())); err != nil {
 		result = errors.Join(result, fmt.Errorf("清理变更日志: %w", err))
 	}
@@ -259,7 +250,7 @@ func (c datasetCleanup) cleanupDataset(ctx context.Context, dataset *pb.Dataset,
 	}
 	// Rows are deleted by whole day buckets, so a Dataset keeps between its
 	// retention and one more bucket of history.
-	cutoff := now.UTC().Add(-period.Duration).Truncate(cleanupBucketDuration())
+	cutoff := now.UTC().Add(-period.Duration).Truncate(pebble.BucketDuration)
 	started := time.Now()
 	deleted, err := c.store.CleanupExpiredBuckets(ctx, dataset.GetSpaceId(), dataset.GetDatasetId(), cutoff)
 	if err != nil {
@@ -270,16 +261,6 @@ func (c datasetCleanup) cleanupDataset(ctx context.Context, dataset *pb.Dataset,
 	tlog.Infof("storage cleanup space=%s dataset=%s freq=%s retention=%s cutoff=%s deleted_ranges=%d elapsed=%s",
 		dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetFreq(), period, cutoff.Format(time.RFC3339), deleted, elapsed.Round(time.Millisecond))
 	return nil
-}
-
-func cleanupBucketDuration() time.Duration {
-	if raw := strings.TrimSpace(os.Getenv("MOOX_STORAGE_BUCKET_DURATION")); raw != "" {
-		if duration, err := time.ParseDuration(raw); err == nil && duration > 0 {
-			return duration
-		}
-		tlog.Warnf("invalid MOOX_STORAGE_BUCKET_DURATION=%q; using 24h", raw)
-	}
-	return 24 * time.Hour
 }
 
 func runViewRole() error {
@@ -360,16 +341,11 @@ func runViewRole() error {
 	s := trpc.NewServer()
 	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
 	trpclog.InstallServiceName("storage")
-	registered := false
-	for _, name := range []string{"trpc.moox.storage.DataView", "trpc.moox.storage.DataView.trpc"} {
-		if listener := s.Service(name); listener != nil {
-			pb.RegisterDataViewService(listener, svc)
-			registered = true
-		}
-	}
-	if !registered {
+	listener := s.Service("trpc.moox.storage.DataView.trpc")
+	if listener == nil {
 		return errors.New("DataView 监听没有配置")
 	}
+	pb.RegisterDataViewService(listener, svc)
 	if err := storagebootstrap.RegisterMetricsReporter(s, "view"); err != nil {
 		return err
 	}

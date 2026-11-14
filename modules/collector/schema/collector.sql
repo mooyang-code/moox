@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_description TEXT NOT NULL DEFAULT '',
     c_data_type TEXT NOT NULL DEFAULT '',
     c_definition_hash TEXT NOT NULL DEFAULT '',
-    c_series_hash TEXT NOT NULL DEFAULT '',
     c_collect_params TEXT NOT NULL DEFAULT '{}',
     c_enabled INTEGER NOT NULL DEFAULT 1,
     c_creator TEXT NOT NULL DEFAULT '',
@@ -47,27 +46,6 @@ CREATE TABLE IF NOT EXISTS t_collector_task_tags (
 
 CREATE INDEX IF NOT EXISTS idx_collector_task_tags_tag ON t_collector_task_tags (c_space_id, c_tag_id);
 
-CREATE TABLE IF NOT EXISTS t_collector_task_series (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_task_id TEXT NOT NULL,
-    c_series_index INTEGER NOT NULL,
-    c_series_key TEXT NOT NULL,
-    c_subject_id TEXT NOT NULL,
-    c_provider TEXT NOT NULL DEFAULT '',
-    c_source_id TEXT NOT NULL DEFAULT '',
-    c_market_type TEXT NOT NULL DEFAULT '',
-    c_provider_symbol TEXT NOT NULL DEFAULT '',
-    c_series_tag TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (c_space_id, c_task_id, c_series_key),
-    UNIQUE (c_space_id, c_task_id, c_series_index),
-    FOREIGN KEY (c_space_id, c_task_id) REFERENCES t_collector_tasks (c_space_id, c_task_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_collector_task_series_subject ON t_collector_task_series (c_space_id, c_subject_id);
-
 CREATE TRIGGER IF NOT EXISTS update_collector_tasks_mtime
 AFTER UPDATE ON t_collector_tasks
 WHEN NEW.c_mtime = OLD.c_mtime
@@ -102,10 +80,12 @@ BEGIN
 END;
 
 -- 空间的采集暂停开关：暂停期间 Collector 不对账、不推进补采，并已停用该空间的 SCF 定时器；重启后保持。
+-- c_paused 是手工暂停，c_system_paused 是模块生命周期的系统暂停，任一个为 1 空间就是暂停的，两者各自恢复、互不覆盖。
 CREATE TABLE IF NOT EXISTS t_collector_fetch_plan_pauses (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL UNIQUE,
     c_paused INTEGER NOT NULL DEFAULT 0 CHECK (c_paused IN (0, 1)),
+    c_system_paused INTEGER NOT NULL DEFAULT 0 CHECK (c_system_paused IN (0, 1)),
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -396,11 +376,3 @@ CREATE TABLE IF NOT EXISTS t_collector_delist_notices (
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_delist_notices_instrument ON t_collector_delist_notices (c_exchange, c_market, c_symbol, c_scope, c_id);
-
--- 已删除的旧结构：逐标的合成实例、实例写入目标、周期就绪（合成改为按数据集 × 桶批量执行，目标周期由 Storage 跟踪）。
--- 保留这些语句让已有的库在升级后清掉旧表；新库里它们什么都不做。
-DROP TRIGGER IF EXISTS update_collector_instances_mtime;
-DROP TABLE IF EXISTS t_period_readiness_items;
-DROP TABLE IF EXISTS t_period_readiness;
-DROP TABLE IF EXISTS t_collector_instance_write_targets;
-DROP TABLE IF EXISTS t_collector_task_instances;

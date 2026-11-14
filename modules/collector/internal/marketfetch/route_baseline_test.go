@@ -174,7 +174,7 @@ func TestRouteBaseline(t *testing.T) {
 				}
 				function.Plan.Datasets[index].Copies[0].From = 1
 			}
-			requests, err := function.Plan.BuildRequests(item.options.SpaceID, name, "request", scheduled, nil)
+			requests, err := function.Plan.BuildRequests(item.options.SpaceID, name, "request", scheduled)
 			require.NoError(t, err)
 			keys := make([]string, 0, len(requests))
 			for _, planned := range requests {

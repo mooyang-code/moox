@@ -8,7 +8,6 @@
 
 ```bash
 ./scripts/build/build.sh trade
-./scripts/build/build.sh trade-cli
 go test -count=1 ./modules/trade/...
 ```
 

@@ -231,25 +231,18 @@ func TestLoadRejectsMissingFile(t *testing.T) {
 func TestLoadEgressProxyUsesSharedGateway(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, `egress_proxy:
   domains: ["*.binance.com", "data-api.binance.vision"]
-  dns:
-    domains: [FAPI.BINANCE.COM., api.binance.com]
-    request_timeout: 2s
 `))
 	require.NoError(t, err)
-	require.True(t, cfg.EgressProxy.DNS.Enabled())
-	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, cfg.EgressProxy.DNS.Domains)
-	require.Equal(t, 2*time.Second, cfg.EgressProxy.DNS.RequestTimeout)
+	require.Equal(t, []string{"*.binance.com", "data-api.binance.vision"}, cfg.EgressProxy.Domains)
 }
+
 func TestLoadRejectsInvalidEgressProxy(t *testing.T) {
 	for _, raw := range []string{
 		"dns_resolver: {enabled: true}",
 		"egress_proxy: {target: 'ip://old.example:11003'}",
 		"egress_proxy: {domains: [binance.com.evil/path]}",
-		"egress_proxy: {dns: {domains: ['*.binance.com']}}",
-		"egress_proxy: {dns: {domains: [api.binance.com, API.BINANCE.COM.]}}",
-		"egress_proxy: {dns: {request_timeout: 0s}}",
-		"egress_proxy: {dns: {request_timeout: 61s}}",
-		"egress_proxy: {dns: {node_id: old}}",
+		"egress_proxy: {dns: {domains: [api.binance.com]}}",
+		"dns: {domains: [api.binance.com]}",
 	} {
 		_, err := Load(writeCollectorConfig(t, raw))
 		require.Error(t, err, raw)

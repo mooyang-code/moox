@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"errors"
 	"sort"
 	"sync"
 	"testing"
@@ -14,26 +13,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// memoryStorage is an in-memory Storage that keeps the same idempotency
-// contract as UpsertFields with commit_id: replaying a commit_id with identical rows is a
-// no-op, replaying it with different rows is a conflict.
+// memoryStorage 是内存里的 Storage：与 UpsertFields 一样，重复写入同一行时后写覆盖先写。
 type memoryStorage struct {
 	mu      sync.Mutex
 	source  map[string][]time.Time
 	closes  map[string]float64
-	commits map[string][]storageio.ResultRow
 	result  map[string]storageio.ResultRow
 	markers []storageio.PeriodMarker
-	// commitDatasets records which result dataset each commit was written to.
-	commitDatasets map[string]string
-	reads          int
+	// writtenDatasets 记录写入过的结果数据集。
+	writtenDatasets map[string]struct{}
+	reads           int
 }
 
 func newMemoryStorage(subjects []string, target time.Time, periods int) *memoryStorage {
 	store := &memoryStorage{
 		source: map[string][]time.Time{}, closes: map[string]float64{},
-		commits: map[string][]storageio.ResultRow{}, result: map[string]storageio.ResultRow{},
-		commitDatasets: map[string]string{},
+		result:          map[string]storageio.ResultRow{},
+		writtenDatasets: map[string]struct{}{},
 	}
 	for index, subject := range subjects {
 		for offset := periods - 1; offset >= 0; offset-- {
@@ -74,17 +70,10 @@ func (s *memoryStorage) ReadWindow(_ context.Context, req storageio.ReadRequest)
 	return frames, nil
 }
 
-func (s *memoryStorage) WriteRows(_ context.Context, _, datasetID, commitID string, rows []storageio.ResultRow) error {
+func (s *memoryStorage) WriteRows(_ context.Context, _, datasetID string, rows []storageio.ResultRow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.commitDatasets[commitID] = datasetID
-	if previous, ok := s.commits[commitID]; ok {
-		if len(previous) != len(rows) {
-			return errCommitConflict
-		}
-		return nil
-	}
-	s.commits[commitID] = append([]storageio.ResultRow(nil), rows...)
+	s.writtenDatasets[datasetID] = struct{}{}
 	for _, row := range rows {
 		s.result[row.SubjectID+row.DataTime.Format(time.RFC3339)+row.SeriesTag] = row
 	}
@@ -101,8 +90,6 @@ func (s *memoryStorage) ReportComputed(_ context.Context, marker storageio.Perio
 func (*memoryStorage) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
 	return false, nil
 }
-
-var errCommitConflict = errors.New("commit_id replayed with different rows")
 
 // e2eMean 是三期均值；e2eBroken 模拟 mgr 与引擎 expr 版本不一致：派生字段来自 mgr，引擎编译不了 spec。
 func e2eMean() domain.FactorDef {
@@ -184,8 +171,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 		_, err = runner.Run(context.Background(), plan)
 		require.NoError(t, err)
 
-		require.Len(t, store.commits, 1, "replays must reuse the deterministic commit_id")
-		require.Len(t, store.result, 3)
+		require.Len(t, store.result, 3, "重复投递覆盖同样的行")
 	})
 
 	t.Run("upstream failed subject degrades the period", func(t *testing.T) {
@@ -265,9 +251,8 @@ func TestSameDefinitionInTwoSetsComputesIntoEachResultDataset(t *testing.T) {
 		require.Equal(t, "complete", outcome.Status)
 	}
 
-	require.Len(t, store.commitDatasets, 2, "each set owns a distinct commit id")
 	datasets := make([]string, 0, 2)
-	for _, datasetID := range store.commitDatasets {
+	for datasetID := range store.writtenDatasets {
 		datasets = append(datasets, datasetID)
 	}
 	require.ElementsMatch(t, []string{"dataset_factor_bars_1m", "dataset_factor_bars_other"}, datasets)

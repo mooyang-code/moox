@@ -73,9 +73,15 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	backfiller := &klinecheck.Backfiller{
 		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: invoker, BaseCtx: process.ctx, Refill: true,
 		Paused: func(ctx context.Context, spaceID string) (bool, error) {
+			space := strings.ToLower(spaceID)
+			manual, err := dbm.FetchPlans().ManuallyPausedSpaces(ctx)
+			if err != nil || manual[space] {
+				// 手工暂停的空间不补采，系统恢复追赶时也一样。
+				return true, err
+			}
 			paused, err := dbm.FetchPlans().PausedSpaces(ctx)
-			// 恢复模式：暂停开关仍在（实时采集关闭），但补采要运行，补齐暂停区间。
-			return paused[strings.ToLower(spaceID)] && !control.Recovering(spaceID), err
+			// 恢复模式：系统暂停仍在（实时采集关闭），但补采要运行，补齐暂停区间。
+			return paused[space] && !control.Recovering(spaceID), err
 		},
 		// 并发上限：SCF 执行端受补采函数的预留并发硬性限制（5）；空间的数据集全部用本地执行端（collector-stream）补采时
 		// 不受这个限制，可以放大，补采（尤其是暂停恢复后补暂停区间）快得多。

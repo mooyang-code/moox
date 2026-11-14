@@ -117,7 +117,7 @@ func TestDryRunPassesTargetLevelErrorsThrough(t *testing.T) {
 	require.False(t, complete)
 
 	// 目标的有效期早已结束（有效期必须晚于生效时间，所以整个窗口放到过去）。
-	record.BarEndTime, record.EffectiveAt, record.ValidUntil = 1_000, 1_000, 2_000
+	record.BarEndTime, record.ValidUntil = 1_000, 2_000
 	_, err = executor.dryRunPlacement(ctx, "space-1", record, action, members, env)
 	require.True(t, errors.Is(err, ErrTargetExpired), "目标已过期：原样返回，实际是 %v", err)
 	require.Empty(t, fake.Calls())

@@ -89,7 +89,7 @@ func TestTopicCoverageAndKVTTL(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	c.Streams = append(c.Streams, config.StreamConfig{Name: "MOOX_OBSERVABILITY_DUP", Subjects: []string{"moox.event.observability.>"}, Retention: "limits", Storage: "file", Replicas: 1})
+	c.Streams = append(c.Streams, config.StreamConfig{Name: "MOOX_OBSERVABILITY_DUP", Subjects: []string{"moox.event.observability.>"}, Retention: "limits", Storage: "file"})
 	if err := c.Validate(); err == nil {
 		t.Fatal("overlapping stream accepted")
 	}

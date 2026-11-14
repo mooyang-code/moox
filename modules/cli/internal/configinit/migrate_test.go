@@ -489,6 +489,21 @@ func TestMigrateRemovesTLSMode(t *testing.T) {
 	}
 }
 
+// [egress_proxy.dns] 整个表删掉，前后的表和下一个表的说明注释不动；重复执行结果不变。
+func TestMigrateRemovesEgressDNS(t *testing.T) {
+	plain := "[egress_proxy]\nhttp_domains = [\"*.binance.com\"]\n\n[egress_proxy.dns]\nprobe_port = 443\ndomains = [\"api.binance.com\"]\n\n# 日志\n[local_logs]\nbackup_count = 5\n"
+	report := MigrateReport{}
+	migrated, err := migrateManifestText([]byte(plain), nil, "", "", &report)
+	require.NoError(t, err)
+	require.True(t, report.RemovedEgressDNS)
+	require.Equal(t, "[egress_proxy]\nhttp_domains = [\"*.binance.com\"]\n\n\n# 日志\n[local_logs]\nbackup_count = 5\n", string(migrated))
+	again := MigrateReport{}
+	second, err := migrateManifestText(migrated, nil, "", "", &again)
+	require.NoError(t, err)
+	require.False(t, again.RemovedEgressDNS)
+	require.Equal(t, string(migrated), string(second))
+}
+
 // 整条重写时保留原条目首行、末行的行尾注释；多行数组中间几行的注释保不住，报告里列出条目位置。
 func TestMigrateRewriteKeepsTrailingComments(t *testing.T) {
 	decrypt := func(t *testing.T, path string, keys *configcrypt.MemoryStore) string {

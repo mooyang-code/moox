@@ -15,7 +15,7 @@ import (
 )
 
 // CleanupExpiredBuckets 删除一个数据集早于 beforeBucket 的时序行、历史行索引、周期账本与完成标记，返回删除的键范围数。
-// 记录型行的版本不在这里删除；commit 标记按自己的 7 天由 CleanupExpiredCommits 删除。
+// 记录型行的版本不在这里删除。
 func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID string, beforeBucket time.Time) (uint64, error) {
 	if s == nil || s.db == nil {
 		return 0, errors.New("pebble store is closed")
@@ -253,8 +253,7 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 		}
 		ranges = append(ranges, [2][]byte{prefix, upper})
 	}
-	// 周期账本、完成标记、序列快照与生效表按数据集前缀整段删除，重建同名数据集后从头登记快照；
-	// commit 标记在各日桶下删除，重建后同一 commit_id 可以重新写入。
+	// 周期账本、完成标记、序列快照与生效表按数据集前缀整段删除，重建同名数据集后从头登记快照。
 	for _, prefix := range []string{
 		periodDatasetPrefix(spaceID, datasetID), markerDatasetPrefix(spaceID, datasetID),
 		seriesSnapshotPrefix + datasetScope(spaceID, datasetID), seriesEffectivePrefix + datasetScope(spaceID, datasetID),
@@ -265,11 +264,6 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 		}
 		ranges = append(ranges, [2][]byte{lower, upper})
 	}
-	commitRanges, err := s.stageDeleteDatasetCommits(batch, spaceID, datasetID)
-	if err != nil {
-		return 0, err
-	}
-	ranges = append(ranges, commitRanges...)
 	deletedOutbox, err := s.stageDatasetOutboxCleanup(batch, spaceID, datasetID)
 	if err != nil {
 		return 0, err

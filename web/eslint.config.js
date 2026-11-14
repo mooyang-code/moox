@@ -65,7 +65,6 @@ export default defineConfig([
       "dist",
       "/public",
       "/docs",
-      ".husky",
       ".local",
       "/bin",
     ]

@@ -126,7 +126,7 @@ func TestStrategyHealthReportsStalledOutbox(t *testing.T) {
 	now := time.Now().UTC()
 	bar := timestamppb.New(now)
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
-		TargetId: "r1", InstanceId: "i1", StrategyId: "s1", SessionId: "i1-session", LogicalAccountId: "acct", BarEndTime: bar, EffectiveAt: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
+		TargetId: "r1", InstanceId: "i1", StrategyId: "s1", SessionId: "i1-session", LogicalAccountId: "acct", BarEndTime: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "r1", OccurredAt: now, SpaceID: "crypto", SubjectID: "acct"})
 	if err != nil {

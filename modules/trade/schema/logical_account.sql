@@ -2,8 +2,6 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
-    -- 归属代数：每次认领、重绑或释放加一，延迟到达的目标按它隔离
-    c_owner_claimed_at INTEGER NOT NULL DEFAULT 0,
     -- 当前归属的 Strategy 实例与会话
     c_owner_instance_id TEXT,
     c_owner_session_id TEXT,
@@ -75,7 +73,6 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
     c_session_id TEXT NOT NULL DEFAULT '',
     c_strategy_id TEXT NOT NULL DEFAULT '',
     c_bar_end_time INTEGER NOT NULL DEFAULT 0,
-    c_effective_at INTEGER NOT NULL DEFAULT 0,
     c_valid_until INTEGER NOT NULL DEFAULT 0,
     c_targets_json TEXT NOT NULL,
     c_status TEXT NOT NULL,
@@ -91,7 +88,7 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
     CHECK (c_command_sequence > 0),
     CHECK (c_instance_id <> '' AND c_session_id <> '' AND
            c_strategy_id <> '' AND c_bar_end_time > 0 AND
-           c_effective_at = c_bar_end_time AND c_valid_until > c_effective_at),
+           c_valid_until > c_bar_end_time),
     CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED', 'EXPIRED')),
     CHECK (json_valid(c_targets_json)),
     CHECK (json_type(c_targets_json) = 'array'),

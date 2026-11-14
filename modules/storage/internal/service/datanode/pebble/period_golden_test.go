@@ -16,8 +16,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// 账本与完成标记的判定金样：完成、降级、迟到提交、重复提交、截止判定，以及写入方上报的标记与 commit_id 查重。
-// 金样只经由改键前后都保留的入口（登记快照、周期提交、截止判定、写入方上报、按触发事件查询、带 commit_id 的写入、
+// 账本与完成标记的判定金样：完成、降级、迟到提交、重复提交、截止判定，以及写入方上报的标记。
+// 金样只经由改键前后都保留的入口（登记快照、周期提交、截止判定、写入方上报、按触发事件查询、
 // 删除数据集）读写，账本怎么存不影响它。
 
 const (
@@ -666,97 +666,8 @@ func TestGoldenProducerMarkers(t *testing.T) {
 	}
 }
 
-// commit_id 查重：同内容重放不写入，内容不同是冲突，与行的顺序无关，跨重启有效，不同数据集互不影响。
-func TestGoldenCommitIDReplay(t *testing.T) {
-	key := func(dataset, record string) *pb.RowKey {
-		return &pb.RowKey{SpaceId: goldenSpace, DatasetId: dataset, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: record, Version: "1"}}}
-	}
-	rows := func(dataset string, value float64, records ...string) []*pb.RowFieldUpsert {
-		out := make([]*pb.RowFieldUpsert, 0, len(records))
-		for _, record := range records {
-			out = append(out, &pb.RowFieldUpsert{Key: key(dataset, record), Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}}}}})
-		}
-		return out
-	}
-	type write struct {
-		dataset   string
-		commitID  string
-		rows      []*pb.RowFieldUpsert
-		reopen    bool // 写之前重开库
-		wantWrite bool // 期望真正写入（返回一条 outbox 条目）
-		wantErr   bool // 期望 CommitConflictError
-	}
-	cases := []struct {
-		name   string
-		writes []write
-		want   map[string]float64 // 数据集/记录 → 最终 close
-	}{
-		{
-			name:   "同内容重放不再写入",
-			writes: []write{{dataset: "a", commitID: "c1", rows: rows("a", 1, "r1"), wantWrite: true}, {dataset: "a", commitID: "c1", rows: rows("a", 1, "r1")}},
-			want:   map[string]float64{"a/r1": 1},
-		},
-		{
-			name:   "行顺序不同仍是同一次提交",
-			writes: []write{{dataset: "a", commitID: "c1", rows: rows("a", 1, "r1", "r2"), wantWrite: true}, {dataset: "a", commitID: "c1", rows: rows("a", 1, "r2", "r1")}},
-			want:   map[string]float64{"a/r1": 1, "a/r2": 1},
-		},
-		{
-			name:   "同一 commit_id 内容不同是冲突",
-			writes: []write{{dataset: "a", commitID: "c1", rows: rows("a", 1, "r1"), wantWrite: true}, {dataset: "a", commitID: "c1", rows: rows("a", 2, "r1"), wantErr: true}},
-			want:   map[string]float64{"a/r1": 1},
-		},
-		{
-			name:   "重开库后仍识别重放",
-			writes: []write{{dataset: "a", commitID: "c1", rows: rows("a", 1, "r1"), wantWrite: true}, {dataset: "a", commitID: "c1", rows: rows("a", 1, "r1"), reopen: true}, {dataset: "a", commitID: "c1", rows: rows("a", 2, "r1"), wantErr: true}},
-			want:   map[string]float64{"a/r1": 1},
-		},
-		{
-			name:   "不同数据集的同名 commit_id 互不影响",
-			writes: []write{{dataset: "a", commitID: "c1", rows: rows("a", 1, "r1"), wantWrite: true}, {dataset: "b", commitID: "c1", rows: rows("b", 2, "r1"), wantWrite: true}},
-			want:   map[string]float64{"a/r1": 1, "b/r1": 2},
-		},
-		{
-			name:   "不带 commit_id 的写入后写覆盖先写",
-			writes: []write{{dataset: "a", rows: rows("a", 1, "r1"), wantWrite: true}, {dataset: "a", rows: rows("a", 2, "r1"), wantWrite: true}},
-			want:   map[string]float64{"a/r1": 2},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			path := filepath.Join(t.TempDir(), "pebble")
-			clock := newGoldenClock(goldenPeriod)
-			store := openGoldenStore(t, path, clock, 0)
-			defer func() { _ = store.Close() }()
-			for i, item := range tc.writes {
-				if item.reopen {
-					require.NoError(t, store.Close())
-					store = openGoldenStore(t, path, clock, 0)
-				}
-				written, err := store.UpsertFields(ctx, goldenSpace, item.dataset, item.commitID, item.rows)
-				if item.wantErr {
-					var conflict CommitConflictError
-					require.ErrorAs(t, err, &conflict, "write %d", i)
-					continue
-				}
-				require.NoError(t, err, "write %d", i)
-				require.Equal(t, item.wantWrite, written, "write %d", i)
-			}
-			for name, want := range tc.want {
-				var dataset, record string
-				_, err := fmt.Sscanf(name, "%1s/%s", &dataset, &record)
-				require.NoError(t, err)
-				got, found := goldenStoredClose(t, store, key(dataset, record))
-				require.True(t, found, name)
-				require.Equal(t, want, got, name)
-			}
-		})
-	}
-}
-
-// 删除数据集清掉它的账本、完成标记与 commit 标记，其他数据集不受影响；重建后从头开始。
-func TestGoldenDeleteDatasetClearsLedgerMarkersAndCommits(t *testing.T) {
+// 删除数据集清掉它的账本与完成标记，其他数据集不受影响；重建后从头开始。
+func TestGoldenDeleteDatasetClearsLedgerAndMarkers(t *testing.T) {
 	ctx := context.Background()
 	clock := newGoldenClock(goldenPeriod.Add(61 * time.Second))
 	store := newGoldenStore(t, clock)
@@ -773,9 +684,7 @@ func TestGoldenDeleteDatasetClearsLedgerMarkersAndCommits(t *testing.T) {
 		_, err = store.AppendDatasetMarker(ctx, raw)
 		require.NoError(t, err)
 		record := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
-		written, err := store.UpsertFields(ctx, goldenSpace, dataset, "commit-1", []*pb.RowFieldUpsert{record})
-		require.NoError(t, err)
-		require.True(t, written)
+		require.NoError(t, store.UpsertFields(ctx, goldenSpace, dataset, []*pb.RowFieldUpsert{record}))
 	}
 
 	_, err := store.DeleteDatasetRows(ctx, goldenSpace, "delete-me")
@@ -797,11 +706,9 @@ func TestGoldenDeleteDatasetClearsLedgerMarkersAndCommits(t *testing.T) {
 	require.Equal(t, "degraded", goldenPeriodStatus(t, store, goldenSpace, "keep-me", goldenFreq, goldenPeriod.Unix()))
 	require.Empty(t, goldenMarkers(t, store, goldenSpace, "delete-me"))
 
-	// 重建后同一 commit_id 作为新提交写入，同一触发事件可以重新上报。
+	// 重建后照常写入，同一触发事件可以重新上报。
 	record := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: "delete-me", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}}
-	written, err := store.UpsertFields(ctx, goldenSpace, "delete-me", "commit-1", []*pb.RowFieldUpsert{record})
-	require.NoError(t, err)
-	require.True(t, written)
+	require.NoError(t, store.UpsertFields(ctx, goldenSpace, "delete-me", []*pb.RowFieldUpsert{record}))
 	marker := goldenProducerMarker("source-ready", goldenPeriod.Unix(), "degraded")
 	marker.DatasetId = "delete-me"
 	raw, _, err := BuildProducerPeriodCompletedMessage(goldenSpace, marker)

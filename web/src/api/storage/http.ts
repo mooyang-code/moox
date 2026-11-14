@@ -3,7 +3,6 @@ import type { AxiosRequestConfig } from "axios";
 import { Message } from "@arco-design/web-vue";
 import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess } from "../ret-info";
-import { getStorageAuthInfo } from "./auth";
 import type { RetInfo } from "./types";
 import { installSpaceAwareSignedClient, readPersistedAuth } from "../admin/signed-client";
 import { StaleSpaceRequestError } from "../admin/stale-space";
@@ -107,15 +106,14 @@ async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo
   const generation = storageReadGeneration;
   const request = (async () => {
     const url = `/api/admin/storage/${method}`;
-    const body = { auth_info: getStorageAuthInfo(), ...req };
     // 显式空间的请求带上自己的 X-Space-Id，签名客户端不再注入当前所选空间。
     const silentError = Boolean(options.silentError);
     const config: AxiosRequestConfig = {};
     if (options.spaceId) config.headers = { "X-Space-Id": options.spaceId };
     if (silentError) config.silentError = true;
     const rsp = Object.keys(config).length
-      ? await storageClient.post<TRsp>(url, body, config)
-      : await storageClient.post<TRsp>(url, body);
+      ? await storageClient.post<TRsp>(url, req, config)
+      : await storageClient.post<TRsp>(url, req);
     try {
       assertSuccess(rsp.data.ret_info, silentError);
     } catch (error) {

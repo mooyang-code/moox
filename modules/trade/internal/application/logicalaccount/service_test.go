@@ -251,7 +251,7 @@ func TestSessionServiceRollsBackWhenTargetDeleteFails(t *testing.T) {
 		return tx.InsertTargetReceipt(store.TargetReceiptRecord{
 			SpaceID: target.SpaceID, LogicalAccountID: target.LogicalAccountID, TargetID: target.TargetID,
 			InstanceID: target.InstanceID, SessionID: target.SessionID, StrategyID: target.StrategyID,
-			BarEndTime: target.BarEndTime, EffectiveAt: target.EffectiveAt, ValidUntil: target.ValidUntil,
+			BarEndTime: target.BarEndTime, ValidUntil: target.ValidUntil,
 			RequestHash: "hash", WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", AcceptedAt: target.AcceptedAt,
 		})
 	}))
@@ -305,7 +305,7 @@ func TestSessionTransitionClearsTargetAndRejectsDelayedManagement(t *testing.T) 
 		return tx.InsertTargetReceipt(store.TargetReceiptRecord{
 			SpaceID: oldTarget.SpaceID, LogicalAccountID: oldTarget.LogicalAccountID, TargetID: oldTarget.TargetID,
 			InstanceID: oldTarget.InstanceID, SessionID: oldTarget.SessionID, StrategyID: oldTarget.StrategyID,
-			BarEndTime: oldTarget.BarEndTime, EffectiveAt: oldTarget.EffectiveAt, ValidUntil: oldTarget.ValidUntil,
+			BarEndTime: oldTarget.BarEndTime, ValidUntil: oldTarget.ValidUntil,
 			RequestHash: "hash", WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", AcceptedAt: oldTarget.AcceptedAt,
 		})
 	}))
@@ -463,7 +463,7 @@ func acceptModernSessionTarget(t *testing.T, tradeStore *store.Store, session st
 	target, accepted, err := tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-" + session,
 		InstanceID: "instance-1", SessionID: session, StrategyID: "strategy-1",
-		BarEndTime: now.Add(-time.Second).UnixMilli(), EffectiveAt: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
+		BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
 		Status: "PENDING", AcceptedAt: now.UnixMilli(),
 		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
 	})
@@ -613,7 +613,7 @@ func acceptSessionTarget(t *testing.T, service *Service, tradeStore *store.Store
 	_, _, err = tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: targetID,
 		InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
-		BarEndTime: 2_000, EffectiveAt: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
+		BarEndTime: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 		Status: "PENDING", AcceptedAt: 2_000,
 		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
 	})

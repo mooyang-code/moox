@@ -119,28 +119,28 @@ func TestHandleLogicalAccountTargetAcceptsEmptyFullWhilePaused(t *testing.T) {
 	require.Empty(t, got.Targets)
 }
 
-func TestHandleLogicalAccountTargetAcceptsBeforeEffectiveAt(t *testing.T) {
+func TestHandleLogicalAccountTargetAcceptsBeforeBarEnd(t *testing.T) {
 	db := openTargetStore(t)
 	seedLogicalTargetAccount(t, db, true, true)
 	now := time.Now().UTC()
 	effective := now.Add(500 * time.Millisecond)
-	delivery := logicalTargetDeliveryWithTimes(t, effective, effective, effective.Add(time.Hour), "future-target", "runner-1", "logical-1", nil)
+	delivery := logicalTargetDeliveryWithTimes(t, effective, effective.Add(time.Hour), "future-target", "runner-1", "logical-1", nil)
 	result := HandleTarget(context.Background(), delivery, targetOptions(db, now))
 	require.Equal(t, jetstream.ACK, result.Decision)
 	require.NoError(t, result.Err)
 	target, err := db.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, effective.UnixMilli(), target.EffectiveAt)
+	require.Equal(t, effective.UnixMilli(), target.BarEndTime)
 	receipt, err := db.GetTargetReceipt(context.Background(), "space-1", "future-target")
 	require.NoError(t, err)
-	require.Equal(t, effective.UnixMilli(), receipt.EffectiveAt)
+	require.Equal(t, effective.UnixMilli(), receipt.BarEndTime)
 }
 
 func TestHandleLogicalAccountTargetTermsAfterValidityWindow(t *testing.T) {
 	db := openTargetStore(t)
 	seedLogicalTargetAccount(t, db, true, true)
 	now := time.Now().UTC()
-	delivery := logicalTargetDeliveryWithTimes(t, now.Add(-2*time.Hour), now.Add(-2*time.Hour), now.Add(-time.Hour), "expired-target", "runner-1", "logical-1", nil)
+	delivery := logicalTargetDeliveryWithTimes(t, now.Add(-2*time.Hour), now.Add(-time.Hour), "expired-target", "runner-1", "logical-1", nil)
 	result := HandleTarget(context.Background(), delivery, targetOptions(db, now))
 	require.Equal(t, jetstream.TERM, result.Decision)
 	require.ErrorIs(t, result.Err, store.ErrTargetExpired)
@@ -164,7 +164,7 @@ func TestHandleLogicalAccountTargetRejectsDelayedEventFromPreviousOwnerLifecycle
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	claimAt := time.Now().UTC()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		// 释放后重新认领：归属代数推进，前一个生命周期的延迟目标必须被拒绝。
+		// 释放后重新认领：会话推进，前一个生命周期的延迟目标必须被拒绝。
 		account, err := tx.GetLogicalAccount("space-1", "logical-1")
 		if err != nil {
 			return err
@@ -245,7 +245,7 @@ func TestHandleTargetFromOldSessionIsSupersededNotConflict(t *testing.T) {
 				return targetapp.WeightConversion{}, nil
 			})
 			result := HandleTarget(context.Background(), logicalTargetDeliveryWithTimes(
-				t, barEnd, barEnd, validUntil, "old-session-target", "runner-1", "logical-1",
+				t, barEnd, validUntil, "old-session-target", "runner-1", "logical-1",
 				[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
 			), opts)
 			require.Equal(t, jetstream.TERM, result.Decision)
@@ -274,9 +274,6 @@ func TestHandleTargetUsesSessionFenceAcrossReclaim(t *testing.T) {
 		_, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", account.AuthFence)
 		return err
 	}))
-	account, err := db.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Positive(t, account.OwnerGeneration)
 	now := time.Now().UTC()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
@@ -285,7 +282,7 @@ func TestHandleTargetUsesSessionFenceAcrossReclaim(t *testing.T) {
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: "modern-session-target", LogicalAccountId: "logical-1",
 			InstanceId: "runner-1", SessionId: "session-1", StrategyId: "strategy-1",
-			BarEndTime: bar, EffectiveAt: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
+			BarEndTime: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
 		}, events.PublishOptions{EventID: "modern-session-target", OccurredAt: now, SpaceID: "space-1", SubjectID: "logical-1"})
 	require.NoError(t, err)
 	raw, err := proto.Marshal(encoded.Message)
@@ -300,25 +297,7 @@ func TestHandleTargetUsesSessionFenceAcrossReclaim(t *testing.T) {
 	require.Equal(t, jetstream.ACK, HandleTarget(ctx, delivery, targetOptions(db, now)).Decision)
 }
 
-func TestHandleLogicalAccountTargetHasNoOwnerGenerationField(t *testing.T) {
-	tradeStore := openTargetStore(t)
-	seedLogicalTargetAccount(t, tradeStore, true, true)
-	now := time.Now().UTC()
-	require.Nil(t, (&tradeeventpb.LogicalAccountTargetWeightRequested{}).ProtoReflect().Descriptor().Fields().ByName("owner_generation"))
-
-	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-generation-match", "runner-1", "logical-1",
-		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
-	), targetOptions(tradeStore, now))
-
-	require.Equal(t, jetstream.ACK, result.Decision)
-	require.NoError(t, result.Err)
-	got, err := tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, "target-generation-match", got.TargetID)
-}
-
-func TestHandleLogicalAccountTargetAcceptsSessionFenceWithoutOwnerGeneration(t *testing.T) {
+func TestHandleLogicalAccountTargetAcceptsSessionFenceAfterReclaim(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	now := time.Now().UTC()
@@ -337,9 +316,6 @@ func TestHandleLogicalAccountTargetAcceptsSessionFenceWithoutOwnerGeneration(t *
 		_, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", account.AuthFence)
 		return err
 	}))
-	claimed, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Greater(t, claimed.OwnerGeneration, int64(0))
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-session-fence", "runner-1", "logical-1",
@@ -700,13 +676,12 @@ func logicalTargetDelivery(
 	logicalAccountID string,
 	targets []*tradeeventpb.InstrumentWeightTarget,
 ) *jetstream.Delivery {
-	return logicalTargetDeliveryWithTimes(t, now, now, now.Add(time.Hour), targetID, instanceID, logicalAccountID, targets)
+	return logicalTargetDeliveryWithTimes(t, now, now.Add(time.Hour), targetID, instanceID, logicalAccountID, targets)
 }
 
 func logicalTargetDeliveryWithTimes(
 	t *testing.T,
 	barEnd time.Time,
-	effective time.Time,
 	validUntil time.Time,
 	targetID string,
 	instanceID string,
@@ -721,7 +696,7 @@ func logicalTargetDeliveryWithTimes(
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: targetID, InstanceId: instanceID, SessionId: "session-1", StrategyId: "strategy-1",
 			LogicalAccountId: logicalAccountID, Targets: targets,
-			BarEndTime: timestamppb.New(barEnd), EffectiveAt: timestamppb.New(effective), ValidUntil: timestamppb.New(validUntil),
+			BarEndTime: timestamppb.New(barEnd), ValidUntil: timestamppb.New(validUntil),
 		},
 		events.PublishOptions{
 			EventID: targetID, OccurredAt: barEnd,

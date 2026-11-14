@@ -21,7 +21,7 @@ func TestPlanBuildRequestsStockDailyIsDueAtNextUTCMidnight(t *testing.T) {
 		}}},
 	}
 	key := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
-	requests, err := plan.BuildRequests("stockcn", "fn", "req", key.Add(24*time.Hour), nil)
+	requests, err := plan.BuildRequests("stockcn", "fn", "req", key.Add(24*time.Hour))
 	require.NoError(t, err)
 	require.Len(t, requests, 1)
 	require.Equal(t, key, requests[0].Period)
@@ -32,7 +32,7 @@ func TestPlanBuildRequestsStockDailyIsDueAtNextUTCMidnight(t *testing.T) {
 	require.True(t, item.RequirePeriodCommit)
 
 	for _, hour := range []int{1, 7, 8, 16} {
-		requests, err = plan.BuildRequests("stockcn", "fn", "req", key.Add(time.Duration(hour)*time.Hour), nil)
+		requests, err = plan.BuildRequests("stockcn", "fn", "req", key.Add(time.Duration(hour)*time.Hour))
 		require.NoError(t, err)
 		require.Empty(t, requests, "%d 点不到期", hour)
 	}

@@ -45,25 +45,8 @@ event_bus:
 health:
   addr: ":11412"
 
-# Collector resolves these hosts before dispatching a short-lived SCF task.
-# Binance is enabled by default; add other provider hosts here as needed.
-dns:
-  domains:
-    - data-api.binance.vision
-    - api-gcp.binance.com
-    - api.binance.com
-    - fapi.binance.com
-  refresh_interval: 5m
-  resolve_timeout: 5s
-  # nameservers: ["119.29.29.29", "1.1.1.1"]
-
 egress_proxy:
   domains: ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]
-  dns:
-    domains: []
-    refresh_interval: 5m
-    request_timeout: 3s
-    cache_ttl: 5m
 
 # 下架检测：安装时按拓扑渲染，没有出口代理（没配海外机）时为 false，只接受手工登记（collector delist register）。
 delist:

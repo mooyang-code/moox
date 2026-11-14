@@ -47,7 +47,7 @@ func (localStoreData) WindowStatuses() []pipeline.WarmupStatus { return nil }
 
 type discardStore struct{ storageio.Store }
 
-func (discardStore) WriteRows(context.Context, string, string, string, []storageio.ResultRow) error {
+func (discardStore) WriteRows(context.Context, string, string, []storageio.ResultRow) error {
 	return nil
 }
 func (discardStore) ReportComputed(context.Context, storageio.PeriodMarker) error { return nil }

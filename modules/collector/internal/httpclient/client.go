@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -117,7 +116,6 @@ func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string
 		candidates = nil
 	}
 	ipDeadline, hasIPDeadline := ipAttemptDeadline(ctx)
-	source := dnsSource(len(candidates) > 0)
 	for index, ip := range candidates {
 		client := c.clientForIP(ip)
 		if client == nil {
@@ -127,17 +125,17 @@ func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string
 			continue
 		}
 		ipCtx, cancel := ipCandidateContext(ctx, ipDeadline, hasIPDeadline, len(candidates)-index)
-		log.InfoContextf(ctx, "collector_http_resolved_ip_attempted domain=%s ip=%s dns_source=%s dns_hash=%s dns_route_age_seconds=%s", domain, ip, source, dnsHash(), dnsRouteAge())
+		log.InfoContextf(ctx, "collector_http_resolved_ip_attempted domain=%s ip=%s", domain, ip)
 		err := c.getWithClient(ipCtx, client, domain, path, query, consume)
 		cancel()
 		if err == nil {
 			return nil
 		}
-		log.WarnContextf(ctx, "collector_http_resolved_ip_failed domain=%s ip=%s dns_source=%s dns_hash=%s dns_route_age_seconds=%s error=%v", domain, ip, source, dnsHash(), dnsRouteAge(), err)
+		log.WarnContextf(ctx, "collector_http_resolved_ip_failed domain=%s ip=%s error=%v", domain, ip, err)
 	}
-	// 没有 DNS 快照时直接走系统解析是常态，不记日志；有快照却全部失败才值得记录。
+	// 没有指定地址时直接走系统解析是常态，不记日志；指定的地址全部失败才值得记录。
 	if len(candidates) > 0 {
-		log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d dns_source=system dns_snapshot_candidates=%d dns_hash=%s dns_route_age_seconds=%s", domain, len(candidates), len(candidates), dnsHash(), dnsRouteAge())
+		log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d", domain, len(candidates))
 	}
 	return c.getWithClient(ctx, c.httpClient, domain, path, query, consume)
 }
@@ -191,31 +189,6 @@ func skipControlPlaneIPs(domain string) bool {
 		return false
 	}
 	return strings.HasPrefix(host, "fapi")
-}
-
-func dnsSource(hasSnapshot bool) string {
-	if hasSnapshot {
-		return "scf_snapshot"
-	}
-	return "system"
-}
-
-func dnsHash() string { return strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DNS_HASH")) }
-
-func dnsRouteAge() string {
-	value := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DNS_UPDATED_AT"))
-	if value == "" {
-		return "unknown"
-	}
-	updated, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return "unknown"
-	}
-	age := time.Since(updated.UTC()).Seconds()
-	if age < 0 {
-		age = 0
-	}
-	return fmt.Sprintf("%.0f", age)
 }
 
 func (c *HTTPClient) clientForIP(ip string) *http.Client {

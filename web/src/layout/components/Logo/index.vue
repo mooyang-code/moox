@@ -2,7 +2,7 @@
   <div class="logo_head">
     <div class="logo_box" :class="collapsed && 'padding-unset'">
       <SvgIcon name="moox-logo" :size="30" />
-      <span :class="asideDark ? 'logo_title dark' : 'logo_title'" v-if="!collapsed">{{ title }}</span>
+      <span class="logo_title" v-if="!collapsed">{{ title }}</span>
     </div>
   </div>
 </template>
@@ -11,7 +11,7 @@
 import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";
 const themeStore = useThemeConfig();
-const { collapsed, asideDark } = storeToRefs(themeStore);
+const { collapsed } = storeToRefs(themeStore);
 
 // 全局title
 const title = import.meta.env.VITE_GLOB_APP_TITLE + " 量化平台";
@@ -49,9 +49,6 @@ const title = import.meta.env.VITE_GLOB_APP_TITLE + " 量化平台";
     text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .dark {
-    color: #ffffff;
   }
 }
 </style>

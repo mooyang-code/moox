@@ -7,12 +7,6 @@ broker:
   store_dir: ./data/eventbus/jetstream
   startup_timeout: 10s
   max_payload_bytes: 8388608
-  cluster:
-    enabled: false
-    name: MOOX_EVENTBUS
-    host: 127.0.0.1
-    port: 6222
-    routes: []
   auth:
     enabled: false
     username: ""
@@ -39,7 +33,6 @@ streams:
     retention: limits
     discard: old
     storage: file
-    replicas: 1
     max_age: 72h
     duplicates: 2m
     # 只剩周期完成与 View 就绪两种事件，不再有行数据：每条带标的全集，几 KB 到十几 KB（发布时压缩），
@@ -51,7 +44,6 @@ streams:
     retention: limits
     discard: old
     storage: file
-    replicas: 1
     max_age: 24h
     duplicates: 2m
     max_bytes: 134217728
@@ -63,7 +55,6 @@ streams:
     retention: work_queue
     discard: old
     storage: file
-    replicas: 1
     max_age: 168h
     duplicates: 2m
     max_bytes: 134217728
@@ -73,7 +64,6 @@ streams:
     retention: limits
     discard: old
     storage: file
-    replicas: 1
     max_age: 72h
     duplicates: 2m
     max_bytes: 134217728

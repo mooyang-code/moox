@@ -45,21 +45,6 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	for _, task := range tasks {
 		require.NoError(t, db.Tasks().Create(ctx, task))
 	}
-	_, _, err := db.Tasks().ReplaceTaskSeries(ctx, "crypto", "task-active", []domain.TaskSeries{{
-		SubjectID: "BTC-USDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot",
-		ProviderSymbol: "BTCUSDT", SeriesTag: "venue:binance|market:spot|source:spot_http",
-	}})
-	require.NoError(t, err)
-	_, _, err = db.Tasks().ReplaceTaskSeries(ctx, "crypto", "task-resample", []domain.TaskSeries{
-		{SubjectID: "BTC-USDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", ProviderSymbol: "BTCUSDT", SeriesTag: "venue:binance"},
-		{SubjectID: "ETH-USDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", ProviderSymbol: "ETHUSDT", SeriesTag: "venue:binance"},
-	})
-	require.NoError(t, err)
-	_, _, err = db.Tasks().ReplaceTaskSeries(ctx, "crypto", "task-disabled", []domain.TaskSeries{{
-		SubjectID: "SOL-USDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot",
-		ProviderSymbol: "SOLUSDT", SeriesTag: "venue:binance|market:spot|source:spot_http",
-	}})
-	require.NoError(t, err)
 	metadata := &taskResultMetadataFake{datasets: make(map[string]*storagepb.Dataset), views: make(map[string]*storagepb.View), indexedTo: make(map[string]string)}
 	for taskID, ids := range map[string]taskresult.IDs{
 		"task-active":   activeIDs,
@@ -95,20 +80,6 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	require.EqualValues(t, 15, entry.GetAllowedLatenessSeconds())
 	require.Equal(t, now.Add(-time.Minute).Format(time.RFC3339), entry.GetViewLastDataTime())
 	require.NotEmpty(t, entry.GetObservedAt())
-	require.True(t, entry.GetCanaryCandidateAvailable())
-	require.Equal(t, "BTC-USDT", entry.GetSubjectId())
-	require.Equal(t, "BTCUSDT", entry.GetProviderSymbol())
-	require.Equal(t, "binance", entry.GetProvider())
-	require.Equal(t, "spot_http", entry.GetSourceId())
-	require.Equal(t, "spot", entry.GetMarketType())
-	require.Equal(t, "venue:binance|market:spot|source:spot_http", entry.GetSeriesTag())
-	require.Equal(t, uint32(0), entry.GetSeriesIndex())
-	require.NotEmpty(t, entry.GetSeriesHash())
-	require.Equal(t, uint32(1), entry.GetExpectedCount())
-	require.Equal(t, []string{"high", "open"}, entry.GetOutputFields())
-	resample := first.GetEntries()[1]
-	require.False(t, resample.GetCanaryCandidateAvailable(), "multiple series must not be exposed as one canary candidate")
-	require.Empty(t, resample.GetSubjectId())
 	concurrent, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 2}})
 	require.NoError(t, err)
 	require.NotEqual(t, first.GetSnapshotId(), concurrent.GetSnapshotId())
@@ -121,10 +92,8 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	require.Len(t, second.GetEntries(), 1)
 	require.Equal(t, "task-disabled", second.GetEntries()[0].GetTaskId())
 	require.False(t, second.GetEntries()[0].GetEnabled())
-	require.True(t, second.GetEntries()[0].GetOwnershipVerified())
-	require.True(t, second.GetEntries()[0].GetCanaryCandidateAvailable(), "disabled task ownership and singleton series remain verifiable")
-	require.Equal(t, "SOL-USDT", second.GetEntries()[0].GetSubjectId())
-	require.Equal(t, []string{"close"}, second.GetEntries()[0].GetOutputFields())
+	require.False(t, second.GetEntries()[0].GetOwnershipVerified(), "停用任务不检查结果归属")
+	require.Equal(t, "pending", second.GetEntries()[0].GetResultStatus())
 	service.inventorySnapshotMu.Lock()
 	_, firstSnapshotRetained := service.inventorySnapshots[first.GetSnapshotId()]
 	service.inventorySnapshotMu.Unlock()

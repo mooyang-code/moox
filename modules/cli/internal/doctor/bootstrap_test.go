@@ -2,11 +2,13 @@ package doctor
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/stretchr/testify/require"
 )
@@ -50,14 +52,17 @@ func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
 	manifest, err := core.LoadEmbeddedManifest()
 	require.NoError(t, err)
 	pathCalls, processCalls := 0, 0
+	releaseRoot, deployRoot := t.TempDir(), t.TempDir()
+	var pidPath string
 	runner := &bootstrapRunner{
 		manifest:    manifest,
 		deployments: map[string]Deployment{"factor-mgr": {ComponentID: "factor-mgr", Status: "enabled"}},
 		options: BootstrapOptions{
 			NodeID:        "node-a",
-			ReleaseRoot:   t.TempDir(),
+			ReleaseRoot:   releaseRoot,
+			DeployRoot:    deployRoot,
 			ProbeWritable: func(context.Context, string, string) error { pathCalls++; return nil },
-			ProcessAlive:  func(string) bool { processCalls++; return true },
+			ProcessAlive:  func(path string) bool { processCalls++; pidPath = path; return true },
 		},
 	}
 	pathResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.path_permissions:factor-mgr@node-a"}, nil)
@@ -66,6 +71,33 @@ func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
 	require.Equal(t, core.StatusPass, processResult.Status)
 	require.Positive(t, pathCalls)
 	require.Equal(t, 1, processCalls)
+	// 进程记录在 <部署根>/run/pids/<组件>.json，不在发布目录里。
+	require.Equal(t, filepath.Join(deployRoot, "run", "pids", "factor-mgr.json"), pidPath)
+}
+
+func TestBootstrapServiceProcessReadsRuntimeRecord(t *testing.T) {
+	manifest, err := core.LoadEmbeddedManifest()
+	require.NoError(t, err)
+	deployRoot := t.TempDir()
+	runner := &bootstrapRunner{
+		manifest:    manifest,
+		deployments: map[string]Deployment{"factor-mgr": {ComponentID: "factor-mgr", Status: "enabled"}},
+		options:     BootstrapOptions{NodeID: "node-a", ReleaseRoot: t.TempDir(), DeployRoot: deployRoot},
+	}
+	spec := core.CheckSpec{ID: "bootstrap.service_autostart:factor-mgr@node-a"}
+	// 没有进程记录：提示进程不在。
+	require.Equal(t, core.StatusWarn, runner.run(context.Background(), spec, nil).Status)
+
+	record := unitruntime.PIDRecordPath(deployRoot, "factor-mgr")
+	require.NoError(t, os.MkdirAll(filepath.Dir(record), 0o700))
+	require.NoError(t, os.WriteFile(record, []byte(fmt.Sprintf(`{"pid":%d,"start_ticks":"1"}`, os.Getpid())), 0o600))
+	require.Equal(t, core.StatusPass, runner.run(context.Background(), spec, nil).Status)
+
+	// 没有部署根也读不到 runtime.json 时不假装检查过。
+	runner.options.DeployRoot = ""
+	result := runner.run(context.Background(), spec, nil)
+	require.Equal(t, core.StatusWarn, result.Status)
+	require.Contains(t, result.Summary, "部署根")
 }
 
 func TestReporterFailureGateUsesRecentErrorTimestamp(t *testing.T) {

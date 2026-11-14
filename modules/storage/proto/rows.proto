@@ -51,13 +51,6 @@ message RowFieldValues {
 	map<string, TypedValue> attributes = 3;
 }
 
-// RowsUpserted 是一个数据集的一批行写入：commit_id 的内容摘要按它的规范编码计算。
-message RowsUpserted {
-  string space_id = 1;
-  string dataset_id = 2;
-  repeated RowFieldUpsert rows = 3;
-}
-
 // Query key views are retained as read-only query contracts. Pebble writes
 // use RowKey above and never accept these request wrappers.
 message TimeSeriesKey {

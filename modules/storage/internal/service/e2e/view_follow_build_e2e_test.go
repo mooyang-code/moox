@@ -68,7 +68,7 @@ func TestFollowSkipsReadyDuringInitialBuild(t *testing.T) {
 		for i, subject := range factor.subjects {
 			rows[i] = readyBenchRow(factor, subject, period, round)
 		}
-		writeRowsInBatches(t, ctx, env, factor, rows, fmt.Sprintf("build-%d", period.Unix()))
+		writeRowsInBatches(t, ctx, env, factor, rows)
 		reportProducerCompleted(t, ctx, env, factor, period, factor.subjects, fmt.Sprintf("build-cause-%d", period.Unix()))
 	}
 	during := env.Watcher().Expect(factor.viewID, readyBenchBase.Unix())
@@ -102,7 +102,7 @@ func TestFollowRebuildsAfterGap(t *testing.T) {
 		for i, subject := range kline.subjects {
 			rows[i] = readyBenchRow(kline, subject, period, round)
 		}
-		writeRowsInBatches(t, ctx, env, kline, rows, "")
+		writeRowsInBatches(t, ctx, env, kline, rows)
 	}
 	write(readyBenchBase, 0)
 	env.WaitApplied(t, ctx, kline.viewID)
@@ -152,7 +152,7 @@ func TestIdleViewSurvivesChangeLogCleanup(t *testing.T) {
 	}
 	for i := 0; i < 5; i++ {
 		row := readyBenchRow(busy, busy.subjects[0], readyBenchBase.Add(time.Duration(i)*readyBenchStep), i)
-		writeRowsInBatches(t, ctx, env, busy, []*pb.RowFieldUpsert{row}, "")
+		writeRowsInBatches(t, ctx, env, busy, []*pb.RowFieldUpsert{row})
 	}
 	head, err := env.store.ChangeCursor()
 	if err != nil {
@@ -173,7 +173,7 @@ func TestIdleViewSurvivesChangeLogCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := readyBenchRow(idle, idle.subjects[0], readyBenchBase, 0)
-	writeRowsInBatches(t, ctx, env, idle, []*pb.RowFieldUpsert{row}, "")
+	writeRowsInBatches(t, ctx, env, idle, []*pb.RowFieldUpsert{row})
 	env.WaitApplied(t, ctx, idle.viewID)
 	requireViewRows(t, ctx, env, idle.viewID, readyBenchBase, readyBenchBase.Add(readyBenchStep), 1)
 	if after := env.WaitBuilt(t, ctx, idle.viewID); after.GetGeneration() != before.GetGeneration() {
@@ -267,7 +267,7 @@ func writeGapPeriod(t *testing.T, env *followEnv, dataset readyBenchDataset, per
 	for i, subject := range dataset.subjects {
 		rows[i] = readyBenchRow(dataset, subject, period, round)
 	}
-	writeRowsInBatches(t, context.Background(), env, dataset, rows, "")
+	writeRowsInBatches(t, context.Background(), env, dataset, rows)
 }
 
 // waitRebuilt 等 View 重建好（建成序号变化）并确认断档前后两期的行都在。
@@ -387,7 +387,7 @@ func TestRecreatedViewDoesNotReuseOldIndex(t *testing.T) {
 		for i, subject := range kline.subjects {
 			rows[i] = readyBenchRow(kline, subject, period, round)
 		}
-		writeRowsInBatches(t, ctx, env, kline, rows, "")
+		writeRowsInBatches(t, ctx, env, kline, rows)
 	}
 	write(readyBenchBase, 0)
 	env.WaitApplied(t, ctx, kline.viewID)

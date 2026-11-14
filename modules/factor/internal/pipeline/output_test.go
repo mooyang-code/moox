@@ -111,9 +111,8 @@ func TestWriteBatchesRows(t *testing.T) {
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
 	require.NoError(t, runner.Write(context.Background(), Plan{Set: domain.FactorTask{TaskID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), rows, 1000))
 	require.Len(t, store.writeCalls, 3)
-	require.NotEqual(t, store.writeCalls[0].commitID, store.writeCalls[1].commitID)
-	require.NotEqual(t, store.writeCalls[1].commitID, store.writeCalls[2].commitID)
-	require.Equal(t, store.writeCalls[0].commitID, storageio.CommitID("set", 10000, rows[:1000]))
+	require.Len(t, store.writeCalls[0].rows, 1000)
+	require.Len(t, store.writeCalls[2].rows, 500)
 }
 
 func TestWriteRetriesTransientThenReturnsErrInfra(t *testing.T) {
@@ -187,8 +186,8 @@ func successfulComputation(factor domain.FactorDef, columns []string, rows [][]a
 type outputStore struct {
 	writeErr   error
 	writeCalls []struct {
-		spaceID, datasetID, commitID string
-		rows                         []storageio.ResultRow
+		spaceID, datasetID string
+		rows               []storageio.ResultRow
 	}
 	markers []storageio.PeriodMarker
 }
@@ -199,11 +198,11 @@ func (*outputStore) DatasetColumns(context.Context, string, string) ([]string, e
 func (*outputStore) ReadWindow(context.Context, storageio.ReadRequest) (map[string]*storageio.Frame, error) {
 	return nil, nil
 }
-func (s *outputStore) WriteRows(_ context.Context, spaceID, datasetID, commitID string, rows []storageio.ResultRow) error {
+func (s *outputStore) WriteRows(_ context.Context, spaceID, datasetID string, rows []storageio.ResultRow) error {
 	s.writeCalls = append(s.writeCalls, struct {
-		spaceID, datasetID, commitID string
-		rows                         []storageio.ResultRow
-	}{spaceID, datasetID, commitID, append([]storageio.ResultRow(nil), rows...)})
+		spaceID, datasetID string
+		rows               []storageio.ResultRow
+	}{spaceID, datasetID, append([]storageio.ResultRow(nil), rows...)})
 	return s.writeErr
 }
 func (s *outputStore) ReportComputed(_ context.Context, marker storageio.PeriodMarker) error {

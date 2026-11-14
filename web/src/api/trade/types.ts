@@ -250,7 +250,6 @@ export interface LogicalAccountTarget {
   session_id?: string;
   strategy_id?: string;
   bar_end_time?: number | string;
-  effective_at?: number | string;
   valid_until?: number | string;
 }
 

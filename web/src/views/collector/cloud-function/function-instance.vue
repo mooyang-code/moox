@@ -210,9 +210,6 @@
             <a-descriptions-item label="任务指纹">
               {{ timerMetadataText("assignment_hash") }}
             </a-descriptions-item>
-            <a-descriptions-item label="DNS 指纹">
-              {{ timerMetadataText("dns_hash") }}
-            </a-descriptions-item>
             <a-descriptions-item label="最近协调时间" :span="2">
               {{ timerDateTimeText() }}
             </a-descriptions-item>

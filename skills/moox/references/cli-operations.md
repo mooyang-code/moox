@@ -33,7 +33,7 @@ Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行；�
 因子定义与因子任务解耦：`moox-cli factor create` 只创建定义，`factor member add` 才把它作为 disabled 成员加入因子任务，
 `factor member enable` 启用成员（见 [`factor-dsl.md`](factor-dsl.md)）。`moox-cli setup factors` 从 `moox.toml` 的 `[[factors.definitions]]` 与 `[[factors.tasks]]`（成员内嵌在任务的 `members` 里）依次补齐定义、任务和成员，
 重复执行只补缺不删除，逐项报告已存在 / 新建 / 冲突并打印每个成员的成员键与列名；配置里已去掉的成员只报告，不自动移除。成员键与列名的规则见 [`factor-dsl.md`](factor-dsl.md)。
-`moox-factor-mgr-cli`（因子管理主机上的本地工具）另有 `init`、`import`、`import-catalog`、`recalc`、`status` 和 `purge-dataset`，只在没有对应 `moox-cli` 命令时使用；
+`moox-factor-mgr-cli`（因子管理主机上的本地工具）另有 `import`、`import-catalog`、`recalc`、`status` 和 `purge-dataset`，只在没有对应 `moox-cli` 命令时使用；
 `purge-dataset --space <空间> --dataset <数据集> --yes` 用因子管理端自己的网关身份删除一个因子结果数据集（行和元数据，不可恢复）：
 只用于清理没有因子任务引用的孤立结果数据集（例如重建因子库后遗留的旧结果），仍被因子任务引用的会被拒绝。
 

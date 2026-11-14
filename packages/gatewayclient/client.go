@@ -23,7 +23,6 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient/relay"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/wirecompress"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
@@ -361,10 +360,6 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Invoke(ctx context.Context, service, method string, req, rsp interface{}) error {
-	// 字典按空间选择：请求顶层带 space_id 的直接用；顶层没有的调用点自行用 wirecompress.WithSpace 指定。
-	if space := wirecompress.SpaceOf(ctx, req); space != "" {
-		ctx = wirecompress.WithSpace(ctx, space)
-	}
 	body, err := codec.Marshal(c.config.Serialization, req)
 	if err != nil {
 		return err

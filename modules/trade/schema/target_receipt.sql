@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS t_logical_account_target_receipts (
     c_session_id TEXT NOT NULL DEFAULT '',
     c_strategy_id TEXT NOT NULL DEFAULT '',
     c_bar_end_time INTEGER NOT NULL DEFAULT 0,
-    c_effective_at INTEGER NOT NULL DEFAULT 0,
     c_valid_until INTEGER NOT NULL DEFAULT 0,
     c_request_hash TEXT NOT NULL,
     c_signal_time INTEGER NOT NULL,
@@ -30,7 +29,7 @@ CREATE TABLE IF NOT EXISTS t_logical_account_target_receipts (
     CHECK ((c_instance_id = '' AND c_session_id = '') OR
            (c_instance_id <> '' AND c_session_id <> '' AND
             c_strategy_id <> '' AND c_bar_end_time > 0 AND
-            c_effective_at = c_bar_end_time AND c_valid_until > c_effective_at)),
+            c_valid_until > c_bar_end_time)),
     CHECK (json_valid(c_weights_json)),
     CHECK (json_type(c_weights_json) = 'array'),
     CHECK (json_valid(c_reference_prices_json)),

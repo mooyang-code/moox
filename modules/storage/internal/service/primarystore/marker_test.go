@@ -30,7 +30,7 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 		Key:    &pb.RowKey{SpaceId: "quant", DatasetId: "result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: 1}}}},
 	}
-	_, err = store.UpsertFields(ctx, "quant", "result", "", []*pb.RowFieldUpsert{row})
+	err = store.UpsertFields(ctx, "quant", "result", []*pb.RowFieldUpsert{row})
 	require.NoError(t, err)
 	var eventID string
 	for attempt := 0; attempt < 2; attempt++ {

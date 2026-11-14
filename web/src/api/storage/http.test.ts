@@ -31,10 +31,8 @@ describe("Storage HTTP facade", () => {
 
     expect(mocks.post).toHaveBeenCalledWith(
       "/api/admin/storage/ListDataSources",
-      expect.objectContaining({
-        auth_info: expect.objectContaining({ app_id: "moox_frontend" }),
-        space_id: "space-1"
-      })
+      // 调用方身份由 Admin 网关写入，前端不带 auth_info
+      { space_id: "space-1" }
     );
   });
 

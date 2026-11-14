@@ -43,7 +43,7 @@ func TestPlanValidateRejectsOutOfRangeStandby(t *testing.T) {
 func TestPlanWithStandbyAndConnReuseSurvivesEncodeDecode(t *testing.T) {
 	plan := testPlan()
 	plan.Fetch.StandbyMS, plan.Fetch.StandbyHourOnly, plan.Fetch.ConnReuse = 800, true, true
-	encoded, err := EncodePlan("crypto", plan)
+	encoded, err := EncodePlan(plan)
 	require.NoError(t, err)
 	decoded, err := DecodePlan(encoded)
 	require.NoError(t, err)

@@ -426,12 +426,9 @@ func TestExecuteRuntimeConfigSkipsUnchangedEnvironmentUpdate(t *testing.T) {
 	environment["MOOX_CODE_PACKAGE_ID"] = "pkg"
 	environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "assignment"
 	environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"] = "1"
-	environment["MOOX_MARKET_FETCH_DNS_HASH"] = "dns"
-	environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"] = "2026-08-04T01:00:00Z"
 	environment["MOOX_MARKET_FETCH_MARKET_TYPE"] = "spot"
 	environment["MOOX_MARKET_FETCH_DATASET_ID"] = "bars"
 	environment["MOOX_MARKET_FETCH_FREQUENCY"] = "1m"
-	environment["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"] = `{"api.binance.com":["203.0.113.1"]}`
 	fake := &fakeSCFClient{currentEnvironment: environment, currentTimeout: 60}
 	svc := &Service{
 		catalog:            catalog,

@@ -179,7 +179,7 @@
             </div>
             <div class="readonly-summary__row">
               <span class="readonly-summary__label">{{
-                taskFieldLabel(editor.data_type === "kline_resample" ? "target_frequency" : "intervals", "频率")
+                taskFieldLabel(editor.data_type === "kline_resample" ? "target_frequency" : "frequency", "频率")
               }}</span>
               <span>{{ frequencyValue || "-" }}</span>
             </div>
@@ -202,7 +202,7 @@
                   field="frequency"
                   :label="
                     taskFieldLabel(
-                      editor.data_type === 'kline_resample' ? 'target_frequency' : 'intervals',
+                      editor.data_type === 'kline_resample' ? 'target_frequency' : 'frequency',
                       editor.data_type === 'kline_resample' ? '目标频率' : '采集频率'
                     )
                   "
@@ -938,7 +938,7 @@ const detailDependents = computed(() =>
   detailData.value ? sourceTasks.value.filter(task => stringParam(task, "source_task_id") === detailData.value?.task_id) : []
 );
 const frequencyOptions = computed(() => {
-  const field = taskTypeFields.value.find(item => item.field_key === "intervals");
+  const field = taskTypeFields.value.find(item => item.field_key === "frequency");
   const configuredOptions = field?.field_options?.options;
   if (!Array.isArray(configuredOptions)) return [];
   return configuredOptions
