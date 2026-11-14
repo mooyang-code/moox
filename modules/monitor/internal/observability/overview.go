@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
@@ -52,6 +53,8 @@ type HostStatus struct {
 	FilesystemTotalBytes, FilesystemUsedBytes                      uint64
 	FilesystemMountpoint                                           string
 	MemoryAvailable, DiskAvailable, MetricsAvailable, CPUAvailable bool
+	// Processes 是最新一次采样里占用最高的进程，CPU、内存检查超限时随告警带出。
+	Processes []alerttext.Process
 }
 
 type DatasetFrequencyStatus struct {
@@ -431,6 +434,30 @@ func (b Builder) buildViewFollowLagHealth(ctx context.Context, spaceID string, n
 	}}, nil
 }
 
+// HostFacts 只取主机类检查需要的事实：部署拓扑、各采集器最近一次上报与最新快照、主机网关信号。
+// 这些都在 Monitor 自己的库和内存里，不读 Storage、不查服务指标：别的机器宕机或 Storage 超时都不影响它。
+func (b Builder) HostFacts(ctx context.Context) (Overview, error) {
+	now := time.Now().UTC()
+	if b.Now != nil {
+		now = b.Now().UTC()
+	}
+	out := Overview{GeneratedAt: now}
+	var err error
+	if b.Topology != nil {
+		if out.Topology, err = b.Topology.Snapshot(ctx); err != nil {
+			return Overview{}, err
+		}
+	}
+	out.TopologyKnown = out.Topology != nil
+	if out.Hosts, err = b.buildHosts(ctx, now); err != nil {
+		return Overview{}, err
+	}
+	if out.GatewaySignals, err = b.gatewaySignals(ctx, now); err != nil {
+		return Overview{}, err
+	}
+	return out, nil
+}
+
 func (b Builder) buildHosts(ctx context.Context, now time.Time) ([]HostStatus, error) {
 	if b.Hosts == nil {
 		return []HostStatus{}, nil
@@ -449,6 +476,7 @@ func (b Builder) buildHosts(ctx context.Context, now time.Time) ([]HostStatus, e
 		item.LastSeenAt, _ = time.Parse(time.RFC3339Nano, row.LastSeenAt)
 		if snapshot := row.Snapshot; snapshot != nil {
 			item.MetricsAvailable = true
+			item.Processes = hostmetrics.TopProcesses(snapshot)
 			item.CPUCores = snapshot.GetCpu().GetLogicalCores()
 			if snapshot.GetCpu() != nil && snapshot.GetCpu().GetUsageAvailable() {
 				item.CPUAvailable = true

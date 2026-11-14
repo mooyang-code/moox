@@ -101,10 +101,9 @@ def main():
     else:
         print(f"共 {stale} 个；清理定时器每 5 分钟跑一次，持续“不再检查”超过 1 小时且没有未恢复告警的会被清掉。")
 
-    section("检查已不存在的默认告警规则（主机规则除外）")
+    section("检查已不存在的默认告警规则")
     orphans = [r[0] for r in db.execute(
-        "SELECT c_rule_id FROM t_monitor_alert_rules WHERE c_check_id NOT IN (SELECT c_check_id FROM t_monitor_checks) "
-        "AND c_check_id NOT LIKE 'host:%'"
+        "SELECT c_rule_id FROM t_monitor_alert_rules WHERE c_check_id NOT IN (SELECT c_check_id FROM t_monitor_checks)"
     )]
     print("没有。" if not orphans else "\n".join(f"- {r}" for r in orphans))
     if orphans:

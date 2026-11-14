@@ -22,7 +22,7 @@ func TestSessionWarmUpResultIsWrittenOnce(t *testing.T) {
 	}
 	attachAndEnable(t, repo, "pool", "session-pool", []byte(resolved))
 	session, err := repo.GetSession(ctx, "session-pool")
-	if err != nil || session.MembersJSON != poolMembersJSON || session.WarmedThrough != nil || session.WarmState != "" {
+	if err != nil || session.MembersJSON != poolMembersJSON || session.WarmedThrough != nil {
 		t.Fatalf("预热前的池会话不符：%+v %v", session, err)
 	}
 	pending, err := repo.PendingWarmSessions(ctx)
@@ -30,16 +30,21 @@ func TestSessionWarmUpResultIsWrittenOnce(t *testing.T) {
 		t.Fatalf("只有启用的池会话需要预热（非池会话没有成员快照）：%+v %v", pending, err)
 	}
 	through := testNow.Add(5 * time.Hour)
-	written, err := repo.SetSessionWarmed(ctx, "session-pool", `{"targets":{"A|spot":"0.5"}}`, through)
+	written, err := repo.SetSessionWarmed(ctx, "session-pool", `{"targets":{"A|spot":"0.5"}}`, through, testNow)
 	if err != nil || !written {
 		t.Fatalf("第一次写入应成功：%v %v", written, err)
 	}
-	if again, err := repo.SetSessionWarmed(ctx, "session-pool", `{}`, through.Add(time.Hour)); err != nil || again {
+	if again, err := repo.SetSessionWarmed(ctx, "session-pool", `{}`, through.Add(time.Hour), testNow); err != nil || again {
 		t.Fatalf("已有预热结果时不再写入（比较交换）：%v %v", again, err)
 	}
 	session, err = repo.GetSession(ctx, "session-pool")
-	if err != nil || session.WarmedThrough == nil || !session.WarmedThrough.Equal(through) || session.WarmState != `{"targets":{"A|spot":"0.5"}}` {
+	if err != nil || session.WarmedThrough == nil || !session.WarmedThrough.Equal(through) {
 		t.Fatalf("预热结果不符：%+v %v", session, err)
+	}
+	// 预热出的状态与预热终点同事务写进实例的状态行；比较交换失败的那次写入没有动它。
+	state, found, err := repo.GetState(ctx, "pool")
+	if err != nil || !found || state.SessionID != "session-pool" || state.DSLHash != testHash || !state.BarEndTime.Equal(through) || string(state.StateJSON) != `{"targets":{"A|spot":"0.5"}}` {
+		t.Fatalf("预热出的状态不符：%+v found=%v err=%v", state, found, err)
 	}
 	if pending, _ := repo.PendingWarmSessions(ctx); len(pending) != 0 {
 		t.Fatalf("预热完成后不再待预热：%+v", pending)
@@ -47,14 +52,17 @@ func TestSessionWarmUpResultIsWrittenOnce(t *testing.T) {
 	if err := repo.CloseSession(ctx, "session-plain", testNow); err != nil {
 		t.Fatal(err)
 	}
-	if written, err := repo.SetSessionWarmed(ctx, "session-plain", `{}`, through); err != nil || written {
+	if written, err := repo.SetSessionWarmed(ctx, "session-plain", `{}`, through, testNow); err != nil || written {
 		t.Fatalf("会话已关闭或没有成员快照时不写入：%v %v", written, err)
+	}
+	if _, found, _ := repo.GetState(ctx, "plain"); found {
+		t.Fatal("没有写入预热结果时不应留下状态行")
 	}
 	// 成员快照必须是非空数组。
 	if err := repo.OpenSession(ctx, Session{SessionID: "bad", InstanceID: "pool", DSLHash: testHash, ResolvedJSON: resolved, MembersJSON: `{}`, CreatedAt: testNow}, "name: demo"); err == nil {
 		t.Fatal("members_json 不是数组应被拒绝")
 	}
-	if _, err := repo.SetSessionWarmed(ctx, "session-pool", "", through); err == nil {
+	if _, err := repo.SetSessionWarmed(ctx, "session-pool", "", through, testNow); err == nil {
 		t.Fatal("预热结果缺状态应被拒绝")
 	}
 }

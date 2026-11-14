@@ -132,17 +132,20 @@ func (h *Handler) evaluatePool(ctx context.Context, p *period, key string, ready
 }
 
 // carriedSummary 是策略池 skipped 记录里写的摘要：成员的状态与原因（就绪判断阶段各成员的原因；没有逐成员原因时所有成员都记这条跳过原因），
-// 账本与比例沿用上期。普通策略写空对象。
-func (h *Handler) carriedSummary(p *period, state json.RawMessage, reason, detail string) (json.RawMessage, error) {
-	empty := json.RawMessage(`{}`)
+// 账本与比例取实例当前的规则状态（跳过的期不动它）。普通策略写空对象；池的状态读不到或无法解析时按空状态写摘要。
+func (h *Handler) carriedSummary(ctx context.Context, p *period, reason, detail string) (json.RawMessage, error) {
 	rt := p.runtime
 	if rt.pool == nil {
-		return empty, nil
+		return json.RawMessage(`{}`), nil
 	}
 	var previous engine.State
-	if len(state) > 0 {
-		if err := json.Unmarshal(state, &previous); err != nil {
-			return nil, err
+	row, found, err := h.Store.GetState(ctx, p.instance.InstanceID)
+	if err != nil {
+		return nil, err
+	}
+	if found && row.SessionID == rt.sessionID {
+		if err := json.Unmarshal(row.StateJSON, &previous); err != nil {
+			previous = engine.State{}
 		}
 	}
 	results := p.memberResults
@@ -156,27 +159,6 @@ func (h *Handler) carriedSummary(p *period, state json.RawMessage, reason, detai
 		return nil, err
 	}
 	return json.Marshal(engine.Summary{Rules: map[string]engine.RuleSummary{}, Notes: []string{detail}, Pool: summary})
-}
-
-// carriedState 是 skipped 记录里写的规则状态：策略池的 skipped 记录也带完整状态（最近一条带状态的结果，没有时是预热完成时的状态），
-// 不写空对象，状态才不会因为跳过的期而缺口；普通策略仍写空对象（它的状态从最近一条带状态的结果恢复）。
-func (h *Handler) carriedState(ctx context.Context, p *period) (json.RawMessage, error) {
-	empty := json.RawMessage(`{}`)
-	rt := p.runtime
-	if rt.pool == nil {
-		return empty, nil
-	}
-	last, found, err := h.Store.LatestState(ctx, p.instance.InstanceID, rt.sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if found {
-		return last.RuleStatesJSON, nil
-	}
-	if len(rt.pool.warmState) > 0 && string(rt.pool.warmState) != "{}" {
-		return rt.pool.warmState, nil
-	}
-	return empty, nil
 }
 
 // degradedMembers 返回带需要人工处理的原因的池成员（成员 id：原因）：成员本期没通过的原因在 degradingReasons 里。普通策略与没有这类成员时为空。

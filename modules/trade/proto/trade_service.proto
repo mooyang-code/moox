@@ -971,13 +971,15 @@ message BlockInstrumentReq {
   string reason = 4;
   // 来源事件 ID，只用于审计。
   string event_id = 5;
+  // 写入者的标识（事件中心的下架处理传它的执行记录 ID）。已在名单里时保留第一个写入者；可以为空。
+  string owner = 6;
 }
 message BlockInstrumentRsp {
   common.RetInfo ret_info = 1;
   // true 表示 Trade 无此标的（用户没开通对应市场的账户）：照常写入名单，不算失败。
   bool instrument_unknown = 2;
-  // false 表示标的已经在名单里，没有改动：已在名单里时保留第一个写入者的原因（事件中心依赖这个跨模块约定，
-  // 演练按名单原因里带的执行记录 ID 判断这一项是不是自己写的，不能靠 created——写名单的响应丢了再重试拿到的就是 false）。
+  // false 表示标的已经在名单里，没有改动（原因、写入者都保留第一次写入的）。写名单的响应丢了再重试拿到的也是 false，
+  // 所以“这一项是不是自己写的”要看名单项的 owner，不能看它。
   bool created = 3;
 }
 
@@ -999,11 +1001,12 @@ message BlockedInstrument {
   // 写入时能从标的表查到的内部标的 ID 和基础资产，只用于展示和审计，查不到为空。
   string instrument_id = 4;
   string base_asset = 5;
-  // 写入名单时的原因。同一个标的重复写入时保留第一个写入者的原因，不会被后来者覆盖（事件中心依赖这个跨模块约定：
-  // 原因里带着写入者的执行记录 ID，据此判断这一项是谁写的）。
+  // 写入名单时的原因，只用于展示和审计。
   string reason = 6;
   string source_event_id = 7;
   int64 blocked_at = 8;
+  // 写入者的标识：第一个把它写进名单的调用方传的 owner，后来的重复写入不会覆盖；没传为空。
+  string owner = 9;
 }
 message ListBlockedInstrumentsReq {}
 message ListBlockedInstrumentsRsp {

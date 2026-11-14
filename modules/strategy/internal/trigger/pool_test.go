@@ -112,7 +112,7 @@ func (h *poolHarness) warm(through time.Time, state string) {
 	if state == "" {
 		state = "{}"
 	}
-	written, err := h.repo.SetSessionWarmed(context.Background(), h.session, state, through)
+	written, err := h.repo.SetSessionWarmed(context.Background(), h.session, state, through, h.now)
 	if err != nil || !written {
 		h.t.Fatalf("写入预热结果：written=%v err=%v", written, err)
 	}
@@ -134,11 +134,16 @@ func (h *poolHarness) health() string {
 	return instance.Health
 }
 
-func (h *poolHarness) state(result store.Result) engine.State {
+// state 返回实例当前的规则状态（每个实例一行，与结果同事务写入）。
+func (h *poolHarness) state() engine.State {
 	h.t.Helper()
+	row, found, err := h.repo.GetState(context.Background(), "i1")
+	if err != nil || !found {
+		h.t.Fatalf("实例没有规则状态：found=%v err=%v", found, err)
+	}
 	var state engine.State
-	if err := json.Unmarshal(result.RuleStatesJSON, &state); err != nil {
-		h.t.Fatalf("规则状态无法解析：%s %v", result.RuleStatesJSON, err)
+	if err := json.Unmarshal(row.StateJSON, &state); err != nil {
+		h.t.Fatalf("规则状态无法解析：%s %v", row.StateJSON, err)
 	}
 	return state
 }
@@ -173,9 +178,9 @@ func TestPoolEvaluatesEveryMemberAndAllocates(t *testing.T) {
 	if got := targetsOf(t, result); got["A"] != "0.5" || got["B"] != "0.5" || len(got) != 2 {
 		t.Fatalf("池目标不符：%v", got)
 	}
-	state := h.state(result)
+	state := h.state()
 	if len(state.Members) != 2 || len(state.Members["a"].Rules["r"].Held) != 2 || len(state.Pool) == 0 {
-		t.Fatalf("状态要带成员状态与池状态：%s", result.RuleStatesJSON)
+		t.Fatalf("状态要带成员状态与池状态：%+v", state)
 	}
 	poolState, err := pool.DecodeState(state.Pool)
 	if err != nil || !poolState.Started || len(poolState.Ledgers) != 2 || poolState.Ratios["a"] != "0.6" {
@@ -247,7 +252,7 @@ func TestPoolMemberMissingFactorDoesNotBlockThePool(t *testing.T) {
 	if h.health() != store.HealthOK {
 		t.Fatalf("缺因子不需要人工处理，不应标 degraded：%s", h.health())
 	}
-	state := h.state(second)
+	state := h.state()
 	if len(state.Members["b"].Rules["r"].Held) != 2 {
 		t.Fatalf("没通过的成员状态原样保留：%+v", state.Members["b"])
 	}
@@ -284,8 +289,8 @@ func TestPoolMemberNeedingManualFixMarksInstanceDegraded(t *testing.T) {
 	}
 }
 
-// 所有成员都没通过时池 skipped，状态也写完整（预热完成时的状态也算）；之后正常求值时从它接着算。
-func TestPoolSkippedRecordCarriesFullState(t *testing.T) {
+// 所有成员都没通过时池 skipped，实例的规则状态不动（这里是预热完成时的状态）；之后正常求值时从它接着算。
+func TestPoolSkippedRecordKeepsState(t *testing.T) {
 	h := newPoolHarness(t, poolDSL("{a: 0.5, b: 0.5}"), standardMembers(), nil)
 	// 预热状态：成员 a 持有 {A: 1}，池目标 {A: 0.5}。
 	warmState := engine.State{Targets: map[string]string{"A|spot": "0.5"}, Members: map[string]engine.State{"a": {Targets: map[string]string{"A|spot": "1"}}}}
@@ -297,22 +302,22 @@ func TestPoolSkippedRecordCarriesFullState(t *testing.T) {
 	if skipped.Status != store.StatusSkipped || skipped.SkipReason != "factor_skipped" {
 		t.Fatalf("所有成员都没通过：%+v", skipped)
 	}
-	if string(skipped.RuleStatesJSON) == "{}" {
-		t.Fatal("池的 skipped 记录要写完整状态，不能是空对象")
+	if got := h.state(); got.Targets["A|spot"] != "0.5" || got.Members["a"].Targets["A|spot"] != "1" {
+		t.Fatalf("跳过的期不应动预热出的状态：%+v", got)
 	}
-	if got := h.state(skipped); got.Targets["A|spot"] != "0.5" || got.Members["a"].Targets["A|spot"] != "1" {
-		t.Fatalf("skipped 记录应带预热状态：%s", skipped.RuleStatesJSON)
+	if row, _, _ := h.repo.GetState(context.Background(), "i1"); !row.BarEndTime.Equal(barStart(1)) {
+		t.Fatalf("跳过的期不推进状态所在的期：%s", row.BarEndTime)
 	}
 	// 摘要也写成员状态（池详情里这些期不缺）：每个成员都记没通过的原因。
 	if pooled := h.summary(skipped).Pool; pooled == nil || len(pooled.Members) != 2 || pooled.Members[0].Status != engine.StatusSkipped || pooled.Members[0].Reason != "factor_skipped" || pooled.Members[1].ID != "b" {
 		t.Fatalf("skipped 记录的摘要要带池的成员状态：%s", skipped.SummaryJSON)
 	}
-	// 下一期恢复：从 skipped 记录里的完整状态接着算（成员 a 的上期持有 A 仍在）。
+	// 下一期恢复：从实例的规则状态接着算（成员 a 的上期持有 A 仍在）。
 	h.now = start.Add(time.Hour)
 	h.frame(3, abcFrame(3, 2, 1))
 	expectAck(t, h.deliverWith(3, bothFactors))
 	third := h.resultAt(3)
-	if third.Status != store.StatusOK || h.state(third).Members["a"].Targets["A|spot"] == "" {
+	if third.Status != store.StatusOK || h.state().Members["a"].Targets["A|spot"] == "" {
 		t.Fatalf("恢复后的第一期：%+v", third)
 	}
 	if h.health() != store.HealthOK {

@@ -11,7 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 )
 
-func TestHostSilenceScanSurvivesMonitorRestartAndIsolatesSameNamedHosts(t *testing.T) {
+func TestHostSilenceSurvivesMonitorRestartAndIsolatesSameNamedHosts(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "monitor.db")
 	startedAt := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
@@ -48,23 +48,8 @@ func TestHostSilenceScanSurvivesMonitorRestartAndIsolatesSameNamedHosts(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	var transitions []hostmetrics.PresenceTransition
-	scanner := hostmetrics.NewSilenceScanner(
-		restartedRegistry,
-		90*time.Second,
-		hostmetrics.PresenceTransitionFunc(func(_ context.Context, transition hostmetrics.PresenceTransition) error {
-			transitions = append(transitions, transition)
-			return nil
-		}),
-	)
-	scanAt := startedAt.Add(91 * time.Second)
-	if err := scanner.Scan(ctx, scanAt); err != nil {
-		t.Fatal(err)
-	}
-	if len(transitions) != 1 || transitions[0].AgentID != "agent-a" ||
-		transitions[0].To != hostmetrics.PresenceUnreachable {
-		t.Fatalf("transitions=%+v", transitions)
-	}
+	// 重启后只凭库里的最近上报时间判断：agent-a 已超过停报时限，同名主机上的 agent-b 不受影响。
+	scanAt := startedAt.Add(hostmetrics.DefaultHostStaleAfter + time.Second)
 	agents, err := restartedRegistry.List(ctx, scanAt)
 	if err != nil {
 		t.Fatal(err)

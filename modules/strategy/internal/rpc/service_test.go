@@ -286,7 +286,7 @@ func TestStrategyDefinitionCRUD(t *testing.T) {
 	}
 }
 
-// S14：重启（新的 Service 实例）后沿用会话；重复启用不新建会话；停用再启用新建会话且状态清零。
+// S14：重启（新的 Service 实例）后沿用会话；重复启用不新建会话；停用再启用新建会话（规则状态是否沿用见 store 的 carryState）。
 func TestS14EnableIsIdempotentAndReenableCreatesSession(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
@@ -433,7 +433,7 @@ func TestS20HistoryAfterRedefinition(t *testing.T) {
 	h.createStrategy("s1", demoDSL)
 	created := h.createInstance("i1", "s1", "ftask_i1", "", true)
 	oldSession := created.GetInstance().GetSessionId()
-	result := store.Result{ResultID: "r-old", InstanceID: "i1", SessionID: oldSession, BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{"view_id":"view_factor_i1"}`), TargetsJSON: []byte(`[{"instrument_id":"BTC-USDT","target_weight":"1"}]`), RuleStatesJSON: []byte(`{}`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
+	result := store.Result{ResultID: "r-old", InstanceID: "i1", SessionID: oldSession, BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{"view_id":"view_factor_i1"}`), TargetsJSON: []byte(`[{"instrument_id":"BTC-USDT","target_weight":"1"}]`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
 	weight := "1"
 	if _, _, err := h.service.Store.CommitResult(h.ctx, store.CommitRequest{Result: result, Items: []store.ResultItem{{RuleID: "r", InstrumentID: "BTC-USDT", Stage: engine.StageWeighted, Weight: &weight}}, Now: h.now}); err != nil {
 		t.Fatal(err)
@@ -673,7 +673,7 @@ func TestGetStrategyResultFailsWhenSnapshotReadErrors(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	created := h.createInstance("i1", "s1", "ftask_i1", "", true)
-	result := store.Result{ResultID: "r1", InstanceID: "i1", SessionID: created.GetInstance().GetSessionId(), BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{}`), TargetsJSON: []byte(`[]`), RuleStatesJSON: []byte(`{}`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
+	result := store.Result{ResultID: "r1", InstanceID: "i1", SessionID: created.GetInstance().GetSessionId(), BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{}`), TargetsJSON: []byte(`[]`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
 	if _, _, err := h.service.Store.CommitResult(h.ctx, store.CommitRequest{Result: result, Now: h.now}); err != nil {
 		t.Fatal(err)
 	}
@@ -705,4 +705,39 @@ func TestStartReplaySupportsSwapAndDualTasks(t *testing.T) {
 	}
 	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SwapFeeBps: 1500})
 	requireFail(t, int32(badFee.GetRetInfo().GetCode()), badFee.GetRetInfo().GetMsg(), "swap_fee_bps")
+}
+
+// 停用后把观察实例改挂组合账户再启用：规则状态在修改实例时清空，新账户不接手原来积累的理论状态；不改实例直接再启用则沿用。
+func TestReenableAfterAccountChangeStartsWithoutRuleState(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	created := h.createInstance("i1", "s1", "ftask_i1", "", true)
+	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
+	first := created.GetInstance().GetSessionId()
+	result := store.Result{ResultID: "r1", InstanceID: "i1", SessionID: first, BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{}`), TargetsJSON: []byte(`[]`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
+	if _, _, err := h.service.Store.CommitResult(h.ctx, store.CommitRequest{Result: result, State: []byte(`{"rules":{"r":{"held":["BTC-USDT"]}}}`), Now: h.now}); err != nil {
+		t.Fatal(err)
+	}
+	// 不改实例：停用再启用沿用状态。
+	requireOK(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "停用")
+	kept := h.setEnabled("i1", true)
+	requireOK(t, int32(kept.GetRetInfo().GetCode()), kept.GetRetInfo().GetMsg())
+	if state, found, err := h.service.Store.GetState(h.ctx, "i1"); err != nil || !found || state.SessionID != kept.GetInstance().GetSessionId() || state.SessionID == first {
+		t.Fatalf("没改实例时状态应挂到新会话沿用：%+v found=%v err=%v", state, found, err)
+	}
+	// 改挂账户：状态清空。
+	requireOK(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "停用")
+	updated, err := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s1", LogicalAccountId: "acct-new"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, int32(updated.GetRetInfo().GetCode()), updated.GetRetInfo().GetMsg())
+	again := h.setEnabled("i1", true)
+	requireOK(t, int32(again.GetRetInfo().GetCode()), again.GetRetInfo().GetMsg())
+	if again.GetInstance().GetLogicalAccountId() != "acct-new" {
+		t.Fatalf("账户应已改为新账户：%+v", again.GetInstance())
+	}
+	if state, found, err := h.service.Store.GetState(h.ctx, "i1"); err != nil || found {
+		t.Fatalf("改了账户后不应沿用规则状态：%+v found=%v err=%v", state, found, err)
+	}
 }

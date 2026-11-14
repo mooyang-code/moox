@@ -30,7 +30,7 @@ func TestStockBasesAreLoadedFromStore(t *testing.T) {
 	}{{"r1", friday, store.StatusOK, ""}, {"r2", monday, store.StatusSkipped, "factor_missing"}} {
 		input, _ := json.Marshal(store.InputRecord{Views: map[string]store.ViewInput{"view_a": {}}, Bar: "1d", Calendar: "cn_stock", BarStart: item.barEnd.Add(-15 * time.Hour)})
 		result := store.Result{ResultID: item.id, InstanceID: "i1", SessionID: "i1-session", BarEndTime: item.barEnd, ValidUntil: item.barEnd.Add(48 * time.Hour), Status: item.status, SkipReason: item.reason, DSLHash: "sha256:demo",
-			InputJSON: input, TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: json.RawMessage(`{}`), SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone, CreatedAt: item.barEnd.Add(time.Minute)}
+			InputJSON: input, TargetsJSON: json.RawMessage(`[]`), SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone, CreatedAt: item.barEnd.Add(time.Minute)}
 		if _, _, err := repo.CommitResult(context.Background(), store.CommitRequest{Result: result, Now: item.barEnd.Add(time.Minute)}); err != nil {
 			t.Fatal(err)
 		}

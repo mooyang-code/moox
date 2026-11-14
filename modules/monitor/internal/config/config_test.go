@@ -110,7 +110,7 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("parse trpc config: %v", err)
 	}
-	if len(cfg.Server.Service) != 7 {
+	if len(cfg.Server.Service) != 6 {
 		t.Fatalf("service count = %d", len(cfg.Server.Service))
 	}
 	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 || cfg.Server.Service[0].Protocol != "trpc" || cfg.Server.Service[0].IP != "127.0.0.1" {

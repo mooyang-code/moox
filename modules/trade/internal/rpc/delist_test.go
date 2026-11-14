@@ -34,7 +34,7 @@ func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 
 	blocked, err := server.BlockInstrument(ctx, &tradepb.BlockInstrumentReq{
 		Exchange: tradepb.Exchange_EXCHANGE_BINANCE, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT,
-		ExchangeSymbol: "FOOUSDT", Reason: "公告下架", EventId: "evt-1",
+		ExchangeSymbol: "FOOUSDT", Reason: "公告下架", EventId: "evt-1", Owner: "exec-1",
 	})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, blocked.GetRetInfo().GetCode())
@@ -48,6 +48,7 @@ func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	require.Len(t, list.GetInstruments(), 1)
 	require.Equal(t, tradepb.Exchange_EXCHANGE_BINANCE, list.GetInstruments()[0].GetExchange())
 	require.Equal(t, "evt-1", list.GetInstruments()[0].GetSourceEventId())
+	require.Equal(t, "exec-1", list.GetInstruments()[0].GetOwner(), "写入者带回：事件中心据此判断名单项是不是自己写的")
 
 	holders, err := server.ListInstrumentHolders(ctx, &tradepb.ListInstrumentHoldersReq{
 		Exchange: tradepb.Exchange_EXCHANGE_BINANCE, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, ExchangeSymbol: "FOOUSDT",

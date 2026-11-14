@@ -7,11 +7,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
-	"github.com/mooyang-code/moox/packages/events"
 )
 
 type Builder struct {
@@ -63,10 +61,6 @@ func (b Builder) Build(ctx context.Context, spaceID string) (*Overview, error) {
 	}
 	titles := newCheckTitles(b.Checks)
 	active := make(map[incidentKey]bool)
-	for _, alert := range out.Alerts {
-		// 主机失联由主机事实投影，不在告警状态表里。
-		active[incidentKey{space: events.SystemSpaceID, check: hostmetrics.PresenceCheckID(alert.Object.AgentId)}] = true
-	}
 	if b.Alerts != nil {
 		states, err := b.Alerts.ListEnabledFiringStates(ctx, spaceID, 1501)
 		if err != nil {
@@ -82,9 +76,6 @@ func (b Builder) Build(ctx context.Context, spaceID string) (*Overview, error) {
 			}
 			out.Alerts = append(out.Alerts, alert)
 			active[incidentKey{space: state.SpaceID, check: state.CheckID}] = true
-		}
-		if err := b.decorateHostThresholds(ctx, out.Hosts); err != nil {
-			return nil, err
 		}
 		out.Incidents, err = b.incidents(ctx, spaceID, facts, active, titles, now)
 		if err != nil {
@@ -112,37 +103,6 @@ func (b Builder) Build(ctx context.Context, spaceID string) (*Overview, error) {
 	out.Summary.AlertCount = int32(len(out.Alerts))
 	out.System = projectSystem(out.Components)
 	return out, nil
-}
-
-// decorateHostThresholds 给主机补上 CPU、内存、磁盘的告警阈值，页面据此画出阈值刻度。
-func (b Builder) decorateHostThresholds(ctx context.Context, hosts []*pb.HealthHost) error {
-	rules, err := b.Alerts.ListRules(ctx, events.SystemSpaceID)
-	if err != nil {
-		return err
-	}
-	byCheck := make(map[string]domain.AlertRule, len(rules))
-	for _, rule := range rules {
-		if rule.Enabled && rule.RuleID == "default:"+rule.CheckID {
-			byCheck[rule.CheckID] = rule
-		}
-	}
-	threshold := func(agentID, metric string) float64 {
-		rule, ok := byCheck[hostmetrics.HostRuleKey(agentID, metric)]
-		if !ok {
-			return 0
-		}
-		value, _ := hostmetrics.RuleThresholds(rule)
-		return value
-	}
-	for _, host := range hosts {
-		if host.AgentId == "" {
-			continue
-		}
-		host.CpuThreshold = threshold(host.AgentId, hostmetrics.HostMetricCPU)
-		host.MemoryThreshold = threshold(host.AgentId, hostmetrics.HostMetricMemory)
-		host.DiskThreshold = threshold(host.AgentId, hostmetrics.HostMetricFilesystemUsage)
-	}
-	return nil
 }
 
 func projectFacts(facts observability.Overview) *Overview {
@@ -180,7 +140,6 @@ func projectFacts(facts observability.Overview) *Overview {
 		}
 	}
 	out.Hosts = projectHosts(facts)
-	out.Alerts = hostPresenceAlerts(facts)
 	for _, host := range out.Hosts {
 		countSummary(out.Summary, host.Status)
 	}

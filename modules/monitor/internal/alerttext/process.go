@@ -1,6 +1,7 @@
 package alerttext
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,6 +15,66 @@ type Process struct {
 	CPUPercent   float64
 	CPUAvailable bool
 	RSSBytes     uint64
+}
+
+// processJSON 是进程在告警事件内容里的写法：没有 CPU 值时不写 cpu_percent。
+type processJSON struct {
+	PID        uint32   `json:"pid"`
+	Name       string   `json:"name"`
+	RSSBytes   uint64   `json:"rss_bytes"`
+	CPUPercent *float64 `json:"cpu_percent,omitempty"`
+}
+
+func (p Process) MarshalJSON() ([]byte, error) {
+	item := processJSON{PID: p.PID, Name: p.Name, RSSBytes: p.RSSBytes}
+	if p.CPUAvailable {
+		item.CPUPercent = &p.CPUPercent
+	}
+	return json.Marshal(item)
+}
+
+func (p *Process) UnmarshalJSON(raw []byte) error {
+	var item processJSON
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return err
+	}
+	*p = Process{PID: item.PID, Name: item.Name, RSSBytes: item.RSSBytes}
+	if item.CPUPercent != nil {
+		p.CPUPercent, p.CPUAvailable = *item.CPUPercent, true
+	}
+	return nil
+}
+
+// ProcessDetail 是检查结果附带的进程排行：主机 CPU、内存检查超限时写进结果的诊断信息，
+// 告警评估把它原样记进事件内容，并在推送正文里列出前几个；页面从事件内容里读。
+type ProcessDetail struct {
+	// Metric 是产生排行的指标（cpu、memory），决定按 CPU 还是按内存排。
+	Metric       string    `json:"metric,omitempty"`
+	TopProcesses []Process `json:"top_processes,omitempty"`
+}
+
+// ByMemory 报告排行是否按常驻内存排（内存检查）；其余按 CPU 排。
+func (d ProcessDetail) ByMemory() bool { return d.Metric == "memory" }
+
+// Encode 把排行写成检查结果的诊断信息；没有进程时返回空串。
+func (d ProcessDetail) Encode() string {
+	if len(d.TopProcesses) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(d)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// DecodeProcessDetail 从检查结果的诊断信息或告警事件内容里读出进程排行；没有时返回零值。
+func DecodeProcessDetail(raw string) ProcessDetail {
+	var detail ProcessDetail
+	if json.Unmarshal([]byte(raw), &detail) != nil || len(detail.TopProcesses) == 0 {
+		return ProcessDetail{}
+	}
+	return detail
 }
 
 // TopProcesses 把占用最高的几个进程写成一行，例如

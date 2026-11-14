@@ -63,7 +63,6 @@ function poolResult(
     targets: [],
     summary_json: JSON.stringify({ gross: "0.8", pool: { method: "rotation", members, ...pool } }),
     input_json: "{}",
-    rule_states_json: "{}",
     publish_status: "none",
     created_at: "",
     next_params_json: "",

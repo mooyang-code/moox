@@ -55,7 +55,7 @@ func (r *AlertRepository) ListEnabledFiringStates(ctx context.Context, spaceID s
 		Select("s.*").
 		Joins("JOIN t_monitor_alert_rules AS r ON r.c_space_id = s.c_space_id AND r.c_rule_id = s.c_rule_id AND r.c_check_id = s.c_check_id").
 		Where("s.c_status = ? AND r.c_enabled = 1 AND r.c_rule_id LIKE ?", domain.AlertStatusFiring, "default:%").
-		Where("s.c_check_id LIKE ? OR EXISTS (SELECT 1 FROM t_monitor_checks AS c WHERE c.c_space_id = s.c_space_id AND c.c_check_id = s.c_check_id AND c.c_enabled = 1)", "host:%").
+		Where("EXISTS (SELECT 1 FROM t_monitor_checks AS c WHERE c.c_space_id = s.c_space_id AND c.c_check_id = s.c_check_id AND c.c_enabled = 1)").
 		Order("s.c_triggered_at DESC, s.c_id DESC")
 	if spaceID != "" {
 		query = query.Where("s.c_space_id IN ?", []string{spaceID, "", events.SystemSpaceID})
@@ -188,10 +188,6 @@ func (r *AlertRepository) GetState(ctx context.Context, spaceID, ruleID, checkID
 
 func (r *AlertRepository) CreateEvent(ctx context.Context, event *domain.AlertEvent) error {
 	return r.db.WithContext(ctx).Create(event).Error
-}
-
-func (r *AlertRepository) CreateEventIdempotent(ctx context.Context, event *domain.AlertEvent) error {
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_event_id"}}, DoNothing: true}).Create(event).Error
 }
 
 func (r *AlertRepository) ListEvents(ctx context.Context, spaceID string, limit int) ([]domain.AlertEvent, error) {

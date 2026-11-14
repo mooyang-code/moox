@@ -43,7 +43,7 @@ func commit(t *testing.T, db *store.Store, bar int) string {
 	id := "r" + string(rune('0'+bar))
 	result := store.Result{
 		ResultID: id, InstanceID: "i1", SessionID: "session-1", BarEndTime: barEnd, ValidUntil: barEnd.Add(2 * time.Hour), Status: store.StatusOK, DSLHash: "sha256:x",
-		InputJSON: json.RawMessage(`{"view_id":"view_factor_i1"}`), TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: json.RawMessage(`{}`),
+		InputJSON: json.RawMessage(`{"view_id":"view_factor_i1"}`), TargetsJSON: json.RawMessage(`[]`),
 		SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone, NextParamsJSON: next, CreatedAt: barEnd,
 	}
 	if _, _, err := db.CommitResult(context.Background(), store.CommitRequest{Result: result, Now: now}); err != nil {

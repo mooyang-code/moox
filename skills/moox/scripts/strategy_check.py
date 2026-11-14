@@ -5,7 +5,7 @@
   targets    导出策略实例（--instance）或研究回放（--replay，含策略池回放）每期的目标权重（只取 ok 的期）
              → JSON {名称: {bar_end: {"市场:标的": 权重}}}
              同一个标的的现货、永续是两个目标，键是 (market, instrument_id)，写成 "swap:BTC-USDT"
-  summary    各实例的结果状态、跳过原因与规则状态体积（稳定性验收）
+  summary    各实例的结果状态、跳过原因与当前规则状态的体积（稳定性验收）
   compare    把 targets 的结果与参考框架算出的权重 CSV（bar_end,market,instrument_id,weight）逐期比对（语义一致验收）
   latency    按 bar_end 关联因子引擎与策略日志，给出端到端分段耗时的 p50 / p95（冷启动与稳态分开）
   task-lag   因子任务从收盘到完成的耗时，按是否落在边界分钟分组（对照其他任务有没有被拖慢）
@@ -46,17 +46,21 @@ for iid in ids:
         query = ("SELECT c_bar_end_time, c_status, c_skip_reason, c_targets_json, '' "
                  "FROM t_strategy_replay_bars WHERE c_replay_id = ? ORDER BY c_bar_end_time")
     else:
-        query = ("SELECT c_bar_end_time, c_status, c_skip_reason, c_targets_json, c_rule_states_json "
+        query = ("SELECT c_bar_end_time, c_status, c_skip_reason, c_targets_json, '' "
                  "FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time")
     rows = []
-    for bar, status, reason, targets, states in c.execute(query, (iid,)):
-        item = {"bar": bar, "status": status, "reason": reason, "state_bytes": len(states or "")}
+    for bar, status, reason, targets, _ in c.execute(query, (iid,)):
+        item = {"bar": bar, "status": status, "reason": reason}
         if mode in ("targets", "replay") and status == "ok":
             # 同一个标的的现货、永续是两个目标：键取 (market, instrument_id)，只用 instrument_id 会互相覆盖
             item["targets"] = {"%s:%s" % (t.get("market", ""), t["instrument_id"]): t["target_weight"]
                                for t in json.loads(targets or "[]")}
         rows.append(item)
     out[iid] = rows
+    if mode == "summary":
+        # 规则状态每个实例只有一行（t_strategy_states）：只能看到当前的大小与它推进到的那一期
+        state = c.execute("SELECT LENGTH(CAST(c_state_json AS BLOB)), c_bar_end_time FROM t_strategy_states WHERE c_instance_id = ?", (iid,)).fetchone()
+        out["state:" + iid] = {"bytes": state[0], "bar": state[1]} if state else None
 print(json.dumps(out))
 '''
 
@@ -163,11 +167,14 @@ def cmd_summary(args):
             continue
         status = Counter(r['status'] for r in rows)
         reasons = Counter(r['reason'] for r in rows if r['status'] != 'ok')
-        sizes = [r['state_bytes'] for r in rows]
-        tail = sizes[-min(len(sizes), args.plateau):]
         print(f"{name}：{len(rows)} 期（{iso(rows[0]['bar'])} ～ {iso(rows[-1]['bar'])}），状态 {dict(status)}，跳过原因 {dict(reasons) or '无'}")
-        print(f'  规则状态字节：首期 {sizes[0]}，最大 {max(sizes)}，末期 {sizes[-1]}；'
-              f'最近 {len(tail)} 期波动 {max(tail) - min(tail)}；超过 {args.state_limit} 的期数 {sum(1 for s in sizes if s > args.state_limit)}')
+        state = data.get('state:' + iid)
+        if state is None:
+            print('  规则状态：还没有（没有成功求值过，或刚被清空）')
+        else:
+            over = '，超过上限' if state['bytes'] > args.state_limit else ''
+            print(f"  规则状态：当前 {state['bytes']} 字节（上限 {args.state_limit}{over}），推进到 {iso(state['bar'])}；"
+                  f'每个实例只存当前一份，没有逐期的体积可比，要看增长请隔一段时间再跑一次')
 
 
 # ---------------------------------------------------------------- compare
@@ -417,7 +424,6 @@ def main():
 
     p = sub.add_parser('summary', help='结果状态、跳过原因与状态体积')
     db_args(p)
-    p.add_argument('--plateau', type=int, default=12, help='看最近多少期的状态体积波动')
     p.add_argument('--state-limit', type=int, default=256 * 1024)
     p.set_defaults(func=cmd_summary)
 

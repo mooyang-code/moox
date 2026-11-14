@@ -19,45 +19,23 @@ import (
 
 var ErrInvalidHostMetric = errors.New("invalid host metric")
 
-// Store 处理主机快照：登记在线、评估阈值、写本地快照历史，并在内存里保留每台主机的最新快照。
+// Store 处理主机快照：登记最近一次上报、写本地快照历史，并在内存里保留每台主机的最新快照。
 // 历史只存在 Monitor 自己的库里（t_monitor_host_samples），不依赖 Storage。
+// 这里不评估告警：失联与资源阈值由主机类检查按登记时间和最新快照判断，和其他检查走同一条告警路径。
 type Store struct {
-	samples         *SampleStore
-	alert           *AlertEvaluator
-	registry        *Registry
-	presence        PresenceTransitionSink
-	presenceFailure func(context.Context, PresenceTransition, error)
-	mu              sync.RWMutex
-	latest          map[string]AgentView
+	samples  *SampleStore
+	registry *Registry
+	mu       sync.RWMutex
+	latest   map[string]AgentView
 }
 
 func NewStore(samples *SampleStore) *Store {
 	return &Store{samples: samples, latest: make(map[string]AgentView)}
 }
 
-func (s *Store) SetAlertEvaluator(evaluator *AlertEvaluator) {
-	if s != nil {
-		s.alert = evaluator
-	}
-}
-
 func (s *Store) SetRegistry(registry *Registry) {
 	if s != nil {
 		s.registry = registry
-	}
-}
-
-func (s *Store) SetPresenceTransitionSink(sink PresenceTransitionSink) {
-	if s != nil {
-		s.presence = sink
-	}
-}
-
-// SetPresenceTransitionFailureSink records notification failures without
-// blocking the host sample from being persisted.
-func (s *Store) SetPresenceTransitionFailureSink(sink func(context.Context, PresenceTransition, error)) {
-	if s != nil {
-		s.presenceFailure = sink
 	}
 }
 
@@ -233,18 +211,12 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 		if result.AgentID != "" {
 			canonicalAgentID = result.AgentID
 		}
-		if result.Transition != nil && s.presence != nil {
-			transition := *result.Transition
-			if err := s.presence.HandlePresenceTransition(ctx, transition); err != nil && s.presenceFailure != nil {
-				s.presenceFailure(ctx, transition, err)
-			}
-		}
 	}
 	if !current {
 		return nil
 	}
-	// 顺序：登记在线（上面）→ 更新最新快照并评估阈值 → 写本地历史。历史写失败只让这条消息重投，
-	// 在线状态与阈值告警不受影响；重投时登记与评估都按事件编号去重。
+	// 顺序：登记最近一次上报（上面）→ 更新最新快照 → 写本地历史。历史写失败只让这条消息重投，
+	// 在线判断与阈值检查用的是登记时间和最新快照，不受影响。
 	view := AgentView{
 		HostID: metric.GetHostId(), AgentID: canonicalAgentID, Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
 		LastSeenAt: occurredAt.Format(time.RFC3339Nano), Reachable: true,
@@ -260,9 +232,6 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 		s.latest[view.AgentID] = view
 	}
 	s.mu.Unlock()
-	if s.alert != nil {
-		_ = s.alert.Evaluate(ctx, canonicalAgentID, metric.GetHostname(), msg.GetEventId(), metric.GetSnapshot(), occurredAt)
-	}
 	if err := s.samples.Write(ctx, canonicalAgentID, occurredAt, metric.GetSnapshot()); err != nil {
 		return fmt.Errorf("写入主机快照历史: %w", err)
 	}

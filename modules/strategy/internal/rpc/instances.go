@@ -281,7 +281,8 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 
 // enable 执行启用流程：解析绑定 → 编译 → 固化快照 → 写会话 → 认领账户 → 置为启用。
 // 只有上次未完成的启用留下的待定会话（未关闭且定义未变）会被沿用，以便恢复 Trade 可能已经成功的认领；
-// 已关闭的会话（停用后释放未确认）必须先在 Trade 侧确认释放，再新建会话，规则状态与绑定快照随之重建。
+// 已关闭的会话（停用后释放未确认）必须先在 Trade 侧确认释放，再新建会话并重建绑定快照；新会话的 DSL 版本、绑定解析与成员
+// 和规则状态所属会话的一致时沿用规则状态，否则清空（见 store.OpenSession）。停用期间改过实例（账户、定义）的，状态在修改时已清空。
 func (s *Service) enable(ctx context.Context, instance store.Instance) (store.Instance, error) {
 	reload := func() store.Instance {
 		if current, err := s.Store.GetInstance(ctx, instance.InstanceID); err == nil {

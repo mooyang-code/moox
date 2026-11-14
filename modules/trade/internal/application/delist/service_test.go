@@ -131,13 +131,13 @@ func TestBlockUnknownInstrumentIsStoredAndReported(t *testing.T) {
 	service.OnChanged = func() { calls++ }
 	key := Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BARUSDT"}
 
-	result, err := service.Block(context.Background(), key, "公告下架", "evt-1")
+	result, err := service.Block(context.Background(), key, "公告下架", "evt-1", "exec-1")
 	require.NoError(t, err)
 	require.True(t, result.InstrumentUnknown)
 	require.True(t, result.Created)
 	require.Equal(t, 1, calls)
 
-	again, err := service.Block(context.Background(), key, "公告下架", "evt-1")
+	again, err := service.Block(context.Background(), key, "公告下架", "evt-1", "exec-2")
 	require.NoError(t, err)
 	require.False(t, again.Created, "重复写入不报错也不改动")
 	require.Equal(t, 1, calls, "没有变化不唤醒")
@@ -146,6 +146,7 @@ func TestBlockUnknownInstrumentIsStoredAndReported(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	require.Equal(t, "", list[0].InstrumentID, "查不到标的时内部 ID 留空")
+	require.Equal(t, "exec-1", list[0].Owner, "重复写入保留第一个写入者")
 
 	holders, err := service.Holders(context.Background(), key, false)
 	require.NoError(t, err)
@@ -164,7 +165,7 @@ func TestBlockRecordsInstrumentIDAndBaseAssetWhenKnown(t *testing.T) {
 	seedInstruments(t, tradeStore)
 	service := &Service{Store: tradeStore}
 
-	result, err := service.Block(context.Background(), Key{Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "FOOUSDT"}, "公告下架", "")
+	result, err := service.Block(context.Background(), Key{Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "FOOUSDT"}, "公告下架", "", "")
 	require.NoError(t, err)
 	require.False(t, result.InstrumentUnknown)
 	list, err := service.List(context.Background())
@@ -180,10 +181,10 @@ func TestBlockValidatesTheKey(t *testing.T) {
 		{Exchange: "BINANCE", MarketType: "STOCK", ExchangeSymbol: "A"},
 		{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: " "},
 	} {
-		_, err := service.Block(context.Background(), key, "r", "")
+		_, err := service.Block(context.Background(), key, "r", "", "")
 		require.ErrorIs(t, err, ErrInvalidRequest, "%+v", key)
 	}
-	_, err := service.Block(context.Background(), Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "A"}, " ", "")
+	_, err := service.Block(context.Background(), Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "A"}, " ", "", "")
 	require.ErrorIs(t, err, ErrInvalidRequest, "reason 必填")
 }
 
@@ -364,7 +365,7 @@ func TestKeysAreCaseInsensitive(t *testing.T) {
 	service := &Service{Store: tradeStore}
 	lower := Key{Exchange: "binance", MarketType: "swap", ExchangeSymbol: "foousdt"}
 
-	result, err := service.Block(context.Background(), lower, "公告下架", "")
+	result, err := service.Block(context.Background(), lower, "公告下架", "", "")
 	require.NoError(t, err)
 	require.False(t, result.InstrumentUnknown)
 	list, err := service.List(context.Background())

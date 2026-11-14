@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	monitorstore "github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
@@ -65,23 +63,11 @@ func TestStorePersistsSnapshotLocally(t *testing.T) {
 	assert.EqualValues(t, 25, history[0].Snapshot.GetCpu().GetUsagePercent())
 }
 
-// 本地历史写不进去时：在线登记和阈值评估照常发生，消息报错等待重投；重投不会重复评估。
-func TestStoreKeepsPresenceAndAlertsWhenHistoryWriteFails(t *testing.T) {
+// 本地历史写不进去时：最近一次上报照常登记（在线判断与阈值检查都靠它和最新快照），消息报错等待重投。
+func TestStoreKeepsPresenceWhenHistoryWriteFails(t *testing.T) {
 	db := openRegistryTestDB(t)
-	repos := monitorstore.NewRepositories(db)
-	agentID := validHostMetric().GetAgentId()
-	checkID := HostRuleKey(agentID, HostMetricCPU)
-	require.NoError(t, repos.Alerts.CreateRule(context.Background(), &domain.AlertRule{
-		SpaceID: events.SystemSpaceID, RuleID: "default:" + checkID, CheckID: checkID, Enabled: true,
-		FailureThreshold: 2, SuccessThreshold: 1, Description: `{"threshold":20}`,
-	}))
-	cache, err := NewRuleCache(RuleCacheOptions{Repository: repos.Alerts})
-	require.NoError(t, err)
-	require.NoError(t, cache.Start(t.Context()))
-
 	store := NewStore(NewSampleStore(db))
 	store.SetRegistry(NewRegistry(db))
-	store.SetAlertEvaluator(&AlertEvaluator{Cache: cache, Repository: repos.Alerts})
 	require.NoError(t, db.Exec("DROP TABLE t_monitor_host_samples").Error)
 
 	message := validHostMessage(t)
@@ -90,16 +76,11 @@ func TestStoreKeepsPresenceAndAlertsWhenHistoryWriteFails(t *testing.T) {
 	require.Error(t, store.Persist(context.Background(), message, metric))
 	require.Error(t, store.Persist(context.Background(), message, metric), "重投同一条消息")
 
-	restarted := NewStore(nil)
-	restarted.SetRegistry(NewRegistry(db))
-	agents, err := restarted.ListAgents(context.Background())
+	agents, err := store.ListAgents(context.Background())
 	require.NoError(t, err)
 	require.Len(t, agents, 1)
 	assert.True(t, agents[0].Reachable)
-
-	state, err := repos.Alerts.GetState(context.Background(), events.SystemSpaceID, "default:"+checkID, checkID)
-	require.NoError(t, err)
-	assert.Equal(t, 1, state.FailureCount, "同一条消息只评估一次")
+	assert.EqualValues(t, 25, agents[0].Snapshot.GetCpu().GetUsagePercent(), "最新快照已更新")
 }
 
 // 超过条数时在整个范围内等间隔抽取（保留首尾）；进程排行与采集器状态不进历史；按采样时间清理。
@@ -144,20 +125,6 @@ func TestValidateSnapshotRejectsInvalidBranches(t *testing.T) {
 	} {
 		require.Error(t, validateSnapshot(snapshot))
 	}
-}
-
-func TestHostHelpers(t *testing.T) {
-	assert.Equal(t, 1, positive(0))
-	assert.Equal(t, 3, positive(3))
-	first := deterministicEventID("msg-1", "rule-1", domain.AlertEventTriggered)
-	assert.Equal(t, first, deterministicEventID("msg-1", "rule-1", domain.AlertEventTriggered))
-	assert.NotEqual(t, first, deterministicEventID("msg-2", "rule-1", domain.AlertEventTriggered))
-	threshold, recovery := RuleThresholds(domain.AlertRule{})
-	assert.Equal(t, 80.0, threshold)
-	assert.Equal(t, 80.0, recovery)
-	threshold, recovery = RuleThresholds(domain.AlertRule{Description: `{"threshold":90,"recovery_threshold":85}`})
-	assert.Equal(t, 90.0, threshold)
-	assert.Equal(t, 85.0, recovery)
 }
 
 func validCPUMetric() *hostmetricpb.CpuMetric {

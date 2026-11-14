@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
@@ -84,11 +85,12 @@ func TestActiveHostAlertsAndRecoveryKeepCauseAndLatestCheckSeparate(t *testing.T
 	for i := 0; i < 20; i++ {
 		require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: fmt.Sprintf("success-%d", i), CheckID: checkID, Status: "ok", Success: true, CheckedAt: now.Add(time.Duration(i) * time.Second)}))
 	}
+	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: "host:AGENT01:cpu", Name: "主机 control · CPU 使用率", Kind: domain.CheckKindExternal, Enabled: true}))
 	for _, id := range []string{checkID, "host:AGENT01:cpu"} {
 		require.NoError(t, repos.Alerts.CreateRule(t.Context(), &domain.AlertRule{RuleID: "default:" + id, CheckID: id, Enabled: true}))
 		require.NoError(t, repos.Alerts.UpsertState(t.Context(), &domain.AlertState{RuleID: "default:" + id, CheckID: id, Status: domain.AlertStatusFiring, DedupeKey: id, TriggeredAt: &now, UpdatedAt: now}))
 	}
-	require.NoError(t, repos.Alerts.CreateEvent(t.Context(), &domain.AlertEvent{EventID: "host-alert", RuleID: "default:host:AGENT01:cpu", CheckID: "host:AGENT01:cpu", EventType: domain.AlertEventTriggered, Message: "状态：新告警\n问题：CPU 使用率 95.0%，超过阈值 80.0%", Payload: `{"agent_id":"AGENT01","metric":"cpu","value":95,"threshold":80}`, CreatedAt: now}))
+	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "host-failed", CheckID: "host:AGENT01:cpu", Status: "down", ErrorMessage: "CPU 使用率 95.0%，超过阈值 80%", CheckedAt: now}))
 	view, err := (Builder{Checks: repos.Checks, Results: repos.Results, Alerts: repos.Alerts, Now: func() time.Time { return now }}).Build(t.Context(), "crypto")
 	require.NoError(t, err)
 	require.Len(t, view.Alerts, 2, "global host/component alerts remain visible when a space is selected")
@@ -97,7 +99,7 @@ func TestActiveHostAlertsAndRecoveryKeepCauseAndLatestCheckSeparate(t *testing.T
 		if alert.Object.Type == "host" {
 			hostFound = true
 			require.Equal(t, "AGENT01", alert.Object.AgentId)
-			require.Equal(t, "CPU 使用率 95.0%，超过阈值 80%", alert.Reason, "主机告警原因来自事件的结构化指标值，不是推送正文")
+			require.Equal(t, "CPU 使用率 95.0%，超过阈值 80%", alert.Reason, "主机告警和其他告警一样，原因取最近一次失败的检查结果")
 			require.Equal(t, "warning", alert.Severity)
 		} else {
 			require.Equal(t, "web-host", alert.Object.ComponentId)
@@ -129,18 +131,19 @@ func TestDisabledHostAgentDoesNotTurnAnEnabledHostIntoSilenceFailure(t *testing.
 	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "control", Status: "enabled"}}, Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "host-agent", Status: "disabled"}}}, Hosts: []observability.HostStatus{{HostID: "control", AgentID: "AB12", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)}}, GatewaySignals: []observability.GatewaySignal{{HostID: "control", Kind: "heartbeat", Status: "healthy", Reason: "主机网关心跳正常"}}}
 	view := projectFacts(facts)
 	require.Equal(t, "healthy", view.Hosts[0].Status)
-	require.Empty(t, view.Alerts)
+	// 采集部署启用后停报：网关心跳正常时主机仍在线，只是 host-agent 停了，显示需关注；心跳也停了才是主机失联。
 	facts.Topology.Deployments[0].Status = "enabled"
 	view = projectFacts(facts)
+	require.Equal(t, "degraded", view.Hosts[0].Status)
+	facts.GatewaySignals[0].Status, facts.GatewaySignals[0].Reason = "down", "主机网关超过 2 分钟没有心跳"
+	view = projectFacts(facts)
 	require.Equal(t, "down", view.Hosts[0].Status)
-	require.Len(t, view.Alerts, 1)
 	facts.Topology.Hosts[0].Status = "disabled"
 	view = projectFacts(facts)
 	require.Equal(t, "disabled", view.Hosts[0].Status)
-	require.Empty(t, view.Alerts)
 }
 
-// 主机从拓扑中删除（移除旧主机）：旧主机上的采集代理不再显示，也不再报失联；拓扑未知时照常显示。
+// 主机从拓扑中删除（移除旧主机）：旧主机上的采集代理不再显示；拓扑未知时照常显示。
 func TestAgentOfRemovedHostIsNeitherListedNorAlerted(t *testing.T) {
 	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "overseas", Status: "enabled"}}}, Hosts: []observability.HostStatus{
 		{HostID: "legacy-1", AgentID: "OLD1", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)},
@@ -149,12 +152,10 @@ func TestAgentOfRemovedHostIsNeitherListedNorAlerted(t *testing.T) {
 	view := projectFacts(facts)
 	require.Len(t, view.Hosts, 1)
 	require.Equal(t, "overseas", view.Hosts[0].HostId)
-	require.Empty(t, view.Alerts)
 
 	facts.Topology = nil
 	view = projectFacts(facts)
 	require.Len(t, view.Hosts, 2)
-	require.Len(t, view.Alerts, 1)
 }
 
 func TestGatewayPendingTimeKeepsItsSnapshotIdentity(t *testing.T) {
@@ -173,8 +174,8 @@ func TestGatewayPendingTimeKeepsItsSnapshotIdentity(t *testing.T) {
 func TestSeriesLimitAlertIsAWarning(t *testing.T) {
 	object := alertObject("mooxsys", "metrics_ingest:series_limit", observability.Overview{})
 	require.Equal(t, "metrics_ingest", object.Kind)
-	require.Equal(t, "warning", alertSeverity("metrics_ingest:series_limit", object))
-	require.Equal(t, "critical", alertSeverity("dataset:storage:bars:1m", alertObject("crypto", "dataset:storage:bars:1m", observability.Overview{})), "数据集告警仍是严重")
+	require.Equal(t, "warning", alerting.Severity("metrics_ingest:series_limit"))
+	require.Equal(t, "critical", alerting.Severity("dataset:storage:bars:1m"), "数据集告警仍是严重")
 }
 
 // 同一台登记主机有新旧两个采集器时只取最近上报的；旧的超时不产生失联告警；没有 host_id 或未登记的采集器不进入主机列表。
@@ -195,13 +196,18 @@ func TestOnlyTheLatestAgentOfEachRegisteredHostSummarizesTheHost(t *testing.T) {
 	require.Equal(t, "healthy", view.Hosts[0].Status)
 	require.Equal(t, "storage", view.Hosts[1].HostId)
 	require.Equal(t, "unknown", view.Hosts[1].Status, "登记主机没有采集器上报时显示未上报")
-	require.Empty(t, view.Alerts, "旧采集器、无主机、未登记的采集器超时都不产生失联告警")
+	require.Empty(t, view.Alerts, "告警只来自告警状态，主机事实不再另外投影一份失联告警")
 
+	// 选中的采集器停报：没有网关心跳可确认时按主机失联显示异常；网关心跳正常时主机仍在线，只显示需关注。
 	facts.Hosts[1].Status = "down"
 	facts.Hosts[1].LastSeenAt = now.Add(-10 * time.Minute)
 	view = projectFacts(facts)
-	require.Len(t, view.Alerts, 1)
-	require.Equal(t, "host-presence:NEW1", view.Alerts[0].Id, "只有当前选中的采集器失联才告警")
+	require.Equal(t, "down", view.Hosts[0].Status)
+	facts.GatewaySignals = []observability.GatewaySignal{{HostID: "control", Kind: "heartbeat", Status: "healthy"}}
+	view = projectFacts(facts)
+	require.Equal(t, "degraded", view.Hosts[0].Status)
+	require.Contains(t, view.Hosts[0].Reason, "主机网关心跳正常")
+	require.EqualValues(t, 80, view.Hosts[0].CpuThreshold)
 }
 
 // 关注项检查带上种类（attention_kind），只认 Monitor 登记过的检查和种类。
@@ -217,8 +223,8 @@ func TestAttentionAlertObjectCarriesAttentionKind(t *testing.T) {
 // 缺币安只读 Key 只是现货下架改为手工登记，告警是 warning，不挡安装验收；下架来源失败仍是 critical。
 func TestReadonlyKeyMissingAlertIsAWarning(t *testing.T) {
 	check := "collector_attention:delist_readonly_key_missing"
-	require.Equal(t, "warning", alertSeverity(check, alertObject("crypto", check, observability.Overview{})))
+	require.Equal(t, "warning", alerting.Severity(check))
 	failed := "collector_attention:delist_source_failed"
-	require.Equal(t, "critical", alertSeverity(failed, alertObject("crypto", failed, observability.Overview{})))
-	require.Equal(t, "critical", alertSeverity("trade_attention:auto_paused", alertObject("crypto", "trade_attention:auto_paused", observability.Overview{})))
+	require.Equal(t, "critical", alerting.Severity(failed))
+	require.Equal(t, "critical", alerting.Severity("trade_attention:auto_paused"))
 }

@@ -16,6 +16,7 @@ const (
 		DELETE FROM t_strategy_result_items
 		WHERE c_result_id IN (SELECT c_result_id FROM t_strategy_results WHERE c_instance_id = ?)`
 	sqlDeleteInstanceResults    = `DELETE FROM t_strategy_results WHERE c_instance_id = ?`
+	sqlDeleteInstanceStates     = `DELETE FROM t_strategy_states WHERE c_instance_id = ?`
 	sqlDeleteInstanceSessions   = `DELETE FROM t_strategy_sessions WHERE c_instance_id = ?`
 	sqlDeleteInstanceReplayBars = `
 		DELETE FROM t_strategy_replay_bars
@@ -39,12 +40,13 @@ const (
 	sqlDeleteViewsAgePassed = `DELETE FROM t_strategy_age_passed WHERE c_space_id = ? AND c_view_id IN (SELECT value FROM json_each(?))`
 )
 
-// instanceScopedDeletes 是按实例 ID 删除的语句，顺序满足外键：结果明细在结果之前，结果、到达记录在会话之前，
+// instanceScopedDeletes 是按实例 ID 删除的语句，顺序满足外键：结果明细在结果之前，结果、到达记录、规则状态在会话之前，
 // 回放记录在回放之前，实例本身最后单独删。
 var instanceScopedDeletes = []string{
 	sqlDeleteInstanceReadyEvents,
 	sqlDeleteInstanceResultItems,
 	sqlDeleteInstanceResults,
+	sqlDeleteInstanceStates,
 	sqlDeleteInstanceSessions,
 	sqlDeleteInstanceReplayBars,
 	sqlDeleteInstanceReplays,
@@ -63,7 +65,7 @@ func (s *Store) ActiveReplaysOfInstance(ctx context.Context, instanceID, spaceID
 	return ids, err
 }
 
-// DeleteInstance 在一个事务里删除已停用、没有会话的实例在策略库里的全部记录：会话、结果与明细、到达记录、回放、外显设置、
+// DeleteInstance 在一个事务里删除已停用、没有会话的实例在策略库里的全部记录：会话、结果与明细、规则状态、到达记录、回放、外显设置、
 // 因子任务登记和实例本身；viewIDs 是实例结果数据集的 View，按 (空间, View) 存的年龄探针记录一并删除。
 // 实例不存在返回 ErrNotFound；实例已启用或还挂着会话时什么也不删。
 func (s *Store) DeleteInstance(ctx context.Context, instanceID, spaceID string, viewIDs []string) error {

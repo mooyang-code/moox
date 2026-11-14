@@ -75,14 +75,13 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 
 func trialProto(decision engine.Decision, loaded input.Loaded, viewIDs []string) *strategypb.StrategyResult {
 	_, targetsJSON, _ := trigger.EncodeTargets(decision.Targets)
-	states, _ := json.Marshal(decision.State)
 	summary, _ := trigger.EncodeSummary(decision.Summary, loaded.Sets.Notes)
 	views := make(map[string]store.ViewInput, len(viewIDs))
 	for _, viewID := range viewIDs {
 		views[viewID] = store.ViewInput{}
 	}
 	inputJSON, _ := json.Marshal(store.InputRecord{Views: views, BarStart: loaded.Boundary.StorageStart})
-	result := store.Result{BarEndTime: loaded.Boundary.BarEnd, Status: decision.Status, SkipReason: decision.SkipReason, TargetsJSON: targetsJSON, RuleStatesJSON: states, SummaryJSON: summary, InputJSON: inputJSON, PublishStatus: store.PublishNone}
+	result := store.Result{BarEndTime: loaded.Boundary.BarEnd, Status: decision.Status, SkipReason: decision.SkipReason, TargetsJSON: targetsJSON, SummaryJSON: summary, InputJSON: inputJSON, PublishStatus: store.PublishNone}
 	return resultProto(result)
 }
 

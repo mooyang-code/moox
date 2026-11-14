@@ -47,17 +47,25 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 			if signal.Kind == "heartbeat" && (host.AgentId == "" || agentDisabled[host.HostId]) && !expectedAgent[host.HostId] {
 				host.Status, host.Reason = domain.HealthStatus(signal.Status), signal.Reason
 			}
-			if signal.Status == "down" {
+			// 已按主机失联显示的主机保留失联的原因（与告警同一段文字），不被单项网关信号的说明盖掉。
+			if signal.Status == "down" && host.Status != "down" {
 				host.Status, host.Reason = "down", signal.Reason
 			}
 		}
 	}
 	var out []*pb.HealthHost
 	covered := make(map[string]bool)
-	for _, item := range selectedAgents(facts) {
-		host := &pb.HealthHost{HostId: item.HostID, AgentId: item.AgentID, Hostname: item.Hostname, Status: domain.HealthStatus(item.Status), Reason: ChineseReason(item.Reason), CpuPercent: item.CPUPercent, MemoryPercent: item.MemoryPercent, DiskPercent: item.FilesystemMaxPercent, MemoryAvailable: item.MemoryAvailable, DiskAvailable: item.DiskAvailable, MetricsAvailable: item.MetricsAvailable, CpuAvailable: item.CPUAvailable, LastReportedAt: stamp(item.LastSeenAt),
+	// 主机状态取在线情形的结论（与主机类告警同一处判断）：只有 host-agent 停报时主机仍在线，显示需关注而不是异常。
+	statuses := map[string]string{observability.HostOnline: "healthy", observability.HostAgentStopped: "degraded", observability.HostLost: "down"}
+	for _, presence := range facts.HostPresences() {
+		item := presence.Host
+		host := &pb.HealthHost{HostId: item.HostID, AgentId: item.AgentID, Hostname: item.Hostname, Status: statuses[presence.State], Reason: presence.Reason, CpuPercent: item.CPUPercent, MemoryPercent: item.MemoryPercent, DiskPercent: item.FilesystemMaxPercent, MemoryAvailable: item.MemoryAvailable, DiskAvailable: item.DiskAvailable, MetricsAvailable: item.MetricsAvailable, CpuAvailable: item.CPUAvailable, LastReportedAt: stamp(item.LastSeenAt),
 			CpuCores: item.CPUCores, MemoryTotalBytes: item.MemoryTotalBytes, MemoryUsedBytes: item.MemoryUsedBytes,
-			DiskTotalBytes: item.FilesystemTotalBytes, DiskUsedBytes: item.FilesystemUsedBytes, DiskMountpoint: item.FilesystemMountpoint}
+			DiskTotalBytes: item.FilesystemTotalBytes, DiskUsedBytes: item.FilesystemUsedBytes, DiskMountpoint: item.FilesystemMountpoint,
+			// 告警阈值，页面据此画出阈值刻度。
+			CpuThreshold:    hostmetrics.MetricThreshold(hostmetrics.HostMetricCPU).Alert,
+			MemoryThreshold: hostmetrics.MetricThreshold(hostmetrics.HostMetricMemory).Alert,
+			DiskThreshold:   hostmetrics.MetricThreshold(hostmetrics.HostMetricFilesystemUsage).Alert}
 		decorate(host)
 		out = append(out, host)
 		covered[item.HostID] = true
@@ -73,63 +81,5 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].HostId+"\x00"+out[i].AgentId < out[j].HostId+"\x00"+out[j].AgentId })
-	return out
-}
-
-// selectedAgents 为每台登记主机选出参与汇总的采集器：同一主机有多个采集器（例如重装后换了 agent_id）时只取最近上报的，
-// 旧的不再输出；没有 host_id、或 host_id 不在登记里的采集器不进入主机列表。拓扑未知时只按 host_id 取最近上报的。
-// 返回结果按 host_id 排序。
-func selectedAgents(facts observability.Overview) []observability.HostStatus {
-	registered := map[string]bool{}
-	topologyKnown := facts.Topology != nil && len(facts.Topology.Hosts) > 0
-	if topologyKnown {
-		for _, host := range facts.Topology.Hosts {
-			registered[host.HostID] = true
-		}
-	}
-	latest := map[string]observability.HostStatus{}
-	for _, item := range facts.Hosts {
-		if item.HostID == "" || topologyKnown && !registered[item.HostID] {
-			continue
-		}
-		if current, ok := latest[item.HostID]; !ok || item.LastSeenAt.After(current.LastSeenAt) || item.LastSeenAt.Equal(current.LastSeenAt) && item.AgentID > current.AgentID {
-			latest[item.HostID] = item
-		}
-	}
-	out := make([]observability.HostStatus, 0, len(latest))
-	for _, item := range latest {
-		out = append(out, item)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].HostID < out[j].HostID })
-	return out
-}
-
-// Presence notifications are code-owned transitions, not threshold rules in the
-// alert repository. Project the same silence cutoff as a current host alert.
-func hostPresenceAlerts(facts observability.Overview) []*pb.HealthAlert {
-	disabled := make(map[string]bool)
-	if facts.Topology != nil {
-		for _, host := range facts.Topology.Hosts {
-			if host.Status == "disabled" {
-				disabled[host.HostID] = true
-			}
-		}
-		for _, deployment := range facts.Topology.Deployments {
-			if deployment.ComponentID == "host-agent" && deployment.Status == "disabled" {
-				disabled[deployment.HostID] = true
-			}
-		}
-	}
-	var out []*pb.HealthAlert
-	for _, host := range selectedAgents(facts) {
-		if host.Status != "down" || disabled[host.HostID] {
-			continue
-		}
-		title := host.HostID
-		if title == "" {
-			title = host.AgentID
-		}
-		out = append(out, &pb.HealthAlert{Id: "host-presence:" + host.AgentID, Severity: "critical", Object: &pb.HealthObject{Type: "host", HostId: host.HostID, AgentId: host.AgentID, Kind: "presence"}, Title: "主机 " + title + " · 失联", Reason: "主机采集代理超过三分钟未上报，主机可能宕机、断网，或采集代理已停止", TriggeredAt: stamp(host.LastSeenAt.Add(hostmetrics.DefaultHostStaleAfter)), LastCheckedAt: stamp(facts.GeneratedAt)})
-	}
 	return out
 }

@@ -89,10 +89,12 @@ type BlockResult struct {
 	Created bool
 }
 
-// BlockedInstrument 是下架名单里的一项。名单遇到重复写入时保留第一个写入者的原因，所以原因里带的执行记录 ID 能说明这一项是谁写的。
+// BlockedInstrument 是下架名单里的一项。
 type BlockedInstrument struct {
 	Instrument InstrumentRef
 	Reason     string
+	// Owner 是第一个把它写进名单的调用方传的写入者标识（下架处理传执行记录 ID），重复写入不会覆盖。
+	Owner string
 }
 
 // ErrInvalidRequest 表示 Trade 认为请求本身不合法（参数、市场不支持）：重试没有用。
@@ -108,11 +110,11 @@ var ErrTradeBusy = errors.New("Trade 正忙，稍后再试")
 // TradeClient 是系统动作调用 Trade 的接口，按交易计划 4.7 的四个接口加两个查询。
 // 这里的类型是事件中心自己的，处理器不依赖 Trade 的 proto 包；真实实现在 internal/tradegateway，经网关调用 Trade 的 RPC。
 type TradeClient interface {
-	// BlockInstrument 把标的写进下架名单（全局，不分空间）。Trade 不认识这个标的时照常写入，ListInstrumentHolders 返回空。
-	BlockInstrument(ctx context.Context, instrument InstrumentRef, reason, eventID string) (BlockResult, error)
+	// BlockInstrument 把标的写进下架名单（全局，不分空间），owner 是写入者标识。Trade 不认识这个标的时照常写入，ListInstrumentHolders 返回空。
+	BlockInstrument(ctx context.Context, instrument InstrumentRef, reason, eventID, owner string) (BlockResult, error)
 	// UnblockInstrument 解除禁止。
 	UnblockInstrument(ctx context.Context, instrument InstrumentRef) error
-	// ListBlockedInstruments 返回当前下架名单（含每一项的原因）；每次推进前用它确认标的还在名单里，演练解除前用它确认这一项是自己写的。
+	// ListBlockedInstruments 返回当前下架名单（含每一项的写入者）；每次推进前用它确认标的还在名单里，演练解除前用它确认这一项是自己写的。
 	ListBlockedInstruments(ctx context.Context) ([]BlockedInstrument, error)
 	// ListInstrumentHolders 跨空间列出策略持有该标的的组合账户；paperOnly 为真只返回模拟盘。
 	ListInstrumentHolders(ctx context.Context, instrument InstrumentRef, paperOnly bool) (HoldersResult, error)

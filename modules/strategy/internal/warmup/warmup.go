@@ -1,5 +1,6 @@
-// Package warmup 是策略池启用后的预热（设计 3.5）：后台从启用时刻往前按真实历史依次求值所有成员、推进成员模拟账本，一直推进到
-// 当时最新已收盘的一期，把最终状态与“预热到哪一期”写进会话。预热完成之前，触发器对这个池实例返回等待（事件稍后重投，不丢期），
+// Package warmup 是策略池启用后的预热（设计 3.5）：后台按真实历史依次求值所有成员、推进成员模拟账本，一直推进到当时最新已收盘的一期，
+// 把最终状态写进实例的状态行、把“预热到哪一期”写进会话。实例带着沿用的规则状态（重新启用而 DSL、绑定与成员都没变）时从状态
+// 推进到的那一期之后接着推进，否则从预热起点从头推进。预热完成之前，触发器对这个池实例返回等待（事件稍后重投，不丢期），
 // 也不允许确认进入运行阶段。
 package warmup
 
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
 	"github.com/mooyang-code/moox/modules/strategy/internal/replay"
@@ -259,7 +261,7 @@ func (m *Manager) recordFailure(ctx context.Context, instanceID, sessionID strin
 	_, _, err = m.Store.CommitResult(ctx, store.CommitRequest{Now: now, Result: store.Result{
 		ResultID: resultID, InstanceID: instanceID, SessionID: sessionID, BarEndTime: boundary.BarEnd, ValidUntil: validUntil,
 		Status: store.StatusSkipped, SkipReason: store.SkipPoolWarmupFailed, DSLHash: session.DSLHash,
-		InputJSON: record, TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: json.RawMessage(`{}`), SummaryJSON: json.RawMessage(`{}`),
+		InputJSON: record, TargetsJSON: json.RawMessage(`[]`), SummaryJSON: json.RawMessage(`{}`),
 		PublishStatus: store.PublishNone, CreatedAt: now,
 	}})
 	if errors.Is(err, store.ErrResultInstanceNotActive) {
@@ -340,25 +342,95 @@ func (m *Manager) warm(ctx context.Context, instanceID, sessionID string) (done 
 			return m.stillCurrent(ctx, instanceID, sessionID)
 		},
 	}
-	result, err := replay.RunPool(ctx, run)
+	// 先试着从沿用的状态接着推进；不能沿用、或接着推进出了任何问题，都退回从预热起点从头推进（写入时覆盖沿用的状态）。
+	result, mode, err := m.continueWarm(ctx, instanceID, sessionID, resolved, run)
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if errors.Is(err, errStale) {
+		return true, nil
+	}
 	if err != nil {
-		if errors.Is(err, errStale) {
-			return true, nil
+		m.logf("实例 %s 的策略池从沿用的状态接着推进失败，改为从头预热：%v", instanceID, err)
+	}
+	if err != nil || mode == warmFresh {
+		mode = warmFresh
+		if result, err = replay.RunPool(ctx, run); err != nil {
+			if errors.Is(err, errStale) {
+				return true, nil
+			}
+			return false, err
 		}
-		return false, err
 	}
 	raw, err := json.Marshal(result.State)
 	if err != nil {
 		return false, err
 	}
-	written, err := m.Store.SetSessionWarmed(ctx, sessionID, string(raw), result.Through)
+	written, err := m.Store.SetSessionWarmed(ctx, sessionID, string(raw), result.Through, m.now())
 	if err != nil {
 		return false, fmt.Errorf("写入预热结果：%w", err)
 	}
 	if written {
-		m.logf("实例 %s 的策略池预热完成：推进 %d 期到 %s，向 Storage 读取 %d 次，耗时 %s", instanceID, result.Bars, result.Through.Format(time.RFC3339), result.Reads, m.now().Sub(started).Round(time.Millisecond))
+		m.logf("实例 %s 的策略池预热完成（%s）：推进 %d 期到 %s，向 Storage 读取 %d 次，耗时 %s", instanceID, mode, result.Bars, result.Through.Format(time.RFC3339), result.Reads, m.now().Sub(started).Round(time.Millisecond))
 	}
 	return true, nil
+}
+
+// 预热的两种方式（写进完成日志）。
+const (
+	warmFresh     = "从预热起点从头推进"
+	warmContinued = "沿用上一个会话的状态接着推进"
+)
+
+// continueWarm 在实例带着沿用的规则状态时，从状态推进到的那一期之后接着推进到 run 的终点，返回推进后的状态。
+// 沿用的条件（任何一条不满足都返回 warmFresh，由调用方从头预热）：
+//   - 状态行存在且已挂在本会话上：打开会话时确认过 DSL 版本、绑定解析与成员都没变（见 store.OpenSession）；
+//   - 状态能解析；
+//   - 状态推进到的那一期不早于从头预热的起点：停用期间漏掉的期数不超过一次从头预热要推进的期数，接着推进不比从头预热多读历史；
+//     早于起点（停用太久）时沿用没有意义，从头预热。
+//
+// 状态之后还没有新收盘的期、或 View 还没写到状态之后的那一期时不推进，原样返回。接着推进失败（例如 Storage 暂不可用、状态里的池账本损坏）
+// 返回错误，调用方同样从头预热。
+func (m *Manager) continueWarm(ctx context.Context, instanceID, sessionID string, resolved input.Resolved, run replay.PoolRun) (replay.PoolRunResult, string, error) {
+	row, found, err := m.Store.GetState(ctx, instanceID)
+	if err != nil {
+		return replay.PoolRunResult{}, warmFresh, err
+	}
+	if !found || row.SessionID != sessionID {
+		return replay.PoolRunResult{}, warmFresh, nil
+	}
+	var state engine.State
+	if err := json.Unmarshal(row.StateJSON, &state); err != nil {
+		return replay.PoolRunResult{}, warmFresh, fmt.Errorf("沿用的规则状态无法解析：%w", err)
+	}
+	reached, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, row.BarEndTime)
+	if err != nil {
+		return replay.PoolRunResult{}, warmFresh, err
+	}
+	if reached.StorageStart.Before(run.Start) {
+		return replay.PoolRunResult{}, warmFresh, nil
+	}
+	carried := replay.PoolRunResult{State: state, Through: row.BarEndTime}
+	if reached.NextEnd.IsZero() {
+		return carried, warmContinued, nil
+	}
+	next, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, reached.NextEnd)
+	if err != nil {
+		return replay.PoolRunResult{}, warmFresh, err
+	}
+	if !next.StorageStart.Before(run.End) {
+		return carried, warmContinued, nil
+	}
+	run.Start, run.State = next.StorageStart, state
+	result, err := replay.RunPool(ctx, run)
+	if errors.Is(err, input.ErrNoCompleteBar) {
+		// 状态之后那一根已过宽限、但 View 还没写到它：和没有新收盘的根一样原样沿用，那一根等它的就绪事件照常处理。
+		return carried, warmContinued, nil
+	}
+	if err != nil {
+		return replay.PoolRunResult{}, warmFresh, err
+	}
+	return result, warmContinued, nil
 }
 
 var errStale = errors.New("会话已不再有效")

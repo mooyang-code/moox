@@ -21,8 +21,8 @@ type lostResponseTrade struct {
 	once sync.Once
 }
 
-func (l *lostResponseTrade) BlockInstrument(ctx context.Context, instrument action.InstrumentRef, reason, eventID string) (action.BlockResult, error) {
-	result, err := l.fakeTrade.BlockInstrument(ctx, instrument, reason, eventID)
+func (l *lostResponseTrade) BlockInstrument(ctx context.Context, instrument action.InstrumentRef, reason, eventID, owner string) (action.BlockResult, error) {
+	result, err := l.fakeTrade.BlockInstrument(ctx, instrument, reason, eventID, owner)
 	lost := false
 	l.once.Do(func() { lost = true })
 	if lost && err == nil {
@@ -79,16 +79,16 @@ type cancelAfterBlockTrade struct {
 	cancel context.CancelFunc
 }
 
-func (c *cancelAfterBlockTrade) BlockInstrument(ctx context.Context, instrument action.InstrumentRef, reason, eventID string) (action.BlockResult, error) {
-	result, err := c.fakeTrade.BlockInstrument(ctx, instrument, reason, eventID)
+func (c *cancelAfterBlockTrade) BlockInstrument(ctx context.Context, instrument action.InstrumentRef, reason, eventID, owner string) (action.BlockResult, error) {
+	result, err := c.fakeTrade.BlockInstrument(ctx, instrument, reason, eventID, owner)
 	c.cancel()
 	return result, err
 }
 
-// 名单里这一项的原因带着别人的执行记录 ID（执行记录 ID 只按完整标记匹配，不会因为前缀相同而认错）。
-func TestOwnerMarkerMatchesWholeExecutionID(t *testing.T) {
+// 名单里这一项的写入者是别人的执行记录 ID（写入者按整个 ID 比较，不会因为前缀相同而认错）。
+func TestOwnerMatchesWholeExecutionID(t *testing.T) {
 	h := newHarness(t)
-	h.trade.blocked[foo] = "下架：binance SPOT FOOUSDT，下架时间 2026-11-11T08:00:00Z（" + blockOwnerMarker("drill-2")
+	h.trade.blocked[foo] = "drill-2"
 	h.addExecution("drill", baseTime.Add(3*time.Hour), "PAPER_ONLY")
 	h.step("drill", baseTime)
 	require.NoError(t, h.cancel("drill"))

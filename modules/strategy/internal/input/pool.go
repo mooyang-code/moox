@@ -348,6 +348,11 @@ func PoolWindow(ctx context.Context, client Client, spaceID string, resolved Res
 	for i, member := range members {
 		for _, market := range member.Resolved.Markets() {
 			next, err := ReplayWindow(member.Resolved, programs[i], covered[market], start, end, now)
+			if includeLatest && errors.Is(err, ErrNoCompleteBar) {
+				// ReplayWindow 不算 View 的最新一根：起点正好落在最新一根上时它报“没有完整的数据”，但预热要包含这一根。
+				// 交给下面的放宽与最终判断：View 确实没有起点之后的数据时才返回这个错误。
+				continue
+			}
 			if err != nil {
 				return time.Time{}, fmt.Errorf("成员 %s 的 %s 市场 View %s：%w", member.ID, market, covered[market].ViewID, err)
 			}
@@ -367,7 +372,7 @@ func PoolWindow(ctx context.Context, client Client, spaceID string, resolved Res
 		}
 	}
 	if !end.After(start) {
-		return time.Time{}, errors.New("历史推进的区间在数据覆盖范围内没有完整的 bar")
+		return time.Time{}, fmt.Errorf("%w：历史推进的区间在数据覆盖范围内没有完整的 bar", ErrNoCompleteBar)
 	}
 	return end, nil
 }

@@ -113,15 +113,25 @@ func TestEvaluatorDoesNotRetryWhenSomeChannelDelivered(t *testing.T) {
 	}
 }
 
-func TestNotificationSeverityMatchesAlertLifecycle(t *testing.T) {
-	if notificationSeverity(domain.AlertEventTriggered) != notification.SeverityCritical {
-		t.Fatal("triggered alerts must be critical")
-	}
-	if notificationSeverity(domain.AlertEventReminder) != notification.SeverityWarning {
-		t.Fatal("reminders must be warnings")
-	}
-	if notificationSeverity(domain.AlertEventResolved) != notification.SeverityInfo {
-		t.Fatal("resolved alerts must be informational")
+// 推送的级别就是告警自己的级别（页面用的同一个 Severity）：新告警和重复提醒一致，恢复是提示。
+func TestNotificationSeverityFollowsAlertSeverity(t *testing.T) {
+	for checkID, want := range map[string]notification.Severity{
+		"dataset:storage:bars:1m":     notification.SeverityCritical,
+		"host:agent-1:presence":       notification.SeverityCritical,
+		"gateway:control:status":      notification.SeverityCritical,
+		"host:agent-1:agent":          notification.SeverityWarning,
+		"host:agent-1:cpu":            notification.SeverityWarning,
+		"reporter:control:collector":  notification.SeverityWarning,
+		"metrics_ingest:series_limit": notification.SeverityWarning,
+	} {
+		for _, eventType := range []string{domain.AlertEventTriggered, domain.AlertEventReminder} {
+			if got := notificationSeverity(eventType, checkID); got != want {
+				t.Fatalf("%s %s = %s, want %s", checkID, eventType, got, want)
+			}
+		}
+		if notificationSeverity(domain.AlertEventResolved, checkID) != notification.SeverityInfo {
+			t.Fatalf("%s 的恢复通知应是提示", checkID)
+		}
 	}
 }
 

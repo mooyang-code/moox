@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
@@ -18,12 +17,9 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-const (
-	monitorCheckTimerService       = "trpc.moox.monitor.check_schedule.timer"
-	monitorHostSilenceTimerService = "trpc.moox.monitor.host_silence.timer"
-)
+const monitorCheckTimerService = "trpc.moox.monitor.check_schedule.timer"
 
-func registerMonitorScheduleTimers(s *server.Server, cfg *config.Config, runtime *Runtime, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), marketCanary func(context.Context) error) error {
+func registerMonitorScheduleTimers(s *server.Server, cfg *config.Config, runtime *Runtime, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), hostChecks, marketCanary func(context.Context) error) error {
 	if s == nil || cfg == nil || runtime == nil || runtime.Repositories == nil {
 		return fmt.Errorf("monitor schedule timers require server, config, and repositories")
 	}
@@ -35,17 +31,7 @@ func registerMonitorScheduleTimers(s *server.Server, cfg *config.Config, runtime
 		InstanceID: cfg.Instance.InstanceID, MaxConcurrency: cfg.Scheduler.MaxConcurrency, Runner: runner, OnResult: hook,
 		Watchdog: watchdogMetrics,
 	})
-	checkJob, err := timerjob.New("monitor_check_schedule", 30*time.Second, func(ctx context.Context) error {
-		count, scheduleErr := runtime.Scheduler.RunDueOnce(ctx)
-		if count > 0 {
-			log.InfoContextf(ctx, "monitor scheduled checks processed=%d", count)
-		}
-		var canaryErr error
-		if marketCanary != nil {
-			canaryErr = marketCanary(ctx)
-		}
-		return errors.Join(scheduleErr, canaryErr)
-	})
+	checkJob, err := timerjob.New("monitor_check_schedule", 30*time.Second, checkRound(hostChecks, runtime.Scheduler.RunDueOnce, marketCanary))
 	if err != nil {
 		return err
 	}
@@ -56,21 +42,24 @@ func registerMonitorScheduleTimers(s *server.Server, cfg *config.Config, runtime
 	return nil
 }
 
-func registerMonitorHostSilenceTimer(s *server.Server, scanner *hostmetrics.SilenceScanner, refreshRules func(context.Context) error) error {
-	if s == nil || scanner == nil {
-		return fmt.Errorf("monitor host silence timer requires server and scanner")
-	}
-	job, err := timerjob.New("monitor_host_silence", 30*time.Second, func(ctx context.Context) error {
-		var refreshErr error
-		if refreshRules != nil {
-			refreshErr = refreshRules(ctx)
+// checkRound 是检查定时器的一轮，顺序固定：主机类检查 → 到期的部署探测 → 行情探针与业务评估。
+// 主机类检查排在最前、只读本地库、有自己的时限：某台主机宕机让部署探测等到超时，或后面读 Storage 超时，都不会推迟或挡住主机失联与资源告警。
+// 各步互不短路，错误合并返回。
+func checkRound(hostChecks func(context.Context) error, schedule func(context.Context) (int, error), watchdog func(context.Context) error) func(context.Context) error {
+	return func(ctx context.Context) error {
+		var hostErr, watchdogErr error
+		if hostChecks != nil {
+			hostErr = hostChecks(ctx)
 		}
-		return errors.Join(refreshErr, scanner.Scan(ctx, time.Now().UTC()))
-	})
-	if err != nil {
-		return err
+		count, scheduleErr := schedule(ctx)
+		if count > 0 {
+			log.InfoContextf(ctx, "monitor scheduled checks processed=%d", count)
+		}
+		if watchdog != nil {
+			watchdogErr = watchdog(ctx)
+		}
+		return errors.Join(hostErr, scheduleErr, watchdogErr)
 	}
-	return registerMonitorTimerJob(s, monitorHostSilenceTimerService, job)
 }
 
 func registerMonitorTimerJob(s *server.Server, name string, job *timerjob.Job) error {

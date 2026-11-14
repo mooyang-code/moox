@@ -34,7 +34,7 @@ func resultProto(value store.Result) *strategypb.StrategyResult {
 		BarEndTime: formatTime(value.BarEndTime), ValidUntil: formatTime(value.ValidUntil),
 		Status: value.Status, SkipReason: value.SkipReason, DslHash: value.DSLHash,
 		Targets: targetProtos(value.TargetsJSON), SummaryJson: string(value.SummaryJSON), InputJson: string(value.InputJSON),
-		RuleStatesJson: string(value.RuleStatesJSON), PublishStatus: string(value.PublishStatus), CreatedAt: formatTime(value.CreatedAt),
+		PublishStatus: string(value.PublishStatus), CreatedAt: formatTime(value.CreatedAt),
 		NextParamsJson: string(value.NextParamsJSON), ParamsError: value.ParamsError, ParamsDeliveredAt: formatOptionalTime(value.ParamsDeliveredAt),
 	}
 }

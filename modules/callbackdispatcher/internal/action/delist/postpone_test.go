@@ -5,7 +5,6 @@ package delist
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -309,7 +308,7 @@ func TestDrillReopenedWhileRealDelistHoldsBlock(t *testing.T) {
 	h.addExecution("real", baseTime.Add(200*time.Hour), "ALL")
 	h.step("real", baseTime)
 	require.True(t, h.trade.isBlocked())
-	require.True(t, strings.Contains(h.trade.blocked[foo], blockOwnerMarker("real")))
+	require.Equal(t, "real", h.trade.blocked[foo])
 
 	drillT := baseTime.Add(3 * time.Hour)
 	h.trade.setHolders(paper("crypto", "la-p"))

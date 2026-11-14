@@ -88,7 +88,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
     c_boot_id TEXT NOT NULL,
     c_last_seen_at DATETIME NOT NULL,
     c_last_event_id TEXT NOT NULL,
-    c_status TEXT NOT NULL CHECK (c_status IN ('reachable', 'unreachable')),
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

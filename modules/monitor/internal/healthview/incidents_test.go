@@ -38,7 +38,7 @@ func TestIncidentsPairTriggerAndRecoveryWithinWindow(t *testing.T) {
 		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: string(rune('a' + seq)), SpaceID: space, RuleID: "default:" + check, CheckID: check, EventType: eventType, Status: "firing", Payload: payload, CreatedAt: at}))
 	}
 	reporter, strategy, webHost, fetch := "reporter:control:collector", "dataset:strategy:s1:1m", "deployment:control:web-host", "market_fetch:scf_timer"
-	presence := hostmetrics.PresenceCheckID("AGENT01")
+	presence := hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindPresence)
 	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{SpaceID: "mooxsys", CheckID: reporter, Name: "行情采集服务（control 节点）· 运行指标上报", Kind: domain.CheckKindExternal, Enabled: true}))
 	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{CheckID: webHost, Name: "控制台前端（control）· 健康检查", Kind: domain.CheckKindHTTP, Enabled: true}))
 
@@ -168,21 +168,6 @@ func TestIncidentsRecoverTriggerCutByEventLimit(t *testing.T) {
 	require.Equal(t, "一直运行失败", view.Incidents[0].Reason)
 }
 
-func TestHostThresholdsComeFromEnabledDefaultRules(t *testing.T) {
-	repos := openRepositories(t)
-	ctx := t.Context()
-	for metric, definition := range map[string]string{hostmetrics.HostMetricCPU: `{"threshold":80,"recovery_threshold":70}`, hostmetrics.HostMetricMemory: `{"threshold":90}`, hostmetrics.HostMetricFilesystemUsage: `{"threshold":85}`} {
-		checkID := hostmetrics.HostRuleKey("AGENT01", metric)
-		require.NoError(t, repos.Alerts.CreateRule(ctx, &domain.AlertRule{SpaceID: events.SystemSpaceID, RuleID: "default:" + checkID, CheckID: checkID, Description: definition, Enabled: metric != hostmetrics.HostMetricMemory}))
-	}
-	hosts := []*pb.HealthHost{{HostId: "control", AgentId: "AGENT01"}, {HostId: "storage"}}
-	require.NoError(t, (Builder{Alerts: repos.Alerts}).decorateHostThresholds(ctx, hosts))
-	require.Equal(t, 80.0, hosts[0].CpuThreshold)
-	require.Zero(t, hosts[0].MemoryThreshold, "disabled rules draw no threshold")
-	require.Equal(t, 85.0, hosts[0].DiskThreshold)
-	require.Zero(t, hosts[1].CpuThreshold)
-}
-
 func TestDatasetAlertCarriesDatasetFactsInsteadOfConcatenatedReason(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	facts := observability.Overview{GeneratedAt: now, Datasets: []observability.DatasetFrequencyStatus{{Producer: "factor", SpaceID: "crypto", DatasetID: "dataset_factor_x_1m", Freq: "1m", Status: "stale", Reason: "run stale", LastSuccessAt: now.Add(-time.Hour), OutputWatermarkAt: now.Add(-time.Hour), WaitingBars: 59, WaitingSince: now.Add(-58 * time.Minute), OverdueSeconds: 3480, LatenessLimitSeconds: 600}}}
@@ -251,6 +236,7 @@ func TestActiveHostAlertCarriesLatestProcesses(t *testing.T) {
 	ctx := t.Context()
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
 	check := "host:AGENT01:memory"
+	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{CheckID: check, Name: "主机 control · 内存使用率", Kind: domain.CheckKindExternal, Enabled: true}))
 	require.NoError(t, repos.Alerts.CreateRule(ctx, &domain.AlertRule{RuleID: "default:" + check, CheckID: check, Enabled: true}))
 	require.NoError(t, repos.Alerts.UpsertState(ctx, &domain.AlertState{RuleID: "default:" + check, CheckID: check, Status: domain.AlertStatusFiring, DedupeKey: check, TriggeredAt: ptr(now.Add(-time.Hour)), UpdatedAt: now}))
 	create := func(id, eventType, name string, at time.Time) {

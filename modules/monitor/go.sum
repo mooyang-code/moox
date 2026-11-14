@@ -100,8 +100,6 @@ github.com/molecule-man/go-brrr v1.3.0 h1:KEGPkUk9PYFw5+Sv/evCOSU5OmMDXCGFqQ9YjR
 github.com/molecule-man/go-brrr v1.3.0/go.mod h1:7ybW6/7gA3oKY45jOfVNjSJDtrr6ea4tzbsTkjmQDC4=
 github.com/mooyang-code/moox/packages/lifecycle v0.0.0-20261104013655-e050b3b4039b h1:GyDl3qx52aMtuIQrFUi9Nuw6NAt+NBez1BHXWIlFMbM=
 github.com/mooyang-code/moox/packages/lifecycle v0.0.0-20261104013655-e050b3b4039b/go.mod h1:5QxcRmUg8A9rPHu9/CRlimRIpJtm5KtnhDdUogDc+qs=
-github.com/mooyang-code/snapshotcache v0.1.1 h1:ac1+aZGzp8Ieq/66oXB0myq6Li4isHp4tjEtjzVgeuQ=
-github.com/mooyang-code/snapshotcache v0.1.1/go.mod h1:Xqz432rJ4mUeq8ZgjBp/tmk3XlHOnAXxdqz4TaQDDsk=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/nats-io/jwt/v2 v2.8.1 h1:V0xpGuD/N8Mi+fQNDynXohVvp7ZztevW5io8CUWlPmU=

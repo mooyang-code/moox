@@ -19,9 +19,7 @@ type Session struct {
 	ResolvedJSON string
 	// MembersJSON 是策略池固化的成员（input.PoolMember 列表的 JSON），非池为空。
 	MembersJSON string
-	// WarmState 是策略池预热完成时的引擎状态（engine.State 的 JSON）；WarmedThrough 是预热推进到的最后一期（bar_end），
-	// nil 表示预热还没完成。非池会话两者都为空。
-	WarmState     string
+	// WarmedThrough 是策略池预热推进到的最后一期（bar_end），nil 表示预热还没完成；非池会话为空。预热出的引擎状态写在实例的状态行里。
 	WarmedThrough *time.Time
 	CreatedAt     time.Time
 	ClosedAt      *time.Time
@@ -33,14 +31,13 @@ type sessionRow struct {
 	DSLHash       string        `gorm:"column:c_dsl_hash"`
 	ResolvedJSON  string        `gorm:"column:c_resolved_json"`
 	MembersJSON   string        `gorm:"column:c_members_json"`
-	WarmState     string        `gorm:"column:c_warm_state"`
 	WarmedThrough sql.NullInt64 `gorm:"column:c_warmed_through"`
 	CreatedAt     time.Time     `gorm:"column:c_ctime"`
 	ClosedAt      sql.NullTime  `gorm:"column:c_closed_at"`
 }
 
 func (r sessionRow) session() Session {
-	session := Session{SessionID: r.SessionID, InstanceID: r.InstanceID, DSLHash: r.DSLHash, ResolvedJSON: r.ResolvedJSON, MembersJSON: r.MembersJSON, WarmState: r.WarmState, CreatedAt: r.CreatedAt.UTC(), ClosedAt: nullableTime(r.ClosedAt)}
+	session := Session{SessionID: r.SessionID, InstanceID: r.InstanceID, DSLHash: r.DSLHash, ResolvedJSON: r.ResolvedJSON, MembersJSON: r.MembersJSON, CreatedAt: r.CreatedAt.UTC(), ClosedAt: nullableTime(r.ClosedAt)}
 	if r.WarmedThrough.Valid {
 		through := fromMillis(r.WarmedThrough.Int64)
 		session.WarmedThrough = &through
@@ -53,24 +50,24 @@ const (
 	// sqlInsertSession 写入一条未关闭的会话快照。
 	sqlInsertSession = `INSERT INTO t_strategy_sessions (c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_ctime, c_closed_at) VALUES (?, ?, ?, ?, ?, ?, NULL)`
 	// sqlSelectSessionByID 按会话 ID 读取会话。
-	sqlSelectSessionByID = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warm_state, c_warmed_through, c_ctime, c_closed_at
+	sqlSelectSessionByID = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warmed_through, c_ctime, c_closed_at
 		FROM t_strategy_sessions WHERE c_session_id = ?`
 	// sqlListSessionsOfInstance 按创建时间倒序列出实例的会话。
-	sqlListSessionsOfInstance = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warm_state, c_warmed_through, c_ctime, c_closed_at
+	sqlListSessionsOfInstance = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warmed_through, c_ctime, c_closed_at
 		FROM t_strategy_sessions WHERE c_instance_id = ? ORDER BY c_ctime DESC, c_session_id`
 	// sqlCloseSession 记录会话结束时间（只关闭还没关闭的会话）。
 	sqlCloseSession = `UPDATE t_strategy_sessions SET c_closed_at = ? WHERE c_session_id = ? AND c_closed_at IS NULL`
-	// sqlSetSessionWarmed 比较交换写入策略池预热结果：只写未关闭、有成员快照、还没有预热结果的会话。
-	sqlSetSessionWarmed = `UPDATE t_strategy_sessions SET c_warm_state = ?, c_warmed_through = ? WHERE c_session_id = ? AND c_closed_at IS NULL AND c_members_json <> '' AND c_warmed_through IS NULL`
+	// sqlSetSessionWarmed 比较交换写入策略池预热的终点：只写未关闭、有成员快照、还没有预热结果的会话。
+	sqlSetSessionWarmed = `UPDATE t_strategy_sessions SET c_warmed_through = ? WHERE c_session_id = ? AND c_closed_at IS NULL AND c_members_json <> '' AND c_warmed_through IS NULL`
 	// sqlListPendingWarmSessions 找出未关闭、挂在启用实例上、有成员快照而还没有预热结果的会话。
-	sqlListPendingWarmSessions = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warm_state, c_warmed_through, c_ctime, c_closed_at
+	sqlListPendingWarmSessions = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warmed_through, c_ctime, c_closed_at
 		FROM t_strategy_sessions
 		WHERE c_closed_at IS NULL AND c_members_json <> '' AND c_warmed_through IS NULL
 		AND c_session_id IN (SELECT c_session_id FROM t_strategy_instances WHERE c_enabled = 1 AND c_session_id IS NOT NULL)
 		ORDER BY c_ctime`
 )
 
-// OpenSession 写入会话快照；dslYaml 用于登记 DSL 版本（已存在则忽略）。
+// OpenSession 写入会话快照；dslYaml 用于登记 DSL 版本（已存在则忽略）。同一个事务里决定实例已有的规则状态是否沿用（见 carryState）。
 func (s *Store) OpenSession(ctx context.Context, session Session, dslYaml string) error {
 	if strings.TrimSpace(session.SessionID) == "" || strings.TrimSpace(session.InstanceID) == "" || strings.TrimSpace(session.DSLHash) == "" || strings.TrimSpace(dslYaml) == "" {
 		return errors.New("会话缺少 session_id、instance_id、dsl_hash 或 DSL 文本")
@@ -93,7 +90,10 @@ func (s *Store) OpenSession(ctx context.Context, session Session, dslYaml string
 		if err := ensureDefinitionVersion(tx, session.DSLHash, dslYaml, now); err != nil {
 			return err
 		}
-		return tx.Exec(sqlInsertSession, session.SessionID, session.InstanceID, session.DSLHash, resolved, session.MembersJSON, now).Error
+		if err := tx.Exec(sqlInsertSession, session.SessionID, session.InstanceID, session.DSLHash, resolved, session.MembersJSON, now).Error; err != nil {
+			return err
+		}
+		return carryState(tx, session.InstanceID, session.SessionID, session.DSLHash, resolved, session.MembersJSON, now)
 	})
 }
 
@@ -131,14 +131,35 @@ func (s *Store) CloseSession(ctx context.Context, sessionID string, at time.Time
 	return s.db.WithContext(ctx).Exec(sqlCloseSession, now, sessionID).Error
 }
 
-// SetSessionWarmed 写入策略池预热的结果（预热完成时的引擎状态与推进到的最后一期）：比较交换，只在会话未关闭、
-// 且还没有预热结果时写入，返回是否写入（会话已被停用或已经预热过时为 false）。
-func (s *Store) SetSessionWarmed(ctx context.Context, sessionID, state string, through time.Time) (bool, error) {
-	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(state) == "" || through.IsZero() {
-		return false, errors.New("预热结果缺少 session_id、状态或终点")
+// SetSessionWarmed 在一个事务里写入策略池预热的结果：会话记下预热推进到的最后一期，实例的状态行写成预热完成时的引擎状态
+// （engine.State 的 JSON，状态推进到的那一期就是预热终点）。比较交换，只在会话未关闭、且还没有预热结果时写入，
+// 返回是否写入（会话已被停用或已经预热过时为 false，状态行不动）。
+func (s *Store) SetSessionWarmed(ctx context.Context, sessionID, state string, through, at time.Time) (bool, error) {
+	if strings.TrimSpace(sessionID) == "" || through.IsZero() {
+		return false, errors.New("预热结果缺少 session_id 或终点")
 	}
-	result := s.db.WithContext(ctx).Exec(sqlSetSessionWarmed, state, millis(through), sessionID)
-	return result.RowsAffected == 1, result.Error
+	now, err := requireTime(at)
+	if err != nil {
+		return false, err
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(state), &object); err != nil || object == nil {
+		return false, errors.New("预热结果的状态必须是 JSON 对象")
+	}
+	written := false
+	err = s.transaction(ctx, func(tx *gorm.DB) error {
+		result := tx.Exec(sqlSetSessionWarmed, millis(through), sessionID)
+		if result.Error != nil || result.RowsAffected != 1 {
+			return result.Error
+		}
+		var row sessionRow
+		if err := tx.Raw(sqlSelectSessionByID, sessionID).Scan(&row).Error; err != nil {
+			return err
+		}
+		written = true
+		return upsertState(tx, State{InstanceID: row.InstanceID, SessionID: sessionID, DSLHash: row.DSLHash, BarEndTime: through, StateJSON: json.RawMessage(state)}, now)
+	})
+	return written, err
 }
 
 // PendingWarmSessions 返回还没有完成预热的策略池会话（未关闭、挂在启用实例上、有成员快照）：进程启动时据此重新开始预热。

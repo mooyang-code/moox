@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // Runtime owns monitor's process-scoped resources and shutdown ordering.
@@ -30,9 +29,11 @@ type Runtime struct {
 	Store          *store.Store
 	Repositories   *store.Repositories
 	MetricStores   *monmetrics.Stores
-	HostRuleCache  *hostmetrics.RuleCache
 	HostSamples    *hostmetrics.SampleStore
 	Scheduler      *scheduler.Scheduler
+	// businessEvaluation 为 true 表示有业务评估在跑；businessEvaluatedAt 是它最近一次成功结束的时刻（Unix 纳秒，0 表示还没有成功过）。
+	businessEvaluation  bool
+	businessEvaluatedAt atomic.Int64
 	// klineFreshness 是 K 线新鲜度评估器（没有评估器时为空）；清理失效检查时用它识别会被补建的 K 线检查。
 	klineFreshness *monmetrics.KlineFreshnessEvaluator
 	// life 是 Monitor 的生命周期控制器（在健康检查注册时创建，创建之前为空）：暂停时告警静默，只记录、不推送。
@@ -197,9 +198,6 @@ func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
 		if r.cancel != nil {
 			r.cancel()
-		}
-		if r.HostRuleCache != nil {
-			_ = r.HostRuleCache.Stop(trpc.BackgroundContext())
 		}
 		r.workers.Wait()
 		if r.Gateway != nil {

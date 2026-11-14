@@ -27,7 +27,7 @@ const (
 	defaultStaleCheckBatch        = 100
 	// orphanRuleMinAge 是孤儿默认规则的最小存在时间：刚创建的规则可能属于本轮读取检查列表之后才出现的新检查。
 	orphanRuleMinAge = 10 * time.Minute
-	// defaultRuleDescription 是 ensureDefaultCheckAlertRules 写入的描述；主机规则的描述是阈值 JSON，不会被当成孤儿规则。
+	// defaultRuleDescription 是 ensureDefaultCheckAlertRules 写入的描述。
 	defaultRuleDescription = "Default MooX monitoring notification"
 )
 

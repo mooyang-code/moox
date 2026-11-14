@@ -120,7 +120,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		log.Warnf("启动对账：%v%s", err, tradeDetail(err))
 	}
 	cancelReconcile()
-	// 进程在预热中途重启：会话里还没有预热结果的池实例从头重新预热（先于开始消费事件，门禁立刻拦住它们的事件）。
+	// 进程在预热中途重启：会话里还没有预热结果的池实例重新开始预热（带着沿用状态的从状态之后接着推进，否则从头；先于开始消费事件，门禁立刻拦住它们的事件）。
 	if err := warm.Resume(ctx); err != nil {
 		return nil, nil, fmt.Errorf("恢复策略池预热失败：%w", err)
 	}
