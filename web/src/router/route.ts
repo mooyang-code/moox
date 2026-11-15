@@ -169,12 +169,6 @@ export const staticRoutes = [
         meta: { title: "实例详情", hide: true, activeMenu: "strategy-tasks" }
       },
       {
-        path: "/ops/activity",
-        name: "ops-activity",
-        component: () => import("@/views/ops/activity/index.vue"),
-        meta: { title: "活动日志" }
-      },
-      {
         path: "/collector/tasks",
         name: "collector-tasks",
         component: () => import("@/views/collector/task-management/index.vue"),
@@ -209,14 +203,14 @@ export const staticRoutes = [
       {
         path: "/ops/logs",
         name: "ops-logs",
-        component: () => import("@/views/ops/log-records/index.vue"),
-        meta: { title: "重要日志" }
+        component: () => import("@/views/ops/log-center/index.vue"),
+        meta: { title: "日志中心", reuseOnQuery: true }
       },
       {
         path: "/ops/deployments",
         name: "ops-deployments",
         component: () => import("@/views/ops/deployments/index.vue"),
-        meta: { title: "服务", reuseOnQuery: true }
+        meta: { title: "服务管理", reuseOnQuery: true }
       },
       {
         path: "/ops/hosts",

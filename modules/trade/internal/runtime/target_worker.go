@@ -287,7 +287,9 @@ func (w *TargetWorker) runRecords(ctx context.Context, records []store.LogicalAc
 			return err
 		}
 		if convergeErr != nil {
-			if !full && convergeErr == gorm.ErrRecordNotFound {
+			// 列出目标之后、收敛之前目标被删掉（会话释放、组合解绑）：没有目标可收敛，不算失败。
+			// 只认没包装过的 ErrRecordNotFound：包在 AccountError 里的是成员账户读不到，要留着诊断。
+			if convergeErr == gorm.ErrRecordNotFound {
 				continue
 			}
 			if accountErr, ok := convergeErr.(*targetapp.AccountError); ok {
@@ -341,14 +343,17 @@ func (w *TargetWorker) observe(
 	if w.Metrics == nil {
 		return
 	}
+	// 暂停（组合暂停自动执行、时段外、目标未生效、成员未就绪等）是没有调仓可做，不算一次运行：
+	// rejected 会刷新最近失败时间，暂停的组合仍绑着策略时“交易调仓”会一直报失败。
+	// 自动暂停由 AttentionWorker 单独告警。
+	if err == nil && result.Status == targetapp.StatusPaused {
+		return
+	}
 	outcome := "success"
 	switch {
 	case err != nil:
 		outcome = "error"
-	case result.Status == targetapp.StatusConverged:
-		outcome = "success"
-	case result.Status == targetapp.StatusBlocked ||
-		result.Status == targetapp.StatusPaused:
+	case result.Status == targetapp.StatusBlocked:
 		outcome = "rejected"
 	}
 	_ = w.Metrics.ObserveRun("target_commit", outcome, "trade-rebalance", at)

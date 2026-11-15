@@ -114,11 +114,11 @@ export const systemMenu = [
   // 展开状态、页签、筛选、定位的主机都在 query 里：query 变化时复用页面（菜单与 route.ts 两处都写）
   menu("0607", "06", "/ops/monitor", "ops-monitor", "监控告警", "ops/monitor/index", 1, { reuseOnQuery: true }),
   menu("0601", "06", "/ops/hosts", "ops-hosts", "主机工作台", "ops/host-workbench/index", 3, { reuseOnQuery: true }),
-  menu("0600", "06", "/ops/deployments", "ops-deployments", "服务", "ops/deployments/index", 2, {
+  menu("0600", "06", "/ops/deployments", "ops-deployments", "服务管理", "ops/deployments/index", 2, {
     reuseOnQuery: true
   }),
-  menu("0608", "06", "/ops/activity", "ops-activity", "活动日志", "ops/activity/index", 4),
-  menu("0609", "06", "/ops/logs", "ops-logs", "重要日志", "ops/log-records/index", 5),
+  // 活动日志与重要日志是同一页的两个页签（?tab=），query 变化时复用页面。
+  menu("0609", "06", "/ops/logs", "ops-logs", "日志中心", "ops/log-center/index", 4, { reuseOnQuery: true }),
 
   directory("07", "0", "/settings/spaces", "settings", "系统设置", 9, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "空间管理", "settings/spaces/index", 1),

@@ -22,10 +22,13 @@ var moduleHealthNames = map[string]string{
 	"monitor-metrics":       "监控指标接收",
 }
 
-// moduleHealthItems turns each built-in module health check into a business
-// check once its module has reported a run. The check fails while the latest
-// run failed and no run has succeeded within the check's MaxLag; a module that
-// is idle, or that recovers, is healthy.
+// moduleIdleAfter 是最近一次失败之后多久没有新的运行就算模块闲下来了。取 1 小时而不是 MaxLag：
+// 每小时跑一次、次次失败的模块要一直判失败，不能在两次运行之间恢复又失败。
+const moduleIdleAfter = time.Hour
+
+// moduleHealthItems 在模块上报过运行之后，把每个内置模块健康检查转成一项业务检查。
+// 最近一次运行失败、且 MaxLag 内没有成功过时判失败；模块恢复成功，或最近一次失败之后
+// 超过 moduleIdleAfter（和 MaxLag 取大）没有新的运行（闲置，例如组合解绑后没有调仓可做），判健康。
 func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, checks []report.ModuleHealthCheck, now time.Time) ([]businessFreshnessItem, error) {
 	if query == nil {
 		return nil, nil
@@ -54,7 +57,12 @@ func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, chec
 			spaceID: events.SystemSpaceID, checkID: "module:" + check.ID, name: name,
 			success: true, reason: "最近一次运行成功",
 		}
-		if lastError.After(lastSuccess) && now.Sub(lastSuccess) > check.MaxLag {
+		failing := lastError.After(lastSuccess) && now.Sub(lastSuccess) > check.MaxLag
+		switch {
+		case failing && now.Sub(lastError) > max(check.MaxLag, moduleIdleAfter):
+			item.reason = fmt.Sprintf("最近一次运行失败（%s）之后已 %s没有新的运行，按闲置处理",
+				alerttext.Time(lastError), alerttext.Duration(now.Sub(lastError)))
+		case failing:
 			item.success = false
 			if lastSuccess.IsZero() {
 				item.reason = fmt.Sprintf("最近一次运行失败（%s），且从未成功过", alerttext.Time(lastError))
