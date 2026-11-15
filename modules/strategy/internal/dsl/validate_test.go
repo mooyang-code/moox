@@ -411,7 +411,7 @@ func TestHoldingOffsetsAll(t *testing.T) {
 		"all 缺 bars":       {holding("{offsets: all}"), "holding.bars 必须大于 0"},
 		"all 配 calendar":   {holding("{calendar: week, days: [1], offsets: all}"), "calendar 与 bars、offsets 只能写一种"},
 		"offsets 写别的文字":    {holding("{bars: 4, offsets: every}"), "必须是整数列表"},
-		"all 与 buffer 仍互斥": {rankRule("select: {top: 1, buffer: 1}, weight: 1, holding: {bars: 4, offsets: all}"), "holding"},
+		"all 与 buffer 仍互斥": {rankRule("select: {top: 1, buffer: 1}, weight: 1, holding: {bars: 4, offsets: all}"), "holding 和 select.buffer"},
 	})
 }
 

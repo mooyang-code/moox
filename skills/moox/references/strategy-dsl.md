@@ -180,6 +180,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 - `holding: {bars, offsets}` 分批换仓，与 `buffer` 互斥；`offsets: all` 等于写出 0 到 `bars − 1`，即每根重建一个批次、每个批次持有 `bars` 根（批次最多 64 个，所以这时 `bars` 不能超过 64；要更长就放大 `bars`、`offsets` 取稀疏的几个）；`anchor: "<RFC3339 的 bar_start>"`（A 股可写交易日期）只改相位。日历换仓写 `holding: {calendar: trading_days | week | month, every: 5（仅 trading_days）, days: [1, -1], at: first | last}`，与 bars/offsets 互斥；建仓 bar 没有 ok 决策时在之后第一根 ok bar 补建。`filter_after` 只剔除不补位，剔除的权重留现金。
 - `hold: {entry, exit, max_bars, cooldown_bars, allow_reentry}` 进出场持有：持有中 exit 为真、不满足 filter、持满 max_bars、止损、缺数即出场（stop 优先），空位按名次从 entry 为真且 exit 不为真的候选里补，目标数取 `select` 换算的个数（持有多于目标不裁减）。持有标的只缺 score、entry 的列时不出场。与 buffer、holding.bars/offsets、then、range、filter_after 互斥；可与 `holding.calendar`（只能一个 days）同写，只在建仓 bar 判进出场。；`allow_reentry: true` 让候选只看 entry（出场条件为真的标的也能入场、刚出场的标的当根可补回，要求 cooldown_bars 为 0），默认不写
 - `scale: {expr, max}` 在规则配权（含 cap）之后逐标的乘系数，截到 [0, max]（max 默认 1、上限 10），乘掉的留现金；系数为 NaN 按缺数处理。`on_missing: {keep_bars: N}` 让持有标的本根缺数时冻结保持，连续缺数超过 N 根才移出。
+- rank 表达不了的写法（参数表式的大量子策略、按数量持有、过滤条件里用名次或分位等）见 `docs/模块/策略.md` 的“表达不了的写法（已知限制）”表；`filter_after` 是保留条件（条件为真的留下），与外部框架“成立就剔除”的后置过滤方向相反。
 - `side` 取 `long`（默认）或 `short`；空头只走永续，纯现货与股票不允许做空。
 - `market: spot | swap` 是规则级市场（见第 1 节“market：市场模式”）。
 
