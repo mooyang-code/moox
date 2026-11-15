@@ -73,7 +73,7 @@
 | `collector subjects status` | 各标签最近一次标的同步的状态 |
 | `collector subjects sync` | 立即同步币安/东财的标的标签成员，不等整点定时任务 |
 | `collector subjects unexclude` | 解除排除：标的从新的生效周期起回到采集（期间的历史需要时用补采） |
-| `collector task create` | 创建 K 线采集任务（可直接指定 SCF 定时模式与每函数标的数） |
+| `collector task create` | 创建 K 线采集任务（可指定采集方式与每函数标的数） |
 | `collector task delete` | 删除采集任务及其结果（默认只预览，--yes 才执行） |
 | `collector task delete-result` | 删除没有任务引用的采集结果（View、行数据与数据集；默认只预览，--yes 才执行） |
 | `collector task disable` | 停用采集任务（默认只预览，--yes 才执行） |

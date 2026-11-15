@@ -170,8 +170,8 @@ type PlanReconciler struct {
 	lastVerified   time.Time
 	// verifyRequested 由 RPC 删除函数之后置位：下一轮对账立即读回，不等 lastVerified 的间隔。
 	verifyRequested atomic.Bool
-	// deletedFunctions 是 RPC 删掉的函数名（受 readMu 保护）：未生效计划里已经确认的函数被删后，下一轮去掉它在本阶段的确认、
-	// 按阶段期望重推，不等到最终阶段。只在内存里，重启就丢，那时退回到等最终阶段（或读回修复）。
+	// deletedFunctions 是 RPC 删掉的计划内函数（键是 refKey：地域/命名空间/函数名，受 readMu 保护）：未生效计划里已经确认的函数被删后，
+	// 下一轮去掉它在本阶段的确认、按阶段期望重推，不等到最终阶段。只在内存里，重启就丢，那时退回到等最终阶段（或读回修复）。
 	deletedFunctions map[string]bool
 	// 操作表（第一次用时创建）与“正在暂停”的标记：暂停时置位，空间的对账协程重新启动（恢复）时随新的对账器清掉。
 	opsOnce    sync.Once
@@ -641,7 +641,7 @@ func (r *PlanReconciler) saveProgress(ctx context.Context, record *store.FetchPl
 	return nil
 }
 
-// takeDeletedFunctions 取走 RPC 删掉的函数名。
+// takeDeletedFunctions 取走 RPC 删掉的计划内函数（键是 refKey）。
 func (r *PlanReconciler) takeDeletedFunctions() map[string]bool {
 	r.readMu.Lock()
 	defer r.readMu.Unlock()
@@ -667,9 +667,9 @@ func (r *PlanReconciler) reconfirmDeleted(ctx context.Context, record *store.Fet
 		return r.fail("store", err)
 	}
 	changed := false
-	for name := range deleted {
+	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
-		if function == nil || !function.IsSCF() {
+		if function == nil || !function.IsSCF() || !deleted[refKey(r.functionRef(name, function.Region))] {
 			continue
 		}
 		switch {

@@ -110,7 +110,7 @@ func planBaselineRecords(t *testing.T, r *PlanReconciler, records []*store.Fetch
 	return plans
 }
 
-// planDispatch 是对账器实际提交给云端的一批请求（发布租约的两项不记：它们只是通行证，不进函数）。
+// planDispatch 是 T0 金样里对账器经旧作业接口提交的一批请求（当时的租约字段没有录：它们不进函数）。
 type planDispatch struct {
 	// At 是提交时刻（测试里的假时钟，UTC）。
 	At   string `json:"at"`

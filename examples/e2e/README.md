@@ -37,4 +37,4 @@ CLI 使用清单中的操作员 SSH 网关身份。`probe-egress` 经 Collector 
 
 连续观察至少 30 分钟，确认数据持续写入、View 追上、超时与缺口均能解释，再逐步扩大标的规模。WS / 本地执行路径还应核对 stream 心跳、已应用计划和周期到达统计，不能用 Timer 探针替代。
 
-不要为了验收删除 Collector、FunctionInstance、Monitor 数据库或现有云函数；修复与重置按[部署与运维](../../docs/部署与运维.md)中对应的维护流程执行。
+不要为了验收删除 Collector、Monitor 数据库或现有云函数；修复与重置按[部署与运维](../../docs/部署与运维.md)中对应的维护流程执行。

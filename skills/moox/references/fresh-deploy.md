@@ -59,9 +59,11 @@ $CLI setup wipe --file ./moox.toml --yes --expect <预览里的 plan.digest>
 $CLI setup validate --file ./moox.toml                               # deployment.route 应为 fresh
 ```
 
-中途失败后再运行一次会接着清。CLI 不清理云函数，见第 8 节。
+中途失败后再运行一次会接着清。CLI 不清理云函数：重装后 Collector 按函数名接管同名函数，计划外的旧函数被停掉定时器、等人工删除，见第 6 节“全新部署后的验收（批 2 采集改造）”第 4 步。
 
 从批 1（Storage 合并与 View 跟随变更日志）之前的版本重装时，**先**运行 `moox-cli config migrate --yes` 删掉 `[deployments]` 里的 `storage-node`（留着它 `setup wipe` 也会拒绝配置），**再** `setup wipe`；然后按 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 1 全新部署注意”核对其余项（两段 `mooxsys` 保留期可删）和归档 worker 配置；因子机本地库被清空后要重新做初始数据导入。
+
+从批 2（采集改造）之前的版本重装时同样**先** `config migrate --yes`：它删掉 `[deployments]` 里的 `cloudfunction`（以及更早的 `cloudnode`）和 `[[scf_plan.spaces]]` 下的 `default_ingest`、`default_executor`，留着它们所有命令都会拒绝配置；其余项见 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 2 全新部署注意”。
 
 ### 本机状态
 
@@ -145,6 +147,62 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
    （`status=degraded rows=0` 说明有问题，常见是 `factor_memory_budget_exceeded`，看内存配置）。
 4. 管理台能打开：`curl --cacert <CA> --resolve <控制机>:9527:<控制机> https://<控制机>:9527/`，首页引用的 `static/js/*.js` 返回 200 且体积正常（占位页的首页也是 200，不能只看首页）。
 
+### 全新部署后的验收（批 2 采集改造）
+
+批 2 把 CloudFunction 并进了 Collector、删了 Admin 的采集发布租约、采集方式改记在任务上、标的时间线拆成了表。第一次按这一版全新部署时，在上面四项之外逐项核对（`CLI` 同第 4 节，`STOCKCN_DATASET` 等换成实际的数据集 ID，时间用 RFC3339）。
+写操作照常先预览、给用户确认后再加 `--yes`；第 8、9 步要在腾讯云控制台动手，先问用户。
+
+1. **配置**：`$CLI config migrate --file ./moox.toml` 的预览里没有要删的 `removed_components`、`removed_ingest_defaults`（`[deployments]` 里没有 `cloudfunction`、`cloudnode`，`[[scf_plan.spaces]]` 里没有 `default_ingest`、`default_executor`），`$CLI setup validate --file ./moox.toml` 通过。
+2. **进程与库**：`$CLI setup status --file ./moox.toml`、`$CLI doctor bootstrap --file ./moox.toml` 的组件清单里没有 `cloudfunction`。控制机上没有 `moox-cloudfunction` 进程，11401、11411 没有监听：
+   ```bash
+   $CLI host exec --host control -- sh -c 'pgrep -fl moox-cloudfunction; ss -ltn | grep -E ":(11401|11411) "; true'
+   ```
+   主机装了 `sqlite3` 时只读看表：Collector 库（`/data/moox/prod/current/collector/data/moox_collector.db`）有 `t_collector_series_timeline`、`t_collector_cloud_accounts`、`t_collector_function_packages`，没有 `t_collector_ingest_modes`（`t_collector_resample_snapshots` 还在是对的）；
+   Admin 库（`/data/moox/prod/current/admin/data/admin.db`）没有 `t_collector_publish_` 开头的两张采集发布租约表。命令形如 `$CLI host exec --host control -- sqlite3 -readonly <库文件> .tables`。
+   Monitor、Admin 用部署下去的配置正常启动（Monitor 严格解码，配置里留着 `timer_coordination_lease_grace` 会起不来）。
+3. **云账号与代码包**：`$CLI collector account list` 有一条云账号；`$CLI collector package list --space-id stockcn` 有可用（`available`）的代码包，每个配置了云函数的空间各查一次。
+4. **自动接管与计划外函数**（验收前先不清腾讯云上的旧函数）：
+   ```bash
+   $CLI setup start --file ./moox.toml --space-id stockcn
+   $CLI collector fetch-plan --space-id stockcn
+   $CLI collector function list --space-id stockcn
+   ```
+   计划在 10 分钟内变成已生效，Collector 日志里没有 `already exists`；函数列表里每个函数存在、定时器一致、代码包最新。旧部署留下、不在计划里的函数列在 `unplanned`，第一次读回之后定时器都是停用（第二片及以后的命名空间里的也是）。
+   按各行给出的删除命令（`collector function delete --space-id stockcn --name <函数名> --namespace <命名空间> --region <地域>`，先不带 `--yes` 看预览）清掉之后，列表里不再出现。
+   全新库里 crypto 的内置任务采集方式是 `stream`，Collector 启动没有因为写内置任务失败而退出。
+5. **采集方式**：`$CLI collector ingest-mode get --space-id crypto` 全是 `stream`，`--space-id stockcn` 全是 `scf`。再选一个 crypto 的 1h 数据集做一次往返切换（分钟第 20～40 秒执行）：
+   ```bash
+   $CLI collector ingest-mode set --space-id crypto --dataset-id CRYPTO_1H_DATASET --ingest scf --yes
+   $CLI collector status --space-id crypto
+   $CLI collector ingest-mode set --space-id crypto --dataset-id CRYPTO_1H_DATASET --ingest stream --yes
+   ```
+   两次都生成交接计划并生效，切换前后的周期在 Storage 里都完成，随后 `collector kline check` 覆盖切换前后的区间没有缺口。
+6. **实时采集与时间线**：开盘后 `$CLI collector status --space-id stockcn` 里第一个 5 分钟周期已完成；`$CLI collector kline check --space-id stockcn --dataset-id STOCKCN_DATASET --from START --to END` 没有缺口。
+   Collector 库的 `t_collector_series_timeline` 每个采集数据集每个频率有一行，合成目标数据集不在里面。
+7. **补采**：
+   ```bash
+   $CLI collector kline backfill --space-id stockcn --dataset-id STOCKCN_DATASET --from START --to END --force
+   $CLI collector function list --space-id stockcn
+   ```
+   补采函数被建出来（列表里出现 `backfill` 一项），作业完成；再提交一次不会重建函数。
+8. **读回修复**：在腾讯云控制台手工删掉一个采集函数、停掉另一个的定时器，`$CLI collector function list --space-id stockcn --drift` 先列出这两个；下一次读回（最长 1 小时，重启 Collector 会立即做首轮读回）之后两个都恢复，`--drift` 为空。
+9. **暂停与恢复**：
+   ```bash
+   $CLI collector fetch-plan pause --space-id stockcn --yes
+   $CLI collector function list --space-id stockcn
+   $CLI collector fetch-plan resume --space-id stockcn
+   $CLI collector function list --space-id stockcn
+   ```
+   暂停命令返回完成时全部定时器已停用，5 分钟后复查仍是停用（没有后台操作把它重新打开）；恢复后一轮内全部启用。在计划还没生效、函数还在创建时再做一遍，结果相同。
+10. **代码包升级**：`$CLI collector function upload --space-id stockcn --cloud-account-id <云账号 ID> --version <新版本> --collector-root $WT/modules/collector` 之后几分钟内，`collector function list` 里全部函数的代码包变成新版本，期间采集不中断（有缺口由自动补采补上）。
+11. **重启续做**：在第 4 步计划还没生效时重启 Collector，计划仍然走完，腾讯云上没有重复或残缺的函数。
+12. **监控**：管理台概览里没有 cloudfunction 组件；在管理台“设置 › 密钥”停用云账号密钥，Monitor 报“调用腾讯云失败”，恢复密钥后告警消除（这一步要用户在管理台操作）。
+13. **依赖边界**（在仓库里）：
+    ```bash
+    cd $WT/modules/collector && go list -deps ./cmd/scf/market_data ./cmd/stream | grep -E 'sqlite|gorm|internal/store|internal/fetchplan|moox/modules/cloud|scfinvoker'; echo "exit=$?"
+    ```
+    没有输出，`exit=1`。不要直接 grep `cloudfunction`：云函数程序引的第三方包 `scf-go-lib/cloudfunction` 是正常依赖。
+
 ## 7. 踩坑清单
 
 | 现象 | 原因 | 处理 |
@@ -163,7 +221,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 
 ## 8. 收尾
 
-- 提醒用户到腾讯云控制台删除旧的 `moox-fetch-plan-` 云函数（`setup wipe` 不清理）。
+- `setup wipe` 不清理腾讯云上的函数：同名的由 Collector 接管，计划外的按第 6 节第 4 步用 `collector function delete` 清掉（先预览、给用户确认）；换过云账号的，旧账号下的函数用 `setup inspect-scf` 查出来，提醒用户到腾讯云控制台删除。
 - 汇报：做了什么、验收结果、没做的事（第 5 节）、重建后丢失的手工配置、需要用户做的事（清理旧 CA 等）。
 - 把发布过程中临时改过的代码或脚本提交并推送；`moox.toml` 的变更提醒用户 `moox-cli config backup`。
 - 更新记忆（部署状态、踩坑）。

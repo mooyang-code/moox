@@ -50,12 +50,13 @@ bin/moox-cli collector function list --file ./moox.toml --space-id crypto --drif
 ## Control Plane Checks
 
 ```bash
-rg -n "fetch plan|backfill|readback" /data/moox/run/logs/collector.log
+rg -n "fetch plan|backfill|Collector-Cloud|Collector-TencentSCF" /data/moox/run/logs/collector.log
 ```
 
 Check these boundaries:
 
-- The node row has the expected function name, region, namespace, package and Timer state.
+- `collector function list` shows the function in the expected region and namespace, with the latest package and the Timer state the plan expects; a non-empty `operation` means a cloud operation (create, update, upgrade, delete) is still running inside Collector and the next round picks up its result.
+- Writes to Tencent Cloud happen only inside Collector (`internal/cloud`, one operation per function at a time); there is no separate CloudFunction process, job table or publish lease to inspect.
 - The applied plan (`fetch-plan`) lists the dataset hashes you expect and no `last_error`.
 
 ## CLS Log Investigation

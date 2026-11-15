@@ -11,7 +11,7 @@
 - 输出是 JSON；`ret_info.code` 非 0 时先打印响应、再以非 0 退出。分页命令用 `--page`、`--page-size`（默认 1、50）。
 - **破坏性命令默认只预览**：不带 `--yes` 输出 `preview: true` 的 JSON（将要发出的请求），**把预览给用户看，确认后再加 `--yes`**。
 - 带 DSL、长文本的参数用文件：`--spec-file`、`--dsl-file`、`--template-file`（`-` 读标准输入），不要在命令行里拼多行 YAML。
-- 带 `--space-id` 的命令默认空间是 `crypto`；策略与云函数服务按请求头里的空间取上下文，这些命令也都带 `--space-id`。
+- 带 `--space-id` 的命令默认空间是 `crypto`；策略服务按请求头里的空间取上下文，这些命令也都带 `--space-id`。
 
 ## 对照表
 

@@ -52,7 +52,7 @@ func (s *Services) closeGateways() {
 }
 
 // StartBackgroundServices 启动 admin 本地基础服务。
-// 云函数实例、云函数包和采集管理已拆到独立服务，admin 只保留网关转发和基础管理能力。
+// 云账号、代码包与云函数由 Collector 管理，admin 只保留网关转发和基础管理能力。
 func StartBackgroundServices(ctx context.Context, cfg *Config) (*Services, error) {
 	log.Info("正在启动后台服务...")
 

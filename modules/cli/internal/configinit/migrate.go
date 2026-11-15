@@ -93,8 +93,8 @@ type ComponentRemoval struct {
 }
 
 // retiredComponents 是已经下线的组件身份：服务目录里没有它，也没有接替的名字，migrate 从 [deployments] 里删掉。
-// storage-node 已并入 storage-primary；cloudfunction 的云账号、代码包与云函数已并入 collector。
-var retiredComponents = []string{"storage-node", "cloudfunction"}
+// storage-node 已并入 storage-primary；cloudfunction（更早叫 cloudnode）的云账号、代码包与云函数已并入 collector。
+var retiredComponents = []string{"storage-node", "cloudfunction", "cloudnode"}
 
 // SCFImportReport 记录导入的 SCF 计划概要（地域、空间与市场、更新了网络信息的主机），不含任何配置值。
 type SCFImportReport struct {
@@ -112,7 +112,7 @@ type MigrateReport struct {
 	Rename    *HostRename          `json:"rename,omitempty"`
 	// FactorEngine 不为空表示旧的 [factor_engine] 已转成该主机的 reachability = "outbound" 与两个外部程序部署。
 	FactorEngine *FactorEngineMigration `json:"factor_engine,omitempty"`
-	// RemovedComponents 记录从 [deployments] 删掉的已下线组件（例如 storage-node、cloudfunction）及位置数。
+	// RemovedComponents 记录从 [deployments] 删掉的已下线组件（例如 storage-node、cloudfunction、cloudnode）及位置数。
 	RemovedComponents []ComponentRemoval `json:"removed_components,omitempty"`
 	// Deployments 为 true 表示旧的 [placements] 表被改名为 [deployments]。
 	Deployments bool             `json:"deployments,omitempty"`

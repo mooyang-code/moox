@@ -585,7 +585,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		return
 	}
 	release := func(reason error) {
-		// 执行端暂时不可用（函数创建中、发布租约被占用、本地执行端离线）：不算执行失败，分块退回待认领并退回这次尝试。
+		// 执行端暂时不可用（补采函数还在创建或升级、本地执行端离线）：不算执行失败，分块退回待认领并退回这次尝试。
 		log.WarnContextf(ctx, "collector backfill executor is not ready space=%s chunk=%s: %v", spaceID, chunk.ChunkID, reason)
 		if releaseErr := b.Store.ReleaseChunk(ctx, chunk.ID, chunk.Attempts); releaseErr != nil {
 			log.WarnContextf(ctx, "collector backfill chunk release failed chunk=%s: %v", chunk.ChunkID, releaseErr)

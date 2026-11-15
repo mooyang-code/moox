@@ -36,6 +36,8 @@ type SCF struct {
 	writes []string
 	// rejected 是因为函数不是 Active 而被拒绝的写请求（不计入 writes）。
 	rejected []string
+	// inventories 是 ListFunctionInventory（清点整个地域）的调用次数。
+	inventories int
 }
 
 // Function 是假腾讯云里一个函数的全部状态。
@@ -184,6 +186,13 @@ func (f *SCF) Writes() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.writes...)
+}
+
+// InventoryCalls 返回清点整个地域（ListFunctionInventory）的调用次数。
+func (f *SCF) InventoryCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.inventories
 }
 
 // ResetWrites 清空写请求记录，开始录下一条路径。
@@ -469,6 +478,7 @@ func (f *SCF) UpdateFunctionEventInvokeConfig(_ context.Context, req tencentscf.
 func (f *SCF) ListFunctionInventory(_ context.Context, region string) ([]tencentscf.DiscoveryFunction, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.inventories++
 	var out []tencentscf.DiscoveryFunction
 	for key, function := range f.functions {
 		parts := strings.SplitN(key, "/", 3)

@@ -171,6 +171,26 @@ func TestMigrateRemovesRetiredCloudFunctionComponent(t *testing.T) {
 	require.Contains(t, string(plain), `"collector", "factor-mgr"`)
 }
 
+// cloudfunction 更早的名字 cloudnode 同样已下线：[deployments] 里还写着它时，migrate 直接删掉，不再改名成 cloudfunction。
+func TestMigrateRemovesRetiredCloudNodeComponent(t *testing.T) {
+	text := legacyText(t)
+	require.Contains(t, text, `"collector", "factor-mgr"`)
+	text = strings.Replace(text, `"collector", "factor-mgr"`, `"collector", "cloudnode", "factor-mgr"`, 1)
+	path, root, keys := migrateFixture(t, text)
+
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "legacy-1", RenameTo: "overseas", Write: true})
+	require.NoError(t, err)
+	require.Equal(t, []ComponentRemoval{{Component: "cloudnode", Changes: 1}}, report.RemovedComponents)
+	require.True(t, report.Valid && report.Written)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	require.NotContains(t, string(plain), `"cloudnode"`)
+	require.NotContains(t, string(plain), `"cloudfunction"`)
+	require.Contains(t, string(plain), `"collector", "factor-mgr"`)
+}
+
 // 旧的 [placements] 表改名为 [deployments]：新版解析器不再认旧表，migrate 负责转换，而且可以重复执行。
 func TestMigrateRenamesLegacyPlacementsTable(t *testing.T) {
 	header := regexp.MustCompile(`(?m)^\[deployments\]$`)

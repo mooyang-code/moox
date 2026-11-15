@@ -60,7 +60,7 @@ func runResetBusinessCommand(args []string, stdout io.Writer, stderr io.Writer) 
 	dbPath, scope := defaultInitDBPath, "data"
 	var dryRun, yes bool
 	fs.StringVar(&dbPath, "db-path", dbPath, "Admin 的 SQLite 数据库路径")
-	fs.StringVar(&scope, "scope", scope, "重置范围：data（活动日志、采集发布租约）| all（再加业务空间）")
+	fs.StringVar(&scope, "scope", scope, "重置范围：data（活动日志）| all（再加业务空间）")
 	fs.BoolVar(&dryRun, "dry-run", false, "只列出会删除的行数，不改动")
 	fs.BoolVar(&yes, "yes", false, "确认执行（会删除数据；执行前先备份）")
 	if err := fs.Parse(args[1:]); err != nil {

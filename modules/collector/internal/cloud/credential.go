@@ -24,7 +24,7 @@ type CredentialResolver interface {
 }
 
 // GatewayCredentials 经网关调 Admin SecretMgr 的专用方法 GetCloudCredential 读云账号密钥。
-// 类别 cloud、厂商 tencent、状态 active 由 SecretMgr 在服务端校验；Collector 只被放行这一个方法，拿不到其他类别的密钥。
+// 类别 cloud、厂商 tencent、状态 active 由 SecretMgr 在服务端校验；Collector 读 SecretMgr 只被放行这个方法与下架检测用的 GetReadonlyExchangeKey，拿不到其他类别的密钥。
 type GatewayCredentials struct {
 	Gateway gatewayclient.Invoker
 }

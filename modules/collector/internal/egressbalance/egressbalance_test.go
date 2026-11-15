@@ -3,20 +3,22 @@ package egressbalance
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
+// fakeProber 会被 Next 并发调用，探测次数用原子计数；ips 只在两次 Next 之间改。
 type fakeProber struct {
 	ips    map[string]string
 	failOn string
-	probes int
+	probes atomic.Int64
 }
 
 func (p *fakeProber) ProbeEgressIP(_ context.Context, _, instanceID string) (string, error) {
-	p.probes++
+	p.probes.Add(1)
 	if instanceID == p.failOn {
 		return "", errors.New("probe failed")
 	}
@@ -55,9 +57,9 @@ func TestNextRecreatesSharedIPsUntilTheyAreSpread(t *testing.T) {
 	prober.ips["f-002"] = "4.4.4.4"
 	require.Empty(t, b.Next(ctx, prober, "s", fourFunctions, now))
 	require.False(t, b.Pending(), "每个函数的 IP 都不同：结束")
-	probes := prober.probes
+	probes := prober.probes.Load()
 	require.Empty(t, b.Next(ctx, prober, "s", fourFunctions, now))
-	require.Equal(t, probes, prober.probes, "结束后不再探测")
+	require.Equal(t, probes, prober.probes.Load(), "结束后不再探测")
 }
 
 func TestNextStopsWhenTheAddressPoolIsTooSmall(t *testing.T) {
@@ -89,7 +91,7 @@ func TestNextWaitsForIdleTimeAndCompleteProbes(t *testing.T) {
 	trading, idle := time.Date(2026, 11, 6, 10, 0, 0, 0, shanghai), time.Date(2026, 11, 6, 16, 0, 0, 0, shanghai)
 
 	require.Empty(t, b.Next(ctx, prober, "s", fourFunctions, trading), "不在空闲时段不删除重建")
-	require.Zero(t, prober.probes, "也不探测")
+	require.Zero(t, prober.probes.Load(), "也不探测")
 
 	prober.failOn = "f-003"
 	require.Empty(t, b.Next(ctx, prober, "s", fourFunctions, idle), "有函数探测失败：这一轮不做决定")
@@ -105,7 +107,7 @@ func TestNextDoesNothingUnlessArmed(t *testing.T) {
 	b, err := New(Config{})
 	require.NoError(t, err)
 	require.Empty(t, b.Next(context.Background(), prober, "s", fourFunctions, time.Now()), "没有新建函数就不探测、不重建")
-	require.Zero(t, prober.probes)
+	require.Zero(t, prober.probes.Load())
 	var nilBalancer *Balancer
 	require.Empty(t, nilBalancer.Next(context.Background(), prober, "s", fourFunctions, time.Now()), "没配置（nil）就不做")
 	require.False(t, nilBalancer.Pending())

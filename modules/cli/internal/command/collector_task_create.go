@@ -32,7 +32,7 @@ var collectorTaskCreateFlagsValue collectorTaskCreateFlags
 
 var collectorTaskCreateCmd = &cobra.Command{
 	Use:   "create",
-	Short: "创建 K 线采集任务（可直接指定 SCF 定时模式与每函数标的数）",
+	Short: "创建 K 线采集任务（可指定采集方式与每函数标的数）",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		if collectorTaskCreateFlagsValue.AllFields && cmd.Flags().Changed("output-field") {

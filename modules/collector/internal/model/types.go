@@ -29,7 +29,7 @@ type CloudFunctionEvent struct {
 	Source      string `json:"source,omitempty"`
 }
 
-// Response is the function response returned to FunctionInstance.
+// Response 是云函数一次调用的返回：Collector 同步调用补采函数、探测出口 IP 时读它，定时触发的调用没有人读。
 type Response struct {
 	Success   bool        `json:"success"`
 	Message   string      `json:"message,omitempty"`

@@ -39,7 +39,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 
 | 主机 | 单元 | 组件 id（二进制名 `moox-<id>`） |
 | --- | --- | --- |
-| 控制机 | `prod` | `admin` `monitor` `collector` `cloudfunction` `factor-mgr` `archive-mgr` `strategy` `web-host` `console-proxy` |
+| 控制机 | `prod` | `admin` `monitor` `collector` `factor-mgr` `archive-mgr` `strategy` `web-host` `console-proxy` |
 | Storage 主机 | `storage` | `storage-primary` `storage-view`（**同一份二进制，两个文件名**） |
 | 每台主机 | `host` | `host-gateway` `host-agent` |
 | 存储机 | `eventbus` | `eventbus`（2026-10-27 起在存储机，见下） |
@@ -53,7 +53,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 装到控制机 `prod` 单元的二进制，`reseal` 依赖这一点：新版 `moox-runtime` 按 `control` profile 校验清单，计划里多出 `eventbus` 会报 `preparation receipt requires a valid unit selection`。
 
 构建目标是 `scripts/build/build.sh` 的参数，和组件 id 基本一致（`host-gateway` 目标同时产出 server、cli 和 `moox-runtime`；`admin`、`collector`、
-`factor-mgr`、`strategy` 目标同时产出对应的 `-cli`，`storage` 目标同时产出 `moox-storage-cli`，`hostagent` 目标同时产出 `moox-host-agent-cli`；`monitor`、`trade`、`cloudfunction`、`callback-dispatcher` 只有服务，没有 `-cli`；`storage-cli`、`factor-engine` 是独立目标）。
+`factor-mgr`、`strategy` 目标同时产出对应的 `-cli`，`storage` 目标同时产出 `moox-storage-cli`，`hostagent` 目标同时产出 `moox-host-agent-cli`；`monitor`、`trade`、`callback-dispatcher` 只有服务，没有 `-cli`；`storage-cli`、`factor-engine` 是独立目标）。
 CGO 只有 Storage 需要（DuckDB），脚本对 `storage`、`storage-cgo`、`storage-primary` 目标自动在 Docker 编译镜像里开启 CGO 构建（`storage-cli` 仍是纯 Go），其余一律在本机交叉编译且关闭 CGO；**不要在宿主机上直接 `CGO_ENABLED=1` 交叉编译 Storage**，需要先启动 Docker（macOS：`colima start`）。
 
 ## 标准流程（单个或几个组件）

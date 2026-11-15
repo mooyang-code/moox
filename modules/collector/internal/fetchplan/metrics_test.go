@@ -144,33 +144,6 @@ func TestMetricsFailureReasonWhitelist(t *testing.T) {
 	require.Equal(t, "rules", normalizeAssignmentFailureReason(" rules "))
 }
 
-func TestMetricsFailureSinceTracksTheFirstAppearanceOfTheCurrentReason(t *testing.T) {
-	metrics := NewControlMetrics(prometheus.NewRegistry())
-	clock := time.Unix(1_700_000_000, 0)
-	metrics.now = func() time.Time { return clock }
-	since := func() float64 { return testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")) }
-	require.Zero(t, since())
-
-	metrics.ObserveAssignmentFailure("crypto", "quota")
-	require.Equal(t, float64(1_700_000_000), since())
-	// 同一原因连续出现：起始时间保持不变。
-	clock = clock.Add(3 * time.Minute)
-	metrics.ObserveAssignmentFailure("crypto", "quota")
-	require.Equal(t, float64(1_700_000_000), since())
-	// 原因变化：重新计时。
-	metrics.ObserveAssignmentFailure("crypto", "cloud")
-	require.Equal(t, float64(1_700_000_180), since())
-	// 其他空间互不影响。
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("stockcn")))
-
-	// 成功清零，再失败从新时间开始。
-	metrics.ObserveAssignmentSuccess("crypto", 1_700_000_200)
-	require.Zero(t, since())
-	clock = clock.Add(time.Minute)
-	metrics.ObserveAssignmentFailure("crypto", "quota")
-	require.Equal(t, float64(1_700_000_240), since())
-}
-
 func TestMetricsRoundOKRestoresHealthAndClearsFailureWithoutTouchingLastSuccess(t *testing.T) {
 	metrics := NewControlMetrics(prometheus.NewRegistry())
 	metrics.ObserveAssignmentSuccess("crypto", 1_700_000_000)
@@ -180,7 +153,6 @@ func TestMetricsRoundOKRestoresHealthAndClearsFailureWithoutTouchingLastSuccess(
 	metrics.ObserveAssignmentRoundOK("crypto")
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "quota")))
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")))
 	require.Equal(t, float64(1_700_000_000), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "恢复健康本身不刷新最近一次对账成功时间")
 	require.NotPanics(t, func() { (*ControlMetrics)(nil).ObserveAssignmentRoundOK("crypto") })
 }

@@ -77,4 +77,6 @@ rg -q 'data-api.binance.vision' "${tmp_root}/egress/app.yaml"
 absent 'dns:' "${tmp_root}/collector/app.yaml" "${tmp_root}/egress/app.yaml"
 rg -q 'egress_proxy:' "${tmp_root}/collector/app.yaml"
 absent 'target:|node_id:|dns_resolver:|\bsecret_id:|secret_key:' "${tmp_root}/collector/app.yaml" "${tmp_root}/egress/app.yaml"
+# 键名可以换（例如 writer_secret_id），配置里腾讯云密钥的值无论写在哪个键下都不能渲染进去。
+absent 'contract-secret-id|contract-secret-key' "${tmp_root}/collector/app.yaml" "${tmp_root}/egress/app.yaml"
 printf 'Egress policy and Collector runtime configuration contract passed\n'

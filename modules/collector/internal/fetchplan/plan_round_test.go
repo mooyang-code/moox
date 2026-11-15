@@ -15,10 +15,9 @@ import (
 	tcerrors "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/errors"
 )
 
-// roundMetrics 给对账器挂上指标，并让失败起始时间跟随测试时钟。
-func roundMetrics(h *planHarness, r *PlanReconciler) *ControlMetrics {
+// roundMetrics 给对账器挂上一份独立注册的指标。
+func roundMetrics(_ *planHarness, r *PlanReconciler) *ControlMetrics {
 	metrics := NewControlMetrics(prometheus.NewRegistry())
-	metrics.now = func() time.Time { return h.now }
 	r.Metrics = metrics
 	return metrics
 }
@@ -171,26 +170,24 @@ func TestSlowCloudJobIsInFlightNotAFailure(t *testing.T) {
 	require.Equal(t, ensures, h.cloud.countOps("ensure", ""), "结束的操作只取结果，不重做")
 }
 
-// 配额超限单独归为 quota（Monitor 提示清理计划外的函数），持续超限时起始时间不重置；
+// 配额超限单独归为 quota（Monitor 提示清理计划外的函数），持续超限时一直报 quota；
 // 恢复后计划仍未生效（等窗口结束），但本轮没有失败，遗留的失败原因必须清掉。
 func TestQuotaExceededIsClassifiedSeparatelyAndRecoversWhileThePlanIsStillOpen(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
 	metrics := roundMetrics(h, r)
-	since := func() float64 { return testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")) }
 
 	recover := failCreates(h, quotaError())
 	require.Error(t, r.Reconcile(context.Background()))
 	require.Equal(t, float64(1), failureLabel(metrics, "quota"))
 	require.Zero(t, failureLabel(metrics, "cloud"))
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
-	first := since()
-	require.Equal(t, float64(h.now.Unix()), first)
 
-	// 持续超限：同一原因，起始时间不重置。
+	// 持续超限：仍报 quota。
 	h.now = h.now.Add(3 * time.Minute)
 	require.Error(t, r.Reconcile(context.Background()))
-	require.Equal(t, first, since())
+	require.Equal(t, float64(1), failureLabel(metrics, "quota"))
+	require.Zero(t, failureLabel(metrics, "cloud"))
 
 	// 清掉计划外的函数之后：建函数成功，等窗口结束期间按对账成功上报，失败原因清掉。
 	recover()
@@ -198,7 +195,6 @@ func TestQuotaExceededIsClassifiedSeparatelyAndRecoversWhileThePlanIsStillOpen(t
 	require.NoError(t, r.Reconcile(context.Background()))
 	require.NotNil(t, h.open(), "计划尚未生效")
 	requireNoFailure(t, metrics)
-	require.Zero(t, since())
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
 	require.Equal(t, float64(h.now.Unix()), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "配置已下发、只等窗口结束：按对账成功上报")
 }
@@ -336,7 +332,6 @@ func TestUpgradePendingBeforeEnableStillFinishesTheRound(t *testing.T) {
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
 	require.Equal(t, float64(op.startedAt.Unix()), testutil.ToFloat64(metrics.assignmentPendingSince.WithLabelValues("crypto")))
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")))
 
 	// 其他错误不是等待，不恢复健康。
 	_ = r.fail("cloud", errors.New("boom"))

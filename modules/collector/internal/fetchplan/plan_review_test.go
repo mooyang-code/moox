@@ -346,6 +346,28 @@ func TestUnplannedFunctionsAreStoppedEvenWithoutAppliedCloudFunctions(t *testing
 	require.False(t, function.Timer.Enabled)
 }
 
+// T5～T7 审查小项：计划外扫描每个地域只清点一次，采集函数与补采函数按各自前缀从同一份清单里筛。
+func TestUnplannedScanListsEachRegionOnce(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	orphan := scfRefIn(PlanFunctionName("crypto", "spot", "ap-nanjing", 3), "ap-nanjing", "default")
+	h.scf.Seed(orphan, activeTimerFunction("pkg"))
+	staleBackfill := scfRefIn(BackfillFunctionName("crypto", "spot", "ap-nanjing"), "ap-nanjing", "old-namespace")
+	h.scf.Seed(staleBackfill, activeTimerFunction("pkg"))
+	before := h.scf.InventoryCalls()
+
+	refs, err := r.scanUnplanned(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, len(r.planRegions()), h.scf.InventoryCalls()-before)
+	names := map[string]bool{}
+	for _, ref := range refs {
+		names[ref.Name] = true
+	}
+	require.True(t, names[orphan.FunctionName], "采集函数")
+	require.True(t, names[staleBackfill.FunctionName], "补采函数")
+	require.Len(t, refs, 2)
+}
+
 // 复审中问题：未生效计划里已经确认过渡的函数被 RPC 删掉，下一轮就按过渡环境重建，不等到最终阶段；计划仍未生效。
 func TestDeletedTransitionedFunctionIsRebuiltWhileThePlanIsOpen(t *testing.T) {
 	h := newPlanHarness(t, 120)
@@ -382,6 +404,51 @@ func TestDeletedTransitionedFunctionIsRebuiltWhileThePlanIsOpen(t *testing.T) {
 	require.True(t, progress.Transitioned[victim], "重建之后重新确认")
 }
 
+// T5～T7 审查小项：命名空间改过之后，只删旧命名空间里的同名副本时，在用的那一份还在：
+// 下一轮不去掉它在本阶段的确认，也不再推一次。
+func TestDeletingAStaleCopyKeepsTheConfirmationOfTheLiveFunction(t *testing.T) {
+	h := newPlanHarness(t, 120)
+	r := h.reconciler()
+	h.applyFirstPlan(r)
+	h.setSubjects(119)
+	require.NoError(t, h.reconcile(r))
+	open := h.open()
+	require.NotNil(t, open)
+	progress, err := decodeFetchPlanProgress(open.Progress)
+	require.NoError(t, err)
+	content := h.content(open)
+	var victim string
+	for _, name := range content.SortedFunctionNames() {
+		if progress.Transitioned[name] {
+			victim = name
+			break
+		}
+	}
+	require.NotEmpty(t, victim, "有已确认过渡的函数")
+	live := scfRef(victim)
+	legacy := scfRefIn(victim, live.Region, "legacy")
+	h.scf.Seed(legacy, activeTimerFunction("pkg-old"))
+	ensures := h.cloud.countOps("ensure", victim)
+
+	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{victim}, Namespace: "legacy", Region: live.Region})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.True(t, results[0].Done, results[0].Error)
+	require.Equal(t, "legacy", results[0].Namespace)
+
+	h.now = h.now.Add(20 * time.Second)
+	require.NoError(t, h.reconcile(r))
+	require.NotNil(t, h.open(), "计划仍未生效")
+	progress, err = decodeFetchPlanProgress(h.open().Progress)
+	require.NoError(t, err)
+	require.True(t, progress.Transitioned[victim], "在用的函数仍算已确认")
+	require.Equal(t, ensures, h.cloud.countOps("ensure", victim), "在用的函数没有被再推一次")
+	_, exists := h.scf.Lookup(legacy)
+	require.False(t, exists, "旧副本删掉了")
+	_, exists = h.scf.Lookup(live)
+	require.True(t, exists)
+}
+
 // reconfirmAfterDeletion 把 name 记成已确认过渡与收尾，再模拟它被 RPC 删掉，返回 reconfirmDeleted 之后的进度。
 func reconfirmAfterDeletion(t *testing.T, h *planHarness, r *PlanReconciler, name string) *FetchPlanProgress {
 	t.Helper()
@@ -392,7 +459,7 @@ func reconfirmAfterDeletion(t *testing.T, h *planHarness, r *PlanReconciler, nam
 	progress.mark(&progress.Finalized, name)
 	require.NoError(t, h.store.Update(context.Background(), open.ID, open.Status, mustJSON(progress), ""))
 	r.readMu.Lock()
-	r.deletedFunctions = map[string]bool{name: true}
+	r.deletedFunctions = map[string]bool{refKey(r.functionRef(name, h.content(open).Functions[name].Region)): true}
 	r.readMu.Unlock()
 	require.NoError(t, r.reconfirmDeleted(context.Background(), h.open()))
 	require.Empty(t, r.takeDeletedFunctions(), "记录取走后清空")

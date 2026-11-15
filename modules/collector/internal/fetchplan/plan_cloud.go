@@ -437,26 +437,29 @@ func (r *PlanReconciler) plannedNames(ctx context.Context) (map[string]cloud.Fun
 	return names, nil
 }
 
-// scanUnplanned 按采集函数与补采函数两个前缀列出本空间各地域（全部命名空间，含分片命名空间）的函数，返回符合本空间命名格式、
+// scanUnplanned 列出本空间各地域（全部命名空间，含分片命名空间）的采集函数与补采函数，返回符合本空间命名格式、
 // 又不在计划里的那些（包括命名空间或补采地域改过之后留下的旧副本）。
 func (r *PlanReconciler) scanUnplanned(ctx context.Context, planned map[string]cloud.FunctionRef) ([]cloud.FunctionRef, error) {
 	if strings.TrimSpace(r.Deploy.CloudAccountID) == "" {
 		return nil, nil
 	}
+	// 每个地域只列一次（List 每次都要清点整个地域），再按两个前缀分别筛：补采函数有自己的前缀，
+	// 命名空间或市场的第一个地域改过之后留下的旧副本也要看得见、删得到。
+	fleet, backfill := r.fleetPrefix(), r.backfillPrefix()
 	var out []cloud.FunctionRef
 	for _, region := range r.planRegions() {
-		// 补采函数单独按它的前缀列：命名空间或市场的第一个地域改过之后留下的旧副本也要看得见、删得到。
-		for _, prefix := range []string{r.fleetPrefix(), r.backfillPrefix()} {
-			refs, err := r.Cloud.List(ctx, r.Deploy.CloudAccountID, region, prefix)
-			if err != nil {
-				return nil, err
+		refs, err := r.Cloud.List(ctx, r.Deploy.CloudAccountID, region, "moox-fetch"+marketfetch.PlanFleetMarker)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range refs {
+			if !strings.HasPrefix(ref.Name, fleet) && !strings.HasPrefix(ref.Name, backfill) {
+				continue
 			}
-			for _, ref := range refs {
-				if _, ok := planned[refKey(ref)]; ok || !r.ownsFunctionName(ref.Name) && !r.ownsBackfillName(ref.Name) {
-					continue
-				}
-				out = append(out, ref)
+			if _, ok := planned[refKey(ref)]; ok || !r.ownsFunctionName(ref.Name) && !r.ownsBackfillName(ref.Name) {
+				continue
 			}
+			out = append(out, ref)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -696,10 +699,14 @@ func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, req DeleteClo
 			r.readMu.Lock()
 			delete(r.readbacks, refKey(ref))
 			r.unplanned = slices.DeleteFunc(r.unplanned, func(item cloud.FunctionRef) bool { return refKey(item) == refKey(ref) })
-			if r.deletedFunctions == nil {
-				r.deletedFunctions = map[string]bool{}
+			// 只有删的正是计划里那一份（地域、命名空间、函数名都对上）才记：只删旧命名空间里的同名副本时，
+			// 在用的函数还在，不能让下一轮去掉它的确认、再推一次。
+			if _, ok := planned[refKey(ref)]; ok {
+				if r.deletedFunctions == nil {
+					r.deletedFunctions = map[string]bool{}
+				}
+				r.deletedFunctions[refKey(ref)] = true
 			}
-			r.deletedFunctions[ref.Name] = true
 			r.readMu.Unlock()
 			r.backfillMu.Lock()
 			delete(r.backfillReady, ref.Name)

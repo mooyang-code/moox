@@ -319,12 +319,12 @@ func TestCoordinationFailureTextFallsBackToAGenericHint(t *testing.T) {
 // 不再指向读旧实例表的 timer-inventory；代码包的文案指向 collector package list。
 func TestQuotaAndPackageTextsPointToTheCollectorCommands(t *testing.T) {
 	quota := coordinationFailureText(map[string]bool{"quota": true})
-	require.Contains(t, quota, "moox-cli collector function list --drift")
-	require.Contains(t, quota, "moox-cli collector function delete --name <函数名> --namespace <命名空间> --region <地域>", "带命名空间与地域，不连同在用的同名函数一起删")
+	require.Contains(t, quota, "moox-cli collector function list --space-id <空间> --drift")
+	require.Contains(t, quota, "moox-cli collector function delete --space-id <空间> --name <函数名> --namespace <命名空间> --region <地域>", "带命名空间与地域，不连同在用的同名函数一起删")
 	require.Contains(t, quota, "moox-cli setup inspect-scf", "旧云账号下的函数 Collector 管不到")
 	require.NotContains(t, quota, "timer-inventory")
 	pkg := coordinationFailureText(map[string]bool{"package": true})
-	require.Contains(t, pkg, "moox-cli collector package list")
+	require.Contains(t, pkg, "moox-cli collector package list --space-id <空间>")
 	require.NotContains(t, pkg, "FunctionInstance")
 }
 

@@ -150,7 +150,7 @@ func limiterFor(key limiterKey) *rate.Limiter {
 }
 
 // call 是所有腾讯云 SCF API 调用的统一入口：先取令牌，再执行；遇到 RequestLimitExceeded 抖动退避重试。
-// 不额外设置超时，只沿用调用方的 ctx（Invoke 有 960 秒的 HTTP 预算）。
+// 不额外设置超时，只沿用调用方的 ctx（SDK 的 HTTP 超时是 scfRequestTimeoutSeconds）。
 func (c *Client) call(ctx context.Context, region, action string, fn func(context.Context) error) error {
 	key := limiterKey{account: c.limitKey, endpoint: scfEndpoint(region), action: action}
 	for attempt := 0; ; attempt++ {

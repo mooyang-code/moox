@@ -50,7 +50,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 - 用户解压的产物包目录（`moox-<版本>/`，或源码仓库根目录）就是工作目录：命令写成 `./bin/moox-cli …`，默认读取当前目录的 `moox.toml`。
 - 产物包里有 `moox-bundle.json`：`setup` 命令自动使用包内预编译的 linux/amd64 程序，不需要 git、Go、Docker 或 Node。
-- 管理台上的操作和各模块的主要操作都有专用命令（`factor`、`strategy`、`space`、`metadata`、`collector`、`cloud`、`monitor`、`eventbus`、`host`、`secret`、`trade` 只读等），先用 `./bin/moox-cli <命令> --help` 看参数；命令对照表见 [`references/api-recipes.md`](references/api-recipes.md)。
+- 管理台上的操作和各模块的主要操作都有专用命令（`factor`、`strategy`、`space`、`metadata`、`collector`（含云账号、代码包与云函数）、`monitor`、`eventbus`、`host`、`secret`、`trade` 只读等），先用 `./bin/moox-cli <命令> --help` 看参数；命令对照表见 [`references/api-recipes.md`](references/api-recipes.md)。
 - 没有专用命令的底层接口：`./bin/moox-cli gateway methods [关键字]` 查有哪些方法，`./bin/moox-cli gateway call <服务> <方法> --data @请求.json` 调用；业务失败时退出码非 0。
 - 命令按 `moox.toml` 里的 SSH 配置连接各台主机；`lifecycle`、`system`、`replay`、`import` 访问模块健康端口时也自动解析，不需要手工建隧道或设置健康密钥环境变量。要在某台主机上执行命令或传文件用 `host exec|get|put`。
 - 带 `--space-id` 的命令默认空间是 `crypto`；时间范围用 `--from` / `--to`（RFC3339，左闭右开）。
