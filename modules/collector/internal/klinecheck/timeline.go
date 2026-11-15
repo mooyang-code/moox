@@ -2,10 +2,10 @@
 package klinecheck
 
 import (
+	"context"
 	"sort"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
@@ -45,7 +45,7 @@ func (s Segment) groups() []seriesGroup {
 	return out
 }
 
-// segmentSeries 把计划里的序列（标的、tag）整理成一段的标的与按 tag 的成员：只有出现 ≥2 个不同 tag 才返回按序列的成员。
+// segmentSeries 把时间线行里的序列（标的、tag）整理成一段的标的与按 tag 的成员：只有出现 ≥2 个不同 tag 才返回按序列的成员。
 func segmentSeries(series []seriesset.Series) (subjects []string, byTag map[string][]string) {
 	seen := map[string]bool{}
 	members := map[string][]string{}
@@ -74,50 +74,38 @@ type Timeline map[string][]Segment
 // DatasetKey 返回时间线使用的键。
 func DatasetKey(datasetID, frequency string) string { return datasetID + "|" + frequency }
 
-// BuildTimeline 由采集计划还原历史上每段时间应有的标的：已生效的计划，
-// 以及已确认登记快照（P 已确定）的未生效计划。
+// TimelineSource 按写入先后返回空间的标的时间线行，由 *store.SeriesTimelineRepository 实现。
+type TimelineSource interface {
+	ListBySpace(ctx context.Context, spaceID string) ([]store.SeriesTimelineEntry, error)
+}
+
+// BuildTimeline 把标的时间线表的行（按写入先后）整理成每个数据集各段时间应有的标的。
+// 一行非空序列结束上一段并开始新的一段；一行空序列只结束上一段（从这一刻起不再采集）。
 //
-// 一份计划里有被清空 hash 的数据集（fetchplan.FetchPlanContent.ClearedDatasets）表示该空间的 Storage 已被整体清空、
-// 正在重新登记：此前的全部计划段连同数据一起作废，包括已退役的数据集（它们以后重新启用时同样从新的生效周期开始）。
-// 每个数据集的时间线从重新登记后的新生效周期开始，新快照登记之前没有任何计划段，所以检查、自动补采与历史扫描的起点
-// （最早一段的 From）都是清库后的新生效点。
-func BuildTimeline(records []*store.FetchPlanRecord) (Timeline, error) {
+// 行由采集计划的对账写入：Storage 确认登记后写序列行（未生效但已登记的计划也算），数据集不再采集时写停止行。
+// 重新登记（Storage 被整体清空）时整个空间的行被删掉，包括已退役的数据集：时间线从重新登记后的新生效周期重新写起，
+// 新快照登记之前没有任何一段，所以检查、自动补采与历史扫描的起点（最早一段的 From）都是清库后的新生效点。
+func BuildTimeline(entries []store.SeriesTimelineEntry) Timeline {
 	timeline := Timeline{}
-	for _, record := range records {
-		content, err := fetchplan.DecodeFetchPlanContent(record.Plan)
-		if err != nil {
-			return nil, err
+	for _, entry := range entries {
+		key := DatasetKey(entry.DatasetID, entry.Frequency)
+		closeSegment(timeline, key, entry.EffectiveFrom)
+		if len(entry.Series) == 0 {
+			continue
 		}
-		progress, err := fetchplan.DecodeFetchPlanProgress(record.Progress)
-		if err != nil {
-			return nil, err
-		}
-		applied := record.Status == store.FetchPlanApplied
-		keys := make([]string, 0, len(content.Datasets))
-		for key := range content.Datasets {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			change := content.Datasets[key]
-			if !change.Changed || change.P <= 0 {
-				continue
-			}
-			switch {
-			case change.Gone:
-				closeSegment(timeline, key, change.P)
-			case change.HashChanged && (applied || progress.Registered[key]):
-				closeSegment(timeline, key, change.P)
-				subjects, byTag := segmentSeries(change.Series)
-				timeline[key] = append(timeline[key], Segment{From: change.P, Subjects: subjects, Series: byTag, LatenessS: change.LatenessS, OutputFields: change.OutputFields})
-			}
-		}
-		// 快照清空发生在这份计划生效之后，所以先按上面还原它的变更，再丢掉此前的全部计划段。
-		if len(content.ClearedDatasets()) > 0 {
-			clear(timeline)
-		}
+		subjects, byTag := segmentSeries(entry.Series)
+		timeline[key] = append(timeline[key], Segment{From: entry.EffectiveFrom, Subjects: subjects, Series: byTag, LatenessS: entry.LatenessS, OutputFields: entry.OutputFields})
 	}
-	return timeline, nil
+	return timeline
+}
+
+// loadTimeline 读出空间的时间线行并整理成时间线。
+func loadTimeline(ctx context.Context, source TimelineSource, spaceID string) (Timeline, error) {
+	entries, err := source.ListBySpace(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return BuildTimeline(entries), nil
 }
 
 // Active 报告数据集是否仍在采集：最后一段没有结束。已停止采集的数据集不再有新数据，结果数据可能已随任务删除，

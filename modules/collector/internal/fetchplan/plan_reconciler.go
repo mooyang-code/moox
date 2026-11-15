@@ -69,8 +69,9 @@ type StreamApplied struct {
 type planStore interface {
 	Open(context.Context, string) (*store.FetchPlanRecord, error)
 	LatestApplied(context.Context, string) (*store.FetchPlanRecord, error)
-	Create(context.Context, string, string, string) (*store.FetchPlanRecord, error)
-	Update(context.Context, int64, string, string, string) error
+	// Create、Update 末尾的时间线行与计划记录在同一个事务里写入（见 plan_timeline.go）。
+	Create(context.Context, string, string, string, ...store.SeriesTimelineEntry) (*store.FetchPlanRecord, error)
+	Update(context.Context, int64, string, string, string, ...store.SeriesTimelineEntry) error
 	SavePlan(context.Context, int64, string) error
 }
 
@@ -532,7 +533,8 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		}
 	}
 	progress := &FetchPlanProgress{}
-	record, err := r.Store.Create(ctx, r.SpaceID, mustJSON(content), mustJSON(progress))
+	// 不再采集的数据集从计划建立起就在时间线上停止，和计划记录一起落库。
+	record, err := r.Store.Create(ctx, r.SpaceID, mustJSON(content), mustJSON(progress), content.stoppedTimeline(r.SpaceID)...)
 	if errors.Is(err, store.ErrFetchPlanOpen) {
 		return nil
 	}
@@ -695,8 +697,9 @@ func mustStruct(values map[string]any) *structpb.Struct {
 	return result
 }
 
-func (r *PlanReconciler) saveProgress(ctx context.Context, record *store.FetchPlanRecord, progress *FetchPlanProgress, status, lastError string) error {
-	if err := r.Store.Update(ctx, record.ID, status, mustJSON(progress), lastError); err != nil {
+// saveProgress 保存计划的状态与进度；timeline 是随这次进度一起成立的时间线行，与进度同一个事务。
+func (r *PlanReconciler) saveProgress(ctx context.Context, record *store.FetchPlanRecord, progress *FetchPlanProgress, status, lastError string, timeline ...store.SeriesTimelineEntry) error {
+	if err := r.Store.Update(ctx, record.ID, status, mustJSON(progress), lastError, timeline...); err != nil {
 		return r.fail("store", fmt.Errorf("save fetch plan progress: %w", err))
 	}
 	record.Status, record.Progress, record.LastError = status, mustJSON(progress), lastError
@@ -812,8 +815,10 @@ func (r *PlanReconciler) registerSnapshots(ctx context.Context, record *store.Fe
 		case registration.Hash != change.Hash || registration.Count != change.Count:
 			return false, r.fail("storage", fmt.Errorf("Storage computed hash %s/%d for %s, Collector computed %s/%d", registration.Hash, registration.Count, key, change.Hash, change.Count))
 		}
+		// Storage 已确认登记：登记标记与时间线上“从 P 起是这份序列”的一行一起落库。P 只在登记之前重选，
+		// 所以写进时间线的生效点不会再变。
 		progress.mark(&progress.Registered, key)
-		if err := r.saveProgress(ctx, record, progress, record.Status, ""); err != nil {
+		if err := r.saveProgress(ctx, record, progress, record.Status, "", seriesTimelineEntry(r.SpaceID, change)); err != nil {
 			return false, err
 		}
 	}

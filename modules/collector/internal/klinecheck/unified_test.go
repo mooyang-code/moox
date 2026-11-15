@@ -136,7 +136,7 @@ func newUnifiedFixtureWithDB(t *testing.T) (*Backfiller, *tagHealingInvoker, *se
 	require.NoError(t, err)
 	record, err := db.FetchPlans().Create(context.Background(), "crypto", string(raw), "{}")
 	require.NoError(t, err)
-	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", ""))
+	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", "", appliedTimeline("crypto", string(raw))...))
 
 	rows := &seriesRows{tags: []string{spotTag, swapTag}, missing: map[string]map[string]map[int64]bool{
 		spotTag: {"BTC-USDT": {}, "ETH-USDT": {}}, swapTag: {"BTC-USDT": {}, "ETH-USDT": {}},
@@ -144,7 +144,7 @@ func newUnifiedFixtureWithDB(t *testing.T) (*Backfiller, *tagHealingInvoker, *se
 	for _, minute := range []int{3, 4, 5} {
 		rows.missing[swapTag]["BTC-USDT"][base.Add(time.Duration(minute)*time.Minute).Unix()] = true
 	}
-	checker := &Checker{Plans: db.FetchPlans(), Rows: rows, Absences: db.Backfill(), Now: func() time.Time { return now }}
+	checker := &Checker{Timeline: db.SeriesTimeline(), Rows: rows, Absences: db.Backfill(), Now: func() time.Time { return now }}
 	invoker := &tagHealingInvoker{rows: rows}
 	backfiller := &Backfiller{
 		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), Invoker: invoker, BaseCtx: context.Background(), Now: func() time.Time { return now },
@@ -160,7 +160,7 @@ func TestCheckUnifiedDatasetFindsGapOfOneSeriesOnly(t *testing.T) {
 	ctx := context.Background()
 	for name, checker := range map[string]*Checker{
 		"计数后读行": backfiller.Checker,
-		"只读行":   {Plans: backfiller.Checker.Plans, Rows: readOnlyRows{rows}, Absences: backfiller.Checker.Absences, Now: backfiller.Checker.Now},
+		"只读行":   {Timeline: backfiller.Checker.Timeline, Rows: readOnlyRows{rows}, Absences: backfiller.Checker.Absences, Now: backfiller.Checker.Now},
 	} {
 		result, err := checker.Check(ctx, Request{SpaceID: "crypto", From: base, To: base.Add(time.Hour)})
 		require.NoError(t, err, name)
@@ -235,13 +235,15 @@ func TestBackfillUnifiedDatasetNoticeCarriesSeriesTag(t *testing.T) {
 func TestDatasetMarketRefusesToBorrowAnotherMarketsPlan(t *testing.T) {
 	backfiller, _, _, base := newUnifiedFixture(t)
 	ctx := context.Background()
-	plan, err := backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", swapTag, base.Add(time.Minute))
+	history, err := backfiller.loadPlanHistory(ctx, "crypto")
+	require.NoError(t, err)
+	plan, err := history.datasetMarket("ds", "1m", "BTC-USDT", swapTag, base.Add(time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, "swap", plan.Market.MarketType)
-	plan, err = backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", spotTag, base.Add(time.Minute))
+	plan, err = history.datasetMarket("ds", "1m", "BTC-USDT", spotTag, base.Add(time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, "spot", plan.Market.MarketType)
-	_, err = backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", "venue:binance|market:delivery|source:delivery_http", base.Add(time.Minute))
+	_, err = history.datasetMarket("ds", "1m", "BTC-USDT", "venue:binance|market:delivery|source:delivery_http", base.Add(time.Minute))
 	require.ErrorContains(t, err, "not part of any fetch plan")
 }
 

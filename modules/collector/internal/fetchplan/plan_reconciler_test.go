@@ -25,6 +25,8 @@ import (
 type memPlanStore struct {
 	mu      sync.Mutex
 	records []*store.FetchPlanRecord
+	// timeline 非空时，Create、Update 带来的时间线行写进这张真实的 SQLite 表（时间线等价测试用）。
+	timeline *store.SeriesTimelineRepository
 }
 
 func (s *memPlanStore) Open(_ context.Context, spaceID string) (*store.FetchPlanRecord, error) {
@@ -51,7 +53,7 @@ func (s *memPlanStore) LatestApplied(_ context.Context, spaceID string) (*store.
 	return nil, nil
 }
 
-func (s *memPlanStore) Create(_ context.Context, spaceID, plan, progress string) (*store.FetchPlanRecord, error) {
+func (s *memPlanStore) Create(ctx context.Context, spaceID, plan, progress string, timeline ...store.SeriesTimelineEntry) (*store.FetchPlanRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, record := range s.records {
@@ -59,18 +61,31 @@ func (s *memPlanStore) Create(_ context.Context, spaceID, plan, progress string)
 			return nil, store.ErrFetchPlanOpen
 		}
 	}
+	if err := s.appendTimeline(ctx, timeline); err != nil {
+		return nil, err
+	}
 	record := &store.FetchPlanRecord{ID: int64(len(s.records) + 1), SpaceID: spaceID, Status: store.FetchPlanPending, Plan: plan, Progress: progress}
 	s.records = append(s.records, record)
 	clone := *record
 	return &clone, nil
 }
 
-func (s *memPlanStore) Update(_ context.Context, id int64, status, progress, lastError string) error {
+func (s *memPlanStore) Update(ctx context.Context, id int64, status, progress, lastError string, timeline ...store.SeriesTimelineEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record := s.records[id-1]
+	if err := s.appendTimeline(ctx, timeline); err != nil {
+		return err
+	}
 	record.Status, record.Progress, record.LastError = status, progress, lastError
 	return nil
+}
+
+func (s *memPlanStore) appendTimeline(ctx context.Context, timeline []store.SeriesTimelineEntry) error {
+	if s.timeline == nil {
+		return nil
+	}
+	return s.timeline.Append(ctx, timeline...)
 }
 
 func (s *memPlanStore) SavePlan(_ context.Context, id int64, plan string) error {

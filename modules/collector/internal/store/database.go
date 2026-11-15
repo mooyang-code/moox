@@ -33,6 +33,7 @@ type Store struct {
 	path       string
 	taskRepo   *TaskRepository
 	fetchPlans *FetchPlanRepository
+	timeline   *SeriesTimelineRepository
 	workers    *StreamWorkerRepository
 	exclusions *SubjectExclusionRepository
 	tagRuns    *TagSyncRunRepository
@@ -49,7 +50,8 @@ func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) e
 	}
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 合成任务的目标快照与历史作业属于任务本身。
+		// 合成任务的目标快照与历史作业属于任务本身。标的时间线不在这里清：任务删掉后，下一份采集计划会给它的数据集
+		// 写一行“停止采集”，在那之前检查与补采仍会碰这个数据集。
 		if err := tx.Exec(`DELETE FROM t_collector_resample_snapshots WHERE c_space_id = ? AND c_task_id = ?`, spaceID, taskID).Error; err != nil {
 			return err
 		}
@@ -115,6 +117,7 @@ func Open(opts *Options) (*Store, error) {
 	s := &Store{db: db, path: dbPath}
 	s.taskRepo = NewTaskRepository(db, opts.defaultIngest())
 	s.fetchPlans = NewFetchPlanRepository(db)
+	s.timeline = NewSeriesTimelineRepository(db)
 	s.workers = NewStreamWorkerRepository(db)
 	s.exclusions = NewSubjectExclusionRepository(db)
 	s.tagRuns = NewTagSyncRunRepository(db)
@@ -140,6 +143,14 @@ func (s *Store) FetchPlans() *FetchPlanRepository {
 		return nil
 	}
 	return s.fetchPlans
+}
+
+// SeriesTimeline 返回标的时间线仓库。
+func (s *Store) SeriesTimeline() *SeriesTimelineRepository {
+	if s == nil {
+		return nil
+	}
+	return s.timeline
 }
 
 // StreamWorkers returns the collector-stream heartbeat repository.

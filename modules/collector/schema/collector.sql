@@ -84,6 +84,24 @@ BEGIN
     UPDATE t_collector_fetch_plans SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
+-- 标的时间线：一个采集数据集的一个频率从 c_effective_from（K 线开始时间，Unix 秒）起应有的序列，只追加。
+-- c_series 是登记给 Storage 的那份序列（标的加序列标签）；'[]' 表示从这一刻起不再采集。
+-- 行与采集计划记录在同一个事务里写入：序列行在 Storage 确认登记之后，停止行在计划建立时；重新登记时整个空间的行一起删掉。
+-- 读取按 c_id 先后重放：一段的结束时间是同一数据集同一频率后一行的生效点。合成目标数据集不在这张表里。
+CREATE TABLE IF NOT EXISTS t_collector_series_timeline (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_effective_from INTEGER NOT NULL,
+    c_series_hash TEXT NOT NULL DEFAULT '',
+    c_series TEXT NOT NULL DEFAULT '[]',
+    c_lateness_s INTEGER NOT NULL DEFAULT 0,
+    c_output_fields TEXT NOT NULL DEFAULT '[]',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (c_space_id, c_dataset_id, c_frequency, c_effective_from)
+);
+
 -- 空间的采集暂停开关：暂停期间 Collector 不对账、不推进补采，并已停用该空间的 SCF 定时器；重启后保持。
 -- c_paused 是手工暂停，c_system_paused 是模块生命周期的系统暂停，任一个为 1 空间就是暂停的，两者各自恢复、互不覆盖。
 CREATE TABLE IF NOT EXISTS t_collector_fetch_plan_pauses (

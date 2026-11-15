@@ -44,14 +44,14 @@ type RowCounter interface {
 	CountTimeSeriesRows(context.Context, *storagepb.CountTimeSeriesRowsReq, ...client.Option) (*storagepb.CountTimeSeriesRowsRsp, error)
 }
 
-// PlanHistory 返回空间的全部采集计划。
+// PlanHistory 返回空间的全部采集计划。只有补采用它：按历史计划找当时负责某个标的的函数与交易所符号映射（loadPlanHistory）。
 type PlanHistory interface {
 	ListAll(context.Context, string) ([]*store.FetchPlanRecord, error)
 }
 
-// Checker 按采集计划还原应有标的与时间点，读取 Storage 行比对出缺口。
+// Checker 按标的时间线得到应有标的与时间点，读取 Storage 行比对出缺口。
 type Checker struct {
-	Plans       PlanHistory
+	Timeline    TimelineSource
 	Rows        RowReader
 	Auth        *storagepb.AuthInfo
 	Now         func() time.Time
@@ -115,17 +115,13 @@ func (c *Checker) now() time.Time {
 
 // Check 检查范围内每个数据集、标的的 K 线是否齐全。
 func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
-	if c == nil || c.Plans == nil || c.Rows == nil {
+	if c == nil || c.Timeline == nil || c.Rows == nil {
 		return nil, fmt.Errorf("kline checker is not initialized")
 	}
 	if strings.TrimSpace(request.SpaceID) == "" || request.From.IsZero() || request.To.IsZero() || !request.From.Before(request.To) {
 		return nil, fmt.Errorf("space_id and a non-empty time range are required")
 	}
-	records, err := c.Plans.ListAll(ctx, request.SpaceID)
-	if err != nil {
-		return nil, err
-	}
-	timeline, err := BuildTimeline(records)
+	timeline, err := loadTimeline(ctx, c.Timeline, request.SpaceID)
 	if err != nil {
 		return nil, err
 	}

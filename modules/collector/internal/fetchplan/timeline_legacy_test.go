@@ -91,15 +91,14 @@ func legacyCloseSegment(timeline klinecheck.Timeline, key string, at int64) {
 	}
 }
 
-// 对照实现与现在的 klinecheck.BuildTimeline 在每个场景上逐字段相等（现在两者是同一份代码，这里确认拷贝没有走样）。
-// T3 把右边换成“从时间线表构造”之后，这个测试就是新旧等价的证据。
+// 新旧等价的证据：同一个场景、同一时刻，左边用旧算法重放全部计划记录，右边用 klinecheck.BuildTimeline
+// 从时间线表读出的行构造，两者逐字段相等。场景是驱动对账器跑出来的，所以“什么时候写入时间线”也一起验证了。
 func TestLegacyTimelineMatchesBuildTimeline(t *testing.T) {
 	shapes := map[string]string{}
 	for _, scenario := range fetchplan.TimelineScenarios(t) {
 		want, err := legacyBuildTimeline(scenario.Records)
 		require.NoError(t, err, scenario.Name)
-		got, err := klinecheck.BuildTimeline(scenario.Records)
-		require.NoError(t, err, scenario.Name)
+		got := klinecheck.BuildTimeline(scenario.Timeline)
 		require.Equal(t, want, got, scenario.Name)
 		shapes[scenario.Name] = timelineShape(want)
 	}
@@ -120,6 +119,12 @@ func TestLegacyTimelineMatchesBuildTimeline(t *testing.T) {
 		"stale_period/saved_not_registered":                 "",
 		"stale_period/reselected_not_registered":            "",
 		"stale_period/applied":                              "ds_spot|1m=[open:60]",
+		"subject_increase":                                  "ds_spot|1m=[closed:60 open:61]",
+		"pause_resume/paused_registered_not_applied":        "ds_spot|1m=[open:60]",
+		"pause_resume/resumed_not_applied":                  "ds_spot|1m=[open:60]",
+		"pause_resume/applied":                              "ds_spot|1m=[open:60]",
+		"change_while_open/first_still_open":                "ds_spot|1m=[open:120]",
+		"change_while_open/both_applied":                    "ds_spot|1m=[closed:120 open:119]",
 	}, shapes)
 }
 

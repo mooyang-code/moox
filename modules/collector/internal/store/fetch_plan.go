@@ -99,7 +99,8 @@ func (r *FetchPlanRepository) LatestApplied(ctx context.Context, spaceID string)
 }
 
 // Create 保存新的计划，状态为 pending。该空间已有未生效计划时返回 ErrFetchPlanOpen。
-func (r *FetchPlanRepository) Create(ctx context.Context, spaceID, plan, progress string) (*FetchPlanRecord, error) {
+// timeline 是这份计划一建立就成立的时间线行（不再采集的数据集从生效周期起停止），与计划记录在同一个事务里写入。
+func (r *FetchPlanRepository) Create(ctx context.Context, spaceID, plan, progress string, timeline ...SeriesTimelineEntry) (*FetchPlanRecord, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("fetch plan repository is not initialized")
 	}
@@ -111,17 +112,24 @@ func (r *FetchPlanRepository) Create(ctx context.Context, spaceID, plan, progres
 		progress = "{}"
 	}
 	row := fetchPlanRow{SpaceID: spaceID, Status: FetchPlanPending, Plan: plan, Progress: progress, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
-	if err := r.db.WithContext(ctx).Create(&row).Error; err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			return nil, ErrFetchPlanOpen
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&row).Error; err != nil {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				return ErrFetchPlanOpen
+			}
+			return err
 		}
+		return appendSeriesTimeline(tx, timeline)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return row.record(), nil
 }
 
 // Update 更新计划的状态、进度与最近错误。
-func (r *FetchPlanRepository) Update(ctx context.Context, id int64, status, progress, lastError string) error {
+// timeline 是随这次进度一起成立的时间线行（Storage 刚确认登记的数据集从生效周期起的序列），与进度在同一个事务里写入。
+func (r *FetchPlanRepository) Update(ctx context.Context, id int64, status, progress, lastError string, timeline ...SeriesTimelineEntry) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("fetch plan repository is not initialized")
 	}
@@ -133,14 +141,16 @@ func (r *FetchPlanRepository) Update(ctx context.Context, id int64, status, prog
 	if strings.TrimSpace(progress) == "" {
 		progress = "{}"
 	}
-	result := r.db.WithContext(ctx).Model(&fetchPlanRow{}).Where("c_id = ? AND c_status <> ?", id, FetchPlanApplied).Updates(map[string]any{"c_status": status, "c_progress": progress, "c_last_error": lastError, "c_mtime": time.Now().UTC()})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&fetchPlanRow{}).Where("c_id = ? AND c_status <> ?", id, FetchPlanApplied).Updates(map[string]any{"c_status": status, "c_progress": progress, "c_last_error": lastError, "c_mtime": time.Now().UTC()})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return appendSeriesTimeline(tx, timeline)
+	})
 }
 
 // SavePlan 更新计划内容（重新选择生效周期时使用）。
@@ -161,26 +171,34 @@ func (r *FetchPlanRepository) SavePlan(ctx context.Context, id int64, plan strin
 	return nil
 }
 
-// UpdateAppliedPlan 改写一份已生效计划的内容。只给维护命令用：Storage 数据被清空后，把数据集标记为“快照未登记”，
-// 让下一轮对账重新登记（见 fetchplan.ClearRegisteredSnapshots）。普通流程只改未生效的计划（SavePlan）。
-func (r *FetchPlanRepository) UpdateAppliedPlan(ctx context.Context, id int64, plan string) error {
+// ReregisterAppliedPlan 改写一份已生效计划的内容，并在同一个事务里删掉该空间的全部时间线行。只给维护命令用：
+// Storage 数据被清空后，把数据集标记为“快照未登记”，让下一轮对账重新登记（见 fetchplan.ClearRegisteredSnapshots）；
+// 此前的时间线连同数据一起作废，重新登记后从新的生效周期写起。普通流程只改未生效的计划（SavePlan）。
+func (r *FetchPlanRepository) ReregisterAppliedPlan(ctx context.Context, id int64, plan string) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("fetch plan repository is not initialized")
 	}
 	if strings.TrimSpace(plan) == "" {
 		return fmt.Errorf("plan is required")
 	}
-	result := r.db.WithContext(ctx).Model(&fetchPlanRow{}).Where("c_id = ? AND c_status = ?", id, FetchPlanApplied).Updates(map[string]any{"c_plan": plan, "c_mtime": time.Now().UTC()})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row fetchPlanRow
+		found := tx.Where("c_id = ? AND c_status = ?", id, FetchPlanApplied).Limit(1).Find(&row)
+		if found.Error != nil {
+			return found.Error
+		}
+		if found.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		if err := tx.Model(&fetchPlanRow{}).Where("c_id = ?", id).Updates(map[string]any{"c_plan": plan, "c_mtime": time.Now().UTC()}).Error; err != nil {
+			return err
+		}
+		return deleteSeriesTimeline(tx, row.SpaceID)
+	})
 }
 
-// ListAll 按先后顺序返回该空间全部采集计划（含未生效的），用于还原历史上的应有标的。
+// ListAll 按先后顺序返回该空间全部采集计划（含未生效的）。只剩补采一个读者：按历史计划找当时负责某个标的的函数
+// 与交易所符号映射（klinecheck 的 loadPlanHistory）。标的时间线不再由它重放，见 SeriesTimelineRepository。
 func (r *FetchPlanRepository) ListAll(ctx context.Context, spaceID string) ([]*FetchPlanRecord, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("fetch plan repository is not initialized")

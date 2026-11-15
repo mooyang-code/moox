@@ -137,7 +137,7 @@ func newUSRefetchHarness(t *testing.T, subjects []string, serveByCode func(code 
 	require.NoError(t, err)
 	record, err := db.FetchPlans().Create(context.Background(), "stockus", string(raw), "{}")
 	require.NoError(t, err)
-	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", ""))
+	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", "", firstPlanTimeline("stockus", content)...))
 
 	clock := func() time.Time { h.mu.Lock(); defer h.mu.Unlock(); return h.now }
 	serve := func(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +162,7 @@ func newUSRefetchHarness(t *testing.T, subjects []string, serveByCode func(code 
 		return stockUSPipeline(t, s, clock(), limits, serve), nil
 	}
 	h.invoker = &hkFunctionInvoker{t: t, handler: handler}
-	checker := &klinecheck.Checker{Plans: db.FetchPlans(), Rows: h.storage, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
+	checker := &klinecheck.Checker{Timeline: db.SeriesTimeline(), Rows: h.storage, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
 	h.backfiller = &klinecheck.Backfiller{
 		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), Invoker: h.invoker, BaseCtx: context.Background(), Now: clock,
 		Functions:    func(string) klinecheck.FunctionProvider { return usBackfillFunctions{} },

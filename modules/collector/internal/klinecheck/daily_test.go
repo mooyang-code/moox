@@ -26,7 +26,7 @@ func TestStockDailyCheckExpectsTradingDaysAndMergesAcrossWeekends(t *testing.T) 
 
 	now := day(11, 11).Add(5 * time.Minute) // 北京时间 11-11 08:05：11-10 的日线已到期
 	rows := &fakeRows{missing: map[string]map[int64]bool{"600519.XSHG": {}}}
-	checker := &Checker{Plans: fakePlans{records}, Rows: rows, Now: func() time.Time { return now }, Calendar: markets.TradingBar}
+	checker := &Checker{Timeline: fakePlans{records}, Rows: rows, Now: func() time.Time { return now }, Calendar: markets.TradingBar}
 
 	// 09-28～10-12 跨国庆：交易日只有 09-28、09-29、09-30、10-08、10-09、10-12（10-01～10-07 休市，10-10、10-11 是周末）。
 	holiday, err := checker.Check(context.Background(), Request{SpaceID: "stockcn", From: day(9, 28), To: day(10, 13), AssumeMissing: true})

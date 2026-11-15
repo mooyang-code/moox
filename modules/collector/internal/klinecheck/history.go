@@ -68,18 +68,14 @@ type HistoryResult struct {
 // 标的第一根 K 线之前的缺失视为“尚无历史”（新上市）；范围内一根都没有的标的不报。
 // 数据集不在任何已登记的计划里时返回 nil。
 func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequencyName string) (*HistoryResult, error) {
-	if c == nil || c.Plans == nil || c.Rows == nil {
+	if c == nil || c.Timeline == nil || c.Rows == nil {
 		return nil, fmt.Errorf("kline checker is not initialized")
 	}
 	frequency, err := marketdata.ParseFrequency(frequencyName)
 	if err != nil {
 		return nil, err
 	}
-	records, err := c.Plans.ListAll(ctx, spaceID)
-	if err != nil {
-		return nil, err
-	}
-	timeline, err := BuildTimeline(records)
+	timeline, err := loadTimeline(ctx, c.Timeline, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -274,11 +270,7 @@ func (b *Backfiller) ScanHistory(ctx context.Context, spaceID string) (*HistoryR
 	}
 	b.mu.Unlock()
 
-	records, err := b.Plans.ListAll(ctx, spaceID)
-	if err != nil {
-		return nil, err
-	}
-	timeline, err := BuildTimeline(records)
+	timeline, err := loadTimeline(ctx, b.Checker.Timeline, spaceID)
 	if err != nil {
 		return nil, err
 	}

@@ -242,7 +242,7 @@ func TestStockHKRefetchAfterCloseOverwritesTheCloseBar(t *testing.T) {
 	require.NoError(t, err)
 	record, err := db.FetchPlans().Create(context.Background(), "stockhk", string(raw), "{}")
 	require.NoError(t, err)
-	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", ""))
+	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", "", firstPlanTimeline("stockhk", content)...))
 
 	storage := newHKRowStore()
 	// 16:02：15:55 开始的那根已过允许迟到时间（收盘后 90 秒），按缺口补采才会把它算进应有的根。
@@ -258,7 +258,7 @@ func TestStockHKRefetchAfterCloseOverwritesTheCloseBar(t *testing.T) {
 		return stockHKPipeline(t, s, clock(), limits, serve), nil
 	}
 	invoker := &hkFunctionInvoker{t: t, handler: handler}
-	checker := &klinecheck.Checker{Plans: db.FetchPlans(), Rows: storage, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
+	checker := &klinecheck.Checker{Timeline: db.SeriesTimeline(), Rows: storage, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
 	backfiller := &klinecheck.Backfiller{
 		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), Invoker: invoker, BaseCtx: context.Background(), Now: clock,
 		Functions:    func(string) klinecheck.FunctionProvider { return hkBackfillFunctions{} },
@@ -402,4 +402,17 @@ func TestStockHKRequestGoesToTheConfiguredEastmoneyAddress(t *testing.T) {
 	require.Equal(t, "0", query.Get("fqt"))
 	require.Equal(t, "20261112", query.Get("beg"))
 	require.Equal(t, "20261112", query.Get("end"))
+}
+
+// firstPlanTimeline 返回首份计划生效时对账器写下的时间线行：每个数据集从生效周期起是计划里的序列。
+// 这里直接往库里写计划记录，不经过对账器，所以时间线行也要一并写上。
+func firstPlanTimeline(spaceID string, content *fetchplan.FetchPlanContent) []store.SeriesTimelineEntry {
+	var entries []store.SeriesTimelineEntry
+	for _, change := range content.Datasets {
+		entries = append(entries, store.SeriesTimelineEntry{
+			SpaceID: spaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P,
+			SeriesHash: change.Hash, Series: change.Series, LatenessS: change.LatenessS, OutputFields: change.OutputFields,
+		})
+	}
+	return entries
 }

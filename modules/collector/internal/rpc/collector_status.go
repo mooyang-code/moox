@@ -94,7 +94,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 		}
 	}
 
-	health, err := klinecheck.Health(ctx, plans, backfill, spaceID, now)
+	health, err := klinecheck.Health(ctx, s.persistence.SeriesTimeline(), backfill, spaceID, now)
 	if err != nil {
 		return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}

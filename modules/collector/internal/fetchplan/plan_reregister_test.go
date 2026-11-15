@@ -19,7 +19,7 @@ func (s *reregisterStore) Open(context.Context, string) (*store.FetchPlanRecord,
 func (s *reregisterStore) LatestApplied(context.Context, string) (*store.FetchPlanRecord, error) {
 	return s.applied, nil
 }
-func (s *reregisterStore) UpdateAppliedPlan(_ context.Context, _ int64, plan string) error {
+func (s *reregisterStore) ReregisterAppliedPlan(_ context.Context, _ int64, plan string) error {
 	s.applied.Plan = plan
 	return nil
 }

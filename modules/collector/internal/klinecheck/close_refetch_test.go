@@ -46,11 +46,11 @@ func closeRefetchFixture(t *testing.T) (*Backfiller, *store.Store, *time.Time) {
 	require.NoError(t, err)
 	record, err := db.FetchPlans().Create(context.Background(), "stockhk", string(raw), "{}")
 	require.NoError(t, err)
-	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", ""))
+	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", "", appliedTimeline("stockhk", string(raw))...))
 
 	now := new(time.Time)
 	clock := func() time.Time { return *now }
-	checker := &Checker{Plans: db.FetchPlans(), Rows: &fakeRows{}, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
+	checker := &Checker{Timeline: db.SeriesTimeline(), Rows: &fakeRows{}, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
 	backfiller := &Backfiller{
 		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), BaseCtx: context.Background(), Now: clock,
 		CloseRefetch: markets.CloseRefetchDay,

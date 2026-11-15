@@ -11,10 +11,24 @@ import (
 )
 
 // recordedPlans 是内存里按 ID 排列的计划记录，同时满足时间线读取与 fetchplan.ClearRegisteredSnapshots 的改写接口。
-type recordedPlans struct{ records []*store.FetchPlanRecord }
+// 重新登记时删掉此前写下的全部时间线行：cleared 之前的记录不再贡献时间线行。
+type recordedPlans struct {
+	records []*store.FetchPlanRecord
+	cleared int
+}
 
 func (p *recordedPlans) ListAll(context.Context, string) ([]*store.FetchPlanRecord, error) {
 	return p.records, nil
+}
+
+func (p *recordedPlans) ListBySpace(context.Context, string) ([]store.SeriesTimelineEntry, error) {
+	return timelineRows(p.records[p.cleared:]), nil
+}
+
+// timeline 读出时间线行并整理成时间线。
+func (p *recordedPlans) timeline() Timeline {
+	entries, _ := p.ListBySpace(context.Background(), "crypto")
+	return BuildTimeline(entries)
 }
 
 func (p *recordedPlans) Open(context.Context, string) (*store.FetchPlanRecord, error) {
@@ -35,12 +49,13 @@ func (p *recordedPlans) LatestApplied(context.Context, string) (*store.FetchPlan
 	return nil, nil
 }
 
-func (p *recordedPlans) UpdateAppliedPlan(_ context.Context, id int64, plan string) error {
+func (p *recordedPlans) ReregisterAppliedPlan(_ context.Context, id int64, plan string) error {
 	for _, record := range p.records {
 		if record.ID == id {
 			record.Plan = plan
 		}
 	}
+	p.cleared = len(p.records)
 	return nil
 }
 
@@ -61,32 +76,27 @@ func TestTimelineRestartsAtTheReregisteredPeriod(t *testing.T) {
 		record(t, 1, store.FetchPlanApplied, base.Unix(), "A-USDT", "B-USDT"),
 		record(t, 2, store.FetchPlanApplied, base.Add(time.Hour).Unix(), "A-USDT", "B-USDT", "C-USDT"),
 	}}
-	timeline, err := BuildTimeline(plans.records)
-	require.NoError(t, err)
+	timeline := plans.timeline()
 	require.Len(t, timeline["ds|1m"], 2)
 	require.Equal(t, base.Unix(), timeline["ds|1m"][0].From)
 
 	reregister(t, plans)
-	timeline, err = BuildTimeline(plans.records)
-	require.NoError(t, err)
+	timeline = plans.timeline()
 	require.Empty(t, timeline["ds|1m"], "快照清空后此前的计划段作废")
 	require.False(t, timeline.Active("ds|1m"))
 
 	next := record(t, 3, store.FetchPlanPending, restart.Unix(), "A-USDT", "B-USDT")
 	plans.records = append(plans.records, next)
-	timeline, err = BuildTimeline(plans.records)
-	require.NoError(t, err)
+	timeline = plans.timeline()
 	require.Empty(t, timeline["ds|1m"], "新计划的快照还没登记，生效周期未定")
 
 	next.Progress = `{"registered":{"ds|1m":true}}`
-	timeline, err = BuildTimeline(plans.records)
-	require.NoError(t, err)
+	timeline = plans.timeline()
 	require.Equal(t, []Segment{{From: restart.Unix(), Subjects: []string{"A-USDT", "B-USDT"}, LatenessS: 15}}, timeline["ds|1m"])
 
 	next.Status = store.FetchPlanApplied
 	plans.records = append(plans.records, record(t, 4, store.FetchPlanApplied, restart.Add(time.Hour).Unix(), "A-USDT"))
-	timeline, err = BuildTimeline(plans.records)
-	require.NoError(t, err)
+	timeline = plans.timeline()
 	require.Equal(t, []Segment{
 		{From: restart.Unix(), To: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT", "B-USDT"}, LatenessS: 15},
 		{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, LatenessS: 15},
@@ -103,21 +113,18 @@ func TestTimelineResetCoversRetiredDatasets(t *testing.T) {
 		goneRecord(t, 2, "retired", base.Add(time.Hour).Unix()),
 		recordFor(t, 3, "ds", store.FetchPlanApplied, base.Add(2*time.Hour).Unix(), "A-USDT"),
 	}}
-	timeline, err := BuildTimeline(plans.records)
-	require.NoError(t, err)
+	timeline := plans.timeline()
 	require.Len(t, timeline["retired|1m"], 1)
 
 	reregister(t, plans)
-	timeline, err = BuildTimeline(plans.records)
-	require.NoError(t, err)
+	timeline = plans.timeline()
 	require.Empty(t, timeline, "清库前的计划段全部作废，包括已退役的数据集")
 
 	plans.records = append(plans.records,
 		recordFor(t, 4, "ds", store.FetchPlanApplied, restart.Unix(), "A-USDT"),
 		recordFor(t, 5, "retired", store.FetchPlanApplied, restart.Add(time.Hour).Unix(), "A-USDT"),
 	)
-	timeline, err = BuildTimeline(plans.records)
-	require.NoError(t, err)
+	timeline = plans.timeline()
 	require.Equal(t, []Segment{{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, LatenessS: 15}}, timeline["retired|1m"], "重新启用后从新的生效周期开始")
 	require.Equal(t, restart.Unix(), timeline["ds|1m"][0].From)
 }
@@ -132,7 +139,7 @@ func TestCheckAndHistoryStartAtTheReregisteredPeriod(t *testing.T) {
 	rows := &fakeRows{missing: map[string]map[int64]bool{}}
 	markMissing(rows, "A-USDT", base, restart) // 清库前的数据已经没了
 	markMissing(rows, "B-USDT", base, restart)
-	checker := &Checker{Plans: plans, Rows: rows, Now: func() time.Time { return restart.Add(time.Hour) }}
+	checker := &Checker{Timeline: plans, Rows: rows, Now: func() time.Time { return restart.Add(time.Hour) }}
 	ctx := context.Background()
 	request := Request{SpaceID: "crypto", From: base, To: restart.Add(20 * time.Minute)}
 
@@ -168,7 +175,7 @@ func TestScansFollowTheReregisteredPeriod(t *testing.T) {
 	markMissing(rows, "A-USDT", base, restart)
 	now := restart.Add(3*time.Hour + 3*time.Minute) // 落后超过一个自动补采窗口，且已过槽内偏移
 	repo := openBackfillStore(t)
-	backfiller := &Backfiller{Checker: &Checker{Plans: plans, Rows: rows, Now: func() time.Time { return now }}, Store: repo, Plans: plans, Now: func() time.Time { return now }}
+	backfiller := &Backfiller{Checker: &Checker{Timeline: plans, Rows: rows, Now: func() time.Time { return now }}, Store: repo, Plans: plans, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	require.NoError(t, backfiller.AutoScan(ctx, "crypto"))

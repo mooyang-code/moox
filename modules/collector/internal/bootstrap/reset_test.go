@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/mooyang-code/moox/packages/lifecycle"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,4 +104,37 @@ func TestCollectorResetFailsFirstStepWhileTimersAreStillEnabled(t *testing.T) {
 	require.Contains(t, st.Operation.Error, "孤儿")
 	require.Equal(t, "failed", st.Operation.Steps[0].State)
 	require.Equal(t, "pending", st.Operation.Steps[1].State, "后面的步骤没有执行")
+}
+
+// 标的时间线和采集计划归在同一类：只清运行数据时两者都保留，全部重置时一起清掉。
+func TestCollectorResetClearsTheTimelineWithThePlans(t *testing.T) {
+	for _, scope := range []lifecycle.ResetScope{lifecycle.ResetData, lifecycle.ResetAll} {
+		life, _, db, _ := newCollectorResetEnv(t)
+		ctx := context.Background()
+		record, err := db.FetchPlans().Create(ctx, "crypto", `{"datasets":{}}`, "{}")
+		require.NoError(t, err)
+		entry := store.SeriesTimelineEntry{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", EffectiveFrom: 100, Series: []seriesset.Series{{SubjectID: "BTC-USDT"}}}
+		require.NoError(t, db.FetchPlans().Update(ctx, record.ID, store.FetchPlanApplied, "{}", "", entry))
+
+		_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem})
+		require.NoError(t, err)
+		plan, err := life.ResetPlan(ctx, scope)
+		require.NoError(t, err)
+		require.Empty(t, plan.Blockers)
+		_, err = life.ResetApply(ctx, lifecycle.ResetApplyRequest{Token: plan.Token, Scope: scope, By: "ops"})
+		require.NoError(t, err)
+		require.NoError(t, life.ResetWait(ctx))
+
+		timeline, err := db.SeriesTimeline().ListBySpace(ctx, "crypto")
+		require.NoError(t, err)
+		plans, err := db.FetchPlans().ListAll(ctx, "crypto")
+		require.NoError(t, err)
+		if scope == lifecycle.ResetAll {
+			require.Empty(t, timeline, "全部重置清掉时间线")
+			require.Empty(t, plans)
+		} else {
+			require.Len(t, timeline, 1, "只清运行数据时保留时间线")
+			require.Len(t, plans, 1)
+		}
+	}
 }

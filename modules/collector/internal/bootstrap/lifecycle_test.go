@@ -79,12 +79,13 @@ func TestCollectorLifecycleReleaseKeepsManuallyPausedSpaces(t *testing.T) {
 	require.Equal(t, map[string]bool{"stockcn": true}, paused)
 }
 
+// recordingPlans 记下读过时间线的空间。
 type recordingPlans struct {
 	mu     sync.Mutex
 	spaces []string
 }
 
-func (p *recordingPlans) ListAll(_ context.Context, space string) ([]*store.FetchPlanRecord, error) {
+func (p *recordingPlans) ListBySpace(_ context.Context, space string) ([]store.SeriesTimelineEntry, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.spaces = append(p.spaces, space)
@@ -103,7 +104,7 @@ func TestCollectorRecoverySkipsManuallyPausedSpaces(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, db.FetchPlans().SetPaused(ctx, "stockcn", true))
 	plans := &recordingPlans{}
-	control.backfiller = &klinecheck.Backfiller{Checker: &klinecheck.Checker{Plans: plans, Rows: noRows{}}, Store: db.Backfill(), Plans: db.FetchPlans()}
+	control.backfiller = &klinecheck.Backfiller{Checker: &klinecheck.Checker{Timeline: plans, Rows: noRows{}}, Store: db.Backfill(), Plans: db.FetchPlans()}
 	require.NoError(t, control.setPaused(ctx, true))
 	control.setRecovering(true)
 

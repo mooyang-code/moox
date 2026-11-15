@@ -27,15 +27,25 @@ func newReregisterFixture(t *testing.T) (*Service, *store.Store) {
 }
 
 const reregisterPlan = `{"datasets":{` +
-	`"ds1|1m":{"dataset_id":"ds1","frequency":"1m","hash":"h1","count":2,"changed":true,"hash_changed":true,"p":100},` +
+	`"ds1|1m":{"dataset_id":"ds1","frequency":"1m","hash":"h1","count":2,"changed":true,"hash_changed":true,"p":100,` +
+	`"series":[{"subject_id":"A-USDT","series_tag":""},{"subject_id":"B-USDT","series_tag":""}]},` +
 	`"ds2|1h":{"dataset_id":"ds2","frequency":"1h","hash":"h2","count":3},` +
 	`"gone|1m":{"dataset_id":"gone","frequency":"1m","hash":"h3","gone":true}},"functions":{}}`
 
+// applyPlan 直接往库里写一份已生效计划，连同对账器登记快照时会写下的时间线行（标的集合变了的数据集从 P 起的序列）。
 func applyPlan(t *testing.T, db *store.Store, spaceID, plan string) *store.FetchPlanRecord {
 	t.Helper()
+	content, err := fetchplan.DecodeFetchPlanContent(plan)
+	require.NoError(t, err)
+	var timeline []store.SeriesTimelineEntry
+	for _, change := range content.Datasets {
+		if change.Changed && change.HashChanged && change.P > 0 {
+			timeline = append(timeline, store.SeriesTimelineEntry{SpaceID: spaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P, SeriesHash: change.Hash, Series: change.Series, LatenessS: change.LatenessS})
+		}
+	}
 	record, err := db.FetchPlans().Create(context.Background(), spaceID, plan, "{}")
 	require.NoError(t, err)
-	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", ""))
+	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", "", timeline...))
 	return record
 }
 
@@ -87,6 +97,13 @@ func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	untouched, err := fetchplan.DecodeFetchPlanContent(other.Plan)
 	require.NoError(t, err)
 	require.Equal(t, "h1", untouched.Datasets["ds1|1m"].Hash)
+
+	timeline, err := db.SeriesTimeline().ListBySpace(ctx, "crypto")
+	require.NoError(t, err)
+	require.Empty(t, timeline, "重新登记在同一个事务里删掉该空间的全部时间线行")
+	timeline, err = db.SeriesTimeline().ListBySpace(ctx, "stockcn")
+	require.NoError(t, err)
+	require.Len(t, timeline, 1, "别的空间的时间线不动")
 }
 
 // 重新登记之后、新快照登记之前，数据集在时间线上没有计划段，数据集健康里看不到它们；
