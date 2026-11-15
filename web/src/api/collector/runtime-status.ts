@@ -53,6 +53,22 @@ export interface CollectorFunctionStatus {
   dataset_subjects?: CollectorFunctionDataset[];
   /** 执行端：scf（云函数）、stream（WS 推送）、local（本地执行端）。 */
   executor?: string;
+  /**
+   * 以下四项是 Collector 内存里最近一次云上读回，只对 scf 函数有意义；Collector 重启后到下一次读回之前为空。
+   * 值为 false 时后端不下发字段。
+   */
+  cloud_exists?: boolean;
+  cloud_timer_matches?: boolean;
+  cloud_package_latest?: boolean;
+  /** 读回时间（RFC3339），空表示还没有读回。 */
+  cloud_read_at?: string;
+}
+
+/** 计划外的函数：符合本空间命名格式但不在计划里，对账器已停掉定时器，不会自动删除。 */
+export interface CollectorUnplannedFunction {
+  name?: string;
+  region?: string;
+  namespace?: string;
 }
 
 export interface StreamConnStatus {
@@ -115,6 +131,8 @@ export interface GetCollectorStatusResponse {
   generated_at?: string;
   stream?: StreamWorkerStatus;
   ingest_modes?: IngestMode[];
+  /** 对账器最近一次读回找到的计划外函数（Collector 内存里的结果，重启后到下一次读回之前为空）。 */
+  unplanned_functions?: CollectorUnplannedFunction[];
 }
 
 export interface KlineBackfillJob {

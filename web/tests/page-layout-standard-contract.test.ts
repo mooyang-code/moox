@@ -27,23 +27,6 @@ const expectMargin = (source: string, selector: string, property: "margin-top" |
   expect(source).toMatch(new RegExp(`${escaped}\\s*\\{[\\s\\S]*?${property}:\\s*${expected};`));
 };
 
-const extractBlock = (source: string, opening: string, closing: string) => {
-  const start = source.indexOf(opening);
-  if (start < 0) throw new Error(`missing opening marker: ${opening}`);
-  const end = source.indexOf(closing, start + opening.length);
-  if (end < 0) throw new Error(`missing closing marker after: ${opening}`);
-  return source.slice(start, end + closing.length);
-};
-
-const expectStrictOrder = (source: string, markers: string[]) => {
-  let previous = -1;
-  for (const marker of markers) {
-    const current = source.indexOf(marker);
-    expect(current, `missing or out-of-order marker: ${marker}`).toBeGreaterThan(previous);
-    previous = current;
-  }
-};
-
 describe("page layout standards", () => {
   it("uses the compact single-tab header standard", () => {
     const spaces = read("settings/spaces/index.vue");
@@ -149,58 +132,7 @@ describe("page layout standards", () => {
   });
 
   it("normalizes special list workbenches", () => {
-    const cloudFunctions = read("collector/cloud-function/function-instance.vue");
     const factorResults = read("factor/results/index.vue");
-
-    const cloudFunctionActions = extractBlock(cloudFunctions, '<a-space class="cloud-function-action-bar" wrap>', "</a-space>");
-    const cloudFunctionFilters = extractBlock(cloudFunctions, '<a-space class="cloud-function-filter-bar" wrap>', "</a-space>");
-    // 批量删除不放在工具栏第一位：选中实例后才出现在“已选择 N 个实例”提示条里
-    expect(cloudFunctionActions).not.toContain("batchDelete");
-    expect(cloudFunctions).toContain('<a-button size="small" status="danger" @click="batchDelete">删除已选实例</a-button>');
-    expectStrictOrder(cloudFunctionActions, [
-      '<a-button type="outline" @click="onCloudAccountManage">',
-      "<span>云账户管理</span>",
-      '<a-button type="outline" @click="onFunctionPackageManage">',
-      "<span>代码包版本</span>"
-    ]);
-    expectStrictOrder(cloudFunctionFilters, [
-      '<a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear @change="search">',
-      'v-model="form.instanceId"',
-      '<a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear @change="search">',
-      '<a-select placeholder="实例类型" v-model="form.functionType" style="width: 180px" allow-clear @change="search">'
-    ]);
-    // 下拉即时生效、文本框回车生效：工具栏不再有“查询”按钮
-    expect(cloudFunctionFilters).not.toContain("<span>查询</span>");
-    expect(cloudFunctions).not.toContain('class="cloud-function-toolbar"');
-    expect(cloudFunctions).not.toContain(".moox-inner .a-row");
-    expect(cloudFunctions).not.toContain("<h2>云函数实例</h2>");
-    expectStrictOrder(cloudFunctions, [cloudFunctionActions, cloudFunctionFilters, "<a-table"]);
-    const toolbarRule = cloudFunctions.match(/\.cloud-function-action-bar\s*,\s*\.cloud-function-filter-bar\s*\{([^}]*)\}/);
-    expect(toolbarRule).not.toBeNull();
-    const toolbarDeclarations = toolbarRule?.[1] || "";
-    for (const [property, value] of [
-      ["display", "flex"],
-      ["width", "100%"],
-      ["max-width", "100%"],
-      ["min-width", "0"],
-      ["justify-content", "flex-start"],
-      ["margin-bottom", "var(--moox-space-tight)"]
-    ]) {
-      expect(toolbarDeclarations).toContain(`${property}: ${value};`);
-    }
-    expect(cloudFunctions).toMatch(
-      /\.moox-page\s*\{[^}]*contain:\s*inline-size;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*auto;/
-    );
-    expect(cloudFunctions).toMatch(
-      /\.moox-page :deep\(\.arco-spin\),\s*\.moox-page :deep\(\.arco-spin-children\)\s*\{[^}]*overflow-x:\s*hidden;/
-    );
-    expect(cloudFunctions).toMatch(/\.moox-inner\s*\{[^}]*overflow-x:\s*hidden;/);
-    expect(cloudFunctions).not.toContain("width: calc(100% - 72px)");
-    expect(cloudFunctions).not.toMatch(/\.cloud-function-toolbar\s*\{[^}]*flex:\s*1;/);
-    expect(cloudFunctions).not.toMatch(/\.cloud-function-toolbar\s*\{[^}]*justify-content:\s*flex-end;/);
-    expect(cloudFunctions).not.toMatch(
-      /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\.page-head\s*\{[^}]*flex-direction:\s*column;/
-    );
 
     expect(factorResults).toContain('class="result-toolbar"');
     expect(factorResults).toContain("#status-extra");

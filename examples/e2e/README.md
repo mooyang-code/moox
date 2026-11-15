@@ -22,11 +22,10 @@ Storage 的端到端验证（View 跟随变更日志）在 `modules/storage/inte
 ```bash
 ./bin/moox-cli collector fetch-plan --file ./moox.toml --space-id crypto
 ./bin/moox-cli collector function probe-egress --file ./moox.toml --space-id crypto
-./bin/moox-cli collector function timer-inventory --file ./moox.toml \
-  --space-id crypto --cloud-account-id <账户ID> --namespace <命名空间> --region <地域>
+./bin/moox-cli collector function list --file ./moox.toml --space-id crypto --drift
 ```
 
-CLI 使用清单中的操作员 SSH 网关身份。`probe-egress` 对已部署的 `market_fetcher` 发起同步诊断调用；公网 IP 反射不可用时不以缺少 IP 判定行情源失败。
+CLI 使用清单中的操作员 SSH 网关身份。`probe-egress` 经 Collector 对已生效计划里的采集函数发起同步诊断调用；公网 IP 反射不可用时不以缺少 IP 判定行情源失败。
 
 先用少量标的的独立采集任务验收，每期保留：
 

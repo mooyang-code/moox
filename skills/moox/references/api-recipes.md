@@ -26,7 +26,7 @@
 | 数据 › 浏览、导入 | 读数据、导入历史 | `data kline get`、`data rows export|count`、`data view query`、`data records search`、`import` |
 | 采集 › 采集任务 | 任务、结果清单、数据类型 | `collector task list|show|create|update|disable|delete|delete-result|inventory`、`collector data-type list|show` |
 | 采集 › 运行状态 | 状态、缺口、补采、合成、标的、采集方式 | `collector status`、`collector kline …`、`collector resample preview|backfill|jobs|cancel`、`collector subjects status|listers|sync|exclude|unexclude|exclusions`、`collector ingest-mode get|set`、`collector fetch-plan …` |
-| 采集 › 云账户、云函数、代码包 | 账户（只读与删除）、实例、作业、导入、代码包 | `cloud account list|regions|delete`、`cloud function list|job|invoke|create|deploy|update-config|delete`、`cloud scf preview|import`、`cloud package list|show|url|delete`、`collector function upload` |
+| 采集 › 运行状态 › 云账号、代码包、云上状态 | 账号（只读与删除）、代码包、函数的云上状态与计划外的函数 | `collector account list|regions|delete`、`collector package list|delete`、`collector function list|delete|upload|probe-egress` |
 | 因子 › 因子定义 | 定义、分类、校验与试算 | `factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign` |
 | 因子 › 计算任务 | 任务、成员、补算、状态 | `factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`、`factor recalc submit|list|show|cancel`、`factor status`；阶段 `lifecycle …`；自定义算子 `udf …` |
 | 策略 | 定义、实例、结果、回放、模板 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy template list|show|save|delete|render`、`strategy display get|set` |

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -438,6 +439,13 @@ func (r *PlanReconciler) scanUnplanned(ctx context.Context, planned map[string]c
 	return out, nil
 }
 
+// UnplannedFunctions 返回最近一次读回时找到的计划外函数（只读内存，不发起读回；重启后到下一次读回之前为空）。
+func (r *PlanReconciler) UnplannedFunctions() []cloud.FunctionRef {
+	r.readMu.Lock()
+	defer r.readMu.Unlock()
+	return append([]cloud.FunctionRef(nil), r.unplanned...)
+}
+
 // ----- 给 RPC 的视图与操作 -----
 
 // CloudFunctionView 是 ListCloudFunctions 的一项：计划里应有的内容、云上读回的状态、是否在计划外。不含任何密钥。
@@ -629,6 +637,7 @@ func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, names []strin
 			r.verifyRequested.Store(true)
 			r.readMu.Lock()
 			delete(r.readbacks, refKey(ref))
+			r.unplanned = slices.DeleteFunc(r.unplanned, func(item cloud.FunctionRef) bool { return refKey(item) == refKey(ref) })
 			if r.deletedFunctions == nil {
 				r.deletedFunctions = map[string]bool{}
 			}

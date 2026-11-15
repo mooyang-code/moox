@@ -389,6 +389,19 @@ func TestCoordinationFailureTextFallsBackToAGenericHint(t *testing.T) {
 	require.Contains(t, coordinationFailureText(map[string]bool{"cloud": true, "quota": true}), "配额超限", "配额超限优先于一般的调用失败")
 }
 
+// 配额超限的文案指向批 2 的新命令：读回云上状态的 collector function list 与经 Collector 删除的 collector function delete，
+// 不再指向读旧实例表的 timer-inventory；代码包的文案指向 collector package list。
+func TestQuotaAndPackageTextsPointToTheCollectorCommands(t *testing.T) {
+	quota := coordinationFailureText(map[string]bool{"quota": true})
+	require.Contains(t, quota, "moox-cli collector function list --drift")
+	require.Contains(t, quota, "moox-cli collector function delete")
+	require.Contains(t, quota, "moox-cli setup inspect-scf", "旧云账号下的函数 Collector 管不到")
+	require.NotContains(t, quota, "timer-inventory")
+	pkg := coordinationFailureText(map[string]bool{"package": true})
+	require.Contains(t, pkg, "moox-cli collector package list")
+	require.NotContains(t, pkg, "FunctionInstance")
+}
+
 func TestBuilderMixedLeaseHeldAndAnotherReasonUsesTheOtherReasonsText(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {

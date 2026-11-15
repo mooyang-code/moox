@@ -137,7 +137,8 @@ func main() {
 		{"monitor/ListHostAgents", "/api/admin/monitor/ListHostAgents", "", `{}`},
 		{"strategy/ListStrategies(crypto)", "/api/admin/strategy/ListStrategies", "crypto", `{"page":{"page":1,"page_size":5}}`},
 		{"factor-mgr/ListFactorTasks", "/api/admin/factor-mgr/ListFactorTasks", "crypto", `{"page":{"page":1,"size":5}}`},
-		{"cloudfunction/ListFunctionInstances(crypto)", "/api/admin/cloudfunction/ListFunctionInstances", "crypto", `{}`},
+		// 云账号、代码包、云函数在 Collector 上；ListCloudFunctions 会逐个调腾讯云读回，探测用不碰云的 ListCloudAccounts。
+		{"collector/ListCloudAccounts(crypto)", "/api/admin/collector/ListCloudAccounts", "crypto", `{}`},
 		{"trade/ListTradingAccounts(crypto)", "/api/admin/trade/ListTradingAccounts", "crypto", `{"page":{"page":1,"size":5}}`},
 	}
 	failed := 0

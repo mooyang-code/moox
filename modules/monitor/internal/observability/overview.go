@@ -1717,13 +1717,13 @@ func statusRank(status string) int {
 // coordinationFailureTexts 是 Collector 上报的协调失败原因对应的告警文案，按优先级排列：
 // 多个实例上报不同原因时取排在前面的。原因名与 Collector 的 assignmentFailureReasons 一一对应。
 var coordinationFailureTexts = []struct{ reason, text string }{
-	{"quota", "函数个数、命名空间或预留并发配额超限：用 moox-cli collector function timer-inventory 找出计划外的函数，再用 moox-cli collector function delete 删除"},
+	{"quota", "函数个数、命名空间或预留并发配额超限：用 moox-cli collector function list --drift 找出计划外的函数（unplanned 一组），确认后用 moox-cli collector function delete --name 删除；换过云账号的，旧账号下的函数用 moox-cli setup inspect-scf 查出来到腾讯云控制台手工删"},
 	{"cloud", "调用腾讯云失败：检查云账号密钥、限频和网络"},
 	{"environment", "函数运行环境生成失败：请检查环境变量大小"},
 	{"rules", "采集规则读取失败：请检查 Collector 规则配置和存储连接"},
 	{"store", "Collector 本地数据库读写失败：请检查 Collector 的 SQLite 数据库、磁盘空间和权限"},
 	{"storage", "标的快照登记失败：请检查 Storage 连接，以及 Collector 与 Storage 计算的快照哈希是否一致"},
-	{"package", "采集函数代码包解析失败：请检查代码包是否已上传，以及 FunctionInstance 是否可达"},
+	{"package", "采集函数代码包解析失败：用 moox-cli collector package list 检查代码包是否已上传、状态是否可用"},
 	{"dataset", "数据集属性（允许迟到）设置失败：请检查 Storage 连接和数据集配置"},
 	{"activity", "采集计划活动日志未写入，计划保持未生效：请检查 Admin 的活动日志服务"},
 	{"preflight", "创建新采集计划前的检查未通过：请检查数据源前置条件，例如 A 股交易日历的覆盖期"},

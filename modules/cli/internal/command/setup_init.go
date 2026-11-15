@@ -354,11 +354,8 @@ func provisionSetupCLS(ctx context.Context, source clsprepare.AccountSource, fac
 	}
 }
 
-// defaultSetupRegisterCloudAccounts makes the single declarative SCF account
-// in moox.toml a real FunctionInstance catalog record. The Tencent credential itself
-// is owned by Admin; FunctionInstance stores only its secret reference and COS
-// metadata, never the SecretKey. SCF regions are execution targets, not
-// separate cloud accounts.
+// defaultSetupRegisterCloudAccounts 把 moox.toml 里 scf_plan 的云账号登记进 Collector。腾讯云密钥本身在 Admin，
+// Collector 只存密钥 ID 与 COS 桶，不存 SecretKey。SCF 的各地域是执行目标，不是不同的云账号。
 func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfig.Snapshot) (*setupCloudAccountSummary, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("cloud_accounts: setup configuration is missing")
@@ -379,7 +376,7 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfi
 	}
 	existing := make(map[string]adminclient.CloudAccount, len(existingAccounts))
 	for _, account := range existingAccounts {
-		if account.Provider == "tencent" && !account.IsDeleted && strings.TrimSpace(account.AccountID) != "" {
+		if account.Provider == "tencent" && strings.TrimSpace(account.AccountID) != "" {
 			existing[account.AccountID] = account
 		}
 	}

@@ -30,8 +30,8 @@ Use this order unless evidence points elsewhere:
 
 1. Local build: the SCF package contains `main`, `sources/` and (for stockcn) market assets.
 2. Package upload: COS object exists and region/bucket/key match the publish request.
-3. SCF function: name, namespace, region, runtime, handler and environment match the FunctionInstance node.
-4. Timer path: the trigger is enabled with the expected cron (`collector function timer-inventory`).
+3. SCF function: exists in the expected region and namespace, with the latest package and the managed environment (`collector function list --drift`).
+4. Timer path: the trigger is enabled with the expected cron (same command; unplanned functions are listed separately with their timers stopped).
 5. Plan: confirm the dataset uses SCF (stream/local has a separate executor); the function environment carries the current fetch plan (`collector fetch-plan`).
 6. Execution: CLS logs show per-subject provider results.
 7. Storage: `CommitTimeSeriesBatch` succeeds through access.

@@ -1,60 +1,42 @@
 import { callControl } from "@/api/admin/http";
-export { withOptionalSpace } from "@/api/space-context";
 
-export interface CloudAccountSummary {
-  id?: number;
+/** 云账号：credential_secret_id 是密钥管理里类别 cloud、厂商 tencent 的密钥 ID，不是密钥本身。云账号是全局的，不分空间。 */
+export interface CloudAccount {
   account_id: string;
   account_name: string;
+  /** 只支持 tencent。 */
   provider: string;
   credential_secret_id: string;
   app_id: string;
   cos_region: string;
   cos_bucket: string;
-  extra_config: string;
-  is_deleted?: boolean;
   create_time?: string;
   modify_time?: string;
 }
 
-export interface CloudAccountInput {
-  account_id: string;
-  account_name: string;
-  provider: string;
-  credential_secret_id: string;
-  app_id: string;
-  cos_region: string;
-  cos_bucket: string;
-  extra_config?: string;
-}
+export type CloudAccountInput = Omit<CloudAccount, "create_time" | "modify_time">;
 
-export type CloudAccount = CloudAccountSummary;
-
-export const getCloudAccountList = async (): Promise<CloudAccountSummary[]> => {
-  const rsp = await callControl<Record<string, never>, { accounts?: CloudAccountSummary[] }>(
-    "cloudfunction",
-    "ListCloudAccounts",
-    {}
-  );
+export const getCloudAccountList = async (): Promise<CloudAccount[]> => {
+  const rsp = await callControl<Record<string, never>, { accounts?: CloudAccount[] }>("collector", "ListCloudAccounts", {});
   return rsp.accounts ?? [];
 };
 
-export const createCloudAccount = async (account: CloudAccountInput): Promise<CloudAccountSummary> => {
-  const rsp = await callControl<{ account: CloudAccountInput }, { account?: CloudAccountSummary }>(
-    "cloudfunction",
-    "CreateCloudAccount",
-    { account }
-  );
-  return rsp.account as CloudAccountSummary;
-};
-
-export const updateCloudAccount = async (account_id: string, account: Partial<CloudAccountInput>): Promise<void> => {
-  await callControl<{ account: Partial<CloudAccountInput> }, Record<string, never>>("cloudfunction", "UpdateCloudAccount", {
-    account: { account_id, ...account }
+export const createCloudAccount = async (account: CloudAccountInput): Promise<CloudAccount | undefined> => {
+  const rsp = await callControl<{ account: CloudAccountInput }, { account?: CloudAccount }>("collector", "CreateCloudAccount", {
+    account
   });
+  return rsp.account;
 };
 
+/** 整行写入：没填的字段会被清空。 */
+export const updateCloudAccount = async (account: CloudAccountInput): Promise<CloudAccount | undefined> => {
+  const rsp = await callControl<{ account: CloudAccountInput }, { account?: CloudAccount }>("collector", "UpdateCloudAccount", {
+    account
+  });
+  return rsp.account;
+};
+
+/** 账号还被 scf_plan 引用、还有代码包或云上还有它建的函数时，Collector 拒绝删除，错误信息就是原因。 */
 export const deleteCloudAccount = async (accountId: string): Promise<void> => {
-  await callControl<{ account_id: string }, Record<string, never>>("cloudfunction", "DeleteCloudAccount", {
-    account_id: accountId
-  });
+  await callControl<{ account_id: string }, Record<string, never>>("collector", "DeleteCloudAccount", { account_id: accountId });
 };

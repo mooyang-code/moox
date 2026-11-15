@@ -33,40 +33,22 @@
 | `archive tasks run` | 立即运行一次（同复核） |
 | `archive tasks update` | 修改拉取间隔、回补起点或启停任务 |
 
-## cloud：云函数：云账户、函数实例、SCF 导入与代码包（调用 CloudFunctionMgr）
+## collector：采集：任务、运行状态、补采与合成、标的、采集方式、云函数、云账号与代码包
 
 | 命令 | 说明 |
 | --- | --- |
-| `cloud account delete` | 删除云账户登记（默认只预览，--yes 才执行） |
-| `cloud account list` | 列出云账户（不含密钥明文） |
-| `cloud account regions` | 列出云厂商可用的地域 |
-| `cloud function create` | 创建函数实例（请求体用 --data，字段 instances；创建后用 job 查看进度） |
-| `cloud function delete` | 删除函数实例（--instance-id 可重复；默认只预览，--yes 才执行） |
-| `cloud function deploy` | 把代码包部署到函数实例（线上切换版本；默认只预览，--yes 才执行） |
-| `cloud function invoke` | 调用一个函数实例（会真实执行函数；默认只预览事件内容，--yes 才执行） |
-| `cloud function job` | 查看函数作业进度 |
-| `cloud function list` | 列出函数实例 |
-| `cloud function update-config` | 修改函数实例的运行配置与定时器（默认只预览，--yes 才执行） |
-| `cloud package delete` | 删除代码包（默认只预览，--yes 才执行） |
-| `cloud package list` | 列出函数代码包 |
-| `cloud package show` | 查看代码包 |
-| `cloud package url` | 取代码包的下载地址 |
-| `cloud scf import` | 把云上已有的 SCF 函数导入登记（函数列表写在 --functions 里；默认只预览，--yes 才执行） |
-| `cloud scf preview` | 预览云上有哪些 SCF 函数可以导入 |
-
-## collector：采集：任务、运行状态、补采与合成、标的、采集方式与云函数包
-
-| 命令 | 说明 |
-| --- | --- |
+| `collector account delete` | 删除云账号登记（默认只预览，--yes 才执行；还被 scf_plan 引用、还有代码包或名下还有函数时拒绝。旧账号下建的函数 collector function delete 删不到，要用 setup inspect-scf 查出来再到腾讯云控制台手工删） |
+| `collector account list` | 列出云账号（不含密钥明文） |
+| `collector account regions` | 列出腾讯云函数可用的地域 |
 | `collector data-type list` | 列出采集数据类型 |
 | `collector data-type show` | 查看数据类型及其字段 |
 | `collector fetch-plan pause` | 暂停空间的采集：停用全部 SCF 定时器，并停止采集计划对账与补采（默认只预览，--yes 才执行） |
 | `collector fetch-plan reregister` | Storage 数据被清空后，让采集计划重新登记序列快照并重置补采状态 |
 | `collector fetch-plan resume` | 恢复空间的采集：重新启用 SCF 定时器并继续采集计划对账与补采 |
-| `collector function delete` | 异步删除当前 space 中全部 SCF 云函数 |
+| `collector function delete` | 按名字或前缀删除空间的云函数（计划里的函数删掉后下一轮对账会重建；默认只预览，--yes 才执行） |
+| `collector function list` | 列出空间的采集函数与补采函数：计划里应有的内容、云上读回的状态，计划外的函数单列（--drift 只看不一致的） |
 | `collector function package` | 构建数据采集器 SCF zip 包 |
-| `collector function probe-egress` | 逐个调用短时 SCF 诊断公网出口和 Provider 连通性 |
-| `collector function timer-inventory` | 只读盘点指定 SCF Timer fleet 并校验云侧 readback |
+| `collector function probe-egress` | 调用已生效计划里的各采集函数，取它们此刻的公网出口 IP |
 | `collector function upload` | 构建（或使用现成的）SCF 代码包并只上传，不创建函数 |
 | `collector ingest-mode get` | 查看各 K 线任务的采集方式、交接中的生效周期与 collector-stream 实例状态 |
 | `collector ingest-mode set` | 切换采集方式（按生效周期交接；不带 --dataset-id 表示空间全部 K 线任务） |
@@ -77,6 +59,8 @@
 | `collector kline backfill-status` | 查看补采作业进度；不带 --job-id 时列出空间最近的作业 |
 | `collector kline check` | 按采集计划检查时间范围内的 K 线是否齐全，输出缺口 |
 | `collector kline history-confirm` | 按最近一次历史扫描发现的缺口补采；行情源本来没有的 K 线会被确认并不再报告 |
+| `collector package delete` | 删除代码包（先删 COS 对象再删记录；默认只预览，--yes 才执行） |
+| `collector package list` | 列出空间的云函数代码包（按上传先后倒序，每个包名保留最新 3 个） |
 | `collector resample backfill` | 提交历史合成作业：把时间范围内的目标 K 线按源数据重新合成 |
 | `collector resample cancel` | 取消排队或运行中的历史合成作业（已写入的保留） |
 | `collector resample jobs` | 查看历史合成作业；带 --job-id 查看单个作业，否则按任务、状态列出最近的作业 |

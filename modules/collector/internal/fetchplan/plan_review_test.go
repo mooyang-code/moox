@@ -451,3 +451,32 @@ func TestAlreadyStoppedUnplannedFunctionIsLeftAlone(t *testing.T) {
 	h.waitOps(r)
 	require.Zero(t, h.cloud.countOps("timer", orphan.FunctionName), "已经停用的不再发停用")
 }
+
+// T6：同名函数在旧命名空间里留下的副本是计划外函数；按名字删时两份都删，结果按命名空间区分；删掉后不再列为计划外。
+func TestDeleteByNameReportsTheNamespaceOfEachCopy(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	h.applyFirstPlan(r)
+	name := h.cloudTimers()[0]
+	planned := scfRef(name)
+	legacy := scfRefIn(name, planned.Region, "legacy")
+	h.scf.Seed(legacy, activeTimerFunction("pkg-old"))
+	h.now = h.now.Add(2 * time.Hour)
+	require.NoError(t, h.reconcile(r))
+	h.waitOps(r)
+	unplanned := r.UnplannedFunctions()
+	require.Len(t, unplanned, 1)
+	require.Equal(t, "legacy", unplanned[0].Namespace)
+	require.Equal(t, name, unplanned[0].Name)
+
+	results, err := r.DeleteCloudFunctions(context.Background(), []string{name}, "")
+	require.NoError(t, err)
+	namespaces := map[string]bool{}
+	for _, result := range results {
+		require.Equal(t, name, result.Name)
+		require.True(t, result.Done, result.Namespace)
+		namespaces[result.Namespace] = true
+	}
+	require.Equal(t, map[string]bool{"default": true, "legacy": true}, namespaces)
+	require.Empty(t, r.UnplannedFunctions(), "删掉的副本不再列为计划外")
+}

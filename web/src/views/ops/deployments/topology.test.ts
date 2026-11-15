@@ -73,7 +73,7 @@ describe("service topology", () => {
     expect(collectorToPrimary).toMatchObject({ category: "business", route: "cross" });
     expect(collectorToPrimary?.services).toEqual(["trpc.moox.storage.Metadata", "trpc.moox.storage.PrimaryStore"]);
     expect(edge(edges, key("control", "strategy"), key("overseas", "trade"))).toMatchObject({ route: "relay" });
-    expect(edge(edges, key("control", "collector"), key("control", "cloudfunction"))).toMatchObject({ route: "local" });
+    expect(edge(edges, key("control", "collector"), key("control", "admin"))).toMatchObject({ route: "local" });
     expect(edge(edges, key("control", "monitor"), key("storage", "host-agent"))).toMatchObject({ category: "monitor" });
     // 每台主机网关以 host-gateway@<主机> 身份拉取 Admin 快照。
     for (const host of hosts)
@@ -118,8 +118,7 @@ describe("service topology", () => {
     const flow = buildDataFlow(topology);
     expect(flow.map(item => item.step)).toEqual(flow.map((_, index) => index + 1));
     expect(flow.map(item => [item.from, item.to])).toEqual([
-      [key("control", "collector"), key("control", "cloudfunction")],
-      [key("control", "cloudfunction"), "ext:scf-collector"],
+      [key("control", "collector"), "ext:scf-collector"],
       ["ext:market", "ext:scf-collector"],
       // 多副本的 access 取与存储主服务同主机的那一台。
       ["ext:scf-collector", key("storage", "access")],
@@ -134,7 +133,7 @@ describe("service topology", () => {
     ]);
     const withoutStream = build(deployments.filter(item => item.component_id !== "collector-stream"));
     const steps = buildDataFlow(withoutStream);
-    expect(steps).toHaveLength(10);
+    expect(steps).toHaveLength(9);
     expect(steps.map(item => item.step)).toEqual(steps.map((_, index) => index + 1));
   });
 

@@ -135,7 +135,7 @@ func TestHostRequiredFlagRejectsMissingHost(t *testing.T) {
 func TestStateChangingSpecsOnlyPreviewWithoutYes(t *testing.T) {
 	for _, path := range [][]string{
 		{"strategy", "instance", "enable"}, {"strategy", "instance", "disable"}, {"collector", "task", "disable"},
-		{"factor", "task", "disable"}, {"factor", "member", "disable"}, {"cloud", "function", "invoke"},
+		{"factor", "task", "disable"}, {"factor", "member", "disable"}, {"collector", "account", "delete"}, {"collector", "package", "delete"},
 	} {
 		spec := specByPath(t, path...)
 		assert.True(t, spec.Destructive, "%v 应默认只预览", path)
@@ -254,20 +254,18 @@ func TestReplayRequiresEveryModuleAndSurvivesEmptyArgs(t *testing.T) {
 
 func TestFunctionDeleteAndFirewallAndUdfPreviewAtCommandLevel(t *testing.T) {
 	gateway := &rpcFakeGateway{responses: map[string]string{
-		"ListFunctionInstances":        `{"ret_info":{"code":0},"items":[{"instance_id":"f-1","function_type":"scf-event","workload_type":"market_fetcher","namespace":"default"}]}`,
-		"AcquireCollectorPublishLease": leaseResponse,
+		"ListCloudFunctions": `{"ret_info":{"code":0},"functions":[{"name":"f-1","region":"ap-nanjing","namespace":"default","kind":"timer","exists":true}]}`,
 	}}
 	useRPCGateway(t, gateway)
-	collectorDeleteFlags = collectorDeleteOptions{SpaceID: "crypto", Wait: true}
-	t.Cleanup(func() { collectorDeleteFlags = collectorDeleteOptions{} })
+	collectorFunctionDeleteFlags = collectorFunctionFlags{SpaceID: "crypto", Names: []string{"f-1"}}
+	t.Cleanup(func() { collectorFunctionDeleteFlags = collectorFunctionFlags{} })
 	var out bytes.Buffer
 	collectorFunctionDeleteCmd.SetOut(&out)
 	collectorFunctionDeleteCmd.SetErr(&bytes.Buffer{})
 	collectorFunctionDeleteCmd.SetContext(context.Background())
 	require.NoError(t, collectorFunctionDeleteCmd.RunE(collectorFunctionDeleteCmd, nil))
-	assert.Contains(t, out.String(), `"dry_run": true`)
-	assert.NotContains(t, gateway.methods, "AcquireCollectorPublishLease", "没有 --yes 不能获取租约更不能提交删除")
-	assert.NotContains(t, gateway.methods, "SubmitDeleteFunctionInstances")
+	assert.Equal(t, true, parsePreview(t, out.String())["preview"])
+	assert.NotContains(t, gateway.methods, "DeleteCloudFunctions", "没有 --yes 不能删除")
 
 	var fwOut bytes.Buffer
 	lighthouseFirewallAddFlags = lighthouseFirewallAddOptions{InstanceID: "lhins-1", Ports: "20201", Protocol: "TCP", Cidr: "0.0.0.0/0", Action: "ACCEPT"}

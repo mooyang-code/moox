@@ -86,7 +86,6 @@ func (f failingCLS) CreateIndex(context.Context, string) (string, error) {
 func testSource() *fakeAccounts {
 	return &fakeAccounts{
 		items: []adminclient.CloudAccount{
-			{AccountID: "deleted", Provider: "tencent", IsDeleted: true},
 			{AccountID: "foreign", Provider: "aws"},
 			{AccountID: "newest", Provider: "tencent", CredentialSecretID: "newest"},
 			{AccountID: "older", Provider: "tencent", CredentialSecretID: "older"},

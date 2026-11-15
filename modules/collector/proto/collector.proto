@@ -659,6 +659,16 @@ message GetCollectorStatusRsp {
   StreamWorkerStatus stream = 11;
   // ingest_modes 是各启用的 K 线任务的采集方式。
   repeated IngestMode ingest_modes = 12;
+  // unplanned_functions 是对账器最近一次读回时找到的计划外函数（Collector 内存里的结果，重启后到下一次读回之前为空）。
+  repeated CollectorUnplannedFunction unplanned_functions = 13;
+}
+
+// CollectorUnplannedFunction 是符合本空间命名格式、但不在计划里的云函数：对账器已停用它的定时器，
+// 不会自动删除，等人工用 moox-cli collector function delete 删除。
+message CollectorUnplannedFunction {
+  string name = 1;
+  string region = 2;
+  string namespace = 3;
 }
 
 // ReregisterFetchPlan 在 Storage 数据被清空后让采集计划重新生效：把最近一份已生效计划里各数据集标记为
@@ -1207,11 +1217,13 @@ message DeleteCloudFunctionsReq {
 }
 
 // CloudFunctionDeletion 是一个函数的删除结果：done 为 false 且 error 为空表示还在删，稍后用 ListCloudFunctions 查看。
+// namespace 区分同名函数在不同命名空间里的副本（例如命名空间配置改过之后留下的）；云上没有这个函数时为空。
 message CloudFunctionDeletion {
   string name = 1;
   string region = 2;
   bool done = 3;
   string error = 4;
+  string namespace = 5;
 }
 
 message DeleteCloudFunctionsRsp {

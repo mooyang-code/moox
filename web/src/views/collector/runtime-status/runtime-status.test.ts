@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  cloudStateInfo,
   cronText,
   datasetFunctions,
   datasetLabel,
@@ -15,7 +16,8 @@ import {
   inspectionInfo,
   levelInfo,
   overallStatus,
-  statusSummary
+  statusSummary,
+  unplannedDeleteCommand
 } from "./runtime-status-model";
 
 const functions = [
@@ -210,6 +212,62 @@ describe("collector runtime status page", () => {
     expect(page).toContain("补采确认");
     expect(page).toContain("清除并重新检查");
     expect(page).toContain('tab: "backfills"');
+  });
+
+  it("函数区上方有云账号、代码包两个入口，打开原来的两个对话框", () => {
+    const toolbarStart = page.indexOf('<div class="pane-toolbar">');
+    const toolbar = page.slice(toolbarStart, page.indexOf("</div>", toolbarStart));
+    expect(toolbar).toContain('@click="accountVisible = true">云账号</a-button>');
+    expect(toolbar).toContain('@click="packageVisible = true">代码包</a-button>');
+    expect(page).toContain('<CloudAccountManage v-model="accountVisible" />');
+    expect(page).toContain('<FunctionPackageManage v-model="packageVisible" />');
+  });
+
+  it("函数表有云上状态列；计划外的函数单列一组，没有时不显示", () => {
+    expect(page).toContain("cloudStateInfo(record).text");
+    expect(page).toContain('<section v-if="unplannedFunctions.length" class="unplanned-section">');
+    expect(page).toContain("<h3>计划外的函数</h3>");
+    expect(page).toContain("定时器已停，可用命令行删除：{{ unplannedHint }}");
+    for (const title of ['title="函数名"', 'title="地域"', 'title="命名空间"']) expect(page).toContain(title);
+    // 页面不实时读腾讯云：只用 GetCollectorStatus 里的读回结果
+    expect(page).not.toContain("ListCloudFunctions");
+  });
+});
+
+describe("云上状态", () => {
+  const read = { executor: "scf", cloud_read_at: "2026-11-15T01:00:00Z", cloud_exists: true };
+
+  it("只对 scf 函数：推送与本地执行端写“—”", () => {
+    expect(cloudStateInfo({ ...read, executor: "stream" })).toEqual({ text: "—", tone: "muted" });
+    expect(cloudStateInfo({ ...read, executor: "local" })).toEqual({ text: "—", tone: "muted" });
+  });
+
+  it("还没读回写“未读回”，不当成异常", () => {
+    expect(cloudStateInfo({ executor: "scf" })).toEqual({ text: "未读回", tone: "muted" });
+    expect(cloudStateInfo({ executor: "scf", cloud_read_at: "" })).toEqual({ text: "未读回", tone: "muted" });
+  });
+
+  it("读回了但云上没有写“不存在”", () => {
+    expect(cloudStateInfo({ executor: "scf", cloud_read_at: read.cloud_read_at })).toEqual({ text: "不存在", tone: "warn" });
+  });
+
+  it("定时器、代码包分别写出不一致的那一项，两项都不一致时都写", () => {
+    expect(cloudStateInfo({ ...read, cloud_package_latest: true })).toEqual({ text: "定时器不一致", tone: "warn" });
+    expect(cloudStateInfo({ ...read, cloud_timer_matches: true })).toEqual({ text: "代码包落后", tone: "warn" });
+    expect(cloudStateInfo(read)).toEqual({ text: "定时器不一致、代码包落后", tone: "warn" });
+  });
+
+  it("都一致写“一致”", () => {
+    expect(cloudStateInfo({ ...read, cloud_timer_matches: true, cloud_package_latest: true })).toEqual({
+      text: "一致",
+      tone: "ok"
+    });
+  });
+
+  it("计划外函数的删除命令可以直接复制执行", () => {
+    expect(unplannedDeleteCommand("crypto", "moox-fetch-plan-crypto-spot-tokyo-009")).toBe(
+      "moox-cli collector function delete --space-id crypto --name moox-fetch-plan-crypto-spot-tokyo-009"
+    );
   });
 });
 

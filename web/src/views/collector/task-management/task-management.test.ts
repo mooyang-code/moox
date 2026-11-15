@@ -5,19 +5,20 @@ import { describe, expect, it } from "vitest";
 const normalizeSource = (source: string) => source.replace(/\s+/g, "").replace(/'/g, '"');
 
 describe("collector task management workbench", () => {
-  it("keeps the five tabs in tasks, results, status, executors, backfills order", () => {
+  it("keeps the four tabs in tasks, results, status, backfills order", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     const normalized = normalizeSource(source);
-    const positions = ["采集任务", "采集结果", "运行状态", "执行器", "补采"].map(label => normalized.indexOf(`label:"${label}"`));
+    const positions = ["采集任务", "采集结果", "运行状态", "补采"].map(label => normalized.indexOf(`label:"${label}"`));
 
     expect(source).toContain("PageTitleTabs");
     expect(source).toContain('aria-label="采集任务"');
     expect(positions.every(position => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
-    expect(normalized).toContain("executors:FunctionInstance");
+    expect(normalized).not.toContain('label:"执行器"');
+    expect(normalized).not.toContain("function-instance");
     expect(normalized).toContain("status:RuntimeStatus");
     expect(normalized).toContain("backfills:BackfillJobs");
-    expect(normalized).toContain('typeCollectorTaskTab="tasks"|"status"|"backfills"|"executors"|"results"');
+    expect(normalized).toContain('typeCollectorTaskTab="tasks"|"status"|"backfills"|"results"');
   });
 
   it("keeps one visible task menu and removes retired collector URLs", () => {

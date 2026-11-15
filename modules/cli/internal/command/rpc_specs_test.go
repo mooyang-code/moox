@@ -361,6 +361,55 @@ func TestEveryConsoleMethodHasACommandOrAReason(t *testing.T) {
 	}
 }
 
+// 只有 moox-cli 能调用的方法登记的命令要存在；批 2 搬进 CollectMgr 的 12 个云账号、代码包、云函数方法每个都要有命令或说明原因。
+func TestCollectorCloudMethodsHaveACommandOrAReason(t *testing.T) {
+	mountCommands(rootCmd)
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	callers := map[string]map[string]bool{}
+	for _, component := range catalog.Components {
+		for _, service := range component.Services {
+			for _, acl := range service.ACL {
+				for _, method := range acl.Methods {
+					key := service.Path + "/" + method
+					if callers[key] == nil {
+						callers[key] = map[string]bool{}
+					}
+					for _, caller := range acl.Callers {
+						callers[key][caller] = true
+					}
+				}
+			}
+		}
+	}
+	commandExists := func(path string) bool {
+		cmd, rest, err := rootCmd.Find(strings.Fields(path))
+		return err == nil && len(rest) == 0 && cmd != nil && cmd.Name() == strings.Fields(path)[len(strings.Fields(path))-1]
+	}
+	for key, path := range cliOnlyCoverage {
+		assert.True(t, callers[key]["moox-cli"], "cliOnlyCoverage 里的 %s 不是 moox-cli 能调用的方法", key)
+		assert.False(t, callers[key]["console"], "%s 管理台也能调用，应登记在 handWrittenCoverage", key)
+		assert.True(t, commandExists(path), "%s 对应的命令 %q 不存在", key, path)
+	}
+	covered := map[string]string{}
+	for _, spec := range allRPCSpecs() {
+		covered[spec.key()] = strings.Join(spec.Path, " ")
+	}
+	for _, method := range []string{
+		"ListCloudAccounts", "CreateCloudAccount", "UpdateCloudAccount", "DeleteCloudAccount", "ListCloudRegions",
+		"InitPackageUpload", "CompletePackageUpload", "ListFunctionPackages", "DeleteFunctionPackage",
+		"ListCloudFunctions", "DeleteCloudFunctions", "ProbeFunctionEgress",
+	} {
+		key := collectMgr + "/" + method
+		path := firstNonEmpty(covered[key], handWrittenCoverage[key], cliOnlyCoverage[key])
+		if path == "" {
+			assert.NotEmpty(t, consoleOnly[key], "%s 既没有命令也没有说明原因", key)
+			continue
+		}
+		assert.True(t, commandExists(path), "%s 对应的命令 %q 不存在", key, path)
+	}
+}
+
 // 一致性检查本身要能抓到错误：不存在的字段、类型对不上都必须被发现。
 func TestProtoIndexCatchesWrongSpecs(t *testing.T) {
 	index := loadProtoIndex(t)

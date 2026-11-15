@@ -292,7 +292,7 @@ func (s *Service) DeleteCloudFunctions(ctx context.Context, req *pb.DeleteCloudF
 	}
 	rsp := &pb.DeleteCloudFunctionsRsp{RetInfo: retOK()}
 	for _, result := range results {
-		rsp.Results = append(rsp.Results, &pb.CloudFunctionDeletion{Name: result.Name, Region: result.Region, Done: result.Done, Error: result.Error})
+		rsp.Results = append(rsp.Results, &pb.CloudFunctionDeletion{Name: result.Name, Region: result.Region, Namespace: result.Namespace, Done: result.Done, Error: result.Error})
 	}
 	return rsp, nil
 }
@@ -316,9 +316,9 @@ func (s *Service) ProbeFunctionEgress(ctx context.Context, req *pb.ProbeFunction
 
 // ----- 运行状态页的“云上状态” -----
 
-// fillCloudReadbacks 给运行状态里的云函数填上内存里最近一次读回（不发起新的读回）。没有对账器或没有读回时不填。
-// 代码包是否最新：与对账器最近一次解析出的最新可用包比较。
-func (s *Service) fillCloudReadbacks(spaceID string, functions []*pb.CollectorFunctionStatus) {
+// fillCloudReadbacks 给运行状态填上内存里最近一次读回（不发起新的读回）：计划里的云函数填“云上状态”，另附计划外的函数。
+// 没有对账器或没有读回时不填。代码包是否最新：与对账器最近一次解析出的最新可用包比较。
+func (s *Service) fillCloudReadbacks(spaceID string, rsp *pb.GetCollectorStatusRsp) {
 	if s.cloud.Reconcilers == nil {
 		return
 	}
@@ -326,6 +326,10 @@ func (s *Service) fillCloudReadbacks(spaceID string, functions []*pb.CollectorFu
 	if reconciler == nil {
 		return
 	}
+	for _, ref := range reconciler.UnplannedFunctions() {
+		rsp.UnplannedFunctions = append(rsp.UnplannedFunctions, &pb.CollectorUnplannedFunction{Name: ref.Name, Region: ref.Region, Namespace: ref.Namespace})
+	}
+	functions := rsp.GetFunctions()
 	latest := strings.TrimSpace(reconciler.LatestPackageID())
 	packageLatest := func(packageID string) bool { return latest != "" && packageID == latest }
 	for _, function := range functions {

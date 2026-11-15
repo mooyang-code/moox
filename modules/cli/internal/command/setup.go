@@ -239,9 +239,7 @@ func newSetupAttachSCFVPCCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
-// newSetupInvokeSCFCommand invokes a single function directly through SCF's
-// control API. It is useful for connectivity proof when the optional
-// FunctionInstance control service is temporarily unavailable.
+// newSetupInvokeSCFCommand 直接经腾讯云 SCF 的控制接口调用一个函数，不经 Collector；Collector 不可用时用来证明连通性。
 func newSetupInvokeSCFCommand(deps setupDeps) *cobra.Command {
 	var file, region, namespace, functionName, eventJSON string
 	cmd := &cobra.Command{

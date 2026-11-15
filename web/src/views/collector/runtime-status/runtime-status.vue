@@ -274,6 +274,8 @@
             </a-select>
             <a-checkbox v-model="functionFilters.abnormalOnly">只看异常</a-checkbox>
             <span class="muted toolbar-count">共 {{ filteredFunctions.length }} 个</span>
+            <a-button size="small" @click="accountVisible = true">云账号</a-button>
+            <a-button size="small" @click="packageVisible = true">代码包</a-button>
           </div>
           <div ref="functionArea" class="function-area">
             <a-table
@@ -330,6 +332,20 @@
                     </div>
                   </template>
                 </a-table-column>
+                <a-table-column :width="130">
+                  <template #title>
+                    云上状态
+                    <a-tooltip :content="CLOUD_STATE_TIP"><icon-question-circle class="column-tip" /></a-tooltip>
+                  </template>
+                  <template #cell="{ record }">
+                    <span
+                      class="single-line"
+                      :class="cloudStateClass(record)"
+                      :title="record.cloud_read_at ? `读回于 ${timeText(record.cloud_read_at)}` : ''"
+                      >{{ cloudStateInfo(record).text }}</span
+                    >
+                  </template>
+                </a-table-column>
                 <a-table-column title="状态" :width="90" align="center">
                   <template #cell="{ record }">
                     <a-tag size="small" :color="functionStateInfo(record.state).color">{{
@@ -340,6 +356,24 @@
               </template>
             </a-table>
           </div>
+        </section>
+
+        <section v-if="unplannedFunctions.length" class="unplanned-section">
+          <header class="block-header">
+            <h3>计划外的函数</h3>
+            <span class="muted mono-text">定时器已停，可用命令行删除：{{ unplannedHint }}</span>
+          </header>
+          <a-table row-key="key" size="mini" :data="unplannedFunctions" :pagination="false" :bordered="{ cell: true }">
+            <template #columns>
+              <a-table-column title="函数名">
+                <template #cell="{ record }"
+                  ><span class="mono-text">{{ record.name }}</span></template
+                >
+              </a-table-column>
+              <a-table-column title="地域" data-index="region" :width="140" />
+              <a-table-column title="命名空间" data-index="namespace" :width="200" />
+            </template>
+          </a-table>
         </section>
       </template>
     </div>
@@ -354,6 +388,9 @@
     />
 
     <FunctionDetailDialog :fn="selectedFunction" :dataset-names="datasetNames" @close="selectedFunction = null" />
+
+    <CloudAccountManage v-model="accountVisible" />
+    <FunctionPackageManage v-model="packageVisible" />
 
     <a-drawer v-model:visible="logVisible" :width="860" :footer="false" title="标的变更记录" unmount-on-close>
       <ActivityLog :space-id="selectedSpaceId" :zone="displayZone" category="collector.subject_change" :page-size="20" />
@@ -380,7 +417,11 @@ import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import KlineRangeDialog from "@/views/collector/backfill-jobs/kline-range-dialog.vue";
 import FunctionDetailDialog from "./function-detail-dialog.vue";
+import CloudAccountManage from "@/views/collector/cloud-account/cloud-account-manage.vue";
+import FunctionPackageManage from "@/views/collector/cloud-function/function-package-manage.vue";
 import {
+  CLOUD_STATE_TIP,
+  cloudStateInfo,
   datasetFunctions,
   executorText,
   streamPeriodText,
@@ -396,7 +437,8 @@ import {
   levelInfo,
   levelRank,
   overallStatus,
-  statusSummary
+  statusSummary,
+  unplannedDeleteCommand
 } from "./runtime-status-model";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
@@ -420,6 +462,8 @@ const rangeVisible = ref(false);
 const rangeMode = ref<"check" | "backfill">("check");
 const rangeDataset = ref("");
 const logVisible = ref(false);
+const accountVisible = ref(false);
+const packageVisible = ref(false);
 
 const summary = computed(() => statusSummary(status.value));
 // 读取失败时不能显示成“正常”：loaded 表示当前空间至少读到过一次。
@@ -496,6 +540,13 @@ const filteredFunctions = computed(() => {
   const rank = (state?: string) => (state === "pending" ? 2 : state === "retiring" ? 1 : 0);
   return [...list].sort((a, b) => rank(b.state) - rank(a.state));
 });
+const unplannedFunctions = computed(() =>
+  (status.value.unplanned_functions || []).map(item => ({ ...item, key: `${item.region}/${item.namespace}/${item.name}` }))
+);
+// 命令里的尖括号写在脚本里：模板里的“<函数名>”会被当成元素
+const unplannedHint = computed(() => unplannedDeleteCommand(selectedSpaceId.value || "", "<函数名>"));
+const cloudStateClass = (record: CollectorFunctionStatus) =>
+  ({ muted: "muted", ok: "", warn: "warn-text" })[cloudStateInfo(record).tone];
 const regionOptions = computed(() => functionOptions(status.value.functions || [], "region"));
 const marketOptions = computed(() => functionOptions(status.value.functions || [], "market"));
 
@@ -636,6 +687,9 @@ onMounted(loadStatus);
 }
 .runtime-status > section {
   flex: none;
+}
+.runtime-status > .unplanned-section {
+  margin-bottom: 12px;
 }
 .runtime-status > .stream-section {
   flex-shrink: 0;
