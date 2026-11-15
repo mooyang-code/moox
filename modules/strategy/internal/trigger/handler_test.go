@@ -517,6 +517,14 @@ func TestHandleBuildsValidTargetEvent(t *testing.T) {
 	if len(target.GetTargets()) != 2 || !target.GetValidUntil().AsTime().Equal(barStart(1).Add(3*time.Hour)) || !target.GetBarEndTime().AsTime().Equal(barStart(1).Add(time.Hour)) {
 		t.Fatalf("事件时间或目标不符：%s", target.String())
 	}
+	// 事件带上会话开始时刻（Trade 用它比较会话先后），与会话行里记的一致。
+	session, err := h.repo.GetSession(context.Background(), h.session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.StartedAt <= 0 || target.GetSessionStartedAt() != session.StartedAt {
+		t.Fatalf("事件的 session_started_at = %d，会话的开始时刻 = %d", target.GetSessionStartedAt(), session.StartedAt)
+	}
 }
 
 // S18 / S19（处理器部分）：用了 bars[-1] 的实例首期 previous_version_unknown 并记录指纹，次期正常；漏掉一根后再次 unknown。

@@ -51,7 +51,7 @@ func TestTargetHistoryPrunerDeletesOnlyRowsExpiredMoreThanSevenDays(t *testing.T
 	for i, validUntil := range validUntils {
 		_, err := tradeStore.RecordShadowTarget(ctx, store.ShadowTargetRecord{
 			SpaceID: "space-1", TargetID: fmt.Sprintf("shadow-%d", i), LogicalAccountID: "logical-1",
-			InstanceID: "runner-2", SessionID: "session-1", StrategyID: "strategy-1",
+			InstanceID: "runner-2", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 			BarEndTime: validUntil.Add(-time.Minute).UnixMilli(), ValidUntil: validUntil.UnixMilli(),
 			WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", RecordedAt: validUntil.UnixMilli(),
 		})

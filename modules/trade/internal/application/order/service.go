@@ -516,33 +516,21 @@ func (s *Service) checkTargetAuthorization(
 	if logicalAccount.AutomationState != "ACTIVE" {
 		return ErrAutomationPaused
 	}
-	if logicalAccount.OwnerInstanceID == "" || logicalAccount.OwnerInstanceID != record.RunnerID {
+	// 目标单可能在提交之前很久就准备好了：提交前再读一次组合的当前目标行，确认这笔单的目标仍是当前目标、
+	// 仍属同一个实例（目标号相同就是同一个会话），并且还在有效期内，旧单不能跨过策略会话的边界。
+	currentTarget, err := s.Store.GetCurrentTarget(ctx, record.SpaceID, record.LogicalAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return ErrTargetOwnerConflict
 	}
-	// A target order may be prepared long before Submit. Resolve the current
-	// target and re-check its session/validity immediately before the exchange
-	// call so a stale order cannot cross a Strategy lifecycle boundary.
-	currentTarget, targetErr := s.Store.GetLogicalAccountTarget(ctx, record.SpaceID, record.LogicalAccountID)
-	if targetErr != nil {
-		if errors.Is(targetErr, gorm.ErrRecordNotFound) {
-			if logicalAccount.OwnerSessionID != "" {
-				return ErrTargetOwnerConflict
-			}
-		} else {
-			return targetErr
-		}
+	if err != nil {
+		return err
 	}
-	if targetErr == nil && currentTarget.TargetID != record.OwnerID {
+	if currentTarget.TargetID != record.OwnerID || currentTarget.InstanceID != record.RunnerID {
 		return ErrTargetOwnerConflict
 	}
-	if targetErr == nil && currentTarget.InstanceID != "" {
-		if logicalAccount.OwnerInstanceID != currentTarget.InstanceID || logicalAccount.OwnerSessionID != currentTarget.SessionID {
-			return ErrTargetOwnerConflict
-		}
-		now := s.now().UTC().UnixMilli()
-		if now < currentTarget.BarEndTime || now >= currentTarget.ValidUntil {
-			return ErrTargetExpired
-		}
+	now := s.now().UTC().UnixMilli()
+	if now < currentTarget.BarEndTime || now >= currentTarget.ValidUntil {
+		return ErrTargetExpired
 	}
 	return nil
 }

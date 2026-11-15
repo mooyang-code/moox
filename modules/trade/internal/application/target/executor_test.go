@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type targetOrderServiceStub struct {
@@ -204,43 +205,29 @@ func TestTargetExecutorDiscardsPendingChildWhenAutomationChangesBeforeSubmit(t *
 	require.Equal(t, "PAUSED", account.AutomationState)
 }
 
+// 落单之后、提交之前组合的当前目标换成了别的实例的新会话（开始时刻更晚）：丢弃待提交单，返回 ErrTargetSession。
 func TestTargetExecutorDiscardsPendingChildWhenSessionChangesAfterPlace(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.now = time.Now().UTC()
-	var fence string
-	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		logical, err := tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", logical.OwnerInstanceID, logical.OwnerSessionID, logical.AuthFence); err != nil {
-			return err
-		}
-		if logical, err = tx.GetLogicalAccount("space-1", "logical-1"); err != nil {
-			return err
-		}
-		fence, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", logical.AuthFence)
-		return err
-	}))
 	now := fixture.now
 	_, accepted, err := fixture.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-session-change",
-		InstanceID: "instance-1", SessionID: "session-1", StrategyID: "strategy-1",
+		InstanceID: "instance-1", SessionID: "session-1", SessionStartedAt: sessionStartedAt("session-1"), StrategyID: "strategy-1",
 		BarEndTime: now.UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
 		AcceptedAt: now.UnixMilli(), Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}}, Status: StatusPending,
 	})
 	require.NoError(t, err)
 	require.True(t, accepted)
 	fixture.orders.afterPlace = func() {
+		// Converge 持有组合锁，这里只用事务里的写法。
 		require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-			if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", fence); err != nil {
-				return err
-			}
-			logical, err := tx.GetLogicalAccount("space-1", "logical-1")
-			if err != nil {
-				return err
-			}
-			_, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-2", "session-2", logical.AuthFence)
+			_, accepted, err := tx.AcceptLogicalAccountTarget(store.LogicalAccountTargetRecord{
+				SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-next-session",
+				InstanceID: "instance-2", SessionID: "session-2", SessionStartedAt: sessionStartedAt("session-2"), StrategyID: "strategy-1",
+				BarEndTime: now.UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
+				AcceptedAt: now.UnixMilli(), Targets: []store.InstrumentTarget{}, Status: StatusPending,
+			})
+			require.True(t, accepted)
 			return err
 		}))
 	}
@@ -1016,13 +1003,25 @@ func fixtureValidUntil(now time.Time) int64 {
 	return base.Add(90 * time.Minute).UnixMilli()
 }
 
+// sessionStartedAt 是测试会话的开始时刻（毫秒）：session-1 < session-2 < session-9，别的会话名按 session-1 处理。
+func sessionStartedAt(sessionID string) int64 {
+	switch sessionID {
+	case "session-2":
+		return 2_000
+	case "session-9":
+		return 9_000
+	default:
+		return 1_000
+	}
+}
+
 func (f *targetFixture) target(t *testing.T, targets []store.InstrumentTarget) {
 	t.Helper()
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(
 		context.Background(),
 		store.LogicalAccountTargetRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TargetID: "target-current", InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+			TargetID: "target-current", InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: sessionStartedAt("session-1"), StrategyID: "strategy-1",
 			BarEndTime: f.now.UnixMilli(), ValidUntil: fixtureValidUntil(f.now),
 			Targets: targets, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 		},
@@ -1051,8 +1050,30 @@ func (f *targetFixture) position(
 func (f *targetFixture) order(t *testing.T, record store.OrderRecord) {
 	t.Helper()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := f.ensureOrderTarget(tx, record); err != nil {
+			return err
+		}
 		return tx.CreateOrder(record)
 	}))
+}
+
+// ensureOrderTarget 给只想搭一笔目标单的用例补上前提：目标单只能由组合当前目标行所属的实例落库。
+// 组合上还没有目标行时，按这笔单的实例写一行空目标（目标号 target-seed、session-1，bar_end_time 取 1，比 f.target 写的早，
+// 之后 f.target 照常覆盖）；已有目标行时不动。落库只比较实例，所以目标号不必与单子的一致。
+func (f *targetFixture) ensureOrderTarget(tx *store.Tx, record store.OrderRecord) error {
+	if record.OwnerType != string(orderdomain.OwnerTarget) || record.LogicalAccountID == "" {
+		return nil
+	}
+	if _, err := tx.GetCurrentTarget(record.SpaceID, record.LogicalAccountID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	_, _, err := tx.AcceptLogicalAccountTarget(store.LogicalAccountTargetRecord{
+		SpaceID: record.SpaceID, LogicalAccountID: record.LogicalAccountID, TargetID: "target-seed",
+		InstanceID: record.RunnerID, SessionID: "session-1", SessionStartedAt: sessionStartedAt("session-1"), StrategyID: "strategy-1",
+		BarEndTime: 1, ValidUntil: fixtureValidUntil(f.now),
+		Targets: []store.InstrumentTarget{}, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
+	})
+	return err
 }
 
 func (f *targetFixture) setReady(t *testing.T, accountID string, ready bool) {

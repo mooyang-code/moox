@@ -13,7 +13,7 @@ import (
 
 // 执行器下单前的会话检查结果表（批 3 T14 前置 R3）：固定“目标还属不属于当前会话”时执行器下不下单、返回什么。
 // 表里只写“谁是当前会话”这个前提，由 becomeCurrentSession 搭出来，不写它靠什么实现。
-// 现在 Trade 靠组合的归属（owner）判断当前会话；T14 改成看当前目标行属于哪个会话，届时只换 becomeCurrentSession
+// T14 之前 Trade 靠组合的归属（owner）判断当前会话；T14 起改成看当前目标行属于哪个会话，只换了 becomeCurrentSession
 // 的搭法，表里每一行的结论不变。影子目标不进执行器，它的四行在 eventconsumer 的 TestShadowTargetSessionTable，
 // 前提由那边的 shadowCurrentSession 搭，改法同理。这张表用下单服务桩，落库与提交时的检查（store 的 validateOrderOwnership、
 // 下单服务的 checkTargetAuthorization）在 order 包的 TestTargetOrderSessionTable，用真实的下单服务和 SQLite。
@@ -24,32 +24,17 @@ import (
 // becomeCurrentSession 是表里唯一的“谁是当前会话”前提：让 runner-1 的 sessionID 成为组合的当前会话，
 // 并写入它的一份目标（BTC-USDT-SWAP 数量 1，bar_end_time 取测试时钟）。
 //
-// 现在的搭法：先释放组合原来的归属、改由这个会话认领，再写它的目标行。
-// T14 之后：Trade 不再看归属，改成写一行开始时刻（session_started_at）更晚的目标行，不再改 owner；只换这里。
+// T14 之前的搭法：先释放组合原来的归属、改由这个会话认领，再写它的目标行。
+// T14 起：Trade 不再看归属，只写一行开始时刻（session_started_at，按 sessionStartedAt 取）更晚的目标行，不改 owner。
 //
 // 收敛过程中也会调用（模拟报价、准备期间被新会话取代）：那时 Converge 持有组合锁，所以这里只用事务里的写法，
 // 不调会再拿组合锁的 Store.AcceptLogicalAccountTarget。
 func becomeCurrentSession(t *testing.T, f *targetFixture, sessionID, targetID string) {
 	t.Helper()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		account, err := tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		if account.OwnerInstanceID != "runner-1" || account.OwnerSessionID != sessionID {
-			if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", account.OwnerInstanceID, account.OwnerSessionID, account.AuthFence); err != nil {
-				return err
-			}
-			if account, err = tx.GetLogicalAccount("space-1", "logical-1"); err != nil {
-				return err
-			}
-			if _, _, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", "runner-1", sessionID, account.AuthFence); err != nil {
-				return err
-			}
-		}
 		_, accepted, err := tx.AcceptLogicalAccountTarget(store.LogicalAccountTargetRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: targetID,
-			InstanceID: "runner-1", SessionID: sessionID, StrategyID: "strategy-1",
+			InstanceID: "runner-1", SessionID: sessionID, SessionStartedAt: sessionStartedAt(sessionID), StrategyID: "strategy-1",
 			BarEndTime: f.now.UnixMilli(), ValidUntil: fixtureValidUntil(f.now),
 			Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
 			Status:  StatusPending, AcceptedAt: f.now.UnixMilli(),

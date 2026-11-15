@@ -48,6 +48,7 @@ func TestTradeEventsExposeOnlyModernWeightTargetContract(t *testing.T) {
 		{name: "strategy_id", number: 9},
 		{name: "bar_end_time", number: 10},
 		{name: "valid_until", number: 12},
+		{name: "session_started_at", number: 15},
 	} {
 		t.Run(string(field.name), func(t *testing.T) {
 			descriptor := message.Fields().ByName(field.name)

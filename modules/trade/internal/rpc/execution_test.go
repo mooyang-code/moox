@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
@@ -226,6 +227,11 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 				OwnerID: "external-1", State: "OPEN",
 			},
 		} {
+			if record.OwnerType == "TARGET" {
+				if err := storetest.EnsureCurrentTarget(tx, record.SpaceID, record.LogicalAccountID, record.RunnerID); err != nil {
+					return err
+				}
+			}
 			if err := tx.CreateOrder(record); err != nil {
 				return err
 			}

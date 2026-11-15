@@ -256,6 +256,25 @@ func (h *LogicalAccountServer) ReleaseLogicalAccountOwner(
 	}, nil
 }
 
+// CloseTargetSession 关闭策略会话（Strategy 停用实例后调用，幂等），见 logicalaccount.Service.CloseTargetSession。
+func (h *LogicalAccountServer) CloseTargetSession(
+	ctx context.Context,
+	req *tradepb.CloseTargetSessionReq,
+) (*tradepb.CloseTargetSessionRsp, error) {
+	spaceID, err := requiredSpace(ctx)
+	if err == nil {
+		err = validatePB(req)
+	}
+	if err != nil {
+		return &tradepb.CloseTargetSessionRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+	}
+	closed, err := h.LogicalAccounts.CloseTargetSession(
+		ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(),
+		req.GetSessionId(), req.GetSessionStartedAt(),
+	)
+	return &tradepb.CloseTargetSessionRsp{RetInfo: errorInfo(err), ClosedThrough: closed}, nil
+}
+
 func (h *LogicalAccountServer) PauseLogicalAccount(
 	ctx context.Context,
 	req *tradepb.PauseLogicalAccountReq,

@@ -10,6 +10,7 @@ import (
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -109,6 +110,9 @@ func TestSyncUnknownTailPropagatesLockDeadline(t *testing.T) {
 	db := openSyncStore(t)
 	seedSyncAccount(t, db)
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := storetest.EnsureCurrentTarget(tx, "space-1", "logical-1", "runner-1"); err != nil {
+			return err
+		}
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: "unknown-order", TradingAccountID: "account-1", ClientOrderID: "unknown-client",
 			ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", PositionSide: "NET", Quantity: "1",

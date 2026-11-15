@@ -167,15 +167,17 @@ func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, targe
 		if account.ControlMode != "STRATEGY" {
 			return fmt.Errorf("%w: logical account is not strategy controlled", ErrTargetAuthorization)
 		}
-		// New targets are checked against the current Trade authorization and
-		// validity window before receipt replay. A stale duplicate must not turn
-		// an old accepted receipt into a way around session/expiry fencing.
+		// 会话先后（含已关闭）和有效期在回执重放之前判断：旧会话的重复投递不能借已接受过的回执绕过会话与过期的检查。
+		// 同一会话的 bar_end_time 先后在回执之后由 AcceptLogicalAccountTarget 判断，被取代之后重投旧目标靠回执确认。
 		if target.InstanceID != "" || target.SessionID != "" || target.BarEndTime != 0 || target.ValidUntil != 0 {
 			if receipt.InstanceID != target.InstanceID || receipt.SessionID != target.SessionID || receipt.StrategyID != target.StrategyID || receipt.BarEndTime != target.BarEndTime || receipt.ValidUntil != target.ValidUntil {
 				return fmt.Errorf("%w: target and receipt session contract mismatch", ErrInvalidRecord)
 			}
-			if account.OwnerInstanceID != target.InstanceID || account.OwnerSessionID != target.SessionID {
-				return fmt.Errorf("%w: target session authorization", ErrTargetAuthorization)
+			if target.SessionStartedAt <= 0 {
+				return fmt.Errorf("%w: incomplete target session contract", ErrInvalidRecord)
+			}
+			if err := tx.checkTargetSession(account, target.session()); err != nil {
+				return err
 			}
 			now := time.Now().UTC().UnixMilli()
 			if now >= target.ValidUntil {

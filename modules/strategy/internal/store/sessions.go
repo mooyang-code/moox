@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -13,8 +14,14 @@ import (
 
 // Session 是一次启用：固化当时的 DSL 版本与绑定解析。
 type Session struct {
-	SessionID    string
-	InstanceID   string
+	SessionID  string
+	InstanceID string
+	// LogicalAccountID 是建会话时实例绑的组合账户（观察实例为空）：停用后通知 Trade 关闭会话按它调，不受之后改账户影响。
+	// 由 OpenSession 在同一个事务里从实例行读出，调用方不用填。
+	LogicalAccountID *string
+	// StartedAt 是会话开始时刻（毫秒）：取“当前毫秒”与“库里最大值加 1”中较大的一个，全库严格递增，
+	// 随目标事件发给 Trade 比较会话先后。由 OpenSession 在同一个事务里算出，调用方不用填。
+	StartedAt    int64
 	DSLHash      string
 	ResolvedJSON string
 	// MembersJSON 是策略池固化的成员（input.PoolMember 列表的 JSON），非池为空。
@@ -26,18 +33,24 @@ type Session struct {
 }
 
 type sessionRow struct {
-	SessionID     string        `gorm:"column:c_session_id"`
-	InstanceID    string        `gorm:"column:c_instance_id"`
-	DSLHash       string        `gorm:"column:c_dsl_hash"`
-	ResolvedJSON  string        `gorm:"column:c_resolved_json"`
-	MembersJSON   string        `gorm:"column:c_members_json"`
-	WarmedThrough sql.NullInt64 `gorm:"column:c_warmed_through"`
-	CreatedAt     time.Time     `gorm:"column:c_ctime"`
-	ClosedAt      sql.NullTime  `gorm:"column:c_closed_at"`
+	SessionID        string         `gorm:"column:c_session_id"`
+	InstanceID       string         `gorm:"column:c_instance_id"`
+	LogicalAccountID sql.NullString `gorm:"column:c_logical_account_id"`
+	StartedAt        int64          `gorm:"column:c_started_at"`
+	DSLHash          string         `gorm:"column:c_dsl_hash"`
+	ResolvedJSON     string         `gorm:"column:c_resolved_json"`
+	MembersJSON      string         `gorm:"column:c_members_json"`
+	WarmedThrough    sql.NullInt64  `gorm:"column:c_warmed_through"`
+	CreatedAt        time.Time      `gorm:"column:c_ctime"`
+	ClosedAt         sql.NullTime   `gorm:"column:c_closed_at"`
 }
 
 func (r sessionRow) session() Session {
-	session := Session{SessionID: r.SessionID, InstanceID: r.InstanceID, DSLHash: r.DSLHash, ResolvedJSON: r.ResolvedJSON, MembersJSON: r.MembersJSON, CreatedAt: r.CreatedAt.UTC(), ClosedAt: nullableTime(r.ClosedAt)}
+	session := Session{SessionID: r.SessionID, InstanceID: r.InstanceID, StartedAt: r.StartedAt, DSLHash: r.DSLHash, ResolvedJSON: r.ResolvedJSON, MembersJSON: r.MembersJSON, CreatedAt: r.CreatedAt.UTC(), ClosedAt: nullableTime(r.ClosedAt)}
+	if r.LogicalAccountID.Valid {
+		account := r.LogicalAccountID.String
+		session.LogicalAccountID = &account
+	}
 	if r.WarmedThrough.Valid {
 		through := fromMillis(r.WarmedThrough.Int64)
 		session.WarmedThrough = &through
@@ -47,20 +60,26 @@ func (r sessionRow) session() Session {
 
 // 会话的 SQL：整条写成常量，不在调用处拼接。
 const (
-	// sqlInsertSession 写入一条未关闭的会话快照。
-	sqlInsertSession = `INSERT INTO t_strategy_sessions (c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_ctime, c_closed_at) VALUES (?, ?, ?, ?, ?, ?, NULL)`
+	// sqlInsertSession 写入一条未关闭的会话快照：组合账户取实例行上当时绑的那个；开始时刻取“当前毫秒”与“库里最大值加 1”中较大的一个
+	// （用时间而不用自增序号：策略库单独重建后序号会从头开始，Trade 留着的“关闭到”时刻会把新会话全挡住）。实例不存在时不写。
+	sqlInsertSession = `INSERT INTO t_strategy_sessions (
+			c_session_id, c_instance_id, c_logical_account_id, c_dsl_hash, c_resolved_json, c_members_json, c_started_at, c_ctime, c_closed_at
+		)
+		SELECT ?, c_instance_id, c_logical_account_id, ?, ?, ?,
+			MAX(?, COALESCE((SELECT MAX(c_started_at) FROM t_strategy_sessions), 0) + 1), ?, NULL
+		FROM t_strategy_instances WHERE c_instance_id = ?`
 	// sqlSelectSessionByID 按会话 ID 读取会话。
-	sqlSelectSessionByID = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warmed_through, c_ctime, c_closed_at
+	sqlSelectSessionByID = `SELECT c_session_id, c_instance_id, c_logical_account_id, c_started_at, c_dsl_hash, c_resolved_json, c_members_json, c_warmed_through, c_ctime, c_closed_at
 		FROM t_strategy_sessions WHERE c_session_id = ?`
 	// sqlListSessionsOfInstance 按创建时间倒序列出实例的会话。
-	sqlListSessionsOfInstance = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warmed_through, c_ctime, c_closed_at
+	sqlListSessionsOfInstance = `SELECT c_session_id, c_instance_id, c_logical_account_id, c_started_at, c_dsl_hash, c_resolved_json, c_members_json, c_warmed_through, c_ctime, c_closed_at
 		FROM t_strategy_sessions WHERE c_instance_id = ? ORDER BY c_ctime DESC, c_session_id`
 	// sqlCloseSession 记录会话结束时间（只关闭还没关闭的会话）。
 	sqlCloseSession = `UPDATE t_strategy_sessions SET c_closed_at = ? WHERE c_session_id = ? AND c_closed_at IS NULL`
 	// sqlSetSessionWarmed 比较交换写入策略池预热的终点：只写未关闭、有成员快照、还没有预热结果的会话。
 	sqlSetSessionWarmed = `UPDATE t_strategy_sessions SET c_warmed_through = ? WHERE c_session_id = ? AND c_closed_at IS NULL AND c_members_json <> '' AND c_warmed_through IS NULL`
 	// sqlListPendingWarmSessions 找出未关闭、挂在启用实例上、有成员快照而还没有预热结果的会话。
-	sqlListPendingWarmSessions = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warmed_through, c_ctime, c_closed_at
+	sqlListPendingWarmSessions = `SELECT c_session_id, c_instance_id, c_logical_account_id, c_started_at, c_dsl_hash, c_resolved_json, c_members_json, c_warmed_through, c_ctime, c_closed_at
 		FROM t_strategy_sessions
 		WHERE c_closed_at IS NULL AND c_members_json <> '' AND c_warmed_through IS NULL
 		AND c_session_id IN (SELECT c_session_id FROM t_strategy_instances WHERE c_enabled = 1 AND c_session_id IS NOT NULL)
@@ -90,8 +109,12 @@ func (s *Store) OpenSession(ctx context.Context, session Session, dslYaml string
 		if err := ensureDefinitionVersion(tx, session.DSLHash, dslYaml, now); err != nil {
 			return err
 		}
-		if err := tx.Exec(sqlInsertSession, session.SessionID, session.InstanceID, session.DSLHash, resolved, session.MembersJSON, now).Error; err != nil {
-			return err
+		inserted := tx.Exec(sqlInsertSession, session.SessionID, session.DSLHash, resolved, session.MembersJSON, millis(now), now, session.InstanceID)
+		if inserted.Error != nil {
+			return inserted.Error
+		}
+		if inserted.RowsAffected != 1 {
+			return fmt.Errorf("实例 %s 不存在，不能写会话", session.InstanceID)
 		}
 		return carryState(tx, session.InstanceID, session.SessionID, session.DSLHash, resolved, session.MembersJSON, now)
 	})

@@ -661,7 +661,7 @@ func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.
 		InputJSON: inputJSON, TargetsJSON: targetsJSON, SummaryJSON: summary, PublishStatus: store.PublishNone, CreatedAt: now,
 	}
 	if decision.Status == engine.StatusOK && p.instance.LogicalAccountID != nil {
-		event, err := MarshalTargetEvent(p.instance, result, targets, p.shadow)
+		event, err := MarshalTargetEvent(p.instance, result, p.runtime.sessionStartedAt, targets, p.shadow)
 		if err != nil {
 			return store.Result{}, nil, nil, err
 		}

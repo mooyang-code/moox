@@ -146,94 +146,77 @@ func TestHandleLogicalAccountTargetTermsAfterValidityWindow(t *testing.T) {
 	require.ErrorIs(t, result.Err, store.ErrTargetExpired)
 }
 
-func TestHandleLogicalAccountTargetRejectsWrongRunner(t *testing.T) {
+// 同毫秒不同会话（不应出现）：开始时刻与组合上的当前目标相同、会话却不同，按授权冲突拒绝并告警，不进入换算、不唤醒执行器。
+func TestHandleTargetSameStartDifferentSessionNeedsAttention(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	now := time.Now().UTC()
+	opts := targetOptions(tradeStore, now)
+	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), logicalTargetDelivery(t, now, "target-1", "runner-1", "logical-1", nil), opts).Decision)
 
-	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-1", "runner-other", "logical-1", nil,
-	), targetOptions(tradeStore, now))
+	opts.WeightResolver = targetResolverFunc(func(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
+		t.Error("会话冲突的目标不能进入换算")
+		return targetapp.WeightConversion{}, nil
+	})
+	opts.WakeTarget = func(string, string) { t.Error("会话冲突的目标不能唤醒执行器") }
+	result := HandleTarget(context.Background(), logicalTargetDelivery(t, now.Add(time.Minute), "target-other", "runner-other", "logical-1", nil), opts)
 
 	require.Equal(t, jetstream.TERM, result.Decision)
-	require.ErrorIs(t, result.Err, store.ErrConflict)
+	require.ErrorIs(t, result.Err, store.ErrTargetSessionConflict)
+	require.Equal(t, "authorization_conflict", targetErrorCode(result))
+	require.True(t, attentionCode(targetErrorCode(result)), "同毫秒不同会话要告警")
+	current, err := tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "target-1", current.TargetID)
 }
 
-func TestHandleLogicalAccountTargetRejectsDelayedEventFromPreviousOwnerLifecycle(t *testing.T) {
-	tradeStore := openTargetStore(t)
-	seedLogicalTargetAccount(t, tradeStore, true, true)
-	claimAt := time.Now().UTC()
-	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		// 释放后重新认领：会话推进，前一个生命周期的延迟目标必须被拒绝。
-		account, err := tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", account.OwnerInstanceID, account.OwnerSessionID, account.AuthFence); err != nil {
-			return err
-		}
-		account, err = tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		_, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "runner-1", "session-2", account.AuthFence)
-		return err
-	}))
-	oldEventAt := claimAt.Add(-time.Second)
-	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, oldEventAt, "delayed-old-target", "runner-1", "logical-1",
-		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
-	), targetOptions(tradeStore, oldEventAt))
-	require.Equal(t, jetstream.TERM, result.Decision)
-	require.ErrorIs(t, result.Err, store.ErrConflict)
-	require.Equal(t, "superseded", targetErrorCode(result), "同一实例换了会话：旧会话的目标被取代，不是授权冲突")
-	_, err := tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
-	require.Error(t, err)
+// testSessions 是测试里用到的会话，按开始时刻从早到晚排列；testSessionStartedAt 给出各自的开始时刻（毫秒）。
+var testSessions = []string{"session-1", "session-2", "session-9"}
+
+// testSessionStartedAt 是测试会话的开始时刻：session-1 < session-2 < session-9，别的会话名按 session-1 处理。
+func testSessionStartedAt(sessionID string) int64 {
+	switch sessionID {
+	case "session-2":
+		return 2_000
+	case "session-9":
+		return 9_000
+	default:
+		return 1_000
+	}
 }
 
-// reassignLogicalOwner 释放 logical-1 当前的会话；instanceID 非空时再由它认领。
-func reassignLogicalOwner(t *testing.T, tradeStore *store.Store, instanceID, sessionID string) {
+// closeTargetSession 对 logical-1 关闭 sessionID（按 testSessionStartedAt 取开始时刻），就是 Trade 的 CloseTargetSession 在库里做的事：
+// 推进 c_closed_through，缩短这个会话的目标行的有效期。
+func closeTargetSession(t *testing.T, tradeStore *store.Store, sessionID string) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		account, err := tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", account.OwnerInstanceID, account.OwnerSessionID, account.AuthFence); err != nil {
-			return err
-		}
-		if instanceID == "" {
-			return nil
-		}
-		account, err = tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		_, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", instanceID, sessionID, account.AuthFence)
+		_, _, err := tx.CloseTargetSession("space-1", "logical-1", testSessionStartedAt(sessionID), time.Now().UnixMilli())
 		return err
 	}))
 }
 
-// 停用再启用策略（改策略的常规操作）后，旧会话还在路上的目标：已过期的按过期终止；没过期的，账户已释放
-// 或同一实例换了会话都按被取代处理，不告警；只有账户被别的实例持有才算需要人看的授权冲突。
+// 停用再启用策略（改策略的常规操作）后，旧会话还在路上的目标：已过期的按过期终止；没过期的，会话已关闭或组合上
+// 已是更晚会话的目标，都按被取代处理、不告警；只有开始时刻相同而会话不同（不应出现）才是需要人看的授权冲突。
 func TestHandleTargetFromOldSessionIsSupersededNotConflict(t *testing.T) {
 	for _, test := range []struct {
-		name                string
-		ownerInstance       string
-		ownerSession        string
+		name string
+		// arrange 是投递 session-1 的目标之前的前置。
+		arrange             func(t *testing.T, db *store.Store)
 		expired             bool
 		code                string
 		needsHumanAttention bool
 	}{
-		{name: "已过期且被别的实例持有", ownerInstance: "runner-2", ownerSession: "session-9", expired: true, code: "target_expired"},
-		{name: "账户已释放", code: "superseded"},
-		{name: "同一实例换了会话", ownerInstance: "runner-1", ownerSession: "session-2", code: "superseded"},
-		{name: "被别的实例持有", ownerInstance: "runner-2", ownerSession: "session-9", code: "authorization_conflict", needsHumanAttention: true},
+		{name: "已过期且会话已关闭", arrange: func(t *testing.T, db *store.Store) { closeTargetSession(t, db, "session-1") }, expired: true, code: "target_expired"},
+		{name: "会话已关闭", arrange: func(t *testing.T, db *store.Store) { closeTargetSession(t, db, "session-1") }, code: "superseded"},
+		{name: "组合上已是更晚会话的目标", arrange: func(t *testing.T, db *store.Store) { seedSessionTarget(t, db, "later", "runner-2", "session-2", 0) }, code: "superseded"},
+		{name: "开始时刻相同、会话不同", arrange: func(t *testing.T, db *store.Store) {
+			seedSessionTarget(t, db, "same-start", "runner-2", "session-x", testSessionStartedAt("session-1"))
+		}, code: "authorization_conflict", needsHumanAttention: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tradeStore := openTargetStore(t)
 			seedLogicalTargetAccount(t, tradeStore, true, true)
-			reassignLogicalOwner(t, tradeStore, test.ownerInstance, test.ownerSession)
+			test.arrange(t, tradeStore)
 			now := time.Now().UTC()
 			barEnd, validUntil := now, now.Add(time.Hour)
 			if test.expired {
@@ -255,77 +238,26 @@ func TestHandleTargetFromOldSessionIsSupersededNotConflict(t *testing.T) {
 	}
 }
 
-func TestHandleTargetUsesSessionFenceAcrossReclaim(t *testing.T) {
-	db := openTargetStore(t)
-	seedLogicalTargetAccount(t, db, true, true)
-	ctx := context.Background()
-	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
-		account, err := tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", account.AuthFence); err != nil {
-			return err
-		}
-		account, err = tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		_, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", account.AuthFence)
-		return err
-	}))
-	now := time.Now().UTC()
-	registry, err := events.DefaultRegistry()
-	require.NoError(t, err)
-	bar := timestamppb.New(now)
-	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested,
-		&tradeeventpb.LogicalAccountTargetWeightRequested{
-			TargetId: "modern-session-target", LogicalAccountId: "logical-1",
-			InstanceId: "runner-1", SessionId: "session-1", StrategyId: "strategy-1",
-			BarEndTime: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
-		}, events.PublishOptions{EventID: "modern-session-target", OccurredAt: now, SpaceID: "space-1", SubjectID: "logical-1"})
-	require.NoError(t, err)
-	raw, err := proto.Marshal(encoded.Message)
-	require.NoError(t, err)
-	delivery := &jetstream.Delivery{RawData: raw, Subject: encoded.Subject, RawMessageID: "modern-session-target", ContentType: events.ContentType}
-	result := HandleTarget(ctx, delivery, targetOptions(db, now))
-	require.NoError(t, result.Err)
-	require.Equal(t, jetstream.ACK, result.Decision)
-	receipt, err := db.GetTargetReceipt(ctx, "space-1", "modern-session-target")
-	require.NoError(t, err)
-	require.Equal(t, "session-1", receipt.SessionID)
-	require.Equal(t, jetstream.ACK, HandleTarget(ctx, delivery, targetOptions(db, now)).Decision)
-}
-
-func TestHandleLogicalAccountTargetAcceptsSessionFenceAfterReclaim(t *testing.T) {
-	tradeStore := openTargetStore(t)
-	seedLogicalTargetAccount(t, tradeStore, true, true)
-	now := time.Now().UTC()
-	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		account, err := tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", account.AuthFence); err != nil {
-			return err
-		}
-		account, err = tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		_, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", account.AuthFence)
-		return err
-	}))
-
-	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-session-fence", "runner-1", "logical-1",
-		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
-	), targetOptions(tradeStore, now))
-
-	if result.Decision != jetstream.ACK {
-		t.Fatalf("decision=%v err=%v", result.Decision, result.Err)
+// seedSessionTarget 直接在库里给 logical-1 写一行 instanceID/sessionID 的当前目标（空目标、有效一小时）；
+// startedAt 为 0 时按会话取 testSessionStartedAt。
+func seedSessionTarget(t *testing.T, db *store.Store, targetID, instanceID, sessionID string, startedAt int64) {
+	t.Helper()
+	if startedAt == 0 {
+		startedAt = testSessionStartedAt(sessionID)
 	}
-	require.NoError(t, result.Err)
+	now := time.Now().UTC()
+	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
+		_, accepted, err := tx.AcceptLogicalAccountTarget(store.LogicalAccountTargetRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: targetID,
+			InstanceID: instanceID, SessionID: sessionID, SessionStartedAt: startedAt, StrategyID: "strategy-1",
+			BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
+			Targets: []store.InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
+		})
+		if err == nil && !accepted {
+			err = errors.New("目标没有写成当前目标")
+		}
+		return err
+	}))
 }
 
 func TestHandleLogicalAccountTargetRejectsUnsupportedInstrument(t *testing.T) {
@@ -694,7 +626,7 @@ func logicalTargetDeliveryWithTimes(
 	encoded, err := registry.Encode(
 		events.LogicalAccountTargetWeightRequested,
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
-			TargetId: targetID, InstanceId: instanceID, SessionId: "session-1", StrategyId: "strategy-1",
+			TargetId: targetID, InstanceId: instanceID, SessionId: "session-1", SessionStartedAt: testSessionStartedAt("session-1"), StrategyId: "strategy-1",
 			LogicalAccountId: logicalAccountID, Targets: targets,
 			BarEndTime: timestamppb.New(barEnd), ValidUntil: timestamppb.New(validUntil),
 		},
@@ -739,17 +671,20 @@ func TestHandleTargetHoldsTargetsWhileIntakeClosed(t *testing.T) {
 	require.True(t, woke)
 }
 
-// 目标通过入口检查后在等组合锁、换算期间，会话被释放或换掉（释放全程持有组合锁，最后才改所有者）：
-// 落库时按当前所有者重新判断，账户已释放的按被取代处理、不告警，被别的实例持有的才是授权冲突。
-func TestHandleTargetOwnerChangedWhileWaitingIsClassifiedByCurrentOwner(t *testing.T) {
+// 目标通过入口检查后在等组合锁、换算期间，会话被关闭或组合上来了别的会话的目标：落库时（在组合锁和事务里）按同样的规则分类，
+// 会话已关闭、来了更晚会话的目标的按被取代处理、不告警，开始时刻相同而会话不同的才是授权冲突；都不写回执、不唤醒执行器。
+func TestHandleTargetSessionChangedWhileWaitingIsClassifiedAtCommit(t *testing.T) {
 	for _, test := range []struct {
 		name                string
-		ownerInstance       string
+		change              func(t *testing.T, db *store.Store)
 		code                string
 		needsHumanAttention bool
 	}{
-		{name: "账户已释放", code: "superseded"},
-		{name: "被别的实例持有", ownerInstance: "runner-2", code: "authorization_conflict", needsHumanAttention: true},
+		{name: "会话被关闭", change: func(t *testing.T, db *store.Store) { closeTargetSession(t, db, "session-1") }, code: "superseded"},
+		{name: "来了更晚会话的目标", change: func(t *testing.T, db *store.Store) { seedSessionTarget(t, db, "later", "runner-2", "session-2", 0) }, code: "superseded"},
+		{name: "来了开始时刻相同的别的会话的目标", change: func(t *testing.T, db *store.Store) {
+			seedSessionTarget(t, db, "same-start", "runner-2", "session-x", testSessionStartedAt("session-1"))
+		}, code: "authorization_conflict", needsHumanAttention: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tradeStore := openTargetStore(t)
@@ -757,19 +692,19 @@ func TestHandleTargetOwnerChangedWhileWaitingIsClassifiedByCurrentOwner(t *testi
 			now := time.Now().UTC()
 			opts := targetOptions(tradeStore, now)
 			opts.WeightResolver = targetResolverFunc(func(ctx context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, space string) (targetapp.WeightConversion, error) {
-				reassignLogicalOwner(t, tradeStore, test.ownerInstance, "session-9")
+				test.change(t, tradeStore)
 				return testWeightResolver{}.Resolve(ctx, request, space)
 			})
-			opts.WakeTarget = func(string, string) { t.Error("所有者已变的目标不能唤醒执行器") }
+			opts.WakeTarget = func(string, string) { t.Error("会话已变的目标不能唤醒执行器") }
 			result := HandleTarget(context.Background(), logicalTargetDelivery(
-				t, now, "target-owner-changed", "runner-1", "logical-1",
+				t, now, "target-session-changed", "runner-1", "logical-1",
 				[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
 			), opts)
 			require.Equal(t, jetstream.TERM, result.Decision)
 			require.Equal(t, test.code, targetErrorCode(result))
 			require.Equal(t, test.needsHumanAttention, attentionCode(targetErrorCode(result)))
-			_, err := tradeStore.GetTargetReceipt(context.Background(), "space-1", "target-owner-changed")
-			require.Error(t, err, "所有者已变的目标不写回执")
+			_, err := tradeStore.GetTargetReceipt(context.Background(), "space-1", "target-session-changed")
+			require.Error(t, err, "会话已变的目标不写回执")
 		})
 	}
 }

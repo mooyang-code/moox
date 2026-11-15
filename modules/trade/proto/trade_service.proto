@@ -583,6 +583,21 @@ message ReleaseLogicalAccountOwnerRsp {
   LogicalAccount logical_account = 2;
 }
 
+// 关闭策略会话（Strategy 停用实例后调用，幂等）：组合的“关闭到”时刻推进到 session_started_at，开始时刻不大于它的会话的目标一律不再接受；
+// 这个会话还没过期的当前目标的有效期缩短到现在（不早于 bar_end_time 加 1 毫秒），由执行器的过期路径撤掉它的挂单。
+message CloseTargetSessionReq {
+  string logical_account_id = 1;
+  string instance_id = 2;
+  string session_id = 3;
+  // 会话的开始时刻（毫秒），与目标事件的 session_started_at 相同。
+  int64 session_started_at = 4;
+}
+message CloseTargetSessionRsp {
+  common.RetInfo ret_info = 1;
+  // 关闭之后组合的“关闭到”时刻（毫秒）。
+  int64 closed_through = 2;
+}
+
 message PauseLogicalAccountReq {
   string logical_account_id = 1;
   string reason = 2;
@@ -896,6 +911,7 @@ service TradeConsoleService {
   rpc RemoveLogicalAccountMember(RemoveLogicalAccountMemberReq) returns (RemoveLogicalAccountMemberRsp);
   rpc ClaimLogicalAccountOwner(ClaimLogicalAccountOwnerReq) returns (ClaimLogicalAccountOwnerRsp);
   rpc ReleaseLogicalAccountOwner(ReleaseLogicalAccountOwnerReq) returns (ReleaseLogicalAccountOwnerRsp);
+  rpc CloseTargetSession(CloseTargetSessionReq) returns (CloseTargetSessionRsp);
   rpc PauseLogicalAccount(PauseLogicalAccountReq) returns (PauseLogicalAccountRsp);
   rpc ResumeLogicalAccount(ResumeLogicalAccountReq) returns (ResumeLogicalAccountRsp);
   rpc FlattenLogicalAccount(FlattenLogicalAccountReq) returns (FlattenLogicalAccountRsp);

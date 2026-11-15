@@ -17,36 +17,21 @@ import (
 // （infra/store/fact.go 的 validateOrderOwnership）和提交前的授权检查（service.go 的 checkTargetAuthorization）；
 // 执行器自己的检查在 target 包的 TestExecutorSessionTable。
 //
-// 表里只写“谁是当前会话”这个前提，由 orderCurrentSession 搭出来，不写它靠什么实现。现在 Trade 靠组合的归属（owner）
-// 判断当前会话；T14 把这两处检查改成与当前目标行的实例、会话比较，届时只换 orderCurrentSession 的搭法，结论不变。
+// 表里只写“谁是当前会话”这个前提，由 orderCurrentSession 搭出来，不写它靠什么实现。T14 之前 Trade 靠组合的归属（owner）
+// 判断当前会话；T14 起这两处检查改成与当前目标行比较，只换了 orderCurrentSession 的搭法，结论不变。
 
 // orderCurrentSession 是这张表唯一的“谁是当前会话”前提：让 instanceID 的 sessionID 成为组合的当前会话，
 // 并写入它的一份目标 targetID（取代组合上原来的目标行）。
 //
-// 现在的搭法：先释放组合原来的归属、改由这个会话认领，再写它的目标行。
-// T14 之后：Trade 不再看归属，改成只写一行开始时刻（session_started_at）更晚的目标行，不再改 owner；只换这里。
+// T14 之前的搭法：先释放组合原来的归属、改由这个会话认领，再写它的目标行。
+// T14 起：Trade 不再看归属，只写一行开始时刻（session_started_at，按 orderSessionStartedAt 取）更晚的目标行，不改 owner。
 func orderCurrentSession(t *testing.T, db *store.Store, instanceID, sessionID, targetID string) {
 	t.Helper()
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
-		account, err := tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		if account.OwnerInstanceID != instanceID || account.OwnerSessionID != sessionID {
-			if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", account.OwnerInstanceID, account.OwnerSessionID, account.AuthFence); err != nil {
-				return err
-			}
-			if account, err = tx.GetLogicalAccount("space-1", "logical-1"); err != nil {
-				return err
-			}
-			if _, _, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", instanceID, sessionID, account.AuthFence); err != nil {
-				return err
-			}
-		}
 		// 同一份目标重写时 accepted 为假（已经是当前目标），所以按写完后的当前目标判断。
 		current, _, err := tx.AcceptLogicalAccountTarget(store.LogicalAccountTargetRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: targetID,
-			InstanceID: instanceID, SessionID: sessionID, StrategyID: "strategy-1",
+			InstanceID: instanceID, SessionID: sessionID, SessionStartedAt: orderSessionStartedAt(sessionID), StrategyID: "strategy-1",
 			BarEndTime: 1, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 			Status: "PENDING", AcceptedAt: 1,
 			Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}},
@@ -56,6 +41,18 @@ func orderCurrentSession(t *testing.T, db *store.Store, instanceID, sessionID, t
 		}
 		return err
 	}))
+}
+
+// orderSessionStartedAt 是表里会话的开始时刻：session-1 < session-2 < session-9。
+func orderSessionStartedAt(sessionID string) int64 {
+	switch sessionID {
+	case "session-2":
+		return 2_000
+	case "session-9":
+		return 9_000
+	default:
+		return 1_000
+	}
 }
 
 func TestTargetOrderSessionTable(t *testing.T) {

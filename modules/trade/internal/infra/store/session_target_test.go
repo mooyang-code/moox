@@ -24,7 +24,7 @@ func TestSessionTransitionRollsBackWhenTargetDeleteFails(t *testing.T) {
 	bar := now.Add(-time.Second).UnixMilli()
 	target, accepted, err := s.AcceptLogicalAccountTarget(ctx, LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-1",
-		InstanceID: "instance-1", SessionID: "session-1", StrategyID: "strategy-1",
+		InstanceID: "instance-1", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 		BarEndTime: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
 		Targets: []InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
 	})
@@ -90,7 +90,9 @@ func TestSessionTransitionRollsBackWhenTargetDeleteFails(t *testing.T) {
 	require.Equal(t, receipt, currentReceipt)
 }
 
-func TestAuthorizedSessionReplacesStaleTargetAtSameOrEarlierBar(t *testing.T) {
+// 开始时刻更晚的会话的目标覆盖旧会话留下的目标行，不与它的 bar_end_time 比较（同一根、更早一根都覆盖）；
+// 之后旧会话的目标按被取代拒绝。
+func TestLaterSessionReplacesStaleTargetAtSameOrEarlierBar(t *testing.T) {
 	for _, offset := range []time.Duration{0, -time.Second} {
 		t.Run(offset.String(), func(t *testing.T) {
 			s := openTestStore(t)
@@ -98,7 +100,6 @@ func TestAuthorizedSessionReplacesStaleTargetAtSameOrEarlierBar(t *testing.T) {
 			require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 				return tx.CreateLogicalAccount(LogicalAccountRecord{
 					SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
-					OwnerInstanceID: "instance-1", OwnerSessionID: "session-1",
 					ExecutionMode: "PAPER", SettlementAsset: "USDT",
 					AutomationState: "PAUSED", PauseReason: "setup",
 				})
@@ -107,42 +108,27 @@ func TestAuthorizedSessionReplacesStaleTargetAtSameOrEarlierBar(t *testing.T) {
 			bar := now.Add(-time.Second).UnixMilli()
 			first := LogicalAccountTargetRecord{
 				SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-1",
-				InstanceID: "instance-1", SessionID: "session-1", StrategyID: "strategy-1",
+				InstanceID: "instance-1", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 				BarEndTime: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
 				Targets: []InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
 			}
 			_, accepted, err := s.AcceptLogicalAccountTarget(ctx, first)
 			require.NoError(t, err)
 			require.True(t, accepted)
-			// The store-level transition leaves the old target until its caller deletes it.
-			require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-				account, err := tx.GetLogicalAccount("space-1", "logical-1")
-				if err != nil {
-					return err
-				}
-				if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", account.AuthFence); err != nil {
-					return err
-				}
-				if account, err = tx.GetLogicalAccount("space-1", "logical-1"); err != nil {
-					return err
-				}
-				_, changed, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-1", "session-2", account.AuthFence)
-				require.True(t, changed)
-				return err
-			}))
 			second := first
-			second.TargetID, second.SessionID = "target-2", "session-2"
+			second.TargetID, second.SessionID, second.SessionStartedAt = "target-2", "session-2", 2_000
 			second.BarEndTime += offset.Milliseconds()
 			_, accepted, err = s.AcceptLogicalAccountTarget(ctx, second)
 			require.NoError(t, err)
 			require.True(t, accepted)
 			_, accepted, err = s.AcceptLogicalAccountTarget(ctx, first)
-			require.ErrorIs(t, err, ErrTargetAuthorization)
+			require.ErrorIs(t, err, ErrTargetSuperseded)
 			require.False(t, accepted)
 			current, err := s.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
 			require.NoError(t, err)
 			require.Equal(t, "target-2", current.TargetID)
 			require.Equal(t, "session-2", current.SessionID)
+			require.Equal(t, int64(2_000), current.SessionStartedAt)
 		})
 	}
 }
@@ -189,7 +175,7 @@ func TestSessionAuthorizationCASAndTargetPeriod(t *testing.T) {
 	validUntil := now.Add(time.Minute).UnixMilli()
 	target := LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-1",
-		InstanceID: "instance-1", SessionID: "session-1", StrategyID: "strategy-1",
+		InstanceID: "instance-1", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 		BarEndTime: bar, ValidUntil: validUntil,
 		Targets: []InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}},
 		Status:  "PENDING", AcceptedAt: now.UnixMilli(),

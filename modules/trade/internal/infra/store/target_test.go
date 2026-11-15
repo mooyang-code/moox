@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAcceptLogicalAccountTargetUsesOwnerAndKeepsLatestBar(t *testing.T) {
+func TestAcceptLogicalAccountTargetKeepsLatestBar(t *testing.T) {
 	s := openTestStore(t)
 	seedLogicalAccount(t, s, "runner-1")
 	ctx := context.Background()
@@ -65,15 +65,48 @@ func TestAcceptLogicalAccountTargetAllowsEmptyFullWhilePaused(t *testing.T) {
 	require.Equal(t, "PAUSED", account.AutomationState)
 }
 
-func TestAcceptLogicalAccountTargetRejectsMismatchedSession(t *testing.T) {
+// 接收按会话开始时刻比较（批 3 的 3.6）：组合上没有目标行时直接接受（不看归属）；更早的会话按被取代拒绝；
+// 开始时刻相同而会话不同按会话冲突拒绝；更晚的会话覆盖；开始时刻不大于 c_closed_through 的会话一律按被取代拒绝。
+func TestAcceptLogicalAccountTargetOrdersSessionsByStartTime(t *testing.T) {
 	s := openTestStore(t)
 	seedLogicalAccount(t, s, "runner-owner")
-	record := validLogicalAccountTarget()
+	ctx := context.Background()
+	record := func(targetID, instanceID, sessionID string, startedAt int64) LogicalAccountTargetRecord {
+		value := validLogicalAccountTarget()
+		value.TargetID, value.InstanceID, value.RunnerID, value.SessionID, value.SessionStartedAt = targetID, instanceID, instanceID, sessionID, startedAt
+		return value
+	}
 
-	_, accepted, err := s.AcceptLogicalAccountTarget(context.Background(), record)
+	_, accepted, err := s.AcceptLogicalAccountTarget(ctx, record("target-1", "runner-1", "session-1", 1_000))
+	require.NoError(t, err, "没有目标行时不看归属，直接接受")
+	require.True(t, accepted)
 
-	require.ErrorIs(t, err, ErrTargetAuthorization)
+	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, record("target-early", "runner-0", "session-0", 999))
+	require.ErrorIs(t, err, ErrTargetSuperseded)
 	require.False(t, accepted)
+
+	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, record("target-same-ms", "runner-2", "session-x", 1_000))
+	require.ErrorIs(t, err, ErrTargetSessionConflict)
+	require.NotErrorIs(t, err, ErrTargetSuperseded)
+	require.False(t, accepted)
+
+	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, record("target-2", "runner-2", "session-2", 2_000))
+	require.NoError(t, err)
+	require.True(t, accepted)
+
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		_, _, err := tx.CloseTargetSession("space-1", "logical-1", 3_000, time.Now().UnixMilli())
+		return err
+	}))
+	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, record("target-3", "runner-3", "session-3", 3_000))
+	require.ErrorIs(t, err, ErrTargetSuperseded, "开始时刻不大于 c_closed_through 的会话已关闭")
+	require.False(t, accepted)
+	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, record("target-4", "runner-3", "session-4", 3_001))
+	require.NoError(t, err)
+	require.True(t, accepted)
+	current, err := s.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "target-4", current.TargetID)
 }
 
 func TestAcceptLogicalAccountTargetRejectsNegativeSpotQuantity(t *testing.T) {
@@ -187,6 +220,7 @@ func TestAcceptLogicalAccountTargetRejectsInvalidInput(t *testing.T) {
 		{"target", func(v *LogicalAccountTargetRecord) { v.TargetID = "" }},
 		{"instance", func(v *LogicalAccountTargetRecord) { v.InstanceID = "" }},
 		{"session", func(v *LogicalAccountTargetRecord) { v.SessionID = "" }},
+		{"session started at", func(v *LogicalAccountTargetRecord) { v.SessionStartedAt = 0 }},
 		{"validity", func(v *LogicalAccountTargetRecord) { v.ValidUntil = v.BarEndTime }},
 		{"sequence overflow", func(v *LogicalAccountTargetRecord) {
 			v.CommandSequence = uint64(math.MaxInt64) + 1
@@ -213,13 +247,67 @@ func TestAcceptLogicalAccountTargetRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+// CloseTargetSession 只缩短属于已关闭会话、还没过期的那一行：有效期取“现在”与 bar_end_time 加 1 毫秒中较大的一个；
+// 更晚会话的目标、已过期的目标、已置为过期的目标都不动；c_closed_through 只增不减。
+func TestCloseTargetSessionShortensOnlyLiveClosedTarget(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, test := range []struct {
+		name string
+		// barEnd、validUntil 是目标行原来的 bar_end_time 与有效期；startedAt 是目标所属会话的开始时刻；status 非空时先改成它。
+		barEnd, validUntil time.Time
+		startedAt          int64
+		status             string
+		shortened          bool
+		want               int64
+	}{
+		{name: "已过 bar_end_time：取现在", barEnd: now.Add(-time.Minute), validUntil: now.Add(time.Hour), startedAt: 1_000, shortened: true, want: now.UnixMilli()},
+		{name: "还没到 bar_end_time：取 bar_end_time 加 1 毫秒", barEnd: now.Add(time.Minute), validUntil: now.Add(time.Hour), startedAt: 1_000, shortened: true, want: now.Add(time.Minute).UnixMilli() + 1},
+		{name: "更晚会话的目标不动", barEnd: now.Add(-time.Minute), validUntil: now.Add(time.Hour), startedAt: 2_000, want: now.Add(time.Hour).UnixMilli()},
+		{name: "已置为过期的目标不动", barEnd: now.Add(-time.Minute), validUntil: now.Add(time.Hour), startedAt: 1_000, status: "EXPIRED", want: now.Add(time.Hour).UnixMilli()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := openTestStore(t)
+			seedLogicalAccount(t, s, "runner-1")
+			ctx := context.Background()
+			record := validLogicalAccountTarget()
+			record.SessionStartedAt, record.BarEndTime, record.ValidUntil, record.CommandSequence = test.startedAt, test.barEnd.UnixMilli(), test.validUntil.UnixMilli(), 0
+			current, accepted, err := s.AcceptLogicalAccountTarget(ctx, record)
+			require.NoError(t, err)
+			require.True(t, accepted)
+			if test.status != "" {
+				current.Status = test.status
+				updated, err := s.UpdateLogicalAccountTargetState(ctx, current)
+				require.NoError(t, err)
+				require.True(t, updated)
+			}
+			var closed int64
+			var shortened bool
+			require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+				closed, shortened, err = tx.CloseTargetSession("space-1", "logical-1", 1_000, now.UnixMilli())
+				return err
+			}))
+			require.Equal(t, int64(1_000), closed)
+			require.Equal(t, test.shortened, shortened)
+			after, err := s.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
+			require.NoError(t, err, "关闭不删目标行")
+			require.Equal(t, test.want, after.ValidUntil)
+
+			require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+				closed, _, err = tx.CloseTargetSession("space-1", "logical-1", 500, now.UnixMilli())
+				return err
+			}))
+			require.Equal(t, int64(1_000), closed, "c_closed_through 不回退")
+		})
+	}
+}
+
 // targetBarBase 是测试目标的基准 K 线结束时间；目标按 K 线结束时间排序。
 const targetBarBase int64 = 1_700_000_000_000
 
 func validLogicalAccountTarget() LogicalAccountTargetRecord {
 	record := LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
-		TargetID: "target-1", InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+		TargetID: "target-1", InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 		ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 		Targets: []InstrumentTarget{{
 			InstrumentID: "BTC-USDT-SPOT", Quantity: "1.0",
@@ -235,6 +323,18 @@ func validLogicalAccountTarget() LogicalAccountTargetRecord {
 func setTargetBar(record *LogicalAccountTargetRecord, n int64) {
 	record.BarEndTime = targetBarBase + n
 	record.CommandSequence = 0
+}
+
+// seedCurrentTarget 给 logical-1 写一行 instanceID 的当前目标（空目标、有效一小时）：目标单只能由当前目标行所属的实例落库。
+func seedCurrentTarget(tx *Tx, instanceID string) error {
+	now := time.Now().UTC()
+	_, _, err := tx.AcceptLogicalAccountTarget(LogicalAccountTargetRecord{
+		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-current",
+		InstanceID: instanceID, SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
+		BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
+		Targets: []InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
+	})
+	return err
 }
 
 func seedLogicalAccount(t *testing.T, s *Store, runnerID string) {

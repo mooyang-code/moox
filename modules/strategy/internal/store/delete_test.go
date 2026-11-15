@@ -21,7 +21,8 @@ func seedInstanceRows(t *testing.T, repo *Store, instanceID, taskID, viewID stri
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO t_strategy_sessions (c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_ctime, c_closed_at) VALUES (?, ?, ?, '{}', ?, ?)`,
+		{`INSERT INTO t_strategy_sessions (c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_started_at, c_ctime, c_closed_at)
+			VALUES (?, ?, ?, '{}', (SELECT COALESCE(MAX(c_started_at), 0) + 1 FROM t_strategy_sessions), ?, ?)`,
 			[]any{sessionID, instanceID, testHash, at, at}},
 		{`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_dsl_hash, c_input_json, c_targets_json, c_summary_json)
 			VALUES (?, ?, ?, 1, 2, 'ok', ?, '{}', '[]', '{}')`, []any{resultID, instanceID, sessionID, testHash}},

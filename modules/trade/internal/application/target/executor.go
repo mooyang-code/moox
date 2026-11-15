@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 var (
@@ -238,9 +239,6 @@ func (e *Executor) Converge(
 	}
 	if logicalAccount.AutomationState != "ACTIVE" {
 		return e.stopWhenInactive(ctx, spaceID, logicalAccountID, logicalAccount, &target)
-	}
-	if target.InstanceID == "" || logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
-		return Result{}, ErrTargetSession
 	}
 	// 快速路径：只在等当前目标已发出的子单结束时，不加载成员、不逐个标的计算。每笔成交都会唤醒收敛，
 	// 这段等待如果每次都走完整计算，会和成交入账抢 SQLite 连接。
@@ -1093,13 +1091,8 @@ func (e *Executor) submitCandidate(
 ) (placement, bool, error) {
 	accountID := candidate.member.account.TradingAccountID
 	quote, quantity, oddFull := check.quote, check.quantity, check.oddFull
-	if target.InstanceID != "" {
-		if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{
-			SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID,
-			OwnerInstanceID: target.InstanceID, OwnerSessionID: target.SessionID,
-		}, target); err != nil {
-			return placement{}, true, err
-		}
+	if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID}, target); err != nil {
+		return placement{}, true, err
 	}
 	// 单笔上限：拆单时每笔的名义金额不超过设置的上限；开了随机化，每笔取上限的 50%～100%。
 	// 同一目标、同一标的已发出的子单（所有执行账户），按提交先后：伪市价单的尝试次数按标的统计（换成员不重新计数），
@@ -1292,18 +1285,23 @@ func (e *Executor) checkTargetExecutable(
 	if now.Before(time.UnixMilli(target.BarEndTime).UTC()) {
 		return errTargetNotEffective
 	}
-	// Always re-read the authorization immediately before an order can be
-	// submitted. The initial Converge snapshot protects the read path; this
-	// second read closes the authorization-change window during quote/prepare.
+	// 下单前总要重读一次：Converge 开头读到的只是当时的快照，报价、准备期间组合可能改成人工控制，
+	// 当前目标行也可能换成了新会话的目标。目标仍属当前会话，是指它的实例、会话与组合当前目标行的一致。
 	fresh, err := e.Store.GetLogicalAccount(ctx, logicalAccount.SpaceID, logicalAccount.LogicalAccountID)
 	if err != nil {
 		return err
 	}
-	logicalAccount = fresh
-	if logicalAccount.ControlMode != "STRATEGY" {
+	if fresh.ControlMode != "STRATEGY" {
 		return ErrTargetSession
 	}
-	if logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
+	current, err := e.Store.GetCurrentTarget(ctx, logicalAccount.SpaceID, logicalAccount.LogicalAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrTargetSession
+	}
+	if err != nil {
+		return err
+	}
+	if current.InstanceID != target.InstanceID || current.SessionID != target.SessionID {
 		return ErrTargetSession
 	}
 	return nil

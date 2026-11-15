@@ -54,17 +54,23 @@ CREATE TABLE IF NOT EXISTS t_strategy_instance_tasks (
 CREATE INDEX IF NOT EXISTS idx_t_strategy_instance_tasks_task ON t_strategy_instance_tasks (c_factor_task_id);
 
 -- 每次启用产生一个会话，固化当时的 DSL 版本与绑定解析。
+-- c_logical_account_id 是建会话时实例绑的组合账户（观察实例为 NULL）：停用后通知 Trade 关闭会话按它调，不受之后改账户影响；
+-- c_started_at 是会话开始时刻（毫秒），取“当前毫秒”与“库里最大值加 1”中较大的一个，全库严格递增，Trade 用它比较会话先后。
 -- 策略池会话另有：c_members_json 是固化的成员（策略 ID、DSL 文本与哈希、各自的绑定解析），非池为空串；
 -- c_warmed_through 是预热推进到的最后一期（bar_end，毫秒），NULL 表示预热还没完成；预热出的引擎状态写在 t_strategy_states
 CREATE TABLE IF NOT EXISTS t_strategy_sessions (
     c_session_id TEXT NOT NULL PRIMARY KEY,
     c_instance_id TEXT NOT NULL,
+    c_logical_account_id TEXT,
     c_dsl_hash TEXT NOT NULL,
     c_resolved_json TEXT NOT NULL,
     c_members_json TEXT NOT NULL DEFAULT '',
     c_warmed_through INTEGER,
+    c_started_at INTEGER NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_closed_at DATETIME,
+    CHECK (c_started_at > 0),
+    UNIQUE (c_started_at),
     FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id),
     FOREIGN KEY (c_dsl_hash) REFERENCES t_strategy_def_versions (c_dsl_hash)
 );

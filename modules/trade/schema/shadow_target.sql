@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS t_shadow_targets (
     c_logical_account_id TEXT NOT NULL,
     c_instance_id TEXT NOT NULL,
     c_session_id TEXT NOT NULL,
+    -- 目标所属会话的开始时刻（毫秒），只用于展示
+    c_session_started_at INTEGER NOT NULL,
     c_strategy_id TEXT NOT NULL,
     c_bar_end_time INTEGER NOT NULL,
     c_valid_until INTEGER NOT NULL,
@@ -16,6 +18,7 @@ CREATE TABLE IF NOT EXISTS t_shadow_targets (
     c_quantity_targets_json TEXT NOT NULL,
     c_recorded_at INTEGER NOT NULL,
     PRIMARY KEY (c_space_id, c_target_id),
+    CHECK (c_session_started_at > 0),
     CHECK (c_bar_end_time > 0),
     CHECK (json_valid(c_weights_json)),
     CHECK (json_type(c_weights_json) = 'array'),

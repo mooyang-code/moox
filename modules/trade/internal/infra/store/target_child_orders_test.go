@@ -27,6 +27,9 @@ func seedTargetChildren(t *testing.T, s *Store, children map[string][2]string) s
 		}); err != nil {
 			return err
 		}
+		if err := seedCurrentTarget(tx, "runner-1"); err != nil {
+			return err
+		}
 		for orderID := range children {
 			limit := "99"
 			if err := tx.CreateOrder(OrderRecord{

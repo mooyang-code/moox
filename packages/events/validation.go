@@ -344,6 +344,9 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 	if strings.TrimSpace(payload.GetInstanceId()) == "" || strings.TrimSpace(payload.GetSessionId()) == "" || strings.TrimSpace(payload.GetStrategyId()) == "" {
 		return fmt.Errorf("trade target weight session identity is incomplete")
 	}
+	if payload.GetSessionStartedAt() <= 0 {
+		return fmt.Errorf("trade target weight session_started_at must be positive")
+	}
 	if payload.GetBarEndTime() == nil || payload.GetValidUntil() == nil {
 		return fmt.Errorf("trade target weight timestamps are required")
 	}

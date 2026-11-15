@@ -62,6 +62,8 @@ type Service struct {
 	OnFundSettingsChanged func(spaceID, logicalAccountID string)
 	// TargetOrders 在策略会话释放、重绑、认领删掉目标之前撤掉组合里还没结束的目标挂单；为空时不撤（测试用）。
 	TargetOrders TargetOrderReleaser
+	// WakeTarget 在关闭策略会话（CloseTargetSession）提交之后唤醒这个组合的执行器，接法同事件消费者的 WakeTarget；为空时不唤醒（测试用）。
+	WakeTarget func(spaceID, logicalAccountID string)
 
 	// releaseFailures 按“空间/组合”记释放会话撤目标单连续失败的起点和最近一次失败时间；释放撤单成功、认领或重绑撤单成功、
 	// 释放请求已不作数时删掉；只在内存里，重启后重新计时。
@@ -653,6 +655,45 @@ func (s *Service) ReleaseSession(
 	})
 }
 
+// CloseTargetSession 关闭策略会话（批 3 的 3.6，幂等）：在组合锁内推进组合的 c_closed_through（取它与 startedAt 中较大的一个），
+// 当前目标行属于开始时刻不大于它的会话、并且还没过期时，把有效期改成“现在”与 bar_end_time 加 1 毫秒中较大的一个，目标行不删；
+// 提交之后唤醒一次这个组合的执行器。之后由执行器的过期路径撤掉这份目标的挂单并把它置为过期，撤不下来由那条路径自己重试，
+// 这里不撤单。开始时刻不大于 c_closed_through 的会话的目标一律不再接受。instanceID、sessionID 只用于日志。
+// 返回关闭之后的 c_closed_through。
+func (s *Service) CloseTargetSession(
+	ctx context.Context,
+	spaceID, logicalAccountID, instanceID, sessionID string,
+	startedAt int64,
+) (int64, error) {
+	if s == nil || s.Store == nil {
+		return 0, ErrServiceConfig
+	}
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return 0, lockErr
+	}
+	defer unlock()
+	var closed int64
+	var shortened bool
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		var err error
+		closed, shortened, err = tx.CloseTargetSession(spaceID, logicalAccountID, startedAt, s.now().UnixMilli())
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	validity := "不用改"
+	if shortened {
+		validity = "已缩短"
+	}
+	log.InfoContextf(ctx, "组合 %s 关闭策略会话 %s/%s（开始于 %d）：已关闭到 %d，目标有效期%s", logicalAccountID, instanceID, sessionID, startedAt, closed, validity)
+	// 已收敛、已阻塞的目标不被定时扫描：不唤醒的话，带挂单的目标要等原来按旧有效期算好的定时器到点才撤单。
+	if s.WakeTarget != nil {
+		s.WakeTarget(spaceID, logicalAccountID)
+	}
+	return closed, nil
+}
+
 // claimChanges、releaseChanges 按 store 里会话 CAS 的同样条件预判这次操作会不会换掉所有者、删掉目标：
 // 只有会删目标时才撤目标挂单。幂等的重复请求、过期的围栏、被别的会话占用时都不撤，否则会撤掉当前所有者正在用的挂单。
 // 调用方持有组合锁，会话字段只在这把锁下改，预判和随后的 CAS 之间不会变。
@@ -867,10 +908,6 @@ func (s *Service) readiness(
 	)
 	switch {
 	case targetErr == nil:
-		if target.InstanceID == "" || target.SessionID == "" ||
-			target.InstanceID != logicalAccount.OwnerInstanceID || target.SessionID != logicalAccount.OwnerSessionID {
-			reasons = append(reasons, "目标所属会话不再持有组合账户")
-		}
 		// Resume enables automation, not an expired target. Execution waits
 		// for the next valid target and checks its validity window itself.
 		if now.UnixMilli() >= target.ValidUntil {

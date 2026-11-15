@@ -415,10 +415,11 @@ func nonTradingExecutor(tradeStore *store.Store, now func() time.Time) *targetap
 	}
 }
 
-func TestModernReadinessRejectsDifferentSession(t *testing.T) {
+// 恢复自动执行的就绪判断不再比较目标与组合归属（批 3 T14）：目标行属于哪个会话由接收时的会话先后保证，
+// 组合的归属换了会话、目标行还是旧会话的，照样就绪。
+func TestReadinessIgnoresTargetOwnerSession(t *testing.T) {
 	service, tradeStore, fence := modernSessionFixture(t)
 	acceptModernSessionTarget(t, tradeStore, "session-1")
-	// Store-only rebind deliberately leaves a stale target to exercise readiness.
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", fence); err != nil {
 			return err
@@ -433,8 +434,7 @@ func TestModernReadinessRejectsDifferentSession(t *testing.T) {
 	}))
 	readiness, err := service.Readiness(context.Background(), service.Store, "space-1", "logical-1")
 	require.NoError(t, err)
-	require.False(t, readiness.Ready)
-	require.Contains(t, readiness.Reasons, "目标所属会话不再持有组合账户")
+	require.True(t, readiness.Ready, "%v", readiness.Reasons)
 }
 
 func modernSessionFixture(t *testing.T) (*Service, *store.Store, string) {
@@ -457,12 +457,20 @@ func modernSessionFixture(t *testing.T) (*Service, *store.Store, string) {
 	return service, tradeStore, fence
 }
 
+// modernSessionStartedAt 是测试会话的开始时刻（毫秒）：session-1 < session-2，别的会话名按 session-1 处理。
+func modernSessionStartedAt(session string) int64 {
+	if session == "session-2" {
+		return 2_000
+	}
+	return 1_000
+}
+
 func acceptModernSessionTarget(t *testing.T, tradeStore *store.Store, session string) store.LogicalAccountTargetRecord {
 	t.Helper()
 	now := time.Now().UTC()
 	target, accepted, err := tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-" + session,
-		InstanceID: "instance-1", SessionID: session, StrategyID: "strategy-1",
+		InstanceID: "instance-1", SessionID: session, SessionStartedAt: modernSessionStartedAt(session), StrategyID: "strategy-1",
 		BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
 		Status: "PENDING", AcceptedAt: now.UnixMilli(),
 		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
@@ -612,7 +620,7 @@ func acceptSessionTarget(t *testing.T, service *Service, tradeStore *store.Store
 	require.NoError(t, err)
 	_, _, err = tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: targetID,
-		InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+		InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1000, StrategyID: "strategy-1",
 		BarEndTime: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 		Status: "PENDING", AcceptedAt: 2_000,
 		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},

@@ -27,4 +27,7 @@ message LogicalAccountTargetWeightRequested {
   google.protobuf.Timestamp valid_until = 12;
   // shadow 为真表示预热中的策略实例发出的影子目标：Trade 只完成换算并记录，不预留资金、不下单。
   bool shadow = 14;
+  // session_started_at 是会话的开始时刻（毫秒，必填，Strategy 全库严格递增）：Trade 用它比较会话先后，
+  // 开始时刻更晚的会话的目标覆盖较早会话的，不大于组合“关闭到”时刻的会话的目标不再接受。
+  int64 session_started_at = 15;
 }

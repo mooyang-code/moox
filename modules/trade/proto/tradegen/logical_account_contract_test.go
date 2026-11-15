@@ -40,6 +40,7 @@ func TestTradeProtoExposesLogicalAccountMethodsOnConsole(t *testing.T) {
 		"RemoveLogicalAccountMember",
 		"ClaimLogicalAccountOwner",
 		"ReleaseLogicalAccountOwner",
+		"CloseTargetSession",
 		"PauseLogicalAccount",
 		"ResumeLogicalAccount",
 		"FlattenLogicalAccount",

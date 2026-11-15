@@ -33,6 +33,9 @@ func seedManagedFixture(t *testing.T, fundSettings string, filled []managedOrder
 		}); err != nil {
 			return err
 		}
+		if err := seedCurrentTarget(tx, "runner-1"); err != nil {
+			return err
+		}
 		for index, order := range filled {
 			instrument := InstrumentRecord{
 				Exchange: "BINANCE", MarketType: order.market, ExchangeSymbol: order.base + "USDT",

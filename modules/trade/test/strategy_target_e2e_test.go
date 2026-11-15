@@ -318,7 +318,7 @@ func targetDeliveryWithTargets(
 		events.LogicalAccountTargetWeightRequested,
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: targetID, InstanceId: testRunner,
-			SessionId: "session-e2e", StrategyId: "strategy-e2e",
+			SessionId: "session-e2e", SessionStartedAt: 1_000, StrategyId: "strategy-e2e",
 			LogicalAccountId: testLogicalAccount,
 			Targets:          targets,
 			BarEndTime:       timestamppb.New(bar),

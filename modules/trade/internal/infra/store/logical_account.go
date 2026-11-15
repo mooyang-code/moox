@@ -22,6 +22,8 @@ type LogicalAccountRecord struct {
 	OwnerInstanceID string
 	OwnerSessionID  string
 	AuthFence       string
+	// ClosedThrough 是关闭到哪个会话为止（会话的开始时刻，毫秒）：开始时刻不大于它的会话的目标一律不再接受，0 表示没关闭过。
+	ClosedThrough   int64
 	ExecutionMode   string
 	SettlementAsset string
 	// OrderSettingsJSON、FundSettingsJSON 是下单设置和资金设置，空对象表示全部取默认值。
@@ -53,6 +55,7 @@ type logicalAccountRow struct {
 	OwnerInstanceID   *string   `gorm:"column:c_owner_instance_id"`
 	OwnerSessionID    *string   `gorm:"column:c_owner_session_id"`
 	AuthFence         string    `gorm:"column:c_auth_fence"`
+	ClosedThrough     int64     `gorm:"column:c_closed_through"`
 	ExecutionMode     string    `gorm:"column:c_execution_mode"`
 	SettlementAsset   string    `gorm:"column:c_settlement_asset"`
 	OrderSettingsJSON string    `gorm:"column:c_order_settings_json"`
@@ -565,7 +568,7 @@ func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
 		ControlMode: row.ControlMode,
 		SpaceID:     row.SpaceID, LogicalAccountID: row.LogicalAccountID,
 		Name: row.Name, OwnerInstanceID: instanceID,
-		OwnerSessionID: sessionID, AuthFence: row.AuthFence,
+		OwnerSessionID: sessionID, AuthFence: row.AuthFence, ClosedThrough: row.ClosedThrough,
 		ExecutionMode:     row.ExecutionMode,
 		SettlementAsset:   row.SettlementAsset,
 		OrderSettingsJSON: row.OrderSettingsJSON, FundSettingsJSON: row.FundSettingsJSON,

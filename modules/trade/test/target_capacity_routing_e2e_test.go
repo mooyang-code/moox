@@ -58,7 +58,7 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 	}))
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(ctx, store.LogicalAccountTargetRecord{
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "live-target",
-		InstanceID: "live-instance", SessionID: "live-session", StrategyID: "live-strategy",
+		InstanceID: "live-instance", SessionID: "live-session", SessionStartedAt: 1000, StrategyID: "live-strategy",
 		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
 		Targets: []store.InstrumentTarget{{InstrumentID: testInstrumentID(exchange.MarketTypeSpot), Quantity: "1"}},
 		Status:  targetapp.StatusPending, AcceptedAt: testNow.UnixMilli(),
@@ -158,7 +158,7 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 	require.NoError(t, err)
 	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "capacity-target", LogicalAccountId: testLogicalAccount,
-		InstanceId: "capacity-instance", SessionId: "capacity-session", StrategyId: "capacity-strategy",
+		InstanceId: "capacity-instance", SessionId: "capacity-session", SessionStartedAt: 1_000, StrategyId: "capacity-strategy",
 		BarEndTime: timestamppb.New(testNow), ValidUntil: timestamppb.New(testNow.Add(time.Hour)),
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: testSubjectID, MarketType: "SPOT", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "capacity-target", OccurredAt: testNow, SpaceID: testSpace, SubjectID: testLogicalAccount})
@@ -250,7 +250,7 @@ func TestTargetRejectionDoesNotLoopE2E(t *testing.T) {
 	}))
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(ctx, store.LogicalAccountTargetRecord{
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "reject-target",
-		InstanceID: "live-instance", SessionID: "live-session", StrategyID: "live-strategy",
+		InstanceID: "live-instance", SessionID: "live-session", SessionStartedAt: 1000, StrategyID: "live-strategy",
 		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
 		Targets: []store.InstrumentTarget{{InstrumentID: testInstrumentID(exchange.MarketTypeSpot), Quantity: "0.1"}},
 		Status:  targetapp.StatusPending, AcceptedAt: testNow.UnixMilli(),

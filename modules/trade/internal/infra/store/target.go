@@ -42,25 +42,89 @@ type LogicalAccountTargetRecord struct {
 	CommandSequence  uint64
 	// Strategy target identity; RunnerID mirrors InstanceID and CommandSequence
 	// mirrors BarEndTime.
-	InstanceID     string
-	SessionID      string
-	StrategyID     string
-	BarEndTime     int64
-	ValidUntil     int64
-	Targets        []InstrumentTarget
-	Status         string
-	BlockedTargets []BlockedTarget
-	LastError      string
-	AcceptedAt     int64
-	UpdatedAt      time.Time
+	InstanceID string
+	SessionID  string
+	// SessionStartedAt 是目标所属会话的开始时刻（毫秒），比较会话先后用。
+	SessionStartedAt int64
+	StrategyID       string
+	BarEndTime       int64
+	ValidUntil       int64
+	Targets          []InstrumentTarget
+	Status           string
+	BlockedTargets   []BlockedTarget
+	LastError        string
+	AcceptedAt       int64
+	UpdatedAt        time.Time
 }
 
 var (
 	// ErrTargetExpired is returned before any quote/equity or receipt fast path
 	// can accept a target whose validity window has elapsed.
-	ErrTargetExpired       = errors.New("trade store: target expired")
+	ErrTargetExpired = errors.New("trade store: target expired")
+	// ErrTargetAuthorization 是组合不是策略控制的（人工控制），不接受策略目标。
 	ErrTargetAuthorization = errors.New("trade store: target authorization mismatch")
+	// ErrTargetSuperseded 是目标所属的会话已关闭（开始时刻不大于组合的 c_closed_through），
+	// 或组合上已是开始时刻更晚的会话的目标：旧会话的目标，按被取代结束。
+	ErrTargetSuperseded = fmt.Errorf("%w: target session closed or superseded", ErrConflict)
+	// ErrTargetSessionConflict 是目标与组合上当前目标的会话开始时刻相同、会话却不同：不应出现，按授权冲突告警。
+	ErrTargetSessionConflict = fmt.Errorf("%w: target sessions share one start time", ErrConflict)
 )
+
+// TargetSession 是目标所属的策略会话：实例、会话与会话的开始时刻（毫秒）。
+type TargetSession struct {
+	InstanceID string
+	SessionID  string
+	StartedAt  int64
+}
+
+// CurrentTarget 是组合当前目标行的身份与有效期，不带目标内容：下单前的会话检查只读这几列。
+type CurrentTarget struct {
+	TargetID string
+	TargetSession
+	BarEndTime int64
+	ValidUntil int64
+}
+
+// CheckClosedTargetSession 判断目标所属的会话是不是已经关闭：开始时刻不大于组合的 c_closed_through 时返回 ErrTargetSuperseded。
+func CheckClosedTargetSession(account LogicalAccountRecord, startedAt int64) error {
+	if startedAt <= account.ClosedThrough {
+		return fmt.Errorf("%w: 会话开始于 %d，组合已关闭到 %d", ErrTargetSuperseded, startedAt, account.ClosedThrough)
+	}
+	return nil
+}
+
+// CompareTargetSession 按会话开始时刻比较新到的目标与组合上的当前目标（批 3 的 3.6 第 4 步）：
+// 开始时刻更晚是新会话，放行（覆盖当前目标行）；相等且是同一个会话，放行，由调用方再按 bar_end_time 比较；
+// 更早返回 ErrTargetSuperseded；相等但会话不同返回 ErrTargetSessionConflict。
+func CompareTargetSession(current, incoming TargetSession) error {
+	switch {
+	case incoming.StartedAt > current.StartedAt:
+		return nil
+	case incoming.StartedAt < current.StartedAt:
+		return fmt.Errorf("%w: 会话开始于 %d，组合上已是开始于 %d 的会话的目标", ErrTargetSuperseded, incoming.StartedAt, current.StartedAt)
+	case incoming.InstanceID == current.InstanceID && incoming.SessionID == current.SessionID:
+		return nil
+	default:
+		return fmt.Errorf("%w: 会话 %s/%s 与当前目标的会话 %s/%s 开始时刻都是 %d",
+			ErrTargetSessionConflict, incoming.InstanceID, incoming.SessionID, current.InstanceID, current.SessionID, incoming.StartedAt)
+	}
+}
+
+// checkTargetSession 是接收目标时的会话先后判断（3.6 第 3、4 步）：会话已关闭、或比组合上的当前目标更早，都不接受。
+// 组合上没有目标行时只看是否已关闭。同一会话的 bar_end_time 先后不在这里比。
+func (tx *Tx) checkTargetSession(account LogicalAccountRecord, incoming TargetSession) error {
+	if err := CheckClosedTargetSession(account, incoming.StartedAt); err != nil {
+		return err
+	}
+	current, err := tx.GetCurrentTarget(account.SpaceID, account.LogicalAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return CompareTargetSession(current.TargetSession, incoming)
+}
 
 type logicalAccountTargetRow struct {
 	SpaceID            string    `gorm:"column:c_space_id"`
@@ -70,6 +134,7 @@ type logicalAccountTargetRow struct {
 	CommandSequence    uint64    `gorm:"column:c_command_sequence"`
 	InstanceID         string    `gorm:"column:c_instance_id"`
 	SessionID          string    `gorm:"column:c_session_id"`
+	SessionStartedAt   int64     `gorm:"column:c_session_started_at"`
 	StrategyID         string    `gorm:"column:c_strategy_id"`
 	BarEndTime         int64     `gorm:"column:c_bar_end_time"`
 	ValidUntil         int64     `gorm:"column:c_valid_until"`
@@ -125,7 +190,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if account.ControlMode != "STRATEGY" {
 		return LogicalAccountTargetRecord{}, false, ErrTargetAuthorization
 	}
-	if blank(record.InstanceID) || blank(record.SessionID) || blank(record.StrategyID) ||
+	if blank(record.InstanceID) || blank(record.SessionID) || blank(record.StrategyID) || record.SessionStartedAt <= 0 ||
 		record.BarEndTime <= 0 || record.ValidUntil <= record.BarEndTime {
 		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete target session contract", ErrInvalidRecord)
 	}
@@ -135,8 +200,9 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if record.RunnerID == "" {
 		record.RunnerID = record.InstanceID
 	}
-	if account.OwnerInstanceID != record.InstanceID || account.OwnerSessionID != record.SessionID {
-		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: logical account target session authorization", ErrTargetAuthorization)
+	// 会话先后（含已关闭）在过期之前判断，与接收入口的顺序一致。
+	if err := tx.checkTargetSession(account, record.session()); err != nil {
+		return LogicalAccountTargetRecord{}, false, err
 	}
 	if time.Now().UTC().UnixMilli() >= record.ValidUntil {
 		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
@@ -178,15 +244,16 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 		if decodeErr != nil {
 			return LogicalAccountTargetRecord{}, false, decodeErr
 		}
+		sameSession := current.InstanceID == record.InstanceID && current.SessionID == record.SessionID
 		same := current.TargetID == record.TargetID &&
-			current.RunnerID == record.RunnerID &&
-			current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && current.BarEndTime == record.BarEndTime &&
+			current.RunnerID == record.RunnerID && sameSession &&
+			current.SessionStartedAt == record.SessionStartedAt && current.BarEndTime == record.BarEndTime &&
 			row.TargetsJSON == targetsJSON
 		if same {
 			return current, false, nil
 		}
-		if record.TargetID == current.TargetID ||
-			(current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && record.BarEndTime <= current.BarEndTime) {
+		// 走到这里时会话先后已经判断过：要么是开始时刻更晚的新会话（直接覆盖），要么是同一会话（只接受更晚的一根）。
+		if record.TargetID == current.TargetID || (sameSession && record.BarEndTime <= current.BarEndTime) {
 			return current, false, fmt.Errorf("%w: stale or conflicting logical account target", ErrConflict)
 		}
 	case query.Error != nil && !errors.Is(query.Error, gorm.ErrRecordNotFound):
@@ -195,7 +262,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 
 	result := tx.db.Exec(execInsertLogicalAccountTarget,
 		record.SpaceID, record.LogicalAccountID, record.TargetID, record.RunnerID,
-		record.CommandSequence, record.InstanceID, record.SessionID, record.StrategyID,
+		record.CommandSequence, record.InstanceID, record.SessionID, record.SessionStartedAt, record.StrategyID,
 		record.BarEndTime, record.ValidUntil,
 		targetsJSON, record.Status,
 		blockedJSON, record.LastError, record.AcceptedAt,
@@ -216,6 +283,78 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	}
 	current, err := logicalAccountTargetRecord(row)
 	return current, true, err
+}
+
+// session 返回目标所属的会话。
+func (r LogicalAccountTargetRecord) session() TargetSession {
+	return TargetSession{InstanceID: r.InstanceID, SessionID: r.SessionID, StartedAt: r.SessionStartedAt}
+}
+
+// currentTargetRow 是 CurrentTarget 的查询结果。
+type currentTargetRow struct {
+	TargetID         string `gorm:"column:c_target_id"`
+	InstanceID       string `gorm:"column:c_instance_id"`
+	SessionID        string `gorm:"column:c_session_id"`
+	SessionStartedAt int64  `gorm:"column:c_session_started_at"`
+	BarEndTime       int64  `gorm:"column:c_bar_end_time"`
+	ValidUntil       int64  `gorm:"column:c_valid_until"`
+}
+
+func (r currentTargetRow) current() CurrentTarget {
+	return CurrentTarget{
+		TargetID:      r.TargetID,
+		TargetSession: TargetSession{InstanceID: r.InstanceID, SessionID: r.SessionID, StartedAt: r.SessionStartedAt},
+		BarEndTime:    r.BarEndTime, ValidUntil: r.ValidUntil,
+	}
+}
+
+// GetCurrentTarget 读组合当前目标行的身份与有效期（不读目标内容）；没有目标行时返回 gorm.ErrRecordNotFound。
+func (s *Store) GetCurrentTarget(ctx context.Context, spaceID, logicalAccountID string) (CurrentTarget, error) {
+	var rows []currentTargetRow
+	if err := s.db.WithContext(ctx).Raw(queryCurrentTarget, spaceID, logicalAccountID).Scan(&rows).Error; err != nil {
+		return CurrentTarget{}, err
+	}
+	if len(rows) == 0 {
+		return CurrentTarget{}, gorm.ErrRecordNotFound
+	}
+	return rows[0].current(), nil
+}
+
+// GetCurrentTarget 是事务内的 Store.GetCurrentTarget。
+func (tx *Tx) GetCurrentTarget(spaceID, logicalAccountID string) (CurrentTarget, error) {
+	var rows []currentTargetRow
+	if err := tx.db.Raw(queryCurrentTarget, spaceID, logicalAccountID).Scan(&rows).Error; err != nil {
+		return CurrentTarget{}, err
+	}
+	if len(rows) == 0 {
+		return CurrentTarget{}, gorm.ErrRecordNotFound
+	}
+	return rows[0].current(), nil
+}
+
+// CloseTargetSession 关闭到 startedAt 为止的会话（批 3 的 3.6）：组合的 c_closed_through 取它与 startedAt 中较大的一个，
+// 不会回退；当前目标行属于开始时刻不大于它的会话、并且到 now 还没过期时，把有效期改成 now 与 bar_end_time 加 1 毫秒中较大的一个
+// （只会缩短，目标行不删，之后由执行器的过期路径撤单并置为过期）。幂等。返回关闭之后的 c_closed_through，
+// 以及目标行的有效期是否被改。调用方持有组合锁。
+func (tx *Tx) CloseTargetSession(spaceID, logicalAccountID string, startedAt, now int64) (int64, bool, error) {
+	if blank(spaceID) || blank(logicalAccountID) || startedAt <= 0 || now <= 0 {
+		return 0, false, fmt.Errorf("%w: incomplete target session close", ErrInvalidRecord)
+	}
+	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
+	if err != nil {
+		return 0, false, err
+	}
+	closed := max(account.ClosedThrough, startedAt)
+	if closed > account.ClosedThrough {
+		if err := tx.db.Exec(execAdvanceClosedThrough, closed, spaceID, logicalAccountID, closed).Error; err != nil {
+			return 0, false, writeError(err)
+		}
+	}
+	result := tx.db.Exec(execShortenClosedTargetValidity, now, spaceID, logicalAccountID, closed, now)
+	if result.Error != nil {
+		return 0, false, writeError(result.Error)
+	}
+	return closed, result.RowsAffected > 0, nil
 }
 
 func (s *Store) GetLogicalAccountTarget(
@@ -314,7 +453,7 @@ func logicalAccountTargetRecord(
 		SpaceID: row.SpaceID, LogicalAccountID: row.LogicalAccountID,
 		TargetID: row.TargetID, RunnerID: row.RunnerID,
 		CommandSequence: row.CommandSequence, Targets: targets,
-		InstanceID: row.InstanceID, SessionID: row.SessionID, StrategyID: row.StrategyID,
+		InstanceID: row.InstanceID, SessionID: row.SessionID, SessionStartedAt: row.SessionStartedAt, StrategyID: row.StrategyID,
 		BarEndTime: row.BarEndTime, ValidUntil: row.ValidUntil,
 		Status: row.Status, BlockedTargets: blocked,
 		LastError: row.LastError, AcceptedAt: row.AcceptedAt,
@@ -500,19 +639,21 @@ const (
 	updateTargetSuffixSQL = `
 		AND (c_status <> 'EXPIRED' OR ? = 'EXPIRED')
 `
+	// 覆盖当前目标行只有两种情况：开始时刻更晚的新会话，或同一会话更晚的一根（与 Go 侧的判断一致，这里再守一次）。
 	execInsertLogicalAccountTarget = `INSERT INTO t_logical_account_targets (
 			c_space_id, c_logical_account_id, c_target_id, c_runner_id,
-			c_command_sequence, c_instance_id, c_session_id, c_strategy_id,
+			c_command_sequence, c_instance_id, c_session_id, c_session_started_at, c_strategy_id,
 			c_bar_end_time, c_valid_until,
 			c_targets_json, c_status,
 			c_blocked_targets_json, c_last_error, c_accepted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_logical_account_id) DO UPDATE SET
 			c_target_id = excluded.c_target_id,
 			c_runner_id = excluded.c_runner_id,
 			c_command_sequence = excluded.c_command_sequence,
 			c_instance_id = excluded.c_instance_id,
 			c_session_id = excluded.c_session_id,
+			c_session_started_at = excluded.c_session_started_at,
 			c_strategy_id = excluded.c_strategy_id,
 			c_bar_end_time = excluded.c_bar_end_time,
 			c_valid_until = excluded.c_valid_until,
@@ -522,9 +663,23 @@ const (
 			c_last_error = excluded.c_last_error,
 			c_accepted_at = excluded.c_accepted_at,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE t_logical_account_targets.c_instance_id <> excluded.c_instance_id
-		   OR t_logical_account_targets.c_session_id <> excluded.c_session_id
-		   OR excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time`
+		WHERE excluded.c_session_started_at > t_logical_account_targets.c_session_started_at
+		   OR (t_logical_account_targets.c_instance_id = excluded.c_instance_id
+		       AND t_logical_account_targets.c_session_id = excluded.c_session_id
+		       AND excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time)`
 	execDeleteLogicalAccountTargets = `DELETE FROM t_logical_account_targets
 		WHERE c_space_id = ? AND c_logical_account_id = ?`
+	queryCurrentTarget = `SELECT c_target_id, c_instance_id, c_session_id, c_session_started_at, c_bar_end_time, c_valid_until
+		FROM t_logical_account_targets WHERE c_space_id = ? AND c_logical_account_id = ?`
+	// 推进组合的“关闭到”时刻，只增不减。
+	execAdvanceClosedThrough = `UPDATE t_logical_accounts
+		SET c_closed_through = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_closed_through < ?`
+	// 关闭会话时缩短目标行的有效期：只改属于已关闭会话、还没过期、确实会缩短的那一行。
+	// 新的有效期取“现在”与 bar_end_time 加 1 毫秒中较大的一个，保持 c_valid_until 晚于 c_bar_end_time。
+	execShortenClosedTargetValidity = `UPDATE t_logical_account_targets
+		SET c_valid_until = MAX(?, c_bar_end_time + 1), c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+			AND c_session_started_at <= ? AND c_status <> 'EXPIRED'
+			AND c_valid_until > MAX(?, c_bar_end_time + 1)`
 )

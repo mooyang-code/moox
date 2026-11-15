@@ -100,8 +100,9 @@ func TradeMarketType(marketType string) (string, error) {
 	}
 }
 
-// MarshalTargetEvent 构造发给 Trade 的目标权重事件；shadow 为真表示预热中的影子目标。每个目标带自己的市场。
-func MarshalTargetEvent(instance store.Instance, result store.Result, targets []TargetJSON, shadow bool) ([]byte, error) {
+// MarshalTargetEvent 构造发给 Trade 的目标权重事件；sessionStartedAt 是结果所属会话的开始时刻（毫秒），
+// shadow 为真表示预热中的影子目标。每个目标带自己的市场。
+func MarshalTargetEvent(instance store.Instance, result store.Result, sessionStartedAt int64, targets []TargetJSON, shadow bool) ([]byte, error) {
 	if instance.LogicalAccountID == nil {
 		return nil, fmt.Errorf("观察实例没有组合账户，不能构造目标事件")
 	}
@@ -119,7 +120,7 @@ func MarshalTargetEvent(instance store.Instance, result store.Result, targets []
 	}
 	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: result.ResultID, InstanceId: result.InstanceID, LogicalAccountId: *instance.LogicalAccountID,
-		SessionId: result.SessionID, StrategyId: instance.StrategyID,
+		SessionId: result.SessionID, SessionStartedAt: sessionStartedAt, StrategyId: instance.StrategyID,
 		BarEndTime: timestamppb.New(result.BarEndTime), ValidUntil: timestamppb.New(result.ValidUntil),
 		Targets: payloadTargets, Shadow: shadow,
 	}

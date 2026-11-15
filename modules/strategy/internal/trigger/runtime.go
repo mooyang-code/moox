@@ -15,9 +15,11 @@ import (
 // runtime 是一个会话在内存中的可执行状态：固化的解析结果与编译好的程序。重启后由会话快照重建。
 type runtime struct {
 	sessionID string
-	dslHash   string
-	resolved  input.Resolved
-	program   *dsl.Program
+	// sessionStartedAt 是会话开始时刻（毫秒），随目标事件发给 Trade 比较会话先后。
+	sessionStartedAt int64
+	dslHash          string
+	resolved         input.Resolved
+	program          *dsl.Program
 	// pool 非空表示策略池会话：program 是池自己的程序（没有规则），成员各自的绑定与程序在 pool 里。
 	pool *poolRuntime
 }
@@ -80,7 +82,7 @@ func (h *Handler) runtimeFor(ctx context.Context, instance store.Instance) (*run
 	if err != nil {
 		return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: resolved}, &input.SkipError{Reason: input.SkipConfigError, Detail: fmt.Sprintf("按会话快照重新编译 DSL 失败：%v", err)}
 	}
-	loaded := &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: compiled, program: program}
+	loaded := &runtime{sessionID: sessionID, sessionStartedAt: session.StartedAt, dslHash: session.DSLHash, resolved: compiled, program: program}
 	if session.MembersJSON != "" {
 		members, programs, err := input.ParseMembers(session.MembersJSON)
 		if err != nil {

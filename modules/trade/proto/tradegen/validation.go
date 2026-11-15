@@ -316,6 +316,13 @@ func (r *ReleaseLogicalAccountOwnerReq) Validate() error {
 	return nil
 }
 
+func (r *CloseTargetSessionReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.InstanceId) == "" || strings.TrimSpace(r.SessionId) == "" || r.SessionStartedAt <= 0 {
+		return fmt.Errorf("logical_account_id, instance_id, session_id and a positive session_started_at are required")
+	}
+	return nil
+}
+
 func (r *PauseLogicalAccountReq) Validate() error {
 	if r == nil ||
 		strings.TrimSpace(r.LogicalAccountId) == "" ||

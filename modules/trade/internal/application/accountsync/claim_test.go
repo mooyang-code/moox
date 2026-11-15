@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/stretchr/testify/require"
 )
@@ -19,6 +20,9 @@ import (
 func seedLocalOrder(t *testing.T, tradeStore *store.Store, orderID, state, exchangeOrderID, filled string) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := storetest.EnsureCurrentTarget(tx, "space-1", "logical-1", "runner-1"); err != nil {
+			return err
+		}
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-1", ClientOrderID: orderID + "-client",
 			ExchangeOrderID: exchangeOrderID, Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTCUSDT",

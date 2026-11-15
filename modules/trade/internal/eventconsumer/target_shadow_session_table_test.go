@@ -21,17 +21,16 @@ import (
 // shadowCurrentSession 是这张表唯一的“谁是当前会话”前提：让 runner-1 的 sessionID 成为组合的当前会话，
 // 之前的会话随之不再是当前会话。
 //
-// 现在的搭法：把组合的归属（owner）换成这个会话。
-// T14 之后：影子目标只做过期、人工控制、c_closed_through 三步判断，不和正式目标行比较，
-// 所以只写一行新会话的目标行不够，要先对之前的会话调 CloseTargetSession 推进 c_closed_through；只换这里。
+// T14 之前的搭法：把组合的归属（owner）换成这个会话。
+// T14 起：影子目标只做过期、人工控制、c_closed_through 三步判断，不和正式目标行比较，
+// 所以只写一行新会话的目标行不够，要对之前的会话调 CloseTargetSession 推进 c_closed_through（不写目标行）。
 func shadowCurrentSession(t *testing.T, db *store.Store, sessionID string) {
 	t.Helper()
-	account, err := db.GetLogicalAccount(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	if account.OwnerInstanceID == "runner-1" && account.OwnerSessionID == sessionID {
-		return
+	for _, earlier := range testSessions {
+		if testSessionStartedAt(earlier) < testSessionStartedAt(sessionID) {
+			closeTargetSession(t, db, earlier)
+		}
 	}
-	reassignLogicalOwner(t, db, "runner-1", sessionID)
 }
 
 // shadowSessionDelivery 是 runner-1 的 sessionID 发来的一份影子目标（BTC-USDT-SPOT 权重 1）；
@@ -45,7 +44,7 @@ func shadowSessionDelivery(t *testing.T, now time.Time, targetID, sessionID stri
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
-		TargetId: targetID, InstanceId: "runner-1", SessionId: sessionID, StrategyId: "strategy-1", LogicalAccountId: "logical-1",
+		TargetId: targetID, InstanceId: "runner-1", SessionId: sessionID, SessionStartedAt: testSessionStartedAt(sessionID), StrategyId: "strategy-1", LogicalAccountId: "logical-1",
 		Targets:    []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
 		BarEndTime: timestamppb.New(barEnd), ValidUntil: timestamppb.New(validUntil),
 		Shadow: true,
@@ -70,7 +69,7 @@ func TestShadowTargetSessionTable(t *testing.T) {
 		recorded bool
 	}{
 		{name: "当前会话的影子目标：记录", current: "session-1", session: "session-1", decision: jetstream.ACK, recorded: true},
-		// “别的会话”取同一实例的旧会话：换成别的实例时，现在按 authorization_conflict、T14 之后按 superseded，结论会变。
+		// “别的会话”取同一实例的旧会话（已关闭）：T14 之前换成别的实例时按 authorization_conflict，T14 起不看实例、同样按 superseded。
 		{name: "别的会话的影子目标：按被取代结束", current: "session-2", session: "session-1", decision: jetstream.TERM, code: "superseded"},
 		{name: "人工控制：拒绝", current: "session-1", manual: true, session: "session-1", decision: jetstream.TERM, code: "authorization_conflict"},
 		{name: "过期的影子目标：按过期结束", current: "session-1", session: "session-1", expired: true, decision: jetstream.TERM, code: "target_expired"},

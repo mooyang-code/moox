@@ -57,6 +57,8 @@ type TradeConsoleServiceService interface {
 
 	ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq) (*ReleaseLogicalAccountOwnerRsp, error)
 
+	CloseTargetSession(ctx context.Context, req *CloseTargetSessionReq) (*CloseTargetSessionRsp, error)
+
 	PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq) (*PauseLogicalAccountRsp, error)
 
 	ResumeLogicalAccount(ctx context.Context, req *ResumeLogicalAccountReq) (*ResumeLogicalAccountRsp, error)
@@ -442,6 +444,24 @@ func TradeConsoleServiceService_ReleaseLogicalAccountOwner_Handler(svr interface
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(TradeConsoleServiceService).ReleaseLogicalAccountOwner(ctx, reqbody.(*ReleaseLogicalAccountOwnerReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_CloseTargetSession_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CloseTargetSessionReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).CloseTargetSession(ctx, reqbody.(*CloseTargetSessionReq))
 	}
 
 	var rsp interface{}
@@ -1002,6 +1022,10 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_ReleaseLogicalAccountOwner_Handler,
 		},
 		{
+			Name: "/trpc.moox.trade.TradeConsoleService/CloseTargetSession",
+			Func: TradeConsoleServiceService_CloseTargetSession_Handler,
+		},
+		{
 			Name: "/trpc.moox.trade.TradeConsoleService/PauseLogicalAccount",
 			Func: TradeConsoleServiceService_PauseLogicalAccount_Handler,
 		},
@@ -1176,6 +1200,9 @@ func (s *UnimplementedTradeConsoleService) ClaimLogicalAccountOwner(ctx context.
 func (s *UnimplementedTradeConsoleService) ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq) (*ReleaseLogicalAccountOwnerRsp, error) {
 	return nil, errors.New("rpc ReleaseLogicalAccountOwner of service TradeConsoleService is not implemented")
 }
+func (s *UnimplementedTradeConsoleService) CloseTargetSession(ctx context.Context, req *CloseTargetSessionReq) (*CloseTargetSessionRsp, error) {
+	return nil, errors.New("rpc CloseTargetSession of service TradeConsoleService is not implemented")
+}
 func (s *UnimplementedTradeConsoleService) PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq) (*PauseLogicalAccountRsp, error) {
 	return nil, errors.New("rpc PauseLogicalAccount of service TradeConsoleService is not implemented")
 }
@@ -1300,6 +1327,8 @@ type TradeConsoleServiceClientProxy interface {
 	ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq, opts ...client.Option) (rsp *ClaimLogicalAccountOwnerRsp, err error)
 
 	ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq, opts ...client.Option) (rsp *ReleaseLogicalAccountOwnerRsp, err error)
+
+	CloseTargetSession(ctx context.Context, req *CloseTargetSessionReq, opts ...client.Option) (rsp *CloseTargetSessionRsp, err error)
 
 	PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq, opts ...client.Option) (rsp *PauseLogicalAccountRsp, err error)
 
@@ -1737,6 +1766,26 @@ func (c *TradeConsoleServiceClientProxyImpl) ReleaseLogicalAccountOwner(ctx cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReleaseLogicalAccountOwnerRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) CloseTargetSession(ctx context.Context, req *CloseTargetSessionReq, opts ...client.Option) (*CloseTargetSessionRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/CloseTargetSession")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("CloseTargetSession")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CloseTargetSessionRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

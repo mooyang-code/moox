@@ -28,6 +28,9 @@ func TestCreateOrderPersistsTrustedOwnership(t *testing.T) {
 		}); err != nil {
 			return err
 		}
+		if err := seedCurrentTarget(tx, "runner-1"); err != nil {
+			return err
+		}
 		return tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "order-target",
 			TradingAccountID: "account-1", ClientOrderID: "client-target",

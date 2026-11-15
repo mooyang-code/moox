@@ -659,6 +659,9 @@ func TestApplySnapshotResolvesUnknownWithoutReenteringAccountLock(t *testing.T) 
 	seedSyncAccount(t, tradeStore)
 	now := time.UnixMilli(3_000)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := storetest.EnsureCurrentTarget(tx, "space-1", "logical-1", "runner-1"); err != nil {
+			return err
+		}
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: "unknown-order",
 			TradingAccountID: "account-1", ClientOrderID: "unknown-client",
