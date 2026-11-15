@@ -17,7 +17,9 @@ import (
 
 // 目标接收的结果表（批 3 T0 第 4 项）：把同会话新旧目标、同一目标重复投递、换会话、人工控制、过期几种情形的
 // 接受与拒绝结果固定下来。之后改“谁来挡住旧会话”的做法时只改每个用例的前置步骤，这张表里的结果不变；
-// 唯一的例外是“会话关闭之后的重复投递”那一行，见用例上的说明。
+// 例外有两行，见用例上的说明：“会话关闭之后的重复投递”在 T14 里按新做法重写、结论不变；
+// “组合被别的实例持有”在 T14 的新规则下结论必然变，按用例上写的新预期改。
+// 执行器下单前的会话检查另有一张表（target 包的 TestExecutorSessionTable），影子目标的会话检查见 TestShadowTargetSessionTable。
 // 每一步断言四件事：投递结论（ACK、TERM、RETRY）、拒绝原因码、是否唤醒执行器、之后组合上的当前目标。
 
 // acceptanceTarget 描述一条目标消息。时间用相对“现在”的分钟数：存储层用真实时钟判断有效期，这里只取相对值，结果不依赖具体时刻。
@@ -116,11 +118,14 @@ func TestTargetAcceptanceTable(t *testing.T) {
 			first,
 			{note: "目标 ID 相同、权重不同", target: acceptanceTarget{id: "t1", weight: "3"}, decision: jetstream.TERM, code: "receipt_conflict", current: "t1"},
 		}},
+		// T14 的前置：先对旧会话（session-1）调 CloseTargetSession 推进 c_closed_through，再换会话；
+		// 只换归属挡不住旧会话的目标（新规则下同会话更晚一根的目标照常接受）。
 		{name: "换会话后旧会话的目标被拒绝", steps: []acceptanceStep{
 			first,
 			{note: "同一实例换了会话，旧会话更新一根的目标才到", before: acceptanceOwner("runner-1", "session-2"),
 				target: acceptanceTarget{id: "t2", barMinutes: 1, weight: "2"}, decision: jetstream.TERM, code: "superseded", current: "t1"},
 		}},
+		// T14 的前置：先对旧会话（session-1）调 CloseTargetSession，再让新会话的目标到达。
 		{name: "换会话后新会话的目标被接受", steps: []acceptanceStep{
 			{note: "旧会话较新一根的目标", target: acceptanceTarget{id: "t2", barMinutes: 1, weight: "2"}, decision: jetstream.ACK, woke: true, current: "t2"},
 			// 新会话的目标不与旧会话的 bar_end_time 比较，直接覆盖旧会话留下的目标行。
@@ -128,6 +133,8 @@ func TestTargetAcceptanceTable(t *testing.T) {
 				target: acceptanceTarget{id: "n1", session: "session-2", weight: "1"}, decision: jetstream.ACK, woke: true, current: "n1"},
 			{note: "旧会话的目标重投", target: acceptanceTarget{id: "t2", barMinutes: 1, weight: "2"}, decision: jetstream.TERM, code: "superseded", current: "n1"},
 		}},
+		// T14 的前置：会话关闭改成对旧会话（session-1）调 CloseTargetSession 推进 c_closed_through，不再靠释放归属；
+		// 关闭后目标行保留（有效期被缩短），“当前目标”一列仍是 t1。
 		{name: "会话关闭之后新到的旧会话目标被拒绝", steps: []acceptanceStep{
 			first,
 			{note: "会话关闭（没有新的持有者），旧会话下一根的目标才到", before: acceptanceOwner("", ""),
@@ -139,6 +146,11 @@ func TestTargetAcceptanceTable(t *testing.T) {
 			{note: "会话关闭后重投已接受过的目标", before: acceptanceOwner("", ""),
 				target: acceptanceTarget{id: "t1", weight: "1"}, decision: jetstream.TERM, code: "superseded", current: "t1"},
 		}},
+		// 例外行：现在按归属判断，别的实例持有组合时按 authorization_conflict 拒绝；T14 起 Trade 不再看归属、改按会话开始时刻
+		// （session_started_at）先后判断，这一行的结论必然变。T14 之后的预期：
+		//   - 组合上没有目标行时，目标直接接受（ACK、唤醒执行器、成为当前目标）；
+		//   - 组合上已有更晚会话的目标行时，较早会话的目标按 superseded 结束；
+		//   - authorization_conflict 只剩开始时刻相等、会话不同这一种（不应出现，按告警处理）。
 		{name: "组合被别的实例持有", steps: []acceptanceStep{
 			{note: "别的实例的会话持有组合", before: acceptanceOwner("runner-2", "session-9"),
 				target: acceptanceTarget{id: "t1", weight: "1"}, decision: jetstream.TERM, code: "authorization_conflict"},
