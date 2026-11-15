@@ -474,7 +474,7 @@
           "name": "GetLifecycle",
           "read_only": true,
           "retryable": true,
-          "timeout_ms": 60000
+          "timeout_ms": 330000
         },
         {
           "name": "GetTaskDetail",

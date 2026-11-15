@@ -13,6 +13,7 @@ require (
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/hostpolicy v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.12.1
@@ -125,3 +126,7 @@ replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsr
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 
 replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
+
+replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
+
+replace github.com/mooyang-code/moox/packages/netguard => ../../packages/netguard

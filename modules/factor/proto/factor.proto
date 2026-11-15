@@ -753,8 +753,11 @@ message EngineRuntimeStatus {
   repeated TaskWatermarkStatus watermarks = 10;
   // udf_modules 是引擎当前目录引用的各自定义算子模块的状态。
   repeated UdfModuleStatus udf_modules = 12;
-  // lifecycle 是模块级生命周期状态：管理端切换自定义算子版本之前，据此确认本次暂停已收敛。
+  // lifecycle 是模块级生命周期状态：管理端切换自定义算子版本之前，据此确认本次暂停已收敛；factor-mgr 也把它代报给 Monitor。
   EngineLifecycleStatus lifecycle = 11;
+  // ready 与 not_ready_reason 是引擎自己 /readyz 用的同一个就绪判断：引擎不经 packages/report 上报，由 factor-mgr 代报给 Monitor。
+  bool ready = 13;
+  string not_ready_reason = 14;
 }
 
 // EngineLifecycleStatus 是引擎模块自身的生命周期状态。
@@ -769,6 +772,11 @@ message EngineLifecycleStatus {
   bool quiesced = 4;
   // catchup_blocked 是恢复追赶的前置条件尚未满足的原因，满足或不在恢复追赶中为空。
   string catchup_blocked = 5;
+  // pause_kind（manual、system）与 pause_reason 是本次暂停的类型与原因，未暂停为空。
+  string pause_kind = 6;
+  string pause_reason = 7;
+  // catchup 是恢复追赶的进度（恢复追赶中才有）。
+  common.CatchupProgress catchup = 8;
 }
 
 message TaskWatermarkStatus {

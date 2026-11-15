@@ -127,16 +127,6 @@ func TestOverviewSortsAbnormalRowsFirst(t *testing.T) {
 	}
 }
 
-func TestMergeServiceHealthKeepsProbeAndReporterTimesSeparate(t *testing.T) {
-	reporterAt := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
-	checkedAt := reporterAt.Add(2 * time.Minute)
-	service := ServiceStatus{Status: "healthy", ReporterStatus: "healthy", LastSeenAt: reporterAt}
-	got := mergeServiceHealth(service, &domain.CheckResult{Success: true, Status: domain.CheckStatusOK, CheckedAt: checkedAt})
-	if !got.LastSeenAt.Equal(reporterAt) || !got.ProbeCheckedAt.Equal(checkedAt) {
-		t.Fatalf("last report = %s, want %s", got.LastSeenAt, reporterAt)
-	}
-}
-
 func TestDatasetStatusUsesMetricObservationAsLastReport(t *testing.T) {
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 	reportedAt := now.Add(-30 * time.Second)
@@ -439,100 +429,43 @@ func TestBuilderDoesNotTreatUnknownTimerReadbackAsUnavailable(t *testing.T) {
 	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
 }
 
-func TestBuilderDeploymentFailureOverridesFreshReporter(t *testing.T) {
+// 组件健康只看上报：新鲜的上报里报了未就绪，组件就是未就绪（down），原因带上上报里的说明。
+func TestBuilderNotReadyReportMarksComponentDown(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, repositories := openOverviewState(t, func(db *gorm.DB) {
 		if err := db.Create(&monmetrics.MetricService{
 			ServiceName: "storage-primary", InstanceID: "storage@node-a", BootID: "boot-a",
-			NodeID: "node-a", LastSeenAt: now,
+			NodeID: "node-a", LastSeenAt: now, Readiness: monmetrics.ReadinessNotReady, NotReadyReason: "数据库不可用",
 		}).Error; err != nil {
 			t.Fatal(err)
 		}
 	})
-	check := domain.Check{
-		SpaceID: "", CheckID: "deployment:node-a:storage-primary",
-		Name: "storage-primary@node-a", Kind: domain.CheckKindHTTP,
-		Source: domain.CheckSourceDeployment, Enabled: true,
-		Labels: `{"host_id":"node-a","component_id":"storage-primary"}`,
-	}
-	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
-		t.Fatal(err)
-	}
-	if err := repositories.Results.Insert(t.Context(), &domain.CheckResult{
-		ResultID: "storage-down", SpaceID: check.SpaceID, CheckID: check.CheckID,
-		Status: domain.CheckStatusDown, ErrorMessage: "readyz failed", CheckedAt: now,
-	}); err != nil {
-		t.Fatal(err)
-	}
 	seedServiceTopology(t, repositories, "node-a", "storage-primary", true)
-	got, err := (Builder{
-		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
-	}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Topology: repositories.Topology}).Build(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got.Services) != 1 || got.Services[0].Status != "down" ||
-		!strings.Contains(got.Services[0].Reason, "readyz failed") ||
-		got.Services[0].ReporterStatus != "healthy" {
+		!strings.Contains(got.Services[0].Reason, "数据库不可用") ||
+		got.Services[0].ReporterStatus != "healthy" || got.Services[0].Readiness != monmetrics.ReadinessNotReady {
 		t.Fatalf("services = %+v", got.Services)
 	}
 }
 
-func TestBuilderIncludesDeploymentServiceWithoutReporter(t *testing.T) {
-	query, repositories := openOverviewState(t, func(*gorm.DB) {})
-	check := domain.Check{
-		SpaceID: "", CheckID: "deployment:node-b:factor-mgr",
-		Name: "factor-mgr@node-b", Kind: domain.CheckKindHTTP,
-		Source: domain.CheckSourceDeployment, Enabled: true,
-		Labels: `{"host_id":"node-b","component_id":"factor-mgr"}`,
-	}
-	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
-		t.Fatal(err)
-	}
-	if err := repositories.Results.Insert(t.Context(), &domain.CheckResult{
-		ResultID: "factor-ready", SpaceID: check.SpaceID, CheckID: check.CheckID,
-		Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	seedServiceTopology(t, repositories, "node-b", "factor-mgr", true)
-	got, err := (Builder{
-		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
-	}).Build(t.Context(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Services) != 1 || got.Services[0].Status != "unknown" ||
-		got.Services[0].ReporterStatus != "missing" ||
-		!strings.Contains(got.Services[0].Reason, "reporter missing") {
-		t.Fatalf("services = %+v", got.Services)
-	}
-}
-
-func TestBuilderDoesNotRequireReporterFromHealthOnlyService(t *testing.T) {
-	query, repositories := openOverviewState(t, func(*gorm.DB) {})
-	check := domain.Check{
-		SpaceID: "", CheckID: "deployment:node-b:web-host",
-		Name: "web-host@node-b", Kind: domain.CheckKindHTTP,
-		Source: domain.CheckSourceDeployment, Enabled: true,
-		Labels: `{"host_id":"node-b","component_id":"web-host"}`,
-	}
-	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
-		t.Fatal(err)
-	}
-	if err := repositories.Results.Insert(t.Context(), &domain.CheckResult{
-		ResultID: "web-ready", SpaceID: check.SpaceID, CheckID: check.CheckID,
-		Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	seedServiceTopology(t, repositories, "node-b", "web-host", true)
-	got, err := (Builder{Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results}).Build(t.Context(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Services) != 1 || got.Services[0].Status != "healthy" || got.Services[0].ReporterStatus != "" {
-		t.Fatalf("services = %+v", got.Services)
+// 登记了部署却从没上报过的组件按“从未上报”处理，不论目录里的功能观测标记（不再有豁免）。
+func TestBuilderTreatsEveryDeploymentWithoutReportAsMissing(t *testing.T) {
+	for _, componentID := range []string{"factor-mgr", "egress-proxy", "web-host"} {
+		query, repositories := openOverviewState(t, func(*gorm.DB) {})
+		seedServiceTopology(t, repositories, "node-b", componentID, true)
+		got, err := (Builder{Metrics: query, Topology: repositories.Topology}).Build(t.Context(), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Services) != 1 || got.Services[0].Status != "unknown" ||
+			got.Services[0].ReporterStatus != "missing" ||
+			!strings.Contains(got.Services[0].Reason, "reporter missing") {
+			t.Fatalf("%s services = %+v", componentID, got.Services)
+		}
 	}
 }
 
@@ -875,11 +808,7 @@ func seedServiceTopology(t *testing.T, repositories *store.Repositories, hostID,
 		status = servicecatalog.Disabled
 	}
 	snapshot := domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(), Hosts: []domain.TopologyHost{{HostID: hostID, Address: "host.example.test", Status: servicecatalog.Enabled}}, Deployments: []domain.TopologyDeployment{{HostID: hostID, ComponentID: componentID, Status: status}}}
-	// Preserve the fixture's existing probe definitions when registering topology.
-	checks, err := repositories.Checks.List(t.Context(), store.ListChecksOptions{Source: domain.CheckSourceDeployment, Page: store.Page{PageSize: 500}})
-	require.NoError(t, err)
-	_, err = repositories.Topology.Reconcile(t.Context(), snapshot, checks)
-	require.NoError(t, err)
+	require.NoError(t, repositories.Topology.Reconcile(t.Context(), snapshot))
 }
 
 // 生产者按设计只产出部分结果（历史不足、预热）时，数据集显示降级与“积累中”，而不是“尚无成功运行 / 成功过期”；

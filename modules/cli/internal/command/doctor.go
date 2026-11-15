@@ -125,13 +125,12 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 				return err
 			}
 			prober := doctorcli.HTTPProber{Auth: auth}
-			// 外部程序（systemd 用户服务）与只能出站的主机：状态经 SSH（本机则直接执行）读取，健康经 control 中转探测。
+			// 外部程序（systemd 用户服务）：状态经 SSH（本机则直接执行）读取；健康只看 Monitor 收到的上报。
 			var systemd doctorcli.SystemdChecker
-			var relay *doctorcli.RelayProber
 			var deployRoot string
-			if remote := loadHostRemote(file, doctorCfg.NodeID, gateway); remote != nil {
+			if remote := loadHostRemote(file, doctorCfg.NodeID); remote != nil {
 				defer remote.Close()
-				systemd, relay = remote.Systemd(), remote.Relay(auth)
+				systemd = remote.Systemd()
 				deployRoot = remote.manifest.Paths.Resolved().DeployRoot
 			}
 			var reportValue core.Report
@@ -148,7 +147,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 					fmt.Fprintln(cmd.ErrOrStderr(), "提示：这台电脑没有部署目录，diagnose 只查本机；看目标机日志用 moox-cli setup logs --host <主机> --component <组件>")
 				}
 				reportValue, err = doctorcli.RunDiagnose(cmd.Context(), doctorcli.DiagnoseOptions{
-					NodeID: nodeID, CheckIDs: checks, Client: client, Prober: prober, Relay: relay, Systemd: systemd,
+					NodeID: nodeID, CheckIDs: checks, Client: client, Systemd: systemd,
 					HealthChecks: report.BuiltInModuleHealthChecks(),
 				})
 			}

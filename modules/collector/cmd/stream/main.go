@@ -88,7 +88,8 @@ func run(ctx context.Context, cfg *streamapp.Config) error {
 	if err != nil {
 		return fmt.Errorf("create collector-stream metrics reporter: %w", err)
 	}
-	go reportMetrics(runCtx, reporter)
+	reporter.SetReadiness(healthz.Readiness(state.Snapshot))
+	go reporter.Run(runCtx)
 	done := make(chan error, 1)
 	go func() { done <- server.Serve() }()
 	// /readyz：已应用 Collector 要求的计划版本，且全部市场的连接都已订阅完成。
@@ -110,26 +111,6 @@ func run(ctx context.Context, cfg *streamapp.Config) error {
 			return err
 		case <-ticker.C:
 			state.SetReady(app.Ready())
-		}
-	}
-}
-
-// metricsReportInterval 是运行指标上报间隔，与其他组件的 metrics 定时器一致。
-const metricsReportInterval = 30 * time.Second
-
-func reportMetrics(ctx context.Context, reporter *report.Handler) {
-	ticker := time.NewTicker(metricsReportInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			if err := reporter.Handle(callCtx); err != nil {
-				log.Warnf("collector-stream metrics report failed: %v", err)
-			}
-			cancel()
 		}
 	}
 }

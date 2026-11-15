@@ -3,6 +3,7 @@ package domain
 import (
 	"time"
 
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
@@ -103,6 +104,9 @@ type EngineStatus struct {
 	Lifecycle EngineLifecycle
 	// UDFModules 是引擎当前目录引用的各自定义算子模块（版本）的状态。
 	UDFModules []UDFModuleStatus
+	// Ready 与 NotReadyReason 是引擎 /readyz 用的同一个就绪判断，factor-mgr 代报给 Monitor。
+	Ready          bool
+	NotReadyReason string
 }
 
 // 自定义算子模块在引擎上的状态。
@@ -128,6 +132,10 @@ type EngineLifecycle struct {
 	QuiescedAt     time.Time
 	Quiesced       bool
 	CatchupBlocked string
+	// PauseKind（manual、system）与 PauseReason 是本次暂停的类型与原因；Catchup 是恢复追赶的进度。factor-mgr 把它们代报给 Monitor。
+	PauseKind   string
+	PauseReason string
+	Catchup     *lifecycle.Catchup
 }
 
 // SetWatermark 是一个任务的连续水位：BlockedSince 非零表示阻塞在 BlockedPeriod（还没补到的周期）上。

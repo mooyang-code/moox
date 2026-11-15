@@ -568,8 +568,8 @@ describe("systemStage", () => {
       label: "运行中",
       issues: []
     });
-    expect(systemStage({ system: { phase: "unknown", color: "red", health: "attention" } })?.label).toBe(
-      "状态未知 · 有模块探测不到"
+    expect(systemStage({ system: { phase: "unknown", color: "red", health: "attention", silent_modules: 1 } })?.label).toBe(
+      "状态未知 · 有模块停止上报"
     );
   });
 
@@ -598,13 +598,32 @@ describe("systemStage", () => {
     expect(systemStage(running, [reEnabled])).toMatchObject({ label: "运行中 · 1 个实例试运行", color: "yellow" });
   });
 
-  it("有模块探测不到时标红并列出", () => {
+  it("有模块停止上报时标红并列出", () => {
     const bad = systemStage({
-      system: { phase: "running", color: "red", health: "attention", issues: ["策略：探测不到（模块没有响应）"] }
+      system: { phase: "running", color: "red", health: "attention", silent_modules: 1, issues: ["策略服务：停止上报"] }
     });
-    expect(bad?.label).toBe("运行中 · 有模块探测不到");
+    expect(bad?.label).toBe("运行中 · 有模块停止上报");
     expect(bad?.color).toBe("red");
-    expect(bad?.issues).toEqual(["策略：探测不到（模块没有响应）"]);
+    expect(bad?.issues).toEqual(["策略服务：停止上报"]);
+  });
+
+  it("有模块未就绪时标红并写明原因（进程仍在上报，例如 Strategy 自检不过）", () => {
+    const bad = systemStage({
+      system: {
+        phase: "running",
+        color: "red",
+        health: "attention",
+        not_ready_modules: 1,
+        issues: ["策略服务：未就绪（出站 EventBus 未连接）"]
+      }
+    });
+    expect(bad?.label).toBe("运行中 · 有模块未就绪");
+    expect(bad?.color).toBe("red");
+    expect(bad?.issues).toEqual(["策略服务：未就绪（出站 EventBus 未连接）"]);
+    const both = systemStage({
+      system: { phase: "running", color: "red", health: "attention", not_ready_modules: 1, silent_modules: 1 }
+    });
+    expect(both?.label).toBe("运行中 · 有模块未就绪或停止上报");
   });
 
   it("暂停与部分暂停", () => {

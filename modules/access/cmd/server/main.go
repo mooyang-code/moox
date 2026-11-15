@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -87,11 +89,24 @@ func run(ctx context.Context, cfg config.Config) error {
 		response := state.Snapshot(ctx)
 		names, _ := missing.Load().([]string)
 		response.Details = map[string]any{"missing_services": names}
+		if !response.Ready && len(names) > 0 {
+			response.Reason = "目录里缺少这些服务的部署：" + strings.Join(names, "、")
+		}
 		return response
 	}
 	handler, err := healthz.WrapFromEnv(healthz.StandardMux(snapshot, promhttp.Handler()))
 	if err != nil {
 		return err
+	}
+	// 组件健康只看上报（设计 3.8）：每 30 秒经 EventBus 把指标快照与就绪判断（与 /readyz 同一个）报给 Monitor。
+	// 部署总会注入运行身份（MOOX_INSTANCE_ID、MOOX_NODE_ID）；没有身份时（本机测试）只记一条日志，不上报。
+	if reporter, err := report.NewHandler(report.DefaultConfig("access", "access")); err != nil {
+		log.Printf("access metrics reporter disabled: %v", err)
+	} else {
+		reporter.SetReadiness(healthz.Readiness(snapshot))
+		reportCtx, stopReport := context.WithCancel(ctx)
+		defer stopReport()
+		go reporter.Run(reportCtx)
 	}
 	if s.Service("trpc.moox.access.Health") == nil {
 		return errors.New("access health service is required")

@@ -23,7 +23,11 @@ func (s *Service) GetHostPolicy(ctx context.Context, _ *monitorpb.GetHostPolicyR
 		out = append(out, &monitorpb.HostPolicyChannel{ChannelType: channel.ChannelType, WebhookUrl: channel.WebhookURL, Secret: channel.Secret})
 	}
 	w := s.hostWatchdog
-	return &monitorpb.GetHostPolicyRsp{RetInfo: success(), Channels: out, Watchdog: &monitorpb.HostWatchdogPolicy{
+	startedAt := ""
+	if !s.startedAt.IsZero() {
+		startedAt = s.startedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return &monitorpb.GetHostPolicyRsp{RetInfo: success(), Channels: out, MonitorStartedAt: startedAt, Watchdog: &monitorpb.HostWatchdogPolicy{
 		Disabled:          w.Disabled,
 		MergeWindow:       durationText(w.MergeWindow),
 		CrashLoopFailures: int32(w.CrashLoopFailures),

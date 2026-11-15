@@ -10,13 +10,25 @@ type MetricService struct {
 	NodeID      string    `gorm:"column:c_node_id"`
 	Version     string    `gorm:"column:c_version"`
 	LastSeenAt  time.Time `gorm:"column:c_last_seen_at"`
+	// Readiness 是最近一次上报的就绪判断：ready、not_ready，空表示上报方没有就绪判断（云函数）。
+	Readiness      string `gorm:"column:c_readiness"`
+	NotReadyReason string `gorm:"column:c_not_ready_reason"`
+	// LifecycleJSON 是最近一次上报的模块级生命周期（metricspb.ModuleLifecycle 的 protojson），没有时为空。
+	LifecycleJSON string `gorm:"column:c_lifecycle_json"`
 	// IsStale is derived on read from LastSeenAt; it is not stored.
-	IsStale   bool      `gorm:"-"`
+	IsStale bool `gorm:"-"`
+	// CreatedAt 是这次启动第一次上报的时间（写入时取上报时间），反复重启按它数。
 	CreatedAt time.Time `gorm:"column:c_ctime"`
 	UpdatedAt time.Time `gorm:"column:c_mtime"`
 }
 
 func (MetricService) TableName() string { return "t_monitor_metric_services" }
+
+// 就绪取值。
+const (
+	ReadinessReady    = "ready"
+	ReadinessNotReady = "not_ready"
+)
 
 type MetricSeries struct {
 	ID          uint64    `gorm:"column:c_id;primaryKey"`

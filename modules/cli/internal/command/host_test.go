@@ -65,7 +65,7 @@ func useHostFake(t *testing.T, fake *hostFakeSSH) *hostRemote {
 	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{
 		"storage": {Address: "198.51.100.20", SSH: setupconfig.SSHConfig{Port: 22, Username: "ubuntu"}},
 	}}
-	remote := newHostRemote(manifest, "", nil)
+	remote := newHostRemote(manifest, "")
 	remote.dial = func(context.Context, setupconfig.Host) (setupssh.Client, error) { return fake, nil }
 	previous := openHostRemoteForCommand
 	openHostRemoteForCommand = func(string) (*hostRemote, error) { return remote, nil }

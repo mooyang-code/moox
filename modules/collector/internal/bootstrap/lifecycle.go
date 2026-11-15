@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report/logsink"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -265,16 +264,4 @@ func newCollectorLifecycle(dbPath string, control *collectorControl) (*lifecycle
 			},
 		},
 	})
-}
-
-// withCollectorLifecycle 把模块的生命周期状态放进健康检查响应，不改变就绪判定。
-func withCollectorLifecycle(snapshot healthz.SnapshotFunc, c *lifecycle.Controller) healthz.SnapshotFunc {
-	return func(ctx context.Context) healthz.Response {
-		rsp := snapshot(ctx)
-		if rsp.Details == nil {
-			rsp.Details = map[string]any{}
-		}
-		rsp.Details["lifecycle"] = c.State()
-		return rsp
-	}
 }

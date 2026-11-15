@@ -10,7 +10,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -30,12 +29,15 @@ type Runtime struct {
 	Repositories   *store.Repositories
 	MetricStores   *monmetrics.Stores
 	HostSamples    *hostmetrics.SampleStore
-	Scheduler      *scheduler.Scheduler
+	// checkRoundAt 是检查定时器最近一次完整成功一轮的时刻（Unix 纳秒，0 表示还没有成功过），见 checkRound。
+	checkRoundAt atomic.Int64
 	// businessEvaluation 为 true 表示有业务评估在跑；businessEvaluatedAt 是它最近一次成功结束的时刻（Unix 纳秒，0 表示还没有成功过）。
 	businessEvaluation  bool
 	businessEvaluatedAt atomic.Int64
 	// klineFreshness 是 K 线新鲜度评估器（没有评估器时为空）；清理失效检查时用它识别会被补建的 K 线检查。
 	klineFreshness *monmetrics.KlineFreshnessEvaluator
+	// readiness 是 Monitor 自己 /readyz 用的就绪判断（健康检查注册时设置），随指标上报带给 Monitor。
+	readiness func(context.Context) (bool, string)
 	// life 是 Monitor 的生命周期控制器（在健康检查注册时创建，创建之前为空）：暂停时告警静默，只记录、不推送。
 	life atomic.Pointer[lifecycle.Controller]
 	// mutes 记录进入静默的时间，静默结束时据此补发汇总。

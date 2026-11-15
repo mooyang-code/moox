@@ -200,12 +200,10 @@ func TestRelayOpenStreamAllowlistAndReplay(t *testing.T) {
 	_, err = h.open("host-gateway@control", servicecatalog.HostGatewayRemotePort)
 	require.ErrorContains(t, err, "not allowed")
 	view := h.state.Load()
-	target, ok := view.Relay("home")
+	_, ok := view.Relay("home")
 	require.True(t, ok)
-	require.Greater(t, len(target.Ports), 1)
-	health := target.Ports[1].Port
-	_, err = h.open("console", health)
-	require.ErrorContains(t, err, "not allowed", "健康端口只对 Monitor 开放")
+	_, err = h.open("monitor", 11012)
+	require.ErrorContains(t, err, "not allowed", "组件健康端口不经中转（组件健康只看上报）")
 
 	// 同一份签名前导重放：第二次被拒绝。
 	signed, err := protocol.Sign(testsnapshot.Credential("monitor"), protocol.MethodOpen, "control", protocol.Open{HostID: "home", Port: servicecatalog.HostGatewayRemotePort}, time.Now())

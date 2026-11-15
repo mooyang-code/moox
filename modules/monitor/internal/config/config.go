@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	watchdogpkg "github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -57,17 +56,14 @@ type InstanceConfig struct {
 	InstanceID string `yaml:"instance_id"`
 }
 
+// SchedulerConfig 是检查结果的保留天数（检查由检查定时器每 30 秒评估，没有单独的调度并发）。
 type SchedulerConfig struct {
 	ResultRetentionDays int `yaml:"result_retention_days"`
-	MaxConcurrency      int `yaml:"max_concurrency"`
 }
 
+// DeploymentConfig 控制是否从 Admin 同步部署拓扑（每台主机应该有哪些组件）；组件健康只看上报，不做探测。
 type DeploymentConfig struct {
-	Enabled bool                          `yaml:"enabled"`
-	HTTPS   map[string]domain.HTTPSConfig `yaml:"https"`
-	// LocalHostID 是 Monitor 自己所在的部署主机 ID；该主机上的组件健康检查直接连 127.0.0.1。
-	// 主机没有私网地址时对外地址从本机访问常常不通（云厂商不回环公网 IP），会把健康的服务误报为超时。
-	LocalHostID string `yaml:"local_host_id"`
+	Enabled bool `yaml:"enabled"`
 }
 
 // HostPolicyConfig 是经 GetHostPolicy 下发给各主机的主机策略里，除告警渠道以外的部分。
@@ -168,14 +164,6 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
-	for id, target := range cfg.Deployment.HTTPS {
-		for _, path := range []*string{&target.CAFile, &target.CABaseline} {
-			if *path != "" && !filepath.IsAbs(*path) {
-				*path = filepath.Join(filepath.Dir(absolutePath), *path)
-			}
-		}
-		cfg.Deployment.HTTPS[id] = target
-	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -202,7 +190,6 @@ func Default() *Config {
 		},
 		Scheduler: SchedulerConfig{
 			ResultRetentionDays: 14,
-			MaxConcurrency:      16,
 		},
 		Deployment: DeploymentConfig{Enabled: true},
 		Alert: AlertConfig{
@@ -252,9 +239,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Scheduler.ResultRetentionDays == 0 {
 		c.Scheduler.ResultRetentionDays = defaults.Scheduler.ResultRetentionDays
-	}
-	if c.Scheduler.MaxConcurrency == 0 {
-		c.Scheduler.MaxConcurrency = defaults.Scheduler.MaxConcurrency
 	}
 	if c.Alert.SendTimeoutSeconds == 0 {
 		c.Alert.SendTimeoutSeconds = defaults.Alert.SendTimeoutSeconds
@@ -424,11 +408,6 @@ func (c *Config) Validate() error {
 	}
 	if c.MarketHealth.TimerCoordinationPendingGrace <= 0 {
 		return fmt.Errorf("market_health.timer_coordination_pending_grace must be positive")
-	}
-	for id, target := range c.Deployment.HTTPS {
-		if err := target.Validate(); err != nil {
-			return fmt.Errorf("deployment.https.%s: %w", id, err)
-		}
 	}
 	if c.Deployment.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
 		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when deployment monitoring is enabled")

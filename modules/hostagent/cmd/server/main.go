@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"slices"
 
 	"github.com/mooyang-code/moox/modules/hostagent/internal/app"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
@@ -19,6 +20,9 @@ import (
 )
 
 var Version = "dev"
+
+// monitorService 是拉取主机策略的服务。
+const monitorService = "trpc.moox.monitor.MonitorMgr"
 
 func main() {
 	ctx := trpc.BackgroundContext()
@@ -68,7 +72,7 @@ func startPolicySync(ctx context.Context, cfg *config.Config) func() {
 	}
 	syncer, err := policysync.New(cfg.HostPolicyPath, func(ctx context.Context) (*monitorpb.GetHostPolicyRsp, error) {
 		rsp := &monitorpb.GetHostPolicyRsp{}
-		err := gateway.Invoke(ctx, "trpc.moox.monitor.MonitorMgr", "GetHostPolicy", &monitorpb.GetHostPolicyReq{}, rsp)
+		err := gateway.Invoke(ctx, monitorService, "GetHostPolicy", &monitorpb.GetHostPolicyReq{}, rsp)
 		return rsp, err
 	})
 	if err != nil {
@@ -76,6 +80,10 @@ func startPolicySync(ctx context.Context, cfg *config.Config) func() {
 		log.Errorf("host-agent host policy sync disabled: %v", err)
 		return func() {}
 	}
+	// 控制机或 Monitor 不可达、Monitor 反复重启这两条由非控制机推送：本机部署了 Monitor 时不推（按网关目录判断）。
+	syncer.SetWatch(policysync.NewWatch(gateway.LocalHostID(), cfg.HostPolicyPath, func() bool {
+		return slices.Contains(gateway.Directory().Services[monitorService], gateway.LocalHostID())
+	}, log.Warnf))
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {

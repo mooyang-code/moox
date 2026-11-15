@@ -18,14 +18,15 @@ export interface HealthComponent {
   name?: string;
   status?: HealthStatus;
   reason?: string;
-  probe?: HealthSignal;
+  /** 组件健康只看上报：上报是否新鲜。 */
   reporter?: HealthSignal;
   instances?: HealthReporter[];
   status_since?: string;
-  probe_url?: string;
-  recent_probes?: HealthSignal[];
-  /** 模块自己的生命周期状态；模块没有生命周期接口时没有这一项。 */
+  /** 模块自己的生命周期状态；模块没有生命周期接口或已停止上报时没有这一项。 */
   lifecycle?: HealthLifecycle;
+  /** 最近一次上报的就绪判断：ready、not_ready，空表示上报里没有；not_ready_reason 是未就绪的原因。 */
+  readiness?: "" | "ready" | "not_ready";
+  not_ready_reason?: string;
 }
 /** 模块的生命周期状态：运行、暂停、恢复追赶。 */
 export type LifecycleStage = "running" | "paused" | "resuming";
@@ -60,7 +61,7 @@ export interface HealthLifecycle {
   pause?: HealthPause;
   catchup?: HealthCatchup;
 }
-/** 系统状态：健康面（有生命周期的模块是否都探测得到）与运行阶段（只由用户命令推进）。 */
+/** 系统状态：健康面（有生命周期的模块是否都在上报、都已就绪）与运行阶段（只由用户命令推进）。 */
 export interface HealthSystem {
   health?: "healthy" | "attention";
   phase?: "unknown" | "running" | "paused" | "partially_paused" | "resuming";
@@ -75,6 +76,9 @@ export interface HealthSystem {
   resuming_modules?: number;
   caught_up_modules?: number;
   catchup_notes?: string[];
+  /** 带生命周期的模块里上报了未就绪的个数、停止上报（或从未上报）的个数。 */
+  not_ready_modules?: number;
+  silent_modules?: number;
 }
 export interface HealthObject {
   type?: "component" | "dataset" | "host" | "business";

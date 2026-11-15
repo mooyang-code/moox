@@ -16,12 +16,14 @@ import (
 
 // Response is the shared process-level health payload exposed by MooX services.
 type Response struct {
-	Module                  string         `json:"module"`
-	Service                 string         `json:"service,omitempty"`
-	InstanceID              string         `json:"instance_id,omitempty"`
-	NodeID                  string         `json:"node_id,omitempty"`
-	Ready                   bool           `json:"ready"`
-	Status                  string         `json:"status"`
+	Module     string `json:"module"`
+	Service    string `json:"service,omitempty"`
+	InstanceID string `json:"instance_id,omitempty"`
+	NodeID     string `json:"node_id,omitempty"`
+	Ready      bool   `json:"ready"`
+	Status     string `json:"status"`
+	// Reason 是未就绪的原因（组件知道时填写）；没填时由 NotReadyReason 从 Details 推断。
+	Reason                  string         `json:"reason,omitempty"`
 	Version                 string         `json:"version,omitempty"`
 	GitCommit               string         `json:"git_commit,omitempty"`
 	BinarySHA256            string         `json:"binary_sha256,omitempty"`
@@ -84,6 +86,9 @@ func (s *State) Snapshot(ctx context.Context) Response {
 			if rsp.Status == "ok" {
 				rsp.Status = "degraded"
 			}
+			if rsp.Reason == "" {
+				rsp.Reason = startingReason
+			}
 		}
 		s.enrich(&rsp)
 		return rsp
@@ -91,8 +96,15 @@ func (s *State) Snapshot(ctx context.Context) Response {
 	if s == nil {
 		return Response{Ready: false, Status: "error", Time: time.Now()}
 	}
-	return Base(s.Module, s.InstanceID, s.Version, s.GitCommit, s.StartedAt, s.Ready())
+	rsp := Base(s.Module, s.InstanceID, s.Version, s.GitCommit, s.StartedAt, s.Ready())
+	if !rsp.Ready {
+		rsp.Reason = startingReason
+	}
+	return rsp
 }
+
+// startingReason 是进程还没有标记为就绪（SetReady）时的未就绪原因。
+const startingReason = "启动尚未完成"
 
 func (s *State) enrich(rsp *Response) {
 	if s == nil || rsp == nil {

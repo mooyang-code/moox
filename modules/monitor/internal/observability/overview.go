@@ -32,14 +32,17 @@ const (
 type ServiceStatus struct {
 	NodeID, ServiceName, InstanceID, Status, Reason string
 	LastSeenAt                                      time.Time
-	ReporterStatus                                  string
-	Enabled                                         bool
-	ProbeStatus, ProbeReason, ProbeRawError         string
-	ProbeCheckedAt                                  time.Time
-	Instances                                       []ReporterInstance
-	ProbeURL                                        string
-	ProbeHistory                                    []domain.CheckResult
-	// Lifecycle 是最近一次探测的健康响应里带的生命周期状态；模块没有上报时为 nil。
+	// Source 是健康的来源：reporter、host_snapshot、delegated（见 SourceReporter 等）。
+	Source string
+	// ReporterStatus 是上报的新鲜度：healthy、stale（停止上报）、missing（从未上报）。
+	ReporterStatus string
+	Enabled        bool
+	// Readiness 是最近一次上报的就绪判断（ready、not_ready，空表示上报里没有）；NotReadyReason 是未就绪的原因。
+	Readiness, NotReadyReason string
+	// BootChanges 是最近 10 分钟里这个组件的启动标识变了几次（“反复重启”检查用）。
+	BootChanges int
+	Instances   []ReporterInstance
+	// Lifecycle 是最近一次上报带的模块级生命周期；上报不新鲜或模块没有生命周期时为 nil。
 	Lifecycle *LifecycleStatus
 }
 
@@ -154,13 +157,13 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	}
 	out := Overview{GeneratedAt: now}
 	var err error
-	if out.Services, out.Unregistered, out.Topology, err = b.buildServices(ctx, now); err != nil {
-		return Overview{}, err
-	}
-	out.TopologyKnown = out.Topology != nil
 	if out.Hosts, err = b.buildHosts(ctx, now); err != nil {
 		return Overview{}, err
 	}
+	if out.Services, out.Unregistered, out.Topology, err = b.buildServices(ctx, now, out.Hosts); err != nil {
+		return Overview{}, err
+	}
+	out.TopologyKnown = out.Topology != nil
 	if out.Datasets, err = b.buildDatasets(ctx, spaceID, now); err != nil {
 		return Overview{}, err
 	}
@@ -1134,7 +1137,7 @@ func parseOverviewFrequency(raw string) time.Duration {
 func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]BusinessStatus, error) {
 	out := make([]BusinessStatus, 0)
 	if b.Checks != nil && b.Results != nil {
-		checks, err := b.Checks.ListEnabledKinds(ctx, spaceID, []string{"market_canary", "subject_tag", "balance", "module", "kline_freshness", "console-page"}, 1501)
+		checks, err := b.Checks.ListEnabledKinds(ctx, spaceID, []string{"market_canary", "subject_tag", "balance", "module", "kline_freshness"}, 1501)
 		if err != nil {
 			return nil, err
 		}
@@ -1583,7 +1586,7 @@ func businessKind(check domain.Check) string {
 		return ""
 	}
 	switch kind {
-	case "market_canary", "subject_tag", "balance", "trade_attention", "event_center_attention", "collector_attention", "module", "kline_freshness", "console-page":
+	case "market_canary", "subject_tag", "balance", "trade_attention", "event_center_attention", "collector_attention", "module", "kline_freshness":
 		return kind
 	default:
 		return ""
@@ -1593,8 +1596,6 @@ func businessKind(check domain.Check) string {
 func businessModule(checkID string) string {
 	kind, id, _ := strings.Cut(checkID, ":")
 	switch kind {
-	case "console-page":
-		return "console-proxy"
 	case "market_canary", "subject_tag", "kline_freshness":
 		return "collector"
 	case "balance", "trade_attention":

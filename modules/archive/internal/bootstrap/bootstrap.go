@@ -15,6 +15,8 @@ import (
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/lifecycle"
+	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
 	"github.com/prometheus/client_golang/prometheus"
@@ -89,10 +91,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *R
 	if err := registerTimer(s, maintainService, "archive_maintain", maintainTimeout, gated(life, "archive_maintain", svc.Maintain)); err != nil {
 		return nil, err
 	}
-	if err := registerMetricsReporter(s, svc); err != nil {
+	if err := registerMetricsReporter(s, svc, healthz.Readiness(runtime.health.Snapshot), life); err != nil {
 		return nil, err
 	}
-	runtime.health.SnapshotFunc = withLifecycle(runtime.healthSnapshot(), life)
+	runtime.health.SnapshotFunc = runtime.healthSnapshot()
 	if err := archivehealth.Register(s.Service(healthService), runtime.health); err != nil {
 		return nil, fmt.Errorf("register archive health service: %w", err)
 	}
@@ -110,11 +112,24 @@ func registerTimer(s *server.Server, service, name string, timeout time.Duration
 }
 
 // registerMetricsReporter 每 30 秒评估一次归档 worker 的在线状态、对象存储可用状态与各任务的健康等级并上报指标快照，Monitor 据此告警。
-func registerMetricsReporter(s *server.Server, svc *service.Service) error {
+// 上报同时带上 archive-mgr 自己的就绪判断与模块级生命周期，以及代归档 worker 上报的一行（worker 只给管理端发心跳）。
+func registerMetricsReporter(s *server.Server, svc *service.Service, readiness func(context.Context) (bool, string), life *lifecycle.Controller) error {
 	handler, err := report.NewHandler(report.DefaultConfig("archive", "archive-mgr"))
 	if err != nil {
 		return fmt.Errorf("create archive metrics reporter: %w", err)
 	}
+	handler.SetReadiness(readiness)
+	handler.SetLifecycle(life.ReportState)
+	handler.SetDelegates(func(ctx context.Context) []*metricspb.DelegatedReport {
+		worker, err := svc.DelegatedWorkerReport(ctx)
+		if err != nil {
+			log.WarnContextf(ctx, "archive worker delegated report not evaluated: %v", err)
+		}
+		if worker == nil {
+			return nil
+		}
+		return []*metricspb.DelegatedReport{worker}
+	})
 	presence, err := report.NewWorkerPresence(prometheus.DefaultRegisterer, "archive")
 	if err != nil {
 		return fmt.Errorf("create archive worker presence metric: %w", err)

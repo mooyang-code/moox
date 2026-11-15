@@ -185,8 +185,7 @@ describe("deployment page", () => {
     await flushPromises();
     expect(page.find(".drawer").exists()).toBe(false);
   });
-  it("preserves independent probe and Reporter errors in component details", async () => {
-    const probeError = "probe failed\n原始探测错误";
+  it("shows the reporter error in component details; health comes only from reports", async () => {
     const reporterError = "reporter missing\n原始上报错误";
     vi.mocked(monitorApi.getOverview).mockResolvedValue({
       overview: {
@@ -196,7 +195,6 @@ describe("deployment page", () => {
             host_id: "storage",
             component_id: "access",
             status: "down",
-            probe: { status: "down", raw_error: probeError },
             reporter: { status: "unknown", raw_error: reporterError }
           }
         ]
@@ -208,7 +206,8 @@ describe("deployment page", () => {
         .get(".drawer")
         .findAll("pre")
         .map(item => item.text())
-    ).toEqual([probeError, reporterError]);
+    ).toEqual([reporterError]);
+    expect(page.get(".drawer").text()).not.toContain("主动探测");
   });
   it("keeps unknown locator targets explicit instead of selecting a different host", async () => {
     const { page } = await render({ host_id: "missing", component_id: "access" });

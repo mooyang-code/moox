@@ -225,28 +225,23 @@
             <dd>{{ detail.row.definition?.scope }} / {{ detail.row.definition?.replicas }}</dd>
             <dt>端口</dt>
             <dd>{{ componentPorts(detail.row.definition).join(", ") || "无监听端口" }}</dd>
-            <dt>健康检查</dt>
+            <dt>健康端口</dt>
             <dd>
               {{ detail.row.definition?.health.kind
               }}<span v-if="detail.row.definition?.health.port"> :{{ detail.row.definition.health.port }}</span>
-              {{ detail.row.health?.probe_url }}
             </dd>
             <dt>当前健康</dt>
-            <dd>{{ statusLabel(detail.row.status) }} · {{ detail.row.health?.reason || "暂无健康观测" }}</dd>
-            <dt>主动探测 / Reporter</dt>
-            <dd>{{ statusLabel(detail.row.health?.probe?.status) }} / {{ statusLabel(detail.row.health?.reporter?.status) }}</dd>
+            <dd>{{ statusLabel(detail.row.status) }} · {{ detail.row.health?.reason || "暂无上报" }}</dd>
+            <dt>上报</dt>
+            <dd>{{ statusLabel(detail.row.health?.reporter?.status) }}</dd>
             <dt>登记 / 更新</dt>
             <dd>
               {{ formatInstant(detail.row.deployment.created_at, displayZone) }} /
               {{ formatInstant(detail.row.deployment.updated_at, displayZone) }}
             </dd>
           </dl>
-          <section v-if="detail.row.health?.probe?.raw_error">
-            <h4>主动探测</h4>
-            <RawError :value="detail.row.health.probe.raw_error" />
-          </section>
           <section v-if="detail.row.health?.reporter?.raw_error">
-            <h4>Reporter</h4>
+            <h4>上报</h4>
             <RawError :value="detail.row.health.reporter.raw_error" />
           </section>
           <section v-for="service in detail.row.definition?.services || []" :key="service.path" class="service-detail">

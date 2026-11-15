@@ -1,10 +1,13 @@
 package report
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events"
@@ -43,7 +46,7 @@ func DefaultConfig(module, serviceName string) Config {
 		ServiceName:          serviceName,
 		InstanceID:           firstEnv("MOOX_INSTANCE_ID"),
 		NodeID:               firstEnv("MOOX_NODE_ID"),
-		BootID:               firstEnv("MOOX_BOOT_ID"),
+		BootID:               processBootID(),
 		Version:              firstEnv("MOOX_VERSION", "MOOX_SERVICE_VERSION"),
 		EventBusURL:          firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_URL", "NATS_URL"),
 		CredentialFile:       firstEnv("MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE"),
@@ -125,13 +128,34 @@ func (c Config) validateIdentity() error {
 	for _, identity := range []struct{ name, value string }{
 		{name: "MOOX_INSTANCE_ID", value: c.InstanceID},
 		{name: "MOOX_NODE_ID", value: c.NodeID},
-		{name: "MOOX_BOOT_ID", value: c.BootID},
 	} {
 		if strings.TrimSpace(identity.value) == "" {
 			return fmt.Errorf("metrics reporter identity requires %s", identity.name)
 		}
 	}
 	return nil
+}
+
+var (
+	bootIDOnce sync.Once
+	bootID     string
+)
+
+// processBootID 是本进程的启动标识：部署注入了 MOOX_BOOT_ID 就用它，否则在进程内生成一次随机值。
+// 同一进程里的多个上报共用这一个值，Monitor 按它的变化数启动次数（“反复重启”检查）。
+func processBootID() string {
+	bootIDOnce.Do(func() {
+		if bootID = firstEnv("MOOX_BOOT_ID"); bootID != "" {
+			return
+		}
+		var raw [16]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			bootID = strconv.FormatInt(time.Now().UnixNano(), 36)
+			return
+		}
+		bootID = hex.EncodeToString(raw[:])
+	})
+	return bootID
 }
 
 func firstEnv(names ...string) string {

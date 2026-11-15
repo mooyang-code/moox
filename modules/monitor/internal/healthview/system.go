@@ -39,8 +39,8 @@ var lifecycleModules = map[string]bool{"collector": true, "factor-engine": true,
 // systemPausable 是系统级暂停（moox-cli system pause）覆盖的模块（组件 ID）。
 var systemPausable = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true}
 
-// projectSystem 汇总系统状态（设计 3.8）：
-//   - 健康面：有生命周期接口的模块探测不到时标红，并列出模块；
+// projectSystem 汇总系统状态（设计 3.8），数据全部来自各模块的上报：
+//   - 健康面：有生命周期接口的模块停止上报（或从未上报）、上报了未就绪时标红，并列出模块与原因；
 //   - 运行阶段：各模块只有运行、暂停、恢复追赶三种状态。有模块恢复追赶 → resuming（含「已追平待放行」）；
 //     系统暂停覆盖的模块全部暂停 → paused，部分暂停 → partially_paused；否则 running。
 //
@@ -51,26 +51,42 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 		l        *pb.HealthLifecycle
 	}
 	var modules []module
-	var unreachable []string
+	// silent 是停止上报（或从未上报）的模块，notReady 是上报了未就绪的模块，都是“模块：说明”。
+	var silent, notReady []string
+	counted := 0
 	for _, c := range components {
-		if c.GetLifecycle() == nil && lifecycleModules[c.GetComponentId()] && (c.GetStatus() == "down" || c.GetStatus() == "unknown") {
-			// 有生命周期接口的模块探测不到：它的生命周期状态读不出来，但不能因此从系统汇总里消失（否则其余模块还在跑时首页仍是绿色）。
-			unreachable = append(unreachable, firstNonEmpty(c.GetName(), c.GetComponentId()))
+		if c.GetStatus() == "disabled" {
 			continue
 		}
+		name := firstNonEmpty(c.GetName(), c.GetComponentId())
+		issue := false
+		if lifecycleModules[c.GetComponentId()] {
+			switch {
+			case c.GetReporter().GetStatus() != "healthy":
+				// 它的生命周期状态读不出来，但不能因此从系统汇总里消失（否则其余模块还在跑时首页仍是绿色）。
+				silent, issue = append(silent, name+"：停止上报"), true
+			case c.GetReadiness() == "not_ready":
+				notReady, issue = append(notReady, name+"：未就绪（"+firstNonEmpty(c.GetNotReadyReason(), "组件报告未就绪")+"）"), true
+			}
+		}
 		if c.GetLifecycle() != nil {
-			modules = append(modules, module{id: c.GetComponentId(), name: firstNonEmpty(c.GetName(), c.GetComponentId()), l: c.GetLifecycle()})
+			modules = append(modules, module{id: c.GetComponentId(), name: name, l: c.GetLifecycle()})
+		}
+		if c.GetLifecycle() != nil || issue {
+			counted++
 		}
 	}
-	if len(modules) == 0 && len(unreachable) == 0 {
+	if counted == 0 {
 		return nil
 	}
 	sort.Slice(modules, func(i, j int) bool { return modules[i].name < modules[j].name })
-	sort.Strings(unreachable)
-	out := &pb.HealthSystem{Health: "healthy", Phase: "running", ModuleCount: int32(len(modules) + len(unreachable)), PauseKinds: map[string]int32{}}
-	for _, name := range unreachable {
+	sort.Strings(silent)
+	sort.Strings(notReady)
+	out := &pb.HealthSystem{Health: "healthy", Phase: "running", ModuleCount: int32(counted), PauseKinds: map[string]int32{},
+		NotReadyModules: int32(len(notReady)), SilentModules: int32(len(silent))}
+	if len(silent)+len(notReady) > 0 {
 		out.Health = "attention"
-		out.Issues = append(out.Issues, fmt.Sprintf("%s：探测不到（模块没有响应）", name))
+		out.Issues = append(append(out.Issues, silent...), notReady...)
 	}
 	if len(modules) == 0 {
 		out.Phase = "unknown"

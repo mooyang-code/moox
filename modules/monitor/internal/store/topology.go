@@ -22,37 +22,21 @@ type topologyRow struct {
 
 func (topologyRow) TableName() string { return "t_monitor_topology" }
 
-// Reconcile commits registration and its probe definitions together. A failed
-// discovery or probe collision cannot leave the overview with half a topology.
-func (r *TopologyRepository) Reconcile(ctx context.Context, snapshot domain.TopologySnapshot, checks []domain.Check) (int, error) {
+// Reconcile 保存一份完整的部署拓扑（这台主机应该有哪些组件）；拓扑不完整时不写入，概览不会看到半份拓扑。
+func (r *TopologyRepository) Reconcile(ctx context.Context, snapshot domain.TopologySnapshot) error {
 	if err := snapshot.Validate(); err != nil {
-		return 0, err
+		return err
 	}
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if len(encoded) > maxTopologyBytes {
-		return 0, fmt.Errorf("topology snapshot exceeds size limit")
+		return fmt.Errorf("topology snapshot exceeds size limit")
 	}
-	count := 0
-	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("UPDATE t_monitor_topology SET c_id = c_id WHERE 0").Error; err != nil {
-			return err
-		}
-		var err error
-		count, err = reconcileDeploymentChecks(tx, checks)
-		if err != nil {
-			return err
-		}
-		return tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "c_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_snapshot_json"}),
-		}).Create(&topologyRow{ID: 1, Snapshot: string(encoded)}).Error
-	})
-	if err != nil {
-		return 0, err
-	}
-	return count, nil
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "c_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_snapshot_json"}),
+	}).Create(&topologyRow{ID: 1, Snapshot: string(encoded)}).Error
 }
 
 // Snapshot returns nil until a complete discovery has succeeded. An absent

@@ -27,8 +27,11 @@ func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, r
 			return fmt.Errorf("monitor lifecycle state failed to open: %w", err)
 		}
 		runtime.life.Store(life)
-		state.SnapshotFunc = withMonitorLifecycle(state.SnapshotFunc, life)
 		runtime.Go(func() { life.Run(ctx, monitorLifecycleRefresh) })
+	}
+	if runtime != nil {
+		// 上报带给 Monitor 自己的就绪与 /readyz 是同一个判断。
+		runtime.readiness = healthz.Readiness(state.Snapshot)
 	}
 	healthAuth, err := healthz.NewAuthenticator(healthz.AuthConfig{
 		Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey,
@@ -58,8 +61,7 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime) healthz.Snapsho
 			activeChecks, checksErr = runtime.Repositories.Checks.CountEnabled(ctx)
 		}
 		databaseReady := runtime != nil && runtime.Store != nil && runtime.Store.Ping(ctx) == nil && runtime.Repositories != nil && checksErr == nil
-		schedulerReady := runtime != nil && runtime.Scheduler != nil
-		ready := databaseReady && schedulerReady
+		ready := databaseReady
 		startedAt := time.Time{}
 		if runtime != nil {
 			startedAt = runtime.StartedAt
@@ -67,7 +69,6 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime) healthz.Snapsho
 		rsp := healthz.Base("monitor", cfg.Instance.InstanceID, "", "", startedAt, ready)
 		rsp.Details = map[string]any{
 			"database":           map[bool]string{true: "ok", false: "error"}[databaseReady],
-			"scheduler_ok":       schedulerReady,
 			"active_checks":      activeChecks,
 			"deployment_enabled": cfg.Deployment.Enabled,
 		}
@@ -95,7 +96,7 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime) healthz.Snapsho
 		if evaluationReason != "" {
 			rsp.Details["evaluation_error"] = evaluationReason
 		}
-		ready = databaseReady && schedulerReady && ingestReady && reporterReady && evaluationReady
+		ready = databaseReady && ingestReady && reporterReady && evaluationReady
 		rsp.Ready = ready
 		if ready {
 			rsp.Status = "ok"
@@ -106,28 +107,27 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime) healthz.Snapsho
 		if checksErr != nil {
 			rsp.Details["database_checks_error"] = checksErr.Error()
 		}
-		rsp.Details["scheduler_ready"] = schedulerReady
 		return rsp
 	}
 }
 
-// evaluationStaleAfter 内没有一次完整成功的评估（检查结果写库失败、调度卡住，或业务评估一直失败），就判为未就绪：
-// 这时 Monitor 进程活着、/healthz 正常，但所有告警都会静默失效，主机守护据此推送“组件持续未就绪”。
-// 检查调度每 30 秒一轮，3 分钟相当于连续 6 轮失败；刚启动的 3 分钟内不判断。
+// evaluationStaleAfter 内没有一次完整成功的评估（检查结果写库失败、检查定时器卡住，或业务评估一直失败），就判为未就绪：
+// 这时 Monitor 进程活着、/healthz 正常，但所有告警都会静默失效。
+// 检查定时器每 30 秒一轮，3 分钟相当于连续 6 轮失败；刚启动的 3 分钟内不判断。
 const evaluationStaleAfter = 3 * time.Minute
 
 func evaluationFresh(runtime *Runtime, now time.Time) (bool, string) {
-	if runtime == nil || runtime.Scheduler == nil {
-		return false, "scheduler is not running"
+	if runtime == nil {
+		return false, "check timer is not running"
 	}
 	if now.Sub(runtime.StartedAt) < evaluationStaleAfter {
 		return true, ""
 	}
-	last := runtime.Scheduler.LastSuccessfulRound()
-	if last.IsZero() {
+	nanos := runtime.checkRoundAt.Load()
+	if nanos == 0 {
 		return false, "no check evaluation has completed since startup"
 	}
-	if age := now.Sub(last); age > evaluationStaleAfter {
+	if age := now.Sub(time.Unix(0, nanos)); age > evaluationStaleAfter {
 		return false, fmt.Sprintf("last complete check evaluation was %s ago", age.Truncate(time.Second))
 	}
 	return businessEvaluationFresh(runtime, now)

@@ -25,6 +25,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -152,10 +153,11 @@ func runPrimaryRole() error {
 	if listener := s.Service("trpc.moox.storage.Metadata.trpc"); listener != nil {
 		pb.RegisterMetadataService(listener, metadataSvc)
 	}
-	if err := storagebootstrap.RegisterMetricsReporter(s, "primary"); err != nil {
+	healthState, err := registerRoleHealth(s, "storage-primary")
+	if err != nil {
 		return err
 	}
-	if err := registerRoleHealth(s, "storage-primary"); err != nil {
+	if err := storagebootstrap.RegisterMetricsReporter(s, "primary", healthz.Readiness(healthState.Snapshot)); err != nil {
 		return err
 	}
 	return s.Serve()
@@ -325,10 +327,11 @@ func runViewRole() error {
 		return errors.New("DataView 监听没有配置")
 	}
 	pb.RegisterDataViewService(listener, svc)
-	if err := storagebootstrap.RegisterMetricsReporter(s, "view"); err != nil {
+	healthState, err := registerRoleHealth(s, "storage-view")
+	if err != nil {
 		return err
 	}
-	if err := registerRoleHealth(s, "storage-view"); err != nil {
+	if err := storagebootstrap.RegisterMetricsReporter(s, "view", healthz.Readiness(healthState.Snapshot)); err != nil {
 		return err
 	}
 	serveErr := make(chan error, 1)
@@ -560,15 +563,16 @@ func storageEventBusCredentialFile() (string, error) {
 	return jetstream.ExpandCredentialPath(strings.TrimSpace(runtimeConfig.Storage.EventBus.CredentialFile)), nil
 }
 
-func registerRoleHealth(s *server.Server, instance string) error {
+// registerRoleHealth 注册健康检查；返回的状态再交给指标上报，上报里的就绪与 /readyz 是同一个判断。
+func registerRoleHealth(s *server.Server, instance string) (*storagehealth.State, error) {
 	if s == nil {
-		return errors.New("storage health server is unavailable")
+		return nil, errors.New("storage health server is unavailable")
 	}
 	state := storagehealth.New("storage", instance, "", "")
 	state.SnapshotFunc = storagehealth.SnapshotForRole(instance, observability.DefaultViewMetrics)
 	state.SetReady(true)
 	if err := storagehealth.Register(s.Service("trpc.moox.storage.Health"), state); err != nil {
-		return fmt.Errorf("register storage health: %w", err)
+		return nil, fmt.Errorf("register storage health: %w", err)
 	}
-	return nil
+	return state, nil
 }

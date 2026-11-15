@@ -20,7 +20,7 @@ func (e *hostExitError) Error() string { return fmt.Sprintf("远端命令退出�
 func (e *hostExitError) ExitCode() int { return e.code }
 
 // openHostRemoteForCommand 是 host 命令装配连接层的入口，测试里替换。
-var openHostRemoteForCommand = func(file string) (*hostRemote, error) { return openHostRemote(file, "", nil) }
+var openHostRemoteForCommand = func(file string) (*hostRemote, error) { return openHostRemote(file, "") }
 
 var hostCmd = &cobra.Command{
 	Use:   "host",

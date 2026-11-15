@@ -117,7 +117,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err := eventRuntime.Start(ctx); err != nil {
 		return nil, nil, err
 	}
-	if err := registerMetricsReporter(s, observer); err != nil {
+	reporter, err := registerMetricsReporter(s, observer)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -188,7 +189,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	service.Lifecycle = life
 	strategypb.RegisterStrategyMgrService(strategyMgr, service)
 	healthState := health.New("strategy", "strategy", "", "")
-	healthState.SnapshotFunc = withLifecycle(strategyHealthSnapshot(db, eventRuntime, healthState, consumer), life)
+	healthState.SnapshotFunc = strategyHealthSnapshot(db, eventRuntime, healthState, consumer)
+	// 上报带给 Monitor 的就绪与 /readyz 是同一个判断；模块级生命周期也随上报，首页的系统状态读它。
+	reporter.SetReadiness(healthz.Readiness(healthState.Snapshot))
+	reporter.SetLifecycle(life.ReportState)
 	healthState.SetReady(true)
 	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState); err != nil {
 		return nil, nil, fmt.Errorf("注册策略健康检查失败：%w", err)
@@ -342,6 +346,20 @@ func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtim
 		calendarWarning, calendarExpired := stockCalendarWarning(ctx, db, time.Now())
 		ready := databaseReady && state.Ready() && eventBusConnected && consumerReady && statsErr == nil && !outboxStalled && !calendarExpired
 		rsp := healthz.Base("strategy", "strategy", "", "", state.StartedAt, ready)
+		switch {
+		case !databaseReady:
+			rsp.Reason = "数据库不可用"
+		case !eventBusConnected:
+			rsp.Reason = "出站 EventBus 未连接"
+		case !consumerReady:
+			rsp.Reason = "就绪事件消费者未连接"
+		case statsErr != nil:
+			rsp.Reason = "读取待投递目标失败：" + statsErr.Error()
+		case outboxStalled:
+			rsp.Reason = "目标投递停滞"
+		case calendarExpired:
+			rsp.Reason = calendarWarning
+		}
 		rsp.Details = map[string]any{
 			"database_ready": databaseReady, "eventbus_connected": eventBusConnected,
 			"ready_consumer_connected": consumerReady, "outbox_pending_count": stats.PendingCount,

@@ -20,9 +20,6 @@ type DiagnoseOptions struct {
 	NodeID   string
 	CheckIDs []string
 	Client   ContextClient
-	Prober   HTTPProber
-	// Relay 为只能出站的主机提供经 control 中转的健康探测；为空时一律直连。
-	Relay *RelayProber
 	// Systemd 检查 systemd_user 托管的组件（外部程序）的服务状态；为空时这类组件的托管状态记为无法判断。
 	Systemd      SystemdChecker
 	HealthChecks []report.ModuleHealthCheck
@@ -160,23 +157,14 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		}
 		if observation != nil && !observation.GetStale() && !observation.GetConflict() {
 			if observation.GetStatus() == "OK" {
-				return checkResult(spec.ID, core.StatusPass, "Monitor health observation is current", nil)
+				return checkResult(spec.ID, core.StatusPass, "the component reports ready to Monitor", nil)
 			}
 			if observation.GetStatus() == "DOWN" {
-				return checkResult(spec.ID, core.StatusFail, "Monitor reports three consecutive health failures", nil, "restart_service_manually")
+				return checkResult(spec.ID, core.StatusFail, "the component reports not ready to Monitor: "+observation.GetSummary(), nil, "restart_service_manually")
 			}
-			return checkResult(spec.ID, core.StatusWarn, "Monitor has fewer than three consecutive health failures", nil, "restart_service_manually")
+			return checkResult(spec.ID, core.StatusWarn, "the component report to Monitor carries no readiness", nil, "restart_service_manually")
 		}
-		if component.GetHealthUrl() == "" {
-			return checkResult(spec.ID, core.StatusUnknown, "health observation is missing and no fixed endpoint is available", nil, "run_bootstrap")
-		}
-		probe, err := r.probeHealth(ctx, component.GetNodeId(), component.GetHealthUrl())
-		if err != nil {
-			return checkResult(spec.ID, core.StatusFail, "direct health evidence confirms a service failure", err, "restart_service_manually")
-		}
-		result := checkResult(spec.ID, core.StatusPass, "missing or stale Monitor health fact was confirmed by a bounded direct read", nil)
-		result.Observations = []core.Observation{{Source: "direct_health", ObservedAt: probe.ObservedAt, Summary: "signed direct health response", Digest: probe.Digest}}
-		return result
+		return checkResult(spec.ID, core.StatusUnknown, "the component report to Monitor is missing or stale", nil, "run_bootstrap")
 	}
 	if strings.HasPrefix(spec.ID, "service.supervisor:") {
 		component := r.expectedFromID(spec.ID)
@@ -237,7 +225,7 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 			if missing := findObservationKind(r.context.GetMissingObservations(), component.GetComponentId(), "reporter"); missing != nil && missing.GetStatus() == "FAIL" {
 				severity = core.StatusFail
 			}
-			return r.directMetrics(ctx, spec.ID, component, severity)
+			return checkResult(spec.ID, severity, "Reporter observation is missing", nil, "verify_eventbus_credentials")
 		}
 		if observation.GetConflict() {
 			return checkResult(spec.ID, core.StatusFail, "Reporter identity conflict fails closed", nil, "verify_service_identity")
@@ -250,7 +238,7 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 			if observation.GetStatus() == "FAIL" || (observation.GetIntervalSeconds() > 0 && observation.GetAgeSeconds() > int64(4*observation.GetIntervalSeconds())) {
 				severity = core.StatusFail
 			}
-			return r.directMetrics(ctx, spec.ID, component, severity)
+			return checkResult(spec.ID, severity, "Reporter delivery is stale", nil, "verify_eventbus_credentials")
 		}
 		return checkResult(spec.ID, core.StatusPass, "Reporter observation is current", nil)
 	}
@@ -396,20 +384,6 @@ func recentMetricError(observations []*monitorpb.DoctorObservation, componentID 
 		return !at.IsZero() && now.Sub(at) <= 2*time.Minute
 	}
 	return false
-}
-
-func (r *diagnoseRunner) directMetrics(ctx context.Context, id string, component *monitorpb.DoctorExpectedComponent, severity core.CheckStatus) core.CheckResult {
-	if component.GetHealthUrl() == "" {
-		return checkResult(id, core.StatusFail, "Reporter observation is missing and no fixed metrics endpoint is available", nil, "verify_eventbus_credentials")
-	}
-	metricsURL := strings.TrimSuffix(strings.TrimSuffix(component.GetHealthUrl(), "/readyz"), "/healthz") + "/metrics"
-	probe, err := r.options.Prober.Get(ctx, metricsURL)
-	if err != nil {
-		return checkResult(id, core.StatusFail, "Reporter observation is missing and direct metrics read failed", err, "verify_eventbus_credentials")
-	}
-	result := checkResult(id, severity, "Reporter delivery is stale or missing while the business metrics endpoint remains healthy", nil, "verify_eventbus_credentials")
-	result.Observations = []core.Observation{{Source: "direct_metrics", ObservedAt: probe.ObservedAt, Summary: "signed direct metrics response", Digest: probe.Digest}}
-	return result
 }
 
 func (r *diagnoseRunner) now() time.Time {
@@ -577,14 +551,4 @@ func firstNode(snapshot *monitorpb.GetDoctorContextRsp) string {
 func parseWireTime(value string) time.Time {
 	parsed, _ := time.Parse(time.RFC3339Nano, value)
 	return parsed
-}
-
-// probeHealth 直连探测节点的健康地址；只能出站的节点改经 control 中转（用 moox-cli 身份）。
-func (r *diagnoseRunner) probeHealth(ctx context.Context, nodeID, rawURL string) (ProbeResult, error) {
-	if r.options.Relay != nil {
-		if result, handled, err := r.options.Relay.Get(ctx, nodeID, rawURL); handled {
-			return result, err
-		}
-	}
-	return r.options.Prober.Get(ctx, rawURL)
 }

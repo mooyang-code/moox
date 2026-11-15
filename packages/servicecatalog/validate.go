@@ -255,7 +255,7 @@ func validateDoctor(component Component, ids map[string]bool) error {
 	if d.Role == "" || d.Description == "" || len(d.Duties) == 0 || len(d.Inputs) == 0 || len(d.Outputs) == 0 {
 		return fmt.Errorf("component %q has incomplete doctor metadata", component.ID)
 	}
-	if !slices.Contains([]string{"reporter", "host_snapshot", "health_only"}, d.Transport) || !slices.Contains([]string{"active", "deferred", "not_applicable"}, d.FunctionalObservability) {
+	if !slices.Contains([]string{"reporter", "host_snapshot", "delegated"}, d.Transport) || !slices.Contains([]string{"active", "deferred", "not_applicable"}, d.FunctionalObservability) {
 		return fmt.Errorf("component %q has invalid doctor transport or observability", component.ID)
 	}
 	if err := ValidateSupervisor(d.Supervisor, d.Unit); err != nil {

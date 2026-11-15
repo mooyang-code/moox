@@ -433,12 +433,12 @@ func (r *Runtime) modulesCheck(set domain.EngineTask) (domain.TaskCheck, bool) {
 			}
 		}
 		return domain.TaskCheck{
-			Name: "自定义算子模块", Status: domain.TaskCheckFail,
+			Name: modulesCheckName, Status: domain.TaskCheckFail,
 			Message: fmt.Sprintf("udf.%s@%.12s 没有就绪（%s）", ref.name, ref.hash, detail),
 			Remedy:  "确认管理端可达（引擎按退避自动拉取），或在管理端检查该版本是否存在",
 		}, true
 	}
-	return domain.TaskCheck{Name: "自定义算子模块", Status: domain.TaskCheckPass}, true
+	return domain.TaskCheck{Name: modulesCheckName, Status: domain.TaskCheckPass}, true
 }
 
 // observeUDF 记录一批自定义算子调用的指标；失败时打一行带原因的日志（一批调用一行，不随标的数放大）。

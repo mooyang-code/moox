@@ -11,8 +11,10 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/udfhost"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/factorudf"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
@@ -301,6 +303,7 @@ func EngineStatusToPB(status domain.EngineStatus) *factorpb.EngineRuntimeStatus 
 		Runners: RunnersToPB(status.Runners), RecentRuns: runs,
 		CatalogHash: status.CatalogHash, CatalogSyncedAt: FormatTime(status.CatalogSyncedAt), Watermarks: watermarks,
 		Lifecycle: LifecycleToPB(status.Lifecycle), UdfModules: UDFModulesToPB(status.UDFModules),
+		Ready: status.Ready, NotReadyReason: status.NotReadyReason,
 	}
 }
 
@@ -324,23 +327,35 @@ func UDFModulesFromPB(modules []*factorpb.UdfModuleStatus) []domain.UDFModuleSta
 
 // LifecycleToPB 转换引擎模块级的生命周期状态。
 func LifecycleToPB(life domain.EngineLifecycle) *factorpb.EngineLifecycleStatus {
-	return &factorpb.EngineLifecycleStatus{
+	out := &factorpb.EngineLifecycleStatus{
 		Stage: life.Stage, PausedSince: FormatTime(life.PausedSince), QuiescedAt: FormatTime(life.QuiescedAt),
-		Quiesced: life.Quiesced, CatchupBlocked: life.CatchupBlocked,
+		Quiesced: life.Quiesced, CatchupBlocked: life.CatchupBlocked, PauseKind: life.PauseKind, PauseReason: life.PauseReason,
 	}
+	if c := life.Catchup; c != nil {
+		out.Catchup = &commonpb.CatchupProgress{Since: FormatTime(c.Since), Target: FormatTime(c.Target), Done: c.Done, Total: c.Total,
+			CaughtUp: c.CaughtUp, BlockedBy: c.BlockedBy, Unfillable: int32(c.Unfillable), Message: c.Message}
+	}
+	return out
 }
 
-// LifecycleFromPB 还原引擎模块级的生命周期状态；缺失（旧引擎或没有上报）时为零值，即“未收敛”。
+// LifecycleFromPB 还原引擎模块级的生命周期状态；缺失（没有上报）时为零值，即“未收敛”。
 func LifecycleFromPB(pb *factorpb.EngineLifecycleStatus) domain.EngineLifecycle {
 	if pb == nil {
 		return domain.EngineLifecycle{}
 	}
 	pausedSince, _ := ParseTime(pb.GetPausedSince())
 	quiescedAt, _ := ParseTime(pb.GetQuiescedAt())
-	return domain.EngineLifecycle{
+	out := domain.EngineLifecycle{
 		Stage: pb.GetStage(), PausedSince: pausedSince, QuiescedAt: quiescedAt,
-		Quiesced: pb.GetQuiesced(), CatchupBlocked: pb.GetCatchupBlocked(),
+		Quiesced: pb.GetQuiesced(), CatchupBlocked: pb.GetCatchupBlocked(), PauseKind: pb.GetPauseKind(), PauseReason: pb.GetPauseReason(),
 	}
+	if c := pb.GetCatchup(); c != nil {
+		since, _ := ParseTime(c.GetSince())
+		target, _ := ParseTime(c.GetTarget())
+		out.Catchup = &lifecycle.Catchup{Since: since, Target: target, Done: c.GetDone(), Total: c.GetTotal(), CaughtUp: c.GetCaughtUp(),
+			BlockedBy: c.GetBlockedBy(), Unfillable: int(c.GetUnfillable()), Message: c.GetMessage()}
+	}
+	return out
 }
 
 func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, error) {
@@ -364,6 +379,7 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 		ConsumerRunning: pb.GetConsumerRunning(), ComputeWorkers: pb.GetComputeWorkers(), ExprVersion: pb.GetExprVersion(),
 		Runners: RunnersFromPB(pb.GetRunners()), RecentRuns: runs, CatalogHash: pb.GetCatalogHash(), CatalogSyncedAt: syncedAt, Watermarks: watermarks,
 		Lifecycle: LifecycleFromPB(pb.GetLifecycle()), UDFModules: UDFModulesFromPB(pb.GetUdfModules()),
+		Ready: pb.GetReady(), NotReadyReason: pb.GetNotReadyReason(),
 	}, nil
 }
 

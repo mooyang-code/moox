@@ -111,7 +111,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	resultHook := monitorResultHook(runtime)
-	probeRunner := buildProbeRunner(cfg, runtime.Gateway)
 	collectorStatus, err := monmetrics.NewCollectorInventoryGatewayClient(runtime.Gateway)
 	if err != nil {
 		_ = runtime.Close()
@@ -130,15 +129,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	syncSystem := monitorSyncFunc(runtimeCtx, s, cfg, runtime)
+	monitorSyncFunc(runtimeCtx, s, cfg, runtime)
 	datasetHealthPolicy, policyErr := loadMonitorDatasetHealthPolicy(cfg)
 	if policyErr != nil {
 		_ = runtime.Close()
 		return nil, policyErr
 	}
 	doctorContext := &monitordoctor.Builder{
-		Deployments: monitordeployment.NewClientSource(runtime.Gateway), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
-		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore,
+		Deployments: monitordeployment.NewClientSource(runtime.Gateway),
+		Alerts:      runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore,
 		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
 	}
 	marketFetchThresholds := monitorobservability.MarketFetchThresholds{
@@ -170,7 +169,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		Datasets:                   archivableDatasets(storageMetadata),
 	}
 	businessFreshness := buildBusinessFreshnessReporterWithInterval(factsBuilder, runtime.Repositories, resultHook, observation, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
-	// 主机类检查在检查定时器每一轮的最前面执行（见 checkRound），先于部署探测、行情探针和业务评估。
+	// 主机类检查在检查定时器每一轮的最前面执行（见 checkRound），先于行情探针和业务评估。
 	hostChecksRun := buildHostCheckReporter(factsBuilder, runtime.Repositories, resultHook, observation)
 	runtime.businessEvaluation = businessFreshness != nil
 	watchdogRun := func(watchdogCtx context.Context) error {
@@ -190,13 +189,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return errors.Join(marketErr, freshnessErr)
 	}
 	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold, MarketFetchThresholds: marketFetchThresholds, Inventory: inventorySource(klineInventory), Datasets: archivableDatasets(storageMetadata)}, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
-	registerMonitorService(s, cfg, runtime, hostStore, probeRunner, resultHook, syncSystem, metricsQuery, doctorContext, health)
+	registerMonitorService(s, cfg, runtime, hostStore, doctorContext, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, hostChecksRun, watchdogRun); err != nil {
+	if err := registerMonitorScheduleTimers(s, cfg, runtime, hostChecksRun, watchdogRun); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}

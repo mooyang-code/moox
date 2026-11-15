@@ -48,24 +48,27 @@ func TestMonitorScheduleTimerConfigs(t *testing.T) {
 	assert.Empty(t, want)
 }
 
-// 检查定时器一轮里主机类检查最先执行：部署探测很慢（等宕机主机超时）或失败，都不推迟、不挡住它；各步的错误合并返回。
-func TestCheckRoundRunsHostChecksBeforeProbes(t *testing.T) {
+// 检查定时器一轮里主机类检查最先执行，业务评估很慢或失败都不推迟、不挡住它；各步的错误合并返回。
+// 主机类检查成功时记下这一轮的时间（Monitor 的就绪检查据此判断评估是否停滞），失败时不记。
+func TestCheckRoundRunsHostChecksFirst(t *testing.T) {
 	var order []string
-	probeErr, watchdogErr := errors.New("probe timeout"), errors.New("storage timeout")
-	round := checkRound(
+	runtime := &Runtime{}
+	watchdogErr := errors.New("storage timeout")
+	round := checkRound(runtime,
 		func(context.Context) error { order = append(order, "host"); return nil },
-		func(context.Context) (int, error) { order = append(order, "probes"); return 0, probeErr },
 		func(context.Context) error { order = append(order, "watchdog"); return watchdogErr },
 	)
 	err := round(t.Context())
-	assert.Equal(t, []string{"host", "probes", "watchdog"}, order)
-	assert.ErrorIs(t, err, probeErr)
+	assert.Equal(t, []string{"host", "watchdog"}, order)
 	assert.ErrorIs(t, err, watchdogErr)
+	assert.NotZero(t, runtime.checkRoundAt.Load())
 
 	order = nil
+	runtime.checkRoundAt.Store(0)
 	hostErr := errors.New("host checks failed")
-	err = checkRound(func(context.Context) error { order = append(order, "host"); return hostErr },
-		func(context.Context) (int, error) { order = append(order, "probes"); return 1, nil }, nil)(t.Context())
-	assert.Equal(t, []string{"host", "probes"}, order, "主机类检查失败不挡住后面的探测")
+	err = checkRound(runtime, func(context.Context) error { order = append(order, "host"); return hostErr },
+		func(context.Context) error { order = append(order, "watchdog"); return nil })(t.Context())
+	assert.Equal(t, []string{"host", "watchdog"}, order, "主机类检查失败不挡住后面的业务评估")
 	assert.ErrorIs(t, err, hostErr)
+	assert.Zero(t, runtime.checkRoundAt.Load())
 }

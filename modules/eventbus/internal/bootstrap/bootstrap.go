@@ -92,9 +92,9 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 			log.Warn("EventBusMgr service is not configured, skip register")
 		}
 	}
-	registerMetricsReporter(s)
 	// 6. health/metrics; ready is set only after every previous stage succeeds.
 	hs := health.New(b, reg, nc)
+	registerMetricsReporter(s, hs.Readiness())
 	hs.SetReady(true)
 	if s != nil {
 		if err := hs.Register(s.Service("trpc.moox.eventbus.Health")); err != nil {
@@ -108,7 +108,7 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 	return rt, nil
 }
 
-func registerMetricsReporter(s *server.Server) {
+func registerMetricsReporter(s *server.Server, readiness func(context.Context) (bool, string)) {
 	if s == nil {
 		return
 	}
@@ -119,6 +119,7 @@ func registerMetricsReporter(s *server.Server) {
 		log.Warnf("eventbus metrics reporter disabled: %v", err)
 		return
 	}
+	h.SetReadiness(readiness)
 	service := s.Service("trpc.moox.eventbus.metrics.timer")
 	if service == nil {
 		log.Warn("eventbus metrics timer service is not configured, skip register")

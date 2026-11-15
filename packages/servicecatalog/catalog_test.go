@@ -500,8 +500,8 @@ func TestExternalProgramComponents(t *testing.T) {
 	if !slices.Contains(worker.AllPorts(), 11428) || !slices.Contains(worker.AllPorts(), 11418) {
 		t.Fatalf("archive-worker ports = %v", worker.AllPorts())
 	}
-	if !c.LocalRelayPort(11428) || !c.LocalRelayPort(11418) || c.LocalRelayPort(22) {
-		t.Fatal("local relay ports must be health and relay_http ports only")
+	if !c.LocalRelayPort(11428) || c.LocalRelayPort(11418) || c.LocalRelayPort(22) {
+		t.Fatal("local relay ports must be relay_http ports only: health ports are not relayed")
 	}
 	if err := ValidateSupervisor("", ""); err != nil {
 		t.Fatal(err)
@@ -626,5 +626,15 @@ func TestLifecycleMethodsAndTimeoutsCoverQuiesce(t *testing.T) {
 		if server := serverTimeouts[path]; server < route {
 			t.Fatalf("%s 的 tRPC 服务端超时 %d 毫秒短于 ControlLifecycle 的路由超时 %d 毫秒", path, server, route)
 		}
+		// GetLifecycle 带 refresh_catchup 时同步算一次追赶进度（system resume 每次轮询都带），服务端超时同样不能更短。
+		if read := service.TimeoutFor("GetLifecycle"); serverTimeouts[path] < read {
+			t.Fatalf("%s 的 tRPC 服务端超时 %d 毫秒短于 GetLifecycle 的路由超时 %d 毫秒", path, serverTimeouts[path], read)
+		}
+	}
+	// 采集的追赶进度要逐个空间把暂停区间跑一遍 K 线核对，与 CheckKline 同一量级：读取的路由超时不能短于它，
+	// 否则暂停较长、空间较多时 system resume 在采集这一步整体报错退出。
+	collect, _ := c.Service("trpc.moox.collector.CollectMgr")
+	if read, check := collect.TimeoutFor("GetLifecycle"), collect.TimeoutFor("CheckKline"); read < check {
+		t.Fatalf("CollectMgr/GetLifecycle 路由超时 %d 毫秒短于 CheckKline 的 %d 毫秒", read, check)
 	}
 }

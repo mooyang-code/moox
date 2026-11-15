@@ -12,21 +12,12 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
-
-func TestProbeRunnerUsesConfiguredHealthSigner(t *testing.T) {
-	cfg := config.Default()
-	cfg.HealthAuth = config.HealthAuthConfig{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}
-	runner := buildProbeRunner(cfg, nil)
-	require.NotNil(t, runner.HTTP.HealthSigner)
-	assert.Equal(t, "monitor", runner.HTTP.HealthSigner.AccessKey)
-}
 
 func TestLoadMonitorDatasetHealthPolicyFallsBackToAppConfigPath(t *testing.T) {
 	t.Setenv("MOOX_DATASET_HEALTH_POLICY", "")
@@ -51,7 +42,7 @@ func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 		t.Fatalf("close manager: %v", err)
 	}
 	repos := mgr.Repositories()
-	runtime := &Runtime{StartedAt: time.Now(), Store: mgr, Repositories: repos, Scheduler: scheduler.New(repos, scheduler.Options{})}
+	runtime := &Runtime{StartedAt: time.Now(), Store: mgr, Repositories: repos}
 
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-test"
@@ -109,7 +100,7 @@ func TestRuntimeCloseAndGo(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
-	rt2 := &Runtime{Store: mgr, Scheduler: scheduler.New(mgr.Repositories(), scheduler.Options{})}
+	rt2 := &Runtime{Store: mgr}
 	require.NoError(t, rt2.Close())
 	require.NoError(t, rt2.Close()) // closeOnce
 }
@@ -141,9 +132,9 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 func TestMonitorSyncHandlerPropagatesTimerFailure(t *testing.T) {
 	wantErr := errors.New("deployment unavailable")
 	called := 0
-	handler := monitorSyncHandler(func(context.Context) (int, error) {
+	handler := monitorSyncHandler(func(context.Context) error {
 		called++
-		return 0, wantErr
+		return wantErr
 	})
 
 	require.ErrorIs(t, handler(context.Background()), wantErr)
@@ -153,21 +144,20 @@ func TestMonitorSyncHandlerPropagatesTimerFailure(t *testing.T) {
 func TestSerializedMonitorSyncPreventsOverlappingRuns(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	syncFunc := serializedMonitorSync(func(context.Context) (int, error) {
+	syncFunc := serializedMonitorSync(func(context.Context) error {
 		close(started)
 		<-release
-		return 1, nil
+		return nil
 	})
 	firstDone := make(chan error, 1)
 	go func() {
-		_, err := syncFunc(context.Background())
-		firstDone <- err
+		firstDone <- syncFunc(context.Background())
 	}()
 	<-started
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, err := syncFunc(ctx)
+	err := syncFunc(ctx)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	close(release)
 	require.NoError(t, <-firstDone)
@@ -237,7 +227,7 @@ func TestMonitorResultHook(t *testing.T) {
 	rt := &Runtime{Store: mgr, Repositories: mgr.Repositories()}
 	now := time.Now().UTC()
 	require.NoError(t, rt.Repositories.Checks.Create(context.Background(), &domain.Check{
-		CheckID: "check-1", Name: "Peer", Kind: domain.CheckKindHTTP, Enabled: true,
+		CheckID: "check-1", Name: "Peer", Kind: domain.CheckKindExternal, Enabled: true,
 	}))
 	require.NoError(t, rt.Repositories.Results.Insert(context.Background(), &domain.CheckResult{
 		ResultID: "result-1", CheckID: "check-1", Status: domain.CheckStatusDown, CheckedAt: now,
@@ -258,7 +248,7 @@ func TestMonitorHealthSnapshotMetricsBranches(t *testing.T) {
 	t.Cleanup(func() { _ = mgr.Close() })
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
 	repos := mgr.Repositories()
-	rt := &Runtime{StartedAt: time.Now().UTC(), Store: mgr, Repositories: repos, Scheduler: scheduler.New(repos, scheduler.Options{})}
+	rt := &Runtime{StartedAt: time.Now().UTC(), Store: mgr, Repositories: repos}
 
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-ready"

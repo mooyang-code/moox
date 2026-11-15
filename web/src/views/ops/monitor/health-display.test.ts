@@ -6,7 +6,7 @@ describe("health display", () => {
     expect(statusLabel("degraded")).toBe("需关注");
     expect(statusLabel("down")).toBe("异常");
     expect(statusLabel("disabled")).toBe("已停用");
-    expect(statusLabel("unchecked")).toBe("不探测");
+    expect(statusLabel("unchecked")).toBe("不检查");
     expect(statusLabel("stale")).toBe("未知");
   });
   it("links each alert to the page that handles it", () => {

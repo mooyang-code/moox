@@ -52,7 +52,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - 产物包里有 `moox-bundle.json`：`setup` 命令自动使用包内预编译的 linux/amd64 程序，不需要 git、Go、Docker 或 Node。
 - 管理台上的操作和各模块的主要操作都有专用命令（`factor`、`strategy`、`space`、`metadata`、`collector`（含云账号、代码包与云函数）、`monitor`、`eventbus`、`host`、`secret`、`trade` 只读等），先用 `./bin/moox-cli <命令> --help` 看参数；命令对照表见 [`references/api-recipes.md`](references/api-recipes.md)。
 - 没有专用命令的底层接口：`./bin/moox-cli gateway methods [关键字]` 查有哪些方法，`./bin/moox-cli gateway call <服务> <方法> --data @请求.json` 调用；业务失败时退出码非 0。
-- 命令按 `moox.toml` 里的 SSH 配置连接各台主机；`lifecycle`、`system`、`import` 访问模块健康端口时也自动解析，不需要手工建隧道或设置健康密钥环境变量。要在某台主机上执行命令或传文件用 `host exec|get|put`。
+- 命令按 `moox.toml` 里的 SSH 配置连接各台主机，经操作员网关调各模块的 RPC；`lifecycle`、`system`、`import` 也一样，不需要手工建隧道或设置健康密钥环境变量。要在某台主机上执行命令或传文件用 `host exec|get|put`。
 - 带 `--space-id` 的命令默认空间是 `crypto`；时间范围用 `--from` / `--to`（RFC3339，左闭右开）。
 - 本机有 HTTP 代理时，执行前 `env -u HTTP_PROXY -u HTTPS_PROXY`，否则到主机的直连会被挡住。
 - 耗时的命令（部署、初始化、导入）放后台运行，盯输出里的 `*-ready` 与报错。

@@ -49,6 +49,80 @@ type Handler struct {
 	// flushPending 表示已安排了一次补报（见 FlushOnOutputAdvance）；afterFunc 默认是 time.AfterFunc，测试可替换。
 	flushPending atomic.Bool
 	afterFunc    func(time.Duration, func())
+	// sources 是随上报带给 Monitor 的就绪判断、模块级生命周期与代报的外部程序（见 SetReadiness 等）。
+	sourcesMu sync.Mutex
+	sources   reportSources
+}
+
+// reportSources 是上报里除指标之外的三项内容的来源，各组件在创建好对应的状态之后登记。
+type reportSources struct {
+	// Readiness 是本进程此刻的就绪判断，必须与 /readyz 用同一个判断函数（healthz.Readiness 提供）；为空时上报不带就绪字段。
+	Readiness func(context.Context) (ready bool, reason string)
+	// Lifecycle 是模块级生命周期（lifecycle.Controller.ReportState 提供）；为空表示组件没有生命周期。
+	Lifecycle func() *metricspb.ModuleLifecycle
+	// Delegates 是管理端代为上报的外部程序（因子引擎、归档 worker）。
+	Delegates func(context.Context) []*metricspb.DelegatedReport
+}
+
+// SetReadiness 登记就绪判断；可以在创建处理器之后再登记（就绪状态往往晚于上报创建）。
+func (h *Handler) SetReadiness(fn func(context.Context) (bool, string)) {
+	h.sourcesMu.Lock()
+	defer h.sourcesMu.Unlock()
+	h.sources.Readiness = fn
+}
+
+// SetLifecycle 登记模块级生命周期的来源。
+func (h *Handler) SetLifecycle(fn func() *metricspb.ModuleLifecycle) {
+	h.sourcesMu.Lock()
+	defer h.sourcesMu.Unlock()
+	h.sources.Lifecycle = fn
+}
+
+// SetDelegates 登记管理端代报的外部程序。
+func (h *Handler) SetDelegates(fn func(context.Context) []*metricspb.DelegatedReport) {
+	h.sourcesMu.Lock()
+	defer h.sourcesMu.Unlock()
+	h.sources.Delegates = fn
+}
+
+// fillReport 把就绪、生命周期与代报写进这一份上报。
+func (h *Handler) fillReport(ctx context.Context, report *metricspb.MetricReport) {
+	h.sourcesMu.Lock()
+	sources := h.sources
+	h.sourcesMu.Unlock()
+	if sources.Readiness != nil {
+		ready, reason := sources.Readiness(ctx)
+		report.Ready = proto.Bool(ready)
+		if !ready {
+			report.NotReadyReason = reason
+		}
+	}
+	if sources.Lifecycle != nil {
+		report.Lifecycle = sources.Lifecycle()
+	}
+	if sources.Delegates != nil {
+		report.Delegated = sources.Delegates(ctx)
+	}
+}
+
+// runTimeout 是 Run 里单次上报的时限。
+const runTimeout = 10 * time.Second
+
+// Run 每个上报周期上报一次，直到 ctx 结束；给没有 tRPC 定时服务的进程（collector-stream、egress-proxy、access）用。
+// 启动时先报一次；失败由 Handle 记日志，下一周期重试。
+func (h *Handler) Run(ctx context.Context) {
+	ticker := time.NewTicker(h.cfg.Interval)
+	defer ticker.Stop()
+	for {
+		callCtx, cancel := context.WithTimeout(ctx, runTimeout)
+		_ = h.Handle(callCtx)
+		cancel()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // flushDelay 是补报的合并窗口：输出水位前进后最多等这么久补报一份快照，窗口内的多次前进合并成一次。
@@ -195,6 +269,7 @@ func (h *Handler) Handle(ctx context.Context) error {
 		return h.reportError(ctx, err)
 	}
 	report := &metricspb.MetricReport{ServiceName: h.cfg.ServiceName, InstanceId: h.cfg.InstanceID, NodeId: h.cfg.NodeID, BootId: h.bootID, ServiceVersion: h.cfg.Version, Sequence: seq, Snapshot: snapshot}
+	h.fillReport(ctx, report)
 	options := events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: h.cfg.SpaceID, SubjectID: h.cfg.ServiceName + "/" + h.cfg.InstanceID}
 	if _, err := client.Publish(ctx, events.ObservabilityMetricsSnapshotReported, report, options); err != nil {
 		if !isTransientPublishError(err) {

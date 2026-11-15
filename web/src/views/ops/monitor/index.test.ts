@@ -259,8 +259,8 @@ describe("monitor page", () => {
     expect(timeline.findAll(".incident")).toHaveLength(12);
   });
 
-  it("opens component details from the host dots and keeps raw errors untranslated", async () => {
-    const raw = "x509: certificate expired\n原始错误";
+  it("opens component details from the host dots and shows the reported not-ready reason", async () => {
+    const raw = "x509: certificate expired";
     const page = render({
       ...healthy,
       components: [
@@ -269,8 +269,10 @@ describe("monitor page", () => {
           component_id: "web-host",
           name: "控制台前端",
           status: "down",
-          reason: "健康检查失败",
-          probe: { status: "down", reason: "证书已过期", raw_error: raw }
+          reason: "未就绪：证书已过期",
+          reporter: { status: "healthy", reason: "监控上报正常" },
+          readiness: "not_ready",
+          not_ready_reason: raw
         },
         { host_id: "storage", component_id: "web-host", name: "控制台前端", status: "healthy" }
       ],
@@ -282,7 +284,9 @@ describe("monitor page", () => {
     expect(page.find(".issues").text()).toContain("未登记进程 rogue（control）");
     await page.find(".component-chip").trigger("click");
     expect(page.find(".detail").text()).toContain("control · web-host");
-    expect(page.find(".detail .raw-error pre").text()).toBe(raw);
+    expect(page.find(".detail").text()).toContain("就绪 · 未就绪");
+    expect(page.find(".detail").text()).toContain(raw);
+    expect(page.find(".detail").text()).not.toContain("探测");
   });
 
   it("shows dataset names and only the datasets that need attention", async () => {

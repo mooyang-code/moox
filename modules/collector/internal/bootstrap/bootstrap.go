@@ -29,6 +29,7 @@ import (
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -153,10 +154,11 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control, bus); err != nil {
 		return nil, err
 	}
-	if err := registerHealth(s, cfg, dbm, process, control, svc); err != nil {
+	healthState, life, err := registerHealth(s, cfg, dbm, process, control, svc)
+	if err != nil {
 		return nil, err
 	}
-	registerMetricsReporter(s, realtimeInventory)
+	registerMetricsReporter(s, realtimeInventory, healthState, life)
 
 	keepRuntime = true
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
@@ -270,7 +272,8 @@ type metricsReporter interface {
 	Handle(context.Context) error
 }
 
-func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler) {
+// registerMetricsReporter 注册指标上报；上报带上与 /readyz 同一个就绪判断和模块级生命周期（首页的系统状态读它）。
+func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler, state *health.State, life *lifecycle.Controller) {
 	if s == nil {
 		return
 	}
@@ -278,6 +281,12 @@ func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconc
 	if err != nil {
 		log.Warnf("collector metrics reporter disabled: %v", err)
 		return
+	}
+	if state != nil {
+		h.SetReadiness(healthz.Readiness(state.Snapshot))
+	}
+	if life != nil {
+		h.SetLifecycle(life.ReportState)
 	}
 	service := s.Service("trpc.moox.collector.metrics.timer")
 	if service == nil {
@@ -298,33 +307,35 @@ func metricsTimerHandler(inventory realtimeInventoryReconciler, reporter metrics
 	}
 }
 
-// registerHealth 注册健康检查，并建好生命周期控制器交给 CollectMgr（GetLifecycle、ControlLifecycle）。
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, control *collectorControl, svc *collectsvc.Service) error {
+// registerHealth 注册健康检查，并建好生命周期控制器交给 CollectMgr（GetLifecycle、ControlLifecycle）；
+// 返回的健康状态与控制器再交给指标上报。
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, control *collectorControl, svc *collectsvc.Service) (*health.State, *lifecycle.Controller, error) {
 	if cfg == nil {
-		return nil
+		return nil, nil, nil
 	}
 	state := health.New("collector", "collector", "", "")
 	state.SnapshotFunc = collectorHealthSnapshot(cfg, dbm, state)
 	if s == nil {
-		return fmt.Errorf("collector health service is unavailable")
+		return nil, nil, fmt.Errorf("collector health service is unavailable")
 	}
+	var life *lifecycle.Controller
 	if control != nil && process != nil {
-		life, err := newCollectorLifecycle(cfg.Database.Path, control)
+		var err error
+		life, err = newCollectorLifecycle(cfg.Database.Path, control)
 		if err != nil {
-			return fmt.Errorf("collector lifecycle state failed to open: %w", err)
+			return nil, nil, fmt.Errorf("collector lifecycle state failed to open: %w", err)
 		}
-		state.SnapshotFunc = withCollectorLifecycle(state.SnapshotFunc, life)
 		if svc != nil {
 			svc.SetLifecycle(life)
 		}
 		if !process.launch(func() { life.Run(process.ctx, collectorLifecycleRefresh) }) {
-			return fmt.Errorf("collector runtime is closing")
+			return nil, nil, fmt.Errorf("collector runtime is closing")
 		}
 	}
 	if err := health.Register(s.Service("trpc.moox.collector.Health"), state); err != nil {
-		return fmt.Errorf("collector health server failed to start: %w", err)
+		return nil, nil, fmt.Errorf("collector health server failed to start: %w", err)
 	}
-	return nil
+	return state, life, nil
 }
 
 func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State) healthz.SnapshotFunc {

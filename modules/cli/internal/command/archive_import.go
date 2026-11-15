@@ -57,7 +57,7 @@ var openArchiveImportRemote = func(file string) (archiveImportRemote, string, er
 		return nil, "", fmt.Errorf("moox.toml 的 [deployments] 里没有唯一一台部署了 %s 的主机", archiveWorkerComponent)
 	}
 	// 本节点 ID 留空：worker 所在主机一律经 SSH 访问（与 deploy-unit 的前提相同）。
-	return newHostRemoteFromSnapshot(snapshot, "", nil), host, nil
+	return newHostRemoteFromSnapshot(snapshot, ""), host, nil
 }
 
 // archiveSleep 是 --wait 轮询的等待（测试替换）。

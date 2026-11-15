@@ -2,8 +2,6 @@ package test
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
@@ -28,14 +26,10 @@ func (c e2eContextClient) GetDoctorContext(context.Context, *monitorpb.GetDoctor
 }
 
 func TestDoctorDiagnoseDistinguishesBusinessHealthFromReporterFailure(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("moox_factor_runs_total 1\n"))
-	}))
-	defer server.Close()
 	components := []*monitorpb.DoctorExpectedComponent{
-		{ComponentId: "eventbus", ServiceName: "eventbus", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"},
-		{ComponentId: "monitor", ServiceName: "monitor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"},
-		{ComponentId: "factor-mgr", ServiceName: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"},
+		{ComponentId: "eventbus", ServiceName: "eventbus", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
+		{ComponentId: "monitor", ServiceName: "monitor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
+		{ComponentId: "factor-mgr", ServiceName: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
 	}
 	health := []*monitorpb.DoctorObservation{}
 	reporters := []*monitorpb.DoctorObservation{}
@@ -48,7 +42,6 @@ func TestDoctorDiagnoseDistinguishesBusinessHealthFromReporterFailure(t *testing
 	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: components, HealthObservations: health, ReporterObservations: reporters, MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "factor-mgr", Status: "MISSING"}}}
 	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{
 		NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:factor-mgr@node-a"}, Client: e2eContextClient{rsp: snapshot},
-		Prober: doctorcli.HTTPProber{Auth: doctorcli.HealthAuth{AccessKey: "monitor", SecretKey: "secret"}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, core.ConclusionDegraded, report.Conclusion)
@@ -76,16 +69,12 @@ func TestDoctorDiagnoseFailsClosedOnIdentityConflict(t *testing.T) {
 }
 
 func TestDoctorDiagnoseEscalatesReporterThatNeverAppeared(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("moox_factor_runs_total 1\n"))
-	}))
-	defer server.Close()
 	snapshot := &monitorpb.GetDoctorContextRsp{
 		ManifestChecksum:    embeddedManifestChecksum(t),
-		ExpectedComponents:  []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", ServiceName: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"}},
+		ExpectedComponents:  []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", ServiceName: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
 		MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "factor-mgr", Status: "FAIL", Stale: true, AgeSeconds: 121, IntervalSeconds: 30}},
 	}
-	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:factor-mgr@node-a"}, Client: e2eContextClient{rsp: snapshot}, Prober: doctorcli.HTTPProber{Auth: doctorcli.HealthAuth{AccessKey: "monitor", SecretKey: "secret"}}})
+	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:factor-mgr@node-a"}, Client: e2eContextClient{rsp: snapshot}})
 	require.NoError(t, err)
 	require.Equal(t, core.StatusFail, report.CheckByID("monitor.reporter_coverage:factor-mgr@node-a").Status)
 }

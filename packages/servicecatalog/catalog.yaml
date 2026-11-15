@@ -127,7 +127,7 @@ components:
       dependencies:
         - admin
         - web-host
-      transport: health_only
+      transport: reporter
       functional_observability: not_applicable
       config_paths:
         - console-proxy/config/app.yaml
@@ -160,7 +160,7 @@ components:
       outputs:
         - web assets
       dependencies: []
-      transport: health_only
+      transport: reporter
       functional_observability: not_applicable
       config_paths: []
       writable_paths:
@@ -585,10 +585,11 @@ components:
             operators: [moox-cli]
             timeout_ms: 120000
           # 模块生命周期（设计 3.7）：管理台与命令行都能读；暂停、恢复、放行只给命令行（moox-cli lifecycle、system）。
-          # 读追赶进度要逐个空间核对补采；暂停要等 SCF 定时器停用确认与在途补采分块结束（最长 5 分钟），超时与旧健康端口一致。
+          # 读追赶进度（system resume 每次轮询都带 refresh_catchup）要对每个空间把整个暂停区间跑一遍 K 线核对，
+          # 与 CheckKline、SubmitKlineBackfill 同一量级，给 330 秒；暂停要等 SCF 定时器停用确认与在途补采分块结束（最长 5 分钟）。
           - name: GetLifecycle
             read_only: true
-            timeout_ms: 60000
+            timeout_ms: 330000
           - name: ControlLifecycle
             operators: [moox-cli]
             timeout_ms: 330000
@@ -898,7 +899,7 @@ components:
       dependencies:
         - storage-primary
         - collector
-      transport: health_only
+      transport: reporter
       functional_observability: deferred
       config_paths:
         - archive-mgr/config/app.yaml
@@ -1502,7 +1503,7 @@ components:
         - restart_service_manually
       required_in_default_profile: false
   # 外部程序：运行在登记主机上（通常是只能出站的因子机），以同名外部身份经 Access 访问系统；
-  # 由 systemd 用户服务托管，部署健康由 Monitor 经中转探测本机健康端口。
+  # 由 systemd 用户服务托管；健康由管理端按心跳代报给 Monitor（doctor.transport: delegated），Monitor 不探测健康端口。
   # 外部程序可以声明只监听本机的服务，由所在主机的网关路由（出站主机经 control 中转）。
   - id: factor-engine
     name: 因子引擎
@@ -1517,7 +1518,8 @@ components:
       ready_body: '"ready":true'
     services:
       # 回放“因子现算”：策略服务逐步调用，引擎按因子机本地快照现算。单步响应由引擎控制在 3 MiB 以内，包体上限用默认值。
-      # 本地写入（导入）的一批默认一万行，按 protobuf 编码远在默认上限之内；超了由导入命令提示减小 --batch-rows。
+      # 本地写入（导入）的一批默认一万行，40 个数值列按 protobuf 编码实测约 3.67 MB，离默认上限 4 MiB（4.19 MB）不远；
+      # 列更多时超出，由导入命令提示减小 --batch-rows。
       # 生命周期、任务检查与本地写入只给命令行，管理台不能调（这个服务没有 console_name）。
       - path: trpc.moox.factor.EngineControl
         port: 11423
@@ -1566,7 +1568,7 @@ components:
       dependencies:
         - factor-mgr
         - access
-      transport: health_only
+      transport: delegated
       functional_observability: deferred
       config_paths:
         - factor-engine/config/engine.yaml
@@ -1605,7 +1607,7 @@ components:
       dependencies:
         - archive-mgr
         - access
-      transport: health_only
+      transport: delegated
       functional_observability: deferred
       config_paths:
         - archive-worker/config/app.yaml

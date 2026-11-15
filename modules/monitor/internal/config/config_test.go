@@ -8,40 +8,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-
 	"gopkg.in/yaml.v3"
 )
 
-func TestHTTPSProbeConfigurationResolvesTrustRelativeToModuleConfig(t *testing.T) {
+// 探测删除后部署段只剩是否同步拓扑：旧的 https、local_host_id 键会被严格解码拒绝。
+func TestDeploymentConfigRejectsRemovedProbeKeys(t *testing.T) {
 	directory := t.TempDir()
-	path := filepath.Join(directory, "app.yaml")
-	raw := "deployment:\n  enabled: false\n  https:\n    console-proxy:\n      url: https://console.example.test:9527/\n      connect_address: 127.0.0.1:9527\n      server_name: console.example.test\n      trust_mode: internal\n      ca_file: ../../certs/caddy/root.crt\n      ca_baseline: ../../certs/caddy/root.sha256\n"
-	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	target := cfg.Deployment.HTTPS["console-proxy"]
-	if target.CAFile != filepath.Clean(filepath.Join(directory, "../../certs/caddy/root.crt")) || !filepath.IsAbs(target.CABaseline) {
-		t.Fatalf("unresolved HTTPS trust files: %+v", target)
-	}
-}
-
-func TestHTTPSProbeConfigurationRejectsAmbiguousTrust(t *testing.T) {
-	for _, target := range []domain.HTTPSConfig{
-		{URL: "http://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public"},
-		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "wrong.example.test", TrustMode: "public"},
-		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "internal", CAFile: "root.crt"},
-		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public", CAFile: "root.crt", CABaseline: "root.sha256"},
-	} {
-		cfg := Default()
-		cfg.Deployment.Enabled = false
-		cfg.Deployment.HTTPS = map[string]domain.HTTPSConfig{"console-proxy": target}
-		if err := cfg.Validate(); err == nil {
-			t.Fatalf("invalid HTTPS configuration accepted: %+v", target)
+	for _, raw := range []string{"deployment:\n  enabled: false\n  https: {}\n", "deployment:\n  enabled: false\n  local_host_id: control\n"} {
+		path := filepath.Join(directory, "app.yaml")
+		if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("removed probe key accepted: %q, err=%v", raw, err)
 		}
 	}
 }
@@ -60,9 +39,6 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	}
 	if cfg.Scheduler.ResultRetentionDays != 14 {
 		t.Fatalf("retention days = %d", cfg.Scheduler.ResultRetentionDays)
-	}
-	if cfg.Scheduler.MaxConcurrency != 16 {
-		t.Fatalf("max concurrency = %d", cfg.Scheduler.MaxConcurrency)
 	}
 	if !cfg.Deployment.Enabled {
 		t.Fatalf("deployment = %+v", cfg.Deployment)

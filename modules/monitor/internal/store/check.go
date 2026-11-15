@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/packages/events"
@@ -147,40 +146,6 @@ func (r *CheckRepository) applyFilters(q *gorm.DB, opts ListChecksOptions) *gorm
 		q = q.Where("c_enabled = ?", *opts.Enabled)
 	}
 	return q
-}
-
-func (r *CheckRepository) ListDue(ctx context.Context, now time.Time, limit int) ([]domain.Check, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	var candidates []domain.Check
-	err := r.db.WithContext(ctx).
-		Where("c_enabled = 1 AND c_kind IN ? AND c_source IN ?", []string{domain.CheckKindHTTP, domain.CheckKindTCP}, []string{domain.CheckSourceDeployment, domain.CheckSourceObservability}).
-		Order("c_next_check_at ASC, c_id ASC").
-		Find(&candidates).Error
-	if err != nil {
-		return nil, err
-	}
-	checks := make([]domain.Check, 0, min(limit, len(candidates)))
-	for _, check := range candidates {
-		if check.NextCheckAt == nil || !check.NextCheckAt.After(now) {
-			checks = append(checks, check)
-			if len(checks) >= limit {
-				break
-			}
-		}
-	}
-	return checks, nil
-}
-
-func (r *CheckRepository) MarkChecked(ctx context.Context, spaceID, checkID string, checkedAt, nextAt time.Time) error {
-	return r.db.WithContext(ctx).
-		Model(&domain.Check{}).
-		Where("c_space_id = ? AND c_check_id = ?", spaceID, checkID).
-		Updates(map[string]any{
-			"c_last_checked_at": checkedAt,
-			"c_next_check_at":   nextAt,
-		}).Error
 }
 
 // ListEnabledKinds filters structured namespaces before the response bound.

@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	trpc "trpc.group/trpc-go/trpc-go"
 	trpcserver "trpc.group/trpc-go/trpc-go/server"
@@ -63,6 +64,16 @@ func run(ctx context.Context, cfg config.Config) error {
 	health, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))
 	if err != nil {
 		return err
+	}
+	// 组件健康只看上报（设计 3.8）：每 30 秒经 EventBus 把指标快照与就绪判断（与 /readyz 同一个）报给 Monitor。
+	// 部署总会注入运行身份（MOOX_INSTANCE_ID、MOOX_NODE_ID）；没有身份时（本机测试）只记一条日志，不上报。
+	if reporter, err := report.NewHandler(report.DefaultConfig("egress", "egress-proxy")); err != nil {
+		log.Printf("egress-proxy metrics reporter disabled: %v", err)
+	} else {
+		reporter.SetReadiness(healthz.Readiness(state.Snapshot))
+		reportCtx, stopReport := context.WithCancel(ctx)
+		defer stopReport()
+		go reporter.Run(reportCtx)
 	}
 	if server.Service("trpc.moox.egress.Health") == nil {
 		return errors.New("egress health service is required")

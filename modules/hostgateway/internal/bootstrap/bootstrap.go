@@ -221,7 +221,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err := registerRouteRefreshTimer(timers, runtime); err != nil {
 		return err
 	}
-	if err := registerMetricsReporter(timers); err != nil {
+	if err := registerMetricsReporter(timers, health.Readiness); err != nil {
 		return err
 	}
 	opened, err := listener.Open(ctx, cfg, material)

@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
+	"google.golang.org/protobuf/encoding/protojson"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -144,19 +145,87 @@ func upsertMetricService(tx *gorm.DB, report *metricspb.MetricReport, seenAt tim
 	if report.GetServiceName() == "" {
 		return errors.New("producer.service_name is required")
 	}
-	service := &MetricService{
+	readiness, reason := readinessOf(report.Ready, report.GetNotReadyReason())
+	rows := []*MetricService{{
 		ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(), BootID: report.GetBootId(),
 		NodeID: report.GetNodeId(), Version: report.GetServiceVersion(), LastSeenAt: seenAt,
+		Readiness: readiness, NotReadyReason: reason, LifecycleJSON: lifecycleJSON(report.GetLifecycle()),
+		CreatedAt: seenAt, UpdatedAt: seenAt,
+	}}
+	// 管理端代报的外部程序（因子引擎、归档 worker）各记一行：时间取管理端最近一次接受它心跳的时间，
+	// 主机留空，由概览按组件名对到它唯一的部署上。从没心跳过的不记，按“从未上报”处理。
+	for _, delegated := range report.GetDelegated() {
+		if delegated.GetServiceName() == "" || delegated.GetLastHeartbeatUnix() <= 0 {
+			continue
+		}
+		heartbeat := time.Unix(delegated.GetLastHeartbeatUnix(), 0).UTC()
+		if heartbeat.After(seenAt) {
+			heartbeat = seenAt
+		}
+		readiness, reason := readinessOf(delegated.Ready, delegated.GetNotReadyReason())
+		rows = append(rows, &MetricService{
+			ServiceName: delegated.GetServiceName(), InstanceID: delegated.GetInstanceId(), BootID: delegated.GetBootId(),
+			Version: delegated.GetServiceVersion(), LastSeenAt: heartbeat,
+			Readiness: readiness, NotReadyReason: reason, LifecycleJSON: lifecycleJSON(delegated.GetLifecycle()),
+			CreatedAt: heartbeat, UpdatedAt: heartbeat,
+		})
 	}
-	return tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "c_service_name"}, {Name: "c_instance_id"}, {Name: "c_boot_id"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"c_node_id":      gorm.Expr("excluded.c_node_id"),
-			"c_version":      gorm.Expr("excluded.c_version"),
-			"c_last_seen_at": gorm.Expr("MAX(c_last_seen_at, excluded.c_last_seen_at)"),
-			"c_mtime":        gorm.Expr("excluded.c_mtime"),
-		}),
-	}).Create(service).Error
+	// 就绪与生命周期只跟着更新的上报走：重投递的旧上报不覆盖它们，也不让 last_seen 后退。
+	newer := func(column string) clause.Expr {
+		return gorm.Expr("CASE WHEN excluded.c_last_seen_at >= c_last_seen_at THEN excluded." + column + " ELSE " + column + " END")
+	}
+	for _, row := range rows {
+		err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "c_service_name"}, {Name: "c_instance_id"}, {Name: "c_boot_id"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"c_node_id":          gorm.Expr("excluded.c_node_id"),
+				"c_version":          gorm.Expr("excluded.c_version"),
+				"c_readiness":        newer("c_readiness"),
+				"c_not_ready_reason": newer("c_not_ready_reason"),
+				"c_lifecycle_json":   newer("c_lifecycle_json"),
+				"c_last_seen_at":     gorm.Expr("MAX(c_last_seen_at, excluded.c_last_seen_at)"),
+				"c_mtime":            gorm.Expr("excluded.c_mtime"),
+			}),
+		}).Create(row).Error
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// readinessOf 把上报里的就绪字段转成库里的取值；没有就绪字段时为空。
+func readinessOf(ready *bool, reason string) (string, string) {
+	switch {
+	case ready == nil:
+		return "", ""
+	case *ready:
+		return ReadinessReady, ""
+	}
+	return ReadinessNotReady, strings.TrimSpace(reason)
+}
+
+func lifecycleJSON(lifecycle *metricspb.ModuleLifecycle) string {
+	if lifecycle == nil || lifecycle.GetStage() == "" {
+		return ""
+	}
+	raw, err := protojson.Marshal(lifecycle)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// DecodeLifecycle 还原库里记的模块级生命周期；为空或格式不符时返回 nil。
+func DecodeLifecycle(raw string) *metricspb.ModuleLifecycle {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var lifecycle metricspb.ModuleLifecycle
+	if protojson.Unmarshal([]byte(raw), &lifecycle) != nil || lifecycle.GetStage() == "" {
+		return nil
+	}
+	return &lifecycle
 }
 
 // ingestBatchRows bounds the rows of one multi-row upsert. A report carries

@@ -57,7 +57,7 @@ func TestEmbeddedManifestMatchesSharedCatalog(t *testing.T) {
 			t.Errorf("Doctor metadata differs from catalog for %s", component.ID)
 		}
 	}
-	if got := manifestServices["console-proxy"]; got.HealthPath != "/readyz" || got.Transport != TransportHealthOnly {
+	if got := manifestServices["console-proxy"]; got.HealthPath != "/readyz" || got.Transport != TransportReporter {
 		t.Fatalf("console proxy health contract: %+v", got)
 	}
 }
@@ -172,7 +172,7 @@ func TestEmbeddedManifestSupervisors(t *testing.T) {
 			if component.Supervisor != servicecatalog.SupervisorSystemdUser || component.Unit != "moox-"+component.ComponentID {
 				t.Fatalf("%s supervisor = %q unit = %q", component.ComponentID, component.Supervisor, component.Unit)
 			}
-			if component.Transport != TransportHealthOnly {
+			if component.Transport != TransportDelegated {
 				t.Fatalf("%s transport = %q", component.ComponentID, component.Transport)
 			}
 		default:

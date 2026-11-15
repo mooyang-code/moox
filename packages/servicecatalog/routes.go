@@ -308,7 +308,7 @@ func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
 }
 
 // relayTargets 计算各台已启用出站主机的中转许可：跨主机端口的调用方是该主机上全部路由调用方的并集，
-// 组件健康端口只允许 Monitor 与 moox-cli（部署与诊断要等外部程序就绪），relay_http 端口只允许声明的调用方。
+// relay_http 端口只允许声明的调用方。组件健康端口不经中转（组件健康只看上报，设计 3.8）。
 // 跨主机端口在前，其余端口按端口号升序。
 func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 	var relays []RelayTarget
@@ -323,9 +323,6 @@ func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 				continue
 			}
 			component, _ := c.Component(deployment.ComponentID)
-			if component.Health.Port > 0 {
-				local[component.Health.Port] = healthRelayCallers
-			}
 			if component.RelayHTTP != nil {
 				local[component.RelayHTTP.Port] = relayHTTPCallers(*component.RelayHTTP)
 			}
@@ -359,9 +356,6 @@ func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 	return relays
 }
 
-// healthRelayCallers 是能经中转连接出站主机组件健康端口的调用方：Monitor 探测，moox-cli 部署与诊断。
-var healthRelayCallers = []string{"monitor", "moox-cli"}
-
 // relayHTTPCallers 返回 relay_http 端口的中转调用方（排序后的副本），编译与 ValidRelay 用同一个顺序。
 func relayHTTPCallers(relay RelayHTTP) []string {
 	callers := slices.Clone(relay.Callers)
@@ -370,8 +364,7 @@ func relayHTTPCallers(relay RelayHTTP) []string {
 }
 
 // ValidRelay 校验一条中转许可：端口不重复，跨主机端口的调用方是合法 ID 且不重复；
-// 其余端口要么是服务目录里某个组件的健康端口并且只对 Monitor 与 moox-cli 开放，
-// 要么是某个外部程序的 relay_http 端口并且只对它声明的调用方开放。没有 relay_http 端口的许可（旧版 Admin 编译的）照样接受。
+// 其余端口只能是某个外部程序的 relay_http 端口，并且只对它声明的调用方开放。
 func (c Catalog) ValidRelay(r RelayTarget) bool {
 	if !ValidHostID(r.HostID) || len(r.Ports) > 64 {
 		return false
@@ -383,9 +376,8 @@ func (c Catalog) ValidRelay(r RelayTarget) bool {
 		}
 		seen[port.Port] = true
 		if port.Port != HostGatewayRemotePort {
-			health := slices.Equal(port.Callers, healthRelayCallers) && c.HealthPort(port.Port)
 			callers, relayHTTP := c.RelayHTTPCallers(port.Port)
-			if !health && !(relayHTTP && slices.Equal(port.Callers, callers)) {
+			if !relayHTTP || !slices.Equal(port.Callers, callers) {
 				return false
 			}
 			continue
@@ -401,16 +393,6 @@ func (c Catalog) ValidRelay(r RelayTarget) bool {
 	return true
 }
 
-// HealthPort 报告端口是否是服务目录里某个组件的健康端口。
-func (c Catalog) HealthPort(port int) bool {
-	for _, component := range c.Components {
-		if component.Health.Port == port && port > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // RelayHTTPCallers 返回端口作为某个外部程序 relay_http 端口时的中转调用方（排序后）；不是时 ok 为假。
 func (c Catalog) RelayHTTPCallers(port int) (callers []string, ok bool) {
 	for _, component := range c.Components {
@@ -421,10 +403,10 @@ func (c Catalog) RelayHTTPCallers(port int) (callers []string, ok bool) {
 	return nil, false
 }
 
-// LocalRelayPort 报告出站主机的网关能否把中转流接到本机这个端口：组件健康端口或外部程序的 relay_http 端口。
+// LocalRelayPort 报告出站主机的网关能否把中转流接到本机这个端口：只有外部程序的 relay_http 端口。
 func (c Catalog) LocalRelayPort(port int) bool {
 	_, relayHTTP := c.RelayHTTPCallers(port)
-	return relayHTTP || c.HealthPort(port)
+	return relayHTTP
 }
 
 // Allowed 报告调用方能否经中转连接出站主机的指定端口。

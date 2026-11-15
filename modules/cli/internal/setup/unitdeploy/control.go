@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -151,17 +149,6 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 			}
 			public["host"] = control.Address
 		case "monitor":
-			deployment, err := mapping("deployment")
-			if err != nil {
-				return nil, err
-			}
-			// 控制主机上的组件由同机的 Monitor 探测，直接连回环地址（公网地址从本机常常访问不通）。
-			deployment["local_host_id"] = control.Name
-			if slices.Contains(components, "console-proxy") {
-				endpoint := (&url.URL{Scheme: "https", Host: net.JoinHostPort(control.Address, "9527"), Path: "/"}).String()
-				target := map[string]string{"url": endpoint, "connect_address": net.JoinHostPort(control.Address, "9527"), "server_name": control.Address, "trust_mode": "internal", "ca_file": "../../console-proxy/certs/caddy/root.crt", "ca_baseline": "../../console-proxy/data/caddy/internal-ca.sha256"}
-				deployment["https"] = map[string]any{"console-proxy": target}
-			}
 			metrics, err := mapping("metrics")
 			if err != nil {
 				return nil, err

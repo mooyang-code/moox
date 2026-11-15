@@ -204,6 +204,8 @@ END;
 
 -- Application metrics catalog and ingestion state. Historical samples are kept
 -- in Storage; SQLite deliberately stores only bounded catalog/latest metadata.
+-- 每个进程启动（c_boot_id）一行：c_ctime 是这次启动第一次上报的时间，反复重启按它数；
+-- 就绪（ready、not_ready，空表示上报方没有就绪判断）与模块级生命周期取最近一次上报。
 CREATE TABLE IF NOT EXISTS t_monitor_metric_services (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
     c_service_name TEXT NOT NULL,
@@ -212,8 +214,12 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_services (
     c_node_id TEXT NOT NULL DEFAULT '',
     c_version TEXT NOT NULL DEFAULT '',
     c_last_seen_at DATETIME NOT NULL,
+    c_readiness TEXT NOT NULL DEFAULT '',
+    c_not_ready_reason TEXT NOT NULL DEFAULT '',
+    c_lifecycle_json TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_readiness IN ('', 'ready', 'not_ready'))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_services_key

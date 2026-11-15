@@ -11,7 +11,7 @@ export function statusLabel(status?: string) {
     case "disabled":
       return "已停用";
     case "unchecked":
-      return "不探测";
+      return "不检查";
     default:
       return "未知";
   }

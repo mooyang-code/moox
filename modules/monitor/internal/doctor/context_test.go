@@ -9,7 +9,6 @@ import (
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -18,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
@@ -44,24 +44,34 @@ func TestBuilderKeepsEveryHostDeploymentAndDoesNotInferMissingDefaults(t *testin
 	require.False(t, byHost[":collector"].Expected, "catalog defaults must not invent a deployment")
 }
 
-func TestBuilderHealthUsesPerComponentFreshnessAndConsecutiveFailures(t *testing.T) {
+// 健康观察项取最近一次上报里的就绪判断：未就绪为 DOWN 并带原因，上报超过两个间隔为过期，没有上报记为缺失。
+func TestBuilderHealthReadsReportedReadiness(t *testing.T) {
 	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
-	repos := mgr.Repositories()
-	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "deployment:node-a:monitor", IntervalSeconds: 30, Enabled: true}))
-	for i := 0; i < 3; i++ {
-		require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: time.Now().Add(time.Duration(i) * time.Nanosecond).String(), CheckID: "deployment:node-a:monitor", Status: domain.CheckStatusDegraded, Success: false, BodyExcerpt: `{"service":"monitor","instance_id":"monitor@node-a","node_id":"node-a","boot_id":"boot-a"}`, CheckedAt: now.Add(-time.Duration(i+3) * time.Minute)}))
+	messages, err := store.WithDatabase(mgr, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
+	_, err = messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "m1", OccurredAt: timestamppb.New(now.Add(-3 * time.Minute))},
+		&metricspb.MetricReport{ServiceName: "monitor", InstanceId: "monitor@node-a", NodeId: "node-a", BootId: "boot-a", Ready: proto.Bool(false), NotReadyReason: "观测输入未连接"}, nil)
+	require.NoError(t, err)
+	builder := Builder{
+		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{{ComponentId: "monitor", HostId: "node-a", Status: "enabled"}, {ComponentId: "eventbus", HostId: "node-a", Status: "enabled"}}},
+		Metrics:     monmetrics.NewQueryService(messages, nil), HealthChecks: report.BuiltInModuleHealthChecks(), Now: func() time.Time { return now },
 	}
-	builder := Builder{Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{{ComponentId: "monitor", HostId: "node-a", Status: "enabled"}}}, Checks: repos.Checks, Results: repos.Results, HealthChecks: report.BuiltInModuleHealthChecks(), Now: func() time.Time { return now }}
-	got, err := builder.Build(context.Background(), "node-a", []string{"monitor"}, nil)
+	got, err := builder.Build(context.Background(), "node-a", []string{"monitor", "eventbus"}, nil)
 	require.NoError(t, err)
 	require.Len(t, got.HealthObservations, 1)
 	require.Equal(t, "DOWN", got.HealthObservations[0].Status)
+	require.Contains(t, got.HealthObservations[0].Summary, "观测输入未连接")
 	require.True(t, got.HealthObservations[0].Stale)
 	require.Equal(t, 30, got.HealthObservations[0].IntervalSeconds)
+	missing := false
+	for _, observation := range got.MissingObservations {
+		missing = missing || (observation.Kind == "health" && observation.ComponentID == "eventbus")
+	}
+	require.True(t, missing, "没有上报的组件记为缺失")
 }
 
 func (s deploymentSourceStub) Snapshot(context.Context) (deployment.Snapshot, error) {
@@ -96,27 +106,6 @@ func TestBuilderMarksDisabledAsNotExpectedAndStorageDeferred(t *testing.T) {
 	require.False(t, byID["factor-mgr"].Expected)
 	require.Equal(t, "deferred", byID["storage-primary"].FunctionalObservability)
 	require.Empty(t, got.Watermarks)
-}
-
-func TestBuilderDoesNotRequireReporterIdentityForNotApplicableComponent(t *testing.T) {
-	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
-	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
-	require.NoError(t, mgr.ApplySchema(schema.SQL()))
-	repos := mgr.Repositories()
-	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "deployment:node-a:eventbus", IntervalSeconds: 30, Enabled: true}))
-	require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: "eventbus-result", CheckID: "deployment:node-a:eventbus", Status: domain.CheckStatusOK, Success: true, BodyExcerpt: `{}`, CheckedAt: now}))
-	builder := Builder{
-		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{{ComponentId: "eventbus", HostId: "node-a", Status: "enabled"}}},
-		Checks:      repos.Checks,
-		Results:     repos.Results,
-		Now:         func() time.Time { return now },
-	}
-	got, err := builder.Build(context.Background(), "node-a", []string{"eventbus"}, nil)
-	require.NoError(t, err)
-	require.Len(t, got.HealthObservations, 1)
-	require.False(t, got.HealthObservations[0].Conflict)
 }
 
 func TestBuilderRejectsUnknownSelections(t *testing.T) {

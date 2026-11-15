@@ -6,7 +6,6 @@ import (
 	"io"
 	"io/fs"
 	"maps"
-	"net"
 	"os/exec"
 	"path/filepath"
 	"sync"
@@ -14,16 +13,11 @@ import (
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-// hostRemote 是命令行访问各台主机的统一连接层，按 moox.toml 与操作员网关装配：
+// hostRemote 是命令行访问各台主机的统一连接层，按 moox.toml 装配：
 //   - 在主机上执行命令、上传下载文件（经 SSH，复用同一台主机的连接）；
-//   - 诊断用：读取 systemd 用户服务状态、对出站主机做中转健康探测。
-
-type relayDialer interface {
-	DialRelay(ctx context.Context, hostID string, port int) (net.Conn, error)
-}
+//   - 诊断用：读取 systemd 用户服务状态。
 
 // hostRemote 是诊断用的远程能力；close 释放 SSH 连接。
 type hostRemote struct {
@@ -31,21 +25,16 @@ type hostRemote struct {
 	localNodeID string
 	dial        func(context.Context, setupconfig.Host) (setupssh.Client, error)
 	runLocal    func(ctx context.Context, argv []string) (string, error)
-	relay       relayDialer
 
 	mu      sync.Mutex
 	clients map[string]setupssh.Client
 }
 
-func newHostRemote(manifest setupconfig.Manifest, localNodeID string, gateway any) *hostRemote {
-	remote := &hostRemote{
+func newHostRemote(manifest setupconfig.Manifest, localNodeID string) *hostRemote {
+	return &hostRemote{
 		manifest: manifest, localNodeID: localNodeID, dial: dialSetupHost, runLocal: runLocalCommand,
 		clients: map[string]setupssh.Client{},
 	}
-	if relay, ok := gateway.(relayDialer); ok {
-		remote.relay = relay
-	}
-	return remote
 }
 
 func runLocalCommand(ctx context.Context, argv []string) (string, error) {
@@ -114,22 +103,9 @@ func (r *hostRemote) Download(ctx context.Context, hostID, src string, dst io.Wr
 	return client.Download(ctx, src, dst)
 }
 
-func (r *hostRemote) outbound(nodeID string) bool {
-	reachability, _ := servicecatalog.ParseReachability(r.manifest.HostByID(nodeID).Reachability)
-	return reachability == servicecatalog.ReachabilityOutbound
-}
-
 // Systemd 返回读取 systemd 用户服务状态的检查器。
 func (r *hostRemote) Systemd() doctorcli.SystemdChecker {
 	return doctorcli.NewSystemdChecker(r.Run)
-}
-
-// Relay 返回出站主机的中转健康探测器；操作员网关不支持中转时为 nil。
-func (r *hostRemote) Relay(auth doctorcli.HealthAuth) *doctorcli.RelayProber {
-	if r.relay == nil {
-		return nil
-	}
-	return &doctorcli.RelayProber{Auth: auth, Outbound: r.outbound, Dial: r.relay.DialRelay}
 }
 
 func (r *hostRemote) Close() {
@@ -146,7 +122,7 @@ func (r *hostRemote) Close() {
 }
 
 // openHostRemote 读取 moox.toml 装配连接层；读不到配置时返回错误。
-func openHostRemote(file string, localNodeID string, gateway any) (*hostRemote, error) {
+func openHostRemote(file string, localNodeID string) (*hostRemote, error) {
 	absolute, err := filepath.Abs(defaultFlag(file, "./moox.toml"))
 	if err != nil {
 		return nil, err
@@ -155,12 +131,12 @@ func openHostRemote(file string, localNodeID string, gateway any) (*hostRemote, 
 	if err != nil {
 		return nil, err
 	}
-	return newHostRemoteFromSnapshot(snapshot, localNodeID, gateway), nil
+	return newHostRemoteFromSnapshot(snapshot, localNodeID), nil
 }
 
 // loadHostRemote 同 openHostRemote，读不到配置时返回 nil（诊断退回只用 Monitor 事实与本机探测）。
-func loadHostRemote(file string, localNodeID string, gateway any) *hostRemote {
-	remote, err := openHostRemote(file, localNodeID, gateway)
+func loadHostRemote(file string, localNodeID string) *hostRemote {
+	remote, err := openHostRemote(file, localNodeID)
 	if err != nil {
 		return nil
 	}
@@ -169,10 +145,10 @@ func loadHostRemote(file string, localNodeID string, gateway any) *hostRemote {
 
 // newHostRemoteFromSnapshot 先复制主机目录（SSH 密码要留到建立连接时使用），再清掉快照里的其余凭据；
 // 复制出来的密码在 Close 时清除。
-func newHostRemoteFromSnapshot(snapshot *setupconfig.Snapshot, localNodeID string, gateway any) *hostRemote {
+func newHostRemoteFromSnapshot(snapshot *setupconfig.Snapshot, localNodeID string) *hostRemote {
 	manifest := snapshot.Manifest
 	catalog := maps.Clone(manifest.HostCatalog)
 	clearSetupSecrets(snapshot)
 	manifest.HostCatalog = catalog
-	return newHostRemote(manifest, localNodeID, gateway)
+	return newHostRemote(manifest, localNodeID)
 }

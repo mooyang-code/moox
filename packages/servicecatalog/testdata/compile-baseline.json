@@ -70,34 +70,6 @@
               ]
             },
             {
-              "port": 11012,
-              "callers": [
-                "monitor",
-                "moox-cli"
-              ]
-            },
-            {
-              "port": 11417,
-              "callers": [
-                "monitor",
-                "moox-cli"
-              ]
-            },
-            {
-              "port": 11418,
-              "callers": [
-                "monitor",
-                "moox-cli"
-              ]
-            },
-            {
-              "port": 11425,
-              "callers": [
-                "monitor",
-                "moox-cli"
-              ]
-            },
-            {
               "port": 11428,
               "callers": [
                 "console"
@@ -163,7 +135,7 @@
         {"service":"trpc.moox.collector.CollectMgr","method":"GetIngestMode","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.collector.CollectMgr","method":"GetKlineBackfill","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.collector.CollectMgr","method":"GetKlineResampleJob","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
-        {"service":"trpc.moox.collector.CollectMgr","method":"GetLifecycle","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":60000,"read_only":true,"callers":["console","moox-cli"]},
+        {"service":"trpc.moox.collector.CollectMgr","method":"GetLifecycle","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":330000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.collector.CollectMgr","method":"GetTaskDetail","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.collector.CollectMgr","method":"GetTaskList","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.collector.CollectMgr","method":"GetTaskResultInventory","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","monitor","moox-cli"]},

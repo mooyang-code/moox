@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/modules/strategy/internal/warmup"
-	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report/logsink"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -29,7 +28,6 @@ const (
 	lifecycleStartupRefreshEvery = time.Second
 	lifecycleStartupWindow       = time.Minute
 	lifecycleStateFileName       = "lifecycle.json"
-	lifecycleHealthDetailID      = "lifecycle"
 )
 
 // moduleCheck 是策略模块自身的就绪检查：数据库 Ping、出站 EventBus 已连、就绪事件消费者已连。周期刷新一个结果，
@@ -294,16 +292,4 @@ func triggerGate(c *lifecycle.Controller, ready *moduleCheck, warm warmState) fu
 // releasedAt 把模块最近一次放行的时间交给处理器：放行之前收盘的周期只记录、不求值（系统恢复与单模块恢复一样）。
 func releasedAt(c *lifecycle.Controller) func(string) time.Time {
 	return func(string) time.Time { return c.ReleasedAt() }
-}
-
-// withLifecycle 把模块的生命周期状态放进健康检查响应（Monitor 据此汇总首页的系统状态），不改变就绪判定。
-func withLifecycle(snapshot func(context.Context) healthz.Response, c *lifecycle.Controller) func(context.Context) healthz.Response {
-	return func(ctx context.Context) healthz.Response {
-		rsp := snapshot(ctx)
-		if rsp.Details == nil {
-			rsp.Details = map[string]any{}
-		}
-		rsp.Details[lifecycleHealthDetailID] = c.State()
-		return rsp
-	}
 }

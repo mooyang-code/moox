@@ -127,7 +127,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":  {182, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "44ae3fed88cd9b593a387ee5381f90da9750a4eeed7e85a10d2fccecac2369f0"},
+		"control":  {182, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "33c1449d24cc5aed00656fb127314cf061d637369c0160e7559a3e5516ee090e"},
 		"storage":  {65, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "4304606d48e8f9f3aa00d7da895c7fbf6058a9c512c60ff9518f148b091d7cef"},
 		"overseas": {64, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "2a99e829e1d556006975d4b2e8f42b6651acf6a22df3438d11446fdf4cdba2ad"},
 	}
@@ -408,13 +408,8 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 	if !relay.Allowed("monitor", HostGatewayRemotePort) || relay.Allowed("admin", HostGatewayRemotePort) || relay.Allowed("monitor", 1) {
 		t.Fatal("relay allowlist is wrong")
 	}
-	if len(relay.Ports) < 2 {
-		t.Fatal("component health ports are missing")
-	}
-	for _, port := range relay.Ports[1:] {
-		if !slices.Equal(port.Callers, []string{"monitor", "moox-cli"}) {
-			t.Fatalf("health port %d open to %v", port.Port, port.Callers)
-		}
+	if len(relay.Ports) != 1 {
+		t.Fatalf("组件健康端口不经中转（组件健康只看上报）: %+v", relay.Ports)
 	}
 	storage, err := c.Compile(p, "storage")
 	if err != nil {
@@ -440,9 +435,9 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 	}
 }
 
-// 因子机是只能出站的主机：外部程序以外部身份经 Access 访问系统，不是网关调用方；它们的健康端口进入中转许可，只对 Monitor 与 moox-cli 开放。
+// 因子机是只能出站的主机：外部程序以外部身份经 Access 访问系统，不是网关调用方；组件健康只看上报，它们的健康端口不进中转许可。
 // 因子引擎声明的服务另见 TestExternalProgramServiceRoutesThroughItsHostGateway。
-func TestOutboundFactorHostRelaysExternalProgramHealthPorts(t *testing.T) {
+func TestOutboundFactorHostDoesNotRelayHealthPorts(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
 	p.Hosts = append(p.Hosts, Host{ID: "factor", Address: "192.168.0.103", Status: Enabled, Reachability: ReachabilityOutbound})
 	for _, id := range []string{"host-gateway", "host-agent", "factor-engine", "archive-worker"} {
@@ -465,8 +460,8 @@ func TestOutboundFactorHostRelaysExternalProgramHealthPorts(t *testing.T) {
 		t.Fatalf("factor relay = %+v", control.Relays)
 	}
 	for _, port := range []int{11417, 11418, 11012, 11425} {
-		if !relay.Allowed("monitor", port) || !relay.Allowed("moox-cli", port) || relay.Allowed("collector", port) {
-			t.Fatalf("health port %d is not limited to monitor and moox-cli: %+v", port, relay.Ports)
+		if relay.Allowed("monitor", port) || relay.Allowed("moox-cli", port) || relay.Allowed("collector", port) {
+			t.Fatalf("health port %d must not be relayed: %+v", port, relay.Ports)
 		}
 	}
 	if relay.Allowed("moox-cli", 22) || relay.Allowed("monitor", 22) {

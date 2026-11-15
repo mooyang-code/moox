@@ -21,7 +21,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T) {
+func TestReporterExpectationUsesStableDeploymentIdentity(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, manager.Close()) })
@@ -31,18 +31,13 @@ func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T
 	query := monmetrics.NewQueryService(messages, nil)
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	for i := range catalog.Components {
-		if catalog.Components[i].ID == "factor-mgr" {
-			catalog.Components[i].Health = servicecatalog.Health{Kind: "none"}
-		}
-	}
 	now := time.Now().UTC()
 	snapshot := domain.TopologySnapshot{Catalog: catalog, ObservedAt: now,
 		Hosts:       []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
 		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "factor-mgr", Status: "enabled"}},
 	}
 	repos := manager.Repositories()
-	_, err = repos.Topology.Reconcile(t.Context(), snapshot, nil)
+	err = repos.Topology.Reconcile(t.Context(), snapshot)
 	require.NoError(t, err)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}, repos, nil)
 	require.NoError(t, run(t.Context()))
@@ -50,7 +45,7 @@ func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T
 	results, err := repos.Results.Recent(t.Context(), "mooxsys", id, 10)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	require.False(t, results[0].Success, "registration creates a never-reported expectation without a probe")
+	require.False(t, results[0].Success, "登记了部署就要求上报：从没上报过按停止上报处理")
 	require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: timestamppb.New(now)}, &metricspb.MetricReport{ServiceName: "factor-mgr", NodeId: "control", InstanceId: "factor-mgr@control", BootId: "boot-1"}))
 	require.NoError(t, run(t.Context()))
 	results, err = repos.Results.Recent(t.Context(), "mooxsys", id, 10)
@@ -59,9 +54,9 @@ func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T
 	require.True(t, results[0].Success, "the first report resolves the same check identity")
 	checks, err := repos.Checks.List(t.Context(), store.ListChecksOptions{Source: domain.CheckSourceObservability, Page: store.Page{PageSize: 10}})
 	require.NoError(t, err)
-	require.Len(t, checks, 1)
+	require.Len(t, checks, 2, "停止上报一条、反复重启一条；上报里没有就绪判断时不生成未就绪检查")
 	snapshot.Deployments[0].Status = "disabled"
-	_, err = repos.Topology.Reconcile(t.Context(), snapshot, nil)
+	err = repos.Topology.Reconcile(t.Context(), snapshot)
 	require.NoError(t, err)
 	require.NoError(t, run(t.Context()))
 	check, err := repos.Checks.Get(t.Context(), "mooxsys", id)
@@ -71,7 +66,7 @@ func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, results, 2, "disable does not fabricate a successful report")
 	snapshot.Deployments[0].Status = "enabled"
-	_, err = repos.Topology.Reconcile(t.Context(), snapshot, nil)
+	err = repos.Topology.Reconcile(t.Context(), snapshot)
 	require.NoError(t, err)
 	require.NoError(t, run(t.Context()))
 	check, err = repos.Checks.Get(t.Context(), "mooxsys", id)
@@ -81,7 +76,7 @@ func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, results, 3)
 	snapshot.Deployments = nil
-	_, err = repos.Topology.Reconcile(t.Context(), snapshot, nil)
+	err = repos.Topology.Reconcile(t.Context(), snapshot)
 	require.NoError(t, err)
 	require.NoError(t, run(t.Context()))
 	check, err = repos.Checks.Get(t.Context(), "mooxsys", id)
@@ -101,7 +96,7 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
 	now := time.Now().UTC()
-	_, err = manager.Repositories().Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now}, nil)
+	err = manager.Repositories().Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now})
 	require.NoError(t, err)
 	route := metricsObservabilityRoute(messages, nil, nil, true)
 	registry, err := events.DefaultRegistry()

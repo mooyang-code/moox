@@ -338,31 +338,16 @@
           <dd>{{ statusLabel(selected.status) }}</dd>
           <dt>状态开始</dt>
           <dd>{{ formatInstant(selected.status_since, displayZone) }}</dd>
-          <dt>探测地址</dt>
-          <dd>{{ selected.probe_url || "不探测" }}</dd>
         </dl>
-        <h4>健康探测 · {{ statusLabel(selected.probe?.status) }}</h4>
-        <p>
-          {{ selected.probe?.reason }}<small> · 最新检查 {{ formatInstant(selected.probe?.checked_at, displayZone) }}</small>
-        </p>
-        <RawError :value="selected.probe?.raw_error" />
-        <div v-if="selected.recent_probes?.length" class="probe-strip" aria-label="最近探测">
-          <span
-            v-for="probe in selected.recent_probes"
-            :key="probe.checked_at"
-            class="probe"
-            :class="`is-${classify(probe.status).tone}`"
-            :title="`${formatInstant(probe.checked_at, displayZone)} · ${statusLabel(probe.status)} · ${probe.reason || ''}`"
-          />
-          <small class="muted">最近 {{ selected.recent_probes.length }} 次探测（最多 10 次）</small>
-        </div>
-        <h4>
-          指标上报 · {{ selected.reporter?.status === "unchecked" ? "不要求上报" : statusLabel(selected.reporter?.status) }}
-        </h4>
+        <h4>指标上报 · {{ statusLabel(selected.reporter?.status) }}</h4>
         <p>
           {{ selected.reporter?.reason
           }}<small> · 最后上报 {{ formatInstant(selected.reporter?.checked_at, displayZone) }}</small>
         </p>
+        <template v-if="selected.readiness">
+          <h4>就绪 · {{ selected.readiness === "ready" ? "已就绪" : "未就绪" }}</h4>
+          <p v-if="selected.readiness === 'not_ready'">{{ selected.not_ready_reason || "组件报告未就绪，没有说明原因" }}</p>
+        </template>
         <div v-if="selected.instances?.length" class="table-scroll">
           <table>
             <thead>
@@ -405,7 +390,6 @@ import { statusLabel } from "./health-display";
 import {
   alertGroups,
   businessKinds,
-  classify,
   componentsByHost,
   hostCards,
   incidentTimeline,
@@ -1375,21 +1359,6 @@ td small {
 .detail h4 {
   margin-top: 8px;
 }
-.probe-strip {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.probe {
-  width: 10px;
-  height: 18px;
-  border-radius: 2px;
-  background: var(--tone);
-}
-.probe-strip small {
-  margin-left: 8px;
-}
-
 @media (max-width: 760px) {
   .incident {
     grid-template-columns: 70px auto minmax(0, 1fr);

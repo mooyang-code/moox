@@ -25,19 +25,7 @@
       "triggered_at": "2026-10-09T12:00:00Z"
     }
   ],
-  "business_checks": [
-    {
-      "check_id": "console-page:control:console-proxy",
-      "checked_at": "2026-10-09T12:00:00Z",
-      "kind": "console-page",
-      "module": "console-proxy",
-      "name": "",
-      "raw_error": "HTTP 502\nupstream web-host",
-      "reason": "页面请求失败",
-      "space_id": "",
-      "status": "down"
-    }
-  ],
+  "business_checks": [],
   "components": [
     {
       "component_id": "archive-mgr",
@@ -45,20 +33,14 @@
       "instances": [],
       "lifecycle": null,
       "name": "数据归档管理服务",
-      "probe": {
-        "checked_at": "",
-        "raw_error": "",
-        "reason": "",
-        "status": "disabled"
-      },
-      "probe_url": "",
+      "not_ready_reason": "",
+      "readiness": "",
       "reason": "部署已停用",
-      "recent_probes": [],
       "reporter": {
         "checked_at": "",
         "raw_error": "",
-        "reason": "未配置指标上报",
-        "status": "unchecked"
+        "reason": "从未收到监控上报",
+        "status": "unknown"
       },
       "status": "disabled",
       "status_since": ""
@@ -77,15 +59,9 @@
       ],
       "lifecycle": null,
       "name": "目录中的控制台入口",
-      "probe": {
-        "checked_at": "2026-10-09T12:00:00Z",
-        "raw_error": "",
-        "reason": "",
-        "status": "healthy"
-      },
-      "probe_url": "",
-      "reason": "健康检查正常",
-      "recent_probes": [],
+      "not_ready_reason": "",
+      "readiness": "ready",
+      "reason": "监控上报正常",
       "reporter": {
         "checked_at": "2026-10-09T12:00:00Z",
         "raw_error": "",
@@ -101,22 +77,16 @@
       "instances": [],
       "lifecycle": null,
       "name": "消息总线",
-      "probe": {
-        "checked_at": "",
-        "raw_error": "",
-        "reason": "",
-        "status": "unchecked"
-      },
-      "probe_url": "",
-      "reason": "不探测",
-      "recent_probes": [],
+      "not_ready_reason": "",
+      "readiness": "",
+      "reason": "从未收到监控上报",
       "reporter": {
         "checked_at": "",
         "raw_error": "",
         "reason": "从未收到监控上报",
         "status": "unknown"
       },
-      "status": "unchecked",
+      "status": "unknown",
       "status_since": ""
     },
     {
@@ -125,20 +95,14 @@
       "instances": [],
       "lifecycle": null,
       "name": "控制台前端",
-      "probe": {
-        "checked_at": "2026-10-09T12:00:00Z",
-        "raw_error": "dial tcp: connection refused\n原始错误",
-        "reason": "健康检查失败",
-        "status": "down"
-      },
-      "probe_url": "",
-      "reason": "健康检查失败",
-      "recent_probes": [],
+      "not_ready_reason": "上游连不上",
+      "readiness": "not_ready",
+      "reason": "未就绪：上游连不上",
       "reporter": {
-        "checked_at": "",
+        "checked_at": "2026-10-09T12:00:00Z",
         "raw_error": "",
-        "reason": "未配置指标上报",
-        "status": "unchecked"
+        "reason": "监控上报正常",
+        "status": "healthy"
       },
       "status": "down",
       "status_since": ""
@@ -149,22 +113,16 @@
       "instances": [],
       "lifecycle": null,
       "name": "控制台前端",
-      "probe": {
-        "checked_at": "",
-        "raw_error": "",
-        "reason": "",
-        "status": "unknown"
-      },
-      "probe_url": "",
-      "reason": "尚未完成健康检查",
-      "recent_probes": [],
+      "not_ready_reason": "",
+      "readiness": "",
+      "reason": "已停止上报",
       "reporter": {
-        "checked_at": "",
+        "checked_at": "2026-10-09T11:50:00Z",
         "raw_error": "",
-        "reason": "未配置指标上报",
-        "status": "unchecked"
+        "reason": "监控上报已中断",
+        "status": "degraded"
       },
-      "status": "unknown",
+      "status": "degraded",
       "status_since": ""
     }
   ],
@@ -311,12 +269,12 @@
   ],
   "summary": {
     "alert_count": 1,
-    "attention_count": 6,
+    "attention_count": 5,
     "components": {
-      "attention_count": 1,
+      "attention_count": 2,
       "disabled_count": 1,
       "healthy_count": 1,
-      "unchecked_count": 1,
+      "unchecked_count": 0,
       "unknown_count": 1
     },
     "healthy_count": 1,
@@ -340,15 +298,9 @@
       ],
       "lifecycle": null,
       "name": "unknown-collector-name",
-      "probe": {
-        "checked_at": "",
-        "raw_error": "",
-        "reason": "",
-        "status": "unknown"
-      },
-      "probe_url": "",
+      "not_ready_reason": "",
+      "readiness": "",
       "reason": "进程在上报，但没有部署记录",
-      "recent_probes": [],
       "reporter": {
         "checked_at": "",
         "raw_error": "",

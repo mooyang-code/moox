@@ -17,10 +17,12 @@ const MaxManifestComponents = 64
 
 type Transport string
 
+// Transport 是组件健康的上报来源（设计 3.8，组件健康只看上报）：reporter 是组件自己经 packages/report 上报；
+// host_snapshot 是 host-agent 的主机快照；delegated 是外部程序只给管理端发心跳，由管理端代报（因子引擎、归档 worker）。
 const (
 	TransportReporter     Transport = "reporter"
 	TransportHostSnapshot Transport = "host_snapshot"
-	TransportHealthOnly   Transport = "health_only"
+	TransportDelegated    Transport = "delegated"
 )
 
 type FunctionalObservability string
@@ -177,7 +179,7 @@ func (c Component) validate() error {
 		return fmt.Errorf("service_name %q is not an independently deployed process", c.ServiceName)
 	}
 	switch c.Transport {
-	case TransportReporter, TransportHostSnapshot, TransportHealthOnly:
+	case TransportReporter, TransportHostSnapshot, TransportDelegated:
 	default:
 		return fmt.Errorf("invalid transport %q", c.Transport)
 	}

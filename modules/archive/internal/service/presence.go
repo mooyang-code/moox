@@ -5,7 +5,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
+	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/report"
+	"google.golang.org/protobuf/proto"
 )
 
 // workerOnline 报告 worker 在 2 分钟内是否有心跳。
@@ -27,6 +29,20 @@ func (s *Service) Presence(ctx context.Context) (state int, workerID string, las
 		workerID, lastHeartbeat = worker.WorkerID, worker.LastHeartbeat
 	}
 	return report.EvaluatePresence(required, lastHeartbeat, s.clock(), report.DefaultPresenceTimeout), workerID, lastHeartbeat, nil
+}
+
+// DelegatedWorkerReport 是 archive-mgr 代归档 worker 上报给 Monitor 的一行（设计 3.8）：worker 只给管理端发心跳，
+// 心跳被接受即算就绪（对象存储是否可用另有检查）；Monitor 按心跳时间判断它是否停止上报。从没心跳过时返回 nil。
+// worker 的心跳不带启动标识，所以 Monitor 发现不了它反复重启。
+func (s *Service) DelegatedWorkerReport(ctx context.Context) (*metricspb.DelegatedReport, error) {
+	worker, ok, err := s.store.GetWorker(ctx)
+	if err != nil || !ok || worker.LastHeartbeat.IsZero() {
+		return nil, err
+	}
+	return &metricspb.DelegatedReport{
+		ServiceName: "archive-worker", InstanceId: worker.WorkerID, ServiceVersion: worker.Version,
+		LastHeartbeatUnix: worker.LastHeartbeat.Unix(), Ready: proto.Bool(true),
+	}, nil
 }
 
 // ObjectStoreState 评估 worker 的对象存储可用状态（见 report.EvaluateObjectStore）。

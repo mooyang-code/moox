@@ -38,8 +38,11 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 	})
 }
 
-// windowCheckName 是“本地窗口已载入”这一项检查的名字：恢复追赶据此区分“只是窗口没载入”与别的不通过项。
-const windowCheckName = "本地窗口"
+// windowCheckName、modulesCheckName 是“本地窗口已载入”“自定义算子模块就绪”两项检查的名字：恢复追赶据此区分暂时不通过与别的不通过项。
+const (
+	windowCheckName  = "本地窗口"
+	modulesCheckName = "自定义算子模块"
+)
 
 // taskChecks 缓存各任务最近一次检查的结果。没有检查过的任务算不通过：引擎启动后窗口载入、检查通过之前不出结果。
 type taskChecks struct {
@@ -152,10 +155,13 @@ func (r *Runtime) catchupModulesPending(tasks []domain.EngineTask) string {
 	return ""
 }
 
-// catchupMembers 是参与本次恢复追赶的任务：除“本地窗口”之外还有不通过的检查项的任务不参与（本来就不计算，不挡放行，
-// 检查通过之后由连续水位从断点补算）。只是窗口没载入的任务照常参与（例如暂停期间引擎重启，载入记录只在内存里）：
-// 追赶会先同步本地数据，载入窗口并立即重查，在那之前报未追平。还没检查过的任务也参与，同步之后的重查决定它去留。
-// 变更日志断档按当时的状态直接判断（与“变更同步”检查同一个条件），不等下一次重查：断档的任务不能再建追赶目标、推进水位。
+// catchupMembers 是参与本次恢复追赶的任务：有不会自己好的不通过项的任务不参与（本来就不计算，不挡放行，
+// 检查通过之后由连续水位从断点补算）。暂时不通过的照常参与，在它们好之前报未追平：
+//   - 窗口没载入（例如暂停期间引擎重启，载入记录只在内存里）：追赶会先同步本地数据，载入窗口并立即重查；
+//   - 引用的自定义算子模块还没开始拉取、正在拉取或编译：模块就绪后重查通过；拉取失败、编译失败要人工处理，才排除。
+//
+// 还没检查过的任务也参与，同步之后的重查决定它去留。数据源不能计算（本地数据、回看数量、变更日志断档，见 sourceBlocked）
+// 按当时的状态直接判断，不等下一次重查：这些任务不能再建追赶目标、推进水位。
 func (r *Runtime) catchupMembers() []domain.EngineTask {
 	if r.catalog == nil {
 		return nil
@@ -163,7 +169,7 @@ func (r *Runtime) catchupMembers() []domain.EngineTask {
 	var members []domain.EngineTask
 	for _, set := range r.catalog.Sets() {
 		checks, _ := r.checks.get(set.Set.TaskID)
-		if failsBeyondWindow(checks) || r.sourceBlocked(set) {
+		if failsBeyondWindow(checks) || r.modulesFailed(set) || r.sourceBlocked(set) {
 			continue
 		}
 		members = append(members, set)
@@ -171,18 +177,53 @@ func (r *Runtime) catchupMembers() []domain.EngineTask {
 	return members
 }
 
-// sourceBlocked 报告任务的数据源是否变更日志断档（与 blockedCheck 同一个条件）。
+// sourceBlocked 报告任务的数据源当前能不能计算，与 blockedCheck 用同一个判断（sourceError 非空）：
+// 零数据标的（“本地数据”）、因子回看超过窗口（“回看数量”）、窗口内存超过预算与变更日志断档（这两种检查项名都是“变更同步”）。
 func (r *Runtime) sourceBlocked(set domain.EngineTask) bool {
-	if r.data == nil {
-		return false
-	}
-	return r.data.Blocked(seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}) != nil
+	return r.sourceError(seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}) != nil
 }
 
-// failsBeyondWindow 报告检查结果里除“本地窗口”外还有没有不通过的项。
+// sourceError 返回数据源当前不能计算的原因（本地数据层的 Blocked），能计算时为 nil。
+func (r *Runtime) sourceError(src seriesstore.Source) error {
+	if r.blockedSource != nil {
+		return r.blockedSource(src)
+	}
+	if r.data == nil {
+		return nil
+	}
+	return r.data.Blocked(src)
+}
+
+// failsBeyondWindow 报告检查结果里除“本地窗口”“自定义算子模块”外还有没有不通过的项。这两项可能只是暂时不通过：
+// 窗口载入由追赶的同步完成；模块是不是真的失败看 modulesFailed。
 func failsBeyondWindow(checks []domain.TaskCheck) bool {
 	for _, check := range checks {
-		if check.Status == domain.TaskCheckFail && check.Name != windowCheckName {
+		if check.Status == domain.TaskCheckFail && check.Name != windowCheckName && check.Name != modulesCheckName {
+			return true
+		}
+	}
+	return false
+}
+
+// modulesFailed 报告任务引用的自定义算子模块里有没有拉取失败或编译失败的：要人工处理，任务不参与追赶。
+// 还没开始拉取、正在拉取的不算失败，任务照常参与追赶，等模块就绪（catchupModulesPending 报阻塞原因）。
+func (r *Runtime) modulesFailed(set domain.EngineTask) bool {
+	if r.udf == nil {
+		return false
+	}
+	refs := refsOfTasks([]domain.EngineTask{set})
+	if len(refs) == 0 {
+		return false
+	}
+	states := map[string]string{}
+	for _, module := range r.udf.Status() {
+		states[module.Hash] = module.State
+	}
+	for _, ref := range refs {
+		if r.udf.Ready(ref.hash) {
+			continue
+		}
+		if state := states[ref.hash]; state == domain.UDFModuleFetchFailed || state == domain.UDFModuleCompileFailed {
 			return true
 		}
 	}
@@ -316,7 +357,7 @@ func gapMessage(count int, first localdata.LongGap) string {
 
 // blockedCheck 把数据源当前不能计算的原因翻成检查项：零数据标的要导入或移除，因子回看超过 N 要调 N，变更日志断档要对账。
 func (r *Runtime) blockedCheck(src seriesstore.Source, taskID string) domain.TaskCheck {
-	err := r.data.Blocked(src)
+	err := r.sourceError(src)
 	if err == nil {
 		return domain.TaskCheck{Name: "变更同步", Status: domain.TaskCheckPass}
 	}
@@ -358,15 +399,16 @@ func (r *Runtime) coverageCheck(ctx context.Context, src seriesstore.Source) dom
 	}
 }
 
-// lifecycleStatus 是随心跳上报的模块级生命周期状态：管理端据此确认本次暂停已收敛（切换自定义算子版本的前提）。
+// lifecycleStatus 是随心跳上报的模块级生命周期状态：管理端据此确认本次暂停已收敛（切换自定义算子版本的前提），
+// 并把暂停类型、原因与追赶进度代报给 Monitor（首页的系统状态读它）。
 func (r *Runtime) lifecycleStatus() domain.EngineLifecycle {
 	if r.life == nil {
 		return domain.EngineLifecycle{}
 	}
 	state := r.life.State()
-	out := domain.EngineLifecycle{Stage: string(state.Stage), QuiescedAt: state.QuiescedAt, Quiesced: state.Quiesced(), CatchupBlocked: r.catchupPreconditionFor(r.catchupMembers())}
+	out := domain.EngineLifecycle{Stage: string(state.Stage), QuiescedAt: state.QuiescedAt, Quiesced: state.Quiesced(), CatchupBlocked: r.catchupPreconditionFor(r.catchupMembers()), Catchup: state.Catchup}
 	if state.Pause != nil {
-		out.PausedSince = state.Pause.Since
+		out.PausedSince, out.PauseKind, out.PauseReason = state.Pause.Since, string(state.Pause.Kind), state.Pause.Reason
 	}
 	return out
 }

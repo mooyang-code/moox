@@ -97,16 +97,24 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline check --deep --file ./
 ## 6. 因子机本地全量导入（操作机，经网关写因子机）
 
 `--target factor` 经操作员网关调因子引擎 `trpc.moox.factor.EngineControl` 的 `WriteSeries`（因子机只能出站时经 control 中转），
-文件留在操作机上，不再传到因子机、也不在因子机上运行 moox-cli（因子机上没有 moox-cli 的签名身份）。
-数据从操作机经 control 绕到因子机（control 上还跑着生产采集），全量历史大时会慢：先用一个标的试跑并记下耗时，按耗时估算全量要多久、告诉用户。
+文件留在操作机上，不传到因子机，也不在因子机上运行 moox-cli：导入由操作机上的 moox-cli 用操作员网关签名发出。
+（因子机网关的快照缓存里本来就有 moox-cli 的校验密钥，因子机上的进程能经它调到 moox-cli 能调的方法，见[主机网关](../../../docs/模块/主机网关.md)；每台主机一把密钥之后才收紧。）
+
+数据从操作机经 control 绕到因子机，**中转没有限速**：control 的出口与采集写 Storage 走的是同一条跨地域公网，一路 TCP 就可能把它占满，挤占生产采集
+（先例：从海外机 rsync 一个 81 MB 的文件让 1m 因子晚了 8 分钟）。`xargs -P` 限制的是进程数，不是带宽。所以：
+
+- **先估体量**：行数 ×（数值列数 × 约 9 字节 + 时间与 tag 约 30 字节），批次经 zstd 压缩后再发，压缩能省一部分，但长历史的总量仍可能到 GB 级；
+  例如 500 个标的、每个 5 年 5m 线（约 52 万行）、20 列，约 500 × 52 万 × 210 字节 ≈ 55 GB 原始量。先用一个标的试跑并记下耗时，按耗时估算全量要多久、告诉用户。
+- **从 1 路开始**：导入时盯着采集延迟（告警已屏蔽，看首页的数据新鲜度与监控页数据链路的到达延迟），没有变慢再考虑加到 2 路；变慢就停下来，挑采集空闲的时段再导。
+
 一批（`--batch-rows`，默认一万行）编码后不能超过 4 MiB，超了按提示减小 `--batch-rows`。
 
 ```bash
 # 试跑一个标的
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --file ./moox.toml --target factor --space-id <空间> --dataset-id <数据集> --frequency <频率> \
   --series-tag '<series_tag>' --allow-missing --job-db ./one.db --path <包目录>/<频率>/<标的>.csv
-# 全量：每个文件一个进程、各自独立的断点库；经 control 中转，先用 2 路并发，看 control 上的采集是否受影响再加（没有实测过上限）
-ls <包目录>/<频率>/*.csv | xargs -P 2 -I{} sh -c 'env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --file ./moox.toml --target factor --space-id <空间> --dataset-id <数据集> --frequency <频率> \
+# 全量：每个文件一个进程、各自独立的断点库；经 control 中转没有限速，从 1 路开始，盯着采集延迟再决定加不加
+ls <包目录>/<频率>/*.csv | xargs -P 1 -I{} sh -c 'env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --file ./moox.toml --target factor --space-id <空间> --dataset-id <数据集> --frequency <频率> \
   --series-tag "<series_tag>" --allow-missing --job-db "./jobs/$(basename {}).db" --path {} > "./logs/$(basename {}).log" 2>&1 \
   && echo ok >> ok.txt || echo "{}" >> fail.txt'
 ```

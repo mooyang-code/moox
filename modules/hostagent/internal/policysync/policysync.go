@@ -1,5 +1,6 @@
 // Package policysync 定期从 Monitor 拉取主机策略（告警渠道与主机守护参数），写入 <部署根>/run/host-policy.json。
 // moox-runtime watch 与证书巡检只读这个文件；拉取失败时保留旧文件，控制面不可用也不影响主机侧告警。
+// 拉取的结果同时是非控制机对控制机与 Monitor 的直推依据（见 Watch）。
 package policysync
 
 import (
@@ -17,8 +18,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Interval 是拉取周期；启动时先拉一次。
-const Interval = 5 * time.Minute
+// Interval 是拉取周期；启动时先拉一次。连续 3 次失败即推送“控制机或 Monitor 不可达”（Watch），所以按分钟拉取。
+const Interval = time.Minute
 
 // Fetcher 调用 MonitorMgr.GetHostPolicy。
 type Fetcher func(context.Context) (*monitorpb.GetHostPolicyRsp, error)
@@ -50,10 +51,15 @@ type Syncer struct {
 	fetch Fetcher
 	now   func() time.Time
 
+	watch *Watch
+
 	mu      sync.Mutex
 	lastErr string
 	lastAt  time.Time
 }
+
+// SetWatch 让每次拉取的结果交给直推判断（控制机或 Monitor 不可达、Monitor 反复重启）。
+func (s *Syncer) SetWatch(watch *Watch) { s.watch = watch }
 
 // New 创建同步器；path 是 host-policy.json 的绝对路径。
 func New(path string, fetch Fetcher) (*Syncer, error) {
@@ -70,7 +76,10 @@ func New(path string, fetch Fetcher) (*Syncer, error) {
 
 // SyncOnce 拉取一次；内容变化时版本号加一并原子写入，内容相同不重写。失败时旧文件保持不变。
 func (s *Syncer) SyncOnce(ctx context.Context) (Result, error) {
-	result, err := s.syncOnce(ctx)
+	result, startedAt, err := s.syncOnce(ctx)
+	if s.watch != nil {
+		s.watch.Observe(ctx, startedAt, err)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
@@ -84,14 +93,22 @@ func (s *Syncer) SyncOnce(ctx context.Context) (Result, error) {
 	return result, nil
 }
 
-func (s *Syncer) syncOnce(ctx context.Context) (Result, error) {
+// syncOnce 拉取并写入一次；startedAt 是 Monitor 在响应里给出的进程启动时间（拉取失败时为空）。
+func (s *Syncer) syncOnce(ctx context.Context) (Result, string, error) {
 	rsp, err := s.fetch(ctx)
 	if err != nil {
-		return "", fmt.Errorf("fetch host policy: %w", err)
+		return "", "", fmt.Errorf("fetch host policy: %w", err)
 	}
 	if code := rsp.GetRetInfo().GetCode(); code != commonpb.ErrorCode_SUCCESS {
-		return "", fmt.Errorf("fetch host policy: %s %s", code, rsp.GetRetInfo().GetMsg())
+		return "", "", fmt.Errorf("fetch host policy: %s %s", code, rsp.GetRetInfo().GetMsg())
 	}
+	startedAt := rsp.GetMonitorStartedAt()
+	result, err := s.write(rsp)
+	return result, startedAt, err
+}
+
+// write 校验并写入主机策略；内容相同不重写。
+func (s *Syncer) write(rsp *monitorpb.GetHostPolicyRsp) (Result, error) {
 	policy := fromResponse(rsp, s.now().UTC())
 	if err := policy.Validate(); err != nil {
 		return "", fmt.Errorf("monitor returned an invalid host policy: %w", err)

@@ -109,7 +109,8 @@ func initialize(
 	if err := registerBuiltins(registry, ashareMarket); err != nil {
 		return nil, err
 	}
-	tradeStore.SetModuleMetrics(registerMetricsReporter(serverInstance))
+	moduleMetrics, reporter := registerMetricsReporter(serverInstance)
+	tradeStore.SetModuleMetrics(moduleMetrics)
 
 	manager := &traderuntime.Manager{
 		Accounts: tradeStore, PollInterval: 5 * time.Second,
@@ -527,7 +528,7 @@ func initialize(
 			eventBus.Close()
 		}
 	}
-	if err := registerHealth(runtimeCtx, serverInstance, life, readiness); err != nil {
+	if err := registerHealth(runtimeCtx, serverInstance, life, readiness, reporter); err != nil {
 		stopWorkers()
 		return nil, err
 	}
@@ -857,9 +858,10 @@ func decimal(value string) shared.Decimal {
 	return parsed
 }
 
-func registerMetricsReporter(serverInstance *server.Server) *report.ModuleMetrics {
+// registerMetricsReporter 注册指标上报；返回的处理器在健康检查注册时接上就绪判断与生命周期（见 registerHealth）。
+func registerMetricsReporter(serverInstance *server.Server) (*report.ModuleMetrics, *report.Handler) {
 	if serverInstance == nil {
-		return nil
+		return nil, nil
 	}
 	moduleMetrics, err := report.NewModuleMetrics(
 		prometheus.DefaultRegisterer,
@@ -868,23 +870,23 @@ func registerMetricsReporter(serverInstance *server.Server) *report.ModuleMetric
 	)
 	if err != nil {
 		log.Warnf("trade module metrics disabled: %v", err)
-		return nil
+		return nil, nil
 	}
 	handler, err := report.NewHandler(report.DefaultConfig("trade", "trade"))
 	if err != nil {
 		log.Warnf("trade metrics reporter disabled: %v", err)
-		return moduleMetrics
+		return moduleMetrics, nil
 	}
 	service := serverInstance.Service("trpc.moox.trade.metrics.timer")
 	if service == nil {
 		log.Warn("trade metrics timer service is not configured")
-		return moduleMetrics
+		return moduleMetrics, nil
 	}
 	timer.RegisterHandlerService(
 		service,
 		handler.Handle,
 	)
-	return moduleMetrics
+	return moduleMetrics, handler
 }
 
 func registerEquitySamplerTimer(
@@ -931,16 +933,17 @@ func newReadiness(
 	}
 }
 
-// registerHealth 注册健康检查，并启动生命周期的定时刷新（生命周期的接口在 TradeConsoleService 上）。
+// registerHealth 注册健康检查，把就绪判断与生命周期接到指标上报，并启动生命周期的定时刷新（生命周期的接口在 TradeConsoleService 上）。
 // 控制器和就绪判定已在第一个工人启动之前建好、绑定到门禁。
 func registerHealth(
 	runtimeCtx context.Context,
 	serverInstance *server.Server,
 	life *lifecycle.Controller,
 	readiness health.Readiness,
+	reporter *report.Handler,
 ) error {
 	state := health.New("trade", "trade", "", "")
-	snapshot := health.SnapshotFunc(
+	state.SnapshotFunc = health.SnapshotFunc(
 		state,
 		readiness,
 		"trade",
@@ -949,13 +952,10 @@ func registerHealth(
 		"",
 		startedAt,
 	)
-	state.SnapshotFunc = func(ctx context.Context) healthz.Response {
-		response := snapshot(ctx)
-		if response.Details == nil {
-			response.Details = map[string]any{}
-		}
-		response.Details["lifecycle"] = life.State()
-		return response
+	if reporter != nil {
+		// 上报带给 Monitor 的就绪与 /readyz 是同一个判断；模块级生命周期也随上报，首页的系统状态读它。
+		reporter.SetReadiness(healthz.Readiness(state.Snapshot))
+		reporter.SetLifecycle(life.ReportState)
 	}
 	go life.Run(runtimeCtx, lifecycleRefreshEvery)
 	if err := health.Register(serverInstance.Service("trpc.moox.trade.Health"), state); err != nil {

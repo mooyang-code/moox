@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,13 +68,15 @@ type Runtime struct {
 	preload  *preloader
 	series   *seriesstore.Store
 	data     *localdata.Data
-	admit    *memadmit.Admitter
-	health   *factorhealth.State
-	life     *lifecycle.Controller
-	checks   taskChecks
-	writes   *inflight
-	udf      *udfModules
-	replays  *replayManager
+	// blockedSource 非空时代替 data.Blocked 判断数据源能否计算（测试夹具：断档、零数据等状态只能由真实的准备流程产生）。
+	blockedSource func(seriesstore.Source) error
+	admit         *memadmit.Admitter
+	health        *factorhealth.State
+	life          *lifecycle.Controller
+	checks        taskChecks
+	writes        *inflight
+	udf           *udfModules
+	replays       *replayManager
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
 	// pointer so status and health reads never wait on EventBus I/O.
@@ -372,6 +375,8 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 	status.Runners = withWarmup(status.Runners, r.catalog.TaskIDs(), r.pipeline.WarmupStatuses())
 	r.markRunners(status.Runners)
 	status.Lifecycle = r.lifecycleStatus()
+	// 引擎不经 packages/report 上报：就绪判断（与 /readyz 同一个）随心跳交给 factor-mgr 代报。
+	status.Ready, status.NotReadyReason = healthz.Readiness(r.healthSnapshot)(context.Background())
 	if r.udf != nil {
 		status.UDFModules = r.udf.Status()
 	}
@@ -467,10 +472,7 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 	if lease.LastError != "" {
 		details["heartbeat_error"] = lease.LastError
 	}
-	if r.life != nil {
-		details["lifecycle"] = r.life.State()
-	}
-	return healthz.Response{Module: "factor-engine", Ready: check.Healthy, Status: state, Time: time.Now().UTC(), Details: details}
+	return healthz.Response{Module: "factor-engine", Ready: check.Healthy, Status: state, Reason: strings.Join(check.Reasons, "；"), Time: time.Now().UTC(), Details: details}
 }
 
 func (r *Runtime) goRun(ctx context.Context, run func(context.Context)) {

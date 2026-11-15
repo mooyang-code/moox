@@ -1,12 +1,10 @@
 package bootstrap
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report/logsink"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -38,17 +36,5 @@ func mutationGate(life *lifecycle.Controller) func() error {
 			return errors.New("因子管理当前不接受修改：模块已暂停或恢复追赶中（moox-cli lifecycle status --module factor-mgr 查看）")
 		}
 		return nil
-	}
-}
-
-// withLifecycle 把模块的生命周期状态放进健康检查响应（Monitor 据此汇总首页的系统状态），不改变就绪判定。
-func withLifecycle(snapshot healthz.SnapshotFunc, c *lifecycle.Controller) healthz.SnapshotFunc {
-	return func(ctx context.Context) healthz.Response {
-		rsp := snapshot(ctx)
-		if rsp.Details == nil {
-			rsp.Details = map[string]any{}
-		}
-		rsp.Details["lifecycle"] = c.State()
-		return rsp
 	}
 }

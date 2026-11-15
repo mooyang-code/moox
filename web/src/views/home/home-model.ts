@@ -487,7 +487,7 @@ const PHASE_LABELS: Record<string, string> = {
 };
 
 export interface SystemStage {
-  /** 圆点颜色：红（有模块探测不到）、青（恢复追赶）、橙（暂停）、黄（有实例试运行）、绿（运行）、灰。 */
+  /** 圆点颜色：红（有模块未就绪或停止上报）、青（恢复追赶）、橙（暂停）、黄（有实例试运行）、绿（运行）、灰。 */
   color: LifecycleColor;
   /** 形如「运行中」「运行中 · 2 个实例试运行」「已暂停」。 */
   label: string;
@@ -508,7 +508,7 @@ export function systemStage(
   let label = PHASE_LABELS[system.phase] || system.phase;
   let color: LifecycleColor = system.color || "gray";
   const trial = instances.filter(isTrialInstance).length;
-  if (system.health === "attention") label = `${label} · 有模块探测不到`;
+  if (system.health === "attention") label = `${label} · ${attentionLabel(system)}`;
   else if (system.phase === "resuming") {
     // 恢复追赶：显示「追平几个、共几个」，全部追平后提示待放行。
     const total = system.resuming_modules || 0;
@@ -522,6 +522,14 @@ export function systemStage(
   const issues = all.slice(0, 3);
   if (all.length > 3) issues.push(`另有 ${all.length - 3} 项`);
   return { color, label, issues };
+}
+
+/** 健康面需要处理时的说明：未就绪与停止上报都来自各模块的上报。 */
+function attentionLabel(system: NonNullable<HealthOverview["system"]>): string {
+  const notReady = system.not_ready_modules || 0;
+  const silent = system.silent_modules || 0;
+  if (notReady && silent) return "有模块未就绪或停止上报";
+  return silent ? "有模块停止上报" : "有模块未就绪";
 }
 
 /** 磁贴里固定显示的条数，其余折叠为“另有 N 项”。 */

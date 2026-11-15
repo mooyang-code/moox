@@ -1,96 +1,164 @@
 package healthview
 
 import (
+	"fmt"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/metricspb"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func component(name, stage string, mutate ...func(*pb.HealthLifecycle)) *pb.HealthComponent {
-	l := &pb.HealthLifecycle{Stage: stage}
-	for _, m := range mutate {
-		m(l)
+// moduleReport 是一个模块的一份上报：silent 表示部署了但这段时间没有上报；notReady 非空表示上报了未就绪。
+type moduleReport struct {
+	id        string
+	silent    bool
+	notReady  string
+	lifecycle *metricspb.ModuleLifecycle
+}
+
+func stage(value string) *metricspb.ModuleLifecycle { return &metricspb.ModuleLifecycle{Stage: value} }
+
+// reportedSystem 按真实的数据来源走一遍：各模块的上报入库 → 概览的组件状态 → 首页系统状态（设计 3.8：组件健康与生命周期只看上报）。
+// 因子引擎不经 packages/report，由 factor-mgr 在自己的上报里代报。
+func reportedSystem(t *testing.T, reports ...moduleReport) *pb.HealthSystem {
+	t.Helper()
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	messages, err := store.WithDatabase(mgr, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
+	now := time.Now().UTC().Truncate(time.Second)
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	topology := domain.TopologySnapshot{Catalog: catalog, ObservedAt: now, Hosts: []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}}}
+	var delegated []*metricspb.DelegatedReport
+	for i, r := range reports {
+		topology.Deployments = append(topology.Deployments, domain.TopologyDeployment{HostID: "control", ComponentID: r.id, Status: "enabled"})
+		if r.silent {
+			continue
+		}
+		if r.id == "factor-engine" {
+			delegated = append(delegated, &metricspb.DelegatedReport{ServiceName: r.id, InstanceId: "engine@mac", BootId: "engine-boot", LastHeartbeatUnix: now.Unix(),
+				Ready: proto.Bool(r.notReady == ""), NotReadyReason: r.notReady, Lifecycle: r.lifecycle})
+			continue
+		}
+		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: fmt.Sprint("report-", i), OccurredAt: timestamppb.New(now)},
+			&metricspb.MetricReport{ServiceName: r.id, InstanceId: r.id + "@control", NodeId: "control", BootId: "boot", Ready: proto.Bool(r.notReady == ""), NotReadyReason: r.notReady, Lifecycle: r.lifecycle}, nil)
+		require.NoError(t, err)
 	}
-	return &pb.HealthComponent{ComponentId: name, Name: name, Lifecycle: l}
+	if delegated != nil {
+		topology.Deployments = append(topology.Deployments, domain.TopologyDeployment{HostID: "control", ComponentID: "factor-mgr", Status: "enabled"})
+		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "factor-mgr", OccurredAt: timestamppb.New(now)},
+			&metricspb.MetricReport{ServiceName: "factor-mgr", InstanceId: "factor-mgr@control", NodeId: "control", BootId: "boot", Ready: proto.Bool(true), Delegated: delegated}, nil)
+		require.NoError(t, err)
+	}
+	repos := mgr.Repositories()
+	require.NoError(t, repos.Topology.Reconcile(t.Context(), topology))
+	facts, err := (&observability.Builder{Metrics: monmetrics.NewQueryService(messages, nil), Topology: repos.Topology, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	return projectSystem(projectFacts(facts).Components)
 }
 
 func TestProjectSystemRunning(t *testing.T) {
-	require.Nil(t, projectSystem([]*pb.HealthComponent{{ComponentId: "storage"}}), "没有模块上报生命周期时不输出系统状态")
+	require.Nil(t, reportedSystem(t, moduleReport{id: "storage-primary"}), "没有模块上报生命周期时不输出系统状态")
 
-	running := projectSystem([]*pb.HealthComponent{component("因子引擎", "running"), component("策略", "running"), component("采集", "running")})
+	running := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: stage("running")}, moduleReport{id: "strategy", lifecycle: stage("running")}, moduleReport{id: "collector", lifecycle: stage("running")})
 	require.Equal(t, "running", running.Phase)
 	require.Equal(t, "green", running.Color)
 	require.Equal(t, "healthy", running.Health)
 	require.Empty(t, running.Issues)
 	require.Nil(t, running.PauseKinds)
+	require.Equal(t, int32(3), running.ModuleCount)
 }
 
-// 有生命周期接口的模块探测不到：不能从系统汇总里消失，健康面标红并列出。
-func TestProjectSystemReportsUnreachableLifecycleModule(t *testing.T) {
-	down := &pb.HealthComponent{ComponentId: "strategy", Name: "策略", Status: "down"}
-	system := projectSystem([]*pb.HealthComponent{component("因子引擎", "running"), down, {ComponentId: "storage", Status: "down"}})
+// 有生命周期接口的模块停止上报：不能从系统汇总里消失，健康面标红并列出；它最后一次上报的生命周期不再参与汇总。
+func TestProjectSystemReportsSilentLifecycleModule(t *testing.T) {
+	system := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: stage("running")}, moduleReport{id: "strategy", silent: true}, moduleReport{id: "storage-primary", silent: true})
 	require.Equal(t, "attention", system.Health)
 	require.Equal(t, "red", system.Color)
 	require.Equal(t, "running", system.Phase)
-	require.Equal(t, []string{"策略：探测不到（模块没有响应）"}, system.Issues, "没有生命周期接口的组件不在此列")
+	require.Equal(t, []string{"策略服务：停止上报"}, system.Issues, "没有生命周期接口的组件不在此列")
+	require.Equal(t, int32(1), system.SilentModules)
 	require.Equal(t, int32(2), system.ModuleCount)
 
-	only := projectSystem([]*pb.HealthComponent{down})
+	only := reportedSystem(t, moduleReport{id: "strategy", silent: true})
 	require.Equal(t, "attention", only.Health)
 	require.Equal(t, "unknown", only.Phase, "一个模块都读不到时运行阶段未知")
 }
 
+// 有模块未就绪：Strategy 自检不过但进程仍在上报，首页标红并写明原因；它的运行阶段照常参与汇总。
+func TestProjectSystemReportsNotReadyModule(t *testing.T) {
+	system := reportedSystem(t,
+		moduleReport{id: "strategy", notReady: "出站 EventBus 未连接", lifecycle: stage("running")},
+		moduleReport{id: "collector", lifecycle: stage("running")},
+		moduleReport{id: "factor-engine", notReady: "因子目录未载入", lifecycle: stage("running")},
+	)
+	require.Equal(t, "attention", system.Health)
+	require.Equal(t, "red", system.Color)
+	require.Equal(t, "running", system.Phase)
+	require.Equal(t, int32(2), system.NotReadyModules)
+	require.Zero(t, system.SilentModules)
+	require.Equal(t, []string{"因子引擎：未就绪（因子目录未载入）", "策略服务：未就绪（出站 EventBus 未连接）"}, system.Issues, "管理端代报的因子引擎同样计入")
+}
+
 // 系统暂停覆盖的模块全部暂停是 paused，部分暂停是 partially_paused；不参与系统暂停的模块不影响“全部”的判断。
 func TestProjectSystemPausePhases(t *testing.T) {
-	paused := func(kind string) func(*pb.HealthLifecycle) {
-		return func(l *pb.HealthLifecycle) {
-			l.Reason = "系统暂停：切换行情源"
-			l.Pause = &pb.HealthPause{Kind: kind, Since: "2026-10-21T10:00:00Z"}
-		}
+	paused := func(kind string) *metricspb.ModuleLifecycle {
+		reason := map[string]string{"system": "系统暂停：切换行情源", "manual": "手动暂停：排查"}[kind]
+		return &metricspb.ModuleLifecycle{Stage: "paused", Reason: reason, PauseKind: kind, PausedSince: "2026-10-21T10:00:00Z"}
 	}
-	all := projectSystem([]*pb.HealthComponent{component("factor-engine", "paused", paused("system")), component("strategy", "paused", paused("system")), component("factor-mgr", "running")})
+	all := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: paused("system")}, moduleReport{id: "strategy", lifecycle: paused("system")},
+		moduleReport{id: "collector", lifecycle: paused("system")}, moduleReport{id: "trade", lifecycle: paused("system")}, moduleReport{id: "archive-mgr", lifecycle: stage("running")})
 	require.Equal(t, "paused", all.Phase)
 	require.Equal(t, "orange", all.Color)
 	require.Equal(t, "healthy", all.Health)
-	require.Equal(t, int32(2), all.PauseKinds["system"])
+	require.Equal(t, int32(4), all.PauseKinds["system"])
 	require.Equal(t, "2026-10-21T10:00:00Z", all.PausedSince)
-	require.Equal(t, []string{"factor-engine：系统暂停：切换行情源", "strategy：系统暂停：切换行情源"}, all.Issues)
+	require.Contains(t, all.Issues, "策略服务：系统暂停：切换行情源")
 
-	partial := projectSystem([]*pb.HealthComponent{component("factor-engine", "running"), component("strategy", "paused", paused("manual"))})
+	partial := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: stage("running")}, moduleReport{id: "strategy", lifecycle: paused("manual")})
 	require.Equal(t, "partially_paused", partial.Phase)
 	require.Equal(t, "orange", partial.Color)
 	require.Equal(t, int32(1), partial.PauseKinds["manual"])
-	require.Contains(t, partial.Issues[0], "strategy：系统暂停")
+	require.Equal(t, []string{"策略服务：手动暂停：排查"}, partial.Issues)
 
 	// 只有不参与系统暂停的模块（例如 Monitor 的告警屏蔽）暂停：不算系统部分暂停，但列出来。
-	muted := projectSystem([]*pb.HealthComponent{component("factor-engine", "running"), component("monitor", "paused", func(l *pb.HealthLifecycle) { l.Reason = "手动暂停：告警屏蔽" })})
+	muted := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: stage("running")}, moduleReport{id: "monitor", lifecycle: &metricspb.ModuleLifecycle{Stage: "paused", Reason: "手动暂停：告警屏蔽", PauseKind: "manual"}})
 	require.Equal(t, "running", muted.Phase)
-	require.Equal(t, []string{"monitor：手动暂停：告警屏蔽"}, muted.Issues)
+	require.Equal(t, []string{"监控服务：手动暂停：告警屏蔽"}, muted.Issues)
 }
 
 // 恢复追赶：显示追赶中的模块数与已追平（待放行）的模块数，以及各模块的进度文字。
 func TestProjectSystemResumingAndCaughtUp(t *testing.T) {
-	resuming := projectSystem([]*pb.HealthComponent{
-		component("因子引擎", "resuming", func(l *pb.HealthLifecycle) {
-			l.Catchup = &pb.HealthCatchup{Done: 6, Total: 10}
-		}),
-		component("策略", "resuming", func(l *pb.HealthLifecycle) {
-			l.Catchup = &pb.HealthCatchup{BlockedBy: "实例 i1"}
-		}),
-		component("Trade", "resuming", func(l *pb.HealthLifecycle) { l.Catchup = &pb.HealthCatchup{CaughtUp: true} }),
-	})
-	require.Equal(t, "resuming", resuming.Phase)
-	require.Equal(t, "cyan", resuming.Color)
-	require.Equal(t, int32(3), resuming.ResumingModules)
-	require.Equal(t, int32(1), resuming.CaughtUpModules)
-	require.ElementsMatch(t, []string{"因子引擎：补采 6/10", "策略：被 实例 i1 阻塞", "Trade：已追平，待放行"}, resuming.CatchupNotes)
+	resuming := func(catchup *metricspb.CatchupProgress) *metricspb.ModuleLifecycle {
+		return &metricspb.ModuleLifecycle{Stage: "resuming", PauseKind: "system", Catchup: catchup}
+	}
+	system := reportedSystem(t,
+		moduleReport{id: "collector", lifecycle: resuming(&metricspb.CatchupProgress{Done: 6, Total: 10})},
+		moduleReport{id: "strategy", lifecycle: resuming(&metricspb.CatchupProgress{BlockedBy: "实例 i1"})},
+		moduleReport{id: "trade", lifecycle: resuming(&metricspb.CatchupProgress{CaughtUp: true})},
+	)
+	require.Equal(t, "resuming", system.Phase)
+	require.Equal(t, "cyan", system.Color)
+	require.Equal(t, int32(3), system.ResumingModules)
+	require.Equal(t, int32(1), system.CaughtUpModules)
+	require.ElementsMatch(t, []string{"行情采集服务：补采 6/10", "策略服务：被 实例 i1 阻塞", "交易服务：已追平，待放行"}, system.CatchupNotes)
 
 	// 全部追平、等待放行。
-	caught := projectSystem([]*pb.HealthComponent{
-		component("因子引擎", "resuming", func(l *pb.HealthLifecycle) { l.Catchup = &pb.HealthCatchup{CaughtUp: true} }),
-		component("采集", "running"),
-	})
+	caught := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: resuming(&metricspb.CatchupProgress{CaughtUp: true})}, moduleReport{id: "collector", lifecycle: stage("running")})
 	require.Equal(t, "resuming", caught.Phase)
 	require.Equal(t, caught.ResumingModules, caught.CaughtUpModules)
 	require.Equal(t, []string{"因子引擎：已追平，待放行"}, caught.CatchupNotes)

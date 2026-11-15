@@ -5,7 +5,6 @@ package doctor
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
-	"gorm.io/gorm"
 )
 
 const (
@@ -29,8 +27,6 @@ const (
 
 type Builder struct {
 	Deployments         deployment.Source
-	Checks              *store.CheckRepository
-	Results             *store.ResultRepository
 	Alerts              *store.AlertRepository
 	Metrics             *monmetrics.QueryService
 	Hosts               *hostmetrics.Store
@@ -40,9 +36,9 @@ type Builder struct {
 }
 
 type ExpectedComponent struct {
-	ComponentID, ServiceName, NodeID, DeploymentStatus, Transport, FunctionalObservability, HealthURL string
-	Expected                                                                                          bool
-	DeploymentCreatedAt                                                                               time.Time
+	ComponentID, ServiceName, NodeID, DeploymentStatus, Transport, FunctionalObservability string
+	Expected                                                                               bool
+	DeploymentCreatedAt                                                                    time.Time
 }
 
 type Observation struct {
@@ -102,20 +98,11 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 				continue
 			}
 			found = true
-			healthURL := ""
-			if b.Checks != nil {
-				check, err := b.Checks.Get(ctx, "", deployment.CheckID(deployed.GetHostId(), component.ComponentID))
-				if err == nil {
-					healthURL = check.URL
-				} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-					return Context{}, err
-				}
-			}
 			out.ExpectedComponents = append(out.ExpectedComponents, ExpectedComponent{
 				ComponentID: component.ComponentID, ServiceName: component.ServiceName, NodeID: deployed.GetHostId(),
 				Expected: hosts[deployed.GetHostId()] && deployed.GetStatus() == "enabled", DeploymentStatus: deployed.GetStatus(),
 				Transport: string(component.Transport), FunctionalObservability: string(component.FunctionalObservability),
-				HealthURL: healthURL, DeploymentCreatedAt: parseTimestamp(deployed.GetCreatedAt()),
+				DeploymentCreatedAt: parseTimestamp(deployed.GetCreatedAt()),
 			})
 		}
 		if !found {
@@ -196,71 +183,53 @@ func (b Builder) loadDeployments(ctx context.Context) (deployment.Snapshot, erro
 	return b.Deployments.Snapshot(ctx)
 }
 
+// addHealth 按各组件最近一次上报里的就绪判断生成健康观察项（组件健康只看上报，设计 3.8）：就绪为 OK，未就绪为 DOWN，
+// 上报里没有就绪判断为 UNKNOWN；上报超过两个间隔为过期；没有上报时记为缺失。主机快照与代报的组件不经 packages/report，不在这里判断。
 func (b Builder) addHealth(ctx context.Context, components []doctor.Component, now time.Time, out *Context) error {
-	if b.Results == nil || b.Checks == nil {
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil
 	}
 	componentByService := componentMap(components)
+	names := make([]string, 0, len(components))
+	for _, component := range components {
+		if component.HealthPath != "" && component.Transport == doctor.TransportReporter {
+			names = append(names, component.ServiceName)
+		}
+	}
+	services, err := b.Metrics.Catalog().ListServicesForAt(ctx, names, "", MaxObservations, now)
+	if err != nil {
+		return err
+	}
+	latest := map[string]monmetrics.MetricService{}
+	for _, service := range services {
+		key := service.ServiceName + "\x00" + service.NodeID
+		if current, ok := latest[key]; !ok || service.LastSeenAt.After(current.LastSeenAt) {
+			latest[key] = service
+		}
+	}
 	for _, expected := range out.ExpectedComponents {
-		if !expected.Expected || componentByService[expected.ServiceName].HealthPath == "" {
+		component := componentByService[expected.ServiceName]
+		if !expected.Expected || component.HealthPath == "" || component.Transport != doctor.TransportReporter {
 			continue
 		}
-		checkID := deployment.CheckID(expected.NodeID, expected.ComponentID)
-		check, err := b.Checks.Get(ctx, "", checkID)
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health check is not registered"})
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		results, err := b.Results.Recent(ctx, "", checkID, 3)
-		if err != nil {
-			return err
-		}
-		if len(results) == 0 {
+		row, ok := latest[expected.ServiceName+"\x00"+expected.NodeID]
+		if !ok {
 			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health observation is missing"})
 			continue
 		}
-		latest := results[0]
-		interval := max(check.IntervalSeconds, 1)
-		age := observationAge(now, latest.CheckedAt)
-		status := strings.ToUpper(latest.Status)
-		if !latest.Success {
-			status = "DEGRADED"
+		status, summary := "UNKNOWN", "reporter carries no readiness"
+		switch row.Readiness {
+		case monmetrics.ReadinessReady:
+			status, summary = "OK", "reported ready"
+		case monmetrics.ReadinessNotReady:
+			status, summary = "DOWN", "reported not ready: "+row.NotReadyReason
 		}
-		if len(results) == 3 && !results[0].Success && !results[1].Success && !results[2].Success {
-			status = "DOWN"
-		}
-		observation := Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: status, ObservedAt: latest.CheckedAt, Stale: age > int64(2*interval), AgeSeconds: age, IntervalSeconds: interval, Summary: healthSummary(latest)}
-		var identity struct {
-			Service                 string `json:"service"`
-			InstanceID              string `json:"instance_id"`
-			NodeID                  string `json:"node_id"`
-			BootID                  string `json:"boot_id"`
-			DatasetHealthPolicyHash string `json:"dataset_health_policy_hash"`
-		}
-		component := componentByService[expected.ServiceName]
-		if json.Unmarshal([]byte(latest.BodyExcerpt), &identity) == nil {
-			observation.InstanceID, observation.NodeID, observation.BootID = identity.InstanceID, identity.NodeID, identity.BootID
-			wantInstance := expected.ServiceName + "@" + expected.NodeID
-			identityMismatch := identity.Service != expected.ServiceName ||
-				identity.InstanceID != wantInstance ||
-				identity.NodeID != expected.NodeID ||
-				identity.BootID == ""
-			policyMismatch := expected.ServiceName == "monitor" &&
-				b.DatasetHealthPolicy.Checksum != "" &&
-				identity.DatasetHealthPolicyHash != b.DatasetHealthPolicy.Checksum
-			if component.Transport == doctor.TransportReporter &&
-				component.FunctionalObservability != doctor.FunctionalObservabilityDeferred &&
-				component.FunctionalObservability != doctor.FunctionalObservabilityNotApplicable &&
-				(identityMismatch || policyMismatch) {
-				observation.Status, observation.Conflict, observation.Summary = "CONFLICT", true, "health identity does not match the deployment contract"
-			}
-		} else if component.Transport == doctor.TransportReporter && component.FunctionalObservability != doctor.FunctionalObservabilityDeferred && component.FunctionalObservability != doctor.FunctionalObservabilityNotApplicable {
-			observation.Status, observation.Conflict, observation.Summary = "CONFLICT", true, "health identity payload is missing or invalid"
-		}
-		out.HealthObservations = append(out.HealthObservations, observation)
+		age := observationAge(now, row.LastSeenAt)
+		out.HealthObservations = append(out.HealthObservations, Observation{
+			Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, InstanceID: row.InstanceID,
+			NodeID: row.NodeID, BootID: row.BootID, Status: status, ObservedAt: row.LastSeenAt, Stale: age > 60,
+			AgeSeconds: age, IntervalSeconds: 30, Summary: summary,
+		})
 	}
 	return nil
 }
@@ -472,16 +441,6 @@ func stringSelection(values []string) map[string]bool {
 func parseTimestamp(value string) time.Time {
 	parsed, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
 	return parsed
-}
-
-func healthSummary(result domain.CheckResult) string {
-	if result.Success {
-		return "service health check passed"
-	}
-	if result.ErrorMessage != "" {
-		return result.ErrorMessage
-	}
-	return "service health check failed"
 }
 
 func observationAge(now, observedAt time.Time) int64 {

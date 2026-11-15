@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/protobuf v1.36.11
 )
@@ -15,3 +16,5 @@ require (
 )
 
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
+
+replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb

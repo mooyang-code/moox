@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -98,6 +100,7 @@ func registerMetricsReporter(s *server.Server) {
 		log.Warnf("admin metrics reporter disabled: %v", err)
 		return
 	}
+	h.SetReadiness(healthz.Readiness(adminhealth.Snapshot(time.Now())))
 	service := s.Service("trpc.moox.admin.metrics.timer")
 	if service == nil {
 		log.Warn("admin metrics timer service is not configured, skip register")

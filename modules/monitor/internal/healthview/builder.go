@@ -169,13 +169,9 @@ func projectComponent(item observability.ServiceStatus, facts observability.Over
 	case "missing":
 		reporterStatus, reporterReason = "unknown", "从未收到监控上报"
 	}
-	component := &pb.HealthComponent{HostId: item.NodeID, ComponentId: item.ServiceName, Name: componentName(facts, item.ServiceName), Status: domain.HealthStatus(item.Status), Reason: ChineseReason(item.Reason), ProbeUrl: item.ProbeURL,
-		Probe:    &pb.HealthSignal{Status: domain.HealthStatus(item.ProbeStatus), Reason: ChineseReason(item.ProbeReason), RawError: item.ProbeRawError, CheckedAt: stamp(item.ProbeCheckedAt)},
-		Reporter: &pb.HealthSignal{Status: reporterStatus, Reason: reporterReason, CheckedAt: stamp(item.LastSeenAt)}}
-
-	for _, result := range item.ProbeHistory {
-		component.RecentProbes = append(component.RecentProbes, &pb.HealthSignal{Status: domain.HealthStatus(result.Status), Reason: ChineseReason(result.ErrorMessage), RawError: unhealthyRaw(domain.HealthStatus(result.Status), result.ErrorMessage, result.RawError), CheckedAt: stamp(result.CheckedAt)})
-	}
+	component := &pb.HealthComponent{HostId: item.NodeID, ComponentId: item.ServiceName, Name: componentName(facts, item.ServiceName), Status: domain.HealthStatus(item.Status), Reason: ChineseReason(item.Reason),
+		Reporter:  &pb.HealthSignal{Status: reporterStatus, Reason: reporterReason, CheckedAt: stamp(item.LastSeenAt)},
+		Readiness: item.Readiness, NotReadyReason: item.NotReadyReason}
 	component.Lifecycle = projectLifecycle((*lifecycleSource)(item.Lifecycle))
 	for _, instance := range item.Instances {
 		component.Instances = append(component.Instances, &pb.HealthReporter{InstanceId: instance.InstanceID, BootId: instance.BootID, Version: instance.Version, Status: domain.HealthStatus(instance.Status), LastReportedAt: stamp(instance.LastSeenAt)})

@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// control 快照带出站主机的中转许可；目录与许可不一致、端口不在服务目录、健康端口对 Monitor 以外开放都拒绝。
+// control 快照带出站主机的中转许可；目录与许可不一致、端口不在服务目录、组件健康端口（组件健康只看上报，不再中转）都拒绝。
 func TestSnapshotRelayAllowlist(t *testing.T) {
 	raw := testsnapshot.NewWithOutbound(t, "control", "home")
 	view, err := Build("control", raw)
@@ -20,7 +20,7 @@ func TestSnapshotRelayAllowlist(t *testing.T) {
 	relay, ok := view.Relay("home")
 	require.True(t, ok)
 	require.True(t, relay.Allowed("monitor", servicecatalog.HostGatewayRemotePort))
-	require.Greater(t, len(relay.Ports), 1, "主机级组件的健康端口")
+	require.Len(t, relay.Ports, 1, "只有网关跨主机端口，组件健康端口不经中转")
 
 	// 其他主机拿到的目录里有中转主机，但没有许可。
 	storage, err := Build("storage", testsnapshot.NewWithOutbound(t, "storage", "home", "storage-primary"))
@@ -29,16 +29,22 @@ func TestSnapshotRelayAllowlist(t *testing.T) {
 	require.False(t, ok)
 	require.False(t, storage.OutboundHost("home"), "不是由本机中转")
 
-	healthPort := raw.Relays[0].Ports[1].Port
+	healthPort := 11012 // host-gateway 的健康端口
 	for name, mutate := range map[string]func(*pb.HostGatewaySnapshot){
 		"missing relay":     func(s *pb.HostGatewaySnapshot) { s.Relays = nil },
 		"direct host relay": func(s *pb.HostGatewaySnapshot) { s.Relays[0].HostId = "control" },
 		"duplicate relay": func(s *pb.HostGatewaySnapshot) {
 			s.Relays = append(s.Relays, proto.Clone(s.Relays[0]).(*pb.HostGatewayRelay))
 		},
-		"arbitrary port":      func(s *pb.HostGatewaySnapshot) { s.Relays[0].Ports[1].Port = 22 },
-		"health port caller":  func(s *pb.HostGatewaySnapshot) { s.Relays[0].Ports[1].Callers = []string{"admin"} },
-		"duplicate port":      func(s *pb.HostGatewaySnapshot) { s.Relays[0].Ports[0].Port = healthPort },
+		"arbitrary port": func(s *pb.HostGatewaySnapshot) {
+			s.Relays[0].Ports = append(s.Relays[0].Ports, &pb.HostGatewayRelayPort{Port: 22, Callers: []string{"monitor"}})
+		},
+		"health port relayed": func(s *pb.HostGatewaySnapshot) {
+			s.Relays[0].Ports = append(s.Relays[0].Ports, &pb.HostGatewayRelayPort{Port: int32(healthPort), Callers: []string{"monitor", "moox-cli"}})
+		},
+		"duplicate port": func(s *pb.HostGatewaySnapshot) {
+			s.Relays[0].Ports = append(s.Relays[0].Ports, &pb.HostGatewayRelayPort{Port: s.Relays[0].Ports[0].Port, Callers: []string{"monitor"}})
+		},
 		"duplicate caller":    func(s *pb.HostGatewaySnapshot) { s.Relays[0].Ports[0].Callers = []string{"monitor", "monitor"} },
 		"relay on other host": func(s *pb.HostGatewaySnapshot) { s.HostId = "home" },
 		"data port to monitor": func(s *pb.HostGatewaySnapshot) {

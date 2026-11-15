@@ -47,6 +47,10 @@ func registerMetricsReporter(s *server.Server, runtime *Runtime) *report.ModuleM
 		log.WarnContextf(trpc.BackgroundContext(), "monitor metrics reporter disabled: %v", err)
 		return moduleMetrics
 	}
+	if runtime != nil {
+		h.SetReadiness(runtime.readiness)
+		h.SetLifecycle(func() *metricspb.ModuleLifecycle { return runtime.life.Load().ReportState() })
+	}
 	service := s.Service("trpc.moox.monitor.metrics.timer")
 	if service == nil {
 		if runtime != nil {

@@ -33,17 +33,11 @@ func ChineseReason(raw string) string {
 	case "reporter fresh":
 		return "监控上报正常"
 	case "reporter missing":
-		return "监控上报已中断"
+		return "从未收到监控上报"
+	case "reporter stale":
+		return "已停止上报"
 	case "producer stale":
 		return "数据生产端长时间未更新"
-	case "health not checked":
-		return "尚未完成健康检查"
-	case "health check failed":
-		return "健康检查失败"
-	case "health check degraded":
-		return "健康检查需要关注"
-	case "health check ok":
-		return "健康检查正常"
 	case "agent reachable":
 		return "主机连接正常"
 	case "agent unreachable":

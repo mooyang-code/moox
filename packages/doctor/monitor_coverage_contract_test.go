@@ -71,7 +71,7 @@ func TestMonitorCoverageComponentCatalog(t *testing.T) {
 		components[component.ID] = component
 	}
 	for name, component := range components {
-		if !contains([]string{"reporter", "host_snapshot", "health_only"}, component.Doctor.Transport) {
+		if !contains([]string{"reporter", "host_snapshot", "delegated"}, component.Doctor.Transport) {
 			t.Errorf("%s: unsupported transport %q", name, component.Doctor.Transport)
 		}
 		for _, dependency := range component.Doctor.Dependencies {
@@ -87,7 +87,7 @@ func TestMonitorCoverageComponentCatalog(t *testing.T) {
 	if !ok {
 		t.Fatal("console-proxy component is missing")
 	}
-	if proxy.Doctor.Transport != "health_only" || proxy.Health.Kind != "readyz" || proxy.Health.Port != 19528 || proxy.Health.Loopback == nil || !*proxy.Health.Loopback {
+	if proxy.Doctor.Transport != "reporter" || proxy.Health.Kind != "readyz" || proxy.Health.Port != 19528 || proxy.Health.Loopback == nil || !*proxy.Health.Loopback {
 		t.Error("console-proxy diagnostics contract changed")
 	}
 }

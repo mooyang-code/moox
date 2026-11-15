@@ -1,6 +1,8 @@
 package rpc
 
 import (
+	"time"
+
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
@@ -13,7 +15,9 @@ import (
 // Checks, raw metric catalogs, webhook CRUD and custom rule engines are
 // intentionally absent: those are internal implementation details now.
 type Options struct {
-	InstanceID    string
+	InstanceID string
+	// StartedAt 是 Monitor 进程的启动时间，随 GetHostPolicy 下发：各主机采集器按它的变化发现 Monitor 反复重启。
+	StartedAt     time.Time
 	HostStore     *hostmetrics.Store
 	DoctorContext *doctor.Builder
 	HealthView    *healthview.Builder
@@ -28,6 +32,7 @@ type Service struct {
 	notifications *store.NotificationRepository
 	logs          *store.LogRecordRepository
 	hostWatchdog  config.HostWatchdogConfig
+	startedAt     time.Time
 	hostStore     *hostmetrics.Store
 	doctorContext *doctor.Builder
 	healthView    *healthview.Builder
@@ -43,6 +48,7 @@ func New(repos *store.Repositories, opts Options) *Service {
 		notifications: repos.Notifications,
 		logs:          repos.Logs,
 		hostWatchdog:  opts.HostWatchdog,
+		startedAt:     opts.StartedAt,
 		hostStore:     opts.HostStore,
 		doctorContext: opts.DoctorContext,
 		healthView:    opts.HealthView,
