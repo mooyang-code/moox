@@ -345,3 +345,109 @@ func TestUnplannedFunctionsAreStoppedEvenWithoutAppliedCloudFunctions(t *testing
 	require.True(t, ok)
 	require.False(t, function.Timer.Enabled)
 }
+
+// 复审中问题：未生效计划里已经确认过渡的函数被 RPC 删掉，下一轮就按过渡环境重建，不等到最终阶段；计划仍未生效。
+func TestDeletedTransitionedFunctionIsRebuiltWhileThePlanIsOpen(t *testing.T) {
+	h := newPlanHarness(t, 120)
+	r := h.reconciler()
+	h.applyFirstPlan(r)
+	h.setSubjects(119)
+	require.NoError(t, h.reconcile(r))
+	open := h.open()
+	require.NotNil(t, open)
+	progress, err := decodeFetchPlanProgress(open.Progress)
+	require.NoError(t, err)
+	content := h.content(open)
+	var victim string
+	for _, name := range content.SortedFunctionNames() {
+		if progress.Transitioned[name] {
+			victim = name
+			break
+		}
+	}
+	require.NotEmpty(t, victim, "有已确认过渡的函数")
+	results, err := r.DeleteCloudFunctions(context.Background(), []string{victim}, "")
+	require.NoError(t, err)
+	require.True(t, results[0].Done, results[0].Error)
+
+	h.now = h.now.Add(20 * time.Second)
+	require.NoError(t, h.reconcile(r))
+	require.NotNil(t, h.open(), "计划仍未生效")
+	want, err := marketfetch.EncodePlan(content.TransitionalPlan(content.Functions[victim]))
+	require.NoError(t, err)
+	require.Equal(t, want, h.mustFunction(victim).Info.Environment[marketfetch.PlanEnvName], "按过渡环境重建")
+	require.True(t, h.timerEnabled(victim))
+	progress, err = decodeFetchPlanProgress(h.open().Progress)
+	require.NoError(t, err)
+	require.True(t, progress.Transitioned[victim], "重建之后重新确认")
+}
+
+// reconfirmAfterDeletion 把 name 记成已确认过渡与收尾，再模拟它被 RPC 删掉，返回 reconfirmDeleted 之后的进度。
+func reconfirmAfterDeletion(t *testing.T, h *planHarness, r *PlanReconciler, name string) *FetchPlanProgress {
+	t.Helper()
+	open := h.open()
+	progress, err := decodeFetchPlanProgress(open.Progress)
+	require.NoError(t, err)
+	progress.mark(&progress.Transitioned, name)
+	progress.mark(&progress.Finalized, name)
+	require.NoError(t, h.store.Update(context.Background(), open.ID, open.Status, mustJSON(progress), ""))
+	r.readMu.Lock()
+	r.deletedFunctions = map[string]bool{name: true}
+	r.readMu.Unlock()
+	require.NoError(t, r.reconfirmDeleted(context.Background(), h.open()))
+	require.Empty(t, r.takeDeletedFunctions(), "记录取走后清空")
+	after, err := decodeFetchPlanProgress(h.open().Progress)
+	require.NoError(t, err)
+	return after
+}
+
+// 复审小项：已确认收尾的函数被删时，最终计划与过渡计划不同的只去掉 Finalized（收尾时重推最终计划）；
+// 相同的（收尾时不再下发）连 Transitioned 一起去掉，由过渡阶段按同一份内容重建，不用等读回修复。
+func TestDeletedFinalizedFunctionLosesTheRightConfirmations(t *testing.T) {
+	// 标的变更：过渡计划带新旧两份，最终计划只留一份，两者不同。
+	h := newPlanHarness(t, 120)
+	r := h.reconciler()
+	h.applyFirstPlan(r)
+	h.setSubjects(119)
+	require.NoError(t, h.reconcile(r))
+	content := h.content(h.open())
+	name := h.cloudTimers()[0]
+	require.True(t, r.finalDiffers(content, content.Functions[name]))
+	after := reconfirmAfterDeletion(t, h, r, name)
+	require.False(t, after.Finalized[name])
+	require.True(t, after.Transitioned[name], "最终计划不同：只重推最终计划")
+
+	// 新加一个 1m 数据集：过渡计划与最终计划相同。
+	h = newPlanHarness(t, 60)
+	h.tasks.tasks[0].CollectParams = strings.Replace(h.tasks.tasks[0].CollectParams, `"frequency":"1m"`, `"frequency":"5m"`, 1)
+	r = h.reconciler()
+	planBaselineSettle(t, h, r)
+	h.tasks.tasks = append(h.tasks.tasks, domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot_1m","frequency":"1m"}`,
+	})
+	r.lastVerified = h.now
+	require.NoError(t, h.reconcile(r))
+	content = h.content(h.open())
+	name = h.cloudTimers()[0]
+	require.True(t, content.Functions[name].Push)
+	require.False(t, r.finalDiffers(content, content.Functions[name]))
+	after = reconfirmAfterDeletion(t, h, r, name)
+	require.False(t, after.Finalized[name])
+	require.False(t, after.Transitioned[name], "最终计划相同：从过渡阶段重建")
+}
+
+// 复审小项：定时器已经停用的计划外函数，每小时的读回不再重发停用。
+func TestAlreadyStoppedUnplannedFunctionIsLeftAlone(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	h.applyFirstPlan(r)
+	orphan := scfRefIn(PlanFunctionName("crypto", "spot", "ap-nanjing", 7), "ap-nanjing", "default")
+	stopped := activeTimerFunction("pkg")
+	stopped.Timer.Enabled = false
+	h.scf.Seed(orphan, stopped)
+	h.now = h.now.Add(2 * time.Hour)
+	require.NoError(t, h.reconcile(r))
+	h.waitOps(r)
+	require.Zero(t, h.cloud.countOps("timer", orphan.FunctionName), "已经停用的不再发停用")
+}

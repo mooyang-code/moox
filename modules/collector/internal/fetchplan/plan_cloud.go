@@ -629,6 +629,10 @@ func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, names []strin
 			r.verifyRequested.Store(true)
 			r.readMu.Lock()
 			delete(r.readbacks, refKey(ref))
+			if r.deletedFunctions == nil {
+				r.deletedFunctions = map[string]bool{}
+			}
+			r.deletedFunctions[ref.Name] = true
 			r.readMu.Unlock()
 			r.backfillMu.Lock()
 			delete(r.backfillReady, ref.Name)

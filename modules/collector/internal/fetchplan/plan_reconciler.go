@@ -170,6 +170,9 @@ type PlanReconciler struct {
 	lastVerified   time.Time
 	// verifyRequested 由 RPC 删除函数之后置位：下一轮对账立即读回，不等 lastVerified 的间隔。
 	verifyRequested atomic.Bool
+	// deletedFunctions 是 RPC 删掉的函数名（受 readMu 保护）：未生效计划里已经确认的函数被删后，下一轮去掉它在本阶段的确认、
+	// 按阶段期望重推，不等到最终阶段。只在内存里，重启就丢，那时退回到等最终阶段（或读回修复）。
+	deletedFunctions map[string]bool
 	// 操作表（第一次用时创建）与“正在暂停”的标记：暂停时置位，空间的对账协程重新启动（恢复）时随新的对账器清掉。
 	opsOnce    sync.Once
 	operations *functionOps
@@ -322,11 +325,15 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 		if err := r.verifyUntouched(ctx, open); err != nil {
 			log.WarnContextf(ctx, "collector fetch plan verification skipped space=%s: %v", r.SpaceID, err)
 		}
+		if err := r.reconfirmDeleted(ctx, open); err != nil {
+			return err
+		}
 		if err := r.advance(ctx, open); err != nil {
 			return err
 		}
 		return collectErr
 	}
+	r.takeDeletedFunctions() // 没有未生效的计划：删掉的函数由读回修复重建（verifyRequested）
 	if err := r.planChange(ctx); err != nil {
 		return err
 	}
@@ -632,6 +639,58 @@ func (r *PlanReconciler) saveProgress(ctx context.Context, record *store.FetchPl
 	}
 	record.Status, record.Progress, record.LastError = status, mustJSON(progress), lastError
 	return nil
+}
+
+// takeDeletedFunctions 取走 RPC 删掉的函数名。
+func (r *PlanReconciler) takeDeletedFunctions() map[string]bool {
+	r.readMu.Lock()
+	defer r.readMu.Unlock()
+	deleted := r.deletedFunctions
+	r.deletedFunctions = nil
+	return deleted
+}
+
+// reconfirmDeleted 把 RPC 删掉、而在未生效计划里已经确认的函数的本阶段确认去掉并保存进度：已确认收尾的去掉 Finalized
+// （最终计划与过渡计划相同、收尾时不再下发的，连 Transitioned 一起去掉），只确认了过渡的去掉 Transitioned。随后的推进按阶段期望重推（Ensure 建出来），不等到最终阶段，也不等每小时的读回。
+// 调用方持有 r.mu（对账协程）。
+func (r *PlanReconciler) reconfirmDeleted(ctx context.Context, record *store.FetchPlanRecord) error {
+	deleted := r.takeDeletedFunctions()
+	if len(deleted) == 0 {
+		return nil
+	}
+	content, err := decodeFetchPlanContent(record.Plan)
+	if err != nil {
+		return r.fail("store", err)
+	}
+	progress, err := decodeFetchPlanProgress(record.Progress)
+	if err != nil {
+		return r.fail("store", err)
+	}
+	changed := false
+	for name := range deleted {
+		function := content.Functions[name]
+		if function == nil || !function.IsSCF() {
+			continue
+		}
+		switch {
+		case progress.Finalized[name] && r.finalDiffers(content, function):
+			delete(progress.Finalized, name)
+			changed = true
+		case progress.Finalized[name]:
+			// 最终计划与过渡计划相同（收尾时不再下发）：去掉两个确认，由过渡阶段按同一份内容重建。
+			delete(progress.Finalized, name)
+			delete(progress.Transitioned, name)
+			changed = true
+		case progress.Transitioned[name]:
+			delete(progress.Transitioned, name)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	log.InfoContextf(ctx, "collector fetch plan repushes functions deleted through the RPC space=%s plan=%d", r.SpaceID, record.ID)
+	return r.saveProgress(ctx, record, progress, record.Status, record.LastError)
 }
 
 // advance 续跑一份未生效的采集计划。
@@ -1411,6 +1470,10 @@ func (r *PlanReconciler) disableUnplanned(ctx context.Context) error {
 	}
 	for _, ref := range unplanned {
 		if r.ops().busy(refKey(ref)) {
+			continue
+		}
+		// 定时器已经停用（或没有）的不再发停用，也不记日志：每小时重发一遍会刷屏。读不到就照常发一次停用。
+		if state, err := r.describe(ctx, ref); err == nil && (!state.Exists || state.Timer == nil || !state.Timer.Enabled) {
 			continue
 		}
 		// 结果在下一轮由 collectFinishedOps 取走：成功才记“已停”，失败按 cloud 报。
