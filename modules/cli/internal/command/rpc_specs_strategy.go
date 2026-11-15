@@ -73,7 +73,6 @@ func init() {
 		rpcSpec{Path: []string{"strategy", "replay", "cancel"}, Short: "取消回放", Service: strategyMgr, Method: "CancelReplay",
 			Flags: []rpcFlag{reqFlag("replay-id", "replay_id", "回放 ID")}},
 
-
 		rpcSpec{Path: []string{"strategy", "display", "get"}, Short: "查看实例的展示设置", Service: strategyMgr, Method: "GetStrategyDisplaySettings",
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
 		rpcSpec{Path: []string{"strategy", "display", "set"}, Short: "设置实例要隐藏的分类、成员与列", Service: strategyMgr, Method: "SetStrategyDisplaySettings",
