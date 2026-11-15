@@ -14,7 +14,7 @@ import (
 	"github.com/mooyang-code/moox/packages/lifecycle"
 )
 
-// 实例要 init 之后才就绪；预热是影子模式，运行是正式模式，其他阶段不求值。
+// 实例要 init 之后才就绪；预热与运行都求值（实盘还是影子看确认列），其他阶段不求值。
 func TestTriggerGateFollowsLifecycleStage(t *testing.T) {
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "strategy.sqlite"))
@@ -106,10 +106,10 @@ func TestTriggerGateCatchupModeAndReleaseBoundary(t *testing.T) {
 
 var caughtUpFlag atomic.Bool
 
-// 没挂账户的观察实例不会真实下单，试运行后自动确认进入运行；挂了账户的实例仍由用户确认。
-func TestAutoConfirmOnlyObserverInstances(t *testing.T) {
-	dir := t.TempDir()
-	db, err := store.Open(filepath.Join(dir, "strategy.sqlite"))
+// openLifecycleStore 打开一个空的策略库并建好定义 s。
+func openLifecycleStore(t *testing.T) *store.Store {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,26 +117,51 @@ func TestAutoConfirmOnlyObserverInstances(t *testing.T) {
 	if err := db.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	account := "acc-1"
-	ctx := context.Background()
 	now := time.Now().UTC()
-	if err := db.CreateDefinition(ctx, store.Definition{StrategyID: "s", Name: "s", DSLYaml: "name: s", DSLHash: "sha256:s", CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := db.CreateDefinition(context.Background(), store.Definition{StrategyID: "s", Name: "s", DSLYaml: "name: s", DSLHash: "sha256:s", CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	for _, instance := range []store.Instance{
-		{InstanceID: "observer", StrategyID: "s", SpaceID: "crypto", FactorTasks: map[string]string{"spot": "ftask_a"}, CreatedAt: now, UpdatedAt: now},
-		{InstanceID: "trader", StrategyID: "s", SpaceID: "crypto", FactorTasks: map[string]string{"spot": "ftask_b"}, LogicalAccountID: &account, CreatedAt: now, UpdatedAt: now},
-	} {
-		if err := db.CreateInstance(ctx, instance); err != nil {
-			t.Fatal(err)
-		}
+	return db
+}
+
+// createAndEnable 建一个绑定现货任务 taskID 的实例并启用（会话 session-<实例>）；account 为空表示观察实例。
+func createAndEnable(t *testing.T, db *store.Store, instanceID, taskID string, account *string) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := db.CreateInstance(ctx, store.Instance{InstanceID: instanceID, StrategyID: "s", SpaceID: "crypto", FactorTasks: map[string]string{"spot": taskID}, LogicalAccountID: account, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
 	}
+	resolved := `{"tasks":{"spot":{"factor_task_id":"` + taskID + `"}}}`
+	if err := db.EnableInstance(ctx, store.Session{SessionID: "session-" + instanceID, InstanceID: instanceID, DSLHash: "sha256:s", ResolvedJSON: resolved, CreatedAt: now}, "name: s"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 对象阶段跟着确认列走：没挂账户的实例启用即确认，自动推进到运行；挂了账户的实例确认实盘之后才推进；停用的实例不推进。
+func TestAutoConfirmFollowsConfirmedColumn(t *testing.T) {
+	db := openLifecycleStore(t)
+	account := "acc-1"
+	createAndEnable(t, db, "observer", "ftask_a", nil)
+	createAndEnable(t, db, "trader", "ftask_b", &account)
 	deps := lifecycleDeps{db: db}
 	if !deps.autoConfirm(instanceRef("observer"), time.Time{}) {
-		t.Fatal("没挂账户的实例应自动确认")
+		t.Fatal("没挂账户的实例启用即确认，应自动推进")
 	}
 	if deps.autoConfirm(instanceRef("trader"), time.Time{}) {
-		t.Fatal("挂了账户的实例不应自动确认")
+		t.Fatal("挂了账户、还没确认实盘的实例不应推进")
+	}
+	if err := db.ConfirmInstance(context.Background(), "trader", "session-trader", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if !deps.autoConfirm(instanceRef("trader"), time.Time{}) {
+		t.Fatal("确认实盘之后应推进")
+	}
+	if err := db.DisableInstance(context.Background(), "trader", "session-trader", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if deps.autoConfirm(instanceRef("trader"), time.Time{}) {
+		t.Fatal("停用的实例不推进")
 	}
 	if deps.autoConfirm(instanceRef("missing"), time.Time{}) || deps.autoConfirm(lifecycle.Ref{Kind: "factor_task", ID: "observer"}, time.Time{}) {
 		t.Fatal("不存在的实例与别的对象类型都不自动确认")

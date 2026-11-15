@@ -239,7 +239,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     选一个起点早于 View 保留根数的区间：View 来源提交即拒绝，`--input compute` 能跑（因子机本地数据要覆盖这段，必要时先做初始数据导入）。
     顶层命令清单（`$CLI --help`）里没有 `replay`；在仓库里 `git grep -n '/v1/replay' -- modules packages` 没有输出（三个模块的健康端口不再挂回放路由）。
 21. **归属（测试网或模拟盘账户，先问用户）**：
-    - 启用挂了这个组合账户的实例并 `$CLI lifecycle confirm --module strategy --kind strategy_instance --id <实例>`，`$CLI trade logical target --logical-account-id <组合>` 里是这个实例的会话，Trade 下单。
+    - 启用挂了这个组合账户的实例：确认之前 `$CLI trade shadow list --instance-id <实例>` 里有影子目标、没有订单；`$CLI strategy instance confirm --instance-id <实例> --yes`（或管理台实例列表的“确认实盘”）之后，`$CLI trade logical target --logical-account-id <组合>` 里是这个实例的会话，Trade 下单。
     - 停用：几秒内这份目标变为过期、目标挂单被撤（挑一份已收敛并带挂单的目标验证，`trade order list --logical-account-id <组合> --owner-type TARGET --only-open` 变空），持仓不动。
     - 停用后把同一会话更晚的一份目标事件重放进 `MOOX_TRADE`：Trade 日志（`$CLI setup logs --host overseas --component trade --lines 2000`）里这条投递的 `error_code` 是 `superseded`，没有新订单。
       仓库里没有重放单个事件的命令，做不了就在汇报里写明没有线上验证，这一条由 Trade 的单测与本机 e2e（`scripts/test/e2e/test-strategy-trade-event-e2e.sh`）覆盖。

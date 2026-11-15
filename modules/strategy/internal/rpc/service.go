@@ -57,6 +57,8 @@ type TradeAccounts interface {
 type Warmer interface {
 	Start(ctx context.Context, instanceID, sessionID string)
 	Stop(instanceID string)
+	// Blocked 返回实例预热没完成或失败的说明；没有在预热的实例为空串。确认实盘时用来给出拒绝的原因。
+	Blocked(instanceID string) string
 }
 
 // ReplayWaker 通知回放执行循环有新任务。

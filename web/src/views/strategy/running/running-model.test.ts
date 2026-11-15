@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRunningQuery, emptyKind, listKey, parseRunningQuery } from "./running-model";
+import { buildRunningQuery, emptyKind, isTrialInstance, listKey, parseRunningQuery } from "./running-model";
 
 describe("running page model", () => {
   it("normalizes the URL state", () => {
@@ -45,5 +45,15 @@ describe("running page model", () => {
     expect(emptyKind({ loading: false, error: "", count: 0, filtered: true })).toBe("no-match");
     expect(emptyKind({ loading: false, error: "", count: 0, filtered: false })).toBe("no-instances");
     expect(emptyKind({ loading: false, error: "", count: 2, filtered: false })).toBe("none");
+  });
+
+  it("marks enabled, account-bound, unconfirmed instances as trial", () => {
+    expect(isTrialInstance({ enabled: true, logical_account_id: "la-1", confirmed_at: "" })).toBe(true);
+    expect(isTrialInstance({ enabled: true, logical_account_id: "la-1" })).toBe(true);
+    expect(isTrialInstance({ enabled: true, logical_account_id: "la-1", confirmed_at: "2026-11-15T01:00:00Z" })).toBe(false);
+    // 没挂账户的实例启用即确认；停用的实例不在试运行。
+    expect(isTrialInstance({ enabled: true, logical_account_id: "", confirmed_at: "" })).toBe(false);
+    expect(isTrialInstance({ enabled: false, logical_account_id: "la-1", confirmed_at: "" })).toBe(false);
+    expect(isTrialInstance(null)).toBe(false);
   });
 });

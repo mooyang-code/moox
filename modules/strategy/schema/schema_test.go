@@ -54,7 +54,7 @@ func TestStrategySchemaColumns(t *testing.T) {
 		"t_strategy_defs":             {"c_strategy_id", "c_name", "c_dsl_yaml", "c_dsl_hash", "c_deleted_at", "c_ctime", "c_mtime"},
 		"t_strategy_def_versions":     {"c_dsl_hash", "c_dsl_yaml", "c_ctime"},
 		"t_strategy_display_settings": {"c_instance_id", "c_hidden_json", "c_ctime", "c_mtime"},
-		"t_strategy_instances":        {"c_instance_id", "c_strategy_id", "c_space_id", "c_logical_account_id", "c_enabled", "c_session_id", "c_resolved_json", "c_health", "c_ctime", "c_mtime"},
+		"t_strategy_instances":        {"c_instance_id", "c_strategy_id", "c_space_id", "c_logical_account_id", "c_enabled", "c_confirmed_at", "c_session_id", "c_resolved_json", "c_health", "c_ctime", "c_mtime"},
 		"t_strategy_instance_tasks":   {"c_instance_id", "c_source", "c_market", "c_factor_task_id"},
 		"t_strategy_ready_events":     {"c_instance_id", "c_session_id", "c_view_id", "c_bar_end_time", "c_event_id", "c_event_bytes", "c_ctime"},
 		"t_strategy_sessions":         {"c_session_id", "c_instance_id", "c_logical_account_id", "c_dsl_hash", "c_resolved_json", "c_members_json", "c_warmed_through", "c_started_at", "c_ctime", "c_closed_at"},

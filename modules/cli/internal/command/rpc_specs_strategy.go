@@ -46,8 +46,10 @@ func init() {
 		rpcSpec{Path: []string{"strategy", "instance", "create"}, Short: "创建策略实例（默认停用，确认无误再 enable；也可加 --enable 创建即启用）", Service: strategyMgr, Method: "CreateStrategyInstance", SpaceField: "instance.space_id", Flags: createInstanceFlags},
 		rpcSpec{Path: []string{"strategy", "instance", "update"}, Short: "修改停用中的策略实例绑定的策略定义与账户（因子任务创建时写定，不能改）", Service: strategyMgr, Method: "UpdateStrategyInstance", SpaceField: "instance.space_id",
 			Flags: updateInstanceFlags},
-		rpcSpec{Path: []string{"strategy", "instance", "enable"}, Destructive: true, Short: "启用策略实例（挂了账户的实例启用后会按目标下单；默认只预览，--yes 才执行）", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": true},
+		rpcSpec{Path: []string{"strategy", "instance", "enable"}, Destructive: true, Short: "启用策略实例（挂了账户的实例启用后先试运行：目标只记为影子目标、不下单，确认实盘后才下单；默认只预览，--yes 才执行）", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": true},
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
+		rpcSpec{Path: []string{"strategy", "instance", "confirm"}, Destructive: true, Short: "确认试运行中的实例转为实盘：下一期起按目标下单（先用 trade shadow list 看影子目标；策略池预热没完成时被拒；默认只预览，--yes 才执行）", Service: strategyMgr, Method: "ConfirmStrategyInstance",
+			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID"), strFlag("session-id", "session_id", "可选：只确认这次启用的会话（实例之后又重新启用过就拒绝）")}},
 		rpcSpec{Path: []string{"strategy", "instance", "disable"}, Destructive: true, Short: "停用策略实例；对已停用的实例再执行一次会重新通知 Trade 关闭最近一次挂账户的会话（默认只预览，--yes 才执行）", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": false},
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
 

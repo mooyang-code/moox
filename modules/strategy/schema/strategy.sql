@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS t_strategy_def_versions (
 
 -- 实例：定义 + 因子任务（见 t_strategy_instance_tasks）+ 可选组合账户；启用时固化解析结果。因子任务在创建时写定，不能修改；
 -- 读取的 View 是任务结果数据集的默认 View，由任务 ID 推导。c_session_id 只在启用时非空（启用、停用各是一个事务）。
+-- c_confirmed_at 为空表示试运行：目标只发影子、不下单。没挂账户的实例启用时直接写入；挂了账户的启用后为空，由用户确认实盘时写入；
+-- 停用、修改实例都清空它，重新启用从试运行开始。
 -- 只有已停用的实例能删除，删除时连同它在本库的全部记录
 CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_instance_id TEXT NOT NULL PRIMARY KEY,
@@ -25,6 +27,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT,
     c_enabled INTEGER NOT NULL DEFAULT 0,
+    c_confirmed_at DATETIME,
     c_session_id TEXT,
     c_resolved_json TEXT NOT NULL DEFAULT '{}',
     c_health TEXT NOT NULL DEFAULT 'ok',
@@ -32,6 +35,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_enabled IN (0, 1)),
     CHECK ((c_enabled = 1) = (c_session_id IS NOT NULL)),
+    CHECK (c_confirmed_at IS NULL OR c_enabled = 1),
     CHECK (c_health IN ('ok', 'degraded')),
     FOREIGN KEY (c_strategy_id) REFERENCES t_strategy_defs (c_strategy_id)
 );

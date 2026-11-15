@@ -41,7 +41,8 @@ function normalizeInstance(value: any): StrategyInstance {
     health: value?.health || "ok",
     created_at: value?.created_at ?? "",
     updated_at: value?.updated_at ?? "",
-    missing_factor_tasks: [...(value?.missing_factor_tasks ?? [])]
+    missing_factor_tasks: [...(value?.missing_factor_tasks ?? [])],
+    confirmed_at: value?.confirmed_at ?? ""
   };
 }
 
@@ -297,6 +298,19 @@ export async function setInstanceEnabled(instance_id: string, enabled: boolean) 
   const response = await call<{ instance_id: string; enabled: boolean }, { instance?: StrategyInstance }>(
     "SetStrategyInstanceEnabled",
     { instance_id, enabled }
+  );
+  return normalizeInstance(response.instance);
+}
+
+/**
+ * 确认试运行中的实例转为实盘：下一期起目标交给 Trade 下单。session_id 是页面看过影子目标的那次启用，
+ * 实例之后又重新启用过时被拒；失败由调用方提示。
+ */
+export async function confirmInstance(instance_id: string, session_id: string) {
+  const response = await call<{ instance_id: string; session_id: string }, { instance?: StrategyInstance }>(
+    "ConfirmStrategyInstance",
+    { instance_id, session_id },
+    { silent: true }
   );
   return normalizeInstance(response.instance);
 }

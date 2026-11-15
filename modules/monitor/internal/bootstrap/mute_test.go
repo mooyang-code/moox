@@ -83,6 +83,32 @@ func TestMuteAlertsSilencesPushesUntilUnmuted(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, idle.GetRetInfo().GetCode(), "没有屏蔽时解除是空操作")
 }
 
+// 系统暂停（moox-cli system pause）同样让告警静默：暂停与恢复追赶期间发送器为 nil，恢复完成后重新推送。
+// 原来由 T1 删掉的 TestMonitorPauseSilencesAlertsAndResetKeepsChannels 覆盖，批 4 T5 改生命周期时靠它保护。
+func TestSystemPauseSilencesAlertsUntilResumed(t *testing.T) {
+	life, runtime := newMuteTestEnv(t)
+	ctx := context.Background()
+	_, err := runtime.Repositories.Notifications.Add(ctx, "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abcd1234", "")
+	require.NoError(t, err)
+	sender, err := runtime.alertSender(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, sender)
+
+	_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem, Reason: "系统维护"})
+	require.NoError(t, err)
+	sender, err = runtime.alertSender(ctx)
+	require.NoError(t, err)
+	require.Nil(t, sender, "系统暂停期间告警静默")
+
+	_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem})
+	require.NoError(t, err)
+	life.Refresh(ctx)
+	require.False(t, life.Halted(lifecycle.Ref{}), "恢复完成：%+v", life.Snapshot().Self)
+	sender, err = runtime.alertSender(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, sender, "系统恢复后重新推送")
+}
+
 // 不是屏蔽设置的暂停（例如系统暂停）不算屏蔽，也不能被 UnmuteAlerts 解除。
 func TestMuteStateIgnoresOtherPauses(t *testing.T) {
 	life, runtime := newMuteTestEnv(t)

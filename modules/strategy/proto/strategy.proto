@@ -38,6 +38,8 @@ message StrategyInstance {
   // 实例引用的、已在 Factor 里不存在的因子任务（只对停用实例检查，读不到 Factor 时留空）：可能是上次删除实例没做完，
   // 也可能是任务被另外删掉。删除实例即可清理。
   repeated string missing_factor_tasks = 12;
+  // 确认实盘的时间；空表示试运行（挂了账户的实例启用后目标只发影子、不下单）。没挂账户的实例启用时写入；停用、修改实例都清空。
+  string confirmed_at = 13;
 }
 
 message InstrumentTarget {
@@ -171,6 +173,11 @@ message ListStrategyInstancesReq { PageRequest page = 1; string strategy_id = 2;
 message ListStrategyInstancesRsp { common.RetInfo ret_info = 1; repeated StrategyInstance instances = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
 message SetStrategyInstanceEnabledReq { string instance_id = 1; bool enabled = 2; }
 message SetStrategyInstanceEnabledRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
+// ConfirmStrategyInstanceReq 把挂了组合账户、正在试运行的实例确认为实盘：下一期起目标交给 Trade 下单。
+// 实例没启用、没挂账户、策略池预热没完成时拒绝；已确认的再确认一次返回成功。
+// session_id 可选：给了就必须是实例当前的会话（页面传它看过影子目标的那次启用，确认不会落到之后新启用的会话上）。
+message ConfirmStrategyInstanceReq { string instance_id = 1; string session_id = 2; }
+message ConfirmStrategyInstanceRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
 // DeleteStrategyInstanceReq 删除已停用、没有会话的实例，连同绑定到它的因子任务和任务的结果数据集（不可恢复）；
 // 没绑定到它的任务保留不动。有回放或补算在进行、结果数据集有归档任务时拒绝；实例不存在返回成功。
 // 中途失败（例如超时）后再删一次即可接着做完。Trade 里的历史不删。
@@ -248,6 +255,7 @@ service StrategyMgr {
   rpc GetStrategyInstance(GetStrategyInstanceReq) returns (GetStrategyInstanceRsp);
   rpc ListStrategyInstances(ListStrategyInstancesReq) returns (ListStrategyInstancesRsp);
   rpc SetStrategyInstanceEnabled(SetStrategyInstanceEnabledReq) returns (SetStrategyInstanceEnabledRsp);
+  rpc ConfirmStrategyInstance(ConfirmStrategyInstanceReq) returns (ConfirmStrategyInstanceRsp);
   rpc DeleteStrategyInstance(DeleteStrategyInstanceReq) returns (DeleteStrategyInstanceRsp);
   rpc ListStrategyResults(ListStrategyResultsReq) returns (ListStrategyResultsRsp);
   rpc GetStrategyResult(GetStrategyResultReq) returns (GetStrategyResultRsp);

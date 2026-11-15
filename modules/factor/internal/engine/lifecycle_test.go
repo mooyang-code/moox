@@ -53,7 +53,7 @@ func newLifecycleRuntime(t *testing.T) (*Runtime, *preloadDataFake) {
 		cfg:     &Config{Lifecycle: LifecycleConfig{StateFile: filepath.Join(t.TempDir(), "lifecycle.json")}},
 		catalog: cache, lease: &leaseState{}, data: localdata.New(localdata.Config{}),
 	}
-	r.preload = newPreloader(cache, lifecycleSourceFake{}, fake, r.active, nil)
+	r.preload = r.newGatedPreloader(lifecycleSourceFake{}, fake, nil)
 	r.life, err = r.newLifecycle()
 	require.NoError(t, err)
 	return r, fake
@@ -90,11 +90,11 @@ func TestEngineLifecycleGatesTaskUntilStarted(t *testing.T) {
 	require.False(t, r.gate("ftask_a"), "暂停后不计算")
 }
 
-// 模块暂停、恢复追赶期间预载循环不运行，不会自己把数据拉回本地；放行后恢复。门禁用的是 NewRuntime 接上的同一个函数。
+// 模块暂停、恢复追赶期间预载循环不运行，不会自己把数据拉回本地；放行后恢复。预载器由 newGatedPreloader 建（NewRuntime 用的同一份接线），
+// 测试不自己接门禁。
 func TestPreloaderIsBlockedWhileTheModuleIsHalted(t *testing.T) {
 	r, fake := newLifecycleRuntime(t)
 	ctx := context.Background()
-	r.preload.blocked = r.preloadBlocked
 	r.life.Refresh(ctx)
 
 	_, err := r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem})

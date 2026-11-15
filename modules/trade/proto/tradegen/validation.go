@@ -447,6 +447,19 @@ func (r *GetLogicalAccountTargetReq) Validate() error {
 	return nil
 }
 
+// maxShadowTargets 是一次最多列出的影子目标条数。
+const maxShadowTargets = 200
+
+func (r *ListShadowTargetsReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.InstanceId) == "" {
+		return fmt.Errorf("instance_id is required")
+	}
+	if r.Limit < 0 || r.Limit > maxShadowTargets {
+		return fmt.Errorf("limit must be between 0 and %d", maxShadowTargets)
+	}
+	return nil
+}
+
 func (r *GetOrderReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.OrderId) == "" {
 		return fmt.Errorf("order_id is required")

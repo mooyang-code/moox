@@ -41,6 +41,8 @@ export interface StrategyInstance {
   updated_at: string;
   /** 引用的、已在因子服务里不存在的任务（只对停用实例检查）：删除实例没做完，或任务被另外删掉；删除实例即可清理。 */
   missing_factor_tasks?: string[];
+  /** 确认实盘的时间；空表示试运行（挂了账户的实例启用后只发影子目标、不下单）。没挂账户的实例启用时写入，停用、修改都清空。 */
+  confirmed_at?: string;
 }
 
 /** 一个处理过的周期：ok 带目标，skipped 带原因。 */

@@ -30,10 +30,11 @@ var removedEnvironmentKeys = []string{
 	"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON",
 }
 
-// secretEnvironmentKeys 与 secretEnvironmentSuffixes 是读回结果带出包外之前去掉的密钥项：调用方密钥、CLS 写入密钥，
+// secretEnvironmentKeys 与 secretEnvironmentSuffixes 是读回结果带出包外之前去掉的密钥项：调用方密钥、CLS 写入密钥、
+// Storage 鉴权删除前注入的 Storage 写入密钥（名字是 _JSON 结尾，后缀认不出来；按函数名接管的旧函数上可能还带着），
 // 以及名字按后缀看像密钥的项（接管的旧函数或基础环境文件里可能带着别的密钥）。
 var (
-	secretEnvironmentKeys     = []string{"MOOX_CALLER_KEY", "MOOX_CLS_SECRET_KEY"}
+	secretEnvironmentKeys     = []string{"MOOX_CALLER_KEY", "MOOX_CLS_SECRET_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"}
 	secretEnvironmentSuffixes = []string{"_KEY", "_SECRET", "_PASSWORD", "_TOKEN", "_CREDENTIALS"}
 )
 

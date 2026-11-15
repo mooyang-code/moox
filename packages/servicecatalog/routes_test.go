@@ -127,9 +127,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":  {175, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "690eb3635018497735c0aab55e71251a113f8d2d3454ce369a1d184c81fe7a55"},
+		"control":  {176, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "f6b30dbc4c2190fbb341c3491d04282bbf3cc295c4606eac15930fc243132e58"},
 		"storage":  {65, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "4304606d48e8f9f3aa00d7da895c7fbf6058a9c512c60ff9518f148b091d7cef"},
-		"overseas": {61, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "a3687a90f358dfd63a442a285e031bac0a0aa6c7bee589167d113413a804a010"},
+		"overseas": {62, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "837be852eff82d83bc4ba358878d370fca5ed894b37f8f0c19c06a500b327eb4"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)

@@ -18,7 +18,8 @@ import (
 )
 
 // Trade 的生命周期（设计第 6 节）：模块自身的检查就是就绪判定（数据库、EventBus、账户会话、各工人）。
-// 预热中的策略实例发来的目标带影子标记，Trade 只换算并记录，这一份记录通过 /v1/shadow/targets 查看。
+// 试运行中的策略实例（挂了账户、还没确认实盘）发来的目标带影子标记，Trade 只换算并记录：管理台与 moox-cli trade shadow list
+// 经 ListShadowTargets（rpc/shadow.go）查看；健康端口上的 /v1/shadow/targets 只剩 moox-cli lifecycle shadow 在用，批 4 T6 随它删除。
 
 const (
 	lifecycleRefreshEvery  = 30 * time.Second

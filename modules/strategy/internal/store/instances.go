@@ -30,11 +30,19 @@ type Instance struct {
 	FactorTasks      map[string]string
 	LogicalAccountID *string
 	Enabled          bool
-	SessionID        *string
-	ResolvedJSON     json.RawMessage
-	Health           string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// ConfirmedAt 为空表示试运行：目标只发影子、不下单。没挂账户的实例启用时写入，挂了账户的由用户确认实盘时写入；
+	// 停用、修改实例都清空它。
+	ConfirmedAt  *time.Time
+	SessionID    *string
+	ResolvedJSON json.RawMessage
+	Health       string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// Trial 报告实例是否在试运行：启用、挂了组合账户、还没确认实盘。试运行的目标带影子标记，Trade 只换算并记录、不下单。
+func (i Instance) Trial() bool {
+	return i.Enabled && i.LogicalAccountID != nil && i.ConfirmedAt == nil
 }
 
 type instanceRow struct {
@@ -43,6 +51,7 @@ type instanceRow struct {
 	SpaceID          string         `gorm:"column:c_space_id"`
 	LogicalAccountID sql.NullString `gorm:"column:c_logical_account_id"`
 	Enabled          int            `gorm:"column:c_enabled"`
+	ConfirmedAt      sql.NullTime   `gorm:"column:c_confirmed_at"`
 	SessionID        sql.NullString `gorm:"column:c_session_id"`
 	ResolvedJSON     string         `gorm:"column:c_resolved_json"`
 	Health           string         `gorm:"column:c_health"`
@@ -53,7 +62,7 @@ type instanceRow struct {
 func (r instanceRow) instance() Instance {
 	return Instance{
 		InstanceID: r.InstanceID, StrategyID: r.StrategyID, SpaceID: r.SpaceID,
-		LogicalAccountID: nullableString(r.LogicalAccountID), Enabled: r.Enabled == 1, SessionID: nullableString(r.SessionID),
+		LogicalAccountID: nullableString(r.LogicalAccountID), Enabled: r.Enabled == 1, ConfirmedAt: nullableTime(r.ConfirmedAt), SessionID: nullableString(r.SessionID),
 		ResolvedJSON: json.RawMessage(r.ResolvedJSON), Health: r.Health,
 		CreatedAt: r.CreatedAt.UTC(), UpdatedAt: r.UpdatedAt.UTC(),
 	}
@@ -62,7 +71,7 @@ func (r instanceRow) instance() Instance {
 // 实例的 SQL：整条写成常量，不在调用处拼接；读实例的语句列清单与 instanceRow 一一对应。
 const (
 	// sqlSelectInstanceByID 按实例 ID 读取实例。
-	sqlSelectInstanceByID = `SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances WHERE c_instance_id = ?`
+	sqlSelectInstanceByID = `SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_confirmed_at, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances WHERE c_instance_id = ?`
 	// sqlSelectTasksOfInstance 读取一个实例绑定的因子任务。
 	sqlSelectTasksOfInstance = `SELECT c_source, c_market, c_factor_task_id FROM t_strategy_instance_tasks WHERE c_instance_id = ?`
 	// sqlSelectTasksOfInstances 按实例 ID 的 JSON 数组一次读出一批实例绑定的因子任务。
@@ -73,19 +82,19 @@ const (
 		VALUES (?, ?, ?, ?, 0, NULL, ?, 'ok', ?, ?)`
 	// sqlInsertInstanceTask 登记实例在一个（来源, 市场）绑定的因子任务。
 	sqlInsertInstanceTask = `INSERT INTO t_strategy_instance_tasks (c_instance_id, c_source, c_market, c_factor_task_id) VALUES (?, ?, ?, ?)`
-	// sqlUpdateInstance 修改停用实例的定义与账户绑定，并清空绑定解析、恢复健康。
+	// sqlUpdateInstance 修改停用实例的定义与账户绑定，并清空绑定解析与确认时间、恢复健康。
 	sqlUpdateInstance = `
-		UPDATE t_strategy_instances SET c_strategy_id = ?, c_logical_account_id = ?, c_resolved_json = '{}', c_health = 'ok', c_mtime = ?
+		UPDATE t_strategy_instances SET c_strategy_id = ?, c_logical_account_id = ?, c_resolved_json = '{}', c_health = 'ok', c_confirmed_at = NULL, c_mtime = ?
 		WHERE c_instance_id = ? AND c_enabled = 0`
 
 	// ListInstances 按过滤条件选用的四个变体：全部、按空间、按启用状态、按空间与启用状态。
-	sqlListInstances               = `SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances WHERE 1 = 1 ORDER BY c_ctime DESC, c_instance_id`
-	sqlListInstancesBySpace        = `SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances WHERE 1 = 1 AND c_space_id = ? ORDER BY c_ctime DESC, c_instance_id`
-	sqlListInstancesByEnabled      = `SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances WHERE 1 = 1 AND c_enabled = ? ORDER BY c_ctime DESC, c_instance_id`
-	sqlListInstancesBySpaceEnabled = `SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances WHERE 1 = 1 AND c_space_id = ? AND c_enabled = ? ORDER BY c_ctime DESC, c_instance_id`
+	sqlListInstances               = `SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_confirmed_at, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances WHERE 1 = 1 ORDER BY c_ctime DESC, c_instance_id`
+	sqlListInstancesBySpace        = `SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_confirmed_at, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances WHERE 1 = 1 AND c_space_id = ? ORDER BY c_ctime DESC, c_instance_id`
+	sqlListInstancesByEnabled      = `SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_confirmed_at, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances WHERE 1 = 1 AND c_enabled = ? ORDER BY c_ctime DESC, c_instance_id`
+	sqlListInstancesBySpaceEnabled = `SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_confirmed_at, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances WHERE 1 = 1 AND c_space_id = ? AND c_enabled = ? ORDER BY c_ctime DESC, c_instance_id`
 	// sqlListEnabledInstancesByTask 列出空间内绑定了某个因子任务的启用实例。
 	sqlListEnabledInstancesByTask = `
-		SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances
+		SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_confirmed_at, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances
 		WHERE c_space_id = ? AND c_enabled = 1
 		AND c_instance_id IN (SELECT c_instance_id FROM t_strategy_instance_tasks WHERE c_factor_task_id = ?)
 		ORDER BY c_instance_id`
@@ -93,9 +102,11 @@ const (
 	// sqlListInstanceIDsByTask 列出登记了某个因子任务的全部实例（不分空间与启用状态）。
 	sqlListInstanceIDsByTask = `SELECT DISTINCT c_instance_id FROM t_strategy_instance_tasks WHERE c_factor_task_id = ? ORDER BY c_instance_id`
 
-	// sqlEnableInstance 把停用的实例挂上会话并置为启用，写入绑定解析并恢复健康。
+	// sqlEnableInstance 把停用的实例挂上会话并置为启用，写入绑定解析并恢复健康。确认时间按实例行上当时绑的账户决定：
+	// 没挂账户的直接写入（观察实例不下单，不需要试运行），挂了账户的置空，从试运行开始。
 	sqlEnableInstance = `
-		UPDATE t_strategy_instances SET c_enabled = 1, c_session_id = ?, c_resolved_json = ?, c_health = 'ok', c_mtime = ?
+		UPDATE t_strategy_instances SET c_enabled = 1, c_session_id = ?, c_resolved_json = ?, c_health = 'ok',
+			c_confirmed_at = CASE WHEN c_logical_account_id IS NULL THEN ? ELSE NULL END, c_mtime = ?
 		WHERE c_instance_id = ? AND c_enabled = 0`
 	// sqlMarkInstanceDegraded 把仍以该会话启用、健康的实例标记为 degraded。
 	sqlMarkInstanceDegraded = `
@@ -105,8 +116,12 @@ const (
 	sqlRecoverInstanceHealth = `
 		UPDATE t_strategy_instances SET c_health = 'ok', c_mtime = ?
 		WHERE c_instance_id = ? AND c_health = 'degraded' AND c_enabled = 1 AND c_session_id = ?`
-	// sqlDisableInstance 比较交换停用以该会话启用的实例，并清掉实例上的会话。
-	sqlDisableInstance = `UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = NULL, c_mtime = ? WHERE c_instance_id = ? AND c_enabled = 1 AND c_session_id = ?`
+	// sqlDisableInstance 比较交换停用以该会话启用的实例，并清掉实例上的会话与确认时间。
+	sqlDisableInstance = `UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = NULL, c_confirmed_at = NULL, c_mtime = ? WHERE c_instance_id = ? AND c_enabled = 1 AND c_session_id = ?`
+	// sqlConfirmInstance 比较交换确认实盘：实例仍以该会话启用、挂了组合账户、还没确认。
+	sqlConfirmInstance = `
+		UPDATE t_strategy_instances SET c_confirmed_at = ?, c_mtime = ?
+		WHERE c_instance_id = ? AND c_enabled = 1 AND c_session_id = ? AND c_logical_account_id IS NOT NULL AND c_confirmed_at IS NULL`
 
 	// sqlSelectLiveDefinitionHash 读取未删除定义当前的 DSL 哈希。
 	sqlSelectLiveDefinitionHash = `SELECT c_dsl_hash FROM t_strategy_defs WHERE c_strategy_id = ? AND c_deleted_at IS NULL`
@@ -436,7 +451,35 @@ func (s *Store) DisableInstance(ctx context.Context, instanceID, sessionID strin
 	})
 }
 
-// SessionTasks 从会话固化的绑定解析（resolved_json）里取出全部任务键 → 因子任务：主帧的 tasks、参考市场 references 与附加来源
+// ConfirmInstance 把以 sessionID 启用、挂了组合账户的试运行实例确认为实盘，之后的目标不再带影子标记。
+// 已经确认的再确认一次是成功（不改确认时间）；实例已停用、换了会话或没挂账户时拒绝。预热等业务前提由调用方检查。
+func (s *Store) ConfirmInstance(ctx context.Context, instanceID, sessionID string, at time.Time) error {
+	now, err := requireTime(at)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(instanceID) == "" || strings.TrimSpace(sessionID) == "" {
+		return errors.New("确认实例需要 instance_id 与会话 ID")
+	}
+	return s.transaction(ctx, func(tx *gorm.DB) error {
+		current, err := readInstance(tx, instanceID)
+		if err != nil {
+			return err
+		}
+		if current.Enabled != 1 || !current.SessionID.Valid || current.SessionID.String != sessionID {
+			return errors.New("实例的会话已变化，请刷新后重试")
+		}
+		if !current.LogicalAccountID.Valid {
+			return errors.New("实例没有挂组合账户，不需要确认")
+		}
+		if current.ConfirmedAt.Valid {
+			return nil
+		}
+		return tx.Exec(sqlConfirmInstance, now, now, instanceID, sessionID).Error
+	})
+}
+
+// SessionTasks从会话固化的绑定解析（resolved_json）里取出全部任务键 → 因子任务：主帧的 tasks、参考市场 references 与附加来源
 // sources（任务键 来源名:市场）。无法解析时返回空表。
 func SessionTasks(resolvedJSON []byte) map[string]string {
 	type task struct {

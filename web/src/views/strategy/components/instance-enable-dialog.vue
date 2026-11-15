@@ -30,7 +30,9 @@
         <a-descriptions-item label="账户状态">{{ logical.ready ? "就绪" : "未就绪" }}</a-descriptions-item>
         <a-descriptions-item label="计算任务">{{ factorTaskText }}</a-descriptions-item>
       </a-descriptions>
-      <p class="line">启用会固化会话快照，之后的策略目标由它执行下单；上一个会话留下的目标挂单由交易模块按新目标撤掉。</p>
+      <p class="line">
+        启用会固化会话快照，先进入试运行：每期的目标只记为影子目标、不下单；在实例列表看过影子目标后点“确认实盘”，之后的目标才由它执行下单。
+      </p>
       <p class="line">
         写了 factor_params 的实例会把计算任务
         {{ factorTaskText }} 与本实例永久关联（已关联的不变）；其余实例只读任务的列，不关联。

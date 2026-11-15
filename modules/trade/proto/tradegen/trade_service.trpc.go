@@ -69,6 +69,8 @@ type TradeConsoleServiceService interface {
 
 	GetLogicalAccountTarget(ctx context.Context, req *GetLogicalAccountTargetReq) (*GetLogicalAccountTargetRsp, error)
 
+	ListShadowTargets(ctx context.Context, req *ListShadowTargetsReq) (*ListShadowTargetsRsp, error)
+
 	GetOrder(ctx context.Context, req *GetOrderReq) (*GetOrderRsp, error)
 
 	ListOrders(ctx context.Context, req *ListOrdersReq) (*ListOrdersRsp, error)
@@ -558,6 +560,24 @@ func TradeConsoleServiceService_GetLogicalAccountTarget_Handler(svr interface{},
 	return rsp, nil
 }
 
+func TradeConsoleServiceService_ListShadowTargets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListShadowTargetsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).ListShadowTargets(ctx, reqbody.(*ListShadowTargetsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func TradeConsoleServiceService_GetOrder_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetOrderReq{}
 	filters, err := f(req)
@@ -1006,6 +1026,10 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_GetLogicalAccountTarget_Handler,
 		},
 		{
+			Name: "/trpc.moox.trade.TradeConsoleService/ListShadowTargets",
+			Func: TradeConsoleServiceService_ListShadowTargets_Handler,
+		},
+		{
 			Name: "/trpc.moox.trade.TradeConsoleService/GetOrder",
 			Func: TradeConsoleServiceService_GetOrder_Handler,
 		},
@@ -1170,6 +1194,9 @@ func (s *UnimplementedTradeConsoleService) GetOperatorAction(ctx context.Context
 func (s *UnimplementedTradeConsoleService) GetLogicalAccountTarget(ctx context.Context, req *GetLogicalAccountTargetReq) (*GetLogicalAccountTargetRsp, error) {
 	return nil, errors.New("rpc GetLogicalAccountTarget of service TradeConsoleService is not implemented")
 }
+func (s *UnimplementedTradeConsoleService) ListShadowTargets(ctx context.Context, req *ListShadowTargetsReq) (*ListShadowTargetsRsp, error) {
+	return nil, errors.New("rpc ListShadowTargets of service TradeConsoleService is not implemented")
+}
 func (s *UnimplementedTradeConsoleService) GetOrder(ctx context.Context, req *GetOrderReq) (*GetOrderRsp, error) {
 	return nil, errors.New("rpc GetOrder of service TradeConsoleService is not implemented")
 }
@@ -1285,6 +1312,8 @@ type TradeConsoleServiceClientProxy interface {
 	GetOperatorAction(ctx context.Context, req *GetOperatorActionReq, opts ...client.Option) (rsp *GetOperatorActionRsp, err error)
 
 	GetLogicalAccountTarget(ctx context.Context, req *GetLogicalAccountTargetReq, opts ...client.Option) (rsp *GetLogicalAccountTargetRsp, err error)
+
+	ListShadowTargets(ctx context.Context, req *ListShadowTargetsReq, opts ...client.Option) (rsp *ListShadowTargetsRsp, err error)
 
 	GetOrder(ctx context.Context, req *GetOrderReq, opts ...client.Option) (rsp *GetOrderRsp, err error)
 
@@ -1828,6 +1857,26 @@ func (c *TradeConsoleServiceClientProxyImpl) GetLogicalAccountTarget(ctx context
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetLogicalAccountTargetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) ListShadowTargets(ctx context.Context, req *ListShadowTargetsReq, opts ...client.Option) (*ListShadowTargetsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ListShadowTargets")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("ListShadowTargets")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListShadowTargetsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -79,6 +79,8 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	resolvedJSON, err := json.Marshal(resolved)
 	require.NoError(t, err)
 	require.NoError(t, repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))
+	// 挂了账户的实例启用后在试运行（只发影子目标）；确认实盘后才发正式目标，Trade 才会下单（批 4 T4）。
+	require.NoError(t, repo.ConfirmInstance(ctx, "instance-e2e", session, now))
 
 	// 启用前 Strategy 只读一次 Trade 的账户，核对它由策略控制、可交易现货（批 3 的 3.6，不再认领归属）。
 	endpoint, err := os.ReadFile(filepath.Join(coord, "trade-ready"))

@@ -20,7 +20,7 @@
             >{{ strategyName }} · <span class="mono">{{ instance.strategy_id }}</span></a-descriptions-item
           >
           <a-descriptions-item label="状态"
-            ><StatusBadge :enabled="instance.enabled" :health="instance.health"
+            ><StatusBadge :enabled="instance.enabled" :health="instance.health" :trial="isTrialInstance(instance)"
           /></a-descriptions-item>
           <a-descriptions-item label="计算任务"><FactorTaskLinks :tasks="instance.factor_tasks" /></a-descriptions-item>
           <a-descriptions-item label="模式"
@@ -60,6 +60,7 @@ import { getInstance } from "@/api/strategy";
 import type { Strategy, StrategyInstance } from "@/api/strategy-types";
 import { RequestGate } from "@/utils/request-gate";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
+import { isTrialInstance } from "@/views/strategy/running/running-model";
 import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 

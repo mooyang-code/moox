@@ -95,7 +95,8 @@ type Method struct {
 	// Callers 是能调它的机器身份：组件 ID、identities 里的外部身份，host-gateway 指每台主机的网关。省略表示没有机器能调。
 	Callers []string `yaml:"callers,omitempty" json:"callers,omitempty"`
 	// Operators 收窄人操作的两个身份（console、moox-cli）：nil 表示两者都能调，空切片表示都不能调。
-	// JSON 不带 omitempty：nil 与空切片要能区分着往返（Monitor 按 JSON 保存目录），否则 [] 会悄悄放宽成两者都能调。
+	// JSON 不带 omitempty：序列化时每个方法都明确写出这个键，[] 写成 []（都不允许）、nil 写成 null（两者都能调），
+	// 读 JSON（例如 Monitor 保存的目录）时一眼看出是哪一种。指针字段加 omitempty 也只省略 nil，[] 照样能往返，不加只是为了写明白。
 	Operators *[]string `yaml:"operators,omitempty" json:"operators"`
 }
 

@@ -25,6 +25,7 @@ func instanceProto(value store.Instance) *strategypb.StrategyInstance {
 		InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, FactorTasks: value.FactorTasks,
 		LogicalAccountId: dereference(value.LogicalAccountID), Enabled: value.Enabled, SessionId: dereference(value.SessionID),
 		ResolvedJson: string(value.ResolvedJSON), Health: value.Health, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
+		ConfirmedAt: formatOptionalTime(value.ConfirmedAt),
 	}
 }
 

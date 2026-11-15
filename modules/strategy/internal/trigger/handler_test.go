@@ -174,7 +174,7 @@ func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	return newHarnessWith(t, dslYaml, account, resolved)
 }
 
-// newHarnessWith 用给定的会话快照搭建一个已启用的实例。
+// newHarnessWith 用给定的会话快照搭建一个已启用的实例（挂了账户时已确认实盘）。
 func newHarnessWith(t *testing.T, dslYaml string, account *string, resolved input.Resolved) *harness {
 	t.Helper()
 	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
@@ -198,6 +198,12 @@ func newHarnessWith(t *testing.T, dslYaml string, account *string, resolved inpu
 	session := "session-1"
 	if err := repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(raw), CreatedAt: bar0}, dslYaml); err != nil {
 		t.Fatal(err)
+	}
+	// 挂了账户的实例默认已确认实盘，目标是正式目标；试运行的用例见 confirm_test.go。
+	if account != nil {
+		if err := repo.ConfirmInstance(ctx, "i1", session, bar0); err != nil {
+			t.Fatal(err)
+		}
 	}
 	h := &harness{t: t, repo: repo, loader: &fakeLoader{frames: map[int64]map[string]map[string]float64{}}, observer: &recordingObserver{}, now: start, session: session}
 	h.handler = h.newHandler()

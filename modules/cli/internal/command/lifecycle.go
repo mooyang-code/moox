@@ -49,7 +49,7 @@ var lifecycleCmd = &cobra.Command{
   moox-cli lifecycle check  [--task-id <id>]         重新执行启动前检查
   moox-cli lifecycle init   [--task-id <id>]         执行初始化（因子任务：载入本地窗口）
   moox-cli lifecycle start  [--task-id <id>]         启动：进入试运行
-  moox-cli lifecycle confirm [--task-id <id>]        确认试运行结果：进入运行
+  moox-cli lifecycle confirm [--task-id <id>]        确认试运行结果：进入运行（策略实例的确认实盘改用 strategy instance confirm）
   moox-cli lifecycle pause  [--task-id <id>] [--reason 原因] [--pause-kind manual|system]
                                                  暂停（默认手动暂停：只有用户 resume 才恢复；可在就绪、试运行、运行时暂停）
   moox-cli lifecycle resume [--task-id <id>] [--pause-kind system] [--force] [--manual-release]

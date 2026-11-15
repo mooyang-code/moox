@@ -65,9 +65,12 @@
               }}</a-tag></template
             ></a-table-column
           >
-          <a-table-column title="状态" :width="110"
+          <a-table-column title="状态" :width="120"
             ><template #cell="{ record }"
-              ><StatusBadge :enabled="record.enabled" :health="record.health" />
+              ><StatusBadge :enabled="record.enabled" :health="record.health" :trial="isTrialInstance(record)" />
+              <div v-if="isTrialInstance(record)" class="cell-sub">
+                <a-link @click="openConfirm(record)">确认实盘</a-link>
+              </div>
               <div v-if="record.missing_factor_tasks?.length" class="cell-sub delete-incomplete">
                 引用的计算任务已不存在<InfoTip text="删除实例即可清理；启用会失败。" /></div></template
           ></a-table-column>
@@ -130,6 +133,7 @@
         @created="created"
       />
       <InstanceEnableDialog ref="enableDialog" />
+      <InstanceConfirmDialog ref="confirmDialog" />
     </div>
   </div>
 </template>
@@ -146,6 +150,7 @@ import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyInstanceCreate from "@/views/strategy/components/strategy-instance-create.vue";
 import { confirmInstanceRedisable, confirmInstanceToggle } from "@/views/strategy/components/instance-toggle";
 import InstanceEnableDialog from "@/views/strategy/components/instance-enable-dialog.vue";
+import InstanceConfirmDialog from "@/views/strategy/components/instance-confirm-dialog.vue";
 import { canDeleteInstance, confirmInstanceDelete } from "@/views/strategy/components/instance-delete";
 import InfoTip from "@/components/info-tip/index.vue";
 import { STRATEGY_TASKS_ROUTE, detailLink, normalizeTaskTab, replayLink, resultsLink } from "@/views/strategy/links";
@@ -153,6 +158,7 @@ import InstanceQuickDrawer from "@/views/strategy/running/instance-quick-drawer.
 import {
   buildRunningQuery,
   emptyKind,
+  isTrialInstance,
   listKey,
   parseRunningQuery,
   type RunningState
@@ -184,6 +190,7 @@ const pagination = computed(() => ({ current: state.value.page, pageSize: PAGE_S
 const readAt = ref("");
 const togglingId = ref("");
 const enableDialog = ref<InstanceType<typeof InstanceEnableDialog> | null>(null);
+const confirmDialog = ref<InstanceType<typeof InstanceConfirmDialog> | null>(null);
 const empty = computed(() =>
   emptyKind({
     loading: store.instancesLoading,
@@ -292,6 +299,10 @@ function toggle(instance: StrategyInstance) {
   // 启用绑了组合账户的实例：确认框要写明账户和环境，生产要输入组合名称
   if (!instance.enabled && instance.logical_account_id) enableDialog.value?.open(instance, hooks);
   else confirmInstanceToggle(instance.instance_id, !instance.enabled, hooks);
+}
+/** 试运行中的实例确认实盘：对话框先列出本次启用的影子目标，确认后（或失败过再取消）重新读取列表。 */
+function openConfirm(instance: StrategyInstance) {
+  confirmDialog.value?.open(instance, { onSettled: () => void refresh() });
 }
 /** 对已停用的实例再停用一次：停用时 Trade 没确认关闭会话的重试入口，结束后（无论成败）重新读取列表。 */
 function redisable(instance: StrategyInstance) {

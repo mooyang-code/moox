@@ -93,6 +93,7 @@ const (
 // 由本事务决定），决定实例已有的规则状态是否沿用（见 carryState），再把会话挂到实例上、置为启用并写入绑定解析（取会话的那一份）。
 // 实例必须是停用的；引用的定义未删除且当前的 DSL 版本就是会话的版本，登记的因子任务与会话固化的一致：解析期间实例被改了定义、
 // 定义被修改时拒绝，什么都不写。没有“挂着会话的停用实例”这种中间状态。
+// 没挂组合账户的实例同时写入确认时间；挂了账户的确认时间为空，从试运行开始，由 ConfirmInstance 确认实盘。
 func (s *Store) EnableInstance(ctx context.Context, session Session, dslYaml string) error {
 	if strings.TrimSpace(session.SessionID) == "" || strings.TrimSpace(session.InstanceID) == "" || strings.TrimSpace(session.DSLHash) == "" || strings.TrimSpace(dslYaml) == "" {
 		return errors.New("会话缺少 session_id、instance_id、dsl_hash 或 DSL 文本")
@@ -142,7 +143,7 @@ func (s *Store) EnableInstance(ctx context.Context, session Session, dslYaml str
 		if err := carryState(tx, session.InstanceID, session.SessionID, session.DSLHash, resolved, session.MembersJSON, now); err != nil {
 			return err
 		}
-		enabled := tx.Exec(sqlEnableInstance, session.SessionID, resolved, now, session.InstanceID)
+		enabled := tx.Exec(sqlEnableInstance, session.SessionID, resolved, now, now, session.InstanceID)
 		if enabled.Error != nil {
 			return enabled.Error
 		}

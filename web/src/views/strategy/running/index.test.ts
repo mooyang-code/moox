@@ -52,6 +52,7 @@ const stubs = {
     }
   }),
   InstanceEnableDialog: { template: "<div />", methods: { open: api.enableOpen } },
+  InstanceConfirmDialog: { template: "<div />", methods: { open: vi.fn() } },
   InstanceQuickDrawer: defineComponent({
     props: ["instanceId"],
     setup(props) {

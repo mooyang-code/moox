@@ -404,6 +404,8 @@ func TestDescribeStripsSecretsAndReadsTimer(t *testing.T) {
 		function.Info.Environment["LEGACY_DB_PASSWORD"] = "p"
 		function.Info.Environment["LEGACY_CLIENT_SECRET"] = "s"
 		function.Info.Environment["LEGACY_CREDENTIALS"] = "c"
+		// Storage 鉴权删除前注入的写入密钥：_JSON 结尾，靠名单而不是后缀认出来。
+		function.Info.Environment["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"] = `{"scf":"k"}`
 		function.ReservedMem = 320
 	})
 	client := newScriptedSCF(fake)
@@ -416,7 +418,7 @@ func TestDescribeStripsSecretsAndReadsTimer(t *testing.T) {
 	require.Equal(t, "hash-final", state.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
 	require.Equal(t, "scf-key-2", state.Environment["MOOX_CALLER_KEY_ID"])
 	require.Equal(t, "fake-cls-secret-id", state.Environment["MOOX_CLS_SECRET_ID"], "公开标识不算密钥")
-	for _, key := range []string{"MOOX_CALLER_KEY", "MOOX_CLS_SECRET_KEY", "OPERATOR_API_TOKEN", "LEGACY_DB_PASSWORD", "LEGACY_CLIENT_SECRET", "LEGACY_CREDENTIALS"} {
+	for _, key := range []string{"MOOX_CALLER_KEY", "MOOX_CLS_SECRET_KEY", "OPERATOR_API_TOKEN", "LEGACY_DB_PASSWORD", "LEGACY_CLIENT_SECRET", "LEGACY_CREDENTIALS", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"} {
 		require.NotContains(t, state.Environment, key)
 	}
 	require.Equal(t, &AsyncRetryState{RetryNum: 0, MsgTTL: 60}, state.AsyncRetry)

@@ -923,6 +923,7 @@ components:
           - name: ListStrategyInstances
             read_only: true
           - name: SetStrategyInstanceEnabled
+          - name: ConfirmStrategyInstance
           # 删除实例要删因子任务和结果数据集，与策略服务端的超时（trpc_go.yaml 30 秒）一致。
           - name: DeleteStrategyInstance
             timeout_ms: 30000
@@ -1337,6 +1338,8 @@ components:
             read_only: true
             callers: [callback-dispatcher]
           - name: GetLogicalAccountTarget
+            read_only: true
+          - name: ListShadowTargets
             read_only: true
           - name: GetOrder
             read_only: true

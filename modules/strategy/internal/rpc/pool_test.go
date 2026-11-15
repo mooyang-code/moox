@@ -217,7 +217,11 @@ func TestPoolIsReplayableButNotTrialled(t *testing.T) {
 type fakeWarmer struct {
 	started []string
 	stopped []string
+	// blocked 是实例 → 预热没完成或失败的说明。
+	blocked map[string]string
 }
+
+func (w *fakeWarmer) Blocked(instanceID string) string { return w.blocked[instanceID] }
 
 func (w *fakeWarmer) Start(_ context.Context, instanceID, sessionID string) {
 	w.started = append(w.started, instanceID+"@"+sessionID)

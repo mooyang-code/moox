@@ -3,9 +3,9 @@
   "summary": {
     "components": 20,
     "services": 26,
-    "methods": 319,
-    "read_only_methods": 143,
-    "retryable_methods": 144,
+    "methods": 321,
+    "read_only_methods": 144,
+    "retryable_methods": 145,
     "callers": 26,
     "principals": 5
   },
@@ -1700,6 +1700,12 @@
           "timeout_ms": 5000
         },
         {
+          "name": "ConfirmStrategyInstance",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
           "name": "CreateStrategy",
           "read_only": false,
           "retryable": false,
@@ -1990,6 +1996,12 @@
         },
         {
           "name": "ListPositions",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListShadowTargets",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 5000
@@ -2394,6 +2406,7 @@
       "trpc.moox.storage.Metadata/UpsertTag",
       "trpc.moox.storage.PrimaryStore/UpsertFields",
       "trpc.moox.strategy.StrategyMgr/CancelReplay",
+      "trpc.moox.strategy.StrategyMgr/ConfirmStrategyInstance",
       "trpc.moox.strategy.StrategyMgr/CreateStrategy",
       "trpc.moox.strategy.StrategyMgr/CreateStrategyInstance",
       "trpc.moox.strategy.StrategyMgr/DeleteStrategy",
@@ -2439,6 +2452,7 @@
       "trpc.moox.trade.TradeConsoleService/ListOperatorActions",
       "trpc.moox.trade.TradeConsoleService/ListOrders",
       "trpc.moox.trade.TradeConsoleService/ListPositions",
+      "trpc.moox.trade.TradeConsoleService/ListShadowTargets",
       "trpc.moox.trade.TradeConsoleService/ListTradableInstruments",
       "trpc.moox.trade.TradeConsoleService/ListTradingAccounts",
       "trpc.moox.trade.TradeConsoleService/PauseLogicalAccount",
@@ -2767,6 +2781,7 @@
       "trpc.moox.storage.PrimaryStore/ReportDatasetPeriodCompleted",
       "trpc.moox.storage.PrimaryStore/UpsertFields",
       "trpc.moox.strategy.StrategyMgr/CancelReplay",
+      "trpc.moox.strategy.StrategyMgr/ConfirmStrategyInstance",
       "trpc.moox.strategy.StrategyMgr/CreateStrategy",
       "trpc.moox.strategy.StrategyMgr/CreateStrategyInstance",
       "trpc.moox.strategy.StrategyMgr/DeleteStrategy",
@@ -2812,6 +2827,7 @@
       "trpc.moox.trade.TradeConsoleService/ListOperatorActions",
       "trpc.moox.trade.TradeConsoleService/ListOrders",
       "trpc.moox.trade.TradeConsoleService/ListPositions",
+      "trpc.moox.trade.TradeConsoleService/ListShadowTargets",
       "trpc.moox.trade.TradeConsoleService/ListTradableInstruments",
       "trpc.moox.trade.TradeConsoleService/ListTradingAccounts",
       "trpc.moox.trade.TradeConsoleService/PauseLogicalAccount",

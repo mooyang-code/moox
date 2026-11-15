@@ -366,10 +366,11 @@
 | `strategy delete` | 删除策略定义（默认只预览，--yes 才执行） |
 | `strategy display get` | 查看实例的展示设置 |
 | `strategy display set` | 设置实例要隐藏的分类、成员与列 |
+| `strategy instance confirm` | 确认试运行中的实例转为实盘：下一期起按目标下单（先用 `trade shadow list` 看影子目标；策略池预热没完成时被拒；默认只预览，--yes 才执行） |
 | `strategy instance create` | 创建策略实例（默认停用，确认无误再 enable；也可加 --enable 创建即启用） |
 | `strategy instance delete` | 删除已停用的策略实例，连同关联到它的因子任务和结果数据集（还被别的实例引用时拒绝；默认只预览，--yes 才执行） |
 | `strategy instance disable` | 停用策略实例；对已停用的实例再执行一次会重新通知 Trade 关闭最近一次挂账户的会话（默认只预览，--yes 才执行） |
-| `strategy instance enable` | 启用策略实例（挂了账户的实例启用后会按目标下单；默认只预览，--yes 才执行） |
+| `strategy instance enable` | 启用策略实例（挂了账户的实例启用后先试运行：目标只记为影子目标、不下单，确认实盘后才下单；默认只预览，--yes 才执行） |
 | `strategy instance list` | 列出策略实例（--space-id 过滤空间，默认 crypto） |
 | `strategy instance show` | 查看一个策略实例 |
 | `strategy instance update` | 修改停用中的策略实例绑定的策略定义与账户（因子任务创建时写定，不能改） |
@@ -418,6 +419,7 @@
 | `trade order show` | 查看订单 |
 | `trade pnl` | 收益拆解：手续费、已实现盈亏（成交表汇总）与资金费（交易所流水，时间范围最长 90 天，取不全时标明截断） |
 | `trade positions` | 列出持仓 |
+| `trade shadow list` | 列出试运行中的策略实例最近的影子目标（权重、换算出的数量，从新到旧） |
 
 ## udf：自定义算子（wasm UDF）：new → build → publish → preview → activate
 

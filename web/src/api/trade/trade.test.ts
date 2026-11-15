@@ -153,6 +153,13 @@ describe("Trade public API", () => {
   it("reads current quantity targets and parses per-account flatten progress", async () => {
     await trade.getLogicalAccountTarget("logical-1");
     expect(callTrade).toHaveBeenCalledWith("console", "GetLogicalAccountTarget", { logical_account_id: "logical-1" }, {});
+    await trade.listShadowTargets("instance-1", 10, { silent: true });
+    expect(callTrade).toHaveBeenLastCalledWith(
+      "console",
+      "ListShadowTargets",
+      { instance_id: "instance-1", limit: 10 },
+      { silent: true }
+    );
     expect(
       trade.parseFlattenResult({
         action_id: "action-1",

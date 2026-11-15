@@ -50,14 +50,12 @@ type Observer interface {
 	ObservePeriod(ctx context.Context, instance store.Instance, bar string, barStart, barEnd time.Time, result, reason string)
 }
 
-// Mode 是实例的生命周期模式（设计 6.1、6.3）。
+// Mode 是实例这一期怎么处理（设计 6.1、6.3）。实盘还是影子不在这里决定，看实例的确认列（store.Instance.Trial）。
 type Mode int
 
 const (
-	// ModeLive 正常求值，目标交给 Trade 执行。
+	// ModeLive 正常求值并发出目标：已确认的实例是正式目标，交给 Trade 执行；试运行的实例目标带影子标记，Trade 只换算并记录，不下单。
 	ModeLive Mode = iota
-	// ModeShadow 预热：正常求值，目标带影子标记，Trade 只换算并记录，不下单。
-	ModeShadow
 	// ModeOff 没有处于预热或运行（未启动、暂停、故障）：不求值、不发新目标，持仓不动。
 	ModeOff
 	// ModeCatchup 恢复追赶中：只记录周期（因子指纹、版本），不发目标，但求值并推进规则状态。引用上一周期因子列的策略需要相邻周期的记录，
@@ -204,7 +202,7 @@ type period struct {
 	validUntil time.Time
 	input      store.InputRecord
 	timing     periodTiming
-	// shadow 为真表示实例在预热：目标事件带影子标记。
+	// shadow 为真表示实例在试运行（挂了账户、还没确认实盘）：目标事件带影子标记。取自本次事件读到的实例行，确认后的下一期就是正式目标。
 	shadow bool
 	// clearState 为真表示实例的规则状态无法解析：随本期的 skipped 记录同事务清掉。
 	clearState bool
@@ -307,7 +305,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		// 不晚于预热终点的周期已经在预热里推进过：事件直接去重。等待期间排队的事件大多落在预热终点以内，不会因为重投的先后变成乱序跳过。
 		return nil
 	}
-	p := &period{timing: periodTiming{start: h.now()}, shadow: h.mode(instance.InstanceID) == ModeShadow, loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), boundary: boundary, validUntil: validUntil}
+	p := &period{timing: periodTiming{start: h.now()}, shadow: instance.Trial(), loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), boundary: boundary, validUntil: validUntil}
 	p.input = store.InputRecord{Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, Views: map[string]store.ViewInput{payload.GetViewId(): {EventID: message.GetEventId()}}}
 	if skip != nil {
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)

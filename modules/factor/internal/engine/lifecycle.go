@@ -144,6 +144,14 @@ func (r *Runtime) leaseAllowed() bool { return r.life == nil || r.life.ModuleOpe
 // preloadBlocked 是预载循环的门禁：模块暂停、恢复追赶期间预载循环不把数据拉回本地。
 func (r *Runtime) preloadBlocked() bool { return r.life != nil && r.life.Halted(lifecycle.Ref{}) }
 
+// newGatedPreloader 建预载器并接上生命周期门禁：模块暂停、恢复追赶期间预载循环不运行，不会自己把数据拉回本地。
+// NewRuntime 与测试共用这一份接线。
+func (r *Runtime) newGatedPreloader(source SourceDataset, data preloadData, onReady func(string)) *preloader {
+	p := newPreloader(r.catalog, source, data, r.active, onReady)
+	p.blocked = r.preloadBlocked
+	return p
+}
+
 func (r *Runtime) lifecycleObjects() []lifecycle.Ref {
 	ids := r.catalog.TaskIDs()
 	refs := make([]lifecycle.Ref, 0, len(ids))

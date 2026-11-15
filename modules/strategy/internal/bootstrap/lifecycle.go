@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -23,8 +22,9 @@ import (
 )
 
 // 策略模块的生命周期（设计第 6 节）：对象是启用的策略实例，只有处于预热或运行的实例才求值。
-// 试运行：求值并发出带影子标记的目标（Trade 只换算记录，不下单）；没有挂账户的观察实例随后自动确认进入运行，挂了账户的实例由用户 confirm；
-// 暂停或没有启动：不求值、不发新目标，持仓不动。
+// 实盘还是影子由实例的确认列决定（store.Instance.Trial，批 4 T4），不看对象阶段：挂了账户、还没确认实盘的实例发影子目标
+// （Trade 只换算记录，不下单），用户在管理台或 moox-cli strategy instance confirm 确认后发正式目标。对象阶段只跟着确认列走
+// （autoConfirm），用于首页与 lifecycle status 的展示，批 4 T5 删除。暂停或没有启动：不求值、不发新目标，持仓不动。
 
 const (
 	instanceKind          = "strategy_instance"
@@ -51,7 +51,7 @@ type lifecycleDeps struct {
 // warmState 是策略池预热状态的只读视图（*warmup.Manager 实现）。
 type warmState interface {
 	State(instanceID string) (warmup.Status, string)
-	// Blocked 返回实例不能确认进入运行阶段的说明；预热完成或不是池实例时为空串。
+	// Blocked 返回实例预热没完成或失败的说明；预热完成或不是池实例时为空串。
 	Blocked(instanceID string) string
 }
 
@@ -78,20 +78,20 @@ func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, err
 	})
 }
 
-// autoConfirm 报告试运行中的实例能否自动确认进入运行：没有挂组合账户的观察实例只计算、不投递目标，不存在真实下单，
-// 试运行（影子目标）没有意义；挂了账户的实例仍由用户确认，避免自己开始真实下单。
+// autoConfirm 让对象阶段跟着实例的确认列走：已确认实盘（没挂账户的实例启用时就确认了）的实例从预热自动推进到运行，
+// 首页与 lifecycle status 的展示与实际是否下单一致。策略池预热没完成时不推进。
 func (d lifecycleDeps) autoConfirm(ref lifecycle.Ref, _ time.Time) bool {
 	if ref.Kind != instanceKind || d.db == nil {
 		return false
 	}
 	if d.warm != nil && d.warm.Blocked(ref.ID) != "" {
-		return false // 策略池预热没完成：没有账户的观察实例也不能自动确认
+		return false
 	}
 	instance, err := d.db.GetInstance(context.Background(), ref.ID)
 	if err != nil {
 		return false
 	}
-	return instance.LogicalAccountID == nil || strings.TrimSpace(*instance.LogicalAccountID) == ""
+	return instance.Enabled && instance.ConfirmedAt != nil
 }
 
 // quiesceStep 是等待 outbox 排空时的轮询间隔。
@@ -220,8 +220,8 @@ func (d lifecycleDeps) checkInstance(ctx context.Context, ref lifecycle.Ref) []l
 	return checks
 }
 
-// triggerGate 把控制器的阶段翻译成处理器的模式：运行是正式目标，预热是影子目标，其他都不求值
-// （暂停、恢复追赶、故障，对象各自的阶段不变但都不求值）。模块自身只是暂时未就绪（刚启动、出站 EventBus 还在连接）
+// triggerGate 把控制器的阶段翻译成处理器的模式：预热与运行都求值（目标是否带影子标记看实例的确认列，由处理器决定），
+// 其他都不求值（暂停、恢复追赶、故障，对象各自的阶段不变但都不求值）。模块自身只是暂时未就绪（刚启动、出站 EventBus 还在连接）
 // 时返回 ModeWait：事件稍后重投，就绪后照常求值，不丢掉这几期。
 func triggerGate(c *lifecycle.Controller, warm warmState) func(string) trigger.Mode {
 	return func(instanceID string) trigger.Mode {
@@ -245,10 +245,8 @@ func triggerGate(c *lifecycle.Controller, warm warmState) func(string) trigger.M
 			return trigger.ModeOff
 		}
 		switch c.Stage(instanceRef(instanceID)) {
-		case lifecycle.StageRunning:
+		case lifecycle.StageRunning, lifecycle.StageWarming:
 			return trigger.ModeLive
-		case lifecycle.StageWarming:
-			return trigger.ModeShadow
 		}
 		return trigger.ModeOff
 	}
@@ -259,11 +257,14 @@ func releasedAt(c *lifecycle.Controller) func(string) time.Time {
 	return func(instanceID string) time.Time { return c.ReleasedAt(instanceRef(instanceID)) }
 }
 
-// confirmGuard 在控制器的命令入口外包一层：策略池实例预热没完成时拒绝 confirm（进入运行阶段）。
-// 现有的追赶钩子只在恢复追赶阶段才会被调用，预热阶段确认运行不会经过它，所以要在这里判断。
-func confirmGuard(next http.Handler, blocked func(instanceID string) string) http.Handler {
+// errInstanceConfirmMoved 是 lifecycle confirm 作用于策略实例时的拒绝说明。
+const errInstanceConfirmMoved = "策略实例的确认实盘改用 moox-cli strategy instance confirm --instance-id <实例> 或管理台实例列表的“确认实盘”（写实例的确认列，挂了账户的实例确认后才下单）"
+
+// confirmGuard 在控制器的命令入口外包一层：拒绝对策略实例的 confirm。确认实盘写在实例的确认列里（ConfirmStrategyInstance），
+// 只推进对象阶段的确认会让展示成“运行”而目标仍是影子；对象阶段由 autoConfirm 跟着确认列推进。批 4 T5 随对象阶段一起删除。
+func confirmGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && blocked != nil {
+		if r.Method == http.MethodPost {
 			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<16))
 			if err != nil {
 				w.Header().Set("Content-Type", "application/json")
@@ -274,26 +275,20 @@ func confirmGuard(next http.Handler, blocked func(instanceID string) string) htt
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			var req lifecycle.CommandRequest
 			if json.Unmarshal(body, &req) == nil && req.Command == lifecycle.CmdConfirm && req.Kind == instanceKind {
-				if reason := blocked(req.ID); reason != "" {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusConflict)
-					_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
-					return
-				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": errInstanceConfirmMoved})
+				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func lifecycleRoutes(c *lifecycle.Controller, warm warmState) []health.Route {
-	var blocked func(string) string
-	if warm != nil {
-		blocked = warm.Blocked
-	}
+func lifecycleRoutes(c *lifecycle.Controller) []health.Route {
 	return []health.Route{
 		{Path: lifecycle.StatusPath, Handler: c.StatusHandler()},
-		{Path: lifecycle.CommandPath, Handler: confirmGuard(c.CommandHandler(), blocked)},
+		{Path: lifecycle.CommandPath, Handler: confirmGuard(c.CommandHandler())},
 		{Path: lifecycle.CatchupPath, Handler: c.CatchupHandler()},
 	}
 }
