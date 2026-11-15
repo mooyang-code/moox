@@ -41,7 +41,7 @@ func finalSubjects(t *testing.T, content *FetchPlanContent) []string {
 
 // 排除后下一轮生成新计划且 hash 变化；到期自动恢复；只作用于匹配的市场。
 func TestSubjectExclusionsChangeThePlanAndExpire(t *testing.T) {
-	h := newIngestHarness(t, modePullSCF, "1m")
+	h := newIngestHarness(t, ingestSCF, "1m")
 	exclusions := &memExclusions{}
 	h.r.Exclusions = exclusions
 	h.settle(true)
@@ -75,11 +75,11 @@ func TestSubjectExclusionsChangeThePlanAndExpire(t *testing.T) {
 
 // 交接进行中设置排除：已打开的交接计划先推进完，排除在下一份计划里生效。
 func TestSubjectExclusionWaitsForAnOpenHandoff(t *testing.T) {
-	h := newIngestHarness(t, modePullSCF, "1m")
+	h := newIngestHarness(t, ingestSCF, "1m")
 	exclusions := &memExclusions{}
 	h.r.Exclusions = exclusions
 	h.settle(true)
-	h.modes.set("ds_spot_1m", IngestStreaming, marketfetch.PlanExecutorLocal, false)
+	h.setIngest("ds_spot_1m", ingestStream)
 	require.NoError(t, h.reconcile(h.r))
 	handoff := h.open()
 	require.NotNil(t, handoff)
@@ -118,7 +118,7 @@ func TestExcludeSubjectsDropsSymbolsPairsAndEmptyGroups(t *testing.T) {
 
 // 全部标的都被排除是操作员的决定：不按“标的暂时取不到”保持现状，经过去抖后数据集退出计划；到期后作为新数据集回到计划。
 func TestExcludingEverySubjectRetiresTheDatasetAndExpiryBringsItBack(t *testing.T) {
-	h := newIngestHarness(t, modePullSCF, "1m")
+	h := newIngestHarness(t, ingestSCF, "1m")
 	exclusions := &memExclusions{}
 	h.r.Exclusions = exclusions
 	h.settle(true)

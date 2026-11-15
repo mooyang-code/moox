@@ -8,6 +8,7 @@ import (
 	"time"
 
 	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/egressbalance"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
@@ -84,15 +85,15 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			// 恢复模式：系统暂停仍在（实时采集关闭），但补采要运行，补齐暂停区间。
 			return paused[space] && !control.Recovering(spaceID), err
 		},
-		// 并发上限：SCF 执行端受补采函数的预留并发硬性限制（5）；空间的数据集全部用本地执行端（collector-stream）补采时
-		// 不受这个限制，可以放大，补采（尤其是暂停恢复后补暂停区间）快得多。
+		// 并发上限：云函数补采受补采函数的预留并发硬性限制（5）；空间的 K 线任务都不用云函数（采集方式是 stream 或 local，
+		// 补采走 collector-stream 的本地执行端）时不受这个限制，可以放大，补采（尤其是暂停恢复后补暂停区间）快得多。
 		MaxInFlightFor: func(ctx context.Context, spaceID string) int {
-			modes, err := dbm.IngestModes().List(ctx, spaceID)
-			if err != nil || len(modes) == 0 {
+			tasks, err := dbm.Tasks().ListKline(ctx, spaceID, "")
+			if err != nil || len(tasks) == 0 {
 				return 0
 			}
-			for _, mode := range modes {
-				if mode.Executor != store.ExecutorLocal {
+			for _, task := range tasks {
+				if task.Ingest == domain.IngestSCF {
 					return 0
 				}
 			}
@@ -104,13 +105,14 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			}
 			return nil
 		},
-		// 补采按数据集的执行端调用：scf 走补采函数，local 调香港机 collector-stream 里的本地执行端。
+		// 补采按任务的采集方式选执行端：scf 走补采函数，stream 与 local 调 collector-stream 里的本地执行端。
+		// 任务已删除的数据集按 scf。
 		Executor: func(ctx context.Context, spaceID, datasetID string) (string, error) {
-			modes, err := dbm.IngestModes().List(ctx, spaceID)
+			tasks, err := dbm.Tasks().ListKline(ctx, spaceID, datasetID)
 			if err != nil {
 				return "", err
 			}
-			if mode, ok := modes[datasetID]; ok && mode.Executor == store.ExecutorLocal {
+			if len(tasks) > 0 && tasks[0].Ingest != domain.IngestSCF {
 				return marketfetch.PlanExecutorLocal, nil
 			}
 			return marketfetch.PlanExecutorSCF, nil
@@ -180,9 +182,11 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				},
 				Store: dbm.FetchPlans(), Storage: registrar, Cloud: invoker, Access: cfg.scfPlanAccessEnvironment, Lateness: results,
 				Activity: invoker, Metrics: metrics, Operations: operations,
-				Modes: dbm.IngestModes(), DefaultMode: cfg.SCFPlan.defaultModeFor(spaceID), Workers: dbm.StreamWorkers(),
+				Workers:      dbm.StreamWorkers(),
 				StreamOnline: func(ctx context.Context) (bool, error) { return stream.Online(ctx, spaceID) },
-				Exclusions:   dbm.SubjectExclusions(),
+				// 进程启动不满一个心跳超时不按离线放行：重启后心跳表里的时间是旧的。
+				StartedAt: collectorStartedAt, StreamTimeout: time.Duration(cfg.Stream.HeartbeatTimeoutSeconds) * time.Second,
+				Exclusions: dbm.SubjectExclusions(),
 			}
 			if balance := cfg.SCFPlan.Spaces[strings.ToLower(spaceID)].EgressBalance; balance != nil {
 				balancer, err := egressbalance.New(balance.config())

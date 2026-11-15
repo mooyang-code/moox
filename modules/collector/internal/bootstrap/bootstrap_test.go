@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/prometheus/client_golang/prometheus"
@@ -18,7 +19,7 @@ import (
 )
 
 func TestObserveCollectorMaintenanceSpaceRefreshesMetricsAndReportsFailure(t *testing.T) {
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
@@ -70,7 +71,7 @@ func (s *metricsReporterStub) Handle(context.Context) error {
 
 func TestCollectorHealthSnapshot(t *testing.T) {
 	cfg := Default()
-	dbm, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	dbm, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
@@ -101,7 +102,7 @@ func TestMetricsTimerRefreshFailureDoesNotBlockReporter(t *testing.T) {
 
 // 任务表非空时不读内置任务文件：文件格式比程序新（回滚到旧版二进制）也不挡住启动。
 func TestSeedBuiltinTasksSkipsTheSeedFileWhenTasksExist(t *testing.T) {
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
@@ -115,4 +116,41 @@ func TestSeedBuiltinTasksSkipsTheSeedFileWhenTasksExist(t *testing.T) {
 		SpaceID: "crypto", TaskID: "t1", TaskName: "任务", DataType: "kline", TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`,
 	}))
 	require.NoError(t, seedBuiltinTasks(context.Background(), db.Tasks(), broken))
+}
+
+// 全新库启动：内置任务种子不写采集方式，由任务仓库按市场默认值填上——crypto 是 stream，A 股与港美股是 scf，
+// 合成任务为空。任务表的约束（K 线任务必须有采集方式）不会把种子拦下。
+func TestFreshDatabaseSeedsBuiltinTasksWithTheMarketDefaultIngest(t *testing.T) {
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	ctx := context.Background()
+	seed := filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml")
+	require.NoError(t, seedBuiltinTasks(ctx, db.Tasks(), seed))
+
+	tasks, total, err := db.Tasks().List(ctx, store.TaskFilter{Page: 1, PageSize: 1000})
+	require.NoError(t, err)
+	require.EqualValues(t, len(tasks), total)
+	seen := map[string]int{}
+	for _, task := range tasks {
+		want := ""
+		if task.DataType == domain.DataTypeKline {
+			want = domain.IngestSCF
+			if task.SpaceID == "crypto" {
+				want = domain.IngestStreaming
+			}
+			seen[task.SpaceID]++
+		}
+		require.Equal(t, want, task.Ingest, "%s/%s", task.SpaceID, task.TaskID)
+	}
+	for _, space := range []string{"crypto", "stockcn", "stockhk", "stockus"} {
+		require.Positive(t, seen[space], "种子里应有 %s 的 K 线任务", space)
+	}
+
+	// 合成任务没有采集方式，同样写得进去。
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "resample", TaskName: "合成", DataType: "kline_resample", CollectParams: "{}"}))
+	resample, err := db.Tasks().GetByTaskID(ctx, "crypto", "resample")
+	require.NoError(t, err)
+	require.Empty(t, resample.Ingest)
 }

@@ -52,14 +52,14 @@
 ./bin/moox-cli collector task list|show|update|disable|inventory      # 任务查询、改名与启停
 ./bin/moox-cli collector task create --help                           # 新建 K 线采集任务
 # 币安永续 1h/1d 可选资金费率：--output-field 会替换默认字段，要把默认字段一起列出，例如
-# --output-field open,high,low,close,volume,quote_volume,trade_num,funding_rate；建完用 ingest-mode get 确认是 stream 加 local
+# --output-field open,high,low,close,volume,quote_volume,trade_num,funding_rate；采集方式不填用市场默认值（crypto 是 stream），要指定加 --ingest stream|scf|local；建完用 ingest-mode get 确认
 # 股票任务（A 股、港股、美股）不要用默认的 --output-field（那是现货、永续行的字段），带 --all-output-fields 输出股票行的全部字段
 ./bin/moox-cli collector kline check|backfill|backfill-status ...     # 检查与补采
 ./bin/moox-cli collector kline backfill-cancel|backfill-retry ...     # 取消补采作业；重试失败的分块
 ./bin/moox-cli collector kline history-confirm|absences-clear ...     # 按历史扫描的缺口补采并确认“行情源本来没有”的 K 线；行情源后来补上数据时清除这些确认
 ./bin/moox-cli collector resample preview|backfill|jobs|cancel ...    # 历史 K 线合成
 ./bin/moox-cli collector subjects exclude|unexclude|exclusions|sync|status|listers
-./bin/moox-cli collector ingest-mode get|set                          # WS 推送 / 定时拉取
+./bin/moox-cli collector ingest-mode get|set                          # 采集方式 stream / scf / local（set --ingest ...，没有 --force）
 ./bin/moox-cli collector fetch-plan pause|resume                      # 暂停或恢复整个空间的采集（pause 默认只预览，--yes 才执行）
 ./bin/moox-cli collector data-type list|show                          # 可采集的数据类型
 ```

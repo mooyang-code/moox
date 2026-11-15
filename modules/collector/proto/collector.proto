@@ -33,6 +33,9 @@ message CollectionTask {
   string prepare_state = 13;  // pending/waiting_view/ready/error
   string last_error = 14;
   TaskResult result = 15;
+  // ingest 是 K 线任务的采集方式：stream（collector-stream 接收推送）、scf（云函数定时拉取）、local（collector-stream 本地定时拉取）。
+  // 创建时不填用市场默认值；创建后只能用 SetIngestMode 切换。合成任务为空。
+  string ingest = 16;
 }
 
 // TaskResult 是采集任务唯一结果的用户可读摘要。
@@ -647,7 +650,7 @@ message GetCollectorStatusRsp {
   string generated_at = 10;
   // stream 是该空间 collector-stream 实例的状态（心跳、连接、最近周期），没有实例时为空。
   StreamWorkerStatus stream = 11;
-  // ingest_modes 是各数据集的采集方式与执行端。
+  // ingest_modes 是各启用的 K 线任务的采集方式。
   repeated IngestMode ingest_modes = 12;
 }
 
@@ -693,17 +696,17 @@ message ReregisterFetchPlanRsp {
   int32 backfill_jobs = 3;
 }
 
-// ===== 采集方式（按数据集）与 WS 推送采集 =====
+// ===== 采集方式（记在 K 线任务上）与 WS 推送采集 =====
 
-// IngestMode 是一个数据集的采集方式：stream（WS 推送）或 pull（定时拉取）；executor 是拉取与补采的执行端（scf 或 local）。
+// IngestMode 是一个 K 线任务（及它的结果数据集）的采集方式：stream（collector-stream 接收推送，补采走它的本地执行端）、
+// scf（云函数定时拉取，补采走云函数）、local（collector-stream 本地定时拉取与补采）。
 message IngestMode {
   string space_id = 1;
   string dataset_id = 2;
-  string mode = 3;
-  string executor = 4;
-  string updated_at = 5;
+  string task_id = 3;
+  string ingest = 4;
   // effective_periods 是正在交接的数据集按频率选定的生效周期 P（RFC3339，K 线开始时间），没有交接时为空。
-  map<string, string> effective_periods = 6;
+  map<string, string> effective_periods = 5;
 }
 
 message GetIngestModeReq {
@@ -718,15 +721,13 @@ message GetIngestModeRsp {
   StreamWorkerStatus stream = 3;
 }
 
-// SetIngestMode 按数据集切换采集方式：dataset_id 为空表示 space_id 的全部数据集。切到 stream 要求 collector-stream 在线；
-// force 用于旧执行端失联的极端故障：不等旧执行端确认，已打开的计划也不再等失联端确认。
+// SetIngestMode 按数据集切换采集方式：dataset_id 为空表示 space_id 的全部 K 线任务。切到 stream 或 local 要求 collector-stream 在线。
+// collector-stream 只是旧执行端且心跳超时时，交接计划不等它确认（固定规则，没有强制开关）。
 message SetIngestModeReq {
   string space_id = 1;
   string dataset_id = 2;
-  string mode = 3;
-  // executor 为空时：stream 默认 local（补采走同进程的本地执行端），pull 默认 scf。
-  string executor = 4;
-  bool force = 5;
+  // ingest 取值 stream、scf、local。
+  string ingest = 3;
 }
 
 message SetIngestModeRsp {

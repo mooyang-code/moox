@@ -115,8 +115,7 @@ func renderSCFPlanBlocks(manifest Manifest, rendered []byte) ([]byte, error) {
 	spaces := map[string]map[string]any{}
 	for _, space := range plan.Spaces {
 		markets[space.SpaceID] = space.Markets
-		override := map[string]any{"package_name": space.PackageName, "namespace": space.Namespace,
-			"default_ingest": space.DefaultIngest, "default_executor": space.DefaultExecutor}
+		override := map[string]any{"package_name": space.PackageName, "namespace": space.Namespace}
 		if space.SymbolsPerFunction > 0 {
 			override["symbols_per_function"] = space.SymbolsPerFunction
 		}

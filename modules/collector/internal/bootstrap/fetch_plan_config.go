@@ -125,9 +125,6 @@ type SCFPlanSpaceConfig struct {
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	// Markets 是按市场的覆盖项（现货、合约的取数时刻与截止不同）。
 	Markets map[string]SCFPlanMarketConfig `yaml:"markets"`
-	// DefaultIngest（stream|pull）与 DefaultExecutor（scf|local）是新数据集第一次出现时的采集方式初值，之后以库为准。
-	DefaultIngest   string `yaml:"default_ingest"`
-	DefaultExecutor string `yaml:"default_executor"`
 }
 
 // autoSizing 返回空间按配置估算每函数标的数的参数；空间固定了 symbols_per_function 或没有配置 auto_size 时返回 nil。
@@ -137,19 +134,6 @@ func (c SCFPlanConfig) autoSizing(spaceID string) *fetchplan.FleetSizing {
 		return nil
 	}
 	return &fetchplan.FleetSizing{TargetFetchMS: space.AutoSize.TargetFetchMS, RequestMS: space.AutoSize.RequestMS, MinFunctions: space.AutoSize.MinFunctions}
-}
-
-// defaultModeFor 返回空间新数据集的采集方式初值（没写的按拉取 + SCF）。
-func (c SCFPlanConfig) defaultModeFor(spaceID string) fetchplan.DatasetMode {
-	space := c.Spaces[strings.ToLower(spaceID)]
-	mode := fetchplan.DatasetMode{Mode: space.DefaultIngest, Executor: space.DefaultExecutor}
-	if mode.Mode == "" {
-		mode.Mode = fetchplan.IngestPull
-	}
-	if mode.Executor == "" {
-		mode.Executor = marketfetch.PlanExecutorSCF
-	}
-	return mode
 }
 
 // maxFunctionsPerNamespace 是腾讯云每个命名空间的函数数上限，超过后分到下一个命名空间。
@@ -230,12 +214,6 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 		if override.EgressBalance == nil && base.EgressBalance != nil {
 			balance := *base.EgressBalance
 			override.EgressBalance = &balance
-		}
-		if override.DefaultIngest == "" {
-			override.DefaultIngest = base.DefaultIngest
-		}
-		if override.DefaultExecutor == "" {
-			override.DefaultExecutor = base.DefaultExecutor
 		}
 		switch {
 		case override.Fetch == nil && base.Fetch != nil:
@@ -379,10 +357,6 @@ func (c *Config) validateSCFPlan() error {
 			if _, err := egressbalance.New(balance.config()); err != nil {
 				return fmt.Errorf("scf_plan.spaces[%s].egress_balance: %w", space, err)
 			}
-		}
-		mode := plan.defaultModeFor(space)
-		if (mode.Mode != fetchplan.IngestStreaming && mode.Mode != fetchplan.IngestPull) || (mode.Executor != marketfetch.PlanExecutorSCF && mode.Executor != marketfetch.PlanExecutorLocal) {
-			return fmt.Errorf("scf_plan.spaces[%s]: default_ingest 必须是 stream 或 pull，default_executor 必须是 scf 或 local（收到 %q、%q）", space, override.DefaultIngest, override.DefaultExecutor)
 		}
 	}
 	for space, markets := range c.SCFMarkets {

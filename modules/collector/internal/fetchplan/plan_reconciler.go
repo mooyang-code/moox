@@ -50,13 +50,6 @@ const (
 	planLeadTimeHandoff = 3 * time.Minute
 )
 
-// IngestModeSource 是按数据集的采集方式（store.IngestModeRepository）。
-type IngestModeSource interface {
-	List(context.Context, string) (map[string]store.IngestMode, error)
-	Initialize(context.Context, []store.IngestMode) error
-	ClearForce(context.Context, string, []string) error
-}
-
 // SubjectExclusionSource 读取采集名单排除（store.SubjectExclusionRepository）。
 type SubjectExclusionSource interface {
 	Active(context.Context, string, time.Time) ([]store.SubjectExclusion, error)
@@ -174,9 +167,6 @@ type PlanReconciler struct {
 	Activity ActivityLogger
 	Metrics  *ControlMetrics
 	Now      func() time.Time
-	// Modes 是按数据集的采集方式；DefaultMode 是新数据集的初值（空间配置的 default_ingest、default_executor）。
-	Modes       IngestModeSource
-	DefaultMode DatasetMode
 	// Workers 读取推送与本地执行端（collector-stream）的确认。
 	Workers StreamWorkerSource
 	// Exclusions 是采集名单排除：期望状态去掉排除的标的；为空表示没有排除。
@@ -186,6 +176,10 @@ type PlanReconciler struct {
 	// StreamOnline 判断 collector-stream 是否在线：新计划要给它下发推送或本地执行项时，它不在线就不建计划，
 	// 否则生效周期早于它上线，开头缺一段 K 线。为空表示不检查。
 	StreamOnline func(ctx context.Context) (bool, error)
+	// StartedAt 是 Collector 进程的启动时刻，StreamTimeout 是 collector-stream 的心跳超时。collector-stream 只是旧执行端
+	// 且已离线时计划不等它确认（见 confirmStream）；进程启动不满一个心跳超时不这样放行。StartedAt 为零值表示从不放行。
+	StartedAt     time.Time
+	StreamTimeout time.Duration
 	// Preflight 在创建新计划前执行（例如 stockcn 的公共日历覆盖期检查）；返回错误则本轮不创建新计划，已有计划照常续跑。
 	Preflight func(ctx context.Context) error
 	// JobWait 与 PollInterval 控制等待一个云端作业的时间。
@@ -469,20 +463,13 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		}
 		groups = excludeSubjects(groups, exclusions)
 	}
-	modes, forced, err := r.datasetModes(ctx, groups, previousDatasets)
-	if err != nil {
-		return r.fail("store", err)
-	}
-	options := r.Options
-	options.Modes = modes
-	desired, err := BuildDesiredState(options, groups, previousFunctions)
+	desired, err := BuildDesiredState(r.Options, groups, previousFunctions)
 	if err != nil {
 		return r.fail("rules", err)
 	}
 	// 交接与标的变更分开：有数据集的标的集合在变时，本轮先按已生效的执行端完成标的变更，交接等下一份计划。
 	if handoffPending(desired, previousDatasets) && subjectsChanging(desired, previousDatasets) {
-		options.Modes = appliedModes(modes, previousDatasets)
-		if desired, err = BuildDesiredState(options, groups, previousFunctions); err != nil {
+		if desired, err = BuildDesiredState(r.Options, appliedIngest(groups, previousDatasets), previousFunctions); err != nil {
 			return r.fail("rules", err)
 		}
 		log.InfoContextf(ctx, "collector fetch plan defers the ingest handoff until the subject change is applied space=%s", r.SpaceID)
@@ -522,12 +509,6 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		return r.fail("rules", err)
 	}
 	if !changed {
-		if len(forced) > 0 && r.Modes != nil {
-			// 切换命令没有带来任何变化：--force 标记不再需要。
-			if err := r.Modes.ClearForce(ctx, r.SpaceID, nil); err != nil {
-				return r.fail("store", err)
-			}
-		}
 		return r.verifyFleet(ctx, scfFunctions(previousFunctions))
 	}
 	content.LeadSeconds = int(lead / time.Second)
@@ -551,11 +532,6 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		}
 	}
 	progress := &FetchPlanProgress{}
-	for _, change := range content.Datasets {
-		if change.Changed && forced[change.DatasetID] {
-			progress.Forced = true
-		}
-	}
 	record, err := r.Store.Create(ctx, r.SpaceID, mustJSON(content), mustJSON(progress))
 	if errors.Is(err, store.ErrFetchPlanOpen) {
 		return nil
@@ -796,13 +772,6 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 	if err := r.saveProgress(ctx, record, progress, store.FetchPlanApplied, ""); err != nil {
 		return err
 	}
-	if r.Modes != nil && content.HasHandoff() {
-		// 只清这份计划完成交接的数据集的 --force 标记：其他数据集的切换（例如逐个数据集执行的 --force）
-		// 还在等下一份计划，标记要留给它。被 --force 推进的标的变更计划没有交接，不清标记。
-		if err := r.Modes.ClearForce(ctx, r.SpaceID, handedOff(content)); err != nil {
-			log.WarnContextf(ctx, "collector fetch plan clear force flags space=%s: %v", r.SpaceID, err)
-		}
-	}
 	log.InfoContextf(ctx, "collector fetch plan applied space=%s plan=%d", r.SpaceID, record.ID)
 	return nil
 }
@@ -972,8 +941,8 @@ func (r *PlanReconciler) allConfirmed(content *FetchPlanContent, progress *Fetch
 
 // confirmStream 把推送与本地执行端的项“下发”到这一阶段：记下要求的阶段（collector-stream 心跳拿到新版本后拉取），
 // 看到实例回报已应用该记录的这一阶段（或更后的阶段）才算确认。
-// --force：带 --force 创建的计划只在 collector-stream 是旧执行端（没有数据集正切到推送或本地执行端）时不等确认，新执行端仍要确认；
-// 计划打开之后才执行的 --force（库里留下了标记）说明这份计划卡在失联的 collector-stream 上，不再等它确认。
+// 固定规则：计划里没有数据集正切到推送或本地执行端（collector-stream 只是旧执行端，或数据集留在它上面只是标的变了），
+// 并且 collector-stream 已离线（心跳超时）时，这份计划不等它确认；有数据集正切到它上面的计划仍要等。
 func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, names []string, final bool) error {
 	stage, confirmed := StreamStageTransition, &progress.Transitioned
 	if final {
@@ -985,13 +954,13 @@ func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchP
 			return err
 		}
 	}
-	ok := progress.Forced && !movesToWorker(content)
-	if !ok && !progress.Forced {
-		later, err := r.forceRequested(ctx)
+	ok := false
+	if !movesToWorker(content) {
+		offline, err := r.streamOffline(ctx)
 		if err != nil {
 			return err
 		}
-		ok = later
+		ok = offline
 	}
 	if !ok && r.Workers != nil {
 		worker, err := r.Workers.Get(ctx, r.SpaceID)
@@ -1014,36 +983,17 @@ func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchP
 	return r.saveProgress(ctx, record, progress, record.Status, record.LastError)
 }
 
-// forceRequested 判断计划打开之后有没有执行过 --force：标记由切换命令原子写进采集方式表，
-// 对账器在这里读取，不与对账器保存的进度互相覆盖。
-func (r *PlanReconciler) forceRequested(ctx context.Context) (bool, error) {
-	if r.Modes == nil {
+// streamOffline 判断 collector-stream 是否已离线到可以不等它确认：心跳超时，并且 Collector 进程启动已满一个心跳超时。
+// 重启后心跳表里的时间是旧的，要先给它一次上报的机会。
+func (r *PlanReconciler) streamOffline(ctx context.Context) (bool, error) {
+	if r.StreamOnline == nil || r.StartedAt.IsZero() || r.now().Sub(r.StartedAt) < r.StreamTimeout {
 		return false, nil
 	}
-	modes, err := r.Modes.List(ctx, r.SpaceID)
+	online, err := r.StreamOnline(ctx)
 	if err != nil {
-		return false, r.fail("store", err)
+		return false, r.fail("store", fmt.Errorf("read collector-stream status: %w", err))
 	}
-	for _, mode := range modes {
-		if mode.Force {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// handedOff 返回计划里完成交接（换了执行端）的数据集。
-func handedOff(content *FetchPlanContent) []string {
-	seen := map[string]bool{}
-	var ids []string
-	for _, change := range content.Datasets {
-		if change.Changed && change.OldIngest != "" && !seen[change.DatasetID] {
-			seen[change.DatasetID] = true
-			ids = append(ids, change.DatasetID)
-		}
-	}
-	sort.Strings(ids)
-	return ids
+	return !online, nil
 }
 
 // movesToWorker 判断计划里有数据集正从别的执行端切到推送或本地执行端（collector-stream 是新执行端）。
@@ -1131,67 +1081,6 @@ func (r *PlanReconciler) applyHandoffLateness(ctx context.Context, record *store
 	return nil
 }
 
-// datasetModes 返回各数据集的采集方式，并为第一次出现的数据集写入初值：已在生效计划里的按它现在的执行端，
-// 真正新出现的取空间默认值（default_ingest、default_executor）。forced 是带 --force 标记的数据集。
-func (r *PlanReconciler) datasetModes(ctx context.Context, groups []TaskGroup, previous map[string]*PlanDatasetState) (map[string]DatasetMode, map[string]bool, error) {
-	modes := map[string]DatasetMode{}
-	forced := map[string]bool{}
-	if r.Modes == nil {
-		return modes, forced, nil
-	}
-	stored, err := r.Modes.List(ctx, r.SpaceID)
-	if err != nil {
-		return nil, nil, err
-	}
-	current := map[string]string{}
-	for _, state := range previous {
-		current[state.DatasetID] = state.IngestOrSCF()
-	}
-	var initial []store.IngestMode
-	for _, group := range groups {
-		if _, ok := stored[group.DatasetID]; ok {
-			continue
-		}
-		mode := r.DefaultMode
-		// 任务参数指定的初值优先于空间默认值。
-		if group.Ingest != "" {
-			mode.Mode = group.Ingest
-		}
-		if group.Executor != "" {
-			mode.Executor = group.Executor
-		}
-		if executor, ok := current[group.DatasetID]; ok {
-			switch executor {
-			case marketfetch.PlanExecutorStreaming:
-				mode.Mode = IngestStreaming
-			case marketfetch.PlanExecutorLocal:
-				mode = DatasetMode{Mode: IngestPull, Executor: marketfetch.PlanExecutorLocal}
-			default:
-				mode = DatasetMode{Mode: IngestPull, Executor: marketfetch.PlanExecutorSCF}
-			}
-		}
-		if mode.Mode == "" {
-			mode.Mode = IngestPull
-		}
-		if mode.Executor == "" {
-			mode.Executor = marketfetch.PlanExecutorSCF
-		}
-		entry := store.IngestMode{SpaceID: r.SpaceID, DatasetID: group.DatasetID, Mode: mode.Mode, Executor: mode.Executor}
-		stored[group.DatasetID] = entry
-		initial = append(initial, entry)
-	}
-	if err := r.Modes.Initialize(ctx, initial); err != nil {
-		return nil, nil, err
-	}
-	for datasetID, mode := range stored {
-		modes[datasetID] = DatasetMode{Mode: mode.Mode, Executor: mode.Executor}
-		if mode.Force {
-			forced[datasetID] = true
-		}
-	}
-	return modes, forced, nil
-}
-
 // excludeSubjects 从采集组里去掉排除的标的；标的全被排除的组不再采集。
 func excludeSubjects(groups []TaskGroup, exclusions []store.SubjectExclusion) []TaskGroup {
 	if len(exclusions) == 0 {
@@ -1262,23 +1151,17 @@ func subjectsChanging(desired *DesiredState, previous map[string]*PlanDatasetSta
 	return false
 }
 
-// appliedModes 把已生效的数据集的方式还原成它们现在的执行端（推迟交接），新数据集保持库里的方式。
-func appliedModes(modes map[string]DatasetMode, previous map[string]*PlanDatasetState) map[string]DatasetMode {
-	result := make(map[string]DatasetMode, len(modes))
-	for id, mode := range modes {
-		result[id] = mode
-	}
+// appliedIngest 把已生效数据集的任务组还原成它们现在的执行端（推迟交接），新数据集保持任务的采集方式。
+func appliedIngest(groups []TaskGroup, previous map[string]*PlanDatasetState) []TaskGroup {
+	current := map[string]string{}
 	for _, state := range previous {
-		mode := result[state.DatasetID]
-		switch state.IngestOrSCF() {
-		case marketfetch.PlanExecutorStreaming:
-			mode.Mode = IngestStreaming
-		case marketfetch.PlanExecutorLocal:
-			mode.Mode, mode.Executor = IngestPull, marketfetch.PlanExecutorLocal
-		default:
-			mode.Mode, mode.Executor = IngestPull, marketfetch.PlanExecutorSCF
+		current[state.DatasetID] = state.IngestOrSCF()
+	}
+	result := append([]TaskGroup(nil), groups...)
+	for i := range result {
+		if ingest, ok := current[result[i].DatasetID]; ok {
+			result[i].Ingest = ingest
 		}
-		result[state.DatasetID] = mode
 	}
 	return result
 }

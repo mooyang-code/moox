@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
@@ -137,7 +138,7 @@ func TestLoadTaskSeedRejectsInvalidContracts(t *testing.T) {
 }
 
 func TestSeedMissingIsIdempotentAndPreservesEdits(t *testing.T) {
-	mgr, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	mgr, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })
 	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
@@ -162,7 +163,7 @@ func TestSeedMissingIsIdempotentAndPreservesEdits(t *testing.T) {
 // 内置任务只在任务表为空的全新安装时写入：已有任何任务（包括用户删到只剩一个）就不再补回。
 func TestSeedIfEmptyOnlySeedsAFreshDatabase(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	defer db.Close()
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))

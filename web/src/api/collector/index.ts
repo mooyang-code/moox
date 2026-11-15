@@ -27,6 +27,8 @@ export interface CollectorTask {
   description?: string;
   space_id?: string;
   data_type?: string;
+  /** K 线任务的采集方式：stream、scf、local；合成任务为空 */
+  ingest?: string;
   tag_ids?: string[];
   definition_hash?: string;
   collect_params?: Record<string, unknown>;
@@ -45,6 +47,8 @@ export interface CollectionTaskPayload {
   task_name?: string;
   description?: string;
   data_type?: string;
+  /** 新建 K 线任务时的采集方式；不带表示用市场默认值 */
+  ingest?: string;
   tag_ids?: string[];
   definition_hash?: string;
   collect_params?: Record<string, unknown>;

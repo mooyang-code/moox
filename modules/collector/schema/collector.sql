@@ -1,5 +1,7 @@
 PRAGMA foreign_keys = ON;
 
+-- c_ingest 是 K 线任务的采集方式：stream（collector-stream 接收推送，补采走它的本地执行端）、
+-- scf（云函数定时拉取，补采走云函数）、local（collector-stream 本地定时拉取与补采）；合成任务为空。
 CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
@@ -7,6 +9,7 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_task_name TEXT NOT NULL,
     c_description TEXT NOT NULL DEFAULT '',
     c_data_type TEXT NOT NULL DEFAULT '',
+    c_ingest TEXT NOT NULL DEFAULT '',
     c_definition_hash TEXT NOT NULL DEFAULT '',
     c_collect_params TEXT NOT NULL DEFAULT '{}',
     c_enabled INTEGER NOT NULL DEFAULT 1,
@@ -16,7 +19,9 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_result_dataset_id TEXT NOT NULL DEFAULT '',
     c_result_view_id TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_ingest IN ('', 'stream', 'scf', 'local')),
+    CHECK ((c_data_type = 'kline') = (c_ingest <> ''))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_task ON t_collector_tasks (c_space_id, c_task_id);
@@ -209,21 +214,6 @@ CREATE TABLE IF NOT EXISTS t_collector_backfill_watermarks (
     c_scanned_until DATETIME NOT NULL,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (c_space_id, c_dataset_id, c_frequency)
-);
-
--- 每个数据集的采集方式：stream（WS 推送）或 pull（定时拉取）；executor 是拉取与补采的执行端（scf 云函数或 local 本地执行端）。
--- c_force 为 1 表示最近一次切换用了 --force：交接计划不等失联的推送或本地执行端确认，计划生效后清零。
-CREATE TABLE IF NOT EXISTS t_collector_ingest_modes (
-    c_space_id TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_mode TEXT NOT NULL,
-    c_executor TEXT NOT NULL,
-    c_force INTEGER NOT NULL DEFAULT 0,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_dataset_id),
-    CHECK (c_mode IN ('stream', 'pull')),
-    CHECK (c_executor IN ('scf', 'local')),
-    CHECK (c_force IN (0, 1))
 );
 
 -- collector-stream 实例的心跳与已应用的计划：c_applied 是已应用的计划记录 ID 与阶段，c_status 是连接状态；

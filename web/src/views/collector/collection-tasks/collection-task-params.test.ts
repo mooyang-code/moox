@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildCollectionTaskParams,
   buildCollectionTaskPayload,
+  INGEST_OPTIONS,
+  ingestLabel,
   parseKlineResampleParams,
   collectionTaskNameError,
   availableExtraFieldIds,
@@ -154,6 +156,31 @@ describe("collection task params", () => {
     expect(task.collect_params).not.toHaveProperty("provider");
     expect(task.collect_params).not.toHaveProperty("market_type");
     expect(task.collect_params).not.toHaveProperty("target_dataset_id");
+  });
+
+  it("sends ingest only for a new kline task that picked one", () => {
+    const input = {
+      dataType: "kline" as const,
+      provider: "binance",
+      market: "spot" as const,
+      frequency: "1m",
+      subjectTags: ["binance_spot"]
+    };
+    const fields = { task_name: "现货", description: "", space_id: "crypto", creator: "admin", enabled: true };
+    expect(buildCollectionTaskPayload(input, fields)).not.toHaveProperty("ingest");
+    expect(buildCollectionTaskPayload({ ...input, ingest: " scf " }, fields).ingest).toBe("scf");
+    const resample = { ...input, dataType: "kline_resample" as const, sourceTaskId: "task-1m", frequency: "5m", ingest: "scf" };
+    expect(buildCollectionTaskPayload(resample, fields)).not.toHaveProperty("ingest");
+    expect(buildCollectionTaskPayload({ ...input, ingest: "local" }, fields).collect_params).not.toHaveProperty("ingest");
+  });
+
+  it("labels the three ingest values and leaves resample tasks blank", () => {
+    expect(INGEST_OPTIONS.map(option => option.value)).toEqual(["stream", "scf", "local"]);
+    expect(ingestLabel("stream")).toBe("推送");
+    expect(ingestLabel("scf")).toBe("云函数拉取");
+    expect(ingestLabel("local")).toBe("本地拉取");
+    expect(ingestLabel("")).toBe("-");
+    expect(normalizeCollectionTask({ task_id: "t", data_type: "kline", ingest: "stream" }).ingest).toBe("stream");
   });
 
   it("validates trimmed Unicode task names", () => {

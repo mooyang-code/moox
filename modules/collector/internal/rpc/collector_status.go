@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
@@ -53,7 +54,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 			raise(klinecheck.HealthError, fmt.Sprintf("采集计划 #%d 下发失败：%s", source.ID, lastError))
 		}
 	}
-	if rsp.IngestModes, err = s.ingestModes(ctx, spaceID, ""); err != nil {
+	if rsp.IngestModes, err = s.ingestModes(ctx, spaceID, "", true); err != nil {
 		return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	if s.stream != nil {
@@ -62,8 +63,8 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 		}
 	}
 	for _, mode := range rsp.IngestModes {
-		if mode.GetMode() == store.IngestStreaming && (rsp.Stream == nil || !rsp.Stream.GetOnline()) {
-			raise(klinecheck.HealthError, "collector-stream 不在线：推送采集的数据集没有写入方，用 moox-cli setup logs --component collector-stream 查原因；配了云函数时也可用 moox-cli collector ingest-mode set --mode pull --executor scf --force 切回")
+		if mode.GetIngest() != domain.IngestSCF && (rsp.Stream == nil || !rsp.Stream.GetOnline()) {
+			raise(klinecheck.HealthError, "collector-stream 不在线：采集方式是 stream 或 local 的数据集没有写入方，用 moox-cli setup logs --component collector-stream 查原因；配了云函数时也可用 moox-cli collector ingest-mode set --ingest scf 切回（它离线超过心跳超时后交接不等它确认）")
 			break
 		}
 	}

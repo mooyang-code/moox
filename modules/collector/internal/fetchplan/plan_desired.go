@@ -33,8 +33,7 @@ type PlanOptions struct {
 	// DefaultLatenessS 是任务没有指定允许迟到时间时的空间默认值；MarketLatenessS 按市场类型覆盖（拉取模式）。
 	DefaultLatenessS int
 	MarketLatenessS  map[string]int
-	// Modes 是各数据集（按数据集 ID）的采集方式；StreamLatenessS 是推送方式按频率的截止默认值。
-	Modes           map[string]DatasetMode
+	// StreamLatenessS 是推送方式按频率的截止默认值。
 	StreamLatenessS map[string]int
 	// AssumedEgressIPs 是函数出口 IP 个数的估计值，只用于频控估算（保守默认 1）。
 	AssumedEgressIPs int
@@ -114,7 +113,7 @@ func PlanFunctionName(spaceID, marketType, region string, index int) string {
 
 // BuildDesiredState 由合并后的任务组算出期望状态。previous 是已生效状态里的各函数，
 // 用于让标的尽量留在原来的函数上，减少不必要的环境变更。
-// 每个数据集按采集方式分给执行端：拉取 + SCF 的数据集按每函数标的数分到 SCF 函数；推送的数据集与拉取 + 本地执行端的数据集
+// 每个数据集按采集方式分给执行端：scf 的数据集按每函数标的数分到 SCF 函数；stream 的数据集与 local 的数据集
 // 各自每个市场一项（stream-<空间>-<市场>、local-<空间>-<市场>），包含该市场这类数据集的全部标的。
 func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string]*PlanFunction) (*DesiredState, error) {
 	spaceID := strings.ToLower(strings.TrimSpace(opts.SpaceID))
@@ -157,19 +156,21 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 			markets[key] = info
 		}
 		info.size = minPositive(info.size, group.SymbolsPerFunction)
-		mode := opts.modeOf(group)
-		executor := mode.PlanExecutor()
+		executor := ingestOf(group)
 		if executor == marketfetch.PlanExecutorStreaming && !marketdata.SupportsStream(frequency) {
 			return nil, fmt.Errorf("dataset %s %s cannot be collected by stream", group.DatasetID, group.Frequency)
 		}
 		datasetKey := planDatasetKey(group.DatasetID, group.Frequency)
 		dataset := state.Datasets[datasetKey]
-		latenessS := opts.latenessFor(group, mode)
+		latenessS := opts.latenessFor(group, executor)
 		if dataset == nil {
 			dataset = &DesiredDataset{PlanDatasetState: PlanDatasetState{DatasetID: group.DatasetID, Frequency: group.Frequency,
 				LatenessS: latenessS, OutputFields: normalizeOutputFields(group.OutputFields), Ingest: executor}}
 			state.Datasets[datasetKey] = dataset
 			subjectSets[datasetKey] = map[string]map[string]struct{}{}
+		} else if dataset.Ingest != executor {
+			// 一个数据集只有一个写入方：建任务与切换时已保证一致，这里兜底。
+			return nil, fmt.Errorf("dataset %s %s has conflicting ingest %s and %s", group.DatasetID, group.Frequency, dataset.Ingest, executor)
 		} else if latenessS > dataset.LatenessS {
 			// 统一数据集的两个市场各有截止时间，取较大的：周期要等较慢的那个市场。
 			dataset.LatenessS = latenessS
@@ -348,46 +349,22 @@ func PlanItemName(executor, spaceID, marketType string) string {
 	return fmt.Sprintf("%s-%s-%s", executor, planNameSanitizer.Replace(strings.ToLower(spaceID)), planNameSanitizer.Replace(strings.ToLower(marketType)))
 }
 
-// 采集方式。
-const (
-	IngestStreaming = "stream"
-	IngestPull      = "pull"
-)
-
-// DatasetMode 是一个数据集的采集方式与拉取、补采执行端。
-type DatasetMode struct {
-	Mode     string
-	Executor string
-}
-
-// PlanExecutor 返回该方式在计划里的执行端：推送是 stream，拉取按执行端是 scf 或 local。
-func (m DatasetMode) PlanExecutor() string {
-	switch {
-	case m.Mode == IngestStreaming:
-		return marketfetch.PlanExecutorStreaming
-	case m.Executor == marketfetch.PlanExecutorLocal:
-		return marketfetch.PlanExecutorLocal
-	default:
+// ingestOf 返回任务组的采集方式（也就是计划里的执行端），空视为 scf。
+func ingestOf(group TaskGroup) string {
+	if group.Ingest == "" {
 		return marketfetch.PlanExecutorSCF
 	}
-}
-
-// modeOf 返回任务组的采集方式：库里该数据集的方式（初值见 PlanReconciler.datasetModes），没有时按拉取 + SCF。
-func (o PlanOptions) modeOf(group TaskGroup) DatasetMode {
-	if mode, ok := o.Modes[group.DatasetID]; ok {
-		return mode
-	}
-	return DatasetMode{Mode: IngestPull, Executor: marketfetch.PlanExecutorSCF}
+	return group.Ingest
 }
 
 // latenessFor 是数据集截止时间的唯一计算入口：任务值 → 当前采集方式的默认值（推送按频率 1m 5 秒、1h 8 秒；
 // 拉取按市场覆盖或空间默认，crypto 现货 15 秒、合约 20 秒）。计划内容与 Storage 属性都只用它。
-func (o PlanOptions) latenessFor(group TaskGroup, mode DatasetMode) int {
+func (o PlanOptions) latenessFor(group TaskGroup, ingest string) int {
 	if group.AllowedLatenessSeconds > 0 {
 		return group.AllowedLatenessSeconds
 	}
 	lateness := 0
-	if mode.PlanExecutor() == marketfetch.PlanExecutorStreaming {
+	if ingest == marketfetch.PlanExecutorStreaming {
 		lateness = o.StreamLatenessS[group.Frequency]
 	} else {
 		lateness = o.MarketLatenessS[strings.ToLower(group.MarketType)]

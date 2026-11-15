@@ -46,11 +46,35 @@ type TaskFilter struct {
 // TaskRepository persists collection tasks.
 type TaskRepository struct {
 	db *gorm.DB
+	// defaultIngest 按空间返回 K 线任务的默认采集方式，见 Options.DefaultIngest。
+	defaultIngest func(spaceID string) string
 }
 
-// NewTaskRepository creates a repository.
-func NewTaskRepository(db *gorm.DB) *TaskRepository {
-	return &TaskRepository{db: db}
+// NewTaskRepository creates a repository. defaultIngest 可以为 nil。
+func NewTaskRepository(db *gorm.DB, defaultIngest func(spaceID string) string) *TaskRepository {
+	return &TaskRepository{db: db, defaultIngest: defaultIngest}
+}
+
+// ResolveIngest 定下任务入库的采集方式，是所有建任务路径（RPC、内置任务种子）共用的唯一入口：
+// K 线任务没写时取空间的市场默认值，取值必须是三种之一；其他任务没有采集方式。
+func (r *TaskRepository) ResolveIngest(task domain.CollectionTask) (string, error) {
+	ingest := strings.ToLower(strings.TrimSpace(task.Ingest))
+	if task.DataType != domain.DataTypeKline {
+		if ingest != "" {
+			return "", fmt.Errorf("只有 K 线采集任务有采集方式，%s 任务不能指定 ingest", task.DataType)
+		}
+		return "", nil
+	}
+	if ingest == "" && r.defaultIngest != nil {
+		ingest = r.defaultIngest(task.SpaceID)
+	}
+	if ingest == "" {
+		return "", fmt.Errorf("空间 %s 没有登记默认采集方式，K 线任务要写明 ingest（stream、scf 或 local）", task.SpaceID)
+	}
+	if err := domain.ValidateIngest(ingest); err != nil {
+		return "", err
+	}
+	return ingest, nil
 }
 
 // List returns tasks matching filters.
@@ -236,6 +260,11 @@ func (r *TaskRepository) Create(ctx context.Context, task domain.CollectionTask)
 	if task.PrepareState == "" {
 		task.PrepareState = domain.PrepareStateReady
 	}
+	ingest, err := r.ResolveIngest(task)
+	if err != nil {
+		return err
+	}
+	task.Ingest = ingest
 	task.CreateTime = now
 	task.ModifyTime = now
 	tags := normalizeTaskTagIDs(task.TagIDs)
@@ -249,6 +278,32 @@ func (r *TaskRepository) Create(ctx context.Context, task domain.CollectionTask)
 		}
 		return insertTaskTags(tx, task.SpaceID, task.TaskID, tags)
 	})
+}
+
+// ListKline 返回空间的全部 K 线采集任务（含停用的），按任务 ID 排序；datasetID 非空时只返回写这个结果数据集的任务。
+func (r *TaskRepository) ListKline(ctx context.Context, spaceID, datasetID string) ([]domain.CollectionTask, error) {
+	query := r.db.WithContext(ctx).Where("c_space_id = ? AND c_data_type = ?", strings.TrimSpace(spaceID), domain.DataTypeKline)
+	if datasetID = strings.TrimSpace(datasetID); datasetID != "" {
+		query = query.Where("c_result_dataset_id = ?", datasetID)
+	}
+	var tasks []domain.CollectionTask
+	err := query.Order("c_task_id ASC").Limit(MaxEnabledTasks).Find(&tasks).Error
+	return tasks, err
+}
+
+// SetIngest 切换 K 线任务的采集方式：datasetID 为空时改空间的全部 K 线任务，否则改写这个结果数据集的任务。
+// 返回改到的任务数。采集方式不进定义哈希，切换不改变任务身份。
+func (r *TaskRepository) SetIngest(ctx context.Context, spaceID, datasetID, ingest string) (int64, error) {
+	if err := domain.ValidateIngest(ingest); err != nil {
+		return 0, err
+	}
+	query := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
+		Where("c_space_id = ? AND c_data_type = ?", strings.TrimSpace(spaceID), domain.DataTypeKline)
+	if datasetID = strings.TrimSpace(datasetID); datasetID != "" {
+		query = query.Where("c_result_dataset_id = ?", datasetID)
+	}
+	result := query.Updates(map[string]any{"c_ingest": ingest, "c_mtime": time.Now().UTC()})
+	return result.RowsAffected, result.Error
 }
 
 // ListResampleByPrepareStates returns bounded preparation work in stable order.

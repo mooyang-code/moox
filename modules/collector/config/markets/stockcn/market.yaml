@@ -3,6 +3,8 @@
 market_id: stockcn
 # 成交额的计价币种：K 线行的 amount_unit 写它的小写，标的属性 currency 写原值。
 currency: CNY
+# K 线任务的默认采集方式：scf 是云函数定时拉取，补采也走云函数。
+ingest: scf
 # 结果数据集的允许迟到时间默认值（秒），任务没写时用它。
 allowed_lateness_seconds: 90
 # 固定的序列标签；不写表示按数据源生成。
@@ -25,8 +27,6 @@ scf_plan:
   auto_size: {target_fetch_ms: 2000, request_ms: 500, min_functions: 8}
   # 出口 IP 去重只在 15:10～次日 07:50 删除重建函数：避开日内交易时段，也避开 08:00 的日线采集。
   egress_balance: {max_per_ip: 1, rounds: 5, idle_start: "15:10", idle_end: "07:50", timezone: Asia/Shanghai}
-  default_ingest: pull
-  default_executor: scf
   # 收盘后固定等 0.8 秒再取数（not_before_ms；2026-11-06 实测三个主源 0.1～0.5 秒就出定稿的那根，与流水线的定稿窗口 0.8 秒一致），各函数同时起跑。
   # 函数内同时处理的标的数、熔断并发由各源的限速配置推导（sources/*.yaml）；rps、burst 只给币安用，这里不配。
   # 2026-11-06 实测 15 个函数同时起跑没有命中频控，起跑 1 秒后 10:40 那期 1.7 秒取完、策略产出 3.2 秒。

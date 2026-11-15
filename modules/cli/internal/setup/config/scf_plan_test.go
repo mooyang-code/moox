@@ -46,7 +46,7 @@ func TestSCFPlanDefaultsAndRenderedCollectorConfig(t *testing.T) {
 	require.Equal(t, 50, plan["symbols_per_function"])
 	require.NotContains(t, plan, "package_id", "代码包只写名称，固定 ID 不再渲染")
 	require.Equal(t, map[string]any{"ap-hongkong": map[string]any{"access_address": "172.19.32.13:11004", "access_id": "access@overseas"}}, plan["access_routes"])
-	require.Equal(t, map[string]any{"crypto": map[string]any{"package_name": "moox-collector-crypto-plan", "namespace": "moox-crypto-plan", "default_ingest": "stream", "default_executor": "local"}}, plan["spaces"])
+	require.Equal(t, map[string]any{"crypto": map[string]any{"package_name": "moox-collector-crypto-plan", "namespace": "moox-crypto-plan"}}, plan["spaces"])
 
 	// 渲染幂等：对自己的输出再渲染结果不变。
 	again, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: manifest}, rendered)
@@ -163,21 +163,12 @@ func TestSCFPlanRenderedCollectorConfigMatchesTheSharedFixture(t *testing.T) {
 	require.Equal(t, string(expected), string(rendered))
 }
 
-// 新部署：crypto 默认 stream + local，stockcn 默认 pull + scf；显式写的以配置为准。
-func TestSCFPlanDefaultIngestPerSpace(t *testing.T) {
-	manifest := scfPlanTestManifest()
-	manifest.SCFPlan.Spaces = append(manifest.SCFPlan.Spaces,
-		SCFPlanSpace{SpaceID: "stockcn", Markets: map[string][]string{"equity": {"ap-hongkong"}}},
-		SCFPlanSpace{SpaceID: "futures", Markets: map[string][]string{"swap": {"ap-hongkong"}}, DefaultIngest: "Pull", DefaultExecutor: "local"})
-	require.NoError(t, validateSCFPlan(&manifest))
-	modes := map[string][2]string{}
-	for _, space := range manifest.SCFPlan.Spaces {
-		modes[space.SpaceID] = [2]string{space.DefaultIngest, space.DefaultExecutor}
+// 采集方式不在 moox.toml 里：旧的 default_ingest、default_executor 报中文错误并提示迁移，渲染出的配置里也没有这两项。
+func TestSCFPlanRejectsRemovedIngestDefaults(t *testing.T) {
+	for _, key := range []string{"default_ingest = \"stream\"", "default_executor = \"local\""} {
+		var manifest Manifest
+		err := decodeStrict([]byte("[[scf_plan.spaces]]\nspace_id = \"crypto\"\n"+key+"\n"), &manifest)
+		require.ErrorContains(t, err, "已删除")
+		require.ErrorContains(t, err, "moox-cli config migrate --yes")
 	}
-	require.Equal(t, [2]string{"stream", "local"}, modes["crypto"])
-	require.Equal(t, [2]string{"pull", "scf"}, modes["stockcn"])
-	require.Equal(t, [2]string{"pull", "local"}, modes["futures"])
-	invalid := scfPlanTestManifest()
-	invalid.SCFPlan.Spaces[0].DefaultIngest = "ws"
-	require.ErrorContains(t, validateSCFPlan(&invalid), "default_ingest")
 }

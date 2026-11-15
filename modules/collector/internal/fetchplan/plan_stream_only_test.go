@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +32,7 @@ func (noCloud) LatestPackage(context.Context, string, string) (string, error) {
 }
 
 func TestStreamOnlyPlanAppliesWithoutCloudFunctions(t *testing.T) {
-	h := newIngestHarness(t, DatasetMode{Mode: IngestStreaming, Executor: marketfetch.PlanExecutorLocal}, "1m")
+	h := newIngestHarness(t, ingestStream, "1m")
 	h.r.Cloud = noCloud{h.cloud}
 	h.r.Deploy = PlanDeploy{}
 	h.r.Options.Markets = nil
@@ -47,7 +46,7 @@ func TestStreamOnlyPlanAppliesWithoutCloudFunctions(t *testing.T) {
 }
 
 func TestFirstStreamPlanWaitsForCollectorStream(t *testing.T) {
-	h := newIngestHarness(t, DatasetMode{Mode: IngestStreaming, Executor: marketfetch.PlanExecutorLocal}, "1m")
+	h := newIngestHarness(t, ingestStream, "1m")
 	online := false
 	h.r.StreamOnline = func(context.Context) (bool, error) { return online, nil }
 	require.NoError(t, h.reconcile(h.r))
@@ -61,7 +60,7 @@ func TestFirstStreamPlanWaitsForCollectorStream(t *testing.T) {
 }
 
 func TestAppliedStreamPlanKeepsChangingWhileWorkerIsOffline(t *testing.T) {
-	h := newIngestHarness(t, DatasetMode{Mode: IngestStreaming, Executor: marketfetch.PlanExecutorLocal}, "1m")
+	h := newIngestHarness(t, ingestStream, "1m")
 	h.settle(true)
 	h.r.StreamOnline = func(context.Context) (bool, error) { return false, nil }
 	h.setSubjects(70)
@@ -70,7 +69,7 @@ func TestAppliedStreamPlanKeepsChangingWhileWorkerIsOffline(t *testing.T) {
 }
 
 func TestPullDatasetWithoutSCFRegionReportsTheReason(t *testing.T) {
-	h := newIngestHarness(t, DatasetMode{Mode: IngestPull, Executor: marketfetch.PlanExecutorSCF}, "1m")
+	h := newIngestHarness(t, ingestSCF, "1m")
 	h.r.Options.Markets = nil
 	require.Error(t, h.reconcile(h.r))
 	require.Contains(t, h.r.Issue(), "no SCF region")

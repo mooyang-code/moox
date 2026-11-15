@@ -95,11 +95,11 @@ export interface StreamWorkerStatus {
   version?: string;
 }
 
+/** 一个 K 线任务的采集方式：stream（推送）、scf（云函数拉取）、local（本地拉取）。 */
 export interface IngestMode {
   dataset_id?: string;
-  mode?: string;
-  executor?: string;
-  updated_at?: string;
+  task_id?: string;
+  ingest?: string;
   effective_periods?: Record<string, string>;
 }
 

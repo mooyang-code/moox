@@ -334,6 +334,10 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	var err error
+	// 采集方式在准备结果数据集之前定下：不填用市场默认值（任务仓库是唯一入口），取值不对在这里就拒绝。
+	if task.Ingest, err = s.taskRepo.ResolveIngest(task); err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
 	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil

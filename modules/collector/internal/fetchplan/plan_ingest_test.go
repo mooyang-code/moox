@@ -3,7 +3,7 @@ package fetchplan
 import (
 	"context"
 	"encoding/json"
-	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,43 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/stretchr/testify/require"
 )
-
-type memModes struct{ modes map[string]store.IngestMode }
-
-func (m *memModes) List(context.Context, string) (map[string]store.IngestMode, error) {
-	result := map[string]store.IngestMode{}
-	for key, value := range m.modes {
-		result[key] = value
-	}
-	return result, nil
-}
-
-func (m *memModes) Initialize(_ context.Context, modes []store.IngestMode) error {
-	if m.modes == nil {
-		m.modes = map[string]store.IngestMode{}
-	}
-	for _, mode := range modes {
-		if _, ok := m.modes[mode.DatasetID]; !ok {
-			m.modes[mode.DatasetID] = mode
-		}
-	}
-	return nil
-}
-
-func (m *memModes) ClearForce(_ context.Context, _ string, datasetIDs []string) error {
-	for key, mode := range m.modes {
-		if len(datasetIDs) > 0 && !slices.Contains(datasetIDs, key) {
-			continue
-		}
-		mode.Force = false
-		m.modes[key] = mode
-	}
-	return nil
-}
-
-func (m *memModes) set(dataset, mode, executor string, force bool) {
-	m.modes[dataset] = store.IngestMode{SpaceID: "crypto", DatasetID: dataset, Mode: mode, Executor: executor, Force: force}
-}
 
 type memWorkers struct{ worker *store.StreamWorker }
 
@@ -60,31 +23,53 @@ func (w *memWorkers) apply(id int64, stage string) {
 
 type ingestHarness struct {
 	*planHarness
-	modes   *memModes
 	workers *memWorkers
-	r       *PlanReconciler
+	// offline 为真表示 collector-stream 心跳超时。
+	offline bool
+	// startedAt 是 Collector 进程的启动时刻，默认早于测试起点一小时（早已启动）。
+	startedAt time.Time
+	r         *PlanReconciler
 }
 
-func newIngestHarness(t *testing.T, defaultMode DatasetMode, frequencies ...string) *ingestHarness {
-	h := &ingestHarness{planHarness: newPlanHarness(t, 60), modes: &memModes{modes: map[string]store.IngestMode{}}, workers: &memWorkers{}}
+// newIngestHarness 建一个现货空间：每个频率一个 K 线任务，采集方式都是 ingest。
+func newIngestHarness(t *testing.T, ingest string, frequencies ...string) *ingestHarness {
+	h := &ingestHarness{planHarness: newPlanHarness(t, 60), workers: &memWorkers{}}
+	h.startedAt = h.now.Add(-time.Hour)
 	h.tasks.tasks = nil
 	for _, frequency := range frequencies {
 		h.tasks.tasks = append(h.tasks.tasks, domain.CollectionTask{
-			SpaceID: "crypto", TaskID: "spot-" + frequency, Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
+			SpaceID: "crypto", TaskID: "spot-" + frequency, Enabled: true, DataType: "kline", Ingest: ingest, TagIDs: []string{"binance_spot"},
 			CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot_` + frequency + `","frequency":"` + frequency + `"}`,
 		})
 	}
-	h.r = h.newReconciler(defaultMode)
+	h.r = h.newReconciler()
 	return h
 }
 
+// setIngest 模拟切换命令：改写这个数据集的任务的采集方式。
+func (h *ingestHarness) setIngest(datasetID, ingest string) {
+	h.t.Helper()
+	for i := range h.tasks.tasks {
+		if strings.Contains(h.tasks.tasks[i].CollectParams, `"target_dataset_id":"`+datasetID+`"`) {
+			h.tasks.tasks[i].Ingest = ingest
+			return
+		}
+	}
+	h.t.Fatalf("no task writes dataset %s", datasetID)
+}
+
 // newReconciler 模拟 Collector 重启：新的对账器实例从库里的计划与进度续跑。
-func (h *ingestHarness) newReconciler(defaultMode DatasetMode) *PlanReconciler {
+func (h *ingestHarness) newReconciler() *PlanReconciler {
 	r := h.reconciler()
-	r.Modes, r.Workers, r.DefaultMode = h.modes, h.workers, defaultMode
+	r.Workers = h.workers
+	r.StreamOnline = func(context.Context) (bool, error) { return !h.offline, nil }
+	r.StartedAt, r.StreamTimeout = h.startedAt, 180*time.Second
 	r.Options.StreamLatenessS = map[string]int{"1m": 5, "1h": 8}
 	return r
 }
+
+// lose 让 collector-stream 失联：不再确认，心跳超时。
+func (h *ingestHarness) lose() { h.workers.worker, h.offline = nil, true }
 
 // settle 推进时间并让 collector-stream 跟上，直到没有未生效的计划；返回生效的计划记录。
 func (h *ingestHarness) settle(confirmStream bool) *store.FetchPlanRecord {
@@ -115,16 +100,17 @@ func (h *ingestHarness) applied() *FetchPlanContent {
 	return h.content(record)
 }
 
-var (
-	modeStream  = DatasetMode{Mode: IngestStreaming, Executor: marketfetch.PlanExecutorLocal}
-	modePullSCF = DatasetMode{Mode: IngestPull, Executor: marketfetch.PlanExecutorSCF}
-	streamItem  = "stream-crypto-spot"
-	localItem   = "local-crypto-spot"
+const (
+	ingestStream = marketfetch.PlanExecutorStreaming
+	ingestSCF    = marketfetch.PlanExecutorSCF
+	ingestLocal  = marketfetch.PlanExecutorLocal
+	streamItem   = "stream-crypto-spot"
+	localItem    = "local-crypto-spot"
 )
 
 // 新部署：默认 stream 的数据集直接进推送项，截止直接是 1m 5 秒、1h 8 秒，不经过 drain。
 func TestFreshDeploymentPutsDefaultStreamDatasetsOnTheStreamItem(t *testing.T) {
-	h := newIngestHarness(t, modeStream, "1m", "1h")
+	h := newIngestHarness(t, ingestStream, "1m", "1h")
 	h.settle(true)
 	content := h.applied()
 	require.Equal(t, marketfetch.PlanExecutorStreaming, content.Functions[streamItem].Executor)
@@ -136,30 +122,17 @@ func TestFreshDeploymentPutsDefaultStreamDatasetsOnTheStreamItem(t *testing.T) {
 	require.NoError(t, plan.Validate())
 	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
 	require.Equal(t, 8, h.lateness.values["ds_spot_1h"])
-	require.Equal(t, store.IngestStreaming, h.modes.modes["ds_spot_1m"].Mode)
-}
-
-// 已在 SCF 上生效的数据集，第一次落库按现有执行端（pull + scf），升级本身不切换。
-func TestExistingDatasetsInitializeToTheirCurrentExecutor(t *testing.T) {
-	h := newIngestHarness(t, modePullSCF, "1m")
-	h.settle(true)
-	h.r.DefaultMode = modeStream
-	h.modes.modes = map[string]store.IngestMode{}
-	h.now = h.now.Add(time.Hour)
-	require.NoError(t, h.reconcile(h.r))
-	require.Nil(t, h.open())
-	require.Equal(t, store.IngestPull, h.modes.modes["ds_spot_1m"].Mode)
 }
 
 func TestHandoffPullToStreamAndBack(t *testing.T) {
-	h := newIngestHarness(t, modePullSCF, "1m", "1h")
+	h := newIngestHarness(t, ingestSCF, "1m", "1h")
 	h.settle(true)
 	require.Equal(t, 15, h.lateness.values["ds_spot_1m"])
 	scfNames := h.applied().SortedFunctionNames()
 
 	// 切到 stream：P 至少 3 分钟之后，hash 不变不重新登记，截止先不改。
-	h.modes.set("ds_spot_1m", IngestStreaming, marketfetch.PlanExecutorLocal, false)
-	h.modes.set("ds_spot_1h", IngestStreaming, marketfetch.PlanExecutorLocal, false)
+	h.setIngest("ds_spot_1m", ingestStream)
+	h.setIngest("ds_spot_1h", ingestStream)
 	registered := len(h.registrar.registered["ds_spot_1m|1m"])
 	require.NoError(t, h.reconcile(h.r))
 	record := h.open()
@@ -195,7 +168,7 @@ func TestHandoffPullToStreamAndBack(t *testing.T) {
 
 	// 截止按数据集在各自窗口里改：1m 在 P + 旧截止 + 余量之后、P 收盘之前（对账在 P+10 秒那一轮里等到可改时刻）。
 	h.now = time.Unix(minute.P, 0).Add(10 * time.Second)
-	h.r = h.newReconciler(modePullSCF) // Collector 重启后续跑
+	h.r = h.newReconciler() // Collector 重启后续跑
 	require.NoError(t, h.reconcile(h.r))
 	require.NotNil(t, h.open())
 	require.Equal(t, 5, h.lateness.values["ds_spot_1m"], "1m 在自己的窗口里改，不等 1h")
@@ -224,8 +197,8 @@ func TestHandoffPullToStreamAndBack(t *testing.T) {
 	require.Nil(t, h.open())
 	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
 
-	// 切回 pull + scf：截止 5 → 15 同样在 drain 才改。
-	h.modes.set("ds_spot_1m", IngestPull, marketfetch.PlanExecutorSCF, false)
+	// 切回 scf：截止 5 → 15 同样在 drain 才改。
+	h.setIngest("ds_spot_1m", ingestSCF)
 	require.NoError(t, h.reconcile(h.r))
 	content = h.content(h.open())
 	require.Equal(t, marketfetch.PlanExecutorStreaming, content.Datasets["ds_spot_1m|1m"].OldIngest)
@@ -240,16 +213,16 @@ func TestHandoffPullToStreamAndBack(t *testing.T) {
 	for _, function := range applied.Functions {
 		if function.IsSCF() && function.New != nil {
 			scfCount++
-			require.Len(t, function.New.Datasets, 1, "SCF 只拿 pull 的数据集")
+			require.Len(t, function.New.Datasets, 1, "SCF 只拿采集方式是 scf 的数据集")
 			require.Equal(t, "ds_spot_1m", function.New.Datasets[0].DatasetID)
 		}
 	}
 	require.Positive(t, scfCount)
 }
 
-// 拉取 + 本地执行端：不建 SCF 函数，分配写成 local 项。
+// local（本地执行端定时拉取）：不建 SCF 函数，分配写成 local 项。
 func TestPullOnTheLocalExecutorUsesALocalItem(t *testing.T) {
-	h := newIngestHarness(t, DatasetMode{Mode: IngestPull, Executor: marketfetch.PlanExecutorLocal}, "1m")
+	h := newIngestHarness(t, ingestLocal, "1m")
 	h.settle(true)
 	content := h.applied()
 	require.Equal(t, marketfetch.PlanExecutorLocal, content.Functions[localItem].Executor)
@@ -258,23 +231,37 @@ func TestPullOnTheLocalExecutorUsesALocalItem(t *testing.T) {
 	require.Empty(t, h.cloud.created)
 }
 
-// --force：stream 失联、从不确认时，只等新执行端（SCF）确认就生效。
-func TestForcedHandoffDoesNotWaitForALostStreamWorker(t *testing.T) {
-	h := newIngestHarness(t, modeStream, "1m")
+// 固定规则一：collector-stream 只是旧执行端且已离线，交接不等它确认，只等新执行端（SCF）就生效。
+func TestHandoffDoesNotWaitForAnOfflineOldStreamWorker(t *testing.T) {
+	h := newIngestHarness(t, ingestStream, "1m")
 	h.settle(true)
-	h.workers.worker = nil // 失联
-	h.modes.set("ds_spot_1m", IngestPull, marketfetch.PlanExecutorSCF, true)
-	record := h.settle(false)
-	progress, _ := decodeFetchPlanProgress(record.Progress)
-	require.True(t, progress.Forced)
+	h.lose()
+	h.setIngest("ds_spot_1m", ingestSCF)
+	h.settle(false)
 	require.Nil(t, h.open())
-	require.False(t, h.modes.modes["ds_spot_1m"].Force, "生效后清掉 --force 标记")
+	require.Equal(t, ingestSCF, h.applied().Datasets["ds_spot_1m|1m"].IngestOrSCF())
 	require.NotEmpty(t, h.cloud.created)
 }
 
-// 标的变更计划下发途中 stream 失联：--force 作用于已打开的计划，按原 hash 与 P 推进完成，交接随即开始。
-func TestForceAdvancesAnOpenPlanStuckOnTheLostWorker(t *testing.T) {
-	h := newIngestHarness(t, modeStream, "1m")
+// 在线但迟迟不确认的 collector-stream 不算离线：计划一直等它。
+func TestHandoffWaitsForAnOnlineStreamWorkerThatHasNotConfirmed(t *testing.T) {
+	h := newIngestHarness(t, ingestStream, "1m")
+	h.settle(true)
+	h.setIngest("ds_spot_1m", ingestSCF)
+	require.NoError(t, h.reconcile(h.r))
+	record := h.open()
+	require.NotNil(t, record)
+	for i := 0; i < 20; i++ {
+		h.now = h.now.Add(time.Minute)
+		require.NoError(t, h.reconcile(h.r))
+	}
+	require.Equal(t, record.ID, h.open().ID, "心跳没超时就一直等确认")
+}
+
+// 固定规则二：数据集留在 collector-stream 上只是标的变了，它离线时这份标的变更计划也不等它确认，
+// 按原 hash 与 P 推进完成；之后的交接照常进行。
+func TestSubjectChangeIsNotStuckOnAnOfflineStreamWorker(t *testing.T) {
+	h := newIngestHarness(t, ingestStream, "1m")
 	h.settle(true)
 	h.setSubjects(61)
 	require.NoError(t, h.reconcile(h.r))
@@ -285,44 +272,69 @@ func TestForceAdvancesAnOpenPlanStuckOnTheLostWorker(t *testing.T) {
 		h.now = h.now.Add(time.Minute)
 		require.NoError(t, h.reconcile(h.r))
 	}
-	require.Equal(t, stuck.ID, h.open().ID, "stream 不确认就卡住")
-	// 切换命令只把 --force 标记写进采集方式表，对账器读到后不再等失联端（不改写已打开计划的进度，避免互相覆盖）。
-	h.modes.set("ds_spot_1m", IngestPull, marketfetch.PlanExecutorSCF, true)
+	require.Equal(t, stuck.ID, h.open().ID, "在线但不确认就卡住")
+	h.lose()
 	require.NoError(t, h.reconcile(h.r))
-	require.Nil(t, h.open(), "已打开的计划推进完成")
+	require.Nil(t, h.open(), "离线后已打开的计划推进完成")
 	require.Equal(t, stuckP, h.applied().Datasets["ds_spot_1m|1m"].P)
+	h.setIngest("ds_spot_1m", ingestSCF)
 	require.NoError(t, h.reconcile(h.r))
 	handoff := h.content(h.open())
-	require.Equal(t, marketfetch.PlanExecutorStreaming, handoff.Datasets["ds_spot_1m|1m"].OldIngest, "交接随即开始")
+	require.Equal(t, ingestStream, handoff.Datasets["ds_spot_1m|1m"].OldIngest, "交接随即开始")
 	h.settle(false)
 	require.Nil(t, h.open())
 }
 
-// 带 --force 切到 stream：collector-stream 是新执行端，仍要等它确认，不会在它没应用计划时提前生效。
-func TestForcedHandoffStillWaitsForTheNewStreamWorker(t *testing.T) {
-	h := newIngestHarness(t, modePullSCF, "1m")
+// 固定规则三：有数据集正切到 collector-stream 上（它是新执行端）时，它离线也要等它确认，不会在它没应用计划时提前生效。
+func TestHandoffToStreamStillWaitsForTheOfflineNewWorker(t *testing.T) {
+	h := newIngestHarness(t, ingestSCF, "1m")
 	h.settle(true)
-	h.workers.worker = nil
-	h.modes.set("ds_spot_1m", IngestStreaming, marketfetch.PlanExecutorLocal, true)
+	h.setIngest("ds_spot_1m", ingestStream)
 	require.NoError(t, h.reconcile(h.r))
 	record := h.open()
-	require.NotNil(t, record)
+	require.NotNil(t, record, "建计划时它在线")
+	h.lose()
 	for i := 0; i < 20; i++ {
 		h.now = h.now.Add(20 * time.Second)
 		require.NoError(t, h.reconcile(h.r))
 	}
 	require.Equal(t, record.ID, h.open().ID, "新执行端没确认就不生效")
+	h.offline = false
 	h.settle(true)
 	require.Nil(t, h.open())
-	require.Equal(t, marketfetch.PlanExecutorStreaming, h.applied().Functions[streamItem].Executor)
+	require.Equal(t, ingestStream, h.applied().Functions[streamItem].Executor)
+}
+
+// 固定规则四：Collector 进程启动不满一个心跳超时（180 秒）时不按离线放行，重启后心跳表里的时间是旧的；满了以后才放行。
+func TestOfflineReleaseWaitsUntilTheCollectorHasBeenUpForOneHeartbeatTimeout(t *testing.T) {
+	h := newIngestHarness(t, ingestStream, "1m")
+	h.settle(true)
+	h.lose()
+	h.setIngest("ds_spot_1m", ingestSCF)
+	require.NoError(t, h.reconcile(h.r))
+	record := h.open()
+	require.NotNil(t, record)
+	p := time.Unix(h.content(record).Datasets["ds_spot_1m|1m"].P, 0)
+	// Collector 在旧窗口结束之后才重启：新进程不满 180 秒，照样等确认。
+	h.now = p.Add(time.Minute)
+	h.startedAt = h.now
+	h.r = h.newReconciler()
+	for i := 0; i < 8; i++ {
+		require.NoError(t, h.reconcile(h.r))
+		require.Equal(t, record.ID, h.open().ID, "启动 %s 时不按离线放行", h.now.Sub(h.startedAt))
+		h.now = h.now.Add(20 * time.Second)
+	}
+	h.now = h.startedAt.Add(181 * time.Second)
+	h.settle(false)
+	require.Nil(t, h.open(), "启动满 180 秒后按离线放行")
 }
 
 // 交接与标的变更同时出现：先按已生效的执行端完成标的变更，下一份计划再交接。
 func TestHandoffWaitsForAPendingSubjectChange(t *testing.T) {
-	h := newIngestHarness(t, modePullSCF, "1m")
+	h := newIngestHarness(t, ingestSCF, "1m")
 	h.settle(true)
 	h.setSubjects(62)
-	h.modes.set("ds_spot_1m", IngestStreaming, marketfetch.PlanExecutorLocal, false)
+	h.setIngest("ds_spot_1m", ingestStream)
 	require.NoError(t, h.reconcile(h.r))
 	first := h.content(h.open())
 	require.True(t, first.Datasets["ds_spot_1m|1m"].HashChanged)
@@ -339,9 +351,8 @@ func TestHandoffWaitsForAPendingSubjectChange(t *testing.T) {
 
 // 推送计划里交易对与 symbol 不同的标的带 pairs；SCF 函数的计划不带。
 func TestStreamPlanCarriesPairsOnly(t *testing.T) {
-	state, err := BuildDesiredState(PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"swap": {"ap-hongkong"}}, Fetch: marketfetch.PlanFetch{Concurrency: 1}, DefaultLatenessS: 15,
-		Modes: map[string]DatasetMode{"ds_stream": modeStream}}, []TaskGroup{
-		{Provider: "binance", SourceID: "swap_http", MarketType: "swap", MarketID: "crypto", InstrumentType: "swap", DatasetID: "ds_stream", Frequency: "1m", Subjects: []string{"ABC-USDT"}, Pairs: map[string]string{"ABC-USDT": "ABCUSDT_X"}},
+	state, err := BuildDesiredState(PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"swap": {"ap-hongkong"}}, Fetch: marketfetch.PlanFetch{Concurrency: 1}, DefaultLatenessS: 15}, []TaskGroup{
+		{Provider: "binance", SourceID: "swap_http", MarketType: "swap", MarketID: "crypto", InstrumentType: "swap", DatasetID: "ds_stream", Frequency: "1m", Ingest: ingestStream, Subjects: []string{"ABC-USDT"}, Pairs: map[string]string{"ABC-USDT": "ABCUSDT_X"}},
 		{Provider: "binance", SourceID: "swap_http", MarketType: "swap", MarketID: "crypto", InstrumentType: "swap", DatasetID: "ds_pull", Frequency: "1m", Subjects: []string{"ABC-USDT"}, Pairs: map[string]string{"ABC-USDT": "ABCUSDT_X"}},
 	}, nil)
 	require.NoError(t, err)
@@ -367,44 +378,14 @@ func TestHandoffLatenessWindow(t *testing.T) {
 	require.Equal(t, time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC), deadline)
 }
 
-// 任务参数指定的采集方式是数据集初值（代替空间默认值），之后以库为准，命令照常能切换。
-func TestTaskParamsSetTheInitialIngestMode(t *testing.T) {
-	h := newIngestHarness(t, modePullSCF, "1m")
-	h.tasks.tasks[0].CollectParams = `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot_1m","frequency":"1m","ingest":"stream","executor":"local"}`
-	h.settle(true)
-	require.Equal(t, store.IngestMode{SpaceID: "crypto", DatasetID: "ds_spot_1m", Mode: IngestStreaming, Executor: marketfetch.PlanExecutorLocal, UpdatedAt: h.modes.modes["ds_spot_1m"].UpdatedAt}, h.modes.modes["ds_spot_1m"])
-	require.Equal(t, marketfetch.PlanExecutorStreaming, h.applied().Functions[streamItem].Executor)
-	h.modes.set("ds_spot_1m", IngestPull, marketfetch.PlanExecutorSCF, false)
-	h.now = h.now.Add(time.Minute)
-	h.settle(true)
-	require.Equal(t, marketfetch.PlanExecutorSCF, h.applied().Datasets["ds_spot_1m|1m"].IngestOrSCF(), "初值之后以库为准")
-}
-
-// 逐个数据集执行 --force：前一份交接计划生效时只清它交接的数据集的标记，后一个数据集的标记留给下一份计划。
-func TestForceFlagsAreClearedPerHandedOffDataset(t *testing.T) {
-	h := newIngestHarness(t, modeStream, "1m", "1h")
-	h.settle(true)
-	h.workers.worker = nil
-	h.modes.set("ds_spot_1m", IngestPull, marketfetch.PlanExecutorSCF, true)
-	h.modes.set("ds_spot_1h", IngestStreaming, marketfetch.PlanExecutorLocal, true)
-	h.settle(false)
-	require.False(t, h.modes.modes["ds_spot_1m"].Force)
-	require.True(t, h.modes.modes["ds_spot_1h"].Force, "没有交接的数据集保留标记")
-	h.modes.set("ds_spot_1h", IngestPull, marketfetch.PlanExecutorSCF, true)
-	h.now = h.now.Add(time.Minute)
-	h.settle(false)
-	require.False(t, h.modes.modes["ds_spot_1h"].Force)
-	require.Equal(t, marketfetch.PlanExecutorSCF, h.applied().Datasets["ds_spot_1h|1h"].IngestOrSCF(), "后一个数据集的 --force 交接不等失联端")
-}
-
-// 旧端（collector-stream）始终不确认、也没有 --force：截止仍按时间在窗口里改成新执行端的值，
+// 旧端（collector-stream）在线但始终不确认：截止仍按时间在窗口里改成新执行端的值，
 // 新执行端（SCF）P 起的周期不会因为截止还是旧值而整期被拒。
 func TestHandoffLatenessSwitchesOnTimeWhenTheOldSideNeverConfirms(t *testing.T) {
-	h := newIngestHarness(t, modeStream, "1m")
+	h := newIngestHarness(t, ingestStream, "1m")
 	h.settle(true)
 	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
 	h.workers.worker = nil
-	h.modes.set("ds_spot_1m", IngestPull, marketfetch.PlanExecutorSCF, false)
+	h.setIngest("ds_spot_1m", ingestSCF)
 	require.NoError(t, h.reconcile(h.r))
 	record := h.open()
 	require.NotNil(t, record)
@@ -413,5 +394,15 @@ func TestHandoffLatenessSwitchesOnTimeWhenTheOldSideNeverConfirms(t *testing.T) 
 	require.NoError(t, h.reconcile(h.r))
 	require.Equal(t, 15, h.lateness.values["ds_spot_1m"], "P + 旧截止 + 余量（10 秒）时改成 SCF 的截止")
 	require.True(t, h.now.Before(p.Add(time.Minute)), "在新执行端第一个周期建立之前")
-	require.Equal(t, record.ID, h.open().ID, "旧端不确认，计划本身仍等着（没有 --force）")
+	require.Equal(t, record.ID, h.open().ID, "旧端不确认，计划本身仍等着")
+}
+
+// 一个数据集只有一个写入方：同一数据集的任务组采集方式不同，期望状态算不出来。
+func TestDesiredStateRejectsOneDatasetWithTwoIngests(t *testing.T) {
+	group := TaskGroup{Provider: "binance", SourceID: "spot_http", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m", Subjects: []string{"ABC-USDT"}, Ingest: ingestStream}
+	other := group
+	other.Provider, other.SourceID, other.MarketType, other.InstrumentType, other.Ingest = "binance", "swap_http", "swap", "swap", ingestSCF
+	_, err := BuildDesiredState(PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-hongkong"}, "swap": {"ap-hongkong"}}, Fetch: marketfetch.PlanFetch{Concurrency: 1}, DefaultLatenessS: 15},
+		[]TaskGroup{group, other}, nil)
+	require.ErrorContains(t, err, "conflicting ingest")
 }

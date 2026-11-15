@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/eastmoneylimit"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
@@ -60,6 +61,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	}
 	dbm, err := store.Open(&store.Options{
 		Path:            cfg.Database.Path,
+		DefaultIngest:   markets.DefaultIngest,
 		MaxIdleConns:    cfg.Database.MaxIdleConns,
 		MaxOpenConns:    cfg.Database.MaxOpenConns,
 		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,

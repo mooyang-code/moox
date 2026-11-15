@@ -30,7 +30,7 @@ var (
 	}
 	collectorConfigTables = []string{
 		"t_collector_tasks", "t_collector_task_tags", "t_collector_fetch_plans",
-		"t_collector_ingest_modes", "t_collector_subject_exclusions",
+		"t_collector_subject_exclusions",
 	}
 	// 暂停开关：不清，系统暂停由 AfterReset 在用户 init 后放开，手工暂停保留。
 	collectorStateTables = []string{"t_collector_fetch_plan_pauses"}

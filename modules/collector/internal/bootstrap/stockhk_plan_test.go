@@ -5,8 +5,9 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,7 +46,7 @@ func TestStockHKPlanUsesFourFunctionsAndWaitsFiveSeconds(t *testing.T) {
 	require.Nil(t, plan.autoSizing("stockhk"), "港股不按负载估算函数个数")
 	require.Nil(t, plan.Spaces["stockhk"].EgressBalance, "港股不做出口 IP 去重")
 	require.Equal(t, 5000, plan.fetchFor("stockhk", "equity").NotBeforeMS)
-	require.Equal(t, fetchplan.DatasetMode{Mode: fetchplan.IngestPull, Executor: marketfetch.PlanExecutorSCF}, plan.defaultModeFor("stockhk"))
+	require.Equal(t, domain.IngestSCF, markets.DefaultIngest("stockhk"))
 
 	desired, err := fetchplan.BuildDesiredState(hkPlanOptions(plan), hkGroups(95), nil)
 	require.NoError(t, err)

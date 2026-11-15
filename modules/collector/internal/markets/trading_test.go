@@ -105,17 +105,19 @@ func TestMarketConfigs(t *testing.T) {
 
 func TestParseConfigRejectsIncompleteFiles(t *testing.T) {
 	for name, raw := range map[string]string{
-		"市场不符":     "market_id: other\nallowed_lateness_seconds: 60\nsubject_egress: direct\n",
-		"缺允许迟到时间":  "market_id: demo\nsubject_egress: direct\n",
-		"缺出口方式":    "market_id: demo\nallowed_lateness_seconds: 60\n",
-		"未知字段":     "market_id: demo\nallowed_lateness_seconds: 60\nsubject_egress: direct\ntimezone: UTC\n",
-		"标的同步没有来源": "market_id: demo\nallowed_lateness_seconds: 60\nsubject_egress: direct\nsubject_sync: {cron: \"0 8 * * *\"}\n",
+		"市场不符":     "market_id: other\ningest: scf\nallowed_lateness_seconds: 60\nsubject_egress: direct\n",
+		"缺允许迟到时间":  "market_id: demo\ningest: scf\nsubject_egress: direct\n",
+		"缺出口方式":    "market_id: demo\ningest: scf\nallowed_lateness_seconds: 60\n",
+		"缺采集方式":    "market_id: demo\nallowed_lateness_seconds: 60\nsubject_egress: direct\n",
+		"采集方式取值不对": "market_id: demo\ningest: pull\nallowed_lateness_seconds: 60\nsubject_egress: direct\n",
+		"未知字段":     "market_id: demo\ningest: scf\nallowed_lateness_seconds: 60\nsubject_egress: direct\ntimezone: UTC\n",
+		"标的同步没有来源": "market_id: demo\ningest: scf\nallowed_lateness_seconds: 60\nsubject_egress: direct\nsubject_sync: {cron: \"0 8 * * *\"}\n",
 	} {
 		_, err := parseConfig("demo", []byte(raw))
 		require.Error(t, err, name)
 	}
 	// subject_sync、scf_plan 都可以不写。
-	config, err := parseConfig("demo", []byte("market_id: demo\nallowed_lateness_seconds: 60\nsubject_egress: direct\n"))
+	config, err := parseConfig("demo", []byte("market_id: demo\ningest: scf\nallowed_lateness_seconds: 60\nsubject_egress: direct\n"))
 	require.NoError(t, err)
 	require.Nil(t, config.SubjectSync)
 	require.True(t, config.SCFPlan.IsZero())

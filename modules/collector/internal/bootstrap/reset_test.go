@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -16,7 +17,7 @@ import (
 func newCollectorResetEnv(t *testing.T) (*lifecycle.Controller, *collectorControl, *store.Store, string) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "moox_collector.db")
-	db, err := store.Open(&store.Options{Path: dbPath})
+	db, err := store.Open(&store.Options{Path: dbPath, DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = db.Close() })

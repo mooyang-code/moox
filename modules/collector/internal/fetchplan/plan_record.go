@@ -38,16 +38,6 @@ type PlanDatasetChange struct {
 	OldLatenessS int    `json:"old_lateness_s,omitempty"`
 }
 
-// HasHandoff 判断这份计划里有数据集换了执行端（交接计划）。
-func (c *FetchPlanContent) HasHandoff() bool {
-	for _, change := range c.Datasets {
-		if change.Changed && change.OldIngest != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // HandoffLateness 判断这个数据集的截止要推迟到 drain 再改：数据集在本计划里换了执行端，且新旧截止不同。
 func (c *PlanDatasetChange) HandoffLateness() bool {
 	return c.Changed && !c.Gone && c.OldLatenessS > 0 && c.OldLatenessS != c.LatenessS
@@ -89,8 +79,6 @@ type FetchPlanProgress struct {
 	LoggedApply  bool            `json:"logged_apply,omitempty"`
 	// StreamStage 是要求推送与本地执行端应用的阶段（transition、final），空表示还没开始下发。
 	StreamStage string `json:"stream_stage,omitempty"`
-	// Forced 为真时不等推送与本地执行端确认（--force：旧执行端失联）。
-	Forced bool `json:"forced,omitempty"`
 	// LatenessSet 记录 drain 时已改成新截止的数据集。
 	LatenessSet map[string]bool `json:"lateness_set,omitempty"`
 }

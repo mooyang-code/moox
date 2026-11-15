@@ -12,7 +12,7 @@ import (
 
 // 数据集全部是推送、云端没有任何计划函数：代码包被清掉（云函数 GC）也不能挡住计划的推进。
 func TestStreamOnlyPlanDoesNotNeedACodePackage(t *testing.T) {
-	h := newIngestHarness(t, modeStream, "1m", "1h")
+	h := newIngestHarness(t, ingestStream, "1m", "1h")
 	h.r.Deploy.PackageID, h.r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	require.Empty(t, h.cloud.packages, "没有任何可用代码包")
 
@@ -25,12 +25,12 @@ func TestStreamOnlyPlanDoesNotNeedACodePackage(t *testing.T) {
 
 // 进程重启后没有缓存的包 ID，之后的每一轮对账照常推进计划变更（新增标的进入推送订阅）。
 func TestStreamOnlyPlanKeepsApplyingChangesAfterARestartWithoutAPackage(t *testing.T) {
-	h := newIngestHarness(t, modeStream, "1m")
+	h := newIngestHarness(t, ingestStream, "1m")
 	h.r.Deploy.PackageID, h.r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	h.settle(true)
 	before := h.applied()
 
-	h.r = h.newReconciler(modeStream) // 模拟重启：新对账器
+	h.r = h.newReconciler() // 模拟重启：新对账器
 	h.r.Deploy.PackageID, h.r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	h.setSubjects(61)
 	h.settle(true)
@@ -69,7 +69,7 @@ func TestCreatingFunctionsWithoutAPackageFailsAsPackage(t *testing.T) {
 
 // 解析不到代码包的警告按间隔记录，不会每轮刷屏。
 func TestMissingPackageWarningIsThrottled(t *testing.T) {
-	h := newIngestHarness(t, modeStream, "1m")
+	h := newIngestHarness(t, ingestStream, "1m")
 	h.r.Deploy.PackageID, h.r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	h.r.refreshPackageIfAvailable(t.Context())
 	first := h.r.packageWarnedAt

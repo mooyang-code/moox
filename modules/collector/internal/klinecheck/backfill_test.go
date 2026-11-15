@@ -74,10 +74,10 @@ func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string
 
 func newBackfillFixture(t *testing.T) (*Backfiller, *healingInvoker, *fakeRows, time.Time) {
 	t.Helper()
-	return newBackfillFixtureWithModes(t, nil)
+	return newBackfillFixtureWithIngest(t, "")
 }
 
-func newBackfillFixtureWithModes(t *testing.T, modes map[string]fetchplan.DatasetMode) (*Backfiller, *healingInvoker, *fakeRows, time.Time) {
+func newBackfillFixtureWithIngest(t *testing.T, ingest string) (*Backfiller, *healingInvoker, *fakeRows, time.Time) {
 	t.Helper()
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
 	require.NoError(t, err)
@@ -89,10 +89,10 @@ func newBackfillFixtureWithModes(t *testing.T, modes map[string]fetchplan.Datase
 	const slot = 5 * time.Minute
 	now := time.Now().UTC().Add(slot).Truncate(slot).Add(3 * time.Minute)
 	base := now.Add(-48*time.Hour - 3*time.Minute)
-	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}, Modes: modes}
+	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
 	desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{{
 		Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
-		Subjects: []string{"BTC-USDT", "ETH-USDT"},
+		Subjects: []string{"BTC-USDT", "ETH-USDT"}, Ingest: ingest,
 	}}, nil)
 	require.NoError(t, err)
 	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
@@ -550,9 +550,9 @@ func (noFunctions) EnsureBackfillFunction(context.Context, string) (string, erro
 	return "", errors.New("the backfill function must not be created")
 }
 
-// 数据集走推送、补采执行端为 local：从推送项解析市场与交易所符号，调本地执行端，不建补采函数。
+// 数据集的采集方式是 stream：从推送项解析市场与交易所符号，调本地执行端，不建补采函数。
 func TestBackfillUsesTheLocalExecutorForStreamDatasets(t *testing.T) {
-	backfiller, local, _, base := newBackfillFixtureWithModes(t, map[string]fetchplan.DatasetMode{"ds": {Mode: fetchplan.IngestStreaming, Executor: marketfetch.PlanExecutorLocal}})
+	backfiller, local, _, base := newBackfillFixtureWithIngest(t, marketfetch.PlanExecutorStreaming)
 	backfiller.Invoker, backfiller.Local = failingInvoker{}, local
 	backfiller.Functions = func(string) FunctionProvider { return noFunctions{} }
 	backfiller.Executor = func(context.Context, string, string) (string, error) { return marketfetch.PlanExecutorLocal, nil }

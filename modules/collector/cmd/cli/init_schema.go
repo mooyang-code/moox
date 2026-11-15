@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/ruleseed"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
@@ -100,7 +101,7 @@ func seedTasks(dbPath string, seedFile string) (ruleseed.SeedSummary, error) {
 	if err != nil {
 		return ruleseed.SeedSummary{}, err
 	}
-	db, err := store.Open(&store.Options{Path: dbPath})
+	db, err := store.Open(&store.Options{Path: dbPath, DefaultIngest: markets.DefaultIngest})
 	if err != nil {
 		return ruleseed.SeedSummary{}, fmt.Errorf("open database for task seed: %w", err)
 	}

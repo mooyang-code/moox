@@ -130,6 +130,8 @@ type MigrateReport struct {
 	SCF         *SCFImportReport `json:"scf,omitempty"`
 	// RemovedTLSMode 记录删掉了 tls_mode 的主机：管理台只用内部证书，这项配置已删除。
 	RemovedTLSMode []string `json:"removed_tls_mode,omitempty"`
+	// RemovedIngestDefaults 是从 [[scf_plan.spaces]] 删掉的 default_ingest、default_executor 的个数：采集方式已记在采集任务上。
+	RemovedIngestDefaults int `json:"removed_ingest_defaults,omitempty"`
 	// RemovedEgressDNS 为 true 表示删掉了 [egress_proxy.dns]：DNS 快照已删除，这一段不再使用。
 	RemovedEgressDNS bool `json:"removed_egress_dns,omitempty"`
 	// LoggingCLSAdded 为 true 表示这次补上了 [logging.cls]。
@@ -456,6 +458,7 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 	renameDeploymentComponents(blocks, report)
 	removeRetiredComponents(blocks, report)
 	blocks = removeEgressDNS(blocks, report)
+	removeIngestDefaults(blocks, report)
 	for i := range blocks {
 		if blocks[i].header == "factors.definitions" && blocks[i].array {
 			change, err := migrateFactorBlock(&blocks[i], library)
@@ -511,6 +514,21 @@ func removeEgressDNS(blocks []block, report *MigrateReport) []block {
 	blocks[at-1].lines = append(blocks[at-1].lines, lines[last+1:]...)
 	report.RemovedEgressDNS = true
 	return slices.Delete(blocks, at, at+1)
+}
+
+// removeIngestDefaults 删掉 [[scf_plan.spaces]] 里的 default_ingest、default_executor：采集方式已记在采集任务上，这两项不再读取。
+func removeIngestDefaults(blocks []block, report *MigrateReport) {
+	for i := range blocks {
+		if blocks[i].header != "scf_plan.spaces" || !blocks[i].array {
+			continue
+		}
+		before := len(blocks[i].lines)
+		blocks[i].lines = slices.DeleteFunc(blocks[i].lines, func(line string) bool {
+			key, _, ok := keyValue(line)
+			return ok && (key == "default_ingest" || key == "default_executor")
+		})
+		report.RemovedIngestDefaults += before - len(blocks[i].lines)
+	}
 }
 
 // factorExternalPrograms 是因子机上部署的两个外部程序组件。

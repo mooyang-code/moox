@@ -140,15 +140,15 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 
 	// 交接：1m 与 1h 两个数据集先由云函数采集，再切到推送，再切回云函数。
 	{
-		h := newIngestHarness(t, modePullSCF, "1m", "1h")
+		h := newIngestHarness(t, ingestSCF, "1m", "1h")
 		h.settle(true)
 		h.r.lastVerified = h.now
-		h.modes.set("ds_spot_1m", IngestStreaming, marketfetch.PlanExecutorLocal, false)
-		h.modes.set("ds_spot_1h", IngestStreaming, marketfetch.PlanExecutorLocal, false)
+		h.setIngest("ds_spot_1m", ingestStream)
+		h.setIngest("ds_spot_1h", ingestStream)
 		h.settle(true)
 		h.r.lastVerified = h.now
-		h.modes.set("ds_spot_1m", IngestPull, marketfetch.PlanExecutorSCF, false)
-		h.modes.set("ds_spot_1h", IngestPull, marketfetch.PlanExecutorSCF, false)
+		h.setIngest("ds_spot_1m", ingestSCF)
+		h.setIngest("ds_spot_1h", ingestSCF)
 		h.settle(true)
 		scenarios = append(scenarios, planBaselineScenario{Name: "handoff_scf_stream_scf", Plans: planBaselineRecords(t, h.r, h.store.records)})
 	}

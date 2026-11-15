@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/prometheus/client_golang/prometheus"
@@ -97,41 +97,52 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 	require.Equal(t, "stream", status.GetFunctions()[0].GetExecutor())
 }
 
-func TestSetIngestModeRequiresAnOnlineStreamAndMarksForce(t *testing.T) {
+func TestSetIngestModeSwitchesKlineTasksAndRequiresAnOnlineStream(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
 	stream := NewStreamService(db, StreamSettings{HeartbeatTimeout: time.Minute}, nil, nil)
 	service.SetStreamService(stream)
-	require.NoError(t, db.IngestModes().Initialize(ctx, []store.IngestMode{
-		{SpaceID: "crypto", DatasetID: "ds1", Mode: store.IngestPull, Executor: store.ExecutorSCF},
-		{SpaceID: "crypto", DatasetID: "ds2", Mode: store.IngestPull, Executor: store.ExecutorSCF},
-	}))
-	rsp, err := service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Mode: "stream"})
+	for _, id := range []string{"ds1", "ds2"} {
+		require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task_" + id, TaskName: id, DataType: domain.DataTypeKline, Ingest: domain.IngestSCF,
+			Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: id, ResultViewID: "view_" + id}))
+	}
+	rsp, err := service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Ingest: "stream"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode(), "stream 离线时拒绝切到 stream")
+	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Ingest: "local"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode(), "stream 离线时拒绝切到 local")
+	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Ingest: "pull"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "旧取值 pull 不再接受")
 
 	_, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1"})
-	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Mode: "stream"})
+	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Ingest: "stream"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Len(t, rsp.GetModes(), 2, "--space-id 表示该空间全部数据集")
-	require.Equal(t, "local", rsp.GetModes()[0].GetExecutor())
+	require.Len(t, rsp.GetModes(), 2, "--space-id 表示该空间全部 K 线任务")
+	require.Equal(t, "stream", rsp.GetModes()[0].GetIngest())
+	require.Equal(t, "task_ds1", rsp.GetModes()[0].GetTaskId())
 
-	// 切回 pull 不要求在线；--force 标记数据集并让已打开的计划不再等失联端。
+	// 切回 scf 不要求在线；只改写这个数据集的任务，已打开计划的进度不动。
 	open, err := db.FetchPlans().Create(ctx, "crypto", streamPlanContent(t), "{}")
 	require.NoError(t, err)
-	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", DatasetId: "ds1", Mode: "pull", Force: true})
+	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", DatasetId: "ds1", Ingest: "scf"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.Equal(t, open.ID, rsp.GetPlanId())
-	modes, _ := db.IngestModes().List(ctx, "crypto")
-	require.Equal(t, store.IngestMode{SpaceID: "crypto", DatasetID: "ds1", Mode: "pull", Executor: "scf", Force: true, UpdatedAt: modes["ds1"].UpdatedAt}, modes["ds1"])
+	require.Len(t, rsp.GetModes(), 1)
+	require.Equal(t, "scf", rsp.GetModes()[0].GetIngest())
 	record, _ := db.FetchPlans().Open(ctx, "crypto")
-	require.Equal(t, "{}", record.Progress, "--force 只写采集方式表，不改写已打开计划的进度")
+	require.Equal(t, "{}", record.Progress)
 
 	got, err := service.GetIngestMode(ctx, &pb.GetIngestModeReq{SpaceId: "crypto", DatasetId: "ds2"})
 	require.NoError(t, err)
 	require.Len(t, got.GetModes(), 1)
-	require.Equal(t, "stream", got.GetModes()[0].GetMode())
+	require.Equal(t, "stream", got.GetModes()[0].GetIngest())
 	require.True(t, got.GetStream().GetOnline())
+
+	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", DatasetId: "ds_missing", Ingest: "scf"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NOT_FOUND, rsp.GetRetInfo().GetCode())
 }

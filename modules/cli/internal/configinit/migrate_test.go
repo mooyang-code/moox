@@ -489,6 +489,21 @@ func TestMigrateRemovesTLSMode(t *testing.T) {
 	}
 }
 
+// [[scf_plan.spaces]] 里的 default_ingest、default_executor 删掉，其余键与别的表里的同名键不动；重复执行结果不变。
+func TestMigrateRemovesIngestDefaults(t *testing.T) {
+	plain := "[[scf_plan.spaces]]\nspace_id = \"crypto\"\ndefault_ingest = \"stream\"\ndefault_executor = \"local\"\n[scf_plan.spaces.markets]\nspot = [\"ap-hongkong\"]\n\n[[scf_plan.spaces]]\nspace_id = \"stockcn\"\ndefault_ingest = \"pull\"\n\n[other]\ndefault_ingest = \"keep\"\n"
+	report := MigrateReport{}
+	migrated, err := migrateManifestText([]byte(plain), nil, "", "", &report)
+	require.NoError(t, err)
+	require.Equal(t, 3, report.RemovedIngestDefaults)
+	require.Equal(t, "[[scf_plan.spaces]]\nspace_id = \"crypto\"\n[scf_plan.spaces.markets]\nspot = [\"ap-hongkong\"]\n\n[[scf_plan.spaces]]\nspace_id = \"stockcn\"\n\n[other]\ndefault_ingest = \"keep\"\n", string(migrated))
+	again := MigrateReport{}
+	second, err := migrateManifestText(migrated, nil, "", "", &again)
+	require.NoError(t, err)
+	require.Zero(t, again.RemovedIngestDefaults)
+	require.Equal(t, string(migrated), string(second))
+}
+
 // [egress_proxy.dns] 整个表删掉，前后的表和下一个表的说明注释不动；重复执行结果不变。
 func TestMigrateRemovesEgressDNS(t *testing.T) {
 	plain := "[egress_proxy]\nhttp_domains = [\"*.binance.com\"]\n\n[egress_proxy.dns]\nprobe_port = 443\ndomains = [\"api.binance.com\"]\n\n# 日志\n[local_logs]\nbackup_count = 5\n"

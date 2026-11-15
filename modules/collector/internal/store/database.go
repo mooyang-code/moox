@@ -33,7 +33,6 @@ type Store struct {
 	path       string
 	taskRepo   *TaskRepository
 	fetchPlans *FetchPlanRepository
-	ingest     *IngestModeRepository
 	workers    *StreamWorkerRepository
 	exclusions *SubjectExclusionRepository
 	tagRuns    *TagSyncRunRepository
@@ -81,11 +80,21 @@ func (s *Store) HasOtherDatasetWriteTargets(ctx context.Context, spaceID, datase
 
 // Options configures the Collector SQLite store.
 type Options struct {
-	Path            string
+	Path string
+	// DefaultIngest 按空间返回 K 线任务的默认采集方式（市场 market.yaml 的 ingest），空间没有登记时返回空串。
+	// 建任务没写采集方式时用它；为 nil 时每个 K 线任务都必须自己写明采集方式。
+	DefaultIngest   func(spaceID string) string
 	MaxIdleConns    int
 	MaxOpenConns    int
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
+}
+
+func (o *Options) defaultIngest() func(string) string {
+	if o == nil {
+		return nil
+	}
+	return o.DefaultIngest
 }
 
 // Open opens the Collector SQLite store. Schema creation is handled by bootstrap.
@@ -104,9 +113,8 @@ func Open(opts *Options) (*Store, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	s := &Store{db: db, path: dbPath}
-	s.taskRepo = NewTaskRepository(db)
+	s.taskRepo = NewTaskRepository(db, opts.defaultIngest())
 	s.fetchPlans = NewFetchPlanRepository(db)
-	s.ingest = NewIngestModeRepository(db)
 	s.workers = NewStreamWorkerRepository(db)
 	s.exclusions = NewSubjectExclusionRepository(db)
 	s.tagRuns = NewTagSyncRunRepository(db)
@@ -132,14 +140,6 @@ func (s *Store) FetchPlans() *FetchPlanRepository {
 		return nil
 	}
 	return s.fetchPlans
-}
-
-// IngestModes returns the per-dataset ingest mode repository.
-func (s *Store) IngestModes() *IngestModeRepository {
-	if s == nil {
-		return nil
-	}
-	return s.ingest
 }
 
 // StreamWorkers returns the collector-stream heartbeat repository.

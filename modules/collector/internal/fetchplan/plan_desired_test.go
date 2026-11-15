@@ -383,11 +383,15 @@ func TestBuildDesiredStateRejectsNotBeforeShorterThanSettleDelay(t *testing.T) {
 	require.NoError(t, err)
 
 	// 本地执行端与云函数走同一个起跑等待，同样校验；推送不拉取，不校验。
-	local, stream := options(0), options(0)
-	local.Modes = map[string]DatasetMode{"ds_cn_5m": {Mode: IngestPull, Executor: marketfetch.PlanExecutorLocal}}
-	stream.Modes = map[string]DatasetMode{"ds_cn_5m": {Mode: IngestStreaming}}
-	_, err = BuildDesiredState(local, equity, nil)
+	withIngest := func(ingest string) []TaskGroup {
+		group := equity[0]
+		group.Ingest = ingest
+		return []TaskGroup{group}
+	}
+	_, err = BuildDesiredState(options(0), withIngest(ingestLocal), nil)
 	require.ErrorContains(t, err, "小于路由文件的结算延迟 800 毫秒")
+	_, err = BuildDesiredState(options(0), withIngest(ingestStream), nil)
+	require.NoError(t, err)
 
 	index := []TaskGroup{{Provider: "eastmoney", SourceID: "index_http", MarketType: "index", MarketID: "stockcn", InstrumentType: "index",
 		DatasetID: "ds_cn_index", Frequency: "5m", Subjects: []string{"000300.XSHG"}}}

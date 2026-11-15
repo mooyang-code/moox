@@ -68,8 +68,8 @@
 | `collector function probe-egress` | 逐个调用短时 SCF 诊断公网出口和 Provider 连通性 |
 | `collector function timer-inventory` | 只读盘点指定 SCF Timer fleet 并校验云侧 readback |
 | `collector function upload` | 构建（或使用现成的）SCF 代码包并只上传，不创建函数 |
-| `collector ingest-mode get` | 查看数据集的采集方式、执行端、交接中的生效周期与 collector-stream 实例状态 |
-| `collector ingest-mode set` | 切换数据集的采集方式（按生效周期交接；不带 --dataset-id 表示空间全部数据集） |
+| `collector ingest-mode get` | 查看各 K 线任务的采集方式、交接中的生效周期与 collector-stream 实例状态 |
+| `collector ingest-mode set` | 切换采集方式（按生效周期交接；不带 --dataset-id 表示空间全部 K 线任务） |
 | `collector kline absences-clear` | 清掉数据集已确认的“行情源缺失”（行情源后来补上数据时），并让历史扫描重新进行 |
 | `collector kline backfill` | 补采缺失的 K 线（默认补检查出的缺口，--force 强制重拉整个范围） |
 | `collector kline backfill-cancel` | 取消补采作业（运行中的分块等其结束） |
