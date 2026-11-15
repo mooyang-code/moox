@@ -17,7 +17,8 @@ message FactorTask {
   string status = 8;
   string created_at = 9;
   string updated_at = 10;
-  // bound_instance_id 是关联的策略实例：一个任务只关联一个实例，一个实例可以关联多个任务；写入后不能修改；为空表示还没有关联。
+  // bound_instance_id 是关联的策略实例：只有声明了 factor_params 的实例启用时关联（独占可变成员的参数提交），一个任务只关联一个实例，
+  // 一个实例可以关联多个任务；写入后不能修改；为空表示没有关联（不调参的实例只读任务的列，不关联）。
   string bound_instance_id = 11;
 }
 
@@ -492,8 +493,8 @@ message SetFactorCategoryRsp {
   FactorDef factor = 2;
 }
 
-// BindFactorTask 把任务与策略实例关联（独占）：同一个实例重复调用直接成功，换一个实例则拒绝；写入后不能修改或清空，
-// 只随 DeleteBoundTask 与任务一起删除。
+// BindFactorTask 把任务与策略实例关联（独占，只给声明了 factor_params 的实例）：同一个实例重复调用直接成功，换一个实例则拒绝；
+// 任务没有可变成员时拒绝；写入后不能修改或清空，只随 DeleteBoundTask 与任务一起删除。
 message BindFactorTaskReq {
   string task_id = 1;
   string instance_id = 2;
@@ -673,6 +674,7 @@ message ActivateUdfRsp {
   bool applied = 6;
   repeated UdfImpact impacts = 7;
   repeated string tasks = 8;
+  // instances 是受影响任务关联的策略实例：只有声明了 factor_params 的实例会关联任务，只读任务的实例不在其中。
   repeated string instances = 9;
   repeated UdfPrerequisite prerequisites = 10;
   repeated string notes = 11;

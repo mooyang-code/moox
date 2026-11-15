@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -103,14 +104,16 @@ func seriesOfSubjects(values []seriesset.Series, subjects []string) []seriesset.
 	return out
 }
 
-// tagsBySubject 把序列按标的归组：标的 → 排好序的 series_tag。
+// tagsBySubject 把序列按标的归组：标的 → 排好序、去重的 series_tag。同一条序列出现两次时只留一个 tag：
+// 组装用 tag 在这里的位置作位图的位，重复的 tag 会让位图多要一位，对应的项就永远确认不了。
 func tagsBySubject(values []seriesset.Series) map[string][]string {
 	out := make(map[string][]string)
 	for _, value := range values {
 		out[value.SubjectID] = append(out[value.SubjectID], value.SeriesTag)
 	}
-	for subject := range out {
-		sort.Strings(out[subject])
+	for subject, tags := range out {
+		sort.Strings(tags)
+		out[subject] = slices.Compact(tags)
 	}
 	return out
 }

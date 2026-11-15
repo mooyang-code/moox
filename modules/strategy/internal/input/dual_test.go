@@ -173,7 +173,7 @@ func TestLoadBarSelectSpotKeepsSwapOnlyForAvailability(t *testing.T) {
 	}
 }
 
-// 启用时先核对“市场 → 任务”再关联：登记错了市场的任务不能被关联占住。
+// 启用时先核对“市场 → 任务”再核对任务状态：登记错了市场的任务不读状态；双市场策略不写 factor_params，两个任务都不关联、只核对已启用。
 func TestResolveInstanceChecksMarketsBeforeBinding(t *testing.T) {
 	client := newDualClient()
 	tasks := &tasksFake{}
@@ -183,14 +183,14 @@ func TestResolveInstanceChecksMarketsBeforeBinding(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "登记为 swap 市场，但它的源数据集是 spot 市场") {
 		t.Fatalf("登记错市场应被拒绝：%v", err)
 	}
-	if len(tasks.binds) != 0 {
-		t.Fatalf("核对失败时不能关联任务：%v", tasks.binds)
+	if len(tasks.binds) != 0 || len(tasks.gets) != 0 {
+		t.Fatalf("核对失败时不能关联或读取任务：binds=%v gets=%v", tasks.binds, tasks.gets)
 	}
 	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_1h", "swap": "ftask_swap1h"}, parseStrategy(t, dualDSL)); err != nil {
 		t.Fatalf("市场对得上应通过：%v", err)
 	}
-	if len(tasks.binds) != 2 {
-		t.Fatalf("两个任务都应关联：%v", tasks.binds)
+	if len(tasks.binds) != 0 || strings.Join(tasks.gets, ",") != "ftask_1h,ftask_swap1h" {
+		t.Fatalf("两个任务都不关联、只读状态：binds=%v gets=%v", tasks.binds, tasks.gets)
 	}
 	if market, err := service.TaskMarket(context.Background(), "space", "ftask_swap1h"); err != nil || market != "swap" {
 		t.Fatalf("任务市场不符：%s %v", market, err)
@@ -215,7 +215,7 @@ func (c *lateView) GetView(ctx context.Context, space, viewID string) (ViewInfo,
 	return c.fakeClient.GetView(ctx, space, viewID)
 }
 
-// 启用前的市场核对在 ReadyWait 内等结果 View 建出；等不到就报错，且始终没有关联任务；其他错误（市场对不上）不重试。
+// 启用前的市场核对在 ReadyWait 内等结果 View 建出；等不到就报错，且始终没有读任务状态；其他错误（市场对不上）不重试。
 func TestResolveInstanceWaitsForViewBeforeCheckingMarkets(t *testing.T) {
 	tasks := map[string]string{"spot": "ftask_1h", "swap": "ftask_swap1h"}
 	client := &lateView{fakeClient: newDualClient(), missing: "view_factor_swap1h", after: 3}
@@ -224,8 +224,8 @@ func TestResolveInstanceWaitsForViewBeforeCheckingMarkets(t *testing.T) {
 	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", tasks, parseStrategy(t, dualDSL)); err != nil {
 		t.Fatalf("View 稍后建出，应等到并通过：%v", err)
 	}
-	if len(sets.binds) != 2 || client.reads <= 3 {
-		t.Fatalf("核对通过之后才关联两个任务：binds=%v reads=%d", sets.binds, client.reads)
+	if len(sets.gets) != 2 || len(sets.binds) != 0 || client.reads <= 3 {
+		t.Fatalf("核对通过之后才读两个任务的状态：gets=%v binds=%v reads=%d", sets.gets, sets.binds, client.reads)
 	}
 
 	never := &lateView{fakeClient: newDualClient(), missing: "view_factor_swap1h", after: 1 << 30}
@@ -234,8 +234,8 @@ func TestResolveInstanceWaitsForViewBeforeCheckingMarkets(t *testing.T) {
 	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", tasks, parseStrategy(t, dualDSL)); err == nil || !strings.Contains(err.Error(), "无法确定因子任务 ftask_swap1h 的市场") {
 		t.Fatalf("等不到 View 应报错：%v", err)
 	}
-	if len(sets.binds) != 0 {
-		t.Fatalf("核对没通过不能关联任务：%v", sets.binds)
+	if len(sets.binds) != 0 || len(sets.gets) != 0 {
+		t.Fatalf("核对没通过不能关联或读取任务：binds=%v gets=%v", sets.binds, sets.gets)
 	}
 
 	wrong := &lateView{fakeClient: newDualClient()}

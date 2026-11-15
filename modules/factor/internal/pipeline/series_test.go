@@ -34,6 +34,16 @@ func unifiedPlan(target time.Time, factors []domain.FactorDef, subjects []string
 	return plan
 }
 
+// asVarMembers 把计划里的成员都当成可变成员：__params 只记可变成员，测“没有取得值的成员不记参数”要用可变成员。
+func asVarMembers(plan Plan) Plan {
+	members := append([]domain.MemberDef(nil), plan.Members...)
+	for i := range members {
+		members[i].Kind = domain.MemberKindVar
+	}
+	plan.Members = members
+	return plan
+}
+
 // unifiedData 按序列给出源数据：absent 里的序列没有源行（例如永续缺这个币，或永续晚到）。
 func unifiedData(subjects []string, target time.Time, bars int, absent ...seriesset.Series) *frameData {
 	skip := seriesSet(absent)
@@ -88,7 +98,7 @@ func TestUnifiedCrossSectionSkipsOnlyTheMarketMissingASeries(t *testing.T) {
 	spread := testPipelineFactor("spread", domain.FactorTypeCrossSection, 2, false)
 	mean := testPipelineFactor("mean", domain.FactorTypeTimeSeries, 2, false)
 	subjects := []string{"BTC", "ETH", "SOL"}
-	plan := unifiedPlan(target, []domain.FactorDef{spread, mean}, subjects)
+	plan := asVarMembers(unifiedPlan(target, []domain.FactorDef{spread, mean}, subjects))
 	loaded, computation, rows := runUnified(t, plan, unifiedData(subjects, target, 2, series("SOL", tagSwap)))
 
 	require.Equal(t, subjects, loaded.Available, "SOL 现货在，标的仍可算")
@@ -198,7 +208,7 @@ func TestUnifiedUpstreamFailedSeriesWritesNullEvenWithLocalData(t *testing.T) {
 	mean := testPipelineFactor("mean", domain.FactorTypeTimeSeries, 2, false)
 	rank := testPipelineFactor("rank", domain.FactorTypeCrossSection, 2, true)
 	subjects := []string{"BTC", "ETH", "SOL"}
-	plan := unifiedPlan(target, []domain.FactorDef{mean, rank}, subjects)
+	plan := asVarMembers(unifiedPlan(target, []domain.FactorDef{mean, rank}, subjects))
 	plan.UpstreamFailedSeries = []seriesset.Series{series("BTC", tagSwap)}
 	plan.UpstreamFailed = []string{"BTC"}
 	data := unifiedData(subjects, target, 2) // 本地每条序列都有这一期的源行

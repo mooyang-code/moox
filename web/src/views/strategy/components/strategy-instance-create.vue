@@ -74,11 +74,7 @@
           allow-search
           allow-clear
           :loading="tasksLoading"
-          :placeholder="
-            market === UNIFIED_TASK_KEY
-              ? '选择一个统一数据集上运行中、还没有关联实例的计算任务'
-              : '选择一个运行中、还没有关联实例的计算任务'
-          "
+          :placeholder="market === UNIFIED_TASK_KEY ? '选择一个统一数据集上运行中的计算任务' : '选择一个运行中的计算任务'"
           @change="onTaskChange"
         >
           <a-option
@@ -101,13 +97,18 @@
         >
       </p>
       <p v-else-if="unifiedMode && !tasksLoading && !taskChoices(UNIFIED_TASK_KEY).length" class="meta-hint">
-        当前空间没有可用的统一数据集计算任务：任务的源数据集要是统一数据集（market_type 为 multi），任务运行中且还没有关联实例。
+        当前空间没有可用的统一数据集计算任务：任务的源数据集要是统一数据集（market_type 为 multi），并且处于运行中。
       </p>
       <p v-else-if="!tasksLoading && !tasks.length" class="meta-hint">
-        当前空间没有可用的计算任务：任务必须处于运行中，且还没有关联策略实例。请先到「因子」模块创建并启用任务。
+        当前空间没有可用的计算任务：任务必须处于运行中。请先到「因子」模块创建并启用任务。
+      </p>
+      <p v-else-if="tuned" class="meta-hint">
+        这份定义写了 factor_params：启用时主帧任务与本实例永久关联、由本实例提交可变成员的参数，已关联到别的实例的任务不能选；
+        删除已停用的实例时，关联到它的任务和结果数据会一起删除（还有别的实例引用这个任务时先删它们）。
       </p>
       <p v-else class="meta-hint">
-        一个计算任务只能被一个实例独占使用，关联创建后不能修改；删除已停用的实例时，绑定到它的任务和结果数据会一起删除。
+        这份定义没有
+        factor_params：实例只读任务的结果列、不关联任务，多个实例可以共用同一个任务；删除实例时任务保留，不用了到「因子」模块手动停用。
       </p>
       <p v-if="varBlockReason && hasVarMemberTasks" class="meta-hint">标为“有可变成员，不可选”的任务：{{ varBlockReason }}。</p>
       <div v-for="item in selectedTasks" :key="item.task.taskId" class="task-columns">
@@ -122,9 +123,14 @@
         <p v-if="item.task.varMembers.length && varBlocked(item.market)" class="meta-hint meta-error">
           可变成员 {{ item.task.varMembers.join("、") }}：{{ varBlocked(item.market) }}，请换一个没有可变成员的任务。
         </p>
-        <p v-else-if="item.task.varMembers.length" class="meta-hint">
+        <p v-else-if="item.task.varMembers.length && tuned && !splitTaskKey(item.market).source" class="meta-hint">
           可变成员 {{ item.task.varMembers.join("、") }}：DSL 的 factor_params 要为每个可变成员给出参数（策略逐期提交），可用
           params("成员键", "参数名") 读取当期实际参数。
+        </p>
+        <p v-else-if="item.task.varMembers.length" class="meta-hint">
+          可变成员 {{ item.task.varMembers.join("、") }}：本策略只读它的列，参数由关联这个任务的实例提交{{
+            item.task.boundInstanceId ? `（${item.task.boundInstanceId}）` : "（还没有关联，用默认参数）"
+          }}，可用 params("成员键", "参数名") 读取当期实际参数。
         </p>
       </div>
       <a-form-item label="运行模式">
@@ -187,8 +193,8 @@
       <ResultItems :result="check_result.trial" :items="check_result.trial_items" />
     </section>
     <a-alert type="info" show-icon class="confirm-note"
-      >创建后实例保持停用。启用时后台会把计算任务与实例永久关联，并重新解析 结果
-      View、列与成员契约，固化为会话快照；绑定组合账户的实例在启用时认领账户会话。</a-alert
+      >创建后实例保持停用。启用时后台重新解析结果 View、列与成员契约，固化为会话快照；写了 factor_params
+      的实例还会把主帧任务与实例永久关联；绑定组合账户的实例在启用时认领账户会话。</a-alert
     >
     <template #footer>
       <a-space>
@@ -209,7 +215,14 @@ import { listFactorTasks } from "@/api/factor";
 import { listLogicalAccounts, listTradingAccounts } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
 import type { FactorTaskInfo } from "@/api/factor/types";
-import { availableTasks, isUnifiedTask, varMemberBlockReason, type TaskOption } from "@/views/strategy/components/task-options";
+import {
+  declaresFactorParams,
+  enabledTasks,
+  isUnifiedTask,
+  selectableTask,
+  varMemberBlockReason,
+  type TaskOption
+} from "@/views/strategy/components/task-options";
 import { readUnifiedDatasetIds } from "@/views/strategy/components/unified-datasets";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
@@ -270,6 +283,8 @@ let checkRequest = 0;
 
 const selectedStrategy = computed(() => props.strategies.find(item => item.strategy_id === form.strategy_id));
 const preview = computed(() => (selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null));
+// 定义写了 factor_params：启用时独占关联主帧任务，已关联到别的实例的主帧任务不能选。
+const tuned = computed(() => declaresFactorParams(selectedStrategy.value?.dsl_yaml ?? ""));
 
 // 策略的市场模式决定要绑定哪些市场的任务；没写 market 时只绑一个，市场由用户选。
 const singleMarkets = ["spot", "swap", "equity"];
@@ -403,11 +418,14 @@ const varBlockReason = computed(() =>
 const hasVarMemberTasks = computed(() => mainKeys.value.some(market => taskChoices(market).some(task => task.varMembers.length)));
 const tasksSelected = computed(() => taskKeys.value.length > 0 && taskKeys.value.every(market => Boolean(form.tasks[market])));
 // 统一数据集上的任务只能选 multi，其余键只能选单市场数据集上的任务；另一个键已选的任务不再出现：一个任务只能登记一次。
+// 写了 factor_params 的定义不能选已关联到别的实例的主帧任务。
 // 数据集信息读取失败时分不出哪些任务在统一数据集上，先都列出，由绑定预检核对。
 function taskChoices(market: string) {
   const taken = new Set(taskKeys.value.filter(item => item !== market).map(item => form.tasks[item]));
+  const source = splitTaskKey(market).source;
   return tasks.value.filter(task => {
     if (taken.has(task.taskId)) return false;
+    if (!selectableTask(task, tuned.value, source)) return false;
     if (datasetsError.value) return true;
     return isUnifiedTask(task, unifiedDatasetIds.value) === (splitTaskKey(market).market === UNIFIED_TASK_KEY);
   });
@@ -460,7 +478,7 @@ async function loadTasksList() {
   try {
     const infos = await loadAllTasks();
     if (requestId !== tasksRequest || props.spaceId !== spaceId) return;
-    tasks.value = availableTasks(infos, spaceId);
+    tasks.value = enabledTasks(infos, spaceId);
   } catch (err) {
     if (requestId === tasksRequest) tasksError.value = err instanceof Error ? err.message : "计算任务加载失败";
   } finally {
@@ -632,7 +650,7 @@ async function submit() {
   const requestId = ++submitRequest;
   saving.value = true;
   try {
-    // 一个任务关联实例后永久占住：没有当前有效的预检结果就先预检（服务端会核对市场与任务是否对应），通过了才创建。
+    // 写了 factor_params 的实例启用后永久占住任务：没有当前有效的预检结果就先预检（服务端会核对市场与任务是否对应），通过了才创建。
     if (!check_result.value?.resolved_json) {
       const result = await check();
       // 预检被作废（等待期间改了定义、任务或市场）：不创建，按新的选择再点创建

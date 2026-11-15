@@ -26,6 +26,9 @@ type factorsFake struct {
 func (f *factorsFake) BindFactorTask(context.Context, string, string) (input.BoundTask, error) {
 	return input.BoundTask{}, nil
 }
+func (f *factorsFake) GetFactorTask(context.Context, string) (input.FactorTaskRecord, error) {
+	return input.FactorTaskRecord{Status: "enabled"}, nil
+}
 func (f *factorsFake) SubmitFactorParams(_ context.Context, submission input.ParamSubmission) ([]input.MemberSubmitResult, error) {
 	f.calls = append(f.calls, submission)
 	return f.results, f.err

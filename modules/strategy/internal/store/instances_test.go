@@ -212,8 +212,9 @@ func TestDisableInstanceClosesSessionAtomically(t *testing.T) {
 	}
 }
 
-// 实例可以绑定现货、永续两个因子任务；一个任务只能属于一个实例；事件按任意一个任务路由到实例。
-func TestInstanceBindsTwoFactorTasksExclusively(t *testing.T) {
+// 实例可以绑定现货、永续两个因子任务；一个任务可以被多个实例登记（独占关联记在 Factor 侧，只给调参的实例）；
+// 事件按任意一个任务路由到启用的实例。
+func TestInstanceBindsTwoFactorTasks(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	if err := repo.CreateDefinition(ctx, Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: testHash, CreatedAt: testNow}); err != nil {
@@ -227,12 +228,15 @@ func TestInstanceBindsTwoFactorTasksExclusively(t *testing.T) {
 	if err != nil || len(got.FactorTasks) != 2 || got.FactorTasks["spot"] != "ftask_spot" || got.FactorTasks["swap"] != "ftask_swap" {
 		t.Fatalf("实例应记下两个任务：%+v err=%v", got, err)
 	}
-	clash := Instance{InstanceID: "i2", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"swap": "ftask_swap"}, CreatedAt: testNow}
-	if err := repo.CreateInstance(ctx, clash); err == nil {
-		t.Fatal("一个因子任务只能被一个实例绑定")
+	shared := Instance{InstanceID: "i2", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"swap": "ftask_swap"}, CreatedAt: testNow}
+	if err := repo.CreateInstance(ctx, shared); err != nil {
+		t.Fatalf("另一个实例也可以登记同一个任务：%v", err)
 	}
-	if _, err := repo.GetInstance(ctx, "i2"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("创建失败的实例不应留下记录：%v", err)
+	if ids, err := repo.InstanceIDsByTask(ctx, "ftask_swap"); err != nil || strings.Join(ids, ",") != "i1,i2" {
+		t.Fatalf("引用 ftask_swap 的实例不符：%v err=%v", ids, err)
+	}
+	if ids, err := repo.InstanceIDsByTask(ctx, "ftask_spot"); err != nil || strings.Join(ids, ",") != "i1" {
+		t.Fatalf("引用 ftask_spot 的实例不符：%v err=%v", ids, err)
 	}
 	for _, bad := range []map[string]string{nil, {"spot": "a", "swap": "b", "equity": "c"}, {"futures": "a"}, {"spot": " "}} {
 		if err := repo.CreateInstance(ctx, Instance{InstanceID: "i3", StrategyID: "s1", SpaceID: "space", FactorTasks: bad, CreatedAt: testNow}); err == nil {

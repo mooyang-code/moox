@@ -20,8 +20,8 @@ rules:
     weight: 1
 `
 
-// 实例创建时必须选定一个合法的因子任务；一个任务只能被一个实例独占；任务在创建时写定。
-func TestInstanceFactorTaskIsRequiredAndExclusive(t *testing.T) {
+// 实例创建时必须选定一个合法的因子任务；一个任务可以被多个实例引用（独占关联只给调参的实例，启用时由 Factor 判定）；任务在创建时写定。
+func TestInstanceFactorTaskIsRequiredAndShared(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	missing := h.createInstance("i1", "s1", "", "", false)
@@ -34,11 +34,15 @@ func TestInstanceFactorTaskIsRequiredAndExclusive(t *testing.T) {
 	if created.GetInstance().GetFactorTasks()["spot"] != "ftask_shared" {
 		t.Fatalf("实例应记下因子任务：%+v", created.GetInstance())
 	}
-	taken := h.createInstance("i2", "s1", "ftask_shared", "", false)
-	requireFail(t, int32(taken.GetRetInfo().GetCode()), taken.GetRetInfo().GetMsg(), "")
-	if _, err := h.service.Store.GetInstance(h.ctx, "i2"); err == nil {
-		t.Fatal("任务已被独占时第二个实例不应创建成功")
+	// 两个不调参的实例引用同一个任务：都能创建、都能启用。
+	shared := h.createInstance("i2", "s1", "ftask_shared", "", true)
+	requireOK(t, int32(shared.GetRetInfo().GetCode()), shared.GetRetInfo().GetMsg())
+	first := h.setEnabled("i1", true)
+	requireOK(t, int32(first.GetRetInfo().GetCode()), first.GetRetInfo().GetMsg())
+	if !shared.GetInstance().GetEnabled() || !first.GetInstance().GetEnabled() {
+		t.Fatalf("两个实例都应启用：%+v %+v", shared.GetInstance(), first.GetInstance())
 	}
+	requireOK(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "")
 
 	// 修改实例：任务不可改，留空或给同一个任务则只改其他字段。
 	changed, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_other"}}})
@@ -136,12 +140,9 @@ func TestCreateInstanceFactorTasksRules(t *testing.T) {
 	if tasks := both.GetInstance().GetFactorTasks(); tasks["spot"] != "ftask_spot" || tasks["swap"] != "ftask_swap" || len(tasks) != 2 {
 		t.Fatalf("实例应记下两个因子任务：%+v", both.GetInstance())
 	}
-	// 一个任务只能被一个实例独占，即使另一个任务不同。
-	taken := create("i-other", map[string]string{"spot": "ftask_x", "swap": "ftask_swap"})
-	requireFail(t, int32(taken.GetRetInfo().GetCode()), taken.GetRetInfo().GetMsg(), "")
-	if _, err := h.service.Store.GetInstance(h.ctx, "i-other"); err == nil {
-		t.Fatal("任务已被独占时第二个实例不应创建成功")
-	}
+	// 一个任务可以被多个实例登记。
+	shared := create("i-other", map[string]string{"spot": "ftask_x", "swap": "ftask_swap"})
+	requireOK(t, int32(shared.GetRetInfo().GetCode()), shared.GetRetInfo().GetMsg())
 	// 同一个 instance_id、相同任务重试幂等；任务不同则冲突。
 	again := create("i-both", map[string]string{"swap": "ftask_swap", "spot": "ftask_spot"})
 	requireOK(t, int32(again.GetRetInfo().GetCode()), again.GetRetInfo().GetMsg())

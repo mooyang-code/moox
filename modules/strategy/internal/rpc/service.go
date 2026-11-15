@@ -24,9 +24,9 @@ import (
 type Resolver interface {
 	// Resolve 按登记的因子任务（任务键 → 任务，附加来源的键是 来源名:市场）解析绑定（只读，不关联任务；校验与研究回放用）。
 	Resolve(ctx context.Context, spaceID string, tasks map[string]string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
-	// ResolveInstance 启用实例时的解析：先把任务（市场 → 任务）与实例永久关联（幂等），要求任务已启用，再解析绑定。
+	// ResolveInstance 启用实例时的解析：声明了 factor_params 的策略先把主帧任务与实例永久关联（幂等），任务都要已启用，再解析绑定。
 	ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
-	// ResolvePoolInstance 是策略池启用时的解析：任务关联同 ResolveInstance，绑定按成员分别解析。
+	// ResolvePoolInstance 是策略池启用时的解析：不关联任务（策略池不能写 factor_params），任务都要已启用，绑定按成员分别解析。
 	ResolvePoolInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, pool dsl.Strategy, members []input.PoolMemberDef) (input.PoolResolved, error)
 	// ResolvePool 解析策略池的绑定（只读，不关联任务；校验接口用）。
 	ResolvePool(ctx context.Context, spaceID string, taskIDs []string, pool dsl.Strategy, members []input.PoolMemberDef) (input.PoolResolved, error)

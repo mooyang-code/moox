@@ -53,7 +53,7 @@ func (f *fakeFactorTasks) GetFactorTask(ctx context.Context, taskID string) (inp
 	if space == "" {
 		space = "crypto"
 	}
-	return input.FactorTaskRecord{SpaceID: space, ResultDatasetID: "dataset_of_" + taskID, BoundInstanceID: instanceID}, nil
+	return input.FactorTaskRecord{SpaceID: space, Status: "enabled", ResultDatasetID: "dataset_of_" + taskID, BoundInstanceID: instanceID}, nil
 }
 
 func (f *fakeFactorTasks) ListFactorTaskIDs(ctx context.Context) (map[string]bool, error) {
@@ -148,6 +148,36 @@ func TestDeleteStrategyInstanceRejectsEnabledInstance(t *testing.T) {
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "先停用")
 	if len(tasks.deleted) != 0 {
 		t.Fatalf("启用中的实例不能删任务：%v", tasks.deleted)
+	}
+}
+
+// 关联到本实例的任务还被别的实例引用（批 3 T9）：拒绝删除并列出引用方，什么都不删；先删引用方（它的任务没关联它，保留），
+// 之后本实例连同任务一起删除。
+func TestDeleteStrategyInstanceRejectsWhileTaskIsReferenced(t *testing.T) {
+	h, tasks, _ := deleteHarness(t)
+	for _, id := range []string{"i2", "i3"} {
+		created := h.createInstance(id, "s1", "ftask_i1", "", false)
+		requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
+	}
+	rsp := h.deleteInstance("i1")
+	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "先删除引用它的实例 i2、i3")
+	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_INVALID_PARAM || rsp.GetIncomplete() || len(tasks.deleted) != 0 || len(tasks.checked) != 0 {
+		t.Fatalf("应在动手前按参数错误拒绝：%+v deleted=%v checked=%v", rsp.GetRetInfo(), tasks.deleted, tasks.checked)
+	}
+	if _, err := h.service.Store.GetInstance(h.ctx, "i1"); err != nil {
+		t.Fatalf("被拒绝时实例应还在：%v", err)
+	}
+	for _, id := range []string{"i2", "i3"} {
+		removed := h.deleteInstance(id)
+		requireOK(t, int32(removed.GetRetInfo().GetCode()), removed.GetRetInfo().GetMsg())
+	}
+	if len(tasks.deleted) != 0 || tasks.bound["ftask_i1"] != "i1" {
+		t.Fatalf("引用方的任务没关联它，删除引用方时任务保留：deleted=%v bound=%v", tasks.deleted, tasks.bound)
+	}
+	rsp = h.deleteInstance("i1")
+	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+	if len(tasks.deleted) != 1 || tasks.deleted[0] != "ftask_i1" {
+		t.Fatalf("没有引用方之后任务随实例删除：%v", tasks.deleted)
 	}
 }
 

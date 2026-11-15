@@ -92,6 +92,9 @@ const (
 		AND c_instance_id IN (SELECT c_instance_id FROM t_strategy_instance_tasks WHERE c_factor_task_id = ?)
 		ORDER BY c_instance_id`
 
+	// sqlListInstanceIDsByTask 列出登记了某个因子任务的全部实例（不分空间与启用状态）。
+	sqlListInstanceIDsByTask = `SELECT DISTINCT c_instance_id FROM t_strategy_instance_tasks WHERE c_factor_task_id = ? ORDER BY c_instance_id`
+
 	// sqlEnableInstance 把挂着会话的停用实例置为启用，写入绑定解析并恢复健康。
 	sqlEnableInstance = `UPDATE t_strategy_instances SET c_enabled = 1, c_session_id = ?, c_resolved_json = ?, c_health = 'ok', c_mtime = ? WHERE c_instance_id = ?`
 	// sqlAttachInstanceSession 把会话挂到停用的实例上。
@@ -379,6 +382,16 @@ func (s *Store) EnabledInstancesByView(ctx context.Context, spaceID, viewID stri
 		return nil, err
 	}
 	return withTasks(s.db.WithContext(ctx), rows)
+}
+
+// InstanceIDsByTask 返回登记了因子任务 taskID 的全部实例 ID（排序；不分空间与启用状态）。删除实例时据此找出还在引用
+// 要删的任务的其他实例。
+func (s *Store) InstanceIDsByTask(ctx context.Context, taskID string) ([]string, error) {
+	var ids []string
+	if err := s.db.WithContext(ctx).Raw(sqlListInstanceIDsByTask, strings.TrimSpace(taskID)).Scan(&ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 // SameTasks 报告两份因子任务绑定相同。

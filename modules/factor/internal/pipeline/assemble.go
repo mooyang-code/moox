@@ -23,7 +23,8 @@ type resultKey struct {
 type assembledRow struct {
 	key    resultKey
 	fields map[string]any
-	// params 是这一行各成员实际用的参数（成员键 → 参数名 → 取值），最后编码成 __params 列写出。
+	// params 是这一行各可变成员实际用的参数（成员键 → 参数名 → 取值），最后编码成 __params 列写出；固定成员的参数就是它自己的
+	// c_params，不记。
 	params map[string]map[string]float64
 }
 
@@ -97,15 +98,13 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 				fields[column] = values[positions[column]]
 			}
 			// 只填充时不预置因子列：没有取得有效值的因子列不写，不会把已有的值覆盖成 NULL。__params 先取已有行的记录，
-			// 再写入本次计算的成员实际用的参数：只填充时随取得有效值的成员一起写，其余情况预置全部成员。
+			// 再写入本次计算的可变成员实际用的参数：只填充时随取得有效值的成员一起写，其余情况预置全部可变成员。
 			rowParams := cloneRowParams(plan.BaseParams[RowKey{Subject: subject, At: at.UTC(), Tag: tagValue}])
 			if !plan.FillOnly {
 				for _, column := range factorColumns {
 					fields[column] = nil
 				}
-				for _, member := range plan.Members {
-					rowParams[member.Key] = MemberParamValues(plan, member, subject)
-				}
+				presetParams(plan, rowParams, subject)
 			}
 			if _, exists := rows[key]; exists {
 				return nil, AssembleReport{}, fmt.Errorf("duplicate source row for subject %q at %s tag %q", subject, at, tagValue)
@@ -218,7 +217,7 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 				for _, column := range member.OutputColumns() {
 					delete(row.fields, column)
 				}
-				if base, ok := plan.BaseParams[RowKey{Subject: key.subject, At: key.at, Tag: key.tag}][member.Key]; ok {
+				if base, ok := plan.BaseParams[RowKey{Subject: key.subject, At: key.at, Tag: key.tag}][member.Key]; ok && member.IsVar() {
 					row.params[member.Key] = base
 				}
 			}
@@ -250,13 +249,15 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 		}
 	}
 
+	// __params 只记可变成员：本次计算没有可变成员时不写这一列（只补固定成员时，Storage 只更新请求带的字段，可变成员的原值不动）。
+	writeParams := hasVarMember(plan.Members)
 	out := make([]storageio.ResultRow, 0, len(rows))
 	for _, row := range rows {
 		if len(row.fields) == 0 {
 			continue // 只填充时没有取得任何有效值的行不写
 		}
-		// 非只填充时成员的参数全被去掉也要写出 {}：Storage 只更新请求带的字段，不写就会留下已有行的旧 __params。
-		if len(row.params) > 0 || (!plan.FillOnly && len(plan.Members) > 0) {
+		// 非只填充时可变成员的参数全被去掉也要写出 {}：Storage 只更新请求带的字段，不写就会留下已有行的旧 __params。
+		if writeParams && (len(row.params) > 0 || !plan.FillOnly) {
 			encoded, encodeErr := factorname.CanonicalParams(row.params)
 			if encodeErr != nil {
 				return nil, AssembleReport{}, fmt.Errorf("encode %s of subject %q at %s: %w", factorname.ParamsColumn, row.key.subject, row.key.at, encodeErr)
@@ -398,9 +399,7 @@ func applyFactorValues(plan Plan, rows map[resultKey]*assembledRow, key resultKe
 			for _, column := range allFactorColumns {
 				row.fields[column] = nil
 			}
-			for _, planned := range plan.Members {
-				row.params[planned.Key] = MemberParamValues(plan, planned, key.subject)
-			}
+			presetParams(plan, row.params, key.subject)
 		}
 		rows[key] = row
 	}
@@ -414,8 +413,29 @@ func applyFactorValues(plan Plan, rows map[resultKey]*assembledRow, key resultKe
 	for i, column := range columns {
 		row.fields[column] = normalizeNumeric(values[i])
 	}
-	row.params[member.Key] = MemberParamValues(plan, member, key.subject)
+	if member.IsVar() {
+		row.params[member.Key] = MemberParamValues(plan, member, key.subject)
+	}
 	return true
+}
+
+// presetParams 预置一行里本次计算的各可变成员实际用的参数（固定成员不记）。
+func presetParams(plan Plan, params map[string]map[string]float64, subject string) {
+	for _, member := range plan.Members {
+		if member.IsVar() {
+			params[member.Key] = MemberParamValues(plan, member, subject)
+		}
+	}
+}
+
+// hasVarMember 报告成员里有没有可变成员。
+func hasVarMember(members []domain.MemberDef) bool {
+	for _, member := range members {
+		if member.IsVar() {
+			return true
+		}
+	}
+	return false
 }
 
 // MemberParamValues 返回成员在标的 subject 上本次计算实际用的参数（参数名 → 取值）；没有参数的成员是空对象。

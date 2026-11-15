@@ -68,7 +68,8 @@ const maxChunkRetryBackoff = 2 * time.Minute
 // ErrGated 表示任务被生命周期门禁挡住（暂停、重置……），这一块没有运行；调用方不应把它当作失败。
 var ErrGated = errors.New("factor task is gated by lifecycle")
 
-// ParamReader 读取已有结果行的 __params：补算按它还原每一期每个标的当时用的参数（设计 7.4）。
+// ParamReader 读取已有结果行的 __params：补算按它还原每一期每个标的当时用的可变成员参数（设计 7.4）。__params 只记可变成员，
+// 被选成员里没有可变成员时不读。
 type ParamReader interface {
 	// ReadRowParams 返回 [start, end) 内这些标的已有行的 __params（行 → 成员键 → 参数名 → 取值）；不存在的行不在结果里。
 	ReadRowParams(ctx context.Context, set domain.FactorTask, subjects []string, start, end time.Time) (map[pipeline.RowKey]map[string]map[string]float64, error)
@@ -235,9 +236,10 @@ func (e *Executor) runSegments(ctx context.Context, selection Selection, start, 
 	return merged, nil
 }
 
-// readParams 读取 [start, end) 内已有行的 __params；没有设置读取方时返回空。
+// readParams 读取 [start, end) 内已有行的 __params；没有设置读取方、或被选成员里没有可变成员（固定成员直接用自己的参数，
+// __params 也不记它们）时不读，返回空。
 func (e *Executor) readParams(ctx context.Context, selection Selection, start, end time.Time) (paramRows, error) {
-	if e.params == nil {
+	if e.params == nil || len(varMembers(selection.Members)) == 0 {
 		return paramRows{}, nil
 	}
 	rows, err := e.params.ReadRowParams(ctx, selection.Set, selection.Subjects, start, end)
@@ -476,7 +478,7 @@ func newParamRows(rows map[pipeline.RowKey]map[string]map[string]float64) paramR
 	return paramRows{rows: rows, byPeriod: byPeriod}
 }
 
-// segment 是从某期起参数不变的一段 [start, end)：各成员本段用的快照、本段按默认参数新补的期次，以及本段内已有行的 __params。
+// segment 是从某期起参数不变的一段 [start, end)：各成员本段用的快照、本段按默认参数新补的可变成员期次，以及本段内已有行的 __params。
 type segment struct {
 	end           time.Time
 	params        map[string]domain.ParamSnapshot
@@ -484,16 +486,22 @@ type segment struct {
 	base          map[pipeline.RowKey]map[string]map[string]float64
 }
 
-// paramSegment 返回从 start 起参数不变的一段（不超过 limit）：段内每一期、每个标的、每个被选成员的已有参数都相同。
+// paramSegment 返回从 start 起参数不变的一段（不超过 limit）：段内每一期、每个标的、每个被选可变成员的已有参数都相同。
 // 已有行里没有这个标的、或没有这个成员时，该成员在这个标的上取成员自己的参数，这一期记为按默认参数新补。
+// 固定成员一律用自己的参数，不看已有行；被选成员里没有可变成员时整段就是 [start, limit)，也不带已有行的 __params。
 func paramSegment(selection Selection, base paramRows, start, limit time.Time, duration time.Duration) segment {
+	tuned := varMembers(selection.Members)
 	first := base.byPeriod[start.UTC().Unix()]
 	end := start.Add(duration)
-	for end.Before(limit) && sameParams(selection, first, base.byPeriod[end.UTC().Unix()]) {
+	for end.Before(limit) && (len(tuned) == 0 || sameParams(selection.Subjects, tuned, first, base.byPeriod[end.UTC().Unix()])) {
 		end = end.Add(duration)
 	}
 	seg := segment{end: end, params: make(map[string]domain.ParamSnapshot, len(selection.Members)), defaultFilled: map[string][]time.Time{}}
 	for _, member := range selection.Members {
+		if !member.IsVar() {
+			seg.params[member.Key] = domain.MemberSnapshot(member)
+			continue
+		}
 		defaults := domain.MemberSnapshot(member)
 		snapshot := make(domain.ParamSnapshot, len(defaults))
 		for name, value := range defaults {
@@ -519,10 +527,13 @@ func paramSegment(selection Selection, base paramRows, start, limit time.Time, d
 		}
 		seg.params[member.Key] = snapshot
 		for at := start; at.Before(end); at = at.Add(duration) {
-			if missingFor(selection, base.byPeriod[at.UTC().Unix()], member.Key) {
+			if missingFor(selection.Subjects, base.byPeriod[at.UTC().Unix()], member.Key) {
 				seg.defaultFilled[member.Key] = append(seg.defaultFilled[member.Key], at.UTC())
 			}
 		}
+	}
+	if len(tuned) == 0 {
+		return seg
 	}
 	seg.base = make(map[pipeline.RowKey]map[string]map[string]float64)
 	for key, members := range base.rows {
@@ -533,9 +544,20 @@ func paramSegment(selection Selection, base paramRows, start, limit time.Time, d
 	return seg
 }
 
-// missingFor 报告这一期里有没有哪个被选标的缺少这个成员的已有参数（行不存在，或 __params 里没有这个成员）。
-func missingFor(selection Selection, period map[string]map[string]map[string]float64, memberKey string) bool {
-	for _, subject := range selection.Subjects {
+// varMembers 返回成员里的可变成员（保持原顺序）。
+func varMembers(members []domain.MemberDef) []domain.MemberDef {
+	var out []domain.MemberDef
+	for _, member := range members {
+		if member.IsVar() {
+			out = append(out, member)
+		}
+	}
+	return out
+}
+
+// missingFor 报告这一期里有没有哪个被选标的缺少这个可变成员的已有参数（行不存在，或 __params 里没有这个成员）。
+func missingFor(subjects []string, period map[string]map[string]map[string]float64, memberKey string) bool {
+	for _, subject := range subjects {
 		if _, ok := period[subject][memberKey]; !ok {
 			return true
 		}
@@ -543,10 +565,10 @@ func missingFor(selection Selection, period map[string]map[string]map[string]flo
 	return false
 }
 
-// sameParams 报告两期里每个被选标的、每个被选成员的已有参数是否完全相同（缺失与缺失相同，缺失与存在不同）。
-func sameParams(selection Selection, left, right map[string]map[string]map[string]float64) bool {
-	for _, subject := range selection.Subjects {
-		for _, member := range selection.Members {
+// sameParams 报告两期里每个被选标的、每个给定可变成员的已有参数是否完全相同（缺失与缺失相同，缺失与存在不同）。
+func sameParams(subjects []string, members []domain.MemberDef, left, right map[string]map[string]map[string]float64) bool {
+	for _, subject := range subjects {
+		for _, member := range members {
 			l, lok := left[subject][member.Key]
 			r, rok := right[subject][member.Key]
 			if lok != rok || len(l) != len(r) {
@@ -639,9 +661,9 @@ func DegradedNote(outcome pipeline.Outcome) string {
 	return note
 }
 
-// filterDefaultFilled 只保留确实按默认参数新补出值的期次：该期有某个标的写出了这个成员的值，并且这个标的的已有行里没有它的参数
-// （行不存在，或 __params 里没有这个成员）。候选期次是按“任一被选标的缺参数”生成的，计算失败的标的、原来就有参数的标的都不算新补。
-// 没有逐项结果（Items 为空）说明没有任何值写出，结果为空。
+// filterDefaultFilled 只保留确实按默认参数新补出值的期次：该期有某个标的写出了这个可变成员的值，并且这个标的的已有行里没有它的参数
+// （行不存在，或 __params 里没有这个成员）。候选期次只对可变成员、按“任一被选标的缺参数”生成（固定成员用自己的参数，谈不上按默认参数新补），
+// 计算失败的标的、原来就有参数的标的都不算新补。没有逐项结果（Items 为空）说明没有任何值写出，结果为空。
 func filterDefaultFilled(selection Selection, base paramRows, filled map[string][]time.Time, items map[pipeline.ItemKey]pipeline.ItemStatus) map[string][]time.Time {
 	if len(items) == 0 || len(filled) == 0 {
 		return nil

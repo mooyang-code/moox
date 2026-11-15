@@ -89,14 +89,14 @@ func TestStrategySchemaIndexesAndConstraints(t *testing.T) {
 		"CHECK (c_publish_status IN ('none', 'pending', 'sent', 'cancelled'))",
 		"UNIQUE (c_instance_id, c_session_id, c_bar_end_time)",
 		"CREATE TABLE IF NOT EXISTS t_strategy_instance_tasks",
-		"UNIQUE (c_factor_task_id)",
+		"CREATE INDEX IF NOT EXISTS idx_t_strategy_instance_tasks_task ON t_strategy_instance_tasks (c_factor_task_id);",
 		"ON DELETE CASCADE",
 	} {
 		if !strings.Contains(sql, part) {
 			t.Errorf("schema 缺少 %q", part)
 		}
 	}
-	for _, obsolete := range []string{"c_rule_states_json", "c_warm_state", "data_revision", "input_bindings_json", "snapshot_json", "c_topic", "c_payload"} {
+	for _, obsolete := range []string{"unique (c_factor_task_id)", "c_rule_states_json", "c_warm_state", "data_revision", "input_bindings_json", "snapshot_json", "c_topic", "c_payload"} {
 		if strings.Contains(strings.ToLower(sql), obsolete) {
 			t.Errorf("schema 仍包含过时列 %q", obsolete)
 		}

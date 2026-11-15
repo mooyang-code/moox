@@ -21,7 +21,10 @@ export interface DeleteTaskLine {
   factorTask?: FactorTask;
 }
 
-/** 任务是否随实例删除：绑定到此实例的，以及因子服务里已经没有的（上次删除时已删掉）；其余（没绑定、绑定到别的实例）保留。 */
+/**
+ * 任务是否随实例删除：关联到此实例的（写了 factor_params 的实例启用时关联），以及因子服务里已经没有的（上次删除时已删掉）；
+ * 其余（不调参的实例只读、不关联的任务，关联到别的实例的任务）保留。关联到此实例的任务还被别的实例引用时，服务端拒绝删除并列出引用方。
+ */
 export function deletedWithInstance(instanceId: string, task: DeleteTaskLine): boolean {
   return !task.factorTask || task.factorTask.bound_instance_id === instanceId;
 }
@@ -42,9 +45,11 @@ export function instanceDeleteLines(instanceId: string, tasks: DeleteTaskLine[])
     lines.push(`${market}：计算任务 ${task.taskId}${name}，结果数据集 ${task.factorTask.result_dataset_id || "-"}`);
   }
   if (kept.length) {
-    lines.push("保留的计算任务（只去掉实例对它的引用）：");
-    for (const task of kept) lines.push(`${taskKeyLabel(task.market)}：计算任务 ${task.taskId}，未绑定到此实例`);
+    lines.push("保留的计算任务（只去掉实例对它的引用，任务照常计算，不用了到「因子」模块手动停用）：");
+    for (const task of kept) lines.push(`${taskKeyLabel(task.market)}：计算任务 ${task.taskId}，未关联到此实例`);
   }
+  if (removed.some(task => task.factorTask))
+    lines.push("关联到此实例的计算任务还被别的实例引用时不能删除，要先删除那些实例（服务端会列出）。");
   lines.push("结果数据不可恢复。交易模块里的历史目标和订单保留。");
   return lines;
 }

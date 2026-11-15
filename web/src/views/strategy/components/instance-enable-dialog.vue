@@ -33,7 +33,10 @@
       <p class="line">
         启用会固化会话快照，并认领这个组合账户的会话（会撤掉上一个会话留下的目标挂单）：之后的策略目标由它执行下单。
       </p>
-      <p class="line">计算任务 {{ factorTaskText }} 会与本实例永久关联（已关联的不变），实例不能删除。</p>
+      <p class="line">
+        写了 factor_params 的实例会把计算任务
+        {{ factorTaskText }} 与本实例永久关联（已关联的不变）；其余实例只读任务的列，不关联。
+      </p>
       <p class="line">{{ ENABLE_STATE_TIP }}</p>
       <p v-if="paused" class="line">组合账户已暂停自动执行：启用后不会下单，直到在交易页恢复自动执行。</p>
       <a-form v-if="tier.requiresName" :model="{}" layout="vertical" class="block">

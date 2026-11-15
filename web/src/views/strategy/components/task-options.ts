@@ -1,3 +1,4 @@
+import { parseDocument } from "yaml";
 import type { FactorTaskInfo } from "@/api/factor/types";
 
 /** 创建实例时可选的计算任务：列出任务的全部结果列名，策略 DSL 里直接写这些列名。 */
@@ -10,8 +11,10 @@ export interface TaskOption {
   freq: string;
   /** 任务全部成员的结果列名（按成员顺序）。 */
   columns: string[];
-  /** 可变成员的成员键：策略的 factor_params 要为它们逐个给出参数。 */
+  /** 可变成员的成员键：声明了 factor_params 的策略要为它们逐个给出参数，其余策略只读它们的列。 */
   varMembers: string[];
+  /** 任务关联的实例（声明了 factor_params 的实例启用时独占关联）；空串表示没有关联。 */
+  boundInstanceId: string;
 }
 
 /** 任务的全部结果列名。 */
@@ -19,7 +22,7 @@ export function taskColumns(info: Pick<FactorTaskInfo, "members">): string[] {
   return (info.members || []).flatMap(member => member.output_columns ?? []);
 }
 
-/** 当前空间里运行中的计算任务（试算只读，不要求未关联实例）；按名称排序。 */
+/** 当前空间里运行中的计算任务（试算与不调参的实例只读，不要求未关联实例）；按名称排序。 */
 export function enabledTasks(infos: FactorTaskInfo[], spaceId: string): TaskOption[] {
   return infos
     .filter(info => info.factor_task.space_id === spaceId && info.factor_task.status === "enabled")
@@ -29,17 +32,30 @@ export function enabledTasks(infos: FactorTaskInfo[], spaceId: string): TaskOpti
       name: info.factor_task.name || info.factor_task.task_id,
       freq: info.factor_task.freq,
       columns: taskColumns(info),
-      varMembers: (info.members || []).filter(member => member.kind === "var").map(member => member.member_key)
+      varMembers: (info.members || []).filter(member => member.kind === "var").map(member => member.member_key),
+      boundInstanceId: info.factor_task.bound_instance_id || ""
     }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.taskId.localeCompare(b.taskId));
 }
 
+/** DSL 是否声明了 factor_params：声明了的实例启用时独占关联主帧任务、逐期提交参数；解析不了按没有声明处理（服务端预检再核对）。 */
+export function declaresFactorParams(dslYaml: string): boolean {
+  try {
+    const document = parseDocument(dslYaml).toJS();
+    return Boolean(
+      document && typeof document === "object" && document.factor_params !== undefined && document.factor_params !== null
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
- * 创建实例时可选的任务：当前空间里运行中、还没有关联实例的计算任务（关联是独占且永久的）；按名称排序。
+ * 创建实例时某个任务键下能不能选这个任务：声明了 factor_params 的实例要独占关联主帧任务，已关联到别的实例的主帧任务不能选；
+ * 附加来源的任务、不调参的实例只读任务的列，不关联，已关联到别的实例的任务也能选。
  */
-export function availableTasks(infos: FactorTaskInfo[], spaceId: string): TaskOption[] {
-  const unbound = new Set(infos.filter(info => !info.factor_task.bound_instance_id).map(info => info.factor_task.task_id));
-  return enabledTasks(infos, spaceId).filter(task => unbound.has(task.taskId));
+export function selectableTask(task: Pick<TaskOption, "boundInstanceId">, tuned: boolean, source: string): boolean {
+  return !(tuned && !source && task.boundInstanceId);
 }
 
 /** 任务是否在统一数据集上（源数据集的 market_type 是 multi，一个任务同时覆盖现货与永续）。 */

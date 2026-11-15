@@ -37,7 +37,8 @@ type FactorTask struct {
 	Status          string `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
 	CreatedAt       string `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt       string `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// bound_instance_id 是关联的策略实例：一个任务只关联一个实例，一个实例可以关联多个任务；写入后不能修改；为空表示还没有关联。
+	// bound_instance_id 是关联的策略实例：只有声明了 factor_params 的实例启用时关联（独占可变成员的参数提交），一个任务只关联一个实例，
+	// 一个实例可以关联多个任务；写入后不能修改；为空表示没有关联（不调参的实例只读任务的列，不关联）。
 	BoundInstanceId string `protobuf:"bytes,11,opt,name=bound_instance_id,json=boundInstanceId,proto3" json:"bound_instance_id,omitempty"`
 }
 
@@ -5101,8 +5102,8 @@ func (x *SetFactorCategoryRsp) GetFactor() *FactorDef {
 	return nil
 }
 
-// BindFactorTask 把任务与策略实例关联（独占）：同一个实例重复调用直接成功，换一个实例则拒绝；写入后不能修改或清空，
-// 只随 DeleteBoundTask 与任务一起删除。
+// BindFactorTask 把任务与策略实例关联（独占，只给声明了 factor_params 的实例）：同一个实例重复调用直接成功，换一个实例则拒绝；
+// 任务没有可变成员时拒绝；写入后不能修改或清空，只随 DeleteBoundTask 与任务一起删除。
 type BindFactorTaskReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -6484,9 +6485,10 @@ type ActivateUdfRsp struct {
 	NewHash string            `protobuf:"bytes,4,opt,name=new_hash,json=newHash,proto3" json:"new_hash,omitempty"`
 	DryRun  bool              `protobuf:"varint,5,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
 	// applied 为真表示已经切换。
-	Applied       bool               `protobuf:"varint,6,opt,name=applied,proto3" json:"applied,omitempty"`
-	Impacts       []*UdfImpact       `protobuf:"bytes,7,rep,name=impacts,proto3" json:"impacts,omitempty"`
-	Tasks         []string           `protobuf:"bytes,8,rep,name=tasks,proto3" json:"tasks,omitempty"`
+	Applied bool         `protobuf:"varint,6,opt,name=applied,proto3" json:"applied,omitempty"`
+	Impacts []*UdfImpact `protobuf:"bytes,7,rep,name=impacts,proto3" json:"impacts,omitempty"`
+	Tasks   []string     `protobuf:"bytes,8,rep,name=tasks,proto3" json:"tasks,omitempty"`
+	// instances 是受影响任务关联的策略实例：只有声明了 factor_params 的实例会关联任务，只读任务的实例不在其中。
 	Instances     []string           `protobuf:"bytes,9,rep,name=instances,proto3" json:"instances,omitempty"`
 	Prerequisites []*UdfPrerequisite `protobuf:"bytes,10,rep,name=prerequisites,proto3" json:"prerequisites,omitempty"`
 	Notes         []string           `protobuf:"bytes,11,rep,name=notes,proto3" json:"notes,omitempty"`

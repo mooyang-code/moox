@@ -150,8 +150,8 @@ func readStrategyDeleteInstance(ctx context.Context, client *adminclient.Client,
 	}
 }
 
-// strategyDeleteTasks 按市场列出实例的因子任务与结果数据集，按绑定分组：绑定到此实例的将删除，没绑定的保留，
-// Factor 里已经不存在的标为已删除。
+// strategyDeleteTasks 按市场列出实例的因子任务与结果数据集，按关联分组：关联到此实例的将删除（还被别的实例引用时服务端拒绝），
+// 没关联的保留，Factor 里已经不存在的标为已删除。
 func strategyDeleteTasks(ctx context.Context, gateway commandGateway, spaceID string, instance strategyDeleteInstance) ([]strategyDeleteTask, error) {
 	var tasks []strategyDeleteTask
 	for _, market := range []string{"spot", "swap", "equity", "multi"} {
@@ -168,7 +168,7 @@ func strategyDeleteTasks(ctx context.Context, gateway commandGateway, spaceID st
 		case commonpb.ErrorCode_SUCCESS:
 			task.Name, task.ResultDatasetID = rsp.GetFactorTask().GetName(), rsp.GetFactorTask().GetResultDatasetId()
 			if rsp.GetFactorTask().GetBoundInstanceId() != instance.InstanceID {
-				task.State, task.Reason = "kept", "未绑定到此实例"
+				task.State, task.Reason = "kept", "未关联到此实例"
 			}
 		case commonpb.ErrorCode_NOT_FOUND:
 			task.State = "already_deleted"

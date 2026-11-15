@@ -37,7 +37,7 @@ func rowFields(rows []storageio.ResultRow, target time.Time) map[string]map[stri
 }
 
 // 提交的参数真正改变计算：默认值之外的标的级覆盖让两个标的用不同的窗口；可变成员与固定成员各用各的参数，
-// 结果列按成员键命名，__params 写这个标的这一期各成员实际用的值，成员状态带成员键与类型。
+// 结果列按成员键命名，__params 只写这个标的这一期各可变成员实际用的值（固定成员不记），成员状态带成员键与类型。
 func TestComputeAndAssembleUsePerSubjectParams(t *testing.T) {
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	plan := computePlan(target, nil, []string{"BTC", "ETH"})
@@ -67,8 +67,8 @@ func TestComputeAndAssembleUsePerSubjectParams(t *testing.T) {
 	require.NoError(t, err)
 	fields := rowFields(rows, target)
 	require.Equal(t, 202.5, fields["ETH"]["pmean__var"])
-	require.Equal(t, `{"pmean__5":{"window":5},"pmean__var":{"window":4}}`, string(fields["ETH"][factorname.ParamsColumn].(storageio.JSONText)), "__params 写实际用的值")
-	require.Equal(t, `{"pmean__5":{"window":5},"pmean__var":{"window":2}}`, string(fields["BTC"][factorname.ParamsColumn].(storageio.JSONText)))
+	require.Equal(t, `{"pmean__var":{"window":4}}`, string(fields["ETH"][factorname.ParamsColumn].(storageio.JSONText)), "__params 写实际用的值")
+	require.Equal(t, `{"pmean__var":{"window":2}}`, string(fields["BTC"][factorname.ParamsColumn].(storageio.JSONText)))
 	for name := range fields["BTC"] {
 		require.NotContains(t, name, "__window", "不再有参数列：%s", name)
 	}
@@ -151,4 +151,21 @@ func TestAssembleWritesEmptyParamsWhenOnlyMemberFailed(t *testing.T) {
 	rows, err := runner.Assemble(plan, loaded, computation)
 	require.NoError(t, err)
 	require.Equal(t, `{}`, string(rowFields(rows, target)["BTC"][factorname.ParamsColumn].(storageio.JSONText)))
+}
+
+// 只补固定成员（本次计算没有可变成员）：不写 __params 这一列，Storage 只更新请求带的字段，原行里可变成员的记录不动。
+func TestAssembleFixedOnlyDoesNotWriteParams(t *testing.T) {
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	plan := computePlan(target, nil, []string{"BTC"})
+	fixed := pmeanMember(t, domain.MemberKindFixed, map[string]float64{"window": 3})
+	plan.Members = []domain.MemberDef{fixed}
+	loaded := withView(t, framesForBars(plan.Available, target, 5))
+	runner := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{ComputeWorkers: 1})
+	computation, err := runner.Compute(context.Background(), plan, loaded)
+	require.NoError(t, err)
+	rows, err := runner.Assemble(plan, loaded, computation)
+	require.NoError(t, err)
+	fields := rowFields(rows, target)["BTC"]
+	require.Equal(t, 103.0, fields[fixed.Key])
+	require.NotContains(t, fields, factorname.ParamsColumn)
 }

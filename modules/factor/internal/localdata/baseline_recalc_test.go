@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +32,8 @@ import (
 // 这份文件最初是按标的处理时生成的，所以它同时证明单序列数据集上两种口径的结果相同。
 // 场景：全部成员、只补可变成员、只补固定成员、只填充、只选数据齐全的标的；数据里有收盘价为 null 的根、中途断档的标的、中途停止的标的、区间内才上市的标的、
 // 本地完全没有数据的标的，已有结果行里记着与默认值不同的 __params（补算按它分参数段并合并写回）。
+// __params 经真实的 recalcexec.StorageParamReader 从结果数据集读（批 3 T9）：它只记可变成员，被选成员里没有可变成员时不读、不按参数分段、
+// 不写这一列，固定成员也不再记“按默认参数新补”。
 // 按序列的名单（failed_series、skipped_series_tags）不进金样：按标的处理时它们是空的，按序列处理时有内容；
 // 按标的的名单、状态、逐项结果与写出的行必须不变。
 // 金样由当前代码生成，默认只比对；有意改变结果时用 UPDATE_BASELINE=1 重新生成。
@@ -121,7 +124,7 @@ func baselineRecalcMembers(t *testing.T) (fixed []domain.FactorDef, variable dom
 
 // baselineRecalcFixture 建好本地数据与已有的结果行。已有行（都带旧的 mean 值）：
 // 第 41～44 分钟 S1、S2 的 pmean 记着 window=6；第 45 分钟 S1 记着 window=8，S2 的行里没有 pmean；
-// 每一行还记着固定成员 mean 的空参数与一个已经不在任务里的成员 gone__var，补算只替换本次计算的成员，其余记录保留。
+// 每一行还记着一个已经不在任务里的可变成员 gone__var，补算只替换本次计算的可变成员，其余记录保留。__params 只记可变成员，已有行里没有固定成员的条目。
 func baselineRecalcFixture(t *testing.T) (*fixture, []domain.MemberDef) {
 	t.Helper()
 	fixed, variable := baselineRecalcMembers(t)
@@ -140,15 +143,8 @@ func baselineRecalcFixture(t *testing.T) (*fixture, []domain.MemberDef) {
 		}
 	}
 	fx.now = at(60)
-	meanKey := ""
-	for _, member := range fx.set.Members {
-		if member.Factor.FactorID == "mean" {
-			meanKey = member.Key
-		}
-	}
-	require.NotEmpty(t, meanKey)
 	preset := func(subject string, minute int, pmean map[string]float64) {
-		members := map[string]map[string]float64{meanKey: {}, "gone__var": {"span": 5}}
+		members := map[string]map[string]float64{"gone__var": {"span": 5}}
 		if pmean != nil {
 			members[variable.Key] = pmean
 		}
@@ -166,32 +162,54 @@ func baselineRecalcFixture(t *testing.T) (*fixture, []domain.MemberDef) {
 	return fx, fx.set.Members
 }
 
-// baselineRecalcParams 从内存里的结果行读 __params，口径与 recalcexec.StorageParamReader 相同。
-type baselineRecalcParams struct{ st *fakeStorage }
+// baselineResultStore 让真实的 recalcexec.StorageParamReader 读内存里的结果行：ReadWindow 按请求的列返回结果数据集的行，
+// 并记下每次读取（固定成员的补算不应读 __params）。其余方法不会被参数读取方调用。
+type baselineResultStore struct {
+	storageio.Store
+	st    *fakeStorage
+	mu    sync.Mutex
+	reads []storageio.ReadRequest
+}
 
-func (r baselineRecalcParams) ReadRowParams(_ context.Context, _ domain.FactorTask, subjects []string, start, end time.Time) (map[pipeline.RowKey]map[string]map[string]float64, error) {
+func (r *baselineResultStore) ReadWindow(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+	r.mu.Lock()
+	r.reads = append(r.reads, req)
+	r.mu.Unlock()
 	r.st.mu.Lock()
 	defer r.st.mu.Unlock()
-	wanted := make(map[string]bool, len(subjects))
-	for _, subject := range subjects {
+	wanted := make(map[string]bool, len(req.Subjects))
+	for _, subject := range req.Subjects {
 		wanted[subject] = true
 	}
-	out := map[pipeline.RowKey]map[string]map[string]float64{}
-	for _, row := range r.st.results {
-		if !wanted[row.SubjectID] || row.DataTime.Before(start) || !row.DataTime.Before(end) {
-			continue
-		}
-		text, ok := row.Fields[factorname.ParamsColumn].(storageio.JSONText)
-		if !ok || text == "" {
-			continue
-		}
-		members, err := factorname.ParseParams(string(text))
-		if err != nil {
-			continue
-		}
-		out[pipeline.RowKey{Subject: row.SubjectID, At: row.DataTime.UTC(), Tag: row.SeriesTag}] = members
+	frames := map[string]*storageio.Frame{}
+	keys := make([]string, 0, len(r.st.results))
+	for key := range r.st.results {
+		keys = append(keys, key)
 	}
-	return out, nil
+	sort.Strings(keys)
+	for _, key := range keys {
+		row := r.st.results[key]
+		if !wanted[row.SubjectID] || row.DataTime.Before(req.Start) || !row.DataTime.Before(req.End) {
+			continue
+		}
+		frame := frames[row.SubjectID]
+		if frame == nil {
+			frame = &storageio.Frame{SubjectID: row.SubjectID, Columns: append([]string{"data_time", "series_tag"}, req.Columns...)}
+			frames[row.SubjectID] = frame
+		}
+		values := []any{row.DataTime, row.SeriesTag}
+		for _, column := range req.Columns {
+			values = append(values, row.Fields[column])
+		}
+		frame.Rows = append(frame.Rows, values)
+	}
+	return frames, nil
+}
+
+func (r *baselineResultStore) readCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.reads)
 }
 
 type baselineRecalcScenario struct {
@@ -276,7 +294,8 @@ func baselineRecalcRun(t *testing.T, scenario baselineRecalcScenario, withSeries
 	}
 	stamp := func(at time.Time) string { return at.UTC().Format(time.RFC3339) }
 	// 每 5 期一块：12 期分成三块，参数段还会在块内再分。
-	executor := recalcexec.NewExecutor(fx.runner, recalcexec.WithChunkPeriods(5), recalcexec.WithParamReader(baselineRecalcParams{st: fx.st}))
+	results := &baselineResultStore{st: fx.st}
+	executor := recalcexec.NewExecutor(fx.runner, recalcexec.WithChunkPeriods(5), recalcexec.WithParamReader(recalcexec.NewStorageParamReader(results)))
 	err := executor.Run(context.Background(), recalcexec.Window{Start: at(baselineRecalcFrom), End: at(baselineRecalcTo)},
 		func(context.Context) (recalcexec.Selection, error) { return selection, nil },
 		func(_ context.Context, progress time.Time, outcome pipeline.Outcome) (bool, error) {
@@ -340,6 +359,19 @@ func baselineRecalcRun(t *testing.T, scenario baselineRecalcScenario, withSeries
 			return false, nil
 		})
 	require.NoError(t, err)
+	// 被选成员里没有可变成员时不读 __params；有可变成员时每个参数段之前都读，请求只带 __params 一列。
+	hasVar := false
+	for _, member := range selected {
+		hasVar = hasVar || member.IsVar()
+	}
+	if !hasVar {
+		require.Zero(t, results.readCount(), "场景 %s：只补固定成员不应读 __params", scenario.name)
+	} else {
+		require.NotZero(t, results.readCount(), "场景 %s：有可变成员时要读 __params", scenario.name)
+		for _, req := range results.reads {
+			require.Equal(t, []string{factorname.ParamsColumn}, req.Columns)
+		}
+	}
 
 	fx.st.mu.Lock()
 	defer fx.st.mu.Unlock()

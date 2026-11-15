@@ -8,14 +8,14 @@ export const ENABLE_STATE_TIP =
   "DSL、绑定和成员都没变时，会沿用停用前的持有记录、止损入场价和冷却；人工平过仓或想从头开始，先清空规则状态再启用：用 moox-cli strategy instance update 原样提交一次，或改一下策略 DSL（详见策略文档“想从头开始”）。";
 
 /**
- * 启停确认框的文案：停用强调不清仓；启用说明会固化快照、计算任务会永久关联。
+ * 启停确认框的文案：停用强调不清仓；启用说明会固化快照，写了 factor_params 的实例会永久关联主帧任务。
  * 绑了组合账户的实例启用时不走这里，改用 instance-enable-dialog.vue（要写明账户和环境，生产要输入组合名称）。
  */
 export function instanceToggleCopy(enable: boolean) {
   return enable
     ? {
         title: "启用实例",
-        content: `启用会解析 View、列与因子指纹并固化会话快照；计算任务会与本实例永久关联（已关联的不变）。${ENABLE_STATE_TIP}确认启用？`,
+        content: `启用会解析 View、列与因子指纹并固化会话快照；写了 factor_params 的实例会把主帧计算任务与本实例永久关联（已关联的不变），其余实例只读任务的列。${ENABLE_STATE_TIP}确认启用？`,
         okText: "确认启用"
       }
     : {

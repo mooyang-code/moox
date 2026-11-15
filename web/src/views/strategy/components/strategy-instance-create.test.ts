@@ -494,7 +494,7 @@ describe("strategy instance creation behavior", () => {
     expect(wrapper.findAll("option").some(item => item.text().includes("ftask_a"))).toBe(true);
   });
 
-  it("offers only running, unbound tasks of the space and says so when there are none", async () => {
+  it("offers running tasks of the space; only a factor_params definition hides tasks bound to another instance", async () => {
     api.listFactorTasks.mockResolvedValue({
       factor_tasks: [
         taskInfo({}, "ftask_ok"),
@@ -504,14 +504,27 @@ describe("strategy instance creation behavior", () => {
       ],
       page_result: { has_more: false }
     });
+    const taskOptions = (wrapper: { findAll: (selector: string) => any[] }) =>
+      wrapper.findAll("option").map(item => item.text() as string);
+    // 没有 factor_params：只读任务的列，已关联到别的实例的任务也能选。
     const { wrapper } = await open({ presetStrategyId: "s1" });
-    const options = wrapper.findAll("option").map(item => item.text());
-    expect(options.some(text => text.includes("ftask_ok"))).toBe(true);
-    for (const hidden of ["ftask_bound", "ftask_off", "ftask_other"])
-      expect(options.some(text => text.includes(hidden))).toBe(false);
+    const options = taskOptions(wrapper);
+    for (const shown of ["ftask_ok", "ftask_bound"]) expect(options.some(text => text.includes(shown))).toBe(true);
+    for (const hidden of ["ftask_off", "ftask_other"]) expect(options.some(text => text.includes(hidden))).toBe(false);
+    expect(wrapper.text()).toContain("多个实例可以共用同一个任务");
+
+    // 写了 factor_params：启用时独占关联主帧任务，已关联到别的实例的不能选。
+    const tuned = [
+      { ...strategies[0], dsl_yaml: "name: demo\nmarket: {select: swap}\nfactor_params:\n  bias__var:\n    window: 20\n" }
+    ];
+    const opened = await open({ presetStrategyId: "s1", strategies: tuned });
+    const tunedOptions = taskOptions(opened.wrapper);
+    expect(tunedOptions.some(text => text.includes("ftask_ok"))).toBe(true);
+    expect(tunedOptions.some(text => text.includes("ftask_bound"))).toBe(false);
+    expect(opened.wrapper.text()).toContain("已关联到别的实例的任务不能选");
 
     api.listFactorTasks.mockResolvedValue({
-      factor_tasks: [taskInfo({ bound_instance_id: "i0" })],
+      factor_tasks: [taskInfo({ status: "disabled" })],
       page_result: { has_more: false }
     });
     const empty = await open({ presetStrategyId: "s1" });
@@ -525,6 +538,7 @@ describe("strategy instance creation behavior", () => {
     expect(wrapper.text()).toContain("任务的列");
     expect(wrapper.text()).toContain("bias__var");
     expect(wrapper.text()).toContain("可变成员 bias__var");
+    expect(wrapper.text()).toContain("本策略只读它的列");
   });
   it("initializes the form and metadata when it is mounted already open (deep link)", async () => {
     const { flushPromises, mount } = await import("@vue/test-utils");

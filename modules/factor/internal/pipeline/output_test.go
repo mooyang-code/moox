@@ -40,7 +40,7 @@ func TestAssembleCarriesSourceColumnsOnSourceTagRows(t *testing.T) {
 	computation := successfulComputation(factor, []string{"data_time", "series_tag", factor.Outputs[0]}, [][]any{{target, "venue:binance", 12.0}})
 	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
 	require.NoError(t, err)
-	require.Equal(t, map[string]any{"close": 10.0, "volume": int64(42), factor.Outputs[0]: 12.0, "__params": storageio.JSONText(`{"momentum":{}}`)}, rows[0].Fields)
+	require.Equal(t, map[string]any{"close": 10.0, "volume": int64(42), factor.Outputs[0]: 12.0}, rows[0].Fields, "只有固定成员时不写 __params")
 }
 
 func TestAssembleDerivedTagWritesFactorColumnsOnly(t *testing.T) {
@@ -62,7 +62,7 @@ func TestAssembleDerivedTagWritesFactorColumnsOnly(t *testing.T) {
 			derived = row
 		}
 	}
-	require.Equal(t, map[string]any{"spread": 1.5, "__params": storageio.JSONText(`{"spread":{}}`)}, derived.Fields)
+	require.Equal(t, map[string]any{"spread": 1.5}, derived.Fields)
 }
 
 func TestAssembleFailedFactorWritesNull(t *testing.T) {

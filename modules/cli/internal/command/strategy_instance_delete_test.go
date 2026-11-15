@@ -86,7 +86,7 @@ func TestStrategyInstanceDeleteOnlyPreviewsWithoutYes(t *testing.T) {
 	kept := preview["keep_factor_tasks"].([]any)
 	require.Len(t, kept, 1)
 	assert.Equal(t, "ftask_shared", kept[0].(map[string]any)["task_id"])
-	assert.Equal(t, "未绑定到此实例", kept[0].(map[string]any)["reason"])
+	assert.Equal(t, "未关联到此实例", kept[0].(map[string]any)["reason"])
 	assert.NotContains(t, gateway.methods, "DeleteStrategyInstance")
 }
 
