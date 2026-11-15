@@ -7,11 +7,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud"
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud/tencentscf"
 	"github.com/mooyang-code/moox/modules/collector/internal/eventbus"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -26,11 +29,11 @@ type Config struct {
 	Database      DatabaseConfig                   `yaml:"database"`
 	SCFAccess     gatewayclient.ExternalFileConfig `yaml:"scf_access"`
 	// SCFRegions 是各地域的函数网络；SCFMarkets 是每个空间、市场使用的地域；SCFPlan 是函数部署参数。
-	SCFRegions         map[string]marketfetch.PlanNetwork `yaml:"scf_regions"`
-	SCFMarkets         map[string]map[string][]string     `yaml:"scf_markets"`
-	SCFPlan            SCFPlanConfig                      `yaml:"scf_plan"`
-	CollectorRetention CollectorRetentionConfig           `yaml:"collector_retention"`
-	KlineResample      KlineResampleConfig                `yaml:"kline_resample"`
+	SCFRegions         map[string]fetchplan.PlanNetwork `yaml:"scf_regions"`
+	SCFMarkets         map[string]map[string][]string   `yaml:"scf_markets"`
+	SCFPlan            SCFPlanConfig                    `yaml:"scf_plan"`
+	CollectorRetention CollectorRetentionConfig         `yaml:"collector_retention"`
+	KlineResample      KlineResampleConfig              `yaml:"kline_resample"`
 	// EventBus 是 Collector 到 EventBus 的连接，K 线合成与下架检测共用；不配置时不发布任何事件，合成只靠兜底检查。
 	EventBus    eventbus.Config   `yaml:"event_bus"`
 	Health      HealthConfig      `yaml:"health"`
@@ -42,6 +45,31 @@ type Config struct {
 	EgressLimits EgressLimitsConfig `yaml:"egress_limits"`
 	// Stream 是 WS 推送采集的 Collector 侧参数（截止、提交预留随计划下发给 collector-stream）。
 	Stream StreamConfig `yaml:"stream"`
+	// Cloud 是 Collector 直接调腾讯云的参数：云函数接口限频与日志服务（CLS）开通。
+	Cloud CloudConfig `yaml:"cloud"`
+}
+
+// CloudConfig 是 Collector 直接调腾讯云的参数。
+type CloudConfig struct {
+	TencentSCF TencentSCFConfig `yaml:"tencent_scf"`
+	// CLS 是创建或更新采集函数时自动开通日志服务、补齐上报环境的配置；开通失败只记日志，不影响函数创建。
+	CLS cloud.CLSConfig `yaml:"cls"`
+}
+
+// TencentSCFConfig 是云函数接口的参数。
+type TencentSCFConfig struct {
+	// APIRateLimits 按接口覆盖本地限频（次/秒），不能超过官方限频；不写时用官方默认值。
+	APIRateLimits map[string]float64 `yaml:"api_rate_limits"`
+}
+
+func (c CloudConfig) validate() error {
+	if err := tencentscf.ValidateRateLimits(c.TencentSCF.APIRateLimits); err != nil {
+		return fmt.Errorf("cloud.tencent_scf.api_rate_limits: %w", err)
+	}
+	if err := c.CLS.Validate(); err != nil {
+		return fmt.Errorf("cloud.%w", err)
+	}
+	return nil
 }
 
 // EgressLimitsConfig 是各外部数据源的限流参数。
@@ -198,6 +226,9 @@ func Load(path string) (*Config, error) {
 	if err := cfg.Stream.validate(); err != nil {
 		return nil, err
 	}
+	if err := cfg.Cloud.validate(); err != nil {
+		return nil, err
+	}
 	if err := cfg.validateSCFPlan(); err != nil {
 		return nil, err
 	}
@@ -216,6 +247,12 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
+	}
+	// 日志保留天数由部署工具按 moox.toml 的 [logging] retention_days 下发；只在创建日志主题时生效。
+	if v := strings.TrimSpace(os.Getenv("MOOX_CLS_RETENTION_DAYS")); v != "" {
+		if days, err := strconv.ParseInt(v, 10, 64); err == nil && days > 0 {
+			c.Cloud.CLS.RetentionDays = days
+		}
 	}
 }
 
@@ -262,7 +299,7 @@ func (c *Config) validateCollectorRetention() error {
 	}
 	offset, offsetErr := time.ParseDuration(strings.TrimSpace(retention.MaintenanceOffset))
 	timeout, timeoutErr := time.ParseDuration(strings.TrimSpace(retention.MaintenanceTimeout))
-	if offsetErr != nil || timeoutErr != nil || marketfetch.ValidateMaintenanceSchedule(interval, offset, timeout) != nil {
+	if offsetErr != nil || timeoutErr != nil || fetchplan.ValidateMaintenanceSchedule(interval, offset, timeout) != nil {
 		return fmt.Errorf("collector_retention.maintenance_offset and maintenance_timeout must keep each pass inside one interval: 0 <= offset < interval and offset + timeout <= interval")
 	}
 	if retention.MaxRowsPerPass < 1 || retention.MaxRowsPerPass > 50000 {
@@ -287,6 +324,7 @@ func Default() *Config {
 		SubjectSync:  subjectsync.DefaultConfig(),
 		EgressLimits: EgressLimitsConfig{Eastmoney: cnstock.DefaultRequestLimitConfig()},
 		Stream:       defaultStreamConfig(),
+		Cloud:        CloudConfig{CLS: cloud.DefaultCLSConfig()},
 		Delist:       DelistConfig{AutoDetect: true},
 		SCFAccess:    gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
 		CollectorRetention: CollectorRetentionConfig{

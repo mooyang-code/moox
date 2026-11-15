@@ -256,11 +256,13 @@ components:
           - ExportSecrets
           - ImportSecrets
           - GetReadonlyExchangeKey
+          - GetCloudCredential
         read_only_methods:
           - ListSecrets
           - GetSecret
           - GetSecretValue
           - GetReadonlyExchangeKey
+          - GetCloudCredential
         acl:
           - methods:
               - ListSecrets
@@ -281,13 +283,18 @@ components:
               - ListSecrets
               - GetSecretValue
             callers:
-              - cloudfunction
               - trade
               - moox-cli
           # Collector 只能读固定 ID 只读 Key 的公开标识；网关转发会丢掉调用方元数据，
           # GetSecretValue 没法按调用方限定，所以用专用方法授权，Collector 拿不到 Trade 的交易密钥。
           - methods:
               - GetReadonlyExchangeKey
+            callers:
+              - collector
+          # Collector 调腾讯云只能读云账号密钥：SecretMgr 在服务端校验类别 cloud、厂商 tencent、状态 active，
+          # 不满足就拒绝，Collector 因此拿不到交易所等其他类别的密钥。
+          - methods:
+              - GetCloudCredential
             callers:
               - collector
       - path: trpc.moox.ops.SysDeploy
@@ -360,37 +367,6 @@ components:
               - GetConfigBackup
             callers:
               - console
-      - path: trpc.moox.admin.CollectorPublishLease
-        port: 11111
-        console_name: publishlease
-        timeout_ms: 5000
-        max_body_bytes: 4194304
-        methods:
-          - AcquireCollectorPublishLease
-          - RenewCollectorPublishLease
-          - ReleaseCollectorPublishLease
-          - ValidateCollectorPublishLease
-          - BeginCollectorPublishOperation
-          - RenewCollectorPublishOperation
-          - EndCollectorPublishOperation
-        acl:
-          - methods:
-              - AcquireCollectorPublishLease
-              - RenewCollectorPublishLease
-              - ReleaseCollectorPublishLease
-            callers:
-              - console
-              - moox-cli
-              - collector
-              - cloudfunction
-          - methods:
-              - ValidateCollectorPublishLease
-              - BeginCollectorPublishOperation
-              - RenewCollectorPublishOperation
-              - EndCollectorPublishOperation
-            callers:
-              - admin
-              - cloudfunction
       - path: trpc.moox.admin.ActivityLog
         port: 11113
         console_name: activity
@@ -618,6 +594,12 @@ components:
           SyncSubjects: 180000
           CheckKline: 310000
           SubmitKlineBackfill: 310000
+          # 读回、删除、探测云函数要逐个调腾讯云（限频 20 次/秒），几十个函数要几十秒。
+          ListCloudFunctions: 120000
+          DeleteCloudFunctions: 120000
+          ProbeFunctionEgress: 120000
+          # 删云账号前要确认它在配置的各地域里没有建过的函数（取凭证、列命名空间、逐个命名空间列函数）；小于管理台的 30 秒请求超时。
+          DeleteCloudAccount: 25000
         max_body_bytes: 4194304
         methods:
           - GetTaskList
@@ -655,6 +637,18 @@ components:
           - ClearSubjectExclusions
           - ListSubjectExclusions
           - RegisterDelistNotice
+          - ListCloudAccounts
+          - CreateCloudAccount
+          - UpdateCloudAccount
+          - DeleteCloudAccount
+          - ListCloudRegions
+          - InitPackageUpload
+          - CompletePackageUpload
+          - ListFunctionPackages
+          - DeleteFunctionPackage
+          - ListCloudFunctions
+          - DeleteCloudFunctions
+          - ProbeFunctionEgress
         read_only_methods:
           - GetTaskList
           - GetTaskDetail
@@ -672,6 +666,10 @@ components:
           - ListSubjectExclusions
           - ListTagSyncStatus
           - ListSubjectListers
+          - ListCloudAccounts
+          - ListCloudRegions
+          - ListFunctionPackages
+          - ListCloudFunctions
         acl:
           - methods:
               - GetTaskList
@@ -744,6 +742,27 @@ components:
             callers:
               - console
               - moox-cli
+          # 云账号与代码包（管理台运行状态页“函数”区的两个对话框、moox-cli）；列出云函数的期望与读回。
+          - methods:
+              - ListCloudAccounts
+              - CreateCloudAccount
+              - UpdateCloudAccount
+              - DeleteCloudAccount
+              - ListCloudRegions
+              - InitPackageUpload
+              - CompletePackageUpload
+              - ListFunctionPackages
+              - DeleteFunctionPackage
+              - ListCloudFunctions
+            callers:
+              - console
+              - moox-cli
+          # 删云函数、探测出口 IP 只给命令行。
+          - methods:
+              - DeleteCloudFunctions
+              - ProbeFunctionEgress
+            callers:
+              - moox-cli
       # collector-stream 的心跳、拉计划与周期统计上报；不设租约，计划里的份就是唯一的授权。
       - path: trpc.moox.collector.StreamCollector
         port: 11422
@@ -775,7 +794,7 @@ components:
       dependencies:
         - eventbus
         - storage-primary
-        - cloudfunction
+        - admin
       transport: reporter
       functional_observability: active
       config_paths:
@@ -835,115 +854,6 @@ components:
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: false
-  - id: cloudfunction
-    name: 云函数管理服务
-    binary: moox-cloudfunction
-    scope: any
-    replicas: single
-    protected: false
-    health:
-      kind: readyz
-      port: 11411
-      ready_body: '"ready":true'
-    services:
-      - path: trpc.moox.cloudfunction.CloudFunctionMgr
-        port: 11401
-        console_name: cloudfunction
-        timeout_ms: 960000
-        max_body_bytes: 33554432
-        methods:
-          - ListFunctionInstances
-          - InvokeFunction
-          - SubmitCreateFunctionInstances
-          - SubmitDeployFunctionInstances
-          - SubmitDeleteFunctionInstances
-          - GetFunctionJob
-          - SubmitUpdateFunctionInstanceRuntimeConfigs
-          - ListCloudAccounts
-          - CreateCloudAccount
-          - UpdateCloudAccount
-          - DeleteCloudAccount
-          - ListCloudRegions
-          - PreviewSCFFunctions
-          - ImportSCFFunctions
-          - GetPackageList
-          - GetPackageDetail
-          - DeletePackage
-          - GetPackageDownloadURL
-          - InitPackageUpload
-          - CompletePackageUpload
-          - CollectGarbage
-        read_only_methods:
-          - ListFunctionInstances
-          - GetFunctionJob
-          - ListCloudAccounts
-          - ListCloudRegions
-          - PreviewSCFFunctions
-          - GetPackageList
-          - GetPackageDetail
-          - GetPackageDownloadURL
-        acl:
-          - methods:
-              - ListFunctionInstances
-              - InvokeFunction
-              - SubmitCreateFunctionInstances
-              - SubmitDeployFunctionInstances
-              - SubmitDeleteFunctionInstances
-              - GetFunctionJob
-              - SubmitUpdateFunctionInstanceRuntimeConfigs
-              - ListCloudAccounts
-              - CreateCloudAccount
-              - UpdateCloudAccount
-              - DeleteCloudAccount
-              - ListCloudRegions
-              - PreviewSCFFunctions
-              - ImportSCFFunctions
-              - GetPackageList
-              - GetPackageDetail
-              - DeletePackage
-              - GetPackageDownloadURL
-              - InitPackageUpload
-              - CompletePackageUpload
-            callers:
-              - console
-              - moox-cli
-          - methods:
-              - ListFunctionInstances
-              - InvokeFunction
-              - SubmitCreateFunctionInstances
-              - SubmitDeployFunctionInstances
-              - SubmitDeleteFunctionInstances
-              - GetFunctionJob
-              - SubmitUpdateFunctionInstanceRuntimeConfigs
-              - GetPackageList
-            callers:
-              - collector
-          - methods:
-              - CollectGarbage
-            callers:
-              - admin
-    doctor:
-      role: cloudfunction
-      description: Cloud job dispatch and execution coordinator
-      duties:
-        - dispatch and track cloud jobs
-      inputs:
-        - job items
-      outputs:
-        - job results
-      dependencies:
-        - eventbus
-        - admin
-      transport: reporter
-      functional_observability: active
-      config_paths:
-        - cloudfunction/config/app.yaml
-        - cloudfunction/config/trpc_go.yaml
-      writable_paths:
-        - data/cloudfunction
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: true
   - id: factor-mgr
     name: 因子管理服务
     binary: moox-factor-mgr

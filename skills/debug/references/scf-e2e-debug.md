@@ -14,7 +14,7 @@ Use this reference when a MooX collector cloud function does not run on its Time
 
 Collect these before acting:
 
-- Function name, namespace, region, Timer cron, and the FunctionInstance node ID.
+- Function name, namespace, region and Timer cron (`moox-cli collector function list`).
 - Cloud account ID, COS bucket/region, package ID and version.
 - Space, collection task ID, result Dataset/View, frequency and the failing period time.
 - CLS topic ID and a narrow time range around the failed Timer tick (CLS timestamps are in milliseconds).
@@ -24,7 +24,7 @@ Never paste SecretKey, service auth secret, SSH password or signed headers into 
 ## Fast Triage
 
 1. No package: local build or COS upload failed.
-2. No function or Timer disabled: FunctionInstance node batch or Tencent SCF API failed.
+2. No function or Timer disabled: the reconciler could not reach Tencent SCF (Monitor's market-fetch check shows the failure reason, such as `cloud` or `quota`); it repairs the function on the next readback.
 3. Timer fires but nothing is fetched: the plan in the function environment has no entry for this period (check `moox-cli collector fetch-plan`), or the event time is past the lateness deadline.
 4. Fetch succeeds but no Storage rows: Access write failed (principal/method allowlist, wrong Storage application key).
 5. Rows written but the View is empty: inspect the View consumer and `storage-view` logs. For historical backfills, first check `[storage_view.max_age]` and `moox_storage_view_expired_rows_dropped_total{space,freq}`: expired rows are deliberately dropped at View write time, including factor results, while processing still succeeds. Primary retention is independent (default crypto 1m: Primary 35d, View 7d).
@@ -33,32 +33,30 @@ Never paste SecretKey, service auth secret, SSH password or signed headers into 
 ## Build And Package
 
 ```bash
-moox-cli collector function upload --package-name moox-collector-crypto-plan --version <version> --collector-root modules/collector
+moox-cli collector function upload --space-id crypto --cloud-account-id <account-id> --package-name moox-collector-crypto-plan --version <version> --collector-root modules/collector
 ```
 
-The package carries no credentials; runtime addresses and secrets come from the function environment written by Collector and FunctionInstance. Uploading a new version under the same package name makes Collector roll the functions forward (resolution happens during reconciliation/backfill preparation and successful results are cached for at least 30 seconds; normal reconciliation runs once per minute).
+The package carries no credentials; runtime addresses and secrets come from the function environment written by Collector. Uploading a new version under the same package name makes Collector roll the functions forward (resolution happens during reconciliation/backfill preparation and successful results are cached for at least 30 seconds; normal reconciliation runs once per minute).
 
 ## Inspect Functions
 
 ```bash
 bin/moox-cli collector fetch-plan --file ./moox.toml --space-id crypto
-bin/moox-cli collector function timer-inventory \
-  --file ./moox.toml \
-  --space-id crypto --cloud-account-id <account-id> --namespace <namespace> --region <region>
+bin/moox-cli collector function list --file ./moox.toml --space-id crypto --drift
 ```
 
-`timer-inventory` is read-only and reports `complete=true` only when every Timer has a fresh provider readback with the expected cron, qualifier and message.
+`collector function list` is read-only: Collector reads every planned function back from Tencent Cloud and compares existence, timer (cron, enabled, qualifier, message), managed environment and package. `--drift` keeps only the mismatches; functions that match the space's naming format but are not in any plan are listed under `unplanned` with their timers stopped, and are removed with `collector function delete` after confirmation. Functions created under an old cloud account are not visible to Collector; find them with `setup inspect-scf`.
 
 ## Control Plane Checks
 
 ```bash
-rg -n "fetch plan|backfill|readback" /data/moox/run/logs/collector.log
-rg -n "SubmitUpdateFunctionInstanceRuntimeConfigs|EnsureTimerTrigger|UpdateFunctionConfiguration" /data/moox/run/logs/cloudfunction.log
+rg -n "fetch plan|backfill|Collector-Cloud|Collector-TencentSCF" /data/moox/run/logs/collector.log
 ```
 
 Check these boundaries:
 
-- The node row has the expected function name, region, namespace, package and Timer state.
+- `collector function list` shows the function in the expected region and namespace, with the latest package and the Timer state the plan expects; a non-empty `operation` means a cloud operation (create, update, upgrade, delete) is still running inside Collector and the next round picks up its result.
+- Writes to Tencent Cloud happen only inside Collector (`internal/cloud`, one operation per function at a time); there is no separate CloudFunction process, job table or publish lease to inspect.
 - The applied plan (`fetch-plan`) lists the dataset hashes you expect and no `last_error`.
 
 ## CLS Log Investigation

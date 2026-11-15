@@ -1,42 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { CLOUD_ACCOUNT_DELETE_TEXT, cloudAccountDeleteError } from "./cloud-account-delete";
 
-const api = vi.hoisted(() => ({ listFunctionInstances: vi.fn() }));
-vi.mock("@/api/function-instance", () => api);
-import { cloudAccountDeleteText, instancesUsingAccount } from "./cloud-account-delete";
-
-beforeEach(() => api.listFunctionInstances.mockReset());
-
-describe("删除云账户前统计在用的实例", () => {
-  it("逐个空间查询（显式带空间）再相加", async () => {
-    api.listFunctionInstances.mockImplementation(async (_params: unknown, spaceId: string) => ({
-      items: [],
-      total: spaceId === "crypto" ? 2 : 1
-    }));
-    await expect(instancesUsingAccount("acc-1", ["crypto", "stockcn"])).resolves.toBe(3);
-    expect(api.listFunctionInstances).toHaveBeenCalledWith({ cloud_account_id: "acc-1", page_size: 1 }, "crypto");
-    expect(api.listFunctionInstances).toHaveBeenCalledWith({ cloud_account_id: "acc-1", page_size: 1 }, "stockcn");
+describe("删除云账号", () => {
+  it("确认正文写明只删登记，以及旧账号下的函数怎么找出来删", () => {
+    expect(CLOUD_ACCOUNT_DELETE_TEXT).toContain("只删除这条登记，不会删除云上的函数");
+    expect(CLOUD_ACCOUNT_DELETE_TEXT).toContain("Collector 会拒绝并说明原因");
+    expect(CLOUD_ACCOUNT_DELETE_TEXT).toContain("moox-cli collector function delete 也删不到");
+    expect(CLOUD_ACCOUNT_DELETE_TEXT).toContain("moox-cli setup inspect-scf");
+    expect(CLOUD_ACCOUNT_DELETE_TEXT).toContain("腾讯云控制台手工删除");
   });
 
-  it("任一空间查询失败或没有空间列表时返回 null，不当成没有实例", async () => {
-    api.listFunctionInstances.mockResolvedValueOnce({ items: [], total: 0 }).mockRejectedValueOnce(new Error("超时"));
-    await expect(instancesUsingAccount("acc-1", ["crypto", "stockcn"])).resolves.toBeNull();
-    await expect(instancesUsingAccount("acc-1", [])).resolves.toBeNull();
-  });
-});
-
-describe("删除云账户的确认正文", () => {
-  it("有实例在用时写出个数和后果，并让人先删实例", () => {
-    const text = cloudAccountDeleteText(3);
-    expect(text).toContain("所有空间里还有 3 个执行器实例在用");
-    expect(text).toContain("在管理台删不掉");
-    expect(text).toContain("请先删除这些实例");
-  });
-
-  it("没有实例在用时直接说明", () => {
-    expect(cloudAccountDeleteText(0)).toBe("所有空间里都没有执行器实例在用这个云账户。");
-  });
-
-  it("没查到实例数时写一般影响", () => {
-    expect(cloudAccountDeleteText(null)).toContain("请先确认没有实例在用");
+  it("被 Collector 拒绝时显示它给的原因", () => {
+    const refused = new Error("云账号 acc-1 还有 2 个代码包");
+    expect(cloudAccountDeleteError(refused)).toBe("删除云账号失败：云账号 acc-1 还有 2 个代码包");
+    expect(cloudAccountDeleteError(null)).toBe("删除云账号失败：未知原因");
   });
 });

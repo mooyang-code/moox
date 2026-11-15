@@ -1,0 +1,300 @@
+package fetchplan
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+// ControlMetrics 是 Collector 主进程的采集控制面指标：对账健康度、库与维护任务的运维统计、周期上报。
+// 执行面（云函数程序、collector-stream）不注册这些指标。
+type ControlMetrics struct {
+	storeBytes               *prometheus.GaugeVec
+	storeRows                *prometheus.GaugeVec
+	storeRowsCapped          *prometheus.GaugeVec
+	storeStatsHealthy        *prometheus.GaugeVec
+	storeStatsLastSuccess    *prometheus.GaugeVec
+	maintenanceDeleted       *prometheus.GaugeVec
+	maintenanceDuration      *prometheus.GaugeVec
+	maintenancePasses        *prometheus.CounterVec
+	maintenanceLastSuccess   *prometheus.GaugeVec
+	assignmentLastSuccess    *prometheus.GaugeVec
+	assignmentHealthy        *prometheus.GaugeVec
+	assignmentFailure        *prometheus.GaugeVec
+	assignmentPending        *prometheus.GaugeVec
+	assignmentPendingSince   *prometheus.GaugeVec
+	assignmentErrors         *prometheus.CounterVec
+	periodPending            *prometheus.GaugeVec
+	periodPendingMu          sync.Mutex
+	periodPendingFrequencies map[string]map[string]struct{}
+	periodReportRetry        *prometheus.CounterVec
+}
+
+func NewControlMetrics(reg prometheus.Registerer) *ControlMetrics {
+	metrics := &ControlMetrics{
+		storeBytes:               prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_database_bytes", Help: "Collector SQLite database and WAL file bytes."}, []string{"kind"}),
+		storeRows:                prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_store_rows", Help: "Space-scoped Collector table rows; lower bound when store_rows_capped is one."}, []string{"space_id", "table"}),
+		storeRowsCapped:          prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_store_rows_capped", Help: "Whether the row observation exceeded its bounded scan limit."}, []string{"space_id", "table"}),
+		storeStatsHealthy:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_store_stats_healthy", Help: "Whether the latest complete store statistics observation succeeded."}, []string{"space_id"}),
+		storeStatsLastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_store_stats_last_success_timestamp_seconds", Help: "Last complete store statistics observation timestamp."}, []string{"space_id"}),
+		maintenanceDeleted:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_maintenance_deleted_rows", Help: "Committed physical deletes in the latest maintenance pass, with readiness, snapshot, Storage state and Timer manifest rows counted separately."}, []string{"space_id", "table"}),
+		maintenanceDuration:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_maintenance_duration_seconds", Help: "Elapsed duration of the latest process-level maintenance pass."}, nil),
+		maintenancePasses:        prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_maintenance_passes_total", Help: "Process-level maintenance passes by bounded outcome."}, []string{"status"}),
+		maintenanceLastSuccess:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_maintenance_last_success_timestamp_seconds", Help: "Last fully successful process-level maintenance pass timestamp."}, nil),
+		assignmentLastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", Help: "Last successful Timer assignment reconciliation timestamp."}, []string{"space_id"}),
+		assignmentHealthy:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_healthy", Help: "Whether the latest Timer assignment reconciliation completed (1 healthy, 0 failed)."}, []string{"space_id"}),
+		assignmentFailure:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_failure", Help: "Current Timer coordination failure reason (1 current, 0 inactive)."}, []string{"space_id", "reason"}),
+		assignmentPending:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending", Help: "Whether a Timer assignment reconciliation batch is pending or running (1 pending, 0 idle)."}, []string{"space_id"}),
+		assignmentPendingSince:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", Help: "Unix timestamp when the current Timer assignment reconciliation batch started."}, []string{"space_id"}),
+		assignmentErrors:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_fetch_assignment_errors_total", Help: "Timer assignment reconciliation errors."}, []string{"space_id", "reason"}),
+		periodPending:            prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_period_pending_total", Help: "Collector periods waiting to be reported."}, []string{"space_id", "frequency"}),
+		periodPendingFrequencies: make(map[string]map[string]struct{}),
+		periodReportRetry:        prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_period_report_retry_total", Help: "Collector period report attempts that need retry."}, []string{"space_id", "frequency"}),
+	}
+	metrics.storeBytes = registerGaugeVec(reg, metrics.storeBytes)
+	metrics.storeRows = registerGaugeVec(reg, metrics.storeRows)
+	metrics.storeRowsCapped = registerGaugeVec(reg, metrics.storeRowsCapped)
+	metrics.storeStatsHealthy = registerGaugeVec(reg, metrics.storeStatsHealthy)
+	metrics.storeStatsLastSuccess = registerGaugeVec(reg, metrics.storeStatsLastSuccess)
+	metrics.maintenanceDeleted = registerGaugeVec(reg, metrics.maintenanceDeleted)
+	metrics.maintenanceDuration = registerGaugeVec(reg, metrics.maintenanceDuration)
+	metrics.maintenancePasses = registerCounterVec(reg, metrics.maintenancePasses)
+	metrics.maintenanceLastSuccess = registerGaugeVec(reg, metrics.maintenanceLastSuccess)
+	metrics.assignmentLastSuccess = registerGaugeVec(reg, metrics.assignmentLastSuccess)
+	metrics.assignmentHealthy = registerGaugeVec(reg, metrics.assignmentHealthy)
+	metrics.assignmentFailure = registerGaugeVec(reg, metrics.assignmentFailure)
+	metrics.assignmentPending = registerGaugeVec(reg, metrics.assignmentPending)
+	metrics.assignmentPendingSince = registerGaugeVec(reg, metrics.assignmentPendingSince)
+	metrics.assignmentErrors = registerCounterVec(reg, metrics.assignmentErrors)
+	metrics.periodPending = registerGaugeVec(reg, metrics.periodPending)
+	metrics.periodReportRetry = registerCounterVec(reg, metrics.periodReportRetry)
+	return metrics
+}
+
+type operationalStatsSource interface {
+	OperationalStats(context.Context, string, int) (store.OperationalStats, error)
+}
+
+var operationalTableKinds = []string{"resample_jobs", "backfill_notices"}
+var maintenanceTableKinds = []string{"backfill_notices", "backfill_jobs", "resample_jobs"}
+
+// RefreshOperationalStats publishes only a complete observation. On failure it
+// retains last-good values and marks them stale rather than inventing zeros.
+func (m *ControlMetrics) RefreshOperationalStats(ctx context.Context, source operationalStatsSource, spaceID string, now time.Time) error {
+	if m == nil {
+		return nil
+	}
+	stats, err := source.OperationalStats(ctx, spaceID, store.MaxOperationalStatsRows)
+	if err != nil {
+		m.storeStatsHealthy.WithLabelValues(spaceID).Set(0)
+		return err
+	}
+	m.storeBytes.WithLabelValues("db").Set(float64(stats.DBBytes))
+	m.storeBytes.WithLabelValues("wal").Set(float64(stats.WALBytes))
+	for _, kind := range operationalTableKinds {
+		row := stats.Rows[kind]
+		m.storeRows.WithLabelValues(spaceID, kind).Set(float64(row.Count))
+		capped := 0.0
+		if row.Capped {
+			capped = 1
+		}
+		m.storeRowsCapped.WithLabelValues(spaceID, kind).Set(capped)
+	}
+	m.storeStatsHealthy.WithLabelValues(spaceID).Set(1)
+	m.storeStatsLastSuccess.WithLabelValues(spaceID).Set(float64(now.Unix()))
+	return nil
+}
+
+func (m *ControlMetrics) ObserveMaintenanceDeletes(spaceID string, deleted map[string]int64) {
+	if m == nil {
+		return
+	}
+	for _, kind := range maintenanceTableKinds {
+		m.maintenanceDeleted.WithLabelValues(spaceID, kind).Set(float64(max(0, deleted[kind])))
+	}
+}
+
+func (m *ControlMetrics) ObserveMaintenancePass(duration time.Duration, err error) {
+	if m == nil {
+		return
+	}
+	m.maintenanceDuration.WithLabelValues().Set(duration.Seconds())
+	status := "success"
+	if err != nil {
+		status = "error"
+	} else {
+		m.maintenanceLastSuccess.WithLabelValues().Set(float64(time.Now().Unix()))
+	}
+	m.maintenancePasses.WithLabelValues(status).Inc()
+}
+
+func registerCounterVec(reg prometheus.Registerer, collector *prometheus.CounterVec) *prometheus.CounterVec {
+	if err := reg.Register(collector); err != nil {
+		if existing, ok := err.(prometheus.AlreadyRegisteredError); ok {
+			if typed, ok := existing.ExistingCollector.(*prometheus.CounterVec); ok {
+				return typed
+			}
+		}
+	}
+	return collector
+}
+
+func registerGaugeVec(reg prometheus.Registerer, collector *prometheus.GaugeVec) *prometheus.GaugeVec {
+	if err := reg.Register(collector); err != nil {
+		if existing, ok := err.(prometheus.AlreadyRegisteredError); ok {
+			if typed, ok := existing.ExistingCollector.(*prometheus.GaugeVec); ok {
+				return typed
+			}
+		}
+	}
+	return collector
+}
+
+func (m *ControlMetrics) ObserveAssignmentSuccess(spaceID string, reconciledAt int64) {
+	if m == nil || reconciledAt <= 0 {
+		return
+	}
+	m.assignmentLastSuccess.WithLabelValues(spaceID).Set(float64(reconciledAt))
+	m.assignmentHealthy.WithLabelValues(spaceID).Set(1)
+	m.ClearAssignmentFailure(spaceID)
+}
+
+// ObserveAssignmentPending 上报本空间的协调是否还在进行：有未生效的计划（since 是计划的创建时间），
+// 或有云端操作在跑（since 是最早一个在跑操作的开始时间）。Monitor 据此区分“还在进行”和“协调失败”。
+func (m *ControlMetrics) ObserveAssignmentPending(spaceID string, pending bool, since time.Time) {
+	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	if !pending {
+		m.assignmentPending.WithLabelValues(spaceID).Set(0)
+		m.assignmentPendingSince.WithLabelValues(spaceID).Set(0)
+		return
+	}
+	m.assignmentPending.WithLabelValues(spaceID).Set(1)
+	if !since.IsZero() {
+		m.assignmentPendingSince.WithLabelValues(spaceID).Set(float64(since.UTC().Unix()))
+	}
+}
+
+func (m *ControlMetrics) ObserveAssignmentFailure(spaceID, reason string) {
+	if m == nil {
+		return
+	}
+	m.assignmentHealthy.WithLabelValues(spaceID).Set(0)
+	reason = normalizeAssignmentFailureReason(reason)
+	m.clearFailureLabels(spaceID)
+	m.assignmentFailure.WithLabelValues(spaceID, reason).Set(1)
+	m.ObserveAssignmentError(spaceID, reason)
+}
+
+// ObserveAssignmentRoundOK 在一轮对账没有任何失败时调用：协调恢复为健康并清除上一轮遗留的失败原因。
+// 它不更新「最近一次对账成功」时间：计划仍在进行或云端作业仍在途时，该时间保持不动。
+func (m *ControlMetrics) ObserveAssignmentRoundOK(spaceID string) {
+	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	m.assignmentHealthy.WithLabelValues(spaceID).Set(1)
+	m.ClearAssignmentFailure(spaceID)
+}
+
+// ClearAssignmentFailure 把全部失败原因标签置 0（而不是删掉序列），Monitor 下一次抓取就不再沿用上一次的失败原因。
+func (m *ControlMetrics) ClearAssignmentFailure(spaceID string) {
+	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	m.clearFailureLabels(spaceID)
+}
+
+func (m *ControlMetrics) clearFailureLabels(spaceID string) {
+	if strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	for _, reason := range assignmentFailureReasons {
+		m.assignmentFailure.WithLabelValues(spaceID, reason).Set(0)
+	}
+}
+
+// assignmentFailureReasons 是协调失败原因的白名单，与 fail 的调用点一一对应；白名单之外的一律按 cloud 上报。
+// cloud 是调腾讯云失败，quota 是腾讯云的函数个数或命名空间配额超限。
+// Monitor 的 coordinationFailureTexts 为每个原因给出告警文案，新增原因时两边要一起改。
+var assignmentFailureReasons = []string{
+	"cloud", "quota", "environment", "rules", "store", "storage", "package", "dataset", "activity", "preflight", "capacity",
+}
+
+func normalizeAssignmentFailureReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	for _, allowed := range assignmentFailureReasons {
+		if reason == allowed {
+			return reason
+		}
+	}
+	return "cloud"
+}
+
+// ObservePeriodPendingSnapshot aggregates pending reports without exposing
+// task-owned Dataset IDs as Prometheus labels and resets disappeared frequencies.
+func (m *ControlMetrics) ObservePeriodPendingSnapshot(spaceID string, pendingByFrequency map[string]int) {
+	spaceID = strings.TrimSpace(spaceID)
+	if m == nil || spaceID == "" {
+		return
+	}
+	current := make(map[string]int, len(pendingByFrequency))
+	for rawFrequency, count := range pendingByFrequency {
+		frequency := boundedPeriodFrequency(rawFrequency)
+		if frequency == "unknown" {
+			continue
+		}
+		current[frequency] += max(0, count)
+	}
+	m.periodPendingMu.Lock()
+	defer m.periodPendingMu.Unlock()
+	previous := m.periodPendingFrequencies[spaceID]
+	for frequency := range previous {
+		if _, exists := current[frequency]; !exists {
+			m.periodPending.WithLabelValues(spaceID, frequency).Set(0)
+		}
+	}
+	next := make(map[string]struct{}, len(current))
+	for frequency, count := range current {
+		m.periodPending.WithLabelValues(spaceID, frequency).Set(float64(count))
+		if count > 0 {
+			next[frequency] = struct{}{}
+		}
+	}
+	if len(next) == 0 {
+		delete(m.periodPendingFrequencies, spaceID)
+	} else {
+		m.periodPendingFrequencies[spaceID] = next
+	}
+}
+
+func (m *ControlMetrics) ObservePeriodReportRetry(spaceID, frequency string) {
+	if m == nil {
+		return
+	}
+	frequency = boundedPeriodFrequency(frequency)
+	if frequency == "unknown" || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	m.periodReportRetry.WithLabelValues(strings.TrimSpace(spaceID), frequency).Inc()
+}
+
+func boundedPeriodFrequency(value string) string {
+	frequency, err := marketdata.ParseFrequency(strings.TrimSpace(value))
+	if err != nil {
+		return "unknown"
+	}
+	return string(frequency)
+}
+
+func (m *ControlMetrics) ObserveAssignmentError(spaceID, reason string) {
+	if m == nil {
+		return
+	}
+	m.assignmentErrors.WithLabelValues(spaceID, normalizeAssignmentFailureReason(reason)).Inc()
+}

@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
@@ -17,7 +19,7 @@ import (
 
 func newReregisterFixture(t *testing.T) (*Service, *store.Store) {
 	t.Helper()
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
@@ -25,15 +27,25 @@ func newReregisterFixture(t *testing.T) (*Service, *store.Store) {
 }
 
 const reregisterPlan = `{"datasets":{` +
-	`"ds1|1m":{"dataset_id":"ds1","frequency":"1m","hash":"h1","count":2,"changed":true,"hash_changed":true,"p":100},` +
+	`"ds1|1m":{"dataset_id":"ds1","frequency":"1m","hash":"h1","count":2,"changed":true,"hash_changed":true,"p":100,` +
+	`"series":[{"subject_id":"A-USDT","series_tag":""},{"subject_id":"B-USDT","series_tag":""}]},` +
 	`"ds2|1h":{"dataset_id":"ds2","frequency":"1h","hash":"h2","count":3},` +
 	`"gone|1m":{"dataset_id":"gone","frequency":"1m","hash":"h3","gone":true}},"functions":{}}`
 
+// applyPlan 直接往库里写一份已生效计划，连同对账器登记快照时会写下的时间线行（标的集合变了的数据集从 P 起的序列）。
 func applyPlan(t *testing.T, db *store.Store, spaceID, plan string) *store.FetchPlanRecord {
 	t.Helper()
+	content, err := fetchplan.DecodeFetchPlanContent(plan)
+	require.NoError(t, err)
+	var timeline []store.SeriesTimelineEntry
+	for _, change := range content.Datasets {
+		if change.Changed && change.HashChanged && change.P > 0 {
+			timeline = append(timeline, store.SeriesTimelineEntry{SpaceID: spaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P, SeriesHash: change.Hash, Series: change.Series, LatenessS: change.LatenessS})
+		}
+	}
 	record, err := db.FetchPlans().Create(context.Background(), spaceID, plan, "{}")
 	require.NoError(t, err)
-	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", ""))
+	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", "", timeline...))
 	return record
 }
 
@@ -59,7 +71,7 @@ func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	latest, err := db.FetchPlans().LatestApplied(ctx, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, applied.ID, latest.ID, "改写的是已生效计划本身，不新建计划")
-	content, err := marketfetch.DecodeFetchPlanContent(latest.Plan)
+	content, err := fetchplan.DecodeFetchPlanContent(latest.Plan)
 	require.NoError(t, err)
 	require.Empty(t, content.Datasets["ds1|1m"].Hash)
 	require.Empty(t, content.Datasets["ds2|1h"].Hash)
@@ -82,9 +94,16 @@ func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	mark, err := db.Backfill().Watermark(ctx, "stockcn", "ds1", "1m")
 	require.NoError(t, err)
 	require.True(t, mark.Equal(oldWatermark))
-	untouched, err := marketfetch.DecodeFetchPlanContent(other.Plan)
+	untouched, err := fetchplan.DecodeFetchPlanContent(other.Plan)
 	require.NoError(t, err)
 	require.Equal(t, "h1", untouched.Datasets["ds1|1m"].Hash)
+
+	timeline, err := db.SeriesTimeline().ListBySpace(ctx, "crypto")
+	require.NoError(t, err)
+	require.Empty(t, timeline, "重新登记在同一个事务里删掉该空间的全部时间线行")
+	timeline, err = db.SeriesTimeline().ListBySpace(ctx, "stockcn")
+	require.NoError(t, err)
+	require.Len(t, timeline, 1, "别的空间的时间线不动")
 }
 
 // 重新登记之后、新快照登记之前，数据集在时间线上没有计划段，数据集健康里看不到它们；
@@ -140,7 +159,7 @@ func TestReregisterFetchPlanRefusesWithoutAppliedPlanOrWithAnOpenPlan(t *testing
 	require.Contains(t, rsp.GetRetInfo().GetMsg(), "未生效")
 	latest, err := db.FetchPlans().LatestApplied(ctx, "crypto")
 	require.NoError(t, err)
-	content, err := marketfetch.DecodeFetchPlanContent(latest.Plan)
+	content, err := fetchplan.DecodeFetchPlanContent(latest.Plan)
 	require.NoError(t, err)
 	require.Equal(t, applied.ID, latest.ID)
 	require.Equal(t, "h1", content.Datasets["ds1|1m"].Hash, "拒绝时不改计划")
@@ -188,13 +207,13 @@ func TestGetCollectorStatusSummarizesPlanAndDatasetHealth(t *testing.T) {
 // 函数详情：每个数据集上本函数负责的标的取当前生效的那份快照。
 func TestPlanFunctionsListSubjectsPerDataset(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
-	options := marketfetch.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
-	desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{{
+	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
+	desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{{
 		Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
 		Subjects: []string{"BTC-USDT", "ETH-USDT"},
 	}}, nil)
 	require.NoError(t, err)
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)

@@ -19,13 +19,13 @@ import (
 
 // moox-admin-cli reset-business：系统重置里 Admin 的业务部分（设计 5.2）。
 //
-// 清掉活动日志（含登录记录）、采集发布租约与操作，--scope all 再清业务空间（由 setup init 重建）；
+// 清掉活动日志（含登录记录），--scope all 再清业务空间（由 setup init 重建）；
 // 保留引导身份层——用户、密钥、主机与部署（含 SSH 信息）、主机网关状态——它们决定谁能进来、能连哪些机器，
 // 清掉后重置自己就无法继续。
 // 重置前用 VACUUM INTO 备份整个库到数据库所在目录的 reset-backups/（保留最近 3 份），这个命令不依赖 Admin 进程是否在运行。
 
 // businessResetData 是运行数据：重置的两个范围都清。
-var businessResetData = []string{"t_activity_logs", "t_collector_publish_leases", "t_collector_publish_operations"}
+var businessResetData = []string{"t_activity_logs"}
 
 // businessResetConfig 是业务配置：只有 --scope all 清。
 var businessResetConfig = []string{"t_spaces"}
@@ -60,7 +60,7 @@ func runResetBusinessCommand(args []string, stdout io.Writer, stderr io.Writer) 
 	dbPath, scope := defaultInitDBPath, "data"
 	var dryRun, yes bool
 	fs.StringVar(&dbPath, "db-path", dbPath, "Admin 的 SQLite 数据库路径")
-	fs.StringVar(&scope, "scope", scope, "重置范围：data（活动日志、采集发布租约）| all（再加业务空间）")
+	fs.StringVar(&scope, "scope", scope, "重置范围：data（活动日志）| all（再加业务空间）")
 	fs.BoolVar(&dryRun, "dry-run", false, "只列出会删除的行数，不改动")
 	fs.BoolVar(&yes, "yes", false, "确认执行（会删除数据；执行前先备份）")
 	if err := fs.Parse(args[1:]); err != nil {

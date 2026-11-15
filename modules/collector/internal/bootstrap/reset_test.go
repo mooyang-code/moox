@@ -6,17 +6,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/mooyang-code/moox/packages/lifecycle"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
 func newCollectorResetEnv(t *testing.T) (*lifecycle.Controller, *collectorControl, *store.Store, string) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "moox_collector.db")
-	db, err := store.Open(&store.Options{Path: dbPath})
+	db, err := store.Open(&store.Options{Path: dbPath, DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = db.Close() })
@@ -47,6 +49,10 @@ func TestCollectorResetKeepsPauseFlagUntilTheFirstInit(t *testing.T) {
 	require.NoError(t, err)
 	_, err = sqlDB.Exec(`INSERT INTO t_collector_backfill_watermarks (c_space_id, c_dataset_id, c_frequency, c_scanned_until) VALUES ('crypto', 'ds', '1m', CURRENT_TIMESTAMP)`)
 	require.NoError(t, err)
+	_, err = sqlDB.Exec(`INSERT INTO t_collector_cloud_accounts (c_account_id, c_credential_secret_id) VALUES ('account-a', 'secret-a')`)
+	require.NoError(t, err)
+	_, err = sqlDB.Exec(`INSERT INTO t_collector_function_packages (c_space_id, c_package_id, c_package_name, c_cloud_account_id, c_status) VALUES ('crypto', 'pkg-1', 'collector', 'account-a', 'available')`)
+	require.NoError(t, err)
 
 	_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem})
 	require.NoError(t, err)
@@ -65,6 +71,11 @@ func TestCollectorResetKeepsPauseFlagUntilTheFirstInit(t *testing.T) {
 	var left int
 	require.NoError(t, sqlDB.QueryRow("SELECT COUNT(*) FROM t_collector_backfill_watermarks").Scan(&left))
 	require.Zero(t, left, "运行数据被清掉")
+	for _, table := range []string{"t_collector_cloud_accounts", "t_collector_function_packages"} {
+		var kept int
+		require.NoError(t, sqlDB.QueryRow("SELECT COUNT(*) FROM "+table).Scan(&kept))
+		require.Equal(t, 1, kept, "云账号与代码包登记的是云上的外部资源，重置时保留：%s", table)
+	}
 
 	paused, err = db.FetchPlans().PausedSpaces(ctx)
 	require.NoError(t, err)
@@ -81,7 +92,7 @@ func TestCollectorResetKeepsPauseFlagUntilTheFirstInit(t *testing.T) {
 // plan 阶段（模块还在运行）不把它当阻止项，否则永远发不出令牌。
 func TestCollectorResetFailsFirstStepWhileTimersAreStillEnabled(t *testing.T) {
 	life, control, _, _ := newCollectorResetEnv(t)
-	control.manager = &marketfetch.PlanManager{}
+	control.manager = &fetchplan.PlanManager{}
 	control.timerWait = 50 * time.Millisecond
 	ctx := context.Background()
 	plan, err := life.ResetPlan(ctx, lifecycle.ResetData)
@@ -102,4 +113,37 @@ func TestCollectorResetFailsFirstStepWhileTimersAreStillEnabled(t *testing.T) {
 	require.Contains(t, st.Operation.Error, "孤儿")
 	require.Equal(t, "failed", st.Operation.Steps[0].State)
 	require.Equal(t, "pending", st.Operation.Steps[1].State, "后面的步骤没有执行")
+}
+
+// 标的时间线和采集计划归在同一类：只清运行数据时两者都保留，全部重置时一起清掉。
+func TestCollectorResetClearsTheTimelineWithThePlans(t *testing.T) {
+	for _, scope := range []lifecycle.ResetScope{lifecycle.ResetData, lifecycle.ResetAll} {
+		life, _, db, _ := newCollectorResetEnv(t)
+		ctx := context.Background()
+		record, err := db.FetchPlans().Create(ctx, "crypto", `{"datasets":{}}`, "{}")
+		require.NoError(t, err)
+		entry := store.SeriesTimelineEntry{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", EffectiveFrom: 100, Series: []seriesset.Series{{SubjectID: "BTC-USDT"}}}
+		require.NoError(t, db.FetchPlans().Update(ctx, record.ID, store.FetchPlanApplied, "{}", "", entry))
+
+		_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem})
+		require.NoError(t, err)
+		plan, err := life.ResetPlan(ctx, scope)
+		require.NoError(t, err)
+		require.Empty(t, plan.Blockers)
+		_, err = life.ResetApply(ctx, lifecycle.ResetApplyRequest{Token: plan.Token, Scope: scope, By: "ops"})
+		require.NoError(t, err)
+		require.NoError(t, life.ResetWait(ctx))
+
+		timeline, err := db.SeriesTimeline().ListBySpace(ctx, "crypto")
+		require.NoError(t, err)
+		plans, err := db.FetchPlans().ListAll(ctx, "crypto")
+		require.NoError(t, err)
+		if scope == lifecycle.ResetAll {
+			require.Empty(t, timeline, "全部重置清掉时间线")
+			require.Empty(t, plans)
+		} else {
+			require.Len(t, timeline, 1, "只清运行数据时保留时间线")
+			require.Len(t, plans, 1)
+		}
+	}
 }

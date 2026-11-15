@@ -35,7 +35,6 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/archive/proto/archivegen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/monitor/proto/monitorgen v0.0.0-00010101000000-000000000000
@@ -195,8 +194,6 @@ replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/ma
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
-
-replace github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen => ../cloudfunction/proto/cloudfunctiongen
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 

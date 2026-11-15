@@ -15,7 +15,6 @@ const stub = vi.hoisted(() => (name: string) => ({ default: { name, render: () =
 vi.mock("@/views/collector/collection-tasks/collection-tasks.vue", () => stub("tasks"));
 vi.mock("@/views/collector/runtime-status/runtime-status.vue", () => stub("status"));
 vi.mock("@/views/collector/backfill-jobs/index.vue", () => stub("backfills"));
-vi.mock("@/views/collector/cloud-function/function-instance.vue", () => stub("executors"));
 vi.mock("@/views/collector/task-results/index.vue", () => stub("results"));
 import TaskManagement from "./index.vue";
 
@@ -55,5 +54,12 @@ describe("采集任务的页签容器", () => {
     setup({ detail: "t1" });
     await flushPromises();
     expect(ctx.route.query).toEqual({ detail: "t1" });
+  });
+
+  it("执行器页签已删除，旧链接 ?tab=executors 打开运行状态", async () => {
+    const wrapper = setup({ tab: "executors" });
+    await flushPromises();
+    expect(wrapper.text()).toContain("status");
+    expect(wrapper.text()).not.toContain("tasks");
   });
 });

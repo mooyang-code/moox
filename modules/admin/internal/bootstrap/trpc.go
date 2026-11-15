@@ -108,14 +108,11 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	if err := register(&adminpb.SetupServer_ServiceDesc, setuprpc.NewService(services.Setup)); err != nil {
 		return err
 	}
-	if err := register(&adminpb.CollectorPublishLeaseServer_ServiceDesc, services.CollectorPublishLease); err != nil {
-		return err
-	}
 	if err := register(&adminpb.ActivityLogServer_ServiceDesc, services.ActivityLog); err != nil {
 		return err
 	}
 
-	gateway, err := newAdminGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master, "console")
+	gateway, err := newConsoleGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master)
 	if err != nil {
 		return err
 	}
@@ -127,11 +124,6 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	// 归档的分区副本下载与最新数据预览：裸 HTTP 处理器，先消费与 <空间>/<数据集> 绑定的一次性 ticket，
 	// 再按拓扑里唯一启用的 archive-worker 部署转发到它的数据端口（本机直连，只出站主机经 console 网关客户端中转）。
 	if err := registerArchiveProxy(services, cfg.AdminNodeID, gateway); err != nil {
-		services.closeGateways()
-		return err
-	}
-	services.machineGateway, err = newAdminGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master, "admin")
-	if err != nil {
 		services.closeGateways()
 		return err
 	}

@@ -42,7 +42,7 @@ func servicePtr(c *Catalog, path string) *Service {
 
 func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 	c := mustCatalog(t)
-	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "console-proxy": 19528, "web-host": 19527, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "cloudfunction": 11411, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418}
+	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "console-proxy": 19528, "web-host": 19527, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418}
 	if len(c.Components) != len(want) {
 		t.Fatalf("components = %d", len(c.Components))
 	}
@@ -72,7 +72,7 @@ func TestCatalogDecodeIsStrictAndBounded(t *testing.T) {
 }
 
 func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
-	const cloud = "trpc.moox.cloudfunction.CloudFunctionMgr"
+	const cloud = "trpc.moox.collector.CollectMgr"
 	cases := []struct {
 		name   string
 		mutate func(*Catalog)
@@ -97,10 +97,10 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 			service.IdempotentMethods = append([]string(nil), service.ReadOnlyMethods[0])
 		}},
 		{"duplicate service", func(c *Catalog) {
-			componentPtr(c, "cloudfunction").Services = append(componentPtr(c, "cloudfunction").Services, *servicePtr(c, cloud))
+			componentPtr(c, "collector").Services = append(componentPtr(c, "collector").Services, *servicePtr(c, cloud))
 		}},
 		{"console without permission", func(c *Catalog) {
-			servicePtr(c, cloud).ACL = []Grant{{Methods: []string{"CollectGarbage"}, Callers: []string{"admin"}}}
+			servicePtr(c, cloud).ACL = []Grant{{Methods: []string{"GetTaskResultInventory"}, Callers: []string{"monitor"}}}
 		}},
 		{"ambiguous console method", func(c *Catalog) { servicePtr(c, "trpc.moox.admin.SpaceMgr").ConsoleName = "storage" }},
 		{"unknown principal method", func(c *Catalog) { c.Principals[0].Allow[0].Methods = []string{"Unregistered"} }},
@@ -168,12 +168,10 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		caller, path, method string
 		want                 bool
 	}{
-		{"console", "trpc.moox.cloudfunction.CloudFunctionMgr", "CollectGarbage", false},
-		{"admin", "trpc.moox.cloudfunction.CloudFunctionMgr", "CollectGarbage", true},
+		{"console", "trpc.moox.collector.CollectMgr", "DeleteCloudFunctions", false},
+		{"moox-cli", "trpc.moox.collector.CollectMgr", "DeleteCloudFunctions", true},
 		{"console", "trpc.moox.ops.SecretMgr", "GetSecretValue", false},
 		{"trade", "trpc.moox.ops.SecretMgr", "GetSecretValue", true},
-		{"console", "trpc.moox.admin.CollectorPublishLease", "AcquireCollectorPublishLease", true},
-		{"cloudfunction", "trpc.moox.admin.CollectorPublishLease", "BeginCollectorPublishOperation", true},
 		{"console", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", false},
 		{"moox-cli", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", true},
 		{"monitor", "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", true},
@@ -203,14 +201,8 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"host-gateway@*", GatewayControlPath, "PullSnapshot", false},
 		{"host-gateway@../escape", GatewayControlPath, "PullSnapshot", false},
 		{"console", GatewayControlPath, "PullSnapshot", false},
-		{"console", "trpc.moox.cloudfunction.CloudFunctionMgr", "Unknown", false},
+		{"console", "trpc.moox.collector.CollectMgr", "Unknown", false},
 		{"console", "trpc.moox.unknown.Service", "Get", false},
-	}
-	for _, method := range []string{"ValidateCollectorPublishLease", "BeginCollectorPublishOperation", "RenewCollectorPublishOperation", "EndCollectorPublishOperation"} {
-		cases = append(cases, struct {
-			caller, path, method string
-			want                 bool
-		}{"console", "trpc.moox.admin.CollectorPublishLease", method, false})
 	}
 	for _, tc := range cases {
 		if got := c.Allowed(tc.caller, tc.path, tc.method); got != tc.want {
@@ -262,7 +254,7 @@ func TestConsoleResolvesStorageByNameAndMethod(t *testing.T) {
 			t.Errorf("storage/%s = %s", method, service.Path)
 		}
 	}
-	for _, route := range [][2]string{{"secret", "GetSecretValue"}, {"cloudfunction", "CollectGarbage"}, {"trpc.moox.ops.SecretMgr", "GetSecretValue"}, {"storage", "Unknown"}, {"", "GetDataset"}} {
+	for _, route := range [][2]string{{"secret", "GetSecretValue"}, {"collector", "DeleteCloudFunctions"}, {"trpc.moox.ops.SecretMgr", "GetSecretValue"}, {"storage", "Unknown"}, {"", "GetDataset"}} {
 		if _, ok := c.ConsoleService(route[0], route[1]); ok {
 			t.Fatalf("forbidden console route %v", route)
 		}

@@ -366,10 +366,8 @@ enabled = false
 # [[scf_plan.spaces]]
 # space_id = "crypto"
 # # package_name 默认 moox-collector-<space>-plan，namespace 默认 moox-<space>-plan，均可覆盖
-# # 新数据集的采集方式初值：crypto 默认 default_ingest = "stream"、default_executor = "local"（WS 推送，补采走海外机本地执行端），
-# # 其他空间默认 "pull" + "scf"。之后以 Collector 库为准，用 moox-cli collector ingest-mode set 切换。
-# default_ingest = "stream"
-# default_executor = "local"
+# # 采集方式不在这里配置：它记在采集任务上（stream / scf / local），建任务不写时用市场默认值（crypto 是 stream，其余是 scf），
+# # 之后用 moox-cli collector ingest-mode set 切换。
 # [scf_plan.spaces.markets]
 # spot = ["ap-hongkong"]
 # swap = ["ap-hongkong"]
@@ -441,7 +439,7 @@ ssh = { port = 22, username = "builder" }
 
 # host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。
 [deployments]
-control = ["console-proxy", "web-host", "admin", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"]
+control = ["console-proxy", "web-host", "admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"]
 # eventbus 是独立单元，可以放在任意一台直达主机上，用 setup deploy-unit --profile eventbus 安装；放在存储机上时 Storage 的周期完成与就绪事件走回环。
 # 客户端与它同机时连回环地址，否则连它所在主机的对外地址。
 storage = ["storage-primary", "storage-view", "access", "eventbus"]

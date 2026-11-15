@@ -283,7 +283,7 @@ func RouteFor(marketID string, instrumentType marketdata.InstrumentType) (route 
 		return Route{}, false, err
 	}
 	if instrumentType == "" {
-		if instrumentType, err = defaultInstrumentType(marketID, ""); err != nil {
+		if instrumentType, err = DefaultInstrumentType(marketID, ""); err != nil {
 			return Route{}, false, err
 		}
 	}

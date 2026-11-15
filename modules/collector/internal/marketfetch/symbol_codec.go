@@ -5,8 +5,8 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 )
 
-// defaultInstrumentType 返回市场在任务或标签没写品种时用的品种（标的规则给出）；未登记的市场报错。
-func defaultInstrumentType(marketID, marketType string) (marketdata.InstrumentType, error) {
+// DefaultInstrumentType 返回市场在任务或标签没写品种时用的品种（标的规则给出）；未登记的市场报错。
+func DefaultInstrumentType(marketID, marketType string) (marketdata.InstrumentType, error) {
 	rules, err := markets.RulesFor(marketID)
 	if err != nil {
 		return "", err

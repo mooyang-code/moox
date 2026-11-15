@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	marketfiles "github.com/mooyang-code/moox/modules/collector/config/markets"
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,6 +33,8 @@ type Config struct {
 	Currency string `yaml:"currency"`
 	// AllowedLatenessSeconds 是结果数据集的允许迟到时间默认值，必填。
 	AllowedLatenessSeconds int `yaml:"allowed_lateness_seconds"`
+	// Ingest 是这个市场 K 线任务的默认采集方式（stream、scf、local），必填；建任务没写采集方式时用它。
+	Ingest string `yaml:"ingest"`
 	// SeriesTag 是固定的序列标签；不写表示按数据源生成。
 	SeriesTag string `yaml:"series_tag"`
 	// RealtimeBatchNoCap 为真时实时批次不限标的数。
@@ -103,6 +106,9 @@ func parseConfig(marketID string, raw []byte) (Config, error) {
 	if config.AllowedLatenessSeconds <= 0 {
 		return Config{}, fmt.Errorf("allowed_lateness_seconds 必填且为正")
 	}
+	if err := domain.ValidateIngest(config.Ingest); err != nil {
+		return Config{}, fmt.Errorf("ingest：%w", err)
+	}
 	if config.SubjectEgress != SubjectEgressDirect && config.SubjectEgress != SubjectEgressProxy {
 		return Config{}, fmt.Errorf("subject_egress 必须是 %s 或 %s", SubjectEgressDirect, SubjectEgressProxy)
 	}
@@ -113,6 +119,16 @@ func parseConfig(marketID string, raw []byte) (Config, error) {
 		return Config{}, fmt.Errorf("refetch_after_close_minutes 不能为负")
 	}
 	return config, nil
+}
+
+// DefaultIngest 返回空间（与市场同名）K 线任务的默认采集方式；空间不是登记的市场时返回空串。
+// 它注入给任务仓库（store.Options.DefaultIngest），是市场默认值的唯一出口。
+func DefaultIngest(spaceID string) string {
+	config, err := ConfigFor(spaceID)
+	if err != nil {
+		return ""
+	}
+	return config.Ingest
 }
 
 // IDs 返回有 market.yaml 的全部市场，按 ID 排序。

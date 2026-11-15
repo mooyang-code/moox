@@ -143,3 +143,13 @@ func truncateString(value string, limit int) string {
 	}
 	return value[:limit]
 }
+
+// InvocationResult 是同步调用一次执行端（云函数或本地执行端）的结果。
+type InvocationResult struct {
+	RequestID    string
+	Code         int32
+	Message      string
+	Result       map[string]any
+	DurationMS   int64
+	BillDuration int64
+}

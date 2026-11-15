@@ -26,14 +26,13 @@ type collectorTaskCreateFlags struct {
 	Lateness  int
 	Disabled  bool
 	Ingest    string
-	Executor  string
 }
 
 var collectorTaskCreateFlagsValue collectorTaskCreateFlags
 
 var collectorTaskCreateCmd = &cobra.Command{
 	Use:   "create",
-	Short: "创建 K 线采集任务（可直接指定 SCF 定时模式与每函数标的数）",
+	Short: "创建 K 线采集任务（可指定采集方式与每函数标的数）",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		if collectorTaskCreateFlagsValue.AllFields && cmd.Flags().Changed("output-field") {
@@ -69,8 +68,7 @@ func init() {
 	flags.IntVar(&collectorTaskCreateFlagsValue.Symbols, "symbols-per-function", 0, "定时模式下每个函数负责的标的数（0 为默认 50）")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Lateness, "allowed-lateness-seconds", 0, "结果数据集的允许迟到时间（0 为空间默认）")
 	flags.BoolVar(&collectorTaskCreateFlagsValue.Disabled, "disabled", false, "创建后保持停用")
-	flags.StringVar(&collectorTaskCreateFlagsValue.Ingest, "ingest", "", "结果数据集的采集方式初值：stream（WS 推送）或 pull（拉取）；留空用空间默认")
-	flags.StringVar(&collectorTaskCreateFlagsValue.Executor, "executor", "", "结果数据集的执行端初值：scf 或 local；留空用空间默认")
+	flags.StringVar(&collectorTaskCreateFlagsValue.Ingest, "ingest", "", "采集方式：stream（collector-stream 接收推送）、scf（云函数定时拉取）或 local（collector-stream 本地定时拉取）；留空用市场默认值")
 }
 
 func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorTaskCreateFlags) error {
@@ -89,7 +87,7 @@ func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorT
 	defer gateway.Close()
 	rsp := &collectorpb.CreateTaskRsp{}
 	req := &collectorpb.CreateTaskReq{
-		Task: &collectorpb.CollectionTask{SpaceId: flags.SpaceID, TaskName: flags.Name, Description: flags.Description, DataType: "kline", TagIds: flags.TagIDs, CollectParams: structured, Enabled: &enabled, Creator: "moox-cli"},
+		Task: &collectorpb.CollectionTask{SpaceId: flags.SpaceID, TaskName: flags.Name, Description: flags.Description, DataType: "kline", Ingest: strings.ToLower(strings.TrimSpace(flags.Ingest)), TagIds: flags.TagIDs, CollectParams: structured, Enabled: &enabled, Creator: "moox-cli"},
 	}
 	if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "CreateTask", req, rsp); err != nil {
 		return fmt.Errorf("create task: %w", err)
@@ -111,12 +109,6 @@ func collectorTaskCreateParams(flags collectorTaskCreateFlags) map[string]any {
 	}
 	if flags.Lateness > 0 {
 		params["allowed_lateness_seconds"] = flags.Lateness
-	}
-	if flags.Ingest != "" {
-		params["ingest"] = flags.Ingest
-	}
-	if flags.Executor != "" {
-		params["executor"] = flags.Executor
 	}
 	return params
 }

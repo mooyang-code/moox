@@ -89,7 +89,7 @@ type unitComponentSpec struct {
 
 var unitProfiles = map[string][]string{
 	"host":    {"host-gateway", "host-agent"},
-	"control": {"console-proxy", "web-host", "admin", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"},
+	"control": {"console-proxy", "web-host", "admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"},
 	// EventBus 是独立单元：由 [deployments] 决定装在哪台主机（与 Storage 同机最省跨机流量），不再属于控制单元。
 	"eventbus":     {"eventbus"},
 	"storage":      {"storage-primary", "storage-view"},
@@ -143,7 +143,6 @@ var unitSpecs = map[string]unitComponentSpec{
 		// 各市场的路由与数据源运行参数编在 Collector 二进制里，不用打包。
 		{"modules/collector/configs/sources", "collector/configs/sources", true},
 	}},
-	"cloudfunction": {assets: []unitAsset{configAsset("cloudfunction", "cloudfunction"), schemaAsset("cloudfunction", "cloudfunction")}},
 	"factor-mgr": {[]string{"moox-factor-mgr-cli"}, []unitAsset{
 		{"modules/factor/config/app.yaml", "factor-mgr/config/app.yaml", false},
 		{"modules/factor/config/trpc_go.yaml", "factor-mgr/config/trpc_go.yaml", false},

@@ -38,7 +38,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "kline-native", "access-native, kline-native, storage-native, egress-native, doctor-native, admin-native or cloudfunction-native")
+	mode := flag.String("mode", "kline-native", "access-native, kline-native, storage-native, egress-native, doctor-native or admin-native")
 	nodeID := flag.String("node-id", "", "test host ID")
 	upstream := flag.String("upstream-addr", "", "loopback fixture upstream")
 	address := flag.String("listen-addr", "127.0.0.1:0", "fixture listener")
@@ -60,8 +60,6 @@ func main() {
 		err = runComponentsNative([]string{"admin", "monitor"}, *nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "admin-native":
 		err = runAdminNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
-	case "cloudfunction-native":
-		err = runCloudFunctionNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	default:
 		err = errors.New("unsupported native fixture mode")
 	}
@@ -103,21 +101,6 @@ func runAccessNative(hostID, storageAddress, listenAddress, readyFile, nonceDire
 func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
 	return runNativeRoutes(nodeID, []gatewayroute.Route{{ServiceID: "storage-primary", Address: upstreamAddress, ServicePath: "trpc.moox.storage.PrimaryStore",
 		AllowedMethods: []string{"ReadTimeSeriesRows", "UpsertFields"}, AllowedCallers: []string{"moox-cli"}}}, "moox-cli", listenAddress, readyFile, nonceDirectory, keyID, secret)
-}
-
-func runCloudFunctionNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return err
-	}
-	spec, _ := catalog.Service("trpc.moox.cloudfunction.CloudFunctionMgr")
-	var methods []string
-	for _, method := range spec.Methods {
-		if catalog.Allowed("moox-cli", spec.Path, method) {
-			methods = append(methods, method)
-		}
-	}
-	return runNativeRoutes(nodeID, []gatewayroute.Route{{ServiceID: "cloudfunction", Address: upstreamAddress, ServicePath: spec.Path, AllowedMethods: methods, AllowedCallers: []string{"moox-cli"}}}, "moox-cli", listenAddress, readyFile, nonceDirectory, keyID, secret)
 }
 
 type fixtureForwarder struct {

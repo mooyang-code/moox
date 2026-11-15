@@ -269,7 +269,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
 import { callControl } from "@/api/admin/http";
-import { listFunctionInstances } from "@/api/function-instance";
+import { getCollectorStatus } from "@/api/collector/runtime-status";
 import { listFactorTasks } from "@/api/factor";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
@@ -435,7 +435,7 @@ const inventory = computed(() => [
   { label: "计算任务", value: counts.factorTasks, path: "/factor/tasks" },
   { label: "策略实例", value: counts.instances, path: "/strategy/tasks" },
   { label: "执行账户", value: counts.accounts, path: "/trading/paper?list=execution" },
-  { label: "云函数实例", value: counts.nodes, path: "/collector/tasks?tab=executors" }
+  { label: "云函数", value: counts.nodes, path: "/collector/tasks?tab=status" }
 ]);
 
 function fmt(value: number | null | undefined) {
@@ -505,8 +505,9 @@ async function loadSpaceScoped() {
     listTradingAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
       if (isCurrent()) counts.accounts = Number(rsp.page_result?.total ?? rsp.accounts?.length ?? 0);
     }),
-    listFunctionInstances({ page: 1, page_size: 1 }).then(({ items, total }) => {
-      if (isCurrent()) counts.nodes = total || items.length;
+    // 云函数个数取采集计划里由 SCF 执行的函数（推送与本地执行端不算）
+    getCollectorStatus(spaceId, { silentError: true }).then(rsp => {
+      if (isCurrent()) counts.nodes = (rsp.functions || []).filter(item => (item.executor || "scf") === "scf").length;
     }),
     listStrategies({ page: 1, page_size: 200 }).then(rsp => {
       if (isCurrent()) catalog.value = rsp.items;

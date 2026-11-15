@@ -636,6 +636,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		if len(keys[0]) >= 2 && keys[0][0] == "egress_proxy" && keys[0][1] == "dns" {
 			return fmt.Errorf("config_invalid: [egress_proxy.dns] 已删除，DNS 快照不再使用；运行 moox-cli config migrate --yes 去掉它")
 		}
+		if last := keys[0][len(keys[0])-1]; keys[0][0] == "scf_plan" && (last == "default_ingest" || last == "default_executor") {
+			return fmt.Errorf("config_invalid: %s 已删除：采集方式记在采集任务上，默认值在各市场的 market.yaml，用 moox-cli collector ingest-mode set 切换；运行 moox-cli config migrate --yes 去掉它", first)
+		}
 		section := string(keys[0][0])
 		switch section {
 		case "control_host", "storage_host", "view_host", "strategy_host", "other_hosts":

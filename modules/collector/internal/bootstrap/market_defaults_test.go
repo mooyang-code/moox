@@ -12,34 +12,34 @@ import (
 func TestSCFPlanSpaceDefaultsComeFromMarketFiles(t *testing.T) {
 	require.Equal(t, map[string]SCFPlanSpaceConfig{
 		"stockcn": {
-			EgressBalance:   &SCFPlanEgressBalance{MaxPerIP: 1, Rounds: 5, IdleStart: "15:10", IdleEnd: "07:50", Timezone: "Asia/Shanghai"},
-			AutoSize:        &SCFPlanAutoSize{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8},
-			DefaultIngest:   "pull",
-			DefaultExecutor: "scf",
-			Fetch:           &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 800},
+			EgressBalance: &SCFPlanEgressBalance{MaxPerIP: 1, Rounds: 5, IdleStart: "15:10", IdleEnd: "07:50", Timezone: "Asia/Shanghai"},
+			AutoSize:      &SCFPlanAutoSize{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8},
+			Fetch:         &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 800},
 		},
 		// 港股：固定每函数 25 只，不估算函数个数、不做出口 IP 去重，收盘后等 5 秒。
 		"stockhk": {
 			SymbolsPerFunction: 25,
-			DefaultIngest:      "pull",
-			DefaultExecutor:    "scf",
 			Fetch:              &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 5000},
 		},
 		// 美股：固定每函数 50 只（标普 500 共 11 个函数），不估算函数个数、不做出口 IP 去重，收盘后等 5 秒。
 		"stockus": {
 			SymbolsPerFunction: 50,
-			DefaultIngest:      "pull",
-			DefaultExecutor:    "scf",
 			Fetch:              &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 5000},
 		},
 		"crypto": {
-			DefaultIngest: "stream", DefaultExecutor: "local",
 			Markets: map[string]SCFPlanMarketConfig{
 				"spot": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 3000}},
 				"swap": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 8000}, LatenessS: 20},
 			},
 		},
 	}, defaultSCFPlan().Spaces)
+}
+
+// 默认采集方式是 market.yaml 顶层的一项 ingest：crypto 推送，A 股与港美股云函数；没登记的空间没有默认值。
+func TestDefaultIngestComesFromMarketFiles(t *testing.T) {
+	for space, want := range map[string]string{"crypto": "stream", "stockcn": "scf", "stockhk": "scf", "stockus": "scf", "no_such_space": ""} {
+		require.Equal(t, want, markets.DefaultIngest(space), space)
+	}
 }
 
 // 允许迟到时间：crypto 15 秒、stockcn 90 秒；未登记的空间报错，不再给 60 秒的默认值。

@@ -124,6 +124,21 @@ export interface CollectionTaskInput {
   sourceSeriesTags?: string[];
   outputFields?: string[];
   tagIds?: string[];
+  /** 新建 K 线任务的采集方式（stream、scf、local）；空表示用市场默认值 */
+  ingest?: string;
+}
+
+/** 采集方式的三个取值与界面文字。 */
+export const INGEST_OPTIONS: ReadonlyArray<{ value: string; label: string; hint: string }> = [
+  { value: "stream", label: "推送", hint: "collector-stream 接收交易所推送，补采走它的本地执行端" },
+  { value: "scf", label: "云函数拉取", hint: "云函数定时拉取，补采也走云函数" },
+  { value: "local", label: "本地拉取", hint: "collector-stream 本地定时拉取与补采" }
+];
+
+/** 采集方式的界面文字；合成任务没有采集方式，显示 “-”。 */
+export function ingestLabel(value: unknown): string {
+  const ingest = String(value ?? "").trim();
+  return INGEST_OPTIONS.find(option => option.value === ingest)?.label || ingest || "-";
 }
 
 export interface KlineResampleParams extends Record<string, unknown> {
@@ -157,6 +172,7 @@ export interface CollectionTaskRecord {
   description: string;
   space_id: string;
   data_type: string;
+  ingest: string;
   tag_ids: string[];
   collect_params: Record<string, unknown>;
   enabled: boolean;
@@ -238,6 +254,7 @@ export function buildCollectionTaskPayload(
     task_name: normalizeCollectionTaskName(fields.task_name),
     description: fields.description.trim(),
     data_type: input.dataType,
+    ...(input.dataType === "kline" && input.ingest?.trim() ? { ingest: input.ingest.trim() } : {}),
     tag_ids: normalizeSubjectTags(input.tagIds || input.subjectTags),
     collect_params: buildCollectionTaskParams(input),
     enabled: fields.enabled,
@@ -254,6 +271,7 @@ export function normalizeCollectionTask(raw: unknown): CollectionTaskRecord {
     description: stringValue(value.description),
     space_id: stringValue(value.space_id),
     data_type: stringValue(value.data_type),
+    ingest: stringValue(value.ingest),
     tag_ids: stringArrayValue(value.tag_ids),
     collect_params: normalizeObject(value.collect_params),
     enabled: value.enabled !== false && value.enabled !== "false",

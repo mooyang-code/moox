@@ -1,3 +1,5 @@
+// Package marketfetch 是采集的执行面：Plan 的结构与编解码、取数流水线、周期提交、路由与单次调用的上报，
+// 云函数程序与 collector-stream 里跑的就是这一包。它不得引入控制面（fetchplan、调腾讯云的 cloud）与 Collector 的库（store）。
 package marketfetch
 
 import (
@@ -320,7 +322,7 @@ func (p *Plan) Pair(subjectID string) string {
 
 // PlanSeriesTag 返回写入行使用的 series_tag；Collector 登记快照时必须使用同一个函数。
 func PlanSeriesTag(spaceID string, market PlanMarket) string {
-	return collectionItemSeriesTag(spaceID, domain.CollectionItem{Provider: market.Provider, SourceID: market.SourceID, MarketType: market.MarketType})
+	return CollectionItemSeriesTag(spaceID, domain.CollectionItem{Provider: market.Provider, SourceID: market.SourceID, MarketType: market.MarketType})
 }
 
 // BuildRequests 按触发时间选出到期的频率与各数据集生效的那份，构造每个频率一次的采集请求。
@@ -451,4 +453,58 @@ func (p *Plan) StandbyFor(scheduled time.Time) int {
 		return 0
 	}
 	return p.Fetch.StandbyMS
+}
+
+// PlanDatasetKey 返回采集计划里数据集的键“数据集|频率”。键的写法只在这里定义。
+func PlanDatasetKey(datasetID, frequency string) string { return datasetID + "|" + frequency }
+
+// PlanDatasetKeyOf 返回计划中数据集的“数据集|频率”键。
+func PlanDatasetKeyOf(dataset PlanDataset) string {
+	return PlanDatasetKey(dataset.DatasetID, dataset.Frequency)
+}
+
+// SymbolsOrNil 返回计划里出现过的标的集合；计划为空返回 nil。
+func (p *Plan) SymbolsOrNil() map[string]struct{} {
+	if p == nil {
+		return nil
+	}
+	subjects := map[string]struct{}{}
+	for _, dataset := range p.Datasets {
+		for _, copy := range dataset.Copies {
+			for _, subject := range copy.Subjects {
+				subjects[subject.ID] = struct{}{}
+			}
+		}
+	}
+	return subjects
+}
+
+// HasSubject 判断标的是否出现在计划的任何一份里。
+func (p *Plan) HasSubject(id string) bool {
+	_, ok := p.SymbolsOrNil()[id]
+	return ok
+}
+
+// PruneExceptions 去掉不再出现在任何份里的标的的例外与交易对。
+func (p *Plan) PruneExceptions() {
+	subjects := p.SymbolsOrNil()
+	for key := range p.Pairs {
+		if _, ok := subjects[key]; !ok {
+			delete(p.Pairs, key)
+		}
+	}
+	if len(p.Pairs) == 0 {
+		p.Pairs = nil
+	}
+	if len(p.SymbolExceptions) == 0 {
+		return
+	}
+	for key := range p.SymbolExceptions {
+		if _, ok := subjects[key]; !ok {
+			delete(p.SymbolExceptions, key)
+		}
+	}
+	if len(p.SymbolExceptions) == 0 {
+		p.SymbolExceptions = nil
+	}
 }

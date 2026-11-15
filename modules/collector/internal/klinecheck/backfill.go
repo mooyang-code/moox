@@ -11,12 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -100,9 +99,9 @@ type FunctionProvider interface {
 	EnsureBackfillFunction(ctx context.Context, marketType string) (string, error)
 }
 
-// Invoker 同步调用函数。
+// Invoker 同步调用补采执行端（云函数或本地执行端）并等它返回。
 type Invoker interface {
-	Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudfunctionpb.ScfInvokeType) (scfinvoker.InvocationResult, error)
+	Invoke(ctx context.Context, spaceID, functionName string, event map[string]any) (marketfetch.InvocationResult, error)
 }
 
 // Backfiller 管理补采作业：展开分块、通过补采函数执行、复查缺口。
@@ -110,8 +109,9 @@ type Backfiller struct {
 	// Refill 为 true 时，分块执行完立刻补位认领下一块（生产开启）；为 false 时只在调度节拍上认领。
 	Refill bool
 
-	Checker   *Checker
-	Store     BackfillStore
+	Checker *Checker
+	Store   BackfillStore
+	// Plans 是全部采集计划记录，只用来找补采分块当时的市场与符号映射；时间线读 Checker.Timeline。
 	Plans     PlanHistory
 	Invoker   Invoker
 	Functions func(spaceID string) FunctionProvider
@@ -347,6 +347,10 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 	if err != nil {
 		return err
 	}
+	// 采集计划记录每轮只读一次（第一次认领到分块时），本轮各作业认领的分块共用。
+	var history *planHistory
+	var historyErr error
+	historyLoaded := false
 	for _, job := range jobs {
 		inFlight, err := b.Store.InFlightChunks(ctx, spaceID)
 		if err != nil {
@@ -362,6 +366,10 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 				if err := b.Store.SetJobStatus(ctx, job.JobID, store.BackfillRunning, ""); err != nil {
 					return err
 				}
+				if !historyLoaded {
+					history, historyErr = b.loadPlanHistory(ctx, spaceID)
+					historyLoaded = true
+				}
 			}
 			for _, chunk := range claimed {
 				b.workers.Add(1)
@@ -370,7 +378,7 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 					// 分块执行完（成功或失败）后立刻补位认领下一块，不等下一次定时调度：
 					// 否则吞吐被限制为每次调度一批（每分钟约 5 块），大窗口要排很久。
 					// 退回名额、结果不明的分块不触发补位，避免函数未就绪时空转。
-					if b.runChunk(b.baseContext(), spaceID, chunk, job.Kind == store.BackfillKindForce) && b.Refill {
+					if b.runChunk(b.baseContext(), spaceID, chunk, job.Kind == store.BackfillKindForce, history, historyErr) && b.Refill {
 						if err := b.Tick(b.baseContext(), spaceID); err != nil {
 							log.WarnContextf(b.baseContext(), "collector backfill refill failed space=%s: %v", spaceID, err)
 						}
@@ -407,23 +415,42 @@ func (b *Backfiller) baseContext() context.Context {
 	return context.Background()
 }
 
+// planHistory 是一个空间的全部采集计划记录（按先后）连同解码后的内容。补采按它找历史上负责某个标的的函数计划。
+// 每轮补采调度（Tick）读一次、解码一次，本轮认领的分块共用；不跨轮缓存。
+type planHistory struct {
+	records  []*store.FetchPlanRecord
+	contents []*fetchplan.FetchPlanContent
+}
+
+// loadPlanHistory 读出并解码空间的全部采集计划记录。
+func (b *Backfiller) loadPlanHistory(ctx context.Context, spaceID string) (*planHistory, error) {
+	records, err := b.Plans.ListAll(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	history := &planHistory{records: records, contents: make([]*fetchplan.FetchPlanContent, len(records))}
+	for i := range records {
+		if history.contents[i], err = fetchplan.DecodeFetchPlanContent(records[i].Plan); err != nil {
+			return nil, err
+		}
+	}
+	return history, nil
+}
+
 // datasetMarket 从采集计划里找到负责该标的的那份函数计划（市场与交易所符号映射）。
 // 例外符号只保存在负责该标的的函数计划里，所以必须按数据集、频率、标的与时间定位，不能借用同一数据集的其他分片。
 // 优先选择在 at 时已生效的计划份，找不到时退回最近一份包含该标的的计划。
 // 统一数据集（seriesTag 非空）里同一标的有现货、永续两条序列，分属不同市场的函数：只选市场与该序列一致的计划，
 // 补采才会用对应市场的路由取数，写出的行 tag 与缺口一致，不会把永续的缺口补成现货行。
-func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, frequency, subjectID, seriesTag string, at time.Time) (*marketfetch.Plan, error) {
+func (h *planHistory) datasetMarket(datasetID, frequency, subjectID, seriesTag string, at time.Time) (*marketfetch.Plan, error) {
 	wantMarket := ""
 	if seriesTag != "" {
 		wantMarket = seriesset.SeriesTagMarket(seriesTag)
 	}
-	records, err := b.Plans.ListAll(ctx, spaceID)
-	if err != nil {
-		return nil, err
-	}
+	records, contents := h.records, h.contents
 	key := DatasetKey(datasetID, frequency)
 	// resolve 返回选中的计划；标的的符号映射按原始新旧计划与时间重新判定，避免过渡计划合并后的映射用错。
-	resolve := func(content *marketfetch.FetchPlanContent, function *marketfetch.PlanFunctionChange, plan *marketfetch.Plan) *marketfetch.Plan {
+	resolve := func(content *fetchplan.FetchPlanContent, function *fetchplan.PlanFunctionChange, plan *marketfetch.Plan) *marketfetch.Plan {
 		symbol, ok := content.SymbolAt(function, key, subjectID, at)
 		if !ok || plan.ExchangeSymbol(subjectID) == symbol {
 			return plan
@@ -436,13 +463,8 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 		patched.SymbolExceptions[subjectID] = symbol
 		return &patched
 	}
-	contents := make([]*marketfetch.FetchPlanContent, len(records))
 	for i := range records {
-		content, err := marketfetch.DecodeFetchPlanContent(records[i].Plan)
-		if err != nil {
-			return nil, err
-		}
-		contents[i] = content
+		content := contents[i]
 		// 纯符号映射变更没有数据集生效边界：不知道旧映射适用到何时，变更之前的历史数据拒绝补采，避免取错交易对。
 		for _, name := range content.SortedFunctionNames() {
 			if !content.SymbolChangedWithoutBoundary(content.Functions[name], key, subjectID) {
@@ -536,8 +558,8 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 }
 
 // runChunk 调用补采函数执行一个分块，随后复查该块的缺口。force 表示分块属于强制重拉作业：函数报失败时退回重试
-// （见下文），而不是直接记失败。
-func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk, force bool) (finished bool) {
+// （见下文），而不是直接记失败。history、historyErr 是本轮调度读出的采集计划记录（读取失败时分块记失败）。
+func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk, force bool, history *planHistory, historyErr error) (finished bool) {
 	fail := func(err error) {
 		finished = true
 		log.WarnContextf(ctx, "collector backfill chunk failed space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
@@ -553,13 +575,17 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		fail(errors.New(reason))
 		return
 	}
-	plan, err := b.datasetMarket(ctx, spaceID, chunk.DatasetID, chunk.Frequency, chunk.SubjectID, chunk.SeriesTag, chunk.From)
+	if historyErr != nil {
+		fail(historyErr)
+		return
+	}
+	plan, err := history.datasetMarket(chunk.DatasetID, chunk.Frequency, chunk.SubjectID, chunk.SeriesTag, chunk.From)
 	if err != nil {
 		fail(err)
 		return
 	}
 	release := func(reason error) {
-		// 执行端暂时不可用（函数创建中、发布租约被占用、本地执行端离线）：不算执行失败，分块退回待认领并退回这次尝试。
+		// 执行端暂时不可用（补采函数还在创建或升级、本地执行端离线）：不算执行失败，分块退回待认领并退回这次尝试。
 		log.WarnContextf(ctx, "collector backfill executor is not ready space=%s chunk=%s: %v", spaceID, chunk.ChunkID, reason)
 		if releaseErr := b.Store.ReleaseChunk(ctx, chunk.ID, chunk.Attempts); releaseErr != nil {
 			log.WarnContextf(ctx, "collector backfill chunk release failed chunk=%s: %v", chunk.ChunkID, releaseErr)
@@ -609,7 +635,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		return
 	}
 	callCtx, cancel := context.WithTimeout(ctx, chunkInvokeLimit)
-	result, err := invoker.Invoke(callCtx, spaceID, functionName, event, cloudfunctionpb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
+	result, err := invoker.Invoke(callCtx, spaceID, functionName, event)
 	cancel()
 	if err != nil {
 		// 同步调用超时或断连时结果不明：不标记失败，名额保留到最迟结束时间后，由重新认领再执行。
@@ -669,7 +695,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 }
 
 // sourceReportedEmpty 判断函数的失败是否仅因行情源返回了空结果（没有已收盘的 K 线）。
-func sourceReportedEmpty(result scfinvoker.InvocationResult) bool {
+func sourceReportedEmpty(result marketfetch.InvocationResult) bool {
 	text := strings.ToLower(fmt.Sprintf("%s %v", result.Message, result.Result))
 	return strings.Contains(text, strings.ToLower(marketdata.ErrNoClosedBar.Error()))
 }
@@ -755,11 +781,7 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 			return nil // 上一次自动作业还没结束，不叠加
 		}
 	}
-	records, err := b.Plans.ListAll(ctx, spaceID)
-	if err != nil {
-		return err
-	}
-	timeline, err := BuildTimeline(records)
+	timeline, err := loadTimeline(ctx, b.Checker.Timeline, spaceID)
 	if err != nil {
 		return err
 	}

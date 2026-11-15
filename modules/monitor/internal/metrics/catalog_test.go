@@ -121,25 +121,25 @@ func TestListFreshSeriesForInstanceFiltersHistoricalLabelsBeforeLimit(t *testing
 	rows := make([]MetricSeries, 0, 503)
 	for i := 0; i < 501; i++ {
 		rows = append(rows, MetricSeries{
-			ServiceName: "cloudfunction", InstanceID: "cloudfunction@control",
+			ServiceName: "collector", InstanceID: "collector@control",
 			SeriesID: fmt.Sprintf("stale-%03d", i), MetricName: "heartbeat",
 			LabelsJSON: `{}`, LastSeenAt: now.Add(-3 * time.Minute),
 		})
 	}
 	rows = append(rows,
 		MetricSeries{
-			ServiceName: "cloudfunction", InstanceID: "cloudfunction@control",
+			ServiceName: "collector", InstanceID: "collector@control",
 			SeriesID: "fresh-a", MetricName: "heartbeat", LabelsJSON: `{}`, LastSeenAt: now,
 		},
 		MetricSeries{
-			ServiceName: "cloudfunction", InstanceID: "cloudfunction@control",
+			ServiceName: "collector", InstanceID: "collector@control",
 			SeriesID: "fresh-b", MetricName: "heartbeat", LabelsJSON: `{}`, LastSeenAt: now,
 		},
 	)
 	require.NoError(t, messageStore.db.CreateInBatches(rows, 100).Error)
 
 	got, err := NewCatalog(messageStore).ListFreshSeriesForInstanceAt(
-		context.Background(), "cloudfunction@control", "heartbeat", now, 500,
+		context.Background(), "collector@control", "heartbeat", now, 500,
 	)
 	require.NoError(t, err)
 	require.Len(t, got, 2)

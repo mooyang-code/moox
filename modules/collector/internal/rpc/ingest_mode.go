@@ -3,25 +3,24 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 )
 
 // SetStreamService 注入推送采集服务（运行状态、切换前的在线检查）。
 func (s *Service) SetStreamService(stream *StreamService) { s.stream = stream }
 
-// GetIngestMode 返回数据集的采集方式、正在交接的生效周期与 collector-stream 实例状态。
+// GetIngestMode 返回 K 线任务的采集方式、正在交接的生效周期与 collector-stream 实例状态。
 func (s *Service) GetIngestMode(ctx context.Context, req *pb.GetIngestModeReq) (*pb.GetIngestModeRsp, error) {
 	spaceID := normalizeSpace(req.GetSpaceId())
 	if spaceID == "" {
 		return &pb.GetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id 必填")}, nil
 	}
-	modes, err := s.ingestModes(ctx, spaceID, strings.TrimSpace(req.GetDatasetId()))
+	modes, err := s.ingestModes(ctx, spaceID, strings.TrimSpace(req.GetDatasetId()), false)
 	if err != nil {
 		return &pb.GetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -34,9 +33,9 @@ func (s *Service) GetIngestMode(ctx context.Context, req *pb.GetIngestModeReq) (
 	return rsp, nil
 }
 
-// ingestModes 列出数据集的采集方式，并标出正在交接的数据集各频率的生效周期 P。
-func (s *Service) ingestModes(ctx context.Context, spaceID, datasetID string) ([]*pb.IngestMode, error) {
-	stored, err := s.persistence.IngestModes().List(ctx, spaceID)
+// ingestModes 列出 K 线任务的采集方式，并标出正在交接的数据集各频率的生效周期 P。enabledOnly 为真时只列启用的任务。
+func (s *Service) ingestModes(ctx context.Context, spaceID, datasetID string, enabledOnly bool) ([]*pb.IngestMode, error) {
+	tasks, err := s.taskRepo.ListKline(ctx, spaceID, datasetID)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +45,7 @@ func (s *Service) ingestModes(ctx context.Context, spaceID, datasetID string) ([
 		return nil, err
 	}
 	if open != nil {
-		content, err := marketfetch.DecodeFetchPlanContent(open.Plan)
+		content, err := fetchplan.DecodeFetchPlanContent(open.Plan)
 		if err != nil {
 			return nil, err
 		}
@@ -59,77 +58,47 @@ func (s *Service) ingestModes(ctx context.Context, spaceID, datasetID string) ([
 			}
 		}
 	}
-	ids := make([]string, 0, len(stored))
-	for id := range stored {
-		if datasetID == "" || id == datasetID {
-			ids = append(ids, id)
+	result := make([]*pb.IngestMode, 0, len(tasks))
+	for _, task := range tasks {
+		if enabledOnly && !task.Enabled {
+			continue
 		}
-	}
-	sort.Strings(ids)
-	result := make([]*pb.IngestMode, 0, len(ids))
-	for _, id := range ids {
-		mode := stored[id]
-		result = append(result, &pb.IngestMode{SpaceId: spaceID, DatasetId: id, Mode: mode.Mode, Executor: mode.Executor, UpdatedAt: mode.UpdatedAt.UTC().Format(time.RFC3339), EffectivePeriods: periods[id]})
+		result = append(result, &pb.IngestMode{SpaceId: spaceID, DatasetId: task.ResultDatasetID, TaskId: task.TaskID, Ingest: task.Ingest, EffectivePeriods: periods[task.ResultDatasetID]})
 	}
 	return result, nil
 }
 
-// SetIngestMode 按数据集切换采集方式（只允许 moox-cli）。下一轮对账生成交接计划并按频率选生效周期 P。
+// SetIngestMode 切换 K 线任务的采集方式（只允许 moox-cli）：按数据集切换时改写这个数据集的任务，不给数据集时改空间的全部 K 线任务。
+// 下一轮对账生成交接计划并按频率选生效周期 P。
 func (s *Service) SetIngestMode(ctx context.Context, req *pb.SetIngestModeReq) (*pb.SetIngestModeRsp, error) {
 	spaceID := normalizeSpace(req.GetSpaceId())
 	datasetID := strings.TrimSpace(req.GetDatasetId())
-	mode, executor := strings.ToLower(strings.TrimSpace(req.GetMode())), strings.ToLower(strings.TrimSpace(req.GetExecutor()))
+	ingest := strings.ToLower(strings.TrimSpace(req.GetIngest()))
 	if spaceID == "" {
 		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id 必填")}, nil
 	}
-	if mode != store.IngestStreaming && mode != store.IngestPull {
-		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "mode 必须是 stream 或 pull")}, nil
+	if err := domain.ValidateIngest(ingest); err != nil {
+		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	if executor != "" && executor != store.ExecutorSCF && executor != store.ExecutorLocal {
-		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "executor 必须是 scf 或 local")}, nil
-	}
-	stored, err := s.persistence.IngestModes().List(ctx, spaceID)
-	if err != nil {
-		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-	}
-	var targets []string
-	for id := range stored {
-		if datasetID == "" || id == datasetID {
-			targets = append(targets, id)
-		}
-	}
-	if len(targets) == 0 {
-		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, fmt.Sprintf("空间 %s 还没有采集计划，没有可切换的数据集 %s；用 moox-cli collector status 看计划为什么没建出来", spaceID, datasetID))}, nil
-	}
-	sort.Strings(targets)
 	var worker *pb.StreamWorkerStatus
+	var err error
 	if s.stream != nil {
 		if worker, err = s.stream.WorkerStatus(ctx, spaceID); err != nil {
 			return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
 	}
-	// 切到 stream（或用本地执行端）要求 collector-stream 在线，否则拒绝。
-	if mode == store.IngestStreaming || executor == store.ExecutorLocal {
-		if worker == nil || !worker.GetOnline() {
-			return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_CONFLICT, "collector-stream 不在线（心跳超时），不能切到 stream 或本地执行端"), Stream: worker}, nil
-		}
+	// 切到 stream 或 local 要求 collector-stream 在线，否则拒绝。
+	if ingest != domain.IngestSCF && (worker == nil || !worker.GetOnline()) {
+		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_CONFLICT, "collector-stream 不在线（心跳超时），不能切到 stream 或 local"), Stream: worker}, nil
 	}
-	updates := make([]store.IngestMode, 0, len(targets))
-	for _, id := range targets {
-		next := store.IngestMode{SpaceID: spaceID, DatasetID: id, Mode: mode, Executor: executor, Force: req.GetForce()}
-		// 不指定执行端时：切到 stream 一并把补采执行端设为 local（本地执行端与推送同进程），切到 pull 用 scf。
-		if next.Executor == "" {
-			next.Executor = store.ExecutorLocal
-			if mode == store.IngestPull {
-				next.Executor = store.ExecutorSCF
-			}
-		}
-		updates = append(updates, next)
-	}
-	if err := s.persistence.IngestModes().Set(ctx, updates); err != nil {
+	changed, err := s.taskRepo.SetIngest(ctx, spaceID, datasetID, ingest)
+	if err != nil {
 		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	modes, err := s.ingestModes(ctx, spaceID, datasetID)
+	if changed == 0 {
+		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, fmt.Sprintf("空间 %s 没有可切换的 K 线任务（数据集 %q）；用 moox-cli collector ingest-mode get 看现有任务", spaceID, datasetID))}, nil
+	}
+	modes, err := s.ingestModes(ctx, spaceID, datasetID, false)
 	if err != nil {
 		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}

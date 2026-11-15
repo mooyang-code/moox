@@ -239,9 +239,7 @@ func newSetupAttachSCFVPCCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
-// newSetupInvokeSCFCommand invokes a single function directly through SCF's
-// control API. It is useful for connectivity proof when the optional
-// FunctionInstance control service is temporarily unavailable.
+// newSetupInvokeSCFCommand 直接经腾讯云 SCF 的控制接口调用一个函数，不经 Collector；Collector 不可用时用来证明连通性。
 func newSetupInvokeSCFCommand(deps setupDeps) *cobra.Command {
 	var file, region, namespace, functionName, eventJSON string
 	cmd := &cobra.Command{
@@ -408,7 +406,7 @@ du -xh --max-depth=2 "$root/data" "$root/logs" 2>/dev/null | sort -h | tail -40 
 printf 'staged archives:\n'
 ls -lh /tmp/moox-control-*.tar.gz /tmp/moox-storage-*.tar.gz 2>/dev/null || true
 printf 'recent service errors:\n'
-for name in cloudfunction eventbus collector factor gateway storage storage-primary storage-view; do
+for name in eventbus collector factor gateway storage storage-primary storage-view; do
   for log in "$root/logs/$name/stdout.log" "$root/logs/$name/stderr.log" "$root/logs/$name.log"; do
     if [ -f "$log" ]; then echo "--- $log"; tail -30 "$log"; fi
   done

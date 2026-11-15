@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/seriesset"
@@ -18,10 +19,58 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
+// fakePlans 是内存里的计划记录：补采按它找历史计划，检查按 timelineRows 从它得到时间线行。
 type fakePlans struct{ records []*store.FetchPlanRecord }
 
 func (f fakePlans) ListAll(context.Context, string) ([]*store.FetchPlanRecord, error) {
 	return f.records, nil
+}
+
+func (f fakePlans) ListBySpace(context.Context, string) ([]store.SeriesTimelineEntry, error) {
+	return timelineRows(f.records), nil
+}
+
+// timelineRows 按对账器写时间线的规则，把测试里构造的计划记录换成时间线行（按记录先后）：
+// 不再采集的数据集（Gone）在计划建立时写一行空序列；标的集合变了的数据集在 Storage 确认登记后
+// （进度里已登记，或计划已生效）写一行序列。这只是检查类测试的夹具，真实写入路径与旧算法的等价
+// 由 fetchplan 的 TestLegacyTimelineMatchesBuildTimeline 驱动对账器证明。
+func timelineRows(records []*store.FetchPlanRecord) []store.SeriesTimelineEntry {
+	var entries []store.SeriesTimelineEntry
+	for _, record := range records {
+		content, err := fetchplan.DecodeFetchPlanContent(record.Plan)
+		if err != nil {
+			panic(err)
+		}
+		progress, err := fetchplan.DecodeFetchPlanProgress(record.Progress)
+		if err != nil {
+			panic(err)
+		}
+		keys := make([]string, 0, len(content.Datasets))
+		for key := range content.Datasets {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			change := content.Datasets[key]
+			if !change.Changed || change.P <= 0 {
+				continue
+			}
+			entry := store.SeriesTimelineEntry{SpaceID: record.SpaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P}
+			switch {
+			case change.Gone:
+				entries = append(entries, entry)
+			case change.HashChanged && (record.Status == store.FetchPlanApplied || progress.Registered[key]):
+				entry.SeriesHash, entry.Series, entry.LatenessS, entry.OutputFields = change.Hash, change.Series, change.LatenessS, change.OutputFields
+				entries = append(entries, entry)
+			}
+		}
+	}
+	return entries
+}
+
+// appliedTimeline 返回一份已生效计划（JSON 内容）写下的时间线行，给直接往库里写计划记录的测试补上时间线。
+func appliedTimeline(spaceID, plan string) []store.SeriesTimelineEntry {
+	return timelineRows([]*store.FetchPlanRecord{{SpaceID: spaceID, Status: store.FetchPlanApplied, Plan: plan, Progress: "{}"}})
 }
 
 // fakeRows 按“标的 → 缺失的开始时间”返回行；深度检查时缺 open 字段的时间点单独登记。
@@ -66,11 +115,11 @@ func record(t *testing.T, id int64, status string, p int64, subjects ...string) 
 	return recordFor(t, id, "ds", status, p, subjects...)
 }
 
-// recordFor 构造只含一个“数据集|1m”变更的计划记录。hash 和真实计划一样非空（空 hash 表示快照已清空，见 BuildTimeline）。
+// recordFor 构造只含一个“数据集|1m”变更的计划记录。hash 和真实计划一样非空。
 func recordFor(t *testing.T, id int64, dataset, status string, p int64, subjects ...string) *store.FetchPlanRecord {
 	t.Helper()
-	content := &marketfetch.FetchPlanContent{Datasets: map[string]*marketfetch.PlanDatasetChange{}, Functions: map[string]*marketfetch.PlanFunctionChange{}}
-	change := &marketfetch.PlanDatasetChange{Changed: true, HashChanged: true, P: p}
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDatasetChange{Changed: true, HashChanged: true, P: p}
 	change.DatasetID, change.Frequency, change.LatenessS, change.Hash = dataset, "1m", 15, "hash:"+strings.Join(subjects, ",")
 	for _, subject := range subjects {
 		change.Series = append(change.Series, seriesOf(subject))
@@ -89,7 +138,7 @@ func TestCheckFindsMergedGapsAcrossSubjectChanges(t *testing.T) {
 	for _, minute := range []int{3, 4, 5, 12} {
 		rows.missing["BTC-USDT"][base.Add(time.Duration(minute)*time.Minute).Unix()] = true
 	}
-	checker := &Checker{Plans: fakePlans{records}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
+	checker := &Checker{Timeline: fakePlans{records}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
 	result, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.Add(20 * time.Minute)})
 	require.NoError(t, err)
 	// BTC 在 0～20 分钟都应有 20 根；ETH 只在 0～10 分钟应有 10 根（之后被移出标的集合）。
@@ -109,7 +158,7 @@ func TestCheckFindsMergedGapsAcrossSubjectChanges(t *testing.T) {
 func TestCheckReachesBeforeTheFirstPlanOnlyWhenAsked(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
 	rows := &fakeRows{missing: map[string]map[int64]bool{"BTC-USDT": {}, "ETH-USDT": {}}}
-	checker := &Checker{Plans: fakePlans{[]*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "BTC-USDT", "ETH-USDT")}}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
+	checker := &Checker{Timeline: fakePlans{[]*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "BTC-USDT", "ETH-USDT")}}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
 	from, to := base.Add(-10*time.Minute), base.Add(5*time.Minute)
 
 	plain, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: from, To: to, AssumeMissing: true})
@@ -141,7 +190,7 @@ func TestCheckReadsManySubjectsInBatches(t *testing.T) {
 		subjects = append(subjects, fmt.Sprintf("S%03d-USDT", i))
 	}
 	rows := &fakeRows{missing: map[string]map[int64]bool{"S007-USDT": {base.Add(2 * time.Minute).Unix(): true}}}
-	checker := &Checker{Plans: fakePlans{[]*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), subjects...)}}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
+	checker := &Checker{Timeline: fakePlans{[]*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), subjects...)}}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
 	result, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.Add(5 * time.Minute)})
 	require.NoError(t, err)
 	require.Equal(t, 2, rows.reads, "标的按每批 subjectsPerRead 个合并读取")
@@ -156,7 +205,7 @@ func TestCheckIgnoresPeriodsBeforeDeadlineAndUnregisteredPlans(t *testing.T) {
 	records := []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "BTC-USDT"), open}
 	rows := &fakeRows{}
 	// 8:10 之前收盘并过了迟到时间的才应有：8:00～8:09 共 10 根（8:09 这根 8:10:00 收盘，+15 秒）。
-	checker := &Checker{Plans: fakePlans{records}, Rows: rows, Now: func() time.Time { return base.Add(10*time.Minute + 20*time.Second) }}
+	checker := &Checker{Timeline: fakePlans{records}, Rows: rows, Now: func() time.Time { return base.Add(10*time.Minute + 20*time.Second) }}
 	result, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.Add(time.Hour)})
 	require.NoError(t, err)
 	require.Equal(t, 10, result.Expected, "a plan whose snapshot is not registered yet contributes nothing")
@@ -172,7 +221,7 @@ func TestCheckIgnoresPeriodsBeforeDeadlineAndUnregisteredPlans(t *testing.T) {
 func TestDeepCheckRequiresFields(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
 	rows := &fakeRows{noOpen: map[string]map[int64]bool{"BTC-USDT": {base.Add(2 * time.Minute).Unix(): true}}}
-	checker := &Checker{Plans: fakePlans{[]*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "BTC-USDT")}}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
+	checker := &Checker{Timeline: fakePlans{[]*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "BTC-USDT")}}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
 	shallow, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.Add(5 * time.Minute)})
 	require.NoError(t, err)
 	require.Zero(t, shallow.Missing)
@@ -206,7 +255,7 @@ func TestCheckSplitsGapsAtNonTradingPeriods(t *testing.T) {
 		minute := int(barStart.Sub(base) / time.Minute)
 		return minute != 4 && minute != 5, nil
 	}
-	checker := &Checker{Plans: fakePlans{records}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }, Calendar: calendar}
+	checker := &Checker{Timeline: fakePlans{records}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }, Calendar: calendar}
 	result, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.Add(10 * time.Minute)})
 	require.NoError(t, err)
 	require.Equal(t, 8, result.Expected)
@@ -225,7 +274,7 @@ func TestCheckRejectsTooManyPointsWithShrinkableError(t *testing.T) {
 		subjects = append(subjects, fmt.Sprintf("S%d-USDT", i))
 	}
 	records := []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), subjects...)}
-	checker := &Checker{Plans: fakePlans{records}, Rows: &fakeRows{}, Now: func() time.Time { return base.Add(24 * 365 * time.Hour) }}
+	checker := &Checker{Timeline: fakePlans{records}, Rows: &fakeRows{}, Now: func() time.Time { return base.Add(24 * 365 * time.Hour) }}
 	_, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.Add(24 * 365 * time.Hour)})
 	require.ErrorIs(t, err, errTooManyChunks)
 }

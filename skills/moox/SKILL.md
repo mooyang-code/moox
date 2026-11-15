@@ -13,7 +13,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **`moox.toml` 是加密的私有配置**：Agent 不直接读取、打印、复制或 `source` 这个文件；要看配置用 `moox-cli config get <路径>`（密钥打码），改单个值用 `moox-cli config set 表.键=值`（见 [`references/config-access.md`](references/config-access.md)）。Agent 也不打开 `config init` / `config edit` / `config restore` 的本机页面；
   只有 `moox-cli` 自己读取其中的密钥。用户要看或改配置时运行 `./bin/moox-cli config edit`，让用户在自己的浏览器里操作。
 - **密码与密钥不经过 Agent**：SSH 密码只在 `config init` 的免密登录页面里由用户输入一次；交易所、云账户等密钥由用户在管理台“设置 › 密钥”自己填写。
-- **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`cloud function deploy`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
+- **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`collector function delete`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
   部署类命令（`setup bootstrap`、`deploy-host`、`deploy-unit`、`init`）没有预览：执行前把 `setup validate` 输出的 `next_steps`（连同防火墙放行内容）作为部署计划一次给用户确认，确认后依次执行，只在计划变化或失败时再问；`setup wipe` 要按 [`references/install.md`](references/install.md) 第 3 节询问用户，并带预览里的 `--expect` 执行；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
 - **`gateway call` 取不到密钥明文，也不能改密钥**：它拒绝返回密钥明文或完整 webhook 的方法，以及密钥的新建、修改、启停、删除；云账户等凭证由专用命令在进程内使用，不会打印。`secret list|show` 只给打码后的信息。
 - **本机状态和线上密钥不碰**：不读取、不打印 `~/.local/state/moox/setup/`（请求文件含 SSH 私钥）、线上的 `secrets/` 和 `identity/`；不手工写入或恢复 `runtime-identity.json`、`admin-ready.json`；不在目标机器上手动执行 `moox-runtime bootstrap`；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。
@@ -50,7 +50,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 - 用户解压的产物包目录（`moox-<版本>/`，或源码仓库根目录）就是工作目录：命令写成 `./bin/moox-cli …`，默认读取当前目录的 `moox.toml`。
 - 产物包里有 `moox-bundle.json`：`setup` 命令自动使用包内预编译的 linux/amd64 程序，不需要 git、Go、Docker 或 Node。
-- 管理台上的操作和各模块的主要操作都有专用命令（`factor`、`strategy`、`space`、`metadata`、`collector`、`cloud`、`monitor`、`eventbus`、`host`、`secret`、`trade` 只读等），先用 `./bin/moox-cli <命令> --help` 看参数；命令对照表见 [`references/api-recipes.md`](references/api-recipes.md)。
+- 管理台上的操作和各模块的主要操作都有专用命令（`factor`、`strategy`、`space`、`metadata`、`collector`（含云账号、代码包与云函数）、`monitor`、`eventbus`、`host`、`secret`、`trade` 只读等），先用 `./bin/moox-cli <命令> --help` 看参数；命令对照表见 [`references/api-recipes.md`](references/api-recipes.md)。
 - 没有专用命令的底层接口：`./bin/moox-cli gateway methods [关键字]` 查有哪些方法，`./bin/moox-cli gateway call <服务> <方法> --data @请求.json` 调用；业务失败时退出码非 0。
 - 命令按 `moox.toml` 里的 SSH 配置连接各台主机；`lifecycle`、`system`、`replay`、`import` 访问模块健康端口时也自动解析，不需要手工建隧道或设置健康密钥环境变量。要在某台主机上执行命令或传文件用 `host exec|get|put`。
 - 带 `--space-id` 的命令默认空间是 `crypto`；时间范围用 `--from` / `--to`（RFC3339，左闭右开）。

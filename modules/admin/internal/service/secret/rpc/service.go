@@ -142,6 +142,31 @@ func (s *Service) GetReadonlyExchangeKey(ctx context.Context, req *pb.GetReadonl
 	return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retOK(), KeyId: record.KeyID}, nil
 }
 
+// GetCloudCredential 按秘钥 ID 返回调腾讯云用的云账号密钥明文，只放行类别 cloud、厂商 tencent、状态 active 的秘钥。
+// 它是给 Collector 的专用方法：网关转发会丢掉调用方元数据，不能在 GetSecretValue 里按调用方限定，
+// 所以靠服务目录“按方法授权”只放行 Collector，再由这里在服务端校验类别，Collector 拿不到交易所等其他密钥。
+func (s *Service) GetCloudCredential(ctx context.Context, req *pb.GetCloudCredentialReq) (*pb.GetCloudCredentialRsp, error) {
+	if strings.TrimSpace(req.GetSecretId()) == "" {
+		return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
+	}
+	record, err := s.svc.GetSecret(ctx, req.GetSecretId())
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "秘钥不存在")}, nil
+		}
+		log.ErrorContextf(ctx, "[Secret] GetCloudCredential failed: %v", err)
+		return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥失败")}, nil
+	}
+	// 状态必须明确是 active：空状态不当作启用。
+	if record.Category != "cloud" || record.Provider != "tencent" || record.Status != "active" {
+		return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "只能读取类别为 cloud、厂商为 tencent 且已启用的秘钥")}, nil
+	}
+	if strings.TrimSpace(record.KeyID) == "" || record.SecretValue == "" {
+		return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "云账号秘钥不完整：缺少 key_id 或秘钥值")}, nil
+	}
+	return &pb.GetCloudCredentialRsp{RetInfo: retOK(), Credential: &pb.CloudCredential{SecretId: record.SecretID, KeyId: record.KeyID, SecretValue: record.SecretValue}}, nil
+}
+
 // CreateSecret 创建秘钥。
 func (s *Service) CreateSecret(ctx context.Context, req *pb.CreateSecretReq) (*pb.CreateSecretRsp, error) {
 	secretRecord := secretPBToModel(req.GetSecret())

@@ -151,23 +151,44 @@ func TestMigrateImportsSCFPlanAndEntryHostNetwork(t *testing.T) {
 	require.ErrorContains(t, err, "没有主机 nope")
 }
 
-// 旧组件身份 cloudnode 改名为 cloudfunction 之后，[deployments] 里的旧名字会让所有命令拒绝配置；migrate 把它改成新名字。
-func TestMigrateRenamesLegacyDeploymentComponent(t *testing.T) {
+// cloudfunction 组件已删除（云账号、代码包与云函数并入 collector），[deployments] 里还写着它会让所有命令拒绝配置；
+// migrate 把它删掉并写进报告，之后配置通过校验。
+func TestMigrateRemovesRetiredCloudFunctionComponent(t *testing.T) {
 	text := legacyText(t)
-	require.Contains(t, text, `"cloudfunction"`)
-	text = strings.Replace(text, `"cloudfunction"`, `"cloudnode"`, 1)
+	require.Contains(t, text, `"collector", "factor-mgr"`)
+	text = strings.Replace(text, `"collector", "factor-mgr"`, `"collector", "cloudfunction", "factor-mgr"`, 1)
 	path, root, keys := migrateFixture(t, text)
 
 	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "legacy-1", RenameTo: "overseas", Write: true})
 	require.NoError(t, err)
-	require.Equal(t, []ComponentRename{{From: "cloudnode", To: "cloudfunction", Changes: 1}}, report.Components)
+	require.Equal(t, []ComponentRemoval{{Component: "cloudfunction", Changes: 1}}, report.RemovedComponents)
+	require.True(t, report.Valid && report.Written)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	require.NotContains(t, string(plain), `"cloudfunction"`)
+	require.Contains(t, string(plain), `"collector", "factor-mgr"`)
+}
+
+// cloudfunction 更早的名字 cloudnode 同样已下线：[deployments] 里还写着它时，migrate 直接删掉，不再改名成 cloudfunction。
+func TestMigrateRemovesRetiredCloudNodeComponent(t *testing.T) {
+	text := legacyText(t)
+	require.Contains(t, text, `"collector", "factor-mgr"`)
+	text = strings.Replace(text, `"collector", "factor-mgr"`, `"collector", "cloudnode", "factor-mgr"`, 1)
+	path, root, keys := migrateFixture(t, text)
+
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "legacy-1", RenameTo: "overseas", Write: true})
+	require.NoError(t, err)
+	require.Equal(t, []ComponentRemoval{{Component: "cloudnode", Changes: 1}}, report.RemovedComponents)
 	require.True(t, report.Valid && report.Written)
 	sealed, err := os.ReadFile(path)
 	require.NoError(t, err)
 	plain, err := configcrypt.Decrypt(sealed, keys)
 	require.NoError(t, err)
 	require.NotContains(t, string(plain), `"cloudnode"`)
-	require.Contains(t, string(plain), `"cloudfunction"`)
+	require.NotContains(t, string(plain), `"cloudfunction"`)
+	require.Contains(t, string(plain), `"collector", "factor-mgr"`)
 }
 
 // 旧的 [placements] 表改名为 [deployments]：新版解析器不再认旧表，migrate 负责转换，而且可以重复执行。
@@ -199,31 +220,6 @@ func TestMigrateRejectsBothPlacementsAndDeployments(t *testing.T) {
 	path, root, keys := migrateFixture(t, text)
 	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "legacy-1", RenameTo: "overseas"})
 	require.ErrorContains(t, err, "同时有 [placements] 与 [deployments]")
-}
-
-// 单引号字符串与多行数组里的旧组件身份同样改名，注释行不动。
-func TestRenameLegacyDeploymentComponentHandlesQuotesAndMultilineArrays(t *testing.T) {
-	blocks := splitBlocks(strings.Split(strings.Join([]string{
-		"[deployments]",
-		"# 旧名字 \"cloudnode\" 只在注释里，不动",
-		"control = ['admin', 'cloudnode']",
-		"storage = [",
-		"  \"access\",",
-		"  \"cloudnode\",",
-		"]",
-		"",
-	}, "\n"), "\n"))
-	var report MigrateReport
-	renameDeploymentComponents(blocks, &report)
-	var out []string
-	for _, b := range blocks {
-		out = append(out, b.lines...)
-	}
-	text := strings.Join(out, "\n")
-	require.Contains(t, text, "control = ['admin', 'cloudfunction']")
-	require.Contains(t, text, "  \"cloudfunction\",")
-	require.Contains(t, text, "# 旧名字 \"cloudnode\" 只在注释里，不动")
-	require.Equal(t, []ComponentRename{{From: "cloudnode", To: "cloudfunction", Changes: 2}}, report.Components)
 }
 
 // legacyFactorText 在当前格式的示例配置上加回旧的因子机写法：[hosts.factor] 只登记登录方式，[factor_engine] 指向它。
@@ -487,6 +483,21 @@ func TestMigrateRemovesTLSMode(t *testing.T) {
 	if strings.Contains(string(migrated), "tls_mode") || len(report.RemovedTLSMode) != 1 || report.RemovedTLSMode[0] != "control" {
 		t.Fatalf("没有删掉 tls_mode：%s %+v", migrated, report)
 	}
+}
+
+// [[scf_plan.spaces]] 里的 default_ingest、default_executor 删掉，其余键与别的表里的同名键不动；重复执行结果不变。
+func TestMigrateRemovesIngestDefaults(t *testing.T) {
+	plain := "[[scf_plan.spaces]]\nspace_id = \"crypto\"\ndefault_ingest = \"stream\"\ndefault_executor = \"local\"\n[scf_plan.spaces.markets]\nspot = [\"ap-hongkong\"]\n\n[[scf_plan.spaces]]\nspace_id = \"stockcn\"\ndefault_ingest = \"pull\"\n\n[other]\ndefault_ingest = \"keep\"\n"
+	report := MigrateReport{}
+	migrated, err := migrateManifestText([]byte(plain), nil, "", "", &report)
+	require.NoError(t, err)
+	require.Equal(t, 3, report.RemovedIngestDefaults)
+	require.Equal(t, "[[scf_plan.spaces]]\nspace_id = \"crypto\"\n[scf_plan.spaces.markets]\nspot = [\"ap-hongkong\"]\n\n[[scf_plan.spaces]]\nspace_id = \"stockcn\"\n\n[other]\ndefault_ingest = \"keep\"\n", string(migrated))
+	again := MigrateReport{}
+	second, err := migrateManifestText(migrated, nil, "", "", &again)
+	require.NoError(t, err)
+	require.Zero(t, again.RemovedIngestDefaults)
+	require.Equal(t, string(migrated), string(second))
 }
 
 // [egress_proxy.dns] 整个表删掉，前后的表和下一个表的说明注释不动；重复执行结果不变。

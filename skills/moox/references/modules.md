@@ -44,7 +44,7 @@
 ## 采集
 
 - **做什么**：按采集任务定时拉取或经 WebSocket 推送 K 线，写入 Storage；巡检缺口、补采、K 线合成（重采样）、每小时同步交易所标的。
-- **在哪**：Collector 在管理台机；`collector-stream`（WS 推送与本地执行端）在海外机；可选的腾讯云 SCF 函数按地域部署。
+- **在哪**：Collector 在管理台机，云账号、代码包与云函数也由它管理（没有单独的云函数进程）；`collector-stream`（WS 推送与本地执行端）在海外机；可选的腾讯云 SCF 函数按地域部署。
 - **常用**：
 
 ```bash
@@ -52,24 +52,25 @@
 ./bin/moox-cli collector task list|show|update|disable|inventory      # 任务查询、改名与启停
 ./bin/moox-cli collector task create --help                           # 新建 K 线采集任务
 # 币安永续 1h/1d 可选资金费率：--output-field 会替换默认字段，要把默认字段一起列出，例如
-# --output-field open,high,low,close,volume,quote_volume,trade_num,funding_rate；建完用 ingest-mode get 确认是 stream 加 local
+# --output-field open,high,low,close,volume,quote_volume,trade_num,funding_rate；采集方式不填用市场默认值（crypto 是 stream），要指定加 --ingest stream|scf|local；建完用 ingest-mode get 确认
 # 股票任务（A 股、港股、美股）不要用默认的 --output-field（那是现货、永续行的字段），带 --all-output-fields 输出股票行的全部字段
 ./bin/moox-cli collector kline check|backfill|backfill-status ...     # 检查与补采
 ./bin/moox-cli collector kline backfill-cancel|backfill-retry ...     # 取消补采作业；重试失败的分块
 ./bin/moox-cli collector kline history-confirm|absences-clear ...     # 按历史扫描的缺口补采并确认“行情源本来没有”的 K 线；行情源后来补上数据时清除这些确认
 ./bin/moox-cli collector resample preview|backfill|jobs|cancel ...    # 历史 K 线合成
 ./bin/moox-cli collector subjects exclude|unexclude|exclusions|sync|status|listers
-./bin/moox-cli collector ingest-mode get|set                          # WS 推送 / 定时拉取
+./bin/moox-cli collector ingest-mode get|set                          # 采集方式 stream / scf / local（set --ingest ...，没有 --force）
 ./bin/moox-cli collector fetch-plan pause|resume                      # 暂停或恢复整个空间的采集（pause 默认只预览，--yes 才执行）
 ./bin/moox-cli collector data-type list|show                          # 可采集的数据类型
 ```
 
 - 删除任务与结果不可恢复：`collector task delete`、`delete-result` 默认只预览，`--yes` 才执行。`collector task purge` 清理 Collector 本机库里的任务运行数据与结果引用（默认只输出清单，`--yes` 才执行），属于重置前后的维护动作，先问用户。
 - Storage 数据被清空后，要让采集重新登记序列快照并重置补采状态：`collector fetch-plan reregister --space-id <空间> --yes`（系统重置后的必做步骤，见 [`fresh-deploy.md`](fresh-deploy.md)）。
-- SCF 函数包与发布：`collector function package`（构建代码包）、`upload`（构建或使用现成的包并只上传，不创建函数）、`delete`（按条件异步删除函数，默认只列目标）、
-  `probe-egress`（逐个调用短时函数诊断公网出口与行情源连通性）、`timer-inventory`（只读盘点 Timer 函数并校验云侧读回）。
-- 云函数：`cloud function list|job|invoke|create|deploy|update-config|delete`、`cloud package list|show|url|delete`、`cloud scf preview|import`、`cloud account list|regions|delete`；
-  创建、部署、改配置、删除会自动持有采集发布租约；代码包上传用 `collector function upload`；云账户的新建与修改带密钥，请用户在管理台填写。
+- 云函数由 Collector 的对账器按采集计划自动建、自动修，不需要手工创建或部署：`collector function package`（构建代码包）、`upload`（构建或使用现成的包并只上传，落后的函数自动升级）、
+  `list`（现场读回计划里的函数与期望比对，`--drift` 只看不一致的；计划外的同前缀函数单列，定时器已被停掉）、`delete`（按名字或前缀删函数，默认只预览；`--namespace`、`--region` 只删这个命名空间、地域里的，删旧命名空间里的同名副本时必带，否则在用的同名函数也会被删；计划里的函数删掉后下一轮重建）、
+  `probe-egress`（取各采集函数此刻的公网出口 IP）。
+- 云账号与代码包：`collector account list|regions|delete`、`collector package list|delete`；云账号的新建与修改在管理台运行状态页的“云账号”对话框，初始账号由 `setup init` 登记。
+  换过云账号之后，旧账号下建的函数 Collector 管不到，`collector function delete` 也删不到，用 `setup inspect-scf` 查出来再到腾讯云控制台手工删。
 - 附加字段（K 线行情之外的可选列：币安永续的资金费率，A 股日线的复权因子、申万行业、财务）只能在建任务时用 `--output-field` 选全，任务建好后只能减少、不能新增；`collector data-type show` 的 `extra_fields` 列出每个字段适用的市场、品种和频率。A 股日线的完整步骤见 [`ashare-daily.md`](ashare-daily.md)。
 - **东方财富限流**：控制机上 Collector 直连东方财富（A 股标的列表、美股交易所对照）默认每秒 2 个请求、顺序发出；连续 5 次传输层失败或一次 429、403 就对该主机冷却（首次 10 分钟，翻倍，最长 60 分钟），期间不发请求，结束后自动探测恢复；push2 单独冷却会回退 push2test、不告警，push2 与 push2test 都冷却才上报关注项 `collector_attention:eastmoney_cooling_down`。被限流后等冷却结束，不要手工狂打、不要重启 Collector；**禁止在生产主机上跑没有上限的临时脚本访问东方财富**，实测用临时云函数（南京出口）并设请求总数上限，或写进 Collector 复用限流器；一次性探测也要总请求数硬上限、每秒不超过 1～2 个、连续失败 3 次立即停止（`docs/模块/采集.md` 第 6a 节）。
 - 长历史导入：[`initial-import.md`](initial-import.md)。取 K 线数据：[`data-query.md`](data-query.md)。

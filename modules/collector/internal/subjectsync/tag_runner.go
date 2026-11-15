@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
-	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -27,8 +27,8 @@ type TagStore interface {
 
 // RunStore 保存标签的同步运行结果（Collector 自己的库）：调度判断读它，结果写它。
 type RunStore interface {
-	List(ctx context.Context, spaceID string) ([]store.TagSyncRun, error)
-	Record(ctx context.Context, run store.TagSyncRun) error
+	List(ctx context.Context, spaceID string) ([]domain.TagSyncRun, error)
+	Record(ctx context.Context, run domain.TagSyncRun) error
 }
 
 type TagRunner struct {
@@ -63,7 +63,7 @@ func parseTagTime(value string) (time.Time, error) {
 }
 
 // tagDue 判断标签的标的同步是否到期：没有运行记录、标签在上次运行后被改过（含同步配置），或按 cron 到点了。
-func tagDue(tag *pb.Tag, run *store.TagSyncRun, now time.Time) (bool, error) {
+func tagDue(tag *pb.Tag, run *domain.TagSyncRun, now time.Time) (bool, error) {
 	if tag == nil || run == nil || run.LastRunAt.IsZero() {
 		return true, nil
 	}
@@ -128,8 +128,8 @@ func (r *TagRunner) RunOnce(ctx context.Context) error {
 func tagKey(spaceID, tagID string) string { return spaceID + "/" + tagID }
 
 // runsByTag 一次读出所有标签的运行记录，按（空间，标签）索引。
-func (r *TagRunner) runsByTag(ctx context.Context) (map[string]*store.TagSyncRun, error) {
-	out := map[string]*store.TagSyncRun{}
+func (r *TagRunner) runsByTag(ctx context.Context) (map[string]*domain.TagSyncRun, error) {
+	out := map[string]*domain.TagSyncRun{}
 	if r.Runs == nil {
 		return out, nil
 	}
@@ -148,9 +148,9 @@ func (r *TagRunner) record(ctx context.Context, tag *pb.Tag, runAt time.Time, ru
 	if r.Runs == nil {
 		return
 	}
-	run := store.TagSyncRun{SpaceID: tag.GetSpaceId(), TagID: tag.GetTagId(), LastRunAt: runAt, LastStatus: store.TagSyncSuccess}
+	run := domain.TagSyncRun{SpaceID: tag.GetSpaceId(), TagID: tag.GetTagId(), LastRunAt: runAt, LastStatus: domain.TagSyncSuccess}
 	if runErr != nil {
-		run.LastStatus, run.LastError = store.TagSyncFailed, runErr.Error()
+		run.LastStatus, run.LastError = domain.TagSyncFailed, runErr.Error()
 	}
 	if err := r.Runs.Record(ctx, run); err != nil {
 		log.ErrorContextf(ctx, "record tag %s/%s sync run: %v", tag.GetSpaceId(), tag.GetTagId(), err)

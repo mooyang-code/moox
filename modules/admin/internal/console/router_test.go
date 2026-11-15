@@ -125,8 +125,8 @@ func TestConsoleRejectsMachineMethodsAndNonCatalogAliasesBeforeDispatch(t *testi
 	router := newTestRouter(t, nil, gateway).buildControlRouter()
 	for _, suffix := range []string{
 		"secret/GetSecretValue", "SecretMgr/getsecretvalue", "trpc.moox.ops.SecretMgr/GetSecretValue",
-		"cloudfunction/CollectGarbage", "publishlease/ValidateCollectorPublishLease",
-		"publishlease/BeginCollectorPublishOperation", "sysdeploy/SyncHostDeployments", "sysdeploy/DeleteHost",
+		"secret/GetCloudCredential", "SecretMgr/getcloudcredential", "trpc.moox.ops.SecretMgr/GetCloudCredential",
+		"sysdeploy/SyncHostDeployments", "sysdeploy/DeleteHost",
 		"trade/ReleaseLogicalAccountOwner", "trade/ClaimLogicalAccountOwner",
 		"trade_owner/ReleaseLogicalAccountOwner", "trade_console/ListOrders", "collectmgr/GetTaskList",
 		"factormgr/ListFactors", "moox_monitor/GetHealthOverview", "collector_market_runtime/ClaimTimerBatch",

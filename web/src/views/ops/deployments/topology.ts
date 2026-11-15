@@ -33,7 +33,6 @@ const LAYER_OF: Record<string, TopologyLayer> = {
   eventbus: "control",
   collector: "business",
   "collector-stream": "business",
-  cloudfunction: "business",
   "factor-mgr": "business",
   "factor-engine": "business",
   "archive-worker": "business",
@@ -77,8 +76,7 @@ export interface FlowStep {
   near?: string;
 }
 export const DATA_FLOW: FlowStep[] = [
-  { from: "collector", to: "cloudfunction", kind: "control", stage: "采集调度", label: "规划采集计划，下发函数配置" },
-  { from: "cloudfunction", to: "ext:scf-collector", kind: "control", stage: "采集调度", label: "Timer / Invoke 触发采集" },
+  { from: "collector", to: "ext:scf-collector", kind: "control", stage: "采集调度", label: "按采集计划建函数、配定时器" },
   { from: "ext:market", to: "ext:scf-collector", kind: "data", stage: "SCF 采集", label: "拉取 K 线等行情" },
   { from: "ext:scf-collector", to: "access", kind: "data", stage: "SCF 采集", label: "签名写入 :11004", near: "storage-primary" },
   {

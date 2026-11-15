@@ -144,7 +144,7 @@ func (r systemResetOptions) externalSteps(scope string) []sysctl.ExternalStep {
 			"系统重置全部完成后再启动 archive-worker",
 		}},
 		{Name: "storage", Describe: describe, After: sysctl.Archive, Commands: storageCommands},
-		{Name: "admin", Describe: "Admin 业务部分：活动日志、采集发布租约（all 再加业务空间，默认空间保留；在 Admin 主机上执行）",
+		{Name: "admin", Describe: "Admin 业务部分：活动日志（all 再加业务空间，默认空间保留；在 Admin 主机上执行）",
 			Commands: []string{fmt.Sprintf("moox-admin-cli reset-business --db-path %s --scope %s --yes", r.AdminDB, scope)}},
 	}
 }

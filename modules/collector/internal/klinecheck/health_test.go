@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +18,7 @@ func TestHealthReportsLagGapsAndHistory(t *testing.T) {
 	now := backfiller.now()
 
 	// 从未扫描过：滞后按最早生效点算，夹具里落后约 48 小时。
-	health, err := Health(ctx, backfiller.Plans, repo, "crypto", now)
+	health, err := Health(ctx, backfiller.Checker.Timeline, repo, "crypto", now)
 	require.NoError(t, err)
 	require.Len(t, health, 1)
 	require.Equal(t, "ds", health[0].DatasetID)
@@ -30,7 +30,7 @@ func TestHealthReportsLagGapsAndHistory(t *testing.T) {
 	// 自动补采发现的实时缺口只展示，水位跟上后等级正常。
 	require.NoError(t, backfiller.AutoScan(ctx, "crypto"))
 	require.NoError(t, repo.SetWatermark(ctx, "crypto", "ds", "1m", now.Add(-5*time.Minute)))
-	health, err = Health(ctx, backfiller.Plans, repo, "crypto", now)
+	health, err = Health(ctx, backfiller.Checker.Timeline, repo, "crypto", now)
 	require.NoError(t, err)
 	require.Equal(t, HealthOK, health[0].Level, health[0].Reasons)
 	require.Equal(t, 4, health[0].GapBars)
@@ -38,7 +38,7 @@ func TestHealthReportsLagGapsAndHistory(t *testing.T) {
 
 	// 未确认的历史缺口与扫描失败都需要关注。
 	require.NoError(t, repo.SaveHistoryScan(ctx, store.HistoryScan{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", ScannedAt: now, GapBars: 6, GapSubjects: 2}))
-	health, err = Health(ctx, backfiller.Plans, repo, "crypto", now)
+	health, err = Health(ctx, backfiller.Checker.Timeline, repo, "crypto", now)
 	require.NoError(t, err)
 	require.Equal(t, HealthWarn, health[0].Level)
 	require.Equal(t, []string{"历史缺口 6 根（2 个标的）待补采确认"}, health[0].Reasons)
@@ -46,7 +46,7 @@ func TestHealthReportsLagGapsAndHistory(t *testing.T) {
 	// 已确认的行情源缺失只计数，不影响等级。
 	require.NoError(t, repo.SaveHistoryScan(ctx, store.HistoryScan{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", ScannedAt: now}))
 	require.NoError(t, repo.AddAbsences(ctx, []store.SourceAbsence{{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", SubjectID: "BTC-USDT", From: base, To: base.Add(2 * time.Minute), Bars: 2}}))
-	health, err = Health(ctx, backfiller.Plans, repo, "crypto", now)
+	health, err = Health(ctx, backfiller.Checker.Timeline, repo, "crypto", now)
 	require.NoError(t, err)
 	require.Equal(t, HealthOK, health[0].Level)
 	require.Equal(t, 2, health[0].AbsentBars)
@@ -64,8 +64,8 @@ func TestFormatDuration(t *testing.T) {
 // 低频数据集整点刚过、扫描槽还没到时，水位比“应扫到的时间”落后一个周期是正常的，不算滞后。
 func TestHealthLagIsMeasuredFromWhenTheNextBarBecomesScannable(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
-	content := &marketfetch.FetchPlanContent{Datasets: map[string]*marketfetch.PlanDatasetChange{}, Functions: map[string]*marketfetch.PlanFunctionChange{}}
-	change := &marketfetch.PlanDatasetChange{Changed: true, HashChanged: true, P: base.Unix()}
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDatasetChange{Changed: true, HashChanged: true, P: base.Unix()}
 	change.DatasetID, change.Frequency, change.LatenessS, change.Hash = "ds", "1h", 60, "hash:BTC-USDT"
 	change.Series = append(change.Series, seriesOf("BTC-USDT"))
 	content.Datasets["ds|1h"] = change

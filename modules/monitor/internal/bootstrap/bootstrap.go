@@ -162,7 +162,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	marketFetchThresholds := monitorobservability.MarketFetchThresholds{
 		CoordinationStaleAfter: cfg.MarketHealth.TimerCoordinationStaleAfter,
 		PendingGrace:           cfg.MarketHealth.TimerCoordinationPendingGrace,
-		LeaseGrace:             cfg.MarketHealth.TimerCoordinationLeaseGrace,
 	}
 	klineInventory, err := buildTaskResultInventory(cfg, runtime.Gateway)
 	if err != nil {
@@ -204,7 +203,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		// Timer-triggered market SCFs intentionally do not publish a per-batch
 		// completion event. Their health is derived from Storage/Dataset freshness
-		// and the FunctionInstance/Collector coordination checks, so an EventBus outage
+		// and the Collector coordination checks, so an EventBus outage
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}

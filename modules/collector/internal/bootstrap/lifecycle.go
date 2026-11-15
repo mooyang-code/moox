@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -40,7 +40,7 @@ type collectorControl struct {
 	mu         sync.Mutex
 	plans      *store.FetchPlanRepository
 	backfiller *klinecheck.Backfiller
-	manager    *marketfetch.PlanManager
+	manager    *fetchplan.PlanManager
 	// spaces 返回管理集合，每次现取：运行中新增的空间也要能暂停、恢复和收敛。known 是最近一次读到的结果，读库失败时沿用。
 	spaces     func(context.Context) ([]string, error)
 	known      []string
@@ -51,7 +51,7 @@ type collectorControl struct {
 	recoveryTo time.Time
 }
 
-func (c *collectorControl) bind(plans *store.FetchPlanRepository, backfiller *klinecheck.Backfiller, manager *marketfetch.PlanManager, spaces func(context.Context) ([]string, error)) {
+func (c *collectorControl) bind(plans *store.FetchPlanRepository, backfiller *klinecheck.Backfiller, manager *fetchplan.PlanManager, spaces func(context.Context) ([]string, error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.plans, c.backfiller, c.manager, c.spaces = plans, backfiller, manager, spaces

@@ -30,7 +30,8 @@ func (s adminDirectorySource) Fetch(ctx context.Context, version string) (gatewa
 	return gatewayclient.DirectoryUpdate{Changed: compiled.Directory.Version != version, Directory: compiled.Directory}, nil
 }
 
-func newAdminGateway(ctx context.Context, db *gorm.DB, hostID, master, caller string) (*gatewayclient.Client, error) {
+// newConsoleGateway 以 console 身份签名，代浏览器调用各业务服务。
+func newConsoleGateway(ctx context.Context, db *gorm.DB, hostID, master string) (*gatewayclient.Client, error) {
 	topology, err := sysdeploy.NewTopologyDAO(db, hostID)
 	if err != nil {
 		return nil, err
@@ -39,19 +40,15 @@ func newAdminGateway(ctx context.Context, db *gorm.DB, hostID, master, caller st
 	if err != nil {
 		return nil, err
 	}
-	key, err := store.Current(ctx, caller)
+	key, err := store.Current(ctx, "console")
 	if err != nil {
-		return nil, fmt.Errorf("load provisioned %s signing key: %w", caller, err)
+		return nil, fmt.Errorf("load provisioned console signing key: %w", err)
 	}
-	serialization := codec.SerializationTypePB
-	if caller == "admin" {
-		serialization = codec.SerializationTypeJSON
-	}
-	return gatewayclient.New(gatewayclient.Config{Serialization: serialization,
+	return gatewayclient.New(gatewayclient.Config{Serialization: codec.SerializationTypePB,
 		Mode: gatewayclient.Internal, Credentials: key.Credentials(), LocalHostID: hostID,
 		CAFile:         filepath.Join(newCertificateWatchFromEnvironment(db).PKIDir, "ca.crt"),
 		Source:         adminDirectorySource{topology: topology, hostID: hostID},
-		OnRefreshError: func(err error) { log.Warnf("%s directory refresh failed: %v", caller, err) },
+		OnRefreshError: func(err error) { log.Warnf("console directory refresh failed: %v", err) },
 	})
 }
 

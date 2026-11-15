@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cnstock"
 )
@@ -26,19 +26,19 @@ func (f *fakeTagStore) ApplyTagSnapshot(_ context.Context, _, tagID string, item
 }
 
 // fakeRunStore 在内存里保存标签的同步运行结果。
-type fakeRunStore struct{ runs map[string]store.TagSyncRun }
+type fakeRunStore struct{ runs map[string]domain.TagSyncRun }
 
-func newFakeRunStore() *fakeRunStore { return &fakeRunStore{runs: map[string]store.TagSyncRun{}} }
+func newFakeRunStore() *fakeRunStore { return &fakeRunStore{runs: map[string]domain.TagSyncRun{}} }
 
-func (f *fakeRunStore) List(context.Context, string) ([]store.TagSyncRun, error) {
-	out := make([]store.TagSyncRun, 0, len(f.runs))
+func (f *fakeRunStore) List(context.Context, string) ([]domain.TagSyncRun, error) {
+	out := make([]domain.TagSyncRun, 0, len(f.runs))
 	for _, run := range f.runs {
 		out = append(out, run)
 	}
 	return out, nil
 }
 
-func (f *fakeRunStore) Record(_ context.Context, run store.TagSyncRun) error {
+func (f *fakeRunStore) Record(_ context.Context, run domain.TagSyncRun) error {
 	f.runs[run.TagID] = run
 	return nil
 }
@@ -58,17 +58,17 @@ func autoTag(spaceID, tagID, mode, source, marketType string) *pb.Tag {
 func TestTagDue(t *testing.T) {
 	now := time.Date(2026, 9, 25, 10, 30, 0, 0, time.UTC)
 	cron := map[string]string{"sync.cron": "0 * * * *", "sync.timezone": "UTC"}
-	run := func(at string) *store.TagSyncRun {
+	run := func(at string) *domain.TagSyncRun {
 		parsed, err := time.Parse("2006-01-02 15:04:05", at)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &store.TagSyncRun{LastRunAt: parsed.UTC()}
+		return &domain.TagSyncRun{LastRunAt: parsed.UTC()}
 	}
 	cases := []struct {
 		name string
 		tag  *pb.Tag
-		run  *store.TagSyncRun
+		run  *domain.TagSyncRun
 		want bool
 	}{
 		{"never run", &pb.Tag{Attributes: cron, UpdatedAt: "2026-09-25 09:00:00"}, nil, true},

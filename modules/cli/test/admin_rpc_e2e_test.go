@@ -22,7 +22,6 @@ import (
 type adminRPCWire struct {
 	monitorpb.UnimplementedMonitorMgr
 	adminpb.UnimplementedSecretMgr
-	adminpb.UnimplementedCollectorPublishLease
 	adminpb.UnimplementedSetup
 	adminpb.UnimplementedSysDeploy
 	adminpb.UnimplementedSpaceMgr
@@ -35,7 +34,6 @@ func startAdminGateway(t *testing.T, wire *adminRPCWire) string {
 	service := server.New(server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTimeout(time.Minute))
 	adminpb.RegisterSecretMgrService(service, wire)
 	monitorpb.RegisterMonitorMgrService(service, wire)
-	adminpb.RegisterCollectorPublishLeaseService(service, wire)
 	adminpb.RegisterSetupService(service, wire)
 	adminpb.RegisterSysDeployService(service, wire)
 	adminpb.RegisterSpaceMgrService(service, wire)
@@ -66,12 +64,6 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	secret, err := client.GetSecretValue(t.Context(), "secret-1")
 	require.NoError(t, err)
 	require.Equal(t, "fixture-secret", secret.SecretValue)
-	lease, err := client.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")
-	require.NoError(t, err)
-	require.EqualValues(t, 17, lease.FencingToken)
-	lease, err = client.RenewCollectorPublishLease(t.Context(), lease)
-	require.NoError(t, err)
-	require.NoError(t, client.ReleaseCollectorPublishLease(t.Context(), lease))
 	setup := setupclient.New(gateway)
 	status, err := setup.Status(t.Context(), snapshot)
 	require.NoError(t, err)
@@ -90,9 +82,9 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	var space adminpb.CreateSpaceRsp
 	require.NoError(t, gateway.Invoke(t.Context(), "trpc.moox.admin.SpaceMgr", "CreateSpace", &adminpb.CreateSpaceReq{Space: &adminpb.Space{SpaceId: "fixture"}}, &space))
 	require.Equal(t, "fixture", space.GetSpace().GetSpaceId())
-	// Machine-only lease validation remains unavailable to the operator.
-	var forbidden adminpb.ValidateCollectorPublishLeaseRsp
-	require.Error(t, gateway.Invoke(t.Context(), "trpc.moox.admin.CollectorPublishLease", "ValidateCollectorPublishLease", &adminpb.ValidateCollectorPublishLeaseReq{}, &forbidden))
+	// 只给 Collector 的读云密钥方法，操作员调不到。
+	var forbidden adminpb.GetCloudCredentialRsp
+	require.Error(t, gateway.Invoke(t.Context(), "trpc.moox.ops.SecretMgr", "GetCloudCredential", &adminpb.GetCloudCredentialReq{SecretId: "secret-1"}, &forbidden))
 	require.NoError(t, gateway.Close())
 	_, err = client.GetSecretValue(t.Context(), "secret-1")
 	require.Error(t, err)
@@ -100,18 +92,6 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 
 func (w *adminRPCWire) GetSecretValue(_ context.Context, req *adminpb.GetSecretValueReq) (*adminpb.GetSecretValueRsp, error) {
 	return &adminpb.GetSecretValueRsp{RetInfo: &adminpb.RetInfo{}, Secret: &adminpb.SecretMaterial{SecretId: req.GetSecretId(), Category: "cloud", Provider: "tencent", Status: "active", KeyId: "fixture-id", SecretValue: "fixture-secret"}}, nil
-}
-
-func (w *adminRPCWire) AcquireCollectorPublishLease(_ context.Context, req *adminpb.AcquireCollectorPublishLeaseReq) (*adminpb.CollectorPublishLeaseRsp, error) {
-	return &adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, SpaceId: req.GetSpaceId(), LeaseId: "lease-1", FencingToken: 17, ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}, nil
-}
-
-func (w *adminRPCWire) RenewCollectorPublishLease(_ context.Context, req *adminpb.RenewCollectorPublishLeaseReq) (*adminpb.CollectorPublishLeaseRsp, error) {
-	return &adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, SpaceId: req.GetSpaceId(), LeaseId: req.GetLeaseId(), FencingToken: req.GetFencingToken(), ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}, nil
-}
-
-func (w *adminRPCWire) ReleaseCollectorPublishLease(_ context.Context, req *adminpb.ReleaseCollectorPublishLeaseReq) (*adminpb.ReleaseCollectorPublishLeaseRsp, error) {
-	return &adminpb.ReleaseCollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, Released: true}, nil
 }
 
 func (w *adminRPCWire) GetSetupStatus(_ context.Context, req *adminpb.GetSetupStatusReq) (*adminpb.GetSetupStatusRsp, error) {

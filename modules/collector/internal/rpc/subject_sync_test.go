@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/stretchr/testify/require"
@@ -83,10 +83,10 @@ func TestListTagSyncStatusReadsCollectorRuns(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
 	ok := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
-	require.NoError(t, db.TagSyncRuns().Record(ctx, store.TagSyncRun{SpaceID: "crypto", TagID: "binance_spot", LastRunAt: ok, LastStatus: store.TagSyncSuccess}))
-	require.NoError(t, db.TagSyncRuns().Record(ctx, store.TagSyncRun{SpaceID: "crypto", TagID: "binance_swap", LastRunAt: ok, LastStatus: store.TagSyncSuccess}))
-	require.NoError(t, db.TagSyncRuns().Record(ctx, store.TagSyncRun{SpaceID: "crypto", TagID: "binance_swap", LastRunAt: ok.Add(time.Hour), LastStatus: store.TagSyncFailed, LastError: "HTTP 451"}))
-	require.NoError(t, db.TagSyncRuns().Record(ctx, store.TagSyncRun{SpaceID: "stockcn", TagID: "cn_a_share", LastRunAt: ok, LastStatus: store.TagSyncFailed, LastError: "boom"}))
+	require.NoError(t, db.TagSyncRuns().Record(ctx, domain.TagSyncRun{SpaceID: "crypto", TagID: "binance_spot", LastRunAt: ok, LastStatus: domain.TagSyncSuccess}))
+	require.NoError(t, db.TagSyncRuns().Record(ctx, domain.TagSyncRun{SpaceID: "crypto", TagID: "binance_swap", LastRunAt: ok, LastStatus: domain.TagSyncSuccess}))
+	require.NoError(t, db.TagSyncRuns().Record(ctx, domain.TagSyncRun{SpaceID: "crypto", TagID: "binance_swap", LastRunAt: ok.Add(time.Hour), LastStatus: domain.TagSyncFailed, LastError: "HTTP 451"}))
+	require.NoError(t, db.TagSyncRuns().Record(ctx, domain.TagSyncRun{SpaceID: "stockcn", TagID: "cn_a_share", LastRunAt: ok, LastStatus: domain.TagSyncFailed, LastError: "boom"}))
 
 	rsp, err := service.ListTagSyncStatus(ctx, &pb.ListTagSyncStatusReq{SpaceId: "crypto"})
 	require.NoError(t, err)

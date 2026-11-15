@@ -107,12 +107,13 @@ func TestUnitEnvironmentCarriesServiceLogCLS(t *testing.T) {
 	}
 }
 
-// CloudFunction 开通采集日志主题时的保留天数来自 moox.toml；别的组件不带这个变量。
-func TestUnitEnvironmentCarriesLogRetentionForCloudFunction(t *testing.T) {
+// Collector 建函数时开通采集日志主题，保留天数来自 moox.toml；别的组件不带这个变量。
+func TestUnitEnvironmentCarriesLogRetentionForCollector(t *testing.T) {
 	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "192.0.2.1"}}}
 	manifest.Logging.RetentionDays = 7
-	environment, err := unitEnvironment(manifest, runtimeIdentity{}, "control", []string{"cloudfunction", "web-host"})
+	identity := runtimeIdentity{StoragePrimarySecret: strings.Repeat("p", 32), StorageViewSecret: strings.Repeat("v", 32)}
+	environment, err := unitEnvironment(manifest, identity, "control", []string{"collector", "web-host"})
 	require.NoError(t, err)
-	require.Equal(t, "7", environment["cloudfunction"]["MOOX_CLS_RETENTION_DAYS"])
+	require.Equal(t, "7", environment["collector"]["MOOX_CLS_RETENTION_DAYS"])
 	require.NotContains(t, environment["web-host"], "MOOX_CLS_RETENTION_DAYS")
 }

@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/ruleseed"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	_ "modernc.org/sqlite"
@@ -45,37 +47,45 @@ func TestRunInitCommandAppliesCollectorSchema(t *testing.T) {
 	}
 }
 
+// 用随发布安装的真实种子（config/setup/collection-tasks.yaml）初始化：每个内置任务都写进去，采集方式按市场默认值填上
+// （crypto 是 stream，A 股、港股、美股是 scf，合成任务为空）；重跑不重复写入。
 func TestRunInitCommandSeedsBuiltInTasks(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
-	seedPath := filepath.Join(t.TempDir(), "tasks.yaml")
-	if err := os.WriteFile(seedPath, []byte("tasks:\n- space_id: crypto\n  task_id: builtin-task\n  task_name: Binance 行情任务\n  data_type: kline\n  tag_ids: [binance_spot]\n  enabled: true\n  collect_params:\n    frequency: 1h\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	seedPath := filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml")
+	seeds, err := ruleseed.LoadFile(seedPath)
+	require.NoError(t, err)
+	require.NotEmpty(t, seeds)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runInitCommand([]string{"init", "--db-path", dbPath, "--seed-file", seedPath}, &stdout, &stderr); err != nil {
-		t.Fatalf("runInitCommand() error = %v, stderr = %s", err, stderr.String())
-	}
+	require.NoError(t, runInitCommand([]string{"init", "--db-path", dbPath, "--seed-file", seedPath}, &stdout, &stderr), stderr.String())
 	var result initResult
-	assert.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
-	assert.Equal(t, 1, result.TasksCreated)
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
+	assert.Equal(t, len(seeds), result.TasksCreated)
 	assert.Equal(t, 0, result.TasksUnchanged)
-	assert.Contains(t, stdout.String(), `"tasks_created":1`)
-	assert.Contains(t, stdout.String(), `"tasks_unchanged":0`)
 	assert.NotContains(t, stdout.String(), `"created"`)
 	stdout.Reset()
-	if err := runInitCommand([]string{"init", "--db-path", dbPath, "--seed-file", seedPath}, &stdout, &stderr); err != nil {
-		t.Fatalf("second runInitCommand() error = %v", err)
-	}
-	assert.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
+	require.NoError(t, runInitCommand([]string{"init", "--db-path", dbPath, "--seed-file", seedPath}, &stdout, &stderr), stderr.String())
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
 	assert.Equal(t, 0, result.TasksCreated)
-	assert.Equal(t, 1, result.TasksUnchanged)
+	assert.Equal(t, len(seeds), result.TasksUnchanged)
+
 	mgr, err := store.Open(&store.Options{Path: dbPath})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer mgr.Close()
-	task, err := mgr.Tasks().GetByTaskID(context.Background(), "crypto", "builtin-task")
-	assert.NoError(t, err)
-	assert.True(t, task.Enabled)
+	want := map[string]string{"crypto": domain.IngestStreaming, "stockcn": domain.IngestSCF, "stockhk": domain.IngestSCF, "stockus": domain.IngestSCF}
+	for _, seed := range seeds {
+		task, err := mgr.Tasks().GetByTaskID(context.Background(), seed.SpaceID, seed.TaskID)
+		require.NoError(t, err, seed.TaskID)
+		assert.Equal(t, seed.Enabled, task.Enabled, seed.TaskID)
+		switch task.DataType {
+		case domain.DataTypeKline:
+			expected, ok := want[task.SpaceID]
+			require.True(t, ok, "种子里出现了没登记期望值的空间 %s", task.SpaceID)
+			assert.Equal(t, expected, task.Ingest, "%s/%s", task.SpaceID, task.TaskID)
+		default:
+			assert.Empty(t, task.Ingest, "合成任务没有采集方式：%s/%s", task.SpaceID, task.TaskID)
+		}
+	}
 }
 
 func assertTableExists(t *testing.T, dbPath string, tableName string) {

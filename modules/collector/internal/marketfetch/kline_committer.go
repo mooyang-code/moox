@@ -260,7 +260,7 @@ func (p *KlineCommitter) rowFor(bar marketdata.NormalizedKline, req Request, rou
 	marketID := firstNonEmptyString(p.MarketID, req.SpaceID)
 	instrumentType := p.InstrumentType
 	if instrumentType == "" {
-		fallback, err := defaultInstrumentType(marketID, "")
+		fallback, err := DefaultInstrumentType(marketID, "")
 		if err != nil {
 			return nil, err
 		}

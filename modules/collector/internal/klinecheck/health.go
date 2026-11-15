@@ -59,12 +59,8 @@ type DatasetHealth struct {
 }
 
 // Health 计算空间里每个正在采集的数据集的健康度，异常排前。
-func Health(ctx context.Context, plans PlanHistory, repo HealthStore, spaceID string, now time.Time) ([]DatasetHealth, error) {
-	records, err := plans.ListAll(ctx, spaceID)
-	if err != nil {
-		return nil, err
-	}
-	timeline, err := BuildTimeline(records)
+func Health(ctx context.Context, source TimelineSource, repo HealthStore, spaceID string, now time.Time) ([]DatasetHealth, error) {
+	timeline, err := loadTimeline(ctx, source, spaceID)
 	if err != nil {
 		return nil, err
 	}

@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/egressbalance"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/packages/security"
@@ -22,18 +23,16 @@ import (
 // 每个空间与市场使用的地域放在 scf_markets，函数访问 Access 的私网入口沿用 scf_access_routes。
 type SCFPlanConfig struct {
 	CloudAccountID string `yaml:"cloud_account_id"`
-	// PackageName 非空时每轮解析该名称的最新可用代码包（上传新版本后函数自动升级）；PackageID 固定某个代码包，
-	// 两者二选一，推荐 PackageName。
+	// PackageName 是代码包的包名：每轮取这个包名最新的可用代码包（上传新版本后函数自动升级）。
 	PackageName string `yaml:"package_name"`
-	PackageID   string `yaml:"package_id"`
 	Namespace   string `yaml:"namespace"`
 	MemoryMB    int    `yaml:"memory_mb"`
 	// BaseEnvironmentFile 是可选的额外非受管环境（JSON 对象），含密钥时权限应为 0600。空间身份与 Storage 应用密钥
-	// 由 Collector 自己生成（密钥由控制机身份里的 Storage 主密钥派生），日志服务由 FunctionInstance 创建函数时补齐，
+	// 由 Collector 自己生成（密钥由控制机身份里的 Storage 主密钥派生），日志服务在创建或更新函数时补齐，
 	// 所以通常不需要这个文件。
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	SymbolsPerFunction  int    `yaml:"symbols_per_function"`
-	// MaxConcurrentOperations 限制各空间同时进行的 SCF 配置操作。
+	// MaxConcurrentOperations 限制各空间同时进行的云函数操作（建函数、改配置、换代码、设定时器、删除）。
 	MaxConcurrentOperations int `yaml:"max_concurrent_operations"`
 	// AssumedEgressIPs 是函数出口 IP 个数的估计（用 moox-cli collector function probe-egress 实测），只用于频控估算与告警。
 	AssumedEgressIPs int `yaml:"assumed_egress_ips"`
@@ -87,7 +86,7 @@ type SCFPlanMarketConfig struct {
 	LatenessS int `yaml:"lateness_s"`
 }
 
-// SCFPlanAutoSize 是按配置估算每函数标的数的参数（见 marketfetch.FleetSizing）。
+// SCFPlanAutoSize 是按配置估算每函数标的数的参数（见 fetchplan.FleetSizing）。
 type SCFPlanAutoSize struct {
 	TargetFetchMS int `yaml:"target_fetch_ms"`
 	RequestMS     int `yaml:"request_ms"`
@@ -116,39 +115,22 @@ type SCFPlanSpaceConfig struct {
 	// EgressBalance 非空时在收盘后的空闲时段探测函数出口 IP，并重建共用 IP 的函数；只对 A 股有效。
 	EgressBalance *SCFPlanEgressBalance `yaml:"egress_balance"`
 	Fetch         *SCFPlanFetchConfig   `yaml:"fetch"`
-	// PackageName、PackageID、Namespace、BaseEnvironmentFile 为空表示沿用全局值。代码包按空间构建（带各自的市场配置），
+	// PackageName、Namespace、BaseEnvironmentFile 为空表示沿用全局值。代码包按空间构建（带各自的市场配置），
 	// 同时管理多个空间时每个空间必须有自己的代码包。
 	PackageName         string `yaml:"package_name"`
-	PackageID           string `yaml:"package_id"`
 	Namespace           string `yaml:"namespace"`
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	// Markets 是按市场的覆盖项（现货、合约的取数时刻与截止不同）。
 	Markets map[string]SCFPlanMarketConfig `yaml:"markets"`
-	// DefaultIngest（stream|pull）与 DefaultExecutor（scf|local）是新数据集第一次出现时的采集方式初值，之后以库为准。
-	DefaultIngest   string `yaml:"default_ingest"`
-	DefaultExecutor string `yaml:"default_executor"`
 }
 
 // autoSizing 返回空间按配置估算每函数标的数的参数；空间固定了 symbols_per_function 或没有配置 auto_size 时返回 nil。
-func (c SCFPlanConfig) autoSizing(spaceID string) *marketfetch.FleetSizing {
+func (c SCFPlanConfig) autoSizing(spaceID string) *fetchplan.FleetSizing {
 	space := c.Spaces[strings.ToLower(spaceID)]
 	if space.SymbolsPerFunction > 0 || space.AutoSize == nil {
 		return nil
 	}
-	return &marketfetch.FleetSizing{TargetFetchMS: space.AutoSize.TargetFetchMS, RequestMS: space.AutoSize.RequestMS, MinFunctions: space.AutoSize.MinFunctions}
-}
-
-// defaultModeFor 返回空间新数据集的采集方式初值（没写的按拉取 + SCF）。
-func (c SCFPlanConfig) defaultModeFor(spaceID string) marketfetch.DatasetMode {
-	space := c.Spaces[strings.ToLower(spaceID)]
-	mode := marketfetch.DatasetMode{Mode: space.DefaultIngest, Executor: space.DefaultExecutor}
-	if mode.Mode == "" {
-		mode.Mode = marketfetch.IngestPull
-	}
-	if mode.Executor == "" {
-		mode.Executor = marketfetch.PlanExecutorSCF
-	}
-	return mode
+	return &fetchplan.FleetSizing{TargetFetchMS: space.AutoSize.TargetFetchMS, RequestMS: space.AutoSize.RequestMS, MinFunctions: space.AutoSize.MinFunctions}
 }
 
 // maxFunctionsPerNamespace 是腾讯云每个命名空间的函数数上限，超过后分到下一个命名空间。
@@ -230,12 +212,6 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 			balance := *base.EgressBalance
 			override.EgressBalance = &balance
 		}
-		if override.DefaultIngest == "" {
-			override.DefaultIngest = base.DefaultIngest
-		}
-		if override.DefaultExecutor == "" {
-			override.DefaultExecutor = base.DefaultExecutor
-		}
 		switch {
 		case override.Fetch == nil && base.Fetch != nil:
 			fetch := *base.Fetch
@@ -272,7 +248,7 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 
 func defaultSCFPlan() SCFPlanConfig {
 	return SCFPlanConfig{
-		Namespace: "default", MemoryMB: 128, SymbolsPerFunction: marketfetch.DefaultSymbolsPerFunction, MaxConcurrentOperations: 20,
+		Namespace: "default", MemoryMB: 128, SymbolsPerFunction: fetchplan.DefaultSymbolsPerFunction, MaxConcurrentOperations: 20,
 		// 写入阶段预算 4 秒：行情请求 3 秒 + 写入 4 秒仍在 1m 数据集 10 秒的迟到窗口内；2 秒太紧，
 		// 跨境建连稍慢或整分钟突发时存储端稍慢就超时，也没有时间重试。
 		Fetch: SCFPlanFetchConfig{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000, StorageTimeoutMS: 4000},
@@ -361,14 +337,14 @@ func (c *Config) validateSCFPlan() error {
 	}
 	packages := map[string]string{}
 	for space := range c.SCFMarkets {
-		key, err := plan.packageKeyFor(space)
-		if err != nil {
-			return err
+		name := strings.TrimSpace(plan.packageNameFor(space))
+		if name == "" {
+			return fmt.Errorf("scf_plan: space %s needs package_name", space)
 		}
-		if other, dup := packages[key]; dup && len(c.SCFMarkets) > 1 {
-			return fmt.Errorf("scf_plan: spaces %s and %s share code package %s; every space needs its own package_name or package_id in scf_plan.spaces", other, space, key)
+		if other, dup := packages[name]; dup && len(c.SCFMarkets) > 1 {
+			return fmt.Errorf("scf_plan: spaces %s and %s share code package %s; every space needs its own package_name in scf_plan.spaces", other, space, name)
 		}
-		packages[key] = space
+		packages[name] = space
 	}
 	for space, override := range plan.Spaces {
 		if auto := override.AutoSize; auto != nil && (auto.TargetFetchMS < 500 || auto.TargetFetchMS > 10000 || auto.RequestMS < 50 || auto.RequestMS > auto.TargetFetchMS || auto.MinFunctions < 1 || auto.MinFunctions > 50) {
@@ -378,10 +354,6 @@ func (c *Config) validateSCFPlan() error {
 			if _, err := egressbalance.New(balance.config()); err != nil {
 				return fmt.Errorf("scf_plan.spaces[%s].egress_balance: %w", space, err)
 			}
-		}
-		mode := plan.defaultModeFor(space)
-		if (mode.Mode != marketfetch.IngestStreaming && mode.Mode != marketfetch.IngestPull) || (mode.Executor != marketfetch.PlanExecutorSCF && mode.Executor != marketfetch.PlanExecutorLocal) {
-			return fmt.Errorf("scf_plan.spaces[%s]: default_ingest 必须是 stream 或 pull，default_executor 必须是 scf 或 local（收到 %q、%q）", space, override.DefaultIngest, override.DefaultExecutor)
 		}
 	}
 	for space, markets := range c.SCFMarkets {
@@ -406,33 +378,11 @@ func (c *Config) validateSCFPlan() error {
 	return nil
 }
 
-func (c SCFPlanConfig) packageIDFor(spaceID string) string {
-	if override := c.Spaces[strings.ToLower(spaceID)]; override.PackageID != "" || override.PackageName != "" {
-		return override.PackageID
-	}
-	return c.PackageID
-}
-
 func (c SCFPlanConfig) packageNameFor(spaceID string) string {
-	if override := c.Spaces[strings.ToLower(spaceID)]; override.PackageID != "" || override.PackageName != "" {
+	if override := c.Spaces[strings.ToLower(spaceID)]; override.PackageName != "" {
 		return override.PackageName
 	}
 	return c.PackageName
-}
-
-// packageKeyFor 返回空间使用的代码包标识（包名或固定 ID），二者必须恰有一个。
-func (c SCFPlanConfig) packageKeyFor(spaceID string) (string, error) {
-	name, id := strings.TrimSpace(c.packageNameFor(spaceID)), strings.TrimSpace(c.packageIDFor(spaceID))
-	switch {
-	case name != "" && id != "":
-		return "", fmt.Errorf("scf_plan: space %s sets both package_name and package_id; keep exactly one", spaceID)
-	case name != "":
-		return "name:" + name, nil
-	case id != "":
-		return "id:" + id, nil
-	default:
-		return "", fmt.Errorf("scf_plan: space %s needs package_name (recommended) or package_id", spaceID)
-	}
 }
 
 // storageAuthSecretEnv 是控制机 Collector 进程里 Storage 主密钥的环境变量名。
@@ -457,11 +407,11 @@ func builtinPlanEnvironment(getenv func(string) string) (map[string]string, erro
 
 // fetchPlanDeploy 读取某个空间的非受管环境文件并生成部署参数。空间身份由对账器所属空间强制写入，
 // 不信任环境文件里的取值，避免一个空间的函数拿到另一个空间的身份。
-func (c *Config) fetchPlanDeploy(spaceID string) (marketfetch.PlanDeploy, error) {
+func (c *Config) fetchPlanDeploy(spaceID string) (fetchplan.PlanDeploy, error) {
 	override := c.SCFPlan.Spaces[strings.ToLower(spaceID)]
 	environment, err := builtinPlanEnvironment(os.Getenv)
 	if err != nil {
-		return marketfetch.PlanDeploy{}, err
+		return fetchplan.PlanDeploy{}, err
 	}
 	path := c.SCFPlan.BaseEnvironmentFile
 	if override.BaseEnvironmentFile != "" {
@@ -473,11 +423,11 @@ func (c *Config) fetchPlanDeploy(spaceID string) (marketfetch.PlanDeploy, error)
 		}
 		raw, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return marketfetch.PlanDeploy{}, fmt.Errorf("read scf_plan.base_environment_file for space %s: %w", spaceID, readErr)
+			return fetchplan.PlanDeploy{}, fmt.Errorf("read scf_plan.base_environment_file for space %s: %w", spaceID, readErr)
 		}
 		extra := map[string]string{}
 		if err := json.Unmarshal(raw, &extra); err != nil {
-			return marketfetch.PlanDeploy{}, fmt.Errorf("parse scf_plan.base_environment_file for space %s: %w", spaceID, err)
+			return fetchplan.PlanDeploy{}, fmt.Errorf("parse scf_plan.base_environment_file for space %s: %w", spaceID, err)
 		}
 		// 文件里的额外环境覆盖内置值（运维显式指定优先），空间身份仍由对账器强制写入。
 		for key, value := range extra {
@@ -489,8 +439,8 @@ func (c *Config) fetchPlanDeploy(spaceID string) (marketfetch.PlanDeploy, error)
 	if override.Namespace != "" {
 		namespace = override.Namespace
 	}
-	return marketfetch.PlanDeploy{
-		CloudAccountID: c.SCFPlan.CloudAccountID, PackageID: c.SCFPlan.packageIDFor(spaceID), PackageName: c.SCFPlan.packageNameFor(spaceID), Namespace: namespace, MemoryMB: c.SCFPlan.MemoryMB,
+	return fetchplan.PlanDeploy{
+		CloudAccountID: c.SCFPlan.CloudAccountID, PackageName: c.SCFPlan.packageNameFor(spaceID), Namespace: namespace, MemoryMB: c.SCFPlan.MemoryMB,
 		BaseEnvironment: environment, Networks: c.SCFRegions, NamespaceCapacity: maxFunctionsPerNamespace,
 	}, nil
 }

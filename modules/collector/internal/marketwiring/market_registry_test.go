@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
@@ -123,9 +124,9 @@ func TestSubjectListersAreKeyedByMarket(t *testing.T) {
 func TestMissingOverrideFallsBackToEmbeddedFiles(t *testing.T) {
 	wantPipeline, err := NewKlinePipeline(timerHandlerStorage{}, "stockcn", marketdata.InstrumentEquity, "5m", "", nil)
 	require.NoError(t, err)
-	sample := marketfetch.TaskGroup{Frequency: "5m"}
-	wantFetch := marketfetch.RouteFetchLimits("stockcn")(sample, marketfetch.PlanFetch{})
-	wantSize := marketfetch.RouteAutoSize("stockcn", marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})(sample, 300)
+	sample := fetchplan.TaskGroup{Frequency: "5m"}
+	wantFetch := fetchplan.RouteFetchLimits("stockcn")(sample, marketfetch.PlanFetch{})
+	wantSize := fetchplan.RouteAutoSize("stockcn", fetchplan.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})(sample, 300)
 
 	t.Setenv(marketfetch.MarketConfigDirEnv, filepath.Join(t.TempDir(), "no_such_dir"))
 
@@ -138,8 +139,8 @@ func TestMissingOverrideFallsBackToEmbeddedFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, wantPipeline.CandidateChain, pipeline.CandidateChain)
 	require.Equal(t, []string{"tdx", "eastmoney", "sina", "tencent"}, pipeline.CandidateChain)
-	require.Equal(t, wantFetch, marketfetch.RouteFetchLimits("stockcn")(sample, marketfetch.PlanFetch{}))
+	require.Equal(t, wantFetch, fetchplan.RouteFetchLimits("stockcn")(sample, marketfetch.PlanFetch{}))
 	require.NotZero(t, wantFetch.Concurrency)
-	require.Equal(t, wantSize, marketfetch.RouteAutoSize("stockcn", marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})(sample, 300))
+	require.Equal(t, wantSize, fetchplan.RouteAutoSize("stockcn", fetchplan.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})(sample, 300))
 	require.NotZero(t, wantSize)
 }

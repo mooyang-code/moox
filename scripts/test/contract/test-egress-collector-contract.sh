@@ -60,7 +60,7 @@ address = "43.132.204.177"
 ssh = { port = 22, username = "ubuntu" }
 
 [deployments]
-control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "factor-mgr", "strategy"]
 storage = ["storage-primary", "storage-view", "access"]
 overseas = ["trade", "egress-proxy"]
 
@@ -76,5 +76,7 @@ chmod 600 "${tmp_root}/moox.toml"
 rg -q 'data-api.binance.vision' "${tmp_root}/egress/app.yaml"
 absent 'dns:' "${tmp_root}/collector/app.yaml" "${tmp_root}/egress/app.yaml"
 rg -q 'egress_proxy:' "${tmp_root}/collector/app.yaml"
-absent 'target:|node_id:|dns_resolver:|secret_id:|secret_key:' "${tmp_root}/collector/app.yaml" "${tmp_root}/egress/app.yaml"
+absent 'target:|node_id:|dns_resolver:|\bsecret_id:|secret_key:' "${tmp_root}/collector/app.yaml" "${tmp_root}/egress/app.yaml"
+# 键名可以换（例如 writer_secret_id），配置里腾讯云密钥的值无论写在哪个键下都不能渲染进去。
+absent 'contract-secret-id|contract-secret-key' "${tmp_root}/collector/app.yaml" "${tmp_root}/egress/app.yaml"
 printf 'Egress policy and Collector runtime configuration contract passed\n'

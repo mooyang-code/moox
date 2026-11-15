@@ -73,7 +73,7 @@ func configResult(snapshot *setupconfig.Snapshot) (Result, error) {
 }
 
 // controlComponents 是可以直接加到管理台主机上的组件；Storage 这类组件对放置有要求，不能这样补。
-var controlComponents = []string{"monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"}
+var controlComponents = []string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}
 
 // CheckDeployments 确认配置里的部署完整：授权服务都有组件提供。这是纯配置检查，不连接任何主机，
 // 缺组件时部署到一半才会以“未就绪”的形式暴露，所以在动手之前就要报出来。

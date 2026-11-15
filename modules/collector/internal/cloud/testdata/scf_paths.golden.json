@@ -1,0 +1,346 @@
+[
+  {
+    "name": "create_timer_function",
+    "writes": [
+      "CreateNamespace ap-singapore/moox-collector",
+      "CreateFunction ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000 package_id=moox-collector_v1 code=packages/collector-v1.zip",
+      "UpdateFunctionEventInvokeConfig ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000 retry=0 msg_ttl=60",
+      "EnsureTimerTrigger ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000 cron=\"0 * * * * * *\" enabled=false package_id=moox-collector_v1 code=packages/collector-v1.zip"
+    ],
+    "final": {
+      "namespaces": [
+        "ap-singapore/moox-collector"
+      ],
+      "functions": {
+        "ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000": {
+          "status": "Active",
+          "runtime": "Go1",
+          "type": "Event",
+          "handler": "main",
+          "description": "MooX cloud function instance moox-fetch-plan-crypto-crypto-singapore-000",
+          "memory_size": 64,
+          "timeout": 60,
+          "max_instance_concurrency": 1,
+          "public_net_status": "ENABLE",
+          "vpc_id": "vpc-fake",
+          "subnet_id": "subnet-fake",
+          "code": {
+            "cos_bucket": "fake-bucket",
+            "cos_region": "ap-guangzhou",
+            "cos_object": "packages/collector-v1.zip"
+          },
+          "native_cls_cleared": false,
+          "environment": {
+            "MOOX_ACCESS_ADDRESS": "access.example:11004",
+            "MOOX_ACCESS_ID": "access@control-a",
+            "MOOX_CALLER": "scf-collector",
+            "MOOX_CALLER_KEY": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "MOOX_CALLER_KEY_ID": "scf-key-1",
+            "MOOX_CLS_ENABLED": "true",
+            "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com",
+            "MOOX_CLS_SECRET_ID": "fake-cls-secret-id",
+            "MOOX_CLS_SECRET_KEY": "fake-cls-secret-key",
+            "MOOX_CLS_TIMEOUT_MS": "3000",
+            "MOOX_CLS_TOPIC_ID": "fake-topic",
+            "MOOX_CODE_PACKAGE_ID": "moox-collector_v1",
+            "MOOX_CREATE_RESERVATION_ID": "0123456789abcdef0123456789abcdef",
+            "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+            "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "hash-transition",
+            "MOOX_MARKET_FETCH_PLAN": "{\"v\":1,\"plan\":\"transition\"}",
+            "MOOX_MARKET_FETCH_SUBJECT_COUNT": "40",
+            "MOOX_SPACE_ID": "crypto",
+            "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": "{\"moox-collector\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+          },
+          "timer": {
+            "name": "moox-market-fetch-timer",
+            "type": "timer",
+            "cron": "0 * * * * * *",
+            "enabled": false,
+            "available_status": "Available",
+            "qualifier": "$LATEST",
+            "message": "market_fetch_timer_v1"
+          },
+          "reserved_concurrency_mem": 0,
+          "async_retry": {
+            "retry_num": 0,
+            "msg_ttl": 60
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "update_runtime_config",
+    "writes": [
+      "UpdateFunctionConfiguration ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000 package_id=moox-collector_v1 code=packages/collector-v1.zip",
+      "EnsureTimerTrigger ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000 cron=\"5 * * * * * *\" enabled=true package_id=moox-collector_v1 code=packages/collector-v1.zip"
+    ],
+    "final": {
+      "namespaces": [
+        "ap-singapore/moox-collector"
+      ],
+      "functions": {
+        "ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000": {
+          "status": "Active",
+          "runtime": "Go1",
+          "type": "Event",
+          "handler": "main",
+          "description": "MooX cloud function instance moox-fetch-plan-crypto-crypto-singapore-000",
+          "memory_size": 64,
+          "timeout": 60,
+          "max_instance_concurrency": 1,
+          "public_net_status": "ENABLE",
+          "vpc_id": "vpc-fake",
+          "subnet_id": "subnet-fake",
+          "code": {
+            "cos_bucket": "fake-bucket",
+            "cos_region": "ap-guangzhou",
+            "cos_object": "packages/collector-v1.zip"
+          },
+          "native_cls_cleared": false,
+          "environment": {
+            "MOOX_ACCESS_ADDRESS": "access.example:11004",
+            "MOOX_ACCESS_ID": "access@control-a",
+            "MOOX_CALLER": "scf-collector",
+            "MOOX_CALLER_KEY": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "MOOX_CALLER_KEY_ID": "scf-key-2",
+            "MOOX_CLS_ENABLED": "true",
+            "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com",
+            "MOOX_CLS_SECRET_ID": "fake-cls-secret-id",
+            "MOOX_CLS_SECRET_KEY": "fake-cls-secret-key",
+            "MOOX_CLS_TIMEOUT_MS": "3000",
+            "MOOX_CLS_TOPIC_ID": "fake-topic",
+            "MOOX_CODE_PACKAGE_ID": "moox-collector_v1",
+            "MOOX_CREATE_RESERVATION_ID": "0123456789abcdef0123456789abcdef",
+            "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+            "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "hash-final",
+            "MOOX_MARKET_FETCH_PLAN": "{\"v\":1,\"plan\":\"final\"}",
+            "MOOX_MARKET_FETCH_SUBJECT_COUNT": "42",
+            "MOOX_SPACE_ID": "crypto",
+            "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": "{\"moox-collector\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+            "OPERATOR_EXTRA": "kept"
+          },
+          "timer": {
+            "name": "moox-market-fetch-timer",
+            "type": "timer",
+            "cron": "5 * * * * * *",
+            "enabled": true,
+            "available_status": "Available",
+            "qualifier": "$LATEST",
+            "message": "market_fetch_timer_v1"
+          },
+          "reserved_concurrency_mem": 0,
+          "async_retry": {
+            "retry_num": 0,
+            "msg_ttl": 60
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "upgrade_code",
+    "writes": [
+      "UpdateFunctionCode ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000 package_id=moox-collector_v1 code=packages/collector-v2.zip",
+      "UpdateFunctionConfiguration ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000 package_id=moox-collector_v2 code=packages/collector-v2.zip",
+      "UpdateFunctionEventInvokeConfig ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000 retry=0 msg_ttl=60"
+    ],
+    "final": {
+      "namespaces": [
+        "ap-singapore/moox-collector"
+      ],
+      "functions": {
+        "ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000": {
+          "status": "Active",
+          "runtime": "Go1",
+          "type": "Event",
+          "handler": "main",
+          "description": "MooX cloud function instance moox-fetch-plan-crypto-crypto-singapore-000",
+          "memory_size": 64,
+          "timeout": 60,
+          "max_instance_concurrency": 1,
+          "public_net_status": "ENABLE",
+          "vpc_id": "vpc-fake",
+          "subnet_id": "subnet-fake",
+          "code": {
+            "cos_bucket": "fake-bucket",
+            "cos_region": "ap-guangzhou",
+            "cos_object": "packages/collector-v2.zip"
+          },
+          "native_cls_cleared": true,
+          "environment": {
+            "MOOX_ACCESS_ADDRESS": "access.example:11004",
+            "MOOX_ACCESS_ID": "access@control-a",
+            "MOOX_CALLER": "scf-collector",
+            "MOOX_CALLER_KEY": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "MOOX_CALLER_KEY_ID": "scf-key-2",
+            "MOOX_CLS_ENABLED": "true",
+            "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com",
+            "MOOX_CLS_SECRET_ID": "fake-cls-secret-id",
+            "MOOX_CLS_SECRET_KEY": "fake-cls-secret-key",
+            "MOOX_CLS_TIMEOUT_MS": "3000",
+            "MOOX_CLS_TOPIC_ID": "fake-topic",
+            "MOOX_CODE_PACKAGE_ID": "moox-collector_v2",
+            "MOOX_CREATE_RESERVATION_ID": "0123456789abcdef0123456789abcdef",
+            "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+            "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "hash-final",
+            "MOOX_MARKET_FETCH_PLAN": "{\"v\":1,\"plan\":\"final\"}",
+            "MOOX_MARKET_FETCH_SUBJECT_COUNT": "42",
+            "MOOX_SPACE_ID": "crypto",
+            "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": "{\"moox-collector\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+            "OPERATOR_EXTRA": "kept"
+          },
+          "timer": {
+            "name": "moox-market-fetch-timer",
+            "type": "timer",
+            "cron": "5 * * * * * *",
+            "enabled": true,
+            "available_status": "Available",
+            "qualifier": "$LATEST",
+            "message": "market_fetch_timer_v1"
+          },
+          "reserved_concurrency_mem": 0,
+          "async_retry": {
+            "retry_num": 0,
+            "msg_ttl": 60
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "disable_timer",
+    "writes": [
+      "EnsureTimerTrigger ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000 cron=\"0 * * * * * *\" enabled=false package_id=moox-collector_v2 code=packages/collector-v2.zip"
+    ],
+    "final": {
+      "namespaces": [
+        "ap-singapore/moox-collector"
+      ],
+      "functions": {
+        "ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000": {
+          "status": "Active",
+          "runtime": "Go1",
+          "type": "Event",
+          "handler": "main",
+          "description": "MooX cloud function instance moox-fetch-plan-crypto-crypto-singapore-000",
+          "memory_size": 64,
+          "timeout": 60,
+          "max_instance_concurrency": 1,
+          "public_net_status": "ENABLE",
+          "vpc_id": "vpc-fake",
+          "subnet_id": "subnet-fake",
+          "code": {
+            "cos_bucket": "fake-bucket",
+            "cos_region": "ap-guangzhou",
+            "cos_object": "packages/collector-v2.zip"
+          },
+          "native_cls_cleared": true,
+          "environment": {
+            "MOOX_ACCESS_ADDRESS": "access.example:11004",
+            "MOOX_ACCESS_ID": "access@control-a",
+            "MOOX_CALLER": "scf-collector",
+            "MOOX_CALLER_KEY": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "MOOX_CALLER_KEY_ID": "scf-key-2",
+            "MOOX_CODE_PACKAGE_ID": "moox-collector_v2",
+            "MOOX_CREATE_RESERVATION_ID": "0123456789abcdef0123456789abcdef",
+            "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+            "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "hash-final",
+            "MOOX_MARKET_FETCH_PLAN": "{\"v\":1,\"plan\":\"final\"}",
+            "MOOX_MARKET_FETCH_SUBJECT_COUNT": "42",
+            "MOOX_SPACE_ID": "crypto",
+            "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": "{\"moox-collector\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+            "OPERATOR_EXTRA": "kept"
+          },
+          "timer": {
+            "name": "moox-market-fetch-timer",
+            "type": "timer",
+            "cron": "0 * * * * * *",
+            "enabled": false,
+            "available_status": "Available",
+            "qualifier": "$LATEST",
+            "message": "market_fetch_timer_v1"
+          },
+          "reserved_concurrency_mem": 0,
+          "async_retry": {
+            "retry_num": 0,
+            "msg_ttl": 60
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "delete_function",
+    "writes": [
+      "DeleteTimerTrigger ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000",
+      "DeleteFunction ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000"
+    ],
+    "final": {
+      "namespaces": [
+        "ap-singapore/moox-collector"
+      ],
+      "functions": {}
+    }
+  },
+  {
+    "name": "create_backfill_function",
+    "writes": [
+      "CreateNamespace ap-singapore/moox-collector",
+      "CreateFunction ap-singapore/moox-collector/moox-fetch-plan-backfill-crypto-crypto-singapore package_id=moox-collector_v1 code=packages/collector-v1.zip",
+      "UpdateFunctionEventInvokeConfig ap-singapore/moox-collector/moox-fetch-plan-backfill-crypto-crypto-singapore retry=0 msg_ttl=60",
+      "PutReservedConcurrencyConfig ap-singapore/moox-collector/moox-fetch-plan-backfill-crypto-crypto-singapore mem=320"
+    ],
+    "final": {
+      "namespaces": [
+        "ap-singapore/moox-collector"
+      ],
+      "functions": {
+        "ap-singapore/moox-collector/moox-fetch-plan-backfill-crypto-crypto-singapore": {
+          "status": "Active",
+          "runtime": "Go1",
+          "type": "Event",
+          "handler": "main",
+          "description": "MooX cloud function instance moox-fetch-plan-backfill-crypto-crypto-singapore",
+          "memory_size": 64,
+          "timeout": 60,
+          "max_instance_concurrency": 1,
+          "public_net_status": "ENABLE",
+          "vpc_id": "vpc-fake",
+          "subnet_id": "subnet-fake",
+          "code": {
+            "cos_bucket": "fake-bucket",
+            "cos_region": "ap-guangzhou",
+            "cos_object": "packages/collector-v1.zip"
+          },
+          "native_cls_cleared": false,
+          "environment": {
+            "MOOX_ACCESS_ADDRESS": "access.example:11004",
+            "MOOX_ACCESS_ID": "access@control-a",
+            "MOOX_CALLER": "scf-collector",
+            "MOOX_CALLER_KEY": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "MOOX_CALLER_KEY_ID": "scf-key-1",
+            "MOOX_CLS_ENABLED": "true",
+            "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com",
+            "MOOX_CLS_SECRET_ID": "fake-cls-secret-id",
+            "MOOX_CLS_SECRET_KEY": "fake-cls-secret-key",
+            "MOOX_CLS_TIMEOUT_MS": "3000",
+            "MOOX_CLS_TOPIC_ID": "fake-topic",
+            "MOOX_CODE_PACKAGE_ID": "moox-collector_v1",
+            "MOOX_CREATE_RESERVATION_ID": "fedcba9876543210fedcba9876543210",
+            "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+            "MOOX_MARKET_FETCH_MODE": "backfill",
+            "MOOX_SPACE_ID": "crypto",
+            "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": "{\"moox-collector\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+          },
+          "timer": null,
+          "reserved_concurrency_mem": 320,
+          "async_retry": {
+            "retry_num": 0,
+            "msg_ttl": 60
+          }
+        }
+      }
+    }
+  }
+]

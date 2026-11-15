@@ -15,9 +15,8 @@ import (
 
 const (
 	defaultTimeoutMS int64 = 5000
-	// FunctionInstance SCF request-response calls may consume the full 900s function
-	// timeout. Keep a bounded proxy ceiling while leaving room for transport
-	// overhead and the public Gateway write timeout.
+	// maxTimeoutMS 是路由超时的上限，与 Admin BFF、Console 的总时限（modules/admin/config/trpc_go.yaml）对齐。
+	// 现在服务目录里最长的路由是 CheckKline、SubmitKlineBackfill 的 310 秒。
 	maxTimeoutMS        int64 = 960000
 	defaultMaxBodyBytes int64 = 4 << 20
 	maxMaxBodyBytes     int64 = 64 << 20

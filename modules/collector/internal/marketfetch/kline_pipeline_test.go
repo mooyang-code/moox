@@ -785,3 +785,11 @@ func TestKlinePipelineAssignsSourcesPerSubjectAndFallsBack(t *testing.T) {
 		require.Equal(t, "default", row.GetKey().GetTimeSeries().GetSeriesTag())
 	}
 }
+
+func TestOnlyLongRunningBatchesUseTheAdaptiveRate(t *testing.T) {
+	require.False(t, adaptiveBatch(domain.BatchKindRealtime))
+	require.False(t, adaptiveBatch(""))
+	for _, kind := range []domain.BatchKind{domain.BatchKindBackfill, domain.BatchKindCatchup, domain.BatchKindGapRepair} {
+		require.True(t, adaptiveBatch(kind), kind)
+	}
+}

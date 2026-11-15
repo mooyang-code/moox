@@ -16,7 +16,7 @@ import (
 func newCollectorStore(t *testing.T) *Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
-	mgr, err := Open(&Options{Path: dbPath})
+	mgr, err := Open(&Options{Path: dbPath, DefaultIngest: func(string) string { return domain.IngestSCF }})
 	require.NoError(t, err)
 	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = mgr.Close() })

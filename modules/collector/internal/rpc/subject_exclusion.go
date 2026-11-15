@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -16,11 +16,11 @@ import (
 // maxExclusionSubjects 是一次设置或移除的标的数上限。
 const maxExclusionSubjects = 1000
 
-// activityLogger 写入全局活动日志（marketfetch.ActivityLogger）。
-type activityLogger = marketfetch.ActivityLogger
+// activityLogger 写入全局活动日志（fetchplan.ActivityLogger）。
+type activityLogger = fetchplan.ActivityLogger
 
 // SetActivityLogger 注入全局活动日志（采集名单干预写 collector.subject_change）。
-func (s *Service) SetActivityLogger(activity marketfetch.ActivityLogger) { s.activity = activity }
+func (s *Service) SetActivityLogger(activity fetchplan.ActivityLogger) { s.activity = activity }
 
 // SetSubjectExclusions 按空间加入一批排除：下一轮对账（≤1 分钟）生成新计划，按提前量生效。
 func (s *Service) SetSubjectExclusions(ctx context.Context, req *pb.SetSubjectExclusionsReq) (*pb.SetSubjectExclusionsRsp, error) {
@@ -116,11 +116,11 @@ func (s *Service) logExclusion(ctx context.Context, spaceID, action, title strin
 		return
 	}
 	raw, _ := json.Marshal(detail)
-	entry := marketfetch.ActivityEntry{
+	entry := fetchplan.ActivityEntry{
 		SpaceID: spaceID, Source: "collector", Category: "collector.subject_change", Level: "info",
 		Title: title, Detail: string(raw), DedupKey: fmt.Sprintf("collector.subject_exclusion.%s.%s.%d", spaceID, action, at.UnixNano()),
 	}
-	if err := s.activity.AppendActivityLogs(ctx, spaceID, []marketfetch.ActivityEntry{entry}); err != nil {
+	if err := s.activity.AppendActivityLogs(ctx, spaceID, []fetchplan.ActivityEntry{entry}); err != nil {
 		log.WarnContextf(ctx, "collector subject exclusion activity log not written space=%s action=%s: %v", spaceID, action, err)
 	}
 }

@@ -69,6 +69,7 @@ type Service struct {
 	stream                  *StreamService
 	activity                activityLogger
 	delistRegistrar         DelistRegistrar
+	cloud                   CloudDeps
 }
 
 // ctxMutex 是可响应 context 取消的互斥锁：等待者超时或被取消后立即返回，而不是一直排队。
@@ -334,6 +335,10 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	var err error
+	// 采集方式在准备结果数据集之前定下：不填用市场默认值（任务仓库是唯一入口），取值不对在这里就拒绝。
+	if task.Ingest, err = s.taskRepo.ResolveIngest(task); err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
 	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -516,6 +521,10 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if err := validateTaskResultIdentityUpdate(*existing, req.GetTask()); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	// 采集方式不随修改任务变：切换要生成交接计划，只走专门的命令。请求里带回现值（例如原样回传的任务）照常放行。
+	if requested.Ingest != "" && requested.Ingest != existing.Ingest {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "修改任务不能改采集方式，请用 moox-cli collector ingest-mode set")}, nil
+	}
 	task := *existing
 	task.TaskID = taskID
 	task.SpaceID = spaceID
@@ -527,7 +536,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if req.GetTask().Enabled != nil {
 		task.Enabled = req.GetTask().GetEnabled()
 	}
-	if dataType := strings.TrimSpace(requested.DataType); dataType != "" {
+	if dataType := strings.ToLower(strings.TrimSpace(requested.DataType)); dataType != "" {
 		task.DataType = dataType
 	}
 	if creator := strings.TrimSpace(requested.Creator); creator != "" {
@@ -814,7 +823,8 @@ func normalizeCollectionTask(task domain.CollectionTask) domain.CollectionTask {
 	task.TaskID = xid.New().String()
 	task.TaskName = domain.NormalizeCollectionTaskName(task.TaskName)
 	task.Description = strings.TrimSpace(task.Description)
-	task.DataType = strings.TrimSpace(task.DataType)
+	// 数据类型只存小写：写成 Kline 也按 K 线任务处理，采集方式、表上的 CHECK 与计划生成看到的是同一个值。
+	task.DataType = strings.ToLower(strings.TrimSpace(task.DataType))
 	// Persist one canonical representation so reads, uniqueness checks and
 	// scheduler joins all observe the same tag set.
 	task.TagIDs = normalizeTagIDs(task.TagIDs)

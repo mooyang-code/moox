@@ -6,17 +6,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/stretchr/testify/require"
 )
 
 type recordedActivity struct {
-	entries []marketfetch.ActivityEntry
+	entries []fetchplan.ActivityEntry
 	err     error
 }
 
-func (r *recordedActivity) AppendActivityLogs(_ context.Context, _ string, entries []marketfetch.ActivityEntry) error {
+func (r *recordedActivity) AppendActivityLogs(_ context.Context, _ string, entries []fetchplan.ActivityEntry) error {
 	r.entries = append(r.entries, entries...)
 	return r.err
 }

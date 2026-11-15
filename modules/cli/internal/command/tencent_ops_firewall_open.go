@@ -82,9 +82,6 @@ func runLighthouseFirewallOpen(cmd *cobra.Command, opts lighthouseFirewallOpenOp
 	}
 	var selected *adminclient.CloudAccount
 	for i := range accounts {
-		if accounts[i].IsDeleted {
-			continue
-		}
 		if accountID == "" || accounts[i].AccountID == accountID {
 			selected = &accounts[i]
 			accountID = accounts[i].AccountID

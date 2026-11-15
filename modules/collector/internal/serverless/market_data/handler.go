@@ -67,7 +67,6 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	if metricsErr != nil {
 		log.WarnContextf(ctx, "market_data_metrics_setup_failed error=%v", metricsErr)
 	} else {
-		runtimeHandler.Metrics = invocationMetrics.Metrics
 		runtimeHandler.MetricsReporter = invocationMetrics.Reporter
 	}
 	if reporter := newItemReporter(ctx, functionName); reporter != nil {

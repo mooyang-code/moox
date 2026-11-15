@@ -20,7 +20,6 @@ const pageShellFiles = [
   "src/views/factor/compute-tasks/index.vue",
   "src/views/factor/recalc/index.vue",
   "src/views/factor/results/index.vue",
-  "src/views/collector/cloud-function/function-instance.vue",
   "src/views/collector/task-management/index.vue",
   "src/views/collector/task-results/index.vue",
   "src/views/collector/runtime-status/runtime-status.vue",
@@ -33,7 +32,7 @@ const pageShellFiles = [
 const tableFiles = [
   ...pageShellFiles,
   "src/views/collector/cloud-account/cloud-account-manage.vue",
-  // 代码包版本管理只以抽屉方式打开，不套页面外壳，只查表格样式
+  // 代码包只以抽屉方式打开，不套页面外壳，只查表格样式
   "src/views/collector/cloud-function/function-package-manage.vue",
   "src/views/collector/backfill-jobs/kline-range-dialog.vue"
 ];
@@ -71,7 +70,7 @@ assert(taskResults.includes("task-results-model"), "task-results must use its pu
 assert(taskResults.includes("暂无采集任务"), "task-results must define the no-task empty state");
 assert(taskResults.includes("结果准备中，请稍后刷新"), "task-results must define the pending result state");
 assert(taskResults.includes("resultTask"), "task-results must persist the selected task");
-for (const label of ["采集任务", "采集结果", "运行状态", "执行器", "补采"]) {
+for (const label of ["采集任务", "采集结果", "运行状态", "补采"]) {
   assert(taskManagement.includes(`label: "${label}"`), `task management must expose ${label}`);
 }
 for (const retiredPath of ["/collector/rules", "/collector/data-management", "/collector/datasets", "/collector/packages"]) {

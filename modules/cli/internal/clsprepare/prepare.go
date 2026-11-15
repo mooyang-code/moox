@@ -145,7 +145,7 @@ func safeUpstreamError(operation string, err error) error {
 func selectAccount(accounts []adminclient.CloudAccount, requested string) (adminclient.CloudAccount, error) {
 	requested = strings.TrimSpace(requested)
 	for _, account := range accounts {
-		if account.Provider != "tencent" || account.IsDeleted {
+		if account.Provider != "tencent" {
 			continue
 		}
 		if requested == "" || account.AccountID == requested {

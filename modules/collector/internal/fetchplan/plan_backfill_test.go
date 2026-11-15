@@ -1,0 +1,180 @@
+package fetchplan
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud/cloudtest"
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud/tencentscf"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+)
+
+// backfillHarness 搭好一个只用补采函数的对账器：代码包按名称取最新（pkg-v1），一次调用里最多等 50 毫秒。
+func backfillHarness(t *testing.T) (*planHarness, *PlanReconciler, string) {
+	t.Helper()
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	r.opWaitMax = 50 * time.Millisecond
+	h.cloud.setPackages("pkg-v1")
+	return h, r, BackfillFunctionName("crypto", "spot", "ap-nanjing")
+}
+
+// 首次使用：补采函数被建出来，没有定时器、不带采集计划，预留并发 5 份内存，代码包是最新的。
+func TestBackfillFunctionIsCreatedOnFirstUse(t *testing.T) {
+	h, r, name := backfillHarness(t)
+	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	function := h.mustFunction(name)
+	require.Nil(t, function.Timer, "补采函数没有定时器")
+	require.Equal(t, "backfill", function.Info.Environment["MOOX_MARKET_FETCH_MODE"])
+	require.NotContains(t, function.Info.Environment, marketfetch.PlanEnvName)
+	require.Equal(t, int64(BackfillReservedConcurrency*64), function.ReservedMem)
+	require.Equal(t, int64(320), function.ReservedMem)
+	require.Equal(t, "pkg-v1", function.Info.Environment["MOOX_CODE_PACKAGE_ID"])
+	require.Equal(t, "packages/pkg-v1.zip", function.COSObject)
+	require.Equal(t, "access@storage", function.Info.Environment["MOOX_ACCESS_ID"])
+	require.Equal(t, 1, h.cloud.client.Count("CreateFunction"))
+}
+
+// 创建要好几分钟：第一次调用起了操作、等到上限就返回“仍在创建”；创建中再调不重复建；建好之后返回函数名。
+func TestBackfillCreateStillRunningIsNotResubmitted(t *testing.T) {
+	h, r, name := backfillHarness(t)
+	release := blockWrites(t, h, "CreateFunction", name)
+
+	_, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.ErrorIs(t, err, errBackfillFunctionPending)
+	require.Equal(t, 1, h.cloud.client.Count("CreateFunction"))
+
+	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	require.ErrorIs(t, err, errBackfillFunctionPending)
+	require.Equal(t, 1, h.cloud.client.Count("CreateFunction"), "创建中重复调用不重复建")
+	require.Equal(t, 1, h.cloud.countOps("ensure", name))
+
+	release()
+	h.waitOps(r)
+	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	require.Equal(t, 1, h.cloud.client.Count("CreateFunction"))
+	require.Equal(t, 1, h.cloud.countOps("ensure", name), "做完的操作只取结果")
+}
+
+// 代码包变了：补采函数重新 Ensure，代码与包 ID 换成新包；之后不再重复。
+func TestBackfillFunctionIsUpgradedWhenThePackageChanges(t *testing.T) {
+	h, r, name := backfillHarness(t)
+	_, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+
+	h.cloud.setPackages("pkg-v1", "pkg-v2")
+	h.now = h.now.Add(time.Minute) // 超过代码包的刷新间隔
+	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	function := h.mustFunction(name)
+	require.Equal(t, "pkg-v2", function.Info.Environment["MOOX_CODE_PACKAGE_ID"])
+	require.Equal(t, "packages/pkg-v2.zip", function.COSObject)
+	require.Equal(t, 1, h.cloud.client.Count("CreateFunction"), "换代码不重建")
+	require.Equal(t, 1, h.cloud.client.Count("UpdateFunctionCode"))
+
+	ensures := h.cloud.countOps("ensure", name)
+	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, ensures, h.cloud.countOps("ensure", name))
+}
+
+// 操作在一次调用的等待上限内做完：当次就返回函数名，不留在跑的操作。
+func TestBackfillJobThatFinishesInTimeReleasesTheLease(t *testing.T) {
+	h, r, name := backfillHarness(t)
+	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	require.False(t, r.ops().busy(opKeyOf(name)))
+	require.Nil(t, r.ops().current(name), "结果已被取走")
+	_, ready := r.backfillRefs[name]
+	require.True(t, ready, "补采调用能按名字找到函数")
+	require.Equal(t, 1, h.cloud.countOps("ensure", name))
+}
+
+// 建函数失败：返回这次的错误（不是“仍在创建”），下一次调用重新 Ensure。
+func TestBackfillSubmitFailureReleasesTheLease(t *testing.T) {
+	h, r, name := backfillHarness(t)
+	recover := h.failWrites("CreateFunction", name)
+	_, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, errBackfillFunctionPending)
+	require.False(t, r.ops().busy(opKeyOf(name)))
+	_, exists := h.cloudFunction(name)
+	require.False(t, exists)
+
+	recover()
+	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	require.Equal(t, "backfill", h.mustFunction(name).Info.Environment["MOOX_MARKET_FETCH_MODE"])
+}
+
+// 换代码还在跑：返回“仍在创建”，期间不重复起；做完后返回函数名。
+func TestBackfillUpgradeStillRunningKeepsTheLease(t *testing.T) {
+	h, r, name := backfillHarness(t)
+	_, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	h.cloud.setPackages("pkg-v1", "pkg-v2")
+	h.now = h.now.Add(time.Minute)
+	release := blockWrites(t, h, "UpdateFunctionCode", name)
+
+	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	require.ErrorIs(t, err, errBackfillFunctionPending)
+	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	require.ErrorIs(t, err, errBackfillFunctionPending)
+	require.Equal(t, 1, h.cloud.client.Count("UpdateFunctionCode"), "在跑期间不重复起")
+
+	release()
+	h.waitOps(r)
+	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	require.Equal(t, "pkg-v2", h.mustFunction(name).Info.Environment["MOOX_CODE_PACKAGE_ID"])
+}
+
+// 建失败遗留的补采函数（云上 CreateFailed）：Ensure 先删掉、等删完，再建成，不需要人工清理。
+func TestBackfillStaleReservationCleanupStillRunningKeepsTheLease(t *testing.T) {
+	h, r, name := backfillHarness(t)
+	h.scf.Seed(scfRef(name), &cloudtest.Function{Info: tencentscf.FunctionInfo{Status: "CreateFailed", Environment: map[string]string{"MOOX_CREATE_RESERVATION_ID": "old"}}})
+	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	require.Equal(t, 1, h.cloud.client.Count("DeleteFunction"))
+	function := h.mustFunction(name)
+	require.Equal(t, "Active", function.Info.Status)
+	require.NotContains(t, function.Info.Environment, "MOOX_CREATE_RESERVATION_ID")
+}
+
+// 补采函数与实时对账互不阻塞：实时函数上有操作在跑（例如计划推进），补采函数照样建得出来；反过来补采函数在建也不挡实时函数。
+func TestBackfillLeaseHeldByRealtimeIsRetriedLaterWithoutTrackingAJob(t *testing.T) {
+	_, r, name := backfillHarness(t)
+	gate := make(chan struct{})
+	t.Cleanup(func() { close(gate) })
+	timer := planFunctionNames(t, 60)[0]
+	_, err := r.ops().start(opKeyOf(timer), planOpKey(1, planStageTransition), true, func(context.Context, *functionOp) error { <-gate; return nil })
+	require.NoError(t, err)
+
+	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	require.True(t, r.ops().busy(opKeyOf(timer)), "实时函数的操作不受影响")
+}
+
+// 暂停期间（系统暂停、恢复追赶）补采函数照常创建：它没有定时器，不算“可能打开定时器”的操作。
+func TestBackfillFunctionIsCreatedWhileTheSpaceIsPausing(t *testing.T) {
+	h, r, name := backfillHarness(t)
+	done, err := r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	require.Equal(t, 1, h.cloud.client.Count("CreateFunction"))
+}

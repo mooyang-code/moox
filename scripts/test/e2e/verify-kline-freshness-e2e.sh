@@ -13,7 +13,7 @@ printf '\n==> Existing Monitor coverage contract\n'
 bash "${ROOT}/scripts/test/contract/test-monitor-coverage-contract.sh"
 
 printf '\n==> Collector explicit Backfill/GapRepair tests\n'
-(cd "${ROOT}/modules/collector" && go test -count=1 ./internal/domain ./internal/marketfetch)
+(cd "${ROOT}/modules/collector" && go test -count=1 ./internal/domain ./internal/marketfetch ./internal/fetchplan)
 
 printf '\n==> Monitor K-line freshness and market-calendar tests\n'
 (cd "${ROOT}/modules/monitor" && go test -count=1 ./internal/config ./internal/metrics ./internal/bootstrap)

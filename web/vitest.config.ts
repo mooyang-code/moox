@@ -17,7 +17,6 @@ export default defineConfig({
       'src/**/*.test.ts',
       'src/views/factor/__tests__/factor-contract.spec.ts',
       'tests/**/*.test.ts',
-      'tests/cloud-function-workflows.spec.ts',
       'tests/storage-view-browse.spec.ts',
     ],
   },

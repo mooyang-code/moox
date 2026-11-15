@@ -18,8 +18,7 @@ import (
 	"testing"
 	"time"
 
-	collectorstore "github.com/mooyang-code/moox/modules/collector/internal/store"
-
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
@@ -111,18 +110,18 @@ func (f *tagSnapshotFixture) ApplyTagSnapshot(_ context.Context, _, tag string, 
 
 // memoryRuns 在内存里保存标签的同步运行结果。
 type memoryRuns struct {
-	runs map[string]collectorstore.TagSyncRun
+	runs map[string]domain.TagSyncRun
 }
 
-func (m *memoryRuns) List(context.Context, string) ([]collectorstore.TagSyncRun, error) {
-	out := make([]collectorstore.TagSyncRun, 0, len(m.runs))
+func (m *memoryRuns) List(context.Context, string) ([]domain.TagSyncRun, error) {
+	out := make([]domain.TagSyncRun, 0, len(m.runs))
 	for _, run := range m.runs {
 		out = append(out, run)
 	}
 	return out, nil
 }
 
-func (m *memoryRuns) Record(_ context.Context, run collectorstore.TagSyncRun) error {
+func (m *memoryRuns) Record(_ context.Context, run domain.TagSyncRun) error {
 	m.runs[run.TagID] = run
 	return nil
 }
@@ -222,7 +221,7 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 			listers, _, err := marketwiring.NewSubjectListers(client)
 			require.NoError(t, err)
 			store := &tagSnapshotFixture{applied: map[string][]*storagepb.TagSnapshotItem{}}
-			runs := &memoryRuns{runs: map[string]collectorstore.TagSyncRun{}}
+			runs := &memoryRuns{runs: map[string]domain.TagSyncRun{}}
 			for _, kind := range []string{"spot", "swap"} {
 				store.tags = append(store.tags, &storagepb.Tag{SpaceId: "crypto", TagId: kind, Mode: "auto", Attributes: map[string]string{"sync.source": "binance", "market_type": kind, "sync.cron": "0 * * * *", "sync.timezone": "UTC"}})
 			}
@@ -244,7 +243,7 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 				failureCtx, cancelFailure := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancelFailure()
 				require.Error(t, runner.RunOnce(failureCtx), "stopped Egress must fail without direct fallback")
-				require.Equal(t, collectorstore.TagSyncFailed, runs.runs["spot"].LastStatus, "proxy failure must be recorded in the Collector database")
+				require.Equal(t, domain.TagSyncFailed, runs.runs["spot"].LastStatus, "proxy failure must be recorded in the Collector database")
 				require.Equal(t, before, backend.calls.Load())
 			}
 		})

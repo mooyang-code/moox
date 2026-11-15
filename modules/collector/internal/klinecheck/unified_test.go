@@ -8,9 +8,8 @@ import (
 	"testing"
 	"time"
 
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -90,7 +89,7 @@ type tagHealingInvoker struct {
 	events []map[string]any
 }
 
-func (h *tagHealingInvoker) Invoke(_ context.Context, _, _ string, event map[string]any, _ cloudfunctionpb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
+func (h *tagHealingInvoker) Invoke(_ context.Context, _, _ string, event map[string]any) (marketfetch.InvocationResult, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.events = append(h.events, event)
@@ -105,7 +104,7 @@ func (h *tagHealingInvoker) Invoke(_ context.Context, _, _ string, event map[str
 		h.rows.writes = append(h.rows.writes, tag+"|"+subject)
 		delete(h.rows.missing[tag][subject], at.Unix())
 	}
-	return scfinvoker.InvocationResult{Result: map[string]any{"success": true}}, nil
+	return marketfetch.InvocationResult{Result: map[string]any{"success": true}}, nil
 }
 
 // newUnifiedFixture 建一个统一数据集：BTC、ETH 都有现货与永续序列，永续的 BTC 缺 3～5 分钟。
@@ -124,20 +123,20 @@ func newUnifiedFixtureWithDB(t *testing.T) (*Backfiller, *tagHealingInvoker, *se
 	const slot = 5 * time.Minute
 	now := time.Now().UTC().Add(slot).Truncate(slot).Add(3 * time.Minute)
 	base := now.Add(-48*time.Hour - 3*time.Minute)
-	options := marketfetch.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}, "swap": {"ap-hongkong"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
+	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}, "swap": {"ap-hongkong"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
 	subjects := []string{"BTC-USDT", "ETH-USDT"}
-	desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{
+	desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{
 		{Provider: "binance", SourceID: "spot_http", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m", Subjects: subjects},
 		{Provider: "binance", SourceID: "swap_http", MarketType: "swap", MarketID: "crypto", InstrumentType: "perpetual", DatasetID: "ds", Frequency: "1m", Subjects: subjects},
 	}, nil)
 	require.NoError(t, err)
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
 	record, err := db.FetchPlans().Create(context.Background(), "crypto", string(raw), "{}")
 	require.NoError(t, err)
-	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", ""))
+	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", "", appliedTimeline("crypto", string(raw))...))
 
 	rows := &seriesRows{tags: []string{spotTag, swapTag}, missing: map[string]map[string]map[int64]bool{
 		spotTag: {"BTC-USDT": {}, "ETH-USDT": {}}, swapTag: {"BTC-USDT": {}, "ETH-USDT": {}},
@@ -145,7 +144,7 @@ func newUnifiedFixtureWithDB(t *testing.T) (*Backfiller, *tagHealingInvoker, *se
 	for _, minute := range []int{3, 4, 5} {
 		rows.missing[swapTag]["BTC-USDT"][base.Add(time.Duration(minute)*time.Minute).Unix()] = true
 	}
-	checker := &Checker{Plans: db.FetchPlans(), Rows: rows, Absences: db.Backfill(), Now: func() time.Time { return now }}
+	checker := &Checker{Timeline: db.SeriesTimeline(), Rows: rows, Absences: db.Backfill(), Now: func() time.Time { return now }}
 	invoker := &tagHealingInvoker{rows: rows}
 	backfiller := &Backfiller{
 		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), Invoker: invoker, BaseCtx: context.Background(), Now: func() time.Time { return now },
@@ -161,7 +160,7 @@ func TestCheckUnifiedDatasetFindsGapOfOneSeriesOnly(t *testing.T) {
 	ctx := context.Background()
 	for name, checker := range map[string]*Checker{
 		"计数后读行": backfiller.Checker,
-		"只读行":   {Plans: backfiller.Checker.Plans, Rows: readOnlyRows{rows}, Absences: backfiller.Checker.Absences, Now: backfiller.Checker.Now},
+		"只读行":   {Timeline: backfiller.Checker.Timeline, Rows: readOnlyRows{rows}, Absences: backfiller.Checker.Absences, Now: backfiller.Checker.Now},
 	} {
 		result, err := checker.Check(ctx, Request{SpaceID: "crypto", From: base, To: base.Add(time.Hour)})
 		require.NoError(t, err, name)
@@ -236,13 +235,15 @@ func TestBackfillUnifiedDatasetNoticeCarriesSeriesTag(t *testing.T) {
 func TestDatasetMarketRefusesToBorrowAnotherMarketsPlan(t *testing.T) {
 	backfiller, _, _, base := newUnifiedFixture(t)
 	ctx := context.Background()
-	plan, err := backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", swapTag, base.Add(time.Minute))
+	history, err := backfiller.loadPlanHistory(ctx, "crypto")
+	require.NoError(t, err)
+	plan, err := history.datasetMarket("ds", "1m", "BTC-USDT", swapTag, base.Add(time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, "swap", plan.Market.MarketType)
-	plan, err = backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", spotTag, base.Add(time.Minute))
+	plan, err = history.datasetMarket("ds", "1m", "BTC-USDT", spotTag, base.Add(time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, "spot", plan.Market.MarketType)
-	_, err = backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", "venue:binance|market:delivery|source:delivery_http", base.Add(time.Minute))
+	_, err = history.datasetMarket("ds", "1m", "BTC-USDT", "venue:binance|market:delivery|source:delivery_http", base.Add(time.Minute))
 	require.ErrorContains(t, err, "not part of any fetch plan")
 }
 

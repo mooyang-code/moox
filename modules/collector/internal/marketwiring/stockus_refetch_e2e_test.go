@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
@@ -128,15 +129,15 @@ func newUSRefetchHarness(t *testing.T, subjects []string, serveByCode func(code 
 	h.db = db
 
 	// 采集计划：真实的生成逻辑，一个数据集，2026-10-20 开盘起生效（早于所有用例的交易日）。
-	desired, err := marketfetch.BuildDesiredState(usPlanOptions(), []marketfetch.TaskGroup{usGroup(subjects...)}, nil)
+	desired, err := fetchplan.BuildDesiredState(usPlanOptions(), []fetchplan.TaskGroup{usGroup(subjects...)}, nil)
 	require.NoError(t, err)
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return usTime("2026-10-20 00:00:00").Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return usTime("2026-10-20 00:00:00").Unix(), nil })
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
 	record, err := db.FetchPlans().Create(context.Background(), "stockus", string(raw), "{}")
 	require.NoError(t, err)
-	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", ""))
+	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", "", firstPlanTimeline("stockus", content)...))
 
 	clock := func() time.Time { h.mu.Lock(); defer h.mu.Unlock(); return h.now }
 	serve := func(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +162,7 @@ func newUSRefetchHarness(t *testing.T, subjects []string, serveByCode func(code 
 		return stockUSPipeline(t, s, clock(), limits, serve), nil
 	}
 	h.invoker = &hkFunctionInvoker{t: t, handler: handler}
-	checker := &klinecheck.Checker{Plans: db.FetchPlans(), Rows: h.storage, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
+	checker := &klinecheck.Checker{Timeline: db.SeriesTimeline(), Rows: h.storage, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
 	h.backfiller = &klinecheck.Backfiller{
 		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), Invoker: h.invoker, BaseCtx: context.Background(), Now: clock,
 		Functions:    func(string) klinecheck.FunctionProvider { return usBackfillFunctions{} },
