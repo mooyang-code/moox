@@ -316,7 +316,7 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 		cfg.SCFRegions = map[string]fetchplan.PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}}
 		cfg.SCFPlan.AccessRoutes = map[string]SCFAccessEndpoint{"ap-nanjing": {Address: "10.0.0.5:11004", InstanceID: "access@storage"}}
 		cfg.SCFMarkets = map[string]map[string][]string{"crypto": {"spot": {"ap-nanjing"}}}
-		cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageID, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "scf-env.json"
+		cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageName, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "scf-env.json"
 		return cfg
 	}
 	require.NoError(t, valid().validateSCFPlan())
@@ -336,8 +336,8 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 	noNetwork.SCFRegions = nil
 	require.ErrorContains(t, noNetwork.validateSCFPlan(), "VPC and subnet")
 	noDeploy := valid()
-	noDeploy.SCFPlan.PackageID = ""
-	require.ErrorContains(t, noDeploy.validateSCFPlan(), "package_id")
+	noDeploy.SCFPlan.PackageName = ""
+	require.ErrorContains(t, noDeploy.validateSCFPlan(), "package_name")
 	require.NoError(t, Default().validateSCFPlan(), "spaces without scf_markets keep the Invoke scheduler only")
 
 	shared := valid()
@@ -345,7 +345,7 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 	require.ErrorContains(t, shared.validateSCFPlan(), "share code package")
 	own := valid()
 	own.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
-	own.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-stockcn"}}
+	own.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageName: "pkg-stockcn"}}
 	require.NoError(t, own.validateSCFPlan())
 }
 
@@ -355,16 +355,16 @@ func TestFetchPlanDeployForcesTheSpaceIdentity(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "env.json"), []byte(`{"MOOX_SPACE_ID":"crypto","OTHER":"x"}`), 0o600))
 	cfg := Default()
 	cfg.sourcePath = filepath.Join(dir, "app.yaml")
-	cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageID, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "env.json"
-	cfg.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-stockcn"}}
+	cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageName, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "env.json"
+	cfg.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageName: "pkg-stockcn"}}
 	deploy, err := cfg.fetchPlanDeploy("stockcn")
 	require.NoError(t, err)
 	require.Equal(t, "stockcn", deploy.BaseEnvironment["MOOX_SPACE_ID"])
-	require.Equal(t, "pkg-stockcn", deploy.PackageID)
+	require.Equal(t, "pkg-stockcn", deploy.PackageName)
 	cryptoDeploy, err := cfg.fetchPlanDeploy("crypto")
 	require.NoError(t, err)
 	require.Equal(t, "crypto", cryptoDeploy.BaseEnvironment["MOOX_SPACE_ID"])
-	require.Equal(t, "pkg", cryptoDeploy.PackageID)
+	require.Equal(t, "pkg", cryptoDeploy.PackageName)
 }
 
 func TestFetchPlanDeployBuildsTheBaseEnvironmentWithoutAFile(t *testing.T) {
@@ -376,7 +376,6 @@ func TestFetchPlanDeployBuildsTheBaseEnvironmentWithoutAFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "crypto", deploy.BaseEnvironment["MOOX_SPACE_ID"])
 	require.Equal(t, "moox-collector-crypto-plan", deploy.PackageName)
-	require.Empty(t, deploy.PackageID)
 	// Storage 应用密钥由主密钥按应用 ID 派生，密钥本身不进入配置文件。
 	var keys map[string]string
 	require.NoError(t, json.Unmarshal([]byte(deploy.BaseEnvironment["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]), &keys))
@@ -389,19 +388,13 @@ func TestFetchPlanDeployBuildsTheBaseEnvironmentWithoutAFile(t *testing.T) {
 	require.ErrorContains(t, err, storageAuthSecretEnv)
 }
 
-func TestSCFPlanPackageSelectionRequiresExactlyOneOfNameAndID(t *testing.T) {
-	plan := SCFPlanConfig{PackageName: "pkg-name", Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-id"}}}
-	key, err := plan.packageKeyFor("crypto")
-	require.NoError(t, err)
-	require.Equal(t, "name:pkg-name", key)
-	key, err = plan.packageKeyFor("stockcn")
-	require.NoError(t, err)
-	require.Equal(t, "id:pkg-id", key)
-
-	_, err = (SCFPlanConfig{PackageName: "a", PackageID: "b"}).packageKeyFor("crypto")
-	require.ErrorContains(t, err, "both")
-	_, err = (SCFPlanConfig{}).packageKeyFor("crypto")
-	require.ErrorContains(t, err, "needs package_name")
+// 代码包只能按包名取最新；固定包 ID 的 package_id 已删除，旧配置里还写着它时严格解码直接报错。
+func TestSCFPlanPackageIsSelectedByNameOnly(t *testing.T) {
+	plan := SCFPlanConfig{PackageName: "pkg-name", Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {PackageName: "pkg-stockcn"}}}
+	require.Equal(t, "pkg-name", plan.packageNameFor("crypto"))
+	require.Equal(t, "pkg-stockcn", plan.packageNameFor("stockcn"))
+	_, err := Load(writeCollectorConfig(t, "scf_plan: {package_id: stale}\n"))
+	require.ErrorContains(t, err, "package_id")
 }
 
 // 部署渲染出的 Timer 配置经真实 Load（含 validateSCFPlan）：覆盖 crypto、仅 stockcn、多空间与关闭状态。

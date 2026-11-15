@@ -15,10 +15,9 @@ import (
 )
 
 const (
-	timerTriggerType      = "timer"
 	timerTriggerQualifier = "$LATEST"
 	timerTriggerMessage   = "market_fetch_timer_v1"
-	// runtimeConfigBatchSize 是 FunctionInstance 单个作业最多的项数。
+	// runtimeConfigBatchSize 是代码包升级每两分钟一次的检查最多起的升级操作数（一批）。
 	runtimeConfigBatchSize = 100
 )
 
@@ -297,4 +296,30 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 		}
 	}
 	return result
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func minPositive(left, right int) int {
+	return int(minPositive64(int64(left), int64(right)))
+}
+
+func minPositive64(left, right int64) int64 {
+	switch {
+	case left <= 0:
+		return max(right, 0)
+	case right <= 0:
+		return left
+	case right < left:
+		return right
+	default:
+		return left
+	}
 }

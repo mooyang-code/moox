@@ -129,3 +129,33 @@ func TestBuildUpdateFunctionCodeRequestUsesCOSPackage(t *testing.T) {
 		t.Fatalf("CosObjectName = %q", got)
 	}
 }
+
+// 2026-11-14 真机实测：从没配置过异步重试的函数返回默认值 RetryConfig=[{2},{-1}]、MsgTTL=21600（不是 ResourceNotFound），
+// 解析成“已配置、RetryNum=2”（只看第一项），Ensure 据此判为不一致而写一次。
+func TestEventInvokeConfigDefaultIsParsedAsConfiguredWithTheFirstRetry(t *testing.T) {
+	response := scf.NewGetFunctionEventInvokeConfigResponse()
+	response.Response = &scf.GetFunctionEventInvokeConfigResponseParams{AsyncTriggerConfig: &scf.AsyncTriggerConfig{
+		RetryConfig: []*scf.RetryConfig{{RetryNum: common.Int64Ptr(2)}, {RetryNum: common.Int64Ptr(-1)}},
+		MsgTTL:      common.Int64Ptr(21600),
+	}}
+	got := eventInvokeConfigFromResponse(response)
+	if !got.Configured || got.RetryNum != 2 || got.MsgTTL != 21600 {
+		t.Fatalf("默认异步重试解析成 %+v，期望已配置、RetryNum=2、MsgTTL=21600", got)
+	}
+	if empty := eventInvokeConfigFromResponse(scf.NewGetFunctionEventInvokeConfigResponse()); empty.Configured {
+		t.Fatalf("没有返回内容时不能算已配置：%+v", empty)
+	}
+}
+
+// 真机实测：没配置过预留并发时返回成功、ReservedMem 为 null，判为没配置（0）。
+func TestReservedMemNullIsNotConfigured(t *testing.T) {
+	response := scf.NewGetReservedConcurrencyConfigResponse()
+	response.Response = &scf.GetReservedConcurrencyConfigResponseParams{}
+	if got := reservedMemFromResponse(response); got != 0 {
+		t.Fatalf("ReservedMem 为 null 时得到 %d，期望 0", got)
+	}
+	response.Response.ReservedMem = common.Uint64Ptr(320)
+	if got := reservedMemFromResponse(response); got != 320 {
+		t.Fatalf("ReservedMem=320 时得到 %d", got)
+	}
+}

@@ -1717,7 +1717,8 @@ func statusRank(status string) int {
 // coordinationFailureTexts 是 Collector 上报的协调失败原因对应的告警文案，按优先级排列：
 // 多个实例上报不同原因时取排在前面的。原因名与 Collector 的 assignmentFailureReasons 一一对应。
 var coordinationFailureTexts = []struct{ reason, text string }{
-	{"cloudfunction", "采集计划配置服务调用失败：请检查 FunctionInstance、网关连接和批处理队列"},
+	{"quota", "函数个数、命名空间或预留并发配额超限：用 moox-cli collector function timer-inventory 找出计划外的函数，再用 moox-cli collector function delete 删除"},
+	{"cloud", "调用腾讯云失败：检查云账号密钥、限频和网络"},
 	{"environment", "函数运行环境生成失败：请检查环境变量大小"},
 	{"rules", "采集规则读取失败：请检查 Collector 规则配置和存储连接"},
 	{"store", "Collector 本地数据库读写失败：请检查 Collector 的 SQLite 数据库、磁盘空间和权限"},
@@ -1736,7 +1737,7 @@ func coordinationFailureText(reasons map[string]bool) string {
 			return item.text
 		}
 	}
-	return "采集计划协调失败：请检查 Collector 日志、FunctionInstance 和函数网络"
+	return "采集计划协调失败：请检查 Collector 日志、腾讯云调用和函数网络"
 }
 
 func unixTime(value float64) time.Time {

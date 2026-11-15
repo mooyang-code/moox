@@ -4,239 +4,220 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// DisableAll 停用该空间全部函数的定时器：已生效计划与未生效计划里出现过的函数都在内。
-// 返回 true 表示云端已确认全部停用。
+// DisableAll 停用该空间全部定时函数的定时器（已生效计划与未生效计划里出现过的都在内），返回 true 表示云上已确认全部停用。
+// 顺序写死（暂停后不能有后台操作再把定时器打开，重置的第一步 verify_scf_timers_disabled 靠这个信号）：
+//
+//  1. 把空间标成“正在暂停”：之后操作表拒绝为它起可能打开定时器的操作（定时函数的 Ensure、启用定时器）；
+//     补采函数与删除照常放行（恢复追赶时系统暂停还开着，补采却要跑）。
+//  2. 取消还没拿到并发名额的这类操作。
+//  3. 等正在跑的这类操作结束（不取消，避免留下建到一半的函数）；还没结束就返回未完成，空间协程每分钟重试。
+//  4. 清掉这些操作留下的结果，免得恢复后被当成某个阶段的确认。
+//  5. 作废未生效计划里的下发与收尾确认并持久化。
+//  6. 对每个定时函数起“停用定时器”的操作并等它们结束。
+//  7. 读回全部定时函数，确认定时器都是停用，才宣布完成。
 func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 	if !r.mu.TryLock() {
 		return false, fmt.Errorf("plan reconciliation already running")
 	}
 	defer r.mu.Unlock()
-	names := map[string]string{}
-	if applied, err := r.Store.LatestApplied(ctx, r.SpaceID); err != nil {
+	r.pausing.Store(true)
+	if running := r.ops().quiesceTimerCapable(); running > 0 {
+		log.InfoContextf(ctx, "collector fetch plan disabling waits for running cloud operations space=%s running=%d", r.SpaceID, running)
+		return false, nil
+	}
+	refs, err := r.timerFunctionRefs(ctx)
+	if err != nil {
 		return false, err
-	} else if applied != nil {
-		content, decodeErr := decodeFetchPlanContent(applied.Plan)
-		if decodeErr != nil {
-			return false, decodeErr
-		}
-		for name, function := range content.Functions {
-			if function.IsSCF() {
-				names[name] = function.Region
-			}
-		}
 	}
 	openRecord, err := r.Store.Open(ctx, r.SpaceID)
 	if err != nil {
 		return false, err
 	}
-	if open := openRecord; open != nil {
-		content, decodeErr := decodeFetchPlanContent(open.Plan)
-		if decodeErr != nil {
-			return false, decodeErr
-		}
-		for name, function := range content.Functions {
-			if function.IsSCF() {
-				names[name] = function.Region
-			}
-		}
-	}
-	if len(names) == 0 {
-		return true, nil
-	}
-	release, err := r.acquireOperation(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer release()
-	// 先结算在途作业，再读回云端：若先读回，在途的启用作业可能在读回之后完成，用过期的 disabled 状态误判停用完成。
-	busy := r.busyFunctions(ctx, true)
-	// 停用确认必须以云端读回为准：目录缓存可能与云端实际状态不一致。
-	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
-	if err != nil {
-		return false, err
-	}
-	var patches []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch
-	exists := map[string]scfinvoker.FunctionInstance{}
-	for _, node := range nodes {
-		exists[node.InstanceID] = node
-	}
-	lease, err := r.ensureLease(ctx)
-	if err != nil {
-		return false, err
-	}
-	deferred := 0
-	for name := range names {
-		if _, inFlight := busy[name]; inFlight {
-			deferred++ // 仍有在途作业：本轮不提交，也不能宣布停用完成
-			continue
-		}
-		node, ok := exists[name]
-		if !ok {
-			continue
-		}
-		if enabled, known := metadataBoolValue(node.Metadata, "timer_actual_enabled"); known && !enabled {
-			continue
-		}
-		patches = append(patches, &cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{InstanceId: name, TimerEnabled: false, TimerCron: "0 * * * * * *", CollectorPublishLeaseId: lease.LeaseID, CollectorPublishFencingToken: lease.FencingToken})
-	}
 	if err := r.invalidateConfirmations(ctx, openRecord); err != nil {
 		return false, err
 	}
-	if len(patches) == 0 {
-		r.releaseLease(ctx)
-		return r.finishDisable(deferred)
+	if len(refs) == 0 {
+		return r.finishDisable(), nil
 	}
-	// FunctionInstance 单个作业最多 100 项：分批提交，全部确认后才算停用完成。
-	for start := 0; start < len(patches); start += runtimeConfigBatchSize {
-		batch := patches[start:min(start+runtimeConfigBatchSize, len(patches))]
-		jobID, err := r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, batch)
+	ops := r.ops()
+	deferred := 0
+	var started []*functionOp
+	var firstErr error
+	for _, name := range sortedKeys(refs) {
+		// 上一次调用起的停用已经成功结束：不再起（第 7 步的读回会确认）；失败了就重起。
+		if done := ops.take(name, opKeyDisable); done != nil && done.err == nil {
+			continue
+		}
+		op, err := r.startDisableTimer(refs[name], opKeyDisable)
 		if err != nil {
-			return false, err
+			deferred++ // 别的操作（删除、补采）在跑：等它结束
+			continue
 		}
-		batchNames := make([]string, 0, len(batch))
-		for _, patch := range batch {
-			batchNames = append(batchNames, patch.GetInstanceId())
-		}
-		items, terminal, err := r.waitAux(ctx, auxJobKindDisable, batchNames, jobID)
-		if err != nil || !terminal {
-			return false, err
-		}
-		for _, item := range items {
-			if !item.Success {
-				return false, fmt.Errorf("disable timer of %s: %s", item.InstanceID, item.Message)
-			}
+		started = append(started, op)
+	}
+	ops.wait(ctx, started, r.roundWait(ctx))
+	for _, op := range started {
+		done := ops.take(op.name, opKeyDisable)
+		switch {
+		case done == nil:
+			deferred++
+		case done.err != nil && firstErr == nil:
+			firstErr = fmt.Errorf("disable timer of %s: %w", op.name, done.err)
 		}
 	}
-	r.releaseLease(ctx)
-	return r.finishDisable(deferred)
+	if firstErr != nil {
+		return false, firstErr
+	}
+	if deferred > 0 {
+		return false, nil
+	}
+	for _, name := range sortedKeys(refs) {
+		state, err := r.describe(ctx, refs[name])
+		if err != nil {
+			return false, fmt.Errorf("read back timer of %s: %w", name, err)
+		}
+		if state.Exists && state.Timer != nil && state.Timer.Enabled {
+			log.WarnContextf(ctx, "collector fetch plan timer of %s is still enabled after disabling space=%s", name, r.SpaceID)
+			return false, nil
+		}
+	}
+	return r.finishDisable(), nil
 }
 
-// EnableAll 启用已生效计划里全部函数的定时器，与 DisableAll 对称：恢复采集或进程重启后立即核对云端并补推，
-// 不等对账逐轮刷新读回（读回过期的函数在对账里会被跳过，恢复会拖很多轮）。
-// 返回 true 表示没有遗留项：没有在途作业，且需要启用的函数都已提交并确认。
+// EnableAll 启用已生效计划里全部函数的定时器，与 DisableAll 对称：恢复采集或进程重启后立即核对云端并补上，
+// 不等对账逐轮读回。启用之前先让落后的函数跟上最新的代码包（环境的编码格式随代码版本变化，先启用会出现“旧代码读新环境”）：
+// 有函数还在旧代码包上就先起 UpgradeCode，升级没成功之前返回 errCodeUpgradePending，一个都不启用。
+// 返回 true 表示没有遗留项：没有在跑的操作，且需要启用的函数都已确认。缺失的函数交给对账重建。
 func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 	if !r.mu.TryLock() {
 		return false, fmt.Errorf("plan reconciliation already running")
 	}
 	defer r.mu.Unlock()
-	applied, err := r.Store.LatestApplied(ctx, r.SpaceID)
+	targets, err := r.appliedTargets(ctx)
 	if err != nil {
 		return false, err
 	}
-	if applied == nil {
+	if len(targets) == 0 {
 		return true, nil
 	}
-	content, err := decodeFetchPlanContent(applied.Plan)
-	if err != nil {
+	r.refreshPackageIfAvailable(ctx)
+	if err := r.packageGate(ctx); err != nil {
 		return false, err
 	}
-	functions, _ := content.Applied()
-	functions = scfFunctions(functions)
-	if len(functions) == 0 {
-		return true, nil
-	}
-	// 启用定时器并下发环境之前，先让落后的函数跟上配置的代码包：环境的编码格式（例如采集计划）随代码版本变化，
-	// 先启用会出现“旧代码读新环境”。升级失败或仍在进行都不启用，下一轮重试；没有落后函数时这一步什么也不做。
-	if err := r.upgradeBeforeEnable(ctx); err != nil {
-		if errors.Is(err, errCodeUpgradePending) {
-			// 管理器随后直接跳过本 tick 的对账，唯一的收尾点不会执行：在这里补上，
-			// 否则升级作业的 pending 指标不更新，之前的失败原因（例如租约被占用）也不会清除。
-			r.finishRound(err)
-		}
-		return false, err
-	}
-	release, err := r.acquireOperation(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer release()
-	busy := r.busyFunctions(ctx, true)
-	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
-	if err != nil {
-		return false, err
-	}
-	exists := map[string]scfinvoker.FunctionInstance{}
-	for _, node := range nodes {
-		exists[node.InstanceID] = node
-	}
-	names := make([]string, 0, len(functions))
-	for name := range functions {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	pkg := strings.TrimSpace(r.packageID())
+	ops := r.ops()
 	deferred := 0
-	var patches []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch
-	for _, name := range names {
-		function := functions[name]
-		if function.Cron == "" {
-			continue
-		}
-		if _, inFlight := busy[name]; inFlight {
+	states := map[string]cloud.FunctionState{}
+	var lagging []*functionOp
+	for _, name := range sortedKeys(targets) {
+		ref := r.functionRef(name, targets[name].Region)
+		if ops.busy(name) {
 			deferred++
 			continue
 		}
-		node, ok := exists[name]
-		if !ok || !timerNeedsRepair(node.Metadata, function.Cron) {
+		state, err := r.describe(ctx, ref)
+		if err != nil {
+			return false, r.fail("cloud", fmt.Errorf("%w: cannot read back %s: %v", errCodeUpgradePending, name, err))
+		}
+		if !state.Exists {
 			continue // 缺失的函数交给对账重建
 		}
-		// 启用定时器的配置必须带受管环境变量（云端校验 MOOX_FETCH_TIMEOUT_SECONDS 等），与对账修复用同一份。
-		environment, envErr := r.functionEnvironment(function.Region, function.Plan)
-		if envErr != nil {
-			return false, fmt.Errorf("function %s: %w", name, envErr)
+		states[name] = state
+		if pkg == "" || state.PackageID == pkg {
+			continue
 		}
-		patches = append(patches, &cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{InstanceId: name, ManagedEnvironment: environment, TimerEnabled: true, TimerCron: function.Cron})
+		var fallback *cloud.FunctionSpec
+		if spec, err := r.desiredSpec(targets[name]); err == nil {
+			fallback = &spec
+		}
+		if op, err := r.startUpgrade(ref, fallback); err == nil {
+			lagging = append(lagging, op)
+		} else {
+			deferred++
+		}
 	}
-	if len(patches) == 0 {
-		r.lastVerified = time.Time{}
-		return deferred == 0, nil
-	}
-	lease, err := r.ensureLease(ctx)
-	if err != nil {
-		return false, err
-	}
-	allOK := deferred == 0
-	for start := 0; start < len(patches); start += runtimeConfigBatchSize {
-		batch := patches[start:min(start+runtimeConfigBatchSize, len(patches))]
-		batchNames := make([]string, 0, len(batch))
-		for _, patch := range batch {
-			patch.CollectorPublishLeaseId, patch.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
-			batchNames = append(batchNames, patch.GetInstanceId())
-		}
-		jobID, err := r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, batch)
-		if err != nil {
-			return false, err
-		}
-		items, terminal, err := r.waitAux(ctx, auxJobKindRepair, batchNames, jobID)
-		if err != nil || !terminal {
-			return false, err
-		}
-		for _, item := range items {
-			if !item.Success {
-				allOK = false
-				log.WarnContextf(ctx, "collector fetch plan enable timer of %s failed: %s", item.InstanceID, item.Message)
+	if len(lagging) > 0 {
+		ops.wait(ctx, lagging, r.roundWait(ctx))
+		stale := 0
+		for _, op := range lagging {
+			done := ops.take(op.name, opKeyUpgrade)
+			if done == nil || done.err != nil {
+				stale++
+				if done != nil {
+					// 升级失败要报出来：这期间整个空间都不启用定时器，不报的话 Monitor 看不到。
+					_ = r.opFailure(fmt.Errorf("code upgrade of %s before enabling timers: %w", op.name, done.err))
+				}
 			}
 		}
+		if stale > 0 {
+			err := fmt.Errorf("%w: %d functions are still on an older code package", errCodeUpgradePending, stale)
+			// 管理器随后直接跳过本 tick 的对账，唯一的收尾点不会执行：在这里补上。
+			r.finishRound(err)
+			return false, err
+		}
 	}
-	r.releaseLease(ctx)
+	var started []*functionOp
+	for _, name := range sortedKeys(states) {
+		target := targets[name]
+		if target.Cron == "" || TimerMatches(states[name].Timer, target.Cron) {
+			continue
+		}
+		op, err := r.ops().start(name, opKeyEnable, true, func(ctx context.Context, _ *functionOp) error {
+			return r.Cloud.SetTimer(ctx, r.functionRef(name, target.Region), cloud.Timer{Cron: target.Cron, Enabled: true}, pkg)
+		})
+		if err != nil {
+			deferred++
+			continue
+		}
+		started = append(started, op)
+	}
+	ops.wait(ctx, started, r.roundWait(ctx))
+	allOK := deferred == 0
+	for _, op := range started {
+		done := ops.take(op.name, opKeyEnable)
+		if done == nil {
+			allOK = false
+			continue
+		}
+		if done.err != nil {
+			allOK = false
+			log.WarnContextf(ctx, "collector fetch plan enable timer of %s failed: %v", op.name, done.err)
+		}
+	}
 	r.lastVerified = time.Time{} // 启用之后让下一轮对账立即读回校验
 	return allOK, nil
 }
 
-// invalidateConfirmations 作废未完成计划里的下发与收尾确认（保留 Created/Registered 与原 P）：停用之后这些确认不再代表云端状态，
-// 重新启用时按原计划重推（下发是幂等的）。必须在提交停用之前持久化：否则部分停用后崩溃，重启时空间已重新启用，
-// 旧确认会让计划一直跳过这些函数。
+// appliedTargets 返回最近一份已生效计划里的定时函数。
+func (r *PlanReconciler) appliedTargets(ctx context.Context) (map[string]functionTarget, error) {
+	applied, err := r.Store.LatestApplied(ctx, r.SpaceID)
+	if err != nil || applied == nil {
+		return nil, err
+	}
+	content, err := decodeFetchPlanContent(applied.Plan)
+	if err != nil {
+		return nil, err
+	}
+	functions, _ := content.Applied()
+	targets := map[string]functionTarget{}
+	for name, function := range scfFunctions(functions) {
+		targets[name] = functionTarget{Name: name, Region: function.Region, Plan: function.Plan, Cron: function.Cron}
+	}
+	return targets, nil
+}
+
+// invalidateConfirmations 作废未完成计划里的下发与收尾确认（保留 Registered 与原 P）：停用之后这些确认不再代表云端状态，
+// 重新启用时按原计划重推（Ensure 是幂等的）。必须在停用定时器之前持久化：否则部分停用后崩溃，重启时空间已重新启用，
+// 旧确认会让计划一直跳过这些函数，计划里新建的函数恢复后一直停用。
 func (r *PlanReconciler) invalidateConfirmations(ctx context.Context, openRecord *store.FetchPlanRecord) error {
 	if openRecord == nil {
 		return nil
@@ -256,13 +237,10 @@ func (r *PlanReconciler) invalidateConfirmations(ctx context.Context, openRecord
 	return nil
 }
 
-// finishDisable 在停用确认后收尾：仍有在途作业则未完成；否则让已生效函数在重新启用后立即校验。
-func (r *PlanReconciler) finishDisable(deferred int) (bool, error) {
-	if deferred > 0 {
-		return false, nil
-	}
+// finishDisable 在停用确认后收尾：让已生效函数在重新启用后立即校验。
+func (r *PlanReconciler) finishDisable() bool {
 	r.lastVerified = time.Time{}
-	return true, nil
+	return true
 }
 
 // PlanManager 为每个启用采集计划的空间维持一个独立的对账协程，每分钟第 Offset 秒执行一轮。
@@ -492,6 +470,8 @@ func (m *PlanManager) sync(ctx context.Context) {
 func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *PlanReconciler, worker *planWorker) {
 	defer m.wg.Done()
 	defer close(worker.done)
+	// 协程退出（暂停收尾完成、进程退出）时取消并等待本空间在跑的云端操作；操作表本身照常可用，暂停期间补采函数与删除还要用。
+	defer reconciler.StopOperations(false)
 	stopping := false
 	// 对账协程每次启动（恢复采集、进程重启）后先把已生效计划里的定时器全部启用，成功前每轮重试。
 	enabling := true
@@ -559,47 +539,5 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 	}
 }
 
-// errCodeUpgradePending 表示仍有函数运行着比配置更旧的代码包：此时不能启用定时器，也不能下发新环境。
+// errCodeUpgradePending 表示仍有函数运行着比最新代码包更旧的代码：此时不能启用定时器，也不能下发新环境。
 var errCodeUpgradePending = errors.New("function code upgrade pending")
-
-// upgradeBeforeEnable 刷新配置的代码包并升级落后的函数；调用方已持有 r.mu。
-// 升级作业是异步的、失败也只记日志，所以最后要读回云端确认没有任何函数仍在旧代码包上，
-// 否则返回 errCodeUpgradePending，调用方本轮既不启用定时器也不继续对账。
-func (r *PlanReconciler) upgradeBeforeEnable(ctx context.Context) error {
-	r.refreshPackageIfAvailable(ctx)
-	if err := r.packageGate(ctx); err != nil {
-		return err
-	}
-	upgradeCtx, cancel := upgradeContext(ctx)
-	upgradeErr := r.upgradeLaggingFunctions(upgradeCtx)
-	cancel()
-	if upgradeErr != nil {
-		log.WarnContextf(ctx, "collector fetch plan code upgrade before enabling timers space=%s failed: %v", r.SpaceID, upgradeErr)
-	}
-	pkg := strings.TrimSpace(r.packageID())
-	if pkg == "" {
-		return nil
-	}
-	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
-	if err != nil {
-		// 读不到云端就无法确认代码已经升级：同样不放行，等下一轮。这是 FunctionInstance 调用失败，必须记入失败，
-		// 否则 EnableAll 里按“升级等待”收尾时会把它当成无失败而清掉既有的失败原因。
-		return r.fail("cloudfunction", fmt.Errorf("%w: cannot read back the fleet: %v", errCodeUpgradePending, err))
-	}
-	prefix := r.fleetPrefix()
-	stale := 0
-	for _, node := range nodes {
-		if !strings.HasPrefix(node.InstanceID, prefix) || strings.TrimSpace(node.PackageID) == "" || node.PackageID == pkg {
-			continue
-		}
-		// 云端已确认不存在的函数没有代码可升级，交给对账清理和重建，不能因此永久阻塞整个空间。
-		if readbackState(node.Metadata, r.now()) == readbackGone {
-			continue
-		}
-		stale++
-	}
-	if stale > 0 {
-		return fmt.Errorf("%w: %d functions are still on an older code package", errCodeUpgradePending, stale)
-	}
-	return nil
-}

@@ -1,12 +1,13 @@
 package command
 
 const (
-	tradeWriteReason     = "交易的写操作由用户在管理台自己做，不提供命令：Agent 不代用户创建账户、下单、撤单或清仓"
-	walletTransferReason = "人工结束一条钱包划转记录要先到交易所核对划转记录再判断到账与否，Agent 不代用户判断；用户确认后用 gateway call 调用"
-	secretWriteReason    = "密钥的新建、修改、启停与删除由用户在管理台“设置 › 密钥”操作（明文不经过 Agent；gateway call 也拒绝这些方法）"
-	sshReason            = "管理台的交互式 SSH 终端与文件管理；命令行用 host exec、host get、host put 代替"
-	authReason           = "管理台的登录与会话；moox-cli 用自己的网关身份，不需要登录"
-	spaceDupReason       = "与 SpaceMgr 同名；管理台走 SpaceMgr（space 命令），Storage 里的空间元数据由 metadata apply 与 setup 维护"
+	tradeWriteReason        = "交易的写操作由用户在管理台自己做，不提供命令：Agent 不代用户创建账户、下单、撤单或清仓"
+	walletTransferReason    = "人工结束一条钱包划转记录要先到交易所核对划转记录再判断到账与否，Agent 不代用户判断；用户确认后用 gateway call 调用"
+	secretWriteReason       = "密钥的新建、修改、启停与删除由用户在管理台“设置 › 密钥”操作（明文不经过 Agent；gateway call 也拒绝这些方法）"
+	sshReason               = "管理台的交互式 SSH 终端与文件管理；命令行用 host exec、host get、host put 代替"
+	authReason              = "管理台的登录与会话；moox-cli 用自己的网关身份，不需要登录"
+	cloudAccountWriteReason = "云账号的新建与修改在管理台运行状态页“函数”区的“云账号”对话框做（初始账号由 setup init 登记）；密钥本身在“设置 › 密钥”"
+	spaceDupReason          = "与 SpaceMgr 同名；管理台走 SpaceMgr（space 命令），Storage 里的空间元数据由 metadata apply 与 setup 维护"
 )
 
 // handWrittenCoverage 记录不是规格表生成、而是手写实现的命令各自覆盖了管理台的哪些接口（接口 → 命令路径）。
@@ -46,6 +47,17 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.cloudfunction.CloudFunctionMgr/SubmitDeleteFunctionInstances":              "cloud function delete",
 	"trpc.moox.cloudfunction.CloudFunctionMgr/SubmitUpdateFunctionInstanceRuntimeConfigs": "cloud function update-config",
 
+	// 批 2 T5：云账号、代码包、云函数的方法搬进 CollectMgr。命令在 T6 改成 collector account、collector package、
+	// collector function list，这里先登记到还调 CloudFunctionMgr 的同功能命令上。
+	"trpc.moox.collector.CollectMgr/ListCloudAccounts":     "cloud account list",
+	"trpc.moox.collector.CollectMgr/ListCloudRegions":      "cloud account regions",
+	"trpc.moox.collector.CollectMgr/DeleteCloudAccount":    "cloud account delete",
+	"trpc.moox.collector.CollectMgr/InitPackageUpload":     "collector function upload",
+	"trpc.moox.collector.CollectMgr/CompletePackageUpload": "collector function upload",
+	"trpc.moox.collector.CollectMgr/ListFunctionPackages":  "cloud package list",
+	"trpc.moox.collector.CollectMgr/DeleteFunctionPackage": "cloud package delete",
+	"trpc.moox.collector.CollectMgr/ListCloudFunctions":    "collector function timer-inventory",
+
 	"trpc.moox.collector.CollectMgr/CreateTask":             "collector task create",
 	"trpc.moox.collector.CollectMgr/DeleteTask":             "collector task delete",
 	"trpc.moox.collector.CollectMgr/GetCollectorStatus":     "collector status",
@@ -84,11 +96,13 @@ var handWrittenCoverage = map[string]string{
 
 // consoleOnly 记录有意只留在管理台的接口及原因。
 var consoleOnly = map[string]string{
-	"trpc.moox.infra.Auth/GetLoginSalt":          authReason,
-	"trpc.moox.infra.Auth/Login":                 authReason,
-	"trpc.moox.infra.Auth/Logout":                authReason,
-	"trpc.moox.infra.Auth/GetUserInfo":           authReason,
-	"trpc.moox.infra.Auth/IssueRawSessionTicket": authReason,
+	"trpc.moox.collector.CollectMgr/CreateCloudAccount": cloudAccountWriteReason,
+	"trpc.moox.collector.CollectMgr/UpdateCloudAccount": cloudAccountWriteReason,
+	"trpc.moox.infra.Auth/GetLoginSalt":                 authReason,
+	"trpc.moox.infra.Auth/Login":                        authReason,
+	"trpc.moox.infra.Auth/Logout":                       authReason,
+	"trpc.moox.infra.Auth/GetUserInfo":                  authReason,
+	"trpc.moox.infra.Auth/IssueRawSessionTicket":        authReason,
 
 	"trpc.moox.ops.Ssh/CreateSession":     sshReason,
 	"trpc.moox.ops.Ssh/DisconnectSession": sshReason,

@@ -115,7 +115,7 @@ func TestFreshDeploymentPutsDefaultStreamDatasetsOnTheStreamItem(t *testing.T) {
 	content := h.applied()
 	require.Equal(t, marketfetch.PlanExecutorStreaming, content.Functions[streamItem].Executor)
 	require.Len(t, content.Functions, 1, "没有 SCF 函数")
-	require.Empty(t, h.cloud.created)
+	require.Empty(t, h.cloudTimers())
 	plan := content.FinalPlan(content.Functions[streamItem])
 	require.Equal(t, marketfetch.PlanExecutorStreaming, plan.Executor)
 	require.Len(t, plan.Datasets[0].Copies[0].Subjects, 60)
@@ -184,7 +184,7 @@ func TestHandoffPullToStreamAndBack(t *testing.T) {
 	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
 	require.Equal(t, 8, h.lateness.values["ds_spot_1h"])
 	for _, name := range scfNames {
-		require.False(t, h.cloud.patches[name].GetTimerEnabled(), "drain 结束后才停用 %s 的定时器", name)
+		require.False(t, h.timerEnabled(name), "drain 结束后才停用 %s 的定时器", name)
 	}
 	// stream 的过渡计划只有从 P 起的一份，与最终计划相同，不需要再确认一次。
 	require.Nil(t, h.open())
@@ -228,7 +228,7 @@ func TestPullOnTheLocalExecutorUsesALocalItem(t *testing.T) {
 	require.Equal(t, marketfetch.PlanExecutorLocal, content.Functions[localItem].Executor)
 	require.Equal(t, marketfetch.PlanExecutorLocal, content.Functions[localItem].New.Executor)
 	require.Equal(t, 15, h.lateness.values["ds_spot_1m"])
-	require.Empty(t, h.cloud.created)
+	require.Empty(t, h.cloudTimers())
 }
 
 // 固定规则一：collector-stream 只是旧执行端且已离线，交接不等它确认，只等新执行端（SCF）就生效。
@@ -240,7 +240,7 @@ func TestHandoffDoesNotWaitForAnOfflineOldStreamWorker(t *testing.T) {
 	h.settle(false)
 	require.Nil(t, h.open())
 	require.Equal(t, ingestSCF, h.applied().Datasets["ds_spot_1m|1m"].IngestOrSCF())
-	require.NotEmpty(t, h.cloud.created)
+	require.NotEmpty(t, h.cloudTimers())
 }
 
 // 在线但迟迟不确认的 collector-stream 不算离线：计划一直等它。

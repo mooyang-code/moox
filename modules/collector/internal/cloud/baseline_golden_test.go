@@ -129,7 +129,7 @@ func backfillSpec() FunctionSpec {
 }
 
 // newTestFunctions 用临时库（登记一个云账号）、假密钥、假 CLS 与给定的腾讯云客户端构造 TencentFunctions。
-func newTestFunctions(t *testing.T, client scfClient) *TencentFunctions {
+func newTestFunctions(t *testing.T, client SCFClient) *TencentFunctions {
 	t.Helper()
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
 	require.NoError(t, err)
@@ -139,7 +139,7 @@ func newTestFunctions(t *testing.T, client scfClient) *TencentFunctions {
 		AccountID: baselineAccount, Provider: "tencent", CredentialSecretID: "fake-secret", COSRegion: "ap-guangzhou", COSBucket: "fake-bucket",
 	}))
 	functions := NewFunctions(db, fakeCredentials{}, baselineCLSEnvironment{})
-	functions.newClient = func(Credential) scfClient { return client }
+	functions.newClient = func(Credential) SCFClient { return client }
 	return functions
 }
 
@@ -212,14 +212,14 @@ func TestBaselineOrderIsCheckedPerFunction(t *testing.T) {
 func TestBaselineSCFRejectsWritesWhileTheFunctionIsNotActive(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
-	fake.pendingReads = 1
+	fake.PendingReads = 1
 	_, err := fake.CreateFunction(ctx, tencentscf.CreateFunctionRequest{FunctionRef: baselineRef, Environment: map[string]string{}})
 	require.NoError(t, err)
 	_, err = fake.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{FunctionRef: baselineRef})
 	require.ErrorContains(t, err, "Creating")
 	_, err = fake.EnsureTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: baselineRef, Name: timerTriggerName, Cron: "0 * * * * * *"})
 	require.ErrorContains(t, err, "Creating")
-	require.Len(t, fake.rejectedWrites(), 2)
+	require.Len(t, fake.RejectedWrites(), 2)
 	info, err := fake.GetFunction(ctx, baselineRef)
 	require.NoError(t, err)
 	require.Equal(t, "Creating", info.Status)
@@ -249,34 +249,34 @@ func TestFunctionPathsMatchBaselineFinalState(t *testing.T) {
 	golden := loadBaselineGolden(t)
 	check := func(name string, fake *baselineSCF, function tencentscf.FunctionRef, wantPackage string) {
 		t.Helper()
-		writes, final := fake.snapshot()
+		writes, final := fake.Snapshot()
 		t.Logf("路径 %s 的写请求：\n%s", name, strings.Join(writes, "\n"))
 		assertBaselineOrder(t, writes, baselineKey(function), wantPackage)
 		require.Equal(t, golden[name].Final, final, "路径 %s 结束时云上的最终状态与基线不一致", name)
-		require.Empty(t, fake.rejectedWrites(), "路径 %s 在函数不是 Active 时发了写请求", name)
-		fake.resetWrites()
+		require.Empty(t, fake.RejectedWrites(), "路径 %s 在函数不是 Active 时发了写请求", name)
+		fake.ResetWrites()
 	}
 
 	// 路径一：建定时采集函数（过渡计划、初始停用的定时器）。提交的环境不带 CLS 项，由 CLS 补齐。
 	fake := newBaselineSCF()
-	fake.pendingReads = 1
+	fake.PendingReads = 1
 	functions := newTestFunctions(t, fake)
 	require.NoError(t, functions.Ensure(ctx, timerSpec(timerEnvironment(`{"v":1,"plan":"transition"}`, "hash-transition", "40", "scf-key-1"), "v1", Timer{Cron: "0 * * * * * *"})))
 	check("create_timer_function", fake, baselineRef, baselineOldPackage)
 
 	// 路径二：改环境与定时器。云上的函数是日志服务开通之前建的（没有 CLS 项），还留着已废弃的受管键和一项人工加的键，
 	// 超时被改成了 30 秒；下发最终计划、轮换后的调用方密钥并启用定时器。
-	fake.mutate(baselineRef, func(function *baselineFunction) {
-		for key := range function.info.Environment {
+	fake.Mutate(baselineRef, func(function *baselineFunction) {
+		for key := range function.Info.Environment {
 			if strings.HasPrefix(key, "MOOX_CLS_") {
-				delete(function.info.Environment, key)
+				delete(function.Info.Environment, key)
 			}
 		}
-		function.info.Environment["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"] = `{"retired":true}`
-		function.info.Environment["MOOX_MARKET_FETCH_DNS_HASH"] = "retired-hash"
-		function.info.Environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"] = "2026-01-01T00:00:00Z"
-		function.info.Environment["OPERATOR_EXTRA"] = "kept"
-		function.info.Timeout = 30
+		function.Info.Environment["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"] = `{"retired":true}`
+		function.Info.Environment["MOOX_MARKET_FETCH_DNS_HASH"] = "retired-hash"
+		function.Info.Environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"] = "2026-01-01T00:00:00Z"
+		function.Info.Environment["OPERATOR_EXTRA"] = "kept"
+		function.Info.Timeout = 30
 	})
 	require.NoError(t, functions.Ensure(ctx, timerSpec(timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), "v1", Timer{Cron: "5 * * * * * *", Enabled: true})))
 	check("update_runtime_config", fake, baselineRef, baselineOldPackage)
@@ -286,10 +286,10 @@ func TestFunctionPathsMatchBaselineFinalState(t *testing.T) {
 	check("upgrade_code", fake, baselineRef, baselineNewPackage)
 
 	// 路径四：停用定时器。云上的函数又没有 CLS 项了：停用只改定时器，不碰环境。
-	fake.mutate(baselineRef, func(function *baselineFunction) {
-		for key := range function.info.Environment {
+	fake.Mutate(baselineRef, func(function *baselineFunction) {
+		for key := range function.Info.Environment {
 			if strings.HasPrefix(key, "MOOX_CLS_") {
-				delete(function.info.Environment, key)
+				delete(function.Info.Environment, key)
 			}
 		}
 	})
@@ -302,7 +302,7 @@ func TestFunctionPathsMatchBaselineFinalState(t *testing.T) {
 
 	// 路径五：建补采函数。没有定时器、没有采集计划，带预留并发（5 份内存）。
 	backfillFake := newBaselineSCF()
-	backfillFake.pendingReads = 1
+	backfillFake.PendingReads = 1
 	require.NoError(t, newTestFunctions(t, backfillFake).Ensure(ctx, backfillSpec()))
 	check("create_backfill_function", backfillFake, baselineBackfillRef, baselineOldPackage)
 }

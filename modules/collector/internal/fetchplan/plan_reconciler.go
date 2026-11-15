@@ -5,7 +5,6 @@ package fetchplan
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,39 +14,36 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	"github.com/mooyang-code/moox/modules/collector/internal/adminrpc"
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/egressbalance"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/seriesset"
-	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
-	planJobKindCreate     = "create"
-	planJobKindTransition = "transition"
-	planJobKindFinal      = "final"
 	// planFinalizeMargin 是旧份保留窗口结束后再多等的时间，让最后一批旧周期提交落地。
 	planFinalizeMargin = 5 * time.Second
 	// planUpgradeCheckInterval 是检查函数代码包是否落后的间隔。
 	planUpgradeCheckInterval = 2 * time.Minute
-	// planUpgradeBudget 是单轮代码升级的时间上限，超出后放弃本轮，留给计划推进。
-	planUpgradeBudget = 90 * time.Second
-	// planVerifyInterval 是全量读回云端配置的间隔；读回不完整时按 planVerifyRetry 重试。
+	// planVerifyInterval 是全量读回云端配置的间隔；读回不完整或修复还在跑时按 planVerifyRetry 重试。
 	planVerifyInterval = time.Hour
 	planVerifyRetry    = 5 * time.Minute
 	// planGoneDebounce 是“数据集消失但任务仍启用”被视为真实删除前需要连续观察到的轮数。
 	planGoneDebounce = 5
 	// planLeadTimeHandoff 是采集方式交接时 P 的最短提前量。
 	planLeadTimeHandoff = 3 * time.Minute
+	// operationStuckAge 是云端操作的卡住年龄：最早一个在跑的操作超过它，对账不再刷新成功时间，由 Monitor 的对账陈旧判定发现。
+	operationStuckAge = 10 * time.Minute
 )
 
 // SubjectExclusionSource 读取采集名单排除（store.SubjectExclusionRepository）。
@@ -75,22 +71,6 @@ type planStore interface {
 	SavePlan(context.Context, int64, string) error
 }
 
-type planCloud interface {
-	LatestPackage(context.Context, string, string) (string, error)
-	ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.FunctionInstance, error)
-	ListTimerMarketFetchersFresh(context.Context, string) ([]scfinvoker.FunctionInstance, error)
-	ListMarketFetchers(context.Context, string) ([]scfinvoker.FunctionInstance, error)
-	ListUnreadyMarketFetchers(context.Context, string, string) ([]scfinvoker.FunctionInstance, error)
-	SubmitDeleteFunctionInstances(context.Context, string, []string, *scfinvoker.CollectorPublishLease) (string, error)
-	SubmitDeployFunctionInstances(context.Context, string, []string, string, *scfinvoker.CollectorPublishLease) (string, error)
-	SubmitCreateFunctionInstances(context.Context, string, []*cloudfunctionpb.FunctionInstanceCreateItem) (string, error)
-	SubmitRuntimeConfigs(context.Context, string, []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch) (string, error)
-	GetBatchResults(context.Context, string, string) (*cloudfunctionpb.FunctionJobSummary, []scfinvoker.BatchItemResult, error)
-	AcquireCollectorPublishLease(context.Context, string, string) (*scfinvoker.CollectorPublishLease, error)
-	RenewCollectorPublishLease(context.Context, *scfinvoker.CollectorPublishLease) (*scfinvoker.CollectorPublishLease, error)
-	ReleaseCollectorPublishLease(context.Context, *scfinvoker.CollectorPublishLease) error
-}
-
 // PlanSnapshotRegistrar 把数据集标的快照登记到 Storage。
 type PlanSnapshotRegistrar interface {
 	RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, frequency string, series []seriesset.Series, effectiveFrom int64) (marketstorage.SnapshotRegistration, error)
@@ -102,7 +82,7 @@ type PlanLatenessSetter interface {
 }
 
 // ActivityEntry 是写入全局活动日志的一条记录。
-type ActivityEntry = scfinvoker.ActivityEntry
+type ActivityEntry = adminrpc.ActivityEntry
 
 // ActivityLogger 写入全局活动日志；相同 DedupKey 的重放必须被忽略。
 type ActivityLogger interface {
@@ -112,9 +92,7 @@ type ActivityLogger interface {
 // PlanDeploy 是创建与配置函数所需的部署参数。
 type PlanDeploy struct {
 	CloudAccountID string
-	// PackageID 固定使用某个代码包；PackageName 非空时每轮解析该名称的最新可用代码包（优先于 PackageID），
-	// 上传新版本后函数自动升级，不需要改配置。
-	PackageID   string
+	// PackageName 是代码包的包名：每轮取这个包名最新的可用代码包，上传新版本后函数自动升级，不需要改配置。
 	PackageName string
 	Namespace   string
 	MemoryMB    int
@@ -124,9 +102,6 @@ type PlanDeploy struct {
 	// NamespaceCapacity 为每个命名空间的函数数上限（0 表示不分片）。
 	NamespaceCapacity int
 }
-
-// pendingJobWarnAge 是云端作业的告警年龄：超过后仍须等到终态，不会因年龄丢弃而重复下发。
-const pendingJobWarnAge = 10 * time.Minute
 
 // NamespaceFor 返回函数所在的命名空间：每个命名空间最多 NamespaceCapacity 个函数，按函数名末尾的序号分片；
 // 第一片使用配置的命名空间名，之后依次加 -2、-3……
@@ -145,16 +120,9 @@ func (d PlanDeploy) NamespaceFor(functionName string) string {
 	return d.Namespace
 }
 
-type pendingPlanJob struct {
-	at        time.Time
-	id        string
-	kind      string
-	functions []string
-	warned    bool // 超龄告警只发一次
-}
-
 // PlanReconciler 是一个空间的采集计划对账器：由任务与标签成员算出期望状态，
 // 与已生效的计划比较，有变化时先保存采集计划，再登记快照、下发环境、收尾。
+// 改云上状态的调用只经操作表（function_ops.go）。
 type PlanReconciler struct {
 	SpaceID  string
 	Options  PlanOptions
@@ -172,8 +140,11 @@ type PlanReconciler struct {
 	Workers StreamWorkerSource
 	// Exclusions 是采集名单排除：期望状态去掉排除的标的；为空表示没有排除。
 	Exclusions SubjectExclusionSource
-	// Operations 限制同时进行的 SCF 配置操作（各空间共用）；为空表示不限制。
+	// Operations 限制同时进行的云端操作（各空间共用）；为空表示不限制。
 	Operations chan struct{}
+	// OtherSpaces 是其他已配置云函数的空间各自的市场与地域（空间 → 市场 → 地域）：判断计划外的同前缀函数是不是本空间的，
+	// 要排除它们按同样规则能生成的名字。
+	OtherSpaces map[string]map[string][]string
 	// StreamOnline 判断 collector-stream 是否在线：新计划要给它下发推送或本地执行项时，它不在线就不建计划，
 	// 否则生效周期早于它上线，开头缺一段 K 线。为空表示不检查。
 	StreamOnline func(ctx context.Context) (bool, error)
@@ -183,9 +154,9 @@ type PlanReconciler struct {
 	StreamTimeout time.Duration
 	// Preflight 在创建新计划前执行（例如 stockcn 的公共日历覆盖期检查）；返回错误则本轮不创建新计划，已有计划照常续跑。
 	Preflight func(ctx context.Context) error
-	// JobWait 与 PollInterval 控制等待一个云端作业的时间。
-	JobWait      time.Duration
-	PollInterval time.Duration
+	// Egress 非空时，计划新建了函数之后做一次出口 IP 去重（见 egressbalance 包）：核对云端没有其他问题时探测各函数的出口 IP，
+	// 共用 IP 的函数删掉重建。做完或地址池用尽之后不再探测。
+	Egress *egressbalance.Balancer
 
 	mu sync.Mutex
 	// waiting 是本轮没有建计划的原因，issue 是最近一轮结束时的问题（受 issueMu 保护），collector 状态接口读取。
@@ -196,18 +167,23 @@ type PlanReconciler struct {
 	// 两者相等说明自上一轮结束以来没有任何失败（包括同一 tick 内对账之前的启用、升级）。
 	failCount      int
 	roundFailCount int
-	lease          *scfinvoker.CollectorPublishLease
-	holder         string
-	pending        []pendingPlanJob
-	aux            auxJobs
 	lastVerified   time.Time
-	// Egress 非空时，计划新建了函数之后做一次出口 IP 去重（见 egressbalance 包）：核对云端没有其他问题时探测各函数的出口 IP，
-	// 共用 IP 的函数走“云端缺失重建”流程。做完或地址池用尽之后不再探测。
-	Egress *egressbalance.Balancer
+	// verifyRequested 由 RPC 删除函数之后置位：下一轮对账立即读回，不等 lastVerified 的间隔。
+	verifyRequested atomic.Bool
+	// 操作表（第一次用时创建）与“正在暂停”的标记：暂停时置位，空间的对账协程重新启动（恢复）时随新的对账器清掉。
+	opsOnce    sync.Once
+	operations *functionOps
+	pausing    atomic.Bool
+	// opWaitMax 是一轮里等操作结束的上限（没有截止时间时）；测试里调小。
+	opWaitMax time.Duration
+	// 最近一次读回（只在内存里）与计划外的同前缀函数，受 readMu 保护。
+	readMu    sync.Mutex
+	readbacks map[string]FunctionReadback
+	unplanned []cloud.FunctionRef
 	// 按包名解析出的最新代码包及其解析时间（见 plan_package.go）。
 	packageMu       sync.Mutex
 	refreshMu       sync.Mutex // 串行化包解析（含云端查询）
-	resolvedPackage string
+	resolvedPackage *cloud.Package
 	resolvedAt      time.Time
 	packageErr      error     // 最近一次解析失败的原因（没有可用的缓存时），解析成功后清空
 	packageWarnedAt time.Time // 上一次记"没有可用代码包"警告的时间
@@ -217,14 +193,25 @@ type PlanReconciler struct {
 	// sleep 替换本轮内的等待（测试用）。
 	sleep func(context.Context, time.Duration) error
 
-	// 补采函数的创建与对账协程互不干扰：单独的互斥与租约，并缓存已确认存在的函数。
-	backfillMu     sync.Mutex
-	backfillReady  map[string]string // 补采函数名 → 已确认就绪的代码包 ID：目标包变了就重新校验升级
-	backfillLease  *scfinvoker.CollectorPublishLease
-	backfillHolder string
-	// backfillJobs 是仍在云端运行的补采作业（函数名 → 作业），受 backfillMu 保护。
-	// 作业结束之前不释放补采租约，也不对同一函数重复提交。
-	backfillJobs map[string]backfillJob
+	// 补采函数：多个补采协程并发调用时串行，backfillReady 缓存已确认就绪的“代码包|Access 指纹”（受 backfillMu 保护）；
+	// backfillRefs 是补采函数在云上的位置（受 readMu 保护）。
+	backfillMu    sync.Mutex
+	backfillReady map[string]string
+	backfillRefs  map[string]cloud.FunctionRef
+}
+
+// ops 返回本空间的操作表。
+func (r *PlanReconciler) ops() *functionOps {
+	r.opsOnce.Do(func() {
+		r.operations = newFunctionOps(r.Operations, r.pausing.Load, r.now)
+	})
+	return r.operations
+}
+
+// StopOperations 取消本空间全部在跑的云端操作并等它们返回。closing 为 true（进程退出）时之后不再接受新操作；
+// 为 false（空间的对账协程退出）时操作表照常可用（暂停期间补采函数与 RPC 删除还要用）。
+func (r *PlanReconciler) StopOperations(closing bool) {
+	r.ops().stop(closing)
 }
 
 // wait 在本轮里等待一段时间（测试替换为推进假时钟）。
@@ -242,15 +229,8 @@ func (r *PlanReconciler) wait(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// backfillJob 是一个仍在云端运行的补采函数作业（创建、升级、删除或清理遗留预留）。
-type backfillJob struct {
-	id   string
-	kind string
-	at   time.Time
-}
-
-// errBackfillJobRunning 表示补采作业在等待上限内没有结束；作业已登记在途，调用方稍后重试。
-var errBackfillJobRunning = errors.New("backfill operation is still running")
+// errBackfillFunctionPending 表示补采函数还在创建或升级：调用方稍后重试。
+var errBackfillFunctionPending = errors.New("补采函数还在创建或升级")
 
 func (r *PlanReconciler) now() time.Time {
 	if r.Now != nil {
@@ -267,49 +247,13 @@ func (r *PlanReconciler) fail(reason string, err error) error {
 	return err
 }
 
-// failItem 上报创建函数项失败：缺代码包单独归为 package（Monitor 提示去检查代码包），其余是环境问题。
-func (r *PlanReconciler) failItem(err error) error {
-	if errors.Is(err, errNoCodePackage) {
-		return r.fail("package", err)
-	}
-	return r.fail("environment", err)
+// operationStuck 判断最早一个在跑的云端操作是否已超过卡住年龄。
+func (r *PlanReconciler) operationStuck() bool {
+	since, ok := r.ops().oldestRunning()
+	return ok && r.now().Sub(since) > operationStuckAge
 }
 
-// failCloud 上报云端协作类失败：Admin 明确答复「发布租约或在途操作占用仍被持有」时单独归类，
-// 其余（包括 Admin 不可达、无权限、响应异常）仍归为 cloudfunction，照常告警。
-func (r *PlanReconciler) failCloud(err error) error {
-	reason := "cloudfunction"
-	if errors.Is(err, scfinvoker.ErrCollectorPublishLeaseHeld) {
-		reason = ReasonPublishLeaseHeld
-	}
-	return r.fail(reason, err)
-}
-
-// inFlightSince 返回最早一个在途云端作业（计划作业或辅助作业）的提交时间。
-func (r *PlanReconciler) inFlightSince() (time.Time, bool) {
-	var since time.Time
-	found := false
-	consider := func(at time.Time) {
-		if !found || at.Before(since) {
-			since, found = at, true
-		}
-	}
-	for _, job := range r.pending {
-		consider(job.at)
-	}
-	for _, job := range r.aux.snapshot() {
-		consider(job.at)
-	}
-	return since, found
-}
-
-// inFlightStuck 判断最老的在途云端作业是否已超过告警年龄（pendingJobWarnAge）。
-func (r *PlanReconciler) inFlightStuck() bool {
-	since, ok := r.inFlightSince()
-	return ok && r.now().Sub(since) > pendingJobWarnAge
-}
-
-// finishRound 在每轮对账结束时统一收尾：有在途云端作业就按作业的提交时间上报 pending；
+// finishRound 在每轮对账结束时统一收尾：有在跑的云端操作就按最早一个的开始时间上报 pending；
 // 本轮及自上一轮结束以来没有任何失败时恢复健康并清除遗留的失败原因（计划仍在进行也一样）。
 func (r *PlanReconciler) finishRound(err error) {
 	// 函数代码升级仍在进行（errCodeUpgradePending）是等待，不是失败。
@@ -318,23 +262,11 @@ func (r *PlanReconciler) finishRound(err error) {
 	if r.Metrics == nil {
 		return
 	}
-	if since, ok := r.inFlightSince(); ok {
+	if since, ok := r.ops().oldestRunning(); ok {
 		r.Metrics.ObserveAssignmentPending(r.SpaceID, true, since)
 	}
 	if clean {
 		r.Metrics.ObserveAssignmentRoundOK(r.SpaceID)
-	}
-}
-
-func (r *PlanReconciler) acquireOperation(ctx context.Context) (func(), error) {
-	if r.Operations == nil {
-		return func() {}, nil
-	}
-	select {
-	case r.Operations <- struct{}{}:
-		return func() { <-r.Operations }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
 	}
 }
 
@@ -369,16 +301,12 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 	if err := r.packageGate(ctx); err != nil {
 		return err
 	}
-	r.refreshAux(ctx)
-	// 代码包升级与采集计划是否在进行无关：计划推进期间也要让落后的函数跟上配置的代码包。
+	// 代码包升级与采集计划是否在进行无关：计划推进期间也要让落后的函数跟上最新的代码包。升级在操作表里异步进行，不拖住本轮。
 	if r.now().Sub(r.lastUpgradeCheck) >= planUpgradeCheckInterval {
 		r.lastUpgradeCheck = r.now()
-		// 升级失败只记日志：不能因为代码升级慢或失败而拖住计划推进与重建。
-		upgradeCtx, cancel := upgradeContext(ctx)
-		if err := r.upgradeLaggingFunctions(upgradeCtx); err != nil {
-			log.WarnContextf(ctx, "collector fetch plan code upgrade failed space=%s: %v", r.SpaceID, err)
+		if err := r.upgradeLaggingFunctions(ctx); err != nil {
+			log.WarnContextf(ctx, "collector fetch plan code upgrade check failed space=%s: %v", r.SpaceID, err)
 		}
-		cancel()
 	}
 	open, err := r.Store.Open(ctx, r.SpaceID)
 	if err != nil {
@@ -398,9 +326,9 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 		return err
 	}
 	// 没有未生效的计划（或本轮刚把计划推进到生效）：对账成功。
-	// 在途云端作业只要还没超过告警年龄就不影响成功：大批量升级可能连续跑十几分钟，期间一直有正常推进的作业；
-	// 最老的作业超龄说明卡住了，此时不再刷新成功时间，由 Monitor 的对账陈旧判定（默认 15 分钟）发现。
-	if r.Metrics != nil && !r.inFlightStuck() {
+	// 在跑的云端操作只要还没超过卡住年龄就不影响成功：大批量升级可能连续跑十几分钟；
+	// 最早的操作卡住时不再刷新成功时间，由 Monitor 的对账陈旧判定（默认 15 分钟）发现。
+	if r.Metrics != nil && !r.operationStuck() {
 		if still, openErr := r.Store.Open(ctx, r.SpaceID); openErr == nil && still == nil {
 			r.Metrics.ObserveAssignmentPending(r.SpaceID, false, time.Time{})
 			r.Metrics.ObserveAssignmentSuccess(r.SpaceID, r.now().Unix())
@@ -689,14 +617,6 @@ func (r *PlanReconciler) validateContent(content *FetchPlanContent) error {
 // maxSCFEnvironmentBytes 是 SCF 函数环境变量的总上限。
 const maxSCFEnvironmentBytes = 4096
 
-func mustStruct(values map[string]any) *structpb.Struct {
-	result, err := structpb.NewStruct(values)
-	if err != nil {
-		panic(err)
-	}
-	return result
-}
-
 // saveProgress 保存计划的状态与进度；timeline 是随这次进度一起成立的时间线行，与进度同一个事务。
 func (r *PlanReconciler) saveProgress(ctx context.Context, record *store.FetchPlanRecord, progress *FetchPlanProgress, status, lastError string, timeline ...store.SeriesTimelineEntry) error {
 	if err := r.Store.Update(ctx, record.ID, status, mustJSON(progress), lastError, timeline...); err != nil {
@@ -715,9 +635,6 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 	progress, err := decodeFetchPlanProgress(record.Progress)
 	if err != nil {
 		return r.fail("store", err)
-	}
-	if blocked, err := r.settlePending(ctx, record, progress); blocked || err != nil {
-		return err
 	}
 	ready, err := r.registerSnapshots(ctx, record, content, progress)
 	if err != nil || !ready {
@@ -749,7 +666,7 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 	if end := content.WindowEnd(); !end.IsZero() && r.now().Before(end.Add(planFinalizeMargin)) {
 		// 过渡配置都已下发，只是在等旧周期的窗口结束（1h 最长约一小时，1d 要等到下一个 UTC 零点）：
 		// 这段时间按对账成功上报，Monitor 不会把正常的等待判成对账陈旧。过了窗口结束仍没收尾的不再刷新，卡住的计划照样报出来。
-		if r.Metrics != nil && r.failCount == r.roundFailCount && !r.inFlightStuck() {
+		if r.Metrics != nil && r.failCount == r.roundFailCount && !r.operationStuck() {
 			r.Metrics.ObserveAssignmentSuccess(r.SpaceID, r.now().Unix())
 		}
 		return nil
@@ -825,15 +742,16 @@ func (r *PlanReconciler) registerSnapshots(ctx context.Context, record *store.Fe
 	return true, nil
 }
 
-// pushFunctions 创建缺失的函数并下发过渡（或最终）环境；全部确认后返回 true。
+// pushFunctions 下发过渡（或最终）阶段：每个云函数一个 Ensure（建函数与下发环境、定时器合成一次），退役的函数只停定时器；
+// 推送与本地执行项靠 collector-stream 心跳确认。全部确认后返回 true。
+// 对每个云函数只有三种情况：没有操作在跑就起一个；有操作在跑就本轮跳过（不算失败）；
+// 操作已结束：成功且用途是本阶段就记确认，失败就按原因上报、下一轮重来。
 func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, final bool) (bool, error) {
-	confirmed := &progress.Transitioned
-	kind := planJobKindTransition
+	confirmed, stage := &progress.Transitioned, planStageTransition
 	if final {
-		confirmed, kind = &progress.Finalized, planJobKindFinal
+		confirmed, stage = &progress.Finalized, planStageFinal
 	}
 	var todo []string
-	var createErr error
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
 		if (*confirmed)[name] {
@@ -851,10 +769,10 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 	if len(todo) == 0 {
 		return true, nil
 	}
-	var cloud, streamItems []string
+	var cloudNames, streamItems []string
 	for _, name := range todo {
 		if content.Functions[name].IsSCF() {
-			cloud = append(cloud, name)
+			cloudNames = append(cloudNames, name)
 		} else {
 			streamItems = append(streamItems, name)
 		}
@@ -864,65 +782,82 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 			return false, err
 		}
 	}
-	todo = cloud
-	if len(todo) == 0 {
+	if len(cloudNames) == 0 {
 		return r.allConfirmed(content, progress, final), nil
 	}
-	// 创建失败或尚未完成的函数不阻塞其他函数：已存在的函数先下发，缺的下一轮再试。
-	notReady := map[string]bool{}
-	if !final {
-		created, err := r.ensureCreated(ctx, record, content, progress, todo)
-		if err != nil {
-			createErr = err
+	key := planOpKey(record.ID, stage)
+	ops := r.ops()
+	changed := false
+	var failures []string
+	var firstErr error
+	settle := func(name string, op *functionOp) {
+		if op.confirmed() {
+			progress.mark(confirmed, name)
+			changed = true
+			return
 		}
-		if !created {
-			for _, name := range todo {
-				if content.Functions[name].Create && !progress.Created[name] {
-					notReady[name] = true
-				}
+		if op.err != nil {
+			failures = append(failures, name+": "+op.err.Error())
+			if firstErr == nil {
+				firstErr = op.err
 			}
 		}
+		// 定时器因为暂停被设成停用的成功不算确认：下一轮（恢复之后）重推。
 	}
-	patches := make(map[string]*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch, len(todo))
-	pushNames := make([]string, 0, len(todo))
-	for _, name := range todo {
-		if notReady[name] {
-			continue
-		}
-		function := content.Functions[name]
-		plan, cron := content.TransitionalPlan(function), content.TransitionalCron(function)
-		if final {
-			plan, cron = content.FinalPlan(function), content.FinalCron(function)
-			if plan == nil {
-				// 退役：保持过渡环境不变，只停用定时器。
-				plan, cron = content.TransitionalPlan(function), ""
+	var started []*functionOp
+	for _, name := range cloudNames {
+		if op := ops.take(name, key); op != nil {
+			settle(name, op)
+			if op.confirmed() || op.err != nil {
+				continue
 			}
 		}
-		environment, err := r.functionEnvironment(function.Region, plan)
-		if err != nil {
+		if ops.busy(name) {
+			continue // 另一个操作在跑：本轮跳过，等它结束
+		}
+		op, err := r.startStage(content, content.Functions[name], key, stage)
+		switch {
+		case errors.Is(err, errOpBusy), errors.Is(err, errOpPausing), errors.Is(err, errOpsClosed):
+			continue
+		case err != nil:
+			// 期望内容算不出来（环境、网络配置）：不碰云端，按环境问题上报。
+			_ = r.saveProgress(ctx, record, progress, record.Status, err.Error())
 			return false, r.fail("environment", fmt.Errorf("function %s: %w", name, err))
 		}
-		patches[name] = &cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{InstanceId: name, ManagedEnvironment: environment, TimerEnabled: cron != "", TimerCron: timerCronOrPlaceholder(cron)}
-		pushNames = append(pushNames, name)
+		started = append(started, op)
 	}
-	if len(pushNames) > 0 {
-		if err := r.submit(ctx, record, progress, kind, pushNames, func(lease *scfinvoker.CollectorPublishLease, batch []string) (string, error) {
-			chunk := make([]*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch, 0, len(batch))
-			for _, name := range batch {
-				patch := patches[name]
-				patch.CollectorPublishLeaseId, patch.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
-				chunk = append(chunk, patch)
-			}
-			return r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, chunk)
-		}); err != nil {
+	ops.wait(ctx, started, r.roundWait(ctx))
+	for _, op := range started {
+		if done := ops.take(op.name, key); done != nil {
+			settle(op.name, done)
+		}
+	}
+	if changed || len(failures) > 0 {
+		lastError := strings.Join(failures, "; ")
+		if err := r.saveProgress(ctx, record, progress, record.Status, lastError); err != nil {
 			return false, err
 		}
 	}
-	if createErr != nil {
-		_ = r.saveProgress(ctx, record, progress, record.Status, createErr.Error())
-		return false, createErr
+	if firstErr != nil {
+		return false, r.opFailure(fmt.Errorf("fetch plan %d %s stage: %d functions failed, first: %w", record.ID, stage, len(failures), firstErr))
 	}
 	return r.allConfirmed(content, progress, final), nil
+}
+
+// startStage 为计划推进起一个操作：期望内容由调用方传入的阶段决定；退役的函数（最终阶段没有最终计划）只停定时器。
+func (r *PlanReconciler) startStage(content *FetchPlanContent, function *PlanFunctionChange, key, stage string) (*functionOp, error) {
+	target := stageTarget(content, function, stage)
+	if stage == planStageFinal && content.FinalPlan(function) == nil {
+		return r.startDisableTimer(r.functionRef(function.Name, function.Region), key)
+	}
+	if target.Plan == nil {
+		return nil, fmt.Errorf("function %s has no plan for the %s stage", function.Name, stage)
+	}
+	spec, err := r.desiredSpec(target)
+	if err != nil {
+		return nil, err
+	}
+	return r.startEnsure(function.Name, key, spec)
 }
 
 // allConfirmed 判断这一阶段需要下发的项都已确认。
@@ -1182,14 +1117,6 @@ func scfFunctions(functions map[string]*PlanFunction) map[string]*PlanFunction {
 	return result
 }
 
-// timerCronOrPlaceholder 停用定时器时仍要给 FunctionInstance 一个受支持的 cron（预检要求非空），只靠 enabled=false 停用。
-func timerCronOrPlaceholder(cron string) string {
-	if cron == "" {
-		return "0 * * * * * *"
-	}
-	return cron
-}
-
 // finalDiffers 判断收尾时该函数是否还需要再下发一次。
 func (r *PlanReconciler) finalDiffers(content *FetchPlanContent, function *PlanFunctionChange) bool {
 	if !function.Push {
@@ -1199,197 +1126,6 @@ func (r *PlanReconciler) finalDiffers(content *FetchPlanContent, function *PlanF
 		return true
 	}
 	return !plansEqual(content.TransitionalPlan(function), content.FinalPlan(function)) || content.TransitionalCron(function) != content.FinalCron(function)
-}
-
-// ensureCreated 创建尚不存在的函数。返回 true 表示所有待下发函数都已存在。
-func (r *PlanReconciler) ensureCreated(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, todo []string) (bool, error) {
-	var missing []string
-	for _, name := range todo {
-		if content.Functions[name].Create && !progress.Created[name] {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) == 0 {
-		return true, nil
-	}
-	release, err := r.acquireOperation(ctx)
-	if err != nil {
-		return false, err
-	}
-	nodes, err := r.Cloud.ListTimerMarketFetchers(ctx, r.SpaceID)
-	release()
-	if err != nil {
-		return false, r.fail("cloudfunction", fmt.Errorf("list market fetchers: %w", err))
-	}
-	existing := map[string]struct{}{}
-	for _, node := range nodes {
-		existing[node.InstanceID] = struct{}{}
-	}
-	var absent []string
-	for _, name := range missing {
-		if _, ok := existing[name]; !ok {
-			absent = append(absent, name)
-		}
-	}
-	if cleared, err := r.clearStaleReservations(ctx, "timer", absent); err != nil {
-		return false, r.failCloud(err)
-	} else if !cleared {
-		return false, nil
-	}
-	var items []*cloudfunctionpb.FunctionInstanceCreateItem
-	var names []string
-	for _, name := range missing {
-		if _, ok := existing[name]; ok {
-			progress.mark(&progress.Created, name)
-			continue
-		}
-		function := content.Functions[name]
-		item, err := r.createItem(record, content, function)
-		if err != nil {
-			return false, r.failItem(fmt.Errorf("function %s: %w", name, err))
-		}
-		items = append(items, item)
-		names = append(names, name)
-	}
-	if len(items) == 0 {
-		return true, r.saveProgress(ctx, record, progress, record.Status, "")
-	}
-	byName := make(map[string]*cloudfunctionpb.FunctionInstanceCreateItem, len(items))
-	for index, item := range items {
-		byName[names[index]] = item
-	}
-	if err := r.submit(ctx, record, progress, planJobKindCreate, names, func(lease *scfinvoker.CollectorPublishLease, batch []string) (string, error) {
-		chunk := make([]*cloudfunctionpb.FunctionInstanceCreateItem, 0, len(batch))
-		for _, name := range batch {
-			item := byName[name]
-			item.CollectorPublishLeaseId, item.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
-			chunk = append(chunk, item)
-		}
-		return r.Cloud.SubmitCreateFunctionInstances(ctx, r.SpaceID, chunk)
-	}); err != nil {
-		return false, err
-	}
-	for _, name := range names {
-		if !progress.Created[name] {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-// staleReservationAge 是创建预留的最长等待：超过后仍未就绪的预留视为创建失败后的遗留。
-const staleReservationAge = 15 * time.Minute
-
-// clearStaleReservations 清理要创建的函数名下遗留的创建预留（目录里有记录但没有部署完成）。
-// 创建失败后预留一直留在 FunctionInstance 目录里，不清理就无法重新创建同名函数。
-// 清理走受发布租约保护的删除作业；作业未结束时返回 false，下一轮再继续。
-func (r *PlanReconciler) clearStaleReservations(ctx context.Context, trigger string, names []string) (bool, error) {
-	if len(names) == 0 {
-		return true, nil
-	}
-	release, err := r.acquireOperation(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer release()
-	return r.clearStale(ctx, trigger, names, false)
-}
-
-// clearStale 是 clearStaleReservations 的实现，调用方须已持有操作槽。
-func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names []string, backfill bool) (bool, error) {
-	unready, err := r.Cloud.ListUnreadyMarketFetchers(ctx, r.SpaceID, trigger)
-	if err != nil {
-		return false, fmt.Errorf("list unready market fetchers: %w", err)
-	}
-	wanted := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		wanted[name] = struct{}{}
-	}
-	inFlight := map[string]struct{}{}
-	if !backfill {
-		// 补采路径与实时对账并发运行，不能读写实时对账的在途作业与租约。
-		for _, job := range r.pending {
-			for _, name := range job.functions {
-				inFlight[name] = struct{}{}
-			}
-		}
-	}
-	var stale []string
-	for _, node := range unready {
-		if _, ok := wanted[node.InstanceID]; !ok {
-			continue
-		}
-		if _, busy := inFlight[node.InstanceID]; busy {
-			continue
-		}
-		if !node.ModifiedAt.IsZero() && r.now().Sub(node.ModifiedAt) < staleReservationAge {
-			// 刚创建的预留可能仍在创建中，等待超时后再清理。
-			return false, nil
-		}
-		stale = append(stale, node.InstanceID)
-	}
-	if len(stale) == 0 {
-		return true, nil
-	}
-	sort.Strings(stale)
-	if !backfill {
-		if stale = r.excludeBusy(ctx, stale); len(stale) == 0 {
-			return false, nil
-		}
-	}
-	var items []scfinvoker.BatchItemResult
-	if backfill {
-		// 补采路径：作业未结束时保留租约并登记在途（见 runBackfillJob），本轮视为清理尚未完成。
-		items, err = r.runBackfillJob(ctx, names[0], "cleanup", "stale reservation cleanup", func(lease *scfinvoker.CollectorPublishLease) (string, error) {
-			jobID, submitErr := r.Cloud.SubmitDeleteFunctionInstances(ctx, r.SpaceID, stale, lease)
-			if submitErr != nil {
-				return "", fmt.Errorf("submit delete of stale reservations: %w", submitErr)
-			}
-			return jobID, nil
-		})
-		if errors.Is(err, errBackfillJobRunning) {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-	} else {
-		lease, leaseErr := r.ensureLease(ctx)
-		if leaseErr != nil {
-			return false, fmt.Errorf("publish lease: %w", leaseErr)
-		}
-		jobID, submitErr := r.Cloud.SubmitDeleteFunctionInstances(ctx, r.SpaceID, stale, lease)
-		if submitErr != nil {
-			return false, fmt.Errorf("submit delete of stale reservations: %w", submitErr)
-		}
-		var terminal bool
-		items, terminal, err = r.waitAux(ctx, auxJobKindCleanup, stale, jobID)
-		if err != nil {
-			return false, err
-		}
-		if !terminal {
-			return false, nil
-		}
-	}
-	for _, item := range items {
-		if !item.Success {
-			return false, fmt.Errorf("delete stale reservation %s: %s", item.InstanceID, item.Message)
-		}
-	}
-	log.Infof("collector fetch plan removed stale create reservations space=%s functions=%s", r.SpaceID, strings.Join(stale, ","))
-	// 实时对账路径的租约由调用方统一持有与释放：清理后调用方还要继续创建与补推，不能在此释放；
-	// 补采路径的租约已由 runBackfillJob 在作业结束后释放。
-	return true, nil
-}
-
-// upgradeCode 把代码包版本落后的已生效函数升级到 scf_plan 配置的代码包：只更新代码，环境与定时器不动。
-// 升级走受发布租约保护的部署作业，分批进行；单个函数更新代码的几秒内可能漏掉一次触发，缺口由自动补采补回。
-func (r *PlanReconciler) upgradeCode(ctx context.Context, applied map[string]*PlanFunction, byName map[string]scfinvoker.FunctionInstance) error {
-	names := make([]string, 0, len(applied))
-	for name := range applied {
-		names = append(names, name)
-	}
-	return r.upgradeCodeOf(ctx, names, byName)
 }
 
 // verifyUntouched 在有未生效计划时，对不受该计划影响的已生效函数做云端校验。
@@ -1422,702 +1158,248 @@ func (r *PlanReconciler) verifyUntouched(ctx context.Context, open *store.FetchP
 	return r.verifyFleet(ctx, untouched)
 }
 
-// upgradeLaggingFunctions 找出本空间代码包落后的计划函数并升级。
+// upgradeLaggingFunctions 是两分钟一次的代码包升级检查：不做完整读回，优先用内存里最近一次读回的包 ID，没有时只调 DescribeCode。
+// 落后的函数分批起 UpgradeCode 操作（只换代码，环境取云上读回的值，不动定时器），不等它们结束。
 func (r *PlanReconciler) upgradeLaggingFunctions(ctx context.Context) error {
-	// 没配代码包（例如不用云函数）时没有可升级的函数，也不用查询云端。
-	if strings.TrimSpace(r.Deploy.PackageName) == "" && strings.TrimSpace(r.Deploy.PackageID) == "" {
+	pkg := strings.TrimSpace(r.packageID())
+	if pkg == "" {
 		return nil
 	}
-	release, err := r.acquireOperation(ctx)
+	refs, err := r.timerFunctionRefs(ctx)
 	if err != nil {
 		return err
 	}
-	nodes, err := r.Cloud.ListTimerMarketFetchers(ctx, r.SpaceID)
-	release()
-	if err != nil {
-		return r.fail("cloudfunction", fmt.Errorf("list market fetchers: %w", err))
-	}
-	prefix := r.fleetPrefix()
-	byName := map[string]scfinvoker.FunctionInstance{}
-	var names []string
-	for _, node := range nodes {
-		if strings.HasPrefix(node.InstanceID, prefix) {
-			byName[node.InstanceID] = node
-			names = append(names, node.InstanceID)
-		}
-	}
-	return r.upgradeCodeOf(ctx, names, byName)
-}
-
-// upgradeCodeOf 升级给定函数名里代码包落后的函数。
-func (r *PlanReconciler) upgradeCodeOf(ctx context.Context, names []string, byName map[string]scfinvoker.FunctionInstance) error {
-	if strings.TrimSpace(r.packageID()) == "" {
-		return nil
-	}
-	var stale []string
-	for _, name := range names {
-		node, ok := byName[name]
-		if ok && strings.TrimSpace(node.PackageID) != "" && node.PackageID != r.packageID() {
-			stale = append(stale, name)
-		}
-	}
-	if len(stale) == 0 {
-		return nil
-	}
-	sort.Strings(stale)
-	if stale = r.excludeBusy(ctx, stale); len(stale) == 0 {
-		return nil
-	}
-	release, err := r.acquireOperation(ctx)
+	targets, err := r.confirmedTargets(ctx)
 	if err != nil {
 		return err
 	}
-	defer release()
-	lease, err := r.ensureLease(ctx)
-	if err != nil {
-		return r.failCloud(err)
-	}
-	log.WarnContextf(ctx, "collector fetch plan upgrading function code space=%s package=%s functions=%d", r.SpaceID, r.packageID(), len(stale))
-	for start := 0; start < len(stale); start += runtimeConfigBatchSize {
-		batch := stale[start:min(start+runtimeConfigBatchSize, len(stale))]
-		jobID, submitErr := r.Cloud.SubmitDeployFunctionInstances(ctx, r.SpaceID, batch, r.packageID(), lease)
-		if submitErr != nil {
-			return r.fail("cloudfunction", submitErr)
+	started := 0
+	for _, name := range sortedKeys(refs) {
+		if started >= runtimeConfigBatchSize {
+			break // 每次检查最多一批，下一次检查接着升级
 		}
-		results, terminal, waitErr := r.waitAux(ctx, auxJobKindUpgrade, batch, jobID)
-		if waitErr != nil {
-			return r.fail("cloudfunction", waitErr)
+		if r.ops().busy(name) {
+			continue
 		}
-		if !terminal {
-			// 作业已记入在途集合，后续轮次不会对这批函数重复提交。
-			log.WarnContextf(ctx, "collector fetch plan code upgrade job still running space=%s job=%s", r.SpaceID, jobID)
-			return nil
+		readback, ok := r.cachedReadback(name)
+		if !ok || readback.Error != "" {
+			state, err := r.Cloud.DescribeCode(ctx, refs[name])
+			if err != nil {
+				log.WarnContextf(ctx, "collector fetch plan cannot read the code package of %s space=%s: %v", name, r.SpaceID, err)
+				continue
+			}
+			readback = FunctionReadback{FunctionState: state, CodeOnly: true}
+			r.storeReadback(name, readback)
 		}
-		for _, result := range results {
-			if !result.Success {
-				return r.fail("cloudfunction", fmt.Errorf("upgrade code of %s: %s", result.InstanceID, result.Message))
+		if !readback.Exists || strings.TrimSpace(readback.PackageID) == "" || readback.PackageID == pkg {
+			continue
+		}
+		var fallback *cloud.FunctionSpec
+		if target, ok := targets[name]; ok {
+			if spec, err := r.desiredSpec(target); err == nil {
+				fallback = &spec
 			}
 		}
-	}
-	r.releaseLease(ctx)
-	return nil
-}
-
-func (r *PlanReconciler) createItem(record *store.FetchPlanRecord, content *FetchPlanContent, function *PlanFunctionChange) (*cloudfunctionpb.FunctionInstanceCreateItem, error) {
-	network, ok := r.Deploy.Networks[function.Region]
-	if !ok || network.VPCID == "" || network.SubnetID == "" {
-		return nil, fmt.Errorf("region %s has no VPC and subnet configured", function.Region)
-	}
-	pkg, err := r.requirePackage()
-	if err != nil {
-		return nil, err
-	}
-	environment, err := r.functionEnvironment(function.Region, content.TransitionalPlan(function))
-	if err != nil {
-		return nil, err
-	}
-	for key, value := range r.Deploy.BaseEnvironment {
-		if _, managed := environment[key]; !managed {
-			environment[key] = value
+		if _, err := r.startUpgrade(refs[name], fallback); err == nil {
+			started++
 		}
 	}
-	memory := r.Deploy.MemoryMB
-	if memory <= 0 {
-		memory = 64
-	}
-	timeout := strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)
-	reservation := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%s", r.SpaceID, record.ID, function.Name)))
-	reservationID := hex.EncodeToString(reservation[:16])
-	return &cloudfunctionpb.FunctionInstanceCreateItem{
-		CloudAccountId: r.Deploy.CloudAccountID, FunctionType: "scf-event", TriggerType: "timer", Runtime: "Go1", Handler: "main",
-		Namespace: r.Deploy.NamespaceFor(function.Name), Region: function.Region, PackageId: pkg, Environment: environment,
-		Config: map[string]string{
-			"timeout": timeout, "memory_size": strconv.Itoa(memory), "max_instance_concurrency": "1",
-			"vpc_id": network.VPCID, "subnet_id": network.SubnetID, "public_net_status": "ENABLE",
-		},
-		Metadata:            mustStruct(map[string]any{"function_name": function.Name, "instance_id": function.Name, "workload_type": "market_fetcher", "function_mode": "kline", "memory_size": memory, "timeout_seconds": tencent.CollectorTimerTimeoutSeconds}),
-		CreateReservationId: reservationID,
-	}, nil
-}
-
-// submit 获取发布租约，按批提交云端作业并等待结果；成功的函数记入 progress。
-func (r *PlanReconciler) submit(ctx context.Context, record *store.FetchPlanRecord, progress *FetchPlanProgress, kind string, names []string, send func(lease *scfinvoker.CollectorPublishLease, batch []string) (string, error)) error {
-	// 仍有辅助作业在途的函数本轮不提交，等作业结束后下一轮继续。
-	if names = r.excludeBusy(ctx, names); len(names) == 0 {
-		return nil
-	}
-	release, err := r.acquireOperation(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-	lease, err := r.ensureLease(ctx)
-	if err != nil {
-		return r.failCloud(fmt.Errorf("publish lease: %w", err))
-	}
-	var firstErr error
-	for start := 0; start < len(names); start += runtimeConfigBatchSize {
-		batch := names[start:min(start+runtimeConfigBatchSize, len(names))]
-		jobID, sendErr := send(lease, batch)
-		if sendErr != nil {
-			_ = r.saveProgress(ctx, record, progress, record.Status, sendErr.Error())
-			return r.fail("cloudfunction", fmt.Errorf("submit %s: %w", kind, sendErr))
-		}
-		job := pendingPlanJob{id: jobID, kind: kind, functions: batch, at: r.now()}
-		items, terminal, waitErr := r.waitJobWithin(ctx, jobID)
-		if waitErr != nil {
-			r.pending = append(r.pending, job)
-			return r.fail("cloudfunction", waitErr)
-		}
-		if !terminal {
-			r.pending = append(r.pending, job)
-			return nil
-		}
-		if err := r.applyResults(ctx, record, progress, job, items); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if firstErr != nil {
-		return firstErr
-	}
-	r.releaseLease(ctx)
-	return nil
-}
-
-func (r *PlanReconciler) applyResults(ctx context.Context, record *store.FetchPlanRecord, progress *FetchPlanProgress, job pendingPlanJob, items []scfinvoker.BatchItemResult) error {
-	var failures []string
-	succeeded := map[string]bool{}
-	for _, item := range items {
-		switch {
-		case item.Success:
-			succeeded[item.InstanceID] = true
-		case item.Failed:
-			failures = append(failures, item.InstanceID+": "+item.Message)
-		}
-	}
-	set := &progress.Transitioned
-	switch job.kind {
-	case planJobKindCreate:
-		set = &progress.Created
-	case planJobKindFinal:
-		set = &progress.Finalized
-	}
-	for _, name := range job.functions {
-		if succeeded[name] {
-			progress.mark(set, name)
-		}
-	}
-	if len(failures) == 0 {
-		for _, name := range job.functions {
-			if !succeeded[name] {
-				failures = append(failures, name+": no result reported")
-			}
-		}
-	}
-	lastError := strings.Join(failures, "; ")
-	if err := r.saveProgress(ctx, record, progress, record.Status, lastError); err != nil {
-		return err
-	}
-	if lastError != "" {
-		return r.fail("cloudfunction", fmt.Errorf("%s job reported failures: %s", job.kind, lastError))
+	if started > 0 {
+		log.WarnContextf(ctx, "collector fetch plan upgrading function code space=%s package=%s functions=%d", r.SpaceID, pkg, started)
 	}
 	return nil
 }
 
-// settlePending 在新一轮开始时先处理上一轮没等完的云端作业。blocked 为 true 表示作业仍在运行，本轮不继续。
-func (r *PlanReconciler) settlePending(ctx context.Context, record *store.FetchPlanRecord, progress *FetchPlanProgress) (bool, error) {
-	if len(r.pending) == 0 {
-		return false, nil
-	}
-	pending := r.pending
-	r.pending = nil
-	var firstErr error
-	for index := range pending {
-		r.warnStalePending(ctx, &pending[index])
-		job := pending[index]
-		items, terminal, err := r.checkJob(ctx, job.id)
+// timerFunctionRefs 返回已生效计划与未生效计划里的全部定时函数在云上的位置。
+func (r *PlanReconciler) timerFunctionRefs(ctx context.Context) (map[string]cloud.FunctionRef, error) {
+	refs := map[string]cloud.FunctionRef{}
+	for _, load := range []func(context.Context, string) (*store.FetchPlanRecord, error){r.Store.LatestApplied, r.Store.Open} {
+		record, err := load(ctx, r.SpaceID)
 		if err != nil {
-			r.pending = append(r.pending, pending[index:]...)
-			return true, r.fail("cloudfunction", err)
-		}
-		if !terminal {
-			r.pending = append(r.pending, pending[index:]...)
-			if renewErr := r.renewLease(ctx); renewErr != nil {
-				return true, r.failCloud(renewErr)
-			}
-			return true, nil
-		}
-		if err := r.applyResults(ctx, record, progress, job, items); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	r.releaseLease(ctx)
-	return false, firstErr
-}
-
-func (r *PlanReconciler) checkJob(ctx context.Context, jobID string) ([]scfinvoker.BatchItemResult, bool, error) {
-	summary, items, err := r.Cloud.GetBatchResults(ctx, r.SpaceID, jobID)
-	if err != nil {
-		return nil, false, err
-	}
-	switch summary.GetStatus() {
-	case cloudfunctionpb.FunctionJobStatus_FUNCTION_JOB_STATUS_SUCCESS, cloudfunctionpb.FunctionJobStatus_FUNCTION_JOB_STATUS_FAILED, cloudfunctionpb.FunctionJobStatus_FUNCTION_JOB_STATUS_PARTIAL:
-		return items, true, nil
-	default:
-		return nil, false, nil
-	}
-}
-
-// waitJob 轮询云端作业直到结束或等待时间用完。
-func (r *PlanReconciler) waitJob(ctx context.Context, jobID string) ([]scfinvoker.BatchItemResult, bool, error) {
-	wait, interval := r.JobWait, r.PollInterval
-	if wait <= 0 {
-		wait = 90 * time.Second
-	}
-	if interval <= 0 {
-		interval = 2 * time.Second
-	}
-	deadline := time.Now().Add(wait)
-	for {
-		items, terminal, err := r.checkJob(ctx, jobID)
-		if err != nil || terminal {
-			return items, terminal, err
-		}
-		if !time.Now().Add(interval).Before(deadline) {
-			return nil, false, nil
-		}
-		select {
-		case <-time.After(interval):
-		case <-ctx.Done():
-			return nil, false, ctx.Err()
-		}
-	}
-}
-
-// waitJobReserve 是 waitJobWithin 给本轮剩余时间留出的余量上限：等待上限 = min(JobWait, 剩余时间 − 余量)，
-// 轮次的时间用尽之前就把作业交给下一轮继续，而不是等到 ctx 到期再把「慢」记成失败。
-// 余量取 5 秒与剩余时间四分之一的较小者：剩余时间很短时仍会查询作业，只是等待上限随之缩小。
-const waitJobReserve = 5 * time.Second
-
-// waitJobWithin 轮询云端作业，到等待上限仍未结束时返回「未结束」（terminal=false, err=nil），由调用方登记在途作业，
-// 下一轮继续。只有 checkJob 本身出错、或父 ctx 被取消/超时才返回错误。
-// 对账、漂移修复等实时路径使用它；补采路径仍用 waitJob（它们没有在途作业记录，且返回时就释放租约）。
-func (r *PlanReconciler) waitJobWithin(ctx context.Context, jobID string) ([]scfinvoker.BatchItemResult, bool, error) {
-	wait, interval := r.JobWait, r.PollInterval
-	if wait <= 0 {
-		wait = 90 * time.Second
-	}
-	if interval <= 0 {
-		interval = 2 * time.Second
-	}
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if room := remaining - min(waitJobReserve, remaining/4); room < wait {
-			wait = room
-		}
-	}
-	if wait <= 0 {
-		// 父 ctx 已经到期：与 waitJob 一样返回其错误。
-		return nil, false, ctx.Err()
-	}
-	// 局部 ctx 同时约束每一次 checkJob，一次慢查询不会越过等待上限。
-	waitCtx, cancel := context.WithTimeout(ctx, wait)
-	defer cancel()
-	limit := time.Now().Add(wait)
-	for {
-		items, terminal, err := r.checkJob(waitCtx, jobID)
-		if err != nil {
-			switch {
-			case ctx.Err() != nil:
-				return nil, false, ctx.Err()
-			case waitCtx.Err() != nil:
-				return nil, false, nil
-			default:
-				return nil, false, err
-			}
-		}
-		if terminal {
-			return items, true, nil
-		}
-		if !time.Now().Add(interval).Before(limit) {
-			return nil, false, nil
-		}
-		select {
-		case <-time.After(interval):
-		case <-waitCtx.Done():
-			if err := ctx.Err(); err != nil {
-				return nil, false, err
-			}
-			return nil, false, nil
-		}
-	}
-}
-
-func (r *PlanReconciler) ensureLease(ctx context.Context) (*scfinvoker.CollectorPublishLease, error) {
-	if r.lease != nil {
-		if err := r.renewLease(ctx); err != nil {
 			return nil, err
 		}
-		if r.lease != nil {
-			return r.lease, nil
+		if record == nil {
+			continue
 		}
-	}
-	if r.holder == "" {
-		var raw [16]byte
-		if _, err := rand.Read(raw[:]); err != nil {
+		content, err := decodeFetchPlanContent(record.Plan)
+		if err != nil {
 			return nil, err
 		}
-		r.holder = "plan-reconciler-" + hex.EncodeToString(raw[:])
-	}
-	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	lease, err := r.Cloud.AcquireCollectorPublishLease(leaseCtx, r.SpaceID, r.holder)
-	if err != nil {
-		return nil, err
-	}
-	if lease == nil || lease.LeaseID == "" || lease.FencingToken < 1 || !strings.EqualFold(lease.SpaceID, r.SpaceID) {
-		return nil, errors.New("publish lease response is incomplete")
-	}
-	r.lease = lease
-	return lease, nil
-}
-
-func (r *PlanReconciler) renewLease(ctx context.Context) error {
-	if r.lease == nil {
-		return nil
-	}
-	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	renewed, err := r.Cloud.RenewCollectorPublishLease(leaseCtx, r.lease)
-	if err != nil {
-		if errors.Is(err, scfinvoker.ErrCollectorPublishLeaseStale) {
-			r.lease = nil
-			return nil
+		for name, function := range content.Functions {
+			if function.IsSCF() {
+				refs[name] = r.functionRef(name, function.Region)
+			}
 		}
-		return err
 	}
-	if renewed != nil {
-		r.lease = renewed
-	}
-	return nil
+	return refs, nil
 }
 
-func (r *PlanReconciler) releaseLease(ctx context.Context) {
-	if r.lease == nil || len(r.pending) > 0 || r.aux.count() > 0 {
-		return
-	}
-	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	if err := r.Cloud.ReleaseCollectorPublishLease(leaseCtx, r.lease); err != nil {
-		log.WarnContextf(ctx, "collector fetch plan release publish lease space=%s: %v", r.SpaceID, err)
-		return
-	}
-	r.lease = nil
-}
-
-// verifyFleet 全量读回云端函数配置：被手工改动或缺失的函数按已生效计划补推。
+// verifyFleet 每小时读回一次已生效计划的函数：不存在、受管环境（分配哈希、Access 三项）或定时器（cron、开关、可用状态、
+// Qualifier、Message）不一致的起 Ensure（期望内容按已确认的状态算）；只是代码包落后的起 UpgradeCode。
+// 同时停掉计划外的同前缀函数的定时器。有函数这次没读到或修复还在跑时，5 分钟后再读，不宣布核对完成。
 func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*PlanFunction) error {
-	if len(applied) == 0 || (!r.lastVerified.IsZero() && r.now().Sub(r.lastVerified) < planVerifyInterval) {
+	if len(applied) == 0 {
 		return nil
 	}
-	release, err := r.acquireOperation(ctx)
+	requested := r.verifyRequested.Load()
+	if !requested && !r.lastVerified.IsZero() && r.now().Sub(r.lastVerified) < planVerifyInterval {
+		return nil
+	}
+	r.verifyRequested.Store(false)
+	targets, err := r.confirmedTargets(ctx)
 	if err != nil {
-		return err
+		return r.fail("store", err)
 	}
-	// 小时校验必须读回云端的真实状态，而不是目录缓存：直接在 SCF 删函数、停触发器、改环境都要能发现。
-	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
-	release()
-	if err != nil {
-		return r.fail("cloudfunction", fmt.Errorf("list market fetchers: %w", err))
-	}
-	byName := map[string]scfinvoker.FunctionInstance{}
-	for _, node := range nodes {
-		byName[node.InstanceID] = node
-	}
-	// 配置里的代码包换了新版本：先把已有函数的代码升级到该版本，再比对环境。
-	// 升级失败不阻断后面的重建与修复（例如云端函数已被删除，升级必然失败）。
-	upgradeCtx, cancelUpgrade := upgradeContext(ctx)
-	err = r.upgradeCode(upgradeCtx, applied, byName)
-	cancelUpgrade()
-	if err != nil {
-		log.WarnContextf(ctx, "collector fetch plan code upgrade failed space=%s: %v", r.SpaceID, err)
-	}
-	var drifted, missing, gone []string
-	unverified := 0
-	patches := map[string]*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{}
-	names := make([]string, 0, len(applied))
-	for name := range applied {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		function := applied[name]
-		environment, envErr := r.functionEnvironment(function.Region, function.Plan)
-		if envErr != nil {
-			return r.fail("environment", fmt.Errorf("function %s: %w", name, envErr))
-		}
-		patches[name] = &cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{InstanceId: name, ManagedEnvironment: environment, TimerEnabled: function.Cron != "", TimerCron: timerCronOrPlaceholder(function.Cron)}
-		node, exists := byName[name]
-		if !exists {
-			missing = append(missing, name)
+	pkg := strings.TrimSpace(r.packageID())
+	ops := r.ops()
+	var repair, upgrade, present []string
+	missing, unverified := false, 0
+	specs := map[string]cloud.FunctionSpec{}
+	for _, name := range sortedKeys(applied) {
+		target, ok := targets[name]
+		if !ok {
 			continue
 		}
-		switch readbackState(node.Metadata, r.now()) {
-		case readbackStale:
+		spec, err := r.desiredSpec(target)
+		if err != nil {
+			return r.fail("environment", fmt.Errorf("function %s: %w", name, err))
+		}
+		specs[name] = spec
+		if ops.busy(name) {
 			unverified++
 			continue
-		case readbackFailed:
+		}
+		state, err := r.describe(ctx, spec.Ref)
+		if err != nil {
+			log.WarnContextf(ctx, "collector fetch plan cannot read back %s space=%s: %v", name, r.SpaceID, err)
 			unverified++
 			continue
-		case readbackGone:
-			gone = append(gone, name)
-			continue
 		}
-		if actualAssignmentHash(node.Metadata) != environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] || timerNeedsRepair(node.Metadata, function.Cron) || accessDrifted(node.Metadata, environment) {
-			drifted = append(drifted, name)
+		switch {
+		case !state.Exists:
+			missing = true
+			repair = append(repair, name)
+		case managedDrift(state.Environment, spec.Environment) || !TimerMatches(state.Timer, target.Cron):
+			present = append(present, name)
+			repair = append(repair, name)
+		case pkg != "" && state.PackageID != pkg:
+			present = append(present, name)
+			upgrade = append(upgrade, name)
+		default:
+			present = append(present, name)
 		}
 	}
-	// 云端函数被删或缺失要重建：新建出来的函数同样要做一次出口 IP 去重（重新初始化也走这里）。
-	if len(missing) > 0 || len(gone) > 0 {
+	if missing {
+		// 云端函数被删要重建：新建出来的函数同样要做一次出口 IP 去重。
 		r.Egress.Arm()
 	}
-	// 没有其他问题时才做出口 IP 去重：重复 IP 的函数按“云端函数没了”走删除再重建；重建后几分钟再探测下一轮。
-	egressRound := false
-	if len(drifted) == 0 && len(missing) == 0 && len(gone) == 0 && unverified == 0 {
-		if prober, ok := r.Cloud.(egressbalance.Prober); ok {
-			present := make([]string, 0, len(names))
-			for _, name := range names {
-				if _, exists := byName[name]; exists {
-					present = append(present, name)
-				}
-			}
-			if again := r.Egress.Next(ctx, prober, r.SpaceID, present, r.now()); len(again) > 0 {
-				gone, egressRound = append(gone, again...), true
-			}
-		}
+	if err := r.disableUnplanned(ctx); err != nil {
+		log.WarnContextf(ctx, "collector fetch plan cannot list unplanned functions space=%s: %v", r.SpaceID, err)
+		unverified++
 	}
-	if len(drifted) == 0 && len(missing) == 0 && len(gone) == 0 {
-		if unverified > 0 {
-			// 有函数这次没读回成功：不能宣布全部核对完毕，几分钟后重试。
-			log.WarnContextf(ctx, "collector fetch plan cloud readback incomplete space=%s unverified=%d", r.SpaceID, unverified)
+	// 没有其他问题时才做出口 IP 去重：共用 IP 的函数先删再按期望内容重建；重建后几分钟再探测下一轮。
+	var egress []string
+	if len(repair) == 0 && len(upgrade) == 0 && unverified == 0 {
+		egress = r.Egress.Next(ctx, r, r.SpaceID, present, r.now())
+	}
+	if len(repair) == 0 && len(upgrade) == 0 && len(egress) == 0 {
+		if unverified > 0 || r.Egress.Pending() {
 			r.lastVerified = r.now().Add(planVerifyRetry - planVerifyInterval)
 			return nil
 		}
 		r.lastVerified = r.now()
 		return nil
 	}
-	// 仍有在途辅助作业的函数本轮不再提交，等作业结束后下一轮继续。
-	drifted, missing, gone = r.excludeBusy(ctx, drifted), r.excludeBusy(ctx, missing), r.excludeBusy(ctx, gone)
-	if len(drifted) == 0 && len(missing) == 0 && len(gone) == 0 {
+	log.WarnContextf(ctx, "collector fetch plan repairing space=%s repair=%s upgrade=%s egress=%s", r.SpaceID, strings.Join(repair, ","), strings.Join(upgrade, ","), strings.Join(egress, ","))
+	type pending struct {
+		op  *functionOp
+		key string
+	}
+	var started []pending
+	startOp := func(op *functionOp, err error, key string) {
+		if err == nil {
+			started = append(started, pending{op: op, key: key})
+		} else {
+			unverified++
+		}
+	}
+	for _, name := range repair {
+		op, err := r.startEnsure(name, opKeyRepair, specs[name])
+		startOp(op, err, opKeyRepair)
+	}
+	for _, name := range upgrade {
+		spec := specs[name]
+		op, err := r.startUpgrade(spec.Ref, &spec)
+		startOp(op, err, opKeyUpgrade)
+	}
+	for _, name := range egress {
+		spec := specs[name]
+		op, err := r.ops().start(name, opKeyEgress, true, func(ctx context.Context, op *functionOp) error {
+			if err := r.Cloud.Delete(ctx, spec.Ref); err != nil {
+				return err
+			}
+			spec, err := r.withPackage(ctx, op, spec)
+			if err != nil {
+				return err
+			}
+			spec.Pausing = r.pausingHook(op)
+			return r.Cloud.Ensure(ctx, spec)
+		})
+		startOp(op, err, opKeyEgress)
+	}
+	ops.wait(ctx, func() []*functionOp {
+		out := make([]*functionOp, 0, len(started))
+		for _, item := range started {
+			out = append(out, item.op)
+		}
+		return out
+	}(), r.roundWait(ctx))
+	var firstErr error
+	failed := 0
+	for _, item := range started {
+		done := ops.take(item.op.name, item.key)
+		switch {
+		case done == nil:
+			unverified++ // 还在跑：结束前不会重复起，5 分钟后再读回
+		case done.err != nil:
+			failed++
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s %s: %w", item.key, item.op.name, done.err)
+			}
+		}
+	}
+	if failed > 0 {
+		// 有失败项：不更新读回时间，下一轮继续修复。
+		return r.opFailure(fmt.Errorf("repair of drifted or missing functions did not fully succeed (%d failed): %w", failed, firstErr))
+	}
+	if unverified > 0 || len(egress) > 0 || r.Egress.Pending() {
+		r.lastVerified = r.now().Add(planVerifyRetry - planVerifyInterval)
 		return nil
 	}
-	log.WarnContextf(ctx, "collector fetch plan repairing space=%s drifted=%s missing=%s gone=%s", r.SpaceID, strings.Join(drifted, ","), strings.Join(missing, ","), strings.Join(gone, ","))
-	release, err = r.acquireOperation(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-	lease, err := r.ensureLease(ctx)
-	if err != nil {
-		return r.failCloud(err)
-	}
-	// allOK 表示没有失败项也没有在途作业；failed 表示有作业已到终态但失败。
-	// allOK 为 false 而 failed 为 false，说明只有仍在云端运行的作业（不是失败）。
-	allOK, failed := true, false
-	// 云端函数已不存在但目录里还有记录：先走受租约保护的删除清掉记录，才能重新创建。
-	if len(gone) > 0 {
-		sort.Strings(gone)
-		jobID, submitErr := r.Cloud.SubmitDeleteFunctionInstances(ctx, r.SpaceID, gone, lease)
-		if submitErr != nil {
-			return r.fail("cloudfunction", submitErr)
-		}
-		results, terminal, waitErr := r.waitAux(ctx, auxJobKindRepair, gone, jobID)
-		if waitErr != nil {
-			return r.fail("cloudfunction", waitErr)
-		}
-		removed := map[string]bool{}
-		for _, result := range results {
-			removed[result.InstanceID] = result.Success
-		}
-		for _, name := range gone {
-			switch {
-			case terminal && removed[name]:
-				missing = append(missing, name)
-			case !terminal:
-				allOK = false
-			default:
-				allOK, failed = false, true
-			}
-		}
-	}
-	// 云端缺失的函数（例如被手工删除）按已生效计划重建，再补推定时器；先清掉上次重建失败遗留的预留。
-	if len(missing) > 0 {
-		cleared, clearErr := r.clearStale(ctx, "timer", missing, false)
-		if clearErr != nil {
-			return r.failCloud(clearErr)
-		}
-		if !cleared {
-			// 清理作业仍在途或预留刚创建还要再等：不是失败，下一轮继续。
-			missing = nil
-			allOK = false
-		}
-	}
-	for start := 0; start < len(missing); start += runtimeConfigBatchSize {
-		batch := missing[start:min(start+runtimeConfigBatchSize, len(missing))]
-		items := make([]*cloudfunctionpb.FunctionInstanceCreateItem, 0, len(batch))
-		for _, name := range batch {
-			function := applied[name]
-			change := &PlanFunctionChange{Name: name, Region: function.Region, Market: function.Market, Old: function.Plan, New: function.Plan}
-			item, itemErr := r.createItem(&store.FetchPlanRecord{ID: r.now().Unix()}, &FetchPlanContent{}, change)
-			if itemErr != nil {
-				return r.failItem(fmt.Errorf("function %s: %w", name, itemErr))
-			}
-			item.CollectorPublishLeaseId, item.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
-			items = append(items, item)
-		}
-		jobID, submitErr := r.Cloud.SubmitCreateFunctionInstances(ctx, r.SpaceID, items)
-		if submitErr != nil {
-			return r.fail("cloudfunction", submitErr)
-		}
-		results, terminal, waitErr := r.waitAux(ctx, auxJobKindRepair, batch, jobID)
-		if waitErr != nil {
-			return r.fail("cloudfunction", waitErr)
-		}
-		created := map[string]bool{}
-		for _, result := range results {
-			created[result.InstanceID] = result.Success
-		}
-		for _, name := range batch {
-			switch {
-			case terminal && created[name]:
-				drifted = append(drifted, name)
-			case !terminal:
-				allOK = false
-			default:
-				allOK, failed = false, true
-			}
-		}
-	}
-	sort.Strings(drifted)
-	for start := 0; start < len(drifted); start += runtimeConfigBatchSize {
-		batch := drifted[start:min(start+runtimeConfigBatchSize, len(drifted))]
-		list := make([]*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch, 0, len(batch))
-		for _, name := range batch {
-			patch := patches[name]
-			patch.CollectorPublishLeaseId, patch.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
-			list = append(list, patch)
-		}
-		jobID, submitErr := r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, list)
-		if submitErr != nil {
-			return r.fail("cloudfunction", submitErr)
-		}
-		results, terminal, waitErr := r.waitAux(ctx, auxJobKindRepair, batch, jobID)
-		if waitErr != nil {
-			return r.fail("cloudfunction", waitErr)
-		}
-		pushed := map[string]bool{}
-		for _, result := range results {
-			pushed[result.InstanceID] = result.Success
-		}
-		for _, name := range batch {
-			switch {
-			case !terminal:
-				allOK = false
-			case !pushed[name]:
-				allOK, failed = false, true
-			}
-		}
-	}
-	if allOK {
-		r.releaseLease(ctx)
-		if unverified > 0 || egressRound || r.Egress.Pending() {
-			// 修复完成，但有函数这次没读回成功、刚重建了共用出口 IP 的函数，或出口 IP 去重还没做完：几分钟后重新读回、探测。
-			r.lastVerified = r.now().Add(planVerifyRetry - planVerifyInterval)
-			return nil
-		}
-		r.lastVerified = r.now()
-		return nil
-	}
-	// 有失败项：不更新读回时间，下一轮继续修复。
-	if failed {
-		return r.fail("cloudfunction", errors.New("repair of drifted or missing functions did not fully succeed"))
-	}
-	// 只有在途作业：不是失败，也不能宣布核对完毕。作业已登记在在途集合里，结束前不会重复提交，
-	// 结束后下一轮重新读回并继续。
+	r.lastVerified = r.now()
 	return nil
 }
 
-// accessDrifted 判断云端记录的 Access 入口与调用方身份是否与期望一致。
-func accessDrifted(metadata map[string]any, environment map[string]string) bool {
-	for metaKey, envKey := range map[string]string{"access_address": "MOOX_ACCESS_ADDRESS", "access_id": "MOOX_ACCESS_ID", "access_key_id": "MOOX_CALLER_KEY_ID"} {
-		// 读回得到的云端实际值优先；没有读回值时才用目录里记录的值。
-		actual, ok := metadata["actual_"+metaKey]
-		if !ok {
-			actual = metadata[metaKey]
+// disableUnplanned 列出计划外的同前缀函数并停掉它们的定时器，不删除：旧部署留下的函数会继续按旧计划拉行情源，
+// 和新函数挤同一批出口 IP 的限流额度，还占函数个数与命名空间配额。由人用 collector function delete 清理。
+func (r *PlanReconciler) disableUnplanned(ctx context.Context) error {
+	planned, err := r.plannedNames(ctx)
+	if err != nil {
+		return err
+	}
+	unplanned, err := r.scanUnplanned(ctx, planned)
+	if err != nil {
+		return err
+	}
+	for _, ref := range unplanned {
+		if r.ops().busy(ref.Name) {
+			continue
 		}
-		if fmt.Sprint(actual) != environment[envKey] {
-			return true
+		if _, err := r.startDisableTimer(ref, opKeyUnplanned); err == nil {
+			log.WarnContextf(ctx, "collector fetch plan stops the timer of an unplanned function space=%s function=%s namespace=%s region=%s", r.SpaceID, ref.Name, ref.Namespace, ref.Region)
 		}
 	}
-	return false
-}
-
-// actualAssignmentHash 返回云端函数环境里实际生效的分配 hash；没有读回值时用目录记录。
-func actualAssignmentHash(metadata map[string]any) string {
-	if actual, ok := metadata["actual_assignment_hash"]; ok {
-		return fmt.Sprint(actual)
-	}
-	return fmt.Sprint(metadata["assignment_hash"])
-}
-
-type readbackResult int
-
-const (
-	readbackFresh  readbackResult = iota // 刚读回成功
-	readbackStale                        // 没有新的读回时间
-	readbackFailed                       // 读回失败（云端暂时不可读）
-	readbackGone                         // 云端函数已不存在
-)
-
-// readbackMaxAge 是读回时间的有效期：超过说明这次列表没有真正读回云端。
-const readbackMaxAge = 10 * time.Minute
-
-// readbackState 判断节点元数据里的云端读回是否可信：必须是刚做的读回，失败要区分“不存在”和“读不到”。
-func readbackState(metadata map[string]any, now time.Time) readbackResult {
-	at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(fmt.Sprint(metadata["timer_last_readback_at"])))
-	if err != nil || now.Sub(at) > readbackMaxAge {
-		return readbackStale
-	}
-	if message := strings.ToLower(strings.TrimSpace(fmt.Sprint(metadata["timer_status_error"]))); message != "" && message != "<nil>" {
-		if strings.Contains(message, "timer trigger is missing") {
-			return readbackFresh // 触发器缺失由 timerNeedsRepair 按元数据修复
-		}
-		if strings.Contains(message, "resourcenotfound") || strings.Contains(message, "not found") {
-			if strings.Contains(message, "function") {
-				return readbackGone
-			}
-			// 触发器不存在由 timerNeedsRepair 按元数据修复。
-			return readbackFresh
-		}
-		return readbackFailed
-	}
-	return readbackFresh
-}
-
-// timerNeedsRepair 判断云端读回的定时器是否与期望一致。
-func timerNeedsRepair(metadata map[string]any, cron string) bool {
-	enabled, hasEnabled := metadataBoolValue(metadata, "timer_actual_enabled")
-	if !hasEnabled || enabled != (cron != "") {
-		return true
-	}
-	if cron == "" {
-		return false
-	}
-	// 定时器的 Message 与 Qualifier 决定函数是否接受事件，漂移后同样需要修复。
-	return !strings.EqualFold(fmt.Sprint(metadata["timer_available_status"]), "available") ||
-		strings.TrimSpace(fmt.Sprint(metadata["timer_actual_cron"])) != cron ||
-		strings.TrimSpace(fmt.Sprint(metadata["timer_actual_qualifier"])) != timerTriggerQualifier ||
-		strings.TrimSpace(fmt.Sprint(metadata["timer_actual_message"])) != timerTriggerMessage
+	return nil
 }
 
 // logPlan 写入活动日志：计划创建（标的变更）与计划生效。写入失败返回错误，下一轮重试；幂等键保证不重复。
@@ -2179,72 +1461,21 @@ func (r *PlanReconciler) BackfillRegion(marketType string) (string, bool) {
 // BackfillReservedConcurrency 是补采函数的最大并发实例数，由平台的函数级预留并发硬性限制。
 const BackfillReservedConcurrency = 5
 
-// EnsureBackfillFunction 保证该市场的补采函数存在（与实时函数同一代码包，不带定时器），返回函数名。
-// 多个补采协程并发调用时串行执行，已确认存在的函数直接返回。
-func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType string) (string, error) {
-	if err := r.refreshPackage(ctx); err != nil {
-		return "", err
-	}
-	region, ok := r.BackfillRegion(marketType)
-	if !ok {
-		return "", fmt.Errorf("no SCF region is configured for market %s", marketType)
-	}
-	name := BackfillFunctionName(r.SpaceID, marketType, region)
-	access, err := r.Access(region)
-	if err != nil {
-		return "", err
-	}
-	fingerprint := backfillAccessFingerprint(access)
-	r.backfillMu.Lock()
-	defer r.backfillMu.Unlock()
-	// 持有补采锁之后才读取并固定目标代码包：在锁外读取，较早读到旧包的调用等到锁后会把已升级的函数降回旧版本。
-	// 期间对账协程解析到新版本不影响这次的判断与创建，下一次调用再跟进。
-	pkg := r.packageID()
-	if pkg != "" && r.backfillReady[name] == pkg+"|"+fingerprint {
-		return name, nil
-	}
-	// 上一次调用留下的在途作业：先结算。仍在运行就不重复提交，也不碰租约；到终态后继续按云端实际状态判断。
-	if busy, settleErr := r.settleBackfillJob(ctx, name); settleErr != nil {
-		return "", settleErr
-	} else if busy {
-		return "", fmt.Errorf("backfill function %s has an operation still running (%w)", name, errBackfillJobRunning)
-	}
-	release, err := r.acquireOperation(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer release()
-	nodes, err := r.Cloud.ListMarketFetchers(ctx, r.SpaceID)
-	if err != nil {
-		return "", fmt.Errorf("list market fetchers: %w", err)
-	}
-	for _, node := range nodes {
-		if node.InstanceID != name {
-			continue
-		}
-		if fmt.Sprint(node.Metadata[backfillAccessMetadataKey]) != fingerprint {
-			// 访问入口或调用方身份变了（主机改名、密钥轮换）：补采函数没有定时器，不能走运行配置更新，删掉后按当前身份重建。
-			if err := r.deleteBackfillFunction(ctx, name); err != nil {
-				return "", err
-			}
-			break
-		}
-		if strings.TrimSpace(node.PackageID) != "" && node.PackageID != pkg {
-			if err := r.upgradeBackfillCode(ctx, name, pkg); err != nil {
-				return "", err
-			}
-		}
-		r.markBackfillReady(name, pkg+"|"+fingerprint)
-		return name, nil
-	}
-	if cleared, clearErr := r.clearStale(ctx, "invoke", []string{name}, true); clearErr != nil {
-		return "", clearErr
-	} else if !cleared {
-		return "", fmt.Errorf("backfill function %s has an unfinished create reservation", name)
-	}
-	network, ok := r.Deploy.Networks[region]
+// backfillPrefix 是本空间补采函数的名字前缀。
+func (r *PlanReconciler) backfillPrefix() string {
+	return fmt.Sprintf("moox-fetch%sbackfill-%s-", marketfetch.PlanFleetMarker, planNameSanitizer.Replace(strings.ToLower(r.SpaceID)))
+}
+
+// backfillRef 返回某市场补采函数在云上的位置（补采函数不分片，在配置的命名空间里）。
+func (r *PlanReconciler) backfillRef(marketType, region string) cloud.FunctionRef {
+	return cloud.FunctionRef{AccountID: r.Deploy.CloudAccountID, Region: region, Namespace: r.Deploy.Namespace, Name: BackfillFunctionName(r.SpaceID, marketType, region)}
+}
+
+// backfillSpec 是补采函数的期望内容：不带定时器与采集计划，同步调用，预留并发 5 份内存硬性限制并发实例数。
+func (r *PlanReconciler) backfillSpec(ref cloud.FunctionRef, access map[string]string) (cloud.FunctionSpec, error) {
+	network, ok := r.Deploy.Networks[ref.Region]
 	if !ok || network.VPCID == "" || network.SubnetID == "" {
-		return "", fmt.Errorf("region %s has no VPC and subnet configured", region)
+		return cloud.FunctionSpec{}, fmt.Errorf("region %s has no VPC and subnet configured", ref.Region)
 	}
 	environment := map[string]string{"MOOX_MARKET_FETCH_MODE": "backfill", "MOOX_FETCH_TIMEOUT_SECONDS": strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)}
 	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
@@ -2257,72 +1488,92 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 			environment[key] = value
 		}
 	}
-	memory := r.Deploy.MemoryMB
-	if memory <= 0 {
-		memory = 64
+	memory := r.memoryMB()
+	return cloud.FunctionSpec{
+		Ref: ref, Environment: environment, MemoryMB: int64(memory), TimeoutS: tencent.CollectorTimerTimeoutSeconds,
+		VPCID: network.VPCID, SubnetID: network.SubnetID, ReservedMem: int64(BackfillReservedConcurrency * memory),
+	}, nil
+}
+
+// EnsureBackfillFunction 保证该市场的补采函数就绪（与定时函数同一代码包，不带定时器），返回函数名。
+// 就绪缓存里已有它、并且代码包与 Access 指纹（Access 入口与调用方身份）都没变就直接返回；否则没有操作在跑就起一个 Ensure，
+// 本次调用等一会儿，做完了就返回函数名，还在做就返回“仍在创建”（errBackfillFunctionPending），调用方下一轮再试。
+// 补采函数没有定时器，暂停期间照常创建（恢复追赶时系统暂停还开着，补采却要跑）。
+func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType string) (string, error) {
+	if err := r.refreshPackage(ctx); err != nil {
+		return "", err
 	}
-	reservation := sha256.Sum256([]byte("backfill|" + r.SpaceID + "|" + name))
-	item := &cloudfunctionpb.FunctionInstanceCreateItem{
-		CloudAccountId: r.Deploy.CloudAccountID, FunctionType: "scf-event", TriggerType: "invoke", Runtime: "Go1", Handler: "main",
-		Namespace: r.Deploy.Namespace, Region: region, PackageId: pkg, Environment: environment,
-		Config: map[string]string{
-			"timeout": strconv.Itoa(tencent.CollectorTimerTimeoutSeconds), "memory_size": strconv.Itoa(memory), "max_instance_concurrency": "1",
-			"vpc_id": network.VPCID, "subnet_id": network.SubnetID, "public_net_status": "ENABLE",
-			"reserved_concurrency_mem": strconv.Itoa(BackfillReservedConcurrency * memory),
-		},
-		Metadata:            mustStruct(map[string]any{"function_name": name, "instance_id": name, "workload_type": "market_fetcher", "function_mode": "kline", "memory_size": memory, "timeout_seconds": tencent.CollectorTimerTimeoutSeconds, backfillAccessMetadataKey: fingerprint}),
-		CreateReservationId: hex.EncodeToString(reservation[:16]),
+	region, ok := r.BackfillRegion(marketType)
+	if !ok {
+		return "", fmt.Errorf("no SCF region is configured for market %s", marketType)
 	}
-	items, err := r.runBackfillJob(ctx, name, "create", "is still being created", func(lease *scfinvoker.CollectorPublishLease) (string, error) {
-		item.CollectorPublishLeaseId, item.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
-		return r.Cloud.SubmitCreateFunctionInstances(ctx, r.SpaceID, []*cloudfunctionpb.FunctionInstanceCreateItem{item})
-	})
+	if r.Access == nil {
+		return "", errors.New("SCF Access environment is required")
+	}
+	access, err := r.Access(region)
 	if err != nil {
 		return "", err
 	}
-	for _, result := range items {
-		if !result.Success {
-			return "", fmt.Errorf("create backfill function %s: %s", name, result.Message)
+	ref := r.backfillRef(marketType, region)
+	name := ref.Name
+	fingerprint := backfillAccessFingerprint(access)
+	key := opKeyBackfill + "|" + fingerprint
+	r.readMu.Lock()
+	if r.backfillRefs == nil {
+		r.backfillRefs = map[string]cloud.FunctionRef{}
+	}
+	r.backfillRefs[name] = ref
+	r.readMu.Unlock()
+	r.backfillMu.Lock()
+	defer r.backfillMu.Unlock()
+	// 持有补采锁之后才读取目标代码包：在锁外读取，较早读到旧包的调用等到锁后会把已升级的函数降回旧版本。
+	pkg := r.packageID()
+	ready := func() bool { return pkg != "" && r.backfillReady[name] == pkg+"|"+fingerprint }
+	settle := func(op *functionOp) error {
+		if op.err != nil {
+			return fmt.Errorf("ensure backfill function %s: %w", name, op.err)
+		}
+		r.markBackfillReady(name, op.packageID+"|"+fingerprint)
+		return nil
+	}
+	if ready() {
+		return name, nil
+	}
+	if op := r.ops().take(name, key); op != nil {
+		if err := settle(op); err != nil {
+			return "", err
+		}
+		if ready() {
+			return name, nil
 		}
 	}
-	r.markBackfillReady(name, pkg+"|"+fingerprint)
+	if r.ops().busy(name) {
+		return "", fmt.Errorf("backfill function %s: %w", name, errBackfillFunctionPending)
+	}
+	spec, err := r.backfillSpec(ref, access)
+	if err != nil {
+		return "", err
+	}
+	op, err := r.ops().start(name, key, false, func(ctx context.Context, op *functionOp) error {
+		spec, err := r.withPackage(ctx, op, spec)
+		if err != nil {
+			return err
+		}
+		return r.Cloud.Ensure(ctx, spec)
+	})
+	if err != nil {
+		return "", fmt.Errorf("backfill function %s: %w", name, err)
+	}
+	r.ops().wait(ctx, []*functionOp{op}, r.roundWait(ctx))
+	done := r.ops().take(name, key)
+	if done == nil {
+		return "", fmt.Errorf("backfill function %s: %w", name, errBackfillFunctionPending)
+	}
+	if err := settle(done); err != nil {
+		return "", err
+	}
 	return name, nil
 }
-
-// upgradeBackfillCode 把已存在的补采函数升级到配置的代码包（调用方已持有操作槽）。
-func (r *PlanReconciler) upgradeBackfillCode(ctx context.Context, name, pkg string) error {
-	items, err := r.runBackfillJob(ctx, name, "upgrade", "code upgrade is still running", func(lease *scfinvoker.CollectorPublishLease) (string, error) {
-		return r.Cloud.SubmitDeployFunctionInstances(ctx, r.SpaceID, []string{name}, pkg, lease)
-	})
-	if err != nil {
-		return err
-	}
-	for _, result := range items {
-		if !result.Success {
-			return fmt.Errorf("upgrade backfill function %s: %s", name, result.Message)
-		}
-	}
-	return nil
-}
-
-// deleteBackfillFunction 删除已存在的补采函数（调用方已持有操作槽），之后由调用方重新创建。
-func (r *PlanReconciler) deleteBackfillFunction(ctx context.Context, name string) error {
-	items, err := r.runBackfillJob(ctx, name, "delete", "deletion is still running", func(lease *scfinvoker.CollectorPublishLease) (string, error) {
-		return r.Cloud.SubmitDeleteFunctionInstances(ctx, r.SpaceID, []string{name}, lease)
-	})
-	if err != nil {
-		return err
-	}
-	for _, result := range items {
-		if !result.Success {
-			return fmt.Errorf("delete backfill function %s: %s", name, result.Message)
-		}
-	}
-	return nil
-}
-
-// backfillAccessMetadataKey 是补采函数元数据里记录创建时 Access 入口与调用方身份指纹的键。
-const backfillAccessMetadataKey = "access_fingerprint"
 
 // backfillAccessFingerprint 由 Access 地址、实例、调用方与密钥 ID 算出指纹，不含密钥本身。
 func backfillAccessFingerprint(access map[string]string) string {
@@ -2336,151 +1587,4 @@ func (r *PlanReconciler) markBackfillReady(name, key string) {
 		r.backfillReady = map[string]string{}
 	}
 	r.backfillReady[name] = key
-}
-
-// ensureBackfillLease 返回补采租约：已持有的租约先续租，续租失败（已过期、被取代、通信失败）就丢弃重新申请。
-// 有在途补采作业时租约一直保留，多个函数的作业共用它。
-func (r *PlanReconciler) ensureBackfillLease(ctx context.Context) (*scfinvoker.CollectorPublishLease, error) {
-	if r.backfillLease != nil {
-		renewed, err := r.renewBackfillLease(ctx)
-		if err == nil {
-			return renewed, nil
-		}
-		// 只有明确得知租约已过期或被取代才丢弃句柄；通信错误时租约可能仍然有效，丢掉句柄后 Admin 会拒绝重新申请
-		// （租约未过期），在途作业也失去续租保护。保留句柄，把错误交给调用方，下次再试。
-		if !errors.Is(err, scfinvoker.ErrCollectorPublishLeaseStale) {
-			return nil, err
-		}
-		r.backfillLease = nil
-	}
-	if r.backfillHolder == "" {
-		var raw [16]byte
-		if _, err := rand.Read(raw[:]); err != nil {
-			return nil, err
-		}
-		r.backfillHolder = "backfill-" + hex.EncodeToString(raw[:])
-	}
-	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	lease, err := r.Cloud.AcquireCollectorPublishLease(leaseCtx, r.SpaceID, r.backfillHolder)
-	if err != nil {
-		return nil, err
-	}
-	if lease == nil || lease.LeaseID == "" || lease.FencingToken < 1 {
-		return nil, errors.New("publish lease response is incomplete")
-	}
-	r.backfillLease = lease
-	return lease, nil
-}
-
-func (r *PlanReconciler) renewBackfillLease(ctx context.Context) (*scfinvoker.CollectorPublishLease, error) {
-	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	renewed, err := r.Cloud.RenewCollectorPublishLease(leaseCtx, r.backfillLease)
-	if err != nil {
-		return nil, err
-	}
-	if renewed != nil {
-		r.backfillLease = renewed
-	}
-	return r.backfillLease, nil
-}
-
-func (r *PlanReconciler) releaseBackfillLease(ctx context.Context) {
-	if r.backfillLease == nil {
-		return
-	}
-	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	_ = r.Cloud.ReleaseCollectorPublishLease(leaseCtx, r.backfillLease)
-	r.backfillLease = nil
-}
-
-// releaseBackfillLeaseIfIdle 只在没有在途补采作业时释放租约：租约一释放就立即过期，
-// 排队中的作业开始执行时会因租约已过期而失败，下一次调用还会对同一函数重复提交。
-func (r *PlanReconciler) releaseBackfillLeaseIfIdle(ctx context.Context) {
-	if len(r.backfillJobs) == 0 {
-		r.releaseBackfillLease(ctx)
-	}
-}
-
-// runBackfillJob 取得补采租约，提交一个作业并等待。调用方须已持有 backfillMu。
-// 作业在等待上限内结束就释放租约（没有其他在途作业时）并返回结果；
-// 没有结束，或读取结果出错时作业仍可能在云端运行：登记在途并保留租约，返回 errBackfillJobRunning
-// （读取出错时返回该错误），由后续调用经 settleBackfillJob 结算。
-func (r *PlanReconciler) runBackfillJob(ctx context.Context, name, kind, running string, submit func(lease *scfinvoker.CollectorPublishLease) (string, error)) ([]scfinvoker.BatchItemResult, error) {
-	lease, err := r.ensureBackfillLease(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("publish lease: %w", err)
-	}
-	jobID, err := submit(lease)
-	if err != nil {
-		r.releaseBackfillLeaseIfIdle(ctx)
-		return nil, err
-	}
-	items, terminal, err := r.waitJob(ctx, jobID)
-	if err != nil || !terminal {
-		if r.backfillJobs == nil {
-			r.backfillJobs = map[string]backfillJob{}
-		}
-		r.backfillJobs[name] = backfillJob{id: jobID, kind: kind, at: r.now()}
-		if err != nil {
-			return nil, err
-		}
-		return nil, fmt.Errorf("backfill function %s %s (%w)", name, running, errBackfillJobRunning)
-	}
-	r.releaseBackfillLeaseIfIdle(ctx)
-	return items, nil
-}
-
-// backfillJobGiveUpAge 是在途补采作业的放弃期限。FunctionInstance 单个节点批次项的总预算是 16 分钟，超过它仍无法确认终态
-// （作业记录丢失、状态一直读不到）就不再等：停止续租、移除在途记录，再按云端实际状态判断下一步。
-// 旧作业即使还活着也会被新租约的围栏令牌隔离；不能更早放弃，否则会对仍在运行的作业重复提交。
-const backfillJobGiveUpAge = 30 * time.Minute
-
-// settleBackfillJob 结算函数上一次调用留下的在途作业，调用方须已持有 backfillMu。
-// busy 为 true 表示作业仍在运行或结果暂时读不到（都会尽力续租，防止排队中的作业因租约过期失败）；
-// 到终态就移出在途集合，没有其他在途作业时释放租约。作业结果不在这里判断：调用方随后读取云端实际状态，
-// 缺失就重建，失败就重试。超过放弃期限仍无法确认终态时见 backfillJobGiveUpAge。
-func (r *PlanReconciler) settleBackfillJob(ctx context.Context, name string) (busy bool, err error) {
-	job, ok := r.backfillJobs[name]
-	if !ok {
-		return false, nil
-	}
-	age := r.now().Sub(job.at)
-	if age > backfillJobGiveUpAge {
-		log.WarnContextf(ctx, "collector backfill gives up waiting for a cloud job space=%s function=%s job=%s kind=%s age=%s", r.SpaceID, name, job.id, job.kind, age.Round(time.Second))
-		delete(r.backfillJobs, name)
-		r.releaseBackfillLeaseIfIdle(ctx)
-		return false, nil
-	}
-	_, terminal, err := r.checkJob(ctx, job.id)
-	if err != nil {
-		// 结果暂时读不到：作业仍可能在运行，同样要续租，否则持续重试超过租约 TTL 后租约过期。
-		r.keepBackfillLeaseAlive(ctx, name)
-		return true, err
-	}
-	if !terminal {
-		r.keepBackfillLeaseAlive(ctx, name)
-		if age > pendingJobWarnAge {
-			log.WarnContextf(ctx, "collector backfill cloud job is still not finished space=%s function=%s job=%s kind=%s age=%s", r.SpaceID, name, job.id, job.kind, age.Round(time.Second))
-		}
-		return true, nil
-	}
-	delete(r.backfillJobs, name)
-	r.releaseBackfillLeaseIfIdle(ctx)
-	return false, nil
-}
-
-// keepBackfillLeaseAlive 尽力续租在途补采作业持有的租约：失败只记日志，明确得知租约已失效时丢弃句柄。
-func (r *PlanReconciler) keepBackfillLeaseAlive(ctx context.Context, name string) {
-	if r.backfillLease == nil {
-		return
-	}
-	if _, err := r.renewBackfillLease(ctx); err != nil {
-		if errors.Is(err, scfinvoker.ErrCollectorPublishLeaseStale) {
-			r.backfillLease = nil
-		}
-		log.WarnContextf(ctx, "collector backfill renew publish lease for in-flight job space=%s function=%s: %v", r.SpaceID, name, err)
-	}
 }

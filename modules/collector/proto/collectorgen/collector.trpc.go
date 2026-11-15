@@ -221,6 +221,31 @@ type CollectMgrService interface {
 	ListSubjectExclusions(ctx context.Context, req *ListSubjectExclusionsReq) (*ListSubjectExclusionsRsp, error)
 	// RegisterDelistNotice ----- 下架检测 -----
 	RegisterDelistNotice(ctx context.Context, req *RegisterDelistNoticeReq) (*RegisterDelistNoticeRsp, error)
+	// ListCloudAccounts ----- 云账号（密钥本身在 Admin 的 SecretMgr，这里只登记密钥 ID 与 COS 桶） -----
+	ListCloudAccounts(ctx context.Context, req *ListCloudAccountsReq) (*ListCloudAccountsRsp, error)
+
+	CreateCloudAccount(ctx context.Context, req *CreateCloudAccountReq) (*CreateCloudAccountRsp, error)
+
+	UpdateCloudAccount(ctx context.Context, req *UpdateCloudAccountReq) (*UpdateCloudAccountRsp, error)
+	// DeleteCloudAccount DeleteCloudAccount 在账号还被 scf_plan 引用、还有代码包、云上还有它建的函数时拒绝（CONFLICT），msg 是原因。
+	DeleteCloudAccount(ctx context.Context, req *DeleteCloudAccountReq) (*DeleteCloudAccountRsp, error)
+
+	ListCloudRegions(ctx context.Context, req *ListCloudRegionsReq) (*ListCloudRegionsRsp, error)
+	// InitPackageUpload ----- 云函数代码包（COS 预签名直传） -----
+	InitPackageUpload(ctx context.Context, req *InitPackageUploadReq) (*InitPackageUploadRsp, error)
+
+	CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq) (*CompletePackageUploadRsp, error)
+
+	ListFunctionPackages(ctx context.Context, req *ListFunctionPackagesReq) (*ListFunctionPackagesRsp, error)
+
+	DeleteFunctionPackage(ctx context.Context, req *DeleteFunctionPackageReq) (*DeleteFunctionPackageRsp, error)
+	// ListCloudFunctions ----- 云函数 -----
+	//  ListCloudFunctions 读回空间的采集函数与补采函数：计划里应有的内容、云上读回的状态、是否在计划外。不返回函数环境与任何密钥。
+	ListCloudFunctions(ctx context.Context, req *ListCloudFunctionsReq) (*ListCloudFunctionsRsp, error)
+	// DeleteCloudFunctions DeleteCloudFunctions 按名字或前缀删函数；计划里的函数删掉后，下一轮对账立即读回并重建。
+	DeleteCloudFunctions(ctx context.Context, req *DeleteCloudFunctionsReq) (*DeleteCloudFunctionsRsp, error)
+	// ProbeFunctionEgress ProbeFunctionEgress 取已生效计划里各采集函数此刻的公网出口 IP（只调用函数，不改云上状态）。
+	ProbeFunctionEgress(ctx context.Context, req *ProbeFunctionEgressReq) (*ProbeFunctionEgressRsp, error)
 }
 
 func CollectMgrService_GetTaskList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -853,6 +878,222 @@ func CollectMgrService_RegisterDelistNotice_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
+func CollectMgrService_ListCloudAccounts_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListCloudAccountsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ListCloudAccounts(ctx, reqbody.(*ListCloudAccountsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_CreateCloudAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateCloudAccountReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).CreateCloudAccount(ctx, reqbody.(*CreateCloudAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_UpdateCloudAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateCloudAccountReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).UpdateCloudAccount(ctx, reqbody.(*UpdateCloudAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_DeleteCloudAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteCloudAccountReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).DeleteCloudAccount(ctx, reqbody.(*DeleteCloudAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ListCloudRegions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListCloudRegionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ListCloudRegions(ctx, reqbody.(*ListCloudRegionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_InitPackageUpload_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &InitPackageUploadReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).InitPackageUpload(ctx, reqbody.(*InitPackageUploadReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_CompletePackageUpload_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CompletePackageUploadReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).CompletePackageUpload(ctx, reqbody.(*CompletePackageUploadReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ListFunctionPackages_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListFunctionPackagesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ListFunctionPackages(ctx, reqbody.(*ListFunctionPackagesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_DeleteFunctionPackage_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteFunctionPackageReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).DeleteFunctionPackage(ctx, reqbody.(*DeleteFunctionPackageReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ListCloudFunctions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListCloudFunctionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ListCloudFunctions(ctx, reqbody.(*ListCloudFunctionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_DeleteCloudFunctions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteCloudFunctionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).DeleteCloudFunctions(ctx, reqbody.(*DeleteCloudFunctionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ProbeFunctionEgress_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ProbeFunctionEgressReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ProbeFunctionEgress(ctx, reqbody.(*ProbeFunctionEgressReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -997,6 +1238,54 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/RegisterDelistNotice",
 			Func: CollectMgrService_RegisterDelistNotice_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ListCloudAccounts",
+			Func: CollectMgrService_ListCloudAccounts_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/CreateCloudAccount",
+			Func: CollectMgrService_CreateCloudAccount_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/UpdateCloudAccount",
+			Func: CollectMgrService_UpdateCloudAccount_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/DeleteCloudAccount",
+			Func: CollectMgrService_DeleteCloudAccount_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ListCloudRegions",
+			Func: CollectMgrService_ListCloudRegions_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/InitPackageUpload",
+			Func: CollectMgrService_InitPackageUpload_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/CompletePackageUpload",
+			Func: CollectMgrService_CompletePackageUpload_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ListFunctionPackages",
+			Func: CollectMgrService_ListFunctionPackages_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/DeleteFunctionPackage",
+			Func: CollectMgrService_DeleteFunctionPackage_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ListCloudFunctions",
+			Func: CollectMgrService_ListCloudFunctions_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/DeleteCloudFunctions",
+			Func: CollectMgrService_DeleteCloudFunctions_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ProbeFunctionEgress",
+			Func: CollectMgrService_ProbeFunctionEgress_Handler,
 		},
 	},
 }
@@ -1149,6 +1438,56 @@ func (s *UnimplementedCollectMgr) ListSubjectExclusions(ctx context.Context, req
 // RegisterDelistNotice ----- 下架检测 -----
 func (s *UnimplementedCollectMgr) RegisterDelistNotice(ctx context.Context, req *RegisterDelistNoticeReq) (*RegisterDelistNoticeRsp, error) {
 	return nil, errors.New("rpc RegisterDelistNotice of service CollectMgr is not implemented")
+}
+
+// ListCloudAccounts ----- 云账号（密钥本身在 Admin 的 SecretMgr，这里只登记密钥 ID 与 COS 桶） -----
+func (s *UnimplementedCollectMgr) ListCloudAccounts(ctx context.Context, req *ListCloudAccountsReq) (*ListCloudAccountsRsp, error) {
+	return nil, errors.New("rpc ListCloudAccounts of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) CreateCloudAccount(ctx context.Context, req *CreateCloudAccountReq) (*CreateCloudAccountRsp, error) {
+	return nil, errors.New("rpc CreateCloudAccount of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) UpdateCloudAccount(ctx context.Context, req *UpdateCloudAccountReq) (*UpdateCloudAccountRsp, error) {
+	return nil, errors.New("rpc UpdateCloudAccount of service CollectMgr is not implemented")
+}
+
+// DeleteCloudAccount DeleteCloudAccount 在账号还被 scf_plan 引用、还有代码包、云上还有它建的函数时拒绝（CONFLICT），msg 是原因。
+func (s *UnimplementedCollectMgr) DeleteCloudAccount(ctx context.Context, req *DeleteCloudAccountReq) (*DeleteCloudAccountRsp, error) {
+	return nil, errors.New("rpc DeleteCloudAccount of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) ListCloudRegions(ctx context.Context, req *ListCloudRegionsReq) (*ListCloudRegionsRsp, error) {
+	return nil, errors.New("rpc ListCloudRegions of service CollectMgr is not implemented")
+}
+
+// InitPackageUpload ----- 云函数代码包（COS 预签名直传） -----
+func (s *UnimplementedCollectMgr) InitPackageUpload(ctx context.Context, req *InitPackageUploadReq) (*InitPackageUploadRsp, error) {
+	return nil, errors.New("rpc InitPackageUpload of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq) (*CompletePackageUploadRsp, error) {
+	return nil, errors.New("rpc CompletePackageUpload of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) ListFunctionPackages(ctx context.Context, req *ListFunctionPackagesReq) (*ListFunctionPackagesRsp, error) {
+	return nil, errors.New("rpc ListFunctionPackages of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) DeleteFunctionPackage(ctx context.Context, req *DeleteFunctionPackageReq) (*DeleteFunctionPackageRsp, error) {
+	return nil, errors.New("rpc DeleteFunctionPackage of service CollectMgr is not implemented")
+}
+
+// ListCloudFunctions ----- 云函数 -----
+//
+//	ListCloudFunctions 读回空间的采集函数与补采函数：计划里应有的内容、云上读回的状态、是否在计划外。不返回函数环境与任何密钥。
+func (s *UnimplementedCollectMgr) ListCloudFunctions(ctx context.Context, req *ListCloudFunctionsReq) (*ListCloudFunctionsRsp, error) {
+	return nil, errors.New("rpc ListCloudFunctions of service CollectMgr is not implemented")
+}
+
+// DeleteCloudFunctions DeleteCloudFunctions 按名字或前缀删函数；计划里的函数删掉后，下一轮对账立即读回并重建。
+func (s *UnimplementedCollectMgr) DeleteCloudFunctions(ctx context.Context, req *DeleteCloudFunctionsReq) (*DeleteCloudFunctionsRsp, error) {
+	return nil, errors.New("rpc DeleteCloudFunctions of service CollectMgr is not implemented")
+}
+
+// ProbeFunctionEgress ProbeFunctionEgress 取已生效计划里各采集函数此刻的公网出口 IP（只调用函数，不改云上状态）。
+func (s *UnimplementedCollectMgr) ProbeFunctionEgress(ctx context.Context, req *ProbeFunctionEgressReq) (*ProbeFunctionEgressRsp, error) {
+	return nil, errors.New("rpc ProbeFunctionEgress of service CollectMgr is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -1341,6 +1680,31 @@ type CollectMgrClientProxy interface {
 	ListSubjectExclusions(ctx context.Context, req *ListSubjectExclusionsReq, opts ...client.Option) (rsp *ListSubjectExclusionsRsp, err error)
 	// RegisterDelistNotice ----- 下架检测 -----
 	RegisterDelistNotice(ctx context.Context, req *RegisterDelistNoticeReq, opts ...client.Option) (rsp *RegisterDelistNoticeRsp, err error)
+	// ListCloudAccounts ----- 云账号（密钥本身在 Admin 的 SecretMgr，这里只登记密钥 ID 与 COS 桶） -----
+	ListCloudAccounts(ctx context.Context, req *ListCloudAccountsReq, opts ...client.Option) (rsp *ListCloudAccountsRsp, err error)
+
+	CreateCloudAccount(ctx context.Context, req *CreateCloudAccountReq, opts ...client.Option) (rsp *CreateCloudAccountRsp, err error)
+
+	UpdateCloudAccount(ctx context.Context, req *UpdateCloudAccountReq, opts ...client.Option) (rsp *UpdateCloudAccountRsp, err error)
+	// DeleteCloudAccount DeleteCloudAccount 在账号还被 scf_plan 引用、还有代码包、云上还有它建的函数时拒绝（CONFLICT），msg 是原因。
+	DeleteCloudAccount(ctx context.Context, req *DeleteCloudAccountReq, opts ...client.Option) (rsp *DeleteCloudAccountRsp, err error)
+
+	ListCloudRegions(ctx context.Context, req *ListCloudRegionsReq, opts ...client.Option) (rsp *ListCloudRegionsRsp, err error)
+	// InitPackageUpload ----- 云函数代码包（COS 预签名直传） -----
+	InitPackageUpload(ctx context.Context, req *InitPackageUploadReq, opts ...client.Option) (rsp *InitPackageUploadRsp, err error)
+
+	CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq, opts ...client.Option) (rsp *CompletePackageUploadRsp, err error)
+
+	ListFunctionPackages(ctx context.Context, req *ListFunctionPackagesReq, opts ...client.Option) (rsp *ListFunctionPackagesRsp, err error)
+
+	DeleteFunctionPackage(ctx context.Context, req *DeleteFunctionPackageReq, opts ...client.Option) (rsp *DeleteFunctionPackageRsp, err error)
+	// ListCloudFunctions ----- 云函数 -----
+	//  ListCloudFunctions 读回空间的采集函数与补采函数：计划里应有的内容、云上读回的状态、是否在计划外。不返回函数环境与任何密钥。
+	ListCloudFunctions(ctx context.Context, req *ListCloudFunctionsReq, opts ...client.Option) (rsp *ListCloudFunctionsRsp, err error)
+	// DeleteCloudFunctions DeleteCloudFunctions 按名字或前缀删函数；计划里的函数删掉后，下一轮对账立即读回并重建。
+	DeleteCloudFunctions(ctx context.Context, req *DeleteCloudFunctionsReq, opts ...client.Option) (rsp *DeleteCloudFunctionsRsp, err error)
+	// ProbeFunctionEgress ProbeFunctionEgress 取已生效计划里各采集函数此刻的公网出口 IP（只调用函数，不改云上状态）。
+	ProbeFunctionEgress(ctx context.Context, req *ProbeFunctionEgressReq, opts ...client.Option) (rsp *ProbeFunctionEgressRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -2046,6 +2410,246 @@ func (c *CollectMgrClientProxyImpl) RegisterDelistNotice(ctx context.Context, re
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &RegisterDelistNoticeRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ListCloudAccounts(ctx context.Context, req *ListCloudAccountsReq, opts ...client.Option) (*ListCloudAccountsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListCloudAccounts")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ListCloudAccounts")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListCloudAccountsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) CreateCloudAccount(ctx context.Context, req *CreateCloudAccountReq, opts ...client.Option) (*CreateCloudAccountRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/CreateCloudAccount")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("CreateCloudAccount")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CreateCloudAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) UpdateCloudAccount(ctx context.Context, req *UpdateCloudAccountReq, opts ...client.Option) (*UpdateCloudAccountRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/UpdateCloudAccount")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("UpdateCloudAccount")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateCloudAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) DeleteCloudAccount(ctx context.Context, req *DeleteCloudAccountReq, opts ...client.Option) (*DeleteCloudAccountRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/DeleteCloudAccount")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("DeleteCloudAccount")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteCloudAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ListCloudRegions(ctx context.Context, req *ListCloudRegionsReq, opts ...client.Option) (*ListCloudRegionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListCloudRegions")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ListCloudRegions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListCloudRegionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) InitPackageUpload(ctx context.Context, req *InitPackageUploadReq, opts ...client.Option) (*InitPackageUploadRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/InitPackageUpload")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("InitPackageUpload")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &InitPackageUploadRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq, opts ...client.Option) (*CompletePackageUploadRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/CompletePackageUpload")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("CompletePackageUpload")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CompletePackageUploadRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ListFunctionPackages(ctx context.Context, req *ListFunctionPackagesReq, opts ...client.Option) (*ListFunctionPackagesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListFunctionPackages")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ListFunctionPackages")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListFunctionPackagesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) DeleteFunctionPackage(ctx context.Context, req *DeleteFunctionPackageReq, opts ...client.Option) (*DeleteFunctionPackageRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/DeleteFunctionPackage")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("DeleteFunctionPackage")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteFunctionPackageRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ListCloudFunctions(ctx context.Context, req *ListCloudFunctionsReq, opts ...client.Option) (*ListCloudFunctionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListCloudFunctions")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ListCloudFunctions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListCloudFunctionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) DeleteCloudFunctions(ctx context.Context, req *DeleteCloudFunctionsReq, opts ...client.Option) (*DeleteCloudFunctionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/DeleteCloudFunctions")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("DeleteCloudFunctions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteCloudFunctionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ProbeFunctionEgress(ctx context.Context, req *ProbeFunctionEgressReq, opts ...client.Option) (*ProbeFunctionEgressRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ProbeFunctionEgress")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ProbeFunctionEgress")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ProbeFunctionEgressRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

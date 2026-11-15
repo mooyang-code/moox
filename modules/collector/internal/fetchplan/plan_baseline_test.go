@@ -8,13 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
@@ -22,11 +21,17 @@ import (
 
 // 批 2 的基线金样（Collector 这一层）。
 //
-// 对已有的几个对账场景（单市场、标的变更、退役、交接、统一数据集），把每份采集计划里每个函数的
+// plan_environment.golden.json：对已有的几个对账场景（单市场、标的变更、退役、交接、统一数据集），把每份采集计划里每个函数的
 // 过渡与最终内容落成文件：云函数记 functionEnvironment 的输出（其中 MOOX_MARKET_FETCH_PLAN 就是下发给函数的
-// Plan JSON，函数严格解码，一个字节都不能变）与两个 cron；推送与本地执行项没有函数环境，记 Plan JSON。
-// 后续改造（拆包、采集方式收成一列、时间线拆表、改用 cloud 包）之后必须原样通过。
-// 调用方密钥是固定的假值。要重新生成时设 MOOX_UPDATE_GOLDEN=1。
+// Plan JSON，函数严格解码，一个字节都不能变）与两个 cron；推送与本地执行项没有函数环境，记 Plan JSON。要重新生成时设 MOOX_UPDATE_GOLDEN=1。
+//
+// plan_dispatch.golden.json 是 T0 用旧实现（经 CloudFunction 的作业接口）录下的“对账器在什么时刻要哪个函数变成什么样”，
+// 文件原样保留、不再重写。T5 之后对账器直接调 cloud 包（Ensure、SetTimer、UpgradeCode、Delete），请求的形状变了，
+// 比对按“函数在每个时刻被要求成为的样子”换算（见 planPushesFromGolden 与 planPushesFromCalls）：
+//   - 旧的“建函数 + 同一时刻的运行配置” = 新的一次 Ensure（建函数与下发环境、定时器合成一次）；
+//   - 旧的只停定时器的运行配置（退役、暂停）= 新的 SetTimer(停用)；
+//   - 旧的部署（只换代码）= 新的 UpgradeCode；补采函数的部署、Access 变了之后的“删掉再建” = 新的一次 Ensure（就地改写）。
+// 比的是受管环境（采集计划换成 SHA-256）、定时器、代码包；创建预留号、函数元数据这些旧实现的附带项不再存在，不比。
 
 // planBaselineFunction 是一份计划里一个函数的记录。
 type planBaselineFunction struct {
@@ -155,51 +160,175 @@ func planDispatchEnvironment(environment map[string]string) map[string]string {
 	return out
 }
 
-func planDispatchCreates(items []*cloudfunctionpb.FunctionInstanceCreateItem) planDispatch {
-	dispatch := planDispatch{Kind: "create"}
-	for _, item := range items {
-		metadata := item.GetMetadata().AsMap()
-		name, _ := metadata["function_name"].(string)
-		config := make(map[string]string, len(item.GetConfig()))
-		for key, value := range item.GetConfig() {
-			config[key] = value
+// planPush 是“对账器在某一时刻要某个函数成为的样子”，下发金样的比对口径。
+type planPush struct {
+	At       string `json:"at"`
+	Function string `json:"function"`
+	// Kind 是 push（下发环境与定时器）、timer（只改定时器）、upgrade（只换代码）、delete。
+	Kind string `json:"kind"`
+	// Environment 是受管环境（去掉基础项，采集计划换成 SHA-256），只有 push 有。
+	Environment map[string]string `json:"environment,omitempty"`
+	// Timer 是定时器（cron 与开关）；补采函数没有定时器，为空。
+	Timer string `json:"timer,omitempty"`
+	// PackageID 是 upgrade 的目标包与补采函数 push 的代码包。
+	PackageID string `json:"package_id,omitempty"`
+}
+
+// planBaseKeys 是函数环境里的基础项（不由计划决定），比对时去掉。
+var planBaseKeys = []string{"MOOX_SPACE_ID", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"}
+
+// planManagedEnvironment 去掉基础项，并把采集计划换成 SHA-256（对账器发出的环境用）。
+func planManagedEnvironment(environment map[string]string) map[string]string {
+	return stripBaseKeys(planDispatchEnvironment(environment))
+}
+
+// stripBaseKeys 去掉基础项（金样里的环境：采集计划已经是 SHA-256）。
+func stripBaseKeys(environment map[string]string) map[string]string {
+	out := make(map[string]string, len(environment))
+	for key, value := range environment {
+		out[key] = value
+	}
+	for _, key := range planBaseKeys {
+		delete(out, key)
+	}
+	return out
+}
+
+func planTimer(enabled bool, cron string) string {
+	if strings.TrimSpace(cron) == "" {
+		cron = "0 * * * * * *"
+	}
+	if enabled {
+		return "enabled " + cron
+	}
+	return "disabled " + cron
+}
+
+func sortPushes(pushes []planPush) []planPush {
+	sort.SliceStable(pushes, func(i, j int) bool {
+		if pushes[i].At != pushes[j].At {
+			return pushes[i].At < pushes[j].At
 		}
-		dispatch.Creates = append(dispatch.Creates, planDispatchCreate{
-			Name: name, CloudAccountID: item.GetCloudAccountId(), FunctionType: item.GetFunctionType(), TriggerType: item.GetTriggerType(),
-			Runtime: item.GetRuntime(), Handler: item.GetHandler(), Namespace: item.GetNamespace(), Region: item.GetRegion(), PackageID: item.GetPackageId(),
-			Environment: planDispatchEnvironment(item.GetEnvironment()), Config: config, Metadata: metadata, CreateReservationID: item.GetCreateReservationId(),
-		})
-	}
-	sort.Slice(dispatch.Creates, func(i, j int) bool { return dispatch.Creates[i].Name < dispatch.Creates[j].Name })
-	return dispatch
-}
-
-func planDispatchPatches(patches []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch) planDispatch {
-	dispatch := planDispatch{Kind: "runtime_config"}
-	for _, patch := range patches {
-		dispatch.RuntimeConfigs = append(dispatch.RuntimeConfigs, planDispatchPatch{
-			InstanceID: patch.GetInstanceId(), ManagedEnvironment: planDispatchEnvironment(patch.GetManagedEnvironment()),
-			TimerEnabled: patch.GetTimerEnabled(), TimerCron: patch.GetTimerCron(),
-		})
-	}
-	sort.Slice(dispatch.RuntimeConfigs, func(i, j int) bool {
-		return dispatch.RuntimeConfigs[i].InstanceID < dispatch.RuntimeConfigs[j].InstanceID
+		if pushes[i].Function != pushes[j].Function {
+			return pushes[i].Function < pushes[j].Function
+		}
+		return pushes[i].Kind < pushes[j].Kind
 	})
-	return dispatch
+	return pushes
 }
 
-// recordDispatch 记下一批提交。
-func (c *fakePlanCloud) recordDispatch(dispatch planDispatch) {
-	if c.clock != nil {
-		dispatch.At = c.clock().UTC().Format(time.RFC3339)
+// planPushesFromGolden 把旧实现提交的批次换算成每个函数的要求（换算规则见文件开头）。
+func planPushesFromGolden(t *testing.T, dispatches []planDispatch) []planPush {
+	t.Helper()
+	var pushes []planPush
+	last := map[string]map[string]string{}
+	created := map[string]planDispatchCreate{}
+	deleted := map[string]bool{}
+	for index, dispatch := range dispatches {
+		switch dispatch.Kind {
+		case "create":
+			for _, item := range dispatch.Creates {
+				if item.TriggerType == "invoke" {
+					environment := stripBaseKeys(item.Environment)
+					pushes = append(pushes, planPush{At: dispatch.At, Function: item.Name, Kind: "push", Environment: environment, PackageID: item.PackageID})
+					last[item.Name] = environment
+					delete(deleted, item.Name)
+					continue
+				}
+				// 定时函数：建出来的环境就是同一时刻紧跟的那批运行配置下发的过渡环境。
+				created[item.Name] = item
+				require.Less(t, index+1, len(dispatches), "建函数之后必须紧跟运行配置：%s", item.Name)
+			}
+		case "runtime_config":
+			for _, patch := range dispatch.RuntimeConfigs {
+				environment := stripBaseKeys(patch.ManagedEnvironment)
+				if item, ok := created[patch.InstanceID]; ok {
+					require.Equal(t, stripBaseKeys(item.Environment), environment, "建函数时的受管环境就是同一时刻下发的那份：%s", patch.InstanceID)
+					delete(created, patch.InstanceID)
+				}
+				if !patch.TimerEnabled && (len(patch.ManagedEnvironment) == 0 || equalEnvironment(last[patch.InstanceID], environment)) {
+					// 只停定时器（退役保持过渡环境不变；暂停不带环境）。
+					pushes = append(pushes, planPush{At: dispatch.At, Function: patch.InstanceID, Kind: "timer", Timer: planTimer(false, patch.TimerCron)})
+					continue
+				}
+				pushes = append(pushes, planPush{At: dispatch.At, Function: patch.InstanceID, Kind: "push", Environment: environment, Timer: planTimer(patch.TimerEnabled, patch.TimerCron)})
+				last[patch.InstanceID] = environment
+			}
+		case "deploy":
+			for _, name := range dispatch.Functions {
+				if strings.Contains(name, "backfill") {
+					// 补采函数的代码包变了：新实现就地 Ensure（环境不变，代码与包 ID 换新）。
+					pushes = append(pushes, planPush{At: dispatch.At, Function: name, Kind: "push", Environment: last[name], PackageID: dispatch.PackageID})
+					continue
+				}
+				pushes = append(pushes, planPush{At: dispatch.At, Function: name, Kind: "upgrade", PackageID: dispatch.PackageID})
+			}
+		case "delete":
+			for _, name := range dispatch.Functions {
+				// 补采函数 Access 变了时旧实现删掉再建；新实现就地 Ensure，删除那一步不再有（紧跟的建函数换算成 push）。
+				require.Contains(t, name, "backfill", "金样里只有补采函数的删除")
+				deleted[name] = true
+			}
+		default:
+			t.Fatalf("unknown dispatch kind %q", dispatch.Kind)
+		}
 	}
-	sort.Strings(dispatch.Functions)
-	c.patchMu.Lock()
-	c.dispatches = append(c.dispatches, dispatch)
-	c.patchMu.Unlock()
+	require.Empty(t, created, "每个建出来的定时函数都要有同一时刻的运行配置")
+	return sortPushes(pushes)
 }
 
-// planDispatchScenario 是一个场景里对账器先后提交给云端的全部请求。
+func equalEnvironment(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+// planPushesFromCalls 把对账器发出的云端操作换算成同样的口径。
+func planPushesFromCalls(calls []cloudCall) []planPush {
+	var pushes []planPush
+	for _, call := range calls {
+		at := call.At.UTC().Format(time.RFC3339)
+		switch call.Op {
+		case "ensure":
+			push := planPush{At: at, Function: call.Name, Kind: "push", Environment: planManagedEnvironment(call.Spec.Environment)}
+			if call.Spec.Timer != nil {
+				push.Timer = planTimer(call.Spec.Timer.Enabled, call.Spec.Timer.Cron)
+			} else {
+				push.PackageID = call.PackageID
+			}
+			pushes = append(pushes, push)
+		case "timer":
+			pushes = append(pushes, planPush{At: at, Function: call.Name, Kind: "timer", Timer: planTimer(call.Timer.Enabled, call.Timer.Cron)})
+		case "upgrade":
+			pushes = append(pushes, planPush{At: at, Function: call.Name, Kind: "upgrade", PackageID: call.PackageID})
+		case "delete":
+			pushes = append(pushes, planPush{At: at, Function: call.Name, Kind: "delete"})
+		}
+	}
+	return sortPushes(pushes)
+}
+
+// loadDispatchGolden 读 T0 录下的下发金样（只读，不重写）。
+func loadDispatchGolden(t *testing.T) map[string][]planDispatch {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "plan_dispatch.golden.json"))
+	require.NoError(t, err)
+	var scenarios []planDispatchScenario
+	require.NoError(t, json.Unmarshal(raw, &scenarios))
+	out := map[string][]planDispatch{}
+	for _, scenario := range scenarios {
+		out[scenario.Name] = scenario.Dispatches
+	}
+	return out
+}
+
+// planDispatchScenario 是一个场景里对账器先后提交给云端的全部请求（金样文件的结构）。
 type planDispatchScenario struct {
 	Name       string         `json:"name"`
 	Dispatches []planDispatch `json:"dispatches"`
@@ -236,7 +365,7 @@ func planBaselineSettle(t *testing.T, h *planHarness, r *PlanReconciler) {
 
 func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 	var scenarios []planBaselineScenario
-	var dispatched []planDispatchScenario
+	dispatched := map[string][]cloudCall{}
 
 	// 单市场：一个现货 1m 任务，120 个标的分成 3 个函数。之后标的减少一个（标的变更，过渡计划带新旧两份）。
 	{
@@ -247,7 +376,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		h.setSubjects(119)
 		planBaselineSettle(t, h, r)
 		scenarios = append(scenarios, planBaselineScenario{Name: "single_market_then_subject_change", Plans: planBaselineRecords(t, r, h.store.records)})
-		dispatched = append(dispatched, planDispatchScenario{Name: "single_market_then_subject_change", Dispatches: h.cloud.dispatches})
+		dispatched["single_market_then_subject_change"] = h.cloud.operations()
 	}
 
 	// 退役：标的从 120 个减到 40 个，后两个函数退役（保持过渡环境、只停定时器）。
@@ -259,7 +388,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		h.setSubjects(40)
 		planBaselineSettle(t, h, r)
 		scenarios = append(scenarios, planBaselineScenario{Name: "retire_functions", Plans: planBaselineRecords(t, r, h.store.records)})
-		dispatched = append(dispatched, planDispatchScenario{Name: "retire_functions", Dispatches: h.cloud.dispatches})
+		dispatched["retire_functions"] = h.cloud.operations()
 	}
 
 	// 交接：1m 与 1h 两个数据集先由云函数采集，再切到推送，再切回云函数。
@@ -275,7 +404,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		h.setIngest("ds_spot_1h", ingestSCF)
 		h.settle(true)
 		scenarios = append(scenarios, planBaselineScenario{Name: "handoff_scf_stream_scf", Plans: planBaselineRecords(t, h.r, h.store.records)})
-		dispatched = append(dispatched, planDispatchScenario{Name: "handoff_scf_stream_scf", Dispatches: h.cloud.dispatches})
+		dispatched["handoff_scf_stream_scf"] = h.cloud.operations()
 	}
 
 	// 交接：1m 数据集先由云函数采集，再切到本地执行端（拉取方式不变，只换执行端）。
@@ -287,7 +416,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		h.settle(true)
 		require.Equal(t, marketfetch.PlanExecutorLocal, h.applied().Functions[localItem].Executor)
 		scenarios = append(scenarios, planBaselineScenario{Name: "handoff_scf_local", Plans: planBaselineRecords(t, h.r, h.store.records)})
-		dispatched = append(dispatched, planDispatchScenario{Name: "handoff_scf_local", Dispatches: h.cloud.dispatches})
+		dispatched["handoff_scf_local"] = h.cloud.operations()
 	}
 
 	// 统一数据集：同一个数据集挂现货、永续两个任务，两个市场的函数共用一份快照；之后标的减少一个。
@@ -298,7 +427,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		h.setSubjects(59)
 		planBaselineSettle(t, h, r)
 		scenarios = append(scenarios, planBaselineScenario{Name: "unified_dataset_then_subject_change", Plans: planBaselineRecords(t, r, h.store.records)})
-		dispatched = append(dispatched, planDispatchScenario{Name: "unified_dataset_then_subject_change", Dispatches: h.cloud.dispatches})
+		dispatched["unified_dataset_then_subject_change"] = h.cloud.operations()
 	}
 
 	for _, scenario := range scenarios {
@@ -307,44 +436,38 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 			require.NotEmpty(t, plan, scenario.Name)
 		}
 	}
-	// 暂停：计划生效后停用全部定时器（DisableAll 的补丁不带受管环境，cron 用占位值）。
+	// 暂停：计划生效后停用全部定时器（只停定时器，cron 用占位值）。
 	{
 		h := newPlanHarness(t, 60)
 		r := h.reconciler()
 		planBaselineSettle(t, h, r)
-		h.cloud.dispatches = nil
+		h.cloud.resetOperations()
 		done, err := r.DisableAll(context.Background())
 		require.NoError(t, err)
 		require.True(t, done)
-		dispatched = append(dispatched, planDispatchScenario{Name: "disable_all", Dispatches: h.cloud.dispatches})
+		dispatched["disable_all"] = h.cloud.operations()
 	}
 
-	// 升级代码：计划生效后换了代码包，落后的函数只提交换代码（不带环境、不动定时器）。
+	// 升级代码：计划生效后上传了新代码包，落后的函数只换代码（不带环境、不动定时器）。
 	{
 		h := newPlanHarness(t, 60)
 		r := h.reconciler()
 		planBaselineSettle(t, h, r)
-		for name, patch := range h.cloud.patches {
-			h.cloud.nodes[name] = scfinvoker.FunctionInstance{InstanceID: name, PackageID: "pkg-old", Metadata: map[string]any{
-				"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
-				"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
-				"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
-			}}
-		}
-		h.cloud.dispatches = nil
-		r.Deploy.PackageID = "pkg-new"
+		h.cloud.resetOperations()
+		h.cloud.setPackages("pkg", "pkg-new")
 		h.now = h.now.Add(2 * time.Hour)
 		require.NoError(t, h.reconcile(r))
-		dispatched = append(dispatched, planDispatchScenario{Name: "upgrade_code", Dispatches: h.cloud.dispatches})
+		h.waitOps(r)
+		dispatched["upgrade_code"] = h.cloud.operations()
 	}
 
-	// 补采函数：先创建（不带定时器与采集计划，预留并发 5 份内存），换代码包后升级，调用方密钥轮换后删掉重建。
+	// 补采函数：先创建（不带定时器与采集计划，预留并发 5 份内存），换代码包后升级，调用方密钥轮换后按新身份改写。
 	{
 		h := newPlanHarness(t, 60)
 		r := h.reconciler()
 		_, err := r.EnsureBackfillFunction(context.Background(), "spot")
 		require.NoError(t, err)
-		r.Deploy.PackageID = "pkg-new"
+		h.cloud.setPackages("pkg", "pkg-new")
 		h.now = h.now.Add(time.Minute)
 		_, err = r.EnsureBackfillFunction(context.Background(), "spot")
 		require.NoError(t, err)
@@ -356,20 +479,22 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		h.now = h.now.Add(time.Minute)
 		_, err = r.EnsureBackfillFunction(context.Background(), "spot")
 		require.NoError(t, err)
-		dispatched = append(dispatched, planDispatchScenario{Name: "backfill_function", Dispatches: h.cloud.dispatches})
+		dispatched["backfill_function"] = h.cloud.operations()
+		spec := h.cloud.operations()[0].Spec
+		require.Nil(t, spec.Timer)
+		require.Equal(t, int64(BackfillReservedConcurrency*64), spec.ReservedMem)
+		require.Equal(t, int64(320), h.mustFunction(BackfillFunctionName("crypto", "spot", "ap-nanjing")).ReservedMem)
 	}
 
-	for _, scenario := range scenarios {
-		require.NotEmpty(t, scenario.Plans, scenario.Name)
-		for _, plan := range scenario.Plans {
-			require.NotEmpty(t, plan, scenario.Name)
-		}
-	}
-	for _, scenario := range dispatched {
-		require.NotEmpty(t, scenario.Dispatches, scenario.Name)
-	}
 	planBaselineCompare(t, "plan_environment.golden.json", scenarios, "函数环境、过渡或最终计划、cron 与基线不一致")
-	planBaselineCompare(t, "plan_dispatch.golden.json", dispatched, "对账器实际提交给云端的请求（创建项、各阶段的运行配置、停用、升级、补采函数）与基线不一致")
+	golden := loadDispatchGolden(t)
+	require.Len(t, golden, len(dispatched))
+	for name, calls := range dispatched {
+		want := planPushesFromGolden(t, golden[name])
+		got := planPushesFromCalls(calls)
+		require.NotEmpty(t, got, name)
+		require.Equal(t, want, got, "场景 %s：对账器在各时刻要各函数成为的样子与 T0 的下发金样不一致", name)
+	}
 }
 
 // planBaselineSymbols 让永续标签落在永续市场上（共用夹具 planSymbolsStub 的标签一律是现货）。

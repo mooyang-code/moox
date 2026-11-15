@@ -83,7 +83,7 @@ func TestExecutionBinaryDependenciesMatchBaseline(t *testing.T) {
 // CloudFunction 与 Admin 的协议和客户端。
 // 不写裸的 cloudfunction：云函数程序引的第三方包 github.com/tencentyun/scf-go-lib/cloudfunction 是合法依赖。
 var controlPlanePackages = []string{
-	"/modules/collector/internal/store", "/modules/collector/internal/fetchplan", "/modules/collector/internal/scfinvoker",
+	"/modules/collector/internal/store", "/modules/collector/internal/fetchplan",
 	"/modules/collector/internal/egressbalance", "/modules/collector/internal/cloud", "/modules/cloudfunction", "/modules/admin/", "gorm.io/", "sqlite",
 }
 

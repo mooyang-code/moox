@@ -3,11 +3,14 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	"github.com/mooyang-code/moox/modules/collector/internal/adminrpc"
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud"
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud/tencentscf"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/egressbalance"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
@@ -19,7 +22,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	collectorresult "github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -60,20 +62,28 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	if err != nil {
 		return fmt.Errorf("initialize snapshot registrar: %w", err)
 	}
-	invoker := scfinvoker.New(scfinvoker.Config{Gateway: process.gateway})
+	admin := adminrpc.New(process.gateway)
+	if err := tencentscf.ConfigureRateLimits(cfg.Cloud.TencentSCF.APIRateLimits); err != nil {
+		return fmt.Errorf("cloud.tencent_scf.api_rate_limits: %w", err)
+	}
+	// 腾讯云直接在 Collector 里调：云账号密钥经网关读 Admin 的 GetCloudCredential，创建或更新采集函数时补齐 CLS 上报环境。
+	credentials := &cloud.GatewayCredentials{Gateway: process.gateway}
+	functions := cloud.NewFunctions(dbm, credentials, cloud.NewCLSProvisioner(cfg.Cloud.CLS, nil))
+	packages := cloud.NewPackages(dbm, credentials)
+	backend := cloudBackend{TencentFunctions: functions, packages: packages}
 	source := storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway))
 	operations := make(chan struct{}, cfg.SCFPlan.MaxConcurrentOperations)
 	auth, err := marketstorage.ResolveStorageAuthInfo(marketstorage.InstTypeSPOT)
 	if err != nil {
 		return fmt.Errorf("resolve storage auth: %w", err)
 	}
-	var reconcilers sync.Map
+	reconcilers := &fetchplan.Reconcilers{}
 	var autoScans sync.Map
 	checker := &klinecheck.Checker{Timeline: dbm.SeriesTimeline(), Rows: storageio.NewGatewayClient(process.gateway), Auth: auth, Absences: dbm.Backfill(), Fields: marketwiring.FieldOffers()}
 	// 应有时间点与函数侧同一套过滤：只有该市场此频率的交易桶才应有 K 线。
 	checker.Calendar = markets.TradingBar
 	backfiller := &klinecheck.Backfiller{
-		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: scfBackfillInvoker{client: invoker}, BaseCtx: process.ctx, Refill: true,
+		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: reconcilers, BaseCtx: process.ctx, Refill: true,
 		Paused: func(ctx context.Context, spaceID string) (bool, error) {
 			space := strings.ToLower(spaceID)
 			manual, err := dbm.FetchPlans().ManuallyPausedSpaces(ctx)
@@ -100,8 +110,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			return klinecheck.LocalMaxInFlight
 		},
 		Functions: func(spaceID string) klinecheck.FunctionProvider {
-			if value, ok := reconcilers.Load(spaceID); ok {
-				return value.(*fetchplan.PlanReconciler)
+			if reconciler := reconcilers.Get(spaceID); reconciler != nil {
+				return reconciler
 			}
 			return nil
 		},
@@ -114,9 +124,16 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		// 补采作业结束后立刻把分块的补写通知封存成事件，不等维护轮或合成的定时器：因子引擎和合成都订阅这个事件。
 		backfiller.FlushNotices = bus.notices.Flush
 	}
-	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })
+	// 退出时先等补采协程，再取消并等待全部空间在跑的云端操作（之后不再接受新操作）。
+	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil }, func() error { reconcilers.Close(); return nil })
 	svc.SetKlineOps(backfiller)
-	svc.SetActivityLogger(invoker)
+	svc.SetActivityLogger(admin)
+	svc.SetCloud(collectsvc.CloudDeps{
+		Accounts: cloud.NewAccounts(dbm), Packages: packages, Reconcilers: reconcilers,
+		AccountInUse: func(ctx context.Context, accountID string) error {
+			return cfg.cloudAccountInUse(ctx, functions, accountID)
+		},
+	})
 	manager := &fetchplan.PlanManager{
 		Configured: managed,
 		Spaces: func(ctx context.Context) ([]string, error) {
@@ -125,7 +142,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			if err != nil {
 				return nil, err
 			}
-			active, err := invoker.ListActiveSpaceIDs(ctx)
+			active, err := admin.ListActiveSpaceIDs(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -169,8 +186,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				Groups: &fetchplan.GroupBuilder{
 					Tasks: dbm.Tasks(), Symbols: source, ResolveSourceID: marketwiring.DefaultSourceID, ResolveSymbol: marketwiring.ResolveSymbol,
 				},
-				Store: dbm.FetchPlans(), Storage: registrar, Cloud: invoker, Access: cfg.scfPlanAccessEnvironment, Lateness: results,
-				Activity: invoker, Metrics: metrics, Operations: operations,
+				Store: dbm.FetchPlans(), Storage: registrar, Cloud: backend, Access: cfg.scfPlanAccessEnvironment, Lateness: results,
+				Activity: admin, Metrics: metrics, Operations: operations, OtherSpaces: otherSCFSpaces(cfg.SCFMarkets, spaceID),
 				Workers:      dbm.StreamWorkers(),
 				StreamOnline: func(ctx context.Context) (bool, error) { return stream.Online(ctx, spaceID) },
 				// 进程启动不满一个心跳超时不按离线放行：重启后心跳表里的时间是旧的。
@@ -241,6 +258,9 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	if !process.launch(func() { manager.Run(process.ctx) }) {
 		return fmt.Errorf("collector runtime is closing")
 	}
+	if !process.launch(func() { runPackageCleanup(process.ctx, packages) }) {
+		return fmt.Errorf("collector runtime is closing")
+	}
 	log.Infof("collector fetch plan reconciliation enabled spaces=%s", strings.Join(control.managed(process.ctx), ","))
 	return nil
 }
@@ -274,12 +294,74 @@ func calendarPreflight(spaceID string) func(context.Context) error {
 	}
 }
 
-// scfBackfillInvoker 让云函数客户端满足补采的同步调用接口：固定用同步调用（等函数返回）。
-type scfBackfillInvoker struct{ client *scfinvoker.Client }
+// cloudBackend 是对账器用到的云端能力：云函数操作加按包名取最新的可用代码包。
+type cloudBackend struct {
+	*cloud.TencentFunctions
+	packages *cloud.Packages
+}
 
-func (i scfBackfillInvoker) Invoke(ctx context.Context, spaceID, functionName string, event map[string]any) (marketfetch.InvocationResult, error) {
-	result, err := i.client.Invoke(ctx, spaceID, functionName, event, cloudfunctionpb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
-	return marketfetch.InvocationResult(result), err
+func (b cloudBackend) LatestPackage(ctx context.Context, spaceID, packageName string) (*cloud.Package, error) {
+	return b.packages.Latest(ctx, spaceID, packageName)
+}
+
+// otherSCFSpaces 返回除 spaceID 以外配置了云函数的空间各自的市场与地域：对账器据此排除别的空间的函数名。
+func otherSCFSpaces(markets map[string]map[string][]string, spaceID string) map[string]map[string][]string {
+	out := map[string]map[string][]string{}
+	for space, byMarket := range markets {
+		if !strings.EqualFold(space, spaceID) {
+			out[space] = byMarket
+		}
+	}
+	return out
+}
+
+// cloudAccountInUse 判断云账号还在不在用：被 scf_plan.cloud_account_id 引用，或者云上（配置过的地域里）还有它建的采集函数。
+// 账号删掉后这些函数没人管，定时器会一直开着，所以有函数时也拒绝；读不了云上时同样拒绝。代码包由 cloud.Accounts.Delete 检查。
+func (c *Config) cloudAccountInUse(ctx context.Context, functions cloud.Functions, accountID string) error {
+	if strings.EqualFold(strings.TrimSpace(c.SCFPlan.CloudAccountID), strings.TrimSpace(accountID)) {
+		return fmt.Errorf("%w：scf_plan.cloud_account_id 引用了它", cloud.ErrAccountInUse)
+	}
+	regions := make([]string, 0, len(c.SCFRegions))
+	for region := range c.SCFRegions {
+		regions = append(regions, region)
+	}
+	sort.Strings(regions)
+	for _, region := range regions {
+		refs, err := functions.List(ctx, accountID, region, "moox-fetch")
+		if err != nil {
+			return fmt.Errorf("%w：无法确认 %s 里没有它建的函数：%v", cloud.ErrAccountInUse, region, err)
+		}
+		if len(refs) > 0 {
+			return fmt.Errorf("%w：%s 里还有 %d 个它建的函数（例如 %s），先用 moox-cli collector function delete 删掉", cloud.ErrAccountInUse, region, len(refs), refs[0].Name)
+		}
+	}
+	return nil
+}
+
+// packageCleanupInterval 是代码包清理的间隔：每个（空间、包名）只留最新 3 个可用包，上传超过 6 小时仍没完成的删除。
+const packageCleanupInterval = 24 * time.Hour
+
+// runPackageCleanup 每天清理一次代码包（启动 10 分钟后第一次）。COS 删除可能较慢，不放进每分钟一轮的维护任务。
+func runPackageCleanup(ctx context.Context, packages *cloud.Packages) {
+	timer := time.NewTimer(10 * time.Minute)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		result, err := packages.Cleanup(cleanupCtx)
+		cancel()
+		switch {
+		case err != nil:
+			log.WarnContextf(ctx, "collector code package cleanup failed: %v", err)
+		case len(result.Deleted) > 0 || len(result.Failed) > 0:
+			log.InfoContextf(ctx, "collector code package cleanup deleted=%s failed=%s", strings.Join(result.Deleted, ","), strings.Join(result.Failed, "; "))
+		}
+		timer.Reset(packageCleanupInterval)
+	}
 }
 
 // backfillExecutor 按任务的采集方式选补采执行端：scf 走补采函数，stream 与 local 调 collector-stream 里的本地执行端。

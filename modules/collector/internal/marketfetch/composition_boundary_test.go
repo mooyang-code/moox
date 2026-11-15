@@ -12,7 +12,7 @@ import (
 // controlPlaneImports 是执行面（云函数程序、collector-stream 里跑的代码）不得引入的包：
 // 控制面、Collector 的库与 SQLite 驱动、CloudFunction 的协议与客户端。
 var controlPlaneImports = []string{
-	"/internal/store", "/internal/fetchplan", "/internal/scfinvoker", "/internal/egressbalance",
+	"/internal/store", "/internal/fetchplan", "/internal/cloud", "/internal/egressbalance",
 	"cloudfunctiongen", "gorm.io/", "modernc.org/sqlite",
 }
 

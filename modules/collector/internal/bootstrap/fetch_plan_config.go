@@ -23,18 +23,16 @@ import (
 // 每个空间与市场使用的地域放在 scf_markets，函数访问 Access 的私网入口沿用 scf_access_routes。
 type SCFPlanConfig struct {
 	CloudAccountID string `yaml:"cloud_account_id"`
-	// PackageName 非空时每轮解析该名称的最新可用代码包（上传新版本后函数自动升级）；PackageID 固定某个代码包，
-	// 两者二选一，推荐 PackageName。
+	// PackageName 是代码包的包名：每轮取这个包名最新的可用代码包（上传新版本后函数自动升级）。
 	PackageName string `yaml:"package_name"`
-	PackageID   string `yaml:"package_id"`
 	Namespace   string `yaml:"namespace"`
 	MemoryMB    int    `yaml:"memory_mb"`
 	// BaseEnvironmentFile 是可选的额外非受管环境（JSON 对象），含密钥时权限应为 0600。空间身份与 Storage 应用密钥
-	// 由 Collector 自己生成（密钥由控制机身份里的 Storage 主密钥派生），日志服务由 FunctionInstance 创建函数时补齐，
+	// 由 Collector 自己生成（密钥由控制机身份里的 Storage 主密钥派生），日志服务在创建或更新函数时补齐，
 	// 所以通常不需要这个文件。
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	SymbolsPerFunction  int    `yaml:"symbols_per_function"`
-	// MaxConcurrentOperations 限制各空间同时进行的 SCF 配置操作。
+	// MaxConcurrentOperations 限制各空间同时进行的云函数操作（建函数、改配置、换代码、设定时器、删除）。
 	MaxConcurrentOperations int `yaml:"max_concurrent_operations"`
 	// AssumedEgressIPs 是函数出口 IP 个数的估计（用 moox-cli collector function probe-egress 实测），只用于频控估算与告警。
 	AssumedEgressIPs int `yaml:"assumed_egress_ips"`
@@ -117,10 +115,9 @@ type SCFPlanSpaceConfig struct {
 	// EgressBalance 非空时在收盘后的空闲时段探测函数出口 IP，并重建共用 IP 的函数；只对 A 股有效。
 	EgressBalance *SCFPlanEgressBalance `yaml:"egress_balance"`
 	Fetch         *SCFPlanFetchConfig   `yaml:"fetch"`
-	// PackageName、PackageID、Namespace、BaseEnvironmentFile 为空表示沿用全局值。代码包按空间构建（带各自的市场配置），
+	// PackageName、Namespace、BaseEnvironmentFile 为空表示沿用全局值。代码包按空间构建（带各自的市场配置），
 	// 同时管理多个空间时每个空间必须有自己的代码包。
 	PackageName         string `yaml:"package_name"`
-	PackageID           string `yaml:"package_id"`
 	Namespace           string `yaml:"namespace"`
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	// Markets 是按市场的覆盖项（现货、合约的取数时刻与截止不同）。
@@ -340,14 +337,14 @@ func (c *Config) validateSCFPlan() error {
 	}
 	packages := map[string]string{}
 	for space := range c.SCFMarkets {
-		key, err := plan.packageKeyFor(space)
-		if err != nil {
-			return err
+		name := strings.TrimSpace(plan.packageNameFor(space))
+		if name == "" {
+			return fmt.Errorf("scf_plan: space %s needs package_name", space)
 		}
-		if other, dup := packages[key]; dup && len(c.SCFMarkets) > 1 {
-			return fmt.Errorf("scf_plan: spaces %s and %s share code package %s; every space needs its own package_name or package_id in scf_plan.spaces", other, space, key)
+		if other, dup := packages[name]; dup && len(c.SCFMarkets) > 1 {
+			return fmt.Errorf("scf_plan: spaces %s and %s share code package %s; every space needs its own package_name in scf_plan.spaces", other, space, name)
 		}
-		packages[key] = space
+		packages[name] = space
 	}
 	for space, override := range plan.Spaces {
 		if auto := override.AutoSize; auto != nil && (auto.TargetFetchMS < 500 || auto.TargetFetchMS > 10000 || auto.RequestMS < 50 || auto.RequestMS > auto.TargetFetchMS || auto.MinFunctions < 1 || auto.MinFunctions > 50) {
@@ -381,33 +378,11 @@ func (c *Config) validateSCFPlan() error {
 	return nil
 }
 
-func (c SCFPlanConfig) packageIDFor(spaceID string) string {
-	if override := c.Spaces[strings.ToLower(spaceID)]; override.PackageID != "" || override.PackageName != "" {
-		return override.PackageID
-	}
-	return c.PackageID
-}
-
 func (c SCFPlanConfig) packageNameFor(spaceID string) string {
-	if override := c.Spaces[strings.ToLower(spaceID)]; override.PackageID != "" || override.PackageName != "" {
+	if override := c.Spaces[strings.ToLower(spaceID)]; override.PackageName != "" {
 		return override.PackageName
 	}
 	return c.PackageName
-}
-
-// packageKeyFor 返回空间使用的代码包标识（包名或固定 ID），二者必须恰有一个。
-func (c SCFPlanConfig) packageKeyFor(spaceID string) (string, error) {
-	name, id := strings.TrimSpace(c.packageNameFor(spaceID)), strings.TrimSpace(c.packageIDFor(spaceID))
-	switch {
-	case name != "" && id != "":
-		return "", fmt.Errorf("scf_plan: space %s sets both package_name and package_id; keep exactly one", spaceID)
-	case name != "":
-		return "name:" + name, nil
-	case id != "":
-		return "id:" + id, nil
-	default:
-		return "", fmt.Errorf("scf_plan: space %s needs package_name (recommended) or package_id", spaceID)
-	}
 }
 
 // storageAuthSecretEnv 是控制机 Collector 进程里 Storage 主密钥的环境变量名。
@@ -465,7 +440,7 @@ func (c *Config) fetchPlanDeploy(spaceID string) (fetchplan.PlanDeploy, error) {
 		namespace = override.Namespace
 	}
 	return fetchplan.PlanDeploy{
-		CloudAccountID: c.SCFPlan.CloudAccountID, PackageID: c.SCFPlan.packageIDFor(spaceID), PackageName: c.SCFPlan.packageNameFor(spaceID), Namespace: namespace, MemoryMB: c.SCFPlan.MemoryMB,
+		CloudAccountID: c.SCFPlan.CloudAccountID, PackageName: c.SCFPlan.packageNameFor(spaceID), Namespace: namespace, MemoryMB: c.SCFPlan.MemoryMB,
 		BaseEnvironment: environment, Networks: c.SCFRegions, NamespaceCapacity: maxFunctionsPerNamespace,
 	}, nil
 }

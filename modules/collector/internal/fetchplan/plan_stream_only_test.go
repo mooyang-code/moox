@@ -6,33 +6,40 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud"
 	"github.com/stretchr/testify/require"
 )
 
-// noCloud 模拟没有云账号：所有云函数查询都失败。纯推送路径不能依赖它们。
-type noCloud struct{ *fakePlanCloud }
+// noCloud 模拟没有云账号：所有云函数的读写都失败。纯推送路径不能依赖它们。
+type noCloud struct{ *testCloud }
 
 var errNoCloudAccount = errors.New("no cloud account")
 
-func (noCloud) ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.FunctionInstance, error) {
+func (noCloud) LatestPackage(context.Context, string, string) (*cloud.Package, error) {
 	return nil, errNoCloudAccount
 }
 
-func (noCloud) ListTimerMarketFetchersFresh(context.Context, string) ([]scfinvoker.FunctionInstance, error) {
+func (noCloud) Describe(context.Context, cloud.FunctionRef) (cloud.FunctionState, error) {
+	return cloud.FunctionState{}, errNoCloudAccount
+}
+
+func (noCloud) DescribeCode(context.Context, cloud.FunctionRef) (cloud.FunctionState, error) {
+	return cloud.FunctionState{}, errNoCloudAccount
+}
+
+func (noCloud) List(context.Context, string, string, string) ([]cloud.FunctionRef, error) {
 	return nil, errNoCloudAccount
 }
 
-func (noCloud) ListUnreadyMarketFetchers(context.Context, string, string) ([]scfinvoker.FunctionInstance, error) {
-	return nil, errNoCloudAccount
-}
+func (noCloud) Ensure(context.Context, cloud.FunctionSpec) error { return errNoCloudAccount }
 
-func (noCloud) LatestPackage(context.Context, string, string) (string, error) {
-	return "", errNoCloudAccount
+func (noCloud) SetTimer(context.Context, cloud.FunctionRef, cloud.Timer, string) error {
+	return errNoCloudAccount
 }
 
 func TestStreamOnlyPlanAppliesWithoutCloudFunctions(t *testing.T) {
 	h := newIngestHarness(t, ingestStream, "1m")
+	h.cloud.setPackages()
 	h.r.Cloud = noCloud{h.cloud}
 	h.r.Deploy = PlanDeploy{}
 	h.r.Options.Markets = nil
@@ -43,6 +50,8 @@ func TestStreamOnlyPlanAppliesWithoutCloudFunctions(t *testing.T) {
 		require.False(t, function.IsSCF(), "不配云函数时计划里只有推送和本地执行项")
 	}
 	require.Empty(t, h.r.Issue())
+	require.Empty(t, h.cloudTimers(), "云上没有函数")
+	require.Empty(t, h.cloud.operations(), "没有任何云端操作")
 }
 
 func TestFirstStreamPlanWaitsForCollectorStream(t *testing.T) {

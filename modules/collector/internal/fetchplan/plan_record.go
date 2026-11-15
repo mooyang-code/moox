@@ -55,7 +55,7 @@ type PlanFunctionChange struct {
 	OldCron  string            `json:"old_cron,omitempty"`
 	New      *marketfetch.Plan `json:"new,omitempty"`
 	NewCron  string            `json:"new_cron,omitempty"`
-	// Push：需要向云端下发过渡环境；Create：函数尚不存在，需要先创建。
+	// Push：需要向云端下发过渡环境；Create：已生效计划里没有这个云函数（计划推进时 Ensure 会建出它），选 P 时提前量用 6 分钟。
 	Push   bool `json:"push,omitempty"`
 	Create bool `json:"create,omitempty"`
 }
@@ -72,7 +72,6 @@ type FetchPlanContent struct {
 // FetchPlanProgress 是 c_progress 的内容：各步的确认状态。
 type FetchPlanProgress struct {
 	Registered   map[string]bool `json:"registered,omitempty"`
-	Created      map[string]bool `json:"created,omitempty"`
 	Transitioned map[string]bool `json:"transitioned,omitempty"`
 	Finalized    map[string]bool `json:"finalized,omitempty"`
 	LoggedStart  bool            `json:"logged_start,omitempty"`

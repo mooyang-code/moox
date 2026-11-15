@@ -37,13 +37,13 @@ func seedTimerFunction(fake *baselineSCF, status, packageID string, environment 
 		env[key] = value
 	}
 	env[packageIDKey] = packageID
-	fake.seed(baselineRef, &baselineFunction{
-		info: tencentscf.FunctionInfo{
+	fake.Seed(baselineRef, &baselineFunction{
+		Info: tencentscf.FunctionInfo{
 			Status: status, Runtime: "Go1", Type: "Event", MemorySize: 64, Timeout: 60, MaxInstanceConcurrency: 1,
 			PublicNetStatus: "ENABLE", VpcID: "vpc-fake", SubnetID: "subnet-fake", Environment: env,
 		},
-		handler: "main", cosBucket: "fake-bucket", cosRegion: "ap-guangzhou", cosObject: "packages/collector-" + strings.TrimPrefix(packageID, "moox-collector_") + ".zip",
-		timer: timer, asyncRetry: &baselineAsyncRetry{RetryNum: 0, MsgTTL: 60},
+		Handler: "main", COSBucket: "fake-bucket", COSRegion: "ap-guangzhou", COSObject: "packages/collector-" + strings.TrimPrefix(packageID, "moox-collector_") + ".zip",
+		Timer: timer, AsyncRetry: &baselineAsyncRetry{RetryNum: 0, MsgTTL: 60},
 	})
 }
 
@@ -53,7 +53,7 @@ func enabledTimer(cron string) *tencentscf.TimerTriggerInfo {
 
 func functionState(t *testing.T, fake *baselineSCF, ref tencentscf.FunctionRef) baselineFunctionState {
 	t.Helper()
-	_, state := fake.snapshot()
+	_, state := fake.Snapshot()
 	function, ok := state.Functions[baselineKey(ref)]
 	require.True(t, ok, "云上没有函数 %s", baselineKey(ref))
 	return function
@@ -63,7 +63,7 @@ func functionState(t *testing.T, fake *baselineSCF, ref tencentscf.FunctionRef) 
 func TestEnsureCreatesMissingFunctionAndIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
-	fake.pendingReads = 2
+	fake.PendingReads = 2
 	functions := newTestFunctions(t, fake)
 	spec := finalSpec("v1")
 	require.NoError(t, functions.Ensure(ctx, spec))
@@ -71,11 +71,11 @@ func TestEnsureCreatesMissingFunctionAndIsIdempotent(t *testing.T) {
 	require.Equal(t, "Active", function.Status)
 	require.Equal(t, baselineOldPackage, function.Environment[packageIDKey])
 	require.True(t, function.Timer.Enabled)
-	require.Empty(t, fake.rejectedWrites())
+	require.Empty(t, fake.RejectedWrites())
 
-	fake.resetWrites()
+	fake.ResetWrites()
 	require.NoError(t, functions.Ensure(ctx, spec))
-	writes, _ := fake.snapshot()
+	writes, _ := fake.Snapshot()
 	require.Empty(t, writes, "云上已经和期望一致，第二次调用不能有写请求")
 }
 
@@ -84,22 +84,22 @@ func TestEnsureCreatesMissingFunctionAndIsIdempotent(t *testing.T) {
 func TestEnsureTakesOverSameNameFunctionWithDifferentPackageAndEnvironment(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
-	fake.pendingReads = 1
+	fake.PendingReads = 1
 	old := timerEnvironment(`{"v":1,"plan":"old-deploy"}`, "hash-old", "7", "scf-key-0")
 	old["MOOX_CREATE_RESERVATION_ID"] = "old-reservation"
 	old["MOOX_MARKET_FETCH_DNS_HASH"] = "retired"
 	old["OPERATOR_EXTRA"] = "kept"
 	seedTimerFunction(fake, "Active", "moox-collector_v0", old, &tencentscf.TimerTriggerInfo{Name: timerTriggerName, Type: "timer", Cron: "0 * * * * * *", Enabled: true, AvailableStatus: "Available", Qualifier: timerTriggerQualifier, Message: timerTriggerMessage})
-	fake.mutate(baselineRef, func(function *baselineFunction) {
-		function.info.Timeout, function.info.VpcID, function.info.SubnetID = 30, "vpc-old", "subnet-old"
-		function.info.MemorySize, function.info.MaxInstanceConcurrency, function.info.PublicNetStatus = 128, 0, "DISABLE"
+	fake.Mutate(baselineRef, func(function *baselineFunction) {
+		function.Info.Timeout, function.Info.VpcID, function.Info.SubnetID = 30, "vpc-old", "subnet-old"
+		function.Info.MemorySize, function.Info.MaxInstanceConcurrency, function.Info.PublicNetStatus = 128, 0, "DISABLE"
 		// 旧函数的异步重试按腾讯云默认（没有显式配置）。
-		function.asyncRetry = nil
+		function.AsyncRetry = nil
 	})
 	functions := newTestFunctions(t, fake)
 	require.NoError(t, functions.Ensure(ctx, finalSpec("v2")))
 
-	writes, _ := fake.snapshot()
+	writes, _ := fake.Snapshot()
 	assertBaselineOrder(t, writes, baselineKey(baselineRef), baselineNewPackage)
 	require.Equal(t, -1, baselineIndex(writes, "DeleteFunction "), "接管不删函数")
 	require.Equal(t, -1, baselineIndex(writes, "CreateFunction "), "接管不重建函数")
@@ -119,7 +119,7 @@ func TestEnsureTakesOverSameNameFunctionWithDifferentPackageAndEnvironment(t *te
 	require.True(t, function.NativeCLSCleared, "紧跟换代码的那次改配置清掉腾讯云自带的日志投递")
 	require.Equal(t, "5 * * * * * *", function.Timer.Cron)
 	require.Equal(t, &baselineAsyncRetry{RetryNum: 0, MsgTTL: 60}, function.AsyncRetry)
-	require.Empty(t, fake.rejectedWrites())
+	require.Empty(t, fake.RejectedWrites())
 }
 
 // 定时器被人停掉或删掉：Ensure 把它改回期望的样子，环境与代码不动。
@@ -133,7 +133,7 @@ func TestEnsureRestoresStoppedOrDeletedTimer(t *testing.T) {
 			fake := newBaselineSCF()
 			seedTimerFunction(fake, "Active", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), timer)
 			require.NoError(t, newTestFunctions(t, fake).Ensure(ctx, finalSpec("v1")))
-			writes, _ := fake.snapshot()
+			writes, _ := fake.Snapshot()
 			require.Len(t, writes, 1, "只改定时器")
 			require.True(t, strings.HasPrefix(writes[0], "EnsureTimerTrigger "))
 			require.True(t, functionState(t, fake, baselineRef).Timer.Enabled)
@@ -145,10 +145,10 @@ func TestEnsureRestoresStoppedOrDeletedTimer(t *testing.T) {
 func TestEnsureDeletesCreateFailedFunctionThenRecreatesIt(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
-	fake.pendingReads = 1
+	fake.PendingReads = 1
 	seedTimerFunction(fake, "CreateFailed", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"broken"}`, "hash-broken", "1", "scf-key-0"), nil)
 	require.NoError(t, newTestFunctions(t, fake).Ensure(ctx, finalSpec("v1")))
-	writes, _ := fake.snapshot()
+	writes, _ := fake.Snapshot()
 	deleteAt, createAt := baselineIndex(writes, "DeleteFunction "), baselineIndex(writes, "CreateFunction ")
 	require.GreaterOrEqual(t, deleteAt, 0)
 	require.Greater(t, createAt, deleteAt, "先删再建")
@@ -156,7 +156,7 @@ func TestEnsureDeletesCreateFailedFunctionThenRecreatesIt(t *testing.T) {
 	require.Equal(t, "Active", function.Status)
 	require.Equal(t, "hash-final", function.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
 	require.True(t, function.Timer.Enabled)
-	require.Empty(t, fake.rejectedWrites())
+	require.Empty(t, fake.RejectedWrites())
 }
 
 // 状态是 UpdateFailed：不删，直接重做更新（即使环境看起来已经对了），成功后回到 Active。
@@ -164,16 +164,16 @@ func TestEnsureDeletesCreateFailedFunctionThenRecreatesIt(t *testing.T) {
 func TestEnsureRedoesUpdateForUpdateFailedFunction(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
-	fake.pendingReads = 1
+	fake.PendingReads = 1
 	seedTimerFunction(fake, "UpdateFailed", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
 	client := newScriptedSCF(fake)
-	client.acceptUpdateFailed = true
+	client.AcceptUpdateFailed = true
 	require.NoError(t, newTestFunctions(t, client).Ensure(ctx, finalSpec("v1")))
-	require.Zero(t, client.count("DeleteFunction"), "UpdateFailed 不删函数")
-	require.Zero(t, client.count("CreateFunction"))
-	require.Equal(t, 1, client.count("UpdateFunctionConfiguration"), "重做一次更新")
+	require.Zero(t, client.Count("DeleteFunction"), "UpdateFailed 不删函数")
+	require.Zero(t, client.Count("CreateFunction"))
+	require.Equal(t, 1, client.Count("UpdateFunctionConfiguration"), "重做一次更新")
 	require.Equal(t, "Active", functionState(t, fake, baselineRef).Status)
-	require.Empty(t, fake.rejectedWrites())
+	require.Empty(t, fake.RejectedWrites())
 }
 
 // 换代码失败：环境里的包 ID 仍是旧的，定时器没被动过。
@@ -182,52 +182,52 @@ func TestEnsureCodeUpdateFailureLeavesPackageIDAndTimerUntouched(t *testing.T) {
 	fake := newBaselineSCF()
 	seedTimerFunction(fake, "Active", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), &tencentscf.TimerTriggerInfo{Name: timerTriggerName, Type: "timer", Cron: "5 * * * * * *", Enabled: false, AvailableStatus: "Available", Qualifier: timerTriggerQualifier, Message: timerTriggerMessage})
 	client := newScriptedSCF(fake)
-	client.codeErrs = []error{tcerrors.NewTencentCloudSDKError("InvalidParameterValue.Code", "代码包不可用", "req-1")}
+	client.CodeErrs = []error{tcerrors.NewTencentCloudSDKError("InvalidParameterValue.Code", "代码包不可用", "req-1")}
 	err := newTestFunctions(t, client).Ensure(ctx, finalSpec("v2"))
 	require.ErrorContains(t, err, "换代码失败")
 	function := functionState(t, fake, baselineRef)
 	require.Equal(t, baselineOldPackage, function.Environment[packageIDKey])
 	require.False(t, function.Timer.Enabled, "定时器没被动过")
-	require.Zero(t, client.count("UpdateFunctionConfiguration"))
-	require.Zero(t, client.count("EnsureTimerTrigger"))
-	require.Equal(t, 1, client.count("UpdateFunctionCode"), "参数错误不重试")
+	require.Zero(t, client.Count("UpdateFunctionConfiguration"))
+	require.Zero(t, client.Count("EnsureTimerTrigger"))
+	require.Equal(t, 1, client.Count("UpdateFunctionCode"), "参数错误不重试")
 }
 
 // 建到一半被取消（建函数请求已发出、函数还在 Creating）：再调一次能续上，函数只建一次。
 func TestEnsureResumesAfterCancellationMidCreate(t *testing.T) {
 	fake := newBaselineSCF()
-	fake.pendingReads = 3
+	fake.PendingReads = 3
 	client := newScriptedSCF(fake)
 	ctx, cancel := context.WithCancel(context.Background())
-	client.afterCreate = cancel
+	client.AfterCreate = cancel
 	functions := newTestFunctions(t, client)
 	err := functions.Ensure(ctx, finalSpec("v1"))
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.Canceled)
 
-	client.afterCreate = nil
+	client.AfterCreate = nil
 	require.NoError(t, functions.Ensure(context.Background(), finalSpec("v1")))
-	require.Equal(t, 1, client.count("CreateFunction"), "第二次接着做，不重复建")
+	require.Equal(t, 1, client.Count("CreateFunction"), "第二次接着做，不重复建")
 	function := functionState(t, fake, baselineRef)
 	require.Equal(t, "Active", function.Status)
 	require.True(t, function.Timer.Enabled)
 	require.Equal(t, &baselineAsyncRetry{RetryNum: 0, MsgTTL: 60}, function.AsyncRetry, "第一次没来得及设的异步重试在第二次补上")
-	require.Empty(t, fake.rejectedWrites())
+	require.Empty(t, fake.RejectedWrites())
 }
 
 // 设定时器那一步看到空间正在暂停：期望启用的定时器设成停用；暂停信号在第 4 步期间才翻过来也算。
 func TestEnsureDisablesTimerWhenSpaceIsPausing(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
-	fake.pendingReads = 1
+	fake.PendingReads = 1
 	seedTimerFunction(fake, "Active", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"transition"}`, "hash-transition", "40", "scf-key-1"), &tencentscf.TimerTriggerInfo{Name: timerTriggerName, Type: "timer", Cron: "0 * * * * * *", Enabled: false, AvailableStatus: "Available", Qualifier: timerTriggerQualifier, Message: timerTriggerMessage})
 	client := newScriptedSCF(fake)
 	var pausing atomic.Bool
-	client.beforeConfig = func() { pausing.Store(true) }
+	client.BeforeConfig = func() { pausing.Store(true) }
 	spec := finalSpec("v1")
 	spec.Pausing = pausing.Load
 	require.NoError(t, newTestFunctions(t, client).Ensure(ctx, spec))
-	require.Equal(t, 1, client.count("UpdateFunctionConfiguration"), "第 4 步照常改环境")
+	require.Equal(t, 1, client.Count("UpdateFunctionConfiguration"), "第 4 步照常改环境")
 	function := functionState(t, fake, baselineRef)
 	require.Equal(t, "hash-final", function.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
 	require.False(t, function.Timer.Enabled, "空间正在暂停，定时器不能被打开")
@@ -245,7 +245,7 @@ func TestSetTimerRefusesToEnableFunctionOnOutdatedPackage(t *testing.T) {
 		err := functions.SetTimer(ctx, timerRef, Timer{Cron: "5 * * * * * *", Enabled: true}, want)
 		require.ErrorIs(t, err, ErrPackageBehind)
 	}
-	writes, _ := fake.snapshot()
+	writes, _ := fake.Snapshot()
 	require.Empty(t, writes)
 	require.False(t, functionState(t, fake, baselineRef).Timer.Enabled)
 
@@ -263,10 +263,10 @@ func TestEnsureReportsQuotaExceededSeparately(t *testing.T) {
 	ctx := context.Background()
 	for _, code := range []string{"LimitExceeded.Function", "LimitExceeded.Namespace"} {
 		client := newScriptedSCF(newBaselineSCF())
-		client.createErrs = []error{tcerrors.NewTencentCloudSDKError(code, "超过上限", "req-1")}
+		client.CreateErrs = []error{tcerrors.NewTencentCloudSDKError(code, "超过上限", "req-1")}
 		err := newTestFunctions(t, client).Ensure(ctx, finalSpec("v1"))
 		require.ErrorIs(t, err, ErrQuota, code)
-		require.Equal(t, 1, client.count("CreateFunction"), "配额超限不重试")
+		require.Equal(t, 1, client.Count("CreateFunction"), "配额超限不重试")
 	}
 	require.False(t, isQuotaError(tcerrors.NewTencentCloudSDKError("RequestLimitExceeded", "限频", "req-2")))
 	require.True(t, isTransientError(tcerrors.NewTencentCloudSDKError("RequestLimitExceeded", "限频", "req-2")))
@@ -277,15 +277,15 @@ func TestEnsureReportsQuotaExceededSeparately(t *testing.T) {
 func TestEnsureRetriesTransientErrorsOnly(t *testing.T) {
 	ctx := context.Background()
 	client := newScriptedSCF(newBaselineSCF())
-	client.getErrs = []error{errors.New("ClientError.NetworkError: connection reset by peer")}
+	client.GetErrs = []error{errors.New("ClientError.NetworkError: connection reset by peer")}
 	require.NoError(t, newTestFunctions(t, client).Ensure(ctx, finalSpec("v1")))
-	require.Equal(t, 1, client.count("CreateFunction"))
+	require.Equal(t, 1, client.Count("CreateFunction"))
 
 	client = newScriptedSCF(newBaselineSCF())
-	client.getErrs = []error{errors.New("AuthFailure.SignatureFailure: permission denied")}
+	client.GetErrs = []error{errors.New("AuthFailure.SignatureFailure: permission denied")}
 	require.ErrorContains(t, newTestFunctions(t, client).Ensure(ctx, finalSpec("v1")), "permission denied")
-	require.Equal(t, 1, client.count("GetFunction"))
-	require.Zero(t, client.count("CreateFunction"))
+	require.Equal(t, 1, client.Count("GetFunction"))
+	require.Zero(t, client.Count("CreateFunction"))
 }
 
 // 碰云端之前就被拒绝，一条写请求都不发：环境带 EventBus 项（采集函数不连 EventBus）、超时不是 60、环境超长、
@@ -317,7 +317,7 @@ func TestEnsureRejectsInvalidSpecsBeforeAnyWrite(t *testing.T) {
 			spec := finalSpec("v1")
 			test.mutate(&spec)
 			require.ErrorContains(t, newTestFunctions(t, fake).Ensure(ctx, spec), test.want)
-			writes, state := fake.snapshot()
+			writes, state := fake.Snapshot()
 			require.Empty(t, writes)
 			require.Empty(t, state.Functions)
 		})
@@ -331,7 +331,7 @@ func TestEnsureRejectsInvalidSpecsBeforeAnyWrite(t *testing.T) {
 	functions := newTestFunctions(t, fake)
 	functions.cls = nil
 	require.ErrorContains(t, functions.Ensure(ctx, finalSpec("v1")), "MOOX_CLS_")
-	writes, _ := fake.snapshot()
+	writes, _ := fake.Snapshot()
 	require.Empty(t, writes)
 }
 
@@ -344,24 +344,24 @@ func TestEnsureAndUpgradeRejectInvalidMergedEnvironmentWithoutWrites(t *testing.
 		want  string
 	}{
 		{"云上环境带 EventBus 项", func(function *baselineFunction) {
-			function.info.Environment["MOOX_EVENTBUS_NATS_URL"] = "tls://eventbus.example:4222"
+			function.Info.Environment["MOOX_EVENTBUS_NATS_URL"] = "tls://eventbus.example:4222"
 		}, "MOOX_EVENTBUS_NATS_URL"},
 		{"合并后环境超长", func(function *baselineFunction) {
-			function.info.Environment["OPERATOR_EXTRA"] = strings.Repeat("x", 4096)
+			function.Info.Environment["OPERATOR_EXTRA"] = strings.Repeat("x", 4096)
 		}, "4096"},
-		{"云上缺调用方密钥", func(function *baselineFunction) { delete(function.info.Environment, "MOOX_CALLER_KEY") }, "MOOX_CALLER_KEY"},
+		{"云上缺调用方密钥", func(function *baselineFunction) { delete(function.Info.Environment, "MOOX_CALLER_KEY") }, "MOOX_CALLER_KEY"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fake := newBaselineSCF()
 			seedTimerFunction(fake, "Active", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"transition"}`, "hash-transition", "40", "scf-key-1"), enabledTimer("0 * * * * * *"))
-			fake.mutate(baselineRef, test.drift)
-			_, before := fake.snapshot()
+			fake.Mutate(baselineRef, test.drift)
+			_, before := fake.Snapshot()
 			functions := newTestFunctions(t, fake)
 			if test.name != "云上缺调用方密钥" {
 				require.ErrorContains(t, functions.Ensure(ctx, finalSpec("v1")), test.want)
 			}
 			require.ErrorContains(t, functions.UpgradeCode(ctx, timerRef, baselinePackage("v2")), test.want)
-			writes, after := fake.snapshot()
+			writes, after := fake.Snapshot()
 			require.Empty(t, writes)
 			require.Equal(t, before, after)
 		})
@@ -373,12 +373,12 @@ func TestEnsureAndUpgradeRejectInvalidMergedEnvironmentWithoutWrites(t *testing.
 func TestUpgradeCodeKeepsRemoteEnvironmentIncludingSecrets(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
-	fake.pendingReads = 1
+	fake.PendingReads = 1
 	transition := timerEnvironment(`{"v":1,"plan":"transition"}`, "hash-transition", "40", "scf-key-1")
 	seedTimerFunction(fake, "Active", baselineOldPackage, transition, enabledTimer("0 * * * * * *"))
 	functions := newTestFunctions(t, fake)
 	require.NoError(t, functions.UpgradeCode(ctx, timerRef, baselinePackage("v2")))
-	writes, _ := fake.snapshot()
+	writes, _ := fake.Snapshot()
 	assertBaselineOrder(t, writes, baselineKey(baselineRef), baselineNewPackage)
 	require.Equal(t, -1, baselineIndex(writes, "EnsureTimerTrigger "), "升级不动定时器")
 	function := functionState(t, fake, baselineRef)
@@ -388,9 +388,9 @@ func TestUpgradeCodeKeepsRemoteEnvironmentIncludingSecrets(t *testing.T) {
 	}
 	require.Equal(t, strings.Repeat("b", 64), function.Environment["MOOX_CALLER_KEY"])
 
-	fake.resetWrites()
+	fake.ResetWrites()
 	require.NoError(t, functions.UpgradeCode(ctx, timerRef, baselinePackage("v2")))
-	writes, _ = fake.snapshot()
+	writes, _ = fake.Snapshot()
 	require.Empty(t, writes)
 }
 
@@ -399,12 +399,12 @@ func TestDescribeStripsSecretsAndReadsTimer(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
 	seedTimerFunction(fake, "Active", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
-	fake.mutate(baselineRef, func(function *baselineFunction) {
-		function.info.Environment["OPERATOR_API_TOKEN"] = "t"
-		function.info.Environment["LEGACY_DB_PASSWORD"] = "p"
-		function.info.Environment["LEGACY_CLIENT_SECRET"] = "s"
-		function.info.Environment["LEGACY_CREDENTIALS"] = "c"
-		function.reservedMem = 320
+	fake.Mutate(baselineRef, func(function *baselineFunction) {
+		function.Info.Environment["OPERATOR_API_TOKEN"] = "t"
+		function.Info.Environment["LEGACY_DB_PASSWORD"] = "p"
+		function.Info.Environment["LEGACY_CLIENT_SECRET"] = "s"
+		function.Info.Environment["LEGACY_CREDENTIALS"] = "c"
+		function.ReservedMem = 320
 	})
 	client := newScriptedSCF(fake)
 	functions := newTestFunctions(t, client)
@@ -424,12 +424,12 @@ func TestDescribeStripsSecretsAndReadsTimer(t *testing.T) {
 	require.Equal(t, &TimerState{Timer: Timer{Cron: "5 * * * * * *", Enabled: true}, AvailableStatus: "Available", Qualifier: "$LATEST", Message: timerTriggerMessage}, state.Timer)
 	require.False(t, state.ReadAt.IsZero())
 
-	reads := client.count("GetTimerTrigger")
+	reads := client.Count("GetTimerTrigger")
 	code, err := functions.DescribeCode(ctx, timerRef)
 	require.NoError(t, err)
 	require.Equal(t, baselineOldPackage, code.PackageID)
 	require.Nil(t, code.Timer)
-	require.Equal(t, reads, client.count("GetTimerTrigger"), "DescribeCode 只调 GetFunction")
+	require.Equal(t, reads, client.Count("GetTimerTrigger"), "DescribeCode 只调 GetFunction")
 
 	missing, err := functions.Describe(ctx, FunctionRef{AccountID: baselineAccount, Region: "ap-singapore", Namespace: "moox-collector", Name: "absent"})
 	require.NoError(t, err)
@@ -452,7 +452,7 @@ func TestListCoversShardNamespacesAndUnplannedFunctionsCanBeStoppedWithoutDeleti
 			env[key] = value
 		}
 		env[packageIDKey] = baselineOldPackage
-		fake.seed(ref, &baselineFunction{info: tencentscf.FunctionInfo{Status: "Active", Environment: env}, timer: enabledTimer("0 * * * * * *")})
+		fake.Seed(ref, &baselineFunction{Info: tencentscf.FunctionInfo{Status: "Active", Environment: env}, Timer: enabledTimer("0 * * * * * *")})
 	}
 	functions := newTestFunctions(t, fake)
 	refs, err := functions.List(ctx, baselineAccount, "ap-singapore", "moox-fetch-plan-crypto-")
@@ -464,7 +464,7 @@ func TestListCoversShardNamespacesAndUnplannedFunctionsCanBeStoppedWithoutDeleti
 	for _, ref := range refs {
 		require.NoError(t, functions.SetTimer(ctx, ref, Timer{}, ""))
 	}
-	_, state := fake.snapshot()
+	_, state := fake.Snapshot()
 	require.Len(t, state.Functions, 4, "只停定时器，不删函数")
 	for _, ref := range refs {
 		require.False(t, state.Functions[ref.Region+"/"+ref.Namespace+"/"+ref.Name].Timer.Enabled)
@@ -475,9 +475,9 @@ func TestListCoversShardNamespacesAndUnplannedFunctionsCanBeStoppedWithoutDeleti
 func TestConcurrentEnsureAndDeleteOnOneFunctionDoNotOverlap(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
-	fake.pendingReads = 1
+	fake.PendingReads = 1
 	client := newScriptedSCF(fake)
-	client.slowWrites = 5 * time.Millisecond
+	client.SlowWrites = 5 * time.Millisecond
 	functions := newTestFunctions(t, client)
 	var wg sync.WaitGroup
 	errs := make([]error, 6)
@@ -496,8 +496,8 @@ func TestConcurrentEnsureAndDeleteOnOneFunctionDoNotOverlap(t *testing.T) {
 	for _, err := range errs {
 		require.NoError(t, err)
 	}
-	require.Empty(t, client.overlapping(), "同一个函数的写请求并发了")
-	require.Empty(t, fake.rejectedWrites())
+	require.Empty(t, client.Overlapping(), "同一个函数的写请求并发了")
+	require.Empty(t, fake.RejectedWrites())
 }
 
 // 补采函数建到一半（预留并发还没设）就中断：下一次 Ensure 读回预留并发，补上；已经对的不再写。
@@ -506,14 +506,14 @@ func TestEnsureRepairsMissingBackfillReservedConcurrency(t *testing.T) {
 	fake := newBaselineSCF()
 	functions := newTestFunctions(t, fake)
 	require.NoError(t, functions.Ensure(ctx, backfillSpec()))
-	fake.mutate(baselineBackfillRef, func(function *baselineFunction) { function.reservedMem = 0 })
-	fake.resetWrites()
+	fake.Mutate(baselineBackfillRef, func(function *baselineFunction) { function.ReservedMem = 0 })
+	fake.ResetWrites()
 	require.NoError(t, functions.Ensure(ctx, backfillSpec()))
-	writes, _ := fake.snapshot()
+	writes, _ := fake.Snapshot()
 	require.Equal(t, []string{"PutReservedConcurrencyConfig ap-singapore/moox-collector/" + baselineBackfill + " mem=320"}, writes)
-	fake.resetWrites()
+	fake.ResetWrites()
 	require.NoError(t, functions.Ensure(ctx, backfillSpec()))
-	writes, _ = fake.snapshot()
+	writes, _ = fake.Snapshot()
 	require.Empty(t, writes)
 }
 
@@ -525,7 +525,7 @@ func TestDeleteIsIdempotent(t *testing.T) {
 	require.NoError(t, functions.Ensure(ctx, backfillSpec()))
 	require.NoError(t, functions.Delete(ctx, backfillRef))
 	require.NoError(t, functions.Delete(ctx, backfillRef))
-	_, state := fake.snapshot()
+	_, state := fake.Snapshot()
 	require.Empty(t, state.Functions)
 }
 
@@ -538,21 +538,21 @@ func TestInvokeChoosesInvocationType(t *testing.T) {
 	require.NoError(t, err)
 	_, err = functions.Invoke(ctx, backfillRef, map[string]any{"probe": true}, false)
 	require.NoError(t, err)
-	require.Equal(t, 1, client.count("Invoke:RequestResponse"))
-	require.Equal(t, 1, client.count("Invoke:Event"))
+	require.Equal(t, 1, client.Count("Invoke:RequestResponse"))
+	require.Equal(t, 1, client.Count("Invoke:Event"))
 }
 
 // 调用方取消上下文时操作随之结束，不把剩下的步骤做完。
 func TestEnsureStopsWhenCallerCancels(t *testing.T) {
 	fake := newBaselineSCF()
-	fake.pendingReads = 1 << 20
+	fake.PendingReads = 1 << 20
 	client := newScriptedSCF(fake)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	begin := time.Now()
 	require.ErrorIs(t, newTestFunctions(t, client).Ensure(ctx, finalSpec("v1")), context.DeadlineExceeded)
 	require.Less(t, time.Since(begin), 5*time.Second)
-	require.Zero(t, client.count("EnsureTimerTrigger"))
+	require.Zero(t, client.Count("EnsureTimerTrigger"))
 }
 
 // recordingCLS 记下补 CLS 时拿到的密钥，并补上与真实实现同量级的七个变量（约 300 字节）。
@@ -612,25 +612,61 @@ func TestEnsureTreatsNotFoundExtrasAsUnconfigured(t *testing.T) {
 	require.Equal(t, int64(320), function.ReservedConcurrencyMem)
 }
 
-// 函数卡在 UpdateFailed、CreateFailed 时定时器开着：停用不等 Active、不看状态，直接停掉；启用照样要求 Active。
-// 假设腾讯云允许给失败状态的函数改定时器（scriptedSCF.acceptTimerWhileFailed 模拟，没有在真机上确认）。
+// 函数卡在 UpdateFailed 时定时器开着：停用不等 Active、不看状态，直接停掉；启用照样要求 Active。
+// 2026-11-14 真机实测：UpdateFailed 时改定时器被接受（scriptedSCF.AcceptTimerWhileFailed 模拟）。
 func TestSetTimerDisablesTimerOfFailedFunction(t *testing.T) {
 	ctx := context.Background()
-	for _, status := range []string{"UpdateFailed", "CreateFailed"} {
-		t.Run(status, func(t *testing.T) {
-			fake := newBaselineSCF()
-			seedTimerFunction(fake, status, baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
-			client := newScriptedSCF(fake)
-			client.acceptTimerWhileFailed = true
-			functions := newTestFunctions(t, client)
-			require.Error(t, functions.SetTimer(ctx, timerRef, Timer{Cron: "5 * * * * * *", Enabled: true}, baselineOldPackage), "失败状态的函数不能启用定时器")
-			require.Zero(t, client.count("EnsureTimerTrigger"))
-			require.NoError(t, functions.SetTimer(ctx, timerRef, Timer{Cron: "5 * * * * * *"}, ""))
-			function := functionState(t, fake, baselineRef)
-			require.False(t, function.Timer.Enabled)
-			require.Equal(t, status, function.Status, "停用不碰函数本身")
-		})
-	}
+	fake := newBaselineSCF()
+	seedTimerFunction(fake, "UpdateFailed", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
+	client := newScriptedSCF(fake)
+	client.AcceptTimerWhileFailed = true
+	functions := newTestFunctions(t, client)
+	require.Error(t, functions.SetTimer(ctx, timerRef, Timer{Cron: "5 * * * * * *", Enabled: true}, baselineOldPackage), "失败状态的函数不能启用定时器")
+	require.Zero(t, client.Count("EnsureTimerTrigger"))
+	require.NoError(t, functions.SetTimer(ctx, timerRef, Timer{Cron: "5 * * * * * *"}, ""))
+	function := functionState(t, fake, baselineRef)
+	require.False(t, function.Timer.Enabled)
+	require.Equal(t, "UpdateFailed", function.Status, "停用不碰函数本身")
+}
+
+// 2026-11-14 真机实测：函数 CreateFailed 时腾讯云拒绝一切触发器操作（FailedOperation），而建定时器要求函数正常，
+// 所以 CreateFailed 的函数不可能有定时器。停用直接成功，不发任何触发器请求，否则暂停与重置的第一步会重试到超时；
+// 读回也不读定时器；删除跳过删定时器这一步。
+func TestCreateFailedFunctionSkipsTriggerOperations(t *testing.T) {
+	ctx := context.Background()
+	fake := newBaselineSCF()
+	seedTimerFunction(fake, "CreateFailed", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"broken"}`, "hash-broken", "1", "scf-key-0"), nil)
+	client := newScriptedSCF(fake)
+	functions := newTestFunctions(t, client)
+	require.NoError(t, functions.SetTimer(ctx, timerRef, Timer{}, ""))
+	require.Zero(t, client.Count("EnsureTimerTrigger"), "CreateFailed 时停用不能去建定时器")
+	require.Zero(t, client.Count("GetTimerTrigger"))
+	state, err := functions.Describe(ctx, timerRef)
+	require.NoError(t, err)
+	require.True(t, state.Exists)
+	require.Equal(t, "CreateFailed", state.Status)
+	require.Nil(t, state.Timer)
+	require.NoError(t, functions.Delete(ctx, timerRef))
+	require.Zero(t, client.Count("DeleteTimerTrigger"))
+	require.Empty(t, fake.RejectedWrites(), "CreateFailed 时没有发任何触发器请求")
+	_, exists := fake.Lookup(baselineRef)
+	require.False(t, exists)
+
+	// 回归防护：假腾讯云确实在 CreateFailed 时拒绝触发器操作。
+	seedTimerFunction(fake, "CreateFailed", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"broken"}`, "hash-broken", "1", "scf-key-0"), nil)
+	_, err = fake.EnsureTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: baselineRef, Name: timerTriggerName, Cron: DisabledTimerCron})
+	require.ErrorContains(t, err, "CreateFailed")
+}
+
+// 云上没有定时器时停用直接成功，不去建一个关着的定时器（没有定时器就不会触发）。
+func TestSetTimerDisableWithoutTimerWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	fake := newBaselineSCF()
+	seedTimerFunction(fake, "Active", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), nil)
+	fake.ResetWrites()
+	require.NoError(t, newTestFunctions(t, fake).SetTimer(ctx, timerRef, Timer{}, ""))
+	writes, _ := fake.Snapshot()
+	require.Empty(t, writes)
 }
 
 // 密钥失效（AuthFailure.SecretIdNotFound）不能被当成函数不存在：读回报错，删除不能当成功。
@@ -643,18 +679,18 @@ func TestAuthFailureIsNotMistakenForMissingFunction(t *testing.T) {
 	seedTimerFunction(fake, "Active", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
 
 	client := newScriptedSCF(fake)
-	client.getErrs = []error{authErr()}
+	client.GetErrs = []error{authErr()}
 	_, err := newTestFunctions(t, client).Describe(ctx, timerRef)
 	require.ErrorContains(t, err, "AuthFailure.SecretIdNotFound")
 
 	client = newScriptedSCF(fake)
-	client.deleteTimerErrs = []error{authErr()}
+	client.DeleteTimerErrs = []error{authErr()}
 	require.ErrorContains(t, newTestFunctions(t, client).Delete(ctx, timerRef), "AuthFailure.SecretIdNotFound")
-	require.Zero(t, client.count("DeleteFunction"), "定时器没删掉就不往下删函数")
+	require.Zero(t, client.Count("DeleteFunction"), "定时器没删掉就不往下删函数")
 	require.True(t, functionState(t, fake, baselineRef).Timer.Enabled)
 
 	client = newScriptedSCF(fake)
-	client.getErrs = []error{authErr()}
+	client.GetErrs = []error{authErr()}
 	require.ErrorContains(t, newTestFunctions(t, client).SetTimer(ctx, timerRef, Timer{}, ""), "AuthFailure.SecretIdNotFound")
 	require.NotErrorIs(t, newTestFunctions(t, client).SetTimer(ctx, timerRef, Timer{}, ""), ErrFunctionNotFound)
 
@@ -677,19 +713,24 @@ func TestAuthFailureIsNotMistakenForMissingFunction(t *testing.T) {
 	}
 }
 
-// 只有函数个数与命名空间配额算 quota；LimitExceeded.Memory 等参数越界不算；补采函数设预留并发超配额同样报 quota。
+// 只有函数个数、命名空间与账号预留并发总额算 quota；LimitExceeded.Memory 等参数越界不算；补采函数设预留并发超配额同样报 quota。
 func TestOnlyFunctionAndNamespaceLimitsAreQuota(t *testing.T) {
 	ctx := context.Background()
 	for _, code := range []string{"LimitExceeded.Memory", "LimitExceeded.Timeout", "LimitExceeded.MsgTTL", "LimitExceeded.RetryNum", "LimitExceeded.InitTimeout"} {
 		require.False(t, isQuotaError(tcerrors.NewTencentCloudSDKError(code, "", "")), code)
 		client := newScriptedSCF(newBaselineSCF())
-		client.createErrs = []error{tcerrors.NewTencentCloudSDKError(code, "参数越界", "req-1")}
+		client.CreateErrs = []error{tcerrors.NewTencentCloudSDKError(code, "参数越界", "req-1")}
 		require.NotErrorIs(t, newTestFunctions(t, client).Ensure(ctx, finalSpec("v1")), ErrQuota, code)
 	}
 	client := newScriptedSCF(newBaselineSCF())
-	client.reservedErrs = []error{tcerrors.NewTencentCloudSDKError("LimitExceeded.Function", "超过上限", "req-1")}
+	client.ReservedErrs = []error{tcerrors.NewTencentCloudSDKError("LimitExceeded.Function", "超过上限", "req-1")}
 	require.ErrorIs(t, newTestFunctions(t, client).Ensure(ctx, backfillSpec()), ErrQuota)
-	require.Equal(t, 1, client.count("PutReservedConcurrencyConfig"), "配额超限不重试")
+	require.Equal(t, 1, client.Count("PutReservedConcurrencyConfig"), "配额超限不重试")
+	// 预留并发超出账号总额（真机实测的错误码）是账号级配额，同样报 quota、不重试。
+	client = newScriptedSCF(newBaselineSCF())
+	client.ReservedErrs = []error{tcerrors.NewTencentCloudSDKError("LimitExceeded.FunctionReservedConcurrencyMemory", "超过账号的预留并发总额", "req-1")}
+	require.ErrorIs(t, newTestFunctions(t, client).Ensure(ctx, backfillSpec()), ErrQuota)
+	require.Equal(t, 1, client.Count("PutReservedConcurrencyConfig"), "配额超限不重试")
 }
 
 // 云上只剩废弃键（旧的创建预留号）不同：Ensure 写一次把它删掉，之后不再写；环境单独变化时改配置只带环境与超时。
@@ -702,8 +743,8 @@ func TestEnsureRemovesStaleKeysWithEnvironmentOnlyUpdate(t *testing.T) {
 	client := newScriptedSCF(fake)
 	functions := newTestFunctions(t, client)
 	require.NoError(t, functions.Ensure(ctx, finalSpec("v1")))
-	require.Len(t, client.configRequests, 1)
-	request := client.configRequests[0]
+	require.Len(t, client.ConfigRequests(), 1)
+	request := client.ConfigRequests()[0]
 	require.Equal(t, int64(60), request.Timeout)
 	require.Zero(t, request.MemorySize, "配置没变时不带内存")
 	require.Zero(t, request.MaxInstanceConcurrency)
@@ -712,9 +753,9 @@ func TestEnsureRemovesStaleKeysWithEnvironmentOnlyUpdate(t *testing.T) {
 	require.False(t, request.ClearNativeCLS)
 	require.NotContains(t, functionState(t, fake, baselineRef).Environment, "MOOX_CREATE_RESERVATION_ID")
 
-	fake.resetWrites()
+	fake.ResetWrites()
 	require.NoError(t, functions.Ensure(ctx, finalSpec("v1")))
-	writes, _ := fake.snapshot()
+	writes, _ := fake.Snapshot()
 	require.Empty(t, writes)
 }
 
@@ -723,9 +764,9 @@ func TestUpgradeCodeRepairsAsyncRetryWhenAlreadyCurrent(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
 	seedTimerFunction(fake, "Active", baselineNewPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
-	fake.mutate(baselineRef, func(function *baselineFunction) { function.asyncRetry = nil })
+	fake.Mutate(baselineRef, func(function *baselineFunction) { function.AsyncRetry = nil })
 	require.NoError(t, newTestFunctions(t, fake).UpgradeCode(ctx, timerRef, baselinePackage("v2")))
-	writes, _ := fake.snapshot()
+	writes, _ := fake.Snapshot()
 	require.Len(t, writes, 1)
 	require.True(t, strings.HasPrefix(writes[0], "UpdateFunctionEventInvokeConfig "))
 }

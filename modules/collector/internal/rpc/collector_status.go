@@ -50,6 +50,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 		if rsp.Functions, err = planFunctions(source); err != nil {
 			return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
+		s.fillCloudReadbacks(spaceID, rsp.Functions)
 		if lastError := strings.TrimSpace(source.LastError); lastError != "" {
 			raise(klinecheck.HealthError, fmt.Sprintf("采集计划 #%d 下发失败：%s", source.ID, lastError))
 		}

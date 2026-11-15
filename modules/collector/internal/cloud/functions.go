@@ -51,8 +51,14 @@ var (
 	retryBaseDelay     = 500 * time.Millisecond
 )
 
+// UseFastPollingForTest 把等待函数状态的轮询间隔与重试退避调到 1 毫秒，给用假腾讯云的测试用（在测试的 init 里调一次）。
+func UseFastPollingForTest() {
+	activePollInterval = time.Millisecond
+	retryBaseDelay = time.Millisecond
+}
+
 var (
-	// ErrQuota 表示腾讯云的函数个数或命名空间配额超限，对账按失败原因 quota 上报。
+	// ErrQuota 表示腾讯云的配额超限（函数个数、命名空间个数、账号的预留并发总额），对账按失败原因 quota 上报。
 	ErrQuota = errors.New("腾讯云函数个数或命名空间配额超限")
 	// ErrPackageBehind 表示函数还在旧代码包上，不能启用定时器。
 	ErrPackageBehind = errors.New("函数的代码包落后")
@@ -158,8 +164,8 @@ type Functions interface {
 	List(ctx context.Context, accountID, region, prefix string) ([]FunctionRef, error)
 }
 
-// scfClient 是 Functions 用到的腾讯云接口（*tencentscf.Client 实现）。
-type scfClient interface {
+// SCFClient 是 Functions 用到的腾讯云接口（*tencentscf.Client 实现）。
+type SCFClient interface {
 	EnsureNamespace(context.Context, string, string) error
 	GetFunction(context.Context, tencentscf.FunctionRef) (*tencentscf.FunctionInfo, error)
 	CreateFunction(context.Context, tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error)
@@ -177,8 +183,8 @@ type scfClient interface {
 	ListFunctionInventory(context.Context, string) ([]tencentscf.DiscoveryFunction, error)
 }
 
-// clsEnvironment 把 CLS 上报环境补进函数环境，返回是否有改动；实现保证失败时不阻断调用方（*CLSProvisioner 实现）。
-type clsEnvironment interface {
+// CLSEnvironment 把 CLS 上报环境补进函数环境，返回是否有改动；实现保证失败时不阻断调用方（*CLSProvisioner 实现）。
+type CLSEnvironment interface {
 	Apply(ctx context.Context, accountID string, credential Credential, environment map[string]string) bool
 }
 
@@ -186,19 +192,26 @@ type clsEnvironment interface {
 type TencentFunctions struct {
 	accounts    *store.CloudAccountRepository
 	credentials CredentialResolver
-	cls         clsEnvironment
-	newClient   func(Credential) scfClient
+	cls         CLSEnvironment
+	newClient   func(Credential) SCFClient
 	now         func() time.Time
 }
 
 // NewFunctions 构造腾讯云函数操作。cls 为 nil 时不补 CLS 上报环境（这时定时采集函数的环境校验会因缺 CLS 项而拒绝）。
-func NewFunctions(db *store.Store, credentials CredentialResolver, cls clsEnvironment) *TencentFunctions {
+func NewFunctions(db *store.Store, credentials CredentialResolver, cls CLSEnvironment) *TencentFunctions {
 	return &TencentFunctions{
 		accounts: db.CloudAccounts(), credentials: credentials, cls: cls, now: time.Now,
-		newClient: func(credential Credential) scfClient {
+		newClient: func(credential Credential) SCFClient {
 			return tencentscf.New(credential.AccountID, credential.SecretID, credential.SecretKey)
 		},
 	}
+}
+
+// NewFunctionsWithClient 与 NewFunctions 相同，只是腾讯云客户端由 newClient 构造（测试里换成假腾讯云）。
+func NewFunctionsWithClient(db *store.Store, credentials CredentialResolver, cls CLSEnvironment, newClient func(Credential) SCFClient) *TencentFunctions {
+	functions := NewFunctions(db, credentials, cls)
+	functions.newClient = newClient
+	return functions
 }
 
 var _ Functions = (*TencentFunctions)(nil)
@@ -207,7 +220,7 @@ var _ Functions = (*TencentFunctions)(nil)
 type session struct {
 	account    store.CloudAccount
 	credential Credential
-	client     scfClient
+	client     SCFClient
 }
 
 func (f *TencentFunctions) open(ctx context.Context, accountID string) (session, error) {
@@ -254,7 +267,8 @@ func (f *TencentFunctions) describe(ctx context.Context, ref FunctionRef, withTi
 		return FunctionState{}, fmt.Errorf("读取云函数 %s 失败: %w", ref.Name, err)
 	}
 	state := FunctionState{Exists: true, Status: info.Status, PackageID: info.Environment[packageIDKey], Environment: publicEnvironment(info.Environment)}
-	if withTimer {
+	// CreateFailed 时腾讯云拒绝触发器操作，函数也不可能有定时器：只读函数本身，下一次 Ensure 会删掉重建。
+	if withTimer && !strings.EqualFold(info.Status, "CreateFailed") {
 		trigger, err := readTimer(ctx, s.client, ref.scf())
 		if err != nil {
 			return FunctionState{}, fmt.Errorf("读取云函数 %s 的定时器失败: %w", ref.Name, err)
@@ -527,7 +541,21 @@ func (f *TencentFunctions) SetTimer(ctx context.Context, ref FunctionRef, timer 
 		if err != nil {
 			return fmt.Errorf("读取云函数 %s 失败: %w", ref.Name, err)
 		}
-		// 停用不看函数状态、不等 Active：函数卡在 UpdateFailed、CreateFailed 时定时器也必须能停（暂停与重置靠它）。
+		// 停用不看函数状态、不等 Active：函数在 Updating、UpdateFailed 时定时器也必须能停（暂停与重置靠它，真机实测都接受）。
+		// CreateFailed 时腾讯云拒绝一切触发器操作，而建定时器要求函数正常，所以这时不可能有定时器，直接算停用成功；
+		// 其他状态下云上没有定时器也直接成功，不去建一个关着的定时器（没有定时器就不会触发）。
+		if !timer.Enabled {
+			if strings.EqualFold(info.Status, "CreateFailed") {
+				return nil
+			}
+			current, err := readTimer(ctx, s.client, scfRef)
+			if err != nil {
+				return fmt.Errorf("读取云函数 %s 的定时器失败: %w", ref.Name, err)
+			}
+			if current == nil {
+				return nil
+			}
+		}
 		if timer.Enabled {
 			if info, err = waitActive(ctx, s.client, scfRef, info); err != nil {
 				return err
@@ -555,8 +583,18 @@ func (f *TencentFunctions) Delete(ctx context.Context, ref FunctionRef) error {
 	defer lockFunction(ref)()
 	return withRetry(ctx, ref.Name, func() error {
 		scfRef := ref.scf()
-		if err := s.client.DeleteTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: scfRef, Name: timerTriggerName, Qualifier: timerTriggerQualifier}); err != nil && !isTriggerNotFound(err) && !isFunctionNotFound(err) {
-			return fmt.Errorf("删除云函数 %s 的定时器失败: %w", ref.Name, err)
+		info, err := s.client.GetFunction(ctx, scfRef)
+		if isFunctionNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("读取云函数 %s 失败: %w", ref.Name, err)
+		}
+		// CreateFailed 时腾讯云拒绝触发器操作，函数也不可能有定时器：直接删函数。
+		if !strings.EqualFold(info.Status, "CreateFailed") {
+			if err := s.client.DeleteTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: scfRef, Name: timerTriggerName, Qualifier: timerTriggerQualifier}); err != nil && !isTriggerNotFound(err) && !isFunctionNotFound(err) {
+				return fmt.Errorf("删除云函数 %s 的定时器失败: %w", ref.Name, err)
+			}
 		}
 		if err := s.client.DeleteFunction(ctx, scfRef); err != nil && !isFunctionNotFound(err) {
 			return fmt.Errorf("删除云函数 %s 失败: %w", ref.Name, err)
@@ -717,7 +755,7 @@ func verifyFunction(info *tencentscf.FunctionInfo, spec FunctionSpec, environmen
 }
 
 // ensureExtras 比对并设置异步重试（腾讯云不重试，重试由 Collector 负责）与预留并发（reservedMem 为 0 时不管）：读回一致就不写。
-func ensureExtras(ctx context.Context, client scfClient, ref tencentscf.FunctionRef, reservedMem int64) error {
+func ensureExtras(ctx context.Context, client SCFClient, ref tencentscf.FunctionRef, reservedMem int64) error {
 	// 没配置过时腾讯云可能直接回“不存在”：当作没有配置，照常去写。
 	async, err := client.GetFunctionEventInvokeConfig(ctx, ref)
 	if err != nil && !isConfigNotFound(err) {
@@ -745,7 +783,7 @@ func ensureExtras(ctx context.Context, client scfClient, ref tencentscf.Function
 }
 
 // readTimer 读定时器；云上没有时返回 nil。
-func readTimer(ctx context.Context, client scfClient, ref tencentscf.FunctionRef) (*tencentscf.TimerTriggerInfo, error) {
+func readTimer(ctx context.Context, client SCFClient, ref tencentscf.FunctionRef) (*tencentscf.TimerTriggerInfo, error) {
 	trigger, err := client.GetTimerTrigger(ctx, ref, timerTriggerName)
 	if isTriggerNotFound(err) {
 		return nil, nil
@@ -754,7 +792,7 @@ func readTimer(ctx context.Context, client scfClient, ref tencentscf.FunctionRef
 }
 
 // applyTimer 把定时器设成期望的样子：读回已经一致（且可用）就不写。
-func applyTimer(ctx context.Context, client scfClient, ref tencentscf.FunctionRef, timer Timer) error {
+func applyTimer(ctx context.Context, client SCFClient, ref tencentscf.FunctionRef, timer Timer) error {
 	current, err := readTimer(ctx, client, ref)
 	if err != nil {
 		return fmt.Errorf("读取云函数 %s 的定时器失败: %w", ref.FunctionName, err)
@@ -770,7 +808,7 @@ func applyTimer(ctx context.Context, client scfClient, ref tencentscf.FunctionRe
 }
 
 // waitActive 等函数回到 Active。current 不为空时先看它；状态带 failed 时直接报错。
-func waitActive(ctx context.Context, client scfClient, ref tencentscf.FunctionRef, current *tencentscf.FunctionInfo) (*tencentscf.FunctionInfo, error) {
+func waitActive(ctx context.Context, client SCFClient, ref tencentscf.FunctionRef, current *tencentscf.FunctionInfo) (*tencentscf.FunctionInfo, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, waitStepTimeout)
 	defer cancel()
 	for {
@@ -798,7 +836,7 @@ func waitActive(ctx context.Context, client scfClient, ref tencentscf.FunctionRe
 }
 
 // waitDeleted 等函数从云上消失。
-func waitDeleted(ctx context.Context, client scfClient, ref tencentscf.FunctionRef) error {
+func waitDeleted(ctx context.Context, client SCFClient, ref tencentscf.FunctionRef) error {
 	waitCtx, cancel := context.WithTimeout(ctx, waitStepTimeout)
 	defer cancel()
 	for {
@@ -849,11 +887,11 @@ func quotaOr(err, cause error) error {
 	return err
 }
 
-// quotaErrorCodes 是腾讯云的函数个数与命名空间配额超限错误码。LimitExceeded.Memory、.Timeout、.MsgTTL 这类是参数越界，
-// 限频是 RequestLimitExceeded，都不算配额。
-var quotaErrorCodes = []string{"LimitExceeded.Function", "LimitExceeded.Namespace"}
+// quotaErrorCodes 是腾讯云的配额超限错误码：函数个数（按文档，没有实测）、命名空间个数（实测）、账号的预留并发总额（实测，
+// 账号上限 128000 MB）。LimitExceeded.Memory（实测）、.Timeout、.MsgTTL 这类是参数越界，限频是 RequestLimitExceeded，都不算配额。
+var quotaErrorCodes = []string{"LimitExceeded.Function", "LimitExceeded.Namespace", "LimitExceeded.FunctionReservedConcurrencyMemory"}
 
-// isQuotaError 判断腾讯云的错误是不是函数个数或命名空间配额超限。
+// isQuotaError 判断腾讯云的错误是不是配额超限（见 quotaErrorCodes）。
 func isQuotaError(err error) bool {
 	var sdkErr *tcerrors.TencentCloudSDKError
 	return errors.As(err, &sdkErr) && slices.Contains(quotaErrorCodes, sdkErr.GetCode())

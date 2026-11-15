@@ -3,478 +3,66 @@ package fetchplan
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud"
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud/cloudtest"
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud/tencentscf"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
-	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
-type memPlanStore struct {
-	mu      sync.Mutex
-	records []*store.FetchPlanRecord
-	// shadow 非空时，计划记录的每次写入都同样写进这个真实的 SQLite 计划库（时间线等价测试用）：
-	// 时间线行走的是生产的写入路径，与计划记录同一个事务。记录本身仍以内存里的为准。
-	shadow *store.FetchPlanRepository
+// waitOps 等对账器在跑的云端操作全部结束（升级等不在当轮等待的操作）。
+func (h *planHarness) waitOps(r *PlanReconciler) {
+	h.t.Helper()
+	require.Eventually(h.t, func() bool { _, running := r.ops().oldestRunning(); return !running }, 5*time.Second, 2*time.Millisecond, "云端操作没有结束")
 }
 
-func (s *memPlanStore) Open(_ context.Context, spaceID string) (*store.FetchPlanRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, record := range s.records {
-		if record.SpaceID == spaceID && record.Status != store.FetchPlanApplied {
-			clone := *record
-			return &clone, nil
-		}
-	}
-	return nil, nil
+// waitHolding 等操作真正开始（拿到并发名额、开始碰云端）：还在排队的操作会被暂停取消。
+func waitHolding(t *testing.T, r *PlanReconciler, op *functionOp) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		r.ops().mu.Lock()
+		defer r.ops().mu.Unlock()
+		return op.holding
+	}, 5*time.Second, time.Millisecond)
 }
 
-func (s *memPlanStore) LatestApplied(_ context.Context, spaceID string) (*store.FetchPlanRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := len(s.records) - 1; i >= 0; i-- {
-		if s.records[i].SpaceID == spaceID && s.records[i].Status == store.FetchPlanApplied {
-			clone := *s.records[i]
-			return &clone, nil
-		}
-	}
-	return nil, nil
-}
-
-func (s *memPlanStore) Create(ctx context.Context, spaceID, plan, progress string, timeline ...store.SeriesTimelineEntry) (*store.FetchPlanRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, record := range s.records {
-		if record.SpaceID == spaceID && record.Status != store.FetchPlanApplied {
-			return nil, store.ErrFetchPlanOpen
-		}
-	}
-	record := &store.FetchPlanRecord{ID: int64(len(s.records) + 1), SpaceID: spaceID, Status: store.FetchPlanPending, Plan: plan, Progress: progress}
-	if s.shadow != nil {
-		shadowed, err := s.shadow.Create(ctx, spaceID, plan, progress, timeline...)
-		if err != nil {
-			return nil, err
-		}
-		if shadowed.ID != record.ID {
-			return nil, fmt.Errorf("shadow fetch plan id %d does not match %d", shadowed.ID, record.ID)
-		}
-	}
-	s.records = append(s.records, record)
-	clone := *record
-	return &clone, nil
-}
-
-func (s *memPlanStore) Update(ctx context.Context, id int64, status, progress, lastError string, timeline ...store.SeriesTimelineEntry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	record := s.records[id-1]
-	if s.shadow != nil {
-		if err := s.shadow.Update(ctx, id, status, progress, lastError, timeline...); err != nil {
-			return err
-		}
-	}
-	record.Status, record.Progress, record.LastError = status, progress, lastError
-	return nil
-}
-
-func (s *memPlanStore) SavePlan(ctx context.Context, id int64, plan string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.shadow != nil {
-		if err := s.shadow.SavePlan(ctx, id, plan); err != nil {
-			return err
-		}
-	}
-	s.records[id-1].Plan = plan
-	return nil
-}
-
-type fakeRegistrar struct {
-	stale      int
-	failures   int
-	registered map[string][]int64
-	calls      int
-}
-
-func (f *fakeRegistrar) RegisterSeriesSnapshot(_ context.Context, _, datasetID, frequency string, series []seriesset.Series, effectiveFrom int64) (marketstorage.SnapshotRegistration, error) {
-	f.calls++
-	if f.failures > 0 {
-		f.failures--
-		return marketstorage.SnapshotRegistration{}, errors.New("connection reset")
-	}
-	if f.stale > 0 {
-		f.stale--
-		return marketstorage.SnapshotRegistration{}, marketstorage.ErrStaleEffectiveFrom
-	}
-	set, err := seriesset.Canonicalize(series)
-	if err != nil {
-		return marketstorage.SnapshotRegistration{}, err
-	}
-	if f.registered == nil {
-		f.registered = map[string][]int64{}
-	}
-	key := datasetID + "|" + frequency
-	f.registered[key] = append(f.registered[key], effectiveFrom)
-	return marketstorage.SnapshotRegistration{Hash: set.Hash, Count: uint32(len(set.Series))}, nil
-}
-
-type fakePlanCloud struct {
-	// patchMu 保护 patches：管理器协程写、测试协程读。
-	patchMu    sync.Mutex
-	nodes      map[string]scfinvoker.FunctionInstance
-	clock      func() time.Time
-	unready    map[string]scfinvoker.FunctionInstance
-	deleted    []string
-	upgraded   []string
-	packages   []string                               // 按创建先后（旧到新）的可用代码包 ID，名称不区分
-	backfill   map[string]scfinvoker.FunctionInstance // 补采函数（ListMarketFetchers 返回）
-	packageErr error
-	jobs       map[string][]scfinvoker.BatchItemResult
-	running    map[string]bool // 仍在运行的作业
-	onFresh    func()          // 新鲜读回返回前的钩子，用于构造读回与作业结算之间的竞态
-	freshErr   error           // 非空时新鲜读回失败，模拟 FunctionInstance 查询超时
-	submitErr  error           // 非空时 SubmitRuntimeConfigs 直接失败，模拟提交停用时崩溃
-	patches    map[string]*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch
-	// onRuntimeConfig 在 SubmitRuntimeConfigs 接受一批补丁之前调用，用于断言提交时函数的代码版本。
-	onRuntimeConfig func([]*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch)
-	created         []string
-	submits         int
-	failInstances   map[string]bool
-	leaseCalls      int
-	releases        int
-	renews          int
-	renewErr        error // 非空时续租失败，模拟租约已过期或被取代
-	// acquireErr 非空时申请发布租约失败，用来模拟 Admin 答复「被占用」或其他故障。
-	acquireErr error
-	// runningAll 让所有作业都停在运行中；batchErr 让读取作业结果失败；hangBatch 让读取一直阻塞到 ctx 结束。
-	runningAll bool
-	batchErr   error
-	hangBatch  bool
-	// dispatches 按先后记下对账器实际提交给云端的每一批请求（见 plan_baseline_test.go 的下发金样）。
-	dispatches []planDispatch
-}
-
-func newFakePlanCloud() *fakePlanCloud {
-	return &fakePlanCloud{nodes: map[string]scfinvoker.FunctionInstance{}, unready: map[string]scfinvoker.FunctionInstance{}, jobs: map[string][]scfinvoker.BatchItemResult{}, patches: map[string]*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{}, failInstances: map[string]bool{}}
-}
-
-func (c *fakePlanCloud) ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.FunctionInstance, error) {
-	nodes := make([]scfinvoker.FunctionInstance, 0, len(c.nodes))
-	for _, node := range c.nodes {
-		nodes = append(nodes, node)
-	}
-	return nodes, nil
-}
-
-func (c *fakePlanCloud) ListTimerMarketFetchersFresh(ctx context.Context, spaceID string) ([]scfinvoker.FunctionInstance, error) {
-	if c.freshErr != nil {
-		return nil, c.freshErr
-	}
-	nodes, err := c.ListTimerMarketFetchers(ctx, spaceID)
-	if c.onFresh != nil {
-		c.onFresh()
-	}
-	for index := range nodes {
-		metadata := map[string]any{}
-		for key, value := range nodes[index].Metadata {
-			metadata[key] = value
-		}
-		if _, set := metadata["timer_last_readback_at"]; !set && c.clock != nil {
-			metadata["timer_last_readback_at"] = c.clock().UTC().Format(time.RFC3339Nano)
-		}
-		nodes[index].Metadata = metadata
-	}
-	return nodes, err
-}
-
-func (c *fakePlanCloud) ListMarketFetchers(context.Context, string) ([]scfinvoker.FunctionInstance, error) {
-	nodes := make([]scfinvoker.FunctionInstance, 0, len(c.backfill))
-	for _, node := range c.backfill {
-		nodes = append(nodes, node)
-	}
-	return nodes, nil
-}
-
-func (c *fakePlanCloud) ListUnreadyMarketFetchers(context.Context, string, string) ([]scfinvoker.FunctionInstance, error) {
-	nodes := make([]scfinvoker.FunctionInstance, 0, len(c.unready))
-	for _, node := range c.unready {
-		nodes = append(nodes, node)
-	}
-	return nodes, nil
-}
-
-func (c *fakePlanCloud) LatestPackage(context.Context, string, string) (string, error) {
-	if c.packageErr != nil {
-		return "", c.packageErr
-	}
-	if len(c.packages) == 0 {
-		return "", errors.New("no available code package")
-	}
-	return c.packages[len(c.packages)-1], nil
-}
-
-func (c *fakePlanCloud) SubmitDeployFunctionInstances(_ context.Context, _ string, nodeIDs []string, packageID string, _ *scfinvoker.CollectorPublishLease) (string, error) {
-	c.recordDispatch(planDispatch{Kind: "deploy", Functions: append([]string(nil), nodeIDs...), PackageID: packageID})
-	for _, id := range nodeIDs {
-		// 升级失败的函数留在旧代码包上，与真实云端一致。
-		if !c.failInstances[id] {
-			if node, ok := c.backfill[id]; ok {
-				node.PackageID = packageID
-				c.backfill[id] = node
-			} else {
-				node := c.nodes[id]
-				node.PackageID = packageID
-				c.nodes[id] = node
-			}
-		}
-		c.upgraded = append(c.upgraded, id)
-	}
-	return c.newJob(nodeIDs), nil
-}
-
-func (c *fakePlanCloud) SubmitDeleteFunctionInstances(_ context.Context, _ string, nodeIDs []string, _ *scfinvoker.CollectorPublishLease) (string, error) {
-	c.recordDispatch(planDispatch{Kind: "delete", Functions: append([]string(nil), nodeIDs...)})
-	for _, id := range nodeIDs {
-		delete(c.unready, id)
-		delete(c.nodes, id)
-		delete(c.backfill, id)
-	}
-	c.deleted = append(c.deleted, nodeIDs...)
-	return c.newJob(nodeIDs), nil
-}
-
-func (c *fakePlanCloud) newJob(names []string) string {
-	c.submits++
-	id := fmt.Sprintf("job-%d", c.submits)
-	items := make([]scfinvoker.BatchItemResult, 0, len(names))
-	for _, name := range names {
-		if c.failInstances[name] {
-			items = append(items, scfinvoker.BatchItemResult{InstanceID: name, Failed: true, Message: "boom"})
-			continue
-		}
-		items = append(items, scfinvoker.BatchItemResult{InstanceID: name, Success: true})
-	}
-	c.jobs[id] = items
-	return id
-}
-
-func (c *fakePlanCloud) SubmitCreateFunctionInstances(_ context.Context, _ string, items []*cloudfunctionpb.FunctionInstanceCreateItem) (string, error) {
-	c.recordDispatch(planDispatchCreates(items))
-	names := make([]string, 0, len(items))
-	for _, item := range items {
-		name := item.GetMetadata().AsMap()["function_name"].(string)
+// planFunctionNames 返回按配置算出的函数名（排序）。
+func planFunctionNames(t *testing.T, subjects int) []string {
+	t.Helper()
+	state, err := BuildDesiredState(testPlanOptions(), testGroups(subjects, "1m"), nil)
+	require.NoError(t, err)
+	names := make([]string, 0, len(state.Functions))
+	for name := range state.Functions {
 		names = append(names, name)
-		if c.failInstances[name] {
-			continue
+	}
+	sort.Strings(names)
+	return names
+}
+
+// failWrites 让某个函数的某种写请求失败，返回解除的函数。
+func (h *planHarness) failWrites(request, function string) func() {
+	var mu sync.Mutex
+	active := true
+	h.cloud.client.BeforeWrite = func(name string, ref tencentscf.FunctionRef) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if active && name == request && ref.FunctionName == function {
+			return errTestBoom
 		}
-		if item.GetTriggerType() == "invoke" {
-			if c.backfill == nil {
-				c.backfill = map[string]scfinvoker.FunctionInstance{}
-			}
-			c.backfill[name] = scfinvoker.FunctionInstance{InstanceID: name, FunctionName: name, Region: item.GetRegion(), TriggerType: "invoke", PackageID: item.GetPackageId(), Metadata: item.GetMetadata().AsMap(), Ready: true}
-		} else {
-			c.nodes[name] = scfinvoker.FunctionInstance{InstanceID: name, FunctionName: name, Region: item.GetRegion(), TriggerType: "timer", Metadata: map[string]any{}}
-		}
-		c.created = append(c.created, name)
+		return nil
 	}
-	return c.newJob(names), nil
-}
-
-func (c *fakePlanCloud) SubmitRuntimeConfigs(_ context.Context, _ string, patches []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch) (string, error) {
-	if c.submitErr != nil {
-		return "", c.submitErr
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		active = false
 	}
-	// 与 FunctionInstance 的预检一致：cron 不能为空，任何一项不合法整批拒绝。
-	for _, patch := range patches {
-		if strings.TrimSpace(patch.GetTimerCron()) == "" {
-			return "", errors.New("INVALID_PARAM: timer_cron is required")
-		}
-	}
-	if c.onRuntimeConfig != nil {
-		c.onRuntimeConfig(patches)
-	}
-	c.recordDispatch(planDispatchPatches(patches))
-	names := make([]string, 0, len(patches))
-	c.patchMu.Lock()
-	for _, patch := range patches {
-		names = append(names, patch.GetInstanceId())
-		if !c.failInstances[patch.GetInstanceId()] {
-			c.patches[patch.GetInstanceId()] = patch
-		}
-	}
-	c.patchMu.Unlock()
-	return c.newJob(names), nil
-}
-
-func (c *fakePlanCloud) GetBatchResults(ctx context.Context, _, jobID string) (*cloudfunctionpb.FunctionJobSummary, []scfinvoker.BatchItemResult, error) {
-	if c.hangBatch {
-		<-ctx.Done()
-		return nil, nil, ctx.Err()
-	}
-	if c.batchErr != nil {
-		return nil, nil, c.batchErr
-	}
-	if c.runningAll || c.running[jobID] {
-		return &cloudfunctionpb.FunctionJobSummary{JobId: jobID, Status: cloudfunctionpb.FunctionJobStatus_FUNCTION_JOB_STATUS_RUNNING}, nil, nil
-	}
-	items := c.jobs[jobID]
-	status := cloudfunctionpb.FunctionJobStatus_FUNCTION_JOB_STATUS_SUCCESS
-	for _, item := range items {
-		if item.Failed {
-			status = cloudfunctionpb.FunctionJobStatus_FUNCTION_JOB_STATUS_PARTIAL
-		}
-	}
-	return &cloudfunctionpb.FunctionJobSummary{JobId: jobID, Status: status}, items, nil
-}
-
-func (c *fakePlanCloud) AcquireCollectorPublishLease(_ context.Context, spaceID, holder string) (*scfinvoker.CollectorPublishLease, error) {
-	if c.acquireErr != nil {
-		return nil, c.acquireErr
-	}
-	c.leaseCalls++
-	return &scfinvoker.CollectorPublishLease{SpaceID: spaceID, LeaseID: "lease", HolderID: holder, FencingToken: int64(c.leaseCalls), ExpiresAt: time.Now().Add(time.Minute)}, nil
-}
-
-func (c *fakePlanCloud) RenewCollectorPublishLease(_ context.Context, lease *scfinvoker.CollectorPublishLease) (*scfinvoker.CollectorPublishLease, error) {
-	c.renews++
-	if c.renewErr != nil {
-		return nil, c.renewErr
-	}
-	return lease, nil
-}
-
-func (c *fakePlanCloud) ReleaseCollectorPublishLease(context.Context, *scfinvoker.CollectorPublishLease) error {
-	c.releases++
-	return nil
-}
-
-type fakeActivity struct {
-	failures int
-	entries  map[string]ActivityEntry
-}
-
-func (a *fakeActivity) AppendActivityLogs(_ context.Context, _ string, entries []ActivityEntry) error {
-	if a.failures > 0 {
-		a.failures--
-		return errors.New("admin unavailable")
-	}
-	if a.entries == nil {
-		a.entries = map[string]ActivityEntry{}
-	}
-	for _, entry := range entries {
-		if _, exists := a.entries[entry.DedupKey]; !exists {
-			a.entries[entry.DedupKey] = entry
-		}
-	}
-	return nil
-}
-
-type fakeLateness struct{ values map[string]int }
-
-func (l *fakeLateness) EnsureAllowedLateness(_ context.Context, _, datasetID string, seconds int) error {
-	if l.values == nil {
-		l.values = map[string]int{}
-	}
-	l.values[datasetID] = seconds
-	return nil
-}
-
-type planTasksStub struct{ tasks []domain.CollectionTask }
-
-func (s *planTasksStub) ListEnabled(context.Context, string) ([]domain.CollectionTask, error) {
-	return append([]domain.CollectionTask(nil), s.tasks...), nil
-}
-
-type planSymbolsStub struct{ subjects []string }
-
-func (s *planSymbolsStub) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
-	return storagesource.DatasetInfo{SubjectTags: []string{"binance_spot"}}, nil
-}
-
-func (s *planSymbolsStub) GetTag(_ context.Context, _, tagID string) (*storagepb.Tag, error) {
-	return &storagepb.Tag{TagId: tagID, Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}}, nil
-}
-
-func (s *planSymbolsStub) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
-	items := make([]domain.Subject, 0, len(s.subjects))
-	for _, subject := range s.subjects {
-		items = append(items, domain.Subject{SubjectID: subject, Status: "active"})
-	}
-	return items, nil
-}
-
-type planHarness struct {
-	t         *testing.T
-	store     *memPlanStore
-	registrar *fakeRegistrar
-	cloud     *fakePlanCloud
-	activity  *fakeActivity
-	lateness  *fakeLateness
-	symbols   *planSymbolsStub
-	tasks     *planTasksStub
-	now       time.Time
-}
-
-func newPlanHarness(t *testing.T, subjectCount int) *planHarness {
-	h := &planHarness{
-		t: t, store: &memPlanStore{}, registrar: &fakeRegistrar{}, cloud: newFakePlanCloud(), activity: &fakeActivity{}, lateness: &fakeLateness{},
-		symbols: &planSymbolsStub{}, now: time.Date(2026, 10, 12, 8, 30, 20, 0, time.UTC),
-	}
-	h.cloud.clock = func() time.Time { return h.now }
-	h.setSubjects(subjectCount)
-	h.tasks = &planTasksStub{tasks: []domain.CollectionTask{{
-		SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
-		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot","frequency":"1m"}`,
-	}}}
-	return h
-}
-
-func (h *planHarness) setSubjects(count int) {
-	h.symbols.subjects = h.symbols.subjects[:0]
-	for i := 0; i < count; i++ {
-		h.symbols.subjects = append(h.symbols.subjects, fmt.Sprintf("S%03d-USDT", i))
-	}
-}
-
-func (h *planHarness) reconciler() *PlanReconciler {
-	return &PlanReconciler{
-		SpaceID: "crypto", Options: testPlanOptions(),
-		Deploy: PlanDeploy{CloudAccountID: "acct", PackageID: "pkg", Namespace: "default", MemoryMB: 64, Networks: map[string]PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}},
-			BaseEnvironment: map[string]string{"MOOX_SPACE_ID": "crypto"}},
-		Groups: &GroupBuilder{Tasks: h.tasks, Symbols: h.symbols},
-		Store:  h.store, Storage: h.registrar, Cloud: h.cloud, Access: testSCFAccessEnvironment, Lateness: h.lateness, Activity: h.activity,
-		Now: func() time.Time { return h.now }, JobWait: time.Millisecond, PollInterval: time.Millisecond,
-		sleep: func(_ context.Context, d time.Duration) error { h.now = h.now.Add(d); return nil },
-	}
-}
-
-func (h *planHarness) reconcile(r *PlanReconciler) error {
-	return r.Reconcile(context.Background())
-}
-
-func (h *planHarness) open() *store.FetchPlanRecord {
-	record, err := h.store.Open(context.Background(), "crypto")
-	require.NoError(h.t, err)
-	return record
-}
-
-func (h *planHarness) content(record *store.FetchPlanRecord) *FetchPlanContent {
-	content, err := decodeFetchPlanContent(record.Plan)
-	require.NoError(h.t, err)
-	return content
 }
 
 func TestPlanReconcilerFullLifecycle(t *testing.T) {
@@ -490,18 +78,19 @@ func TestPlanReconcilerFullLifecycle(t *testing.T) {
 	require.Equal(t, time.Date(2026, 10, 12, 8, 37, 0, 0, time.UTC).Unix(), change.P)
 	require.Equal(t, 15, h.lateness.values["ds_spot"])
 	require.Equal(t, []int64{change.P}, h.registrar.registered["ds_spot|1m"])
-	require.Len(t, h.cloud.created, 3)
-	require.Len(t, h.cloud.patches, 3)
-	for name, patch := range h.cloud.patches {
-		require.True(t, patch.GetTimerEnabled(), name)
-		require.Equal(t, "0 * * * * * *", patch.GetTimerCron())
-		plan, err := marketfetch.DecodePlan(patch.GetManagedEnvironment()[marketfetch.PlanEnvName])
-		require.NoError(t, err)
-		require.Len(t, plan.Datasets[0].Copies, 1)
-		require.Equal(t, "access@storage", patch.GetManagedEnvironment()["MOOX_ACCESS_ID"])
-		require.NotEmpty(t, patch.GetCollectorPublishLeaseId())
+	// 建函数与下发环境、定时器合成一次 Ensure：每个函数一次。
+	require.Len(t, h.cloudTimers(), 3)
+	require.Equal(t, 3, h.cloud.client.Count("CreateFunction"))
+	require.Equal(t, 3, h.cloud.countOps("ensure", ""))
+	for _, name := range h.cloudTimers() {
+		function := h.mustFunction(name)
+		require.True(t, function.Timer.Enabled, name)
+		require.Equal(t, "0 * * * * * *", function.Timer.Cron)
+		require.Len(t, h.cloudPlan(name).Datasets[0].Copies, 1)
+		require.Equal(t, "access@storage", function.Info.Environment["MOOX_ACCESS_ID"])
+		require.Equal(t, "pkg", function.Info.Environment["MOOX_CODE_PACKAGE_ID"])
+		require.NotContains(t, function.Info.Environment, "MOOX_CREATE_RESERVATION_ID")
 	}
-	require.Equal(t, 2, h.cloud.releases, "the lease is released after the create batch and the config batch")
 
 	// 窗口结束前什么都不做；之后收尾并标记已生效。
 	h.now = time.Unix(change.P, 0).Add(10 * time.Second)
@@ -512,27 +101,22 @@ func TestPlanReconcilerFullLifecycle(t *testing.T) {
 	require.Nil(t, h.open())
 	require.Len(t, h.activity.entries, 2)
 
-	// 没有变化：不会产生新计划（云端校验另有测试，这里让它保持已完成）。
-	submits := h.cloud.submits
+	// 没有变化：不会产生新计划，也不改云上状态（云端校验另有测试，这里让它保持已完成）。
+	writes := len(h.scf.Writes())
 	r.lastVerified = h.now
 	h.now = h.now.Add(5 * time.Minute)
 	require.NoError(t, h.reconcile(r))
 	require.Nil(t, h.open())
-	require.Equal(t, submits, h.cloud.submits)
+	require.Len(t, h.scf.Writes(), writes)
 	require.Len(t, h.store.records, 1)
 }
 
 func TestPlanReconcilerSubjectChangeUsesTwoCopies(t *testing.T) {
 	h := newPlanHarness(t, 120)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	first := h.content(h.open())
-	h.now = time.Unix(first.Datasets["ds_spot|1m"].P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
+	h.applyFirstPlan(r)
 
 	h.setSubjects(119)
-	h.cloud.patches = map[string]*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{}
 	require.NoError(t, h.reconcile(r))
 	record := h.open()
 	require.NotNil(t, record)
@@ -541,10 +125,8 @@ func TestPlanReconcilerSubjectChangeUsesTwoCopies(t *testing.T) {
 	require.Equal(t, []string{"S119-USDT"}, change.Removed)
 	require.NotEmpty(t, change.OldHash)
 	require.Len(t, h.registrar.registered["ds_spot|1m"], 2)
-	for name, patch := range h.cloud.patches {
-		plan, err := marketfetch.DecodePlan(patch.GetManagedEnvironment()[marketfetch.PlanEnvName])
-		require.NoError(t, err, name)
-		copies := plan.Datasets[0].Copies
+	for _, name := range h.cloudTimers() {
+		copies := h.cloudPlan(name).Datasets[0].Copies
 		require.Len(t, copies, 2, name)
 		require.Equal(t, change.P, copies[1].From)
 		require.Equal(t, change.Hash, copies[1].Hash)
@@ -555,10 +137,8 @@ func TestPlanReconcilerSubjectChangeUsesTwoCopies(t *testing.T) {
 	h.now = time.Unix(change.P, 0).Add(time.Minute)
 	require.NoError(t, h.reconcile(r))
 	require.Nil(t, h.open())
-	for name, patch := range h.cloud.patches {
-		plan, err := marketfetch.DecodePlan(patch.GetManagedEnvironment()[marketfetch.PlanEnvName])
-		require.NoError(t, err, name)
-		require.Len(t, plan.Datasets[0].Copies, 1, name)
+	for _, name := range h.cloudTimers() {
+		require.Len(t, h.cloudPlan(name).Datasets[0].Copies, 1, name)
 	}
 	logged := 0
 	for key := range h.activity.entries {
@@ -571,27 +151,25 @@ func TestPlanReconcilerSubjectChangeUsesTwoCopies(t *testing.T) {
 
 func TestPlanReconcilerRetriesOnlyFailedFunctions(t *testing.T) {
 	h := newPlanHarness(t, 120)
-	names := []string{}
-	state, _ := BuildDesiredState(testPlanOptions(), testGroups(120, "1m"), nil)
-	for name := range state.Functions {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	h.cloud.failInstances[names[1]] = true
+	names := planFunctionNames(t, 120)
+	recover := h.failWrites("CreateFunction", names[1])
 	r := h.reconciler()
 	require.Error(t, h.reconcile(r))
 	record := h.open()
 	progress, err := decodeFetchPlanProgress(record.Progress)
 	require.NoError(t, err)
-	require.True(t, progress.Created[names[0]])
-	require.False(t, progress.Created[names[1]])
+	require.True(t, progress.Transitioned[names[0]])
+	require.False(t, progress.Transitioned[names[1]])
 	require.Contains(t, record.LastError, names[1])
+	_, exists := h.cloudFunction(names[1])
+	require.False(t, exists)
 
-	delete(h.cloud.failInstances, names[1])
-	before := len(h.cloud.created)
+	recover()
+	before := h.cloud.client.Count("CreateFunction")
 	require.NoError(t, h.reconcile(r))
-	require.Equal(t, before+1, len(h.cloud.created), "only the failed function is created again")
-	require.Len(t, h.cloud.patches, 3)
+	require.Equal(t, before+1, h.cloud.client.Count("CreateFunction"), "only the failed function is created again")
+	require.Equal(t, 1, h.cloud.countOps("ensure", names[0]), "confirmed functions are not pushed again")
+	require.Len(t, h.cloudTimers(), 3)
 }
 
 func TestPlanReconcilerRestartContinuesWithoutNewPeriod(t *testing.T) {
@@ -610,7 +188,7 @@ func TestPlanReconcilerRestartContinuesWithoutNewPeriod(t *testing.T) {
 	record = h.open()
 	require.Equal(t, period, h.content(record).Datasets["ds_spot|1m"].P)
 	require.Equal(t, []int64{period}, h.registrar.registered["ds_spot|1m"])
-	require.Len(t, h.cloud.patches, 2)
+	require.Len(t, h.cloudTimers(), 2)
 }
 
 func TestPlanReconcilerReselectsPeriodOnlyOnExplicitStaleRejection(t *testing.T) {
@@ -631,10 +209,8 @@ func TestPlanReconcilerReselectsPeriodOnlyOnExplicitStaleRejection(t *testing.T)
 
 	require.NoError(t, h.reconcile(r))
 	require.Equal(t, []int64{reselected}, h.registrar.registered["ds_spot|1m"])
-	for _, patch := range h.cloud.patches {
-		plan, err := marketfetch.DecodePlan(patch.GetManagedEnvironment()[marketfetch.PlanEnvName])
-		require.NoError(t, err)
-		require.Equal(t, reselected, plan.Datasets[0].Copies[0].From)
+	for _, name := range h.cloudTimers() {
+		require.Equal(t, reselected, h.cloudPlan(name).Datasets[0].Copies[0].From)
 	}
 }
 
@@ -655,11 +231,7 @@ func TestPlanReconcilerActivityLogFailureKeepsPlanOpenAndDoesNotDuplicate(t *tes
 func TestPlanReconcilerRetiresFunctionsWhenSubjectsShrink(t *testing.T) {
 	h := newPlanHarness(t, 120)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
+	h.applyFirstPlan(r)
 
 	h.setSubjects(40)
 	require.NoError(t, h.reconcile(r))
@@ -672,22 +244,26 @@ func TestPlanReconcilerRetiresFunctionsWhenSubjectsShrink(t *testing.T) {
 		}
 	}
 	require.Len(t, retired, 2)
+	transitional := map[string]string{}
+	for _, name := range retired {
+		transitional[name] = h.mustFunction(name).Info.Environment[marketfetch.PlanEnvName]
+	}
 	h.now = time.Unix(content.Datasets["ds_spot|1m"].P, 0).Add(time.Minute)
+	ensures := h.cloud.countOps("ensure", "")
 	require.NoError(t, h.reconcile(r))
 	require.Nil(t, h.open())
 	for _, name := range retired {
-		require.False(t, h.cloud.patches[name].GetTimerEnabled(), "%s must be disabled after the window", name)
+		require.False(t, h.timerEnabled(name), "%s must be disabled after the window", name)
+		require.Equal(t, transitional[name], h.mustFunction(name).Info.Environment[marketfetch.PlanEnvName], "退役的函数保留过渡环境")
+		require.Equal(t, 1, h.cloud.countOps("timer", name), "退役只停定时器")
 	}
+	require.Equal(t, ensures+1, h.cloud.countOps("ensure", ""), "收尾只给留下的那个函数下发最终计划")
 }
 
 func TestPlanReconcilerKeepsStateWhenEnabledTasksHaveNoSubjects(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
+	h.applyFirstPlan(r)
 
 	h.setSubjects(0)
 	for i := 0; i < 2*planGoneDebounce; i++ {
@@ -699,35 +275,27 @@ func TestPlanReconcilerKeepsStateWhenEnabledTasksHaveNoSubjects(t *testing.T) {
 func TestPlanReconcilerRepairsDriftHourly(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
+	h.applyFirstPlan(r)
 
-	// 云端读回与计划一致：不下发。
-	for name, patch := range h.cloud.patches {
-		h.cloud.nodes[name] = scfinvoker.FunctionInstance{InstanceID: name, Metadata: map[string]any{
-			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
-			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
-			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
-		}}
-	}
+	// 云端读回与计划一致：不写。
 	h.now = h.now.Add(2 * time.Hour)
-	before := h.cloud.submits
+	writes := len(h.scf.Writes())
 	require.NoError(t, h.reconcile(r))
-	require.Equal(t, before, h.cloud.submits)
+	require.Len(t, h.scf.Writes(), writes)
+	require.True(t, h.now.Equal(r.lastVerified))
 
-	// 被手工改动：下一次读回时补推。
-	for name := range h.cloud.nodes {
-		node := h.cloud.nodes[name]
-		node.Metadata["assignment_hash"] = "tampered"
-		h.cloud.nodes[name] = node
-		break
-	}
+	// 被手工改动（受管环境的分配哈希、定时器的 cron）：下一次读回时改回。
+	names := h.cloudTimers()
+	hash := h.mustFunction(names[0]).Info.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"]
+	h.mutate(names[0], func(function *cloudtest.Function) {
+		function.Info.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "tampered"
+	})
+	h.mutate(names[1], func(function *cloudtest.Function) { function.Timer.Cron = "0 */5 * * * * *" })
 	h.now = h.now.Add(2 * time.Hour)
 	require.NoError(t, h.reconcile(r))
-	require.Equal(t, before+1, h.cloud.submits)
+	require.Equal(t, hash, h.mustFunction(names[0]).Info.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
+	require.Equal(t, "0 * * * * * *", h.mustFunction(names[1]).Timer.Cron)
+	require.True(t, h.now.Equal(r.lastVerified))
 }
 
 func TestPlanReconcilerRejectsOversizedEnvironment(t *testing.T) {
@@ -765,10 +333,7 @@ func TestPlanManagerRunsOneWorkerPerSpaceAndDisablesRemovedSpace(t *testing.T) {
 	finished := make(chan struct{})
 	go func() { manager.Run(ctx); close(finished) }()
 
-	require.Eventually(t, func() bool {
-		record, _ := h.store.Open(context.Background(), "crypto")
-		return record != nil
-	}, 5*time.Second, 10*time.Millisecond, "the space worker creates a fetch plan")
+	require.Eventually(t, func() bool { return len(h.cloudTimers()) == 2 }, 5*time.Second, 10*time.Millisecond, "the space worker creates its functions")
 	time.Sleep(150 * time.Millisecond)
 	mu.Lock()
 	require.Equal(t, 1, created, "one reconciler per space")
@@ -782,76 +347,77 @@ func TestPlanManagerRunsOneWorkerPerSpaceAndDisablesRemovedSpace(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond, "the worker exits only after timers are disabled")
 	cancel()
 	<-finished
-	disabled := 0
-	for _, patch := range h.cloud.patches {
-		if !patch.GetTimerEnabled() {
-			disabled++
-		}
+	for _, name := range h.cloudTimers() {
+		require.False(t, h.timerEnabled(name), "every function of the removed space is disabled: %s", name)
 	}
-	require.Equal(t, 2, disabled, "every function of the removed space is disabled")
 }
 
 func TestPlanReconcilerCreateFailureDoesNotBlockExistingFunctions(t *testing.T) {
 	h := newPlanHarness(t, 120)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
+	h.applyFirstPlan(r)
 
-	// 120 → 140 个标的需要新增第 3 个函数以外的容量变化：50*3=150 足够，无需新函数；
-	// 改成 160 个标的 → 4 个函数，其中新增 1 个，创建失败。
+	// 160 个标的 → 4 个函数，其中新增的 -003 建函数失败。
 	h.setSubjects(160)
-	state, _ := BuildDesiredState(testPlanOptions(), testGroups(160, "1m"), nil)
 	var failing string
-	for name := range state.Functions {
+	for _, name := range planFunctionNames(t, 160) {
 		if strings.HasSuffix(name, "-003") {
 			failing = name
 		}
 	}
-	h.cloud.failInstances[failing] = true
-	h.cloud.patches = map[string]*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{}
+	recover := h.failWrites("CreateFunction", failing)
 	require.Error(t, h.reconcile(r))
-	require.Len(t, h.cloud.patches, 3, "the three existing functions still receive their transitional environment")
-	require.Empty(t, h.cloud.patches[failing])
-	delete(h.cloud.failInstances, failing)
+	progress, err := decodeFetchPlanProgress(h.open().Progress)
+	require.NoError(t, err)
+	require.Len(t, progress.Transitioned, 3, "the three existing functions still receive their transitional environment")
+	require.False(t, progress.Transitioned[failing])
+	_, exists := h.cloudFunction(failing)
+	require.False(t, exists)
+	recover()
 	require.NoError(t, h.reconcile(r))
-	require.NotNil(t, h.cloud.patches[failing])
+	require.True(t, h.timerEnabled(failing))
 }
 
 func TestPlanReconcilerRetiredFunctionsGetAValidCronWhenDisabled(t *testing.T) {
 	h := newPlanHarness(t, 120)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
+	h.applyFirstPlan(r)
 	h.setSubjects(40)
 	require.NoError(t, h.reconcile(r))
 	p := h.content(h.open()).Datasets["ds_spot|1m"].P
 	h.now = time.Unix(p, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r), "the final push of retired functions must pass FunctionInstance's cron preflight")
+	require.NoError(t, h.reconcile(r), "retiring only stops the timer")
 	require.Nil(t, h.open())
+	for _, name := range h.cloudTimers() {
+		timer := h.mustFunction(name).Timer
+		require.NotEmpty(t, timer.Cron, name)
+	}
 }
 
 func TestPlanReconcilerRecreatesMissingFunctionsAndDetectsAccessDrift(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
+	h.applyFirstPlan(r)
 
-	created := len(h.cloud.created)
-	for name := range h.cloud.nodes {
-		delete(h.cloud.nodes, name)
-		break
+	names := h.cloudTimers()
+	h.remove(names[0])
+	created := h.cloud.client.Count("CreateFunction")
+	h.now = h.now.Add(2 * time.Hour)
+	require.NoError(t, h.reconcile(r))
+	require.Equal(t, created+1, h.cloud.client.Count("CreateFunction"), "a function deleted in the cloud is rebuilt from the applied plan")
+	require.True(t, h.timerEnabled(names[0]))
+
+	// 调用方密钥轮换：Access 指纹不一致的函数下一次读回时按新身份重推。
+	r.Access = func(region string) (map[string]string, error) {
+		access, err := testSCFAccessEnvironment(region)
+		access["MOOX_CALLER_KEY_ID"] = "assigned-scf-key-18"
+		return access, err
 	}
 	h.now = h.now.Add(2 * time.Hour)
 	require.NoError(t, h.reconcile(r))
-	require.Equal(t, created+1, len(h.cloud.created), "a function deleted in the cloud is rebuilt from the applied plan")
+	for _, name := range h.cloudTimers() {
+		require.Equal(t, "assigned-scf-key-18", h.mustFunction(name).Info.Environment["MOOX_CALLER_KEY_ID"], name)
+	}
 }
 
 func TestTransitionalPlanDropsRemovedSymbolExceptions(t *testing.T) {
@@ -895,41 +461,37 @@ func TestNamespaceShardsEveryFiftyFunctions(t *testing.T) {
 	require.Equal(t, "plain", PlanDeploy{Namespace: "plain"}.NamespaceFor("f-999"))
 }
 
+// 建函数失败后的遗留（云上的 CreateFailed 函数）不再靠清理预留：Ensure 先删掉它、等删完，再按期望内容重建。
 func TestPlanReconcilerClearsStaleCreateReservationsBeforeRecreating(t *testing.T) {
 	h := newPlanHarness(t, 60)
+	name := planFunctionNames(t, 60)[0]
+	h.scf.Seed(scfRef(name), &cloudtest.Function{Info: tencentscf.FunctionInfo{Status: "CreateFailed", Environment: map[string]string{"MOOX_CREATE_RESERVATION_ID": "old-reservation"}}})
 	r := h.reconciler()
-	state, _ := BuildDesiredState(testPlanOptions(), testGroups(60, "1m"), nil)
-	var name string
-	for fn := range state.Functions {
-		name = fn
-		break
-	}
-	// 创建失败后遗留的预留：目录里有记录但没有部署完成，且已超过等待时长。
-	h.cloud.unready[name] = scfinvoker.FunctionInstance{InstanceID: name, FunctionName: name, TriggerType: "timer", ModifiedAt: h.now.Add(-time.Hour)}
 	require.NoError(t, h.reconcile(r))
-	require.Contains(t, h.cloud.deleted, name, "the stale reservation is deleted before creating")
-	require.Contains(t, h.cloud.created, name)
+	require.Equal(t, 1, h.cloud.client.Count("DeleteFunction"), "the failed function is deleted before creating")
+	function := h.mustFunction(name)
+	require.Equal(t, "Active", function.Info.Status)
+	require.NotContains(t, function.Info.Environment, "MOOX_CREATE_RESERVATION_ID")
+	require.True(t, function.Timer.Enabled)
 }
 
+// 云上的同名函数还在创建中（例如重启前起的操作建到一半）：Ensure 等它回到 Active 后接管，不重复建，也不删。
 func TestPlanReconcilerWaitsForFreshCreateReservations(t *testing.T) {
 	h := newPlanHarness(t, 60)
+	name := planFunctionNames(t, 60)[0]
+	h.scf.Seed(scfRef(name), &cloudtest.Function{Info: tencentscf.FunctionInfo{Status: "Creating", Environment: map[string]string{}}, Pending: 3})
 	r := h.reconciler()
-	state, _ := BuildDesiredState(testPlanOptions(), testGroups(60, "1m"), nil)
-	var name string
-	for fn := range state.Functions {
-		name = fn
-		break
-	}
-	h.cloud.unready[name] = scfinvoker.FunctionInstance{InstanceID: name, FunctionName: name, TriggerType: "timer", ModifiedAt: h.now.Add(-time.Minute)}
 	require.NoError(t, h.reconcile(r))
-	require.Empty(t, h.cloud.deleted, "a reservation that may still be in progress is left alone")
-	require.NotContains(t, h.cloud.created, name)
+	require.Equal(t, 1, h.cloud.client.Count("CreateFunction"), "only the other function is created")
+	require.Zero(t, h.cloud.client.Count("DeleteFunction"))
+	require.True(t, h.timerEnabled(name))
 }
 
 func TestPlanManagerDisablesConfiguredSpacesThatAreInactiveAtStartup(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
 	require.NoError(t, h.reconcile(r)) // 先让该空间有函数与计划，模拟停机前的状态
+	require.NotEmpty(t, h.cloudTimers())
 	created := 0
 	var mu sync.Mutex
 	manager := &PlanManager{
@@ -948,16 +510,10 @@ func TestPlanManagerDisablesConfiguredSpacesThatAreInactiveAtStartup(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan struct{})
 	go func() { manager.Run(ctx); close(finished) }()
-	require.Eventually(t, func() bool {
-		h.cloud.patchMu.Lock()
-		defer h.cloud.patchMu.Unlock()
-		for _, patch := range h.cloud.patches {
-			if patch.GetTimerEnabled() {
-				return false
-			}
-		}
-		return len(h.cloud.patches) > 0
-	}, 5*time.Second, 10*time.Millisecond, "timers of the inactive space are disabled after a restart")
+	require.Eventually(t, func() bool { return manager.TimersDisabled("crypto") }, 5*time.Second, 10*time.Millisecond, "timers of the inactive space are disabled after a restart")
+	for _, name := range h.cloudTimers() {
+		require.False(t, h.timerEnabled(name), name)
+	}
 	time.Sleep(200 * time.Millisecond)
 	cancel()
 	<-finished
@@ -969,212 +525,221 @@ func TestPlanManagerDisablesConfiguredSpacesThatAreInactiveAtStartup(t *testing.
 func TestPlanReconcilerRecreatesFunctionsDeletedInTheCloudAndIgnoresFailedReadbacks(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
-	var names []string
-	for name, patch := range h.cloud.patches {
-		names = append(names, name)
-		h.cloud.nodes[name] = scfinvoker.FunctionInstance{InstanceID: name, Metadata: map[string]any{
-			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
-			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
-			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
-		}}
-	}
-	sort.Strings(names)
+	h.applyFirstPlan(r)
+	names := h.cloudTimers()
 	require.GreaterOrEqual(t, len(names), 2)
-	// 一个函数在云端已被删除（目录里还有记录），另一个这次读回失败（云端暂时读不到）。
+	// 一个函数在云端已被删除，另一个这次读回失败（云端暂时读不到）。
 	deleted, unreadable := names[0], names[1]
-	node := h.cloud.nodes[deleted]
-	node.Metadata["timer_status_error"] = "ResourceNotFound.Function: function not found"
-	h.cloud.nodes[deleted] = node
-	node = h.cloud.nodes[unreadable]
-	node.Metadata["timer_status_error"] = "context deadline exceeded"
-	h.cloud.nodes[unreadable] = node
-
+	h.remove(deleted)
+	h.cloud.client.BeforeRead = func(_ string, ref tencentscf.FunctionRef) error {
+		if ref.FunctionName == unreadable {
+			return errors.New("InternalError: context deadline exceeded")
+		}
+		return nil
+	}
 	h.now = h.now.Add(2 * time.Hour)
-	h.cloud.created = nil
+	created := h.cloud.client.Count("CreateFunction")
+	untouched := h.cloud.countOps("ensure", unreadable)
 	require.NoError(t, h.reconcile(r))
-	require.Equal(t, []string{deleted}, h.cloud.deleted, "only the function that is gone in the cloud is removed from the catalog")
-	require.Equal(t, []string{deleted}, h.cloud.created, "and is recreated afterwards")
+	require.Equal(t, created+1, h.cloud.client.Count("CreateFunction"), "the deleted function is recreated")
+	require.True(t, h.timerEnabled(deleted))
+	require.Equal(t, untouched, h.cloud.countOps("ensure", unreadable), "an unreadable function is not touched")
 	require.True(t, r.lastVerified.Before(h.now), "an unreadable function keeps the verification open for a retry")
 }
 
 func TestPlanReconcilerUpgradesFunctionCodeWhenThePackageChanges(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
-	for name, patch := range h.cloud.patches {
-		h.cloud.nodes[name] = scfinvoker.FunctionInstance{InstanceID: name, PackageID: "pkg-old", Metadata: map[string]any{
-			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
-			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
-			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
-		}}
-	}
-	r.Deploy.PackageID = "pkg-new"
+	h.applyFirstPlan(r)
+	h.cloud.setPackages("pkg", "pkg-new")
 	h.now = h.now.Add(2 * time.Hour)
 	require.NoError(t, h.reconcile(r))
-	require.Len(t, h.cloud.upgraded, len(h.cloud.nodes), "every function still on the old package is upgraded")
-	for _, node := range h.cloud.nodes {
-		require.Equal(t, "pkg-new", node.PackageID)
+	h.waitOps(r)
+	names := h.cloudTimers()
+	require.Equal(t, len(names), h.cloud.countOps("upgrade", ""), "every function still on the old package is upgraded")
+	for _, name := range names {
+		function := h.mustFunction(name)
+		require.Equal(t, "pkg-new", function.Info.Environment["MOOX_CODE_PACKAGE_ID"])
+		require.Equal(t, "packages/pkg-new.zip", function.COSObject)
+		require.True(t, function.Timer.Enabled, "升级不动定时器")
 	}
-	before := len(h.cloud.upgraded)
+	before := h.cloud.countOps("upgrade", "")
 	h.now = h.now.Add(2 * time.Hour)
 	require.NoError(t, h.reconcile(r))
-	require.Len(t, h.cloud.upgraded, before, "functions already on the configured package are left alone")
+	h.waitOps(r)
+	require.Equal(t, before, h.cloud.countOps("upgrade", ""), "functions already on the latest package are left alone")
 }
 
 func TestTimerNeedsRepairDetectsMessageAndQualifierDrift(t *testing.T) {
-	good := func() map[string]any {
-		return map[string]any{
-			"timer_actual_enabled": true, "timer_actual_cron": "0 * * * * * *", "timer_available_status": "Available",
-			"timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
-		}
+	good := func() *cloud.TimerState {
+		return &cloud.TimerState{Timer: cloud.Timer{Cron: "0 * * * * * *", Enabled: true}, AvailableStatus: "Available", Qualifier: timerTriggerQualifier, Message: timerTriggerMessage}
 	}
-	require.False(t, timerNeedsRepair(good(), "0 * * * * * *"))
+	require.True(t, TimerMatches(good(), "0 * * * * * *"))
 	bad := good()
-	bad["timer_actual_message"] = "wrong"
-	require.True(t, timerNeedsRepair(bad, "0 * * * * * *"))
+	bad.Message = "wrong"
+	require.False(t, TimerMatches(bad, "0 * * * * * *"))
 	bad = good()
-	bad["timer_actual_qualifier"] = "v1"
-	require.True(t, timerNeedsRepair(bad, "0 * * * * * *"))
+	bad.Qualifier = "v1"
+	require.False(t, TimerMatches(bad, "0 * * * * * *"))
+	bad = good()
+	bad.AvailableStatus = "Disabled"
+	require.False(t, TimerMatches(bad, "0 * * * * * *"))
+	require.False(t, TimerMatches(nil, "0 * * * * * *"))
+	require.True(t, TimerMatches(nil, ""), "没有 cron 时没有定时器也算一致")
+	require.False(t, TimerMatches(good(), ""), "没有 cron 时定时器必须停用")
 }
 
+// 一个函数同一时刻只有一个操作：在跑的操作结束之前，同一个函数起不了第二个（不论用途），别的函数不受影响；
+// 结束之后取走结果，就能起新的。
 func TestAuxJobsTrackedUntilTerminalAndBlockResubmission(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	h.cloud.running = map[string]bool{"job-1": true, "job-2": true}
-	r.aux.track(auxJob{id: "job-1", kind: auxJobKindUpgrade, functions: []string{"fn-a", "fn-b"}, at: r.now()})
-	// 作业未结束：这批函数被排除，其余函数不受影响。
-	require.Equal(t, []string{"fn-c"}, r.excludeBusy(context.Background(), []string{"fn-a", "fn-c"}))
-	require.Equal(t, 1, r.aux.count())
+	release := make(chan struct{})
+	op, err := r.ops().start("fn-a", opKeyUpgrade, false, func(ctx context.Context, _ *functionOp) error { <-release; return nil })
+	require.NoError(t, err)
+	_, err = r.ops().start("fn-a", opKeyRepair, true, func(context.Context, *functionOp) error { return nil })
+	require.ErrorIs(t, err, errOpBusy)
+	other, err := r.ops().start("fn-c", opKeyRepair, true, func(context.Context, *functionOp) error { return nil })
+	require.NoError(t, err)
+	r.ops().wait(context.Background(), []*functionOp{other}, time.Second)
+	require.True(t, r.ops().busy("fn-a"))
+	require.Nil(t, r.ops().take("fn-a", opKeyUpgrade), "还没结束的操作取不到结果")
 
-	// 排队超过告警年龄（20 分钟）的作业仍在运行：只告警，不解除互斥。
-	r.aux.track(auxJob{id: "job-2", kind: auxJobKindRepair, functions: []string{"fn-d"}, at: r.now().Add(-2 * auxJobWarnAge)})
-	require.Empty(t, r.excludeBusy(context.Background(), []string{"fn-d"}))
-	require.Equal(t, 2, r.aux.count())
-	h.cloud.running["job-2"] = false
-	require.Equal(t, []string{"fn-d"}, r.excludeBusy(context.Background(), []string{"fn-d"}))
-
-	// 作业到终态后立即解除。
-	h.cloud.running["job-1"] = false
-	require.Equal(t, []string{"fn-a"}, r.excludeBusy(context.Background(), []string{"fn-a"}))
-	require.Equal(t, 0, r.aux.count())
+	close(release)
+	r.ops().wait(context.Background(), []*functionOp{op}, time.Second)
+	require.Nil(t, r.ops().take("fn-a", opKeyRepair), "用途不同的结果不被取走")
+	require.NotNil(t, r.ops().take("fn-a", opKeyUpgrade))
+	_, err = r.ops().start("fn-a", opKeyRepair, true, func(context.Context, *functionOp) error { return nil })
+	require.NoError(t, err)
 }
 
+// 计划推进的操作在跑时，读回修复与升级都不碰这个函数：本轮跳过，不算失败，也不宣布核对完成。
 func TestInFlightPlanJobsAlsoBlockAuxiliaryChanges(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	h.cloud.running = map[string]bool{"plan-job": true}
-	r.pending = []pendingPlanJob{{id: "plan-job", kind: planJobKindTransition, functions: []string{"fn-x"}, at: r.now()}}
-	// 普通计划作业在途时，辅助变更同样不能碰这些函数；活动对账路径不在这里结算计划作业。
-	require.Equal(t, []string{"fn-y"}, r.excludeBusy(context.Background(), []string{"fn-x", "fn-y"}))
-	require.Len(t, r.pending, 1)
-
-	// 空间停用收尾时没有计划推进，终态的计划作业在这里移出在途集合。
-	busy := r.busyFunctions(context.Background(), true)
-	require.Contains(t, busy, "fn-x")
-	h.cloud.running["plan-job"] = false
-	busy = r.busyFunctions(context.Background(), true)
-	require.NotContains(t, busy, "fn-x")
-	require.Empty(t, r.pending)
+	h.applyFirstPlan(r)
+	names := h.cloudTimers()
+	h.mutate(names[0], func(function *cloudtest.Function) {
+		function.Info.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "tampered"
+	})
+	release := make(chan struct{})
+	_, err := r.ops().start(names[0], planOpKey(99, planStageTransition), true, func(ctx context.Context, _ *functionOp) error { <-release; return nil })
+	require.NoError(t, err)
+	h.now = h.now.Add(2 * time.Hour)
+	ensures := h.cloud.countOps("ensure", names[0])
+	require.NoError(t, h.reconcile(r))
+	require.Equal(t, ensures, h.cloud.countOps("ensure", names[0]), "在跑的操作结束前不起修复")
+	require.True(t, r.lastVerified.Before(h.now), "核对没有完成，几分钟后重试")
+	close(release)
+	h.waitOps(r)
+	h.now = h.now.Add(planVerifyRetry)
+	require.NoError(t, h.reconcile(r))
+	require.Equal(t, ensures+1, h.cloud.countOps("ensure", names[0]))
+	require.NotEqual(t, "tampered", h.mustFunction(names[0]).Info.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
 }
 
+// 一轮里等操作结束的上限：本轮剩余时间减 5 秒，没有截止时间时用 opWaitMax。
 func TestUpgradeContextReservesTimeForPlanProgress(t *testing.T) {
+	r := &PlanReconciler{opWaitMax: 50 * time.Second}
 	parent, cancel := context.WithTimeout(context.Background(), 55*time.Second)
 	defer cancel()
-	child, cancelChild := upgradeContext(parent)
-	defer cancelChild()
-	deadline, ok := child.Deadline()
-	require.True(t, ok)
-	require.LessOrEqual(t, time.Until(deadline), 19*time.Second)
-	require.NoError(t, parent.Err())
+	require.LessOrEqual(t, r.roundWait(parent), 50*time.Second)
+	require.Greater(t, r.roundWait(parent), 49*time.Second)
+	short, cancelShort := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelShort()
+	require.LessOrEqual(t, r.roundWait(short), 5*time.Second)
+	require.Equal(t, 50*time.Second, r.roundWait(context.Background()))
 }
 
+// 启用定时器的操作还在跑：停用不能宣布完成，否则它结束后定时器又被打开；它结束后才停用并确认。
 func TestDisableAllWaitsForInFlightEnablingJobs(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
-
-	// 启用定时器的计划作业等待超时仍在运行：停用不能宣布完成，否则作业生效后定时器又被打开。
-	var target string
-	for name := range h.cloud.patches {
-		target = name
-		break
-	}
-	h.cloud.running = map[string]bool{"enable-job": true}
-	r.pending = []pendingPlanJob{{id: "enable-job", kind: planJobKindTransition, functions: []string{target}, at: r.now()}}
+	h.applyFirstPlan(r)
+	target := h.cloudTimers()[0]
+	release := make(chan struct{})
+	op, err := r.ops().start(target, opKeyEnable, true, func(ctx context.Context, _ *functionOp) error {
+		<-release
+		return r.Cloud.SetTimer(ctx, r.functionRef(target, "ap-nanjing"), cloud.Timer{Cron: "0 * * * * * *", Enabled: true}, "pkg")
+	})
+	require.NoError(t, err)
+	waitHolding(t, r, op)
 	done, err := r.DisableAll(context.Background())
 	require.NoError(t, err)
 	require.False(t, done)
 
-	// 作业结束后才提交停用并确认完成。
-	h.cloud.running["enable-job"] = false
+	close(release)
+	h.waitOps(r)
 	done, err = r.DisableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
-	require.False(t, h.cloud.patches[target].GetTimerEnabled())
+	for _, name := range h.cloudTimers() {
+		require.False(t, h.timerEnabled(name), name)
+	}
 }
 
+// 停用请求发出后，读回仍看到定时器启用（例如被别处重新打开）：不能宣布完成，下一次重新停用、再读回确认。
 func TestDisableAllDoesNotTrustAReadbackTakenBeforeInFlightJobsSettle(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	var target string
-	for name := range h.cloud.patches {
-		target = name
-		break
+	h.applyFirstPlan(r)
+	target := h.cloudTimers()[0]
+	var mu sync.Mutex
+	disabled, reopened := false, false
+	h.cloud.client.BeforeWrite = func(name string, ref tencentscf.FunctionRef) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if name == "EnsureTimerTrigger" && ref.FunctionName == target {
+			disabled = true
+		}
+		return nil
 	}
-	// 启用作业在读回的这一刻才完成：先结算再读回，所以这一轮仍判定未完成，下一轮基于完成后的读回再停用。
-	h.cloud.running = map[string]bool{"enable-job": true}
-	h.cloud.onFresh = func() { h.cloud.running["enable-job"] = false }
-	r.pending = []pendingPlanJob{{id: "enable-job", kind: planJobKindTransition, functions: []string{target}, at: r.now()}}
+	h.cloud.client.BeforeRead = func(name string, ref tencentscf.FunctionRef) error {
+		mu.Lock()
+		reopen := name == "GetTimerTrigger" && ref.FunctionName == target && disabled && !reopened
+		if reopen {
+			reopened = true
+		}
+		mu.Unlock()
+		if reopen {
+			// 停用之后、读回之前定时器又被打开。
+			h.mutate(target, func(function *cloudtest.Function) { function.Timer.Enabled = true })
+		}
+		return nil
+	}
 	done, err := r.DisableAll(context.Background())
 	require.NoError(t, err)
-	require.False(t, done)
+	require.False(t, done, "读回看到定时器仍启用")
 	done, err = r.DisableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
+	require.False(t, h.timerEnabled(target))
 }
 
 func TestReenableAfterDisableRepushesAnUnfinishedPlan(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
 	require.NoError(t, h.reconcile(r))
-	open := h.open()
-	require.NotNil(t, open, "计划在等待生效边界，尚未收尾")
-	require.NotEmpty(t, h.cloud.patches)
-	for name, patch := range h.cloud.patches {
-		require.True(t, patch.GetTimerEnabled(), name)
+	require.NotNil(t, h.open(), "计划在等待生效边界，尚未收尾")
+	for _, name := range h.cloudTimers() {
+		require.True(t, h.timerEnabled(name), name)
 	}
 
 	done, err := r.DisableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
-	for name, patch := range h.cloud.patches {
-		require.False(t, patch.GetTimerEnabled(), name)
+	for _, name := range h.cloudTimers() {
+		require.False(t, h.timerEnabled(name), name)
 	}
 	progress, err := DecodeFetchPlanProgress(h.open().Progress)
 	require.NoError(t, err)
 	require.Empty(t, progress.Transitioned, "停用后下发确认作废")
 
-	// 重新启用：原计划的下发确认已作废，函数的定时器被重新打开。
-	require.NoError(t, h.reconcile(r))
-	for name, patch := range h.cloud.patches {
-		require.True(t, patch.GetTimerEnabled(), name)
+	// 重新启用（恢复时空间协程用新的对账器）：原计划的下发确认已作废，函数的定时器被重新打开。
+	resumed := h.reconciler()
+	require.NoError(t, h.reconcile(resumed))
+	for _, name := range h.cloudTimers() {
+		require.True(t, h.timerEnabled(name), name)
 	}
 }
 
@@ -1187,8 +752,9 @@ func TestDisableAllInvalidatesConfirmationsBeforeSubmittingDisables(t *testing.T
 	require.NoError(t, err)
 	require.NotEmpty(t, before.Transitioned)
 
-	// 提交停用时失败（进程崩溃的等价情形）：确认位已经先持久化作废，重启后的对账器重新启用就会重推。
-	h.cloud.submitErr = errors.New("submit crashed")
+	// 停用定时器时失败（进程崩溃的等价情形）：确认位已经先持久化作废，重启后的对账器重新启用就会重推。
+	names := h.cloudTimers()
+	recover := h.failWrites("EnsureTimerTrigger", names[0])
 	_, err = r.DisableAll(context.Background())
 	require.Error(t, err)
 	after, err := DecodeFetchPlanProgress(h.open().Progress)
@@ -1196,22 +762,17 @@ func TestDisableAllInvalidatesConfirmationsBeforeSubmittingDisables(t *testing.T
 	require.Empty(t, after.Transitioned)
 	require.Empty(t, after.Finalized)
 
-	h.cloud.submitErr = nil
-	for name := range h.cloud.patches {
-		patch := h.cloud.patches[name]
-		patch.TimerEnabled = false // 云端已有一部分函数被停用
-	}
+	recover()
 	require.NoError(t, h.reconcile(h.reconciler()))
-	for name, patch := range h.cloud.patches {
-		require.True(t, patch.GetTimerEnabled(), name)
+	for _, name := range names {
+		require.True(t, h.timerEnabled(name), name)
 	}
 }
 
 func TestPlanReconcilerResolvesTheLatestPackageByNameAndUpgradesWhenANewOneIsUploaded(t *testing.T) {
 	h := newPlanHarness(t, 60)
-	h.cloud.packages = []string{"pkg-v1"}
+	h.cloud.setPackages("pkg-v1")
 	r := h.reconciler()
-	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	require.NoError(t, h.reconcile(r))
 	require.Equal(t, "pkg-v1", r.packageID())
 
@@ -1219,24 +780,17 @@ func TestPlanReconcilerResolvesTheLatestPackageByNameAndUpgradesWhenANewOneIsUpl
 	change := h.content(h.open()).Datasets["ds_spot|1m"]
 	h.now = time.Unix(change.P, 0).Add(time.Minute)
 	require.NoError(t, h.reconcile(r))
-	for name, patch := range h.cloud.patches {
-		h.cloud.nodes[name] = scfinvoker.FunctionInstance{InstanceID: name, PackageID: "pkg-v1", Metadata: map[string]any{
-			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
-			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
-			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
-		}}
-	}
-	h.cloud.packages = append(h.cloud.packages, "pkg-v2")
+	h.cloud.setPackages("pkg-v1", "pkg-v2")
 	h.now = h.now.Add(2 * time.Hour)
 	require.NoError(t, h.reconcile(r))
+	h.waitOps(r)
 	require.Equal(t, "pkg-v2", r.packageID())
-	require.Len(t, h.cloud.upgraded, len(h.cloud.nodes))
-	for _, node := range h.cloud.nodes {
-		require.Equal(t, "pkg-v2", node.PackageID)
+	for _, name := range h.cloudTimers() {
+		require.Equal(t, "pkg-v2", h.mustFunction(name).Info.Environment["MOOX_CODE_PACKAGE_ID"], name)
 	}
 
 	// 云端暂时读不到包列表：沿用上一次的结果，不让函数停摆。
-	h.cloud.packageErr = errors.New("cloudfunction unavailable")
+	h.cloud.setPackageErr(errors.New("store unavailable"))
 	h.now = h.now.Add(2 * time.Hour)
 	require.NoError(t, h.reconcile(r))
 	require.Equal(t, "pkg-v2", r.packageID())
@@ -1244,48 +798,46 @@ func TestPlanReconcilerResolvesTheLatestPackageByNameAndUpgradesWhenANewOneIsUpl
 
 func TestPlanReconcilerRefusesToRunWithoutAnyResolvablePackage(t *testing.T) {
 	h := newPlanHarness(t, 60)
+	h.cloud.setPackages()
 	r := h.reconciler()
-	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	// 没有上传过代码包：不能创建函数，明确报错而不是用空包 ID 创建。
 	err := h.reconcile(r)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "code package")
-	require.Empty(t, h.cloud.created)
+	require.Zero(t, h.cloud.client.Count("CreateFunction"))
 }
 
 func TestBackfillFunctionFollowsANewlyUploadedPackageWithinTheSameReconciler(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
-	h.cloud.packages = []string{"pkg-v1"}
-	h.cloud.backfill = map[string]scfinvoker.FunctionInstance{name: {InstanceID: name, PackageID: "pkg-v1", Metadata: testBackfillMetadata()}}
+	h.cloud.setPackages("pkg-v1")
 
 	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
 	require.Equal(t, name, got)
-	require.Empty(t, h.cloud.upgraded)
+	require.Equal(t, "pkg-v1", h.mustFunction(name).Info.Environment["MOOX_CODE_PACKAGE_ID"])
 
 	// 就绪缓存记的是已确认的代码包：上传新版本后，补采函数在同一个对账器里被升级，不需要重启 Collector。
-	h.cloud.packages = append(h.cloud.packages, "pkg-v2")
+	h.cloud.setPackages("pkg-v1", "pkg-v2")
 	h.now = h.now.Add(time.Minute)
 	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
-	require.Equal(t, []string{name}, h.cloud.upgraded)
-	require.Equal(t, "pkg-v2", h.cloud.backfill[name].PackageID)
+	require.Equal(t, "pkg-v2", h.mustFunction(name).Info.Environment["MOOX_CODE_PACKAGE_ID"])
+	require.Equal(t, "packages/pkg-v2.zip", h.mustFunction(name).COSObject)
 
-	// 之后不再重复升级。
+	// 之后不再重复。
+	ensures := h.cloud.countOps("ensure", name)
 	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
-	require.Len(t, h.cloud.upgraded, 1)
+	require.Equal(t, ensures, h.cloud.countOps("ensure", name))
 }
 
 // 对账协程与补采协程并发解析包名：查询串行，较早发出的旧结果不会覆盖更新的版本。
 func TestPackageResolutionIsSerializedAndNeverRegresses(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
-	h.cloud.packages = []string{"pkg-v1", "pkg-v2"}
+	h.cloud.setPackages("pkg-v1", "pkg-v2")
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -1298,53 +850,45 @@ func TestPackageResolutionIsSerializedAndNeverRegresses(t *testing.T) {
 	require.Equal(t, "pkg-v2", r.packageID())
 }
 
-// 较早读到旧包的补采调用，等到拿到补采锁时必须按最新解析结果判断，不能把别的调用刚升级好的函数降回旧版本。
+// 较早读到旧包的补采调用，等到拿到补采锁时必须按最新解析结果判断，不能把别的调用刚升级好的函数降回旧版本：
+// 代码包在操作开始时现取，所以 Ensure 写的一定是最新的包。
 func TestBackfillFunctionIsNeverDowngradedByAStaleCaller(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
-	h.cloud.packages = []string{"pkg-v1"}
-	h.cloud.backfill = map[string]scfinvoker.FunctionInstance{name: {InstanceID: name, PackageID: "pkg-v2", Metadata: testBackfillMetadata()}}
+	h.cloud.setPackages("pkg-v1", "pkg-v2")
+	_, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, "pkg-v2", h.mustFunction(name).Info.Environment["MOOX_CODE_PACKAGE_ID"])
 
-	r.backfillMu.Lock() // 模拟另一次调用正在升级补采函数
+	stale := h.reconciler()
+	h.cloud.setPackages("pkg-v1")
+	require.NoError(t, stale.refreshPackage(context.Background()))
+	require.Equal(t, "pkg-v1", stale.packageID())
+	stale.backfillMu.Lock() // 模拟另一次调用正在操作补采函数
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.EnsureBackfillFunction(context.Background(), "spot")
+		_, err := stale.EnsureBackfillFunction(context.Background(), "spot")
 		done <- err
 	}()
-	// 等调用方确实解析到 v1（并卡在补采锁上）再推进包版本，而不是靠固定睡眠假定调度顺序。
-	require.Eventually(t, func() bool { return r.packageID() == "pkg-v1" }, 5*time.Second, 5*time.Millisecond)
-	h.cloud.packages = []string{"pkg-v1", "pkg-v2"}
-	h.now = h.now.Add(time.Minute)
-	require.NoError(t, r.refreshPackage(context.Background()))
-	require.Equal(t, "pkg-v2", r.packageID())
-	r.backfillMu.Unlock()
-
+	h.cloud.setPackages("pkg-v1", "pkg-v2")
+	stale.backfillMu.Unlock()
 	require.NoError(t, <-done)
-	require.Empty(t, h.cloud.upgraded, "已在 v2 的补采函数不能被降级")
-	require.Equal(t, "pkg-v2", h.cloud.backfill[name].PackageID)
+	require.Equal(t, "pkg-v2", h.mustFunction(name).Info.Environment["MOOX_CODE_PACKAGE_ID"], "已在 v2 的补采函数不能被降级")
 }
 
-// 访问入口或调用方身份变了（主机改名、密钥轮换），以及没有记录指纹的旧补采函数：删掉后按当前身份重建，之后不再重复。
+// 访问入口或调用方身份变了（主机改名、密钥轮换）：Ensure 按当前身份改写环境（不再删掉重建），之后不再重复。
 func TestBackfillFunctionIsRecreatedWhenAccessIdentityChanges(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
-	h.cloud.packages = []string{"pkg-v1"}
-	h.cloud.backfill = map[string]scfinvoker.FunctionInstance{name: {InstanceID: name, PackageID: "pkg-v1", Metadata: map[string]any{}, Ready: true}}
-
 	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
 	require.Equal(t, name, got)
-	require.Equal(t, []string{name}, h.cloud.deleted)
-	require.Equal(t, []string{name}, h.cloud.created)
-	require.Equal(t, testBackfillMetadata()[backfillAccessMetadataKey], h.cloud.backfill[name].Metadata[backfillAccessMetadataKey])
-
+	ensures := h.cloud.countOps("ensure", name)
 	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
-	require.Len(t, h.cloud.deleted, 1, "身份一致后不再重建")
+	require.Equal(t, ensures, h.cloud.countOps("ensure", name), "身份一致时不再写")
 
 	r.Access = func(region string) (map[string]string, error) {
 		access, err := testSCFAccessEnvironment(region)
@@ -1353,17 +897,10 @@ func TestBackfillFunctionIsRecreatedWhenAccessIdentityChanges(t *testing.T) {
 	}
 	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
-	require.Len(t, h.cloud.deleted, 2, "访问入口变了要重建")
-	require.Len(t, h.cloud.created, 2)
-}
-
-func testBackfillMetadata() map[string]any {
-	access, _ := testSCFAccessEnvironment("")
-	return map[string]any{backfillAccessMetadataKey: backfillAccessFingerprint(access)}
-}
-
-func testSCFAccessEnvironment(string) (map[string]string, error) {
-	return map[string]string{"MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER": "scf-collector", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 64)}, nil
+	require.Equal(t, ensures+1, h.cloud.countOps("ensure", name), "访问入口变了要重新 Ensure")
+	require.Equal(t, "access@overseas", h.mustFunction(name).Info.Environment["MOOX_ACCESS_ID"])
+	require.Zero(t, h.cloud.client.Count("DeleteFunction"))
+	require.Equal(t, 1, h.cloud.client.Count("CreateFunction"))
 }
 
 // 暂停：空间从运行集合里移出后，管理器先停用全部定时器再退出协程，TimersDisabled 随之为真（大小写不敏感）；
@@ -1394,15 +931,15 @@ func TestPlanManagerReportsTimersDisabledAfterPauseAndRestartsOnResume(t *testin
 	go func() { manager.Run(ctx); close(finished) }()
 	defer func() { cancel(); <-finished }()
 
-	require.Eventually(t, func() bool { record, _ := h.store.Open(context.Background(), "crypto"); return record != nil }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return len(h.cloudTimers()) == 2 }, 5*time.Second, 10*time.Millisecond)
 	require.False(t, manager.TimersDisabled("crypto"), "运行中的空间不是停用状态")
 
 	mu.Lock()
 	paused = true
 	mu.Unlock()
 	require.Eventually(t, func() bool { return manager.TimersDisabled("CRYPTO") }, 5*time.Second, 10*time.Millisecond, "停用确认后报告定时器已停用")
-	for _, patch := range h.cloud.patches {
-		require.False(t, patch.GetTimerEnabled(), "全部函数的定时器已停用")
+	for _, name := range h.cloudTimers() {
+		require.False(t, h.timerEnabled(name), "全部函数的定时器已停用")
 	}
 
 	mu.Lock()
@@ -1414,197 +951,144 @@ func TestPlanManagerReportsTimersDisabledAfterPauseAndRestartsOnResume(t *testin
 func TestEnableAllReenablesTimersAfterDisableWithoutWaitingForRounds(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open(), "计划已收尾，进入已生效状态")
+	h.applyFirstPlan(r)
 
 	done, err := r.DisableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
-	for name, patch := range h.cloud.patches {
-		require.False(t, patch.GetTimerEnabled(), name)
+	for _, name := range h.cloudTimers() {
+		require.False(t, h.timerEnabled(name), name)
 	}
 
 	// 恢复：一次调用就让全部函数的定时器重新启用，并让下一轮对账立即读回校验。
-	done, err = r.EnableAll(context.Background())
+	resumed := h.reconciler()
+	done, err = resumed.EnableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
-	for name, patch := range h.cloud.patches {
-		require.True(t, patch.GetTimerEnabled(), name)
-		// 云端要求启用定时器的配置带受管环境变量，否则提交被拒绝。
-		require.NotEmpty(t, patch.GetManagedEnvironment()["MOOX_FETCH_TIMEOUT_SECONDS"], name)
+	for _, name := range h.cloudTimers() {
+		require.True(t, h.timerEnabled(name), name)
 	}
-	require.True(t, r.lastVerified.IsZero())
+	require.True(t, resumed.lastVerified.IsZero())
 
-	// 已经全部启用时再次调用不再提交，也算完成。
-	done, err = r.EnableAll(context.Background())
+	// 已经全部启用时再次调用不再写，也算完成。
+	writes := len(h.scf.Writes())
+	done, err = resumed.EnableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
+	require.Len(t, h.scf.Writes(), writes)
 }
 
 func TestEnableAllWaitsForInFlightJobs(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
+	h.applyFirstPlan(r)
 	done, err := r.DisableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
 
-	var target string
-	for name := range h.cloud.patches {
-		target = name
-		break
-	}
-	h.cloud.running = map[string]bool{"job": true}
-	r.pending = []pendingPlanJob{{id: "job", kind: planJobKindTransition, functions: []string{target}, at: r.now()}}
-	done, err = r.EnableAll(context.Background())
+	resumed := h.reconciler()
+	target := h.cloudTimers()[0]
+	release := make(chan struct{})
+	_, err = resumed.ops().start(target, opKeyRepair, true, func(ctx context.Context, _ *functionOp) error { <-release; return nil })
 	require.NoError(t, err)
-	require.False(t, done, "仍有在途作业的函数不提交，也不能算完成")
-	require.False(t, h.cloud.patches[target].GetTimerEnabled())
+	done, err = resumed.EnableAll(context.Background())
+	require.NoError(t, err)
+	require.False(t, done, "仍有操作在跑的函数不启用，也不能算完成")
+	require.False(t, h.timerEnabled(target))
 
-	h.cloud.running["job"] = false
-	done, err = r.EnableAll(context.Background())
+	close(release)
+	h.waitOps(resumed)
+	done, err = resumed.EnableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
-	require.True(t, h.cloud.patches[target].GetTimerEnabled())
+	require.True(t, h.timerEnabled(target))
 }
 
-// 恢复采集时必须先升级落后的函数，再启用定时器并下发环境：环境格式随代码版本变化，不能出现“旧代码读新环境”。
+// 恢复采集时必须先升级落后的函数，再启用定时器：环境格式随代码版本变化，不能出现“旧代码读新环境”。
 func TestEnableAllUpgradesFunctionCodeBeforeEnablingTimers(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
+	h.applyFirstPlan(r)
 	done, err := r.DisableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
-	for name, patch := range h.cloud.patches {
-		h.cloud.nodes[name] = scfinvoker.FunctionInstance{InstanceID: name, PackageID: "pkg-old", Metadata: map[string]any{
-			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": false,
-			"timer_available_status": "Disabled", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
-		}}
-	}
-	r.Deploy.PackageID = "pkg-new"
-	h.cloud.upgraded = nil
-	enabledAfterUpgrade := map[string]bool{}
-	h.cloud.onRuntimeConfig = func(patches []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch) {
-		for _, patch := range patches {
-			enabledAfterUpgrade[patch.GetInstanceId()] = h.cloud.nodes[patch.GetInstanceId()].PackageID == "pkg-new"
-		}
-	}
+	h.cloud.setPackages("pkg", "pkg-new")
+	h.scf.ResetWrites()
 
-	done, err = r.EnableAll(context.Background())
+	resumed := h.reconciler()
+	done, err = resumed.EnableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
-	require.Len(t, h.cloud.upgraded, len(h.cloud.nodes), "全部落后函数先升级")
-	require.NotEmpty(t, enabledAfterUpgrade)
-	for name, upgraded := range enabledAfterUpgrade {
-		require.True(t, upgraded, "函数 %s 启用定时器时代码必须已经是新版本", name)
-	}
-	for name := range h.cloud.nodes {
-		require.True(t, h.cloud.patches[name].GetTimerEnabled(), name)
+	writes := h.scf.Writes()
+	for _, name := range h.cloudTimers() {
+		function := h.mustFunction(name)
+		require.Equal(t, "pkg-new", function.Info.Environment["MOOX_CODE_PACKAGE_ID"], name)
+		require.True(t, function.Timer.Enabled, name)
+		// 启用定时器的请求发出时，函数的代码与包 ID 已经是新包。
+		key := cloudtest.Key(scfRef(name))
+		for _, write := range writes {
+			if strings.HasPrefix(write, "EnsureTimerTrigger "+key+" ") && strings.Contains(write, "enabled=true") {
+				require.Contains(t, write, "package_id=pkg-new code=packages/pkg-new.zip", "函数 %s 启用定时器时代码必须已经是新版本", name)
+			}
+		}
 	}
 }
 
-// 升级失败或仍在进行时，EnableAll 读回确认仍有函数在旧代码包上：返回 errCodeUpgradePending，既不启用定时器也不下发环境。
+// 升级失败时，EnableAll 读回确认仍有函数在旧代码包上：返回 errCodeUpgradePending，一个定时器都不启用；升级成功后才启用。
 func TestEnableAllRefusesToEnableWhileFunctionsStayOnTheOldPackage(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
+	h.applyFirstPlan(r)
 	done, err := r.DisableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
-	var stuck string
-	for name, patch := range h.cloud.patches {
-		h.cloud.nodes[name] = scfinvoker.FunctionInstance{InstanceID: name, PackageID: "pkg-old", Metadata: map[string]any{
-			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": false,
-			"timer_available_status": "Disabled", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
-		}}
-		stuck = name
-	}
-	r.Deploy.PackageID = "pkg-new"
-	before := map[string]bool{}
-	for name, patch := range h.cloud.patches {
-		before[name] = patch.GetTimerEnabled()
-	}
+	h.cloud.setPackages("pkg", "pkg-new")
+	stuck := h.cloudTimers()[0]
+	recover := h.failWrites("UpdateFunctionCode", stuck)
 
-	// 某个函数的升级失败：不能启用。
-	h.cloud.failInstances[stuck] = true
-	done, err = r.EnableAll(context.Background())
+	resumed := h.reconciler()
+	done, err = resumed.EnableAll(context.Background())
 	require.ErrorIs(t, err, errCodeUpgradePending)
 	require.False(t, done)
-	for name, patch := range h.cloud.patches {
-		require.Equal(t, before[name], patch.GetTimerEnabled(), "代码没升级完，函数 %s 的定时器不能被启用", name)
+	for _, name := range h.cloudTimers() {
+		require.False(t, h.timerEnabled(name), "代码没升级完，函数 %s 的定时器不能被启用", name)
 	}
+	require.Equal(t, "pkg", h.mustFunction(stuck).Info.Environment["MOOX_CODE_PACKAGE_ID"])
 
-	// 作业仍在运行（升级请求已提交、云端还没完成）：同样不能启用。
-	h.cloud.failInstances[stuck] = false
-	node := h.cloud.nodes[stuck]
-	node.PackageID = "pkg-old"
-	h.cloud.nodes[stuck] = node
-	r.aux.track(auxJob{id: "job-running", kind: auxJobKindUpgrade, functions: []string{stuck}, at: r.now()})
-	h.cloud.running = map[string]bool{"job-running": true}
-	_, err = r.EnableAll(context.Background())
-	require.ErrorIs(t, err, errCodeUpgradePending)
-
-	// 作业结束、代码已是新包：启用。
-	h.cloud.running["job-running"] = false
-	node.PackageID = "pkg-new"
-	h.cloud.nodes[stuck] = node
-	for name, n := range h.cloud.nodes {
-		n.PackageID = "pkg-new"
-		h.cloud.nodes[name] = n
-	}
-	done, err = r.EnableAll(context.Background())
+	recover()
+	done, err = resumed.EnableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
-	for name := range h.cloud.nodes {
-		require.True(t, h.cloud.patches[name].GetTimerEnabled(), name)
+	for _, name := range h.cloudTimers() {
+		require.True(t, h.timerEnabled(name), name)
 	}
 }
 
-// 云端已确认不存在的函数没有代码可升级，不能让整个空间永远等下去；读回失败则无法确认，同样等待。
+// 云上已经不存在的函数没有代码可升级，不能让整个空间永远等下去（交给对账重建）；读回失败则无法确认，同样等待。
 func TestUpgradeBeforeEnableIgnoresFunctionsGoneFromTheCloudAndWaitsOnReadbackErrors(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
-	require.Nil(t, h.open())
-	var gone string
-	for name, patch := range h.cloud.patches {
-		h.cloud.nodes[name] = scfinvoker.FunctionInstance{InstanceID: name, PackageID: "pkg-new", Metadata: map[string]any{
-			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": false,
-			"timer_available_status": "Disabled", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
-		}}
-		gone = name
-	}
-	r.Deploy.PackageID = "pkg-new"
-	// 一个函数在目录里还是旧包，但云端读回确认它已不存在。
-	h.cloud.nodes[gone] = scfinvoker.FunctionInstance{InstanceID: gone, PackageID: "pkg-old", Metadata: map[string]any{
-		"timer_last_readback_at": h.now.UTC().Format(time.RFC3339Nano),
-		"timer_status_error":     "ResourceNotFound.Function: function not found",
-	}}
-	h.cloud.failInstances[gone] = true // 不存在的函数升级必然失败，留在旧包
-	require.NoError(t, r.upgradeBeforeEnable(context.Background()), "已确认不存在的函数不阻塞升级门禁")
-	require.Equal(t, "pkg-old", h.cloud.nodes[gone].PackageID)
+	h.applyFirstPlan(r)
+	done, err := r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	names := h.cloudTimers()
+	h.remove(names[0])
 
-	// 同一个函数没有读回证据（读回过期），说明它可能还活着：必须等。
-	h.cloud.nodes[gone] = scfinvoker.FunctionInstance{InstanceID: gone, PackageID: "pkg-old", Metadata: map[string]any{}}
-	require.ErrorIs(t, r.upgradeBeforeEnable(context.Background()), errCodeUpgradePending)
+	resumed := h.reconciler()
+	done, err = resumed.EnableAll(context.Background())
+	require.NoError(t, err, "已确认不存在的函数不阻塞启用")
+	require.True(t, done)
+	require.True(t, h.timerEnabled(names[1]))
+
+	h.cloud.client.BeforeRead = func(_ string, ref tencentscf.FunctionRef) error {
+		if ref.FunctionName == names[1] {
+			return errors.New("InternalError: context deadline exceeded")
+		}
+		return nil
+	}
+	_, err = h.reconciler().EnableAll(context.Background())
+	require.ErrorIs(t, err, errCodeUpgradePending, "读不到云上就无法确认代码已经升级")
 }
 
 func TestFirstStreamPlanUsesShortLead(t *testing.T) {

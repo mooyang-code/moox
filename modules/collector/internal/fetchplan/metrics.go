@@ -252,14 +252,11 @@ func (m *ControlMetrics) trackFailureSince(spaceID, reason string) {
 	m.assignmentFailureSince.WithLabelValues(spaceID).Set(float64(record.since.Unix()))
 }
 
-// ReasonPublishLeaseHeld 是 Admin 明确答复「发布租约或在途操作占用仍被持有」时的失败原因。
-const ReasonPublishLeaseHeld = "publish_lease_held"
-
-// assignmentFailureReasons 是协调失败原因的白名单，与 fail 的调用点一一对应；白名单之外的一律按 cloudfunction 上报。
+// assignmentFailureReasons 是协调失败原因的白名单，与 fail 的调用点一一对应；白名单之外的一律按 cloud 上报。
+// cloud 是调腾讯云失败，quota 是腾讯云的函数个数或命名空间配额超限。
 // Monitor 的 coordinationFailureTexts 为每个原因给出告警文案，新增原因时两边要一起改。
 var assignmentFailureReasons = []string{
-	"cloudfunction", "environment", "rules", "store", "storage", "package", "dataset", "activity", "preflight", "capacity",
-	ReasonPublishLeaseHeld,
+	"cloud", "quota", "environment", "rules", "store", "storage", "package", "dataset", "activity", "preflight", "capacity",
 }
 
 func normalizeAssignmentFailureReason(reason string) string {
@@ -269,7 +266,7 @@ func normalizeAssignmentFailureReason(reason string) string {
 			return reason
 		}
 	}
-	return "cloudfunction"
+	return "cloud"
 }
 
 // ObservePeriodPendingSnapshot aggregates pending reports without exposing

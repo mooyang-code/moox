@@ -73,7 +73,7 @@ func TestMetricsClearAssignmentPending(t *testing.T) {
 func TestMetricsUseFixedErrorReasons(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewControlMetrics(registry)
-	for _, reason := range []string{"capacity", "rules", "symbols", "dns", "cloudfunction", "environment"} {
+	for _, reason := range []string{"capacity", "rules", "symbols", "dns", "cloud", "environment"} {
 		metrics.ObserveAssignmentError("crypto", reason)
 	}
 	families, err := registry.Gather()
@@ -88,7 +88,7 @@ func TestMetricsUseFixedErrorReasons(t *testing.T) {
 					continue
 				}
 				switch label.GetValue() {
-				case "capacity", "rules", "symbols", "dns", "cloudfunction", "environment":
+				case "capacity", "rules", "symbols", "dns", "cloud", "environment":
 				default:
 					t.Fatalf("unexpected error reason %q", label.GetValue())
 				}
@@ -106,15 +106,15 @@ func TestMetricsRecoveryCanSucceedWithoutAssignmentScopes(t *testing.T) {
 
 func TestMetricsKeepOnlyCurrentCoordinationFailureReason(t *testing.T) {
 	metrics := NewControlMetrics(prometheus.NewRegistry())
-	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", ReasonPublishLeaseHeld)))
+	metrics.ObserveAssignmentFailure("crypto", "quota")
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "quota")))
 
-	metrics.ObserveAssignmentFailure("crypto", "cloudfunction")
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", ReasonPublishLeaseHeld)))
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "cloudfunction")))
+	metrics.ObserveAssignmentFailure("crypto", "cloud")
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "quota")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "cloud")))
 
 	metrics.ObserveAssignmentSuccess("crypto", 1722772800)
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "cloudfunction")))
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "cloud")))
 }
 
 func metricFamily(t *testing.T, families []*dto.MetricFamily, name string) *dto.MetricFamily {
@@ -137,10 +137,10 @@ func metricLabels(metric *dto.Metric) map[string]string {
 }
 
 func TestMetricsFailureReasonWhitelist(t *testing.T) {
-	require.Equal(t, ReasonPublishLeaseHeld, normalizeAssignmentFailureReason(ReasonPublishLeaseHeld))
-	// 白名单之外（包括已删除的 submit_timeout 与随手写的 publish_lease）一律归为 cloudfunction。
-	require.Equal(t, "cloudfunction", normalizeAssignmentFailureReason("submit_timeout"))
-	require.Equal(t, "cloudfunction", normalizeAssignmentFailureReason("publish_lease"))
+	require.Equal(t, "quota", normalizeAssignmentFailureReason("quota"))
+	// 白名单之外（包括已删除的 publish_lease_held、旧名 cloudfunction）一律归为 cloud。
+	require.Equal(t, "cloud", normalizeAssignmentFailureReason("publish_lease_held"))
+	require.Equal(t, "cloud", normalizeAssignmentFailureReason("cloudfunction"))
 	require.Equal(t, "rules", normalizeAssignmentFailureReason(" rules "))
 }
 
@@ -151,14 +151,14 @@ func TestMetricsFailureSinceTracksTheFirstAppearanceOfTheCurrentReason(t *testin
 	since := func() float64 { return testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")) }
 	require.Zero(t, since())
 
-	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
+	metrics.ObserveAssignmentFailure("crypto", "quota")
 	require.Equal(t, float64(1_700_000_000), since())
 	// 同一原因连续出现：起始时间保持不变。
 	clock = clock.Add(3 * time.Minute)
-	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
+	metrics.ObserveAssignmentFailure("crypto", "quota")
 	require.Equal(t, float64(1_700_000_000), since())
 	// 原因变化：重新计时。
-	metrics.ObserveAssignmentFailure("crypto", "cloudfunction")
+	metrics.ObserveAssignmentFailure("crypto", "cloud")
 	require.Equal(t, float64(1_700_000_180), since())
 	// 其他空间互不影响。
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("stockcn")))
@@ -167,33 +167,33 @@ func TestMetricsFailureSinceTracksTheFirstAppearanceOfTheCurrentReason(t *testin
 	metrics.ObserveAssignmentSuccess("crypto", 1_700_000_200)
 	require.Zero(t, since())
 	clock = clock.Add(time.Minute)
-	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
+	metrics.ObserveAssignmentFailure("crypto", "quota")
 	require.Equal(t, float64(1_700_000_240), since())
 }
 
 func TestMetricsRoundOKRestoresHealthAndClearsFailureWithoutTouchingLastSuccess(t *testing.T) {
 	metrics := NewControlMetrics(prometheus.NewRegistry())
 	metrics.ObserveAssignmentSuccess("crypto", 1_700_000_000)
-	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
+	metrics.ObserveAssignmentFailure("crypto", "quota")
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
 
 	metrics.ObserveAssignmentRoundOK("crypto")
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", ReasonPublishLeaseHeld)))
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "quota")))
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")))
 	require.Equal(t, float64(1_700_000_000), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "恢复健康本身不刷新最近一次对账成功时间")
 	require.NotPanics(t, func() { (*ControlMetrics)(nil).ObserveAssignmentRoundOK("crypto") })
 }
 
-// fail 调用点用到的每个原因都必须在白名单里：白名单之外的原因会被悄悄归为 cloudfunction，
-// Monitor 就会把 Collector 本地数据库、Storage 等故障显示成“FunctionInstance 服务调用失败”。
+// fail 调用点用到的每个原因都必须在白名单里：白名单之外的原因会被悄悄归为 cloud，
+// Monitor 就会把 Collector 本地数据库、Storage 等故障显示成“调用腾讯云失败”。
 func TestEveryFailureReasonUsedByTheReconcilerIsWhitelisted(t *testing.T) {
 	allowed := map[string]bool{}
 	for _, reason := range assignmentFailureReasons {
 		allowed[reason] = true
 	}
 	used := map[string]int{}
-	for _, name := range []string{"plan_reconciler.go", "plan_manager.go", "plan_aux.go"} {
+	for _, name := range []string{"plan_reconciler.go", "plan_manager.go", "plan_cloud.go", "plan_package.go"} {
 		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
 		require.NoError(t, err)
 		ast.Inspect(file, func(node ast.Node) bool {
@@ -212,16 +212,13 @@ func TestEveryFailureReasonUsedByTheReconcilerIsWhitelisted(t *testing.T) {
 			reason, err := strconv.Unquote(literal.Value)
 			require.NoError(t, err)
 			used[reason]++
-			require.Truef(t, allowed[reason], "%s: fail(%q, …) 的原因不在 assignmentFailureReasons 白名单里，会被归为 cloudfunction", name, reason)
+			require.Truef(t, allowed[reason], "%s: fail(%q, …) 的原因不在 assignmentFailureReasons 白名单里，会被归为 cloud", name, reason)
 			return true
 		})
 	}
 	require.GreaterOrEqual(t, len(used), 8, "扫描到的原因数量异常，扫描规则可能失效")
 	// 白名单里没有任何调用点使用的原因是死条目。
 	for _, reason := range assignmentFailureReasons {
-		if reason == ReasonPublishLeaseHeld {
-			continue // 由 failCloud 按错误类别选择，没有字面量调用点
-		}
 		require.Positivef(t, used[reason], "白名单里的 %q 没有任何 fail 调用点使用", reason)
 	}
 }
@@ -232,10 +229,6 @@ func TestEveryFailureReasonHasAMonitorText(t *testing.T) {
 	require.NoError(t, err)
 	source := string(raw)
 	for _, reason := range assignmentFailureReasons {
-		if reason == ReasonPublishLeaseHeld {
-			require.Contains(t, source, "publishLeaseHeldReason = \""+reason+"\"")
-			continue
-		}
 		require.Containsf(t, source, "{\""+reason+"\", \"", "Monitor 的 coordinationFailureTexts 缺少原因 %q 的告警文案", reason)
 	}
 }

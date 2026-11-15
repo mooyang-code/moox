@@ -13,7 +13,7 @@ import (
 // CloudFunction 的协议与客户端。规则与 marketfetch 的同名测试相同。
 func TestRuntimeDoesNotImportControlPlane(t *testing.T) {
 	forbiddenImports := []string{
-		"/internal/store", "/internal/fetchplan", "/internal/scfinvoker", "/internal/egressbalance",
+		"/internal/store", "/internal/fetchplan", "/internal/cloud", "/internal/egressbalance",
 		"cloudfunctiongen", "gorm.io/", "modernc.org/sqlite",
 	}
 	names, err := filepath.Glob("*.go")

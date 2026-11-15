@@ -211,11 +211,13 @@ func TimelineScenarios(t *testing.T) []TimelineScenario {
 		require.NoError(t, err)
 		require.True(t, done)
 		snapshot("pause_resume/paused_registered_not_applied", h.store.records)
-		done, err = r.EnableAll(context.Background())
+		// 恢复时空间协程用新的对账器（“正在暂停”的标记随旧对账器一起丢掉）。
+		resumed := h.reconciler()
+		done, err = resumed.EnableAll(context.Background())
 		require.NoError(t, err)
 		require.True(t, done)
 		snapshot("pause_resume/resumed_not_applied", h.store.records)
-		planBaselineSettle(t, h, r)
+		planBaselineSettle(t, h, resumed)
 		snapshot("pause_resume/applied", h.store.records)
 	}
 

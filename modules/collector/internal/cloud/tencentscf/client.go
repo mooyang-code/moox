@@ -200,9 +200,15 @@ func (c *Client) GetFunctionEventInvokeConfig(ctx context.Context, ref FunctionR
 	}); err != nil {
 		return nil, err
 	}
+	return eventInvokeConfigFromResponse(response), nil
+}
+
+// eventInvokeConfigFromResponse 解析异步重试配置。2026-11-14 真机实测：从没配置过的函数也返回成功，内容是默认值
+// RetryConfig=[{RetryNum:2},{RetryNum:-1}]、MsgTTL=21600，只看第一项，解析成“已配置、RetryNum=2”，与期望（0、60）不一致而写一次。
+func eventInvokeConfigFromResponse(response *scf.GetFunctionEventInvokeConfigResponse) *EventInvokeConfig {
 	out := &EventInvokeConfig{}
-	if response.Response == nil || response.Response.AsyncTriggerConfig == nil {
-		return out, nil
+	if response == nil || response.Response == nil || response.Response.AsyncTriggerConfig == nil {
+		return out
 	}
 	config := response.Response.AsyncTriggerConfig
 	for _, retry := range config.RetryConfig {
@@ -214,7 +220,7 @@ func (c *Client) GetFunctionEventInvokeConfig(ctx context.Context, ref FunctionR
 	if config.MsgTTL != nil {
 		out.MsgTTL = *config.MsgTTL
 	}
-	return out, nil
+	return out
 }
 
 // GetReservedConcurrencyConfig 读函数的预留并发内存配额（MB），没有设置时返回 0。
@@ -233,10 +239,15 @@ func (c *Client) GetReservedConcurrencyConfig(ctx context.Context, ref FunctionR
 	}); err != nil {
 		return 0, err
 	}
-	if response.Response == nil || response.Response.ReservedMem == nil {
-		return 0, nil
+	return reservedMemFromResponse(response), nil
+}
+
+// reservedMemFromResponse 解析预留并发内存。真机实测：没配置过时返回成功、ReservedMem 为 null，判为没配置（0）。
+func reservedMemFromResponse(response *scf.GetReservedConcurrencyConfigResponse) int64 {
+	if response == nil || response.Response == nil || response.Response.ReservedMem == nil {
+		return 0
 	}
-	return int64(*response.Response.ReservedMem), nil
+	return int64(*response.Response.ReservedMem)
 }
 
 // PutReservedConcurrencyConfigRequest 设置函数的预留并发内存配额（MB）：并发实例数 × 函数内存。

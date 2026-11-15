@@ -626,6 +626,10 @@ components:
           SyncSubjects: 180000
           CheckKline: 310000
           SubmitKlineBackfill: 310000
+          # 读回、删除、探测云函数要逐个调腾讯云（限频 20 次/秒），几十个函数要几十秒。
+          ListCloudFunctions: 120000
+          DeleteCloudFunctions: 120000
+          ProbeFunctionEgress: 120000
         max_body_bytes: 4194304
         methods:
           - GetTaskList
@@ -663,6 +667,18 @@ components:
           - ClearSubjectExclusions
           - ListSubjectExclusions
           - RegisterDelistNotice
+          - ListCloudAccounts
+          - CreateCloudAccount
+          - UpdateCloudAccount
+          - DeleteCloudAccount
+          - ListCloudRegions
+          - InitPackageUpload
+          - CompletePackageUpload
+          - ListFunctionPackages
+          - DeleteFunctionPackage
+          - ListCloudFunctions
+          - DeleteCloudFunctions
+          - ProbeFunctionEgress
         read_only_methods:
           - GetTaskList
           - GetTaskDetail
@@ -680,6 +696,10 @@ components:
           - ListSubjectExclusions
           - ListTagSyncStatus
           - ListSubjectListers
+          - ListCloudAccounts
+          - ListCloudRegions
+          - ListFunctionPackages
+          - ListCloudFunctions
         acl:
           - methods:
               - GetTaskList
@@ -752,6 +772,27 @@ components:
             callers:
               - console
               - moox-cli
+          # 云账号与代码包（管理台运行状态页“函数”区的两个对话框、moox-cli）；列出云函数的期望与读回。
+          - methods:
+              - ListCloudAccounts
+              - CreateCloudAccount
+              - UpdateCloudAccount
+              - DeleteCloudAccount
+              - ListCloudRegions
+              - InitPackageUpload
+              - CompletePackageUpload
+              - ListFunctionPackages
+              - DeleteFunctionPackage
+              - ListCloudFunctions
+            callers:
+              - console
+              - moox-cli
+          # 删云函数、探测出口 IP 只给命令行。
+          - methods:
+              - DeleteCloudFunctions
+              - ProbeFunctionEgress
+            callers:
+              - moox-cli
       # collector-stream 的心跳、拉计划与周期统计上报；不设租约，计划里的份就是唯一的授权。
       - path: trpc.moox.collector.StreamCollector
         port: 11422
@@ -783,7 +824,7 @@ components:
       dependencies:
         - eventbus
         - storage-primary
-        - cloudfunction
+        - admin
       transport: reporter
       functional_observability: active
       config_paths:
