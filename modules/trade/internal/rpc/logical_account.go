@@ -207,55 +207,6 @@ func (h *LogicalAccountServer) RemoveLogicalAccountMember(
 	}, nil
 }
 
-func (h *LogicalAccountServer) ClaimLogicalAccountOwner(
-	ctx context.Context,
-	req *tradepb.ClaimLogicalAccountOwnerReq,
-) (*tradepb.ClaimLogicalAccountOwnerRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.ClaimLogicalAccountOwnerRsp{
-			RetInfo: invalidOrErrorInfo(err),
-		}, nil
-	}
-	record, _, err := h.LogicalAccounts.ClaimSession(
-		ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(),
-		req.GetSessionId(), req.GetExpectedAuthFence(),
-	)
-	return &tradepb.ClaimLogicalAccountOwnerRsp{
-		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
-	}, nil
-}
-
-func (h *LogicalAccountServer) ReleaseLogicalAccountOwner(
-	ctx context.Context,
-	req *tradepb.ReleaseLogicalAccountOwnerReq,
-) (*tradepb.ReleaseLogicalAccountOwnerRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.ReleaseLogicalAccountOwnerRsp{
-			RetInfo: invalidOrErrorInfo(err),
-		}, nil
-	}
-	if err := h.LogicalAccounts.ReleaseSession(
-		ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(),
-		req.GetSessionId(), req.GetExpectedAuthFence(),
-	); err != nil {
-		return &tradepb.ReleaseLogicalAccountOwnerRsp{RetInfo: errorInfo(err)}, nil
-	}
-	record, err := h.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId())
-	return &tradepb.ReleaseLogicalAccountOwnerRsp{
-		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
-	}, nil
-}
-
 // CloseTargetSession 关闭策略会话（Strategy 停用实例后调用，幂等），见 logicalaccount.Service.CloseTargetSession。
 func (h *LogicalAccountServer) CloseTargetSession(
 	ctx context.Context,

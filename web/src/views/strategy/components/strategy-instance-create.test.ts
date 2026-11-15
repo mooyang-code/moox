@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   getInstance: vi.fn(),
   getStrategy: vi.fn(),
   validateStrategy: vi.fn(),
+  listInstances: vi.fn(),
   listFactorTasks: vi.fn(),
   listLogicalAccounts: vi.fn(),
   listTradingAccounts: vi.fn(async () => ({ accounts: [] })),
@@ -17,6 +18,7 @@ vi.mock("@/api/strategy", () => ({
   createInstance: api.createInstance,
   getInstance: api.getInstance,
   getStrategy: api.getStrategy,
+  listInstances: api.listInstances,
   validateStrategy: api.validateStrategy
 }));
 vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
@@ -133,6 +135,7 @@ describe("strategy instance creation behavior", () => {
     api.getStrategy.mockReset().mockRejectedValue(new Error("策略不存在"));
     api.listFactorTasks.mockReset().mockResolvedValue({ factor_tasks: [taskInfo()], page_result: { has_more: false } });
     api.listLogicalAccounts.mockReset().mockResolvedValue({ logical_accounts: [], page_result: { has_more: false } });
+    api.listInstances.mockReset().mockResolvedValue({ items: [], page: { total: 0 } });
     api.listAllDatasets.mockReset().mockResolvedValue([]);
   });
 
@@ -336,6 +339,32 @@ describe("strategy instance creation behavior", () => {
         .findAll("option")
         .map(item => item.attributes("value"))
     ).toEqual(["", "acc2"]);
+  });
+
+  it("已被启用实例绑定的账户显示但不可选，绑定关系读 Strategy 的实例列表", async () => {
+    api.listLogicalAccounts.mockResolvedValue({
+      logical_accounts: [
+        { logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [2] },
+        { logical_account_id: "acc2", name: "账户二", space_id: "crypto", control_mode: 1, markets: [2] }
+      ],
+      page_result: { has_more: false }
+    });
+    api.listInstances.mockResolvedValue({
+      items: [
+        { instance_id: "inst-live", logical_account_id: "acc1", enabled: true },
+        { instance_id: "inst-off", logical_account_id: "acc2", enabled: false }
+      ],
+      page: { total: 2 }
+    });
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
+    runModeGroup(wrapper).vm.$emit("update:modelValue", "trade");
+    await flushPromises();
+    expect(api.listInstances).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+    const options = wrapper.findAll("select")[2].findAll("option");
+    const bound = options.find(item => item.attributes("value") === "acc1")!;
+    expect(bound.attributes("disabled")).toBeDefined();
+    expect(bound.text()).toContain("inst-live");
+    expect(options.find(item => item.attributes("value") === "acc2")!.attributes("disabled")).toBeUndefined();
   });
 
   it("asks for a spot and a swap task for a mixed-market strategy and keeps one task from being picked twice", async () => {

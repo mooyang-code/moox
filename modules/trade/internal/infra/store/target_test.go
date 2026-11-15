@@ -346,7 +346,7 @@ func seedLogicalAccount(t *testing.T, s *Store, runnerID string) {
 		}
 		return tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			Name: "logical", OwnerInstanceID: runnerID, OwnerSessionID: "session-1",
+			Name:            "logical",
 			ExecutionMode:   "PAPER",
 			SettlementAsset: "USDT", AutomationState: "PAUSED",
 			PauseReason: "新建的组合账户，等待恢复自动执行",

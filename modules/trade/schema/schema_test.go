@@ -149,7 +149,6 @@ func TestAllSQLDefinesApprovedIdentityScopes(t *testing.T) {
 		{"t_trading_accounts", []string{"c_exchange", "c_live_environment", "c_credential_secret_id"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_logical_account_id"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_name"}},
-		{"t_logical_accounts", []string{"c_space_id", "c_owner_instance_id"}},
 		{"t_logical_account_members", []string{"c_space_id", "c_logical_account_id", "c_trading_account_id"}},
 		{"t_logical_account_members", []string{"c_space_id", "c_trading_account_id"}},
 		{"t_logical_account_targets", []string{"c_space_id", "c_logical_account_id"}},
@@ -196,6 +195,10 @@ func TestLogicalAccountSchemaKeepsSettlementAssetAndUsesAutomationState(t *testi
 	require.Contains(t, sql, "'REDUCE'")
 	require.Contains(t, sql, "'DELIST_FLATTEN'")
 	require.NotContains(t, sql, "c_market_type TEXT NOT NULL,\n    c_settlement_asset")
+	// 实例与组合账户的归属只记在 Strategy：组合账户表不存归属与切换令牌。
+	for _, retired := range []string{"c_owner_instance_id", "c_owner_session_id", "c_auth_fence"} {
+		require.NotContains(t, sql, retired)
+	}
 }
 
 func TestTradingAccountSchemaRestrictsMarketsAndCredentialUse(t *testing.T) {

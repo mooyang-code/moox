@@ -12,25 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// handOverSession 模拟策略换实例：旧会话释放并删掉目标，新实例认领后发来新目标。
+// handOverSession 模拟策略换实例：新实例的会话开始得更晚，它的目标直接覆盖旧会话的目标行（Trade 不存归属，不经认领、释放）。
 func (f *targetFixture) handOverSession(t *testing.T, quantity string) {
 	t.Helper()
-	ctx := context.Background()
-	logical, err := f.store.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", logical.AuthFence); err != nil {
-			return err
-		}
-		return tx.DeleteLogicalAccountTarget("space-1", "logical-1")
-	}))
-	logical, err = f.store.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
-		_, _, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", "runner-2", "session-2", logical.AuthFence)
-		return err
-	}))
-	_, accepted, err := f.store.AcceptLogicalAccountTarget(ctx, store.LogicalAccountTargetRecord{
+	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TargetID: "target-next", InstanceID: "runner-2", SessionID: "session-2", SessionStartedAt: 2000, StrategyID: "strategy-1",
 		BarEndTime: f.now.UnixMilli(), ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
@@ -40,7 +25,7 @@ func (f *targetFixture) handOverSession(t *testing.T, quantity string) {
 	require.True(t, accepted)
 }
 
-// 换实例接管时上一个实例的挂单还在簿上（释放时没撤下来）：新目标按第 1 阶段撤掉它，不暂停组合。
+// 换实例接管时上一个实例的挂单还在簿上：新会话的目标覆盖目标行后按第 1 阶段撤掉它，不暂停组合。
 func TestNewInstanceTargetStopsPreviousInstanceRestingOrder(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
@@ -63,7 +48,8 @@ func TestNewInstanceTargetStopsPreviousInstanceRestingOrder(t *testing.T) {
 	require.Equal(t, "ACTIVE", logical.AutomationState)
 }
 
-// ReleaseTargetOrders 不分哪一份目标：挂单撤掉，待提交的丢弃，市价单不动；限价 GTC 单结果未知时先解析，解析不出就报错（调用方重试）。
+// 过期路径撤目标单（releaseTargetOrders 不带 keepTargetID）不分哪一份目标：挂单撤掉，待提交的丢弃，市价单不动；
+// 限价 GTC 单结果未知时先解析，解析不出就报错（调用方重试）。
 func TestReleaseTargetOrdersCoversEveryTarget(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
@@ -81,7 +67,7 @@ func TestReleaseTargetOrdersCoversEveryTarget(t *testing.T) {
 	f.order(t, market)
 
 	executor := f.restingExecutor()
-	require.NoError(t, executor.ReleaseTargetOrders(context.Background(), "space-1", "logical-1"))
+	require.NoError(t, executor.releaseTargetOrders(context.Background(), "space-1", "logical-1", ""))
 	require.Equal(t, []string{"resting-1"}, f.orders.canceled)
 	require.Equal(t, []string{"pending-old"}, f.orders.discarded)
 
@@ -89,7 +75,7 @@ func TestReleaseTargetOrdersCoversEveryTarget(t *testing.T) {
 	unknown.OrderID, unknown.ClientOrderID, unknown.OrderType, unknown.TimeInForce = "gtc-unknown", "gtc-unknown", "LIMIT", "GTC"
 	unknown.LimitPrice, unknown.State, unknown.SubmittedAt = strPtr("99"), "SUBMIT_UNKNOWN", f.now.UnixMilli()
 	f.order(t, unknown)
-	err := executor.ReleaseTargetOrders(context.Background(), "space-1", "logical-1")
+	err := executor.releaseTargetOrders(context.Background(), "space-1", "logical-1", "")
 	require.ErrorIs(t, err, errTargetOrderUnresolved)
 	require.Contains(t, f.orders.resolved, "gtc-unknown")
 }
@@ -109,7 +95,7 @@ func (o recoveringOrders) RecoverCancel(ctx context.Context, spaceID, orderID st
 	})
 }
 
-// 上一次撤单结果未知的挂单（释放重试时会遇到）：先确认撤单结果，确认不了就报错，不能当作已经撤掉、放行释放。
+// 上一次撤单结果未知的挂单（过期路径重试时会遇到）：先确认撤单结果，确认不了就报错，不能当作已经撤掉、放行。
 func TestReleaseTargetOrdersConfirmsUnknownCancel(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
@@ -120,12 +106,12 @@ func TestReleaseTargetOrdersConfirmsUnknownCancel(t *testing.T) {
 		OwnerType: "TARGET", OwnerID: "target-current", State: "CANCEL_UNKNOWN", SubmittedAt: f.now.UnixMilli(), Version: 1,
 	})
 	executor := f.restingExecutor()
-	require.ErrorIs(t, executor.ReleaseTargetOrders(context.Background(), "space-1", "logical-1"), errTargetOrderUnresolved,
+	require.ErrorIs(t, executor.releaseTargetOrders(context.Background(), "space-1", "logical-1", ""), errTargetOrderUnresolved,
 		"订单服务确认不了撤单结果")
 
 	f.orders.store = f.store
 	executor.Orders = recoveringOrders{f.orders}
-	require.NoError(t, executor.ReleaseTargetOrders(context.Background(), "space-1", "logical-1"))
+	require.NoError(t, executor.releaseTargetOrders(context.Background(), "space-1", "logical-1", ""))
 	order, err := f.store.GetOrder(context.Background(), "space-1", "cancel-unknown")
 	require.NoError(t, err)
 	require.Equal(t, "CANCELED", order.State)
@@ -263,7 +249,7 @@ func (o resolvingOrders) ResolveUnknown(ctx context.Context, spaceID, orderID st
 	})
 }
 
-// 释放时市价、IOC 单结果未知也要解析一次：退回待提交的丢弃（否则目标删掉后没人管）；仍解析不出来的不挡释放，它们自己会结束。
+// 过期路径撤目标单时市价、IOC 单结果未知也要解析一次：退回待提交的丢弃（否则目标过期后没人管）；仍解析不出来的不挡，它们自己会结束。
 func TestReleaseTargetOrdersResolvesEveryUnknownOrder(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
@@ -283,7 +269,7 @@ func TestReleaseTargetOrdersResolvesEveryUnknownOrder(t *testing.T) {
 	executor := f.restingExecutor()
 	executor.Orders = resolvingOrders{targetOrderServiceStub: f.orders, toPending: map[string]bool{"market-unknown": true}}
 
-	require.NoError(t, executor.ReleaseTargetOrders(context.Background(), "space-1", "logical-1"), "IOC 仍解析不出来也不挡释放")
+	require.NoError(t, executor.releaseTargetOrders(context.Background(), "space-1", "logical-1", ""), "IOC 仍解析不出来也不挡")
 	require.ElementsMatch(t, []string{"market-unknown", "ioc-unknown"}, f.orders.resolved)
 	require.Equal(t, []string{"market-unknown"}, f.orders.discarded, "退回待提交的丢弃")
 	order, err := f.store.GetOrder(context.Background(), "space-1", "market-unknown")
@@ -298,7 +284,7 @@ type deferredSyncOrders struct {
 }
 
 func (o deferredSyncOrders) Cancel(context.Context, string, string) (orderdomain.Order, error) {
-	panic("释放时应该用不带同步的撤单")
+	panic("批量撤目标单时应该用不带同步的撤单")
 }
 
 func (o deferredSyncOrders) CancelWithoutSync(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error) {
@@ -310,7 +296,7 @@ func (o deferredSyncOrders) SyncAfterCancel(_ context.Context, tradingAccountID 
 	return nil
 }
 
-// 释放时撤 N 笔挂单只在最后按账户同步一次，不是每笔撤单都做一次全量同步。
+// 批量撤 N 笔目标挂单只在最后按账户同步一次，不是每笔撤单都做一次全量同步。
 func TestReleaseTargetOrdersSyncsOncePerAccount(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
@@ -321,7 +307,7 @@ func TestReleaseTargetOrdersSyncsOncePerAccount(t *testing.T) {
 	executor := f.restingExecutor()
 	executor.Orders = deferredSyncOrders{targetOrderServiceStub: f.orders, syncs: &syncs}
 
-	require.NoError(t, executor.ReleaseTargetOrders(context.Background(), "space-1", "logical-1"))
+	require.NoError(t, executor.releaseTargetOrders(context.Background(), "space-1", "logical-1", ""))
 	require.ElementsMatch(t, []string{"resting-1", "resting-2", "resting-3"}, f.orders.canceled)
 	require.Equal(t, []string{"account-a"}, syncs)
 }

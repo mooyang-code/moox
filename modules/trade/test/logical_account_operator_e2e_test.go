@@ -100,8 +100,7 @@ func seedSwapLogicalAccount(t *testing.T, tradeStore *store.Store) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount,
-			Name:            "E2E swap logical account",
-			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
+			Name:          "E2E swap logical account",
 			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {

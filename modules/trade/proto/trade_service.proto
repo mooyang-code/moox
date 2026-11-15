@@ -148,11 +148,6 @@ message LogicalAccount {
   repeated string readiness_reasons = 12;
   int64 created_at = 13;
   int64 updated_at = 14;
-  // Strategy lifecycle identity of the current owner.
-  string owner_instance_id = 16;
-  string owner_session_id = 17;
-  // Strategy 生命周期调用的比较并交换令牌，只返回给内部调用方。
-  string auth_fence = 18;
   ControlMode control_mode = 19;
   // 只读：当前生效的下单设置和资金设置（没写的项已填上默认值）。
   OrderSettings order_settings = 20;
@@ -561,28 +556,6 @@ message RemoveLogicalAccountMemberRsp {
   LogicalAccount logical_account = 2;
 }
 
-message ClaimLogicalAccountOwnerReq {
-  string logical_account_id = 1;
-  string instance_id = 3;
-  string session_id = 4;
-  string expected_auth_fence = 5;
-}
-message ClaimLogicalAccountOwnerRsp {
-  common.RetInfo ret_info = 1;
-  LogicalAccount logical_account = 2;
-}
-
-message ReleaseLogicalAccountOwnerReq {
-  string logical_account_id = 1;
-  string instance_id = 3;
-  string session_id = 4;
-  string expected_auth_fence = 5;
-}
-message ReleaseLogicalAccountOwnerRsp {
-  common.RetInfo ret_info = 1;
-  LogicalAccount logical_account = 2;
-}
-
 // 关闭策略会话（Strategy 停用实例后调用，幂等）：组合的“关闭到”时刻推进到 session_started_at，开始时刻不大于它的会话的目标一律不再接受；
 // 这个会话还没过期的当前目标的有效期缩短到现在（不早于 bar_end_time 加 1 毫秒），由执行器的过期路径撤掉它的挂单。
 message CloseTargetSessionReq {
@@ -909,8 +882,6 @@ service TradeConsoleService {
   rpc UpdateLogicalAccountFundSettings(UpdateLogicalAccountFundSettingsReq) returns (UpdateLogicalAccountFundSettingsRsp);
   rpc AddLogicalAccountMember(AddLogicalAccountMemberReq) returns (AddLogicalAccountMemberRsp);
   rpc RemoveLogicalAccountMember(RemoveLogicalAccountMemberReq) returns (RemoveLogicalAccountMemberRsp);
-  rpc ClaimLogicalAccountOwner(ClaimLogicalAccountOwnerReq) returns (ClaimLogicalAccountOwnerRsp);
-  rpc ReleaseLogicalAccountOwner(ReleaseLogicalAccountOwnerReq) returns (ReleaseLogicalAccountOwnerRsp);
   rpc CloseTargetSession(CloseTargetSessionReq) returns (CloseTargetSessionRsp);
   rpc PauseLogicalAccount(PauseLogicalAccountReq) returns (PauseLogicalAccountRsp);
   rpc ResumeLogicalAccount(ResumeLogicalAccountReq) returns (ResumeLogicalAccountRsp);

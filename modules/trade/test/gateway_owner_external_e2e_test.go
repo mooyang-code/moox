@@ -33,13 +33,11 @@ func TestExternalGatewayOwnerTrade(t *testing.T) {
 	console := &rpc.ConsoleServer{Store: db, Paper: &papersimulation.Service{Store: db}, LogicalAccountServer: &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}}
 	listener, err := net.Listen("tcp4", "127.0.0.1:11200")
 	require.NoError(t, err)
-	var submits, owners, closes atomic.Int32
+	var submits, closes atomic.Int32
 	svc := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTransport(transport.NewServerTransport()), server.WithServiceName("trpc.moox.trade.TradeConsoleService"), server.WithListener(listener), server.WithFilter(filter.GetServer(spacecontext.SpaceFilterName)), server.WithFilter(func(ctx context.Context, req interface{}, next filter.ServerHandleFunc) (interface{}, error) {
 		switch req.(type) {
 		case *tradepb.SubmitOrderReq:
 			submits.Add(1)
-		case *tradepb.ClaimLogicalAccountOwnerReq, *tradepb.ReleaseLogicalAccountOwnerReq:
-			owners.Add(1)
 		case *tradepb.CloseTargetSessionReq:
 			closes.Add(1)
 		}
@@ -62,7 +60,6 @@ func TestExternalGatewayOwnerTrade(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(coord, "trade-ready"), []byte(listener.Addr().String()), 0600))
 	require.Eventually(t, func() bool { _, e := os.Stat(filepath.Join(coord, "gateway-done")); return e == nil }, 45*time.Second, 25*time.Millisecond)
 	require.Zero(t, submits.Load(), "SubmitOrder must never reach Trade")
-	require.Zero(t, owners.Load(), "Strategy 不再认领、释放归属")
 	require.Positive(t, closes.Load())
 	account, err := db.GetLogicalAccount(context.Background(), "space-gateway-e2e", id)
 	require.NoError(t, err)

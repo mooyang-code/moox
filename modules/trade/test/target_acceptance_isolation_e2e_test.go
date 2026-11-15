@@ -59,7 +59,6 @@ func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: "logical-other", Name: "Other logical account",
-			OwnerInstanceID: "instance-other", OwnerSessionID: "session-other",
 			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		})

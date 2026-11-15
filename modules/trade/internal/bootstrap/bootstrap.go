@@ -229,8 +229,6 @@ func initialize(
 	logicalAccounts := &logicalapp.Service{
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
-		// 策略会话释放、重绑、认领删掉目标前，由执行器撤掉组合里还没结束的目标挂单。
-		TargetOrders: targetExecutor,
 		// 关闭策略会话之后唤醒执行器，由过期路径撤掉这份目标的挂单。
 		WakeTarget: targetWorker.WakeTarget,
 	}

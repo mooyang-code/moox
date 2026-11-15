@@ -544,7 +544,7 @@ func (s *Service) Cancel(
 	return s.cancel(ctx, spaceID, orderID, true)
 }
 
-// CancelWithoutSync 撤单但不做撤单后的账户同步：一次撤一批单（例如释放会话撤组合里所有目标单）时，
+// CancelWithoutSync 撤单但不做撤单后的账户同步：一次撤一批单（例如目标过期时撤组合里所有目标单）时，
 // 每笔都同步会让 N 笔挂单做 N 次全量同步、超出调用期限。调用方撤完之后对每个撤过单的账户调用一次 SyncAfterCancel。
 func (s *Service) CancelWithoutSync(
 	ctx context.Context,

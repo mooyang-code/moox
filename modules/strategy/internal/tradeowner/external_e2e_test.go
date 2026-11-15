@@ -62,8 +62,8 @@ func TestExternalStrategyGatewayOwnerClient(t *testing.T) {
 	require.Error(t, trade.CheckAccount(ctx, "another-space", id, []string{"spot"}))
 	require.NoError(t, trade.CloseSession(ctx, space, id, instance, session, startedAt))
 	require.NoError(t, trade.CloseSession(ctx, space, id, instance, session, startedAt))
-	// ACL：strategy 不能调用 Trade 的下单方法，也不能再认领或释放归属。
-	for _, method := range []string{"SubmitOrder", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner"} {
+	// ACL：strategy 只能读组合账户、关闭会话，不能调用 Trade 的下单与暂停、恢复。
+	for _, method := range []string{"SubmitOrder", "PauseLogicalAccount", "ResumeLogicalAccount"} {
 		_, err = gateway.Forward(ctx, tradeService, method, codec.SerializationTypePB, nil)
 		require.ErrorContains(t, err, "not allowed", method)
 	}

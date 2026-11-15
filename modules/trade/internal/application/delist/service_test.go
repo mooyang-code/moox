@@ -65,7 +65,7 @@ func seedAccounts(t *testing.T, tradeStore *store.Store, fundSettings string, sp
 				logicals[spec.logical] = true
 				if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 					SpaceID: "space-1", LogicalAccountID: spec.logical, Name: spec.logical, ExecutionMode: spec.mode,
-					SettlementAsset: "USDT", OwnerInstanceID: "i-" + spec.logical, OwnerSessionID: "s", FundSettingsJSON: fundSettings,
+					SettlementAsset: "USDT", FundSettingsJSON: fundSettings,
 					AutomationState: "PAUSED", PauseReason: "configure",
 				}); err != nil {
 					return err

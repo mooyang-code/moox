@@ -41,21 +41,17 @@ func TestAddMemberRequiresAdoptionForExistingExposure(t *testing.T) {
 	}))
 }
 
-func TestManualControlRejectsIdempotentClaimAndResume(t *testing.T) {
+func TestManualControlRejectsResume(t *testing.T) {
 	s, db := logicalAccountServiceFixture(t)
 	ctx := context.Background()
-	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = NULL, c_owner_session_id = NULL WHERE c_logical_account_id = 'logical-1'").Error)
-	account, err := db.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	_, _, err = s.ClaimSession(ctx, "space-1", "logical-1", "runner", "session-1", account.AuthFence)
-	require.Error(t, err)
-	_, _, err = s.Resume(ctx, "space-1", "logical-1")
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL' WHERE c_logical_account_id = 'logical-1'").Error)
+	_, _, err := s.Resume(ctx, "space-1", "logical-1")
 	require.Error(t, err)
 }
 
-func TestManualReadinessUsesActualMembersWithoutStrategyOwner(t *testing.T) {
+func TestManualReadinessUsesActualMembers(t *testing.T) {
 	s, db := logicalAccountServiceFixture(t)
-	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = NULL").Error)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
 	ready, err := s.Readiness(context.Background(), s.Store, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.True(t, ready.Ready, ready.Reasons)
@@ -153,7 +149,7 @@ func TestLogicalReadinessRequiresEveryEnabledMemberAndTargetMetadata(t *testing.
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TradingAccountID: "account-b", Enabled: true, Priority: 2,
 	}))
-	acceptSessionTarget(t, service, tradeStore, "target-1")
+	acceptSessionTarget(t, tradeStore, "target-1")
 
 	readiness, err := service.Readiness(
 		context.Background(), service.Store, "space-1", "logical-1",
@@ -181,7 +177,7 @@ func TestLogicalReadinessRejectsTargetForDifferentSettlementAsset(t *testing.T) 
 			MinExchangeQuantity: "1", PriceTick: "0.1", Status: "TRADING",
 		})
 	}))
-	acceptSessionTarget(t, service, tradeStore, "target-usdc")
+	acceptSessionTarget(t, tradeStore, "target-usdc")
 
 	readiness, err := service.Readiness(
 		context.Background(), service.Store, "space-1", "logical-1",
@@ -193,7 +189,7 @@ func TestLogicalReadinessRejectsTargetForDifferentSettlementAsset(t *testing.T) 
 
 func TestResumeRequiresReadyNoConflictAndWarnsAboutReopen(t *testing.T) {
 	service, tradeStore := logicalAccountServiceFixture(t)
-	acceptSessionTarget(t, service, tradeStore, "target-1")
+	acceptSessionTarget(t, tradeStore, "target-1")
 
 	account, warning, err := service.Resume(
 		context.Background(), "space-1", "logical-1",
@@ -224,133 +220,15 @@ func TestResumeRequiresReadyNoConflictAndWarnsAboutReopen(t *testing.T) {
 }
 
 func TestModernSessionTargetCanResume(t *testing.T) {
-	service, tradeStore, fence := modernSessionFixture(t)
+	service, tradeStore := modernSessionFixture(t)
 	acceptModernSessionTarget(t, tradeStore, "session-1")
 	account, _, err := service.Resume(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "ACTIVE", account.AutomationState)
-	require.Equal(t, fence, account.AuthFence)
-}
-
-func TestIdempotentClaimSessionPreservesTarget(t *testing.T) {
-	service, tradeStore, fence := modernSessionFixture(t)
-	want := acceptModernSessionTarget(t, tradeStore, "session-1")
-	_, actualFence, err := service.ClaimSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", fence)
-	require.NoError(t, err)
-	require.Equal(t, fence, actualFence)
-	got, err := tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, want, got)
-}
-
-func TestSessionServiceRollsBackWhenTargetDeleteFails(t *testing.T) {
-	service, tradeStore, fence := modernSessionFixture(t)
-	ctx := context.Background()
-	target := acceptModernSessionTarget(t, tradeStore, "session-1")
-	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.InsertTargetReceipt(store.TargetReceiptRecord{
-			SpaceID: target.SpaceID, LogicalAccountID: target.LogicalAccountID, TargetID: target.TargetID,
-			InstanceID: target.InstanceID, SessionID: target.SessionID, StrategyID: target.StrategyID,
-			BarEndTime: target.BarEndTime, ValidUntil: target.ValidUntil,
-			RequestHash: "hash", WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", AcceptedAt: target.AcceptedAt,
-		})
-	}))
-	// 把旧目标留在原处，验证认领时清理目标失败会整体回滚。
-	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.ReleaseLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", fence)
-	}))
-	before, err := tradeStore.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	receipt, err := tradeStore.GetTargetReceipt(ctx, "space-1", target.TargetID)
-	require.NoError(t, err)
-	require.NoError(t, tradeStore.DBForTest().Exec(`CREATE TRIGGER fail_target_delete
-		AFTER DELETE ON t_logical_account_targets
-		BEGIN SELECT RAISE(ABORT, 'injected target delete failure'); END`).Error)
-	claim := func() (store.LogicalAccountRecord, string, error) {
-		return service.ClaimSession(ctx, "space-1", "logical-1", "instance-2", "session-2", before.AuthFence)
-	}
-	_, _, err = claim()
-	require.ErrorContains(t, err, "injected target delete failure")
-	current, err := tradeStore.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, before, current)
-	currentTarget, err := tradeStore.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, target, currentTarget)
-	currentReceipt, err := tradeStore.GetTargetReceipt(ctx, "space-1", target.TargetID)
-	require.NoError(t, err)
-	require.Equal(t, receipt, currentReceipt)
-	require.NoError(t, tradeStore.DBForTest().Exec("DROP TRIGGER fail_target_delete").Error)
-	account, newFence, err := claim()
-	require.NoError(t, err)
-	require.NotEqual(t, before.AuthFence, newFence)
-	require.Equal(t, "instance-2", account.OwnerInstanceID)
-	require.Equal(t, "session-2", account.OwnerSessionID)
-	require.Equal(t, newFence, account.AuthFence)
-	current, err = tradeStore.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, account, current)
-	_, err = tradeStore.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
-	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	currentReceipt, err = tradeStore.GetTargetReceipt(ctx, "space-1", target.TargetID)
-	require.NoError(t, err)
-	require.Equal(t, receipt, currentReceipt)
-}
-
-func TestSessionTransitionClearsTargetAndRejectsDelayedManagement(t *testing.T) {
-	service, tradeStore, oldFence := modernSessionFixture(t)
-	ctx := context.Background()
-	oldTarget := acceptModernSessionTarget(t, tradeStore, "session-1")
-	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.InsertTargetReceipt(store.TargetReceiptRecord{
-			SpaceID: oldTarget.SpaceID, LogicalAccountID: oldTarget.LogicalAccountID, TargetID: oldTarget.TargetID,
-			InstanceID: oldTarget.InstanceID, SessionID: oldTarget.SessionID, StrategyID: oldTarget.StrategyID,
-			BarEndTime: oldTarget.BarEndTime, ValidUntil: oldTarget.ValidUntil,
-			RequestHash: "hash", WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", AcceptedAt: oldTarget.AcceptedAt,
-		})
-	}))
-	beforeReceipt, err := tradeStore.GetTargetReceipt(ctx, "space-1", oldTarget.TargetID)
-	require.NoError(t, err)
-	// 换会话：旧会话释放（清掉目标），新会话用释放后的围栏认领。
-	require.NoError(t, service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-1", oldFence))
-	released, err := tradeStore.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	account, fence, err := service.ClaimSession(ctx, "space-1", "logical-1", "instance-1", "session-2", released.AuthFence)
-	require.NoError(t, err)
-	require.NotEqual(t, oldFence, fence)
-	require.Equal(t, "PAUSED", account.AutomationState)
-	_, err = tradeStore.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
-	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	receipt, err := tradeStore.GetTargetReceipt(ctx, "space-1", oldTarget.TargetID)
-	require.NoError(t, err)
-	require.Equal(t, beforeReceipt, receipt)
-	want := acceptModernSessionTarget(t, tradeStore, "session-2")
-	for _, operation := range []string{"release", "claim", "release-old-identity-current-fence", "claim-other-session-current-fence"} {
-		t.Run(operation, func(t *testing.T) {
-			var err error
-			switch operation {
-			case "release":
-				err = service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-1", oldFence)
-			case "claim":
-				_, _, err = service.ClaimSession(ctx, "space-1", "logical-1", "instance-1", "session-2", oldFence)
-			case "release-old-identity-current-fence":
-				err = service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-1", fence)
-			case "claim-other-session-current-fence":
-				_, _, err = service.ClaimSession(ctx, "space-1", "logical-1", "instance-1", "session-3", fence)
-			}
-			require.ErrorIs(t, err, store.ErrConflict)
-			current, err := tradeStore.GetLogicalAccount(ctx, "space-1", "logical-1")
-			require.NoError(t, err)
-			require.Equal(t, account, current)
-			currentTarget, err := tradeStore.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
-			require.NoError(t, err)
-			require.Equal(t, want, currentTarget)
-		})
-	}
 }
 
 func TestModernResumeWithoutTargetWaitsForNextTarget(t *testing.T) {
-	service, tradeStore, _ := modernSessionFixture(t)
+	service, tradeStore := modernSessionFixture(t)
 	account, _, err := service.Resume(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "ACTIVE", account.AutomationState)
@@ -359,7 +237,7 @@ func TestModernResumeWithoutTargetWaitsForNextTarget(t *testing.T) {
 }
 
 func TestModernResumeIgnoresExpiredTargetMetadata(t *testing.T) {
-	service, tradeStore, _ := modernSessionFixture(t)
+	service, tradeStore := modernSessionFixture(t)
 	want := acceptModernSessionTarget(t, tradeStore, "session-1")
 	service.Now = func() time.Time { return time.UnixMilli(want.ValidUntil) }
 	service.MaxSnapshotAge = 2 * time.Hour
@@ -390,7 +268,7 @@ func TestModernResumeIgnoresExpiredTargetMetadata(t *testing.T) {
 }
 
 func TestPausedModernTargetDoesNotTrade(t *testing.T) {
-	service, tradeStore, _ := modernSessionFixture(t)
+	service, tradeStore := modernSessionFixture(t)
 	want := acceptModernSessionTarget(t, tradeStore, "session-1")
 	executor := nonTradingExecutor(tradeStore, service.Now)
 	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
@@ -415,29 +293,7 @@ func nonTradingExecutor(tradeStore *store.Store, now func() time.Time) *targetap
 	}
 }
 
-// 恢复自动执行的就绪判断不再比较目标与组合归属（批 3 T14）：目标行属于哪个会话由接收时的会话先后保证，
-// 组合的归属换了会话、目标行还是旧会话的，照样就绪。
-func TestReadinessIgnoresTargetOwnerSession(t *testing.T) {
-	service, tradeStore, fence := modernSessionFixture(t)
-	acceptModernSessionTarget(t, tradeStore, "session-1")
-	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", fence); err != nil {
-			return err
-		}
-		logical, err := tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		_, changed, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-1", "session-2", logical.AuthFence)
-		require.True(t, changed)
-		return err
-	}))
-	readiness, err := service.Readiness(context.Background(), service.Store, "space-1", "logical-1")
-	require.NoError(t, err)
-	require.True(t, readiness.Ready, "%v", readiness.Reasons)
-}
-
-func modernSessionFixture(t *testing.T) (*Service, *store.Store, string) {
+func modernSessionFixture(t *testing.T) (*Service, *store.Store) {
 	t.Helper()
 	service, tradeStore := logicalAccountServiceFixture(t)
 	now := time.Now().UTC()
@@ -450,11 +306,7 @@ func modernSessionFixture(t *testing.T) (*Service, *store.Store, string) {
 			SnapshotSourceTime: now.UnixMilli(), LastSyncAt: now.UnixMilli(),
 		})
 	}))
-	account, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	_, fence, err := service.ClaimSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", account.AuthFence)
-	require.NoError(t, err)
-	return service, tradeStore, fence
+	return service, tradeStore
 }
 
 // modernSessionStartedAt 是测试会话的开始时刻（毫秒）：session-1 < session-2，别的会话名按 session-1 处理。
@@ -611,14 +463,10 @@ func TestLogicalAccountOperationsHonorDeadlineWhileLocksAreHeld(t *testing.T) {
 	unlockMembership()
 }
 
-// acceptSessionTarget 以 runner-1/session-1 认领账户并写入一份有效的会话目标（目标数量 1 张 BTC-USDT-SWAP）。
-func acceptSessionTarget(t *testing.T, service *Service, tradeStore *store.Store, targetID string) {
+// acceptSessionTarget 写入 runner-1/session-1 的一份有效目标（目标数量 1 张 BTC-USDT-SWAP）。
+func acceptSessionTarget(t *testing.T, tradeStore *store.Store, targetID string) {
 	t.Helper()
-	account, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	_, _, err = service.ClaimSession(context.Background(), "space-1", "logical-1", "runner-1", "session-1", account.AuthFence)
-	require.NoError(t, err)
-	_, _, err = tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+	_, _, err := tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: targetID,
 		InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1000, StrategyID: "strategy-1",
 		BarEndTime: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),

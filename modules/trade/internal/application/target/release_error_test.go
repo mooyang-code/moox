@@ -19,11 +19,11 @@ func requireReadable(t *testing.T, err error) {
 	require.Contains(t, err.Error(), "目标单")
 }
 
-// ReleaseTargetOrders 对外（停用策略实例时展示给用户）只返回中文错误，不带账户错误的前缀。
+// 撤目标单（过期路径）的错误只有中文、不带账户错误的前缀：账户前缀由外层 AccountError 加一次。
 func TestReleaseTargetOrdersErrorIsPlainChinese(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.gtcOrder(t, "cancel-unknown", "target-old", "CANCEL_UNKNOWN")
-	err := f.restingExecutor().ReleaseTargetOrders(context.Background(), "space-1", "logical-1")
+	err := f.restingExecutor().releaseTargetOrders(context.Background(), "space-1", "logical-1", "")
 	require.ErrorIs(t, err, errTargetOrderUnresolved)
 	require.NotContains(t, err.Error(), "执行账户")
 	requireReadable(t, err)

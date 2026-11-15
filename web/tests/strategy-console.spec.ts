@@ -154,7 +154,6 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
     settlement_asset: "USDT",
     automation_state: "PAUSED",
     pause_reason: "manual review",
-    owner_instance_id: "instance-paper",
     ready: true,
     readiness_reasons: [],
     members: [{ trading_account_id: "binance-paper", enabled: true, priority: 0 }]

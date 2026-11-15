@@ -70,24 +70,3 @@ func TestPaperSimulationControlModeRPC(t *testing.T) {
 		})
 	}
 }
-
-func TestManualControlModeClaimConflictIsConsistent(t *testing.T) {
-	db := openRPCStore(t)
-	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-	h := &LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}, NewID: func() string { return "manual-1" }}
-	created, err := h.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{Name: "manual", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER, SettlementAsset: "USDT", ControlMode: tradepb.ControlMode_CONTROL_MODE_MANUAL})
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode())
-	before, err := db.GetLogicalAccount(ctx, "space-1", "manual-1")
-	require.NoError(t, err)
-	for _, req := range []*tradepb.ClaimLogicalAccountOwnerReq{
-		{LogicalAccountId: "manual-1", InstanceId: "instance-1", SessionId: "session-1", ExpectedAuthFence: before.AuthFence},
-	} {
-		rsp, err := h.ClaimLogicalAccountOwner(ctx, req)
-		require.NoError(t, err)
-		require.Equal(t, tradepb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode(), req)
-	}
-	after, err := db.GetLogicalAccount(ctx, "space-1", "manual-1")
-	require.NoError(t, err)
-	require.Equal(t, before, after)
-}

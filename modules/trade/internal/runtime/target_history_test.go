@@ -20,7 +20,7 @@ func TestTargetHistoryPrunerDeletesOnlyRowsExpiredMoreThanSevenDays(t *testing.T
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			ExecutionMode:   "PAPER",
 			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
 		})
 	}))

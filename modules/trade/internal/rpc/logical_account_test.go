@@ -23,7 +23,7 @@ func TestLogicalAccountRPCRejectsMissingSpace(t *testing.T) {
 	}
 }
 
-func TestLogicalAccountRPCCreatesPausedAccountAndClaimsOwner(t *testing.T) {
+func TestLogicalAccountRPCCreatesPausedAccount(t *testing.T) {
 	tradeStore := openRPCStore(t)
 	service := &logicalapp.Service{Store: tradeStore}
 	handler := &LogicalAccountServer{
@@ -43,23 +43,6 @@ func TestLogicalAccountRPCCreatesPausedAccountAndClaimsOwner(t *testing.T) {
 		created.GetLogicalAccount().GetLogicalAccountId() != "logical-1" ||
 		created.GetLogicalAccount().GetAutomationState() != "PAUSED" {
 		t.Fatalf("created = %+v", created)
-	}
-
-	claimed, err := handler.ClaimLogicalAccountOwner(
-		ctx,
-		&tradepb.ClaimLogicalAccountOwnerReq{
-			LogicalAccountId:  "logical-1",
-			InstanceId:        "instance-1",
-			SessionId:         "session-1",
-			ExpectedAuthFence: created.GetLogicalAccount().GetAuthFence(),
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if claimed.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS ||
-		claimed.GetLogicalAccount().GetOwnerInstanceId() != "instance-1" {
-		t.Fatalf("claimed = %+v", claimed)
 	}
 }
 
@@ -153,38 +136,6 @@ func TestFlattenLogicalAccountMapsInvalidRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if response.GetRetInfo().GetCode() != tradepb.ErrorCode_INVALID_PARAM {
-		t.Fatalf("ret_info = %+v", response.GetRetInfo())
-	}
-}
-
-func TestReleaseLogicalAccountOwnerMapsOwnerConflict(t *testing.T) {
-	tradeStore := openRPCStore(t)
-	service := &logicalapp.Service{Store: tradeStore}
-	handler := &LogicalAccountServer{
-		LogicalAccounts: service,
-		Store:           tradeStore,
-	}
-	requireNoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
-			SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "test",
-		})
-	}))
-
-	account, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
-	requireNoError(t, err)
-	response, err := handler.ReleaseLogicalAccountOwner(
-		spacecontext.WithSpaceID(context.Background(), "space-1"),
-		&tradepb.ReleaseLogicalAccountOwnerReq{
-			LogicalAccountId: "logical-1", InstanceId: "runner-other", SessionId: "session-other", ExpectedAuthFence: account.AuthFence,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.GetRetInfo().GetCode() != tradepb.ErrorCode_CONFLICT {
 		t.Fatalf("ret_info = %+v", response.GetRetInfo())
 	}
 }

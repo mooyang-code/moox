@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -47,7 +48,7 @@ func newMixedExecutorFixture(t *testing.T) *targetFixture {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			ExecutionMode:   "PAPER",
 			SettlementAsset: "USDT", OrderSettingsJSON: legacyOrderSettings, AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -472,6 +473,90 @@ func TestExpiryCancelFailureSchedulesRetry(t *testing.T) {
 	current, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.NotEqual(t, StatusExpired, current.Status, "撤单没成功，目标不能先置为过期")
+}
+
+// expiryStuckNoted 判断 release_orders_stuck 里有没有这个组合的关注项。
+func expiryStuckNoted(now time.Time) bool {
+	for _, detail := range telemetry.Recent(telemetry.AttentionReleaseOrdersStuck, now, time.Hour) {
+		if detail == expiryStuckDetail("logical-1") {
+			return true
+		}
+	}
+	return false
+}
+
+// expiredTargetWithStuckOrder 放一份已经过期、带一笔撤不下来的挂单的目标，返回现在的时刻（有效期结束后 1 秒）。
+func expiredTargetWithStuckOrder(t *testing.T, f *targetFixture) time.Time {
+	t.Helper()
+	telemetry.Forget(telemetry.AttentionReleaseOrdersStuck, expiryStuckDetail("logical-1"))
+	t.Cleanup(func() { telemetry.Forget(telemetry.AttentionReleaseOrdersStuck, expiryStuckDetail("logical-1")) })
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}})
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	f.order(t, restingEthOrder(target))
+	f.orders.cancelErr = errors.New("交易所暂时不可用")
+	f.now = time.UnixMilli(target.ValidUntil).Add(time.Second).UTC()
+	return f.now
+}
+
+// 过期目标的挂单连续撤不下来：不到 10 分钟不记关注项，满 10 分钟记 release_orders_stuck（之后每次重试刷新），撤下来之后消除。
+func TestExpiryCancelStuckNotesAttentionAfterTenMinutes(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	start := expiredTargetWithStuckOrder(t, f)
+	executor := f.executor()
+	converge := func() (Result, error) { return executor.Converge(context.Background(), "space-1", "logical-1") }
+
+	_, err := converge()
+	require.Error(t, err)
+	require.False(t, expiryStuckNoted(f.now), "第一次失败不记")
+	f.now = start.Add(expiryStuckAfter - time.Second)
+	_, err = converge()
+	require.Error(t, err)
+	require.False(t, expiryStuckNoted(f.now), "不到 10 分钟不记")
+	f.now = start.Add(expiryStuckAfter)
+	result, err := converge()
+	require.Error(t, err)
+	require.Equal(t, expiryRetryDelay, result.RetryAfter, "记关注项不改变重试")
+	require.True(t, expiryStuckNoted(f.now), "连续失败满 10 分钟记关注项")
+
+	f.orders.cancelErr = nil
+	f.orders.canceled = nil
+	f.now = f.now.Add(expiryRetryDelay)
+	result, err = converge()
+	require.NoError(t, err)
+	require.Equal(t, StatusExpired, result.Status)
+	require.Equal(t, []string{"resting-eth"}, f.orders.canceled)
+	require.False(t, expiryStuckNoted(f.now), "撤下来之后消除")
+}
+
+// 过期目标换了一份（新会话的目标覆盖了目标行）：计时按新的一份重新算，不沿用上一份的失败起点。
+func TestExpiryCancelStuckTimerRestartsForAnotherTarget(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	start := expiredTargetWithStuckOrder(t, f)
+	executor := f.executor()
+	_, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.Error(t, err)
+
+	f.now = start.Add(expiryStuckAfter - time.Minute)
+	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-next",
+		InstanceID: "runner-2", SessionID: "session-2", SessionStartedAt: sessionStartedAt("session-2"), StrategyID: "strategy-1",
+		BarEndTime: f.now.Add(-2 * time.Second).UnixMilli(), ValidUntil: f.now.Add(-time.Second).UnixMilli(),
+		Targets: []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}}, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
+	})
+	require.NoError(t, err)
+	require.True(t, accepted)
+	_, err = executor.Converge(context.Background(), "space-1", "logical-1")
+	require.Error(t, err)
+
+	f.now = start.Add(expiryStuckAfter + time.Minute)
+	_, err = executor.Converge(context.Background(), "space-1", "logical-1")
+	require.Error(t, err)
+	require.False(t, expiryStuckNoted(f.now), "新的一份目标只失败了 2 分钟")
+	f.now = start.Add(2*expiryStuckAfter - time.Minute)
+	_, err = executor.Converge(context.Background(), "space-1", "logical-1")
+	require.Error(t, err)
+	require.True(t, expiryStuckNoted(f.now), "新的一份目标连续失败满 10 分钟")
 }
 
 // 资金设置的数值字段坏了而底仓设置还在：执行器对空目标和已接收的目标都不平掉底仓的永续对冲腿。

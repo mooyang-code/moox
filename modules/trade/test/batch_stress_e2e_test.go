@@ -229,7 +229,6 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "stress logical",
-			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
 			ExecutionMode: string(exchange.ExecutionModeLive), SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {

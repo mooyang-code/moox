@@ -194,7 +194,7 @@
     </section>
     <a-alert type="info" show-icon class="confirm-note"
       >创建后实例保持停用。启用时后台重新解析结果 View、列与成员契约，固化为会话快照；写了 factor_params
-      的实例还会把主帧任务与实例永久关联；绑定组合账户的实例在启用时认领账户会话。</a-alert
+      的实例还会把主帧任务与实例永久关联；绑定组合账户的实例启用后，之后的策略目标由它执行下单。</a-alert
     >
     <template #footer>
       <a-space>
@@ -209,7 +209,7 @@
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { createInstance, getInstance, getStrategy, validateStrategy } from "@/api/strategy";
+import { createInstance, getInstance, getStrategy, listInstances, validateStrategy } from "@/api/strategy";
 import type { Strategy, ValidateStrategyResult } from "@/api/strategy-types";
 import { listFactorTasks } from "@/api/factor";
 import { listLogicalAccounts, listTradingAccounts } from "@/api/trade";
@@ -227,7 +227,12 @@ import {
 import { readUnifiedDatasetIds } from "@/views/strategy/components/unified-datasets";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
-import { logicalAccountOptions, marketsToResolved, resolvedMarkets } from "@/views/strategy/components/logical-account-options";
+import {
+  enabledInstanceAccounts,
+  logicalAccountOptions,
+  marketsToResolved,
+  resolvedMarkets
+} from "@/views/strategy/components/logical-account-options";
 import {
   UNIFIED_TASK_KEY,
   marketLabel,
@@ -275,6 +280,8 @@ const unifiedDatasetIds = ref<ReadonlySet<string>>(new Set());
 const accounts = ref<LogicalAccount[]>([]);
 // 成员执行账户：用来在账户选项前写测试网还是生产；读不到时为 null，选项只写“实盘”。
 const tradingAccounts = ref<ReadonlyMap<string, TradingAccount> | null>(null);
+// 组合账户 → 绑着它的启用实例（取自 Strategy 的实例列表，Trade 不存归属）：这些账户显示但不可选；读不到时为 null，不置灰，启用时由 Strategy 拒绝。
+const boundInstances = ref<ReadonlyMap<string, string> | null>(null);
 const check_result = ref<ValidateStrategyResult | null>(null);
 let tasksRequest = 0;
 let datasetsRequest = 0;
@@ -347,7 +354,9 @@ const marketNames = computed(() => {
 });
 // 已选的账户因为市场收窄被清空：提示一句，用户重新选择后消失。
 const accountCleared = ref(false);
-const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value, tradingAccounts.value));
+const accountOptions = computed(() =>
+  logicalAccountOptions(accounts.value, market.value, tradingAccounts.value, boundInstances.value)
+);
 // 预检或成员定义读到后账户列表会收窄：已选的账户不在新列表里（或变成不可选）时清掉，不能悄悄提交不符合的账户。
 watch(accountOptions, options => {
   if (!form.logical_account_id) return;
@@ -502,15 +511,19 @@ async function loadAccountsList() {
   accountsLoading.value = true;
   accountsError.value = "";
   try {
-    const [nextAccounts, members] = await Promise.all([
+    const [nextAccounts, members, bound] = await Promise.all([
       loadAllAccounts(),
       listTradingAccounts({ page: { page: 1, size: 200 } })
         .then(rsp => new Map((rsp.accounts || []).map(item => [item.trading_account_id, item])))
+        .catch(() => null),
+      listInstances({ page: 1, page_size: 500, enabled: true })
+        .then(rsp => enabledInstanceAccounts(rsp.items))
         .catch(() => null)
     ]);
     if (requestId !== accountsRequest || props.spaceId !== spaceId) return;
     accounts.value = nextAccounts.filter(account => account.space_id === spaceId);
     tradingAccounts.value = members;
+    boundInstances.value = bound;
   } catch (err) {
     if (requestId === accountsRequest) accountsError.value = err instanceof Error ? err.message : "账户读取失败";
   } finally {
@@ -612,6 +625,7 @@ function resetForm() {
   datasetsError.value = "";
   accounts.value = [];
   tradingAccounts.value = null;
+  boundInstances.value = null;
   tasksRequest += 1;
   accountsRequest += 1;
   tasksLoading.value = false;

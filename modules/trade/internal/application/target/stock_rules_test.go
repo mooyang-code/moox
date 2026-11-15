@@ -69,7 +69,7 @@ func newStockFixture(t *testing.T) *stockFixture {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			ExecutionMode:   "PAPER",
 			SettlementAsset: "CNY", OrderSettingsJSON: legacyOrderSettings,
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {

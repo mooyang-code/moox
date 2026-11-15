@@ -1292,7 +1292,7 @@ func newTestServiceForMarket(
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: account.SpaceID, LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: string(account.ExecutionMode),
+			ExecutionMode:   string(account.ExecutionMode),
 			SettlementAsset: account.SettlementAsset,
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {

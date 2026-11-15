@@ -1792,8 +1792,6 @@ components:
           - UpdateLogicalAccountFundSettings
           - AddLogicalAccountMember
           - RemoveLogicalAccountMember
-          - ClaimLogicalAccountOwner
-          - ReleaseLogicalAccountOwner
           - CloseTargetSession
           - PauseLogicalAccount
           - ResumeLogicalAccount
@@ -1903,11 +1901,6 @@ components:
               - GetOperatorAction
             callers:
               - callback-dispatcher
-          - methods:
-              - ClaimLogicalAccountOwner
-              - ReleaseLogicalAccountOwner
-            callers:
-              - moox-cli
           - methods:
               - GetLogicalAccount
               - CloseTargetSession

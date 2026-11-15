@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
@@ -18,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -33,7 +31,6 @@ var (
 	ErrRemovalHasExposure = errors.New("执行账户上还有挂单、持仓或受管的现货资产，不能移出组合，请先撤单、平仓后再移出")
 	// ErrMemberNotSynced 是加入、停用或移出成员时执行账户未就绪或快照过期，持仓核对不了。
 	ErrMemberNotSynced = errors.New("执行账户还没同步完成，稍后再试")
-	ErrOwnerConflict   = errors.New("组合账户已被别的策略会话占用")
 	ErrNotReady        = errors.New("组合账户还没准备好，暂时不能恢复自动执行")
 )
 
@@ -60,106 +57,8 @@ type Service struct {
 	MaxSnapshotAge time.Duration
 	// OnFundSettingsChanged 在资金设置保存后调用，通知资金维护任务重新检查；为空时不通知。
 	OnFundSettingsChanged func(spaceID, logicalAccountID string)
-	// TargetOrders 在策略会话释放、重绑、认领删掉目标之前撤掉组合里还没结束的目标挂单；为空时不撤（测试用）。
-	TargetOrders TargetOrderReleaser
 	// WakeTarget 在关闭策略会话（CloseTargetSession）提交之后唤醒这个组合的执行器，接法同事件消费者的 WakeTarget；为空时不唤醒（测试用）。
 	WakeTarget func(spaceID, logicalAccountID string)
-
-	// releaseFailures 按“空间/组合”记释放会话撤目标单连续失败的起点和最近一次失败时间；释放撤单成功、认领或重绑撤单成功、
-	// 释放请求已不作数时删掉；只在内存里，重启后重新计时。
-	releaseMu       sync.Mutex
-	releaseFailures map[string]releaseFailure
-}
-
-// releaseFailure 是一个组合释放会话撤目标单连续失败的计时。
-type releaseFailure struct {
-	since time.Time // 这一串连续失败的起点
-	last  time.Time // 最近一次失败的时间
-}
-
-// releaseStuckAfter 是释放会话连续失败多久之后记关注项 release_orders_stuck。
-const releaseStuckAfter = 10 * time.Minute
-
-func releaseFailureKey(spaceID, logicalAccountID string) string {
-	return spaceID + "/" + logicalAccountID
-}
-
-// releaseStuckDetail 是释放会话持续失败的关注项详情，文字固定，同一组合只占一条。
-func releaseStuckDetail(logicalAccountID string) string {
-	return "组合 " + logicalAccountID + "：释放会话连续失败超过 10 分钟，目标单没撤下、会话没有释放（策略在重试），" +
-		"检查执行账户会话是否建得起来"
-}
-
-// releaseUnverifiedDetail 是释放会话只按本地记录放行时的关注项详情。
-func releaseUnverifiedDetail(logicalAccountID string) string {
-	return "组合 " + logicalAccountID + "：凭证失效、交易账户已停用或异常、标的已不存在，目标单没能撤下，只按本地记录释放会话，需人工核对"
-}
-
-// noteReleaseFailure 记下释放会话撤目标单失败：从第一次失败算起超过 releaseStuckAfter 仍在失败，就记关注项并写日志。
-// 账户启用但会话一直建不起来时，释放会一直失败，不记的话没人知道这个组合的会话卡着没释放。
-// 和上一次失败隔了超过 releaseStuckAfter 的不算连续失败（中间可能已经走了别的路径、没人清计时），起点重新算。
-func (s *Service) noteReleaseFailure(ctx context.Context, spaceID, logicalAccountID string, cause error) {
-	now := s.now()
-	key := releaseFailureKey(spaceID, logicalAccountID)
-	s.releaseMu.Lock()
-	if s.releaseFailures == nil {
-		s.releaseFailures = make(map[string]releaseFailure)
-	}
-	failure, found := s.releaseFailures[key]
-	if !found || now.Sub(failure.last) > releaseStuckAfter {
-		failure.since = now
-	}
-	failure.last = now
-	s.releaseFailures[key] = failure
-	since := failure.since
-	s.releaseMu.Unlock()
-	if now.Sub(since) < releaseStuckAfter {
-		return
-	}
-	detail := releaseStuckDetail(logicalAccountID)
-	telemetry.Note(telemetry.AttentionReleaseOrdersStuck, detail, now)
-	log.WarnContextf(ctx, "交易关注项：%s（从 %s 起）：%v", detail, since.Format(time.RFC3339), cause)
-}
-
-// clearReleaseFailure 清掉释放会话的失败计时和关注项：释放撤目标单成功（或按本地记录放行）、认领或重绑撤目标单成功、
-// 释放请求已不作数（围栏过期、会话已换）时调用。
-func (s *Service) clearReleaseFailure(spaceID, logicalAccountID string) {
-	key := releaseFailureKey(spaceID, logicalAccountID)
-	s.releaseMu.Lock()
-	_, found := s.releaseFailures[key]
-	delete(s.releaseFailures, key)
-	s.releaseMu.Unlock()
-	if found {
-		telemetry.Forget(telemetry.AttentionReleaseOrdersStuck, releaseStuckDetail(logicalAccountID))
-	}
-}
-
-// TargetOrderReleaser 撤掉组合里还没结束的目标单，调用方持有组合锁（目标执行器实现）。
-type TargetOrderReleaser interface {
-	ReleaseTargetOrders(ctx context.Context, spaceID, logicalAccountID string) error
-}
-
-// ErrTargetOrdersNotReleased 表示释放会话前目标挂单没撤下来，会话没有释放，稍后重试。
-// 它不包住撤单的原始错误（原始错误可能是版本冲突、记录不存在，会被当成“所有权冲突”“账户不存在”，策略就不再重试了），只把原因写进文案。
-var ErrTargetOrdersNotReleased = errors.New("目标挂单还没撤下来，会话没有释放，稍后重试")
-
-type targetOrdersNotReleased struct{ cause error }
-
-func (e targetOrdersNotReleased) Error() string {
-	return ErrTargetOrdersNotReleased.Error() + "：" + e.cause.Error()
-}
-
-func (e targetOrdersNotReleased) Unwrap() error { return ErrTargetOrdersNotReleased }
-
-// releaseTargetOrders 在删掉目标之前撤掉组合里还没结束的目标单（调用方持有组合锁）。
-func (s *Service) releaseTargetOrders(ctx context.Context, spaceID, logicalAccountID string) error {
-	if s.TargetOrders == nil {
-		return nil
-	}
-	if err := s.TargetOrders.ReleaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
-		return targetOrdersNotReleased{cause: err}
-	}
-	return nil
 }
 
 type AccountSyncer interface {
@@ -473,34 +372,6 @@ func credentialUnavailable(err error) bool {
 	return errors.As(err, &accountErr) && accountErr.Operation == "adapter"
 }
 
-// allOrdersUnreachable 判断撤目标单失败是否每一支都是等多久都不会成功的：凭证失效、交易所确认标的不存在、
-// 取不到账户会话而交易账户已经停用或处于异常（ERROR）状态。取不到会话但交易账户仍启用（例如重启后会话还没建好）只是暂时的，不算；
-// 查不到交易账户状态也不算。多笔单的错误是 errors.Join 起来的，只要有一支是别的错误（例如超时、限流），就不算，照样让调用方重试。
-func (s *Service) allOrdersUnreachable(ctx context.Context, err error) bool {
-	if err == nil {
-		return false
-	}
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		children := joined.Unwrap()
-		for _, child := range children {
-			if !s.allOrdersUnreachable(ctx, child) {
-				return false
-			}
-		}
-		return len(children) > 0
-	}
-	if exchange.IsKind(err, exchange.ErrorAuthentication) || exchange.IsInstrumentNotFound(err) {
-		return true
-	}
-	var accountErr *orderapp.AccountExecutionError
-	if !errors.As(err, &accountErr) || accountErr.Operation != "adapter" {
-		return false
-	}
-	account, getErr := s.Store.GetTradingAccountByID(ctx, accountErr.TradingAccountID)
-	return getErr == nil && (account.Status == string(exchange.AccountStatusDisabled) ||
-		account.Status == string(exchange.AccountStatusError))
-}
-
 // syncFailureSummary 是给前端看的同步失败原因：用中文说清是没有会话还是凭证失效，不带交易所原文（可能是英文或带请求串）。
 func syncFailureSummary(err error) string {
 	var accountErr *orderapp.AccountExecutionError
@@ -565,96 +436,6 @@ func (s *Service) RemoveMember(
 	return "", nil
 }
 
-// ClaimSession assigns the explicit Strategy instance/session identity used by
-// target events, with auth_fence compare-and-set semantics.
-func (s *Service) ClaimSession(
-	ctx context.Context,
-	spaceID, logicalAccountID, instanceID, sessionID, expectedFence string,
-) (store.LogicalAccountRecord, string, error) {
-	if s == nil || s.Store == nil {
-		return store.LogicalAccountRecord{}, "", ErrServiceConfig
-	}
-	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
-	if lockErr != nil {
-		return store.LogicalAccountRecord{}, "", lockErr
-	}
-	defer unlock()
-	// 认领会删掉目标：先撤掉上一个会话可能留下的挂单。撤不下来也照常认领，新会话的第一份目标在第 1 阶段会再撤（executor.go）。
-	if current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID); err == nil && claimChanges(current, instanceID, sessionID, expectedFence) {
-		if err := s.releaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
-			log.WarnContextf(ctx, "交易关注项：组合 %s 认领会话前撤目标挂单失败，交给新目标的第 1 阶段处理：%v", logicalAccountID, err)
-		} else {
-			s.clearReleaseFailure(spaceID, logicalAccountID)
-		}
-	}
-	var fence string
-	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		var err error
-		var changed bool
-		fence, changed, err = tx.ClaimLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence)
-		if err != nil || !changed {
-			return err
-		}
-		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
-	})
-	if err != nil {
-		return store.LogicalAccountRecord{}, "", err
-	}
-	value, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
-	return value, fence, err
-}
-
-// ReleaseSession is a compare-and-set release. A stale session cannot clear
-// a replacement session's authorization or target.
-func (s *Service) ReleaseSession(
-	ctx context.Context,
-	spaceID, logicalAccountID, instanceID, sessionID, expectedFence string,
-) error {
-	if s == nil || s.Store == nil {
-		return ErrServiceConfig
-	}
-	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
-	if lockErr != nil {
-		return lockErr
-	}
-	defer unlock()
-	// 释放会删掉目标，之后没有人再管这个组合的目标单。顺序：先删目标（执行器不会再按它下新单），再撤目标单，最后做所有权 CAS。
-	// 撤不下来就不释放、返回错误，由策略稍后重试释放（目标已删，重试时只撤单）。撤单按组合查单，不依赖目标。
-	// 凭证失效、交易账户已停用或异常（没有会话）时撤单永远不会成功：比照移出成员，只按本地记录放行，记关注项，交给人工核对；
-	// 交易所确认标的不存在（已下架）的单也不可能还挂着，同样放行。账户仍启用只是暂时没有会话（例如重启后还没建好）时不放行，让策略重试；
-	// 连续失败超过 10 分钟记关注项 release_orders_stuck（见 noteReleaseFailure）。
-	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
-	if err != nil {
-		return err
-	}
-	if releaseChanges(current, instanceID, sessionID, expectedFence) {
-		if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-			return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
-		}); err != nil {
-			return err
-		}
-		if s.TargetOrders != nil {
-			if err := s.TargetOrders.ReleaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
-				if ctx.Err() != nil || !s.allOrdersUnreachable(ctx, err) {
-					s.noteReleaseFailure(ctx, spaceID, logicalAccountID, err)
-					return targetOrdersNotReleased{cause: err}
-				}
-				detail := releaseUnverifiedDetail(logicalAccountID)
-				telemetry.Note(telemetry.AttentionReleaseOrdersUnverified, detail, s.now())
-				log.WarnContextf(ctx, "交易关注项：%s：%v", detail, err)
-			}
-		}
-	}
-	// 撤单成功、按本地记录放行，或者这次释放不作数（围栏过期、会话已换，之前没释放下来的那个会话已经不在了）：清掉失败计时。
-	s.clearReleaseFailure(spaceID, logicalAccountID)
-	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.ReleaseLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence); err != nil {
-			return err
-		}
-		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
-	})
-}
-
 // CloseTargetSession 关闭策略会话（批 3 的 3.6，幂等）：在组合锁内推进组合的 c_closed_through（取它与 startedAt 中较大的一个），
 // 当前目标行属于开始时刻不大于它的会话、并且还没过期时，把有效期改成“现在”与 bar_end_time 加 1 毫秒中较大的一个，目标行不删；
 // 提交之后唤醒一次这个组合的执行器。之后由执行器的过期路径撤掉这份目标的挂单并把它置为过期，撤不下来由那条路径自己重试，
@@ -692,24 +473,6 @@ func (s *Service) CloseTargetSession(
 		s.WakeTarget(spaceID, logicalAccountID)
 	}
 	return closed, nil
-}
-
-// claimChanges、releaseChanges 按 store 里会话 CAS 的同样条件预判这次操作会不会换掉所有者、删掉目标：
-// 只有会删目标时才撤目标挂单。幂等的重复请求、过期的围栏、被别的会话占用时都不撤，否则会撤掉当前所有者正在用的挂单。
-// 调用方持有组合锁，会话字段只在这把锁下改，预判和随后的 CAS 之间不会变。
-func claimChanges(account store.LogicalAccountRecord, instanceID, sessionID, expectedFence string) bool {
-	// 认领只在组合空闲时生效（同一会话重复认领时所有者非空，不会走到这里）。
-	return account.ControlMode == "STRATEGY" && account.AuthFence == expectedFence &&
-		account.OwnerInstanceID == "" && account.OwnerSessionID == "" && instanceID != "" && sessionID != ""
-}
-
-// releaseChanges 对已经空闲的组合也返回真：释放照样删目标，重试释放时要接着撤上一次没撤下来的挂单。
-func releaseChanges(account store.LogicalAccountRecord, instanceID, sessionID, expectedFence string) bool {
-	if account.AuthFence != expectedFence {
-		return false
-	}
-	idle := account.OwnerInstanceID == "" && account.OwnerSessionID == ""
-	return idle || account.OwnerInstanceID == instanceID && account.OwnerSessionID == sessionID
 }
 
 func (s *Service) Pause(

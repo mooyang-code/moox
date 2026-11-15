@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { StrategyInstance } from "@/api/strategy-types";
 import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
-import { environmentPrefix, logicalAccountOptions, resolvedMarkets } from "./logical-account-options";
+import { enabledInstanceAccounts, environmentPrefix, logicalAccountOptions, resolvedMarkets } from "./logical-account-options";
 
 const account = (patch: Partial<LogicalAccount>) =>
   ({
@@ -50,10 +51,26 @@ describe("策略绑定组合账户选项", () => {
     expect(options.map(item => item.account.logical_account_id)).toEqual(["ashare"]);
   });
 
-  it("已被其他实例绑定的显示为不可选并写明实例", () => {
-    const [option] = logicalAccountOptions([account({ owner_instance_id: "inst-1" })]);
+  it("已被启用实例绑定的显示为不可选并写明实例，绑定关系取自 Strategy 的实例列表", () => {
+    const instances = [
+      { instance_id: "inst-off", logical_account_id: "a", enabled: false },
+      { instance_id: "inst-1", logical_account_id: "a", enabled: true },
+      { instance_id: "inst-2", logical_account_id: "b", enabled: true }
+    ] as StrategyInstance[];
+    const bound = enabledInstanceAccounts(instances);
+    expect([...bound]).toEqual([
+      ["a", "inst-1"],
+      ["b", "inst-2"]
+    ]);
+    const [option, free] = logicalAccountOptions([account({}), account({ logical_account_id: "c" })], {}, null, bound);
     expect(option.disabledReason).toContain("inst-1");
     expect(option.label).toContain("inst-1");
+    expect(free.disabledReason).toBe("");
+  });
+
+  it("实例列表读不到时不置灰，由启用时的服务端检查兜底", () => {
+    const [option] = logicalAccountOptions([account({})], {}, null, null);
+    expect(option.disabledReason).toBe("");
   });
 
   it("从校验结果读市场模式", () => {

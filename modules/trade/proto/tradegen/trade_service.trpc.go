@@ -53,10 +53,6 @@ type TradeConsoleServiceService interface {
 
 	RemoveLogicalAccountMember(ctx context.Context, req *RemoveLogicalAccountMemberReq) (*RemoveLogicalAccountMemberRsp, error)
 
-	ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq) (*ClaimLogicalAccountOwnerRsp, error)
-
-	ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq) (*ReleaseLogicalAccountOwnerRsp, error)
-
 	CloseTargetSession(ctx context.Context, req *CloseTargetSessionReq) (*CloseTargetSessionRsp, error)
 
 	PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq) (*PauseLogicalAccountRsp, error)
@@ -408,42 +404,6 @@ func TradeConsoleServiceService_RemoveLogicalAccountMember_Handler(svr interface
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(TradeConsoleServiceService).RemoveLogicalAccountMember(ctx, reqbody.(*RemoveLogicalAccountMemberReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func TradeConsoleServiceService_ClaimLogicalAccountOwner_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ClaimLogicalAccountOwnerReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeConsoleServiceService).ClaimLogicalAccountOwner(ctx, reqbody.(*ClaimLogicalAccountOwnerReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func TradeConsoleServiceService_ReleaseLogicalAccountOwner_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReleaseLogicalAccountOwnerReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeConsoleServiceService).ReleaseLogicalAccountOwner(ctx, reqbody.(*ReleaseLogicalAccountOwnerReq))
 	}
 
 	var rsp interface{}
@@ -1014,14 +974,6 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_RemoveLogicalAccountMember_Handler,
 		},
 		{
-			Name: "/trpc.moox.trade.TradeConsoleService/ClaimLogicalAccountOwner",
-			Func: TradeConsoleServiceService_ClaimLogicalAccountOwner_Handler,
-		},
-		{
-			Name: "/trpc.moox.trade.TradeConsoleService/ReleaseLogicalAccountOwner",
-			Func: TradeConsoleServiceService_ReleaseLogicalAccountOwner_Handler,
-		},
-		{
 			Name: "/trpc.moox.trade.TradeConsoleService/CloseTargetSession",
 			Func: TradeConsoleServiceService_CloseTargetSession_Handler,
 		},
@@ -1194,12 +1146,6 @@ func (s *UnimplementedTradeConsoleService) AddLogicalAccountMember(ctx context.C
 func (s *UnimplementedTradeConsoleService) RemoveLogicalAccountMember(ctx context.Context, req *RemoveLogicalAccountMemberReq) (*RemoveLogicalAccountMemberRsp, error) {
 	return nil, errors.New("rpc RemoveLogicalAccountMember of service TradeConsoleService is not implemented")
 }
-func (s *UnimplementedTradeConsoleService) ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq) (*ClaimLogicalAccountOwnerRsp, error) {
-	return nil, errors.New("rpc ClaimLogicalAccountOwner of service TradeConsoleService is not implemented")
-}
-func (s *UnimplementedTradeConsoleService) ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq) (*ReleaseLogicalAccountOwnerRsp, error) {
-	return nil, errors.New("rpc ReleaseLogicalAccountOwner of service TradeConsoleService is not implemented")
-}
 func (s *UnimplementedTradeConsoleService) CloseTargetSession(ctx context.Context, req *CloseTargetSessionReq) (*CloseTargetSessionRsp, error) {
 	return nil, errors.New("rpc CloseTargetSession of service TradeConsoleService is not implemented")
 }
@@ -1323,10 +1269,6 @@ type TradeConsoleServiceClientProxy interface {
 	AddLogicalAccountMember(ctx context.Context, req *AddLogicalAccountMemberReq, opts ...client.Option) (rsp *AddLogicalAccountMemberRsp, err error)
 
 	RemoveLogicalAccountMember(ctx context.Context, req *RemoveLogicalAccountMemberReq, opts ...client.Option) (rsp *RemoveLogicalAccountMemberRsp, err error)
-
-	ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq, opts ...client.Option) (rsp *ClaimLogicalAccountOwnerRsp, err error)
-
-	ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq, opts ...client.Option) (rsp *ReleaseLogicalAccountOwnerRsp, err error)
 
 	CloseTargetSession(ctx context.Context, req *CloseTargetSessionReq, opts ...client.Option) (rsp *CloseTargetSessionRsp, err error)
 
@@ -1726,46 +1668,6 @@ func (c *TradeConsoleServiceClientProxyImpl) RemoveLogicalAccountMember(ctx cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &RemoveLogicalAccountMemberRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *TradeConsoleServiceClientProxyImpl) ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq, opts ...client.Option) (*ClaimLogicalAccountOwnerRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ClaimLogicalAccountOwner")
-	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("TradeConsoleService")
-	msg.WithCalleeMethod("ClaimLogicalAccountOwner")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ClaimLogicalAccountOwnerRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *TradeConsoleServiceClientProxyImpl) ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq, opts ...client.Option) (*ReleaseLogicalAccountOwnerRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ReleaseLogicalAccountOwner")
-	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("TradeConsoleService")
-	msg.WithCalleeMethod("ReleaseLogicalAccountOwner")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReleaseLogicalAccountOwnerRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

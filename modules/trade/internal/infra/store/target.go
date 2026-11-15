@@ -372,14 +372,6 @@ func (s *Store) GetLogicalAccountTarget(
 	return logicalAccountTargetRecord(row)
 }
 
-// DeleteLogicalAccountTarget removes the current target during an ownership
-// lifecycle transition. Historical TargetReceipt rows remain immutable; only
-// the live convergence target is cleared so a released runner cannot resume
-// an obsolete strategy after the account is claimed again.
-func (tx *Tx) DeleteLogicalAccountTarget(spaceID, logicalAccountID string) error {
-	return tx.db.Exec(execDeleteLogicalAccountTargets, spaceID, logicalAccountID).Error
-}
-
 func (s *Store) ListLogicalAccountTargets(
 	ctx context.Context,
 	statuses ...string,
@@ -667,8 +659,6 @@ const (
 		   OR (t_logical_account_targets.c_instance_id = excluded.c_instance_id
 		       AND t_logical_account_targets.c_session_id = excluded.c_session_id
 		       AND excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time)`
-	execDeleteLogicalAccountTargets = `DELETE FROM t_logical_account_targets
-		WHERE c_space_id = ? AND c_logical_account_id = ?`
 	queryCurrentTarget = `SELECT c_target_id, c_instance_id, c_session_id, c_session_started_at, c_bar_end_time, c_valid_until
 		FROM t_logical_account_targets WHERE c_space_id = ? AND c_logical_account_id = ?`
 	// 推进组合的“关闭到”时刻，只增不减。

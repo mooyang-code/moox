@@ -16,7 +16,7 @@ func TestCreateOrderPersistsTrustedOwnership(t *testing.T) {
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			ExecutionMode:   "PAPER",
 			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {

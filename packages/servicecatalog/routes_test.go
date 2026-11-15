@@ -129,7 +129,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 	}{
 		"control":  {190, []string{"access", "admin", "archive-mgr", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "b048ff6c4ebf3c6b0e93695be13cd6b4d12a3f7efedcb5b03aa5eb63abde7e0d"},
 		"storage":  {65, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "6a8447172d02fb02b4961b5a450944f7b26f8e447f5a59d829e890b6ece50abb"},
-		"overseas": {63, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "e5b65cc03683b84b443c1963ce4c3995efab15eb29a4244dbe633f45841403c1"},
+		"overseas": {61, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "56cadabb459b2865058a8bbc8af6d2b06fcdb50b97589fb8cbda2d490dd476dc"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)

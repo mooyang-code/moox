@@ -914,7 +914,7 @@ func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			ExecutionMode:   "PAPER",
 			SettlementAsset: "USDT", OrderSettingsJSON: legacyOrderSettings,
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {

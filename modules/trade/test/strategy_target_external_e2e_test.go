@@ -62,12 +62,10 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	require.NoError(t, err)
 	logical := &logicalapp.Service{Store: f.store, Syncer: syncBridge{service: f.sync}, Now: func() time.Time { return testNow }}
 	h := &rpc.LogicalAccountServer{Store: f.store, LogicalAccounts: logical}
-	beforeClaim, err := h.GetLogicalAccount(ctx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalID})
+	// Trade 不存归属：不认领，直接恢复自动执行，之后按会话先后接受 Strategy 的目标。
+	logicalRsp, err := h.GetLogicalAccount(ctx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalID})
 	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_SUCCESS, beforeClaim.GetRetInfo().GetCode())
-	claimed, err := h.ClaimLogicalAccountOwner(ctx, &tradepb.ClaimLogicalAccountOwnerReq{LogicalAccountId: logicalID, InstanceId: "instance-e2e", SessionId: "session-e2e", ExpectedAuthFence: beforeClaim.GetLogicalAccount().GetAuthFence()})
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_SUCCESS, claimed.GetRetInfo().GetCode(), claimed.GetRetInfo())
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, logicalRsp.GetRetInfo().GetCode())
 	resumed, err := h.ResumeLogicalAccount(ctx, &tradepb.ResumeLogicalAccountReq{LogicalAccountId: logicalID})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, resumed.GetRetInfo().GetCode(), resumed.GetRetInfo())

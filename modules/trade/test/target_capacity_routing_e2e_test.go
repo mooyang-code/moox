@@ -42,7 +42,6 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "Live capacity routing",
-			OwnerInstanceID: "live-instance", OwnerSessionID: "live-session",
 			ExecutionMode: "LIVE", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -115,7 +114,6 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "Capacity routing",
-			OwnerInstanceID: "capacity-instance", OwnerSessionID: "capacity-session",
 			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -237,7 +235,6 @@ func TestTargetRejectionDoesNotLoopE2E(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "reject",
-			OwnerInstanceID: "live-instance", OwnerSessionID: "live-session",
 			ExecutionMode: "LIVE", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {

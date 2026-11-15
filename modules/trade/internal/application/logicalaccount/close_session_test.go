@@ -12,7 +12,7 @@ import (
 
 // CloseTargetSession（批 3 的 3.6）：在组合锁内推进 c_closed_through、缩短这个会话的目标的有效期，提交之后唤醒一次执行器。
 func TestCloseTargetSessionAdvancesShortensAndWakesAfterCommit(t *testing.T) {
-	service, tradeStore, _ := modernSessionFixture(t)
+	service, tradeStore := modernSessionFixture(t)
 	target := acceptModernSessionTarget(t, tradeStore, "session-1")
 	now := time.Now().UTC().Add(time.Second)
 	service.Now = func() time.Time { return now }
@@ -45,7 +45,7 @@ func TestCloseTargetSessionAdvancesShortensAndWakesAfterCommit(t *testing.T) {
 
 // 幂等、不回退：重复关闭同一个会话结果不变（照样唤醒一次）；关闭更早的会话不让 c_closed_through 往回走。
 func TestCloseTargetSessionIsIdempotentAndNeverMovesBack(t *testing.T) {
-	service, tradeStore, _ := modernSessionFixture(t)
+	service, tradeStore := modernSessionFixture(t)
 	acceptModernSessionTarget(t, tradeStore, "session-1")
 	wakes := 0
 	service.WakeTarget = func(string, string) { wakes++ }
@@ -67,7 +67,7 @@ func TestCloseTargetSessionIsIdempotentAndNeverMovesBack(t *testing.T) {
 
 // 没有目标行时也能关闭（会话从没发出过目标）；组合不存在时报不存在、不唤醒。
 func TestCloseTargetSessionWithoutTargetAndUnknownAccount(t *testing.T) {
-	service, tradeStore, _ := modernSessionFixture(t)
+	service, tradeStore := modernSessionFixture(t)
 	wakes := 0
 	service.WakeTarget = func(string, string) { wakes++ }
 	ctx := context.Background()
