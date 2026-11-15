@@ -157,7 +157,8 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 	return result
 }
 
-// EncodeDetail 把因子成员状态编码成 ViewDataReady 的 detail_type 与 detail（回放据此构造事件）。
+// EncodeDetail 把因子成员状态编码成 ViewDataReady 的 detail_type 与 detail，是解码的逆过程。
+// 生产路径上明细由因子模块写入，这里只供各包的测试构造带明细的就绪事件。
 func EncodeDetail(factors []*factorpb.FactorPeriodState) (string, []byte, error) {
 	raw, err := proto.Marshal(&factorpb.PeriodDetail{Factors: factors})
 	return PeriodDetailType, raw, err

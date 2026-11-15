@@ -72,7 +72,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	prices := targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: f.adapter}}
 	equity := &equityapp.Service{Store: f.store, Adapters: adapterSource{adapter: f.adapter}, Now: func() time.Time { return testNow }, SourceMaxAge: time.Minute}
 	require.NoError(t, equity.SampleAccount(ctx, testAccount))
-	var authorizationReads atomic.Int32
+	var accountReads atomic.Int32
 	// This bridge exercises the real RPC handler and Store across processes;
 	// it is intentionally not a claim of production Gateway/tRPC coverage.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +90,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 			http.Error(w, marshalErr.Error(), http.StatusInternalServerError)
 			return
 		}
-		authorizationReads.Add(1)
+		accountReads.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(raw)
 	}))
@@ -116,11 +116,11 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	t.Cleanup(stop)
 	require.Eventually(t, func() bool {
 		current, getErr := f.store.GetLogicalAccountTarget(ctx, testSpace, logicalID)
-		return getErr == nil && current.InstanceID == "instance-e2e" && current.SessionID == "session-e2e" && len(current.Targets) == 1 && current.Targets[0].Quantity == "1"
+		return getErr == nil && current.InstanceID == "instance-e2e" && current.SessionID == "session-e2e" && current.SessionStartedAt > 0 && len(current.Targets) == 1 && current.Targets[0].Quantity == "1"
 	}, 15*time.Second, 50*time.Millisecond)
 	stop()
 	require.ErrorIs(t, runErr, context.Canceled)
-	require.Positive(t, authorizationReads.Load(), "Processor must query Trade session authorization")
+	require.Positive(t, accountReads.Load(), "Strategy 启用前要只读核对一次组合账户")
 	current, err := f.store.GetLogicalAccountTarget(ctx, testSpace, logicalID)
 	require.NoError(t, err)
 	receipt, err := f.store.GetTargetReceipt(ctx, testSpace, current.TargetID)
@@ -131,7 +131,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	require.Greater(t, receipt.ValidUntil, receipt.BarEndTime)
 	require.NotEmpty(t, receipt.RequestHash)
 	require.Equal(t, "100000", receipt.Equity)
-	require.JSONEq(t, `[{"instrument_id":"BTC-USDT","target_weight":"0.5"}]`, receipt.WeightsJSON)
+	require.JSONEq(t, `[{"instrument_id":"BTC-USDT-SPOT","target_weight":"0.5"}]`, receipt.WeightsJSON, "回执只存标准化后带市场后缀的 Trade 内部 ID")
 	executor := &targetapp.Executor{Store: f.store, Orders: f.orders, Prices: prices, Now: func() time.Time { return testNow }}
 	worker := &traderuntime.TargetWorker{Store: f.store, Executor: executor, Interval: time.Hour, Now: func() time.Time { return testNow }}
 	workerCtx, stopWorker := context.WithCancel(ctx)

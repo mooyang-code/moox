@@ -56,6 +56,7 @@
 | 控制多空净敞口、总敞口 | 池的 `exposure`、`gross` | 9.5 |
 | 某个成员空仓时把它的比例转给另一个成员 | 池的 `allocation.switch` | 9.5 |
 | 空头组合波动太大时暂停再平衡 | 池的 `freeze` | 9.7 |
+| 上线前在历史上回放；调参策略或超出 View 保留根数的长区间 | `strategy replay start`；`--input compute`（因子现算）、`--slippage-bps` | 11 |
 
 ## 2. 顶层结构与市场模式
 
@@ -1160,7 +1161,10 @@ portfolio: {max_missing: 0.2}
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| 保存即拒绝，提示“包含未知字段” | 解析严格，拼错键名或写了不存在的字段 | 按本手册字段名核对 |
+| 保存即拒绝，提示“包含未知字段” | 解析严格，拼错键名或写了不存在的字段；规则上的 `entry`、`exit`、`candidates`、`tranche`、`params` 都已不存在 | 按本手册字段名核对；进出场条件写进 `hold`，每根开一批用 `holding: {bars, offsets: all}`（5.1） |
+| 保存即拒绝，提示 type “不受支持，只能是 rank” | 规则类型只有 `rank`，`signal`、`tranche` 已删 | 固定几个标的按信号进出写成显式 `pool` 加 `hold`（第 6 节）；每根开一批、各批持有固定根数写成 `holding: {bars, offsets: all}`（5.1） |
+| 回放提交被拒，提示声明了 `factor_params` 的策略只能用“因子现算”来源 | 可变成员的参数随策略逐期变化，View 里的历史值不能复用 | `strategy replay start` 加 `--input compute`（第 11 节） |
+| 回放提交被拒，提示“因子现算”只支持一个主帧任务、不支持策略池或股票市场 | 这几种只能读结果 View | 去掉 `--input compute`；现货加永续要现算时改用统一数据集上的任务 |
 | `hold.allow_reentry 不能与大于 0 的 cooldown_bars 同时使用` | 允许当根补回与冷却语义冲突 | 去掉冷却，或不写 `allow_reentry` |
 | 提示互斥（hold 与 buffer、then、range、filter_after、holding.bars） | 这些写法语义冲突 | 按提示二选一 |
 | 提示“weight.cap 乘以最多可持有的标的数小于 weight.total，预算永远分不完” | 预算分不完 | 调大 `cap` 或 `select.top`，或调小 `total` |

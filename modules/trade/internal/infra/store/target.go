@@ -200,7 +200,8 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if record.RunnerID == "" {
 		record.RunnerID = record.InstanceID
 	}
-	// 会话先后（含已关闭）在过期之前判断，与接收入口的顺序一致。
+	// 这里先判会话先后（含已关闭）、再判过期；接收入口先判过期。两处顺序不同只影响既过期又属于旧会话的目标
+	// 被归为 superseded 还是 expired，两种结论都不执行。
 	if err := tx.checkTargetSession(account, record.session()); err != nil {
 		return LogicalAccountTargetRecord{}, false, err
 	}

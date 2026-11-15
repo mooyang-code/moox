@@ -252,8 +252,11 @@ stop:
 2. **创建定义**：`moox-cli strategy create --dsl-file s.yaml`；已有定义用 `strategy update --strategy-id <ID> --dsl-file s.yaml` 修改；删除用 `strategy delete`（默认只预览）。创建后用 `strategy show --strategy-id <ID>` 读回 DSL 核对。
 3. **创建实例**：`strategy instance create --strategy-id <ID> --factor-task <市场>=<因子任务>`（可重复：市场模式含现货和永续时 `spot=…` 与 `swap=…` 两个都要给，或统一数据集上的一个任务 `multi=…`；股票策略 `equity=…`；默认停用；加 `--enable` 创建即启用）。市场必须是任务源数据集真实的市场。因子任务要是本空间里运行中的任务（启用时核对），**创建后不能改**；一个任务可以被多个实例引用，只有 DSL 写了 `factor_params` 的实例启用时独占关联主帧任务：创建时不检查，主帧任务已关联到别的实例时启用被拒（“关联的是实例 X，不是本实例”）。已停用的实例可以用 `strategy instance delete --instance-id <实例>` 删除，关联到它的因子任务和结果数据集一起删除、不可恢复（还被别的实例引用时拒绝，先删引用方）；没关联到它的任务保留，只有固定成员的任务不随任何实例删除，不用了要手动停用；停用期间可以用 `strategy instance update` 改绑策略定义与账户。
    不挂账户的是观察实例：只计算目标权重、不投递，适合先验证。
+   需要先看历史表现时用 `strategy replay start`（与 `validate` 同样给 `--factor-task`，加 `--from`、`--to`、费率与可选的 `--slippage-bps`）；声明了 `factor_params` 的策略只能加 `--input compute`（因子现算），它不支持策略池、现货加永续两个任务与股票。
 4. **启用**：`strategy instance enable --instance-id <ID>`（`disable` 停用；两者不带 `--yes` 只预览，确认后加 `--yes`）。启用时才解析列、成员契约和市场类型，列不存在或现货做空等问题在这一步被拒绝；
    任务刚建、结果 View 还没数据时可能因“还没有数据（覆盖范围未知）”被拒，等任务算出几个周期后再启用。
+   挂账户的实例停用后，Strategy 调一次 Trade 关闭会话，Trade 撤掉最后一份目标的挂单（持仓不动）。返回“实例已停用，但 Trade 未确认”时实例已经停用，
+   等 Trade 可用后对它再执行一次 `disable --yes` 重试；没确认期间最后一份目标最多执行到有效期结束（2 根 K 线），要立刻停手就请用户在管理台暂停这个组合账户的自动执行。
 5. **看结果**：`strategy result list --instance-id <ID>`、`strategy target list --instance-id <ID>`（当前会话最新的 ok 目标）；控制台 `/strategy/detail/<实例ID>`。
    首次启用进入试运行（只发带影子标记的目标，Trade 不下单）；观察实例随后自动进入运行，挂账户的实例要用户执行 `confirm`。
 
@@ -276,7 +279,9 @@ stop:
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| 保存即拒绝，提示未知字段 | 解析严格，拼错键名或写了不存在的字段 | 按本文字段名核对 |
+| 保存即拒绝，提示未知字段 | 解析严格，拼错键名或写了不存在的字段（规则上的 `entry`、`exit`、`candidates`、`tranche`、`params` 都已删除） | 按本文字段名核对 |
+| 保存即拒绝，提示 type 只能是 rank | `signal`、`tranche` 规则类型已删 | 固定标的择时写成显式 `pool` 加 `hold`（第 2 节“固定标的择时”）；每根开一批写成 `holding: {bars, offsets: all}` |
+| 回放被拒，提示声明了 `factor_params` 的策略只能用“因子现算”来源 | View 里的历史因子值是按当时提交的参数算的 | 加 `--input compute`；策略池、现货加永续两个任务与股票不支持现算，这类调参策略不能回放 |
 | 池定义保存被拒，提示成员不存在或不能进池 | 成员是池、用了 `factor_params`、写了 `sources` 或 `market.reference`，或 `bar` 与池不一致 | 先修好成员策略再引用 |
 | 池实例启用被拒，提示成员没有显式写 market | 现货、永续成员必须写 `market`；只有池绑定 `equity` 任务时，成员按股票成员处理、可以不写 | 给成员策略补上 `market` |
 | 提示 `cap × 选中数量 < total` | 预算分不完 | 调大 `cap` 或 `select.top`，或调小 `total` |

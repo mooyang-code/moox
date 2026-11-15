@@ -119,7 +119,8 @@ func TestCloseTargetSessionEndsRedeliveryOfSameTarget(t *testing.T) {
 
 	requireSupersededAfterClose(t, result)
 	current := requireCurrentTarget(t, db, "t1")
-	require.LessOrEqual(t, current.ValidUntil, time.Now().UnixMilli(), "关闭把这份目标的有效期缩短到了关闭那一刻")
+	// 有效期取“关闭那一刻”与 bar_end_time 加 1 毫秒中较大的一个：整段用例在同一毫秒里跑完时是后者，比此刻还晚 1 毫秒。
+	require.LessOrEqual(t, current.ValidUntil, max(time.Now().UnixMilli(), current.BarEndTime+1), "关闭把这份目标的有效期缩短到了关闭那一刻")
 }
 
 // 新会话在旧会话关闭之前到达时被接受并覆盖：开始时刻更晚，直接覆盖旧会话的目标行（不比 bar_end_time）；

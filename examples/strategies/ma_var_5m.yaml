@@ -3,6 +3,8 @@
 # 使用方法：因子任务里加一个可变成员 { factor = "ma", var = true }（成员键 ma__var，默认窗口 20），
 # 创建实例时选这个任务，不挂账户（观察实例）。第一期没有提交过，用默认窗口 20；
 # 本策略每期提交窗口 10，从第二期起 __params 里 ma__var 的 window 应为 10。
+# 写了 factor_params，实例第一次启用时独占关联这个任务：别的写了 factor_params 的实例不能再选它，不调参的实例可以只读它的列；
+# 删除本实例时任务与结果数据集一起删除（还被别的实例引用时先删引用方）。回放只能用“因子现算”来源（strategy replay start --input compute）。
 name: ma_var_5m
 bar: 5m
 

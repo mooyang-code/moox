@@ -111,7 +111,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 `setup start --space-id crypto` 自动创建：[`examples/strategies/dual_ma_swap_1m.yaml`](../../../examples/strategies/dual_ma_swap_1m.yaml)，绑定合约 1m 因子任务 `ftask_swap_1m`，固定 ID `default_dual_ma_swap_1m`，观察实例，不挂账户、只计算不投递。重复运行不会重复创建。
 
-快线 `ma__5` 在慢线 `ma__10` 之上的合约都持有，等权，单个最多 5%。前几根 `ma__10` 为空时记 `too_many_missing`，第一个 ok 之前按积累处理，上限 30 分钟或 20 个周期，所以约 15 分钟内看到第一个结果。这个因子任务已绑给用户自己的实例时跳过默认示例，要改绑先停用，再 `strategy instance update`。
+快线 `ma__5` 在慢线 `ma__10` 之上的合约都持有，等权，单个最多 5%。前几根 `ma__10` 为空时记 `too_many_missing`，第一个 ok 之前按积累处理，上限 30 分钟或 20 个周期，所以约 15 分钟内看到第一个结果。示例不写 `factor_params`，不独占关联因子任务：用户自己的实例也引用 `ftask_swap_1m` 时照常创建，两个实例共用这个任务。
 
 ### A 股空间（stockcn）
 
@@ -144,6 +144,60 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 3. 一条链路至少跑通一期：`moox-cli collector status --space-id crypto`（各数据集 `level: ok`）→ 因子机 `/data/moox/factor-engine/logs/factor-engine.log` 里 `factor_period_done ... status=complete rows=<标的数>`
    （`status=degraded rows=0` 说明有问题，常见是 `factor_memory_budget_exceeded`，看内存配置）。
 4. 管理台能打开：`curl --cacert <CA> --resolve <控制机>:9527:<控制机> https://<控制机>:9527/`，首页引用的 `static/js/*.js` 返回 200 且体积正常（占位页的首页也是 200，不能只看首页）。
+
+### 全新部署后的验收（批 3 因子、策略与回放）
+
+批 3 把规则类型收成只有 rank、去掉了模板子系统，完成事件对所有数据集都带序列全集、因子只按序列计算，绑定只给写了 `factor_params` 的实例，回放合成一个执行器（结果 View 与因子现算两种来源），
+因子引擎多了入站服务 EngineControl，实例与组合账户的归属只记在 Strategy（Trade 按会话先后接受目标，停用后由 `CloseTargetSession` 关闭会话）。第一次按这一版全新部署时，在上面四项之外逐项核对
+（`CLI` 同第 4 节，`<…>` 换成实际的 ID，时间用 RFC3339）。写操作照常先预览、给用户确认后再加 `--yes`；第 8 步会真实下单，只在测试网或模拟盘账户上做，先问用户。
+
+1. **策略定义**：`examples/strategies/` 的 5 个示例各用头部注释里说的因子任务试算一次（默认部署只有 `ftask_spot_1m`、`ftask_swap_1m`、`ftask_cn_5m`，其余按注释先建任务；`ma_var_5m` 写了 `factor_params`，试算只校验 DSL）：
+   ```bash
+   $CLI strategy validate --dsl-file $WT/examples/strategies/dual_ma_swap_1m.yaml --factor-task swap=ftask_swap_1m
+   ```
+   再写一份带 `type: signal` 的规则、一份带 `tranche:` 字段的规则各试算一次，前者报 type“只能是 rank”，后者报未知字段；把 dual_ma 的规则改成 `holding: {bars: 24, offsets: all}` 能通过。
+2. **固定标的择时**：按 `docs/策略DSL手册.md` 第 6 节的 BTC 规则（列名换成任务里有的，例如 `ma__5`、`ma__10`）建一个定义和观察实例，跑过至少一次入场和一次出场后，
+   `$CLI strategy result show --result-id <结果>` 的明细里有 `hold_entered`、`exit_condition`。
+3. **共用任务与删除**：
+   - 两个不调参的实例选同一个任务都能启用：`$CLI strategy instance create --strategy-id default_dual_ma_swap_1m --factor-task swap=ftask_swap_1m --enable`，与默认示例 `default_dual_ma_swap_1m` 同时出结果（`strategy result list`）。
+     停用并删除新建的那个（`strategy instance disable`、`strategy instance delete`，预览里 `ftask_swap_1m` 在 `keep_factor_tasks`），之后 `$CLI factor task show --task-id ftask_swap_1m` 仍在，默认示例照常出结果。
+   - 建一个 crypto 5m 的因子任务，加可变成员 `$CLI factor member add --task-id <5m 任务> --factor-id ma --kind var`，用 `ma_var_5m` 建观察实例并启用；`factor task show` 里 `bound_instance_id` 是这个实例。
+     再用同一份定义建第二个实例选这个任务，启用被拒（“关联的是实例 X，不是本实例”）；再建一个不调参的实例（例如 `dual_ma` 的规则换成 `ma__var` 列）引用它，能启用。
+   - 这时删除 `ma_var_5m` 的实例被拒，提示里列出那个不调参的实例；先删引用方，再删 `ma_var_5m` 的实例，预览里这个任务在 `delete_factor_tasks`，删完 `factor task show` 返回不存在、结果数据集一起删掉。
+4. **`__params`**：默认合约任务只有固定成员，结果行的 `__params` 为空：
+   ```bash
+   $CLI data view query --space-id crypto --view-id view_factor_swap_1m --column __params --limit 3 \
+     --selectors '[{"space_id":"crypto","dataset_id":"dataset_factor_swap_1m","subject_id":"BTC-USDT","freq":"1m"}]'
+   ```
+   第 3 步那个调参任务的 `__params` 只有 `ma__var` 一个键，`$CLI factor task params --task-id <5m 任务>` 有 `ma__var` 最近一次提交（`t_factor_member_params` 的一行）。
+   对固定成员发起一次补算（`factor recalc submit --task-id ftask_swap_1m --member ma__5 --from START --to END`），完成后同一区间的 `ma__5` 与补算前逐位相同，`__params` 仍为空。
+5. **序列全集**：事件校验要求 `universe_series` 必填、覆盖 `universe_subject_ids`、tag 非空，不合格的事件发不出去，所以看下游：crypto 现货、合约与 A 股的因子任务都出结果
+   （`$CLI factor status`，因子机日志 `factor_period_done ... status=complete`）；对 `ftask_cn_5m` 发起一段补算能算出结果。有统一数据集时它的任务同样出结果。
+6. **方式 A 仍可用**：现货、永续各一个任务（`--factor-task spot=ftask_spot_1m --factor-task swap=ftask_swap_1m`）的 `market: {select: both, prefer: spot}` 观察实例能启用并出结果；用同样的 `--factor-task` 做一次 View 来源的回放能跑完。
+7. **回放**：
+   ```bash
+   $CLI strategy replay start --strategy-id default_dual_ma_swap_1m --factor-task swap=ftask_swap_1m --from START --to END --swap-fee-bps 5
+   $CLI strategy replay start --strategy-id default_dual_ma_swap_1m --factor-task swap=ftask_swap_1m --from START --to END --swap-fee-bps 5 --slippage-bps 20
+   $CLI strategy replay show --replay-id <回放>
+   ```
+   两次都完成，带滑点的累计收益更低。`ma_var_5m` 不加 `--input` 时提交被拒（只能用“因子现算”），加 `--input compute` 能跑完，`strategy replay bars` 每期的 `params_json` 里有 `ma__var`。
+   选一个起点早于 View 保留根数的区间：View 来源提交即拒绝，`--input compute` 能跑（因子机本地数据要覆盖这段，必要时先做初始数据导入）。
+   顶层命令清单（`$CLI --help`）里没有 `replay`；在仓库里 `git grep -n '/v1/replay' -- modules packages` 没有输出（三个模块的健康端口不再挂回放路由）。
+8. **归属（测试网或模拟盘账户，先问用户）**：
+   - 启用挂了这个组合账户的实例并 `$CLI lifecycle confirm --module strategy --kind strategy_instance --id <实例>`，`$CLI trade logical target --logical-account-id <组合>` 里是这个实例的会话，Trade 下单。
+   - 停用：几秒内这份目标变为过期、目标挂单被撤（挑一份已收敛并带挂单的目标验证，`trade order list --logical-account-id <组合> --owner-type TARGET --only-open` 变空），持仓不动。
+   - 停用后把同一会话更晚的一份目标事件重放进 `MOOX_TRADE`：Trade 日志（`$CLI setup logs --host overseas --component trade --lines 2000`）里这条投递的 `error_code` 是 `superseded`，没有新订单。
+     仓库里没有重放单个事件的命令，做不了就在汇报里写明没有线上验证，这一条由 Trade 的单测与本机 e2e（`scripts/test/e2e/test-strategy-trade-event-e2e.sh`）覆盖。
+   - 再启用：新会话的第一份目标被接受。
+   - 暂停 Trade（`$CLI host exec --host overseas -- /data/moox/trade/current/pause.sh`）后停用：实例显示已停用，并提示“Trade 未确认”；恢复 Trade（`resume.sh`）后再执行一次 `strategy instance disable`，目标变为过期。
+   - 停用后把实例改到另一个组合账户（`strategy instance update`），再执行一次 `disable`，关闭仍落在原组合上（原组合的目标过期，新组合没有变化）。
+   - 管理台的组合账户详情页能看到关联的实例；`$CLI trade logical show --logical-account-id <组合>` 的输出里没有归属相关的字段（原来记归属实例、归属会话与切换令牌的三个字段都已删除）。
+9. **因子侧**：新建因子任务后一分钟内 `$CLI lifecycle status --task-id <任务>` 的阶段是运行（不停在试运行）；第 4 步已看过 `t_factor_member_params`；
+   带自定义算子的补算作业续跑时用的是首次领取时的算子版本：主机装了 `sqlite3` 时只读看 Factor 库，
+   `$CLI host exec --host control -- sqlite3 -readonly /data/moox/prod/current/factor-mgr/data/factor/factor.db "SELECT c_job_id, c_udf_bindings FROM t_factor_recalc_jobs"`，
+   领取过的作业这一列有值（空对象表示没引用算子），激活新版本后再续跑这一列不变；库里没有 `t_factor_recalc_job_bindings` 表。
+10. **EngineControl 与模板**：`$CLI host routes --host-id factor` 里有 `trpc.moox.factor.EngineControl` 的三条路由，调用方是 strategy；因子机上 `ss -ltn | grep ':11423 '` 只监听 `127.0.0.1`。
+    管理台没有策略模板入口，`$CLI strategy --help` 的子命令里没有 `template`。
 
 ## 7. 踩坑清单
 

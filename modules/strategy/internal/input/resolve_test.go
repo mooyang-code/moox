@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
 
 func TestResolveExampleStrategy(t *testing.T) {
@@ -15,7 +17,7 @@ func TestResolveExampleStrategy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
-	if resolved.Bar != "1h" || resolved.Calendar != DefaultCalendar || resolved.Market.Select != "spot" || resolved.Primary().SourceDatasetID != "ds_kline" {
+	if resolved.Bar != "1h" || resolved.Calendar != DefaultCalendar || resolved.Market != dsl.SingleMarket("spot") || resolved.Primary().SourceDatasetID != "ds_kline" {
 		t.Fatalf("解析结果不符：%+v", resolved)
 	}
 	if resolved.Factors["ma"] != "sha256:ma|fixed" || resolved.Factors["bias"] != "sha256:bias|fixed" || resolved.Factors["qv"] != "sha256:qv|fixed" || len(resolved.Factors) != 3 {
@@ -151,7 +153,7 @@ func TestResolveMarketTypeFromAttributesOrTags(t *testing.T) {
 	source := client.datasets["ds_kline"]
 	source.Attributes = map[string]string{"market_type": "spot"}
 	client.datasets["ds_kline"] = source
-	if resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL)); err != nil || resolved.Market.Select != "spot" {
+	if resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL)); err != nil || resolved.Market != dsl.SingleMarket("spot") {
 		t.Fatalf("数据集属性应优先：%+v err=%v", resolved, err)
 	}
 	source.Attributes = map[string]string{}

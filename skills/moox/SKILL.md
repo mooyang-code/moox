@@ -35,7 +35,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 | 清空生产后按默认配置重装 | [`references/fresh-deploy.md`](references/fresh-deploy.md) |
 | 写因子、转换 Python 因子、修改已有因子 | [`references/factor-dsl.md`](references/factor-dsl.md) |
 | 自定义算子（Rust → wasm） | [`references/udf.md`](references/udf.md) |
-| 写策略 DSL、创建策略定义与实例 | [`references/strategy-dsl.md`](references/strategy-dsl.md) |
+| 写策略 DSL、回放（结果 View 或因子现算）、创建策略定义与实例 | [`references/strategy-dsl.md`](references/strategy-dsl.md) |
 | 迁移整套 Python 选币策略 | [`references/strategy-migration.md`](references/strategy-migration.md) |
 | 导入历史 K 线 | [`references/initial-import.md`](references/initial-import.md) |
 | 打开 A 股日线及其附加数据（复权因子、申万行业、财务），在策略里按行业、财务选股 | [`references/ashare-daily.md`](references/ashare-daily.md) |

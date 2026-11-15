@@ -90,7 +90,7 @@
 ## 因子
 
 - **做什么**：用 YAML 表达式定义因子，按计算任务（源数据集 + 频率 → 结果数据集）在每个采集周期增量计算；支持历史补算和 Rust 写的 wasm 自定义算子。
-- **在哪**：因子管理（factor-mgr）在管理台机；因子引擎在因子机（systemd 用户服务）。
+- **在哪**：因子管理（factor-mgr）在管理台机；因子引擎在因子机（systemd 用户服务），另在本机 `11423` 上提供 EngineControl 服务，只给策略回放的“因子现算”调用（经因子机主机网关的反向中转，不需要另开端口）。
 - **常用**：写因子与转换 Python 因子按 [`factor-dsl.md`](factor-dsl.md)；
   - 定义与分类：`factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign`；
   - 任务与成员：`factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`；批量配置写进 `moox.toml` 的 `[factors]` 后 `./bin/moox-cli setup factors`；
