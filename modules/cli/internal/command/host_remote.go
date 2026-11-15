@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"time"
 
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -20,8 +19,6 @@ import (
 
 // hostRemote 是命令行访问各台主机的统一连接层，按 moox.toml 与操作员网关装配：
 //   - 在主机上执行命令、上传下载文件（经 SSH，复用同一台主机的连接）；
-//   - 把主机的本机端口映射到操作机的回环端口（直连主机经 SSH 转发，只能出站的主机经 control 中转），
-//     供 lifecycle、system、import 访问模块的健康端口，不需要手工建隧道；
 //   - 诊断用：读取 systemd 用户服务状态、对出站主机做中转健康探测。
 
 type relayDialer interface {
@@ -36,16 +33,14 @@ type hostRemote struct {
 	runLocal    func(ctx context.Context, argv []string) (string, error)
 	relay       relayDialer
 
-	mu        sync.Mutex
-	clients   map[string]setupssh.Client
-	endpoints map[string]string // "主机:端口" → 本机回环地址
-	listeners []net.Listener
+	mu      sync.Mutex
+	clients map[string]setupssh.Client
 }
 
 func newHostRemote(manifest setupconfig.Manifest, localNodeID string, gateway any) *hostRemote {
 	remote := &hostRemote{
 		manifest: manifest, localNodeID: localNodeID, dial: dialSetupHost, runLocal: runLocalCommand,
-		clients: map[string]setupssh.Client{}, endpoints: map[string]string{},
+		clients: map[string]setupssh.Client{},
 	}
 	if relay, ok := gateway.(relayDialer); ok {
 		remote.relay = relay
@@ -119,67 +114,6 @@ func (r *hostRemote) Download(ctx context.Context, hostID, src string, dst io.Wr
 	return client.Download(ctx, src, dst)
 }
 
-// LocalEndpoint 返回操作机回环地址上的一个端口（host:port 形式）：连接它等于连接主机 hostID 的本机端口 port。
-// 只能出站的主机经 control 中转，其余主机经 SSH 端口转发；同一目标重复调用返回同一个地址。
-func (r *hostRemote) LocalEndpoint(ctx context.Context, hostID string, port int) (string, error) {
-	key := fmt.Sprintf("%s:%d", hostID, port)
-	r.mu.Lock()
-	if address := r.endpoints[key]; address != "" {
-		r.mu.Unlock()
-		return address, nil
-	}
-	r.mu.Unlock()
-	var listener net.Listener
-	if r.outbound(hostID) {
-		if r.relay == nil {
-			return "", fmt.Errorf("主机 %s 只能出站，需要经 control 中转，但当前网关不支持中转", hostID)
-		}
-		var err error
-		if listener, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
-			return "", err
-		}
-		go serveRelay(listener, r.relay, hostID, port)
-	} else {
-		client, err := r.client(ctx, hostID)
-		if err != nil {
-			return "", err
-		}
-		if listener, err = client.ForwardLocal(ctx, fmt.Sprintf("127.0.0.1:%d", port)); err != nil {
-			return "", fmt.Errorf("到主机 %s 的端口 %d 转发失败: %w", hostID, port, err)
-		}
-	}
-	address := listener.Addr().String()
-	r.mu.Lock()
-	r.endpoints[key] = address
-	r.listeners = append(r.listeners, listener)
-	r.mu.Unlock()
-	return address, nil
-}
-
-// serveRelay 把本机回环端口上的每个连接经 control 中转到主机 hostID 的本机端口 port。
-func serveRelay(listener net.Listener, relay relayDialer, hostID string, port int) {
-	for {
-		local, err := listener.Accept()
-		if err != nil {
-			return
-		}
-		go func() {
-			defer local.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			remote, err := relay.DialRelay(ctx, hostID, port)
-			cancel()
-			if err != nil {
-				return
-			}
-			defer remote.Close()
-			done := make(chan struct{}, 2)
-			go func() { _, _ = io.Copy(remote, local); done <- struct{}{} }()
-			go func() { _, _ = io.Copy(local, remote); done <- struct{}{} }()
-			<-done
-		}()
-	}
-}
-
 func (r *hostRemote) outbound(nodeID string) bool {
 	reachability, _ := servicecatalog.ParseReachability(r.manifest.HostByID(nodeID).Reachability)
 	return reachability == servicecatalog.ReachabilityOutbound
@@ -205,11 +139,6 @@ func (r *hostRemote) Close() {
 		definition.SSH.Password = ""
 		r.manifest.HostCatalog[id] = definition
 	}
-	for _, listener := range r.listeners {
-		_ = listener.Close()
-	}
-	r.listeners = nil
-	r.endpoints = map[string]string{}
 	for id, client := range r.clients {
 		_ = client.Close()
 		delete(r.clients, id)

@@ -3,9 +3,9 @@
   "summary": {
     "components": 20,
     "services": 26,
-    "methods": 321,
-    "read_only_methods": 144,
-    "retryable_methods": 145,
+    "methods": 338,
+    "read_only_methods": 154,
+    "retryable_methods": 155,
     "callers": 26,
     "principals": 5
   },
@@ -133,6 +133,12 @@
           "timeout_ms": 30000
         },
         {
+          "name": "ControlLifecycle",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 30000
+        },
+        {
           "name": "CreateArchiveTask",
           "read_only": false,
           "retryable": false,
@@ -158,6 +164,12 @@
         },
         {
           "name": "GetArchiveRun",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "GetLifecycle",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 30000
@@ -375,6 +387,12 @@
           "timeout_ms": 5000
         },
         {
+          "name": "ControlLifecycle",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 330000
+        },
+        {
           "name": "CreateCloudAccount",
           "read_only": false,
           "retryable": false,
@@ -451,6 +469,12 @@
           "read_only": true,
           "retryable": true,
           "timeout_ms": 5000
+        },
+        {
+          "name": "GetLifecycle",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 60000
         },
         {
           "name": "GetTaskDetail",
@@ -706,9 +730,45 @@
       "component": "factor-engine",
       "methods": [
         {
+          "name": "CheckSeriesSubject",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "CheckTask",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
           "name": "CloseReplay",
           "read_only": false,
           "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "ControlLifecycle",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetLifecycle",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetSeriesBounds",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetSeriesFields",
+          "read_only": true,
+          "retryable": true,
           "timeout_ms": 120000
         },
         {
@@ -719,6 +779,12 @@
         },
         {
           "name": "StepReplay",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "WriteSeries",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 120000
@@ -797,6 +863,12 @@
           "timeout_ms": 120000
         },
         {
+          "name": "ControlLifecycle",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
           "name": "CreateFactor",
           "read_only": false,
           "retryable": false,
@@ -846,6 +918,12 @@
         },
         {
           "name": "GetFactorTask",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetLifecycle",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 120000
@@ -1706,6 +1784,12 @@
           "timeout_ms": 5000
         },
         {
+          "name": "ControlLifecycle",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 60000
+        },
+        {
           "name": "CreateStrategy",
           "read_only": false,
           "retryable": false,
@@ -1728,6 +1812,12 @@
           "read_only": false,
           "retryable": false,
           "timeout_ms": 30000
+        },
+        {
+          "name": "GetLifecycle",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 60000
         },
         {
           "name": "GetReplay",
@@ -1869,6 +1959,12 @@
           "timeout_ms": 5000
         },
         {
+          "name": "ControlLifecycle",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 60000
+        },
+        {
           "name": "CreateLogicalAccount",
           "read_only": false,
           "retryable": false,
@@ -1909,6 +2005,12 @@
           "read_only": true,
           "retryable": true,
           "timeout_ms": 5000
+        },
+        {
+          "name": "GetLifecycle",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 60000
         },
         {
           "name": "GetLogicalAccount",
@@ -2225,6 +2327,7 @@
       "trpc.moox.archive.ArchiveMgr/GetArchiveOverview",
       "trpc.moox.archive.ArchiveMgr/GetArchivePartition",
       "trpc.moox.archive.ArchiveMgr/GetArchiveRun",
+      "trpc.moox.archive.ArchiveMgr/GetLifecycle",
       "trpc.moox.archive.ArchiveMgr/ListArchivePartitions",
       "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
       "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
@@ -2263,6 +2366,7 @@
       "trpc.moox.collector.CollectMgr/GetIngestMode",
       "trpc.moox.collector.CollectMgr/GetKlineBackfill",
       "trpc.moox.collector.CollectMgr/GetKlineResampleJob",
+      "trpc.moox.collector.CollectMgr/GetLifecycle",
       "trpc.moox.collector.CollectMgr/GetTaskDetail",
       "trpc.moox.collector.CollectMgr/GetTaskList",
       "trpc.moox.collector.CollectMgr/GetTaskResultInventory",
@@ -2300,6 +2404,7 @@
       "trpc.moox.factor.FactorMgr/GetFactor",
       "trpc.moox.factor.FactorMgr/GetFactorParams",
       "trpc.moox.factor.FactorMgr/GetFactorTask",
+      "trpc.moox.factor.FactorMgr/GetLifecycle",
       "trpc.moox.factor.FactorMgr/GetRecalcJob",
       "trpc.moox.factor.FactorMgr/GetStatus",
       "trpc.moox.factor.FactorMgr/GetUdf",
@@ -2411,6 +2516,7 @@
       "trpc.moox.strategy.StrategyMgr/CreateStrategyInstance",
       "trpc.moox.strategy.StrategyMgr/DeleteStrategy",
       "trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance",
+      "trpc.moox.strategy.StrategyMgr/GetLifecycle",
       "trpc.moox.strategy.StrategyMgr/GetReplay",
       "trpc.moox.strategy.StrategyMgr/GetStrategy",
       "trpc.moox.strategy.StrategyMgr/GetStrategyDisplaySettings",
@@ -2437,6 +2543,7 @@
       "trpc.moox.trade.TradeConsoleService/FlattenLogicalAccount",
       "trpc.moox.trade.TradeConsoleService/FlattenTradingAccount",
       "trpc.moox.trade.TradeConsoleService/GetExecutionCapabilities",
+      "trpc.moox.trade.TradeConsoleService/GetLifecycle",
       "trpc.moox.trade.TradeConsoleService/GetLogicalAccount",
       "trpc.moox.trade.TradeConsoleService/GetLogicalAccountTarget",
       "trpc.moox.trade.TradeConsoleService/GetOperatorAction",
@@ -2583,11 +2690,13 @@
       "trpc.moox.archive.ArchiveMgr/BackfillArchiveRange",
       "trpc.moox.archive.ArchiveMgr/CancelArchiveRun",
       "trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable",
+      "trpc.moox.archive.ArchiveMgr/ControlLifecycle",
       "trpc.moox.archive.ArchiveMgr/CreateArchiveTask",
       "trpc.moox.archive.ArchiveMgr/DeleteArchiveTask",
       "trpc.moox.archive.ArchiveMgr/GetArchiveOverview",
       "trpc.moox.archive.ArchiveMgr/GetArchivePartition",
       "trpc.moox.archive.ArchiveMgr/GetArchiveRun",
+      "trpc.moox.archive.ArchiveMgr/GetLifecycle",
       "trpc.moox.archive.ArchiveMgr/ImportArchiveFile",
       "trpc.moox.archive.ArchiveMgr/ListArchivePartitions",
       "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
@@ -2615,6 +2724,7 @@
       "trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
       "trpc.moox.collector.CollectMgr/CompletePackageUpload",
       "trpc.moox.collector.CollectMgr/ConfirmHistoryGaps",
+      "trpc.moox.collector.CollectMgr/ControlLifecycle",
       "trpc.moox.collector.CollectMgr/CreateCloudAccount",
       "trpc.moox.collector.CollectMgr/CreateTask",
       "trpc.moox.collector.CollectMgr/DeleteCloudAccount",
@@ -2628,6 +2738,7 @@
       "trpc.moox.collector.CollectMgr/GetIngestMode",
       "trpc.moox.collector.CollectMgr/GetKlineBackfill",
       "trpc.moox.collector.CollectMgr/GetKlineResampleJob",
+      "trpc.moox.collector.CollectMgr/GetLifecycle",
       "trpc.moox.collector.CollectMgr/GetTaskDetail",
       "trpc.moox.collector.CollectMgr/GetTaskList",
       "trpc.moox.collector.CollectMgr/GetTaskResultInventory",
@@ -2660,9 +2771,17 @@
       "trpc.moox.eventbus.EventBusMgr/ListConsumers",
       "trpc.moox.eventbus.EventBusMgr/ListEvents",
       "trpc.moox.eventbus.EventBusMgr/ListStreams",
+      "trpc.moox.factor.EngineControl/CheckSeriesSubject",
+      "trpc.moox.factor.EngineControl/CheckTask",
+      "trpc.moox.factor.EngineControl/ControlLifecycle",
+      "trpc.moox.factor.EngineControl/GetLifecycle",
+      "trpc.moox.factor.EngineControl/GetSeriesBounds",
+      "trpc.moox.factor.EngineControl/GetSeriesFields",
+      "trpc.moox.factor.EngineControl/WriteSeries",
       "trpc.moox.factor.FactorMgr/ActivateUdf",
       "trpc.moox.factor.FactorMgr/AddTaskMember",
       "trpc.moox.factor.FactorMgr/CancelRecalcJob",
+      "trpc.moox.factor.FactorMgr/ControlLifecycle",
       "trpc.moox.factor.FactorMgr/CreateFactor",
       "trpc.moox.factor.FactorMgr/CreateFactorTask",
       "trpc.moox.factor.FactorMgr/DeleteFactor",
@@ -2671,6 +2790,7 @@
       "trpc.moox.factor.FactorMgr/GetFactor",
       "trpc.moox.factor.FactorMgr/GetFactorParams",
       "trpc.moox.factor.FactorMgr/GetFactorTask",
+      "trpc.moox.factor.FactorMgr/GetLifecycle",
       "trpc.moox.factor.FactorMgr/GetRecalcJob",
       "trpc.moox.factor.FactorMgr/GetStatus",
       "trpc.moox.factor.FactorMgr/GetUdf",
@@ -2782,10 +2902,12 @@
       "trpc.moox.storage.PrimaryStore/UpsertFields",
       "trpc.moox.strategy.StrategyMgr/CancelReplay",
       "trpc.moox.strategy.StrategyMgr/ConfirmStrategyInstance",
+      "trpc.moox.strategy.StrategyMgr/ControlLifecycle",
       "trpc.moox.strategy.StrategyMgr/CreateStrategy",
       "trpc.moox.strategy.StrategyMgr/CreateStrategyInstance",
       "trpc.moox.strategy.StrategyMgr/DeleteStrategy",
       "trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance",
+      "trpc.moox.strategy.StrategyMgr/GetLifecycle",
       "trpc.moox.strategy.StrategyMgr/GetReplay",
       "trpc.moox.strategy.StrategyMgr/GetStrategy",
       "trpc.moox.strategy.StrategyMgr/GetStrategyDisplaySettings",
@@ -2806,12 +2928,14 @@
       "trpc.moox.trade.TradeConsoleService/AddLogicalAccountMember",
       "trpc.moox.trade.TradeConsoleService/CancelOrder",
       "trpc.moox.trade.TradeConsoleService/ClosePaperSimulation",
+      "trpc.moox.trade.TradeConsoleService/ControlLifecycle",
       "trpc.moox.trade.TradeConsoleService/CreateLogicalAccount",
       "trpc.moox.trade.TradeConsoleService/CreatePaperSimulation",
       "trpc.moox.trade.TradeConsoleService/CreateTradingAccount",
       "trpc.moox.trade.TradeConsoleService/FlattenLogicalAccount",
       "trpc.moox.trade.TradeConsoleService/FlattenTradingAccount",
       "trpc.moox.trade.TradeConsoleService/GetExecutionCapabilities",
+      "trpc.moox.trade.TradeConsoleService/GetLifecycle",
       "trpc.moox.trade.TradeConsoleService/GetLogicalAccount",
       "trpc.moox.trade.TradeConsoleService/GetLogicalAccountTarget",
       "trpc.moox.trade.TradeConsoleService/GetOperatorAction",

@@ -122,7 +122,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.stopCatalog = stopCatalog
 
-	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)),
+	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)), factorrpc.WithLifecycle(life),
 		factorrpc.WithPreviewer(preview.New(storageio.NewAxis(storage), previewWorkers, preview.WithUDF(udfhost.New(previewRuntime), fetchModule))))
 	factorpb.RegisterFactorMgrService(s.Service(factorMgrService), factorService)
 	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub, catalogService))
@@ -131,7 +131,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	if err := registerMetricsReporter(s, hub); err != nil {
 		return nil, err
 	}
-	if err := factorhealth.Register(s.Service(factorHealthService), runtime.health, lifecycleRoutes(life)...); err != nil {
+	if err := factorhealth.Register(s.Service(factorHealthService), runtime.health); err != nil {
 		return nil, fmt.Errorf("register factor health service: %w", err)
 	}
 	runtime.health.SetReady(true)

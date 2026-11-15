@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	_ "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -64,6 +65,10 @@ type StrategyMgrService interface {
 	GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq) (*GetStrategyDisplaySettingsRsp, error)
 
 	SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq) (*SetStrategyDisplaySettingsRsp, error)
+	// GetLifecycle GetLifecycle 读策略模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复与放行策略模块：暂停要等在途的求值结束、已落库的目标发布完（最长 30 秒）。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error)
 }
 
 func StrategyMgrService_CreateStrategy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -480,6 +485,42 @@ func StrategyMgrService_SetStrategyDisplaySettings_Handler(svr interface{}, ctx 
 	return rsp, nil
 }
 
+func StrategyMgrService_GetLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.GetLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).GetLifecycle(ctx, reqbody.(*commonpb.GetLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_ControlLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.ControlLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).ControlLifecycle(ctx, reqbody.(*commonpb.ControlLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // StrategyMgrServer_ServiceDesc descriptor for server.RegisterService.
 var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.strategy.StrategyMgr",
@@ -577,6 +618,14 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.strategy.StrategyMgr/SetStrategyDisplaySettings",
 			Func: StrategyMgrService_SetStrategyDisplaySettings_Handler,
 		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/GetLifecycle",
+			Func: StrategyMgrService_GetLifecycle_Handler,
+		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/ControlLifecycle",
+			Func: StrategyMgrService_ControlLifecycle_Handler,
+		},
 	},
 }
 
@@ -661,6 +710,16 @@ func (s *UnimplementedStrategyMgr) SetStrategyDisplaySettings(ctx context.Contex
 	return nil, errors.New("rpc SetStrategyDisplaySettings of service StrategyMgr is not implemented")
 }
 
+// GetLifecycle GetLifecycle 读策略模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+func (s *UnimplementedStrategyMgr) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error) {
+	return nil, errors.New("rpc GetLifecycle of service StrategyMgr is not implemented")
+}
+
+// ControlLifecycle ControlLifecycle 暂停、恢复与放行策略模块：暂停要等在途的求值结束、已落库的目标发布完（最长 30 秒）。
+func (s *UnimplementedStrategyMgr) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error) {
+	return nil, errors.New("rpc ControlLifecycle of service StrategyMgr is not implemented")
+}
+
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -714,6 +773,10 @@ type StrategyMgrClientProxy interface {
 	GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq, opts ...client.Option) (rsp *GetStrategyDisplaySettingsRsp, err error)
 
 	SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq, opts ...client.Option) (rsp *SetStrategyDisplaySettingsRsp, err error)
+	// GetLifecycle GetLifecycle 读策略模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (rsp *commonpb.GetLifecycleRsp, err error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复与放行策略模块：暂停要等在途的求值结束、已落库的目标发布完（最长 30 秒）。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (rsp *commonpb.ControlLifecycleRsp, err error)
 }
 
 type StrategyMgrClientProxyImpl struct {
@@ -1179,6 +1242,46 @@ func (c *StrategyMgrClientProxyImpl) SetStrategyDisplaySettings(ctx context.Cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SetStrategyDisplaySettingsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (*commonpb.GetLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/GetLifecycle")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("GetLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.GetLifecycleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (*commonpb.ControlLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/ControlLifecycle")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("ControlLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.ControlLifecycleRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -78,7 +79,9 @@ type Service struct {
 	// Tasks 与 Archives 用于删除实例（以及启用前核对任务还在、标出删除未完成的实例）；为空时不能删除实例。
 	Tasks    FactorTaskAdmin
 	Archives ArchiveTasks
-	Now      func() time.Time
+	// Lifecycle 是模块的生命周期控制器（GetLifecycle、ControlLifecycle 转给它）；为空时两个方法回答“还没有就绪”。
+	Lifecycle *lifecycle.Controller
+	Now       func() time.Time
 
 	// locks 是按定义 ID 的锁，引用计数归零即删除，不随出现过的定义无限增长。
 	locksMu sync.Mutex

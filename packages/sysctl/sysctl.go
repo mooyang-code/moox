@@ -49,11 +49,12 @@ var releaseOrder = []string{Collector, FactorEngine, Trade, Strategy}
 // 等待栅栏的是有副作用的模块（因子发布结果、Trade 与策略下单）。
 func selfReleasing(name string) bool { return name == Collector }
 
-// Lifecycle 是一个模块的生命周期接口（*lifecycle.Client 实现）。
+// Lifecycle 是一个模块的生命周期接口：经网关调用模块服务的 GetLifecycle、ControlLifecycle（*lifecycle.Remote 实现）。
+// Status 只读当前状态；Catchup 先让模块推进一次恢复追赶再读，进度是最新的；Exec 被模块拒绝时错误就是模块给出的说明。
 type Lifecycle interface {
 	Status(ctx context.Context) (lifecycle.State, error)
-	Exec(ctx context.Context, req lifecycle.CommandRequest) (lifecycle.State, error)
-	Catchup(ctx context.Context) (lifecycle.CatchupReport, error)
+	Exec(ctx context.Context, req lifecycle.Request) (lifecycle.State, error)
+	Catchup(ctx context.Context) (lifecycle.State, error)
 }
 
 // Module 是参与编排的一个模块。
@@ -64,7 +65,7 @@ type Module struct {
 
 // Orchestrator 编排系统级暂停与恢复。
 type Orchestrator struct {
-	// Modules 是参与编排的模块；没有出现的模块（没有配置地址）被跳过。
+	// Modules 是参与编排的模块；没有出现的模块（没有部署）被跳过。
 	Modules []Module
 	// By 是操作者，写进暂停详情。
 	By string
@@ -158,7 +159,7 @@ type PauseResult struct {
 func (o *Orchestrator) Pause(ctx context.Context, reason string) (PauseResult, error) {
 	var result PauseResult
 	for _, m := range o.ordered(pauseOrder) {
-		state, err := m.API.Exec(ctx, lifecycle.CommandRequest{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem, Reason: reason, By: o.By})
+		state, err := m.API.Exec(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem, Reason: reason, By: o.By})
 		switch {
 		case err == nil:
 		case strings.Contains(err.Error(), "已暂停，但在途操作没有结束") && m.Name == Strategy:
@@ -214,7 +215,7 @@ func (o *Orchestrator) Resume(ctx context.Context, opts ResumeOptions) (ResumeRe
 	result := ResumeResult{Pending: map[string]string{}}
 	mods := o.ordered(releaseOrder)
 	if len(mods) == 0 {
-		return result, errors.New("没有配置任何模块的生命周期地址")
+		return result, errors.New("没有可操作的模块")
 	}
 	states := map[string]*resumeState{}
 	for _, m := range mods {
@@ -255,8 +256,9 @@ func (o *Orchestrator) Resume(ctx context.Context, opts ResumeOptions) (ResumeRe
 			if err != nil {
 				return result, fmt.Errorf("读取 %s 的追赶进度：%w", m.Name, err)
 			}
-			st.caughtUp, st.note = report.CaughtUp && (report.Resuming || selfReleasing(m.Name)), catchupNote(report)
-			if selfReleasing(m.Name) && !report.Resuming && report.CaughtUp {
+			resuming := report.Stage == lifecycle.StageResuming
+			st.caughtUp, st.note = report.CaughtUp() && (resuming || selfReleasing(m.Name)), catchupNote(report)
+			if selfReleasing(m.Name) && !resuming && report.CaughtUp() {
 				st.skipped = "已放行"
 				if len(result.Released) == 0 || result.Released[len(result.Released)-1] != m.Name {
 					result.Released = append(result.Released, m.Name)
@@ -289,7 +291,7 @@ func (o *Orchestrator) Resume(ctx context.Context, opts ResumeOptions) (ResumeRe
 		if st.skipped != "" || !st.caughtUp {
 			continue
 		}
-		if _, err := m.API.Exec(ctx, lifecycle.CommandRequest{Command: lifecycle.CmdRelease}); err != nil {
+		if _, err := m.API.Exec(ctx, lifecycle.Request{Command: lifecycle.CmdRelease}); err != nil {
 			// 放行前模块会再核一次：又出现缺口时被拒绝，已放行的上游保持运行，停在这一步，下次重试。
 			return o.partial(result, states, mods), fmt.Errorf("放行 %s：%w", m.Name, err)
 		}
@@ -345,18 +347,18 @@ func (o *Orchestrator) startResume(ctx context.Context, m Module) (string, error
 	case current.Pause != nil && current.Pause.Kind != lifecycle.PauseSystem:
 		return "手动暂停（系统恢复不动它）", nil
 	}
-	if _, err := m.API.Exec(ctx, lifecycle.CommandRequest{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem, ManualRelease: !selfReleasing(m.Name), By: o.By}); err != nil {
+	if _, err := m.API.Exec(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem, ManualRelease: !selfReleasing(m.Name), By: o.By}); err != nil {
 		return "", err
 	}
 	return "", nil
 }
 
-func catchupNote(report lifecycle.CatchupReport) string {
+func catchupNote(report lifecycle.State) string {
 	switch {
-	case report.CaughtUp && report.Resuming:
+	case report.CaughtUp() && report.Stage == lifecycle.StageResuming:
 		return "已追平，待放行"
-	case report.State.Catchup != nil:
-		return describeCatchup(*report.State.Catchup)
+	case report.Catchup != nil:
+		return describeCatchup(*report.Catchup)
 	}
 	return "追赶中"
 }

@@ -14,9 +14,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/seriesformat"
 	"github.com/mooyang-code/moox/packages/seriesimport/checkpoint"
-	"github.com/mooyang-code/moox/packages/seriesimport/engineclient"
 	"github.com/mooyang-code/moox/packages/seriesimport/runner"
-	"github.com/mooyang-code/moox/packages/seriesimport/target"
 	"github.com/spf13/cobra"
 )
 
@@ -41,7 +39,6 @@ type importOptions struct {
 	Targets        []string
 	Manifest       string
 	ViewID         string
-	Engine         string
 	JobDB          string
 	JobID          string
 	// TailRows 与 Pack、MinRows 见初始数据导入执行计划：Storage 只写每个文件最后 TailRows 行（且在保留期内）、
@@ -58,9 +55,9 @@ var importCmd = &cobra.Command{
 
 文件必须带数据集的全部字段和时间列（可选 series_tag 列），时间按 UTC 解析；文件名（去掉扩展名）即标的 ID。
 本地存储按频率网格保证连续：序列内部缺周期时默认拒绝，加 --allow-missing 把缺的周期写成带标记的填充行。
-写 Storage 经过操作员 SSH 网关（同 moox-cli storage 的其他命令）；写因子机本地存储经过因子引擎的本地接口：
-默认按 --file（moox.toml）自动找到因子机、建立转发并读取健康密钥，不需要手工建隧道或设置环境变量；
-直接在因子机上运行时可用 --engine 指定地址，鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY。
+写 Storage 与写因子机本地存储都经过操作员 SSH 网关（同 moox-cli storage 的其他命令）：因子机本地存储经因子引擎
+trpc.moox.factor.EngineControl 的 WriteSeries 写入，因子机只能出站时由网关经 control 中转，不需要手工建隧道。
+一批（--batch-rows）编码后不能超过 4 MiB，默认一万行远在这之内；超了会提示减小 --batch-rows。
 
 示例:
   moox-cli import --space-id crypto --dataset-id dataset_spot_kline_1m --frequency 1m \
@@ -88,28 +85,11 @@ func init() {
 	f.StringSliceVar(&importFlags.Targets, "target", []string{"storage", "factor"}, "写入目标：storage、factor")
 	f.StringVar(&importFlags.Manifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	f.StringVar(&importFlags.ViewID, "view", "", "可选 View ID；写 Storage 后等该 View 跟上导入的写入")
-	f.StringVar(&importFlags.Engine, "engine", "", "因子引擎健康检查地址（本地写入接口挂在它上面）；不给时按 --file 里的 moox.toml 自动解析，没有 moox.toml 时用 http://127.0.0.1:11417")
 	f.StringVar(&importFlags.JobDB, "job-db", "./importer.db", "断点库路径")
 	f.StringVar(&importFlags.JobID, "job", "", "任务 ID；不写时按请求与文件特征生成，重跑同一请求自动续传")
 	f.IntVar(&importFlags.TailRows, "tail-rows", 0, "Storage 目标每个文件只写最后 N 行，且跳过早于保留期的行；因子机本地目标仍写全量（初始数据导入用，0 表示不限制）")
 	f.StringVar(&importFlags.Pack, "pack", "", "导入包目录（含 manifest.json）：空间、数据集、频率、series_tag 与文件清单取自清单，并按清单预检；--dry-run 只预检")
 	f.IntVar(&importFlags.MinRows, "min-rows", 0, "预检要求每个文件至少这么多行（该数据源的回看数量，保证因子窗口凑得满）")
-}
-
-// localBounds 取标的在因子机本地的边界（补更早的历史时批要从后往前写）。
-func localBounds(engine *engineclient.Client, opts importOptions) func(ctx context.Context, subject string) (time.Time, time.Time, bool, error) {
-	return func(ctx context.Context, subject string) (time.Time, time.Time, bool, error) {
-		b, err := engine.Bounds(ctx, opts.Space, opts.Dataset, opts.Freq, subject)
-		if err != nil || !b.Exists {
-			return time.Time{}, time.Time{}, false, err
-		}
-		earliest, err := time.Parse(time.RFC3339, b.Earliest)
-		if err != nil {
-			return time.Time{}, time.Time{}, false, err
-		}
-		latest, err := time.Parse(time.RFC3339, b.Latest)
-		return earliest, latest, err == nil, err
-	}
 }
 
 func runImportCommand(ctx context.Context, opts importOptions) error {
@@ -128,26 +108,21 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 	if err != nil {
 		return err
 	}
-	if wantFactor && opts.Engine == "" {
-		endpoint, err := resolveSingleModuleEndpoint(ctx, opts.Manifest, "factor-engine", true, os.Stderr)
-		if err != nil {
-			return err
-		}
-		opts.Engine = endpoint
+	gateway, err := openCommandGateway(ctx, opts.Manifest, nil)
+	if err != nil {
+		return err
 	}
-	engine := &engineclient.Client{Endpoint: opts.Engine, AuthVersion: os.Getenv("MOOX_HEALTH_AUTH_VERSION"),
-		AccessKey: os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY"), SecretKey: os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY")}
+	defer gateway.Close()
+	if wantFactor && !deployedService(gateway, engineControl) {
+		return errors.New("服务目录里没有启用的因子引擎（factor-engine）：--target factor 要写因子机本地存储，先部署因子引擎，或只用 --target storage")
+	}
+	engine := factorEngine{Gateway: gateway}
 
 	var (
 		meta    runner.Meta
 		targets []runner.Target
 	)
 	if wantStorage {
-		gateway, err := openCommandGateway(ctx, opts.Manifest, nil)
-		if err != nil {
-			return err
-		}
-		defer gateway.Close()
 		metaClient := gatewayStorageImportMetadataClient{Gateway: gateway}
 		dataset, err := metaClient.GetDataset(ctx, opts.Space, opts.Dataset)
 		if err != nil {
@@ -193,10 +168,10 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 		}}
 	}
 	if wantFactor {
-		meta.LocalBounds = localBounds(engine, opts)
+		meta.LocalBounds = engine.LocalBounds(opts.Space, opts.Dataset, opts.Freq)
 	}
 	if wantFactor && !opts.DryRun {
-		targets = append(targets, &target.Factor{Endpoint: opts.Engine, AuthVersion: engine.AuthVersion, AccessKey: engine.AccessKey, SecretKey: engine.SecretKey})
+		targets = append(targets, newFactorTarget(engine))
 	}
 	retention, retentionKnown := loadImportRetention(opts.Manifest, opts.Space, opts.Freq)
 	limits := importPackLimits{Now: time.Now().UTC(), Retention: retention, RetentionKnown: retentionKnown, MinRows: opts.MinRows}

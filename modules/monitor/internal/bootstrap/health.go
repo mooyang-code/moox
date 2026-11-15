@@ -41,12 +41,6 @@ func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, r
 	handler.Handle("/healthz", healthAuth.Wrap(healthz.LivenessHandler(state.Snapshot)))
 	handler.Handle("/readyz", healthAuth.Wrap(healthz.ReadinessHandler(state.Snapshot)))
 	handler.Handle("/metrics", healthAuth.Wrap(promhttp.Handler()))
-	if life != nil {
-		// 前缀路由不限方法：生命周期命令是 POST。
-		handler.HandlePrefix(lifecycle.StatusPath, healthAuth.Wrap(life.StatusHandler()))
-		handler.HandlePrefix(lifecycle.CommandPath, healthAuth.Wrap(life.CommandHandler()))
-		handler.HandlePrefix(lifecycle.CatchupPath, healthAuth.Wrap(life.CatchupHandler()))
-	}
 	if s == nil {
 		return fmt.Errorf("monitor health service is unavailable")
 	}

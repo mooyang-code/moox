@@ -10,6 +10,7 @@ import (
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -148,10 +149,10 @@ func TestStateChangingSpecsOnlyPreviewWithoutYes(t *testing.T) {
 }
 
 func TestSystemPauseAndFetchPlanPauseOnlyPreviewWithoutYes(t *testing.T) {
-	gateway := &rpcFakeGateway{}
-	useRPCGateway(t, gateway)
-	systemFlags = systemOptions{Collector: "http://127.0.0.1:1", Strategy: "http://127.0.0.1:2"}
-	t.Cleanup(func() { systemFlags = systemOptions{} })
+	modules := newLifecycleGateway()
+	modules.add(t, "collector", lifecycle.Hooks{})
+	modules.add(t, "strategy", lifecycle.Hooks{})
+	modules.use(t)
 	pause, _, err := systemCmd.Find([]string{"pause"})
 	require.NoError(t, err)
 	var out, errOut bytes.Buffer
@@ -161,9 +162,11 @@ func TestSystemPauseAndFetchPlanPauseOnlyPreviewWithoutYes(t *testing.T) {
 	require.NoError(t, pause.RunE(pause, nil))
 	preview := parsePreview(t, out.String())
 	assert.Equal(t, "system_pause", preview["action"])
-	assert.Equal(t, []any{"strategy", "collector"}, preview["modules"], "预览列出将要暂停的模块（下游到上游）")
-	assert.Zero(t, gateway.calls)
+	assert.Equal(t, []any{"strategy", "collector"}, preview["modules"], "预览列出将要暂停的模块（下游到上游），没有部署的跳过")
+	assert.Empty(t, modules.snapshot(), "预览不发暂停命令")
 
+	gateway := &rpcFakeGateway{}
+	useRPCGateway(t, gateway)
 	out.Reset()
 	fetchPlanPauseFlags.SpaceID, fetchPlanPauseYes = "crypto", false
 	t.Cleanup(func() { fetchPlanPauseFlags.SpaceID = "" })
@@ -226,16 +229,6 @@ func TestHostPutRefusesToOverwriteWhenExistenceCannotBeConfirmed(t *testing.T) {
 	_, _, err := runHostCommand(t, "put", "--host", "storage", local, "/tmp/a.txt")
 	require.ErrorContains(t, err, "无法确认远端文件")
 	assert.Nil(t, fake.uploaded)
-}
-
-// ---- 多主机部署 ----
-
-func TestResolveRejectsComponentDeployedOnSeveralHosts(t *testing.T) {
-	clearHealthEnv(t)
-	remote := healthTestRemote(t, &healthFilesSSH{})
-	remote.manifest.Deployments["factor"] = append(remote.manifest.Deployments["factor"], "strategy")
-	_, err := resolveModuleHealthWith(context.Background(), remote, moduleHealthRequest{Modules: []string{"strategy"}})
-	require.ErrorContains(t, err, "部署在多台主机上（control、factor）")
 }
 
 // ---- 命令层把 --yes 映射成预览（之前只在内部函数层测过） ----

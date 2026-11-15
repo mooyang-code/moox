@@ -21,16 +21,16 @@ server:
       port: 11210
       network: tcp
       protocol: http_no_protocol
-      # 健康检查端口同时承载生命周期接口（/v1/lifecycle）：暂停要等在途的订单提交结束（最长 30 秒），请求时限不能小于它
-      timeout: 30000
+      timeout: 10000
       ######## unified Trade console RPC ########
+    # ControlLifecycle 暂停要等在途的订单提交结束（最长 30 秒），请求时限要大于它（与服务目录里这个方法的 60 秒一致）
     - name: trpc.moox.trade.TradeConsoleService
       ip: 127.0.0.1
       port: 11200
       network: tcp
       protocol: trpc
       transport: go-net
-      timeout: 15000
+      timeout: 60000
 
     - name: trpc.moox.trade.metrics.timer
       port: 11210

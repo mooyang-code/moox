@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,13 +15,25 @@ import (
 )
 
 type preloadDataFake struct {
+	// mu 保护两个记录：恢复追赶时各任务的本地同步在各自的协程里并发进行。
+	mu       sync.Mutex
 	prepared []string
 	released []domain.FactorTask
 	// hold 不为空时 Prepare 等它关闭才返回，用来让恢复追赶的本地同步停在“同步中”。
 	hold chan struct{}
 }
 
-func (f *preloadDataFake) ReleaseTask(set domain.FactorTask) { f.released = append(f.released, set) }
+func (f *preloadDataFake) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.prepared)
+}
+
+func (f *preloadDataFake) ReleaseTask(set domain.FactorTask) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.released = append(f.released, set)
+}
 
 func (f *preloadDataFake) Prepare(ctx context.Context, set domain.EngineTask, _ []string) error {
 	if f.hold != nil {
@@ -30,6 +43,8 @@ func (f *preloadDataFake) Prepare(ctx context.Context, set domain.EngineTask, _ 
 			return ctx.Err()
 		}
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.prepared = append(f.prepared, set.Set.TaskID)
 	return nil
 }
@@ -49,6 +64,12 @@ func (lifecycleSourceFake) ListDatasetSubjects(context.Context, string, string) 
 // Initialize 本身要 tRPC 服务、网关与 EventBus，这里不走它。
 func newLifecycleRuntime(t *testing.T, tasks ...domain.EngineTask) (*Runtime, *preloadDataFake) {
 	t.Helper()
+	return newLifecycleRuntimeAt(t, filepath.Join(t.TempDir(), "lifecycle.json"), tasks...)
+}
+
+// newLifecycleRuntimeAt 用给定的生命周期状态文件建运行时：同一个文件建第二个运行时就是模拟引擎重启（预载记录只在内存里，重启后清空）。
+func newLifecycleRuntimeAt(t *testing.T, stateFile string, tasks ...domain.EngineTask) (*Runtime, *preloadDataFake) {
+	t.Helper()
 	cache, _ := newTestCache(t)
 	if len(tasks) == 0 {
 		tasks = []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias")}
@@ -61,7 +82,7 @@ func newLifecycleRuntime(t *testing.T, tasks ...domain.EngineTask) (*Runtime, *p
 	require.NoError(t, err)
 	fake := new(preloadDataFake)
 	r := &Runtime{
-		cfg:     &Config{Lifecycle: LifecycleConfig{StateFile: filepath.Join(t.TempDir(), "lifecycle.json")}},
+		cfg:     &Config{Lifecycle: LifecycleConfig{StateFile: stateFile}},
 		catalog: cache, lease: &leaseState{}, data: localdata.New(localdata.Config{}),
 	}
 	r.preload = r.newGatedPreloader(lifecycleSourceFake{}, fake, nil)
@@ -169,12 +190,18 @@ func TestPreloaderIsBlockedWhileTheModuleIsHalted(t *testing.T) {
 	r.preload.once(ctx)
 	require.Empty(t, fake.prepared, "暂停时预载循环不运行")
 
+	// 恢复追赶自己载入窗口（不靠预载循环），追平后自动放行。
 	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem})
 	require.NoError(t, err)
-	require.Eventually(t, func() bool { return !r.life.Halted() }, 3*time.Second, 20*time.Millisecond)
+	require.Eventually(t, func() bool {
+		r.life.Refresh(ctx)
+		return !r.life.Halted()
+	}, 3*time.Second, 20*time.Millisecond)
 	require.False(t, r.preloadBlocked())
+	r.preload.unmark("ftask_a") // 让窗口失效，看预载循环自己会不会再载入
+	before := fake.count()
 	r.preload.once(ctx)
-	require.NotEmpty(t, fake.prepared, "放行后预载循环恢复")
+	require.Greater(t, fake.count(), before, "放行后预载循环恢复")
 }
 
 // 已预载且回看够长的任务再次预载不重复做。

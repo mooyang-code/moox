@@ -498,6 +498,7 @@ func initialize(
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore.ReadOnly(), Adapters: manager},
 			Adapters:           manager,
 			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake, Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry}},
+			Lifecycle:          life,
 			FlattenInstrument: func(callCtx context.Context, command rpc.FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
 				result, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
 					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
@@ -930,7 +931,7 @@ func newReadiness(
 	}
 }
 
-// registerHealth 注册健康检查与生命周期路由，并启动生命周期的恢复和定时刷新。
+// registerHealth 注册健康检查，并启动生命周期的定时刷新（生命周期的接口在 TradeConsoleService 上）。
 // 控制器和就绪判定已在第一个工人启动之前建好、绑定到门禁。
 func registerHealth(
 	runtimeCtx context.Context,
@@ -957,11 +958,7 @@ func registerHealth(
 		return response
 	}
 	go life.Run(runtimeCtx, lifecycleRefreshEvery)
-	if err := health.Register(
-		serverInstance.Service("trpc.moox.trade.Health"),
-		state,
-		lifecycleRoutes(life)...,
-	); err != nil {
+	if err := health.Register(serverInstance.Service("trpc.moox.trade.Health"), state); err != nil {
 		return fmt.Errorf("trade health server failed to register: %w", err)
 	}
 	return nil

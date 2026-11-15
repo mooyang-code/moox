@@ -10,14 +10,66 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
 	"github.com/mooyang-code/moox/packages/lifecycle"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/sysctl"
 	"github.com/spf13/cobra"
 )
 
+// lifecycleModule 是有模块级生命周期的模块：GetLifecycle、ControlLifecycle 在它的服务上（设计 3.7）。
+type lifecycleModule struct {
+	Name    string // 命令行里的模块名（与服务目录的组件 ID 一致）
+	Service string
+}
+
+// lifecycleModules 是 moox-cli lifecycle 能操作的模块。前四个参与系统暂停（moox-cli system），factor-mgr、archive-mgr 不参与；
+// Monitor 的暂停就是告警屏蔽，用 moox-cli monitor mute。
+var lifecycleModules = []lifecycleModule{
+	{sysctl.Collector, collectMgr},
+	{sysctl.FactorEngine, engineControl},
+	{sysctl.Strategy, "trpc.moox.strategy.StrategyMgr"},
+	{sysctl.Trade, "trpc.moox.trade.TradeConsoleService"},
+	{"factor-mgr", factorMgr},
+	{"archive-mgr", "trpc.moox.archive.ArchiveMgr"},
+}
+
+func lifecycleModuleByName(name string) (lifecycleModule, bool) {
+	for _, module := range lifecycleModules {
+		if module.Name == name {
+			return module, true
+		}
+	}
+	return lifecycleModule{}, false
+}
+
+func lifecycleModuleNames() string {
+	names := make([]string, 0, len(lifecycleModules))
+	for _, module := range lifecycleModules {
+		names = append(names, module.Name)
+	}
+	return strings.Join(names, "、")
+}
+
+// directoryGateway 是给得出服务目录的网关（操作员网关实现，见 gatewayclient.Client.Directory）。
+type directoryGateway interface {
+	Directory() servicecatalog.Directory
+}
+
+// 真实的操作员网关必须给得出服务目录，否则 deployedService 会把没部署的模块当作已部署。
+var _ directoryGateway = (*gatewayio.Client)(nil)
+
+// deployedService 报告服务有没有启用的部署：操作员网关给得出服务目录时按目录判断，给不出（测试替身）时当作已部署。
+func deployedService(gateway any, service string) bool {
+	if source, ok := gateway.(directoryGateway); ok {
+		return len(source.Directory().Services[service]) > 0
+	}
+	return true
+}
+
 // lifecycleOptions 是 moox-cli lifecycle 的参数。
 type lifecycleOptions struct {
-	Endpoint string
-	// Module 是要操作的模块（factor-engine、strategy、trade……），未给 --endpoint 时按 moox.toml 解析它的健康端点。
+	// Module 是要操作的模块（factor-engine、strategy、trade……）。
 	Module string
 	File   string
 	JSON   bool
@@ -45,47 +97,19 @@ var lifecycleCmd = &cobra.Command{
                                                  --manual-release 追平后停在待放行，等 release（系统级恢复用）；
                                                  --pause-kind system 只恢复系统暂停（不动手动暂停）
   moox-cli lifecycle release                     放行：恢复追赶已追平的模块回到运行
-  moox-cli lifecycle catchup                     查看恢复追赶的进度
+  moox-cli lifecycle catchup                     先让模块推进一次恢复追赶，再看进度
 
-因子任务能不能计算看 moox-cli factor task status，策略实例的确认实盘用 moox-cli strategy instance confirm。
-
-连接：默认操作 factor-engine，用 --module 换成 strategy、trade 等模块；按 --file（moox.toml）自动找到模块所在主机、
-建立转发（只能出站的主机经 control 中转）并读取健康密钥，不需要手工建隧道或设置环境变量。
-给了 --endpoint 就直接连这个地址（例如在模块所在主机上运行），鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY；
-没有 moox.toml 时同样退回本机地址。`,
-	PersistentPreRunE: prepareLifecycleEndpoint,
-}
-
-// prepareLifecycleEndpoint 在子命令运行前确定模块的健康端点：显式 --endpoint 优先，其次按 moox.toml 解析。
-func prepareLifecycleEndpoint(cmd *cobra.Command, _ []string) error {
-	if lifecycleFlags.Endpoint != "" {
-		return nil
-	}
-	if _, ok := healthModuleByName(lifecycleFlags.Module); !ok {
-		return fmt.Errorf("未知的模块 %q（%s）", lifecycleFlags.Module, healthModuleNames())
-	}
-	endpoint, err := resolveSingleModuleEndpoint(cmd.Context(), lifecycleFlags.File, lifecycleFlags.Module, true, cmd.ErrOrStderr())
-	if err != nil {
-		return err
-	}
-	lifecycleFlags.Endpoint = endpoint
-	return nil
-}
-
-func healthModuleNames() string {
-	names := make([]string, 0, len(healthModules))
-	for _, module := range healthModules {
-		names = append(names, module.Name)
-	}
-	return strings.Join(names, "、")
+默认操作 factor-engine，用 --module 换成 collector、strategy、trade、factor-mgr、archive-mgr。
+经操作员网关调用模块服务的 GetLifecycle、ControlLifecycle（因子机只能出站时经 control 中转），按 --file（moox.toml）建立隧道。
+Monitor 的暂停就是告警屏蔽，用 moox-cli monitor mute / unmute。
+因子任务能不能计算看 moox-cli factor task status，策略实例的确认实盘用 moox-cli strategy instance confirm。`,
 }
 
 func init() {
 	rootCmd.AddCommand(lifecycleCmd)
 	pf := lifecycleCmd.PersistentFlags()
-	pf.StringVar(&lifecycleFlags.Endpoint, "endpoint", "", "模块健康检查地址；不给时按 --file 与 --module 自动解析")
-	pf.StringVar(&lifecycleFlags.Module, "module", "factor-engine", "要操作的模块："+healthModuleNames())
-	pf.StringVar(&lifecycleFlags.File, "file", defaultSetupFile, "部署配置文件（moox.toml）；用于定位模块所在主机")
+	pf.StringVar(&lifecycleFlags.Module, "module", sysctl.FactorEngine, "要操作的模块："+lifecycleModuleNames())
+	pf.StringVar(&lifecycleFlags.File, "file", defaultSetupFile, "部署配置文件（moox.toml）；用于解析操作员 SSH 网关")
 	pf.BoolVar(&lifecycleFlags.JSON, "json", false, "以 JSON 输出")
 	pf.StringVar(&lifecycleFlags.Reason, "reason", "", "暂停原因（写进暂停详情）")
 	pf.StringVar(&lifecycleFlags.PauseKind, "pause-kind", "", "pause：暂停类型 manual（默认）| system；resume：只恢复该类型的暂停")
@@ -123,23 +147,35 @@ func init() {
 	}
 }
 
-func (o lifecycleOptions) client() *lifecycle.Client {
-	return &lifecycle.Client{
-		Endpoint: o.Endpoint, AuthVersion: os.Getenv("MOOX_HEALTH_AUTH_VERSION"),
-		AccessKey: os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY"), SecretKey: os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY"),
+// withLifecycle 打开操作员网关，把模块的生命周期客户端交给 fn；模块没有部署时报错。
+func withLifecycle(ctx context.Context, o lifecycleOptions, fn func(*lifecycle.Remote) error) error {
+	module, ok := lifecycleModuleByName(o.Module)
+	if !ok {
+		return fmt.Errorf("未知的模块 %q（%s）", o.Module, lifecycleModuleNames())
 	}
-}
-
-func runLifecycleStatus(ctx context.Context, o lifecycleOptions, out io.Writer) error {
-	state, err := o.client().Status(ctx)
+	gateway, err := openCommandGateway(ctx, o.File, nil)
 	if err != nil {
 		return err
 	}
-	if o.JSON {
-		return writeLifecycleJSON(out, state)
+	defer gateway.Close()
+	if !deployedService(gateway, module.Service) {
+		return fmt.Errorf("服务目录里没有启用的 %s（%s 没有部署）", module.Name, module.Service)
 	}
-	printState(out, state)
-	return nil
+	return fn(&lifecycle.Remote{Gateway: gateway, Service: module.Service})
+}
+
+func runLifecycleStatus(ctx context.Context, o lifecycleOptions, out io.Writer) error {
+	return withLifecycle(ctx, o, func(remote *lifecycle.Remote) error {
+		state, err := remote.Status(ctx)
+		if err != nil {
+			return err
+		}
+		if o.JSON {
+			return writeLifecycleJSON(out, state)
+		}
+		printState(out, state)
+		return nil
+	})
 }
 
 func runLifecycleCommand(ctx context.Context, o lifecycleOptions, cmd lifecycle.Command, out io.Writer) error {
@@ -150,22 +186,24 @@ func runLifecycleCommand(ctx context.Context, o lifecycleOptions, cmd lifecycle.
 		host, _ := os.Hostname()
 		by = "cli:" + host
 	}
-	req := lifecycle.CommandRequest{Command: cmd, PauseKind: lifecycle.PauseKind(o.PauseKind), Reason: o.Reason, By: by, ManualRelease: o.ManualRelease}
+	req := lifecycle.Request{Command: cmd, PauseKind: lifecycle.PauseKind(o.PauseKind), Reason: o.Reason, By: by, ManualRelease: o.ManualRelease}
 	if o.ExpiresIn > 0 {
 		if cmd != lifecycle.CmdPause {
 			return errors.New("--for 只用于 pause")
 		}
 		req.ExpiresAt = time.Now().Add(o.ExpiresIn)
 	}
-	state, err := o.client().Exec(ctx, req)
-	if err != nil {
-		return err
-	}
-	if o.JSON {
-		return writeLifecycleJSON(out, state)
-	}
-	printState(out, state)
-	return nil
+	return withLifecycle(ctx, o, func(remote *lifecycle.Remote) error {
+		state, err := remote.Exec(ctx, req)
+		if err != nil {
+			return err
+		}
+		if o.JSON {
+			return writeLifecycleJSON(out, state)
+		}
+		printState(out, state)
+		return nil
+	})
 }
 
 func printState(out io.Writer, state lifecycle.State) {
@@ -227,28 +265,31 @@ func catchupLine(cu *lifecycle.Catchup) string {
 	return "追赶中"
 }
 
-// runLifecycleCatchup 读恢复追赶的进度。
+// runLifecycleCatchup 先让模块推进一次恢复追赶，再读进度（追平且设为自动放行的模块就此放行）。
 func runLifecycleCatchup(ctx context.Context, o lifecycleOptions, out io.Writer) error {
-	rep, err := o.client().Catchup(ctx)
-	if err != nil {
-		return err
-	}
-	if o.JSON {
-		return writeLifecycleJSON(out, rep)
-	}
-	if !rep.Resuming {
-		fmt.Fprintf(out, "模块 %s：不在恢复追赶中（%s）\n", rep.Module, stageText(rep.State.Stage))
+	return withLifecycle(ctx, o, func(remote *lifecycle.Remote) error {
+		state, err := remote.Catchup(ctx)
+		if err != nil {
+			return err
+		}
+		resuming, caughtUp := state.Stage == lifecycle.StageResuming, state.CaughtUp()
+		if o.JSON {
+			return writeLifecycleJSON(out, map[string]any{"module": state.Module, "resuming": resuming, "caught_up": caughtUp, "state": state})
+		}
+		if !resuming {
+			fmt.Fprintf(out, "模块 %s：不在恢复追赶中（%s）\n", state.Module, stageText(state.Stage))
+			return nil
+		}
+		text := "追赶中"
+		if caughtUp {
+			text = "已追平，待放行"
+		}
+		fmt.Fprintf(out, "模块 %s：%s\n", state.Module, text)
+		if cu := state.Catchup; cu != nil && !caughtUp {
+			fmt.Fprintf(out, "  追赶：%s\n", catchupLine(cu))
+		}
 		return nil
-	}
-	state := "追赶中"
-	if rep.CaughtUp {
-		state = "已追平，待放行"
-	}
-	fmt.Fprintf(out, "模块 %s：%s\n", rep.Module, state)
-	if cu := rep.State.Catchup; cu != nil && !rep.CaughtUp {
-		fmt.Fprintf(out, "  追赶：%s\n", catchupLine(cu))
-	}
-	return nil
+	})
 }
 
 func writeLifecycleJSON(out io.Writer, v any) error {

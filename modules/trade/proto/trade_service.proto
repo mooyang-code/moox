@@ -950,6 +950,10 @@ service TradeConsoleService {
   rpc FlattenInstrument(FlattenInstrumentReq) returns (FlattenInstrumentRsp);
   rpc SummarizeAccountPnl(SummarizeAccountPnlReq) returns (SummarizeAccountPnlRsp);
   rpc ListOperatorActions(ListOperatorActionsReq) returns (ListOperatorActionsRsp);
+  // GetLifecycle 读 Trade 模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+  rpc GetLifecycle(common.GetLifecycleReq) returns (common.GetLifecycleRsp);
+  // ControlLifecycle 暂停、恢复与放行 Trade：暂停要等在途的订单提交结束（最长 30 秒），不撤单、不平仓。
+  rpc ControlLifecycle(common.ControlLifecycleReq) returns (common.ControlLifecycleRsp);
 }
 
 // 资金流水：手续费、资金费、已实现盈亏、划转等，从交易所即查即用（模拟盘由本地成交和资金费记录生成），按时间倒序。

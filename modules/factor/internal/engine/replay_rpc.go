@@ -10,14 +10,9 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 )
 
-// engineControlService 是引擎入站服务 EngineControl 的服务名：只监听本机，由因子机的主机网关按路由转发，只给策略服务调用。
-const engineControlService = "trpc.moox.factor.EngineControl"
-
 // replayService 实现 EngineControl 的回放方法：线上格式与返回码的换算在这里，会话与计算在 replayManager。
 // 失败都放在 ret_info 里返回，传输层只在网关转发失败时报错（调用方据此判断“因子引擎不在线”）。
 type replayService struct{ m *replayManager }
-
-var _ factorpb.EngineControlService = replayService{}
 
 func (s replayService) OpenReplay(ctx context.Context, req *factorpb.OpenReplayReq) (*factorpb.OpenReplayRsp, error) {
 	ctx, cancel := context.WithTimeout(ctx, replayOpenTimeout)

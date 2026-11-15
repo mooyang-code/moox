@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
-	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -266,14 +265,6 @@ func newCollectorLifecycle(dbPath string, control *collectorControl) (*lifecycle
 			},
 		},
 	})
-}
-
-func collectorLifecycleRoutes(c *lifecycle.Controller) []health.Route {
-	return []health.Route{
-		{Path: lifecycle.StatusPath, Handler: c.StatusHandler()},
-		{Path: lifecycle.CommandPath, Handler: c.CommandHandler()},
-		{Path: lifecycle.CatchupPath, Handler: c.CatchupHandler()},
-	}
 }
 
 // withCollectorLifecycle 把模块的生命周期状态放进健康检查响应，不改变就绪判定。

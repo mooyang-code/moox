@@ -72,13 +72,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *R
 	if err != nil {
 		return nil, fmt.Errorf("open archive Storage gateway client: %w", err)
 	}
-	svc, err := service.New(runtime.store, cfg, newGatewayDatasets(runtime.gateway), service.WithCollector(newGatewayCollector(runtime.gateway)))
-	if err != nil {
-		return nil, err
-	}
 	life, err := newArchiveLifecycle(cfg.Database.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open archive lifecycle: %w", err)
+	}
+	svc, err := service.New(runtime.store, cfg, newGatewayDatasets(runtime.gateway), service.WithCollector(newGatewayCollector(runtime.gateway)), service.WithLifecycle(life))
+	if err != nil {
+		return nil, err
 	}
 	go life.Run(ctx, lifecycleRefreshEvery)
 	archivepb.RegisterArchiveMgrService(s.Service(mgrService), svc.Mgr())
@@ -93,7 +93,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *R
 		return nil, err
 	}
 	runtime.health.SnapshotFunc = withLifecycle(runtime.healthSnapshot(), life)
-	if err := archivehealth.Register(s.Service(healthService), runtime.health, lifecycleRoutes(life)...); err != nil {
+	if err := archivehealth.Register(s.Service(healthService), runtime.health); err != nil {
 		return nil, fmt.Errorf("register archive health service: %w", err)
 	}
 	runtime.health.SetReady(true)

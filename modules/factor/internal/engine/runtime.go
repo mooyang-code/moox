@@ -275,10 +275,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, func(ctx context.Context) { r.runTaskChecks(ctx, cfg.Lifecycle.Interval) })
 
 	r.health.SnapshotFunc = r.healthSnapshot
-	if err := factorhealth.Register(s.Service(healthService), r.health, append(newLocalWriter(r.data, r.storage).routes(), r.lifecycleRoutes()...)...); err != nil {
+	if err := factorhealth.Register(s.Service(healthService), r.health); err != nil {
 		return nil, fmt.Errorf("register factor engine health service: %w", err)
 	}
-	factorpb.RegisterEngineControlService(s.Service(engineControlService), replayService{m: r.replays})
+	factorpb.RegisterEngineControlService(s.Service(engineControlService), r.controlService())
 	r.health.SetReady(true)
 	log.InfoContextf(ctx, "factor_engine_started engine_id=%s boot_id=%s catalog_loaded=%t lease_conflict=%t",
 		r.identity.EngineID, bootID, r.catalog.Loaded(), r.lease.Conflict())

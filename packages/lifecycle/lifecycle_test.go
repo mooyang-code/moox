@@ -1,11 +1,7 @@
 package lifecycle
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -130,60 +126,6 @@ func TestRunNotifiesTheRestoredStateOnce(t *testing.T) {
 	cancel()
 	c3.Run(ctx, time.Hour)
 	require.Empty(t, running.changes, "载入运行时不通知")
-}
-
-func TestHTTPHandlers(t *testing.T) {
-	c := newController(t, &fakeModule{}, "")
-	post := func(body string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		c.CommandHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, CommandPath, bytes.NewReader([]byte(body))))
-		return rec
-	}
-	rec := post(`{"command":"pause","reason":"维护","by":"ops"}`)
-	require.Equal(t, http.StatusOK, rec.Code)
-	var state State
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &state))
-	require.Equal(t, StagePaused, state.Stage)
-	require.Equal(t, "ops", state.Pause.By)
-
-	require.Equal(t, http.StatusConflict, post(`{"command":"release"}`).Code, "状态不允许")
-	require.Equal(t, http.StatusBadRequest, post(`{"command":"init"}`).Code, "对象级命令已经没有了")
-	require.Equal(t, http.StatusBadRequest, post(`{"command":"pause","kind":"factor_task","id":"a"}`).Code, "不再接受对象")
-	require.Equal(t, http.StatusBadRequest, post(`{"bogus":1}`).Code)
-
-	rec = httptest.NewRecorder()
-	c.CommandHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, CommandPath, nil))
-	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
-
-	rec = httptest.NewRecorder()
-	c.StatusHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, StatusPath, nil))
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &state))
-	require.Equal(t, "factor-engine", state.Module)
-	require.Equal(t, StagePaused, state.Stage)
-}
-
-// 客户端经过 HTTP 处理器读状态、执行命令；命令不被允许时返回 409 和错误文本。
-func TestClientStatusAndCommand(t *testing.T) {
-	ctrl := newController(t, &fakeModule{}, "")
-	mux := http.NewServeMux()
-	mux.Handle(StatusPath, ctrl.StatusHandler())
-	mux.Handle(CommandPath, ctrl.CommandHandler())
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	c := &Client{Endpoint: srv.URL, AccessKey: "k", SecretKey: "s"}
-	ctx := context.Background()
-
-	state, err := c.Status(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "factor-engine", state.Module)
-	require.Equal(t, StageRunning, state.Stage)
-
-	state, err = c.Exec(ctx, CommandRequest{Command: CmdPause, PauseKind: PauseSystem, By: "ops"})
-	require.NoError(t, err)
-	require.Equal(t, StagePaused, state.Stage)
-	_, err = c.Exec(ctx, CommandRequest{Command: CmdRelease})
-	require.ErrorContains(t, err, "409")
 }
 
 // 快照是副本：调用方拿到之后控制器再改暂停详情，快照不变。

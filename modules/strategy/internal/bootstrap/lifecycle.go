@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/health"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/modules/strategy/internal/warmup"
@@ -295,14 +294,6 @@ func triggerGate(c *lifecycle.Controller, ready *moduleCheck, warm warmState) fu
 // releasedAt 把模块最近一次放行的时间交给处理器：放行之前收盘的周期只记录、不求值（系统恢复与单模块恢复一样）。
 func releasedAt(c *lifecycle.Controller) func(string) time.Time {
 	return func(string) time.Time { return c.ReleasedAt() }
-}
-
-func lifecycleRoutes(c *lifecycle.Controller) []health.Route {
-	return []health.Route{
-		{Path: lifecycle.StatusPath, Handler: c.StatusHandler()},
-		{Path: lifecycle.CommandPath, Handler: c.CommandHandler()},
-		{Path: lifecycle.CatchupPath, Handler: c.CatchupHandler()},
-	}
 }
 
 // withLifecycle 把模块的生命周期状态放进健康检查响应（Monitor 据此汇总首页的系统状态），不改变就绪判定。

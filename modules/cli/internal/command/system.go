@@ -14,31 +14,32 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// moox-cli system：系统级暂停与恢复（设计 2.1）。逐个调用各模块自己的生命周期接口，编排逻辑在 packages/sysctl。
+// moox-cli system：系统级暂停与恢复（设计 2.1）。经操作员网关逐个调用各模块服务的 GetLifecycle、ControlLifecycle，
+// 编排逻辑在 packages/sysctl。
 
 type systemOptions struct {
-	Collector, Factor, Strategy, Trade string
-	File                               string
-	Reason                             string
-	By                                 string
-	Timeout                            time.Duration
-	ReleasePartial                     bool
-	Yes                                bool
-	JSON                               bool
+	File           string
+	Reason         string
+	By             string
+	Timeout        time.Duration
+	ReleasePartial bool
+	Yes            bool
+	JSON           bool
 }
 
 var systemFlags systemOptions
 
+// systemModules 是参与系统暂停的模块（顺序与依赖由 packages/sysctl 决定）；factor-mgr、archive-mgr、Monitor 不参与。
+var systemModules = []string{sysctl.Collector, sysctl.FactorEngine, sysctl.Strategy, sysctl.Trade}
+
+// systemPollInterval 是恢复时轮询追赶进度的间隔（测试里调小）。
+var systemPollInterval = 5 * time.Second
+
 var systemCmd = &cobra.Command{
 	Use:   "system",
 	Short: "系统级暂停与恢复（按依赖顺序逐个模块，恢复先追赶补采、全部追平后统一放行）",
-	Long: `系统级暂停与恢复。默认按 --file（moox.toml）自动找到 collector、factor-engine、strategy、trade 所在的主机，
-建立转发（只能出站的主机经 control 中转）并读取各模块的健康密钥，没有部署的模块自动跳过。
-不需要手工建隧道或设置环境变量。
-
-直接在模块所在的主机上运行、或要覆盖某个模块的地址时，用 --collector / --factor / --strategy / --trade
-或环境变量 MOOX_COLLECTOR_HEALTH_ENDPOINT / MOOX_FACTOR_ / MOOX_STRATEGY_ / MOOX_TRADE_HEALTH_ENDPOINT 指定；
-这时鉴权密钥按模块取环境变量 MOOX_<COLLECTOR|FACTOR|STRATEGY|TRADE>_HEALTH_AUTH_ACCESS_KEY / _SECRET_KEY，没有设置时用 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY。
+	Long: `系统级暂停与恢复：collector、factor-engine、strategy、trade 四个模块，经操作员网关调用各模块服务的
+GetLifecycle、ControlLifecycle（因子机只能出站时经 control 中转），按 --file（moox.toml）建立隧道；服务目录里没有部署的模块自动跳过。
 
   moox-cli system status                  各模块的阶段与暂停详情、恢复追赶进度
   moox-cli system pause  [--reason 原因]  下游到上游逐个暂停：策略 → Trade → 因子引擎 → 采集
@@ -47,52 +48,12 @@ var systemCmd = &cobra.Command{
 
 命令幂等：中途断开后再执行一次就按各模块当前状态继续。追赶超时只报告，不自动放行；
 --release-partial --yes 在超时后放行已追平的模块，让未追平的继续追赶。`,
-	PersistentPreRunE: prepareSystemEndpoints,
-}
-
-// prepareSystemEndpoints 为没有显式给地址的模块按 moox.toml 解析健康端点；没有 moox.toml 时保持原样（只用显式给的地址）。
-func prepareSystemEndpoints(cmd *cobra.Command, _ []string) error {
-	o := &systemFlags
-	type item struct {
-		name     string
-		endpoint *string
-	}
-	wanted := []item{{"collector", &o.Collector}, {"factor-engine", &o.Factor}, {"strategy", &o.Strategy}, {"trade", &o.Trade}}
-	var missing []string
-	for _, w := range wanted {
-		if *w.endpoint == "" {
-			missing = append(missing, w.name)
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	health, err := resolveAndTrackModuleHealth(cmd.Context(), moduleHealthRequest{File: o.File, Modules: missing})
-	if errors.Is(err, errManifestUnavailable) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for _, w := range wanted {
-		if endpoint := health.Endpoint(w.name); endpoint != "" && *w.endpoint == "" {
-			*w.endpoint = endpoint
-		}
-	}
-	if len(health.NotDeployed) > 0 {
-		fmt.Fprintf(cmd.ErrOrStderr(), "提示：moox.toml 里没有部署 %s，已跳过\n", strings.Join(health.NotDeployed, "、"))
-	}
-	return nil
 }
 
 func init() {
 	rootCmd.AddCommand(systemCmd)
 	pf := systemCmd.PersistentFlags()
-	pf.StringVar(&systemFlags.Collector, "collector", os.Getenv("MOOX_COLLECTOR_HEALTH_ENDPOINT"), "采集模块的健康检查地址")
-	pf.StringVar(&systemFlags.Factor, "factor", os.Getenv("MOOX_FACTOR_HEALTH_ENDPOINT"), "因子引擎的健康检查地址")
-	pf.StringVar(&systemFlags.Strategy, "strategy", os.Getenv("MOOX_STRATEGY_HEALTH_ENDPOINT"), "策略模块的健康检查地址")
-	pf.StringVar(&systemFlags.Trade, "trade", os.Getenv("MOOX_TRADE_HEALTH_ENDPOINT"), "Trade 的健康检查地址")
-	pf.StringVar(&systemFlags.File, "file", defaultSetupFile, "部署配置文件（moox.toml）；用于定位各模块所在主机")
+	pf.StringVar(&systemFlags.File, "file", defaultSetupFile, "部署配置文件（moox.toml）；用于解析操作员 SSH 网关")
 	pf.StringVar(&systemFlags.By, "by", "", "操作者（默认 cli:<主机名>）")
 	pf.BoolVar(&systemFlags.JSON, "json", false, "以 JSON 输出（status）")
 
@@ -107,12 +68,7 @@ func init() {
 		Use: "pause", Short: "系统暂停：下游到上游逐个暂停（默认只预览，--yes 才执行）", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !pauseYes {
-				// 暂停顺序是下游到上游，预览按这个顺序列出。
-				var modules []string
-				for _, module := range systemFlags.orchestrator(nil).Modules {
-					modules = append([]string{module.Name}, modules...)
-				}
-				return writePreview(cmd, map[string]any{"action": "system_pause", "modules": modules, "reason": systemFlags.Reason})
+				return previewSystemPause(cmd, systemFlags)
 			}
 			return runSystemPause(cmd.Context(), systemFlags, cmd.OutOrStdout())
 		},
@@ -132,128 +88,132 @@ func init() {
 	systemCmd.AddCommand(resume)
 }
 
-// healthAPI 按模块名取地址与鉴权密钥：模块自己的环境变量优先，没有设置时用通用的。
-func healthAPI(prefix, endpoint string) *lifecycle.Client {
-	get := func(name string) string {
-		if v := os.Getenv("MOOX_" + prefix + "_HEALTH_AUTH_" + name); v != "" {
-			return v
-		}
-		return os.Getenv("MOOX_HEALTH_AUTH_" + name)
+// withSystem 打开操作员网关，按服务目录装配编排器（没有部署的模块跳过并提示）交给 fn。
+func withSystem(ctx context.Context, o systemOptions, out, warn io.Writer, fn func(*sysctl.Orchestrator) error) error {
+	gateway, err := openCommandGateway(ctx, o.File, nil)
+	if err != nil {
+		return err
 	}
-	return &lifecycle.Client{Endpoint: endpoint, AuthVersion: get("VERSION"), AccessKey: get("ACCESS_KEY"), SecretKey: get("SECRET_KEY")}
-}
-
-func (o systemOptions) orchestrator(out io.Writer) *sysctl.Orchestrator {
+	defer gateway.Close()
 	by := o.By
 	if by == "" {
 		host, _ := os.Hostname()
 		by = "cli:" + host
 	}
-	var modules []sysctl.Module
-	for _, m := range []struct{ name, prefix, endpoint string }{
-		{sysctl.Collector, "COLLECTOR", o.Collector},
-		{sysctl.FactorEngine, "FACTOR", o.Factor},
-		{sysctl.Strategy, "STRATEGY", o.Strategy},
-		{sysctl.Trade, "TRADE", o.Trade},
-	} {
-		if m.endpoint == "" {
+	orch := &sysctl.Orchestrator{By: by, Out: out, Poll: systemPollInterval}
+	var skipped []string
+	for _, name := range systemModules {
+		module, _ := lifecycleModuleByName(name)
+		if !deployedService(gateway, module.Service) {
+			skipped = append(skipped, name)
 			continue
 		}
-		modules = append(modules, sysctl.Module{Name: m.name, API: healthAPI(m.prefix, m.endpoint)})
+		orch.Modules = append(orch.Modules, sysctl.Module{Name: name, API: &lifecycle.Remote{Gateway: gateway, Service: module.Service}})
 	}
-	return &sysctl.Orchestrator{Modules: modules, By: by, Out: out}
+	if len(skipped) > 0 && warn != nil {
+		fmt.Fprintf(warn, "提示：服务目录里没有部署 %s，已跳过\n", strings.Join(skipped, "、"))
+	}
+	if len(orch.Modules) == 0 {
+		return errors.New("没有可操作的模块：服务目录里 collector、factor-engine、strategy、trade 都没有部署")
+	}
+	return fn(orch)
+}
+
+// previewSystemPause 只列出将要暂停的模块（按暂停顺序：下游到上游），不执行。
+func previewSystemPause(cmd *cobra.Command, o systemOptions) error {
+	return withSystem(cmd.Context(), o, nil, cmd.ErrOrStderr(), func(orch *sysctl.Orchestrator) error {
+		var modules []string
+		for _, module := range orch.Modules {
+			modules = append([]string{module.Name}, modules...)
+		}
+		return writePreview(cmd, map[string]any{"action": "system_pause", "modules": modules, "reason": o.Reason})
+	})
 }
 
 func runSystemStatus(ctx context.Context, o systemOptions, out io.Writer) error {
-	orch := o.orchestrator(nil)
-	if len(orch.Modules) == 0 {
-		return errors.New("没有可操作的模块：moox.toml 里没有部署任何带健康端口的模块，或没有找到 moox.toml（可用 --collector / --factor / --strategy / --trade 指定地址）")
-	}
-	states := orch.Status(ctx)
-	if o.JSON {
-		type item struct {
-			Module  string               `json:"module"`
-			Stage   lifecycle.Stage      `json:"stage,omitempty"`
-			Pause   *lifecycle.PauseInfo `json:"pause,omitempty"`
-			Catchup *lifecycle.Catchup   `json:"catchup,omitempty"`
-			Error   string               `json:"error,omitempty"`
+	return withSystem(ctx, o, nil, os.Stderr, func(orch *sysctl.Orchestrator) error {
+		states := orch.Status(ctx)
+		if o.JSON {
+			type item struct {
+				Module  string               `json:"module"`
+				Stage   lifecycle.Stage      `json:"stage,omitempty"`
+				Pause   *lifecycle.PauseInfo `json:"pause,omitempty"`
+				Catchup *lifecycle.Catchup   `json:"catchup,omitempty"`
+				Error   string               `json:"error,omitempty"`
+			}
+			items := make([]item, 0, len(states))
+			for _, s := range states {
+				it := item{Module: s.Name, Stage: s.Stage, Pause: s.Pause, Catchup: s.Catchup}
+				if s.Err != nil {
+					it.Error = s.Err.Error()
+				}
+				items = append(items, it)
+			}
+			return writeLifecycleJSON(out, items)
 		}
-		items := make([]item, 0, len(states))
 		for _, s := range states {
-			it := item{Module: s.Name, Stage: s.Stage, Pause: s.Pause, Catchup: s.Catchup}
 			if s.Err != nil {
-				it.Error = s.Err.Error()
+				fmt.Fprintf(out, "%-14s 读取失败：%v\n", s.Name, s.Err)
+				continue
 			}
-			items = append(items, it)
-		}
-		return writeLifecycleJSON(out, items)
-	}
-	for _, s := range states {
-		if s.Err != nil {
-			fmt.Fprintf(out, "%-14s 读取失败：%v\n", s.Name, s.Err)
-			continue
-		}
-		line := fmt.Sprintf("%-14s %s", s.Name, stageText(s.Stage))
-		if s.Pause != nil {
-			line += "（" + pauseKindText(s.Pause.Kind)
-			if s.Pause.Reason != "" {
-				line += "：" + s.Pause.Reason
+			line := fmt.Sprintf("%-14s %s", s.Name, stageText(s.Stage))
+			if s.Pause != nil {
+				line += "（" + pauseKindText(s.Pause.Kind)
+				if s.Pause.Reason != "" {
+					line += "：" + s.Pause.Reason
+				}
+				line += "）"
 			}
-			line += "）"
+			if s.Catchup != nil {
+				line += "，追赶：" + catchupLine(s.Catchup)
+			}
+			fmt.Fprintln(out, line)
 		}
-		if s.Catchup != nil {
-			line += "，追赶：" + catchupLine(s.Catchup)
-		}
-		fmt.Fprintln(out, line)
-	}
-	return nil
+		return nil
+	})
 }
 
 func runSystemPause(ctx context.Context, o systemOptions, out io.Writer) error {
-	orch := o.orchestrator(out)
-	if len(orch.Modules) == 0 {
-		return errors.New("没有可操作的模块：moox.toml 里没有部署任何带健康端口的模块，或没有找到 moox.toml（可用 --collector / --factor / --strategy / --trade 指定地址）")
-	}
-	result, err := orch.Pause(ctx, o.Reason)
-	for _, w := range result.Warnings {
-		fmt.Fprintf(out, "提示：%s\n", w)
-	}
-	if err != nil {
-		fmt.Fprintf(out, "已暂停：%v；其余模块没有暂停（暂停无损，重复执行即可继续）\n", result.Paused)
-		return err
-	}
-	fmt.Fprintf(out, "系统已暂停：%v\n", result.Paused)
-	return nil
+	return withSystem(ctx, o, out, out, func(orch *sysctl.Orchestrator) error {
+		result, err := orch.Pause(ctx, o.Reason)
+		for _, w := range result.Warnings {
+			fmt.Fprintf(out, "提示：%s\n", w)
+		}
+		if err != nil {
+			fmt.Fprintf(out, "已暂停：%v；其余模块没有暂停（暂停无损，重复执行即可继续）\n", result.Paused)
+			return err
+		}
+		fmt.Fprintf(out, "系统已暂停：%v\n", result.Paused)
+		return nil
+	})
 }
 
 func runSystemResume(ctx context.Context, o systemOptions, out io.Writer) error {
 	if o.ReleasePartial && !o.Yes {
 		return errors.New("--release-partial 会在超时后放行已追平的模块、保持其余模块继续追赶，需要加 --yes 确认")
 	}
-	orch := o.orchestrator(out)
-	if len(orch.Modules) == 0 {
-		return errors.New("没有可操作的模块：moox.toml 里没有部署任何带健康端口的模块，或没有找到 moox.toml（可用 --collector / --factor / --strategy / --trade 指定地址）")
-	}
-	result, err := orch.Resume(ctx, sysctl.ResumeOptions{Timeout: o.Timeout, ReleasePartial: o.ReleasePartial})
-	if err != nil {
-		fmt.Fprintf(out, "已放行：%v\n", result.Released)
+	return withSystem(ctx, o, out, out, func(orch *sysctl.Orchestrator) error {
+		result, err := orch.Resume(ctx, sysctl.ResumeOptions{Timeout: o.Timeout, ReleasePartial: o.ReleasePartial})
+		if err != nil {
+			fmt.Fprintf(out, "已放行：%v\n", result.Released)
+			for name, why := range result.Pending {
+				fmt.Fprintf(out, "未放行 %s：%s\n", name, why)
+			}
+			return err
+		}
+		if result.TimedOut {
+			fmt.Fprintln(out, "等待追平超时，没有自动放行：")
+		}
 		for name, why := range result.Pending {
 			fmt.Fprintf(out, "未放行 %s：%s\n", name, why)
 		}
-		return err
-	}
-	if result.TimedOut {
-		fmt.Fprintln(out, "等待追平超时，没有自动放行：")
-	}
-	for name, why := range result.Pending {
-		fmt.Fprintf(out, "未放行 %s：%s\n", name, why)
-	}
-	if len(result.Pending) == 0 {
-		fmt.Fprintf(out, "系统已恢复：已放行 %v\n", result.Released)
+		if len(result.Pending) == 0 {
+			fmt.Fprintf(out, "系统已恢复：已放行 %v\n", result.Released)
+			return nil
+		}
+		if result.TimedOut {
+			return errors.New("部分模块没有追平；再次执行 system resume 继续等待，或加 --release-partial --yes 放行已追平的模块")
+		}
 		return nil
-	}
-	if result.TimedOut {
-		return errors.New("部分模块没有追平；再次执行 system resume 继续等待，或加 --release-partial --yes 放行已追平的模块")
-	}
-	return nil
+	})
 }

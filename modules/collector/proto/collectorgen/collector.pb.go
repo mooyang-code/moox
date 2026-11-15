@@ -11620,7 +11620,7 @@ var file_collector_proto_rawDesc = []byte{
 	0x65, 0x74, 0x63, 0x68, 0x52, 0x65, 0x71, 0x1a, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d,
 	0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x49, 0x6e,
 	0x76, 0x6f, 0x6b, 0x65, 0x4d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x52,
-	0x73, 0x70, 0x32, 0x8d, 0x28, 0x0a, 0x0a, 0x43, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x4d, 0x67,
+	0x73, 0x70, 0x32, 0xc5, 0x29, 0x0a, 0x0a, 0x43, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x4d, 0x67,
 	0x72, 0x12, 0x57, 0x0a, 0x0b, 0x47, 0x65, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x4c, 0x69, 0x73, 0x74,
 	0x12, 0x23, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c,
 	0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x4c, 0x69,
@@ -11941,12 +11941,24 @@ var file_collector_proto_rawDesc = []byte{
 	0x73, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x2b, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
 	0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x50, 0x72, 0x6f, 0x62,
 	0x65, 0x46, 0x75, 0x6e, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x45, 0x67, 0x72, 0x65, 0x73, 0x73, 0x52,
-	0x73, 0x70, 0x42, 0x4f, 0x5a, 0x4d, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d,
-	0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f,
-	0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x63, 0x6f, 0x6c, 0x6c, 0x65,
-	0x63, 0x74, 0x6f, 0x72, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x63, 0x6f, 0x6c, 0x6c, 0x65,
-	0x63, 0x74, 0x6f, 0x72, 0x67, 0x65, 0x6e, 0x3b, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f,
-	0x72, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x73, 0x70, 0x12, 0x54, 0x0a, 0x0c, 0x47, 0x65, 0x74, 0x4c, 0x69, 0x66, 0x65, 0x63, 0x79, 0x63,
+	0x6c, 0x65, 0x12, 0x21, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63,
+	0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x47, 0x65, 0x74, 0x4c, 0x69, 0x66, 0x65, 0x63, 0x79, 0x63,
+	0x6c, 0x65, 0x52, 0x65, 0x71, 0x1a, 0x21, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
+	0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x47, 0x65, 0x74, 0x4c, 0x69, 0x66, 0x65,
+	0x63, 0x79, 0x63, 0x6c, 0x65, 0x52, 0x73, 0x70, 0x12, 0x60, 0x0a, 0x10, 0x43, 0x6f, 0x6e, 0x74,
+	0x72, 0x6f, 0x6c, 0x4c, 0x69, 0x66, 0x65, 0x63, 0x79, 0x63, 0x6c, 0x65, 0x12, 0x25, 0x2e, 0x74,
+	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e,
+	0x43, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x4c, 0x69, 0x66, 0x65, 0x63, 0x79, 0x63, 0x6c, 0x65,
+	0x52, 0x65, 0x71, 0x1a, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x43, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x4c, 0x69,
+	0x66, 0x65, 0x63, 0x79, 0x63, 0x6c, 0x65, 0x52, 0x73, 0x70, 0x42, 0x4f, 0x5a, 0x4d, 0x67, 0x69,
+	0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67,
+	0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c,
+	0x65, 0x73, 0x2f, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2f, 0x70, 0x72, 0x6f,
+	0x74, 0x6f, 0x2f, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x67, 0x65, 0x6e, 0x3b,
+	0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f,
+	0x74, 0x6f, 0x33,
 }
 
 var (
@@ -12105,6 +12117,10 @@ var file_collector_proto_goTypes = []interface{}{
 	(*commonpb.RetInfo)(nil),               // 139: trpc.moox.common.RetInfo
 	(*commonpb.PageResult)(nil),            // 140: trpc.moox.common.PageResult
 	(*structpb.Value)(nil),                 // 141: google.protobuf.Value
+	(*commonpb.GetLifecycleReq)(nil),       // 142: trpc.moox.common.GetLifecycleReq
+	(*commonpb.ControlLifecycleReq)(nil),   // 143: trpc.moox.common.ControlLifecycleReq
+	(*commonpb.GetLifecycleRsp)(nil),       // 144: trpc.moox.common.GetLifecycleRsp
+	(*commonpb.ControlLifecycleRsp)(nil),   // 145: trpc.moox.common.ControlLifecycleRsp
 }
 var file_collector_proto_depIdxs = []int32{
 	137, // 0: trpc.moox.collector.CollectionTask.collect_params:type_name -> google.protobuf.Struct
@@ -12279,59 +12295,63 @@ var file_collector_proto_depIdxs = []int32{
 	127, // 169: trpc.moox.collector.CollectMgr.ListCloudFunctions:input_type -> trpc.moox.collector.ListCloudFunctionsReq
 	130, // 170: trpc.moox.collector.CollectMgr.DeleteCloudFunctions:input_type -> trpc.moox.collector.DeleteCloudFunctionsReq
 	133, // 171: trpc.moox.collector.CollectMgr.ProbeFunctionEgress:input_type -> trpc.moox.collector.ProbeFunctionEgressReq
-	95,  // 172: trpc.moox.collector.StreamCollector.StreamHeartbeat:output_type -> trpc.moox.collector.StreamHeartbeatRsp
-	98,  // 173: trpc.moox.collector.StreamCollector.PullStreamPlan:output_type -> trpc.moox.collector.PullStreamPlanRsp
-	101, // 174: trpc.moox.collector.StreamCollector.ReportStreamPeriods:output_type -> trpc.moox.collector.ReportStreamPeriodsRsp
-	103, // 175: trpc.moox.collector.MarketFetchExecutor.Invoke:output_type -> trpc.moox.collector.InvokeMarketFetchRsp
-	4,   // 176: trpc.moox.collector.CollectMgr.GetTaskList:output_type -> trpc.moox.collector.GetTaskListRsp
-	6,   // 177: trpc.moox.collector.CollectMgr.GetTaskDetail:output_type -> trpc.moox.collector.GetTaskDetailRsp
-	9,   // 178: trpc.moox.collector.CollectMgr.GetTaskResultInventory:output_type -> trpc.moox.collector.GetTaskResultInventoryRsp
-	11,  // 179: trpc.moox.collector.CollectMgr.CreateTask:output_type -> trpc.moox.collector.CreateTaskRsp
-	13,  // 180: trpc.moox.collector.CollectMgr.UpdateTask:output_type -> trpc.moox.collector.UpdateTaskRsp
-	15,  // 181: trpc.moox.collector.CollectMgr.DisableTask:output_type -> trpc.moox.collector.DisableTaskRsp
-	17,  // 182: trpc.moox.collector.CollectMgr.DeleteTask:output_type -> trpc.moox.collector.DeleteTaskRsp
-	23,  // 183: trpc.moox.collector.CollectMgr.GetDataTypeConfigs:output_type -> trpc.moox.collector.GetDataTypeConfigsRsp
-	25,  // 184: trpc.moox.collector.CollectMgr.GetDataTypeConfigWithFields:output_type -> trpc.moox.collector.GetDataTypeConfigWithFieldsRsp
-	28,  // 185: trpc.moox.collector.CollectMgr.SubmitKlineResampleJob:output_type -> trpc.moox.collector.SubmitKlineResampleJobRsp
-	30,  // 186: trpc.moox.collector.CollectMgr.GetKlineResampleJob:output_type -> trpc.moox.collector.GetKlineResampleJobRsp
-	32,  // 187: trpc.moox.collector.CollectMgr.ListKlineResampleJobs:output_type -> trpc.moox.collector.ListKlineResampleJobsRsp
-	34,  // 188: trpc.moox.collector.CollectMgr.CancelKlineResampleJob:output_type -> trpc.moox.collector.CancelKlineResampleJobRsp
-	36,  // 189: trpc.moox.collector.CollectMgr.PreviewKlineResampleSource:output_type -> trpc.moox.collector.PreviewKlineResampleSourceRsp
-	40,  // 190: trpc.moox.collector.CollectMgr.SyncSubjects:output_type -> trpc.moox.collector.SyncSubjectsRsp
-	43,  // 191: trpc.moox.collector.CollectMgr.ListTagSyncStatus:output_type -> trpc.moox.collector.ListTagSyncStatusRsp
-	46,  // 192: trpc.moox.collector.CollectMgr.ListSubjectListers:output_type -> trpc.moox.collector.ListSubjectListersRsp
-	49,  // 193: trpc.moox.collector.CollectMgr.CheckKline:output_type -> trpc.moox.collector.CheckKlineRsp
-	51,  // 194: trpc.moox.collector.CollectMgr.SubmitKlineBackfill:output_type -> trpc.moox.collector.SubmitKlineBackfillRsp
-	55,  // 195: trpc.moox.collector.CollectMgr.GetKlineBackfill:output_type -> trpc.moox.collector.GetKlineBackfillRsp
-	57,  // 196: trpc.moox.collector.CollectMgr.ListKlineBackfills:output_type -> trpc.moox.collector.ListKlineBackfillsRsp
-	59,  // 197: trpc.moox.collector.CollectMgr.CancelKlineBackfill:output_type -> trpc.moox.collector.CancelKlineBackfillRsp
-	61,  // 198: trpc.moox.collector.CollectMgr.RetryKlineBackfill:output_type -> trpc.moox.collector.RetryKlineBackfillRsp
-	63,  // 199: trpc.moox.collector.CollectMgr.ConfirmHistoryGaps:output_type -> trpc.moox.collector.ConfirmHistoryGapsRsp
-	65,  // 200: trpc.moox.collector.CollectMgr.ClearSourceAbsences:output_type -> trpc.moox.collector.ClearSourceAbsencesRsp
-	71,  // 201: trpc.moox.collector.CollectMgr.GetCollectorStatus:output_type -> trpc.moox.collector.GetCollectorStatusRsp
-	78,  // 202: trpc.moox.collector.CollectMgr.ReregisterFetchPlan:output_type -> trpc.moox.collector.ReregisterFetchPlanRsp
-	77,  // 203: trpc.moox.collector.CollectMgr.TriggerFetchPlan:output_type -> trpc.moox.collector.TriggerFetchPlanRsp
-	75,  // 204: trpc.moox.collector.CollectMgr.SetFetchPlanPaused:output_type -> trpc.moox.collector.SetFetchPlanPausedRsp
-	81,  // 205: trpc.moox.collector.CollectMgr.GetIngestMode:output_type -> trpc.moox.collector.GetIngestModeRsp
-	83,  // 206: trpc.moox.collector.CollectMgr.SetIngestMode:output_type -> trpc.moox.collector.SetIngestModeRsp
-	86,  // 207: trpc.moox.collector.CollectMgr.SetSubjectExclusions:output_type -> trpc.moox.collector.SetSubjectExclusionsRsp
-	88,  // 208: trpc.moox.collector.CollectMgr.ClearSubjectExclusions:output_type -> trpc.moox.collector.ClearSubjectExclusionsRsp
-	90,  // 209: trpc.moox.collector.CollectMgr.ListSubjectExclusions:output_type -> trpc.moox.collector.ListSubjectExclusionsRsp
-	105, // 210: trpc.moox.collector.CollectMgr.RegisterDelistNotice:output_type -> trpc.moox.collector.RegisterDelistNoticeRsp
-	108, // 211: trpc.moox.collector.CollectMgr.ListCloudAccounts:output_type -> trpc.moox.collector.ListCloudAccountsRsp
-	110, // 212: trpc.moox.collector.CollectMgr.CreateCloudAccount:output_type -> trpc.moox.collector.CreateCloudAccountRsp
-	112, // 213: trpc.moox.collector.CollectMgr.UpdateCloudAccount:output_type -> trpc.moox.collector.UpdateCloudAccountRsp
-	114, // 214: trpc.moox.collector.CollectMgr.DeleteCloudAccount:output_type -> trpc.moox.collector.DeleteCloudAccountRsp
-	117, // 215: trpc.moox.collector.CollectMgr.ListCloudRegions:output_type -> trpc.moox.collector.ListCloudRegionsRsp
-	120, // 216: trpc.moox.collector.CollectMgr.InitPackageUpload:output_type -> trpc.moox.collector.InitPackageUploadRsp
-	122, // 217: trpc.moox.collector.CollectMgr.CompletePackageUpload:output_type -> trpc.moox.collector.CompletePackageUploadRsp
-	124, // 218: trpc.moox.collector.CollectMgr.ListFunctionPackages:output_type -> trpc.moox.collector.ListFunctionPackagesRsp
-	126, // 219: trpc.moox.collector.CollectMgr.DeleteFunctionPackage:output_type -> trpc.moox.collector.DeleteFunctionPackageRsp
-	129, // 220: trpc.moox.collector.CollectMgr.ListCloudFunctions:output_type -> trpc.moox.collector.ListCloudFunctionsRsp
-	132, // 221: trpc.moox.collector.CollectMgr.DeleteCloudFunctions:output_type -> trpc.moox.collector.DeleteCloudFunctionsRsp
-	135, // 222: trpc.moox.collector.CollectMgr.ProbeFunctionEgress:output_type -> trpc.moox.collector.ProbeFunctionEgressRsp
-	172, // [172:223] is the sub-list for method output_type
-	121, // [121:172] is the sub-list for method input_type
+	142, // 172: trpc.moox.collector.CollectMgr.GetLifecycle:input_type -> trpc.moox.common.GetLifecycleReq
+	143, // 173: trpc.moox.collector.CollectMgr.ControlLifecycle:input_type -> trpc.moox.common.ControlLifecycleReq
+	95,  // 174: trpc.moox.collector.StreamCollector.StreamHeartbeat:output_type -> trpc.moox.collector.StreamHeartbeatRsp
+	98,  // 175: trpc.moox.collector.StreamCollector.PullStreamPlan:output_type -> trpc.moox.collector.PullStreamPlanRsp
+	101, // 176: trpc.moox.collector.StreamCollector.ReportStreamPeriods:output_type -> trpc.moox.collector.ReportStreamPeriodsRsp
+	103, // 177: trpc.moox.collector.MarketFetchExecutor.Invoke:output_type -> trpc.moox.collector.InvokeMarketFetchRsp
+	4,   // 178: trpc.moox.collector.CollectMgr.GetTaskList:output_type -> trpc.moox.collector.GetTaskListRsp
+	6,   // 179: trpc.moox.collector.CollectMgr.GetTaskDetail:output_type -> trpc.moox.collector.GetTaskDetailRsp
+	9,   // 180: trpc.moox.collector.CollectMgr.GetTaskResultInventory:output_type -> trpc.moox.collector.GetTaskResultInventoryRsp
+	11,  // 181: trpc.moox.collector.CollectMgr.CreateTask:output_type -> trpc.moox.collector.CreateTaskRsp
+	13,  // 182: trpc.moox.collector.CollectMgr.UpdateTask:output_type -> trpc.moox.collector.UpdateTaskRsp
+	15,  // 183: trpc.moox.collector.CollectMgr.DisableTask:output_type -> trpc.moox.collector.DisableTaskRsp
+	17,  // 184: trpc.moox.collector.CollectMgr.DeleteTask:output_type -> trpc.moox.collector.DeleteTaskRsp
+	23,  // 185: trpc.moox.collector.CollectMgr.GetDataTypeConfigs:output_type -> trpc.moox.collector.GetDataTypeConfigsRsp
+	25,  // 186: trpc.moox.collector.CollectMgr.GetDataTypeConfigWithFields:output_type -> trpc.moox.collector.GetDataTypeConfigWithFieldsRsp
+	28,  // 187: trpc.moox.collector.CollectMgr.SubmitKlineResampleJob:output_type -> trpc.moox.collector.SubmitKlineResampleJobRsp
+	30,  // 188: trpc.moox.collector.CollectMgr.GetKlineResampleJob:output_type -> trpc.moox.collector.GetKlineResampleJobRsp
+	32,  // 189: trpc.moox.collector.CollectMgr.ListKlineResampleJobs:output_type -> trpc.moox.collector.ListKlineResampleJobsRsp
+	34,  // 190: trpc.moox.collector.CollectMgr.CancelKlineResampleJob:output_type -> trpc.moox.collector.CancelKlineResampleJobRsp
+	36,  // 191: trpc.moox.collector.CollectMgr.PreviewKlineResampleSource:output_type -> trpc.moox.collector.PreviewKlineResampleSourceRsp
+	40,  // 192: trpc.moox.collector.CollectMgr.SyncSubjects:output_type -> trpc.moox.collector.SyncSubjectsRsp
+	43,  // 193: trpc.moox.collector.CollectMgr.ListTagSyncStatus:output_type -> trpc.moox.collector.ListTagSyncStatusRsp
+	46,  // 194: trpc.moox.collector.CollectMgr.ListSubjectListers:output_type -> trpc.moox.collector.ListSubjectListersRsp
+	49,  // 195: trpc.moox.collector.CollectMgr.CheckKline:output_type -> trpc.moox.collector.CheckKlineRsp
+	51,  // 196: trpc.moox.collector.CollectMgr.SubmitKlineBackfill:output_type -> trpc.moox.collector.SubmitKlineBackfillRsp
+	55,  // 197: trpc.moox.collector.CollectMgr.GetKlineBackfill:output_type -> trpc.moox.collector.GetKlineBackfillRsp
+	57,  // 198: trpc.moox.collector.CollectMgr.ListKlineBackfills:output_type -> trpc.moox.collector.ListKlineBackfillsRsp
+	59,  // 199: trpc.moox.collector.CollectMgr.CancelKlineBackfill:output_type -> trpc.moox.collector.CancelKlineBackfillRsp
+	61,  // 200: trpc.moox.collector.CollectMgr.RetryKlineBackfill:output_type -> trpc.moox.collector.RetryKlineBackfillRsp
+	63,  // 201: trpc.moox.collector.CollectMgr.ConfirmHistoryGaps:output_type -> trpc.moox.collector.ConfirmHistoryGapsRsp
+	65,  // 202: trpc.moox.collector.CollectMgr.ClearSourceAbsences:output_type -> trpc.moox.collector.ClearSourceAbsencesRsp
+	71,  // 203: trpc.moox.collector.CollectMgr.GetCollectorStatus:output_type -> trpc.moox.collector.GetCollectorStatusRsp
+	78,  // 204: trpc.moox.collector.CollectMgr.ReregisterFetchPlan:output_type -> trpc.moox.collector.ReregisterFetchPlanRsp
+	77,  // 205: trpc.moox.collector.CollectMgr.TriggerFetchPlan:output_type -> trpc.moox.collector.TriggerFetchPlanRsp
+	75,  // 206: trpc.moox.collector.CollectMgr.SetFetchPlanPaused:output_type -> trpc.moox.collector.SetFetchPlanPausedRsp
+	81,  // 207: trpc.moox.collector.CollectMgr.GetIngestMode:output_type -> trpc.moox.collector.GetIngestModeRsp
+	83,  // 208: trpc.moox.collector.CollectMgr.SetIngestMode:output_type -> trpc.moox.collector.SetIngestModeRsp
+	86,  // 209: trpc.moox.collector.CollectMgr.SetSubjectExclusions:output_type -> trpc.moox.collector.SetSubjectExclusionsRsp
+	88,  // 210: trpc.moox.collector.CollectMgr.ClearSubjectExclusions:output_type -> trpc.moox.collector.ClearSubjectExclusionsRsp
+	90,  // 211: trpc.moox.collector.CollectMgr.ListSubjectExclusions:output_type -> trpc.moox.collector.ListSubjectExclusionsRsp
+	105, // 212: trpc.moox.collector.CollectMgr.RegisterDelistNotice:output_type -> trpc.moox.collector.RegisterDelistNoticeRsp
+	108, // 213: trpc.moox.collector.CollectMgr.ListCloudAccounts:output_type -> trpc.moox.collector.ListCloudAccountsRsp
+	110, // 214: trpc.moox.collector.CollectMgr.CreateCloudAccount:output_type -> trpc.moox.collector.CreateCloudAccountRsp
+	112, // 215: trpc.moox.collector.CollectMgr.UpdateCloudAccount:output_type -> trpc.moox.collector.UpdateCloudAccountRsp
+	114, // 216: trpc.moox.collector.CollectMgr.DeleteCloudAccount:output_type -> trpc.moox.collector.DeleteCloudAccountRsp
+	117, // 217: trpc.moox.collector.CollectMgr.ListCloudRegions:output_type -> trpc.moox.collector.ListCloudRegionsRsp
+	120, // 218: trpc.moox.collector.CollectMgr.InitPackageUpload:output_type -> trpc.moox.collector.InitPackageUploadRsp
+	122, // 219: trpc.moox.collector.CollectMgr.CompletePackageUpload:output_type -> trpc.moox.collector.CompletePackageUploadRsp
+	124, // 220: trpc.moox.collector.CollectMgr.ListFunctionPackages:output_type -> trpc.moox.collector.ListFunctionPackagesRsp
+	126, // 221: trpc.moox.collector.CollectMgr.DeleteFunctionPackage:output_type -> trpc.moox.collector.DeleteFunctionPackageRsp
+	129, // 222: trpc.moox.collector.CollectMgr.ListCloudFunctions:output_type -> trpc.moox.collector.ListCloudFunctionsRsp
+	132, // 223: trpc.moox.collector.CollectMgr.DeleteCloudFunctions:output_type -> trpc.moox.collector.DeleteCloudFunctionsRsp
+	135, // 224: trpc.moox.collector.CollectMgr.ProbeFunctionEgress:output_type -> trpc.moox.collector.ProbeFunctionEgressRsp
+	144, // 225: trpc.moox.collector.CollectMgr.GetLifecycle:output_type -> trpc.moox.common.GetLifecycleRsp
+	145, // 226: trpc.moox.collector.CollectMgr.ControlLifecycle:output_type -> trpc.moox.common.ControlLifecycleRsp
+	174, // [174:227] is the sub-list for method output_type
+	121, // [121:174] is the sub-list for method input_type
 	121, // [121:121] is the sub-list for extension type_name
 	121, // [121:121] is the sub-list for extension extendee
 	0,   // [0:121] is the sub-list for field type_name

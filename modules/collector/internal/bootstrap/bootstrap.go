@@ -153,7 +153,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control, bus); err != nil {
 		return nil, err
 	}
-	if err := registerHealth(s, cfg, dbm, process, control); err != nil {
+	if err := registerHealth(s, cfg, dbm, process, control, svc); err != nil {
 		return nil, err
 	}
 	registerMetricsReporter(s, realtimeInventory)
@@ -298,7 +298,8 @@ func metricsTimerHandler(inventory realtimeInventoryReconciler, reporter metrics
 	}
 }
 
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, control *collectorControl) error {
+// registerHealth 注册健康检查，并建好生命周期控制器交给 CollectMgr（GetLifecycle、ControlLifecycle）。
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, control *collectorControl, svc *collectsvc.Service) error {
 	if cfg == nil {
 		return nil
 	}
@@ -307,19 +308,20 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Ru
 	if s == nil {
 		return fmt.Errorf("collector health service is unavailable")
 	}
-	var routes []health.Route
 	if control != nil && process != nil {
 		life, err := newCollectorLifecycle(cfg.Database.Path, control)
 		if err != nil {
 			return fmt.Errorf("collector lifecycle state failed to open: %w", err)
 		}
 		state.SnapshotFunc = withCollectorLifecycle(state.SnapshotFunc, life)
-		routes = collectorLifecycleRoutes(life)
+		if svc != nil {
+			svc.SetLifecycle(life)
+		}
 		if !process.launch(func() { life.Run(process.ctx, collectorLifecycleRefresh) }) {
 			return fmt.Errorf("collector runtime is closing")
 		}
 	}
-	if err := health.Register(s.Service("trpc.moox.collector.Health"), state, routes...); err != nil {
+	if err := health.Register(s.Service("trpc.moox.collector.Health"), state); err != nil {
 		return fmt.Errorf("collector health server failed to start: %w", err)
 	}
 	return nil

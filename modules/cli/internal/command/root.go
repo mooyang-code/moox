@@ -73,7 +73,6 @@ func Execute() {
 	// 先执行命令解析，这样可以检查是否使用了--version标志
 	mountCommands(rootCmd)
 	err := rootCmd.Execute()
-	closeModuleHealth()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		var coded interface{ ExitCode() int }

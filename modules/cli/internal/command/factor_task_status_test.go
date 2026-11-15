@@ -20,7 +20,17 @@ func (g *statusGateway) Forward(_ context.Context, service, method string, _ int
 	return nil, errs.New(errs.RetServerNoFunc, service+"/"+method)
 }
 
-func (g *statusGateway) Invoke(_ context.Context, _, method string, _, rsp any) error {
+func (g *statusGateway) Invoke(_ context.Context, service, method string, req, rsp any) error {
+	if service == engineControl && method == "CheckTask" {
+		out := rsp.(*factorpb.CheckTaskRsp)
+		if req.(*factorpb.CheckTaskReq).GetTaskId() != "ftask_a" {
+			out.RetInfo = &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND, Msg: "因子任务不在引擎的目录里"}
+			return nil
+		}
+		out.RetInfo = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+		out.Checks = []*factorpb.FactorTaskCheck{{Name: "本地窗口", Status: "PASS"}, {Name: "本地数据覆盖", Status: "PASS"}}
+		return nil
+	}
 	if method != "GetStatus" {
 		return errs.New(errs.RetServerNoFunc, method)
 	}
@@ -65,4 +75,15 @@ func TestFactorTaskStatusShowsChecks(t *testing.T) {
 	require.Contains(t, out.String(), "引擎模块暂停中")
 
 	require.ErrorContains(t, runFactorTaskStatus(ctx, gateway, "missing", false, &out), "没有上报因子任务 missing")
+}
+
+// --recheck 直接问引擎：经 EngineControl.CheckTask 立即重查，不读心跳里的旧结果；必须指定任务，任务不在目录里报引擎的说明。
+func TestFactorTaskRecheckAsksTheEngine(t *testing.T) {
+	gateway := &statusGateway{}
+	ctx := context.Background()
+	var out bytes.Buffer
+	require.NoError(t, runFactorTaskRecheck(ctx, gateway, "ftask_a", false, &out))
+	require.Contains(t, out.String(), "ftask_a：计算中", "引擎重查之后检查全部通过")
+	require.ErrorContains(t, runFactorTaskRecheck(ctx, gateway, "", false, &out), "--task-id")
+	require.ErrorContains(t, runFactorTaskRecheck(ctx, gateway, "ftask_x", false, &out), "不在引擎的目录里")
 }

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -38,6 +37,9 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 		},
 	})
 }
+
+// windowCheckName 是“本地窗口已载入”这一项检查的名字：恢复追赶据此区分“只是窗口没载入”与别的不通过项。
+const windowCheckName = "本地窗口"
 
 // taskChecks 缓存各任务最近一次检查的结果。没有检查过的任务算不通过：引擎启动后窗口载入、检查通过之前不出结果。
 type taskChecks struct {
@@ -103,16 +105,28 @@ func (r *Runtime) resumeStartedAt() time.Time {
 	return time.Time{}
 }
 
-// catchupPrecondition 返回追赶前置条件未满足的原因，满足时为空。追赶在写任何结果（推进水位、后台补算）之前都要满足：
-// 本次恢复开始之后目录至少成功同步过一次（返回已应用或未变化都算）。没有目录同步器的运行时（测试）不要求。
-// taskID 为空时按目录里的全部任务核对自定义算子模块。
+// catchupPrecondition 返回一个任务的追赶前置条件未满足的原因，满足时为空（见 catchupPreconditionFor）。
 func (r *Runtime) catchupPrecondition(taskID string) string {
+	var tasks []domain.EngineTask
+	if r.catalog != nil {
+		if set, lookup := r.catalog.SetByID(taskID); lookup == SetFound {
+			tasks = []domain.EngineTask{set}
+		}
+	}
+	return r.catchupPreconditionFor(tasks)
+}
+
+// catchupPreconditionFor 返回追赶前置条件未满足的原因，满足时为空。追赶在写任何结果（推进水位、后台补算）之前都要满足：
+// tasks 引用的自定义算子模块全部就绪，并且本次恢复开始之后目录至少成功同步过一次（返回已应用或未变化都算）。
+// 模块级恢复只核对参与本次追赶的任务（catchupMembers）：被排除的任务不计算，它用到的算子编译失败不挡放行。
+// 没有目录同步器的运行时（测试）不要求目录同步。
+func (r *Runtime) catchupPreconditionFor(tasks []domain.EngineTask) string {
 	started := r.resumeStartedAt()
 	if started.IsZero() {
 		return ""
 	}
-	// 追赶写结果之前，目录里引用的自定义算子模块必须全部就绪：不会拿旧版本、或还没编译好的版本计算。
-	if reason := r.catchupModulesPending(taskID); reason != "" {
+	// 追赶写结果之前，引用的自定义算子模块必须全部就绪：不会拿旧版本、或还没编译好的版本计算。
+	if reason := r.catchupModulesPending(tasks); reason != "" {
 		return reason
 	}
 	if r.syncer == nil {
@@ -125,17 +139,10 @@ func (r *Runtime) catchupPrecondition(taskID string) string {
 	return "等待本次恢复之后的目录同步（管理端不可达时会一直等待）"
 }
 
-// catchupModulesPending 返回恢复追赶时引用的自定义算子模块还没有全部就绪的原因，就绪或没有引用时为空。
-// taskID 为空时检查目录里全部任务（模块级恢复）。
-func (r *Runtime) catchupModulesPending(taskID string) string {
-	if r.udf == nil || r.catalog == nil {
+// catchupModulesPending 返回 tasks 引用的自定义算子模块还没有全部就绪的原因，就绪或没有引用时为空。
+func (r *Runtime) catchupModulesPending(tasks []domain.EngineTask) string {
+	if r.udf == nil {
 		return ""
-	}
-	var tasks []domain.EngineTask
-	if taskID == "" {
-		tasks = r.catalog.Sets()
-	} else if set, lookup := r.catalog.SetByID(taskID); lookup == SetFound {
-		tasks = []domain.EngineTask{set}
 	}
 	for _, ref := range refsOfTasks(tasks) {
 		if !r.udf.Ready(ref.hash) {
@@ -143,6 +150,43 @@ func (r *Runtime) catchupModulesPending(taskID string) string {
 		}
 	}
 	return ""
+}
+
+// catchupMembers 是参与本次恢复追赶的任务：除“本地窗口”之外还有不通过的检查项的任务不参与（本来就不计算，不挡放行，
+// 检查通过之后由连续水位从断点补算）。只是窗口没载入的任务照常参与（例如暂停期间引擎重启，载入记录只在内存里）：
+// 追赶会先同步本地数据，载入窗口并立即重查，在那之前报未追平。还没检查过的任务也参与，同步之后的重查决定它去留。
+// 变更日志断档按当时的状态直接判断（与“变更同步”检查同一个条件），不等下一次重查：断档的任务不能再建追赶目标、推进水位。
+func (r *Runtime) catchupMembers() []domain.EngineTask {
+	if r.catalog == nil {
+		return nil
+	}
+	var members []domain.EngineTask
+	for _, set := range r.catalog.Sets() {
+		checks, _ := r.checks.get(set.Set.TaskID)
+		if failsBeyondWindow(checks) || r.sourceBlocked(set) {
+			continue
+		}
+		members = append(members, set)
+	}
+	return members
+}
+
+// sourceBlocked 报告任务的数据源是否变更日志断档（与 blockedCheck 同一个条件）。
+func (r *Runtime) sourceBlocked(set domain.EngineTask) bool {
+	if r.data == nil {
+		return false
+	}
+	return r.data.Blocked(seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}) != nil
+}
+
+// failsBeyondWindow 报告检查结果里除“本地窗口”外还有没有不通过的项。
+func failsBeyondWindow(checks []domain.TaskCheck) bool {
+	for _, check := range checks {
+		if check.Status == domain.TaskCheckFail && check.Name != windowCheckName {
+			return true
+		}
+	}
+	return false
 }
 
 // writeGate 是后台写结果路径（补算作业、缺口恢复、失效重算）的门禁：实时计算或恢复追赶允许时才写。
@@ -240,9 +284,9 @@ func (r *Runtime) checkTask(ctx context.Context, taskID string) []domain.TaskChe
 	}
 	ready := r.preload.Ready(taskID)
 	if ready {
-		checks = append(checks, domain.TaskCheck{Name: "本地窗口", Status: domain.TaskCheckPass})
+		checks = append(checks, domain.TaskCheck{Name: windowCheckName, Status: domain.TaskCheckPass})
 	} else {
-		checks = append(checks, domain.TaskCheck{Name: "本地窗口", Status: domain.TaskCheckFail, Message: "窗口还没有载入完成", Remedy: "引擎会自动载入，载入完成后立即开始计算；长时间不完成时看引擎日志的 factor_preload_failed"})
+		checks = append(checks, domain.TaskCheck{Name: windowCheckName, Status: domain.TaskCheckFail, Message: "窗口还没有载入完成", Remedy: "引擎会自动载入，载入完成后立即开始计算；长时间不完成时看引擎日志的 factor_preload_failed"})
 	}
 	src := seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}
 	if ready {
@@ -296,15 +340,6 @@ func (r *Runtime) blockedCheck(src seriesstore.Source, taskID string) domain.Tas
 	}
 }
 
-// lifecycleRoutes 是挂在健康端口上的生命周期接口（状态与命令）。
-func (r *Runtime) lifecycleRoutes() []factorhealth.Route {
-	return []factorhealth.Route{
-		{Path: lifecycle.StatusPath, Handler: r.life.StatusHandler()},
-		{Path: lifecycle.CommandPath, Handler: r.life.CommandHandler()},
-		{Path: lifecycle.CatchupPath, Handler: r.life.CatchupHandler()},
-	}
-}
-
 // coverageCheck 检查每个标的的本地连续数据满足回看要求，或属于新标的（本地最早一根就是 Storage 的首根）；不满足的列出来并提示导入。
 func (r *Runtime) coverageCheck(ctx context.Context, src seriesstore.Source) domain.TaskCheck {
 	short, err := r.data.Coverage(ctx, src)
@@ -329,7 +364,7 @@ func (r *Runtime) lifecycleStatus() domain.EngineLifecycle {
 		return domain.EngineLifecycle{}
 	}
 	state := r.life.State()
-	out := domain.EngineLifecycle{Stage: string(state.Stage), QuiescedAt: state.QuiescedAt, Quiesced: state.Quiesced(), CatchupBlocked: r.catchupPrecondition("")}
+	out := domain.EngineLifecycle{Stage: string(state.Stage), QuiescedAt: state.QuiescedAt, Quiesced: state.Quiesced(), CatchupBlocked: r.catchupPreconditionFor(r.catchupMembers())}
 	if state.Pause != nil {
 		out.PausedSince = state.Pause.Since
 	}

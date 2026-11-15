@@ -127,9 +127,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":  {176, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "f6b30dbc4c2190fbb341c3491d04282bbf3cc295c4606eac15930fc243132e58"},
+		"control":  {182, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "44ae3fed88cd9b593a387ee5381f90da9750a4eeed7e85a10d2fccecac2369f0"},
 		"storage":  {65, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "4304606d48e8f9f3aa00d7da895c7fbf6058a9c512c60ff9518f148b091d7cef"},
-		"overseas": {62, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "837be852eff82d83bc4ba358878d370fca5ed894b37f8f0c19c06a500b327eb4"},
+		"overseas": {64, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "2a99e829e1d556006975d4b2e8f42b6651acf6a22df3438d11446fdf4cdba2ad"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -350,10 +350,14 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 			routes[route.ServicePath+"/"+route.Method] = route
 		}
 	}
-	if len(routes) != 17+4 {
-		t.Fatalf("archive-mgr routes = %d, want 21", len(routes))
+	// ArchiveMgr 19 个（含生命周期两个）、ArchiveWorker 4 个。
+	if len(routes) != 19+4 {
+		t.Fatalf("archive-mgr routes = %d, want 23", len(routes))
 	}
-	for _, method := range []string{"PrepareArchiveImport", "ImportArchiveFile", "ClearArchiveUnrecoverable"} {
+	if route := routes["trpc.moox.archive.ArchiveMgr/GetLifecycle"]; !slices.Equal(route.Callers, []string{"console", "moox-cli"}) || !route.ReadOnly {
+		t.Fatalf("GetLifecycle 给管理台与 moox-cli 读: %+v", route)
+	}
+	for _, method := range []string{"PrepareArchiveImport", "ImportArchiveFile", "ClearArchiveUnrecoverable", "ControlLifecycle"} {
 		if route := routes["trpc.moox.archive.ArchiveMgr/"+method]; !slices.Equal(route.Callers, []string{"moox-cli"}) || route.ReadOnly {
 			t.Fatalf("%s 只给 moox-cli: %+v", method, route)
 		}
@@ -546,25 +550,36 @@ func TestExternalProgramServiceRoutesThroughItsHostGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]int64{"OpenReplay": 600000, "StepReplay": 120000, "CloseReplay": 120000}
+	// 回放三个方法只给 strategy；生命周期、任务检查与本地写入只给 moox-cli。
+	type want struct {
+		timeout  int64
+		readOnly bool
+		caller   string
+	}
+	wants := map[string]want{
+		"OpenReplay": {600000, false, "strategy"}, "StepReplay": {120000, false, "strategy"}, "CloseReplay": {120000, false, "strategy"},
+		"GetLifecycle": {120000, true, "moox-cli"}, "ControlLifecycle": {120000, false, "moox-cli"}, "CheckTask": {120000, true, "moox-cli"},
+		"WriteSeries": {120000, false, "moox-cli"}, "GetSeriesFields": {120000, true, "moox-cli"}, "CheckSeriesSubject": {120000, true, "moox-cli"},
+		"GetSeriesBounds": {120000, true, "moox-cli"},
+	}
 	got := map[string]Route{}
 	for _, route := range factor.Routes {
 		if route.ServicePath == "trpc.moox.factor.EngineControl" {
 			got[route.Method] = route
 		}
 	}
-	if len(got) != len(want) {
+	if len(got) != len(wants) {
 		t.Fatalf("factor host EngineControl routes = %+v", got)
 	}
-	for method, timeout := range want {
+	for method, w := range wants {
 		route := got[method]
-		if route.ComponentID != "factor-engine" || route.Address != "127.0.0.1:11423" || route.TimeoutMS != timeout ||
-			route.MaxBodyBytes != DefaultMaxBodyBytes || route.ReadOnly || !slices.Equal(route.Callers, []string{"strategy"}) {
+		if route.ComponentID != "factor-engine" || route.Address != "127.0.0.1:11423" || route.TimeoutMS != w.timeout ||
+			route.MaxBodyBytes != DefaultMaxBodyBytes || route.ReadOnly != w.readOnly || !slices.Equal(route.Callers, []string{w.caller}) {
 			t.Fatalf("%s route = %+v", method, route)
 		}
 	}
-	if !slices.Contains(factor.VerificationCallers, "strategy") {
-		t.Fatalf("factor host must verify strategy: %v", factor.VerificationCallers)
+	if !slices.Contains(factor.VerificationCallers, "strategy") || !slices.Contains(factor.VerificationCallers, "moox-cli") {
+		t.Fatalf("factor host must verify strategy and moox-cli: %v", factor.VerificationCallers)
 	}
 	if !slices.Equal(factor.Directory.Services["trpc.moox.factor.EngineControl"], []string{"factor"}) {
 		t.Fatalf("directory = %v", factor.Directory.Services["trpc.moox.factor.EngineControl"])

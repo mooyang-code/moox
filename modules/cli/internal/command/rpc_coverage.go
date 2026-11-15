@@ -71,6 +71,13 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.monitor.MonitorMgr/GetAlertMute":              "monitor mute-status",
 	"trpc.moox.monitor.MonitorMgr/GetDoctorContext":          "doctor diagnose",
 
+	// 模块生命周期（设计 3.7）：管理台只读；暂停、恢复、放行只给命令行（见 cliOnlyCoverage）。
+	"trpc.moox.collector.CollectMgr/GetLifecycle":      "lifecycle status",
+	"trpc.moox.strategy.StrategyMgr/GetLifecycle":      "lifecycle status",
+	"trpc.moox.trade.TradeConsoleService/GetLifecycle": "lifecycle status",
+	"trpc.moox.factor.FactorMgr/GetLifecycle":          "lifecycle status",
+	"trpc.moox.archive.ArchiveMgr/GetLifecycle":        "lifecycle status",
+
 	"trpc.moox.storage.Metadata/AddTagMembers":    "metadata tag members",
 	"trpc.moox.storage.Metadata/RemoveTagMembers": "metadata tag members",
 	"trpc.moox.storage.PrimaryStore/UpsertFields": "import",
@@ -80,6 +87,20 @@ var handWrittenCoverage = map[string]string{
 var cliOnlyCoverage = map[string]string{
 	"trpc.moox.collector.CollectMgr/DeleteCloudFunctions": "collector function delete",
 	"trpc.moox.collector.CollectMgr/ProbeFunctionEgress":  "collector function probe-egress",
+
+	// 模块生命周期的写方法只给命令行：lifecycle 逐个模块，system 编排采集、因子引擎、策略、Trade。
+	"trpc.moox.collector.CollectMgr/ControlLifecycle":      "lifecycle pause",
+	"trpc.moox.strategy.StrategyMgr/ControlLifecycle":      "lifecycle pause",
+	"trpc.moox.trade.TradeConsoleService/ControlLifecycle": "lifecycle pause",
+	"trpc.moox.factor.FactorMgr/ControlLifecycle":          "lifecycle pause",
+	"trpc.moox.archive.ArchiveMgr/ControlLifecycle":        "lifecycle pause",
+	"trpc.moox.factor.EngineControl/GetLifecycle":          "lifecycle status",
+	"trpc.moox.factor.EngineControl/ControlLifecycle":      "lifecycle pause",
+	"trpc.moox.factor.EngineControl/CheckTask":             "factor task status",
+	"trpc.moox.factor.EngineControl/WriteSeries":           "import",
+	"trpc.moox.factor.EngineControl/GetSeriesFields":       "import",
+	"trpc.moox.factor.EngineControl/CheckSeriesSubject":    "import",
+	"trpc.moox.factor.EngineControl/GetSeriesBounds":       "import",
 }
 
 // consoleOnly 记录有意只留在管理台的接口及原因。

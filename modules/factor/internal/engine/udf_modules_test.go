@@ -237,6 +237,37 @@ func TestCatchupWaitsForModules(t *testing.T) {
 	}, 15*time.Second, 10*time.Millisecond, "模块就绪、检查通过的任务同步完本地数据后追平")
 }
 
+// 恢复追赶的前置条件只核对参与追赶的任务：一个任务引用的自定义算子拉取失败，它的检查不通过、被排除出追赶，
+// 不挡引擎放行；不引用它的任务照常追赶、追平。
+func TestExcludedTaskWithFailedModuleDoesNotBlockRelease(t *testing.T) {
+	wasm := exampleWasm(t, "ts_mean")
+	task, hash := udfTask(t, wasm)
+	f := &fakeFetcher{files: map[string][]byte{hash: wasm}}
+	f.fail.Store(true)
+	r, _ := newLifecycleRuntime(t)
+	startRunningModule(t, r)
+	r.udf = newModules(t, f)
+	_, err := r.catalog.Apply(CatalogSnapshot{Hash: "h-udf", Sets: []domain.EngineTask{task, engineTask("ftask_a", "dataset_a", true, "bias")}})
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.Error(t, r.udf.Ensure(ctx, hash, "ts_mean_udf"), "模块拉取失败")
+	r.refreshTaskChecks(ctx)
+	checks, _ := r.checks.get("ftask_u")
+	require.Equal(t, domain.TaskCheckFail, checkStatus(checks, "自定义算子模块"))
+
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause})
+	require.NoError(t, err)
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, ManualRelease: true})
+	require.NoError(t, err)
+	require.Empty(t, r.lifecycleStatus().CatchupBlocked, "被排除的任务用到的模块不算追赶前置条件")
+	require.Eventually(t, func() bool { return r.life.Settled(ctx).CaughtUp() }, 15*time.Second, 10*time.Millisecond)
+	require.False(t, r.catchupGate("ftask_u"), "被排除的任务不做追赶写")
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdRelease})
+	require.NoError(t, err)
+	require.True(t, r.gate("ftask_a"))
+	require.False(t, r.gate("ftask_u"))
+}
+
 // 补算领取：作业绑定的模块准备失败，作业报告失败、没有写任何分块；准备好后可以重新发起。
 func TestRecalcJobFailsWithoutWritingWhenModulesCannotBePrepared(t *testing.T) {
 	wasm := exampleWasm(t, "ts_mean")

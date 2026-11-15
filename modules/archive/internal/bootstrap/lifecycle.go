@@ -5,14 +5,14 @@ import (
 	"path/filepath"
 	"time"
 
-	archivehealth "github.com/mooyang-code/moox/modules/archive/internal/health"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report/logsink"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Archive 管理端的生命周期：只有模块级的暂停。暂停 = 不再调度新的归档运行（定时触发与定时维护跳过），
+// Archive 管理端的生命周期：只有模块级的暂停，不参与系统暂停（moox-cli lifecycle --module archive-mgr 经 ArchiveMgr 的
+// GetLifecycle、ControlLifecycle 操作）。暂停 = 不再调度新的归档运行（定时触发与定时维护跳过），
 // 已经在执行的运行由 worker 跑完；它没有要追赶的数据，恢复即放行。
 
 const lifecycleRefreshEvery = 30 * time.Second
@@ -38,14 +38,6 @@ func gated(life *lifecycle.Controller, name string, run func(context.Context) er
 			return nil
 		}
 		return run(ctx)
-	}
-}
-
-func lifecycleRoutes(c *lifecycle.Controller) []archivehealth.Route {
-	return []archivehealth.Route{
-		{Path: lifecycle.StatusPath, Handler: c.StatusHandler()},
-		{Path: lifecycle.CommandPath, Handler: c.CommandHandler()},
-		{Path: lifecycle.CatchupPath, Handler: c.CatchupHandler()},
 	}
 }
 

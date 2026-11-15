@@ -11763,7 +11763,7 @@ var file_trade_service_proto_rawDesc = []byte{
 	0x54, 0x41, 0x52, 0x47, 0x45, 0x54, 0x5f, 0x4c, 0x41, 0x4e, 0x45, 0x5f, 0x53, 0x54, 0x41, 0x54,
 	0x45, 0x5f, 0x42, 0x45, 0x4c, 0x4f, 0x57, 0x5f, 0x4c, 0x4f, 0x54, 0x10, 0x05, 0x12, 0x1d, 0x0a,
 	0x19, 0x54, 0x41, 0x52, 0x47, 0x45, 0x54, 0x5f, 0x4c, 0x41, 0x4e, 0x45, 0x5f, 0x53, 0x54, 0x41,
-	0x54, 0x45, 0x5f, 0x42, 0x4c, 0x4f, 0x43, 0x4b, 0x45, 0x44, 0x10, 0x06, 0x32, 0xee, 0x24, 0x0a,
+	0x54, 0x45, 0x5f, 0x42, 0x4c, 0x4f, 0x43, 0x4b, 0x45, 0x44, 0x10, 0x06, 0x32, 0xa6, 0x26, 0x0a,
 	0x13, 0x54, 0x72, 0x61, 0x64, 0x65, 0x43, 0x6f, 0x6e, 0x73, 0x6f, 0x6c, 0x65, 0x53, 0x65, 0x72,
 	0x76, 0x69, 0x63, 0x65, 0x12, 0x6a, 0x0a, 0x14, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x54, 0x72,
 	0x61, 0x64, 0x69, 0x6e, 0x67, 0x41, 0x63, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x28, 0x2e, 0x74,
@@ -12058,12 +12058,24 @@ var file_trade_service_proto_rawDesc = []byte{
 	0x73, 0x74, 0x4f, 0x70, 0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x41, 0x63, 0x74, 0x69, 0x6f, 0x6e,
 	0x73, 0x52, 0x65, 0x71, 0x1a, 0x27, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
 	0x2e, 0x74, 0x72, 0x61, 0x64, 0x65, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x4f, 0x70, 0x65, 0x72, 0x61,
-	0x74, 0x6f, 0x72, 0x41, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x52, 0x73, 0x70, 0x42, 0x43, 0x5a,
-	0x41, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79,
-	0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f,
-	0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x74, 0x72, 0x61, 0x64, 0x65, 0x2f, 0x70, 0x72, 0x6f, 0x74,
-	0x6f, 0x2f, 0x74, 0x72, 0x61, 0x64, 0x65, 0x67, 0x65, 0x6e, 0x3b, 0x74, 0x72, 0x61, 0x64, 0x65,
-	0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x74, 0x6f, 0x72, 0x41, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x52, 0x73, 0x70, 0x12, 0x54, 0x0a,
+	0x0c, 0x47, 0x65, 0x74, 0x4c, 0x69, 0x66, 0x65, 0x63, 0x79, 0x63, 0x6c, 0x65, 0x12, 0x21, 0x2e,
+	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e,
+	0x2e, 0x47, 0x65, 0x74, 0x4c, 0x69, 0x66, 0x65, 0x63, 0x79, 0x63, 0x6c, 0x65, 0x52, 0x65, 0x71,
+	0x1a, 0x21, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d,
+	0x6d, 0x6f, 0x6e, 0x2e, 0x47, 0x65, 0x74, 0x4c, 0x69, 0x66, 0x65, 0x63, 0x79, 0x63, 0x6c, 0x65,
+	0x52, 0x73, 0x70, 0x12, 0x60, 0x0a, 0x10, 0x43, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x4c, 0x69,
+	0x66, 0x65, 0x63, 0x79, 0x63, 0x6c, 0x65, 0x12, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d,
+	0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x43, 0x6f, 0x6e, 0x74, 0x72,
+	0x6f, 0x6c, 0x4c, 0x69, 0x66, 0x65, 0x63, 0x79, 0x63, 0x6c, 0x65, 0x52, 0x65, 0x71, 0x1a, 0x25,
+	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f,
+	0x6e, 0x2e, 0x43, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x4c, 0x69, 0x66, 0x65, 0x63, 0x79, 0x63,
+	0x6c, 0x65, 0x52, 0x73, 0x70, 0x42, 0x43, 0x5a, 0x41, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e,
+	0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65,
+	0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x74, 0x72,
+	0x61, 0x64, 0x65, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x74, 0x72, 0x61, 0x64, 0x65, 0x67,
+	0x65, 0x6e, 0x3b, 0x74, 0x72, 0x61, 0x64, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74,
+	0x6f, 0x33,
 }
 
 var (
@@ -12220,6 +12232,10 @@ var file_trade_service_proto_goTypes = []interface{}{
 	(*commonpb.RetInfo)(nil),                     // 136: trpc.moox.common.RetInfo
 	(*commonpb.Page)(nil),                        // 137: trpc.moox.common.Page
 	(*commonpb.PageResult)(nil),                  // 138: trpc.moox.common.PageResult
+	(*commonpb.GetLifecycleReq)(nil),             // 139: trpc.moox.common.GetLifecycleReq
+	(*commonpb.ControlLifecycleReq)(nil),         // 140: trpc.moox.common.ControlLifecycleReq
+	(*commonpb.GetLifecycleRsp)(nil),             // 141: trpc.moox.common.GetLifecycleRsp
+	(*commonpb.ControlLifecycleRsp)(nil),         // 142: trpc.moox.common.ControlLifecycleRsp
 }
 var file_trade_service_proto_depIdxs = []int32{
 	10,  // 0: trpc.moox.trade.TradingAccountSnapshot.balances:type_name -> trpc.moox.trade.AssetBalance
@@ -12446,53 +12462,57 @@ var file_trade_service_proto_depIdxs = []int32{
 	123, // 221: trpc.moox.trade.TradeConsoleService.FlattenInstrument:input_type -> trpc.moox.trade.FlattenInstrumentReq
 	126, // 222: trpc.moox.trade.TradeConsoleService.SummarizeAccountPnl:input_type -> trpc.moox.trade.SummarizeAccountPnlReq
 	128, // 223: trpc.moox.trade.TradeConsoleService.ListOperatorActions:input_type -> trpc.moox.trade.ListOperatorActionsReq
-	27,  // 224: trpc.moox.trade.TradeConsoleService.CreateTradingAccount:output_type -> trpc.moox.trade.CreateTradingAccountRsp
-	29,  // 225: trpc.moox.trade.TradeConsoleService.UpdateTradingAccount:output_type -> trpc.moox.trade.UpdateTradingAccountRsp
-	39,  // 226: trpc.moox.trade.TradeConsoleService.GetTradingAccount:output_type -> trpc.moox.trade.GetTradingAccountRsp
-	41,  // 227: trpc.moox.trade.TradeConsoleService.ListTradingAccounts:output_type -> trpc.moox.trade.ListTradingAccountsRsp
-	43,  // 228: trpc.moox.trade.TradeConsoleService.SetLeverage:output_type -> trpc.moox.trade.SetLeverageRsp
-	45,  // 229: trpc.moox.trade.TradeConsoleService.SyncTradingAccount:output_type -> trpc.moox.trade.SyncTradingAccountRsp
-	33,  // 230: trpc.moox.trade.TradeConsoleService.InspectExchangeCredential:output_type -> trpc.moox.trade.InspectExchangeCredentialRsp
-	35,  // 231: trpc.moox.trade.TradeConsoleService.ReinspectTradingAccount:output_type -> trpc.moox.trade.ReinspectTradingAccountRsp
-	37,  // 232: trpc.moox.trade.TradeConsoleService.ResolveWalletTransfer:output_type -> trpc.moox.trade.ResolveWalletTransferRsp
-	47,  // 233: trpc.moox.trade.TradeConsoleService.CreateLogicalAccount:output_type -> trpc.moox.trade.CreateLogicalAccountRsp
-	49,  // 234: trpc.moox.trade.TradeConsoleService.GetLogicalAccount:output_type -> trpc.moox.trade.GetLogicalAccountRsp
-	51,  // 235: trpc.moox.trade.TradeConsoleService.ListLogicalAccounts:output_type -> trpc.moox.trade.ListLogicalAccountsRsp
-	53,  // 236: trpc.moox.trade.TradeConsoleService.UpdateLogicalAccount:output_type -> trpc.moox.trade.UpdateLogicalAccountRsp
-	55,  // 237: trpc.moox.trade.TradeConsoleService.UpdateLogicalAccountOrderSettings:output_type -> trpc.moox.trade.UpdateLogicalAccountOrderSettingsRsp
-	57,  // 238: trpc.moox.trade.TradeConsoleService.UpdateLogicalAccountFundSettings:output_type -> trpc.moox.trade.UpdateLogicalAccountFundSettingsRsp
-	59,  // 239: trpc.moox.trade.TradeConsoleService.AddLogicalAccountMember:output_type -> trpc.moox.trade.AddLogicalAccountMemberRsp
-	61,  // 240: trpc.moox.trade.TradeConsoleService.RemoveLogicalAccountMember:output_type -> trpc.moox.trade.RemoveLogicalAccountMemberRsp
-	63,  // 241: trpc.moox.trade.TradeConsoleService.CloseTargetSession:output_type -> trpc.moox.trade.CloseTargetSessionRsp
-	65,  // 242: trpc.moox.trade.TradeConsoleService.PauseLogicalAccount:output_type -> trpc.moox.trade.PauseLogicalAccountRsp
-	67,  // 243: trpc.moox.trade.TradeConsoleService.ResumeLogicalAccount:output_type -> trpc.moox.trade.ResumeLogicalAccountRsp
-	69,  // 244: trpc.moox.trade.TradeConsoleService.FlattenLogicalAccount:output_type -> trpc.moox.trade.FlattenLogicalAccountRsp
-	73,  // 245: trpc.moox.trade.TradeConsoleService.SubmitOrder:output_type -> trpc.moox.trade.SubmitOrderRsp
-	75,  // 246: trpc.moox.trade.TradeConsoleService.CancelOrder:output_type -> trpc.moox.trade.CancelOrderRsp
-	77,  // 247: trpc.moox.trade.TradeConsoleService.GetOperatorAction:output_type -> trpc.moox.trade.GetOperatorActionRsp
-	80,  // 248: trpc.moox.trade.TradeConsoleService.GetLogicalAccountTarget:output_type -> trpc.moox.trade.GetLogicalAccountTargetRsp
-	84,  // 249: trpc.moox.trade.TradeConsoleService.ListShadowTargets:output_type -> trpc.moox.trade.ListShadowTargetsRsp
-	86,  // 250: trpc.moox.trade.TradeConsoleService.GetOrder:output_type -> trpc.moox.trade.GetOrderRsp
-	88,  // 251: trpc.moox.trade.TradeConsoleService.ListOrders:output_type -> trpc.moox.trade.ListOrdersRsp
-	90,  // 252: trpc.moox.trade.TradeConsoleService.ListFills:output_type -> trpc.moox.trade.ListFillsRsp
-	92,  // 253: trpc.moox.trade.TradeConsoleService.ListPositions:output_type -> trpc.moox.trade.ListPositionsRsp
-	94,  // 254: trpc.moox.trade.TradeConsoleService.CreatePaperSimulation:output_type -> trpc.moox.trade.CreatePaperSimulationRsp
-	96,  // 255: trpc.moox.trade.TradeConsoleService.ClosePaperSimulation:output_type -> trpc.moox.trade.ClosePaperSimulationRsp
-	99,  // 256: trpc.moox.trade.TradeConsoleService.GetExecutionCapabilities:output_type -> trpc.moox.trade.GetExecutionCapabilitiesRsp
-	102, // 257: trpc.moox.trade.TradeConsoleService.ListTradableInstruments:output_type -> trpc.moox.trade.ListTradableInstrumentsRsp
-	105, // 258: trpc.moox.trade.TradeConsoleService.QueryEquityCurve:output_type -> trpc.moox.trade.QueryEquityCurveRsp
-	108, // 259: trpc.moox.trade.TradeConsoleService.ListHoldings:output_type -> trpc.moox.trade.ListHoldingsRsp
-	111, // 260: trpc.moox.trade.TradeConsoleService.ListAccountLedger:output_type -> trpc.moox.trade.ListAccountLedgerRsp
-	71,  // 261: trpc.moox.trade.TradeConsoleService.FlattenTradingAccount:output_type -> trpc.moox.trade.FlattenTradingAccountRsp
-	113, // 262: trpc.moox.trade.TradeConsoleService.BlockInstrument:output_type -> trpc.moox.trade.BlockInstrumentRsp
-	115, // 263: trpc.moox.trade.TradeConsoleService.UnblockInstrument:output_type -> trpc.moox.trade.UnblockInstrumentRsp
-	118, // 264: trpc.moox.trade.TradeConsoleService.ListBlockedInstruments:output_type -> trpc.moox.trade.ListBlockedInstrumentsRsp
-	122, // 265: trpc.moox.trade.TradeConsoleService.ListInstrumentHolders:output_type -> trpc.moox.trade.ListInstrumentHoldersRsp
-	124, // 266: trpc.moox.trade.TradeConsoleService.FlattenInstrument:output_type -> trpc.moox.trade.FlattenInstrumentRsp
-	127, // 267: trpc.moox.trade.TradeConsoleService.SummarizeAccountPnl:output_type -> trpc.moox.trade.SummarizeAccountPnlRsp
-	129, // 268: trpc.moox.trade.TradeConsoleService.ListOperatorActions:output_type -> trpc.moox.trade.ListOperatorActionsRsp
-	224, // [224:269] is the sub-list for method output_type
-	179, // [179:224] is the sub-list for method input_type
+	139, // 224: trpc.moox.trade.TradeConsoleService.GetLifecycle:input_type -> trpc.moox.common.GetLifecycleReq
+	140, // 225: trpc.moox.trade.TradeConsoleService.ControlLifecycle:input_type -> trpc.moox.common.ControlLifecycleReq
+	27,  // 226: trpc.moox.trade.TradeConsoleService.CreateTradingAccount:output_type -> trpc.moox.trade.CreateTradingAccountRsp
+	29,  // 227: trpc.moox.trade.TradeConsoleService.UpdateTradingAccount:output_type -> trpc.moox.trade.UpdateTradingAccountRsp
+	39,  // 228: trpc.moox.trade.TradeConsoleService.GetTradingAccount:output_type -> trpc.moox.trade.GetTradingAccountRsp
+	41,  // 229: trpc.moox.trade.TradeConsoleService.ListTradingAccounts:output_type -> trpc.moox.trade.ListTradingAccountsRsp
+	43,  // 230: trpc.moox.trade.TradeConsoleService.SetLeverage:output_type -> trpc.moox.trade.SetLeverageRsp
+	45,  // 231: trpc.moox.trade.TradeConsoleService.SyncTradingAccount:output_type -> trpc.moox.trade.SyncTradingAccountRsp
+	33,  // 232: trpc.moox.trade.TradeConsoleService.InspectExchangeCredential:output_type -> trpc.moox.trade.InspectExchangeCredentialRsp
+	35,  // 233: trpc.moox.trade.TradeConsoleService.ReinspectTradingAccount:output_type -> trpc.moox.trade.ReinspectTradingAccountRsp
+	37,  // 234: trpc.moox.trade.TradeConsoleService.ResolveWalletTransfer:output_type -> trpc.moox.trade.ResolveWalletTransferRsp
+	47,  // 235: trpc.moox.trade.TradeConsoleService.CreateLogicalAccount:output_type -> trpc.moox.trade.CreateLogicalAccountRsp
+	49,  // 236: trpc.moox.trade.TradeConsoleService.GetLogicalAccount:output_type -> trpc.moox.trade.GetLogicalAccountRsp
+	51,  // 237: trpc.moox.trade.TradeConsoleService.ListLogicalAccounts:output_type -> trpc.moox.trade.ListLogicalAccountsRsp
+	53,  // 238: trpc.moox.trade.TradeConsoleService.UpdateLogicalAccount:output_type -> trpc.moox.trade.UpdateLogicalAccountRsp
+	55,  // 239: trpc.moox.trade.TradeConsoleService.UpdateLogicalAccountOrderSettings:output_type -> trpc.moox.trade.UpdateLogicalAccountOrderSettingsRsp
+	57,  // 240: trpc.moox.trade.TradeConsoleService.UpdateLogicalAccountFundSettings:output_type -> trpc.moox.trade.UpdateLogicalAccountFundSettingsRsp
+	59,  // 241: trpc.moox.trade.TradeConsoleService.AddLogicalAccountMember:output_type -> trpc.moox.trade.AddLogicalAccountMemberRsp
+	61,  // 242: trpc.moox.trade.TradeConsoleService.RemoveLogicalAccountMember:output_type -> trpc.moox.trade.RemoveLogicalAccountMemberRsp
+	63,  // 243: trpc.moox.trade.TradeConsoleService.CloseTargetSession:output_type -> trpc.moox.trade.CloseTargetSessionRsp
+	65,  // 244: trpc.moox.trade.TradeConsoleService.PauseLogicalAccount:output_type -> trpc.moox.trade.PauseLogicalAccountRsp
+	67,  // 245: trpc.moox.trade.TradeConsoleService.ResumeLogicalAccount:output_type -> trpc.moox.trade.ResumeLogicalAccountRsp
+	69,  // 246: trpc.moox.trade.TradeConsoleService.FlattenLogicalAccount:output_type -> trpc.moox.trade.FlattenLogicalAccountRsp
+	73,  // 247: trpc.moox.trade.TradeConsoleService.SubmitOrder:output_type -> trpc.moox.trade.SubmitOrderRsp
+	75,  // 248: trpc.moox.trade.TradeConsoleService.CancelOrder:output_type -> trpc.moox.trade.CancelOrderRsp
+	77,  // 249: trpc.moox.trade.TradeConsoleService.GetOperatorAction:output_type -> trpc.moox.trade.GetOperatorActionRsp
+	80,  // 250: trpc.moox.trade.TradeConsoleService.GetLogicalAccountTarget:output_type -> trpc.moox.trade.GetLogicalAccountTargetRsp
+	84,  // 251: trpc.moox.trade.TradeConsoleService.ListShadowTargets:output_type -> trpc.moox.trade.ListShadowTargetsRsp
+	86,  // 252: trpc.moox.trade.TradeConsoleService.GetOrder:output_type -> trpc.moox.trade.GetOrderRsp
+	88,  // 253: trpc.moox.trade.TradeConsoleService.ListOrders:output_type -> trpc.moox.trade.ListOrdersRsp
+	90,  // 254: trpc.moox.trade.TradeConsoleService.ListFills:output_type -> trpc.moox.trade.ListFillsRsp
+	92,  // 255: trpc.moox.trade.TradeConsoleService.ListPositions:output_type -> trpc.moox.trade.ListPositionsRsp
+	94,  // 256: trpc.moox.trade.TradeConsoleService.CreatePaperSimulation:output_type -> trpc.moox.trade.CreatePaperSimulationRsp
+	96,  // 257: trpc.moox.trade.TradeConsoleService.ClosePaperSimulation:output_type -> trpc.moox.trade.ClosePaperSimulationRsp
+	99,  // 258: trpc.moox.trade.TradeConsoleService.GetExecutionCapabilities:output_type -> trpc.moox.trade.GetExecutionCapabilitiesRsp
+	102, // 259: trpc.moox.trade.TradeConsoleService.ListTradableInstruments:output_type -> trpc.moox.trade.ListTradableInstrumentsRsp
+	105, // 260: trpc.moox.trade.TradeConsoleService.QueryEquityCurve:output_type -> trpc.moox.trade.QueryEquityCurveRsp
+	108, // 261: trpc.moox.trade.TradeConsoleService.ListHoldings:output_type -> trpc.moox.trade.ListHoldingsRsp
+	111, // 262: trpc.moox.trade.TradeConsoleService.ListAccountLedger:output_type -> trpc.moox.trade.ListAccountLedgerRsp
+	71,  // 263: trpc.moox.trade.TradeConsoleService.FlattenTradingAccount:output_type -> trpc.moox.trade.FlattenTradingAccountRsp
+	113, // 264: trpc.moox.trade.TradeConsoleService.BlockInstrument:output_type -> trpc.moox.trade.BlockInstrumentRsp
+	115, // 265: trpc.moox.trade.TradeConsoleService.UnblockInstrument:output_type -> trpc.moox.trade.UnblockInstrumentRsp
+	118, // 266: trpc.moox.trade.TradeConsoleService.ListBlockedInstruments:output_type -> trpc.moox.trade.ListBlockedInstrumentsRsp
+	122, // 267: trpc.moox.trade.TradeConsoleService.ListInstrumentHolders:output_type -> trpc.moox.trade.ListInstrumentHoldersRsp
+	124, // 268: trpc.moox.trade.TradeConsoleService.FlattenInstrument:output_type -> trpc.moox.trade.FlattenInstrumentRsp
+	127, // 269: trpc.moox.trade.TradeConsoleService.SummarizeAccountPnl:output_type -> trpc.moox.trade.SummarizeAccountPnlRsp
+	129, // 270: trpc.moox.trade.TradeConsoleService.ListOperatorActions:output_type -> trpc.moox.trade.ListOperatorActionsRsp
+	141, // 271: trpc.moox.trade.TradeConsoleService.GetLifecycle:output_type -> trpc.moox.common.GetLifecycleRsp
+	142, // 272: trpc.moox.trade.TradeConsoleService.ControlLifecycle:output_type -> trpc.moox.common.ControlLifecycleRsp
+	226, // [226:273] is the sub-list for method output_type
+	179, // [179:226] is the sub-list for method input_type
 	179, // [179:179] is the sub-list for extension type_name
 	179, // [179:179] is the sub-list for extension extendee
 	0,   // [0:179] is the sub-list for field type_name

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -20,7 +19,8 @@ import (
 //	③ 连续水位追赶：复用现有的追赶循环（Advance 在追赶门禁下放行），补算暂停区间每个周期的因子并发布历史结果；
 //	④ 追平：连续水位追到目标并且没有阻塞。
 //
-// 变更日志断档（暂停超过保留期或 Storage 身份变化）时增量同步无法追上，报告阻塞原因，需要离线维护（reconcile / backfill）。
+// 变更日志断档（暂停超过保留期或 Storage 身份变化）时增量同步无法追上：任务检查的“变更同步”一项不通过，任务被排除出追赶、
+// 不再计算，需要离线维护（reconcile / backfill）。
 
 // catchupGrace 是追赶目标之前留的宽限：最新一根刚收盘时采集还在路上，不把它算进追赶目标，避免一直追不平。
 const catchupGraceMax = time.Minute
@@ -76,23 +76,24 @@ func (t *catchupTracker) drop(taskID string) {
 	delete(t.jobs, taskID)
 }
 
-// catchupHook 是生命周期的 Catchup 钩子：引擎是活动引擎、满足追赶前置条件（本次恢复之后目录同步成功、引用的自定义算子模块全部就绪），
-// 并且检查通过的任务都追平，才算追平。检查没通过的任务本来就不计算，不参与本次追赶、也不挡住放行；检查通过之后由连续水位从断点补算。
+// catchupHook 是生命周期的 Catchup 钩子：引擎是活动引擎、满足追赶前置条件（本次恢复之后目录同步成功、参与追赶的任务引用的
+// 自定义算子模块全部就绪），并且参与追赶的任务都追平，才算追平。参与者见 catchupMembers：除本地窗口外还有不通过项的任务
+// 本来就不计算，不参与本次追赶、也不挡住引擎放行（检查通过之后由连续水位从断点补算）；只是窗口没载入的任务照常参与，
+// 由 catchupSet 先载入窗口，载入并重查通过之前报未追平。
 func (r *Runtime) catchupHook(ctx context.Context, since time.Time) (lifecycle.Catchup, error) {
 	out := lifecycle.Catchup{Since: since, CaughtUp: true}
 	if !r.active() {
 		out.CaughtUp, out.BlockedBy, out.Message = false, "引擎", "因子目录还没有载入，或另一个引擎持有租约"
 		return out, nil
 	}
-	if reason := r.catchupPrecondition(""); reason != "" {
+	members := r.catchupMembers()
+	if reason := r.catchupPreconditionFor(members); reason != "" {
 		out.CaughtUp, out.BlockedBy, out.Message = false, "追赶前置条件", reason
 		return out, nil
 	}
 	now := time.Now().UTC()
-	for _, taskID := range r.catalog.TaskIDs() {
-		if !r.taskReady(taskID) {
-			continue
-		}
+	for _, set := range members {
+		taskID := set.Set.TaskID
 		cu := r.catchupSet(ctx, taskID, since, now)
 		out.Done += cu.Done
 		out.Total += cu.Total
@@ -131,14 +132,9 @@ func (r *Runtime) catchupSet(ctx context.Context, taskID string, since, now time
 		out.Message = reason
 		return out
 	}
-	src := seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}
-	if err := r.data.Blocked(src); err != nil {
-		out.BlockedBy = "变更日志断档"
-		out.Message = err.Error() + "：增量同步追不上，需要离线维护（moox-factor-engine reconcile / backfill）"
-		return out
-	}
+	// 变更日志断档不在这里判断：catchupHook 只对参与者调用这里，断档的任务已被 catchupMembers 排除。
 
-	// ① 本地数据同步：每次恢复只做一次，放在后台，进度由 job 状态报告。
+	// ① 本地数据同步：每次恢复只做一次，放在后台，进度由 job 状态报告；同步会载入窗口并立即重查任务。
 	job := r.catchups.get(taskID, since)
 	if job == nil {
 		job = &catchupJob{since: since, state: "syncing"}

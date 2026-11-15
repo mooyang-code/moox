@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/schedule"
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/codec"
 )
 
@@ -57,6 +58,8 @@ type Service struct {
 	collector CollectorFrequencies
 	now       func() time.Time
 	avoid     avoidanceState
+	// life 是模块的生命周期控制器：ArchiveMgr 的 GetLifecycle、ControlLifecycle 转给它（见 lifecycle.go）。
+	life *lifecycle.Controller
 
 	mu          sync.Mutex
 	lastRefresh time.Time
@@ -69,6 +72,9 @@ type Option func(*Service)
 
 // WithClock 替换时钟，测试使用。
 func WithClock(now func() time.Time) Option { return func(s *Service) { s.now = now } }
+
+// WithLifecycle 设置模块的生命周期控制器；不设置时 GetLifecycle、ControlLifecycle 回答“还没有就绪”。
+func WithLifecycle(life *lifecycle.Controller) Option { return func(s *Service) { s.life = life } }
 
 // New 构造服务。
 func New(db *store.Store, cfg *config.Config, datasets DatasetProvider, opts ...Option) (*Service, error) {

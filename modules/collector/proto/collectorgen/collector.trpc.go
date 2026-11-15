@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	_ "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -246,6 +247,11 @@ type CollectMgrService interface {
 	DeleteCloudFunctions(ctx context.Context, req *DeleteCloudFunctionsReq) (*DeleteCloudFunctionsRsp, error)
 	// ProbeFunctionEgress ProbeFunctionEgress 取已生效计划里各采集函数此刻的公网出口 IP（只调用函数，不改云上状态）。
 	ProbeFunctionEgress(ctx context.Context, req *ProbeFunctionEgressReq) (*ProbeFunctionEgressRsp, error)
+	// GetLifecycle ----- 模块生命周期（设计 3.7，请求与响应见 moox_common.proto）-----
+	//  GetLifecycle 读采集模块的暂停与恢复追赶状态（追赶进度是暂停区间的补采）。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复与放行采集模块：暂停要等每个空间的 SCF 定时器停用确认、在途补采分块结束（最长 5 分钟）。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error)
 }
 
 func CollectMgrService_GetTaskList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -1094,6 +1100,42 @@ func CollectMgrService_ProbeFunctionEgress_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
+func CollectMgrService_GetLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.GetLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).GetLifecycle(ctx, reqbody.(*commonpb.GetLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ControlLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.ControlLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ControlLifecycle(ctx, reqbody.(*commonpb.ControlLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -1286,6 +1328,14 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/ProbeFunctionEgress",
 			Func: CollectMgrService_ProbeFunctionEgress_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/GetLifecycle",
+			Func: CollectMgrService_GetLifecycle_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ControlLifecycle",
+			Func: CollectMgrService_ControlLifecycle_Handler,
 		},
 	},
 }
@@ -1488,6 +1538,18 @@ func (s *UnimplementedCollectMgr) DeleteCloudFunctions(ctx context.Context, req 
 // ProbeFunctionEgress ProbeFunctionEgress 取已生效计划里各采集函数此刻的公网出口 IP（只调用函数，不改云上状态）。
 func (s *UnimplementedCollectMgr) ProbeFunctionEgress(ctx context.Context, req *ProbeFunctionEgressReq) (*ProbeFunctionEgressRsp, error) {
 	return nil, errors.New("rpc ProbeFunctionEgress of service CollectMgr is not implemented")
+}
+
+// GetLifecycle ----- 模块生命周期（设计 3.7，请求与响应见 moox_common.proto）-----
+//
+//	GetLifecycle 读采集模块的暂停与恢复追赶状态（追赶进度是暂停区间的补采）。
+func (s *UnimplementedCollectMgr) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error) {
+	return nil, errors.New("rpc GetLifecycle of service CollectMgr is not implemented")
+}
+
+// ControlLifecycle ControlLifecycle 暂停、恢复与放行采集模块：暂停要等每个空间的 SCF 定时器停用确认、在途补采分块结束（最长 5 分钟）。
+func (s *UnimplementedCollectMgr) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error) {
+	return nil, errors.New("rpc ControlLifecycle of service CollectMgr is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -1705,6 +1767,11 @@ type CollectMgrClientProxy interface {
 	DeleteCloudFunctions(ctx context.Context, req *DeleteCloudFunctionsReq, opts ...client.Option) (rsp *DeleteCloudFunctionsRsp, err error)
 	// ProbeFunctionEgress ProbeFunctionEgress 取已生效计划里各采集函数此刻的公网出口 IP（只调用函数，不改云上状态）。
 	ProbeFunctionEgress(ctx context.Context, req *ProbeFunctionEgressReq, opts ...client.Option) (rsp *ProbeFunctionEgressRsp, err error)
+	// GetLifecycle ----- 模块生命周期（设计 3.7，请求与响应见 moox_common.proto）-----
+	//  GetLifecycle 读采集模块的暂停与恢复追赶状态（追赶进度是暂停区间的补采）。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (rsp *commonpb.GetLifecycleRsp, err error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复与放行采集模块：暂停要等每个空间的 SCF 定时器停用确认、在途补采分块结束（最长 5 分钟）。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (rsp *commonpb.ControlLifecycleRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -2650,6 +2717,46 @@ func (c *CollectMgrClientProxyImpl) ProbeFunctionEgress(ctx context.Context, req
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ProbeFunctionEgressRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (*commonpb.GetLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetLifecycle")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("GetLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.GetLifecycleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (*commonpb.ControlLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ControlLifecycle")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ControlLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.ControlLifecycleRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

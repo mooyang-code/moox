@@ -568,9 +568,10 @@ func TestPerMarketFetchYAMLIsStrictlyParsed(t *testing.T) {
 	require.Error(t, err)
 }
 
-// 暂停要等在途补采分块结束、SCF 定时器停用确认（最长 collectorQuiesceTimeout），健康端口的请求时限必须大于它，
-// 否则线上会出现「已暂停，但在途操作没有结束」（请求在 3 秒时被截断，门禁已关、确认没做完）。
-func TestCollectorHealthRequestTimeoutCoversPauseQuiesce(t *testing.T) {
+// 暂停要等在途补采分块结束、SCF 定时器停用确认（最长 collectorQuiesceTimeout）：ControlLifecycle 在 CollectMgr 上，
+// 它的服务端请求时限必须大于收敛时限，否则线上会出现「已暂停，但在途操作没有结束」（请求先被截断，门禁已关、确认没做完）。
+// 路由超时与服务端超时的对齐由 servicecatalog 的 TestLifecycleMethodsAndTimeoutsCoverQuiesce 核对。
+func TestCollectMgrRequestTimeoutCoversPauseQuiesce(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "trpc_go.yaml"))
 	require.NoError(t, err)
 	var config struct {
@@ -583,12 +584,12 @@ func TestCollectorHealthRequestTimeoutCoversPauseQuiesce(t *testing.T) {
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &config))
 	for _, service := range config.Server.Service {
-		if service.Name == "trpc.moox.collector.Health" {
+		if service.Name == "trpc.moox.collector.CollectMgr" {
 			require.Greater(t, time.Duration(service.Timeout)*time.Millisecond, collectorQuiesceTimeout)
 			return
 		}
 	}
-	t.Fatal("没有找到 trpc.moox.collector.Health 服务")
+	t.Fatal("没有找到 trpc.moox.collector.CollectMgr 服务")
 }
 
 // 空间固定了 symbols_per_function 时不再估算；auto_size 只写部分字段时其余沿用默认值。

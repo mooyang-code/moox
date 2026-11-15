@@ -185,11 +185,12 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if strategyMgr == nil {
 		return nil, nil, errors.New("缺少 tRPC 服务 trpc.moox.strategy.StrategyMgr")
 	}
+	service.Lifecycle = life
 	strategypb.RegisterStrategyMgrService(strategyMgr, service)
 	healthState := health.New("strategy", "strategy", "", "")
 	healthState.SnapshotFunc = withLifecycle(strategyHealthSnapshot(db, eventRuntime, healthState, consumer), life)
 	healthState.SetReady(true)
-	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState, lifecycleRoutes(life)...); err != nil {
+	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState); err != nil {
 		return nil, nil, fmt.Errorf("注册策略健康检查失败：%w", err)
 	}
 	keep = true

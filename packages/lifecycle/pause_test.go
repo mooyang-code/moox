@@ -1,12 +1,8 @@
 package lifecycle
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -95,14 +91,14 @@ func TestManualReleaseWaitsForBarrier(t *testing.T) {
 	var denied *ErrNotAllowed
 	_, err = c.Execute(ctx, Request{Command: CmdRelease})
 	require.ErrorAs(t, err, &denied, "没追平不能放行")
-	require.False(t, c.CatchupReport(ctx).CaughtUp)
+	require.False(t, c.Settled(ctx).CaughtUp())
 
 	f.setCaught(true)
 	c.Refresh(ctx)
 	require.Equal(t, StageResuming, c.Stage(), "追平但设为手动放行：停在待放行")
-	rep := c.CatchupReport(ctx)
-	require.True(t, rep.Resuming)
-	require.True(t, rep.CaughtUp)
+	rep := c.Settled(ctx)
+	require.Equal(t, StageResuming, rep.Stage)
+	require.True(t, rep.CaughtUp())
 
 	state, err := c.Execute(ctx, Request{Command: CmdRelease})
 	require.NoError(t, err)
@@ -111,9 +107,9 @@ func TestManualReleaseWaitsForBarrier(t *testing.T) {
 
 	_, err = c.Execute(ctx, Request{Command: CmdRelease})
 	require.ErrorAs(t, err, &denied, "已经放行")
-	rep = c.CatchupReport(ctx)
-	require.False(t, rep.Resuming)
-	require.True(t, rep.CaughtUp)
+	rep = c.Settled(ctx)
+	require.Equal(t, StageRunning, rep.Stage)
+	require.True(t, rep.CaughtUp())
 }
 
 // 放行前再核一次：待放行期间又出现缺口（追赶进度回退），release 被拒绝。
@@ -284,16 +280,6 @@ func TestPauseExpiresAutoResumes(t *testing.T) {
 	require.True(t, c.Running(), "追平后自动放行")
 }
 
-// 没有到期时间的命令请求不带 expires_at：模块按已知字段严格解析请求，多一个字段就返回 400。
-func TestCommandRequestOmitsZeroExpiry(t *testing.T) {
-	raw, err := json.Marshal(CommandRequest{Command: CmdPause, PauseKind: PauseSystem, By: "ops"})
-	require.NoError(t, err)
-	require.NotContains(t, string(raw), "expires_at")
-	raw, err = json.Marshal(CommandRequest{Command: CmdPause, ExpiresAt: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)})
-	require.NoError(t, err)
-	require.Contains(t, string(raw), "expires_at")
-}
-
 // 暂停、恢复命令成功后各记一条审计事件，带模块、暂停类型、操作者与原因；被拒绝的命令不记。
 func TestPauseAndResumeAuditEvents(t *testing.T) {
 	var mu sync.Mutex
@@ -319,38 +305,4 @@ func TestPauseAndResumeAuditEvents(t *testing.T) {
 		`lifecycle_pause module=factor-engine kind=system by=cli:ops reason="切换行情源"`,
 		`lifecycle_resume module=factor-engine kind=system by=cli:ops reason=""`,
 	}, events)
-}
-
-func TestHTTPPauseKindAndCatchup(t *testing.T) {
-	c := newController(t, &fakeModule{}, "")
-	mux := http.NewServeMux()
-	mux.Handle(CommandPath, c.CommandHandler())
-	mux.Handle(CatchupPath, c.CatchupHandler())
-	post := func(body any) (int, State) {
-		raw, _ := json.Marshal(body)
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, CommandPath, bytes.NewReader(raw)))
-		var state State
-		_ = json.Unmarshal(rec.Body.Bytes(), &state)
-		return rec.Code, state
-	}
-	code, state := post(CommandRequest{Command: CmdPause, PauseKind: PauseSystem, Reason: "测试", By: "cli:ops"})
-	require.Equal(t, http.StatusOK, code)
-	require.Equal(t, PauseSystem, state.Pause.Kind)
-	require.Equal(t, "cli:ops", state.Pause.By)
-
-	code, state = post(CommandRequest{Command: CmdResume, ManualRelease: true})
-	require.Equal(t, http.StatusOK, code)
-	require.Equal(t, StageResuming, state.Stage)
-
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, CatchupPath, nil))
-	var rep CatchupReport
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rep))
-	require.True(t, rep.Resuming)
-	require.False(t, rep.CaughtUp)
-	require.Equal(t, int64(10), rep.State.Catchup.Total)
-
-	code, _ = post(CommandRequest{Command: CmdRelease})
-	require.Equal(t, http.StatusConflict, code, "没追平不能放行")
 }

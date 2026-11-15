@@ -27,6 +27,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/rs/xid"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
@@ -70,6 +71,7 @@ type Service struct {
 	activity                activityLogger
 	delistRegistrar         DelistRegistrar
 	cloud                   CloudDeps
+	life                    *lifecycle.Controller
 }
 
 // ctxMutex 是可响应 context 取消的互斥锁：等待者超时或被取消后立即返回，而不是一直排队。

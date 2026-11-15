@@ -15,6 +15,7 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorexpr"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"gorm.io/gorm"
 )
 
@@ -115,6 +116,11 @@ func (s *Service) mutationAllowed() error {
 	return s.mutationGate()
 }
 
+// WithLifecycle 设置模块的生命周期控制器（GetLifecycle、ControlLifecycle 转给它）；不设置时两个方法回答“还没有就绪”。
+func WithLifecycle(life *lifecycle.Controller) ServiceOption {
+	return func(s *Service) { s.life = life }
+}
+
 // WithPreviewer 启用 PreviewFactor；不设置时该接口返回错误。
 func WithPreviewer(previewer Previewer) ServiceOption {
 	return func(s *Service) { s.previewer = previewer }
@@ -129,6 +135,7 @@ type Service struct {
 	previewer Previewer
 	// mutationGate 是修改类接口的生命周期门禁（见 WithMutationGate）。
 	mutationGate func() error
+	life         *lifecycle.Controller
 }
 
 func NewService(catalog CatalogAPI, recalc RecalcAPI, opts ...ServiceOption) *Service {

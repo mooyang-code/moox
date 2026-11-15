@@ -600,6 +600,11 @@ service FactorMgr {
   rpc ListUdfs(ListUdfsReq) returns (ListUdfsRsp);
   rpc GetUdf(GetUdfReq) returns (GetUdfRsp);
   rpc ActivateUdf(ActivateUdfReq) returns (ActivateUdfRsp);
+  // GetLifecycle 读因子管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
+  // 暂停时修改类接口被拒绝，读接口与引擎的同步、心跳、领取任务照常；没有要追赶的数据，恢复即放行。
+  rpc GetLifecycle(common.GetLifecycleReq) returns (common.GetLifecycleRsp);
+  // ControlLifecycle 暂停、恢复因子管理模块。
+  rpc ControlLifecycle(common.ControlLifecycleReq) returns (common.ControlLifecycleRsp);
 }
 
 // ---- 自定义算子（wasm UDF）
@@ -841,10 +846,11 @@ message GetUdfModuleRsp {
 
 // ---- 因子引擎的入站服务
 
-// EngineControl 是因子引擎自己的 tRPC 服务：只监听因子机本机，由因子机的主机网关转发（因子机只能出站时经 control 中转），
-// 只给策略服务调用。现在只有回放“因子现算”的三个方法：会话开始时从因子机本地存储取快照，之后按时间顺序逐步现算，
-// 每期走实时计算路径；回放不写结果、不发周期完成事件、不改连续水位。会话只在引擎内存里，闲置 6 小时清理，
-// 引擎重启后会话不存在（NOT_FOUND），要重新建立。
+// EngineControl 是因子引擎自己的 tRPC 服务：只监听因子机本机，由因子机的主机网关转发（因子机只能出站时经 control 中转）。
+//   - 回放“因子现算”的三个方法只给策略服务调用：会话开始时从因子机本地存储取快照，之后按时间顺序逐步现算，
+//     每期走实时计算路径；回放不写结果、不发周期完成事件、不改连续水位。会话只在引擎内存里，闲置 6 小时清理，
+//     引擎重启后会话不存在（NOT_FOUND），要重新建立。
+//   - 模块生命周期、任务检查与本地写入只给 moox-cli（lifecycle、system、factor task status --recheck、import --target factor）。
 service EngineControl {
   // OpenReplay 建立会话：核对本地数据、按预热区间读快照、预留内存。同一个 replay_id 重复打开时先释放旧会话。
   rpc OpenReplay(OpenReplayReq) returns (OpenReplayRsp);
@@ -853,6 +859,21 @@ service EngineControl {
   rpc StepReplay(StepReplayReq) returns (StepReplayRsp);
   // CloseReplay 结束会话并释放内存；会话不存在时 closed 为假。
   rpc CloseReplay(CloseReplayReq) returns (CloseReplayRsp);
+  // GetLifecycle 读引擎模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+  rpc GetLifecycle(common.GetLifecycleReq) returns (common.GetLifecycleRsp);
+  // ControlLifecycle 暂停、恢复与放行引擎模块。
+  rpc ControlLifecycle(common.ControlLifecycleReq) returns (common.ControlLifecycleRsp);
+  // CheckTask 立即重查一个因子任务能不能计算（不等每 30 秒一轮），结果同时更新随心跳上报的检查结果。
+  rpc CheckTask(CheckTaskReq) returns (CheckTaskRsp);
+  // WriteSeries 是本地写入：导入服务用一批行整段替换标的在 [from, to) 内的本地数据。本地存储同一时刻只能由引擎进程打开，
+  // 所以写入只能经过引擎；引擎未就绪时也接受写入。
+  rpc WriteSeries(WriteSeriesReq) returns (WriteSeriesRsp);
+  // GetSeriesFields 返回数据集的字段表（名称、类型、填充规则），导入服务据此解析文件。
+  rpc GetSeriesFields(GetSeriesFieldsReq) returns (GetSeriesFieldsRsp);
+  // CheckSeriesSubject 判断标的是否在数据集的标签范围内（导入不自动绑定标的）。
+  rpc CheckSeriesSubject(CheckSeriesSubjectReq) returns (CheckSeriesSubjectRsp);
+  // GetSeriesBounds 返回标的在本地的最早与最新时间。
+  rpc GetSeriesBounds(GetSeriesBoundsReq) returns (GetSeriesBoundsRsp);
 }
 
 message OpenReplayReq {
@@ -981,4 +1002,104 @@ message CloseReplayReq {
 message CloseReplayRsp {
   common.RetInfo ret_info = 1;
   bool closed = 2;
+}
+
+// CheckTaskReq 指定要重查的因子任务。
+message CheckTaskReq {
+  string task_id = 1;
+}
+
+message CheckTaskRsp {
+  // 任务不在引擎的目录里（没有启用，或目录还没同步）时 ret_info 是 NOT_FOUND。
+  common.RetInfo ret_info = 1;
+  // checks 是逐项结果：有 FAIL 项的任务不计算。
+  repeated FactorTaskCheck checks = 2;
+  // paused 表示引擎模块被有意停下（暂停、恢复追赶），检查通过也暂不计算。
+  bool paused = 3;
+}
+
+// SeriesColumn 是一列：null 标记与按类型的值，f 用于 double，i 用于 int 与 bool，s 用于其余类型；长度都等于行数。
+message SeriesColumn {
+  repeated bool null = 1;
+  repeated double f = 2;
+  repeated int64 i = 3;
+  repeated string s = 4;
+}
+
+// WriteSeriesReq 是一批要整段替换的行，必须带数据集的全部字段。
+message WriteSeriesReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string freq = 3;
+  string subject_id = 4;
+  // from、to 是整段替换的区间（RFC3339，左闭右开），行时间与区间都是真实时间。
+  string from = 5;
+  string to = 6;
+  // allow_missing 允许中间缺的周期按字段填充规则写成缺失行；否则缺期时拒绝。
+  bool allow_missing = 7;
+  // record_pending 把改变的区间记入失效重算待办（带 --recalc 的导入）；reason 是待办的原因，为空时是 import。
+  bool record_pending = 8;
+  string reason = 9;
+  // times 是各行的 UTC 秒；tags 是各行的 series_tag。
+  repeated int64 times = 10;
+  repeated string tags = 11;
+  // cols 按字段名给出每一列。
+  map<string, SeriesColumn> cols = 12;
+}
+
+message WriteSeriesRsp {
+  // 请求不合法、缺周期、字段对不上时 ret_info 是 INVALID_PARAM；读不到数据集字段、写本地存储失败时是 INNER_ERR。
+  common.RetInfo ret_info = 1;
+  int32 written = 2;
+  int32 filled = 3;
+  int32 removed = 4;
+  // changed_from、changed_to 是本地数据实际改变的区间；earliest、latest 是写入后标的在本地的边界。
+  string changed_from = 5;
+  string changed_to = 6;
+  string earliest = 7;
+  string latest = 8;
+}
+
+message GetSeriesFieldsReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string freq = 3;
+}
+
+// SeriesField 是数据集的一个字段：type 是 Storage 的字段类型，fill 是缺期时的填充规则（prev、prev_close、zero，空表示留空）。
+message SeriesField {
+  string name = 1;
+  string type = 2;
+  string fill = 3;
+}
+
+message GetSeriesFieldsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SeriesField fields = 2;
+}
+
+message CheckSeriesSubjectReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string subject_id = 3;
+}
+
+message CheckSeriesSubjectRsp {
+  common.RetInfo ret_info = 1;
+  bool in_scope = 2;
+}
+
+message GetSeriesBoundsReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string freq = 3;
+  string subject_id = 4;
+}
+
+message GetSeriesBoundsRsp {
+  common.RetInfo ret_info = 1;
+  // exists 为假表示本地没有这个标的的数据，earliest、latest 为空。
+  bool exists = 2;
+  string earliest = 3;
+  string latest = 4;
 }

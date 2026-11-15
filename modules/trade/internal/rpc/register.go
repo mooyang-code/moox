@@ -5,6 +5,7 @@ import (
 	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	executionport "github.com/mooyang-code/moox/modules/trade/internal/execution"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -34,6 +35,7 @@ func RegisterAll(
 	console.FlattenAccount = options.FlattenAccount
 	console.Delist = options.Delist
 	console.FlattenInstrumentAction = options.FlattenInstrument
+	console.Lifecycle = options.Lifecycle
 	tradepb.RegisterTradeConsoleServiceService(consoleService, console)
 }
 
@@ -47,4 +49,5 @@ type ConsoleOptions struct {
 	FlattenAccount     FlattenTradingAccountFunc
 	Delist             *delistapp.Service
 	FlattenInstrument  FlattenInstrumentFunc
+	Lifecycle          *lifecycle.Controller
 }

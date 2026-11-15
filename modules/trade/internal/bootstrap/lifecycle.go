@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report/logsink"
@@ -116,12 +115,4 @@ func newLifecycle(dbPath string, quiesce func(context.Context) error, catchup fu
 			},
 		},
 	})
-}
-
-func lifecycleRoutes(life *lifecycle.Controller) []health.Route {
-	return []health.Route{
-		{Path: lifecycle.StatusPath, Handler: life.StatusHandler()},
-		{Path: lifecycle.CommandPath, Handler: life.CommandHandler()},
-		{Path: lifecycle.CatchupPath, Handler: life.CatchupHandler()},
-	}
 }

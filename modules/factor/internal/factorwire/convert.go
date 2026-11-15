@@ -237,13 +237,14 @@ func RunnersToPB(runners []domain.RunnerStatus) []*factorpb.FactorRunnerStatus {
 		out = append(out, &factorpb.FactorRunnerStatus{
 			TaskId: runner.TaskID, Queued: runner.Queued, Active: runner.Active,
 			WarmupState: runner.WarmupState, WarmSubjects: runner.WarmSubjects, ExpectedSubjects: runner.ExpectedSubjects, Paused: runner.Paused,
-			Checks: taskChecksToPB(runner.Checks),
+			Checks: TaskChecksToPB(runner.Checks),
 		})
 	}
 	return out
 }
 
-func taskChecksToPB(checks []domain.TaskCheck) []*factorpb.FactorTaskCheck {
+// TaskChecksToPB 把任务检查的逐项结果换成线上格式（心跳与 EngineControl.CheckTask 共用）。
+func TaskChecksToPB(checks []domain.TaskCheck) []*factorpb.FactorTaskCheck {
 	if len(checks) == 0 {
 		return nil
 	}

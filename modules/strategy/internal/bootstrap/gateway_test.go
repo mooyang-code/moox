@@ -58,6 +58,15 @@ type strategyGatewayWire struct {
 	deadlines map[string]time.Duration
 }
 
+// 这个替身同时充当 FactorMgr、EngineControl 与 TradeConsoleService，三个服务都有生命周期方法：在这里显式实现一次消除歧义，本测试不调用它们。
+func (w *strategyGatewayWire) GetLifecycle(context.Context, *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error) {
+	return nil, errors.New("not used")
+}
+
+func (w *strategyGatewayWire) ControlLifecycle(context.Context, *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error) {
+	return nil, errors.New("not used")
+}
+
 func (w *strategyGatewayWire) GetDirectory(_ context.Context, req *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
 	w.mu.Lock()
 	w.refreshes++

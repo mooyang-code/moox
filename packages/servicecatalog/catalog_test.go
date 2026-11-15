@@ -8,7 +8,10 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func mustCatalog(t *testing.T) Catalog {
@@ -465,7 +468,8 @@ func TestExternalProgramComponents(t *testing.T) {
 			}
 		}
 	}
-	// 因子引擎只有回放这一个服务：本机端口 11423，服务级超时 120 秒、OpenReplay 10 分钟，包体上限用默认值，只给策略服务调。
+	// 因子引擎只有 EngineControl 这一个服务：本机端口 11423，服务级超时 120 秒、OpenReplay 10 分钟，包体上限用默认值；
+	// 回放只给策略服务调，生命周期、任务检查与本地写入只给 moox-cli（管理台不能调）。
 	engine, _ := c.Component("factor-engine")
 	if len(engine.Services) != 1 {
 		t.Fatalf("factor-engine services = %+v", engine.Services)
@@ -473,8 +477,14 @@ func TestExternalProgramComponents(t *testing.T) {
 	control := engine.Services[0]
 	if control.Path != "trpc.moox.factor.EngineControl" || control.Port != 11423 || control.MaxBodyBytes != 0 || control.ConsoleName != "" ||
 		control.TimeoutFor("OpenReplay") != 600000 || control.TimeoutFor("StepReplay") != 120000 || control.TimeoutFor("CloseReplay") != 120000 ||
-		!slices.Equal(control.MethodNames(), []string{"OpenReplay", "StepReplay", "CloseReplay"}) {
+		!slices.Equal(control.MethodNames(), []string{"OpenReplay", "StepReplay", "CloseReplay", "GetLifecycle", "ControlLifecycle", "CheckTask", "WriteSeries", "GetSeriesFields", "CheckSeriesSubject", "GetSeriesBounds"}) {
 		t.Fatalf("EngineControl = %+v", control)
+	}
+	for _, method := range control.MethodNames() {
+		replay := strings.HasSuffix(method, "Replay")
+		if c.Allowed("strategy", control.Path, method) != replay || c.Allowed(OperatorMooxCLI, control.Path, method) == replay || c.Allowed(OperatorConsole, control.Path, method) {
+			t.Fatalf("EngineControl/%s ACL: strategy=%t moox-cli=%t console=%t", method, c.Allowed("strategy", control.Path, method), c.Allowed(OperatorMooxCLI, control.Path, method), c.Allowed(OperatorConsole, control.Path, method))
+		}
 	}
 	if !slices.Contains(engine.AllPorts(), 11423) || c.LocalRelayPort(11423) {
 		t.Fatalf("EngineControl 的端口计入组件端口，但不能直接中转: %v", engine.AllPorts())
@@ -547,5 +557,74 @@ func TestMissingGrantsNamesTheProvidingComponent(t *testing.T) {
 	missing := catalog.MissingGrants(without)
 	if len(missing) != 1 || missing[0].Component != "archive-mgr" || missing[0].Service != "trpc.moox.archive.ArchiveWorker" {
 		t.Fatalf("应指出缺 archive-mgr: %+v", missing)
+	}
+}
+
+// 模块生命周期（设计 3.7）：六个模块的服务都有 GetLifecycle、ControlLifecycle，读给管理台与 moox-cli、写只给 moox-cli，没有机器调用方；
+// ControlLifecycle 要等在途操作结束（采集最长 5 分钟，策略、Trade、因子引擎最长 30 秒），所以路由超时与模块的 tRPC 服务端超时
+// 都不能短于收敛时限，否则暂停会被网关或服务端先截断（H4）。
+func TestLifecycleMethodsAndTimeoutsCoverQuiesce(t *testing.T) {
+	c := mustCatalog(t)
+	quiesce := map[string]int64{
+		"trpc.moox.collector.CollectMgr": 300000, "trpc.moox.strategy.StrategyMgr": 30000, "trpc.moox.trade.TradeConsoleService": 30000,
+		"trpc.moox.factor.EngineControl": 30000, "trpc.moox.factor.FactorMgr": 0, "trpc.moox.archive.ArchiveMgr": 0,
+	}
+	serverTimeouts := map[string]int64{}
+	files, err := filepath.Glob("../../modules/*/config/trpc_go*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Server struct {
+				Timeout int64 `yaml:"timeout"`
+				Service []struct {
+					Name    string `yaml:"name"`
+					Timeout int64  `yaml:"timeout"`
+				} `yaml:"service"`
+			} `yaml:"server"`
+		}
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		for _, service := range doc.Server.Service {
+			timeout := service.Timeout
+			if timeout == 0 {
+				timeout = doc.Server.Timeout
+			}
+			serverTimeouts[service.Name] = timeout
+		}
+	}
+	for path, wait := range quiesce {
+		service, ok := c.Service(path)
+		if !ok {
+			t.Fatalf("服务目录没有 %s", path)
+		}
+		get, okGet := service.Method("GetLifecycle")
+		control, okControl := service.Method("ControlLifecycle")
+		if !okGet || !okControl || !get.ReadOnly || control.ReadOnly || control.Idempotent || len(get.Callers) != 0 || len(control.Callers) != 0 {
+			t.Fatalf("%s 的生命周期方法登记不对：%+v %+v", path, get, control)
+		}
+		if !slices.Equal(control.OperatorList(), []string{OperatorMooxCLI}) {
+			t.Fatalf("%s/ControlLifecycle 只给 moox-cli：%v", path, control.OperatorList())
+		}
+		wantRead := []string{OperatorConsole, OperatorMooxCLI}
+		if service.ConsoleName == "" {
+			wantRead = []string{OperatorMooxCLI}
+		}
+		if !slices.Equal(get.OperatorList(), wantRead) {
+			t.Fatalf("%s/GetLifecycle 的读者：%v", path, get.OperatorList())
+		}
+		route := service.TimeoutFor("ControlLifecycle")
+		if route <= wait {
+			t.Fatalf("%s/ControlLifecycle 路由超时 %d 毫秒不长于收敛时限 %d 毫秒", path, route, wait)
+		}
+		if server := serverTimeouts[path]; server < route {
+			t.Fatalf("%s 的 tRPC 服务端超时 %d 毫秒短于 ControlLifecycle 的路由超时 %d 毫秒", path, server, route)
+		}
 	}
 }

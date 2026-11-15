@@ -584,6 +584,14 @@ components:
           - name: ProbeFunctionEgress
             operators: [moox-cli]
             timeout_ms: 120000
+          # 模块生命周期（设计 3.7）：管理台与命令行都能读；暂停、恢复、放行只给命令行（moox-cli lifecycle、system）。
+          # 读追赶进度要逐个空间核对补采；暂停要等 SCF 定时器停用确认与在途补采分块结束（最长 5 分钟），超时与旧健康端口一致。
+          - name: GetLifecycle
+            read_only: true
+            timeout_ms: 60000
+          - name: ControlLifecycle
+            operators: [moox-cli]
+            timeout_ms: 330000
       # collector-stream 的心跳、拉计划与周期统计上报；不设租约，计划里的份就是唯一的授权。
       - path: trpc.moox.collector.StreamCollector
         port: 11422
@@ -749,6 +757,11 @@ components:
           - name: GetUdf
             read_only: true
           - name: ActivateUdf
+          # 模块生命周期（设计 3.7）：不参与系统暂停；管理台与命令行都能读，暂停、恢复只给命令行（moox-cli lifecycle --module factor-mgr）。
+          - name: GetLifecycle
+            read_only: true
+          - name: ControlLifecycle
+            operators: [moox-cli]
       - path: trpc.moox.factor.FactorEngine
         port: 11405
         timeout_ms: 120000
@@ -850,6 +863,11 @@ components:
             operators: [moox-cli]
           - name: ClearArchiveUnrecoverable
             operators: [moox-cli]
+          # 模块生命周期（设计 3.7）：不参与系统暂停；管理台与命令行都能读，暂停、恢复只给命令行（moox-cli lifecycle --module archive-mgr）。
+          - name: GetLifecycle
+            read_only: true
+          - name: ControlLifecycle
+            operators: [moox-cli]
       - path: trpc.moox.archive.ArchiveWorker
         port: 11408
         timeout_ms: 60000
@@ -944,6 +962,13 @@ components:
           - name: GetStrategyDisplaySettings
             read_only: true
           - name: SetStrategyDisplaySettings
+          # 模块生命周期（设计 3.7）：管理台与命令行都能读；暂停、恢复、放行只给命令行。暂停要等在途求值结束、目标发布完（最长 30 秒）。
+          - name: GetLifecycle
+            read_only: true
+            timeout_ms: 60000
+          - name: ControlLifecycle
+            operators: [moox-cli]
+            timeout_ms: 60000
     doctor:
       role: strategy
       description: Strategy evaluation and target generation service
@@ -1385,6 +1410,13 @@ components:
             timeout_ms: 15000
           - name: ListOperatorActions
             read_only: true
+          # 模块生命周期（设计 3.7）：管理台与命令行都能读；暂停、恢复、放行只给命令行。暂停要等在途订单提交结束（最长 30 秒）。
+          - name: GetLifecycle
+            read_only: true
+            timeout_ms: 60000
+          - name: ControlLifecycle
+            operators: [moox-cli]
+            timeout_ms: 60000
     doctor:
       role: trade
       description: Trade execution and reconciliation service
@@ -1485,6 +1517,8 @@ components:
       ready_body: '"ready":true'
     services:
       # 回放“因子现算”：策略服务逐步调用，引擎按因子机本地快照现算。单步响应由引擎控制在 3 MiB 以内，包体上限用默认值。
+      # 本地写入（导入）的一批默认一万行，按 protobuf 编码远在默认上限之内；超了由导入命令提示减小 --batch-rows。
+      # 生命周期、任务检查与本地写入只给命令行，管理台不能调（这个服务没有 console_name）。
       - path: trpc.moox.factor.EngineControl
         port: 11423
         timeout_ms: 120000
@@ -1500,6 +1534,25 @@ components:
           - name: CloseReplay
             callers: [strategy]
             operators: []
+          - name: GetLifecycle
+            read_only: true
+            operators: [moox-cli]
+          - name: ControlLifecycle
+            operators: [moox-cli]
+          - name: CheckTask
+            read_only: true
+            operators: [moox-cli]
+          - name: WriteSeries
+            operators: [moox-cli]
+          - name: GetSeriesFields
+            read_only: true
+            operators: [moox-cli]
+          - name: CheckSeriesSubject
+            read_only: true
+            operators: [moox-cli]
+          - name: GetSeriesBounds
+            read_only: true
+            operators: [moox-cli]
     doctor:
       role: factor-engine
       description: Factor compute engine that consumes period events and writes factor results through Access

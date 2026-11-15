@@ -10,20 +10,20 @@ server:
     - prometheus
   timeout: 30000
   service:
+    # ControlLifecycle 暂停要等在途的求值结束、已落库的目标发布完（最长 30 秒），请求时限要大于它（与服务目录里这个方法的 60 秒一致）
     - name: trpc.moox.strategy.StrategyMgr
       ip: 127.0.0.1
       port: 11430
       network: tcp
       protocol: trpc
       transport: go-net
-      timeout: 30000
+      timeout: 60000
     - name: trpc.moox.strategy.Health
       ip: 127.0.0.1
       port: 11431
       network: tcp
       protocol: http_no_protocol
-      # 健康检查端口同时承载生命周期接口（/v1/lifecycle）：暂停要等在途的求值结束、已落库的目标发布完（最长 30 秒），请求时限要大于它
-      timeout: 60000
+      timeout: 10000
     - name: trpc.moox.strategy.metrics.timer
       port: 11432
       network: "*/30 * * * * *?startAtOnce=1"
