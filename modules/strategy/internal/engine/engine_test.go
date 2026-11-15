@@ -239,10 +239,14 @@ rules:
 
   - id: btc_trend
     name: BTC 均线趋势跟随
-    type: signal
+    type: rank
     pool: [BTC-USDT]
-    entry: "bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20"
-    exit:  "bars[0].close < bars[0].ma_20"
+    allow_empty: true
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20"
+      exit: "bars[0].close < bars[0].ma_20"
     weight: {total: 0.2}
 
 portfolio:
@@ -254,7 +258,7 @@ portfolio:
 
 var exampleColumns = []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num", "bias_q_20", "quote_volume_mean_20", "quote_volume_mean_q_20", "ma_20"}
 
-// exampleFrame 构造设计文档示例策略的一帧：8 个山寨币通过 filter，BTC 走 signal 规则。
+// exampleFrame 构造设计文档示例策略的一帧：8 个山寨币通过 filter，BTC 走固定标的择时规则。
 func exampleFrame(program *dsl.Program) Frame {
 	rows := map[string]Row{}
 	alts := numberedIDs("ALT", 8)

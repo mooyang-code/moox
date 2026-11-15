@@ -63,7 +63,7 @@ func TestStockCalendarHead(t *testing.T) {
 	}
 	program, err := dsl.Compile(parseStrategy(t, `name: x
 rules:
-  - {id: r, type: signal, pool: [600000.SH], entry: "bars[-1].close < bars[0].close", exit: "close < 1", weight: 1}
+  - {id: r, type: rank, pool: [600000.SH], score: "0", select: {top: 10000}, hold: {entry: "bars[-1].close < bars[0].close", exit: "close < 1"}, weight: 1}
 `), []string{"close"})
 	if err != nil {
 		t.Fatal(err)

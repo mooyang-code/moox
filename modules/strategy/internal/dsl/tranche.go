@@ -234,7 +234,7 @@ func (s Strategy) HasTranche() bool {
 
 // validateTrancheRule 校验 tranche 规则并展开子策略。
 func validateTrancheRule(prefix string, rule *Rule) error {
-	if rule.Pool.Explicit || rule.Filter != "" || rule.Score != "" || rule.HasSelect || rule.FilterAfter != "" || rule.Holding != nil || rule.Entry != "" || rule.Exit != "" {
+	if rule.Pool.Explicit || rule.Filter != "" || rule.Score != "" || rule.HasSelect || rule.FilterAfter != "" || rule.Holding != nil {
 		return fmt.Errorf("%s 是 tranche 规则，只能使用 id、name、type、weight、candidates、tranche、params", prefix)
 	}
 	if rule.Side != SideLong {

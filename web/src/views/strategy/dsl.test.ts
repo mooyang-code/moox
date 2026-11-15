@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mixedMarketTemplate, parseDSL, poolTemplate, rankedTemplate, signalTemplate, summarizeDSL, tunedTemplate } from "./dsl";
+import { mixedMarketTemplate, parseDSL, poolTemplate, rankedTemplate, summarizeDSL, timingTemplate, tunedTemplate } from "./dsl";
 
 describe("strategy DSL preview", () => {
   it("parses the v3 templates without diagnostics", () => {
@@ -8,7 +8,7 @@ describe("strategy DSL preview", () => {
     expect(ranked.preview).toMatchObject({ name: "binance_spot_momentum", bar: "1m", leverage: "1" });
     expect(ranked.preview?.rules).toEqual([
       { id: "long_momentum", name: "多头动量选币", type: "rank", subStrategies: 0 },
-      { id: "btc_trend", name: "BTC 上穿均线", type: "signal", subStrategies: 0 }
+      { id: "btc_trend", name: "BTC 上穿均线", type: "rank", subStrategies: 0 }
     ]);
     expect(ranked.preview?.universe).toContain("排除 BTC-USDT");
     const aged = parseDSL(
@@ -17,18 +17,18 @@ describe("strategy DSL preview", () => {
     expect(aged.preview?.universe).toBe("上市满 5 根；规则 f：上市不满 30 根，年龄按全部市场判断（允许为空）");
     const excluded = parseDSL("name: e\nrules:\n  - {id: g, type: rank, universe: {exclude_tags: [meme, new]}}\n");
     expect(excluded.preview?.universe).toBe("全部标的；规则 g：排除标签 meme、new");
-    const signal = parseDSL(signalTemplate);
-    expect(signal.diagnostics).toEqual([]);
-    expect(signalTemplate).toContain("bars[-1].bias");
+    const timing = parseDSL(timingTemplate);
+    expect(timing.diagnostics).toEqual([]);
+    expect(timing.preview?.rules).toEqual([{ id: "majors_trend", name: "主流币均线择时", type: "rank", subStrategies: 0 }]);
+    expect(timingTemplate).toContain("bars[-1].bias");
   });
 
   it("reports structural problems before saving", () => {
     expect(parseDSL("name: a\nrules: {rank: {}}\n").diagnostics.map(item => item.message)).toContain(
       "rules 必须是非空列表，每条规则包含 id 与 type"
     );
-    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: ranked\n").diagnostics[0].message).toContain(
-      "rank、signal 或 tranche"
-    );
+    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: ranked\n").diagnostics[0].message).toContain("rank 或 tranche");
+    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: signal\n").diagnostics[0].message).toContain("rank 或 tranche");
     expect(parseDSL("name: [").preview).toBeNull();
   });
 

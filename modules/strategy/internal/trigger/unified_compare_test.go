@@ -686,11 +686,11 @@ func TestUnifiedMatchesDualTasksIgnoresFailuresOutsideThePool(t *testing.T) {
 			}
 		})
 	}
-	signalPool := "name: compare\nmarket: {select: both, prefer: swap}\nrules:\n  - id: r\n    type: signal\n    pool: [D, X]\n    entry: \"m > 0\"\n    exit: \"m < 0\"\n    weight: {total: 1}\nportfolio: {max_missing: 0.2}\n"
+	fixedPool := "name: compare\nmarket: {select: both, prefer: swap}\nrules:\n  - id: r\n    type: rank\n    pool: [D, X]\n    score: \"0\"\n    select: {top: 10000}\n    hold:\n      entry: \"m > 0\"\n      exit: \"m < 0\"\n    weight: {total: 1}\nportfolio: {max_missing: 0.2}\n"
 	for _, failed := range [][]string{{"B"}, {"B", "C"}} {
 		t.Run("固定池"+strings.Join(failed, ""), func(t *testing.T) {
 			world := ucBase("{select: both, prefer: swap}")
-			world.dsl = signalPool
+			world.dsl = fixedPool
 			world.failed["swap"] = failed
 			for _, id := range failed {
 				delete(world.rows["swap"], id)

@@ -168,7 +168,7 @@
   <text class="chip-text" x="821" y="686.0" text-anchor="middle">读因子结果 View</text>
   <text class="chip-note" x="821" y="702.0" text-anchor="middle">实例绑定单一因子任务</text>
   <rect x="696" y="722" width="250" height="46" rx="7" fill="#f5f3ff" stroke="#c4b5fd" stroke-opacity="0.7"/>
-  <text class="chip-text" x="821" y="742.0" text-anchor="middle">rank · signal · tranche 规则</text>
+  <text class="chip-text" x="821" y="742.0" text-anchor="middle">rank · tranche 规则</text>
   <text class="chip-note" x="821" y="758.0" text-anchor="middle">筛选 · 打分 · 选股 · 配权 · 止损止盈</text>
   <rect x="696" y="778" width="250" height="46" rx="7" fill="#f5f3ff" stroke="#c4b5fd" stroke-opacity="0.7"/>
   <text class="chip-text" x="821" y="798.0" text-anchor="middle">结果与目标权重持久化</text>

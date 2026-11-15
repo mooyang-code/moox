@@ -61,8 +61,8 @@ portfolio: {max_missing: 1}
 	require.Equal(t, 1, decision.Summary.Rules["r"].Missing)
 }
 
-// holding 批次乘系数，批次的基准权重不变；signal 规则同样乘在输出权重上。
-func TestScaleOnHoldingBatchesAndSignal(t *testing.T) {
+// holding 批次乘系数，批次的基准权重不变；固定标的择时规则同样乘在输出权重上。
+func TestScaleOnHoldingBatchesAndHoldPool(t *testing.T) {
 	program := compile(t, `name: s
 rules:
   - id: r
@@ -73,10 +73,13 @@ rules:
     holding: {bars: 2, offsets: [0]}
     scale: {expr: "c", max: 2}
   - id: g
-    type: signal
+    type: rank
     pool: [B]
-    entry: "m > 0"
-    exit: "m < 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "m > 0"
+      exit: "m < 0"
     weight: 0.4
     scale: {expr: "c", max: 2}
 portfolio: {max_missing: 1, leverage: 2}
@@ -171,15 +174,18 @@ portfolio: {max_missing: 1}
 	require.False(t, holdsTarget(second, "A"))
 }
 
-// signal 规则写 on_missing：持仓的 exit 输入缺失时冻结保持，不清仓。
-func TestOnMissingSignal(t *testing.T) {
+// 固定标的择时规则写 on_missing：持仓的出场条件输入缺失时冻结保持，不清仓。
+func TestOnMissingHoldPool(t *testing.T) {
 	program := compile(t, `name: o
 rules:
   - id: g
-    type: signal
+    type: rank
     pool: [A]
-    entry: "m > 0"
-    exit: "m < 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "m > 0"
+      exit: "m < 0"
     weight: 1
     on_missing: {keep_bars: 1}
 portfolio: {max_missing: 1}

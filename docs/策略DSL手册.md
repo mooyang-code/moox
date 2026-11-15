@@ -42,7 +42,7 @@
 | 分批换仓，平滑进出 | `holding: {bars, offsets}` | 5.1 |
 | 按周、按月、按交易日换仓 | `holding.calendar` | 5.2 |
 | 满足入场条件才买，触发出场条件才卖 | `hold: {entry, exit, max_bars, cooldown_bars, allow_reentry}` | 5.3 |
-| 固定几个币按信号进出（如 BTC 趋势） | `signal` 规则 | 6 |
+| 固定几个币按信号进出（如 BTC 趋势） | 显式 `pool` 加 `hold` | 6 |
 | 每根新开一批、各批持有固定期数 | `tranche` 规则 | 7 |
 | 止损、跟踪止损、止盈 | `stop` | 8.1 |
 | 按行情给仓位打折 | `scale` | 8.2 |
@@ -399,24 +399,35 @@ holding:
 
 **与日历同写**：`hold` 可以与 `holding.calendar`（只能一个 `days`）同写，这时 `filter`、`exit`、`max_bars` 与补位只在建仓日判断，其余 bar 保持上一次的持有集合；止损、缺数、冻结每根都判。
 
-## 6. signal 规则：固定币择时
+## 6. 固定标的择时
 
-不选股，只对固定的几个标的判断进出：
+不选股，只对固定的几个标的判断进出：用显式 `pool` 给出标的，进出场条件写在 `hold` 里（5.3）。
 
 ```yaml
 - id: btc_trend
-  type: signal
+  type: rank
   pool: [BTC-USDT]                          # 固定列表或 {tags: [...]}
-  entry: "bars[-1].bias <= 1 && bars[0].bias > 1"    # 上一根不大于 1、这一根大于 1：上穿
-  exit: "bars[0].bias < 1"                  # 跌破
+  score: "0"                                # 不排序，写常数即可
+  select: {top: 10000}                      # 足够大的上限：池里满足条件的都持有
+  hold:
+    entry: "bars[-1].bias <= 1 && bars[0].bias > 1"    # 上一根不大于 1、这一根大于 1：上穿
+    exit: "bars[0].bias < 1"                # 跌破
   weight: {total: 0.2}
 ```
 
-- 先对旧持仓判 `exit`，再对候选判 `entry`，**退出优先**。
+- 每根先对持有的标的判 `exit`，再对其余标的判 `entry`；`entry` 与 `exit` 同根都成立时不入场，本根出场的标的本根不补回。
 - 本期持有的标的平分规则预算：`total: 0.2`、池里有 2 个同时持有，每个 0.1。
-- 持有标的的 `exit` 输入缺失按退出处理（写了 `on_missing` 才冻结保持，见 8.3）。
+- 持有标的的 `exit` 输入缺失按缺数出场（`exit_missing`）；写了 `on_missing` 才冻结保持，见 8.3。只缺 `entry` 用到的列（例如上一根）不出场。
 - 判断“穿越”要用 `bars[-1]` 取上一根的值；第一期没有上一根，`bars[-1]` 的值都缺失。
-- 可以配 `stop`、`scale`、`on_missing`、`market`。
+- 可以配 `stop`、`scale`、`on_missing`、`market`、`side`；止损等同出场并进入冷却。
+
+这条规则和其他 rank 规则一样参与整期跳过的检查（8.4），固定的池很小，要留意三点：
+
+| 情形 | 行为 | 建议 |
+| --- | --- | --- |
+| 池里的标的全部年龄不够（`min_age_bars`） | 这条规则没有可评估的候选，整期跳过（`universe_too_small`），其他规则这一根也不出目标 | 池里放上市足够久的标的，或给这条规则写 `allow_empty: true` |
+| 池里的标的数少于 `portfolio.min_universe` | 保存时拒绝，必须写 `allow_empty: true`。写了之后这条规则不参与任何整期跳过的检查，持有的标的缺数时直接按 `exit_missing` 出场 | 同时写 `on_missing: {keep_bars: N}`，缺数时先冻结而不是卖出 |
+| 有标的被冻结（市场不可用、只缺上一根、`on_missing`） | 预算在全部持有标的（含冻结的）之间平分，冻结的那一份由组合层保持不动，合计不超过规则预算 | 无需处理 |
 
 ## 7. tranche 规则：批次持仓
 
@@ -444,7 +455,7 @@ portfolio: {leverage: 1}
 
 ### 8.1 stop：止损止盈
 
-`rank`、`signal` 写在规则上，`tranche` 写在子策略模板里：
+`rank` 写在规则上，`tranche` 写在子策略模板里：
 
 ```yaml
 stop:
@@ -475,7 +486,7 @@ scale: {expr: "timing_coef", max: 1}    # 数值表达式（逐行，不能用�
 on_missing: {keep_bars: 3}     # 持有标的连续缺数不超过 3 根时冻结保持，超过后移出；1～1000
 ```
 
-默认情况下持有中的标的某一根缺数就按缺数口径处理（rank 规则移出，signal 规则清仓）。写了 `on_missing` 后，缺数的持有标的冻结：保持上期目标、不交易，持有根数照常累计；数据恢复即清零，连续缺数超过 `keep_bars` 根才移出。`keep_bars` 数的是“连续多少次求值都缺数”。tranche 规则不支持。
+默认情况下持有中的标的某一根缺数就按缺数口径处理（移出持有）。写了 `on_missing` 后，缺数的持有标的冻结：保持上期目标、不交易，持有根数照常累计；数据恢复即清零，连续缺数超过 `keep_bars` 根才移出。`keep_bars` 数的是“连续多少次求值都缺数”。tranche 规则不支持。
 
 ### 8.4 缺数、冻结与整期跳过
 
@@ -483,7 +494,7 @@ on_missing: {keep_bars: 3}     # 持有标的连续缺数不超过 3 根时冻�
 
 | 层次 | 做法 |
 | --- | --- |
-| 单个标的缺数 | 没有持有：这根不入选。持有中：rank 规则移出，signal 规则清仓；写了 `on_missing` 则冻结 |
+| 单个标的缺数 | 没有持有：这根不入选。持有中：移出持有；写了 `on_missing` 则冻结 |
 | 持仓冻结 | 市场本期整体不可用，或只缺上一根（`bars[-1]`）而当期输入齐全：持有的标的**不判出场、不调仓**，保持上期目标权重，明细阶段 `held` |
 | 整期跳过 | 缺数的标的占比超过 `portfolio.max_missing`（默认 0.2），或可用标的少于 `portfolio.min_universe`：这一根不产出新目标，已有目标继续有效 |
 
@@ -983,10 +994,13 @@ portfolio: {leverage: 1}
 name: trend_plus_rotation
 rules:
   - id: btc_trend
-    type: signal
+    type: rank
     pool: [BTC-USDT]
-    entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
-    exit: "bars[0].bias < 1"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
+      exit: "bars[0].bias < 1"
     weight: {total: 0.2}
   - id: alt_rotation
     type: rank

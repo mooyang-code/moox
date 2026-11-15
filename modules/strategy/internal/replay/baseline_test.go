@@ -151,7 +151,7 @@ func baselineHours(from, to int) map[int]bool {
 }
 
 // baselineSwapDSL：纯永续，universe 白名单是 majors 标签加 D，排除 meme 标签与 B（B、C 的动量最高，都被排除）；
-// 新上线的标的要满 3 根；signal 规则的显式 pool 只有 E（替代 universe，不受黑名单影响）。
+// 新上线的标的要满 3 根；规则 e 是固定标的择时，显式 pool 只有 E（替代 universe，不受黑名单影响）。
 const baselineSwapDSL = `name: baseline_swap
 market: {select: swap}
 universe:
@@ -167,10 +167,13 @@ rules:
     select: {top: 1}
     weight: {total: 1.5}
   - id: e
-    type: signal
+    type: rank
     pool: [E]
-    entry: "mom > 0"
-    exit: "mom < 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "mom > 0"
+      exit: "mom < 0"
     weight: {total: 0.5}
 portfolio:
   leverage: 2
@@ -212,7 +215,7 @@ type baselineReplayScenario struct {
 
 func baselineReplayScenarios() []baselineReplayScenario {
 	return []baselineReplayScenario{
-		{name: "swap_universe_pool", dsl: baselineSwapDSL, hours: 16,
+		{name: "swap_universe_pool_rank", dsl: baselineSwapDSL, hours: 16,
 			client: func() input.Client { return newBaselineClient(baselineSwapClient()) },
 			tasks:  map[string]store.ReplayTask{"swap": swapTask}, check: baselineCheckSwap},
 		{name: "dual_two_tasks", dsl: baselineDualDSL, hours: 16,

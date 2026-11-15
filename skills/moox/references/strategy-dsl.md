@@ -1,7 +1,7 @@
 # 策略 DSL 语法与写入流程
 
 策略用一份 YAML（DSL）描述：怎么在截面上选标的、怎么配权。时序计算（均线、动量、分位）一律写成因子（见 [factor-dsl.md](factor-dsl.md)），
-策略只在截面上过滤、打分、配权。Go 代码只提供通用规则类型（`rank`、`signal`、`tranche`），新策略写配置即可，不改代码。
+策略只在截面上过滤、打分、配权。Go 代码只提供通用规则类型（`rank`、`tranche`），新策略写配置即可，不改代码。
 
 按功能讲写法、带例子与逐步推演的完整手册见 `docs/策略DSL手册.md`（含单标的上限、进出场持有、策略池漂移与组合约束的推演）。
 本文是 Agent 写策略时的语法速查；字段的完整语义、状态与明细以 `docs/模块/策略.md` 的第 3 节为准，解析与校验的源码在 `modules/strategy/internal/dsl/`。
@@ -162,8 +162,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 
 | `type` | 用途 | 关键字段 |
 | --- | --- | --- |
-| `rank` | 截面选股 | `filter`、`score`、`select`、`weight`，可选 `holding`、`hold`、`filter_after`、`side`、`stop`、`scale`、`on_missing`、`market` |
-| `signal` | 固定池择时 | `pool`、`entry`、`exit`、`weight`，可选 `stop`、`scale`、`on_missing`、`market` |
+| `rank` | 截面选股；配显式 `pool` 与 `hold` 也用来对固定标的择时 | `filter`、`score`、`select`、`weight`，可选 `pool`、`holding`、`hold`、`filter_after`、`side`、`stop`、`scale`、`on_missing`、`market` |
 | `tranche` | 批次持仓：每根 K 线按本期选币新开一批，每批持有 h 期，多批叠加 | `tranche` 子策略模板、可选 `params` 参数表、`weight`，见第 4 节 |
 
 含 `tranche` 规则的策略只能全部是 `tranche` 规则，且不能写 `factor_params`；只能用在单个市场的策略（`spot/spot` 按权重持有且不做空，或 `swap/swap`），双市场模式启用被拒（S1 暂不支持双市场 tranche：市场不可用时无法冻结持仓）。
@@ -183,22 +182,29 @@ portfolio: {leverage: 1, max_weight: 0.1}
 - `select` 的扩展：`top: 0.1`（(0, 1) 是比例，分母是通过 filter 且分数有效的样本数）配 `count_round: floor | ceil | round`、`count_min`；`range: [10, 13]` 名次闭区间（与 top/bottom、buffer 互斥）；`group: {by: 列, max: 3}` 或 `{by: 列, quotas: [2, 1], rest: 1}` 分组名额（分组值 NaN 的不入选）；`then: {score: "表达式", top: 5}` 在第一段结果上二次排序（与 buffer、hold 互斥；`top`、`bottom` 也可以写 (0, 1) 的比例，分母是第一段选中且分数有效的个数，配 `count_round`、`count_min`）。
 - `holding: {bars, offsets}` 分批换仓，与 `buffer` 互斥；`anchor: "<RFC3339 的 bar_start>"`（A 股可写交易日期）只改相位。日历换仓写 `holding: {calendar: trading_days | week | month, every: 5（仅 trading_days）, days: [1, -1], at: first | last}`，与 bars/offsets 互斥；建仓 bar 没有 ok 决策时在之后第一根 ok bar 补建。`filter_after` 只剔除不补位，剔除的权重留现金。
 - `hold: {entry, exit, max_bars, cooldown_bars, allow_reentry}` 进出场持有：持有中 exit 为真、不满足 filter、持满 max_bars、止损、缺数即出场（stop 优先），空位按名次从 entry 为真且 exit 不为真的候选里补，目标数取 `select` 换算的个数（持有多于目标不裁减）。持有标的只缺 score、entry 的列时不出场。与 buffer、holding.bars/offsets、then、range、filter_after 互斥；可与 `holding.calendar`（只能一个 days）同写，只在建仓 bar 判进出场。；`allow_reentry: true` 让候选只看 entry（出场条件为真的标的也能入场、刚出场的标的当根可补回，要求 cooldown_bars 为 0），默认不写
-- `scale: {expr, max}` 在规则配权（含 cap）之后逐标的乘系数，截到 [0, max]（max 默认 1、上限 10），乘掉的留现金；系数为 NaN 按缺数处理。`on_missing: {keep_bars: N}`（rank、signal；tranche 不支持）让持有标的本根缺数时冻结保持，连续缺数超过 N 根才移出。
+- `scale: {expr, max}` 在规则配权（含 cap）之后逐标的乘系数，截到 [0, max]（max 默认 1、上限 10），乘掉的留现金；系数为 NaN 按缺数处理。`on_missing: {keep_bars: N}`（tranche 不支持）让持有标的本根缺数时冻结保持，连续缺数超过 N 根才移出。
 - `side` 取 `long`（默认）或 `short`；空头只走永续，纯现货与股票不允许做空。
 - `market: spot | swap` 是规则级市场（见第 1 节“market：市场模式”）。
 
-### signal 规则
+### 固定标的择时
+
+不选股、只对固定的几个标的判断进出，写显式 `pool` 加 `hold`：
 
 ```yaml
 - id: btc_trend
-  type: signal
+  type: rank
   pool: [BTC-USDT]                          # 固定列表或 {tags: [...]}
-  entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
-  exit: "bars[0].bias < 1"
+  score: "0"                                # 不排序，写常数即可
+  select: {top: 10000}                      # 足够大的上限：池里满足条件的都持有
+  hold:
+    entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
+    exit: "bars[0].bias < 1"
   weight: {total: 0.2}
 ```
 
-先对旧理论持仓判 `exit`，再对候选判 `entry`，退出优先。
+- 每根先对持有的标的判 `exit`，再对其余标的判 `entry`；两者同根都成立不入场；持有的标的平分规则预算。
+- 它与其他 rank 规则一样参与整期跳过的检查：池里的标的全部年龄不够时整期跳过（`universe_too_small`）。
+- 固定 `pool` 的标的数少于 `portfolio.min_universe` 时保存被拒，要写 `allow_empty: true`；写了之后这条规则不参与整期跳过的检查，持有的标的缺数时直接出场（`exit_missing`），建议同时写 `on_missing: {keep_bars: N}` 让缺数先冻结。
 
 ## 3. 表达式
 
@@ -271,7 +277,7 @@ portfolio:
 
 ## 5. 止损止盈
 
-`rank`、`signal` 写在规则上，`tranche` 写在子策略模板里（可用参数表占位符）：
+`rank` 写在规则上，`tranche` 写在子策略模板里（可用参数表占位符）：
 
 ```yaml
 stop:

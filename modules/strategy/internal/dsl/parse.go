@@ -257,10 +257,6 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 			rule.Weight, err = decodeWeight(f.value, fieldPath)
 		case "side":
 			rule.Side, err = scalarRequiredText(f.value, fieldPath)
-		case "entry":
-			rule.Entry, err = scalarRequiredText(f.value, fieldPath)
-		case "exit":
-			rule.Exit, err = scalarRequiredText(f.value, fieldPath)
 		case "holding":
 			var holding Holding
 			holding, err = decodeHolding(f.value, fieldPath)

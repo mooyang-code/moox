@@ -104,7 +104,7 @@
 
 ## 策略
 
-- **做什么**：声明式 DSL（`rank` / `signal` / `tranche` 规则、止损止盈、模板），每个周期在因子结果上求值，输出截面目标权重；可历史回放。
+- **做什么**：声明式 DSL（`rank` / `tranche` 规则、止损止盈、模板），每个周期在因子结果上求值，输出截面目标权重；可历史回放。
 - **在哪**：管理台机。
 - **常用**：写与校验 DSL、创建定义与实例按 [`strategy-dsl.md`](strategy-dsl.md)；
   `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、

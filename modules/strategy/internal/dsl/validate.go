@@ -223,14 +223,12 @@ func validateRule(rule *Rule, sources map[string]struct{}) error {
 	switch rule.Type {
 	case RuleTypeRank:
 		return validateRankRule(prefix, rule, sources)
-	case RuleTypeSignal:
-		return validateSignalRule(prefix, rule, sources)
 	case RuleTypeTranche:
 		return validateTrancheRule(prefix, rule)
 	case "":
-		return fmt.Errorf("%s 缺少 type（rank、signal 或 tranche）", prefix)
+		return fmt.Errorf("%s 缺少 type（rank 或 tranche）", prefix)
 	default:
-		return fmt.Errorf("%s 的 type %q 不受支持，只能是 rank、signal 或 tranche", prefix, rule.Type)
+		return fmt.Errorf("%s 的 type %q 不受支持，只能是 rank 或 tranche", prefix, rule.Type)
 	}
 }
 
@@ -256,9 +254,6 @@ func validateWeight(prefix string, weight *Weight) error {
 }
 
 func validateRankRule(prefix string, rule *Rule, sources map[string]struct{}) error {
-	if rule.Entry != "" || rule.Exit != "" {
-		return fmt.Errorf("%s 是 rank 规则，不能使用 entry / exit", prefix)
-	}
 	if rule.Score == "" {
 		return fmt.Errorf("%s 缺少 score", prefix)
 	}
@@ -305,25 +300,6 @@ func validateRankRule(prefix string, rule *Rule, sources map[string]struct{}) er
 	}
 	if fixed && rule.Weight.HasCap && rule.Weight.Cap.Mul(quant.Must(fmt.Sprint(slots))).Cmp(rule.Weight.Total) < 0 {
 		return fmt.Errorf("%s 的 weight.cap 乘以最多可持有的标的数小于 weight.total，预算永远分不完", prefix)
-	}
-	return analyzeStages(prefix, rule.stageSources(), sources)
-}
-
-func validateSignalRule(prefix string, rule *Rule, sources map[string]struct{}) error {
-	if !rule.Pool.Explicit {
-		return fmt.Errorf("%s 是 signal 规则，必须显式给出 pool", prefix)
-	}
-	if rule.Score != "" || rule.HasSelect || rule.Filter != "" || rule.FilterAfter != "" || rule.Holding != nil {
-		return fmt.Errorf("%s 是 signal 规则，只能使用 pool、entry、exit、weight、side", prefix)
-	}
-	if rule.Entry == "" || rule.Exit == "" {
-		return fmt.Errorf("%s 需要同时给出 entry 和 exit", prefix)
-	}
-	if rule.Weight.Method != WeightMethodEqual {
-		return fmt.Errorf("%s 是 signal 规则，weight.method 只能是 equal", prefix)
-	}
-	if rule.Weight.HasCap {
-		return fmt.Errorf("%s 是 signal 规则，不支持 weight.cap", prefix)
 	}
 	return analyzeStages(prefix, rule.stageSources(), sources)
 }

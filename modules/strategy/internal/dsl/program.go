@@ -12,8 +12,6 @@ type CompiledRule struct {
 	Score       *Expression
 	SelectWhere *Expression
 	FilterAfter *Expression
-	Entry       *Expression
-	Exit        *Expression
 	ThenScore   *Expression
 	HoldEntry   *Expression
 	HoldExit    *Expression
@@ -35,28 +33,26 @@ func (r Rule) stageSources() []stageSource {
 		{StageScore, r.Score},
 		{StageSelectWhere, r.Select.Where},
 		{StageFilterAfter, r.FilterAfter},
-		{StageEntry, r.Entry},
-		{StageExit, r.Exit},
 		{StageThenScore, ""},
 		{StageHoldEntry, ""},
 		{StageHoldExit, ""},
 		{StageScale, ""},
 	}
 	if r.Select.Then != nil {
-		sources[6].source = r.Select.Then.Score
+		sources[4].source = r.Select.Then.Score
 	}
 	if r.Hold != nil {
-		sources[7].source, sources[8].source = r.Hold.Entry, r.Hold.Exit
+		sources[5].source, sources[6].source = r.Hold.Entry, r.Hold.Exit
 	}
 	if r.Scale != nil {
-		sources[9].source = r.Scale.Expr
+		sources[7].source = r.Scale.Expr
 	}
 	return sources
 }
 
 // stageTargets 返回与 stageSources 同序的编译结果位置。
 func (r *CompiledRule) stageTargets() []**Expression {
-	return []**Expression{&r.Filter, &r.Score, &r.SelectWhere, &r.FilterAfter, &r.Entry, &r.Exit, &r.ThenScore, &r.HoldEntry, &r.HoldExit, &r.Scale}
+	return []**Expression{&r.Filter, &r.Score, &r.SelectWhere, &r.FilterAfter, &r.ThenScore, &r.HoldEntry, &r.HoldExit, &r.Scale}
 }
 
 // DirectColumns 是规则直接写列名（不经表达式）引用的当期列：select.group.by（主帧的列名，或写作 来源名.列名 的来源列，

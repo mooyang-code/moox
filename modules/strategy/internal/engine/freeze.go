@@ -65,39 +65,28 @@ func missingCauses(id string, row Row, hasRow bool, columns, previousColumns []s
 	return causes
 }
 
-// heldColumns 是规则对「该规则已持有的标的」检查的列：signal 规则的持仓只判 exit，只需要 exit（与 scale）引用的列；
-// hold 规则的持仓只看 filter、hold.exit、scale 与 select.group.by，score、entry 缺值时不出场，只是不能参与补位。
-// 集合划分与冻结判定共用这一个口径。
+// heldColumns 是规则对「该规则已持有的标的」检查的列：hold 规则的持仓只看 filter、hold.exit、scale 与 select.group.by，
+// score、entry 缺值时不出场，只是不能参与补位。集合划分与冻结判定共用这一个口径。
 func heldColumns(rule *dsl.CompiledRule) (columns, previous []string) {
-	var expressions []*dsl.Expression
-	switch {
-	case rule.Rule.Type == dsl.RuleTypeSignal && rule.Exit != nil:
-		expressions = []*dsl.Expression{rule.Exit, rule.Scale}
-	case rule.Rule.Hold != nil:
-		expressions = []*dsl.Expression{rule.Filter, rule.HoldExit, rule.Scale}
-	default:
+	if rule.Rule.Hold == nil {
 		return rule.Columns(), rule.PreviousColumns()
 	}
-	{
-		current, prior := make(map[string]struct{}), make(map[string]struct{})
-		for _, expression := range expressions {
-			if expression == nil {
-				continue
-			}
-			for _, column := range expression.AllColumns() {
-				current[column] = struct{}{}
-			}
-			for _, column := range expression.AllPreviousColumns() {
-				prior[column] = struct{}{}
-			}
+	current, prior := make(map[string]struct{}), make(map[string]struct{})
+	for _, expression := range []*dsl.Expression{rule.Filter, rule.HoldExit, rule.Scale} {
+		if expression == nil {
+			continue
 		}
-		if rule.Rule.Hold != nil {
-			for _, column := range rule.Rule.DirectColumns() {
-				current[column] = struct{}{}
-			}
+		for _, column := range expression.AllColumns() {
+			current[column] = struct{}{}
 		}
-		return sortedSet(current), sortedSet(prior)
+		for _, column := range expression.AllPreviousColumns() {
+			prior[column] = struct{}{}
+		}
 	}
+	for _, column := range rule.Rule.DirectColumns() {
+		current[column] = struct{}{}
+	}
+	return sortedSet(current), sortedSet(prior)
 }
 
 func sortedSet(set map[string]struct{}) []string {

@@ -14,7 +14,7 @@
             <a-button :disabled="loading || saving">插入示例<icon-down /></a-button>
             <template #content>
               <a-doption value="ranked">截面选股</a-doption>
-              <a-doption value="signal">择时</a-doption>
+              <a-doption value="timing">择时</a-doption>
               <a-doption value="tuned">动态调参</a-doption>
               <a-doption value="mixed">混合市场</a-doption>
               <a-doption value="pool">策略池</a-doption>
@@ -68,11 +68,9 @@
                   {{
                     rule.type === "rank"
                       ? "截面选股"
-                      : rule.type === "signal"
-                        ? "固定池择时"
-                        : rule.type === "tranche"
-                          ? `批次持仓（${rule.subStrategies} 个子策略）`
-                          : rule.type
+                      : rule.type === "tranche"
+                        ? `批次持仓（${rule.subStrategies} 个子策略）`
+                        : rule.type
                   }}{{ rule.market ? ` · 只用${RULE_MARKET_LABELS[rule.market]}` : "" }}
                 </div></a-descriptions-item
               >
@@ -108,7 +106,7 @@ import {
   parseDSL,
   poolTemplate,
   rankedTemplate,
-  signalTemplate,
+  timingTemplate,
   tunedTemplate
 } from "@/views/strategy/dsl";
 
@@ -154,7 +152,7 @@ async function load() {
 }
 const templates = {
   ranked: rankedTemplate,
-  signal: signalTemplate,
+  timing: timingTemplate,
   tuned: tunedTemplate,
   mixed: mixedMarketTemplate,
   pool: poolTemplate

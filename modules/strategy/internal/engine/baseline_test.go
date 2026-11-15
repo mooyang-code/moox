@@ -16,7 +16,7 @@ import (
 )
 
 // 基线金样（第 0 期）：用合成帧多期驱动引擎，导出每期的目标、规则状态（rule_states_json，与实盘写库同样用 json.Marshal(decision.State)）、
-// 摘要与解释明细，存为 testdata/baseline/<场景>.json。覆盖 rank 的 holding/offsets、buffer、stop、filter_after，signal，
+// 摘要与解释明细，存为 testdata/baseline/<场景>.json。覆盖 rank 的 holding/offsets、buffer、stop、filter_after、固定标的择时（显式 pool 加 hold），
 // 五种市场模式（含市场不可用时的冻结）与统一数据集。金样由当前代码生成，默认只比对；有意改变结果时用 UPDATE_BASELINE=1 重新生成。
 
 // baselineUpdate 报告本次是否重新生成基线金样。
@@ -328,9 +328,9 @@ func baselineStopBars() []baselineEngineBar {
 	return bars
 }
 
-// baselineSignalBars 是 signal 场景的数据：A、B 按 close 上穿 ma 入场、跌破 ma 出场；C 是空头，close 低于 ma 入场，第 4 期相对入场价涨 5% 以上止损（exit 不成立）；
+// baselineHoldPoolBars 是固定标的择时场景（hold_pool）的数据：A、B 按 close 上穿 ma 入场、跌破 ma 出场；C 是空头，close 低于 ma 入场，第 4 期相对入场价涨 5% 以上止损（出场条件不成立）；
 // 第 5 期 C 的 ma 因子失败（缺数）。
-func baselineSignalBars() []baselineEngineBar {
+func baselineHoldPoolBars() []baselineEngineBar {
 	closes := map[string][]float64{
 		"A": {99, 101, 103, 98, 97, 102, 104, 103},
 		"B": {50, 49, 48, 51, 52, 53, 49, 50},
@@ -598,28 +598,34 @@ portfolio:
 			},
 		},
 		{
-			name: "signal",
-			dsl: `name: baseline_signal
+			name: "hold_pool",
+			dsl: `name: baseline_hold_pool
 rules:
   - id: long
-    type: signal
+    type: rank
     pool: [A, B]
-    entry: "bars[-1].close <= bars[-1].ma && close > ma"
-    exit: "close < ma"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "bars[-1].close <= bars[-1].ma && close > ma"
+      exit: "close < ma"
     weight: {total: 0.4}
   - id: short
-    type: signal
+    type: rank
     pool: [C]
     side: short
-    entry: "close < ma"
-    exit: "close > ma"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "close < ma"
+      exit: "close > ma"
     weight: {total: 0.3}
     stop: {loss: 0.05, cooldown_bars: 1}
 portfolio:
   max_missing: 0.5
 `,
 			columns: []string{"close", "ma"},
-			bars:    baselineSignalBars(),
+			bars:    baselineHoldPoolBars(),
 			check: func(t *testing.T, decisions []Decision) {
 				require.True(t, baselineHasItem(decisions, func(item Item) bool { return item.RuleID == "long" && item.Stage == StageWeighted }), "多头应入场")
 				require.True(t, baselineHasItem(decisions, func(item Item) bool { return item.RuleID == "long" && item.Stage == StageDropped }), "多头应出场")

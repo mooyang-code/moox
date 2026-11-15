@@ -26,8 +26,6 @@ const (
 	StageScore       Stage = "score"
 	StageSelectWhere Stage = "select.where"
 	StageFilterAfter Stage = "filter_after"
-	StageEntry       Stage = "entry"
-	StageExit        Stage = "exit"
 	// StageThenScore 是 select.then 的二次排序分数（数值，可用 rank/zscore，在第一段选中的集合上计算）。
 	StageThenScore Stage = "select.then.score"
 	// StageHoldEntry、StageHoldExit 是 rank 规则 hold 块的入场、出场条件（布尔）。

@@ -19,10 +19,14 @@ rules:
 
   - id: btc_trend
     name: BTC 上穿均线
-    type: signal
+    type: rank
     pool: [BTC-USDT]
-    entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
-    exit: "bars[0].bias < 1"
+    allow_empty: true
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
+      exit: "bars[0].bias < 1"
     weight: {total: 0.2}
 
 portfolio:
@@ -32,17 +36,20 @@ portfolio:
   max_missing: 0.2
 `;
 
-/** 固定池择时模板：BTC、ETH 站上 20 期均线时持有。 */
-export const signalTemplate = `name: majors_trend
+/** 固定标的择时模板：BTC、ETH 站上 20 期均线时持有。score 取常数、select.top 取足够大，表示池里满足进出场条件的都持有。 */
+export const timingTemplate = `name: majors_trend
 bar: 1m
 
 rules:
   - id: majors_trend
     name: 主流币均线择时
-    type: signal
+    type: rank
     pool: [BTC-USDT, ETH-USDT]
-    entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
-    exit: "bars[0].bias < 1"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
+      exit: "bars[0].bias < 1"
     weight: {total: 0.6}
 
 portfolio:
@@ -230,8 +237,7 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
       const id = typeof rule?.id === "string" ? rule.id : "";
       const type = typeof rule?.type === "string" ? rule.type : "";
       if (!id) diagnostics.push({ message: `rules[${index}] 缺少 id` });
-      if (type !== "rank" && type !== "signal" && type !== "tranche")
-        diagnostics.push({ message: `rules[${index}] 的 type 只能是 rank、signal 或 tranche` });
+      if (type !== "rank" && type !== "tranche") diagnostics.push({ message: `rules[${index}] 的 type 只能是 rank 或 tranche` });
       const rows = rule?.params?.rows;
       const subStrategies = type === "tranche" ? (Array.isArray(rows) ? rows.length : 1) : 0;
       const preview: DSLRulePreview = {

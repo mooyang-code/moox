@@ -14,10 +14,13 @@ rules:
     select: {top: 10}
     weight: {total: 0.5}
   - id: btc
-    type: signal
+    type: rank
     pool: [BTC-USDT]
-    entry: "m > 0"
-    exit: "m < 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "m > 0"
+      exit: "m < 0"
     weight: {total: 0.5}
 portfolio:
   max_missing: 0.2
@@ -72,7 +75,7 @@ func TestS1MissingGuardCountsOnlyExpectedMinusAgedOut(t *testing.T) {
 
 	// 显式 pool 的 BTC 不受 universe.exclude 影响。
 	if item := findItem(t, boundary, "btc", "BTC-USDT"); item.Stage != StageWeighted || item.Weight != "0.5" {
-		t.Fatalf("BTC 应在 signal 规则中进入权重：%+v", item)
+		t.Fatalf("BTC 应在显式 pool 的规则中进入权重：%+v", item)
 	}
 	for _, item := range boundary.Items {
 		if item.RuleID == "r" && item.InstrumentID == "BTC-USDT" {
@@ -197,18 +200,21 @@ portfolio:
 
 // 上期持有、本期已不在预期集合中的标的给出 dropped(not_expected) 明细。
 func TestHeldInstrumentLeavingExpectedSetIsExplained(t *testing.T) {
-	signal := compile(t, `name: gone
+	program := compile(t, `name: gone
 rules:
   - id: s
-    type: signal
+    type: rank
     pool: [BTC-USDT, ETH-USDT]
-    entry: "m > 0"
-    exit: "m < 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "m > 0"
+      exit: "m < 0"
     weight: {total: 0.5}
 `, "m")
-	frame := frameOf(signal, map[string]Row{"ETH-USDT": values("m", 1)})
+	frame := frameOf(program, map[string]Row{"ETH-USDT": values("m", 1)})
 	previous := State{Rules: map[string]RuleState{"s": {Held: []string{"BTC-USDT"}}}, Targets: map[string]string{"BTC-USDT|swap": "0.5"}}
-	decision := evaluate(t, signal, frame, previous)
+	decision := evaluate(t, program, frame, previous)
 	assertOK(t, decision)
 	assertWeights(t, decision, map[string]string{"ETH-USDT": "0.5"})
 	if item := findItem(t, decision, "s", "BTC-USDT"); item.Stage != StageDropped || item.Reason != "not_expected" {

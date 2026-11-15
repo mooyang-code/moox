@@ -27,8 +27,7 @@ type ruleSets struct {
 
 // partitionRule 按规则引用的列划分可用与缺数：行不存在、所需列为空、或该列上游对该标的失败，都算缺数。
 // 年龄剔除只拦住新进入的标的：规则上期已持有的标的在建仓时已经满足 min_age_bars，不会因为探针窗口内恰好
-// 缺数（历史数据缺口）被当作新上市剔除。signal 规则的持仓只判 exit，只需要 exit 引用的列（含 bars[-1]）：
-// 只缺 entry 用到的输入（例如交叉入场的上一根）不能触发清仓；未持有的候选同时判 entry 与 exit，需要全部列。
+// 缺数（历史数据缺口）被当作新上市剔除。持有的标的只检查 heldColumns 给出的列（见 freeze.go）。
 func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen map[string]struct{}, holdReasons map[string]string) ruleSets {
 	sets := ruleSets{agedOut: make(map[string]struct{}), missing: make(map[string]string), frozen: make(map[string]struct{}), holdReason: holdReasons}
 	heldSet := make(map[string]struct{}, len(held))

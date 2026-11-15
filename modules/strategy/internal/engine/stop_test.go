@@ -202,16 +202,19 @@ portfolio: {max_missing: 1}
 	require.Equal(t, StageStopped, items["A-USDT"].Stage)
 }
 
-// signal：止损等同 exit，exit 的输入缺失也照常判断；明细合并成一条；做空方向。
-func TestSignalStopShortAndMissingExitInput(t *testing.T) {
+// 固定标的择时：止损等同出场，出场条件的输入缺失也照常判断；明细合并成一条；做空方向。
+func TestHoldPoolStopShortAndMissingExitInput(t *testing.T) {
 	run := newStopRun(t, `name: s
 rules:
   - id: r
-    type: signal
+    type: rank
     pool: [A-USDT]
     side: short
-    entry: "e > 0"
-    exit: "x > 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "e > 0"
+      exit: "x > 0"
     weight: {total: 1}
     stop: {loss: 0.05, cooldown_bars: 3}
 portfolio: {max_missing: 1}
@@ -223,7 +226,7 @@ portfolio: {max_missing: 1}
 	require.Empty(t, weights)
 	require.Equal(t, StageStopped, items["A-USDT"].Stage)
 	require.Contains(t, items["A-USDT"].Reason, reasonStopLoss+";missing:x")
-	// 冷却中 entry 成立也不入场。
+	// 冷却中入场条件成立也不入场。
 	weights, items, _ = run.step(map[string]map[string]float64{"A-USDT": {"close": 105, "e": 1, "x": 0}})
 	require.Empty(t, weights)
 	require.Equal(t, reasonCooldown, items["A-USDT"].Reason)
