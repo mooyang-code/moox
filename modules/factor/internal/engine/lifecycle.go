@@ -36,7 +36,6 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 			AutoConfirm: r.autoConfirmTask,
 			Catchup:     r.catchupHook,
 			Quiesce:     r.quiesce,
-			Reset:       r.resetSpec(),
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
 				if to == lifecycle.StageResuming {
 					// 恢复一开始就同步目录：追赶的前置条件要等本次恢复之后的同步。
@@ -51,7 +50,7 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 // gate 是实时周期处理前的门禁：任务没有处于预热或运行就不计算。
 func (r *Runtime) gate(taskID string) bool { return r.life.Allowed(setRef(taskID)) }
 
-// catchupGate 是恢复追赶的门禁：只写历史数据（连续水位追赶、历史周期补算）；暂停、重置期间一律关闭。
+// catchupGate 是恢复追赶的门禁：只写历史数据（连续水位追赶、历史周期补算）；暂停期间一律关闭。
 // 除生命周期允许外还要满足追赶前置条件：本次恢复之后至少成功同步过一次目录（见 catchupPrecondition），
 // 否则可能先用暂停前的旧目录写出结果。
 // 模块处于暂停时一律关闭：任务级的 resume --force 在模块暂停期间原本可以只放行这个任务的追赶，但那会让已经上报“本次暂停已收敛”
@@ -260,7 +259,6 @@ func (r *Runtime) lifecycleRoutes() []factorhealth.Route {
 		{Path: lifecycle.StatusPath, Handler: r.life.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: r.life.CommandHandler()},
 		{Path: lifecycle.CatchupPath, Handler: r.life.CatchupHandler()},
-		{Path: lifecycle.ResetPrefix, Handler: r.life.ResetHandler()},
 	}
 }
 

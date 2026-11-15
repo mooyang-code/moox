@@ -45,8 +45,6 @@ type collectorControl struct {
 	spaces     func(context.Context) ([]string, error)
 	known      []string
 	recovering bool
-	// timerWait 是重置前等待 SCF 定时器停用的时限（默认 2 分钟，测试可缩短）。
-	timerWait time.Duration
 	// recoveryTo 是本次恢复的追赶目标：进入恢复追赶的时刻，固定不变（见 Backfiller.Catchup）。
 	recoveryTo time.Time
 }
@@ -146,7 +144,7 @@ func (c *collectorControl) onChange(ctx context.Context, from, to lifecycle.Stag
 			log.ErrorContextf(ctx, "collector_lifecycle_resume_failed error=%v", err)
 		}
 	case lifecycle.StageReady, lifecycle.StageWarming, lifecycle.StageRunning:
-		// 放行回到可工作的阶段才放开暂停开关；离开暂停去重置、未就绪、故障时必须保持暂停（采集不能自己重新开始）。
+		// 放行回到可工作的阶段才放开暂停开关；离开暂停去未就绪、故障时必须保持暂停（采集不能自己重新开始）。
 		if from == lifecycle.StageResuming || from == lifecycle.StagePaused {
 			c.setRecovering(false)
 			if err := c.setPaused(ctx, false); err != nil {
@@ -252,7 +250,7 @@ func (c *collectorControl) runRecovery(ctx context.Context) {
 	}
 }
 
-func newCollectorLifecycle(dbPath string, control *collectorControl, ready func() bool, reset *lifecycle.ResetSpec) (*lifecycle.Controller, error) {
+func newCollectorLifecycle(dbPath string, control *collectorControl, ready func() bool) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
 		Audit:          logsink.Audit,
 		Module:         "collector",
@@ -265,9 +263,7 @@ func newCollectorLifecycle(dbPath string, control *collectorControl, ready func(
 				}
 				return []lifecycle.Check{{Name: "数据库", Status: lifecycle.CheckPass}}
 			},
-			Quiesce:    func(ctx context.Context, _ lifecycle.Ref) error { return control.quiesce(ctx) },
-			Reset:      reset,
-			AfterReset: control.afterReset,
+			Quiesce: func(ctx context.Context, _ lifecycle.Ref) error { return control.quiesce(ctx) },
 			Catchup: func(ctx context.Context, ref lifecycle.Ref, since time.Time) (lifecycle.Catchup, error) {
 				if ref != (lifecycle.Ref{}) {
 					return lifecycle.Catchup{CaughtUp: true}, nil
@@ -287,7 +283,6 @@ func collectorLifecycleRoutes(c *lifecycle.Controller) []health.Route {
 		{Path: lifecycle.StatusPath, Handler: c.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: c.CommandHandler()},
 		{Path: lifecycle.CatchupPath, Handler: c.CatchupHandler()},
-		{Path: lifecycle.ResetPrefix, Handler: c.ResetHandler()},
 	}
 }
 

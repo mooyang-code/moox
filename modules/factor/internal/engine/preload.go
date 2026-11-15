@@ -42,8 +42,8 @@ type preloader struct {
 	source SourceDataset
 	data   preloadData
 	active func() bool
-	// blocked 非空且返回 true 时不预载：模块暂停、恢复追赶、重置期间预载循环不能自己把数据拉回本地
-	//（恢复追赶由生命周期的追赶钩子显式刷新，重置期间更不能把刚清掉的数据重新写进去）。
+	// blocked 非空且返回 true 时不预载：模块暂停、恢复追赶期间预载循环不能自己把数据拉回本地
+	//（恢复追赶由生命周期的追赶钩子显式刷新）。
 	blocked func() bool
 	// onReady 在一个任务预载成功后调用（唤醒跳过恢复补算预载期间跳过的周期）。
 	onReady func(taskID string)
@@ -206,13 +206,6 @@ func (p *preloader) Refresh(ctx context.Context, taskID string) error {
 
 func newPreloader(sets preloadCatalog, source SourceDataset, data preloadData, active func() bool, onReady func(string)) *preloader {
 	return &preloader{sets: sets, source: source, data: data, active: active, onReady: onReady, kick: make(chan struct{}, 1), prepared: map[string]preparedState{}}
-}
-
-// Forget 忘掉所有任务的预载记录（重置清空本地数据之后，每个任务要重新预载）。
-func (p *preloader) Forget() {
-	p.mu.Lock()
-	p.prepared = map[string]preparedState{}
-	p.mu.Unlock()
 }
 
 // Kick 让预载循环尽快检查一次，不阻塞。引擎成为活动引擎、目录变化时调用。

@@ -60,8 +60,6 @@ type Lifecycle interface {
 type Module struct {
 	Name string
 	API  Lifecycle
-	// Reset 是模块的重置接口（要用重置专用密钥）；系统重置要求参与的模块都有。
-	Reset ResetAPI
 }
 
 // Orchestrator 编排系统级暂停与恢复。
@@ -75,8 +73,6 @@ type Orchestrator struct {
 	Sleep func(ctx context.Context, d time.Duration) error
 	// Out 接收进度输出，可为 nil。
 	Out io.Writer
-	// Reset 是系统重置的配置（状态目录、系统名、外部步骤）。
-	Reset ResetConfig
 }
 
 func (o *Orchestrator) logf(format string, args ...any) {

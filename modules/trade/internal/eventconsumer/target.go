@@ -30,7 +30,7 @@ type TargetOptions struct {
 	SetReady       func(bool)
 	WeightResolver TargetWeightResolver
 	ResolveTimeout time.Duration
-	// Intake 返回 false（暂停、恢复追赶、重置）时延迟重投真实目标；影子目标只是记录，不受影响。
+	// Intake 返回 false（暂停、恢复追赶）时延迟重投真实目标；影子目标只是记录，不受影响。
 	Intake func() bool
 }
 

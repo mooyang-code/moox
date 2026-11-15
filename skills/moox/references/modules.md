@@ -64,7 +64,7 @@
 ./bin/moox-cli collector data-type list|show                          # 可采集的数据类型
 ```
 
-- 删除任务与结果不可恢复：`collector task delete`、`delete-result` 默认只预览，`--yes` 才执行。`collector task purge` 清理 Collector 本机库里的任务运行数据与结果引用（默认只输出清单，`--yes` 才执行），属于重置前后的维护动作，先问用户。
+- 删除任务与结果不可恢复：`collector task delete`、`delete-result` 默认只预览，`--yes` 才执行。
 - Storage 数据被清空后，要让采集重新登记序列快照并重置补采状态：`collector fetch-plan reregister --space-id <空间> --yes`（系统重置后的必做步骤，见 [`fresh-deploy.md`](fresh-deploy.md)）。
 - 云函数由 Collector 的对账器按采集计划自动建、自动修，不需要手工创建或部署：`collector function package`（构建代码包）、`upload`（构建或使用现成的包并只上传，落后的函数自动升级）、
   `list`（现场读回计划里的函数与期望比对，`--drift` 只看不一致的；计划外的同前缀函数单列，定时器已被停掉）、`delete`（按名字或前缀删函数，默认只预览；`--namespace`、`--region` 只删这个命名空间、地域里的，删旧命名空间里的同名副本时必带，否则在用的同名函数也会被删；计划里的函数删掉后下一轮重建）、
@@ -98,8 +98,7 @@
   - 补算与状态：`factor recalc submit|list|show|cancel`（左闭右开）、`factor status`；
   - 阶段控制 `./bin/moox-cli lifecycle status|check|init|start|confirm|pause|resume --task-id <任务>`（默认连因子引擎，`--module` 换模块）；
   - 生命周期的其余命令：`lifecycle catchup`（恢复追赶进度）、`release`（追平后手动放行，配合 `resume --manual-release`）、`shadow --space-id <空间> --id <实例>`（读 Trade 为试运行实例记录的影子目标，固定连 trade 模块）；
-    单个模块的重置 `lifecycle reset-plan|reset-apply|reset-status|reset-abort`：先 `pause` 模块，`reset-plan --scope data|all` 只读列出每一步与阻止条件并给 10 分钟内有效、只能用一次的令牌，再 `reset-apply --token … --scope … --yes`；
-    会删除运行数据，必须先得到用户明确同意，整套系统的重置用 `system reset`；
+    没有单个模块或整套系统的重置命令，清空数据只用 `setup wipe`（破坏性，必须先得到用户明确同意）；
   - 自定义算子 `./bin/moox-cli udf new|build|publish|preview|activate|list|show`（[`udf.md`](udf.md)；`activate` 默认只看影响清单，`--yes` 才切换）。
 - **注意**：被启用成员引用的定义不能改；长回看因子受保留期、`window.lookback`、`compute.max_memory` 三道限制。
 
@@ -188,16 +187,13 @@ worker 每次导出就把分区单次 PUT 到对象存储、读回时本地缺�
 `archive partitions get` 的 `remote_state`（off / none / verified / failed / pending），`archive runs list` 的 `partitions_uploaded`。导出超过 24 小时没有已校验的远端副本算需关注、超过 3 天算异常。
 密钥、桶与权限的准备见 `docs/部署与运维.md` 的“归档对象存储”；worker 侧细节见 `docs/模块/归档.md` 第 9 节。
 
-## 系统暂停、恢复与重置（只有命令行）
+## 系统暂停与恢复（只有命令行）
 
 ```bash
 ./bin/moox-cli system status     # 按 moox.toml 自动连各模块，没有部署的模块跳过
 ./bin/moox-cli system pause      # 从下游到上游逐个暂停（默认只预览将要暂停的模块，--yes 才执行）
 ./bin/moox-cli system resume     # 先追赶补采，全部追平后统一放行
-./bin/moox-cli system reset plan|apply|status|abort   # 删除运行数据回到“刚部署完”的状态，破坏性，必须先得到用户明确确认
 ```
-
-只能出站的主机（如局域网因子机）读不到模块自己的重置专用密钥，`system reset` 需要用户提供环境变量 `MOOX_<模块>_HEALTH_RESET_ACCESS_KEY` / `_SECRET_KEY`。
 
 ## 空间、密钥与配置
 

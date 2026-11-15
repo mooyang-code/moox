@@ -15,7 +15,7 @@ import (
 )
 
 // 因子管理（FactorMgr）的生命周期：模块级，没有对象。暂停时修改类接口（创建、修改、删除、启停因子与因子任务，提交与取消重算）被拒绝，
-// 读接口与引擎的同步、心跳、领取任务照常；它没有要追赶的数据。重置见 reset.go。
+// 读接口与引擎的同步、心跳、领取任务照常；它没有要追赶的数据。
 
 const lifecycleRefreshEvery = 30 * time.Second
 
@@ -31,7 +31,6 @@ func newMgrLifecycle(db *store.Store, dbPath string) (*lifecycle.Controller, err
 				}
 				return []lifecycle.Check{{Name: "数据库", Status: lifecycle.CheckPass}}
 			},
-			Reset: mgrResetSpec(db, dbPath),
 			OnChange: func(_ lifecycle.Ref, from, to lifecycle.Stage, reason string) {
 				log.Infof("factor_mgr_lifecycle_changed from=%s to=%s reason=%s", from, to, reason)
 			},
@@ -39,11 +38,11 @@ func newMgrLifecycle(db *store.Store, dbPath string) (*lifecycle.Controller, err
 	})
 }
 
-// mutationGate 是修改类接口的门禁：模块被有意停下（暂停、恢复追赶、重置、故障）时拒绝。
+// mutationGate 是修改类接口的门禁：模块被有意停下（暂停、恢复追赶、故障）时拒绝。
 func mutationGate(life *lifecycle.Controller) func() error {
 	return func() error {
 		if life.Halted(lifecycle.Ref{}) {
-			return errors.New("因子管理当前不接受修改：模块已暂停、恢复追赶中或正在重置（moox-cli lifecycle status 查看）")
+			return errors.New("因子管理当前不接受修改：模块已暂停或恢复追赶中（moox-cli lifecycle status 查看）")
 		}
 		return nil
 	}
@@ -54,7 +53,6 @@ func lifecycleRoutes(c *lifecycle.Controller) []factorhealth.Route {
 		{Path: lifecycle.StatusPath, Handler: c.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: c.CommandHandler()},
 		{Path: lifecycle.CatchupPath, Handler: c.CatchupHandler()},
-		{Path: lifecycle.ResetPrefix, Handler: c.ResetHandler()},
 	}
 }
 

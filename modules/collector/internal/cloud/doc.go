@@ -24,7 +24,7 @@
 //     - Updating（改配置后、换代码后立刻）：已确认，停用被接受，回到 Active 后定时器仍是关的。
 //     - UpdateFailed：已确认，停用、启用都被接受。
 //     - CreateFailed：不成立。腾讯云拒绝一切触发器操作（FailedOperation，“functionInfo Status is CreateFailed, unsupport operate”）。
-//     原先 SetTimer(停用) 在没有定时器时会去建一个关着的定时器，在 CreateFailed 上失败并重试到超时，暂停与重置的第一步会卡住。
+//     原先 SetTimer(停用) 在没有定时器时会去建一个关着的定时器，在 CreateFailed 上失败并重试到超时，暂停会卡住。
 //     修法：SetTimer 停用时，函数是 CreateFailed 就直接成功（建定时器要求函数正常，CreateFailed 的函数不可能有定时器）；
 //     其他状态先读定时器，没有就直接成功（没有定时器就不会触发）。读回（Describe）在 CreateFailed 时不读定时器与异步、预留配置；
 //     Delete 在 CreateFailed 时跳过删定时器。Ensure 的路径不变（CreateFailed 先删再建，不碰触发器）。

@@ -484,12 +484,11 @@ const PHASE_LABELS: Record<string, string> = {
   running: "运行中",
   paused: "已暂停",
   partially_paused: "部分暂停",
-  resuming: "恢复中",
-  resetting: "重置中"
+  resuming: "恢复中"
 };
 
 export interface SystemStage {
-  /** 圆点颜色：红（健康面异常）、紫（重置中）、青（恢复追赶）、橙（降级或暂停）、黄（试运行）、蓝（就绪）、绿（运行）、灰。 */
+  /** 圆点颜色：红（健康面异常）、青（恢复追赶）、橙（降级或暂停）、黄（试运行）、蓝（就绪）、绿（运行）、灰。 */
   color: LifecycleColor;
   /** 形如「运行中 · 降级」「试运行」「就绪」。 */
   label: string;

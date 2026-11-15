@@ -79,7 +79,6 @@
 | `collector task disable` | 停用采集任务（默认只预览，--yes 才执行） |
 | `collector task inventory` | 查看采集结果清单（任务拥有的结果数据集与 View） |
 | `collector task list` | 列出采集任务 |
-| `collector task purge` | 清理 Collector 任务运行数据和结果引用 |
 | `collector task show` | 查看一个采集任务 |
 | `collector task update` | 修改采集任务的名称、说明或启用状态 |
 
@@ -216,10 +215,6 @@
 | `lifecycle init` | 初始化：未就绪 → 就绪（准备本地状态与历史） |
 | `lifecycle pause` | 暂停：不再计算新周期（--for 可设定自动恢复） |
 | `lifecycle release` | 放行：追赶已追平的对象回到暂停前的阶段 |
-| `lifecycle reset-abort` | 放弃失败的重置：模块置为未初始化，已做的步骤不会回来 |
-| `lifecycle reset-apply` | 发起重置（--token --scope）或续做（--operation-id）；模块必须已暂停 |
-| `lifecycle reset-plan` | 重置计划：只读，列出每一步、保留什么、不备份什么，并给出一次性令牌（10 分钟） |
-| `lifecycle reset-status` | 查看重置状态与步骤日志 |
 | `lifecycle resume` | 恢复：先追赶暂停期间的周期，追平后放行 |
 | `lifecycle shadow` | 查看试运行中的策略实例的影子目标（固定连接 trade 模块） |
 | `lifecycle start` | 启动：就绪 → 试运行（完整计算，但不真实下单） |
@@ -357,13 +352,12 @@
 | `space show` | 查看 Storage 里一个空间的元数据 |
 | `space update` | 修改空间 |
 
-## storage：View 维护与元数据重置
+## storage：View 维护
 
 | 命令 | 说明 |
 | --- | --- |
 | `storage delete-view` | 离线删除一个 View 的元数据（不带 --yes 时存储机上的程序会拒绝执行） |
 | `storage repair-view` | 重建指定 View 的索引（默认只预览，--yes 才执行） |
-| `storage reset-metadata` | 备份后清空全部业务定义并重新导入种子（Storage 必须已停止；默认只预览，--yes 才执行） |
 
 ## strategy：策略定义、实例、结果、历史回放与展示设置（调用 StrategyMgr）
 
@@ -398,10 +392,6 @@
 | 命令 | 说明 |
 | --- | --- |
 | `system pause` | 系统暂停：下游到上游逐个暂停（默认只预览，--yes 才执行） |
-| `system reset abort` | 放弃未完成的系统重置（只标记日志，不撤销已做的步骤，不动各模块） |
-| `system reset apply` | 执行系统重置（--token）或续做（--operation-id） |
-| `system reset plan` | 系统重置计划（只读），给出令牌 |
-| `system reset status` | 查看系统重置日志 |
 | `system resume` | 系统恢复：先追赶补采，全部追平后统一放行 |
 | `system status` | 查看各模块的阶段与恢复追赶进度 |
 

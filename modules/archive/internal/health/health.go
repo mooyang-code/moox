@@ -31,7 +31,7 @@ func Handler(state *State, routes ...Route) http.Handler {
 		return standard
 	}
 	for _, route := range routes {
-		// 前缀路由不限方法：生命周期命令与重置都是 POST。
+		// 前缀路由不限方法：生命周期命令是 POST。
 		mux.HandlePrefix(route.Path, route.Handler)
 	}
 	return mux

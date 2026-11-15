@@ -370,29 +370,10 @@ func TestSystemPauseHoldWorksEvenWhenModuleNotReady(t *testing.T) {
 	require.Equal(t, HoldNone, obj.Hold)
 }
 
-func TestPostResetHoldBlocksAutoInit(t *testing.T) {
-	f := newFake()
-	f.refs = []Ref{set1}
-	f.setObject(set1, pass("ok"))
-	c := newController(t, f, "")
-	ctx := context.Background()
-	c.mu.Lock()
-	c.self.Hold = HoldPostReset
-	c.mu.Unlock()
-	c.Refresh(ctx)
-	require.Equal(t, StageUninitialized, c.Stage(Ref{}), "重置后 Refresh 不自动初始化模块自身")
-	require.False(t, c.CatchupAllowed(set1))
-
-	obj, err := c.Command(ctx, CmdInit, Ref{})
-	require.NoError(t, err)
-	require.Equal(t, StageReady, obj.Stage)
-	require.Equal(t, HoldNone, obj.Hold)
-}
-
-// 门禁矩阵：自身未初始化、未就绪、重置、故障时一律不放行实时计算与追赶。
+// 门禁矩阵：自身未初始化、未就绪、故障时一律不放行实时计算与追赶。
 func TestGateMatrixDeniesNonOperationalModuleStages(t *testing.T) {
 	fx := newFixture(t, "")
-	for _, stage := range []Stage{StageUninitialized, StageNotReady, StageResetting, StageResetFailed, StageFault} {
+	for _, stage := range []Stage{StageUninitialized, StageNotReady, StageFault} {
 		fx.c.mu.Lock()
 		fx.c.self.Stage = stage
 		fx.c.objects[set1.key()].Stage = StageResuming // 即使对象在追赶
@@ -450,8 +431,6 @@ func TestAutoResumeGoesThroughCatchup(t *testing.T) {
 
 func TestStageColorsOfNewStages(t *testing.T) {
 	require.Equal(t, "cyan", StageResuming.Color())
-	require.Equal(t, "purple", StageResetting.Color())
-	require.Equal(t, "red", StageResetFailed.Color())
 	require.False(t, StageResuming.Active())
 }
 
@@ -514,7 +493,7 @@ func TestHaltedOnlyForDeliberateStops(t *testing.T) {
 	_, err = c.Execute(ctx, Request{Command: CmdPause, PauseKind: PauseSystem})
 	require.NoError(t, err)
 	c.mu.Lock()
-	c.self.Stage = StageResetting
+	c.self.Stage = StageFault
 	c.mu.Unlock()
 	require.True(t, c.Halted(Ref{}))
 }

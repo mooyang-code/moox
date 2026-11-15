@@ -24,7 +24,7 @@ func (s *Store) ListCategories(ctx context.Context) ([]domain.FactorCategory, er
 	return categories, nil
 }
 
-// EnsureDefaultCategory 补回默认分类“未分类”（建表脚本也会写入；重置清空分类后由这里立刻补回）。
+// EnsureDefaultCategory 补回默认分类“未分类”（建表脚本也会写入；分类被清空后由这里立刻补回）。
 func (s *Store) EnsureDefaultCategory(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("factor database is not open")

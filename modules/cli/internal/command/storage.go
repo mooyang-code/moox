@@ -19,8 +19,8 @@ import (
 var storageCmd = &cobra.Command{
 	Use:     "storage",
 	Aliases: []string{"存储"},
-	Short:   "View 维护与元数据重置",
-	Long: "Storage 的维护命令。维护命令（repair-view、reset-metadata、delete-view）" +
+	Short:   "View 维护",
+	Long: "Storage 的维护命令。维护命令（repair-view、delete-view）" +
 		"按 --file（moox.toml）经 SSH 在存储机上执行部署包里的 moox-storage-cli，不需要本机装存储程序。历史数据导入请使用 moox-cli import。",
 	Run: func(cmd *cobra.Command, args []string) {
 		_ = cmd.Help()
@@ -67,11 +67,6 @@ var storageMaintenanceActions = []storageMaintenanceAction{
 		Action: "repair-view", Aliases: []string{"修复视图", "repair"}, Defaults: storageConfDefaults, DryRun: true,
 		Short: "重建指定 View 的索引（默认只预览，--yes 才执行）",
 		Long:  "暂停 storage-view、删除 View 的索引文件，恢复后从 Primary 重新建索引，元数据不用改。常用参数：--space-id、--view-id、--restart=false。\n记录型 View 重建后为空，只跟随新写入。",
-	},
-	{
-		Action: "reset-metadata", Aliases: []string{"重置元数据"}, Defaults: storageConfDefaults, DryRun: true,
-		Short: "备份后清空全部业务定义并重新导入种子（Storage 必须已停止；默认只预览，--yes 才执行）",
-		Long:  "常用参数：--seed（种子文件，在存储机上的路径）。",
 	},
 	{
 		Action: "delete-view", Defaults: storageMetadataDefaults,
@@ -149,7 +144,7 @@ func takeFlag(args []string, name string) (value string, rest []string, found bo
 	return "", args, false
 }
 
-// storageRemoteScript 在存储机上执行动作：输出先落到维护日志再回显，SSH 中断时结果（如 reset-metadata 的 backup）不会丢；退出码原样返回。
+// storageRemoteScript 在存储机上执行动作：输出先落到维护日志再回显，SSH 中断时结果（如 repair-view 的进度）不会丢；退出码原样返回。
 const storageRemoteScript = `umask 077; dir="$1"; name="$2"; shift 2; mkdir -p "$dir" || exit 125; log="$dir/$name-$(date -u +%Y%m%dT%H%M%SZ).log"; "$@" >"$log" 2>&1; code=$?; cat "$log"; echo "（输出已保存在存储机 $log）" >&2; exit $code`
 
 func runStorageMaintenance(cmd *cobra.Command, action storageMaintenanceAction, args []string) error {

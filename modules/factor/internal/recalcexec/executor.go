@@ -65,7 +65,7 @@ const defaultChunkPeriods = 2000
 // maxChunkRetryBackoff 是同一个补算分块两次重试之间等待的上限。
 const maxChunkRetryBackoff = 2 * time.Minute
 
-// ErrGated 表示任务被生命周期门禁挡住（暂停、重置……），这一块没有运行；调用方不应把它当作失败。
+// ErrGated 表示任务被生命周期门禁挡住（暂停、恢复追赶……），这一块没有运行；调用方不应把它当作失败。
 var ErrGated = errors.New("factor task is gated by lifecycle")
 
 // ParamReader 读取已有结果行的 __params：补算按它还原每一期每个标的当时用的可变成员参数（设计 7.4）。__params 只记可变成员，
@@ -102,7 +102,7 @@ func WithChunkRetry(attempts int, backoff time.Duration) Option {
 func WithParamReader(reader ParamReader) Option { return func(cfg *config) { cfg.params = reader } }
 
 // WithGate 设置生命周期门禁：每个分块真正写结果之前（已持有任务锁）检查，任务不允许写结果时返回 ErrGated。
-// 补算、缺口恢复、失效重算都经过这个执行器，所以暂停、恢复追赶、重置期间这些后台路径不会越过门禁写结果。
+// 补算、缺口恢复、失效重算都经过这个执行器，所以暂停、恢复追赶期间这些后台路径不会越过门禁写结果。
 func WithGate(gate func(taskID string) bool) Option { return func(cfg *config) { cfg.gate = gate } }
 
 // WithWriteScope 设置写结果的登记式门禁，设置后取代 WithGate：begin 先登记在途、再检查门禁，不允许写时返回 false，

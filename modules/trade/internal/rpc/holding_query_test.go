@@ -142,7 +142,7 @@ func TestHoldingQueryPaperPrefetchesQuotesAndKeepsAverageCost(t *testing.T) {
 		}
 		return nil
 	}))
-	sqlDB, err := tradeStore.SQLDB()
+	sqlDB, err := tradeStore.DBForTest().DB()
 	require.NoError(t, err)
 	_, err = sqlDB.Exec(`INSERT INTO t_trade_orders (c_space_id, c_order_id, c_trading_account_id, c_client_order_id, c_exchange, c_market_type, c_instrument_id,
 		c_exchange_symbol, c_order_type, c_side, c_quantity, c_reference_price, c_reference_price_at, c_owner_type, c_owner_id, c_state)

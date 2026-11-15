@@ -71,9 +71,9 @@ var systemPausable = map[string]bool{"collector": true, "factor-engine": true, "
 var phaseRank = map[string]int{"uninitialized": 0, "not_ready": 0, "ready": 1, "warming": 2, "running": 3}
 
 // projectSystem 汇总系统状态（设计 6.1）：
-//   - 健康面：任何模块未就绪、重置失败或故障，系统标红，并列出模块与原因；
-//   - 运行阶段：就绪 → 预热 → 运行，各模块里最靠前的；暂停、恢复追赶、重置是叠加在上面的控制状态：
-//     有模块在重置 → resetting；有模块恢复追赶 → resuming（含「已追平待放行」）；全部可暂停模块暂停 → paused，部分暂停 → partially_paused；
+//   - 健康面：任何模块未就绪或故障，系统标红，并列出模块与原因；
+//   - 运行阶段：就绪 → 预热 → 运行，各模块里最靠前的；暂停、恢复追赶是叠加在上面的控制状态：
+//     有模块恢复追赶 → resuming（含「已追平待放行」）；全部可暂停模块暂停 → paused，部分暂停 → partially_paused；
 //   - 降级只算不是用户意图的情形（自动暂停、故障）；手动、系统暂停和恢复追赶都不算降级。
 //
 // 没有任何模块上报生命周期状态时返回 nil。
@@ -113,11 +113,11 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 	if len(modules) == 0 {
 		phase, phaseName = 0, "uninitialized"
 	}
-	var pausedModules, pausableModules, resuming, caughtUp, resetting int
+	var pausedModules, pausableModules, resuming, caughtUp int
 	var pausedSince string
 	for _, m := range modules {
 		l := m.l
-		bad := l.Stage == "not_ready" || l.Stage == "fault" || l.Stage == "reset_failed"
+		bad := l.Stage == "not_ready" || l.Stage == "fault"
 		if bad {
 			out.Health = "attention"
 			reason := l.Reason
@@ -160,8 +160,6 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 				caughtUp++
 			}
 			out.CatchupNotes = append(out.CatchupNotes, catchupNote(m.name, l.Catchup))
-		case "resetting":
-			resetting++
 		}
 		if l.Recovered > 0 {
 			out.AutoRecovered = true
@@ -182,8 +180,6 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 	out.PausedSince = pausedSince
 	out.ResumingModules, out.CaughtUpModules = int32(resuming), int32(caughtUp)
 	switch {
-	case resetting > 0:
-		out.Phase = "resetting"
 	case resuming > 0:
 		out.Phase = "resuming"
 	case pausedModules > 0 && pausedModules == pausableModules:
@@ -194,8 +190,6 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 	switch {
 	case out.Health == "attention":
 		out.Color = "red"
-	case out.Phase == "resetting":
-		out.Color = "purple"
 	case out.Phase == "resuming":
 		out.Color = "cyan"
 	case out.Degraded || out.Phase == "paused" || out.Phase == "partially_paused":

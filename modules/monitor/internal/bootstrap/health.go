@@ -35,7 +35,6 @@ func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, r
 	}
 	healthAuth, err := healthz.NewAuthenticator(healthz.AuthConfig{
 		Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey,
-		ResetAccessKey: cfg.HealthAuth.ResetAccessKey, ResetSecretKey: cfg.HealthAuth.ResetSecretKey,
 		ClockSkew: time.Minute, NonceTTL: 2 * time.Minute,
 	})
 	if err != nil {
@@ -46,11 +45,10 @@ func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, r
 	handler.Handle("/readyz", healthAuth.Wrap(healthz.ReadinessHandler(state.Snapshot)))
 	handler.Handle("/metrics", healthAuth.Wrap(promhttp.Handler()))
 	if life != nil {
-		// 前缀路由不限方法：生命周期命令与重置都是 POST。
+		// 前缀路由不限方法：生命周期命令是 POST。
 		handler.HandlePrefix(lifecycle.StatusPath, healthAuth.Wrap(life.StatusHandler()))
 		handler.HandlePrefix(lifecycle.CommandPath, healthAuth.Wrap(life.CommandHandler()))
 		handler.HandlePrefix(lifecycle.CatchupPath, healthAuth.Wrap(life.CatchupHandler()))
-		handler.HandlePrefix(lifecycle.ResetPrefix, healthAuth.Wrap(life.ResetHandler()))
 	}
 	if s == nil {
 		return fmt.Errorf("monitor health service is unavailable")

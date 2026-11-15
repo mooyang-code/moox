@@ -19,8 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Store owns the Collector SQLite connection and repositories.
-// SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
+// SQLDB 返回底层数据库连接（测试直接改写运行态时用）。
 func (s *Store) SQLDB() (*sql.DB, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("collector store is not open")
@@ -28,6 +27,7 @@ func (s *Store) SQLDB() (*sql.DB, error) {
 	return s.db.DB()
 }
 
+// Store owns the Collector SQLite connection and repositories.
 type Store struct {
 	db         *gorm.DB
 	path       string

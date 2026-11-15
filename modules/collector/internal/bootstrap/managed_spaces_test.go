@@ -45,19 +45,6 @@ func TestManagedSpacesFollowEnabledTasksPlansScfAndPauses(t *testing.T) {
 	require.Equal(t, []string{"crypto", "stockcn", "stockhk"}, spaces)
 }
 
-// 重置清空任务和计划表、保留暂停表：第一次 init 要能解除暂停，否则采集再也不恢复。
-func TestAfterResetClearsPauseWhenNoTasksOrPlansRemain(t *testing.T) {
-	db := openManagedDB(t)
-	ctx := context.Background()
-	cfg := &Config{}
-	require.NoError(t, db.FetchPlans().SetSystemPaused(ctx, "crypto", true))
-	control := &collectorControl{plans: db.FetchPlans(), spaces: func(ctx context.Context) ([]string, error) { return managedSpaces(ctx, cfg, db) }}
-	control.afterReset(ctx)
-	paused, err := db.FetchPlans().PausedSpaces(ctx)
-	require.NoError(t, err)
-	require.Empty(t, paused)
-}
-
 // 运行中新增的空间也要被暂停。
 func TestPauseCoversSpacesAddedWhileRunning(t *testing.T) {
 	db := openManagedDB(t)

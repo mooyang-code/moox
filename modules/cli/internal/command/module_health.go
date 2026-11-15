@@ -213,7 +213,6 @@ func resolveModuleHealthWith(ctx context.Context, remote *hostRemote, request mo
 
 // healthSecretFallbacks 是控制机上可借用的运行时环境文件：整个集群共用同一把健康密钥（部署时写进每个单元），
 // 所以只能出站、没法 SSH 的主机（例如局域网里的因子机），密钥可以从控制机上的文件读到。
-// 模块各自的重置专用密钥不在这里，只能从模块自己的主机读，或由用户用环境变量给出。
 var healthSecretFallbacks = []string{"monitor", "collector", "strategy", "admin"}
 
 // componentHosts 列出部署了某个组件的全部主机（已排序）。
@@ -285,9 +284,6 @@ func applyHealthSecrets(module healthModule, values map[string]string, generic b
 		if generic {
 			set("MOOX_HEALTH_AUTH_"+name, value)
 		}
-	}
-	for _, name := range []string{"ACCESS_KEY", "SECRET_KEY"} {
-		set("MOOX_"+module.EnvPrefix+"_HEALTH_RESET_"+name, values["MOOX_HEALTH_RESET_"+name])
 	}
 }
 

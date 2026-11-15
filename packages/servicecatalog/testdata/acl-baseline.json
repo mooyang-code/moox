@@ -1,0 +1,2942 @@
+{
+  "note": "批 4 T0 记下的服务目录访问控制基线：callers 是 Allowed(调用方, 服务, 方法) 为真的“服务/方法”集合，principals 是 PrincipalAllowed 为真的集合；host-gateway@* 用 host-gateway@control 代表。T3 用它核对新旧结果一致。",
+  "summary": {
+    "components": 20,
+    "services": 26,
+    "methods": 319,
+    "read_only_methods": 143,
+    "retryable_methods": 144,
+    "acl_grants": 63,
+    "callers": 26,
+    "principals": 5
+  },
+  "services": [
+    {
+      "path": "trpc.moox.admin.ActivityLog",
+      "component": "admin",
+      "console_name": "activity",
+      "methods": [
+        {
+          "name": "AppendActivityLogs",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListActivityLogs",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.admin.GatewayControl",
+      "component": "admin",
+      "methods": [
+        {
+          "name": "PullSnapshot",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ReportStatus",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.admin.Setup",
+      "component": "admin",
+      "console_name": "setup",
+      "methods": [
+        {
+          "name": "ApplySetup",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetConfigBackup",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetSetupStatus",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "PutConfigBackup",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.admin.SpaceMgr",
+      "component": "admin",
+      "console_name": "space",
+      "methods": [
+        {
+          "name": "CreateSpace",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteSpace",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListSpaces",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateSpace",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.archive.ArchiveMgr",
+      "component": "archive-mgr",
+      "console_name": "archive",
+      "methods": [
+        {
+          "name": "BackfillArchiveRange",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "CancelArchiveRun",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "ClearArchiveUnrecoverable",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "CreateArchiveTask",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "DeleteArchiveTask",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "GetArchiveOverview",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "GetArchivePartition",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "GetArchiveRun",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "ImportArchiveFile",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "ListArchivePartitions",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "ListArchiveRuns",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "ListArchiveTasks",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "PrepareArchiveImport",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "PrepareArchiveTask",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "PreviewArchiveSchedule",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "RunArchiveTaskNow",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "UpdateArchiveTask",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 30000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.archive.ArchiveWorker",
+      "component": "archive-mgr",
+      "methods": [
+        {
+          "name": "ArchiveWorkerHeartbeat",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 60000
+        },
+        {
+          "name": "CompleteArchiveRun",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 60000
+        },
+        {
+          "name": "PullArchiveRun",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 60000
+        },
+        {
+          "name": "ReportArchiveRunProgress",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 60000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.callbackdispatcher.CallbackDispatcherService",
+      "component": "callback-dispatcher",
+      "console_name": "callback-dispatcher",
+      "methods": [
+        {
+          "name": "AcknowledgeEventExecution",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "CancelEventExecution",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "CreateEventRule",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "DeleteEventRule",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "GetEventExecution",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "GetEventRule",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "ListEventExecutions",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "ListEventRules",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "ListSubscribableEvents",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "RetryEventExecution",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "TestEventRule",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "UpdateEventRule",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 15000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.collector.CollectMgr",
+      "component": "collector",
+      "console_name": "collector",
+      "methods": [
+        {
+          "name": "CancelKlineBackfill",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CancelKlineResampleJob",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CheckKline",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 310000
+        },
+        {
+          "name": "ClearSourceAbsences",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ClearSubjectExclusions",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CompletePackageUpload",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ConfirmHistoryGaps",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateCloudAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateTask",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteCloudAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 25000
+        },
+        {
+          "name": "DeleteCloudFunctions",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "DeleteFunctionPackage",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteTask",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DisableTask",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetCollectorStatus",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetDataTypeConfigWithFields",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetDataTypeConfigs",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetIngestMode",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetKlineBackfill",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetKlineResampleJob",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetTaskDetail",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetTaskList",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetTaskResultInventory",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "InitPackageUpload",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListCloudAccounts",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListCloudFunctions",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "ListCloudRegions",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListFunctionPackages",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListKlineBackfills",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListKlineResampleJobs",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListSubjectExclusions",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListSubjectListers",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListTagSyncStatus",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "PreviewKlineResampleSource",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ProbeFunctionEgress",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "RegisterDelistNotice",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ReregisterFetchPlan",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "RetryKlineBackfill",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SetFetchPlanPaused",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SetIngestMode",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SetSubjectExclusions",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SubmitKlineBackfill",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 310000
+        },
+        {
+          "name": "SubmitKlineResampleJob",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SyncSubjects",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 180000
+        },
+        {
+          "name": "TriggerFetchPlan",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateCloudAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateTask",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.collector.MarketFetchExecutor",
+      "component": "collector-stream",
+      "methods": [
+        {
+          "name": "Invoke",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 95000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.collector.StreamCollector",
+      "component": "collector",
+      "methods": [
+        {
+          "name": "PullStreamPlan",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 10000
+        },
+        {
+          "name": "ReportStreamPeriods",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 10000
+        },
+        {
+          "name": "StreamHeartbeat",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 10000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.egress.Proxy",
+      "component": "egress-proxy",
+      "methods": [
+        {
+          "name": "Do",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.eventbus.EventBusMgr",
+      "component": "eventbus",
+      "console_name": "eventbus",
+      "methods": [
+        {
+          "name": "GetConsumer",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetOverview",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListConsumers",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListEvents",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListStreams",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.factor.EngineControl",
+      "component": "factor-engine",
+      "methods": [
+        {
+          "name": "CloseReplay",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "OpenReplay",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 600000
+        },
+        {
+          "name": "StepReplay",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.factor.FactorEngine",
+      "component": "factor-mgr",
+      "methods": [
+        {
+          "name": "EngineHeartbeat",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetTaskParams",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetUdfModule",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "PullRecalcJob",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "ReportRecalcProgress",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "SyncEngineCatalog",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.factor.FactorMgr",
+      "component": "factor-mgr",
+      "console_name": "factor-mgr",
+      "methods": [
+        {
+          "name": "ActivateUdf",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "AddTaskMember",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "BindFactorTask",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "CancelRecalcJob",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "CreateFactor",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "CreateFactorTask",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "DeleteBoundTask",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "DeleteFactor",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "DeleteFactorCategory",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "DeleteFactorTask",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetFactor",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetFactorParams",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetFactorTask",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetRecalcJob",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetStatus",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "GetUdf",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "ListFactorCategories",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "ListFactorFunctions",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "ListFactorTasks",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "ListFactors",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "ListRecalcJobs",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "ListUdfs",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "PreviewFactor",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "PublishUdf",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "RecalcFactors",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "RemoveTaskMember",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "SetFactorCategory",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "SetFactorTaskStatus",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "SetTaskMemberStatus",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "SubmitFactorParams",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "UpdateFactor",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "UpsertFactorCategory",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "ValidateFactorSpec",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 120000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.hostagent.HostAgentMgr",
+      "component": "host-agent",
+      "methods": [
+        {
+          "name": "GetSnapshot",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetStatus",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "RunOnce",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.infra.Auth",
+      "component": "admin",
+      "console_name": "auth",
+      "methods": [
+        {
+          "name": "GetLoginSalt",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetUserInfo",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "IssueRawSessionTicket",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "Login",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "Logout",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.monitor.MonitorMgr",
+      "component": "monitor",
+      "console_name": "monitor",
+      "methods": [
+        {
+          "name": "AddNotificationChannel",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteNotificationChannel",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetAlertMute",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetDoctorContext",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetHealthOverview",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetHostPolicy",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListHostAgents",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListNotificationChannels",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "MuteAlerts",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "QueryHostMetricHistory",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "QueryLogRecords",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "QueryPipelineArrivalHistory",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UnmuteAlerts",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.ops.SecretMgr",
+      "component": "admin",
+      "console_name": "secret",
+      "methods": [
+        {
+          "name": "CreateSecret",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteSecret",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ExportSecrets",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetCloudCredential",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetReadonlyExchangeKey",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetSecret",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetSecretValue",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ImportSecrets",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListSecrets",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ToggleSecretStatus",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateSecret",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.ops.Ssh",
+      "component": "admin",
+      "console_name": "ssh",
+      "methods": [
+        {
+          "name": "CreateSession",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DisconnectSession",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ResizeWindow",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SftpDelete",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SftpList",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SftpMkdir",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.ops.SysDeploy",
+      "component": "admin",
+      "console_name": "sysdeploy",
+      "methods": [
+        {
+          "name": "DeleteHost",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetCatalog",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetDirectory",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetHostRoutes",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListDeployments",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListHosts",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SetDeploymentStatus",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SetHostStatus",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SyncHostDeployments",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.storage.DataView",
+      "component": "storage-view",
+      "console_name": "storage",
+      "methods": [
+        {
+          "name": "CountTimeSeriesRows",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 25000
+        },
+        {
+          "name": "GetViewState",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 25000
+        },
+        {
+          "name": "QueryTimeSeriesRows",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 25000
+        },
+        {
+          "name": "SearchRecordRows",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 25000
+        },
+        {
+          "name": "WaitViewApplied",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 35000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.storage.Metadata",
+      "component": "storage-primary",
+      "console_name": "storage",
+      "methods": [
+        {
+          "name": "AddTagMembers",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ApplyTagSnapshot",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "BatchUpdateFields",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateDataSource",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateDataset",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateField",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateFieldGroup",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateSpace",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateView",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteDataSource",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteDataset",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteFieldGroup",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteSpace",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteTag",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteView",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetDataSource",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetDataset",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetField",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetFieldGroup",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetSpace",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetSubject",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetTag",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetView",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListDataSources",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListDatasetColumns",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListDatasetSubjects",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListDatasets",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListFieldGroups",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListFields",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListSpaces",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListSubjects",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListTagMembers",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListTags",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListViewColumns",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListViews",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "RemoveTagMembers",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ResolveSubjects",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SetTagMemberStatus",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateDataSource",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateDataset",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateField",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateFieldGroup",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateSpace",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateSubjectAttributes",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateView",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpsertDatasetColumn",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpsertSubject",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpsertTag",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.storage.PrimaryStore",
+      "component": "storage-primary",
+      "console_name": "storage",
+      "methods": [
+        {
+          "name": "CommitTimeSeriesBatch",
+          "read_only": false,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CountTimeSeriesRows",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetDatasetPeriodCompleted",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ReadDatasetChanges",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ReadRows",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ReadTimeSeriesRows",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "RegisterSeriesSnapshot",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ReportDatasetPeriodCompleted",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpsertFields",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.strategy.StrategyMgr",
+      "component": "strategy",
+      "console_name": "strategy",
+      "methods": [
+        {
+          "name": "CancelReplay",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateStrategy",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateStrategyInstance",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteStrategy",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "DeleteStrategyInstance",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 30000
+        },
+        {
+          "name": "GetReplay",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetStrategy",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetStrategyDisplaySettings",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetStrategyInstance",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetStrategyResult",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListReplayBars",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListReplays",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListStrategies",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListStrategyInstances",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListStrategyResults",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListStrategyTargets",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SetStrategyDisplaySettings",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SetStrategyInstanceEnabled",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "StartReplay",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateStrategy",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateStrategyInstance",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ValidateStrategy",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    {
+      "path": "trpc.moox.trade.TradeConsoleService",
+      "component": "trade",
+      "console_name": "trade",
+      "methods": [
+        {
+          "name": "AddLogicalAccountMember",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "BlockInstrument",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CancelOrder",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ClosePaperSimulation",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CloseTargetSession",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateLogicalAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreatePaperSimulation",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "CreateTradingAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "FlattenInstrument",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 12000
+        },
+        {
+          "name": "FlattenLogicalAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 12000
+        },
+        {
+          "name": "FlattenTradingAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 12000
+        },
+        {
+          "name": "GetExecutionCapabilities",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetLogicalAccount",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetLogicalAccountTarget",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetOperatorAction",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetOrder",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetTradingAccount",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "InspectExchangeCredential",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "ListAccountLedger",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "ListBlockedInstruments",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListFills",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListHoldings",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListInstrumentHolders",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListLogicalAccounts",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListOperatorActions",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListOrders",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListPositions",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListTradableInstruments",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListTradingAccounts",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "PauseLogicalAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "QueryEquityCurve",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ReinspectTradingAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "RemoveLogicalAccountMember",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ResolveWalletTransfer",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ResumeLogicalAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SetLeverage",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SubmitOrder",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SummarizeAccountPnl",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 15000
+        },
+        {
+          "name": "SyncTradingAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UnblockInstrument",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateLogicalAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateLogicalAccountFundSettings",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateLogicalAccountOrderSettings",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpdateTradingAccount",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        }
+      ]
+    }
+  ],
+  "callers": {
+    "access": [
+      "trpc.moox.archive.ArchiveWorker/ArchiveWorkerHeartbeat",
+      "trpc.moox.archive.ArchiveWorker/CompleteArchiveRun",
+      "trpc.moox.archive.ArchiveWorker/PullArchiveRun",
+      "trpc.moox.archive.ArchiveWorker/ReportArchiveRunProgress",
+      "trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/ListSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/SetSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/SyncSubjects",
+      "trpc.moox.factor.FactorEngine/EngineHeartbeat",
+      "trpc.moox.factor.FactorEngine/GetTaskParams",
+      "trpc.moox.factor.FactorEngine/GetUdfModule",
+      "trpc.moox.factor.FactorEngine/PullRecalcJob",
+      "trpc.moox.factor.FactorEngine/ReportRecalcProgress",
+      "trpc.moox.factor.FactorEngine/SyncEngineCatalog",
+      "trpc.moox.storage.Metadata/GetDataset",
+      "trpc.moox.storage.Metadata/ListDatasetColumns",
+      "trpc.moox.storage.Metadata/ListDatasetSubjects",
+      "trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch",
+      "trpc.moox.storage.PrimaryStore/GetDatasetPeriodCompleted",
+      "trpc.moox.storage.PrimaryStore/ReadDatasetChanges",
+      "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows",
+      "trpc.moox.storage.PrimaryStore/ReportDatasetPeriodCompleted",
+      "trpc.moox.storage.PrimaryStore/UpsertFields"
+    ],
+    "admin": [],
+    "archive-mgr": [
+      "trpc.moox.collector.CollectMgr/GetCollectorStatus",
+      "trpc.moox.storage.Metadata/GetDataset"
+    ],
+    "archive-worker": [],
+    "callback-dispatcher": [
+      "trpc.moox.trade.TradeConsoleService/BlockInstrument",
+      "trpc.moox.trade.TradeConsoleService/FlattenInstrument",
+      "trpc.moox.trade.TradeConsoleService/GetOperatorAction",
+      "trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
+      "trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
+      "trpc.moox.trade.TradeConsoleService/UnblockInstrument"
+    ],
+    "collector": [
+      "trpc.moox.admin.ActivityLog/AppendActivityLogs",
+      "trpc.moox.admin.SpaceMgr/ListSpaces",
+      "trpc.moox.collector.MarketFetchExecutor/Invoke",
+      "trpc.moox.egress.Proxy/Do",
+      "trpc.moox.ops.SecretMgr/GetCloudCredential",
+      "trpc.moox.ops.SecretMgr/GetReadonlyExchangeKey",
+      "trpc.moox.storage.DataView/CountTimeSeriesRows",
+      "trpc.moox.storage.DataView/GetViewState",
+      "trpc.moox.storage.DataView/QueryTimeSeriesRows",
+      "trpc.moox.storage.DataView/SearchRecordRows",
+      "trpc.moox.storage.DataView/WaitViewApplied",
+      "trpc.moox.storage.Metadata/ApplyTagSnapshot",
+      "trpc.moox.storage.Metadata/CreateDataset",
+      "trpc.moox.storage.Metadata/CreateView",
+      "trpc.moox.storage.Metadata/DeleteDataset",
+      "trpc.moox.storage.Metadata/DeleteView",
+      "trpc.moox.storage.Metadata/GetDataSource",
+      "trpc.moox.storage.Metadata/GetDataset",
+      "trpc.moox.storage.Metadata/GetField",
+      "trpc.moox.storage.Metadata/GetFieldGroup",
+      "trpc.moox.storage.Metadata/GetSpace",
+      "trpc.moox.storage.Metadata/GetSubject",
+      "trpc.moox.storage.Metadata/GetTag",
+      "trpc.moox.storage.Metadata/GetView",
+      "trpc.moox.storage.Metadata/ListDataSources",
+      "trpc.moox.storage.Metadata/ListDatasetColumns",
+      "trpc.moox.storage.Metadata/ListDatasetSubjects",
+      "trpc.moox.storage.Metadata/ListDatasets",
+      "trpc.moox.storage.Metadata/ListFieldGroups",
+      "trpc.moox.storage.Metadata/ListFields",
+      "trpc.moox.storage.Metadata/ListSpaces",
+      "trpc.moox.storage.Metadata/ListSubjects",
+      "trpc.moox.storage.Metadata/ListTagMembers",
+      "trpc.moox.storage.Metadata/ListTags",
+      "trpc.moox.storage.Metadata/ListViewColumns",
+      "trpc.moox.storage.Metadata/ListViews",
+      "trpc.moox.storage.Metadata/ResolveSubjects",
+      "trpc.moox.storage.Metadata/UpdateDataset",
+      "trpc.moox.storage.Metadata/UpdateSubjectAttributes",
+      "trpc.moox.storage.Metadata/UpsertDatasetColumn",
+      "trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch",
+      "trpc.moox.storage.PrimaryStore/CountTimeSeriesRows",
+      "trpc.moox.storage.PrimaryStore/GetDatasetPeriodCompleted",
+      "trpc.moox.storage.PrimaryStore/ReadRows",
+      "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows",
+      "trpc.moox.storage.PrimaryStore/RegisterSeriesSnapshot",
+      "trpc.moox.storage.PrimaryStore/UpsertFields"
+    ],
+    "collector-operator": [],
+    "collector-stream": [
+      "trpc.moox.collector.StreamCollector/PullStreamPlan",
+      "trpc.moox.collector.StreamCollector/ReportStreamPeriods",
+      "trpc.moox.collector.StreamCollector/StreamHeartbeat",
+      "trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch",
+      "trpc.moox.storage.PrimaryStore/UpsertFields"
+    ],
+    "console": [
+      "trpc.moox.admin.ActivityLog/ListActivityLogs",
+      "trpc.moox.admin.Setup/ApplySetup",
+      "trpc.moox.admin.Setup/GetConfigBackup",
+      "trpc.moox.admin.Setup/GetSetupStatus",
+      "trpc.moox.admin.Setup/PutConfigBackup",
+      "trpc.moox.admin.SpaceMgr/CreateSpace",
+      "trpc.moox.admin.SpaceMgr/DeleteSpace",
+      "trpc.moox.admin.SpaceMgr/ListSpaces",
+      "trpc.moox.admin.SpaceMgr/UpdateSpace",
+      "trpc.moox.archive.ArchiveMgr/BackfillArchiveRange",
+      "trpc.moox.archive.ArchiveMgr/CancelArchiveRun",
+      "trpc.moox.archive.ArchiveMgr/CreateArchiveTask",
+      "trpc.moox.archive.ArchiveMgr/DeleteArchiveTask",
+      "trpc.moox.archive.ArchiveMgr/GetArchiveOverview",
+      "trpc.moox.archive.ArchiveMgr/GetArchivePartition",
+      "trpc.moox.archive.ArchiveMgr/GetArchiveRun",
+      "trpc.moox.archive.ArchiveMgr/ListArchivePartitions",
+      "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
+      "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
+      "trpc.moox.archive.ArchiveMgr/PrepareArchiveTask",
+      "trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
+      "trpc.moox.archive.ArchiveMgr/RunArchiveTaskNow",
+      "trpc.moox.archive.ArchiveMgr/UpdateArchiveTask",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/AcknowledgeEventExecution",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/CancelEventExecution",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/CreateEventRule",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/DeleteEventRule",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventExecution",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventRule",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventExecutions",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventRules",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListSubscribableEvents",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/RetryEventExecution",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/TestEventRule",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/UpdateEventRule",
+      "trpc.moox.collector.CollectMgr/CancelKlineBackfill",
+      "trpc.moox.collector.CollectMgr/CancelKlineResampleJob",
+      "trpc.moox.collector.CollectMgr/CheckKline",
+      "trpc.moox.collector.CollectMgr/ClearSourceAbsences",
+      "trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/CompletePackageUpload",
+      "trpc.moox.collector.CollectMgr/ConfirmHistoryGaps",
+      "trpc.moox.collector.CollectMgr/CreateCloudAccount",
+      "trpc.moox.collector.CollectMgr/CreateTask",
+      "trpc.moox.collector.CollectMgr/DeleteCloudAccount",
+      "trpc.moox.collector.CollectMgr/DeleteFunctionPackage",
+      "trpc.moox.collector.CollectMgr/DeleteTask",
+      "trpc.moox.collector.CollectMgr/DisableTask",
+      "trpc.moox.collector.CollectMgr/GetCollectorStatus",
+      "trpc.moox.collector.CollectMgr/GetDataTypeConfigWithFields",
+      "trpc.moox.collector.CollectMgr/GetDataTypeConfigs",
+      "trpc.moox.collector.CollectMgr/GetIngestMode",
+      "trpc.moox.collector.CollectMgr/GetKlineBackfill",
+      "trpc.moox.collector.CollectMgr/GetKlineResampleJob",
+      "trpc.moox.collector.CollectMgr/GetTaskDetail",
+      "trpc.moox.collector.CollectMgr/GetTaskList",
+      "trpc.moox.collector.CollectMgr/GetTaskResultInventory",
+      "trpc.moox.collector.CollectMgr/InitPackageUpload",
+      "trpc.moox.collector.CollectMgr/ListCloudAccounts",
+      "trpc.moox.collector.CollectMgr/ListCloudFunctions",
+      "trpc.moox.collector.CollectMgr/ListCloudRegions",
+      "trpc.moox.collector.CollectMgr/ListFunctionPackages",
+      "trpc.moox.collector.CollectMgr/ListKlineBackfills",
+      "trpc.moox.collector.CollectMgr/ListKlineResampleJobs",
+      "trpc.moox.collector.CollectMgr/ListSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/ListSubjectListers",
+      "trpc.moox.collector.CollectMgr/ListTagSyncStatus",
+      "trpc.moox.collector.CollectMgr/PreviewKlineResampleSource",
+      "trpc.moox.collector.CollectMgr/RegisterDelistNotice",
+      "trpc.moox.collector.CollectMgr/RetryKlineBackfill",
+      "trpc.moox.collector.CollectMgr/SetSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/SubmitKlineBackfill",
+      "trpc.moox.collector.CollectMgr/SubmitKlineResampleJob",
+      "trpc.moox.collector.CollectMgr/UpdateCloudAccount",
+      "trpc.moox.collector.CollectMgr/UpdateTask",
+      "trpc.moox.eventbus.EventBusMgr/GetConsumer",
+      "trpc.moox.eventbus.EventBusMgr/GetOverview",
+      "trpc.moox.eventbus.EventBusMgr/ListConsumers",
+      "trpc.moox.eventbus.EventBusMgr/ListEvents",
+      "trpc.moox.eventbus.EventBusMgr/ListStreams",
+      "trpc.moox.factor.FactorMgr/ActivateUdf",
+      "trpc.moox.factor.FactorMgr/AddTaskMember",
+      "trpc.moox.factor.FactorMgr/CancelRecalcJob",
+      "trpc.moox.factor.FactorMgr/CreateFactor",
+      "trpc.moox.factor.FactorMgr/CreateFactorTask",
+      "trpc.moox.factor.FactorMgr/DeleteFactor",
+      "trpc.moox.factor.FactorMgr/DeleteFactorCategory",
+      "trpc.moox.factor.FactorMgr/DeleteFactorTask",
+      "trpc.moox.factor.FactorMgr/GetFactor",
+      "trpc.moox.factor.FactorMgr/GetFactorParams",
+      "trpc.moox.factor.FactorMgr/GetFactorTask",
+      "trpc.moox.factor.FactorMgr/GetRecalcJob",
+      "trpc.moox.factor.FactorMgr/GetStatus",
+      "trpc.moox.factor.FactorMgr/GetUdf",
+      "trpc.moox.factor.FactorMgr/ListFactorCategories",
+      "trpc.moox.factor.FactorMgr/ListFactorFunctions",
+      "trpc.moox.factor.FactorMgr/ListFactorTasks",
+      "trpc.moox.factor.FactorMgr/ListFactors",
+      "trpc.moox.factor.FactorMgr/ListRecalcJobs",
+      "trpc.moox.factor.FactorMgr/ListUdfs",
+      "trpc.moox.factor.FactorMgr/PreviewFactor",
+      "trpc.moox.factor.FactorMgr/PublishUdf",
+      "trpc.moox.factor.FactorMgr/RecalcFactors",
+      "trpc.moox.factor.FactorMgr/RemoveTaskMember",
+      "trpc.moox.factor.FactorMgr/SetFactorCategory",
+      "trpc.moox.factor.FactorMgr/SetFactorTaskStatus",
+      "trpc.moox.factor.FactorMgr/SetTaskMemberStatus",
+      "trpc.moox.factor.FactorMgr/UpdateFactor",
+      "trpc.moox.factor.FactorMgr/UpsertFactorCategory",
+      "trpc.moox.factor.FactorMgr/ValidateFactorSpec",
+      "trpc.moox.infra.Auth/GetLoginSalt",
+      "trpc.moox.infra.Auth/GetUserInfo",
+      "trpc.moox.infra.Auth/IssueRawSessionTicket",
+      "trpc.moox.infra.Auth/Login",
+      "trpc.moox.infra.Auth/Logout",
+      "trpc.moox.monitor.MonitorMgr/AddNotificationChannel",
+      "trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel",
+      "trpc.moox.monitor.MonitorMgr/GetAlertMute",
+      "trpc.moox.monitor.MonitorMgr/GetDoctorContext",
+      "trpc.moox.monitor.MonitorMgr/GetHealthOverview",
+      "trpc.moox.monitor.MonitorMgr/ListHostAgents",
+      "trpc.moox.monitor.MonitorMgr/ListNotificationChannels",
+      "trpc.moox.monitor.MonitorMgr/QueryHostMetricHistory",
+      "trpc.moox.monitor.MonitorMgr/QueryLogRecords",
+      "trpc.moox.monitor.MonitorMgr/QueryPipelineArrivalHistory",
+      "trpc.moox.ops.SecretMgr/CreateSecret",
+      "trpc.moox.ops.SecretMgr/DeleteSecret",
+      "trpc.moox.ops.SecretMgr/ExportSecrets",
+      "trpc.moox.ops.SecretMgr/GetSecret",
+      "trpc.moox.ops.SecretMgr/ImportSecrets",
+      "trpc.moox.ops.SecretMgr/ListSecrets",
+      "trpc.moox.ops.SecretMgr/ToggleSecretStatus",
+      "trpc.moox.ops.SecretMgr/UpdateSecret",
+      "trpc.moox.ops.Ssh/CreateSession",
+      "trpc.moox.ops.Ssh/DisconnectSession",
+      "trpc.moox.ops.Ssh/ResizeWindow",
+      "trpc.moox.ops.Ssh/SftpDelete",
+      "trpc.moox.ops.Ssh/SftpList",
+      "trpc.moox.ops.Ssh/SftpMkdir",
+      "trpc.moox.ops.SysDeploy/GetCatalog",
+      "trpc.moox.ops.SysDeploy/GetDirectory",
+      "trpc.moox.ops.SysDeploy/GetHostRoutes",
+      "trpc.moox.ops.SysDeploy/ListDeployments",
+      "trpc.moox.ops.SysDeploy/ListHosts",
+      "trpc.moox.storage.DataView/CountTimeSeriesRows",
+      "trpc.moox.storage.DataView/GetViewState",
+      "trpc.moox.storage.DataView/QueryTimeSeriesRows",
+      "trpc.moox.storage.DataView/SearchRecordRows",
+      "trpc.moox.storage.DataView/WaitViewApplied",
+      "trpc.moox.storage.Metadata/AddTagMembers",
+      "trpc.moox.storage.Metadata/BatchUpdateFields",
+      "trpc.moox.storage.Metadata/CreateDataSource",
+      "trpc.moox.storage.Metadata/CreateDataset",
+      "trpc.moox.storage.Metadata/CreateField",
+      "trpc.moox.storage.Metadata/CreateFieldGroup",
+      "trpc.moox.storage.Metadata/CreateSpace",
+      "trpc.moox.storage.Metadata/CreateView",
+      "trpc.moox.storage.Metadata/DeleteDataSource",
+      "trpc.moox.storage.Metadata/DeleteDataset",
+      "trpc.moox.storage.Metadata/DeleteFieldGroup",
+      "trpc.moox.storage.Metadata/DeleteSpace",
+      "trpc.moox.storage.Metadata/DeleteTag",
+      "trpc.moox.storage.Metadata/DeleteView",
+      "trpc.moox.storage.Metadata/GetDataSource",
+      "trpc.moox.storage.Metadata/GetDataset",
+      "trpc.moox.storage.Metadata/GetField",
+      "trpc.moox.storage.Metadata/GetFieldGroup",
+      "trpc.moox.storage.Metadata/GetSpace",
+      "trpc.moox.storage.Metadata/GetSubject",
+      "trpc.moox.storage.Metadata/GetTag",
+      "trpc.moox.storage.Metadata/GetView",
+      "trpc.moox.storage.Metadata/ListDataSources",
+      "trpc.moox.storage.Metadata/ListDatasetColumns",
+      "trpc.moox.storage.Metadata/ListDatasetSubjects",
+      "trpc.moox.storage.Metadata/ListDatasets",
+      "trpc.moox.storage.Metadata/ListFieldGroups",
+      "trpc.moox.storage.Metadata/ListFields",
+      "trpc.moox.storage.Metadata/ListSpaces",
+      "trpc.moox.storage.Metadata/ListSubjects",
+      "trpc.moox.storage.Metadata/ListTagMembers",
+      "trpc.moox.storage.Metadata/ListTags",
+      "trpc.moox.storage.Metadata/ListViewColumns",
+      "trpc.moox.storage.Metadata/ListViews",
+      "trpc.moox.storage.Metadata/RemoveTagMembers",
+      "trpc.moox.storage.Metadata/ResolveSubjects",
+      "trpc.moox.storage.Metadata/SetTagMemberStatus",
+      "trpc.moox.storage.Metadata/UpdateDataSource",
+      "trpc.moox.storage.Metadata/UpdateDataset",
+      "trpc.moox.storage.Metadata/UpdateField",
+      "trpc.moox.storage.Metadata/UpdateFieldGroup",
+      "trpc.moox.storage.Metadata/UpdateSpace",
+      "trpc.moox.storage.Metadata/UpdateView",
+      "trpc.moox.storage.Metadata/UpsertDatasetColumn",
+      "trpc.moox.storage.Metadata/UpsertSubject",
+      "trpc.moox.storage.Metadata/UpsertTag",
+      "trpc.moox.storage.PrimaryStore/UpsertFields",
+      "trpc.moox.strategy.StrategyMgr/CancelReplay",
+      "trpc.moox.strategy.StrategyMgr/CreateStrategy",
+      "trpc.moox.strategy.StrategyMgr/CreateStrategyInstance",
+      "trpc.moox.strategy.StrategyMgr/DeleteStrategy",
+      "trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance",
+      "trpc.moox.strategy.StrategyMgr/GetReplay",
+      "trpc.moox.strategy.StrategyMgr/GetStrategy",
+      "trpc.moox.strategy.StrategyMgr/GetStrategyDisplaySettings",
+      "trpc.moox.strategy.StrategyMgr/GetStrategyInstance",
+      "trpc.moox.strategy.StrategyMgr/GetStrategyResult",
+      "trpc.moox.strategy.StrategyMgr/ListReplayBars",
+      "trpc.moox.strategy.StrategyMgr/ListReplays",
+      "trpc.moox.strategy.StrategyMgr/ListStrategies",
+      "trpc.moox.strategy.StrategyMgr/ListStrategyInstances",
+      "trpc.moox.strategy.StrategyMgr/ListStrategyResults",
+      "trpc.moox.strategy.StrategyMgr/ListStrategyTargets",
+      "trpc.moox.strategy.StrategyMgr/SetStrategyDisplaySettings",
+      "trpc.moox.strategy.StrategyMgr/SetStrategyInstanceEnabled",
+      "trpc.moox.strategy.StrategyMgr/StartReplay",
+      "trpc.moox.strategy.StrategyMgr/UpdateStrategy",
+      "trpc.moox.strategy.StrategyMgr/UpdateStrategyInstance",
+      "trpc.moox.strategy.StrategyMgr/ValidateStrategy",
+      "trpc.moox.trade.TradeConsoleService/AddLogicalAccountMember",
+      "trpc.moox.trade.TradeConsoleService/CancelOrder",
+      "trpc.moox.trade.TradeConsoleService/ClosePaperSimulation",
+      "trpc.moox.trade.TradeConsoleService/CreateLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/CreatePaperSimulation",
+      "trpc.moox.trade.TradeConsoleService/CreateTradingAccount",
+      "trpc.moox.trade.TradeConsoleService/FlattenLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/FlattenTradingAccount",
+      "trpc.moox.trade.TradeConsoleService/GetExecutionCapabilities",
+      "trpc.moox.trade.TradeConsoleService/GetLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/GetLogicalAccountTarget",
+      "trpc.moox.trade.TradeConsoleService/GetOperatorAction",
+      "trpc.moox.trade.TradeConsoleService/GetOrder",
+      "trpc.moox.trade.TradeConsoleService/GetTradingAccount",
+      "trpc.moox.trade.TradeConsoleService/InspectExchangeCredential",
+      "trpc.moox.trade.TradeConsoleService/ListAccountLedger",
+      "trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
+      "trpc.moox.trade.TradeConsoleService/ListFills",
+      "trpc.moox.trade.TradeConsoleService/ListHoldings",
+      "trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
+      "trpc.moox.trade.TradeConsoleService/ListLogicalAccounts",
+      "trpc.moox.trade.TradeConsoleService/ListOperatorActions",
+      "trpc.moox.trade.TradeConsoleService/ListOrders",
+      "trpc.moox.trade.TradeConsoleService/ListPositions",
+      "trpc.moox.trade.TradeConsoleService/ListTradableInstruments",
+      "trpc.moox.trade.TradeConsoleService/ListTradingAccounts",
+      "trpc.moox.trade.TradeConsoleService/PauseLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/QueryEquityCurve",
+      "trpc.moox.trade.TradeConsoleService/ReinspectTradingAccount",
+      "trpc.moox.trade.TradeConsoleService/RemoveLogicalAccountMember",
+      "trpc.moox.trade.TradeConsoleService/ResolveWalletTransfer",
+      "trpc.moox.trade.TradeConsoleService/ResumeLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/SetLeverage",
+      "trpc.moox.trade.TradeConsoleService/SubmitOrder",
+      "trpc.moox.trade.TradeConsoleService/SummarizeAccountPnl",
+      "trpc.moox.trade.TradeConsoleService/SyncTradingAccount",
+      "trpc.moox.trade.TradeConsoleService/UnblockInstrument",
+      "trpc.moox.trade.TradeConsoleService/UpdateLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/UpdateLogicalAccountFundSettings",
+      "trpc.moox.trade.TradeConsoleService/UpdateLogicalAccountOrderSettings",
+      "trpc.moox.trade.TradeConsoleService/UpdateTradingAccount"
+    ],
+    "console-proxy": [],
+    "egress-proxy": [],
+    "eventbus": [],
+    "factor-engine": [],
+    "factor-mgr": [
+      "trpc.moox.storage.DataView/CountTimeSeriesRows",
+      "trpc.moox.storage.DataView/GetViewState",
+      "trpc.moox.storage.DataView/QueryTimeSeriesRows",
+      "trpc.moox.storage.DataView/SearchRecordRows",
+      "trpc.moox.storage.DataView/WaitViewApplied",
+      "trpc.moox.storage.Metadata/CreateDataset",
+      "trpc.moox.storage.Metadata/CreateView",
+      "trpc.moox.storage.Metadata/DeleteDataset",
+      "trpc.moox.storage.Metadata/DeleteView",
+      "trpc.moox.storage.Metadata/GetDataSource",
+      "trpc.moox.storage.Metadata/GetDataset",
+      "trpc.moox.storage.Metadata/GetField",
+      "trpc.moox.storage.Metadata/GetFieldGroup",
+      "trpc.moox.storage.Metadata/GetSpace",
+      "trpc.moox.storage.Metadata/GetSubject",
+      "trpc.moox.storage.Metadata/GetTag",
+      "trpc.moox.storage.Metadata/GetView",
+      "trpc.moox.storage.Metadata/ListDataSources",
+      "trpc.moox.storage.Metadata/ListDatasetColumns",
+      "trpc.moox.storage.Metadata/ListDatasetSubjects",
+      "trpc.moox.storage.Metadata/ListDatasets",
+      "trpc.moox.storage.Metadata/ListFieldGroups",
+      "trpc.moox.storage.Metadata/ListFields",
+      "trpc.moox.storage.Metadata/ListSpaces",
+      "trpc.moox.storage.Metadata/ListSubjects",
+      "trpc.moox.storage.Metadata/ListTagMembers",
+      "trpc.moox.storage.Metadata/ListTags",
+      "trpc.moox.storage.Metadata/ListViewColumns",
+      "trpc.moox.storage.Metadata/ListViews",
+      "trpc.moox.storage.Metadata/ResolveSubjects",
+      "trpc.moox.storage.Metadata/UpdateDataset",
+      "trpc.moox.storage.Metadata/UpsertDatasetColumn",
+      "trpc.moox.storage.PrimaryStore/CountTimeSeriesRows",
+      "trpc.moox.storage.PrimaryStore/GetDatasetPeriodCompleted",
+      "trpc.moox.storage.PrimaryStore/ReadRows",
+      "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows",
+      "trpc.moox.storage.PrimaryStore/ReportDatasetPeriodCompleted",
+      "trpc.moox.storage.PrimaryStore/UpsertFields"
+    ],
+    "host-agent": [
+      "trpc.moox.monitor.MonitorMgr/GetHostPolicy"
+    ],
+    "host-gateway": [],
+    "host-gateway@control": [
+      "trpc.moox.admin.GatewayControl/PullSnapshot",
+      "trpc.moox.admin.GatewayControl/ReportStatus"
+    ],
+    "monitor": [
+      "trpc.moox.archive.ArchiveMgr/GetArchiveOverview",
+      "trpc.moox.archive.ArchiveMgr/GetArchivePartition",
+      "trpc.moox.archive.ArchiveMgr/GetArchiveRun",
+      "trpc.moox.archive.ArchiveMgr/ListArchivePartitions",
+      "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
+      "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
+      "trpc.moox.archive.ArchiveMgr/PrepareArchiveTask",
+      "trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
+      "trpc.moox.collector.CollectMgr/GetTaskResultInventory",
+      "trpc.moox.collector.CollectMgr/ListTagSyncStatus",
+      "trpc.moox.hostagent.HostAgentMgr/GetSnapshot",
+      "trpc.moox.hostagent.HostAgentMgr/GetStatus",
+      "trpc.moox.hostagent.HostAgentMgr/RunOnce",
+      "trpc.moox.ops.SysDeploy/GetCatalog",
+      "trpc.moox.ops.SysDeploy/GetHostRoutes",
+      "trpc.moox.ops.SysDeploy/ListDeployments",
+      "trpc.moox.ops.SysDeploy/ListHosts",
+      "trpc.moox.storage.DataView/CountTimeSeriesRows",
+      "trpc.moox.storage.DataView/GetViewState",
+      "trpc.moox.storage.DataView/QueryTimeSeriesRows",
+      "trpc.moox.storage.DataView/SearchRecordRows",
+      "trpc.moox.storage.DataView/WaitViewApplied",
+      "trpc.moox.storage.Metadata/GetDataSource",
+      "trpc.moox.storage.Metadata/GetDataset",
+      "trpc.moox.storage.Metadata/GetField",
+      "trpc.moox.storage.Metadata/GetFieldGroup",
+      "trpc.moox.storage.Metadata/GetSpace",
+      "trpc.moox.storage.Metadata/GetSubject",
+      "trpc.moox.storage.Metadata/GetTag",
+      "trpc.moox.storage.Metadata/GetView",
+      "trpc.moox.storage.Metadata/ListDataSources",
+      "trpc.moox.storage.Metadata/ListDatasetColumns",
+      "trpc.moox.storage.Metadata/ListDatasetSubjects",
+      "trpc.moox.storage.Metadata/ListDatasets",
+      "trpc.moox.storage.Metadata/ListFieldGroups",
+      "trpc.moox.storage.Metadata/ListFields",
+      "trpc.moox.storage.Metadata/ListSpaces",
+      "trpc.moox.storage.Metadata/ListSubjects",
+      "trpc.moox.storage.Metadata/ListTagMembers",
+      "trpc.moox.storage.Metadata/ListTags",
+      "trpc.moox.storage.Metadata/ListViewColumns",
+      "trpc.moox.storage.Metadata/ListViews",
+      "trpc.moox.storage.Metadata/ResolveSubjects",
+      "trpc.moox.storage.PrimaryStore/CountTimeSeriesRows",
+      "trpc.moox.storage.PrimaryStore/GetDatasetPeriodCompleted",
+      "trpc.moox.storage.PrimaryStore/ReadRows",
+      "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows"
+    ],
+    "moox-cli": [
+      "trpc.moox.admin.ActivityLog/ListActivityLogs",
+      "trpc.moox.admin.Setup/ApplySetup",
+      "trpc.moox.admin.Setup/GetSetupStatus",
+      "trpc.moox.admin.SpaceMgr/CreateSpace",
+      "trpc.moox.admin.SpaceMgr/DeleteSpace",
+      "trpc.moox.admin.SpaceMgr/ListSpaces",
+      "trpc.moox.admin.SpaceMgr/UpdateSpace",
+      "trpc.moox.archive.ArchiveMgr/BackfillArchiveRange",
+      "trpc.moox.archive.ArchiveMgr/CancelArchiveRun",
+      "trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable",
+      "trpc.moox.archive.ArchiveMgr/CreateArchiveTask",
+      "trpc.moox.archive.ArchiveMgr/DeleteArchiveTask",
+      "trpc.moox.archive.ArchiveMgr/GetArchiveOverview",
+      "trpc.moox.archive.ArchiveMgr/GetArchivePartition",
+      "trpc.moox.archive.ArchiveMgr/GetArchiveRun",
+      "trpc.moox.archive.ArchiveMgr/ImportArchiveFile",
+      "trpc.moox.archive.ArchiveMgr/ListArchivePartitions",
+      "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
+      "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
+      "trpc.moox.archive.ArchiveMgr/PrepareArchiveImport",
+      "trpc.moox.archive.ArchiveMgr/PrepareArchiveTask",
+      "trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
+      "trpc.moox.archive.ArchiveMgr/RunArchiveTaskNow",
+      "trpc.moox.archive.ArchiveMgr/UpdateArchiveTask",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/AcknowledgeEventExecution",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/CancelEventExecution",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/DeleteEventRule",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventExecution",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventRule",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventExecutions",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventRules",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListSubscribableEvents",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/RetryEventExecution",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/TestEventRule",
+      "trpc.moox.callbackdispatcher.CallbackDispatcherService/UpdateEventRule",
+      "trpc.moox.collector.CollectMgr/CancelKlineBackfill",
+      "trpc.moox.collector.CollectMgr/CancelKlineResampleJob",
+      "trpc.moox.collector.CollectMgr/CheckKline",
+      "trpc.moox.collector.CollectMgr/ClearSourceAbsences",
+      "trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/CompletePackageUpload",
+      "trpc.moox.collector.CollectMgr/ConfirmHistoryGaps",
+      "trpc.moox.collector.CollectMgr/CreateCloudAccount",
+      "trpc.moox.collector.CollectMgr/CreateTask",
+      "trpc.moox.collector.CollectMgr/DeleteCloudAccount",
+      "trpc.moox.collector.CollectMgr/DeleteCloudFunctions",
+      "trpc.moox.collector.CollectMgr/DeleteFunctionPackage",
+      "trpc.moox.collector.CollectMgr/DeleteTask",
+      "trpc.moox.collector.CollectMgr/DisableTask",
+      "trpc.moox.collector.CollectMgr/GetCollectorStatus",
+      "trpc.moox.collector.CollectMgr/GetDataTypeConfigWithFields",
+      "trpc.moox.collector.CollectMgr/GetDataTypeConfigs",
+      "trpc.moox.collector.CollectMgr/GetIngestMode",
+      "trpc.moox.collector.CollectMgr/GetKlineBackfill",
+      "trpc.moox.collector.CollectMgr/GetKlineResampleJob",
+      "trpc.moox.collector.CollectMgr/GetTaskDetail",
+      "trpc.moox.collector.CollectMgr/GetTaskList",
+      "trpc.moox.collector.CollectMgr/GetTaskResultInventory",
+      "trpc.moox.collector.CollectMgr/InitPackageUpload",
+      "trpc.moox.collector.CollectMgr/ListCloudAccounts",
+      "trpc.moox.collector.CollectMgr/ListCloudFunctions",
+      "trpc.moox.collector.CollectMgr/ListCloudRegions",
+      "trpc.moox.collector.CollectMgr/ListFunctionPackages",
+      "trpc.moox.collector.CollectMgr/ListKlineBackfills",
+      "trpc.moox.collector.CollectMgr/ListKlineResampleJobs",
+      "trpc.moox.collector.CollectMgr/ListSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/ListSubjectListers",
+      "trpc.moox.collector.CollectMgr/ListTagSyncStatus",
+      "trpc.moox.collector.CollectMgr/PreviewKlineResampleSource",
+      "trpc.moox.collector.CollectMgr/ProbeFunctionEgress",
+      "trpc.moox.collector.CollectMgr/RegisterDelistNotice",
+      "trpc.moox.collector.CollectMgr/ReregisterFetchPlan",
+      "trpc.moox.collector.CollectMgr/RetryKlineBackfill",
+      "trpc.moox.collector.CollectMgr/SetFetchPlanPaused",
+      "trpc.moox.collector.CollectMgr/SetIngestMode",
+      "trpc.moox.collector.CollectMgr/SetSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/SubmitKlineBackfill",
+      "trpc.moox.collector.CollectMgr/SubmitKlineResampleJob",
+      "trpc.moox.collector.CollectMgr/SyncSubjects",
+      "trpc.moox.collector.CollectMgr/TriggerFetchPlan",
+      "trpc.moox.collector.CollectMgr/UpdateCloudAccount",
+      "trpc.moox.collector.CollectMgr/UpdateTask",
+      "trpc.moox.eventbus.EventBusMgr/GetConsumer",
+      "trpc.moox.eventbus.EventBusMgr/GetOverview",
+      "trpc.moox.eventbus.EventBusMgr/ListConsumers",
+      "trpc.moox.eventbus.EventBusMgr/ListEvents",
+      "trpc.moox.eventbus.EventBusMgr/ListStreams",
+      "trpc.moox.factor.FactorMgr/ActivateUdf",
+      "trpc.moox.factor.FactorMgr/AddTaskMember",
+      "trpc.moox.factor.FactorMgr/CancelRecalcJob",
+      "trpc.moox.factor.FactorMgr/CreateFactor",
+      "trpc.moox.factor.FactorMgr/CreateFactorTask",
+      "trpc.moox.factor.FactorMgr/DeleteFactor",
+      "trpc.moox.factor.FactorMgr/DeleteFactorCategory",
+      "trpc.moox.factor.FactorMgr/DeleteFactorTask",
+      "trpc.moox.factor.FactorMgr/GetFactor",
+      "trpc.moox.factor.FactorMgr/GetFactorParams",
+      "trpc.moox.factor.FactorMgr/GetFactorTask",
+      "trpc.moox.factor.FactorMgr/GetRecalcJob",
+      "trpc.moox.factor.FactorMgr/GetStatus",
+      "trpc.moox.factor.FactorMgr/GetUdf",
+      "trpc.moox.factor.FactorMgr/ListFactorCategories",
+      "trpc.moox.factor.FactorMgr/ListFactorFunctions",
+      "trpc.moox.factor.FactorMgr/ListFactorTasks",
+      "trpc.moox.factor.FactorMgr/ListFactors",
+      "trpc.moox.factor.FactorMgr/ListRecalcJobs",
+      "trpc.moox.factor.FactorMgr/ListUdfs",
+      "trpc.moox.factor.FactorMgr/PreviewFactor",
+      "trpc.moox.factor.FactorMgr/PublishUdf",
+      "trpc.moox.factor.FactorMgr/RecalcFactors",
+      "trpc.moox.factor.FactorMgr/RemoveTaskMember",
+      "trpc.moox.factor.FactorMgr/SetFactorCategory",
+      "trpc.moox.factor.FactorMgr/SetFactorTaskStatus",
+      "trpc.moox.factor.FactorMgr/SetTaskMemberStatus",
+      "trpc.moox.factor.FactorMgr/UpdateFactor",
+      "trpc.moox.factor.FactorMgr/UpsertFactorCategory",
+      "trpc.moox.factor.FactorMgr/ValidateFactorSpec",
+      "trpc.moox.hostagent.HostAgentMgr/GetSnapshot",
+      "trpc.moox.hostagent.HostAgentMgr/GetStatus",
+      "trpc.moox.hostagent.HostAgentMgr/RunOnce",
+      "trpc.moox.monitor.MonitorMgr/AddNotificationChannel",
+      "trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel",
+      "trpc.moox.monitor.MonitorMgr/GetAlertMute",
+      "trpc.moox.monitor.MonitorMgr/GetDoctorContext",
+      "trpc.moox.monitor.MonitorMgr/GetHealthOverview",
+      "trpc.moox.monitor.MonitorMgr/ListHostAgents",
+      "trpc.moox.monitor.MonitorMgr/ListNotificationChannels",
+      "trpc.moox.monitor.MonitorMgr/MuteAlerts",
+      "trpc.moox.monitor.MonitorMgr/QueryHostMetricHistory",
+      "trpc.moox.monitor.MonitorMgr/QueryLogRecords",
+      "trpc.moox.monitor.MonitorMgr/QueryPipelineArrivalHistory",
+      "trpc.moox.monitor.MonitorMgr/UnmuteAlerts",
+      "trpc.moox.ops.SecretMgr/CreateSecret",
+      "trpc.moox.ops.SecretMgr/DeleteSecret",
+      "trpc.moox.ops.SecretMgr/GetSecret",
+      "trpc.moox.ops.SecretMgr/GetSecretValue",
+      "trpc.moox.ops.SecretMgr/ListSecrets",
+      "trpc.moox.ops.SecretMgr/ToggleSecretStatus",
+      "trpc.moox.ops.SecretMgr/UpdateSecret",
+      "trpc.moox.ops.SysDeploy/DeleteHost",
+      "trpc.moox.ops.SysDeploy/GetCatalog",
+      "trpc.moox.ops.SysDeploy/GetDirectory",
+      "trpc.moox.ops.SysDeploy/GetHostRoutes",
+      "trpc.moox.ops.SysDeploy/ListDeployments",
+      "trpc.moox.ops.SysDeploy/ListHosts",
+      "trpc.moox.ops.SysDeploy/SetDeploymentStatus",
+      "trpc.moox.ops.SysDeploy/SetHostStatus",
+      "trpc.moox.ops.SysDeploy/SyncHostDeployments",
+      "trpc.moox.storage.DataView/CountTimeSeriesRows",
+      "trpc.moox.storage.DataView/GetViewState",
+      "trpc.moox.storage.DataView/QueryTimeSeriesRows",
+      "trpc.moox.storage.DataView/SearchRecordRows",
+      "trpc.moox.storage.DataView/WaitViewApplied",
+      "trpc.moox.storage.Metadata/AddTagMembers",
+      "trpc.moox.storage.Metadata/BatchUpdateFields",
+      "trpc.moox.storage.Metadata/CreateDataSource",
+      "trpc.moox.storage.Metadata/CreateDataset",
+      "trpc.moox.storage.Metadata/CreateField",
+      "trpc.moox.storage.Metadata/CreateFieldGroup",
+      "trpc.moox.storage.Metadata/CreateSpace",
+      "trpc.moox.storage.Metadata/CreateView",
+      "trpc.moox.storage.Metadata/DeleteDataSource",
+      "trpc.moox.storage.Metadata/DeleteDataset",
+      "trpc.moox.storage.Metadata/DeleteFieldGroup",
+      "trpc.moox.storage.Metadata/DeleteSpace",
+      "trpc.moox.storage.Metadata/DeleteTag",
+      "trpc.moox.storage.Metadata/DeleteView",
+      "trpc.moox.storage.Metadata/GetDataSource",
+      "trpc.moox.storage.Metadata/GetDataset",
+      "trpc.moox.storage.Metadata/GetField",
+      "trpc.moox.storage.Metadata/GetFieldGroup",
+      "trpc.moox.storage.Metadata/GetSpace",
+      "trpc.moox.storage.Metadata/GetSubject",
+      "trpc.moox.storage.Metadata/GetTag",
+      "trpc.moox.storage.Metadata/GetView",
+      "trpc.moox.storage.Metadata/ListDataSources",
+      "trpc.moox.storage.Metadata/ListDatasetColumns",
+      "trpc.moox.storage.Metadata/ListDatasetSubjects",
+      "trpc.moox.storage.Metadata/ListDatasets",
+      "trpc.moox.storage.Metadata/ListFieldGroups",
+      "trpc.moox.storage.Metadata/ListFields",
+      "trpc.moox.storage.Metadata/ListSpaces",
+      "trpc.moox.storage.Metadata/ListSubjects",
+      "trpc.moox.storage.Metadata/ListTagMembers",
+      "trpc.moox.storage.Metadata/ListTags",
+      "trpc.moox.storage.Metadata/ListViewColumns",
+      "trpc.moox.storage.Metadata/ListViews",
+      "trpc.moox.storage.Metadata/RemoveTagMembers",
+      "trpc.moox.storage.Metadata/ResolveSubjects",
+      "trpc.moox.storage.Metadata/SetTagMemberStatus",
+      "trpc.moox.storage.Metadata/UpdateDataSource",
+      "trpc.moox.storage.Metadata/UpdateDataset",
+      "trpc.moox.storage.Metadata/UpdateField",
+      "trpc.moox.storage.Metadata/UpdateFieldGroup",
+      "trpc.moox.storage.Metadata/UpdateSpace",
+      "trpc.moox.storage.Metadata/UpdateView",
+      "trpc.moox.storage.Metadata/UpsertDatasetColumn",
+      "trpc.moox.storage.Metadata/UpsertSubject",
+      "trpc.moox.storage.Metadata/UpsertTag",
+      "trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch",
+      "trpc.moox.storage.PrimaryStore/CountTimeSeriesRows",
+      "trpc.moox.storage.PrimaryStore/GetDatasetPeriodCompleted",
+      "trpc.moox.storage.PrimaryStore/ReadDatasetChanges",
+      "trpc.moox.storage.PrimaryStore/ReadRows",
+      "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows",
+      "trpc.moox.storage.PrimaryStore/ReportDatasetPeriodCompleted",
+      "trpc.moox.storage.PrimaryStore/UpsertFields",
+      "trpc.moox.strategy.StrategyMgr/CancelReplay",
+      "trpc.moox.strategy.StrategyMgr/CreateStrategy",
+      "trpc.moox.strategy.StrategyMgr/CreateStrategyInstance",
+      "trpc.moox.strategy.StrategyMgr/DeleteStrategy",
+      "trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance",
+      "trpc.moox.strategy.StrategyMgr/GetReplay",
+      "trpc.moox.strategy.StrategyMgr/GetStrategy",
+      "trpc.moox.strategy.StrategyMgr/GetStrategyDisplaySettings",
+      "trpc.moox.strategy.StrategyMgr/GetStrategyInstance",
+      "trpc.moox.strategy.StrategyMgr/GetStrategyResult",
+      "trpc.moox.strategy.StrategyMgr/ListReplayBars",
+      "trpc.moox.strategy.StrategyMgr/ListReplays",
+      "trpc.moox.strategy.StrategyMgr/ListStrategies",
+      "trpc.moox.strategy.StrategyMgr/ListStrategyInstances",
+      "trpc.moox.strategy.StrategyMgr/ListStrategyResults",
+      "trpc.moox.strategy.StrategyMgr/ListStrategyTargets",
+      "trpc.moox.strategy.StrategyMgr/SetStrategyDisplaySettings",
+      "trpc.moox.strategy.StrategyMgr/SetStrategyInstanceEnabled",
+      "trpc.moox.strategy.StrategyMgr/StartReplay",
+      "trpc.moox.strategy.StrategyMgr/UpdateStrategy",
+      "trpc.moox.strategy.StrategyMgr/UpdateStrategyInstance",
+      "trpc.moox.strategy.StrategyMgr/ValidateStrategy",
+      "trpc.moox.trade.TradeConsoleService/AddLogicalAccountMember",
+      "trpc.moox.trade.TradeConsoleService/CancelOrder",
+      "trpc.moox.trade.TradeConsoleService/ClosePaperSimulation",
+      "trpc.moox.trade.TradeConsoleService/CreateLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/CreatePaperSimulation",
+      "trpc.moox.trade.TradeConsoleService/CreateTradingAccount",
+      "trpc.moox.trade.TradeConsoleService/FlattenLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/FlattenTradingAccount",
+      "trpc.moox.trade.TradeConsoleService/GetExecutionCapabilities",
+      "trpc.moox.trade.TradeConsoleService/GetLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/GetLogicalAccountTarget",
+      "trpc.moox.trade.TradeConsoleService/GetOperatorAction",
+      "trpc.moox.trade.TradeConsoleService/GetOrder",
+      "trpc.moox.trade.TradeConsoleService/GetTradingAccount",
+      "trpc.moox.trade.TradeConsoleService/InspectExchangeCredential",
+      "trpc.moox.trade.TradeConsoleService/ListAccountLedger",
+      "trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
+      "trpc.moox.trade.TradeConsoleService/ListFills",
+      "trpc.moox.trade.TradeConsoleService/ListHoldings",
+      "trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
+      "trpc.moox.trade.TradeConsoleService/ListLogicalAccounts",
+      "trpc.moox.trade.TradeConsoleService/ListOperatorActions",
+      "trpc.moox.trade.TradeConsoleService/ListOrders",
+      "trpc.moox.trade.TradeConsoleService/ListPositions",
+      "trpc.moox.trade.TradeConsoleService/ListTradableInstruments",
+      "trpc.moox.trade.TradeConsoleService/ListTradingAccounts",
+      "trpc.moox.trade.TradeConsoleService/PauseLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/QueryEquityCurve",
+      "trpc.moox.trade.TradeConsoleService/ReinspectTradingAccount",
+      "trpc.moox.trade.TradeConsoleService/RemoveLogicalAccountMember",
+      "trpc.moox.trade.TradeConsoleService/ResolveWalletTransfer",
+      "trpc.moox.trade.TradeConsoleService/ResumeLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/SetLeverage",
+      "trpc.moox.trade.TradeConsoleService/SubmitOrder",
+      "trpc.moox.trade.TradeConsoleService/SummarizeAccountPnl",
+      "trpc.moox.trade.TradeConsoleService/SyncTradingAccount",
+      "trpc.moox.trade.TradeConsoleService/UpdateLogicalAccount",
+      "trpc.moox.trade.TradeConsoleService/UpdateLogicalAccountFundSettings",
+      "trpc.moox.trade.TradeConsoleService/UpdateLogicalAccountOrderSettings",
+      "trpc.moox.trade.TradeConsoleService/UpdateTradingAccount"
+    ],
+    "moox-skill": [],
+    "scf-collector": [],
+    "storage-primary": [],
+    "storage-view": [],
+    "strategy": [
+      "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
+      "trpc.moox.factor.EngineControl/CloseReplay",
+      "trpc.moox.factor.EngineControl/OpenReplay",
+      "trpc.moox.factor.EngineControl/StepReplay",
+      "trpc.moox.factor.FactorMgr/BindFactorTask",
+      "trpc.moox.factor.FactorMgr/DeleteBoundTask",
+      "trpc.moox.factor.FactorMgr/GetFactor",
+      "trpc.moox.factor.FactorMgr/GetFactorParams",
+      "trpc.moox.factor.FactorMgr/GetFactorTask",
+      "trpc.moox.factor.FactorMgr/GetStatus",
+      "trpc.moox.factor.FactorMgr/ListFactorCategories",
+      "trpc.moox.factor.FactorMgr/ListFactorTasks",
+      "trpc.moox.factor.FactorMgr/ListFactors",
+      "trpc.moox.factor.FactorMgr/ListRecalcJobs",
+      "trpc.moox.factor.FactorMgr/SubmitFactorParams",
+      "trpc.moox.storage.DataView/CountTimeSeriesRows",
+      "trpc.moox.storage.DataView/GetViewState",
+      "trpc.moox.storage.DataView/QueryTimeSeriesRows",
+      "trpc.moox.storage.DataView/SearchRecordRows",
+      "trpc.moox.storage.DataView/WaitViewApplied",
+      "trpc.moox.storage.Metadata/GetDataSource",
+      "trpc.moox.storage.Metadata/GetDataset",
+      "trpc.moox.storage.Metadata/GetField",
+      "trpc.moox.storage.Metadata/GetFieldGroup",
+      "trpc.moox.storage.Metadata/GetSpace",
+      "trpc.moox.storage.Metadata/GetSubject",
+      "trpc.moox.storage.Metadata/GetTag",
+      "trpc.moox.storage.Metadata/GetView",
+      "trpc.moox.storage.Metadata/ListDataSources",
+      "trpc.moox.storage.Metadata/ListDatasetColumns",
+      "trpc.moox.storage.Metadata/ListDatasetSubjects",
+      "trpc.moox.storage.Metadata/ListDatasets",
+      "trpc.moox.storage.Metadata/ListFieldGroups",
+      "trpc.moox.storage.Metadata/ListFields",
+      "trpc.moox.storage.Metadata/ListSpaces",
+      "trpc.moox.storage.Metadata/ListSubjects",
+      "trpc.moox.storage.Metadata/ListTagMembers",
+      "trpc.moox.storage.Metadata/ListTags",
+      "trpc.moox.storage.Metadata/ListViewColumns",
+      "trpc.moox.storage.Metadata/ListViews",
+      "trpc.moox.storage.Metadata/ResolveSubjects",
+      "trpc.moox.storage.PrimaryStore/CountTimeSeriesRows",
+      "trpc.moox.storage.PrimaryStore/GetDatasetPeriodCompleted",
+      "trpc.moox.storage.PrimaryStore/ReadRows",
+      "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows",
+      "trpc.moox.trade.TradeConsoleService/CloseTargetSession",
+      "trpc.moox.trade.TradeConsoleService/GetLogicalAccount"
+    ],
+    "trade": [
+      "trpc.moox.ops.SecretMgr/GetSecretValue",
+      "trpc.moox.ops.SecretMgr/ListSecrets"
+    ],
+    "web-host": []
+  },
+  "principals": {
+    "archive-worker": [
+      "trpc.moox.archive.ArchiveWorker/ArchiveWorkerHeartbeat",
+      "trpc.moox.archive.ArchiveWorker/CompleteArchiveRun",
+      "trpc.moox.archive.ArchiveWorker/PullArchiveRun",
+      "trpc.moox.archive.ArchiveWorker/ReportArchiveRunProgress",
+      "trpc.moox.storage.Metadata/GetDataset",
+      "trpc.moox.storage.Metadata/ListDatasetColumns",
+      "trpc.moox.storage.PrimaryStore/ReadDatasetChanges",
+      "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows"
+    ],
+    "collector-operator": [
+      "trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/ListSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/SetSubjectExclusions",
+      "trpc.moox.collector.CollectMgr/SyncSubjects"
+    ],
+    "factor-engine": [
+      "trpc.moox.factor.FactorEngine/EngineHeartbeat",
+      "trpc.moox.factor.FactorEngine/GetTaskParams",
+      "trpc.moox.factor.FactorEngine/GetUdfModule",
+      "trpc.moox.factor.FactorEngine/PullRecalcJob",
+      "trpc.moox.factor.FactorEngine/ReportRecalcProgress",
+      "trpc.moox.factor.FactorEngine/SyncEngineCatalog",
+      "trpc.moox.storage.Metadata/GetDataset",
+      "trpc.moox.storage.Metadata/ListDatasetColumns",
+      "trpc.moox.storage.Metadata/ListDatasetSubjects",
+      "trpc.moox.storage.PrimaryStore/GetDatasetPeriodCompleted",
+      "trpc.moox.storage.PrimaryStore/ReadDatasetChanges",
+      "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows",
+      "trpc.moox.storage.PrimaryStore/ReportDatasetPeriodCompleted",
+      "trpc.moox.storage.PrimaryStore/UpsertFields"
+    ],
+    "moox-skill": [
+      "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows"
+    ],
+    "scf-collector": [
+      "trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch",
+      "trpc.moox.storage.PrimaryStore/UpsertFields"
+    ]
+  },
+  "relay_http": [
+    {
+      "component": "archive-worker",
+      "port": 11428,
+      "callers": [
+        "console"
+      ]
+    }
+  ]
+}

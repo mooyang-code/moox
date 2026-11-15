@@ -121,7 +121,7 @@ func (c *Client) CheckAccount(ctx context.Context, spaceID, logicalAccountID str
 }
 
 // CloseSession 在实例停用之后通知 Trade 关闭这个会话（幂等，批 3 的 3.6）：组合的“关闭到”推进到会话的开始时刻，开始时刻不大于它的
-// 会话的目标都不再接受；这份目标的挂单由 Trade 的过期路径撤掉。Trade 回答账户不存在（code=5，例如 Trade 重置过）时视为已关闭：
+// 会话的目标都不再接受；这份目标的挂单由 Trade 的过期路径撤掉。Trade 回答账户不存在（code=5，例如 Trade 的数据被清空过）时视为已关闭：
 // 这个组合上不会再有目标执行，不能让重复停用、删除实例永远卡在这里。
 func (c *Client) CloseSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string, startedAt int64) error {
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(logicalAccountID) == "" || strings.TrimSpace(instanceID) == "" || strings.TrimSpace(sessionID) == "" || startedAt <= 0 {

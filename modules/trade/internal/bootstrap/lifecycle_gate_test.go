@@ -37,7 +37,7 @@ func TestGateIsClosedAfterBindWhenStateFileSaysPaused(t *testing.T) {
 	}
 
 	// 上一次运行：用户暂停了 Trade，状态写进文件。
-	before, err := newLifecycle(dbPath, ready, quiesce, catchup, nil)
+	before, err := newLifecycle(dbPath, ready, quiesce, catchup)
 	require.NoError(t, err)
 	before.Refresh(ctx)
 	_, err = before.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, Reason: "维护"})
@@ -46,7 +46,7 @@ func TestGateIsClosedAfterBindWhenStateFileSaysPaused(t *testing.T) {
 	// 重启：就绪判定里的依赖还没起来，控制器刚读完状态文件。
 	gate := &lifecycleGate{}
 	require.True(t, gate.Open(), "绑定之前放行，所以必须在第一个工人启动之前绑定")
-	after, err := newLifecycle(dbPath, health.Readiness{}, quiesce, catchup, nil)
+	after, err := newLifecycle(dbPath, health.Readiness{}, quiesce, catchup)
 	require.NoError(t, err)
 	gate.Bind(after)
 	require.False(t, gate.Open(), "状态文件为暂停：绑定后门禁关闭")

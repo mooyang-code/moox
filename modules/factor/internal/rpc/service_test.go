@@ -476,7 +476,7 @@ func TestListRecalcJobsFiltersByTaskAndPaginates(t *testing.T) {
 	require.True(t, rsp.GetPageResult().GetHasMore())
 }
 
-// 修改类接口受生命周期门禁约束：暂停、重置中时被拒绝；读接口不受影响。
+// 修改类接口受生命周期门禁约束：暂停、恢复追赶中时被拒绝；读接口不受影响。
 func TestMutationGateRejectsWritesButNotReads(t *testing.T) {
 	blocked := errors.New("因子管理已暂停")
 	gate := func() error { return blocked }

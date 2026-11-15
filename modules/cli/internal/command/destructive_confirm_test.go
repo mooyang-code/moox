@@ -124,7 +124,7 @@ func TestDestructiveCommandsNoLongerHaveLegacyConfirmFlags(t *testing.T) {
 		name string
 		flag func(string) bool
 	}{
-		{"collector task purge", func(n string) bool { return collectorTaskPurgeCmd.Flags().Lookup(n) != nil }},
+		{"collector task delete-result", func(n string) bool { return collectorResultDeleteCmd.Flags().Lookup(n) != nil }},
 		{"collector function delete", func(n string) bool { return collectorFunctionDeleteCmd.Flags().Lookup(n) != nil }},
 		{"firewall add", func(n string) bool { return lighthouseFirewallAddCmd.Flags().Lookup(n) != nil }},
 		{"firewall open", func(n string) bool { return lighthouseFirewallOpenCmd.Flags().Lookup(n) != nil }},

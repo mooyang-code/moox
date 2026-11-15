@@ -122,14 +122,10 @@ func TestProjectSystemResumingAndReset(t *testing.T) {
 	require.Equal(t, int32(1), resuming.CaughtUpModules)
 	require.ElementsMatch(t, []string{"因子引擎：补采 6/10", "策略：被 factor_task/crypto_1m 阻塞", "Trade：已追平，待放行"}, resuming.CatchupNotes)
 
-	resetting := projectSystem([]*pb.HealthComponent{component("因子引擎", "resetting"), component("策略", "running")})
-	require.Equal(t, "resetting", resetting.Phase)
-	require.Equal(t, "purple", resetting.Color)
-
-	failed := projectSystem([]*pb.HealthComponent{component("因子引擎", "reset_failed", func(l *pb.HealthLifecycle) { l.Reason = "清理本地存储失败" })})
+	failed := projectSystem([]*pb.HealthComponent{component("因子引擎", "fault", func(l *pb.HealthLifecycle) { l.Reason = "本地存储写入失败" })})
 	require.Equal(t, "attention", failed.Health)
 	require.Equal(t, "red", failed.Color)
-	require.Equal(t, []string{"因子引擎：清理本地存储失败"}, failed.Issues)
+	require.Equal(t, []string{"因子引擎：本地存储写入失败"}, failed.Issues)
 }
 
 // 没有对象、自身只是就绪的模块（采集、因子管理）不参与运行阶段的比较，否则系统一直显示「就绪」。

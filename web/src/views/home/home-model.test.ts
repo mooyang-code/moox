@@ -587,7 +587,7 @@ describe("systemStage", () => {
     expect(bad?.color).toBe("red");
   });
 
-  it("暂停、部分暂停与重置中", () => {
+  it("暂停与部分暂停", () => {
     const paused = systemStage({
       system: {
         phase: "paused",
@@ -599,9 +599,6 @@ describe("systemStage", () => {
     });
     expect(paused).toEqual({ color: "orange", label: "已暂停", issues: ["策略：系统暂停：切换行情源"], recovered: false });
     expect(systemStage({ system: { phase: "partially_paused", color: "orange", health: "healthy" } })?.label).toBe("部分暂停");
-    const resetting = systemStage({ system: { phase: "resetting", color: "purple", health: "healthy" } });
-    expect(resetting?.label).toBe("重置中");
-    expect(resetting?.color).toBe("purple");
   });
 
   it("恢复追赶：显示追平进度与各模块说明，全部追平后提示待放行", () => {

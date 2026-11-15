@@ -57,9 +57,6 @@ func clearHealthEnv(t *testing.T) {
 		for _, suffix := range []string{"VERSION", "ACCESS_KEY", "SECRET_KEY"} {
 			t.Setenv("MOOX_"+module.EnvPrefix+"_HEALTH_AUTH_"+suffix, "")
 		}
-		for _, suffix := range []string{"ACCESS_KEY", "SECRET_KEY"} {
-			t.Setenv("MOOX_"+module.EnvPrefix+"_HEALTH_RESET_"+suffix, "")
-		}
 	}
 	for _, suffix := range []string{"VERSION", "ACCESS_KEY", "SECRET_KEY"} {
 		t.Setenv("MOOX_HEALTH_AUTH_"+suffix, "")
@@ -73,9 +70,9 @@ func TestParseHealthSecretsJSONAndEnv(t *testing.T) {
 	_, err = parseHealthSecrets("not json", "json")
 	require.Error(t, err)
 
-	values, err = parseHealthSecrets("# 注释\nexport MOOX_HEALTH_AUTH_ACCESS_KEY=\"a\"\nMOOX_HEALTH_AUTH_SECRET_KEY='s'\nMOOX_HEALTH_RESET_SECRET_KEY=r\n", "env")
+	values, err = parseHealthSecrets("# 注释\nexport MOOX_HEALTH_AUTH_ACCESS_KEY=\"a\"\nMOOX_HEALTH_AUTH_SECRET_KEY='s'\nMOOX_HEALTH_AUTH_VERSION=v1\n", "env")
 	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"MOOX_HEALTH_AUTH_ACCESS_KEY": "a", "MOOX_HEALTH_AUTH_SECRET_KEY": "s", "MOOX_HEALTH_RESET_SECRET_KEY": "r"}, values)
+	assert.Equal(t, map[string]string{"MOOX_HEALTH_AUTH_ACCESS_KEY": "a", "MOOX_HEALTH_AUTH_SECRET_KEY": "s", "MOOX_HEALTH_AUTH_VERSION": "v1"}, values)
 }
 
 func TestHealthSecretSourcesFollowDeploymentLayout(t *testing.T) {
@@ -95,7 +92,7 @@ func TestHealthSecretSourcesFollowDeploymentLayout(t *testing.T) {
 func TestResolveModuleHealthReadsSecretsForwardsPortsAndSetsEnv(t *testing.T) {
 	clearHealthEnv(t)
 	ssh := &healthFilesSSH{files: map[string]string{
-		"cat /data/moox/prod/current/secrets/runtime-collector.json": `{"MOOX_HEALTH_AUTH_VERSION":"moox-health-v1","MOOX_HEALTH_AUTH_ACCESS_KEY":"monitor-x","MOOX_HEALTH_AUTH_SECRET_KEY":"secret-1","MOOX_HEALTH_RESET_ACCESS_KEY":"reset-collector","MOOX_HEALTH_RESET_SECRET_KEY":"reset-secret"}`,
+		"cat /data/moox/prod/current/secrets/runtime-collector.json": `{"MOOX_HEALTH_AUTH_VERSION":"moox-health-v1","MOOX_HEALTH_AUTH_ACCESS_KEY":"monitor-x","MOOX_HEALTH_AUTH_SECRET_KEY":"secret-1"}`,
 		"cat /data/moox/factor-engine/secrets/health-auth.env":       "MOOX_HEALTH_AUTH_ACCESS_KEY=monitor-x\nMOOX_HEALTH_AUTH_SECRET_KEY=secret-2\n",
 	}}
 	remote := healthTestRemote(t, ssh)
@@ -110,7 +107,6 @@ func TestResolveModuleHealthReadsSecretsForwardsPortsAndSetsEnv(t *testing.T) {
 	}
 	assert.Equal(t, []string{"trade"}, health.NotDeployed, "没有部署的模块自动跳过")
 	assert.Equal(t, "secret-1", getenv("MOOX_COLLECTOR_HEALTH_AUTH_SECRET_KEY"))
-	assert.Equal(t, "reset-secret", getenv("MOOX_COLLECTOR_HEALTH_RESET_SECRET_KEY"))
 	assert.Equal(t, "secret-2", getenv("MOOX_FACTOR_HEALTH_AUTH_SECRET_KEY"))
 	assert.Equal(t, "secret-2", getenv("MOOX_HEALTH_AUTH_SECRET_KEY"), "GenericFrom 的模块同时设为通用变量")
 	assert.Equal(t, "moox-health-v1", getenv("MOOX_FACTOR_HEALTH_AUTH_VERSION"), "文件里没有版本时取默认值")
@@ -227,14 +223,6 @@ func TestSystemResolvesOnlyModulesWithoutExplicitEndpoint(t *testing.T) {
 	assert.Equal(t, "http://explicit:9", systemFlags.Strategy)
 	assert.Empty(t, systemFlags.Trade)
 	assert.Contains(t, stderr.String(), "没有部署 trade")
-
-	// 重置命令另外包含 factor-mgr、archive-mgr、monitor。
-	systemFlags = systemOptions{}
-	reset := &cobra.Command{Use: "reset"}
-	plan := &cobra.Command{Use: "plan"}
-	reset.AddCommand(plan)
-	require.NoError(t, prepareSystemEndpoints(plan, nil))
-	assert.Equal(t, []string{"collector", "factor-engine", "strategy", "trade", "factor-mgr", "archive-mgr", "monitor"}, (*requests)[1].Modules)
 }
 
 func TestSystemWithoutManifestKeepsExplicitBehavior(t *testing.T) {

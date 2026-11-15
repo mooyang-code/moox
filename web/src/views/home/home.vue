@@ -777,10 +777,6 @@ a {
   background: rgb(var(--cyan-6));
 }
 
-.stage-dot.is-purple {
-  background: rgb(var(--purple-6));
-}
-
 .stage-dot.is-orange {
   background: rgb(var(--orange-6));
 }

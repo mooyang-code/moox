@@ -30,6 +30,11 @@ type collectorTaskCreateFlags struct {
 
 var collectorTaskCreateFlagsValue collectorTaskCreateFlags
 
+var collectorTaskCmd = &cobra.Command{
+	Use:   "task",
+	Short: "采集任务维护工具",
+}
+
 var collectorTaskCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "创建 K 线采集任务（可指定采集方式与每函数标的数）",
@@ -55,6 +60,7 @@ func collectorTaskCreateFieldsHint(flags collectorTaskCreateFlags, fieldsGiven b
 }
 
 func init() {
+	collectorCmd.AddCommand(collectorTaskCmd)
 	collectorTaskCmd.AddCommand(collectorTaskCreateCmd)
 	flags := collectorTaskCreateCmd.Flags()
 	flags.StringVar(&collectorTaskCreateFlagsValue.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
@@ -200,19 +206,19 @@ var collectorResultDeleteCmd = &cobra.Command{
 		if !flags.Yes {
 			return writePreview(cmd, map[string]any{"action": "delete_result", "space_id": flags.SpaceID, "views": flags.ViewIDs, "datasets": flags.DatasetIDs})
 		}
-		metadata, closer, err := newCollectorStorageMetadataClient(cmd.Context(), flags.File, nil, flags.AuthFile)
+		metadata, closer, err := newCollectorStorageMetadataClient(cmd.Context(), flags.File, flags.AuthFile)
 		if err != nil {
 			return err
 		}
 		defer closer.Close()
-		summary := &collectorTaskPurgeSummary{}
+		var objects collectorOwnedMetadata
 		for _, id := range flags.ViewIDs {
-			summary.storageViewRefs = appendUniqueStorageObject(summary.storageViewRefs, flags.SpaceID, id)
+			objects.views = appendUniqueStorageObject(objects.views, flags.SpaceID, id)
 		}
 		for _, id := range flags.DatasetIDs {
-			summary.storageDatasetRefs = appendUniqueStorageObject(summary.storageDatasetRefs, flags.SpaceID, id)
+			objects.datasets = appendUniqueStorageObject(objects.datasets, flags.SpaceID, id)
 		}
-		if err := deleteCollectorOwnedMetadata(cmd.Context(), metadata, summary); err != nil {
+		if err := deleteCollectorOwnedMetadata(cmd.Context(), metadata, objects); err != nil {
 			return err
 		}
 		return printJSON(cmd.OutOrStdout(), map[string]any{"status": "deleted", "views": flags.ViewIDs, "datasets": flags.DatasetIDs})

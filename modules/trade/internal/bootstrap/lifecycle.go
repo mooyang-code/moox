@@ -30,7 +30,7 @@ const (
 // 所以工人的第一轮就能看到暂停状态；只有绑定之前（装配期间）才放行。
 //
 // 门禁用 Halted 而不是 Allowed：就绪检查的抖动（单个账户会话断开、EventBus 短暂不可用）不应该让执行和目标接收停掉，
-// 只有用户或系统有意停下（暂停、恢复追赶、重置、故障）才停。
+// 只有用户或系统有意停下（暂停、恢复追赶、故障）才停。
 type lifecycleGate struct {
 	life atomic.Pointer[lifecycle.Controller]
 }
@@ -102,7 +102,7 @@ func tradeCatchup(accounts accountLister, worker interface{ Quiesce(context.Cont
 	}
 }
 
-func newLifecycle(dbPath string, readiness health.Readiness, quiesce func(context.Context) error, catchup func(context.Context, lifecycle.Ref, time.Time) (lifecycle.Catchup, error), reset *lifecycle.ResetSpec) (*lifecycle.Controller, error) {
+func newLifecycle(dbPath string, readiness health.Readiness, quiesce func(context.Context) error, catchup func(context.Context, lifecycle.Ref, time.Time) (lifecycle.Catchup, error)) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
 		Audit:     logsink.Audit,
 		Module:    "trade",
@@ -119,7 +119,6 @@ func newLifecycle(dbPath string, readiness health.Readiness, quiesce func(contex
 			// 暂停之后等在途的订单提交结束才算真正停下；不撤单、不平仓。
 			Quiesce: func(ctx context.Context, _ lifecycle.Ref) error { return quiesce(ctx) },
 			Catchup: catchup,
-			Reset:   reset,
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
 				log.Infof("trade_lifecycle_changed from=%s to=%s reason=%s", from, to, reason)
 			},
@@ -132,7 +131,6 @@ func lifecycleRoutes(life *lifecycle.Controller, tradeStore *store.Store) []heal
 		{Path: lifecycle.StatusPath, Handler: life.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: life.CommandHandler()},
 		{Path: lifecycle.CatchupPath, Handler: life.CatchupHandler()},
-		{Path: lifecycle.ResetPrefix, Handler: life.ResetHandler()},
 		{Path: shadowTargetsPath, Handler: shadowTargetsHandler(tradeStore)},
 	}
 }

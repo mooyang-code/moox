@@ -71,7 +71,6 @@ func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, err
 			AutoConfirm: deps.autoConfirm,
 			Catchup:     deps.catchup,
 			Quiesce:     deps.quiesce,
-			Reset:       strategyResetSpec(deps.db, dbPath),
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
 				log.Infof("strategy_lifecycle_changed kind=%s id=%s from=%s to=%s reason=%s", ref.Kind, ref.ID, from, to, reason)
 			},
@@ -222,7 +221,7 @@ func (d lifecycleDeps) checkInstance(ctx context.Context, ref lifecycle.Ref) []l
 }
 
 // triggerGate 把控制器的阶段翻译成处理器的模式：运行是正式目标，预热是影子目标，其他都不求值
-// （暂停、恢复追赶、重置、故障，对象各自的阶段不变但都不求值）。模块自身只是暂时未就绪（刚启动、出站 EventBus 还在连接）
+// （暂停、恢复追赶、故障，对象各自的阶段不变但都不求值）。模块自身只是暂时未就绪（刚启动、出站 EventBus 还在连接）
 // 时返回 ModeWait：事件稍后重投，就绪后照常求值，不丢掉这几期。
 func triggerGate(c *lifecycle.Controller, warm warmState) func(string) trigger.Mode {
 	return func(instanceID string) trigger.Mode {
@@ -296,7 +295,6 @@ func lifecycleRoutes(c *lifecycle.Controller, warm warmState) []health.Route {
 		{Path: lifecycle.StatusPath, Handler: c.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: confirmGuard(c.CommandHandler(), blocked)},
 		{Path: lifecycle.CatchupPath, Handler: c.CatchupHandler()},
-		{Path: lifecycle.ResetPrefix, Handler: c.ResetHandler()},
 	}
 }
 

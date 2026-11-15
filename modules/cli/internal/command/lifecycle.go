@@ -328,10 +328,6 @@ func stageText(s lifecycle.Stage) string {
 		return "暂停"
 	case lifecycle.StageResuming:
 		return "恢复追赶"
-	case lifecycle.StageResetting:
-		return "重置中"
-	case lifecycle.StageResetFailed:
-		return "重置失败"
 	case lifecycle.StageFault:
 		return "故障"
 	}

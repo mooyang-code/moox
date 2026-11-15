@@ -36,7 +36,7 @@ func (c *Controller) StageSince(ref Ref) time.Time {
 }
 
 // ModuleWaiting 报告模块自身是否只是暂时未就绪：刚启动、检查还没跑完，或检查有失败项（例如出站连接还在建立），
-// 而且没有暂停、重置等控制意图。调用方据此让到达的输入稍后重试，而不是像暂停那样直接丢弃。
+// 而且没有暂停等控制意图。调用方据此让到达的输入稍后重试，而不是像暂停那样直接丢弃。
 func (c *Controller) ModuleWaiting() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -47,7 +47,7 @@ func (c *Controller) ModuleWaiting() bool {
 }
 
 // moduleOpen 报告模块自身是否放行实时计算：没有控制意图，且自身阶段是就绪、预热或运行。
-// 自身未初始化、未就绪、暂停、恢复追赶、重置、故障时一律不放行，不沿用「本来就不计算」的隐含假设。
+// 自身未初始化、未就绪、暂停、恢复追赶、故障时一律不放行，不沿用「本来就不计算」的隐含假设。
 // 调用方持有锁。
 func (c *Controller) moduleOpen() bool {
 	if c.self.Hold != HoldNone {
@@ -75,7 +75,7 @@ func (o Object) Quiesced() bool {
 
 // Allowed 报告对象是否在做实时计算（预热或运行）：处理周期事件前用它做门禁。
 // ref 为空时指模块自身（没有对象的模块，例如 Trade）：自身处于预热或运行。
-// 模块自身暂停、恢复追赶、重置或故障时整个模块都不计算，不管对象各自处于什么阶段。
+// 模块自身暂停、恢复追赶或故障时整个模块都不计算，不管对象各自处于什么阶段。
 func (c *Controller) Allowed(ref Ref) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -96,15 +96,12 @@ func (c *Controller) Allowed(ref Ref) bool {
 //	模块恢复追赶中   ：参与本次恢复的对象（手动暂停的对象继续排除）；
 //	模块就绪/预热/运行：处于恢复追赶的单个对象；
 //	模块暂停          ：只有处于恢复追赶的单个对象（resume --force 的例外，不放开整个模块）；
-//	重置、故障、未初始化、未就绪：一律不允许。
+//	故障、未初始化、未就绪：一律不允许。
 //
 // ref 为空指模块自身。
 func (c *Controller) CatchupAllowed(ref Ref) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.self.Hold == HoldPostReset {
-		return false
-	}
 	switch c.self.Stage {
 	case StageResuming:
 		if ref == (Ref{}) {
@@ -122,7 +119,7 @@ func (c *Controller) CatchupAllowed(ref Ref) bool {
 	return false
 }
 
-// Halted 报告 ref（空表示模块自身）是否被有意停下：暂停、恢复追赶、重置、重置失败、故障，或者带着控制意图。
+// Halted 报告 ref（空表示模块自身）是否被有意停下：暂停、恢复追赶、故障，或者带着控制意图。
 // 它和 Allowed 不同：自身未初始化、未就绪不算「有意停下」。Trade 这类下单的模块用它做门禁——
 // 就绪检查的抖动不应该让执行和目标接收停掉，只有用户（或系统）有意停下才停。
 func (c *Controller) Halted(ref Ref) bool {
@@ -141,7 +138,7 @@ func (c *Controller) Halted(ref Ref) bool {
 		}
 	}
 	switch c.self.Stage {
-	case StagePaused, StageResuming, StageResetting, StageResetFailed, StageFault:
+	case StagePaused, StageResuming, StageFault:
 		return true
 	}
 	if ref == (Ref{}) {
@@ -176,7 +173,7 @@ func (c *Controller) effective(r *record) Stage {
 		return r.Stage
 	}
 	switch c.self.Stage {
-	case StagePaused, StageResuming, StageResetting, StageResetFailed, StageFault:
+	case StagePaused, StageResuming, StageFault:
 		return c.self.Stage
 	}
 	if c.self.Hold == HoldSystemPause {
@@ -188,7 +185,7 @@ func (c *Controller) effective(r *record) Stage {
 func (c *Controller) object(r *record) Object {
 	obj := Object{
 		Ref: r.Ref, Stage: r.Stage, Effective: c.effective(r), Color: c.effective(r).Color(), Reason: r.Reason, Since: r.Since,
-		Pause: r.Pause, PausedSince: r.PausedSince, QuiescedAt: r.QuiescedAt, Resume: r.Resume, Recovered: r.Recovered, Hold: r.Hold, ReleasedAt: r.ReleasedAt, LastReset: r.LastReset,
+		Pause: r.Pause, PausedSince: r.PausedSince, QuiescedAt: r.QuiescedAt, Resume: r.Resume, Recovered: r.Recovered, Hold: r.Hold, ReleasedAt: r.ReleasedAt,
 		Checks: append([]Check(nil), c.checks[r.key()]...),
 	}
 	if r.Pause != nil {
@@ -221,13 +218,13 @@ func (c *Controller) Snapshot() Snapshot {
 	return snap
 }
 
-// summarize 推导汇总阶段：模块自身没有通过检查、重置中、暂停、恢复追赶时，汇总就是模块自身的阶段；
+// summarize 推导汇总阶段：模块自身没有通过检查、暂停、恢复追赶时，汇总就是模块自身的阶段；
 // 有对象时，故障 > 未就绪 > 暂停 > 恢复追赶 > 预热 > 运行 > 就绪 > 未初始化。
 // 降级只算「不是用户意图」的情形：自动暂停、故障、未就绪；手动和系统暂停是用户意图，恢复追赶是预期的过渡，都不算降级。
 func (c *Controller) summarize(s Snapshot) (Stage, string, bool) {
 	switch s.Self.Stage {
-	case StageUninitialized, StageNotReady, StageFault, StageResetting, StageResetFailed:
-		return s.Self.Stage, s.Self.Reason, s.Self.Stage == StageResetFailed
+	case StageUninitialized, StageNotReady, StageFault:
+		return s.Self.Stage, s.Self.Reason, false
 	case StagePaused, StageResuming:
 		return s.Self.Stage, s.Self.Reason, s.Self.Stage == StagePaused && s.Self.Pause != nil && s.Self.Pause.Kind == PauseAuto
 	}
@@ -277,8 +274,7 @@ func (c *Controller) Recover(ctx context.Context) {
 
 // AutoAdvance 把 AutoStart 钩子认定的对象从未初始化推进到预热：未初始化先 init，就绪再 start；
 // 预热中的对象在 AutoConfirm 钩子认可时自动确认进入运行。
-// 其他阶段（未就绪、预热、运行、暂停、恢复追赶、重置、故障）不动；命令被拒绝（模块重置中、等待重置后初始化、
-// 模块自身没有放行）时静默跳过，下一轮刷新再试。
+// 其他阶段（未就绪、预热、运行、暂停、恢复追赶、故障）不动；命令被拒绝（模块自身没有放行）时静默跳过，下一轮刷新再试。
 func (c *Controller) AutoAdvance(ctx context.Context) {
 	if c.opts.Hooks.AutoStart == nil || c.opts.Hooks.Objects == nil {
 		return
@@ -346,8 +342,6 @@ type Compact struct {
 	Hold  Hold       `json:"hold,omitempty"`
 	// Catchup 是模块自身的恢复追赶进度（模块恢复追赶中）。
 	Catchup *Catchup `json:"catchup,omitempty"`
-	// LastReset 是最近一次完成的重置。
-	LastReset *ResetRecord `json:"last_reset,omitempty"`
 	// Counts 是各阶段的对象数；PauseKinds 是暂停的对象（含模块自身）按类型计数。
 	Counts     map[Stage]int     `json:"counts,omitempty"`
 	PauseKinds map[PauseKind]int `json:"pause_kinds,omitempty"`
@@ -364,7 +358,7 @@ func (c *Controller) Compact() Compact {
 	snap := c.Snapshot()
 	out := Compact{
 		Stage: snap.Stage, Color: snap.Color, Degraded: snap.Degraded, Reason: snap.Reason,
-		Self: snap.Self.Stage, Pause: snap.Self.Pause, Hold: snap.Self.Hold, Catchup: snap.Self.Catchup, LastReset: snap.Self.LastReset,
+		Self: snap.Self.Stage, Pause: snap.Self.Pause, Hold: snap.Self.Hold, Catchup: snap.Self.Catchup,
 		Counts: map[Stage]int{},
 	}
 	countPause := func(o Object) {

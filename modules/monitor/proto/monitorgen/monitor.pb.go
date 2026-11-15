@@ -864,9 +864,9 @@ type HealthLifecycle struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	// 汇总阶段：uninitialized | not_ready | ready | warming | running | paused | resuming | resetting | reset_failed | fault。
+	// 汇总阶段：uninitialized | not_ready | ready | warming | running | paused | resuming | fault。
 	Stage string `protobuf:"bytes,1,opt,name=stage,proto3" json:"stage,omitempty"`
-	// 阶段对应的颜色：gray | red | blue | yellow | green | orange | cyan | purple。
+	// 阶段对应的颜色：gray | red | blue | yellow | green | orange | cyan。
 	Color string `protobuf:"bytes,2,opt,name=color,proto3" json:"color,omitempty"`
 	// 有对象自动暂停、故障或未就绪，而另一些对象在跑（手动、系统暂停是用户意图，不算降级）。
 	Degraded bool   `protobuf:"varint,3,opt,name=degraded,proto3" json:"degraded,omitempty"`
@@ -881,7 +881,7 @@ type HealthLifecycle struct {
 	Recovered int32 `protobuf:"varint,8,opt,name=recovered,proto3" json:"recovered,omitempty"`
 	// 模块自身的暂停详情（模块暂停或恢复追赶中）。
 	Pause *HealthPause `protobuf:"bytes,9,opt,name=pause,proto3" json:"pause,omitempty"`
-	// 控制意图：system_pause | post_reset | 空。
+	// 控制意图：system_pause | 空。
 	Hold string `protobuf:"bytes,10,opt,name=hold,proto3" json:"hold,omitempty"`
 	// 暂停的对象（含模块自身）按类型计数：manual | system | auto。
 	PauseKinds map[string]int32 `protobuf:"bytes,11,rep,name=pause_kinds,json=pauseKinds,proto3" json:"pause_kinds,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
@@ -1298,9 +1298,9 @@ type HealthSystem struct {
 
 	// 健康面：healthy（没有模块未就绪或故障）| attention。
 	Health string `protobuf:"bytes,1,opt,name=health,proto3" json:"health,omitempty"`
-	// 运行阶段：uninitialized | ready | warming | running | paused | partially_paused | resuming | resetting；全部在跑时是 running。
+	// 运行阶段：uninitialized | ready | warming | running | paused | partially_paused | resuming；全部在跑时是 running。
 	Phase string `protobuf:"bytes,2,opt,name=phase,proto3" json:"phase,omitempty"`
-	// 首页圆点的颜色：红（健康面异常）> 紫（重置中）> 青（恢复追赶）> 橙（降级或暂停）> 黄（预热）> 蓝（就绪）> 绿（运行）> 灰。
+	// 首页圆点的颜色：红（健康面异常）> 青（恢复追赶）> 橙（降级或暂停）> 黄（预热）> 蓝（就绪）> 绿（运行）> 灰。
 	Color string `protobuf:"bytes,3,opt,name=color,proto3" json:"color,omitempty"`
 	// 运行中但有部分对象自动暂停、故障：首页显示「运行中 · 降级」；手动、系统暂停不算降级。
 	Degraded bool `protobuf:"varint,4,opt,name=degraded,proto3" json:"degraded,omitempty"`

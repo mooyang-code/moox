@@ -35,8 +35,6 @@ const (
 	StageRunning       Stage = "running"       // 绿：用户确认后运行
 	StagePaused        Stage = "paused"        // 橙：手动暂停，或受上游故障影响自动暂停
 	StageResuming      Stage = "resuming"      // 青：恢复追赶，补齐暂停期间缺失的数据；不计算、不下单
-	StageResetting     Stage = "resetting"     // 紫：重置进行中
-	StageResetFailed   Stage = "reset_failed"  // 红：重置某一步失败，模块保持停用
 	StageFault         Stage = "fault"         // 红：运行中出现自身无法恢复的错误
 )
 
@@ -45,7 +43,7 @@ func (s Stage) Color() string {
 	switch s {
 	case StageUninitialized:
 		return "gray"
-	case StageNotReady, StageFault, StageResetFailed:
+	case StageNotReady, StageFault:
 		return "red"
 	case StageReady:
 		return "blue"
@@ -57,8 +55,6 @@ func (s Stage) Color() string {
 		return "orange"
 	case StageResuming:
 		return "cyan"
-	case StageResetting:
-		return "purple"
 	}
 	return "gray"
 }
@@ -142,14 +138,12 @@ type PauseInfo struct {
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
-// Hold 是持久化在模块自身记录里的控制意图，不依赖阶段推导：系统暂停时即使模块自身检查失败（未就绪）也必须能建立门禁，
-// 重置完成后必须等用户 init，Refresh 不得自动初始化模块自身。
+// Hold 是持久化在模块自身记录里的控制意图，不依赖阶段推导：系统暂停时即使模块自身检查失败（未就绪）也必须能建立门禁。
 type Hold string
 
 const (
 	HoldNone        Hold = ""
 	HoldSystemPause Hold = "system_pause"
-	HoldPostReset   Hold = "post_reset"
 )
 
 // Catchup 是恢复追赶的进度，由模块的 Catchup 钩子报告。
@@ -182,7 +176,7 @@ func (r Ref) key() string { return r.Kind + "/" + r.ID }
 type Object struct {
 	Ref
 	Stage Stage `json:"stage"`
-	// Effective 是考虑模块自身状态后的有效阶段：模块暂停、恢复追赶、重置时，处于计算中的对象实际都不在计算。
+	// Effective 是考虑模块自身状态后的有效阶段：模块暂停、恢复追赶时，处于计算中的对象实际都不在计算。
 	Effective Stage  `json:"effective"`
 	Color     string `json:"color"`
 	Reason    string `json:"reason,omitempty"`
@@ -202,8 +196,6 @@ type Object struct {
 	Hold Hold `json:"hold,omitempty"`
 	// ReleasedAt 是最近一次放行的时间：下单类模块据此只对放行之后收盘的周期出目标，放行之前的周期只记录、不求值。
 	ReleasedAt time.Time `json:"released_at,omitempty"`
-	// LastReset 是最近一次完成的重置（只在模块自身记录里有意义）。
-	LastReset *ResetRecord `json:"last_reset,omitempty"`
 	// Recovered 为真表示这次是重启后自动回到原阶段（首页提示「已自动恢复」）。
 	Recovered bool    `json:"recovered,omitempty"`
 	Checks    []Check `json:"checks,omitempty"`
@@ -233,7 +225,7 @@ type Hooks struct {
 	// Init 执行初始化动作（可为 nil）；ref 为空表示模块自身。
 	Init func(ctx context.Context, ref Ref) error
 	// AutoStart 报告对象是否随创建自动推进到试运行（init → start）：返回 true 的对象在未初始化、就绪时由周期刷新自动
-	// init、start，不必用户逐个执行命令（例如策略实例的私有因子任务、启用后的策略实例）。暂停、恢复追赶、重置、故障、未就绪
+	// init、start，不必用户逐个执行命令（例如策略实例的私有因子任务、启用后的策略实例）。暂停、恢复追赶、故障、未就绪
 	// 的对象不动，试运行到运行的确认（confirm）默认仍由用户执行（见 AutoConfirm）。为 nil 表示没有对象自动推进。
 	AutoStart func(ref Ref) bool
 	// AutoConfirm 报告试运行中的对象能否自动确认进入运行；since 是对象进入试运行的时间。只对 AutoStart 认定的对象调用，
@@ -242,11 +234,6 @@ type Hooks struct {
 	// Catchup 报告一个对象（ref 为空是模块自身）的恢复追赶进度；since 是最早一次暂停的时间。
 	// 为 nil 表示没有数据需要追赶，恢复后立即视为追平。钩子应只写历史数据，不下单、不发目标。
 	Catchup func(ctx context.Context, ref Ref, since time.Time) (Catchup, error)
-	// AfterReset 在重置完成后用户第一次 init 模块自身（解除「重置后等待初始化」）时调用，可为 nil。
-	// 模块用它放开重置期间一直保持关闭的东西（例如 Collector 的采集暂停开关）：重置结束不等于可以马上工作，要等用户明确 init。
-	AfterReset func(ctx context.Context)
-	// Reset 是模块的重置实现（见 reset.go）；为 nil 表示模块不支持重置。
-	Reset *ResetSpec
 	// Quiesce 在对象暂停之后调用（门禁已经关闭）：等待该对象在途的写操作结束（例如 Trade 已提交的订单请求）。
 	// 返回错误表示在途操作没有在时限内结束；对象仍然是暂停，调用方可以稍后再确认。为 nil 表示没有需要等待的在途操作。
 	Quiesce func(ctx context.Context, ref Ref) error
@@ -263,8 +250,7 @@ type Options struct {
 	StateFile string
 	Now       func() time.Time
 	Hooks     Hooks
-	// Audit 接收审计事件（重置的开始、每一步、结束、失败、放弃，暂停与恢复命令），含操作者、范围和计划摘要；
-	// 模块把它接到自己的日志，可为 nil。调用时不持有控制器锁。
+	// Audit 接收审计事件（暂停与恢复等命令），含操作者与原因；模块把它接到自己的日志，可为 nil。调用时不持有控制器锁。
 	Audit func(event string)
 }
 
@@ -276,23 +262,20 @@ type Controller struct {
 	self    *record
 	objects map[string]*record
 	checks  map[string][]Check
-
-	reset resetState
 }
 
 type record struct {
 	Ref
-	Stage       Stage        `json:"stage"`
-	Reason      string       `json:"reason,omitempty"`
-	Since       time.Time    `json:"since"`
-	Pause       *PauseInfo   `json:"pause,omitempty"`
-	PausedSince time.Time    `json:"paused_since,omitempty"`
-	Resume      Stage        `json:"resume,omitempty"`
-	QuiescedAt  time.Time    `json:"quiesced_at,omitempty"`
-	Recovered   bool         `json:"recovered,omitempty"`
-	Hold        Hold         `json:"hold,omitempty"`
-	ReleasedAt  time.Time    `json:"released_at,omitempty"`
-	LastReset   *ResetRecord `json:"last_reset,omitempty"`
+	Stage       Stage      `json:"stage"`
+	Reason      string     `json:"reason,omitempty"`
+	Since       time.Time  `json:"since"`
+	Pause       *PauseInfo `json:"pause,omitempty"`
+	PausedSince time.Time  `json:"paused_since,omitempty"`
+	Resume      Stage      `json:"resume,omitempty"`
+	QuiescedAt  time.Time  `json:"quiesced_at,omitempty"`
+	Recovered   bool       `json:"recovered,omitempty"`
+	Hold        Hold       `json:"hold,omitempty"`
+	ReleasedAt  time.Time  `json:"released_at,omitempty"`
 	// 以下是进程内的恢复追赶状态，重启后清零（重启时恢复追赶回到暂停，要重新 resume）。
 	catchup       *Catchup
 	catchupMember bool // 模块恢复追赶时，参与本次恢复的原活动对象
@@ -330,9 +313,6 @@ func New(opts Options) (*Controller, error) {
 	if opts.StateFile == "" {
 		return c, nil
 	}
-	if err := c.loadJournal(); err != nil {
-		return nil, err
-	}
 	raw, err := os.ReadFile(opts.StateFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return c, nil
@@ -360,10 +340,6 @@ func New(opts Options) (*Controller, error) {
 			out.Pending = StagePaused
 			out.Stage = StageNotReady
 			out.Reason = "重启后等待启动前检查"
-		case r.Stage == StageResetting:
-			// 重置进行中进程退出：停在重置失败，等 reset 续做。
-			out.Stage = StageResetFailed
-			out.Reason = "重置被重启中断"
 		}
 		return &out
 	}
@@ -486,7 +462,7 @@ func (c *Controller) runChecks(ctx context.Context, ref Ref) []Check {
 func (c *Controller) Refresh(ctx context.Context) {
 	// 模块自身是基础设施，第一次检查时自动初始化；需要用户 init 的是它管理的对象。
 	c.mu.Lock()
-	selfUninit := c.self.Stage == StageUninitialized && c.self.Hold != HoldPostReset
+	selfUninit := c.self.Stage == StageUninitialized
 	c.mu.Unlock()
 	if selfUninit {
 		_, _ = c.initCmd(ctx, Ref{})
@@ -596,8 +572,8 @@ func (c *Controller) apply(r *record, checks []Check, changes *[]change) {
 			r.Reason = failure
 			r.Pause.Reason = failure
 		}
-	case StageResuming, StageResetting, StageResetFailed:
-		// 恢复追赶由 settle 推进；重置由重置流程推进。
+	case StageResuming:
+		// 恢复追赶由 settle 推进。
 	case StageFault:
 		// 故障要用户 resume（检查通过后）才恢复。
 	}

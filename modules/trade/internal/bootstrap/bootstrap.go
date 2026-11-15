@@ -374,7 +374,6 @@ func initialize(
 	life, err := newLifecycle(
 		cfg.Database.Path, readiness, targetWorker.Quiesce,
 		tradeCatchup(tradeStore, targetWorker, time.Now),
-		tradeResetSpec(tradeStore, cfg.Database.Path, accountSyncer{service: syncService}.SyncAccount),
 	)
 	if err != nil {
 		if eventBus != nil {

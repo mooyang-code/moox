@@ -37,7 +37,7 @@ func (s *Service) MuteAlerts(ctx context.Context, req *monitorpb.MuteAlertsReq) 
 	if current := muteState(self); current.GetMuted() {
 		return &monitorpb.MuteAlertsRsp{RetInfo: invalid(errors.New("alerts are already muted; unmute first")), State: current}, nil
 	}
-	// 模块已经因为别的原因暂停（系统暂停、手动暂停、恢复追赶、重置、故障）或带着控制意图时不能再设置屏蔽：
+	// 模块已经因为别的原因暂停（系统暂停、手动暂停、恢复追赶、故障）或带着控制意图时不能再设置屏蔽：
 	// 手动暂停会覆盖已有的暂停信息，解除或到期时还会连别的暂停一起放行。
 	switch self.Stage {
 	case lifecycle.StageReady, lifecycle.StageWarming, lifecycle.StageRunning:

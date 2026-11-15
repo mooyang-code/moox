@@ -546,7 +546,7 @@ func (f *TencentFunctions) SetTimer(ctx context.Context, ref FunctionRef, timer 
 		if err != nil {
 			return fmt.Errorf("读取云函数 %s 失败: %w", ref.Name, err)
 		}
-		// 停用不看函数状态、不等 Active：函数在 Updating、UpdateFailed 时定时器也必须能停（暂停与重置靠它，真机实测都接受）。
+		// 停用不看函数状态、不等 Active：函数在 Updating、UpdateFailed 时定时器也必须能停（暂停靠它，真机实测都接受）。
 		// CreateFailed 时腾讯云拒绝一切触发器操作，而建定时器要求函数正常，所以这时不可能有定时器，直接算停用成功；
 		// 其他状态下云上没有定时器也直接成功，不去建一个关着的定时器（没有定时器就不会触发）。
 		if !timer.Enabled {
