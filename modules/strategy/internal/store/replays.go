@@ -51,6 +51,8 @@ type Replay struct {
 	// SpotFeeBps 是现货与股票的单边手续费，SwapFeeBps 是永续的（基点）。
 	SpotFeeBps float64
 	SwapFeeBps float64
+	// SlippageBps 是滑点（基点）：成交价在收盘价上按方向加减这个比例，现货、永续相同。
+	SlippageBps float64
 	// FundingColumn 非空时永续持仓按 View 里的这一列（本根累计的资金费率）结算资金费；空串表示不计。
 	FundingColumn string
 	// MembersJSON 是策略池回放发起时固化的成员（input.PoolMember 列表的 JSON，与会话的成员快照同一格式）；执行时只读它，
@@ -66,7 +68,7 @@ type Replay struct {
 	UpdatedAt    time.Time
 }
 
-// MaxReplayFeeBps 是回放单边手续费的上限（bps）。
+// MaxReplayFeeBps 是回放单边手续费与滑点的上限（bps）。
 const MaxReplayFeeBps = 1000
 
 // MaxActiveReplays 是每个空间同时排队与运行的回放上限：回放由一个执行循环逐个运行，排队过多只会让后发起的
@@ -109,6 +111,7 @@ type replayRow struct {
 	EndTime       int64          `gorm:"column:c_end_time"`
 	SpotFeeBps    float64        `gorm:"column:c_spot_fee_bps"`
 	SwapFeeBps    float64        `gorm:"column:c_swap_fee_bps"`
+	SlippageBps   float64        `gorm:"column:c_slippage_bps"`
 	FundingColumn string         `gorm:"column:c_funding_column"`
 	MembersJSON   sql.NullString `gorm:"column:c_members_json"`
 	FactorsJSON   string         `gorm:"column:c_factors_json"`
@@ -123,7 +126,7 @@ type replayRow struct {
 func (r replayRow) replay() Replay {
 	replay := Replay{
 		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, DSLHash: r.DSLHash, Calendar: r.Calendar, SpaceID: r.SpaceID,
-		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), SpotFeeBps: r.SpotFeeBps, SwapFeeBps: r.SwapFeeBps, FundingColumn: r.FundingColumn, MembersJSON: r.MembersJSON.String, Status: r.Status,
+		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), SpotFeeBps: r.SpotFeeBps, SwapFeeBps: r.SwapFeeBps, SlippageBps: r.SlippageBps, FundingColumn: r.FundingColumn, MembersJSON: r.MembersJSON.String, Status: r.Status,
 		MetricsJSON: json.RawMessage(r.MetricsJSON), Error: r.Error, CreatedAt: r.CreatedAt.UTC(), UpdatedAt: r.UpdatedAt.UTC(),
 	}
 	if r.ProgressTime.Valid {
@@ -143,18 +146,18 @@ func (r replayRow) replay() Replay {
 const (
 	// sqlInsertReplay 写入一条排队中的回放。
 	sqlInsertReplay = `
-	INSERT INTO t_strategy_replays (c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)`
+	INSERT INTO t_strategy_replays (c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_slippage_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)`
 	// sqlCountActiveReplays 统计空间内排队与运行中的回放。
 	sqlCountActiveReplays = `SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ? AND c_status IN ('pending', 'running')`
 	// sqlSelectReplayByID 按回放 ID 读取回放。
-	sqlSelectReplayByID = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_replay_id = ?`
+	sqlSelectReplayByID = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_slippage_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_replay_id = ?`
 	// sqlCountReplaysOfSpace 统计空间内的全部回放。
 	sqlCountReplaysOfSpace = `SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ?`
 	// sqlListReplaysOfSpace 按创建时间倒序分页列出空间内的回放，不读取 DSL 全文与成员快照（c_dsl_yaml 返回空串，c_members_json 返回 NULL）。
-	sqlListReplaysOfSpace = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, '' AS c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, NULL AS c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_space_id = ? ORDER BY c_ctime DESC, c_replay_id LIMIT ? OFFSET ?`
+	sqlListReplaysOfSpace = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, '' AS c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_slippage_bps, c_funding_column, NULL AS c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_space_id = ? ORDER BY c_ctime DESC, c_replay_id LIMIT ? OFFSET ?`
 	// sqlSelectNextPendingReplay 读取最早的一条排队中的回放。
-	sqlSelectNextPendingReplay = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_status = 'pending' ORDER BY c_ctime, c_replay_id LIMIT 1`
+	sqlSelectNextPendingReplay = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_slippage_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_status = 'pending' ORDER BY c_ctime, c_replay_id LIMIT 1`
 	// sqlClaimReplay 比较交换把排队中的回放改为运行中。
 	sqlClaimReplay = `UPDATE t_strategy_replays SET c_status = 'running', c_mtime = ? WHERE c_replay_id = ? AND c_status = 'pending'`
 	// sqlUpdateReplayProgress 推进运行中回放的进度。
@@ -201,9 +204,9 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 	if replay.StartTime.IsZero() || replay.EndTime.IsZero() || !replay.EndTime.After(replay.StartTime) {
 		return errors.New("回放区间必须满足 start < end")
 	}
-	for name, fee := range map[string]float64{"现货": replay.SpotFeeBps, "永续": replay.SwapFeeBps} {
+	for name, fee := range map[string]float64{"现货手续费": replay.SpotFeeBps, "永续手续费": replay.SwapFeeBps, "滑点": replay.SlippageBps} {
 		if math.IsNaN(fee) || fee < 0 || fee > MaxReplayFeeBps {
-			return fmt.Errorf("%s手续费必须在 0 到 %d bps 之间", name, MaxReplayFeeBps)
+			return fmt.Errorf("%s必须在 0 到 %d bps 之间", name, MaxReplayFeeBps)
 		}
 	}
 	now, err := requireTime(replay.CreatedAt)
@@ -239,7 +242,7 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 		if active >= MaxActiveReplays {
 			return fmt.Errorf("空间 %s 已有 %d 个排队或运行中的回放，请等它们完成或取消后再发起", replay.SpaceID, active)
 		}
-		return tx.Exec(sqlInsertReplay, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.Calendar, replay.SpaceID, string(tasksJSON), millis(replay.StartTime), millis(replay.EndTime), replay.SpotFeeBps, replay.SwapFeeBps, replay.FundingColumn, membersJSON, string(factorsJSON), now, now).Error
+		return tx.Exec(sqlInsertReplay, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.Calendar, replay.SpaceID, string(tasksJSON), millis(replay.StartTime), millis(replay.EndTime), replay.SpotFeeBps, replay.SwapFeeBps, replay.SlippageBps, replay.FundingColumn, membersJSON, string(factorsJSON), now, now).Error
 	})
 }
 

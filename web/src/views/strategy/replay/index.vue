@@ -402,6 +402,7 @@ const form = reactive<ReplayFormState>({
   range: recentRange(30),
   spot_fee_bps: 10,
   swap_fee_bps: 10,
+  slippage_bps: 0,
   funding_column: ""
 });
 let chart: VChart | null = null;
@@ -840,6 +841,7 @@ async function start() {
       end_time: endTime,
       spot_fee_bps: Number(form.spot_fee_bps) || 0,
       swap_fee_bps: Number(form.swap_fee_bps) || 0,
+      slippage_bps: Number(form.slippage_bps) || 0,
       ...(fundingColumn ? { funding_column: fundingColumn } : {})
     });
     if (gen !== generation) return;

@@ -72,7 +72,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if !end.After(start) {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("end_time 必须晚于 start_time"))}, nil
 	}
-	for name, fee := range map[string]float64{"spot_fee_bps": req.GetSpotFeeBps(), "swap_fee_bps": req.GetSwapFeeBps()} {
+	for name, fee := range map[string]float64{"spot_fee_bps": req.GetSpotFeeBps(), "swap_fee_bps": req.GetSwapFeeBps(), "slippage_bps": req.GetSlippageBps()} {
 		if math.IsNaN(fee) || math.IsInf(fee, 0) || fee < 0 || fee > store.MaxReplayFeeBps {
 			return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("%s 必须在 0 到 %d 之间", name, store.MaxReplayFeeBps))}, nil
 		}
@@ -164,7 +164,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	for key, task := range bindings {
 		replayTasks[key] = store.ReplayTask{FactorTaskID: task.FactorTaskID, ViewID: task.ViewID, ViewGeneration: generations[key]}
 	}
-	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), Calendar: resolved.Calendar, SpaceID: scoped, Tasks: replayTasks, StartTime: start, EndTime: end, SpotFeeBps: req.GetSpotFeeBps(), SwapFeeBps: req.GetSwapFeeBps(), FundingColumn: fundingColumn, MembersJSON: membersJSON, Factors: resolved.Factors, CreatedAt: s.nowTime()}
+	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), Calendar: resolved.Calendar, SpaceID: scoped, Tasks: replayTasks, StartTime: start, EndTime: end, SpotFeeBps: req.GetSpotFeeBps(), SwapFeeBps: req.GetSwapFeeBps(), SlippageBps: req.GetSlippageBps(), FundingColumn: fundingColumn, MembersJSON: membersJSON, Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}

@@ -705,6 +705,14 @@ func TestStartReplaySupportsSwapAndDualTasks(t *testing.T) {
 	}
 	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SwapFeeBps: 1500})
 	requireFail(t, int32(badFee.GetRetInfo().GetCode()), badFee.GetRetInfo().GetMsg(), "swap_fee_bps")
+	// 滑点与手续费同一范围，随回放记录保存并在详情里返回。
+	slipped, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SlippageBps: 3})
+	requireOK(t, int32(slipped.GetRetInfo().GetCode()), slipped.GetRetInfo().GetMsg())
+	if slipped.GetReplay().GetSlippageBps() != 3 {
+		t.Fatalf("回放应带上滑点：%+v", slipped.GetReplay())
+	}
+	badSlippage, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SlippageBps: -1})
+	requireFail(t, int32(badSlippage.GetRetInfo().GetCode()), badSlippage.GetRetInfo().GetMsg(), "slippage_bps")
 }
 
 // 停用后把观察实例改挂组合账户再启用：规则状态在修改实例时清空，新账户不接手原来积累的理论状态；不改实例直接再启用则沿用。

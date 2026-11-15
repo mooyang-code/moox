@@ -467,6 +467,7 @@ describe("strategy replay page", () => {
     vm.form.tasks = { spot: "ftask_a", swap: "ftask_b", equity: "stale" };
     vm.form.spot_fee_bps = 10;
     vm.form.swap_fee_bps = 5;
+    vm.form.slippage_bps = 3;
     await nextTick();
     const startButton = wrapper.findAll("button").find(button => button.text() === "开始回放");
     await startButton!.trigger("click");
@@ -474,7 +475,8 @@ describe("strategy replay page", () => {
     expect(api.startReplay.mock.calls[0][0]).toMatchObject({
       factor_tasks: { spot: "ftask_a", swap: "ftask_b" },
       spot_fee_bps: 10,
-      swap_fee_bps: 5
+      swap_fee_bps: 5,
+      slippage_bps: 3
     });
     expect(Object.keys(api.startReplay.mock.calls[0][0].factor_tasks)).toEqual(["spot", "swap"]);
   });

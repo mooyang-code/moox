@@ -147,11 +147,14 @@ export function replayFunding(replay: Pick<Replay, "funding_column" | "dsl_yaml"
   }
 }
 
-/** 回放的手续费说明：现货类一个费率，用到永续时再写永续的。 */
-export function replayFeeText(replay: Pick<Replay, "tasks" | "spot_fee_bps" | "swap_fee_bps">): string {
-  return replayUsesSwap(replay)
+/** 回放的手续费说明：现货类一个费率，用到永续时再写永续的；有滑点时再写滑点。 */
+export function replayFeeText(
+  replay: Pick<Replay, "tasks" | "spot_fee_bps" | "swap_fee_bps"> & { slippage_bps?: number }
+): string {
+  const fee = replayUsesSwap(replay)
     ? `现货 ${replay.spot_fee_bps} bps、永续 ${replay.swap_fee_bps} bps`
     : `${replay.spot_fee_bps} bps`;
+  return replay.slippage_bps ? `${fee}，滑点 ${replay.slippage_bps} bps` : fee;
 }
 
 /** 一期理论账本里的一个持仓：id 是（标的|市场）键，label 是展示文本，市值对永续是带符号的名义价值。 */
@@ -272,6 +275,7 @@ export function replayFormFromReplay(replay: Replay) {
     range: Number.isFinite(start) && Number.isFinite(end) ? ([start, end] as [number, number]) : null,
     spot_fee_bps: replay.spot_fee_bps,
     swap_fee_bps: replay.swap_fee_bps,
+    slippage_bps: replay.slippage_bps ?? 0,
     funding_column: replay.funding_column ?? ""
   };
 }

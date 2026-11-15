@@ -2,6 +2,7 @@ package replay
 
 import (
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
@@ -167,12 +168,17 @@ func periodsPerYear(calendar, bar string, duration time.Duration) float64 {
 }
 
 // limitations 是每份回放报告都要标注的局限；用到永续时再注明资金费与强平。
-func limitations(liquidateAfter int, usesTags, usesSwap bool, fundingColumn string) []string {
+// slippageBps 是回放的滑点（基点）：为 0 时说明不含滑点，否则说明成交价按收盘价加减这个比例。
+func limitations(liquidateAfter int, usesTags, usesSwap bool, fundingColumn string, slippageBps float64) []string {
+	cost := "手续费只按实际成交额计；不含滑点与盘口冲击"
+	if slippageBps > 0 {
+		cost = "成交价按当期 close 加减 " + strconv.FormatFloat(slippageBps, 'f', -1, 64) + " bps 滑点（买入上浮、卖出下浮），手续费按收盘价的成交额计；不含盘口冲击"
+	}
 	notes := []string{
 		"研究回放：按当期 close 成交的理想化假设，与实盘在 bar_end 之后成交不同",
 		"区间内历史行版本未验证：因子结果行不携带版本，只核对了回放开始时的因子定义指纹",
 		"基础集合取每期有行的标的，与实时事件名单可能不同；数据集的全部标的绑定（含已停用）都参与读取",
-		"手续费只按实际成交额计；不含滑点与盘口冲击",
+		cost,
 	}
 	// 清算阈值为 0 表示不清算（股票成员的账本：停牌时按最后价格保持持仓）。
 	if liquidateAfter > 0 {

@@ -165,7 +165,7 @@ CREATE INDEX IF NOT EXISTS idx_t_strategy_result_items_ctime ON t_strategy_resul
 
 -- 回放任务：基于因子任务结果 View 的研究回放，按天数与每个空间的个数清理；c_tasks_json 是任务键（市场，附加来源为 来源名:市场）→
 -- {factor_task_id, view_id, view_generation}：结果 View 由任务推导，view_generation 是提交时校验区间所用的活动索引代次；
--- 费率分两列：c_spot_fee_bps 用于现货与股票，c_swap_fee_bps 用于永续；
+-- 费率分两列：c_spot_fee_bps 用于现货与股票，c_swap_fee_bps 用于永续；c_slippage_bps 是滑点（成交价在收盘价上按方向加减的比例）；
 -- c_members_json 是策略池回放固化的成员快照（单策略回放为 NULL），c_funding_column 是单策略回放计资金费用的列名（空串表示不计）
 CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_replay_id TEXT NOT NULL PRIMARY KEY,
@@ -181,6 +181,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_end_time INTEGER NOT NULL,
     c_spot_fee_bps REAL NOT NULL DEFAULT 0,
     c_swap_fee_bps REAL NOT NULL DEFAULT 0,
+    c_slippage_bps REAL NOT NULL DEFAULT 0,
     c_factors_json TEXT NOT NULL DEFAULT '{}',
     c_members_json TEXT,
     c_funding_column TEXT NOT NULL DEFAULT '',
@@ -192,7 +193,8 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('pending', 'running', 'done', 'failed', 'cancelled')),
     CHECK (c_spot_fee_bps >= 0 AND c_spot_fee_bps <= 1000),
-    CHECK (c_swap_fee_bps >= 0 AND c_swap_fee_bps <= 1000)
+    CHECK (c_swap_fee_bps >= 0 AND c_swap_fee_bps <= 1000),
+    CHECK (c_slippage_bps >= 0 AND c_slippage_bps <= 1000)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_replays_space ON t_strategy_replays (c_space_id, c_ctime);

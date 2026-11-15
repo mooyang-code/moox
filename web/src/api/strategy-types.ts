@@ -122,6 +122,8 @@ export interface Replay {
   /** 现货与股票的单边手续费、永续的单边手续费（bps）。 */
   spot_fee_bps: number;
   swap_fee_bps: number;
+  /** 滑点（bps）：成交价在收盘价上按方向加减这个比例，买入上浮、卖出下浮。 */
+  slippage_bps: number;
   /** 永续持仓结算资金费用的列（本根累计的资金费率）；空串表示不计。 */
   funding_column: string;
   status: "pending" | "running" | "done" | "failed" | "cancelled" | string;
@@ -171,6 +173,8 @@ export interface StartReplayRequest {
   end_time: string;
   spot_fee_bps: number;
   swap_fee_bps: number;
+  /** 滑点（bps，0～1000）：成交价在收盘价上按方向加减这个比例。 */
+  slippage_bps: number;
   /** 可选：永续持仓按这一列结算资金费；不写不计。 */
   funding_column?: string;
 }

@@ -879,11 +879,11 @@ moox-cli strategy validate --dsl-file s.yaml --factor-task swap=<永续因子任
 
 ```bash
 moox-cli strategy replay start --dsl-file s.yaml --factor-task swap=<永续因子任务> \
-  --from 2026-01-01T00:00:00Z --to 2026-03-01T00:00:00Z --spot-fee-bps 10 --swap-fee-bps 6
+  --from 2026-01-01T00:00:00Z --to 2026-03-01T00:00:00Z --spot-fee-bps 10 --swap-fee-bps 6 --slippage-bps 2
 moox-cli strategy replay show --replay-id <回放ID>
 ```
 
-- 回放在 View 的历史数据上逐期求值，用理论账本按收盘价成交。**默认不计资金费，不模拟强平与保证金率**；用 `funding_column` 才计资金费（策略池写在池的 `fees` 里）。
+- 回放在 View 的历史数据上逐期求值，用理论账本按收盘价成交；`--slippage-bps` 让成交价在收盘价上按方向加减这个比例（买入上浮、卖出下浮），不写为 0。**默认不计资金费，不模拟强平与保证金率**；用 `funding_column` 才计资金费（策略池写在池的 `fees` 里）。
 - 回放只用已闭合的 K 线，终点截到最新一根之前，根数不超过 20000。起点要留够 `min_age_bars` 与 `bars[-1]` 所需的历史，否则提交时提示可用起点。
 - 回放用来比较策略版本，不承诺复现历史上的实时结果；与实时的差别见 [策略模块](模块/策略.md)“回放与实时的已知差别”。
 - 每期记录里有解释明细：每个标的的最终阶段与原因，以及 `decision.limits`、`decision.pool`。

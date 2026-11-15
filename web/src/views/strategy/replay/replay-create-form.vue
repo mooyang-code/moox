@@ -93,6 +93,10 @@
         }}</template
       >
     </a-form-item>
+    <a-form-item label="滑点（bps）">
+      <a-input-number v-model="form.slippage_bps" :min="0" :max="1000" :step="1" />
+      <template #extra>成交价在收盘价上按方向加减这个比例：买入上浮、卖出下浮；0 表示按收盘价成交。</template>
+    </a-form-item>
     <a-form-item v-if="usesSwap && !pooled" label="资金费列（可选）">
       <a-input v-model="form.funding_column" placeholder="funding_rate" allow-clear />
       <template #extra>写了就按这一列（本根累计的资金费率）给永续持仓结算资金费：上一根收盘调仓之前的持仓乘本根费率。</template>

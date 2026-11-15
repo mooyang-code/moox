@@ -31,6 +31,7 @@ const base: ReplayFormState = {
   range: [Date.parse("2026-09-01T00:00:00Z"), Date.parse("2026-09-02T00:00:00Z")],
   spot_fee_bps: 10,
   swap_fee_bps: 5,
+  slippage_bps: 0,
   funding_column: ""
 };
 
@@ -120,6 +121,10 @@ describe("replay form model", () => {
       expect(validateReplayForm({ ...base, [key]: Number.NaN }, strategies)).toContain("手续费");
       expect(validateReplayForm({ ...base, [key]: 0 }, strategies)).toBe("");
     }
+    for (const value of [-1, 1001, Number.NaN]) {
+      expect(validateReplayForm({ ...base, slippage_bps: value }, strategies)).toContain("滑点");
+    }
+    expect(validateReplayForm({ ...base, slippage_bps: 3 }, strategies)).toBe("");
   });
 
   it("只选日期时区间吸附成显示的整天：起点零点，终点是最后一天的次日零点（按空间时区）", () => {

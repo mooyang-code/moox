@@ -5,7 +5,7 @@ import { parseDSL } from "@/views/strategy/dsl";
 import { freqSeconds } from "@/views/factor/shared/health";
 import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
 
-/** 回放表单的状态：来源三选一（实例会话 / 已保存定义 / DSL 草稿），其余为各市场的计算任务、区间与两个手续费。 */
+/** 回放表单的状态：来源三选一（实例会话 / 已保存定义 / DSL 草稿），其余为各市场的计算任务、区间、两个手续费与滑点。 */
 export interface ReplayFormState {
   source: "definition" | "dsl";
   strategy_id: string;
@@ -20,6 +20,8 @@ export interface ReplayFormState {
   /** 现货与股票的单边手续费、永续的单边手续费（bps）。 */
   spot_fee_bps: number;
   swap_fee_bps: number;
+  /** 滑点（bps）：成交价在收盘价上按方向加减这个比例。 */
+  slippage_bps: number;
   /** 永续持仓结算资金费用的列（例如 funding_rate）；空串表示不计。 */
   funding_column: string;
   /** 从实例发起时实例引用的策略定义（页面按实例 ID 读回）；只用来判断是不是策略池，没读到时为空。 */
@@ -91,7 +93,7 @@ export function replayFactorTasks(form: ReplayFormState, strategies: Strategy[])
   return Object.fromEntries(replayMarkets(form, strategies).map(market => [market, form.tasks[market] ?? ""]));
 }
 
-/** 发起前的本地校验，返回第一条错误（没有则为空串）：来源与各市场的计算任务、区间、两个手续费范围。 */
+/** 发起前的本地校验，返回第一条错误（没有则为空串）：来源与各市场的计算任务、区间、两个手续费与滑点的范围。 */
 export function validateReplayForm(form: ReplayFormState, strategies: Strategy[] = []): string {
   if (!replaySourceOf(form)) return "请选择定义、粘贴 DSL 文本或从实例详情进入";
   const pool = replayPool(form, strategies);
@@ -106,6 +108,8 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
   for (const fee of [Number(form.spot_fee_bps), Number(form.swap_fee_bps)]) {
     if (!Number.isFinite(fee) || fee < 0 || fee > 1000) return "单边手续费需在 0～1000 bps 之间";
   }
+  const slippage = Number(form.slippage_bps);
+  if (!Number.isFinite(slippage) || slippage < 0 || slippage > 1000) return "滑点需在 0～1000 bps 之间";
   const funding = replayFundingColumn(form, strategies);
   if (funding && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(funding)) return "资金费列只能是 View 里的列名";
   return "";
