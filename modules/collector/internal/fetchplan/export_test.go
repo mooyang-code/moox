@@ -26,19 +26,23 @@ type TimelineScenario struct {
 type timelineReregisterStore struct{ *memPlanStore }
 
 func (s timelineReregisterStore) ReregisterAppliedPlan(ctx context.Context, id int64, plan string) error {
+	if err := s.shadow.ReregisterAppliedPlan(ctx, id, plan); err != nil {
+		return err
+	}
 	s.records[id-1].Plan = plan
-	return s.timeline.DeleteSpace(ctx, s.records[id-1].SpaceID)
+	return nil
 }
 
-// withSeriesTimeline 给内存计划库挂上一张真实的时间线表（临时目录里的新库），对账器写的时间线行落到这张表里。
+// withSeriesTimeline 给内存计划库挂上一个真实的计划库（临时目录里的新库）：对账器的每次写入经生产路径同样落进去，
+// 返回这个库的时间线仓库供读取。
 func withSeriesTimeline(t *testing.T, plans *memPlanStore) *store.SeriesTimelineRepository {
 	t.Helper()
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = db.Close() })
-	plans.timeline = db.SeriesTimeline()
-	return plans.timeline
+	plans.shadow = db.FetchPlans()
+	return db.SeriesTimeline()
 }
 
 // TimelineScenarios 驱动对账器跑现有的几类场景，在每个有代表性的时刻留一份计划记录：

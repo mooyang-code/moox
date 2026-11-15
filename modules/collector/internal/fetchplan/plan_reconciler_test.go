@@ -25,8 +25,9 @@ import (
 type memPlanStore struct {
 	mu      sync.Mutex
 	records []*store.FetchPlanRecord
-	// timeline 非空时，Create、Update 带来的时间线行写进这张真实的 SQLite 表（时间线等价测试用）。
-	timeline *store.SeriesTimelineRepository
+	// shadow 非空时，计划记录的每次写入都同样写进这个真实的 SQLite 计划库（时间线等价测试用）：
+	// 时间线行走的是生产的写入路径，与计划记录同一个事务。记录本身仍以内存里的为准。
+	shadow *store.FetchPlanRepository
 }
 
 func (s *memPlanStore) Open(_ context.Context, spaceID string) (*store.FetchPlanRecord, error) {
@@ -61,10 +62,16 @@ func (s *memPlanStore) Create(ctx context.Context, spaceID, plan, progress strin
 			return nil, store.ErrFetchPlanOpen
 		}
 	}
-	if err := s.appendTimeline(ctx, timeline); err != nil {
-		return nil, err
-	}
 	record := &store.FetchPlanRecord{ID: int64(len(s.records) + 1), SpaceID: spaceID, Status: store.FetchPlanPending, Plan: plan, Progress: progress}
+	if s.shadow != nil {
+		shadowed, err := s.shadow.Create(ctx, spaceID, plan, progress, timeline...)
+		if err != nil {
+			return nil, err
+		}
+		if shadowed.ID != record.ID {
+			return nil, fmt.Errorf("shadow fetch plan id %d does not match %d", shadowed.ID, record.ID)
+		}
+	}
 	s.records = append(s.records, record)
 	clone := *record
 	return &clone, nil
@@ -74,23 +81,23 @@ func (s *memPlanStore) Update(ctx context.Context, id int64, status, progress, l
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record := s.records[id-1]
-	if err := s.appendTimeline(ctx, timeline); err != nil {
-		return err
+	if s.shadow != nil {
+		if err := s.shadow.Update(ctx, id, status, progress, lastError, timeline...); err != nil {
+			return err
+		}
 	}
 	record.Status, record.Progress, record.LastError = status, progress, lastError
 	return nil
 }
 
-func (s *memPlanStore) appendTimeline(ctx context.Context, timeline []store.SeriesTimelineEntry) error {
-	if s.timeline == nil {
-		return nil
-	}
-	return s.timeline.Append(ctx, timeline...)
-}
-
-func (s *memPlanStore) SavePlan(_ context.Context, id int64, plan string) error {
+func (s *memPlanStore) SavePlan(ctx context.Context, id int64, plan string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.shadow != nil {
+		if err := s.shadow.SavePlan(ctx, id, plan); err != nil {
+			return err
+		}
+	}
 	s.records[id-1].Plan = plan
 	return nil
 }

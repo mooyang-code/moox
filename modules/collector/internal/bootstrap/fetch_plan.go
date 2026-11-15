@@ -105,19 +105,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			}
 			return nil
 		},
-		// 补采按任务的采集方式选执行端：scf 走补采函数，stream 与 local 调 collector-stream 里的本地执行端。
-		// 任务已删除的数据集按 scf。
-		Executor: func(ctx context.Context, spaceID, datasetID string) (string, error) {
-			tasks, err := dbm.Tasks().ListKline(ctx, spaceID, datasetID)
-			if err != nil {
-				return "", err
-			}
-			if len(tasks) > 0 && tasks[0].Ingest != domain.IngestSCF {
-				return marketfetch.PlanExecutorLocal, nil
-			}
-			return marketfetch.PlanExecutorSCF, nil
-		},
-		Local: &fetchplan.LocalExecutorClient{Gateway: process.gateway},
+		Executor: backfillExecutor(dbm.Tasks(), markets.DefaultIngest),
+		Local:    &fetchplan.LocalExecutorClient{Gateway: process.gateway},
 		// 收市后整天重取：时刻取各市场 market.yaml 的 refetch_after_close_minutes，没配的市场不做。
 		CloseRefetch: markets.CloseRefetchDay, RefetchFrequency: routedFrequency,
 	}
@@ -291,4 +280,23 @@ type scfBackfillInvoker struct{ client *scfinvoker.Client }
 func (i scfBackfillInvoker) Invoke(ctx context.Context, spaceID, functionName string, event map[string]any) (marketfetch.InvocationResult, error) {
 	result, err := i.client.Invoke(ctx, spaceID, functionName, event, cloudfunctionpb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
 	return marketfetch.InvocationResult(result), err
+}
+
+// backfillExecutor 按任务的采集方式选补采执行端：scf 走补采函数，stream 与 local 调 collector-stream 里的本地执行端。
+// 任务已删除、只保留了数据的数据集查不到任务，按空间的默认采集方式（defaultIngest）选。
+func backfillExecutor(tasks *store.TaskRepository, defaultIngest func(string) string) func(context.Context, string, string) (string, error) {
+	return func(ctx context.Context, spaceID, datasetID string) (string, error) {
+		listed, err := tasks.ListKline(ctx, spaceID, datasetID)
+		if err != nil {
+			return "", err
+		}
+		ingest := defaultIngest(spaceID)
+		if len(listed) > 0 {
+			ingest = listed[0].Ingest
+		}
+		if ingest == domain.IngestStreaming || ingest == domain.IngestLocal {
+			return marketfetch.PlanExecutorLocal, nil
+		}
+		return marketfetch.PlanExecutorSCF, nil
+	}
 }

@@ -1135,7 +1135,7 @@ func TestValidateCollectionTaskTagRoutesFundingRate(t *testing.T) {
 // 建任务不填采集方式时等于市场默认值（crypto 是 stream）；填了就用填的；旧取值与任务参数里的旧字段都被拒绝。
 func TestCreateTaskIngestDefaultsToTheMarketValue(t *testing.T) {
 	ctx := context.Background()
-	create := func(t *testing.T, ingest string, extra map[string]any) (*Service, *taskResultMetadataFake, *pb.CreateTaskRsp) {
+	create := func(t *testing.T, dataType, ingest string, extra map[string]any) (*Service, *taskResultMetadataFake, *pb.CreateTaskRsp) {
 		t.Helper()
 		metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
 		service := &Service{
@@ -1149,7 +1149,7 @@ func TestCreateTaskIngestDefaultsToTheMarketValue(t *testing.T) {
 		}
 		params, err := structpb.NewStruct(values)
 		require.NoError(t, err)
-		rsp, err := service.CreateTask(ctx, &pb.CreateTaskReq{Task: &pb.CollectionTask{SpaceId: "crypto", TaskName: "现货 K 线", DataType: "kline", Ingest: ingest, CollectParams: params}})
+		rsp, err := service.CreateTask(ctx, &pb.CreateTaskReq{Task: &pb.CollectionTask{SpaceId: "crypto", TaskName: "现货 K 线", DataType: dataType, Ingest: ingest, CollectParams: params}})
 		require.NoError(t, err)
 		return service, metadata, rsp
 	}
@@ -1161,15 +1161,22 @@ func TestCreateTaskIngestDefaultsToTheMarketValue(t *testing.T) {
 		return detail.GetTask().GetIngest()
 	}
 
-	service, _, rsp := create(t, "", nil)
+	service, _, rsp := create(t, "kline", "", nil)
 	require.Equal(t, "stream", ingestOf(t, service, rsp), "不填用 crypto 的市场默认值")
-	service, _, rsp = create(t, " SCF ", nil)
+	service, _, rsp = create(t, "kline", " SCF ", nil)
 	require.Equal(t, "scf", ingestOf(t, service, rsp))
+	// 数据类型大小写不一样也是 K 线任务：存成小写，采集方式照样取市场默认值。
+	service, _, rsp = create(t, " Kline ", "", nil)
+	require.Equal(t, "stream", ingestOf(t, service, rsp))
+	stored, err := service.taskRepo.GetByTaskID(ctx, "crypto", rsp.GetTaskId())
+	require.NoError(t, err)
+	require.Equal(t, domain.DataTypeKline, stored.DataType)
+	require.Equal(t, domain.IngestStreaming, stored.Ingest)
 
-	_, metadata, rsp := create(t, "pull", nil)
+	_, metadata, rsp := create(t, "kline", "pull", nil)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "旧取值 pull 不再接受")
 	require.Empty(t, metadata.datasets, "被拒绝的请求不准备结果数据集")
-	_, metadata, rsp = create(t, "", map[string]any{"ingest": "stream", "executor": "scf"})
+	_, metadata, rsp = create(t, "kline", "", map[string]any{"ingest": "stream", "executor": "scf"})
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "“推送加云函数补采”无法表达")
 	require.Empty(t, metadata.datasets)
 }

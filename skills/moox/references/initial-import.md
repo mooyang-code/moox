@@ -82,7 +82,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor mute --for 3h --reason 初始�
 
 ## 5. 补缺口（操作机）
 
-文件最后一根到现在的缺口用 REST 补采。范围从**文件末根的下一期**到**实时写入的起点**（`ingest-mode get` 与第一批 WS 数据的时间可确认；已经在写入时取最近已收盘的一根）：
+文件最后一根到现在的缺口用 REST 补采。范围从**文件末根的下一期**到**实时写入的起点**（新数据集的实时写入起点就是 `moox-cli collector status --file ./moox.toml --space-id <空间>` 里该数据集的 `effective_from`，即首份采集计划的生效周期；也可以用第一批 WS 数据的时间核对。已经在写入时取最近已收盘的一根）：
 
 ```bash
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline backfill --file ./moox.toml --space-id <空间> --dataset-id <数据集> --force --from <末根+1期> --to <实时起点>

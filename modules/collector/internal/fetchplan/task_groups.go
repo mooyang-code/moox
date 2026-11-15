@@ -65,9 +65,7 @@ func (r *GroupBuilder) groups(ctx context.Context, spaceID string) ([]TaskGroup,
 		}
 		if _, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Target.DatasetID); datasetErr != nil {
 			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get target dataset %s: %v", task.TaskID, params.Target.DatasetID, datasetErr)
-			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
-				groups = append(groups, previous...)
-			}
+			groups = append(groups, r.cachedGroups(task)...)
 			continue
 		}
 
@@ -80,9 +78,7 @@ func (r *GroupBuilder) groups(ctx context.Context, spaceID string) ([]TaskGroup,
 		tagSource, ok := r.Symbols.(tagRouteSource)
 		if !ok {
 			log.WarnContextf(ctx, "skip collection task=%s: metadata source does not expose tag routes", task.TaskID)
-			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
-				groups = append(groups, previous...)
-			}
+			groups = append(groups, r.cachedGroups(task)...)
 			continue
 		}
 		taskGroups := make([]TaskGroup, 0)
@@ -116,15 +112,25 @@ func (r *GroupBuilder) groups(ctx context.Context, spaceID string) ([]TaskGroup,
 			taskGroups = append(taskGroups, routeGroups...)
 		}
 		if !valid || len(taskGroups) == 0 {
-			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
-				groups = append(groups, previous...)
-			}
+			groups = append(groups, r.cachedGroups(task)...)
 			continue
 		}
 		r.lastGroups[task.TaskID] = append([]TaskGroup(nil), taskGroups...)
 		groups = append(groups, taskGroups...)
 	}
 	return mergeGroups(groups), nil
+}
+
+// cachedGroups 返回任务上一次成功展开的采集组，元数据暂时读不到时沿用。标的与路由沿用缓存，采集方式取任务的现值：
+// 切换采集方式只改任务，不能因为元数据读不到就按旧方式生成计划、把交接推迟。
+func (r *GroupBuilder) cachedGroups(task domain.CollectionTask) []TaskGroup {
+	previous := r.lastGroups[task.TaskID]
+	groups := make([]TaskGroup, len(previous))
+	for i, group := range previous {
+		group.Ingest = task.Ingest
+		groups[i] = group
+	}
+	return groups
 }
 
 func normalizedTaskTagIDs(values []string) []string {

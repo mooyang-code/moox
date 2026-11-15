@@ -47,19 +47,6 @@ func NewSeriesTimelineRepository(db *gorm.DB) *SeriesTimelineRepository {
 	return &SeriesTimelineRepository{db: db}
 }
 
-// Append 按给出的先后追加时间线行；同一数据集、频率、生效点已有的行被新行取代（新行排在最后）。
-func (r *SeriesTimelineRepository) Append(ctx context.Context, entries ...SeriesTimelineEntry) error {
-	if r == nil || r.db == nil {
-		return fmt.Errorf("series timeline repository is not initialized")
-	}
-	if len(entries) == 0 {
-		return nil
-	}
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return appendSeriesTimeline(tx, entries)
-	})
-}
-
 // ListBySpace 按写入先后返回该空间的全部时间线行。
 func (r *SeriesTimelineRepository) ListBySpace(ctx context.Context, spaceID string) ([]SeriesTimelineEntry, error) {
 	if r == nil || r.db == nil {
@@ -88,14 +75,6 @@ func (r *SeriesTimelineRepository) ListBySpace(ctx context.Context, spaceID stri
 		entries = append(entries, entry)
 	}
 	return entries, nil
-}
-
-// DeleteSpace 删除该空间的全部时间线行。
-func (r *SeriesTimelineRepository) DeleteSpace(ctx context.Context, spaceID string) error {
-	if r == nil || r.db == nil {
-		return fmt.Errorf("series timeline repository is not initialized")
-	}
-	return deleteSeriesTimeline(r.db.WithContext(ctx), spaceID)
 }
 
 // appendSeriesTimeline 在调用方的事务里追加时间线行。同一生效点的旧行先删再插：新行拿到新的 c_id，排在最后，

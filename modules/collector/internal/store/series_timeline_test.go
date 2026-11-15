@@ -22,33 +22,35 @@ func timelineEntry(space, dataset string, p int64, subjects ...string) SeriesTim
 	return entry
 }
 
-// 按写入先后读出；同一生效点重复写入时后写的覆盖先写的并排到最后；空列表读成 nil；关库重开后内容不变。
-func TestSeriesTimelineAppendListAndReopen(t *testing.T) {
+// 按写入先后读出；同一生效点重复写入时后写的覆盖先写的并排到最后；空列表读成 nil；只读指定空间；关库重开后内容不变。
+func TestSeriesTimelineListsInWriteOrderAndSurvivesReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "collector.db")
 	db, err := Open(&Options{Path: path})
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
-	repo := db.SeriesTimeline()
+	plans := db.FetchPlans()
 
-	require.NoError(t, repo.Append(ctx,
+	record, err := plans.Create(ctx, "crypto", `{"v":1}`, "{}")
+	require.NoError(t, err)
+	require.NoError(t, plans.Update(ctx, record.ID, FetchPlanApplying, "{}", "",
 		timelineEntry("crypto", "a", 100, "BTC-USDT", "ETH-USDT"),
 		timelineEntry("crypto", "b", 100, "BTC-USDT"),
-		timelineEntry("stockcn", "a", 100, "600000.XSHG"),
 	))
-	require.NoError(t, repo.Append(ctx, timelineEntry("crypto", "a", 100, "BTC-USDT"), timelineEntry("crypto", "a", 200)))
+	require.NoError(t, plans.Update(ctx, record.ID, FetchPlanApplying, "{}", "", timelineEntry("crypto", "a", 100, "BTC-USDT"), timelineEntry("crypto", "a", 200)))
+	other, err := plans.Create(ctx, "stockcn", `{"v":1}`, "{}", timelineEntry("stockcn", "a", 100))
+	require.NoError(t, err)
+	require.NotZero(t, other.ID)
 	want := []SeriesTimelineEntry{
 		timelineEntry("crypto", "b", 100, "BTC-USDT"),
 		timelineEntry("crypto", "a", 100, "BTC-USDT"),
 		timelineEntry("crypto", "a", 200),
 	}
-	got, err := repo.ListBySpace(ctx, "crypto")
+	got, err := db.SeriesTimeline().ListBySpace(ctx, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.Nil(t, got[2].Series, "停止行的空序列读成 nil")
 	require.Nil(t, got[2].OutputFields)
-
-	require.Error(t, repo.Append(ctx, timelineEntry("crypto", "a", 0, "BTC-USDT")), "生效点必须为正")
 	require.NoError(t, db.Close())
 
 	reopened, err := Open(&Options{Path: path})
@@ -57,14 +59,6 @@ func TestSeriesTimelineAppendListAndReopen(t *testing.T) {
 	got, err = reopened.SeriesTimeline().ListBySpace(ctx, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, want, got, "重启后时间线不变")
-
-	require.NoError(t, reopened.SeriesTimeline().DeleteSpace(ctx, "crypto"))
-	got, err = reopened.SeriesTimeline().ListBySpace(ctx, "crypto")
-	require.NoError(t, err)
-	require.Empty(t, got)
-	other, err := reopened.SeriesTimeline().ListBySpace(ctx, "stockcn")
-	require.NoError(t, err)
-	require.Len(t, other, 1, "只删指定空间")
 }
 
 // 时间线行与计划记录同一个事务：计划写不进去（已有未生效计划、计划已生效）时时间线行也不写；时间线行不合法时进度也不保存。
