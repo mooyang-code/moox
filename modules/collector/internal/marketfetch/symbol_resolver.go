@@ -21,6 +21,7 @@ func DefaultProviderSymbol(marketID, marketType, subjectID string) (string, erro
 	return subject.Code, nil
 }
 
+// ResolveProviderSymbol 用解析器把标的换成数据源的交易所符号。
 func ResolveProviderSymbol(resolver SymbolResolver, provider, marketID, marketType, subjectID string) (string, error) {
 	if resolver != nil {
 		return resolver(provider, marketID, marketType, subjectID)

@@ -141,6 +141,8 @@ type fakePlanCloud struct {
 	runningAll bool
 	batchErr   error
 	hangBatch  bool
+	// dispatches 按先后记下对账器实际提交给云端的每一批请求（见 plan_baseline_test.go 的下发金样）。
+	dispatches []planDispatch
 }
 
 func newFakePlanCloud() *fakePlanCloud {
@@ -203,6 +205,7 @@ func (c *fakePlanCloud) LatestPackage(context.Context, string, string) (string, 
 }
 
 func (c *fakePlanCloud) SubmitDeployFunctionInstances(_ context.Context, _ string, nodeIDs []string, packageID string, _ *scfinvoker.CollectorPublishLease) (string, error) {
+	c.recordDispatch(planDispatch{Kind: "deploy", Functions: append([]string(nil), nodeIDs...), PackageID: packageID})
 	for _, id := range nodeIDs {
 		// 升级失败的函数留在旧代码包上，与真实云端一致。
 		if !c.failInstances[id] {
@@ -221,6 +224,7 @@ func (c *fakePlanCloud) SubmitDeployFunctionInstances(_ context.Context, _ strin
 }
 
 func (c *fakePlanCloud) SubmitDeleteFunctionInstances(_ context.Context, _ string, nodeIDs []string, _ *scfinvoker.CollectorPublishLease) (string, error) {
+	c.recordDispatch(planDispatch{Kind: "delete", Functions: append([]string(nil), nodeIDs...)})
 	for _, id := range nodeIDs {
 		delete(c.unready, id)
 		delete(c.nodes, id)
@@ -246,6 +250,7 @@ func (c *fakePlanCloud) newJob(names []string) string {
 }
 
 func (c *fakePlanCloud) SubmitCreateFunctionInstances(_ context.Context, _ string, items []*cloudfunctionpb.FunctionInstanceCreateItem) (string, error) {
+	c.recordDispatch(planDispatchCreates(items))
 	names := make([]string, 0, len(items))
 	for _, item := range items {
 		name := item.GetMetadata().AsMap()["function_name"].(string)
@@ -279,6 +284,7 @@ func (c *fakePlanCloud) SubmitRuntimeConfigs(_ context.Context, _ string, patche
 	if c.onRuntimeConfig != nil {
 		c.onRuntimeConfig(patches)
 	}
+	c.recordDispatch(planDispatchPatches(patches))
 	names := make([]string, 0, len(patches))
 	c.patchMu.Lock()
 	for _, patch := range patches {

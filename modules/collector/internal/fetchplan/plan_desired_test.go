@@ -1,6 +1,7 @@
 package fetchplan
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -318,17 +319,29 @@ func TestNextBoundaryAlignsWithKlineGrid(t *testing.T) {
 	}
 }
 
-// 任务选的资金费率要原样进到计划里（计划进到请求这一步，由执行面 marketfetch 的 TestPlanCarriesFundingRateIntoRequests 验证）。
-func TestDesiredPlanCarriesFundingRate(t *testing.T) {
+// 任务选的资金费率要原样进到计划与计划构造的请求里，执行端才知道要取这一列。
+// 请求里每一项实际选中的字段，由执行面 marketfetch 的 TestPlanCarriesFundingRateIntoRequests 验证。
+func TestDesiredPlanCarriesFundingRateIntoRequests(t *testing.T) {
 	groups := testGroups(3, "1h")
 	groups[0].OutputFields = []string{"close", domain.FieldFundingRate}
 	state, err := BuildDesiredState(testPlanOptions(), groups, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, state.Functions)
-	for _, function := range state.Functions {
+	scheduled := time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)
+	for name, function := range state.Functions {
 		dataset := findPlanDataset(function.Plan, "ds_spot_1h|1h")
 		require.NotNil(t, dataset)
 		require.Contains(t, dataset.OutputFields, domain.FieldFundingRate)
+		// 生效起点由对账选定，这里固定成 1，再用这份计划构造整点的请求。
+		dataset.Copies[0].From = 1
+		requests, err := function.Plan.BuildRequests("crypto", name, "r", scheduled)
+		require.NoError(t, err)
+		require.Len(t, requests, 1, name)
+		require.Equal(t, "1h", requests[0].Frequency)
+		require.NotEmpty(t, requests[0].Request.Items)
+		raw, err := json.Marshal(requests[0].Request)
+		require.NoError(t, err)
+		require.Contains(t, string(raw), domain.FieldFundingRate, "%s 的请求没有带上资金费率", name)
 	}
 }
 

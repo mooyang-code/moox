@@ -1,0 +1,479 @@
+[
+ {
+  "space_id": "stockcn",
+  "symbols_per_function": 50,
+  "auto_size": {
+   "TargetFetchMS": 2000,
+   "RequestMS": 500,
+   "Workers": 0,
+   "MinFunctions": 8
+  },
+  "egress_balance": {
+   "MaxPerIP": 1,
+   "Rounds": 5,
+   "IdleWindow": {
+    "Start": "15:10",
+    "End": "07:50",
+    "Timezone": "Asia/Shanghai"
+   }
+  },
+  "default_lateness_s": 90,
+  "market_lateness_s": {},
+  "fetch": {
+   "concurrency": 50,
+   "rps": 50,
+   "burst": 50,
+   "feed_concurrency": 50,
+   "request_timeout_ms": 3000,
+   "storage_timeout_ms": 2000,
+   "not_before_ms": 800
+  },
+  "market_fetch": {},
+  "default_ingest": "scf",
+  "default_mode": {
+   "Mode": "pull",
+   "Executor": "scf"
+  },
+  "states": [
+   {
+    "ingest": "scf",
+    "datasets": {
+     "ds_cn_1d|1d": {
+      "dataset_id": "ds_cn_1d",
+      "frequency": "1d",
+      "hash": "51006078c3ad3d2301d9d13b781c67b0c1c05127e2594b46edea07708012767d",
+      "count": 300,
+      "lateness_s": 90,
+      "output_fields": [
+       "amount",
+       "close",
+       "open",
+       "volume"
+      ],
+      "ingest": "scf"
+     },
+     "ds_cn_5m|5m": {
+      "dataset_id": "ds_cn_5m",
+      "frequency": "5m",
+      "hash": "51006078c3ad3d2301d9d13b781c67b0c1c05127e2594b46edea07708012767d",
+      "count": 300,
+      "lateness_s": 90,
+      "ingest": "scf"
+     },
+     "ds_cn_index_5m|5m": {
+      "dataset_id": "ds_cn_index_5m",
+      "frequency": "5m",
+      "hash": "a057579c60f09826e11d0aa6918af9f9d0ec5e0dc8587290b7956f8f7af1b514",
+      "count": 3,
+      "lateness_s": 90,
+      "ingest": "scf"
+     }
+    },
+    "functions": {
+     "moox-fetch-plan-stockcn-equity-nanjing-000": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhN+wm1CgBCDikeYAvaAMjnrwrdO35Bm2yVIN+YJUiZmZnJRYn47V8VDweGKPOuaibineGxlG7mXdVMxDu736+UbuZd1UxEs/9rt1K6mXdVMxHvzHaAoMAg4P+/Px5ePnuf+QY6aPPIoof4TG/M/OA11nygnXLseAePgab5+5taQgsKALFSQiHGyzlWJFMkLYBIkAI1KAR0FEultUMHlBSyEgM5rIQEA0pGwaiVBGzoAYcCEkggiQMBEmBwEIaAorBsxzomQbQlZRb22TN4VKMhYrFIHkXlPlwImd98ZdPZw7SOL9KvFho6glrgEc/HJxAUsYsgjpFjOaT4AucZXcDTeHI3zNk/s3KYvIk9ThIzkoLl9M9klHV3FdRdwFYvOgDe8D7t9H0FdL4LuYC0Eg5GnoNU2GD2CezgoHeNOri4DizJOjtAHQx86kDaXYA350Ch5UDiHwcSiIOwtCI="
+     },
+     "moox-fetch-plan-stockcn-equity-nanjing-001": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNDwpVCgACzigeYAvTAMjn24TtjB9x725CkO1GAszMzMzkokT89q8KDweFZCbinVnVt5t5VzUT8c6s6nrtZt5VzUS8M6t6djPvqmYi3plVHbsHCAoMAvj+639nda3O372BDlI8sNPQWuVNmR+rpniPq9OnfnbuGGd4r39lJbSQACCWlEgQ431OFckUCgsgFKRADQkCOoolSVp2DiglyKIYyGFJSDCgZBRMsigBbOgxhxJIlADGARIIIQyCMSQsg52SINqSMgv77BmCfKOhQmVJWIsAPVAS8cyGZdhzEOeEhgmlSDst7AgXNq1Dty5Eb//2zctiPA5/B4uBQ9iSsKCn8lQ8xbZ4kJlKQ87kcPKmrPL/TcMYpI9+vwKQK4VccFoJBxXPAVXY4NAJ7OBBTxp1MOE6CEsw2cHkYIJRB+fuknJzDi5aDiL+cdACcRCWVgQ="
+     },
+     "moox-fetch-plan-stockcn-equity-nanjing-002": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNKwqFCgBCDikeUAvbAHj77URYy5jSkl5UcxFHI1JSaJNkwpmSCICGDwdHzp3Z7/u7qpmI5xhzZ+bbaH9XNRPxHGPuzH7vrmom4jnG3Jn91l3VzAGCAoMATNtoX0pMu9WZNlRSaA6zx1Taj9GRj0R0zeOeNt1n6ZJxSNNo/3yphQQAsaxEghjelF4sVCgqgFCQQjUkCOoolmTh7RzUSpBFMZTDkpBgUAspoGRRAmv4EgghDAHFcICidWqCaEvKLOyzZ5C0swG30SKBgOb9HJA4n7Ic5BsH4h0dk6qlSlJvFS9PhUrQq9sHWjgscfs56ZidgMCgF0TSpoia7vV+vXmy/RNmDD48EqYSwZVd/bZj7X5MEvKSubMi2U6/X4Gd6RdygaOVcOD2cQhS2ACNJrADBz2oUQeLcB3sJKyzA+dgMEYdLLsLKzfnAIGWA+f+cUAr4oAmviI="
+     },
+     "moox-fetch-plan-stockcn-equity-nanjing-003": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNWwoVCgACjigeYAvaAMjnrwrdO35Bm2yVIN+YJZiZmZRSxIH59T8qDwdH8rfsZt5VzSwF8e630s28q5pZCuLdb9jNvKuaWQri3W9n1828q5o5QFBgEFB+MzXDs7p3Y9s1Ax2k5Sidh/aeZm7sWDXnPfCnzw3v4DHQ8JqaPZ/QggJArJRQiGF9zotkioQFEAlSoAaFgI5iqaQ/dEBJISsxkMNKSDCgZBSMWklr6CGHABIlMQISCCEMAcVQGLF1SkS0JWUW9tkzqBSk0c1uscqOAt0hOJnfrOVgBjg9ni6Hnu2OC68gQRblh0rO1LHkFXqGUygi9f9ZmBol+jW3GUaxoLs5v75z3PZ9gC8vAXUvSd+vQEd+IReIVsKB23OcFDbYaAI7OOhRow4gXAc62To7iBzMMOpA3V1Wbs6BQMsB/j8OUBEHNHRF"
+     },
+     "moox-fetch-plan-stockcn-equity-nanjing-004": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNWwodCgACjigdcAvSAZDfZxEjqaitJGSrF6g8/JBNdpNT8ur/hxcPB4aodzPvqmYi3plVu3cz76pmIt6ZFbt3M++qZiLemdXWuncz76pmIt4AQYFBwKlVbRUaXj6rLuYy3vzmka73fKZVrNTBW6z5QDNurPAMGgNLc22VqZ1fQACIdBIIMcqNseKUImkBRIIU34AQ/igSOmuHDn8QkhLjHVJCguFPUSgoJQFsqMHEBgQIgoY+IYcAEgWBAwESyCAMwzEUBaydkiBNSZmFffYMqBTU7W635A1jCrijwCl6fkav+M+nFsjIra5DcTOa2DsmOfW1IzHrB2CZSMdx60ROvq3nNLk4m1vlCmQnMm9SMTrhB4DILxcg+OFAhF/oETaAvcIOHHLUoA6Gug7Cp+LsYHLKuKg6SHcv/u45yHs50NKPA1WJA5rqBg=="
+     },
+     "moox-fetch-plan-stockcn-equity-nanjing-005": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNWwoFCgBCDikecAuaAJD/i8GQCQctchO8XgD+F3unTDIl5oTr/4cXDwdHclc1sxTEu9/nO8eYXdXMUhDvft8/x5hd1cxSEO/+s+8cY3ZVM0tBvPsHCAoMAnxuq41pde823rWhktJylJOn9p5GRz5W0c0e+HTSjZcwGYjMWu3nl1pgAIi2EgwxfFJ6sVCRGAFEghSqgSGoo2hs6Q8d1GJISwzl0BISDGohBcRaEmqoocQmBAiChj4hhwASJaCDARLIIAxCUQwFjJ2SINqSMgv77BmoFKTJl92SXNoow84dTqbJWtZRdeNUD7Gxacx16AwsOT1UuuY6Bwfm8wfRAMtr0+zFLQX+9PL7G6tQitk9FehFdrmA4Q8H68apIrBBoBV2cNBRozqAaB24ecWxg8iJWUF1oKK/7AfnQPPlAIQ/DlBVHNDQIA=="
+     },
+     "moox-fetch-plan-stockcn-equity-nanjing-006": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNWwo1CgACjigdcAvSAZDfZxEjqaitJGSrF6g8/JBNdpNT8ur/hxcPB4aoaibinVltrXs3865qJuKdWal7N/OuaibinVmlezfzrmom4p1ZofsAQYFBQN9VbRUaXj6rLuYy3vzmka73fKZVrNTBW6z5QDNurPAMGgNLc22VqZ1fQACIdBIIMcqNseKUImkBRIIU34AQ/igSOmuHDn8QkhLjHVJCguFPUSgoJQFs6CGHABIliBESCCEMQlEUxoudkiDakjIL++wZqBSkUcRuSViLAt1ROJnMrGVIfwBj2sYEV77IXR/RqlXm/T1iMZyU1lZixW+O61dy3SMPJAi2TaB5RCYCPjP60zuCCPDN549gMuJt+Oj7CnT0LuQC0Uo4GHkOq8IGh05gBw9606iDieugJVpnB5ODWYw6kHaXLTfnQKLl4OIfBxGIg7C6Ig=="
+     },
+     "moox-fetch-plan-stockcn-equity-nanjing-007": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNcwn1CQBSTScecAnaAUD2nxaIxEAJlzTWbhfE4Q9JdpsdPQT+/4MJDQaHqHcz76qWkol4Z+7ezbyrWkom4p21ezfzrmopmYh3xu7dzAIDBAUAu2i2Zol4Gc/amM149FuO4orPeGrnjh2855qPPOToLBElMvI025qdXnoFdShWQijEMEfoTDom6YAiQcwzqIM/zFJpDzPxSSErMT6xEBALn07CUSsJZOgRhwASCgKHAhLoIBCCQRhFK6USESElZRj22TM0RLKpwlEZWoiC/kTE7OIWeoVFPjRe+nyMknVBdUbgDlaf7DEqNfsT6h6AbKA0WDWhhXTX3CWsWxDZQMuISrkXCYMW+J8xXyF2in8FIFaFXEBaCQeKl3BS2CCqCezgoGeNOni9DkDZOjuINgZr6mBCXyBvzsFCy8HgPw5WiQPatCI="
+     },
+     "moox-fetch-plan-stockcn-index-nanjing-000": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhN8wCtBQAiSBsdYEHbAODNpWrXAq7kkuxBAj6rQqTQJnbzwCLffUUN0iANUjAcEIL/+H8MDpXrRZ19UJFyNVBiJnXGxFfa2punZ/fqjo+R+v5JihDh966ISUtCoC0JL1izkjBsnTOOAF5sYdoyAKuVWEmRGNMCF/CufSxhCJA5/zIKsHFFQQQTD6oNBElDQOo6fUU2dAC/ZSdzEL9zYDOTRQfF8ig4B4Vy+poxB65bkQMq6zgQv+JAjAgb"
+     },
+     "moox-fetch-plan-stockcn-index-nanjing-001": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhN8wCtBQAiSBsdYEHbAODNpWrXAq7kkuxBAj6rQqTQJnbzwCLffUUN0iANUjAcEAK8/j8Gh8r1os4+qEi5Gigxkzpj4itt7c3Ts3t1x8dIff8kRYjwe1fEpCUh0JaEF6xZSRi2zhlHAC+2MG0ZgNVKrKRIjGkBF/CPfSxhCJA5/zIKsHFFQQQTD6oNBElDQOo6fUU2dAC/ZSdzEL9zYDOTRQfF8ig4B4Vy+poxB65bkQMq6zgQv+JAjAgb"
+     },
+     "moox-fetch-plan-stockcn-index-nanjing-002": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhN8wC1BQCiiBwccLF1wI2BQx2DsGQX4ccNHgiwhTYliFIg7/9/NdGIRjTiKUxiAoZQMBwEnNmN0EAX0V/p1fN2QrJPUqtYS1/m2fr7l9LmtbKpOh/V+cms06bNpdm7B1SFgcrhifeOHMtzrAcFuHvKApcDeHOJYwj2FhgW8IYgGvkVyICNLQoikAhRbbBIGiZS1+ktsqGD+O2czIH4nYObhSw6cJYLwTlwlRvXjDlw3YocUFnHgfgVB2JE2A=="
+     }
+    }
+   }
+  ]
+ },
+ {
+  "space_id": "stockhk",
+  "symbols_per_function": 25,
+  "auto_size": null,
+  "egress_balance": null,
+  "default_lateness_s": 90,
+  "market_lateness_s": {},
+  "fetch": {
+   "concurrency": 50,
+   "rps": 50,
+   "burst": 50,
+   "feed_concurrency": 50,
+   "request_timeout_ms": 3000,
+   "storage_timeout_ms": 2000,
+   "not_before_ms": 5000
+  },
+  "market_fetch": {},
+  "default_ingest": "scf",
+  "default_mode": {
+   "Mode": "pull",
+   "Executor": "scf"
+  },
+  "states": [
+   {
+    "ingest": "scf",
+    "datasets": {
+     "ds_hk_5m|5m": {
+      "dataset_id": "ds_hk_5m",
+      "frequency": "5m",
+      "hash": "c1dff4e27d56818be5f1d40fd31fdc79327c530ace96da055ba4fabaf0ad1d7e",
+      "count": 95,
+      "lateness_s": 90,
+      "ingest": "scf"
+     }
+    },
+    "functions": {
+     "moox-fetch-plan-stockhk-equity-nanjing-000": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNcQNFCQDCDCUfUEkcAAChkqMQhqGVRFbSAf6pdCySqT/JrwtLuq6fEM/xHM/xJERERETEH/+2f//+bf/+/dt1jaWMQmWREiVExX8BgoECgP4vp1ob+7GEvcSSzFkrllPYKBWFaCmlvaL2Tq0vXWLUKLIpdOm9VqWvTGQxIM0ZUGgOiENgnksQh0EUTTgEc3Aa5hKOQcKBWwyLwjhNRfzKi4ctIRCOGFvE/ykGwQKN4w8rD5NtDrFvWIMNNI6bD4NdNY5cbb7QYqfAhY2jypMAw6YhZKMZKCcUv2WUm5QiRcX3IqLw/QgRgnF/f9rah1DlHstSgNjzcgggGp8NCsgzHEQt20EccbIAljpY3jqIYEDIDlyTwXbUwbJfmMdwDlCMlgO3++OAvomDJOIrAg=="
+     },
+     "moox-fetch-plan-stockhk-equity-nanjing-001": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNewNtCACSCyQeYEnbAUDjvE212BwWJRFCaAywBqIJV5LdkLIAAFAXS7EUS7G4rfE23Mu6qZiH56bG23Av66ZiHp5bGm/TaGYCBAMFAIxm5t/qFLKFDLQUGbuGFPsnZLmpMb2TWpdqmapb+4Y5w6saX9dSl8589xyGk9gGFJLDeQRkvXEUBMGXeARyUBL0CcUg4eAPw5EQJQlJ/Erd/5YQCGf0d0sMiDv61xPXfY8tkxs9kpMAebN/LaGgnNGvthgQEZv+UNY6FnnGFRYi4fdBeIYeIkHmHioGsKSvHIKR584GIuYZgg0t20EcIVkdljqIbx1A0CBkB6XJPDvqQNwvzGM4ByhGy4Hb/XFA38RBEvEVAQ=="
+     },
+     "moox-fetch-plan-stockhk-equity-nanjing-002": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNewNVCACiCyQeYEnbAUDjvE212BwWJRFCaAywBqIJV5LdkLIAAFAXS7EUS7HopmIenlsbb8O9rJuKeWh8bmy8DfeybiomrpkJEAwUANyamX+rU8gWMtBSZOwaUuyfkOWmxvROal2qZapu7RvmDK9qfF1LXTrz3XMYTmIbUEgO5xGQ9cZREARf4hHIQUnQJxSDhIM/DEdClCRH/MqLhy0hECKTMBG1vjO5b1RlhwTiOhtXtHjeCQHw7XzkgBGUbfGsUxDANfjZEgEg7UHk/p/2S8hHuQdcCowUKYdg4VmzgaA8QzCgZTtYIxirq1AHUawDUjRL2UGBMi+XOhD9CwsZzgGi0XLgan8cUBxxkER8RQ=="
+     },
+     "moox-fetch-plan-stockhk-equity-nanjing-003": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhN9AL1BwBSiyMdYGfroFH/KX98j5XJppZJwPFA9EKpLFGaQQKCQFeLsRiLsSRF6aA8yciLd6lVlRSlg/Ik41q8axcRtzAGQzABAwIEAGoRkX07u+E31z41p4qtFftriPTtQbyvP1E/ps5XdyuX0t7j6b/zJbIqOwosQS1McmBugLw7piAIlQlHIAclaZ5QDAcFfhSOhyhJPuxQI6CIdAyl5UFbCErGWH4ja51l/pHajgzqzsaLl8+9EJCXcfxGLXWKvAd6i3PYPk8/r7mH3wiAz+UQLHTNBo3yDBvQsh2oAYzlCnWAWAek6FJ2YKFMcqkD4l8SMpwDaLQcqPbHATjiIIlcEQ=="
+     }
+    }
+   }
+  ]
+ },
+ {
+  "space_id": "stockus",
+  "symbols_per_function": 50,
+  "auto_size": null,
+  "egress_balance": null,
+  "default_lateness_s": 90,
+  "market_lateness_s": {},
+  "fetch": {
+   "concurrency": 50,
+   "rps": 50,
+   "burst": 50,
+   "feed_concurrency": 50,
+   "request_timeout_ms": 3000,
+   "storage_timeout_ms": 2000,
+   "not_before_ms": 5000
+  },
+  "market_fetch": {},
+  "default_ingest": "scf",
+  "default_mode": {
+   "Mode": "pull",
+   "Executor": "scf"
+  },
+  "states": [
+   {
+    "ingest": "scf",
+    "datasets": {
+     "ds_us_5m|5m": {
+      "dataset_id": "ds_us_5m",
+      "frequency": "5m",
+      "hash": "707e0012543e63176e944a5bda129c8cedb686de2a1d1d8d57c7c687a4c6c854",
+      "count": 505,
+      "lateness_s": 90,
+      "ingest": "scf"
+     }
+    },
+    "functions": {
+     "moox-fetch-plan-stockus-equity-nanjing-000": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhN4wVVCgASzykdYAkrAHiGFXjIB3PIZiJF7Hfvjt2k3XvnvKbe+4gLsRALsaib////////37dt27Zt27brtm3btm3bFldxZWYmrsSVmbgycWUqzKRQOsicG7/OIq5VMEAQkIjL3CR22A2UDkMMmZZatjTq2knnaI4lpppGO4zxK3dQ+jjfNBEdQpSojCmeUjw0AgDPUDgFxMAdRYIcTi64A2JInuEWkgMlwT0FgSHJC3eokdBDBBG29AHhhgAiFZCuDBJIIBgMhEESFwmUpKnUGPYNNGyzJdGmbbYk2rQeB4Wr4iAxKKQVR1LQJSg2YMwsDhKBcnJxIAG7AHYIxkH3X5+ZX+1coCrhHJRKCAEYzP/4W/sQugEqlutDoF5gNpgYNsNmqtuBtpBbXQ5MHcjZOoCtm8AOJnrMTVMHZ3jLp/UcHKcqB0nUcYA7i4ND1AY="
+     },
+     "moox-fetch-plan-stockus-equity-nanjing-001": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhN7QUlCQDyTikdgKkpOGiTI+wyxiiJrO3KhUZS+/9PSUqZImqCigWN0RiN0fx2////////v2/btm3btm3Xbdu2bdu2Vtytfp3FTIjSQXcs75Z+ncVMiNJBd9CKomCAIODQCkxolSohdaqqYuLkkkPOStJpSJay+jkkMSCS0lf2UC6U8JzZqvXsiMeSOBZDAYDlcCwFxWAZDkZB5C0shHJgFmQtMAeJhLUkEJTCLAF3qHHUBAQRtvQBUUdAAQHpahJIIBgMBOEgDySMgjSVGsO+ASGRXl+rpbU3tYMevl5inRbwU3epJHue1r/L75cQgoGTkP8hUIH7bEB9QIb8UbcDLWNsZTlgdTDHroMFIE92QNHLnAnqQAp7uWk9B3pX5SATdRxo1+LgkAYB"
+     },
+     "moox-fetch-plan-stockus-equity-nanjing-002": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNHwatCQAiTyoeYEnbALAgGqNaVKrYvdYQMXJuFWJXpPwXcsgkSQIci7EYi7Gc5////////+/btm3btn2Fr7hjNmeNburTRx8a3jE0Z41u6tNHH9rdsTNnjW7q00cf2hVWFAwQBJxdkU+DFB1Zo2jRZjLp0iGokho1JIUMOnhIMiTyH6V7VuUnnpla27OTeazEsSwFANbhUAqJgTIcSoLQW1CI5KAsRC0oB4kEtRIIKFFWeKhx0CUEEbb0AVFHQEEB6QoSSCAYEAbBqM0SJklTqTHsG5eLJx2ViqNvyZSIQvEaIchG8QdGANH3OglSUQrWtklhGyPwZknFyxeMed5jMgMTx8QhqEaIbDD9IMNmqtuBtkG2shywOqBj18EVkBc7qOhlzgR1MIW93LSeg72rcpCcOg7mcHFwSIM="
+     },
+     "moox-fetch-plan-stockus-equity-nanjing-003": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNHwZ9CQACjykecEkbAFB8M03sNckQKXfVuc8qduS9/xcpReJV1YADi7EYi7H85vz///////++bdu2bdu2Xbdt27Zt215xN/XrLGZClA66Y/Ju0q+zmAlROugOXmGKggGCgMMrMKFVqoTUqaqKy+vWIYetdBoWU1Y/hywDIimdZQ8lQwnPGcNqeuaIR0sczaAAQDscTCExYIZDSRB5CwyRHJSGsAXlIJHAWgJBJUoLeKhx1AQEEbb0AVFHQAEB6WoSSCAYEAahqM0SJklTqTHsG6H2vMYU4gQ1xDBFTCFOTFpE715hIk2ZuP49qG1C2vXu79X8YCmigdQPMBAKzB8CFYTPBtQHMmSmuh1oGWMrywGrgzl2HVwBebIDil7mTFAHUtjLTes50LsqB8mp40COFgeHNAg="
+     },
+     "moox-fetch-plan-stockus-equity-nanjing-004": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNHwbdCQCCDywfYGnTALAQS8GNilTcuxrpfoYUwUK7IuW/kJ1gKIrACo2hMTSGBj3///////9/37Zt27ZtPIzHIfNBe3RTnz760PCQ4UF7dFOfPvrQ7pDdQXt0U58++tDwwIKBMACMg0BgIOAMj3yepOnJHk2bNtVRpy7BpfToQa10EsJL1CGTHy3dsy4/8czW2p6hTGRZIItlwVgSyEJQCtYBYRSFXsJSKAlmSVYCg1gcrGVhkBRmCXeocdAlBBG09gFRR0BBAekKEkggGAwE4WCbJUySplJj2DerT22vV/ujf+SUiKHIGiFjo+iiOGIyrZ0KDSXi9G1CSIwz/SNJ8X9+nfjIzECDy+MQVCNENpiYIMNmqtuBtiBbuxyAOqDD62CxyCM7qGgwZ7I6mMK73AScg737cpCcOg7mcHFwSIM="
+     },
+     "moox-fetch-plan-stockus-equity-nanjing-005": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNHwZ9CQACjykecEkbAFB8M03sNckQKXfVuc8qduS9/xcpReJV1YADi7EYi7H8Bv3///////++bdu2bdu2Xbdt27Zt257iburXWcyEKB10x+TdpF9nMROidNAdPIUpCgYIAg5PgQmtUiWkTlVVXF63DjlspdOwmLL6OWQZEEnpLHsoGUp4zhhW0zNHPFriaAYFANrhYAqJATMcSoLIW2CI5KA0hC0oB4kE1hIIKlFaeKhx1AQEEbb0AVFHQAEB6WoSSCAYEAahqM0SJklTqTHsG6H2vMYU4gQ1xDBFTCFOTFpE715hIk2ZuP49qG1C2vXu79X8YCki9JAPMBAKzB8CFYTPBtQHMmSmuh1oGWMrywGrgzl2HVwBebIDil7mTFAHUtjLTes50LsqB8mp40COFgeHNAg="
+     },
+     "moox-fetch-plan-stockus-equity-nanjing-006": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNHwatCQAiTyoeYEnbALAgGqNaVKrYvdYQMXJuFWJXpPwXcsgkSQIci7EYi7Gc5////////+/btm3btu3CLu6YzVmjm/r00YeGdwzNWaOb+vTRh3Z37MxZo5v69NGH5sKKggGCgDMX+TRI0ZE1ihZtJpMuHYIqqVFDUsigg4ckQyL/UbpnVX7imam1PTuZx0ocy1IAYB0OpZAYKMOhJAi9BYVIDspC1IJykEhQK4GAEmUFeKhx0CUEEbb0AVFHQEEB6QoSSCAYEAbBqM0SJklTqTHsG5eLJx2ViqNvyZSIQvEaIchG8QdGANH3OglSUQrWtklhGyPwZknFyxeMDW5gMgMTx8QhqEaIbDD9IMNmqtuBtkG2shywOqBj18EVkBc7qOhlzgR1MIW93LSeg72rcpCcOg7mcHFwSIM="
+     },
+     "moox-fetch-plan-stockus-equity-nanjing-007": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNHwZ9CQACjykecEkbAFB8M03sNckQKXfVuc8qduS9/xcpReJV1YADi7EYi7H8Jv3///////++bdu2bdu2Xbdt27Zt26LiburXWcyEKB10x+TdpF9nMROidNAdRIUpCgYIAg5RgQmtUiWkTlVVXF63DjlspdOwmLL6OWQZEEnpLHsoGUp4zhhW0zNHPFriaAYFANrhYAqJATMcSoLIW2CI5KA0hC0oB4kE1hIIKlFaeKhx1AQEEbb0AVFHQAEB6WoSSCAYEAahqM0SJklTqTHsG6H2vMYU4gQ1xDBFTCFOTFpE715hIk2ZuP49qG1C2vXu79X8YCkiVeMPMBAKzB8CFYTPBtQHMmSmuh1oGWMrywGrgzl2HVwBebIDil7mTFAHUtjLTes50LsqB8mp40COFgeHNAg="
+     },
+     "moox-fetch-plan-stockus-equity-nanjing-008": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNHwaVCQACDyoeYEnbALAgGqNaVKrYvdYQMXJuFWJXpPwXcsgkSQIci7EYi7Gc5////////+/btm3btv3CL+6YzVmjm/r00YeGdwzNWaOb+vTRh3Z37MxZo5v69NGH9qJggCDg7EU+DVJ0ZI2iRZvJpEuHoEpq1JAUMujgIcmQyH+U7lmVn3hmam3PTuaxEseyFABYh0MpJAbKcCgJQm9BIZKDshC1oBwkEtRKIKBEWQF3qHHQtSTClj5RR0BBAekSEkggGAwEwWCTJUyaplJj2DcH32Ab1ukTbmV2BKF4RYhno7iIAPzIDdD6C6IHfSEiXgY58pPg/sNpdApCaKDR5TgEwrySDSYmyLCZ6nagdZCtLAesDujYdbAA5MUOKnqZM0EdTGEvN63nYO+qHGSijoPtXhwc0iA="
+     },
+     "moox-fetch-plan-stockus-equity-nanjing-009": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNHwZ1CQDyTikdgKkpOGiTI+wyxiiJrO3KhUZS+/9PKUkpDZjE1AiN0RiN0fwH////////f9+2bdu2bduu27Zt27Ztr7Cf+nUW8zAdSoZO2k/6dRbzMB1KhvCKomCAIMDwCjy0SnVInaqqmDixxBC0knQakqWsjgxJDIjcfWUt5UqHyM5ZPbVzxGNJHMtBAYDlcCwFxWAZDkZBpC0shHJgFmQtMAeJhLUkEJTCLAF3qHHUBAQRtvQBQYeAAgLSBQASSCAYDAShsM0SJkiaSo1h3yHweYx7UwytTfyLbDOM2FpEX15hws0ec65NXM/8HCd7zq75H/AXv4XAQOPL/xBUxH02mD4gQ/6o24GWUbayHLA6oGPXwQKSJzuo6GVkgjpIw140recg31U5WKKOg9y1ODhMQQ=="
+     },
+     "moox-fetch-plan-stockus-equity-nanjing-010": {
+      "region": "ap-nanjing",
+      "executor": "",
+      "cron": "0 */5 * * * * *",
+      "plan": "KLUv/WMBAFhNYAEtBgDySB0ccLF1IG+bfCYcUDUpm+TZQKd/QepMdonLq6qmCNGIRjTi8llz1CQXhYFQEGhywcvJ25eh1I4ccUtNmzLzrVMf7T25MsrawWxXfSM9/WfZaOajRJqKeT1lveRB4CHrA9zhjwVd0rp84hD42C8QoQD8UxLu4Ase8I45HOR06LnGxXnvTzSXRtpOTwNwSFEOgcQMzQaR5Bk+omU7gIdxrCFQB+5bBzZmWXYQV2Zn1IFTFzwwnIMFQctBlP84QB9xILqtCA=="
+     }
+    }
+   }
+  ]
+ },
+ {
+  "space_id": "crypto",
+  "symbols_per_function": 50,
+  "auto_size": null,
+  "egress_balance": null,
+  "default_lateness_s": 15,
+  "market_lateness_s": {
+   "swap": 20
+  },
+  "fetch": {
+   "concurrency": 50,
+   "rps": 50,
+   "burst": 50,
+   "feed_concurrency": 50,
+   "request_timeout_ms": 3000,
+   "storage_timeout_ms": 4000
+  },
+  "market_fetch": {
+   "spot": {
+    "concurrency": 50,
+    "rps": 50,
+    "burst": 50,
+    "feed_concurrency": 50,
+    "request_timeout_ms": 3000,
+    "storage_timeout_ms": 4000,
+    "not_before_ms": 3000
+   },
+   "swap": {
+    "concurrency": 50,
+    "rps": 50,
+    "burst": 50,
+    "feed_concurrency": 50,
+    "request_timeout_ms": 3000,
+    "storage_timeout_ms": 4000,
+    "not_before_ms": 8000
+   }
+  },
+  "default_ingest": "stream",
+  "default_mode": {
+   "Mode": "stream",
+   "Executor": "local"
+  },
+  "states": [
+   {
+    "ingest": "stream",
+    "datasets": {
+     "ds_spot_1m|1m": {
+      "dataset_id": "ds_spot_1m",
+      "frequency": "1m",
+      "hash": "343ef947415fcd45b1f1a8a548d9dbeeccab55d294d6e73995b584076b7deb14",
+      "count": 5,
+      "lateness_s": 5,
+      "ingest": "stream"
+     },
+     "ds_swap_1h|1h": {
+      "dataset_id": "ds_swap_1h",
+      "frequency": "1h",
+      "hash": "97c5741b1c3434126925d80aa036f95b33a276d3ab1988f933c84748cf473e55",
+      "count": 3,
+      "lateness_s": 8,
+      "ingest": "stream"
+     },
+     "ds_swap_1m|1m": {
+      "dataset_id": "ds_swap_1m",
+      "frequency": "1m",
+      "hash": "4a1626c88b63296c1b234f5c54e382e39bd304fecfa70bd4f85729d689c0015e",
+      "count": 5,
+      "lateness_s": 5,
+      "ingest": "stream"
+     }
+    },
+    "functions": {
+     "stream-crypto-spot": {
+      "executor": "stream",
+      "plan": "KLUv/WMBAFhNYgEdBQDSRhYYkKcCemrZsoRj8p+bxFhqmr3Je+xfDjPMMcUUU7TARL9GDVP4pCZCxdxYI8Bmqlrr10V7nOoowoimd7EkNkbsxYUkbIV3vLvGrgdsBA/UHXxEgHANGtYPDxf8u8aqj2vtc4KLTRBi+/R2C4vT9nx2BBvg7UMxj6PvkmClgJctwKBplAA5PgcOwBMZXD6gBZQER8RItgdoRSOBe+LgLe3c"
+     },
+     "stream-crypto-swap": {
+      "executor": "stream",
+      "plan": "KLUv/WMBAFhNXQKVBwDCCyMccIdtAO6YaA2iBxGbm6ntP6z7nUmU0jNf+/97CAuxEAux4LPzGMOriO2l1IZsmaQad0NztvZ9+sbkbPhbh9He0VJldOgoTMO4wTP7CRsrJlT+t6nuWeoMpVP/ym3oRimjLG/RHTyezzqYktMeBRBQBEmRGB2ExCgaOVqvQjkC0FCNKIkwCMihDHAXdCT8IKThAQxwgwCeslFUaCC+EgOat35Ql4Ec2cqB9gTKNVK/1vsXPruNXp1rBNunK/waetcebq8AIpLAoQJUBiCwYJTAIrLnAN9JtYic2fkg/qQ4PkfzZQ9iGUYCtIuDBm46Ag=="
+     }
+    }
+   },
+   {
+    "ingest": "scf",
+    "datasets": {
+     "ds_spot_1m|1m": {
+      "dataset_id": "ds_spot_1m",
+      "frequency": "1m",
+      "hash": "343ef947415fcd45b1f1a8a548d9dbeeccab55d294d6e73995b584076b7deb14",
+      "count": 5,
+      "lateness_s": 15,
+      "ingest": "scf"
+     },
+     "ds_swap_1h|1h": {
+      "dataset_id": "ds_swap_1h",
+      "frequency": "1h",
+      "hash": "97c5741b1c3434126925d80aa036f95b33a276d3ab1988f933c84748cf473e55",
+      "count": 3,
+      "lateness_s": 20,
+      "ingest": "scf"
+     },
+     "ds_swap_1m|1m": {
+      "dataset_id": "ds_swap_1m",
+      "frequency": "1m",
+      "hash": "4a1626c88b63296c1b234f5c54e382e39bd304fecfa70bd4f85729d689c0015e",
+      "count": 5,
+      "lateness_s": 20,
+      "ingest": "scf"
+     }
+    },
+    "functions": {
+     "moox-fetch-plan-crypto-spot-hongkong-000": {
+      "region": "ap-hongkong",
+      "executor": "",
+      "cron": "0 * * * * * *",
+      "plan": "KLUv/WMBAFhNTwGdBAACBhQYkKcNl9LIeGfKJLLxh+IKkSa/RriTmeYEyyyzzLrgt825RNoLLqqSbIKvAUbcg1D3snI5nnIu3eIZJbznNTU5uUMRjMLogkq9xaEGA8DMHhT8uwamj9Psc8KGTRA8+/RGCouj9XzeAxtI7UOxhaPvf2BFvssWYNA0EKCH08BBPSEDLQfUNSKCWJGLgw8RcwM="
+     },
+     "moox-fetch-plan-crypto-swap-hongkong-000": {
+      "region": "ap-hongkong",
+      "executor": "",
+      "cron": "0 * * * * * *",
+      "plan": "KLUv/WMBAFhNSwL9BgACiyAbgAdtAEwvYsd/YdKS7M0E1nxLoU3igpi6QOJGi1jEIlZek55Z8xLEWHRVomPFqE4q7ejwE+5TaqvK47kmjCdntwmSM2kYGHDV9JKqN0tu/6x2+Y45IgXNf5QVuRljixSZ4OXzfeeyaBc+QwECc3AUhy3AcBhFKiiodAqDwsBAMLMMIPwgrOGBB3CjAJ6gUVRWIL7uApqlflB3gBzZyoE2T+vpn+phC4vdLl/MH3f2uaq8JhysnxsiIJI/EJF8lQQANlgCgUK402A/r7SUOS2Wg8DEoTmCdXGgqzBB"
+     }
+    }
+   },
+   {
+    "ingest": "local",
+    "datasets": {
+     "ds_spot_1m|1m": {
+      "dataset_id": "ds_spot_1m",
+      "frequency": "1m",
+      "hash": "343ef947415fcd45b1f1a8a548d9dbeeccab55d294d6e73995b584076b7deb14",
+      "count": 5,
+      "lateness_s": 15,
+      "ingest": "local"
+     },
+     "ds_swap_1h|1h": {
+      "dataset_id": "ds_swap_1h",
+      "frequency": "1h",
+      "hash": "97c5741b1c3434126925d80aa036f95b33a276d3ab1988f933c84748cf473e55",
+      "count": 3,
+      "lateness_s": 20,
+      "ingest": "local"
+     },
+     "ds_swap_1m|1m": {
+      "dataset_id": "ds_swap_1m",
+      "frequency": "1m",
+      "hash": "4a1626c88b63296c1b234f5c54e382e39bd304fecfa70bd4f85729d689c0015e",
+      "count": 5,
+      "lateness_s": 20,
+      "ingest": "local"
+     }
+    },
+    "functions": {
+     "local-crypto-spot": {
+      "executor": "local",
+      "plan": "KLUv/WMBAFhNYgEdBQCyRhYZgLcN3BjLKqIEm5Ko31SsgELb5DdsJSSmKg011FD74KfNRgsD+EHFzGK64GeAETXtdisnn2M66dQpnlfh3TxVl5djq5AYSSNLtRpsEX6kXQchIJDFDNuHDhf8u8aqj2vtc4KLTRBi+/R2C4vT9nx2BBvg7UMxj6PvkmClgJctwKApJUAPzYGD2kQGig+oa0iCNbKT6wFCEUjgJnFAgXZu"
+     },
+     "local-crypto-swap": {
+      "executor": "local",
+      "plan": "KLUv/WMBAFhNXgKVBwCySyMdgCdtAMyIkTWPHSlkEpK9JQNBD0uhTfLygMjArgJJkRRJkeCz05TCq2ftoVSGSxWUGDfD8qX2ffrG5GT4U4bP3o9S5XPHJDyOIzyzj5CxIkLlf5nqGpW+Drr0q1x2XlIquvL2nMHj2SiDKBmtKQcgkAgQAyk6IJDDaENjrYxDC8BC4lYgBoShHQa4Czoj/CCs4UEMcKMAnrNRVGkgvhQDmrh+UKeBHNnKgTZP6+mf6vkLi90uv84fw/a5Cr8mnLWfmysgEkkQUQErCQBssFAChXDNwX6OailzWuKD+JDi9hziqx6UMoAEyy4OGkToCA=="
+     }
+    }
+   }
+  ]
+ }
+]

@@ -3,13 +3,13 @@ package fetchplan
 import (
 	"context"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"sort"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/log"
 )

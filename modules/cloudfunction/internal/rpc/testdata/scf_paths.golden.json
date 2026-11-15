@@ -242,12 +242,6 @@
             "MOOX_CALLER": "scf-collector",
             "MOOX_CALLER_KEY": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "MOOX_CALLER_KEY_ID": "scf-key-2",
-            "MOOX_CLS_ENABLED": "true",
-            "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com",
-            "MOOX_CLS_SECRET_ID": "fake-cls-secret-id",
-            "MOOX_CLS_SECRET_KEY": "fake-cls-secret-key",
-            "MOOX_CLS_TIMEOUT_MS": "3000",
-            "MOOX_CLS_TOPIC_ID": "fake-topic",
             "MOOX_CODE_PACKAGE_ID": "moox-collector_v2",
             "MOOX_CREATE_RESERVATION_ID": "0123456789abcdef0123456789abcdef",
             "MOOX_FETCH_TIMEOUT_SECONDS": "60",
@@ -274,6 +268,19 @@
           }
         }
       }
+    }
+  },
+  {
+    "name": "delete_function",
+    "writes": [
+      "DeleteTimerTrigger ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000",
+      "DeleteFunction ap-singapore/moox-collector/moox-fetch-plan-crypto-crypto-singapore-000"
+    ],
+    "final": {
+      "namespaces": [
+        "ap-singapore/moox-collector"
+      ],
+      "functions": {}
     }
   },
   {

@@ -183,7 +183,7 @@ func findPlanDataset(plan *marketfetch.Plan, key string) *marketfetch.PlanDatase
 		return nil
 	}
 	for i := range plan.Datasets {
-		if planDatasetKey(plan.Datasets[i].DatasetID, plan.Datasets[i].Frequency) == key {
+		if marketfetch.PlanDatasetKey(plan.Datasets[i].DatasetID, plan.Datasets[i].Frequency) == key {
 			return &plan.Datasets[i]
 		}
 	}
@@ -197,7 +197,7 @@ func planDatasetKeys(plans ...*marketfetch.Plan) []string {
 			continue
 		}
 		for _, dataset := range plan.Datasets {
-			seen[planDatasetKey(dataset.DatasetID, dataset.Frequency)] = struct{}{}
+			seen[marketfetch.PlanDatasetKey(dataset.DatasetID, dataset.Frequency)] = struct{}{}
 		}
 	}
 	keys := make([]string, 0, len(seen))
