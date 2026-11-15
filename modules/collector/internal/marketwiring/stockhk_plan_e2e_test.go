@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/stretchr/testify/require"
 )
@@ -23,9 +24,9 @@ func TestStockHKPlanToFunctionRequests(t *testing.T) {
 	}
 	group := hkE2EGroup(subjects...)
 	require.Equal(t, "stockhk_http", group.SourceID, "source_id 取自行情源目录的登记")
-	desired, err := marketfetch.BuildDesiredState(hkE2EPlanOptions(), []marketfetch.TaskGroup{group}, nil)
+	desired, err := fetchplan.BuildDesiredState(hkE2EPlanOptions(), []fetchplan.TaskGroup{group}, nil)
 	require.NoError(t, err)
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkTime("2026-11-10 09:30:00").Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkTime("2026-11-10 09:30:00").Unix(), nil })
 	require.NoError(t, err)
 	require.Len(t, content.Functions, 4)
 

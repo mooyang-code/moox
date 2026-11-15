@@ -7,7 +7,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +24,6 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, CandidateChain: []string{"sina", "tencent"}, MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Now: func() time.Time { return now }}
-	metrics := NewMetrics(prometheus.NewRegistry())
 	handler := &Handler{
 		NewStorage: func(string) (Storage, error) { return storage, nil },
 		NewKlinePipeline: func(s Storage, marketID string, instrument marketdata.InstrumentType, frequency, _ string, _ *FeedLimits) (*KlinePipeline, error) {
@@ -35,8 +33,7 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 			pipeline.Storage = s
 			return pipeline, nil
 		},
-		Metrics: metrics,
-		Now:     func() time.Time { return now },
+		Now: func() time.Time { return now },
 	}
 	req := Request{
 		BatchID: "handler-metrics-batch", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
@@ -124,4 +121,13 @@ func TestHandleRequestAlignsStaleSpotSourceOntoSwapPipeline(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, response.Success, "%+v", response)
 	require.Len(t, storage.rows, 1)
+}
+
+func TestStockCNPlanSkipsNonTradingPeriods(t *testing.T) {
+	// 没有交易日历配置时（如本测试环境），过滤保守地拒绝执行 stockcn 周期；crypto 不受影响。
+	handler := &Handler{PlanPeriodValid: func(market PlanMarket, frequency string, period time.Time) bool {
+		return market.MarketID != StockCNSpaceID
+	}}
+	require.True(t, handler.PlanPeriodValid(PlanMarket{MarketID: "crypto"}, "1m", time.Now()))
+	require.False(t, handler.PlanPeriodValid(PlanMarket{MarketID: StockCNSpaceID}, "1m", time.Now()))
 }

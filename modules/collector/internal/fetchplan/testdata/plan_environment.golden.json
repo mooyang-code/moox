@@ -1,0 +1,841 @@
+[
+ {
+  "name": "single_market_then_subject_change",
+  "plans": [
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNrgX1BwDCDB8XsIV0Wr/mGDfZpH2gwAEkkXunlBLmAwPHcAzHcNj/////////27Zt27Zt23bbtm3btm3b0hnpSLKQjnQk6UhHEs0EoaoUQn67JdER0VHpG5qyTB3zgqTilKjbWOQUhTQ0gwAgArlwjCli1BR2+GLj/KS9Fa04ECAwEAwYbqiR2OCCon8BMYcQCUVZHRJ4DhW7opKS8igVhs19xxHMZARLGUKOgyggHLgGCuHYFCAI9EQl4aAiwOEJRxYQMgB/KxxU+dvQBJgKfs71jDz8Ag/joGlleQkh7M+6KYDMS4H+NAkkur0JkGZYIFwO/QZ9iOAgNfABAuDioIUCAQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNrgX1BwDCDB8XsIV0Wr/mGDfZpH2gwAEkkXunlBLmAwPHcAzHcNj/////////27Zt27Zt23bbtm3btm3b0hnpSLKQjnQk6UhHEs0EoaoUQn67JdER0VHpG5qyTB3zgqTilKjbWOQUhTQ0gwAgArlwjCli1BR2+GLj/KS9Fa04ECAwEAwYbqiR2OCCon8BMYcQCUVZHRJ4DhW7opKS8igVhs19xxHMZARLGUKOgyggHLgGCuHYFCAI9EQl4aAiwOEJRxYQMgB/KxxU+dvQBJgKfs71jDz8Ag/joGlleQkh7M+6KYDMS4H+NAkkur0JkGZYIFwO/QZ9iOAgNfABAuDioIUCAQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNuAUNBwCSzB4WoAUxnG/ntXzLnfwYQ1T1bpHiAjOgVMdwDMdw/P////////9t27Zt27Ztu23btm3bth1h+tst4p0ZIVVEg4O/3SLemRFSdSPcCHMjTBGxpCxqtqQVRFOUImrk1CsFEiXdIADOZy6ZPaOyeCFDYhSzq7KXXhoIEBgIBhRuqGHcm4KifwFhR0REWDASeAiKe0ZJSXmUCsNmts8222zTRgc+BCxBwOpk0M/szRbpL3UsoYBBhCpU9eUZEPa+uikAp14KCMCTgKCtm0BoDwvC4ejfYA4RHIi2+EAAcXHQktY=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNuAUNBwCSzB4WoAUxnG/ntXzLnfwYQ1T1bpHiAjOgVMdwDMdw/P////////9t27Zt27Ztu23btm3bth1h+tst4p0ZIVVEg4O/3SLemRFSdSPcCHMjTBGxpCxqtqQVRFOUImrk1CsFEiXdIADOZy6ZPaOyeCFDYhSzq7KXXhoIEBgIBhRuqGHcm4KifwFhR0REWDASeAiKe0ZJSXmUCsNmts8222zTRgc+BCxBwOpk0M/szRbpL3UsoYBBhCpU9eUZEPa+uikAp14KCMCTgKCtm0BoDwvC4ejfYA4RHIi2+EAAcXHQktY=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-002",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNwALFBQCiSBgXoAFpAJw/LUpZIrf3X0FEZUVKSykToCpHOMIRjuoYmYh3v1mVTSarjpGJePebVZEJmRCZUNm+3nJumn2xqZga8qbOMwXttRKD4MZ9mN08orao8dEI81/VNa3pgAFAESgcMvgRPAXR3aikpDxKhWEzHDJVSdrpUtO14PpFwEFd2xZtQySx42r4Ex9E7EfDp1phV+8TD7BBLwUcIAlQtLsJRCosmB58v4H7Cw6oxgeixcVBFbEz",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNwALFBQCiSBgXoAFpAJw/LUpZIrf3X0FEZUVKSykToCpHOMIRjuoYmYh3v1mVTSarjpGJePebVZEJmRCZUNm+3nJumn2xqZga8qbOMwXttRKD4MZ9mN08orao8dEI81/VNa3pgAFAESgcMvgRPAXR3aikpDxKhWEzHDJVSdrpUtO14PpFwEFd2xZtQySx42r4Ex9E7EfDp1phV+8TD7BBLwUcIAlQtLsJRCosmB58v4H7Cw6oxgeixcVBFbEz",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+     }
+    }
+   ],
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "8b1cd728aa555c25",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNLwvFCQASUSkXkAfGzPwzc/v2vQ0zNSpy+04pfSjDSgXFoBgYmhVkKQknnAxUXwciwxDOBBpWgyDUPRWSEjIhEbcis1Tl7kwquzpAMSjM/////////9u2bdu2bdt227Zt27Zt29YxrEOSxjqsQ7IO65BFY0ohxGyM325ZdarqVOkfryRH0n0ga0hF5DYkIw1GHg2BhFHGS7ojg+gNJvFmIv2jvSE0hAUCAwQBBAxzqJHU48KifwchhxAJBQRZHRIYgSDAwVJXVFJSHkWFwsZmFVUCpo5FEeYAQblIOaysGRtbU1ObKnBgHAgHRIMhHNsCBYJICUk4SAT4ccKxCYgCwLkVDkr+62ECmA78Kf5UScQhX/DrHLL8qRD2fEI+YFZJAZE/CUilvQkkLFjguDv9BkOL4EAO+ECKcHGglYA=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "054f1f27089cefbe",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNrgUNCADCzB8WoAXGnG/nXfLXbwIlsSpy+04pnQkEGktYwhJW+f///////3/btm3btm3bbtu2bdu2bVszhWZI8miGZkiaoRnSWAohY9wJ8dstzYyZmULeEXRKnXQ+BKpTBRqDOMkCJM6GcyxdkaEUuqMEv6I7ZSSlVJRdsr8MlsGBAIEBwIABbqiR2OCCon8BMYcQCUVZHRJ4DhW7opKS8igVhs19xxHMZARLGUKOgyggHLgGCuHYFCAI9EQl4aAiwOEJRxYQMgB/KxxU+dvQBJgKfs71jDz8Ag/joGlleQkh7M+6KYDMS4H+NAkkur0JkGZYIFwO/QZ9iOAgNfABAuDioIUCAQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "23b95f85d04ac35d",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNQwvlCADiECkXkAc0zPwz53rpbxuGoFO9W6TcJXIMowrFoBi8EG3wnJLFemaQHGc6XElCmEMaSqG0455jsBzCcBjEQ87MH8IkAygGxf/////////ftm3btm3bttu2bdu2bVsSqL/dIt6ZETJGFSHhb7eId2aEjHEkHAl0JNAoYlk5qtmTNlTRcIapkVfvDFiVdcKU85lPZo8YOfyUISGO2Y1hb71VIDBAEEBQAXOoYdicwqJ/B1FHRAQEWDASGIEgQGFhzygpKY+iQmFjMx/1BKjiPu1YAyzqUsF/7/3510Vw4OXAEtouC1LfVCdF6P1NxxIqMIhQk1XfnQJh56MoBTRXUkDynwSkYt0EElZY4JBd/AZDg+BAzuID+cTFgVZaAw==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c88a6fbaf66df3bb",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNuAUVBwCSDB8WoAU0nG/nXfmTvwkUgap6t0i5N0yAqsVQDMVQ/P////////9t27Zt27Ztu23btm3btiWB+tvtnVlVKYSMQUf32+2dWVUphBgJRgIZCR/jzucyDZqqHVKQ2ClhBovg2BFhDGGlm3nOpKCOnLskI+KTDqnqHe8YCBAYAAxGbqhh3JuCon8BYUdERFgwEngIintGSUl5lArDZrbPNtts00YHPgQsQcDqZNDP7M0W6S91LKGAQYQqVPXlGRD2vropAKdeCgjAk4CgrZtAaA8LwuHo32AOERyItvhAAHFx0JLW",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-002",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "643c5c8fc51671ca",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNOAV9BwASTSIYkAXIAIwxowEQkghpxCJwXEY2addFGNoEZzjDGfaZgmT34HGKpIwLiRYcbIZgUhmD+FpoN8nR5rJIZpNg5m1KphOc4ewKoZqJeGdW9dPpu0KoZiLemVXRBbpAdIHqdnyuK2vzlZ9KF9GzvWKX/PlryECBJ5pZ0RSX7V+a6TusutWvfiBAYAAweDf4EYwgBBhks1FJSXkUFQobcwoUAWBTKbRUACC3MMhtvT4VoeaJyqXIBV2hxY+Gfhtgxz7U8P07iEgJDX8Phd0iI1CAil4KLJckEPvuJkBpWMAfTn6DhSo4iB8fIIuLA9VtZw==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "19"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "24e2721f8942d9f9",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNpQK9BQCCSBgWoCUZA0BklpCWGrHC9aaZ5JNd/n+lAkc4whHOruqfiXhnVkVFNcau6p+JeGdGRagIUZFR9a95d+GCmsaOLY0OWfgIk6ehFGLs1W7z0gTezN+0zDyazoQ4tIbWICAoAEUFMPgRPAXR3aikpDxKhWEzHDJVSdrpUtOh+sVG4CNd2xZtJdRlNXzWBxH/0fCTV9jVydwF2KCXAhGQBBDa3QSOCgukZ77fIP4FB0jjA2dxcVDR7gw=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "19"
+     }
+    }
+   ]
+  ]
+ },
+ {
+  "name": "retire_functions",
+  "plans": [
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNrgX1BwDCDB8XsIV0Wr/mGDfZpH2gwAEkkXunlBLmAwPHcAzHcNj/////////27Zt27Zt23bbtm3btm3b0hnpSLKQjnQk6UhHEs0EoaoUQn67JdER0VHpG5qyTB3zgqTilKjbWOQUhTQ0gwAgArlwjCli1BR2+GLj/KS9Fa04ECAwEAwYbqiR2OCCon8BMYcQCUVZHRJ4DhW7opKS8igVhs19xxHMZARLGUKOgyggHLgGCuHYFCAI9EQl4aAiwOEJRxYQMgB/KxxU+dvQBJgKfs71jDz8Ag/joGlleQkh7M+6KYDMS4H+NAkkur0JkGZYIFwO/QZ9iOAgNfABAuDioIUCAQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNrgX1BwDCDB8XsIV0Wr/mGDfZpH2gwAEkkXunlBLmAwPHcAzHcNj/////////27Zt27Zt23bbtm3btm3b0hnpSLKQjnQk6UhHEs0EoaoUQn67JdER0VHpG5qyTB3zgqTilKjbWOQUhTQ0gwAgArlwjCli1BR2+GLj/KS9Fa04ECAwEAwYbqiR2OCCon8BMYcQCUVZHRJ4DhW7opKS8igVhs19xxHMZARLGUKOgyggHLgGCuHYFCAI9EQl4aAiwOEJRxYQMgB/KxxU+dvQBJgKfs71jDz8Ag/joGlleQkh7M+6KYDMS4H+NAkkur0JkGZYIFwO/QZ9iOAgNfABAuDioIUCAQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNuAUNBwCSzB4WoAUxnG/ntXzLnfwYQ1T1bpHiAjOgVMdwDMdw/P////////9t27Zt27Ztu23btm3bth1h+tst4p0ZIVVEg4O/3SLemRFSdSPcCHMjTBGxpCxqtqQVRFOUImrk1CsFEiXdIADOZy6ZPaOyeCFDYhSzq7KXXhoIEBgIBhRuqGHcm4KifwFhR0REWDASeAiKe0ZJSXmUCsNmts8222zTRgc+BCxBwOpk0M/szRbpL3UsoYBBhCpU9eUZEPa+uikAp14KCMCTgKCtm0BoDwvC4ejfYA4RHIi2+EAAcXHQktY=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNuAUNBwCSzB4WoAUxnG/ntXzLnfwYQ1T1bpHiAjOgVMdwDMdw/P////////9t27Zt27Ztu23btm3bth1h+tst4p0ZIVVEg4O/3SLemRFSdSPcCHMjTBGxpCxqtqQVRFOUImrk1CsFEiXdIADOZy6ZPaOyeCFDYhSzq7KXXhoIEBgIBhRuqGHcm4KifwFhR0REWDASeAiKe0ZJSXmUCsNmts8222zTRgc+BCxBwOpk0M/szRbpL3UsoYBBhCpU9eUZEPa+uikAp14KCMCTgKCtm0BoDwvC4ejfYA4RHIi2+EAAcXHQktY=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-002",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNwALFBQCiSBgXoAFpAJw/LUpZIrf3X0FEZUVKSykToCpHOMIRjuoYmYh3v1mVTSarjpGJePebVZEJmRCZUNm+3nJumn2xqZga8qbOMwXttRKD4MZ9mN08orao8dEI81/VNa3pgAFAESgcMvgRPAXR3aikpDxKhWEzHDJVSdrpUtO14PpFwEFd2xZtQySx42r4Ex9E7EfDp1phV+8TD7BBLwUcIAlQtLsJRCosmB58v4H7Cw6oxgeixcVBFbEz",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNwALFBQCiSBgXoAFpAJw/LUpZIrf3X0FEZUVKSykToCpHOMIRjuoYmYh3v1mVTSarjpGJePebVZEJmRCZUNm+3nJumn2xqZga8qbOMwXttRKD4MZ9mN08orao8dEI81/VNa3pgAFAESgcMvgRPAXR3aikpDxKhWEzHDJVSdrpUtO14PpFwEFd2xZtQySx42r4Ex9E7EfDp1phV+8TD7BBLwUcIAlQtLsJRCosmB58v4H7Cw6oxgeixcVBFbEz",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+     }
+    }
+   ],
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "1ea297d4882eedc2",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNKgrVCQAiUSkXkAfGzPwzc/v2vwUzNbRl904pfSjDSgWFUAiF8DJuILYZIxsQ4lfDgRBiR5QJMSE7YpQGVwgjg2qQRhmRSmf5MHWAQijs/////////23btm3btm27bdu2bdu2besY65AkYR3WIVmHdciimTGlEDLGb7esOlV1qvSPV5Yr6T6QNaSichvLSAMhj0agwTDjJt2VQfQGSzwxkf7R3gqtsEBggCCAgAFzqJHY4sKifwchhxAJBQVZHRIYgSAAolJXVFJSHkWFwsZmEAy2B6AqS17CDtAqFyHH777r+77Pf67+wGgQDreWhHBsC5QE+2KScBAR4OGE4xYQBQD/Vjgo+W/DBGQe+CPyV3xRPf6OA0fJ8pKEsAcp8gFiJQXa9CSQlfYmwLBgAcft8hs0LYKDPOAD/MDFgRYFAg==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "40"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7c6ef6620b7dd0bf",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNqQS9BwByCx0WoAXGnG/nXeL39wRKYmnL7bunNDMQQoVQCIVQ3P/////////btm3btm3bNs2Vpm2tNKVpS1Oalr0rhRCzMap+u6QhaVhkIIH9V35uMKKQSwVmdohw02k6h+wnDYgQP+VwSIM/xlQlNQqrjvRIBwIEBgCDBlu4sdQig6J/ARJYAWJzV1ROeZQKw2ZqRB5UZmEndTaw5XnAxwdHBi4IR3BBFQLs0REOEAQMmHCkCWgTgIMKRzX/w1ACFgN+SdobQMrqFkbCB+mu/BwE+7xRQGwA4oMEJOulAGI6CbjddRNQ2mGBYeLgb4AOFxw4BR/QPFwctMSD",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "40"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true,
+     "transitional_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "84f60e37b309ff7c",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNMQYVCQAi0SoakAdpAG+MjllTsMkmqS1zeJ13F5GyBM4w5wEH4SAchcKBwBVNkWa3lRNpnCGuIjNvDFKn1Ck3aeUQpoYVFyIOkpWkc9VD0wEchOP/////////b9u2bdu2bdtt27Zt27YtDdTfbjMR78wIqaKk/O02E/HOjBCkAWkgpIFI2ZkypGp6zBVVVBxSevYqniKrTN0oBBrPx5iiQUzxU5dmnDsk5N56y2CAoCCgoAJzqGHcm8KifwdRR0QEBVgwEhiBIIAhYVdUUlIepcKwGY2VAMw1YY5jBwCoS3vb5ff5dUf7wFMCS8AQljjpZgnFSNLf6FhCAYMIdbLqy18g7G90p4B+JQUk/0lA0NZNIDSFBWFxwG8wBwgORC8+EFNcHLSkNQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-002",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true,
+     "transitional_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "860a3cdd35f02e6a",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNOQOVBwAyTSMZgAfIANNsVrPGEbKJszB1rimMbNK+t64rVoc4xCEQCgJOkUua7TCyRZrjGi+ZuWzqTd5kOY10wWqMDEJFIxlJ6rseDrrBIc7uGKqZiHdmVT+dvjuGaibinVkVfaAPRB+obsfnurI2X/mpdBE92yt2yZ+/hhQ48EYzK5risv1LM32HVbf61RMIDBQACg83+BGMIAQcY7tRSUl5lArDZpUwAODUsi0VAMgtDHJ6z4+FqHqkdAmRQVVKtSup/kSYsS81fPcOIlJCw99CYffKAwpQppcCSyAJRLS7CRAVFkiHvt9g+QsOosYHKODioHLbGQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+     }
+    }
+   ]
+  ]
+ },
+ {
+  "name": "handoff_scf_stream_scf",
+  "plans": [
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c081f98af983a968",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNeAvdCACijB8YsCXJWl/WIi2QvXfSQkYDfim/TCkxzOcEBYP2BsP///////9/27Zt27Zt227btm3btm3bneIOSRJ3uENyhzvkWGVMKUSE/HbL7Ww7IyKTuGERGaaoEgoCUaDiKNdYFFMMKpSRJwxSxjgIQ4zWyT/5KBuRKqzCAAKBgQPAgQF3uLHY4oKifwES2MKhMhcFKSgqj3KSjc1taU0jhVrOPEziGVZ9HDNZzezZVUdu9MqZt66q7F4PwBThAJDqCAdpwSMCQ3BNOFgQGJnCITIgF8CPLRwg/NUkCvDJ+qdokBIQinI2yjF7b13+D4j9s1TAIeD4iQIO+yqwMM0EVgKSJ/B8gVnO57CgI97pN4jhCw7QgQ9cES4OtLRB",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c081f98af983a968",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNeAvdCACijB8YsCXJWl/WIi2QvXfSQkYDfim/TCkxzOcEBYP2BsP///////9/27Zt27Zt227btm3btm3bneIOSRJ3uENyhzvkWGVMKUSE/HbL7Ww7IyKTuGERGaaoEgoCUaDiKNdYFFMMKpSRJwxSxjgIQ4zWyT/5KBuRKqzCAAKBgQPAgQF3uLHY4oKifwES2MKhMhcFKSgqj3KSjc1taU0jhVrOPEziGVZ9HDNZzezZVUdu9MqZt66q7F4PwBThAJDqCAdpwSMCQ3BNOFgQGJnCITIgF8CPLRwg/NUkCvDJ+qdokBIQinI2yjF7b13+D4j9s1TAIeD4iQIO+yqwMM0EVgKSJ/B8gVnO57CgI97pN4jhCw7QgQ9cES4OtLRB",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "dd8fd7b01b52b71b",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNbAOFBQAyxxUXoCUZA0Bk9rWsZJNmhevdkvKbbP5/VwGFwQwNg3dV/0zEO7MkkkQoidD/q4Jb/PcaNsIQpbg5fExldLVfKFVh6eTtUzbbGH+Iv6NET9ZirQBBMDgARwUn/GfcvpD64kmQGoTKI2y3ACt0H/mRigGaoZAvNPJkiYmDELH/6iv6S+x2U4HiOe7lAGbQVwFRYAIrBXoCnxXMcorCgs+Kw98gOgUHCOEDV3VxMI62Wg==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "dd8fd7b01b52b71b",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNbAOFBQAyxxUXoCUZA0Bk9rWsZJNmhevdkvKbbP5/VwGFwQwNg3dV/0zEO7MkkkQoidD/q4Jb/PcaNsIQpbg5fExldLVfKFVh6eTtUzbbGH+Iv6NET9ZirQBBMDgARwUn/GfcvpD64kmQGoTKI2y3ACt0H/mRigGaoZAvNPJkiYmDELH/6iv6S+x2U4HiOe7lAGbQVwFRYAIrBXoCnxXMcorCgs+Kw98gOgUHCOEDV3VxMI62Wg==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+     }
+    }
+   ],
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true,
+     "transitional_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "babd49de6bece89e",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNagytCQCSzSIagDfGWO3azLbl/vIbBzAhsO/1O6XEqgywMQEH4Ya0RyAOh4OBHsBBOO7/////////bdu2bdu2bbtt27Zt27Zt6xzrkKSxDuuQrMM6ZPHOmFLMCPntllWnqk6ZmYlueGbJFNdCUUAGK4zzFYtiSjJDKfIokTPJQIak3s2/2ShVRq7wCgUMCAoSAQkGeqih0EOGRf8C8YYQCUGCLnQSUBBgMDhQ4hKJBCkpj3KSGi0H5jB6tebQJBFpThufuUCBodVgBgTMBULMQSqzukXENCQ1uByUJ8LhkMgIR6kAR7DhQhMOCoENpHCQAiAD7LaFg1p/ZUMBn1g/mf2QXpc7j8yxC+ny0YLYg1ABPr3HMQk4+lWAi2cCnPHSE0wZALPkp7AADZX/BtspOOBAfLDPXRzQ+CA=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true,
+     "transitional_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "9f193e74e263cc5e",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNXgQlBgASiBgYkDcNs6zYzLBRa3s3Jl81KlJeRIRwZsaIC5Gsd5kkCHIYXAMWYulm3v1VMxHvtIyWKS1T/9FOsvWfGPUVqDjHkdHYZWh5048tszxJm5NxWNN1HjOPxlZde63XBAZCQQkoFir8xoHTdd9laT6IyNqJgQVio++Lr3HYOcBzNX+8yPoAgqX+ebZaQrIE7UOIeHL1LRoSew6oQHQc59QB8PRVwAFMgLTMniDcCmYJAmFBCZ3wNxCdgoOI8AGqujgY51Yt",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+     }
+    },
+    {
+     "name": "stream-crypto-spot",
+     "executor": "stream",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "transitional_plan": "KLUv/WMBAFhNkg0tCgAizyYakDfhm2VN3DkusvduXJ+bM5L/y5RSgoPdNSAHATb/4fD/////////tm3btm3btt22bdu2bdu2JEmSJEmSJEnnik5VlRWdolNVdIpOFdWdMaWY/XZLFtEhokNm1jJs6swQcxwLR8Ew2JFcj+oopiBmKFRlA/kZJDHMEZ6ttjUpRLwrdaXMwAJBoBBQ1KGQJBYKAgAhgVgUHIlBEoCOqJHY2IKipQ/xhhABAYAFAxK4QcEgkQODhIiAHB1BQwNx1vW1S5/O8v492uU2P/4jMpJMp0IZKVqmwaFQPjBIDQesE9lwjAs2BOdtzeFQQiCKPBxjQLwA5wHiUNffd3ZAJNyvYRIEUDlq73DNcgW93nXtep0BKq3amx+A2NGArH8B3vVlwcRWOktiTAzyYa/zgPCRHsgFQxAfwB6IBUYCkSkOplIb",
+     "final_plan": "KLUv/WMBAFhNkg0tCgAizyYakDfhm2VN3DkusvduXJ+bM5L/y5RSgoPdNSAHATb/4fD/////////tm3btm3btt22bdu2bdu2JEmSJEmSJEnnik5VlRWdolNVdIpOFdWdMaWY/XZLFtEhokNm1jJs6swQcxwLR8Ew2JFcj+oopiBmKFRlA/kZJDHMEZ6ttjUpRLwrdaXMwAJBoBBQ1KGQJBYKAgAhgVgUHIlBEoCOqJHY2IKipQ/xhhABAYAFAxK4QcEgkQODhIiAHB1BQwNx1vW1S5/O8v492uU2P/4jMpJMp0IZKVqmwaFQPjBIDQesE9lwjAs2BOdtzeFQQiCKPBxjQLwA5wHiUNffd3ZAJNyvYRIEUDlq73DNcgW93nXtep0BKq3amx+A2NGArH8B3vVlwcRWOktiTAzyYa/zgPCRHsgFQxAfwB6IBUYCkSkOplIb"
+    }
+   ],
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "67b9274e0407bded",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNeAvtCADCzB8YsCXJWl/WIi2QLXfSQkYDfin/TikxzOcEBYNSFTEY/v///////9u2bdu2bdt227Zt27Zt284UZ0iSOMMZkjOcIceqUgghIojfbrmZbWZEZBYvLKJTjCrBIBQFMo5yjQYp5FCBjHxxiCrnKApxWif/5INspSsswgACgYEDwIEBd7ix2Nqg6F8S2MKhMhcFKSgqj3ILG5sBbWlPI4UtZ95M4nmrPg4VjVX16maLrnjjqtfONHV/DsAR4YCR6ggHacEjAkNwTThYIDAyhUNkQC4AP7ZwgOCvJlGAT9Y/RaMqQCBImVCCgXvr8n9A7J+lAg4Bx88JcMhXgYVZJrASUDyB5wvMcj6GBR3xnt8g0i44QAc+cEW4ONDSBgE=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "67b9274e0407bded",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNeAvtCADCzB8YsCXJWl/WIi2QLXfSQkYDfin/TikxzOcEBYNSFTEY/v///////9u2bdu2bdt227Zt27Zt284UZ0iSOMMZkjOcIceqUgghIojfbrmZbWZEZBYvLKJTjCrBIBQFMo5yjQYp5FCBjHxxiCrnKApxWif/5INspSsswgACgYEDwIEBd7ix2Nqg6F8S2MKhMhcFKSgqj3ILG5sBbWlPI4UtZ95M4nmrPg4VjVX16maLrnjjqtfONHV/DsAR4YCR6ggHacEjAkNwTThYIDAyhUNkQC4AP7ZwgOCvJlGAT9Y/RaMqQCBImVCCgXvr8n9A7J+lAg4Bx88JcMhXgYVZJrASUDyB5wvMcj6GBR3xnt8g0i44QAc+cEW4ONDSBgE=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7b73dbbda533af8c",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNbAONBQBSBxYXoCUZA0Bk9rWsZJNmhevdkvKbbP5/VwGFwc6shsG7qn8m4p1ZEkkilETo/1XBLf57DRthiFLcHD6mMrraL5SqsHTy9imbbYw/xN9RojXaYq0AQTA4AEcFJ/xnHFPkvXgKSM2h8njlBGoGEFblBytSOUAJ640qWWLORIjYcvUV4iN2i6lAOR5n4ACD9FVABJhAacGewN0KZjkCYUEJxeFvEJ2CA4Twgau6OBhHWy0=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7b73dbbda533af8c",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNbAONBQBSBxYXoCUZA0Bk9rWsZJNmhevdkvKbbP5/VwGFwc6shsG7qn8m4p1ZEkkilETo/1XBLf57DRthiFLcHD6mMrraL5SqsHTy9imbbYw/xN9RojXaYq0AQTA4AEcFJ/xnHFPkvXgKSM2h8njlBGoGEFblBytSOUAJ640qWWLORIjYcvUV4iN2i6lAOR5n4ACD9FVABJhAacGewN0KZjkCYUEJxeFvEJ2CA4Twgau6OBhHWy0=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+     }
+    },
+    {
+     "name": "stream-crypto-spot",
+     "executor": "stream",
+     "push": true,
+     "create": false,
+     "retired": true,
+     "transitional_plan": "KLUv/WMBAFhNhA4NCwCCUCsckDfJm2VNjI3AVtt7XwsRMzP0pZQppbS66+54Ao0Czd0x+hGIw8GAALGQ3TGARqFx/////////2/btm3btm3bbdu2bdu2bUuSJEmSJEmSlc4qmZkZq2SVzKySVTIru0PoHGN+uyWtKlVVKmNMDTGyM0ZByfFIDsRgkuV6ZclBRzGGU2ZGlB9SFgRd4dnUNl1OFe+O3TE0wEgULAQWhjgWBWNBCCAoEgyDZDlYAoCQqIHQ2EBASx8BhxABAQEXDBI4AsEQgUMwSEBCQA45BBqWAKbl+ayv04S+j+YBYfKs8xU4lDV+3MwsAQPBQiAoCBoERAHRCH4AwRqO2ujacGgLtgRCrM3hUKwALHk44gHgAEwIxKGyfz/cAZF3vzgPpgr+5rkmfy1p0O+z177sGZg6S/v/ga8cDZzvF+idXhZIkqWzqK+JQf73OQ+Ev/QArxmCfAZ7gLY1EuirODChQA=="
+    }
+   ]
+  ]
+ },
+ {
+  "name": "unified_dataset_then_subject_change",
+  "plans": [
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2f53473f7b9aef4c",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNtgUVCABSzSAXoBeYA8eEhZOWzNocKBtE5JZJJv5/pQKDMAiDMNz4+Pj4+P1+v9+NjIyMjAQJEiRIULlcLpfv+75vKpVKpZKYatetWZJBElGSGElE6y7oJklJQpLQtTjHXPkJ3HEFGM3r9o856ZcdY85xaG8xLrUrhVrCcMC92R/WYS2G4BAUHAAYNG6ogdhbG/sXMcdAMIi7GhJYwYFSX1RSUh6lwrAZvR5sCjaFkcJJ4Q77wPVnMAu1ITI45XiFHXF+NowNqJEtSPO8DQUQmHO5wQYcKNEVW/0oE++MDV/+0IpdSq0PPP9VoE1lAkNbPUHSCgvC5ZjfQAcIDlIHH+gTFwetNAg=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2f53473f7b9aef4c",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNtgUVCABSzSAXoBeYA8eEhZOWzNocKBtE5JZJJv5/pQKDMAiDMNz4+Pj4+P1+v9+NjIyMjAQJEiRIULlcLpfv+75vKpVKpZKYatetWZJBElGSGElE6y7oJklJQpLQtTjHXPkJ3HEFGM3r9o856ZcdY85xaG8xLrUrhVrCcMC92R/WYS2G4BAUHAAYNG6ogdhbG/sXMcdAMIi7GhJYwYFSX1RSUh6lwrAZvR5sCjaFkcJJ4Q77wPVnMAu1ITI45XiFHXF+NowNqJEtSPO8DQUQmHO5wQYcKNEVW/0oE++MDV/+0IpdSq0PPP9VoE1lAkNbPUHSCgvC5ZjfQAcIDlIHH+gTFwetNAg=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c2137e876921cee2",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNtQFVBQDyRxYWoIcGp0P2XMolQm4EaNkkW3x7VlXFA4c4xCHOkXE3j1JVS7WUquWulmpptdTkkYlnfoNLl8CKr9tPfOuXJeJLsnYyaEN2xgCoBpZgutknRsTIYJFF4RAwUB78egFArtGfNiKgv19/r+fogpLX/bnqjTwS98yNwo/RChEK1/AZe4v9lsBdYCd9FaARExDJ3T1BbAMLPMuEv0FxCg4WhA9i1cXBOBSrAQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c2137e876921cee2",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNtQFVBQDyRxYWoIcGp0P2XMolQm4EaNkkW3x7VlXFA4c4xCHOkXE3j1JVS7WUquWulmpptdTkkYlnfoNLl8CKr9tPfOuXJeJLsnYyaEN2xgCoBpZgutknRsTIYJFF4RAwUB78egFArtGfNiKgv19/r+fogpLX/bnqjTwS98yNwo/RChEK1/AZe4v9lsBdYCd9FaARExDJ3T1BbAMLPMuEv0FxCg4WhA9i1cXBOBSrAQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-swap-hongkong-000",
+     "region": "ap-hongkong",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "89f38f37f01055db",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNtgUNCQBCjSAWoBfQAKdDPtzebUJuqFQy5U6fnlVV8YMwCIMwIB6Px+Pv9/v9bmRkZGQkSJAgQYLK5XK5fN/3fdPQ0NDQNJs0zWlOc5o416aNaLPapDbdZpttsx6LUsiNn8AVV4CVvG6/kLd+WSHkxVL7DOIxdmPQlCAd8Nzsow3aDEJQCAoOAAwmcKjB1Kg29i/hhgCBTEgbOhJYAWICt6CgpKSslIrlQoLMFgkpWwkSWyYibLW2B42zgLWtDfmfwZshdSCFoFR3DaoHyoCwQUWgRJKNpJFg+wzXxtEreHytN5cbR8NfWhZEgvlLzoL+I9e5910QIgjnsO9W7D2CJmDvV4EVYwKvuD0B04IFYbHzG0SHmjniEBy0jA8i2dAc0Xpx0Oqv",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "89f38f37f01055db",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNtgUNCQBCjSAWoBfQAKdDPtzebUJuqFQy5U6fnlVV8YMwCIMwIB6Px+Pv9/v9bmRkZGQkSJAgQYLK5XK5fN/3fdPQ0NDQNJs0zWlOc5o416aNaLPapDbdZpttsx6LUsiNn8AVV4CVvG6/kLd+WSHkxVL7DOIxdmPQlCAd8Nzsow3aDEJQCAoOAAwmcKjB1Kg29i/hhgCBTEgbOhJYAWICt6CgpKSslIrlQoLMFgkpWwkSWyYibLW2B42zgLWtDfmfwZshdSCFoFR3DaoHyoCwQUWgRJKNpJFg+wzXxtEreHytN5cbR8NfWhZEgvlLzoL+I9e5910QIgjnsO9W7D2CJmDvV4EVYwKvuD0B04IFYbHzG0SHmjniEBy0jA8i2dAc0Xpx0Oqv",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-swap-hongkong-001",
+     "region": "ap-hongkong",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "ecf90b9880e0e11e",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNtQGlBQACiBYWoCE00Z+V5DIlQsiNiKC75XZZaSagaMccc8wp5chPjBt/443iRqob6Ubf6KIau0rSyIBsXXBWu1XZqtllv1U1l/UZpVbSkUxBH2pCkV2VlaNylDrsUAgIAFAg/HoBQK7R/41LF92g1Lww7PtUUResor//fFLuNygvWQRH/FWI0GoihwlZ7EPMjAP76asAvZiAmNjdE0QVsICETPgblLOZ4zPAwQLxQcygOQJycQC0kGk=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "ecf90b9880e0e11e",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNtQGlBQACiBYWoCE00Z+V5DIlQsiNiKC75XZZaSagaMccc8wp5chPjBt/443iRqob6Ubf6KIau0rSyIBsXXBWu1XZqtllv1U1l/UZpVbSkUxBH2pCkV2VlaNylDrsUAgIAFAg/HoBQK7R/41LF92g1Lww7PtUUResor//fFLuNygvWQRH/FWI0GoihwlZ7EPMjAP76asAvZiAmNjdE0QVsICETPgblLOZ4zPAwQLxQcygOQJycQC0kGk=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10"
+     }
+    }
+   ],
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "6d7e01c63c617653",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNPAvFCQCiESoXkAc0rJlx8t7b9wbMKOWbkqTLLtoktQqFUAjZKuZJ2JZpac+gjHI/4ki2HIqZQZ9dFaJmZky01fNgxvBcdIBCKHJ8fHx8PJ/P5/NYWFhYWFdXV1dXZrPZbL7v+76r1Wq1SsRVu25NJTKIyJWIIBG5Wv7qJiIlIkREyPWdY7I8B3lsA5K53f4xJ/INjzGncQjfYlyKWUrVzhDhHu0P7MAWI3AEBgoCCBpzqIHQNAZl/w4hx0AwCAi7GhIYgUBwqNAnKikpj6JCYWMzGlUCtMZiJ9YAQLpMdvZnIWEiUkJURIwKcODBM9jA2oBWx0e6EMiQn42YNbnbAjrkbdQwgZmXG0qCAffl/K2fMvHImvDlo6zYgz5CgXxVBcgUE8AK2xMoLFjAYbv9BqRJcIAXfKBiXBxo0SA=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "92e4c4ce719f1e10",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNtgUdCABSDSEXsCV0UFtHxMjenyQVxefsLaVMKSXMBwbFUAzFUAxycnJy8vHx8fHx8/l8PpvNZrO5Wq1Wq+/7vq9pmqZJpWbLkiVSIUTFSFSOqBhr3PwSFRIVIiqDtDkfdKQPDUkAMMTYjfhRawxM1blamQ3BqjolSNM6qFNnNf3kSI7mFAiFgAGBAANuqIHYWxv7FzHHQDCIuxoSWMGBUl9UUlIepcKwGb0ebAo2hZHCSeEO+8D1ZzALtSEyOOV4hR1xfjaMDaiRLUjzvA0FEJhzucEGHCjRFVv9KBPvjA1f/tCKXUqtDzz/VaBNZQJDWz1B0goLwuWY30AHCA5SBx/oExcHrTQI",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "4417a843fec559c4",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNHwP1BgBiTCAXkAc0rJlxcqX0vQEzSrldKV22/NoktQqFUAiFQDwwi/TskUb7DLCglRF1pZMB/zyy20DC/5MIe9hoeP6MRgugEApSjNSR1X/Na+rXFL3mNX1NyWTnJMEiA3LowzXrRVQnq6X6ncxqOb0yJqGPIA7fsgS5jqjKuZwxBY7AQEEAgQMj/HxPAJhUIhEnAkaHjMN/XRFwvin/IRdWf09j6gJUxv1fpY08ZDwpj8JffBQiWNfwn7zFDntqDgAy+iqAKibggLt7AqoCFighEv4GyCk4cAgf0KqLg3HiVgM=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "9"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "b0c446add04a98e8",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNmgFFBQDSRxYWoCcGp0M+3H7Zq61QKbEvxcuXDACcB4c4xCGOlTqy+i++WL9Y9OKLfbHYJE2Vnk2M0z4COaSVGXWllyJ/c2Q3kob/GzJsYqPi5mdEWjWch3MawSEYFAAEBxz8egFArnH/fRdef0/j0AWo2P1fgY08fPwrj8JffBQiWNfwn7zFDntqDgAy+iqAKibggLt7AqoCFighEv4GyCk4cAgf0KqLg3HiVgM=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "9"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-swap-hongkong-000",
+     "region": "ap-hongkong",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "240ea1765068093e",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNPAvdCgCSUSoXkAc0rJlx8t7b9wbMKOWbkqSl/NoktQqFUAjpKuZZtMu42GdQRrkfcSxZDsXMIJ1dFcJmZoiwy0eDGcOj6gEKoRjj4+Pj4/l8Pp/HwsLCwrq6urq6MjIyMjI6nU6nU7lcLpdLSsolLnGJS4azJehribWkWkItaUlbUjLdOSbLc5CHbMCa24l+zFu64THmHad4F0PFmKWU7UwJ8pHoAz3QxQgcgYGCAAIHdbjRzFMMyv4dEhiBQICYwCsoKCkpK0XF0p4BGukJ3CqLT8wAAOliz2YikmKkQihUBAGSIoRGJFAAJRLPB9zOArdXbaDkM9AhjTpAgmCiuwbbgRkQNtgQGEiy4QhJYEKHa6NhKvDmFpLLjWdlwUAWuJH5c70D/Y2B594VI0QkG4adR7Hbp0IBtqoqEOViAkgY9AQuLFjAkaH9DYKGmSPsBAflER8sFjRHefDiQBvBBg==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "87e1010e2afb1700",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNtgUVCQBCzSAWoCUYEcnXomzv/95XIkLTU5J0+QxAacVQDMVQIBISEhLSoEGDBg263+/3u91ut9trampqamhoaGho7vu+72bzbrrpppvo0ebZ2qw23+a02WbbHPZJodGzX0xsAgBBYmQEXafGgFSVGys7IVxVZQj7thlUqbN5ifCMZ1IKhELAgEDAAXCowdSoNvYv4YYAgUxIGzoSWAFiAregoKSkrJSK5UKCzBYJKVsJElsmImy1tgeNs4C1rQ35n8GbIXUghaBUdw2qB8qAsEFFoESSjaSRYPsM18bRK3h8rTeXG0fDX1oWRIL5S86C/iPXufddECII57DvVuw9giZg71eBFWMCr7g9AdOCBWGx8xtEh5o54hActIwPItnQHNF6cdDqrw==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-swap-hongkong-001",
+     "region": "ap-hongkong",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "0f7aba5b4bff75d2",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNHwM9BwByTCAXoAVNZwu4+ciUCGlnqrG9aXvaiXMA4CZJSEISigemlZ490mgjAg0SI4Vd62XAP6/IycDC/7MKe5jU8PyRGjVBEpIxV36DvOfvec94j+s9fk/f03IRhLKgFaKg+nBNu1UZSmvLfijTalDPjFnoK4jDJ9mibFdl5mzOmAM0CBgAEHAl/HxPAJhUIhEnAkaHjMN/XRHw4rNvim64o/kX7HutURfUR3+f+QzuNyCfVgSHkqsQwWMihwJZ7GycjQO26KuA6zAB+ujuCcRzsKCEQvgbuLOZ4zDAwQLxQcygOQJycQC0kGk=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "9"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c60e654020fd0f5b",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNmgGNBQDiRxYWoIcGp0M+/JP811aolNiV0lcKqyqfAcccc8xBcrQ75U95Sjul65Q+JZ2S2KY7CKFta7WLgBa9ccRAqpNB/8W6nynh/1uEbb4avscrozEKuqB1BYVgUAAQHB78egHA4ppvim64c/gX7HutUxfUR3+ffRnvN6AsbQSHElkhgsdEDoWw2NksiwJs0VcB12EC9NHdE4jnYEEJhfA3cGczx2GAgwXig5hBcwTk4gBoIdM=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "9"
+     }
+    }
+   ]
+  ]
+ }
+]

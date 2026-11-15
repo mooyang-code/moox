@@ -37,7 +37,6 @@ type Handler struct {
 	PlanPeriodValid func(market PlanMarket, frequency string, period time.Time) bool
 	Reporter        ItemReporter
 	CLSReserve      time.Duration
-	Metrics         *Metrics
 	MetricsReporter MetricsReporter
 }
 
@@ -182,7 +181,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 		marketID := firstNonEmptyString(req.MarketID, req.SpaceID)
 		instrumentType := marketdata.InstrumentType(strings.ToLower(strings.TrimSpace(req.InstrumentType)))
 		if instrumentType == "" {
-			if instrumentType, err = defaultInstrumentType(marketID, req.MarketType); err != nil {
+			if instrumentType, err = DefaultInstrumentType(marketID, req.MarketType); err != nil {
 				return nil, err
 			}
 		}
@@ -199,7 +198,6 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 		}
 		pipeline.DatasetID = strings.TrimSpace(req.DatasetID)
 		pipeline.Now = h.Now
-		pipeline.Metrics = h.Metrics
 		pipeline.Reporter = h.Reporter
 		pipeline.FunctionName = req.FunctionName
 		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)

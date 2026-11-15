@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 )
@@ -46,7 +46,7 @@ func (s *Service) ingestModes(ctx context.Context, spaceID, datasetID string) ([
 		return nil, err
 	}
 	if open != nil {
-		content, err := marketfetch.DecodeFetchPlanContent(open.Plan)
+		content, err := fetchplan.DecodeFetchPlanContent(open.Plan)
 		if err != nil {
 			return nil, err
 		}

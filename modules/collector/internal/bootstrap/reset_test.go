@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -81,7 +81,7 @@ func TestCollectorResetKeepsPauseFlagUntilTheFirstInit(t *testing.T) {
 // plan 阶段（模块还在运行）不把它当阻止项，否则永远发不出令牌。
 func TestCollectorResetFailsFirstStepWhileTimersAreStillEnabled(t *testing.T) {
 	life, control, _, _ := newCollectorResetEnv(t)
-	control.manager = &marketfetch.PlanManager{}
+	control.manager = &fetchplan.PlanManager{}
 	control.timerWait = 50 * time.Millisecond
 	ctx := context.Background()
 	plan, err := life.ResetPlan(ctx, lifecycle.ResetData)

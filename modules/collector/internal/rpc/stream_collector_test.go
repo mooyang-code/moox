@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
@@ -28,9 +29,9 @@ func streamPlanContent(t *testing.T) string {
 	plan := &marketfetch.Plan{V: 1, Executor: marketfetch.PlanExecutorStreaming, Fetch: marketfetch.PlanFetch{Concurrency: 1},
 		Market:   marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
 		Datasets: []marketfetch.PlanDataset{{DatasetID: "ds1", Frequency: "1m", LatenessS: 5, Copies: []marketfetch.PlanCopy{{From: 1000, Hash: "h", Count: 1, Subjects: []marketfetch.PlanSubject{{ID: "BTC-USDT", Index: 0}}}}}}}
-	content := marketfetch.FetchPlanContent{
-		Datasets:  map[string]*marketfetch.PlanDatasetChange{"ds1|1m": {PlanDatasetState: marketfetch.PlanDatasetState{DatasetID: "ds1", Frequency: "1m", Hash: "h", Count: 1, LatenessS: 5, Ingest: "stream"}, Changed: true, P: 60}},
-		Functions: map[string]*marketfetch.PlanFunctionChange{"stream-crypto-spot": {Name: "stream-crypto-spot", Executor: "stream", Market: "m", New: plan}},
+	content := fetchplan.FetchPlanContent{
+		Datasets:  map[string]*fetchplan.PlanDatasetChange{"ds1|1m": {PlanDatasetState: fetchplan.PlanDatasetState{DatasetID: "ds1", Frequency: "1m", Hash: "h", Count: 1, LatenessS: 5, Ingest: "stream"}, Changed: true, P: 60}},
+		Functions: map[string]*fetchplan.PlanFunctionChange{"stream-crypto-spot": {Name: "stream-crypto-spot", Executor: "stream", Market: "m", New: plan}},
 	}
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
@@ -41,7 +42,7 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
 	syncer := &recordingSyncer{filters: make(chan subjectsync.Filter, 1)}
-	stream := NewStreamService(db, StreamSettings{}, marketfetch.NewStreamMetrics(prometheus.NewRegistry()), syncer)
+	stream := NewStreamService(db, StreamSettings{}, fetchplan.NewStreamMetrics(prometheus.NewRegistry()), syncer)
 	service.SetStreamService(stream)
 
 	rsp, err := stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1", SentAtMs: time.Now().UnixMilli()})
@@ -52,7 +53,7 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 	applied := applyPlan(t, db, "crypto", streamPlanContent(t))
 	rsp, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1"})
 	require.Equal(t, applied.ID, rsp.GetPlanId())
-	require.Equal(t, marketfetch.StreamStageFinal, rsp.GetStage())
+	require.Equal(t, fetchplan.StreamStageFinal, rsp.GetStage())
 	pull, err := stream.PullStreamPlan(ctx, &pb.PullStreamPlanReq{SpaceId: "crypto"})
 	require.NoError(t, err)
 	require.Len(t, pull.GetItems(), 1)
@@ -63,18 +64,18 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 	require.Equal(t, marketfetch.PlanExecutorStreaming, pull.GetItems()[0].GetExecutor())
 
 	// 心跳回报已应用的版本，Collector 据此确认。
-	_, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1", AppliedPlanId: applied.ID, AppliedStage: marketfetch.StreamStageFinal,
+	_, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1", AppliedPlanId: applied.ID, AppliedStage: fetchplan.StreamStageFinal,
 		Conns: []*pb.StreamConnStatus{{Market: "spot", Frequency: "1m", Streams: 1, Reconnects: 2}}})
 	worker, err := db.StreamWorkers().Get(ctx, "crypto")
 	require.NoError(t, err)
-	var confirmed marketfetch.StreamApplied
+	var confirmed fetchplan.StreamApplied
 	require.NoError(t, json.Unmarshal([]byte(worker.Applied), &confirmed))
-	require.Equal(t, marketfetch.StreamApplied{ID: applied.ID, Stage: marketfetch.StreamStageFinal}, confirmed)
+	require.Equal(t, fetchplan.StreamApplied{ID: applied.ID, Stage: fetchplan.StreamStageFinal}, confirmed)
 
 	// 暂停：下发空计划。
 	require.NoError(t, db.FetchPlans().SetPaused(ctx, "crypto", true))
 	rsp, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1"})
-	require.Equal(t, marketfetch.StreamStagePaused, rsp.GetStage())
+	require.Equal(t, fetchplan.StreamStagePaused, rsp.GetStage())
 	pull, _ = stream.PullStreamPlan(ctx, &pb.PullStreamPlanReq{SpaceId: "crypto"})
 	require.Empty(t, pull.GetItems())
 	require.NoError(t, db.FetchPlans().SetPaused(ctx, "crypto", false))

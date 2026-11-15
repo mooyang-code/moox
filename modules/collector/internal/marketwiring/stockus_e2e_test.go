@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/stretchr/testify/require"
@@ -17,7 +18,7 @@ import (
 
 // usPlanOptions 与 Collector 装配采集计划时相同：每函数标的数、收盘后等待时间读编进二进制的 config/markets/stockus/market.yaml
 // 的 scf_plan（部署配置只写代码包与命名空间时的默认值），函数内并发由美股的路由与东方财富的限速配置推导。
-func usPlanOptions() marketfetch.PlanOptions {
+func usPlanOptions() fetchplan.PlanOptions {
 	config, err := markets.ConfigFor("stockus")
 	if err != nil {
 		panic(err)
@@ -33,15 +34,15 @@ func usPlanOptions() marketfetch.PlanOptions {
 	if err := config.SCFPlan.Decode(&plan); err != nil {
 		panic(err)
 	}
-	return marketfetch.PlanOptions{SpaceID: "stockus", Markets: map[string][]string{"equity": {"ap-nanjing"}}, DefaultLatenessS: config.AllowedLatenessSeconds,
+	return fetchplan.PlanOptions{SpaceID: "stockus", Markets: map[string][]string{"equity": {"ap-nanjing"}}, DefaultLatenessS: config.AllowedLatenessSeconds,
 		SymbolsPerFunction: plan.SymbolsPerFunction,
 		Fetch:              marketfetch.PlanFetch{RequestTimeoutMS: plan.Fetch.RequestTimeoutMS, StorageTimeoutMS: plan.Fetch.StorageTimeoutMS, NotBeforeMS: plan.Fetch.NotBeforeMS},
-		DeriveFetch:        marketfetch.RouteFetchLimits("stockus")}
+		DeriveFetch:        fetchplan.RouteFetchLimits("stockus")}
 }
 
 // usGroup 按 Collector 由任务和标签成员拼分组的做法造一个美股分组：source_id 取行情源目录的登记，
 // 传给数据源的代码由美股的标的规则换出（BRK.B.XNYS → BRK.B）。
-func usGroup(subjects ...string) marketfetch.TaskGroup {
+func usGroup(subjects ...string) fetchplan.TaskGroup {
 	symbols := make(map[string]string, len(subjects))
 	for _, subject := range subjects {
 		symbol, err := ResolveSymbol("eastmoney", "stockus", "equity", subject)
@@ -50,7 +51,7 @@ func usGroup(subjects ...string) marketfetch.TaskGroup {
 		}
 		symbols[subject] = symbol
 	}
-	return marketfetch.TaskGroup{Provider: "eastmoney", SourceID: DefaultSourceID("stockus", "eastmoney", "equity"), MarketType: "equity", MarketID: "stockus", InstrumentType: "equity",
+	return fetchplan.TaskGroup{Provider: "eastmoney", SourceID: DefaultSourceID("stockus", "eastmoney", "equity"), MarketType: "equity", MarketID: "stockus", InstrumentType: "equity",
 		DatasetID: usDataset, Frequency: "5m", Subjects: subjects, ExternalSymbols: symbols}
 }
 
@@ -65,9 +66,9 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 	group := usGroup(subjects...)
 	require.Equal(t, "stockus_http", group.SourceID, "source_id 取自行情源目录的登记")
 	require.Equal(t, "BRK.B", group.ExternalSymbols["BRK.B.XNYS"])
-	desired, err := marketfetch.BuildDesiredState(usPlanOptions(), []marketfetch.TaskGroup{group}, nil)
+	desired, err := fetchplan.BuildDesiredState(usPlanOptions(), []fetchplan.TaskGroup{group}, nil)
 	require.NoError(t, err)
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return usTime("2026-11-10 22:30:00").Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return usTime("2026-11-10 22:30:00").Unix(), nil })
 	require.NoError(t, err)
 	require.Len(t, content.Functions, 11)
 
@@ -131,10 +132,10 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 
 func usPlan(t *testing.T) (*marketfetch.Plan, string) {
 	t.Helper()
-	desired, err := marketfetch.BuildDesiredState(usPlanOptions(), []marketfetch.TaskGroup{usGroup("AAPL.XNAS", "BRK.B.XNYS")}, nil)
+	desired, err := fetchplan.BuildDesiredState(usPlanOptions(), []fetchplan.TaskGroup{usGroup("AAPL.XNAS", "BRK.B.XNYS")}, nil)
 	require.NoError(t, err)
 	// 计划份的生效起点设在这些时刻之前，返回 no_work 只可能是因为周期不是交易桶。
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return usTime("2026-10-20 00:00:00").Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return usTime("2026-10-20 00:00:00").Unix(), nil })
 	require.NoError(t, err)
 	require.Len(t, content.Functions, 1)
 	for name, function := range content.Functions {

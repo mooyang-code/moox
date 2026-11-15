@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -18,11 +19,11 @@ func (s *Service) ReregisterFetchPlan(ctx context.Context, req *pb.ReregisterFet
 		return &pb.ReregisterFetchPlanRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
 	}
 	spaceID := strings.TrimSpace(req.GetSpaceId())
-	datasets, err := marketfetch.ClearRegisteredSnapshots(ctx, s.persistence.FetchPlans(), spaceID)
+	datasets, err := fetchplan.ClearRegisteredSnapshots(ctx, s.persistence.FetchPlans(), spaceID)
 	switch {
-	case errors.Is(err, marketfetch.ErrReregisterPlanOpen):
+	case errors.Is(err, fetchplan.ErrReregisterPlanOpen):
 		return &pb.ReregisterFetchPlanRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "该空间还有未生效的采集计划，等它生效后再重新登记（moox-cli collector fetch-plan 查看进度）")}, nil
-	case errors.Is(err, marketfetch.ErrReregisterNoPlan):
+	case errors.Is(err, fetchplan.ErrReregisterNoPlan):
 		return &pb.ReregisterFetchPlanRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "该空间还没有已生效的采集计划，没有需要重新登记的数据集")}, nil
 	case err != nil:
 		log.ErrorContextf(ctx, "reregister fetch plan failed space=%s: %v", spaceID, err)

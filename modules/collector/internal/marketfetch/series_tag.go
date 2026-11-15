@@ -26,7 +26,7 @@ func realtimeBatchNoCap(marketID string) bool {
 }
 
 // collectionItemSeriesTag 返回行情序列的 series_tag：市场配了固定标签的用它，否则按数据源生成。
-func collectionItemSeriesTag(spaceID string, item domain.CollectionItem) string {
+func CollectionItemSeriesTag(spaceID string, item domain.CollectionItem) string {
 	if tag := fixedSeriesTag(spaceID); tag != "" {
 		return tag
 	}

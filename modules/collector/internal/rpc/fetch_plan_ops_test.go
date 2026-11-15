@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
@@ -59,7 +60,7 @@ func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	latest, err := db.FetchPlans().LatestApplied(ctx, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, applied.ID, latest.ID, "改写的是已生效计划本身，不新建计划")
-	content, err := marketfetch.DecodeFetchPlanContent(latest.Plan)
+	content, err := fetchplan.DecodeFetchPlanContent(latest.Plan)
 	require.NoError(t, err)
 	require.Empty(t, content.Datasets["ds1|1m"].Hash)
 	require.Empty(t, content.Datasets["ds2|1h"].Hash)
@@ -82,7 +83,7 @@ func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	mark, err := db.Backfill().Watermark(ctx, "stockcn", "ds1", "1m")
 	require.NoError(t, err)
 	require.True(t, mark.Equal(oldWatermark))
-	untouched, err := marketfetch.DecodeFetchPlanContent(other.Plan)
+	untouched, err := fetchplan.DecodeFetchPlanContent(other.Plan)
 	require.NoError(t, err)
 	require.Equal(t, "h1", untouched.Datasets["ds1|1m"].Hash)
 }
@@ -140,7 +141,7 @@ func TestReregisterFetchPlanRefusesWithoutAppliedPlanOrWithAnOpenPlan(t *testing
 	require.Contains(t, rsp.GetRetInfo().GetMsg(), "未生效")
 	latest, err := db.FetchPlans().LatestApplied(ctx, "crypto")
 	require.NoError(t, err)
-	content, err := marketfetch.DecodeFetchPlanContent(latest.Plan)
+	content, err := fetchplan.DecodeFetchPlanContent(latest.Plan)
 	require.NoError(t, err)
 	require.Equal(t, applied.ID, latest.ID)
 	require.Equal(t, "h1", content.Datasets["ds1|1m"].Hash, "拒绝时不改计划")
@@ -188,13 +189,13 @@ func TestGetCollectorStatusSummarizesPlanAndDatasetHealth(t *testing.T) {
 // 函数详情：每个数据集上本函数负责的标的取当前生效的那份快照。
 func TestPlanFunctionsListSubjectsPerDataset(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
-	options := marketfetch.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
-	desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{{
+	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
+	desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{{
 		Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
 		Subjects: []string{"BTC-USDT", "ETH-USDT"},
 	}}, nil)
 	require.NoError(t, err)
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)

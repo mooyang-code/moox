@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -25,7 +25,7 @@ func newTestSyncer(t *testing.T) (*Syncer, *fakeTagStore, *fakeRunStore, *fakeAt
 	runs := newFakeRunStore()
 	for _, tag := range tags[:3] {
 		tag.UpdatedAt = "2026-09-01 00:00:00"
-		runs.runs[tag.TagId] = store.TagSyncRun{SpaceID: tag.SpaceId, TagID: tag.TagId, LastRunAt: justRun, LastStatus: store.TagSyncSuccess}
+		runs.runs[tag.TagId] = domain.TagSyncRun{SpaceID: tag.SpaceId, TagID: tag.TagId, LastRunAt: justRun, LastStatus: domain.TagSyncSuccess}
 	}
 	tagStore := &fakeTagStore{tags: tags, applied: map[string]int{}}
 	listers := Listers{

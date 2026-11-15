@@ -3,7 +3,7 @@ package subjectsync
 import (
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -34,7 +34,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 	return m
 }
 
-func (m *Metrics) observeTagInventory(tag *pb.Tag, run *store.TagSyncRun) {
+func (m *Metrics) observeTagInventory(tag *pb.Tag, run *domain.TagSyncRun) {
 	if m == nil || tag == nil {
 		return
 	}

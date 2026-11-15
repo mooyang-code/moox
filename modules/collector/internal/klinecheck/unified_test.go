@@ -8,9 +8,8 @@ import (
 	"testing"
 	"time"
 
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -90,7 +89,7 @@ type tagHealingInvoker struct {
 	events []map[string]any
 }
 
-func (h *tagHealingInvoker) Invoke(_ context.Context, _, _ string, event map[string]any, _ cloudfunctionpb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
+func (h *tagHealingInvoker) Invoke(_ context.Context, _, _ string, event map[string]any) (marketfetch.InvocationResult, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.events = append(h.events, event)
@@ -105,7 +104,7 @@ func (h *tagHealingInvoker) Invoke(_ context.Context, _, _ string, event map[str
 		h.rows.writes = append(h.rows.writes, tag+"|"+subject)
 		delete(h.rows.missing[tag][subject], at.Unix())
 	}
-	return scfinvoker.InvocationResult{Result: map[string]any{"success": true}}, nil
+	return marketfetch.InvocationResult{Result: map[string]any{"success": true}}, nil
 }
 
 // newUnifiedFixture 建一个统一数据集：BTC、ETH 都有现货与永续序列，永续的 BTC 缺 3～5 分钟。
@@ -124,14 +123,14 @@ func newUnifiedFixtureWithDB(t *testing.T) (*Backfiller, *tagHealingInvoker, *se
 	const slot = 5 * time.Minute
 	now := time.Now().UTC().Add(slot).Truncate(slot).Add(3 * time.Minute)
 	base := now.Add(-48*time.Hour - 3*time.Minute)
-	options := marketfetch.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}, "swap": {"ap-hongkong"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
+	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}, "swap": {"ap-hongkong"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
 	subjects := []string{"BTC-USDT", "ETH-USDT"}
-	desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{
+	desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{
 		{Provider: "binance", SourceID: "spot_http", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m", Subjects: subjects},
 		{Provider: "binance", SourceID: "swap_http", MarketType: "swap", MarketID: "crypto", InstrumentType: "perpetual", DatasetID: "ds", Frequency: "1m", Subjects: subjects},
 	}, nil)
 	require.NoError(t, err)
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)

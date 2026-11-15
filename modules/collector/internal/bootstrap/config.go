@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/eventbus"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -26,11 +26,11 @@ type Config struct {
 	Database      DatabaseConfig                   `yaml:"database"`
 	SCFAccess     gatewayclient.ExternalFileConfig `yaml:"scf_access"`
 	// SCFRegions 是各地域的函数网络；SCFMarkets 是每个空间、市场使用的地域；SCFPlan 是函数部署参数。
-	SCFRegions         map[string]marketfetch.PlanNetwork `yaml:"scf_regions"`
-	SCFMarkets         map[string]map[string][]string     `yaml:"scf_markets"`
-	SCFPlan            SCFPlanConfig                      `yaml:"scf_plan"`
-	CollectorRetention CollectorRetentionConfig           `yaml:"collector_retention"`
-	KlineResample      KlineResampleConfig                `yaml:"kline_resample"`
+	SCFRegions         map[string]fetchplan.PlanNetwork `yaml:"scf_regions"`
+	SCFMarkets         map[string]map[string][]string   `yaml:"scf_markets"`
+	SCFPlan            SCFPlanConfig                    `yaml:"scf_plan"`
+	CollectorRetention CollectorRetentionConfig         `yaml:"collector_retention"`
+	KlineResample      KlineResampleConfig              `yaml:"kline_resample"`
 	// EventBus 是 Collector 到 EventBus 的连接，K 线合成与下架检测共用；不配置时不发布任何事件，合成只靠兜底检查。
 	EventBus    eventbus.Config   `yaml:"event_bus"`
 	Health      HealthConfig      `yaml:"health"`
@@ -262,7 +262,7 @@ func (c *Config) validateCollectorRetention() error {
 	}
 	offset, offsetErr := time.ParseDuration(strings.TrimSpace(retention.MaintenanceOffset))
 	timeout, timeoutErr := time.ParseDuration(strings.TrimSpace(retention.MaintenanceTimeout))
-	if offsetErr != nil || timeoutErr != nil || marketfetch.ValidateMaintenanceSchedule(interval, offset, timeout) != nil {
+	if offsetErr != nil || timeoutErr != nil || fetchplan.ValidateMaintenanceSchedule(interval, offset, timeout) != nil {
 		return fmt.Errorf("collector_retention.maintenance_offset and maintenance_timeout must keep each pass inside one interval: 0 <= offset < interval and offset + timeout <= interval")
 	}
 	if retention.MaxRowsPerPass < 1 || retention.MaxRowsPerPass > 50000 {

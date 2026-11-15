@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/prometheus/client_golang/prometheus"
@@ -23,7 +23,7 @@ func TestObserveCollectorMaintenanceSpaceRefreshesMetricsAndReportsFailure(t *te
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	reg := prometheus.NewRegistry()
-	m := marketfetch.NewMetrics(reg)
+	m := fetchplan.NewControlMetrics(reg)
 	now := time.Now().UTC()
 	require.NoError(t, observeCollectorMaintenanceSpace(context.Background(), db, m, "crypto", now, map[string]int64{"backfill_notices": 2}))
 	families, err := reg.Gather()

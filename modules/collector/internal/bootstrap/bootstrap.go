@@ -13,8 +13,8 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/attention"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/eastmoneylimit"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
@@ -94,22 +94,13 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector dataset metrics: %w", err)
 	}
-	moduleMetrics, err := report.NewModuleMetrics(
+	// 模块指标只注册（保持 /metrics 的指标名不变），Collector 里目前没有往里写的地方。
+	if _, err := report.NewModuleMetrics(
 		prometheus.DefaultRegisterer,
 		"collector",
 		report.HealthCheckIDsForModule("collector"),
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("initialize collector module metrics: %w", err)
-	}
-	datasetRunObserver, err := report.NewDatasetModuleObserver(
-		datasetMetrics,
-		moduleMetrics,
-		"collect",
-		"collector-market-data",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("initialize collector run metrics: %w", err)
 	}
 	realtimeInventory := collectorobservability.NewRealtimeInventory(dbm.Tasks(), datasetMetrics)
 	realtimeInventory.SetResampleEnabled(cfg.KlineResample.Enabled)
@@ -133,15 +124,14 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		FieldOffers: marketwiring.FieldOffers(),
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
-	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
-	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
+	marketFetchMetrics := fetchplan.NewControlMetrics(prometheus.DefaultRegisterer)
 	subjectSyncer, err := registerSubjectSyncRuntime(s, cfg, process, dbm.TagSyncRuns())
 	if err != nil {
 		return nil, err
 	}
 	svc.SetSubjectSyncer(subjectSyncer)
 	streamService := collectsvc.NewStreamService(dbm, collectsvc.StreamSettings{HeartbeatTimeout: time.Duration(cfg.Stream.HeartbeatTimeoutSeconds) * time.Second, CommitReserveMS: cfg.Stream.CommitReserveMS},
-		marketfetch.NewStreamMetrics(prometheus.DefaultRegisterer), subjectSyncer)
+		fetchplan.NewStreamMetrics(prometheus.DefaultRegisterer), subjectSyncer)
 	streamServer := s.Service("trpc.moox.collector.StreamCollector")
 	if streamServer == nil {
 		return nil, fmt.Errorf("trpc_go.yaml 缺少 trpc.moox.collector.StreamCollector 服务")
@@ -356,7 +346,7 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State)
 // registerCollectorBackground 启动 Collector 的后台任务：K 线重采样与保留期清理。
 // 维护与清理每轮现取管理集合（managedSpaces，与采集计划同一份名单）；合成覆盖 barclock 登记的全部市场。
 // 实时行情采集已全部由 SCF 定时器按采集计划触发（见 registerFetchPlanManager），这里不再有任何行情调度。
-func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, metrics *marketfetch.Metrics, process *Runtime, bus *eventBusRuntime) {
+func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, metrics *fetchplan.ControlMetrics, process *Runtime, bus *eventBusRuntime) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
@@ -373,7 +363,7 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 	}
 	maintenanceSpaceCursor := 0
 	retentionConfig := cfg.CollectorRetention
-	maintenanceRunner := marketfetch.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.offset(), retentionConfig.timeout(), func(passCtx context.Context) error {
+	maintenanceRunner := fetchplan.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.offset(), retentionConfig.timeout(), func(passCtx context.Context) error {
 		now := time.Now().UTC()
 		var passErrors []error
 		// 先封存搁置的补写通知再清理：合成关闭时没有合成定时器来封存，补采作业结束时那一次失败的话只剩这里兜底，
@@ -447,7 +437,7 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 	}
 }
 
-func observeCollectorMaintenanceSpace(ctx context.Context, db *store.Store, metrics *marketfetch.Metrics, spaceID string, now time.Time, deleted map[string]int64) error {
+func observeCollectorMaintenanceSpace(ctx context.Context, db *store.Store, metrics *fetchplan.ControlMetrics, spaceID string, now time.Time, deleted map[string]int64) error {
 	metrics.ObserveMaintenanceDeletes(spaceID, deleted)
 	statsCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()

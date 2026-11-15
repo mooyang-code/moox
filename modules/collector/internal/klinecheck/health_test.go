@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -64,8 +64,8 @@ func TestFormatDuration(t *testing.T) {
 // 低频数据集整点刚过、扫描槽还没到时，水位比“应扫到的时间”落后一个周期是正常的，不算滞后。
 func TestHealthLagIsMeasuredFromWhenTheNextBarBecomesScannable(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
-	content := &marketfetch.FetchPlanContent{Datasets: map[string]*marketfetch.PlanDatasetChange{}, Functions: map[string]*marketfetch.PlanFunctionChange{}}
-	change := &marketfetch.PlanDatasetChange{Changed: true, HashChanged: true, P: base.Unix()}
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDatasetChange{Changed: true, HashChanged: true, P: base.Unix()}
 	change.DatasetID, change.Frequency, change.LatenessS, change.Hash = "ds", "1h", 60, "hash:BTC-USDT"
 	change.Series = append(change.Series, seriesOf("BTC-USDT"))
 	content.Datasets["ds|1h"] = change

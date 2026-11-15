@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	useastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/eastmoney"
@@ -421,7 +422,7 @@ func TestStockUSRequestsUseExchangeAndDottedCode(t *testing.T) {
 func TestStockUSSingleSourceBreakerThreshold(t *testing.T) {
 	t.Setenv("MOOX_FETCH_HTTP_MAX_ATTEMPTS", "")
 	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
-	planned := marketfetch.RouteFetchLimits("stockus")(marketfetch.TaskGroup{Frequency: "5m"}, marketfetch.PlanFetch{})
+	planned := fetchplan.RouteFetchLimits("stockus")(fetchplan.TaskGroup{Frequency: "5m"}, marketfetch.PlanFetch{})
 	require.Equal(t, 16, planned.FeedConcurrency, "采集计划给美股的源并发")
 	require.Equal(t, 16, planned.Concurrency, "一个函数内同时处理的标的数")
 	threshold := func(limits *marketfetch.FeedLimits) int {

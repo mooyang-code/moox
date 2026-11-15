@@ -10,7 +10,7 @@ type SourceIDResolver func(marketID, provider, instrumentType string) string
 
 // DefaultProviderSymbol 按市场的标的规则把标的 ID 换成传给数据源的代码；marketType 为空时用市场的默认品种。
 func DefaultProviderSymbol(marketID, marketType, subjectID string) (string, error) {
-	instrumentType, err := defaultInstrumentType(marketID, marketType)
+	instrumentType, err := DefaultInstrumentType(marketID, marketType)
 	if err != nil {
 		return "", err
 	}
@@ -21,7 +21,7 @@ func DefaultProviderSymbol(marketID, marketType, subjectID string) (string, erro
 	return subject.Code, nil
 }
 
-func resolveProviderSymbol(resolver SymbolResolver, provider, marketID, marketType, subjectID string) (string, error) {
+func ResolveProviderSymbol(resolver SymbolResolver, provider, marketID, marketType, subjectID string) (string, error) {
 	if resolver != nil {
 		return resolver(provider, marketID, marketType, subjectID)
 	}

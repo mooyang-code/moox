@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
@@ -77,18 +77,18 @@ func DatasetKey(datasetID, frequency string) string { return datasetID + "|" + f
 // BuildTimeline 由采集计划还原历史上每段时间应有的标的：已生效的计划，
 // 以及已确认登记快照（P 已确定）的未生效计划。
 //
-// 一份计划里有被清空 hash 的数据集（marketfetch.FetchPlanContent.ClearedDatasets）表示该空间的 Storage 已被整体清空、
+// 一份计划里有被清空 hash 的数据集（fetchplan.FetchPlanContent.ClearedDatasets）表示该空间的 Storage 已被整体清空、
 // 正在重新登记：此前的全部计划段连同数据一起作废，包括已退役的数据集（它们以后重新启用时同样从新的生效周期开始）。
 // 每个数据集的时间线从重新登记后的新生效周期开始，新快照登记之前没有任何计划段，所以检查、自动补采与历史扫描的起点
 // （最早一段的 From）都是清库后的新生效点。
 func BuildTimeline(records []*store.FetchPlanRecord) (Timeline, error) {
 	timeline := Timeline{}
 	for _, record := range records {
-		content, err := marketfetch.DecodeFetchPlanContent(record.Plan)
+		content, err := fetchplan.DecodeFetchPlanContent(record.Plan)
 		if err != nil {
 			return nil, err
 		}
-		progress, err := marketfetch.DecodeFetchPlanProgress(record.Progress)
+		progress, err := fetchplan.DecodeFetchPlanProgress(record.Progress)
 		if err != nil {
 			return nil, err
 		}

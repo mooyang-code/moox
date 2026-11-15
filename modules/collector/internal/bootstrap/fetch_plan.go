@@ -7,9 +7,10 @@ import (
 	"sync"
 	"time"
 
+	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/egressbalance"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
-	"github.com/mooyang-code/moox/modules/collector/internal/localexec"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
@@ -46,7 +47,7 @@ func managedSpaces(ctx context.Context, cfg *Config, dbm *store.Store) ([]string
 }
 
 // registerFetchPlanManager 启动采集计划对账：管理集合里的每个空间一个独立协程。对账器始终启动，推送采集不依赖云函数配置。
-func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl, bus *eventBusRuntime) error {
+func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *fetchplan.ControlMetrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl, bus *eventBusRuntime) error {
 	managed := func(ctx context.Context) ([]string, error) { return managedSpaces(ctx, cfg, dbm) }
 	// 启动时先逐个云函数空间检查部署参数，配置错误尽早暴露。
 	for _, space := range cfg.scfSpaces() {
@@ -71,7 +72,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	// 应有时间点与函数侧同一套过滤：只有该市场此频率的交易桶才应有 K 线。
 	checker.Calendar = markets.TradingBar
 	backfiller := &klinecheck.Backfiller{
-		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: invoker, BaseCtx: process.ctx, Refill: true,
+		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: scfBackfillInvoker{client: invoker}, BaseCtx: process.ctx, Refill: true,
 		Paused: func(ctx context.Context, spaceID string) (bool, error) {
 			space := strings.ToLower(spaceID)
 			manual, err := dbm.FetchPlans().ManuallyPausedSpaces(ctx)
@@ -99,7 +100,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		},
 		Functions: func(spaceID string) klinecheck.FunctionProvider {
 			if value, ok := reconcilers.Load(spaceID); ok {
-				return value.(*marketfetch.PlanReconciler)
+				return value.(*fetchplan.PlanReconciler)
 			}
 			return nil
 		},
@@ -114,7 +115,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			}
 			return marketfetch.PlanExecutorSCF, nil
 		},
-		Local: &localexec.Client{Gateway: process.gateway},
+		Local: &fetchplan.LocalExecutorClient{Gateway: process.gateway},
 		// 收市后整天重取：时刻取各市场 market.yaml 的 refetch_after_close_minutes，没配的市场不做。
 		CloseRefetch: markets.CloseRefetchDay, RefetchFrequency: routedFrequency,
 	}
@@ -125,7 +126,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })
 	svc.SetKlineOps(backfiller)
 	svc.SetActivityLogger(invoker)
-	manager := &marketfetch.PlanManager{
+	manager := &fetchplan.PlanManager{
 		Configured: managed,
 		Spaces: func(ctx context.Context) ([]string, error) {
 			// 运行集合：管理集合 ∩ Admin 中仍启用的空间 − 暂停的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
@@ -150,31 +151,31 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			}
 			return running, nil
 		},
-		Factory: func(spaceID string) (*marketfetch.PlanReconciler, error) {
+		Factory: func(spaceID string) (*fetchplan.PlanReconciler, error) {
 			latenessSeconds, err := defaultLatenessSeconds(spaceID)
 			if err != nil {
 				return nil, err
 			}
-			options := marketfetch.PlanOptions{
+			options := fetchplan.PlanOptions{
 				StreamLatenessS: cfg.Stream.LatenessS,
 				SpaceID:         spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
 				Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
 				DefaultLatenessS: latenessSeconds, MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
 			}
 			// 有路由文件的市场，函数内并发等 fetch 参数由各源的限速配置推导，不在计划配置里手填；没有路由文件的市场保持配置值。
-			options.DeriveFetch = marketfetch.RouteFetchLimits(spaceID)
+			options.DeriveFetch = fetchplan.RouteFetchLimits(spaceID)
 			// 每函数标的数的估算看 market.yaml 的 scf_plan.auto_size 配没配；同样只对有路由文件的市场算得出来。
 			if sizing := cfg.SCFPlan.autoSizing(spaceID); sizing != nil {
-				options.AutoSize = marketfetch.RouteAutoSize(spaceID, *sizing)
+				options.AutoSize = fetchplan.RouteAutoSize(spaceID, *sizing)
 			}
 			deploy, err := cfg.fetchPlanDeploy(spaceID)
 			if err != nil {
 				return nil, err
 			}
-			reconciler := &marketfetch.PlanReconciler{
+			reconciler := &fetchplan.PlanReconciler{
 				Preflight: calendarPreflight(spaceID),
 				SpaceID:   spaceID, Options: options, Deploy: deploy,
-				Groups: &marketfetch.GroupBuilder{
+				Groups: &fetchplan.GroupBuilder{
 					Tasks: dbm.Tasks(), Symbols: source, ResolveSourceID: marketwiring.DefaultSourceID, ResolveSymbol: marketwiring.ResolveSymbol,
 				},
 				Store: dbm.FetchPlans(), Storage: registrar, Cloud: invoker, Access: cfg.scfPlanAccessEnvironment, Lateness: results,
@@ -278,4 +279,12 @@ func calendarPreflight(spaceID string) func(context.Context) error {
 		}
 		return nil
 	}
+}
+
+// scfBackfillInvoker 让云函数客户端满足补采的同步调用接口：固定用同步调用（等函数返回）。
+type scfBackfillInvoker struct{ client *scfinvoker.Client }
+
+func (i scfBackfillInvoker) Invoke(ctx context.Context, spaceID, functionName string, event map[string]any) (marketfetch.InvocationResult, error) {
+	result, err := i.client.Invoke(ctx, spaceID, functionName, event, cloudfunctionpb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
+	return marketfetch.InvocationResult(result), err
 }

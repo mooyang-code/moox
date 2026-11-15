@@ -11,23 +11,19 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// InvocationMetrics is the shared short-lived metrics composition used by
-// stockcn and crypto SCF handlers. Each invocation owns a fresh
-// registry, so a warm SCF cannot publish stale counters from an earlier task.
+// InvocationMetrics 是云函数一次调用的指标上报。每次调用用一个新的注册表，
+// 热启动的函数不会把上一次调用的计数带出去。
 type InvocationMetrics struct {
-	Metrics  *Metrics
 	Reporter MetricsReporter
 }
 
-// NewInvocationMetrics creates the local market metrics and, when the
-// observability EventBus is configured, a one-shot reporter consumed by
-// Monitor. No implicit localhost EventBus connection is attempted in SCF.
+// NewInvocationMetrics 在配置了观测用的 EventBus 时创建一次性的上报器（Monitor 消费）；
+// 没有配置时不上报，也不会隐式连接本机的 EventBus。
 func NewInvocationMetrics(functionName, spaceID string) (*InvocationMetrics, error) {
-	registry := prometheus.NewRegistry()
-	metrics := NewMetrics(registry)
 	if !metricsEventBusConfigured() {
-		return &InvocationMetrics{Metrics: metrics}, nil
+		return &InvocationMetrics{}, nil
 	}
+	registry := prometheus.NewRegistry()
 	functionName = strings.TrimSpace(functionName)
 	if functionName == "" {
 		return nil, fmt.Errorf("SCF function name is required for metrics identity")
@@ -44,7 +40,7 @@ func NewInvocationMetrics(functionName, spaceID string) (*InvocationMetrics, err
 	if err != nil {
 		return nil, fmt.Errorf("create SCF metrics reporter: %w", err)
 	}
-	return &InvocationMetrics{Metrics: metrics, Reporter: reporter}, nil
+	return &InvocationMetrics{Reporter: reporter}, nil
 }
 
 func metricsEventBusConfigured() bool {

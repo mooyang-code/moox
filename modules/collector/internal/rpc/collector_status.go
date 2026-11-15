@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -132,7 +133,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 // 这期间数据集在时间线上没有计划段，数据集健康里看不到它们，实时提交又因快照缺失被拒绝，只能在这里报出来；
 // 通常是对账建不出新计划（例如预检失败、取不到标的）。applied 的更新时间就是重新登记的时间。
 func reregisterStalled(applied *store.FetchPlanRecord, now time.Time) (string, error) {
-	content, err := marketfetch.DecodeFetchPlanContent(applied.Plan)
+	content, err := fetchplan.DecodeFetchPlanContent(applied.Plan)
 	if err != nil {
 		return "", err
 	}
@@ -169,11 +170,11 @@ func datasetStatusToPB(item klinecheck.DatasetHealth, functions int) *pb.Collect
 
 // planFunctions 返回计划里每个函数的分配与状态，下发中的排前。
 func planFunctions(source *store.FetchPlanRecord) ([]*pb.CollectorFunctionStatus, error) {
-	content, err := marketfetch.DecodeFetchPlanContent(source.Plan)
+	content, err := fetchplan.DecodeFetchPlanContent(source.Plan)
 	if err != nil {
 		return nil, err
 	}
-	progress, err := marketfetch.DecodeFetchPlanProgress(source.Progress)
+	progress, err := fetchplan.DecodeFetchPlanProgress(source.Progress)
 	if err != nil {
 		return nil, err
 	}

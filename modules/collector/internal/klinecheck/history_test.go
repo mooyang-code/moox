@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -180,8 +180,8 @@ func TestConfirmHistoryCreatesAJobForTheScannedGaps(t *testing.T) {
 // goneRecord 构造把数据集移出采集计划的记录（任务删除后对账产生）。
 func goneRecord(t *testing.T, id int64, dataset string, p int64) *store.FetchPlanRecord {
 	t.Helper()
-	content := &marketfetch.FetchPlanContent{Datasets: map[string]*marketfetch.PlanDatasetChange{}, Functions: map[string]*marketfetch.PlanFunctionChange{}}
-	change := &marketfetch.PlanDatasetChange{Changed: true, Gone: true, P: p}
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDatasetChange{Changed: true, Gone: true, P: p}
 	change.DatasetID, change.Frequency = dataset, "1m"
 	content.Datasets[dataset+"|1m"] = change
 	return &store.FetchPlanRecord{ID: id, SpaceID: "crypto", Status: store.FetchPlanApplied, Plan: mustJSON(content), Progress: "{}"}

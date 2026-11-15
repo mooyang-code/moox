@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
@@ -75,7 +75,7 @@ func (s *Service) resampleSourceOf(ctx context.Context, spaceID, sourceTaskID st
 				return resampleSource{}, fmt.Errorf("load source tag %s: %v", tagID, tagErr)
 			}
 			route := sourceRoute{provider: tagattr.Source(tag), marketType: tagattr.MarketType(tag)}
-			seriesTag, tagErr := marketfetch.TaskSeriesTag(task.SpaceID, params, route.provider, route.marketType, s.sourceIDResolver)
+			seriesTag, tagErr := fetchplan.TaskSeriesTag(task.SpaceID, params, route.provider, route.marketType, s.sourceIDResolver)
 			if tagErr != nil {
 				return resampleSource{}, fmt.Errorf("源任务 %q 的序列标签：%w", sourceTaskID, tagErr)
 			}

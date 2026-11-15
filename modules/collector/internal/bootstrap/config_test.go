@@ -11,7 +11,7 @@ import (
 	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/security"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -313,7 +313,7 @@ func TestLoadSubjectSyncFromCollectorConfig(t *testing.T) {
 func TestSCFPlanConfigValidation(t *testing.T) {
 	valid := func() *Config {
 		cfg := Default()
-		cfg.SCFRegions = map[string]marketfetch.PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}}
+		cfg.SCFRegions = map[string]fetchplan.PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}}
 		cfg.SCFPlan.AccessRoutes = map[string]SCFAccessEndpoint{"ap-nanjing": {Address: "10.0.0.5:11004", InstanceID: "access@storage"}}
 		cfg.SCFMarkets = map[string]map[string][]string{"crypto": {"spot": {"ap-nanjing"}}}
 		cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageID, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "scf-env.json"
@@ -439,7 +439,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		require.Equal(t, []string{"stockcn"}, cfg.scfSpaces(), "只配置 stockcn 也要启动管理器")
 		sizing := cfg.SCFPlan.autoSizing("stockcn")
 		require.NotNil(t, sizing, "A 股默认按配置估算每函数标的数")
-		require.Equal(t, marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, *sizing)
+		require.Equal(t, fetchplan.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, *sizing)
 		require.Equal(t, 800, cfg.SCFPlan.fetchFor("stockcn", "").NotBeforeMS, "A 股收盘后 0.8 秒取数")
 		balance := cfg.SCFPlan.Spaces["stockcn"].EgressBalance
 		require.NotNil(t, balance, "A 股默认新建函数后去重出口 IP")

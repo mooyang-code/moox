@@ -162,7 +162,7 @@ func (r *FetchPlanRepository) SavePlan(ctx context.Context, id int64, plan strin
 }
 
 // UpdateAppliedPlan 改写一份已生效计划的内容。只给维护命令用：Storage 数据被清空后，把数据集标记为“快照未登记”，
-// 让下一轮对账重新登记（见 marketfetch.ClearRegisteredSnapshots）。普通流程只改未生效的计划（SavePlan）。
+// 让下一轮对账重新登记（见 fetchplan.ClearRegisteredSnapshots）。普通流程只改未生效的计划（SavePlan）。
 func (r *FetchPlanRepository) UpdateAppliedPlan(ctx context.Context, id int64, plan string) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("fetch plan repository is not initialized")

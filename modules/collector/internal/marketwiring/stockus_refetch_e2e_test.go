@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
@@ -128,9 +129,9 @@ func newUSRefetchHarness(t *testing.T, subjects []string, serveByCode func(code 
 	h.db = db
 
 	// 采集计划：真实的生成逻辑，一个数据集，2026-10-20 开盘起生效（早于所有用例的交易日）。
-	desired, err := marketfetch.BuildDesiredState(usPlanOptions(), []marketfetch.TaskGroup{usGroup(subjects...)}, nil)
+	desired, err := fetchplan.BuildDesiredState(usPlanOptions(), []fetchplan.TaskGroup{usGroup(subjects...)}, nil)
 	require.NoError(t, err)
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return usTime("2026-10-20 00:00:00").Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return usTime("2026-10-20 00:00:00").Unix(), nil })
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)

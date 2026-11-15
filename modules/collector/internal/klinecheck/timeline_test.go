@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/stretchr/testify/require"
 )
 
-// recordedPlans 是内存里按 ID 排列的计划记录，同时满足时间线读取与 marketfetch.ClearRegisteredSnapshots 的改写接口。
+// recordedPlans 是内存里按 ID 排列的计划记录，同时满足时间线读取与 fetchplan.ClearRegisteredSnapshots 的改写接口。
 type recordedPlans struct{ records []*store.FetchPlanRecord }
 
 func (p *recordedPlans) ListAll(context.Context, string) ([]*store.FetchPlanRecord, error) {
@@ -47,7 +47,7 @@ func (p *recordedPlans) UpdateAppliedPlan(_ context.Context, id int64, plan stri
 // reregister 按 ReregisterFetchPlan 的真实步骤清空最近一份已生效计划里的数据集 hash。
 func reregister(t *testing.T, plans *recordedPlans) {
 	t.Helper()
-	keys, err := marketfetch.ClearRegisteredSnapshots(context.Background(), plans, "crypto")
+	keys, err := fetchplan.ClearRegisteredSnapshots(context.Background(), plans, "crypto")
 	require.NoError(t, err)
 	require.NotEmpty(t, keys)
 }

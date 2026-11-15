@@ -11,12 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -100,9 +99,9 @@ type FunctionProvider interface {
 	EnsureBackfillFunction(ctx context.Context, marketType string) (string, error)
 }
 
-// Invoker 同步调用函数。
+// Invoker 同步调用补采执行端（云函数或本地执行端）并等它返回。
 type Invoker interface {
-	Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudfunctionpb.ScfInvokeType) (scfinvoker.InvocationResult, error)
+	Invoke(ctx context.Context, spaceID, functionName string, event map[string]any) (marketfetch.InvocationResult, error)
 }
 
 // Backfiller 管理补采作业：展开分块、通过补采函数执行、复查缺口。
@@ -423,7 +422,7 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 	}
 	key := DatasetKey(datasetID, frequency)
 	// resolve 返回选中的计划；标的的符号映射按原始新旧计划与时间重新判定，避免过渡计划合并后的映射用错。
-	resolve := func(content *marketfetch.FetchPlanContent, function *marketfetch.PlanFunctionChange, plan *marketfetch.Plan) *marketfetch.Plan {
+	resolve := func(content *fetchplan.FetchPlanContent, function *fetchplan.PlanFunctionChange, plan *marketfetch.Plan) *marketfetch.Plan {
 		symbol, ok := content.SymbolAt(function, key, subjectID, at)
 		if !ok || plan.ExchangeSymbol(subjectID) == symbol {
 			return plan
@@ -436,9 +435,9 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 		patched.SymbolExceptions[subjectID] = symbol
 		return &patched
 	}
-	contents := make([]*marketfetch.FetchPlanContent, len(records))
+	contents := make([]*fetchplan.FetchPlanContent, len(records))
 	for i := range records {
-		content, err := marketfetch.DecodeFetchPlanContent(records[i].Plan)
+		content, err := fetchplan.DecodeFetchPlanContent(records[i].Plan)
 		if err != nil {
 			return nil, err
 		}
@@ -609,7 +608,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		return
 	}
 	callCtx, cancel := context.WithTimeout(ctx, chunkInvokeLimit)
-	result, err := invoker.Invoke(callCtx, spaceID, functionName, event, cloudfunctionpb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
+	result, err := invoker.Invoke(callCtx, spaceID, functionName, event)
 	cancel()
 	if err != nil {
 		// 同步调用超时或断连时结果不明：不标记失败，名额保留到最迟结束时间后，由重新认领再执行。
@@ -669,7 +668,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 }
 
 // sourceReportedEmpty 判断函数的失败是否仅因行情源返回了空结果（没有已收盘的 K 线）。
-func sourceReportedEmpty(result scfinvoker.InvocationResult) bool {
+func sourceReportedEmpty(result marketfetch.InvocationResult) bool {
 	text := strings.ToLower(fmt.Sprintf("%s %v", result.Message, result.Result))
 	return strings.Contains(text, strings.ToLower(marketdata.ErrNoClosedBar.Error()))
 }

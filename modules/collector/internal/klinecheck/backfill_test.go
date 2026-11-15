@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/stretchr/testify/require"
@@ -38,21 +37,21 @@ type healingInvoker struct {
 	healOne bool
 }
 
-func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string]any, _ cloudfunctionpb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
+func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string]any) (marketfetch.InvocationResult, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.events = append(h.events, event)
 	if h.err != nil {
-		return scfinvoker.InvocationResult{}, h.err
+		return marketfetch.InvocationResult{}, h.err
 	}
 	if h.fail {
-		return scfinvoker.InvocationResult{Result: map[string]any{"success": false, "message": "provider error"}}, nil
+		return marketfetch.InvocationResult{Result: map[string]any{"success": false, "message": "provider error"}}, nil
 	}
 	if h.sourceEmpty {
-		return scfinvoker.InvocationResult{Result: map[string]any{"success": false, "message": "item failed: no closed bar"}}, nil
+		return marketfetch.InvocationResult{Result: map[string]any{"success": false, "message": "item failed: no closed bar"}}, nil
 	}
 	if h.noWrite {
-		return scfinvoker.InvocationResult{Result: map[string]any{"success": true}}, nil
+		return marketfetch.InvocationResult{Result: map[string]any{"success": true}}, nil
 	}
 	data := event["data"].(map[string]any)
 	item := data["items"].([]any)[0].(map[string]any)
@@ -70,7 +69,7 @@ func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string
 		}
 	}
 	h.rows.mu.Unlock()
-	return scfinvoker.InvocationResult{Result: map[string]any{"success": true}}, nil
+	return marketfetch.InvocationResult{Result: map[string]any{"success": true}}, nil
 }
 
 func newBackfillFixture(t *testing.T) (*Backfiller, *healingInvoker, *fakeRows, time.Time) {
@@ -78,7 +77,7 @@ func newBackfillFixture(t *testing.T) (*Backfiller, *healingInvoker, *fakeRows, 
 	return newBackfillFixtureWithModes(t, nil)
 }
 
-func newBackfillFixtureWithModes(t *testing.T, modes map[string]marketfetch.DatasetMode) (*Backfiller, *healingInvoker, *fakeRows, time.Time) {
+func newBackfillFixtureWithModes(t *testing.T, modes map[string]fetchplan.DatasetMode) (*Backfiller, *healingInvoker, *fakeRows, time.Time) {
 	t.Helper()
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
 	require.NoError(t, err)
@@ -90,13 +89,13 @@ func newBackfillFixtureWithModes(t *testing.T, modes map[string]marketfetch.Data
 	const slot = 5 * time.Minute
 	now := time.Now().UTC().Add(slot).Truncate(slot).Add(3 * time.Minute)
 	base := now.Add(-48*time.Hour - 3*time.Minute)
-	options := marketfetch.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}, Modes: modes}
-	desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{{
+	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}, Modes: modes}
+	desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{{
 		Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
 		Subjects: []string{"BTC-USDT", "ETH-USDT"},
 	}}, nil)
 	require.NoError(t, err)
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
@@ -474,25 +473,25 @@ func TestDatasetMarketRefusesHistoryBeforeAMappingOnlyChange(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	base := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
-	options := marketfetch.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
-	build := func(previous *marketfetch.FetchPlanContent, external string) *marketfetch.FetchPlanContent {
-		desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{{
+	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
+	build := func(previous *fetchplan.FetchPlanContent, external string) *fetchplan.FetchPlanContent {
+		desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{{
 			Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
 			Subjects: []string{"BTC-USDT"}, ExternalSymbols: map[string]string{"BTC-USDT": external},
 		}}, nil)
 		require.NoError(t, err)
-		var prevFunctions map[string]*marketfetch.PlanFunction
-		var prevDatasets map[string]*marketfetch.PlanDatasetState
+		var prevFunctions map[string]*fetchplan.PlanFunction
+		var prevDatasets map[string]*fetchplan.PlanDatasetState
 		if previous != nil {
 			prevFunctions, prevDatasets = previous.Applied()
 		}
-		content, _, err := marketfetch.BuildPlanContent(prevFunctions, prevDatasets, desired, func(string) (int64, error) { return base.Unix(), nil })
+		content, _, err := fetchplan.BuildPlanContent(prevFunctions, prevDatasets, desired, func(string) (int64, error) { return base.Unix(), nil })
 		require.NoError(t, err)
 		return content
 	}
 	first := build(nil, "BTCOLD")
 	second := build(first, "BTCNEW")
-	for _, content := range []*marketfetch.FetchPlanContent{first, second} {
+	for _, content := range []*fetchplan.FetchPlanContent{first, second} {
 		raw, err := json.Marshal(content)
 		require.NoError(t, err)
 		record, err := db.FetchPlans().Create(ctx, "crypto", string(raw), "{}")
@@ -541,8 +540,8 @@ func TestBackfillRefillDrainsAJobWithoutWaitingForTheNextTick(t *testing.T) {
 
 type failingInvoker struct{}
 
-func (failingInvoker) Invoke(context.Context, string, string, map[string]any, cloudfunctionpb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
-	return scfinvoker.InvocationResult{}, errors.New("SCF must not be invoked")
+func (failingInvoker) Invoke(context.Context, string, string, map[string]any) (marketfetch.InvocationResult, error) {
+	return marketfetch.InvocationResult{}, errors.New("SCF must not be invoked")
 }
 
 type noFunctions struct{}
@@ -553,7 +552,7 @@ func (noFunctions) EnsureBackfillFunction(context.Context, string) (string, erro
 
 // 数据集走推送、补采执行端为 local：从推送项解析市场与交易所符号，调本地执行端，不建补采函数。
 func TestBackfillUsesTheLocalExecutorForStreamDatasets(t *testing.T) {
-	backfiller, local, _, base := newBackfillFixtureWithModes(t, map[string]marketfetch.DatasetMode{"ds": {Mode: marketfetch.IngestStreaming, Executor: marketfetch.PlanExecutorLocal}})
+	backfiller, local, _, base := newBackfillFixtureWithModes(t, map[string]fetchplan.DatasetMode{"ds": {Mode: fetchplan.IngestStreaming, Executor: marketfetch.PlanExecutorLocal}})
 	backfiller.Invoker, backfiller.Local = failingInvoker{}, local
 	backfiller.Functions = func(string) FunctionProvider { return noFunctions{} }
 	backfiller.Executor = func(context.Context, string, string) (string, error) { return marketfetch.PlanExecutorLocal, nil }

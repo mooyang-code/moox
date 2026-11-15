@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/stretchr/testify/require"
@@ -17,8 +17,8 @@ import (
 // 一年的日线一个标的只有一个分块。
 func TestStockDailyCheckExpectsTradingDaysAndMergesAcrossWeekends(t *testing.T) {
 	day := func(month time.Month, d int) time.Time { return time.Date(2026, month, d, 0, 0, 0, 0, time.UTC) }
-	content := &marketfetch.FetchPlanContent{Datasets: map[string]*marketfetch.PlanDatasetChange{}, Functions: map[string]*marketfetch.PlanFunctionChange{}}
-	change := &marketfetch.PlanDatasetChange{Changed: true, HashChanged: true, P: day(1, 5).Unix()}
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDatasetChange{Changed: true, HashChanged: true, P: day(1, 5).Unix()}
 	change.DatasetID, change.Frequency, change.LatenessS, change.Hash = "ds", "1d", 90, "hash:600519.XSHG"
 	change.Series = append(change.Series, seriesOf("600519.XSHG"))
 	content.Datasets["ds|1d"] = change

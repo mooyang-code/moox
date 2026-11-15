@@ -7,7 +7,7 @@
 从仓库根目录运行：
 
 ```bash
-go test -count=1 ./modules/collector/internal/marketfetch ./modules/collector/internal/klinecheck ./modules/collector/internal/stream/...
+go test -count=1 ./modules/collector/internal/marketfetch ./modules/collector/internal/fetchplan ./modules/collector/internal/klinecheck ./modules/collector/internal/stream/...
 go test -race -count=1 ./modules/collector/test -run '^TestKlineResample.*E2E$'
 ```
 

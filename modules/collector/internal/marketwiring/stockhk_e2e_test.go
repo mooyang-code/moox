@@ -15,14 +15,13 @@ import (
 	"testing"
 	"time"
 
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	hkeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
@@ -184,20 +183,20 @@ type hkFunctionInvoker struct {
 	calls   int
 }
 
-func (i *hkFunctionInvoker) Invoke(ctx context.Context, _, functionName string, event map[string]any, _ cloudfunctionpb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
+func (i *hkFunctionInvoker) Invoke(ctx context.Context, _, functionName string, event map[string]any) (marketfetch.InvocationResult, error) {
 	i.mu.Lock()
 	i.calls++
 	i.mu.Unlock()
 	data, _ := event["data"].(map[string]any)
 	response, err := i.handler.HandleWithFunctionName(ctx, model.CloudFunctionEvent{Action: model.EventActionMarketFetch, Data: data}, functionName)
 	if err != nil {
-		return scfinvoker.InvocationResult{}, err
+		return marketfetch.InvocationResult{}, err
 	}
 	raw, err := json.Marshal(response)
 	require.NoError(i.t, err)
 	result := map[string]any{}
 	require.NoError(i.t, json.Unmarshal(raw, &result))
-	return scfinvoker.InvocationResult{Message: response.Message, Result: result}, nil
+	return marketfetch.InvocationResult{Message: response.Message, Result: result}, nil
 }
 
 type hkBackfillFunctions struct{}
@@ -235,9 +234,9 @@ func TestStockHKRefetchAfterCloseOverwritesTheCloseBar(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = db.Close() })
-	desired, err := marketfetch.BuildDesiredState(hkE2EPlanOptions(), []marketfetch.TaskGroup{hkE2EGroup("00700.XHKG")}, nil)
+	desired, err := fetchplan.BuildDesiredState(hkE2EPlanOptions(), []fetchplan.TaskGroup{hkE2EGroup("00700.XHKG")}, nil)
 	require.NoError(t, err)
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkTime("2026-11-10 09:30:00").Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkTime("2026-11-10 09:30:00").Unix(), nil })
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
@@ -318,16 +317,16 @@ func TestStockHKRefetchAfterCloseOverwritesTheCloseBar(t *testing.T) {
 	require.Equal(t, [6]float64{407.8, 409.6, 407.6, 409.6, 2819000, 1153976836}, after[changed[0]], "含收市竞价的最终值，成交量从 61.12 万股变成 281.9 万股")
 }
 
-func hkE2EPlanOptions() marketfetch.PlanOptions {
+func hkE2EPlanOptions() fetchplan.PlanOptions {
 	// 与 Collector 装配采集计划时相同：函数内并发由港股的路由与东方财富的限速配置推导，每函数 25 只、收盘后等 5 秒是 market.yaml 的默认值。
-	return marketfetch.PlanOptions{SpaceID: "stockhk", Markets: map[string][]string{"equity": {"ap-nanjing"}}, DefaultLatenessS: 90,
+	return fetchplan.PlanOptions{SpaceID: "stockhk", Markets: map[string][]string{"equity": {"ap-nanjing"}}, DefaultLatenessS: 90,
 		SymbolsPerFunction: 25, Fetch: marketfetch.PlanFetch{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 5000},
-		DeriveFetch: marketfetch.RouteFetchLimits("stockhk")}
+		DeriveFetch: fetchplan.RouteFetchLimits("stockhk")}
 }
 
 // hkE2EGroup 按 Collector 由任务和标签成员拼分组的做法造一个港股分组：source_id 取行情源目录的登记，
 // 传给数据源的代码由港股的标的规则换出（00700.XHKG → 00700）。
-func hkE2EGroup(subjects ...string) marketfetch.TaskGroup {
+func hkE2EGroup(subjects ...string) fetchplan.TaskGroup {
 	symbols := make(map[string]string, len(subjects))
 	for _, subject := range subjects {
 		symbol, err := ResolveSymbol("eastmoney", "stockhk", "equity", subject)
@@ -336,7 +335,7 @@ func hkE2EGroup(subjects ...string) marketfetch.TaskGroup {
 		}
 		symbols[subject] = symbol
 	}
-	return marketfetch.TaskGroup{Provider: "eastmoney", SourceID: DefaultSourceID("stockhk", "eastmoney", "equity"), MarketType: "equity", MarketID: "stockhk", InstrumentType: "equity",
+	return fetchplan.TaskGroup{Provider: "eastmoney", SourceID: DefaultSourceID("stockhk", "eastmoney", "equity"), MarketType: "equity", MarketID: "stockhk", InstrumentType: "equity",
 		DatasetID: hkE2EDataset, Frequency: "5m", Subjects: subjects, ExternalSymbols: symbols}
 }
 
