@@ -5,21 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/stretchr/testify/require"
 )
 
-// newLifecycleTestEnv 打开一个空的因子管理库并建好生命周期控制器。
+// newLifecycleTestEnv 在因子管理库所在目录建好生命周期控制器。
 func newLifecycleTestEnv(t *testing.T) *lifecycle.Controller {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "factor.db")
-	db, err := store.Open(&store.Options{Path: dbPath})
+	life, err := newMgrLifecycle(filepath.Join(t.TempDir(), "factor.db"))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	life, err := newMgrLifecycle(db, dbPath)
-	require.NoError(t, err)
-	life.Refresh(context.Background())
 	return life
 }
 

@@ -897,7 +897,7 @@ moox-cli strategy instance create --strategy-id <ID> --factor-task swap=<永续�
 moox-cli strategy instance enable --instance-id <实例ID> --yes
 ```
 
-不挂账户的实例是**观察实例**：只计算目标权重、不投递，适合先验证。首次启用进入试运行（只发带影子标记的目标，Trade 不下单），挂账户的实例要用户 `confirm` 才进入运行。完整流程与注意事项见 `skills/moox/references/strategy-dsl.md` 第 5 节。
+不挂账户的实例是**观察实例**：只计算目标权重、不投递，适合先验证。挂账户的实例启用后先试运行（只发带影子标记的目标，Trade 不下单），用户在管理台“确认实盘”或执行 `moox-cli strategy instance confirm --instance-id <实例ID> --session-id <会话>` 之后才下单，确认前可以用 `moox-cli trade shadow list --instance-id <实例ID>` 看影子目标。完整流程与注意事项见 `skills/moox/references/strategy-dsl.md` 第 5 节。
 
 ## 12. 示例配方
 

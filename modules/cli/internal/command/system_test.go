@@ -15,7 +15,6 @@ func lifecycleServer(t *testing.T, name string) (*httptest.Server, *lifecycle.Co
 	t.Helper()
 	ctrl, err := lifecycle.New(lifecycle.Options{Module: name})
 	require.NoError(t, err)
-	ctrl.Refresh(context.Background())
 	mux := http.NewServeMux()
 	mux.Handle(lifecycle.StatusPath, ctrl.StatusHandler())
 	mux.Handle(lifecycle.CommandPath, ctrl.CommandHandler())
@@ -37,8 +36,8 @@ func TestSystemPauseStatusResumeAgainstModules(t *testing.T) {
 
 	require.NoError(t, runSystemPause(ctx, opts, &out))
 	require.Contains(t, out.String(), "系统已暂停")
-	require.Equal(t, lifecycle.StagePaused, collectorCtrl.Stage(lifecycle.Ref{}))
-	require.Equal(t, lifecycle.StagePaused, tradeCtrl.Stage(lifecycle.Ref{}))
+	require.Equal(t, lifecycle.StagePaused, collectorCtrl.Stage())
+	require.Equal(t, lifecycle.StagePaused, tradeCtrl.Stage())
 
 	out.Reset()
 	require.NoError(t, runSystemStatus(ctx, opts, &out))
@@ -49,9 +48,9 @@ func TestSystemPauseStatusResumeAgainstModules(t *testing.T) {
 	out.Reset()
 	require.NoError(t, runSystemResume(ctx, opts, &out))
 	require.Contains(t, out.String(), "系统已恢复")
-	require.Equal(t, lifecycle.StageReady, collectorCtrl.Stage(lifecycle.Ref{}))
-	require.Equal(t, lifecycle.StageReady, tradeCtrl.Stage(lifecycle.Ref{}))
-	require.False(t, collectorCtrl.Halted(lifecycle.Ref{}))
+	require.Equal(t, lifecycle.StageRunning, collectorCtrl.Stage())
+	require.Equal(t, lifecycle.StageRunning, tradeCtrl.Stage())
+	require.False(t, collectorCtrl.Halted())
 }
 
 func TestSystemCommandsValidateArguments(t *testing.T) {

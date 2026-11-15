@@ -258,7 +258,12 @@ stop:
    挂账户的实例停用后，Strategy 调一次 Trade 关闭会话，Trade 撤掉最后一份目标的挂单（持仓不动）。返回“实例已停用，但 Trade 未确认”时实例已经停用，
    等 Trade 可用后对它再执行一次 `disable --yes` 重试；没确认期间最后一份目标最多执行到有效期结束（2 根 K 线），要立刻停手就请用户在管理台暂停这个组合账户的自动执行。
 5. **看结果**：`strategy result list --instance-id <ID>`、`strategy target list --instance-id <ID>`（当前会话最新的 ok 目标）；控制台 `/strategy/detail/<实例ID>`。
-   首次启用进入试运行（只发带影子标记的目标，Trade 不下单）；观察实例随后自动进入运行，挂账户的实例要用户执行 `confirm`。
+   挂账户的实例启用后先试运行（只发带影子标记的目标，Trade 不下单），观察实例启用即确认。确认实盘要用户决定：
+   1. 先 `trade shadow list --instance-id <ID>` 把影子目标给用户看；
+   2. `strategy instance confirm --instance-id <ID>` 预览，拿到预览里的 `session_id`；
+   3. 用户确认后执行 `strategy instance confirm --instance-id <ID> --session-id <预览里的 session_id> --yes`，也可以请用户在管理台点“确认实盘”。
+
+   `lifecycle` 命令只管模块级的暂停与恢复，不能确认实例。
 
 ### 修改已有策略
 

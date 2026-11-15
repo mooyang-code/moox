@@ -309,16 +309,13 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Ru
 	}
 	var routes []health.Route
 	if control != nil && process != nil {
-		life, err := newCollectorLifecycle(cfg.Database.Path, control, func() bool { return dbm != nil })
+		life, err := newCollectorLifecycle(cfg.Database.Path, control)
 		if err != nil {
 			return fmt.Errorf("collector lifecycle state failed to open: %w", err)
 		}
 		state.SnapshotFunc = withCollectorLifecycle(state.SnapshotFunc, life)
 		routes = collectorLifecycleRoutes(life)
-		if !process.launch(func() {
-			life.Recover(process.ctx)
-			life.Run(process.ctx, collectorLifecycleRefresh)
-		}) {
+		if !process.launch(func() { life.Run(process.ctx, collectorLifecycleRefresh) }) {
 			return fmt.Errorf("collector runtime is closing")
 		}
 	}

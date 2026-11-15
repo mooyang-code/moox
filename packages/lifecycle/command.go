@@ -12,257 +12,150 @@ const quiesceTimeout = 30 * time.Second
 // Request 是一个命令请求。
 type Request struct {
 	Command Command
-	// Ref 为空表示模块自身。
-	Ref Ref
 	// PauseKind：pause 时是要设置的暂停类型（默认手动）；resume 时是只恢复该类型的暂停（空表示不过滤）。
 	PauseKind PauseKind
 	Reason    string
-	// By 是操作者，写进暂停详情。
+	// By 是操作者，写进暂停详情与审计。
 	By string
-	// Force 用于模块暂停期间对单个对象执行 resume（紧急情况）：只放行该对象的追赶，不放开整个模块。
-	Force bool
 	// ManualRelease 为真时追平后不自动放行，等 release（系统级恢复由编排器统一放行）。
 	ManualRelease bool
-	// ExpiresAt 用于 pause：到点自动恢复（进入恢复追赶，追平后放行）。只用于手动、自动暂停；
-	// 系统暂停要经栅栏统一放行，不能由某个模块自己到点恢复。
+	// ExpiresAt 用于 pause：到点自动恢复（进入恢复追赶，追平后放行）。只用于手动暂停；
+	// 系统暂停要经编排器统一放行，不能由某个模块自己到点恢复。
 	ExpiresAt time.Time
 }
 
-// Command 执行一个用户命令并返回对象的新状态。ref 为空表示模块自身。
-func (c *Controller) Command(ctx context.Context, cmd Command, ref Ref) (Object, error) {
-	return c.Execute(ctx, Request{Command: cmd, Ref: ref})
-}
-
-// Execute 执行命令请求。
-func (c *Controller) Execute(ctx context.Context, req Request) (Object, error) {
+// Execute 执行命令请求并返回模块的新状态。
+func (c *Controller) Execute(ctx context.Context, req Request) (State, error) {
+	var (
+		state State
+		err   error
+	)
 	switch req.Command {
-	case CmdInit:
-		return c.initCmd(ctx, req.Ref)
-	case CmdCheck:
-		return c.checkCmd(ctx, req.Ref)
-	case CmdStart, CmdConfirm, CmdPause, CmdResume:
-		obj, err := c.transition(ctx, req)
-		switch {
-		case err == nil && req.Command == CmdResume:
-			c.settle(ctx)
-			c.mu.Lock()
-			obj = c.object(c.recordFor(req.Ref))
-			c.mu.Unlock()
-		case err == nil && req.Command == CmdPause && obj.Stage == StagePaused && c.opts.Hooks.Quiesce != nil:
-			// 门禁已经关闭；等在途操作结束才算真正停下。
-			timeout := c.opts.QuiesceTimeout
-			if timeout <= 0 {
-				timeout = quiesceTimeout
-			}
-			qctx, cancel := context.WithTimeout(ctx, timeout)
-			qerr := c.opts.Hooks.Quiesce(qctx, req.Ref)
-			cancel()
-			if qerr != nil {
-				return obj, fmt.Errorf("已暂停，但在途操作没有结束：%w", qerr)
-			}
-			obj = c.markQuiesced(req.Ref, obj)
-		case err == nil && req.Command == CmdPause && obj.Stage == StagePaused:
-			// 没有需要等待的在途操作：暂停即收敛。
-			obj = c.markQuiesced(req.Ref, obj)
-		}
-		if err == nil {
-			c.audit("lifecycle_%s module=%s ref=%s/%s kind=%s by=%s reason=%q", req.Command, c.opts.Module, req.Ref.Kind, req.Ref.ID, req.PauseKind, req.By, req.Reason)
-		}
-		return obj, err
-	case CmdRelease:
-		return c.release(ctx, req.Ref)
-	}
-	return Object{}, fmt.Errorf("未知命令 %q", req.Command)
-}
-
-// markQuiesced 写入收敛时间并返回更新后的对象。等待是针对 obj 所属的那一轮暂停做的：期间恢复过、又暂停过（新的一轮有新的
-// 暂停详情）时不写，否则上一轮的等待结果会把还没收敛的下一轮误报为已收敛。
-func (c *Controller) markQuiesced(ref Ref, obj Object) Object {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	r := c.recordFor(ref)
-	// 轮次按暂停开始的时间与类型认定（快照里的 Pause 是副本，不能比指针）：同一轮暂停里原因被改写不算新一轮。
-	if r.Stage != StagePaused || r.Pause == nil || obj.Pause == nil || !r.Pause.Since.Equal(obj.Pause.Since) || r.Pause.Kind != obj.Pause.Kind {
-		return c.object(r)
-	}
-	r.QuiescedAt = c.opts.Now().UTC()
-	_ = c.save()
-	return c.object(r)
-}
-
-func (c *Controller) initCmd(ctx context.Context, ref Ref) (Object, error) {
-	if c.opts.Hooks.Init != nil {
-		if err := c.opts.Hooks.Init(ctx, ref); err != nil {
-			return Object{}, fmt.Errorf("初始化失败：%w", err)
-		}
-	}
-	checks := c.runChecks(ctx, ref)
-	c.mu.Lock()
-	var changes []change
-	r := c.recordFor(ref)
-	c.checks[ref.key()] = checks
-	if r.Stage == StageUninitialized || r.Stage == StageNotReady || r.Stage == StageReady {
-		if Passed(checks) {
-			c.set(r, StageReady, "", &changes)
-		} else {
-			c.set(r, StageNotReady, firstFailure(checks), &changes)
-		}
-	}
-	_ = c.save()
-	obj := c.object(r)
-	c.mu.Unlock()
-	c.notify(changes)
-	return obj, nil
-}
-
-func (c *Controller) checkCmd(ctx context.Context, ref Ref) (Object, error) {
-	checks := c.runChecks(ctx, ref)
-	c.mu.Lock()
-	var changes []change
-	r := c.recordFor(ref)
-	c.checks[ref.key()] = checks
-	c.apply(r, checks, &changes)
-	_ = c.save()
-	obj := c.object(r)
-	c.mu.Unlock()
-	c.notify(changes)
-	return obj, nil
-}
-
-func (c *Controller) markPausedSince(r *record) {
-	if r.PausedSince.IsZero() {
-		r.PausedSince = c.opts.Now().UTC()
-	}
-}
-
-// beginResume 让暂停（或故障）的记录进入恢复追赶；调用方持有锁。
-// 模块自身进入恢复追赶时，暂停前处于预热、运行的对象成为本次恢复的参与者（手动暂停的对象继续排除）。
-func (c *Controller) beginResume(r *record, autoRelease bool, changes *[]change) {
-	if r.Resume == "" {
-		r.Resume = StageReady
-	}
-	c.markPausedSince(r)
-	r.autoRelease = autoRelease
-	r.catchup = nil
-	if r.Ref == (Ref{}) {
-		for _, o := range c.objects {
-			o.catchupMember = o.Stage.Active()
-			o.catchup = nil
-		}
-	} else {
-		r.catchupMember = true
-	}
-	c.set(r, StageResuming, "恢复追赶", changes)
-}
-
-func (c *Controller) transition(ctx context.Context, req Request) (Object, error) {
-	ref, cmd := req.Ref, req.Command
-	checks := c.runChecks(ctx, ref)
-	c.mu.Lock()
-	var changes []change
-	r := c.recordFor(ref)
-	c.checks[ref.key()] = checks
-	deny := func(why string) (Object, error) {
-		obj := c.object(r)
-		c.mu.Unlock()
-		return obj, &ErrNotAllowed{Ref: ref, Command: cmd, Stage: r.Stage, Why: why}
-	}
-	switch cmd {
-	case CmdStart:
-		if r.Stage != StageReady {
-			return deny("只有就绪的对象才能启动；先 init 并让检查通过")
-		}
-		if !Passed(checks) {
-			return deny("检查有失败项：" + firstFailure(checks))
-		}
-		c.set(r, StageWarming, "", &changes)
-	case CmdConfirm:
-		if r.Stage != StageWarming {
-			return deny("只有试运行中的对象才能确认进入运行")
-		}
-		if !Passed(checks) {
-			return deny("检查有失败项：" + firstFailure(checks))
-		}
-		c.set(r, StageRunning, "", &changes)
 	case CmdPause:
-		kind := req.PauseKind
-		if kind == "" {
-			kind = PauseManual
-		}
-		if kind.rank() == 0 {
-			return deny(fmt.Sprintf("未知的暂停类型 %q", kind))
-		}
-		info := &PauseInfo{Kind: kind, Reason: req.Reason, By: req.By, Since: c.opts.Now().UTC()}
-		if !req.ExpiresAt.IsZero() {
-			switch {
-			case kind == PauseSystem:
-				return deny("系统暂停不支持定时恢复：要经 system resume 先追赶再统一放行")
-			case !req.ExpiresAt.After(info.Since):
-				return deny("定时恢复的时间必须晚于现在")
-			}
-			info.ExpiresAt = req.ExpiresAt.UTC()
-		}
-		reason := pauseReason(kind, req.Reason)
-		switch {
-		case r.Stage == StagePaused:
-			// 已暂停：高优先级的暂停覆盖低优先级的（手动 > 系统 > 自动），反过来不覆盖。
-			if r.Pause == nil || kind.rank() > r.Pause.Kind.rank() {
-				r.Pause = info
-				r.Reason = reason
-			}
-		case r.Stage == StageResuming:
-			// 恢复追赶中再暂停：回到暂停，暂停起点保持最早的那次。
-			r.Pause = info
-			c.endCatchup(r)
-			c.set(r, StagePaused, reason, &changes)
-		case r.Stage == StageReady || r.Stage.Active():
-			r.Resume = r.Stage
-			r.Pause = info
-			// 模块恢复追赶期间被暂停的对象不再参与本次追赶（与“手动暂停的对象不参与恢复”一致），否则它没追平会一直挡住模块。
-			r.catchupMember = false
-			r.catchup = nil
-			c.markPausedSince(r)
-			c.set(r, StagePaused, reason, &changes)
-		case ref == (Ref{}) && kind == PauseSystem:
-			// 模块自身未就绪时也要能建立系统暂停的门禁（只靠 hold）。
-		default:
-			return deny("只有就绪、试运行、运行或恢复追赶中的对象才能暂停")
-		}
-		if ref == (Ref{}) && kind == PauseSystem && (r.Pause == nil || r.Pause.Kind == PauseSystem) {
-			r.Hold = HoldSystemPause
+		state, err = c.pause(req)
+		if err == nil {
+			state, err = c.quiesce(ctx, state)
 		}
 	case CmdResume:
-		if ref == (Ref{}) && r.Hold == HoldSystemPause && r.Stage != StagePaused && r.Stage != StageFault {
-			// 只靠 hold 建立的系统暂停（模块自身当时未就绪）：解除 hold 即可，阶段由检查重新推导。
-			if req.PauseKind == "" || req.PauseKind == PauseSystem {
-				r.Hold = HoldNone
-			}
-			break
+		if state, err = c.resume(req); err == nil {
+			c.settle(ctx)
+			state = c.State()
 		}
-		if r.Stage != StagePaused && r.Stage != StageFault {
-			return deny("只有暂停或故障的对象才能恢复")
+	case CmdRelease:
+		return c.release(ctx)
+	default:
+		return c.State(), fmt.Errorf("未知命令 %q", req.Command)
+	}
+	if err == nil {
+		c.audit("lifecycle_%s module=%s kind=%s by=%s reason=%q", req.Command, c.opts.Module, req.PauseKind, req.By, req.Reason)
+	}
+	return state, err
+}
+
+func (c *Controller) pause(req Request) (State, error) {
+	kind := req.PauseKind
+	if kind == "" {
+		kind = PauseManual
+	}
+	c.mu.Lock()
+	deny := func(why string) (State, error) {
+		state := c.state()
+		c.mu.Unlock()
+		return state, &ErrNotAllowed{Command: CmdPause, Stage: state.Stage, Why: why}
+	}
+	if kind.rank() == 0 {
+		return deny(fmt.Sprintf("未知的暂停类型 %q", kind))
+	}
+	info := &PauseInfo{Kind: kind, Reason: req.Reason, By: req.By, Since: c.opts.Now().UTC()}
+	if !req.ExpiresAt.IsZero() {
+		switch {
+		case kind == PauseSystem:
+			return deny("系统暂停不支持定时恢复：要经 system resume 先追赶再统一放行")
+		case !req.ExpiresAt.After(info.Since):
+			return deny("定时恢复的时间必须晚于现在")
 		}
-		if r.Stage == StagePaused && req.PauseKind != "" && r.Pause != nil && r.Pause.Kind != req.PauseKind {
-			// 只恢复指定类型的暂停（系统恢复不动手动暂停的对象）。
-			break
+		info.ExpiresAt = req.ExpiresAt.UTC()
+	}
+	var changes []change
+	reason := pauseReason(kind, req.Reason)
+	switch c.rec.Stage {
+	case StagePaused:
+		// 已暂停：高优先级的暂停覆盖低优先级的（手动 > 系统），反过来不覆盖。
+		if c.rec.Pause == nil || kind.rank() > c.rec.Pause.Kind.rank() {
+			c.rec.Pause = info
+			c.rec.Reason = reason
 		}
-		if ref != (Ref{}) && !req.Force && (c.self.Stage == StagePaused || c.self.Hold == HoldSystemPause) {
-			return deny("模块暂停中，先恢复模块；紧急情况下加 --force 只放行这个对象的追赶")
+	default:
+		// 运行或恢复追赶中：回到暂停，暂停起点保持最早的那次。
+		c.rec.Pause = info
+		if c.rec.PausedSince.IsZero() {
+			c.rec.PausedSince = info.Since
 		}
-		if !Passed(checks) {
-			return deny("检查有失败项：" + firstFailure(checks))
-		}
-		c.beginResume(r, !req.ManualRelease, &changes)
+		c.endCatchup()
+		c.set(StagePaused, reason, &changes)
 	}
 	_ = c.save()
-	obj := c.object(r)
+	state := c.state()
 	c.mu.Unlock()
 	c.notify(changes)
-	return obj, nil
+	return state, nil
+}
+
+// quiesce 在门禁关闭之后等在途操作结束，成功才写入收敛时间。
+func (c *Controller) quiesce(ctx context.Context, state State) (State, error) {
+	if c.opts.Hooks.Quiesce != nil {
+		timeout := c.opts.QuiesceTimeout
+		if timeout <= 0 {
+			timeout = quiesceTimeout
+		}
+		qctx, cancel := context.WithTimeout(ctx, timeout)
+		err := c.opts.Hooks.Quiesce(qctx)
+		cancel()
+		if err != nil {
+			return state, fmt.Errorf("已暂停，但在途操作没有结束：%w", err)
+		}
+	}
+	return c.markQuiesced(state), nil
+}
+
+// markQuiesced 写入收敛时间并返回新状态。等待是针对 state 所属的那一轮暂停做的：期间恢复过、又暂停过（新的一轮有新的
+// 暂停详情）时不写，否则上一轮的等待结果会把还没收敛的下一轮误报为已收敛。
+func (c *Controller) markQuiesced(state State) State {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p := c.rec.Pause
+	// 轮次按暂停开始的时间与类型认定：同一轮暂停里原因被改写不算新一轮。
+	if c.rec.Stage != StagePaused || p == nil || state.Pause == nil || !p.Since.Equal(state.Pause.Since) || p.Kind != state.Pause.Kind {
+		return c.state()
+	}
+	c.rec.QuiescedAt = c.opts.Now().UTC()
+	_ = c.save()
+	return c.state()
+}
+
+func (c *Controller) resume(req Request) (State, error) {
+	c.mu.Lock()
+	if c.rec.Stage != StagePaused {
+		state := c.state()
+		c.mu.Unlock()
+		return state, &ErrNotAllowed{Command: CmdResume, Stage: state.Stage, Why: "只有暂停的模块才能恢复"}
+	}
+	var changes []change
+	if req.PauseKind == "" || c.rec.Pause == nil || c.rec.Pause.Kind == req.PauseKind {
+		// 只恢复指定类型的暂停：系统恢复不动手动暂停的模块。
+		c.autoRelease = !req.ManualRelease
+		c.catchup = nil
+		c.set(StageResuming, "恢复追赶", &changes)
+		_ = c.save()
+	}
+	state := c.state()
+	c.mu.Unlock()
+	c.notify(changes)
+	return state, nil
 }
 
 func pauseReason(kind PauseKind, reason string) string {
-	label := map[PauseKind]string{PauseManual: "手动暂停", PauseSystem: "系统暂停", PauseAuto: "自动暂停"}[kind]
+	label := map[PauseKind]string{PauseManual: "手动暂停", PauseSystem: "系统暂停"}[kind]
 	if reason == "" {
 		return label
 	}
@@ -270,164 +163,75 @@ func pauseReason(kind PauseKind, reason string) string {
 }
 
 // endCatchup 清除恢复追赶的进程内状态；调用方持有锁。
-func (c *Controller) endCatchup(r *record) {
-	r.catchup = nil
-	r.autoRelease = false
-	r.catchupMember = false
-	if r.Ref == (Ref{}) {
-		for _, o := range c.objects {
-			o.catchupMember = false
-			if o.Stage != StageResuming {
-				o.catchup = nil
-			}
-		}
-	}
+func (c *Controller) endCatchup() {
+	c.catchup = nil
+	c.autoRelease = false
 }
 
-// roundID 标识一次恢复追赶：模块的阶段时间、对象自己的阶段时间与暂停信息。再次暂停、恢复之后三者之一必然改变，
-// settle 在锁外读追赶进度，回写时靠它丢弃上一轮迟到的结果（不能用旧结果覆盖新一轮、更不能据此放行）。
-type roundID struct {
-	self, own time.Time
-	pause     *PauseInfo
-}
-
-// roundOf 读取 ref 当前的恢复轮次标识；调用方持有锁。
-func (c *Controller) roundOf(ref Ref) roundID {
-	r := c.recordFor(ref)
-	return roundID{self: c.self.Since, own: r.Since, pause: r.Pause}
-}
-
-// settle 推进恢复追赶：对恢复追赶中的记录（和模块恢复追赶时参与追赶的对象）调用 Catchup 钩子，
-// 追平且检查通过的、设为自动放行的记录回到暂停前的阶段；系统级恢复的记录停在「已追平待放行」，等 release。
+// settle 推进恢复追赶：调用 Catchup 钩子读取进度，追平且设为自动放行的回到运行；系统级恢复停在「已追平待放行」，等 release。
+// 钩子在锁外调用，回写时按轮次（进入恢复追赶的时间与暂停详情）丢弃上一轮迟到的结果：不能用旧结果覆盖新一轮，更不能据此放行。
 func (c *Controller) settle(ctx context.Context) {
 	c.mu.Lock()
-	var refs []Ref
-	if c.self.Stage == StageResuming {
-		refs = append(refs, Ref{})
-	}
-	for _, o := range c.objects {
-		if o.Stage == StageResuming || (c.self.Stage == StageResuming && o.catchupMember) {
-			refs = append(refs, o.Ref)
-		}
-	}
-	since := map[string]time.Time{}
-	rounds := map[string]roundID{}
-	for _, ref := range refs {
-		rounds[ref.key()] = c.roundOf(ref)
-		since[ref.key()] = c.recordFor(ref).PausedSince
-		if since[ref.key()].IsZero() {
-			// 模块恢复追赶时，参与追赶的对象继续运行阶段、没有自己的暂停时间：取模块的暂停时间作为追赶起点。
-			since[ref.key()] = c.self.PausedSince
-		}
-	}
-	c.mu.Unlock()
-	if len(refs) == 0 {
+	if c.rec.Stage != StageResuming {
+		c.mu.Unlock()
 		return
 	}
-	type result struct {
-		checks  []Check
-		catchup Catchup
-		err     error
-	}
-	results := make(map[string]result, len(refs))
-	for _, ref := range refs {
-		res := result{checks: c.runChecks(ctx, ref), catchup: Catchup{CaughtUp: true}}
-		if c.opts.Hooks.Catchup != nil {
-			res.catchup, res.err = c.opts.Hooks.Catchup(ctx, ref, since[ref.key()])
+	since, round, pause := c.rec.PausedSince, c.rec.Since, c.rec.Pause
+	c.mu.Unlock()
+
+	cu := Catchup{CaughtUp: true}
+	if c.opts.Hooks.Catchup != nil {
+		var err error
+		if cu, err = c.opts.Hooks.Catchup(ctx, since); err != nil {
+			cu.CaughtUp = false
+			cu.Message = "追赶进度读取失败：" + err.Error()
 		}
-		results[ref.key()] = res
 	}
+	cu.Since = since
 
 	c.mu.Lock()
 	var changes []change
-	stale := map[string]bool{}
-	for _, ref := range refs {
-		if rounds[ref.key()] != c.roundOf(ref) {
-			stale[ref.key()] = true // 这一轮已经结束或被新一轮取代：结果作废
-			continue
+	if c.rec.Stage == StageResuming && c.rec.Since.Equal(round) && c.rec.Pause == pause {
+		c.catchup = &cu
+		if c.autoRelease && cu.CaughtUp {
+			c.finishResume(&changes)
 		}
-		r := c.recordFor(ref)
-		res := results[ref.key()]
-		cu := res.catchup
-		cu.Since = since[ref.key()]
-		if res.err != nil {
-			cu.CaughtUp = false
-			cu.Message = "追赶进度读取失败：" + res.err.Error()
-		}
-		r.catchup = &cu
-		c.checks[ref.key()] = res.checks
+		_ = c.save()
 	}
-	// 模块自身：自己和所有参与追赶的对象都追平，并且自身检查没有失败项，才算追平。
-	if c.self.Stage == StageResuming && c.self.catchup != nil && !stale[c.self.key()] {
-		self := c.self
-		caught := self.catchup.CaughtUp && Passed(c.checks[self.key()])
-		for _, o := range c.objects {
-			if o.catchupMember && (o.catchup == nil || !o.catchup.CaughtUp) {
-				caught = false
-				if self.catchup.BlockedBy == "" {
-					self.catchup.BlockedBy = o.Ref.key()
-				}
-			}
-		}
-		self.catchup.CaughtUp = caught
-	}
-	for _, ref := range refs {
-		r := c.recordFor(ref)
-		if stale[ref.key()] || r.Stage != StageResuming || !r.autoRelease || r.catchup == nil || !r.catchup.CaughtUp {
-			continue
-		}
-		if !Passed(c.checks[ref.key()]) {
-			continue
-		}
-		c.finishResume(r, &changes)
-	}
-	_ = c.save()
 	c.mu.Unlock()
 	c.notify(changes)
 }
 
-// finishResume 放行：回到暂停前的阶段并清掉恢复追赶状态；调用方持有锁。
-func (c *Controller) finishResume(r *record, changes *[]change) {
-	back := r.Resume
-	if back == "" {
-		back = StageReady
-	}
-	c.endCatchup(r)
-	r.Pause, r.PausedSince, r.Resume = nil, time.Time{}, ""
-	r.ReleasedAt = c.opts.Now().UTC()
-	if r.Ref == (Ref{}) {
-		r.Hold = HoldNone
-	}
-	c.set(r, back, "恢复追赶完成，已放行", changes)
+// finishResume 放行：回到运行并清掉恢复追赶状态；调用方持有锁。
+func (c *Controller) finishResume(changes *[]change) {
+	c.endCatchup()
+	c.rec.Pause, c.rec.PausedSince = nil, time.Time{}
+	c.rec.ReleasedAt = c.opts.Now().UTC()
+	c.set(StageRunning, "恢复追赶完成，已放行", changes)
 }
 
-func (c *Controller) release(ctx context.Context, ref Ref) (Object, error) {
-	// 放行前再核一次：重新检查并重新读取追赶进度。
+func (c *Controller) release(ctx context.Context) (State, error) {
+	// 放行前再核一次：重新读取追赶进度。
 	c.settle(ctx)
-	checks := c.runChecks(ctx, ref)
 	c.mu.Lock()
-	var changes []change
-	r := c.recordFor(ref)
-	c.checks[ref.key()] = checks
-	deny := func(why string) (Object, error) {
-		obj := c.object(r)
+	deny := func(why string) (State, error) {
+		state := c.state()
 		c.mu.Unlock()
-		return obj, &ErrNotAllowed{Ref: ref, Command: CmdRelease, Stage: r.Stage, Why: why}
+		return state, &ErrNotAllowed{Command: CmdRelease, Stage: state.Stage, Why: why}
 	}
 	switch {
-	case r.Stage != StageResuming:
-		return deny("只有恢复追赶中的对象才能放行")
-	case r.catchup == nil || !r.catchup.CaughtUp:
-		return deny("尚未追平：" + catchupText(r.catchup))
-	case !Passed(checks):
-		return deny("检查有失败项：" + firstFailure(checks))
+	case c.rec.Stage != StageResuming:
+		return deny("只有恢复追赶中的模块才能放行")
+	case c.catchup == nil || !c.catchup.CaughtUp:
+		return deny("尚未追平：" + catchupText(c.catchup))
 	}
-	c.finishResume(r, &changes)
+	var changes []change
+	c.finishResume(&changes)
 	_ = c.save()
-	obj := c.object(r)
+	state := c.state()
 	c.mu.Unlock()
 	c.notify(changes)
-	return obj, nil
+	return state, nil
 }
 
 func catchupText(cu *Catchup) string {
@@ -435,26 +239,18 @@ func catchupText(cu *Catchup) string {
 	case cu == nil:
 		return "还没有追赶进度"
 	case cu.BlockedBy != "":
-		return "被 " + cu.BlockedBy + " 阻塞"
+		return "被 " + cu.BlockedBy + " 阻塞" + messageSuffix(cu.Message)
+	case cu.Total > 0:
+		return fmt.Sprintf("%d/%d", cu.Done, cu.Total) + messageSuffix(cu.Message)
 	case cu.Message != "":
 		return cu.Message
-	case cu.Total > 0:
-		return fmt.Sprintf("%d/%d", cu.Done, cu.Total)
 	}
 	return "追赶中"
 }
 
-// Fault 报告对象运行中出现自身无法恢复的错误：进入故障，要用户 resume。
-func (c *Controller) Fault(ref Ref, err error) {
-	c.mu.Lock()
-	r := c.recordFor(ref)
-	var changes []change
-	if r.Stage.Active() {
-		r.Resume = r.Stage
+func messageSuffix(message string) string {
+	if message == "" {
+		return ""
 	}
-	c.markPausedSince(r)
-	c.set(r, StageFault, err.Error(), &changes)
-	_ = c.save()
-	c.mu.Unlock()
-	c.notify(changes)
+	return "（" + message + "）"
 }

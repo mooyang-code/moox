@@ -187,9 +187,9 @@ func TestLifecycleResolvesEndpointFromManifestUnlessGiven(t *testing.T) {
 	assert.Equal(t, "http://127.0.0.1:1", lifecycleFlags.Endpoint, "显式地址不解析")
 	assert.Len(t, *requests, 1)
 
-	lifecycleFlags = lifecycleOptions{Module: "factor-engine"}
-	require.NoError(t, prepareLifecycleEndpoint(&cobra.Command{Use: "shadow"}, nil))
-	assert.Equal(t, "http://127.0.0.1:42000", lifecycleFlags.Endpoint, "shadow 固定连接 trade")
+	lifecycleFlags = lifecycleOptions{Module: "trade"}
+	require.NoError(t, prepareLifecycleEndpoint(cmd, nil))
+	assert.Equal(t, "http://127.0.0.1:42000", lifecycleFlags.Endpoint, "--module 换模块")
 
 	lifecycleFlags = lifecycleOptions{Module: "bogus"}
 	require.ErrorContains(t, prepareLifecycleEndpoint(cmd, nil), "未知的模块")

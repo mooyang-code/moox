@@ -442,7 +442,7 @@ func (s *Store) DisableInstance(ctx context.Context, instanceID, sessionID strin
 			return err
 		}
 		if current.Enabled != 1 || !current.SessionID.Valid || current.SessionID.String != sessionID {
-			return errors.New("实例的会话已变化，请刷新后重试")
+			return errConfirmSessionChanged
 		}
 		if err := tx.Exec(sqlDisableInstance, now, instanceID, sessionID).Error; err != nil {
 			return err
@@ -467,7 +467,7 @@ func (s *Store) ConfirmInstance(ctx context.Context, instanceID, sessionID strin
 			return err
 		}
 		if current.Enabled != 1 || !current.SessionID.Valid || current.SessionID.String != sessionID {
-			return errors.New("实例的会话已变化，请刷新后重试")
+			return errConfirmSessionChanged
 		}
 		if !current.LogicalAccountID.Valid {
 			return errors.New("实例没有挂组合账户，不需要确认")
@@ -475,8 +475,23 @@ func (s *Store) ConfirmInstance(ctx context.Context, instanceID, sessionID strin
 		if current.ConfirmedAt.Valid {
 			return nil
 		}
-		return tx.Exec(sqlConfirmInstance, now, now, instanceID, sessionID).Error
+		return confirmInstanceRow(tx, instanceID, sessionID, now)
 	})
+}
+
+// errConfirmSessionChanged 是确认时实例的会话已经变了（停用、重新启用）的拒绝说明；页面原样显示给用户。
+var errConfirmSessionChanged = errors.New("实例的会话已变化，请刷新后重试")
+
+// confirmInstanceRow 按“还是这次启用、还没确认”的条件写入确认时间；一行都没改到说明条件已经不成立，不能当成确认成功。
+func confirmInstanceRow(tx *gorm.DB, instanceID, sessionID string, now time.Time) error {
+	result := tx.Exec(sqlConfirmInstance, now, now, instanceID, sessionID)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errConfirmSessionChanged
+	}
+	return nil
 }
 
 // SessionTasks从会话固化的绑定解析（resolved_json）里取出全部任务键 → 因子任务：主帧的 tasks、参考市场 references 与附加来源

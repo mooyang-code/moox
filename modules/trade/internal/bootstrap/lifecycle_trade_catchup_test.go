@@ -39,7 +39,7 @@ func TestTradeCatchupRequiresFreshReconciledLiveAccounts(t *testing.T) {
 	paper := store.TradingAccountRecord{TradingAccountID: "paper", ExecutionMode: "PAPER", Status: "ENABLED"}
 	disabled := live("off", stale, func(r *store.TradingAccountRecord) { r.Status = "DISABLED" })
 	hook := func(accounts accountsFake, q quiesceFake) (lifecycle.Catchup, error) {
-		return tradeCatchup(accounts, q, func() time.Time { return now })(context.Background(), lifecycle.Ref{}, now.Add(-time.Hour))
+		return tradeCatchup(nil, accounts, q, func() time.Time { return now })(context.Background(), now.Add(-time.Hour))
 	}
 
 	got, err := hook(accountsFake{list: []store.TradingAccountRecord{paper, disabled, live("a", fresh, nil), live("b", fresh, nil)}}, quiesceFake{})
@@ -69,7 +69,26 @@ func TestTradeCatchupRequiresFreshReconciledLiveAccounts(t *testing.T) {
 	_, err = hook(accountsFake{err: errors.New("数据库不可用")}, quiesceFake{})
 	require.Error(t, err)
 
-	object, err := tradeCatchup(accountsFake{}, quiesceFake{}, time.Now)(context.Background(), lifecycle.Ref{Kind: "x", ID: "y"}, now)
+}
+
+// 放行前再核 Trade 自身就绪：没有就绪不算追平，原因写进进度里；就绪之后按对账判断。
+func TestTradeCatchupRequiresTradeReady(t *testing.T) {
+	ready := false
+	evaluate := func(context.Context) (bool, map[string]any) {
+		if ready {
+			return true, nil
+		}
+		return false, map[string]any{"eventbus": "未连接"}
+	}
+	hook := tradeCatchup(evaluate, accountsFake{}, quiesceFake{}, time.Now)
+	got, err := hook(context.Background(), time.Now())
 	require.NoError(t, err)
-	require.True(t, object.CaughtUp)
+	require.False(t, got.CaughtUp)
+	require.Equal(t, "Trade 就绪", got.BlockedBy)
+	require.Contains(t, got.Message, "eventbus")
+
+	ready = true
+	got, err = hook(context.Background(), time.Now())
+	require.NoError(t, err)
+	require.True(t, got.CaughtUp)
 }

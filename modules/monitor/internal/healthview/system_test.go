@@ -15,48 +15,15 @@ func component(name, stage string, mutate ...func(*pb.HealthLifecycle)) *pb.Heal
 	return &pb.HealthComponent{ComponentId: name, Name: name, Lifecycle: l}
 }
 
-func TestProjectSystemColorsAndPhase(t *testing.T) {
+func TestProjectSystemRunning(t *testing.T) {
 	require.Nil(t, projectSystem([]*pb.HealthComponent{{ComponentId: "storage"}}), "没有模块上报生命周期时不输出系统状态")
 
-	running := projectSystem([]*pb.HealthComponent{component("因子引擎", "running"), component("策略", "running")})
+	running := projectSystem([]*pb.HealthComponent{component("因子引擎", "running"), component("策略", "running"), component("采集", "running")})
 	require.Equal(t, "running", running.Phase)
 	require.Equal(t, "green", running.Color)
 	require.Equal(t, "healthy", running.Health)
-
-	// 一个模块还只是就绪（有对象但都没启动）：系统的运行阶段取最靠前的。
-	mixed := projectSystem([]*pb.HealthComponent{component("因子引擎", "running"), component("策略", "ready", func(l *pb.HealthLifecycle) { l.Counts = map[string]int32{"ready": 1} })})
-	require.Equal(t, "ready", mixed.Phase)
-	require.Equal(t, "blue", mixed.Color)
-
-	warming := projectSystem([]*pb.HealthComponent{component("因子引擎", "warming"), component("策略", "running")})
-	require.Equal(t, "yellow", warming.Color)
-}
-
-// 运行中、有对象暂停：运行中 · 降级（橙）；有模块未就绪或故障：红并列出原因。
-func TestProjectSystemDegradedAndAttention(t *testing.T) {
-	degraded := projectSystem([]*pb.HealthComponent{
-		component("因子引擎", "running", func(l *pb.HealthLifecycle) {
-			l.Degraded = true
-			l.Attention = []*pb.HealthLifecycleObject{{Id: "crypto_1m", Stage: "paused", Reason: "变更同步：变更日志断档"}}
-		}),
-		component("策略", "running"),
-	})
-	require.Equal(t, "running", degraded.Phase)
-	require.True(t, degraded.Degraded)
-	require.Equal(t, "orange", degraded.Color)
-	require.Equal(t, "healthy", degraded.Health)
-	require.Contains(t, degraded.Issues[0], "因子引擎：crypto_1m 变更同步：变更日志断档")
-
-	bad := projectSystem([]*pb.HealthComponent{
-		component("因子引擎", "running"),
-		component("Trade", "not_ready", func(l *pb.HealthLifecycle) { l.Reason = "数据库不可用" }),
-	})
-	require.Equal(t, "attention", bad.Health)
-	require.Equal(t, "red", bad.Color)
-	require.Equal(t, []string{"Trade：数据库不可用"}, bad.Issues)
-
-	recovered := projectSystem([]*pb.HealthComponent{component("因子引擎", "running", func(l *pb.HealthLifecycle) { l.Recovered = 2 })})
-	require.True(t, recovered.AutoRecovered)
+	require.Empty(t, running.Issues)
+	require.Nil(t, running.PauseKinds)
 }
 
 // 有生命周期接口的模块探测不到：不能从系统汇总里消失，健康面标红并列出。
@@ -65,84 +32,66 @@ func TestProjectSystemReportsUnreachableLifecycleModule(t *testing.T) {
 	system := projectSystem([]*pb.HealthComponent{component("因子引擎", "running"), down, {ComponentId: "storage", Status: "down"}})
 	require.Equal(t, "attention", system.Health)
 	require.Equal(t, "red", system.Color)
+	require.Equal(t, "running", system.Phase)
 	require.Equal(t, []string{"策略：探测不到（模块没有响应）"}, system.Issues, "没有生命周期接口的组件不在此列")
 	require.Equal(t, int32(2), system.ModuleCount)
 
 	only := projectSystem([]*pb.HealthComponent{down})
 	require.Equal(t, "attention", only.Health)
-	require.Equal(t, "uninitialized", only.Phase)
+	require.Equal(t, "unknown", only.Phase, "一个模块都读不到时运行阶段未知")
 }
 
-// 手动、系统暂停是用户意图：不降级，首页显示暂停；全部暂停是 paused，部分暂停是 partially_paused。
+// 系统暂停覆盖的模块全部暂停是 paused，部分暂停是 partially_paused；不参与系统暂停的模块不影响“全部”的判断。
 func TestProjectSystemPausePhases(t *testing.T) {
 	paused := func(kind string) func(*pb.HealthLifecycle) {
 		return func(l *pb.HealthLifecycle) {
 			l.Reason = "系统暂停：切换行情源"
 			l.Pause = &pb.HealthPause{Kind: kind, Since: "2026-10-21T10:00:00Z"}
-			l.PauseKinds = map[string]int32{kind: 1}
 		}
 	}
-	all := projectSystem([]*pb.HealthComponent{component("factor-engine", "paused", paused("system")), component("strategy", "paused", paused("system")), component("factor-mgr", "ready")})
+	all := projectSystem([]*pb.HealthComponent{component("factor-engine", "paused", paused("system")), component("strategy", "paused", paused("system")), component("factor-mgr", "running")})
 	require.Equal(t, "paused", all.Phase)
 	require.Equal(t, "orange", all.Color)
-	require.False(t, all.Degraded, "系统暂停不算降级")
 	require.Equal(t, "healthy", all.Health)
 	require.Equal(t, int32(2), all.PauseKinds["system"])
 	require.Equal(t, "2026-10-21T10:00:00Z", all.PausedSince)
+	require.Equal(t, []string{"factor-engine：系统暂停：切换行情源", "strategy：系统暂停：切换行情源"}, all.Issues)
 
 	partial := projectSystem([]*pb.HealthComponent{component("factor-engine", "running"), component("strategy", "paused", paused("manual"))})
 	require.Equal(t, "partially_paused", partial.Phase)
-	require.False(t, partial.Degraded)
+	require.Equal(t, "orange", partial.Color)
+	require.Equal(t, int32(1), partial.PauseKinds["manual"])
 	require.Contains(t, partial.Issues[0], "strategy：系统暂停")
 
-	// 对象级的手动暂停：模块汇总仍是运行，pause_kinds 计数但不降级。
-	object := projectSystem([]*pb.HealthComponent{component("strategy", "running", func(l *pb.HealthLifecycle) {
-		l.Counts = map[string]int32{"running": 2}
-		l.PauseKinds = map[string]int32{"manual": 1}
-	})})
-	require.Equal(t, "running", object.Phase)
-	require.Equal(t, int32(1), object.PauseKinds["manual"])
-	require.False(t, object.Degraded)
+	// 只有不参与系统暂停的模块（例如 Monitor 的告警屏蔽）暂停：不算系统部分暂停，但列出来。
+	muted := projectSystem([]*pb.HealthComponent{component("factor-engine", "running"), component("monitor", "paused", func(l *pb.HealthLifecycle) { l.Reason = "手动暂停：告警屏蔽" })})
+	require.Equal(t, "running", muted.Phase)
+	require.Equal(t, []string{"monitor：手动暂停：告警屏蔽"}, muted.Issues)
 }
 
-func TestProjectSystemResumingAndReset(t *testing.T) {
+// 恢复追赶：显示追赶中的模块数与已追平（待放行）的模块数，以及各模块的进度文字。
+func TestProjectSystemResumingAndCaughtUp(t *testing.T) {
 	resuming := projectSystem([]*pb.HealthComponent{
 		component("因子引擎", "resuming", func(l *pb.HealthLifecycle) {
 			l.Catchup = &pb.HealthCatchup{Done: 6, Total: 10}
 		}),
 		component("策略", "resuming", func(l *pb.HealthLifecycle) {
-			l.Catchup = &pb.HealthCatchup{BlockedBy: "factor_task/crypto_1m"}
+			l.Catchup = &pb.HealthCatchup{BlockedBy: "实例 i1"}
 		}),
 		component("Trade", "resuming", func(l *pb.HealthLifecycle) { l.Catchup = &pb.HealthCatchup{CaughtUp: true} }),
 	})
 	require.Equal(t, "resuming", resuming.Phase)
 	require.Equal(t, "cyan", resuming.Color)
-	require.False(t, resuming.Degraded, "恢复追赶是预期的过渡，不算降级")
 	require.Equal(t, int32(3), resuming.ResumingModules)
 	require.Equal(t, int32(1), resuming.CaughtUpModules)
-	require.ElementsMatch(t, []string{"因子引擎：补采 6/10", "策略：被 factor_task/crypto_1m 阻塞", "Trade：已追平，待放行"}, resuming.CatchupNotes)
+	require.ElementsMatch(t, []string{"因子引擎：补采 6/10", "策略：被 实例 i1 阻塞", "Trade：已追平，待放行"}, resuming.CatchupNotes)
 
-	failed := projectSystem([]*pb.HealthComponent{component("因子引擎", "fault", func(l *pb.HealthLifecycle) { l.Reason = "本地存储写入失败" })})
-	require.Equal(t, "attention", failed.Health)
-	require.Equal(t, "red", failed.Color)
-	require.Equal(t, []string{"因子引擎：本地存储写入失败"}, failed.Issues)
-}
-
-// 没有对象、自身只是就绪的模块（采集、因子管理）不参与运行阶段的比较，否则系统一直显示「就绪」。
-func TestProjectSystemIgnoresObjectlessReadyModulesForThePhase(t *testing.T) {
-	system := projectSystem([]*pb.HealthComponent{
-		component("因子引擎", "running", func(l *pb.HealthLifecycle) { l.Counts = map[string]int32{"running": 4} }),
-		component("策略", "running", func(l *pb.HealthLifecycle) { l.Counts = map[string]int32{"running": 1} }),
-		component("采集", "ready"),
-		component("因子管理", "ready"),
+	// 全部追平、等待放行。
+	caught := projectSystem([]*pb.HealthComponent{
+		component("因子引擎", "resuming", func(l *pb.HealthLifecycle) { l.Catchup = &pb.HealthCatchup{CaughtUp: true} }),
+		component("采集", "running"),
 	})
-	require.Equal(t, "running", system.Phase)
-	require.Equal(t, "green", system.Color)
-
-	// 有对象但都只是就绪：系统是就绪。
-	ready := projectSystem([]*pb.HealthComponent{
-		component("因子引擎", "ready", func(l *pb.HealthLifecycle) { l.Counts = map[string]int32{"ready": 2} }),
-		component("采集", "ready"),
-	})
-	require.Equal(t, "ready", ready.Phase)
+	require.Equal(t, "resuming", caught.Phase)
+	require.Equal(t, caught.ResumingModules, caught.CaughtUpModules)
+	require.Equal(t, []string{"因子引擎：已追平，待放行"}, caught.CatchupNotes)
 }

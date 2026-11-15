@@ -26,9 +26,8 @@ func newMuteTestEnv(t *testing.T) (*lifecycle.Controller, *Runtime) {
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.SQL()))
 	t.Cleanup(func() { _ = db.Close() })
-	life, err := newMonitorLifecycle(db, dbPath, nil)
+	life, err := newMonitorLifecycle(dbPath, nil)
 	require.NoError(t, err)
-	life.Refresh(context.Background())
 	runtime := &Runtime{Store: db, Repositories: db.Repositories()}
 	runtime.life.Store(life)
 	return life, runtime
@@ -103,7 +102,7 @@ func TestSystemPauseSilencesAlertsUntilResumed(t *testing.T) {
 	_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem})
 	require.NoError(t, err)
 	life.Refresh(ctx)
-	require.False(t, life.Halted(lifecycle.Ref{}), "恢复完成：%+v", life.Snapshot().Self)
+	require.False(t, life.Halted(), "恢复完成：%+v", life.State())
 	sender, err = runtime.alertSender(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, sender, "系统恢复后重新推送")
@@ -168,17 +167,14 @@ func TestMuteTrackerKeepsTheEarliestStart(t *testing.T) {
 	require.True(t, tracker.leave().IsZero(), "取走后清空")
 }
 
-// 阶段回调：进入暂停时记下静默起点，回到放行阶段时取走（并异步汇总）；模块对象的阶段变化不处理。
+// 状态回调：进入暂停时记下静默起点，回到运行时取走（并异步汇总）。
 func TestLifecycleChangeTracksMuteWindow(t *testing.T) {
 	_, runtime := newMuteTestEnv(t)
-	runtime.onLifecycleChange(lifecycle.Ref{Kind: "x", ID: "y"}, lifecycle.StageRunning, lifecycle.StagePaused, "")
-	require.True(t, runtime.mutes.leave().IsZero(), "对象的阶段变化不算模块静默")
-
-	runtime.onLifecycleChange(lifecycle.Ref{}, lifecycle.StageRunning, lifecycle.StagePaused, "mute")
-	runtime.onLifecycleChange(lifecycle.Ref{}, lifecycle.StagePaused, lifecycle.StageResuming, "")
+	runtime.onLifecycleChange(lifecycle.StageRunning, lifecycle.StagePaused, "mute")
+	runtime.onLifecycleChange(lifecycle.StagePaused, lifecycle.StageResuming, "")
 	require.False(t, runtime.mutes.since.Load() == 0, "恢复追赶仍在静默中，起点保留")
-	runtime.onLifecycleChange(lifecycle.Ref{}, lifecycle.StageResuming, lifecycle.StageRunning, "")
-	require.Zero(t, runtime.mutes.since.Load(), "回到放行阶段后起点被取走")
+	runtime.onLifecycleChange(lifecycle.StageResuming, lifecycle.StageRunning, "")
+	require.Zero(t, runtime.mutes.since.Load(), "回到运行后起点被取走")
 	runtime.workers.Wait()
 }
 
@@ -193,27 +189,34 @@ func TestMuteIsRejectedWhileTheModuleIsPausedForAnotherReason(t *testing.T) {
 	rsp, err := service.MuteAlerts(ctx, &monitorpb.MuteAlertsReq{DurationSeconds: 60})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-	require.Equal(t, lifecycle.StagePaused, life.Snapshot().Self.Stage, "系统暂停原样保留")
-	require.Equal(t, lifecycle.PauseSystem, life.Snapshot().Self.Pause.Kind)
+	require.Equal(t, lifecycle.StagePaused, life.State().Stage, "系统暂停原样保留")
+	require.Equal(t, lifecycle.PauseSystem, life.State().Pause.Kind)
 
 	// 屏蔽的解除也不影响系统暂停。
 	un, err := service.UnmuteAlerts(ctx, &monitorpb.UnmuteAlertsReq{})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, un.GetRetInfo().GetCode())
-	require.Equal(t, lifecycle.StagePaused, life.Snapshot().Self.Stage)
+	require.Equal(t, lifecycle.StagePaused, life.State().Stage)
 }
 
-// 进入暂停时静默起点取生命周期持久化的暂停时间，而不是回调触发时的「现在」（Monitor 在静默期间重启时两者不同）。
-func TestLifecycleChangeUsesPersistedPauseStartAsMuteStart(t *testing.T) {
-	life, runtime := newMuteTestEnv(t)
-	ctx := context.Background()
-	_, err := life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseManual, Reason: "告警屏蔽"})
+// 静默期间重启：生命周期一开始运行就按载入的暂停通知一次，静默起点取持久化的暂停时间，而不是重启时刻。
+func TestRestartWhileMutedKeepsThePersistedMuteStart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "monitor.db")
+	first, err := newMonitorLifecycle(dbPath, nil)
 	require.NoError(t, err)
-	persisted := life.Snapshot().Self.PausedSince
+	_, err = first.Execute(context.Background(), lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseManual, Reason: "告警屏蔽"})
+	require.NoError(t, err)
+	persisted := first.State().PausedSince
 	require.False(t, persisted.IsZero())
 
 	time.Sleep(20 * time.Millisecond)
-	runtime.onLifecycleChange(lifecycle.Ref{}, lifecycle.StageNotReady, lifecycle.StagePaused, "重启后回到暂停")
+	runtime := &Runtime{}
+	restarted, err := newMonitorLifecycle(dbPath, runtime.onLifecycleChange)
+	require.NoError(t, err)
+	runtime.life.Store(restarted)
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+	restarted.Run(stopped, time.Hour)
 	require.Equal(t, persisted.UnixNano(), runtime.mutes.since.Load(), "起点应是持久化的暂停时间")
 }
 

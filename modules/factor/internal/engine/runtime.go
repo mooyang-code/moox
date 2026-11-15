@@ -70,6 +70,7 @@ type Runtime struct {
 	admit    *memadmit.Admitter
 	health   *factorhealth.State
 	life     *lifecycle.Controller
+	checks   taskChecks
 	writes   *inflight
 	udf      *udfModules
 	replays  *replayManager
@@ -232,7 +233,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) { return r.beginWrite(ctx, taskID, true, true) }),
 		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)), recalcexec.WithHistory(r.data))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval,
-		prepare: r.prepareJobModules, leaseAllowed: r.leaseAllowed, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") },
+		prepare: r.prepareJobModules, leaseAllowed: r.leaseAllowed, moduleOpen: r.moduleRunning, pulling: func() func() { return r.writes.enter("") },
 		history: func(ctx context.Context, set domain.EngineTask, subjects []string, bars int) error {
 			_, err := r.data.BackfillTask(ctx, set, subjects, bars, nil)
 			return err
@@ -270,10 +271,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		Pin: r.pinTaskModules, Synced: synced.Subjects,
 	})
 	r.goRun(appCtx, r.replays.Run)
-	r.goRun(appCtx, func(ctx context.Context) {
-		r.life.Recover(ctx)
-		r.life.Run(ctx, cfg.Lifecycle.Interval)
-	})
+	r.goRun(appCtx, func(ctx context.Context) { r.life.Run(ctx, cfg.Lifecycle.Interval) })
+	r.goRun(appCtx, func(ctx context.Context) { r.runTaskChecks(ctx, cfg.Lifecycle.Interval) })
 
 	r.health.SnapshotFunc = r.healthSnapshot
 	if err := factorhealth.Register(s.Service(healthService), r.health, append(newLocalWriter(r.data, r.storage).routes(), r.lifecycleRoutes()...)...); err != nil {
@@ -371,7 +370,7 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 		}
 	}
 	status.Runners = withWarmup(status.Runners, r.catalog.TaskIDs(), r.pipeline.WarmupStatuses())
-	markPausedRunners(status.Runners, r.life)
+	r.markRunners(status.Runners)
 	status.Lifecycle = r.lifecycleStatus()
 	if r.udf != nil {
 		status.UDFModules = r.udf.Status()
@@ -469,7 +468,7 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 		details["heartbeat_error"] = lease.LastError
 	}
 	if r.life != nil {
-		details["lifecycle"] = r.life.Compact()
+		details["lifecycle"] = r.life.State()
 	}
 	return healthz.Response{Module: "factor-engine", Ready: check.Healthy, Status: state, Time: time.Now().UTC(), Details: details}
 }

@@ -23,15 +23,12 @@ func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, r
 	var life *lifecycle.Controller
 	if runtime != nil && runtime.Store != nil {
 		var err error
-		if life, err = newMonitorLifecycle(runtime.Store, cfg.Database.Path, runtime.onLifecycleChange); err != nil {
+		if life, err = newMonitorLifecycle(cfg.Database.Path, runtime.onLifecycleChange); err != nil {
 			return fmt.Errorf("monitor lifecycle state failed to open: %w", err)
 		}
 		runtime.life.Store(life)
 		state.SnapshotFunc = withMonitorLifecycle(state.SnapshotFunc, life)
-		runtime.Go(func() {
-			life.Recover(ctx)
-			life.Run(ctx, monitorLifecycleRefresh)
-		})
+		runtime.Go(func() { life.Run(ctx, monitorLifecycleRefresh) })
 	}
 	healthAuth, err := healthz.NewAuthenticator(healthz.AuthConfig{
 		Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey,

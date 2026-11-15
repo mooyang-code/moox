@@ -369,7 +369,7 @@ func TestRecalcLoopExtendsLocalHistoryBeforeRunning(t *testing.T) {
 	require.Equal(t, jobStatusSucceeded, failing.reports[len(failing.reports)-1].status)
 }
 
-// 任务刚建立、自动 init/start 还没走完时任务会被生命周期门禁挡住：在限定时间内重试，放行后继续跑完，
+// 任务刚建立、检查还没通过时任务会被门禁挡住：在限定时间内重试，放行后继续跑完，
 // 一直挡住时归还作业（回到待领取，不等作业租约过期），不报失败。
 func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
 	var attempts int

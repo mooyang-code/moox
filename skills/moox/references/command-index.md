@@ -165,7 +165,7 @@
 | `factor recalc show` | 查看一个补算作业 |
 | `factor recalc submit` | 提交历史补算（时间左闭右开；不给 --request-id 时自动生成） |
 | `factor show` | 查看一个因子定义 |
-| `factor status` | 因子运行状态（各任务的预热、排队与暂停） |
+| `factor status` | 因子运行状态（各任务的预热、排队、暂停与计算前检查；单个任务的检查看 factor task status） |
 | `factor task create` | 创建计算任务（源数据集 + 频率 → 结果数据集）；批量配置优先写进 moox.toml 后用 setup factors |
 | `factor task delete` | 删除计算任务（--purge 连结果一起删，不可恢复；默认只预览，--yes 才执行） |
 | `factor task disable` | 停用计算任务（默认只预览，--yes 才执行） |
@@ -173,6 +173,7 @@
 | `factor task list` | 列出因子计算任务 |
 | `factor task params` | 查看计算任务各成员当前的参数 |
 | `factor task show` | 查看一个计算任务 |
+| `factor task status` | 查看因子任务能不能计算：引擎计算前的逐项检查（窗口载入、数据覆盖、变更同步、回看数量、自定义算子模块） |
 | `factor update` | 修改因子定义（被启用成员引用的定义不能改） |
 | `factor validate` | 线上校验因子表达式（不落库） |
 
@@ -205,19 +206,14 @@
 | --- | --- |
 | `import` | 导入历史时序数据（写 Storage 和因子机本地存储） |
 
-## lifecycle：查看和推进模块、对象的生命周期（未就绪 → 就绪 → 试运行 → 运行）
+## lifecycle：查看和控制模块的生命周期（运行、暂停、恢复追赶）
 
 | 命令 | 说明 |
 | --- | --- |
 | `lifecycle catchup` | 查看恢复追赶的进度 |
-| `lifecycle check` | 启动前检查：列出不通过的项和处理办法，不改变阶段 |
-| `lifecycle confirm` | 确认：试运行 → 运行 |
-| `lifecycle init` | 初始化：未就绪 → 就绪（准备本地状态与历史） |
-| `lifecycle pause` | 暂停：不再计算新周期（--for 可设定自动恢复） |
-| `lifecycle release` | 放行：追赶已追平的对象回到暂停前的阶段 |
+| `lifecycle pause` | 暂停：不再计算新周期、不下单（--for 可设定自动恢复） |
+| `lifecycle release` | 放行：追赶已追平的模块回到运行 |
 | `lifecycle resume` | 恢复：先追赶暂停期间的周期，追平后放行 |
-| `lifecycle shadow` | 查看试运行中的策略实例的影子目标（固定连接 trade 模块） |
-| `lifecycle start` | 启动：就绪 → 试运行（完整计算，但不真实下单） |
 | `lifecycle status` | 查看生命周期状态 |
 
 ## metadata：存储元数据管理工具
@@ -366,7 +362,7 @@
 | `strategy delete` | 删除策略定义（默认只预览，--yes 才执行） |
 | `strategy display get` | 查看实例的展示设置 |
 | `strategy display set` | 设置实例要隐藏的分类、成员与列 |
-| `strategy instance confirm` | 确认试运行中的实例转为实盘：下一期起按目标下单（先用 `trade shadow list` 看影子目标；策略池预热没完成时被拒；默认只预览，--yes 才执行） |
+| `strategy instance confirm` | 确认试运行中的实例转为实盘：下一期起按目标下单（先用 `trade shadow list` 看影子目标；策略池预热没完成时被拒；默认只预览，--yes 才执行；不给 --session-id 时预览里显示当前会话号） |
 | `strategy instance create` | 创建策略实例（默认停用，确认无误再 enable；也可加 --enable 创建即启用） |
 | `strategy instance delete` | 删除已停用的策略实例，连同关联到它的因子任务和结果数据集（还被别的实例引用时拒绝；默认只预览，--yes 才执行） |
 | `strategy instance disable` | 停用策略实例；对已停用的实例再执行一次会重新通知 Trade 关闭最近一次挂账户的会话（默认只预览，--yes 才执行） |

@@ -33,25 +33,20 @@ func (s *Service) MuteAlerts(ctx context.Context, req *monitorpb.MuteAlertsReq) 
 	if seconds == 0 || time.Duration(seconds)*time.Second > MaxMuteDuration {
 		return &monitorpb.MuteAlertsRsp{RetInfo: invalid(fmt.Errorf("duration_seconds must be within [1, %d]", int(MaxMuteDuration/time.Second)))}, nil
 	}
-	self := life.Snapshot().Self
+	self := life.State()
 	if current := muteState(self); current.GetMuted() {
 		return &monitorpb.MuteAlertsRsp{RetInfo: invalid(errors.New("alerts are already muted; unmute first")), State: current}, nil
 	}
-	// 模块已经因为别的原因暂停（系统暂停、手动暂停、恢复追赶、故障）或带着控制意图时不能再设置屏蔽：
+	// 模块已经因为别的原因暂停（系统暂停、手动暂停、恢复追赶）时不能再设置屏蔽：
 	// 手动暂停会覆盖已有的暂停信息，解除或到期时还会连别的暂停一起放行。
-	switch self.Stage {
-	case lifecycle.StageReady, lifecycle.StageWarming, lifecycle.StageRunning:
-	default:
-		return &monitorpb.MuteAlertsRsp{RetInfo: invalid(fmt.Errorf("monitor is %s (%s); alerts can only be muted while it is ready or running", self.Stage, self.Reason))}, nil
-	}
-	if self.Hold != lifecycle.HoldNone {
-		return &monitorpb.MuteAlertsRsp{RetInfo: invalid(fmt.Errorf("monitor is under %s; alerts cannot be muted", self.Hold))}, nil
+	if self.Stage != lifecycle.StageRunning {
+		return &monitorpb.MuteAlertsRsp{RetInfo: invalid(fmt.Errorf("monitor is %s (%s); alerts can only be muted while it is running", self.Stage, self.Reason))}, nil
 	}
 	reason := muteReasonPrefix
 	if text := strings.TrimSpace(req.GetReason()); text != "" {
 		reason += "：" + text
 	}
-	obj, err := life.Execute(ctx, lifecycle.Request{
+	state, err := life.Execute(ctx, lifecycle.Request{
 		Command:   lifecycle.CmdPause,
 		PauseKind: lifecycle.PauseManual,
 		Reason:    reason,
@@ -61,7 +56,7 @@ func (s *Service) MuteAlerts(ctx context.Context, req *monitorpb.MuteAlertsReq) 
 	if err != nil {
 		return &monitorpb.MuteAlertsRsp{RetInfo: inner(err)}, nil
 	}
-	return &monitorpb.MuteAlertsRsp{RetInfo: success(), State: muteState(obj)}, nil
+	return &monitorpb.MuteAlertsRsp{RetInfo: success(), State: muteState(state)}, nil
 }
 
 // UnmuteAlerts 提前结束屏蔽。
@@ -70,14 +65,14 @@ func (s *Service) UnmuteAlerts(ctx context.Context, _ *monitorpb.UnmuteAlertsReq
 	if life == nil {
 		return &monitorpb.UnmuteAlertsRsp{RetInfo: inner(errLifecycleUnavailable)}, nil
 	}
-	if !muteState(life.Snapshot().Self).GetMuted() {
+	if !muteState(life.State()).GetMuted() {
 		return &monitorpb.UnmuteAlertsRsp{RetInfo: success(), State: &monitorpb.AlertMuteState{}}, nil
 	}
-	obj, err := life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseManual, By: "monitor:unmute"})
+	state, err := life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseManual, By: "monitor:unmute"})
 	if err != nil {
 		return &monitorpb.UnmuteAlertsRsp{RetInfo: inner(err)}, nil
 	}
-	return &monitorpb.UnmuteAlertsRsp{RetInfo: success(), State: muteState(obj)}, nil
+	return &monitorpb.UnmuteAlertsRsp{RetInfo: success(), State: muteState(state)}, nil
 }
 
 // GetAlertMute 返回当前的屏蔽状态。
@@ -86,7 +81,7 @@ func (s *Service) GetAlertMute(_ context.Context, _ *monitorpb.GetAlertMuteReq) 
 	if life == nil {
 		return &monitorpb.GetAlertMuteRsp{RetInfo: inner(errLifecycleUnavailable)}, nil
 	}
-	return &monitorpb.GetAlertMuteRsp{RetInfo: success(), State: muteState(life.Snapshot().Self)}, nil
+	return &monitorpb.GetAlertMuteRsp{RetInfo: success(), State: muteState(life.State())}, nil
 }
 
 func (s *Service) controller() *lifecycle.Controller {
@@ -96,8 +91,8 @@ func (s *Service) controller() *lifecycle.Controller {
 	return s.lifecycle()
 }
 
-// muteState 把模块自身的生命周期对象转成屏蔽状态：处于暂停且是我们设置的屏蔽才算屏蔽。
-func muteState(self lifecycle.Object) *monitorpb.AlertMuteState {
+// muteState 把模块的生命周期状态转成屏蔽状态：处于暂停且是我们设置的屏蔽才算屏蔽。
+func muteState(self lifecycle.State) *monitorpb.AlertMuteState {
 	if self.Stage != lifecycle.StagePaused || self.Pause == nil || !strings.HasPrefix(self.Pause.Reason, muteReasonPrefix) {
 		return &monitorpb.AlertMuteState{}
 	}

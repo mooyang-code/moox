@@ -76,14 +76,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *R
 	if err != nil {
 		return nil, err
 	}
-	life, err := newArchiveLifecycle(runtime.store, cfg.Database.Path)
+	life, err := newArchiveLifecycle(cfg.Database.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open archive lifecycle: %w", err)
 	}
-	go func() {
-		life.Recover(ctx)
-		life.Run(ctx, lifecycleRefreshEvery)
-	}()
+	go life.Run(ctx, lifecycleRefreshEvery)
 	archivepb.RegisterArchiveMgrService(s.Service(mgrService), svc.Mgr())
 	archivepb.RegisterArchiveWorkerService(s.Service(workerService), svc.Worker())
 	if err := registerTimer(s, triggerService, "archive_trigger", triggerTimeout, gated(life, "archive_trigger", svc.Trigger)); err != nil {

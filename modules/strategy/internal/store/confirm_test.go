@@ -125,3 +125,33 @@ func TestConfirmedAtFollowsEnableConfirmDisableAndEveryReadPath(t *testing.T) {
 		t.Fatal("停用的实例不应带确认时间")
 	}
 }
+
+// 写确认时间是按“还是这次启用、还没确认”的条件更新：条件已经不成立（读完之后会话变了）、一行都没改到时报“会话已变化”，
+// 不能当成确认成功（页面会提示“已确认”，实际仍在试运行）。
+func TestConfirmInstanceRowReportsAChangedSession(t *testing.T) {
+	repo := openTestStore(t)
+	ctx := context.Background()
+	if err := repo.CreateDefinition(ctx, Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: testHash, CreatedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	account := "acct-1"
+	if err := repo.CreateInstance(ctx, Instance{InstanceID: "trader", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, LogicalAccountID: &account, CreatedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	resolved := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}`
+	if err := repo.EnableInstance(ctx, Session{SessionID: "session-1", InstanceID: "trader", DSLHash: testHash, ResolvedJSON: resolved, CreatedAt: testNow}, "name: demo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := confirmInstanceRow(repo.db.WithContext(ctx), "trader", "session-old", testNow); err == nil || !strings.Contains(err.Error(), "会话已变化") {
+		t.Fatalf("会话已经不是这一次时应报会话已变化：%v", err)
+	}
+	if trader, err := repo.GetInstance(ctx, "trader"); err != nil || trader.ConfirmedAt != nil {
+		t.Fatalf("没有写入确认时间：%+v err=%v", trader, err)
+	}
+	if err := confirmInstanceRow(repo.db.WithContext(ctx), "trader", "session-1", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := confirmInstanceRow(repo.db.WithContext(ctx), "trader", "session-1", testNow); err == nil {
+		t.Fatal("已经确认过，再按“还没确认”的条件更新改不到行")
+	}
+}

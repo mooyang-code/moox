@@ -35,7 +35,7 @@ func init() {
 				listFlag("subject", "subjects", "展示的标的，可重复或逗号分隔"), intFlag("periods", "periods", "最近多少期"), strFlag("factor-id", "factor_id", "因子 ID"),
 				boolFlag("allow-partial-universe", "allow_partial_universe", "截面因子允许标的不完整"), jsonFlag("params", "params", "成员参数 JSON"), jsonFlag("udf-versions", "udf_versions", "自定义算子版本 JSON")}},
 		rpcSpec{Path: []string{"factor", "functions"}, Short: "列出表达式里可用的函数", Service: factorMgr, Method: "ListFactorFunctions"},
-		rpcSpec{Path: []string{"factor", "status"}, Short: "因子运行状态（各任务的预热、排队与暂停）", Service: factorMgr, Method: "GetStatus"},
+		rpcSpec{Path: []string{"factor", "status"}, Short: "因子运行状态（各任务的预热、排队、暂停与计算前检查；单个任务的检查看 factor task status）", Service: factorMgr, Method: "GetStatus"},
 
 		rpcSpec{Path: []string{"factor", "category", "list"}, Short: "列出因子分类", Service: factorMgr, Method: "ListFactorCategories"},
 		rpcSpec{Path: []string{"factor", "category", "upsert"}, Short: "新建或修改因子分类", Service: factorMgr, Method: "UpsertFactorCategory",

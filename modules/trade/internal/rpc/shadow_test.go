@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -85,5 +86,33 @@ func TestListShadowTargets(t *testing.T) {
 		if rsp := call(); rsp.GetRetInfo().GetCode() == tradepb.ErrorCode_SUCCESS {
 			t.Fatalf("%s 应被拒绝：%+v", name, rsp)
 		}
+	}
+}
+
+// 不填 limit 时列出默认的 20 条（最新的 20 期）。
+func TestListShadowTargetsDefaultsToTwentyItems(t *testing.T) {
+	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tradeStore.Close() })
+	ctx := context.Background()
+	for i := range 25 {
+		record := shadowRecord("space-1", "instance-1", fmt.Sprintf("t%02d", i), int64(i+1)*3_600_000)
+		if _, err := tradeStore.RecordShadowTarget(ctx, record); err != nil {
+			t.Fatalf("记录 %d：%v", i, err)
+		}
+	}
+	server := &ConsoleServer{Store: tradeStore}
+	rsp, err := server.ListShadowTargets(spacecontext.WithSpaceID(ctx, "space-1"), &tradepb.ListShadowTargetsReq{InstanceId: "instance-1"})
+	if err != nil || rsp.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS {
+		t.Fatalf("list = %+v err=%v", rsp, err)
+	}
+	targets := rsp.GetTargets()
+	if len(targets) != defaultShadowTargets || defaultShadowTargets != 20 {
+		t.Fatalf("不填 limit 应列出 20 条：%d", len(targets))
+	}
+	if targets[0].GetTargetId() != "t24" || targets[19].GetTargetId() != "t05" {
+		t.Fatalf("应是最新的 20 期：%s … %s", targets[0].GetTargetId(), targets[19].GetTargetId())
 	}
 }

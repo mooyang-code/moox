@@ -12,8 +12,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// 恢复追赶（设计 2.2）：任务暂停之后恢复，先在追赶门禁下把暂停期间缺失的数据补进来、把历史周期补算出来，
-// 追平后才放行回到实时计算。
+// 恢复追赶（设计 2.2）：引擎暂停之后恢复，先在追赶门禁下把每个任务暂停期间缺失的数据补进来、把历史周期补算出来，
+// 全部追平后才放行回到实时计算。
 //
 //	① 同步本地数据：Data.Prepare 做 Follow（已有范围的修正）+ Pull（新增尾部）+ 重载内存窗口，每次恢复只做一次；
 //	② 显式建立追赶目标：暂停期间的实时事件在连续水位目标更新之前就被 ACK，目标会停在暂停前，不能等下一条事件；
@@ -76,17 +76,37 @@ func (t *catchupTracker) drop(taskID string) {
 	delete(t.jobs, taskID)
 }
 
-// catchupHook 是生命周期的 Catchup 钩子：模块自身没有数据要追赶（由各任务决定），任务走 catchupSet。
-func (r *Runtime) catchupHook(ctx context.Context, ref lifecycle.Ref, since time.Time) (lifecycle.Catchup, error) {
-	if ref == (lifecycle.Ref{}) {
-		// 模块自身没有数据要追赶，但放行前同样要满足前置条件：本次恢复之后目录同步成功、引用的自定义算子模块全部就绪。
-		// 重启后暂停中的任务还没有预载（未就绪阶段），不在各任务的追赶范围里，只靠任务级检查会漏掉这一条。
-		if reason := r.catchupPrecondition(""); reason != "" {
-			return lifecycle.Catchup{Since: since, BlockedBy: "追赶前置条件", Message: reason}, nil
-		}
-		return lifecycle.Catchup{CaughtUp: true}, nil
+// catchupHook 是生命周期的 Catchup 钩子：引擎是活动引擎、满足追赶前置条件（本次恢复之后目录同步成功、引用的自定义算子模块全部就绪），
+// 并且检查通过的任务都追平，才算追平。检查没通过的任务本来就不计算，不参与本次追赶、也不挡住放行；检查通过之后由连续水位从断点补算。
+func (r *Runtime) catchupHook(ctx context.Context, since time.Time) (lifecycle.Catchup, error) {
+	out := lifecycle.Catchup{Since: since, CaughtUp: true}
+	if !r.active() {
+		out.CaughtUp, out.BlockedBy, out.Message = false, "引擎", "因子目录还没有载入，或另一个引擎持有租约"
+		return out, nil
 	}
-	return r.catchupSet(ctx, ref.ID, since, time.Now().UTC()), nil
+	if reason := r.catchupPrecondition(""); reason != "" {
+		out.CaughtUp, out.BlockedBy, out.Message = false, "追赶前置条件", reason
+		return out, nil
+	}
+	now := time.Now().UTC()
+	for _, taskID := range r.catalog.TaskIDs() {
+		if !r.taskReady(taskID) {
+			continue
+		}
+		cu := r.catchupSet(ctx, taskID, since, now)
+		out.Done += cu.Done
+		out.Total += cu.Total
+		if cu.Target.After(out.Target) {
+			out.Target = cu.Target
+		}
+		if !cu.CaughtUp && out.CaughtUp {
+			out.CaughtUp, out.BlockedBy, out.Message = false, "因子任务 "+taskID, cu.Message
+			if cu.BlockedBy != "" {
+				out.Message = cu.BlockedBy + "：" + cu.Message
+			}
+		}
+	}
+	return out, nil
 }
 
 // catchupTarget 是追赶目标（轴上）：扣掉采集宽限后最新一根已收盘的周期。

@@ -6,41 +6,34 @@ import (
 	"time"
 
 	archivehealth "github.com/mooyang-code/moox/modules/archive/internal/health"
-	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report/logsink"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Archive 管理端的生命周期：模块级，没有对象。暂停 = 不再调度新的归档运行（定时触发与定时维护跳过），
-// 已经在执行的运行由 worker 跑完；它没有要追赶的数据。
+// Archive 管理端的生命周期：只有模块级的暂停。暂停 = 不再调度新的归档运行（定时触发与定时维护跳过），
+// 已经在执行的运行由 worker 跑完；它没有要追赶的数据，恢复即放行。
 
 const lifecycleRefreshEvery = 30 * time.Second
 
-func newArchiveLifecycle(db *store.Store, dbPath string) (*lifecycle.Controller, error) {
+func newArchiveLifecycle(dbPath string) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
 		Audit:     logsink.Audit,
 		Module:    "archive-mgr",
 		StateFile: filepath.Join(filepath.Dir(dbPath), "lifecycle.json"),
 		Hooks: lifecycle.Hooks{
-			CheckModule: func(ctx context.Context) []lifecycle.Check {
-				if db == nil || db.Ping(ctx) != nil {
-					return []lifecycle.Check{{Name: "数据库", Status: lifecycle.CheckFail, Message: "归档管理数据库不可用"}}
-				}
-				return []lifecycle.Check{{Name: "数据库", Status: lifecycle.CheckPass}}
-			},
-			OnChange: func(_ lifecycle.Ref, from, to lifecycle.Stage, reason string) {
+			OnChange: func(from, to lifecycle.Stage, reason string) {
 				log.Infof("archive_lifecycle_changed from=%s to=%s reason=%s", from, to, reason)
 			},
 		},
 	})
 }
 
-// gated 包装定时任务：模块被有意停下（暂停、恢复追赶、故障）时本次触发直接跳过。
+// gated 包装定时任务：模块被有意停下（暂停、恢复追赶）时本次触发直接跳过。
 func gated(life *lifecycle.Controller, name string, run func(context.Context) error) func(context.Context) error {
 	return func(ctx context.Context) error {
-		if life.Halted(lifecycle.Ref{}) {
+		if life.Halted() {
 			log.Infof("archive_timer_skipped timer=%s reason=lifecycle_halted", name)
 			return nil
 		}
@@ -56,14 +49,14 @@ func lifecycleRoutes(c *lifecycle.Controller) []archivehealth.Route {
 	}
 }
 
-// withLifecycle 把生命周期快照放进健康检查响应，生命周期的检查本身不改变就绪判定。
+// withLifecycle 把模块的生命周期状态放进健康检查响应，不改变就绪判定。
 func withLifecycle(snapshot healthz.SnapshotFunc, c *lifecycle.Controller) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		rsp := snapshot(ctx)
 		if rsp.Details == nil {
 			rsp.Details = map[string]any{}
 		}
-		rsp.Details["lifecycle"] = c.Compact()
+		rsp.Details["lifecycle"] = c.State()
 		return rsp
 	}
 }

@@ -12,16 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// startRunningModule 让测试运行时的任务进入运行：模块自身放行、任务运行。
+// startRunningModule 让测试运行时的任务能计算：窗口载入、检查通过（模块本来就在运行）。
 func startRunningModule(t *testing.T, r *Runtime) {
 	t.Helper()
 	r.writes = newInflight()
-	ctx := context.Background()
-	r.life.Refresh(ctx)
-	for _, cmd := range []lifecycle.Command{lifecycle.CmdInit, lifecycle.CmdStart, lifecycle.CmdConfirm} {
-		_, err := r.life.Command(ctx, cmd, setRef("ftask_a"))
-		require.NoError(t, err)
-	}
+	require.NoError(t, r.preload.PrepareSet(context.Background(), "ftask_a"))
+	require.True(t, r.gate("ftask_a"))
 }
 
 // 暂停等在途的写结果操作结束才算收敛：登记之后的写操作没有结束时，Quiesce 一直等；结束后才写入收敛证据。
@@ -33,23 +29,23 @@ func TestPauseWaitsForRegisteredWritesBeforeQuiesced(t *testing.T) {
 	release, ok := r.beginWrite(ctx, "ftask_a", true, false)
 	require.True(t, ok)
 
-	done := make(chan lifecycle.Object, 1)
+	done := make(chan lifecycle.State, 1)
 	go func() {
-		obj, _ := r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
-		done <- obj
+		state, _ := r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause})
+		done <- state
 	}()
-	require.Eventually(t, func() bool { return !r.life.ModuleOpen() }, 5*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return !r.life.Running() }, 5*time.Second, 5*time.Millisecond)
 	select {
 	case <-done:
 		t.Fatal("在途操作还没结束，暂停不应返回收敛")
 	case <-time.After(100 * time.Millisecond):
 	}
-	require.False(t, r.life.Snapshot().Self.Quiesced())
+	require.False(t, r.life.State().Quiesced())
 
 	release()
 	select {
-	case obj := <-done:
-		require.True(t, obj.Quiesced())
+	case state := <-done:
+		require.True(t, state.Quiesced())
 	case <-time.After(5 * time.Second):
 		t.Fatal("在途操作结束后暂停应当收敛")
 	}
@@ -62,7 +58,7 @@ func TestPausedModuleRejectsWritesAndLeases(t *testing.T) {
 	r, _ := newLifecycleRuntime(t)
 	startRunningModule(t, r)
 	ctx := context.Background()
-	_, err := r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
+	_, err := r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause})
 	require.NoError(t, err)
 
 	_, ok := r.beginWrite(ctx, "ftask_a", true, true)
@@ -72,7 +68,7 @@ func TestPausedModuleRejectsWritesAndLeases(t *testing.T) {
 
 	client := &jobClientFake{job: testJob("BTC"), found: true}
 	loop := &recalcLoop{client: client, executor: recalcexec.NewExecutor(&planRecorder{}), source: &sourceFake{}, poll: time.Millisecond,
-		leaseAllowed: r.leaseAllowed, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") }}
+		leaseAllowed: r.leaseAllowed, moduleOpen: r.moduleRunning, pulling: func() func() { return r.writes.enter("") }}
 	found, err := loop.RunOnce(ctx)
 	require.NoError(t, err)
 	require.False(t, found)
@@ -92,7 +88,7 @@ func TestRecalcJobIsAbandonedWhenTheModulePauses(t *testing.T) {
 		}))
 	loop := &recalcLoop{client: client, executor: executor, source: &sourceFake{}, poll: time.Millisecond,
 		gateWait: 5 * time.Second, gateRetry: time.Millisecond,
-		leaseAllowed: r.leaseAllowed, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") }}
+		leaseAllowed: r.leaseAllowed, moduleOpen: r.moduleRunning, pulling: func() func() { return r.writes.enter("") }}
 
 	// 第一块跑完后暂停模块，再下一块被门禁挡住；作业不能等到“门禁重开”。
 	var chunks int
@@ -103,9 +99,9 @@ func TestRecalcJobIsAbandonedWhenTheModulePauses(t *testing.T) {
 			// 暂停命令要等这一块的在途登记结束才返回，所以放在后台，只等它先把门禁关上。
 			go func() {
 				defer close(pauseDone)
-				_, _ = r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
+				_, _ = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause})
 			}()
-			require.Eventually(t, func() bool { return !r.life.ModuleOpen() }, 5*time.Second, time.Millisecond)
+			require.Eventually(t, func() bool { return !r.life.Running() }, 5*time.Second, time.Millisecond)
 		}
 	}}, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond),
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) {
@@ -139,7 +135,7 @@ func TestJobPulledBeforePauseDoesNotContinueDuringCatchup(t *testing.T) {
 	inHistory, unblock := make(chan struct{}), make(chan struct{})
 	loop := &recalcLoop{client: client, executor: executor, source: &sourceFake{}, poll: time.Millisecond,
 		gateWait: 5 * time.Second, gateRetry: time.Millisecond,
-		leaseAllowed: r.leaseAllowed, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") },
+		leaseAllowed: r.leaseAllowed, moduleOpen: r.moduleRunning, pulling: func() func() { return r.writes.enter("") },
 		history: func(context.Context, domain.EngineTask, []string, int) error {
 			close(inHistory)
 			<-unblock
@@ -155,10 +151,10 @@ func TestJobPulledBeforePauseDoesNotContinueDuringCatchup(t *testing.T) {
 		result <- outcome{found, err}
 	}()
 	<-inHistory
-	obj, err := r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
+	state, err := r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause})
 	require.NoError(t, err)
-	require.True(t, obj.Quiesced(), "补历史不在在途登记里，暂停立即收敛")
-	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, Ref: lifecycle.Ref{}, ManualRelease: true})
+	require.True(t, state.Quiesced(), "补历史不在在途登记里，暂停立即收敛")
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, ManualRelease: true})
 	require.NoError(t, err)
 	require.True(t, r.catchupGate("ftask_a"), "追赶门禁放行分块")
 	require.False(t, r.leaseAllowed())
@@ -205,10 +201,10 @@ func TestCatchupWaitsForACatalogSyncAfterResume(t *testing.T) {
 	go func() { oldDone <- r.syncer.SyncOnce(ctx) }()
 	<-client.started
 
-	_, err := r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
+	_, err := r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause})
 	require.NoError(t, err)
 	time.Sleep(5 * time.Millisecond)
-	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, Ref: lifecycle.Ref{}, ManualRelease: true})
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, ManualRelease: true})
 	require.NoError(t, err)
 
 	// 旧响应在恢复之后才到达并被应用：不能满足前置条件。
@@ -246,28 +242,6 @@ func (g *gatedCatalogClient) SyncCatalog(ctx context.Context, _ string) (Catalog
 		return CatalogSnapshot{}, ctx.Err()
 	}
 	return CatalogSnapshot{NotModified: true}, nil
-}
-
-// 模块暂停期间，任务级 resume --force 不再放开追赶写（否则已上报收敛的模块会重新开始写结果）。
-func TestPausedModuleKeepsCatchupClosedEvenForForcedTasks(t *testing.T) {
-	r, fake := newLifecycleRuntime(t)
-	startRunningModule(t, r)
-	// 恢复追赶的本地同步在后台进行；让它停在“同步中”，否则同步抢先完成时任务会直接追平放行、离开恢复追赶阶段。
-	fake.hold = make(chan struct{})
-	t.Cleanup(func() { close(fake.hold) })
-	ctx := context.Background()
-	_, err := r.life.Command(ctx, lifecycle.CmdPause, setRef("ftask_a"))
-	require.NoError(t, err)
-	_, err = r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
-	require.NoError(t, err)
-	require.True(t, r.life.Snapshot().Self.Quiesced())
-	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, Ref: setRef("ftask_a"), Force: true})
-	require.NoError(t, err)
-	require.Equal(t, lifecycle.StageResuming, r.life.Stage(setRef("ftask_a")))
-	require.True(t, r.life.CatchupAllowed(setRef("ftask_a")), "生命周期本身允许强制放行的任务追赶")
-	require.False(t, r.catchupGate("ftask_a"), "引擎在模块暂停期间一律不放行追赶写")
-	_, ok := r.beginWrite(ctx, "ftask_a", true, true)
-	require.False(t, ok)
 }
 
 // 上报的状态与未暂停时：没有收敛证据。

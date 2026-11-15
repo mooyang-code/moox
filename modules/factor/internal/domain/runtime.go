@@ -48,8 +48,36 @@ type RunnerStatus struct {
 	WarmupState      string
 	WarmSubjects     int32
 	ExpectedSubjects int32
-	// Paused 表示任务被有意停下（手动、系统或自动暂停，以及放行前的恢复追赶）；故障不算。
+	// Paused 表示引擎模块被有意停下（暂停，以及放行前的恢复追赶），任务因此不计算。
 	Paused bool
+	// Checks 是引擎计算前对任务做的检查；有不通过项的任务不计算，不通过的项写明原因和处理办法。
+	Checks []TaskCheck
+}
+
+// TaskCheck 是因子任务的一项计算前检查的结果。
+type TaskCheck struct {
+	Name   string
+	Status string // TaskCheckPass | TaskCheckWarn | TaskCheckFail
+	// Message 是没通过的原因；Remedy 是处理办法（例如要执行的命令）。
+	Message string
+	Remedy  string
+}
+
+// 检查结果：警告不挡计算，不通过的任务不计算。
+const (
+	TaskCheckPass = "PASS"
+	TaskCheckWarn = "WARN"
+	TaskCheckFail = "FAIL"
+)
+
+// TaskChecksPassed 报告检查里是否没有不通过项。
+func TaskChecksPassed(checks []TaskCheck) bool {
+	for _, check := range checks {
+		if check.Status == TaskCheckFail {
+			return false
+		}
+	}
+	return true
 }
 
 // EngineIdentity names one running moox-factor-engine process.

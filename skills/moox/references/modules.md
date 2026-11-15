@@ -96,8 +96,9 @@
   - 定义与分类：`factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign`；
   - 任务与成员：`factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`；批量配置写进 `moox.toml` 的 `[factors]` 后 `./bin/moox-cli setup factors`；
   - 补算与状态：`factor recalc submit|list|show|cancel`（左闭右开）、`factor status`；
-  - 阶段控制 `./bin/moox-cli lifecycle status|check|init|start|confirm|pause|resume --task-id <任务>`（默认连因子引擎，`--module` 换模块）；
-  - 生命周期的其余命令：`lifecycle catchup`（恢复追赶进度）、`release`（追平后手动放行，配合 `resume --manual-release`）、`shadow --space-id <空间> --id <实例>`（读 Trade 为试运行实例记录的影子目标，固定连 trade 模块）；
+  - 任务能不能计算：`./bin/moox-cli factor task status [--task-id <任务>]`，列出引擎计算前的逐项检查与处理办法；任务不需要生命周期命令，检查通过就自动计算；
+  - 模块级生命周期：`./bin/moox-cli lifecycle status|pause|resume|release|catchup`，默认连因子引擎，`--module` 换模块；`resume --manual-release` 追平后停在待放行，等 `release`；
+  - 试运行实例的影子目标用 `trade shadow list --instance-id <实例>` 看，确认实盘用 `strategy instance confirm --instance-id <实例> --session-id <会话>`，见 [`strategy-dsl.md`](strategy-dsl.md)；
     没有单个模块或整套系统的重置命令，清空数据只用 `setup wipe`（破坏性，必须先得到用户明确同意）；
   - 自定义算子 `./bin/moox-cli udf new|build|publish|preview|activate|list|show`（[`udf.md`](udf.md)；`activate` 默认只看影响清单，`--yes` 才切换）。
 - **注意**：被启用成员引用的定义不能改；长回看因子受保留期、`window.lookback`、`compute.max_memory` 三道限制。

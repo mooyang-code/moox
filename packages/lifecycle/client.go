@@ -25,25 +25,18 @@ type Client struct {
 	HTTP        *http.Client
 }
 
-// Status 读取模块的状态快照。
-func (c *Client) Status(ctx context.Context) (Snapshot, error) {
-	var snap Snapshot
-	err := c.do(ctx, http.MethodGet, StatusPath, nil, &snap)
-	return snap, err
+// Status 读取模块的状态。
+func (c *Client) Status(ctx context.Context) (State, error) {
+	var state State
+	err := c.do(ctx, http.MethodGet, StatusPath, nil, &state)
+	return state, err
 }
 
-// Do 执行一个命令并返回对象的新状态。
-func (c *Client) Do(ctx context.Context, cmd Command, ref Ref) (Object, error) {
-	var obj Object
-	err := c.do(ctx, http.MethodPost, CommandPath, CommandRequest{Command: cmd, Kind: ref.Kind, ID: ref.ID}, &obj)
-	return obj, err
-}
-
-// Exec 执行带参数的命令请求（暂停类型、原因、操作者……）。
-func (c *Client) Exec(ctx context.Context, req CommandRequest) (Object, error) {
-	var obj Object
-	err := c.do(ctx, http.MethodPost, CommandPath, req, &obj)
-	return obj, err
+// Exec 执行命令请求（暂停类型、原因、操作者……）并返回模块的新状态。
+func (c *Client) Exec(ctx context.Context, req CommandRequest) (State, error) {
+	var state State
+	err := c.do(ctx, http.MethodPost, CommandPath, req, &state)
+	return state, err
 }
 
 // Catchup 读取恢复追赶的进度。
@@ -51,11 +44,6 @@ func (c *Client) Catchup(ctx context.Context) (CatchupReport, error) {
 	var rep CatchupReport
 	err := c.do(ctx, http.MethodGet, CatchupPath, nil, &rep)
 	return rep, err
-}
-
-// Get 调用模块健康端口上的其他只读接口（例如 Trade 的影子目标），path 可带查询串。
-func (c *Client) Get(ctx context.Context, path string, out any) error {
-	return c.do(ctx, http.MethodGet, path, nil, out)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {

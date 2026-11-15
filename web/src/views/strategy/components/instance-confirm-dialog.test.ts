@@ -144,6 +144,16 @@ describe("确认实盘", () => {
     expect(onSettled).not.toHaveBeenCalled();
   });
 
+  it("确认时实例的会话已经变了（停用或重新启用过）：写出原因，不提示已确认", async () => {
+    const onSettled = vi.fn();
+    const vm = await openWith(combo(), [member(1)], [shadow()], onSettled);
+    api.confirmInstance.mockRejectedValue(new Error("实例的会话已变化，请刷新后重试"));
+    await expect(vm.handleOk()).resolves.toBe(false);
+    await flushPromises();
+    expect(document.body.textContent).toContain("确认失败：实例的会话已变化，请刷新后重试");
+    expect(onSettled).not.toHaveBeenCalled();
+  });
+
   it("影子目标或账户读取失败时不能确认，不当成“没有影子目标”放行", async () => {
     api.getLogicalAccount.mockResolvedValue({ logical_account: combo() });
     api.listTradingAccounts.mockResolvedValue({ accounts: [member(1)] });

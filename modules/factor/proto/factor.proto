@@ -354,9 +354,22 @@ message FactorRunnerStatus {
   string warmup_state = 4; // warming | ready
   int32 warm_subjects = 5;
   int32 expected_subjects = 6;
-  // paused 表示任务被有意停下（手动、系统或自动暂停，以及放行前的恢复追赶）；故障不算。
+  // paused 表示引擎模块被有意停下（暂停，以及放行前的恢复追赶），任务因此不计算。
   // 管理端据此不再把它的结果数据集当作应当持续产出的数据，Monitor 也就不对暂停的任务做新鲜度检查。
   bool paused = 7;
+  // checks 是引擎计算前对任务做的检查（本地窗口、数据覆盖、变更同步、回看数量、自定义算子模块等）：有 FAIL 项的任务不计算，
+  // 引擎每 30 秒重查一次，窗口载入完成后立即重查。
+  repeated FactorTaskCheck checks = 8;
+}
+
+// FactorTaskCheck 是因子任务的一项计算前检查。
+message FactorTaskCheck {
+  string name = 1;
+  // PASS | WARN | FAIL；WARN 不挡计算。
+  string status = 2;
+  // message 是没通过的原因；remedy 是处理办法（例如要执行的命令）。
+  string message = 3;
+  string remedy = 4;
 }
 
 // EngineInfo describes the compute engine as last seen by moox-factor-mgr.

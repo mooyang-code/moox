@@ -35,20 +35,20 @@ func (l *callLog) snapshot() []string {
 	return append([]string(nil), l.calls...)
 }
 
-func (a *controllerAPI) Status(ctx context.Context) (lifecycle.Snapshot, error) {
+func (a *controllerAPI) Status(ctx context.Context) (lifecycle.State, error) {
 	if a.statusEr != nil {
-		return lifecycle.Snapshot{}, a.statusEr
+		return lifecycle.State{}, a.statusEr
 	}
-	return a.c.Snapshot(), nil
+	return a.c.State(), nil
 }
 
-func (a *controllerAPI) Exec(ctx context.Context, req lifecycle.CommandRequest) (lifecycle.Object, error) {
+func (a *controllerAPI) Exec(ctx context.Context, req lifecycle.CommandRequest) (lifecycle.State, error) {
 	a.log.add(a.name + ":" + string(req.Command))
-	obj, err := a.c.Execute(ctx, req.Request())
+	state, err := a.c.Execute(ctx, req.Request())
 	if err == nil && req.Command == lifecycle.CmdPause && a.pauseErr != nil {
-		return obj, a.pauseErr
+		return state, a.pauseErr
 	}
-	return obj, err
+	return state, err
 }
 
 func (a *controllerAPI) Catchup(ctx context.Context) (lifecycle.CatchupReport, error) {
@@ -71,7 +71,7 @@ func newFixture(t *testing.T, names ...string) *fixture {
 		flag := new(bool)
 		f.caught[name] = flag
 		c, err := lifecycle.New(lifecycle.Options{Module: name, Hooks: lifecycle.Hooks{
-			Catchup: func(context.Context, lifecycle.Ref, time.Time) (lifecycle.Catchup, error) {
+			Catchup: func(context.Context, time.Time) (lifecycle.Catchup, error) {
 				return lifecycle.Catchup{CaughtUp: *flag, Total: 10}, nil
 			},
 		}})
@@ -105,10 +105,10 @@ func TestPauseGoesDownstreamToUpstream(t *testing.T) {
 	require.Equal(t, []string{"strategy:pause", "trade:pause", "factor-engine:pause", "collector:pause"}, f.log.snapshot())
 	for _, name := range all {
 		snap, _ := f.apis[name].Status(context.Background())
-		require.Equal(t, lifecycle.StagePaused, snap.Self.Stage, name)
-		require.Equal(t, lifecycle.PauseSystem, snap.Self.Pause.Kind, name)
-		require.Equal(t, "切换行情源", snap.Self.Pause.Reason)
-		require.Equal(t, "test", snap.Self.Pause.By)
+		require.Equal(t, lifecycle.StagePaused, snap.Stage, name)
+		require.Equal(t, lifecycle.PauseSystem, snap.Pause.Kind, name)
+		require.Equal(t, "切换行情源", snap.Pause.Reason)
+		require.Equal(t, "test", snap.Pause.By)
 	}
 	// 幂等：再暂停一次不报错。
 	_, err = f.o.Pause(context.Background(), "切换行情源")
@@ -143,7 +143,7 @@ func TestPauseStopsAtStrategyWhenItsTargetsAreNotPublished(t *testing.T) {
 	require.Equal(t, []string{Strategy}, result.Paused)
 	require.Equal(t, []string{"strategy:pause"}, f.log.snapshot(), "Trade、因子引擎、采集都不能在策略的目标发完之前暂停")
 	snap, _ := f.apis[Strategy].Status(context.Background())
-	require.Equal(t, lifecycle.StagePaused, snap.Self.Stage)
+	require.Equal(t, lifecycle.StagePaused, snap.Stage)
 
 	// 目标发完后重新执行：幂等，继续往上游暂停。
 	f.apis[Strategy].pauseErr = nil
@@ -190,7 +190,7 @@ func TestResumeWaitsForUpstreamAndReleasesBehindABarrier(t *testing.T) {
 	require.Less(t, f.index("trade:release"), f.index("strategy:release"))
 	for _, name := range all {
 		snap, _ := f.apis[name].Status(ctx)
-		require.Equal(t, lifecycle.StageReady, snap.Self.Stage, name)
+		require.Equal(t, lifecycle.StageRunning, snap.Stage, name)
 	}
 }
 
@@ -225,10 +225,10 @@ func TestCollectorReleasesItselfWithoutWaitingForTheBarrier(t *testing.T) {
 	require.NotContains(t, result.Pending, Collector)
 	require.Contains(t, result.Pending, Trade)
 	snap, _ := f.apis[Collector].Status(ctx)
-	require.Equal(t, lifecycle.StageReady, snap.Self.Stage)
+	require.Equal(t, lifecycle.StageRunning, snap.Stage)
 	require.Equal(t, -1, f.index("collector:release"), "不是栅栏放行的")
 	trade, _ := f.apis[Trade].Status(ctx)
-	require.Equal(t, lifecycle.StageResuming, trade.Self.Stage)
+	require.Equal(t, lifecycle.StageResuming, trade.Stage)
 }
 
 // --release-partial：超时后只放行已追平的模块，未追平的继续追赶。
@@ -244,7 +244,7 @@ func TestResumeReleasePartial(t *testing.T) {
 	require.Equal(t, []string{Collector}, result.Released)
 	require.Contains(t, result.Pending, Trade)
 	snap, _ := f.apis[Trade].Status(ctx)
-	require.Equal(t, lifecycle.StageResuming, snap.Self.Stage, "未追平的继续追赶")
+	require.Equal(t, lifecycle.StageResuming, snap.Stage, "未追平的继续追赶")
 }
 
 // 再次执行 resume 是幂等的：已在追赶的模块不重复启动，已放行的不再动；手动暂停的模块不参与。
@@ -274,8 +274,8 @@ func TestResumeIsIdempotentAndSkipsManualPause(t *testing.T) {
 	require.Equal(t, -1, f.index("collector:resume"), "已在追赶，不重复启动")
 	require.Equal(t, -1, f.index("trade:resume"), "手动暂停不动")
 	snap, _ := f.apis[Trade].Status(ctx)
-	require.Equal(t, lifecycle.StagePaused, snap.Self.Stage)
-	require.Equal(t, lifecycle.PauseManual, snap.Self.Pause.Kind)
+	require.Equal(t, lifecycle.StagePaused, snap.Stage)
+	require.Equal(t, lifecycle.PauseManual, snap.Pause.Kind)
 
 	// 第三次：全部已经不在暂停（采集已放行），没有可做的。
 	result, err = f.o.Resume(ctx, ResumeOptions{})
@@ -289,7 +289,7 @@ func TestStatusReportsEveryModuleAndUnreachableOnes(t *testing.T) {
 	states := f.o.Status(context.Background())
 	require.Len(t, states, 2)
 	require.Equal(t, Collector, states[0].Name)
-	require.Equal(t, lifecycle.StageReady, states[0].Stage)
+	require.Equal(t, lifecycle.StageRunning, states[0].Stage)
 	require.Error(t, states[1].Err)
 	var empty Orchestrator
 	_, err := empty.Resume(context.Background(), ResumeOptions{})

@@ -85,6 +85,25 @@ describe("strategy overview model", () => {
     expect(card.more).toBe(9 - CARD_CHIP_LIMIT);
     expect(card.stateTag.label).toBe("目标有效");
     expect(card.links.results).toEqual({ name: "strategy-tasks", query: { tab: "results", instance: "a" } });
+    expect(card.trial).toBe(false);
+  });
+
+  it("marks enabled instances with an account but no confirmation as trial", () => {
+    const cards = instanceCards(
+      input({
+        instances: [
+          instance("trial", { logical_account_id: "acc", confirmed_at: "" }),
+          instance("live", { logical_account_id: "acc", confirmed_at: "2026-10-10T00:00:00Z" }),
+          instance("off", { logical_account_id: "acc", confirmed_at: "", enabled: false })
+        ]
+      }),
+      "UTC"
+    );
+    expect(Object.fromEntries(cards.map(card => [card.instanceId, card.trial]))).toEqual({
+      trial: true,
+      live: false,
+      off: false
+    });
   });
 
   it("lists one pending item per instance by severity", () => {

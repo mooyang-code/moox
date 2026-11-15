@@ -174,14 +174,13 @@ func runSystemStatus(ctx context.Context, o systemOptions, out io.Writer) error 
 		type item struct {
 			Module  string               `json:"module"`
 			Stage   lifecycle.Stage      `json:"stage,omitempty"`
-			Hold    lifecycle.Hold       `json:"hold,omitempty"`
 			Pause   *lifecycle.PauseInfo `json:"pause,omitempty"`
 			Catchup *lifecycle.Catchup   `json:"catchup,omitempty"`
 			Error   string               `json:"error,omitempty"`
 		}
 		items := make([]item, 0, len(states))
 		for _, s := range states {
-			it := item{Module: s.Name, Stage: s.Stage, Hold: s.Hold, Pause: s.Pause, Catchup: s.Catchup}
+			it := item{Module: s.Name, Stage: s.Stage, Pause: s.Pause, Catchup: s.Catchup}
 			if s.Err != nil {
 				it.Error = s.Err.Error()
 			}
@@ -201,9 +200,6 @@ func runSystemStatus(ctx context.Context, o systemOptions, out io.Writer) error 
 				line += "：" + s.Pause.Reason
 			}
 			line += "）"
-		}
-		if s.Hold != lifecycle.HoldNone {
-			line += "，控制意图：" + string(s.Hold)
 		}
 		if s.Catchup != nil {
 			line += "，追赶：" + catchupLine(s.Catchup)

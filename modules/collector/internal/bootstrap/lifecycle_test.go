@@ -18,22 +18,51 @@ import (
 
 func newLifecycleFixture(t *testing.T) (*lifecycle.Controller, *collectorControl, *store.Store) {
 	t.Helper()
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	life, control, db, _ := newLifecycleFixtureAt(t, filepath.Join(t.TempDir(), "collector.db"))
+	return life, control, db
+}
+
+func newLifecycleFixtureAt(t *testing.T, dbPath string) (*lifecycle.Controller, *collectorControl, *store.Store, string) {
+	t.Helper()
+	db, err := store.Open(&store.Options{Path: dbPath})
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = db.Close() })
 	control := &collectorControl{}
 	control.plans, control.spaces = db.FetchPlans(), fixedSpaces("crypto", "stockcn")
-	life, err := newCollectorLifecycle(filepath.Join(t.TempDir(), "collector.db"), control, func() bool { return true })
+	life, err := newCollectorLifecycle(dbPath, control)
 	require.NoError(t, err)
-	life.Refresh(context.Background())
-	require.Equal(t, lifecycle.StageReady, life.Stage(lifecycle.Ref{}))
-	return life, control, db
+	return life, control, db, dbPath
+}
+
+// 重启后载入的是暂停：生命周期一开始运行就把系统暂停开关重新落到全部空间上（采集不能因为开关丢了自己重新开始）。
+func TestCollectorRestoredPauseReappliesTheSystemPause(t *testing.T) {
+	dir := t.TempDir()
+	life, _, db, dbPath := newLifecycleFixtureAt(t, filepath.Join(dir, "collector.db"))
+	ctx := context.Background()
+	_, err := life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem})
+	require.NoError(t, err)
+	for _, space := range []string{"crypto", "stockcn"} {
+		require.NoError(t, db.FetchPlans().SetSystemPaused(ctx, space, false))
+	}
+
+	control := &collectorControl{}
+	control.plans, control.spaces = db.FetchPlans(), fixedSpaces("crypto", "stockcn")
+	restarted, err := newCollectorLifecycle(dbPath, control)
+	require.NoError(t, err)
+	require.Equal(t, lifecycle.StagePaused, restarted.Stage())
+	stopped, cancel := context.WithCancel(ctx)
+	cancel()
+	restarted.Run(stopped, time.Hour)
+	got, err := db.FetchPlans().PausedSpaces(ctx)
+	require.NoError(t, err)
+	require.Equal(t, map[string]bool{"crypto": true, "stockcn": true}, got)
 }
 
 // 暂停把全部采集计划空间置为暂停；恢复追赶进入恢复模式（暂停开关仍在，补采调度运行）；放行才清除暂停开关。
 func TestCollectorLifecycleDrivesPauseRecoveryAndRelease(t *testing.T) {
 	life, control, db := newLifecycleFixture(t)
+	require.Equal(t, lifecycle.StageRunning, life.Stage())
 	ctx := context.Background()
 	paused := func() map[string]bool {
 		got, err := db.FetchPlans().PausedSpaces(ctx)
@@ -44,19 +73,19 @@ func TestCollectorLifecycleDrivesPauseRecoveryAndRelease(t *testing.T) {
 
 	_, err := life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem, ManualRelease: true})
 	require.NoError(t, err, "没有绑定补采和计划管理器时没有需要等待的在途操作")
-	require.Equal(t, lifecycle.StagePaused, life.Stage(lifecycle.Ref{}))
+	require.Equal(t, lifecycle.StagePaused, life.Stage())
 	require.Equal(t, map[string]bool{"crypto": true, "stockcn": true}, paused())
 	require.False(t, control.Recovering("crypto"))
 
 	_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem, ManualRelease: true})
 	require.NoError(t, err)
-	require.Equal(t, lifecycle.StageResuming, life.Stage(lifecycle.Ref{}), "没有补采组件时视为立即追平，但手动放行要等 release")
+	require.Equal(t, lifecycle.StageResuming, life.Stage(), "没有补采组件时视为立即追平，但手动放行要等 release")
 	require.True(t, control.Recovering("crypto"), "恢复模式：补采运行，实时关闭")
 	require.Len(t, paused(), 2, "暂停开关仍在，实时采集保持关闭")
 
-	_, err = life.Command(ctx, lifecycle.CmdRelease, lifecycle.Ref{})
+	_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdRelease})
 	require.NoError(t, err)
-	require.Equal(t, lifecycle.StageReady, life.Stage(lifecycle.Ref{}))
+	require.Equal(t, lifecycle.StageRunning, life.Stage())
 	require.False(t, control.Recovering("crypto"))
 	require.Empty(t, paused(), "放行后清除暂停开关，对账协程恢复实时采集")
 }
@@ -71,9 +100,9 @@ func TestCollectorLifecycleReleaseKeepsManuallyPausedSpaces(t *testing.T) {
 	require.NoError(t, err)
 	_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem, ManualRelease: true})
 	require.NoError(t, err)
-	_, err = life.Command(ctx, lifecycle.CmdRelease, lifecycle.Ref{})
+	_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdRelease})
 	require.NoError(t, err)
-	require.Equal(t, lifecycle.StageReady, life.Stage(lifecycle.Ref{}))
+	require.Equal(t, lifecycle.StageRunning, life.Stage())
 	paused, err := db.FetchPlans().PausedSpaces(ctx)
 	require.NoError(t, err)
 	require.Equal(t, map[string]bool{"stockcn": true}, paused)
@@ -124,11 +153,11 @@ func TestCollectorRecoverySkipsManuallyPausedSpaces(t *testing.T) {
 func TestCollectorLifecyclePauseDuringRecoveryLeavesRecoveryMode(t *testing.T) {
 	life, control, _ := newLifecycleFixture(t)
 	ctx := context.Background()
-	_, _ = life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
+	_, _ = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause})
 	_, err := life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, ManualRelease: true})
 	require.NoError(t, err)
 	require.True(t, control.Recovering("crypto"))
-	_, _ = life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
+	_, _ = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause})
 	require.False(t, control.Recovering("crypto"))
-	require.Equal(t, lifecycle.StagePaused, life.Stage(lifecycle.Ref{}))
+	require.Equal(t, lifecycle.StagePaused, life.Stage())
 }

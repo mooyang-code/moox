@@ -45,7 +45,7 @@
           <template v-if="current">
             <div class="instance-bar">
               <a-space wrap :size="12">
-                <StatusBadge :enabled="current.enabled" :health="current.health" />
+                <StatusBadge :enabled="current.enabled" :health="current.health" :trial="isTrialInstance(current)" />
                 <a-tag size="small" :color="current.logical_account_id ? 'orange' : 'blue'">{{
                   current.logical_account_id ? "交易模式" : "仅计算"
                 }}</a-tag>
@@ -102,6 +102,7 @@ import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import { STRATEGY_TASKS_ROUTE, detailLink, instancesLink, normalizeTaskTab, replayLink } from "@/views/strategy/links";
 import { queryString } from "@/views/strategy/query";
 import { instanceTabs, resolveSelectedInstance } from "@/views/strategy/results/results-model";
+import { isTrialInstance } from "@/views/strategy/running/running-model";
 import { useInstanceResults } from "@/views/strategy/use-instance-results";
 
 defineOptions({ name: "StrategyResults" });

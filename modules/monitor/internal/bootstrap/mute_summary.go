@@ -44,26 +44,20 @@ func (t *muteTracker) leave() time.Time {
 	return time.Unix(0, nanos).UTC()
 }
 
-// onLifecycleChange 是 Monitor 生命周期的阶段变化回调：进入暂停时记起点，回到放行阶段时补发汇总。
-func (r *Runtime) onLifecycleChange(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
+// onLifecycleChange 是 Monitor 生命周期的状态变化回调：进入暂停时记起点（重启后载入暂停时也记），回到运行时补发汇总。
+func (r *Runtime) onLifecycleChange(from, to lifecycle.Stage, reason string) {
 	log.Infof("monitor_lifecycle_changed from=%s to=%s reason=%s", from, to, reason)
-	if ref != (lifecycle.Ref{}) {
-		return
-	}
-	silenced := func(stage lifecycle.Stage) bool {
-		return stage == lifecycle.StagePaused || stage == lifecycle.StageResuming
-	}
 	switch {
 	case to == lifecycle.StagePaused:
 		// 起点取生命周期持久化的暂停时间：Monitor 在静默期间重启时，回调里的「现在」是重启时刻，会丢掉重启前的事件。
 		at := time.Now()
 		if life := r.life.Load(); life != nil {
-			if since := life.Snapshot().Self.PausedSince; !since.IsZero() {
+			if since := life.State().PausedSince; !since.IsZero() {
 				at = since
 			}
 		}
 		r.mutes.enter(at)
-	case silenced(from) && !silenced(to) && to.Active():
+	case from != "" && to == lifecycle.StageRunning:
 		since := r.mutes.leave()
 		if since.IsZero() {
 			since = time.Now().Add(-muteSummaryFallbackWindow)

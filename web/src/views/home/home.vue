@@ -20,7 +20,6 @@
             <div v-if="stage" class="banner-stage" :title="stage.issues.join('\n')">
               <span class="stage-dot" :class="`is-${stage.color}`" />
               <b>{{ stage.label }}</b>
-              <small v-if="stage.recovered" class="stage-recovered">已自动恢复</small>
               <small v-for="issue in stage.issues" :key="issue" class="stage-issue">{{ issue }}</small>
             </div>
             <nav class="banner-links" aria-label="常用入口">
@@ -389,7 +388,7 @@ const status = computed(() =>
     failed: failedCount.value
   })
 );
-const stage = computed(() => (monitorError.value ? undefined : systemStage(overview.value)));
+const stage = computed(() => (monitorError.value ? undefined : systemStage(overview.value, instances.value)));
 // 监控没有关注项时这一格的说明：别的格子读取失败时不能写“一切正常”
 const allClearText = computed(() => {
   if (monitorError.value) return "监控数据暂不可用";
@@ -791,10 +790,6 @@ a {
 
 .stage-dot.is-green {
   background: rgb(var(--success-6));
-}
-
-.stage-recovered {
-  color: rgb(var(--success-6));
 }
 
 .stage-issue {

@@ -123,17 +123,15 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 
 	var consumer *eventconsumer.Consumer
 	var handlerRef atomic.Pointer[trigger.Handler]
-	life, err := newLifecycle(cfg.Database, lifecycleDeps{
-		db: db, eventConnected: eventRuntime.Connected, consumerReady: func() bool { return consumer == nil || consumer.Ready() },
-		handler: &handlerRef, warm: warm,
-	})
+	ready := newModuleCheck(db, eventRuntime.Connected, func() bool { return consumer == nil || consumer.Ready() })
+	life, err := newLifecycle(cfg.Database, lifecycleDeps{db: db, handler: &handlerRef, warm: warm, ready: ready})
 	if err != nil {
 		return nil, nil, fmt.Errorf("打开策略生命周期状态：%w", err)
 	}
 	if inputClient != nil {
 		meta := input.NewMetaCache()
 		meta.Ages = db
-		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life, warm), ReleasedAt: releasedAt(life), EnsureWarm: warm.Ensure}
+		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life, ready, warm), ReleasedAt: releasedAt(life), EnsureWarm: warm.Ensure}
 		handlerRef.Store(handler)
 		// EventBus 暂不可用时消费者在后台重试连接，进程照常启动（未就绪），与出站投递的容错一致。
 		connect := func(ctx context.Context) (*jetstream.Client, error) {
@@ -158,8 +156,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		loops.Wait()
 		return nil
 	})
-	loops.Add(4)
-	submitter := &paramsubmit.Submitter{Store: db, Factors: live, Allowed: paramSubmitAllowed(triggerGate(life, warm)), OnResult: observer.ParamSubmitted,
+	loops.Add(5)
+	submitter := &paramsubmit.Submitter{Store: db, Factors: live, Allowed: paramSubmitAllowed(triggerGate(life, ready, warm)), OnResult: observer.ParamSubmitted,
 		OnError: func(requestID string, err error) { log.Warnf("因子参数提交 %s 未完成：%v", requestID, err) }}
 	go func() {
 		defer loops.Done()
@@ -175,8 +173,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}()
 	go func() {
 		defer loops.Done()
-		life.Recover(background)
-		refreshUntilReady(background, life, lifecycleStartupRefreshEvery, lifecycleStartupWindow)
+		runModuleCheck(background, ready)
+	}()
+	go func() {
+		defer loops.Done()
 		life.Run(background, lifecycleRefreshEvery)
 	}()
 
@@ -209,7 +209,7 @@ const (
 	factorTaskReadyStep = 3 * time.Second
 )
 
-// paramSubmitAllowed 把触发闸门转成参数提交的闸门：模块暂停、实例暂停时不提交（ModeOff），模块暂时未就绪时也不提交（ModeWait），其余模式照常。
+// paramSubmitAllowed 把触发门禁转成参数提交的门禁：模块暂停时不提交（ModeOff），模块自检没通过、策略池预热中也不提交（ModeWait），其余模式照常。
 func paramSubmitAllowed(gate func(string) trigger.Mode) func(string) bool {
 	return func(instanceID string) bool {
 		mode := gate(instanceID)

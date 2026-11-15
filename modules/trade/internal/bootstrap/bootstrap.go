@@ -372,8 +372,8 @@ func initialize(
 		cfg.EventBus.Enabled, eventBus, &targetConsumerReady,
 	)
 	life, err := newLifecycle(
-		cfg.Database.Path, readiness, targetWorker.Quiesce,
-		tradeCatchup(tradeStore, targetWorker, time.Now),
+		cfg.Database.Path, targetWorker.Quiesce,
+		tradeCatchup(readiness.Evaluate, tradeStore, targetWorker, time.Now),
 	)
 	if err != nil {
 		if eventBus != nil {
@@ -526,7 +526,7 @@ func initialize(
 			eventBus.Close()
 		}
 	}
-	if err := registerHealth(runtimeCtx, serverInstance, tradeStore, life, readiness); err != nil {
+	if err := registerHealth(runtimeCtx, serverInstance, life, readiness); err != nil {
 		stopWorkers()
 		return nil, err
 	}
@@ -935,7 +935,6 @@ func newReadiness(
 func registerHealth(
 	runtimeCtx context.Context,
 	serverInstance *server.Server,
-	tradeStore *store.Store,
 	life *lifecycle.Controller,
 	readiness health.Readiness,
 ) error {
@@ -954,17 +953,14 @@ func registerHealth(
 		if response.Details == nil {
 			response.Details = map[string]any{}
 		}
-		response.Details["lifecycle"] = life.Compact()
+		response.Details["lifecycle"] = life.State()
 		return response
 	}
-	go func() {
-		life.Recover(runtimeCtx)
-		life.Run(runtimeCtx, lifecycleRefreshEvery)
-	}()
+	go life.Run(runtimeCtx, lifecycleRefreshEvery)
 	if err := health.Register(
 		serverInstance.Service("trpc.moox.trade.Health"),
 		state,
-		lifecycleRoutes(life, tradeStore)...,
+		lifecycleRoutes(life)...,
 	); err != nil {
 		return fmt.Errorf("trade health server failed to register: %w", err)
 	}

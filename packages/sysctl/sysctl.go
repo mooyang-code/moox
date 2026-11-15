@@ -51,8 +51,8 @@ func selfReleasing(name string) bool { return name == Collector }
 
 // Lifecycle 是一个模块的生命周期接口（*lifecycle.Client 实现）。
 type Lifecycle interface {
-	Status(ctx context.Context) (lifecycle.Snapshot, error)
-	Exec(ctx context.Context, req lifecycle.CommandRequest) (lifecycle.Object, error)
+	Status(ctx context.Context) (lifecycle.State, error)
+	Exec(ctx context.Context, req lifecycle.CommandRequest) (lifecycle.State, error)
 	Catchup(ctx context.Context) (lifecycle.CatchupReport, error)
 }
 
@@ -123,7 +123,6 @@ func (o *Orchestrator) ordered(names []string) []Module {
 type ModuleState struct {
 	Name    string
 	Stage   lifecycle.Stage
-	Hold    lifecycle.Hold
 	Pause   *lifecycle.PauseInfo
 	Catchup *lifecycle.Catchup
 	Message string
@@ -136,12 +135,11 @@ func (o *Orchestrator) Status(ctx context.Context) []ModuleState {
 	var out []ModuleState
 	for _, m := range o.ordered(releaseOrder) {
 		state := ModuleState{Name: m.Name}
-		snap, err := m.API.Status(ctx)
+		current, err := m.API.Status(ctx)
 		if err != nil {
 			state.Err = err
 		} else {
-			state.Stage, state.Hold, state.Pause, state.Catchup = snap.Self.Stage, snap.Self.Hold, snap.Self.Pause, snap.Self.Catchup
-			state.Message = snap.Self.Reason
+			state.Stage, state.Pause, state.Catchup, state.Message = current.Stage, current.Pause, current.Catchup, current.Reason
 		}
 		out = append(out, state)
 	}
@@ -160,7 +158,7 @@ type PauseResult struct {
 func (o *Orchestrator) Pause(ctx context.Context, reason string) (PauseResult, error) {
 	var result PauseResult
 	for _, m := range o.ordered(pauseOrder) {
-		obj, err := m.API.Exec(ctx, lifecycle.CommandRequest{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem, Reason: reason, By: o.By})
+		state, err := m.API.Exec(ctx, lifecycle.CommandRequest{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem, Reason: reason, By: o.By})
 		switch {
 		case err == nil:
 		case strings.Contains(err.Error(), "已暂停，但在途操作没有结束") && m.Name == Strategy:
@@ -174,17 +172,17 @@ func (o *Orchestrator) Pause(ctx context.Context, reason string) (PauseResult, e
 		default:
 			return result, fmt.Errorf("暂停 %s：%w", m.Name, err)
 		}
-		o.logf("%s：已暂停（%s）", m.Name, describePause(obj))
+		o.logf("%s：已暂停（%s）", m.Name, describePause(state))
 		result.Paused = append(result.Paused, m.Name)
 	}
 	return result, nil
 }
 
-func describePause(obj lifecycle.Object) string {
-	if obj.Pause == nil {
-		return string(obj.Stage)
+func describePause(state lifecycle.State) string {
+	if state.Pause == nil {
+		return string(state.Stage)
 	}
-	return string(obj.Pause.Kind)
+	return string(state.Pause.Kind)
 }
 
 // ResumeOptions 是系统恢复的选项。
@@ -335,17 +333,17 @@ func (o *Orchestrator) depsCaughtUp(name string, states map[string]*resumeState)
 
 // startResume 让模块进入恢复追赶。返回非空 skipped 表示模块不参与：手动暂停的、已经在跑的。
 func (o *Orchestrator) startResume(ctx context.Context, m Module) (string, error) {
-	snap, err := m.API.Status(ctx)
+	current, err := m.API.Status(ctx)
 	if err != nil {
 		return "", err
 	}
-	switch stage := snap.Self.Stage; {
-	case stage == lifecycle.StageResuming:
+	switch {
+	case current.Stage == lifecycle.StageResuming:
 		return "", nil // 上一次执行已经启动，继续等
-	case stage == lifecycle.StagePaused && snap.Self.Pause != nil && snap.Self.Pause.Kind != lifecycle.PauseSystem:
-		return "手动暂停（系统恢复不动它）", nil
-	case stage != lifecycle.StagePaused && snap.Self.Hold != lifecycle.HoldSystemPause:
+	case current.Stage != lifecycle.StagePaused:
 		return "没有处于暂停", nil
+	case current.Pause != nil && current.Pause.Kind != lifecycle.PauseSystem:
+		return "手动暂停（系统恢复不动它）", nil
 	}
 	if _, err := m.API.Exec(ctx, lifecycle.CommandRequest{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem, ManualRelease: !selfReleasing(m.Name), By: o.By}); err != nil {
 		return "", err
@@ -357,13 +355,8 @@ func catchupNote(report lifecycle.CatchupReport) string {
 	switch {
 	case report.CaughtUp && report.Resuming:
 		return "已追平，待放行"
-	case report.Self != nil && report.Self.Catchup != nil:
-		return describeCatchup(*report.Self.Catchup)
-	}
-	for _, obj := range report.Objects {
-		if obj.Catchup != nil && !obj.Catchup.CaughtUp {
-			return obj.Kind + "/" + obj.ID + "：" + describeCatchup(*obj.Catchup)
-		}
+	case report.State.Catchup != nil:
+		return describeCatchup(*report.State.Catchup)
 	}
 	return "追赶中"
 }

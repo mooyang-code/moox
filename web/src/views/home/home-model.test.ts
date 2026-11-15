@@ -553,6 +553,10 @@ describe("home tiles", () => {
 });
 
 describe("systemStage", () => {
+  const trial = { enabled: true, logical_account_id: "acc-1", confirmed_at: "" };
+  const confirmed = { enabled: true, logical_account_id: "acc-1", confirmed_at: "2026-11-15T00:00:00Z" };
+  const observer = { enabled: true, logical_account_id: "", confirmed_at: "2026-11-15T00:00:00Z" };
+
   it("没有模块上报生命周期状态时不显示", () => {
     expect(systemStage(undefined)).toBeUndefined();
     expect(systemStage({} as HealthOverview)).toBeUndefined();
@@ -562,29 +566,45 @@ describe("systemStage", () => {
     expect(systemStage({ system: { phase: "running", color: "green", health: "healthy" } })).toEqual({
       color: "green",
       label: "运行中",
-      issues: [],
-      recovered: false
+      issues: []
     });
-    expect(systemStage({ system: { phase: "warming", color: "yellow", health: "healthy" } })?.label).toBe("试运行");
-    expect(systemStage({ system: { phase: "ready", color: "blue", health: "healthy" } })?.label).toBe("就绪");
+    expect(systemStage({ system: { phase: "unknown", color: "red", health: "attention" } })?.label).toBe(
+      "状态未知 · 有模块探测不到"
+    );
   });
 
-  it("降级与健康面异常分别提示，并列出原因", () => {
-    const degraded = systemStage({
-      system: {
-        phase: "running",
-        color: "orange",
-        degraded: true,
-        health: "healthy",
-        issues: ["因子引擎：crypto_1m 变更同步：变更日志断档"]
-      }
+  it("试运行只看实例的确认列与启用状态：挂了账户、还没确认实盘的启用实例才算", () => {
+    const running = { system: { phase: "running", color: "green", health: "healthy" } } as HealthOverview;
+    expect(systemStage(running, [trial, confirmed, observer])).toMatchObject({
+      label: "运行中 · 1 个实例试运行",
+      color: "yellow"
     });
-    expect(degraded?.label).toBe("运行中 · 降级");
-    expect(degraded?.issues).toEqual(["因子引擎：crypto_1m 变更同步：变更日志断档"]);
+    expect(systemStage(running, [confirmed, observer, { ...trial, enabled: false }])).toMatchObject({
+      label: "运行中",
+      color: "green"
+    });
+    // 暂停、恢复追赶时按模块状态显示，不叠加试运行。
+    const paused = { system: { phase: "paused", color: "orange", health: "healthy" } } as HealthOverview;
+    expect(systemStage(paused, [trial])).toMatchObject({ label: "已暂停", color: "orange" });
+  });
 
-    const bad = systemStage({ system: { phase: "running", color: "red", health: "attention", issues: ["Trade：数据库不可用"] } });
-    expect(bad?.label).toBe("运行中 · 有模块未就绪");
+  it("确认实盘后停用再启用：确认列被清空，首页立即显示试运行", () => {
+    const running = { system: { phase: "running", color: "green", health: "healthy" } } as HealthOverview;
+    expect(systemStage(running, [confirmed])?.label).toBe("运行中");
+    // 停用清空确认列；再次启用之后确认列仍是空的。
+    const disabled = { ...confirmed, enabled: false, confirmed_at: "" };
+    expect(systemStage(running, [disabled])?.label).toBe("运行中");
+    const reEnabled = { ...disabled, enabled: true };
+    expect(systemStage(running, [reEnabled])).toMatchObject({ label: "运行中 · 1 个实例试运行", color: "yellow" });
+  });
+
+  it("有模块探测不到时标红并列出", () => {
+    const bad = systemStage({
+      system: { phase: "running", color: "red", health: "attention", issues: ["策略：探测不到（模块没有响应）"] }
+    });
+    expect(bad?.label).toBe("运行中 · 有模块探测不到");
     expect(bad?.color).toBe("red");
+    expect(bad?.issues).toEqual(["策略：探测不到（模块没有响应）"]);
   });
 
   it("暂停与部分暂停", () => {
@@ -597,7 +617,7 @@ describe("systemStage", () => {
         pause_kinds: { system: 2 }
       }
     });
-    expect(paused).toEqual({ color: "orange", label: "已暂停", issues: ["策略：系统暂停：切换行情源"], recovered: false });
+    expect(paused).toEqual({ color: "orange", label: "已暂停", issues: ["策略：系统暂停：切换行情源"] });
     expect(systemStage({ system: { phase: "partially_paused", color: "orange", health: "healthy" } })?.label).toBe("部分暂停");
   });
 
@@ -609,24 +629,21 @@ describe("systemStage", () => {
         health: "healthy",
         resuming_modules: 3,
         caught_up_modules: 1,
-        catchup_notes: ["因子引擎：补采 6/10", "策略：被 factor_task/crypto_1m 阻塞"]
+        catchup_notes: ["因子引擎：补采 6/10", "策略：被 实例 i1 阻塞"]
       }
     });
     expect(resuming?.label).toBe("恢复中 · 追赶 1/3 个模块");
     expect(resuming?.color).toBe("cyan");
-    expect(resuming?.issues).toEqual(["因子引擎：补采 6/10", "策略：被 factor_task/crypto_1m 阻塞"]);
+    expect(resuming?.issues).toEqual(["因子引擎：补采 6/10", "策略：被 实例 i1 阻塞"]);
     const done = systemStage({
       system: { phase: "resuming", color: "cyan", health: "healthy", resuming_modules: 3, caught_up_modules: 3 }
     });
     expect(done?.label).toBe("恢复中 · 已追平，待放行");
   });
 
-  it("原因最多显示 3 条，其余折叠；自动恢复要提示", () => {
-    const stage = systemStage({
-      system: { phase: "running", color: "orange", degraded: true, auto_recovered: true, issues: ["a", "b", "c", "d", "e"] }
-    });
+  it("原因最多显示 3 条，其余折叠", () => {
+    const stage = systemStage({ system: { phase: "partially_paused", color: "orange", issues: ["a", "b", "c", "d", "e"] } });
     expect(stage?.issues).toEqual(["a", "b", "c", "另有 2 项"]);
-    expect(stage?.recovered).toBe(true);
   });
 });
 

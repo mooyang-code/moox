@@ -237,7 +237,30 @@ func RunnersToPB(runners []domain.RunnerStatus) []*factorpb.FactorRunnerStatus {
 		out = append(out, &factorpb.FactorRunnerStatus{
 			TaskId: runner.TaskID, Queued: runner.Queued, Active: runner.Active,
 			WarmupState: runner.WarmupState, WarmSubjects: runner.WarmSubjects, ExpectedSubjects: runner.ExpectedSubjects, Paused: runner.Paused,
+			Checks: taskChecksToPB(runner.Checks),
 		})
+	}
+	return out
+}
+
+func taskChecksToPB(checks []domain.TaskCheck) []*factorpb.FactorTaskCheck {
+	if len(checks) == 0 {
+		return nil
+	}
+	out := make([]*factorpb.FactorTaskCheck, 0, len(checks))
+	for _, check := range checks {
+		out = append(out, &factorpb.FactorTaskCheck{Name: check.Name, Status: check.Status, Message: check.Message, Remedy: check.Remedy})
+	}
+	return out
+}
+
+func taskChecksFromPB(checks []*factorpb.FactorTaskCheck) []domain.TaskCheck {
+	if len(checks) == 0 {
+		return nil
+	}
+	out := make([]domain.TaskCheck, 0, len(checks))
+	for _, check := range checks {
+		out = append(out, domain.TaskCheck{Name: check.GetName(), Status: check.GetStatus(), Message: check.GetMessage(), Remedy: check.GetRemedy()})
 	}
 	return out
 }
@@ -248,6 +271,7 @@ func RunnersFromPB(runners []*factorpb.FactorRunnerStatus) []domain.RunnerStatus
 		out = append(out, domain.RunnerStatus{
 			TaskID: runner.GetTaskId(), Queued: runner.GetQueued(), Active: runner.GetActive(),
 			WarmupState: runner.GetWarmupState(), WarmSubjects: runner.GetWarmSubjects(), ExpectedSubjects: runner.GetExpectedSubjects(), Paused: runner.GetPaused(),
+			Checks: taskChecksFromPB(runner.GetChecks()),
 		})
 	}
 	return out

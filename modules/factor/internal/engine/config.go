@@ -93,7 +93,7 @@ type ParamsConfig struct {
 	FetchTimeout time.Duration `yaml:"fetch_timeout"`
 }
 
-// LifecycleConfig 是生命周期控制器的配置：阶段持久化文件与检查周期。
+// LifecycleConfig 是生命周期的配置：模块状态的持久化文件，以及推进定时恢复、恢复追赶与任务检查的周期。
 type LifecycleConfig struct {
 	StateFile string        `yaml:"state_file"`
 	Interval  time.Duration `yaml:"interval"`

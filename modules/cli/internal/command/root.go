@@ -104,5 +104,10 @@ func mountCommands(root *cobra.Command) {
 			panic("命令组 strategy instance 不存在")
 		}
 		instance.AddCommand(newStrategyInstanceDeleteCommand())
+		task, _, err := root.Find([]string{"factor", "task"})
+		if err != nil || task == root {
+			panic("命令组 factor task 不存在")
+		}
+		task.AddCommand(newFactorTaskStatusCommand())
 	})
 }

@@ -182,7 +182,7 @@ func TestTaskCheckFailsUntilItsModulesAreReady(t *testing.T) {
 
 	check, ok := r.modulesCheck(task)
 	require.True(t, ok)
-	require.Equal(t, lifecycle.CheckFail, check.Status)
+	require.Equal(t, domain.TaskCheckFail, check.Status)
 	require.Contains(t, check.Message, "没有就绪")
 
 	require.Error(t, r.udf.Ensure(context.Background(), hash, "ts_mean_udf"))
@@ -192,7 +192,7 @@ func TestTaskCheckFailsUntilItsModulesAreReady(t *testing.T) {
 	f.fail.Store(false)
 	require.NoError(t, r.udf.Ensure(context.Background(), hash, "ts_mean_udf"))
 	check, _ = r.modulesCheck(task)
-	require.Equal(t, lifecycle.CheckPass, check.Status)
+	require.Equal(t, domain.TaskCheckPass, check.Status)
 
 	// 不引用自定义算子的任务没有这一项。
 	_, ok = r.modulesCheck(engineTask("ftask_a", "dataset_a", true, "bias"))
@@ -211,9 +211,9 @@ func TestCatchupWaitsForModules(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	_, err = r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause})
 	require.NoError(t, err)
-	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, Ref: lifecycle.Ref{}, ManualRelease: true})
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, ManualRelease: true})
 	require.NoError(t, err)
 
 	require.Contains(t, r.catchupPrecondition("ftask_u"), "自定义算子", "引用了没有就绪模块的任务不追赶")
@@ -221,8 +221,8 @@ func TestCatchupWaitsForModules(t *testing.T) {
 	require.False(t, r.catchupGate("ftask_u"))
 	require.Contains(t, r.lifecycleStatus().CatchupBlocked, "自定义算子", "上报里带出阻塞原因")
 
-	// 模块级的追赶钩子同样要满足前置条件：任务在重启后还没有预载（不在任务级追赶范围里）时，不能因此直接放行模块。
-	moduleCatchup, err := r.catchupHook(ctx, lifecycle.Ref{}, time.Now())
+	// 模块级的追赶钩子同样要满足前置条件：引用它的任务还没有预载（检查没通过、不参与追赶）时，不能因此直接放行模块。
+	moduleCatchup, err := r.catchupHook(ctx, time.Now())
 	require.NoError(t, err)
 	require.False(t, moduleCatchup.CaughtUp)
 	require.Contains(t, moduleCatchup.Message, "自定义算子")
@@ -230,9 +230,11 @@ func TestCatchupWaitsForModules(t *testing.T) {
 	require.NoError(t, r.udf.Ensure(ctx, hash, "ts_mean_udf"))
 	require.Empty(t, r.catchupPrecondition("ftask_u"))
 	require.Empty(t, r.lifecycleStatus().CatchupBlocked)
-	moduleCatchup, err = r.catchupHook(ctx, lifecycle.Ref{}, time.Now())
-	require.NoError(t, err)
-	require.True(t, moduleCatchup.CaughtUp)
+	since := time.Now()
+	require.Eventually(t, func() bool {
+		moduleCatchup, err = r.catchupHook(ctx, since)
+		return err == nil && moduleCatchup.CaughtUp
+	}, 15*time.Second, 10*time.Millisecond, "模块就绪、检查通过的任务同步完本地数据后追平")
 }
 
 // 补算领取：作业绑定的模块准备失败，作业报告失败、没有写任何分块；准备好后可以重新发起。

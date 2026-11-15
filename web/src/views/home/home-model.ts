@@ -9,6 +9,7 @@ import { resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
 import { pendingItems, stateOf } from "@/views/strategy/overview/overview-model";
 import { sortInstancesForResults } from "@/views/strategy/results/results-model";
+import { isTrialInstance } from "@/views/strategy/running/running-model";
 import { formatInstant, marketTime } from "@/utils/time-zone";
 
 /** 首页统一的状态色：正常、需要关注、异常、无观测。 */
@@ -478,9 +479,7 @@ export function scopeOverviewToSpace(overview: HealthOverview | undefined, space
 
 /** 运行阶段的中文名。 */
 const PHASE_LABELS: Record<string, string> = {
-  uninitialized: "未初始化",
-  ready: "就绪",
-  warming: "试运行",
+  unknown: "状态未知",
   running: "运行中",
   paused: "已暂停",
   partially_paused: "部分暂停",
@@ -488,33 +487,41 @@ const PHASE_LABELS: Record<string, string> = {
 };
 
 export interface SystemStage {
-  /** 圆点颜色：红（健康面异常）、青（恢复追赶）、橙（降级或暂停）、黄（试运行）、蓝（就绪）、绿（运行）、灰。 */
+  /** 圆点颜色：红（有模块探测不到）、青（恢复追赶）、橙（暂停）、黄（有实例试运行）、绿（运行）、灰。 */
   color: LifecycleColor;
-  /** 形如「运行中 · 降级」「试运行」「就绪」。 */
+  /** 形如「运行中」「运行中 · 2 个实例试运行」「已暂停」。 */
   label: string;
   /** 受影响的模块与原因，最多显示 3 条，其余折叠为一条“另有 N 项”。 */
   issues: string[];
-  /** 有模块重启后自动回到原阶段。 */
-  recovered: boolean;
 }
 
-/** 首页的系统状态：健康面与运行阶段两个维度同时展示。没有模块上报生命周期状态时返回 undefined（不显示）。 */
-export function systemStage(overview?: HealthOverview): SystemStage | undefined {
+/**
+ * 首页的系统状态：健康面与运行阶段来自 Monitor 汇总的各模块状态；“试运行”只看策略实例的确认列与启用状态
+ * （挂了账户、还没确认实盘的启用实例），不读任何阶段。没有模块上报生命周期状态时返回 undefined（不显示）。
+ */
+export function systemStage(
+  overview?: HealthOverview,
+  instances: Pick<StrategyInstance, "enabled" | "logical_account_id" | "confirmed_at">[] = []
+): SystemStage | undefined {
   const system = overview?.system;
   if (!system || !system.phase) return undefined;
   let label = PHASE_LABELS[system.phase] || system.phase;
-  if (system.health === "attention") label = `${label} · 有模块未就绪`;
-  else if (system.degraded) label += " · 降级";
+  let color: LifecycleColor = system.color || "gray";
+  const trial = instances.filter(isTrialInstance).length;
+  if (system.health === "attention") label = `${label} · 有模块探测不到`;
   else if (system.phase === "resuming") {
     // 恢复追赶：显示「追平几个、共几个」，全部追平后提示待放行。
     const total = system.resuming_modules || 0;
     const caught = system.caught_up_modules || 0;
     label += total > 0 && caught >= total ? " · 已追平，待放行" : ` · 追赶 ${caught}/${total} 个模块`;
+  } else if (system.phase === "running" && trial > 0) {
+    label += ` · ${trial} 个实例试运行`;
+    color = "yellow";
   }
   const all = [...(system.issues || []), ...(system.phase === "resuming" ? system.catchup_notes || [] : [])];
   const issues = all.slice(0, 3);
   if (all.length > 3) issues.push(`另有 ${all.length - 3} 项`);
-  return { color: system.color || "gray", label, issues, recovered: Boolean(system.auto_recovered) };
+  return { color, label, issues };
 }
 
 /** 磁贴里固定显示的条数，其余折叠为“另有 N 项”。 */

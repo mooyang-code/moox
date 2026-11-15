@@ -72,14 +72,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 		return nil, fmt.Errorf("open factor database: %w", err)
 	}
 	runtime.store = db
-	life, err := newMgrLifecycle(db, cfg.Database.Path)
+	life, err := newMgrLifecycle(cfg.Database.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open factor-mgr lifecycle: %w", err)
 	}
-	go func() {
-		life.Recover(appCtx)
-		life.Run(appCtx, lifecycleRefreshEvery)
-	}()
+	go life.Run(appCtx, lifecycleRefreshEvery)
 
 	runtime.gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(appCtx, "factor-mgr gateway directory refresh: %v", err) })
 	if err != nil {

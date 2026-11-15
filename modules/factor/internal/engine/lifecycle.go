@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -14,12 +15,9 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// 引擎的生命周期（设计第 9 节）：模块自身是基础设施，对象是目录里启用的因子任务。
-// 只有处于预热或运行的任务才计算；检查不过的任务自动暂停，检查恢复后自动回到原阶段，其他任务不受影响。
-
-const factorTaskKind = "factor_task"
-
-func setRef(taskID string) lifecycle.Ref { return lifecycle.Ref{Kind: factorTaskKind, ID: taskID} }
+// 引擎的生命周期（设计 3.8）：模块级只有运行、暂停、恢复追赶三种状态；目录里的因子任务没有自己的阶段，
+// 每个任务计算前要过一组检查（checkTask），检查通过才计算，不通过就在任务状态里写明哪一项没过。
+// 检查每 30 秒重查一次，窗口载入完成时立即重查；窗口没载入时自动唤醒预载，不需要任何命令。
 
 // newLifecycle 创建引擎的生命周期控制器。
 func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
@@ -28,55 +26,88 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 		Module:    "factor-engine",
 		StateFile: r.cfg.Lifecycle.StateFile,
 		Hooks: lifecycle.Hooks{
-			CheckModule: r.checkModule,
-			CheckObject: r.checkTask,
-			Objects:     r.lifecycleObjects,
-			Init:        r.initTask,
-			AutoStart:   r.autoStartTask,
-			AutoConfirm: r.autoConfirmTask,
-			Catchup:     r.catchupHook,
-			Quiesce:     r.quiesce,
-			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
+			Catchup: r.catchupHook,
+			Quiesce: r.quiesce,
+			OnChange: func(from, to lifecycle.Stage, reason string) {
 				if to == lifecycle.StageResuming {
 					// 恢复一开始就同步目录：追赶的前置条件要等本次恢复之后的同步。
 					r.syncer.SyncSoon()
 				}
-				log.Infof("factor_lifecycle_changed kind=%s id=%s from=%s to=%s reason=%s", ref.Kind, ref.ID, from, to, reason)
+				log.Infof("factor_lifecycle_changed from=%s to=%s reason=%s", from, to, reason)
 			},
 		},
 	})
 }
 
-// gate 是实时周期处理前的门禁：任务没有处于预热或运行就不计算。
-func (r *Runtime) gate(taskID string) bool { return r.life.Allowed(setRef(taskID)) }
-
-// catchupGate 是恢复追赶的门禁：只写历史数据（连续水位追赶、历史周期补算）；暂停期间一律关闭。
-// 除生命周期允许外还要满足追赶前置条件：本次恢复之后至少成功同步过一次目录（见 catchupPrecondition），
-// 否则可能先用暂停前的旧目录写出结果。
-// 模块处于暂停时一律关闭：任务级的 resume --force 在模块暂停期间原本可以只放行这个任务的追赶，但那会让已经上报“本次暂停已收敛”
-// 的模块重新开始写结果，收敛证据就失效了（切换自定义算子版本依赖它）；要追赶先恢复模块。
-func (r *Runtime) catchupGate(taskID string) bool {
-	if r.life.Stage(lifecycle.Ref{}) == lifecycle.StagePaused {
-		return false
-	}
-	return r.life.CatchupAllowed(setRef(taskID)) && r.catchupPrecondition(taskID) == ""
+// taskChecks 缓存各任务最近一次检查的结果。没有检查过的任务算不通过：引擎启动后窗口载入、检查通过之前不出结果。
+type taskChecks struct {
+	mu     sync.Mutex
+	byTask map[string][]domain.TaskCheck
 }
 
-// resumeStartedAt 是这个任务本次恢复追赶开始的时间：模块在恢复追赶就取模块的，否则取任务自己的；不在恢复追赶时为零。
-func (r *Runtime) resumeStartedAt(taskID string) time.Time {
-	if r.life.Stage(lifecycle.Ref{}) == lifecycle.StageResuming {
-		return r.life.StageSince(lifecycle.Ref{})
+func (t *taskChecks) get(taskID string) ([]domain.TaskCheck, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	checks, ok := t.byTask[taskID]
+	return checks, ok
+}
+
+func (t *taskChecks) put(taskID string, checks []domain.TaskCheck) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.byTask == nil {
+		t.byTask = map[string][]domain.TaskCheck{}
 	}
-	if r.life.Stage(setRef(taskID)) == lifecycle.StageResuming {
-		return r.life.StageSince(setRef(taskID))
+	t.byTask[taskID] = checks
+}
+
+// keep 只保留目录里还有的任务。
+func (t *taskChecks) keep(taskIDs []string) {
+	keep := make(map[string]struct{}, len(taskIDs))
+	for _, id := range taskIDs {
+		keep[id] = struct{}{}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for id := range t.byTask {
+		if _, ok := keep[id]; !ok {
+			delete(t.byTask, id)
+		}
+	}
+}
+
+// taskReady 报告任务能不能计算：引擎是活动引擎（目录已载入、没有租约冲突）、窗口已载入、最近一次检查没有不通过项。
+// 窗口直接看预载器：目录变化触发重新预载时，旧的“通过”不能在下一次重查之前放行计算。
+func (r *Runtime) taskReady(taskID string) bool {
+	if !r.active() || !r.preload.Ready(taskID) {
+		return false
+	}
+	checks, ok := r.checks.get(taskID)
+	return ok && domain.TaskChecksPassed(checks)
+}
+
+// gate 是实时周期处理前的门禁：模块在运行、任务检查通过才计算。
+func (r *Runtime) gate(taskID string) bool { return r.life.Running() && r.taskReady(taskID) }
+
+// catchupGate 是恢复追赶的门禁：只写历史数据（连续水位追赶、历史周期补算），只在模块恢复追赶中、任务检查通过时放行。
+// 除此之外还要满足追赶前置条件：本次恢复之后至少成功同步过一次目录（见 catchupPrecondition），否则可能先用暂停前的旧目录写出结果。
+func (r *Runtime) catchupGate(taskID string) bool {
+	return r.life.Stage() == lifecycle.StageResuming && r.taskReady(taskID) && r.catchupPrecondition(taskID) == ""
+}
+
+// resumeStartedAt 是本次恢复追赶开始的时间；不在恢复追赶时为零。
+func (r *Runtime) resumeStartedAt() time.Time {
+	if state := r.life.State(); state.Stage == lifecycle.StageResuming {
+		return state.Since
 	}
 	return time.Time{}
 }
 
 // catchupPrecondition 返回追赶前置条件未满足的原因，满足时为空。追赶在写任何结果（推进水位、后台补算）之前都要满足：
 // 本次恢复开始之后目录至少成功同步过一次（返回已应用或未变化都算）。没有目录同步器的运行时（测试）不要求。
+// taskID 为空时按目录里的全部任务核对自定义算子模块。
 func (r *Runtime) catchupPrecondition(taskID string) string {
-	started := r.resumeStartedAt(taskID)
+	started := r.resumeStartedAt()
 	if started.IsZero() {
 		return ""
 	}
@@ -115,7 +146,6 @@ func (r *Runtime) catchupModulesPending(taskID string) string {
 }
 
 // writeGate 是后台写结果路径（补算作业、缺口恢复、失效重算）的门禁：实时计算或恢复追赶允许时才写。
-// 这几条路径原先只看目录与租约（active），任务暂停后仍会写结果，现在统一并入生命周期门禁。
 func (r *Runtime) writeGate(taskID string) bool { return r.gate(taskID) || r.catchupGate(taskID) }
 
 // beginWrite 是写结果操作的登记式门禁：先登记在途，再检查门禁，不允许就立刻注销并拒绝。live 表示实时门禁放行，
@@ -130,74 +160,102 @@ func (r *Runtime) beginWrite(_ context.Context, taskID string, live, catchup boo
 }
 
 // quiesce 是生命周期的 Quiesce 钩子：门禁已经关闭，等在途的写结果操作（实时计算、补算分块、追赶推进、补算领取）结束。
-func (r *Runtime) quiesce(ctx context.Context, ref lifecycle.Ref) error {
-	taskID := ""
-	if ref != (lifecycle.Ref{}) {
-		taskID = ref.ID
-	}
-	return r.writes.wait(ctx, taskID)
+func (r *Runtime) quiesce(ctx context.Context) error { return r.writes.wait(ctx, "") }
+
+// leaseAllowed 报告是否可以领取补算作业：模块在运行、因子目录已载入才领取。不用 active()，它还服务于消费者、预载与数据同步。
+func (r *Runtime) leaseAllowed() bool {
+	return (r.life == nil || r.life.Running()) && r.catalog.Loaded()
 }
 
-// leaseAllowed 报告是否可以领取补算作业：模块级生命周期放行才领取。不用 active()，它还服务于消费者、预载与数据同步。
-func (r *Runtime) leaseAllowed() bool { return r.life == nil || r.life.ModuleOpen() }
+// moduleRunning 报告模块是否在运行（补算等待门禁时据此区分“任务刚建立”与“模块暂停了”）。
+func (r *Runtime) moduleRunning() bool { return r.life == nil || r.life.Running() }
 
 // preloadBlocked 是预载循环的门禁：模块暂停、恢复追赶期间预载循环不把数据拉回本地。
-func (r *Runtime) preloadBlocked() bool { return r.life != nil && r.life.Halted(lifecycle.Ref{}) }
+func (r *Runtime) preloadBlocked() bool { return r.life != nil && r.life.Halted() }
 
 // newGatedPreloader 建预载器并接上生命周期门禁：模块暂停、恢复追赶期间预载循环不运行，不会自己把数据拉回本地。
-// NewRuntime 与测试共用这一份接线。
+// 任务预载完成时立即重查这个任务，载入后马上开始计算，不用等下一轮检查。Initialize 与测试共用这一个构造函数。
 func (r *Runtime) newGatedPreloader(source SourceDataset, data preloadData, onReady func(string)) *preloader {
-	p := newPreloader(r.catalog, source, data, r.active, onReady)
+	p := newPreloader(r.catalog, source, data, r.active, func(taskID string) {
+		if onReady != nil {
+			onReady(taskID)
+		}
+		r.recheckTask(taskID)
+	})
 	p.blocked = r.preloadBlocked
 	return p
 }
 
-func (r *Runtime) lifecycleObjects() []lifecycle.Ref {
+// refreshTaskChecks 检查目录里的全部任务并缓存结果；有任务的窗口还没载入时唤醒预载器（预载器本来就覆盖目录里的全部任务）。
+func (r *Runtime) refreshTaskChecks(ctx context.Context) {
 	ids := r.catalog.TaskIDs()
-	refs := make([]lifecycle.Ref, 0, len(ids))
+	r.checks.keep(ids)
+	missing := false
 	for _, id := range ids {
-		refs = append(refs, setRef(id))
+		if ctx.Err() != nil {
+			return
+		}
+		r.checks.put(id, r.checkTask(ctx, id))
+		missing = missing || !r.preload.Ready(id)
 	}
-	return refs
+	if missing {
+		r.preload.Kick()
+	}
 }
 
-func (r *Runtime) checkModule(context.Context) []lifecycle.Check {
-	checks := []lifecycle.Check{{Name: "本地时序存储", Status: lifecycle.CheckPass}}
-	if r.catalog.Loaded() {
-		checks = append(checks, lifecycle.Check{Name: "因子目录", Status: lifecycle.CheckPass})
-	} else {
-		checks = append(checks, lifecycle.Check{Name: "因子目录", Status: lifecycle.CheckFail, Message: "尚未同步到因子目录"})
+// recheckTask 立即重查一个任务（预载完成时）。
+func (r *Runtime) recheckTask(taskID string) {
+	ctx := r.appCtx
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if r.lease.Conflict() {
-		checks = append(checks, lifecycle.Check{Name: "租约", Status: lifecycle.CheckFail, Message: "另一个引擎持有租约"})
-	}
-	return checks
+	r.checks.put(taskID, r.checkTask(ctx, taskID))
 }
 
-// checkTask 检查一个因子任务能不能计算：窗口已就绪、数据源没有变更日志断档。
-func (r *Runtime) checkTask(ctx context.Context, ref lifecycle.Ref) []lifecycle.Check {
-	set, lookup := r.catalog.SetByID(ref.ID)
+// runTaskChecks 启动时检查一次，之后每隔 interval 重查。
+func (r *Runtime) runTaskChecks(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		r.refreshTaskChecks(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// checkTask 检查一个因子任务能不能计算：有启用的成员、窗口已载入、本地数据覆盖回看、数据源没有变更日志断档、
+// 回看数量够、引用的自定义算子模块就绪；长缺口只警告。
+func (r *Runtime) checkTask(ctx context.Context, taskID string) []domain.TaskCheck {
+	set, lookup := r.catalog.SetByID(taskID)
 	if lookup != SetFound {
-		return []lifecycle.Check{{Name: "因子目录", Status: lifecycle.CheckFail, Message: "任务已不在目录里"}}
+		return []domain.TaskCheck{{Name: "因子目录", Status: domain.TaskCheckFail, Message: "任务已不在目录里"}}
 	}
-	var checks []lifecycle.Check
-	if r.preload.Ready(ref.ID) {
-		checks = append(checks, lifecycle.Check{Name: "本地窗口", Status: lifecycle.CheckPass})
+	var checks []domain.TaskCheck
+	if len(set.Members) == 0 {
+		// 没有启用成员的任务不会产出任何列，不计算；成员启用、目录同步之后下一轮重查就会通过。
+		checks = append(checks, domain.TaskCheck{Name: "启用成员", Status: domain.TaskCheckFail, Message: "任务没有启用的因子成员", Remedy: "启用至少一个成员：moox-cli factor member enable"})
+	}
+	ready := r.preload.Ready(taskID)
+	if ready {
+		checks = append(checks, domain.TaskCheck{Name: "本地窗口", Status: domain.TaskCheckPass})
 	} else {
-		checks = append(checks, lifecycle.Check{Name: "本地窗口", Status: lifecycle.CheckFail, Message: "窗口还没有载入完成", Remedy: "moox-cli lifecycle init --task-id " + ref.ID})
+		checks = append(checks, domain.TaskCheck{Name: "本地窗口", Status: domain.TaskCheckFail, Message: "窗口还没有载入完成", Remedy: "引擎会自动载入，载入完成后立即开始计算；长时间不完成时看引擎日志的 factor_preload_failed"})
 	}
 	src := seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}
-	if r.preload.Ready(ref.ID) {
+	if ready {
 		checks = append(checks, r.coverageCheck(ctx, src))
 	}
-	checks = append(checks, r.blockedCheck(src, ref.ID))
+	checks = append(checks, r.blockedCheck(src, taskID))
 	if check, ok := r.modulesCheck(set); ok {
 		checks = append(checks, check)
 	}
 	if gaps := r.data.LongGaps(src); len(gaps) > 0 {
 		first := gaps[0]
-		checks = append(checks, lifecycle.Check{
-			Name: "长缺口", Status: lifecycle.CheckWarn,
+		checks = append(checks, domain.TaskCheck{
+			Name: "长缺口", Status: domain.TaskCheckWarn,
 			Message: gapMessage(len(gaps), first),
 			Remedy:  "确认交易所是否仍有该标的的行情；不需要时把它从源数据集的标签里移除，或在因子里用 is_filled 排除填充值",
 		})
@@ -213,55 +271,29 @@ func gapMessage(count int, first localdata.LongGap) string {
 }
 
 // blockedCheck 把数据源当前不能计算的原因翻成检查项：零数据标的要导入或移除，因子回看超过 N 要调 N，变更日志断档要对账。
-func (r *Runtime) blockedCheck(src seriesstore.Source, taskID string) lifecycle.Check {
+func (r *Runtime) blockedCheck(src seriesstore.Source, taskID string) domain.TaskCheck {
 	err := r.data.Blocked(src)
 	if err == nil {
-		return lifecycle.Check{Name: "变更同步", Status: lifecycle.CheckPass}
+		return domain.TaskCheck{Name: "变更同步", Status: domain.TaskCheckPass}
 	}
 	var noData *localdata.NoDataError
 	var over *localdata.LookbackExceededError
 	switch {
 	case errors.As(err, &noData):
-		return lifecycle.Check{
-			Name: "本地数据", Status: lifecycle.CheckFail, Message: err.Error(),
+		return domain.TaskCheck{
+			Name: "本地数据", Status: domain.TaskCheckFail, Message: err.Error(),
 			Remedy: fmt.Sprintf("导入历史数据：moox-cli import --target factor --space-id %s --dataset-id %s --frequency %s --path <历史文件>；或把这些标的从源数据集的标签里移除", src.SpaceID, src.DatasetID, src.Freq),
 		}
 	case errors.As(err, &over):
-		return lifecycle.Check{
-			Name: "回看数量", Status: lifecycle.CheckFail, Message: err.Error(),
+		return domain.TaskCheck{
+			Name: "回看数量", Status: domain.TaskCheckFail, Message: err.Error(),
 			Remedy: fmt.Sprintf("在 engine.yaml 里调大 window.lookback（7×24 市场）或 window.session_lookback（有交易时段的市场），或设置 window.lookback_overrides 的 %s/%s/%s，重启引擎", src.SpaceID, src.DatasetID, src.Freq),
 		}
 	}
-	return lifecycle.Check{
-		Name: "变更同步", Status: lifecycle.CheckFail, Message: err.Error(),
+	return domain.TaskCheck{
+		Name: "变更同步", Status: domain.TaskCheckFail, Message: err.Error(),
 		Remedy: fmt.Sprintf("先停止引擎，再执行 moox-factor-engine reconcile --task %s", taskID),
 	}
-}
-
-// initTask 为任务准备本地数据（读字段、取同步基线、补到最新已收盘的一根、载入窗口）；模块自身没有动作。
-func (r *Runtime) initTask(ctx context.Context, ref lifecycle.Ref) error {
-	if ref == (lifecycle.Ref{}) {
-		return nil
-	}
-	return r.preload.PrepareSet(ctx, ref.ID)
-}
-
-// autoStartTask 报告任务是否随创建自动 init、start：目录里的计算任务没有人会逐个执行生命周期命令，
-// 有启用成员的任务建好就该直接开始预热计算。没有启用成员的任务不启动（它不会产出任何列，启动没有意义；
-// 周期刷新会在成员启用、目录同步之后重新判断）。本地序列是否覆盖成员里最长的“回看 + 预热”由任务检查（checkTask 的本地数据覆盖）负责，
-// 可变成员的回看按参数声明范围的上限计算（编译时已取最坏情况），不够时检查不通过，检查项里给出需要导入历史的提示。
-func (r *Runtime) autoStartTask(ref lifecycle.Ref) bool {
-	if ref.Kind != factorTaskKind {
-		return false
-	}
-	set, lookup := r.catalog.SetByID(ref.ID)
-	return lookup == SetFound && len(set.Members) > 0
-}
-
-// autoConfirmTask 对试运行中的计算任务直接认可进入运行：因子计算在试运行和运行阶段没有区别（门禁一视同仁），
-// 窗口是否载入完成已经由启动前的任务检查（checkTask）把关，所以任务启动后的下一轮周期刷新就显示为运行。
-func (r *Runtime) autoConfirmTask(ref lifecycle.Ref, _ time.Time) bool {
-	return ref.Kind == factorTaskKind
 }
 
 // lifecycleRoutes 是挂在健康端口上的生命周期接口（状态与命令）。
@@ -274,17 +306,17 @@ func (r *Runtime) lifecycleRoutes() []factorhealth.Route {
 }
 
 // coverageCheck 检查每个标的的本地连续数据满足回看要求，或属于新标的（本地最早一根就是 Storage 的首根）；不满足的列出来并提示导入。
-func (r *Runtime) coverageCheck(ctx context.Context, src seriesstore.Source) lifecycle.Check {
+func (r *Runtime) coverageCheck(ctx context.Context, src seriesstore.Source) domain.TaskCheck {
 	short, err := r.data.Coverage(ctx, src)
 	if err != nil {
-		return lifecycle.Check{Name: "本地数据覆盖", Status: lifecycle.CheckWarn, Message: "无法核对：" + err.Error()}
+		return domain.TaskCheck{Name: "本地数据覆盖", Status: domain.TaskCheckWarn, Message: "无法核对：" + err.Error()}
 	}
 	if len(short) == 0 {
-		return lifecycle.Check{Name: "本地数据覆盖", Status: lifecycle.CheckPass}
+		return domain.TaskCheck{Name: "本地数据覆盖", Status: domain.TaskCheckPass}
 	}
 	first := short[0]
-	return lifecycle.Check{
-		Name: "本地数据覆盖", Status: lifecycle.CheckFail,
+	return domain.TaskCheck{
+		Name: "本地数据覆盖", Status: domain.TaskCheckFail,
 		Message: fmt.Sprintf("%d 个标的的本地数据不足回看根数，例如 %s：本地 %d 根（最早 %s），需要 %d 根",
 			len(short), first.Subject, first.Have, src.Format(first.Earliest), first.Want),
 		Remedy: fmt.Sprintf("导入更早的历史：moox-cli import --target factor --space-id %s --dataset-id %s --frequency %s --path <历史文件>", src.SpaceID, src.DatasetID, src.Freq),
@@ -296,23 +328,20 @@ func (r *Runtime) lifecycleStatus() domain.EngineLifecycle {
 	if r.life == nil {
 		return domain.EngineLifecycle{}
 	}
-	self := r.life.Snapshot().Self
-	out := domain.EngineLifecycle{Stage: string(self.Stage), QuiescedAt: self.QuiescedAt, Quiesced: self.Quiesced(), CatchupBlocked: r.catchupPrecondition("")}
-	if self.Pause != nil {
-		out.PausedSince = self.Pause.Since
+	state := r.life.State()
+	out := domain.EngineLifecycle{Stage: string(state.Stage), QuiescedAt: state.QuiescedAt, Quiesced: state.Quiesced(), CatchupBlocked: r.catchupPrecondition("")}
+	if state.Pause != nil {
+		out.PausedSince = state.Pause.Since
 	}
 	return out
 }
 
-// markPausedRunners 标出被有意停下的任务（手动、系统或自动暂停，以及放行前的恢复追赶；故障不算，要照常告警），
-// 随心跳上报给管理端：管理端据此不再期望它的结果数据集持续产出，Monitor 也就不对它做新鲜度检查。
-// 恢复追赶期间任务不计算实时周期，要等放行才开始产出；这段时间若恢复检查，暂停前留下的旧水位会立刻判成过期。
-func markPausedRunners(runners []domain.RunnerStatus, life *lifecycle.Controller) {
-	if life == nil {
-		return
-	}
+// markRunners 给心跳里的任务补上暂停标记与检查结果。暂停标记只看模块是否被有意停下（暂停，以及放行前的恢复追赶）：
+// 管理端据此不再期望结果数据集持续产出，Monitor 也就不对它做新鲜度检查。检查没通过的任务不算暂停，照常做新鲜度检查。
+func (r *Runtime) markRunners(runners []domain.RunnerStatus) {
+	halted := r.life != nil && r.life.Halted()
 	for i := range runners {
-		stage := life.Stage(setRef(runners[i].TaskID))
-		runners[i].Paused = stage == lifecycle.StagePaused || stage == lifecycle.StageResuming
+		runners[i].Paused = halted
+		runners[i].Checks, _ = r.checks.get(runners[i].TaskID)
 	}
 }

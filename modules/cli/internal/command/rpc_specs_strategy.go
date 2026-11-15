@@ -1,5 +1,11 @@
 package command
 
+import (
+	"context"
+	"errors"
+	"fmt"
+)
+
 // 策略（StrategyMgr）：定义、实例、结果、历史回放与展示设置。
 
 const strategyMgr = "trpc.moox.strategy.StrategyMgr"
@@ -48,8 +54,8 @@ func init() {
 			Flags: updateInstanceFlags},
 		rpcSpec{Path: []string{"strategy", "instance", "enable"}, Destructive: true, Short: "启用策略实例（挂了账户的实例启用后先试运行：目标只记为影子目标、不下单，确认实盘后才下单；默认只预览，--yes 才执行）", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": true},
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
-		rpcSpec{Path: []string{"strategy", "instance", "confirm"}, Destructive: true, Short: "确认试运行中的实例转为实盘：下一期起按目标下单（先用 trade shadow list 看影子目标；策略池预热没完成时被拒；默认只预览，--yes 才执行）", Service: strategyMgr, Method: "ConfirmStrategyInstance",
-			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID"), strFlag("session-id", "session_id", "可选：只确认这次启用的会话（实例之后又重新启用过就拒绝）")}},
+		rpcSpec{Path: []string{"strategy", "instance", "confirm"}, Destructive: true, Merge: pinConfirmSession, Short: "确认试运行中的实例转为实盘：下一期起按目标下单（先用 trade shadow list 看影子目标；策略池预热没完成时被拒；默认只预览，--yes 才执行）", Service: strategyMgr, Method: "ConfirmStrategyInstance",
+			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID"), strFlag("session-id", "session_id", "只确认这次启用的会话（实例之后又重新启用过就拒绝）；不给时取实例当前的会话，预览里能看到它")}},
 		rpcSpec{Path: []string{"strategy", "instance", "disable"}, Destructive: true, Short: "停用策略实例；对已停用的实例再执行一次会重新通知 Trade 关闭最近一次挂账户的会话（默认只预览，--yes 才执行）", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": false},
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
 
@@ -82,4 +88,22 @@ func init() {
 		rpcSpec{Path: []string{"strategy", "display", "set"}, Short: "设置实例要隐藏的分类、成员与列", Service: strategyMgr, Method: "SetStrategyDisplaySettings",
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID"), jsonFlag("hidden", "hidden", `隐藏项 JSON，如 '{"categories":[],"members":[],"columns":[]}'`)}},
 	)
+}
+
+// pinConfirmSession 在确认实盘的请求没给 session_id 时取回实例当前的会话填进去：预览里能看到要确认的是哪一次启用，
+// 执行时也只确认这一次（实例之后又重新启用过就被拒绝）。把预览里的会话号带进 --session-id 再加 --yes 最稳妥。
+func pinConfirmSession(ctx context.Context, inv rpcInvocation, request map[string]any) error {
+	if session, ok := lookupRequestString(request, "session_id"); ok && session != "" {
+		return nil
+	}
+	instance, err := fetchObject(ctx, inv, "GetStrategyInstance", map[string]any{"instance_id": request["instance_id"]}, "instance")
+	if err != nil {
+		return fmt.Errorf("读取实例的当前会话：%w", err)
+	}
+	session, _ := instance["session_id"].(string)
+	if session == "" {
+		return errors.New("实例没有运行会话（没有启用）：先启用实例")
+	}
+	request["session_id"] = session
+	return nil
 }

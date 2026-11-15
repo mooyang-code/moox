@@ -2,6 +2,7 @@ import type { Replay, Strategy, StrategyInstance, StrategyTargetSnapshot } from 
 import { deriveTargetState, percent, rankTargets, targetStateTag, type TargetState } from "@/views/strategy/model";
 import { replayLink, resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { shortId, sortInstancesForResults } from "@/views/strategy/results/results-model";
+import { isTrialInstance } from "@/views/strategy/running/running-model";
 import { formatInstant } from "@/utils/time-zone";
 
 export interface OverviewInput {
@@ -37,6 +38,8 @@ export interface InstanceCard {
   subtitle: string;
   enabled: boolean;
   health: string;
+  /** 挂了组合账户、还没确认实盘：徽标显示“试运行”。 */
+  trial: boolean;
   trading: boolean;
   state: TargetState;
   stateTag: { label: string; color: string };
@@ -128,6 +131,7 @@ export function instanceCards(input: OverviewInput, zone: string): InstanceCard[
         subtitle: instance.instance_id,
         enabled: instance.enabled,
         health: instance.health,
+        trial: isTrialInstance(instance),
         trading: Boolean(instance.logical_account_id),
         state,
         stateTag: targetStateTag(state),
