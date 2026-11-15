@@ -105,9 +105,6 @@ message FactorMember {
   map<string, double> params = 11;
   // kind 是成员类型：fixed 或 var。
   string kind = 12;
-  // last_submitted_period、last_submitted_at 是可变成员最近一次被接受的提交的目标期（Unix 秒）和提交时间；从未提交过为 0 和空。
-  int64 last_submitted_period = 13;
-  string last_submitted_at = 14;
 }
 
 // SeriesRef 是一条时间序列的身份：标的加 series_tag，与行键一致。

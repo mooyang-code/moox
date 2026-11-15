@@ -38,7 +38,7 @@
           <div v-if="row.paramsText" class="member-row__outputs">
             {{ row.member.kind === "var" ? "默认参数" : "固定参数" }} {{ row.paramsText }}
           </div>
-          <div v-if="row.member.kind === 'var'" class="member-row__outputs">{{ row.submissionText }}</div>
+          <div v-if="row.member.kind === 'var' && paramStates" class="member-row__outputs">{{ row.submissionText }}</div>
         </div>
         <a-tag size="small" :color="memberStatusTag(row.member.status).color">{{
           memberStatusTag(row.member.status).label
@@ -110,11 +110,11 @@
 <script setup lang="ts">
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
-import { removeFactorFromTask, setFactorMemberStatus } from "@/api/factor";
-import type { FactorMember, FactorTaskInfo, MemberStatus } from "@/api/factor/types";
+import { getFactorParams, removeFactorFromTask, setFactorMemberStatus } from "@/api/factor";
+import type { FactorMember, FactorTaskInfo, MemberParamState, MemberStatus } from "@/api/factor/types";
 import { useFactorStore } from "@/store/modules/factor";
 import { barLagText, formatPeriod } from "@/views/factor/shared/health";
 import { paramsText } from "@/views/factor/shared/params";
@@ -140,13 +140,31 @@ const store = useFactorStore();
 const addVisible = ref(false);
 const pending = ref("");
 
+// 可变成员最近一次被接受的提交不在成员上，单独读；任务信息每次刷新后重读。读不到（null）时不显示这一行。
+const paramStates = ref<Record<string, MemberParamState> | null>(null);
+watch(
+  () => props.info,
+  async (info, previous) => {
+    if (info.factor_task.task_id !== previous?.factor_task.task_id) paramStates.value = null;
+    if (!info.members.some(member => member.kind === "var")) return;
+    try {
+      const rsp = await getFactorParams({ task_id: info.factor_task.task_id });
+      if (props.info !== info) return;
+      paramStates.value = Object.fromEntries((rsp.members ?? []).map(state => [state.member_key, state]));
+    } catch {
+      if (props.info === info) paramStates.value = null;
+    }
+  },
+  { immediate: true }
+);
+
 const counts = computed(() => memberCounts(props.info));
 const addState = computed(() => addFactorState(props.info.factor_task));
 const rows = computed(() =>
   props.info.members.map(member => {
     const key = member.member_key || member.factor_id;
     const period = memberPeriodState(props.info, key);
-    const submitted = lastSubmission(member);
+    const submitted = lastSubmission(paramStates.value?.[key]);
     return {
       member,
       key,

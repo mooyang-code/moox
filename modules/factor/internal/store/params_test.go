@@ -85,8 +85,8 @@ func TestSubmitMemberParamsPeriodAndIdempotency(t *testing.T) {
 	require.Len(t, states, 1)
 	require.Equal(t, int64(2000), states[0].LastSubmittedPeriod)
 	require.Equal(t, "req-4", states[0].LastRequestID)
-	require.NotNil(t, states[0].LastSubmittedAt)
-	require.Equal(t, 50.0, states[0].LastSubmittedParams.Value("span", "BTC"))
+	require.False(t, states[0].LastSubmittedAt.IsZero())
+	require.Equal(t, 50.0, states[0].Params.Value("span", "BTC"))
 }
 
 // 按标的合并：默认值取本次提交的；本次带了的标的覆盖旧值，没带的标的保留旧值。
@@ -101,7 +101,7 @@ func TestSubmitMemberParamsMergesBySubject(t *testing.T) {
 
 	states, err := s.ListMemberParamStates(ctx, "task_prices")
 	require.NoError(t, err)
-	got := states[0].LastSubmittedParams
+	got := states[0].Params
 	require.Equal(t, 12.0, got.Value("span", "BTC"))
 	require.Equal(t, 15.0, got.Value("span", "ETH"))
 	require.Equal(t, 8.0, got.Value("span", "SOL"))
@@ -136,7 +136,7 @@ func TestSubmitMemberParamsChecksMergedSnapshotPerMember(t *testing.T) {
 	require.Equal(t, int64(0), states[1].LastSubmittedPeriod)
 }
 
-// 提交只写 c_last_* 运行状态列，不更新 c_mtime，所以不改变目录指纹；改配置列（状态）才更新 c_mtime。
+// 提交只写参数表，不碰成员行的 c_mtime，所以不改变目录指纹；改成员行（状态）才更新 c_mtime。
 func TestSubmitMemberParamsDoesNotTouchMtime(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -154,13 +154,20 @@ func TestSubmitMemberParamsDoesNotTouchMtime(t *testing.T) {
 	require.NotContains(t, mtime, "2000-01-01")
 }
 
-// 固定成员不能带提交状态（CHECK 约束）。
-func TestFixedMemberCannotCarrySubmission(t *testing.T) {
+// 删成员时它的提交状态跟着删掉（外键级联）：同名成员重新加入后目标期从头开始。
+func TestRemoveMemberDropsSubmission(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
-	addTestMember(t, s, "task_prices", "factor_close", domain.MemberStatusDisabled)
-	require.Error(t, s.db.Exec("UPDATE t_factor_task_members SET c_last_submitted_period = 5 WHERE c_member_key = 'factor_close'").Error)
+	key := addVarMember(t, s, "task_prices", "ema")
+	require.Equal(t, SubmitAccepted, submit(t, s, 1000, "req-1", key, snapshot(30, nil)).Result)
+
+	require.NoError(t, s.RemoveMember(ctx, "task_prices", key))
+	var n int
+	require.NoError(t, s.db.Raw("SELECT COUNT(*) FROM t_factor_member_params").Scan(&n).Error)
+	require.Zero(t, n)
+	addVarMember(t, s, "task_prices", "ema")
+	require.Equal(t, SubmitAccepted, submit(t, s, 500, "req-2", key, snapshot(40, nil)).Result)
 }
 
 func TestRecalcJobDefaultFilledRoundTrip(t *testing.T) {
@@ -187,24 +194,4 @@ func TestRecalcJobDefaultFilledRoundTrip(t *testing.T) {
 	done, err := s.ReportRecalcProgress(ctx, pulled.JobID, pulled.LeaseToken, 1000, RecalcStatusSucceeded, "", map[string][]TimeRange{}, now, time.Minute)
 	require.NoError(t, err)
 	require.Empty(t, done.DefaultFilled)
-}
-
-// 数据重置清掉提交状态，成员和配置保持不变。
-func TestClearParamSubmissionsKeepsMembers(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
-	key := addVarMember(t, s, "task_prices", "ema")
-	require.Equal(t, SubmitAccepted, submit(t, s, 1000, "req-1", key, snapshot(30, nil)).Result)
-
-	require.NoError(t, s.ClearParamSubmissions(ctx))
-	states, err := s.ListMemberParamStates(ctx, "task_prices")
-	require.NoError(t, err)
-	require.Len(t, states, 1)
-	require.Equal(t, int64(0), states[0].LastSubmittedPeriod)
-	require.Empty(t, states[0].LastRequestID)
-	require.Nil(t, states[0].LastSubmittedAt)
-	require.Equal(t, map[string]float64{"span": 20}, states[0].Params, "默认参数是配置，保留")
-	// 目标期可以重新从头开始。
-	require.Equal(t, SubmitAccepted, submit(t, s, 500, "req-2", key, snapshot(40, nil)).Result)
 }

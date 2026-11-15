@@ -33,8 +33,6 @@ type trackedRun struct {
 	factors        []domain.FactorPeriodState
 	failedSubjects []string
 	warming        int
-	// rows 是这一期写入的结果行数。
-	rows int
 	// repaired 是缺口补算已补齐的这一期 (因子 → 标的)：预热中或回看窗口有空洞而跳过的项补齐后，摘要据此改写。
 	// unwritten 是补算重算这一期时没有写成的 (因子 → 标的)，整因子跳过的因子据此保留失败。
 	repaired, unwritten map[string]map[string]struct{}
@@ -84,7 +82,7 @@ func (t *runTracker) record(taskID string, axis periodclock.Axis, periodTime tim
 	}
 	t.runs[taskID] = trackedRun{
 		periodTime: periodTime, axis: axis, completedAt: completedAt, status: status, factors: factors,
-		failedSubjects: outcome.FailedSubjects, warming: outcome.Warming, rows: outcome.RowsWritten,
+		failedSubjects: outcome.FailedSubjects, warming: outcome.Warming,
 	}
 	t.mu.Unlock()
 	t.notifyRecorded()
@@ -315,15 +313,4 @@ func lagSeconds(axis periodclock.Axis, period, now time.Time) (int64, error) {
 	step := axis.Step()
 	bars, err := lagBehind(axis, period, now.Add(-min(closeGrace, step/2)))
 	return bars * int64(step/time.Second), err
-}
-
-// lastRecorded 返回任务最近记录的一期原始记录（只在内存里，引擎重启后清空）。
-func (t *runTracker) lastRecorded(taskID string) (trackedRun, bool) {
-	if t == nil {
-		return trackedRun{}, false
-	}
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	run, ok := t.runs[taskID]
-	return run, ok
 }

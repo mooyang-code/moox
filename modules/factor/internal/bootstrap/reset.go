@@ -11,18 +11,18 @@ import (
 
 // 因子管理的重置（设计 5.2）。
 //
-//	data：清重算作业与引擎心跳（运行数据）；保留因子任务、因子定义、任务成员（配置）；
+//	data：清重算作业、引擎心跳与可变成员的参数提交（运行数据）；保留因子任务、因子定义、任务成员（配置）；
 //	all ：再清因子任务、因子定义、任务成员与因子分类，回到新部署的空白状态
 //	      （默认分类“未分类”重新写入）；默认因子库需要重新导入（moox-cli setup factors）。
 //
 // 每个结果行的 __params 记着当时用的参数（在 Storage 里，不在这个库），所以这个库里没有需要跟结果保留的参数记录。
-// 可变成员最近一次被接受的提交（c_last_submitted_*）是运行状态：data 重置后结果和策略都从头开始，提交的目标期不能倒退，
-// 所以 data 重置把它清掉；all 重置连成员一起删除。
+// 可变成员最近一次被接受的提交（t_factor_member_params）是运行状态：data 重置后结果和策略都从头开始，提交的目标期不能倒退，
+// 所以 data 重置把它清掉。
 //
 // Storage 里的因子结果数据集是另一份数据（它们的重置是 Storage 的事）；引擎的本地缓存由引擎自己重置。
 
 var (
-	mgrDataTables   = []string{"t_factor_recalc_job_bindings", "t_factor_recalc_jobs", "t_factor_engine_heartbeat"}
+	mgrDataTables   = []string{"t_factor_recalc_jobs", "t_factor_engine_heartbeat", "t_factor_member_params"}
 	mgrConfigTables = []string{"t_factor_tasks", "t_factor_defs", "t_factor_task_members", "t_factor_categories", "t_factor_udf_versions", "t_factor_udfs"}
 )
 
@@ -76,8 +76,7 @@ func mgrResetSpec(db *store.Store, dbPath string) *lifecycle.ResetSpec {
 					// 新定义默认归入“未分类”，清空分类后立刻补回，不必等下次启动建表。
 					return db.EnsureDefaultCategory(ctx)
 				}
-				// data 重置保留成员，但可变成员的提交状态要跟着结果一起回到初始。
-				return db.ClearParamSubmissions(ctx)
+				return nil
 			}},
 		}
 		return info, steps, nil

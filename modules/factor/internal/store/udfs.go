@@ -357,15 +357,17 @@ func (s *Store) JobBindings(ctx context.Context, jobID string) (bindings map[str
 	if s == nil || s.db == nil {
 		return nil, false, fmt.Errorf("factor database is not open")
 	}
-	var raw string
-	result := s.db.WithContext(ctx).Raw(`SELECT c_bindings FROM t_factor_recalc_job_bindings WHERE c_job_id = ?`, jobID).Scan(&raw)
-	if result.Error != nil {
-		return nil, false, result.Error
+	// 作业不存在和还没固化（列为 NULL）都按没有固化返回。
+	var row struct {
+		Bindings *string `gorm:"column:c_udf_bindings"`
 	}
-	if result.RowsAffected == 0 {
+	if err := s.db.WithContext(ctx).Raw(`SELECT c_udf_bindings FROM t_factor_recalc_jobs WHERE c_job_id = ?`, jobID).Scan(&row).Error; err != nil {
+		return nil, false, err
+	}
+	if row.Bindings == nil {
 		return nil, false, nil
 	}
-	if err := json.Unmarshal([]byte(raw), &bindings); err != nil {
+	if err := json.Unmarshal([]byte(*row.Bindings), &bindings); err != nil {
 		return nil, false, fmt.Errorf("job %s bindings are not valid JSON: %w", jobID, err)
 	}
 	return bindings, true, nil
@@ -380,7 +382,7 @@ func (s *Store) SaveJobBindings(ctx context.Context, jobID string, bindings map[
 	if err != nil {
 		return nil, err
 	}
-	if err := s.db.WithContext(ctx).Exec(`INSERT OR IGNORE INTO t_factor_recalc_job_bindings (c_job_id, c_bindings) VALUES (?, ?)`, jobID, string(raw)).Error; err != nil {
+	if err := s.db.WithContext(ctx).Exec(`UPDATE t_factor_recalc_jobs SET c_udf_bindings = ? WHERE c_job_id = ? AND c_udf_bindings IS NULL`, string(raw), jobID).Error; err != nil {
 		return nil, err
 	}
 	effective, found, err := s.JobBindings(ctx, jobID)

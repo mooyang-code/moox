@@ -248,8 +248,8 @@ func (r *Runtime) initTask(ctx context.Context, ref lifecycle.Ref) error {
 
 // autoStartTask 报告任务是否随创建自动 init、start：目录里的计算任务没有人会逐个执行生命周期命令，
 // 有启用成员的任务建好就该直接开始预热计算。没有启用成员的任务不启动（它不会产出任何列，启动没有意义；
-// 周期刷新会在成员启用、目录同步之后重新判断）。本地序列是否覆盖成员里最长的“回看 + 预热”由预热阶段的数据检查负责，
-// 可变成员的回看按参数声明范围的上限计算（编译时已取最坏情况），不够时停在预热阶段，状态里给出需要导入历史的提示。
+// 周期刷新会在成员启用、目录同步之后重新判断）。本地序列是否覆盖成员里最长的“回看 + 预热”由任务检查（checkTask 的本地数据覆盖）负责，
+// 可变成员的回看按参数声明范围的上限计算（编译时已取最坏情况），不够时检查不通过，检查项里给出需要导入历史的提示。
 func (r *Runtime) autoStartTask(ref lifecycle.Ref) bool {
 	if ref.Kind != factorTaskKind {
 		return false
@@ -258,72 +258,10 @@ func (r *Runtime) autoStartTask(ref lifecycle.Ref) bool {
 	return lookup == SetFound && len(set.Members) > 0
 }
 
-// autoConfirmTask 报告试运行中的计算任务能否自动确认进入运行（任务与策略实例相互独立，是否关联实例不影响）。
-// 证据只放在引擎内存里：任务进入试运行之后，有一期所有启用成员都完整算完（没有失败、没有预热中的标的）、
-// 写入了结果行，且这一期各成员的成员契约（成员键、类型、定义哈希）都与当前目录一致。成员变化、再次进入预热、引擎重启都会使证据作废，
-// 代价至多是晚一个周期转为运行；因子计算在预热阶段本来就是完整的。
-func (r *Runtime) autoConfirmTask(ref lifecycle.Ref, since time.Time) bool {
-	if ref.Kind != factorTaskKind {
-		return false
-	}
-	set, lookup := r.catalog.SetByID(ref.ID)
-	if lookup != SetFound {
-		return false
-	}
-	run, ok := r.runs.lastRecorded(ref.ID)
-	if !ok || !run.completedAt.After(since) {
-		return false
-	}
-	return runConfirmsWarmup(run, set.Members)
-}
-
-// runConfirmsWarmup 报告一期的结果能否作为预热完成的证据。
-//
-// 统一数据集（多个 series_tag）上截面因子只跳过一部分 tag 时成员记 degraded 并列出跳过的 tag：缺数的序列是行情本身的状况，
-// 不说明窗口没载入完，所以这样的 degraded 成员算作已完成；这时这一期因缺数序列而记的失败标的、整期 degraded 也不拦。
-// 预热中、整个计算失败的成员仍然不算。
-func runConfirmsWarmup(run trackedRun, members []domain.MemberDef) bool {
-	if run.warming > 0 || run.rows == 0 || len(members) == 0 || run.status == "failed" {
-		return false
-	}
-	partialSkip := false
-	for _, factor := range run.factors {
-		if factor.Status == "degraded" && len(factor.SkippedSeriesTags) > 0 {
-			partialSkip = true
-		}
-	}
-	if !partialSkip && (run.status != "complete" || len(run.failedSubjects) > 0) {
-		return false
-	}
-	if len(run.factors) != len(members) {
-		return false
-	}
-	want := make(map[string]domain.MemberDef, len(members))
-	for _, member := range members {
-		want[member.Key] = member
-	}
-	for _, factor := range run.factors {
-		member, ok := want[factor.MemberKey]
-		if !ok {
-			return false
-		}
-		if factor.Status == "degraded" && len(factor.SkippedSeriesTags) > 0 {
-			// 只跳过一部分 series_tag 的截面因子：算作已完成。
-		} else if factor.Status != "complete" || len(factor.FailedSubjects) > 0 || len(factor.FailedSeries) > 0 {
-			return false
-		}
-		// 证据要绑定成员的契约：成员键已经带了固定参数，再核对类型与定义哈希，成员删除重加成不同的定义或类型后，
-		// 旧的一期不能算新成员的证据。
-		compiled, err := domain.CompileDefinition(member.Factor)
-		if err != nil {
-			return false
-		}
-		if factor.MemberKind != member.Kind || factor.DefinitionHash != domain.DefinitionHash(compiled) {
-			return false
-		}
-		delete(want, factor.MemberKey)
-	}
-	return len(want) == 0
+// autoConfirmTask 对试运行中的计算任务直接认可进入运行：因子计算在试运行和运行阶段没有区别（门禁一视同仁），
+// 窗口是否载入完成已经由启动前的任务检查（checkTask）把关，所以任务启动后的下一轮周期刷新就显示为运行。
+func (r *Runtime) autoConfirmTask(ref lifecycle.Ref, _ time.Time) bool {
+	return ref.Kind == factorTaskKind
 }
 
 // lifecycleRoutes 是挂在健康端口上的生命周期接口（状态与命令）。

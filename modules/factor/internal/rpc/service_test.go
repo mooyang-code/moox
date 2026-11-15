@@ -306,7 +306,7 @@ type catalogFake struct {
 	submitPeriod      time.Time
 	submitRequest     string
 	submissions       []catalog.MemberSubmission
-	paramStates       []domain.FactorTaskMember
+	paramStates       []domain.MemberParamState
 	boundTask         string
 	boundInstance     string
 	addKind           string
@@ -401,7 +401,7 @@ func (f *catalogFake) SubmitParams(_ context.Context, writer, taskID string, per
 	}
 	return results, f.err
 }
-func (f *catalogFake) GetParams(context.Context, string) ([]domain.FactorTaskMember, error) {
+func (f *catalogFake) GetParams(context.Context, string) ([]domain.MemberParamState, error) {
 	return f.paramStates, f.err
 }
 

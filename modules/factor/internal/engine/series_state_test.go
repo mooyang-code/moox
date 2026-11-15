@@ -57,7 +57,7 @@ func TestRunTrackerRepairUpdatesSeriesLists(t *testing.T) {
 		}},
 	}
 	tracker.record("t1", axis, period, "degraded", outcome, period.Add(time.Minute))
-	run, _ := tracker.lastRecorded("t1")
+	run := tracker.runs["t1"]
 	require.Equal(t, []string{engineSwapTag}, run.factors[0].SkippedSeriesTags)
 	require.Len(t, run.factors[0].FailedSeries, 2)
 
@@ -67,7 +67,7 @@ func TestRunTrackerRepairUpdatesSeriesLists(t *testing.T) {
 		Repaired:  []pipeline.ItemKey{{Member: "rank", Subject: "ETH", Period: period}},
 		Unwritten: []pipeline.ItemKey{{Member: "rank", Subject: "SOL", Period: period}},
 	}, period.Add(2*time.Minute))
-	run, _ = tracker.lastRecorded("t1")
+	run = tracker.runs["t1"]
 	require.Equal(t, []string{"SOL"}, run.factors[0].FailedSubjects)
 	require.Equal(t, []seriesset.Series{engineSeries("SOL", engineSwapTag)}, run.factors[0].FailedSeries)
 	require.Equal(t, []string{engineSwapTag}, run.factors[0].SkippedSeriesTags)
@@ -78,43 +78,9 @@ func TestRunTrackerRepairUpdatesSeriesLists(t *testing.T) {
 		Period: period, Done: true,
 		Repaired: []pipeline.ItemKey{{Member: "rank", Subject: "SOL", Period: period}},
 	}, period.Add(3*time.Minute))
-	run, _ = tracker.lastRecorded("t1")
+	run = tracker.runs["t1"]
 	require.Empty(t, run.factors[0].FailedSubjects)
 	require.Empty(t, run.factors[0].FailedSeries)
 	require.Empty(t, run.factors[0].SkippedSeriesTags)
 	require.Equal(t, "complete", run.factors[0].Status)
-}
-
-// 预热完成判断：统一数据集上截面因子只跳过一部分 series_tag（degraded）算已完成；空洞与整体失败仍然不算；单序列任务的判断不变。
-func TestRunConfirmsWarmupAcceptsPartialSeriesSkip(t *testing.T) {
-	member := domain.AsMembers(domain.MustDefinition("rank", "rank", "output: cs_rank(close)\n"))[0]
-	compiled, err := domain.CompileDefinition(member.Factor)
-	require.NoError(t, err)
-	state := func(status string, mutate func(*domain.FactorPeriodState)) trackedRun {
-		factor := domain.FactorPeriodState{
-			MemberKey: member.Key, MemberKind: member.Kind, FactorID: member.Factor.FactorID, Status: status,
-			DefinitionHash: domain.DefinitionHash(compiled),
-		}
-		if mutate != nil {
-			mutate(&factor)
-		}
-		return trackedRun{status: "degraded", rows: 10, factors: []domain.FactorPeriodState{factor}, failedSubjects: []string{"SOL"}}
-	}
-	members := []domain.MemberDef{member}
-
-	partial := state("degraded", func(f *domain.FactorPeriodState) {
-		f.FailedSubjects = []string{"SOL"}
-		f.FailedSeries = []seriesset.Series{engineSeries("SOL", engineSwapTag)}
-		f.SkippedSeriesTags = []string{engineSwapTag}
-	})
-	require.True(t, runConfirmsWarmup(partial, members), "只跳过永续：缺数的序列是行情本身的状况，不说明窗口没载完")
-
-	warming := partial
-	warming.warming = 1
-	require.False(t, runConfirmsWarmup(warming, members), "预热中不算")
-	failed := state("degraded", func(f *domain.FactorPeriodState) { f.FailedSubjects = []string{"SOL"} })
-	require.False(t, runConfirmsWarmup(failed, members), "没有跳过 tag 的 degraded（整体失败）不算：单序列任务的判断不变")
-	complete := state("complete", nil)
-	complete.status, complete.failedSubjects = "complete", nil
-	require.True(t, runConfirmsWarmup(complete, members))
 }

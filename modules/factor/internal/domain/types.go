@@ -85,8 +85,8 @@ type FactorDef struct {
 func (FactorDef) TableName() string { return "t_factor_defs" }
 
 // FactorTaskMember 是定义在某个因子任务里的运行实例，身份是任务内唯一的成员键（因子 ID 加参数段，规则见 packages/factorname）。
-// 固定成员的参数（Params）在加成员时写定；可变成员的 Params 是默认参数，策略逐期提交的值记在 LastSubmitted*。
-// LastSubmitted* 是运行状态，不属于配置：目录同步、目录指纹都不看它们，提交时也不更新 UpdatedAt。
+// 固定成员的参数（Params）在加成员时写定；可变成员的 Params 是默认参数，策略逐期提交的值是运行状态，
+// 不属于配置，单独记在参数表里（MemberParamState）。
 type FactorTaskMember struct {
 	TaskID    string             `json:"task_id" gorm:"column:c_task_id;primaryKey"`
 	MemberKey string             `json:"member_key" gorm:"column:c_member_key;primaryKey"`
@@ -94,14 +94,18 @@ type FactorTaskMember struct {
 	Kind      string             `json:"kind" gorm:"column:c_kind"`
 	Status    string             `json:"status" gorm:"column:c_status"`
 	Params    map[string]float64 `json:"params,omitempty" gorm:"column:c_params;serializer:json"`
-	// LastSubmittedParams 是各标的最近一次提交的参数（按标的合并后的结果）。
-	LastSubmittedParams ParamSnapshot `json:"last_submitted_params,omitempty" gorm:"column:c_last_submitted_params;serializer:json"`
-	// LastSubmittedPeriod 是最近一次被接受的提交的目标期（Unix 秒）；0 表示从未提交。
-	LastSubmittedPeriod int64      `json:"last_submitted_period,omitempty" gorm:"column:c_last_submitted_period"`
-	LastRequestID       string     `json:"last_request_id,omitempty" gorm:"column:c_last_request_id"`
-	LastSubmittedAt     *time.Time `json:"last_submitted_at,omitempty" gorm:"column:c_last_submitted_at"`
-	CreatedAt           time.Time  `json:"created_at" gorm:"column:c_ctime"`
-	UpdatedAt           time.Time  `json:"updated_at" gorm:"column:c_mtime"`
+	CreatedAt time.Time          `json:"created_at" gorm:"column:c_ctime"`
+	UpdatedAt time.Time          `json:"updated_at" gorm:"column:c_mtime"`
+}
+
+// MemberParamState 是可变成员最近一次被接受的提交。Params 是各标的的参数（按标的合并后的结果）；
+// LastSubmittedPeriod 是目标期（Unix 秒），0 表示从未提交过（Params 为空、LastSubmittedAt 为零值）。
+type MemberParamState struct {
+	MemberKey           string
+	Params              ParamSnapshot
+	LastSubmittedPeriod int64
+	LastRequestID       string
+	LastSubmittedAt     time.Time
 }
 
 func (FactorTaskMember) TableName() string { return "t_factor_task_members" }

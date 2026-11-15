@@ -55,9 +55,9 @@ func TestSubmitFactorParamsPassesEveryMember(t *testing.T) {
 
 func TestGetFactorParamsReturnsLastSubmittedPerVarMember(t *testing.T) {
 	submittedAt := time.Unix(200, 0).UTC()
-	fake := &catalogFake{set: domain.FactorTask{TaskID: "s", SpaceID: "crypto"}, paramStates: []domain.FactorTaskMember{{
-		TaskID: "s", MemberKey: "fast__var", Kind: domain.MemberKindVar, LastSubmittedPeriod: 180, LastRequestID: "r-3",
-		LastSubmittedAt: &submittedAt, LastSubmittedParams: domain.ParamSnapshot{"window": {Default: 30, Overrides: map[string]float64{"BTC": 20}}},
+	fake := &catalogFake{set: domain.FactorTask{TaskID: "s", SpaceID: "crypto"}, paramStates: []domain.MemberParamState{{
+		MemberKey: "fast__var", LastSubmittedPeriod: 180, LastRequestID: "r-3",
+		LastSubmittedAt: submittedAt, Params: domain.ParamSnapshot{"window": {Default: 30, Overrides: map[string]float64{"BTC": 20}}},
 	}}}
 	svc := NewService(fake, &recalcFake{})
 	rsp, err := svc.GetFactorParams(spaceCtx("crypto"), &factorpb.GetFactorParamsReq{TaskId: "s"})
