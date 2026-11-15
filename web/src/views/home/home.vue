@@ -231,7 +231,7 @@
           <section class="tile tile-wide" aria-label="最近动态">
             <header class="tile-head">
               <h3>最近动态</h3>
-              <a @click="go('/ops/activity')">活动日志 →</a>
+              <a @click="go('/ops/logs?tab=activity')">日志中心 →</a>
             </header>
             <div class="tile-body activity-body">
               <p v-if="!activity.length" class="tile-empty">
@@ -245,7 +245,7 @@
                 type="button"
                 class="line activity-line"
                 :title="row.title"
-                @click="go('/ops/activity')"
+                @click="go('/ops/logs?tab=activity')"
               >
                 <span class="muted" :title="row.whenTitle">{{ row.when }}</span>
                 <span class="ellipsis">{{ row.title }}</span>

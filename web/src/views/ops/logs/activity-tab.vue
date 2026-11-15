@@ -1,6 +1,5 @@
 <template>
-  <div class="moox-page">
-    <div class="moox-inner">
+  <div>
       <a-radio-group v-model="scope" type="button" class="activity-scope">
         <a-radio value="space">当前空间</a-radio>
         <a-radio value="global">系统事件</a-radio>
@@ -14,7 +13,6 @@
         :page-size="20"
         show-filters
       />
-    </div>
   </div>
 </template>
 

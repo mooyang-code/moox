@@ -1,6 +1,5 @@
 <template>
-  <div class="moox-page">
-    <div class="moox-inner logs-page">
+  <div class="logs-page">
       <header class="logs-head">
         <div>
           <h2>重要日志</h2>
@@ -103,7 +102,6 @@
       <div v-if="hasMore" class="logs-more">
         <a-button :loading="loadingMore" @click="loadMore">加载更早的日志</a-button>
       </div>
-    </div>
 
     <a-drawer v-model:visible="detailVisible" title="日志详情" width="min(720px, 100vw)" :footer="false">
       <dl v-if="selected" class="logs-detail">

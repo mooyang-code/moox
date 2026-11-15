@@ -124,8 +124,8 @@ export const systemMenu = [
   menu("0600", "06", "/ops/deployments", "ops-deployments", "ops-deployments", "ops/deployments/index", 2, {
     reuseOnQuery: true
   }),
-  menu("0608", "06", "/ops/activity", "ops-activity", "ops-activity", "ops/activity/index", 4),
-  menu("0609", "06", "/ops/logs", "ops-logs", "ops-logs", "ops/log-records/index", 5),
+  // 活动日志与重要日志是同一页的两个页签（?tab=），query 变化时复用页面。
+  menu("0609", "06", "/ops/logs", "ops-logs", "ops-logs", "ops/logs/index", 4, { reuseOnQuery: true }),
 
   directory("07", "0", "/settings/spaces", "settings", "settings", 9, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "settings-spaces", "settings/spaces/index", 1),
