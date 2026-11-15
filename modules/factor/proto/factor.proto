@@ -755,7 +755,7 @@ message TaskWatermarkStatus {
   string task_id = 1;
   string committed_through = 2;
   string target = 3;
-  // blocked_since 非空表示水位阻塞：blocked_period 是卡住的那一期，blocked_reason 是原因（no_rows、missing_over_threshold、no_universe）。
+  // blocked_since 非空表示水位阻塞：blocked_period 是卡住的那一期，blocked_reason 是原因（no_rows、missing_over_threshold、no_universe、compute_failed）。
   string blocked_since = 4;
   string blocked_period = 5;
   string blocked_reason = 6;

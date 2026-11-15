@@ -177,12 +177,31 @@ func TestExpectedSeriesForSingleTagDatasetIsSubjectsTimesTheTag(t *testing.T) {
 	require.False(t, derived)
 	require.Equal(t, plainSeries("SOL"), series)
 
-	fx.st.putTag("ETH", "venue:binance|market:spot|source:other", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	// 改过 tag：旧 tag 停在第 9 分钟，新 tag 写到第 12 分钟。取最新一根最晚的新 tag，不看字典序（旧 tag 的字典序更小），
+	// 仍是每个标的一条序列。
+	const renamed = "venue:binance|v2"
+	fx.st.putTag("ETH", renamed, 100, 10, 11, 12)
+	fx.now = at(13)
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC", "ETH"}))
-	series, derived, err = fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC", "ETH", "SOL"}, TargetEnd: at(10)})
-	require.NoError(t, err)
-	require.False(t, derived)
-	require.Equal(t, want, series, "仍是每个标的一条序列")
+	for i := 0; i < 5; i++ {
+		series, derived, err = fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC", "ETH", "SOL"}, TargetEnd: at(13)})
+		require.NoError(t, err)
+		require.False(t, derived)
+		require.Equal(t, []seriesset.Series{{SubjectID: "BTC", SeriesTag: renamed}, {SubjectID: "ETH", SeriesTag: renamed}, {SubjectID: "SOL", SeriesTag: renamed}}, series)
+	}
+}
+
+// 多个 tag 的最新一根一样晚时取字典序最小的，结果与遍历顺序无关。
+func TestSingleTagTieBreaksByName(t *testing.T) {
+	fx := newFixture(t, mean3())
+	fx.st.putTag("BTC", "venue:b", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	fx.st.putTag("BTC", "venue:a", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
+	for i := 0; i < 5; i++ {
+		series, _, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC"}, TargetEnd: at(10)})
+		require.NoError(t, err)
+		require.Equal(t, []seriesset.Series{{SubjectID: "BTC", SeriesTag: "venue:a"}}, series)
+	}
 }
 
 // 本地一条序列都没有：没有可补的数据，补算直接报错。

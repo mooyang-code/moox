@@ -234,12 +234,17 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 	if err == nil {
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	}
-	if errors.Is(err, storageio.ErrInfra) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if transient(err) {
 		log.WarnContextf(ctx, "factor_period_retry dataset_id=%s period_time=%d error=%v", payload.GetDatasetId(), payload.GetPeriodTime(), err)
 		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: h.cfg.NakDelay, Err: err}
 	}
 	log.ErrorContextf(ctx, "factor_period_rejected dataset_id=%s period_time=%d error=%v", payload.GetDatasetId(), payload.GetPeriodTime(), err)
 	return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+}
+
+// transient 报告错误是否只是暂时的（基础设施故障、超时、取消），值得重试；其余（例如 Storage 判为无效请求）重试也不会通过。
+func transient(err error) bool {
+	return errors.Is(err, storageio.ErrInfra) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 // periodEvent 是一条周期完成事件里引擎需要的部分。

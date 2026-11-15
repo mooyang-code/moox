@@ -42,13 +42,16 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 	if err != nil {
 		return nil, AssembleReport{}, err
 	}
-	applied := make(map[ItemKey]bool)
-	appliedSeries := make(map[seriesItem]bool) // 每条序列各自取得有效值的项
+	// appliedSeries 记每个 (成员, 标的, 周期) 上哪些期望序列取得了有效值：第 i 位是 tagsOf[标的] 里第 i 个 tag。
+	// 逐项结果只从它推出；按项而不按（项、tag）建表，大补算块里这张表有上千万项，键越小越省内存。
+	tagsOf := tagsBySubject(plan.ExpectedSeries)
+	appliedSeries := make(map[ItemKey]uint64)
 	markApplied := func(member domain.MemberDef, subject, tag string, at time.Time) {
-		applied[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
-		appliedSeries[seriesItem{ItemKey: ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}, tag: tag}] = true
+		if bit := tagBit(tagsOf[subject], tag); bit != 0 {
+			appliedSeries[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] |= bit
+		}
 	}
-	failedItems := make(map[ItemKey]bool) // 任一序列失败的项：不能因为另一序列成功就确认
+	failedItems := make(map[ItemKey]bool) // 有序列取得无效值的项：不能因为另一序列成功就确认
 	rows := make(map[resultKey]*assembledRow)
 	factorColumns := make([]string, 0)
 	columnSet := make(map[string]struct{})
@@ -271,11 +274,7 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 		}
 		return out[i].SeriesTag < out[j].SeriesTag
 	})
-	r.failUnavailableSeriesItems(plan, loaded, computation, appliedSeries, failedItems)
-	for key := range failedItems {
-		delete(applied, key)
-	}
-	report, reportErr := r.assembleReport(plan, loaded, computation, applied)
+	report, reportErr := r.assembleReport(plan, loaded, computation, tagsOf, appliedSeries, failedItems)
 	if reportErr != nil {
 		return nil, AssembleReport{}, reportErr
 	}
@@ -509,34 +508,14 @@ func markFactorSeriesFailure(computation Computation, failed map[string]map[seri
 	computation.FactorStates[member.Key] = state
 }
 
-// seriesItem 是（成员、标的、周期、series_tag）一条序列上的结果项。
-type seriesItem struct {
-	ItemKey
-	tag string
-}
-
-// failUnavailableSeriesItems：一个 (成员, 标的, 周期) 要期望且可用的每条序列在该周期都取得有效值才算写成，
-// 缺一条（序列整段缺数、所在 tag 被跳过、或这一周期那条序列没有行/没有取得值）就记为失败——
-// 统一数据集上不能因为另一个市场的序列成功就确认（补算与缺口恢复据此保留待办）。
-func (r *Runner) failUnavailableSeriesItems(plan Plan, loaded LoadResult, computation Computation, appliedSeries map[seriesItem]bool, failedItems map[ItemKey]bool) {
-	targets, err := r.itemTargets(plan)
-	if err != nil {
-		return
-	}
-	missing := seriesSet(differenceSeries(plan.ExpectedSeries, loaded.AvailableSeries))
-	for _, member := range plan.Members {
-		skipped := computation.FactorStates[member.Key].SkippedSeriesTags
-		for _, item := range plan.ExpectedSeries {
-			_, isMissing := missing[item]
-			unavailable := isMissing || tagIn(skipped, item.SeriesTag)
-			for _, target := range targets {
-				key := ItemKey{Member: member.Key, Subject: item.SubjectID, Period: target.UTC()}
-				if unavailable || !appliedSeries[seriesItem{ItemKey: key, tag: item.SeriesTag}] {
-					failedItems[key] = true
-				}
-			}
+// tagBit 返回 tag 在标的期望 tag 列表里的位；不是期望的 tag（不进确认）或超出 64 个时为 0。
+func tagBit(tags []string, tag string) uint64 {
+	for i, candidate := range tags {
+		if candidate == tag && i < 64 {
+			return 1 << uint(i)
 		}
 	}
+	return 0
 }
 
 func tagIn(tags []string, tag string) bool {
@@ -562,22 +541,37 @@ type AssembleReport struct {
 	Items map[ItemKey]ItemStatus
 }
 
-// assembleReport 汇总每个 (因子, 标的, 周期) 的结果：取得有效值 written；其余（计算错误、无效值、没有源行）failed。
-func (r *Runner) assembleReport(plan Plan, loaded LoadResult, computation Computation, applied map[ItemKey]bool) (AssembleReport, error) {
+// assembleReport 汇总每个 (因子, 标的, 周期) 的结果。这个标的的每条期望序列都可用（本期有数据、所在 tag 没被跳过）、
+// 在这一周期都取得有效值（appliedSeries 里这些位都在），并且没有序列取得无效值（不在 failedItems 里），才是 written；
+// 缺一条（序列整段缺数、所在 tag 被跳过、这一周期那条序列没有行或没取得值）就是 failed——
+// 统一数据集上不能因为另一个市场的序列成功就确认（补算与缺口恢复据此保留待办）。
+func (r *Runner) assembleReport(plan Plan, loaded LoadResult, computation Computation, tagsOf map[string][]string,
+	appliedSeries map[ItemKey]uint64, failedItems map[ItemKey]bool) (AssembleReport, error) {
 	targets, err := r.itemTargets(plan)
 	if err != nil {
 		return AssembleReport{}, err
 	}
 	report := AssembleReport{Items: make(map[ItemKey]ItemStatus)}
 	subjects := intersectLists(plan.Expected, loaded.Available)
+	missing := seriesSet(differenceSeries(plan.ExpectedSeries, loaded.AvailableSeries))
 	for _, member := range plan.Members {
-		for _, target := range targets {
-			for _, subject := range subjects {
+		skipped := computation.FactorStates[member.Key].SkippedSeriesTags
+		for _, subject := range subjects {
+			// 有期望序列整段不可用的标的，这个成员在所有周期都没有写成；期望 tag 超过 64 个的标的确认不了（不会出现）。
+			tags := tagsOf[subject]
+			usable := len(tags) > 0 && len(tags) <= 64
+			for _, tag := range tags {
+				if _, gone := missing[seriesset.Series{SubjectID: subject, SeriesTag: tag}]; gone || tagIn(skipped, tag) {
+					usable = false
+					break
+				}
+			}
+			for _, target := range targets {
 				key := ItemKey{Member: member.Key, Subject: subject, Period: target.UTC()}
-				switch {
-				case applied[key]:
+				all := uint64(1)<<uint(len(tags)) - 1 // len(tags) == 64 时移位得 0，减 1 正好是全 1
+				if written := usable && !failedItems[key] && appliedSeries[key]&all == all; written {
 					report.Items[key] = ItemWritten
-				default:
+				} else {
 					report.Items[key] = ItemFailed
 				}
 			}

@@ -241,6 +241,20 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 				return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
 			}
 			if _, err := h.computePeriod(ctx, set, members, period, scope, triggerID); err != nil {
+				if !transient(err) {
+					// 重试也不会通过的错误（例如完成标记超过体积上限、被 Storage 判为无效请求）：水位停在这一期，
+					// 记成阻塞，让水位阻塞的监控看得到；之后的追赶照常重试，问题排除后自动解除。
+					if state.BlockedSince.IsZero() || !state.BlockedPeriod.Equal(period) {
+						if state.BlockedSince.IsZero() {
+							state.BlockedSince = c.cfg.Now().UTC()
+						}
+						log.ErrorContextf(ctx, "factor_watermark_blocked task_id=%s period=%s reason=compute_failed error=%v", set.TaskID, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), err)
+					}
+					state.BlockedPeriod, state.BlockedReason = period, "compute_failed"
+					if putErr := c.cfg.Store.Put(state); putErr != nil {
+						return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, putErr)
+					}
+				}
 				return err
 			}
 		}

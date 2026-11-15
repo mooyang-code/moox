@@ -834,35 +834,33 @@ func (d *Data) ExpectedSeries(ctx context.Context, plan pipeline.Plan) ([]series
 var ErrNoLocalData = errors.New("本地没有这个数据集的数据，没有可补的数据")
 
 // singleTag 返回只有一个 series_tag 的数据集的那个 tag：取本地时序存储里序列边界上记的 tag——先看 subjects（计划的期望标的），
-// 它们都没有本地数据时再看这个数据源上任一有本地数据的标的；一个标的边界上有多个 tag（不应出现）时取最小的。
-// 本地一条序列都没有时返回 ErrNoLocalData：补算只读本地，这时什么都算不出来。
+// 它们都没有本地数据时再看这个数据源上全部有本地数据的标的。看到多个 tag（例如改过 tag，旧 tag 已停写）时取最新一根最晚的那个，
+// 一样晚时取字典序最小的，结果与遍历顺序无关。本地一条序列都没有时返回 ErrNoLocalData：补算只读本地，这时什么都算不出来。
 func (d *Data) singleTag(src seriesstore.Source, subjects []string) (string, error) {
-	tagOf := func(subject string) (string, error) {
-		bounds, err := d.cfg.Store.TagBounds(src, subject)
-		if err != nil {
-			return "", err
-		}
-		tag := ""
-		for candidate := range bounds {
-			if tag == "" || candidate < tag {
-				tag = candidate
+	pick := func(subjects []string) (string, error) {
+		tag, latest := "", time.Time{}
+		for _, subject := range subjects {
+			bounds, err := d.cfg.Store.TagBounds(src, subject)
+			if err != nil {
+				return "", err
+			}
+			for candidate, b := range bounds {
+				if tag == "" || b.Latest.After(latest) || (b.Latest.Equal(latest) && candidate < tag) {
+					tag, latest = candidate, b.Latest
+				}
 			}
 		}
 		return tag, nil
 	}
-	for _, subject := range subjects {
-		if tag, err := tagOf(subject); err != nil || tag != "" {
-			return tag, err
-		}
+	if tag, err := pick(subjects); err != nil || tag != "" {
+		return tag, err
 	}
 	local, err := d.cfg.Store.Subjects(src)
 	if err != nil {
 		return "", err
 	}
-	for _, subject := range local {
-		if tag, err := tagOf(subject); err != nil || tag != "" {
-			return tag, err
-		}
+	if tag, err := pick(local); err != nil || tag != "" {
+		return tag, err
 	}
 	return "", fmt.Errorf("%w（%s/%s %s）", ErrNoLocalData, src.SpaceID, src.DatasetID, src.Freq)
 }

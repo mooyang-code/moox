@@ -2,6 +2,7 @@ package eventconsumer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -222,6 +223,39 @@ func TestContinuityBlocksAboveTheThresholdAndRecomputesAfterBackfill(t *testing.
 	require.Len(t, h.runner.plans, 2)
 	require.Equal(t, []string{"S00"}, h.runner.plans[1].UpstreamFailed)
 	require.Equal(t, minuteAt(1), h.state().CommittedThrough)
+}
+
+// 报告完成标记遇到重试也不会通过的错误（例如标记超过体积上限、Storage 判为无效请求）：水位停在这一期并记成阻塞
+// （compute_failed），水位阻塞的监控能看到；基础设施错误不记阻塞，照常重试。问题排除后追赶算完这一期，阻塞清除。
+func TestContinuityMarksNonTransientComputeFailureAsBlocked(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(20)
+	h.event(0, universe, nil)
+
+	h.runner.err = fmt.Errorf("%w: storage unavailable", storageio.ErrInfra)
+	require.Equal(t, jetstream.RETRY, h.event(1, universe, nil).Decision)
+	require.True(t, h.state().BlockedSince.IsZero(), "基础设施错误只重试，不记阻塞")
+
+	h.runner.err = errors.New("report factor period computed: 因子周期完成标记超过体积上限")
+	require.Equal(t, jetstream.TERM, h.event(1, universe, nil).Decision)
+	state := h.state()
+	require.Equal(t, minuteAt(0), state.CommittedThrough)
+	require.Equal(t, minuteAt(1), state.BlockedPeriod)
+	require.Equal(t, "compute_failed", state.BlockedReason)
+	require.Equal(t, h.now, state.BlockedSince)
+
+	// 追赶（这一期读回齐全）时仍失败：阻塞开始的时刻不变。
+	h.rows.set(minuteAt(1), universe...)
+	h.now = h.now.Add(time.Minute)
+	require.Error(t, h.handler.Advance(context.Background(), h.taskID))
+	require.Equal(t, h.now.Add(-time.Minute), h.state().BlockedSince)
+	require.Equal(t, "compute_failed", h.state().BlockedReason)
+
+	h.runner.err = nil
+	require.NoError(t, h.handler.Advance(context.Background(), h.taskID))
+	require.Equal(t, minuteAt(1), h.state().CommittedThrough)
+	require.True(t, h.state().BlockedSince.IsZero())
+	require.Empty(t, h.state().BlockedReason)
 }
 
 // 补采确认行情源没有的标的不计入缺失、不阻塞，也不作为上游失败记账。

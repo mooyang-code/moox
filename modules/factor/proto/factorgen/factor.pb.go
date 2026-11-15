@@ -7216,7 +7216,7 @@ type TaskWatermarkStatus struct {
 	TaskId           string `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	CommittedThrough string `protobuf:"bytes,2,opt,name=committed_through,json=committedThrough,proto3" json:"committed_through,omitempty"`
 	Target           string `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
-	// blocked_since 非空表示水位阻塞：blocked_period 是卡住的那一期，blocked_reason 是原因（no_rows、missing_over_threshold、no_universe）。
+	// blocked_since 非空表示水位阻塞：blocked_period 是卡住的那一期，blocked_reason 是原因（no_rows、missing_over_threshold、no_universe、compute_failed）。
 	BlockedSince  string `protobuf:"bytes,4,opt,name=blocked_since,json=blockedSince,proto3" json:"blocked_since,omitempty"`
 	BlockedPeriod string `protobuf:"bytes,5,opt,name=blocked_period,json=blockedPeriod,proto3" json:"blocked_period,omitempty"`
 	BlockedReason string `protobuf:"bytes,6,opt,name=blocked_reason,json=blockedReason,proto3" json:"blocked_reason,omitempty"`
