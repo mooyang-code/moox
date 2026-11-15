@@ -495,7 +495,7 @@ func (f *TencentFunctions) UpgradeCode(ctx context.Context, ref FunctionRef, pkg
 		if err != nil {
 			return err
 		}
-		if !environmentMatches(verified.Environment, environment) {
+		if !environmentCovers(verified.Environment, environment) {
 			return fmt.Errorf("云函数 %s 升级后读回的环境与写入的不一致", ref.Name)
 		}
 		return nil
@@ -706,7 +706,7 @@ func verifyFunction(info *tencentscf.FunctionInfo, spec FunctionSpec, environmen
 	if got := info.Environment[packageIDKey]; got != spec.Package.PackageID {
 		return fmt.Errorf("云函数 %s 读回的代码包是 %q，期望 %q", name, got, spec.Package.PackageID)
 	}
-	if !environmentMatches(info.Environment, environment) {
+	if !environmentCovers(info.Environment, environment) {
 		return fmt.Errorf("云函数 %s 读回的环境与写入的不一致", name)
 	}
 	if configDiffers(info, spec) {

@@ -63,6 +63,7 @@ func environmentCovers(current, want map[string]string) bool {
 
 // environmentMatches 判断云上环境已经是期望的样子：期望的每一项都在且相等，并且没有要删掉的废弃键（创建预留号、DNS 键）。
 // 云上还带着废弃键时算不一致，让 Ensure 写一次把它们删掉。
+// 只用于决定要不要写；写后读回校验用 environmentCovers，免得云上按键合并环境时废弃键删不掉而永远校验失败。
 func environmentMatches(current, want map[string]string) bool {
 	for _, key := range removedEnvironmentKeys {
 		if _, ok := current[key]; ok {
