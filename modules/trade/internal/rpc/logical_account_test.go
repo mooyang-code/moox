@@ -103,6 +103,11 @@ func TestCloseTargetSessionRPCValidatesAndReturnsClosedThrough(t *testing.T) {
 	if woke != 2 {
 		t.Fatalf("woke = %d, want 2", woke)
 	}
+	// 组合不存在（例如 Trade 重置过）回 NOT_FOUND：Strategy 据此视为已关闭，重复停用、删除实例不会一直卡住。
+	unknown := &tradepb.CloseTargetSessionReq{LogicalAccountId: "logical-gone", InstanceId: "instance-1", SessionId: "session-1", SessionStartedAt: 1_000}
+	if response, err := handler.CloseTargetSession(ctx, unknown); err != nil || response.GetRetInfo().GetCode() != tradepb.ErrorCode_NOT_FOUND {
+		t.Fatalf("组合不存在：response = %+v, err = %v", response, err)
+	}
 }
 
 func TestFlattenLogicalAccountDelegatesTrustedSpace(t *testing.T) {

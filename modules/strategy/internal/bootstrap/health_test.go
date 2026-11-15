@@ -60,16 +60,10 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 		t.Fatal(err)
 	}
 	session := instanceID + "-session"
-	if err := repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: instanceID, DSLHash: "sha256:demo", ResolvedJSON: resolved, CreatedAt: seedTime}, "name: demo"); err != nil {
+	if err := repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: instanceID, DSLHash: "sha256:demo", ResolvedJSON: resolved, CreatedAt: seedTime}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 	// 按启用流程先把会话写到停用的实例上，再启用。
-	if err := repo.SetInstanceEnabled(ctx, instanceID, false, &session, json.RawMessage(resolved), seedTime); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetInstanceEnabled(ctx, instanceID, true, &session, json.RawMessage(resolved), seedTime); err != nil {
-		t.Fatal(err)
-	}
 }
 
 const resolvedJSON = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"1h","calendar":"crypto_24x7","columns":{},"view_columns":["close"]}`

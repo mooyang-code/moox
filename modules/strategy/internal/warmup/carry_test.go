@@ -29,17 +29,12 @@ func (h *harness) reenable(t *testing.T, previous, next string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.DisableInstance(ctx, "i1", &previous, nil, "", origin); err != nil {
+	if err := h.repo.DisableInstance(ctx, "i1", previous, origin); err != nil {
 		t.Fatal(err)
 	}
 	h.manager.Stop("i1")
-	if err := h.repo.OpenSession(ctx, store.Session{SessionID: next, InstanceID: "i1", DSLHash: old.DSLHash, ResolvedJSON: old.ResolvedJSON, MembersJSON: old.MembersJSON, CreatedAt: origin}, poolYaml); err != nil {
+	if err := h.repo.EnableInstance(ctx, store.Session{SessionID: next, InstanceID: "i1", DSLHash: old.DSLHash, ResolvedJSON: old.ResolvedJSON, MembersJSON: old.MembersJSON, CreatedAt: origin}, poolYaml); err != nil {
 		t.Fatal(err)
-	}
-	for _, enabled := range []bool{false, true} {
-		if err := h.repo.SetInstanceEnabled(ctx, "i1", enabled, &next, json.RawMessage(old.ResolvedJSON), origin); err != nil {
-			t.Fatal(err)
-		}
 	}
 }
 

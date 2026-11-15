@@ -65,10 +65,10 @@ func (p taskPlan) deleteIDs() []string {
 	return ids
 }
 
-// DeleteStrategyInstance 删除已停用、没有会话的实例，连同关联到它的因子任务与结果数据集，最后在一个事务里删掉实例在策略库里的全部记录。
+// DeleteStrategyInstance 删除已停用的实例，连同关联到它的因子任务与结果数据集，最后在一个事务里删掉实例在策略库里的全部记录。
 // 没关联或关联到别的实例的任务保留不动，只去掉本实例的引用；只有固定成员的任务从不关联，不随任何实例删除。全程持有实例锁，并发的启用会被挡住。
-// 所有拒绝（任务不在本空间、要删的任务还被别的实例引用、有回放在进行、Factor 的删除前检查不过、结果数据集有归档任务）都在删第一个任务之前做完；
-// 已经删掉的部分算成功，中途失败（例如超时）后再删一次即可接着做完。Trade 里的影子目标、目标回执与订单不删。
+// 所有拒绝（任务不在本空间、要删的任务还被别的实例引用、有回放在进行、Factor 的删除前检查不过、结果数据集有归档任务、Trade 没确认关闭会话）
+// 都在删第一个任务之前做完；已经删掉的部分算成功，中途失败（例如超时）后再删一次即可接着做完。Trade 里的影子目标、目标回执与订单不删。
 func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.DeleteStrategyInstanceReq) (*strategypb.DeleteStrategyInstanceRsp, error) {
 	refuse := func(info *commonpb.RetInfo) (*strategypb.DeleteStrategyInstanceRsp, error) {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: info}, nil
@@ -101,9 +101,6 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	if instance.Enabled {
 		return refuse(invalid(errors.New("实例必须先停用才能删除")))
 	}
-	if instance.SessionID != nil {
-		return refuse(invalid(errors.New("实例的启用或停用操作尚未完成，稍后再删除")))
-	}
 	callCtx, cancel := deleteCallContext(ctx)
 	defer cancel()
 	plan, err := s.planTasks(callCtx, instance)
@@ -119,6 +116,9 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 		}
 	}
 	if err := s.checkNotArchived(callCtx, instance.SpaceID, plan.Delete); err != nil {
+		return refuse(deleteError(err))
+	}
+	if err := s.closeBeforeDelete(callCtx, instance); err != nil {
 		return refuse(deleteError(err))
 	}
 	// 从这里开始动手：之后的失败都标为“删除未完成”，再删一次即可接着做完。
@@ -224,6 +224,22 @@ func (s *Service) planTasks(ctx context.Context, instance store.Instance) (taskP
 		plan.Delete = append(plan.Delete, pendingTask{TaskID: taskID, ResultDatasetID: task.ResultDatasetID})
 	}
 	return plan, nil
+}
+
+// closeBeforeDelete 在动手删除之前，对实例最近一次挂过组合账户的会话再通知一次 Trade 关闭（幂等，账户取会话里记的那个）：会话行随实例
+// 删除后，停用时没确认的关闭就再也没有重试入口了。Trade 没确认就拒绝删除；从没挂过账户的实例不联系 Trade。
+func (s *Service) closeBeforeDelete(ctx context.Context, instance store.Instance) error {
+	session, found, err := s.Store.LatestAccountSession(ctx, instance.InstanceID)
+	if err != nil {
+		return fmt.Errorf("读取实例最近一次挂账户的会话失败，暂不能删除：%w", err)
+	}
+	if !found {
+		return nil
+	}
+	if err := s.closeTradeSession(ctx, instance.SpaceID, session); err != nil {
+		return fmt.Errorf("Trade 未确认关闭实例在组合账户 %s 上的会话，暂不能删除，请稍后重试：%w", *session.LogicalAccountID, err)
+	}
+	return nil
 }
 
 // checkNotArchived 拒绝删除有归档任务的结果数据集：archive-mgr 不能按数据集过滤，分页拉回空间内全部归档任务后在本地筛选。

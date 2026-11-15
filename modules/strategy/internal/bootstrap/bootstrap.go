@@ -1,4 +1,4 @@
-// Package bootstrap 装配策略进程：数据库、投递、事件消费、管理接口、指标、对账与保留清理。
+// Package bootstrap 装配策略进程：数据库、投递、事件消费、管理接口、指标与保留清理。
 package bootstrap
 
 import (
@@ -35,16 +35,12 @@ import (
 )
 
 const (
-	reconcileInterval = 30 * time.Second
 	retentionInterval = 6 * time.Hour
-	// startupReconcileTimeout 限制启动时对账联系 Trade 的总时长：Trade 不可达时不让启动按实例数线性变慢，
-	// 剩下的由对账循环继续。
-	startupReconcileTimeout = 20 * time.Second
 	// outboxStallThreshold 是待投递结果最长允许的等待：投递正常时 1 秒内发出，超过它说明投递已停滞，健康检查报未就绪。
 	outboxStallThreshold = 5 * time.Minute
 )
 
-// Initialize 打开数据库、对账未完成的启停握手、启动投递与事件消费，并在服务监听前注册 StrategyMgr。
+// Initialize 打开数据库、启动投递与事件消费，并在服务监听前注册 StrategyMgr。
 func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Server, func() error, error) {
 	db, err := store.Open(cfg.Database)
 	if err != nil {
@@ -94,7 +90,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	ranged.PageSize = uint32(cfg.Replay.PageSize)
 	var replayClient input.Client = &ranged
 	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient, Sets: live, ReadyWait: factorTaskReadyWait, ReadyStep: factorTaskReadyStep}}
-	service.Owner = tradeowner.New(cfg.Trade, gateway)
+	// 启用绑了组合账户的实例前读一次 Trade 的账户；停用后通知 Trade 关闭会话（批 3 的 3.6）。
+	service.Trade = tradeowner.New(cfg.Trade, gateway)
 	// 删除实例：经 Factor 删除关联的任务，删除前经 archive-mgr 确认结果数据集没有归档任务。
 	service.Tasks = live
 	service.Archives = &archivetasks.Client{Gateway: gateway}
@@ -112,20 +109,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err != nil {
 		return nil, nil, err
 	}
-	service.Alerts = observer
 	observer.SetStaleAlertPeriods(cfg.Params.StaleAlertPeriods)
 
-	// 先尝试完成崩溃或网络中断留下的启停握手，再开始消费事件。Trade 暂不可达或个别实例不一致只告警：
-	// 停用侧由对账循环继续重试；启用侧被 Trade 拒绝的实例自动停用，结果未知的标记 session_unverified，
-	// 进程与接口照常启动以便人工修复。启动对账限时，超时未完成的实例由对账循环继续。
-	reconcileCtx, cancelReconcile := context.WithTimeout(ctx, startupReconcileTimeout)
-	if err := service.ReconcileDisabledInstances(reconcileCtx); err != nil {
-		log.Warnf("启动对账：已停用实例的 Trade 释放未完成，稍后自动重试：%v%s", err, tradeDetail(err))
-	}
-	if err := service.ReconcileEnabledInstances(reconcileCtx); err != nil {
-		log.Warnf("启动对账：%v%s", err, tradeDetail(err))
-	}
-	cancelReconcile()
 	// 进程在预热中途重启：会话里还没有预热结果的池实例重新开始预热（带着沿用状态的从状态之后接着推进，否则从头；先于开始消费事件，门禁立刻拦住它们的事件）。
 	if err := warm.Resume(ctx); err != nil {
 		return nil, nil, fmt.Errorf("恢复策略池预热失败：%w", err)
@@ -174,7 +159,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		loops.Wait()
 		return nil
 	})
-	loops.Add(5)
+	loops.Add(4)
 	submitter := &paramsubmit.Submitter{Store: db, Factors: live, Allowed: paramSubmitAllowed(triggerGate(life, warm)), OnResult: observer.ParamSubmitted,
 		OnError: func(requestID string, err error) { log.Warnf("因子参数提交 %s 未完成：%v", requestID, err) }}
 	go func() {
@@ -184,10 +169,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	go func() {
 		defer loops.Done()
 		runner.Run(background)
-	}()
-	go func() {
-		defer loops.Done()
-		reconcileLoop(background, service)
 	}()
 	go func() {
 		defer loops.Done()
@@ -234,24 +215,6 @@ func paramSubmitAllowed(gate func(string) trigger.Mode) func(string) bool {
 	return func(instanceID string) bool {
 		mode := gate(instanceID)
 		return mode != trigger.ModeOff && mode != trigger.ModeWait
-	}
-}
-
-func reconcileLoop(ctx context.Context, service *rpc.Service) {
-	ticker := time.NewTicker(reconcileInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-		if err := service.ReconcileDisabledInstances(ctx); err != nil {
-			log.Warnf("已停用实例的 Trade 释放仍未完成：%v%s", err, tradeDetail(err))
-		}
-		if err := service.ReconcileEnabledInstances(ctx); err != nil {
-			log.Warnf("启用实例的 Trade 会话复核：%v%s", err, tradeDetail(err))
-		}
 	}
 }
 
@@ -321,14 +284,6 @@ func stockCalendarWarning(ctx context.Context, db *store.Store, now time.Time) (
 	default:
 		return err.Error() + "；使用 A 股日历的实例无法求值", true
 	}
-}
-
-// tradeDetail 把 Trade 业务错误附带的原始说明拼到日志后面。
-func tradeDetail(err error) string {
-	if detail := tradeowner.Detail(err); detail != "" {
-		return "；Trade 的说明：" + detail
-	}
-	return ""
 }
 
 // eventBusConfig 是出站投递与事件消费共用的连接配置：环境变量给出的凭据优先，否则用配置的凭据文件。

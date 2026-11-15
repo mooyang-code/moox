@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
-	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
@@ -153,57 +152,35 @@ func (f *fakeResolver) ComputeReplayWindow(_ context.Context, _ string, resolved
 	return end, generations, series, nil
 }
 
-// fakeOwner 记录认领与释放；claimErr 让下一次认领失败。
-type fakeOwner struct {
-	claims      []string
-	releases    []string
-	claimErr    error
-	releaseErr  error
-	validateErr error
-	owner       map[string]string
-	// onRelease 在每次释放时调用，用来模拟 Trade 调用期间的并发操作。
-	onRelease func(instance, session string)
+// closeCall 是一次 CloseTargetSession：组合账户、实例、会话与开始时刻。
+type closeCall struct {
+	account, instance, session string
+	startedAt                  int64
 }
 
-func (f *fakeOwner) ClaimSession(_ context.Context, _, account, instance, session string, _ []string) error {
-	f.claims = append(f.claims, session)
-	if f.claimErr != nil {
-		return f.claimErr
-	}
-	if f.owner == nil {
-		f.owner = map[string]string{}
-	}
-	f.owner[account] = instance + "/" + session
-	return nil
+// fakeTrade 记录启用前的账户核对与停用后的关闭会话；checkErr、closeErr 让之后的调用失败。
+type fakeTrade struct {
+	checks   []string
+	closes   []closeCall
+	checkErr error
+	closeErr error
 }
 
-func (f *fakeOwner) ReleaseSession(_ context.Context, _, account, instance, session string) error {
-	f.releases = append(f.releases, session)
-	if f.onRelease != nil {
-		f.onRelease(instance, session)
-	}
-	if f.releaseErr != nil {
-		return f.releaseErr
-	}
-	delete(f.owner, account)
-	return nil
+func (f *fakeTrade) CheckAccount(_ context.Context, _, account string, _ []string) error {
+	f.checks = append(f.checks, account)
+	return f.checkErr
 }
 
-func (f *fakeOwner) ValidateSession(_ context.Context, _, account, instance, session string) error {
-	if f.validateErr != nil {
-		return f.validateErr
-	}
-	if f.owner[account] != instance+"/"+session {
-		return tradeowner.ErrSessionNotOwned
-	}
-	return nil
+func (f *fakeTrade) CloseSession(_ context.Context, _, account, instance, session string, startedAt int64) error {
+	f.closes = append(f.closes, closeCall{account: account, instance: instance, session: session, startedAt: startedAt})
+	return f.closeErr
 }
 
 type harness struct {
 	t        *testing.T
 	service  *Service
 	resolver *fakeResolver
-	owner    *fakeOwner
+	trade    *fakeTrade
 	ctx      context.Context
 	now      time.Time
 }
@@ -219,8 +196,8 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	coverage := input.ViewInfo{ViewID: "view_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)}
-	h := &harness{t: t, resolver: &fakeResolver{view: coverage}, owner: &fakeOwner{}, now: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
-	h.service = &Service{Store: repo, Resolver: h.resolver, Owner: h.owner, Now: func() time.Time { return h.now }}
+	h := &harness{t: t, resolver: &fakeResolver{view: coverage}, trade: &fakeTrade{}, now: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+	h.service = &Service{Store: repo, Resolver: h.resolver, Trade: h.trade, Now: func() time.Time { return h.now }}
 	ctx := trpc.BackgroundContext()
 	trpc.SetMetaData(ctx, "x-space-id", []byte("crypto"))
 	h.ctx = ctx
@@ -307,98 +284,162 @@ func TestStrategyDefinitionCRUD(t *testing.T) {
 	}
 }
 
-// S14：重启（新的 Service 实例）后沿用会话；重复启用不新建会话；停用再启用新建会话（规则状态是否沿用见 store 的 carryState）。
+// S14：重启（新的 Service 实例）后沿用会话；重复启用不新建会话、不联系 Trade；停用再启用新建会话（规则状态是否沿用见 store 的 carryState）。
 func TestS14EnableIsIdempotentAndReenableCreatesSession(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	created := h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
 	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
 	first := created.GetInstance()
-	if !first.GetEnabled() || first.GetSessionId() == "" || first.GetResolvedJson() == "{}" || len(h.owner.claims) != 1 {
-		t.Fatalf("创建并启用的实例不符：%+v claims=%v", first, h.owner.claims)
+	if !first.GetEnabled() || first.GetSessionId() == "" || first.GetResolvedJson() == "{}" || len(h.trade.checks) != 1 || h.trade.checks[0] != "acct-1" {
+		t.Fatalf("创建并启用的实例不符：%+v checks=%v", first, h.trade.checks)
 	}
-	restarted := &Service{Store: h.service.Store, Resolver: h.resolver, Owner: h.owner, Now: h.service.Now}
+	restarted := &Service{Store: h.service.Store, Resolver: h.resolver, Trade: h.trade, Now: h.service.Now}
 	again, _ := restarted.SetStrategyInstanceEnabled(h.ctx, &strategypb.SetStrategyInstanceEnabledReq{InstanceId: "i1", Enabled: true})
 	requireOK(t, int32(again.GetRetInfo().GetCode()), again.GetRetInfo().GetMsg())
-	if again.GetInstance().GetSessionId() != first.GetSessionId() || len(h.owner.claims) != 1 || h.resolver.calls != 1 {
-		t.Fatalf("重复启用不应新建会话或重新解析：%+v claims=%v calls=%d", again.GetInstance(), h.owner.claims, h.resolver.calls)
-	}
-	if err := restarted.ReconcileEnabledInstances(h.ctx); err != nil {
-		t.Fatalf("重启对账应通过：%v", err)
+	if again.GetInstance().GetSessionId() != first.GetSessionId() || len(h.trade.checks) != 1 || len(h.trade.closes) != 0 || h.resolver.calls != 1 {
+		t.Fatalf("重复启用不应新建会话、重新解析或联系 Trade：%+v checks=%v calls=%d", again.GetInstance(), h.trade.checks, h.resolver.calls)
 	}
 	disabled := h.setEnabled("i1", false)
 	requireOK(t, int32(disabled.GetRetInfo().GetCode()), disabled.GetRetInfo().GetMsg())
-	if disabled.GetInstance().GetEnabled() || disabled.GetInstance().GetSessionId() != "" || len(h.owner.releases) != 1 {
-		t.Fatalf("停用应释放并清空会话：%+v releases=%v", disabled.GetInstance(), h.owner.releases)
-	}
 	session, err := h.service.Store.GetSession(h.ctx, first.GetSessionId())
 	if err != nil || session.ClosedAt == nil {
 		t.Fatalf("停用应关闭会话：%+v err=%v", session, err)
 	}
+	want := closeCall{account: "acct-1", instance: "i1", session: first.GetSessionId(), startedAt: session.StartedAt}
+	if disabled.GetInstance().GetEnabled() || disabled.GetInstance().GetSessionId() != "" || len(h.trade.closes) != 1 || h.trade.closes[0] != want {
+		t.Fatalf("停用应清空会话并按会话通知 Trade 关闭：%+v closes=%v want=%v", disabled.GetInstance(), h.trade.closes, want)
+	}
 	reenabled := h.setEnabled("i1", true)
 	requireOK(t, int32(reenabled.GetRetInfo().GetCode()), reenabled.GetRetInfo().GetMsg())
-	if reenabled.GetInstance().GetSessionId() == first.GetSessionId() || len(h.owner.claims) != 2 {
-		t.Fatalf("重新启用应新建会话：%+v", reenabled.GetInstance())
+	if reenabled.GetInstance().GetSessionId() == first.GetSessionId() || len(h.trade.checks) != 2 {
+		t.Fatalf("重新启用应新建会话并再核对一次账户：%+v checks=%v", reenabled.GetInstance(), h.trade.checks)
 	}
 	if _, ok, _ := h.service.Store.LatestOk(h.ctx, "i1", reenabled.GetInstance().GetSessionId()); ok {
 		t.Fatal("新会话不应继承旧会话的状态")
 	}
-	// Trade 侧被改绑后，重复启用必须报错而不是假成功。
-	h.owner.owner["acct-1"] = "other/session"
-	stale := h.setEnabled("i1", true)
-	requireFail(t, int32(stale.GetRetInfo().GetCode()), stale.GetRetInfo().GetMsg(), "不再被 Trade 授权")
+	if next, _ := h.service.Store.GetSession(h.ctx, reenabled.GetInstance().GetSessionId()); next.StartedAt <= session.StartedAt {
+		t.Fatalf("新会话的开始时刻应晚于旧会话：%d <= %d", next.StartedAt, session.StartedAt)
+	}
 }
 
-// 认领失败：确定性拒绝清除待定会话；结果未知保留会话，之后显式启用沿用同一会话。
-func TestEnableClaimFailureHandling(t *testing.T) {
+// 启用前读账户核对（人工控制、市场不符、Trade 不可达）失败时不写会话、实例保持停用；之后重试照常启用。
+func TestEnableAccountCheckFailureLeavesNoSession(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		err    error
-		retain bool
+		name string
+		err  error
 	}{
-		{"结果未知", errors.New("claim timeout"), true},
-		{"确定性拒绝", &tradeowner.ResponseError{Operation: "认领会话", Code: tradepb.ErrorCode(14), Message: "owner conflict"}, false},
+		{"Trade 不可达", errors.New("Trade 账户读取失败：Trade 或网关不可达，结果未知")},
+		{"人工控制", tradeowner.ErrManualControl},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
 			h.createStrategy("s1", demoDSL)
-			h.owner.claimErr = tc.err
+			h.trade.checkErr = tc.err
 			rsp := h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
 			requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "i1")
-			if rsp.GetInstance().GetInstanceId() != "i1" || rsp.GetInstance().GetEnabled() || (rsp.GetInstance().GetSessionId() != "") != tc.retain {
+			if rsp.GetInstance().GetInstanceId() != "i1" || rsp.GetInstance().GetEnabled() || rsp.GetInstance().GetSessionId() != "" {
 				t.Fatalf("失败后的实例状态不符：%+v", rsp.GetInstance())
 			}
-			h.owner.claimErr = nil
+			if sessions, err := h.service.Store.ListSessions(h.ctx, "i1"); err != nil || len(sessions) != 0 {
+				t.Fatalf("核对没过不应留下会话：%+v err=%v", sessions, err)
+			}
+			h.trade.checkErr = nil
 			recovered := h.setEnabled("i1", true)
 			requireOK(t, int32(recovered.GetRetInfo().GetCode()), recovered.GetRetInfo().GetMsg())
-			if (h.owner.claims[0] == h.owner.claims[1]) != tc.retain {
-				t.Fatalf("恢复时会话沿用不符：%v", h.owner.claims)
+			if !recovered.GetInstance().GetEnabled() || len(h.trade.closes) != 0 {
+				t.Fatalf("重试应启用，且不联系 Trade 关闭任何会话：%+v closes=%v", recovered.GetInstance(), h.trade.closes)
 			}
 		})
 	}
 }
 
-// 停用时 Trade 释放失败：保留会话，对账在 Trade 恢复后完成释放。
-func TestDisableReleaseFailureIsReconciled(t *testing.T) {
+// 停用时 Trade 没确认关闭：实例已经停用、会话已关闭，提示再点一次停用；再点停用对同一个会话、同一个账户重试，不做后台重试。
+func TestDisableReportsUnconfirmedTradeClose(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
-	h.owner.releaseErr = errors.New("trade unavailable")
+	first := h.createInstance("i1", "s1", "ftask_i1", "acct-1", true).GetInstance()
+	h.trade.closeErr = errors.New("Trade 账户关闭会话失败：Trade 或网关不可达，结果未知")
 	rsp := h.setEnabled("i1", false)
-	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "释放未确认")
-	if rsp.GetInstance().GetEnabled() || rsp.GetInstance().GetSessionId() == "" {
-		t.Fatalf("释放未确认时应已停用并保留会话：%+v", rsp.GetInstance())
+	for _, want := range []string{"实例已停用", "Trade 未确认", "再点一次停用", "暂停组合账户 acct-1"} {
+		requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), want)
 	}
-	if err := h.service.ReconcileDisabledInstances(h.ctx); err == nil {
-		t.Fatal("Trade 仍不可用时对账应返回错误")
+	if rsp.GetInstance().GetEnabled() || rsp.GetInstance().GetSessionId() != "" {
+		t.Fatalf("Trade 没确认时实例也应已停用、没有会话：%+v", rsp.GetInstance())
 	}
-	h.owner.releaseErr = nil
-	if err := h.service.ReconcileDisabledInstances(h.ctx); err != nil {
-		t.Fatal(err)
+	if session, err := h.service.Store.GetSession(h.ctx, first.GetSessionId()); err != nil || session.ClosedAt == nil {
+		t.Fatalf("会话应已关闭：%+v err=%v", session, err)
 	}
-	instance, _ := h.service.Store.GetInstance(h.ctx, "i1")
-	if instance.SessionID != nil {
-		t.Fatalf("对账后会话应清空：%+v", instance)
+	retried := h.setEnabled("i1", false)
+	requireFail(t, int32(retried.GetRetInfo().GetCode()), retried.GetRetInfo().GetMsg(), "Trade 未确认")
+	h.trade.closeErr = nil
+	done := h.setEnabled("i1", false)
+	requireOK(t, int32(done.GetRetInfo().GetCode()), done.GetRetInfo().GetMsg())
+	if len(h.trade.closes) != 3 {
+		t.Fatalf("每次停用调一次 Trade：%v", h.trade.closes)
+	}
+	for _, call := range h.trade.closes {
+		if call.account != "acct-1" || call.session != first.GetSessionId() || call.instance != "i1" || call.startedAt <= 0 {
+			t.Fatalf("重试应对同一个会话、同一个账户：%v", h.trade.closes)
+		}
+	}
+}
+
+// 用例“停用后改账户，再点停用仍按原账户调用”：关闭按会话里记的账户调，不受之后改账户（含改成观察实例）影响。
+func TestDisableAfterAccountChangeStillClosesOriginalAccount(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	first := h.createInstance("i1", "s1", "ftask_i1", "acct-1", true).GetInstance()
+	h.trade.closeErr = errors.New("trade unavailable")
+	requireFail(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "", "")
+	h.trade.closeErr = nil
+	update := func(account string) {
+		t.Helper()
+		rsp, err := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s1", LogicalAccountId: account}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+	}
+	// 停用后立刻能改实例（没有握手没完成的中间状态）：改到别的账户，再点停用仍调原账户。
+	update("acct-2")
+	h.trade.closes = nil
+	requireOK(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "")
+	if len(h.trade.closes) != 1 || h.trade.closes[0].account != "acct-1" || h.trade.closes[0].session != first.GetSessionId() {
+		t.Fatalf("改账户后再点停用应仍按原账户调用：%v", h.trade.closes)
+	}
+	// 改成观察实例并启用、停用一次：最近一次会话没挂账户，再点停用取更早挂过账户的那次。
+	update("")
+	observer := h.setEnabled("i1", true).GetInstance().GetSessionId()
+	h.trade.closes = nil
+	requireOK(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "")
+	if len(h.trade.closes) != 0 {
+		t.Fatalf("观察会话停用不联系 Trade：%v", h.trade.closes)
+	}
+	requireOK(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "")
+	if len(h.trade.closes) != 1 || h.trade.closes[0].account != "acct-1" || h.trade.closes[0].session != first.GetSessionId() || observer == first.GetSessionId() {
+		t.Fatalf("最近一次会话没挂账户时应取更早挂过账户的那次：%v", h.trade.closes)
+	}
+	// 改到新账户并重新启用之后，最近一次挂账户的会话是新账户的：旧账户那次关闭不再有入口（写进文档的已知情况）。
+	update("acct-2")
+	second := h.setEnabled("i1", true).GetInstance().GetSessionId()
+	requireOK(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "")
+	h.trade.closes = nil
+	requireOK(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "")
+	if len(h.trade.closes) != 1 || h.trade.closes[0].account != "acct-2" || h.trade.closes[0].session != second {
+		t.Fatalf("重新启用之后再点停用对新账户的会话：%v", h.trade.closes)
+	}
+}
+
+// 观察实例（没挂账户）的启用、停用、重复停用都不联系 Trade。
+func TestObserverInstanceNeverCallsTrade(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	requireOK(t, int32(h.createInstance("i1", "s1", "ftask_i1", "", true).GetRetInfo().GetCode()), "")
+	requireOK(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "")
+	requireOK(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "")
+	if len(h.trade.checks) != 0 || len(h.trade.closes) != 0 {
+		t.Fatalf("观察实例不应联系 Trade：checks=%v closes=%v", h.trade.checks, h.trade.closes)
 	}
 }
 
@@ -540,70 +581,23 @@ func TestS26StartReplayChecksTaskMarkets(t *testing.T) {
 	requireFail(t, int32(foreign.GetRetInfo().GetCode()), foreign.GetRetInfo().GetMsg(), "空间")
 }
 
-// 停用时 Trade 释放未确认，随后再启用：不能沿用已关闭的旧会话；先在 Trade 侧确认释放，再新建会话并重新解析绑定。
-func TestReenableAfterUnconfirmedReleaseCreatesNewSession(t *testing.T) {
+// 停用时 Trade 没确认关闭，随后再启用：不被挡住，新建会话并重新解析绑定，新会话的开始时刻更晚（Trade 按它覆盖旧会话的目标）。
+func TestReenableAfterUnconfirmedCloseCreatesNewSession(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	first := h.createInstance("i1", "s1", "ftask_i1", "acct-1", true).GetInstance()
-	h.owner.releaseErr = errors.New("trade unavailable")
+	h.trade.closeErr = errors.New("trade unavailable")
 	disabled := h.setEnabled("i1", false)
-	requireFail(t, int32(disabled.GetRetInfo().GetCode()), disabled.GetRetInfo().GetMsg(), "释放未确认")
-	blocked := h.setEnabled("i1", true)
-	requireFail(t, int32(blocked.GetRetInfo().GetCode()), blocked.GetRetInfo().GetMsg(), "释放尚未确认")
-	if blocked.GetInstance().GetEnabled() || blocked.GetInstance().GetSessionId() != first.GetSessionId() {
-		t.Fatalf("释放未确认时不能启用，也不能丢掉待释放的会话：%+v", blocked.GetInstance())
-	}
-	h.owner.releaseErr = nil
+	requireFail(t, int32(disabled.GetRetInfo().GetCode()), disabled.GetRetInfo().GetMsg(), "Trade 未确认")
 	reenabled := h.setEnabled("i1", true)
 	requireOK(t, int32(reenabled.GetRetInfo().GetCode()), reenabled.GetRetInfo().GetMsg())
-	if reenabled.GetInstance().GetSessionId() == first.GetSessionId() {
-		t.Fatalf("不能沿用已关闭的会话：%+v", reenabled.GetInstance())
+	if reenabled.GetInstance().GetSessionId() == first.GetSessionId() || h.resolver.calls != 2 {
+		t.Fatalf("应新建会话并重新解析绑定：%+v calls=%d", reenabled.GetInstance(), h.resolver.calls)
 	}
-	if h.resolver.calls != 2 {
-		t.Fatalf("新会话应重新解析绑定：calls=%d", h.resolver.calls)
-	}
-	released := false
-	for _, session := range h.owner.releases {
-		released = released || session == first.GetSessionId()
-	}
-	if !released {
-		t.Fatalf("旧会话应在 Trade 侧释放：%v", h.owner.releases)
-	}
-}
-
-// 启动对账只隔离不一致的实例：Trade 明确拒绝的会话自动停用；结果未知时保持启用并标记 degraded。
-func TestReconcileEnabledInstancesIsolatesInstances(t *testing.T) {
-	h := newHarness(t)
-	h.createStrategy("s1", demoDSL)
-	h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
-	h.createInstance("i2", "s1", "ftask_i2", "acct-2", true)
-	h.owner.owner["acct-1"] = "other/session"
-	err := h.service.ReconcileEnabledInstances(h.ctx)
-	if err == nil || !strings.Contains(err.Error(), "已自动停用") {
-		t.Fatalf("被拒绝的会话应自动停用并告警：%v", err)
-	}
-	rejected, _ := h.service.Store.GetInstance(h.ctx, "i1")
-	if rejected.Enabled || rejected.SessionID != nil || rejected.Health != store.HealthDegraded {
-		t.Fatalf("i1 应已停用、清空会话并标记 degraded：%+v", rejected)
-	}
-	if healthy, _ := h.service.Store.GetInstance(h.ctx, "i2"); !healthy.Enabled {
-		t.Fatalf("i2 不应受影响：%+v", healthy)
-	}
-	h.owner.validateErr = &tradeowner.TransportError{Operation: "校验会话", Err: errors.New("dial tcp 10.0.0.1:443: connect refused")}
-	err = h.service.ReconcileEnabledInstances(h.ctx)
-	if err == nil || !strings.Contains(err.Error(), "暂时无法核实") || strings.Contains(err.Error(), "10.0.0.1") {
-		t.Fatalf("结果未知时只告警，且不暴露网关地址：%v", err)
-	}
-	if unknown, _ := h.service.Store.GetInstance(h.ctx, "i2"); !unknown.Enabled || unknown.Health != store.HealthSessionUnverified {
-		t.Fatalf("i2 应保持启用并标记 session_unverified：%+v", unknown)
-	}
-	// 再次核实成功后恢复 ok；ok 周期不会提前清除 session_unverified。
-	h.owner.validateErr = nil
-	if err := h.service.ReconcileEnabledInstances(h.ctx); err != nil {
-		t.Fatalf("核实成功不应报错：%v", err)
-	}
-	if recovered, _ := h.service.Store.GetInstance(h.ctx, "i2"); recovered.Health != store.HealthOK {
-		t.Fatalf("核实成功后应恢复 ok：%+v", recovered)
+	previous, _ := h.service.Store.GetSession(h.ctx, first.GetSessionId())
+	next, _ := h.service.Store.GetSession(h.ctx, reenabled.GetInstance().GetSessionId())
+	if next.StartedAt <= previous.StartedAt || len(h.trade.closes) != 1 {
+		t.Fatalf("新会话开始更晚，启用不再调关闭：%d <= %d closes=%v", next.StartedAt, previous.StartedAt, h.trade.closes)
 	}
 }
 
@@ -653,29 +647,16 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	requireFail(t, int32(tooLong.GetRetInfo().GetCode()), tooLong.GetRetInfo().GetMsg(), "20000")
 }
 
-// Trade 对释放返回账户不存在（code=5）也是确定结论：停用后会话照常清空，之后可以删除或重新启用。
-func TestDisableTreatsMissingAccountAsReleased(t *testing.T) {
-	h := newHarness(t)
-	h.createStrategy("s1", demoDSL)
-	h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
-	h.owner.releaseErr = &tradeowner.ResponseError{Operation: "释放会话", Code: tradepb.ErrorCode(5), Message: "account not found"}
-	rsp := h.setEnabled("i1", false)
-	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
-	if rsp.GetInstance().GetEnabled() || rsp.GetInstance().GetSessionId() != "" {
-		t.Fatalf("账户不存在时停用应清空会话：%+v", rsp.GetInstance())
-	}
-}
-
-// 同一空间的组合账户已被另一个启用实例绑定时，启用在联系 Trade 认领之前就被拒绝。
+// 同一空间的组合账户已被另一个启用实例绑定时，启用在联系 Trade 之前就被拒绝。
 func TestEnableRejectsAccountHeldByAnotherInstance(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
-	claims := len(h.owner.claims)
+	checks := len(h.trade.checks)
 	second := h.createInstance("i2", "s1", "ftask_i2", "acct-1", true)
 	requireFail(t, int32(second.GetRetInfo().GetCode()), second.GetRetInfo().GetMsg(), "已被启用实例 i1 绑定")
-	if len(h.owner.claims) != claims {
-		t.Fatalf("不应向 Trade 认领：%v", h.owner.claims)
+	if len(h.trade.checks) != checks {
+		t.Fatalf("不应联系 Trade：%v", h.trade.checks)
 	}
 }
 

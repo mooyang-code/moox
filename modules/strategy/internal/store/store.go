@@ -29,7 +29,7 @@ const sqliteConstraint = 19
 // FriendlyMessage 把错误链中的 SQLite 驱动错误替换为中文概述，避免把表名、列名等内部细节返回给接口调用方；
 // replaced 为 true 时调用方应把原始错误写入日志。
 func FriendlyMessage(err error) (message string, replaced bool) {
-	// 取消、超时与数据库关闭只替换错误链里的英文原文，保留前面的中文上下文（例如“已停用但 Trade 释放未确认”）。
+	// 取消、超时与数据库关闭只替换错误链里的英文原文，保留前面的中文上下文（例如“实例已停用，但 Trade 未确认关闭会话”）。
 	for _, known := range []struct {
 		match    bool
 		raw      []string

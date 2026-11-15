@@ -8,7 +8,7 @@ import (
 
 // 会话开始时刻（批 3 T14）：取“当前毫秒”与“库里最大值加 1”中较大的一个，全库严格递增——同一毫秒、甚至时钟回拨时建的会话也比之前的晚；
 // 会话同时记下建会话时实例绑的组合账户，之后改账户不影响它（停用后通知 Trade 关闭会话按它调）。
-func TestOpenSessionStartsStrictlyLaterAndRecordsAccount(t *testing.T) {
+func TestEnableInstanceStartsStrictlyLaterAndRecordsAccount(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	account := "logical-1"
@@ -31,7 +31,10 @@ func TestOpenSessionStartsStrictlyLaterAndRecordsAccount(t *testing.T) {
 	// 同一毫秒、时钟回拨一小时、正常往后：开始时刻都严格递增。
 	for index, createdAt := range []time.Time{testNow, testNow.Add(-time.Hour), testNow.Add(time.Hour)} {
 		sessionID := []string{"session-same-ms", "session-clock-back", "session-later"}[index]
-		if err := repo.OpenSession(ctx, Session{SessionID: sessionID, InstanceID: "observer", DSLHash: testHash, ResolvedJSON: `{}`, CreatedAt: createdAt}, "name: demo"); err != nil {
+		if err := repo.EnableInstance(ctx, Session{SessionID: sessionID, InstanceID: "observer", DSLHash: testHash, ResolvedJSON: `{"tasks":{"spot":{"factor_task_id":"ftask_o"}}}`, CreatedAt: createdAt}, "name: demo"); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.DisableInstance(ctx, "observer", sessionID, createdAt); err != nil {
 			t.Fatal(err)
 		}
 		opened = append(opened, sessionID)
@@ -55,18 +58,12 @@ func TestOpenSessionStartsStrictlyLaterAndRecordsAccount(t *testing.T) {
 	}
 
 	// 停用后改绑账户：已有会话记下的仍是原来的账户。
-	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), nil, HealthOK, testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", "session-1", testNow); err != nil {
 		t.Fatal(err)
 	}
 	instance, err := repo.GetInstance(ctx, "i1")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if instance.SessionID != nil {
-		if err := repo.ClearInstanceSession(ctx, "i1", *instance.SessionID, testNow); err != nil {
-			t.Fatal(err)
-		}
-		instance, _ = repo.GetInstance(ctx, "i1")
 	}
 	other := "logical-2"
 	instance.LogicalAccountID, instance.UpdatedAt = &other, testNow
@@ -83,12 +80,12 @@ func TestOpenSessionStartsStrictlyLaterAndRecordsAccount(t *testing.T) {
 }
 
 // 实例不存在时不写会话。
-func TestOpenSessionRejectsUnknownInstance(t *testing.T) {
+func TestEnableInstanceRejectsUnknownInstance(t *testing.T) {
 	repo := openTestStore(t)
 	if err := repo.CreateDefinition(context.Background(), Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: testHash, CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.OpenSession(context.Background(), Session{SessionID: "orphan", InstanceID: "missing", DSLHash: testHash, ResolvedJSON: `{}`, CreatedAt: testNow}, "name: demo"); err == nil {
+	if err := repo.EnableInstance(context.Background(), Session{SessionID: "orphan", InstanceID: "missing", DSLHash: testHash, ResolvedJSON: `{}`, CreatedAt: testNow}, "name: demo"); err == nil {
 		t.Fatal("实例不存在时应拒绝写会话")
 	}
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
-	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 )
@@ -76,7 +75,7 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 	}); err != nil {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
 	}
-	if v.GetEnabled() && instance.LogicalAccountID != nil && s.Owner == nil {
+	if v.GetEnabled() && instance.LogicalAccountID != nil && s.Trade == nil {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("未接线 Trade，不能启用绑定账户的实例"))}, nil
 	}
 	if err := s.Store.CreateInstance(ctx, instance); err != nil {
@@ -157,9 +156,6 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 	updated.StrategyID = strings.TrimSpace(v.GetStrategyId())
 	if current.Enabled {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例必须先停用才能修改"))}, nil
-	}
-	if current.SessionID != nil {
-		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例的启用或停用操作尚未完成"))}, nil
 	}
 	if def, err := s.Store.GetDefinition(ctx, updated.StrategyID); err != nil || def.DeletedAt != nil {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("策略定义 %s 不存在", updated.StrategyID))}, nil
@@ -255,15 +251,7 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 	}
 	if req.GetEnabled() {
 		if instance.Enabled {
-			// 重复启用幂等：不新建会话；绑定账户时核对 Trade 的所有者仍是本会话。
-			if instance.LogicalAccountID != nil && instance.SessionID != nil && s.Owner != nil {
-				if err := s.Owner.ValidateSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID); err != nil {
-					if tradeowner.IsSessionRejected(err) {
-						return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(fmt.Errorf("实例的会话已不再被 Trade 授权：%w", err))}, nil
-					}
-					return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(fmt.Errorf("暂时无法向 Trade 核实实例的会话：%w", err))}, nil
-				}
-			}
+			// 重复启用幂等：不新建会话，也不联系 Trade。
 			return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: success(), Instance: instanceProto(instance)}, nil
 		}
 		enabled, err := s.enable(ctx, instance)
@@ -279,10 +267,9 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 	return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: success(), Instance: instanceProto(disabled)}, nil
 }
 
-// enable 执行启用流程：解析绑定 → 编译 → 固化快照 → 写会话 → 认领账户 → 置为启用。
-// 只有上次未完成的启用留下的待定会话（未关闭且定义未变）会被沿用，以便恢复 Trade 可能已经成功的认领；
-// 已关闭的会话（停用后释放未确认）必须先在 Trade 侧确认释放，再新建会话并重建绑定快照；新会话的 DSL 版本、绑定解析与成员
-// 和规则状态所属会话的一致时沿用规则状态，否则清空（见 store.OpenSession）。停用期间改过实例（账户、定义）的，状态在修改时已清空。
+// enable 执行启用（批 3 的 3.6）：解析绑定 → 编译 → 核对覆盖 → 绑了组合账户时读一次 Trade 的账户，核对控制模式与市场（只读）→
+// 一个事务里写会话（带开始时刻与当时的组合账户）、挂到实例上并置为启用（store.EnableInstance）。任何一步失败都不留下会话。
+// 新会话的 DSL 版本、绑定解析与成员和规则状态所属会话的一致时沿用规则状态，否则清空；停用期间改过实例（账户、定义）的，状态在修改时已清空。
 func (s *Service) enable(ctx context.Context, instance store.Instance) (store.Instance, error) {
 	reload := func() store.Instance {
 		if current, err := s.Store.GetInstance(ctx, instance.InstanceID); err == nil {
@@ -290,11 +277,11 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		}
 		return instance
 	}
-	if instance.LogicalAccountID != nil && s.Owner == nil {
-		return instance, errors.New("未接线 Trade，不能启用绑定账户的实例")
-	}
 	if instance.LogicalAccountID != nil {
-		// 同一空间的组合账户只能由一个启用实例持有：在写会话、联系 Trade 之前检查，被拒绝时不留下待定会话。
+		if s.Trade == nil {
+			return instance, errors.New("未接线 Trade，不能启用绑定账户的实例")
+		}
+		// 同一空间的组合账户只能由一个启用实例持有（唯一索引兜底）：在解析与联系 Trade 之前检查。
 		if holder, err := s.accountHolder(ctx, instance); err != nil {
 			return instance, err
 		} else if holder != "" {
@@ -305,121 +292,65 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 	if err != nil || definition.DeletedAt != nil {
 		return instance, fmt.Errorf("策略定义 %s 不存在", instance.StrategyID)
 	}
-	sessionID := ""
-	// poolSession 为真表示这次启用用的会话是策略池会话（带成员快照）：启用成功后要开始预热。直接用这里已有的成员快照判断，
-	// 不再重读会话——重读失败会让预热没有启动，门禁又看不到任务，事件就被一直重投。
-	poolSession := false
-	var resolvedJSON json.RawMessage
-	if instance.SessionID != nil && strings.TrimSpace(*instance.SessionID) != "" {
-		previous := *instance.SessionID
-		if session, err := s.Store.GetSession(ctx, previous); err == nil && session.ClosedAt == nil && session.DSLHash == definition.DSLHash && store.SameTasks(sessionTasks(session), instance.FactorTasks) {
-			resolved, err := input.ParseResolved([]byte(session.ResolvedJSON))
-			if err != nil {
-				return reload(), err
-			}
-			if err := checkLiveCalendar(resolved, s.nowTime()); err != nil {
-				return reload(), err
-			}
-			sessionID = session.SessionID
-			resolvedJSON = json.RawMessage(session.ResolvedJSON)
-			poolSession = session.MembersJSON != ""
-		} else {
-			if instance.LogicalAccountID != nil {
-				if err := s.Owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, previous); err != nil && !tradeowner.IsReleaseSettled(err) {
-					return reload(), fmt.Errorf("上一个会话在 Trade 侧的释放尚未确认，暂不能启用：%w", err)
-				}
-			}
-			_ = s.Store.CloseSession(ctx, previous, s.nowTime())
-			if err := s.Store.ClearInstanceSession(ctx, instance.InstanceID, previous, s.nowTime()); err != nil {
-				return reload(), fmt.Errorf("清理旧会话失败：%w", err)
-			}
-		}
-	}
-	if sessionID == "" {
-		if err := s.checkTasksExist(ctx, instance); err != nil {
-			return reload(), err
-		}
-		strategy, err := dsl.Parse([]byte(definition.DSLYaml))
-		if err != nil {
-			return reload(), err
-		}
-		if s.Resolver == nil {
-			return reload(), errors.New("Storage 与 Factor 依赖未配置，不能启用实例")
-		}
-		var resolved input.Resolved
-		membersJSON := ""
-		if strategy.IsPool() {
-			members, err := s.checkPool(ctx, strategy)
-			if err != nil {
-				return reload(), err
-			}
-			pooled, err := s.Resolver.ResolvePoolInstance(ctx, instance.InstanceID, instance.SpaceID, instance.FactorTasks, strategy, members)
-			if err != nil {
-				return reload(), err
-			}
-			if err := checkLiveCalendar(pooled.Resolved, s.nowTime()); err != nil {
-				return reload(), err
-			}
-			if err := s.Resolver.CheckPoolCoverage(ctx, instance.SpaceID, pooled, s.nowTime()); err != nil {
-				return reload(), err
-			}
-			if membersJSON, err = pooled.MembersJSON(); err != nil {
-				return reload(), err
-			}
-			resolved = pooled.Resolved
-		} else {
-			var err error
-			if resolved, _, err = s.Resolver.ResolveInstance(ctx, instance.InstanceID, instance.SpaceID, instance.FactorTasks, strategy); err != nil {
-				return reload(), err
-			}
-			if err := checkLiveCalendar(resolved, s.nowTime()); err != nil {
-				return reload(), err
-			}
-			if err := s.Resolver.CheckCoverage(ctx, instance.SpaceID, resolved, s.nowTime()); err != nil {
-				return reload(), err
-			}
-		}
-		resolvedJSON, err = json.Marshal(resolved)
-		if err != nil {
-			return reload(), err
-		}
-		poolSession = membersJSON != ""
-		if sessionID, err = store.NewID(); err != nil {
-			return reload(), err
-		}
-		now := s.nowTime()
-		if err := s.Store.OpenSession(ctx, store.Session{SessionID: sessionID, InstanceID: instance.InstanceID, DSLHash: definition.DSLHash, ResolvedJSON: string(resolvedJSON), MembersJSON: membersJSON, CreatedAt: now}, definition.DSLYaml); err != nil {
-			return reload(), fmt.Errorf("写入会话快照失败：%w", err)
-		}
-		// 先把会话写到停用状态的实例上再联系 Trade：认领响应丢失时，启动对账能释放这个确定的身份。
-		// 挂不上（期间实例被改绑或定义被修改）时这个会话从未交给 Trade，直接关闭。
-		if err := s.Store.SetInstanceEnabled(ctx, instance.InstanceID, false, &sessionID, resolvedJSON, now); err != nil {
-			_ = s.Store.CloseSession(ctx, sessionID, s.nowTime())
-			return reload(), err
-		}
-	}
-	if instance.LogicalAccountID != nil {
-		resolved, err := input.ParseResolved(resolvedJSON)
-		if err != nil {
-			return reload(), err
-		}
-		if err := s.Owner.ClaimSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, sessionID, resolved.Market.Markets()); err != nil {
-			if tradeowner.IsPermanentClaimError(err) {
-				_ = s.Store.CloseSession(ctx, sessionID, s.nowTime())
-				if clearErr := s.Store.ClearInstanceSession(ctx, instance.InstanceID, sessionID, s.nowTime()); clearErr != nil {
-					err = errors.Join(err, fmt.Errorf("清除被拒绝的会话失败：%w", clearErr))
-				}
-			}
-			return reload(), err
-		}
-	}
-	if err := s.Store.SetInstanceEnabled(ctx, instance.InstanceID, true, &sessionID, resolvedJSON, s.nowTime()); err != nil {
-		if instance.LogicalAccountID != nil {
-			_ = s.Owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, sessionID)
-		}
+	if err := s.checkTasksExist(ctx, instance); err != nil {
 		return reload(), err
 	}
-	if poolSession && s.Warmer != nil {
+	strategy, err := dsl.Parse([]byte(definition.DSLYaml))
+	if err != nil {
+		return reload(), err
+	}
+	if s.Resolver == nil {
+		return reload(), errors.New("Storage 与 Factor 依赖未配置，不能启用实例")
+	}
+	var resolved input.Resolved
+	membersJSON := ""
+	if strategy.IsPool() {
+		members, err := s.checkPool(ctx, strategy)
+		if err != nil {
+			return reload(), err
+		}
+		pooled, err := s.Resolver.ResolvePoolInstance(ctx, instance.InstanceID, instance.SpaceID, instance.FactorTasks, strategy, members)
+		if err != nil {
+			return reload(), err
+		}
+		if err := checkLiveCalendar(pooled.Resolved, s.nowTime()); err != nil {
+			return reload(), err
+		}
+		if err := s.Resolver.CheckPoolCoverage(ctx, instance.SpaceID, pooled, s.nowTime()); err != nil {
+			return reload(), err
+		}
+		if membersJSON, err = pooled.MembersJSON(); err != nil {
+			return reload(), err
+		}
+		resolved = pooled.Resolved
+	} else {
+		if resolved, _, err = s.Resolver.ResolveInstance(ctx, instance.InstanceID, instance.SpaceID, instance.FactorTasks, strategy); err != nil {
+			return reload(), err
+		}
+		if err := checkLiveCalendar(resolved, s.nowTime()); err != nil {
+			return reload(), err
+		}
+		if err := s.Resolver.CheckCoverage(ctx, instance.SpaceID, resolved, s.nowTime()); err != nil {
+			return reload(), err
+		}
+	}
+	resolvedJSON, err := json.Marshal(resolved)
+	if err != nil {
+		return reload(), err
+	}
+	if instance.LogicalAccountID != nil {
+		if err := s.Trade.CheckAccount(ctx, instance.SpaceID, *instance.LogicalAccountID, resolved.Market.Markets()); err != nil {
+			return reload(), err
+		}
+	}
+	sessionID, err := store.NewID()
+	if err != nil {
+		return reload(), err
+	}
+	if err := s.Store.EnableInstance(ctx, store.Session{SessionID: sessionID, InstanceID: instance.InstanceID, DSLHash: definition.DSLHash, ResolvedJSON: string(resolvedJSON), MembersJSON: membersJSON, CreatedAt: s.nowTime()}, definition.DSLYaml); err != nil {
+		return reload(), err
+	}
+	if membersJSON != "" && s.Warmer != nil {
 		s.Warmer.Start(ctx, instance.InstanceID, sessionID)
 	}
 	return reload(), nil
@@ -434,16 +365,6 @@ func checkLiveCalendar(resolved input.Resolved, now time.Time) error {
 		return fmt.Errorf("不能启用实例：%w", err)
 	}
 	return nil
-}
-
-// sessionTasks 返回会话固化的解析结果里的全部因子任务（任务键 → 任务：主帧、参考市场与附加来源，与存储层启用时的核对口径一致）；
-// 解析失败时返回空表。
-func sessionTasks(session store.Session) map[string]string {
-	resolved, err := input.ParseResolved([]byte(session.ResolvedJSON))
-	if err != nil {
-		return map[string]string{}
-	}
-	return resolved.AllTasks()
 }
 
 // normalizeFactorTasks 校验并规范化请求里的 factor_tasks（任务键 → 因子任务）：键是市场（spot、swap、equity，统一数据集上的任务登记为
@@ -491,7 +412,10 @@ func normalizeFactorTasks(raw map[string]string) (map[string]string, error) {
 	return tasks, nil
 }
 
-// disable 执行停用流程：先落库再释放 Trade；释放确认前保留会话，供重启对账恢复。
+// disable 执行停用（批 3 的 3.6）：启用的实例在一个事务里停用、关闭会话并清掉实例上的会话（store.DisableInstance），提交之后对
+// 刚关闭的会话调一次 Trade 的 CloseTargetSession，组合账户取会话里记的那个（不受之后改账户影响）；会话没挂账户（观察实例）时不调。
+// 对已停用的实例再停用一次，按它最近一次挂过账户的会话、会话里记的账户再调一次（幂等），这是 Trade 没确认时唯一的重试入口：
+// 不做后台重试。Trade 没确认时返回错误，实例已经停用；Trade 最多把最后一份目标执行到它原本的有效期结束，要立刻停手就在 Trade 暂停组合。
 func (s *Service) disable(ctx context.Context, instance store.Instance) (store.Instance, error) {
 	reload := func() store.Instance {
 		if current, err := s.Store.GetInstance(ctx, instance.InstanceID); err == nil {
@@ -499,135 +423,49 @@ func (s *Service) disable(ctx context.Context, instance store.Instance) (store.I
 		}
 		return instance
 	}
-	releaseNeeded := instance.SessionID != nil && instance.LogicalAccountID != nil
-	var pending *string
-	if releaseNeeded {
-		pending = instance.SessionID
-	}
-	if err := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, pending, "", s.nowTime()); err != nil {
-		return reload(), err
-	}
-	if s.Warmer != nil {
-		s.Warmer.Stop(instance.InstanceID)
-	}
-	if releaseNeeded {
-		if s.Owner == nil {
-			return reload(), errors.New("未接线 Trade，无法释放账户会话；请接线后重试停用")
+	var session store.Session
+	found := false
+	if instance.Enabled {
+		sessionID := ""
+		if instance.SessionID != nil {
+			sessionID = *instance.SessionID
 		}
-		if err := s.Owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID); err != nil && !tradeowner.IsReleaseSettled(err) {
-			return reload(), fmt.Errorf("已停用但 Trade 释放未确认，稍后自动重试：%w", err)
-		}
-		if err := s.Store.ClearInstanceSession(ctx, instance.InstanceID, *instance.SessionID, s.nowTime()); err != nil {
+		if err := s.Store.DisableInstance(ctx, instance.InstanceID, sessionID, s.nowTime()); err != nil {
 			return reload(), err
 		}
+		if s.Warmer != nil {
+			s.Warmer.Stop(instance.InstanceID)
+		}
+		closed, err := s.Store.GetSession(ctx, sessionID)
+		if err != nil {
+			return reload(), fmt.Errorf("实例已停用，但读取会话失败、没有通知 Trade 关闭会话：%w；再点一次停用重试", err)
+		}
+		session, found = closed, closed.LogicalAccountID != nil
+	} else {
+		latest, ok, err := s.Store.LatestAccountSession(ctx, instance.InstanceID)
+		if err != nil {
+			return reload(), fmt.Errorf("读取实例最近一次挂账户的会话失败：%w", err)
+		}
+		session, found = latest, ok
+	}
+	if !found {
+		return reload(), nil
+	}
+	if err := s.closeTradeSession(ctx, instance.SpaceID, session); err != nil {
+		return reload(), fmt.Errorf("实例已停用，但 Trade 未确认关闭会话（%w）：再点一次停用重试；要立刻停手，在 Trade 暂停组合账户 %s", err, *session.LogicalAccountID)
 	}
 	return reload(), nil
 }
 
-// ReconcileDisabledInstances 完成崩溃或 Trade 响应丢失时留下的停用握手：释放并清空会话。
-func (s *Service) ReconcileDisabledInstances(ctx context.Context) error {
-	if err := s.ready(); err != nil {
+// closeTradeSession 对挂过组合账户的会话调一次 Trade 的 CloseTargetSession，账户取会话里记的那个。
+func (s *Service) closeTradeSession(ctx context.Context, spaceID string, session store.Session) error {
+	if session.LogicalAccountID == nil {
 		return nil
 	}
-	disabled := false
-	instances, err := s.Store.ListInstances(ctx, "", &disabled)
-	if err != nil {
-		return err
+	if s.Trade == nil {
+		return errors.New("未接线 Trade")
 	}
-	var reconcileErr error
-	for _, instance := range instances {
-		if instance.SessionID == nil {
-			continue
-		}
-		func() {
-			current, unlock, err := s.lockInstance(ctx, instance.InstanceID)
-			if err != nil {
-				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("实例 %s：重读失败：%w", instance.InstanceID, err))
-				return
-			}
-			defer unlock()
-			// 拿锁后重读并与列表快照比较：快照之后用户已重新停用、改绑或开始启用时，会话已不是快照里那个，
-			// 不能把正在进行的启用握手当成过期的停用会话释放掉。
-			if current.Enabled || current.SessionID == nil || *current.SessionID != *instance.SessionID {
-				return
-			}
-			if current.LogicalAccountID != nil {
-				if s.Owner == nil {
-					reconcileErr = errors.Join(reconcileErr, fmt.Errorf("实例 %s：未接线 Trade，无法释放会话", current.InstanceID))
-					return
-				}
-				if err := s.Owner.ReleaseSession(ctx, current.SpaceID, *current.LogicalAccountID, current.InstanceID, *current.SessionID); err != nil && !tradeowner.IsReleaseSettled(err) {
-					reconcileErr = errors.Join(reconcileErr, fmt.Errorf("实例 %s：释放会话失败：%w", current.InstanceID, err))
-					return
-				}
-			}
-			if err := s.Store.ClearInstanceSession(ctx, current.InstanceID, *current.SessionID, s.nowTime()); err != nil && !errors.Is(err, store.ErrNotFound) {
-				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("实例 %s：清空会话失败：%w", current.InstanceID, err))
-				return
-			}
-			_ = s.Store.CloseSession(ctx, *current.SessionID, s.nowTime())
-		}()
-	}
-	return reconcileErr
-}
-
-// ReconcileEnabledInstances 核对每个绑定账户的启用实例仍持有 Trade 会话：启动时执行一次，之后随对账循环周期执行。
-// 不一致只影响对应实例，汇总错误供告警，不阻塞进程（接口必须可用，才能人工修复）：
-// Trade 明确不再授权该会话（所有者已变或账户不存在）时实例无法继续交易，自动停用、标记 degraded 并上报告警；
-// 结果未知（Trade 不可达等）时保持启用并标记 session_unverified，直到再次核实成功；目标事件由 Trade 按会话围栏校验。
-func (s *Service) ReconcileEnabledInstances(ctx context.Context) error {
-	if err := s.ready(); err != nil || s.Owner == nil {
-		return nil
-	}
-	enabled := true
-	instances, err := s.Store.ListInstances(ctx, "", &enabled)
-	if err != nil {
-		return err
-	}
-	var reconcileErr error
-	for _, listed := range instances {
-		if listed.LogicalAccountID == nil || listed.SessionID == nil || strings.TrimSpace(*listed.SessionID) == "" {
-			continue
-		}
-		if err := s.reconcileEnabled(ctx, listed); err != nil {
-			reconcileErr = errors.Join(reconcileErr, err)
-		}
-	}
-	return reconcileErr
-}
-
-func (s *Service) reconcileEnabled(ctx context.Context, listed store.Instance) error {
-	// 拿锁后重读：并发的停用或重新启用已经改变了会话时，以最新状态为准。
-	instance, unlock, err := s.lockInstance(ctx, listed.InstanceID)
-	if err != nil {
-		return fmt.Errorf("实例 %s：重读失败：%w", listed.InstanceID, err)
-	}
-	defer unlock()
-	if !instance.Enabled || instance.LogicalAccountID == nil || instance.SessionID == nil || *instance.SessionID != *listed.SessionID {
-		return nil
-	}
-	err = s.Owner.ValidateSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID)
-	switch {
-	case err == nil:
-		if instance.Health == store.HealthSessionUnverified {
-			_ = s.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthOK, s.nowTime())
-		}
-		return nil
-	case tradeowner.IsSessionRejected(err):
-		// 停用与标记 degraded 在同一事务：自动停用的原因留在实例上。
-		if disableErr := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, nil, store.HealthDegraded, s.nowTime()); disableErr != nil {
-			return fmt.Errorf("启用实例 %s 的会话已被 Trade 拒绝，自动停用失败：%w", instance.InstanceID, disableErr)
-		}
-		if s.Alerts != nil {
-			s.Alerts.Alert(instance, "Trade 不再授权该实例的会话，已自动停用")
-		}
-		return fmt.Errorf("启用实例 %s 的会话已被 Trade 拒绝，已自动停用：%w", instance.InstanceID, err)
-	default:
-		if instance.Health != store.HealthSessionUnverified {
-			_ = s.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthSessionUnverified, s.nowTime())
-		}
-		return fmt.Errorf("启用实例 %s 的 Trade 会话暂时无法核实：%w", instance.InstanceID, err)
-	}
+	return s.Trade.CloseSession(ctx, spaceID, *session.LogicalAccountID, session.InstanceID, session.SessionID, session.StartedAt)
 }
 
 // accountHolder 返回同一空间里已绑定该组合账户的其他启用实例；没有时返回空串。

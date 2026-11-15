@@ -364,7 +364,7 @@ func TestListInstancesIgnoresFactorFailure(t *testing.T) {
 	}
 }
 
-// 挂着组合账户的停用实例也能删，账户绑定随实例一起清掉。
+// 挂着组合账户的停用实例也能删，账户绑定随实例一起清掉。删除前对最近一次挂过账户的会话再通知一次 Trade 关闭（会话行随实例删掉后就没有重试入口）。
 func TestDeleteStrategyInstanceWithLogicalAccount(t *testing.T) {
 	h := newHarness(t)
 	tasks := &fakeFactorTasks{bound: map[string]string{"ftask_acct": "", "ftask_acct2": ""}}
@@ -373,22 +373,72 @@ func TestDeleteStrategyInstanceWithLogicalAccount(t *testing.T) {
 	created := h.createInstance("ia", "s1", "ftask_acct", "acct-1", true)
 	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
 	tasks.bound["ftask_acct"] = "ia"
+	session, err := h.service.Store.GetSession(h.ctx, created.GetInstance().GetSessionId())
+	if err != nil {
+		t.Fatal(err)
+	}
 	disabled := h.setEnabled("ia", false)
 	requireOK(t, int32(disabled.GetRetInfo().GetCode()), disabled.GetRetInfo().GetMsg())
-	releases := len(h.owner.releases)
+	h.trade.closes = nil
 	rsp := h.deleteInstance("ia")
 	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
 	if len(tasks.deleted) != 1 || tasks.deleted[0] != "ftask_acct" {
 		t.Fatalf("应删除关联的任务：%v", tasks.deleted)
 	}
-	// 停用时已经向 Trade 释放了会话；删除不再联系 Trade，账户绑定随实例一起清掉，账户可以挂到新实例上启用。
-	if len(h.owner.releases) != releases || h.owner.owner["acct-1"] != "" {
-		t.Fatalf("删除不应再联系 Trade，账户也不应还有所有者：releases=%v owner=%v", h.owner.releases, h.owner.owner)
+	want := closeCall{account: "acct-1", instance: "ia", session: session.SessionID, startedAt: session.StartedAt}
+	if len(h.trade.closes) != 1 || h.trade.closes[0] != want {
+		t.Fatalf("删除前应对最近一次挂账户的会话再通知一次 Trade：%v want=%v", h.trade.closes, want)
 	}
 	next := h.createInstance("ib", "s1", "ftask_acct2", "acct-1", true)
 	requireOK(t, int32(next.GetRetInfo().GetCode()), next.GetRetInfo().GetMsg())
-	if !next.GetInstance().GetEnabled() || !strings.HasPrefix(h.owner.owner["acct-1"], "ib/") {
-		t.Fatalf("账户应能挂到新实例上启用：%+v owner=%v", next.GetInstance(), h.owner.owner)
+	if !next.GetInstance().GetEnabled() {
+		t.Fatalf("账户应能挂到新实例上启用：%+v", next.GetInstance())
+	}
+}
+
+// 删除前 Trade 没确认关闭：拒绝删除（什么都没删，不算删除未完成），提示稍后重试；Trade 恢复后再删一次照常完成。
+// 最近一次会话没挂账户、更早一次挂过时，取更早的那次；从没挂过账户的实例删除不联系 Trade。
+func TestDeleteRefusesUntilTradeConfirmsClose(t *testing.T) {
+	h := newHarness(t)
+	tasks := &fakeFactorTasks{bound: map[string]string{"ftask_acct": "", "ftask_obs": ""}}
+	h.service.Tasks, h.service.Archives = tasks, &fakeArchives{}
+	h.createStrategy("s1", demoDSL)
+	first := h.createInstance("ia", "s1", "ftask_acct", "acct-1", true).GetInstance()
+	tasks.bound["ftask_acct"] = "ia"
+	requireOK(t, int32(h.setEnabled("ia", false).GetRetInfo().GetCode()), "")
+	// 改成观察实例再启用、停用一次：最近一次会话没挂账户。
+	updated, err := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "ia", StrategyId: "s1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, int32(updated.GetRetInfo().GetCode()), updated.GetRetInfo().GetMsg())
+	requireOK(t, int32(h.setEnabled("ia", true).GetRetInfo().GetCode()), "")
+	requireOK(t, int32(h.setEnabled("ia", false).GetRetInfo().GetCode()), "")
+	h.trade.closes, h.trade.closeErr = nil, errors.New("trade unavailable")
+	refused := h.deleteInstance("ia")
+	requireFail(t, int32(refused.GetRetInfo().GetCode()), refused.GetRetInfo().GetMsg(), "Trade 未确认关闭实例在组合账户 acct-1 上的会话")
+	requireFail(t, int32(refused.GetRetInfo().GetCode()), refused.GetRetInfo().GetMsg(), "稍后重试")
+	if refused.GetIncomplete() || len(tasks.deleted) != 0 {
+		t.Fatalf("Trade 没确认时什么都不删：incomplete=%v deleted=%v", refused.GetIncomplete(), tasks.deleted)
+	}
+	if _, err := h.service.Store.GetInstance(h.ctx, "ia"); err != nil {
+		t.Fatalf("实例应保留：%v", err)
+	}
+	if len(h.trade.closes) != 1 || h.trade.closes[0].account != "acct-1" || h.trade.closes[0].session != first.GetSessionId() {
+		t.Fatalf("应取更早挂过账户的那次会话：%v", h.trade.closes)
+	}
+	h.trade.closeErr = nil
+	requireOK(t, int32(h.deleteInstance("ia").GetRetInfo().GetCode()), "")
+	if _, err := h.service.Store.GetInstance(h.ctx, "ia"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Trade 确认后应删除：%v", err)
+	}
+	// 从没挂过账户的实例：删除不联系 Trade。
+	requireOK(t, int32(h.createInstance("io", "s1", "ftask_obs", "", true).GetRetInfo().GetCode()), "")
+	requireOK(t, int32(h.setEnabled("io", false).GetRetInfo().GetCode()), "")
+	h.trade.closes, h.trade.closeErr = nil, errors.New("trade unavailable")
+	requireOK(t, int32(h.deleteInstance("io").GetRetInfo().GetCode()), "")
+	if len(h.trade.closes) != 0 {
+		t.Fatalf("观察实例删除不联系 Trade：%v", h.trade.closes)
 	}
 }
 

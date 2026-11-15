@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS t_strategy_def_versions (
 );
 
 -- 实例：定义 + 因子任务（见 t_strategy_instance_tasks）+ 可选组合账户；启用时固化解析结果。因子任务在创建时写定，不能修改；
--- 读取的 View 是任务结果数据集的默认 View，由任务 ID 推导。只有已停用、没有会话的实例能删除，删除时连同它在本库的全部记录
+-- 读取的 View 是任务结果数据集的默认 View，由任务 ID 推导。c_session_id 只在启用时非空（启用、停用各是一个事务）。
+-- 只有已停用的实例能删除，删除时连同它在本库的全部记录
 CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_instance_id TEXT NOT NULL PRIMARY KEY,
     c_strategy_id TEXT NOT NULL,
@@ -30,7 +31,8 @@ CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_enabled IN (0, 1)),
-    CHECK (c_health IN ('ok', 'degraded', 'session_unverified')),
+    CHECK ((c_enabled = 1) = (c_session_id IS NOT NULL)),
+    CHECK (c_health IN ('ok', 'degraded')),
     FOREIGN KEY (c_strategy_id) REFERENCES t_strategy_defs (c_strategy_id)
 );
 
@@ -75,7 +77,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_sessions (
     FOREIGN KEY (c_dsl_hash) REFERENCES t_strategy_def_versions (c_dsl_hash)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_strategy_sessions_instance ON t_strategy_sessions (c_instance_id, c_ctime);
+CREATE INDEX IF NOT EXISTS idx_t_strategy_sessions_instance ON t_strategy_sessions (c_instance_id, c_started_at);
 
 -- 规则状态：每个实例一行，是引擎下一期求值的起点（各规则的状态与组合目标，策略池另有成员状态与池账本），与结果在同一个事务里更新。
 -- c_bar_end_time 是状态推进到的那一期（bar_end，毫秒）；c_session_id、c_dsl_hash 是它当前所属的会话与 DSL 版本。

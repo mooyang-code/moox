@@ -9,9 +9,9 @@ import { instanceTasks, taskKeyLabel } from "@/views/strategy/market-mode";
 
 export const DELETE_INCOMPLETE_TIP = "删除未完成，请稍后重试";
 
-/** 只有已停用、没有运行会话的实例能删除。 */
-export function canDeleteInstance(instance: Pick<StrategyInstance, "enabled" | "session_id">): boolean {
-  return !instance.enabled && !instance.session_id;
+/** 只有已停用的实例能删除（停用的实例上没有会话）。 */
+export function canDeleteInstance(instance: Pick<StrategyInstance, "enabled">): boolean {
+  return !instance.enabled;
 }
 
 /** 删除确认框里的一个计算任务：factorTask 为空表示因子服务里已经没有这个任务（上次删除时已删掉）。 */

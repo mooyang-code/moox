@@ -52,7 +52,8 @@ type strategyGatewayWire struct {
 	nonces      map[string]bool
 	calls       map[string]int
 	refreshes   int
-	owner       *tradepb.LogicalAccount
+	// closedThrough 是 Trade 替身记下的“关闭到”时刻。
+	closedThrough int64
 	// deadlines 记下 EngineControl 各方法收到的剩余超时：回放“因子现算”不能被 factor.timeout（5 秒）掐断。
 	deadlines map[string]time.Duration
 }
@@ -245,42 +246,23 @@ func (w *strategyGatewayWire) verifyTrade(ctx context.Context, method string, re
 	return nil
 }
 
-func (w *strategyGatewayWire) account() *tradepb.LogicalAccount {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.owner == nil {
-		w.owner = &tradepb.LogicalAccount{LogicalAccountId: "acct-1", SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, AuthFence: "fence-1"}
-	}
-	return proto.Clone(w.owner).(*tradepb.LogicalAccount)
-}
-
 func (w *strategyGatewayWire) GetLogicalAccount(ctx context.Context, req *tradepb.GetLogicalAccountReq) (*tradepb.GetLogicalAccountRsp, error) {
 	if err := w.verifyTrade(ctx, "GetLogicalAccount", req); err != nil {
 		return nil, err
 	}
-	return &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: w.account()}, nil
+	account := &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY}
+	return &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: account}, nil
 }
 
-func (w *strategyGatewayWire) ClaimLogicalAccountOwner(ctx context.Context, req *tradepb.ClaimLogicalAccountOwnerReq) (*tradepb.ClaimLogicalAccountOwnerRsp, error) {
-	if err := w.verifyTrade(ctx, "ClaimLogicalAccountOwner", req); err != nil {
+func (w *strategyGatewayWire) CloseTargetSession(ctx context.Context, req *tradepb.CloseTargetSessionReq) (*tradepb.CloseTargetSessionRsp, error) {
+	if err := w.verifyTrade(ctx, "CloseTargetSession", req); err != nil {
 		return nil, err
 	}
 	w.mu.Lock()
-	w.owner = &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, AuthFence: "fence-1", OwnerInstanceId: req.GetInstanceId(), OwnerSessionId: req.GetSessionId()}
-	owner := proto.Clone(w.owner).(*tradepb.LogicalAccount)
+	w.closedThrough = max(w.closedThrough, req.GetSessionStartedAt())
+	closed := w.closedThrough
 	w.mu.Unlock()
-	return &tradepb.ClaimLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: owner}, nil
-}
-
-func (w *strategyGatewayWire) ReleaseLogicalAccountOwner(ctx context.Context, req *tradepb.ReleaseLogicalAccountOwnerReq) (*tradepb.ReleaseLogicalAccountOwnerRsp, error) {
-	if err := w.verifyTrade(ctx, "ReleaseLogicalAccountOwner", req); err != nil {
-		return nil, err
-	}
-	w.mu.Lock()
-	w.owner = &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, AuthFence: "fence-1"}
-	owner := proto.Clone(w.owner).(*tradepb.LogicalAccount)
-	w.mu.Unlock()
-	return &tradepb.ReleaseLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: owner}, nil
+	return &tradepb.CloseTargetSessionRsp{RetInfo: &tradepb.RetInfo{}, ClosedThrough: closed}, nil
 }
 
 func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGatewayWire) {
@@ -390,10 +372,12 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	require.Less(t, deadlines["StepReplay"], 3*time.Minute)
 	require.Greater(t, deadlines["CloseReplay"], 100*time.Second)
 
-	owner := tradeowner.New(cfg.Trade, gateway)
-	require.NoError(t, owner.ClaimSession(ctx, "crypto", "acct-1", "instance-1", "session-1", []string{"swap"}))
-	require.NoError(t, owner.ValidateSession(ctx, "crypto", "acct-1", "instance-1", "session-1"))
-	require.NoError(t, owner.ReleaseSession(ctx, "crypto", "acct-1", "instance-1", "session-1"))
+	trade := tradeowner.New(cfg.Trade, gateway)
+	require.NoError(t, trade.CheckAccount(ctx, "crypto", "acct-1", []string{"swap"}))
+	require.NoError(t, trade.CloseSession(ctx, "crypto", "acct-1", "instance-1", "session-1", 1_700_000_000_000))
+	wire.mu.Lock()
+	require.Equal(t, int64(1_700_000_000_000), wire.closedThrough)
+	wire.mu.Unlock()
 
 	// 网关调用的参数由 ctx 与服务目录决定，不接受 tRPC 客户端选项。
 	_, err = reader.Metadata.GetView(ctx, &storagepb.GetViewReq{}, client.WithTarget("ip://192.0.2.99:20100"))
@@ -409,8 +393,7 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 		"trpc.moox.storage.Metadata/GetTag", "trpc.moox.storage.Metadata/ListDatasetSubjects", "trpc.moox.storage.Metadata/ListSubjects",
 		"trpc.moox.storage.Metadata/ListTagMembers", "trpc.moox.storage.DataView/QueryTimeSeriesRows", "trpc.moox.storage.DataView/GetViewState", "trpc.moox.factor.FactorMgr/GetFactor",
 		"trpc.moox.factor.EngineControl/OpenReplay", "trpc.moox.factor.EngineControl/StepReplay", "trpc.moox.factor.EngineControl/CloseReplay",
-		"trpc.moox.trade.TradeConsoleService/GetLogicalAccount", "trpc.moox.trade.TradeConsoleService/ClaimLogicalAccountOwner",
-		"trpc.moox.trade.TradeConsoleService/ReleaseLogicalAccountOwner",
+		"trpc.moox.trade.TradeConsoleService/GetLogicalAccount", "trpc.moox.trade.TradeConsoleService/CloseTargetSession",
 	} {
 		require.Positive(t, calls[want], want)
 	}

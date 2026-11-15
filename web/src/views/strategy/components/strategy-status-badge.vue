@@ -4,12 +4,6 @@
     <a-tooltip v-if="health === 'degraded'" content="最近一期被跳过，请在实例详情的历史结果中查看具体跳过原因">
       <a-tag size="small" color="red">需要处理</a-tag>
     </a-tooltip>
-    <a-tooltip
-      v-else-if="health === 'session_unverified'"
-      content="启动或对账时无法核实 Trade 的账户会话，目标是否被接受未知；对账成功后自动恢复"
-    >
-      <a-tag size="small" color="orange">Trade 会话待核实</a-tag>
-    </a-tooltip>
   </a-space>
 </template>
 

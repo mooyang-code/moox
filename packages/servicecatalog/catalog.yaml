@@ -1910,8 +1910,6 @@ components:
               - moox-cli
           - methods:
               - GetLogicalAccount
-              - ClaimLogicalAccountOwner
-              - ReleaseLogicalAccountOwner
               - CloseTargetSession
             callers:
               - strategy

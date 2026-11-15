@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -78,17 +79,15 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "factor_view", FactorTaskID: "factor_task", DatasetID: "factor_ds"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, Member: "bias", FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias"}, ViewColumns: []string{"bias", "close"}}
 	resolvedJSON, err := json.Marshal(resolved)
 	require.NoError(t, err)
-	require.NoError(t, repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))
-	require.NoError(t, repo.SetInstanceEnabled(ctx, "instance-e2e", false, &session, resolvedJSON, now))
-	require.NoError(t, repo.SetInstanceEnabled(ctx, "instance-e2e", true, &session, resolvedJSON, now))
+	require.NoError(t, repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))
 
-	// 启用时与进程启动时，Strategy 都要求 Trade 的账户所有者就是本实例本会话。
+	// 启用前 Strategy 只读一次 Trade 的账户，核对它由策略控制、可交易现货（批 3 的 3.6，不再认领归属）。
 	endpoint, err := os.ReadFile(filepath.Join(coord, "trade-ready"))
 	require.NoError(t, err)
 	tradeURL, err := url.Parse(string(endpoint))
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1", tradeURL.Hostname())
-	require.NoError(t, requireTradeAuthorization(ctx, string(endpoint), "space-e2e", logical, "instance-e2e", session))
+	require.NoError(t, requireTradeAccountReady(ctx, string(endpoint), "space-e2e", logical))
 
 	handler := &trigger.Handler{Store: repo, Loader: externalInput{}, Now: func() time.Time { return now }, Logf: t.Logf}
 	message := &eventpb.EventMessage{EventId: "external-ready", EventName: "event.storage.view.data_ready", SpaceId: "space-e2e"}
@@ -134,7 +133,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	t.Logf("Handler → Result → Relay → NATS：target=%s instance=%s session=%s weights=%s", result.ResultID, target.GetInstanceId(), target.GetSessionId(), result.TargetsJSON)
 }
 
-func requireTradeAuthorization(ctx context.Context, endpoint, space, account, instance, session string) error {
+func requireTradeAccountReady(ctx context.Context, endpoint, space, account string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/logical-account?"+url.Values{"space_id": {space}, "logical_account_id": {account}}.Encode(), nil)
 	if err != nil {
 		return err
@@ -149,15 +148,15 @@ func requireTradeAuthorization(ctx context.Context, endpoint, space, account, in
 		return err
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("Trade 授权查询返回 HTTP %d：%s", response.StatusCode, body)
+		return fmt.Errorf("Trade 账户查询返回 HTTP %d：%s", response.StatusCode, body)
 	}
 	var result tradepb.GetLogicalAccountRsp
 	if err := protojson.Unmarshal(body, &result); err != nil {
 		return err
 	}
 	logical := result.GetLogicalAccount()
-	if result.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS || logical.GetOwnerInstanceId() != instance || logical.GetOwnerSessionId() != session || logical.GetAutomationState() != "ACTIVE" || logical.GetControlMode() != tradepb.ControlMode_CONTROL_MODE_STRATEGY {
-		return fmt.Errorf("Trade 没有授权实例 %s 的会话 %s：%s", instance, session, body)
+	if result.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS || logical.GetAutomationState() != "ACTIVE" || logical.GetControlMode() != tradepb.ControlMode_CONTROL_MODE_STRATEGY || !slices.Contains(logical.GetMarkets(), tradepb.MarketType_MARKET_TYPE_SPOT) {
+		return fmt.Errorf("Trade 组合账户 %s 不是由策略控制、可交易现货的自动执行组合：%s", account, body)
 	}
 	return nil
 }

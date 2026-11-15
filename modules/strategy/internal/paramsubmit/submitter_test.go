@@ -74,14 +74,7 @@ func harness(t *testing.T) (*store.Store, *Submitter, *factorsFake) {
 		t.Fatal(err)
 	}
 	resolved := json.RawMessage(`{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`)
-	if err := db.OpenSession(ctx, store.Session{SessionID: "session-1", InstanceID: "i1", DSLHash: "sha256:x", ResolvedJSON: string(resolved), CreatedAt: now}, "name: demo"); err != nil {
-		t.Fatal(err)
-	}
-	session := "session-1"
-	if err := db.SetInstanceEnabled(ctx, "i1", false, &session, resolved, now); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SetInstanceEnabled(ctx, "i1", true, &session, resolved, now); err != nil {
+	if err := db.EnableInstance(ctx, store.Session{SessionID: "session-1", InstanceID: "i1", DSLHash: "sha256:x", ResolvedJSON: string(resolved), CreatedAt: now}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 	commit(t, db, 0)
@@ -203,7 +196,7 @@ func TestSubmitterHonorsPauseAndDisable(t *testing.T) {
 
 	db2, submitter2, fake2 := harness(t)
 	session := "session-1"
-	if err := db2.DisableInstance(context.Background(), "i1", &session, nil, "", now); err != nil {
+	if err := db2.DisableInstance(context.Background(), "i1", session, now); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := submitter2.RunOnce(context.Background()); err != nil || n != 0 || len(fake2.calls) != 0 {

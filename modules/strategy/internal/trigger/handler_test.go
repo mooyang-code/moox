@@ -196,13 +196,7 @@ func newHarnessWith(t *testing.T, dslYaml string, account *string, resolved inpu
 	}
 	raw, _ := json.Marshal(resolved)
 	session := "session-1"
-	if err := repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(raw), CreatedAt: bar0}, dslYaml); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, &session, raw, bar0); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", true, &session, raw, bar0); err != nil {
+	if err := repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(raw), CreatedAt: bar0}, dslYaml); err != nil {
 		t.Fatal(err)
 	}
 	h := &harness{t: t, repo: repo, loader: &fakeLoader{frames: map[int64]map[string]map[string]float64{}}, observer: &recordingObserver{}, now: start, session: session}
@@ -643,7 +637,7 @@ END;`); err != nil {
 	}
 }
 
-// ambiguous_series 同样需要人工处理，实例标记 degraded；ok 周期恢复 degraded，但不清除 session_unverified。
+// ambiguous_series 同样需要人工处理，实例标记 degraded；下一个 ok 周期恢复 ok。
 func TestHandleHealthTransitions(t *testing.T) {
 	h := newHarness(t, rankDSL, nil)
 	h.loader.errs = []error{&input.SkipError{Reason: input.SkipAmbiguousSeries, Detail: "两个序列"}}
@@ -652,14 +646,11 @@ func TestHandleHealthTransitions(t *testing.T) {
 	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthDegraded {
 		t.Fatalf("ambiguous_series 应标记 degraded：%+v", instance)
 	}
-	if err := h.repo.SetInstanceHealth(context.Background(), "i1", store.HealthSessionUnverified, bar0); err != nil {
-		t.Fatal(err)
-	}
 	h.frame(2, map[string]map[string]float64{"A": {"m": 1}})
 	h.now = barStart(2).Add(90 * time.Minute)
 	expectAck(t, h.deliver(2))
-	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthSessionUnverified {
-		t.Fatalf("ok 周期不能清除 session_unverified：%+v", instance)
+	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthOK {
+		t.Fatalf("ok 周期应恢复 ok：%+v", instance)
 	}
 }
 

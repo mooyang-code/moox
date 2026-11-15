@@ -71,4 +71,4 @@ wait "$trade_pid" || status=1
 pids=()
 cat "$WORK/trade.log" "$WORK/gateway.log"
 [[ "$status" == 0 ]] || exit "$status"
-printf 'PASS: local production Strategy client -> Directory -> private TLS native Gateway -> Trade tRPC + Paper Store ownership. No order execution or deployment claimed.\n'
+printf 'PASS: local production Strategy client -> Directory -> private TLS native Gateway -> Trade tRPC + Paper Store account check and CloseTargetSession. No order execution or deployment claimed.\n'

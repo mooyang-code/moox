@@ -92,9 +92,8 @@ describe("strategy overview model", () => {
       input({
         instances: [
           instance("deg", { health: "degraded" }),
-          instance("unv", { health: "session_unverified" }),
           instance("exp"),
-          instance("rel", { enabled: false, session_id: "s" }),
+          instance("off", { enabled: false }),
           instance("fine")
         ],
         targets: {
@@ -106,9 +105,7 @@ describe("strategy overview model", () => {
     );
     expect(items.map(item => [item.instanceId, item.kind])).toEqual([
       ["deg", "degraded"],
-      ["unv", "session_unverified"],
-      ["exp", "expired"],
-      ["rel", "releasing"]
+      ["exp", "expired"]
     ]);
   });
 

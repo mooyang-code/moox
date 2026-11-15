@@ -88,7 +88,7 @@ func (h *harness) reenable(next, dslYaml string) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	if err := h.repo.DisableInstance(ctx, "i1", &h.session, nil, "", h.now); err != nil {
+	if err := h.repo.DisableInstance(ctx, "i1", h.session, h.now); err != nil {
 		h.t.Fatal(err)
 	}
 	hash := previous.DSLHash
@@ -104,13 +104,8 @@ func (h *harness) reenable(next, dslYaml string) {
 			h.t.Fatal(err)
 		}
 	}
-	if err := h.repo.OpenSession(ctx, store.Session{SessionID: next, InstanceID: "i1", DSLHash: hash, ResolvedJSON: previous.ResolvedJSON, MembersJSON: previous.MembersJSON, CreatedAt: h.now}, dslYaml); err != nil {
+	if err := h.repo.EnableInstance(ctx, store.Session{SessionID: next, InstanceID: "i1", DSLHash: hash, ResolvedJSON: previous.ResolvedJSON, MembersJSON: previous.MembersJSON, CreatedAt: h.now}, dslYaml); err != nil {
 		h.t.Fatal(err)
-	}
-	for _, enabled := range []bool{false, true} {
-		if err := h.repo.SetInstanceEnabled(ctx, "i1", enabled, &next, json.RawMessage(previous.ResolvedJSON), h.now); err != nil {
-			h.t.Fatal(err)
-		}
 	}
 	h.session = next
 }

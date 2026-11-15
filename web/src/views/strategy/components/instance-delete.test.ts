@@ -43,9 +43,8 @@ describe("instance delete flow", () => {
   });
 
   it("only offers deletion for stopped instances without a session", () => {
-    expect(canDeleteInstance({ enabled: false, session_id: "" })).toBe(true);
-    expect(canDeleteInstance({ enabled: true, session_id: "s" })).toBe(false);
-    expect(canDeleteInstance({ enabled: false, session_id: "s" })).toBe(false);
+    expect(canDeleteInstance({ enabled: false })).toBe(true);
+    expect(canDeleteInstance({ enabled: true })).toBe(false);
   });
 
   it("lists deleted and kept tasks in two groups", () => {

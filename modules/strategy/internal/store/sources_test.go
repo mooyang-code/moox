@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -34,10 +33,9 @@ func TestInstanceSourceTasksRoundTrip(t *testing.T) {
 		t.Fatalf("会话快照里的全部任务：%v", got)
 	}
 	session := "session-1"
-	if err := repo.OpenSession(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: resolved, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.EnableInstance(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: resolved, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
-	attachAndEnable(t, repo, "i1", session, json.RawMessage(resolved))
 	byView, err := repo.EnabledInstancesByView(ctx, "space", "view_factor_daily")
 	if err != nil || len(byView) != 1 || byView[0].InstanceID != "i1" {
 		t.Fatalf("来源 View 的事件应路由到实例：%+v err=%v", byView, err)

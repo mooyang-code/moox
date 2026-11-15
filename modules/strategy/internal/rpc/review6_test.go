@@ -1,8 +1,6 @@
 package rpc
 
 import (
-	"encoding/json"
-	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"testing"
 	"time"
 
@@ -12,8 +10,7 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 )
 
-// A 股内嵌日历过了可用截止日（最后一个交易日往前 2 个交易日）后，启用的实例每一期都会被丢弃：启用时就拒绝，
-// 沿用待定会话的启用也一样。
+// A 股内嵌日历过了可用截止日（最后一个交易日往前 2 个交易日）后，启用的实例每一期都会被丢弃：启用时就拒绝。
 func TestEnableRejectsExpiredStockCalendar(t *testing.T) {
 	h := newHarness(t)
 	h.resolver.calendar = "cn_stock"
@@ -23,25 +20,6 @@ func TestEnableRejectsExpiredStockCalendar(t *testing.T) {
 	rsp := h.setEnabled("i1", true)
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "不能启用实例")
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "无法推算有效期")
-
-	definition, err := h.service.Store.GetDefinition(h.ctx, "s1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := json.Marshal(input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_i1", FactorTaskID: "ftask_i1", DatasetID: "ds"}}, Bar: "1d", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, ViewColumns: []string{"close"}})
-	pending := "pending-session"
-	if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: pending, InstanceID: "i1", DSLHash: definition.DSLHash, ResolvedJSON: string(raw), CreatedAt: h.now}, definition.DSLYaml); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.service.Store.SetInstanceEnabled(h.ctx, "i1", false, &pending, raw, h.now); err != nil {
-		t.Fatal(err)
-	}
-	calls := h.resolver.calls
-	rsp = h.setEnabled("i1", true)
-	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "不能启用实例")
-	if h.resolver.calls != calls {
-		t.Fatalf("沿用待定会话时不重新解析，也应检查日历：%d → %d", calls, h.resolver.calls)
-	}
 
 	h.now = time.Date(2026, 10, 9, 2, 0, 0, 0, time.UTC)
 	requireOK(t, int32(h.setEnabled("i1", true).GetRetInfo().GetCode()), "")

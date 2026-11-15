@@ -46,22 +46,17 @@ type Resolver interface {
 	PoolReplayWindow(ctx context.Context, spaceID string, pooled input.PoolResolved, start, end, now time.Time) (time.Time, map[string]string, error)
 }
 
-// Owner 是 Trade 组合账户的会话所有权接口。
-type Owner interface {
-	ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string, markets []string) error
-	ReleaseSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
-	ValidateSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
+// TradeAccounts 是用到的 Trade 组合账户接口（批 3 的 3.6）：启用绑了账户的实例前只读账户核对控制模式与市场；
+// 停用后通知 Trade 关闭会话（幂等，不做后台重试）。
+type TradeAccounts interface {
+	CheckAccount(ctx context.Context, spaceID, logicalAccountID string, markets []string) error
+	CloseSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string, startedAt int64) error
 }
 
 // Warmer 管理策略池实例的后台预热：启用成功后开始预热，停用时取消。
 type Warmer interface {
 	Start(ctx context.Context, instanceID, sessionID string)
 	Stop(instanceID string)
-}
-
-// Alerter 接收需要人工处理的实例事件（例如因 Trade 拒绝会话被自动停用），用于模块健康告警。
-type Alerter interface {
-	Alert(instance store.Instance, reason string)
 }
 
 // ReplayWaker 通知回放执行循环有新任务。
@@ -73,11 +68,11 @@ type ReplayWaker interface {
 type Service struct {
 	Store    *store.Store
 	Resolver Resolver
-	Owner    Owner
-	Replays  ReplayWaker
+	// Trade 为空时不能启用、停用或删除挂过组合账户的实例。
+	Trade   TradeAccounts
+	Replays ReplayWaker
 	// Warmer 为空时不预热（没有策略池的部署）。
 	Warmer Warmer
-	Alerts Alerter
 	// Tasks 与 Archives 用于删除实例（以及启用前核对任务还在、标出删除未完成的实例）；为空时不能删除实例。
 	Tasks    FactorTaskAdmin
 	Archives ArchiveTasks

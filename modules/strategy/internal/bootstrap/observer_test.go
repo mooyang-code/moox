@@ -138,7 +138,7 @@ func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T)
 	}
 	// 停用后刷新清单即移出。
 	session := "i1-session"
-	if err := repo.DisableInstance(context.Background(), "i1", &session, nil, "", seedTime); err != nil {
+	if err := repo.DisableInstance(context.Background(), "i1", session, seedTime); err != nil {
 		t.Fatal(err)
 	}
 	if err := observer.refresh(context.Background()); err != nil {
