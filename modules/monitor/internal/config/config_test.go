@@ -31,9 +31,6 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Database.Path != "./data/monitor/monitor.db" {
 		t.Fatalf("database path = %q", cfg.Database.Path)
 	}
-	if cfg.Health.Addr != ":11409" {
-		t.Fatalf("health addr = %q", cfg.Health.Addr)
-	}
 	if cfg.Instance.InstanceID == "" {
 		t.Fatal("instance id must not be empty")
 	}
@@ -104,8 +101,6 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 
 func TestMonitorConfigEnvOverride(t *testing.T) {
 	t.Setenv("MOOX_MONITOR_DB_PATH", "/tmp/moox-monitor.db")
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 
 	cfg, err := Load(writeConfig(t, `
 instance:
@@ -120,8 +115,6 @@ instance:
 }
 
 func TestMonitorConfigKeepsExplicitEmptyObservabilityCredential(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 	cfg, err := Load(writeConfig(t, "observability:\n  credential_file: \"\"\n"))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -135,8 +128,6 @@ func TestMonitorStorageUsesConfiguredIdentityInsteadOfLegacyEnvironment(t *testi
 	t.Setenv("MOOX_GATEWAY_NODE_ID", "control")
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://192.0.2.99:11003")
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "fixture-health-secret")
 	cfg, err := Load(writeConfig(t, `gateway_client:
   caller: monitor
   key_id: admin-assigned-monitor-key
@@ -161,8 +152,6 @@ func TestMonitorRejectsOldAndInvalidGatewayConfiguration(t *testing.T) {
 		"gateway_client:\n  caller: monitor\n---\ngateway_client:\n  caller: archive\n",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-			t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "fixture-health-secret")
 			if _, err := Load(writeConfig(t, raw)); err == nil {
 				t.Fatal("invalid gateway configuration was accepted")
 			}
@@ -178,30 +167,6 @@ func TestMonitorRejectsOldCollectorGatewayConfiguration(t *testing.T) {
 		if _, err := Load(writeConfig(t, "kline_freshness:\n  "+old+"\n")); err == nil {
 			t.Fatalf("old Collector route was accepted: %s", old)
 		}
-	}
-}
-
-func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
-	cfg, err := Load(writeConfig(t, "{}\n"))
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.HealthAuth.Version != "moox-health-v1" || cfg.HealthAuth.AccessKey != "monitor" || cfg.HealthAuth.SecretKey != "secret" {
-		t.Fatalf("health auth = %+v", cfg.HealthAuth)
-	}
-}
-
-func TestMonitorConfigRequiresHealthCredentialsWhenDeploymentEnabled(t *testing.T) {
-	cfg := Default()
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want health credential error")
-	}
-	cfg.Deployment.Enabled = false
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate() with deployment disabled = %v", err)
 	}
 }
 
@@ -239,8 +204,6 @@ func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 }
 
 func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "app.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -298,8 +261,6 @@ func TestMonitorDefaultDatasetHealthPolicyPathExistsFromModuleWorkingDirectory(t
 }
 
 func TestMonitorConfigRejectsLegacyEventBusFields(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 	for _, content := range []string{
 		"metrics:\n  eventbus_credential_file: old.yaml\n",
 		"metrics:\n  host_eventbus_credential_file: old.yaml\n",
@@ -392,8 +353,6 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 }
 
 func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 	_, err := Load(writeConfig(t, "kline_freshness:\n  enabled: true\n  typo_interval: 30s\n"))
 	if err == nil {
 		t.Fatal("Load() accepted unknown kline freshness field")
@@ -434,8 +393,6 @@ func TestMonitorConfigRejectsRemovedHostStorage(t *testing.T) {
 }
 
 func TestMonitorConfigRejectsRemovedPeerConfiguration(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 	_, err := Load(writeConfig(t, "peer:\n  enabled: false\n"))
 	if err == nil || !strings.Contains(err.Error(), "field peer not found") {
 		t.Fatalf("Load() error = %v, want removed peer field rejection", err)
@@ -453,8 +410,6 @@ func writeConfig(t *testing.T, content string) string {
 }
 
 func TestMonitorNewSeriesLimitsCanBeTunedOrDisabled(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "fixture-health-secret")
 	cfg, err := Load(writeConfig(t, "metrics:\n  max_new_series_per_hour: 50\n  max_new_series_per_day: -1\n"))
 	if err != nil {
 		t.Fatal(err)

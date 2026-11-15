@@ -181,10 +181,6 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		return err
 	}
 	health := health.NewState()
-	healthHandler, err := authenticatedHealthHandler(health.Handler())
-	if err != nil {
-		return err
-	}
 	// tRPC repairs process-wide codec/client configuration. Finish setup before
 	// creating any control connection or accepting requests.
 	timers := trpc.NewServer()
@@ -258,7 +254,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err := directory.Register(local, runtime.State()); err != nil {
 		return err
 	}
-	healthServer := newHealthHTTPServer(healthHandler)
+	healthServer := newHealthHTTPServer(health.Handler())
 	results := make(chan serverResult, 4)
 	go func() { results <- serverResult{"remote tRPC", remote.Serve()} }()
 	go func() { results <- serverResult{"local tRPC", local.Serve()} }()
@@ -352,7 +348,7 @@ func startRelayClient(ctx context.Context, cfg config.Config, material *tlsconfi
 	return nil
 }
 
-// relayLocalPorts 返回出站主机允许 control 接入的本机端口：网关跨主机端口、组件健康端口与外部程序的 relay_http 端口。
+// relayLocalPorts 返回出站主机允许 control 接入的本机端口：网关跨主机端口与外部程序的 relay_http 端口（健康端口不中转）。
 func relayLocalPorts(catalog servicecatalog.Catalog, remotePort string) func(int) bool {
 	return func(port int) bool {
 		return strconv.Itoa(port) == remotePort || catalog.LocalRelayPort(port)
@@ -371,9 +367,6 @@ func relayStatusProto(items []relay.Status) []*pb.RelaySessionStatus {
 	return result
 }
 
-func authenticatedHealthHandler(next http.Handler) (http.Handler, error) {
-	return healthz.WrapFromEnv(next)
-}
 func newHealthHTTPServer(handler http.Handler) *http.Server {
 	return &http.Server{Handler: handler, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
 }

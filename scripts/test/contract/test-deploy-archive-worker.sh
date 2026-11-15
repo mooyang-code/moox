@@ -27,13 +27,9 @@ chmod 0755 "${tmp}/moox-archive-worker"
 printf '#!/bin/sh\n[ "$1" = check-config ] && exit 1\nexit 0\n' >"${tmp}/bad-worker"
 chmod 0755 "${tmp}/bad-worker"
 
-health_env="${tmp}/health-auth.env"
-printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=health-access-9\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "$(printf 'h%.0s' {1..64})" >"${health_env}"
-chmod 0600 "${health_env}"
-
 export MOOX_SYSTEMD_USER_DIR="${tmp}/systemd"
 args=(--dir "${deploy}" --root-dir "${archive_root}" --worker-id archive-worker@testhost --access-address access.example.test:11004
-  --access-id access@storage --access-key-id key-123 --binary "${tmp}/moox-archive-worker" --health-env "${health_env}" --no-start)
+  --access-id access@storage --access-key-id key-123 --binary "${tmp}/moox-archive-worker" --no-start)
 
 # 输入校验。
 if bash "${SCRIPT}" --dir "${deploy}" --root-dir relative/path --access-address a:1 --access-id access@x --access-key-id k --no-start >"${tmp}/bad1.log" 2>&1; then
@@ -67,14 +63,14 @@ unit="${MOOX_SYSTEMD_USER_DIR}/moox-archive-worker.service"
 [[ -s "${unit}" ]] || fail "service definition was not rendered"
 grep -qF "${deploy}/bin/moox-archive-worker" "${unit}" || fail "service definition does not run the installed binary"
 grep -q '__[A-Z_]*__' "${unit}" && fail "unrendered placeholder in the service definition"
-[[ -s "${secrets}/health-auth.env" ]] || fail "health auth env was not installed"
-grep -qF 'MOOX_HEALTH_AUTH_ACCESS_KEY=health-access-9' "${secrets}/health-auth.env" || fail "health auth env must come from --health-env"
-[[ "$(stat -f '%Lp' "${secrets}/health-auth.env" 2>/dev/null || stat -c '%a' "${secrets}/health-auth.env")" == 600 ]] || fail "health auth env must be mode 0600"
-# 再次部署不带 --health-env 时保留已安装的健康检查凭据。
-before="$(cat "${secrets}/health-auth.env")"
+# 健康端口只听本机、不验签：不安装健康凭据，服务定义也不引用它。
+[[ ! -e "${secrets}/health-auth.env" ]] || fail "health auth env must not be installed"
+grep -qF 'health-auth.env' "${unit}" && fail "service definition must not load a health credential"
 bash "${SCRIPT}" --dir "${deploy}" --root-dir "${archive_root}" --worker-id archive-worker@testhost --access-address access.example.test:11004 \
   --access-id access@storage --access-key-id key-123 --skip-build --no-start >/dev/null 2>&1 || fail "second deploy failed"
-[[ "$(cat "${secrets}/health-auth.env")" == "${before}" ]] || fail "health credentials must be kept across deployments"
+if bash "${SCRIPT}" "${args[@]}" --health-env "${tmp}/health-auth.env" >/dev/null 2>&1; then
+  fail "the removed --health-env option must be rejected"
+fi
 
 grep -qF "${deploy}/config/app.yaml.new" "${tmp}/check-config.log" || fail "check-config must validate the rendered app.yaml.new before it replaces app.yaml"
 [[ ! -e "${deploy}/config/app.yaml.new" ]] || fail "app.yaml.new must be renamed into place"

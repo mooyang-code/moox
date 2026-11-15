@@ -6,7 +6,6 @@ import "time"
 type Config struct {
 	Broker         BrokerConfig         `yaml:"broker"`
 	InternalClient InternalClientConfig `yaml:"internal_client"`
-	Health         HealthConfig         `yaml:"health"`
 	Streams        []StreamConfig       `yaml:"streams"`
 }
 
@@ -39,10 +38,6 @@ type TLSConfig struct {
 	CertFile string `yaml:"cert_file"`
 	KeyFile  string `yaml:"key_file"`
 	CAFile   string `yaml:"ca_file"`
-}
-
-type HealthConfig struct {
-	Addr string `yaml:"addr"`
 }
 
 type StreamConfig struct {

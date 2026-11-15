@@ -183,15 +183,18 @@ func (r *Runtime) sourceBlocked(set domain.EngineTask) bool {
 	return r.sourceError(seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}) != nil
 }
 
-// sourceError 返回数据源当前不能计算的原因（本地数据层的 Blocked），能计算时为 nil。
+// sourceGate 判断数据源当前能不能计算：零数据标的、因子回看超过窗口、窗口内存超过预算、变更日志断档时返回原因。
+// 运行时由本地数据层（*localdata.Data）实现。
+type sourceGate interface {
+	Blocked(seriesstore.Source) error
+}
+
+// sourceError 返回数据源当前不能计算的原因，能计算时为 nil。
 func (r *Runtime) sourceError(src seriesstore.Source) error {
-	if r.blockedSource != nil {
-		return r.blockedSource(src)
-	}
-	if r.data == nil {
+	if r.sources == nil {
 		return nil
 	}
-	return r.data.Blocked(src)
+	return r.sources.Blocked(src)
 }
 
 // failsBeyondWindow 报告检查结果里除“本地窗口”“自定义算子模块”外还有没有不通过的项。这两项可能只是暂时不通过：

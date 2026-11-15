@@ -31,7 +31,6 @@ type StorageConfig struct {
 	Devices    StorageDevices  `yaml:"devices"`
 	EventBus   StorageEventBus `yaml:"eventbus"`
 	View       StorageView     `yaml:"view"`
-	Health     StorageHealth   `yaml:"health"`
 }
 
 // StorageMetadata 保存元数据存储与种子数据配置。
@@ -57,11 +56,6 @@ type StorageView struct {
 	BackfillRequestInterval string `yaml:"backfill_request_interval"`
 	// DeleteOldestBatchSize 是定时删除最旧数据时每批最多删除的行数；未配置时取默认值 2000。
 	DeleteOldestBatchSize int `yaml:"delete_oldest_batch_size"`
-}
-
-// StorageHealth controls the lightweight HTTP health endpoint.
-type StorageHealth struct {
-	Addr string `yaml:"addr"`
 }
 
 func (c *RuntimeConfig) ApplyDefaults() {
@@ -92,9 +86,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if strings.TrimSpace(c.View.BackfillRequestInterval) == "" {
 		c.View.BackfillRequestInterval = "100ms"
-	}
-	if c.Health.Addr == "" {
-		c.Health.Addr = ":20210"
 	}
 }
 

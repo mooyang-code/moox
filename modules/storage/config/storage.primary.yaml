@@ -10,5 +10,3 @@ storage:
     pebble_path: ./var/storage/pebble
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-  health:
-    addr: ":20210"

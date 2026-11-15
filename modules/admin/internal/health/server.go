@@ -35,9 +35,5 @@ func Handler(startedAt time.Time) http.Handler {
 }
 
 func Register(service server.Service, startedAt time.Time) error {
-	handler, err := healthz.WrapFromEnv(Handler(startedAt))
-	if err != nil {
-		return err
-	}
-	return healthz.RegisterNoProtocolServiceMux(service, handler)
+	return healthz.RegisterNoProtocolServiceMux(service, Handler(startedAt))
 }

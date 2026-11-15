@@ -14,14 +14,11 @@ for secret in access-factor-engine.key factor-eventbus.yaml; do
   chmod 0600 "${DIR}/secrets/${secret}"
 done
 
-health_env="${TMP_ROOT}/health-auth.env"
-printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=health-access-17\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "$(printf 'h%.0s' {1..64})" >"${health_env}"
-chmod 0600 "${health_env}"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${TMP_ROOT}/moox-factor-engine-new"
 chmod +x "${TMP_ROOT}/moox-factor-engine-new"
 
 install_args=(
-  --dir "${DIR}" --binary "${TMP_ROOT}/moox-factor-engine-new" --health-env "${health_env}" --no-start --engine-id factor-engine@contract
+  --dir "${DIR}" --binary "${TMP_ROOT}/moox-factor-engine-new" --no-start --engine-id factor-engine@contract
   --access-address storage.example:11004 --access-id access@storage
   --access-key-id assigned-factor-key-17
   --eventbus-url tls://control.example:4222
@@ -41,40 +38,29 @@ grep -Fq 'tls://control.example:4222' "${config}"
 ! grep -Eq '^storage:' "${config}"
 grep -Eq '^compute:' "${config}"
 [[ -s "${DIR}/config/trpc_go.engine.yaml" ]]
-# 健康凭据按传入的文件安装，权限 0600。
-grep -Fq 'MOOX_HEALTH_AUTH_ACCESS_KEY=health-access-17' "${DIR}/secrets/health-auth.env"
-[[ "$(stat -f '%Lp' "${DIR}/secrets/health-auth.env" 2>/dev/null || stat -c '%a' "${DIR}/secrets/health-auth.env")" == 600 ]]
+# 健康端口只听本机、不验签：不安装健康凭据，服务定义也不引用它。
+[[ ! -e "${DIR}/secrets/health-auth.env" ]]
 [[ -x "${DIR}/bin/moox-factor-engine" ]]
 
 service="${TMP_ROOT}/systemd/moox-factor-engine.service"
 [[ -s "${service}" ]]
 grep -Fq "${DIR}/bin/moox-factor-engine" "${service}"
+if grep -Fq 'health-auth.env' "${service}"; then
+  echo "the engine service must not load a health credential" >&2
+  exit 1
+fi
 if grep -Eq '(HTTPS?_PROXY|https?_proxy)[^ ]*=' "${service}"; then
   echo "the engine service must not carry proxy variables" >&2
   exit 1
 fi
 
-# 重复部署不带 --health-env 时沿用已安装的健康凭据。
+# 重复部署（复用已安装的二进制）照样通过。
 "${ROOT}/scripts/deploy/deploy-factor-engine.sh" --dir "${DIR}" --skip-build --no-start --engine-id factor-engine@contract \
   --access-address storage.example:11004 --access-id access@storage --access-key-id assigned-factor-key-17 \
   --eventbus-url tls://control.example:4222 >/dev/null
-grep -Fq 'MOOX_HEALTH_AUTH_ACCESS_KEY=health-access-17' "${DIR}/secrets/health-auth.env"
-
-# 健康凭据文件权限不对、缺变量都要拒绝。
-loose="${TMP_ROOT}/loose.env"
-cp "${health_env}" "${loose}"
-chmod 0644 "${loose}"
-if "${ROOT}/scripts/deploy/deploy-factor-engine.sh" --dir "${DIR}" --binary "${TMP_ROOT}/moox-factor-engine-new" --health-env "${loose}" --no-start \
-  --access-address storage.example:11004 --access-id access@storage --access-key-id assigned-factor-key-17 --eventbus-url tls://control.example:4222 >/dev/null 2>&1; then
-  echo "installer accepted a group-readable health credential" >&2
-  exit 1
-fi
-incomplete="${TMP_ROOT}/incomplete.env"
-printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\n' >"${incomplete}"
-chmod 0600 "${incomplete}"
-if "${ROOT}/scripts/deploy/deploy-factor-engine.sh" --dir "${DIR}" --binary "${TMP_ROOT}/moox-factor-engine-new" --health-env "${incomplete}" --no-start \
-  --access-address storage.example:11004 --access-id access@storage --access-key-id assigned-factor-key-17 --eventbus-url tls://control.example:4222 >/dev/null 2>&1; then
-  echo "installer accepted an incomplete health credential" >&2
+# 已删除的 --health-env 参数要被拒绝，不能静默忽略。
+if "${ROOT}/scripts/deploy/deploy-factor-engine.sh" "${install_args[@]}" --health-env "${TMP_ROOT}/health-auth.env" >/dev/null 2>&1; then
+  echo "installer accepted the removed --health-env option" >&2
   exit 1
 fi
 

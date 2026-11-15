@@ -109,3 +109,22 @@ func TestReporterFailureGateUsesRecentErrorTimestamp(t *testing.T) {
 	moduleRecent := []byte("moox_factor_metrics_errors_total{operation=\"run\"} 1\nmoox_factor_metrics_last_error_timestamp_seconds 999\n")
 	require.True(t, reporterHasRecentFailure(moduleRecent, now))
 }
+
+// bootstrap 只查本节点：健康与身份检查请求本节点上组件只听本机的健康端口。
+func TestBootstrapProbesTheLocalHealthPort(t *testing.T) {
+	manifest, err := core.LoadEmbeddedManifest()
+	require.NoError(t, err)
+	var asked []string
+	runner := &bootstrapRunner{
+		manifest:    manifest,
+		deployments: map[string]Deployment{"factor-mgr": {ComponentID: "factor-mgr", Status: "enabled"}},
+		options: BootstrapOptions{NodeID: "node-a", Probe: func(_ context.Context, node string, port int, path string) (ProbeResult, error) {
+			asked = append(asked, fmt.Sprintf("%s:%d%s", node, port, path))
+			return ProbeResult{StatusCode: 200}, nil
+		}},
+	}
+	require.Equal(t, core.StatusPass, runner.run(context.Background(), core.CheckSpec{ID: "service.health:factor-mgr@node-a"}, nil).Status)
+	require.Equal(t, []string{"node-a:11414/readyz"}, asked)
+	runner.options.Probe = nil
+	require.Equal(t, core.StatusFail, runner.run(context.Background(), core.CheckSpec{ID: "service.health:factor-mgr@node-a"}, nil).Status)
+}

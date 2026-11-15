@@ -1003,19 +1003,12 @@ func setupEventBusFirewallRule(eventBusPort int) cloudtencent.CreateFirewallRule
 }
 
 // setupRuntimeFirewallRules 是控制机上运行时需要的端口（不含 EventBus，见 setupEventBusFirewallRule）。
+// 健康端口只听本机，不放行。
 func setupRuntimeFirewallRules() []cloudtencent.CreateFirewallRulesOptions {
 	return []cloudtencent.CreateFirewallRulesOptions{
 		{
 			Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0",
 			Action: "ACCEPT", Description: "MooX service gateway native",
-		},
-		{
-			Protocol: "TCP", Ports: "11012", CidrBlock: "0.0.0.0/0",
-			Action: "ACCEPT", Description: "MooX SCF Gateway readiness",
-		},
-		{
-			Protocol: "TCP", Ports: "11409", CidrBlock: "0.0.0.0/0",
-			Action: "ACCEPT", Description: "MooX SCF Monitor readiness",
 		},
 	}
 }

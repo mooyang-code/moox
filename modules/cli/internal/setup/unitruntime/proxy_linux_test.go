@@ -116,5 +116,5 @@ func TestRuntimeLinuxRealProxyDrainsHTTPSAndPreservesCAWhilePaused(t *testing.T)
 	require.Equal(t, root, again)
 	metadata, err := json.Marshal(resumed)
 	require.NoError(t, err)
-	require.NotContains(t, string(metadata), values["MOOX_HEALTH_AUTH_SECRET_KEY"])
+	require.NotContains(t, string(metadata), values["MOOX_RUNTIME_TEST_SECRET"])
 }

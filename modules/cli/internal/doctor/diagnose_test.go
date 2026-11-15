@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -181,4 +182,52 @@ func TestRunDiagnoseDisabledModuleDoesNotFailHealthCheck(t *testing.T) {
 	require.NotNil(t, check)
 	require.Equal(t, core.StatusSkipped, check.Status)
 	require.Equal(t, core.ConclusionHealthy, result.Conclusion)
+}
+
+// 上报缺失或过期时经 SSH 在目标机上请求本机 /readyz：就绪算通过，端口不通或未就绪算失败，SSH 连不上记为无法判断。
+func TestRunDiagnoseProbesMissingHealthReportOverSSH(t *testing.T) {
+	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", NodeId: "node-a", Expected: true}}}
+	id := "service.health:factor-mgr@node-a"
+	var asked []string
+	run := func(probe HealthProbe) *core.CheckResult {
+		t.Helper()
+		reportValue, err := RunDiagnose(context.Background(), DiagnoseOptions{CheckIDs: []string{id}, Client: contextClientStub{rsp: snapshot}, Probe: probe})
+		require.NoError(t, err)
+		return reportValue.CheckByID(id)
+	}
+	probe := func(result error) HealthProbe {
+		return func(_ context.Context, node string, port int, path string) (ProbeResult, error) {
+			asked = append(asked, fmt.Sprintf("%s:%d%s", node, port, path))
+			return ProbeResult{StatusCode: 200}, result
+		}
+	}
+	require.Equal(t, core.StatusPass, run(probe(nil)).Status)
+	require.Equal(t, []string{"node-a:11414/readyz"}, asked, "请求目标机上 factor-mgr 的本机健康端口")
+	require.Equal(t, core.StatusFail, run(probe(errors.New("probe returned HTTP 503"))).Status)
+	unreachable := run(probe(fmt.Errorf("%w node-a: dial timeout", ErrNodeUnreachable)))
+	require.Equal(t, core.StatusUnknown, unreachable.Status)
+	require.Contains(t, unreachable.Error, "dial timeout")
+	require.Equal(t, core.StatusUnknown, run(nil).Status)
+}
+
+// host-agent（主机快照）、因子引擎与归档 worker（管理端代报）也有健康观察项：新鲜时通过，过期时不通过。
+func TestRunDiagnoseHealthCoversHostSnapshotAndDelegatedComponents(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t)}
+		var ids []string
+		for _, id := range []string{"host-agent", "factor-engine", "archive-worker"} {
+			snapshot.ExpectedComponents = append(snapshot.ExpectedComponents, &monitorpb.DoctorExpectedComponent{ComponentId: id, NodeId: "factor", Expected: true})
+			snapshot.HealthObservations = append(snapshot.HealthObservations, &monitorpb.DoctorObservation{Kind: "health", ComponentId: id, NodeId: "factor", Status: "OK", Stale: stale})
+			ids = append(ids, "service.health:"+id+"@factor")
+		}
+		reportValue, err := RunDiagnose(context.Background(), DiagnoseOptions{NodeID: "factor", CheckIDs: ids, Client: contextClientStub{rsp: snapshot}})
+		require.NoError(t, err)
+		for _, id := range ids {
+			if stale {
+				require.NotEqual(t, core.StatusPass, reportValue.CheckByID(id).Status, id)
+			} else {
+				require.Equal(t, core.StatusPass, reportValue.CheckByID(id).Status, id)
+			}
+		}
+	}
 }

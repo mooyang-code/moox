@@ -9,10 +9,12 @@ import (
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
+	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -219,4 +221,68 @@ func TestBuilderReportsIngestDropsAndRejectsWithoutBreakingBounds(t *testing.T) 
 	rejected := byKind["metrics_ingest_snapshot_rejected"]
 	require.Equal(t, "broken", rejected.ServiceName)
 	require.Contains(t, rejected.DetailsJSON, `"last_reason":"checksum"`)
+}
+
+// host-agent 按主机快照、因子引擎与归档 worker 按管理端代报（不带主机、按组件名）生成健康观察项：新鲜时 OK，过期时标为过期。
+func TestBuilderHealthCoversHostSnapshotAndDelegatedComponents(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	messages, err := store.WithDatabase(mgr, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
+	samples, err := store.WithDatabase(mgr, hostmetrics.NewSampleStore)
+	require.NoError(t, err)
+	registry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
+	require.NoError(t, err)
+	hosts := hostmetrics.NewStore(samples)
+	hosts.SetRegistry(registry)
+	delegate := func(at time.Time, service string, id string) {
+		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: id, OccurredAt: timestamppb.New(at)},
+			&metricspb.MetricReport{ServiceName: service, InstanceId: service + "@mgr", BootId: "boot-" + id, Ready: proto.Bool(true)}, nil)
+		require.NoError(t, err)
+	}
+	snapshot := func(at time.Time, id string) {
+		metric := &hostmetricpb.HostMetric{HostId: "factor", AgentId: "agent-factor", Hostname: "factor-box", BootId: "boot", Snapshot: &hostmetricpb.HostSnapshot{
+			Cpu: &hostmetricpb.CpuMetric{LogicalCores: 4, UsageAvailable: true, UsagePercent: 10},
+		}}
+		require.NoError(t, hosts.Persist(t.Context(), &eventpb.EventMessage{EventId: id, OccurredAt: timestamppb.New(at)}, metric))
+	}
+	clock := now
+	builder := Builder{
+		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{
+			{ComponentId: "host-agent", HostId: "factor", Status: "enabled"},
+			{ComponentId: "factor-engine", HostId: "factor", Status: "enabled"},
+			{ComponentId: "archive-worker", HostId: "factor", Status: "enabled"},
+		}},
+		Metrics: monmetrics.NewQueryService(messages, nil), Hosts: hosts, HealthChecks: report.BuiltInModuleHealthChecks(), Now: func() time.Time { return clock },
+	}
+	components := []string{"host-agent", "factor-engine", "archive-worker"}
+	health := func() map[string]Observation {
+		t.Helper()
+		got, err := builder.Build(context.Background(), "factor", components, nil)
+		require.NoError(t, err)
+		for _, observation := range got.MissingObservations {
+			require.NotEqual(t, "health", observation.Kind, "三类组件都要有健康观察项：%+v", observation)
+		}
+		byID := map[string]Observation{}
+		for _, observation := range got.HealthObservations {
+			byID[observation.ComponentID] = observation
+		}
+		require.Len(t, byID, 3)
+		return byID
+	}
+	delegate(now.Add(-10*time.Second), "factor-engine", "e1")
+	delegate(now.Add(-10*time.Second), "archive-worker", "w1")
+	snapshot(now.Add(-10*time.Second), "h1")
+	for id, observation := range health() {
+		require.Equal(t, "OK", observation.Status, id)
+		require.False(t, observation.Stale, id)
+		require.Equal(t, "factor", observation.NodeID, id)
+	}
+	clock = now.Add(20 * time.Minute)
+	for id, observation := range health() {
+		require.True(t, observation.Stale, "%s 的上报过期后不能算新鲜", id)
+	}
 }

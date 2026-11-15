@@ -5,18 +5,15 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"net"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
 	"github.com/mooyang-code/moox/packages/hostpolicy"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -126,16 +123,11 @@ func setValue(node *yaml.Node, key string, value any) error {
 }
 
 func renderConfigurations(root *os.Root, options PrepareOptions, components []string, projection unitbundle.Projection, destination string) error {
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return err
-	}
 	keys := map[string]string{}
 	for _, credential := range projection.Credentials {
 		keys[credential.Caller] = credential.KeyID
 	}
 	for _, id := range components {
-		component, _ := catalog.Component(id)
 		if id == "host-gateway" || id == "web-host" {
 			continue
 		}
@@ -182,30 +174,9 @@ func renderConfigurations(root *os.Root, options PrepareOptions, components []st
 					}
 				}
 			}
-			bind := "0.0.0.0"
-			if component.Health.Loopback {
-				bind = "127.0.0.1"
-			}
-			if health := member(document, "health"); health != nil {
-				for _, key := range []string{"addr", "listen"} {
-					if member(health, key) != nil {
-						if err := setValue(health, key, net.JoinHostPort(bind, strconv.Itoa(component.Health.Port))); err != nil {
-							return err
-						}
-					}
-				}
-			}
-			if services := member(member(document, "server"), "service"); services != nil && services.Kind == yaml.SequenceNode {
-				for _, service := range services.Content {
-					if port := member(service, "port"); port != nil && port.Value == strconv.Itoa(component.Health.Port) {
-						if err := setValue(service, "ip", bind); err != nil {
-							return err
-						}
-					}
-				}
-			}
+			// 健康端口照模板只听 127.0.0.1，渲染不改写监听地址（契约测试核对每个组件的模板）。
 			if id == "host-agent" && name == "host-agent/config/app.yaml" {
-				for key, value := range map[string]string{"host_id": projection.HostID, "identity_path": filepath.Join(destination, "host-agent", "data", "identity.yaml"), "eventbus_config": filepath.Join(destination, "host-agent", "config", "eventbus.yaml"), "health_addr": net.JoinHostPort(bind, strconv.Itoa(component.Health.Port))} {
+				for key, value := range map[string]string{"host_id": projection.HostID, "identity_path": filepath.Join(destination, "host-agent", "data", "identity.yaml"), "eventbus_config": filepath.Join(destination, "host-agent", "config", "eventbus.yaml")} {
 					if err := setValue(document, key, value); err != nil {
 						return err
 					}

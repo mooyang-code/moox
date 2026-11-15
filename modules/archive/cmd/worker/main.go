@@ -5,8 +5,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -30,7 +27,6 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/source"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
 	"github.com/mooyang-code/moox/packages/healthz"
-	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -127,7 +123,7 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 	return worker.Run(ctx)
 }
 
-// serveHealth 在本机地址上提供 /healthz /readyz /metrics，接受 MOOX_HEALTH_AUTH_* 环境配置的签名校验。
+// serveHealth 在本机地址上提供 /healthz /readyz /metrics，不验签（只给同机进程与经 SSH 的诊断用）。
 func serveHealth(addr string, worker *app.App) (func() error, error) {
 	state := healthz.NewState("archive-worker", "archive-worker", Version, GitCommit)
 	state.SnapshotFunc = func(context.Context) healthz.Response {
@@ -151,10 +147,7 @@ func serveHealth(addr string, worker *app.App) (func() error, error) {
 		}
 	}
 	state.SetReady(true)
-	handler, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))
-	if err != nil {
-		return nil, err
-	}
+	handler := healthz.StandardMux(state.Snapshot, promhttp.Handler())
 	server := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -210,7 +203,7 @@ func checkConfig(args []string) error {
 	return nil
 }
 
-// health 询问本机 worker 的就绪状态，请求用 MOOX_HEALTH_AUTH_* 环境变量签名。
+// health 询问本机 worker 的就绪状态；健康端口只听本机、不验签。
 func health(args []string) error {
 	fs := flag.NewFlagSet("health", flag.ContinueOnError)
 	url := fs.String("url", "http://127.0.0.1:11418/readyz", "worker health URL")
@@ -219,9 +212,6 @@ func health(args []string) error {
 	}
 	request, err := http.NewRequest(http.MethodGet, *url, nil)
 	if err != nil {
-		return err
-	}
-	if err := signHealthRequest(request); err != nil {
 		return err
 	}
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
@@ -235,29 +225,5 @@ func health(args []string) error {
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("archive worker is not ready: HTTP %d", response.StatusCode)
 	}
-	return nil
-}
-
-func signHealthRequest(request *http.Request) error {
-	version := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_VERSION"))
-	if version == "" {
-		version = "moox-health-v1"
-	}
-	accessKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY"))
-	secretKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY"))
-	if accessKey == "" || secretKey == "" {
-		return errors.New("MOOX_HEALTH_AUTH_ACCESS_KEY and MOOX_HEALTH_AUTH_SECRET_KEY are required")
-	}
-	nonceBytes := make([]byte, 32)
-	if _, err := rand.Read(nonceBytes); err != nil {
-		return fmt.Errorf("generate health nonce: %w", err)
-	}
-	timestamp := time.Now().Unix()
-	nonce := hex.EncodeToString(nonceBytes)
-	signature, err := requestauth.Sign(secretKey, requestauth.Material{Method: request.Method, Path: request.URL.EscapedPath(), Timestamp: timestamp, Nonce: nonce})
-	if err != nil {
-		return fmt.Errorf("sign health request: %w", err)
-	}
-	request.Header.Set("X-Moox-Health-Auth", strings.Join([]string{version, accessKey, strconv.FormatInt(timestamp, 10), nonce, signature}, "/"))
 	return nil
 }

@@ -81,9 +81,10 @@ func newLifecycleRuntimeAt(t *testing.T, stateFile string, tasks ...domain.Engin
 	_, err := cache.Apply(CatalogSnapshot{Hash: "h", Sets: sets})
 	require.NoError(t, err)
 	fake := new(preloadDataFake)
+	data := localdata.New(localdata.Config{})
 	r := &Runtime{
 		cfg:     &Config{Lifecycle: LifecycleConfig{StateFile: stateFile}},
-		catalog: cache, lease: &leaseState{}, data: localdata.New(localdata.Config{}),
+		catalog: cache, lease: &leaseState{}, data: data, sources: data,
 	}
 	r.preload = r.newGatedPreloader(lifecycleSourceFake{}, fake, nil)
 	r.life, err = r.newLifecycle()

@@ -19,7 +19,6 @@ ACCESS_ADDRESS=""
 ACCESS_ID=""
 ACCESS_KEY_ID=""
 BINARY=""
-HEALTH_ENV=""
 EXPORT_FORMAT="csv.gz"
 PAGE_ROWS="500"
 SKIP_BUILD=0
@@ -50,8 +49,6 @@ Options:
   --access-id <id>          Access identity, e.g. access@storage.
   --access-key-id <id>      KeyID assigned by Admin keys export --caller archive-worker.
   --binary <path>           Install this prebuilt moox-archive-worker (from the release package).
-  --health-env <path>       Health credential file (MOOX_HEALTH_AUTH_* variables, mode 0600) rendered by moox-cli.
-                            Required for the first deployment; later deployments keep the installed one.
   --export-format <fmt>     Partition file format: csv.gz (default) or csv.
   --page-rows <n>           Rows per Storage read page, 1..2000. Default: 500.
   --skip-build              Reuse <dir>/bin/moox-archive-worker.
@@ -96,7 +93,6 @@ while [[ $# -gt 0 ]]; do
     --access-id) ACCESS_ID="$2"; shift 2 ;;
     --access-key-id) ACCESS_KEY_ID="$2"; shift 2 ;;
     --binary) BINARY="$2"; shift 2 ;;
-    --health-env) HEALTH_ENV="$2"; shift 2 ;;
     --export-format) EXPORT_FORMAT="$2"; shift 2 ;;
     --page-rows) PAGE_ROWS="$2"; shift 2 ;;
     --object-store-endpoint) OS_ENDPOINT="$2"; shift 2 ;;
@@ -277,21 +273,6 @@ EOF2
   log "built-in object store ready at 127.0.0.1:${SW_S3} (bucket ${SW_BUCKET})"
 }
 
-# 健康检查凭据由 moox-cli 按集群运行身份渲染后传入（Monitor 经中转探测时用同一把）；重复部署不带 --health-env 时沿用已有的。
-health_env="${SECRETS_DIR}/health-auth.env"
-if [[ -n "${HEALTH_ENV}" ]]; then
-  [[ -f "${HEALTH_ENV}" && ! -L "${HEALTH_ENV}" ]] || fail "missing --health-env file ${HEALTH_ENV}"
-  [[ "$(file_mode "${HEALTH_ENV}")" == 600 ]] || fail "--health-env file ${HEALTH_ENV} must have mode 0600"
-  for var in MOOX_HEALTH_AUTH_VERSION MOOX_HEALTH_AUTH_ACCESS_KEY MOOX_HEALTH_AUTH_SECRET_KEY; do
-    grep -Eq "^${var}=[^[:space:]]+$" "${HEALTH_ENV}" || fail "--health-env file lacks ${var}"
-  done
-  (umask 077; cp "${HEALTH_ENV}" "${health_env}.new" && mv -f "${health_env}.new" "${health_env}")
-fi
-[[ -s "${health_env}" ]] || fail "--health-env is required for the first deployment"
-health_access="$(sed -n 's/^MOOX_HEALTH_AUTH_ACCESS_KEY=//p' "${health_env}")"
-health_secret="$(sed -n 's/^MOOX_HEALTH_AUTH_SECRET_KEY=//p' "${health_env}")"
-[[ -n "${health_access}" && -n "${health_secret}" ]] || fail "invalid ${health_env}"
-
 # 新二进制先放在 .new，和新配置一起经 check-config 校验通过后才替换。
 candidate="${DEPLOY_DIR}/bin/moox-archive-worker"
 if [[ -n "${BINARY}" ]]; then
@@ -396,8 +377,7 @@ if [[ -z "${OS_ENDPOINT}" ]]; then
 fi
 
 render_template() {
-  sed -e "s#__ROOT__#${DEPLOY_DIR}#g" -e "s#__SECRETS__#${SECRETS_DIR}#g" -e "s#__HEALTH_ACCESS_KEY__#${health_access}#g" \
-    -e "s#__HEALTH_SECRET_KEY__#${health_secret}#g" "$1"
+  sed -e "s#__ROOT__#${DEPLOY_DIR}#g" -e "s#__SECRETS__#${SECRETS_DIR}#g" "$1"
 }
 
 mkdir -p "${SYSTEMD_USER_DIR}"
@@ -418,14 +398,12 @@ fi
 
 log "wait for moox-archive-worker readiness"
 for _ in $(seq 1 90); do
-  if env -i PATH=/usr/bin:/bin MOOX_HEALTH_AUTH_ACCESS_KEY="${health_access}" MOOX_HEALTH_AUTH_SECRET_KEY="${health_secret}" \
-    "${DEPLOY_DIR}/bin/moox-archive-worker" health >/dev/null 2>&1; then
+  if env -i PATH=/usr/bin:/bin "${DEPLOY_DIR}/bin/moox-archive-worker" health >/dev/null 2>&1; then
     log "moox-archive-worker is ready (${WORKER_ID})"
     exit 0
   fi
   sleep 2
 done
-env -i PATH=/usr/bin:/bin MOOX_HEALTH_AUTH_ACCESS_KEY="${health_access}" MOOX_HEALTH_AUTH_SECRET_KEY="${health_secret}" \
-  "${DEPLOY_DIR}/bin/moox-archive-worker" health || true
+env -i PATH=/usr/bin:/bin "${DEPLOY_DIR}/bin/moox-archive-worker" health || true
 tail -n 30 "${DEPLOY_DIR}/logs/archive-worker.log" >&2 || true
 fail "moox-archive-worker did not become ready"

@@ -19,8 +19,6 @@ type Config struct {
 	GatewayClient  gatewayclient.FileConfig `yaml:"gateway_client"`
 	sourcePath     string                   `yaml:"-"`
 	Database       DatabaseConfig           `yaml:"database"`
-	Health         HealthConfig             `yaml:"health"`
-	HealthAuth     HealthAuthConfig         `yaml:"health_auth"`
 	Instance       InstanceConfig           `yaml:"instance"`
 	Scheduler      SchedulerConfig          `yaml:"scheduler"`
 	Deployment     DeploymentConfig         `yaml:"deployment"`
@@ -40,16 +38,6 @@ type DatabaseConfig struct {
 	MaxOpenConns    int           `yaml:"max_open_conns"`
 	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`
 	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
-}
-
-type HealthConfig struct {
-	Addr string `yaml:"addr"`
-}
-
-type HealthAuthConfig struct {
-	Version   string `yaml:"version"`
-	AccessKey string `yaml:"access_key"`
-	SecretKey string `yaml:"secret_key"`
 }
 
 type InstanceConfig struct {
@@ -181,10 +169,6 @@ func Default() *Config {
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
-		Health: HealthConfig{
-			Addr: ":11409",
-		},
-		HealthAuth: HealthAuthConfig{Version: "moox-health-v1"},
 		Instance: InstanceConfig{
 			InstanceID: defaultInstanceID(),
 		},
@@ -227,12 +211,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Database.ConnMaxIdleTime == 0 {
 		c.Database.ConnMaxIdleTime = defaults.Database.ConnMaxIdleTime
-	}
-	if c.Health.Addr == "" {
-		c.Health.Addr = defaults.Health.Addr
-	}
-	if c.HealthAuth.Version == "" {
-		c.HealthAuth.Version = defaults.HealthAuth.Version
 	}
 	if c.Instance.InstanceID == "" {
 		c.Instance.InstanceID = defaults.Instance.InstanceID
@@ -311,18 +289,6 @@ func (c *Config) applyDefaults() {
 func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_MONITOR_DB_PATH"); v != "" {
 		c.Database.Path = v
-	}
-	if v := os.Getenv("MOOX_MONITOR_HEALTH_ADDR"); v != "" {
-		c.Health.Addr = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_VERSION")); v != "" {
-		c.HealthAuth.Version = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY")); v != "" {
-		c.HealthAuth.AccessKey = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY")); v != "" {
-		c.HealthAuth.SecretKey = v
 	}
 	if v := os.Getenv("MOOX_MONITOR_INSTANCE_ID"); v != "" {
 		c.Instance.InstanceID = v
@@ -408,9 +374,6 @@ func (c *Config) Validate() error {
 	}
 	if c.MarketHealth.TimerCoordinationPendingGrace <= 0 {
 		return fmt.Errorf("market_health.timer_coordination_pending_grace must be positive")
-	}
-	if c.Deployment.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
-		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when deployment monitoring is enabled")
 	}
 	if c.GatewayClient.Caller != "monitor" {
 		return fmt.Errorf("gateway_client.caller must be monitor")

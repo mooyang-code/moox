@@ -28,10 +28,7 @@ func Serve(ctx context.Context, cfg config.Config, version, commit string) error
 		rsp.Details = map[string]any{"caddy_version": "v2.11.4", "upstream_tcp_reachable": dependencies}
 		return rsp
 	}
-	handler, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))
-	if err != nil {
-		return err
-	}
+	handler := healthz.StandardMux(state.Snapshot, promhttp.Handler())
 	listener, err := net.Listen("tcp", cfg.Health.Listen)
 	if err != nil {
 		return err

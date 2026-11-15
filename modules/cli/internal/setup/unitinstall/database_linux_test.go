@@ -48,7 +48,7 @@ func databaseCandidate(t *testing.T, flag string) Prepared {
 	for _, name := range []string{"bin", "secrets", "storage-primary"} {
 		require.NoError(t, os.MkdirAll(filepath.Join(candidate.Directory, name), 0o700))
 	}
-	env := map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": "synthetic-storage-health", "MOOX_HEALTH_AUTH_SECRET_KEY": "synthetic-storage-health-secret-long-enough", "MOOX_TEST_INIT": flag}
+	env := map[string]string{"MOOX_TEST_INIT": flag}
 	raw, err := json.Marshal(env)
 	require.NoError(t, err)
 	envFile := filepath.Join(candidate.Directory, "secrets/runtime-storage-primary.json")

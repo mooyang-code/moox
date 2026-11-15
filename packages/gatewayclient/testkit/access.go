@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -121,19 +120,10 @@ server:
 `, adminPort, ip, port, healthPort)
 	frameworkPath := filepath.Join(root, "access/config/trpc_go.yaml")
 	write(t, frameworkPath, []byte(framework))
-	const healthKey = "fixture-health-signing-key-at-least-32-bytes"
-	process := start(t, root, options.AccessBinary, append(os.Environ(), "MOOX_HEALTH_AUTH_VERSION=moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY=fixture-monitor", "MOOX_HEALTH_AUTH_SECRET_KEY="+healthKey), "-config="+appPath, "-conf="+frameworkPath)
+	process := start(t, root, options.AccessBinary, os.Environ(), "-config="+appPath, "-conf="+frameworkPath)
 	client := &http.Client{Timeout: 250 * time.Millisecond}
 	wait(t, process, func() bool {
-		request, err := http.NewRequest(http.MethodGet, "http://"+healthAddress+"/healthz", nil)
-		require.NoError(t, err)
-		now := time.Now()
-		nonce, err := requestauth.NewNonce()
-		require.NoError(t, err)
-		signature, err := requestauth.Sign(healthKey, requestauth.Material{Method: request.Method, Path: request.URL.EscapedPath(), Timestamp: now.Unix(), Nonce: nonce})
-		require.NoError(t, err)
-		request.Header.Set("X-Moox-Health-Auth", fmt.Sprintf("moox-health-v1/fixture-monitor/%d/%s/%s", now.Unix(), nonce, signature))
-		response, err := client.Do(request)
+		response, err := client.Get("http://" + healthAddress + "/healthz")
 		if err != nil {
 			return false
 		}

@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
@@ -196,13 +195,9 @@ func TestIsPublicFirewallIPRejectsPrivateAndLoopbackAddresses(t *testing.T) {
 
 func TestSetupRuntimeFirewallRulesAreServicePortsAndEventBusRuleIsSeparate(t *testing.T) {
 	rules := setupRuntimeFirewallRules()
-	require.Len(t, rules, 3, "EventBus 端口不再属于控制机的运行时规则")
+	require.Len(t, rules, 1, "EventBus 端口不属于控制机的运行时规则，健康端口只听本机不放行")
 	assert.Equal(t, "11003", rules[0].Ports)
 	assert.Equal(t, "MooX service gateway native", rules[0].Description)
-	assert.Equal(t, "11012", rules[1].Ports)
-	assert.Equal(t, "MooX SCF Gateway readiness", rules[1].Description)
-	assert.Equal(t, "11409", rules[2].Ports)
-	assert.Equal(t, "MooX SCF Monitor readiness", rules[2].Description)
 	busRule := setupEventBusFirewallRule(4333)
 	assert.Equal(t, "4333", busRule.Ports)
 	assert.Equal(t, "MooX EventBus TLS", busRule.Description)
@@ -236,22 +231,8 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 	}
 	assert.Contains(t, ports("control"), "4222")
 	assert.Contains(t, ports("control"), "11003", "出站主机经 control 的 11003 反向连接")
-	assert.Equal(t, []string{"11003", "11012", "11425", "20210"}, ports("storage"), "存储机没有同地域私网地址时 Monitor 走公网探测健康端口")
-	assert.Equal(t, []string{"11003", "11200", "11012", "11425", "11210"}, ports("compute"), "Monitor 探测主机服务与 trade 健康端口")
-	for _, target := range targets {
-		for _, rule := range target.Rules {
-			if strings.HasPrefix(rule.Description, "MooX Monitor health probe") {
-				assert.Equal(t, "203.0.113.8/32", rule.CidrBlock, "健康端口只放行控制机")
-			}
-		}
-	}
-
-	// 与控制机同地域、有私网地址的存储机：Monitor 走私网探测，不放行健康端口。
-	control, storage := manifest.HostCatalog["control"], manifest.HostCatalog["storage"]
-	control.Region, storage.Region, storage.PrivateAddress = "ap-guangzhou", "ap-guangzhou", "10.0.0.5"
-	manifest.HostCatalog["control"], manifest.HostCatalog["storage"] = control, storage
-	targets = mustFirewallTargets(t, manifest)
 	assert.Equal(t, []string{"11003"}, ports("storage"))
+	assert.Equal(t, []string{"11003", "11200"}, ports("compute"))
 
 	// 只能出站的主机不接受入站连接，不作为防火墙目标。
 	compute := manifest.HostCatalog["compute"]
@@ -274,79 +255,31 @@ func mustFirewallTargets(t *testing.T, manifest setupconfig.Manifest) []setupFir
 	return targets
 }
 
-func TestSetupFirewallTargetsIncludeAutomaticHostServices(t *testing.T) {
-	manifest := setupconfig.Manifest{
-		HostCatalog: map[string]setupconfig.HostDefinition{
-			"control": {Address: "203.0.113.8"},
-			"storage": {Address: "203.0.113.10"},
-			"edge":    {Address: "203.0.113.11"},
-		},
-		Deployments: map[string][]string{"control": {"admin"}, "storage": {"storage-primary"}},
-	}
-	targets := mustFirewallTargets(t, manifest)
-	for _, name := range []string{"storage", "edge"} {
-		t.Run(name, func(t *testing.T) {
-			var healthPorts []string
-			for _, target := range targets {
-				if target.Host.Name != name {
-					continue
-				}
-				for _, rule := range target.Rules {
-					if rule.Ports != "11012" && rule.Ports != "11425" {
-						continue
-					}
-					healthPorts = append(healthPorts, rule.Ports)
-					assert.Equal(t, "TCP", rule.Protocol)
-					assert.Equal(t, "203.0.113.8/32", rule.CidrBlock)
-					assert.Equal(t, "ACCEPT", rule.Action)
-				}
-			}
-			assert.ElementsMatch(t, []string{"11012", "11425"}, healthPorts)
-		})
-	}
-}
-
-// Monitor 经公网探测的每个健康端口都要有放行规则；同地域私网和只能出站的主机不走公网，也不该开端口。
-func TestSetupFirewallCoversEveryPublicHealthProbe(t *testing.T) {
+// 健康端口只听本机、不验签：任何主机的防火墙都不放行健康端口（包括自动补入的主机网关与主机采集器）。
+func TestSetupFirewallOpensNoHealthPort(t *testing.T) {
 	manifest := setupconfig.Manifest{
 		HostCatalog: map[string]setupconfig.HostDefinition{
 			"control": {Address: "203.0.113.8", Region: "ap-shanghai"},
 			"storage": {Address: "203.0.113.10", Region: "ap-guangzhou"},
 			"edge":    {Address: "203.0.113.11", Region: "ap-hongkong"},
-			"nearby":  {Address: "203.0.113.12", PrivateAddress: "10.0.0.12", Region: "ap-shanghai"},
-			"inside":  {Address: "192.168.0.103", Reachability: servicecatalog.ReachabilityOutbound},
 		},
-		Deployments: map[string][]string{"control": {"admin"}, "storage": {"storage-primary"}, "inside": {"factor-engine"}},
+		EventBus:    setupconfig.EventBus{Port: 4222},
+		Deployments: map[string][]string{"control": {"admin", "monitor"}, "storage": {"storage-primary", "eventbus"}, "edge": {"trade"}},
 	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	topology, err := manifest.Topology()
-	require.NoError(t, err)
-	rules := map[string]map[string]bool{}
-	for _, target := range mustFirewallTargets(t, manifest) {
-		rules[target.Host.Name] = map[string]bool{}
+	health := map[string]string{}
+	for _, component := range catalog.Components {
+		health[fmt.Sprint(component.Health.Port)] = component.ID
+	}
+	targets := mustFirewallTargets(t, manifest)
+	require.NotEmpty(t, targets)
+	for _, target := range targets {
 		for _, rule := range target.Rules {
-			if rule.CidrBlock == "203.0.113.8/32" {
-				rules[target.Host.Name][rule.Ports] = true
-			}
+			component, isHealth := health[rule.Ports]
+			assert.False(t, isHealth, "%s 放行了 %s 的健康端口 %s", target.Host.Name, component, rule.Ports)
 		}
 	}
-	checked := 0
-	for _, deployment := range topology.Deployments {
-		component, ok := catalog.Component(deployment.ComponentID)
-		if !ok || component.Health.Kind != "readyz" || component.Health.Port <= 0 || component.Health.Loopback {
-			continue
-		}
-		port := fmt.Sprint(component.Health.Port)
-		switch deployment.HostID {
-		case "storage", "edge":
-			checked++
-			assert.True(t, rules[deployment.HostID][port], "%s 缺少 %s 的健康端口 %s", deployment.HostID, deployment.ComponentID, port)
-		case "nearby", "inside":
-			assert.False(t, rules[deployment.HostID][port], "%s 不走公网探测，不该放行 %s", deployment.HostID, port)
-		}
-	}
-	assert.GreaterOrEqual(t, checked, 4)
 }
 
 // EventBus 部署在存储机：4222 只在存储机上放行，控制机不再放行；出站主机接入需要的规则也跟着分到两台主机上。

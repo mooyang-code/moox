@@ -139,10 +139,12 @@ func (b Builder) bootChanges(ctx context.Context, now time.Time) (map[string]int
 
 func deploymentKey(hostID, componentID string) string { return hostID + "\x00" + componentID }
 
-// withReporters 按最近一次上报判断组件状态：没有上报为 missing（从未上报）、过了无数据时限为 stale（停止上报）；
-// 上报新鲜时再看就绪：未就绪记为 down 并带上原因，模块级生命周期也只在上报新鲜时挂上（停止上报的模块不能显示成最后的暂停状态）。
+// withReporters 按最近一次上报判断组件状态：上报新鲜时看就绪，未就绪记为 down 并带上原因，模块级生命周期也只在上报新鲜时挂上
+// （停止上报的模块不能显示成最后的暂停状态）。上报的新鲜度记在 ReporterStatus：missing（从未上报）、stale（停止上报）。
+// 已启用的部署从没上报或停止上报，组件状态记为 down：进程挂了与进程活着但未就绪一样严重（告警都是严重），
+// setup verify 也据此拦住没起来的组件；未启用的部署由调用方改成 disabled。
 func withReporters(item ServiceStatus, rows []monmetrics.MetricService) ServiceStatus {
-	item.ReporterStatus, item.Status, item.Reason = "missing", "unknown", "reporter missing"
+	item.ReporterStatus, item.Status, item.Reason = "missing", silentStatus(item, "unknown"), "reporter missing"
 	var latest *monmetrics.MetricService
 	for i, row := range rows {
 		status := "healthy"
@@ -160,7 +162,7 @@ func withReporters(item ServiceStatus, rows []monmetrics.MetricService) ServiceS
 	}
 	item.Readiness, item.NotReadyReason = latest.Readiness, latest.NotReadyReason
 	if item.ReporterStatus != "healthy" {
-		item.Status, item.Reason = item.ReporterStatus, "reporter stale"
+		item.Status, item.Reason = silentStatus(item, item.ReporterStatus), "reporter stale"
 		return item
 	}
 	item.Status, item.Reason = "healthy", "reporter fresh"
@@ -171,10 +173,18 @@ func withReporters(item ServiceStatus, rows []monmetrics.MetricService) ServiceS
 	return item
 }
 
-// withHostSnapshot 用这台主机最近一次主机快照判断 host-agent：快照新鲜为正常，否则停止上报。
+// silentStatus 是没有新鲜上报时的组件状态：已启用的部署记为 down，否则保留 fallback（未启用的部署随后由调用方改成 disabled）。
+func silentStatus(item ServiceStatus, fallback string) string {
+	if item.Enabled {
+		return "down"
+	}
+	return fallback
+}
+
+// withHostSnapshot 用这台主机最近一次主机快照判断 host-agent：快照新鲜为正常，否则停止上报（已启用时状态同样记为 down）。
 // 主机失联、采集器停报由主机类检查告警，这里不另起上报检查。
 func withHostSnapshot(item ServiceStatus, hosts []HostStatus) ServiceStatus {
-	item.ReporterStatus, item.Status, item.Reason = "missing", "unknown", "reporter missing"
+	item.ReporterStatus, item.Status, item.Reason = "missing", silentStatus(item, "unknown"), "reporter missing"
 	for _, host := range hosts {
 		if host.HostID != item.NodeID || !host.LastSeenAt.After(item.LastSeenAt) {
 			continue
@@ -182,7 +192,7 @@ func withHostSnapshot(item ServiceStatus, hosts []HostStatus) ServiceStatus {
 		item.InstanceID, item.LastSeenAt = host.AgentID, host.LastSeenAt.UTC()
 		item.ReporterStatus, item.Status, item.Reason = "healthy", "healthy", "reporter fresh"
 		if host.Status != "healthy" {
-			item.ReporterStatus, item.Status, item.Reason = "stale", "stale", "reporter stale"
+			item.ReporterStatus, item.Status, item.Reason = "stale", silentStatus(item, "stale"), "reporter stale"
 		}
 	}
 	return item

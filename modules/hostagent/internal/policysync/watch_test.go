@@ -25,7 +25,10 @@ type watchHarness struct {
 func newWatchHarness() *watchHarness {
 	h := &watchHarness{clock: time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)}
 	h.watch = &Watch{host: "storage", local: func() bool { return h.local }, now: func() time.Time { return h.clock },
-		send: func(_ context.Context, message notification.Message) error { h.sent = append(h.sent, message); return nil }}
+		send: func(_ context.Context, message notification.Message) error {
+			h.sent = append(h.sent, message)
+			return nil
+		}}
 	return h
 }
 
@@ -103,7 +106,10 @@ func TestSyncerHandsFetchResultToWatch(t *testing.T) {
 	require.NoError(t, err)
 	var seen []string
 	h := newWatchHarness()
-	h.watch.send = func(_ context.Context, message notification.Message) error { seen = append(seen, message.Title); return nil }
+	h.watch.send = func(_ context.Context, message notification.Message) error {
+		seen = append(seen, message.Title)
+		return nil
+	}
 	syncer.SetWatch(h.watch)
 	_, err = syncer.SyncOnce(t.Context())
 	require.NoError(t, err)
@@ -114,4 +120,47 @@ func TestSyncerHandsFetchResultToWatch(t *testing.T) {
 	}
 	require.Equal(t, []string{"【MooX】控制机或 Monitor 不可达（由 storage 观测）"}, seen)
 	require.Equal(t, time.Minute, Interval, "每分钟拉一次")
+}
+
+// “不可达”没有送达（全新安装时渠道还没缓存）就不推“已恢复”：用户不能收到一条从没告警过的恢复。
+func TestWatchRecoversOnlyAfterTheAlertWasDelivered(t *testing.T) {
+	h := newWatchHarness()
+	deliver := false
+	h.watch.send = func(_ context.Context, message notification.Message) error {
+		if !deliver {
+			return errors.New("主机策略缓存里没有告警渠道")
+		}
+		h.sent = append(h.sent, message)
+		return nil
+	}
+	down := errors.New("dial control:11003: connection refused")
+	for i := 0; i < UnreachableAfter; i++ {
+		h.tick("", down)
+	}
+	deliver = true
+	h.tick("2026-11-15T09:00:00Z", nil)
+	require.Empty(t, h.sent, "告警没送达，恢复也不推")
+	for i := 0; i < UnreachableAfter; i++ {
+		h.tick("", down)
+	}
+	h.tick("2026-11-15T09:00:00Z", nil)
+	require.Equal(t, []string{"【MooX】控制机或 Monitor 不可达（由 storage 观测）", "【MooX】控制机与 Monitor 已恢复可达（由 storage 观测）"}, h.titles())
+}
+
+// 本机写主机策略缓存失败时 Monitor 是可达的：不算拉取失败，不推“不可达”。
+func TestSyncerLocalWriteFailureIsNotUnreachable(t *testing.T) {
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o600))
+	syncer, err := New(filepath.Join(blocked, "host-policy.json"), func(context.Context) (*monitorpb.GetHostPolicyRsp, error) {
+		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, MonitorStartedAt: "2026-11-15T09:00:00Z"}, nil
+	})
+	require.NoError(t, err)
+	h := newWatchHarness()
+	syncer.SetWatch(h.watch)
+	for i := 0; i < UnreachableAfter+1; i++ {
+		_, err = syncer.SyncOnce(t.Context())
+		require.Error(t, err, "写缓存失败照样报错")
+	}
+	require.Empty(t, h.sent)
+	require.Equal(t, "2026-11-15T09:00:00Z", h.watch.lastStart)
 }

@@ -42,7 +42,7 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 		return request, nil, err
 	}
 	request.Control.Components = components
-	request.Control.Environment, err = unitEnvironment(snapshot.Manifest, identity, request.Topology.ControlHostID, components)
+	request.Control.Environment, err = unitEnvironment(snapshot.Manifest, request.Topology.ControlHostID, components)
 	if err != nil {
 		return request, nil, err
 	}

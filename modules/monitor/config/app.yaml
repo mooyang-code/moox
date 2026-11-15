@@ -13,12 +13,6 @@ database:
   conn_max_lifetime: 1h
   conn_max_idle_time: 10m
 
-health:
-  addr: ":11409"
-
-health_auth:
-  version: "moox-health-v1"
-
 instance:
   instance_id: ""
 

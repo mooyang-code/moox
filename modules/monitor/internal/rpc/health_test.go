@@ -29,7 +29,7 @@ func TestHealthOverviewRPCV2CarriesIdentityIndependentSignalsAndStatusSince(t *t
 	require.NoError(t, err)
 	err = repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now, Hosts: []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}}, Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "web-host", Status: "enabled"}}})
 	require.NoError(t, err)
-	require.NoError(t, repos.ComponentHealth.Reconcile(t.Context(), []domain.ComponentHealthState{{HostID: "control", ComponentID: "web-host", Status: "unknown"}}, now.Add(-time.Minute)))
+	require.NoError(t, repos.ComponentHealth.Reconcile(t.Context(), []domain.ComponentHealthState{{HostID: "control", ComponentID: "web-host", Status: "down"}}, now.Add(-time.Minute)))
 	facts := &observability.Builder{Topology: repos.Topology, Now: func() time.Time { return now }}
 	service := New(repos, Options{HealthView: &healthview.Builder{Facts: facts, ComponentHealth: repos.ComponentHealth, Now: func() time.Time { return now }}})
 	rsp, err := service.GetHealthOverview(t.Context(), nil)

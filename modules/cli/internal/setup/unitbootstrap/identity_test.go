@@ -21,9 +21,7 @@ func TestBootstrapRuntimeIdentityCannotChangeAfterInitialization(t *testing.T) {
 	for _, name := range []string{"host", "control"} {
 		require.NoError(t, deployment.Mkdir(name, 0o700))
 	}
-	environment := func() map[string]string {
-		return map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": "synthetic-monitor", "MOOX_HEALTH_AUTH_SECRET_KEY": strings.Repeat("h", 32)}
-	}
+	environment := func() map[string]string { return map[string]string{} }
 	admin := environment()
 	admin["MOOX_ADMIN_JWT_SECRET_KEY"] = strings.Repeat("j", 32)
 	input := inputs{request: Request{Topology: hostbundle.Topology{ControlHostID: "control"}, Host: Unit{UnitRoot: filepath.Join(directory, "host"), Environment: map[string]map[string]string{"host-gateway": environment(), "host-agent": environment()}}, Control: Unit{UnitRoot: filepath.Join(directory, "control"), Environment: map[string]map[string]string{"admin": admin, "eventbus": environment()}}}}
@@ -33,7 +31,6 @@ func TestBootstrapRuntimeIdentityCannotChangeAfterInitialization(t *testing.T) {
 	raw, err := deployment.ReadFile("identity/runtime.json")
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), strings.Repeat("j", 32))
-	require.NotContains(t, string(raw), strings.Repeat("h", 32))
 	admin["MOOX_ADMIN_JWT_SECRET_KEY"] = strings.Repeat("k", 32)
 	require.ErrorContains(t, bindRuntimeIdentity(deployment, input), "restore original native state")
 	admin["MOOX_ADMIN_JWT_SECRET_KEY"] = strings.Repeat("j", 32)

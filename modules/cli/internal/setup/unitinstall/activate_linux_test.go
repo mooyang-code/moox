@@ -26,7 +26,7 @@ import (
 func activationCommand(t *testing.T, operation string, args ...string) (Activation, error) {
 	t.Helper()
 	output, err := exec.CommandContext(t.Context(), os.Getenv("MOOX_RUNTIME_BINARY"), append([]string{operation}, args...)...).CombinedOutput()
-	require.NotContains(t, string(output), healthEnvironment()["MOOX_HEALTH_AUTH_SECRET_KEY"])
+	require.NotContains(t, string(output), syntheticEnvironment()["MOOX_SYNTHETIC_SECRET"])
 	if err != nil {
 		return Activation{}, fmt.Errorf("installation helper: %w: %s", err, output)
 	}
@@ -70,7 +70,7 @@ func controlActivationOptions(t *testing.T) PrepareOptions {
 	options.Profile = "control"
 	options.Archive, options.SHA256 = os.Getenv("MOOX_UNIT_INSTALL_CONTROL_ARCHIVE"), os.Getenv("MOOX_UNIT_INSTALL_CONTROL_SHA256")
 	options.Components = []string{"web-host"}
-	options.Environment = map[string]map[string]string{"web-host": healthEnvironment()}
+	options.Environment = map[string]map[string]string{"web-host": syntheticEnvironment()}
 	options.Environment["web-host"]["MOOX_WEB_HOST_ADDR"] = "127.0.0.1:0"
 	options.Overrides = nil
 	return options

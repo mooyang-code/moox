@@ -25,9 +25,7 @@ components:
       - 11002
       - 11003
     health:
-      kind: readyz
       port: 11012
-      ready_body: '"ready":true'
     doctor:
       role: host-gateway
       description: 按主机提供签名校验与本机 tRPC 转发
@@ -58,9 +56,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 11425
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.hostagent.HostAgentMgr
         port: 11426
@@ -108,10 +104,7 @@ components:
     ports:
       - 9527
     health:
-      kind: readyz
       port: 19528
-      loopback: true
-      ready_body: '"ready":true'
     doctor:
       role: console-proxy
       description: 内嵌 Caddy 的控制台 HTTPS 代理
@@ -146,10 +139,7 @@ components:
     ports:
       - 9528
     health:
-      kind: readyz
       port: 19527
-      loopback: true
-      ready_body: '"ready":true'
     doctor:
       role: web-host
       description: Embedded MooX administration web host
@@ -177,9 +167,7 @@ components:
     ports:
       - 11000
     health:
-      kind: readyz
       port: 11010
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.infra.Auth
         port: 11100
@@ -362,9 +350,7 @@ components:
     ports:
       - 4222
     health:
-      kind: readyz
       port: 11419
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.eventbus.EventBusMgr
         port: 11420
@@ -410,9 +396,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 11409
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.monitor.MonitorMgr
         port: 11410
@@ -477,9 +461,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 11412
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.collector.CollectMgr
         port: 11402
@@ -641,9 +623,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 11451
-      ready_body: '"ready":true'
     services:
       # 拉取与补采的本地执行端，处理代码与 SCF 函数相同；补采分块单次调用最长 90 秒。
       - path: trpc.moox.collector.MarketFetchExecutor
@@ -686,9 +666,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 11414
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.factor.FactorMgr
         port: 11403
@@ -816,9 +794,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 11416
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.archive.ArchiveMgr
         port: 11406
@@ -916,9 +892,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 11431
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.strategy.StrategyMgr
         port: 11430
@@ -1001,9 +975,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 20210
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.storage.Metadata
         port: 20100
@@ -1185,9 +1157,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 20211
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.storage.DataView
         port: 20103
@@ -1244,9 +1214,7 @@ components:
     ports:
       - 11004
     health:
-      kind: readyz
       port: 11014
-      ready_body: '"ready":true'
     doctor:
       role: access
       description: 外部签名 tRPC 接入与重新签名转发
@@ -1276,9 +1244,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 11441
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.egress.Proxy
         port: 11440
@@ -1316,9 +1282,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 11210
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.trade.TradeConsoleService
         port: 11200
@@ -1448,9 +1412,7 @@ components:
     replicas: single
     protected: false
     health:
-      kind: readyz
       port: 11461
-      ready_body: '"ready":true'
     services:
       - path: trpc.moox.callbackdispatcher.CallbackDispatcherService
         port: 11460
@@ -1513,9 +1475,7 @@ components:
     protected: false
     external_program: true
     health:
-      kind: readyz
       port: 11417
-      ready_body: '"ready":true'
     services:
       # 回放“因子现算”：策略服务逐步调用，引擎按因子机本地快照现算。单步响应由引擎控制在 3 MiB 以内，包体上限用默认值。
       # 本地写入（导入）的一批默认一万行，40 个数值列按 protobuf 编码实测约 3.67 MB，离默认上限 4 MiB（4.19 MB）不远；
@@ -1587,9 +1547,7 @@ components:
     protected: false
     external_program: true
     health:
-      kind: readyz
       port: 11418
-      ready_body: '"ready":true'
     # 数据端口只听 127.0.0.1：分区副本下载与最新数据预览，只给控制台经 Admin 使用（只出站主机上经 control 中转）。
     relay_http:
       port: 11428

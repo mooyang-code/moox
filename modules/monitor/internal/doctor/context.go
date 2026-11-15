@@ -183,55 +183,109 @@ func (b Builder) loadDeployments(ctx context.Context) (deployment.Snapshot, erro
 	return b.Deployments.Snapshot(ctx)
 }
 
-// addHealth 按各组件最近一次上报里的就绪判断生成健康观察项（组件健康只看上报，设计 3.8）：就绪为 OK，未就绪为 DOWN，
-// 上报里没有就绪判断为 UNKNOWN；上报超过两个间隔为过期；没有上报时记为缺失。主机快照与代报的组件不经 packages/report，不在这里判断。
+// addHealth 按各组件的上报生成健康观察项（组件健康只看上报，设计 3.8），来源跟目录里的 doctor.transport 一致：
+//   - reporter：组件自己的上报，按主机加组件名匹配；
+//   - delegated：管理端代报（因子引擎、归档 worker），代报行不带主机，按组件名匹配；
+//   - host_snapshot：host-agent 的主机快照，按主机匹配，快照新鲜为 OK。
+//
+// 上报里的就绪判断：就绪为 OK，未就绪为 DOWN，没有就绪判断为 UNKNOWN；上报超过两个间隔为过期；没有上报时记为缺失。
 func (b Builder) addHealth(ctx context.Context, components []doctor.Component, now time.Time, out *Context) error {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil
-	}
 	componentByService := componentMap(components)
 	names := make([]string, 0, len(components))
+	snapshots := false
 	for _, component := range components {
-		if component.HealthPath != "" && component.Transport == doctor.TransportReporter {
+		switch component.Transport {
+		case doctor.TransportReporter, doctor.TransportDelegated:
 			names = append(names, component.ServiceName)
+		case doctor.TransportHostSnapshot:
+			snapshots = true
 		}
-	}
-	services, err := b.Metrics.Catalog().ListServicesForAt(ctx, names, "", MaxObservations, now)
-	if err != nil {
-		return err
 	}
 	latest := map[string]monmetrics.MetricService{}
-	for _, service := range services {
-		key := service.ServiceName + "\x00" + service.NodeID
-		if current, ok := latest[key]; !ok || service.LastSeenAt.After(current.LastSeenAt) {
-			latest[key] = service
+	if b.Metrics != nil && b.Metrics.Catalog() != nil && len(names) > 0 {
+		services, err := b.Metrics.Catalog().ListServicesForAt(ctx, names, "", MaxObservations, now)
+		if err != nil {
+			return err
 		}
+		for _, service := range services {
+			key := service.ServiceName + "\x00" + service.NodeID
+			if current, ok := latest[key]; !ok || service.LastSeenAt.After(current.LastSeenAt) {
+				latest[key] = service
+			}
+		}
+	}
+	var agents []hostmetrics.AgentView
+	var agentsErr error
+	if snapshots && b.Hosts != nil {
+		agents, agentsErr = b.Hosts.ListAgentsAt(ctx, now)
 	}
 	for _, expected := range out.ExpectedComponents {
 		component := componentByService[expected.ServiceName]
-		if !expected.Expected || component.HealthPath == "" || component.Transport != doctor.TransportReporter {
+		if !expected.Expected {
 			continue
 		}
-		row, ok := latest[expected.ServiceName+"\x00"+expected.NodeID]
-		if !ok {
-			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health observation is missing"})
-			continue
+		missing := Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health observation is missing"}
+		switch component.Transport {
+		case doctor.TransportHostSnapshot:
+			if b.Hosts == nil || agentsErr != nil {
+				missing.Status, missing.Summary = "UNKNOWN", "host snapshots are unavailable"
+				out.MissingObservations = append(out.MissingObservations, missing)
+				continue
+			}
+			agent, ok := latestAgent(agents, expected.NodeID)
+			if !ok {
+				out.MissingObservations = append(out.MissingObservations, missing)
+				continue
+			}
+			seen := parseTimestamp(agent.LastSeenAt)
+			summary := "host snapshot is fresh"
+			if !agent.Reachable {
+				summary = "host snapshot is stale"
+			}
+			out.HealthObservations = append(out.HealthObservations, Observation{
+				Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, InstanceID: agent.AgentID,
+				NodeID: expected.NodeID, BootID: agent.BootID, Status: "OK", ObservedAt: seen, Stale: !agent.Reachable,
+				AgeSeconds: observationAge(now, seen), Summary: summary,
+			})
+		case doctor.TransportReporter, doctor.TransportDelegated:
+			node := expected.NodeID
+			if component.Transport == doctor.TransportDelegated {
+				node = ""
+			}
+			row, ok := latest[expected.ServiceName+"\x00"+node]
+			if !ok {
+				out.MissingObservations = append(out.MissingObservations, missing)
+				continue
+			}
+			status, summary := "UNKNOWN", "reporter carries no readiness"
+			switch row.Readiness {
+			case monmetrics.ReadinessReady:
+				status, summary = "OK", "reported ready"
+			case monmetrics.ReadinessNotReady:
+				status, summary = "DOWN", "reported not ready: "+row.NotReadyReason
+			}
+			age := observationAge(now, row.LastSeenAt)
+			out.HealthObservations = append(out.HealthObservations, Observation{
+				Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, InstanceID: row.InstanceID,
+				NodeID: expected.NodeID, BootID: row.BootID, Status: status, ObservedAt: row.LastSeenAt, Stale: age > 60,
+				AgeSeconds: age, IntervalSeconds: 30, Summary: summary,
+			})
 		}
-		status, summary := "UNKNOWN", "reporter carries no readiness"
-		switch row.Readiness {
-		case monmetrics.ReadinessReady:
-			status, summary = "OK", "reported ready"
-		case monmetrics.ReadinessNotReady:
-			status, summary = "DOWN", "reported not ready: "+row.NotReadyReason
-		}
-		age := observationAge(now, row.LastSeenAt)
-		out.HealthObservations = append(out.HealthObservations, Observation{
-			Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, InstanceID: row.InstanceID,
-			NodeID: row.NodeID, BootID: row.BootID, Status: status, ObservedAt: row.LastSeenAt, Stale: age > 60,
-			AgeSeconds: age, IntervalSeconds: 30, Summary: summary,
-		})
 	}
 	return nil
+}
+
+// latestAgent 取这台主机最近一次主机快照。
+func latestAgent(agents []hostmetrics.AgentView, hostID string) (hostmetrics.AgentView, bool) {
+	var found hostmetrics.AgentView
+	ok := false
+	for _, agent := range agents {
+		if agent.HostID != hostID || (ok && parseTimestamp(agent.LastSeenAt).Before(parseTimestamp(found.LastSeenAt))) {
+			continue
+		}
+		found, ok = agent, true
+	}
+	return found, ok
 }
 
 func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, nodeID string, healthCheckIDs []string, now time.Time, out *Context) error {

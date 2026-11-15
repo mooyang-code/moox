@@ -48,9 +48,7 @@ type coverageComponent struct {
 		Dependencies []string `yaml:"dependencies"`
 	} `yaml:"doctor"`
 	Health struct {
-		Kind     string `yaml:"kind"`
-		Port     int    `yaml:"port"`
-		Loopback *bool  `yaml:"loopback"`
+		Port int `yaml:"port"`
 	} `yaml:"health"`
 }
 
@@ -79,15 +77,15 @@ func TestMonitorCoverageComponentCatalog(t *testing.T) {
 				t.Errorf("%s: unknown component dependency %q", name, dependency)
 			}
 		}
-		if !contains([]string{"readyz", "https", "none"}, component.Health.Kind) {
-			t.Errorf("%s: unsupported health kind %q", name, component.Health.Kind)
+		if component.Health.Port <= 0 {
+			t.Errorf("%s: missing health port", name)
 		}
 	}
 	proxy, ok := components["console-proxy"]
 	if !ok {
 		t.Fatal("console-proxy component is missing")
 	}
-	if proxy.Doctor.Transport != "reporter" || proxy.Health.Kind != "readyz" || proxy.Health.Port != 19528 || proxy.Health.Loopback == nil || !*proxy.Health.Loopback {
+	if proxy.Doctor.Transport != "reporter" || proxy.Health.Port != 19528 {
 		t.Error("console-proxy diagnostics contract changed")
 	}
 }

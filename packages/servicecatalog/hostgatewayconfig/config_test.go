@@ -48,6 +48,7 @@ func TestConfigRejectsInvalidIdentityListenersAndControlEndpoint(t *testing.T) {
 		func(c *Config) { c.Control.KeyID = "" },
 		func(c *Config) { c.Control.KeyID = "key\x01" },
 		func(c *Config) { c.Server.LocalAddr = "0.0.0.0:11002" },
+		func(c *Config) { c.Server.HealthAddr = "0.0.0.0:11012" },
 		func(c *Config) { c.Server.RemoteAddr = "localhost:11003" },
 		func(c *Config) { c.Server.HealthAddr = c.Server.RemoteAddr },
 		func(c *Config) { c.Control.Target = "https://control:11003" },

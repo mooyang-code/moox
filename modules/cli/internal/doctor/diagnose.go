@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,7 +22,9 @@ type DiagnoseOptions struct {
 	CheckIDs []string
 	Client   ContextClient
 	// Systemd 检查 systemd_user 托管的组件（外部程序）的服务状态；为空时这类组件的托管状态记为无法判断。
-	Systemd      SystemdChecker
+	Systemd SystemdChecker
+	// Probe 在上报缺失或过期时经 SSH 在目标机上请求组件的本机 /readyz；为空时这种情况只能记为无法判断。
+	Probe        HealthProbe
 	HealthChecks []report.ModuleHealthCheck
 	Now          func() time.Time
 }
@@ -164,7 +167,7 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 			}
 			return checkResult(spec.ID, core.StatusWarn, "the component report to Monitor carries no readiness", nil, "restart_service_manually")
 		}
-		return checkResult(spec.ID, core.StatusUnknown, "the component report to Monitor is missing or stale", nil, "run_bootstrap")
+		return r.probeHealth(ctx, spec.ID, component)
 	}
 	if strings.HasPrefix(spec.ID, "service.supervisor:") {
 		component := r.expectedFromID(spec.ID)
@@ -371,6 +374,31 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		return checkResult(spec.ID, status, "disk forecasts evaluated with the seven-day median policy", nil, "free_disk_space")
 	}
 	return checkResult(spec.ID, core.StatusFail, "unknown diagnose check", nil)
+}
+
+// probeHealth 在组件给 Monitor 的上报缺失或过期时，经 SSH 在目标机上请求它的本机 /readyz：
+// 应答就绪算通过（上报链路的问题由 reporter_coverage 单独报），应答未就绪或连不上端口算失败，SSH 连不上记为无法判断。
+func (r *diagnoseRunner) probeHealth(ctx context.Context, id string, component *monitorpb.DoctorExpectedComponent) core.CheckResult {
+	const stale = "the component report to Monitor is missing or stale"
+	port := 0
+	for _, candidate := range r.manifest.Components {
+		if candidate.ComponentID == component.GetComponentId() {
+			port = candidate.HealthPort
+		}
+	}
+	if r.options.Probe == nil || port == 0 {
+		return checkResult(id, core.StatusUnknown, stale, nil, "run_bootstrap")
+	}
+	probe, err := r.options.Probe(ctx, component.GetNodeId(), port, "/readyz")
+	if errors.Is(err, ErrNodeUnreachable) {
+		return checkResult(id, core.StatusUnknown, stale+"; the node cannot be reached over SSH", err, "run_bootstrap")
+	}
+	if err != nil {
+		return checkResult(id, core.StatusFail, stale+"; the local /readyz probe over SSH failed", err, "restart_service_manually")
+	}
+	result := checkResult(id, core.StatusPass, stale+", but the local /readyz probe over SSH answered ready", nil)
+	result.Observations = []core.Observation{{Source: "ssh_health", ObservedAt: probe.ObservedAt, Summary: "local /readyz over SSH", Digest: probe.Digest}}
+	return result
 }
 
 func recentMetricError(observations []*monitorpb.DoctorObservation, componentID string, now time.Time) bool {

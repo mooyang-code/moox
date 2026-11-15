@@ -87,7 +87,8 @@ func saveJSON(root *os.Root, name string, value any, replace bool) error {
 }
 
 func runtimeBinding(identity runtimeIdentity) string {
-	raw, _ := json.Marshal(map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": identity.HealthAccessKey, "MOOX_HEALTH_AUTH_SECRET_KEY": identity.HealthSecret, "MOOX_ADMIN_JWT_SECRET_KEY": identity.JWTSecret})
+	// 与目标机上 unitbootstrap.bindRuntimeIdentity 的键集合一致。
+	raw, _ := json.Marshal(map[string]string{"MOOX_ADMIN_JWT_SECRET_KEY": identity.JWTSecret})
 	return "sha256:" + sha(raw)
 }
 
@@ -167,7 +168,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	if err != nil {
 		return result, err
 	}
-	environment, err := unitEnvironment(manifest, identity, options.HostID, components)
+	environment, err := unitEnvironment(manifest, options.HostID, components)
 	if err != nil {
 		return result, err
 	}
@@ -398,7 +399,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 			return result, errors.New("config_changed")
 		}
 		result, err = deployExternal(ctx, externalInstall{
-			options: options, manifest: manifest, host: host, control: control, identity: identity, operation: operation,
+			options: options, manifest: manifest, host: host, control: control, operation: operation,
 			localClients: localClients, target: target, source: source,
 			disabled:       !registered.HostEnabled || !registered.DeploymentEnabled,
 			objectStoreEnv: objectStoreEnv,

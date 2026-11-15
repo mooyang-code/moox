@@ -291,10 +291,7 @@ func main() {
 	}
 
 	cfg := loadGatewayConfig()
-	healthHandler, err := healthz.WrapFromEnv(newHealthHandler())
-	if err != nil {
-		log.Fatalf("健康检查鉴权配置无效: %v", err)
-	}
+	healthHandler := newHealthHandler()
 
 	// Caddy owns the public listeners; both web-host listeners stay on loopback.
 	log.Printf("静态服务器启动在 http://%s", cfg.ListenAddr)

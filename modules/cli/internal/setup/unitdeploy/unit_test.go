@@ -36,9 +36,8 @@ func TestBusinessUnitSelectionAndExportRolesFollowActualDeployments(t *testing.T
 // Storage 不再有自己的口令：两个角色只拿到数据目录、角色与本机 RPC 地址。
 func TestStorageEnvironmentCarriesRoleAndLoopbackTargets(t *testing.T) {
 	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "192.0.2.1"}, "primary": {Address: "192.0.2.2"}, "view": {Address: "192.0.2.3"}}, Deployments: map[string][]string{"control": {"admin"}, "primary": {"storage-primary", "storage-view"}}}
-	identity := runtimeIdentity{HealthAccessKey: "a", HealthSecret: "s"}
 	components := []string{"storage-primary", "storage-view", "access"}
-	environment, err := unitEnvironment(manifest, identity, "primary", components)
+	environment, err := unitEnvironment(manifest, "primary", components)
 	require.NoError(t, err)
 	require.Equal(t, "ip://127.0.0.1:20102", environment["storage-view"]["MOOX_STORAGE_PRIMARY_TARGET"])
 	require.Equal(t, "ip://127.0.0.1:20100", environment["storage-view"]["MOOX_STORAGE_METADATA_TARGET"])
@@ -47,7 +46,7 @@ func TestStorageEnvironmentCarriesRoleAndLoopbackTargets(t *testing.T) {
 	require.Equal(t, "view", environment["storage-view"]["MOOX_STORAGE_ROLE"])
 	manifest.Deployments["primary"] = []string{"storage-primary"}
 	manifest.Deployments["view"] = []string{"storage-view"}
-	_, err = unitEnvironment(manifest, identity, "view", []string{"storage-view"})
+	_, err = unitEnvironment(manifest, "view", []string{"storage-view"})
 	require.Error(t, err, "loopback RPC templates cannot reach a different host")
 }
 
@@ -57,8 +56,7 @@ func TestCollectorStreamEnvironmentCarriesSpace(t *testing.T) {
 	components, err := unitComponents(manifest, "overseas", "collector-stream")
 	require.NoError(t, err)
 	require.Equal(t, []string{"collector-stream"}, components)
-	identity := runtimeIdentity{HealthAccessKey: "a", HealthSecret: "s"}
-	environment, err := unitEnvironment(manifest, identity, "overseas", components)
+	environment, err := unitEnvironment(manifest, "overseas", components)
 	require.NoError(t, err)
 	require.Equal(t, "crypto", environment["collector-stream"]["MOOX_SPACE_ID"])
 }
@@ -68,13 +66,13 @@ func TestCollectorStreamEnvironmentCarriesSpace(t *testing.T) {
 func TestUnitEnvironmentCarriesServiceLogCLS(t *testing.T) {
 	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"overseas": {Address: "192.0.2.9"}}}
 	components := []string{"trade", "access"}
-	disabled, err := unitEnvironment(manifest, runtimeIdentity{}, "overseas", components)
+	disabled, err := unitEnvironment(manifest, "overseas", components)
 	require.NoError(t, err)
 	for key := range disabled["trade"] {
 		require.NotContains(t, key, "CLS")
 	}
 	manifest.Logging.CLS = setupconfig.LoggingCLS{Enabled: true, Endpoint: "ap-guangzhou.cls.tencentcs.com", TopicID: "topic-1", WriterSecretID: "AKIDwriter", WriterSecretKey: "writer-key", MinLevel: "warn"}
-	enabled, err := unitEnvironment(manifest, runtimeIdentity{}, "overseas", components)
+	enabled, err := unitEnvironment(manifest, "overseas", components)
 	require.NoError(t, err)
 	for key := range enabled["access"] {
 		require.NotContains(t, key, "CLS")
@@ -98,7 +96,7 @@ func TestUnitEnvironmentCarriesServiceLogCLS(t *testing.T) {
 func TestUnitEnvironmentCarriesLogRetentionForCollector(t *testing.T) {
 	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "192.0.2.1"}}}
 	manifest.Logging.RetentionDays = 7
-	environment, err := unitEnvironment(manifest, runtimeIdentity{}, "control", []string{"collector", "web-host"})
+	environment, err := unitEnvironment(manifest, "control", []string{"collector", "web-host"})
 	require.NoError(t, err)
 	require.Equal(t, "7", environment["collector"]["MOOX_CLS_RETENTION_DAYS"])
 	require.NotContains(t, environment["web-host"], "MOOX_CLS_RETENTION_DAYS")

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -55,11 +54,10 @@ var serviceLogComponents = []string{
 	"storage-primary", "storage-view", "trade", "collector-stream", "callback-dispatcher",
 }
 
-func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, hostID string, components []string) (map[string]map[string]string, error) {
-	health := map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": identity.HealthAccessKey, "MOOX_HEALTH_AUTH_SECRET_KEY": identity.HealthSecret}
+func unitEnvironment(manifest setupconfig.Manifest, hostID string, components []string) (map[string]map[string]string, error) {
 	environment := make(map[string]map[string]string, len(components))
 	for _, id := range components {
-		values := maps.Clone(health)
+		values := map[string]string{}
 		environment[id] = values
 		// 服务日志上报 CLS：只给接入了日志上报的组件（main 引入了 logcls 的那些）写入，别的组件不拿这把密钥。
 		// 变量名用 MOOX_LOG_CLS_ 前缀，和云函数、Collector 开通采集日志用的 MOOX_CLS_* 分开（那一组是采集日志的主题和另一把密钥）。

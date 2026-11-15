@@ -63,7 +63,7 @@ func Default(hostID, controlHostID, controlAddress, keyID string) Config {
 	}
 	return Config{
 		Host:    Host{ID: hostID},
-		Server:  Server{RemoteAddr: "0.0.0.0:11003", LocalAddr: "127.0.0.1:11002", HealthAddr: "0.0.0.0:11012"},
+		Server:  Server{RemoteAddr: "0.0.0.0:11003", LocalAddr: "127.0.0.1:11002", HealthAddr: "127.0.0.1:11012"},
 		TLS:     TLS{CertificateFile: "../../certs/host-gateway/server.crt", KeyFile: "../../certs/host-gateway/server.key", CAFile: "../../certs/moox-ca.crt"},
 		Control: Control{HostID: controlHostID, Target: target, Caller: "host-gateway@" + hostID, KeyID: keyID, KeyFile: "../../secrets/caller-host-gateway.key"},
 		Store:   Store{Path: "../../data/host-gateway"},
@@ -94,8 +94,9 @@ func (c Config) Validate() error {
 		if err != nil {
 			return fmt.Errorf("server.%s: %w", listener.name, err)
 		}
-		if listener.name == "local_addr" && !net.ParseIP(host).IsLoopback() {
-			return errors.New("server.local_addr must bind a loopback IP")
+		// 本机入口和健康端口都只听回环地址：健康端口不验签，只给同机进程与经 SSH 的诊断用。
+		if listener.name != "remote_addr" && !net.ParseIP(host).IsLoopback() {
+			return fmt.Errorf("server.%s must bind a loopback IP", listener.name)
 		}
 		if ports[port] {
 			return errors.New("host gateway listener ports must be distinct")

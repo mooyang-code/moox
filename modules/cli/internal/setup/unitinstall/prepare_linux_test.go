@@ -48,11 +48,12 @@ func realPrepareOptions(t *testing.T) PrepareOptions {
 	require.NoError(t, os.Mkdir(unit, 0o700))
 	eventbus := filepath.Join(root, "host-agent-eventbus.yaml")
 	require.NoError(t, os.WriteFile(eventbus, []byte("version: 1\nurls: [nats://127.0.0.1:4222]\nusername: host-agent\neventbus_token: synthetic-test-token\nca_file: ''\n"), 0o600))
-	return PrepareOptions{Archive: os.Getenv("MOOX_UNIT_INSTALL_HOST_ARCHIVE"), SHA256: os.Getenv("MOOX_UNIT_INSTALL_HOST_SHA256"), Profile: "host", DeploymentRoot: deployment, UnitRoot: unit, ReleaseID: "first", MaterialDirectory: directory, MaterialOptions: selected, Environment: map[string]map[string]string{"host-gateway": healthEnvironment(), "host-agent": healthEnvironment()}, Overrides: map[string]string{"host-agent/config/eventbus.yaml": eventbus}}
+	return PrepareOptions{Archive: os.Getenv("MOOX_UNIT_INSTALL_HOST_ARCHIVE"), SHA256: os.Getenv("MOOX_UNIT_INSTALL_HOST_SHA256"), Profile: "host", DeploymentRoot: deployment, UnitRoot: unit, ReleaseID: "first", MaterialDirectory: directory, MaterialOptions: selected, Environment: map[string]map[string]string{"host-gateway": syntheticEnvironment(), "host-agent": syntheticEnvironment()}, Overrides: map[string]string{"host-agent/config/eventbus.yaml": eventbus}}
 }
 
-func healthEnvironment() map[string]string {
-	return map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": "synthetic-monitor", "MOOX_HEALTH_AUTH_SECRET_KEY": "synthetic-health-secret-at-least-thirty-two-bytes"}
+// syntheticEnvironment 是组件的环境文件内容；MOOX_SYNTHETIC_SECRET 代表其中的秘密，测试核对它不出现在输出里。
+func syntheticEnvironment() map[string]string {
+	return map[string]string{"MOOX_SYNTHETIC_SECRET": "synthetic-secret-at-least-thirty-two-bytes"}
 }
 
 func prepareWithHelper(t *testing.T, options PrepareOptions) (Prepared, error) {
@@ -67,7 +68,7 @@ func prepareWithHelper(t *testing.T, options PrepareOptions) (Prepared, error) {
 		// real-software gate failure identifies the violated contract.
 		return Prepared{}, fmt.Errorf("preparation helper: %w: %s", err, output)
 	}
-	require.NotContains(t, string(output), healthEnvironment()["MOOX_HEALTH_AUTH_SECRET_KEY"])
+	require.NotContains(t, string(output), syntheticEnvironment()["MOOX_SYNTHETIC_SECRET"])
 	require.NotContains(t, string(output), "PRIVATE KEY")
 	var prepared Prepared
 	require.NoError(t, json.Unmarshal(output, &prepared))
@@ -158,7 +159,7 @@ func TestUnitPreparationLinuxReceiptRejectsChangedFilesAndEscapingHostView(t *te
 			}
 			_, err = ReadPrepared(t.Context(), host.Directory)
 			require.Error(t, err)
-			require.NotContains(t, err.Error(), healthEnvironment()["MOOX_HEALTH_AUTH_SECRET_KEY"])
+			require.NotContains(t, err.Error(), syntheticEnvironment()["MOOX_SYNTHETIC_SECRET"])
 			require.NoError(t, os.WriteFile(config, original, 0o600))
 			require.NoError(t, os.Chmod(config, 0o600))
 			require.NoError(t, os.WriteFile(receipt, saved, 0o600))
@@ -200,7 +201,7 @@ func TestUnitPreparationLinuxBusinessUsesHostViewAndOnlyAccessIdentities(t *test
 	business.Profile = "access"
 	business.Archive = os.Getenv("MOOX_UNIT_INSTALL_ACCESS_ARCHIVE")
 	business.SHA256 = os.Getenv("MOOX_UNIT_INSTALL_ACCESS_SHA256")
-	business.Environment = map[string]map[string]string{"access": healthEnvironment()}
+	business.Environment = map[string]map[string]string{"access": syntheticEnvironment()}
 	business.Overrides = nil
 	prepared, err := prepareWithHelper(t, business)
 	require.NoError(t, err)
@@ -257,10 +258,8 @@ func TestUnitPreparationLinuxFailureDoesNotPublishOrReplaceCurrent(t *testing.T)
 	_, err = prepareWithHelper(t, options)
 	require.Error(t, err)
 	options.ReleaseID = "invalid"
-	delete(options.Environment["host-agent"], "MOOX_HEALTH_AUTH_SECRET_KEY")
 	_, err = prepareWithHelper(t, options)
 	require.Error(t, err)
-	options.Environment["host-agent"] = healthEnvironment()
 	options.Overrides["host-gateway/config/app.yaml"] = options.Overrides["host-agent/config/eventbus.yaml"]
 	_, err = prepareWithHelper(t, options)
 	require.Error(t, err)

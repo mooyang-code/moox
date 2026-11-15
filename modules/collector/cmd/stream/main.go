@@ -69,10 +69,7 @@ func run(ctx context.Context, cfg *streamapp.Config) error {
 		return err
 	}
 	state := healthz.NewState("collector-stream", cfg.InstanceID, Version, GitCommit)
-	health, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))
-	if err != nil {
-		return err
-	}
+	health := healthz.StandardMux(state.Snapshot, promhttp.Handler())
 	healthService := server.Service("trpc.moox.collector.stream.Health")
 	if healthService == nil {
 		return errors.New("trpc_go.yaml 缺少 trpc.moox.collector.stream.Health 服务")

@@ -15,7 +15,6 @@ type Config struct {
 	Version        int    `yaml:"version"`
 	IdentityPath   string `yaml:"identity_path"`
 	EventBusConfig string `yaml:"eventbus_config"`
-	HealthAddr     string `yaml:"health_addr"`
 	HostName       string `yaml:"host_name"`
 	// GatewayClient 与 HostPolicyPath 由部署渲染；两者都设置时 HostAgent 定期从 Monitor 拉取主机策略，
 	// 写入 HostPolicyPath（<部署根>/run/host-policy.json）。独立运行的 HostAgent 留空，不拉取。
@@ -36,7 +35,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read hostagent config: %w", err)
 	}
-	cfg := &Config{Version: 1, IdentityPath: "~/.local/state/moox/hostagent/identity.yaml", EventBusConfig: "~/.config/moox/hostagent/eventbus.yaml", HealthAddr: "127.0.0.1:11425"}
+	cfg := &Config{Version: 1, IdentityPath: "~/.local/state/moox/hostagent/identity.yaml", EventBusConfig: "~/.config/moox/hostagent/eventbus.yaml"}
 	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
@@ -47,9 +46,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.IdentityPath == "" || cfg.EventBusConfig == "" {
 		return nil, fmt.Errorf("identity_path and eventbus_config are required")
-	}
-	if healthAddr := strings.TrimSpace(os.Getenv("MOOX_HOST_AGENT_HEALTH_ADDR")); healthAddr != "" {
-		cfg.HealthAddr = healthAddr
 	}
 	cfg.IdentityPath, cfg.EventBusConfig = Expand(cfg.IdentityPath), Expand(cfg.EventBusConfig)
 	cfg.HostName = strings.TrimSpace(cfg.HostName)

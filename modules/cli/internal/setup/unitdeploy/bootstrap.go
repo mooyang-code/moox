@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -52,13 +51,11 @@ type BootstrapResult struct {
 }
 
 type runtimeIdentity struct {
-	Version         int    `json:"version"`
-	HostID          string `json:"host_id"`
-	Address         string `json:"address"`
-	DeploymentRoot  string `json:"deployment_root"`
-	HealthAccessKey string `json:"health_access_key"`
-	HealthSecret    string `json:"health_secret"`
-	JWTSecret       string `json:"jwt_secret"`
+	Version        int    `json:"version"`
+	HostID         string `json:"host_id"`
+	Address        string `json:"address"`
+	DeploymentRoot string `json:"deployment_root"`
+	JWTSecret      string `json:"jwt_secret"`
 }
 
 func (runtimeIdentity) String() string     { return "MooXRuntimeIdentity{private inputs omitted}" }
@@ -85,7 +82,7 @@ func privateRoot(directory string) (*os.Root, error) {
 func loadIdentity(root *os.Root, host setupconfig.Host, deployment string) (runtimeIdentity, error) {
 	identity := runtimeIdentity{Version: 1, HostID: host.Name, Address: host.Address, DeploymentRoot: deployment}
 	if _, err := root.Lstat("runtime-identity.json"); os.IsNotExist(err) {
-		identity.HealthAccessKey, identity.HealthSecret, identity.JWTSecret = "monitor-"+rand.Text(), rand.Text()+rand.Text(), rand.Text()+rand.Text()
+		identity.JWTSecret = rand.Text() + rand.Text()
 		raw, err := json.Marshal(identity)
 		if err != nil {
 			return identity, err
@@ -103,7 +100,7 @@ func loadIdentity(root *os.Root, host setupconfig.Host, deployment string) (runt
 	var stored runtimeIdentity
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&stored) != nil || decoder.Decode(new(any)) != io.EOF || stored.Version != 1 || stored.HostID != host.Name || stored.Address != host.Address || stored.DeploymentRoot != deployment || len(stored.HealthAccessKey) < 16 || len(stored.HealthSecret) < 32 || len(stored.JWTSecret) < 32 {
+	if decoder.Decode(&stored) != nil || decoder.Decode(new(any)) != io.EOF || stored.Version != 1 || stored.HostID != host.Name || stored.Address != host.Address || stored.DeploymentRoot != deployment || len(stored.JWTSecret) < 32 {
 		return identity, errors.New("private runtime identity does not match this deployment")
 	}
 	return stored, nil
@@ -125,11 +122,10 @@ func adminRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host,
 		}
 		topology.Hosts = append(topology.Hosts, entry)
 	}
-	health := map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": identity.HealthAccessKey, "MOOX_HEALTH_AUTH_SECRET_KEY": identity.HealthSecret}
 	unit := func(result unitpackage.Result, name string, components []string) unitbootstrap.Unit {
 		env := map[string]map[string]string{}
 		for _, id := range components {
-			env[id] = maps.Clone(health)
+			env[id] = map[string]string{}
 		}
 		return unitbootstrap.Unit{Archive: artifactPath(manifest.Paths.DeployRoot, result), SHA256: result.SHA256, UnitRoot: path.Join(manifest.Paths.DeployRoot, name), Environment: env, Overrides: map[string]string{}, Components: components}
 	}

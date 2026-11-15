@@ -75,10 +75,11 @@ func New(path string, fetch Fetcher) (*Syncer, error) {
 }
 
 // SyncOnce 拉取一次；内容变化时版本号加一并原子写入，内容相同不重写。失败时旧文件保持不变。
+// 交给直推判断的只是“能不能从 Monitor 拿到策略”：本机写缓存失败时 Monitor 是可达的，不算不可达。
 func (s *Syncer) SyncOnce(ctx context.Context) (Result, error) {
-	result, startedAt, err := s.syncOnce(ctx)
+	result, startedAt, fetchErr, err := s.syncOnce(ctx)
 	if s.watch != nil {
-		s.watch.Observe(ctx, startedAt, err)
+		s.watch.Observe(ctx, startedAt, fetchErr)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -94,17 +95,19 @@ func (s *Syncer) SyncOnce(ctx context.Context) (Result, error) {
 }
 
 // syncOnce 拉取并写入一次；startedAt 是 Monitor 在响应里给出的进程启动时间（拉取失败时为空）。
-func (s *Syncer) syncOnce(ctx context.Context) (Result, string, error) {
+// fetchErr 只在没能从 Monitor 拿到策略时非空，err 还包括本机写缓存的失败。
+func (s *Syncer) syncOnce(ctx context.Context) (result Result, startedAt string, fetchErr, err error) {
 	rsp, err := s.fetch(ctx)
 	if err != nil {
-		return "", "", fmt.Errorf("fetch host policy: %w", err)
+		err = fmt.Errorf("fetch host policy: %w", err)
+		return "", "", err, err
 	}
 	if code := rsp.GetRetInfo().GetCode(); code != commonpb.ErrorCode_SUCCESS {
-		return "", "", fmt.Errorf("fetch host policy: %s %s", code, rsp.GetRetInfo().GetMsg())
+		err = fmt.Errorf("fetch host policy: %s %s", code, rsp.GetRetInfo().GetMsg())
+		return "", "", err, err
 	}
-	startedAt := rsp.GetMonitorStartedAt()
-	result, err := s.write(rsp)
-	return result, startedAt, err
+	result, err = s.write(rsp)
+	return result, rsp.GetMonitorStartedAt(), nil, err
 }
 
 // write 校验并写入主机策略；内容相同不重写。

@@ -62,14 +62,13 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 }
 
 func TestControlEnvironmentCarriesNotificationAndHostPolicy(t *testing.T) {
-	identity := runtimeIdentity{HealthAccessKey: "a", HealthSecret: "s"}
 	components := []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr", "strategy"}
 	// 没配置告警推送地址也能部署 Monitor，渠道由用户稍后在管理台添加。
-	empty, err := unitEnvironment(setupconfig.Manifest{}, identity, "control", components)
+	empty, err := unitEnvironment(setupconfig.Manifest{}, "control", components)
 	require.NoError(t, err)
 	require.Empty(t, empty["monitor"]["MOOX_NOTIFICATION_WEBHOOK_URL"])
 	manifest := setupconfig.Manifest{Notification: setupconfig.Notification{ChannelType: "wecom", WebhookURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"}}
-	env, err := unitEnvironment(manifest, identity, "control", components)
+	env, err := unitEnvironment(manifest, "control", components)
 	require.NoError(t, err)
 	require.Equal(t, "wecom", env["monitor"]["MOOX_NOTIFICATION_CHANNEL_TYPE"])
 	require.Equal(t, manifest.Notification.WebhookURL, env["monitor"]["MOOX_NOTIFICATION_WEBHOOK_URL"])

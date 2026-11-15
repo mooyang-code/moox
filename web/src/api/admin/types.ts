@@ -82,7 +82,8 @@ export interface CatalogComponent {
   /** 外部程序（因子引擎、归档 worker）：由 systemd 用户服务托管，不经主机网关路由 */
   external_program?: boolean;
   ports?: number[];
-  health: { kind: string; port?: number; loopback?: boolean; ready_body?: string };
+  /** 健康端口只听本机（/healthz、/readyz、/metrics），组件健康看上报 */
+  health: { port: number };
   services?: CatalogService[];
   doctor?: Record<string, unknown>;
 }

@@ -4,12 +4,9 @@ package gatewaycontrol
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -29,7 +26,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
@@ -283,7 +279,7 @@ func startGatewayExecutable(t *testing.T, binary, framework string, cfg hostgate
 	output, err := os.OpenFile(filepath.Join(dir, "process.log"), os.O_CREATE|os.O_WRONLY, 0o600)
 	require.NoError(t, err)
 	cmd := exec.Command(binary, "--config", path, "--conf", framework)
-	cmd.Env = append(os.Environ(), "MOOX_HEALTH_AUTH_VERSION=moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY=fixture", "MOOX_HEALTH_AUTH_SECRET_KEY=synthetic-health", "MOOX_INSTANCE_ID="+cfg.Host.ID, "MOOX_NODE_ID="+cfg.Host.ID, "MOOX_BOOT_ID=synthetic-boot", "MOOX_METRICS_EVENTBUS_URL=nats://127.0.0.1:1", "MOOX_GATEWAY_ROUTE_SYNC_STALE_AFTER_SECONDS=90")
+	cmd.Env = append(os.Environ(), "MOOX_INSTANCE_ID="+cfg.Host.ID, "MOOX_NODE_ID="+cfg.Host.ID, "MOOX_BOOT_ID=synthetic-boot", "MOOX_METRICS_EVENTBUS_URL=nats://127.0.0.1:1", "MOOX_GATEWAY_ROUTE_SYNC_STALE_AFTER_SECONDS=90")
 	cmd.Stdout, cmd.Stderr = output, output
 	require.NoError(t, cmd.Start())
 	p := &gatewayExecutable{cmd: cmd, done: make(chan error, 1), log: output.Name(), host: cfg.Host.ID}
@@ -424,15 +420,8 @@ func e2eRawCall(address string, trust *tls.Config, service, method string, seria
 
 func e2eHealth(t *testing.T, address string) int {
 	t.Helper()
-	random := make([]byte, 32)
-	_, err := rand.Read(random)
-	require.NoError(t, err)
-	nonce, now := hex.EncodeToString(random), time.Now().Unix()
-	signature, err := requestauth.Sign("synthetic-health", requestauth.Material{Method: http.MethodGet, Path: "/readyz", Timestamp: now, Nonce: nonce})
-	require.NoError(t, err)
 	request, err := http.NewRequest(http.MethodGet, "http://"+address+"/readyz", nil)
 	require.NoError(t, err)
-	request.Header.Set("X-Moox-Health-Auth", fmt.Sprintf("moox-health-v1/fixture/%d/%s/%s", now, nonce, signature))
 	client := &http.Client{Timeout: time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
 	response, err := client.Do(request)
 	if err != nil {

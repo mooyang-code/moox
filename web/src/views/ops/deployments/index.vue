@@ -226,10 +226,7 @@
             <dt>端口</dt>
             <dd>{{ componentPorts(detail.row.definition).join(", ") || "无监听端口" }}</dd>
             <dt>健康端口</dt>
-            <dd>
-              {{ detail.row.definition?.health.kind
-              }}<span v-if="detail.row.definition?.health.port"> :{{ detail.row.definition.health.port }}</span>
-            </dd>
+            <dd>{{ detail.row.definition?.health.port ? `${detail.row.definition.health.port}（只听本机）` : "—" }}</dd>
             <dt>当前健康</dt>
             <dd>{{ statusLabel(detail.row.status) }} · {{ detail.row.health?.reason || "暂无上报" }}</dd>
             <dt>上报</dt>

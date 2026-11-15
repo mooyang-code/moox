@@ -62,7 +62,7 @@ func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 		t.Fatalf("components = %d", len(c.Components))
 	}
 	for _, component := range c.Components {
-		if component.Health.Kind != "readyz" || component.Health.Port != want[component.ID] {
+		if component.Health.Port != want[component.ID] {
 			t.Fatalf("incorrect health for %s", component.ID)
 		}
 		if component.Protected != slices.Contains([]string{"host-gateway", "console-proxy", "web-host", "admin"}, component.ID) {
@@ -73,7 +73,7 @@ func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 		}
 	}
 	proxy, _ := c.Component("console-proxy")
-	if proxy.Scope != ScopeControl || !proxy.Health.Loopback || !slices.Equal(proxy.Ports, []int{9527}) {
+	if proxy.Scope != ScopeControl || !slices.Equal(proxy.Ports, []int{9527}) {
 		t.Fatal("console proxy registration is incorrect")
 	}
 }
@@ -98,7 +98,6 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"invalid replicas", func(c *Catalog) { c.Components[0].Replicas = "unlimited" }},
 		{"host multi", func(c *Catalog) { c.Components[0].Replicas = Multi }},
 		{"missing health port", func(c *Catalog) { c.Components[0].Health.Port = 0 }},
-		{"invalid health kind", func(c *Catalog) { c.Components[0].Health.Kind = "http" }},
 		{"duplicate port", func(c *Catalog) { c.Components[0].Ports = append(c.Components[0].Ports, 11012) }},
 		{"unknown caller", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"typo"} }},
 		{"wildcard caller", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"*"} }},
@@ -154,11 +153,7 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"external program service reuses its health port", func(c *Catalog) {
 			componentPtr(c, "factor-engine").Services[0].Port = componentPtr(c, "factor-engine").Health.Port
 		}},
-		{"external program without a health port", func(c *Catalog) {
-			component := componentPtr(c, "archive-worker")
-			component.Health = Health{Kind: "none"}
-		}},
-		{"external program with loopback health", func(c *Catalog) { componentPtr(c, "archive-worker").Health.Loopback = true }},
+		{"external program without a health port", func(c *Catalog) { componentPtr(c, "archive-worker").Health = Health{} }},
 		{"relay_http on a regular component", func(c *Catalog) {
 			componentPtr(c, "monitor").RelayHTTP = &RelayHTTP{Port: 11998, Callers: []string{"console"}}
 		}},
@@ -452,7 +447,7 @@ func TestExternalProgramComponents(t *testing.T) {
 		if !ok || !component.ExternalProgram || component.Doctor.Supervisor != SupervisorSystemdUser || component.Doctor.Unit != "moox-"+id {
 			t.Fatalf("external program %s is not registered correctly: %+v", id, component)
 		}
-		if len(component.Ports) != 0 || component.Health.Kind != "readyz" || component.Health.Loopback {
+		if len(component.Ports) != 0 || component.Health.Port == 0 {
 			t.Fatalf("external program %s must not own extra ports", id)
 		}
 		if !c.ExternalIdentity(id) || len(c.Grants(id)) == 0 {

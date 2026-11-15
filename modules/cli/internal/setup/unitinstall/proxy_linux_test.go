@@ -46,7 +46,7 @@ func TestUnitActivationLinuxActualProxyDrainsAndPreservesCA(t *testing.T) {
 	require.NoError(t, os.WriteFile(override, []byte(config), 0o600))
 	options.Components = []string{"console-proxy", "web-host"}
 	options.Environment["web-host"]["MOOX_WEB_HOST_ADDR"] = "127.0.0.1:9528"
-	options.Environment["console-proxy"] = healthEnvironment()
+	options.Environment["console-proxy"] = syntheticEnvironment()
 	options.Overrides = map[string]string{"console-proxy/config/app.yaml": override}
 	options.ReleaseID = "empty-proxy"
 	empty, err := prepareWithHelper(t, options)

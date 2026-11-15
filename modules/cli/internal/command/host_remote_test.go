@@ -2,9 +2,15 @@ package command
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
 
+	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/assert"
@@ -80,4 +86,88 @@ func TestHostRemoteKeepsHostPasswordsUntilClose(t *testing.T) {
 
 	remote.Close()
 	assert.Empty(t, remote.manifest.HostCatalog["storage"].SSH.Password, "关闭后清除")
+}
+
+// forwardSSH 模拟 SSH 的本地转发：把本地端口转到 target（代表目标机上的 127.0.0.1:{端口}）。
+type forwardSSH struct {
+	remoteSSH
+	target    string
+	forwarded []string
+}
+
+func (f *forwardSSH) ForwardLocal(ctx context.Context, remote string) (net.Listener, error) {
+	f.forwarded = append(f.forwarded, remote)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+	go func() {
+		for {
+			local, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			upstream, err := net.Dial("tcp", f.target)
+			if err != nil {
+				_ = local.Close()
+				continue
+			}
+			go func() { _, _ = io.Copy(upstream, local); _ = upstream.Close() }()
+			go func() { _, _ = io.Copy(local, upstream); _ = local.Close() }()
+		}
+	}()
+	return listener, nil
+}
+
+// 健康端口只听本机：本节点直接请求 127.0.0.1，其他主机经 SSH 转发到目标机的 127.0.0.1:{端口}。
+func TestHostRemoteHealthProbeForwardsToTheTargetLoopbackOverSSH(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ready":true}`))
+	}))
+	defer server.Close()
+	ssh := &forwardSSH{target: server.Listener.Addr().String()}
+	remote, _, _ := hostRemoteFixture()
+	remote.dial = func(context.Context, setupconfig.Host) (setupssh.Client, error) { return ssh, nil }
+	defer remote.Close()
+	probe := remote.HealthProbe()
+
+	result, err := probe(t.Context(), "factor", 11417, "/readyz")
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	assert.Equal(t, []string{"127.0.0.1:11417"}, ssh.forwarded, "转发到目标机的本机健康端口")
+
+	_, rawPort, err := net.SplitHostPort(server.Listener.Addr().String())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(rawPort)
+	require.NoError(t, err)
+	result, err = probe(t.Context(), "control", port, "/readyz")
+	require.NoError(t, err, "本节点直接请求 127.0.0.1")
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	assert.Len(t, ssh.forwarded, 1)
+}
+
+// 只能出站的主机 SSH 连不上时：探测报不可达（诊断记为无法判断），错误里写明只能在局域网里检查和不在局域网时看什么。
+func TestHostRemoteExplainsOutboundHostsAreLANOnly(t *testing.T) {
+	remote, _, _ := hostRemoteFixture()
+	remote.dial = func(context.Context, setupconfig.Host) (setupssh.Client, error) {
+		return nil, errors.New("dial timeout")
+	}
+	defer remote.Close()
+
+	_, err := remote.HealthProbe()(t.Context(), "factor", 11417, "/readyz")
+	require.ErrorIs(t, err, doctorcli.ErrNodeUnreachable)
+	assert.ErrorContains(t, err, "局域网")
+	assert.ErrorContains(t, err, "moox-cli host agent status --host factor")
+
+	_, err = remote.Systemd()(t.Context(), "factor", "moox-factor-engine")
+	assert.ErrorContains(t, err, "局域网", "systemd 检查同样经 SSH，提示一致")
+
+	remote.manifest.HostCatalog["storage"] = setupconfig.HostDefinition{Address: "198.51.100.11"}
+	_, err = remote.HealthProbe()(t.Context(), "storage", 20210, "/readyz")
+	require.ErrorIs(t, err, doctorcli.ErrNodeUnreachable)
+	assert.NotContains(t, err.Error(), "局域网", "直连主机不加出站提示")
 }

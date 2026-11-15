@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/failure"
-	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 )
@@ -95,16 +94,6 @@ func runFixtureProcess() {
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGTERM)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		parts := strings.Split(r.Header.Get("X-Moox-Health-Auth"), "/")
-		if len(parts) != 5 || parts[0] != os.Getenv("MOOX_HEALTH_AUTH_VERSION") || parts[1] != os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY") {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		timestamp, err := strconv.ParseInt(parts[2], 10, 64)
-		if err != nil || requestauth.Verify(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY"), requestauth.Material{Method: r.Method, Path: r.URL.Path, Timestamp: timestamp, Nonce: parts[3]}, parts[4]) != nil {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
 		marker := os.Getenv("MOOX_RUNTIME_TEST_NOT_READY")
 		if r.URL.Path == "/healthz" {
 			marker = os.Getenv("MOOX_RUNTIME_TEST_NOT_LIVE")
@@ -334,7 +323,7 @@ func TestRuntimeLinuxForceWaitsFullBudgetAndObservesExit(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(plan.DeploymentRoot, "run", "draining", "console-proxy"))
 }
 
-func TestRuntimeLinuxWatchdogUsesLivenessAndDoesNotRestartForReadinessOrBadCredentials(t *testing.T) {
+func TestRuntimeLinuxWatchdogUsesLivenessAndDoesNotRestartForReadiness(t *testing.T) {
 	path, plan := planFixture(t, "web-host")
 	values := fixtureEnvironment()
 	marker := filepath.Join(plan.ReleaseRoot, "not-ready")
@@ -351,15 +340,6 @@ func TestRuntimeLinuxWatchdogUsesLivenessAndDoesNotRestartForReadinessOrBadCrede
 	require.False(t, status.Components[0].Ready)
 	require.Empty(t, status.Components[0].ReadinessError)
 	require.Equal(t, started.Components[0].PID, status.Components[0].PID)
-	values["MOOX_HEALTH_AUTH_SECRET_KEY"] = "different-fixture-health-signing-key"
-	writeFixture(t, plan.Components[0].EnvironmentFile, values)
-	_, err := Execute(context.Background(), path, "healthcheck", nil, Options{})
-	require.ErrorIs(t, err, errHealthIdentity)
-	status = runRuntime(t, path, "status")
-	require.Equal(t, started.Components[0].PID, status.Components[0].PID)
-	require.NotEmpty(t, status.Components[0].ReadinessError)
-	values["MOOX_HEALTH_AUTH_SECRET_KEY"] = fixtureEnvironment()["MOOX_HEALTH_AUTH_SECRET_KEY"]
-	writeFixture(t, plan.Components[0].EnvironmentFile, values)
 	require.NoError(t, os.Remove(marker))
 	require.True(t, runRuntime(t, path, "healthcheck").Components[0].Ready)
 	require.True(t, runRuntime(t, path, "status").Components[0].Ready)
@@ -478,10 +458,10 @@ func TestRuntimeLinuxRefusesUnrelatedOrReusedPIDAndDoesNotExposeSecrets(t *testi
 	require.False(t, childProof["operator_leaked"])
 	arguments, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", started.Components[0].PID))
 	require.NoError(t, err)
-	require.NotContains(t, string(arguments), values["MOOX_HEALTH_AUTH_SECRET_KEY"])
+	require.NotContains(t, string(arguments), values["MOOX_RUNTIME_TEST_SECRET"])
 	metadata, err := json.Marshal(started)
 	require.NoError(t, err)
-	require.NotContains(t, string(metadata), values["MOOX_HEALTH_AUTH_SECRET_KEY"])
+	require.NotContains(t, string(metadata), values["MOOX_RUNTIME_TEST_SECRET"])
 	state, err := openRuntime(plan)
 	require.NoError(t, err)
 	defer state.close()

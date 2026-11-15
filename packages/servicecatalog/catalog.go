@@ -67,11 +67,10 @@ type RelayHTTP struct {
 	Callers []string `yaml:"callers" json:"callers"`
 }
 
+// Health 是组件的健康端口：/healthz、/readyz、/metrics 只监听 127.0.0.1、不验签，
+// 给同机进程与 moox-cli doctor 经 SSH 在目标机上请求；Monitor 不探测它（组件健康只看上报）。
 type Health struct {
-	Kind      string `yaml:"kind" json:"kind"`
-	Port      int    `yaml:"port,omitempty" json:"port,omitempty"`
-	Loopback  bool   `yaml:"loopback,omitempty" json:"loopback,omitempty"`
-	ReadyBody string `yaml:"ready_body,omitempty" json:"ready_body,omitempty"`
+	Port int `yaml:"port" json:"port"`
 }
 
 type Service struct {

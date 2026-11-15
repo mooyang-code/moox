@@ -6,8 +6,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -17,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,7 +22,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/gapledger"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
-	"github.com/mooyang-code/moox/packages/requestauth"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
@@ -118,8 +114,7 @@ func (v *listFlag) Set(raw string) error {
 	return nil
 }
 
-// health asks the local engine for readiness, signing the request with the
-// MOOX_HEALTH_AUTH_* environment the engine runs with.
+// health 询问本机引擎的就绪状态；健康端口只听本机、不验签。
 func health(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("health", flag.ContinueOnError)
 	url := fs.String("url", "http://127.0.0.1:11417/readyz", "engine health URL")
@@ -128,9 +123,6 @@ func health(args []string, out io.Writer) error {
 	}
 	request, err := http.NewRequest(http.MethodGet, *url, nil)
 	if err != nil {
-		return err
-	}
-	if err := signHealthRequest(request); err != nil {
 		return err
 	}
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
@@ -308,33 +300,5 @@ func tune(args []string, out io.Writer) error {
 			return err
 		}
 	}
-	return nil
-}
-
-func signHealthRequest(request *http.Request) error {
-	version := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_VERSION"))
-	if version == "" {
-		version = "moox-health-v1"
-	}
-	accessKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY"))
-	secretKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY"))
-	if accessKey == "" || secretKey == "" {
-		return errors.New("MOOX_HEALTH_AUTH_ACCESS_KEY and MOOX_HEALTH_AUTH_SECRET_KEY are required")
-	}
-	nonceBytes := make([]byte, 32)
-	if _, err := rand.Read(nonceBytes); err != nil {
-		return fmt.Errorf("generate health nonce: %w", err)
-	}
-	timestamp := time.Now().Unix()
-	nonce := hex.EncodeToString(nonceBytes)
-	signature, err := requestauth.Sign(secretKey, requestauth.Material{
-		Method: request.Method, Path: request.URL.EscapedPath(), Timestamp: timestamp, Nonce: nonce,
-	})
-	if err != nil {
-		return fmt.Errorf("sign health request: %w", err)
-	}
-	request.Header.Set("X-Moox-Health-Auth", strings.Join([]string{
-		version, accessKey, strconv.FormatInt(timestamp, 10), nonce, signature,
-	}, "/"))
 	return nil
 }

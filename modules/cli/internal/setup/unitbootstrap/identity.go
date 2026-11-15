@@ -20,34 +20,18 @@ type runtimeBinding struct {
 }
 
 // Bind the fleet's runtime credentials outside release snapshots before any
-// process stops. Losing native state never authorizes replacing health/JWT
-// identities on an already initialized deployment.
+// process stops. Losing native state never authorizes replacing the JWT
+// identity on an already initialized deployment. 健康端口只听本机、不验签，没有健康密钥。
 func bindRuntimeIdentity(deployment *os.Root, input inputs) error {
-	admin := input.request.Control.Environment["admin"]
-	keys := []string{"MOOX_HEALTH_AUTH_VERSION", "MOOX_HEALTH_AUTH_ACCESS_KEY", "MOOX_HEALTH_AUTH_SECRET_KEY", "MOOX_ADMIN_JWT_SECRET_KEY"}
-	if admin[keys[0]] != "moox-health-v1" || admin[keys[1]] == "" || len(admin[keys[2]]) < 32 || len(admin[keys[3]]) < 32 {
-		return errors.New("bootstrap requires valid persistent health and JWT identities")
+	const key = "MOOX_ADMIN_JWT_SECRET_KEY"
+	value := input.request.Control.Environment["admin"][key]
+	if len(value) < 32 {
+		return errors.New("bootstrap requires a valid persistent JWT identity")
 	}
-	for _, key := range keys {
-		value := admin[key]
-		if len(value) > 4096 || !utf8.ValidString(value) || strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
-			return errors.New("bootstrap runtime identity must contain bounded canonical secrets")
-		}
+	if len(value) > 4096 || !utf8.ValidString(value) || strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return errors.New("bootstrap runtime identity must contain bounded canonical secrets")
 	}
-	for _, unit := range []Unit{input.request.Host, input.request.Control} {
-		for _, values := range unit.Environment {
-			for _, key := range keys[:3] {
-				if values[key] != admin[key] {
-					return errors.New("bootstrap components must share the fleet health identity")
-				}
-			}
-		}
-	}
-	values := map[string]string{}
-	for _, key := range keys {
-		values[key] = admin[key]
-	}
-	raw, err := json.Marshal(values)
+	raw, err := json.Marshal(map[string]string{key: value})
 	if err != nil {
 		return err
 	}

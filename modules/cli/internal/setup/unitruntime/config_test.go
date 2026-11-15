@@ -72,9 +72,9 @@ func olderCatalogFixture(t *testing.T, path string, plan Plan) Plan {
 
 func fixtureEnvironment() map[string]string {
 	return map[string]string{
-		"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": "fixture-monitor",
-		"MOOX_HEALTH_AUTH_SECRET_KEY": "fixture-only-health-signing-key-at-least-32-bytes",
-		"MOOX_RUNTIME_TEST_CHILD":     "1",
+		// MOOX_RUNTIME_TEST_SECRET 代表环境文件里的秘密：测试核对它不出现在命令行和输出里。
+		"MOOX_RUNTIME_TEST_SECRET": "fixture-only-runtime-secret-at-least-32-bytes",
+		"MOOX_RUNTIME_TEST_CHILD":  "1",
 	}
 }
 

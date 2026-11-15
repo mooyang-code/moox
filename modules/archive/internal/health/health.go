@@ -24,9 +24,5 @@ func Handler(state *State) http.Handler {
 
 // Register 把健康服务挂到 tRPC 服务上。
 func Register(service server.Service, state *State) error {
-	handler, err := healthz.WrapFromEnv(Handler(state))
-	if err != nil {
-		return err
-	}
-	return healthz.RegisterNoProtocolServiceMux(service, handler)
+	return healthz.RegisterNoProtocolServiceMux(service, Handler(state))
 }

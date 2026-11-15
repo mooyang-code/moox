@@ -15,7 +15,7 @@ go test -count=1 ./modules/hostgateway/...
 
 - `11003`：TLS tRPC，使用独立 MooX 私有 CA 验证主机 ID；服务请求仍须 HMAC。
 - `127.0.0.1:11002`：本机 tRPC 转发与只读 Directory。Directory 仅包含主机和服务目录。
-- `11012`：经过健康鉴权的 `/healthz`、`/readyz` 和指标入口。
+- `11012`：`/healthz`、`/readyz` 和指标入口，只听 127.0.0.1、不验签。
 
 control 网关直接访问 `127.0.0.1:11112`；其他主机经 control 的 TLS 网关同步。只有 `GatewayControl` 保留已验证的六个签名字段，供 Admin 再次验证原调用主机和原始请求；该转发层不重试，下一次同步由调用方生成新 nonce。普通业务上游剥离所有 `x-moox-*` 字段。
 
@@ -42,4 +42,4 @@ moox-host-gateway-cli routes --config host-gateway/config/app.yaml
 moox-host-gateway-cli health --config host-gateway/config/app.yaml
 ```
 
-`routes` 只输出公共诊断字段，省略校验密钥。`health` 从配置推导本机 `/readyz` 地址，并使用健康鉴权环境变量；也可用 `--url` 指定地址。
+`routes` 只输出公共诊断字段，省略校验密钥。`health` 请求配置里本机的 `/readyz` 地址；也可用 `--url` 指定地址。

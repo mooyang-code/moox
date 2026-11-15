@@ -9,15 +9,6 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-func TestStorageConfigAppliesHealthDefault(t *testing.T) {
-	var cfg RuntimeConfig
-	cfg.ApplyDefaults()
-
-	if cfg.Storage.Health.Addr != ":20210" {
-		t.Fatalf("Storage.Health.Addr = %q, want :20210", cfg.Storage.Health.Addr)
-	}
-}
-
 func TestStorageConfigRolesAreExplicit(t *testing.T) {
 	cfg := StorageConfig{Roles: []string{"primary", "view"}}
 	if !cfg.HasRole("primary") || !cfg.HasRole("view") || cfg.HasRole("view_index") {
@@ -114,14 +105,13 @@ func TestStorageConfigApplyHomeRootRebasesAbsolutePathsUnderOldRoot(t *testing.T
 	}
 }
 
-func TestStorageDeploymentConfigFilesLoadRolesAndHealth(t *testing.T) {
+func TestStorageDeploymentConfigFilesLoadRoles(t *testing.T) {
 	tests := []struct {
-		file       string
-		wantRole   string
-		wantHealth string
+		file     string
+		wantRole string
 	}{
-		{file: "storage.primary.yaml", wantRole: "primary", wantHealth: ":20210"},
-		{file: "storage_view/trpc_go.yaml", wantRole: "view", wantHealth: ":20211"},
+		{file: "storage.primary.yaml", wantRole: "primary"},
+		{file: "storage_view/trpc_go.yaml", wantRole: "view"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -134,9 +124,6 @@ func TestStorageDeploymentConfigFilesLoadRolesAndHealth(t *testing.T) {
 			}
 			if cfg.Storage.EventBus.CredentialFile != "~/.config/moox/eventbus/storage-eventbus.yaml" {
 				t.Fatalf("EventBus.CredentialFile = %q", cfg.Storage.EventBus.CredentialFile)
-			}
-			if cfg.Storage.Health.Addr != tt.wantHealth {
-				t.Fatalf("Health.Addr = %q, want %q", cfg.Storage.Health.Addr, tt.wantHealth)
 			}
 		})
 	}

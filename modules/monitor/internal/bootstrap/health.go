@@ -33,21 +33,10 @@ func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, r
 		// 上报带给 Monitor 自己的就绪与 /readyz 是同一个判断。
 		runtime.readiness = healthz.Readiness(state.Snapshot)
 	}
-	healthAuth, err := healthz.NewAuthenticator(healthz.AuthConfig{
-		Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey,
-		ClockSkew: time.Minute, NonceTTL: 2 * time.Minute,
-	})
-	if err != nil {
-		return fmt.Errorf("monitor health authentication is invalid: %w", err)
-	}
-	handler := healthz.NewMux()
-	handler.Handle("/healthz", healthAuth.Wrap(healthz.LivenessHandler(state.Snapshot)))
-	handler.Handle("/readyz", healthAuth.Wrap(healthz.ReadinessHandler(state.Snapshot)))
-	handler.Handle("/metrics", healthAuth.Wrap(promhttp.Handler()))
 	if s == nil {
 		return fmt.Errorf("monitor health service is unavailable")
 	}
-	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.monitor.Health"), handler); err != nil {
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.monitor.Health"), healthz.StandardMux(state.Snapshot, promhttp.Handler())); err != nil {
 		return fmt.Errorf("monitor health server failed to start: %w", err)
 	}
 	return nil

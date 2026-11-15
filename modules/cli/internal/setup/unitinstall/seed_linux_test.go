@@ -34,7 +34,7 @@ func sealWithHelper(t *testing.T, options SealStateOptions) (StateSeedReference,
 func TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot(t *testing.T) {
 	options := controlActivationOptions(t)
 	options.Components = []string{"admin", "web-host"}
-	options.Environment["admin"] = healthEnvironment()
+	options.Environment["admin"] = syntheticEnvironment()
 	tools, err := prepareWithHelper(t, options)
 	require.NoError(t, err)
 	adminCLI := filepath.Join(tools.Directory, "bin/moox-admin-cli")
@@ -89,7 +89,7 @@ func TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot(t 
 	host.Profile, host.UnitRoot, host.HostUnitRoot = "host", options.HostUnitRoot, options.HostUnitRoot
 	host.Archive, host.SHA256 = os.Getenv("MOOX_UNIT_INSTALL_HOST_ARCHIVE"), os.Getenv("MOOX_UNIT_INSTALL_HOST_SHA256")
 	host.ReleaseID, host.Components = "seeded-host", []string{"host-gateway", "host-agent"}
-	host.Environment = map[string]map[string]string{"host-gateway": healthEnvironment(), "host-agent": healthEnvironment()}
+	host.Environment = map[string]map[string]string{"host-gateway": syntheticEnvironment(), "host-agent": syntheticEnvironment()}
 	eventbus := filepath.Join(trust, "eventbus.yaml")
 	require.NoError(t, os.WriteFile(eventbus, []byte("version: 1\nurls: [nats://127.0.0.1:4222]\nusername: host-agent\neventbus_token: synthetic-token\nca_file: ''\n"), 0o600))
 	host.Overrides = map[string]string{"host-agent/config/eventbus.yaml": eventbus}

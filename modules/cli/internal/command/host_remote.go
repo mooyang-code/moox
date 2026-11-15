@@ -6,18 +6,23 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 // hostRemote 是命令行访问各台主机的统一连接层，按 moox.toml 装配：
 //   - 在主机上执行命令、上传下载文件（经 SSH，复用同一台主机的连接）；
-//   - 诊断用：读取 systemd 用户服务状态。
+//   - 诊断用：读取 systemd 用户服务状态、经 SSH 转发请求目标机上只听本机的健康端口。
+//
+// 只能出站的主机（因子机）只有在家里的局域网才 SSH 得上，连不上时错误里附带不在局域网时的查看办法。
 
 // hostRemote 是诊断用的远程能力；close 释放 SSH 连接。
 type hostRemote struct {
@@ -70,10 +75,19 @@ func (r *hostRemote) client(ctx context.Context, hostID string) (setupssh.Client
 	}
 	client, err := r.dial(ctx, host)
 	if err != nil {
+		if reachability, _ := servicecatalog.ParseReachability(host.Reachability); reachability == servicecatalog.ReachabilityOutbound {
+			return nil, fmt.Errorf("%w；%s", err, outboundSSHHint(hostID))
+		}
 		return nil, err
 	}
 	r.clients[hostID] = client
 	return client, nil
+}
+
+// outboundSSHHint 是只能出站的主机 SSH 连不上时的提示：它只接受家里局域网内的 SSH。
+func outboundSSHHint(hostID string) string {
+	return fmt.Sprintf("%s 只能出站，SSH 只有在家里的局域网才连得上，doctor 与 /readyz 检查只能在局域网里做；"+
+		"不在局域网时看 Monitor 的上报状态（moox-cli doctor alerts）和 moox-cli host agent status --host %s", hostID, hostID)
 }
 
 // Exec 经 SSH 在主机上执行命令（不区分是否本机）；退出码非 0 时返回错误，结果里仍有输出与退出码。
@@ -106,6 +120,33 @@ func (r *hostRemote) Download(ctx context.Context, hostID, src string, dst io.Wr
 // Systemd 返回读取 systemd 用户服务状态的检查器。
 func (r *hostRemote) Systemd() doctorcli.SystemdChecker {
 	return doctorcli.NewSystemdChecker(r.Run)
+}
+
+// HealthProbe 返回请求组件健康端口的探测器：健康端口只听 127.0.0.1，本节点直接请求，
+// 其他主机经 SSH 转发到目标机的 127.0.0.1。SSH 连不上时返回 doctorcli.ErrNodeUnreachable。
+func (r *hostRemote) HealthProbe() doctorcli.HealthProbe {
+	local := doctorcli.LocalHealthProbe(r.localNodeID)
+	return func(ctx context.Context, nodeID string, port int, path string) (doctorcli.ProbeResult, error) {
+		if nodeID == r.localNodeID {
+			return local(ctx, nodeID, port, path)
+		}
+		client, err := r.client(ctx, nodeID)
+		if err != nil {
+			return doctorcli.ProbeResult{}, fmt.Errorf("%w %s: %w", doctorcli.ErrNodeUnreachable, nodeID, err)
+		}
+		forwardCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		listener, err := client.ForwardLocal(forwardCtx, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err != nil {
+			return doctorcli.ProbeResult{}, fmt.Errorf("%w %s: %w", doctorcli.ErrNodeUnreachable, nodeID, err)
+		}
+		_, localPort, err := net.SplitHostPort(listener.Addr().String())
+		if err != nil {
+			return doctorcli.ProbeResult{}, err
+		}
+		forwarded, _ := strconv.Atoi(localPort)
+		return doctorcli.HTTPProber{}.Get(ctx, doctorcli.LoopbackURL(forwarded, path))
+	}
 }
 
 func (r *hostRemote) Close() {

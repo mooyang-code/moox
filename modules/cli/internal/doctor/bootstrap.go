@@ -32,10 +32,11 @@ type BootstrapOptions struct {
 	CheckIDs                                                  []string
 	Client                                                    DeploymentClient
 	MonitorClient                                             DoctorContextClient
-	Prober                                                    HTTPProber
-	Now                                                       func() time.Time
-	ProbeWritable                                             func(context.Context, string, string) error
-	ProcessAlive                                              func(string) bool
+	// Probe 请求组件只听本机的健康端口；bootstrap 只查本节点，所以总是直接请求本机 127.0.0.1。
+	Probe         HealthProbe
+	Now           func() time.Time
+	ProbeWritable func(context.Context, string, string) error
+	ProcessAlive  func(string) bool
 	// Systemd 检查 systemd_user 托管的组件（外部程序）：开机自启、运行中与 linger 三项都满足才通过；为空时退回 PID 检查。
 	Systemd SystemdChecker
 	// DeployRoot 是部署根目录：外部程序的安装目录是 <部署根>/<组件>，它声明的路径相对部署根而不是发布目录。
@@ -204,7 +205,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		if component.FunctionalObservability == core.FunctionalObservabilityDeferred || component.Transport != core.TransportReporter {
 			return checkResult(spec.ID, core.StatusSkipped, "identity extension is not part of the active V1 contract", nil)
 		}
-		probe, err := r.options.Prober.Get(ctx, healthURL(deployment, component.HealthPath))
+		probe, err := r.probe(ctx, component, "/readyz")
 		if err != nil {
 			return checkResult(spec.ID, core.StatusFail, "service identity probe failed", err, "verify_service_identity")
 		}
@@ -230,15 +231,15 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			return checkResult(spec.ID, core.StatusFail, "service identity conflicts with canonical service@node identity", nil, "verify_service_identity")
 		}
 		result = checkResult(spec.ID, core.StatusPass, "service identity matches the canonical contract", nil)
-		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "signed identity response", Digest: probe.Digest}}
+		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "local identity response", Digest: probe.Digest}}
 		return result
 	case "network", "health":
-		probe, err := r.options.Prober.Get(ctx, healthURL(deployment, component.HealthPath))
+		probe, err := r.probe(ctx, component, "/readyz")
 		if err != nil {
 			return checkResult(spec.ID, core.StatusFail, "service health endpoint is unavailable", err, "restart_service_manually")
 		}
 		result = checkResult(spec.ID, core.StatusPass, "service health endpoint responded", nil)
-		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "signed health response", Digest: probe.Digest}}
+		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "local health response", Digest: probe.Digest}}
 		return result
 	case "path_permissions":
 		if len(component.WritablePaths) == 0 {
@@ -290,7 +291,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		if component.Transport != core.TransportReporter {
 			return checkResult(spec.ID, core.StatusSkipped, "component does not use Reporter transport", nil)
 		}
-		probe, err := r.options.Prober.Get(ctx, healthURL(deployment, "/metrics"))
+		probe, err := r.probe(ctx, component, "/metrics")
 		if err != nil {
 			return checkResult(spec.ID, core.StatusFail, "Reporter metrics endpoint is unavailable", err, "verify_eventbus_credentials")
 		}
@@ -369,7 +370,13 @@ func validateManifestChecksumFile(path, want string) error {
 	return nil
 }
 
-func healthURL(deployment Deployment, path string) string { return deployment.HealthAddress + path }
+// probe 在本节点上请求组件的健康端口。
+func (r *bootstrapRunner) probe(ctx context.Context, component core.Component, path string) (ProbeResult, error) {
+	if r.options.Probe == nil {
+		return ProbeResult{}, fmt.Errorf("health probe is unavailable")
+	}
+	return r.options.Probe(ctx, r.options.NodeID, component.HealthPort, path)
+}
 
 func checkResult(id string, status core.CheckStatus, summary string, err error, actions ...string) core.CheckResult {
 	result := core.CheckResult{ID: id, Status: status, Summary: summary, RecoveryActionIDs: actions}

@@ -117,6 +117,8 @@
 | `doctor bootstrap` | 检查新部署各模块的安装与配置 |
 | `doctor diagnose` | 按 Monitor 的事实诊断模块 |
 
+各组件的健康端口（`/healthz`、`/readyz`、`/metrics`）只听 127.0.0.1、不验签：`doctor bootstrap` 只查本机，直接请求本机端口；`doctor diagnose` 在组件给 Monitor 的上报缺失或过期时，经 SSH 在目标机上请求它的本机 `/readyz`（SSH 连不上记为无法判断），`systemd` 用户服务的状态同样经 SSH 读取。因子机只能出站，SSH 只有在家里的局域网才连得上，所以因子机的 doctor 与 `/readyz` 检查只能在局域网里做；不在局域网时看 Monitor 的上报状态（`doctor alerts`）和 `moox-cli host agent status --host factor`。
+
 ## event：事件中心：事件规则（事件发生时通知你的接口）与执行记录（调用 CallbackDispatcherService）
 
 | 命令 | 说明 |

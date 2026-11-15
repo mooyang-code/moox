@@ -25,7 +25,7 @@ required=[
     'TestRuntimeLinuxPausePersistsAcrossReleaseAndAllAutomaticStarts',
     'TestRuntimeLinuxUsesRunningReleaseBudgetBeforeForceAndKeepsDrainOnCancellation',
     'TestRuntimeLinuxForceWaitsFullBudgetAndObservesExit',
-    'TestRuntimeLinuxWatchdogUsesLivenessAndDoesNotRestartForReadinessOrBadCredentials',
+    'TestRuntimeLinuxWatchdogUsesLivenessAndDoesNotRestartForReadiness',
     'TestRuntimeLinuxMaintenanceLockSkipCancellationAndInheritedDescriptor',
     'TestRuntimeLinuxWatchdogRestartsFailedLivenessWithRunningGraceBudget',
     'TestRuntimeLinuxCancelledPauseMarksAllTargetsAndHostIdentityIsPersistent',

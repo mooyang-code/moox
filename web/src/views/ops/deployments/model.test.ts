@@ -9,7 +9,7 @@ const component: CatalogComponent = {
   scope: "any",
   replicas: "multi",
   protected: false,
-  health: { kind: "readyz", port: 11012 },
+  health: { port: 11012 },
   ports: [11011],
   services: [
     {

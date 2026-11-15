@@ -62,7 +62,7 @@ func TestReverseReconciliationUsesAllDeploymentsAndExactIdentity(t *testing.T) {
 		require.Equal(t, "new", collector.Instances[0].BootID)
 		missing := byKey[deploymentKey("control", "factor-mgr")]
 		require.Equal(t, "missing", missing.ReporterStatus, "登记了部署却没有上报")
-		require.Equal(t, "unknown", missing.Status)
+		require.Equal(t, "down", missing.Status, "已启用的部署从没上报，进程没起来，与未就绪一样严重")
 		require.True(t, missing.LastSeenAt.IsZero())
 		require.Equal(t, "missing", byKey[deploymentKey("control", "web-host")].ReporterStatus, "不再有不要求上报的组件")
 		for _, key := range []string{deploymentKey("control", "egress-proxy"), deploymentKey("disabled-host", "collector")} {
@@ -145,7 +145,8 @@ func TestServiceLifecycleOnlyFromFreshReport(t *testing.T) {
 	require.NotNil(t, byID["strategy"].Lifecycle)
 	require.Equal(t, "paused", byID["strategy"].Lifecycle.Stage)
 	require.Equal(t, "system", byID["strategy"].Lifecycle.Pause.Kind)
-	require.Equal(t, "stale", byID["trade"].Status)
+	require.Equal(t, "stale", byID["trade"].ReporterStatus)
+	require.Equal(t, "down", byID["trade"].Status, "已启用的部署停止上报记为 down")
 	require.Nil(t, byID["trade"].Lifecycle, "停止上报时不挂旧的生命周期")
 }
 
@@ -184,7 +185,38 @@ func TestDelegatedAndHostSnapshotSources(t *testing.T) {
 	require.NoError(t, err)
 	for _, service := range services {
 		if service.ServiceName == "host-agent" {
-			require.Equal(t, "stale", service.Status, "主机快照不新鲜即停止上报")
+			require.Equal(t, "stale", service.ReporterStatus, "主机快照不新鲜即停止上报")
+			require.Equal(t, "down", service.Status)
 		}
 	}
+}
+
+// 已启用的部署从没上报或停止上报记为 down（上报新鲜度仍在 ReporterStatus 里）；未启用的部署不算，记为 disabled。
+func TestSilentEnabledDeploymentsAreDown(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, repos := openOverviewState(t, func(db *gorm.DB) {
+		require.NoError(t, db.Create(&monmetrics.MetricService{ServiceName: "trade", NodeID: "control", InstanceID: "trade@control", BootID: "1", LastSeenAt: now.Add(-10 * time.Minute), Readiness: monmetrics.ReadinessReady}).Error)
+		require.NoError(t, db.Create(&monmetrics.MetricService{ServiceName: "monitor", NodeID: "control", InstanceID: "monitor@control", BootID: "1", LastSeenAt: now, Readiness: monmetrics.ReadinessReady}).Error)
+	})
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	require.NoError(t, repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now,
+		Hosts: []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
+		Deployments: []domain.TopologyDeployment{
+			{HostID: "control", ComponentID: "strategy", Status: "enabled"},
+			{HostID: "control", ComponentID: "trade", Status: "enabled"},
+			{HostID: "control", ComponentID: "monitor", Status: "enabled"},
+			{HostID: "control", ComponentID: "callback-dispatcher", Status: "disabled"},
+		},
+	}))
+	got, err := (Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	byID := map[string]ServiceStatus{}
+	for _, service := range got.Services {
+		byID[service.ServiceName] = service
+	}
+	require.Equal(t, [2]string{"missing", "down"}, [2]string{byID["strategy"].ReporterStatus, byID["strategy"].Status}, "从没上报")
+	require.Equal(t, [2]string{"stale", "down"}, [2]string{byID["trade"].ReporterStatus, byID["trade"].Status}, "停止上报")
+	require.Equal(t, "healthy", byID["monitor"].Status)
+	require.Equal(t, [2]string{"missing", "disabled"}, [2]string{byID["callback-dispatcher"].ReporterStatus, byID["callback-dispatcher"].Status}, "未启用的部署不算")
 }

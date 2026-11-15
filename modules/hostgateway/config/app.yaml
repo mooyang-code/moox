@@ -3,7 +3,7 @@ host:
 server:
   remote_addr: 0.0.0.0:11003
   local_addr: 127.0.0.1:11002
-  health_addr: 0.0.0.0:11012
+  health_addr: 127.0.0.1:11012
 tls:
   cert_file: ../../certs/host-gateway/server.crt
   key_file: ../../certs/host-gateway/server.key

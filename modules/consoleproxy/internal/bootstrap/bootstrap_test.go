@@ -19,7 +19,6 @@ import (
 	"github.com/mooyang-code/moox/modules/consoleproxy/internal/config"
 	"github.com/mooyang-code/moox/modules/consoleproxy/internal/engine"
 	"github.com/mooyang-code/moox/packages/healthz"
-	"github.com/mooyang-code/moox/packages/requestauth"
 )
 
 func freeAddress(t *testing.T) string {
@@ -32,30 +31,17 @@ func freeAddress(t *testing.T) string {
 	return l.Addr().String()
 }
 
-func signedRequest(t *testing.T, address, path, secret string) *http.Request {
+// healthRequest 请求只听本机的诊断端口：不验签。
+func healthRequest(t *testing.T, address, path string) *http.Request {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, "http://"+address+path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	nonce, err := requestauth.NewNonce()
-	if err != nil {
-		t.Fatal(err)
-	}
-	timestamp := time.Now().Unix()
-	sig, err := requestauth.Sign(secret, requestauth.Material{Method: req.Method, Path: path, Timestamp: timestamp, Nonce: nonce})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("X-Moox-Health-Auth", fmt.Sprintf("moox-health-v1/test-monitor/%d/%s/%s", timestamp, nonce, sig))
 	return req
 }
 
-func TestAuthenticatedDiagnosticsReadinessAndServeDrain(t *testing.T) {
-	const secret = "console-proxy-test-health-secret"
-	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "test-monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", secret)
+func TestDiagnosticsReadinessAndServeDrain(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +96,7 @@ func TestAuthenticatedDiagnosticsReadinessAndServeDrain(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(5 * time.Second)
 		for {
-			rsp, err := client.Do(signedRequest(t, cfg.Health.Listen, "/readyz", secret))
+			rsp, err := client.Do(healthRequest(t, cfg.Health.Listen, "/readyz"))
 			if err == nil {
 				var payload healthz.Response
 				decodeErr := json.NewDecoder(rsp.Body).Decode(&payload)
@@ -133,34 +119,13 @@ func TestAuthenticatedDiagnosticsReadinessAndServeDrain(t *testing.T) {
 	if dependencies["web-host"] != false || !payload.Ready {
 		t.Fatal("web-host failure incorrectly made the proxy unready")
 	}
-	for _, path := range []string{"/readyz", "/healthz", "/metrics"} {
-		rsp, err := client.Get("http://" + cfg.Health.Listen + path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rsp.Body.Close()
-		if rsp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("anonymous %s returned %d", path, rsp.StatusCode)
-		}
-	}
-	request := signedRequest(t, cfg.Health.Listen, "/readyz", secret)
-	for attempt, want := range []int{http.StatusOK, http.StatusUnauthorized} {
-		rsp, err := client.Do(request.Clone(context.Background()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		rsp.Body.Close()
-		if rsp.StatusCode != want {
-			t.Fatalf("signed request attempt %d returned %d", attempt, rsp.StatusCode)
-		}
-	}
-	rsp, err := client.Do(signedRequest(t, cfg.Health.Listen, "/healthz", "wrong-test-secret"))
+	rsp, err := client.Do(healthRequest(t, cfg.Health.Listen, "/metrics"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	rsp.Body.Close()
-	if rsp.StatusCode != http.StatusUnauthorized {
-		t.Fatal("wrong health HMAC secret was accepted")
+	if rsp.StatusCode != http.StatusOK {
+		t.Fatalf("/metrics returned %d", rsp.StatusCode)
 	}
 	root, err := os.ReadFile(filepath.Join(cfg.TLS.CAPublishDir, "root.crt"))
 	if err != nil {
@@ -173,7 +138,7 @@ func TestAuthenticatedDiagnosticsReadinessAndServeDrain(t *testing.T) {
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: cfg.Public.Host, MinVersion: tls.VersionTLS12}}
 	defer transport.CloseIdleConnections()
 	proxyClient := &http.Client{Transport: transport, Timeout: 5 * time.Second}
-	request, _ = http.NewRequest(http.MethodGet, "https://"+public+"/api/admin/stream", nil)
+	request, _ := http.NewRequest(http.MethodGet, "https://"+public+"/api/admin/stream", nil)
 	request.Host = cfg.Public.Host
 	rsp, err = proxyClient.Do(request)
 	if err != nil {
@@ -185,7 +150,7 @@ func TestAuthenticatedDiagnosticsReadinessAndServeDrain(t *testing.T) {
 	if payload = waitReady(http.StatusServiceUnavailable); payload.Ready {
 		t.Fatal("draining proxy remained ready")
 	}
-	alive, err := client.Do(signedRequest(t, cfg.Health.Listen, "/healthz", secret))
+	alive, err := client.Do(healthRequest(t, cfg.Health.Listen, "/healthz"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,19 +163,4 @@ func TestAuthenticatedDiagnosticsReadinessAndServeDrain(t *testing.T) {
 	if err != nil || string(body) != "started\nfinished\n" {
 		t.Fatalf("Serve cancellation truncated an admitted stream: %q %v", body, err)
 	}
-}
-
-func TestServeRequiresHealthCredentialsBeforeListening(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "")
-	cfg := config.Defaults()
-	cfg.Health.Listen = freeAddress(t)
-	if err := Serve(context.Background(), cfg, "test", "test"); err == nil {
-		t.Fatal("missing health credentials were accepted")
-	}
-	l, err := net.Listen("tcp", cfg.Health.Listen)
-	if err != nil {
-		t.Fatal("authentication failure leaked diagnostic listener")
-	}
-	l.Close()
 }

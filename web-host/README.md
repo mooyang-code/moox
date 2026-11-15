@@ -62,7 +62,7 @@ Web Host 只负责提供前端静态资源，不代理 API 请求。浏览器只
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `MOOX_WEB_HOST_ADDR` | `127.0.0.1:9528` | Caddy 静态上游，只绑定 loopback |
-| `MOOX_WEB_HOST_HEALTH_ADDR` | `127.0.0.1:19527` | 独立诊断监听，需 health HMAC |
+| `MOOX_WEB_HOST_HEALTH_ADDR` | `127.0.0.1:19527` | 独立诊断监听，只听本机、不验签 |
 
 仓库根目录运行示例：
 
@@ -70,4 +70,4 @@ Web Host 只负责提供前端静态资源，不代理 API 请求。浏览器只
 MOOX_WEB_HOST_ADDR=127.0.0.1:9528 MOOX_WEB_HOST_HEALTH_ADDR=127.0.0.1:19527 ./bin/moox-web-host
 ```
 
-`/healthz`、`/readyz`、`/metrics` 不在静态监听上暴露；诊断监听缺少有效 `X-Moox-Health-Auth` 时返回 `401`。证书流程见[部署与运维](../docs/部署与运维.md)，前端说明见[前端](../docs/模块/前端.md)。
+`/healthz`、`/readyz`、`/metrics` 不在静态监听上暴露，只在只听本机、不验签的诊断端口 `19527` 上提供。证书流程见[部署与运维](../docs/部署与运维.md)，前端说明见[前端](../docs/模块/前端.md)。

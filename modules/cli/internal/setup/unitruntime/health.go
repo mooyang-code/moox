@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -12,26 +11,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/mooyang-code/moox/packages/requestauth"
 )
 
-var errHealthIdentity = errors.New("runtime health credentials or response process identity are invalid; refusing automatic restart")
+// errHealthIdentity 表示健康端口上应答的不是本次拉起的进程（二进制或启动标识对不上），这时不自动重启。
+var errHealthIdentity = errors.New("runtime health response process identity is invalid; refusing automatic restart")
 
-func validateHealthEnvironment(values map[string]string) error {
-	for _, key := range []string{"MOOX_HEALTH_AUTH_VERSION", "MOOX_HEALTH_AUTH_ACCESS_KEY"} {
-		if values[key] == "" || strings.ContainsAny(values[key], "\x00\r\n/") {
-			return errHealthIdentity
-		}
-	}
-	if values["MOOX_HEALTH_AUTH_SECRET_KEY"] == "" || strings.ContainsAny(values["MOOX_HEALTH_AUTH_SECRET_KEY"], "\x00\r\n") {
-		return errHealthIdentity
-	}
-	return nil
-}
-
-func (s *runtimeState) probe(ctx context.Context, component Component, record pidRecord, values map[string]string, readiness bool) (bool, error) {
-	ready, _, err := s.probeReasons(ctx, component, record, values, readiness)
+// probe 请求组件在本机 127.0.0.1 上的健康端口（只听本机、不验签）。
+func (s *runtimeState) probe(ctx context.Context, component Component, record pidRecord, readiness bool) (bool, error) {
+	ready, _, err := s.probeReasons(ctx, component, record, readiness)
 	return ready, err
 }
 
@@ -61,10 +48,7 @@ func notReadyReasons(raw []byte) []string {
 	return reasons
 }
 
-func (s *runtimeState) probeReasons(ctx context.Context, component Component, record pidRecord, values map[string]string, readiness bool) (bool, []string, error) {
-	if err := validateHealthEnvironment(values); err != nil {
-		return false, nil, err
-	}
+func (s *runtimeState) probeReasons(ctx context.Context, component Component, record pidRecord, readiness bool) (bool, []string, error) {
 	catalog, _ := s.catalog.Component(component.ID)
 	path := "/healthz"
 	if readiness {
@@ -75,16 +59,6 @@ func (s *runtimeState) probeReasons(ctx context.Context, component Component, re
 	if err != nil {
 		return false, nil, errors.New("cannot construct runtime health request")
 	}
-	nonce, err := requestauth.NewNonce()
-	if err != nil {
-		return false, nil, err
-	}
-	timestamp := time.Now().Unix()
-	signature, err := requestauth.Sign(values["MOOX_HEALTH_AUTH_SECRET_KEY"], requestauth.Material{Method: http.MethodGet, Path: path, Timestamp: timestamp, Nonce: nonce})
-	if err != nil {
-		return false, nil, errHealthIdentity
-	}
-	request.Header.Set("X-Moox-Health-Auth", fmt.Sprintf("%s/%s/%d/%s/%s", values["MOOX_HEALTH_AUTH_VERSION"], values["MOOX_HEALTH_AUTH_ACCESS_KEY"], timestamp, nonce, signature))
 	client := &http.Client{
 		Timeout:       2 * time.Second,
 		Transport:     &http.Transport{Proxy: nil, DisableKeepAlives: true},
@@ -95,7 +69,7 @@ func (s *runtimeState) probeReasons(ctx context.Context, component Component, re
 		return false, nil, errors.New("runtime health endpoint is unreachable")
 	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode >= 300 && response.StatusCode < 400 {
+	if response.StatusCode >= 300 && response.StatusCode < 400 {
 		return false, nil, errHealthIdentity
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))

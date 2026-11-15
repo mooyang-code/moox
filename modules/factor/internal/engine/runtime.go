@@ -68,15 +68,15 @@ type Runtime struct {
 	preload  *preloader
 	series   *seriesstore.Store
 	data     *localdata.Data
-	// blockedSource 非空时代替 data.Blocked 判断数据源能否计算（测试夹具：断档、零数据等状态只能由真实的准备流程产生）。
-	blockedSource func(seriesstore.Source) error
-	admit         *memadmit.Admitter
-	health        *factorhealth.State
-	life          *lifecycle.Controller
-	checks        taskChecks
-	writes        *inflight
-	udf           *udfModules
-	replays       *replayManager
+	// sources 判断数据源当前能不能计算，运行时就是本地数据层 data。
+	sources sourceGate
+	admit   *memadmit.Admitter
+	health  *factorhealth.State
+	life    *lifecycle.Controller
+	checks  taskChecks
+	writes  *inflight
+	udf     *udfModules
+	replays *replayManager
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
 	// pointer so status and health reads never wait on EventBus I/O.
@@ -159,6 +159,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects, Headroom: cfg.Window.Headroom, WindowMax: int64(cfg.Window.MaxMemory),
 		Lookback: func(src seriesstore.Source) int { return cfg.Window.LookbackFor(src.SpaceID, src.DatasetID, src.Freq) },
 	})
+	r.sources = r.data
 	pipelineConfig := pipeline.Config{
 		WriteBatchRows: cfg.Pipeline.WriteBatchRows, WriteRetryBackoff: 300 * time.Millisecond,
 		ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory),

@@ -61,10 +61,7 @@ func run(ctx context.Context, cfg config.Config) error {
 		instance = "egress-proxy"
 	}
 	state := healthz.NewState("egress-proxy", instance, Version, GitCommit)
-	health, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))
-	if err != nil {
-		return err
-	}
+	health := healthz.StandardMux(state.Snapshot, promhttp.Handler())
 	// 组件健康只看上报（设计 3.8）：每 30 秒经 EventBus 把指标快照与就绪判断（与 /readyz 同一个）报给 Monitor。
 	// 部署总会注入运行身份（MOOX_INSTANCE_ID、MOOX_NODE_ID）；没有身份时（本机测试）只记一条日志，不上报。
 	if reporter, err := report.NewHandler(report.DefaultConfig("egress", "egress-proxy")); err != nil {

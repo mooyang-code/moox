@@ -1,10 +1,8 @@
 package command
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,17 +118,14 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			}
 			defer gateway.Close()
 			client := deps.newClient(gateway)
-			auth, err := loadDoctorHealthAuth(doctorCfg.ReleaseRoot)
-			if err != nil {
-				return err
-			}
-			prober := doctorcli.HTTPProber{Auth: auth}
-			// 外部程序（systemd 用户服务）：状态经 SSH（本机则直接执行）读取；健康只看 Monitor 收到的上报。
+			// 健康端口只听本机：本节点直接请求 127.0.0.1，其他主机经 SSH 在目标机上请求；
+			// 外部程序（systemd 用户服务）的状态同样经 SSH（本机则直接执行）读取。读不到 moox.toml 时只能查本机。
+			probe := doctorcli.LocalHealthProbe(doctorCfg.NodeID)
 			var systemd doctorcli.SystemdChecker
 			var deployRoot string
 			if remote := loadHostRemote(file, doctorCfg.NodeID); remote != nil {
 				defer remote.Close()
-				systemd = remote.Systemd()
+				systemd, probe = remote.Systemd(), remote.HealthProbe()
 				deployRoot = remote.manifest.Paths.Resolved().DeployRoot
 			}
 			var reportValue core.Report
@@ -139,7 +134,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 				reportValue, err = doctorcli.RunBootstrap(cmd.Context(), doctorcli.BootstrapOptions{
 					NodeID: nodeID, LocalNodeID: doctorCfg.NodeID, ReleaseRoot: doctorCfg.ReleaseRoot,
 					DatasetHealthPolicyPath: resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.DatasetHealthPolicyPath),
-					CheckIDs:                checks, Client: client, MonitorClient: client, Prober: prober,
+					CheckIDs:                checks, Client: client, MonitorClient: client, Probe: probe,
 					Systemd: systemd, DeployRoot: deployRoot,
 				})
 			case "diagnose":
@@ -147,7 +142,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 					fmt.Fprintln(cmd.ErrOrStderr(), "提示：这台电脑没有部署目录，diagnose 只查本机；看目标机日志用 moox-cli setup logs --host <主机> --component <组件>")
 				}
 				reportValue, err = doctorcli.RunDiagnose(cmd.Context(), doctorcli.DiagnoseOptions{
-					NodeID: nodeID, CheckIDs: checks, Client: client, Systemd: systemd,
+					NodeID: nodeID, CheckIDs: checks, Client: client, Systemd: systemd, Probe: probe,
 					HealthChecks: report.BuiltInModuleHealthChecks(),
 				})
 			}
@@ -220,54 +215,4 @@ func resolveReleasePath(root, path string) string {
 		return path
 	}
 	return filepath.Join(root, path)
-}
-
-func loadDoctorHealthAuth(releaseRoot string) (doctorcli.HealthAuth, error) {
-	auth := doctorcli.HealthAuth{Version: envOr("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1"), AccessKey: envOr("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor"), SecretKey: os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY")}
-	if auth.SecretKey != "" {
-		return auth, nil
-	}
-	path := filepath.Join(releaseRoot, "secrets", "health-auth.env")
-	info, statErr := os.Lstat(path)
-	if statErr == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0) {
-		return auth, fmt.Errorf("health auth file must be a regular 0600 file")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return auth, nil
-		}
-		return auth, err
-	}
-	defer file.Close()
-	if err := readHealthEnv(file, &auth); err != nil {
-		return auth, err
-	}
-	return auth, nil
-}
-
-func readHealthEnv(reader io.Reader, auth *doctorcli.HealthAuth) error {
-	scanner := bufio.NewScanner(io.LimitReader(reader, 64<<10))
-	for scanner.Scan() {
-		name, value, ok := strings.Cut(scanner.Text(), "=")
-		if !ok {
-			continue
-		}
-		switch name {
-		case "MOOX_HEALTH_AUTH_VERSION":
-			auth.Version = value
-		case "MOOX_HEALTH_AUTH_ACCESS_KEY":
-			auth.AccessKey = value
-		case "MOOX_HEALTH_AUTH_SECRET_KEY":
-			auth.SecretKey = value
-		}
-	}
-	return scanner.Err()
-}
-
-func envOr(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
 }

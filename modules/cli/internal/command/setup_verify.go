@@ -263,11 +263,12 @@ func readCriticalAlerts(ctx context.Context, gateway setupVerifyGateway, spaceID
 	return criticalAlertLines(doctorcli.BuildAlertsReport(overview).Items), nil
 }
 
-// criticalAlertLines 列出 critical 项。同一个组件既有告警又有状态项，只算一项。
+// criticalAlertLines 列出 critical 项。同一个组件既有 critical 告警又有 critical 状态项，只算一项；
+// 组件状态项不是 critical 时保留它的 critical 告警，不能因为去重把严重告警丢掉。
 func criticalAlertLines(items []doctorcli.AlertItem) []string {
 	var components []string
 	for _, item := range items {
-		if item.Source == doctorcli.AlertSourceComponent {
+		if item.Source == doctorcli.AlertSourceComponent && item.Severity == doctorcli.AlertSeverityCritical {
 			components = append(components, item.Object)
 		}
 	}

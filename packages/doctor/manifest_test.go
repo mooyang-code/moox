@@ -57,7 +57,7 @@ func TestEmbeddedManifestMatchesSharedCatalog(t *testing.T) {
 			t.Errorf("Doctor metadata differs from catalog for %s", component.ID)
 		}
 	}
-	if got := manifestServices["console-proxy"]; got.HealthPath != "/readyz" || got.Transport != TransportReporter {
+	if got := manifestServices["console-proxy"]; got.HealthPort != 19528 || got.Transport != TransportReporter {
 		t.Fatalf("console proxy health contract: %+v", got)
 	}
 }
@@ -106,7 +106,7 @@ func TestManifestValidation(t *testing.T) {
 		Description:             "monitor",
 		Transport:               TransportReporter,
 		FunctionalObservability: FunctionalObservabilityActive,
-		HealthPath:              "/readyz",
+		HealthPort:              11409,
 		RecoveryActionIDs:       []string{"restart_service_manually"},
 	}
 	tests := []struct {
@@ -123,6 +123,7 @@ func TestManifestValidation(t *testing.T) {
 		{name: "systemd without unit", mutate: func(m *Manifest) { m.Components[0].Supervisor = servicecatalog.SupervisorSystemdUser }},
 		{name: "unit without systemd", mutate: func(m *Manifest) { m.Components[0].Unit = "moox-monitor" }},
 		{name: "unknown supervisor", mutate: func(m *Manifest) { m.Components[0].Supervisor = "launchd" }},
+		{name: "missing health port", mutate: func(m *Manifest) { m.Components[0].HealthPort = 0 }},
 		{name: "storage active", mutate: func(m *Manifest) {
 			m.Components[0].ServiceName = "storage-primary"
 			m.Components[0].FunctionalObservability = FunctionalObservabilityActive

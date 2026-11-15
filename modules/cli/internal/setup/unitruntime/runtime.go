@@ -347,12 +347,7 @@ func (s *runtimeState) inspect(ctx context.Context, component Component) (Status
 	if record.Launcher != nil {
 		return status, nil
 	}
-	values, err := loadEnvironment(Component{ID: component.ID, EnvironmentFile: filepath.Join(record.ReleaseRoot, "secrets", "runtime-"+component.ID+".json")})
-	if err != nil {
-		status.ReadinessError = "runtime health environment cannot be loaded"
-		return status, nil
-	}
-	status.Ready, err = s.probe(ctx, component, record, values, true)
+	status.Ready, err = s.probe(ctx, component, record, true)
 	if ctx.Err() != nil {
 		return status, ctx.Err()
 	}
@@ -378,9 +373,6 @@ func componentArguments(id string) []string {
 func (s *runtimeState) prepare(component Component) (map[string]string, time.Duration, time.Duration, error) {
 	values, err := loadEnvironment(component)
 	if err != nil {
-		return nil, 0, 0, err
-	}
-	if err := validateHealthEnvironment(values); err != nil {
 		return nil, 0, 0, err
 	}
 	stop, startup, err := lifecycleBudgets(s.plan.ReleaseRoot, component.ID)
@@ -421,14 +413,10 @@ func (s *runtimeState) start(ctx context.Context, component Component) (Status, 
 		if err != nil {
 			return status, err
 		}
-		values, err := loadEnvironment(Component{ID: component.ID, EnvironmentFile: filepath.Join(record.ReleaseRoot, "secrets", "runtime-"+component.ID+".json")})
-		if err != nil {
-			return status, err
-		}
 		if record.Launcher != nil {
-			return s.awaitStartup(ctx, component, record, values, status, -1)
+			return s.awaitStartup(ctx, component, record, status, -1)
 		}
-		status.Ready, err = s.probe(ctx, component, record, values, true)
+		status.Ready, err = s.probe(ctx, component, record, true)
 		return status, err
 	}
 	values, stop, startup, err := s.prepare(component)
@@ -516,7 +504,7 @@ func (s *runtimeState) start(ctx context.Context, component Component) (Status, 
 		return status, errors.New("could not release the recorded child process")
 	}
 	_ = release.Close()
-	return s.awaitStartup(ctx, component, record, values, status, logStart)
+	return s.awaitStartup(ctx, component, record, status, logStart)
 }
 
 func componentEnvironment(values map[string]string) []string {
@@ -539,7 +527,7 @@ func componentEnvironment(values map[string]string) []string {
 
 // awaitStartup 等组件就绪。没等到时停掉组件，并把能说的原因带回操作机：进程自己退出了，还是一直没就绪、缺哪几项。
 // logStart 是这次启动前输出日志的长度，-1 表示这次启动不是本次调用发起的，日志不属于它。
-func (s *runtimeState) awaitStartup(ctx context.Context, component Component, record pidRecord, values map[string]string, status Status, logStart int64) (Status, error) {
+func (s *runtimeState) awaitStartup(ctx context.Context, component Component, record pidRecord, status Status, logStart int64) (Status, error) {
 	readyCtx, cancel := context.WithDeadline(ctx, record.StartedAt.Add(record.StartupTimeout))
 	defer cancel()
 	exited := false
@@ -556,7 +544,7 @@ func (s *runtimeState) awaitStartup(ctx context.Context, component Component, re
 			break
 		}
 		if actual == record.processIdentity {
-			ready, current, probeErr := s.probeReasons(readyCtx, component, record, values, true)
+			ready, current, probeErr := s.probeReasons(readyCtx, component, record, true)
 			if len(current) != 0 {
 				reasons = current
 			}
@@ -762,10 +750,6 @@ func (s *runtimeState) healthcheck(ctx context.Context, component Component) (St
 		status.Action = "started"
 		return status, err
 	}
-	values, err := loadEnvironment(component)
-	if err != nil {
-		return status, err
-	}
 	record, _, err := s.record(component)
 	if err != nil {
 		return status, err
@@ -776,7 +760,7 @@ func (s *runtimeState) healthcheck(ctx context.Context, component Component) (St
 		status.Action = "started"
 		return status, err
 	}
-	live, err := s.probe(ctx, component, record, values, false)
+	live, err := s.probe(ctx, component, record, false)
 	if ctx.Err() != nil {
 		return status, ctx.Err()
 	}
@@ -784,7 +768,7 @@ func (s *runtimeState) healthcheck(ctx context.Context, component Component) (St
 		return status, err
 	}
 	if err == nil && live {
-		status.Ready, _ = s.probe(ctx, component, record, values, true)
+		status.Ready, _ = s.probe(ctx, component, record, true)
 		return status, nil
 	}
 	if _, err := s.stop(ctx, component); err != nil {

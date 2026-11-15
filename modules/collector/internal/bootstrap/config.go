@@ -36,7 +36,6 @@ type Config struct {
 	KlineResample      KlineResampleConfig              `yaml:"kline_resample"`
 	// EventBus 是 Collector 到 EventBus 的连接，K 线合成与下架检测共用；不配置时不发布任何事件，合成只靠兜底检查。
 	EventBus    eventbus.Config   `yaml:"event_bus"`
-	Health      HealthConfig      `yaml:"health"`
 	EgressProxy EgressProxyConfig `yaml:"egress_proxy"`
 	// Delist 是下架检测的开关，安装时按拓扑渲染：没有出口代理（没配海外机）时关掉自动检测。
 	Delist      DelistConfig       `yaml:"delist"`
@@ -165,11 +164,6 @@ type KlineResampleConfig struct {
 	MaxReadKeys int `yaml:"max_read_keys"`
 }
 
-// HealthConfig controls the lightweight HTTP health endpoint.
-type HealthConfig struct {
-	Addr string `yaml:"addr"`
-}
-
 // DelistConfig 控制下架检测。AutoDetect 为 false 时不轮询币安现货、币安 U 本位、OKX 永续三个来源，
 // 手工登记（collector delist register）照常可用。默认 true：配置里没写时保持自动检测。
 type DelistConfig struct {
@@ -244,9 +238,6 @@ func Load(path string) (*Config, error) {
 func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_DB_PATH"); v != "" {
 		c.Database.Path = v
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
-		c.Health.Addr = v
 	}
 	// 日志保留天数由部署工具按 moox.toml 的 [logging] retention_days 下发；只在创建日志主题时生效。
 	if v := strings.TrimSpace(os.Getenv("MOOX_CLS_RETENTION_DAYS")); v != "" {
@@ -334,9 +325,6 @@ func Default() *Config {
 			Enabled: false, ScanTimeout: 30 * time.Second, ExecTimeout: 30 * time.Second,
 			FallbackLookbackBars: 3, FallbackGrace: time.Minute, FallbackMaxBuckets: 200,
 			HistoryBucketsPerRound: 20, HistoryMaxJobs: 8, MaxReadKeys: 5000,
-		},
-		Health: HealthConfig{
-			Addr: ":11412",
 		},
 		EgressProxy: EgressProxyConfig{Domains: []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}},
 	}

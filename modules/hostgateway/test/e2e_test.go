@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -26,7 +25,6 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
@@ -93,7 +91,7 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 		}
 		return body, nil
 	})
-	for key, value := range map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": "fixture", "MOOX_HEALTH_AUTH_SECRET_KEY": "synthetic-health", "MOOX_INSTANCE_ID": "storage", "MOOX_NODE_ID": "storage", "MOOX_BOOT_ID": "synthetic-boot", "MOOX_METRICS_EVENTBUS_URL": "nats://127.0.0.1:1"} {
+	for key, value := range map[string]string{"MOOX_INSTANCE_ID": "storage", "MOOX_NODE_ID": "storage", "MOOX_BOOT_ID": "synthetic-boot", "MOOX_METRICS_EVENTBUS_URL": "nats://127.0.0.1:1"} {
 		t.Setenv(key, value)
 	}
 	oldPath := trpc.ServerConfigPath
@@ -130,19 +128,9 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 	require.NoError(t, err)
 	defer source.Close()
 	require.Eventually(t, func() bool { _, err := source.Fetch(context.Background(), ""); return err == nil }, 10*time.Second, 30*time.Millisecond)
+	// 健康端口只听本机、不验签：同机直接请求即可。
 	healthClient := &http.Client{Timeout: 2 * time.Second}
-	healthURL := "http://" + cfg.Server.HealthAddr + "/readyz"
-	unauthorized, err := healthClient.Get(healthURL)
-	require.NoError(t, err)
-	_ = unauthorized.Body.Close()
-	require.Equal(t, http.StatusUnauthorized, unauthorized.StatusCode)
-	healthRequest, err := http.NewRequest(http.MethodGet, healthURL, nil)
-	require.NoError(t, err)
-	timestamp, nonce := time.Now().Unix(), strings.Repeat("a", 64)
-	signature, err := requestauth.Sign("synthetic-health", requestauth.Material{Method: http.MethodGet, Path: "/readyz", Timestamp: timestamp, Nonce: nonce})
-	require.NoError(t, err)
-	healthRequest.Header.Set("X-Moox-Health-Auth", fmt.Sprintf("moox-health-v1/fixture/%d/%s/%s", timestamp, nonce, signature))
-	ready, err := healthClient.Do(healthRequest)
+	ready, err := healthClient.Get("http://" + cfg.Server.HealthAddr + "/readyz")
 	require.NoError(t, err)
 	_ = ready.Body.Close()
 	require.Equal(t, http.StatusOK, ready.StatusCode)

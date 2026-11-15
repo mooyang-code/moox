@@ -13,9 +13,5 @@ func Handler(state *State) http.Handler {
 }
 
 func Register(service server.Service, state *State) error {
-	handler, err := healthz.WrapFromEnv(Handler(state))
-	if err != nil {
-		return err
-	}
-	return healthz.RegisterNoProtocolServiceMux(service, handler)
+	return healthz.RegisterNoProtocolServiceMux(service, Handler(state))
 }

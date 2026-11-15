@@ -53,7 +53,7 @@ type Component struct {
 	Dependencies             []string                `yaml:"dependencies" json:"dependencies"`
 	Transport                Transport               `yaml:"transport" json:"transport"`
 	FunctionalObservability  FunctionalObservability `yaml:"functional_observability" json:"functional_observability"`
-	HealthPath               string                  `yaml:"health_path" json:"health_path"`
+	HealthPort               int                     `yaml:"health_port" json:"health_port"` // 只听本机的健康端口，doctor 在目标机上请求它
 	ConfigPaths              []string                `yaml:"config_paths" json:"config_paths"`
 	WritablePaths            []string                `yaml:"writable_paths" json:"writable_paths"`
 	RecoveryActionIDs        []string                `yaml:"recovery_action_ids" json:"recovery_action_ids"`
@@ -104,20 +104,13 @@ func loadManifest(raw []byte, source string) (Manifest, error) {
 		if supervisor == "" {
 			supervisor = servicecatalog.SupervisorMooxRuntime
 		}
-		healthPath := ""
-		switch component.Health.Kind {
-		case "readyz":
-			healthPath = "/readyz"
-		case "https":
-			healthPath = "/"
-		}
 		manifest.Components = append(manifest.Components, Component{
 			ComponentID: component.ID, ServiceName: component.ID,
 			Role: metadata.Role, Description: metadata.Description,
 			Duties: metadata.Duties, Inputs: metadata.Inputs, Outputs: metadata.Outputs,
 			Dependencies: metadata.Dependencies, Transport: Transport(metadata.Transport),
 			FunctionalObservability: FunctionalObservability(metadata.FunctionalObservability),
-			HealthPath:              healthPath, ConfigPaths: metadata.ConfigPaths, WritablePaths: metadata.WritablePaths,
+			HealthPort:              component.Health.Port, ConfigPaths: metadata.ConfigPaths, WritablePaths: metadata.WritablePaths,
 			RecoveryActionIDs: metadata.RecoveryActionIDs, RequiredInDefaultProfile: metadata.RequiredInDefaultProfile,
 			Supervisor: supervisor, Unit: metadata.Unit,
 		})
@@ -194,8 +187,8 @@ func (c Component) validate() error {
 	if strings.HasPrefix(c.ServiceName, "storage-") && c.FunctionalObservability != FunctionalObservabilityDeferred {
 		return fmt.Errorf("storage service %q must remain deferred", c.ServiceName)
 	}
-	if c.HealthPath != "/readyz" && c.HealthPath != "/healthz" && c.HealthPath != "/" && c.HealthPath != "" {
-		return fmt.Errorf("unsupported health_path %q", c.HealthPath)
+	if c.HealthPort <= 0 || c.HealthPort > 65535 {
+		return fmt.Errorf("invalid health_port %d", c.HealthPort)
 	}
 	for _, candidate := range append(append([]string{}, c.ConfigPaths...), c.WritablePaths...) {
 		if err := validateRelativePath(candidate); err != nil {

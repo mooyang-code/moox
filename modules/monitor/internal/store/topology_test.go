@@ -18,11 +18,6 @@ func TestTopologyPersistsFullRegistration(t *testing.T) {
 	require.NoError(t, manager.ApplySchema(schema.SQL()))
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	for i := range catalog.Components {
-		if catalog.Components[i].ID == "web-host" {
-			catalog.Components[i].Health = servicecatalog.Health{Kind: "none"}
-		}
-	}
 	snapshot := domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(),
 		Hosts:       []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
 		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "web-host", Status: "disabled"}},
@@ -38,7 +33,7 @@ func TestTopologyPersistsFullRegistration(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, snapshot, *before)
 	component, _ := before.Catalog.Component("web-host")
-	require.Equal(t, "none", component.Health.Kind)
+	require.Equal(t, 19527, component.Health.Port)
 	// 拓扑不合法时不写入，库里仍是上一份完整拓扑。
 	invalid := snapshot
 	invalid.Deployments = []domain.TopologyDeployment{{HostID: "missing-host", ComponentID: "web-host", Status: "enabled"}}

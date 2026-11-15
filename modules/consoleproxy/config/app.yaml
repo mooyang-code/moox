@@ -1,5 +1,4 @@
-# Paths are relative to this configuration file; health credentials come from
-# the existing MOOX_HEALTH_AUTH_* environment, never this distributable file.
+# 路径相对本配置文件；诊断端口只听本机、不验签。
 public:
   host: localhost
   bind: 0.0.0.0

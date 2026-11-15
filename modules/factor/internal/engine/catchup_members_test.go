@@ -58,12 +58,13 @@ func TestBlockedSourceExcludesTaskFromCatchup(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, _ := newLifecycleRuntime(t, engineTask("ftask_a", "dataset_a", true, "bias"), engineTask("ftask_b", "dataset_b", true, "bias"))
-			r.blockedSource = func(src seriesstore.Source) error {
+			// 断档、零数据等状态只能由真实的准备流程产生，这里换成假的本地数据判断。
+			r.sources = sourcesFunc(func(src seriesstore.Source) error {
 				if src.DatasetID == "dataset_b" {
 					return tc.err
 				}
 				return nil
-			}
+			})
 			r.refreshTaskChecks(context.Background())
 			checks, _ := r.checks.get("ftask_b")
 			require.Equal(t, domain.TaskCheckFail, checkStatus(checks, tc.check))
@@ -73,3 +74,8 @@ func TestBlockedSourceExcludesTaskFromCatchup(t *testing.T) {
 		})
 	}
 }
+
+// sourcesFunc 是测试里替代本地数据层的数据源判断。
+type sourcesFunc func(seriesstore.Source) error
+
+func (f sourcesFunc) Blocked(src seriesstore.Source) error { return f(src) }

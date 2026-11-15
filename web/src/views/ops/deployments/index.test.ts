@@ -24,7 +24,7 @@ const component: CatalogComponent = {
   scope: "any",
   replicas: "multi",
   protected: false,
-  health: { kind: "readyz", port: 11013 },
+  health: { port: 11013 },
   services: [
     {
       path: "test.Service",

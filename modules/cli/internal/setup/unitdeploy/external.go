@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path"
@@ -62,7 +63,6 @@ type externalInstall struct {
 	manifest     setupconfig.Manifest
 	host         setupconfig.Host
 	control      setupconfig.Host
-	identity     runtimeIdentity
 	operation    unitOperation
 	localClients string
 	target       setupssh.Client
@@ -93,10 +93,7 @@ func deployExternal(ctx context.Context, in externalInstall) (UnitResult, error)
 	if err != nil {
 		return result, err
 	}
-	secrets := map[string][]byte{
-		program.keyFile:   []byte(credentials.Secret + "\n"),
-		"health-auth.env": []byte(healthEnvironment(in.identity)),
-	}
+	secrets := map[string][]byte{program.keyFile: []byte(credentials.Secret + "\n")}
 	if len(in.objectStoreEnv) > 0 {
 		secrets[objectStoreEnvFile] = append([]byte(nil), in.objectStoreEnv...)
 	}
@@ -139,15 +136,9 @@ func deployExternal(ctx context.Context, in externalInstall) (UnitResult, error)
 			return result, err
 		}
 	}
-	// 凭据放到安装目录自己的 secrets 目录（脚本要求它们已经在那里）；健康凭据由脚本经 --health-env 安装。
+	// 凭据放到安装目录自己的 secrets 目录（脚本要求它们已经在那里）。
 	installSecrets := path.Join(installDir, "secrets")
-	moves := []string{}
-	for name := range secrets {
-		if name != "health-auth.env" {
-			moves = append(moves, name)
-		}
-	}
-	slices.Sort(moves)
+	moves := slices.Sorted(maps.Keys(secrets))
 	if err := runExternal(ctx, in.target, "place the external program credentials", `set -eu
 umask 077
 stage="$1"; secrets="$2"; shift 2
@@ -163,7 +154,6 @@ done`, append([]string{stage, installSecrets}, moves...)...); err != nil {
 		"bash", path.Join(extracted, program.script),
 		"--dir", installDir,
 		"--binary", path.Join(extracted, "bin/moox-"+profile),
-		"--health-env", path.Join(stage, "secrets/health-auth.env"),
 		"--access-address", access.address, "--access-id", access.id, "--access-key-id", credentials.KeyID,
 	}
 	switch profile {
@@ -261,10 +251,4 @@ func externalAccess(manifest setupconfig.Manifest) (externalAccessTarget, error)
 	}
 	host := manifest.HostByID(chosen)
 	return externalAccessTarget{address: net.JoinHostPort(host.Address, "11004"), id: "access@" + host.Name}, nil
-}
-
-func healthEnvironment(identity runtimeIdentity) string {
-	return "MOOX_HEALTH_AUTH_VERSION=moox-health-v1\n" +
-		"MOOX_HEALTH_AUTH_ACCESS_KEY=" + identity.HealthAccessKey + "\n" +
-		"MOOX_HEALTH_AUTH_SECRET_KEY=" + identity.HealthSecret + "\n"
 }

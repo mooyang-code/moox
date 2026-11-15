@@ -14,7 +14,6 @@ ACCESS_ID=""
 ACCESS_KEY_ID=""
 EVENTBUS_URL=""
 BINARY=""
-HEALTH_ENV=""
 SKIP_BUILD=0
 NO_START=0
 SYSTEMD_USER_DIR="${MOOX_SYSTEMD_USER_DIR:-${HOME}/.config/systemd/user}"
@@ -34,8 +33,6 @@ Options:
   --access-key-id <id>     KeyID assigned by Admin keys export --caller factor-engine.
   --eventbus-url <url>      EventBus URL, e.g. tls://eventbus.example.com:4222.
   --binary <path>           Install this prebuilt moox-factor-engine (from the release package).
-  --health-env <path>       Health credential file (MOOX_HEALTH_AUTH_* variables, mode 0600) rendered by moox-cli.
-                            Required for the first deployment; later deployments keep the installed one.
   --skip-build              Reuse <dir>/bin/moox-factor-engine.
   --no-start                Install files only; do not (re)start the service.
 
@@ -64,7 +61,6 @@ while [[ $# -gt 0 ]]; do
     --access-key-id) ACCESS_KEY_ID="$2"; shift 2 ;;
     --eventbus-url) EVENTBUS_URL="$2"; shift 2 ;;
     --binary) BINARY="$2"; shift 2 ;;
-    --health-env) HEALTH_ENV="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --no-start) NO_START=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -157,24 +153,8 @@ if ! "${DEPLOY_DIR}/bin/moox-factor-engine" tune --config "${DEPLOY_DIR}/config/
   log "WARN: moox-factor-engine tune failed; run it manually: moox-factor-engine tune --config ${DEPLOY_DIR}/config/engine.yaml --write"
 fi
 
-# 健康检查凭据由 moox-cli 按集群运行身份渲染后传入（Monitor 经中转探测时用同一把）；重复部署不带 --health-env 时沿用已有的。
-health_env="${SECRETS_DIR}/health-auth.env"
-if [[ -n "${HEALTH_ENV}" ]]; then
-  [[ -f "${HEALTH_ENV}" && ! -L "${HEALTH_ENV}" ]] || fail "missing --health-env file ${HEALTH_ENV}"
-  [[ "$(file_mode "${HEALTH_ENV}")" == 600 ]] || fail "--health-env file ${HEALTH_ENV} must have mode 0600"
-  for var in MOOX_HEALTH_AUTH_VERSION MOOX_HEALTH_AUTH_ACCESS_KEY MOOX_HEALTH_AUTH_SECRET_KEY; do
-    grep -Eq "^${var}=[^[:space:]]+$" "${HEALTH_ENV}" || fail "--health-env file lacks ${var}"
-  done
-  (umask 077; cp "${HEALTH_ENV}" "${health_env}.new" && mv -f "${health_env}.new" "${health_env}")
-fi
-[[ -s "${health_env}" ]] || fail "--health-env is required for the first deployment"
-health_access="$(sed -n 's/^MOOX_HEALTH_AUTH_ACCESS_KEY=//p' "${health_env}")"
-health_secret="$(sed -n 's/^MOOX_HEALTH_AUTH_SECRET_KEY=//p' "${health_env}")"
-[[ -n "${health_access}" && -n "${health_secret}" ]] || fail "invalid ${health_env}"
-
 render_template() {
-  sed -e "s#__ROOT__#${DEPLOY_DIR}#g" -e "s#__SECRETS__#${SECRETS_DIR}#g" -e "s#__HEALTH_ACCESS_KEY__#${health_access}#g" \
-    -e "s#__HEALTH_SECRET_KEY__#${health_secret}#g" "$1"
+  sed -e "s#__ROOT__#${DEPLOY_DIR}#g" -e "s#__SECRETS__#${SECRETS_DIR}#g" "$1"
 }
 
 mkdir -p "${SYSTEMD_USER_DIR}"
@@ -195,14 +175,12 @@ fi
 
 log "wait for moox-factor-engine readiness"
 for _ in $(seq 1 90); do
-  if env -i PATH=/usr/bin:/bin MOOX_HEALTH_AUTH_ACCESS_KEY="${health_access}" MOOX_HEALTH_AUTH_SECRET_KEY="${health_secret}" \
-    "${DEPLOY_DIR}/bin/moox-factor-engine" health >/dev/null 2>&1; then
+  if env -i PATH=/usr/bin:/bin "${DEPLOY_DIR}/bin/moox-factor-engine" health >/dev/null 2>&1; then
     log "moox-factor-engine is ready (${ENGINE_ID})"
     exit 0
   fi
   sleep 2
 done
-env -i PATH=/usr/bin:/bin MOOX_HEALTH_AUTH_ACCESS_KEY="${health_access}" MOOX_HEALTH_AUTH_SECRET_KEY="${health_secret}" \
-  "${DEPLOY_DIR}/bin/moox-factor-engine" health || true
+env -i PATH=/usr/bin:/bin "${DEPLOY_DIR}/bin/moox-factor-engine" health || true
 tail -n 30 "${DEPLOY_DIR}/logs/factor-engine.log" >&2 || true
 fail "moox-factor-engine did not become ready"

@@ -47,14 +47,9 @@ func (c Catalog) Validate() error {
 		if component.Scope == ScopeHost && component.Replicas != Single {
 			return fmt.Errorf("host component %q must be single per host", component.ID)
 		}
-		if !slices.Contains([]string{"readyz", "https", "none"}, component.Health.Kind) {
-			return fmt.Errorf("component %q has invalid health.kind", component.ID)
-		}
 		// 外部程序可以声明服务（只监听本机，经所在主机的网关路由），但不能声明其他端口。
-		if component.ExternalProgram {
-			if len(component.Ports) != 0 || component.Health.Kind != "readyz" || component.Health.Loopback {
-				return fmt.Errorf("external program %q cannot declare ports and must use a readyz health port", component.ID)
-			}
+		if component.ExternalProgram && len(component.Ports) != 0 {
+			return fmt.Errorf("external program %q cannot declare ports", component.ID)
 		}
 		ports := map[int]bool{}
 		addPort := func(port int) error {
@@ -64,11 +59,8 @@ func (c Catalog) Validate() error {
 			ports[port] = true
 			return nil
 		}
-		if component.Health.Kind == "none" {
-			if component.Health.Port != 0 {
-				return fmt.Errorf("health none cannot have a port")
-			}
-		} else if err := addPort(component.Health.Port); err != nil {
+		// 每个组件都有健康端口。
+		if err := addPort(component.Health.Port); err != nil {
 			return err
 		}
 		for _, port := range component.Ports {

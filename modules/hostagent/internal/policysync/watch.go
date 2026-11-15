@@ -38,15 +38,21 @@ type Watch struct {
 	lastStart   string
 	changes     []time.Time
 	restarting  bool
+	// alerted 记下哪类告警真的送达过（按消息的 kind）：恢复只在告警送达过时才推，
+	// 否则全新安装时（渠道还没缓存、告警发不出去）会冒出一条从没告警过的“已恢复”。
+	alerted map[string]bool
 }
 
 // NewWatch 创建直推判断；policyPath 是主机策略缓存（推送渠道从这里读）。
 func NewWatch(host, policyPath string, local func() bool, logf func(string, ...any)) *Watch {
 	return &Watch{host: host, local: local, now: time.Now, logf: logf,
-		send: func(ctx context.Context, message notification.Message) error { return sendToPolicyChannels(ctx, policyPath, message) }}
+		send: func(ctx context.Context, message notification.Message) error {
+			return sendToPolicyChannels(ctx, policyPath, message)
+		}}
 }
 
-// Observe 记下一次拉取的结果：startedAt 是 Monitor 的进程启动时间，err 非空表示这次拉取失败。
+// Observe 记下一次拉取的结果：startedAt 是 Monitor 的进程启动时间，err 非空表示这次没能从 Monitor 拿到主机策略
+// （本机写缓存失败不算：那时 Monitor 是可达的）。
 func (w *Watch) Observe(ctx context.Context, startedAt string, err error) {
 	if w == nil || (w.local != nil && w.local()) {
 		return
@@ -61,9 +67,12 @@ func (w *Watch) Observe(ctx context.Context, startedAt string, err error) {
 			messages = append(messages, w.unreachableMessage(err))
 		}
 	} else {
-		if w.unreachable {
+		if w.unreachable && w.alerted["unreachable"] {
 			messages = append(messages, w.message("unreachable", notification.SeverityInfo, "控制机与 Monitor 已恢复可达",
 				fmt.Sprintf("主机 %s 的采集器又能从 Monitor 拉到主机策略了（此前连续 %d 次失败）。", w.host, w.failures)))
+		}
+		if w.unreachable {
+			delete(w.alerted, "unreachable")
 		}
 		w.failures, w.unreachable = 0, false
 		if startedAt != "" && w.lastStart != "" && startedAt != w.lastStart {
@@ -88,13 +97,28 @@ func (w *Watch) Observe(ctx context.Context, startedAt string, err error) {
 				w.host, int(RestartWindow/time.Minute), len(w.changes), w.lastStart)))
 	case len(w.changes) < RestartChanges && w.restarting:
 		w.restarting = false
-		messages = append(messages, w.message("monitor_restart", notification.SeverityInfo, "Monitor 不再反复重启",
-			fmt.Sprintf("最近 %d 分钟里 Monitor 的启动时间变化少于 %d 次。", int(RestartWindow/time.Minute), RestartChanges)))
+		if w.alerted["monitor_restart"] {
+			messages = append(messages, w.message("monitor_restart", notification.SeverityInfo, "Monitor 不再反复重启",
+				fmt.Sprintf("最近 %d 分钟里 Monitor 的启动时间变化少于 %d 次。", int(RestartWindow/time.Minute), RestartChanges)))
+		}
+		delete(w.alerted, "monitor_restart")
 	}
 	w.mu.Unlock()
 	for _, message := range messages {
-		if err := w.send(ctx, message); err != nil && w.logf != nil {
-			w.logf("host-agent direct alert %q not delivered: %v", message.Title, err)
+		err := w.send(ctx, message)
+		if err != nil {
+			if w.logf != nil {
+				w.logf("host-agent direct alert %q not delivered: %v", message.Title, err)
+			}
+			continue
+		}
+		if message.Severity == notification.SeverityCritical {
+			w.mu.Lock()
+			if w.alerted == nil {
+				w.alerted = map[string]bool{}
+			}
+			w.alerted[message.Labels["kind"]] = true
+			w.mu.Unlock()
 		}
 	}
 }

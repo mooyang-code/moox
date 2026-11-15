@@ -17,10 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	healthSecret = "health-secret-0123456789abcdef0123456789"
-	callerKey    = "caller-signing-key-0123456789abcdef0123456789"
-)
+const callerKey = "caller-signing-key-0123456789abcdef0123456789"
 
 // scriptedSSH 是目标机的假 SSH：记录执行的命令与上传的文件，按需让某类命令失败。
 type scriptedSSH struct {
@@ -33,7 +30,7 @@ type scriptedSSH struct {
 func (s *scriptedSSH) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	s.runs = append(s.runs, argv)
 	if s.failWhen != nil && s.failWhen(argv) {
-		return setupssh.Result{ExitCode: 1, Stderr: callerKey + healthSecret}, nil
+		return setupssh.Result{ExitCode: 1, Stderr: callerKey}, nil
 	}
 	switch {
 	case argv[0] == "python3" && argv[3] == "prepare":
@@ -110,7 +107,6 @@ func externalFixture(t *testing.T, profile string, disabled bool) (externalInsta
 		manifest:     manifest,
 		host:         manifest.HostByID("factor"),
 		control:      manifest.HostByID("control"),
-		identity:     runtimeIdentity{HealthAccessKey: "health-access-17", HealthSecret: healthSecret},
 		operation:    unitOperation{Profile: profile, Package: unitpackage.Result{Archive: archive, SHA256: "sha256:" + digest}},
 		localClients: clients,
 		target:       target,
@@ -132,7 +128,7 @@ func TestDeployExternalInstallsFactorEngineWithCredentialsAndStartsIt(t *testing
 
 	stage := "/data/moox/bootstrap-input/external/factor-engine-export1"
 	assert.Equal(t, []byte(callerKey+"\n"), target.uploads[stage+"/secrets/access-factor-engine.key"])
-	assert.Contains(t, string(target.uploads[stage+"/secrets/health-auth.env"]), "MOOX_HEALTH_AUTH_ACCESS_KEY=health-access-17")
+	assert.NotContains(t, target.uploads, stage+"/secrets/health-auth.env", "健康端口不验签，不投放健康密钥")
 	assert.Equal(t, []byte("CA PEM"), target.uploads[stage+"/secrets/ca.pem"])
 	assert.Contains(t, string(target.uploads[stage+"/secrets/factor-eventbus.yaml"]), "ca_file: ca.pem")
 	assert.Contains(t, target.uploads, artifactPath("/data/moox", in.operation.Package))
@@ -148,15 +144,14 @@ func TestDeployExternalInstallsFactorEngineWithCredentialsAndStartsIt(t *testing
 	for _, want := range []string{
 		stage + "/software/factor-engine/scripts/deploy/deploy-factor-engine.sh",
 		"--dir /data/moox/factor-engine", "--binary " + stage + "/software/bin/moox-factor-engine",
-		"--health-env " + stage + "/secrets/health-auth.env",
 		"--access-address 198.51.100.11:11004", "--access-id access@storage", "--access-key-id assigned-key-17",
 		"--engine-id factor-engine@factor", "--eventbus-url tls://198.51.100.11:4222",
 	} {
 		assert.Contains(t, line, want)
 	}
 	assert.NotContains(t, line, "--no-start")
+	assert.NotContains(t, line, "--health-env")
 	assert.NotContains(t, line, callerKey, "密钥不出现在命令行")
-	assert.NotContains(t, line, healthSecret, "密钥不出现在命令行")
 	assert.True(t, target.ran("rm -rf -- \"$1\""), "暂存目录里的凭据与解包内容用完即删")
 	assert.True(t, target.ran("is-active"), "核对服务状态")
 	assert.True(t, target.ran("Linger"), "核对 linger")
@@ -205,7 +200,6 @@ func TestDeployExternalReportsFailuresWithoutLeakingSecrets(t *testing.T) {
 	_, err := deployExternal(t.Context(), in)
 	require.ErrorContains(t, err, "安装外部程序")
 	assert.NotContains(t, err.Error(), callerKey)
-	assert.NotContains(t, err.Error(), healthSecret)
 	assert.True(t, target.ran("rm -rf -- \"$1\""), "失败时也要清掉暂存的凭据")
 
 	in, target, _ = externalFixture(t, "factor-engine", false)

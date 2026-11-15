@@ -13,7 +13,6 @@ import (
 func Default() *Config {
 	return &Config{
 		Broker: BrokerConfig{Host: "127.0.0.1", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024},
-		Health: HealthConfig{Addr: "127.0.0.1:11419"},
 	}
 }
 
@@ -54,9 +53,6 @@ func (c *Config) applyDefaults() {
 	if c.Broker.MaxPayloadBytes == 0 {
 		c.Broker.MaxPayloadBytes = d.Broker.MaxPayloadBytes
 	}
-	if c.Health.Addr == "" {
-		c.Health.Addr = d.Health.Addr
-	}
 	for i := range c.Streams {
 		normalizeStream(&c.Streams[i])
 	}
@@ -83,9 +79,6 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_EVENTBUS_SERVER_NAME"); v != "" {
 		c.Broker.ServerName = v
-	}
-	if v := os.Getenv("MOOX_EVENTBUS_HEALTH_ADDR"); v != "" {
-		c.Health.Addr = v
 	}
 	if v := os.Getenv("MOOX_EVENTBUS_PORT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

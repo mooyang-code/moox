@@ -33,7 +33,7 @@ func StopExternalService(ctx context.Context, target setupssh.Client, component 
 	return runExternal(ctx, target, "stop and disable "+component, externalStopScript, unit)
 }
 
-// StartExternalService 启用并启动外部程序，再用安装目录里的健康凭据执行本机健康检查，等到就绪才返回。
+// StartExternalService 启用并启动外部程序，再经 SSH 在目标机上执行本机健康检查（健康端口只听本机、不验签），等到就绪才返回。
 // installDeploymentRoot 是部署根（安装目录为 <部署根>/<组件>）。
 func StartExternalService(ctx context.Context, target setupssh.Client, component, installDeploymentRoot string) error {
 	program, ok := externalPrograms[component]
@@ -48,11 +48,7 @@ systemctl --user restart "$1"`, program.unit); err != nil {
 		return err
 	}
 	for attempt := 0; attempt < 45; attempt++ {
-		output, err := target.Run(ctx, []string{"sh", "-c", `set -eu
-set -a
-. "$1/secrets/health-auth.env"
-set +a
-exec env -i PATH=/usr/bin:/bin MOOX_HEALTH_AUTH_ACCESS_KEY="$MOOX_HEALTH_AUTH_ACCESS_KEY" MOOX_HEALTH_AUTH_SECRET_KEY="$MOOX_HEALTH_AUTH_SECRET_KEY" "$1/bin/moox-$2" health`, "moox-external-health", installDir, component}, nil)
+		output, err := target.Run(ctx, []string{"sh", "-c", `exec env -i PATH=/usr/bin:/bin "$1/bin/moox-$2" health`, "moox-external-health", installDir, component}, nil)
 		if err == nil && output.ExitCode == 0 {
 			return nil
 		}

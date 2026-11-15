@@ -17,6 +17,6 @@ TARGET_GOOS=linux TARGET_GOARCH=amd64 bash scripts/build/build.sh access
 
 内部主机身份、loopback 地址和 CA 来自同一发布根目录下的 `host-gateway/config/app.yaml`。目录缓存位于 `data/access/gatewayclient`；控制面暂时不可达时继续使用有效缓存。就绪状态要求外部白名单涉及的服务都有目录 deployment。
 
-健康检查使用 `11014`：仓库模板绑定 loopback，原生安装按组件目录渲染为 `0.0.0.0`；接口使用共享健康鉴权的 `MOOX_HEALTH_AUTH_*` 配置。逐方法超时与请求体上限来自组件目录，拒绝指标为 `moox_access_denials_total`。独立部署 profile 为 `access`，本组件使用纯 Go SQLite，可在本机关闭 CGO 构建 Linux 制品。
+健康检查使用 `11014`：只听 127.0.0.1、不验签。逐方法超时与请求体上限来自组件目录，拒绝指标为 `moox_access_denials_total`。独立部署 profile 为 `access`，本组件使用纯 Go SQLite，可在本机关闭 CGO 构建 Linux 制品。
 
 原生 `setup deploy-unit --profile access` 已接入身份导出、校验文件安装和配置渲染；实际网络放行与运行状态以部署结果和健康检查为准。外部调用方的完整逐方法白名单见[外部接入](../../docs/模块/外部接入.md)。

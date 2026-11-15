@@ -452,7 +452,7 @@ func TestBuilderNotReadyReportMarksComponentDown(t *testing.T) {
 	}
 }
 
-// 登记了部署却从没上报过的组件按“从未上报”处理，不论目录里的功能观测标记（不再有豁免）。
+// 登记了部署却从没上报过的组件按“从未上报”处理，不论目录里的功能观测标记（不再有豁免）；已启用的部署状态记为 down。
 func TestBuilderTreatsEveryDeploymentWithoutReportAsMissing(t *testing.T) {
 	for _, componentID := range []string{"factor-mgr", "egress-proxy", "web-host"} {
 		query, repositories := openOverviewState(t, func(*gorm.DB) {})
@@ -461,7 +461,7 @@ func TestBuilderTreatsEveryDeploymentWithoutReportAsMissing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Services) != 1 || got.Services[0].Status != "unknown" ||
+		if len(got.Services) != 1 || got.Services[0].Status != "down" ||
 			got.Services[0].ReporterStatus != "missing" ||
 			!strings.Contains(got.Services[0].Reason, "reporter missing") {
 			t.Fatalf("%s services = %+v", componentID, got.Services)

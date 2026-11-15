@@ -1,24 +1,18 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
-	"github.com/mooyang-code/moox/packages/requestauth"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout)) }
@@ -104,14 +98,8 @@ func checkHealth(arguments []string, output io.Writer) error {
 		if err != nil {
 			return err
 		}
-		host, port, _ := net.SplitHostPort(cfg.Server.HealthAddr)
-		if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
-			host = "127.0.0.1"
-			if ip.To4() == nil {
-				host = "::1"
-			}
-		}
-		*endpoint = "http://" + net.JoinHostPort(host, port) + "/readyz"
+		// 健康端口只听本机（配置校验保证），直接按配置的地址请求。
+		*endpoint = "http://" + cfg.Server.HealthAddr + "/readyz"
 	}
 	parsed, err := url.Parse(*endpoint)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -120,9 +108,6 @@ func checkHealth(arguments []string, output io.Writer) error {
 	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	request, err := http.NewRequest(http.MethodGet, parsed.String(), nil)
 	if err != nil {
-		return err
-	}
-	if err := signHealthRequest(request); err != nil {
 		return err
 	}
 	response, err := client.Do(request)
@@ -135,31 +120,6 @@ func checkHealth(arguments []string, output io.Writer) error {
 		return fmt.Errorf("gateway is not ready: HTTP %d", response.StatusCode)
 	}
 	_, _ = fmt.Fprintln(output, "ready")
-	return nil
-}
-
-func signHealthRequest(request *http.Request) error {
-	version := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_VERSION"))
-	accessKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY"))
-	secretKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY"))
-	if version == "" || accessKey == "" || secretKey == "" {
-		return errors.New("health authentication environment is required")
-	}
-	nonceBytes := make([]byte, 32)
-	if _, err := rand.Read(nonceBytes); err != nil {
-		return fmt.Errorf("generate health nonce: %w", err)
-	}
-	timestamp := time.Now().Unix()
-	nonce := hex.EncodeToString(nonceBytes)
-	signature, err := requestauth.Sign(secretKey, requestauth.Material{
-		Method: request.Method, Path: request.URL.EscapedPath(), Timestamp: timestamp, Nonce: nonce,
-	})
-	if err != nil {
-		return fmt.Errorf("sign health request: %w", err)
-	}
-	request.Header.Set("X-Moox-Health-Auth", strings.Join([]string{
-		version, accessKey, strconv.FormatInt(timestamp, 10), nonce, signature,
-	}, "/"))
 	return nil
 }
 

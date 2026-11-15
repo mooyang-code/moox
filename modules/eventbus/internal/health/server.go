@@ -58,11 +58,7 @@ func (s *Server) Register(service server.Service) error {
 		}
 		s.sub = sub
 	}
-	handler, err := healthz.WrapFromEnv(s.Handler())
-	if err != nil {
-		return err
-	}
-	return healthz.RegisterNoProtocolServiceMux(service, handler)
+	return healthz.RegisterNoProtocolServiceMux(service, s.Handler())
 }
 
 func (s *Server) snapshot(context.Context) healthz.Response {

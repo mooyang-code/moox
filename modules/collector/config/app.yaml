@@ -42,9 +42,6 @@ event_bus:
   urls: []
   credential_file: ""
 
-health:
-  addr: ":11412"
-
 egress_proxy:
   domains: ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]
 
