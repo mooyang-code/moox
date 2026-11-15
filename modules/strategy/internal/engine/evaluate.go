@@ -71,12 +71,9 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, views map
 		ruleMarket := dsl.RuleMarket(mode, rule.Rule)
 		ruleFrame := frameFor(mode, rule.Rule, frame, views)
 		var sets ruleSets
-		switch {
-		case rule.Rule.Type == dsl.RuleTypeTranche:
-			sets = partitionTranche(rule, ruleFrame, previous.Rules[rule.Rule.ID].Held)
-		case ruleMarket != "":
+		if ruleMarket != "" {
 			sets = partitionRule(rule, ruleFrame, previous.Rules[rule.Rule.ID].Held, marketFrozen[ruleMarket], marketReasons[ruleMarket])
-		default:
+		} else {
 			sets = partitionRule(rule, ruleFrame, previous.Rules[rule.Rule.ID].Held, frozen, holdReasons)
 		}
 		if ruleMarket != "" {
@@ -134,16 +131,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, views map
 		rule := &program.Rules[i]
 		ruleMarket := dsl.RuleMarket(mode, rule.Rule)
 		ruleFrame := frameFor(mode, rule.Rule, frame, views)
-		var result ruleResult
-		var err error
-		switch rule.Rule.Type {
-		case dsl.RuleTypeRank:
-			result, err = evaluateRank(rule, ruleFrame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
-		case dsl.RuleTypeTranche:
-			result, err = evaluateTranche(rule, ruleFrame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
-		default:
-			err = fmt.Errorf("类型 %q 不受支持", rule.Rule.Type)
-		}
+		result, err := evaluateRank(rule, ruleFrame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
 		if err != nil {
 			// 出错的规则与排在它后面的规则都还没有产出明细：补齐可用标的，使每条规则的解释仍覆盖全部 E(r)。
 			for j := i; j < len(program.Rules); j++ {

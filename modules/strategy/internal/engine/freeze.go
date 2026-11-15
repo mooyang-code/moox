@@ -109,10 +109,6 @@ func sortedSet(set map[string]struct{}) []string {
 // （按键冻结，frame 是该市场的视图，candidates 是上期在该市场持有的标的，见 rulemarket.go）。没有规则级市场时空串就是全部规则。
 func frozenSet(program *dsl.Program, frame Frame, previous State, candidates []string, scope string) (frozen map[string]struct{}, reasons map[string]string, streaks map[string]map[string]int) {
 	frozen, reasons = make(map[string]struct{}), make(map[string]string)
-	// tranche 规则不与其他规则混用，持仓到期由自己的持有计数决定，不参与冻结。
-	if program.Strategy.HasTranche() {
-		return frozen, reasons, nil
-	}
 	if program.Strategy.HasOnMissing() {
 		return frozenSetOnMissing(program, frame, previous, candidates, scope)
 	}

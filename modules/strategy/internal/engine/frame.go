@@ -105,8 +105,6 @@ type RuleState struct {
 	// 只在规则开了 stop 时记录（见 stop.go）。
 	Entries  map[string]StopEntry `json:"entries,omitempty"`
 	Cooldown map[string]int64     `json:"cooldown,omitempty"`
-	// Tranche 是 tranche 规则的开仓记录（见 tranche.go）。
-	Tranche *TrancheState `json:"tranche,omitempty"`
 	// Hold 是 rank 规则 hold 块的入场序号、冷却与上次判进出场的序号（见 hold.go）。
 	Hold *HoldState `json:"hold,omitempty"`
 	// MissingStreak 是写了 on_missing 的规则里，按缺数冻结保持的持有标的已连续缺数的根数（标的 → 根数）；数据恢复即清零。

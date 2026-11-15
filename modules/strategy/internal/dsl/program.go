@@ -16,8 +16,6 @@ type CompiledRule struct {
 	HoldEntry   *Expression
 	HoldExit    *Expression
 	Scale       *Expression
-	// TrancheGroups 是 tranche 规则按排名签名分好的子策略组（见 tranche.go）；其他类型为空。
-	TrancheGroups []TrancheGroup
 }
 
 // stageSource 是规则一个阶段的表达式文本。
@@ -79,12 +77,6 @@ func (r *CompiledRule) Expressions() []*Expression {
 // Columns 返回该规则引用的全部当期列。
 func (r *CompiledRule) Columns() []string {
 	set := make(map[string]struct{})
-	if r.Rule.Type == RuleTypeTranche {
-		// tranche 规则的列来自子策略模板，表达式阶段只有 scale。
-		for _, column := range r.Rule.TrancheColumns() {
-			set[column] = struct{}{}
-		}
-	}
 	for _, expression := range r.Expressions() {
 		for _, column := range expression.AllColumns() {
 			set[column] = struct{}{}
@@ -166,14 +158,6 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 				return nil, fmt.Errorf("规则 %s 引用的列 %q 不存在于绑定的 View", rule.ID, column)
 			}
 		}
-		if rule.Type == RuleTypeTranche {
-			for _, column := range rule.TrancheColumns() {
-				if _, ok := available[column]; !ok {
-					return nil, fmt.Errorf("规则 %s 引用的列 %q 不存在于绑定的 View", rule.ID, column)
-				}
-			}
-			compiled.TrancheGroups = rule.Tranche.TrancheGroups()
-		}
 		for _, column := range compiled.Columns() {
 			allColumns[column] = struct{}{}
 		}
@@ -234,11 +218,6 @@ func ReferencedColumns(strategy Strategy) ([]string, error) {
 	for _, rule := range strategy.Rules {
 		for _, column := range rule.StopColumns() {
 			set[column] = struct{}{}
-		}
-		if rule.Type == RuleTypeTranche {
-			for _, column := range rule.TrancheColumns() {
-				set[column] = struct{}{}
-			}
 		}
 		for _, column := range rule.DirectColumns() {
 			set[column] = struct{}{}

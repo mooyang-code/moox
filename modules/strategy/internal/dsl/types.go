@@ -104,8 +104,7 @@ type Holding struct {
 	At       string
 }
 
-// Rule 是一条规则。rank 规则使用 Pool、Filter、Score、Select、Weight、FilterAfter、Holding、Hold；
-// tranche 规则使用 Weight（只有 total）与 Tranche。
+// Rule 是一条规则（类型只有 rank）。
 type Rule struct {
 	ID   string
 	Name string
@@ -124,13 +123,11 @@ type Rule struct {
 	Holding     *Holding
 	// Hold 是 rank 规则的进出场持有（见 hold.go）。
 	Hold *Hold
-	// Scale 是规则输出权重上的仓位系数；OnMissing 是持有标的缺数时的冻结保持（见 scale.go，tranche 规则不支持 on_missing）。
+	// Scale 是规则输出权重上的仓位系数；OnMissing 是持有标的缺数时的冻结保持（见 scale.go）。
 	Scale     *Scale
 	OnMissing *OnMissing
-	// Stop 是 rank 规则的止损止盈（见 stop.go）；tranche 规则写在子策略模板里。
+	// Stop 是规则的止损止盈（见 stop.go）。
 	Stop *Stop
-	// Tranche 是 tranche 规则的子策略模板与参数表（见 tranche.go）。
-	Tranche *TrancheSpec
 	// Market 是规则级市场（spot 或 swap，见 market.go）：策略涉及两个市场时，这条规则只从该市场的序列选择，目标也落在该市场；
 	// 空串表示沿用策略的选币池与定市场。
 	Market string

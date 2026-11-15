@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -12,17 +13,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// maxDSLBytes 是 DSL 文本的大小上限；含 tranche 参数表的 DSL 放宽到 maxTrancheDSLBytes。
-const (
-	maxDSLBytes        = 64 << 10
-	maxTrancheDSLBytes = 1 << 20
-)
+// maxDSLBytes 是 DSL 文本的大小上限。
+const maxDSLBytes = 64 << 10
 
 // Parse 解析并校验一份 DSL。解析经由 yaml.Node 完成：拒绝重复键、未知字段和多文档，
 // 让配置错误在保存时就暴露，而不是等到求值。
 func Parse(raw []byte) (Strategy, error) {
-	if len(raw) > maxTrancheDSLBytes {
-		return Strategy{}, fmt.Errorf("策略 DSL 超过 %d KiB 上限（含 tranche 参数表时）", maxTrancheDSLBytes>>10)
+	if len(raw) > maxDSLBytes {
+		return Strategy{}, fmt.Errorf("策略 DSL 超过 %d KiB 上限", maxDSLBytes>>10)
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	var document yaml.Node
@@ -45,9 +43,6 @@ func Parse(raw []byte) (Strategy, error) {
 	strategy, err := decodeStrategy(document.Content[0])
 	if err != nil {
 		return Strategy{}, err
-	}
-	if len(raw) > maxDSLBytes && !strategy.hasTrancheParams() {
-		return Strategy{}, fmt.Errorf("策略 DSL 超过 %d KiB 上限（只有含 tranche 参数表时放宽到 %d KiB）", maxDSLBytes>>10, maxTrancheDSLBytes>>10)
 	}
 	if err := Validate(&strategy); err != nil {
 		return Strategy{}, err
@@ -107,6 +102,24 @@ func scalarInt(node *yaml.Node, path string) (int, error) {
 		return 0, fmt.Errorf("%s 必须是整数", path)
 	}
 	return value, nil
+}
+
+func scalarFloat(node *yaml.Node, path string) (float64, error) {
+	if node == nil || node.Kind != yaml.ScalarNode || (node.Tag != "!!int" && node.Tag != "!!float") {
+		return 0, fmt.Errorf("%s 必须是数字", path)
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(node.Value), 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, fmt.Errorf("%s 必须是有限的数字", path)
+	}
+	return value, nil
+}
+
+func scalarBool(node *yaml.Node, path string) (bool, error) {
+	if node == nil || node.Kind != yaml.ScalarNode || node.Tag != "!!bool" {
+		return false, fmt.Errorf("%s 必须是 true 或 false", path)
+	}
+	return strconv.ParseBool(strings.TrimSpace(node.Value))
 }
 
 func scalarDecimal(node *yaml.Node, path string) (quant.Decimal, error) {
@@ -269,12 +282,6 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 			rule.OnMissing, err = decodeOnMissing(f.value, fieldPath)
 		case "stop":
 			rule.Stop, err = decodeStop(f.value, fieldPath)
-		case "candidates":
-			err = decodeTrancheCandidates(f.value, fieldPath, &rule)
-		case "tranche":
-			err = decodeTranche(f.value, fieldPath, &rule)
-		case "params":
-			err = decodeTrancheParams(f.value, fieldPath, &rule)
 		default:
 			return Rule{}, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
 		}

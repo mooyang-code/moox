@@ -21,15 +21,17 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/packages/factorname"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
 // 补算金样（批 3 T0 第 2 项）：单序列数据集（数据集属性 market_type 不是 multi，所有行同一个非空 series_tag）上，经
 // 补算执行器、管线与本地数据层（与引擎的正式补算同一条路径）跑一段补算，把写出的结果行（含 __params）与各分块的结果存成数据文件。
-// 现在这条路径按标的处理（Selection.Series 为空、期望序列为 nil）；改成只按序列之后，同样的输入要对着这份数据文件逐位一致。
+// 输入按序列给（期望序列是“标的 × 唯一的 series_tag”），走按序列的分支；结果要对着这份数据文件逐位一致，
+// 这份文件最初是按标的处理时生成的，所以它同时证明单序列数据集上两种口径的结果相同。
 // 场景：全部成员、只补可变成员、只补固定成员、只填充、只选数据齐全的标的；数据里有收盘价为 null 的根、中途断档的标的、中途停止的标的、区间内才上市的标的、
 // 本地完全没有数据的标的，已有结果行里记着与默认值不同的 __params（补算按它分参数段并合并写回）。
-// 按序列的名单（failed_series、skipped_series_tags）不进金样：按标的处理时它们是空的，改成按序列之后会有内容；
+// 按序列的名单（failed_series、skipped_series_tags）不进金样：按标的处理时它们是空的，按序列处理时有内容；
 // 按标的的名单、状态、逐项结果与写出的行必须不变。
 // 金样由当前代码生成，默认只比对；有意改变结果时用 UPDATE_BASELINE=1 重新生成。
 
@@ -212,6 +214,15 @@ func baselineRecalcScenarios() []baselineRecalcScenario {
 	}
 }
 
+// baselineSeriesOf 把标的名单换成按序列的名单：单序列数据集上就是“标的 × 唯一的 series_tag”。
+func baselineSeriesOf(subjects []string) []seriesset.Series {
+	out := make([]seriesset.Series, 0, len(subjects))
+	for _, subject := range subjects {
+		out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: baselineRecalcTag})
+	}
+	return out
+}
+
 func baselineRecalcText(value any) string {
 	switch typed := value.(type) {
 	case nil:
@@ -241,7 +252,8 @@ func baselineRecalcRun(t *testing.T, scenario baselineRecalcScenario) [][]string
 	if subjects == nil {
 		subjects = baselineRecalcSubjects
 	}
-	selection := recalcexec.Selection{Set: fx.set.Set, Members: selected, Subjects: subjects, Columns: []string{"close", "volume"}, FillOnly: scenario.fillOnly}
+	selection := recalcexec.Selection{Set: fx.set.Set, Members: selected, Subjects: subjects, Series: baselineSeriesOf(subjects),
+		Columns: []string{"close", "volume"}, FillOnly: scenario.fillOnly}
 	var records [][]string
 	add := func(kind, subject, tag, dataTime, column, value string) {
 		records = append(records, []string{scenario.name, kind, subject, tag, dataTime, column, value})
@@ -505,6 +517,7 @@ func baselineLiveRun(t *testing.T) [][]string {
 		fx.now = at(minute + 1)
 		plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
 			Set: fx.set.Set, Members: fx.set.Members, PeriodTime: at(minute), Universe: universe, UpstreamFailed: upstreamFailed,
+			UniverseSeries: baselineSeriesOf(universe), UpstreamFailedSeries: baselineSeriesOf(upstreamFailed),
 			CarryColumns: []string{"close", "volume"}, TriggerEventID: fmt.Sprintf("evt-%d", minute),
 		})
 		require.NoError(t, err)

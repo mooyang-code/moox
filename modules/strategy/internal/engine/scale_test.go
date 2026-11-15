@@ -4,8 +4,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
-	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/stretchr/testify/require"
 )
 
@@ -197,36 +195,6 @@ portfolio: {max_missing: 1}
 	require.Equal(t, []string{"A"}, second.State.Rules["g"].Held)
 	third := evaluate(t, program, frameOf(program, map[string]Row{"A": values("x", 1)}), second.State)
 	require.False(t, holdsTarget(third, "A"))
-}
-
-// tranche 规则的 scale：在 tranche 配好的权重上乘系数，开仓记录不变；scale 引用的列计入 tranche 的列。
-func TestScaleOnTranche(t *testing.T) {
-	bars := loadTrancheBars(t)
-	golden := loadGoldenCase(t, "multi_sub_merge")
-	strategy, err := dsl.Parse([]byte(golden.DSL))
-	require.NoError(t, err)
-	scaled := strategy
-	scaled.Rules = append([]dsl.Rule(nil), strategy.Rules...)
-	scaled.Rules[0].Scale = &dsl.Scale{Expr: "close * 0 + 0.5", Max: 1}
-	plain, err := compileMode(strategy, columnsOf(bars))
-	require.NoError(t, err)
-	program, err := compileMode(scaled, columnsOf(bars))
-	require.NoError(t, err)
-	require.Equal(t, plain.Rules[0].Columns(), program.Rules[0].Columns())
-	var before, after RuleState
-	half := quant.Must("0.5")
-	for i, bar := range bars {
-		frame := trancheFrame(bar, int64(i), program.Rules[0].Rule.ID)
-		a, err := evaluateTranche(&plain.Rules[0], frame, partitionTranche(&plain.Rules[0], frame, before.Held), before, noise)
-		require.NoError(t, err)
-		b, err := evaluateTranche(&program.Rules[0], frame, partitionTranche(&program.Rules[0], frame, after.Held), after, noise)
-		require.NoError(t, err)
-		applyScale(&program.Rules[0], frame, &b, noise)
-		for id, w := range a.weights {
-			require.Zero(t, w.Mul(half).Cmp(b.weights[id]), "第 %d 期 %s", i, id)
-		}
-		before, after = a.state, b.state
-	}
 }
 
 // holding 批次写 on_missing：成员本根缺数时冻结保持，份额留在批次里，恢复后继续。

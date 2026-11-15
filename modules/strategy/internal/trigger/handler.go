@@ -377,7 +377,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		ready = h.checkReady(p, adjacent)
 	}
 	if expired {
-		// 迟到周期（有效期已过）不发目标，但仍求值并只推进规则状态：状态是逐期累积的（tranche 的开仓记录与持有计数、持仓集合），跳过会让后续周期的状态缺口。
+		// 迟到周期（有效期已过）不发目标，但仍求值并只推进规则状态：状态是逐期累积的（holding 的批次、hold 的入场序号与冷却、持仓集合），跳过会让后续周期的状态缺口。
 		detail := fmt.Sprintf("有效期 %s 已过", input.BarEndLabel(calendar, bar, validUntil))
 		if ready.Reason != "" {
 			return h.commitSkipped(ctx, p, store.SkipExpired, detail)

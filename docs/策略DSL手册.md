@@ -43,19 +43,19 @@
 | 按周、按月、按交易日换仓 | `holding.calendar` | 5.2 |
 | 满足入场条件才买，触发出场条件才卖 | `hold: {entry, exit, max_bars, cooldown_bars, allow_reentry}` | 5.3 |
 | 固定几个币按信号进出（如 BTC 趋势） | 显式 `pool` 加 `hold` | 6 |
-| 每根新开一批、各批持有固定期数 | `tranche` 规则 | 7 |
-| 止损、跟踪止损、止盈 | `stop` | 8.1 |
-| 按行情给仓位打折 | `scale` | 8.2 |
-| 偶尔缺数时先冻结持仓，不立刻清掉 | `on_missing` | 8.3 |
+| 每根新开一批、各批持有固定根数 | `holding: {bars, offsets: all}` | 5.1 |
+| 止损、跟踪止损、止盈 | `stop` | 7.1 |
+| 按行情给仓位打折 | `scale` | 7.2 |
+| 偶尔缺数时先冻结持仓，不立刻清掉 | `on_missing` | 7.3 |
 | 规则经常没候选，不要让整期跳过 | `allow_empty` | 3.3 |
 | 只做上市满 N 根的老币，或只做新币 | `universe.min_age_bars`、`max_age_bars` | 3.2、3.3 |
 | 同一个币在现货和永续里选择下单市场 | `market: {select, prefer}` | 2 |
-| 总杠杆上限、单币上限 | `portfolio.leverage`、`max_weight` | 9 |
-| 单标的多头、空头分别封顶，超出的转给别的标的 | `portfolio.limits` | 9.3 |
-| 多个策略按比例或按业绩分钱 | `strategy_pool`：`fixed`、`rotation`、`drift` | 10 |
-| 控制多空净敞口、总敞口 | 池的 `exposure`、`gross` | 10.5 |
-| 某个成员空仓时把它的比例转给另一个成员 | 池的 `allocation.switch` | 10.5 |
-| 空头组合波动太大时暂停再平衡 | 池的 `freeze` | 10.7 |
+| 总杠杆上限、单币上限 | `portfolio.leverage`、`max_weight` | 8 |
+| 单标的多头、空头分别封顶，超出的转给别的标的 | `portfolio.limits` | 8.3 |
+| 多个策略按比例或按业绩分钱 | `strategy_pool`：`fixed`、`rotation`、`drift` | 9 |
+| 控制多空净敞口、总敞口 | 池的 `exposure`、`gross` | 9.5 |
+| 某个成员空仓时把它的比例转给另一个成员 | 池的 `allocation.switch` | 9.5 |
+| 空头组合波动太大时暂停再平衡 | 池的 `freeze` | 9.7 |
 
 ## 2. 顶层结构与市场模式
 
@@ -72,8 +72,8 @@ sources: {daily: {bar: 1d}}    # 可选：附加列来源（见策略模块文�
 
 - 解析严格：重复键、未知字段、多文档一律拒绝，错误信息是中文，会指出出错的路径。
 - 实例的周期由绑定 View 的频率决定，`bar` 只是断言。
-- 限制：DSL 文本不超过 64 KiB（含参数表的策略放宽到 1 MiB）；单条表达式不超过 1024 个字符、256 个语法节点；`portfolio.leverage` 不超过 10。
-- 保存定义时只做语法与结构校验；列是否存在、市场类型在**启用实例**时才解析。想提前发现列名写错，用带因子任务的校验（第 12 节）。
+- 限制：DSL 文本不超过 64 KiB；单条表达式不超过 1024 个字符、256 个语法节点；`portfolio.leverage` 不超过 10。
+- 保存定义时只做语法与结构校验；列是否存在、市场类型在**启用实例**时才解析。想提前发现列名写错，用带因子任务的校验（第 11 节）。
 
 ### 市场模式
 
@@ -224,7 +224,7 @@ select: {top: 6, group: {by: industry, quotas: [2, 1, 1], rest: 1}} # 按组内�
 
 按名次从前往后逐个接受，所属组已满就跳过（明细 `group_full`）。`by` 必须是数值列：主帧 View 的列，或附加来源的列（见下）；分组值为空的标的按缺数处理。`max` 与 `quotas` 二选一，`rest` 只能配 `quotas`。
 
-写了 `sources` 时，`by` 也可以写附加来源的列（`来源名.列名`），例如小时线主帧按日线来源里的行业代码分组：`group: {by: daily.industry, max: 2}`。分组值取这一根主帧读到的最新一根来源值；来源读不到或这一列为空的标的同样按缺数处理（明细 `missing:daily.industry`）。完整例子见 13.10。
+写了 `sources` 时，`by` 也可以写附加来源的列（`来源名.列名`），例如小时线主帧按日线来源里的行业代码分组：`group: {by: daily.industry, max: 2}`。分组值取这一根主帧读到的最新一根来源值；来源读不到或这一列为空的标的同样按缺数处理（明细 `missing:daily.industry`）。完整例子见 12.10。
 
 **二次排序：`then`**
 
@@ -265,7 +265,7 @@ weight: {total: 0.8, method: equal, cap: 0.1}
 - `cap`：规则内单标的上限。超过 `cap` 的权重被裁到 `cap`，**多出来的部分在规则内按原权重比例分给还没封顶的标的**，迭代到没有新的超限，仍分不出去的留现金。
 - 保存时要求 `cap × 选中数量 ≥ total`（预算分得完）。
 
-规则内的 `cap` 和组合级的 `max_weight`、`limits` 是三层不同的封顶，区别见第 9 节。
+规则内的 `cap` 和组合级的 `max_weight`、`limits` 是三层不同的封顶，区别见第 8 节。
 
 ### 4.5 side：做多与做空
 
@@ -322,6 +322,25 @@ holding: {bars: 24, offsets: [0, 12]}      # 24 根为一个周期，两个批�
 | Z | — | 0.25 | 0.25 |
 
 到第 24 根，批次 A 重选，X、Y 换成当时的前两名，批次 B 不动。
+
+**每根开一批**：`offsets` 写 `all`，等于把 0 到 `bars − 1` 全部列出来——每根都有一个批次按本期名次重选，每个批次持有 `bars` 根，多批叠加。
+
+```yaml
+rules:
+  - id: main
+    type: rank
+    filter: "volume > 0"
+    score: "rank(momentum__20)"
+    select: {top: 1}
+    filter_after: "shadow__24 <= 0.1"       # 满足条件的留下；只剔除不补位
+    holding: {bars: 24, offsets: all}       # 每根重建一个批次，每个批次持有 24 根
+    weight: {total: 1}
+```
+
+- 批次最多 64 个，所以 `offsets: all` 时 `bars` 不能超过 64；要持有更久，把 `bars` 放大、`offsets` 取稀疏的几个（例如 `{bars: 288, offsets: [0, 12, 24, …]}`）。
+- 每个批次的份额是规则预算的 `1 / bars`，按权重固定，不随价格漂移。
+- 首次求值成功的那一根就按本期名次建好全部批次，不是逐根加到满仓。
+- 多空都做的写成两条规则（一条 `side: long`，一条 `side: short`）；止损写规则上的 `stop`（7.1）。
 
 ### 5.2 holding.calendar：按日历换仓
 
@@ -417,11 +436,11 @@ holding:
 
 - 每根先对持有的标的判 `exit`，再对其余标的判 `entry`；`entry` 与 `exit` 同根都成立时不入场，本根出场的标的本根不补回。
 - 本期持有的标的平分规则预算：`total: 0.2`、池里有 2 个同时持有，每个 0.1。
-- 持有标的的 `exit` 输入缺失按缺数出场（`exit_missing`）；写了 `on_missing` 才冻结保持，见 8.3。只缺 `entry` 用到的列（例如上一根）不出场。
+- 持有标的的 `exit` 输入缺失按缺数出场（`exit_missing`）；写了 `on_missing` 才冻结保持，见 7.3。只缺 `entry` 用到的列（例如上一根）不出场。
 - 判断“穿越”要用 `bars[-1]` 取上一根的值；第一期没有上一根，`bars[-1]` 的值都缺失。
 - 可以配 `stop`、`scale`、`on_missing`、`market`、`side`；止损等同出场并进入冷却。
 
-这条规则和其他 rank 规则一样参与整期跳过的检查（8.4），固定的池很小，要留意三点：
+这条规则和其他 rank 规则一样参与整期跳过的检查（7.4），固定的池很小，要留意三点：
 
 | 情形 | 行为 | 建议 |
 | --- | --- | --- |
@@ -429,33 +448,11 @@ holding:
 | 池里的标的数少于 `portfolio.min_universe` | 保存时拒绝，必须写 `allow_empty: true`。写了之后这条规则不参与任何整期跳过的检查，持有的标的缺数时直接按 `exit_missing` 出场 | 同时写 `on_missing: {keep_bars: N}`，缺数时先冻结而不是卖出 |
 | 有标的被冻结（市场不可用、只缺上一根、`on_missing`） | 预算在全部持有标的（含冻结的）之间平分，冻结的那一份由组合层保持不动，合计不超过规则预算 | 无需处理 |
 
-## 7. tranche 规则：批次持仓
+## 7. 止损、仓位系数、缺数处理
 
-每根 K 线按本期选币**新开一批**仓位，每一批持有 h 期，多批叠加。打分、选币、过滤、定仓方式都是选项，同类策略写配置即可。适合“每根都开仓、各批固定持有 h 期”的日内或短周期风格。
+### 7.1 stop：止损止盈
 
-```yaml
-rules:
-  - id: main
-    type: tranche
-    weight: {total: 1}
-    tranche:
-      hold_period: 6                  # 每批持有 6 期
-      score: {method: rank_sum}
-      long_factors: [{factor: "momentum__20", descending: true, weight: 1}]
-      long_weight: 1
-      long_coin_num: 1                # 每批选 1 个
-portfolio: {leverage: 1}
-```
-
-- 一条策略里只能全是 `tranche` 规则，不能写 `factor_params`，只能用于单个市场（`spot/spot` 按权重持有且不做空，或 `swap/swap`）。
-- 想让各批的子策略逐行变化（不同周期、不同因子参数），写 `params` 参数表，每行展开一个子策略，一条规则最多 5000 行。
-- 全部选项（打分方式、缺值处理、前后过滤、定仓方式、名单）见 `skills/moox/references/strategy-dsl.md` 第 4 节，设计细节见 [策略模块](模块/策略.md)“tranche 规则”。
-
-## 8. 止损、仓位系数、缺数处理
-
-### 8.1 stop：止损止盈
-
-`rank` 写在规则上，`tranche` 写在子策略模板里：
+写在规则上：
 
 ```yaml
 stop:
@@ -470,7 +467,7 @@ stop:
 - **按收盘判断，不是盘中触价**；View 必须有 `close`（`price: extreme` 时还要 `high`、`low`）。
 - 止损与 `exit` 同一根成立时按止损记，冷却按 `stop.cooldown_bars`。
 
-### 8.2 scale：按行情给仓位打折
+### 7.2 scale：按行情给仓位打折
 
 ```yaml
 scale: {expr: "timing_coef", max: 1}    # 数值表达式（逐行，不能用截面函数），结果截到 [0, max]
@@ -480,15 +477,15 @@ scale: {expr: "timing_coef", max: 1}    # 数值表达式（逐行，不能用�
 - `max` 默认 1、上限 10；允许大于 1 用来加仓。
 - 系数为 NaN、无穷或求值出错的标的按缺数处理；想“缺值当 0”，在因子里用 `fill_nan`。
 
-### 8.3 on_missing：偶尔缺数先冻结
+### 7.3 on_missing：偶尔缺数先冻结
 
 ```yaml
 on_missing: {keep_bars: 3}     # 持有标的连续缺数不超过 3 根时冻结保持，超过后移出；1～1000
 ```
 
-默认情况下持有中的标的某一根缺数就按缺数口径处理（移出持有）。写了 `on_missing` 后，缺数的持有标的冻结：保持上期目标、不交易，持有根数照常累计；数据恢复即清零，连续缺数超过 `keep_bars` 根才移出。`keep_bars` 数的是“连续多少次求值都缺数”。tranche 规则不支持。
+默认情况下持有中的标的某一根缺数就按缺数口径处理（移出持有）。写了 `on_missing` 后，缺数的持有标的冻结：保持上期目标、不交易，持有根数照常累计；数据恢复即清零，连续缺数超过 `keep_bars` 根才移出。`keep_bars` 数的是“连续多少次求值都缺数”。
 
-### 8.4 缺数、冻结与整期跳过
+### 7.4 缺数、冻结与整期跳过
 
 求值时每个标的可能缺数（列为空、因子失败、没有行）。策略对缺数分三层处理：
 
@@ -515,7 +512,7 @@ on_missing: {keep_bars: 3}     # 持有标的连续缺数不超过 3 根时冻�
 
 `degraded` 的实例在下一个正常周期自动恢复。每种原因的完整语义见 [策略模块](模块/策略.md)“失败语义”。
 
-## 9. portfolio：组合级约束
+## 8. portfolio：组合级约束
 
 ```yaml
 portfolio:
@@ -526,7 +523,7 @@ portfolio:
   limits: {long_max: 0.08, short_max: 0.05, overflow: {to: momentum_long}}
 ```
 
-### 9.1 字段
+### 8.1 字段
 
 | 字段 | 说明 |
 | --- | --- |
@@ -534,15 +531,15 @@ portfolio:
 | `max_weight` | 单币上限，同一个币的现货与永续**合计**（绝对值之和，“现货多 + 永续空”的对冲也按绝对值之和截断）；两边都不为零时按比例缩小，只有一边时取上限；超出部分留现金 |
 | `min_universe` | rank 规则进入 `filter` 的可用标的少于它则整期跳过 |
 | `max_missing` | 任一规则缺数占比超过它则整期跳过；显式写 0 表示不容忍任何缺数 |
-| `limits` | 单标的多头、空头分别封顶，超出部分转给指定来源的其他标的，见 9.3 |
+| `limits` | 单标的多头、空头分别封顶，超出部分转给指定来源的其他标的，见 8.3 |
 
-### 9.2 执行顺序
+### 8.2 执行顺序
 
 多条规则各自配权后相加（同一个标的的权重相加）→ **`limits`** → **`max_weight`** → 现货预算 → **`leverage`**。冻结的标的先按上期目标预留预算，其余标的在剩余预算内缩小。
 
 现货预算这一步只在 `leverage` 大于 1 且市场模式含现货时才单独执行：现货部分的总权重不能超过 1（减去冻结保持的现货目标），超过时现货目标整体按比例缩小，永续不受影响；`leverage` 不大于 1 时，这一步已经被总敞口约束包含。
 
-### 9.3 limits：单标的上限与超限转移
+### 8.3 limits：单标的上限与超限转移
 
 `limits` 解决的问题：多条规则（或策略池的多个成员）可能同时重仓同一个标的，合起来超过了你能接受的单标的暴露。它**按方向分别封顶**，并且可以把超出的部分**转给别处**，而不是单纯留现金。
 
@@ -594,7 +591,7 @@ portfolio:
 
 **在策略池里**：来源是成员，“该来源的各标的权重”是**成员本期的合成比例乘以成员目标**。比例为 0 的成员分组权重为 0，不能当去向。
 
-### 9.4 四层封顶对比
+### 8.4 四层封顶对比
 
 | | 作用范围 | 超出的部分 |
 | --- | --- | --- |
@@ -605,7 +602,7 @@ portfolio:
 
 `limits` 与规则内的 `cap` 思路一致：**封顶是严格的**，分出去的部分只给还没封顶的标的。
 
-## 10. strategy_pool：策略池
+## 9. strategy_pool：策略池
 
 策略池把**多个已有策略**当成员，按成员的模拟净值分配资金，合成一份目标权重。适合：
 
@@ -632,7 +629,7 @@ portfolio: {leverage: 1}
 
 **每期怎么算**（一句话版）：每个成员各自求值、得到成员目标 → 成员账本按本根收盘价估值 → 算本期分配比例 → 成员账本按成员目标调仓、追加期末净值 → 每个成员的目标乘各自的比例后按（标的, 市场）相加，得到池目标，再走组合约束（`limits`、`max_weight`、`leverage`）。没通过的成员（缺因子、被跳过）沿用它上期的目标；只有所有成员都没通过时，池才整期跳过。
 
-### 10.1 三种分配方式
+### 9.1 三种分配方式
 
 | `method` | 比例怎么来 | 适合 |
 | --- | --- | --- |
@@ -642,7 +639,7 @@ portfolio: {leverage: 1}
 
 `ratios` 要覆盖所有成员（不分配的写 0），可以不归一，总敞口受 `portfolio.leverage` 约束。
 
-### 10.2 fixed 与 timing、step
+### 9.2 fixed 与 timing、step
 
 ```yaml
 allocation:
@@ -655,7 +652,7 @@ step: 0.2                 # 每期每个成员的比例变化上限
 - `timing` 让成员在自己的净值跌破均线时**休息**（比例变 0），回到均线之上再恢复。
 - `step` 限制比例变化的速度：上期 0.6、目标 0.4、`step: 0.2` 时，本期取 0.4；目标 0 时只能每期降 0.2。上期没有比例时不限制。
 
-### 10.3 rotation：业绩轮动
+### 9.3 rotation：业绩轮动
 
 ```yaml
 allocation:
@@ -675,7 +672,7 @@ allocation:
 
 每个因子在未爆仓的成员之间排名（并列取平均名次），按因子权重加权得综合名次分，取最小的前 `top` 名（与第 `top` 名并列的一并入选）平分 1。序列不够长、算不出某个因子时，这一期不排名，未爆仓的成员均分。
 
-### 10.4 成员净值：是模拟曲线，不是实盘收益
+### 9.4 成员净值：是模拟曲线，不是实盘收益
 
 每个成员有自己的模拟账本：初始权益 1，按成员目标在收盘价调仓，扣手续费，永续逐期结算价差。**它只用来分配资金，不代表实盘收益**：不模拟最小下单额、拆单、强平与保证金率。
 
@@ -687,7 +684,7 @@ fees: {spot_bps: 10, swap_bps: 5, equity_bps: 3, funding_column: funding_rate}
 - 写了 `funding_column`（取值是本根内各次结算费率之和）时，永续持仓按这一列结算资金费：费率为正时多头付、空头收；第 k 根的费率按第 k−1 根收盘调仓**之前**的持仓结算。只读永续的 View，要求池绑定了永续、且永续 View 有这一列。
 - 成员账本权益不为正即模拟爆仓：从下一根起比例为 0，明细标 `bankrupt`。
 
-### 10.5 组合约束：switch、exposure、gross
+### 9.5 组合约束：switch、exposure、gross
 
 这三项都按**成员汇总的分配比例**计算：多头敞口 = 多头成员的比例之和，空头敞口 = 空头成员的比例之和，不按实际持仓折算、不做同标的抵消。因此写了 `drift`、`switch`、`exposure`、`gross` 任意一项，**每个成员都必须是单方向的**（规则全部做多或全部做空）。
 
@@ -748,9 +745,9 @@ allocation:
 - `from` 的比例按 `to` 各成员本根的比例分给它们（都为 0 时平分）；`from` 与 `to` 必须同方向，保存时校验，要改净敞口请用 `exposure`。
 - 只能与 `method: fixed` 或 `drift` 同写，不支持 `rotation`。
 
-在 `fixed`、`rotation` 下，这三项只作用于**本期合成用的比例**，下一期步长用的上期比例仍是步长之后、这几步之前的值。`drift` 下不同：`exposure`、`gross` 修正后的系数会写入状态，下一根从它漂移；只有 `switch` 的转移与 `limits` 不写回（见 10.6）。
+在 `fixed`、`rotation` 下，这三项只作用于**本期合成用的比例**，下一期步长用的上期比例仍是步长之后、这几步之前的值。`drift` 下不同：`exposure`、`gross` 修正后的系数会写入状态，下一根从它漂移；只有 `switch` 的转移与 `limits` 不写回（见 9.6）。
 
-### 10.6 drift：漂移分配
+### 9.6 drift：漂移分配
 
 `drift` 的想法：成员比例不再每根回到固定值，而是随成员持仓价值的自然变化漂移——持有的东西涨了，它在池里的占比就变大——然后每一侧（多头侧、空头侧）按自己的规则拉回目标构成。
 
@@ -802,7 +799,7 @@ strategy_pool:
 
 **每根的顺序**：估值 → 漂移 → 冻结判断 → 侧内再平衡 → `exposure` → `gross` → `switch` → 合成。`gross` 之后的系数写入状态，下一根从它漂移。
 
-### 10.7 freeze：波动冻结
+### 9.7 freeze：波动冻结
 
 ```yaml
 freeze: {watch: short, window_bars: 1, threshold: 0.10, bars: 4}
@@ -812,26 +809,26 @@ freeze: {watch: short, window_bars: 1, threshold: 0.10, bars: 4}
 - 冻结期间跳过侧内再平衡（分步暂停）、`exposure` 与 `gross`，**直接用漂移后的系数**；`switch`、`limits`、`leverage`、`max_weight` 照常执行。
 - 用途：行情剧烈时不去追着把比例拉回来，等波动过去。只能与 `method: drift` 同写。
 
-### 10.8 漂移起点
+### 9.8 漂移起点
 
 - `allocation.start: "<时刻>"`：漂移从这一根开始，系数置为 `ratios`；成员的状态与账本也从这一根起步，推进到最新已收盘的一根。
 - `allocation.initial: {at: "<时刻>", ratios: {...}}`：在 `at` 那一根把系数置为给定的比例（例如从一次回放结果里取），之后照常漂移；与 `start` 二选一。
 - 都不写：漂移从预热的第一根开始。
 - 时刻必须是池周期上某根 bar 的起点；从起点到最新一根不能超过 20000 根，View 的历史要覆盖到起点，否则启用时拒绝。
 
-### 10.9 池里的 limits 与结果字段
+### 9.9 池里的 limits 与结果字段
 
 池目标合成之后，走与普通策略相同的组合约束：先 `limits`（分组权重是成员的合成比例乘成员目标），再 `max_weight`、`leverage`。成员冻结的标的保持上期池目标。
 
 每期结果摘要的 `summary_json.pool` 记：各成员的状态、期末净值、基础比例、步长前后的比例、实际合成比例（`composed`，与 `ratio` 不同时才有）、总敞口与净敞口、各（标的、市场）的贡献；`adjustments` 记 `exposure`、`gross` 各段的修正；`drift` 记漂移阶段、各侧触发原因与冻结状态；研究回放里这些在 `decision.pool` 与 `decision.limits`。
 
-### 10.10 预热与回放
+### 9.10 预热与回放
 
 - 启用池后先在后台**预热**：用历史按真实顺序推进成员账本，推进到最新已收盘的一根；预热完成前不求值、不能 `confirm`。
 - 研究回放支持策略池：回放起点要在预热允许的范围内；写了 `allocation.start` 的 drift 池，回放起点必须等于 `start`，这样与实时逐期一致。
 - 非 drift 池和没写起点的 drift 池，回放从区间第一根起步，与实时的前几期不可比。详见 [策略模块](模块/策略.md)“回放与实时的已知差别”。
 
-## 11. 表达式
+## 10. 表达式
 
 表达式用 Expr 语法编写，在 `filter`、`score`、`select.where`、`select.then.score`、`filter_after`、`entry`、`exit`、`hold.entry`、`hold.exit`、`scale.expr` 里使用。
 
@@ -863,7 +860,7 @@ score: "rank(mom__20) - rank(vol__24)"                      # 综合名次
 scale: {expr: "close > ma__200 ? 1 : 0.5"}                  # 年线上方满仓，下方半仓
 ```
 
-## 12. 校验、回放与上线
+## 11. 校验、回放与上线
 
 写入生产的策略定义和实例属于外部写操作，每一步先和用户确认。
 
@@ -896,13 +893,13 @@ moox-cli strategy instance create --strategy-id <ID> --factor-task swap=<永续�
 moox-cli strategy instance enable --instance-id <实例ID> --yes
 ```
 
-不挂账户的实例是**观察实例**：只计算目标权重、不投递，适合先验证。首次启用进入试运行（只发带影子标记的目标，Trade 不下单），挂账户的实例要用户 `confirm` 才进入运行。完整流程与注意事项见 `skills/moox/references/strategy-dsl.md` 第 7 节。
+不挂账户的实例是**观察实例**：只计算目标权重、不投递，适合先验证。首次启用进入试运行（只发带影子标记的目标，Trade 不下单），挂账户的实例要用户 `confirm` 才进入运行。完整流程与注意事项见 `skills/moox/references/strategy-dsl.md` 第 5 节。
 
-## 13. 示例配方
+## 12. 示例配方
 
 下面每个例子都是完整的策略，列名换成你的因子任务里的列即可。
 
-### 13.1 动量 Top N，现货做多
+### 12.1 动量 Top N，现货做多
 
 ```yaml
 name: spot_momentum_top10
@@ -917,7 +914,7 @@ rules:
 portfolio: {leverage: 1, max_weight: 0.15}
 ```
 
-### 13.2 永续多空对冲
+### 12.2 永续多空对冲
 
 ```yaml
 name: swap_long_short
@@ -938,7 +935,7 @@ rules:
 portfolio: {leverage: 1}
 ```
 
-### 13.3 低波入场、过热出场（hold）
+### 12.3 低波入场、过热出场（hold）
 
 ```yaml
 name: quiet_hold
@@ -959,7 +956,7 @@ rules:
 portfolio: {leverage: 1}
 ```
 
-### 13.4 先粗选再细选（then）
+### 12.4 先粗选再细选（then）
 
 ```yaml
 name: calm_then_strong
@@ -974,7 +971,7 @@ rules:
 portfolio: {leverage: 1}
 ```
 
-### 13.5 分批换仓
+### 12.5 分批换仓
 
 ```yaml
 name: staggered_rebalance
@@ -988,7 +985,7 @@ rules:
 portfolio: {leverage: 1}
 ```
 
-### 13.6 BTC 趋势择时加行业分散选股
+### 12.6 BTC 趋势择时加行业分散选股
 
 ```yaml
 name: trend_plus_rotation
@@ -1010,7 +1007,7 @@ rules:
 portfolio: {leverage: 1}
 ```
 
-### 13.7 单标的上限，超出的转给另一条规则
+### 12.7 单标的上限，超出的转给另一条规则
 
 ```yaml
 name: capped_with_overflow
@@ -1032,7 +1029,7 @@ portfolio:
     overflow: {to: diversified}
 ```
 
-### 13.8 多空两个成员的固定池，控制净敞口
+### 12.8 多空两个成员的固定池，控制净敞口
 
 ```yaml
 name: long_short_pool
@@ -1052,7 +1049,7 @@ strategy_pool:
 portfolio: {leverage: 1.2}
 ```
 
-### 13.9 漂移池，带冻结
+### 12.9 漂移池，带冻结
 
 ```yaml
 name: drift_pool
@@ -1078,7 +1075,7 @@ strategy_pool:
 portfolio: {leverage: 1.8}
 ```
 
-### 13.10 日线选股、小时线逐标的择时
+### 12.10 日线选股、小时线逐标的择时
 
 ```yaml
 name: daily_pick_hourly_timing
@@ -1101,7 +1098,7 @@ portfolio: {max_missing: 0.2}
 - `scale` 是“日线分区列 × 小时信号列”相加：`daily.zone_trend`、`daily.zone_range` 是日线因子给每个标的标出的分区（0/1，同一天只有一个为 1），`sig_breakout`、`sig_revert` 是小时线因子里对应分区用的 0/1 信号。标的处在哪个分区，就只看那个分区的信号。
 - “突破置位、跌破复位并保持”这类信号不在策略里写状态，而是在因子里用事件记忆算子（`ts_last_valid`、`ts_bars_since`、`ts_value_when` 等）写成 0/1 列：突破那根记 1、跌破那根记 0、其余为空，再取最近一次有效值。
 
-### 13.11 A 股：日线行业与财务选股，5m 主帧
+### 12.11 A 股：日线行业与财务选股，5m 主帧
 
 A 股日线可以带复权因子、申万行业、财务、换手率和股本字段（见[采集](模块/采集.md)第 4b 节）。这些列随日线因子任务进入结果数据集，策略写 `sources` 后用 `daily.列名` 读取。
 
@@ -1145,7 +1142,7 @@ portfolio: {max_missing: 0.2}
   需要前复权价本身时，以当前这一根为基准换算：k 根之前的前复权收盘价是 `delay(close, k) * delay(adj_factor, k) / adj_factor`。不要在策略表达式里拿不复权的 `close` 跨除权日比较。
 - **日线次日 08:00 才到**：交易日 D 的日线在北京时间 D+1 日 08:00 采集。D 日盘中每一根 5m 读的是 D−1 日的日线（当天 08:00 已到齐）；D 日 15:00 收盘的那一根要读 D 日的日线，会等到 D+1 日 08:00 之后才求值，结果在次日开盘前给出。
   所以这个例子里“每 5 个交易日的第一根”用的是上一交易日收盘后的日线数据。
-- **日线缺了一天**：日线实时采集失败时，自动补采要再过一天才补上，这期间来源列按缺数处理。不想因此清仓的规则配 `on_missing: {keep_bars: N}`（8.3 节），或者手工补采。
+- **日线缺了一天**：日线实时采集失败时，自动补采要再过一天才补上，这期间来源列按缺数处理。不想因此清仓的规则配 `on_missing: {keep_bars: N}`（7.3 节），或者手工补采。
 - **绑定**：创建实例时给两个因子任务，`--factor-task equity=<5m 因子任务> --factor-task daily:equity=<日线因子任务>`。A 股的来源只能是 `1d`，主帧必须是日内周期。
 - **市值、估值、筹码**：内置因子库里有 `total_mv`、`float_mv`、`pe_ttm`、`pb`、`ps_ttm`、`dv_ratio` 和 `chip_profit_ratio`、`chip_avg_cost`、`chip_concentration`（清单与口径见 `skills/moox/references/ashare-daily.md` 第 4 节），加进日线因子任务后同样用 `daily.因子名` 读。例如在上面的规则里选小市值、剔除亏损股、只要多数筹码获利的：
 
@@ -1156,7 +1153,7 @@ portfolio: {max_missing: 0.2}
 
   股本只有开通以后的值，市值和估值因子在那之前为空：`filter`、`score` 用到的列全为空的周期按缺数过多整期跳过，所以用到它们的策略只能从开通日起回放。筹码因子默认回看 210 个交易日，历史不够的周期同样没有值。偏离平均成本写 `daily.close / daily.chip_avg_cost - 1`。
 
-## 14. 报错速查
+## 13. 报错速查
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |

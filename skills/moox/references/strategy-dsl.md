@@ -1,7 +1,7 @@
 # 策略 DSL 语法与写入流程
 
 策略用一份 YAML（DSL）描述：怎么在截面上选标的、怎么配权。时序计算（均线、动量、分位）一律写成因子（见 [factor-dsl.md](factor-dsl.md)），
-策略只在截面上过滤、打分、配权。Go 代码只提供通用规则类型（`rank`、`tranche`），新策略写配置即可，不改代码。
+策略只在截面上过滤、打分、配权。Go 代码只提供一种通用规则类型（`rank`），新策略写配置即可，不改代码。
 
 按功能讲写法、带例子与逐步推演的完整手册见 `docs/策略DSL手册.md`（含单标的上限、进出场持有、策略池漂移与组合约束的推演）。
 本文是 Agent 写策略时的语法速查；字段的完整语义、状态与明细以 `docs/模块/策略.md` 的第 3 节为准，解析与校验的源码在 `modules/strategy/internal/dsl/`。
@@ -23,7 +23,7 @@ sources: {daily: {bar: 1d}}    # 可选：附加列来源，规则里写 daily.�
 - 解析严格：重复键、未知字段、多文档一律拒绝，错误信息是中文。
 - 规则里引用的列名就是**因子任务结果数据集的列名**，由成员键推导：`因子ID[__参数段][__输出名]`，参数全为默认值时省略参数段，可变成员以 `__var` 结尾
   （例如成员 `ma` 窗口 5 的列是 `ma__5`）。创建实例选好因子任务后，页面和校验报错都会列出该任务的全部列。
-- 限制：DSL 文本 ≤ 64 KiB（含参数表的策略放宽到 1 MiB）；单条表达式 ≤ 1024 字符、≤ 256 个语法节点；`portfolio.leverage` ≤ 10。
+- 限制：DSL 文本 ≤ 64 KiB；单条表达式 ≤ 1024 字符、≤ 256 个语法节点；`portfolio.leverage` ≤ 10。
 
 ### market：市场模式
 
@@ -49,7 +49,7 @@ market:
 - 一个市场的因子本期被跳过，或失败（时序因子在该市场整体晚到、读取的标的全部失败；失败的标的占比超过 `portfolio.max_missing`，已持仓的币即使年龄没通过也计入）时，这个市场的币本期不可用：已持仓的保持不动（包括永续空头），新开仓用另一个市场。选币市场、或所有市场都这样不可用时整期按 `market_failed` 跳过（数据类原因，不是“积累中”，持续出现要看数据集新鲜度告警）。只涉及单个市场的策略仍按普通缺数处理。
 - **两种输入方式**：同样的五种模式，因子数据可以是现货、永续各一个任务（`--factor-task spot=… --factor-task swap=…`），也可以是**统一数据集上的一个任务**（同一个数据集里放现货、永续两条序列，用 `series_tag` 区分；一个任务一个 View，`--factor-task multi=…`）。统一数据集上的任务必须显式写 `market`（没有可当默认值的市场），五种模式都能用，只绑这一个任务，不支持 `factor_params`、不能进策略池、不支持闭环回放（研究回放可以）；建实例时要把任务登记为 `multi`。两种方式的目标一致：现货、永续两条序列并存不算歧义，永续上失败的币现货照常，永续的因子被跳过时永续不可用、已持仓的永续保持不动。
 - **规则级市场**：模式含两个市场（`both/*`、`spot/swap`）时，规则可写 `market: spot` 或 `market: swap`，这条规则只用该市场的因子值选择、目标也落在该市场，同一个币在两条规则里可以落在不同市场（不互相抵消）；不沿用上期持仓市场，缺数与年龄按这个市场判断，这个市场不可用时只冻结它在这个市场的持仓。写了它的策略必须显式写 `market`；单市场模式下只能写与策略相同的市场；`market: spot` 的规则不能做空。
-- tranche 只能用在单市场模式（`spot/spot`、`swap/swap`）；纯现货的 tranche 不能做空且必须 `sizing.method: weight`；双市场模式（`both`、`spot/swap`）不支持 tranche。绑定两个任务的策略不支持 `factor_params`。
+- 绑定两个任务的策略不支持 `factor_params`。
 - 行为变化：现货权重之和超过 1、总敞口超过 `leverage` 时，现在按比例缩小并在摘要注明，不再整期跳过。
 
 - **参考市场**：单市场策略可写 `market: {select: swap, reference: [spot]}`，额外绑定另一个市场的任务（`--factor-task spot=…`），只用于 `age_markets: all` 的年龄判定，不参与选择与下单。只能写模式不涉及的市场；必须有规则写 `age_markets: all`；不支持 `factor_params`、池成员不能写、统一数据集上的任务不能再写。
@@ -163,9 +163,6 @@ portfolio: {leverage: 1, max_weight: 0.1}
 | `type` | 用途 | 关键字段 |
 | --- | --- | --- |
 | `rank` | 截面选股；配显式 `pool` 与 `hold` 也用来对固定标的择时 | `filter`、`score`、`select`、`weight`，可选 `pool`、`holding`、`hold`、`filter_after`、`side`、`stop`、`scale`、`on_missing`、`market` |
-| `tranche` | 批次持仓：每根 K 线按本期选币新开一批，每批持有 h 期，多批叠加 | `tranche` 子策略模板、可选 `params` 参数表、`weight`，见第 4 节 |
-
-含 `tranche` 规则的策略只能全部是 `tranche` 规则，且不能写 `factor_params`；只能用在单个市场的策略（`spot/spot` 按权重持有且不做空，或 `swap/swap`），双市场模式启用被拒（S1 暂不支持双市场 tranche：市场不可用时无法冻结持仓）。
 
 ### rank 规则
 
@@ -180,9 +177,9 @@ portfolio: {leverage: 1, max_weight: 0.1}
 
 - 保存时要求 `cap × 选中数量 ≥ total`（预算分得完；写了 `then` 时选中数量取 `then` 的个数；个数要到运行时才知道的写法跳过这项检查，即 `then` 写比例，或没写 `then` 而 `top`/`bottom` 写比例，分不完的留现金）。`select.top` 写成大于标的数的值就等于全选。
 - `select` 的扩展：`top: 0.1`（(0, 1) 是比例，分母是通过 filter 且分数有效的样本数）配 `count_round: floor | ceil | round`、`count_min`；`range: [10, 13]` 名次闭区间（与 top/bottom、buffer 互斥）；`group: {by: 列, max: 3}` 或 `{by: 列, quotas: [2, 1], rest: 1}` 分组名额（分组值 NaN 的不入选）；`then: {score: "表达式", top: 5}` 在第一段结果上二次排序（与 buffer、hold 互斥；`top`、`bottom` 也可以写 (0, 1) 的比例，分母是第一段选中且分数有效的个数，配 `count_round`、`count_min`）。
-- `holding: {bars, offsets}` 分批换仓，与 `buffer` 互斥；`anchor: "<RFC3339 的 bar_start>"`（A 股可写交易日期）只改相位。日历换仓写 `holding: {calendar: trading_days | week | month, every: 5（仅 trading_days）, days: [1, -1], at: first | last}`，与 bars/offsets 互斥；建仓 bar 没有 ok 决策时在之后第一根 ok bar 补建。`filter_after` 只剔除不补位，剔除的权重留现金。
+- `holding: {bars, offsets}` 分批换仓，与 `buffer` 互斥；`offsets: all` 等于写出 0 到 `bars − 1`，即每根重建一个批次、每个批次持有 `bars` 根（批次最多 64 个，所以这时 `bars` 不能超过 64；要更长就放大 `bars`、`offsets` 取稀疏的几个）；`anchor: "<RFC3339 的 bar_start>"`（A 股可写交易日期）只改相位。日历换仓写 `holding: {calendar: trading_days | week | month, every: 5（仅 trading_days）, days: [1, -1], at: first | last}`，与 bars/offsets 互斥；建仓 bar 没有 ok 决策时在之后第一根 ok bar 补建。`filter_after` 只剔除不补位，剔除的权重留现金。
 - `hold: {entry, exit, max_bars, cooldown_bars, allow_reentry}` 进出场持有：持有中 exit 为真、不满足 filter、持满 max_bars、止损、缺数即出场（stop 优先），空位按名次从 entry 为真且 exit 不为真的候选里补，目标数取 `select` 换算的个数（持有多于目标不裁减）。持有标的只缺 score、entry 的列时不出场。与 buffer、holding.bars/offsets、then、range、filter_after 互斥；可与 `holding.calendar`（只能一个 days）同写，只在建仓 bar 判进出场。；`allow_reentry: true` 让候选只看 entry（出场条件为真的标的也能入场、刚出场的标的当根可补回，要求 cooldown_bars 为 0），默认不写
-- `scale: {expr, max}` 在规则配权（含 cap）之后逐标的乘系数，截到 [0, max]（max 默认 1、上限 10），乘掉的留现金；系数为 NaN 按缺数处理。`on_missing: {keep_bars: N}`（tranche 不支持）让持有标的本根缺数时冻结保持，连续缺数超过 N 根才移出。
+- `scale: {expr, max}` 在规则配权（含 cap）之后逐标的乘系数，截到 [0, max]（max 默认 1、上限 10），乘掉的留现金；系数为 NaN 按缺数处理。`on_missing: {keep_bars: N}` 让持有标的本根缺数时冻结保持，连续缺数超过 N 根才移出。
 - `side` 取 `long`（默认）或 `short`；空头只走永续，纯现货与股票不允许做空。
 - `market: spot | swap` 是规则级市场（见第 1 节“market：市场模式”）。
 
@@ -224,60 +221,9 @@ portfolio: {leverage: 1, max_weight: 0.1}
 - 数字写法不超过 64 个字符、精度不超过 18 位小数、绝对值小于 10^9。
 - 通过 filter 的候选全部分数无效时整期 `skipped(config_error)`，不当作“选不出标的”清仓。
 
-## 4. tranche 规则（批次持仓）
+## 4. 止损止盈
 
-```yaml
-rules:
-  - id: main
-    type: tranche
-    weight: {total: 1}                      # 规则预算：各子策略按 stg_weight 归一化后乘以它
-    candidates: {require_volume: true}      # 规则级：候选是否要求 volume > 0，默认 true
-    tranche:                                # 子策略模板；"{列名}" 取参数表这一行的值，整段占位符保留数字类型
-      hold_period: "{h}"                    # 必填，1～2016
-      hold_count: candidate_rows
-      score: {method: rank_sum, missing: median}
-      sizing: {method: quantity, scale: 0.5}
-      long_factors: [{factor: "momentum__{n}", descending: true, weight: 1}]
-      short_factors: []
-      long_weight: 2
-      short_weight: 0
-      long_coin_num: 1                      # 整数是个数；0～1 之间是百分比
-      short_coin_num: 0
-      filter_before: []                     # 串联执行，符合条件的保留
-      filter_after:                         # 在选中的样本上一次判断，任一条件成立就剔除，不补位
-        - {direction: long, factor: "shadow__{m}", type: value, op: lte, value: "{p}"}
-      stg_weight: "{w}"
-      # stop: {loss: 0.08, cooldown_bars: 12}
-    params:                                 # 可选：每行展开为一个子策略
-      columns: [h, n, m, p, w]
-      rows:
-        - [1, 20, 24, 0.1, 0.0033333333333333335]
-portfolio:
-  leverage: 2                               # 按数量持有会让 Σw 略大于 1，留出上限；超过 leverage 时按比例缩小
-```
-
-| 选项 | 取值 | 默认 |
-| --- | --- | --- |
-| `hold_count` | `candidate_rows`：该标的本期是候选才计数；`bars`：每根 K 线都计数 | `bars` |
-| `score.method` | `rank_sum`：各因子平均名次 × 权重 × 方向求和；`raw_sum`：因子原值加权求和 | `rank_sum` |
-| `score.missing` | `median`：空值补同期名次中位数；`drop`：空值不参与本期排名 | `drop` |
-| `sizing.method` | `quantity`：开仓时定数量；`weight`：每批份额固定 | `weight` |
-| `sizing.scale` | (0, 10]，份额 = `scale × side_weight / h / 分母` | 1 |
-| `long_weight`、`short_weight` | 0～20，某侧为 0 时该侧不选币 | 1、0 |
-| `long_coin_num`、`short_coin_num` | 个数（分母固定）或 0～1 的比例（分母为实际选中数） | 1、0 |
-| `stg_weight` | > 0 | 1 |
-| 名单 | `long_white_list`、`long_black_list`、`short_white_list`、`short_black_list` | 空 |
-
-- **参数表**：每行一个子策略，一条规则最多 5000 行、全策略合计最多 10000 个；占位符 `{列名}` 只能整段替换。
-- **过滤条件**：`direction`（`long`/`short`）、`factor`、`type`（`value`/`rank`/`pct`）、`op`（`lt lte gt gte bt bte nbt nbte eq ne`，必填）、
-  `value`（数字，或 `bt` 一类的 `[下限, 上限]`）、`rank_ascending`；逻辑组合写成 `{logic: "1&(2|3)", items: [...]}`。
-- **要与外部框架逐值一致时**，把它的做法逐项显式写出，不要依赖默认值。
-- **去重**：打分方式、缺值处理、多空因子、名单、前置过滤、个数、哪一侧权重大于 0、`stop.price` 都相同的子策略共用一次选币（“排名签名”）；
-  后置过滤、定仓与止损逐个子策略计算。
-
-## 5. 止损止盈
-
-`rank` 写在规则上，`tranche` 写在子策略模板里（可用参数表占位符）：
+写在规则上：
 
 ```yaml
 stop:
@@ -290,7 +236,7 @@ stop:
 
 至少写一项；`loss`、`trailing` 取值 (0, 1)，`profit` 取值 (0, 10]。按收盘判断，不是盘中触价；View 必须有 `close`（`extreme` 时还要 `high`、`low`）。
 
-## 6. 校验、创建与上线
+## 5. 校验、创建与上线
 
 写入生产的策略定义和实例属于外部写操作，每一步先告诉用户并等确认。
 
@@ -311,7 +257,7 @@ stop:
 ### 修改已有策略
 
 - 启用时定义会写入会话快照；已启用的实例改了定义，按文档的说法，会话与定义版本不一致时挂会话与置为启用都会被拒绝，所以改定义后要停用再启用（这一步没有在线上逐项验证，改之前先在观察实例上试）。
-  **停用后重新启用会新建会话，但 DSL、绑定解析、成员都没变时规则状态（tranche 的开仓记录、持有计数、止损入场价与冷却）沿用**，停用的那几根算时间流逝。
+  **停用后重新启用会新建会话，但 DSL、绑定解析、成员都没变时规则状态（持有集合、holding 批次、hold 的入场序号、止损入场价与冷却）沿用**，停用的那几根算时间流逝。
   修改实例（换账户或定义，原样提交也算）或改 DSL 文本（加一行注释也行）会清空，改 `id` 同理。人工平仓后要让策略从零开始，必须先清空再启用，否则启用后第一期会把平掉的标的买回来。
 - 清空规则状态（管理台不能改实例，只能用命令行），两条路任选其一：
     - 原样提交一次实例修改，只清这一个实例：
@@ -323,7 +269,7 @@ stop:
 - 引用的因子定义哈希变了（见 [factor-dsl.md](factor-dsl.md)“修改已有因子的定义”），引用它的实例同样要重新启用。
 - 改动较大时，优先新建一份策略定义和观察实例并行跑一段时间，再切换。
 
-## 7. 常见错误
+## 6. 常见错误
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
@@ -334,10 +280,7 @@ stop:
 | 提示使用了 `max_age_bars` 必须写 `allow_empty: true` | 只保留新标的的规则经常没有候选，不写会让整期守门跳过 | 在这条规则上写 `allow_empty: true` |
 | 提示互斥（hold 与 buffer / then / range / filter_after / holding.bars，range 与 top、buffer，then 与 buffer，calendar 与 bars） | 这些写法语义冲突 | 按提示二选一 |
 | 启用被拒，提示 holding.anchor 不是 bar 起点 | 锚点要写某根 bar 的 bar_start（A 股日线是上海 0 点，可直接写交易日期） | 改成 bar 起点或交易日期 |
-| tranche 规则写 `on_missing` 被拒 | tranche 不走冻结保持 | 去掉 `on_missing` |
 | 规则写 `market` 被拒 | 策略没显式写 `market`；单市场策略写了不同的市场；`market: spot` 的规则做空；取值不是 spot、swap | 显式写策略的 `market`（双市场模式才能另选）；现货规则改成多头或改 `market: swap` |
 | 启用被拒，提示列不存在 | 规则引用的列不在因子任务结果里 | 按成员键推导列名；默认参数的成员省略参数段 |
 | 提示 `x 不是已声明的来源` 或不允许属性访问 | 表达式写了 `x.y`，但 `sources` 没有声明 `x` | 在 `sources` 里声明来源，或改回主帧的列名 |
 | 启用被拒，提示来源要按主帧的任务键各绑定一个任务、或周期不是整数倍 | 来源任务少给了市场，或来源周期与主帧对不齐 | 按 `来源名:市场=任务` 补齐；换成周期是主帧整数倍的任务 |
-| 含参数表的 DSL 被拒（超 64 KiB） | 参数表很大 | 含参数表的策略上限是 1 MiB，仍超出就拆成多条规则或多个策略 |
-| tranche 策略启用被拒 | 混用了 `rank` 规则、`factor_params`，用在双市场模式，或纯现货里做空 / 按数量持有 | tranche 只能全部是 tranche 规则、只用单市场模式；纯现货只能 `sizing.method: weight` 且不做空 |

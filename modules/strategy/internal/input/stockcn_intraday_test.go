@@ -252,7 +252,7 @@ func TestStockIntradayTradingDayBarsAndRetention(t *testing.T) {
 	}
 }
 
-// A 股（market_type=equity）按现货处理：不许 tranche、杠杆不大于 1、不许做空。
+// A 股（market_type=equity）按现货处理：杠杆不大于 1、不许做空。
 func TestResolveEquityFollowsSpotLimits(t *testing.T) {
 	client := newFakeClient("equity")
 	client.tagMarkets["binance_equity"] = "equity"
@@ -267,30 +267,6 @@ func TestResolveEquityFollowsSpotLimits(t *testing.T) {
 	short := parseStrategy(t, "name: short\nrules:\n  - {id: s, type: rank, score: close, select: {bottom: 1}, weight: {total: 0.5}, side: short}\n")
 	if _, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, short); err == nil || !strings.Contains(err.Error(), "做空") {
 		t.Fatalf("equity 应拒绝做空：%v", err)
-	}
-	tranche := parseStrategy(t, `name: tranche_demo
-bar: 1h
-universe: {}
-rules:
-  - id: r
-    type: tranche
-    weight: {total: 1}
-    tranche:
-      hold_count: candidate_rows
-      score: {method: rank_sum, missing: median}
-      sizing: {method: quantity, scale: 0.5}
-      hold_period: 3
-      long_weight: 2
-      short_weight: 0
-      long_coin_num: 1
-      short_coin_num: 0
-      long_factors: [{factor: "close", descending: true, weight: 1.0}]
-      short_factors: []
-      filter_before: []
-      filter_after: []
-`)
-	if _, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, tranche); err == nil || !strings.Contains(err.Error(), "tranche") {
-		t.Fatalf("equity 应拒绝 tranche：%v", err)
 	}
 	// 数据集属性直接声明 equity 也接受。
 	source := client.datasets["ds_kline"]

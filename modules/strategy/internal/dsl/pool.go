@@ -157,7 +157,7 @@ const (
 	cryptoMonthDay = 31
 )
 
-// MaxHoldBars 返回策略里最长的持有期（bar 数）：rank 规则的 holding.bars、hold.max_bars，tranche 子策略的 hold_period，
+// MaxHoldBars 返回策略里最长的持有期（bar 数）：规则的 holding.bars、hold.max_bars，
 // 以及日历换仓一个周期内最多的 bar 数（clock 换算，见 BarClock）；没有持有期时为 0。
 func (s Strategy) MaxHoldBars(clock BarClock) int {
 	longest := 0
@@ -171,11 +171,6 @@ func (s Strategy) MaxHoldBars(clock BarClock) int {
 		}
 		if rule.Hold != nil {
 			longest = max(longest, rule.Hold.MaxBars)
-		}
-		if rule.Tranche != nil {
-			for _, sub := range rule.Tranche.Subs {
-				longest = max(longest, sub.HoldPeriod)
-			}
 		}
 	}
 	return longest

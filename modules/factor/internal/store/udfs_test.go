@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
@@ -243,8 +244,12 @@ func TestJobBindingsArePinnedOnce(t *testing.T) {
 	require.True(t, found, "空绑定也算固化过")
 	require.Empty(t, pinned)
 
+	before := time.Now().UTC()
 	_, err = s.SaveJobBindings(ctx, "job-2", map[string]string{"u": "h1"})
 	require.NoError(t, err)
+	saved, err := s.GetRecalcJob(ctx, "job-2")
+	require.NoError(t, err)
+	require.False(t, saved.UpdatedAt.Before(before), "固化时写入带小数秒的更新时间，不落到触发器的秒级时间上")
 	pinned, err = s.SaveJobBindings(ctx, "job-2", map[string]string{"u": "h2"})
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"u": "h1"}, pinned, "已经固化的不覆盖")

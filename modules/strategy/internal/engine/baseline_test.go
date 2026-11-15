@@ -717,3 +717,35 @@ func TestBaselineEngineGoldens(t *testing.T) {
 		})
 	}
 }
+
+// holding.offsets: all 只是解析时的简写：与逐个写出 0 到 bars-1 的写法逐期得到相同的决策（目标、状态、摘要与明细）。
+func TestHoldingOffsetsAllMatchesExplicitList(t *testing.T) {
+	text := func(offsets string) string {
+		return `name: offsets_all
+rules:
+  - id: h
+    type: rank
+    filter: "liq > 0"
+    score: "m"
+    select: {top: 2}
+    weight: {total: 0.9, method: rank}
+    filter_after: "ok > 0"
+    holding: {bars: 3, offsets: ` + offsets + `}
+portfolio:
+  max_missing: 1
+`
+	}
+	scenario := baselineEngineScenario{name: "offsets_all", columns: []string{"m", "liq", "ok"}, bars: baselineHoldingBars()}
+	scenario.dsl = text("all")
+	all, _ := baselineEngineRun(t, scenario)
+	scenario.dsl = text("[0, 1, 2]")
+	explicit, _ := baselineEngineRun(t, scenario)
+	require.Equal(t, explicit, all)
+	offsets := map[int]bool{}
+	for _, decision := range all {
+		for _, batch := range decision.State.Rules["h"].Batches {
+			offsets[batch.Offset] = true
+		}
+	}
+	require.Equal(t, map[int]bool{0: true, 1: true, 2: true}, offsets, "每根都应建一个批次")
+}

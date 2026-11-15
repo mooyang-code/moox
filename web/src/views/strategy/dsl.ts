@@ -87,7 +87,7 @@ portfolio:
 /** 混合市场示例：market 写 {select: both, prefer: swap}，同一个币两边都有时优先永续下单；空头只走永续（现货不能做空）。 */
 export const mixedMarketTemplate = `# 混合市场示例：从现货与永续两边选币，空头只走永续。
 # 创建实例时绑定计算任务：现货、永续各一个（两个任务的列名要一致），或统一数据集上的一个任务；
-# 混合市场不能用 tranche 规则与 factor_params。
+# 混合市场不能用 factor_params。
 name: mixed_market_momentum
 bar: 1h
 
@@ -169,8 +169,6 @@ export interface DSLRulePreview {
   id: string;
   name: string;
   type: string;
-  /** tranche 规则展开后的子策略数（参数表行数，没有参数表时为 1）；其他类型为 0。 */
-  subStrategies: number;
   /** 规则级市场（spot 或 swap）；没写时不出现。 */
   market?: string;
 }
@@ -237,14 +235,11 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
       const id = typeof rule?.id === "string" ? rule.id : "";
       const type = typeof rule?.type === "string" ? rule.type : "";
       if (!id) diagnostics.push({ message: `rules[${index}] 缺少 id` });
-      if (type !== "rank" && type !== "tranche") diagnostics.push({ message: `rules[${index}] 的 type 只能是 rank 或 tranche` });
-      const rows = rule?.params?.rows;
-      const subStrategies = type === "tranche" ? (Array.isArray(rows) ? rows.length : 1) : 0;
+      if (type !== "rank") diagnostics.push({ message: `rules[${index}] 的 type 只能是 rank` });
       const preview: DSLRulePreview = {
         id: id || `#${index + 1}`,
         name: typeof rule?.name === "string" ? rule.name : "",
-        type,
-        subStrategies
+        type
       };
       if (rule?.market !== undefined) {
         if (rule.market in RULE_MARKET_LABELS) preview.market = rule.market;
@@ -252,8 +247,6 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
       }
       rules.push(preview);
     });
-    if (rules.some(rule => rule.type === "tranche") && rules.some(rule => rule.type !== "tranche"))
-      diagnostics.push({ message: "含 tranche 规则的策略只能全部是 tranche 规则" });
   }
   const universe = [
     value.universe && typeof value.universe === "object" ? describeUniverse(value.universe) : "全部标的",
@@ -457,10 +450,7 @@ export function summarizeDSL(source: string): string {
   if (preview.pool) return `${preview.bar} · 策略池：${describePool(preview.pool)}`;
   if (!preview.rules.length) return "DSL 没有规则";
   const rules = preview.rules
-    .map(
-      rule =>
-        `${rule.name || rule.id}（${rule.type === "tranche" ? `tranche，${rule.subStrategies} 个子策略` : rule.type || "?"}${rule.market ? `，${RULE_MARKET_LABELS[rule.market]}` : ""}）`
-    )
+    .map(rule => `${rule.name || rule.id}（${rule.type || "?"}${rule.market ? `，${RULE_MARKET_LABELS[rule.market]}` : ""}）`)
     .join("、");
   return `${preview.bar} · ${preview.rules.length} 条规则：${rules}`;
 }

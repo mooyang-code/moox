@@ -21,8 +21,6 @@ type ruleSets struct {
 	holdReason map[string]string
 	// waived 表示规则本期不守门（永续整体不可用时的空头规则，见 waivesShortGuard）：规则只保持冻结的持仓，holding 规则不重建批次。
 	waived bool
-	// inactive 是 tranche 规则里本期有行但 volume 为 0 的标的：不是候选，也不算缺数（require_volume 时只有 volume > 0 的行是候选）。
-	inactive []string
 }
 
 // partitionRule 按规则引用的列划分可用与缺数：行不存在、所需列为空、或该列上游对该标的失败，都算缺数。
@@ -93,16 +91,9 @@ const (
 	ReasonAgeMarkets = "age_markets"
 )
 
-// reasonVolumeZero 是 tranche 规则里本期有行但 volume 为 0、不作为候选的标的的明细原因。
-const reasonVolumeZero = "volume_zero"
-
-// items 为年龄剔除、缺数、保持持仓与（tranche 规则）本期无成交的标的生成解释明细；其余标的的明细由各规则求值产生。
+// items 为年龄剔除、缺数与保持持仓的标的生成解释明细；其余标的的明细由各规则求值产生。
 func (s ruleSets) items(ruleID string) []Item {
-	items := make([]Item, 0, len(s.agedOut)+len(s.missing)+len(s.frozen)+len(s.inactive))
-	inactive := make(map[string]struct{}, len(s.inactive))
-	for _, id := range s.inactive {
-		inactive[id] = struct{}{}
-	}
+	items := make([]Item, 0, len(s.agedOut)+len(s.missing)+len(s.frozen))
 	for _, id := range s.expected {
 		if _, aged := s.agedOut[id]; aged {
 			reason := "min_age_bars"
@@ -122,10 +113,6 @@ func (s ruleSets) items(ruleID string) []Item {
 		}
 		if reason, missing := s.missing[id]; missing {
 			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageMissing, Reason: reason})
-			continue
-		}
-		if _, idle := inactive[id]; idle {
-			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageIdle, Reason: reasonVolumeZero})
 		}
 	}
 	return items

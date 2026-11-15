@@ -105,7 +105,7 @@ func TestLimitsInPlainStrategy(t *testing.T) {
 	}
 }
 
-// 成员方向：写了 switch、exposure、gross 时每个成员都要单方向，switch 只能同方向转移；tranche 按子策略的多空权重判断。
+// 成员方向：写了 switch、exposure、gross 时每个成员都要单方向，switch 只能同方向转移。
 func TestPoolMemberSides(t *testing.T) {
 	t.Parallel()
 	long := sideMember(t, "market: {select: swap}\n", SideLong)
@@ -116,13 +116,6 @@ func TestPoolMemberSides(t *testing.T) {
 	}
 	if long.Direction() != SideLong || short.Direction() != SideShort || mixed.Direction() != "" {
 		t.Fatalf("方向判定不符：%q %q %q", long.Direction(), short.Direction(), mixed.Direction())
-	}
-	tranche, err := Parse([]byte(strings.Replace(trancheDSL(trancheRows, ""), "long_weight: 2\n      short_weight: 0", "long_weight: 0\n      short_weight: 1", 1)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tranche.Direction() != SideShort {
-		t.Fatalf("tranche 只有空头子策略时判为空头：%q", tranche.Direction())
 	}
 	switched, err := parsePool(t, "  allocation: {method: fixed, ratios: {a: 1, b: 0}, switch: [{when: {empty: b}, move: {from: a, to: [b]}}]}\nportfolio: {leverage: 2}\n")
 	if err != nil {

@@ -382,7 +382,9 @@ func (s *Store) SaveJobBindings(ctx context.Context, jobID string, bindings map[
 	if err != nil {
 		return nil, err
 	}
-	if err := s.db.WithContext(ctx).Exec(`UPDATE t_factor_recalc_jobs SET c_udf_bindings = ? WHERE c_job_id = ? AND c_udf_bindings IS NULL`, string(raw), jobID).Error; err != nil {
+	// 一起写 c_mtime：不写的话触发器会填秒级的 CURRENT_TIMESTAMP，与别处写入的带小数秒的时间混在一列，同一秒内排序会有偏差。
+	if err := s.db.WithContext(ctx).Exec(`UPDATE t_factor_recalc_jobs SET c_udf_bindings = ?, c_mtime = ? WHERE c_job_id = ? AND c_udf_bindings IS NULL`,
+		string(raw), time.Now().UTC(), jobID).Error; err != nil {
 		return nil, err
 	}
 	effective, found, err := s.JobBindings(ctx, jobID)
