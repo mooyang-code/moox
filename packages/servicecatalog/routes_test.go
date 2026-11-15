@@ -127,9 +127,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":  {180, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "1c0405300ceccde74ff7d0b71dc41d519273f553ff96884f1b65cd5b814b4b62"},
+		"control":  {175, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "690eb3635018497735c0aab55e71251a113f8d2d3454ce369a1d184c81fe7a55"},
 		"storage":  {65, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "4304606d48e8f9f3aa00d7da895c7fbf6058a9c512c60ff9518f148b091d7cef"},
-		"overseas": {62, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "0a2d5848f0208a0ce715807a8ceb41850010c251e49a817dbe24302fef9d0dda"},
+		"overseas": {61, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "a3687a90f358dfd63a442a285e031bac0a0aa6c7bee589167d113413a804a010"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -197,7 +197,7 @@ func TestCompilePreservesMethodSpecificPermissionBoundaries(t *testing.T) {
 		if route.ServicePath != "trpc.moox.trade.TradeConsoleService" {
 			continue
 		}
-		if slices.Contains(route.Callers, "strategy") != slices.Contains([]string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner"}, route.Method) {
+		if slices.Contains(route.Callers, "strategy") != slices.Contains([]string{"GetLogicalAccount", "CloseTargetSession"}, route.Method) {
 			t.Fatalf("strategy permission crossed method boundary: %+v", route)
 		}
 	}
@@ -432,7 +432,8 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 	}
 }
 
-// 因子机是只能出站的主机：外部程序没有网关路由，只通过 Access 访问系统；它们的健康端口进入中转许可，只对 Monitor 与 moox-cli 开放。
+// 因子机是只能出站的主机：外部程序以外部身份经 Access 访问系统，不是网关调用方；它们的健康端口进入中转许可，只对 Monitor 与 moox-cli 开放。
+// 因子引擎声明的服务另见 TestExternalProgramServiceRoutesThroughItsHostGateway。
 func TestOutboundFactorHostRelaysExternalProgramHealthPorts(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
 	p.Hosts = append(p.Hosts, Host{ID: "factor", Address: "192.168.0.103", Status: Enabled, Reachability: ReachabilityOutbound})
@@ -524,6 +525,95 @@ func TestOutboundFactorHostRelaysExternalProgramHealthPorts(t *testing.T) {
 	for _, relay := range control.Relays {
 		if relay.HostID == "factor" {
 			t.Fatalf("disabled factor host keeps relay: %+v", relay)
+		}
+	}
+}
+
+// 外部程序声明服务之后（因子引擎的 EngineControl）：所在主机的快照有它的路由（指向本机端口、只给 strategy），
+// strategy 进入该主机网关的校验名单；因子机只能出站时，control 的中转许可让 strategy 打开到因子机网关端口的中转，
+// 服务端口本身不能直接中转。
+func TestExternalProgramServiceRoutesThroughItsHostGateway(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	p.Hosts = append(p.Hosts, Host{ID: "factor", Address: "192.168.0.103", Status: Enabled, Reachability: ReachabilityOutbound})
+	for _, id := range []string{"host-gateway", "host-agent", "factor-engine", "archive-worker"} {
+		p.Deployments = append(p.Deployments, Deployment{HostID: "factor", ComponentID: id, Status: Enabled})
+	}
+	factor, err := c.Compile(p, "factor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int64{"OpenReplay": 600000, "StepReplay": 120000, "CloseReplay": 120000}
+	got := map[string]Route{}
+	for _, route := range factor.Routes {
+		if route.ServicePath == "trpc.moox.factor.EngineControl" {
+			got[route.Method] = route
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("factor host EngineControl routes = %+v", got)
+	}
+	for method, timeout := range want {
+		route := got[method]
+		if route.ComponentID != "factor-engine" || route.Address != "127.0.0.1:11423" || route.TimeoutMS != timeout ||
+			route.MaxBodyBytes != DefaultMaxBodyBytes || route.ReadOnly || !slices.Equal(route.Callers, []string{"strategy"}) {
+			t.Fatalf("%s route = %+v", method, route)
+		}
+	}
+	if !slices.Contains(factor.VerificationCallers, "strategy") {
+		t.Fatalf("factor host must verify strategy: %v", factor.VerificationCallers)
+	}
+	if !slices.Equal(factor.Directory.Services["trpc.moox.factor.EngineControl"], []string{"factor"}) {
+		t.Fatalf("directory = %v", factor.Directory.Services["trpc.moox.factor.EngineControl"])
+	}
+
+	control, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control.Directory.Hosts["factor"].Relay != "control" {
+		t.Fatalf("factor host must be reached through control: %+v", control.Directory.Hosts["factor"])
+	}
+	for _, route := range control.Routes {
+		if route.ServicePath == "trpc.moox.factor.EngineControl" {
+			t.Fatalf("control must not route EngineControl locally: %+v", route)
+		}
+	}
+	var relay *RelayTarget
+	for i := range control.Relays {
+		if control.Relays[i].HostID == "factor" {
+			relay = &control.Relays[i]
+		}
+	}
+	if relay == nil || !c.ValidRelay(*relay) {
+		t.Fatalf("factor relay = %+v", control.Relays)
+	}
+	if !relay.Allowed("strategy", HostGatewayRemotePort) || relay.Allowed("strategy", 11423) || relay.Allowed("console", 11423) {
+		t.Fatalf("strategy must reach EngineControl only through the factor gateway port: %+v", relay.Ports)
+	}
+	if !slices.Contains(control.VerificationCallers, "strategy") {
+		t.Fatalf("control must verify strategy relay streams: %v", control.VerificationCallers)
+	}
+
+	// 停用因子引擎的部署后，路由与中转许可里的 strategy 随之撤销（因子机上其他服务都没有给 strategy）。
+	for i := range p.Deployments {
+		if p.Deployments[i].ComponentID == "factor-engine" {
+			p.Deployments[i].Status = Disabled
+		}
+	}
+	if factor, err = c.Compile(p, "factor"); err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range factor.Routes {
+		if route.ComponentID == "factor-engine" {
+			t.Fatalf("disabled factor-engine keeps a route: %+v", route)
+		}
+	}
+	if control, err = c.Compile(p, "control"); err != nil {
+		t.Fatal(err)
+	}
+	for _, relay := range control.Relays {
+		if relay.HostID == "factor" && relay.Allowed("strategy", HostGatewayRemotePort) {
+			t.Fatalf("disabled factor-engine keeps strategy in the relay: %+v", relay.Ports)
 		}
 	}
 }

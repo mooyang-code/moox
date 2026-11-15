@@ -12,18 +12,14 @@ import (
 )
 
 type memberRow struct {
-	TaskID              string     `gorm:"column:c_task_id"`
-	MemberKey           string     `gorm:"column:c_member_key"`
-	FactorID            string     `gorm:"column:c_factor_id"`
-	Kind                string     `gorm:"column:c_kind"`
-	Status              string     `gorm:"column:c_status"`
-	Params              string     `gorm:"column:c_params"`
-	LastSubmittedParams string     `gorm:"column:c_last_submitted_params"`
-	LastSubmittedPeriod int64      `gorm:"column:c_last_submitted_period"`
-	LastRequestID       string     `gorm:"column:c_last_request_id"`
-	LastSubmittedAt     *time.Time `gorm:"column:c_last_submitted_at"`
-	CreatedAt           time.Time  `gorm:"column:c_ctime"`
-	UpdatedAt           time.Time  `gorm:"column:c_mtime"`
+	TaskID    string    `gorm:"column:c_task_id"`
+	MemberKey string    `gorm:"column:c_member_key"`
+	FactorID  string    `gorm:"column:c_factor_id"`
+	Kind      string    `gorm:"column:c_kind"`
+	Status    string    `gorm:"column:c_status"`
+	Params    string    `gorm:"column:c_params"`
+	CreatedAt time.Time `gorm:"column:c_ctime"`
+	UpdatedAt time.Time `gorm:"column:c_mtime"`
 }
 
 func (r memberRow) domain() (domain.FactorTaskMember, error) {
@@ -31,17 +27,9 @@ func (r memberRow) domain() (domain.FactorTaskMember, error) {
 	if err != nil {
 		return domain.FactorTaskMember{}, fmt.Errorf("member %s/%s: %w", r.TaskID, r.MemberKey, err)
 	}
-	submitted, err := domain.ParseParamSnapshot(r.LastSubmittedParams)
-	if err != nil {
-		return domain.FactorTaskMember{}, fmt.Errorf("member %s/%s: %w", r.TaskID, r.MemberKey, err)
-	}
-	if len(submitted) == 0 {
-		submitted = nil
-	}
 	return domain.FactorTaskMember{
 		TaskID: r.TaskID, MemberKey: r.MemberKey, FactorID: r.FactorID, Kind: r.Kind, Status: r.Status, Params: params,
-		LastSubmittedParams: submitted, LastSubmittedPeriod: r.LastSubmittedPeriod, LastRequestID: r.LastRequestID,
-		LastSubmittedAt: r.LastSubmittedAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}, nil
 }
 
@@ -68,29 +56,22 @@ func decodeMemberParams(raw string) (map[string]float64, error) {
 	return params, nil
 }
 
-const memberColumns = `c_task_id, c_member_key, c_factor_id, c_kind, c_status, c_params, c_last_submitted_params,
-	c_last_submitted_period, c_last_request_id, c_last_submitted_at, c_ctime, c_mtime`
+const memberColumns = `c_task_id, c_member_key, c_factor_id, c_kind, c_status, c_params, c_ctime, c_mtime`
 
 // joinedMemberRow is one member row joined with its definition.
 type joinedMemberRow struct {
-	MemberTaskID              string       `gorm:"column:m_task_id"`
-	MemberKey                 string       `gorm:"column:m_member_key"`
-	MemberKind                string       `gorm:"column:m_kind"`
-	MemberStatus              string       `gorm:"column:m_status"`
-	Params                    string       `gorm:"column:m_params"`
-	MemberLastSubmittedParams string       `gorm:"column:m_last_submitted_params"`
-	MemberLastSubmittedPeriod int64        `gorm:"column:m_last_submitted_period"`
-	MemberLastRequestID       string       `gorm:"column:m_last_request_id"`
-	MemberLastSubmittedAt     *time.Time   `gorm:"column:m_last_submitted_at"`
-	MemberCreatedAt           time.Time    `gorm:"column:m_ctime"`
-	MemberUpdatedAt           time.Time    `gorm:"column:m_mtime"`
-	Def                       factorDefRow `gorm:"embedded"`
+	MemberTaskID    string       `gorm:"column:m_task_id"`
+	MemberKey       string       `gorm:"column:m_member_key"`
+	MemberKind      string       `gorm:"column:m_kind"`
+	MemberStatus    string       `gorm:"column:m_status"`
+	Params          string       `gorm:"column:m_params"`
+	MemberCreatedAt time.Time    `gorm:"column:m_ctime"`
+	MemberUpdatedAt time.Time    `gorm:"column:m_mtime"`
+	Def             factorDefRow `gorm:"embedded"`
 }
 
 const joinedMemberColumns = `m.c_task_id AS m_task_id, m.c_member_key AS m_member_key, m.c_kind AS m_kind, m.c_status AS m_status,
-	 m.c_params AS m_params, m.c_last_submitted_params AS m_last_submitted_params,
-	 m.c_last_submitted_period AS m_last_submitted_period, m.c_last_request_id AS m_last_request_id,
-	 m.c_last_submitted_at AS m_last_submitted_at, m.c_ctime AS m_ctime, m.c_mtime AS m_mtime,
+	 m.c_params AS m_params, m.c_ctime AS m_ctime, m.c_mtime AS m_mtime,
 	 d.c_factor_id, d.c_name, d.c_category_id, d.c_spec, d.c_spec_hash, d.c_allow_partial_universe, d.c_ctime, d.c_mtime`
 
 // AddMember attaches a definition to a factor task as a disabled member under member key. params 是成员的固定参数，
@@ -237,9 +218,7 @@ func (s *Store) ListMembers(ctx context.Context, taskID, status string) ([]domai
 		}
 		member, err := memberRow{
 			TaskID: row.MemberTaskID, MemberKey: row.MemberKey, FactorID: def.FactorID, Kind: row.MemberKind, Status: row.MemberStatus,
-			Params: row.Params, LastSubmittedParams: row.MemberLastSubmittedParams, LastSubmittedPeriod: row.MemberLastSubmittedPeriod,
-			LastRequestID: row.MemberLastRequestID, LastSubmittedAt: row.MemberLastSubmittedAt,
-			CreatedAt: row.MemberCreatedAt, UpdatedAt: row.MemberUpdatedAt,
+			Params: row.Params, CreatedAt: row.MemberCreatedAt, UpdatedAt: row.MemberUpdatedAt,
 		}.domain()
 		if err != nil {
 			return nil, err

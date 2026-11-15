@@ -33,7 +33,7 @@ func TestGapFillerMixesPeriodsWithAndWithoutFrozenUniverse(t *testing.T) {
 		minuteAt(3).Unix(): frozen("BTC"),
 	}}
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(f, universe, true)
+	frozenFiller(f, universe)
 	f.record(t, gapT0, "BTC", 0, "evt-0", factor)
 	f.record(t, gapT0, "BTC", 1, "evt-1", factor)
 	f.record(t, gapT0, "BTC", 2, "", factor) // 没有触发事件
@@ -59,7 +59,7 @@ func TestGapFillerDoesNotMergeNonAdjacentPeriods(t *testing.T) {
 	full := frozen("BTC")
 	universe := &periodUniverse{byPeriod: map[int64]storageio.Universe{minuteAt(0).Unix(): full, minuteAt(3).Unix(): full}}
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(f, universe, true)
+	frozenFiller(f, universe)
 	f.record(t, gapT0, "BTC", 0, "evt-0", factor)
 	f.record(t, gapT0, "BTC", 3, "evt-3", factor)
 	f.now = gapT0.Add(6 * time.Minute)
@@ -84,7 +84,7 @@ func TestGapFillerDailyTaskMergesOnlyAdjacentDays(t *testing.T) {
 	set.Set.Freq = "1d"
 	f.filler.cfg.GiveUpAfter = 10 * day // 日线任务的待办要等好几天：不能被 6 小时的放弃时限先记 gave_up
 	f.sets.sets["fset"] = set
-	unifiedFiller(f, universe, true)
+	frozenFiller(f, universe)
 	f.record(t, gapT0, "BTC", 0, "evt-0", factor)
 	f.record(t, gapT0, "BTC", 24*60, "evt-1", factor)
 	f.record(t, gapT0, "BTC", 3*24*60, "evt-3", factor)
@@ -106,7 +106,7 @@ func TestGapFillerOtherSubjectsListingDoesNotSplitTheBatch(t *testing.T) {
 		minuteAt(1).Unix(): frozen("BTC"),
 	}}
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(f, universe, true)
+	frozenFiller(f, universe)
 	f.record(t, gapT0, "BTC", 0, "evt-0", factor)
 	f.record(t, gapT0, "BTC", 1, "evt-1", factor)
 	f.now = gapT0.Add(6 * time.Minute)
@@ -123,7 +123,7 @@ func TestGapFillerReadsEachMarkerOncePerSweep(t *testing.T) {
 	full := frozen("BTC", "ETH")
 	universe := &periodUniverse{byPeriod: map[int64]storageio.Universe{minuteAt(0).Unix(): full, minuteAt(1).Unix(): full}}
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(f, universe, true)
+	frozenFiller(f, universe)
 	f.record(t, gapT0, "BTC", 0, "evt-0", factor)
 	f.record(t, gapT0, "BTC", 1, "evt-1", factor)
 	f.record(t, gapT0, "ETH", 0, "evt-0", factor) // 区间不同：与 BTC 分两批
@@ -141,7 +141,7 @@ func TestGapFillerTimeSeriesRunsIgnoreCrossSectionPeriods(t *testing.T) {
 	full := frozen("BTC")
 	universe := &periodUniverse{byPeriod: map[int64]storageio.Universe{minuteAt(0).Unix(): full, minuteAt(1).Unix(): full, minuteAt(2).Unix(): full}}
 	f := newGapFixture(t, fakeUniverse{subjects: []string{"BTC"}, found: true}, ts, cross)
-	unifiedFiller(f, universe, true)
+	frozenFiller(f, universe)
 	f.record(t, gapT0, "BTC", 0, "evt-0", ts)
 	f.record(t, gapT0, "BTC", 1, "evt-1", cross) // 第 1 期只有截面成员的待办
 	f.record(t, gapT0, "BTC", 2, "evt-2", ts)
@@ -182,7 +182,7 @@ func TestGapFillerMarkerReadFailureOnlyHoldsThatPeriod(t *testing.T) {
 		minuteAt(0).Unix(): full, minuteAt(1).Unix(): full, minuteAt(2).Unix(): full,
 	}}, failAt: minuteAt(1).Unix()}
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(f, universe, true)
+	frozenFiller(f, universe)
 	for minute := 0; minute < 3; minute++ {
 		f.record(t, gapT0, "BTC", minute, "evt", factor)
 	}
@@ -204,7 +204,7 @@ func TestGapFillerHoldsPendingWhileMarkerMayStillBeWritten(t *testing.T) {
 	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
 	universe := &periodUniverse{byPeriod: map[int64]storageio.Universe{}}
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(f, universe, true)
+	frozenFiller(f, universe)
 	f.filler.warmup = func() []pipeline.WarmupStatus {
 		return []pipeline.WarmupStatus{{TaskID: "fset", State: pipeline.WarmupReady}}
 	}
@@ -224,7 +224,7 @@ func TestGapFillerHoldsPendingWhileMarkerMayStillBeWritten(t *testing.T) {
 
 	// 超过 Settle 仍读不到 marker：按原逻辑退回兜底，一次运行、不带序列。
 	late := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(late, &periodUniverse{byPeriod: map[int64]storageio.Universe{}}, true)
+	frozenFiller(late, &periodUniverse{byPeriod: map[int64]storageio.Universe{}})
 	late.record(t, gapT0, "BTC", 0, "evt-0", factor)
 	late.now = gapT0.Add(6 * time.Minute)
 	late.filler.tick(context.Background())

@@ -36,13 +36,15 @@ type Plan struct {
 	Expected       []string
 	Available      []string
 	UpstreamFailed []string
-	// ExpectedSeries、UpstreamFailedSeries 是按序列（标的、series_tag）的期望全集与上游失败名单，只有统一数据集才有：
-	// 期望、缺失、跳过、失败都按序列判断，一个市场的缺数不连累另一个市场。单序列数据集为空，一切按标的处理。
-	// 有序列全集时 Expected 是它涉及的标的，Available 是至少有一条序列没有上游失败的标的，UpstreamFailed 是有序列上游失败的标的。
+	// ExpectedSeries、UpstreamFailedSeries 是按序列（标的、series_tag）的期望全集与上游失败名单，所有数据集都有：
+	// 期望、缺失、跳过、失败都按序列判断，统一数据集里一个市场的缺数不连累另一个市场。
+	// Expected 是它涉及的标的，Available 是至少有一条序列没有上游失败的标的，UpstreamFailed 是有序列上游失败的标的。
+	// 实时计划取自周期完成事件；补算类计划没有带时由 Run 向数据层取（SeriesExpecter）。
 	ExpectedSeries       []seriesset.Series
 	UpstreamFailedSeries []seriesset.Series
-	// ExpectedSeriesDerived 为真表示 ExpectedSeries 是数据层按本地存储推测出来的（补算、失效重算没有冻结全集可用），不是 marker 里冻结的确定值。
-	// 推测的期望可能把晚到或刚下架的序列算进来：非只填充的计划里，因这类推测缺数而被跳过的 series_tag 不写 NULL，保留已有的值。
+	// ExpectedSeriesDerived 为真表示 ExpectedSeries 是数据层在统一数据集上按本地存储推测出来的（补算、失效重算没有冻结全集可用），
+	// 不是 marker 里冻结的确定值。推测的期望可能把晚到或刚下架的序列算进来：非只填充的计划里，因这类推测缺数而被跳过的
+	// series_tag 不写 NULL，保留已有的值。只有一个 tag 的数据集不做推测，恒为假。
 	ExpectedSeriesDerived bool
 	CarryColumns          []string
 	WriteCarry            bool
@@ -77,7 +79,7 @@ type RowKey struct {
 type Outcome struct {
 	Status         string
 	FailedSubjects []string
-	// FailedSeries 是按序列的失败名单（统一数据集才有）。
+	// FailedSeries 是按序列的失败名单，口径同 FailedSubjects。
 	FailedSeries []seriesset.Series
 	// DerivedSkipped 表示补算类计划（期望序列是数据层推测的，ExpectedSeriesDerived）里有成员因推测的期望缺数而整个或部分 tag 被跳过：
 	// 这些行保留了旧值、没有真正重算，失效重算据此保留这一段待办，等推测不再跳过（例如已下架的序列沉默超过阈值被排除）再重算。
@@ -146,8 +148,8 @@ type LoadResult struct {
 	View           *serieswindow.View
 	Available      []string
 	FailedSubjects []string
-	// AvailableSeries、FailedSeries 是统一数据集上期望序列里本期可用与不可用的序列（可用：本期有真实的源行；
-	// 不可用：上游失败、本期数据还没到、同步失败、预热中），两者合起来正好是 Plan.ExpectedSeries。单序列数据集为空。
+	// AvailableSeries、FailedSeries 是期望序列里本期可用与不可用的序列（可用：本期有真实的源行；
+	// 不可用：上游失败、本期数据还没到、同步失败、预热中），两者合起来正好是 Plan.ExpectedSeries。
 	// 不可用序列的标的都在 FailedSubjects 里（按标的口径：任一序列失败，标的就记失败）；Available 是至少有一条可用序列的标的。
 	AvailableSeries []seriesset.Series
 	FailedSeries    []seriesset.Series
@@ -166,7 +168,7 @@ type Computation struct {
 	BudgetHit bool
 	// Warnings 是成员在目标区间内整截面没有算出的次数（成员键 → 原因 → 截面数），来自 exec.Result.Warnings。
 	Warnings map[string]map[string]int
-	// availableSeries 是统一数据集上本期可用的序列：成员整体计算失败时，这些序列都记为失败。
+	// availableSeries 是本期可用的序列：成员整体计算失败时，这些序列都记为失败。
 	availableSeries []seriesset.Series
 }
 

@@ -96,7 +96,7 @@ func TestPreviousFactorsOnlyForFactorColumns(t *testing.T) {
 	client := newFakeClient("spot")
 	klineOnly := parseStrategy(t, `name: x
 rules:
-  - {id: r, type: signal, pool: [BTC-USDT], entry: "bars[-1].close < bars[0].close && ma_20 > 0", exit: "close < 1", weight: 1}
+  - {id: r, type: rank, pool: [BTC-USDT], score: "0", select: {top: 10000}, hold: {entry: "bars[-1].close < bars[0].close && ma_20 > 0", exit: "close < 1"}, weight: 1}
 `)
 	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, klineOnly)
 	if err != nil || !program.UsesPreviousBar || len(resolved.PreviousFactors) != 0 || len(resolved.ReadinessBinding().PreviousFactors) != 0 {

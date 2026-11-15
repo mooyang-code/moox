@@ -31,7 +31,7 @@ func TestRunTargetRetryDoesNotHoldBackOtherAccounts(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "stuck",
-			OwnerInstanceID: "runner-2", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			ExecutionMode:   "PAPER",
 			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
 		})
 	}))
@@ -83,7 +83,7 @@ func TestRunTargetSlowRetriesDoNotStarveOtherAccounts(t *testing.T) {
 		require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 			return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 				SpaceID: "space-1", LogicalAccountID: slow.logical, Name: slow.logical,
-				OwnerInstanceID: slow.instance, OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+				ExecutionMode:   "PAPER",
 				SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
 			})
 		}))

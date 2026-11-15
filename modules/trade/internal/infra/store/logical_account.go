@@ -2,8 +2,6 @@ package store
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -18,10 +16,8 @@ type LogicalAccountRecord struct {
 	SpaceID          string
 	LogicalAccountID string
 	Name             string
-	// OwnerInstanceID and OwnerSessionID are the Strategy lifecycle identity.
-	OwnerInstanceID string
-	OwnerSessionID  string
-	AuthFence       string
+	// ClosedThrough 是关闭到哪个会话为止（会话的开始时刻，毫秒）：开始时刻不大于它的会话的目标一律不再接受，0 表示没关闭过。
+	ClosedThrough   int64
 	ExecutionMode   string
 	SettlementAsset string
 	// OrderSettingsJSON、FundSettingsJSON 是下单设置和资金设置，空对象表示全部取默认值。
@@ -50,9 +46,7 @@ type logicalAccountRow struct {
 	SpaceID           string    `gorm:"column:c_space_id"`
 	LogicalAccountID  string    `gorm:"column:c_logical_account_id"`
 	Name              string    `gorm:"column:c_name"`
-	OwnerInstanceID   *string   `gorm:"column:c_owner_instance_id"`
-	OwnerSessionID    *string   `gorm:"column:c_owner_session_id"`
-	AuthFence         string    `gorm:"column:c_auth_fence"`
+	ClosedThrough     int64     `gorm:"column:c_closed_through"`
 	ExecutionMode     string    `gorm:"column:c_execution_mode"`
 	SettlementAsset   string    `gorm:"column:c_settlement_asset"`
 	OrderSettingsJSON string    `gorm:"column:c_order_settings_json"`
@@ -86,27 +80,9 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 	if record.ControlMode == "" {
 		record.ControlMode = string(logicalaccount.ControlStrategy)
 	}
-	if record.ControlMode == string(logicalaccount.ControlManual) &&
-		(record.OwnerInstanceID != "" || record.OwnerSessionID != "") {
-		return fmt.Errorf("%w: manual account cannot have a strategy session", ErrInvalidRecord)
-	}
 	account := logicalAccountDomain(record)
 	if err := account.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, err)
-	}
-	instanceID := record.OwnerInstanceID
-	var ownerInstance *string
-	if !blank(instanceID) {
-		ownerInstance = &instanceID
-	}
-	var ownerSession *string
-	if !blank(record.OwnerSessionID) {
-		session := record.OwnerSessionID
-		ownerSession = &session
-	}
-	authFence := record.AuthFence
-	if blank(authFence) {
-		authFence = newAuthFence()
 	}
 	if blank(record.OrderSettingsJSON) {
 		record.OrderSettingsJSON = "{}"
@@ -116,7 +92,6 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 	}
 	err := tx.db.Exec(execInsertLogicalAccount,
 		record.SpaceID, record.LogicalAccountID, record.Name,
-		ownerInstance, ownerSession, authFence,
 		record.ControlMode, record.ExecutionMode, record.SettlementAsset,
 		record.OrderSettingsJSON, record.FundSettingsJSON,
 		record.AutomationState, record.PauseReason,
@@ -169,79 +144,6 @@ func (s *Store) ListLogicalAccounts(
 		records = append(records, logicalAccountRecord(row))
 	}
 	return records, nil
-}
-
-// ClaimLogicalAccountSession atomically assigns a Strategy instance/session
-// to a logical account. expectedFence is the caller's previously observed
-// auth_fence and is mandatory. Keeping it out of the
-// public target contract makes delayed management calls harmless even when a
-// new session has already claimed the account. The returned fence is the value
-// to retain for the next CAS. changed is false for an identical session retry
-// with the current fence, so callers retain its already-accepted target.
-func (tx *Tx) ClaimLogicalAccountSession(
-	spaceID, logicalAccountID, instanceID, sessionID, expectedFence string,
-) (string, bool, error) {
-	if blank(spaceID) || blank(logicalAccountID) || blank(instanceID) || blank(sessionID) || blank(expectedFence) {
-		return "", false, fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
-	}
-	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
-	if err != nil {
-		return "", false, err
-	}
-	if account.ControlMode != "STRATEGY" {
-		return "", false, fmt.Errorf("%w: logical account is not strategy controlled", ErrConflict)
-	}
-	if account.AuthFence != expectedFence {
-		return "", false, fmt.Errorf("%w: session authorization fence changed", ErrConflict)
-	}
-	if account.OwnerInstanceID == instanceID && account.OwnerSessionID == sessionID {
-		return account.AuthFence, false, nil
-	}
-	if account.OwnerInstanceID != "" || account.OwnerSessionID != "" {
-		return "", false, fmt.Errorf("%w: logical account is owned by another session", ErrConflict)
-	}
-	fence := newAuthFence()
-	result := tx.db.Exec(execClaimLogicalAccountOwner, instanceID, sessionID, fence, spaceID, logicalAccountID, account.AuthFence)
-	if result.Error != nil {
-		return "", false, writeError(result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return "", false, fmt.Errorf("%w: session authorization claim lost compare-and-set", ErrConflict)
-	}
-	return fence, true, nil
-}
-
-// ReleaseLogicalAccountSession releases only the expected identity and fence. Releasing
-// an already-idle account is idempotent; releasing an account owned by a new
-// session is a conflict and never changes that new authorization.
-func (tx *Tx) ReleaseLogicalAccountSession(
-	spaceID, logicalAccountID, instanceID, sessionID, expectedFence string,
-) error {
-	if blank(instanceID) || blank(sessionID) || blank(expectedFence) {
-		return fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
-	}
-	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
-	if err != nil {
-		return err
-	}
-	if account.AuthFence != expectedFence {
-		return fmt.Errorf("%w: stale session authorization release", ErrConflict)
-	}
-	if account.OwnerInstanceID == "" && account.OwnerSessionID == "" {
-		return nil
-	}
-	if account.OwnerInstanceID != instanceID || account.OwnerSessionID != sessionID ||
-		account.AuthFence != expectedFence {
-		return fmt.Errorf("%w: stale session authorization release", ErrConflict)
-	}
-	result := tx.db.Exec(execReleaseLogicalAccountOwner, newAuthFence(), spaceID, logicalAccountID, instanceID, sessionID, account.AuthFence)
-	if result.Error != nil {
-		return writeError(result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return fmt.Errorf("%w: session authorization release lost compare-and-set", ErrConflict)
-	}
-	return nil
 }
 
 func (tx *Tx) SetLogicalAccountName(
@@ -554,35 +456,16 @@ func logicalAccountDomain(record LogicalAccountRecord) logicalaccount.Account {
 }
 
 func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
-	var instanceID, sessionID string
-	if row.OwnerInstanceID != nil {
-		instanceID = *row.OwnerInstanceID
-	}
-	if row.OwnerSessionID != nil {
-		sessionID = *row.OwnerSessionID
-	}
 	return LogicalAccountRecord{
 		ControlMode: row.ControlMode,
 		SpaceID:     row.SpaceID, LogicalAccountID: row.LogicalAccountID,
-		Name: row.Name, OwnerInstanceID: instanceID,
-		OwnerSessionID: sessionID, AuthFence: row.AuthFence,
+		Name: row.Name, ClosedThrough: row.ClosedThrough,
 		ExecutionMode:     row.ExecutionMode,
 		SettlementAsset:   row.SettlementAsset,
 		OrderSettingsJSON: row.OrderSettingsJSON, FundSettingsJSON: row.FundSettingsJSON,
 		AutomationState: row.AutomationState, PauseReason: row.PauseReason, ResumedAt: row.ResumedAt,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
-}
-
-func newAuthFence() string {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err == nil {
-		return hex.EncodeToString(raw[:])
-	}
-	// rand.Reader failures are exceptionally rare. A non-empty fallback keeps
-	// the row usable while preserving the invariant that an idle account also
-	// carries a fence value.
-	return fmt.Sprintf("fence-%d", time.Now().UnixNano())
 }
 
 func logicalAccountMemberRecord(row logicalAccountMemberRow) LogicalAccountMemberRecord {
@@ -598,11 +481,10 @@ func logicalAccountMemberRecord(row logicalAccountMemberRow) LogicalAccountMembe
 const (
 	execInsertLogicalAccount = `INSERT INTO t_logical_accounts (
 			c_space_id, c_logical_account_id, c_name,
-			c_owner_instance_id, c_owner_session_id, c_auth_fence,
 			c_control_mode, c_execution_mode, c_settlement_asset,
 			c_order_settings_json, c_fund_settings_json,
 			c_automation_state, c_pause_reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	// 改自动执行状态：从暂停恢复时记下恢复时间；只有策略控制的组合能恢复自动执行。
 	execSetLogicalAccountAutomation = `UPDATE t_logical_accounts
 		SET c_resumed_at = CASE WHEN ? = 'ACTIVE' AND c_automation_state <> 'ACTIVE' THEN ? ELSE c_resumed_at END,
@@ -619,20 +501,6 @@ const (
 			ON a.c_space_id = m.c_space_id
 			AND a.c_trading_account_id = m.c_trading_account_id
 		WHERE m.c_space_id = ? AND m.c_logical_account_id = ? AND m.c_enabled = 1`
-	execClaimLogicalAccountOwner = `UPDATE t_logical_accounts
-		SET c_owner_instance_id = ?, c_owner_session_id = ?,
-			c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-		  AND COALESCE(c_owner_instance_id, '') = ''
-		  AND c_control_mode = 'STRATEGY'
-		  AND COALESCE(c_owner_session_id, '') = ''
-		  AND c_auth_fence = ?`
-	execReleaseLogicalAccountOwner = `UPDATE t_logical_accounts
-		SET c_owner_instance_id = NULL, c_owner_session_id = NULL,
-			c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-		  AND c_owner_instance_id = ? AND c_owner_session_id = ?
-		  AND c_auth_fence = ?`
 	execRenameLogicalAccount = `UPDATE t_logical_accounts
 		SET c_name = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?`

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mixedMarketTemplate, parseDSL, poolTemplate, rankedTemplate, signalTemplate, summarizeDSL, tunedTemplate } from "./dsl";
+import { mixedMarketTemplate, parseDSL, poolTemplate, rankedTemplate, summarizeDSL, timingTemplate, tunedTemplate } from "./dsl";
 
 describe("strategy DSL preview", () => {
   it("parses the v3 templates without diagnostics", () => {
@@ -7,8 +7,8 @@ describe("strategy DSL preview", () => {
     expect(ranked.diagnostics).toEqual([]);
     expect(ranked.preview).toMatchObject({ name: "binance_spot_momentum", bar: "1m", leverage: "1" });
     expect(ranked.preview?.rules).toEqual([
-      { id: "long_momentum", name: "多头动量选币", type: "rank", subStrategies: 0 },
-      { id: "btc_trend", name: "BTC 上穿均线", type: "signal", subStrategies: 0 }
+      { id: "long_momentum", name: "多头动量选币", type: "rank" },
+      { id: "btc_trend", name: "BTC 上穿均线", type: "rank", timing: true }
     ]);
     expect(ranked.preview?.universe).toContain("排除 BTC-USDT");
     const aged = parseDSL(
@@ -17,18 +17,18 @@ describe("strategy DSL preview", () => {
     expect(aged.preview?.universe).toBe("上市满 5 根；规则 f：上市不满 30 根，年龄按全部市场判断（允许为空）");
     const excluded = parseDSL("name: e\nrules:\n  - {id: g, type: rank, universe: {exclude_tags: [meme, new]}}\n");
     expect(excluded.preview?.universe).toBe("全部标的；规则 g：排除标签 meme、new");
-    const signal = parseDSL(signalTemplate);
-    expect(signal.diagnostics).toEqual([]);
-    expect(signalTemplate).toContain("bars[-1].bias");
+    const timing = parseDSL(timingTemplate);
+    expect(timing.diagnostics).toEqual([]);
+    expect(timing.preview?.rules).toEqual([{ id: "majors_trend", name: "主流币均线择时", type: "rank", timing: true }]);
+    expect(timingTemplate).toContain("bars[-1].bias");
   });
 
   it("reports structural problems before saving", () => {
     expect(parseDSL("name: a\nrules: {rank: {}}\n").diagnostics.map(item => item.message)).toContain(
       "rules 必须是非空列表，每条规则包含 id 与 type"
     );
-    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: ranked\n").diagnostics[0].message).toContain(
-      "rank、signal 或 tranche"
-    );
+    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: ranked\n").diagnostics[0].message).toContain("只能是 rank");
+    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: signal\n").diagnostics[0].message).toContain("只能是 rank");
     expect(parseDSL("name: [").preview).toBeNull();
   });
 
@@ -70,37 +70,6 @@ describe("tuned template", () => {
   });
 });
 
-describe("tranche rules", () => {
-  const tranche = `name: tranche_demo
-rules:
-  - id: demo
-    type: tranche
-    weight: {total: 1}
-    tranche:
-      hold_period: "{h}"
-      long_factors: [{factor: "po__{s}"}]
-    params:
-      columns: [h, s]
-      rows:
-        - [1, 49]
-        - [3, 65]
-`;
-  it("accepts tranche rules and counts sub-strategies", () => {
-    const result = parseDSL(tranche);
-    expect(result.diagnostics).toEqual([]);
-    expect(result.preview?.rules[0]).toMatchObject({ id: "demo", type: "tranche", subStrategies: 2 });
-    expect(summarizeDSL(tranche)).toContain("tranche，2 个子策略");
-  });
-  it("rejects mixing tranche with other rule types", () => {
-    const mixed =
-      tranche +
-      `  - id: other
-    type: rank
-`;
-    expect(parseDSL(mixed).diagnostics.map(item => item.message)).toContain("含 tranche 规则的策略只能全部是 tranche 规则");
-  });
-});
-
 describe("market 预览", () => {
   it("没写 market 时按计算任务的市场，写了就说明选币范围与下单市场", () => {
     expect(parseDSL(rankedTemplate).preview?.market).toBe("按计算任务的市场");
@@ -117,7 +86,6 @@ describe("混合市场模板", () => {
     expect(mixedMarketTemplate).toContain("market: {select: both, prefer: swap}");
     expect(mixedMarketTemplate).toContain("side: short");
     expect(mixedMarketTemplate).toContain("现货、永续各一个（两个任务的列名要一致），或统一数据集上的一个任务");
-    expect(mixedMarketTemplate).not.toContain("type: tranche");
     expect(mixedMarketTemplate).not.toContain("factor_params:");
   });
 });

@@ -168,7 +168,8 @@ func TestMemberColumnsCarryContractAttributes(t *testing.T) {
 	}
 }
 
-// 关联：重复关联同一个实例幂等；换实例、清空都拒绝；没有成员的任务不能关联；一个实例可以关联多个任务，一个任务只能关联一个实例。
+// 关联：重复关联同一个实例幂等；换实例、清空都拒绝；没有可变成员的任务不能关联（只有固定成员也不行）；一个实例可以关联多个任务，
+// 一个任务只能关联一个实例。
 func TestBindTask(t *testing.T) {
 	ctx := context.Background()
 	db := openCatalogStore(t)
@@ -176,9 +177,16 @@ func TestBindTask(t *testing.T) {
 	svc := newReadyService(t, db, meta)
 
 	_, err := svc.BindTask(ctx, testTaskID(), "inst-1")
-	require.ErrorContains(t, err, "no members", "没有成员的任务不能关联")
+	require.ErrorContains(t, err, "没有可变成员", "没有成员的任务不能关联")
 
 	addMember(t, svc, testTaskID(), "momentum", domain.MemberStatusEnabled)
+	_, err = svc.BindTask(ctx, testTaskID(), "inst-1")
+	require.ErrorContains(t, err, "没有可变成员", "只有固定成员的任务不能关联")
+	task, err := db.GetTask(ctx, testTaskID())
+	require.NoError(t, err)
+	require.Empty(t, task.BoundInstanceID, "被拒绝时不写关联")
+
+	addVarMember(t, svc, testTaskID(), domain.MemberStatusEnabled)
 	bound, err := svc.BindTask(ctx, testTaskID(), "inst-1")
 	require.NoError(t, err)
 	require.Equal(t, "inst-1", bound.BoundInstanceID)
@@ -195,7 +203,7 @@ func TestBindTask(t *testing.T) {
 	other.TaskID, other.Name = "ftask_prices_other", "第二任务"
 	_, err = svc.CreateTask(ctx, other)
 	require.NoError(t, err)
-	addMember(t, svc, other.TaskID, "momentum", domain.MemberStatusDisabled)
+	addVarMember(t, svc, other.TaskID, domain.MemberStatusDisabled)
 	_, err = svc.BindTask(ctx, other.TaskID, "inst-1")
 	require.NoError(t, err, "一个实例可以关联多个任务")
 	_, err = svc.BindTask(ctx, other.TaskID, "inst-2")

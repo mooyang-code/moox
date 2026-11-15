@@ -65,7 +65,7 @@ describe("启用绑了组合账户的实例", () => {
     const text = document.body.textContent || "";
     expect(text).toContain("主组合");
     expect(text).toContain("生产环境");
-    expect(text).toContain("计算任务 task-a 会与本实例永久关联");
+    expect(text).toContain("写了 factor_params 的实例会把计算任务 task-a 与本实例永久关联");
     expect(text).toContain("会沿用停用前的持有记录、止损入场价和冷却");
     expect(text).toContain("先清空规则状态再启用");
     expect(text).toContain("moox-cli strategy instance update 原样提交一次，或改一下策略 DSL");

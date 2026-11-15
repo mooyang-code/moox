@@ -1,3 +1,4 @@
+import type { StrategyInstance } from "@/api/strategy-types";
 import type { LogicalAccount, MarketType, TradingAccount } from "@/api/trade/types";
 import { environmentLabel, logicalEnvironment } from "@/components/trade-confirm/environment";
 
@@ -44,11 +45,24 @@ export function environmentPrefix(account: LogicalAccount, tradingAccounts: Read
   return environmentLabel(logicalEnvironment(account, tradingAccounts));
 }
 
+/** 组合账户编号 → 绑着它的启用实例编号：取自 Strategy 的实例列表（归属只记在 Strategy，Trade 不存）。 */
+export function enabledInstanceAccounts(instances: readonly StrategyInstance[]): Map<string, string> {
+  const result = new Map<string, string>();
+  for (const instance of instances) {
+    if (instance.enabled && instance.logical_account_id && !result.has(instance.logical_account_id)) {
+      result.set(instance.logical_account_id, instance.instance_id);
+    }
+  }
+  return result;
+}
+
 // 账户的可交易市场必须包含策略要输出的全部市场（交易模块用启用成员已开通市场的并集算出）。
+// 已被启用实例绑着的账户显示但不可选；boundInstances 读不到（null）时不置灰，启用时由 Strategy 拒绝。
 export function logicalAccountOptions(
   accounts: LogicalAccount[],
   markets: ResolvedMarkets = {},
-  tradingAccounts: ReadonlyMap<string, TradingAccount> | null = null
+  tradingAccounts: ReadonlyMap<string, TradingAccount> | null = null,
+  boundInstances: ReadonlyMap<string, string> | null = null
 ): LogicalAccountOption[] {
   return accounts
     .filter(
@@ -57,7 +71,8 @@ export function logicalAccountOptions(
     )
     .map(account => {
       const members = (account.members || []).filter(member => member.enabled).length;
-      const disabledReason = account.owner_instance_id ? `已绑定实例 ${account.owner_instance_id}` : "";
+      const bound = boundInstances?.get(account.logical_account_id);
+      const disabledReason = bound ? `已绑定实例 ${bound}` : "";
       const state = account.ready ? "就绪" : "未就绪";
       const suffix = disabledReason ? `，${disabledReason}` : "";
       return {

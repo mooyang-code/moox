@@ -36,8 +36,10 @@ var errCancelled = errors.New("回放已取消")
 
 // Runner 是进程内单工作协程的回放执行器：同一时刻只跑一个回放，pending 任务排队。
 type Runner struct {
-	Store                     *store.Store
-	Client                    input.Client
+	Store  *store.Store
+	Client input.Client
+	// Engine 是“因子现算”来源调用因子引擎 EngineControl 的客户端；为空时这种来源的回放失败。
+	Engine                    input.EngineClient
 	ChunkBars                 int
 	MissingPriceLiquidateBars int
 	MaxBars                   int
@@ -217,31 +219,6 @@ func replayViewIDs(job store.Replay) []string {
 	return ids
 }
 
-// marketReader 是回放读取的一个市场：这个市场结果 View 的行读取器、年龄判定用的历史读取器，以及它的数据集标的。
-type marketReader struct {
-	market string
-	task   store.ReplayTask
-	// subjects 是数据集的全部标的绑定（含已停用，回放中都视为活跃）。
-	subjects []input.Subject
-	rows     *input.RangeLoader
-	history  *input.RangeLoader
-	// passed 是整次回放内已通过年龄判定的标的（按判定根数 N 分开），各段共用（与实时一致：通过后不再因窗口缺口被重新剔除）。
-	passed map[int]map[string]struct{}
-	// listed 是这个市场列出的标的（全部标的绑定），年龄判定用；构造时算一次。
-	listed map[string]struct{}
-	// sources 是这个市场各附加来源的行读取器（来源名 → 读取器）：每段按 as-of 读来源应读的那几根，并进主帧的行。
-	sources map[string]*input.RangeLoader
-}
-
-// newMarketReader 构造一个市场的读取器，列出的标的取全部标的绑定。
-func newMarketReader(market string, task store.ReplayTask, subjects []input.Subject, rows, history *input.RangeLoader) *marketReader {
-	listed := make(map[string]struct{}, len(subjects))
-	for _, subject := range subjects {
-		listed[subject.SubjectID] = struct{}{}
-	}
-	return &marketReader{market: market, task: task, subjects: subjects, rows: rows, history: history, passed: make(map[int]map[string]struct{}), listed: listed}
-}
-
 // checkFundingColumn 确认永续的 View 有资金费列（column 为空时不检查）。
 func checkFundingColumn(views map[string]input.ViewInfo, column string) error {
 	if column == "" {
@@ -301,6 +278,33 @@ func loadMarketViews(ctx context.Context, client input.Client, spaceID string, r
 	return views, subjects, nil
 }
 
+// loadMarketSubjects 读取绑定的每个市场的数据集全部标的绑定（含已停用，回放中都视为活跃），规则与 loadMarketViews 相同：
+// “因子现算”的主帧不读 View，只要标的名单。
+func loadMarketSubjects(ctx context.Context, client input.Client, spaceID string, resolved input.Resolved) (map[string][]input.Subject, error) {
+	subjects := make(map[string][]input.Subject, len(resolved.Markets()))
+	for _, market := range resolved.Markets() {
+		task := resolved.TaskOf(market)
+		bindings, err := client.ListDatasetSubjects(ctx, spaceID, task.DatasetID)
+		if err != nil {
+			return nil, err
+		}
+		sort.Slice(bindings, func(i, j int) bool { return bindings[i].SubjectID < bindings[j].SubjectID })
+		active := make([]input.Subject, 0, len(bindings))
+		for _, subject := range bindings {
+			subject.Active = true
+			if resolved.Unified() {
+				subject.SeriesTag = ""
+			}
+			active = append(active, subject)
+		}
+		if len(active) == 0 {
+			return nil, fmt.Errorf("因子任务 %s 的结果数据集没有标的绑定", task.FactorTaskID)
+		}
+		subjects[market] = active
+	}
+	return subjects, nil
+}
+
 func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) {
 	if r.Client == nil {
 		return Metrics{}, errors.New("Storage 与 Factor 依赖未配置，不能回放")
@@ -323,21 +327,32 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if drift := factorDrift(job.Factors, resolved.Factors); drift != "" {
 		return Metrics{}, fmt.Errorf("因子定义在排队期间发生变化（%s），请重新发起回放", drift)
 	}
+	compute := job.Input == store.ReplayInputCompute
 	markets := resolved.Markets()
-	views, subjects, err := loadMarketViews(ctx, r.Client, job.SpaceID, resolved)
-	if err != nil {
-		return Metrics{}, err
-	}
-	if err := checkFundingColumn(views, job.FundingColumn); err != nil {
-		return Metrics{}, err
-	}
 	// 退避之前和之后都确认回放没有被取消：写入密集的 View 上一段读取可能退避很久，取消要尽快生效。
 	abort := r.abortHook(job.ReplayID)
-	// 开始前总是按精确统计复查起点并截断终点：排队期间可能重建过索引（新一代只保留最近的根数），
-	// 同一代索引也会由 Storage 定时删除每个序列最旧的数据，提交时校验过的起点可能已经不在了。
 	end := job.EndTime
-	if views, end, err = r.recheckWindow(ctx, job, resolved, program, views, job.StartTime, end, abort); err != nil {
-		return Metrics{}, err
+	var (
+		views    map[string]input.ViewInfo
+		subjects map[string][]input.Subject
+	)
+	if compute {
+		// “因子现算”的主帧不读 View：区间由引擎按本地数据给出，不按 View 的覆盖范围复查或截短。
+		if subjects, err = loadMarketSubjects(ctx, r.Client, job.SpaceID, resolved); err != nil {
+			return Metrics{}, err
+		}
+	} else {
+		if views, subjects, err = loadMarketViews(ctx, r.Client, job.SpaceID, resolved); err != nil {
+			return Metrics{}, err
+		}
+		if err := checkFundingColumn(views, job.FundingColumn); err != nil {
+			return Metrics{}, err
+		}
+		// 开始前总是按精确统计复查起点并截断终点：排队期间可能重建过索引（新一代只保留最近的根数），
+		// 同一代索引也会由 Storage 定时删除每个序列最旧的数据，提交时校验过的起点可能已经不在了。
+		if views, end, err = r.recheckWindow(ctx, job, resolved, program, views, job.StartTime, end, abort); err != nil {
+			return Metrics{}, err
+		}
 	}
 	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, job.StartTime, end, r.maxBars())
 	if err != nil {
@@ -350,62 +365,71 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if err != nil {
 		return Metrics{}, err
 	}
-	acc := r.newAccumulator(resolved, freq.NominalDuration(), job, end, bars)
-	acc.metrics.Factors = resolved.Factors
-	acc.metrics.Limitations = limitations(r.liquidateAfter(), usesTags(strategy), slices.Contains(markets, dsl.MarketSwap), job.FundingColumn)
-	columns := uniqueStrings(append(append([]string{"close"}, program.MainColumns()...), program.PreviousColumns...))
-	// 计资金费时永续的行另读费率列；统一数据集两个市场共用一个 View 与读取缓存，两边都读这一列，查询才相同。
-	columnsOf := func(market string) []string {
-		if job.FundingColumn == "" || (market != dsl.MarketSwap && !resolved.Unified()) {
-			return columns
-		}
-		return uniqueStrings(append(append([]string(nil), columns...), job.FundingColumn))
-	}
-	readers := make([]*marketReader, 0, len(markets))
-	// 统一数据集里两个市场共用一个 View：同一段的读取只发一次，各市场再按 series_tag 过滤。
-	var memo *input.RowsMemo
-	if resolved.Unified() {
-		memo = &input.RowsMemo{}
-	}
+	replayMarkets := make([]*replayMarket, 0, len(markets))
 	for _, market := range markets {
-		view := views[market]
-		loaderMarket := ""
-		if resolved.Unified() {
-			loaderMarket = market
+		replayMarkets = append(replayMarkets, newReplayMarket(market, subjects[market]))
+	}
+	var (
+		source barSource
+		refs   []*replayMarket
+		acc    *accumulator
+	)
+	chunk := r.chunkBars()
+	if compute {
+		computeInput, err := r.newComputeSource(ctx, job, resolved, program, replayMarkets, bars, abort)
+		if err != nil {
+			return Metrics{}, err
 		}
-		readers = append(readers, newMarketReader(market, job.Tasks[resolved.TaskKey(market)], subjects[market],
-			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: columnsOf(market), Market: loaderMarket, Memo: memo, Abort: abort},
-			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Market: loaderMarket, Memo: memo, Abort: abort}))
+		source, refs, bars, chunk = computeInput, computeInput.references(), computeInput.bars, computeInput.stepPeriods
+		acc = r.newAccumulator(resolved, freq.NominalDuration(), job, end, bars)
+		acc.setNote(noteCompute, computeInput.note)
+	} else {
+		acc = r.newAccumulator(resolved, freq.NominalDuration(), job, end, bars)
+		viewInput, err := r.newViewSource(ctx, job, resolved, program, views, replayMarkets, end, acc, abort)
+		if err != nil {
+			return Metrics{}, err
+		}
+		source, refs = viewInput, viewInput.references()
 	}
-	if err := attachSources(ctx, r.Client, job.SpaceID, resolved, program, readers, memo, abort); err != nil {
-		return Metrics{}, err
-	}
-	refs, err := referenceReaders(ctx, r.Client, job, resolved, abort)
-	if err != nil {
-		return Metrics{}, err
-	}
-	reader := &segmentReader{runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort, markets: readers, refs: refs, memo: memo}
+	defer func() { _ = source.Close(ctx) }()
+	acc.metrics.Factors = resolved.Factors
+	acc.metrics.Limitations = limitations(r.liquidateAfter(), usesTags(strategy), slices.Contains(markets, dsl.MarketSwap), job.FundingColumn, job.SlippageBps)
 	members := cachedMembership(r.Client, job.SpaceID)
 	book := r.newBook(job, resolved, acc)
 	state := engine.State{}
-	chunk := r.chunkBars()
+	// 声明了 factor_params 的策略（只在“因子现算”下回放）每段一根：本根 ok 时求出的参数交给下一根的因子计算。
+	tuned := compute && len(program.Params) > 0
+	var next engine.ParamSet
 	for start := 0; start < len(bars); start += chunk {
 		segment := bars[start:min(start+chunk, len(bars))]
-		segments, err := reader.load(ctx, segment)
+		segments, err := source.Load(ctx, segment, next)
 		if err != nil {
 			return acc.finish(), err
 		}
-		bars, segment = truncateBars(bars, start, chunk, reader.end, resolved, acc)
+		next = nil
+		bars, segment = truncateBars(bars, start, chunk, source.End(), resolved, acc)
 		for _, bar := range segment {
 			if err := abort(ctx); err != nil {
 				return acc.finish(), err
 			}
-			decision, err := evaluateBar(ctx, program, resolved, readers, refs, members, segments, bar, state)
+			decision, frame, err := evaluateBar(ctx, program, resolved, replayMarkets, refs, members, segments, bar, state)
 			if err != nil {
 				return acc.finish(), err
 			}
+			if tuned && decision.Status == engine.StatusOK {
+				outcome := engine.EvaluateParams(program, frame, resolved.FactorParams)
+				if len(outcome.Params) > 0 {
+					next = outcome.Params
+				}
+				decision.Summary.Notes = append(decision.Summary.Notes, outcome.Notes...)
+			}
 			key := bar.StorageStart.Unix()
-			if err := book.settle(ctx, bar, decision, barPrices(readers, segments, key), barFunding(readers, segments, key, job.FundingColumn)); err != nil {
+			// 引擎拒绝的参数（这一期沿用上一期生效的）写进这一期的说明与日志：持续被拒时结果看起来有效、其实没有调参。
+			if rejected := source.Rejected(key); len(rejected) > 0 {
+				decision.Summary.Notes = append(decision.Summary.Notes, rejected...)
+				r.logf("回放 %s 周期 %s：%s", job.ReplayID, bar.BarEnd.UTC().Format(time.RFC3339), strings.Join(rejected, "；"))
+			}
+			if err := book.settle(ctx, bar, decision, barPrices(replayMarkets, segments, key), barFunding(replayMarkets, segments, key, job.FundingColumn), source.Applied(key)); err != nil {
 				return acc.finish(), err
 			}
 			if decision.Status == engine.StatusOK {
@@ -448,13 +472,16 @@ type replayBook struct {
 	previousEquity float64
 }
 
-// newBook 构造回放的账本：费率用回放任务的现货、永续费率。
+// newBook 构造回放的账本：费率与滑点用回放任务的（现货、永续费率与 slippage_bps）。
 func (r *Runner) newBook(job store.Replay, resolved input.Resolved, acc *accumulator) *replayBook {
-	return &replayBook{runner: r, job: job, resolved: resolved, acc: acc, ledger: ledger.NewLedger(r.initialEquity(), job.SpotFeeBps, job.SwapFeeBps, r.liquidateAfter()), previousEquity: r.initialEquity()}
+	book := ledger.NewLedger(r.initialEquity(), job.SpotFeeBps, job.SwapFeeBps, r.liquidateAfter())
+	book.SlippageRate = job.SlippageBps / 10000
+	return &replayBook{runner: r, job: job, resolved: resolved, acc: acc, ledger: book, previousEquity: r.initialEquity()}
 }
 
 // settle 让账本承接一期的决策（skipped 期只估值、不调仓），先写入这一期再累计指标：写入失败时，保留的部分指标与已写入的周期一致。
-func (b *replayBook) settle(ctx context.Context, bar input.PeriodBoundaries, decision engine.Decision, prices, funding map[string]float64) error {
+// params 是这一期因子实际生效的逐期提交参数（只有“因子现算”来源有），随这一期记录写入。
+func (b *replayBook) settle(ctx context.Context, bar input.PeriodBoundaries, decision engine.Decision, prices, funding map[string]float64, params engine.ParamSet) error {
 	ok := decision.Status == engine.StatusOK
 	targets := make(map[string]float64, len(decision.Targets))
 	for _, target := range decision.Targets {
@@ -467,7 +494,7 @@ func (b *replayBook) settle(ctx context.Context, bar input.PeriodBoundaries, dec
 		barReturn = outcome.EquityAfter/b.previousEquity - 1
 	}
 	b.previousEquity = outcome.EquityAfter
-	if err := b.runner.writeBar(ctx, b.job.ReplayID, bar.BarEnd, decision, b.ledger, outcome, barReturn); err != nil {
+	if err := b.runner.writeBar(ctx, b.job.ReplayID, bar.BarEnd, decision, b.ledger, outcome, barReturn, params); err != nil {
 		return err
 	}
 	b.acc.add(bar.BarEnd, ok, decision.SkipReason, outcome, b.ledger.Holdings())
@@ -479,7 +506,7 @@ func (b *replayBook) settle(ctx context.Context, bar input.PeriodBoundaries, dec
 
 // barPrices 是一根 bar 上各（标的，市场）的收盘价：按各 View 的原始行取，不受选币池构造的去重影响（另一个市场的持仓也要估值）；
 // 同一标的同一周期有多个序列时，这根 bar 上它的价格不可信，按缺价处理。
-func barPrices(readers []*marketReader, segments map[string]marketSegment, key int64) map[string]float64 {
+func barPrices(readers []*replayMarket, segments map[string]marketSegment, key int64) map[string]float64 {
 	prices := make(map[string]float64)
 	for _, market := range readers {
 		rows := segments[market.market].rows
@@ -497,7 +524,7 @@ func barPrices(readers []*marketReader, segments map[string]marketSegment, key i
 
 // barFunding 是一根 bar 上各永续（标的，市场）本根累计的资金费率：column 为空时返回 nil（不计资金费），否则返回非 nil 的映射，
 // 只含有有效值的键；同一标的有多个序列时按缺值处理（与 barPrices 一致）。
-func barFunding(readers []*marketReader, segments map[string]marketSegment, key int64, column string) map[string]float64 {
+func barFunding(readers []*replayMarket, segments map[string]marketSegment, key int64, column string) map[string]float64 {
 	if column == "" {
 		return nil
 	}
@@ -677,223 +704,6 @@ func (r *Runner) recheckView(ctx context.Context, job store.Replay, taskKey stri
 	return view, newEnd, nil
 }
 
-// segmentReader 按段读取各市场回放的行与年龄判定所需的历史，跟随活动索引换代：某个市场读取期间活动索引换了一代时，按新索引
-// 复查从本段起的剩余区间，通过才让这个市场的两个读取器一起切换过去、整段重读，并按新索引截短终点；否则失败，不静默改读
-// 一代可能已经丢掉较早 bar 的新索引。一次回放内最多跟随 maxIndexSwitches 次（各市场合计）。
-type segmentReader struct {
-	runner   *Runner
-	job      store.Replay
-	resolved input.Resolved
-	program  *dsl.Program
-	markets  []*marketReader
-	// refs 是参考市场的读取器：只读年龄判定的历史，不读行。
-	refs []*marketReader
-	// acc 记录换代的局限说明：每次换代成功后立即写入，回放失败或取消时保存的部分指标也带着它；abort 在退避前后确认
-	// 回放没有被取消。
-	acc      *accumulator
-	abort    func(context.Context) error
-	switches int
-	// memo 是统一数据集两个市场共用的读取暂存（方式 A 为空）。
-	memo *input.RowsMemo
-	// end 是当前有效的终点（不含）：换代后可能被新索引截短。
-	end time.Time
-	// group 非空时换代由它统一跟随（策略池回放的全部成员共用一个计数，一起切换），switches 不用。
-	group *readerGroup
-}
-
-// usesTask 报告这个读取器有没有读任务键 taskKey 上的 View。
-func (s *segmentReader) usesTask(taskKey string) bool {
-	for _, market := range s.markets {
-		if s.resolved.TaskKey(market.market) == taskKey {
-			return true
-		}
-	}
-	return false
-}
-
-// marketSegment 是一个市场一段读取的结果：行与年龄判定的历史，以及各附加来源这一段的行（来源名 → 行）。
-type marketSegment struct {
-	rows    input.RangeRows
-	ages    *presence
-	sources map[string]input.RangeRows
-}
-
-func (s *segmentReader) load(ctx context.Context, segment []input.PeriodBoundaries) (map[string]marketSegment, error) {
-	readFrom := segment[0].StorageStart
-	if s.program.UsesPreviousBar && !segment[0].PreviousStart.IsZero() {
-		readFrom = segment[0].PreviousStart
-	}
-	revisionRereads := 0
-	// 各市场都读完（成功或失败）就丢掉暂存的原始行：求值期间不再多占一份。
-	defer s.memo.Reset()
-reload:
-	for {
-		s.memo.Reset()
-		loaded := make(map[string]marketSegment, len(s.markets))
-		for _, market := range s.markets {
-			market.history.ExpectedRevision = 0
-			rows, err := market.rows.Load(ctx, readFrom, segment[len(segment)-1].StorageStart.Add(time.Nanosecond))
-			var ages *presence
-			if err == nil {
-				// 年龄探针固定到主数据读到的修订号：两次读取之间同一代索引发生原地补算时，丢弃整段重读，不混用两个修订号。
-				market.history.ExpectedRevision = rows.Revision
-				ages, err = agePresence(ctx, market.history, s.resolved, segment, market.passed)
-				var changedRevision *input.RevisionChangedError
-				if errors.As(err, &changedRevision) {
-					if revisionRereads >= maxRevisionRereads {
-						return nil, fmt.Errorf("View %s 在回放读取期间持续有新的写入，没有读到同一修订号的数据，请稍后重新发起回放", market.task.ViewID)
-					}
-					revisionRereads++
-					continue reload
-				}
-			}
-			var sources map[string]input.RangeRows
-			if err == nil {
-				sources, err = loadSourceSegment(ctx, s.resolved, market, segment)
-			}
-			var changed *input.IndexChangedError
-			if !errors.As(err, &changed) {
-				if err != nil {
-					return nil, err
-				}
-				loaded[market.market] = marketSegment{rows: rows, ages: ages, sources: sources}
-				continue
-			}
-			if s.group != nil {
-				if err := s.group.follow(ctx, s.resolved.TaskKey(market.market), changed.View, segment[0].StorageStart); err != nil {
-					return nil, err
-				}
-				continue reload
-			}
-			if s.switches >= maxIndexSwitches {
-				return nil, fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", market.task.ViewID)
-			}
-			s.switches++
-			taskKey := s.resolved.TaskKey(market.market)
-			view, end, err := s.runner.recheckView(ctx, s.job, taskKey, s.resolved, s.program, changed.View, segment[0].StorageStart, s.end, true, s.abort)
-			if err != nil {
-				return nil, err
-			}
-			s.end = end
-			// 年龄证明属于旧索引；与实时的缓存一致，换代后重新判定。统一数据集的两个市场共用一个 View，一起切换，
-			// 同一次换代不会被另一个市场再算一次。
-			for _, other := range s.markets {
-				if s.resolved.TaskKey(other.market) == taskKey {
-					other.rows.View, other.history.View = view, view
-					clear(other.passed)
-				}
-			}
-			s.acc.setNote(noteIndexSwitch, fmt.Sprintf("回放过程中 View 重建了 %d 次索引，每次都按新索引复查了剩余区间后继续", s.switches))
-			continue reload
-		}
-		// 参考市场只读年龄判定的历史（修订号不固定）。
-		for _, ref := range s.refs {
-			ages, err := agePresence(ctx, ref.history, s.resolved, segment, ref.passed)
-			if err != nil {
-				return nil, fmt.Errorf("参考市场 %s：%w", ref.market, err)
-			}
-			loaded[ref.market] = marketSegment{ages: ages}
-		}
-		return loaded, nil
-	}
-}
-
-// attachSources 给每个市场的读取器加上各附加来源的行读取器：来源 View 是这个市场所在任务键上的来源任务，标的与主帧相同
-// （不带 series_tag，读全部序列；统一数据集再按市场过滤），只读策略引用的来源列。
-func attachSources(ctx context.Context, client input.Client, spaceID string, resolved input.Resolved, program *dsl.Program, readers []*marketReader, memo *input.RowsMemo, abort func(context.Context) error) error {
-	if !resolved.HasSources() {
-		return nil
-	}
-	views := map[string]input.ViewInfo{}
-	for _, reader := range readers {
-		reader.sources = map[string]*input.RangeLoader{}
-		for _, name := range resolved.SourceNames() {
-			columns := program.SourceColumns[name]
-			if len(columns) == 0 {
-				continue
-			}
-			task := resolved.Sources[name].Tasks[resolved.TaskKey(reader.market)]
-			view, ok := views[task.ViewID]
-			if !ok {
-				var err error
-				if view, err = client.GetView(ctx, spaceID, task.ViewID); err != nil {
-					return err
-				}
-				views[task.ViewID] = view
-			}
-			subjects := make([]input.Subject, 0, len(reader.subjects))
-			for _, subject := range reader.subjects {
-				subject.SeriesTag = ""
-				subjects = append(subjects, subject)
-			}
-			market := ""
-			if resolved.Unified() {
-				market = reader.market
-			}
-			reader.sources[name] = &input.RangeLoader{Client: client, SpaceID: spaceID, View: view, Subjects: subjects, Columns: columns, Market: market, Memo: memo, Abort: abort}
-		}
-	}
-	return nil
-}
-
-// loadSourceSegment 读一段 bar 要用到的来源行：从第一根主帧应读的来源 bar 的前一根（多取一根）到最后一根主帧应读的那一根。
-// 来源 View 在回放过程中换了索引时直接失败（不跟随换代），请重新发起回放。
-func loadSourceSegment(ctx context.Context, resolved input.Resolved, reader *marketReader, segment []input.PeriodBoundaries) (map[string]input.RangeRows, error) {
-	if len(reader.sources) == 0 {
-		return nil, nil
-	}
-	out := make(map[string]input.RangeRows, len(reader.sources))
-	for _, name := range sortedNames(reader.sources) {
-		source := resolved.Sources[name]
-		first, _, err := source.Period(segment[0].BarEnd)
-		if err != nil {
-			return nil, err
-		}
-		last, _, err := source.Period(segment[len(segment)-1].BarEnd)
-		if err != nil {
-			return nil, err
-		}
-		from := first.StorageStart
-		if !first.PreviousStart.IsZero() {
-			from = first.PreviousStart
-		}
-		rows, err := reader.sources[name].Load(ctx, from, last.StorageStart.Add(time.Nanosecond))
-		var changed *input.IndexChangedError
-		if errors.As(err, &changed) {
-			return nil, fmt.Errorf("来源 %s 的 View %s 在回放过程中重建了索引，请重新发起回放", name, changed.View.ViewID)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("读取来源 %s 的行：%w", name, err)
-		}
-		out[name] = rows
-	}
-	return out, nil
-}
-
-// referenceReaders 构造参考市场的读取器：只读年龄判定所需的 close 历史，列出的标的取参考数据集的全部标的绑定（回放中都视为活跃）。
-func referenceReaders(ctx context.Context, client input.Client, job store.Replay, resolved input.Resolved, abort func(context.Context) error) ([]*marketReader, error) {
-	refs := make([]*marketReader, 0, len(resolved.References))
-	for _, market := range sortedNames(resolved.References) {
-		task := resolved.References[market]
-		view, err := client.GetView(ctx, job.SpaceID, task.ViewID)
-		if err != nil {
-			return nil, err
-		}
-		bindings, err := client.ListDatasetSubjects(ctx, job.SpaceID, view.DatasetID)
-		if err != nil {
-			return nil, err
-		}
-		subjects := make([]input.Subject, 0, len(bindings))
-		for _, subject := range bindings {
-			subject.Active = true
-			subjects = append(subjects, subject)
-		}
-		refs = append(refs, newMarketReader(market, job.Tasks[market], subjects, nil,
-			&input.RangeLoader{Client: client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: []string{"close"}, Abort: abort}))
-	}
-	return refs, nil
-}
-
 func sortedNames[V any](values map[string]V) []string {
 	names := make([]string, 0, len(values))
 	for name := range values {
@@ -907,7 +717,7 @@ func sortedNames[V any](values map[string]V) []string {
 // （∪E(r)，年龄剔除之前）在本期（用到 bars[-1] 时还有上一根）出现多个序列才整期跳过，无关标的的歧义不影响本期，只是它们的价格
 // 不用于估值。年龄判定按市场各自的历史；多个市场时，年龄没通过的市场不用它的行。
 // refs 是参考市场的读取器：只参与 age_markets: all 的年龄判定（列出的标的与探针）。
-func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resolved, readers, refs []*marketReader, members input.Membership, segments map[string]marketSegment, bar input.PeriodBoundaries, state engine.State) (engine.Decision, error) {
+func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resolved, readers, refs []*replayMarket, members input.Membership, segments map[string]marketSegment, bar input.PeriodBoundaries, state engine.State) (engine.Decision, engine.Frame, error) {
 	key := bar.StorageStart.Unix()
 	multi := len(readers) > 1
 	// 基础集合与标的绑定只取选币市场：基础集合是选币市场本期有行的标的（回放与实时的已知差别见 docs/模块/策略.md 第 10 节）。
@@ -929,23 +739,23 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 	sort.Strings(universe)
 	sets, err := input.BuildSets(ctx, members, program.Strategy, subjects, universe)
 	if err != nil {
-		return engine.Decision{}, err
+		return engine.Decision{}, engine.Frame{}, err
 	}
 	// 判定顺序与实时一致：当期的歧义 → 年龄探针 → 上一根的歧义。
 	involved := sets.Instruments()
 	for _, reader := range readers {
 		if detail := firstAmbiguous(involved, segments[reader.market].rows.Ambiguous[key]); detail != "" {
-			return skippedDecision(state, input.SkipAmbiguousSeries, marketDetail(reader.market, multi, detail)), nil
+			return skippedDecision(state, input.SkipAmbiguousSeries, marketDetail(reader.market, multi, detail)), engine.Frame{}, nil
 		}
 	}
 	// 每个市场列出的标的取它的全部标的绑定（与实时的市场基础集合一致：本根没有行也算列出），探针候选也按它收窄。
 	listed := make(input.AgeListed, len(readers)+len(refs))
-	for _, reader := range append(append([]*marketReader(nil), readers...), refs...) {
+	for _, reader := range append(append([]*replayMarket(nil), readers...), refs...) {
 		listed[reader.market] = reader.listed
 	}
 	probe := func(ctx context.Context, n int, ids []string) (map[string]map[string]struct{}, error) {
 		passed := make(map[string]map[string]struct{}, len(readers)+len(refs))
-		for _, reader := range append(append([]*marketReader(nil), readers...), refs...) {
+		for _, reader := range append(append([]*replayMarket(nil), readers...), refs...) {
 			inMarket := make([]string, 0, len(ids))
 			for _, id := range ids {
 				if _, ok := listed[reader.market][id]; ok {
@@ -964,22 +774,22 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 	if err != nil {
 		var skip *input.SkipError
 		if errors.As(err, &skip) {
-			return skippedDecision(state, skip.Reason, skip.Detail), nil
+			return skippedDecision(state, skip.Reason, skip.Detail), engine.Frame{}, nil
 		}
-		return engine.Decision{}, err
+		return engine.Decision{}, engine.Frame{}, err
 	}
 	// 按市场剔除行只按策略级 min_age_bars 判断（与实时一致）。
 	agePassed := allPassed[resolved.MinAgeBars]
 	if program.UsesPreviousBar {
 		for _, reader := range readers {
 			if detail := firstAmbiguous(involved, segments[reader.market].rows.Ambiguous[bar.PreviousStart.Unix()]); detail != "" {
-				return skippedDecision(state, input.SkipAmbiguousSeries, "上一根："+marketDetail(reader.market, multi, detail)), nil
+				return skippedDecision(state, input.SkipAmbiguousSeries, "上一根："+marketDetail(reader.market, multi, detail)), engine.Frame{}, nil
 			}
 		}
 	}
 	holdings, err := input.HoldingClocks(resolved.Calendar, resolved.Bar, program.Strategy, bar)
 	if err != nil {
-		return skippedDecision(state, input.SkipConfigError, err.Error()), nil
+		return skippedDecision(state, input.SkipConfigError, err.Error()), engine.Frame{}, nil
 	}
 	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Markets: make(map[string]engine.MarketInput, len(readers)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, AgedOutReasons: sets.AgedOutReasons, Holdings: holdings}
 	for _, reader := range readers {
@@ -1003,7 +813,8 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 					}
 				}
 			}
-			engineRow := engine.Row{Values: row.Values}
+			// 来源读了 __params 时带上各可变成员这一行实际用的参数，params() 读它；没读时为空，params() 取到 NaN。
+			engineRow := engine.Row{Values: row.Values, Params: row.Params}
 			if program.UsesPreviousBar {
 				if prev, ok := previous[subjectID]; ok {
 					engineRow.Previous = prev.Values
@@ -1015,7 +826,7 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 		for _, name := range sortedNames(segments[reader.market].sources) {
 			period, _, err := resolved.Sources[name].Period(bar.BarEnd)
 			if err != nil {
-				return engine.Decision{}, err
+				return engine.Decision{}, engine.Frame{}, err
 			}
 			rows := segments[reader.market].sources[name]
 			at := period.StorageStart.Unix()
@@ -1029,7 +840,8 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 		}
 		frame.Markets[reader.market] = engine.MarketInput{Rows: frameRows, AgedOut: marketAged}
 	}
-	return engine.Evaluate(program, frame, state)
+	decision, err := engine.Evaluate(program, frame, state)
+	return decision, frame, err
 }
 
 // marketDetail 在多个市场时给说明加上市场名。
@@ -1075,7 +887,7 @@ func factorDrift(pinned, current map[string]string) string {
 	return ""
 }
 
-func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time, decision engine.Decision, book *ledger.Ledger, outcome ledger.Outcome, barReturn float64) error {
+func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time, decision engine.Decision, book *ledger.Ledger, outcome ledger.Outcome, barReturn float64, params engine.ParamSet) error {
 	targets := decision.Targets
 	if decision.Status != engine.StatusOK {
 		targets = nil
@@ -1092,6 +904,10 @@ func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time
 	if err != nil {
 		return err
 	}
+	paramsJSON, err := encodeParams(params)
+	if err != nil {
+		return err
+	}
 	frozen := 0
 	for _, position := range book.Positions {
 		if position.Frozen {
@@ -1099,10 +915,23 @@ func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time
 		}
 	}
 	return r.Store.AppendReplayBar(ctx, store.ReplayBar{
-		ReplayID: replayID, BarEndTime: barEnd, Status: decision.Status, TargetsJSON: targetsJSON, PositionsJSON: positions, SummaryJSON: summary,
+		ReplayID: replayID, BarEndTime: barEnd, Status: decision.Status, TargetsJSON: targetsJSON, PositionsJSON: positions, SummaryJSON: summary, ParamsJSON: paramsJSON,
 		Return: round4(barReturn), Equity: round4(outcome.EquityAfter), Turnover: round4(outcome.Turnover), Fee: round4(outcome.Fee),
 		SpotValue: round4(outcome.SpotValue), SwapValue: round4(outcome.SwapValue), Holdings: book.Holdings(), Frozen: frozen, SkipReason: decision.SkipReason, Unfilled: len(outcome.Unfilled), Liquidated: len(outcome.Liquidated),
 	})
+}
+
+// encodeParams 把一期生效的可变成员参数编码成记录里的 params_json（成员键 → 参数名 → {default, overrides}，与实时结果的
+// next_params_json 同一格式）；没有逐期提交的参数时是 {}。
+func encodeParams(params engine.ParamSet) (json.RawMessage, error) {
+	members := make(map[string]map[string]input.ParamValue, len(params))
+	for member, values := range params {
+		members[member] = make(map[string]input.ParamValue, len(values))
+		for name, value := range values {
+			members[member][name] = input.ParamValue{Default: value.Default, Overrides: value.Overrides}
+		}
+	}
+	return json.Marshal(members)
 }
 
 // ageWindow 是一段年龄判定要读的历史区间 [From, To)（bar_start）。

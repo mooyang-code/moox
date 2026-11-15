@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -50,4 +51,38 @@ func TestUnifiedFillOnlyRecoveryConfirmsOnlyFullyWrittenSubjects(t *testing.T) {
 	for _, subject := range subjects {
 		require.Equal(t, ItemWritten, report.Items[ItemKey{Member: "spread", Subject: subject, Period: start}], subject)
 	}
+}
+
+// 期望序列里同一条序列出现两次：按标的归组时去重，项照常确认（重复的 tag 曾让位图多要一位，这个标的的项永远确认不了）。
+func TestDuplicateExpectedSeriesStillConfirms(t *testing.T) {
+	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	spread := testPipelineFactor("spread", domain.FactorTypeCrossSection, 2, false)
+	subjects := []string{"BTC", "ETH", "SOL"}
+	plan := unifiedPlan(start, []domain.FactorDef{spread}, subjects)
+	plan.Mode, plan.FillOnly, plan.WriteCarry = ModeRecalc, true, false
+	plan.TargetStart, plan.TargetEnd = start, start.Add(time.Minute)
+	plan.UpstreamFailed, plan.UpstreamFailedSeries = nil, nil
+	plan.ExpectedSeries = append(plan.ExpectedSeries, series("BTC", tagSpot), series("BTC", tagSwap))
+	require.Equal(t, map[string][]string{"BTC": {tagSpot, tagSwap}, "ETH": {tagSpot, tagSwap}, "SOL": {tagSpot, tagSwap}}, normalizeTags(plan.TagsBySubject()))
+	runner := NewRunner(&fakeStore{}, unifiedData(subjects, start, 2), periodclock.Continuous{}, Config{})
+	loaded, err := runner.Load(context.Background(), plan)
+	require.NoError(t, err)
+	computation, err := runner.Compute(context.Background(), plan, loaded)
+	require.NoError(t, err)
+	_, report, err := runner.AssembleWithReport(plan, loaded, computation)
+	require.NoError(t, err)
+	for _, subject := range subjects {
+		require.Equal(t, ItemWritten, report.Items[ItemKey{Member: "spread", Subject: subject, Period: start}], subject)
+	}
+}
+
+// normalizeTags 把每个标的的 tag 排序，便于比较。
+func normalizeTags(in map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(in))
+	for subject, tags := range in {
+		sorted := append([]string(nil), tags...)
+		sort.Strings(sorted)
+		out[subject] = sorted
+	}
+	return out
 }

@@ -19,7 +19,7 @@ func TestCleanupExpiredBucketsRemovesLedgerAndMarkersBeforeCutoff(t *testing.T) 
 	keptPeriod := goldenPeriod.Add(24 * time.Hour)
 	clock := newGoldenClock(oldPeriod.Add(61 * time.Second))
 	store := newGoldenStore(t, clock)
-	series := goldenSeries(t, []seriesset.Series{{SubjectID: "BTC-USDT"}})
+	series := goldenSeries(t, []seriesset.Series{{SubjectID: "BTC-USDT", SeriesTag: goldenTag}})
 	exp := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, series, oldPeriod, goldenLateness)
 	for _, period := range []time.Time{oldPeriod, keptPeriod} {
 		clock.set(period.Add(61 * time.Second))
@@ -30,7 +30,8 @@ func TestCleanupExpiredBucketsRemovesLedgerAndMarkersBeforeCutoff(t *testing.T) 
 		require.Equal(t, "complete", result.Status)
 		raw, _, err := BuildProducerPeriodCompletedMessage(goldenSpace, &pb.DatasetPeriodCompletedMarker{
 			DatasetId: goldenDataset, Frequency: goldenFreq, PeriodTime: period.Unix(), Status: "complete",
-			UniverseSubjectIds: []string{"BTC-USDT"}, CauseEventId: "source-ready", CompletedAt: timestamppb.New(period.Add(time.Minute)),
+			UniverseSubjectIds: []string{"BTC-USDT"}, UniverseSeries: []*pb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: goldenTag}},
+			CauseEventId: "source-ready", CompletedAt: timestamppb.New(period.Add(time.Minute)),
 		})
 		require.NoError(t, err)
 		_, err = store.AppendDatasetMarker(ctx, raw)
@@ -134,7 +135,7 @@ func TestDeleteDatasetRowsClearsSeriesSnapshots(t *testing.T) {
 	require.ErrorAs(t, err, &missing, "旧快照已删除")
 
 	// 生效表已清空：比旧生效点更早的 goldenPeriod 可以重新登记。
-	fresh := goldenSeries(t, []seriesset.Series{{SubjectID: "SOL-USDT"}})
+	fresh := goldenSeries(t, []seriesset.Series{{SubjectID: "SOL-USDT", SeriesTag: goldenTag}})
 	exp := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, fresh, goldenPeriod, goldenLateness)
 	result, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, fresh[0], goldenPeriod, 1)}})
 	require.NoError(t, err)
@@ -149,9 +150,9 @@ func TestCleanupExpiredBucketsTrimsSeriesSnapshots(t *testing.T) {
 	ctx := context.Background()
 	clock := newGoldenClock(goldenPeriod.Add(-time.Hour))
 	store := newGoldenStore(t, clock)
-	seriesA := goldenSeries(t, []seriesset.Series{{SubjectID: "BTC-USDT"}})
-	seriesB := goldenSeries(t, []seriesset.Series{{SubjectID: "ETH-USDT"}})
-	seriesC := goldenSeries(t, []seriesset.Series{{SubjectID: "SOL-USDT"}})
+	seriesA := goldenSeries(t, []seriesset.Series{{SubjectID: "BTC-USDT", SeriesTag: goldenTag}})
+	seriesB := goldenSeries(t, []seriesset.Series{{SubjectID: "ETH-USDT", SeriesTag: goldenTag}})
+	seriesC := goldenSeries(t, []seriesset.Series{{SubjectID: "SOL-USDT", SeriesTag: goldenTag}})
 	periods := []time.Time{goldenPeriod, goldenPeriod.Add(time.Hour), goldenPeriod.Add(2 * time.Hour), goldenPeriod.Add(3 * time.Hour)}
 	// A → B → A → C：快照 A 被一条过期条目和一条保留的条目同时引用。
 	hashA := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, seriesA, periods[0], goldenLateness).SeriesHash

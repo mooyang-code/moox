@@ -781,40 +781,88 @@ func seriesDelisted(latest, targetStart, reference time.Time, step time.Duration
 	return latest.Before(targetStart) && reference.Sub(latest) > DelistedThreshold(step)
 }
 
-// UnifiedTask 报告任务的源数据集是不是统一数据集（数据集属性 market_type=multi）。
-func (d *Data) UnifiedTask(ctx context.Context, set domain.FactorTask) (bool, error) {
-	return d.UnifiedDataset(ctx, sourceOf(set))
-}
-
-// ExpectedSeries 实现 pipeline.SeriesExpecter：补算类计划在统一数据集（数据集属性 market_type=multi）上的期望序列，
-// 取本地存储里这些标的“应存在”的每条序列（标的、series_tag）。这是没有冻结全集可用时的兜底（人工补算、失效重算、
-// 没有 marker 的待办）；能读到周期 marker 的恢复路径直接用冻结的 universe_series，不走这里。
+// ExpectedSeries 实现 pipeline.SeriesExpecter：没有带序列全集的补算类计划（人工补算、失效重算、读不到 marker 的待办）
+// 的期望序列；带着冻结的 universe_series 的恢复路径不走这里。两种数据集的分界是数据集属性 market_type=multi，不看某一期实际出现了几个 tag。
+//
+// 只有一个 series_tag 的数据集：期望序列是“期望标的 × 这个数据集唯一的 tag”，不做任何推测（derived 为假），
+// 缺数、失败的处理与按标的判断相同。唯一的 tag 的取法见 singleTag；本地没有数据的期望标的同样配上它，按缺数处理。
+//
+// 统一数据集：取本地存储里这些标的“应存在”的每条序列（标的、series_tag），derived 为真。
 // 应存在 = 计划区间结束之前已有数据，并且没有下架（见 seriesDelisted）：下架判断的参照点是“数据源最新一根已经沉默多久”，
 // 不是区间起点——历史重算块能正确排除早已下架的合约，而最近一期晚到的永续（沉默时长只有一两个周期）仍算应存在；
 // 阈值与回看根数、give_up_after 都无关：回看只决定读多远的窗口，分不清“晚到停更”和“已下架”。
-// 兜底推导是推测：刚下架不久（沉默不到阈值）的合约分不出来，仍会被当成应存在，所以补算类计划里因此缺数而被跳过的 tag
-// 不写 NULL（见 Plan.ExpectedSeriesDerived）。单序列数据集返回 nil。
-func (d *Data) ExpectedSeries(ctx context.Context, plan pipeline.Plan) ([]seriesset.Series, error) {
+// 这是推测：刚下架不久（沉默不到阈值）的合约分不出来，仍会被当成应存在，所以补算类计划里因此缺数而被跳过的 tag
+// 不写 NULL（见 Plan.ExpectedSeriesDerived）。
+func (d *Data) ExpectedSeries(ctx context.Context, plan pipeline.Plan) ([]seriesset.Series, bool, error) {
 	src := sourceOf(plan.Set)
 	multi, err := d.UnifiedDataset(ctx, src)
-	if err != nil || !multi {
-		return nil, err
+	if err != nil {
+		return nil, false, err
+	}
+	if !multi {
+		if len(plan.Expected) == 0 {
+			return nil, false, nil
+		}
+		tag, err := d.singleTag(src, plan.Expected)
+		if err != nil {
+			return nil, false, err
+		}
+		out := make([]seriesset.Series, 0, len(plan.Expected))
+		for _, subject := range plan.Expected {
+			out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: tag})
+		}
+		return out, false, nil
 	}
 	step, err := seriesstore.Step(src.Freq)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var all []seriesBounds
 	for _, subject := range plan.Expected {
 		bounds, err := d.cfg.Store.TagBounds(src, subject)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		for tag, b := range bounds {
 			all = append(all, seriesBounds{subject: subject, tag: tag, bounds: b})
 		}
 	}
-	return expectedFromBounds(all, plan.TargetStart, plan.TargetEnd, step), nil
+	return expectedFromBounds(all, plan.TargetStart, plan.TargetEnd, step), true, nil
+}
+
+// ErrNoLocalData 表示数据源在本地时序存储里一条序列都没有：补算只读本地，没有可补的数据。
+var ErrNoLocalData = errors.New("本地没有这个数据集的数据，没有可补的数据")
+
+// singleTag 返回只有一个 series_tag 的数据集的那个 tag：取本地时序存储里序列边界上记的 tag——先看 subjects（计划的期望标的），
+// 它们都没有本地数据时再看这个数据源上全部有本地数据的标的。看到多个 tag（例如改过 tag，旧 tag 已停写）时取最新一根最晚的那个，
+// 一样晚时取字典序最小的，结果与遍历顺序无关。本地一条序列都没有时返回 ErrNoLocalData：补算只读本地，这时什么都算不出来。
+func (d *Data) singleTag(src seriesstore.Source, subjects []string) (string, error) {
+	pick := func(subjects []string) (string, error) {
+		tag, latest := "", time.Time{}
+		for _, subject := range subjects {
+			bounds, err := d.cfg.Store.TagBounds(src, subject)
+			if err != nil {
+				return "", err
+			}
+			for candidate, b := range bounds {
+				if tag == "" || b.Latest.After(latest) || (b.Latest.Equal(latest) && candidate < tag) {
+					tag, latest = candidate, b.Latest
+				}
+			}
+		}
+		return tag, nil
+	}
+	if tag, err := pick(subjects); err != nil || tag != "" {
+		return tag, err
+	}
+	local, err := d.cfg.Store.Subjects(src)
+	if err != nil {
+		return "", err
+	}
+	if tag, err := pick(local); err != nil || tag != "" {
+		return tag, err
+	}
+	return "", fmt.Errorf("%w（%s/%s %s）", ErrNoLocalData, src.SpaceID, src.DatasetID, src.Freq)
 }
 
 // seriesBounds 是本地存储里一条序列（标的、series_tag）的数据边界。
@@ -917,7 +965,7 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	timing.settle = time.Since(began)
 
 	began = time.Now()
-	// 统一数据集按各序列自己的进度拉取：落后的市场（例如永续晚到）不会被另一个市场的最新时间盖住。
+	// 按各序列自己的进度拉取：统一数据集里落后的市场（例如永续晚到）不会被另一个市场的最新时间盖住。
 	staged, err := d.syncer.PullStagedTags(ctx, st.spec, subjects, plan.TagsBySubject(), plan.TargetEnd)
 	timing.pull = time.Since(began)
 	if err != nil {
@@ -996,24 +1044,15 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 		if _, bad := failed[subject]; bad {
 			continue
 		}
-		if plan.Multi() {
-			// 统一数据集：每条期望序列各自判断本期有没有真实的源行。有些序列还没到时，到了的序列照常算；
-			// 一条都没到的标的整体按失败处理。
-			missing := missingTagsAt(view, subject, tagsOf[subject], target.Unix(), true)
-			if len(missing) == len(tagsOf[subject]) {
-				failed[subject] = struct{}{}
-				continue
-			}
-			for _, tag := range missing {
-				failedSeries = append(failedSeries, seriesset.Series{SubjectID: subject, SeriesTag: tag})
-			}
-			ok = append(ok, subject)
-			continue
-		}
-		// 同步之后本地仍没有目标周期的行：数据还没到，本期按失败处理。
-		if end, has := view.Latest(subject); !has || end < target.Unix() {
+		// 每条期望序列各自判断同步之后本期有没有真实的源行。统一数据集里有些序列还没到时，到了的序列照常算；
+		// 一条都没到的标的（数据还没到）整体按失败处理。
+		missing := missingTagsAt(view, subject, tagsOf[subject], target.Unix(), true)
+		if len(missing) == len(tagsOf[subject]) {
 			failed[subject] = struct{}{}
 			continue
+		}
+		for _, tag := range missing {
+			failedSeries = append(failedSeries, seriesset.Series{SubjectID: subject, SeriesTag: tag})
 		}
 		ok = append(ok, subject)
 	}
@@ -1299,19 +1338,17 @@ func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, su
 		}
 		rows[subject] = seriessync.ColumnsToFrame(subject, target, plan.CarryColumns, types)
 	}
+	// 实时周期（追赶读磁盘）按目标那一根逐序列判断；补算与只填充的区间只看这条序列有没有数据。
+	// 整个标的都没有数据的（failed）不再重复列出。
 	var failedSeries []seriesset.Series
-	if plan.Multi() {
-		// 统一数据集：实时周期（追赶读磁盘）按目标那一根逐序列判断；补算与只填充的区间只看这条序列有没有数据。
-		// 整个标的都没有数据的（failed）不再重复列出。
-		tagsOf := plan.TagsBySubject()
-		live, target := plan.Mode == pipeline.ModeLive, plan.TargetEnd.Add(-step).Unix()
-		for _, subject := range subjects {
-			if got[subject] == nil {
-				continue
-			}
-			for _, tag := range missingTagsAt(view, subject, tagsOf[subject], target, live) {
-				failedSeries = append(failedSeries, seriesset.Series{SubjectID: subject, SeriesTag: tag})
-			}
+	tagsOf := plan.TagsBySubject()
+	live, target := plan.Mode == pipeline.ModeLive, plan.TargetEnd.Add(-step).Unix()
+	for _, subject := range subjects {
+		if got[subject] == nil {
+			continue
+		}
+		for _, tag := range missingTagsAt(view, subject, tagsOf[subject], target, live) {
+			failedSeries = append(failedSeries, seriesset.Series{SubjectID: subject, SeriesTag: tag})
 		}
 	}
 	return pipeline.DataResult{View: view, Frames: rows, Failed: failed, FailedSeries: failedSeries}, nil
@@ -1658,7 +1695,7 @@ func (d *Data) BackfillTask(ctx context.Context, set domain.EngineTask, subjects
 //     Prepare 自己会拉到最新。
 //   - 只拉数据源上登记的标的范围内、本地已有数据的标的（subjects 为空表示这个范围内的全部标的）。本地没有数据的标的不拉：
 //     第一次准备在取同步基线之前就失败时本地是空的，靠这一条不会在没有基线的情况下写入（那样会漏掉之后的修正）。
-//   - 统一数据集按各序列自己的进度拉，与实时路径相同：落后的序列不会被另一条序列的最新时间盖住而写成填充行。
+//   - 按各序列自己的进度拉，与实时路径相同：落后的序列不会被另一条序列的最新时间盖住而写成填充行。
 //   - 有标的读取失败时返回错误（已经拉到的照常写入）。
 func (d *Data) CatchUp(ctx context.Context, set domain.EngineTask, subjects []string, end time.Time) (int, error) {
 	src := sourceOf(set.Set)
@@ -1695,7 +1732,7 @@ func (d *Data) CatchUp(ctx context.Context, set domain.EngineTask, subjects []st
 	// 上一期的热路径写盘必须先落完：拉取按本地最新一根决定从哪里拉。
 	d.settleFlush(st)
 	plan := pipeline.Plan{Set: set.Set, Expected: subjects, TargetStart: end, TargetEnd: end}
-	if plan.ExpectedSeries, err = d.ExpectedSeries(ctx, plan); err != nil {
+	if plan.ExpectedSeries, _, err = d.ExpectedSeries(ctx, plan); err != nil {
 		return 0, err
 	}
 	staged, err := d.syncer.PullStagedTags(ctx, st.spec, subjects, plan.TagsBySubject(), end)

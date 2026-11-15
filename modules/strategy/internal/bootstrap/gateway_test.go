@@ -40,6 +40,7 @@ import (
 // strategyGatewayWire 模拟主机网关背后的 Storage、Factor 与 Trade：校验调用方签名、服务目录里的 ACL 与 Storage 角色鉴权。
 type strategyGatewayWire struct {
 	factorpb.UnimplementedFactorMgr
+	factorpb.UnimplementedEngineControl
 	tradepb.UnimplementedTradeConsoleService
 	storagepb.UnimplementedMetadata
 	storagepb.UnimplementedDataView
@@ -51,7 +52,10 @@ type strategyGatewayWire struct {
 	nonces      map[string]bool
 	calls       map[string]int
 	refreshes   int
-	owner       *tradepb.LogicalAccount
+	// closedThrough 是 Trade 替身记下的“关闭到”时刻。
+	closedThrough int64
+	// deadlines 记下 EngineControl 各方法收到的剩余超时：回放“因子现算”不能被 factor.timeout（5 秒）掐断。
+	deadlines map[string]time.Duration
 }
 
 func (w *strategyGatewayWire) GetDirectory(_ context.Context, req *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
@@ -65,6 +69,7 @@ func (w *strategyGatewayWire) GetDirectory(_ context.Context, req *directorypb.G
 		Services: map[string]*directorypb.ServiceHosts{
 			"trpc.moox.trade.TradeConsoleService": {HostIds: []string{"control"}},
 			"trpc.moox.factor.FactorMgr":          {HostIds: []string{"control"}},
+			"trpc.moox.factor.EngineControl":      {HostIds: []string{"control"}},
 			"trpc.moox.storage.Metadata":          {HostIds: []string{"control"}},
 			"trpc.moox.storage.DataView":          {HostIds: []string{"control"}},
 		}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
@@ -122,6 +127,45 @@ func (w *strategyGatewayWire) GetFactor(ctx context.Context, req *factorpb.GetFa
 		return nil, err
 	}
 	return &factorpb.GetFactorRsp{RetInfo: &commonpb.RetInfo{}, Factor: &factorpb.FactorDef{FactorId: req.GetFactorId(), DefinitionHash: "sha256:fixture"}}, nil
+}
+
+// engineCall 校验 EngineControl 的调用并记下剩余超时。
+func (w *strategyGatewayWire) engineCall(ctx context.Context, method string, req proto.Message) error {
+	if _, err := w.verify(ctx, "trpc.moox.factor.EngineControl", method, req); err != nil {
+		return err
+	}
+	remaining := time.Duration(0)
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining = time.Until(deadline)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.deadlines == nil {
+		w.deadlines = map[string]time.Duration{}
+	}
+	w.deadlines[method] = remaining
+	return nil
+}
+
+func (w *strategyGatewayWire) OpenReplay(ctx context.Context, req *factorpb.OpenReplayReq) (*factorpb.OpenReplayRsp, error) {
+	if err := w.engineCall(ctx, "OpenReplay", req); err != nil {
+		return nil, err
+	}
+	return &factorpb.OpenReplayRsp{RetInfo: &commonpb.RetInfo{}, ReplayId: req.GetReplayId(), PeriodTimes: []int64{3600}}, nil
+}
+
+func (w *strategyGatewayWire) StepReplay(ctx context.Context, req *factorpb.StepReplayReq) (*factorpb.StepReplayRsp, error) {
+	if err := w.engineCall(ctx, "StepReplay", req); err != nil {
+		return nil, err
+	}
+	return &factorpb.StepReplayRsp{RetInfo: &commonpb.RetInfo{}, Periods: []*factorpb.ReplayPeriod{{PeriodTime: req.GetPeriodTime()}}}, nil
+}
+
+func (w *strategyGatewayWire) CloseReplay(ctx context.Context, req *factorpb.CloseReplayReq) (*factorpb.CloseReplayRsp, error) {
+	if err := w.engineCall(ctx, "CloseReplay", req); err != nil {
+		return nil, err
+	}
+	return &factorpb.CloseReplayRsp{RetInfo: &commonpb.RetInfo{}, Closed: true}, nil
 }
 
 func (w *strategyGatewayWire) GetView(ctx context.Context, req *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
@@ -202,42 +246,23 @@ func (w *strategyGatewayWire) verifyTrade(ctx context.Context, method string, re
 	return nil
 }
 
-func (w *strategyGatewayWire) account() *tradepb.LogicalAccount {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.owner == nil {
-		w.owner = &tradepb.LogicalAccount{LogicalAccountId: "acct-1", SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, AuthFence: "fence-1"}
-	}
-	return proto.Clone(w.owner).(*tradepb.LogicalAccount)
-}
-
 func (w *strategyGatewayWire) GetLogicalAccount(ctx context.Context, req *tradepb.GetLogicalAccountReq) (*tradepb.GetLogicalAccountRsp, error) {
 	if err := w.verifyTrade(ctx, "GetLogicalAccount", req); err != nil {
 		return nil, err
 	}
-	return &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: w.account()}, nil
+	account := &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY}
+	return &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: account}, nil
 }
 
-func (w *strategyGatewayWire) ClaimLogicalAccountOwner(ctx context.Context, req *tradepb.ClaimLogicalAccountOwnerReq) (*tradepb.ClaimLogicalAccountOwnerRsp, error) {
-	if err := w.verifyTrade(ctx, "ClaimLogicalAccountOwner", req); err != nil {
+func (w *strategyGatewayWire) CloseTargetSession(ctx context.Context, req *tradepb.CloseTargetSessionReq) (*tradepb.CloseTargetSessionRsp, error) {
+	if err := w.verifyTrade(ctx, "CloseTargetSession", req); err != nil {
 		return nil, err
 	}
 	w.mu.Lock()
-	w.owner = &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, AuthFence: "fence-1", OwnerInstanceId: req.GetInstanceId(), OwnerSessionId: req.GetSessionId()}
-	owner := proto.Clone(w.owner).(*tradepb.LogicalAccount)
+	w.closedThrough = max(w.closedThrough, req.GetSessionStartedAt())
+	closed := w.closedThrough
 	w.mu.Unlock()
-	return &tradepb.ClaimLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: owner}, nil
-}
-
-func (w *strategyGatewayWire) ReleaseLogicalAccountOwner(ctx context.Context, req *tradepb.ReleaseLogicalAccountOwnerReq) (*tradepb.ReleaseLogicalAccountOwnerRsp, error) {
-	if err := w.verifyTrade(ctx, "ReleaseLogicalAccountOwner", req); err != nil {
-		return nil, err
-	}
-	w.mu.Lock()
-	w.owner = &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, AuthFence: "fence-1"}
-	owner := proto.Clone(w.owner).(*tradepb.LogicalAccount)
-	w.mu.Unlock()
-	return &tradepb.ReleaseLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: owner}, nil
+	return &tradepb.CloseTargetSessionRsp{RetInfo: &tradepb.RetInfo{}, ClosedThrough: closed}, nil
 }
 
 func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGatewayWire) {
@@ -267,7 +292,7 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(hostPath, encoded, 0o600))
 	directory := servicecatalog.Directory{Services: map[string][]string{
-		"trpc.moox.trade.TradeConsoleService": {"control"}, "trpc.moox.factor.FactorMgr": {"control"}, "trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.DataView": {"control"},
+		"trpc.moox.trade.TradeConsoleService": {"control"}, "trpc.moox.factor.FactorMgr": {"control"}, "trpc.moox.factor.EngineControl": {"control"}, "trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.DataView": {"control"},
 	}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
@@ -276,6 +301,7 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	wire := &strategyGatewayWire{credentials: credentials, directory: directory, catalog: catalog, nonces: map[string]bool{}, calls: map[string]int{}}
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	factorpb.RegisterFactorMgrService(svc, wire)
+	factorpb.RegisterEngineControlService(svc, wire)
 	tradepb.RegisterTradeConsoleServiceService(svc, wire)
 	storagepb.RegisterMetadataService(svc, wire)
 	storagepb.RegisterDataViewService(svc, wire)
@@ -330,10 +356,28 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "sha256:fixture", factor.DefinitionHash)
 
-	owner := tradeowner.New(cfg.Trade, gateway)
-	require.NoError(t, owner.ClaimSession(ctx, "crypto", "acct-1", "instance-1", "session-1", []string{"swap"}))
-	require.NoError(t, owner.ValidateSession(ctx, "crypto", "acct-1", "instance-1", "session-1"))
-	require.NoError(t, owner.ReleaseSession(ctx, "crypto", "acct-1", "instance-1", "session-1"))
+	// 回放“因子现算”经同一个网关客户端调因子引擎：超时按服务目录（OpenReplay 10 分钟、其余 2 分钟），不套 factor.timeout。
+	engineClient := input.NewEngineClient(gateway)
+	_, err = engineClient.OpenReplay(ctx, &factorpb.OpenReplayReq{ReplayId: "r1", TaskId: "ftask", From: "1970-01-01T01:00:00Z", To: "1970-01-01T02:00:00Z", Columns: []string{"close"}})
+	require.NoError(t, err)
+	_, err = engineClient.StepReplay(ctx, &factorpb.StepReplayReq{ReplayId: "r1", PeriodTime: 3600, Periods: 1})
+	require.NoError(t, err)
+	_, err = engineClient.CloseReplay(ctx, &factorpb.CloseReplayReq{ReplayId: "r1"})
+	require.NoError(t, err)
+	wire.mu.Lock()
+	deadlines := maps.Clone(wire.deadlines)
+	wire.mu.Unlock()
+	require.Greater(t, deadlines["OpenReplay"], 9*time.Minute, "OpenReplay 用目录的 10 分钟超时")
+	require.Greater(t, deadlines["StepReplay"], 100*time.Second, "StepReplay 用目录的 2 分钟超时")
+	require.Less(t, deadlines["StepReplay"], 3*time.Minute)
+	require.Greater(t, deadlines["CloseReplay"], 100*time.Second)
+
+	trade := tradeowner.New(cfg.Trade, gateway)
+	require.NoError(t, trade.CheckAccount(ctx, "crypto", "acct-1", []string{"swap"}))
+	require.NoError(t, trade.CloseSession(ctx, "crypto", "acct-1", "instance-1", "session-1", 1_700_000_000_000))
+	wire.mu.Lock()
+	require.Equal(t, int64(1_700_000_000_000), wire.closedThrough)
+	wire.mu.Unlock()
 
 	// 网关调用的参数由 ctx 与服务目录决定，不接受 tRPC 客户端选项。
 	_, err = reader.Metadata.GetView(ctx, &storagepb.GetViewReq{}, client.WithTarget("ip://192.0.2.99:20100"))
@@ -348,8 +392,8 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 		"trpc.moox.storage.Metadata/GetView", "trpc.moox.storage.Metadata/ListViewColumns", "trpc.moox.storage.Metadata/GetDataset",
 		"trpc.moox.storage.Metadata/GetTag", "trpc.moox.storage.Metadata/ListDatasetSubjects", "trpc.moox.storage.Metadata/ListSubjects",
 		"trpc.moox.storage.Metadata/ListTagMembers", "trpc.moox.storage.DataView/QueryTimeSeriesRows", "trpc.moox.storage.DataView/GetViewState", "trpc.moox.factor.FactorMgr/GetFactor",
-		"trpc.moox.trade.TradeConsoleService/GetLogicalAccount", "trpc.moox.trade.TradeConsoleService/ClaimLogicalAccountOwner",
-		"trpc.moox.trade.TradeConsoleService/ReleaseLogicalAccountOwner",
+		"trpc.moox.factor.EngineControl/OpenReplay", "trpc.moox.factor.EngineControl/StepReplay", "trpc.moox.factor.EngineControl/CloseReplay",
+		"trpc.moox.trade.TradeConsoleService/GetLogicalAccount", "trpc.moox.trade.TradeConsoleService/CloseTargetSession",
 	} {
 		require.Positive(t, calls[want], want)
 	}

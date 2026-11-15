@@ -172,10 +172,13 @@ rules:
     weight: {total: 0.8, method: equal, cap: 0.3}
 
   - id: btc_trend
-    type: signal
+    type: rank
     pool: [BTC-USDT]
-    entry: "bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20"
-    exit:  "bars[0].close < bars[0].ma_20"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20"
+      exit: "bars[0].close < bars[0].ma_20"
     weight: {total: 0.2}
 
 portfolio:

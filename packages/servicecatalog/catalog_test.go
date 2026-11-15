@@ -113,10 +113,10 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"external program without its principal", func(c *Catalog) {
 			c.Principals = slices.DeleteFunc(c.Principals, func(p Principal) bool { return p.ID == "factor-engine" })
 		}},
-		{"external program declares a service", func(c *Catalog) {
-			componentPtr(c, "factor-engine").Services = []Service{{Path: "trpc.moox.factor.Engine", Port: 11999, Methods: []string{"Ping"}}}
-		}},
 		{"external program declares a port", func(c *Catalog) { componentPtr(c, "archive-worker").Ports = []int{11999} }},
+		{"external program service reuses its health port", func(c *Catalog) {
+			componentPtr(c, "factor-engine").Services[0].Port = componentPtr(c, "factor-engine").Health.Port
+		}},
 		{"external program without a health port", func(c *Catalog) {
 			component := componentPtr(c, "archive-worker")
 			component.Health = Health{Kind: "none"}
@@ -188,12 +188,19 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"monitor", "trpc.moox.ops.SysDeploy", "SetHostStatus", false},
 		{"monitor", "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", false},
 		{"monitor", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", false},
+		{"strategy", "trpc.moox.factor.EngineControl", "OpenReplay", true},
+		{"strategy", "trpc.moox.factor.EngineControl", "StepReplay", true},
+		{"strategy", "trpc.moox.factor.EngineControl", "CloseReplay", true},
+		{"console", "trpc.moox.factor.EngineControl", "OpenReplay", false},
+		{"moox-cli", "trpc.moox.factor.EngineControl", "StepReplay", false},
+		{"monitor", "trpc.moox.factor.EngineControl", "CloseReplay", false},
+		{"access", "trpc.moox.factor.EngineControl", "OpenReplay", false},
 		{"strategy", "trpc.moox.trade.TradeConsoleService", "GetLogicalAccount", true},
 		{"strategy", "trpc.moox.trade.TradeConsoleService", "SubmitOrder", false},
-		{"console", "trpc.moox.trade.TradeConsoleService", "ClaimLogicalAccountOwner", false},
-		{"console", "trpc.moox.trade.TradeConsoleService", "ReleaseLogicalAccountOwner", false},
-		{"moox-cli", "trpc.moox.trade.TradeConsoleService", "ClaimLogicalAccountOwner", true},
-		{"strategy", "trpc.moox.trade.TradeConsoleService", "ClaimLogicalAccountOwner", true},
+		{"strategy", "trpc.moox.trade.TradeConsoleService", "PauseLogicalAccount", false},
+		{"strategy", "trpc.moox.trade.TradeConsoleService", "CloseTargetSession", true},
+		{"console", "trpc.moox.trade.TradeConsoleService", "CloseTargetSession", false},
+		{"moox-cli", "trpc.moox.trade.TradeConsoleService", "CloseTargetSession", false},
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
 		{"access", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", true},
 		{"access", "trpc.moox.storage.Metadata", "DeleteDataset", false},
@@ -383,7 +390,8 @@ func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 	}
 }
 
-// 外部程序组件：以同名外部身份经 Access 访问系统，目录里它们没有服务，也不出现在任何内部 ACL 里。
+// 外部程序组件：以同名外部身份经 Access 访问系统，不出现在任何内部 ACL 里；可以声明只经网关路由的服务（因子引擎的
+// EngineControl），不能声明其他端口。
 func TestExternalProgramComponents(t *testing.T) {
 	c := mustCatalog(t)
 	for _, id := range []string{"factor-engine", "archive-worker"} {
@@ -391,8 +399,8 @@ func TestExternalProgramComponents(t *testing.T) {
 		if !ok || !component.ExternalProgram || component.Doctor.Supervisor != SupervisorSystemdUser || component.Doctor.Unit != "moox-"+id {
 			t.Fatalf("external program %s is not registered correctly: %+v", id, component)
 		}
-		if len(component.Services) != 0 || len(component.Ports) != 0 || component.Health.Kind != "readyz" || component.Health.Loopback {
-			t.Fatalf("external program %s must only own a health port", id)
+		if len(component.Ports) != 0 || component.Health.Kind != "readyz" || component.Health.Loopback {
+			t.Fatalf("external program %s must not own extra ports", id)
 		}
 		for _, other := range c.Components {
 			for _, service := range other.Services {
@@ -403,6 +411,23 @@ func TestExternalProgramComponents(t *testing.T) {
 				}
 			}
 		}
+	}
+	// 因子引擎只有回放这一个服务：本机端口 11423，服务级超时 120 秒、OpenReplay 10 分钟，包体上限用默认值，只给策略服务调。
+	engine, _ := c.Component("factor-engine")
+	if len(engine.Services) != 1 {
+		t.Fatalf("factor-engine services = %+v", engine.Services)
+	}
+	control := engine.Services[0]
+	if control.Path != "trpc.moox.factor.EngineControl" || control.Port != 11423 || control.MaxBodyBytes != 0 || control.ConsoleName != "" ||
+		control.TimeoutFor("OpenReplay") != 600000 || control.TimeoutFor("StepReplay") != 120000 || control.TimeoutFor("CloseReplay") != 120000 ||
+		!slices.Equal(control.Methods, []string{"OpenReplay", "StepReplay", "CloseReplay"}) {
+		t.Fatalf("EngineControl = %+v", control)
+	}
+	if !slices.Contains(engine.AllPorts(), 11423) || c.LocalRelayPort(11423) {
+		t.Fatalf("EngineControl 的端口计入组件端口，但不能直接中转: %v", engine.AllPorts())
+	}
+	if worker, _ := c.Component("archive-worker"); len(worker.Services) != 0 {
+		t.Fatalf("archive-worker services = %+v", worker.Services)
 	}
 	// 归档 worker 的数据端口只给控制台，计入它占用的端口。
 	worker, _ := c.Component("archive-worker")

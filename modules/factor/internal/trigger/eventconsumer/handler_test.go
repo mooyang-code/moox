@@ -366,7 +366,9 @@ func collectorDelivery(t *testing.T, eventID string) *jetstream.Delivery {
 		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: "degraded",
 		Source: "ledger", SnapshotRef: "scope-1",
 		UniverseSubjectIds: []string{"ETH", "BTC"}, FailedSubjects: []string{"ETH"},
-		CompletedAt: timestamppb.New(period.Add(time.Minute)),
+		UniverseSeries: []*storagepb.SeriesRef{{SubjectId: "ETH", SeriesTag: testSeriesTag}, {SubjectId: "BTC", SeriesTag: testSeriesTag}},
+		FailedSeries:   []*storagepb.SeriesRef{{SubjectId: "ETH", SeriesTag: testSeriesTag}},
+		CompletedAt:    timestamppb.New(period.Add(time.Minute)),
 	}
 	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{
 		EventID: eventID, OccurredAt: period.Add(time.Minute), SpaceID: "crypto", SubjectID: "bars",
@@ -481,7 +483,8 @@ func stockDelivery(t *testing.T, eventID string, period time.Time) *jetstream.De
 	payload := &storagepb.DatasetPeriodCompleted{
 		DatasetId: "stock_bars", Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
 		Source: "ledger", SnapshotRef: "scope-1", UniverseSubjectIds: []string{"600000.SH"},
-		CompletedAt: timestamppb.New(period.Add(5 * time.Minute)),
+		UniverseSeries: []*storagepb.SeriesRef{{SubjectId: "600000.SH", SeriesTag: "default"}},
+		CompletedAt:    timestamppb.New(period.Add(5 * time.Minute)),
 	}
 	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{
 		EventID: eventID, OccurredAt: period.Add(5 * time.Minute), SpaceID: "stockcn", SubjectID: "stock_bars",

@@ -34,9 +34,9 @@ type ParamSubmitOutcome struct {
 // SubmitMemberParams 在一个事务里处理一次提交（每个成员一份）。对每个成员：
 //  1. 目标期不能倒退：小于该成员最近一次被接受的目标期则拒绝；
 //  2. 同一目标期下，同一个 requestID 重复提交按幂等成功，不同 requestID 拒绝；
-//  3. 按标的合并（domain.MergeSnapshots）后，交给 check 校验合并结果；通过就写入 c_last_submitted_*。
+//  3. 按标的合并（domain.MergeSnapshots）后，交给 check 校验合并结果；通过就写入 t_factor_member_params。
 //
-// 提交只写运行状态列，不更新 c_mtime，也就不改变目录指纹。成员不存在、或不是可变成员时该成员被拒绝，不影响其他成员。
+// 提交不碰成员行，也就不改变目录指纹。成员不存在、或不是可变成员时该成员被拒绝，不影响其他成员。
 func (s *Store) SubmitMemberParams(ctx context.Context, taskID string, period int64, requestID string, submissions []ParamSubmission,
 	check func(memberKey string, merged domain.ParamSnapshot) error) ([]ParamSubmitOutcome, error) {
 	if s == nil || s.db == nil {
@@ -71,9 +71,14 @@ func submitOne(tx *gorm.DB, taskID string, period int64, requestID string, submi
 		outcome.Result, outcome.Reason = SubmitRejected, fmt.Sprintf(format, args...)
 		return outcome, nil
 	}
-	var row memberRow
-	result := tx.Raw(`SELECT `+memberColumns+` FROM t_factor_task_members WHERE c_task_id = ? AND c_member_key = ?`,
-		taskID, submission.MemberKey).Scan(&row)
+	// 没有提交过的成员在参数表里没有行，按目标期 0、空参数处理。
+	var row memberParamRow
+	result := tx.Raw(`
+		SELECT `+memberParamColumns+`
+		FROM t_factor_task_members m
+		LEFT JOIN t_factor_member_params p ON p.c_task_id = m.c_task_id AND p.c_member_key = m.c_member_key
+		WHERE m.c_task_id = ? AND m.c_member_key = ?
+	`, taskID, submission.MemberKey).Scan(&row)
 	if result.Error != nil {
 		return outcome, result.Error
 	}
@@ -84,15 +89,15 @@ func submitOne(tx *gorm.DB, taskID string, period int64, requestID string, submi
 		return reject("成员 %s 是固定成员，不接受参数提交", submission.MemberKey)
 	}
 	switch {
-	case period < row.LastSubmittedPeriod:
-		return reject("目标期 %s 早于已接受的目标期 %s", formatPeriod(period), formatPeriod(row.LastSubmittedPeriod))
-	case period == row.LastSubmittedPeriod && row.LastRequestID == requestID:
+	case period < row.Period:
+		return reject("目标期 %s 早于已接受的目标期 %s", formatPeriod(period), formatPeriod(row.Period))
+	case period == row.Period && row.RequestID == requestID:
 		outcome.Result = SubmitDuplicate
 		return outcome, nil
-	case period == row.LastSubmittedPeriod:
-		return reject("目标期 %s 已被另一次提交（request_id %s）接受", formatPeriod(period), row.LastRequestID)
+	case period == row.Period:
+		return reject("目标期 %s 已被另一次提交（request_id %s）接受", formatPeriod(period), row.RequestID)
 	}
-	previous, err := domain.ParseParamSnapshot(row.LastSubmittedParams)
+	previous, err := domain.ParseParamSnapshot(row.Params)
 	if err != nil {
 		return outcome, err
 	}
@@ -106,12 +111,13 @@ func submitOne(tx *gorm.DB, taskID string, period int64, requestID string, submi
 	if err != nil {
 		return outcome, err
 	}
-	// 只写 c_last_* 运行状态列：触发器按配置列限定，不会更新 c_mtime。
 	if err := tx.Exec(`
-		UPDATE t_factor_task_members
-		SET c_last_submitted_params = ?, c_last_submitted_period = ?, c_last_request_id = ?, c_last_submitted_at = ?
-		WHERE c_task_id = ? AND c_member_key = ?
-	`, string(encoded), period, requestID, time.Now().UTC(), taskID, submission.MemberKey).Error; err != nil {
+		INSERT INTO t_factor_member_params (c_task_id, c_member_key, c_params, c_period, c_request_id, c_submitted_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (c_task_id, c_member_key) DO UPDATE SET
+			c_params = excluded.c_params, c_period = excluded.c_period,
+			c_request_id = excluded.c_request_id, c_submitted_at = excluded.c_submitted_at
+	`, taskID, submission.MemberKey, string(encoded), period, requestID, time.Now().UTC()).Error; err != nil {
 		return outcome, err
 	}
 	outcome.Result = SubmitAccepted
@@ -120,37 +126,49 @@ func submitOne(tx *gorm.DB, taskID string, period int64, requestID string, submi
 
 func formatPeriod(period int64) string { return time.Unix(period, 0).UTC().Format(time.RFC3339) }
 
+// memberParamRow 是成员行左连参数表的结果：没有提交过的成员参数列为空。
+type memberParamRow struct {
+	MemberKey   string     `gorm:"column:c_member_key"`
+	Kind        string     `gorm:"column:c_kind"`
+	Params      string     `gorm:"column:c_params"`
+	Period      int64      `gorm:"column:c_period"`
+	RequestID   string     `gorm:"column:c_request_id"`
+	SubmittedAt *time.Time `gorm:"column:c_submitted_at"`
+}
+
+const memberParamColumns = `m.c_member_key, m.c_kind, COALESCE(p.c_params, '{}') AS c_params, COALESCE(p.c_period, 0) AS c_period,
+	COALESCE(p.c_request_id, '') AS c_request_id, p.c_submitted_at`
+
 // ListMemberParamStates 返回任务里各可变成员最近一次被接受的提交（没有提交过的成员也在内，LastSubmittedPeriod 为 0），
 // 按成员键排序。
-func (s *Store) ListMemberParamStates(ctx context.Context, taskID string) ([]domain.FactorTaskMember, error) {
+func (s *Store) ListMemberParamStates(ctx context.Context, taskID string) ([]domain.MemberParamState, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
-	var rows []memberRow
+	var rows []memberParamRow
 	if err := s.db.WithContext(ctx).Raw(`
-		SELECT `+memberColumns+` FROM t_factor_task_members WHERE c_task_id = ? AND c_kind = ? ORDER BY c_member_key
+		SELECT `+memberParamColumns+`
+		FROM t_factor_task_members m
+		LEFT JOIN t_factor_member_params p ON p.c_task_id = m.c_task_id AND p.c_member_key = m.c_member_key
+		WHERE m.c_task_id = ? AND m.c_kind = ?
+		ORDER BY m.c_member_key
 	`, strings.TrimSpace(taskID), domain.MemberKindVar).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	members := make([]domain.FactorTaskMember, 0, len(rows))
+	states := make([]domain.MemberParamState, 0, len(rows))
 	for _, row := range rows {
-		member, err := row.domain()
+		params, err := domain.ParseParamSnapshot(row.Params)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("member %s/%s: %w", taskID, row.MemberKey, err)
 		}
-		members = append(members, member)
+		if len(params) == 0 {
+			params = nil
+		}
+		state := domain.MemberParamState{MemberKey: row.MemberKey, Params: params, LastSubmittedPeriod: row.Period, LastRequestID: row.RequestID}
+		if row.SubmittedAt != nil {
+			state.LastSubmittedAt = *row.SubmittedAt
+		}
+		states = append(states, state)
 	}
-	return members, nil
-}
-
-// ClearParamSubmissions 清掉全部可变成员最近一次被接受的提交（数据重置用）；成员本身和配置不变，也不更新 c_mtime。
-func (s *Store) ClearParamSubmissions(ctx context.Context) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("factor database is not open")
-	}
-	return s.db.WithContext(ctx).Exec(`
-		UPDATE t_factor_task_members
-		SET c_last_submitted_params = '{}', c_last_submitted_period = 0, c_last_request_id = '', c_last_submitted_at = NULL
-		WHERE c_kind = ?
-	`, domain.MemberKindVar).Error
+	return states, nil
 }

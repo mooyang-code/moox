@@ -13,13 +13,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// boundTaskWithEnabledMember 建出一个已启用、关联到 inst-1、带一个已启用成员的任务。
+// boundTaskWithEnabledMember 建出一个已启用、关联到 inst-1、带一个已启用的固定成员与一个已启用的可变成员的任务。
 func boundTaskWithEnabledMember(t *testing.T) (*Service, *store.Store, *metadataFake) {
 	t.Helper()
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
 	addMember(t, svc, testTaskID(), "momentum", domain.MemberStatusEnabled)
+	addVarMember(t, svc, testTaskID(), domain.MemberStatusEnabled)
 	_, err := svc.BindTask(context.Background(), testTaskID(), "inst-1")
 	require.NoError(t, err)
 	return svc, db, meta
@@ -94,7 +95,7 @@ func TestDeleteBoundTaskRejectsOtherInstance(t *testing.T) {
 	require.Equal(t, domain.TaskStatusEnabled, stored.Status)
 	count, err := db.CountMembers(ctx, testTaskID())
 	require.NoError(t, err)
-	require.Equal(t, 1, count)
+	require.Equal(t, 2, count)
 	require.NotContains(t, meta.writeOps, "delete")
 }
 
@@ -129,7 +130,7 @@ func TestDeleteBoundTaskRejectsActiveRecalc(t *testing.T) {
 	require.Equal(t, domain.TaskStatusEnabled, stored.Status, "拒绝时不停用任务")
 	count, err := db.CountMembers(ctx, testTaskID())
 	require.NoError(t, err)
-	require.Equal(t, 1, count)
+	require.Equal(t, 2, count)
 	require.NotContains(t, meta.writeOps, "delete")
 
 	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(current *store.RecalcJob) error {
@@ -156,7 +157,7 @@ func TestDeleteBoundTaskRejectsReferencedDatasetBeforeChanging(t *testing.T) {
 	require.Equal(t, domain.TaskStatusEnabled, stored.Status)
 	count, err := db.CountMembers(ctx, testTaskID())
 	require.NoError(t, err)
-	require.Equal(t, 1, count)
+	require.Equal(t, 2, count)
 
 	// 读不到 Storage：按错误返回（不是冲突），同样什么也不改。
 	meta.deletableErr = errors.New("storage unavailable")

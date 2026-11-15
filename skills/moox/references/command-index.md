@@ -297,12 +297,6 @@
 | `ops tencent lighthouse firewall add` | 添加轻量应用服务器防火墙规则 |
 | `ops tencent lighthouse firewall open` | 通过控制面云账户凭证开放轻量防火墙端口 |
 
-## replay：逐期回放：按实盘时序用历史数据验证因子、策略与成交（不产生实际下单）
-
-| 命令 | 说明 |
-| --- | --- |
-| `replay` | 逐期回放：按实盘时序用历史数据验证因子、策略与成交（不产生实际下单） |
-
 ## secret：密钥：只列清单与打码后的信息；新建、修改请用户在管理台“设置 › 密钥”填写
 
 | 命令 | 说明 |
@@ -371,7 +365,7 @@
 | `storage repair-view` | 重建指定 View 的索引（默认只预览，--yes 才执行） |
 | `storage reset-metadata` | 备份后清空全部业务定义并重新导入种子（Storage 必须已停止；默认只预览，--yes 才执行） |
 
-## strategy：策略定义、实例、结果、历史回放与模板（调用 StrategyMgr）
+## strategy：策略定义、实例、结果、历史回放与展示设置（调用 StrategyMgr）
 
 | 命令 | 说明 |
 | --- | --- |
@@ -380,8 +374,8 @@
 | `strategy display get` | 查看实例的展示设置 |
 | `strategy display set` | 设置实例要隐藏的分类、成员与列 |
 | `strategy instance create` | 创建策略实例（默认停用，确认无误再 enable；也可加 --enable 创建即启用） |
-| `strategy instance delete` | 删除已停用的策略实例，连同绑定到它的因子任务和结果数据集（默认只预览，--yes 才执行） |
-| `strategy instance disable` | 停用策略实例（默认只预览，--yes 才执行） |
+| `strategy instance delete` | 删除已停用的策略实例，连同关联到它的因子任务和结果数据集（还被别的实例引用时拒绝；默认只预览，--yes 才执行） |
+| `strategy instance disable` | 停用策略实例；对已停用的实例再执行一次会重新通知 Trade 关闭最近一次挂账户的会话（默认只预览，--yes 才执行） |
 | `strategy instance enable` | 启用策略实例（挂了账户的实例启用后会按目标下单；默认只预览，--yes 才执行） |
 | `strategy instance list` | 列出策略实例（--space-id 过滤空间，默认 crypto） |
 | `strategy instance show` | 查看一个策略实例 |
@@ -391,16 +385,11 @@
 | `strategy replay cancel` | 取消回放 |
 | `strategy replay list` | 列出策略历史回放 |
 | `strategy replay show` | 查看一次回放 |
-| `strategy replay start` | 开始一次策略历史回放（支持现货、永续与混合市场） |
+| `strategy replay start` | 开始一次策略历史回放（支持现货、永续与混合市场）；`--input view` 读结果 View（默认），`--input compute` 由因子引擎现算（声明了 factor_params 的策略只能用它）；`--slippage-bps` 滑点 |
 | `strategy result list` | 列出实例每期的结果 |
 | `strategy result show` | 查看一期结果 |
 | `strategy show` | 查看一个策略定义 |
 | `strategy target list` | 查看实例当前的目标权重 |
-| `strategy template delete` | 删除模板（默认只预览，--yes 才执行） |
-| `strategy template list` | 列出策略模板 |
-| `strategy template render` | 用变量渲染模板，得到策略 DSL |
-| `strategy template save` | 保存模板 |
-| `strategy template show` | 查看一个模板 |
 | `strategy update` | 修改策略定义（引用它的实例要先停用） |
 | `strategy validate` | 试算策略 DSL（不落库） |
 

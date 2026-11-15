@@ -57,8 +57,8 @@ func TestPauseWaitsForRegisteredWritesBeforeQuiesced(t *testing.T) {
 	require.Equal(t, "paused", r.lifecycleStatus().Stage)
 }
 
-// 暂停之后：新的写操作被拒绝且不留在途登记；不领取补算；回放写回被拒绝。
-func TestPausedModuleRejectsWritesLeasesAndReplayWrites(t *testing.T) {
+// 暂停之后：新的写操作被拒绝且不留在途登记；不领取补算。
+func TestPausedModuleRejectsWritesAndLeases(t *testing.T) {
 	r, _ := newLifecycleRuntime(t)
 	startRunningModule(t, r)
 	ctx := context.Background()
@@ -66,8 +66,6 @@ func TestPausedModuleRejectsWritesLeasesAndReplayWrites(t *testing.T) {
 	require.NoError(t, err)
 
 	_, ok := r.beginWrite(ctx, "ftask_a", true, true)
-	require.False(t, ok)
-	_, ok = r.beginReplayWrite(ctx, "ftask_a")
 	require.False(t, ok)
 	require.Zero(t, r.writes.count(""), "被拒绝的操作不留登记")
 	require.False(t, r.leaseAllowed())

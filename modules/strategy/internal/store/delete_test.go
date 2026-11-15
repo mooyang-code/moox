@@ -21,7 +21,8 @@ func seedInstanceRows(t *testing.T, repo *Store, instanceID, taskID, viewID stri
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO t_strategy_sessions (c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_ctime, c_closed_at) VALUES (?, ?, ?, '{}', ?, ?)`,
+		{`INSERT INTO t_strategy_sessions (c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_started_at, c_ctime, c_closed_at)
+			VALUES (?, ?, ?, '{}', (SELECT COALESCE(MAX(c_started_at), 0) + 1 FROM t_strategy_sessions), ?, ?)`,
 			[]any{sessionID, instanceID, testHash, at, at}},
 		{`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_dsl_hash, c_input_json, c_targets_json, c_summary_json)
 			VALUES (?, ?, ?, 1, 2, 'ok', ?, '{}', '[]', '{}')`, []any{resultID, instanceID, sessionID, testHash}},
@@ -146,7 +147,7 @@ func TestDeleteInstanceRejectsActiveInstance(t *testing.T) {
 // 按 View 清理的年龄探针表）。新增的表没有分类时测试失败，提醒在 DeleteInstance 里处理或登记为全局表。
 func TestEveryStrategyTableIsClassifiedForInstanceDeletion(t *testing.T) {
 	repo := openTestStore(t)
-	global := map[string]bool{"t_strategy_defs": true, "t_strategy_def_versions": true, "t_strategy_templates": true}
+	global := map[string]bool{"t_strategy_defs": true, "t_strategy_def_versions": true}
 	// 没有 c_instance_id、由 DeleteInstance 另外清理的表：结果明细随结果、回放明细随回放、年龄探针按 View。
 	cleanedOtherwise := map[string]bool{"t_strategy_result_items": true, "t_strategy_replay_bars": true, "t_strategy_age_passed": true}
 	withInstance := map[string]bool{}

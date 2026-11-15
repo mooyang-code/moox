@@ -90,17 +90,12 @@ func TestDriftWarmUpStartsAtAllocationStart(t *testing.T) {
 	// 停用再启用（DSL、绑定与成员都没变，期间没有新收盘的期）：旧会话关闭，状态原样挂到新会话，不重新预热。
 	ctx := context.Background()
 	previous := "session-1"
-	if err := h.repo.DisableInstance(ctx, "i1", &previous, nil, "", origin); err != nil {
+	if err := h.repo.DisableInstance(ctx, "i1", previous, origin); err != nil {
 		t.Fatal(err)
 	}
 	next := "session-2"
-	if err := h.repo.OpenSession(ctx, store.Session{SessionID: next, InstanceID: "i1", DSLHash: first.DSLHash, ResolvedJSON: first.ResolvedJSON, MembersJSON: first.MembersJSON, CreatedAt: origin}, yaml); err != nil {
+	if err := h.repo.EnableInstance(ctx, store.Session{SessionID: next, InstanceID: "i1", DSLHash: first.DSLHash, ResolvedJSON: first.ResolvedJSON, MembersJSON: first.MembersJSON, CreatedAt: origin}, yaml); err != nil {
 		t.Fatal(err)
-	}
-	for _, enabled := range []bool{false, true} {
-		if err := h.repo.SetInstanceEnabled(ctx, "i1", enabled, &next, json.RawMessage(first.ResolvedJSON), origin); err != nil {
-			t.Fatal(err)
-		}
 	}
 	h.manager.Start(ctx, "i1", next)
 	var second store.Session

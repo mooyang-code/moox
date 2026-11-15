@@ -125,3 +125,32 @@ func TestRunChunkWithoutParamReaderComputesOneSegment(t *testing.T) {
 	require.Len(t, runner.snapshot(), 1)
 	require.Empty(t, outcome.DefaultFilled[key])
 }
+
+// 固定成员不看已有行（批 3 T9）：参数段只按可变成员切分，固定成员一律用自己的参数、不记按默认参数新补；
+// 被选成员只有固定成员时整段一次算完，不带已有行的 __params。
+func TestParamSegmentIgnoresFixedMembers(t *testing.T) {
+	window := testWindow(4)
+	at := func(minute int) time.Time { return window.Start.Add(time.Duration(minute) * time.Minute) }
+	selection, key := paramSelection(t, "BTC")
+	fixedDef := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 50, default: 20}\noutput: ts_mean(close, window)\n")
+	fixed := domain.MemberDef{Key: "pmean__7", Factor: fixedDef, Kind: domain.MemberKindFixed, Params: map[string]float64{"window": 7}}
+	selection.Members = append(selection.Members, fixed)
+	rows := map[pipeline.RowKey]map[string]map[string]float64{}
+	for minute := 0; minute < 4; minute++ {
+		// 已有行里固定成员的记录（旧数据才会有）逐期不同，可变成员的记录不变：不能因此切段，也不能拿它还原固定成员的参数。
+		rows[pipeline.RowKey{Subject: "BTC", At: at(minute)}] = map[string]map[string]float64{key: {"window": 30}, fixed.Key: {"window": float64(10 + minute)}}
+	}
+	seg := paramSegment(selection, newParamRows(rows), window.Start, window.End, time.Minute)
+	require.Equal(t, window.End, seg.end, "只按可变成员切段")
+	require.Equal(t, 30.0, seg.params[key].Value("window", "BTC"))
+	require.Equal(t, 7.0, seg.params[fixed.Key].Value("window", "BTC"), "固定成员用自己的参数")
+	require.NotContains(t, seg.defaultFilled, fixed.Key)
+	require.Len(t, seg.base, 4)
+
+	fixedOnly := selection
+	fixedOnly.Members = []domain.MemberDef{fixed}
+	only := paramSegment(fixedOnly, paramRows{}, window.Start, window.End, time.Minute)
+	require.Equal(t, window.End, only.end)
+	require.Nil(t, only.base, "只有固定成员时不带已有行的 __params")
+	require.Empty(t, only.defaultFilled)
+}

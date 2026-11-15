@@ -123,16 +123,13 @@ func Validate(s *Strategy) error {
 	if err := validateLimitsTarget(s.Portfolio, ids, "规则 id"); err != nil {
 		return err
 	}
-	if err := validateTrancheStrategy(s); err != nil {
-		return err
-	}
 	if err := validateAnchorAlignment(s); err != nil {
 		return err
 	}
 	if err := validateSourcesReferenced(s); err != nil {
 		return err
 	}
-	// 显式写了 market 时，保存就按这个模式校验做空、杠杆、tranche 与 factor_params，不必等到启用；没写时模式取决于绑定的任务，启用时再校验。
+	// 显式写了 market 时，保存就按这个模式校验做空、杠杆与 factor_params，不必等到启用；没写时模式取决于绑定的任务，启用时再校验。
 	if s.MarketDeclared {
 		return ValidateMode(*s, s.Market)
 	}
@@ -203,34 +200,18 @@ func validateRule(rule *Rule, sources map[string]struct{}) error {
 	if rule.Pool.Explicit && len(rule.Pool.Fixed) == 0 && len(rule.Pool.Tags) == 0 {
 		return fmt.Errorf("%s 的 pool 不能为空", prefix)
 	}
-	if rule.Stop != nil && rule.Type == RuleTypeTranche {
-		return fmt.Errorf("%s 是 tranche 规则，stop 写在 tranche 子策略模板里", prefix)
-	}
-	if rule.OnMissing != nil && rule.Type == RuleTypeTranche {
-		return fmt.Errorf("%s 是 tranche 规则，不支持 on_missing：tranche 的持仓按自己的持有计数到期，不走冻结保持", prefix)
-	}
 	if rule.Scale != nil {
 		if _, err := analyzeIn(rule.Scale.Expr, StageScale, sources); err != nil {
 			return fmt.Errorf("%s 的 %s 表达式无效：%w", prefix, StageScale, err)
 		}
 	}
-	if rule.Hold != nil && rule.Type != RuleTypeRank {
-		return fmt.Errorf("%s 不是 rank 规则，不能写 hold", prefix)
-	}
-	if rule.Tranche != nil && rule.Type != RuleTypeTranche {
-		return fmt.Errorf("%s 不是 tranche 规则，不能写 candidates、tranche 或 params", prefix)
-	}
 	switch rule.Type {
 	case RuleTypeRank:
 		return validateRankRule(prefix, rule, sources)
-	case RuleTypeSignal:
-		return validateSignalRule(prefix, rule, sources)
-	case RuleTypeTranche:
-		return validateTrancheRule(prefix, rule)
 	case "":
-		return fmt.Errorf("%s 缺少 type（rank、signal 或 tranche）", prefix)
+		return fmt.Errorf("%s 缺少 type（只能是 rank）", prefix)
 	default:
-		return fmt.Errorf("%s 的 type %q 不受支持，只能是 rank、signal 或 tranche", prefix, rule.Type)
+		return fmt.Errorf("%s 的 type %q 不受支持，只能是 rank", prefix, rule.Type)
 	}
 }
 
@@ -256,9 +237,6 @@ func validateWeight(prefix string, weight *Weight) error {
 }
 
 func validateRankRule(prefix string, rule *Rule, sources map[string]struct{}) error {
-	if rule.Entry != "" || rule.Exit != "" {
-		return fmt.Errorf("%s 是 rank 规则，不能使用 entry / exit", prefix)
-	}
 	if rule.Score == "" {
 		return fmt.Errorf("%s 缺少 score", prefix)
 	}
@@ -305,25 +283,6 @@ func validateRankRule(prefix string, rule *Rule, sources map[string]struct{}) er
 	}
 	if fixed && rule.Weight.HasCap && rule.Weight.Cap.Mul(quant.Must(fmt.Sprint(slots))).Cmp(rule.Weight.Total) < 0 {
 		return fmt.Errorf("%s 的 weight.cap 乘以最多可持有的标的数小于 weight.total，预算永远分不完", prefix)
-	}
-	return analyzeStages(prefix, rule.stageSources(), sources)
-}
-
-func validateSignalRule(prefix string, rule *Rule, sources map[string]struct{}) error {
-	if !rule.Pool.Explicit {
-		return fmt.Errorf("%s 是 signal 规则，必须显式给出 pool", prefix)
-	}
-	if rule.Score != "" || rule.HasSelect || rule.Filter != "" || rule.FilterAfter != "" || rule.Holding != nil {
-		return fmt.Errorf("%s 是 signal 规则，只能使用 pool、entry、exit、weight、side", prefix)
-	}
-	if rule.Entry == "" || rule.Exit == "" {
-		return fmt.Errorf("%s 需要同时给出 entry 和 exit", prefix)
-	}
-	if rule.Weight.Method != WeightMethodEqual {
-		return fmt.Errorf("%s 是 signal 规则，weight.method 只能是 equal", prefix)
-	}
-	if rule.Weight.HasCap {
-		return fmt.Errorf("%s 是 signal 规则，不支持 weight.cap", prefix)
 	}
 	return analyzeStages(prefix, rule.stageSources(), sources)
 }

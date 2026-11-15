@@ -26,10 +26,21 @@ func series(subject, tag string) seriesset.Series {
 // unifiedPlan 造统一数据集的实时计划：每个标的都有现货、永续两条序列。
 func unifiedPlan(target time.Time, factors []domain.FactorDef, subjects []string) Plan {
 	plan := computePlan(target, factors, subjects)
+	plan.ExpectedSeries = nil
 	for _, subject := range subjects {
 		plan.ExpectedSeries = append(plan.ExpectedSeries, series(subject, tagSpot), series(subject, tagSwap))
 	}
 	plan.ExpectedSeries = uniqueSeriesSorted(plan.ExpectedSeries)
+	return plan
+}
+
+// asVarMembers 把计划里的成员都当成可变成员：__params 只记可变成员，测“没有取得值的成员不记参数”要用可变成员。
+func asVarMembers(plan Plan) Plan {
+	members := append([]domain.MemberDef(nil), plan.Members...)
+	for i := range members {
+		members[i].Kind = domain.MemberKindVar
+	}
+	plan.Members = members
 	return plan
 }
 
@@ -87,7 +98,7 @@ func TestUnifiedCrossSectionSkipsOnlyTheMarketMissingASeries(t *testing.T) {
 	spread := testPipelineFactor("spread", domain.FactorTypeCrossSection, 2, false)
 	mean := testPipelineFactor("mean", domain.FactorTypeTimeSeries, 2, false)
 	subjects := []string{"BTC", "ETH", "SOL"}
-	plan := unifiedPlan(target, []domain.FactorDef{spread, mean}, subjects)
+	plan := asVarMembers(unifiedPlan(target, []domain.FactorDef{spread, mean}, subjects))
 	loaded, computation, rows := runUnified(t, plan, unifiedData(subjects, target, 2, series("SOL", tagSwap)))
 
 	require.Equal(t, subjects, loaded.Available, "SOL 现货在，标的仍可算")
@@ -197,7 +208,7 @@ func TestUnifiedUpstreamFailedSeriesWritesNullEvenWithLocalData(t *testing.T) {
 	mean := testPipelineFactor("mean", domain.FactorTypeTimeSeries, 2, false)
 	rank := testPipelineFactor("rank", domain.FactorTypeCrossSection, 2, true)
 	subjects := []string{"BTC", "ETH", "SOL"}
-	plan := unifiedPlan(target, []domain.FactorDef{mean, rank}, subjects)
+	plan := asVarMembers(unifiedPlan(target, []domain.FactorDef{mean, rank}, subjects))
 	plan.UpstreamFailedSeries = []seriesset.Series{series("BTC", tagSwap)}
 	plan.UpstreamFailed = []string{"BTC"}
 	data := unifiedData(subjects, target, 2) // 本地每条序列都有这一期的源行
@@ -222,7 +233,6 @@ func TestBuildLivePlanUnifiedKeepsSubjectsWithAnyUsableSeries(t *testing.T) {
 	plan, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
 		Set:     domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.TaskStatusEnabled},
 		Members: domain.AsMembers(testPipelineFactor("mean", domain.FactorTypeTimeSeries, 2, false)), PeriodTime: target,
-		Universe: []string{"BTC", "ETH"}, UpstreamFailed: []string{"BTC"},
 		UniverseSeries: []seriesset.Series{
 			series("BTC", tagSpot), series("BTC", tagSwap), series("ETH", tagSpot), series("ETH", tagSwap),
 		},
@@ -234,16 +244,14 @@ func TestBuildLivePlanUnifiedKeepsSubjectsWithAnyUsableSeries(t *testing.T) {
 	require.Equal(t, []string{"BTC"}, plan.UpstreamFailed)
 	require.Equal(t, []seriesset.Series{series("BTC", tagSpot)}, plan.UpstreamFailedSeries)
 	require.Len(t, plan.ExpectedSeries, 4)
-	require.True(t, plan.Multi())
 
 	single, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
 		Set:     domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.TaskStatusEnabled},
 		Members: domain.AsMembers(testPipelineFactor("mean", domain.FactorTypeTimeSeries, 2, false)), PeriodTime: target,
-		Universe: []string{"BTC", "ETH"}, UpstreamFailed: []string{"BTC"},
+		UniverseSeries: singleSeries("BTC", "ETH"), UpstreamFailedSeries: singleSeries("BTC"),
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{"ETH"}, single.Available, "单序列数据集：失败的标的整体不读（原有行为）")
-	require.False(t, single.Multi())
+	require.Equal(t, []string{"ETH"}, single.Available, "只有一个 tag 的数据集：唯一的序列失败，标的整体不读")
 }
 
 // 统一数据集写自己的周期完成标记时带上序列全集与失败序列。

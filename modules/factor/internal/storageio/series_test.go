@@ -82,7 +82,7 @@ func TestValidatePeriodDetailSeriesRules(t *testing.T) {
 	} {
 		require.Error(t, ValidatePeriodDetail(build(mutate), []string{"BTC"}, universe, "degraded"), name)
 	}
-	// 单序列数据集（没有序列全集）不能带按序列的名单。
+	// 周期没有序列全集时，失败序列与跳过的 tag 都不在全集里，同样拒绝；不带这两项则通过。
 	require.Error(t, ValidatePeriodDetail(build(func(*factorpb.FactorPeriodState) {}), []string{"BTC"}, nil, "degraded"))
 	require.NoError(t, ValidatePeriodDetail(build(func(s *factorpb.FactorPeriodState) {
 		s.FailedSeries, s.SkippedSeriesTags = nil, nil

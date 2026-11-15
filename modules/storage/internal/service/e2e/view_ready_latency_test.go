@@ -189,7 +189,7 @@ func runKlinePeriodBench(t *testing.T, ctx context.Context, env readyBenchEnv, d
 	env.SetPeriodClock(readyBenchBase.Add(-time.Minute))
 	series := make([]*pb.SeriesSnapshotEntry, len(dataset.subjects))
 	for i, subject := range dataset.subjects {
-		series[i] = &pb.SeriesSnapshotEntry{SubjectId: subject}
+		series[i] = &pb.SeriesSnapshotEntry{SubjectId: subject, SeriesTag: "default"}
 	}
 	snapshot, err := env.Primary().RegisterSeriesSnapshot(ctx, &pb.PrimaryRegisterSeriesSnapshotReq{
 		AuthInfo: env.Auth(), SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Frequency: readyBenchFreq,
@@ -317,11 +317,15 @@ func writeRowsInBatches(t *testing.T, ctx context.Context, env readyBenchEnv, da
 
 func reportProducerCompleted(t *testing.T, ctx context.Context, env readyBenchEnv, dataset readyBenchDataset, period time.Time, universe []string, cause string) {
 	t.Helper()
+	series := make([]*pb.SeriesRef, 0, len(universe))
+	for _, subject := range universe {
+		series = append(series, &pb.SeriesRef{SubjectId: subject, SeriesTag: "default"})
+	}
 	rsp, err := env.Primary().ReportDatasetPeriodCompleted(ctx, &pb.ReportDatasetPeriodCompletedReq{
 		AuthInfo: env.Auth(), SpaceId: readyBenchSpace,
 		Marker: &pb.DatasetPeriodCompletedMarker{
 			DatasetId: dataset.datasetID, Frequency: readyBenchFreq, PeriodTime: period.Unix(), Status: "complete",
-			UniverseSubjectIds: universe, CauseEventId: cause, CompletedAt: timestamppb.Now(),
+			UniverseSubjectIds: universe, UniverseSeries: series, CauseEventId: cause, CompletedAt: timestamppb.Now(),
 			DetailType: "moox.bench.PeriodDetail.v1", Detail: []byte("bench"),
 		},
 	})
@@ -342,7 +346,7 @@ func requireViewRows(t *testing.T, ctx context.Context, env readyBenchEnv, viewI
 func readyBenchRow(dataset readyBenchDataset, subject string, at time.Time, round int) *pb.RowFieldUpsert {
 	return &pb.RowFieldUpsert{
 		Key: &pb.RowKey{SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: subject, Freq: readyBenchFreq, DataTime: at.UTC().Format(time.RFC3339Nano),
+			SubjectId: subject, SeriesTag: "default", Freq: readyBenchFreq, DataTime: at.UTC().Format(time.RFC3339Nano),
 		}}},
 		Fields: readyBenchFields(dataset.columns, at, round),
 	}

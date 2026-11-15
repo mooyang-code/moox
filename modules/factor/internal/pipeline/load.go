@@ -21,12 +21,7 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 		ctx = context.Background()
 	}
 	result := LoadResult{Frames: make(map[string]*storageio.Frame)}
-	subjects := uniqueSorted(plan.Available)
-	failedTask := make(map[string]struct{}, len(plan.UpstreamFailed))
-	for _, subject := range plan.UpstreamFailed {
-		failedTask[subject] = struct{}{}
-	}
-	if len(subjects) == 0 {
+	if len(plan.Available) == 0 {
 		result.FailedSubjects = uniqueSorted(plan.UpstreamFailed)
 		result.FailedSeries = append([]seriesset.Series(nil), plan.ExpectedSeries...)
 		return result, nil
@@ -42,29 +37,33 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 	for subject, frame := range data.Frames {
 		result.Frames[subject] = frame
 	}
-	for _, subject := range data.Failed {
-		failedTask[subject] = struct{}{}
-	}
-	for _, subject := range result.WarmingSubjects {
-		failedTask[subject] = struct{}{}
-	}
-	if plan.multi() {
-		classifySeries(plan, data, &result)
-		return result, nil
-	}
-	for _, subject := range subjects {
-		if _, failed := failedTask[subject]; !failed {
-			result.Available = append(result.Available, subject)
-		}
-	}
-	for subject := range failedTask {
-		result.FailedSubjects = append(result.FailedSubjects, subject)
-	}
-	result.FailedSubjects = uniqueSorted(result.FailedSubjects)
+	classifySeries(plan, data, &result)
 	return result, nil
 }
 
-// classifySeries 统一数据集：把期望序列分成本期可用与不可用的。标的整体失败（同步失败、预热中，failedSubject）或这条序列自己
+// LoadSubjects 给只有标的名单、没有序列全集的调用方（管理端试算）用：按 plan.Available 读入，再把计划的期望序列补成
+// “期望标的 × 读到的数据里它的 series_tag”（见 SubjectSeries），返回补好的计划与读入结果。读不到数据的标的照常记为失败。
+func (r *Runner) LoadSubjects(ctx context.Context, plan Plan) (Plan, LoadResult, error) {
+	if r == nil || r.data == nil {
+		return plan, LoadResult{}, errors.New("factor local data layer is required")
+	}
+	if !plan.TargetStart.Before(plan.TargetEnd) {
+		return plan, LoadResult{}, errors.New("factor read window must have start before end")
+	}
+	data, err := r.data.Load(ctx, plan)
+	if err != nil {
+		return plan, LoadResult{}, err
+	}
+	plan.ExpectedSeries = SubjectSeries(data.View, plan.Expected)
+	result := LoadResult{Frames: data.Frames, View: data.View, WarmingSubjects: uniqueSorted(data.Warming)}
+	if result.Frames == nil {
+		result.Frames = make(map[string]*storageio.Frame)
+	}
+	classifySeries(plan, data, &result)
+	return plan, result, nil
+}
+
+// classifySeries 把期望序列分成本期可用与不可用的。标的整体失败（同步失败、预热中，failedSubject）或这条序列自己
 // 不可用（上游失败、本期数据还没到）的序列不可用，其余可用；一个市场的缺数不连累另一个市场。
 // 标的口径沿用原有定义：有不可用序列的标的记入 FailedSubjects，至少有一条可用序列的标的才是 Available。
 func classifySeries(plan Plan, data DataResult, result *LoadResult) {

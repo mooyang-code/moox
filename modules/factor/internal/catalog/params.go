@@ -160,7 +160,7 @@ func datasetScope(ctx context.Context, source SubjectSource, task domain.FactorT
 }
 
 // GetParams 只读：返回任务里各可变成员最近一次被接受的提交（没有提交过的成员也在内，LastSubmittedPeriod 为 0）。
-func (s *Service) GetParams(ctx context.Context, taskID string) ([]domain.FactorTaskMember, error) {
+func (s *Service) GetParams(ctx context.Context, taskID string) ([]domain.MemberParamState, error) {
 	taskID = strings.TrimSpace(taskID)
 	if _, err := s.db.GetTask(ctx, taskID); err != nil {
 		return nil, fmt.Errorf("读取因子任务 %s：%w", taskID, err)

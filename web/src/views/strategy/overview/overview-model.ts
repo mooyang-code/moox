@@ -47,7 +47,7 @@ export interface InstanceCard {
 }
 
 export interface PendingItem {
-  kind: "degraded" | "paused" | "session_unverified" | "expired" | "releasing";
+  kind: "degraded" | "paused" | "expired";
   instanceId: string;
   title: string;
   text: string;
@@ -101,7 +101,7 @@ export function overviewStats(input: OverviewInput): StatItem[] {
       key: "attention",
       label: "需要处理",
       value: String(attention),
-      hint: "降级、会话待核实、目标过期、会话释放中",
+      hint: "降级、组合账户暂停、目标过期",
       tone: attention ? "danger" : "ok"
     },
     {
@@ -162,12 +162,8 @@ export function pendingItems(input: OverviewInput): PendingItem[] {
         text: "组合账户已暂停，目标不会执行，到组合账户恢复自动执行",
         target: { name: "trading-account-detail", params: { logical_account_id: instance.logical_account_id } }
       });
-    } else if (instance.health === "session_unverified") {
-      items.push({ ...base, kind: "session_unverified", text: "无法核实 Trade 账户会话，目标是否被接受未知" });
     } else if (instance.enabled && stateOf(instance, input.targets, input.nowMs) === "expired") {
       items.push({ ...base, kind: "expired", text: "目标已过期，最近一期之后没有产出新结果" });
-    } else if (!instance.enabled && instance.session_id) {
-      items.push({ ...base, kind: "releasing", text: "已停用但会话仍在释放，旧目标不代表当前仓位" });
     }
   }
   return items;

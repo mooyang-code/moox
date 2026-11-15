@@ -14,7 +14,6 @@ import type {
   StrategyResultDetail,
   StrategyResultItem,
   StrategyTargetSnapshot,
-  StrategyTemplate,
   ValidateStrategyResult
 } from "./strategy-types";
 
@@ -101,6 +100,7 @@ function normalizeReplay(value: any): Replay {
     end_time: value?.end_time ?? "",
     spot_fee_bps: Number(value?.spot_fee_bps ?? 0),
     swap_fee_bps: Number(value?.swap_fee_bps ?? 0),
+    slippage_bps: Number(value?.slippage_bps ?? 0),
     funding_column: value?.funding_column ?? "",
     status: value?.status ?? "",
     progress_time: value?.progress_time ?? "",
@@ -111,7 +111,8 @@ function normalizeReplay(value: any): Replay {
     dsl_hash: value?.dsl_hash ?? "",
     instance_id: value?.instance_id ?? "",
     session_id: value?.session_id ?? "",
-    calendar: value?.calendar ?? ""
+    calendar: value?.calendar ?? "",
+    input: value?.input || "view"
   };
 }
 
@@ -122,6 +123,7 @@ function normalizeReplayBar(value: any): ReplayBar {
     targets: (value?.targets ?? []).map(normalizeTarget),
     positions_json: value?.positions_json || "{}",
     summary_json: value?.summary_json || "{}",
+    params_json: value?.params_json || "{}",
     bar_return: Number(value?.bar_return ?? 0),
     equity: Number(value?.equity ?? 0),
     turnover: Number(value?.turnover ?? 0),
@@ -428,36 +430,4 @@ export async function setStrategyDisplaySettings(instance_id: string, hidden: Di
     }
   );
   return normalizeHidden(response.hidden);
-}
-
-function normalizeTemplate(value: any): StrategyTemplate {
-  return {
-    template_id: value?.template_id ?? "",
-    name: value?.name ?? "",
-    description: value?.description ?? "",
-    template_yaml: value?.template_yaml ?? "",
-    columns: value?.columns ?? [],
-    variables: value?.variables ?? [],
-    created_at: value?.created_at ?? "",
-    updated_at: value?.updated_at ?? ""
-  };
-}
-
-/** 列出策略模板（模板的保存与删除走 moox-cli，见策略模块文档）。 */
-export async function listStrategyTemplates(): Promise<StrategyTemplate[]> {
-  const response = await call<Record<string, never>, { templates?: unknown[] }>("ListStrategyTemplates", {});
-  return (response.templates ?? []).map(normalizeTemplate);
-}
-
-/** 用模板生成策略 DSL（变量含策略名 name；参数表 CSV 第一行是表头），只校验不落库。 */
-export async function renderStrategyTemplate(
-  template_id: string,
-  variables: Record<string, string>,
-  params_csv: string
-): Promise<string> {
-  const response = await call<
-    { template_id: string; variables: Record<string, string>; params_csv: string },
-    { dsl_yaml?: string }
-  >("RenderStrategyTemplate", { template_id, variables, params_csv });
-  return response.dsl_yaml ?? "";
 }

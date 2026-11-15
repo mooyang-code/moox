@@ -27,9 +27,9 @@ func TestParseExample(t *testing.T) {
 	if rank.Select.Top != 5 || rank.Select.Buffer != 2 || rank.Weight.Total.String() != "0.8" || !rank.Weight.HasCap || rank.Weight.Cap.String() != "0.3" || rank.Weight.Method != WeightMethodEqual {
 		t.Fatalf("rank 规则的 select/weight 不符：%+v / %+v", rank.Select, rank.Weight)
 	}
-	signal := strategy.Rules[1]
-	if signal.Type != RuleTypeSignal || !signal.Pool.Explicit || len(signal.Pool.Fixed) != 1 || signal.Weight.Total.String() != "0.2" || signal.Side != SideLong {
-		t.Fatalf("signal 规则不符：%+v", signal)
+	timing := strategy.Rules[1]
+	if timing.Type != RuleTypeRank || !timing.Pool.Explicit || len(timing.Pool.Fixed) != 1 || !timing.AllowEmpty || timing.Hold == nil || timing.Hold.Entry == "" || timing.Hold.Exit == "" || timing.Weight.Total.String() != "0.2" || timing.Side != SideLong {
+		t.Fatalf("固定标的择时规则不符：%+v", timing)
 	}
 	if strategy.Portfolio.Leverage.String() != "1" || !strategy.Portfolio.HasMaxWeight || strategy.Portfolio.MaxWeight.String() != "0.3" || strategy.Portfolio.MinUniverse != 20 || strategy.Portfolio.MaxMissing.String() != "0.2" {
 		t.Fatalf("portfolio 不符：%+v", strategy.Portfolio)

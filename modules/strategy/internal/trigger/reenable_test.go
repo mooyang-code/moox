@@ -88,7 +88,7 @@ func (h *harness) reenable(next, dslYaml string) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	if err := h.repo.DisableInstance(ctx, "i1", &h.session, nil, "", h.now); err != nil {
+	if err := h.repo.DisableInstance(ctx, "i1", h.session, h.now); err != nil {
 		h.t.Fatal(err)
 	}
 	hash := previous.DSLHash
@@ -104,13 +104,8 @@ func (h *harness) reenable(next, dslYaml string) {
 			h.t.Fatal(err)
 		}
 	}
-	if err := h.repo.OpenSession(ctx, store.Session{SessionID: next, InstanceID: "i1", DSLHash: hash, ResolvedJSON: previous.ResolvedJSON, MembersJSON: previous.MembersJSON, CreatedAt: h.now}, dslYaml); err != nil {
+	if err := h.repo.EnableInstance(ctx, store.Session{SessionID: next, InstanceID: "i1", DSLHash: hash, ResolvedJSON: previous.ResolvedJSON, MembersJSON: previous.MembersJSON, CreatedAt: h.now}, dslYaml); err != nil {
 		h.t.Fatal(err)
-	}
-	for _, enabled := range []bool{false, true} {
-		if err := h.repo.SetInstanceEnabled(ctx, "i1", enabled, &next, json.RawMessage(previous.ResolvedJSON), h.now); err != nil {
-			h.t.Fatal(err)
-		}
 	}
 	h.session = next
 }
@@ -123,7 +118,7 @@ func (h *harness) run(from, to int) {
 	}
 }
 
-// 同一份 DSL 停用再启用：止损入场价与冷却、hold 的入场序号、holding 的分批持有、tranche 的开仓记录都保留，
+// 同一份 DSL 停用再启用：止损入场价与冷却、hold 的入场序号、holding 的分批持有都保留，
 // 之后每一期的目标与状态和从未停用过的实例逐字节一致。
 func TestReenableWithSameDSLKeepsRuleState(t *testing.T) {
 	cases := []struct {
@@ -137,7 +132,6 @@ func TestReenableWithSameDSLKeepsRuleState(t *testing.T) {
 		{name: "止损入场价", build: newStopHarness, stopAfter: 1, last: 5, carried: []string{`"entries":{"A":`}},
 		{name: "hold 入场序号", build: newHoldHarness, stopAfter: 2, last: 5, carried: []string{`"hold":{`}},
 		{name: "holding 分批持有", build: newBatchHarness, stopAfter: 2, last: 5, carried: []string{`"batches":[`}},
-		{name: "tranche 开仓记录", build: newTrancheHarness, stopAfter: 2, last: 5, carried: []string{`"tranche":{`}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,7 +169,7 @@ func TestReenableWithSameDSLKeepsRuleState(t *testing.T) {
 // 持有根数、冷却、批次都按 bar 序号的差计算，两种中断是同一口径。
 func TestReenableGapMatchesPause(t *testing.T) {
 	cases := map[string]func(*testing.T) *harness{
-		"止损": newStopHarness, "holding 分批": newBatchHarness, "hold": newHoldHarness, "tranche": newTrancheHarness,
+		"止损": newStopHarness, "holding 分批": newBatchHarness, "hold": newHoldHarness,
 	}
 	for name, build := range cases {
 		t.Run(name, func(t *testing.T) {

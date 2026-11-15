@@ -243,7 +243,7 @@ export function strategyRows(
     const cashRatio = snapshot ? Math.max(0, 1 - net) : 0;
     const barMax = Math.max(...ranked.map(row => Math.abs(row.weight)), cashRatio, 0);
     const tone: Tone =
-      instance.health === "degraded" || instance.health === "session_unverified"
+      instance.health === "degraded"
         ? "warn"
         : !instance.enabled
           ? "idle"

@@ -1,6 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { describe, expect, it, vi } from "vitest";
+import { reactive } from "vue";
 import type { ReplayFormState } from "./replay-form-model";
 import ReplayCreateForm from "./replay-create-form.vue";
 
@@ -21,7 +22,9 @@ describe("回放表单的区间", () => {
       range: [Date.parse("2026-10-08T10:00:00Z"), Date.parse("2026-11-07T10:00:00Z")],
       spot_fee_bps: 10,
       swap_fee_bps: 10,
-      funding_column: ""
+      slippage_bps: 0,
+      funding_column: "",
+      input: "view"
     };
     const wrapper = mount(ReplayCreateForm, {
       props: {
@@ -59,7 +62,9 @@ describe("回放表单的资金费列", () => {
     range: [Date.parse("2026-10-08T10:00:00Z"), Date.parse("2026-11-07T10:00:00Z")],
     spot_fee_bps: 10,
     swap_fee_bps: 10,
-    funding_column: ""
+    slippage_bps: 0,
+    funding_column: "",
+    input: "view"
   });
   const mountForm = (form: ReplayFormState) =>
     mount(ReplayCreateForm, {
@@ -84,5 +89,53 @@ describe("回放表单的资金费列", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("资金费列（可选）");
     expect(wrapper.text()).toContain("资金费要在下面写资金费列才计入");
+  });
+});
+
+describe("回放表单的因子数据来源", () => {
+  const tunedDSL = 'name: t\nfactor_params:\n  ma__var:\n    window: {default: "close"}\nrules: []\n';
+  const mountForm = (form: ReplayFormState, dsl: string) =>
+    mount(ReplayCreateForm, {
+      props: {
+        modelValue: form,
+        strategies: [{ strategy_id: "s1", name: "策略", dsl_yaml: dsl }] as never,
+        tasks: [{ task_id: "ftask_a", freq: "1h" }] as never,
+        tasksLoading: false
+      },
+      global: { plugins: [ArcoVue] }
+    });
+  const base = (): ReplayFormState => ({
+    source: "definition",
+    strategy_id: "s1",
+    dsl_yaml: "",
+    instance_id: "",
+    single_market: "spot",
+    tasks: { spot: "ftask_a" },
+    range: [Date.parse("2026-10-08T10:00:00Z"), Date.parse("2026-11-07T10:00:00Z")],
+    spot_fee_bps: 10,
+    swap_fee_bps: 10,
+    slippage_bps: 0,
+    funding_column: "",
+    input: "view"
+  });
+
+  it("声明了 factor_params 的策略自动切到因子现算，结果 View 不能选", async () => {
+    const form = base();
+    const wrapper = mountForm(form, tunedDSL);
+    await flushPromises();
+    expect(form.input).toBe("compute");
+    expect(wrapper.text()).toContain("因子数据来源");
+    expect(wrapper.text()).toContain("只能用因子现算");
+  });
+
+  it("普通策略默认读结果 View，选因子现算时说明它的限制", async () => {
+    const form = reactive(base());
+    const wrapper = mountForm(form, "name: a\n");
+    await flushPromises();
+    expect(form.input).toBe("view");
+    expect(wrapper.text()).toContain("区间受 View 保留的根数限制");
+    form.input = "compute";
+    await flushPromises();
+    expect(wrapper.text()).toContain("不受 View 保留根数限制");
   });
 });

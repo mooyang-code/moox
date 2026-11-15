@@ -100,7 +100,7 @@ var unitProfiles = map[string][]string{
 	"collector-stream": {"collector-stream"},
 	// 事件中心：全局服务，由 [deployments] 决定装在哪台主机（默认海外机），独立成单元。
 	"callback-dispatcher": {"callback-dispatcher"},
-	// 外部程序：由 systemd 用户服务托管，不经主机网关路由；安装脚本与服务模板随软件包一起交付。
+	// 外部程序：由 systemd 用户服务托管；安装脚本与服务模板随软件包一起交付。
 	"factor-engine":  {"factor-engine"},
 	"archive-worker": {"archive-worker"},
 }

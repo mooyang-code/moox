@@ -12,14 +12,10 @@ type CompiledRule struct {
 	Score       *Expression
 	SelectWhere *Expression
 	FilterAfter *Expression
-	Entry       *Expression
-	Exit        *Expression
 	ThenScore   *Expression
 	HoldEntry   *Expression
 	HoldExit    *Expression
 	Scale       *Expression
-	// TrancheGroups 是 tranche 规则按排名签名分好的子策略组（见 tranche.go）；其他类型为空。
-	TrancheGroups []TrancheGroup
 }
 
 // stageSource 是规则一个阶段的表达式文本。
@@ -35,28 +31,26 @@ func (r Rule) stageSources() []stageSource {
 		{StageScore, r.Score},
 		{StageSelectWhere, r.Select.Where},
 		{StageFilterAfter, r.FilterAfter},
-		{StageEntry, r.Entry},
-		{StageExit, r.Exit},
 		{StageThenScore, ""},
 		{StageHoldEntry, ""},
 		{StageHoldExit, ""},
 		{StageScale, ""},
 	}
 	if r.Select.Then != nil {
-		sources[6].source = r.Select.Then.Score
+		sources[4].source = r.Select.Then.Score
 	}
 	if r.Hold != nil {
-		sources[7].source, sources[8].source = r.Hold.Entry, r.Hold.Exit
+		sources[5].source, sources[6].source = r.Hold.Entry, r.Hold.Exit
 	}
 	if r.Scale != nil {
-		sources[9].source = r.Scale.Expr
+		sources[7].source = r.Scale.Expr
 	}
 	return sources
 }
 
 // stageTargets 返回与 stageSources 同序的编译结果位置。
 func (r *CompiledRule) stageTargets() []**Expression {
-	return []**Expression{&r.Filter, &r.Score, &r.SelectWhere, &r.FilterAfter, &r.Entry, &r.Exit, &r.ThenScore, &r.HoldEntry, &r.HoldExit, &r.Scale}
+	return []**Expression{&r.Filter, &r.Score, &r.SelectWhere, &r.FilterAfter, &r.ThenScore, &r.HoldEntry, &r.HoldExit, &r.Scale}
 }
 
 // DirectColumns 是规则直接写列名（不经表达式）引用的当期列：select.group.by（主帧的列名，或写作 来源名.列名 的来源列，
@@ -83,12 +77,6 @@ func (r *CompiledRule) Expressions() []*Expression {
 // Columns 返回该规则引用的全部当期列。
 func (r *CompiledRule) Columns() []string {
 	set := make(map[string]struct{})
-	if r.Rule.Type == RuleTypeTranche {
-		// tranche 规则的列来自子策略模板，表达式阶段只有 scale。
-		for _, column := range r.Rule.TrancheColumns() {
-			set[column] = struct{}{}
-		}
-	}
 	for _, expression := range r.Expressions() {
 		for _, column := range expression.AllColumns() {
 			set[column] = struct{}{}
@@ -170,14 +158,6 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 				return nil, fmt.Errorf("规则 %s 引用的列 %q 不存在于绑定的 View", rule.ID, column)
 			}
 		}
-		if rule.Type == RuleTypeTranche {
-			for _, column := range rule.TrancheColumns() {
-				if _, ok := available[column]; !ok {
-					return nil, fmt.Errorf("规则 %s 引用的列 %q 不存在于绑定的 View", rule.ID, column)
-				}
-			}
-			compiled.TrancheGroups = rule.Tranche.TrancheGroups()
-		}
 		for _, column := range compiled.Columns() {
 			allColumns[column] = struct{}{}
 		}
@@ -238,11 +218,6 @@ func ReferencedColumns(strategy Strategy) ([]string, error) {
 	for _, rule := range strategy.Rules {
 		for _, column := range rule.StopColumns() {
 			set[column] = struct{}{}
-		}
-		if rule.Type == RuleTypeTranche {
-			for _, column := range rule.TrancheColumns() {
-				set[column] = struct{}{}
-			}
 		}
 		for _, column := range rule.DirectColumns() {
 			set[column] = struct{}{}

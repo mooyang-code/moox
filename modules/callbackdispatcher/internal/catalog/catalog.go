@@ -83,7 +83,10 @@ var entries = []Entry{
 		Sample: map[string]any{
 			"dataset_id": "示例数据集", "frequency": "5m", "period_time": "1786032000", "status": "complete", "source": "producer",
 			"universe_subject_ids": []string{"BTCUSDT", "ETHUSDT"},
-			"cause_event_id":       "示例事件", "completed_at": "2026-08-06T00:05:03Z",
+			"universe_series": []map[string]string{
+				{"subject_id": "BTCUSDT", "series_tag": "venue:binance"}, {"subject_id": "ETHUSDT", "series_tag": "venue:binance"},
+			},
+			"cause_event_id": "示例事件", "completed_at": "2026-08-06T00:05:03Z",
 		},
 		PayloadFields: []Field{
 			{Key: "dataset_id", Title: "数据集 ID"},
@@ -93,8 +96,8 @@ var entries = []Entry{
 			{Key: "source", Title: "怎样判定完成：ledger 按账本判定，producer 由写入方报告"},
 			{Key: "universe_subject_ids", Title: "这一期应有的全部标的"},
 			{Key: "failed_subjects", Title: "这一期没写成功的标的（只在 degraded 时出现）"},
-			{Key: "universe_series", Title: "按序列（标的、series_tag）的全部成员：只有统一数据集（一个数据集含多个序列）才有"},
-			{Key: "failed_series", Title: "按序列的失败名单：只有统一数据集才有"},
+			{Key: "universe_series", Title: "按序列（标的、series_tag）的全部成员；一个数据集含多个序列时同一标的出现多次"},
+			{Key: "failed_series", Title: "按序列的失败名单（只在 degraded 时出现）"},
 			{Key: "completed_at", Title: "判定完成的时刻（UTC）"},
 			{Key: "cause_event_id", Title: "触发这次计算的事件 ID（source 为 producer 时）"},
 			{Key: "snapshot_ref", Title: "内部字段（source 为 ledger 时的快照引用），可以忽略"},

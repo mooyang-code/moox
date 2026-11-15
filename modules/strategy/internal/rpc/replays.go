@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
+	"github.com/mooyang-code/moox/modules/strategy/internal/replay"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -77,6 +78,9 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 			return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("%s 必须在 0 到 %d 之间", name, store.MaxReplayFeeBps))}, nil
 		}
 	}
+	if slippage := req.GetSlippageBps(); math.IsNaN(slippage) || math.IsInf(slippage, 0) || slippage < 0 || slippage > store.MaxReplaySlippageBps {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("slippage_bps 必须在 0 到 %d 之间", store.MaxReplaySlippageBps))}, nil
+	}
 	if s.Resolver == nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("Storage 与 Factor 依赖未配置，不能回放"))}, nil
 	}
@@ -87,12 +91,11 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if fundingColumn != "" && !dsl.ValidColumnName(fundingColumn) {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("funding_column %q 必须是 View 里的列名", fundingColumn))}, nil
 	}
-	if len(strategy.FactorParams) > 0 {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("输出了 factor_params 的策略暂不支持研究回放：可变成员的参数随策略逐期变化，需要从实例发起的闭环回放"))}, nil
+	inputSource, err := replayInputOf(req.GetInput(), strategy)
+	if err != nil {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
-	if strategy.HasTranche() {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("研究回放第一版不支持 tranche 策略"))}, nil
-	}
+	compute := inputSource == store.ReplayInputCompute
 	// 先做一次低成本计数：排队已满时不必再解析绑定、让 Storage 现算覆盖统计；事务内的计数仍是最终判定。
 	if active, err := s.Store.CountActiveReplays(ctx, scoped); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
@@ -124,6 +127,11 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err := input.CheckResolvedMarkets(resolved, tasks); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
+	if compute {
+		if err := checkComputeReplay(resolved); err != nil {
+			return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
+		}
+	}
 	if fundingColumn != "" && !resolved.Market.Has(dsl.MarketSwap) {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("策略不涉及永续（市场 %s），资金费只对永续持仓结算，不要写 funding_column", resolved.Market))}, nil
 	}
@@ -137,10 +145,17 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	// 同步校验起点、截断终点并检查根数上限：排队后才失败、或回放没有数据的未来 bar 都会误导用户。
+	// “因子现算”不查主帧 View 的覆盖范围（可回放的各期由因子引擎在回放开始时给出），只截终点并估算单步大小。
 	var generations map[string]string
-	if strategy.IsPool() {
+	switch {
+	case strategy.IsPool():
 		end, generations, err = s.Resolver.PoolReplayWindow(ctx, scoped, pooled, start, end, s.nowTime())
-	} else {
+	case compute:
+		var series int
+		if end, generations, series, err = s.Resolver.ComputeReplayWindow(ctx, scoped, resolved, start, end, s.nowTime()); err == nil {
+			_, err = replay.ComputeStepPeriods(series, len(replay.ComputeColumns(program, fundingColumn)), len(program.Params) > 0, 1)
+		}
+	default:
 		end, generations, err = s.Resolver.ReplayWindow(ctx, scoped, resolved, program, start, end, s.nowTime())
 	}
 	if err != nil {
@@ -167,7 +182,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	for key, task := range bindings {
 		replayTasks[key] = store.ReplayTask{FactorTaskID: task.FactorTaskID, ViewID: task.ViewID, ViewGeneration: generations[key]}
 	}
-	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), Calendar: resolved.Calendar, SpaceID: scoped, Tasks: replayTasks, StartTime: start, EndTime: end, SpotFeeBps: req.GetSpotFeeBps(), SwapFeeBps: req.GetSwapFeeBps(), FundingColumn: fundingColumn, MembersJSON: membersJSON, Factors: resolved.Factors, CreatedAt: s.nowTime()}
+	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), Calendar: resolved.Calendar, SpaceID: scoped, Tasks: replayTasks, Input: inputSource, StartTime: start, EndTime: end, SpotFeeBps: req.GetSpotFeeBps(), SwapFeeBps: req.GetSwapFeeBps(), SlippageBps: req.GetSlippageBps(), FundingColumn: fundingColumn, MembersJSON: membersJSON, Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
@@ -179,6 +194,37 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
 	}
 	return &strategypb.StartReplayRsp{RetInfo: success(), Replay: replayProto(created), BarCount: int32(len(bars)), FirstBarEnd: formatTime(bars[0].BarEnd), LastBarEnd: formatTime(bars[len(bars)-1].BarEnd)}, nil
+}
+
+// replayInputOf 确定回放主帧的输入来源：不写按 view；声明了 factor_params 的策略必须用 compute（可变成员的参数随策略逐期变化，
+// View 里的历史值是按当时提交的参数算的）；compute 不支持策略池。其余限制要等解析出绑定后再查（见 checkComputeReplay）。
+func replayInputOf(raw string, strategy dsl.Strategy) (string, error) {
+	source := strings.TrimSpace(raw)
+	if source == "" {
+		source = store.ReplayInputView
+	}
+	if source != store.ReplayInputView && source != store.ReplayInputCompute {
+		return "", fmt.Errorf("input 只能是 %s（读结果 View）或 %s（因子现算）", store.ReplayInputView, store.ReplayInputCompute)
+	}
+	if len(strategy.FactorParams) > 0 && source != store.ReplayInputCompute {
+		return "", errors.New("声明了 factor_params 的策略只能用“因子现算”来源回放（input=compute）：可变成员的参数随策略逐期变化，View 里的历史值是按当时提交的参数算的")
+	}
+	if source == store.ReplayInputCompute && strategy.IsPool() {
+		return "", errors.New("“因子现算”来源不支持策略池，策略池请用 View 来源回放")
+	}
+	return source, nil
+}
+
+// checkComputeReplay 是“因子现算”来源在解析出绑定后的限制：只支持一个主帧任务（方式 A 的现货、永续两个任务不支持；统一数据集是
+// 一个任务），不支持股票市场（引擎回放的计算核心没有核对过交易日历与午休）。
+func checkComputeReplay(resolved input.Resolved) error {
+	if len(resolved.Tasks) != 1 {
+		return fmt.Errorf("“因子现算”来源只支持一个主帧任务，这个回放绑定了 %d 个（%s）；现货加永续请用统一数据集上的任务，或改用 View 来源", len(resolved.Tasks), strings.Join(resolved.TaskKeys(), "、"))
+	}
+	if resolved.Calendar != input.DefaultCalendar || resolved.Market.Has(dsl.MarketEquity) {
+		return fmt.Errorf("“因子现算”来源暂不支持股票市场（日历 %s）：请用 View 来源回放", resolved.Calendar)
+	}
+	return nil
 }
 
 // replayInput 是被回放的 DSL 文本及其来源。

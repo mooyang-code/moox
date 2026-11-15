@@ -467,6 +467,7 @@ describe("strategy replay page", () => {
     vm.form.tasks = { spot: "ftask_a", swap: "ftask_b", equity: "stale" };
     vm.form.spot_fee_bps = 10;
     vm.form.swap_fee_bps = 5;
+    vm.form.slippage_bps = 3;
     await nextTick();
     const startButton = wrapper.findAll("button").find(button => button.text() === "开始回放");
     await startButton!.trigger("click");
@@ -474,7 +475,9 @@ describe("strategy replay page", () => {
     expect(api.startReplay.mock.calls[0][0]).toMatchObject({
       factor_tasks: { spot: "ftask_a", swap: "ftask_b" },
       spot_fee_bps: 10,
-      swap_fee_bps: 5
+      swap_fee_bps: 5,
+      slippage_bps: 3,
+      input: "view"
     });
     expect(Object.keys(api.startReplay.mock.calls[0][0].factor_tasks)).toEqual(["spot", "swap"]);
   });
@@ -558,6 +561,29 @@ describe("strategy replay page", () => {
     expect(text).toContain("模拟曲线未计资金费与强平");
     expect(text).toContain("永续净名义价值");
     expect(text).toContain("现货市值 10.0000 · 永续净名义价值 -100.0000");
+  });
+
+  it("因子现算的回放写明来源，每期明细显示生效的参数", async () => {
+    const computed = replay("r9", "done", '{"bars":2,"ok_bars":2,"limitations":[]}', { input: "compute" });
+    api.listReplays.mockResolvedValue({ items: [computed], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(computed);
+    api.listReplayBars.mockResolvedValue({
+      items: [
+        { ...bar(), bar_end_time: "2026-09-01T01:00:00Z", params_json: "{}" },
+        {
+          ...bar(),
+          bar_end_time: "2026-09-01T02:00:00Z",
+          params_json: '{"f__var":{"window":{"default":30,"overrides":{"A":40,"B":45}}}}'
+        }
+      ],
+      page: { total: 2 }
+    });
+    const wrapper = mountPage();
+    await flushPromises();
+    const text = wrapper.text();
+    expect(text).toContain("因子数据来源 因子现算");
+    expect(text).toContain("生效参数：按成员自己的参数");
+    expect(text).toContain("生效参数：f__var window = 30（另有 2 个标的单独取值）");
   });
 
   it("names the funding column instead of the no-funding-fee warning when the replay charges funding", async () => {

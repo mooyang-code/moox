@@ -86,7 +86,7 @@ func TestCommitResultFailureLeavesNeitherResultNorState(t *testing.T) {
 	}
 }
 
-// reopen 停用实例（还挂着会话时）并用给定的快照打开新会话（不启用：沿用与否在打开会话的事务里就定了）。
+// reopen 停用实例（还启用着时），DSL 版本不同时先把定义改成这个版本，再用给定的快照启用到新会话（沿用与否在启用的事务里决定）。
 func reopen(t *testing.T, repo *Store, previous, next, dslHash, resolved, members string) {
 	t.Helper()
 	ctx := context.Background()
@@ -94,12 +94,19 @@ func reopen(t *testing.T, repo *Store, previous, next, dslHash, resolved, member
 	if err != nil {
 		t.Fatal(err)
 	}
-	if instance.SessionID != nil {
-		if err := repo.DisableInstance(ctx, "i1", &previous, nil, "", testNow); err != nil {
+	if instance.Enabled {
+		if err := repo.DisableInstance(ctx, "i1", previous, testNow); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := repo.OpenSession(ctx, Session{SessionID: next, InstanceID: "i1", DSLHash: dslHash, ResolvedJSON: resolved, MembersJSON: members, CreatedAt: testNow}, "name: "+next); err != nil {
+	if definition, err := repo.GetDefinition(ctx, instance.StrategyID); err != nil {
+		t.Fatal(err)
+	} else if definition.DSLHash != dslHash {
+		if err := repo.UpdateDefinition(ctx, Definition{StrategyID: instance.StrategyID, Name: definition.Name, DSLYaml: "name: " + next, DSLHash: dslHash, UpdatedAt: testNow}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.EnableInstance(ctx, Session{SessionID: next, InstanceID: "i1", DSLHash: dslHash, ResolvedJSON: resolved, MembersJSON: members, CreatedAt: testNow}, "name: "+next); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -189,7 +196,7 @@ func TestUpdateInstanceClearsState(t *testing.T) {
 		t.Fatal(err)
 	}
 	previous := "session-1"
-	if err := repo.DisableInstance(ctx, "i1", &previous, nil, "", testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", previous, testNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, _ := repo.GetState(ctx, "i1"); !found {

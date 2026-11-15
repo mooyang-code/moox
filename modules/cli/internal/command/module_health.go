@@ -18,7 +18,7 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-// lifecycle、system、replay、import 要访问模块的健康端口（回放、生命周期、本地写入接口都挂在上面，签名鉴权）。
+// lifecycle、system、import 要访问模块的健康端口（生命周期、本地写入接口都挂在上面，签名鉴权）。
 // 以前要先手工建 SSH 隧道、再把健康密钥放进环境变量；现在由 moox.toml 解析：
 // 模块在哪台主机、端口是多少（服务目录）、怎么连（直连经 SSH 转发，只能出站的主机经 control 中转）、
 // 密钥从主机上的运行时文件经 SSH 读出，只放进本进程的环境变量，不打印、不落盘。

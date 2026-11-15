@@ -192,7 +192,7 @@ func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient,
 	if !ok || !slices.ContainsFunc(manifest.Factors.Tasks, func(task setupconfig.FactorSetupTask) bool { return task.ID == example.FactorTask }) {
 		return summary, nil
 	}
-	summary.Strategy, err = setupStartStrategy(ctx, client, repository, spaceID, example, &summary)
+	summary.Strategy, err = setupStartStrategy(ctx, client, repository, spaceID, example)
 	return summary, err
 }
 
@@ -302,29 +302,17 @@ func setupStartFactors(ctx context.Context, deps setupDeps, snapshot *setupconfi
 	return true, errors.Join(applyErr, service.Close())
 }
 
-// taskValues 返回绑定的因子任务 ID。
-func taskValues(tasks map[string]string) []string {
-	ids := make([]string, 0, len(tasks))
-	for _, id := range tasks {
-		ids = append(ids, id)
-	}
-	return ids
-}
-
-// setupStartStrategy 创建空间的默认示例并启用。用户已经把这个因子任务绑给别的实例时跳过：一个因子任务只能有一个实例。
-func setupStartStrategy(ctx context.Context, client setupStartClient, repository, spaceID string, example spaceExample, summary *setupStartSummary) (string, error) {
+// setupStartStrategy 创建空间的默认示例并启用。默认示例不写 factor_params，不独占关联因子任务，
+// 用户自己的实例也引用这个任务时照常创建（一个任务可以被多个实例引用）。
+func setupStartStrategy(ctx context.Context, client setupStartClient, repository, spaceID string, example spaceExample) (string, error) {
 	instances, err := client.Instances(ctx, spaceID)
 	if err != nil {
 		return "", err
 	}
 	var existing *setupStartInstance
 	for i, instance := range instances {
-		switch {
-		case instance.InstanceID == example.InstanceID:
+		if instance.InstanceID == example.InstanceID {
 			existing = &instances[i]
-		case slices.Contains(taskValues(instance.FactorTasks), example.FactorTask):
-			summary.Notes = append(summary.Notes, fmt.Sprintf("因子任务 %s 已绑定实例 %s，跳过默认示例", example.FactorTask, instance.InstanceID))
-			return "skipped", nil
 		}
 	}
 	if existing != nil {

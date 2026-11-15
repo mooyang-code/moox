@@ -150,8 +150,7 @@ func validateMarketCombination(market *Market) error {
 }
 
 // ValidateMode 校验策略与有效市场模式（DSL 写出的，或没写时按绑定任务的市场取的默认值）能否同时成立：
-// 纯现货与股票不能做空、不能加杠杆；tranche 只能用在单个市场的策略（S1 暂不支持双市场 tranche）；可能输出现货的模式（纯现货与股票）里 tranche 不能做空、只能按权重持有
-// （tranche 内部把同一个币的多空合成一个净值，没法再按方向分市场；按数量持有会让权重之和略大于 1）。
+// 纯现货与股票不能做空、不能加杠杆。
 // 绑定了任务之后、启用与试算之前调用。
 func ValidateMode(s Strategy, mode Market) error {
 	if mode.IsZero() {
@@ -159,9 +158,6 @@ func ValidateMode(s Strategy, mode Market) error {
 	}
 	if !mode.Single() && len(s.FactorParams) > 0 {
 		return fmt.Errorf("%s 策略要绑定现货、永续两个因子任务，不支持 factor_params（两个任务的可变成员键可能重名，参数回写会冲突）", modeLabel(mode))
-	}
-	if !mode.Single() && s.HasTranche() {
-		return fmt.Errorf("%s 策略不支持 tranche 规则：S1 暂不支持双市场 tranche，原因是一个市场本期不可用时 tranche 的持仓无法冻结（tranche 内部把同一个币的多空合成一个净值，也不参与冻结），会把这个市场里的持仓卖掉；tranche 只能用在单个市场的策略（spot/spot 或 swap/swap）", modeLabel(mode))
 	}
 	for _, rule := range s.Rules {
 		if rule.Market != "" && mode.Single() && rule.Market != mode.Select {
@@ -173,24 +169,8 @@ func ValidateMode(s Strategy, mode Market) error {
 			return fmt.Errorf("%s 策略不允许 portfolio.leverage 大于 1（当前 %s），加杠杆需要永续市场", modeLabel(mode), s.Portfolio.Leverage.String())
 		}
 		for _, rule := range s.Rules {
-			if rule.Type != RuleTypeTranche && rule.Side == SideShort {
+			if rule.Side == SideShort {
 				return fmt.Errorf("%s 策略不允许规则 %s 做空，空头只能在永续市场", modeLabel(mode), rule.ID)
-			}
-		}
-	}
-	if !mode.CanOutputSpotLike() {
-		return nil
-	}
-	for _, rule := range s.Rules {
-		if rule.Type != RuleTypeTranche || rule.Tranche == nil {
-			continue
-		}
-		for _, sub := range rule.Tranche.Subs {
-			if sub.ShortWeight > 0 {
-				return fmt.Errorf("规则 %s 的 tranche 子策略做空：%s 策略的 tranche 不能做空（tranche 内部把同一个币的多空合成一个净值，没法再按方向分市场）", rule.ID, modeLabel(mode))
-			}
-			if sub.SizingMethod != SizingWeight {
-				return fmt.Errorf("规则 %s 的 tranche 子策略按数量持有：%s 策略的 tranche 只能用 sizing.method: weight（按数量持有会让权重之和略大于 1）", rule.ID, modeLabel(mode))
 			}
 		}
 	}

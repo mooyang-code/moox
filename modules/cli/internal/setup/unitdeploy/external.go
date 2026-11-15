@@ -247,7 +247,7 @@ func runExternal(ctx context.Context, target setupssh.Client, what, script strin
 type externalAccessTarget struct{ address, id string }
 
 // externalAccess 取外部程序使用的 Access：Access 可以部署在多台主机上，优先用与 Storage primary 同一台的那个，
-// 没有时取主机 ID 排序最前的一台。外部程序只经 Access 访问系统，不经主机网关路由。
+// 没有时取主机 ID 排序最前的一台。外部程序作为调用方只经 Access 访问系统；它声明的服务（因子引擎的 EngineControl）由所在主机的网关转发。
 func externalAccess(manifest setupconfig.Manifest) (externalAccessTarget, error) {
 	var hosts []string
 	for id, components := range manifest.Deployments {

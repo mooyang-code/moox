@@ -24,9 +24,9 @@ import (
 type Resolver interface {
 	// Resolve 按登记的因子任务（任务键 → 任务，附加来源的键是 来源名:市场）解析绑定（只读，不关联任务；校验与研究回放用）。
 	Resolve(ctx context.Context, spaceID string, tasks map[string]string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
-	// ResolveInstance 启用实例时的解析：先把任务（市场 → 任务）与实例永久关联（幂等），要求任务已启用，再解析绑定。
+	// ResolveInstance 启用实例时的解析：任务都要已启用，解析绑定通过之后，声明了 factor_params 的策略才把主帧任务与实例永久关联（幂等）。
 	ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
-	// ResolvePoolInstance 是策略池启用时的解析：任务关联同 ResolveInstance，绑定按成员分别解析。
+	// ResolvePoolInstance 是策略池启用时的解析：不关联任务（策略池不能写 factor_params），任务都要已启用，绑定按成员分别解析。
 	ResolvePoolInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, pool dsl.Strategy, members []input.PoolMemberDef) (input.PoolResolved, error)
 	// ResolvePool 解析策略池的绑定（只读，不关联任务；校验接口用）。
 	ResolvePool(ctx context.Context, spaceID string, taskIDs []string, pool dsl.Strategy, members []input.PoolMemberDef) (input.PoolResolved, error)
@@ -39,26 +39,24 @@ type Resolver interface {
 	LoadLatest(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, now time.Time) (input.Loaded, error)
 	// ReplayWindow 校验并截断回放区间，返回截断后的终点与各市场校验所用的活动索引代次（市场 → 代次）。
 	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, map[string]string, error)
+	// ComputeReplayWindow 是“因子现算”来源的提交校验：不查主帧 View 的覆盖范围，终点截到最近一根已收盘的 bar 之前；返回截断后的终点、
+	// 各任务键的活动索引代次与主帧的序列数（估算单步大小用）。
+	ComputeReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, start, end, now time.Time) (time.Time, map[string]string, int, error)
 	// PoolReplayWindow 是策略池回放的区间校验：按每个成员各自的回看要求校验起点、截断终点，返回值同 ReplayWindow。
 	PoolReplayWindow(ctx context.Context, spaceID string, pooled input.PoolResolved, start, end, now time.Time) (time.Time, map[string]string, error)
 }
 
-// Owner 是 Trade 组合账户的会话所有权接口。
-type Owner interface {
-	ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string, markets []string) error
-	ReleaseSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
-	ValidateSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
+// TradeAccounts 是用到的 Trade 组合账户接口（批 3 的 3.6）：启用绑了账户的实例前只读账户核对控制模式与市场；
+// 停用后通知 Trade 关闭会话（幂等，不做后台重试）。
+type TradeAccounts interface {
+	CheckAccount(ctx context.Context, spaceID, logicalAccountID string, markets []string) error
+	CloseSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string, startedAt int64) error
 }
 
 // Warmer 管理策略池实例的后台预热：启用成功后开始预热，停用时取消。
 type Warmer interface {
 	Start(ctx context.Context, instanceID, sessionID string)
 	Stop(instanceID string)
-}
-
-// Alerter 接收需要人工处理的实例事件（例如因 Trade 拒绝会话被自动停用），用于模块健康告警。
-type Alerter interface {
-	Alert(instance store.Instance, reason string)
 }
 
 // ReplayWaker 通知回放执行循环有新任务。
@@ -70,11 +68,11 @@ type ReplayWaker interface {
 type Service struct {
 	Store    *store.Store
 	Resolver Resolver
-	Owner    Owner
-	Replays  ReplayWaker
+	// Trade 为空时不能启用、停用或删除挂过组合账户的实例。
+	Trade   TradeAccounts
+	Replays ReplayWaker
 	// Warmer 为空时不预热（没有策略池的部署）。
 	Warmer Warmer
-	Alerts Alerter
 	// Tasks 与 Archives 用于删除实例（以及启用前核对任务还在、标出删除未完成的实例）；为空时不能删除实例。
 	Tasks    FactorTaskAdmin
 	Archives ArchiveTasks

@@ -39,6 +39,10 @@ type Position struct {
 // 资金费（只在 Step.Funding 非 nil 时计）：第 k 根的费率是这一根开盘时刻的结算，那一刻持有的是第 k−1 根收盘调仓之前的仓位，
 // 所以每根估值后把永续持仓的带符号名义价值存成 FundingBasis，下一根按它乘本根费率结算进现金（费率为正时多头付、空头收）。
 //
+// 滑点（SlippageRate，默认 0）：成交价在收盘价上按方向加减这个比例，买入上浮、卖出下浮。成交数量仍按收盘价的名义金额算、持仓仍按
+// 收盘价估值，滑点按成交的名义金额乘比例从现金里扣（与按成交价成交在现金上等价）；手续费按收盘价的名义金额计。
+// 缺价清算与爆仓后的平仓同样计滑点。
+//
 // 每根依次调用 Mark（估值与结算）和 Rebalance（清算与调仓）；Step 是两者的合写。
 type Ledger struct {
 	Cash      float64              `json:"cash"`
@@ -47,6 +51,8 @@ type Ledger struct {
 	SpotFeeRate    float64 `json:"spot_fee_rate"`
 	SwapFeeRate    float64 `json:"swap_fee_rate"`
 	LiquidateAfter int     `json:"liquidate_after"`
+	// SlippageRate 是滑点比例（基点 / 10000），现货、永续相同；策略池的成员账本不计滑点。
+	SlippageRate float64 `json:"slippage_rate,omitempty"`
 	// Bankrupt 在持仓期间权益降到不超过 0 时置位（模拟爆仓）：之后各期忽略目标，可成交的持仓全部平掉、不再开仓，空仓直到结束。
 	// 没有这条规则时负权益会让“目标权重 × 权益”变成反向持仓，账户靠反向持仓“复活”。
 	Bankrupt bool `json:"bankrupt,omitempty"`
@@ -77,6 +83,8 @@ type Outcome struct {
 	Traded       float64 `json:"traded"`
 	Fee          float64 `json:"fee"`
 	Turnover     float64 `json:"turnover"`
+	// Slippage 是本根成交的滑点成本（成交的名义金额乘滑点比例，已从现金扣除）；不计滑点时为 0、不输出。
+	Slippage float64 `json:"slippage,omitempty"`
 	// Funding 是本根结算的资金费（正数为支出、负数为收入），已经计入 EquityBefore。
 	Funding    float64  `json:"funding,omitempty"`
 	Unfilled   []string `json:"unfilled,omitempty"`
@@ -230,13 +238,15 @@ func (l *Ledger) rebalance(outcome Outcome, step Step) Outcome {
 		if position.Frozen && l.LiquidateAfter > 0 && position.MissingBars >= l.LiquidateAfter {
 			// 现货按最后价卖出换回现金；永续的盈亏已按最后价结算，清算只扣手续费。
 			fee := math.Abs(position.Value) * l.feeRate(id)
+			slip := math.Abs(position.Value) * l.SlippageRate
 			if isSwapKey(id) {
-				l.Cash -= fee
+				l.Cash -= fee + slip
 			} else {
-				l.Cash += position.Value - fee
+				l.Cash += position.Value - slip - fee
 			}
 			outcome.Traded += math.Abs(position.Value)
 			outcome.Fee += fee
+			outcome.Slippage += slip
 			outcome.Liquidated = append(outcome.Liquidated, id)
 			delete(l.Positions, id)
 		}
@@ -312,7 +322,7 @@ func (l *Ledger) rebalance(outcome Outcome, step Step) Outcome {
 				spotCost += math.Abs(want(id, adjusted) - value(id))
 			}
 		}
-		next := equity - (l.SpotFeeRate*spotCost + l.SwapFeeRate*swapCost)
+		next := equity - (l.SpotFeeRate*spotCost + l.SwapFeeRate*swapCost + l.SlippageRate*(spotCost+swapCost))
 		converged := math.Abs(next-adjusted) <= convergenceTolerance*math.Max(math.Abs(equity), 1)
 		adjusted = next
 		if converged {
@@ -333,9 +343,11 @@ func (l *Ledger) rebalance(outcome Outcome, step Step) Outcome {
 		}
 		sell := current - desired[id]
 		fee := sell * l.SpotFeeRate
-		l.Cash += sell - fee
+		slip := sell * l.SlippageRate
+		l.Cash += sell - slip - fee
 		outcome.Traded += sell
 		outcome.Fee += fee
+		outcome.Slippage += slip
 		l.adjust(id, -sell, tradable[id], dust)
 	}
 	for _, id := range ids {
@@ -343,7 +355,9 @@ func (l *Ledger) rebalance(outcome Outcome, step Step) Outcome {
 			continue
 		}
 		if delta := desired[id] - value(id); math.Abs(delta) > dust {
-			outcome.Fee += l.tradeSwap(id, delta, tradable[id], dust)
+			fee, slip := l.tradeSwap(id, delta, tradable[id], dust)
+			outcome.Fee += fee
+			outcome.Slippage += slip
 			outcome.Traded += math.Abs(delta)
 		}
 	}
@@ -360,7 +374,7 @@ func (l *Ledger) rebalance(outcome Outcome, step Step) Outcome {
 	}
 	if total > 0 {
 		scale := 1.0
-		need := total * (1 + l.SpotFeeRate)
+		need := total * (1 + l.SpotFeeRate + l.SlippageRate)
 		if need > l.Cash {
 			scale = math.Max(l.Cash, 0) / need
 			// 迭代误差造成的粉尘级缺口只做截断，不算目标未达成。
@@ -382,9 +396,11 @@ func (l *Ledger) rebalance(outcome Outcome, step Step) Outcome {
 				continue
 			}
 			fee := buy * l.SpotFeeRate
-			l.Cash -= buy + fee
+			slip := buy * l.SlippageRate
+			l.Cash -= buy + slip + fee
 			outcome.Traded += buy
 			outcome.Fee += fee
+			outcome.Slippage += slip
 			l.adjust(id, buy, tradable[id], dust)
 		}
 		if l.Cash < 0 && l.Cash > -1e-9*math.Max(equity, 1) {
@@ -419,23 +435,24 @@ func (l *Ledger) adjust(id string, amount, price, dust float64) {
 	}
 }
 
-// tradeSwap 按名义金额变化 delta（正为加多或减空，负为加空或减多）调整永续持仓，返回手续费：成交价就是已结算的当期价，
-// 只改数量、扣手续费。
-func (l *Ledger) tradeSwap(id string, delta, price, dust float64) float64 {
+// tradeSwap 按名义金额变化 delta（正为加多或减空，负为加空或减多）调整永续持仓，返回手续费与滑点成本：数量按已结算的当期价算，
+// 只改数量、扣手续费与滑点。
+func (l *Ledger) tradeSwap(id string, delta, price, dust float64) (float64, float64) {
 	position, ok := l.Positions[id]
 	if !ok {
 		position = &Position{LastPrice: price}
 		l.Positions[id] = position
 	}
 	fee := math.Abs(delta) * l.SwapFeeRate
-	l.Cash -= fee
+	slip := math.Abs(delta) * l.SlippageRate
+	l.Cash -= fee + slip
 	position.LastPrice = price
 	position.Quantity += delta / price
 	position.Value = position.Quantity * price
 	if math.Abs(position.Value) <= dust {
 		delete(l.Positions, id)
 	}
-	return fee
+	return fee, slip
 }
 
 func (l *Ledger) sortedIDs() []string {

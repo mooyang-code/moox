@@ -50,7 +50,7 @@ func TestListAccountLedgerMergesLocalTransfers(t *testing.T) {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l", OwnerInstanceID: "r", OwnerSessionID: "s",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l",
 			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
 		}); err != nil {
 			return err

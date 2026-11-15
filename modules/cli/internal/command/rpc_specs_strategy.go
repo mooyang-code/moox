@@ -1,22 +1,21 @@
 package command
 
-// 策略（StrategyMgr）：定义、实例、结果、历史回放、模板与展示设置。
+// 策略（StrategyMgr）：定义、实例、结果、历史回放与展示设置。
 
 const strategyMgr = "trpc.moox.strategy.StrategyMgr"
 
 // 策略服务按请求头里的空间 ID 取元数据，所有命令都带 --space-id（默认 crypto）。
 func init() {
-	rpcGroupShort["strategy"] = "策略定义、实例、结果、历史回放与模板（调用 StrategyMgr）"
+	rpcGroupShort["strategy"] = "策略定义、实例、结果、历史回放与展示设置（调用 StrategyMgr）"
 	rpcGroupShort["strategy instance"] = "策略实例"
 	rpcGroupShort["strategy result"] = "策略每期结果"
 	rpcGroupShort["strategy target"] = "策略当前目标权重"
-	rpcGroupShort["strategy replay"] = "策略服务里的历史回放（逐期因子 → 策略 → 纸面成交的完整回放用顶层 replay 命令）"
-	rpcGroupShort["strategy template"] = "策略模板"
+	rpcGroupShort["strategy replay"] = "策略服务里的历史回放（因子数据读结果 View 或由因子引擎现算）"
 	rpcGroupShort["strategy display"] = "策略实例的展示设置"
 
 	createInstanceFlags := []rpcFlag{
 		reqFlag("strategy-id", "instance.strategy_id", "策略定义 ID"),
-		mapFlag("factor-task", "instance.factor_tasks", "关联的因子计算任务，写成 市场=任务 ID，可重复：现货、永续策略各给一个（spot=…、swap=…，两个市场都用时两个都要给），股票策略 equity=…；任务在统一数据集上（同一个数据集里放现货、永续两条序列）时写 multi=…，只绑这一个任务，策略必须显式写 market；DSL 写了 market.reference 时再给参考市场的任务（如 spot=…）；DSL 写了 sources 时按 来源名:市场=任务 ID 给每个来源绑定任务（如 daily:swap=…，市场与主帧的任务一一对应）；只能选本空间里运行中、还没被别的实例关联的任务，创建后不能改"),
+		mapFlag("factor-task", "instance.factor_tasks", "关联的因子计算任务，写成 市场=任务 ID，可重复：现货、永续策略各给一个（spot=…、swap=…，两个市场都用时两个都要给），股票策略 equity=…；任务在统一数据集上（同一个数据集里放现货、永续两条序列）时写 multi=…，只绑这一个任务，策略必须显式写 market；DSL 写了 market.reference 时再给参考市场的任务（如 spot=…）；DSL 写了 sources 时按 来源名:市场=任务 ID 给每个来源绑定任务（如 daily:swap=…，市场与主帧的任务一一对应）；任务要是本空间里运行中的任务（启用时核对），一个任务可以被多个实例引用；DSL 写了 factor_params 的实例启用时独占关联主帧任务：创建时不检查，主帧任务已关联到别的实例时启用被拒；创建后不能改"),
 		strFlag("logical-account-id", "instance.logical_account_id", "挂载的逻辑账户；不挂＝观察实例，只算目标不下单"),
 		strFlag("instance-id", "instance.instance_id", "实例 ID；不给由服务端生成，重试创建时带上同一个 ID 保持幂等"),
 		boolFlag("enable", "instance.enabled", "创建后立即启用；不加则创建后停用，确认无误再 enable"),
@@ -49,7 +48,7 @@ func init() {
 			Flags: updateInstanceFlags},
 		rpcSpec{Path: []string{"strategy", "instance", "enable"}, Destructive: true, Short: "启用策略实例（挂了账户的实例启用后会按目标下单；默认只预览，--yes 才执行）", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": true},
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
-		rpcSpec{Path: []string{"strategy", "instance", "disable"}, Destructive: true, Short: "停用策略实例（默认只预览，--yes 才执行）", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": false},
+		rpcSpec{Path: []string{"strategy", "instance", "disable"}, Destructive: true, Short: "停用策略实例；对已停用的实例再执行一次会重新通知 Trade 关闭最近一次挂账户的会话（默认只预览，--yes 才执行）", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": false},
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
 
 		rpcSpec{Path: []string{"strategy", "result", "list"}, Short: "列出实例每期的结果", Service: strategyMgr, Method: "ListStrategyResults", Page: rpcPagePSize,
@@ -64,8 +63,10 @@ func init() {
 				mapFlag("factor-task", "factor_tasks", "读取的因子计算任务，写成 市场=任务 ID，可重复：现货、永续策略各给一个（spot=…、swap=…，混合市场两个都要给），股票策略 equity=…，统一数据集上的任务 multi=…；参考市场的任务按市场给，附加来源写 来源名:市场=任务 ID；从实例发起时可省略（读实例关联的任务）"),
 				timeFlag("from", "start_time", "起点（RFC3339）", true), timeFlag("to", "end_time", "终点（RFC3339）", true),
 				{Name: "spot-fee-bps", Field: "spot_fee_bps", Kind: rpcFloat, Usage: "现货与股票的单边费率（基点）"}, {Name: "swap-fee-bps", Field: "swap_fee_bps", Kind: rpcFloat, Usage: "永续的单边费率（基点）"},
+				{Name: "slippage-bps", Field: "slippage_bps", Kind: rpcFloat, Usage: "滑点（基点，0～200）：成交价在收盘价上按方向加减这个比例，买入上浮、卖出下浮；不写为 0"},
 				strFlag("funding-column", "funding_column", "永续持仓按 View 里的这一列结算资金费（本根累计的资金费率，例如 funding_rate）；不写不计，策略池写在池 DSL 的 fees.funding_column"),
-				strFlag("instance-id", "instance_id", "沿用这个实例当前会话的策略版本与因子任务")}},
+				strFlag("instance-id", "instance_id", "沿用这个实例当前会话的策略版本与因子任务"),
+				strFlag("input", "input", "主帧的因子数据来源：view（默认，读因子任务的结果 View）或 compute（因子现算：经主机网关调因子引擎，按因子机本地 K 线与回放中的参数现算，不受 View 保留根数限制）；声明了 factor_params 的策略必须用 compute；compute 不支持策略池、绑了两个主帧任务的实例与股票市场")}},
 		rpcSpec{Path: []string{"strategy", "replay", "list"}, Short: "列出策略历史回放", Service: strategyMgr, Method: "ListReplays", Page: rpcPagePSize},
 		rpcSpec{Path: []string{"strategy", "replay", "show"}, Short: "查看一次回放", Service: strategyMgr, Method: "GetReplay",
 			Flags: []rpcFlag{reqFlag("replay-id", "replay_id", "回放 ID")}},
@@ -73,16 +74,6 @@ func init() {
 			Flags: []rpcFlag{reqFlag("replay-id", "replay_id", "回放 ID"), boolFlag("brief", "brief", "只返回摘要")}},
 		rpcSpec{Path: []string{"strategy", "replay", "cancel"}, Short: "取消回放", Service: strategyMgr, Method: "CancelReplay",
 			Flags: []rpcFlag{reqFlag("replay-id", "replay_id", "回放 ID")}},
-
-		rpcSpec{Path: []string{"strategy", "template", "list"}, Short: "列出策略模板", Service: strategyMgr, Method: "ListStrategyTemplates"},
-		rpcSpec{Path: []string{"strategy", "template", "show"}, Short: "查看一个模板", Service: strategyMgr, Method: "GetStrategyTemplate",
-			Flags: []rpcFlag{reqFlag("template-id", "template_id", "模板 ID")}},
-		rpcSpec{Path: []string{"strategy", "template", "save"}, Short: "保存模板", Service: strategyMgr, Method: "SaveStrategyTemplate",
-			Flags: []rpcFlag{fileFlag("template-file", "template_yaml", "模板 YAML 文件；- 为标准输入", true)}},
-		rpcSpec{Path: []string{"strategy", "template", "delete"}, Short: "删除模板（默认只预览，--yes 才执行）", Service: strategyMgr, Method: "DeleteStrategyTemplate", Destructive: true,
-			Flags: []rpcFlag{reqFlag("template-id", "template_id", "模板 ID")}},
-		rpcSpec{Path: []string{"strategy", "template", "render"}, Short: "用变量渲染模板，得到策略 DSL", Service: strategyMgr, Method: "RenderStrategyTemplate",
-			Flags: []rpcFlag{reqFlag("template-id", "template_id", "模板 ID"), mapFlag("var", "variables", "模板变量 名=值，可重复"), strFlag("params-csv", "params_csv", "参数 CSV")}},
 
 		rpcSpec{Path: []string{"strategy", "display", "get"}, Short: "查看实例的展示设置", Service: strategyMgr, Method: "GetStrategyDisplaySettings",
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},

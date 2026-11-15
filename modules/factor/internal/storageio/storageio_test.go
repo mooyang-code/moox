@@ -186,6 +186,22 @@ func TestReportComputedBuildsDeterministicEventID(t *testing.T) {
 	require.Equal(t, primary.reportIDs[0], primary.reportIDs[1])
 }
 
+// Storage 判为无效请求（例如完成标记通不过事件校验）不是基础设施错误：重试也不会通过，调用方不重试；内部错误照常重试。
+func TestReportComputedInvalidRequestIsNotRetried(t *testing.T) {
+	marker := PeriodMarker{
+		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m",
+		PeriodTime: 1791115200, Status: "complete", TriggerEventID: "collector-event",
+	}
+	primary := &primaryFake{reportRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "完成标记无法通过事件校验"}}
+	err := NewClient(primary, nil, nil).ReportComputed(context.Background(), marker)
+	require.Error(t, err)
+	require.False(t, errors.Is(err, ErrInfra))
+
+	primary = &primaryFake{reportRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "pebble unavailable"}}
+	err = NewClient(primary, nil, nil).ReportComputed(context.Background(), marker)
+	require.ErrorIs(t, err, ErrInfra)
+}
+
 func TestComputedExistsNotFoundIsFalse(t *testing.T) {
 	for name, rsp := range map[string]*storagepb.GetDatasetPeriodCompletedRsp{
 		"absent":         {RetInfo: successRet(), Found: false},
@@ -366,6 +382,7 @@ type primaryFake struct {
 	writeErr       error
 	writeRet       *commonpb.RetInfo
 	reportIDs      []string
+	reportRet      *commonpb.RetInfo
 	computedRsp    *storagepb.GetDatasetPeriodCompletedRsp
 	computedReq    *storagepb.GetDatasetPeriodCompletedReq
 	readDeadlines  []time.Duration
@@ -511,6 +528,9 @@ func (f *primaryFake) UpsertFields(_ context.Context, req *storagepb.PrimaryUpse
 func (f *primaryFake) ReportDatasetPeriodCompleted(_ context.Context, req *storagepb.ReportDatasetPeriodCompletedReq, _ ...client.Option) (*storagepb.ReportDatasetPeriodCompletedRsp, error) {
 	id := computedEventID(req.GetSpaceId(), req.GetMarker())
 	f.reportIDs = append(f.reportIDs, id)
+	if f.reportRet != nil {
+		return &storagepb.ReportDatasetPeriodCompletedRsp{RetInfo: f.reportRet}, nil
+	}
 	return &storagepb.ReportDatasetPeriodCompletedRsp{RetInfo: successRet(), EventId: id}, nil
 }
 

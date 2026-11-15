@@ -4,6 +4,7 @@ import type {
   FactorTask,
   FactorTaskInfo,
   FactorTaskStatus,
+  MemberParamState,
   MemberStatus
 } from "@/api/factor/types";
 
@@ -97,12 +98,11 @@ export function memberPeriodState(info: Pick<FactorTaskInfo, "last_run">, member
   return info.last_run?.factors?.find(item => (item.member_key || item.factor_id) === memberKey);
 }
 
-/** 可变成员最近一次被接受的提交：从未提交过返回 null（实际用定义的默认参数）。 */
-export function lastSubmission(member: Pick<FactorMember, "kind" | "last_submitted_period" | "last_submitted_at">) {
-  if (member.kind !== "var") return null;
-  const period = Number(member.last_submitted_period || 0);
+/** 可变成员最近一次被接受的提交（GetFactorParams 的结果）：从未提交过返回 null（实际用定义的默认参数）。 */
+export function lastSubmission(state?: Pick<MemberParamState, "last_submitted_period" | "last_submitted_at">) {
+  const period = Number(state?.last_submitted_period || 0);
   if (!period) return null;
-  return { period, at: member.last_submitted_at || "" };
+  return { period, at: state?.last_submitted_at || "" };
 }
 
 /** 任务名直接用作结果数据集的名称：1～10 个字、含汉字、首尾无空白、无控制字符（与服务端、CLI 的规则一致）。 */

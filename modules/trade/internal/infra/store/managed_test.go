@@ -22,7 +22,7 @@ func seedManagedFixture(t *testing.T, fundSettings string, filled []managedOrder
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			ExecutionMode:   "PAPER",
 			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
 			FundSettingsJSON: fundSettings,
 		}); err != nil {
@@ -31,6 +31,9 @@ func seedManagedFixture(t *testing.T, fundSettings string, filled []managedOrder
 		if err := tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true, Priority: 1,
 		}); err != nil {
+			return err
+		}
+		if err := seedCurrentTarget(tx, "runner-1"); err != nil {
 			return err
 		}
 		for index, order := range filled {

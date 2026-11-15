@@ -235,7 +235,7 @@ func (s *Syncer) PullStaged(ctx context.Context, spec Spec, subjects []string, e
 
 // PullStagedTags 与 PullStaged 相同，只是标的的起点按各 series_tag 自己的最新时间算（统一数据集）：tags 给出每个标的期望的
 // series_tag，起点取这些序列里最落后的一条的最新时间之后，落后的市场不会被另一个市场的最新时间盖住。
-// 标的没有列在 tags 里时按并集的最新时间（单序列数据集的原有行为）。
+// 标的没有列在 tags 里时按并集的最新时间（PullStaged：窗口准备、历史回补这类不区分序列的拉取）。
 func (s *Syncer) PullStagedTags(ctx context.Context, spec Spec, subjects []string, tags map[string][]string, end time.Time) (*StagedPull, error) {
 	staged := &StagedPull{syncer: s, spec: spec}
 	step, err := seriesstore.Step(spec.Source.Freq)

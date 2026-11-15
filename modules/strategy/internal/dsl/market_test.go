@@ -123,73 +123,12 @@ func TestValidateModeRestrictions(t *testing.T) {
 	}
 }
 
-func TestValidateModeTrancheRestrictions(t *testing.T) {
-	t.Parallel()
-	tranche := func(sizing string, shortWeight string) string {
-		return `name: t
-rules:
-  - id: g
-    type: tranche
-    weight: 1
-    tranche:
-      hold_period: 3
-      long_factors: [{factor: x1}]
-      long_weight: 1
-      short_weight: ` + shortWeight + `
-      short_factors: [{factor: x1}]
-      sizing: {method: ` + sizing + `}
-`
-	}
-	spot, swap, both := SingleMarket(MarketSpot), SingleMarket(MarketSwap), Market{MarketBoth, MarketSwap}
-	cases := []struct {
-		name, dsl string
-		mode      Market
-		want      string
-	}{
-		{"现货按权重持有可以", tranche("weight", "0"), spot, ""},
-		{"现货按数量持有", tranche("quantity", "0"), spot, "只能用 sizing.method: weight"},
-		{"现货做空", tranche("weight", "0.5"), spot, "不能做空"},
-		{"两边选的混合市场", tranche("weight", "0"), both, "S1 暂不支持双市场 tranche"},
-		{"两边选现货优先", tranche("weight", "0"), Market{MarketBoth, MarketSpot}, "S1 暂不支持双市场 tranche"},
-		{"现货选币永续下单", tranche("weight", "0"), Market{MarketSpot, MarketSwap}, "S1 暂不支持双市场 tranche"},
-		{"纯永续按权重持有", tranche("weight", "0.5"), swap, ""},
-		{"纯永续不受限", tranche("quantity", "0.5"), swap, ""},
-	}
-	for _, tc := range cases {
-		strategy, err := Parse([]byte(tc.dsl))
-		if err != nil {
-			t.Fatalf("%s：解析：%v", tc.name, err)
-		}
-		err = ValidateMode(strategy, tc.mode)
-		if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
-			t.Fatalf("%s：期望 %q，实际 %v", tc.name, tc.want, err)
-		}
-	}
-}
-
-// 显式写了 market 的 DSL 保存（解析）时就按模式校验：双市场 tranche、纯现货做空、双任务用 factor_params 都在保存时被拒绝。
+// 显式写了 market 的 DSL 保存（解析）时就按模式校验：纯现货做空、双任务用 factor_params 都在保存时被拒绝。
 func TestParseValidatesDeclaredMarketMode(t *testing.T) {
 	t.Parallel()
-	tranche := func(market string) string {
-		return "name: t\n" + market + `rules:
-  - id: g
-    type: tranche
-    weight: 1
-    tranche:
-      hold_period: 3
-      long_factors: [{factor: x1}]
-      long_weight: 1
-      short_weight: 0
-      sizing: {method: weight}
-`
-	}
 	cases := []struct{ name, dsl, want string }{
-		{"双市场 tranche", tranche("market: {select: both, prefer: swap}\n"), "S1 暂不支持双市场 tranche"},
-		{"现货选币永续下单的 tranche", tranche("market: {select: spot, prefer: swap}\n"), "S1 暂不支持双市场 tranche"},
 		{"纯现货做空", "name: s\nmarket: {select: spot}\nrules:\n  - {id: s, type: rank, side: short, score: close, select: {bottom: 1}, weight: 1}\n", "不允许规则 s 做空"},
 		{"双市场不许 factor_params", "name: f\nmarket: {select: both, prefer: spot}\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\nfactor_params:\n  ma__var:\n    window: \"close\"\n", "factor_params"},
-		{"纯永续 tranche 可以", tranche("market: {select: swap}\n"), ""},
-		{"没写 market 的 tranche 留到启用时校验", tranche(""), ""},
 	}
 	for _, tc := range cases {
 		_, err := Parse([]byte(tc.dsl))

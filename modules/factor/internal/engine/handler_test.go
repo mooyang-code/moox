@@ -35,6 +35,7 @@ func periodDelivery(t *testing.T, datasetID string) *jetstream.Delivery {
 		DatasetId: datasetID, Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
 		Source: "ledger", SnapshotRef: "scope-1",
 		UniverseSubjectIds: []string{"BTC"}, CompletedAt: timestamppb.New(period.Add(time.Minute)),
+		UniverseSeries: []*storagepb.SeriesRef{{SubjectId: "BTC", SeriesTag: "venue:binance"}},
 	}
 	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{
 		EventID: "event-1", OccurredAt: period.Add(time.Minute), SpaceID: "crypto", SubjectID: datasetID,

@@ -108,6 +108,8 @@ message Replay {
   double spot_fee_bps = 21;              // 现货与股票的单边手续费
   double swap_fee_bps = 22;              // 永续的单边手续费
   string funding_column = 23;            // 永续持仓结算资金费用的列（本根累计的资金费率）；空串表示不计
+  double slippage_bps = 24;              // 滑点（基点）：成交价在收盘价上按方向加减这个比例
+  string input = 25;                     // 主帧的输入来源：view（读结果 View）| compute（因子现算：经主机网关调因子引擎按因子机本地 K 线现算）
 }
 
 // ReplayBar 是回放中一个周期的记录。
@@ -128,6 +130,7 @@ message ReplayBar {
   int32 liquidated = 14;                 // 本期清算的标的数
   double spot_value = 15;                // 期末现货类持仓的市值之和
   double swap_value = 16;                // 期末永续持仓的净名义价值（多头为正，空头为负）
+  string params_json = 17;               // 这一期因子实际生效的、由回放逐期提交的可变成员参数（成员键 → 参数名 → {default, overrides}）；只有因子现算的调参策略有内容，其余为 {}；brief 时为 {}
 }
 
 message PageRequest {
@@ -208,6 +211,8 @@ message StartReplayReq {
   double spot_fee_bps = 9;               // 现货与股票的单边手续费（基点）
   double swap_fee_bps = 10;              // 永续的单边手续费（基点）
   string funding_column = 11;            // 可选：永续持仓按 View 里的这一列（本根累计的资金费率，例如 funding_rate）结算资金费；策略池不能写，改写池 DSL 的 fees.funding_column
+  double slippage_bps = 12;              // 可选：滑点（基点，0～200）；成交价在收盘价上按方向加减这个比例，买入上浮、卖出下浮
+  string input = 13;                     // 可选：主帧的输入来源，view（默认，读结果 View）| compute（因子现算）；声明了 factor_params 的策略必须用 compute；compute 不支持策略池、绑了两个主帧任务的实例与股票市场
 }
 message StartReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; int32 bar_count = 3; string first_bar_end = 4; string last_bar_end = 5; }
 message GetReplayReq { string replay_id = 1; }
@@ -230,32 +235,6 @@ message GetStrategyDisplaySettingsReq { string instance_id = 1; }
 message GetStrategyDisplaySettingsRsp { common.RetInfo ret_info = 1; DisplayHidden hidden = 2; }
 message SetStrategyDisplaySettingsReq { string instance_id = 1; DisplayHidden hidden = 2; }
 message SetStrategyDisplaySettingsRsp { common.RetInfo ret_info = 1; DisplayHidden hidden = 2; }
-
-// StrategyTemplate 是策略模板：命名的 DSL 骨架、变量定义与参数表样例行（template_yaml 原文）。
-// columns 是骨架里参数表的列（没有参数表时为空），variables 是声明的变量名（不含内置的 name）。
-message StrategyTemplate {
-  string template_id = 1;
-  string name = 2;
-  string description = 3;
-  string template_yaml = 4;
-  repeated string columns = 5;
-  repeated string variables = 6;
-  string created_at = 7;
-  string updated_at = 8;
-}
-
-message ListStrategyTemplatesReq {}
-message ListStrategyTemplatesRsp { common.RetInfo ret_info = 1; repeated StrategyTemplate templates = 2; }
-message GetStrategyTemplateReq { string template_id = 1; }
-message GetStrategyTemplateRsp { common.RetInfo ret_info = 1; StrategyTemplate template = 2; }
-// SaveStrategyTemplateReq 按 template_yaml 里的 template_id 新建或整体替换；保存前用默认值与 sample_row 试渲染并校验 DSL。
-message SaveStrategyTemplateReq { string template_yaml = 1; }
-message SaveStrategyTemplateRsp { common.RetInfo ret_info = 1; StrategyTemplate template = 2; }
-message DeleteStrategyTemplateReq { string template_id = 1; }
-message DeleteStrategyTemplateRsp { common.RetInfo ret_info = 1; }
-// RenderStrategyTemplateReq 给定变量（含策略名 name）与参数表 CSV（第一行是表头），返回生成的 DSL；不落库。
-message RenderStrategyTemplateReq { string template_id = 1; map<string, string> variables = 2; string params_csv = 3; }
-message RenderStrategyTemplateRsp { common.RetInfo ret_info = 1; string dsl_yaml = 2; }
 
 service StrategyMgr {
   rpc CreateStrategy(CreateStrategyReq) returns (CreateStrategyRsp);
@@ -280,9 +259,4 @@ service StrategyMgr {
   rpc CancelReplay(CancelReplayReq) returns (CancelReplayRsp);
   rpc GetStrategyDisplaySettings(GetStrategyDisplaySettingsReq) returns (GetStrategyDisplaySettingsRsp);
   rpc SetStrategyDisplaySettings(SetStrategyDisplaySettingsReq) returns (SetStrategyDisplaySettingsRsp);
-  rpc ListStrategyTemplates(ListStrategyTemplatesReq) returns (ListStrategyTemplatesRsp);
-  rpc GetStrategyTemplate(GetStrategyTemplateReq) returns (GetStrategyTemplateRsp);
-  rpc SaveStrategyTemplate(SaveStrategyTemplateReq) returns (SaveStrategyTemplateRsp);
-  rpc DeleteStrategyTemplate(DeleteStrategyTemplateReq) returns (DeleteStrategyTemplateRsp);
-  rpc RenderStrategyTemplate(RenderStrategyTemplateReq) returns (RenderStrategyTemplateRsp);
 }

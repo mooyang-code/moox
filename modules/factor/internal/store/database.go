@@ -111,14 +111,16 @@ func (s *Store) validateSchemaTables(tables []string, requireAll bool) error {
 			"c_factor_id", "c_name", "c_category_id", "c_spec", "c_spec_hash", "c_allow_partial_universe", "c_ctime", "c_mtime",
 		},
 		"t_factor_task_members": {
-			"c_task_id", "c_member_key", "c_factor_id", "c_kind", "c_status", "c_params", "c_last_submitted_params",
-			"c_last_submitted_period", "c_last_request_id", "c_last_submitted_at", "c_ctime", "c_mtime",
+			"c_task_id", "c_member_key", "c_factor_id", "c_kind", "c_status", "c_params", "c_ctime", "c_mtime",
+		},
+		"t_factor_member_params": {
+			"c_task_id", "c_member_key", "c_params", "c_period", "c_request_id", "c_submitted_at",
 		},
 		"t_factor_recalc_jobs": {
 			"c_job_id", "c_request_id", "c_task_id", "c_members_json", "c_subjects_json",
 			"c_members_omitted", "c_subjects_omitted",
 			"c_start_time", "c_end_time", "c_status", "c_progress_time", "c_error",
-			"c_default_filled_json", "c_engine_id", "c_lease_token", "c_lease_expires_at", "c_ctime", "c_mtime",
+			"c_default_filled_json", "c_engine_id", "c_lease_token", "c_lease_expires_at", "c_udf_bindings", "c_ctime", "c_mtime",
 		},
 		"t_factor_tasks": {
 			"c_task_id", "c_space_id", "c_name", "c_source_dataset_id", "c_freq",
@@ -132,9 +134,6 @@ func (s *Store) validateSchemaTables(tables []string, requireAll bool) error {
 		},
 		"t_factor_udf_versions": {
 			"c_hash", "c_name", "c_manifest", "c_wasm", "c_source_ref", "c_sdk_version", "c_toolchain", "c_report", "c_ctime",
-		},
-		"t_factor_recalc_job_bindings": {
-			"c_job_id", "c_bindings", "c_ctime",
 		},
 	}
 	if requireAll && len(tables) != len(expected) {

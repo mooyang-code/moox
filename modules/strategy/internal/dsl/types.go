@@ -1,7 +1,7 @@
 // Package dsl 定义策略 DSL 的数据结构、严格解析、校验与表达式编译。
 //
 // DSL 只描述截面上的选股与配权逻辑：规则是列表，每条规则有稳定的 id、展示用的 name 和
-// 固定词表的 type（rank 截面选股、signal 固定池择时）。时序计算一律在因子层完成，
+// 固定词表的 type（rank 截面选股）。时序计算一律在因子层完成，
 // 策略表达式只在当期一帧数据上求值，可选地引用上一根（bars[-1]）。
 package dsl
 
@@ -15,8 +15,6 @@ import (
 const (
 	// RuleTypeRank 是截面选股规则：filter → score → select → weight → filter_after。
 	RuleTypeRank = "rank"
-	// RuleTypeSignal 是固定池择时规则：对旧理论持仓判 exit，再对候选判 entry。
-	RuleTypeSignal = "signal"
 
 	SideLong  = "long"
 	SideShort = "short"
@@ -106,8 +104,7 @@ type Holding struct {
 	At       string
 }
 
-// Rule 是一条规则。rank 规则使用 Filter、Score、Select、Weight、FilterAfter、Holding；
-// signal 规则使用 Pool、Entry、Exit、Weight；tranche 规则使用 Weight（只有 total）与 Tranche。
+// Rule 是一条规则（类型只有 rank）。
 type Rule struct {
 	ID   string
 	Name string
@@ -123,18 +120,14 @@ type Rule struct {
 	Weight      Weight
 	Side        string
 	FilterAfter string
-	Entry       string
-	Exit        string
 	Holding     *Holding
 	// Hold 是 rank 规则的进出场持有（见 hold.go）。
 	Hold *Hold
-	// Scale 是规则输出权重上的仓位系数；OnMissing 是持有标的缺数时的冻结保持（见 scale.go，tranche 规则不支持 on_missing）。
+	// Scale 是规则输出权重上的仓位系数；OnMissing 是持有标的缺数时的冻结保持（见 scale.go）。
 	Scale     *Scale
 	OnMissing *OnMissing
-	// Stop 是 rank、signal 规则的止损止盈（见 stop.go）；tranche 规则写在子策略模板里。
+	// Stop 是规则的止损止盈（见 stop.go）。
 	Stop *Stop
-	// Tranche 是 tranche 规则的子策略模板与参数表（见 tranche.go）。
-	Tranche *TrancheSpec
 	// Market 是规则级市场（spot 或 swap，见 market.go）：策略涉及两个市场时，这条规则只从该市场的序列选择，目标也落在该市场；
 	// 空串表示沿用策略的选币池与定市场。
 	Market string

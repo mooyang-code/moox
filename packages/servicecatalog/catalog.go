@@ -43,8 +43,9 @@ type Component struct {
 	Health   Health    `yaml:"health" json:"health"`
 	Services []Service `yaml:"services,omitempty" json:"services,omitempty"`
 	Doctor   Doctor    `yaml:"doctor" json:"doctor"`
-	// ExternalProgram 标记运行在登记主机上、但不经主机网关路由的外部程序（因子引擎、归档 worker）：
-	// 它以同名外部身份（Principal）经 Access 访问系统，没有自己的服务，只有一个健康端口与可选的 RelayHTTP 端口。
+	// ExternalProgram 标记运行在登记主机上、由 systemd 用户服务托管的外部程序（因子引擎、归档 worker）：
+	// 它以同名外部身份（Principal）经 Access 访问系统；除健康端口与可选的 RelayHTTP 端口外，还可以声明只监听本机的服务，
+	// 由所在主机的网关按路由转发（因子引擎的 EngineControl），不能声明其他端口。
 	ExternalProgram bool `yaml:"external_program,omitempty" json:"external_program,omitempty"`
 	// RelayHTTP 是外部程序只听回环地址的 HTTP 端口：装在只出站主机上时，声明的调用方可经 control 中转连接它
 	// （归档 worker 的下载与预览）。端口本身不验签，由 control 的中转按调用方白名单放行。

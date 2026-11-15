@@ -23,7 +23,7 @@ func seedTransferParents(t *testing.T) *Store {
 			return err
 		}
 		return tx.CreateLogicalAccount(LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l", OwnerInstanceID: "r", OwnerSessionID: "s",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l",
 			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
 		})
 	}))

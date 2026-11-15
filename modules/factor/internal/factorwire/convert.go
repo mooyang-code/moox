@@ -400,25 +400,19 @@ func SnapshotFromPB(params map[string]*factorpb.ParamValue) domain.ParamSnapshot
 }
 
 // MemberParamStateToPB 转换一个可变成员最近一次被接受的提交。
-func MemberParamStateToPB(member domain.FactorTaskMember) *factorpb.MemberParamState {
+func MemberParamStateToPB(member domain.MemberParamState) *factorpb.MemberParamState {
 	state := &factorpb.MemberParamState{
-		MemberKey: member.MemberKey, Params: SnapshotToPB(member.LastSubmittedParams),
+		MemberKey: member.MemberKey, Params: SnapshotToPB(member.Params),
 		LastSubmittedPeriod: member.LastSubmittedPeriod, LastRequestId: member.LastRequestID,
 	}
-	if member.LastSubmittedAt != nil {
-		state.LastSubmittedAt = FormatTime(*member.LastSubmittedAt)
+	if !member.LastSubmittedAt.IsZero() {
+		state.LastSubmittedAt = FormatTime(member.LastSubmittedAt)
 	}
 	return state
 }
 
-// MemberParamState 是引擎和策略读到的可变成员的最近一次提交；LastSubmittedPeriod 为 0 表示从未提交过（Params 为空）。
-type MemberParamState struct {
-	MemberKey           string
-	Params              domain.ParamSnapshot
-	LastSubmittedPeriod int64
-	LastRequestID       string
-	LastSubmittedAt     time.Time
-}
+// MemberParamState 是引擎和策略读到的可变成员的最近一次提交。
+type MemberParamState = domain.MemberParamState
 
 // MemberParamStateFromPB 还原一个可变成员最近一次被接受的提交。
 func MemberParamStateFromPB(pb *factorpb.MemberParamState) (MemberParamState, error) {

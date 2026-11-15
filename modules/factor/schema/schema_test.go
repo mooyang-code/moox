@@ -17,7 +17,8 @@ func TestFactorSchemaContainsExpectedTables(t *testing.T) {
 		// 成员按成员键标识：同一因子可以用不同参数加入一个任务多次；一个因子最多一个可变成员。
 		"PRIMARY KEY (c_task_id, c_member_key)",
 		"ux_t_factor_task_members_var",
-		"c_last_submitted_params TEXT NOT NULL DEFAULT '{}'",
+		"CREATE TABLE IF NOT EXISTS t_factor_member_params",
+		"REFERENCES t_factor_task_members (c_task_id, c_member_key) ON DELETE CASCADE",
 		"UNIQUE (c_space_id, c_name)",
 		"c_default_filled_json TEXT NOT NULL DEFAULT '{}'",
 		"FOREIGN KEY (c_category_id) REFERENCES t_factor_categories (c_category_id) ON DELETE RESTRICT",

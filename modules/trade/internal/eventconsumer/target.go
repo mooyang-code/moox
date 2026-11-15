@@ -122,14 +122,30 @@ func admitTarget(
 	if opts.Now != nil {
 		now = opts.Now().UTC()
 	}
+	// 按批 3 的 3.6 依次判断：1. 过期；2. 人工控制；3. 会话已关闭；4.（只对正式目标）与当前目标行比较会话先后。
 	// 过期最先判断：停用再启用策略后，旧会话还在路上的目标多半已经过期，按过期终止，不当成授权冲突告警。
 	// 目标可能早于生效时刻送到（策略与交易的时钟、传输不完全对齐）：有效期内照常接收，执行器保持 PENDING
 	// 到 bar_end_time 才执行，过了 valid_until 才终止。
 	if !now.Before(request.GetValidUntil().AsTime()) {
 		return admittedTarget{}, jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}, true
 	}
-	if rejection, rejected := ownershipRejection(account, request); rejected {
-		return admittedTarget{}, rejection, true
+	if account.ControlMode != "STRATEGY" {
+		return admittedTarget{}, targetRejection("authorization_conflict", fmt.Errorf("%w: 组合账户不是策略控制的", store.ErrTargetAuthorization)), true
+	}
+	if err := store.CheckClosedTargetSession(account, request.GetSessionStartedAt()); err != nil {
+		return admittedTarget{}, sessionRejection(err), true
+	}
+	// 影子目标只做上面三步，不与正式目标行比较（3.6）。会话先后在回执检查之前判断，同一会话的 bar 先后在回执检查之后（acceptTarget）。
+	if !request.GetShadow() {
+		current, currentErr := opts.Store.GetCurrentTarget(ctx, message.GetSpaceId(), request.GetLogicalAccountId())
+		switch {
+		case currentErr == nil:
+			if err := store.CompareTargetSession(current.TargetSession, requestSession(request)); err != nil {
+				return admittedTarget{}, sessionRejection(err), true
+			}
+		case !errors.Is(currentErr, gorm.ErrRecordNotFound):
+			return admittedTarget{}, retryTarget(currentErr), true
+		}
 	}
 	// 上游标的 ID 不带市场后缀，回执和目标只保存标准化后的 Trade 内部 ID。
 	tradable, err := opts.Store.LogicalAccountMarkets(ctx, message.GetSpaceId(), account.LogicalAccountID)
@@ -155,23 +171,18 @@ func admitTarget(
 	return admittedTarget{message: message, request: request, account: account}, jetstream.HandlerResult{}, false
 }
 
-// ownershipRejection 判断目标所属的策略会话是不是账户当前的所有者，不是时给出拒绝结论。
-// 账户已释放（所有者为空）或同一实例换了会话（停用再启用）：这是旧会话的目标，按被取代处理，不告警；
-// 只有账户改成人工控制或被别的实例持有，才是需要人看的授权冲突。
-func ownershipRejection(
-	account store.LogicalAccountRecord,
-	request *tradeeventpb.LogicalAccountTargetWeightRequested,
-) (jetstream.HandlerResult, bool) {
-	if account.ControlMode != "STRATEGY" {
-		return targetRejection("authorization_conflict", fmt.Errorf("%w: 组合账户不是策略控制的", store.ErrTargetAuthorization)), true
+// requestSession 是目标事件所属的策略会话。
+func requestSession(request *tradeeventpb.LogicalAccountTargetWeightRequested) store.TargetSession {
+	return store.TargetSession{InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StartedAt: request.GetSessionStartedAt()}
+}
+
+// sessionRejection 把会话检查的结果转成拒绝结论：会话已关闭或比当前目标更早的，是旧会话的目标，按被取代处理、不告警；
+// 人工控制、开始时刻相同而会话不同（不应出现）是需要人看的授权冲突。
+func sessionRejection(err error) jetstream.HandlerResult {
+	if errors.Is(err, store.ErrTargetSuperseded) {
+		return targetRejection("superseded", err)
 	}
-	if account.OwnerInstanceID == request.GetInstanceId() && account.OwnerSessionID == request.GetSessionId() {
-		return jetstream.HandlerResult{}, false
-	}
-	if account.OwnerInstanceID == "" || account.OwnerInstanceID == request.GetInstanceId() {
-		return targetRejection("superseded", fmt.Errorf("%w: 目标所属的策略会话已不是账户当前的所有者", store.ErrConflict)), true
-	}
-	return targetRejection("authorization_conflict", fmt.Errorf("%w: 目标所属的策略会话与账户当前授权不一致", store.ErrConflict)), true
+	return targetRejection("authorization_conflict", err)
 }
 
 // acceptTarget 把已通过校验的真实目标换算成数量快照，在账户锁内连同回执一起落库，成功后唤醒执行器。
@@ -203,7 +214,7 @@ func acceptTarget(
 	barEnd := request.GetBarEndTime().AsTime().UnixMilli()
 	sequence := uint64(barEnd)
 	instanceID := request.GetInstanceId()
-	if current, currentErr := opts.Store.GetLogicalAccountTarget(ctx, message.GetSpaceId(), request.GetLogicalAccountId()); currentErr == nil {
+	if current, currentErr := opts.Store.GetCurrentTarget(ctx, message.GetSpaceId(), request.GetLogicalAccountId()); currentErr == nil {
 		if current.InstanceID == request.GetInstanceId() && current.SessionID == request.GetSessionId() &&
 			(current.BarEndTime > barEnd || (current.BarEndTime == barEnd && current.TargetID != request.GetTargetId())) {
 			// The command is permanently superseded. TERM preserves the
@@ -246,6 +257,7 @@ func acceptTarget(
 		CommandSequence:  sequence,
 		InstanceID:       request.GetInstanceId(),
 		SessionID:        request.GetSessionId(),
+		SessionStartedAt: request.GetSessionStartedAt(),
 		StrategyID:       request.GetStrategyId(),
 		Targets:          make([]store.InstrumentTarget, 0, len(request.GetTargets())),
 		Status:           "PENDING",
@@ -279,19 +291,13 @@ func acceptTarget(
 	var accepted bool
 	_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt)
 	if err != nil {
-		if errors.Is(err, store.ErrTargetAuthorization) {
-			// 入口检查之后、拿到组合锁之前会话被释放或换掉（释放全程持锁，最后才改所有者）：按当前所有者重新分类，
-			// 旧会话的目标按被取代处理、不告警。读不到账户时按下面的原样终止。
-			if current, lookupErr := opts.Store.GetLogicalAccount(ctx, message.GetSpaceId(), request.GetLogicalAccountId()); lookupErr == nil {
-				if rejection, rejected := ownershipRejection(current, request); rejected {
-					return rejection
-				}
-			}
+		// 入口检查之后、拿到组合锁之前会话被关闭、来了更晚会话的目标或组合改成人工控制：落库时按同样的规则分类。
+		if errors.Is(err, store.ErrTargetSuperseded) || errors.Is(err, store.ErrTargetSessionConflict) || errors.Is(err, store.ErrTargetAuthorization) {
+			return sessionRejection(err)
 		}
 		if errors.Is(err, store.ErrInvalidRecord) ||
 			errors.Is(err, store.ErrConflict) ||
 			errors.Is(err, store.ErrTargetExpired) ||
-			errors.Is(err, store.ErrTargetAuthorization) ||
 			errors.Is(err, gorm.ErrRecordNotFound) {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 		}
@@ -350,7 +356,7 @@ func handleShadowTarget(
 	}
 	_, err = opts.Store.RecordShadowTarget(ctx, store.ShadowTargetRecord{
 		SpaceID: spaceID, TargetID: request.GetTargetId(), LogicalAccountID: request.GetLogicalAccountId(),
-		InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(),
+		InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), SessionStartedAt: request.GetSessionStartedAt(), StrategyID: request.GetStrategyId(),
 		BarEndTime: request.GetBarEndTime().AsTime().UTC().UnixMilli(), ValidUntil: request.GetValidUntil().AsTime().UTC().UnixMilli(),
 		WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime,
 		ReferencePricesJSON: mustMarshal(referencePriceByInstrument(conversion)), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets),

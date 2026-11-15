@@ -66,8 +66,8 @@ TRADE_TEST='TestExternalLogicalAccountTargetIsConsumedIntoTradeStore'
   CGO_ENABLED=1 go test -c -tags=e2e_external -o "$WORK_DIR/trade.test" ./test
 )
 
-# Trade 先认领账户与会话，Strategy 侧按启用时的校验确认授权后再求值。 Both test binaries share only the isolated broker and this
-# temporary coordination directory, not a database or hand-built event.
+# Trade 先建好策略控制的组合账户，Strategy 侧按启用时的只读核对（控制模式、市场）确认账户可用后再求值。
+# 两个测试进程只共用隔离的本机 NATS 与这个临时协调目录，不共用数据库，也不手工构造事件。
 "$WORK_DIR/trade.test" -test.v -test.timeout=60s -test.run="^${TRADE_TEST}$" \
   >"$WORK_DIR/trade-test.log" 2>&1 &
 TRADE_PID=$!

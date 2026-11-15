@@ -12,7 +12,7 @@ import (
 func snapshotSeries(subjects ...string) []seriesset.Series {
 	series := make([]seriesset.Series, 0, len(subjects))
 	for _, subject := range subjects {
-		series = append(series, seriesset.Series{SubjectID: subject})
+		series = append(series, seriesset.Series{SubjectID: subject, SeriesTag: goldenTag})
 	}
 	set, err := seriesset.Canonicalize(series)
 	if err != nil {
@@ -71,7 +71,7 @@ func TestRegisterSeriesSnapshotRejectsWhenLaterPeriodExists(t *testing.T) {
 	clock.set(period.Add(2 * time.Minute))
 	later := exp
 	later.PeriodTime = period.Add(5 * time.Minute).Unix()
-	_, err := store.CommitTimeSeriesBatch(ctx, later, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: goldenRow("crypto", "bars", "1m", seriesset.Series{SubjectID: "BTC-USDT"}, period.Add(5*time.Minute), 1)}})
+	_, err := store.CommitTimeSeriesBatch(ctx, later, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: goldenRow("crypto", "bars", "1m", seriesset.Series{SubjectID: "BTC-USDT", SeriesTag: goldenTag}, period.Add(5*time.Minute), 1)}})
 	require.NoError(t, err)
 	var stale StaleEffectiveFromError
 	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT", "ETH-USDT"), period.Add(4*time.Minute).Unix())
@@ -97,7 +97,11 @@ func TestRegisterSeriesSnapshotRejectsFarFutureAndAmbiguousSeries(t *testing.T) 
 	require.ErrorAs(t, err, &stale, "P 不在未来或不晚于最后登记时返回可识别的过期错误")
 
 	// 同一 (subject_id, series_tag) 出现两次，逐行校验会有歧义。
-	dup := append(snapshotSeries("BTC-USDT"), seriesset.Series{SubjectID: "btc-usdt"})
+	dup := append(snapshotSeries("BTC-USDT"), seriesset.Series{SubjectID: "btc-usdt", SeriesTag: goldenTag})
 	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", dup, soon+600)
 	require.Error(t, err)
+
+	// series_tag 为空的序列进不了周期完成事件的序列全集，登记时就拒绝。
+	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", []seriesset.Series{{SubjectID: "BTC-USDT"}}, soon+600)
+	require.ErrorContains(t, err, "series_tag is required")
 }

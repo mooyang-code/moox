@@ -164,7 +164,6 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "A 股组合",
-			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
 			ExecutionMode:   string(exchange.ExecutionModeLive),
 			SettlementAsset: "CNY", AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {

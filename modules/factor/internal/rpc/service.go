@@ -43,7 +43,7 @@ type CatalogAPI interface {
 	DeleteCategory(ctx context.Context, categoryID string) error
 	SetFactorCategory(ctx context.Context, factorID, categoryID string) (domain.FactorDef, error)
 	SubmitParams(ctx context.Context, writer, taskID string, period time.Time, requestID string, submissions []catalog.MemberSubmission) ([]store.ParamSubmitOutcome, error)
-	GetParams(ctx context.Context, taskID string) ([]domain.FactorTaskMember, error)
+	GetParams(ctx context.Context, taskID string) ([]domain.MemberParamState, error)
 }
 
 // RecalcJob is the RPC-facing representation of one durable recalc request.

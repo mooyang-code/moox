@@ -84,7 +84,7 @@ func logicalSeed(t *testing.T, server *ConsoleServer) {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l", OwnerInstanceID: "r", OwnerSessionID: "s",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l",
 			ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
 		}); err != nil {
 			return err
@@ -241,7 +241,7 @@ func TestSummarizeAccountPnlFundingFromIsTheLatestOfTheOldestTimes(t *testing.T)
 	}))
 	require.NoError(t, server.Store.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l", OwnerInstanceID: "r", OwnerSessionID: "s",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l",
 			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
 		}); err != nil {
 			return err

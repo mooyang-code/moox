@@ -20,10 +20,14 @@ rules:
 
   - id: btc_trend
     name: BTC 均线趋势跟随
-    type: signal
+    type: rank
     pool: [BTC-USDT]
-    entry: "bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20"
-    exit:  "bars[0].close < bars[0].ma_20"
+    allow_empty: true
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20"
+      exit: "bars[0].close < bars[0].ma_20"
     weight: {total: 0.2}
 
 portfolio:

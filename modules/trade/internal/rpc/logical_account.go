@@ -207,53 +207,23 @@ func (h *LogicalAccountServer) RemoveLogicalAccountMember(
 	}, nil
 }
 
-func (h *LogicalAccountServer) ClaimLogicalAccountOwner(
+// CloseTargetSession 关闭策略会话（Strategy 停用实例后调用，幂等），见 logicalaccount.Service.CloseTargetSession。
+func (h *LogicalAccountServer) CloseTargetSession(
 	ctx context.Context,
-	req *tradepb.ClaimLogicalAccountOwnerReq,
-) (*tradepb.ClaimLogicalAccountOwnerRsp, error) {
+	req *tradepb.CloseTargetSessionReq,
+) (*tradepb.CloseTargetSessionRsp, error) {
 	spaceID, err := requiredSpace(ctx)
 	if err == nil {
 		err = validatePB(req)
 	}
 	if err != nil {
-		return &tradepb.ClaimLogicalAccountOwnerRsp{
-			RetInfo: invalidOrErrorInfo(err),
-		}, nil
+		return &tradepb.CloseTargetSessionRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	record, _, err := h.LogicalAccounts.ClaimSession(
+	closed, err := h.LogicalAccounts.CloseTargetSession(
 		ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(),
-		req.GetSessionId(), req.GetExpectedAuthFence(),
+		req.GetSessionId(), req.GetSessionStartedAt(),
 	)
-	return &tradepb.ClaimLogicalAccountOwnerRsp{
-		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
-	}, nil
-}
-
-func (h *LogicalAccountServer) ReleaseLogicalAccountOwner(
-	ctx context.Context,
-	req *tradepb.ReleaseLogicalAccountOwnerReq,
-) (*tradepb.ReleaseLogicalAccountOwnerRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.ReleaseLogicalAccountOwnerRsp{
-			RetInfo: invalidOrErrorInfo(err),
-		}, nil
-	}
-	if err := h.LogicalAccounts.ReleaseSession(
-		ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(),
-		req.GetSessionId(), req.GetExpectedAuthFence(),
-	); err != nil {
-		return &tradepb.ReleaseLogicalAccountOwnerRsp{RetInfo: errorInfo(err)}, nil
-	}
-	record, err := h.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId())
-	return &tradepb.ReleaseLogicalAccountOwnerRsp{
-		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
-	}, nil
+	return &tradepb.CloseTargetSessionRsp{RetInfo: errorInfo(err), ClosedThrough: closed}, nil
 }
 
 func (h *LogicalAccountServer) PauseLogicalAccount(

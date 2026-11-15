@@ -38,13 +38,21 @@ func TestTradeProtoExposesLogicalAccountMethodsOnConsole(t *testing.T) {
 		"UpdateLogicalAccount",
 		"AddLogicalAccountMember",
 		"RemoveLogicalAccountMember",
-		"ClaimLogicalAccountOwner",
-		"ReleaseLogicalAccountOwner",
+		"CloseTargetSession",
 		"PauseLogicalAccount",
 		"ResumeLogicalAccount",
 		"FlattenLogicalAccount",
 	} {
 		require.NotNil(t, logical.Methods().ByName(method), method)
+	}
+	// 实例与组合账户的归属只记在 Strategy：Trade 没有认领、释放归属的方法，组合账户也不带归属字段。
+	for _, retired := range []protoreflect.Name{"ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner"} {
+		require.Nil(t, logical.Methods().ByName(retired), retired)
+	}
+	account := File_trade_service_proto.Messages().ByName("LogicalAccount")
+	require.NotNil(t, account)
+	for _, retired := range []protoreflect.Name{"owner_instance_id", "owner_session_id", "auth_fence"} {
+		require.Nil(t, account.Fields().ByName(retired), retired)
 	}
 }
 

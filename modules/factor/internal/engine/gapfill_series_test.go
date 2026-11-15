@@ -42,9 +42,9 @@ func seriesOf(subject string, tags ...string) []seriesset.Series {
 	return out
 }
 
-func unifiedFiller(f *gapFixture, universe universeReader, multi bool) {
+// frozenFiller 让恢复读给定的冻结全集。
+func frozenFiller(f *gapFixture, universe universeReader) {
 	f.filler.universe = universe
-	f.filler.unified = func(context.Context, domain.FactorTask) (bool, error) { return multi, nil }
 }
 
 // 统一数据集的时序恢复按待办周期读冻结全集：永续在第 1 期之后下架，第 1 期的冻结全集里没有它，
@@ -56,7 +56,7 @@ func TestGapFillerUnifiedTimeSeriesUsesFrozenUniversePerPeriod(t *testing.T) {
 		gapT0.Add(time.Minute).Unix(): {Subjects: []string{"BTC"}, Series: seriesOf("BTC", gapSpotTag)},
 	}}
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(f, universe, true)
+	frozenFiller(f, universe)
 	f.record(t, gapT0, "BTC", 0, "evt-0", factor)
 	f.record(t, gapT0, "BTC", 1, "evt-1", factor)
 	f.now = gapT0.Add(6 * time.Minute)
@@ -81,7 +81,7 @@ func TestGapFillerUnifiedTimeSeriesMergesPeriodsWithSameUniverse(t *testing.T) {
 		gapT0.Unix(): full, gapT0.Add(time.Minute).Unix(): full, gapT0.Add(2 * time.Minute).Unix(): full,
 	}}
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(f, universe, true)
+	frozenFiller(f, universe)
 	for minute := 0; minute < 3; minute++ {
 		f.record(t, gapT0, "BTC", minute, "evt", factor)
 	}
@@ -96,22 +96,24 @@ func TestGapFillerUnifiedTimeSeriesMergesPeriodsWithSameUniverse(t *testing.T) {
 	require.Equal(t, []string{"BTC"}, call.selection.Subjects)
 }
 
-// 单序列数据集（不是统一数据集）：不读 marker，保持原来的一次运行，Selection 不带序列全集。
-func TestGapFillerSingleSeriesDatasetDoesNotReadFrozenUniverse(t *testing.T) {
+// 只有一个 tag 的数据集同样读 marker 里冻结的序列全集：两期全集相同，合并成一次运行，Selection 带“标的 × 唯一的 tag”。
+func TestGapFillerSingleTagDatasetUsesFrozenUniverse(t *testing.T) {
 	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
-	universe := &periodUniverse{}
+	full := storageio.Universe{Subjects: []string{"BTC", "ETH"}, Series: append(seriesOf("BTC", gapSpotTag), seriesOf("ETH", gapSpotTag)...)}
+	universe := &periodUniverse{byPeriod: map[int64]storageio.Universe{gapT0.Unix(): full, gapT0.Add(time.Minute).Unix(): full}}
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(f, universe, false)
+	frozenFiller(f, universe)
 	f.record(t, gapT0, "BTC", 0, "evt-0", factor)
 	f.record(t, gapT0, "BTC", 1, "evt-1", factor)
 	f.now = gapT0.Add(6 * time.Minute)
 	f.filler.tick(context.Background())
 
-	require.Zero(t, universe.reads, "单序列数据集不为时序恢复读 marker")
+	require.Equal(t, 2, universe.reads)
 	require.Len(t, f.chunks.calls, 1)
-	require.Empty(t, f.chunks.calls[0].selection.Series)
+	require.Equal(t, seriesOf("BTC", gapSpotTag), f.chunks.calls[0].selection.Series, "ETH 不在这批待办里")
 	require.Equal(t, gapT0, f.chunks.calls[0].start)
 	require.Equal(t, gapT0.Add(2*time.Minute), f.chunks.calls[0].end)
+	require.Zero(t, f.ledger.PendingCount())
 }
 
 // 统一数据集但 marker 不存在（或没有 universe_series）：不冻结，保持原来的一次运行，期望序列由数据层兜底推出。
@@ -121,7 +123,7 @@ func TestGapFillerUnifiedWithoutFrozenSeriesFallsBackToOneRun(t *testing.T) {
 		gapT0.Add(time.Minute).Unix(): {Subjects: []string{"BTC"}}, // marker 在，但没有序列全集
 	}}
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(f, universe, true)
+	frozenFiller(f, universe)
 	f.record(t, gapT0, "BTC", 0, "evt-0", factor)
 	f.record(t, gapT0, "BTC", 1, "evt-1", factor)
 	f.record(t, gapT0, "BTC", 2, "", factor) // 没有触发事件：读不了 marker
@@ -138,7 +140,7 @@ func TestGapFillerUnifiedWithoutFrozenSeriesFallsBackToOneRun(t *testing.T) {
 func TestGapFillerUnifiedKeepsPendingWhenFrozenUniverseReadFails(t *testing.T) {
 	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	unifiedFiller(f, &periodUniverse{err: errors.New("storage unavailable")}, true)
+	frozenFiller(f, &periodUniverse{err: errors.New("storage unavailable")})
 	f.record(t, gapT0, "BTC", 0, "evt-0", factor)
 	f.now = gapT0.Add(6 * time.Minute)
 	f.filler.tick(context.Background())

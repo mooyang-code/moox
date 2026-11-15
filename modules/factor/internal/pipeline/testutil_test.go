@@ -81,13 +81,29 @@ func viewFromFrames(frames map[string]*storageio.Frame, stepSeconds int64) (*ser
 	return serieswindow.FromColumns(seriesstore.Source{}, stepSeconds, fieldNames, cols)
 }
 
-// withView 按 loaded.Frames 当前的内容重新生成列式视图（测试改了帧之后调用）。
+// withView 按 loaded.Frames 当前的内容重新生成列式视图（测试改了帧之后调用）。测试没有自己给出可用序列时，
+// 按“可用标的 × 视图里它的 series_tag”补上（与回放、试算相同的换法）。
 func withView(t *testing.T, loaded LoadResult) LoadResult {
 	t.Helper()
 	view, err := viewFromFrames(loaded.Frames, 60)
 	require.NoError(t, err)
 	loaded.View = view
+	if loaded.AvailableSeries == nil {
+		loaded.AvailableSeries = SubjectSeries(view, loaded.Available)
+	}
 	return loaded
+}
+
+// singleTag 是只有一个 series_tag 的测试数据集用的 tag。
+const singleTag = "venue:binance"
+
+// singleSeries 把标的逐个配上 singleTag。
+func singleSeries(subjects ...string) []seriesset.Series {
+	out := make([]seriesset.Series, 0, len(subjects))
+	for _, subject := range subjects {
+		out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: singleTag})
+	}
+	return out
 }
 
 // frameData 把按帧给出的源数据适配成 Data：用来测试管线本身，不涉及本地存储与同步。

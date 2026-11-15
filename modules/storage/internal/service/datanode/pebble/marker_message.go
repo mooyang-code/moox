@@ -26,7 +26,7 @@ type LedgerPeriodCompleted struct {
 	SnapshotRef        string
 	UniverseSubjectIDs []string
 	FailedSubjects     []string
-	// UniverseSeries、FailedSeries 是按序列的全集与失败名单，只有快照含多个 series_tag（统一数据集）时才有。
+	// UniverseSeries、FailedSeries 是按序列（标的、series_tag）的全集与失败名单。
 	UniverseSeries []*storageeventpb.SeriesRef
 	FailedSeries   []*storageeventpb.SeriesRef
 	CompletedAt    *timestamppb.Timestamp
@@ -84,7 +84,8 @@ func buildMarkerMessage(event events.Event, eventID, spaceID, subjectID string, 
 		EventID: eventID, OccurredAt: occurredAt.UTC(), SpaceID: spaceID, SubjectID: subjectID,
 	})
 	if err != nil {
-		return nil, "", err
+		// 编码时的事件契约校验（全集必填、series_tag 非空等）不通过是请求本身的问题，重试也不会通过：标成无效请求。
+		return nil, "", invalidf("完成标记无法通过事件校验：%v", err)
 	}
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(encoded.Message)
 	return raw, eventID, err

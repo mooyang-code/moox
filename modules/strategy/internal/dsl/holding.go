@@ -19,6 +19,9 @@ const (
 	// HoldingAtFirst、HoldingAtLast 是日内帧上建仓所在的那一根：交易日的第一根或最后一根（默认）。
 	HoldingAtFirst = "first"
 	HoldingAtLast  = "last"
+
+	// HoldingOffsetsAll 是 holding.offsets 的简写：每根都建一个批次，解析时展开成 0 到 bars-1。
+	HoldingOffsetsAll = "all"
 )
 
 // IsCalendar 报告 holding 是否按交易日历换仓。
@@ -60,13 +63,18 @@ func decodeHolding(node *yaml.Node, path string) (Holding, error) {
 		return Holding{}, err
 	}
 	var holding Holding
+	allOffsets := false
 	for _, f := range fields {
 		fieldPath := path + "." + f.key
 		switch f.key {
 		case "bars":
 			holding.Bars, err = scalarInt(f.value, fieldPath)
 		case "offsets":
-			holding.Offsets, err = intList(f.value, fieldPath)
+			if f.value.Kind == yaml.ScalarNode && f.value.Tag == "!!str" && f.value.Value == HoldingOffsetsAll {
+				allOffsets = true
+			} else {
+				holding.Offsets, err = intList(f.value, fieldPath)
+			}
 		case "anchor":
 			holding.Anchor, err = scalarRequiredText(f.value, fieldPath)
 		case "calendar":
@@ -82,6 +90,16 @@ func decodeHolding(node *yaml.Node, path string) (Holding, error) {
 		}
 		if err != nil {
 			return Holding{}, err
+		}
+	}
+	if allOffsets {
+		if holding.Bars > MaxHoldingOffsets {
+			return Holding{}, fmt.Errorf("%s.offsets 写 %s 时每根建一个批次，bars 不能超过 %d", path, HoldingOffsetsAll, MaxHoldingOffsets)
+		}
+		// 展开成 0 到 bars-1；bars 没写或不合法时留一个空列表，由校验报 bars 或 calendar 的错。
+		holding.Offsets = make([]int, 0, max(holding.Bars, 0))
+		for offset := 0; offset < holding.Bars; offset++ {
+			holding.Offsets = append(holding.Offsets, offset)
 		}
 	}
 	return holding, nil

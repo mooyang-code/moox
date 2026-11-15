@@ -69,7 +69,7 @@ func newStockFixture(t *testing.T) *stockFixture {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			ExecutionMode:   "PAPER",
 			SettlementAsset: "CNY", OrderSettingsJSON: legacyOrderSettings,
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -121,7 +121,7 @@ func (f *stockFixture) target(t *testing.T, targets ...store.InstrumentTarget) s
 	}
 	record := store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
-		TargetID: "target-current", InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+		TargetID: "target-current", InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1000, StrategyID: "strategy-1",
 		BarEndTime: f.now.UnixMilli(), ValidUntil: validUntil.UnixMilli(),
 		Targets: targets, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 	}

@@ -171,9 +171,9 @@ func TestRunTargetReportsBusinessDecisionAfterTransportAction(t *testing.T) {
 			t.Error("target runner did not stop")
 		}
 	})
-	// A valid envelope with a different owner is a permanent business rejection,
-	// not a transport failure. It must be visible even though TERM succeeds.
-	delivery := logicalTargetDelivery(t, now, "report-rejected-target", "other-owner", "logical-1", nil)
+	// 合法的信封、但组合是人工控制：这是永久的业务拒绝，不是传输失败；TERM 成功了也要能看到。
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	delivery := logicalTargetDelivery(t, now, "report-rejected-target", "runner-1", "logical-1", nil)
 	before := targetReportMetric(t, "TERM", "authorization_conflict", "success")
 	_, err = client.PublishRaw(ctx, delivery.Subject, delivery.RawMessageID, delivery.RawData, delivery.ContentType)
 	require.NoError(t, err)

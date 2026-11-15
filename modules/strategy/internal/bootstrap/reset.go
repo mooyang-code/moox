@@ -13,9 +13,10 @@ import (
 //
 //	data：清运行数据——结果与明细、规则状态、回放、年龄通过记录；保留策略定义、实例与会话（配置）。规则状态清掉后普通实例从头开始；
 //	     策略池实例的状态要靠预热重建，重置后要停用再启用（之前每期记 config_error 并写明原因）；
-//	all ：再清策略定义与版本、实例、会话与模板，回到新部署的空白状态（策略没有种子）。
+//	all ：再清策略定义与版本、实例与会话，回到新部署的空白状态（策略没有种子）。
 //
-// 重置不会替 Trade 解除实例对逻辑账户的认领：那是系统级重置的事（先重置策略再重置 Trade，Trade 的逻辑账户一并清掉）。
+// 重置不会通知 Trade 关闭启用实例的会话：最后一份目标照样执行到它的有效期结束。要立刻停手先在 Trade 暂停组合；
+// 系统级重置先重置策略再重置 Trade，Trade 的逻辑账户一并清掉。
 
 // 策略数据库的业务表分类；Plan 校验库里的每张表都已归类，schema 新增表而忘了归类时重置会拒绝执行。
 var (
@@ -24,7 +25,7 @@ var (
 		"t_strategy_states",
 	}
 	strategyConfigTables = []string{
-		"t_strategy_defs", "t_strategy_def_versions", "t_strategy_instance_tasks", "t_strategy_instances", "t_strategy_sessions", "t_strategy_display_settings", "t_strategy_templates",
+		"t_strategy_defs", "t_strategy_def_versions", "t_strategy_instance_tasks", "t_strategy_instances", "t_strategy_sessions", "t_strategy_display_settings",
 	}
 )
 
@@ -42,7 +43,7 @@ func strategyResetSpec(db *store.Store, dbPath string) *lifecycle.ResetSpec {
 		}
 		info := lifecycle.ResetPlanInfo{
 			Keeps: []string{"数据库表结构", "发布内的配置文件", "生命周期状态文件"},
-			Notes: []string{"不会解除实例在 Trade 里对逻辑账户的认领：系统级重置先重置策略再重置 Trade"},
+			Notes: []string{"不会通知 Trade 关闭启用实例的会话，最后一份目标执行到有效期结束：要立刻停手先在 Trade 暂停组合；系统级重置先重置策略再重置 Trade"},
 		}
 		if unclassified, _ := lifecycle.ClassifyTables(actual, strategyDataTables, strategyConfigTables); len(unclassified) > 0 {
 			info.Blockers = append(info.Blockers, "有未归类的表，先更新重置清单："+lifecycle.JoinTables(unclassified))

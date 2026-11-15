@@ -46,9 +46,10 @@ func (c Catalog) Validate() error {
 		if !slices.Contains([]string{"readyz", "https", "none"}, component.Health.Kind) {
 			return fmt.Errorf("component %q has invalid health.kind", component.ID)
 		}
+		// 外部程序可以声明服务（只监听本机，经所在主机的网关路由），但不能声明其他端口。
 		if component.ExternalProgram {
-			if len(component.Services) != 0 || len(component.Ports) != 0 || component.Health.Kind != "readyz" || component.Health.Loopback {
-				return fmt.Errorf("external program %q cannot declare services or ports and must use a readyz health port", component.ID)
+			if len(component.Ports) != 0 || component.Health.Kind != "readyz" || component.Health.Loopback {
+				return fmt.Errorf("external program %q cannot declare ports and must use a readyz health port", component.ID)
 			}
 		}
 		ports := map[int]bool{}

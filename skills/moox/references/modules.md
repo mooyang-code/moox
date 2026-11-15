@@ -91,7 +91,7 @@
 ## 因子
 
 - **做什么**：用 YAML 表达式定义因子，按计算任务（源数据集 + 频率 → 结果数据集）在每个采集周期增量计算；支持历史补算和 Rust 写的 wasm 自定义算子。
-- **在哪**：因子管理（factor-mgr）在管理台机；因子引擎在因子机（systemd 用户服务）。
+- **在哪**：因子管理（factor-mgr）在管理台机；因子引擎在因子机（systemd 用户服务），另在本机 `11423` 上提供 EngineControl 服务，只给策略回放的“因子现算”调用（经因子机主机网关的反向中转，不需要另开端口）。
 - **常用**：写因子与转换 Python 因子按 [`factor-dsl.md`](factor-dsl.md)；
   - 定义与分类：`factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign`；
   - 任务与成员：`factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`；批量配置写进 `moox.toml` 的 `[factors]` 后 `./bin/moox-cli setup factors`；
@@ -105,20 +105,20 @@
 
 ## 策略
 
-- **做什么**：声明式 DSL（`rank` / `signal` / `tranche` 规则、止损止盈、模板），每个周期在因子结果上求值，输出截面目标权重；可历史回放。
+- **做什么**：声明式 DSL（`rank` 规则、止损止盈），每个周期在因子结果上求值，输出截面目标权重；可历史回放。
 - **在哪**：管理台机。
 - **常用**：写与校验 DSL、创建定义与实例按 [`strategy-dsl.md`](strategy-dsl.md)；
   `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、
-  `strategy template list|show|save|delete|render`、`strategy display get|set`；策略服务里的历史回放 `strategy replay start|list|show|bars|cancel`；
-  逐期回放（因子 → 策略 → 纸面成交）用 `./bin/moox-cli replay start|status|report …`。迁移整套 Python 选币策略：[`strategy-migration.md`](strategy-migration.md)。
+  `strategy display get|set`；策略服务里的历史回放 `strategy replay start|list|show|bars|cancel`；
+  迁移整套 Python 选币策略：[`strategy-migration.md`](strategy-migration.md)。
 - **市场模式**：DSL 顶层 `market` 的 `select`（从现货、永续还是两边选币）与 `prefer`（两边都能交易时优先在哪个市场下单）只有 5 种合法组合，
   决定实例要绑几个因子任务（[`strategy-dsl.md`](strategy-dsl.md) 的“market：市场模式”）。
 - **双任务与统一数据集**：同时涉及现货和永续时有两种绑法——现货、永续各绑一个因子任务（`--factor-task spot=… --factor-task swap=…`，两个结果 View 本期都到齐才求值，
   一个市场的因子本期被跳过时只让这个市场不可用）；或绑统一数据集（同一数据集里放现货、永续两条序列）上的一个任务，写 `--factor-task multi=…`，只能单独绑定，到达即求值，
-  不支持 `factor_params`、不能进策略池、不支持闭环回放。
+  不支持 `factor_params`、不能进策略池。
 - **策略池**：定义里写 `strategy_pool`（与 `rules` 互斥），成员引用已有策略定义，各自在模拟账本里算净值，按 `fixed` 比例或 `rotation` 轮动分配资金；
-  启用后先预热，预热完成前不求值、不能 `confirm`；研究回放与闭环回放不支持（[`strategy-dsl.md`](strategy-dsl.md) 的“strategy_pool：策略池”）。
-- **注意**：一个因子任务只能关联一个实例，绑定在创建实例时选定、之后不能改；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
+  启用后先预热，预热完成前不求值、不能 `confirm`；研究回放支持，只能用结果 View 来源（[`strategy-dsl.md`](strategy-dsl.md) 的“strategy_pool：策略池”）。
+- **注意**：一个因子任务可以被多个实例引用，只有写了 `factor_params` 的实例启用时独占关联它（一个任务只关联一个实例）；实例的任务在创建时选定、之后不能改；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
 
 ## 交易（只读）
 

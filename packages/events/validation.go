@@ -137,7 +137,7 @@ func validateDatasetPeriodCompleted(message *eventpb.EventMessage, value proto.M
 }
 
 // validatePeriodSeries 校验按序列的全集与失败名单：序列不重复、失败名单是全集的子集；
-// 有序列全集时，它包含的标的必须正好是 universe_subject_ids；没有全集（单序列数据集）时不能带失败序列。
+// 序列全集必填，它包含的标的必须正好是 universe_subject_ids（没有任何标的的事件两者都为空）。
 // 失败序列的标的必须在 failed_subjects 里：标的口径沿用原有定义（统一数据集执行计划 3.4），有一条序列失败的标的就记入失败标的，
 // 只读按标的字段的消费方（单市场任务、K 线 View）才不会把失败序列的标的当成可用。
 func validatePeriodSeries(payload *storagepb.DatasetPeriodCompleted, subjects, failedSubjects map[string]struct{}, label string) error {
@@ -157,7 +157,7 @@ func validatePeriodSeries(payload *storagepb.DatasetPeriodCompleted, subjects, f
 		}
 		seenSubjects[series.GetSubjectId()] = struct{}{}
 	}
-	if len(universe) != 0 && len(seenSubjects) != len(subjects) {
+	if len(seenSubjects) != len(subjects) {
 		return fmt.Errorf("%s universe_series does not cover every subject in universe_subject_ids", label)
 	}
 	failed := make(map[string]struct{}, len(payload.GetFailedSeries()))
@@ -343,6 +343,9 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 	}
 	if strings.TrimSpace(payload.GetInstanceId()) == "" || strings.TrimSpace(payload.GetSessionId()) == "" || strings.TrimSpace(payload.GetStrategyId()) == "" {
 		return fmt.Errorf("trade target weight session identity is incomplete")
+	}
+	if payload.GetSessionStartedAt() <= 0 {
+		return fmt.Errorf("trade target weight session_started_at must be positive")
 	}
 	if payload.GetBarEndTime() == nil || payload.GetValidUntil() == nil {
 		return fmt.Errorf("trade target weight timestamps are required")

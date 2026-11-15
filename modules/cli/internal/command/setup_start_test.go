@@ -132,26 +132,25 @@ func TestSetupStartWithoutTasksFails(t *testing.T) {
 	require.ErrorContains(t, err, "no_collection_tasks")
 }
 
-func TestSetupStartStrategyIsRepeatableAndRespectsUserInstance(t *testing.T) {
+func TestSetupStartStrategyIsRepeatableAndSharesTask(t *testing.T) {
 	repository := startRepository(t)
 	client := startClient()
-	summary := setupStartSummary{}
 	example := spaceExamples["crypto"]
-	status, err := setupStartStrategy(context.Background(), client, repository, "crypto", example, &summary)
+	status, err := setupStartStrategy(context.Background(), client, repository, "crypto", example)
 	require.NoError(t, err)
 	require.Equal(t, "created", status)
-	status, err = setupStartStrategy(context.Background(), client, repository, "crypto", example, &summary)
+	status, err = setupStartStrategy(context.Background(), client, repository, "crypto", example)
 	require.NoError(t, err)
 	require.Equal(t, "unchanged", status, "重复运行不重复创建")
 	require.Equal(t, 1, client.created)
 
-	bound := startClient()
-	bound.instances = []setupStartInstance{{InstanceID: "mine", FactorTasks: map[string]string{example.Market: example.FactorTask}}}
-	status, err = setupStartStrategy(context.Background(), bound, repository, "crypto", example, &summary)
+	// 默认示例不写 factor_params，不独占关联任务：用户自己的实例也引用这个任务时照常创建。
+	shared := startClient()
+	shared.instances = []setupStartInstance{{InstanceID: "mine", FactorTasks: map[string]string{example.Market: example.FactorTask}}}
+	status, err = setupStartStrategy(context.Background(), shared, repository, "crypto", example)
 	require.NoError(t, err)
-	require.Equal(t, "skipped", status, "因子任务已被用户实例绑定")
-	require.Zero(t, bound.created)
-	require.NotEmpty(t, summary.Notes)
+	require.Equal(t, "created", status)
+	require.Equal(t, 1, shared.created)
 }
 
 func TestSetupStartPrerequisitesDependOnSpace(t *testing.T) {
@@ -181,9 +180,8 @@ func TestSetupStartEnableTaskDoesNotRetryOtherErrors(t *testing.T) {
 func TestSetupStartStockCNExampleUsesItsOwnTask(t *testing.T) {
 	repository := startRepository(t)
 	client := startClient()
-	summary := setupStartSummary{}
 	example := spaceExamples["stockcn"]
-	status, err := setupStartStrategy(context.Background(), client, repository, "stockcn", example, &summary)
+	status, err := setupStartStrategy(context.Background(), client, repository, "stockcn", example)
 	require.NoError(t, err)
 	require.Equal(t, "created", status)
 	require.Equal(t, []setupStartInstance{{InstanceID: "default_dual_ma_cn_5m", StrategyID: "default_dual_ma_cn_5m", SpaceID: "stockcn", FactorTasks: map[string]string{"equity": "ftask_cn_5m"}, Enabled: true}}, client.instances)

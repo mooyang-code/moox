@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use for everything about the MooX quant system (MooX 量化系统) — installing and deploying it from release artifacts (安装, 部署, 初始化, 免密登录, moox-cli config init, setup bootstrap/deploy-host/deploy-unit/init), upgrading or rolling back production units (发布, 上线, 升级, 回滚, native release, service catalog rollout, 全新部署, 清空重装), and day-to-day management through moox-cli and gateway call (采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记). Also covers querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情 queries, factor expression DSL (因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子), strategy DSL (策略 DSL, rank/signal/tranche 规则, ValidateStrategy, 策略模板, 策略迁移, 选币策略), 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Linux Host Agent monitoring, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud firewall, CLS log queries, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance, and the moox-cli command set that covers the 管理台 (空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易只读, host exec, 命令覆盖).
+description: Use for everything about the MooX quant system (MooX 量化系统) — installing and deploying it from release artifacts (安装, 部署, 初始化, 免密登录, moox-cli config init, setup bootstrap/deploy-host/deploy-unit/init), upgrading or rolling back production units (发布, 上线, 升级, 回滚, native release, service catalog rollout, 全新部署, 清空重装), and day-to-day management through moox-cli and gateway call (采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记). Also covers querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情 queries, factor expression DSL (因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子), strategy DSL (策略 DSL, rank 规则, ValidateStrategy, 策略迁移, 选币策略), 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Linux Host Agent monitoring, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud firewall, CLS log queries, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance, and the moox-cli command set that covers the 管理台 (空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易只读, host exec, 命令覆盖).
 ---
 
 # MooX
@@ -35,7 +35,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 | 清空生产后按默认配置重装 | [`references/fresh-deploy.md`](references/fresh-deploy.md) |
 | 写因子、转换 Python 因子、修改已有因子 | [`references/factor-dsl.md`](references/factor-dsl.md) |
 | 自定义算子（Rust → wasm） | [`references/udf.md`](references/udf.md) |
-| 写策略 DSL、创建策略定义与实例 | [`references/strategy-dsl.md`](references/strategy-dsl.md) |
+| 写策略 DSL、回放（结果 View 或因子现算）、创建策略定义与实例 | [`references/strategy-dsl.md`](references/strategy-dsl.md) |
 | 迁移整套 Python 选币策略 | [`references/strategy-migration.md`](references/strategy-migration.md) |
 | 导入历史 K 线 | [`references/initial-import.md`](references/initial-import.md) |
 | 打开 A 股日线及其附加数据（复权因子、申万行业、财务），在策略里按行业、财务选股 | [`references/ashare-daily.md`](references/ashare-daily.md) |
@@ -52,7 +52,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - 产物包里有 `moox-bundle.json`：`setup` 命令自动使用包内预编译的 linux/amd64 程序，不需要 git、Go、Docker 或 Node。
 - 管理台上的操作和各模块的主要操作都有专用命令（`factor`、`strategy`、`space`、`metadata`、`collector`（含云账号、代码包与云函数）、`monitor`、`eventbus`、`host`、`secret`、`trade` 只读等），先用 `./bin/moox-cli <命令> --help` 看参数；命令对照表见 [`references/api-recipes.md`](references/api-recipes.md)。
 - 没有专用命令的底层接口：`./bin/moox-cli gateway methods [关键字]` 查有哪些方法，`./bin/moox-cli gateway call <服务> <方法> --data @请求.json` 调用；业务失败时退出码非 0。
-- 命令按 `moox.toml` 里的 SSH 配置连接各台主机；`lifecycle`、`system`、`replay`、`import` 访问模块健康端口时也自动解析，不需要手工建隧道或设置健康密钥环境变量。要在某台主机上执行命令或传文件用 `host exec|get|put`。
+- 命令按 `moox.toml` 里的 SSH 配置连接各台主机；`lifecycle`、`system`、`import` 访问模块健康端口时也自动解析，不需要手工建隧道或设置健康密钥环境变量。要在某台主机上执行命令或传文件用 `host exec|get|put`。
 - 带 `--space-id` 的命令默认空间是 `crypto`；时间范围用 `--from` / `--to`（RFC3339，左闭右开）。
 - 本机有 HTTP 代理时，执行前 `env -u HTTP_PROXY -u HTTPS_PROXY`，否则到主机的直连会被挡住。
 - 耗时的命令（部署、初始化、导入）放后台运行，盯输出里的 `*-ready` 与报错。

@@ -17,10 +17,9 @@ func TestSessionWarmUpResultIsWrittenOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolved := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_pool","factor_task_id":"ftask_pool"}}}`
-	if err := repo.OpenSession(ctx, Session{SessionID: "session-pool", InstanceID: "pool", DSLHash: testHash, ResolvedJSON: resolved, MembersJSON: poolMembersJSON, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.EnableInstance(ctx, Session{SessionID: "session-pool", InstanceID: "pool", DSLHash: testHash, ResolvedJSON: resolved, MembersJSON: poolMembersJSON, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
-	attachAndEnable(t, repo, "pool", "session-pool", []byte(resolved))
 	session, err := repo.GetSession(ctx, "session-pool")
 	if err != nil || session.MembersJSON != poolMembersJSON || session.WarmedThrough != nil {
 		t.Fatalf("预热前的池会话不符：%+v %v", session, err)
@@ -49,7 +48,7 @@ func TestSessionWarmUpResultIsWrittenOnce(t *testing.T) {
 	if pending, _ := repo.PendingWarmSessions(ctx); len(pending) != 0 {
 		t.Fatalf("预热完成后不再待预热：%+v", pending)
 	}
-	if err := repo.CloseSession(ctx, "session-plain", testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "plain", "session-plain", testNow); err != nil {
 		t.Fatal(err)
 	}
 	if written, err := repo.SetSessionWarmed(ctx, "session-plain", `{}`, through, testNow); err != nil || written {
@@ -59,7 +58,7 @@ func TestSessionWarmUpResultIsWrittenOnce(t *testing.T) {
 		t.Fatal("没有写入预热结果时不应留下状态行")
 	}
 	// 成员快照必须是非空数组。
-	if err := repo.OpenSession(ctx, Session{SessionID: "bad", InstanceID: "pool", DSLHash: testHash, ResolvedJSON: resolved, MembersJSON: `{}`, CreatedAt: testNow}, "name: demo"); err == nil {
+	if err := repo.EnableInstance(ctx, Session{SessionID: "bad", InstanceID: "pool", DSLHash: testHash, ResolvedJSON: resolved, MembersJSON: `{}`, CreatedAt: testNow}, "name: demo"); err == nil {
 		t.Fatal("members_json 不是数组应被拒绝")
 	}
 	if _, err := repo.SetSessionWarmed(ctx, "session-pool", "", through, testNow); err == nil {

@@ -17,7 +17,8 @@ message FactorTask {
   string status = 8;
   string created_at = 9;
   string updated_at = 10;
-  // bound_instance_id 是关联的策略实例：一个任务只关联一个实例，一个实例可以关联多个任务；写入后不能修改；为空表示还没有关联。
+  // bound_instance_id 是关联的策略实例：只有声明了 factor_params 的实例启用时关联（独占可变成员的参数提交），一个任务只关联一个实例，
+  // 一个实例可以关联多个任务；写入后不能修改；为空表示没有关联（不调参的实例只读任务的列，不关联）。
   string bound_instance_id = 11;
 }
 
@@ -105,9 +106,6 @@ message FactorMember {
   map<string, double> params = 11;
   // kind 是成员类型：fixed 或 var。
   string kind = 12;
-  // last_submitted_period、last_submitted_at 是可变成员最近一次被接受的提交的目标期（Unix 秒）和提交时间；从未提交过为 0 和空。
-  int64 last_submitted_period = 13;
-  string last_submitted_at = 14;
 }
 
 // SeriesRef 是一条时间序列的身份：标的加 series_tag，与行键一致。
@@ -495,8 +493,8 @@ message SetFactorCategoryRsp {
   FactorDef factor = 2;
 }
 
-// BindFactorTask 把任务与策略实例关联（独占）：同一个实例重复调用直接成功，换一个实例则拒绝；写入后不能修改或清空，
-// 只随 DeleteBoundTask 与任务一起删除。
+// BindFactorTask 把任务与策略实例关联（独占，只给声明了 factor_params 的实例）：同一个实例重复调用直接成功，换一个实例则拒绝；
+// 任务没有可变成员时拒绝；写入后不能修改或清空，只随 DeleteBoundTask 与任务一起删除。
 message BindFactorTaskReq {
   string task_id = 1;
   string instance_id = 2;
@@ -676,6 +674,7 @@ message ActivateUdfRsp {
   bool applied = 6;
   repeated UdfImpact impacts = 7;
   repeated string tasks = 8;
+  // instances 是受影响任务关联的策略实例：只有声明了 factor_params 的实例会关联任务，只读任务的实例不在其中。
   repeated string instances = 9;
   repeated UdfPrerequisite prerequisites = 10;
   repeated string notes = 11;
@@ -758,7 +757,7 @@ message TaskWatermarkStatus {
   string task_id = 1;
   string committed_through = 2;
   string target = 3;
-  // blocked_since 非空表示水位阻塞：blocked_period 是卡住的那一期，blocked_reason 是原因（no_rows、missing_over_threshold、no_universe）。
+  // blocked_since 非空表示水位阻塞：blocked_period 是卡住的那一期，blocked_reason 是原因（no_rows、missing_over_threshold、no_universe、compute_failed）。
   string blocked_since = 4;
   string blocked_period = 5;
   string blocked_reason = 6;
@@ -825,4 +824,148 @@ message GetUdfModuleRsp {
   common.RetInfo ret_info = 1;
   string name = 2;
   bytes wasm = 3;
+}
+
+// ---- 因子引擎的入站服务
+
+// EngineControl 是因子引擎自己的 tRPC 服务：只监听因子机本机，由因子机的主机网关转发（因子机只能出站时经 control 中转），
+// 只给策略服务调用。现在只有回放“因子现算”的三个方法：会话开始时从因子机本地存储取快照，之后按时间顺序逐步现算，
+// 每期走实时计算路径；回放不写结果、不发周期完成事件、不改连续水位。会话只在引擎内存里，闲置 6 小时清理，
+// 引擎重启后会话不存在（NOT_FOUND），要重新建立。
+service EngineControl {
+  // OpenReplay 建立会话：核对本地数据、按预热区间读快照、预留内存。同一个 replay_id 重复打开时先释放旧会话。
+  rpc OpenReplay(OpenReplayReq) returns (OpenReplayRsp);
+  // StepReplay 从 period_time 起按顺序算最多 periods 期。单步响应不超过 3 MiB：放不下时只返回前面几期（至少 1 期），
+  // 一期就放不下时拒绝，要减少 columns。
+  rpc StepReplay(StepReplayReq) returns (StepReplayRsp);
+  // CloseReplay 结束会话并释放内存；会话不存在时 closed 为假。
+  rpc CloseReplay(CloseReplayReq) returns (CloseReplayRsp);
+}
+
+message OpenReplayReq {
+  string replay_id = 1;
+  string task_id = 2;
+  // from、to 是回放区间（RFC3339，左闭右开），按任务频率对齐：决策周期是 data_time 落在其中的每一根 K 线。
+  string from = 3;
+  string to = 4;
+  // extra_periods 是策略额外需要的回看根数（引用上一根的深度，0 或 1；年龄按本地数据里序列的第一根算，与快照长度无关，不用算进来）：
+  // 预热起点 = from −（因子最大回看 − 1 + extra_periods）× 周期。
+  int32 extra_periods = 5;
+  // columns 是每行要返回的列（结果数据集里的列名）：成员的输出列、源数据集的数值列，以及 __params（各成员本期实际用的参数）。
+  // 必填，不认识的列名拒绝。
+  repeated string columns = 6;
+  // allow_short_warmup 允许多数标的的本地数据不够预热区间（因子前段会是空值）；不允许时这种情况拒绝建立会话。
+  bool allow_short_warmup = 7;
+}
+
+// ReplayFactor 是回放固定下来的一个成员：outputs 是它在结果数据集里的列名。
+message ReplayFactor {
+  string member_key = 1;
+  string factor_id = 2;
+  // kind 是成员类型：fixed 或 var。
+  string kind = 3;
+  string definition_hash = 4;
+  repeated string outputs = 5;
+}
+
+message ReplayExcluded {
+  string subject_id = 1;
+  string reason = 2;
+}
+
+message OpenReplayRsp {
+  common.RetInfo ret_info = 1;
+  string replay_id = 2;
+  // subjects 是参与回放的标的；excluded 是被排除的标的及原因（本地没有数据、到不了回放的最后一期）。
+  repeated string subjects = 3;
+  repeated ReplayExcluded excluded = 4;
+  // period_times 是各决策周期的 data_time（真实时间的 Unix 秒，升序；有交易时段的市场跳过休市），可回放的区间就是它的首尾。
+  repeated int64 period_times = 5;
+  int64 step_seconds = 6;
+  // warmup_start 是预热起点（RFC3339）。
+  string warmup_start = 7;
+  // snapshot_bytes 是快照预留的内存（字节）。
+  int64 snapshot_bytes = 8;
+  repeated ReplayFactor factors = 9;
+  // source_fields 是源数据集的数值列，columns 可以引用它们。
+  repeated string source_fields = 10;
+  // short_warmup 是本地数据起点晚于预热起点的标的数（因子前段为空值），short_samples 是其中的前几个。
+  int32 short_warmup = 11;
+  repeated string short_samples = 12;
+}
+
+message StepReplayReq {
+  string replay_id = 1;
+  // period_time 是这一步第一期的 data_time（真实时间的 Unix 秒，必须是 OpenReplay 给出的某一期）。
+  int64 period_time = 2;
+  // periods 是这一步最多算几期，至少 1；到回放区间末尾为止。
+  int32 periods = 3;
+  // params 是这一步第一期各可变成员的参数（策略在上一期求值后产出）：只存在于会话里，不写成员行。
+  // 没给的成员沿用上一期实际用的参数，再没有就用成员自己的参数；这一步后面各期都沿用。
+  // 不合法的成员参数被拒绝并沿用上一期；成员键不存在时整步失败。
+  repeated MemberParams params = 4;
+}
+
+// ReplayParamValues 是一个成员本期实际用的参数：参数名 → 值。
+message ReplayParamValues {
+  map<string, double> values = 1;
+}
+
+// ReplayRow 是一条序列（标的, series_tag）本期的行：只含 OpenReplay 请求的列，没有数据、算不出的列不出现。
+// 本期在本地数据里没有这条序列的行时，这一行不出现。
+message ReplayRow {
+  string subject_id = 1;
+  string series_tag = 2;
+  map<string, double> values = 3;
+  // previous 是同一条序列上一期的同名列。
+  map<string, double> previous = 4;
+  // params 是这一期各成员实际用的参数（成员键 → 参数）；只在 columns 含 __params 时给。
+  map<string, ReplayParamValues> params = 5;
+  // age_bars 是本地数据里这条序列截至本期的根数（含本期），策略的年龄检查用。
+  int32 age_bars = 6;
+}
+
+// ReplayMemberState 是一个成员本期的状态。
+message ReplayMemberState {
+  // status：complete、degraded（部分标的失败）或 skipped（截面因子整体跳过）。
+  string status = 1;
+  string factor_id = 2;
+  string definition_hash = 3;
+  string kind = 4;
+  repeated string failed_subjects = 5;
+}
+
+message ReplayParamRejection {
+  string member_key = 1;
+  string reason = 2;
+}
+
+// ReplayPeriod 是一期的因子帧。
+message ReplayPeriod {
+  // period_time 是这一期的 data_time（真实时间的 Unix 秒）。
+  int64 period_time = 1;
+  repeated ReplayRow rows = 2;
+  // states 是各成员本期的状态（成员键 → 状态）。
+  map<string, ReplayMemberState> states = 3;
+  // applied_params 是这一期实际生效的、由请求带来（或沿用之前请求）的成员参数：策略以它为基础叠加下一期的新参数，
+  // 不合法的请求参数不会出现在这里。
+  repeated MemberParams applied_params = 4;
+  // rejected_params 是被拒绝的成员参数，只出现在一步的第一期。
+  repeated ReplayParamRejection rejected_params = 5;
+}
+
+message StepReplayRsp {
+  common.RetInfo ret_info = 1;
+  // periods 是实际算了的期：从请求的 period_time 起连续、按时间升序。少于请求的期数时，从下一期接着请求。
+  repeated ReplayPeriod periods = 2;
+  // compute_ms 是这一步的计算耗时。
+  int64 compute_ms = 3;
+}
+
+message CloseReplayReq {
+  string replay_id = 1;
+}
+message CloseReplayRsp {
+  common.RetInfo ret_info = 1;
+  bool closed = 2;
 }

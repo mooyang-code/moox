@@ -97,8 +97,6 @@ export interface LogicalAccount {
   logical_account_id: string;
   space_id: string;
   name: string;
-  owner_instance_id?: string;
-  owner_session_id?: string;
   control_mode: ControlMode;
   execution_mode: ExecutionMode;
   /** 可交易的市场：启用成员已开通市场的并集（只读，由 Trade 计算）；策略要输出的市场必须都在里面。 */

@@ -132,11 +132,6 @@ const itemReasons: Record<string, string> = {
   not_selected: "名次未入选",
   not_rebalanced: "非建仓 bar",
   filter_after: "filter_after 剔除",
-  tranche_filter_after: "被全部子策略的后置过滤剔除",
-  volume_zero: "本期无成交（volume=0），不作为候选",
-  exit: "触发 exit",
-  no_entry: "未触发 entry",
-  entry_and_exit: "entry 与 exit 同时成立",
   min_age_bars: "上市时间不足",
   no_row: "本期无行",
   score_invalid: "分数无效",
@@ -167,11 +162,10 @@ const itemReasons: Record<string, string> = {
 };
 
 function reasonText(reason: string): string {
-  // 止损的标的会在原因后附上原有原因（例如 stop_loss;missing:x、tranche:2;stopped:1），逐段翻译。
+  // 止损的标的会在原因后附上原有原因（例如 stop_loss;missing:x、holding;stopped:1），逐段翻译。
   if (reason.includes(";")) return reason.split(";").map(reasonText).join("；");
   if (/^stopped:\d+$/.test(reason)) return `本期有 ${reason.slice("stopped:".length)} 个持仓单位止损`;
   if (reason.startsWith("holding:")) return `延续批次持有，本期${reasonText(reason.slice("holding:".length))}`;
-  if (/^tranche:\d+$/.test(reason)) return `由 ${reason.slice("tranche:".length)} 个子策略持有`;
   if (reason.startsWith("missing:")) return `缺少 ${reason.slice("missing:".length)}`;
   if (reason.startsWith("factor_failed:")) return `上游因子失败（${reason.slice("factor_failed:".length)}）`;
   if (reason.startsWith("source_failed:")) return `上游数据失败（${reason.slice("source_failed:".length)}）`;
@@ -182,7 +176,7 @@ function reasonText(reason: string): string {
   return itemReasons[reason] ?? reason;
 }
 
-/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、market_unavailable:、score_error:、exit_stop:、select.then:）逐段翻译。 */
+/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、missing:、factor_failed:、source_failed:、market_unavailable:、score_error:、exit_stop:、select.then:）逐段翻译。 */
 export function itemReasonLabel(reason?: string): string {
   if (!reason) return "-";
   const text = reasonText(reason);

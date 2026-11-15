@@ -54,7 +54,7 @@ func TestStockBasesLoadedAfterEventsArrivedFirst(t *testing.T) {
 	}
 	// 实例停用、移出启用清单后清除标记，重新启用时再载入。
 	session := "i1-session"
-	if err := repo.DisableInstance(context.Background(), "i1", &session, nil, store.HealthOK, monday); err != nil {
+	if err := repo.DisableInstance(context.Background(), "i1", session, monday); err != nil {
 		t.Fatal(err)
 	}
 	if err := observer.refresh(context.Background()); err != nil {

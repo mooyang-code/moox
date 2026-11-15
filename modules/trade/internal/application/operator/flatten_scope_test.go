@@ -136,8 +136,8 @@ func TestReduceFixesTargetsAtStartAndDoesNotReduceAgain(t *testing.T) {
 // 自主下单组合没有自动执行：减仓（包括保证金率风控减仓）和撤单一样不暂停组合，暂停原因不被改写。
 func TestReduceDoesNotRewriteThePauseReasonOfAManualGroup(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = NULL,
-		c_owner_session_id = NULL, c_automation_state = 'PAUSED', c_pause_reason = '自主下单' WHERE c_logical_account_id = 'logical-1'`).Error)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL',
+		c_automation_state = 'PAUSED', c_pause_reason = '自主下单' WHERE c_logical_account_id = 'logical-1'`).Error)
 	command := flattenCommand("margin-logical-1-1")
 	command.ReduceRatio, command.Reason = shared.MustDecimal("0.5"), store.MarginPauseReason()
 

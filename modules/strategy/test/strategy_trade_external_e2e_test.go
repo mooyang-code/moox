@@ -6,20 +6,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/outbox"
+	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
@@ -32,7 +33,6 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 )
 
 const externalDSL = `name: external_e2e
@@ -74,21 +74,19 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	require.NotEmpty(t, logical)
 	hash := dsl.Hash([]byte(externalDSL))
 	require.NoError(t, repo.CreateDefinition(ctx, store.Definition{StrategyID: "strategy-e2e", Name: "external_e2e", DSLYaml: externalDSL, DSLHash: hash, CreatedAt: now}))
-	require.NoError(t, repo.CreateInstance(ctx, store.Instance{InstanceID: "instance-e2e", StrategyID: "strategy-e2e", SpaceID: "space-e2e", FactorTasks: map[string]string{"spot": "factor_task"}, LogicalAccountID: &logical, CreatedAt: now}))
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "factor_view", FactorTaskID: "factor_task", DatasetID: "factor_ds"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, Member: "bias", FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias"}, ViewColumns: []string{"bias", "close"}}
+	require.NoError(t, repo.CreateInstance(ctx, store.Instance{InstanceID: "instance-e2e", StrategyID: "strategy-e2e", SpaceID: "space-e2e", FactorTasks: map[string]string{"spot": "ftask_e2e"}, LogicalAccountID: &logical, CreatedAt: now}))
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_e2e", FactorTaskID: "ftask_e2e", DatasetID: "dataset_factor_e2e"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, Member: "bias", FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias|fixed"}, ViewColumns: []string{"bias", "close"}}
 	resolvedJSON, err := json.Marshal(resolved)
 	require.NoError(t, err)
-	require.NoError(t, repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))
-	require.NoError(t, repo.SetInstanceEnabled(ctx, "instance-e2e", false, &session, resolvedJSON, now))
-	require.NoError(t, repo.SetInstanceEnabled(ctx, "instance-e2e", true, &session, resolvedJSON, now))
+	require.NoError(t, repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))
 
-	// 启用时与进程启动时，Strategy 都要求 Trade 的账户所有者就是本实例本会话。
+	// 启用前 Strategy 只读一次 Trade 的账户，核对它由策略控制、可交易现货（批 3 的 3.6，不再认领归属）。
 	endpoint, err := os.ReadFile(filepath.Join(coord, "trade-ready"))
 	require.NoError(t, err)
 	tradeURL, err := url.Parse(string(endpoint))
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1", tradeURL.Hostname())
-	require.NoError(t, requireTradeAuthorization(ctx, string(endpoint), "space-e2e", logical, "instance-e2e", session))
+	require.NoError(t, requireTradeAccountReady(ctx, string(endpoint), "space-e2e", logical))
 
 	handler := &trigger.Handler{Store: repo, Loader: externalInput{}, Now: func() time.Time { return now }, Logf: t.Logf}
 	message := &eventpb.EventMessage{EventId: "external-ready", EventName: "event.storage.view.data_ready", SpaceId: "space-e2e"}
@@ -96,13 +94,13 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := &storagepb.ViewDataReady{ViewId: "factor_view", Frequency: "1h", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, DetailType: detailType, Detail: detail}
+	payload := &storagepb.ViewDataReady{ViewId: "view_factor_e2e", Frequency: "1h", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, DetailType: detailType, Detail: detail}
 	require.NoError(t, handler.Handle(ctx, message, payload))
 	result, found, err := repo.LatestOk(ctx, "instance-e2e", session)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, store.PublishPending, result.PublishStatus)
-	require.JSONEq(t, `[{"instrument_id":"BTC-USDT","target_weight":"0.5"}]`, string(result.TargetsJSON))
+	require.JSONEq(t, `[{"instrument_id":"BTC-USDT","market":"spot","target_weight":"0.5"}]`, string(result.TargetsJSON))
 	require.NoError(t, handler.Handle(ctx, message, payload), "重复投递不能产生第二个结果")
 	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{natsURL}, Name: "strategy-e2e-publisher"})
 	require.NoError(t, err)
@@ -119,14 +117,19 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	require.NoError(t, err)
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	decoded, err := registry.UnmarshalMessage(raw.Data)
+	// 发布器默认压缩信封，按消费端的同一个入口解码（解压、核对主题与消息 ID、校验载荷）。
+	_, payloadMessage, err := events.DecodeRaw(registry, raw.Data, raw.Subject, raw.Header.Get(nats.MsgIdHdr), raw.Header.Get("Content-Type"))
 	require.NoError(t, err)
-	target := new(tradeeventpb.LogicalAccountTargetWeightRequested)
-	require.NoError(t, proto.Unmarshal(decoded.GetPayload(), target))
+	target, ok := payloadMessage.(*tradeeventpb.LogicalAccountTargetWeightRequested)
+	require.True(t, ok, "载荷类型不符：%T", payloadMessage)
 	barEnd := barStart.Add(time.Hour)
 	require.Equal(t, result.ResultID, target.GetTargetId())
 	require.Equal(t, "instance-e2e", target.GetInstanceId())
 	require.Equal(t, session, target.GetSessionId())
+	stored, err := repo.GetSession(ctx, session)
+	require.NoError(t, err)
+	require.Positive(t, stored.StartedAt)
+	require.Equal(t, stored.StartedAt, target.GetSessionStartedAt(), "目标事件带会话开始时刻，Trade 按它比较会话先后")
 	require.Equal(t, "strategy-e2e", target.GetStrategyId())
 	require.Equal(t, logical, target.GetLogicalAccountId())
 	require.True(t, target.GetBarEndTime().AsTime().Equal(barEnd))
@@ -134,7 +137,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	t.Logf("Handler → Result → Relay → NATS：target=%s instance=%s session=%s weights=%s", result.ResultID, target.GetInstanceId(), target.GetSessionId(), result.TargetsJSON)
 }
 
-func requireTradeAuthorization(ctx context.Context, endpoint, space, account, instance, session string) error {
+func requireTradeAccountReady(ctx context.Context, endpoint, space, account string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/logical-account?"+url.Values{"space_id": {space}, "logical_account_id": {account}}.Encode(), nil)
 	if err != nil {
 		return err
@@ -149,15 +152,15 @@ func requireTradeAuthorization(ctx context.Context, endpoint, space, account, in
 		return err
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("Trade 授权查询返回 HTTP %d：%s", response.StatusCode, body)
+		return fmt.Errorf("Trade 账户查询返回 HTTP %d：%s", response.StatusCode, body)
 	}
 	var result tradepb.GetLogicalAccountRsp
 	if err := protojson.Unmarshal(body, &result); err != nil {
 		return err
 	}
 	logical := result.GetLogicalAccount()
-	if result.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS || logical.GetOwnerInstanceId() != instance || logical.GetOwnerSessionId() != session || logical.GetAutomationState() != "ACTIVE" || logical.GetControlMode() != tradepb.ControlMode_CONTROL_MODE_STRATEGY {
-		return fmt.Errorf("Trade 没有授权实例 %s 的会话 %s：%s", instance, session, body)
+	if result.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS || logical.GetAutomationState() != "ACTIVE" || logical.GetControlMode() != tradepb.ControlMode_CONTROL_MODE_STRATEGY || !slices.Contains(logical.GetMarkets(), tradepb.MarketType_MARKET_TYPE_SPOT) {
+		return fmt.Errorf("Trade 组合账户 %s 不是由策略控制、可交易现货的自动执行组合：%s", account, body)
 	}
 	return nil
 }

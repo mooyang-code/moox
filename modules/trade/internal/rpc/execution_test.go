@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
@@ -27,7 +28,7 @@ func TestManualPersistedFailureMapsToInvalidParam(t *testing.T) {
 			db := rpcStoreWithAccount(t)
 			ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 			if err := db.Transaction(ctx, func(tx *store.Tx) error {
-				return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "manual", OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
+				return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "manual", ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -195,7 +196,6 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1",
 			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "test",
 		}); err != nil {
@@ -226,6 +226,11 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 				OwnerID: "external-1", State: "OPEN",
 			},
 		} {
+			if record.OwnerType == "TARGET" {
+				if err := storetest.EnsureCurrentTarget(tx, record.SpaceID, record.LogicalAccountID, record.RunnerID); err != nil {
+					return err
+				}
+			}
 			if err := tx.CreateOrder(record); err != nil {
 				return err
 			}

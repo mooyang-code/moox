@@ -21,7 +21,7 @@ import (
 // hostRemote 是命令行访问各台主机的统一连接层，按 moox.toml 与操作员网关装配：
 //   - 在主机上执行命令、上传下载文件（经 SSH，复用同一台主机的连接）；
 //   - 把主机的本机端口映射到操作机的回环端口（直连主机经 SSH 转发，只能出站的主机经 control 中转），
-//     供 lifecycle、system、replay、import 访问模块的健康端口，不需要手工建隧道；
+//     供 lifecycle、system、import 访问模块的健康端口，不需要手工建隧道；
 //   - 诊断用：读取 systemd 用户服务状态、对出站主机做中转健康探测。
 
 type relayDialer interface {

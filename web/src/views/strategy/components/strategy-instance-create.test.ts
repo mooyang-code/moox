@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   getInstance: vi.fn(),
   getStrategy: vi.fn(),
   validateStrategy: vi.fn(),
+  listInstances: vi.fn(),
   listFactorTasks: vi.fn(),
   listLogicalAccounts: vi.fn(),
   listTradingAccounts: vi.fn(async () => ({ accounts: [] })),
@@ -17,6 +18,7 @@ vi.mock("@/api/strategy", () => ({
   createInstance: api.createInstance,
   getInstance: api.getInstance,
   getStrategy: api.getStrategy,
+  listInstances: api.listInstances,
   validateStrategy: api.validateStrategy
 }));
 vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
@@ -133,6 +135,7 @@ describe("strategy instance creation behavior", () => {
     api.getStrategy.mockReset().mockRejectedValue(new Error("策略不存在"));
     api.listFactorTasks.mockReset().mockResolvedValue({ factor_tasks: [taskInfo()], page_result: { has_more: false } });
     api.listLogicalAccounts.mockReset().mockResolvedValue({ logical_accounts: [], page_result: { has_more: false } });
+    api.listInstances.mockReset().mockResolvedValue({ items: [], page: { total: 0 } });
     api.listAllDatasets.mockReset().mockResolvedValue([]);
   });
 
@@ -338,6 +341,32 @@ describe("strategy instance creation behavior", () => {
     ).toEqual(["", "acc2"]);
   });
 
+  it("已被启用实例绑定的账户显示但不可选，绑定关系读 Strategy 的实例列表", async () => {
+    api.listLogicalAccounts.mockResolvedValue({
+      logical_accounts: [
+        { logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [2] },
+        { logical_account_id: "acc2", name: "账户二", space_id: "crypto", control_mode: 1, markets: [2] }
+      ],
+      page_result: { has_more: false }
+    });
+    api.listInstances.mockResolvedValue({
+      items: [
+        { instance_id: "inst-live", logical_account_id: "acc1", enabled: true },
+        { instance_id: "inst-off", logical_account_id: "acc2", enabled: false }
+      ],
+      page: { total: 2 }
+    });
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
+    runModeGroup(wrapper).vm.$emit("update:modelValue", "trade");
+    await flushPromises();
+    expect(api.listInstances).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+    const options = wrapper.findAll("select")[2].findAll("option");
+    const bound = options.find(item => item.attributes("value") === "acc1")!;
+    expect(bound.attributes("disabled")).toBeDefined();
+    expect(bound.text()).toContain("inst-live");
+    expect(options.find(item => item.attributes("value") === "acc2")!.attributes("disabled")).toBeUndefined();
+  });
+
   it("asks for a spot and a swap task for a mixed-market strategy and keeps one task from being picked twice", async () => {
     api.listFactorTasks.mockResolvedValue({
       factor_tasks: [taskInfo({ name: "现货因子" }, "ftask_spot"), taskInfo({ name: "永续因子" }, "ftask_swap")],
@@ -374,7 +403,7 @@ describe("strategy instance creation behavior", () => {
     });
   });
 
-  it("双市场策略不能写 factor_params：带可变成员的任务不可选并写明原因", async () => {
+  it("带可变成员的主帧任务都能选（不写 factor_params 时只读）；只有附加来源的任务不能有可变成员", async () => {
     api.listFactorTasks.mockResolvedValue({
       factor_tasks: [
         taskInfo({ name: "现货因子" }, "ftask_spot"),
@@ -385,20 +414,30 @@ describe("strategy instance creation behavior", () => {
       ],
       page_result: { has_more: false }
     });
+    const option = (wrapper: { findAll: (selector: string) => any[] }, index: number, value: string) =>
+      wrapper
+        .findAll("select")
+        [index].findAll("option")
+        .find((item: any) => item.attributes("value") === value)!;
+    // 双市场策略不能写 factor_params，但带可变成员的任务照样能选，只读它的列。
     const mixed = [{ ...strategies[0], dsl_yaml: "name: demo\nmarket: {select: both, prefer: swap}\n" }];
     const { wrapper } = await open({ presetStrategyId: "s1", strategies: mixed });
-    const spotOption = wrapper
-      .findAll("select")[1]
-      .findAll("option")
-      .find(item => item.attributes("value") === "ftask_spot")!;
-    expect(spotOption.attributes("disabled")).toBeDefined();
-    expect(spotOption.text()).toContain("有可变成员，不可选");
-    const fixedOption = wrapper
-      .findAll("select")[1]
-      .findAll("option")
-      .find(item => item.attributes("value") === "ftask_fixed")!;
-    expect(fixedOption.attributes("disabled")).toBeUndefined();
-    expect(wrapper.text()).toContain("现货、永续双市场策略不支持 factor_params");
+    const spotOption = option(wrapper, 1, "ftask_spot");
+    expect(spotOption.attributes("disabled")).toBeUndefined();
+    expect(spotOption.text()).not.toContain("不可选");
+    expect(wrapper.text()).not.toContain("有可变成员，不可选");
+
+    // 附加来源：带可变成员的任务置灰并写明原因，主帧照常可选。
+    const withSources = [
+      { ...strategies[0], dsl_yaml: "name: demo\nbar: 1h\nmarket: {select: swap}\nsources:\n  daily: {bar: 1d}\n" }
+    ];
+    const sourced = await open({ presetStrategyId: "s1", strategies: withSources });
+    expect(option(sourced.wrapper, 1, "ftask_spot").attributes("disabled")).toBeUndefined();
+    const sourceOption = option(sourced.wrapper, 2, "ftask_spot");
+    expect(sourceOption.attributes("disabled")).toBeDefined();
+    expect(sourceOption.text()).toContain("有可变成员，不可选");
+    expect(option(sourced.wrapper, 2, "ftask_fixed").attributes("disabled")).toBeUndefined();
+    expect(sourced.wrapper.text()).toContain("附加来源的任务不能有可变成员");
   });
 
   describe("统一数据集上的任务（方式 B）", () => {
@@ -494,7 +533,7 @@ describe("strategy instance creation behavior", () => {
     expect(wrapper.findAll("option").some(item => item.text().includes("ftask_a"))).toBe(true);
   });
 
-  it("offers only running, unbound tasks of the space and says so when there are none", async () => {
+  it("offers running tasks of the space; only a factor_params definition hides tasks bound to another instance", async () => {
     api.listFactorTasks.mockResolvedValue({
       factor_tasks: [
         taskInfo({}, "ftask_ok"),
@@ -504,14 +543,27 @@ describe("strategy instance creation behavior", () => {
       ],
       page_result: { has_more: false }
     });
+    const taskOptions = (wrapper: { findAll: (selector: string) => any[] }) =>
+      wrapper.findAll("option").map(item => item.text() as string);
+    // 没有 factor_params：只读任务的列，已关联到别的实例的任务也能选。
     const { wrapper } = await open({ presetStrategyId: "s1" });
-    const options = wrapper.findAll("option").map(item => item.text());
-    expect(options.some(text => text.includes("ftask_ok"))).toBe(true);
-    for (const hidden of ["ftask_bound", "ftask_off", "ftask_other"])
-      expect(options.some(text => text.includes(hidden))).toBe(false);
+    const options = taskOptions(wrapper);
+    for (const shown of ["ftask_ok", "ftask_bound"]) expect(options.some(text => text.includes(shown))).toBe(true);
+    for (const hidden of ["ftask_off", "ftask_other"]) expect(options.some(text => text.includes(hidden))).toBe(false);
+    expect(wrapper.text()).toContain("多个实例可以共用同一个任务");
+
+    // 写了 factor_params：启用时独占关联主帧任务，已关联到别的实例的不能选。
+    const tuned = [
+      { ...strategies[0], dsl_yaml: "name: demo\nmarket: {select: swap}\nfactor_params:\n  bias__var:\n    window: 20\n" }
+    ];
+    const opened = await open({ presetStrategyId: "s1", strategies: tuned });
+    const tunedOptions = taskOptions(opened.wrapper);
+    expect(tunedOptions.some(text => text.includes("ftask_ok"))).toBe(true);
+    expect(tunedOptions.some(text => text.includes("ftask_bound"))).toBe(false);
+    expect(opened.wrapper.text()).toContain("已关联到别的实例的任务不能选");
 
     api.listFactorTasks.mockResolvedValue({
-      factor_tasks: [taskInfo({ bound_instance_id: "i0" })],
+      factor_tasks: [taskInfo({ status: "disabled" })],
       page_result: { has_more: false }
     });
     const empty = await open({ presetStrategyId: "s1" });
@@ -525,6 +577,7 @@ describe("strategy instance creation behavior", () => {
     expect(wrapper.text()).toContain("任务的列");
     expect(wrapper.text()).toContain("bias__var");
     expect(wrapper.text()).toContain("可变成员 bias__var");
+    expect(wrapper.text()).toContain("本策略只读它的列");
   });
   it("initializes the form and metadata when it is mounted already open (deep link)", async () => {
     const { flushPromises, mount } = await import("@vue/test-utils");

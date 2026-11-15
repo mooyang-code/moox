@@ -229,7 +229,6 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "stress logical",
-			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
 			ExecutionMode: string(exchange.ExecutionModeLive), SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -244,7 +243,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 	}))
 	_, accepted, err := tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "stress-target",
-		InstanceID: testRunner, SessionID: "session-e2e", StrategyID: "stress",
+		InstanceID: testRunner, SessionID: "session-e2e", SessionStartedAt: 1000, StrategyID: "stress",
 		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
 		Targets: targets, Status: targetapp.StatusPending, AcceptedAt: testNow.UnixMilli(),
 	})

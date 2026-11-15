@@ -524,12 +524,19 @@ func validateOrderOwnership(tx *Tx, record OrderRecord) error {
 	if record.LogicalAccountID == "" {
 		return nil
 	}
-	account, err := tx.GetLogicalAccount(record.SpaceID, record.LogicalAccountID)
-	if err != nil {
+	if _, err := tx.GetLogicalAccount(record.SpaceID, record.LogicalAccountID); err != nil {
 		return err
 	}
-	if owner.Type == orderdomain.OwnerTarget && (account.OwnerInstanceID == "" || account.OwnerInstanceID != record.RunnerID) {
-		return fmt.Errorf("%w: TARGET instance does not own logical account", ErrConflict)
+	// 目标单只能由组合当前目标行所属的实例落库：没有目标行、或目标行已换成别的实例的会话，都不落。
+	// 订单上只有实例（RunnerID）和目标号（OwnerID），会话与目标号的比较在提交前（下单服务的 checkTargetAuthorization）。
+	if owner.Type == orderdomain.OwnerTarget {
+		current, err := tx.GetCurrentTarget(record.SpaceID, record.LogicalAccountID)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if err != nil || current.InstanceID != record.RunnerID {
+			return fmt.Errorf("%w: TARGET instance is not the current target's instance", ErrConflict)
+		}
 	}
 	var membership int64
 	if err := tx.db.Raw(

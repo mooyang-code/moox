@@ -39,7 +39,7 @@ func TestRebindFollowsConcurrentRebind(t *testing.T) {
 				done <- result{code, msg}
 			}()
 			time.Sleep(50 * time.Millisecond)
-			// 另一个请求把实例改绑到 s3，随后开始启用：写好会话、挂到实例上，正在联系 Trade。
+			// 另一个请求把实例改绑到 s3，随后在 s3 的锁里把实例启用了。
 			current, err := h.service.Store.GetInstance(h.ctx, "i1")
 			if err != nil {
 				t.Fatal(err)
@@ -54,79 +54,18 @@ func TestRebindFollowsConcurrentRebind(t *testing.T) {
 				t.Fatalf("实例当前定义的锁仍被持有时不应完成：%+v", got)
 			case <-time.After(100 * time.Millisecond):
 			}
-			session := "session-enabling"
-			if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(third)), ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`, CreatedAt: h.now}, third); err != nil {
-				t.Fatal(err)
-			}
-			if err := h.service.Store.SetInstanceEnabled(h.ctx, "i1", false, &session, nil, h.now); err != nil {
+			session := "session-enabled"
+			if err := h.service.Store.EnableInstance(h.ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(third)), ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`, CreatedAt: h.now}, third); err != nil {
 				t.Fatal(err)
 			}
 			unlockThird()
 			got := <-done
-			requireFail(t, got.code, got.msg, "")
+			requireFail(t, got.code, got.msg, "先停用")
 			after, err := h.service.Store.GetInstance(h.ctx, "i1")
-			if err != nil || after.StrategyID != "s3" || after.FactorTasks["spot"] != "ftask_i1" || after.SessionID == nil || *after.SessionID != session {
-				t.Fatalf("启用中的实例不应被改绑：%+v err=%v", after, err)
+			if err != nil || after.StrategyID != "s3" || after.FactorTasks["spot"] != "ftask_i1" || !after.Enabled || after.SessionID == nil || *after.SessionID != session {
+				t.Fatalf("启用的实例不应被改绑：%+v err=%v", after, err)
 			}
 		})
-	}
-}
-
-// 停用对账逐个调用 Trade 期间，另一个实例的会话已被用户的操作换掉：拿锁后重读与列表快照不一致就跳过，
-// 不能把正在进行的启用握手当成过期的停用会话释放、清空或关闭。
-func TestReconcileDisabledSkipsSessionChangedSinceSnapshot(t *testing.T) {
-	h := newHarness(t)
-	h.createStrategy("s1", demoDSL)
-	for _, id := range []string{"i0", "i1"} {
-		created := h.createInstance(id, "s1", "ftask_"+id, "acct-"+id, true)
-		requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
-	}
-	// Trade 释放超时：两个实例都停用，但会话留着等对账。
-	h.owner.releaseErr = errors.New("trade timeout")
-	for _, id := range []string{"i0", "i1"} {
-		h.setEnabled(id, false)
-	}
-	h.owner.releaseErr = nil
-	stale, err := h.service.Store.GetInstance(h.ctx, "i1")
-	if err != nil || stale.SessionID == nil {
-		t.Fatalf("i1 应保留待释放的会话：%+v err=%v", stale, err)
-	}
-	staleSession := *stale.SessionID
-	replacement := "session-new"
-	h.owner.onRelease = func(instance, session string) {
-		if instance != "i0" {
-			return
-		}
-		// 对账释放 i0 期间，用户对 i1 重试停用成功，随后开始启用并挂上新会话。
-		if err := h.service.Store.ClearInstanceSession(h.ctx, "i1", staleSession, h.now); err != nil {
-			t.Error(err)
-		}
-		_ = h.service.Store.CloseSession(h.ctx, staleSession, h.now)
-		if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: replacement, InstanceID: "i1", DSLHash: dsl.Hash([]byte(demoDSL)), ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`, CreatedAt: h.now}, demoDSL); err != nil {
-			t.Error(err)
-		}
-		if err := h.service.Store.SetInstanceEnabled(h.ctx, "i1", false, &replacement, nil, h.now); err != nil {
-			t.Error(err)
-		}
-	}
-	h.owner.releases = nil
-	if err := h.service.ReconcileDisabledInstances(h.ctx); err != nil {
-		t.Fatal(err)
-	}
-	for _, released := range h.owner.releases {
-		if released == replacement {
-			t.Fatalf("不应释放快照之后挂上的新会话：%v", h.owner.releases)
-		}
-	}
-	after, err := h.service.Store.GetInstance(h.ctx, "i1")
-	if err != nil || after.SessionID == nil || *after.SessionID != replacement {
-		t.Fatalf("新会话应保留在实例上：%+v err=%v", after, err)
-	}
-	if session, err := h.service.Store.GetSession(h.ctx, replacement); err != nil || session.ClosedAt != nil {
-		t.Fatalf("新会话不应被关闭：%+v err=%v", session, err)
-	}
-	if first, err := h.service.Store.GetInstance(h.ctx, "i0"); err != nil || first.SessionID != nil {
-		t.Fatalf("i0 的过期会话应已清空：%+v err=%v", first, err)
 	}
 }
 
@@ -138,12 +77,12 @@ func TestEnableChecksAgeCoverageBeforeSession(t *testing.T) {
 	created := h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
 	requireFail(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg(), "当前只覆盖")
 	sessions, err := h.service.Store.ListSessions(h.ctx, "i1")
-	if err != nil || len(sessions) != 0 || len(h.owner.claims) != 0 {
-		t.Fatalf("覆盖不足时不应写会话或认领：sessions=%v claims=%v err=%v", sessions, h.owner.claims, err)
+	if err != nil || len(sessions) != 0 || len(h.trade.checks) != 0 {
+		t.Fatalf("覆盖不足时不应写会话或联系 Trade：sessions=%v checks=%v err=%v", sessions, h.trade.checks, err)
 	}
 }
 
-// 解析期间实例被并发改绑到另一个定义（越过锁的路径）：会话挂不上，刚打开的会话立即关闭，也不联系 Trade。
+// 解析期间实例被并发改绑到另一个定义（越过锁的路径）：启用的事务整体回滚，不留下会话，实例保持停用。
 func TestEnableClosesSessionWhenInstanceChangesDuringResolve(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
@@ -164,14 +103,11 @@ func TestEnableClosesSessionWhenInstanceChangesDuringResolve(t *testing.T) {
 	rsp := h.setEnabled("i1", true)
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "被修改")
 	sessions, err := h.service.Store.ListSessions(h.ctx, "i1")
-	if err != nil || len(sessions) != 1 || sessions[0].ClosedAt == nil {
-		t.Fatalf("挂不上的会话应被关闭：%+v err=%v", sessions, err)
+	if err != nil || len(sessions) != 0 {
+		t.Fatalf("回滚的启用不应留下会话：%+v err=%v", sessions, err)
 	}
 	if instance, err := h.service.Store.GetInstance(h.ctx, "i1"); err != nil || instance.SessionID != nil || instance.Enabled {
 		t.Fatalf("实例不应挂上会话：%+v err=%v", instance, err)
-	}
-	if len(h.owner.claims) != 0 {
-		t.Fatalf("挂不上会话时不应联系 Trade：%v", h.owner.claims)
 	}
 	// 之后正常重试能启用到改绑后的定义。
 	retried := h.setEnabled("i1", true)

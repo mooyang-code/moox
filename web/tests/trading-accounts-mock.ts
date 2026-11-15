@@ -79,7 +79,6 @@ const logicals = [
     markets: [1, 2],
     settlement_asset: "USDT",
     automation_state: "ACTIVE",
-    owner_instance_id: "inst-1",
     ready: true,
     readiness_reasons: [],
     members: [{ trading_account_id: "ta-paper-1", enabled: true, priority: 1 }]

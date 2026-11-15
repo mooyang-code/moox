@@ -20,18 +20,20 @@ const names = new Map([
   ["st-new", "新策略"],
   ["st-live", "运行中的策略"]
 ]);
-const link = (list: StrategyInstance[], owner = "") =>
-  buildStrategyLinks([{ logical_account_id: "la", owner_instance_id: owner }], list, names).get("la");
+const link = (list: StrategyInstance[]) => buildStrategyLinks([{ logical_account_id: "la" }], list, names).get("la");
 
 describe("关联策略取哪个实例", () => {
-  it("优先取组合自己记着的实例，哪怕它不在最前、也没启用", () => {
-    const list = [instance("new", { strategy_id: "st-new", enabled: true }), instance("old", { strategy_id: "st-old" })];
-    expect(link(list, "old")).toMatchObject({ instanceId: "old", name: "旧策略" });
+  it("取绑了这个账户且启用中的实例，哪怕它不在最前", () => {
+    const list = [instance("new", { strategy_id: "st-new" }), instance("live", { strategy_id: "st-live", enabled: true })];
+    expect(link(list)).toMatchObject({ instanceId: "live", name: "运行中的策略", enabled: true });
   });
 
-  it("没有记着的实例时取启用中的", () => {
-    const list = [instance("new", { strategy_id: "st-new" }), instance("live", { strategy_id: "st-live", enabled: true })];
-    expect(link(list)).toMatchObject({ instanceId: "live", name: "运行中的策略" });
+  it("只看 Strategy 的实例列表：绑了别的账户的启用实例不算", () => {
+    const list = [
+      instance("other", { strategy_id: "st-live", logical_account_id: "la-other", enabled: true }),
+      instance("old", { strategy_id: "st-old" })
+    ];
+    expect(link(list)).toMatchObject({ instanceId: "old", name: "旧策略", enabled: false });
   });
 
   it("都没启用时取最新创建的，不因列表顺序留下最老的", () => {

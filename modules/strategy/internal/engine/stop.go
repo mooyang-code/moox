@@ -132,7 +132,7 @@ func inCooldown(cooldown map[string]int64, id string, bar int64) bool {
 	return ok && bar <= until
 }
 
-// stopTracker 是 rank、signal 规则一期的止损处理：同一规则的全部持仓单位共用一组参数与方向。nil 表示规则没有止损。
+// stopTracker 是 rank 规则一期的止损处理：同一规则的全部持仓单位共用一组参数与方向。nil 表示规则没有止损。
 type stopTracker struct {
 	stop  *dsl.Stop
 	short bool

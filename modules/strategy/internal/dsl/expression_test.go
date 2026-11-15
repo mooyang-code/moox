@@ -54,7 +54,7 @@ func TestAnalyzeNestedNormalizers(t *testing.T) {
 
 func TestAnalyzeBarsAccess(t *testing.T) {
 	t.Parallel()
-	expression, err := Analyze("bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20", StageEntry)
+	expression, err := Analyze("bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20", StageHoldEntry)
 	if err != nil {
 		t.Fatalf("Analyze() 出错：%v", err)
 	}
@@ -117,7 +117,7 @@ func TestCompileExpressionRunsAgainstRowEnvironment(t *testing.T) {
 	if got := value.(float64); got != 0.6*0.5+0.4*10 {
 		t.Fatalf("score 不符：%v", got)
 	}
-	entry, err := CompileExpression("bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20 && instrument_id == \"BTC-USDT\"", StageEntry, columns)
+	entry, err := CompileExpression("bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20 && instrument_id == \"BTC-USDT\"", StageHoldEntry, columns)
 	if err != nil {
 		t.Fatalf("CompileExpression(entry) 出错：%v", err)
 	}
@@ -180,9 +180,9 @@ func TestCompileProgramFromExample(t *testing.T) {
 	if rank.Filter == nil || rank.Score == nil || rank.SelectWhere != nil || len(rank.Score.Normalizers) != 2 {
 		t.Fatalf("rank 规则不符：%+v", rank)
 	}
-	signal := program.Rules[1]
-	if signal.Entry == nil || signal.Exit == nil || !reflect.DeepEqual(signal.PreviousColumns(), []string{"close", "ma_20"}) {
-		t.Fatalf("signal 规则不符：%+v", signal)
+	timing := program.Rules[1]
+	if timing.HoldEntry == nil || timing.HoldExit == nil || !reflect.DeepEqual(timing.PreviousColumns(), []string{"close", "ma_20"}) {
+		t.Fatalf("固定标的择时规则不符：%+v", timing)
 	}
 	if _, err := Compile(strategy, []string{"close"}); err == nil || !strings.Contains(err.Error(), "long_momentum") {
 		t.Fatalf("缺列时 Compile() 的错误不符：%v", err)

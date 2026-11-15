@@ -33,7 +33,7 @@ func TestHoldFlagReachesTargetsJSONAndTradeEvent(t *testing.T) {
 	now := time.Date(2026, 10, 14, 6, 0, 0, 0, time.UTC)
 	instance := store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "crypto", LogicalAccountID: &account}
 	result := store.Result{ResultID: "r1", InstanceID: "i1", SessionID: "sess", BarEndTime: now, ValidUntil: now.Add(time.Hour), CreatedAt: now}
-	data, err := MarshalTargetEvent(instance, result, items, false)
+	data, err := MarshalTargetEvent(instance, result, 1_000, items, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +57,9 @@ func TestHoldFlagReachesTargetsJSONAndTradeEvent(t *testing.T) {
 	if len(targets) != 2 || !targets[0].GetHold() || targets[1].GetHold() || targets[0].GetTargetWeight() != "0.5" {
 		t.Fatalf("事件里的保持标记不符：%v", targets)
 	}
+	if got := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested).GetSessionStartedAt(); got != 1_000 {
+		t.Fatalf("事件里的会话开始时刻 = %d，期望 1000", got)
+	}
 }
 
 // 同一个币的现货、永续各是一个目标：两项都带各自的 market_type，事件契约校验通过；同一（标的, 市场）重复则被拒绝。
@@ -72,7 +75,7 @@ func TestSpotAndSwapTargetsOfSameInstrumentReachTradeEvent(t *testing.T) {
 	now := time.Date(2026, 11, 5, 6, 0, 0, 0, time.UTC)
 	instance := store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "crypto", LogicalAccountID: &account}
 	result := store.Result{ResultID: "r1", InstanceID: "i1", SessionID: "sess", BarEndTime: now, ValidUntil: now.Add(time.Hour), CreatedAt: now}
-	data, err := MarshalTargetEvent(instance, result, items, false)
+	data, err := MarshalTargetEvent(instance, result, 1_000, items, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,12 +101,12 @@ func TestSpotAndSwapTargetsOfSameInstrumentReachTradeEvent(t *testing.T) {
 	}
 	// 同一（标的, 市场）重复仍拒绝；股票映射为 STOCK，未知市场无法生成事件。
 	dup := []TargetJSON{{InstrumentID: "BTC-USDT", Market: "spot", TargetWeight: "0.1"}, {InstrumentID: "BTC-USDT", Market: "spot", TargetWeight: "0.2"}}
-	if data, err = MarshalTargetEvent(instance, result, dup, false); err == nil {
+	if data, err = MarshalTargetEvent(instance, result, 1_000, dup, false); err == nil {
 		if _, err = registry.UnmarshalMessage(data); err == nil {
 			t.Fatal("同一（标的, 市场）重复应被事件契约拒绝")
 		}
 	}
-	if _, err := MarshalTargetEvent(instance, result, []TargetJSON{{InstrumentID: "A", Market: "option", TargetWeight: "1"}}, false); err == nil {
+	if _, err := MarshalTargetEvent(instance, result, 1_000, []TargetJSON{{InstrumentID: "A", Market: "option", TargetWeight: "1"}}, false); err == nil {
 		t.Fatal("未知市场应报错")
 	}
 }

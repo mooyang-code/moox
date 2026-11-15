@@ -9,8 +9,10 @@ import {
   replayFormFromReplay,
   replayMetricsLine,
   recentRange,
+  replayBarParams,
   replayFeeText,
   replayFunding,
+  replayInputLabel,
   replayPoolPeriods,
   replayStatusLabel,
   replayTasksText,
@@ -181,6 +183,15 @@ describe("replay model helpers", () => {
     expect(replayTasksText(mixed)).toBe("现货 ftask_a、永续 ftask_b");
     expect(replayFeeText(single)).toBe("10 bps");
     expect(replayFeeText(mixed)).toBe("现货 10 bps、永续 5 bps");
+    expect(replayFeeText({ ...single, slippage_bps: 3 }), "有滑点时写在手续费后面").toBe("10 bps，滑点 3 bps");
+    expect(replayInputLabel("compute")).toBe("因子现算");
+    expect(replayInputLabel("view")).toBe("结果 View");
+    expect(replayInputLabel(undefined)).toBe("结果 View");
+    expect(replayBarParams("{}")).toEqual([]);
+    expect(replayBarParams('{"b":{"y":{"default":2}},"a":{"x":{"default":1.5,"overrides":{"A":3}}}}')).toEqual([
+      "a x = 1.5（另有 1 个标的单独取值）",
+      "b y = 2"
+    ]);
     expect(replayUsesSwap(single)).toBe(false);
     expect(replayUsesSwap(mixed)).toBe(true);
     expect(replayUsesSwap(null)).toBe(false);
@@ -244,7 +255,8 @@ describe("回放对比", () => {
       start_time: "2026-10-01T00:00:00Z",
       end_time: "2026-10-02T00:00:00Z",
       spot_fee_bps: 8,
-      swap_fee_bps: 5
+      swap_fee_bps: 5,
+      slippage_bps: 2
     } as never;
     expect(replayFormFromReplay(base)).toMatchObject({
       source: "dsl",
@@ -252,7 +264,8 @@ describe("回放对比", () => {
       tasks: { swap: "ft1" },
       range: [Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 2)],
       spot_fee_bps: 8,
-      swap_fee_bps: 5
+      swap_fee_bps: 5,
+      slippage_bps: 2
     });
     expect(
       replayFormFromReplay({ ...(base as object), tasks: { multi: { factor_task_id: "u", view_id: "v" } } } as never)

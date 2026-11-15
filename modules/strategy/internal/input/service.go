@@ -13,7 +13,7 @@ import (
 // Service 把解析与装配封装成管理接口可用的形式。
 type Service struct {
 	Client Client
-	// Sets 是 FactorMgr 的任务关联接口；nil 时不能启用实例。
+	// Sets 是 FactorMgr 的任务关联与读取接口；nil 时不能启用实例。
 	Sets FactorTasks
 	// ReadyWait 与 ReadyStep 是任务的结果 View 补齐成员列的最长等待与探测间隔（列由 Storage 异步扩展进 View）；
 	// 零值表示不等待。
@@ -21,15 +21,16 @@ type Service struct {
 	ReadyStep time.Duration
 }
 
-// ResolveInstance 启用实例时的解析（设计 8.1）：先把每个任务与实例永久关联（幂等：第一次启用时写入，以后只是核对原来的关联），
-// 要求任务已启用；再解析绑定——DSL 引用的列都存在，任务的可变成员与 factor_params 一一对应。tasks 是实例登记的任务键 → 因子任务
-// （附加来源的键是 来源名:市场），解析出的市场必须与登记一致。任务刚加成员时，结果 View 的列由 Storage 异步补齐，所以列不存在时在限定时间内重试。
+// ResolveInstance 启用实例时的解析（设计 8.1）：所有任务都要已启用；解析绑定——DSL 引用的列都存在，声明了 factor_params 时任务的
+// 可变成员与它一一对应；解析通过之后，声明了 factor_params 的策略才把主帧任务与实例永久关联（幂等：第一次启用时写入，
+// 以后只是核对原来的关联），没有声明的不关联。tasks 是实例登记的任务键 → 因子任务（附加来源的键是 来源名:市场），解析出的市场必须与登记一致。
+// 任务刚加成员时，结果 View 的列由 Storage 异步补齐，所以列不存在时在限定时间内重试。
 func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
 	if err := dsl.Validate(&strategy); err != nil {
 		return Resolved{}, nil, err
 	}
 	var program *dsl.Program
-	resolved, err := s.bindAndResolve(ctx, instanceID, spaceID, tasks, func() (Resolved, error) {
+	resolved, err := s.bindAndResolve(ctx, instanceID, spaceID, tasks, len(strategy.FactorParams) > 0, func() (Resolved, error) {
 		resolved, compiled, err := ResolveTasks(ctx, s.Client, spaceID, tasks, strategy)
 		program = compiled
 		return resolved, err
@@ -37,13 +38,14 @@ func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID string
 	return resolved, program, err
 }
 
-// ResolvePoolInstance 是策略池启用时的解析：与 ResolveInstance 相同的任务关联与重试，绑定按成员分别解析。
+// ResolvePoolInstance 是策略池启用时的解析：与 ResolveInstance 相同的任务核对与重试，绑定按成员分别解析。策略池与成员都不能写
+// factor_params，所以不关联任务。
 func (s Service) ResolvePoolInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, pool dsl.Strategy, members []PoolMemberDef) (PoolResolved, error) {
 	if err := dsl.Validate(&pool); err != nil {
 		return PoolResolved{}, err
 	}
 	var out PoolResolved
-	_, err := s.bindAndResolve(ctx, instanceID, spaceID, tasks, func() (Resolved, error) {
+	_, err := s.bindAndResolve(ctx, instanceID, spaceID, tasks, false, func() (Resolved, error) {
 		var err error
 		out, err = ResolvePool(ctx, s.Client, spaceID, TaskIDs(tasks), pool, members)
 		return out.Resolved, err
@@ -59,15 +61,15 @@ func (s Service) ResolvePool(ctx context.Context, spaceID string, taskIDs []stri
 	return ResolvePool(ctx, s.Client, spaceID, taskIDs, pool, members)
 }
 
-// bindAndResolve 完成启用解析里与策略无关的部分：核对登记的市场、把任务与实例关联，再在限定时间内重试 resolve（任务的结果 View 还没补齐列时）。
-func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string, tasks map[string]string, resolve func() (Resolved, error)) (Resolved, error) {
+// bindAndResolve 完成启用解析里与策略无关的部分：核对登记的市场、核对任务都已启用，在限定时间内重试 resolve（任务的结果 View 还没补齐列时）；
+// 解析与市场核对都通过之后，tuned 为真时才把主帧任务与实例关联。关联是永久的，解析没通过（DSL 写错、来源任务有可变成员、
+// factor_params 与可变成员对不上）时不能先把任务占住，否则启用失败的实例会一直占着任务，交叉登记时两个实例都删不掉。
+func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string, tasks map[string]string, tuned bool, resolve func() (Resolved, error)) (Resolved, error) {
 	if s.Client == nil || s.Sets == nil {
 		return Resolved{}, errors.New("Factor 依赖未配置，不能启用实例")
 	}
-	taskIDs := TaskIDs(tasks)
 	deadline := time.Now().Add(s.ReadyWait)
-	// 关联是永久的：先核对市场，填错的任务不能被关联占住。任务刚建、结果 View 或数据集还没建出时在限定时间内重试，
-	// 其他错误（包括市场对不上）立即返回；关联只在核对通过之后。
+	// 先核对市场：任务刚建、结果 View 或数据集还没建出时在限定时间内重试，其他错误（包括市场对不上）立即返回。
 	for {
 		err := CheckRegisteredMarkets(ctx, tasks, func(ctx context.Context, taskID string) (string, error) { return s.TaskMarket(ctx, spaceID, taskID) })
 		if err == nil {
@@ -82,25 +84,25 @@ func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string,
 		case <-time.After(s.ReadyStep):
 		}
 	}
-	for _, taskID := range taskIDs {
-		bound, err := s.Sets.BindFactorTask(ctx, taskID, instanceID)
+	keys := sortedMapKeys(tasks)
+	for _, key := range keys {
+		task, err := s.Sets.GetFactorTask(ctx, tasks[key])
 		if err != nil {
 			return Resolved{}, err
 		}
-		if bound.BoundInstanceID != instanceID {
-			return Resolved{}, fmt.Errorf("因子任务 %s 关联的是实例 %q，不是本实例", taskID, bound.BoundInstanceID)
-		}
-		if bound.Status != "enabled" {
-			return Resolved{}, fmt.Errorf("因子任务 %s 的状态是 %q，只有已启用的任务才能启用实例", taskID, bound.Status)
+		if err := requireEnabledTask(tasks[key], task.Status); err != nil {
+			return Resolved{}, err
 		}
 	}
+	var resolved Resolved
 	for {
-		resolved, err := resolve()
+		var err error
+		resolved, err = resolve()
 		if err == nil {
 			err = CheckResolvedMarkets(resolved, tasks)
 		}
 		if err == nil {
-			return resolved, nil
+			break
 		}
 		if !waitingForColumns(err) || !time.Now().Add(s.ReadyStep).Before(deadline) {
 			return Resolved{}, err
@@ -111,6 +113,35 @@ func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string,
 		case <-time.After(s.ReadyStep):
 		}
 	}
+	if !tuned {
+		return resolved, nil
+	}
+	// 参数只提交给主帧任务（写了 factor_params 的策略只有一个主帧任务，没有参考市场），附加来源的任务只读不关联。
+	for _, key := range keys {
+		if source, _ := dsl.SplitTaskKey(key); source != "" {
+			continue
+		}
+		taskID := tasks[key]
+		bound, err := s.Sets.BindFactorTask(ctx, taskID, instanceID)
+		if err != nil {
+			return Resolved{}, err
+		}
+		if bound.BoundInstanceID != instanceID {
+			return Resolved{}, fmt.Errorf("因子任务 %s 关联的是实例 %q，不是本实例", taskID, bound.BoundInstanceID)
+		}
+		if err := requireEnabledTask(taskID, bound.Status); err != nil {
+			return Resolved{}, err
+		}
+	}
+	return resolved, nil
+}
+
+// requireEnabledTask 要求任务已启用。
+func requireEnabledTask(taskID, status string) error {
+	if status != "enabled" {
+		return fmt.Errorf("因子任务 %s 的状态是 %q，只有已启用的任务才能启用实例", taskID, status)
+	}
+	return nil
 }
 
 // TaskMarket 返回因子任务的市场：任务结果 View → 数据集 → 源数据集的市场类型。创建实例和启用前用它核对“市场 → 任务”的对应。
@@ -241,6 +272,39 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 		generations[key] = generation
 	}
 	return end, generations, nil
+}
+
+// ComputeReplayWindow 是“因子现算”来源的提交校验：主帧不读 View，不按 View 的覆盖范围校验起点或截断终点（可回放的各期
+// 由因子引擎按本地数据在回放开始时给出），只把终点截到 now 时最近一根已收盘的 bar 之前（它可能还没同步到因子机本地，与
+// View 来源一样不回放最新一根）。返回截断后的终点、各任务键的活动索引代次（附加来源与参考市场执行时仍读 View；主帧任务
+// 只登记，不再按它复查），以及主帧的序列数（数据集的标的数 × 市场数，用来估算单步大小）。
+func (s Service) ComputeReplayWindow(ctx context.Context, spaceID string, resolved Resolved, start, end, now time.Time) (time.Time, map[string]string, int, error) {
+	if s.Client == nil {
+		return time.Time{}, nil, 0, errors.New("Storage 与 Factor 依赖未配置，不能回放")
+	}
+	closed, err := ClosedPeriod(resolved.Calendar, resolved.Bar, now)
+	if err != nil {
+		return time.Time{}, nil, 0, err
+	}
+	if end.After(closed.StorageStart) {
+		end = closed.StorageStart
+	}
+	if !end.After(start) {
+		return time.Time{}, nil, 0, fmt.Errorf("%w：最近一根已收盘的 bar 是 %s，回放只到它之前", ErrNoCompleteBar, PeriodLabel(resolved.Calendar, resolved.Bar, closed.StorageStart))
+	}
+	generations := make(map[string]string, len(resolved.Tasks))
+	for key, task := range resolved.AllTaskBindings() {
+		generation, err := s.Client.ViewGeneration(ctx, spaceID, task.ViewID)
+		if err != nil {
+			return time.Time{}, nil, 0, err
+		}
+		generations[key] = generation
+	}
+	subjects, err := s.Client.ListDatasetSubjects(ctx, spaceID, resolved.Primary().DatasetID)
+	if err != nil {
+		return time.Time{}, nil, 0, err
+	}
+	return end, generations, len(subjects) * len(resolved.Markets()), nil
 }
 
 // PoolReplayWindow 校验并截断策略池研究回放的区间：每个成员按自己的 min_age_bars 与回看校验起点、终点取各 View 各成员中最早的

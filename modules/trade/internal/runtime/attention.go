@@ -73,10 +73,9 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		telemetry.AttentionTransferShortfall: telemetry.Recent(telemetry.AttentionTransferShortfall, now, rejectionWindow),
 		telemetry.AttentionTransferFailing:   telemetry.Recent(telemetry.AttentionTransferFailing, now, rejectionWindow),
 		telemetry.AttentionValuationDegraded: telemetry.Recent(telemetry.AttentionValuationDegraded, now, rejectionWindow),
-		// 清仓收尾、释放会话留下要人工核对的单：每次发生记一条，保留窗口内持续上报。
-		telemetry.AttentionFlattenOrdersUnsettled:  telemetry.Recent(telemetry.AttentionFlattenOrdersUnsettled, now, rejectionWindow),
-		telemetry.AttentionReleaseOrdersUnverified: telemetry.Recent(telemetry.AttentionReleaseOrdersUnverified, now, rejectionWindow),
-		// 释放会话持续失败：失败期间每次重试都刷新时间，释放成功后不再刷新，保留窗口过了就消失。
+		// 清仓收尾留下要人工核对的单：每次发生记一条，保留窗口内持续上报。
+		telemetry.AttentionFlattenOrdersUnsettled: telemetry.Recent(telemetry.AttentionFlattenOrdersUnsettled, now, rejectionWindow),
+		// 过期目标的挂单持续撤不下来：过期路径每次重试失败都刷新时间，撤下来即删掉；重试停了（目标被新会话的目标取代）不再刷新，保留窗口过了就消失。
 		telemetry.AttentionReleaseOrdersStuck: telemetry.Recent(telemetry.AttentionReleaseOrdersStuck, now, rejectionWindow),
 		// 同步把标的已下架、查不到的订单按过期结束或收掉成交缺口：每笔记一条，保留窗口内持续上报。
 		telemetry.AttentionOrdersInstrumentGone: telemetry.Recent(telemetry.AttentionOrdersInstrumentGone, now, rejectionWindow),
@@ -284,7 +283,7 @@ func (w *AttentionWorker) turnoverHigh(ctx context.Context, logical store.Logica
 		return false, err
 	}
 	// 1 小时内暂停或恢复过（清仓、人工下单都会暂停）：恢复后执行器会把持仓拉回目标，
-	// 这部分成交没有对应的目标变化，这一小时不判断。组合账户只在暂停、恢复、改名、认领会话时更新。
+	// 这部分成交没有对应的目标变化，这一小时不判断。组合账户只在暂停、恢复、改名、改设置、关闭会话时更新。
 	if !logical.UpdatedAt.IsZero() && now.Sub(logical.UpdatedAt) < time.Hour {
 		return false, nil
 	}

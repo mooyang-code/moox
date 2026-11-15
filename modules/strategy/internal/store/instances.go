@@ -14,12 +14,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// 实例健康状态：degraded 是求值类问题，下一个 ok 周期自动恢复；session_unverified 是 Trade 会话结果未知，
-// 只有重新核实会话成功才恢复，ok 周期不会清除它。
+// 实例健康状态：degraded 是求值类问题，下一个 ok 周期自动恢复。
 const (
-	HealthOK                = "ok"
-	HealthDegraded          = "degraded"
-	HealthSessionUnverified = "session_unverified"
+	HealthOK       = "ok"
+	HealthDegraded = "degraded"
 )
 
 // Instance 把定义绑定到一个空间、一个或两个因子任务和可选的组合账户。因子任务在创建时写定、不能修改；读取的 View 是任务结果数据集的默认 View。
@@ -92,14 +90,13 @@ const (
 		AND c_instance_id IN (SELECT c_instance_id FROM t_strategy_instance_tasks WHERE c_factor_task_id = ?)
 		ORDER BY c_instance_id`
 
-	// sqlEnableInstance 把挂着会话的停用实例置为启用，写入绑定解析并恢复健康。
-	sqlEnableInstance = `UPDATE t_strategy_instances SET c_enabled = 1, c_session_id = ?, c_resolved_json = ?, c_health = 'ok', c_mtime = ? WHERE c_instance_id = ?`
-	// sqlAttachInstanceSession 把会话挂到停用的实例上。
-	sqlAttachInstanceSession = `UPDATE t_strategy_instances SET c_session_id = ?, c_mtime = ? WHERE c_instance_id = ?`
-	// sqlClearInstanceSession 比较交换清空停用实例的会话。
-	sqlClearInstanceSession = `UPDATE t_strategy_instances SET c_session_id = NULL, c_mtime = ? WHERE c_instance_id = ? AND c_enabled = 0 AND c_session_id = ?`
-	// sqlSetInstanceHealth 更新健康状态，状态没变时不写。
-	sqlSetInstanceHealth = `UPDATE t_strategy_instances SET c_health = ?, c_mtime = ? WHERE c_instance_id = ? AND c_health <> ?`
+	// sqlListInstanceIDsByTask 列出登记了某个因子任务的全部实例（不分空间与启用状态）。
+	sqlListInstanceIDsByTask = `SELECT DISTINCT c_instance_id FROM t_strategy_instance_tasks WHERE c_factor_task_id = ? ORDER BY c_instance_id`
+
+	// sqlEnableInstance 把停用的实例挂上会话并置为启用，写入绑定解析并恢复健康。
+	sqlEnableInstance = `
+		UPDATE t_strategy_instances SET c_enabled = 1, c_session_id = ?, c_resolved_json = ?, c_health = 'ok', c_mtime = ?
+		WHERE c_instance_id = ? AND c_enabled = 0`
 	// sqlMarkInstanceDegraded 把仍以该会话启用、健康的实例标记为 degraded。
 	sqlMarkInstanceDegraded = `
 		UPDATE t_strategy_instances SET c_health = 'degraded', c_mtime = ?
@@ -108,15 +105,9 @@ const (
 	sqlRecoverInstanceHealth = `
 		UPDATE t_strategy_instances SET c_health = 'ok', c_mtime = ?
 		WHERE c_instance_id = ? AND c_health = 'degraded' AND c_enabled = 1 AND c_session_id = ?`
-	// sqlDisableInstanceKeepSession 停用实例并保留待 Trade 释放的会话。
-	sqlDisableInstanceKeepSession = `UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = ?, c_mtime = ? WHERE c_instance_id = ?`
-	// sqlDisableInstanceClearSession 停用实例并清空会话。
-	sqlDisableInstanceClearSession = `UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = NULL, c_mtime = ? WHERE c_instance_id = ?`
-	// sqlSetInstanceHealthOnly 只改健康状态（停用事务里使用，不改 c_mtime）。
-	sqlSetInstanceHealthOnly = `UPDATE t_strategy_instances SET c_health = ? WHERE c_instance_id = ?`
+	// sqlDisableInstance 比较交换停用以该会话启用的实例，并清掉实例上的会话。
+	sqlDisableInstance = `UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = NULL, c_mtime = ? WHERE c_instance_id = ? AND c_enabled = 1 AND c_session_id = ?`
 
-	// sqlSelectSessionForMatch 读取启用握手比对所需的会话字段。
-	sqlSelectSessionForMatch = `SELECT c_instance_id, c_dsl_hash, c_resolved_json, c_closed_at FROM t_strategy_sessions WHERE c_session_id = ?`
 	// sqlSelectLiveDefinitionHash 读取未删除定义当前的 DSL 哈希。
 	sqlSelectLiveDefinitionHash = `SELECT c_dsl_hash FROM t_strategy_defs WHERE c_strategy_id = ? AND c_deleted_at IS NULL`
 	// sqlCountLiveDefinition 统计未删除的定义（0 或 1）。
@@ -300,7 +291,7 @@ func (s *Store) GetInstance(ctx context.Context, instanceID string) (Instance, e
 	return instance, nil
 }
 
-// UpdateInstance 修改停用且无会话实例的定义与账户绑定。因子任务在创建时写定，不能修改（也不写这一列）。
+// UpdateInstance 修改停用实例的定义与账户绑定。因子任务在创建时写定，不能修改（也不写这一列）。
 // 同一个事务里清掉实例的规则状态：状态是按原来的定义和账户积累的理论持仓，换了账户或定义之后不能接着用。
 func (s *Store) UpdateInstance(ctx context.Context, instance Instance) error {
 	if err := validateInstanceIdentity(instance); err != nil {
@@ -324,9 +315,6 @@ func (s *Store) UpdateInstance(ctx context.Context, instance Instance) error {
 		}
 		if !SameTasks(tasks, instance.FactorTasks) {
 			return errors.New("实例的因子任务在创建时写定，不能修改")
-		}
-		if current.SessionID.Valid {
-			return errors.New("实例的启用或停用操作尚未完成")
 		}
 		if current.SpaceID != instance.SpaceID {
 			return errors.New("实例不能迁移到其他空间")
@@ -381,6 +369,16 @@ func (s *Store) EnabledInstancesByView(ctx context.Context, spaceID, viewID stri
 	return withTasks(s.db.WithContext(ctx), rows)
 }
 
+// InstanceIDsByTask 返回登记了因子任务 taskID 的全部实例 ID（排序；不分空间与启用状态）。删除实例时据此找出还在引用
+// 要删的任务的其他实例。
+func (s *Store) InstanceIDsByTask(ctx context.Context, taskID string) ([]string, error) {
+	var ids []string
+	if err := s.db.WithContext(ctx).Raw(sqlListInstanceIDsByTask, strings.TrimSpace(taskID)).Scan(&ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // SameTasks 报告两份因子任务绑定相同。
 func SameTasks(a, b map[string]string) bool {
 	if len(a) != len(b) {
@@ -394,95 +392,7 @@ func SameTasks(a, b map[string]string) bool {
 	return true
 }
 
-// SetInstanceEnabled 推进启用握手：enabled=false 把会话挂到停用的实例上（启用流程先写会话再联系 Trade，认领响应
-// 丢失时启动对账能释放这个确定的身份）；enabled=true 把挂着该会话的实例置为启用。两步都对会话做比较交换。
-// 停用走 DisableInstance（同时关闭会话）。
-func (s *Store) SetInstanceEnabled(ctx context.Context, instanceID string, enabled bool, sessionID *string, resolvedJSON json.RawMessage, at time.Time) error {
-	now, err := requireTime(at)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(instanceID) == "" {
-		return errors.New("instance_id 不能为空")
-	}
-	if sessionID == nil || strings.TrimSpace(*sessionID) == "" {
-		return errors.New("启用实例或挂会话需要会话 ID")
-	}
-	session := strings.TrimSpace(*sessionID)
-	return s.transaction(ctx, func(tx *gorm.DB) error {
-		current, err := readInstance(tx, instanceID)
-		if err != nil {
-			return err
-		}
-		if current.Enabled == 1 {
-			if enabled && current.SessionID.Valid && current.SessionID.String == session {
-				return nil
-			}
-			return errors.New("实例已处于启用状态")
-		}
-		if enabled {
-			// 比较交换：会话必须已经挂在实例上、未关闭，并且与实例当前引用的定义版本和 View 一致；
-			// 期间被对账清掉、关闭，或实例被改绑，都拒绝启用。
-			if !current.SessionID.Valid || current.SessionID.String != session {
-				return errors.New("实例的启用或停用操作尚未完成")
-			}
-			if err := requireMatchingSession(tx, current, session); err != nil {
-				return err
-			}
-			resolved := current.ResolvedJSON
-			if len(resolvedJSON) > 0 {
-				resolved, err = jsonObjectOrEmpty(resolvedJSON)
-				if err != nil {
-					return err
-				}
-			}
-			return tx.Exec(sqlEnableInstance, session, resolved, now, instanceID).Error
-		}
-		if current.SessionID.Valid && current.SessionID.String != session {
-			return errors.New("实例的启用或停用操作尚未完成")
-		}
-		// 挂上会话前确认它属于该实例、未关闭，并与实例当前引用的定义版本和 View 一致：打开会话之后实例被改绑
-		// 或定义被修改时，在联系 Trade 之前就拒绝。
-		if err := requireMatchingSession(tx, current, session); err != nil {
-			return err
-		}
-		return tx.Exec(sqlAttachInstanceSession, session, now, instanceID).Error
-	})
-}
-
-// ClearInstanceSession 在 Trade 确认释放后清空停用实例的会话；比较交换，避免延迟的释放清掉新会话。
-func (s *Store) ClearInstanceSession(ctx context.Context, instanceID, expectedSessionID string, at time.Time) error {
-	now, err := requireTime(at)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(instanceID) == "" || strings.TrimSpace(expectedSessionID) == "" {
-		return errors.New("instance_id 与期望的会话 ID 不能为空")
-	}
-	result := s.db.WithContext(ctx).Exec(sqlClearInstanceSession, now, instanceID, expectedSessionID)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// SetInstanceHealth 更新健康状态（ok | degraded）。
-func (s *Store) SetInstanceHealth(ctx context.Context, instanceID, health string, at time.Time) error {
-	now, err := requireTime(at)
-	if err != nil {
-		return err
-	}
-	if health != HealthOK && health != HealthDegraded && health != HealthSessionUnverified {
-		return errors.New("健康状态只能是 ok、degraded 或 session_unverified")
-	}
-	result := s.db.WithContext(ctx).Exec(sqlSetInstanceHealth, health, now, instanceID, health)
-	return result.Error
-}
-
-// MarkInstanceDegraded 在求值类问题出现时把健康的实例标记为 degraded；不覆盖 session_unverified。
+// MarkInstanceDegraded 在求值类问题出现时把健康的实例标记为 degraded。
 // 只作用于仍以该会话启用的实例：求值期间实例被停用或换了会话时，这一期的结论已不代表实例的当前状态。
 func (s *Store) MarkInstanceDegraded(ctx context.Context, instanceID, sessionID string, at time.Time) error {
 	now, err := requireTime(at)
@@ -492,8 +402,7 @@ func (s *Store) MarkInstanceDegraded(ctx context.Context, instanceID, sessionID 
 	return s.db.WithContext(ctx).Exec(sqlMarkInstanceDegraded, now, instanceID, sessionID).Error
 }
 
-// RecoverInstanceHealth 在 ok 周期把 degraded 恢复为 ok；session_unverified 只能由重新核实会话恢复。
-// 只作用于仍以该会话启用的实例：对账循环自动停用并标记的 degraded 不能被一个并发提交的 ok 周期抹掉。
+// RecoverInstanceHealth 在 ok 周期把 degraded 恢复为 ok。只作用于仍以该会话启用的实例。
 func (s *Store) RecoverInstanceHealth(ctx context.Context, instanceID, sessionID string, at time.Time) error {
 	now, err := requireTime(at)
 	if err != nil {
@@ -502,72 +411,29 @@ func (s *Store) RecoverInstanceHealth(ctx context.Context, instanceID, sessionID
 	return s.db.WithContext(ctx).Exec(sqlRecoverInstanceHealth, now, instanceID, sessionID).Error
 }
 
-// DisableInstance 在一个事务里停用实例并关闭会话：pending 非空时保留它等待 Trade 释放，否则清空。
-// 停用与关闭会话必须同时成功，否则再次启用时可能沿用一个本应关闭的会话。health 非空时在同一事务里设置健康状态
-// （对账自动停用时标记 degraded，让原因留在实例上）。
-func (s *Store) DisableInstance(ctx context.Context, instanceID string, sessionID, pending *string, health string, at time.Time) error {
+// DisableInstance 在一个事务里停用实例（批 3 的 3.6）：置为停用、清掉实例上的会话、关闭这个会话；停用的实例上从不挂会话。
+// 比较交换：实例必须仍以 sessionID 启用，不能关掉一个之后才换上的会话。通知 Trade 关闭会话由调用方在提交之后做。
+func (s *Store) DisableInstance(ctx context.Context, instanceID, sessionID string, at time.Time) error {
 	now, err := requireTime(at)
 	if err != nil {
 		return err
 	}
-	if health != "" && health != HealthOK && health != HealthDegraded && health != HealthSessionUnverified {
-		return errors.New("健康状态只能是 ok、degraded 或 session_unverified")
+	if strings.TrimSpace(instanceID) == "" || strings.TrimSpace(sessionID) == "" {
+		return errors.New("停用实例需要 instance_id 与会话 ID")
 	}
 	return s.transaction(ctx, func(tx *gorm.DB) error {
 		current, err := readInstance(tx, instanceID)
 		if err != nil {
 			return err
 		}
-		// 比较交换：调用方看到的会话必须仍是实例当前的会话，不能关掉或清空一个之后才挂上的会话。
-		if (sessionID == nil && current.SessionID.Valid) || (sessionID != nil && (!current.SessionID.Valid || current.SessionID.String != *sessionID)) {
+		if current.Enabled != 1 || !current.SessionID.Valid || current.SessionID.String != sessionID {
 			return errors.New("实例的会话已变化，请刷新后重试")
 		}
-		if pending != nil {
-			if err := tx.Exec(sqlDisableInstanceKeepSession, *pending, now, instanceID).Error; err != nil {
-				return err
-			}
-		} else if err := tx.Exec(sqlDisableInstanceClearSession, now, instanceID).Error; err != nil {
+		if err := tx.Exec(sqlDisableInstance, now, instanceID, sessionID).Error; err != nil {
 			return err
 		}
-		if health != "" {
-			if err := tx.Exec(sqlSetInstanceHealthOnly, health, instanceID).Error; err != nil {
-				return err
-			}
-		}
-		if sessionID != nil {
-			return tx.Exec(sqlCloseSession, now, *sessionID).Error
-		}
-		return nil
+		return tx.Exec(sqlCloseSession, now, sessionID).Error
 	})
-}
-
-// requireMatchingSession 确认会话属于该实例、未关闭，且固化的 DSL 版本与因子任务与实例当前的定义和因子任务一致。
-func requireMatchingSession(tx *gorm.DB, instance instanceRow, sessionID string) error {
-	var session struct {
-		InstanceID   string       `gorm:"column:c_instance_id"`
-		DSLHash      string       `gorm:"column:c_dsl_hash"`
-		ResolvedJSON string       `gorm:"column:c_resolved_json"`
-		ClosedAt     sql.NullTime `gorm:"column:c_closed_at"`
-	}
-	if err := tx.Raw(sqlSelectSessionForMatch, sessionID).Scan(&session).Error; err != nil {
-		return err
-	}
-	if session.InstanceID != instance.InstanceID || session.ClosedAt.Valid {
-		return errors.New("实例的会话已关闭或不属于该实例，请重新启用")
-	}
-	var definitionHash string
-	if err := tx.Raw(sqlSelectLiveDefinitionHash, instance.StrategyID).Scan(&definitionHash).Error; err != nil {
-		return err
-	}
-	sessionTasks := SessionTasks([]byte(session.ResolvedJSON))
-	tasks, err := instanceTasks(tx, instance.InstanceID)
-	if err != nil {
-		return err
-	}
-	if definitionHash != session.DSLHash || !SameTasks(sessionTasks, tasks) {
-		return errors.New("实例在启用期间被修改，请重新启用")
-	}
-	return nil
 }
 
 // SessionTasks 从会话固化的绑定解析（resolved_json）里取出全部任务键 → 因子任务：主帧的 tasks、参考市场 references 与附加来源

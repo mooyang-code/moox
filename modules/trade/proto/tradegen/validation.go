@@ -302,16 +302,9 @@ func (r *RemoveLogicalAccountMemberReq) Validate() error {
 	return nil
 }
 
-func (r *ClaimLogicalAccountOwnerReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.InstanceId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" {
-		return fmt.Errorf("logical_account_id, instance_id, session_id and expected_auth_fence are required")
-	}
-	return nil
-}
-
-func (r *ReleaseLogicalAccountOwnerReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.InstanceId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" {
-		return fmt.Errorf("logical_account_id, instance_id, session_id and expected_auth_fence are required")
+func (r *CloseTargetSessionReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.InstanceId) == "" || strings.TrimSpace(r.SessionId) == "" || r.SessionStartedAt <= 0 {
+		return fmt.Errorf("logical_account_id, instance_id, session_id and a positive session_started_at are required")
 	}
 	return nil
 }

@@ -202,16 +202,19 @@ portfolio: {max_missing: 1}
 	require.Equal(t, StageStopped, items["A-USDT"].Stage)
 }
 
-// signal：止损等同 exit，exit 的输入缺失也照常判断；明细合并成一条；做空方向。
-func TestSignalStopShortAndMissingExitInput(t *testing.T) {
+// 固定标的择时：止损等同出场，出场条件的输入缺失也照常判断；明细合并成一条；做空方向。
+func TestHoldPoolStopShortAndMissingExitInput(t *testing.T) {
 	run := newStopRun(t, `name: s
 rules:
   - id: r
-    type: signal
+    type: rank
     pool: [A-USDT]
     side: short
-    entry: "e > 0"
-    exit: "x > 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "e > 0"
+      exit: "x > 0"
     weight: {total: 1}
     stop: {loss: 0.05, cooldown_bars: 3}
 portfolio: {max_missing: 1}
@@ -223,51 +226,10 @@ portfolio: {max_missing: 1}
 	require.Empty(t, weights)
 	require.Equal(t, StageStopped, items["A-USDT"].Stage)
 	require.Contains(t, items["A-USDT"].Reason, reasonStopLoss+";missing:x")
-	// 冷却中 entry 成立也不入场。
+	// 冷却中入场条件成立也不入场。
 	weights, items, _ = run.step(map[string]map[string]float64{"A-USDT": {"close": 105, "e": 1, "x": 0}})
 	require.Empty(t, weights)
 	require.Equal(t, reasonCooldown, items["A-USDT"].Reason)
-}
-
-// tranche：同组子策略按各自阈值判断，共用入场价与最有利价格；冷却中的子策略不为新开仓取权重；止盈。
-func TestTrancheStopPerSub(t *testing.T) {
-	run := newStopRun(t, `name: s
-rules:
-  - id: g
-    type: tranche
-    weight: 1
-    tranche:
-      hold_period: 3
-      long_factors: [{factor: m, descending: true}]
-      stg_weight: 1
-      stop: {loss: "{l}", profit: 0.5, cooldown_bars: 5}
-    params:
-      columns: [l]
-      rows:
-        - [0.05]
-        - [0.2]
-portfolio: {leverage: 10, max_missing: 1}
-`, "close", "volume", "m")
-	require.Len(t, run.program.Rules[0].TrancheGroups, 1, "阈值不同、价格口径相同的子策略同组")
-	row := func(close, m float64) map[string]float64 {
-		return map[string]float64{"close": close, "volume": 1, "m": m}
-	}
-	// 每个子策略每批份额 1/3，两个子策略 stg_weight 各半。
-	weights, _, _ := run.step(map[string]map[string]float64{"A-USDT": row(100, 9), "B-USDT": row(100, 1)})
-	require.Equal(t, map[string]string{"A-USDT": "0.3333"}, weights)
-	// A 跌 10%：第 1 个子策略（5%）止损、第 2 个（20%）不止损。A 仍有权重，原因追加 stopped:1。
-	weights, items, decision := run.step(map[string]map[string]float64{"A-USDT": row(90, 9), "B-USDT": row(100, 1)})
-	require.Equal(t, 1, decision.Summary.Rules["g"].StopLoss)
-	require.Contains(t, items["A-USDT"].Reason, "stopped:1")
-	// 第 1 批：只剩子策略 2 的 1/6；第 2 批（本期新开，子策略 1 在冷却中）：只有子策略 2 的 1/6。
-	require.Equal(t, "0.3333", weights["A-USDT"])
-	pick := run.state.Rules["g"].Tranche.Groups[0].Picks[0]
-	require.True(t, passBit(pick.Stopped, 0))
-	require.False(t, passBit(pick.Stopped, 1))
-	require.Equal(t, "100", pick.Peak)
-	// 止盈：第 1 批相对 100 涨 50%，子策略 2 止盈；第 2 批入场 90，涨 66%，也止盈。
-	_, _, decision = run.step(map[string]map[string]float64{"A-USDT": row(150, 1), "B-USDT": row(100, 9)})
-	require.Equal(t, 2, decision.Summary.Rules["g"].TakeProfit)
 }
 
 // 止损用的列是可选列：编译时要求 View 有，但不进规则的必需列；extreme 要 high/low。

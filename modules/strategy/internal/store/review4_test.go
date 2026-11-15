@@ -11,61 +11,42 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 )
 
-// 挂会话与启用都对会话做比较交换：会话必须属于该实例、未关闭，并与实例当前引用的定义版本和 View 一致。
-// 会话固化的因子任务与实例不一致、打开会话之后定义被修改，或会话已被关闭，都在联系 Trade 之前拒绝。
-func TestSetInstanceEnabledComparesSessionWithInstance(t *testing.T) {
+// 启用在同一个事务里核对会话与实例：会话固化的因子任务与实例不一致、解析之后定义被修改，都整体拒绝，不留下会话。
+func TestEnableInstanceComparesSessionWithInstance(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	if err := repo.CreateDefinition(ctx, Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: testHash, CreatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"i1", "i2"} {
-		if err := repo.CreateInstance(ctx, Instance{InstanceID: id, StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_" + id}, CreatedAt: testNow}); err != nil {
-			t.Fatal(err)
-		}
+	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_i1"}, CreatedAt: testNow}); err != nil {
+		t.Fatal(err)
 	}
-	open := func(sessionID, instanceID, hash, task string) string {
-		t.Helper()
-		if err := repo.OpenSession(ctx, Session{SessionID: sessionID, InstanceID: instanceID, DSLHash: hash, ResolvedJSON: fmt.Sprintf(`{"tasks":{"spot":{"factor_task_id":%q}}}`, task), CreatedAt: testNow}, "name: demo"); err != nil {
-			t.Fatal(err)
-		}
-		return sessionID
+	enable := func(sessionID, hash, task string) error {
+		return repo.EnableInstance(ctx, Session{SessionID: sessionID, InstanceID: "i1", DSLHash: hash, ResolvedJSON: fmt.Sprintf(`{"tasks":{"spot":{"factor_task_id":%q}}}`, task), CreatedAt: testNow}, "name: demo")
 	}
-	attach := func(sessionID string) error {
-		return repo.SetInstanceEnabled(ctx, "i1", false, &sessionID, nil, testNow)
-	}
-
 	// 会话固化的因子任务与实例的不一致。
-	stale := open("s-task", "i1", testHash, "ftask_other")
-	if err := attach(stale); err == nil || !strings.Contains(err.Error(), "被修改") {
-		t.Fatalf("因子任务不一致的会话不应挂上：%v", err)
+	if err := enable("s-task", testHash, "ftask_other"); err == nil || !strings.Contains(err.Error(), "被修改") {
+		t.Fatalf("因子任务不一致的会话不应启用：%v", err)
 	}
-	// 会话属于另一个实例。
-	foreign := open("s-foreign", "i2", testHash, "ftask_i2")
-	if err := attach(foreign); err == nil || !strings.Contains(err.Error(), "不属于该实例") {
-		t.Fatalf("不应挂上其他实例的会话：%v", err)
-	}
-	// 打开会话之后定义被修改。
-	before := open("s-def", "i1", testHash, "ftask_i1")
+	// 解析之后定义被修改。
 	if err := repo.UpdateDefinition(ctx, Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo2", DSLHash: "sha256:def2", UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	if err := attach(before); err == nil || !strings.Contains(err.Error(), "被修改") {
-		t.Fatalf("定义修改后不应挂上旧版本的会话：%v", err)
+	if err := enable("s-def", testHash, "ftask_i1"); err == nil || !strings.Contains(err.Error(), "被修改") {
+		t.Fatalf("定义修改后不应用旧版本的会话启用：%v", err)
 	}
-	// 一致的会话可以挂上；挂上之后被关闭（例如对账释放）则不能启用。
-	current := open("s-ok", "i1", "sha256:def2", "ftask_i1")
-	if err := attach(current); err != nil {
-		t.Fatal(err)
+	if sessions, err := repo.ListSessions(ctx, "i1"); err != nil || len(sessions) != 0 {
+		t.Fatalf("被拒绝的启用不应留下会话：%+v err=%v", sessions, err)
 	}
-	if err := repo.CloseSession(ctx, current, testNow); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", true, &current, nil, testNow); err == nil || !strings.Contains(err.Error(), "已关闭") {
-		t.Fatalf("已关闭的会话不应能启用：%v", err)
-	}
-	if instance, err := repo.GetInstance(ctx, "i1"); err != nil || instance.Enabled {
+	if instance, err := repo.GetInstance(ctx, "i1"); err != nil || instance.Enabled || instance.SessionID != nil {
 		t.Fatalf("实例应保持停用：%+v err=%v", instance, err)
+	}
+	// 一致的会话可以启用。
+	if err := enable("s-ok", "sha256:def2", "ftask_i1"); err != nil {
+		t.Fatal(err)
+	}
+	if instance, err := repo.GetInstance(ctx, "i1"); err != nil || !instance.Enabled || *instance.SessionID != "s-ok" {
+		t.Fatalf("实例应以新会话启用：%+v err=%v", instance, err)
 	}
 }
 
@@ -190,10 +171,10 @@ func TestApplySchemaToleratesFormattingAndIsAtomic(t *testing.T) {
 	}
 }
 
-// 取消与超时只替换错误链里的英文原文，保留前面的中文上下文（例如停用已落库但 Trade 释放未确认）。
+// 取消与超时只替换错误链里的英文原文，保留前面的中文上下文（例如停用已落库但 Trade 未确认关闭会话）。
 func TestFriendlyMessageKeepsContext(t *testing.T) {
-	message, replaced := FriendlyMessage(fmt.Errorf("已停用但 Trade 释放未确认，稍后自动重试：%w", context.DeadlineExceeded))
-	if !replaced || message != "已停用但 Trade 释放未确认，稍后自动重试：请求超时" {
+	message, replaced := FriendlyMessage(fmt.Errorf("实例已停用，但读取会话失败：%w", context.DeadlineExceeded))
+	if !replaced || message != "实例已停用，但读取会话失败：请求超时" {
 		t.Fatalf("应保留上下文：%q replaced=%v", message, replaced)
 	}
 	if message, replaced := FriendlyMessage(context.Canceled); !replaced || message != "请求已取消" {

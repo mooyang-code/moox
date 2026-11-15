@@ -1,0 +1,434 @@
+{
+  "bars": [
+    {
+      "bar_end": 1788231600,
+      "equity": 99.9001,
+      "fee": 0.0999,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "params": {},
+      "positions": {
+        "cash": 0,
+        "positions": {
+          "B|spot": {
+            "instrument_id": "B",
+            "last_price": 54,
+            "market": "spot",
+            "quantity": 1.85000185,
+            "value": 99.9001
+          }
+        }
+      },
+      "return": -0.001,
+      "skip_reason": "",
+      "spot_value": 99.9001,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "0",
+          "gross": "1",
+          "net": "1",
+          "rules": {
+            "r": {
+              "aged_out": 0,
+              "allocated": "1",
+              "available": 3,
+              "budget": "1",
+              "expected": 3,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 3,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0.5",
+          "universe": 3
+        },
+        "ledger": {
+          "equity_after": 99.9001,
+          "equity_before": 100,
+          "fee": 0.0999,
+          "spot_value": 99.9001,
+          "swap_value": 0,
+          "traded": 99.9001,
+          "turnover": 0.4995
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 0,
+      "targets": [
+        {
+          "instrument_id": "B",
+          "market": "spot",
+          "target_weight": "1"
+        }
+      ],
+      "turnover": 0.4995,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788235200,
+      "equity": 99.9001,
+      "fee": 0,
+      "frozen": 1,
+      "holdings": 1,
+      "liquidated": 0,
+      "params": {
+        "f__var": {
+          "window": {
+            "default": 10
+          }
+        }
+      },
+      "positions": {
+        "cash": 0,
+        "positions": {
+          "B|spot": {
+            "frozen": true,
+            "instrument_id": "B",
+            "last_price": 54,
+            "market": "spot",
+            "missing_bars": 1,
+            "quantity": 1.85000185,
+            "value": 99.9001
+          }
+        }
+      },
+      "return": 0,
+      "skip_reason": "no_data",
+      "spot_value": 99.9001,
+      "status": "skipped",
+      "summary": {
+        "decision": {
+          "notes": [
+            "本期基础集合为空：没有任何标的的数据"
+          ],
+          "rules": {
+            "r": {
+              "aged_out": 0,
+              "available": 0,
+              "budget": "1",
+              "expected": 0,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 0,
+              "selected": 0,
+              "weighted": 0
+            }
+          },
+          "universe": 0
+        },
+        "ledger": {
+          "equity_after": 99.9001,
+          "equity_before": 99.9001,
+          "fee": 0,
+          "spot_value": 99.9001,
+          "swap_value": 0,
+          "traded": 0,
+          "turnover": 0
+        },
+        "skip_reason": "no_data"
+      },
+      "swap_value": 0,
+      "targets": [],
+      "turnover": 0,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788238800,
+      "equity": 107.3001,
+      "fee": 0,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "params": {
+        "f__var": {
+          "window": {
+            "default": 10
+          }
+        }
+      },
+      "positions": {
+        "cash": 0,
+        "positions": {
+          "B|spot": {
+            "instrument_id": "B",
+            "last_price": 58,
+            "market": "spot",
+            "quantity": 1.85000185,
+            "value": 107.3001
+          }
+        }
+      },
+      "return": 0.0741,
+      "skip_reason": "",
+      "spot_value": 107.3001,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "0",
+          "gross": "1",
+          "net": "1",
+          "rules": {
+            "r": {
+              "aged_out": 0,
+              "allocated": "1",
+              "available": 3,
+              "budget": "1",
+              "expected": 3,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 3,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0",
+          "universe": 3
+        },
+        "ledger": {
+          "equity_after": 107.3001,
+          "equity_before": 107.3001,
+          "fee": 0,
+          "spot_value": 107.3001,
+          "swap_value": 0,
+          "traded": 0,
+          "turnover": 0
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 0,
+      "targets": [
+        {
+          "instrument_id": "B",
+          "market": "spot",
+          "target_weight": "1"
+        }
+      ],
+      "turnover": 0,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788242400,
+      "equity": 107.3001,
+      "fee": 0,
+      "frozen": 1,
+      "holdings": 1,
+      "liquidated": 0,
+      "params": {
+        "f__var": {
+          "window": {
+            "default": 30
+          }
+        }
+      },
+      "positions": {
+        "cash": 0,
+        "positions": {
+          "B|spot": {
+            "frozen": true,
+            "instrument_id": "B",
+            "last_price": 58,
+            "market": "spot",
+            "missing_bars": 1,
+            "quantity": 1.85000185,
+            "value": 107.3001
+          }
+        }
+      },
+      "return": 0,
+      "skip_reason": "no_data",
+      "spot_value": 107.3001,
+      "status": "skipped",
+      "summary": {
+        "decision": {
+          "notes": [
+            "本期基础集合为空：没有任何标的的数据"
+          ],
+          "rules": {
+            "r": {
+              "aged_out": 0,
+              "available": 0,
+              "budget": "1",
+              "expected": 0,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 0,
+              "selected": 0,
+              "weighted": 0
+            }
+          },
+          "universe": 0
+        },
+        "ledger": {
+          "equity_after": 107.3001,
+          "equity_before": 107.3001,
+          "fee": 0,
+          "spot_value": 107.3001,
+          "swap_value": 0,
+          "traded": 0,
+          "turnover": 0
+        },
+        "skip_reason": "no_data"
+      },
+      "swap_value": 0,
+      "targets": [],
+      "turnover": 0,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788246000,
+      "equity": 96.0079,
+      "fee": 0.1922,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "params": {
+        "f__var": {
+          "window": {
+            "default": 30
+          }
+        }
+      },
+      "positions": {
+        "cash": 0,
+        "positions": {
+          "A|spot": {
+            "instrument_id": "A",
+            "last_price": 106,
+            "market": "spot",
+            "quantity": 0.90573479,
+            "value": 96.0079
+          }
+        }
+      },
+      "return": -0.1052,
+      "skip_reason": "",
+      "spot_value": 96.0079,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "0",
+          "gross": "1",
+          "net": "1",
+          "notes": [
+            "成员 f__var 的参数 window 求值失败（default 在所有标的上都没有有效值），本期不提交该成员的参数"
+          ],
+          "rules": {
+            "r": {
+              "aged_out": 0,
+              "allocated": "1",
+              "available": 3,
+              "budget": "1",
+              "expected": 3,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 3,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "1",
+          "universe": 3
+        },
+        "ledger": {
+          "equity_after": 96.0079,
+          "equity_before": 96.2001,
+          "fee": 0.1922,
+          "spot_value": 96.0079,
+          "swap_value": 0,
+          "traded": 192.208,
+          "turnover": 0.999
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 0,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "spot",
+          "target_weight": "1"
+        }
+      ],
+      "turnover": 0.999,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788249600,
+      "equity": 96.9136,
+      "fee": 0,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "params": {
+        "f__var": {
+          "window": {
+            "default": 30
+          }
+        }
+      },
+      "positions": {
+        "cash": 0,
+        "positions": {
+          "A|spot": {
+            "instrument_id": "A",
+            "last_price": 107,
+            "market": "spot",
+            "quantity": 0.90573479,
+            "value": 96.9136
+          }
+        }
+      },
+      "return": 0.0094,
+      "skip_reason": "",
+      "spot_value": 96.9136,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "0",
+          "gross": "1",
+          "net": "1",
+          "rules": {
+            "r": {
+              "aged_out": 0,
+              "allocated": "1",
+              "available": 3,
+              "budget": "1",
+              "expected": 3,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 3,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0",
+          "universe": 3
+        },
+        "ledger": {
+          "equity_after": 96.9136,
+          "equity_before": 96.9136,
+          "fee": 0,
+          "spot_value": 96.9136,
+          "swap_value": 0,
+          "traded": 0,
+          "turnover": 0
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 0,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "spot",
+          "target_weight": "1"
+        }
+      ],
+      "turnover": 0,
+      "unfilled": 0
+    }
+  ],
+  "dsl": "name: tuned_compute\nfactor_params:\n  f__var:\n    window:\n      default: \"p\"\nrules:\n  - id: r\n    type: rank\n    score: \"m\"\n    filter: 'params(\"f__var\", \"window\") > 0'\n    select: {top: 1}\n    weight: {total: 1}\nportfolio:\n  max_missing: 1\n"
+}

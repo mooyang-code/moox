@@ -37,8 +37,6 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 		"t_paper_account_configs",
 		"t_paper_balance_projections",
 		"t_shadow_targets",
-		"t_replay_sessions",
-		"t_replay_periods",
 		"t_paper_asset_balances",
 		"t_paper_funding_fees",
 		"t_account_equity_points",
@@ -58,7 +56,7 @@ func TestEachSQLLoadsIntoEmptyDatabase(t *testing.T) {
 		"paper_balance.sql": paperBalanceSQL, "paper_funding.sql": paperFundingSQL, "equity.sql": equitySQL,
 		"target_receipt.sql": targetReceiptSQL, "execution.sql": executionSQL,
 		"wallet_transfer.sql": walletTransferSQL, "blocked_instrument.sql": blockedInstrumentSQL,
-		"replay.sql": replaySQL, "shadow_target.sql": shadowTargetSQL,
+		"shadow_target.sql": shadowTargetSQL,
 	} {
 		t.Run(name, func(t *testing.T) {
 			db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -151,7 +149,6 @@ func TestAllSQLDefinesApprovedIdentityScopes(t *testing.T) {
 		{"t_trading_accounts", []string{"c_exchange", "c_live_environment", "c_credential_secret_id"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_logical_account_id"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_name"}},
-		{"t_logical_accounts", []string{"c_space_id", "c_owner_instance_id"}},
 		{"t_logical_account_members", []string{"c_space_id", "c_logical_account_id", "c_trading_account_id"}},
 		{"t_logical_account_members", []string{"c_space_id", "c_trading_account_id"}},
 		{"t_logical_account_targets", []string{"c_space_id", "c_logical_account_id"}},
@@ -198,6 +195,10 @@ func TestLogicalAccountSchemaKeepsSettlementAssetAndUsesAutomationState(t *testi
 	require.Contains(t, sql, "'REDUCE'")
 	require.Contains(t, sql, "'DELIST_FLATTEN'")
 	require.NotContains(t, sql, "c_market_type TEXT NOT NULL,\n    c_settlement_asset")
+	// 实例与组合账户的归属只记在 Strategy：组合账户表不存归属与切换令牌。
+	for _, retired := range []string{"c_owner_instance_id", "c_owner_session_id", "c_auth_fence"} {
+		require.NotContains(t, sql, retired)
+	}
 }
 
 func TestTradingAccountSchemaRestrictsMarketsAndCredentialUse(t *testing.T) {

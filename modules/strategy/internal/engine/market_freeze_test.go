@@ -128,9 +128,9 @@ func TestHeldSwapLongFreezesWhenSwapUnavailable(t *testing.T) {
 	}
 }
 
-// 永续整体不可用时空头 signal 规则也不守门（与空头候选过滤的范围一致）：持有的永续空头 X 保持，明细原因 market_hold、市场 swap；
+// 永续整体不可用时空头的固定标的择时规则也不守门（与空头候选过滤的范围一致）：持有的永续空头 X 保持，明细原因 market_hold、市场 swap；
 // 多头规则照常（冻结的 X 不是多头规则的持仓，不计入它守门的缺数），在现货开仓。
-func TestShortSignalRuleSkipsGuardWhenSwapUnavailable(t *testing.T) {
+func TestShortHoldPoolRuleSkipsGuardWhenSwapUnavailable(t *testing.T) {
 	program := compileIn(t, dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}, `name: ls
 rules:
   - id: l
@@ -139,11 +139,14 @@ rules:
     select: {top: 1}
     weight: {total: 0.5}
   - id: s
-    type: signal
+    type: rank
     side: short
     pool: [X]
-    entry: "m > 100"
-    exit: "m < -100"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "m > 100"
+      exit: "m < -100"
     weight: {total: 0.5}
 portfolio: {leverage: 2}
 `, "m")
@@ -157,7 +160,7 @@ portfolio: {leverage: 2}
 		t.Fatal(err)
 	}
 	requireHolds(t, decision, map[string]string{"C|spot": "0.5", "X|swap": "-0.5(hold)"})
-	// 不守门的这一期之后空头规则的理论持仓仍有 X，下一期永续恢复时照常判 exit。
+	// 不守门的这一期之后空头规则的持有里仍有 X，下一期永续恢复时照常判出场。
 	if !contains(decision.State.Rules["s"].Held, "X") {
 		t.Fatalf("空头规则的持仓应保留 X：%+v", decision.State.Rules["s"])
 	}
@@ -190,7 +193,7 @@ portfolio: {max_missing: 0.2}
 	assertSkipped(t, decision, SkipTooManyMissing)
 }
 
-// 持有时检查的列为空的规则（signal 的 exit 是常量、hold 不写 filter 等）：永续整体不可用时，持有的永续 A 仍按 market_hold 冻结，
+// 持有时检查的列为空的规则（hold.exit 是常量、hold 不写 filter 等）：永续整体不可用时，持有的永续 A 仍按 market_hold 冻结，
 // 不因为“没有行”而被平掉。
 func TestMarketHoldWhenHeldColumnsEmpty(t *testing.T) {
 	mode := dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSwap}
@@ -199,7 +202,7 @@ func TestMarketHoldWhenHeldColumnsEmpty(t *testing.T) {
 		previous State
 		rules    []string
 	}{
-		"signal 常量 exit 加 rank 同持": {
+		"常量 hold.exit 加 rank 同持": {
 			dsl: `name: c
 rules:
   - id: r
@@ -208,10 +211,13 @@ rules:
     select: {top: 1}
     weight: {total: 0.5}
   - id: g
-    type: signal
+    type: rank
     pool: [A]
-    entry: "m > 0"
-    exit: "false"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "m > 0"
+      exit: "false"
     weight: {total: 0.5}
 portfolio: {max_missing: 1}
 `,

@@ -45,8 +45,6 @@ func errorInfo(err error) *tradepb.RetInfo {
 	code := tradepb.ErrorCode_INNER_ERR
 	switch {
 	case errors.Is(err, operatorapp.ErrInvalidActionResult),
-		// 释放会话前目标挂单没撤下来：不能落到“冲突”“不存在”（策略把这两种当成已了结、不再重试）。
-		errors.Is(err, logicalapp.ErrTargetOrdersNotReleased),
 		// 下面这些错误的文案本来就是写给用户看的中文（不含交易所原文、SQL、路径），照原样回，不走兜底。
 		errors.Is(err, accountapp.ErrInspectionUnavailable),
 		errors.Is(err, accountapp.ErrLiveTradingDisabled),
@@ -74,7 +72,6 @@ func errorInfo(err error) *tradepb.RetInfo {
 		code = tradepb.ErrorCode_NOT_FOUND
 	case errors.Is(err, store.ErrConflict),
 		errors.Is(err, accountapp.ErrAccountConflict),
-		errors.Is(err, logicalapp.ErrOwnerConflict),
 		errors.Is(err, operatorapp.ErrLogicalAccountBusy),
 		errors.Is(err, orderapp.ErrIdempotencyConflict):
 		code = tradepb.ErrorCode_CONFLICT
@@ -418,9 +415,6 @@ func logicalAccountToPB(
 		LogicalAccountId: value.LogicalAccountID,
 		SpaceId:          value.SpaceID,
 		Name:             value.Name,
-		OwnerInstanceId:  value.OwnerInstanceID,
-		OwnerSessionId:   value.OwnerSessionID,
-		AuthFence:        value.AuthFence,
 		ExecutionMode:    executionModeToPB(value.ExecutionMode),
 		ControlMode:      controlModeToPB(value.ControlMode),
 		Markets:          marketsToPB(markets),

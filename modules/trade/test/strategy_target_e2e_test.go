@@ -245,8 +245,7 @@ func seedLogicalAccount(t *testing.T, tradeStore *store.Store) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount,
-			Name:            "E2E logical account",
-			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
+			Name:          "E2E logical account",
 			ExecutionMode: account.ExecutionMode, SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -318,7 +317,7 @@ func targetDeliveryWithTargets(
 		events.LogicalAccountTargetWeightRequested,
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: targetID, InstanceId: testRunner,
-			SessionId: "session-e2e", StrategyId: "strategy-e2e",
+			SessionId: "session-e2e", SessionStartedAt: 1_000, StrategyId: "strategy-e2e",
 			LogicalAccountId: testLogicalAccount,
 			Targets:          targets,
 			BarEndTime:       timestamppb.New(bar),

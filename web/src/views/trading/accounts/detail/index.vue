@@ -25,10 +25,6 @@
                 <a-link @click="openStrategy">{{ strategy.name }}</a-link>
                 <span class="tx-muted">（实例 {{ strategy.instanceId }}）</span>
               </span>
-              <span v-else-if="logical.owner_instance_id">
-                关联策略实例
-                <a-link class="tx-mono" @click="openInstance(logical.owner_instance_id)">{{ logical.owner_instance_id }}</a-link>
-              </span>
               <span v-else>{{
                 logical.control_mode === 2 ? "自主下单，没有关联策略" : strategiesFailed ? "策略读取失败" : "尚未绑定策略"
               }}</span>
@@ -532,8 +528,8 @@ async function loadFirst() {
     void resumeRunningAction();
     void loadDayChange();
     const links = await loadStrategyLinks(logical.value ? [logical.value] : []);
-    // 读取失败时保留上一次读到的关联策略；没有的话页头仍能按 owner_instance_id 链到实例，
-    // 两样都没有时写“策略读取失败”，不当成没有绑定
+    // 关联策略读 Strategy 的实例列表（绑了这个账户的实例，启用中的优先）；读取失败时保留上一次读到的，
+    // 没有的话写“策略读取失败”，不当成没有绑定
     strategiesFailed.value = links === null;
     if (links) strategy.value = links.get(logicalId.value) ?? null;
   } catch (cause) {
@@ -588,10 +584,6 @@ function backToList() {
     path: environmentMenus[env.value].path,
     query: { list: route.query.list === "execution" ? "execution" : undefined }
   });
-}
-
-function openInstance(instanceId: string) {
-  void router.push({ name: "strategy-detail", params: { instanceId } });
 }
 
 function openStrategy() {

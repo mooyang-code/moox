@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/packages/factorname"
 	"github.com/mooyang-code/moox/packages/frequency"
 )
 
@@ -98,13 +99,14 @@ func (c *sharedReads) reset() {
 	c.mu.Unlock()
 }
 
-// poolMemberRun 是一个成员在历史推进里的读取与求值上下文：成员自己的绑定与程序、读取器（年龄判定的历史读取与已通过集合各自独立）。
+// poolMemberRun 是一个成员在历史推进里的读取与求值上下文：成员自己的绑定与程序、市场与 View 来源（年龄判定的历史读取与
+// 已通过集合各自独立）。
 type poolMemberRun struct {
 	id       string
 	resolved input.Resolved
 	program  *dsl.Program
-	readers  []*marketReader
-	reader   *segmentReader
+	markets  []*replayMarket
+	source   *viewSource
 	segments map[string]marketSegment
 }
 
@@ -116,9 +118,9 @@ type poolPass struct {
 	members    []*poolMemberRun
 	shared     *sharedReads
 	membership input.Membership
-	// funding 是池 DSL 的 fees.funding_column（成员账本与池回放的池级账本都按它结算资金费）；prices 只带市场名，按市场取本段的行。
+	// funding 是池 DSL 的 fees.funding_column（成员账本与池回放的池级账本都按它结算资金费）；prices 是池绑定的各市场，按市场取本段的行。
 	funding string
-	prices  []*marketReader
+	prices  []*replayMarket
 	// segments 是当前段各市场的行（取第一个读这个市场的成员读到的，成员之间读到的相同），估值与资金费按它取。
 	segments map[string]marketSegment
 	// group 非空时读取期间的索引换代由它统一跟随（策略池回放）；为空时不跟随（预热：换代后由调用方整体重试）。
@@ -126,13 +128,17 @@ type poolPass struct {
 }
 
 // newPoolPass 构造各成员的读取器：读取的列取全体成员的并集，每个成员的行读取器发出完全相同的查询，成员之间经 shared 共享读取；
-// 写了 fees.funding_column 时永续的行另读这一列。follow 为真时读取期间的索引换代按整个池跟随（见 readerGroup），否则遇到换代直接失败。
+// 写了 fees.funding_column 时永续的行另读这一列；有成员用了 params() 时另读 __params 列。follow 为真时读取期间的索引换代按整个池跟随
+// （见 readerGroup），否则遇到换代直接失败。
 func newPoolPass(shared *sharedReads, spaceID string, resolved input.Resolved, members []input.PoolMember, programs []*dsl.Program, cfg pool.Config,
 	views map[string]input.ViewInfo, subjects map[string][]input.Subject, job store.Replay, runner *Runner, end time.Time, acc *accumulator, abort func(context.Context) error, follow bool) *poolPass {
 	columns := []string{"close"}
 	for _, program := range programs {
 		columns = append(columns, program.Columns...)
 		columns = append(columns, program.PreviousColumns...)
+		if len(program.ParamRefs) > 0 {
+			columns = append(columns, factorname.ParamsColumn)
+		}
 	}
 	columns = uniqueStrings(columns)
 	fundingColumn := cfg.Spec.Fees.FundingColumn
@@ -150,22 +156,26 @@ func newPoolPass(shared *sharedReads, spaceID string, resolved input.Resolved, m
 	if follow {
 		switches = 0
 	}
+	// 各市场的标的对全体成员相同，共用一份；年龄判定的已通过集合在各成员的 View 来源里，各自独立。
+	markets := make(map[string]*replayMarket, len(resolved.Markets()))
+	for _, market := range resolved.Markets() {
+		markets[market] = newReplayMarket(market, subjects[market])
+		pass.prices = append(pass.prices, markets[market])
+	}
 	for i, member := range members {
 		item := &poolMemberRun{id: member.ID, resolved: member.Resolved, program: programs[i]}
+		item.source = &viewSource{runner: runner, job: job, resolved: item.resolved, program: item.program, end: end, acc: acc, abort: abort, switches: switches, group: pass.group}
 		for _, market := range member.Resolved.Markets() {
 			view := views[market]
-			item.readers = append(item.readers, newMarketReader(market, job.Tasks[market], subjects[market],
+			item.markets = append(item.markets, markets[market])
+			item.source.markets = append(item.source.markets, newViewMarket(markets[market], job.Tasks[market],
 				&input.RangeLoader{Client: shared, SpaceID: spaceID, View: view, Subjects: subjects[market], Columns: columnsOf(market), Abort: abort},
 				&input.RangeLoader{Client: shared, SpaceID: spaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Abort: abort}))
 		}
-		item.reader = &segmentReader{runner: runner, job: job, resolved: item.resolved, program: item.program, end: end, acc: acc, abort: abort, markets: item.readers, switches: switches, group: pass.group}
 		pass.members = append(pass.members, item)
 		if pass.group != nil {
-			pass.group.readers = append(pass.group.readers, item.reader)
+			pass.group.sources = append(pass.group.sources, item.source)
 		}
-	}
-	for _, market := range resolved.Markets() {
-		pass.prices = append(pass.prices, &marketReader{market: market})
 	}
 	return pass
 }
@@ -175,7 +185,7 @@ func (p *poolPass) load(ctx context.Context, segment []input.PeriodBoundaries) e
 	p.segments = make(map[string]marketSegment, len(p.resolved.Tasks))
 	for _, member := range p.members {
 		var err error
-		if member.segments, err = member.reader.load(ctx, segment); err != nil {
+		if member.segments, err = member.source.Load(ctx, segment, nil); err != nil {
 			return fmt.Errorf("成员 %s：%w", member.id, err)
 		}
 		for market, loaded := range member.segments {
@@ -192,8 +202,8 @@ func (p *poolPass) load(ctx context.Context, segment []input.PeriodBoundaries) e
 func (p *poolPass) end() time.Time {
 	end := time.Time{}
 	for _, member := range p.members {
-		if end.IsZero() || member.reader.end.Before(end) {
-			end = member.reader.end
+		if source := member.source.End(); end.IsZero() || source.Before(end) {
+			end = source
 		}
 	}
 	return end
@@ -204,7 +214,7 @@ func (p *poolPass) end() time.Time {
 func (p *poolPass) step(ctx context.Context, bar input.PeriodBoundaries, state engine.State) (engine.Decision, map[string]float64, map[string]float64, error) {
 	results := make([]pool.MemberResult, 0, len(p.members))
 	for _, member := range p.members {
-		decision, err := evaluateBar(ctx, member.program, member.resolved, member.readers, nil, p.membership, member.segments, bar, state.Members[member.id])
+		decision, _, err := evaluateBar(ctx, member.program, member.resolved, member.markets, nil, p.membership, member.segments, bar, state.Members[member.id])
 		if err != nil {
 			return engine.Decision{}, nil, nil, fmt.Errorf("成员 %s：%w", member.id, err)
 		}
@@ -220,10 +230,10 @@ func (p *poolPass) step(ctx context.Context, bar input.PeriodBoundaries, state e
 }
 
 // readerGroup 让策略池回放的全部成员一起跟随索引换代：一次回放累计最多跟随 maxIndexSwitches 次（整个池共用一个计数）；某个成员读到换代时，
-// 按每个用到这个市场的成员各自的回看要求依次复查剩余区间，通过后把同一任务键上所有成员的读取器都切到新索引、清掉它们的年龄判定结果，
+// 按每个用到这个市场的成员各自的回看要求依次复查剩余区间，通过后把同一任务键上所有成员的 View 来源都切到新索引、清掉它们的年龄判定结果，
 // 终点取复查后最早的，其余成员不会再为同一次换代复查一遍。
 type readerGroup struct {
-	readers  []*segmentReader
+	sources  []*viewSource
 	switches int
 	end      time.Time
 	acc      *accumulator
@@ -235,23 +245,18 @@ func (g *readerGroup) follow(ctx context.Context, taskKey string, changed input.
 	}
 	g.switches++
 	view := changed
-	for _, reader := range g.readers {
-		if !reader.usesTask(taskKey) {
+	for _, source := range g.sources {
+		if !source.usesTask(taskKey) {
 			continue
 		}
 		var err error
-		if view, g.end, err = reader.runner.recheckView(ctx, reader.job, taskKey, reader.resolved, reader.program, view, from, g.end, true, reader.abort); err != nil {
+		if view, g.end, err = source.runner.recheckView(ctx, source.job, taskKey, source.resolved, source.program, view, from, g.end, true, source.abort); err != nil {
 			return err
 		}
 	}
-	for _, reader := range g.readers {
-		reader.end = g.end
-		for _, market := range reader.markets {
-			if reader.resolved.TaskKey(market.market) == taskKey {
-				market.rows.View, market.history.View = view, view
-				clear(market.passed)
-			}
-		}
+	for _, source := range g.sources {
+		source.end = g.end
+		source.switchView(taskKey, view)
 	}
 	g.acc.setNote(noteIndexSwitch, fmt.Sprintf("回放过程中 View 重建了 %d 次索引，每次都按新索引复查了剩余区间后继续", g.switches))
 	return nil
@@ -380,8 +385,11 @@ func (r *Runner) replayPool(ctx context.Context, job store.Replay, strategy dsl.
 	for _, program := range pooled.Programs {
 		tags = tags || usesTags(program.Strategy)
 	}
-	acc.metrics.Limitations = append(limitations(r.liquidateAfter(), tags, resolved.Market.Has(dsl.MarketSwap), cfg.Spec.Fees.FundingColumn),
-		"策略池：成员按回放发起时固化的成员版本求值，成员账本是按收盘价成交的模拟曲线（费率用池 DSL 的 fees），只用来分配资金；池目标由池级账本按回放任务的费率承接")
+	poolNote := "策略池：成员按回放发起时固化的成员版本求值，成员账本是按收盘价成交的模拟曲线（费率用池 DSL 的 fees），只用来分配资金；池目标由池级账本按回放任务的费率承接"
+	if job.SlippageBps > 0 {
+		poolNote = "策略池：成员按回放发起时固化的成员版本求值，成员账本是按收盘价成交的模拟曲线（费率用池 DSL 的 fees，不计滑点），只用来分配资金；池目标由池级账本按回放任务的费率与滑点承接"
+	}
+	acc.metrics.Limitations = append(limitations(r.liquidateAfter(), tags, resolved.Market.Has(dsl.MarketSwap), cfg.Spec.Fees.FundingColumn, job.SlippageBps), poolNote)
 	pass := newPoolPass(shared, job.SpaceID, resolved, pooled.Members, pooled.Programs, cfg, views, subjects, job, r, end, acc, abort, true)
 	book := r.newBook(job, resolved, acc)
 	state := engine.State{}
@@ -400,7 +408,7 @@ func (r *Runner) replayPool(ctx context.Context, job store.Replay, strategy dsl.
 			if err != nil {
 				return acc.finish(), err
 			}
-			if err := book.settle(ctx, bar, decision, prices, funding); err != nil {
+			if err := book.settle(ctx, bar, decision, prices, funding, nil); err != nil {
 				return acc.finish(), err
 			}
 			state = decision.State
