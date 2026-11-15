@@ -169,12 +169,6 @@ export const staticRoutes = [
         meta: { title: "strategy-detail", hide: true, activeMenu: "strategy-tasks" }
       },
       {
-        path: "/ops/activity",
-        name: "ops-activity",
-        component: () => import("@/views/ops/activity/index.vue"),
-        meta: { title: "ops-activity" }
-      },
-      {
         path: "/collector/tasks",
         name: "collector-tasks",
         component: () => import("@/views/collector/task-management/index.vue"),
@@ -209,8 +203,8 @@ export const staticRoutes = [
       {
         path: "/ops/logs",
         name: "ops-logs",
-        component: () => import("@/views/ops/log-records/index.vue"),
-        meta: { title: "ops-logs" }
+        component: () => import("@/views/ops/log-center/index.vue"),
+        meta: { title: "ops-logs", reuseOnQuery: true }
       },
       {
         path: "/ops/deployments",
