@@ -95,11 +95,9 @@ describe("isUnifiedTask", () => {
 });
 
 describe("varMemberBlockReason", () => {
-  it("策略池、统一数据集、双市场不能写 factor_params，带可变成员的任务不能用；单市场可以", () => {
-    expect(varMemberBlockReason({ pool: false, unified: false, marketCount: 1 })).toBe("");
-    expect(varMemberBlockReason({ pool: true, unified: false, marketCount: 1 })).toContain("策略池");
-    expect(varMemberBlockReason({ pool: false, unified: true, marketCount: 2 })).toContain("统一数据集");
-    expect(varMemberBlockReason({ pool: false, unified: false, marketCount: 2 })).toContain("双市场");
+  it("只拦附加来源的任务；主帧任务（含策略池、统一数据集、双市场，不写 factor_params 时只读）都能选", () => {
+    expect(varMemberBlockReason("")).toBe("");
+    expect(varMemberBlockReason("daily")).toContain("附加来源的任务不能有可变成员");
   });
 });
 
@@ -107,6 +105,8 @@ describe("declaresFactorParams", () => {
   it("is true only when the DSL writes factor_params", () => {
     expect(declaresFactorParams("name: a\nfactor_params:\n  bias__var:\n    window: 20\n")).toBe(true);
     expect(declaresFactorParams("name: a\nrules: []\n")).toBe(false);
+    expect(declaresFactorParams("name: a\nfactor_params: {}\n")).toBe(false);
+    expect(declaresFactorParams("name: a\nfactor_params:\n")).toBe(false);
     expect(declaresFactorParams("name: [")).toBe(false);
   });
 });

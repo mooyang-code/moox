@@ -38,13 +38,14 @@ export function enabledTasks(infos: FactorTaskInfo[], spaceId: string): TaskOpti
     .sort((a, b) => a.name.localeCompare(b.name) || a.taskId.localeCompare(b.taskId));
 }
 
-/** DSL 是否声明了 factor_params：声明了的实例启用时独占关联主帧任务、逐期提交参数；解析不了按没有声明处理（服务端预检再核对）。 */
+/**
+ * DSL 是否声明了 factor_params：声明了的实例启用时独占关联主帧任务、逐期提交参数。与后端一致按成员个数判断，
+ * 写成空对象 `factor_params: {}` 不算声明；解析不了按没有声明处理（服务端预检再核对）。
+ */
 export function declaresFactorParams(dslYaml: string): boolean {
   try {
-    const document = parseDocument(dslYaml).toJS();
-    return Boolean(
-      document && typeof document === "object" && document.factor_params !== undefined && document.factor_params !== null
-    );
+    const params = parseDocument(dslYaml).toJS()?.factor_params;
+    return Boolean(params && typeof params === "object" && Object.keys(params).length > 0);
   } catch {
     return false;
   }
@@ -64,15 +65,13 @@ export function isUnifiedTask(task: Pick<TaskOption, "sourceDatasetId">, unified
 }
 
 /**
- * 带可变成员的任务在这种绑定方式下能不能用：可变成员要由策略的 factor_params 逐期提交参数，
- * 而策略池（成员也不能写）、统一数据集、现货永续双市场都不允许写 factor_params（与 Strategy 的 dsl/pool.go、input/resolve.go、dsl/market.go 一致），
- * 这几种方式下带可变成员的任务一定通不过绑定预检。能用时返回空串，否则返回原因。
+ * 带可变成员的任务能不能登记在这个任务键下：附加来源的任务不能有可变成员（factor_params 只作用于主帧的任务，与 Strategy 的
+ * input/sources.go 一致）；主帧任务都能选，不写 factor_params 的实例（含策略池、统一数据集、双市场）只读可变成员的列。
+ * 能选时返回空串，否则返回原因。
  */
-export function varMemberBlockReason(binding: { pool: boolean; unified: boolean; marketCount: number }): string {
-  if (binding.pool) return "策略池和它的成员都不能写 factor_params，带可变成员的任务没法提交参数";
-  if (binding.unified)
-    return "统一数据集上的任务暂不支持 factor_params（现货、永续会共用同一组参数），带可变成员的任务没法提交参数";
-  if (binding.marketCount > 1)
-    return "现货、永续双市场策略不支持 factor_params（两个任务的可变成员键可能重名），带可变成员的任务没法提交参数";
-  return "";
+export function varMemberBlockReason(source: string): string {
+  return source ? SOURCE_VAR_MEMBER_REASON : "";
 }
+
+/** 附加来源的任务不能有可变成员的原因。 */
+export const SOURCE_VAR_MEMBER_REASON = "factor_params 只作用于主帧的任务，附加来源的任务不能有可变成员";

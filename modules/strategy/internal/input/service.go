@@ -21,9 +21,9 @@ type Service struct {
 	ReadyStep time.Duration
 }
 
-// ResolveInstance 启用实例时的解析（设计 8.1）：声明了 factor_params 的策略先把主帧任务与实例永久关联（幂等：第一次启用时写入，
-// 以后只是核对原来的关联），没有声明的不关联；所有任务都要已启用。再解析绑定——DSL 引用的列都存在，声明了 factor_params 时任务的
-// 可变成员与它一一对应。tasks 是实例登记的任务键 → 因子任务（附加来源的键是 来源名:市场），解析出的市场必须与登记一致。
+// ResolveInstance 启用实例时的解析（设计 8.1）：所有任务都要已启用；解析绑定——DSL 引用的列都存在，声明了 factor_params 时任务的
+// 可变成员与它一一对应；解析通过之后，声明了 factor_params 的策略才把主帧任务与实例永久关联（幂等：第一次启用时写入，
+// 以后只是核对原来的关联），没有声明的不关联。tasks 是实例登记的任务键 → 因子任务（附加来源的键是 来源名:市场），解析出的市场必须与登记一致。
 // 任务刚加成员时，结果 View 的列由 Storage 异步补齐，所以列不存在时在限定时间内重试。
 func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
 	if err := dsl.Validate(&strategy); err != nil {
@@ -61,15 +61,15 @@ func (s Service) ResolvePool(ctx context.Context, spaceID string, taskIDs []stri
 	return ResolvePool(ctx, s.Client, spaceID, taskIDs, pool, members)
 }
 
-// bindAndResolve 完成启用解析里与策略无关的部分：核对登记的市场、核对任务已启用（tuned 为真时把主帧任务与实例关联，关联的应答兼做这项核对），
-// 再在限定时间内重试 resolve（任务的结果 View 还没补齐列时）。
+// bindAndResolve 完成启用解析里与策略无关的部分：核对登记的市场、核对任务都已启用，在限定时间内重试 resolve（任务的结果 View 还没补齐列时）；
+// 解析与市场核对都通过之后，tuned 为真时才把主帧任务与实例关联。关联是永久的，解析没通过（DSL 写错、来源任务有可变成员、
+// factor_params 与可变成员对不上）时不能先把任务占住，否则启用失败的实例会一直占着任务，交叉登记时两个实例都删不掉。
 func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string, tasks map[string]string, tuned bool, resolve func() (Resolved, error)) (Resolved, error) {
 	if s.Client == nil || s.Sets == nil {
 		return Resolved{}, errors.New("Factor 依赖未配置，不能启用实例")
 	}
 	deadline := time.Now().Add(s.ReadyWait)
-	// 关联是永久的：先核对市场，填错的任务不能被关联占住。任务刚建、结果 View 或数据集还没建出时在限定时间内重试，
-	// 其他错误（包括市场对不上）立即返回；关联与状态核对只在市场核对通过之后。
+	// 先核对市场：任务刚建、结果 View 或数据集还没建出时在限定时间内重试，其他错误（包括市场对不上）立即返回。
 	for {
 		err := CheckRegisteredMarkets(ctx, tasks, func(ctx context.Context, taskID string) (string, error) { return s.TaskMarket(ctx, spaceID, taskID) })
 		if err == nil {
@@ -84,36 +84,25 @@ func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string,
 		case <-time.After(s.ReadyStep):
 		}
 	}
-	for _, key := range sortedMapKeys(tasks) {
-		taskID, status := tasks[key], ""
-		if source, _ := dsl.SplitTaskKey(key); tuned && source == "" {
-			// 参数只提交给主帧任务（写了 factor_params 的策略只有一个主帧任务，没有参考市场），附加来源的任务只读不关联。
-			bound, err := s.Sets.BindFactorTask(ctx, taskID, instanceID)
-			if err != nil {
-				return Resolved{}, err
-			}
-			if bound.BoundInstanceID != instanceID {
-				return Resolved{}, fmt.Errorf("因子任务 %s 关联的是实例 %q，不是本实例", taskID, bound.BoundInstanceID)
-			}
-			status = bound.Status
-		} else {
-			task, err := s.Sets.GetFactorTask(ctx, taskID)
-			if err != nil {
-				return Resolved{}, err
-			}
-			status = task.Status
+	keys := sortedMapKeys(tasks)
+	for _, key := range keys {
+		task, err := s.Sets.GetFactorTask(ctx, tasks[key])
+		if err != nil {
+			return Resolved{}, err
 		}
-		if status != "enabled" {
-			return Resolved{}, fmt.Errorf("因子任务 %s 的状态是 %q，只有已启用的任务才能启用实例", taskID, status)
+		if err := requireEnabledTask(tasks[key], task.Status); err != nil {
+			return Resolved{}, err
 		}
 	}
+	var resolved Resolved
 	for {
-		resolved, err := resolve()
+		var err error
+		resolved, err = resolve()
 		if err == nil {
 			err = CheckResolvedMarkets(resolved, tasks)
 		}
 		if err == nil {
-			return resolved, nil
+			break
 		}
 		if !waitingForColumns(err) || !time.Now().Add(s.ReadyStep).Before(deadline) {
 			return Resolved{}, err
@@ -124,6 +113,35 @@ func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string,
 		case <-time.After(s.ReadyStep):
 		}
 	}
+	if !tuned {
+		return resolved, nil
+	}
+	// 参数只提交给主帧任务（写了 factor_params 的策略只有一个主帧任务，没有参考市场），附加来源的任务只读不关联。
+	for _, key := range keys {
+		if source, _ := dsl.SplitTaskKey(key); source != "" {
+			continue
+		}
+		taskID := tasks[key]
+		bound, err := s.Sets.BindFactorTask(ctx, taskID, instanceID)
+		if err != nil {
+			return Resolved{}, err
+		}
+		if bound.BoundInstanceID != instanceID {
+			return Resolved{}, fmt.Errorf("因子任务 %s 关联的是实例 %q，不是本实例", taskID, bound.BoundInstanceID)
+		}
+		if err := requireEnabledTask(taskID, bound.Status); err != nil {
+			return Resolved{}, err
+		}
+	}
+	return resolved, nil
+}
+
+// requireEnabledTask 要求任务已启用。
+func requireEnabledTask(taskID, status string) error {
+	if status != "enabled" {
+		return fmt.Errorf("因子任务 %s 的状态是 %q，只有已启用的任务才能启用实例", taskID, status)
+	}
+	return nil
 }
 
 // TaskMarket 返回因子任务的市场：任务结果 View → 数据集 → 源数据集的市场类型。创建实例和启用前用它核对“市场 → 任务”的对应。

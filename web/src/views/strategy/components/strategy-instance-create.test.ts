@@ -374,7 +374,7 @@ describe("strategy instance creation behavior", () => {
     });
   });
 
-  it("双市场策略不能写 factor_params：带可变成员的任务不可选并写明原因", async () => {
+  it("带可变成员的主帧任务都能选（不写 factor_params 时只读）；只有附加来源的任务不能有可变成员", async () => {
     api.listFactorTasks.mockResolvedValue({
       factor_tasks: [
         taskInfo({ name: "现货因子" }, "ftask_spot"),
@@ -385,20 +385,30 @@ describe("strategy instance creation behavior", () => {
       ],
       page_result: { has_more: false }
     });
+    const option = (wrapper: { findAll: (selector: string) => any[] }, index: number, value: string) =>
+      wrapper
+        .findAll("select")
+        [index].findAll("option")
+        .find((item: any) => item.attributes("value") === value)!;
+    // 双市场策略不能写 factor_params，但带可变成员的任务照样能选，只读它的列。
     const mixed = [{ ...strategies[0], dsl_yaml: "name: demo\nmarket: {select: both, prefer: swap}\n" }];
     const { wrapper } = await open({ presetStrategyId: "s1", strategies: mixed });
-    const spotOption = wrapper
-      .findAll("select")[1]
-      .findAll("option")
-      .find(item => item.attributes("value") === "ftask_spot")!;
-    expect(spotOption.attributes("disabled")).toBeDefined();
-    expect(spotOption.text()).toContain("有可变成员，不可选");
-    const fixedOption = wrapper
-      .findAll("select")[1]
-      .findAll("option")
-      .find(item => item.attributes("value") === "ftask_fixed")!;
-    expect(fixedOption.attributes("disabled")).toBeUndefined();
-    expect(wrapper.text()).toContain("现货、永续双市场策略不支持 factor_params");
+    const spotOption = option(wrapper, 1, "ftask_spot");
+    expect(spotOption.attributes("disabled")).toBeUndefined();
+    expect(spotOption.text()).not.toContain("不可选");
+    expect(wrapper.text()).not.toContain("有可变成员，不可选");
+
+    // 附加来源：带可变成员的任务置灰并写明原因，主帧照常可选。
+    const withSources = [
+      { ...strategies[0], dsl_yaml: "name: demo\nbar: 1h\nmarket: {select: swap}\nsources:\n  daily: {bar: 1d}\n" }
+    ];
+    const sourced = await open({ presetStrategyId: "s1", strategies: withSources });
+    expect(option(sourced.wrapper, 1, "ftask_spot").attributes("disabled")).toBeUndefined();
+    const sourceOption = option(sourced.wrapper, 2, "ftask_spot");
+    expect(sourceOption.attributes("disabled")).toBeDefined();
+    expect(sourceOption.text()).toContain("有可变成员，不可选");
+    expect(option(sourced.wrapper, 2, "ftask_fixed").attributes("disabled")).toBeUndefined();
+    expect(sourced.wrapper.text()).toContain("附加来源的任务不能有可变成员");
   });
 
   describe("统一数据集上的任务（方式 B）", () => {

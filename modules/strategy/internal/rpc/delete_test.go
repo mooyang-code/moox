@@ -151,6 +151,32 @@ func TestDeleteStrategyInstanceRejectsEnabledInstance(t *testing.T) {
 	}
 }
 
+// 交叉登记的两个调参实例（A：主帧 T1、来源 T2；B：主帧 T2、来源 T1）：启用在关联之前就被拒（见 input 的
+// TestTunedInstanceBindsOnlyAfterResolvePasses），两个任务都没有关联，所以两个实例都能删掉，任务都保留。
+func TestDeleteCrossRegisteredInstances(t *testing.T) {
+	h := newHarness(t)
+	tasks := &fakeFactorTasks{bound: map[string]string{"ftask_t1": "", "ftask_t2": ""}}
+	h.service.Tasks, h.service.Archives = tasks, &fakeArchives{}
+	h.createStrategy("s1", demoDSL)
+	for id, registered := range map[string]map[string]string{
+		"a": {"spot": "ftask_t1", "daily:spot": "ftask_t2"},
+		"b": {"spot": "ftask_t2", "daily:spot": "ftask_t1"},
+	} {
+		created, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: id, StrategyId: "s1", FactorTasks: registered}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
+	}
+	for _, id := range []string{"a", "b"} {
+		rsp := h.deleteInstance(id)
+		requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+	}
+	if len(tasks.deleted) != 0 {
+		t.Fatalf("没有关联的任务不随实例删除：%v", tasks.deleted)
+	}
+}
+
 // 关联到本实例的任务还被别的实例引用（批 3 T9）：拒绝删除并列出引用方，什么都不删；先删引用方（它的任务没关联它，保留），
 // 之后本实例连同任务一起删除。
 func TestDeleteStrategyInstanceRejectsWhileTaskIsReferenced(t *testing.T) {

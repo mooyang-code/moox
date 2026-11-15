@@ -55,7 +55,7 @@
           >统一数据集把现货、永续放在同一个数据集里（用 series_tag 区分），一个计算任务、一个 View
           同时覆盖两个市场，策略到达即求值；
           分开时现货、永续各有自己的数据集与计算任务，策略等两边都到齐再求值。统一数据集上的任务暂不支持
-          factor_params（带可变成员的任务在这种方式下不能选），也不能进策略池。</template
+          factor_params（带可变成员的任务可以选，只读它的列），也不能进策略池。</template
         >
       </a-form-item>
       <p v-if="extraKeys.length" class="meta-hint mode-hint">
@@ -110,7 +110,7 @@
         这份定义没有
         factor_params：实例只读任务的结果列、不关联任务，多个实例可以共用同一个任务；删除实例时任务保留，不用了到「因子」模块手动停用。
       </p>
-      <p v-if="varBlockReason && hasVarMemberTasks" class="meta-hint">标为“有可变成员，不可选”的任务：{{ varBlockReason }}。</p>
+      <p v-if="hasBlockedVarTasks" class="meta-hint">标为“有可变成员，不可选”的任务：{{ SOURCE_VAR_MEMBER_REASON }}。</p>
       <div v-for="item in selectedTasks" :key="item.task.taskId" class="task-columns">
         <div class="task-columns__head">
           <strong>{{ taskLabel(item.market) }}任务的列（{{ columnsHint(item.market) }}）</strong>
@@ -221,6 +221,7 @@ import {
   isUnifiedTask,
   selectableTask,
   varMemberBlockReason,
+  SOURCE_VAR_MEMBER_REASON,
   type TaskOption
 } from "@/views/strategy/components/task-options";
 import { readUnifiedDatasetIds } from "@/views/strategy/components/unified-datasets";
@@ -396,10 +397,9 @@ function columnsHint(key: string) {
   if (referenceKeys.value.includes(key)) return "只用于年龄判定";
   return market === UNIFIED_TASK_KEY ? "DSL 里直接写这些列名，现货、永续共用" : "DSL 里直接写这些列名";
 }
-// 带可变成员的任务能不能选：附加来源的任务一律不能有可变成员；主帧按当前绑定方式判断。
+// 带可变成员的任务能不能选：只有附加来源的任务不能有可变成员，主帧任务都能选（不调参的实例只读可变成员的列）。
 function varBlocked(key: string) {
-  if (splitTaskKey(key).source) return "factor_params 只作用于主帧的任务，附加来源的任务不能有可变成员";
-  return varBlockReason.value;
+  return varMemberBlockReason(splitTaskKey(key).source);
 }
 const selectedTasks = computed(() =>
   taskKeys.value.flatMap(market => {
@@ -407,15 +407,10 @@ const selectedTasks = computed(() =>
     return task ? [{ market, task }] : [];
   })
 );
-// 带可变成员的任务在当前绑定方式下能不能选（策略池、统一数据集、双市场都不能写 factor_params）。
-const varBlockReason = computed(() =>
-  varMemberBlockReason({
-    pool: Boolean(poolRequirement.value),
-    unified: unifiedMode.value,
-    marketCount: activeMarkets.value.length
-  })
+// 有没有因为“附加来源不能有可变成员”被置灰的候选任务。
+const hasBlockedVarTasks = computed(() =>
+  taskKeys.value.some(key => varBlocked(key) && taskChoices(key).some(task => task.varMembers.length))
 );
-const hasVarMemberTasks = computed(() => mainKeys.value.some(market => taskChoices(market).some(task => task.varMembers.length)));
 const tasksSelected = computed(() => taskKeys.value.length > 0 && taskKeys.value.every(market => Boolean(form.tasks[market])));
 // 统一数据集上的任务只能选 multi，其余键只能选单市场数据集上的任务；另一个键已选的任务不再出现：一个任务只能登记一次。
 // 写了 factor_params 的定义不能选已关联到别的实例的主帧任务。

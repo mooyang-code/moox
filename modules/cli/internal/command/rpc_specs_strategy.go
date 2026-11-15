@@ -15,7 +15,7 @@ func init() {
 
 	createInstanceFlags := []rpcFlag{
 		reqFlag("strategy-id", "instance.strategy_id", "策略定义 ID"),
-		mapFlag("factor-task", "instance.factor_tasks", "关联的因子计算任务，写成 市场=任务 ID，可重复：现货、永续策略各给一个（spot=…、swap=…，两个市场都用时两个都要给），股票策略 equity=…；任务在统一数据集上（同一个数据集里放现货、永续两条序列）时写 multi=…，只绑这一个任务，策略必须显式写 market；DSL 写了 market.reference 时再给参考市场的任务（如 spot=…）；DSL 写了 sources 时按 来源名:市场=任务 ID 给每个来源绑定任务（如 daily:swap=…，市场与主帧的任务一一对应）；只能选本空间里运行中的任务，一个任务可以被多个实例引用；DSL 写了 factor_params 的实例启用时独占关联主帧任务，不能选已关联到别的实例的任务；创建后不能改"),
+		mapFlag("factor-task", "instance.factor_tasks", "关联的因子计算任务，写成 市场=任务 ID，可重复：现货、永续策略各给一个（spot=…、swap=…，两个市场都用时两个都要给），股票策略 equity=…；任务在统一数据集上（同一个数据集里放现货、永续两条序列）时写 multi=…，只绑这一个任务，策略必须显式写 market；DSL 写了 market.reference 时再给参考市场的任务（如 spot=…）；DSL 写了 sources 时按 来源名:市场=任务 ID 给每个来源绑定任务（如 daily:swap=…，市场与主帧的任务一一对应）；任务要是本空间里运行中的任务（启用时核对），一个任务可以被多个实例引用；DSL 写了 factor_params 的实例启用时独占关联主帧任务：创建时不检查，主帧任务已关联到别的实例时启用被拒；创建后不能改"),
 		strFlag("logical-account-id", "instance.logical_account_id", "挂载的逻辑账户；不挂＝观察实例，只算目标不下单"),
 		strFlag("instance-id", "instance.instance_id", "实例 ID；不给由服务端生成，重试创建时带上同一个 ID 保持幂等"),
 		boolFlag("enable", "instance.enabled", "创建后立即启用；不加则创建后停用，确认无误再 enable"),
