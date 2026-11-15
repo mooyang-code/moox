@@ -1717,7 +1717,7 @@ func statusRank(status string) int {
 // coordinationFailureTexts 是 Collector 上报的协调失败原因对应的告警文案，按优先级排列：
 // 多个实例上报不同原因时取排在前面的。原因名与 Collector 的 assignmentFailureReasons 一一对应。
 var coordinationFailureTexts = []struct{ reason, text string }{
-	{"quota", "函数个数、命名空间或预留并发配额超限：用 moox-cli collector function list --drift 找出计划外的函数（unplanned 一组），确认后用 moox-cli collector function delete --name 删除；换过云账号的，旧账号下的函数用 moox-cli setup inspect-scf 查出来到腾讯云控制台手工删"},
+	{"quota", "函数个数、命名空间或预留并发配额超限：用 moox-cli collector function list --drift 找出计划外的函数（unplanned 一组），确认后按各行的 delete_command 删除（moox-cli collector function delete --name <函数名> --namespace <命名空间> --region <地域>，带上命名空间与地域才不会连同在用的同名函数一起删）；换过云账号的，旧账号下的函数用 moox-cli setup inspect-scf 查出来到腾讯云控制台手工删"},
 	{"cloud", "调用腾讯云失败：检查云账号密钥、限频和网络"},
 	{"environment", "函数运行环境生成失败：请检查环境变量大小"},
 	{"rules", "采集规则读取失败：请检查 Collector 规则配置和存储连接"},

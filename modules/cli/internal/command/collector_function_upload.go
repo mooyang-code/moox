@@ -51,6 +51,7 @@ func init() {
 }
 
 func runCollectorFunctionUpload(ctx context.Context, out io.Writer, opts collectorFunctionUploadOptions) error {
+	opts.SpaceID = strings.ToLower(strings.TrimSpace(opts.SpaceID))
 	if opts.SpaceID == "" || opts.CloudAccountID == "" {
 		return errors.New("--space-id and --cloud-account-id are required")
 	}

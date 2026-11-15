@@ -277,7 +277,7 @@ func cloudFunctionToPB(view fetchplan.CloudFunctionView) *pb.CloudFunction {
 	return out
 }
 
-// DeleteCloudFunctions 按名字或前缀删除空间的云函数（经操作表）。
+// DeleteCloudFunctions 按名字或前缀删除空间的云函数（经操作表）；dry_run 只返回会删哪些。
 func (s *Service) DeleteCloudFunctions(ctx context.Context, req *pb.DeleteCloudFunctionsReq) (*pb.DeleteCloudFunctionsRsp, error) {
 	reconciler, code, msg := s.reconcilerFor(req.GetSpaceId())
 	if reconciler == nil {
@@ -286,7 +286,9 @@ func (s *Service) DeleteCloudFunctions(ctx context.Context, req *pb.DeleteCloudF
 	if len(req.GetNames()) == 0 && strings.TrimSpace(req.GetPrefix()) == "" {
 		return &pb.DeleteCloudFunctionsRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "names 与 prefix 至少给一个")}, nil
 	}
-	results, err := reconciler.DeleteCloudFunctions(ctx, req.GetNames(), req.GetPrefix())
+	results, err := reconciler.DeleteCloudFunctions(ctx, fetchplan.DeleteCloudFunctionsRequest{
+		Names: req.GetNames(), Prefix: req.GetPrefix(), Namespace: req.GetNamespace(), Region: req.GetRegion(), DryRun: req.GetDryRun(),
+	})
 	if err != nil {
 		return &pb.DeleteCloudFunctionsRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}

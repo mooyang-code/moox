@@ -630,6 +630,8 @@ components:
           ListCloudFunctions: 120000
           DeleteCloudFunctions: 120000
           ProbeFunctionEgress: 120000
+          # 删云账号前要确认它在配置的各地域里没有建过的函数（取凭证、列命名空间、逐个命名空间列函数）；小于管理台的 30 秒请求超时。
+          DeleteCloudAccount: 25000
         max_body_bytes: 4194304
         methods:
           - GetTaskList

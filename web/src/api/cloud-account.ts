@@ -36,7 +36,15 @@ export const updateCloudAccount = async (account: CloudAccountInput): Promise<Cl
   return rsp.account;
 };
 
-/** 账号还被 scf_plan 引用、还有代码包或云上还有它建的函数时，Collector 拒绝删除，错误信息就是原因。 */
+/**
+ * 账号还被 scf_plan 引用、还有代码包或云上还有它建的函数时，Collector 拒绝删除，错误信息就是原因。
+ * 不弹全局提示：调用方自己把原因提示一次，网络出错时也只提示一次。
+ */
 export const deleteCloudAccount = async (accountId: string): Promise<void> => {
-  await callControl<{ account_id: string }, Record<string, never>>("collector", "DeleteCloudAccount", { account_id: accountId });
+  await callControl<{ account_id: string }, Record<string, never>>(
+    "collector",
+    "DeleteCloudAccount",
+    { account_id: accountId },
+    { silentError: true }
+  );
 };

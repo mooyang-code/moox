@@ -1210,10 +1210,15 @@ message ListCloudFunctionsRsp {
 }
 
 // DeleteCloudFunctionsReq 的 names 与 prefix 至少给一个；prefix 必须是本空间的函数名前缀。
+// namespace、region 非空时只删这个命名空间、这个地域里的（同名函数在旧命名空间的副本与在用的函数分得开）；
+// dry_run 为 true 时只返回会删哪些（done 为 false、error 为空的项），不删，匹配规则与实际删除相同。
 message DeleteCloudFunctionsReq {
   string space_id = 1;
   repeated string names = 2;
   string prefix = 3;
+  string namespace = 4;
+  string region = 5;
+  bool dry_run = 6;
 }
 
 // CloudFunctionDeletion 是一个函数的删除结果：done 为 false 且 error 为空表示还在删，稍后用 ListCloudFunctions 查看。

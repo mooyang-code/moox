@@ -258,13 +258,24 @@ func (c *Client) ListCloudFunctions(ctx context.Context) ([]CloudFunction, error
 	return rsp.Functions, nil
 }
 
-// DeleteCloudFunctions 按名字或前缀删 Client.SpaceID 空间的云函数；计划里的函数删掉后，下一轮对账重建。
-func (c *Client) DeleteCloudFunctions(ctx context.Context, names []string, prefix string) ([]CloudFunctionDeletion, error) {
+// DeleteCloudFunctionsRequest 是删除条件：Names 与 Prefix 至少给一个；Namespace、Region 非空时只删这个命名空间、地域里的；
+// DryRun 为 true 时 Collector 用与实际删除相同的匹配只返回会删哪些，不删。
+type DeleteCloudFunctionsRequest struct {
+	Names     []string `json:"names,omitempty"`
+	Prefix    string   `json:"prefix,omitempty"`
+	Namespace string   `json:"namespace,omitempty"`
+	Region    string   `json:"region,omitempty"`
+	DryRun    bool     `json:"dry_run,omitempty"`
+}
+
+// DeleteCloudFunctions 按名字或前缀删 Client.SpaceID 空间的云函数（DryRun 时只预览）；计划里的函数删掉后，下一轮对账重建。
+func (c *Client) DeleteCloudFunctions(ctx context.Context, req DeleteCloudFunctionsRequest) ([]CloudFunctionDeletion, error) {
 	var rsp struct {
 		collectorRsp
 		Results []CloudFunctionDeletion `json:"results"`
 	}
-	if err := c.callCollectorChecked(ctx, "DeleteCloudFunctions", map[string]any{"space_id": c.SpaceID, "names": names, "prefix": prefix}, &rsp); err != nil {
+	body := map[string]any{"space_id": c.SpaceID, "names": req.Names, "prefix": req.Prefix, "namespace": req.Namespace, "region": req.Region, "dry_run": req.DryRun}
+	if err := c.callCollectorChecked(ctx, "DeleteCloudFunctions", body, &rsp); err != nil {
 		return nil, err
 	}
 	return rsp.Results, nil

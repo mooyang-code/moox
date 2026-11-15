@@ -284,9 +284,12 @@ export function cloudStateInfo(
 export const CLOUD_STATE_TIP =
   "对账器定期读回云上的函数，比对定时器和代码包，不一致时自动修复。Collector 重启后，到下一次读回（最长 1 小时）之前显示“未读回”。";
 
-/** 计划外函数的删除命令：可以直接复制到命令行执行。 */
-export function unplannedDeleteCommand(spaceId: string, name: string) {
-  return `moox-cli collector function delete --space-id ${spaceId} --name ${name}`;
+/**
+ * 计划外函数的删除命令：可以直接复制到命令行执行。一定带上命名空间与地域：命名空间改过之后，
+ * 旧命名空间里的副本与在用的函数同名，只按名字删会把在用的也删掉。
+ */
+export function unplannedDeleteCommand(spaceId: string, fn: { name?: string; namespace?: string; region?: string }) {
+  return `moox-cli collector function delete --space-id ${spaceId} --name ${fn.name || ""} --namespace ${fn.namespace || ""} --region ${fn.region || ""}`;
 }
 
 /** 推送周期一行的展示：到达/期望、缺失（含疑似下架）、写入完成相对收盘。 */

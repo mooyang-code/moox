@@ -394,7 +394,7 @@ func TestCoordinationFailureTextFallsBackToAGenericHint(t *testing.T) {
 func TestQuotaAndPackageTextsPointToTheCollectorCommands(t *testing.T) {
 	quota := coordinationFailureText(map[string]bool{"quota": true})
 	require.Contains(t, quota, "moox-cli collector function list --drift")
-	require.Contains(t, quota, "moox-cli collector function delete")
+	require.Contains(t, quota, "moox-cli collector function delete --name <函数名> --namespace <命名空间> --region <地域>", "带命名空间与地域，不连同在用的同名函数一起删")
 	require.Contains(t, quota, "moox-cli setup inspect-scf", "旧云账号下的函数 Collector 管不到")
 	require.NotContains(t, quota, "timer-inventory")
 	pkg := coordinationFailureText(map[string]bool{"package": true})

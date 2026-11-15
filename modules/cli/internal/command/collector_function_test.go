@@ -49,30 +49,43 @@ func TestCollectorFunctionListSeparatesUnplannedAndFiltersDrift(t *testing.T) {
 		assert.Equal(t, "legacy", view.Unplanned[0].Namespace)
 		assert.Equal(t, 4, view.Total)
 		assert.Equal(t, 3, view.DriftCount)
-		assert.Contains(t, view.Note, "moox-cli collector function delete --space-id crypto")
+		assert.Equal(t, "moox-cli collector function delete --space-id crypto --name moox-fetch-plan-crypto-spot-nanjing-001 --namespace legacy --region ap-nanjing",
+			view.Unplanned[0].DeleteCommand, "只删旧命名空间里的副本，不碰在用的同名函数")
+		assert.Contains(t, view.Note, "delete_command")
 	}
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(gateway.bodies["ListCloudFunctions"], &body))
 	assert.Equal(t, "crypto", body["space_id"])
 	require.ErrorContains(t, runCollectorFunctionList(context.Background(), &bytes.Buffer{}, collectorFunctionFlags{}), "--space-id")
+	require.NoError(t, runCollectorFunctionList(context.Background(), &bytes.Buffer{}, collectorFunctionFlags{SpaceID: " Crypto "}))
+	require.NoError(t, json.Unmarshal(gateway.bodies["ListCloudFunctions"], &body))
+	assert.Equal(t, "crypto", body["space_id"], "空间 ID 统一成小写")
 }
 
-// delete 不加 --yes：读回并列出会被删的函数，同名函数在两个命名空间的副本分别列出，云上不存在的不列；不发删除请求。
-func TestCollectorFunctionDeletePreviewListsEveryNamespaceCopy(t *testing.T) {
-	gateway := &rpcFakeGateway{responses: map[string]string{"ListCloudFunctions": cloudFunctionsFixture}}
+// delete 不加 --yes：发 dry_run 的 DeleteCloudFunctions，Collector 用与实际删除相同的匹配返回会删哪些；
+// 命名空间与地域原样带上，被拒绝的单列；不读回、不删。
+func TestCollectorFunctionDeletePreviewUsesTheServerDryRun(t *testing.T) {
+	gateway := &rpcFakeGateway{responses: map[string]string{"DeleteCloudFunctions": `{"ret_info":{"code":0},"results":[
+		{"name":"f-001","region":"ap-nanjing","namespace":"legacy"},
+		{"name":"other-space-000","error":"函数 other-space-000 不属于空间 crypto"}]}`}}
 	useRPCGateway(t, gateway)
 	stdout, _, err := runCollectorFunctionCommand(t, collectorFunctionDeleteCmd, func() error {
 		return runCollectorFunctionDelete(collectorFunctionDeleteCmd, collectorFunctionFlags{SpaceID: "crypto",
-			Names: []string{"moox-fetch-plan-crypto-spot-nanjing-001", "moox-fetch-plan-crypto-spot-nanjing-002"}})
+			Names: []string{"f-001", "other-space-000"}, Namespace: "legacy", Region: "AP-Nanjing"})
 	})
 	require.NoError(t, err)
 	preview := parsePreview(t, stdout)
 	targets := preview["targets"].([]any)
-	require.Len(t, targets, 2)
-	assert.Equal(t, "default", targets[0].(map[string]any)["namespace"])
-	assert.Equal(t, "legacy", targets[1].(map[string]any)["namespace"])
+	require.Len(t, targets, 1)
+	assert.Equal(t, "legacy", targets[0].(map[string]any)["namespace"])
+	require.Len(t, preview["refused"].([]any), 1)
 	assert.Contains(t, preview["note"], "setup inspect-scf", "提示旧账号下的函数怎么找")
-	assert.NotContains(t, gateway.methods, "DeleteCloudFunctions")
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(gateway.bodies["DeleteCloudFunctions"], &body))
+	assert.Equal(t, true, body["dry_run"])
+	assert.Equal(t, "legacy", body["namespace"])
+	assert.Equal(t, "ap-nanjing", body["region"])
+	assert.Equal(t, []string{"DeleteCloudFunctions"}, gateway.methods, "预览只发一次 dry_run，不读回")
 
 	_, _, err = runCollectorFunctionCommand(t, collectorFunctionDeleteCmd, func() error {
 		return runCollectorFunctionDelete(collectorFunctionDeleteCmd, collectorFunctionFlags{SpaceID: "crypto"})
@@ -103,6 +116,7 @@ func TestCollectorFunctionDeleteReportsResultsWithNamespaces(t *testing.T) {
 	require.NoError(t, json.Unmarshal(gateway.bodies["DeleteCloudFunctions"], &body))
 	assert.Equal(t, "crypto", body["space_id"])
 	assert.Equal(t, []any{"f-001", "f-009"}, body["names"])
+	assert.Equal(t, false, body["dry_run"], "--yes 真删")
 	assert.NotContains(t, gateway.methods, "ListCloudFunctions", "--yes 直接删，不先读回")
 }
 

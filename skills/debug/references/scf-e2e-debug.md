@@ -33,7 +33,7 @@ Never paste SecretKey, service auth secret, SSH password or signed headers into 
 ## Build And Package
 
 ```bash
-moox-cli collector function upload --package-name moox-collector-crypto-plan --version <version> --collector-root modules/collector
+moox-cli collector function upload --space-id crypto --cloud-account-id <account-id> --package-name moox-collector-crypto-plan --version <version> --collector-root modules/collector
 ```
 
 The package carries no credentials; runtime addresses and secrets come from the function environment written by Collector. Uploading a new version under the same package name makes Collector roll the functions forward (resolution happens during reconciliation/backfill preparation and successful results are cached for at least 30 seconds; normal reconciliation runs once per minute).

@@ -195,7 +195,6 @@ replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tra
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
 
-
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 
 replace github.com/mooyang-code/moox/packages/hostpolicy => ../../packages/hostpolicy

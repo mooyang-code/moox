@@ -345,6 +345,30 @@ func (r *PlanReconciler) ownsFunctionName(name string) bool {
 	return true
 }
 
+// ownsBackfillName 判断函数名是本空间配置里某个市场、某个地域的补采函数名，并且不是其他已配置空间的补采函数名。
+func (r *PlanReconciler) ownsBackfillName(name string) bool {
+	if !matchesBackfillName(r.SpaceID, r.Options.Markets, name) {
+		return false
+	}
+	for space, markets := range r.OtherSpaces {
+		if !strings.EqualFold(space, r.SpaceID) && matchesBackfillName(space, markets, name) {
+			return false
+		}
+	}
+	return true
+}
+
+func matchesBackfillName(spaceID string, markets map[string][]string, name string) bool {
+	for market, regions := range markets {
+		for _, region := range regions {
+			if BackfillFunctionName(spaceID, market, region) == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // matchesFleetName 判断 name 是不是 PlanFunctionName(spaceID, 某个市场, 该市场的某个地域, 某个序号)。
 func matchesFleetName(spaceID string, markets map[string][]string, name string) bool {
 	cut := strings.LastIndex(name, "-")
@@ -413,23 +437,26 @@ func (r *PlanReconciler) plannedNames(ctx context.Context) (map[string]cloud.Fun
 	return names, nil
 }
 
-// scanUnplanned 按函数名前缀列出本空间各地域（全部命名空间，含分片命名空间）的函数，返回符合本空间命名格式、
-// 又不在计划里的那些。
+// scanUnplanned 按采集函数与补采函数两个前缀列出本空间各地域（全部命名空间，含分片命名空间）的函数，返回符合本空间命名格式、
+// 又不在计划里的那些（包括命名空间或补采地域改过之后留下的旧副本）。
 func (r *PlanReconciler) scanUnplanned(ctx context.Context, planned map[string]cloud.FunctionRef) ([]cloud.FunctionRef, error) {
 	if strings.TrimSpace(r.Deploy.CloudAccountID) == "" {
 		return nil, nil
 	}
 	var out []cloud.FunctionRef
 	for _, region := range r.planRegions() {
-		refs, err := r.Cloud.List(ctx, r.Deploy.CloudAccountID, region, r.fleetPrefix())
-		if err != nil {
-			return nil, err
-		}
-		for _, ref := range refs {
-			if _, ok := planned[refKey(ref)]; ok || !r.ownsFunctionName(ref.Name) {
-				continue
+		// 补采函数单独按它的前缀列：命名空间或市场的第一个地域改过之后留下的旧副本也要看得见、删得到。
+		for _, prefix := range []string{r.fleetPrefix(), r.backfillPrefix()} {
+			refs, err := r.Cloud.List(ctx, r.Deploy.CloudAccountID, region, prefix)
+			if err != nil {
+				return nil, err
 			}
-			out = append(out, ref)
+			for _, ref := range refs {
+				if _, ok := planned[refKey(ref)]; ok || !r.ownsFunctionName(ref.Name) && !r.ownsBackfillName(ref.Name) {
+					continue
+				}
+				out = append(out, ref)
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -514,7 +541,11 @@ func (r *PlanReconciler) ListCloudFunctions(ctx context.Context) ([]CloudFunctio
 		return nil, err
 	}
 	for _, ref := range unplanned {
-		view := CloudFunctionView{Name: ref.Name, Region: ref.Region, Namespace: ref.Namespace, Kind: "timer", Unplanned: true, ExpectedPackageID: pkg, Operation: running[refKey(ref)]}
+		kind := "timer"
+		if strings.HasPrefix(ref.Name, r.backfillPrefix()) {
+			kind = "backfill"
+		}
+		view := CloudFunctionView{Name: ref.Name, Region: ref.Region, Namespace: ref.Namespace, Kind: kind, Unplanned: true, ExpectedPackageID: pkg, Operation: running[refKey(ref)]}
 		if state, readErr := r.describe(ctx, ref); readErr == nil && state.Exists {
 			view.TimerMatches = state.Timer == nil || !state.Timer.Enabled
 			view.PackageLatest = pkg == "" || state.PackageID == pkg
@@ -558,37 +589,49 @@ type FunctionDeletion struct {
 }
 
 // belongs 判断云上一个函数是不是本空间的：在计划里（按地域、命名空间、函数名），或者函数名符合本空间的命名格式
-// （ownsFunctionName：排除其他已配置空间按同样规则能生成的名字），或者是本空间某个市场的补采函数。
+// （ownsFunctionName：排除其他已配置空间按同样规则能生成的名字），或者是本空间某个市场的补采函数（ownsBackfillName）。
 func (r *PlanReconciler) belongs(ref cloud.FunctionRef, planned map[string]cloud.FunctionRef) bool {
 	if _, ok := planned[refKey(ref)]; ok || r.ownsFunctionName(ref.Name) {
 		return true
 	}
-	for market, regions := range r.Options.Markets {
-		for _, region := range regions {
-			if ref.Name == BackfillFunctionName(r.SpaceID, market, region) {
-				return true
-			}
-		}
-	}
-	return false
+	return r.ownsBackfillName(ref.Name)
+}
+
+// DeleteCloudFunctionsRequest 是 DeleteCloudFunctions 的条件：Names 与 Prefix 至少给一个；Namespace、Region 非空时只删这个命名空间、
+// 这个地域里的（同名函数在旧命名空间的副本与在用的函数分得开）；DryRun 为 true 时只返回会删哪些，不删。
+type DeleteCloudFunctionsRequest struct {
+	Names     []string
+	Prefix    string
+	Namespace string
+	Region    string
+	DryRun    bool
 }
 
 // DeleteCloudFunctions 按名字或前缀删除本空间的云函数（经操作表）。计划里的函数删掉后，下一轮对账立即读回并重建。
-// names 与 prefix 至少给一个；prefix 必须以本空间的函数名前缀（moox-fetch-plan-<空间>- 或补采函数前缀）开头。
-// 只删本空间的函数（见 belongs）：前缀相同的别的空间（例如 crypto 与 crypto-x）的函数不碰，按名字点到别的空间的函数直接拒绝。
-func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, names []string, prefix string) ([]FunctionDeletion, error) {
-	prefix = strings.TrimSpace(prefix)
-	if len(names) == 0 && prefix == "" {
+// prefix 必须以本空间的函数名前缀（moox-fetch-plan-<空间>- 或补采函数前缀）开头。预览（DryRun）与实际删除用同一段匹配，
+// 预览列出的就是实际会删的。只删本空间的函数（见 belongs）：前缀相同的别的空间（例如 crypto 与 crypto-x）的函数不碰，
+// 按名字点到别的空间的函数直接拒绝。
+func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, req DeleteCloudFunctionsRequest) ([]FunctionDeletion, error) {
+	prefix := strings.TrimSpace(req.Prefix)
+	namespace, region := strings.TrimSpace(req.Namespace), strings.ToLower(strings.TrimSpace(req.Region))
+	wanted := map[string]bool{}
+	for _, name := range req.Names {
+		if name = strings.TrimSpace(name); name != "" {
+			wanted[name] = true
+		}
+	}
+	if len(wanted) == 0 && prefix == "" {
 		return nil, errors.New("要写明函数名或前缀")
 	}
 	if prefix != "" && !strings.HasPrefix(prefix, r.fleetPrefix()) && !strings.HasPrefix(prefix, r.backfillPrefix()) {
 		return nil, fmt.Errorf("前缀 %q 不是本空间的函数名前缀（%s 或 %s）", prefix, r.fleetPrefix(), r.backfillPrefix())
 	}
-	wanted := map[string]bool{}
-	for _, name := range names {
-		if name = strings.TrimSpace(name); name != "" {
-			wanted[name] = true
+	regions := r.planRegions()
+	if region != "" {
+		if !slices.Contains(regions, region) {
+			return nil, fmt.Errorf("地域 %q 不在空间 %s 的 scf_plan 配置里（%s）", region, r.SpaceID, strings.Join(regions, "、"))
 		}
+		regions = []string{region}
 	}
 	planned, err := r.plannedNames(ctx)
 	if err != nil {
@@ -597,7 +640,7 @@ func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, names []strin
 	var results []FunctionDeletion
 	found := map[string]bool{}
 	var refs []cloud.FunctionRef
-	for _, region := range r.planRegions() {
+	for _, region := range regions {
 		listPrefix := prefix
 		if listPrefix == "" {
 			listPrefix = "moox-fetch"
@@ -607,7 +650,7 @@ func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, names []strin
 			return nil, err
 		}
 		for _, ref := range listed {
-			if prefix == "" && !wanted[ref.Name] {
+			if prefix == "" && !wanted[ref.Name] || namespace != "" && ref.Namespace != namespace {
 				continue
 			}
 			found[ref.Name] = true
@@ -620,6 +663,21 @@ func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, names []strin
 			}
 			refs = append(refs, ref)
 		}
+	}
+	notFound := func() {
+		for _, name := range sortedKeys(wanted) {
+			if !found[name] {
+				results = append(results, FunctionDeletion{Name: name, Error: "云上没有符合条件的这个函数"})
+			}
+		}
+	}
+	if req.DryRun {
+		sort.Slice(refs, func(i, j int) bool { return refKey(refs[i]) < refKey(refs[j]) })
+		for _, ref := range refs {
+			results = append(results, FunctionDeletion{Name: ref.Name, Region: ref.Region, Namespace: ref.Namespace})
+		}
+		notFound()
+		return results, nil
 	}
 	sort.Slice(refs, func(i, j int) bool { return refKey(refs[i]) < refKey(refs[j]) })
 	type pending struct {
@@ -670,11 +728,7 @@ func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, names []strin
 			}
 		}
 	}
-	for _, name := range sortedKeys(wanted) {
-		if !found[name] {
-			results = append(results, FunctionDeletion{Name: name, Error: "云上没有这个函数"})
-		}
-	}
+	notFound()
 	return results, nil
 }
 

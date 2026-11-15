@@ -361,7 +361,9 @@
         <section v-if="unplannedFunctions.length" class="unplanned-section">
           <header class="block-header">
             <h3>计划外的函数</h3>
-            <span class="muted mono-text">定时器已停，可用命令行删除：{{ unplannedHint }}</span>
+            <span class="muted"
+              >定时器已停，不会自动删除。确认后用该行的命令删除，只删这个命名空间里的，不碰在用的同名函数。</span
+            >
           </header>
           <a-table row-key="key" size="mini" :data="unplannedFunctions" :pagination="false" :bordered="{ cell: true }">
             <template #columns>
@@ -372,6 +374,11 @@
               </a-table-column>
               <a-table-column title="地域" data-index="region" :width="140" />
               <a-table-column title="命名空间" data-index="namespace" :width="200" />
+              <a-table-column title="删除命令">
+                <template #cell="{ record }"
+                  ><span class="mono-text">{{ record.command }}</span></template
+                >
+              </a-table-column>
             </template>
           </a-table>
         </section>
@@ -541,10 +548,12 @@ const filteredFunctions = computed(() => {
   return [...list].sort((a, b) => rank(b.state) - rank(a.state));
 });
 const unplannedFunctions = computed(() =>
-  (status.value.unplanned_functions || []).map(item => ({ ...item, key: `${item.region}/${item.namespace}/${item.name}` }))
+  (status.value.unplanned_functions || []).map(item => ({
+    ...item,
+    key: `${item.region}/${item.namespace}/${item.name}`,
+    command: unplannedDeleteCommand(selectedSpaceId.value || "", item)
+  }))
 );
-// 命令里的尖括号写在脚本里：模板里的“<函数名>”会被当成元素
-const unplannedHint = computed(() => unplannedDeleteCommand(selectedSpaceId.value || "", "<函数名>"));
 const cloudStateClass = (record: CollectorFunctionStatus) =>
   ({ muted: "muted", ok: "", warn: "warn-text" })[cloudStateInfo(record).tone];
 const regionOptions = computed(() => functionOptions(status.value.functions || [], "region"));

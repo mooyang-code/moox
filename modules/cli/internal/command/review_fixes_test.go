@@ -254,7 +254,7 @@ func TestReplayRequiresEveryModuleAndSurvivesEmptyArgs(t *testing.T) {
 
 func TestFunctionDeleteAndFirewallAndUdfPreviewAtCommandLevel(t *testing.T) {
 	gateway := &rpcFakeGateway{responses: map[string]string{
-		"ListCloudFunctions": `{"ret_info":{"code":0},"functions":[{"name":"f-1","region":"ap-nanjing","namespace":"default","kind":"timer","exists":true}]}`,
+		"DeleteCloudFunctions": `{"ret_info":{"code":0},"results":[{"name":"f-1","region":"ap-nanjing","namespace":"default"}]}`,
 	}}
 	useRPCGateway(t, gateway)
 	collectorFunctionDeleteFlags = collectorFunctionFlags{SpaceID: "crypto", Names: []string{"f-1"}}
@@ -265,7 +265,9 @@ func TestFunctionDeleteAndFirewallAndUdfPreviewAtCommandLevel(t *testing.T) {
 	collectorFunctionDeleteCmd.SetContext(context.Background())
 	require.NoError(t, collectorFunctionDeleteCmd.RunE(collectorFunctionDeleteCmd, nil))
 	assert.Equal(t, true, parsePreview(t, out.String())["preview"])
-	assert.NotContains(t, gateway.methods, "DeleteCloudFunctions", "没有 --yes 不能删除")
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(gateway.bodies["DeleteCloudFunctions"], &body))
+	assert.Equal(t, true, body["dry_run"], "没有 --yes 只发预览，不删除")
 
 	var fwOut bytes.Buffer
 	lighthouseFirewallAddFlags = lighthouseFirewallAddOptions{InstanceID: "lhins-1", Ports: "20201", Protocol: "TCP", Cidr: "0.0.0.0/0", Action: "ACCEPT"}

@@ -227,8 +227,9 @@ describe("collector runtime status page", () => {
     expect(page).toContain("cloudStateInfo(record).text");
     expect(page).toContain('<section v-if="unplannedFunctions.length" class="unplanned-section">');
     expect(page).toContain("<h3>计划外的函数</h3>");
-    expect(page).toContain("定时器已停，可用命令行删除：{{ unplannedHint }}");
-    for (const title of ['title="函数名"', 'title="地域"', 'title="命名空间"']) expect(page).toContain(title);
+    expect(page).toContain("定时器已停，不会自动删除");
+    for (const title of ['title="函数名"', 'title="地域"', 'title="命名空间"', 'title="删除命令"']) expect(page).toContain(title);
+    expect(page).toContain("command: unplannedDeleteCommand(selectedSpaceId.value");
     // 页面不实时读腾讯云：只用 GetCollectorStatus 里的读回结果
     expect(page).not.toContain("ListCloudFunctions");
   });
@@ -264,9 +265,11 @@ describe("云上状态", () => {
     });
   });
 
-  it("计划外函数的删除命令可以直接复制执行", () => {
-    expect(unplannedDeleteCommand("crypto", "moox-fetch-plan-crypto-spot-tokyo-009")).toBe(
-      "moox-cli collector function delete --space-id crypto --name moox-fetch-plan-crypto-spot-tokyo-009"
+  it("计划外函数的删除命令可以直接复制执行，带命名空间与地域，不连同在用的同名函数一起删", () => {
+    expect(
+      unplannedDeleteCommand("crypto", { name: "moox-fetch-plan-crypto-spot-tokyo-009", namespace: "legacy", region: "ap-tokyo" })
+    ).toBe(
+      "moox-cli collector function delete --space-id crypto --name moox-fetch-plan-crypto-spot-tokyo-009 --namespace legacy --region ap-tokyo"
     );
   });
 });

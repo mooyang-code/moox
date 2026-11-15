@@ -278,7 +278,7 @@ func TestBackfillFunctionAndDeletionStillWorkWhileTheSpaceIsPaused(t *testing.T)
 	require.Equal(t, "backfill", function.Info.Environment["MOOX_MARKET_FETCH_MODE"])
 
 	victim := h.cloudTimers()[0]
-	results, err := r.DeleteCloudFunctions(context.Background(), []string{victim}, "")
+	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{victim}})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.True(t, results[0].Done, results[0].Error)
@@ -425,7 +425,7 @@ func TestDeletedPlannedFunctionIsRebuiltOnTheNextRound(t *testing.T) {
 	require.NoError(t, h.reconcile(r))
 	require.True(t, h.now.Equal(r.lastVerified), "刚读回过")
 	victim := h.cloudTimers()[0]
-	results, err := r.DeleteCloudFunctions(context.Background(), nil, r.fleetPrefix()+"spot-nanjing-000")
+	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Prefix: r.fleetPrefix() + "spot-nanjing-000"})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.True(t, results[0].Done)

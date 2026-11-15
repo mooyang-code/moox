@@ -144,12 +144,15 @@ func TestDeleteCloudFunctionsDecodesTheNamespaceOfEachResult(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, "crypto", body["space_id"])
 		assert.Equal(t, []any{"f-000"}, body["names"])
+		assert.Equal(t, "legacy", body["namespace"])
+		assert.Equal(t, "ap-nanjing", body["region"])
+		assert.Equal(t, true, body["dry_run"])
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"results":[
 			{"name":"f-000","region":"ap-nanjing","namespace":"default","done":true},
 			{"name":"f-000","region":"ap-nanjing","namespace":"legacy","done":true}]}`))
 	}))
 	defer server.Close()
-	results, err := spaceTestClient(server, "crypto").DeleteCloudFunctions(context.Background(), []string{"f-000"}, "")
+	results, err := spaceTestClient(server, "crypto").DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{"f-000"}, Namespace: "legacy", Region: "ap-nanjing", DryRun: true})
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 	assert.Equal(t, "default", results[0].Namespace)

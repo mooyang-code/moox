@@ -34,7 +34,7 @@ func TestDeleteCloudFunctionsRefusesFunctionsOfAnotherSpace(t *testing.T) {
 	stockcn := scfRefIn(PlanFunctionName("stockcn", "equity", "ap-nanjing", 0), "ap-nanjing", "default")
 	h.scf.Seed(stockcn, activeTimerFunction("pkg"))
 
-	results, err := r.DeleteCloudFunctions(context.Background(), []string{stockcn.FunctionName}, "")
+	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{stockcn.FunctionName}})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.False(t, results[0].Done)
@@ -54,7 +54,7 @@ func TestDeleteCloudFunctionsByPrefixKeepsTheOtherSpaceWithTheSamePrefix(t *test
 	h.scf.Seed(other, activeTimerFunction("pkg"))
 	require.True(t, strings.HasPrefix(other.FunctionName, r.fleetPrefix()), "前缀确实相同")
 
-	results, err := r.DeleteCloudFunctions(context.Background(), nil, r.fleetPrefix())
+	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Prefix: r.fleetPrefix()})
 	require.NoError(t, err)
 	require.Len(t, results, 2, "只删本空间的两个函数")
 	for _, result := range results {
@@ -203,7 +203,7 @@ func TestDeletedBackfillFunctionIsRebuiltOnTheNextUse(t *testing.T) {
 	r := h.reconciler()
 	name, err := r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
-	results, err := r.DeleteCloudFunctions(context.Background(), []string{name}, "")
+	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{name}})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.True(t, results[0].Done, results[0].Error)
@@ -247,7 +247,7 @@ func TestDeletedUntouchedFunctionIsRebuiltWhileAPlanIsOpen(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, untouched, "永续的函数不受这份计划影响")
-	results, err := r.DeleteCloudFunctions(context.Background(), []string{untouched}, "")
+	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{untouched}})
 	require.NoError(t, err)
 	require.True(t, results[0].Done, results[0].Error)
 
@@ -366,7 +366,7 @@ func TestDeletedTransitionedFunctionIsRebuiltWhileThePlanIsOpen(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, victim, "有已确认过渡的函数")
-	results, err := r.DeleteCloudFunctions(context.Background(), []string{victim}, "")
+	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{victim}})
 	require.NoError(t, err)
 	require.True(t, results[0].Done, results[0].Error)
 
@@ -469,7 +469,7 @@ func TestDeleteByNameReportsTheNamespaceOfEachCopy(t *testing.T) {
 	require.Equal(t, "legacy", unplanned[0].Namespace)
 	require.Equal(t, name, unplanned[0].Name)
 
-	results, err := r.DeleteCloudFunctions(context.Background(), []string{name}, "")
+	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{name}})
 	require.NoError(t, err)
 	namespaces := map[string]bool{}
 	for _, result := range results {
@@ -479,4 +479,87 @@ func TestDeleteByNameReportsTheNamespaceOfEachCopy(t *testing.T) {
 	}
 	require.Equal(t, map[string]bool{"default": true, "legacy": true}, namespaces)
 	require.Empty(t, r.UnplannedFunctions(), "删掉的副本不再列为计划外")
+}
+
+// T6 复审：补采函数在旧命名空间里的副本，读回时列为计划外（种类 backfill）；预览与实际删除用同一段匹配，预览列出的就是实际删掉的，预览不删。
+func TestDeleteDryRunListsExactlyWhatIsDeletedIncludingBackfillCopies(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	h.applyFirstPlan(r)
+	backfill := BackfillFunctionName("crypto", "spot", "ap-nanjing")
+	current := scfRefIn(backfill, "ap-nanjing", "default")
+	legacy := scfRefIn(backfill, "ap-nanjing", "legacy")
+	h.scf.Seed(current, &cloudtest.Function{Info: tencentscf.FunctionInfo{Status: "Active"}})
+	h.scf.Seed(legacy, &cloudtest.Function{Info: tencentscf.FunctionInfo{Status: "Active"}})
+
+	views, err := r.ListCloudFunctions(context.Background())
+	require.NoError(t, err)
+	var unplanned []CloudFunctionView
+	for _, view := range views {
+		if view.Unplanned {
+			unplanned = append(unplanned, view)
+		}
+	}
+	require.Len(t, unplanned, 1, "补采函数的旧副本看得见")
+	require.Equal(t, "legacy", unplanned[0].Namespace)
+	require.Equal(t, "backfill", unplanned[0].Kind)
+
+	request := DeleteCloudFunctionsRequest{Prefix: r.backfillPrefix(), DryRun: true}
+	preview, err := r.DeleteCloudFunctions(context.Background(), request)
+	require.NoError(t, err)
+	require.Len(t, preview, 2)
+	for _, item := range preview {
+		require.False(t, item.Done)
+		require.Empty(t, item.Error)
+	}
+	_, exists := h.scf.Lookup(legacy)
+	require.True(t, exists, "预览不删")
+	require.Zero(t, h.cloud.countOps("delete", ""))
+
+	request.DryRun = false
+	results, err := r.DeleteCloudFunctions(context.Background(), request)
+	require.NoError(t, err)
+	require.Len(t, results, len(preview))
+	for i, result := range results {
+		require.True(t, result.Done, result.Namespace)
+		require.Equal(t, preview[i].Namespace, result.Namespace)
+	}
+
+	_, err = r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Prefix: "moox-fetch-plan-", DryRun: true})
+	require.ErrorContains(t, err, "不是本空间的函数名前缀", "无效前缀在预览时就拒绝")
+	_, err = r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{backfill}, Region: "ap-tokyo", DryRun: true})
+	require.ErrorContains(t, err, "不在空间 crypto")
+}
+
+// T6 复审：同名函数在旧命名空间里的副本与配置命名空间里在用的函数，按 --namespace 删只删副本，在用的不动。
+func TestDeleteByNamespaceKeepsTheFunctionInUse(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	h.applyFirstPlan(r)
+	name := h.cloudTimers()[0]
+	planned := scfRef(name)
+	legacy := scfRefIn(name, planned.Region, "legacy")
+	h.scf.Seed(legacy, activeTimerFunction("pkg-old"))
+
+	request := DeleteCloudFunctionsRequest{Names: []string{name}, Namespace: "legacy", Region: planned.Region, DryRun: true}
+	preview, err := r.DeleteCloudFunctions(context.Background(), request)
+	require.NoError(t, err)
+	require.Len(t, preview, 1)
+	require.Equal(t, "legacy", preview[0].Namespace)
+
+	request.DryRun = false
+	results, err := r.DeleteCloudFunctions(context.Background(), request)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.True(t, results[0].Done)
+	require.Equal(t, "legacy", results[0].Namespace)
+	_, exists := h.scf.Lookup(legacy)
+	require.False(t, exists, "旧副本删掉了")
+	require.True(t, h.timerEnabled(name), "在用的函数还在、定时器开着")
+
+	missing, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{name}, Namespace: "other"})
+	require.NoError(t, err)
+	require.Len(t, missing, 1)
+	require.Contains(t, missing[0].Error, "云上没有符合条件的这个函数")
+	require.True(t, h.timerEnabled(name))
 }

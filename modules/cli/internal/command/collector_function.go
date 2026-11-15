@@ -20,12 +20,14 @@ const oldAccountFunctionsHint = "只删当前 scf_plan 云账号下、属于本�
 	"要用 moox-cli setup inspect-scf 查出来，再到腾讯云控制台手工删。"
 
 type collectorFunctionFlags struct {
-	File    string
-	SpaceID string
-	Drift   bool
-	Names   []string
-	Prefix  string
-	Yes     bool
+	File      string
+	SpaceID   string
+	Drift     bool
+	Names     []string
+	Prefix    string
+	Namespace string
+	Region    string
+	Yes       bool
 }
 
 var (
@@ -50,7 +52,8 @@ var collectorFunctionDeleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "按名字或前缀删除空间的云函数（计划里的函数删掉后下一轮对账会重建；默认只预览，--yes 才执行）",
 	Long: "经 Collector 删除云函数，用来清理计划外的函数或强制重建计划里的函数。--name 可重复，--prefix 必须是本空间的函数名前缀。" +
-		"不加 --yes 只读回并列出会被删的函数（带命名空间，同名函数在不同命名空间的副本分别列出）。" + oldAccountFunctionsHint,
+		"--namespace、--region 只删这个命名空间、地域里的：命名空间改过之后，旧命名空间里会留下与在用函数同名的副本，删副本时一定要带上，否则在用的同名函数也会被删（下一轮对账才重建）。" +
+		"不加 --yes 时 Collector 用与实际删除相同的匹配列出会被删的函数（带命名空间），不删。" + oldAccountFunctionsHint,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runCollectorFunctionDelete(cmd, collectorFunctionDeleteFlags)
@@ -78,13 +81,15 @@ func init() {
 	deleteFlags := collectorFunctionDeleteCmd.Flags()
 	deleteFlags.StringArrayVar(&collectorFunctionDeleteFlags.Names, "name", nil, "要删的函数名，可重复")
 	deleteFlags.StringVar(&collectorFunctionDeleteFlags.Prefix, "prefix", "", "按函数名前缀删（必须是本空间的前缀）")
+	deleteFlags.StringVar(&collectorFunctionDeleteFlags.Namespace, "namespace", "", "只删这个命名空间里的（删旧命名空间里的同名副本时必带）")
+	deleteFlags.StringVar(&collectorFunctionDeleteFlags.Region, "region", "", "只删这个地域里的，如 ap-nanjing")
 	deleteFlags.BoolVar(&collectorFunctionDeleteFlags.Yes, "yes", false, "确认删除；不加只预览")
 	collectorFunctionProbeCmd.Flags().StringArrayVar(&collectorFunctionProbeFlags.Names, "name", nil, "只探测这些函数，可重复；不给时探测全部")
 }
 
 // openCollectorFunctionClient 校验空间并打开网关；返回的 close 必须调用。
 func openCollectorFunctionClient(ctx context.Context, flags collectorFunctionFlags) (*adminclient.Client, func() error, error) {
-	spaceID := strings.TrimSpace(flags.SpaceID)
+	spaceID := strings.ToLower(strings.TrimSpace(flags.SpaceID))
 	if spaceID == "" {
 		return nil, nil, errors.New("--space-id is required")
 	}
@@ -100,26 +105,37 @@ type collectorFunctionListView struct {
 	Total      int                         `json:"total"`
 	DriftCount int                         `json:"drift_count"`
 	Functions  []adminclient.CloudFunction `json:"functions"`
-	Unplanned  []adminclient.CloudFunction `json:"unplanned"`
+	Unplanned  []unplannedFunctionView     `json:"unplanned"`
 	Note       string                      `json:"note,omitempty"`
+}
+
+// unplannedFunctionView 是计划外的一个函数，带上只删它自己的命令（限定命名空间与地域，不碰在用的同名函数）。
+type unplannedFunctionView struct {
+	adminclient.CloudFunction
+	DeleteCommand string `json:"delete_command"`
+}
+
+// unplannedDeleteCommand 是只删一个函数的命令：同名函数在别的命名空间里可能正在用，所以一定带上命名空间与地域。
+func unplannedDeleteCommand(spaceID string, function adminclient.CloudFunction) string {
+	return fmt.Sprintf("moox-cli collector function delete --space-id %s --name %s --namespace %s --region %s", spaceID, function.Name, function.Namespace, function.Region)
 }
 
 // buildCollectorFunctionList 把读回分成计划内与计划外两组；drift 为 true 时计划内只留不一致的。
 func buildCollectorFunctionList(spaceID string, functions []adminclient.CloudFunction, drift bool) collectorFunctionListView {
-	view := collectorFunctionListView{SpaceID: spaceID, Total: len(functions), Functions: []adminclient.CloudFunction{}, Unplanned: []adminclient.CloudFunction{}}
+	view := collectorFunctionListView{SpaceID: spaceID, Total: len(functions), Functions: []adminclient.CloudFunction{}, Unplanned: []unplannedFunctionView{}}
 	for _, function := range functions {
 		if function.Drifted() {
 			view.DriftCount++
 		}
 		switch {
 		case function.Unplanned:
-			view.Unplanned = append(view.Unplanned, function)
+			view.Unplanned = append(view.Unplanned, unplannedFunctionView{CloudFunction: function, DeleteCommand: unplannedDeleteCommand(spaceID, function)})
 		case !drift || function.Drifted():
 			view.Functions = append(view.Functions, function)
 		}
 	}
 	if len(view.Unplanned) > 0 {
-		view.Note = fmt.Sprintf("有 %d 个计划外的函数：定时器已停，确认后用 moox-cli collector function delete --space-id %s --name <函数名> 删除", len(view.Unplanned), spaceID)
+		view.Note = fmt.Sprintf("有 %d 个计划外的函数：定时器已停，确认后用各自的 delete_command 删除（带命名空间与地域，不碰在用的同名函数）", len(view.Unplanned))
 	}
 	return view
 }
@@ -135,39 +151,6 @@ func runCollectorFunctionList(ctx context.Context, out io.Writer, flags collecto
 		return err
 	}
 	return printJSON(out, buildCollectorFunctionList(client.SpaceID, functions, flags.Drift))
-}
-
-type collectorFunctionTarget struct {
-	Name      string `json:"name"`
-	Region    string `json:"region"`
-	Namespace string `json:"namespace"`
-	Kind      string `json:"kind"`
-	Unplanned bool   `json:"unplanned,omitempty"`
-}
-
-// collectorDeleteTargets 从读回里挑出按名字或前缀会被删的函数（同名函数在不同命名空间的副本分别列出），按名字、命名空间排序。
-func collectorDeleteTargets(functions []adminclient.CloudFunction, names []string, prefix string) []collectorFunctionTarget {
-	wanted := map[string]bool{}
-	for _, name := range names {
-		wanted[strings.TrimSpace(name)] = true
-	}
-	var targets []collectorFunctionTarget
-	for _, function := range functions {
-		if !wanted[function.Name] && (prefix == "" || !strings.HasPrefix(function.Name, prefix)) {
-			continue
-		}
-		if !function.Exists && function.ReadError == "" {
-			continue
-		}
-		targets = append(targets, collectorFunctionTarget{Name: function.Name, Region: function.Region, Namespace: function.Namespace, Kind: function.Kind, Unplanned: function.Unplanned})
-	}
-	sort.Slice(targets, func(i, j int) bool {
-		if targets[i].Name != targets[j].Name {
-			return targets[i].Name < targets[j].Name
-		}
-		return targets[i].Namespace < targets[j].Namespace
-	})
-	return targets
 }
 
 func runCollectorFunctionDelete(cmd *cobra.Command, flags collectorFunctionFlags) error {
@@ -187,18 +170,28 @@ func runCollectorFunctionDelete(cmd *cobra.Command, flags collectorFunctionFlags
 		return err
 	}
 	defer closeGateway()
+	request := adminclient.DeleteCloudFunctionsRequest{Names: names, Prefix: prefix, Namespace: strings.TrimSpace(flags.Namespace), Region: strings.ToLower(strings.TrimSpace(flags.Region))}
 	if !flags.Yes {
-		functions, err := client.ListCloudFunctions(ctx)
+		request.DryRun = true
+		preview, err := client.DeleteCloudFunctions(ctx, request)
 		if err != nil {
 			return err
 		}
+		targets, refused := []adminclient.CloudFunctionDeletion{}, []adminclient.CloudFunctionDeletion{}
+		for _, item := range preview {
+			if item.Error != "" {
+				refused = append(refused, item)
+			} else {
+				targets = append(targets, item)
+			}
+		}
 		return writePreview(cmd, map[string]any{
-			"space_id": client.SpaceID, "names": names, "prefix": prefix, "targets": collectorDeleteTargets(functions, names, prefix),
-			"note": "以 Collector 执行时的读回为准；计划里的函数删掉后下一轮对账会重建。" + oldAccountFunctionsHint,
+			"space_id": client.SpaceID, "request": request, "targets": targets, "refused": refused,
+			"note": "targets 是加 --yes 后会删的函数（与实际删除同一套匹配）；计划里的函数删掉后下一轮对账会重建。" + oldAccountFunctionsHint,
 		})
 	}
 	cmd.SilenceUsage = true
-	results, err := client.DeleteCloudFunctions(ctx, names, prefix)
+	results, err := client.DeleteCloudFunctions(ctx, request)
 	if err != nil {
 		return err
 	}
