@@ -190,7 +190,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 ```yaml
 - id: btc_trend
   type: rank
-  pool: [BTC-USDT]                          # 固定列表或 {tags: [...]}
+  pool: [BTC-USDT]                          # 固定列表，或 {tags: [...]}（标签池保存时不检查成员数，见下）
   score: "0"                                # 不排序，写常数即可
   select: {top: 10000}                      # 足够大的上限：池里满足条件的都持有
   hold:
@@ -200,8 +200,10 @@ portfolio: {leverage: 1, max_weight: 0.1}
 ```
 
 - 每根先对持有的标的判 `exit`，再对其余标的判 `entry`；两者同根都成立不入场；持有的标的平分规则预算。
-- 它与其他 rank 规则一样参与整期跳过的检查：池里的标的全部年龄不够时整期跳过（`universe_too_small`）。
-- 固定 `pool` 的标的数少于 `portfolio.min_universe` 时保存被拒，要写 `allow_empty: true`；写了之后这条规则不参与整期跳过的检查，持有的标的缺数时直接出场（`exit_missing`），建议同时写 `on_missing: {keep_bars: N}` 让缺数先冻结。
+- 它与其他 rank 规则一样参与整期跳过的检查：池里本期没有可评估的标的时整期跳过（`universe_too_small`），同策略的其他规则也不出目标——全部年龄不够，或池与本期基础集合没有交集（标的停用、退市，标签池没有成员，ID 写错）。不写 `allow_empty` 时，1～4 个标的的小池按默认 `max_missing: 0.2` 缺一个就整期跳过。
+- 池里的标的数少于 `portfolio.min_universe`：固定列表保存即拒；`{tags}` 池保存不拒，运行时成员少于 `min_universe` 就每根整期跳过。两种都要写 `allow_empty: true`；写了之后这条规则不参与整期跳过的检查，持有的标的普通缺数时出场（`exit_missing`；市场不可用、只缺上一根的仍冻结保持），建议同时写 `on_missing: {keep_bars: N}` 让缺数先冻结。
+- 有标的被冻结时，冻结的一份按上期权重保持，其余持有标的按含冻结的个数平分预算；冻结标的上期份额大于本期平分份额时规则合计会超过 `weight.total`（预算 0.5：上期 A 独占 0.5，本期 A 冻结、B 入场得 0.25，合计 0.75），只受 `portfolio.leverage` 封顶，冻结解除后恢复。
+- 止损等同出场，明细原因是 `exit_stop:<原因>`（例如 `exit_stop:stop_loss`）。
 
 ## 3. 表达式
 

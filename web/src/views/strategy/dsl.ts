@@ -22,6 +22,8 @@ rules:
     type: rank
     pool: [BTC-USDT]
     allow_empty: true
+    # 写了 allow_empty 后缺数不再整期跳过：BTC 偶尔缺数先冻结保持，连续超过 3 根才出场
+    on_missing: {keep_bars: 3}
     score: "0"
     select: {top: 10000}
     hold:
@@ -169,6 +171,8 @@ export interface DSLRulePreview {
   id: string;
   name: string;
   type: string;
+  /** 固定标的择时（显式 pool 加 hold）；不是时不出现。 */
+  timing?: boolean;
   /** 规则级市场（spot 或 swap）；没写时不出现。 */
   market?: string;
 }
@@ -241,6 +245,7 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
         name: typeof rule?.name === "string" ? rule.name : "",
         type
       };
+      if (rule?.pool !== undefined && rule?.hold !== undefined) preview.timing = true;
       if (rule?.market !== undefined) {
         if (rule.market in RULE_MARKET_LABELS) preview.market = rule.market;
         else diagnostics.push({ message: `rules[${index}] 的 market 只能是 spot 或 swap` });

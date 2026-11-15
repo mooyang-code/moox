@@ -425,7 +425,7 @@ holding:
 ```yaml
 - id: btc_trend
   type: rank
-  pool: [BTC-USDT]                          # 固定列表或 {tags: [...]}
+  pool: [BTC-USDT]                          # 固定列表，或 {tags: [...]}（标签池的注意事项见下表）
   score: "0"                                # 不排序，写常数即可
   select: {top: 10000}                      # 足够大的上限：池里满足条件的都持有
   hold:
@@ -436,17 +436,17 @@ holding:
 
 - 每根先对持有的标的判 `exit`，再对其余标的判 `entry`；`entry` 与 `exit` 同根都成立时不入场，本根出场的标的本根不补回。
 - 本期持有的标的平分规则预算：`total: 0.2`、池里有 2 个同时持有，每个 0.1。
-- 持有标的的 `exit` 输入缺失按缺数出场（`exit_missing`）；写了 `on_missing` 才冻结保持，见 7.3。只缺 `entry` 用到的列（例如上一根）不出场。
+- 持有标的的 `exit` 输入普通缺数（因子失败、当期列为空）按缺数出场（`exit_missing`）；写了 `on_missing` 才冻结保持，见 7.3。所在市场本期整体不可用、或只缺上一根的持有标的不出场，冻结保持（7.4）。只缺 `entry` 用到的列（例如上一根）不出场。
 - 判断“穿越”要用 `bars[-1]` 取上一根的值；第一期没有上一根，`bars[-1]` 的值都缺失。
-- 可以配 `stop`、`scale`、`on_missing`、`market`、`side`；止损等同出场并进入冷却。
+- 可以配 `stop`、`scale`、`on_missing`、`market`、`side`；止损等同出场并进入冷却，明细原因是 `exit_stop:<止损原因>`（例如 `exit_stop:stop_loss`）。
 
-这条规则和其他 rank 规则一样参与整期跳过的检查（7.4），固定的池很小，要留意三点：
+这条规则和其他 rank 规则一样参与整期跳过的检查（7.4），固定的池很小，要留意下面几点。不写 `allow_empty` 时，1～4 个标的的小池按默认 `max_missing: 0.2` 缺一个就整期跳过（缺数占比至少 25%）：
 
 | 情形 | 行为 | 建议 |
 | --- | --- | --- |
-| 池里的标的全部年龄不够（`min_age_bars`） | 这条规则没有可评估的候选，整期跳过（`universe_too_small`），其他规则这一根也不出目标 | 池里放上市足够久的标的，或给这条规则写 `allow_empty: true` |
-| 池里的标的数少于 `portfolio.min_universe` | 保存时拒绝，必须写 `allow_empty: true`。写了之后这条规则不参与任何整期跳过的检查，持有的标的缺数时直接按 `exit_missing` 出场 | 同时写 `on_missing: {keep_bars: N}`，缺数时先冻结而不是卖出 |
-| 有标的被冻结（市场不可用、只缺上一根、`on_missing`） | 预算在全部持有标的（含冻结的）之间平分，冻结的那一份由组合层保持不动，合计不超过规则预算 | 无需处理 |
+| 池里本期没有可评估的标的：全部年龄不够（`min_age_bars`），或池与本期基础集合没有交集（标的停用、退市，标签池没有成员，ID 写错） | 这条规则没有可评估的候选，整期跳过（`universe_too_small`），其他规则这一根也不出目标 | 池里放上市足够久、仍在交易的标的，或给这条规则写 `allow_empty: true` |
+| 池里的标的数少于 `portfolio.min_universe` | 固定列表保存即拒；`{tags}` 池保存不拒，运行时成员少于 `min_universe` 就每根整期跳过（`universe_too_small`）。两种都要写 `allow_empty: true`。写了之后这条规则不参与任何整期跳过的检查，持有的标的普通缺数时按 `exit_missing` 出场（市场不可用、只缺上一根的仍冻结保持） | 同时写 `on_missing: {keep_bars: N}`，缺数时先冻结而不是卖出 |
+| 有标的被冻结（市场不可用、只缺上一根、`on_missing`） | 冻结的那一份按上期权重保持，其余持有标的按含冻结的个数平分预算。冻结标的上期份额大于本期平分份额时，规则合计会超过 `weight.total`（例如预算 0.5：上期 A 独占 0.5，本期 A 冻结、B 入场得 0.25，合计 0.75），只受 `portfolio.leverage` 封顶，冻结解除后恢复 | `leverage` 留出余量，或接受这几根暂时超出 |
 
 ## 7. 止损、仓位系数、缺数处理
 
@@ -466,6 +466,7 @@ stop:
 - 至少写一项；`loss`、`trailing` 取值 (0, 1)，`profit` 取值 (0, 10]。
 - **按收盘判断，不是盘中触价**；View 必须有 `close`（`price: extreme` 时还要 `high`、`low`）。
 - 止损与 `exit` 同一根成立时按止损记，冷却按 `stop.cooldown_bars`。
+- 明细原因：普通 rank 与 `holding` 规则是 `stop_loss`、`trailing_stop`、`take_profit`；写了 `hold` 的规则止损等同出场，原因是 `exit_stop:<原因>`（例如 `exit_stop:stop_loss`）。
 
 ### 7.2 scale：按行情给仓位打折
 
@@ -855,7 +856,7 @@ freeze: {watch: short, window_bars: 1, threshold: 0.10, bars: 4}
 ```yaml
 filter: "volume_mean > 20000 && close > ma__20"             # 两个条件同时满足
 filter: "instrument_id matches '^[A-Z]+-USDT$'"             # 只要 USDT 计价
-entry: "bars[-1].bias <= 1 && bars[0].bias > 1"             # 上穿
+hold: {entry: "bars[-1].bias <= 1 && bars[0].bias > 1"}     # 上穿（entry 写在 hold 里）
 score: "rank(mom__20) - rank(vol__24)"                      # 综合名次
 scale: {expr: "close > ma__200 ? 1 : 0.5"}                  # 年线上方满仓，下方半仓
 ```

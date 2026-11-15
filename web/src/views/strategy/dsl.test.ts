@@ -8,7 +8,7 @@ describe("strategy DSL preview", () => {
     expect(ranked.preview).toMatchObject({ name: "binance_spot_momentum", bar: "1m", leverage: "1" });
     expect(ranked.preview?.rules).toEqual([
       { id: "long_momentum", name: "多头动量选币", type: "rank" },
-      { id: "btc_trend", name: "BTC 上穿均线", type: "rank" }
+      { id: "btc_trend", name: "BTC 上穿均线", type: "rank", timing: true }
     ]);
     expect(ranked.preview?.universe).toContain("排除 BTC-USDT");
     const aged = parseDSL(
@@ -19,7 +19,7 @@ describe("strategy DSL preview", () => {
     expect(excluded.preview?.universe).toBe("全部标的；规则 g：排除标签 meme、new");
     const timing = parseDSL(timingTemplate);
     expect(timing.diagnostics).toEqual([]);
-    expect(timing.preview?.rules).toEqual([{ id: "majors_trend", name: "主流币均线择时", type: "rank" }]);
+    expect(timing.preview?.rules).toEqual([{ id: "majors_trend", name: "主流币均线择时", type: "rank", timing: true }]);
     expect(timingTemplate).toContain("bars[-1].bias");
   });
 

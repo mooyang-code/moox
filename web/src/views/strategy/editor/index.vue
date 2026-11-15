@@ -65,7 +65,7 @@
               <a-descriptions-item v-else label="规则"
                 ><div v-for="rule in parse.preview.rules" :key="rule.id">
                   {{ rule.name || rule.id }} · <span class="mono">{{ rule.id }}</span> ·
-                  {{ rule.type === "rank" ? "截面选股" : rule.type
+                  {{ rule.type === "rank" ? (rule.timing ? "固定标的择时" : "截面选股") : rule.type
                   }}{{ rule.market ? ` · 只用${RULE_MARKET_LABELS[rule.market]}` : "" }}
                 </div></a-descriptions-item
               >

@@ -23,7 +23,7 @@ func holdOf(decision Decision) map[string]bool {
 	return out
 }
 
-// 固定标的择时：已持有的标的因所在市场不可用缺数时保持持仓（不判出场、不清仓），预算先预留给它，其余标的在剩余额度里按比例缩小；
+// 固定标的择时：已持有的标的因所在市场不可用缺数时保持持仓（不判出场、不清仓），份额按上期权重保持，其余持有标的按含它在内的个数平分预算；
 // 市场恢复后照常延续。
 func TestHoldPoolHoldsFrozenPositionAndReservesBudget(t *testing.T) {
 	program := compile(t, holdPoolStrategy, "sig")
@@ -34,7 +34,7 @@ func TestHoldPoolHoldsFrozenPositionAndReservesBudget(t *testing.T) {
 	down.FailedColumns = marketFailed("sig", "A")
 	second := evaluate(t, program, down, first.State)
 	assertOK(t, second)
-	// A 保持（预留 0.5），B 原本平分到 1，被缩到剩余的 0.5。
+	// A 保持上期的 0.5；B 按两个持有标的（含冻结的 A）平分预算，直接分到 0.5。
 	assertWeights(t, second, map[string]string{"A": "0.5", "B": "0.5"})
 	if holds := holdOf(second); len(holds) != 1 || !holds["A"] {
 		t.Fatalf("只有 A 应是保持目标：%v", second.Targets)
