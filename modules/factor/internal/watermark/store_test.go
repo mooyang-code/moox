@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,13 +16,13 @@ func TestStorePersistsStates(t *testing.T) {
 	_, ok := store.Get("s")
 	require.False(t, ok)
 	at := time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)
-	require.NoError(t, store.Put(State{TaskID: "s", CommittedThrough: at, Target: at.Add(time.Minute), Universe: []string{"A"}}))
+	require.NoError(t, store.Put(State{TaskID: "s", CommittedThrough: at, Target: at.Add(time.Minute), UniverseSeries: []seriesset.Series{{SubjectID: "A", SeriesTag: "venue:binance"}}}))
 	reopened, err := Open(path)
 	require.NoError(t, err)
 	state, ok := reopened.Get("s")
 	require.True(t, ok)
 	require.True(t, state.Behind())
-	require.Equal(t, []string{"A"}, state.Universe)
+	require.Equal(t, []seriesset.Series{{SubjectID: "A", SeriesTag: "venue:binance"}}, state.UniverseSeries)
 	require.Len(t, reopened.All(), 1)
 }
 

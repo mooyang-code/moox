@@ -38,9 +38,7 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 			}
 		}
 	}
-	if plan.multi() {
-		outcome.FailedSeries = uniqueSeriesSorted(append(append([]seriesset.Series(nil), plan.UpstreamFailedSeries...), loaded.FailedSeries...))
-	}
+	outcome.FailedSeries = uniqueSeriesSorted(append(append([]seriesset.Series(nil), plan.UpstreamFailedSeries...), loaded.FailedSeries...))
 	if len(outcome.FailedSubjects) > 0 {
 		outcome.Status = "degraded"
 	}
@@ -100,14 +98,16 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 		return Outcome{}, err
 	}
 	if plan.Mode == ModeRecalc && len(plan.ExpectedSeries) == 0 && len(plan.Members) > 0 {
-		// 补算类计划没有冻结的序列全集：统一数据集上由数据层按本地存储构造，单序列数据集不受影响。
-		if expecter, ok := r.data.(SeriesExpecter); ok {
-			series, err := expecter.ExpectedSeries(ctx, plan)
-			if err != nil {
-				return Outcome{StageDurations: outcome.StageDurations}, fmt.Errorf("构造补算的期望序列: %w", err)
-			}
-			plan.ExpectedSeries, plan.ExpectedSeriesDerived = series, len(series) > 0
+		// 补算类计划没有冻结的序列全集：由数据层给出（只有一个 tag 的数据集是确定值，统一数据集按本地存储推测）。
+		expecter, ok := r.data.(SeriesExpecter)
+		if !ok {
+			return Outcome{StageDurations: outcome.StageDurations}, errors.New("补算计划没有期望序列，数据层也不能给出")
 		}
+		series, derived, err := expecter.ExpectedSeries(ctx, plan)
+		if err != nil {
+			return Outcome{StageDurations: outcome.StageDurations}, fmt.Errorf("构造补算的期望序列: %w", err)
+		}
+		plan.ExpectedSeries, plan.ExpectedSeriesDerived = series, derived
 	}
 	if plan.Observed() && plan.HistorySubjects == nil {
 		// observed 成员的历史截面要用本地存储里本期不可用的标的：在内存预检之前取得，预检按扩大后的序列数估算。

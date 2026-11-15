@@ -11,7 +11,7 @@ import (
 
 // ValidatePeriodDetail 校验因子周期明细：成员身份是 member_key（同一因子可以用不同参数出现多次），factor_id 是它引用的定义；
 // member_kind 必须是已知取值；失败标的必须在冻结的全集里；complete 的周期里不能有非 complete 的成员。
-// 统一数据集（universeSeries 非空）还要求：失败序列在冻结的序列全集里，跳过的 series_tag 是序列全集里出现的 tag。
+// 按序列的字段：失败序列在冻结的序列全集里，跳过的 series_tag 是序列全集里出现的 tag。
 // Storage 对明细是不透明字节，这些规则由因子自己保证。
 func ValidatePeriodDetail(detail *factorpb.PeriodDetail, universe []string, universeSeries []seriesset.Series, status string) error {
 	subjects := make(map[string]struct{}, len(universe))

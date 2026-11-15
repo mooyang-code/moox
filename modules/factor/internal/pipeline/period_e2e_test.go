@@ -107,7 +107,7 @@ func e2eLiveInput(target time.Time, subjects []string, factors []domain.FactorDe
 			TaskID: "task_e2e", SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m",
 			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.TaskStatusEnabled,
 		},
-		Members: domain.AsMembers(factors...), PeriodTime: target, Universe: subjects, CarryColumns: []string{"close"}, TriggerEventID: "evt-1",
+		Members: domain.AsMembers(factors...), PeriodTime: target, UniverseSeries: singleSeries(subjects...), CarryColumns: []string{"close"}, TriggerEventID: "evt-1",
 	}
 }
 
@@ -178,7 +178,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
 		runner := NewRunner(store, store.data(), clock, Config{ComputeWorkers: 2})
 		input := e2eLiveInput(target, subjects, []domain.FactorDef{mean})
-		input.UpstreamFailed = []string{"SOL"}
+		input.UpstreamFailedSeries = singleSeries("SOL")
 		plan, err := BuildLivePlan(clock, input)
 		require.NoError(t, err)
 

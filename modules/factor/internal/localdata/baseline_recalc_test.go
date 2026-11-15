@@ -223,6 +223,17 @@ func baselineSeriesOf(subjects []string) []seriesset.Series {
 	return out
 }
 
+// requireSingleTagLists 是派生断言（批 3 T5）：只有一个 tag 的数据集上按序列的名单由按标的的名单决定——
+// 失败序列就是失败标的逐个配上唯一的 tag，跳过的 tag 恒为空。所以金样只记按标的的名单。
+func requireSingleTagLists(t *testing.T, failedSubjects []string, failedSeries []seriesset.Series, states []storageio.FactorState) {
+	t.Helper()
+	require.ElementsMatch(t, baselineSeriesOf(failedSubjects), failedSeries)
+	for _, state := range states {
+		require.ElementsMatch(t, baselineSeriesOf(state.FailedSubjects), state.FailedSeries, state.MemberKey)
+		require.Empty(t, state.SkippedSeriesTags, state.MemberKey)
+	}
+}
+
 func baselineRecalcText(value any) string {
 	switch typed := value.(type) {
 	case nil:
@@ -236,9 +247,11 @@ func baselineRecalcText(value any) string {
 	}
 }
 
-// baselineRecalcRun 跑一个场景，返回 CSV 记录：先是每个分块的结果（状态、失败名单、成员状态、逐项结果、按默认参数新补的期次、告警），
+// baselineRecalcRun 跑一个场景，返回 CSV 记录。withSeries 为假时 Selection 不带序列（人工补算、失效重算的接线，
+// 期望序列由数据层按“标的 × 唯一的 tag”给出），为真时带上“标的 × 唯一的 tag”（读到 marker 冻结全集的恢复的接线）。
+// 记录里：先是每个分块的结果（状态、失败名单、成员状态、逐项结果、按默认参数新补的期次、告警），
 // 再是结果数据集里的全部行（含补算前已有的行），按（标的、series_tag、时间、列名）排序。
-func baselineRecalcRun(t *testing.T, scenario baselineRecalcScenario) [][]string {
+func baselineRecalcRun(t *testing.T, scenario baselineRecalcScenario, withSeries bool) [][]string {
 	t.Helper()
 	fx, members := baselineRecalcFixture(t)
 	selected := make([]domain.MemberDef, 0, len(members))
@@ -252,8 +265,11 @@ func baselineRecalcRun(t *testing.T, scenario baselineRecalcScenario) [][]string
 	if subjects == nil {
 		subjects = baselineRecalcSubjects
 	}
-	selection := recalcexec.Selection{Set: fx.set.Set, Members: selected, Subjects: subjects, Series: baselineSeriesOf(subjects),
+	selection := recalcexec.Selection{Set: fx.set.Set, Members: selected, Subjects: subjects,
 		Columns: []string{"close", "volume"}, FillOnly: scenario.fillOnly}
+	if withSeries {
+		selection.Series = baselineSeriesOf(subjects)
+	}
 	var records [][]string
 	add := func(kind, subject, tag, dataTime, column, value string) {
 		records = append(records, []string{scenario.name, kind, subject, tag, dataTime, column, value})
@@ -264,6 +280,7 @@ func baselineRecalcRun(t *testing.T, scenario baselineRecalcScenario) [][]string
 	err := executor.Run(context.Background(), recalcexec.Window{Start: at(baselineRecalcFrom), End: at(baselineRecalcTo)},
 		func(context.Context) (recalcexec.Selection, error) { return selection, nil },
 		func(_ context.Context, progress time.Time, outcome pipeline.Outcome) (bool, error) {
+			requireSingleTagLists(t, outcome.FailedSubjects, outcome.FailedSeries, outcome.Factors)
 			chunk := stamp(progress)
 			add("chunk", "", "", chunk, "status", outcome.Status)
 			add("chunk", "", "", chunk, "failed_subjects", strings.Join(outcome.FailedSubjects, ";"))
@@ -367,8 +384,8 @@ func baselineRecalcFind(records [][]string, scenario, kind, subject, dataTime, c
 func TestBaselineSingleSeriesRecalc(t *testing.T) {
 	var records [][]string
 	for _, scenario := range baselineRecalcScenarios() {
-		got := baselineRecalcRun(t, scenario)
-		require.Equal(t, got, baselineRecalcRun(t, scenario), "场景 %s 两次运行的结果不同", scenario.name)
+		got := baselineRecalcRun(t, scenario, false)
+		require.Equal(t, got, baselineRecalcRun(t, scenario, true), "场景 %s：期望序列由数据层给出与随 Selection 带上，结果不同", scenario.name)
 		records = append(records, got...)
 	}
 	// 与金样无关的硬断言：确认场景标注的特性真的发生了。
@@ -468,10 +485,11 @@ func baselineRecalcCompare(t *testing.T, path string, records [][]string) {
 	t.Fatalf("%s 与金样的字节不一致", path)
 }
 
-// 实时金样：同一个单序列数据集上连续算五期，完成事件只带按标的的全集（现在的口径），把每期的结果、上报的周期标记与写出的结果行存成数据文件。
+// 实时金样：同一个单序列数据集上连续算五期，完成事件带“标的 × 唯一的 tag”的序列全集，把每期的结果、上报的周期标记与写出的结果行存成数据文件
+// （金样最初按标的口径生成）。
 // 第 9 分钟 L5 没有数据；第 10 分钟 L4 的 K 线还没到；第 11 分钟 L4 补到（缺的第 10 根在本地按规则填充）；第 12 分钟事件里 L2 上游失败；
 // 第 13 分钟全集里没有 L5、四个标的都齐（严格全集的截面因子只有这一期能算出）。
-// 周期标记里按序列的全集与名单同样不进金样。
+// 周期标记里按序列的全集与名单同样不进金样，由派生断言检查（requireSingleTagLists）。
 
 const baselineLivePath = "testdata/baseline/single_series_live.csv"
 
@@ -516,13 +534,14 @@ func baselineLiveRun(t *testing.T) [][]string {
 	run := func(minute int, universe, upstreamFailed []string) {
 		fx.now = at(minute + 1)
 		plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-			Set: fx.set.Set, Members: fx.set.Members, PeriodTime: at(minute), Universe: universe, UpstreamFailed: upstreamFailed,
+			Set: fx.set.Set, Members: fx.set.Members, PeriodTime: at(minute),
 			UniverseSeries: baselineSeriesOf(universe), UpstreamFailedSeries: baselineSeriesOf(upstreamFailed),
 			CarryColumns: []string{"close", "volume"}, TriggerEventID: fmt.Sprintf("evt-%d", minute),
 		})
 		require.NoError(t, err)
 		outcome, err := fx.runner.Run(context.Background(), plan)
 		require.NoError(t, err)
+		requireSingleTagLists(t, outcome.FailedSubjects, outcome.FailedSeries, outcome.Factors)
 		fx.data.Drain()
 		period := stamp(at(minute))
 		add("period", "", "", period, "status", outcome.Status)
@@ -553,6 +572,8 @@ func baselineLiveRun(t *testing.T) [][]string {
 	defer fx.st.mu.Unlock()
 	require.Len(t, fx.st.markers, 5, "每期上报一次周期标记")
 	for _, marker := range fx.st.markers {
+		require.ElementsMatch(t, baselineSeriesOf(marker.UniverseSubjects), marker.UniverseSeries)
+		requireSingleTagLists(t, marker.FailedSubjects, marker.FailedSeries, marker.Factors)
 		period := stamp(time.Unix(marker.PeriodTime, 0))
 		add("marker", "", "", period, "status", marker.Status)
 		add("marker", "", "", period, "universe_subjects", strings.Join(marker.UniverseSubjects, ";"))

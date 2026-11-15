@@ -184,16 +184,13 @@ func baselineTask() domain.FactorTask {
 		Freq: "1m", Status: domain.TaskStatusEnabled}
 }
 
-// baselineRecalcPlan 是补算计划：目标区间 [baselineStart, baselineStart+periods)。
+// baselineRecalcPlan 是补算计划：目标区间 [baselineStart, baselineStart+periods)，期望序列由调用方给出。
 func baselineRecalcPlan(members []domain.MemberDef, periods int, expectedSeries []seriesset.Series) Plan {
 	plan := Plan{Mode: ModeRecalc, Set: baselineTask(), Members: members, TargetStart: baselineStart,
 		TargetEnd: baselineStart.Add(time.Duration(periods) * time.Minute), WriteCarry: true}
-	plan.Expected, plan.Available = append([]string(nil), baselineSubjects...), append([]string(nil), baselineSubjects...)
-	if len(expectedSeries) > 0 {
-		plan.ExpectedSeries = uniqueSeriesSorted(expectedSeries)
-		plan.Expected = seriesSubjects(plan.ExpectedSeries)
-		plan.Available = append([]string(nil), plan.Expected...)
-	}
+	plan.ExpectedSeries = uniqueSeriesSorted(expectedSeries)
+	plan.Expected = seriesSubjects(plan.ExpectedSeries)
+	plan.Available = append([]string(nil), plan.Expected...)
 	return plan
 }
 
@@ -211,14 +208,14 @@ func baselineScenarios(t *testing.T, members []domain.MemberDef) []baselineScena
 	}
 	// 实时、单序列：事件里 S4 上游失败，数据层又报 S2 本期取不到。
 	live, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{Set: baselineTask(), Members: members, PeriodTime: baselineStart.Add(5 * time.Minute),
-		Universe: baselineSubjects, UpstreamFailed: []string{"S4"}})
+		UniverseSeries: singleSeries(baselineSubjects...), UpstreamFailedSeries: singleSeries("S4")})
 	require.NoError(t, err)
 	// 实时、统一数据集：事件里 S2 的永续序列上游失败（本地仍有它的行）。
 	unifiedLive, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{Set: baselineTask(), Members: members, PeriodTime: baselineStart.Add(2 * time.Minute),
-		Universe: baselineSubjects[:4], UniverseSeries: unifiedSeries, UpstreamFailedSeries: []seriesset.Series{series("S2", tagSwap)}})
+		UniverseSeries: unifiedSeries, UpstreamFailedSeries: []seriesset.Series{series("S2", tagSwap)}})
 	require.NoError(t, err)
 	return []baselineScenario{
-		{name: "single_recalc", plan: baselineRecalcPlan(members, 6, nil), data: baselineData(baselineFrames(baselineSingleSeries(5)), nil, nil)},
+		{name: "single_recalc", plan: baselineRecalcPlan(members, 6, singleSeries(baselineSubjects...)), data: baselineData(baselineFrames(baselineSingleSeries(5)), nil, nil)},
 		{name: "single_live_failed", plan: live, data: baselineData(baselineFrames(baselineSingleSeries(5)), []string{"S2"}, nil)},
 		{name: "unified_recalc", plan: baselineRecalcPlan(members, 3, unifiedSeries), data: baselineData(baselineFrames(baselineUnifiedSeries(2)), nil, nil)},
 		{name: "unified_live_failed_series", plan: unifiedLive, data: baselineData(baselineFrames(baselineUnifiedSeries(2)), nil, nil)},
@@ -403,6 +400,16 @@ func baselineCheckScenarios(t *testing.T, library, cross []domain.FactorDef, pla
 	}
 	if value, ok := baselineValueAt(single, keyOf(plan, "min_max"), "S3", "venue:binance", baselineStart); !ok || value != nil {
 		t.Fatalf("S3 零波动段的 min_max 是 0/0，应为 null：%v（有行 %v）", value, ok)
+	}
+
+	// 派生断言（批 3 T5）：只有一个 tag 的数据集上按序列的名单由按标的的名单决定——失败序列就是失败标的逐个配上唯一的 tag，
+	// 跳过的 tag 恒为空。
+	for _, name := range []string{"single_recalc", "single_live_failed"} {
+		for _, member := range plans[name].Members {
+			state := results[name].FactorStates[member.Key]
+			require.ElementsMatch(t, singleSeries(state.FailedSubjects...), state.FailedSeries, "%s %s", name, member.Key)
+			require.Empty(t, state.SkippedSeriesTags, "%s %s", name, member.Key)
+		}
 	}
 
 	live, livePlan := results["single_live_failed"], plans["single_live_failed"]

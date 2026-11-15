@@ -91,7 +91,7 @@ func TestStockCN5mAcrossBreaks(t *testing.T) {
 			t.Cleanup(func() { _ = store.Close() })
 			raw := newFakeStorage()
 			for i, at := range bars {
-				raw.rows["600000.SH"] = append(raw.rows["600000.SH"], bar{at: at, close: 100 + float64(i), volume: 10})
+				raw.rows["600000.SH"] = append(raw.rows["600000.SH"], bar{at: at, close: 100 + float64(i), volume: 10, tag: plainTag})
 			}
 			storage := storageio.NewAxis(stockBackend{fakeStorage: raw})
 			now := cstTime(t, c.now)
@@ -126,7 +126,7 @@ func TestStockCN5mAcrossBreaks(t *testing.T) {
 			}
 
 			plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-				Set: set.Set, Members: set.Members, PeriodTime: period, Universe: subjects, CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
+				Set: set.Set, Members: set.Members, PeriodTime: period, UniverseSeries: plainSeries(subjects...), CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
 			})
 			require.NoError(t, err)
 			outcome, err := runner.Run(context.Background(), plan)
@@ -137,7 +137,7 @@ func TestStockCN5mAcrossBreaks(t *testing.T) {
 			raw.mu.Lock()
 			defer raw.mu.Unlock()
 			require.Len(t, raw.results, 1)
-			row, ok := raw.results["600000.SH"+cstTime(t, c.period).Format(time.RFC3339)]
+			row, ok := raw.results["600000.SH"+cstTime(t, c.period).Format(time.RFC3339)+plainTag]
 			require.True(t, ok, "写回 Storage 的 data_time 是真实时间")
 			require.InDelta(t, c.want, row.Fields["ma"], 1e-9)
 			require.InDelta(t, 0, row.Fields["filled"], 1e-9)
@@ -159,7 +159,7 @@ func TestStockCNCoverageExemptsNewDatasetWithinRetention(t *testing.T) {
 		t.Cleanup(func() { _ = store.Close() })
 		raw := newFakeStorage()
 		raw.retention = "7200h"
-		raw.rows["600519.XSHG"] = []bar{{at: cstTime(t, "2026-11-05 09:30"), close: 1465, volume: 10}}
+		raw.rows["600519.XSHG"] = []bar{{at: cstTime(t, "2026-11-05 09:30"), close: 1465, volume: 10, tag: plainTag}}
 		storage := storageio.NewAxis(stockBackend{fakeStorage: raw})
 		now := cstTime(t, "2026-11-05 09:36")
 		lookback := c.lookback

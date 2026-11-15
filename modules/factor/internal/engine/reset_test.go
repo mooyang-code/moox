@@ -30,7 +30,7 @@ func TestEngineResetClearsLocalStateInProcess(t *testing.T) {
 	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "dataset_a", Freq: "1m"}
 	cols := seriesstore.NewColumns([]seriesstore.Field{{Name: "close", Type: seriesstore.TypeFloat64, Fill: seriesstore.FillPrevClose}}, 1)
 	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	cols.AppendRow(t0, "", false, seriesstore.Float(100))
+	cols.AppendRow(t0, plainTag, false, seriesstore.Float(100))
 	_, err = series.WriteRange(ctx, src, seriesstore.SubjectWrite{Subject: "BTC", From: t0, To: t0.Add(time.Minute), Rows: cols}, seriesstore.WriteOptions{})
 	require.NoError(t, err)
 

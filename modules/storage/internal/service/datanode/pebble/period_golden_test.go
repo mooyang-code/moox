@@ -268,14 +268,24 @@ func TestGoldenLedgerJudgement(t *testing.T) {
 				require.Empty(t, marker.GetCauseEventId())
 				require.Equal(t, tc.wantUniverse, marker.GetUniverseSubjectIds())
 				require.Equal(t, tc.wantFailed, nilIfEmpty(marker.GetFailedSubjects()))
-				wantUniverseSeries, wantFailedSeries := tc.wantUniverseSeries, tc.wantFailedSeries
-				if !tc.unified {
-					wantUniverseSeries = len(tc.wantUniverse)
+				var universeSeries []string
+				for _, ref := range marker.GetUniverseSeries() {
+					universeSeries = append(universeSeries, ref.GetSubjectId()+"|"+ref.GetSeriesTag())
+				}
+				wantFailedSeries := tc.wantFailedSeries
+				if tc.unified {
+					require.Len(t, universeSeries, tc.wantUniverseSeries)
+				} else {
+					// 单市场：序列全集与失败序列逐条等于标的配上 goldenTag。
+					var wantUniverseSeries []string
+					for _, subject := range tc.wantUniverse {
+						wantUniverseSeries = append(wantUniverseSeries, subject+"|"+goldenTag)
+					}
+					require.Equal(t, wantUniverseSeries, universeSeries)
 					for _, subject := range tc.wantFailed {
 						wantFailedSeries = append(wantFailedSeries, subject+"|"+goldenTag)
 					}
 				}
-				require.Len(t, marker.GetUniverseSeries(), wantUniverseSeries)
 				var failedSeries []string
 				for _, ref := range marker.GetFailedSeries() {
 					failedSeries = append(failedSeries, ref.GetSubjectId()+"|"+ref.GetSeriesTag())

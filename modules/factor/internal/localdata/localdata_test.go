@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,7 +25,7 @@ func at(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
 type bar struct {
 	at            time.Time
 	close, volume float64
-	// tag 是行的 series_tag：单序列测试用空串，统一数据集的测试用 putTag 写现货、永续两条序列。
+	// tag 是行的 series_tag：单序列测试用 plainTag，统一数据集的测试用 putTag 写现货、永续两条序列。
 	tag string
 }
 
@@ -47,8 +48,20 @@ func newFakeStorage() *fakeStorage {
 	return &fakeStorage{rows: map[string][]bar{}, results: map[string]storageio.ResultRow{}}
 }
 
+// plainTag 是只有一个 series_tag 的测试数据集用的 tag（Storage 不接受空 tag）。
+const plainTag = "venue:binance"
+
+// plainSeries 把标的逐个配上 plainTag。
+func plainSeries(subjects ...string) []seriesset.Series {
+	out := make([]seriesset.Series, 0, len(subjects))
+	for _, subject := range subjects {
+		out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: plainTag})
+	}
+	return out
+}
+
 func (f *fakeStorage) put(subject string, base float64, minutes ...int) {
-	f.putTag(subject, "", base, minutes...)
+	f.putTag(subject, plainTag, base, minutes...)
 }
 
 func (f *fakeStorage) putTag(subject, tag string, base float64, minutes ...int) {
@@ -223,7 +236,7 @@ func newFixture(t *testing.T, factors ...domain.FactorDef) *fixture {
 func (fx *fixture) live(t *testing.T, target time.Time, subjects []string) pipeline.Outcome {
 	t.Helper()
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-		Set: fx.set.Set, Members: fx.set.Members, PeriodTime: target, Universe: subjects, CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
+		Set: fx.set.Set, Members: fx.set.Members, PeriodTime: target, UniverseSeries: plainSeries(subjects...), CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
 	})
 	require.NoError(t, err)
 	outcome, err := fx.runner.Run(context.Background(), plan)
@@ -239,7 +252,7 @@ func mean3() domain.FactorDef {
 func (fx *fixture) result(subject string, m int) storageio.ResultRow {
 	fx.st.mu.Lock()
 	defer fx.st.mu.Unlock()
-	return fx.st.results[subject+at(m).Format(time.RFC3339)]
+	return fx.st.results[subject+at(m).Format(time.RFC3339)+plainTag]
 }
 
 type sink struct {
@@ -460,7 +473,7 @@ func TestWriteLocalReloadsWindow(t *testing.T) {
 	fields, _, _ := fx.data.Store().Schema(src)
 
 	rows := seriesstore.NewColumns(fields, 1)
-	rows.AppendRow(at(8), "", false, seriesstore.Float(900), seriesstore.Float(10))
+	rows.AppendRow(at(8), plainTag, false, seriesstore.Float(900), seriesstore.Float(10))
 	_, err := fx.data.WriteLocal(context.Background(), src, []seriesstore.SubjectWrite{{Subject: "BTC", From: at(8), To: at(9), Rows: rows}}, seriesstore.WriteOptions{FillGaps: true})
 	require.NoError(t, err)
 	fx.st.put("BTC", 100, 10)
@@ -492,7 +505,7 @@ func TestLiveCatchUpOlderPeriodReadsDiskNotTruncatedWindow(t *testing.T) {
 				values[i] = seriesstore.Float(10)
 			}
 		}
-		hist.AppendRow(at(m), "", false, values...)
+		hist.AppendRow(at(m), plainTag, false, values...)
 	}
 	_, err = fx.data.Store().WriteRange(context.Background(), src, seriesstore.SubjectWrite{Subject: "BTC", From: at(0), To: at(8), Rows: hist}, seriesstore.WriteOptions{})
 	require.NoError(t, err)
@@ -624,7 +637,7 @@ func TestCatchUpStopsAtTheLatestClosedBar(t *testing.T) {
 	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(100))
 	require.NoError(t, err)
 	require.Equal(t, 1, pulled)
-	require.Equal(t, at(10), fx.tagLatest(t, "BTC", ""))
+	require.Equal(t, at(10), fx.tagLatest(t, "BTC", plainTag))
 }
 
 // 有标的从 Storage 读取失败时要报出来：否则补算照样写出 0 行、作业成功，而且没有任何日志。
@@ -641,7 +654,7 @@ func TestCatchUpReportsReadFailures(t *testing.T) {
 	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(11))
 	require.ErrorIs(t, err, storageio.ErrInfra)
 	require.Zero(t, pulled)
-	require.Equal(t, at(9), fx.tagLatest(t, "BTC", ""))
+	require.Equal(t, at(9), fx.tagLatest(t, "BTC", plainTag))
 }
 
 // 只拉任务范围内的标的：任务收窄之后，本地还留着的其他标的不拉，也不会被加回窗口。
@@ -659,8 +672,8 @@ func TestCatchUpPullsOnlySubjectsInTheTask(t *testing.T) {
 	pulled, err := fx.data.CatchUp(context.Background(), fx.set, nil, at(11))
 	require.NoError(t, err)
 	require.Equal(t, 1, pulled)
-	require.Equal(t, at(10), fx.tagLatest(t, "BTC", ""))
-	require.Equal(t, at(9), fx.tagLatest(t, "ETH", ""))
+	require.Equal(t, at(10), fx.tagLatest(t, "BTC", plainTag))
+	require.Equal(t, at(9), fx.tagLatest(t, "ETH", plainTag))
 	// 显式给出的标的同样限定在任务范围内。
 	pulled, err = fx.data.CatchUp(context.Background(), fx.set, []string{"ETH", "SOL"}, at(11))
 	require.NoError(t, err)

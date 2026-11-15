@@ -69,8 +69,8 @@ type PeriodMarker struct {
 	Status           string
 	UniverseSubjects []string
 	FailedSubjects   []string
-	// UniverseSeries、FailedSeries 是按序列（标的、series_tag）的期望全集与失败名单：按序列处理的计划才有。
-	// 实时计算的计划来自源数据集的周期完成事件，事件总带序列全集，所以实时的标记总带。
+	// UniverseSeries、FailedSeries 是按序列（标的、series_tag）的期望全集与失败名单。
+	// 实时计算的计划来自源数据集的周期完成事件，事件总带序列全集，所以标记总带。
 	UniverseSeries []seriesset.Series
 	FailedSeries   []seriesset.Series
 	Factors        []FactorState
@@ -88,7 +88,7 @@ type FactorState struct {
 	FailedSubjects []string
 	SourceHash     string // 填因子定义的 spec_hash；Storage 协议里这个字段仍叫 source_hash
 	DefinitionHash string
-	// FailedSeries 是按序列的失败名单（统一数据集才有，口径同 FailedSubjects）。
+	// FailedSeries 是按序列的失败名单（口径同 FailedSubjects）。
 	FailedSeries []seriesset.Series
 	// SkippedSeriesTags 是被跳过的 series_tag（截面因子全集缺数）：这些序列的结果写 NULL。
 	// 全部 tag 都跳过时 Status 为 skipped；只跳过一部分时 Status 为 degraded，并在这里列出。

@@ -727,8 +727,11 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 			universe = append(universe, subject)
 		}
 	}
+	// 回放按标的选范围：序列全集取“标的 × 快照里它的 series_tag”，本期可用的标的它的各条序列都算可用，
+	// 标的缺数就是它的序列缺数。
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-		Set: s.set.Set, Members: s.set.Members, Params: params, PeriodTime: period, Universe: universe, CarryColumns: s.carry,
+		Set: s.set.Set, Members: s.set.Members, Params: params, PeriodTime: period,
+		UniverseSeries: pipeline.SubjectSeries(s.view, universe), CarryColumns: s.carry,
 	})
 	if err != nil {
 		return nil, pipeline.Plan{}, pipeline.Computation{}, err
@@ -756,7 +759,8 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 	if cached != nil {
 		return cached, plan, pipeline.Computation{}, nil
 	}
-	loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: available, Frames: map[string]*storageio.Frame{}}
+	loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: available,
+		AvailableSeries: pipeline.SubjectSeries(s.view, available), Frames: map[string]*storageio.Frame{}}
 	computation, err := runner.Compute(ctx, plan, loaded)
 	if err != nil {
 		return nil, plan, computation, fmt.Errorf("计算 %s：%w", s.axis.Format(period), err)
@@ -812,7 +816,8 @@ func (s *replaySession) write(ctx context.Context, runner *pipeline.Runner, plan
 	}
 	if comp.Results == nil {
 		// 命中缓存时没有保留计算结果：重算这一期。
-		loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: plan.Available}
+		loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: plan.Available,
+			AvailableSeries: pipeline.SubjectSeries(s.view, plan.Available)}
 		var err error
 		if comp, err = runner.Compute(ctx, plan, loaded); err != nil {
 			return 0, err
@@ -834,7 +839,8 @@ func (s *replaySession) write(ctx context.Context, runner *pipeline.Runner, plan
 			frames[subject] = seriessync.ColumnsToFrame(subject, target, s.carry, s.types)
 		}
 	}
-	loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: plan.Available, Frames: frames}
+	loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: plan.Available,
+		AvailableSeries: pipeline.SubjectSeries(s.view, plan.Available), Frames: frames}
 	rows, err := runner.Assemble(plan, loaded, comp)
 	if err != nil {
 		return 0, fmt.Errorf("组装 %s 的结果行：%w", s.axis.Format(period), err)

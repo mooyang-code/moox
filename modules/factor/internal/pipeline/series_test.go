@@ -26,6 +26,7 @@ func series(subject, tag string) seriesset.Series {
 // unifiedPlan 造统一数据集的实时计划：每个标的都有现货、永续两条序列。
 func unifiedPlan(target time.Time, factors []domain.FactorDef, subjects []string) Plan {
 	plan := computePlan(target, factors, subjects)
+	plan.ExpectedSeries = nil
 	for _, subject := range subjects {
 		plan.ExpectedSeries = append(plan.ExpectedSeries, series(subject, tagSpot), series(subject, tagSwap))
 	}
@@ -222,7 +223,6 @@ func TestBuildLivePlanUnifiedKeepsSubjectsWithAnyUsableSeries(t *testing.T) {
 	plan, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
 		Set:     domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.TaskStatusEnabled},
 		Members: domain.AsMembers(testPipelineFactor("mean", domain.FactorTypeTimeSeries, 2, false)), PeriodTime: target,
-		Universe: []string{"BTC", "ETH"}, UpstreamFailed: []string{"BTC"},
 		UniverseSeries: []seriesset.Series{
 			series("BTC", tagSpot), series("BTC", tagSwap), series("ETH", tagSpot), series("ETH", tagSwap),
 		},
@@ -234,16 +234,14 @@ func TestBuildLivePlanUnifiedKeepsSubjectsWithAnyUsableSeries(t *testing.T) {
 	require.Equal(t, []string{"BTC"}, plan.UpstreamFailed)
 	require.Equal(t, []seriesset.Series{series("BTC", tagSpot)}, plan.UpstreamFailedSeries)
 	require.Len(t, plan.ExpectedSeries, 4)
-	require.True(t, plan.Multi())
 
 	single, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
 		Set:     domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.TaskStatusEnabled},
 		Members: domain.AsMembers(testPipelineFactor("mean", domain.FactorTypeTimeSeries, 2, false)), PeriodTime: target,
-		Universe: []string{"BTC", "ETH"}, UpstreamFailed: []string{"BTC"},
+		UniverseSeries: singleSeries("BTC", "ETH"), UpstreamFailedSeries: singleSeries("BTC"),
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{"ETH"}, single.Available, "单序列数据集：失败的标的整体不读（原有行为）")
-	require.False(t, single.Multi())
+	require.Equal(t, []string{"ETH"}, single.Available, "只有一个 tag 的数据集：唯一的序列失败，标的整体不读")
 }
 
 // 统一数据集写自己的周期完成标记时带上序列全集与失败序列。

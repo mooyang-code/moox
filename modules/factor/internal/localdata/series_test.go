@@ -29,12 +29,8 @@ func unifiedUniverse(subjects ...string) []seriesset.Series {
 // liveSeries 按统一数据集的事件（按序列的全集与失败名单）跑一期。
 func (fx *fixture) liveSeries(t *testing.T, target time.Time, subjects []string, failed ...seriesset.Series) pipeline.Outcome {
 	t.Helper()
-	failedSubjects := make([]string, 0, len(failed))
-	for _, item := range failed {
-		failedSubjects = append(failedSubjects, item.SubjectID)
-	}
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-		Set: fx.set.Set, Members: fx.set.Members, PeriodTime: target, Universe: subjects, UpstreamFailed: failedSubjects,
+		Set: fx.set.Set, Members: fx.set.Members, PeriodTime: target,
 		UniverseSeries: unifiedUniverse(subjects...), UpstreamFailedSeries: failed,
 		CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
 	})

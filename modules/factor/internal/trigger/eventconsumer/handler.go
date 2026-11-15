@@ -163,7 +163,6 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 
 	event := periodEvent{
 		periodTime: time.Unix(payload.GetPeriodTime(), 0).UTC(), eventID: message.GetEventId(),
-		universe: payload.GetUniverseSubjectIds(), failed: payload.GetFailedSubjects(),
 		universeSeries: eventSeries(payload.GetUniverseSeries()), failedSeries: eventSeries(payload.GetFailedSeries()),
 	}
 	// 同一个源数据集可以有多个任务：事件同时分给每个启用的任务，各自在自己的串行通道里计算（同一任务内部的期次仍按顺序），
@@ -247,21 +246,18 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 type periodEvent struct {
 	periodTime time.Time
 	eventID    string
-	universe   []string
-	failed     []string
-	// universeSeries、failedSeries 是统一数据集（多个 series_tag）事件里按序列的全集与失败名单；单序列数据集为空。
+	// universeSeries、failedSeries 是事件里按序列的全集与失败名单（所有数据集的事件都带）。
 	universeSeries []seriesset.Series
 	failedSeries   []seriesset.Series
 }
 
-// periodScope 是一期要算的范围：期望全集与上游失败名单，按标的；统一数据集还带按序列的全集与失败名单（非空时按序列判断）。
+// periodScope 是一期要算的范围：按序列（标的、series_tag）的期望全集与上游失败名单。
 type periodScope struct {
-	universe, failed             []string
 	universeSeries, failedSeries []seriesset.Series
 }
 
 func (e periodEvent) scope() periodScope {
-	return periodScope{universe: e.universe, failed: e.failed, universeSeries: e.universeSeries, failedSeries: e.failedSeries}
+	return periodScope{universeSeries: e.universeSeries, failedSeries: e.failedSeries}
 }
 
 // eventSeries 把事件里的序列名单转成引擎内部的形式。
@@ -351,7 +347,7 @@ func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members [
 		return pipeline.Plan{}, budgetErr
 	}
 	return pipeline.BuildLivePlan(clock, pipeline.LiveInput{
-		Set: set, Members: members, Params: params, PeriodTime: period, Universe: scope.universe, UpstreamFailed: scope.failed,
+		Set: set, Members: members, Params: params, PeriodTime: period,
 		UniverseSeries: scope.universeSeries, UpstreamFailedSeries: scope.failedSeries,
 		CarryColumns: carryColumns, TriggerEventID: triggerEventID, Budget: budget,
 	})

@@ -111,8 +111,9 @@ func TestFrozenUniverseSkipsOnlyTheSwapMarketWhenASeriesIsMissing(t *testing.T) 
 func TestManualRecalcBuildsExpectedSeriesFromLocalStore(t *testing.T) {
 	fx := unifiedStoreFixtureWith(t, []int{0, 1, 2, 3, 4, 5, 6, 7, 8}, strictRank())
 	subjects := []string{"BTC", "ETH", "SOL"}
-	series, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, Expected: subjects, TargetStart: at(9), TargetEnd: at(10)})
+	series, derived, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, Expected: subjects, TargetStart: at(9), TargetEnd: at(10)})
 	require.NoError(t, err)
+	require.True(t, derived, "统一数据集的期望序列是推测")
 	require.Len(t, series, 6, "SOL 的永续序列延续到读取范围内，应存在")
 
 	executor := recalcexec.NewExecutor(fx.runner)
@@ -156,23 +157,39 @@ func TestInvalidationRecomputeOnUnifiedDatasetDoesNotOverwriteWithPartialUnivers
 	require.NotNil(t, spot.rank)
 }
 
-// 单序列数据集（market_type 不是 multi）不构造期望序列：计划保持按标的处理，与引入序列之前逐位一致；
-// 即使本地存储里碰巧有跨市场的 tag 也不按统一数据集处理（以数据集属性为准）。
-func TestExpectedSeriesIsNilForSingleSeriesDatasets(t *testing.T) {
+// 只有一个 series_tag 的数据集（数据集属性不是 market_type=multi）：期望序列是“期望标的 × 唯一的 tag”，不做推测（derived 为假）。
+// 唯一的 tag 取本地序列边界上记的 tag；本地没有数据的期望标的（SOL）同样配上它，按缺数处理。即使本地存储里碰巧有别的 tag
+// （例如导入时用错了 tag）也不按统一数据集推导，以数据集属性为准。
+func TestExpectedSeriesForSingleTagDatasetIsSubjectsTimesTheTag(t *testing.T) {
 	fx := newFixture(t, mean3())
 	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
-	fx.st.putTag("ETH", spotTag, 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	fx.st.put("ETH", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC", "ETH"}))
-	series, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC", "ETH"}, TargetEnd: at(10)})
+	want := plainSeries("BTC", "ETH", "SOL")
+	series, derived, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC", "ETH", "SOL"}, TargetEnd: at(10)})
 	require.NoError(t, err)
-	require.Nil(t, series)
+	require.False(t, derived)
+	require.Equal(t, want, series)
 
-	// 同一市场下有两条不同的 tag（例如导入时用错了 tag）也不是统一数据集。
+	// 期望标的在本地都没有数据时，从数据源上别的有本地数据的标的取 tag。
+	series, derived, err = fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"SOL"}, TargetEnd: at(10)})
+	require.NoError(t, err)
+	require.False(t, derived)
+	require.Equal(t, plainSeries("SOL"), series)
+
 	fx.st.putTag("ETH", "venue:binance|market:spot|source:other", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC", "ETH"}))
-	series, err = fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC", "ETH"}, TargetEnd: at(10)})
+	series, derived, err = fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC", "ETH", "SOL"}, TargetEnd: at(10)})
 	require.NoError(t, err)
-	require.Nil(t, series)
+	require.False(t, derived)
+	require.Equal(t, want, series, "仍是每个标的一条序列")
+}
+
+// 本地一条序列都没有：没有可补的数据，补算直接报错。
+func TestExpectedSeriesForSingleTagDatasetWithoutLocalData(t *testing.T) {
+	fx := newFixture(t, mean3())
+	_, _, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC"}, TargetEnd: at(10)})
+	require.ErrorIs(t, err, ErrNoLocalData)
 }
 
 // presetSwapRanks 模拟实时路径已经为这些分钟写好的永续排名（有效值）。
@@ -200,8 +217,9 @@ func TestRecentlyDelistedSwapDoesNotOverwriteExistingRanksWithNull(t *testing.T)
 	for _, s := range []string{"BTC", "ETH"} {
 		fx.putLocalEarly(t, s, swapTag, minutesBetween(0, 9)...)
 	}
-	series, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, Expected: subjects, TargetStart: at(5), TargetEnd: at(10)})
+	series, derived, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, Expected: subjects, TargetStart: at(5), TargetEnd: at(10)})
 	require.NoError(t, err)
+	require.True(t, derived)
 	require.Len(t, series, 6, "SOL 永续沉默才 8 分钟，不到阈值：仍是期望序列")
 
 	executor := recalcexec.NewExecutor(fx.runner)
@@ -235,8 +253,9 @@ func TestLongDelistedSwapSeriesIsNotExpected(t *testing.T) {
 		fx.putLocalEarly(t, s, spotTag, minutesBetween(10, 400)...)
 	}
 	subjects := []string{"BTC", "ETH", "SOL"}
-	series, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, Expected: subjects, TargetStart: at(395), TargetEnd: at(396)})
+	series, derived, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, Expected: subjects, TargetStart: at(395), TargetEnd: at(396)})
 	require.NoError(t, err)
+	require.True(t, derived)
 	require.Len(t, series, 5)
 	for _, item := range series {
 		require.False(t, item.SubjectID == "SOL" && item.SeriesTag == swapTag)

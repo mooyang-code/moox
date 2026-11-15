@@ -70,7 +70,7 @@ func TestReplayObservedHistoryIncludesDelisted(t *testing.T) {
 	rewrite := func(subject string, base float64, minutes int) {
 		cols := seriesstore.NewColumns(fields, minutes)
 		for i := 0; i < minutes; i++ {
-			cols.AppendRow(rt0.Add(time.Duration(i)*time.Minute), "", false, seriesstore.Float(base+float64(i)), seriesstore.Float(base+float64(i)-0.5))
+			cols.AppendRow(rt0.Add(time.Duration(i)*time.Minute), plainTag, false, seriesstore.Float(base+float64(i)), seriesstore.Float(base+float64(i)-0.5))
 		}
 		_, err := store.WriteRange(context.Background(), src, seriesstore.SubjectWrite{
 			Subject: subject, From: rt0, To: rt0.Add(time.Duration(minutes) * time.Minute), Rows: cols}, seriesstore.WriteOptions{FillGaps: true})
@@ -99,7 +99,7 @@ func TestReplayObservedHistoryIncludesDelisted(t *testing.T) {
 			require.InDelta(t, expected, got, 1e-12, "minute %d", minute)
 		}
 		plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{Set: set.Set, Members: set.Members, PeriodTime: period,
-			Universe: []string{"A", "B"}})
+			UniverseSeries: plainSeries("A", "B")})
 		require.NoError(t, err)
 		plan.HistorySubjects, err = live.HistorySubjects(ctx, plan)
 		require.NoError(t, err)

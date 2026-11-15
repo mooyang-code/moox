@@ -58,7 +58,7 @@ func newReplayManagerWithTask(t *testing.T, set domain.EngineTask) (*replayManag
 		cols := seriesstore.NewColumns(fields, minutes)
 		for i := 0; i < minutes; i++ {
 			price := 100 + float64(i)
-			cols.AppendRow(rt0.Add(time.Duration(i)*time.Minute), "", false, seriesstore.Float(price), seriesstore.Float(price-0.5))
+			cols.AppendRow(rt0.Add(time.Duration(i)*time.Minute), plainTag, false, seriesstore.Float(price), seriesstore.Float(price-0.5))
 		}
 		_, err := store.WriteRange(context.Background(), src, seriesstore.SubjectWrite{
 			Subject: subject, From: rt0, To: rt0.Add(time.Duration(minutes) * time.Minute), Rows: cols,
@@ -147,7 +147,7 @@ func TestReplayUniverseExcludesNotYetListedSubjects(t *testing.T) {
 	fields := []seriesstore.Field{{Name: "close", Type: seriesstore.TypeFloat64}, {Name: "open", Type: seriesstore.TypeFloat64}}
 	cols := seriesstore.NewColumns(fields, 12)
 	for i := 8; i < 20; i++ {
-		cols.AppendRow(rt0.Add(time.Duration(i)*time.Minute), "", false, seriesstore.Float(50), seriesstore.Float(50))
+		cols.AppendRow(rt0.Add(time.Duration(i)*time.Minute), plainTag, false, seriesstore.Float(50), seriesstore.Float(50))
 	}
 	_, err := store.WriteRange(ctx, src, seriesstore.SubjectWrite{Subject: "LATE", From: rt0.Add(8 * time.Minute), To: rt0.Add(20 * time.Minute), Rows: cols}, seriesstore.WriteOptions{})
 	require.NoError(t, err)

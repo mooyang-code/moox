@@ -35,8 +35,8 @@ type Selection struct {
 	Set      domain.FactorTask
 	Members  []domain.MemberDef
 	Subjects []string
-	// Series 是统一数据集（同一个数据集里有多个 series_tag）上冻结的期望序列全集（标的、series_tag）；缺口恢复用它按序列判断全集。
-	// 为空表示按标的处理（单序列数据集，以及没有冻结全集可用的人工补算）。有值时 Subjects 是它涉及的标的。
+	// Series 是冻结的期望序列全集（标的、series_tag）：缺口恢复从周期 marker 读到时带上，有值时 Subjects 是它涉及的标的。
+	// 为空表示没有冻结全集可用（人工补算、失效重算、读不到 marker 的恢复），期望序列由数据层给出（pipeline.SeriesExpecter）。
 	Series  []seriesset.Series
 	Columns []string
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞与失败都不写任何字段，也不写 carry 列。用于 K 线空洞补齐后的恢复。
@@ -427,7 +427,7 @@ func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time, his
 	}
 	periods := e.chunkPeriods
 	if e.memoryBudget > 0 {
-		// 序列数按标的数估计（crypto 每个标的一个 series_tag）；统一数据集按冻结的序列数。
+		// 序列数按标的数估计（每个标的一个 series_tag）；带着冻结全集时按冻结的序列数。
 		fit, err := pipeline.MaxPeriodsWithin(selection.Members, max(len(selection.Subjects), len(selection.Series))+history, len(selection.Columns), periods, e.memoryBudget)
 		if err != nil {
 			return time.Time{}, err

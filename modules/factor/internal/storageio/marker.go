@@ -63,14 +63,14 @@ func (c *Client) ComputedExists(ctx context.Context, spaceID, datasetID, trigger
 	return rsp != nil && rsp.GetFound(), nil
 }
 
-// Universe 是周期 marker 里冻结的期望全集：Subjects 按标的；Series 按序列（标的、series_tag），只有统一数据集才有。
+// Universe 是周期 marker 里冻结的期望全集：Subjects 按标的；Series 按序列（标的、series_tag）。
 type Universe struct {
 	Subjects []string
 	Series   []seriesset.Series
 }
 
 // ComputedUniverse 返回周期 marker 里冻结的全集（universe_subject_ids 与 universe_series）；marker 不存在时 found 为 false。
-// 截面因子的恢复用它：按目标周期冻结的全集重算，不用当前标的池，也不把单个标的当作完整截面；统一数据集按序列判断全集。
+// 截面因子的恢复用它：按目标周期冻结的全集重算，不用当前标的池，也不把单个标的当作完整截面；全集按序列判断。
 func (c *Client) ComputedUniverse(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (Universe, bool, error) {
 	rsp, err := c.getComputed(ctx, spaceID, datasetID, triggerEventID, periodTime)
 	if err != nil || rsp == nil || !rsp.GetFound() {
