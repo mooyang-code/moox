@@ -61,7 +61,6 @@ use (
 	./packages/security
 	./packages/seriesformat
 	./packages/seriesimport
-	./packages/seriesreplay
 	./packages/seriesset
 	./packages/servicecatalog
 	./packages/storagepb

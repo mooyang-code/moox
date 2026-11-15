@@ -16,8 +16,6 @@ replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ../
 
 replace github.com/mooyang-code/moox/packages/seriesimport => ../../packages/seriesimport
 
-replace github.com/mooyang-code/moox/packages/seriesreplay => ../../packages/seriesreplay
-
 replace github.com/mooyang-code/moox/packages/factorexpr => ../../packages/factorexpr
 
 replace github.com/mooyang-code/moox/packages/factorname => ../../packages/factorname
@@ -60,7 +58,6 @@ require (
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/seriesformat v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/seriesimport v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/seriesreplay v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/seriesset v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000

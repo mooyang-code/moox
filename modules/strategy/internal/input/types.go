@@ -301,9 +301,6 @@ func (r Resolved) ViewIDs() []string {
 	return ids
 }
 
-// SpotOnly 报告策略只输出现货或股票：闭环回放目前只支持这种策略（研究回放已支持永续与混合市场）。
-func (r Resolved) SpotOnly() bool { return r.Market.Single() && dsl.SpotLike(r.Market.Select) }
-
 // TaskKeyOfView 返回 View 所属的任务键。
 func (r Resolved) TaskKeyOfView(viewID string) (string, bool) {
 	for key, task := range r.Tasks {

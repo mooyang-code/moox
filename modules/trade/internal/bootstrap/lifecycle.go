@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	replayapp "github.com/mooyang-code/moox/modules/trade/internal/application/replay"
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -129,15 +128,13 @@ func newLifecycle(dbPath string, readiness health.Readiness, quiesce func(contex
 }
 
 func lifecycleRoutes(life *lifecycle.Controller, tradeStore *store.Store) []health.Route {
-	routes := []health.Route{
+	return []health.Route{
 		{Path: lifecycle.StatusPath, Handler: life.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: life.CommandHandler()},
 		{Path: lifecycle.CatchupPath, Handler: life.CatchupHandler()},
 		{Path: lifecycle.ResetPrefix, Handler: life.ResetHandler()},
 		{Path: shadowTargetsPath, Handler: shadowTargetsHandler(tradeStore)},
 	}
-	routes = append(routes, replayRoutes(&replayapp.Service{Store: tradeStore})...)
-	return routes
 }
 
 // shadowTargetsHandler 返回实例最近的影子目标：GET ?space=<空间>&instance=<实例>&limit=<条数>。

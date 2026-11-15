@@ -37,8 +37,6 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 		"t_paper_account_configs",
 		"t_paper_balance_projections",
 		"t_shadow_targets",
-		"t_replay_sessions",
-		"t_replay_periods",
 		"t_paper_asset_balances",
 		"t_paper_funding_fees",
 		"t_account_equity_points",
@@ -58,7 +56,7 @@ func TestEachSQLLoadsIntoEmptyDatabase(t *testing.T) {
 		"paper_balance.sql": paperBalanceSQL, "paper_funding.sql": paperFundingSQL, "equity.sql": equitySQL,
 		"target_receipt.sql": targetReceiptSQL, "execution.sql": executionSQL,
 		"wallet_transfer.sql": walletTransferSQL, "blocked_instrument.sql": blockedInstrumentSQL,
-		"replay.sql": replaySQL, "shadow_target.sql": shadowTargetSQL,
+		"shadow_target.sql": shadowTargetSQL,
 	} {
 		t.Run(name, func(t *testing.T) {
 			db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

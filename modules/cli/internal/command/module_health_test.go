@@ -245,27 +245,6 @@ func TestSystemWithoutManifestKeepsExplicitBehavior(t *testing.T) {
 	assert.Empty(t, systemFlags.Collector)
 }
 
-func TestReplayAddsEndpointsForNetworkCommandsOnly(t *testing.T) {
-	requests := useFakeHealth(t, map[string]string{"factor-engine": "http://127.0.0.1:1", "strategy": "http://127.0.0.1:2", "trade": "http://127.0.0.1:3"})
-	cmd := &cobra.Command{Use: "replay"}
-
-	args, err := prepareReplayEndpoints(cmd, []string{"start", "--file", "x.toml", "--instance-id", "i1", "--strategy-endpoint=http://mine:9"})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"start", "--instance-id", "i1", "--strategy-endpoint=http://mine:9", "--factor-endpoint=http://127.0.0.1:1", "--trade-endpoint=http://127.0.0.1:3"}, args)
-	assert.Equal(t, "x.toml", (*requests)[0].File)
-	assert.Equal(t, []string{"factor-engine", "trade"}, (*requests)[0].Modules, "已给地址的模块不解析")
-
-	args, err = prepareReplayEndpoints(cmd, []string{"status", "--replay", "r1"})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"status", "--replay", "r1"}, args)
-	assert.Len(t, *requests, 1, "只读本地库的子命令不连接模块")
-
-	useUnavailableManifest(t)
-	args, err = prepareReplayEndpoints(cmd, []string{"report", "--replay", "r1"})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"report", "--replay", "r1"}, args, "没有 moox.toml 时保持原样")
-}
-
 func TestTakeFlag(t *testing.T) {
 	value, rest, found := takeFlag([]string{"a", "--file", "x", "b"}, "--file")
 	assert.True(t, found)

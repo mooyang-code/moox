@@ -10,7 +10,6 @@ import (
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -229,7 +228,7 @@ func TestHostPutRefusesToOverwriteWhenExistenceCannotBeConfirmed(t *testing.T) {
 	assert.Nil(t, fake.uploaded)
 }
 
-// ---- 多主机部署与回放缺模块 ----
+// ---- 多主机部署 ----
 
 func TestResolveRejectsComponentDeployedOnSeveralHosts(t *testing.T) {
 	clearHealthEnv(t)
@@ -237,17 +236,6 @@ func TestResolveRejectsComponentDeployedOnSeveralHosts(t *testing.T) {
 	remote.manifest.Deployments["factor"] = append(remote.manifest.Deployments["factor"], "strategy")
 	_, err := resolveModuleHealthWith(context.Background(), remote, moduleHealthRequest{Modules: []string{"strategy"}})
 	require.ErrorContains(t, err, "部署在多台主机上（control、factor）")
-}
-
-func TestReplayRequiresEveryModuleAndSurvivesEmptyArgs(t *testing.T) {
-	cmd := &cobra.Command{Use: "replay"}
-	args, err := prepareReplayEndpoints(cmd, []string{"--file", "x.toml"})
-	require.NoError(t, err, "只有 --file 没有子命令时不能 panic")
-	assert.Empty(t, args)
-
-	useFakeHealth(t, map[string]string{"factor-engine": "http://127.0.0.1:1", "strategy": "http://127.0.0.1:2"}, "trade")
-	_, err = prepareReplayEndpoints(cmd, []string{"start", "--instance-id", "i"})
-	require.ErrorContains(t, err, "没有部署 trade", "缺模块不能退回默认的本机地址")
 }
 
 // ---- 命令层把 --yes 映射成预览（之前只在内部函数层测过） ----

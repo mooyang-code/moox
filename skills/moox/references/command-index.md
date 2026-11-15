@@ -381,7 +381,7 @@
 | `storage repair-view` | 重建指定 View 的索引（默认只预览，--yes 才执行） |
 | `storage reset-metadata` | 备份后清空全部业务定义并重新导入种子（Storage 必须已停止；默认只预览，--yes 才执行） |
 
-## strategy：策略定义、实例、结果、历史回放与模板（调用 StrategyMgr）
+## strategy：策略定义、实例、结果、历史回放与展示设置（调用 StrategyMgr）
 
 | 命令 | 说明 |
 | --- | --- |

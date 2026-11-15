@@ -22,7 +22,7 @@ server:
       port: 11431
       network: tcp
       protocol: http_no_protocol
-      # 健康检查端口同时承载生命周期与逐期回放接口（/v1/lifecycle、/v1/replay）；固定回放绑定要读 Storage 元数据，比健康检查慢
+      # 健康检查端口同时承载生命周期接口（/v1/lifecycle）：暂停要等在途的求值结束、已落库的目标发布完（最长 30 秒），请求时限要大于它
       timeout: 60000
     - name: trpc.moox.strategy.metrics.timer
       port: 11432

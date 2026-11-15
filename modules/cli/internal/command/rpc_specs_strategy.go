@@ -1,16 +1,16 @@
 package command
 
-// 策略（StrategyMgr）：定义、实例、结果、历史回放、模板与展示设置。
+// 策略（StrategyMgr）：定义、实例、结果、历史回放与展示设置。
 
 const strategyMgr = "trpc.moox.strategy.StrategyMgr"
 
 // 策略服务按请求头里的空间 ID 取元数据，所有命令都带 --space-id（默认 crypto）。
 func init() {
-	rpcGroupShort["strategy"] = "策略定义、实例、结果、历史回放与模板（调用 StrategyMgr）"
+	rpcGroupShort["strategy"] = "策略定义、实例、结果、历史回放与展示设置（调用 StrategyMgr）"
 	rpcGroupShort["strategy instance"] = "策略实例"
 	rpcGroupShort["strategy result"] = "策略每期结果"
 	rpcGroupShort["strategy target"] = "策略当前目标权重"
-	rpcGroupShort["strategy replay"] = "策略服务里的历史回放（逐期因子 → 策略 → 纸面成交的完整回放用顶层 replay 命令）"
+	rpcGroupShort["strategy replay"] = "策略服务里的历史回放（因子数据读结果 View 或由因子引擎现算）"
 	rpcGroupShort["strategy display"] = "策略实例的展示设置"
 
 	createInstanceFlags := []rpcFlag{

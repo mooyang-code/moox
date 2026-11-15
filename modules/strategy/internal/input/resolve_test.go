@@ -15,7 +15,7 @@ func TestResolveExampleStrategy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
-	if resolved.Bar != "1h" || resolved.Calendar != DefaultCalendar || !resolved.SpotOnly() || resolved.Market.Select != "spot" || resolved.Primary().SourceDatasetID != "ds_kline" {
+	if resolved.Bar != "1h" || resolved.Calendar != DefaultCalendar || resolved.Market.Select != "spot" || resolved.Primary().SourceDatasetID != "ds_kline" {
 		t.Fatalf("解析结果不符：%+v", resolved)
 	}
 	if resolved.Factors["ma"] != "sha256:ma|fixed" || resolved.Factors["bias"] != "sha256:bias|fixed" || resolved.Factors["qv"] != "sha256:qv|fixed" || len(resolved.Factors) != 3 {
@@ -102,7 +102,7 @@ portfolio:
 	if _, _, err := Resolve(context.Background(), newFakeClient("spot"), "space", []string{"ftask_1h"}, levered); err == nil || !strings.Contains(err.Error(), "leverage") {
 		t.Fatalf("现货应拒绝杠杆：%v", err)
 	}
-	if resolved, _, err := Resolve(context.Background(), newFakeClient("swap"), "space", []string{"ftask_1h"}, levered); err != nil || resolved.SpotOnly() {
+	if resolved, _, err := Resolve(context.Background(), newFakeClient("swap"), "space", []string{"ftask_1h"}, levered); err != nil || resolved.Market.Select != "swap" {
 		t.Fatalf("合约应允许杠杆：%+v err=%v", resolved, err)
 	}
 	short := parseStrategy(t, `name: short
@@ -145,13 +145,13 @@ func TestResolveRejectsMinAgeBeyondRetentionAndMissingHash(t *testing.T) {
 func TestResolveMarketTypeFromAttributesOrTags(t *testing.T) {
 	client := newFakeClient("swap")
 	resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
-	if err != nil || resolved.SpotOnly() || resolved.Market.Select != "swap" {
+	if err != nil || resolved.Market.Select != "swap" {
 		t.Fatalf("binance_swap 标签应判定为合约：%+v err=%v", resolved, err)
 	}
 	source := client.datasets["ds_kline"]
 	source.Attributes = map[string]string{"market_type": "spot"}
 	client.datasets["ds_kline"] = source
-	if resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL)); err != nil || !resolved.SpotOnly() {
+	if resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL)); err != nil || resolved.Market.Select != "spot" {
 		t.Fatalf("数据集属性应优先：%+v err=%v", resolved, err)
 	}
 	source.Attributes = map[string]string{}

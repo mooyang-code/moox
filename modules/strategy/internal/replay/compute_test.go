@@ -385,7 +385,7 @@ func paramsWindow(t *testing.T, bar store.ReplayBar) float64 {
 	return params["f__var"]["window"].Default
 }
 
-// 照搬闭环回放的参数沿用规则（seriesreplay TestClosedLoopCarriesParamsIntoNextStep）：每期产出下一期的参数，下一期的因子步进带着它；
+// 参数沿用规则：每期产出下一期的参数，下一期的因子步进带着它；
 // 没有产出的期次（跳过、或本期求不出参数）下一步不带参数，引擎沿用上一期生效的；第一期没有上一期，参数交给引擎（成员自己的参数）。
 // 逐期比较请求、记录里的生效参数与目标。
 func TestComputeTunedCarriesParamsIntoNextStep(t *testing.T) {
@@ -403,7 +403,7 @@ func TestComputeTunedCarriesParamsIntoNextStep(t *testing.T) {
 	require.Equal(t, "{}", string(bars[0].ParamsJSON), "第一期按成员自己的参数，记录里没有逐期提交的参数")
 }
 
-// 照搬闭环回放的拒绝规则（seriesreplay TestClosedLoopDropsParamsRejectedByFactorEngine）：引擎拒绝的参数不留在记录里，
+// 拒绝规则：引擎拒绝的参数不留在记录里，
 // 这一期沿用上一期生效的（第一期之后还没有，按成员自己的参数）；之后产出合法的参数照常生效。
 func TestComputeTunedDropsParamsRejectedByEngine(t *testing.T) {
 	reject := func(window float64) string {
