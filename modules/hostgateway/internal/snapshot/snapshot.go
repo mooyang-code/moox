@@ -176,7 +176,7 @@ func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
 		if limit == 0 {
 			limit = servicecatalog.DefaultMaxBodyBytes
 		}
-		if service.Path == "" || !slices.Contains(service.Methods, route.Method) ||
+		if _, declared := service.Method(route.Method); service.Path == "" || !declared ||
 			route.Address != net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)) ||
 			route.TimeoutMs != timeout || route.MaxBodyBytes != limit || route.ReadOnly != catalog.ReadOnly(service.Path, route.Method) ||
 			!slices.Contains(dir.Services[service.Path], hostID) || len(route.Callers) == 0 || len(route.Callers) > 2048 {

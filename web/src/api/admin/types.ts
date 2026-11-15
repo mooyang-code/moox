@@ -55,19 +55,22 @@ export interface ComponentDeployment {
   created_at?: string;
   updated_at?: string;
 }
-export interface CatalogGrant {
-  methods: string[];
-  callers: string[];
+/** 服务目录里的一个方法：callers 是能调它的机器身份，operators 收窄 console 与 moox-cli（省略表示两者都能调，[] 表示都不能调）。 */
+export interface CatalogMethod {
+  name: string;
+  read_only?: boolean;
+  idempotent?: boolean;
+  timeout_ms?: number;
+  callers?: string[];
+  operators?: string[];
 }
 export interface CatalogService {
   path: string;
   port: number;
-  methods: string[];
-  acl: CatalogGrant[];
+  methods: CatalogMethod[];
   timeout_ms?: number;
   max_body_bytes?: number;
   console_name?: string;
-  read_only_methods?: string[];
 }
 export interface CatalogComponent {
   id: string;
@@ -85,8 +88,9 @@ export interface CatalogComponent {
 }
 export interface ComponentCatalog {
   version: number;
+  /** 不对应部署的调用身份；external 为真的经外部接入 access 进入。 */
+  identities: { id: string; external: boolean }[];
   components: CatalogComponent[];
-  principals: { id: string; allow: { service: string; methods: string[] }[] }[];
 }
 export interface CatalogResponse {
   catalog_yaml: string;

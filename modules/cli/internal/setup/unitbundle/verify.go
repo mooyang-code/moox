@@ -51,8 +51,8 @@ func verifyAccess(files map[string][]byte, name string, allowed map[string]bool)
 		return nil, err
 	}
 	principals := map[string]bool{}
-	for _, principal := range catalog.Principals {
-		principals[principal.ID] = false
+	for _, principal := range catalog.ExternalIdentities() {
+		principals[principal] = false
 	}
 	allowed[name] = true
 	var result []gatewayauth.Credentials

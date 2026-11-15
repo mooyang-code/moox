@@ -1,5 +1,6 @@
 import type {
   CatalogComponent,
+  CatalogMethod,
   ComponentDeployment,
   DeploymentHost,
   HostGatewayRoute,
@@ -13,6 +14,12 @@ export interface DeploymentRow {
   definition?: CatalogComponent;
   health?: HealthComponent;
   status: HealthStatus;
+}
+/** 人操作的两个身份：方法的 operators 省略时两者都能调。 */
+export const DEFAULT_OPERATORS = ["console", "moox-cli"];
+/** 方法的全部调用方：人操作身份加 callers 里的机器身份（host-gateway 指每台主机的网关）。 */
+export function methodCallerIds(method: CatalogMethod): string[] {
+  return [...(method.operators ?? DEFAULT_OPERATORS), ...(method.callers || [])];
 }
 export function deploymentKey(hostId: string, componentId: string) {
   return `${hostId}\0${componentId}`;

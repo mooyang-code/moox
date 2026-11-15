@@ -140,7 +140,7 @@ func (s *Store) validateCaller(tx *gorm.DB, caller string) error {
 }
 
 func (s *Store) isExternal(caller string) bool {
-	return slices.ContainsFunc(s.catalog.Principals, func(p servicecatalog.Principal) bool { return p.ID == caller })
+	return s.catalog.ExternalIdentity(caller)
 }
 
 func (s *Store) mutate(ctx context.Context, fn func(*gorm.DB) error) error {
@@ -306,9 +306,7 @@ func (s *Store) EnsureAll(ctx context.Context) ([]SigningKey, error) {
 				callers = append(callers, component.ID)
 			}
 		}
-		for _, principal := range s.catalog.Principals {
-			callers = append(callers, principal.ID)
-		}
+		callers = append(callers, s.catalog.ExternalIdentities()...)
 		var hosts []string
 		if err := tx.Table("t_hosts").Order("c_host_id").Pluck("c_host_id", &hosts).Error; err != nil {
 			return err
@@ -435,11 +433,7 @@ func (s *Store) InternalVerification(ctx context.Context, callers []string) ([]V
 }
 
 func (s *Store) ExternalVerification(ctx context.Context) ([]VerificationKey, error) {
-	callers := make([]string, 0, len(s.catalog.Principals))
-	for _, principal := range s.catalog.Principals {
-		callers = append(callers, principal.ID)
-	}
-	return s.verification(ctx, callers, true)
+	return s.verification(ctx, s.catalog.ExternalIdentities(), true)
 }
 
 func (s *Store) verification(ctx context.Context, callers []string, external bool) ([]VerificationKey, error) {

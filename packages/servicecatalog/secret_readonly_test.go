@@ -24,16 +24,11 @@ func TestCollectorOnlyReadsReadonlyExchangeKeyIdentifier(t *testing.T) {
 	if !ok {
 		t.Fatal("SecretMgr is not declared")
 	}
-	if !slices.Contains(service.ReadOnlyMethods, "GetReadonlyExchangeKey") {
+	method, _ := service.Method("GetReadonlyExchangeKey")
+	if !method.ReadOnly {
 		t.Fatal("GetReadonlyExchangeKey is read only")
 	}
-	var callers []string
-	for _, grant := range service.ACL {
-		if slices.Contains(grant.Methods, "GetReadonlyExchangeKey") {
-			callers = append(callers, grant.Callers...)
-		}
-	}
-	if !slices.Equal(callers, []string{"collector"}) {
+	if callers := method.Callers; !slices.Equal(callers, []string{"collector"}) || len(method.OperatorList()) != 0 {
 		t.Fatalf("GetReadonlyExchangeKey callers = %v, want only collector", callers)
 	}
 	// 其他调用方（含 Access 对外身份与外部程序）都不能调用。
@@ -58,16 +53,11 @@ func TestCollectorOnlyReadsCloudCredentialThroughDedicatedMethod(t *testing.T) {
 	if !ok {
 		t.Fatal("SecretMgr is not declared")
 	}
-	if !slices.Contains(service.ReadOnlyMethods, "GetCloudCredential") {
+	method, _ := service.Method("GetCloudCredential")
+	if !method.ReadOnly {
 		t.Fatal("GetCloudCredential is read only")
 	}
-	var callers []string
-	for _, grant := range service.ACL {
-		if slices.Contains(grant.Methods, "GetCloudCredential") {
-			callers = append(callers, grant.Callers...)
-		}
-	}
-	if !slices.Equal(callers, []string{"collector"}) {
+	if callers := method.Callers; !slices.Equal(callers, []string{"collector"}) || len(method.OperatorList()) != 0 {
 		t.Fatalf("GetCloudCredential callers = %v, want only collector", callers)
 	}
 	for _, caller := range []string{"console", "moox-cli", "trade", "access", "scf-collector", "collector-stream", "monitor"} {

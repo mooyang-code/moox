@@ -7,6 +7,8 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"slices"
+	"sort"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,8 +28,15 @@ const (
 
 type Catalog struct {
 	Version    int         `yaml:"version" json:"version"`
+	Identities []Identity  `yaml:"identities" json:"identities"`
 	Components []Component `yaml:"components" json:"components"`
-	Principals []Principal `yaml:"principals" json:"principals"`
+}
+
+// Identity 是不对应任何部署的调用身份。External 为真时它是外部身份：只能经 Access 进入，
+// 能调的方法是 callers 里写了它的那些。
+type Identity struct {
+	ID       string `yaml:"id" json:"id"`
+	External bool   `yaml:"external" json:"external"`
 }
 
 type Component struct {
@@ -44,7 +53,7 @@ type Component struct {
 	Services []Service `yaml:"services,omitempty" json:"services,omitempty"`
 	Doctor   Doctor    `yaml:"doctor" json:"doctor"`
 	// ExternalProgram 标记运行在登记主机上、由 systemd 用户服务托管的外部程序（因子引擎、归档 worker）：
-	// 它以同名外部身份（Principal）经 Access 访问系统；除健康端口与可选的 RelayHTTP 端口外，还可以声明只监听本机的服务，
+	// 它以同名外部身份（identities）经 Access 访问系统；除健康端口与可选的 RelayHTTP 端口外，还可以声明只监听本机的服务，
 	// 由所在主机的网关按路由转发（因子引擎的 EngineControl），不能声明其他端口。
 	ExternalProgram bool `yaml:"external_program,omitempty" json:"external_program,omitempty"`
 	// RelayHTTP 是外部程序只听回环地址的 HTTP 端口：装在只出站主机上时，声明的调用方可经 control 中转连接它
@@ -66,34 +75,63 @@ type Health struct {
 }
 
 type Service struct {
-	Path        string `yaml:"path" json:"path"`
-	Port        int    `yaml:"port" json:"port"`
-	ConsoleName string `yaml:"console_name,omitempty" json:"console_name,omitempty"`
-	TimeoutMS   int64  `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
-	// MethodTimeoutsMS 覆盖个别长等待方法的超时，未列出的方法使用 TimeoutMS。
-	MethodTimeoutsMS map[string]int64 `yaml:"method_timeouts_ms,omitempty" json:"method_timeouts_ms,omitempty"`
-	MaxBodyBytes     int64            `yaml:"max_body_bytes,omitempty" json:"max_body_bytes,omitempty"`
-	Methods          []string         `yaml:"methods" json:"methods"`
-	ReadOnlyMethods  []string         `yaml:"read_only_methods,omitempty" json:"read_only_methods,omitempty"`
-	// IdempotentMethods 是写方法中重复提交同一请求不会产生额外副作用的方法：请求可能已发出的网络失败后，
-	// 网关客户端可以像只读方法一样换连接重试一次。必须由服务端语义保证幂等，不得与只读方法重复声明。
-	IdempotentMethods []string `yaml:"idempotent_methods,omitempty" json:"idempotent_methods,omitempty"`
-	ACL               []Grant  `yaml:"acl" json:"acl"`
+	Path         string   `yaml:"path" json:"path"`
+	Port         int      `yaml:"port" json:"port"`
+	ConsoleName  string   `yaml:"console_name,omitempty" json:"console_name,omitempty"`
+	TimeoutMS    int64    `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
+	MaxBodyBytes int64    `yaml:"max_body_bytes,omitempty" json:"max_body_bytes,omitempty"`
+	Methods      []Method `yaml:"methods" json:"methods"`
 }
 
-type Grant struct {
-	Methods []string `yaml:"methods" json:"methods"`
-	Callers []string `yaml:"callers" json:"callers"`
+// Method 是服务上的一个方法与它的全部属性；方法名在目录里只写这一次。
+type Method struct {
+	Name     string `yaml:"name" json:"name"`
+	ReadOnly bool   `yaml:"read_only,omitempty" json:"read_only,omitempty"`
+	// Idempotent 标记重复提交同一请求不会产生额外副作用的写方法：请求可能已发出的网络失败后，
+	// 网关客户端可以像只读方法一样换连接重试一次。必须由服务端语义保证幂等，不能与 ReadOnly 同时声明。
+	Idempotent bool `yaml:"idempotent,omitempty" json:"idempotent,omitempty"`
+	// TimeoutMS 覆盖个别长等待方法的超时，为 0 时用服务级超时。
+	TimeoutMS int64 `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
+	// Callers 是能调它的机器身份：组件 ID、identities 里的外部身份，host-gateway 指每台主机的网关。省略表示没有机器能调。
+	Callers []string `yaml:"callers,omitempty" json:"callers,omitempty"`
+	// Operators 收窄人操作的两个身份（console、moox-cli）：nil 表示两者都能调，空切片表示都不能调。
+	// JSON 不带 omitempty：nil 与空切片要能区分着往返（Monitor 按 JSON 保存目录），否则 [] 会悄悄放宽成两者都能调。
+	Operators *[]string `yaml:"operators,omitempty" json:"operators"`
 }
 
-type Principal struct {
-	ID    string       `yaml:"id" json:"id"`
-	Allow []Permission `yaml:"allow" json:"allow"`
+// 人操作的两个身份：方法默认对两者开放，operators 可以收窄。
+const (
+	OperatorConsole = "console"
+	OperatorMooxCLI = "moox-cli"
+)
+
+// OperatorList 返回能调这个方法的人操作身份（排序后的副本）。
+func (m Method) OperatorList() []string {
+	if m.Operators == nil {
+		return []string{OperatorConsole, OperatorMooxCLI}
+	}
+	operators := slices.Clone(*m.Operators)
+	sort.Strings(operators)
+	return operators
 }
 
-type Permission struct {
-	Service string   `yaml:"service" json:"service"`
-	Methods []string `yaml:"methods" json:"methods"`
+// Method 按名字取方法。
+func (s Service) Method(name string) (Method, bool) {
+	for _, method := range s.Methods {
+		if method.Name == name {
+			return method, true
+		}
+	}
+	return Method{}, false
+}
+
+// MethodNames 按目录顺序返回服务的方法名。
+func (s Service) MethodNames() []string {
+	names := make([]string, 0, len(s.Methods))
+	for _, method := range s.Methods {
+		names = append(names, method.Name)
+	}
+	return names
 }
 
 // Doctor keeps the diagnostics metadata in the same source of truth without
@@ -193,8 +231,8 @@ func (c Catalog) ConsoleService(name, method string) (Service, bool) {
 
 // TimeoutFor 返回方法的路由超时（毫秒）：方法级覆盖优先，其次服务级，最后默认值。
 func (s Service) TimeoutFor(method string) int64 {
-	if timeout := s.MethodTimeoutsMS[method]; timeout > 0 {
-		return timeout
+	if m, ok := s.Method(method); ok && m.TimeoutMS > 0 {
+		return m.TimeoutMS
 	}
 	if s.TimeoutMS > 0 {
 		return s.TimeoutMS

@@ -11,7 +11,16 @@ const component: CatalogComponent = {
   protected: false,
   health: { kind: "readyz", port: 11012 },
   ports: [11011],
-  services: [{ path: "test.Service", port: 11011, methods: ["Read", "Write"], acl: [{ methods: ["Read"], callers: ["reader"] }] }]
+  services: [
+    {
+      path: "test.Service",
+      port: 11011,
+      methods: [
+        { name: "Read", callers: ["reader"], operators: [] },
+        { name: "Write", operators: [] }
+      ]
+    }
+  ]
 };
 const snapshot: HostRoutesResponse = {
   host_id: "a",

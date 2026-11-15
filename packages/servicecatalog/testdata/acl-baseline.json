@@ -6,7 +6,6 @@
     "methods": 319,
     "read_only_methods": 143,
     "retryable_methods": 144,
-    "acl_grants": 63,
     "callers": 26,
     "principals": 5
   },

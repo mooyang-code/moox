@@ -184,9 +184,9 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 	require.NoError(t, err)
 	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"storage": {Address: "storage.example.test"}}, Services: map[string][]string{}}
 	credentials := []gatewayauth.Credentials{}
-	for _, principal := range catalog.Principals {
-		credentials = append(credentials, gatewayauth.Credentials{Caller: principal.ID, KeyID: "assigned-" + principal.ID + "-73", Secret: "fixture-external-signing-key-at-least-32-bytes"})
-		for _, grant := range principal.Allow {
+	for _, principal := range catalog.ExternalIdentities() {
+		credentials = append(credentials, gatewayauth.Credentials{Caller: principal, KeyID: "assigned-" + principal + "-73", Secret: "fixture-external-signing-key-at-least-32-bytes"})
+		for _, grant := range catalog.Grants(principal) {
 			directory.Services[grant.Service] = []string{"storage"}
 		}
 	}
@@ -233,13 +233,13 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 	require.NoError(t, RegisterAccessService(access, proxy))
 	go func() { _ = access.Serve() }()
 	t.Cleanup(func() { _ = access.Close(nil) })
-	for index, principal := range catalog.Principals {
+	for index, principal := range catalog.ExternalIdentities() {
 		external, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.External, Credentials: credentials[index], AccessAddress: accessListener.Addr().String(), AccessInstanceID: "access@storage"})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, external.Close()) })
 		ctx, cancel := context.WithTimeout(gatewayclient.WithCallMetadata(t.Context(), gatewayclient.CallMetadata{SpaceID: "crypto", TraceID: "trace-fixture"}), 5*time.Second)
 		defer cancel()
-		for _, grant := range principal.Allow {
+		for _, grant := range catalog.Grants(principal) {
 			for _, method := range grant.Methods {
 				for _, request := range []struct {
 					encoding int
@@ -249,7 +249,7 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 					{codec.SerializationTypeJSON, []byte(" {\n\"value\": 1e+03 }\n")},
 				} {
 					response, err := external.Forward(ctx, grant.Service, method, request.encoding, request.body)
-					require.NoError(t, err, "%s %s/%s", principal.ID, grant.Service, method)
+					require.NoError(t, err, "%s %s/%s", principal, grant.Service, method)
 					require.Equal(t, request.body, response)
 				}
 			}

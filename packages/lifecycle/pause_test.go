@@ -601,3 +601,36 @@ func TestCommandRequestOmitsZeroExpiry(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(raw), "expires_at")
 }
+
+// 暂停、恢复命令成功后各记一条审计事件，带模块、对象、暂停类型、操作者与原因；被拒绝的命令不记。
+func TestPauseAndResumeAuditEvents(t *testing.T) {
+	f := newFake()
+	f.refs = []Ref{set1}
+	f.setObject(set1, pass("ok"))
+	var mu sync.Mutex
+	var events []string
+	c, err := New(Options{Module: "factor-engine", Hooks: f.hooks(), Audit: func(event string) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, event)
+	}})
+	require.NoError(t, err)
+	ctx := context.Background()
+	c.Refresh(ctx)
+	_, err = c.Command(ctx, CmdInit, set1)
+	require.NoError(t, err)
+
+	_, err = c.Execute(ctx, Request{Command: CmdPause, Ref: set1, PauseKind: PauseSystem, Reason: "切换行情源", By: "cli:ops"})
+	require.NoError(t, err)
+	_, err = c.Execute(ctx, Request{Command: CmdPause, Ref: set1, PauseKind: "bogus", By: "cli:ops"})
+	require.Error(t, err)
+	_, err = c.Execute(ctx, Request{Command: CmdResume, Ref: set1, PauseKind: PauseSystem, By: "cli:ops"})
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{
+		`lifecycle_pause module=factor-engine ref=factor_task/set1 kind=system by=cli:ops reason="切换行情源"`,
+		`lifecycle_resume module=factor-engine ref=factor_task/set1 kind=system by=cli:ops reason=""`,
+	}, events)
+}

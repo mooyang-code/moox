@@ -1,5 +1,19 @@
-# 组件、公开 RPC、ACL 与 Doctor 的共同事实源；不包含地址或凭据。
-version: 1
+# 组件、公开 RPC 与调用权限、Doctor 的共同事实源；不包含地址或凭据。
+# 每个方法只写一遍：callers 是能调它的机器身份（组件 ID、identities 里的外部身份；host-gateway 指每台主机的网关），
+# 省略表示没有机器能调；operators 收窄人操作的 console 与 moox-cli，省略表示两者都能调，写 [] 表示都不能调。
+version: 2
+identities:
+  - id: scf-collector
+    external: true
+  - id: factor-engine
+    external: true
+  - id: archive-worker
+    external: true
+  # 采集名单干预的旁路程序（不在部署拓扑里）：只放行排除名单三个方法与 SyncSubjects。
+  - id: collector-operator
+    external: true
+  - id: moox-skill
+    external: true
 components:
   - id: host-gateway
     name: 主机网关
@@ -53,20 +67,17 @@ components:
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - GetStatus
-          - GetSnapshot
-          - RunOnce
-        read_only_methods:
-          - GetStatus
-          - GetSnapshot
-        acl:
-          - methods:
-              - GetStatus
-              - GetSnapshot
-              - RunOnce
-            callers:
-              - monitor
-              - moox-cli
+          - name: GetStatus
+            read_only: true
+            callers: [monitor]
+            operators: [moox-cli]
+          - name: GetSnapshot
+            read_only: true
+            callers: [monitor]
+            operators: [moox-cli]
+          - name: RunOnce
+            callers: [monitor]
+            operators: [moox-cli]
     doctor:
       role: host-agent
       description: Host resource snapshot agent
@@ -176,230 +187,147 @@ components:
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - GetLoginSalt
-          - Login
-          - Logout
-          - IssueRawSessionTicket
-          - GetUserInfo
-        read_only_methods:
-          - GetLoginSalt
-          - GetUserInfo
-        acl:
-          - methods:
-              - GetLoginSalt
-              - Login
-              - Logout
-              - IssueRawSessionTicket
-              - GetUserInfo
-            callers:
-              - console
+          - name: GetLoginSalt
+            read_only: true
+            operators: [console]
+          - name: Login
+            operators: [console]
+          - name: Logout
+            operators: [console]
+          - name: IssueRawSessionTicket
+            operators: [console]
+          - name: GetUserInfo
+            read_only: true
+            operators: [console]
       - path: trpc.moox.ops.Ssh
         port: 11106
         console_name: ssh
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - CreateSession
-          - DisconnectSession
-          - ResizeWindow
-          - SftpList
-          - SftpMkdir
-          - SftpDelete
-        acl:
-          - methods:
-              - CreateSession
-              - DisconnectSession
-              - ResizeWindow
-              - SftpList
-              - SftpMkdir
-              - SftpDelete
-            callers:
-              - console
+          - name: CreateSession
+            operators: [console]
+          - name: DisconnectSession
+            operators: [console]
+          - name: ResizeWindow
+            operators: [console]
+          - name: SftpList
+            operators: [console]
+          - name: SftpMkdir
+            operators: [console]
+          - name: SftpDelete
+            operators: [console]
       - path: trpc.moox.admin.SpaceMgr
         port: 11107
         console_name: space
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - CreateSpace
-          - UpdateSpace
-          - DeleteSpace
-          - ListSpaces
-        read_only_methods:
-          - ListSpaces
-        acl:
-          - methods:
-              - CreateSpace
-              - UpdateSpace
-              - DeleteSpace
-              - ListSpaces
-            callers:
-              - console
-              - moox-cli
-          - methods:
-              - ListSpaces
-            callers:
-              - collector
+          - name: CreateSpace
+          - name: UpdateSpace
+          - name: DeleteSpace
+          - name: ListSpaces
+            read_only: true
+            callers: [collector]
       - path: trpc.moox.ops.SecretMgr
         port: 11108
         console_name: secret
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - ListSecrets
-          - GetSecret
-          - GetSecretValue
-          - CreateSecret
-          - UpdateSecret
-          - DeleteSecret
-          - ToggleSecretStatus
-          - ExportSecrets
-          - ImportSecrets
-          - GetReadonlyExchangeKey
-          - GetCloudCredential
-        read_only_methods:
-          - ListSecrets
-          - GetSecret
-          - GetSecretValue
-          - GetReadonlyExchangeKey
-          - GetCloudCredential
-        acl:
-          - methods:
-              - ListSecrets
-              - GetSecret
-              - CreateSecret
-              - UpdateSecret
-              - DeleteSecret
-              - ToggleSecretStatus
-            callers:
-              - console
-              - moox-cli
-          - methods:
-              - ExportSecrets
-              - ImportSecrets
-            callers:
-              - console
-          - methods:
-              - ListSecrets
-              - GetSecretValue
-            callers:
-              - trade
-              - moox-cli
+          - name: ListSecrets
+            read_only: true
+            callers: [trade]
+          - name: GetSecret
+            read_only: true
+          - name: GetSecretValue
+            read_only: true
+            callers: [trade]
+            operators: [moox-cli]
+          - name: CreateSecret
+          - name: UpdateSecret
+          - name: DeleteSecret
+          - name: ToggleSecretStatus
+          - name: ExportSecrets
+            operators: [console]
+          - name: ImportSecrets
+            operators: [console]
           # Collector 只能读固定 ID 只读 Key 的公开标识；网关转发会丢掉调用方元数据，
           # GetSecretValue 没法按调用方限定，所以用专用方法授权，Collector 拿不到 Trade 的交易密钥。
-          - methods:
-              - GetReadonlyExchangeKey
-            callers:
-              - collector
+          - name: GetReadonlyExchangeKey
+            read_only: true
+            callers: [collector]
+            operators: []
           # Collector 调腾讯云只能读云账号密钥：SecretMgr 在服务端校验类别 cloud、厂商 tencent、状态 active，
           # 不满足就拒绝，Collector 因此拿不到交易所等其他类别的密钥。
-          - methods:
-              - GetCloudCredential
-            callers:
-              - collector
+          - name: GetCloudCredential
+            read_only: true
+            callers: [collector]
+            operators: []
       - path: trpc.moox.ops.SysDeploy
         port: 11109
         console_name: sysdeploy
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - GetCatalog
-          - ListHosts
-          - ListDeployments
-          - GetHostRoutes
-          - GetDirectory
-          - SetHostStatus
-          - SetDeploymentStatus
-          - SyncHostDeployments
-          - DeleteHost
-        read_only_methods:
-          - GetCatalog
-          - ListHosts
-          - ListDeployments
-          - GetHostRoutes
-          - GetDirectory
-        acl:
-          - methods:
-              - GetCatalog
-              - ListHosts
-              - ListDeployments
-              - GetHostRoutes
-              - GetDirectory
-            callers:
-              - console
-              - moox-cli
-          - methods:
-              - SetHostStatus
-              - SetDeploymentStatus
-              - SyncHostDeployments
-              - DeleteHost
-            callers:
-              - moox-cli
-          - methods:
-              - GetCatalog
-              - ListHosts
-              - ListDeployments
-              - GetHostRoutes
-            callers:
-              - monitor
+          - name: GetCatalog
+            read_only: true
+            callers: [monitor]
+          - name: ListHosts
+            read_only: true
+            callers: [monitor]
+          - name: ListDeployments
+            read_only: true
+            callers: [monitor]
+          - name: GetHostRoutes
+            read_only: true
+            callers: [monitor]
+          - name: GetDirectory
+            read_only: true
+          - name: SetHostStatus
+            operators: [moox-cli]
+          - name: SetDeploymentStatus
+            operators: [moox-cli]
+          - name: SyncHostDeployments
+            operators: [moox-cli]
+          - name: DeleteHost
+            operators: [moox-cli]
       - path: trpc.moox.admin.Setup
         port: 11110
         console_name: setup
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - ApplySetup
-          - GetSetupStatus
-          - PutConfigBackup
-          - GetConfigBackup
-        read_only_methods:
-          - GetSetupStatus
-          - GetConfigBackup
-        acl:
-          - methods:
-              - ApplySetup
-              - GetSetupStatus
-            callers:
-              - console
-              - moox-cli
-          - methods:
-              - PutConfigBackup
-              - GetConfigBackup
-            callers:
-              - console
+          - name: ApplySetup
+          - name: GetSetupStatus
+            read_only: true
+          - name: PutConfigBackup
+            operators: [console]
+          - name: GetConfigBackup
+            read_only: true
+            operators: [console]
       - path: trpc.moox.admin.ActivityLog
         port: 11113
         console_name: activity
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - AppendActivityLogs
-          - ListActivityLogs
-        read_only_methods:
-          - ListActivityLogs
-        acl:
-          - methods:
-              - AppendActivityLogs
-            callers:
-              - collector
-          - methods:
-              - ListActivityLogs
-            callers:
-              - console
-              - moox-cli
+          - name: AppendActivityLogs
+            callers: [collector]
+            operators: []
+          - name: ListActivityLogs
+            read_only: true
       - path: trpc.moox.admin.GatewayControl
         port: 11112
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - PullSnapshot
-          - ReportStatus
-        acl:
-          - methods:
-              - PullSnapshot
-              - ReportStatus
-            callers:
-              - host-gateway@*
+          - name: PullSnapshot
+            callers: [host-gateway]
+            operators: []
+          - name: ReportStatus
+            callers: [host-gateway]
+            operators: []
     doctor:
       role: admin
       description: 认证、空间、密钥、部署与网关控制面
@@ -444,27 +372,16 @@ components:
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - GetOverview
-          - ListEvents
-          - ListStreams
-          - ListConsumers
-          - GetConsumer
-        read_only_methods:
-          - GetOverview
-          - ListEvents
-          - ListStreams
-          - ListConsumers
-          - GetConsumer
-        acl:
-          - methods:
-              - GetOverview
-              - ListEvents
-              - ListStreams
-              - ListConsumers
-              - GetConsumer
-            callers:
-              - console
-              - moox-cli
+          - name: GetOverview
+            read_only: true
+          - name: ListEvents
+            read_only: true
+          - name: ListStreams
+            read_only: true
+          - name: ListConsumers
+            read_only: true
+          - name: GetConsumer
+            read_only: true
     doctor:
       role: eventbus
       description: NATS JetStream event transport
@@ -503,53 +420,32 @@ components:
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - GetHealthOverview
-          - ListNotificationChannels
-          - AddNotificationChannel
-          - DeleteNotificationChannel
-          - ListHostAgents
-          - QueryHostMetricHistory
-          - QueryPipelineArrivalHistory
-          - QueryLogRecords
-          - GetDoctorContext
-          - GetHostPolicy
-          - MuteAlerts
-          - UnmuteAlerts
-          - GetAlertMute
-        read_only_methods:
-          - GetHealthOverview
-          - ListNotificationChannels
-          - ListHostAgents
-          - QueryHostMetricHistory
-          - QueryPipelineArrivalHistory
-          - QueryLogRecords
-          - GetDoctorContext
-          - GetHostPolicy
-          - GetAlertMute
-        acl:
-          - methods:
-              - GetHealthOverview
-              - ListNotificationChannels
-              - AddNotificationChannel
-              - DeleteNotificationChannel
-              - ListHostAgents
-              - QueryHostMetricHistory
-              - QueryPipelineArrivalHistory
-              - QueryLogRecords
-              - GetDoctorContext
-              - GetAlertMute
-            callers:
-              - console
-              - moox-cli
-          - methods:
-              - MuteAlerts
-              - UnmuteAlerts
-            callers:
-              - moox-cli
-          - methods:
-              - GetHostPolicy
-            callers:
-              - host-agent
+          - name: GetHealthOverview
+            read_only: true
+          - name: ListNotificationChannels
+            read_only: true
+          - name: AddNotificationChannel
+          - name: DeleteNotificationChannel
+          - name: ListHostAgents
+            read_only: true
+          - name: QueryHostMetricHistory
+            read_only: true
+          - name: QueryPipelineArrivalHistory
+            read_only: true
+          - name: QueryLogRecords
+            read_only: true
+          - name: GetDoctorContext
+            read_only: true
+          - name: GetHostPolicy
+            read_only: true
+            callers: [host-agent]
+            operators: []
+          - name: MuteAlerts
+            operators: [moox-cli]
+          - name: UnmuteAlerts
+            operators: [moox-cli]
+          - name: GetAlertMute
+            read_only: true
     doctor:
       role: monitor
       description: Single-instance monitoring fact store and alert evaluator
@@ -589,198 +485,121 @@ components:
         port: 11402
         console_name: collector
         timeout_ms: 5000
-        # SyncSubjects 在服务端最多等 170 秒（交易所标的清单约 17MB），路由预算要大于它。
-        method_timeouts_ms:
-          SyncSubjects: 180000
-          CheckKline: 310000
-          SubmitKlineBackfill: 310000
-          # 读回、删除、探测云函数要逐个调腾讯云（限频 20 次/秒），几十个函数要几十秒。
-          ListCloudFunctions: 120000
-          DeleteCloudFunctions: 120000
-          ProbeFunctionEgress: 120000
-          # 删云账号前要确认它在配置的各地域里没有建过的函数（取凭证、列命名空间、逐个命名空间列函数）；小于管理台的 30 秒请求超时。
-          DeleteCloudAccount: 25000
         max_body_bytes: 4194304
         methods:
-          - GetTaskList
-          - GetTaskDetail
-          - GetTaskResultInventory
-          - CreateTask
-          - UpdateTask
-          - DisableTask
-          - DeleteTask
-          - GetDataTypeConfigs
-          - GetDataTypeConfigWithFields
-          - SubmitKlineResampleJob
-          - GetKlineResampleJob
-          - ListKlineResampleJobs
-          - CancelKlineResampleJob
-          - PreviewKlineResampleSource
-          - SyncSubjects
-          - ListTagSyncStatus
-          - ListSubjectListers
-          - CheckKline
-          - SubmitKlineBackfill
-          - GetKlineBackfill
-          - ListKlineBackfills
-          - CancelKlineBackfill
-          - RetryKlineBackfill
-          - ConfirmHistoryGaps
-          - ClearSourceAbsences
-          - GetCollectorStatus
-          - ReregisterFetchPlan
-          - TriggerFetchPlan
-          - SetFetchPlanPaused
-          - GetIngestMode
-          - SetIngestMode
-          - SetSubjectExclusions
-          - ClearSubjectExclusions
-          - ListSubjectExclusions
-          - RegisterDelistNotice
-          - ListCloudAccounts
-          - CreateCloudAccount
-          - UpdateCloudAccount
-          - DeleteCloudAccount
-          - ListCloudRegions
-          - InitPackageUpload
-          - CompletePackageUpload
-          - ListFunctionPackages
-          - DeleteFunctionPackage
-          - ListCloudFunctions
-          - DeleteCloudFunctions
-          - ProbeFunctionEgress
-        read_only_methods:
-          - GetTaskList
-          - GetTaskDetail
-          - GetTaskResultInventory
-          - GetDataTypeConfigs
-          - GetDataTypeConfigWithFields
-          - GetKlineResampleJob
-          - ListKlineResampleJobs
-          - PreviewKlineResampleSource
-          - CheckKline
-          - GetKlineBackfill
-          - ListKlineBackfills
-          - GetCollectorStatus
-          - GetIngestMode
-          - ListSubjectExclusions
-          - ListTagSyncStatus
-          - ListSubjectListers
-          - ListCloudAccounts
-          - ListCloudRegions
-          - ListFunctionPackages
-          - ListCloudFunctions
-        acl:
-          - methods:
-              - GetTaskList
-              - GetTaskDetail
-              - GetTaskResultInventory
-              - CreateTask
-              - UpdateTask
-              - DisableTask
-              - DeleteTask
-              - GetDataTypeConfigs
-              - GetDataTypeConfigWithFields
-              - SubmitKlineResampleJob
-              - GetKlineResampleJob
-              - ListKlineResampleJobs
-              - CancelKlineResampleJob
-              - PreviewKlineResampleSource
-              - CheckKline
-              - SubmitKlineBackfill
-              - GetKlineBackfill
-              - ListKlineBackfills
-              - CancelKlineBackfill
-              - RetryKlineBackfill
-              - ConfirmHistoryGaps
-              - ClearSourceAbsences
-              - GetCollectorStatus
-              - GetIngestMode
-            callers:
-              - console
-              - moox-cli
-          - methods:
-              - SyncSubjects
-              - ReregisterFetchPlan
-              - TriggerFetchPlan
-              - SetFetchPlanPaused
-              - SetIngestMode
-            callers:
-              - moox-cli
-          # 采集名单干预：控制台、moox-cli；旁路程序经 Access 用外部身份 collector-operator 调用（见 principals）。
-          - methods:
-              - SetSubjectExclusions
-              - ClearSubjectExclusions
-              - ListSubjectExclusions
-            callers:
-              - console
-              - moox-cli
-          # 手工登记标的下架（补漏报和演练）：事件中心页面（经控制台）和 moox-cli。
-          - methods:
-              - RegisterDelistNotice
-            callers:
-              - console
-              - moox-cli
-          - methods:
-              - GetTaskResultInventory
-            callers:
-              - monitor
-          # 归档避让：archive-mgr 只读各空间生效中的采集函数（服务的数据集与频率），据此推出避让时段。
-          - methods:
-              - GetCollectorStatus
-            callers:
-              - archive-mgr
+          - name: GetTaskList
+            read_only: true
+          - name: GetTaskDetail
+            read_only: true
+          - name: GetTaskResultInventory
+            read_only: true
+            callers: [monitor]
+          - name: CreateTask
+          - name: UpdateTask
+          - name: DisableTask
+          - name: DeleteTask
+          - name: GetDataTypeConfigs
+            read_only: true
+          - name: GetDataTypeConfigWithFields
+            read_only: true
+          - name: SubmitKlineResampleJob
+          - name: GetKlineResampleJob
+            read_only: true
+          - name: ListKlineResampleJobs
+            read_only: true
+          - name: CancelKlineResampleJob
+          - name: PreviewKlineResampleSource
+            read_only: true
+          # SyncSubjects 在服务端最多等 170 秒（交易所标的清单约 17MB），路由预算要大于它。
+          - name: SyncSubjects
+            callers: [collector-operator]
+            operators: [moox-cli]
+            timeout_ms: 180000
           # 标签同步的运行状态：Monitor 的标签检查读；可选的（来源，市场类型）组合给管理台新建自动标签用。
-          - methods:
-              - ListTagSyncStatus
-            callers:
-              - console
-              - moox-cli
-              - monitor
-          - methods:
-              - ListSubjectListers
-            callers:
-              - console
-              - moox-cli
+          - name: ListTagSyncStatus
+            read_only: true
+            callers: [monitor]
+          - name: ListSubjectListers
+            read_only: true
+          - name: CheckKline
+            read_only: true
+            timeout_ms: 310000
+          - name: SubmitKlineBackfill
+            timeout_ms: 310000
+          - name: GetKlineBackfill
+            read_only: true
+          - name: ListKlineBackfills
+            read_only: true
+          - name: CancelKlineBackfill
+          - name: RetryKlineBackfill
+          - name: ConfirmHistoryGaps
+          - name: ClearSourceAbsences
+          # 归档避让：archive-mgr 只读各空间生效中的采集函数（服务的数据集与频率），据此推出避让时段。
+          - name: GetCollectorStatus
+            read_only: true
+            callers: [archive-mgr]
+          - name: ReregisterFetchPlan
+            operators: [moox-cli]
+          - name: TriggerFetchPlan
+            operators: [moox-cli]
+          - name: SetFetchPlanPaused
+            operators: [moox-cli]
+          - name: GetIngestMode
+            read_only: true
+          - name: SetIngestMode
+            operators: [moox-cli]
+          # 采集名单干预：控制台、moox-cli；旁路程序用外部身份 collector-operator 经 Access 调用。
+          - name: SetSubjectExclusions
+            callers: [collector-operator]
+          - name: ClearSubjectExclusions
+            callers: [collector-operator]
+          - name: ListSubjectExclusions
+            read_only: true
+            callers: [collector-operator]
+          # 手工登记标的下架（补漏报和演练）：事件中心页面（经控制台）和 moox-cli。
+          - name: RegisterDelistNotice
           # 云账号与代码包（管理台运行状态页“函数”区的两个对话框、moox-cli）；列出云函数的期望与读回。
-          - methods:
-              - ListCloudAccounts
-              - CreateCloudAccount
-              - UpdateCloudAccount
-              - DeleteCloudAccount
-              - ListCloudRegions
-              - InitPackageUpload
-              - CompletePackageUpload
-              - ListFunctionPackages
-              - DeleteFunctionPackage
-              - ListCloudFunctions
-            callers:
-              - console
-              - moox-cli
+          - name: ListCloudAccounts
+            read_only: true
+          - name: CreateCloudAccount
+          - name: UpdateCloudAccount
+          # 删云账号前要确认它在配置的各地域里没有建过的函数（取凭证、列命名空间、逐个命名空间列函数）；小于管理台的 30 秒请求超时。
+          - name: DeleteCloudAccount
+            timeout_ms: 25000
+          - name: ListCloudRegions
+            read_only: true
+          - name: InitPackageUpload
+          - name: CompletePackageUpload
+          - name: ListFunctionPackages
+            read_only: true
+          - name: DeleteFunctionPackage
+          # 读回、删除、探测云函数要逐个调腾讯云（限频 20 次/秒），几十个函数要几十秒。
+          - name: ListCloudFunctions
+            read_only: true
+            timeout_ms: 120000
           # 删云函数、探测出口 IP 只给命令行。
-          - methods:
-              - DeleteCloudFunctions
-              - ProbeFunctionEgress
-            callers:
-              - moox-cli
+          - name: DeleteCloudFunctions
+            operators: [moox-cli]
+            timeout_ms: 120000
+          - name: ProbeFunctionEgress
+            operators: [moox-cli]
+            timeout_ms: 120000
       # collector-stream 的心跳、拉计划与周期统计上报；不设租约，计划里的份就是唯一的授权。
       - path: trpc.moox.collector.StreamCollector
         port: 11422
         timeout_ms: 10000
         max_body_bytes: 4194304
         methods:
-          - StreamHeartbeat
-          - PullStreamPlan
-          - ReportStreamPeriods
-        read_only_methods:
-          - PullStreamPlan
-        acl:
-          - methods:
-              - StreamHeartbeat
-              - PullStreamPlan
-              - ReportStreamPeriods
-            callers:
-              - collector-stream
+          - name: StreamHeartbeat
+            callers: [collector-stream]
+            operators: []
+          - name: PullStreamPlan
+            read_only: true
+            callers: [collector-stream]
+            operators: []
+          - name: ReportStreamPeriods
+            callers: [collector-stream]
+            operators: []
     doctor:
       role: collector
       description: Market data collection planner and executor
@@ -823,12 +642,9 @@ components:
         timeout_ms: 95000
         max_body_bytes: 4194304
         methods:
-          - Invoke
-        acl:
-          - methods:
-              - Invoke
-            callers:
-              - collector
+          - name: Invoke
+            callers: [collector]
+            operators: []
     doctor:
       role: collector-stream
       description: 常驻接收交易所 WebSocket 收盘 K 线并按周期提交 Storage，同进程提供本地执行端
@@ -871,116 +687,91 @@ components:
         timeout_ms: 120000
         max_body_bytes: 4194304
         methods:
-          - CreateFactorTask
-          - SetFactorTaskStatus
-          - DeleteFactorTask
-          - GetFactorTask
-          - ListFactorTasks
-          - CreateFactor
-          - UpdateFactor
-          - DeleteFactor
-          - GetFactor
-          - AddTaskMember
-          - RemoveTaskMember
-          - SetTaskMemberStatus
-          - ListFactors
-          - RecalcFactors
-          - ListRecalcJobs
-          - GetRecalcJob
-          - CancelRecalcJob
-          - GetStatus
-          - ValidateFactorSpec
-          - PreviewFactor
-          - ListFactorFunctions
-          - ListFactorCategories
-          - UpsertFactorCategory
-          - DeleteFactorCategory
-          - SetFactorCategory
-          - BindFactorTask
-          - DeleteBoundTask
-          - SubmitFactorParams
-          - GetFactorParams
-          - PublishUdf
-          - ListUdfs
-          - GetUdf
-          - ActivateUdf
-        read_only_methods:
-          - GetFactorTask
-          - ListFactorTasks
-          - GetFactor
-          - ListFactors
-          - ListRecalcJobs
-          - GetRecalcJob
-          - GetStatus
-          - ValidateFactorSpec
-          - PreviewFactor
-          - ListFactorFunctions
-          - ListFactorCategories
-          - GetFactorParams
-          - ListUdfs
-          - GetUdf
-        acl:
-          - methods:
-              - CreateFactorTask
-              - SetFactorTaskStatus
-              - DeleteFactorTask
-              - GetFactorTask
-              - ListFactorTasks
-              - CreateFactor
-              - UpdateFactor
-              - DeleteFactor
-              - GetFactor
-              - AddTaskMember
-              - RemoveTaskMember
-              - SetTaskMemberStatus
-              - ListFactors
-              - RecalcFactors
-              - ListRecalcJobs
-              - GetRecalcJob
-              - CancelRecalcJob
-              - GetStatus
-              - ValidateFactorSpec
-              - PreviewFactor
-              - ListFactorFunctions
-              - ListFactorCategories
-              - UpsertFactorCategory
-              - DeleteFactorCategory
-              - SetFactorCategory
-              - GetFactorParams
-              - PublishUdf
-              - ListUdfs
-              - GetUdf
-              - ActivateUdf
-            callers:
-              - console
-              - moox-cli
+          - name: CreateFactorTask
+          - name: SetFactorTaskStatus
+          - name: DeleteFactorTask
           # 策略实例与因子任务的关联、参数提交（因子动态调参）和随实例删除任务：只有策略服务是参数写入方。
-          - methods:
-              - GetFactorTask
-              - ListFactorTasks
-              - GetFactor
-              - ListFactors
-              - ListRecalcJobs
-              - GetStatus
-              - ListFactorCategories
-              - BindFactorTask
-              - DeleteBoundTask
-              - SubmitFactorParams
-              - GetFactorParams
-            callers:
-              - strategy
+          - name: GetFactorTask
+            read_only: true
+            callers: [strategy]
+          - name: ListFactorTasks
+            read_only: true
+            callers: [strategy]
+          - name: CreateFactor
+          - name: UpdateFactor
+          - name: DeleteFactor
+          - name: GetFactor
+            read_only: true
+            callers: [strategy]
+          - name: AddTaskMember
+          - name: RemoveTaskMember
+          - name: SetTaskMemberStatus
+          - name: ListFactors
+            read_only: true
+            callers: [strategy]
+          - name: RecalcFactors
+          - name: ListRecalcJobs
+            read_only: true
+            callers: [strategy]
+          - name: GetRecalcJob
+            read_only: true
+          - name: CancelRecalcJob
+          - name: GetStatus
+            read_only: true
+            callers: [strategy]
+          - name: ValidateFactorSpec
+            read_only: true
+          - name: PreviewFactor
+            read_only: true
+          - name: ListFactorFunctions
+            read_only: true
+          - name: ListFactorCategories
+            read_only: true
+            callers: [strategy]
+          - name: UpsertFactorCategory
+          - name: DeleteFactorCategory
+          - name: SetFactorCategory
+          - name: BindFactorTask
+            callers: [strategy]
+            operators: []
+          - name: DeleteBoundTask
+            callers: [strategy]
+            operators: []
+          - name: SubmitFactorParams
+            callers: [strategy]
+            operators: []
+          - name: GetFactorParams
+            read_only: true
+            callers: [strategy]
+          - name: PublishUdf
+          - name: ListUdfs
+            read_only: true
+          - name: GetUdf
+            read_only: true
+          - name: ActivateUdf
       - path: trpc.moox.factor.FactorEngine
         port: 11405
         timeout_ms: 120000
         max_body_bytes: 4194304
         methods:
-          - SyncEngineCatalog
-          - EngineHeartbeat
-          - PullRecalcJob
-          - ReportRecalcProgress
-          - GetTaskParams
-          - GetUdfModule
-        acl: []
+          - name: SyncEngineCatalog
+            callers: [factor-engine]
+            operators: []
+          - name: EngineHeartbeat
+            callers: [factor-engine]
+            operators: []
+          - name: PullRecalcJob
+            callers: [factor-engine]
+            operators: []
+          - name: ReportRecalcProgress
+            callers: [factor-engine]
+            operators: []
+          - name: GetTaskParams
+            callers: [factor-engine]
+            operators: []
+          - name: GetUdfModule
+            callers: [factor-engine]
+            operators: []
     doctor:
       role: factor-mgr
       description: Factor catalog manager serving definitions, tasks and recalc jobs to the compute engine
@@ -1021,84 +812,61 @@ components:
         timeout_ms: 30000
         max_body_bytes: 4194304
         methods:
-          - GetArchiveOverview
-          - ListArchiveTasks
-          - PrepareArchiveTask
-          - PreviewArchiveSchedule
-          - CreateArchiveTask
-          - UpdateArchiveTask
-          - DeleteArchiveTask
-          - RunArchiveTaskNow
-          - BackfillArchiveRange
-          - CancelArchiveRun
-          - ListArchiveRuns
-          - GetArchiveRun
-          - ListArchivePartitions
-          - GetArchivePartition
-          - PrepareArchiveImport
-          - ImportArchiveFile
-          - ClearArchiveUnrecoverable
-        read_only_methods:
-          - GetArchiveOverview
-          - ListArchiveTasks
-          - PrepareArchiveTask
-          - PreviewArchiveSchedule
-          - ListArchiveRuns
-          - GetArchiveRun
-          - ListArchivePartitions
-          - GetArchivePartition
-        acl:
-          - methods:
-              - GetArchiveOverview
-              - ListArchiveTasks
-              - PrepareArchiveTask
-              - PreviewArchiveSchedule
-              - CreateArchiveTask
-              - UpdateArchiveTask
-              - DeleteArchiveTask
-              - RunArchiveTaskNow
-              - BackfillArchiveRange
-              - CancelArchiveRun
-              - ListArchiveRuns
-              - GetArchiveRun
-              - ListArchivePartitions
-              - GetArchivePartition
-            callers:
-              - console
-              - moox-cli
+          - name: GetArchiveOverview
+            read_only: true
+            callers: [monitor]
+          # strategy 删除策略实例前确认结果数据集没有归档任务。
+          - name: ListArchiveTasks
+            read_only: true
+            callers: [monitor, strategy]
+          - name: PrepareArchiveTask
+            read_only: true
+            callers: [monitor]
+          - name: PreviewArchiveSchedule
+            read_only: true
+            callers: [monitor]
+          - name: CreateArchiveTask
+          - name: UpdateArchiveTask
+          - name: DeleteArchiveTask
+          - name: RunArchiveTaskNow
+          - name: BackfillArchiveRange
+          - name: CancelArchiveRun
+          - name: ListArchiveRuns
+            read_only: true
+            callers: [monitor]
+          - name: GetArchiveRun
+            read_only: true
+            callers: [monitor]
+          - name: ListArchivePartitions
+            read_only: true
+            callers: [monitor]
+          - name: GetArchivePartition
+            read_only: true
+            callers: [monitor]
           # CSV 导入与清除无法补齐区间：只给 moox-cli（导入要经 SSH 把文件传到 worker 所在主机）。
-          - methods:
-              - PrepareArchiveImport
-              - ImportArchiveFile
-              - ClearArchiveUnrecoverable
-            callers:
-              - moox-cli
-          - methods:
-              - GetArchiveOverview
-              - ListArchiveTasks
-              - PrepareArchiveTask
-              - PreviewArchiveSchedule
-              - ListArchiveRuns
-              - GetArchiveRun
-              - ListArchivePartitions
-              - GetArchivePartition
-            callers:
-              - monitor
-          # 删除策略实例前确认结果数据集没有归档任务（只读）。
-          - methods:
-              - ListArchiveTasks
-            callers:
-              - strategy
+          - name: PrepareArchiveImport
+            operators: [moox-cli]
+          - name: ImportArchiveFile
+            operators: [moox-cli]
+          - name: ClearArchiveUnrecoverable
+            operators: [moox-cli]
       - path: trpc.moox.archive.ArchiveWorker
         port: 11408
         timeout_ms: 60000
         max_body_bytes: 4194304
         methods:
-          - ArchiveWorkerHeartbeat
-          - PullArchiveRun
-          - ReportArchiveRunProgress
-          - CompleteArchiveRun
-        acl: []
+          - name: ArchiveWorkerHeartbeat
+            callers: [archive-worker]
+            operators: []
+          - name: PullArchiveRun
+            callers: [archive-worker]
+            operators: []
+          - name: ReportArchiveRunProgress
+            callers: [archive-worker]
+            operators: []
+          - name: CompleteArchiveRun
+            callers: [archive-worker]
+            operators: []
     doctor:
       role: archive-mgr
       description: Archive task manager scheduling runs and registering partitions for the archive worker
@@ -1137,73 +905,44 @@ components:
         port: 11430
         console_name: strategy
         timeout_ms: 5000
-        # 删除实例要删因子任务和结果数据集，与策略服务端的超时（trpc_go.yaml 30 秒）一致。
-        method_timeouts_ms:
-          DeleteStrategyInstance: 30000
         max_body_bytes: 4194304
         methods:
-          - CreateStrategy
-          - UpdateStrategy
-          - GetStrategy
-          - ListStrategies
-          - DeleteStrategy
-          - ValidateStrategy
-          - CreateStrategyInstance
-          - UpdateStrategyInstance
-          - GetStrategyInstance
-          - ListStrategyInstances
-          - SetStrategyInstanceEnabled
-          - DeleteStrategyInstance
-          - ListStrategyResults
-          - GetStrategyResult
-          - ListStrategyTargets
-          - StartReplay
-          - GetReplay
-          - ListReplays
-          - ListReplayBars
-          - CancelReplay
-          - GetStrategyDisplaySettings
-          - SetStrategyDisplaySettings
-        read_only_methods:
-          - GetStrategy
-          - ListStrategies
-          - ValidateStrategy
-          - GetStrategyInstance
-          - ListStrategyInstances
-          - ListStrategyResults
-          - GetStrategyResult
-          - ListStrategyTargets
-          - GetReplay
-          - ListReplays
-          - ListReplayBars
-          - GetStrategyDisplaySettings
-        acl:
-          - methods:
-              - CreateStrategy
-              - UpdateStrategy
-              - GetStrategy
-              - ListStrategies
-              - DeleteStrategy
-              - ValidateStrategy
-              - CreateStrategyInstance
-              - UpdateStrategyInstance
-              - GetStrategyInstance
-              - ListStrategyInstances
-              - SetStrategyInstanceEnabled
-              - DeleteStrategyInstance
-              - ListStrategyResults
-              - GetStrategyResult
-              - ListStrategyTargets
-              - StartReplay
-              - GetReplay
-              - ListReplays
-              - ListReplayBars
-              - CancelReplay
-              - GetStrategyDisplaySettings
-              - SetStrategyDisplaySettings
-            callers:
-              - console
-              - moox-cli
+          - name: CreateStrategy
+          - name: UpdateStrategy
+          - name: GetStrategy
+            read_only: true
+          - name: ListStrategies
+            read_only: true
+          - name: DeleteStrategy
+          - name: ValidateStrategy
+            read_only: true
+          - name: CreateStrategyInstance
+          - name: UpdateStrategyInstance
+          - name: GetStrategyInstance
+            read_only: true
+          - name: ListStrategyInstances
+            read_only: true
+          - name: SetStrategyInstanceEnabled
+          # 删除实例要删因子任务和结果数据集，与策略服务端的超时（trpc_go.yaml 30 秒）一致。
+          - name: DeleteStrategyInstance
+            timeout_ms: 30000
+          - name: ListStrategyResults
+            read_only: true
+          - name: GetStrategyResult
+            read_only: true
+          - name: ListStrategyTargets
+            read_only: true
+          - name: StartReplay
+          - name: GetReplay
+            read_only: true
+          - name: ListReplays
+            read_only: true
+          - name: ListReplayBars
+            read_only: true
+          - name: CancelReplay
+          - name: GetStrategyDisplaySettings
+            read_only: true
+          - name: SetStrategyDisplaySettings
     doctor:
       role: strategy
       description: Strategy evaluation and target generation service
@@ -1244,183 +983,108 @@ components:
         console_name: storage
         timeout_ms: 5000
         max_body_bytes: 33554432
+        # 写方法的机器调用方按各模块实际的调用点放行：Collector 建改删数据集、建删浏览 View；factor-mgr 建删结果数据集、列与默认 View。
         methods:
-          - CreateSpace
-          - UpdateSpace
-          - DeleteSpace
-          - GetSpace
-          - ListSpaces
-          - CreateView
-          - UpdateView
-          - DeleteView
-          - GetView
-          - ListViews
-          - ListViewColumns
-          - CreateDataSource
-          - UpdateDataSource
-          - DeleteDataSource
-          - GetDataSource
-          - ListDataSources
-          - UpsertSubject
-          - GetSubject
-          - ListSubjects
-          - UpsertTag
-          - GetTag
-          - ListTags
-          - DeleteTag
-          - ListTagMembers
-          - AddTagMembers
-          - RemoveTagMembers
-          - SetTagMemberStatus
-          - ApplyTagSnapshot
-          - UpdateSubjectAttributes
-          - ResolveSubjects
-          - CreateDataset
-          - UpdateDataset
-          - DeleteDataset
-          - GetDataset
-          - ListDatasets
-          - ListDatasetSubjects
-          - CreateFieldGroup
-          - UpdateFieldGroup
-          - GetFieldGroup
-          - ListFieldGroups
-          - CreateField
-          - UpdateField
-          - GetField
-          - ListFields
-          - BatchUpdateFields
-          - DeleteFieldGroup
-          - UpsertDatasetColumn
-          - ListDatasetColumns
-        read_only_methods:
-          - GetSpace
-          - ListSpaces
-          - GetView
-          - ListViews
-          - ListViewColumns
-          - GetDataSource
-          - ListDataSources
-          - GetSubject
-          - ListSubjects
-          - GetTag
-          - ListTags
-          - ListTagMembers
-          - ResolveSubjects
-          - GetDataset
-          - ListDatasets
-          - ListDatasetSubjects
-          - GetFieldGroup
-          - ListFieldGroups
-          - GetField
-          - ListFields
-          - ListDatasetColumns
-        acl:
-          - methods:
-              - CreateSpace
-              - UpdateSpace
-              - DeleteSpace
-              - GetSpace
-              - ListSpaces
-              - CreateView
-              - UpdateView
-              - DeleteView
-              - GetView
-              - ListViews
-              - ListViewColumns
-              - CreateDataSource
-              - UpdateDataSource
-              - DeleteDataSource
-              - GetDataSource
-              - ListDataSources
-              - UpsertSubject
-              - GetSubject
-              - ListSubjects
-              - UpsertTag
-              - GetTag
-              - ListTags
-              - DeleteTag
-              - ListTagMembers
-              - AddTagMembers
-              - RemoveTagMembers
-              - SetTagMemberStatus
-              - ResolveSubjects
-              - CreateDataset
-              - UpdateDataset
-              - DeleteDataset
-              - GetDataset
-              - ListDatasets
-              - ListDatasetSubjects
-              - CreateFieldGroup
-              - UpdateFieldGroup
-              - GetFieldGroup
-              - ListFieldGroups
-              - CreateField
-              - UpdateField
-              - GetField
-              - ListFields
-              - BatchUpdateFields
-              - DeleteFieldGroup
-              - UpsertDatasetColumn
-              - ListDatasetColumns
-            callers:
-              - console
-              - moox-cli
-          - methods:
-              - ApplyTagSnapshot
-              - UpdateSubjectAttributes
-            callers:
-              - collector
-          - methods:
-              - GetSpace
-              - ListSpaces
-              - GetView
-              - ListViews
-              - ListViewColumns
-              - GetDataSource
-              - ListDataSources
-              - GetSubject
-              - ListSubjects
-              - GetTag
-              - ListTags
-              - ListTagMembers
-              - ResolveSubjects
-              - GetDataset
-              - ListDatasets
-              - ListDatasetSubjects
-              - GetFieldGroup
-              - ListFieldGroups
-              - GetField
-              - ListFields
-              - ListDatasetColumns
-            callers:
-              - collector
-              - factor-mgr
-              - monitor
-              - strategy
-          # 写方法按各模块实际的调用点放行：Collector 建改删数据集、建删浏览 View；factor-mgr 建删结果数据集、列与默认 View。
-          - methods:
-              - CreateDataset
-              - UpdateDataset
-              - DeleteDataset
-              - CreateView
-              - DeleteView
-              - UpsertDatasetColumn
-            callers:
-              - collector
-          - methods:
-              - CreateDataset
-              - UpdateDataset
-              - DeleteDataset
-              - CreateView
-              - DeleteView
-              - UpsertDatasetColumn
-            callers:
-              - factor-mgr
-          - methods:
-              - GetDataset
-            callers:
-              - archive-mgr
+          - name: CreateSpace
+          - name: UpdateSpace
+          - name: DeleteSpace
+          - name: GetSpace
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: ListSpaces
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: CreateView
+            callers: [collector, factor-mgr]
+          - name: UpdateView
+          - name: DeleteView
+            callers: [collector, factor-mgr]
+          - name: GetView
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: ListViews
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: ListViewColumns
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: CreateDataSource
+          - name: UpdateDataSource
+          - name: DeleteDataSource
+          - name: GetDataSource
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: ListDataSources
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: UpsertSubject
+          - name: GetSubject
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: ListSubjects
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: UpsertTag
+          - name: GetTag
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: ListTags
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: DeleteTag
+          - name: ListTagMembers
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: AddTagMembers
+          - name: RemoveTagMembers
+          - name: SetTagMemberStatus
+          - name: ApplyTagSnapshot
+            callers: [collector]
+            operators: []
+          - name: UpdateSubjectAttributes
+            callers: [collector]
+            operators: []
+          - name: ResolveSubjects
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: CreateDataset
+            callers: [collector, factor-mgr]
+          - name: UpdateDataset
+            callers: [collector, factor-mgr]
+          - name: DeleteDataset
+            callers: [collector, factor-mgr]
+          - name: GetDataset
+            read_only: true
+            callers: [archive-mgr, archive-worker, collector, factor-engine, factor-mgr, monitor, strategy]
+          - name: ListDatasets
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: ListDatasetSubjects
+            read_only: true
+            callers: [collector, factor-engine, factor-mgr, monitor, strategy]
+          - name: CreateFieldGroup
+          - name: UpdateFieldGroup
+          - name: GetFieldGroup
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: ListFieldGroups
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: CreateField
+          - name: UpdateField
+          - name: GetField
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: ListFields
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: BatchUpdateFields
+          - name: DeleteFieldGroup
+          - name: UpsertDatasetColumn
+            callers: [collector, factor-mgr]
+          - name: ListDatasetColumns
+            read_only: true
+            callers: [archive-worker, collector, factor-engine, factor-mgr, monitor, strategy]
       - path: trpc.moox.storage.PrimaryStore
         port: 20102
         console_name: storage
@@ -1430,67 +1094,39 @@ components:
         # 所以 Storage 的读取接口要自己把单页控制在 10 MiB 以内（例如变更日志单页约 4 MiB）。
         max_body_bytes: 33554432
         methods:
-          - UpsertFields
-          - RegisterSeriesSnapshot
-          - CommitTimeSeriesBatch
-          - ReadRows
-          - ReadTimeSeriesRows
-          - CountTimeSeriesRows
-          - ReadDatasetChanges
-          - ReportDatasetPeriodCompleted
-          - GetDatasetPeriodCompleted
-        read_only_methods:
-          - ReadRows
-          - ReadTimeSeriesRows
-          - CountTimeSeriesRows
-          - ReadDatasetChanges
-          - GetDatasetPeriodCompleted
-        # 周期提交按（数据集，周期，序列）覆盖行并幂等置位完成位图，周期封口后返回回执而不再写入，重复提交安全。
-        idempotent_methods:
-          - CommitTimeSeriesBatch
-        acl:
-          - methods:
-              - UpsertFields
-            callers:
-              - console
-          - methods:
-              - UpsertFields
-              - CommitTimeSeriesBatch
-              - ReadRows
-              - ReadTimeSeriesRows
-              - CountTimeSeriesRows
-              - ReadDatasetChanges
-              - ReportDatasetPeriodCompleted
-              - GetDatasetPeriodCompleted
-            callers:
-              - moox-cli
-          - methods:
-              - RegisterSeriesSnapshot
-              - CommitTimeSeriesBatch
-              - UpsertFields
-            callers:
-              - collector
-          - methods:
-              - ReadRows
-              - ReadTimeSeriesRows
-              - CountTimeSeriesRows
-              - GetDatasetPeriodCompleted
-            callers:
-              - collector
-              - factor-mgr
-              - monitor
-              - strategy
-          # collector-stream 的周期提交与补采写入。
-          - methods:
-              - CommitTimeSeriesBatch
-              - UpsertFields
-            callers:
-              - collector-stream
-          - methods:
-              - UpsertFields
-              - ReportDatasetPeriodCompleted
-            callers:
-              - factor-mgr
+          - name: UpsertFields
+            callers: [collector, collector-stream, factor-engine, factor-mgr, scf-collector]
+          - name: RegisterSeriesSnapshot
+            callers: [collector]
+            operators: []
+          # 周期提交按（数据集，周期，序列）覆盖行并幂等置位完成位图，周期封口后返回回执而不再写入，重复提交安全。
+          - name: CommitTimeSeriesBatch
+            idempotent: true
+            callers: [collector, collector-stream, scf-collector]
+            operators: [moox-cli]
+          - name: ReadRows
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+            operators: [moox-cli]
+          - name: ReadTimeSeriesRows
+            read_only: true
+            callers: [archive-worker, collector, factor-engine, factor-mgr, monitor, moox-skill, strategy]
+            operators: [moox-cli]
+          - name: CountTimeSeriesRows
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+            operators: [moox-cli]
+          - name: ReadDatasetChanges
+            read_only: true
+            callers: [archive-worker, factor-engine]
+            operators: [moox-cli]
+          - name: ReportDatasetPeriodCompleted
+            callers: [factor-engine, factor-mgr]
+            operators: [moox-cli]
+          - name: GetDatasetPeriodCompleted
+            read_only: true
+            callers: [collector, factor-engine, factor-mgr, monitor, strategy]
+            operators: [moox-cli]
     doctor:
       role: storage-primary
       description: Storage 元数据与事实数据主服务
@@ -1530,36 +1166,25 @@ components:
         port: 20103
         console_name: storage
         timeout_ms: 25000
-        # WaitViewApplied 服务端最多等待 30 秒，路由预算要大于它并留出传输余量。
-        method_timeouts_ms:
-          WaitViewApplied: 35000
         max_body_bytes: 33554432
         methods:
-          - QueryTimeSeriesRows
-          - CountTimeSeriesRows
-          - SearchRecordRows
-          - GetViewState
-          - WaitViewApplied
-        read_only_methods:
-          - QueryTimeSeriesRows
-          - CountTimeSeriesRows
-          - SearchRecordRows
-          - GetViewState
-          - WaitViewApplied
-        acl:
-          - methods:
-              - QueryTimeSeriesRows
-              - CountTimeSeriesRows
-              - SearchRecordRows
-              - GetViewState
-              - WaitViewApplied
-            callers:
-              - console
-              - moox-cli
-              - collector
-              - factor-mgr
-              - monitor
-              - strategy
+          - name: QueryTimeSeriesRows
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: CountTimeSeriesRows
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: SearchRecordRows
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          - name: GetViewState
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+          # WaitViewApplied 服务端最多等待 30 秒，路由预算要大于它并留出传输余量。
+          - name: WaitViewApplied
+            read_only: true
+            callers: [collector, factor-mgr, monitor, strategy]
+            timeout_ms: 35000
     doctor:
       role: storage-view
       description: Storage 可重建查询视图服务
@@ -1634,12 +1259,9 @@ components:
         # 32 MiB decoded HTTP body plus PB/JSON framing and bounded headers.
         max_body_bytes: 50331648
         methods:
-          - Do
-        acl:
-          - methods:
-              - Do
-            callers:
-              - collector
+          - name: Do
+            callers: [collector]
+            operators: []
     doctor:
       role: egress-proxy
       description: 受限网络出口
@@ -1675,147 +1297,91 @@ components:
         port: 11200
         console_name: trade
         timeout_ms: 5000
-        method_timeouts_ms:
-          ListAccountLedger: 15000
-          InspectExchangeCredential: 15000
-          ReinspectTradingAccount: 15000
-          SummarizeAccountPnl: 15000
-          FlattenLogicalAccount: 12000
-          FlattenTradingAccount: 12000
-          FlattenInstrument: 12000
         max_body_bytes: 4194304
         methods:
-          - CreateTradingAccount
-          - UpdateTradingAccount
-          - GetTradingAccount
-          - ListTradingAccounts
-          - SetLeverage
-          - SyncTradingAccount
-          - InspectExchangeCredential
-          - ReinspectTradingAccount
-          - ResolveWalletTransfer
-          - CreateLogicalAccount
-          - GetLogicalAccount
-          - ListLogicalAccounts
-          - UpdateLogicalAccount
-          - UpdateLogicalAccountOrderSettings
-          - UpdateLogicalAccountFundSettings
-          - AddLogicalAccountMember
-          - RemoveLogicalAccountMember
-          - CloseTargetSession
-          - PauseLogicalAccount
-          - ResumeLogicalAccount
-          - FlattenLogicalAccount
-          - SubmitOrder
-          - CancelOrder
-          - GetOperatorAction
-          - GetLogicalAccountTarget
-          - GetOrder
-          - ListOrders
-          - ListFills
-          - ListPositions
-          - CreatePaperSimulation
-          - ClosePaperSimulation
-          - GetExecutionCapabilities
-          - ListTradableInstruments
-          - QueryEquityCurve
-          - ListHoldings
-          - ListAccountLedger
-          - FlattenTradingAccount
-          - BlockInstrument
-          - UnblockInstrument
-          - ListBlockedInstruments
-          - ListInstrumentHolders
-          - FlattenInstrument
-          - SummarizeAccountPnl
-          - ListOperatorActions
-        read_only_methods:
-          - InspectExchangeCredential
-          - GetTradingAccount
-          - ListTradingAccounts
-          - GetLogicalAccount
-          - ListLogicalAccounts
-          - GetOperatorAction
-          - GetLogicalAccountTarget
-          - GetOrder
-          - ListOrders
-          - ListFills
-          - ListPositions
-          - GetExecutionCapabilities
-          - ListTradableInstruments
-          - QueryEquityCurve
-          - ListHoldings
-          - ListAccountLedger
-          - ListBlockedInstruments
-          - ListInstrumentHolders
-          - SummarizeAccountPnl
-          - ListOperatorActions
-        acl:
-          - methods:
-              - CreateTradingAccount
-              - UpdateTradingAccount
-              - GetTradingAccount
-              - ListTradingAccounts
-              - SetLeverage
-              - SyncTradingAccount
-              - InspectExchangeCredential
-              - ReinspectTradingAccount
-              - ResolveWalletTransfer
-              - CreateLogicalAccount
-              - GetLogicalAccount
-              - ListLogicalAccounts
-              - UpdateLogicalAccount
-              - UpdateLogicalAccountOrderSettings
-              - UpdateLogicalAccountFundSettings
-              - AddLogicalAccountMember
-              - RemoveLogicalAccountMember
-              - PauseLogicalAccount
-              - ResumeLogicalAccount
-              - FlattenLogicalAccount
-              - SubmitOrder
-              - CancelOrder
-              - GetOperatorAction
-              - GetLogicalAccountTarget
-              - GetOrder
-              - ListOrders
-              - ListFills
-              - ListPositions
-              - CreatePaperSimulation
-              - ClosePaperSimulation
-              - GetExecutionCapabilities
-              - ListTradableInstruments
-              - QueryEquityCurve
-              - ListHoldings
-              - ListAccountLedger
-              - FlattenTradingAccount
-              - SummarizeAccountPnl
-              - ListOperatorActions
-            callers:
-              - console
-              - moox-cli
-          - methods:
-              - ListBlockedInstruments
-              - ListInstrumentHolders
-            callers:
-              - console
-              - moox-cli
-              - callback-dispatcher
-          - methods:
-              - UnblockInstrument
-            callers:
-              - console
-          - methods:
-              - BlockInstrument
-              - UnblockInstrument
-              - FlattenInstrument
-              - GetOperatorAction
-            callers:
-              - callback-dispatcher
-          - methods:
-              - GetLogicalAccount
-              - CloseTargetSession
-            callers:
-              - strategy
+          - name: CreateTradingAccount
+          - name: UpdateTradingAccount
+          - name: GetTradingAccount
+            read_only: true
+          - name: ListTradingAccounts
+            read_only: true
+          - name: SetLeverage
+          - name: SyncTradingAccount
+          - name: InspectExchangeCredential
+            read_only: true
+            timeout_ms: 15000
+          - name: ReinspectTradingAccount
+            timeout_ms: 15000
+          - name: ResolveWalletTransfer
+          - name: CreateLogicalAccount
+          - name: GetLogicalAccount
+            read_only: true
+            callers: [strategy]
+          - name: ListLogicalAccounts
+            read_only: true
+          - name: UpdateLogicalAccount
+          - name: UpdateLogicalAccountOrderSettings
+          - name: UpdateLogicalAccountFundSettings
+          - name: AddLogicalAccountMember
+          - name: RemoveLogicalAccountMember
+          - name: CloseTargetSession
+            callers: [strategy]
+            operators: []
+          - name: PauseLogicalAccount
+          - name: ResumeLogicalAccount
+          - name: FlattenLogicalAccount
+            timeout_ms: 12000
+          - name: SubmitOrder
+          - name: CancelOrder
+          - name: GetOperatorAction
+            read_only: true
+            callers: [callback-dispatcher]
+          - name: GetLogicalAccountTarget
+            read_only: true
+          - name: GetOrder
+            read_only: true
+          - name: ListOrders
+            read_only: true
+          - name: ListFills
+            read_only: true
+          - name: ListPositions
+            read_only: true
+          - name: CreatePaperSimulation
+          - name: ClosePaperSimulation
+          - name: GetExecutionCapabilities
+            read_only: true
+          - name: ListTradableInstruments
+            read_only: true
+          - name: QueryEquityCurve
+            read_only: true
+          - name: ListHoldings
+            read_only: true
+          - name: ListAccountLedger
+            read_only: true
+            timeout_ms: 15000
+          - name: FlattenTradingAccount
+            timeout_ms: 12000
+          - name: BlockInstrument
+            callers: [callback-dispatcher]
+            operators: []
+          - name: UnblockInstrument
+            callers: [callback-dispatcher]
+            operators: [console]
+          - name: ListBlockedInstruments
+            read_only: true
+            callers: [callback-dispatcher]
+          - name: ListInstrumentHolders
+            read_only: true
+            callers: [callback-dispatcher]
+          - name: FlattenInstrument
+            callers: [callback-dispatcher]
+            operators: []
+            timeout_ms: 12000
+          - name: SummarizeAccountPnl
+            read_only: true
+            timeout_ms: 15000
+          - name: ListOperatorActions
+            read_only: true
     doctor:
       role: trade
       description: Trade execution and reconciliation service
@@ -1857,45 +1423,25 @@ components:
         timeout_ms: 15000
         max_body_bytes: 1048576
         methods:
-          - ListSubscribableEvents
-          - ListEventRules
-          - GetEventRule
-          - CreateEventRule
-          - UpdateEventRule
-          - DeleteEventRule
-          - TestEventRule
-          - ListEventExecutions
-          - GetEventExecution
-          - RetryEventExecution
-          - CancelEventExecution
-          - AcknowledgeEventExecution
-        read_only_methods:
-          - ListSubscribableEvents
-          - ListEventRules
-          - GetEventRule
-          - ListEventExecutions
-          - GetEventExecution
-        acl:
+          - name: ListSubscribableEvents
+            read_only: true
+          - name: ListEventRules
+            read_only: true
+          - name: GetEventRule
+            read_only: true
           # CreateEventRule 的返回里有验证密钥明文：只放行 console，moox-cli 与 gateway call 都不能调用。
-          - methods:
-              - CreateEventRule
-            callers:
-              - console
-          - methods:
-              - ListSubscribableEvents
-              - ListEventRules
-              - GetEventRule
-              - UpdateEventRule
-              - DeleteEventRule
-              - TestEventRule
-              - ListEventExecutions
-              - GetEventExecution
-              - RetryEventExecution
-              - CancelEventExecution
-              - AcknowledgeEventExecution
-            callers:
-              - console
-              - moox-cli
+          - name: CreateEventRule
+            operators: [console]
+          - name: UpdateEventRule
+          - name: DeleteEventRule
+          - name: TestEventRule
+          - name: ListEventExecutions
+            read_only: true
+          - name: GetEventExecution
+            read_only: true
+          - name: RetryEventExecution
+          - name: CancelEventExecution
+          - name: AcknowledgeEventExecution
     doctor:
       role: callback-dispatcher
       description: 事件中心：按规则把 EventBus 事件通知到用户接口或执行系统动作
@@ -1939,20 +1485,18 @@ components:
       - path: trpc.moox.factor.EngineControl
         port: 11423
         timeout_ms: 120000
-        # OpenReplay 要读整段本地快照、预留内存，与引擎侧的建会话超时（10 分钟）一致。
-        method_timeouts_ms:
-          OpenReplay: 600000
         methods:
-          - OpenReplay
-          - StepReplay
-          - CloseReplay
-        acl:
-          - methods:
-              - OpenReplay
-              - StepReplay
-              - CloseReplay
-            callers:
-              - strategy
+          # OpenReplay 要读整段本地快照、预留内存，与引擎侧的建会话超时（10 分钟）一致。
+          - name: OpenReplay
+            callers: [strategy]
+            operators: []
+            timeout_ms: 600000
+          - name: StepReplay
+            callers: [strategy]
+            operators: []
+          - name: CloseReplay
+            callers: [strategy]
+            operators: []
     doctor:
       role: factor-engine
       description: Factor compute engine that consumes period events and writes factor results through Access
@@ -2016,62 +1560,3 @@ components:
       required_in_default_profile: false
       supervisor: systemd_user
       unit: moox-archive-worker
-principals:
-  - id: scf-collector
-    allow:
-      - service: trpc.moox.storage.PrimaryStore
-        methods:
-          - CommitTimeSeriesBatch
-          - UpsertFields
-  - id: factor-engine
-    allow:
-      - service: trpc.moox.storage.PrimaryStore
-        methods:
-          - ReadTimeSeriesRows
-          - ReadDatasetChanges
-          - UpsertFields
-          - ReportDatasetPeriodCompleted
-          - GetDatasetPeriodCompleted
-      - service: trpc.moox.storage.Metadata
-        methods:
-          - GetDataset
-          - ListDatasetColumns
-          - ListDatasetSubjects
-      - service: trpc.moox.factor.FactorEngine
-        methods:
-          - SyncEngineCatalog
-          - EngineHeartbeat
-          - PullRecalcJob
-          - ReportRecalcProgress
-          - GetTaskParams
-          - GetUdfModule
-  - id: archive-worker
-    allow:
-      - service: trpc.moox.storage.PrimaryStore
-        methods:
-          - ReadTimeSeriesRows
-          - ReadDatasetChanges
-      - service: trpc.moox.storage.Metadata
-        methods:
-          - GetDataset
-          - ListDatasetColumns
-      - service: trpc.moox.archive.ArchiveWorker
-        methods:
-          - ArchiveWorkerHeartbeat
-          - PullArchiveRun
-          - ReportArchiveRunProgress
-          - CompleteArchiveRun
-  # 采集名单干预的旁路程序（不在部署拓扑里）：只放行排除名单三个方法与 SyncSubjects。
-  - id: collector-operator
-    allow:
-      - service: trpc.moox.collector.CollectMgr
-        methods:
-          - SetSubjectExclusions
-          - ClearSubjectExclusions
-          - ListSubjectExclusions
-          - SyncSubjects
-  - id: moox-skill
-    allow:
-      - service: trpc.moox.storage.PrimaryStore
-        methods:
-          - ReadTimeSeriesRows

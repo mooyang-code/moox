@@ -127,6 +127,63 @@ func TestConsoleRejectsMachineMethodsAndNonCatalogAliasesBeforeDispatch(t *testi
 	require.Zero(t, calls)
 }
 
+// 服务目录里 operators 不含 console 的方法（写了 [] 或 [moox-cli]）经控制台调用一律 404，转发之前就拒绝；
+// 同一服务上 console 能调的方法走到鉴权（未登录返回 401），说明拒绝来自目录而不是路由不存在。
+func TestConsoleRejectsMethodsWhoseOperatorsExcludeConsole(t *testing.T) {
+	SetConfig(&Config{})
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	calls := 0
+	gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { calls++; return nil, nil })
+	router := newTestRouter(t, nil, gateway).buildControlRouter()
+	post := func(name, method string) int {
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/admin/"+name+"/"+method, strings.NewReader(`{}`)))
+		return rr.Code
+	}
+	// Storage 的三个服务共用一个控制台名：只要其中一个服务允许 console，这个方法就合法地解析到那个服务。
+	consoleCallable := func(name, method string) bool {
+		for _, component := range catalog.Components {
+			for _, service := range component.Services {
+				if service.ConsoleName == name && catalog.Allowed(servicecatalog.OperatorConsole, service.Path, method) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	kinds := map[string]int{}
+	for _, component := range catalog.Components {
+		for _, service := range component.Services {
+			if service.ConsoleName == "" {
+				continue
+			}
+			checkedAllowed := false
+			for _, method := range service.Methods {
+				if _, raw := rawRouteOperations[service.ConsoleName+"/"+method.Name]; raw {
+					continue
+				}
+				if catalog.Allowed(servicecatalog.OperatorConsole, service.Path, method.Name) {
+					if !checkedAllowed && !shouldSkipAdminRequestAuth(apiAdminPathPrefix+service.ConsoleName+"/"+method.Name) {
+						require.Equal(t, http.StatusUnauthorized, post(service.ConsoleName, method.Name), "%s/%s", service.ConsoleName, method.Name)
+						checkedAllowed = true
+					}
+					continue
+				}
+				if consoleCallable(service.ConsoleName, method.Name) {
+					continue
+				}
+				kinds[strings.Join(method.OperatorList(), ",")]++
+				require.Equal(t, http.StatusNotFound, post(service.ConsoleName, method.Name), "%s/%s（%s）", service.ConsoleName, method.Name, service.Path)
+			}
+		}
+	}
+	require.Zero(t, calls, "被拒绝的方法不能转发")
+	require.Positive(t, kinds[""], "要覆盖 operators: [] 的方法")
+	require.Positive(t, kinds[servicecatalog.OperatorMooxCLI], "要覆盖 operators: [moox-cli] 的方法")
+	t.Logf("经控制台被拒的方法：%v", kinds)
+}
+
 type localAuth struct {
 	pb.UnimplementedAuth
 	username string

@@ -162,8 +162,8 @@ func validateMetadata(metadata hostbundle.Metadata, options Options) error {
 			return errors.New("host material file inventory is invalid or exceeds limits")
 		}
 		if !allowed[file.Path] {
-			external := wantVerification != "" && path.Dir(file.Path) == path.Dir(wantVerification) && strings.HasSuffix(file.Path, ".key") && slices.ContainsFunc(catalog.Principals, func(p servicecatalog.Principal) bool {
-				return strings.HasPrefix(path.Base(file.Path), "caller-"+p.ID+"-")
+			external := wantVerification != "" && path.Dir(file.Path) == path.Dir(wantVerification) && strings.HasSuffix(file.Path, ".key") && slices.ContainsFunc(catalog.ExternalIdentities(), func(id string) bool {
+				return strings.HasPrefix(path.Base(file.Path), "caller-"+id+"-")
 			})
 			if !external {
 				return errors.New("host material inventory contains a file outside its target identities")

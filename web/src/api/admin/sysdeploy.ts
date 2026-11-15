@@ -85,7 +85,7 @@ export function decodeCatalog(response: CatalogResponse): ComponentCatalog {
     if (isAlias(node)) throw new Error("组件目录不允许 YAML 别名");
   });
   const value = doc.toJS({ maxAliasCount: 0 }) as ComponentCatalog;
-  if (!value || value.version !== 1 || !Array.isArray(value.components) || !Array.isArray(value.principals))
+  if (!value || value.version !== 2 || !Array.isArray(value.components) || !Array.isArray(value.identities))
     throw new Error("组件目录结构无效");
   const ids = new Set<string>();
   for (const component of value.components) {

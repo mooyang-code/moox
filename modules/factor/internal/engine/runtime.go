@@ -200,7 +200,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
 	r.preload = newPreloader(r.catalog, r.storage, r.data, r.active, func(string) { kickGap() })
 	r.preload.onSubjects = synced.Update
-	r.preload.blocked = func() bool { return r.life != nil && r.life.Halted(lifecycle.Ref{}) }
+	r.preload.blocked = r.preloadBlocked
 	if r.life, err = r.newLifecycle(); err != nil {
 		return nil, fmt.Errorf("open factor lifecycle: %w", err)
 	}

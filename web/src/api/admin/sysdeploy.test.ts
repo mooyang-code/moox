@@ -61,13 +61,14 @@ describe("SysDeploy v2", () => {
     const response = {
       control_host_id: "arbitrary-control-id",
       sha256: "a".repeat(64),
-      catalog_yaml: "version: 1\ncomponents: []\nprincipals: []\n"
+      catalog_yaml: "version: 2\nidentities: []\ncomponents: []\n"
     };
-    expect(decodeCatalog(response).version).toBe(1);
+    expect(decodeCatalog(response).version).toBe(2);
+    expect(() => decodeCatalog({ ...response, catalog_yaml: "version: 1\ncomponents: []\nprincipals: []\n" })).toThrow("结构");
     expect(() => decodeCatalog({ ...response, control_host_id: "" })).toThrow("控制主机");
-    expect(() => decodeCatalog({ ...response, catalog_yaml: "version: 1\nversion: 1\ncomponents: []\nprincipals: []" })).toThrow(
+    expect(() => decodeCatalog({ ...response, catalog_yaml: "version: 2\nversion: 2\nidentities: []\ncomponents: []" })).toThrow(
       "YAML"
     );
-    expect(() => decodeCatalog({ ...response, catalog_yaml: "version: 1\ncomponents: &x []\nprincipals: *x" })).toThrow();
+    expect(() => decodeCatalog({ ...response, catalog_yaml: "version: 2\nidentities: &x []\ncomponents: *x" })).toThrow();
   });
 });

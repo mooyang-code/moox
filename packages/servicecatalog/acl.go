@@ -5,77 +5,107 @@ import (
 	"strings"
 )
 
-// Allowed is shared by the console and host gateways. External principal IDs
+// hostGatewayCaller 是 callers 里对每台主机网关的写法，网关以 host-gateway@{主机} 的身份调用。
+const hostGatewayCaller = "host-gateway"
+
+// Allowed is shared by the console and host gateways. External identities
 // never authenticate to a host gateway: only access may forward their requests.
 func (c Catalog) Allowed(caller, servicePath, method string) bool {
-	if caller == "host-gateway@*" {
+	m, ok := c.method(servicePath, method)
+	if !ok {
 		return false
 	}
-	service, ok := c.Service(servicePath)
-	if !ok || !slices.Contains(service.Methods, method) {
+	switch {
+	case caller == OperatorConsole || caller == OperatorMooxCLI:
+		return slices.Contains(m.OperatorList(), caller)
+	case caller == "access":
+		return c.externallyCallable(m)
+	case strings.HasPrefix(caller, hostGatewayCaller+"@"):
+		return identifier.MatchString(strings.TrimPrefix(caller, hostGatewayCaller+"@")) && slices.Contains(m.Callers, hostGatewayCaller)
+	case caller == hostGatewayCaller || c.ExternalIdentity(caller):
 		return false
 	}
-	if caller == "access" && c.externallyAllowed(servicePath, method) {
-		return true
-	}
-	for _, grant := range service.ACL {
-		if !slices.Contains(grant.Methods, method) {
-			continue
-		}
-		for _, allowed := range grant.Callers {
-			if caller == allowed {
-				return true
-			}
-			if allowed == "host-gateway@*" && strings.HasPrefix(caller, "host-gateway@") && identifier.MatchString(strings.TrimPrefix(caller, "host-gateway@")) {
-				return true
-			}
-		}
-	}
-	return false
+	return slices.Contains(m.Callers, caller)
 }
 
+// PrincipalAllowed 报告外部身份能否调用这个方法：方法的 callers 里写了它。
 func (c Catalog) PrincipalAllowed(principal, servicePath, method string) bool {
-	for _, p := range c.Principals {
-		if p.ID != principal {
-			continue
+	m, ok := c.method(servicePath, method)
+	return ok && c.ExternalIdentity(principal) && slices.Contains(m.Callers, principal)
+}
+
+func (c Catalog) method(servicePath, method string) (Method, bool) {
+	service, ok := c.Service(servicePath)
+	if !ok {
+		return Method{}, false
+	}
+	return service.Method(method)
+}
+
+func (c Catalog) externallyCallable(m Method) bool {
+	return slices.ContainsFunc(m.Callers, c.ExternalIdentity)
+}
+
+// ExternalIdentity 报告 id 是否是 identities 里的外部身份。
+func (c Catalog) ExternalIdentity(id string) bool {
+	return slices.ContainsFunc(c.Identities, func(identity Identity) bool { return identity.External && identity.ID == id })
+}
+
+// ExternalIdentities 按目录顺序返回全部外部身份。
+func (c Catalog) ExternalIdentities() []string {
+	ids := []string{}
+	for _, identity := range c.Identities {
+		if identity.External {
+			ids = append(ids, identity.ID)
 		}
-		for _, permission := range p.Allow {
-			if permission.Service == servicePath && slices.Contains(permission.Methods, method) {
-				return true
+	}
+	return ids
+}
+
+// IdentityGrant 是一个身份在一个服务上能调的方法。
+type IdentityGrant struct {
+	Service string
+	Methods []string
+}
+
+// Grants 按目录顺序返回身份能调的服务与方法（由各方法的 callers 推出）。
+func (c Catalog) Grants(identity string) []IdentityGrant {
+	grants := []IdentityGrant{}
+	for _, component := range c.Components {
+		for _, service := range component.Services {
+			grant := IdentityGrant{Service: service.Path}
+			for _, method := range service.Methods {
+				if slices.Contains(method.Callers, identity) {
+					grant.Methods = append(grant.Methods, method.Name)
+				}
+			}
+			if len(grant.Methods) > 0 {
+				grants = append(grants, grant)
 			}
 		}
 	}
-	return false
-}
-
-func (c Catalog) externallyAllowed(servicePath, method string) bool {
-	for _, p := range c.Principals {
-		if c.PrincipalAllowed(p.ID, servicePath, method) {
-			return true
-		}
-	}
-	return false
+	return grants
 }
 
 func (c Catalog) ReadOnly(servicePath, method string) bool {
-	service, ok := c.Service(servicePath)
-	return ok && slices.Contains(service.ReadOnlyMethods, method)
+	m, ok := c.method(servicePath, method)
+	return ok && m.ReadOnly
 }
 
 // Retryable 判断方法在请求可能已发出的网络失败后能否安全重发：只读方法，或声明为幂等的写方法。
 func (c Catalog) Retryable(servicePath, method string) bool {
-	service, ok := c.Service(servicePath)
-	return ok && (slices.Contains(service.ReadOnlyMethods, method) || slices.Contains(service.IdempotentMethods, method))
+	m, ok := c.method(servicePath, method)
+	return ok && (m.ReadOnly || m.Idempotent)
 }
 
-// MissingGrant 是一项授权服务没有部署：调用方的授权指向了它，但提供它的组件不在部署里。
+// MissingGrant 是一项授权服务没有部署：外部身份能调它，但提供它的组件不在部署里。
 type MissingGrant struct {
 	Principal string `json:"principal"`
 	Service   string `json:"service"`
 	Component string `json:"component"`
 }
 
-// MissingGrants 列出授权服务里没有部署的项。Access 要等全部授权服务都进入服务目录才就绪，
+// MissingGrants 列出外部身份能调、但没有部署的服务。Access 要等全部授权服务都进入服务目录才就绪，
 // 所以这里缺一项，部署时就会卡在 Access 未就绪。
 func (c Catalog) MissingGrants(deployed []string) []MissingGrant {
 	providers := map[string]string{}
@@ -86,14 +116,14 @@ func (c Catalog) MissingGrants(deployed []string) []MissingGrant {
 	}
 	missing := []MissingGrant{}
 	seen := map[string]bool{}
-	for _, principal := range c.Principals {
-		for _, grant := range principal.Allow {
+	for _, principal := range c.ExternalIdentities() {
+		for _, grant := range c.Grants(principal) {
 			provider := providers[grant.Service]
 			if seen[grant.Service] || slices.Contains(deployed, provider) {
 				continue
 			}
 			seen[grant.Service] = true
-			missing = append(missing, MissingGrant{Principal: principal.ID, Service: grant.Service, Component: provider})
+			missing = append(missing, MissingGrant{Principal: principal, Service: grant.Service, Component: provider})
 		}
 	}
 	return missing

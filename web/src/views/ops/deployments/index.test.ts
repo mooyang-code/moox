@@ -25,17 +25,26 @@ const component: CatalogComponent = {
   replicas: "multi",
   protected: false,
   health: { kind: "readyz", port: 11013 },
-  services: [{ path: "test.Service", port: 11011, methods: ["Read", "Write"], acl: [{ methods: ["Read"], callers: ["reader"] }] }]
+  services: [
+    {
+      path: "test.Service",
+      port: 11011,
+      methods: [
+        { name: "Read", callers: ["reader"], operators: [] },
+        { name: "Write", operators: [] }
+      ]
+    }
+  ]
 };
 const definition = (name = "外部接入"): CatalogResponse => ({
   catalog_yaml: stringify(
     {
-      version: 1,
+      version: 2,
+      identities: [],
       components: [
         { ...component, name },
         { ...component, id: "host-gateway", name: "主机网关", protected: true }
-      ],
-      principals: []
+      ]
     },
     { aliasDuplicateObjects: false }
   ),

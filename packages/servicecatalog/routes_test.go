@@ -214,17 +214,20 @@ func TestCompilationIsOrderIndependentAndDoesNotMutateInputs(t *testing.T) {
 		t.Fatal("compiler changed input")
 	}
 	slices.Reverse(c.Components)
-	slices.Reverse(c.Principals)
+	slices.Reverse(c.Identities)
 	slices.Reverse(p.Hosts)
 	slices.Reverse(p.Deployments)
 	for i := range c.Components {
 		for j := range c.Components[i].Services {
 			s := &c.Components[i].Services[j]
 			slices.Reverse(s.Methods)
-			slices.Reverse(s.ACL)
-			for k := range s.ACL {
-				slices.Reverse(s.ACL[k].Methods)
-				slices.Reverse(s.ACL[k].Callers)
+			for k := range s.Methods {
+				slices.Reverse(s.Methods[k].Callers)
+				if s.Methods[k].Operators != nil {
+					reversed := slices.Clone(*s.Methods[k].Operators)
+					slices.Reverse(reversed)
+					s.Methods[k].Operators = &reversed
+				}
 			}
 		}
 	}
@@ -252,7 +255,8 @@ func TestHashTracksRemoteDirectoryAndLocalACLChanges(t *testing.T) {
 		t.Fatal("remote address change did not invalidate snapshots")
 	}
 	p = productionTopology()
-	servicePtr(&c, "trpc.moox.collector.CollectMgr").ACL[1].Callers = append(servicePtr(&c, "trpc.moox.collector.CollectMgr").ACL[1].Callers, "monitor")
+	create := methodPtr(&c, "trpc.moox.collector.CollectMgr", "CreateTask")
+	create.Callers = append(create.Callers, "monitor")
 	changed, err = c.Compile(p, "control")
 	if err != nil {
 		t.Fatal(err)
@@ -362,7 +366,7 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 	if !slices.Equal(list.Callers, []string{"console", "monitor", "moox-cli", "strategy"}) || !list.ReadOnly {
 		t.Fatalf("ListArchiveTasks 只读方法允许 monitor 与 strategy: %+v", list)
 	}
-	// ArchiveWorker 的 acl 为空：只有外部身份 archive-worker（经 Access 白名单）能调用。
+	// ArchiveWorker 的方法只有外部身份 archive-worker 能调，网关上的调用方是代它转发的 access。
 	pull := routes["trpc.moox.archive.ArchiveWorker/PullArchiveRun"]
 	if !slices.Equal(pull.Callers, []string{"access"}) {
 		t.Fatalf("PullArchiveRun callers = %v", pull.Callers)

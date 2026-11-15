@@ -80,10 +80,8 @@ func validateExternalIdentity(catalog servicecatalog.Catalog, caller, address, i
 	if !validAddress(address) || !strings.HasPrefix(instanceID, "access@") || !hostID.MatchString(strings.TrimPrefix(instanceID, "access@")) {
 		return errors.New("external client requires an access address and access@host instance ID")
 	}
-	for _, principal := range catalog.Principals {
-		if principal.ID == caller {
-			return nil
-		}
+	if catalog.ExternalIdentity(caller) {
+		return nil
 	}
 	return errors.New("unknown external principal")
 }

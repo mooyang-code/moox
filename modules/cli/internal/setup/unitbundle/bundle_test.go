@@ -104,12 +104,12 @@ func newFixture(t *testing.T, host string, components []string, operator bool) *
 		catalog, err := servicecatalog.LoadEmbedded()
 		require.NoError(t, err)
 		table := accessTable{Version: 1}
-		for _, principal := range catalog.Principals {
+		for _, principal := range catalog.ExternalIdentities() {
 			// Both current and retiring keys remain valid during rotation.
 			for _, generation := range []string{"current", "retiring"} {
-				keyID := principal.ID + "-" + generation
-				name := "caller-" + principal.ID + "-" + keyID + ".key"
-				table.Credentials = append(table.Credentials, accessCredential{KeyID: keyID, Caller: principal.ID, SecretFile: name})
+				keyID := principal + "-" + generation
+				name := "caller-" + principal + "-" + keyID + ".key"
+				table.Credentials = append(table.Credentials, accessCredential{KeyID: keyID, Caller: principal, SecretFile: name})
 				f.files["secrets/access/"+name] = []byte(strings.Repeat("external-test-secret-", 3) + "\n")
 			}
 		}

@@ -3,6 +3,7 @@ package cloud
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -730,6 +731,24 @@ func TestOnlyFunctionAndNamespaceLimitsAreQuota(t *testing.T) {
 	client.ReservedErrs = []error{tcerrors.NewTencentCloudSDKError("LimitExceeded.FunctionReservedConcurrencyMemory", "超过账号的预留并发总额", "req-1")}
 	require.ErrorIs(t, newTestFunctions(t, client).Ensure(ctx, backfillSpec()), ErrQuota)
 	require.Equal(t, 1, client.Count("PutReservedConcurrencyConfig"), "配额超限不重试")
+}
+
+// 接管的旧函数还带着 Storage 鉴权删除前注入的 Storage 写入密钥：只差这一项也算不一致，写一次把它删掉，其余键保留。
+func TestEnsureRemovesRetiredStorageAuthKey(t *testing.T) {
+	ctx := context.Background()
+	fake := newBaselineSCF()
+	environment := timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2")
+	desired := maps.Clone(environment)
+	environment["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"] = `{"moox-collector":"retired"}`
+	environment["OPERATOR_EXTRA"] = "kept"
+	require.False(t, environmentMatches(environment, desired), "带着旧的 Storage 写入密钥不算一致")
+	seedTimerFunction(fake, "Active", baselineOldPackage, environment, enabledTimer("5 * * * * * *"))
+	functions := newTestFunctions(t, fake)
+	require.NoError(t, functions.Ensure(ctx, finalSpec("v1")))
+	function := functionState(t, fake, baselineRef)
+	require.NotContains(t, function.Environment, "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON")
+	require.Equal(t, "kept", function.Environment["OPERATOR_EXTRA"])
+	require.True(t, environmentMatches(function.Environment, desired))
 }
 
 // 云上只剩废弃键（旧的创建预留号）不同：Ensure 写一次把它删掉，之后不再写；环境单独变化时改配置只带环境与超时。

@@ -144,7 +144,7 @@ $S catalog-changed --host control                    # 用台账里最近一次 
 2. 重启该组件，再验证。
 3. 把这次手工改动写进文档（例如 Admin 的 `trpc.moox.ops.SysDeploy` 服务端 `timeout` 已手工改为 300000），否则下次重建发布目录会丢。
 
-目录里的方法超时（`method_timeouts_ms`）要和服务端 `trpc_go.yaml` 的 `timeout` 配套：服务端不小于目录。
+目录里的方法超时（方法上的 `timeout_ms`）要和服务端 `trpc_go.yaml` 的 `timeout` 配套：服务端不小于目录。
 
 ### Collector 的 `delist.auto_detect`
 

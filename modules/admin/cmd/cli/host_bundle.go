@@ -175,8 +175,8 @@ func hostAccessVerification(ctx context.Context, store *keys.Store, host hostbun
 	if err != nil {
 		return nil, err
 	}
-	for _, principal := range catalog.Principals {
-		if _, err := store.Ensure(ctx, principal.ID); err != nil {
+	for _, principal := range catalog.ExternalIdentities() {
+		if _, err := store.Ensure(ctx, principal); err != nil {
 			return nil, err
 		}
 	}

@@ -20,13 +20,14 @@ const (
 	timeoutKey = "MOOX_FETCH_TIMEOUT_SECONDS"
 )
 
-// removedEnvironmentKeys 是写入时从云上现有环境里删掉的键：创建预留号（预留机制已删除），
-// 以及已经废弃的 DNS 受管键。写入以云上环境为底合并，不显式删掉的话会一直留在按函数名接管的旧函数上。
+// removedEnvironmentKeys 是写入时从云上现有环境里删掉的键：创建预留号（预留机制已删除）、已经废弃的 DNS 受管键，
+// 以及 Storage 鉴权删除前注入的 Storage 写入密钥。写入以云上环境为底合并，不显式删掉的话会一直留在按函数名接管的旧函数上。
 var removedEnvironmentKeys = []string{
 	"MOOX_CREATE_RESERVATION_ID",
 	"MOOX_MARKET_FETCH_DNS_ROUTES_JSON",
 	"MOOX_MARKET_FETCH_DNS_HASH",
 	"MOOX_MARKET_FETCH_DNS_UPDATED_AT",
+	"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON",
 }
 
 // secretEnvironmentKeys 与 secretEnvironmentSuffixes 是读回结果带出包外之前去掉的密钥项：调用方密钥、CLS 写入密钥，
@@ -61,7 +62,7 @@ func environmentCovers(current, want map[string]string) bool {
 	return true
 }
 
-// environmentMatches 判断云上环境已经是期望的样子：期望的每一项都在且相等，并且没有要删掉的废弃键（创建预留号、DNS 键）。
+// environmentMatches 判断云上环境已经是期望的样子：期望的每一项都在且相等，并且没有要删掉的废弃键（创建预留号、DNS 键、旧的 Storage 写入密钥）。
 // 云上还带着废弃键时算不一致，让 Ensure 写一次把它们删掉。
 // 只用于决定要不要写；写后读回校验用 environmentCovers，免得云上按键合并环境时废弃键删不掉而永远校验失败。
 func environmentMatches(current, want map[string]string) bool {

@@ -68,24 +68,14 @@ func New(options Options) (*Proxy, error) {
 }
 
 func (p *Proxy) deny(caller, service, method, reason, message string) (*codec.Body, error) {
-	known := false
-	for _, principal := range p.catalog.Principals {
-		known = known || principal.ID == caller
-	}
-	if !known {
+	if !p.catalog.ExternalIdentity(caller) {
 		caller = "unknown"
 	}
 	spec, ok := p.catalog.Service(service)
 	if !ok {
 		service, method = "unknown", "unknown"
-	} else {
-		found := false
-		for _, registered := range spec.Methods {
-			found = found || registered == method
-		}
-		if !found {
-			method = "unknown"
-		}
+	} else if _, found := spec.Method(method); !found {
+		method = "unknown"
 	}
 	p.denials.WithLabelValues(caller, service, method, reason).Inc()
 	return nil, errors.New(message)

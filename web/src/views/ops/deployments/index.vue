@@ -251,9 +251,9 @@
           </section>
           <section v-for="service in detail.row.definition?.services || []" :key="service.path" class="service-detail">
             <h4>{{ service.path }} :{{ service.port }}</h4>
-            <p>方法：{{ service.methods.join(", ") }}</p>
-            <p v-for="(grant, index) in service.acl" :key="index">
-              {{ grant.methods.join(", ") }} → {{ grant.callers.join(", ") }}
+            <p v-for="method in service.methods" :key="method.name">
+              {{ method.name }}{{ method.read_only ? "（只读）" : "" }} →
+              {{ methodCallerIds(method).join(", ") || "无调用方" }}
             </p>
           </section>
           <h4>上报实例</h4>
@@ -272,7 +272,7 @@ import { computed, ref, watch } from "vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import RawError from "@/views/ops/monitor/raw-error.vue";
 import { statusColor, statusLabel } from "@/views/ops/monitor/health-display";
-import { componentPorts, gatewayLabel, groupRoutes, routeSync } from "./model";
+import { componentPorts, gatewayLabel, groupRoutes, methodCallerIds, routeSync } from "./model";
 import TopologyView from "./topology-view.vue";
 import { useDeployments } from "./use-deployments";
 import { formatInstant } from "@/utils/time-zone";

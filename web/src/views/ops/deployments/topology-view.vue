@@ -206,7 +206,8 @@
         >数据流向依据总体设计的采集、因子、策略链路，按当前部署落到节点上；未部署的环节自动略过。</template
       >
       <template v-else
-        >调用关系依据组件目录的逐方法 ACL 与外部调用方（principals）推导；消息总线的事件订阅见「数据流向」。</template
+        >调用关系依据组件目录里各方法的调用方（callers 与
+        operators）推导，外部身份经外部接入转发；消息总线的事件订阅见「数据流向」。</template
       >
       <template v-if="topology.unplaced.length">目录中未部署：{{ topology.unplaced.join("、") }}。</template>
     </p>

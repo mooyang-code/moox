@@ -85,7 +85,7 @@ func runAccessNative(hostID, storageAddress, listenAddress, readyFile, nonceDire
 		}
 		spec, _ := catalog.Service(selected.path)
 		var methods []string
-		for _, method := range spec.Methods {
+		for _, method := range spec.MethodNames() {
 			if catalog.Allowed("access", selected.path, method) {
 				methods = append(methods, method)
 			}
@@ -292,7 +292,7 @@ func runComponentsNative(components []string, nodeID, upstreamAddress, listenAdd
 		}
 		for _, spec := range component.Services {
 			var methods []string
-			for _, method := range spec.Methods {
+			for _, method := range spec.MethodNames() {
 				if catalog.Allowed(caller, spec.Path, method) {
 					methods = append(methods, method)
 				}

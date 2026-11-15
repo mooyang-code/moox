@@ -132,8 +132,8 @@ func updateReady(state *healthz.State, gateway *gatewayclient.Client) []string {
 	catalog, err := servicecatalog.LoadEmbedded()
 	ready := err == nil && directory.Version != ""
 	missing := []string{}
-	for _, principal := range catalog.Principals {
-		for _, grant := range principal.Allow {
+	for _, principal := range catalog.ExternalIdentities() {
+		for _, grant := range catalog.Grants(principal) {
 			if len(directory.Services[grant.Service]) == 0 && !slices.Contains(missing, grant.Service) {
 				missing = append(missing, grant.Service)
 			}

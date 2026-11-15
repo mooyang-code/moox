@@ -6,11 +6,11 @@
 ## 前置条件
 
 - 命令在产物包（或仓库）根目录执行，读取当前目录的 `moox.toml`（`--file` 指定）；`moox-cli` 与存储机上部署包里的 `moox-storage-cli` 必须来自同一版本发布包。
-- Storage 维护命令（`repair-view`、`reset-metadata`、`delete-view`）不调用 Admin、不连接 EventBus，不需要任何 EventBus 凭据。
+- Storage 维护命令（`repair-view`、`delete-view`）不调用 Admin、不连接 EventBus，不需要任何 EventBus 凭据。
 - 不要把任何 token、HMAC 写进命令、脚本、日志或 Skill。
 - `--yes` 才会执行修改；不带 `--yes` 时 `moox-cli storage …` 自动加 `--dry-run` 只预览（`delete-view` 没有预览，不带 `--yes` 会被拒绝）。
 - 路径参数（`--storage-conf`、`--package-root`、`--metadata-db`）缺省时按部署目录补齐（`<storage_root>/current/…`），不要再手写路径。
-- 命令输出 sanitized JSON，同时保存在存储机 `<storage_root>/maintenance/<动作>-<时间>.log`；应保留 `backup`（reset-metadata 的元数据备份）、`view_indexes_removed` 和 `restarted` 等字段用于运维记录。退出码与存储机上的程序一致。
+- 命令输出 sanitized JSON，同时保存在存储机 `<storage_root>/maintenance/<动作>-<时间>.log`；应保留 `view_indexes_removed` 和 `restarted` 等字段用于运维记录。退出码与存储机上的程序一致。
 - 用 `--host <主机 ID>` 可以指定在哪台主机上执行（默认 `storage-primary` 所在主机）；`--help` 只显示本地说明，不连接主机。
 
 ## Factor 周期诊断与补算

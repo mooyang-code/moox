@@ -31,6 +31,9 @@ const (
 	FunctionalObservabilityNotApplicable FunctionalObservability = "not_applicable"
 )
 
+// ManifestVersion 是 Doctor 清单自己的格式版本，与服务目录的版本无关（目录改写调用权限不影响 doctor 段）。
+const ManifestVersion = 1
+
 type Manifest struct {
 	Version    int         `yaml:"version" json:"version"`
 	Components []Component `yaml:"components" json:"components"`
@@ -92,7 +95,7 @@ func loadManifest(raw []byte, source string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, fmt.Errorf("decode %s: %w", source, err)
 	}
-	manifest := Manifest{Version: catalog.Version, Components: make([]Component, 0, len(catalog.Components))}
+	manifest := Manifest{Version: ManifestVersion, Components: make([]Component, 0, len(catalog.Components))}
 	for _, component := range catalog.Components {
 		metadata := component.Doctor
 		supervisor := metadata.Supervisor
@@ -126,7 +129,7 @@ func loadManifest(raw []byte, source string) (Manifest, error) {
 }
 
 func (m Manifest) Validate() error {
-	if m.Version != 1 {
+	if m.Version != ManifestVersion {
 		return fmt.Errorf("unsupported manifest version %d", m.Version)
 	}
 	if len(m.Components) == 0 {

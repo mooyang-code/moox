@@ -1,8 +1,8 @@
 import type { ComponentCatalog, DeploymentHost } from "@/api/admin/types";
 import type { HealthStatus } from "@/api/monitor";
-import type { DeploymentRow } from "./model";
+import { methodCallerIds, type DeploymentRow } from "./model";
 
-// 服务拓扑：调用关系只依据组件目录（ACL、principals）、主机与部署推导，不凭印象补关系；
+// 服务拓扑：调用关系只依据组件目录（各方法的 callers 与 operators）、主机与部署推导，不凭印象补关系；
 // 数据流向是总体设计第 5、6 节的固定链路（事件订阅不在目录里），按实际部署落到节点上。
 // 坐标在这里一次算好，HTML 节点和 SVG 连线共用，刷新时不抖动，也能在无 DOM 环境下测试。
 
@@ -46,7 +46,7 @@ const LAYER_OF: Record<string, TopologyLayer> = {
   "host-gateway": "infra",
   "host-agent": "infra"
 };
-// 外部调用方的展示名；目录里新增的 principal 没有登记时直接显示 ID。
+// 外部调用方的展示名；目录里新增的外部身份没有登记时直接显示 ID。
 const EXTERNAL_LABELS: Record<string, { name: string; note: string }> = {
   // 数据流向经过的外部节点排在一起，避免流向线横穿其他外部节点。
   market: { name: "行情源", note: "交易所 / 行情接口" },
@@ -240,10 +240,9 @@ export function buildTopology(input: TopologyInput): Topology {
     height: hostsBottom - hostsTop
   }));
 
-  // 2. 由 ACL 与 principals 推导调用关系；同一对节点的多个服务合并成一条边。
+  // 2. 由各方法的调用方推导调用关系；同一对节点的多个服务合并成一条边。外部身份经外部接入 access 转发。
   const componentIds = new Set(components.map(item => item.id));
-  const owner = new Map<string, string>();
-  for (const component of components) for (const service of component.services || []) owner.set(service.path, component.id);
+  const external = externalIdentities(input.catalog);
   const placed = new Map<string, TopologyNode[]>();
   for (const node of nodes) if (node.componentId) placed.set(node.componentId, [...(placed.get(node.componentId) || []), node]);
   const nodeById = new Map(nodes.map(node => [node.id, node]));
@@ -267,21 +266,13 @@ export function buildTopology(input: TopologyInput): Topology {
   for (const component of components) {
     for (const service of component.services || []) {
       const targets = placed.get(component.id) || [];
-      const callers = [...new Set(service.acl.flatMap(grant => grant.callers))];
+      const callers = [...new Set(service.methods.flatMap(methodCallerIds))];
       for (const caller of callers) {
         const sources = sourcesOf(caller, placed, nodeById);
         const category = categoryOf(caller, componentIds.has(caller));
-        for (const target of targets) for (const source of sources) link(source, target, category, service.path, viaOf(caller));
+        const via = external.has(caller) ? "经外部接入 access :11004 转发" : viaOf(caller);
+        for (const target of targets) for (const source of sources) link(source, target, category, service.path, via);
       }
-    }
-  }
-  for (const principal of input.catalog?.principals || []) {
-    const sources = sourcesOf(principal.id, placed, nodeById);
-    const category = categoryOf(principal.id, componentIds.has(principal.id));
-    for (const grant of principal.allow) {
-      const componentId = owner.get(grant.service);
-      for (const target of (componentId && placed.get(componentId)) || [])
-        for (const source of sources) link(source, target, category, grant.service, "经外部接入 access :11004 转发");
     }
   }
   for (const entry of ENTRY_LINKS) {
@@ -305,14 +296,16 @@ export function buildTopology(input: TopologyInput): Topology {
   };
 }
 
+function externalIdentities(catalog?: ComponentCatalog) {
+  return new Set((catalog?.identities || []).filter(item => item.external).map(item => item.id));
+}
 function collectExternals(catalog?: ComponentCatalog) {
   const componentIds = new Set((catalog?.components || []).map(item => item.id));
   const ids = new Set<string>(["market", "console"]);
   for (const component of catalog?.components || [])
     for (const service of component.services || [])
-      for (const grant of service.acl)
-        for (const caller of grant.callers) if (!componentIds.has(caller) && caller !== "host-gateway@*") ids.add(caller);
-  for (const principal of catalog?.principals || []) if (!componentIds.has(principal.id)) ids.add(principal.id);
+      for (const method of service.methods)
+        for (const caller of methodCallerIds(method)) if (!componentIds.has(caller)) ids.add(caller);
   const order = Object.keys(EXTERNAL_LABELS);
   return [...ids]
     .sort((a, b) => rank(order, a) - rank(order, b) || a.localeCompare(b))
@@ -322,18 +315,18 @@ function rank(order: string[], id: string) {
   const index = order.indexOf(id);
   return index < 0 ? order.length : index;
 }
+// callers 里的 host-gateway 指每台主机的网关，正好是各主机上部署的 host-gateway 节点。
 function sourcesOf(caller: string, placed: Map<string, TopologyNode[]>, nodeById: Map<string, TopologyNode>) {
-  if (caller === "host-gateway@*") return placed.get("host-gateway") || [];
   return placed.get(caller) || [nodeById.get(`ext:${caller}`)].filter(isNode);
 }
 function categoryOf(caller: string, isComponent: boolean): EdgeCategory {
   if (caller === "monitor") return "monitor";
-  if (caller === "console" || caller === "moox-cli" || caller === "host-gateway@*") return "ops";
+  if (caller === "console" || caller === "moox-cli" || caller === "host-gateway") return "ops";
   return isComponent ? "business" : "entry";
 }
 function viaOf(caller: string) {
   if (caller === "console") return "经 console-proxy → Admin 以 console 身份转发";
-  if (caller === "host-gateway@*") return "主机网关拉取路由快照";
+  if (caller === "host-gateway") return "主机网关拉取路由快照";
   return "";
 }
 function routeOf(from: TopologyNode, to: TopologyNode, hosts: Map<string, DeploymentHost>): EdgeRoute {

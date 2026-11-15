@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -221,16 +220,10 @@ func TestRPCSpecsMatchProtoAndCatalog(t *testing.T) {
 	for _, component := range catalog.Components {
 		for _, service := range component.Services {
 			known[service.Path] = map[string]bool{}
-			for _, m := range service.Methods {
-				known[service.Path][m] = true
-			}
 			allowed[service.Path] = map[string]bool{}
-			for _, acl := range service.ACL {
-				if slices.Contains(acl.Callers, "moox-cli") {
-					for _, m := range acl.Methods {
-						allowed[service.Path][m] = true
-					}
-				}
+			for _, m := range service.MethodNames() {
+				known[service.Path][m] = true
+				allowed[service.Path][m] = catalog.Allowed(servicecatalog.OperatorMooxCLI, service.Path, m)
 			}
 		}
 	}
@@ -315,11 +308,8 @@ func TestEveryConsoleMethodHasACommandOrAReason(t *testing.T) {
 	console := map[string]bool{}
 	for _, component := range catalog.Components {
 		for _, service := range component.Services {
-			for _, acl := range service.ACL {
-				if !slices.Contains(acl.Callers, "console") {
-					continue
-				}
-				for _, method := range acl.Methods {
+			for _, method := range service.MethodNames() {
+				if catalog.Allowed(servicecatalog.OperatorConsole, service.Path, method) {
 					console[service.Path+"/"+method] = true
 				}
 			}
@@ -369,15 +359,11 @@ func TestCollectorCloudMethodsHaveACommandOrAReason(t *testing.T) {
 	callers := map[string]map[string]bool{}
 	for _, component := range catalog.Components {
 		for _, service := range component.Services {
-			for _, acl := range service.ACL {
-				for _, method := range acl.Methods {
-					key := service.Path + "/" + method
-					if callers[key] == nil {
-						callers[key] = map[string]bool{}
-					}
-					for _, caller := range acl.Callers {
-						callers[key][caller] = true
-					}
+			for _, method := range service.MethodNames() {
+				key := service.Path + "/" + method
+				callers[key] = map[string]bool{}
+				for _, operator := range []string{servicecatalog.OperatorConsole, servicecatalog.OperatorMooxCLI} {
+					callers[key][operator] = catalog.Allowed(operator, service.Path, method)
 				}
 			}
 		}

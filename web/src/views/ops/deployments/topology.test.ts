@@ -67,7 +67,7 @@ describe("service topology", () => {
     expect(layerOf("future-component")).toBe("other");
   });
 
-  it("derives component calls from ACLs and marks cross-host and relayed routes", () => {
+  it("derives component calls from method callers and marks cross-host and relayed routes", () => {
     const { edges } = build();
     const collectorToPrimary = edge(edges, key("control", "collector"), key("storage", "storage-primary"));
     expect(collectorToPrimary).toMatchObject({ category: "business", route: "cross" });
@@ -81,7 +81,7 @@ describe("service topology", () => {
     expect(edges.some(item => item.from === item.to)).toBe(false);
   });
 
-  it("links principals and console callers as external sources", () => {
+  it("links external identities and console callers as external sources", () => {
     const topology = build();
     const ids = topology.nodes.filter(node => node.kind === "external").map(node => node.id);
     // 数据流向经过的外部节点排在最前，彼此相邻。
@@ -89,7 +89,7 @@ describe("service topology", () => {
     // 因子引擎、归档 Worker 是登记在主机上的外部程序组件，不再作为外部节点。
     expect(ids).not.toContain("ext:factor-engine");
     expect(ids).not.toContain("ext:archive-worker");
-    // FactorEngine 的 ACL 没有调用方，只能从 principals 推出因子机上的因子引擎到因子管理的链路。
+    // FactorEngine 的方法只有外部身份 factor-engine 能调：因子机上的因子引擎经外部接入到因子管理。
     expect(edge(topology.edges, key("factor", "factor-engine"), key("control", "factor-mgr"))).toMatchObject({
       category: "business",
       services: ["trpc.moox.factor.FactorEngine"]

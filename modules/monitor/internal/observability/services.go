@@ -99,9 +99,9 @@ func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceSta
 	}
 	// Catalog principals run outside host deployments (for example SCF). Their
 	// metrics remain available to business checks without inventing deployments.
-	external := make(map[string]bool, len(snapshot.Catalog.Principals))
-	for _, principal := range snapshot.Catalog.Principals {
-		external[principal.ID] = true
+	external := make(map[string]bool)
+	for _, principal := range snapshot.Catalog.ExternalIdentities() {
+		external[principal] = true
 	}
 	var unregistered []ServiceStatus
 	for _, row := range rows {

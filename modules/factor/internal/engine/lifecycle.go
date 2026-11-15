@@ -141,6 +141,9 @@ func (r *Runtime) quiesce(ctx context.Context, ref lifecycle.Ref) error {
 // leaseAllowed 报告是否可以领取补算作业：模块级生命周期放行才领取。不用 active()，它还服务于消费者、预载与数据同步。
 func (r *Runtime) leaseAllowed() bool { return r.life == nil || r.life.ModuleOpen() }
 
+// preloadBlocked 是预载循环的门禁：模块暂停、恢复追赶期间预载循环不把数据拉回本地。
+func (r *Runtime) preloadBlocked() bool { return r.life != nil && r.life.Halted(lifecycle.Ref{}) }
+
 func (r *Runtime) lifecycleObjects() []lifecycle.Ref {
 	ids := r.catalog.TaskIDs()
 	refs := make([]lifecycle.Ref, 0, len(ids))

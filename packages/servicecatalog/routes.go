@@ -257,15 +257,15 @@ func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
 				continue
 			}
 			for _, method := range service.Methods {
-				callers := c.routeCallers(service, method, t.Hosts)
+				callers := c.routeCallers(method, t.Hosts)
 				if len(callers) == 0 {
 					continue
 				}
-				timeout, limit := service.TimeoutFor(method), service.MaxBodyBytes
+				timeout, limit := service.TimeoutFor(method.Name), service.MaxBodyBytes
 				if limit == 0 {
 					limit = DefaultMaxBodyBytes
 				}
-				compiled.Routes = append(compiled.Routes, Route{ComponentID: component.ID, ServicePath: service.Path, Method: method, Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMS: timeout, MaxBodyBytes: limit, ReadOnly: slices.Contains(service.ReadOnlyMethods, method), Callers: callers})
+				compiled.Routes = append(compiled.Routes, Route{ComponentID: component.ID, ServicePath: service.Path, Method: method.Name, Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMS: timeout, MaxBodyBytes: limit, ReadOnly: method.ReadOnly, Callers: callers})
 				for _, caller := range callers {
 					verification[caller] = true
 				}
@@ -331,7 +331,7 @@ func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 			}
 			for _, service := range component.Services {
 				for _, method := range service.Methods {
-					for _, caller := range c.routeCallers(service, method, t.Hosts) {
+					for _, caller := range c.routeCallers(method, t.Hosts) {
 						gateway[caller] = true
 					}
 				}
@@ -437,26 +437,26 @@ func (r RelayTarget) Allowed(caller string, port int) bool {
 	return false
 }
 
-func (c Catalog) routeCallers(service Service, method string, hosts []Host) []string {
+// routeCallers 是网关上这条路由的调用方：人操作身份按 operators，host-gateway 展开成每台已登记主机的网关，
+// 外部身份统一由 access 代为转发。
+func (c Catalog) routeCallers(method Method, hosts []Host) []string {
 	set := map[string]bool{}
-	for _, grant := range service.ACL {
-		if !slices.Contains(grant.Methods, method) {
-			continue
-		}
-		for _, caller := range grant.Callers {
-			if caller == "host-gateway@*" {
-				// Disabled hosts must still authenticate to obtain their disabled
-				// snapshot. Removed hosts disappear from this scope immediately.
-				for _, host := range hosts {
-					set["host-gateway@"+host.ID] = true
-				}
-			} else {
-				set[caller] = true
-			}
-		}
+	for _, operator := range method.OperatorList() {
+		set[operator] = true
 	}
-	if c.externallyAllowed(service.Path, method) {
-		set["access"] = true
+	for _, caller := range method.Callers {
+		switch {
+		case caller == hostGatewayCaller:
+			// Disabled hosts must still authenticate to obtain their disabled
+			// snapshot. Removed hosts disappear from this scope immediately.
+			for _, host := range hosts {
+				set[hostGatewayCaller+"@"+host.ID] = true
+			}
+		case c.ExternalIdentity(caller):
+			set["access"] = true
+		default:
+			set[caller] = true
+		}
 	}
 	callers := make([]string, 0, len(set))
 	for caller := range set {

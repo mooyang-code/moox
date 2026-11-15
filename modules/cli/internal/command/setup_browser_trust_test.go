@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -80,4 +81,20 @@ func TestSetupBrowserTrustWithoutTerminalPrintsManualCommand(t *testing.T) {
 	err := ensureSetupBrowserCATrust(context.Background(), snapshot)
 	require.ErrorContains(t, err, "browser_trust_manual")
 	require.ErrorContains(t, err, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
+}
+
+// 浏览器信任每次都先经 SSH 从控制机取回内部 CA 根证书，取不回时报 browser_ca_trust_failed，不用本机残留的旧副本。
+func TestEnsureSetupBrowserCATrustRefreshesNativeControlCA(t *testing.T) {
+	original := refreshSetupConsoleCA
+	t.Cleanup(func() { refreshSetupConsoleCA = original })
+	calls := 0
+	refreshSetupConsoleCA = func(context.Context, setupconfig.Manifest) error {
+		calls++
+		return errors.New("ssh unavailable")
+	}
+
+	err := ensureSetupBrowserCATrust(context.Background(), setupSnapshot(t))
+	require.ErrorContains(t, err, "browser_ca_trust_failed")
+	require.True(t, strings.Contains(err.Error(), "ssh unavailable"))
+	require.Equal(t, 1, calls)
 }

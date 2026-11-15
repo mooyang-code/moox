@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
@@ -87,6 +88,27 @@ func TestEngineLifecycleGatesTaskUntilStarted(t *testing.T) {
 	_, err = r.life.Command(ctx, lifecycle.CmdPause, ref)
 	require.NoError(t, err)
 	require.False(t, r.gate("ftask_a"), "暂停后不计算")
+}
+
+// 模块暂停、恢复追赶期间预载循环不运行，不会自己把数据拉回本地；放行后恢复。门禁用的是 NewRuntime 接上的同一个函数。
+func TestPreloaderIsBlockedWhileTheModuleIsHalted(t *testing.T) {
+	r, fake := newLifecycleRuntime(t)
+	ctx := context.Background()
+	r.preload.blocked = r.preloadBlocked
+	r.life.Refresh(ctx)
+
+	_, err := r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem})
+	require.NoError(t, err)
+	require.True(t, r.preloadBlocked())
+	r.preload.once(ctx)
+	require.Empty(t, fake.prepared, "暂停时预载循环不运行")
+
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return !r.life.Halted(lifecycle.Ref{}) }, 3*time.Second, 20*time.Millisecond)
+	require.False(t, r.preloadBlocked())
+	r.preload.once(ctx)
+	require.NotEmpty(t, fake.prepared, "放行后预载循环恢复")
 }
 
 // 已预载且回看够长的任务再次 init 不重复预载。
