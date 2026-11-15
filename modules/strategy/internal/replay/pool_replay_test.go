@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -175,6 +176,23 @@ func requireSameAsWarmUp(t *testing.T, bars []store.ReplayBar, decisions []engin
 	}
 }
 
+// poolBaselineCompare 把池回放写出的逐期记录（目标、账本、收益、权益、换手、费用，summary_json 里含 pool 与 limits）与最终绩效
+// 和 testdata/baseline/pool_<name>.json 比较；UPDATE_BASELINE=1 时重新生成。回放对预热的互比两边走同一套读取代码，
+// 读取改动时会一起变，这份金样单独守住回放的结果。时间都由固定的 origin 推出，不含随机 ID，导出的内容是确定的。
+func poolBaselineCompare(t *testing.T, repo *store.Store, id, name, raw string, members []input.PoolMemberDef) {
+	t.Helper()
+	done, err := repo.GetReplay(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberDSL := map[string]string{}
+	for _, member := range members {
+		memberDSL[member.ID] = member.DSLYaml
+	}
+	dump := map[string]any{"dsl": raw, "members": memberDSL, "metrics": baselineDecode(t, done.MetricsJSON), "bars": baselineBarRecords(t, barsOf(t, repo, id))}
+	baselineCompare(t, filepath.Join("testdata", "baseline", "pool_"+name+".json"), baselineJSON(t, dump))
+}
+
 func replayMetrics(t *testing.T, repo *store.Store, id string) (store.Replay, Metrics) {
 	t.Helper()
 	done, err := repo.GetReplay(context.Background(), id)
@@ -218,6 +236,7 @@ func TestPoolReplayMatchesWarmUpBarByBar(t *testing.T) {
 	if !moved || metrics.AverageHoldings == 0 {
 		t.Fatalf("池级账本应按池目标持仓：%+v", metrics)
 	}
+	poolBaselineCompare(t, repo, "p1", "rotation", raw, list)
 }
 
 // drift、超限转移（P1）、条件转移（P2）、净敞口（P4）、总杠杆（P5）、波动冻结（P6）各一个回放用例：都与预热逐期一致，且功能在回放里真的生效。
@@ -314,6 +333,7 @@ func TestPoolReplayFeaturesMatchWarmUp(t *testing.T) {
 			if !anyPool(decisions, item.effective) {
 				t.Fatalf("%s 在回放区间里没有生效，用例没有检验到它", item.name)
 			}
+			poolBaselineCompare(t, repo, job.ReplayID, item.name, raw, item.members)
 		})
 	}
 }
