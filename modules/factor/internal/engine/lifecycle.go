@@ -130,17 +130,7 @@ func (r *Runtime) beginWrite(_ context.Context, taskID string, live, catchup boo
 	return release, true
 }
 
-// beginReplayWrite 是回放写回的登记式门禁：回放的任务不一定处于预热或运行，所以只在被有意停下（暂停、恢复追赶、重置、故障）时拒绝。
-func (r *Runtime) beginReplayWrite(_ context.Context, taskID string) (func(), bool) {
-	release := r.writes.enter(taskID)
-	if r.life.Halted(lifecycle.Ref{}) || r.life.Halted(setRef(taskID)) {
-		release()
-		return nil, false
-	}
-	return release, true
-}
-
-// quiesce 是生命周期的 Quiesce 钩子：门禁已经关闭，等在途的写结果操作（实时计算、补算分块、追赶推进、回放写回、补算领取）结束。
+// quiesce 是生命周期的 Quiesce 钩子：门禁已经关闭，等在途的写结果操作（实时计算、补算分块、追赶推进、补算领取）结束。
 func (r *Runtime) quiesce(ctx context.Context, ref lifecycle.Ref) error {
 	taskID := ""
 	if ref != (lifecycle.Ref{}) {

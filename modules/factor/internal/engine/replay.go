@@ -2,41 +2,44 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
+	"math"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
 	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
-	"github.com/mooyang-code/moox/modules/factor/internal/seriessync"
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/factorname"
+	"github.com/mooyang-code/moox/packages/seriesset"
+	"google.golang.org/protobuf/proto"
 )
 
-// 逐期回放的因子侧接口（设计 9.2）：回放服务通过它按时间顺序逐期取因子帧。回放窗口是会话开始时从本地存储取的快照，
-// 运行中不随修正更新；每期走实时计算路径（pipeline.Compute）；回放不发周期完成事件，不改连续水位。
-// 接口挂在健康检查端口上（只监听本机，沿用健康检查的签名鉴权）。
+// 回放的“因子现算”来源：策略服务经主机网关调引擎的 EngineControl 服务（replay_rpc.go），按时间顺序逐步取因子帧。
+// 回放窗口是会话开始时从本地存储取的快照，运行中不随修正更新；每期走实时计算路径（pipeline.Compute）；
+// 回放不写结果、不发周期完成事件、不改连续水位。
 //
-//	POST /v1/replay/open   建立会话：校验数据、按预热区间读快照、预留内存
-//	POST /v1/replay/step   计算一期，返回因子帧、源数据列、报价与标的年龄
-//	POST /v1/replay/close  结束会话，释放内存
+//	OpenReplay   建立会话：校验数据、按预热区间读快照、预留内存
+//	StepReplay   从某一期起算若干期，按（标的, series_tag）返回请求的列、上一期的同名列、生效参数与年龄
+//	CloseReplay  结束会话，释放内存
 
 const (
-	replayOpenTimeout   = 30 * time.Minute
-	replayIdleTimeout   = 6 * time.Hour
-	replayReserveWait   = time.Minute
-	maxReplayBody       = 1 << 20
-	replayWriteBatchMin = 1000
+	// replayOpenTimeout 与目录里 OpenReplay 的路由超时（10 分钟）一致。
+	replayOpenTimeout = 10 * time.Minute
+	replayIdleTimeout = 6 * time.Hour
+	replayReserveWait = time.Minute
+	// replayStepMaxBytes 是单步响应的上限：服务的包体上限是默认的 4 MiB，留出余量。
+	replayStepMaxBytes = 3 << 20
 )
 
 // ReplayDeps 是回放会话用到的引擎能力。
@@ -44,27 +47,47 @@ type ReplayDeps struct {
 	Sets interface {
 		SetByID(string) (domain.EngineTask, SetLookup)
 	}
-	Source  SourceDataset
-	Columns interface {
-		ListColumns(ctx context.Context, spaceID, datasetID string) ([]storageio.ColumnInfo, error)
-	}
-	Store *seriesstore.Store
+	Source SourceDataset
+	Store  *seriesstore.Store
 	// Synced 返回数据源上正在同步的标的（目录里同源启用任务的范围）：observed 成员的历史截面不纳入其他任务正在同步、
 	// 而本任务范围不含的标的（与实时计算同一规则，localdata.HistoryRule）。nil 表示只看本任务的范围。
-	Synced  func(context.Context, seriesstore.Source) ([]string, error)
-	Runner  *pipeline.Runner
-	Admit   *memadmit.Admitter
-	Now     func() time.Time
-	BatchOK func() int
-	// Begin 非空时是写回的登记式门禁：先登记在途、再检查门禁；不允许时拒绝写回（暂停、恢复追赶、重置期间）。
-	Begin func(ctx context.Context, taskID string) (func(), bool)
+	Synced func(context.Context, seriesstore.Source) ([]string, error)
+	Runner *pipeline.Runner
+	Admit  *memadmit.Admitter
+	Now    func() time.Time
 	// Pin 非空时在会话建立期间固定任务引用的自定义算子模块（返回释放函数）：从读取任务到会话登记之间目录可能切换版本，
 	// 没有它，这段时间里的回收会把会话马上要用的版本卸载。
 	Pin func(set domain.EngineTask) func()
 }
 
+// replayError 带上回放失败对应的返回码：会话不存在（NOT_FOUND）时调用方要重新建立会话。
+type replayError struct {
+	code commonpb.ErrorCode
+	err  error
+}
+
+func (e *replayError) Error() string { return e.err.Error() }
+func (e *replayError) Unwrap() error { return e.err }
+
+func replayFail(code commonpb.ErrorCode, format string, args ...any) error {
+	return &replayError{code: code, err: fmt.Errorf(format, args...)}
+}
+
+func replayWrap(code commonpb.ErrorCode, err error) error { return &replayError{code: code, err: err} }
+
+// replayCode 返回错误对应的返回码；没有标明的按内部错误。
+func replayCode(err error) commonpb.ErrorCode {
+	var typed *replayError
+	if errors.As(err, &typed) {
+		return typed.code
+	}
+	return commonpb.ErrorCode_INNER_ERR
+}
+
 type replayManager struct {
 	deps ReplayDeps
+	// maxStepBytes 是单步响应的上限（测试里调小）。
+	maxStepBytes int
 
 	mu       sync.Mutex
 	sessions map[string]*replaySession
@@ -74,7 +97,14 @@ func newReplayManager(deps ReplayDeps) *replayManager {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	return &replayManager{deps: deps, sessions: map[string]*replaySession{}}
+	return &replayManager{deps: deps, maxStepBytes: replayStepMaxBytes, sessions: map[string]*replaySession{}}
+}
+
+// replayColumns 是会话请求的列，按来源分开：成员输出列（列名 → 成员键）、源数据集的数值列、是否要 __params。
+type replayColumns struct {
+	factors map[string]string
+	source  []string
+	params  bool
 }
 
 type replaySession struct {
@@ -87,20 +117,17 @@ type replaySession struct {
 	from, to time.Time // 决策周期的 data_time 范围 [from, to)（轴上）
 	start    time.Time // 预热起点（轴上）
 	subjects []string
-	// history 是 observed 成员历史截面额外用到的标的：只在快照里提供历史，不输出、不写回。
+	// history 是 observed 成员历史截面额外用到的标的：只在快照里提供历史，不出行。
 	history  []string
-	numeric  []string
 	lookback int
-	carry    []string
-	types    map[string]string
+	columns  replayColumns
 	view     *serieswindow.View
 	cols     map[string]*seriesstore.Columns
+	// earliest 是标的在本地数据里的第一根（各 series_tag 取最早）：本期的标的全集只含已经上市的标的。
 	earliest map[string]time.Time
-	release  func()
-	// quote 是成交价取法：next_open（下一根开盘，默认）或 close（本期收盘）。
-	quote string
-	// udfKey 是会话建立时任务成员引用的自定义算子绑定：写回时与引擎当前目录比较，不同（期间切换过版本）就拒绝，要求重新打开会话。
-	udfKey string
+	// seriesEarliest 是每条序列在本地数据里的第一根：年龄按序列算。
+	seriesEarliest map[seriesset.Series]time.Time
+	release        func()
 
 	mu       sync.Mutex
 	closed   bool // 已关闭（预算已归还）：此后取得会话指针的请求不能再执行
@@ -113,12 +140,12 @@ type replaySession struct {
 
 // ReplayParamRejection 是被拒绝的成员参数：本期沿用上一期实际用的参数（没有就按成员自己的参数）。
 type ReplayParamRejection struct {
-	Member string `json:"member"`
-	Reason string `json:"reason"`
+	Member string
+	Reason string
 }
 
 // replayPeriod 是一期的计算结果（缓存，下一期取上一期的因子值用）；digest 是这一期所用参数的摘要；
-// paramValues 是这一期各标的各成员实际用的参数（标的 → 成员键 → 参数名 → 值），与实时结果行的 __params 一致，策略的 params() 读它。
+// paramValues 是这一期各标的各成员实际用的参数（标的 → 成员键 → 参数名 → 值），策略的 params() 读它。
 type replayPeriod struct {
 	values      pipeline.FactorValues
 	states      map[string]ReplayFactorState
@@ -128,128 +155,84 @@ type replayPeriod struct {
 
 // ReplayFactorState 是一个成员本期的状态：complete、degraded（部分标的失败）或 skipped（截面因子整体跳过）。
 type ReplayFactorState struct {
-	Status         string `json:"status"`
-	FactorID       string `json:"factor_id"`
-	DefinitionHash string `json:"definition_hash"`
+	Status         string
+	FactorID       string
+	DefinitionHash string
 	// Kind 是成员类型（fixed 或 var）：策略据此和启用时固化的成员契约比对。
-	Kind           string   `json:"kind"`
-	FailedSubjects []string `json:"failed_subjects,omitempty"`
+	Kind           string
+	FailedSubjects []string
 }
 
-// ReplayOpenRequest 是 POST /v1/replay/open 的请求体。
+// ReplayOpenRequest 是建立会话的请求。
 type ReplayOpenRequest struct {
-	ReplayID string `json:"replay_id"`
-	TaskID   string `json:"task_id"`
+	ReplayID string
+	TaskID   string
 	// From、To 是回放区间（RFC3339，左闭右开）：决策周期是 data_time 落在其中的每一根 K 线。
-	From string `json:"from"`
-	To   string `json:"to"`
+	From string
+	To   string
 	// ExtraPeriods 是策略额外需要的回看根数（引用因子列的上一根深度、年龄检查根数中较大的）；预热起点 = from −（因子最大回看 − 1 + ExtraPeriods）。
-	ExtraPeriods int `json:"extra_periods"`
-	// Quote 是成交价取法：next_open（默认）或 close。
-	Quote string `json:"quote"`
-	// WriteFactors 为真时，每期把因子结果写回结果数据集（与区间重算相同的写法，不发周期完成事件）。
-	WriteFactors bool `json:"write_factors"`
+	ExtraPeriods int
+	// Columns 是每行要返回的列：成员输出列、源数据集的数值列与 __params。
+	Columns []string
 	// AllowShortWarmup 允许多数标的的本地数据不够预热区间：不加时多数标的预热不足会拒绝建立会话（因子前段会是空值，回放结果没有意义）。
-	AllowShortWarmup bool `json:"allow_short_warmup,omitempty"`
+	AllowShortWarmup bool
 }
 
 // ReplayFactor 描述回放固定下来的一个成员：Member 是成员键，Kind 是成员类型（fixed 或 var），Outputs 是它在结果数据集里的列名。
 type ReplayFactor struct {
-	Member         string   `json:"member"`
-	FactorID       string   `json:"factor_id"`
-	Kind           string   `json:"kind"`
-	DefinitionHash string   `json:"definition_hash"`
-	Outputs        []string `json:"outputs"`
+	Member         string
+	FactorID       string
+	Kind           string
+	DefinitionHash string
+	Outputs        []string
 }
 
 // ReplayExcluded 是被排除出回放的标的及原因。
 type ReplayExcluded struct {
-	Subject string `json:"subject"`
-	Reason  string `json:"reason"`
+	Subject string
+	Reason  string
 }
 
 // ReplayOpenResponse 是建立会话的结果。
 type ReplayOpenResponse struct {
-	ReplayID string           `json:"replay_id"`
-	Subjects []string         `json:"subjects"`
-	Excluded []ReplayExcluded `json:"excluded,omitempty"`
-	Periods  int              `json:"periods"`
-	// PeriodTimes 是各决策周期的 data_time（真实时间的 Unix 秒，升序）：有交易时段的市场跳过休市，回放服务按它逐期推进。
-	PeriodTimes []int64        `json:"period_times"`
-	Start       string         `json:"start"`
-	StepSecs    int64          `json:"step_seconds"`
-	Bytes       int64          `json:"bytes"`
-	Factors     []ReplayFactor `json:"factors"`
-	Fields      []string       `json:"fields"`
+	ReplayID string
+	Subjects []string
+	Excluded []ReplayExcluded
+	// PeriodTimes 是各决策周期的 data_time（真实时间的 Unix 秒，升序）：有交易时段的市场跳过休市，调用方按它逐期推进。
+	PeriodTimes []int64
+	Start       string
+	StepSecs    int64
+	Bytes       int64
+	Factors     []ReplayFactor
+	Fields      []string
 	// ShortWarmup 是本地数据起点晚于预热起点的标的数（因子前段为空值）；ShortSamples 是其中的前几个。
-	ShortWarmup  int      `json:"short_warmup,omitempty"`
-	ShortSamples []string `json:"short_samples,omitempty"`
+	ShortWarmup  int
+	ShortSamples []string
 }
 
-func (m *replayManager) routes() []factorhealth.Route {
-	return []factorhealth.Route{
-		{Path: "/v1/replay/open", Handler: http.HandlerFunc(m.handleOpen)},
-		{Path: "/v1/replay/step", Handler: http.HandlerFunc(m.handleStep)},
-		{Path: "/v1/replay/close", Handler: http.HandlerFunc(m.handleClose)},
-	}
-}
-
-func decodeReplay(rw http.ResponseWriter, r *http.Request, out any) bool {
-	if r.Method != http.MethodPost {
-		writeJSONError(rw, http.StatusMethodNotAllowed, errors.New("POST only"))
-		return false
-	}
-	dec := json.NewDecoder(http.MaxBytesReader(rw, r.Body, maxReplayBody))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(out); err != nil {
-		writeJSONError(rw, http.StatusBadRequest, fmt.Errorf("解析请求：%w", err))
-		return false
-	}
-	return true
-}
-
-func (m *replayManager) handleOpen(rw http.ResponseWriter, r *http.Request) {
-	var req ReplayOpenRequest
-	if !decodeReplay(rw, r, &req) {
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), replayOpenTimeout)
-	defer cancel()
-	rsp, status, err := m.Open(ctx, req)
-	if err != nil {
-		writeJSONError(rw, status, err)
-		return
-	}
-	writeJSON(rw, http.StatusOK, rsp)
-}
-
-// Open 建立回放会话。同一个 replay_id 重复打开时（回放服务重启后续跑）先释放旧会话再重建。
-func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (ReplayOpenResponse, int, error) {
+// Open 建立回放会话。同一个 replay_id 重复打开时先释放旧会话再重建。
+func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (ReplayOpenResponse, error) {
 	req.ReplayID, req.TaskID = strings.TrimSpace(req.ReplayID), strings.TrimSpace(req.TaskID)
 	if req.ReplayID == "" || req.TaskID == "" {
-		return ReplayOpenResponse{}, http.StatusBadRequest, errors.New("replay_id 与 task_id 是必填项")
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_INVALID_PARAM, "replay_id 与 task_id 是必填项")
 	}
 	if req.ExtraPeriods < 0 {
-		return ReplayOpenResponse{}, http.StatusBadRequest, errors.New("extra_periods 不能为负数")
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_INVALID_PARAM, "extra_periods 不能为负数")
 	}
-	quote := req.Quote
-	if quote == "" {
-		quote = "next_open"
-	}
-	if quote != "next_open" && quote != "close" {
-		return ReplayOpenResponse{}, http.StatusBadRequest, errors.New("quote 只能是 next_open 或 close")
+	if len(req.Columns) == 0 {
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_INVALID_PARAM, "columns 是必填项：列出策略引用的列")
 	}
 	from, err := time.Parse(time.RFC3339, req.From)
 	if err != nil {
-		return ReplayOpenResponse{}, http.StatusBadRequest, fmt.Errorf("from：%w", err)
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_INVALID_PARAM, "from：%w", err)
 	}
 	to, err := time.Parse(time.RFC3339, req.To)
 	if err != nil {
-		return ReplayOpenResponse{}, http.StatusBadRequest, fmt.Errorf("to：%w", err)
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_INVALID_PARAM, "to：%w", err)
 	}
 	set, lookup := m.deps.Sets.SetByID(req.TaskID)
 	if lookup != SetFound {
-		return ReplayOpenResponse{}, http.StatusNotFound, fmt.Errorf("因子任务 %s 不在引擎目录里（未启用或结果数据集未就绪）", req.TaskID)
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_NOT_FOUND, "因子任务 %s 不在引擎目录里（未启用或结果数据集未就绪）", req.TaskID)
 	}
 	set.Members = CompileMembers(set.Members)
 	if m.deps.Pin != nil {
@@ -257,64 +240,77 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		defer release() // 会话登记之后由会话表保留它引用的版本（udfHashes）
 		// 固定之前目录可能已经切换了版本：以固定之后的目录为准，不一致就让调用方重试。
 		if current, lookup := m.deps.Sets.SetByID(req.TaskID); lookup != SetFound || taskUDFKey(current) != taskUDFKey(set) {
-			return ReplayOpenResponse{}, http.StatusConflict, errors.New("目录刚刚发生变化（任务引用的自定义算子版本切换或任务离开目录），请重试")
+			return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_CONFLICT, "目录刚刚发生变化（任务引用的自定义算子版本切换或任务离开目录），请重试")
 		}
 	}
 	step, err := seriesstore.Step(set.Set.Freq)
 	if err != nil {
-		return ReplayOpenResponse{}, http.StatusBadRequest, err
+		return ReplayOpenResponse{}, replayWrap(commonpb.ErrorCode_INVALID_PARAM, err)
 	}
 	// 回放接口是换算边界：请求里的区间是真实时间，会话内全部换到轴上。
 	axis, err := periodclock.AxisFor(set.Set.SpaceID, set.Set.Freq)
 	if err != nil {
-		return ReplayOpenResponse{}, http.StatusBadRequest, err
+		return ReplayOpenResponse{}, replayWrap(commonpb.ErrorCode_INVALID_PARAM, err)
 	}
 	realFrom, realTo := from.UTC(), to.UTC()
 	from, fromErr := axis.ToAxis(realFrom)
 	to, toErr := axis.EndToAxis(realTo)
 	if fromErr != nil || toErr != nil || !from.Before(to) {
-		return ReplayOpenResponse{}, http.StatusBadRequest, fmt.Errorf("回放区间 [%s, %s) 必须按 %s 对齐且 from 早于 to", req.From, req.To, set.Set.Freq)
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_INVALID_PARAM, "回放区间 [%s, %s) 必须按 %s 对齐且 from 早于 to", req.From, req.To, set.Set.Freq)
 	}
 	lookback := maxLookbackOf(set)
 	start := from.Add(-time.Duration(lookback-1+req.ExtraPeriods) * step)
+	last := to.Add(-step)
 	src := seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}
 
 	m.closeSession(req.ReplayID)
 	fields, ok, err := m.deps.Store.Schema(src)
 	if err != nil {
-		return ReplayOpenResponse{}, http.StatusInternalServerError, err
+		return ReplayOpenResponse{}, err
 	}
 	if !ok {
-		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("数据源 %s 在本地没有数据：先导入或启动同步", src)
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_CONFLICT, "数据源 %s 在本地没有数据：先导入或启动同步", src)
 	}
 	numeric := serieswindow.NumericFields(fields)
+	columns, err := parseReplayColumns(req.Columns, set, numeric)
+	if err != nil {
+		return ReplayOpenResponse{}, replayWrap(commonpb.ErrorCode_INVALID_PARAM, err)
+	}
 	candidates, err := setSubjects(ctx, m.deps.Source, set, nil)
 	if err != nil {
-		return ReplayOpenResponse{}, http.StatusBadGateway, err
+		return ReplayOpenResponse{}, err
 	}
-	// 校验：本地数据覆盖回放区间，并且包含 to 之后的一根（用于下一根开盘成交）。预热区间不够的标的照常参与（因子前段为空）。
+	// 校验：本地数据覆盖到回放的最后一期。预热区间不够的标的照常参与（因子前段为空）。
 	var subjects []string
 	var excluded []ReplayExcluded
 	earliest := map[string]time.Time{}
+	seriesEarliest := map[seriesset.Series]time.Time{}
 	for _, subject := range uniqueStrings(candidates) {
 		b, has, err := m.deps.Store.Bounds(src, subject)
 		if err != nil {
-			return ReplayOpenResponse{}, http.StatusInternalServerError, err
+			return ReplayOpenResponse{}, err
 		}
 		switch {
 		case !has:
 			excluded = append(excluded, ReplayExcluded{Subject: subject, Reason: "本地没有数据"})
-		case b.Latest.Before(to):
-			excluded = append(excluded, ReplayExcluded{Subject: subject, Reason: fmt.Sprintf("本地数据只到 %s，不包含回放终点（%s）这一根", axis.Format(b.Latest), axis.Format(to))})
-		case b.Earliest.After(to.Add(-step)):
+		case b.Latest.Before(last):
+			excluded = append(excluded, ReplayExcluded{Subject: subject, Reason: fmt.Sprintf("本地数据只到 %s，不包含回放的最后一期（%s）", axis.Format(b.Latest), axis.Format(last))})
+		case b.Earliest.After(last):
 			excluded = append(excluded, ReplayExcluded{Subject: subject, Reason: fmt.Sprintf("本地数据从 %s 才开始，回放区间内没有数据", axis.Format(b.Earliest))})
 		default:
 			subjects = append(subjects, subject)
 			earliest[subject] = b.Earliest
+			tags, err := m.deps.Store.TagBounds(src, subject)
+			if err != nil {
+				return ReplayOpenResponse{}, err
+			}
+			for tag, bounds := range tags {
+				seriesEarliest[seriesset.Series{SubjectID: subject, SeriesTag: tag}] = bounds.Earliest
+			}
 		}
 	}
 	if len(subjects) == 0 {
-		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("没有任何标的的本地数据覆盖回放区间：先导入 %s 到 %s 的数据（需要包含终点之后的一根）", realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339))
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_CONFLICT, "没有任何标的的本地数据覆盖回放区间：先导入 %s 到 %s 的数据", realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339))
 	}
 	var shortSamples []string
 	shortCount := 0
@@ -327,16 +323,16 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		}
 	}
 	if shortCount*2 > len(subjects) && !req.AllowShortWarmup {
-		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("%d/%d 个标的的本地数据晚于预热起点 %s（例如 %s），因子前段会是空值：先回补或导入更早的历史（moox-factor-engine backfill / moox-cli import），或确认接受后加 --allow-short-warmup",
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_CONFLICT, "%d/%d 个标的的本地数据晚于预热起点 %s（例如 %s），因子前段会是空值：先回补或导入更早的历史（moox-factor-engine backfill / moox-cli import），或确认接受短预热后重新发起",
 			shortCount, len(subjects), axis.Format(start), strings.Join(shortSamples, "、"))
 	}
 	// observed 成员：历史截面还要用本地存储里在快照区间内有数据、但不在回放标的里的标的（含已下架的），与实时计算同一口径。
-	history, err := m.replayHistory(ctx, src, set, candidates, subjects, start, to.Add(step))
+	history, err := m.replayHistory(ctx, src, set, candidates, subjects, start, to)
 	if err != nil {
-		return ReplayOpenResponse{}, http.StatusInternalServerError, err
+		return ReplayOpenResponse{}, err
 	}
 	periods := int(to.Sub(from) / step)
-	rowsPerSubject := int(to.Add(step).Sub(start) / step)
+	rowsPerSubject := int(to.Sub(start) / step)
 	need := int64(len(subjects)+len(history)) * int64(rowsPerSubject) * int64(len(numeric)*8+9)
 	release := func() {}
 	if m.deps.Admit != nil {
@@ -344,7 +340,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		release, err = m.deps.Admit.Reserve(waitCtx, need)
 		cancel()
 		if err != nil {
-			return ReplayOpenResponse{}, http.StatusServiceUnavailable, fmt.Errorf("回放快照需要约 %d 字节内存，预留不到：%w", need, err)
+			return ReplayOpenResponse{}, fmt.Errorf("回放快照需要约 %d 字节内存，预留不到：%w", need, err)
 		}
 	}
 	cleanup := release
@@ -353,114 +349,118 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 			cleanup()
 		}
 	}()
-	snapshot, err := m.deps.Store.ReadRange(ctx, src, append(append([]string(nil), subjects...), history...), start, to.Add(step))
+	snapshot, err := m.deps.Store.ReadRange(ctx, src, append(append([]string(nil), subjects...), history...), start, to)
 	if err != nil {
-		return ReplayOpenResponse{}, http.StatusInternalServerError, fmt.Errorf("读取回放快照：%w", err)
+		return ReplayOpenResponse{}, fmt.Errorf("读取回放快照：%w", err)
 	}
 	view, err := serieswindow.FromColumns(src, int64(step/time.Second), numeric, snapshot)
 	if err != nil {
-		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("回放快照不连续：%w", err)
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_CONFLICT, "回放快照不连续：%w", err)
 	}
-	var carry []string
-	var types map[string]string
-	if req.WriteFactors {
-		if carry, err = m.deps.Source.DatasetColumns(ctx, set.Set.SpaceID, set.Set.SourceDatasetID); err != nil {
-			return ReplayOpenResponse{}, http.StatusBadGateway, fmt.Errorf("读取源数据集字段：%w", err)
-		}
-		columns, err := m.deps.Columns.ListColumns(ctx, set.Set.SpaceID, set.Set.SourceDatasetID)
+	periodTimes := make([]int64, 0, periods)
+	for period := from; period.Before(to); period = period.Add(step) {
+		at, err := axis.FromAxis(period)
 		if err != nil {
-			return ReplayOpenResponse{}, http.StatusBadGateway, fmt.Errorf("读取源数据集字段类型：%w", err)
+			return ReplayOpenResponse{}, err
 		}
-		types = seriessync.ValueTypes(columns)
+		periodTimes = append(periodTimes, at.Unix())
 	}
 	session := &replaySession{
 		id: req.ReplayID, set: set, src: src, axis: axis, step: step, from: from, to: to, start: start,
-		subjects: subjects, history: history, numeric: numeric, lookback: lookback, carry: carry, types: types, view: view, cols: snapshot,
-		earliest: earliest, release: release, quote: quote, udfKey: taskUDFKey(set), cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
+		subjects: subjects, history: history, lookback: lookback, columns: columns, view: view, cols: snapshot,
+		earliest: earliest, seriesEarliest: seriesEarliest, release: release,
+		cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
 	}
 	cleanup = nil
 	m.mu.Lock()
 	m.sessions[req.ReplayID] = session
 	m.mu.Unlock()
-	periodTimes := make([]int64, 0, periods)
-	for period := from; period.Before(to); period = period.Add(step) {
-		at, err := axis.FromAxis(period)
-		if err != nil {
-			return ReplayOpenResponse{}, http.StatusInternalServerError, err
-		}
-		periodTimes = append(periodTimes, at.Unix())
-	}
 	rsp := ReplayOpenResponse{
-		ReplayID: req.ReplayID, Subjects: subjects, Excluded: excluded, Periods: periods, PeriodTimes: periodTimes, Start: axis.Format(start),
+		ReplayID: req.ReplayID, Subjects: subjects, Excluded: excluded, PeriodTimes: periodTimes, Start: axis.Format(start),
 		StepSecs: int64(step / time.Second), Bytes: need, Fields: numeric, ShortWarmup: shortCount, ShortSamples: shortSamples,
 	}
 	for _, member := range set.Members {
 		rsp.Factors = append(rsp.Factors, ReplayFactor{Member: member.Key, FactorID: member.Factor.FactorID,
 			DefinitionHash: domain.DefinitionHash(member.Factor), Kind: member.Kind, Outputs: member.OutputColumns()})
 	}
-	return rsp, http.StatusOK, nil
+	return rsp, nil
 }
 
-// ReplayStepRequest 是 POST /v1/replay/step 的请求体。
+// parseReplayColumns 把请求的列分到三类：成员输出列、源数据集的数值列、__params。不认识的列名是调用方的错误。
+func parseReplayColumns(requested []string, set domain.EngineTask, numeric []string) (replayColumns, error) {
+	outputs := map[string]string{}
+	for _, member := range set.Members {
+		for _, column := range member.OutputColumns() {
+			outputs[column] = member.Key
+		}
+	}
+	source := map[string]bool{}
+	for _, name := range numeric {
+		source[name] = true
+	}
+	out := replayColumns{factors: map[string]string{}}
+	seen := map[string]bool{}
+	for _, column := range requested {
+		column = strings.TrimSpace(column)
+		if column == "" || seen[column] {
+			continue
+		}
+		seen[column] = true
+		switch {
+		case column == factorname.ParamsColumn:
+			out.params = true
+		case outputs[column] != "":
+			out.factors[column] = outputs[column]
+		case source[column]:
+			out.source = append(out.source, column)
+		default:
+			return replayColumns{}, fmt.Errorf("列 %s 既不是任务成员的输出列，也不是源数据集的数值列", column)
+		}
+	}
+	sort.Strings(out.source)
+	return out, nil
+}
+
+// ReplayStepRequest 是一步的请求。
 type ReplayStepRequest struct {
-	ReplayID string `json:"replay_id"`
-	// Period 是这根 K 线的 data_time（RFC3339）；决策时刻是 Period + 周期。
-	Period string `json:"period"`
-	// SourceColumns 是要返回的源数据列；为空返回全部数值列。close 与 open 总是返回（估值、成交价要用）。
-	SourceColumns []string `json:"source_columns,omitempty"`
-	// WriteFactors 为真时把本期因子结果写回结果数据集（会话打开时也要声明 write_factors）。
-	WriteFactors bool `json:"write_factors,omitempty"`
-	// Params 是闭环回放这一期各可变成员的参数快照（成员键 → 快照，设计 8.4）：由策略回放在上一期求值后产出，只存在于回放会话里，
-	// 不写成员行。没有给出的成员沿用上一期实际用的参数，再没有就用成员自己的参数（可变成员的默认参数）。
-	Params map[string]domain.ParamSnapshot `json:"params,omitempty"`
+	ReplayID string
+	// Period 是这一步第一期的 data_time（真实时间的 Unix 秒）；Periods 是这一步最多算几期。
+	Period  int64
+	Periods int
+	// Params 是这一步第一期各可变成员的参数快照（成员键 → 快照）：由策略在上一期求值后产出，只存在于回放会话里，
+	// 不写成员行。没有给出的成员沿用上一期实际用的参数，再没有就用成员自己的参数（可变成员的默认参数）；这一步后面的各期都沿用。
+	Params map[string]domain.ParamSnapshot
 }
 
-// ReplaySubjectFrame 是一个标的本期的数据。
-type ReplaySubjectFrame struct {
-	// Source 是本期源数据列的值，SourcePrev 是上一根的；缺失的列不出现。
-	Source     map[string]float64 `json:"source"`
-	SourcePrev map[string]float64 `json:"source_prev,omitempty"`
-	// Factors 是各成员各输出列本期的值，FactorsPrev 是上一期的。
-	Factors     map[string]map[string]float64 `json:"factors,omitempty"`
-	FactorsPrev map[string]map[string]float64 `json:"factors_prev,omitempty"`
-	// Params 是本期各成员（成员键）实际用的参数（参数名 → 值），与实时结果行的 __params 一致。
-	Params map[string]map[string]float64 `json:"params,omitempty"`
-	// Quote 是回放报价：Close 是本期收盘价，Exec 是成交价（next_open 时为下一根开盘价，close 时为本期收盘价）；没有价格时为 0。
-	Close float64 `json:"close"`
-	Exec  float64 `json:"exec"`
-	// AgeBars 是本地数据里这个标的截至本期的根数（含本期）：策略的年龄检查用。
-	AgeBars int `json:"age_bars"`
+// ReplayRow 是一条序列本期的行：只含会话请求的列，没有数据、算不出的列不出现。
+type ReplayRow struct {
+	Series seriesset.Series
+	// Values 是请求的列本期的值，Previous 是上一期的。
+	Values   map[string]float64
+	Previous map[string]float64
+	// Params 是本期各成员（成员键）实际用的参数（参数名 → 值）；只在请求了 __params 时给。
+	Params map[string]map[string]float64
+	// AgeBars 是本地数据里这条序列截至本期的根数（含本期）：策略的年龄检查用。
+	AgeBars int
 }
 
-// ReplayStepResponse 是一期的因子帧。
+// ReplayPeriodFrame 是一期的因子帧。
+type ReplayPeriodFrame struct {
+	// Period 是这一期的 data_time（真实时间的 Unix 秒）。
+	Period int64
+	Rows   []ReplayRow
+	States map[string]ReplayFactorState
+	// AppliedParams 是本期实际生效的、由请求带来（或沿用之前请求）的成员参数：策略回放以它为基础叠加下一期的新参数，
+	// 不合法的请求参数不会留在回放记录里。RejectedParams 是本期被拒绝的成员与原因（只在一步的第一期）。
+	AppliedParams  map[string]domain.ParamSnapshot
+	RejectedParams []ReplayParamRejection
+}
+
+// ReplayStepResponse 是一步的结果：Periods 从请求的期起连续，wire 是它们的线上格式（量大小时已经转换过）。
 type ReplayStepResponse struct {
-	ReplayID string `json:"replay_id"`
-	Period   string `json:"period"`
-	// DecisionAt 是决策时刻（Period + 周期）。
-	DecisionAt string                        `json:"decision_at"`
-	Subjects   map[string]ReplaySubjectFrame `json:"subjects"`
-	States     map[string]ReplayFactorState  `json:"factor_states"`
-	// Rows 是写回结果数据集的行数（write_factors 时）。
-	Rows int `json:"rows,omitempty"`
-	// ComputeMillis 是本期因子计算耗时。
-	ComputeMillis int64 `json:"compute_ms"`
-	// AppliedParams 是本期实际生效的、由请求带来（或沿用上一期请求）的成员参数：策略回放以它为基础叠加下一期的新参数，
-	// 不合法的请求参数不会留在回放记录里。RejectedParams 是本期被拒绝的成员与原因。
-	AppliedParams  map[string]domain.ParamSnapshot `json:"applied_params,omitempty"`
-	RejectedParams []ReplayParamRejection          `json:"rejected_params,omitempty"`
-}
-
-func (m *replayManager) handleStep(rw http.ResponseWriter, r *http.Request) {
-	var req ReplayStepRequest
-	if !decodeReplay(rw, r, &req) {
-		return
-	}
-	rsp, status, err := m.Step(r.Context(), req)
-	if err != nil {
-		writeJSONError(rw, status, err)
-		return
-	}
-	writeJSON(rw, http.StatusOK, rsp)
+	Periods       []ReplayPeriodFrame
+	ComputeMillis int64
+	wire          []*factorpb.ReplayPeriod
 }
 
 func (m *replayManager) session(id string) *replaySession {
@@ -469,53 +469,75 @@ func (m *replayManager) session(id string) *replaySession {
 	return m.sessions[id]
 }
 
-// Step 计算一期并返回因子帧。同一期可重复请求（回放服务重启后补齐）：结果由快照决定，重复计算得到同样的值。
-func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (ReplayStepResponse, int, error) {
+// Step 从请求的期起按顺序算最多 Periods 期。单步响应不超过 maxStepBytes：放不下时只返回前面几期（至少 1 期），
+// 一期就放不下时拒绝。同一期可重复请求：结果由快照与参数决定，重复计算得到同样的值。
+func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (ReplayStepResponse, error) {
 	s := m.session(strings.TrimSpace(req.ReplayID))
 	if s == nil {
-		return ReplayStepResponse{}, http.StatusNotFound, fmt.Errorf("回放会话 %s 不存在（引擎重启或已结束），请重新建立会话", req.ReplayID)
+		return ReplayStepResponse{}, replayFail(commonpb.ErrorCode_NOT_FOUND, "回放会话 %s 不存在（引擎重启或已结束），请重新建立会话", req.ReplayID)
 	}
-	realPeriod, err := time.Parse(time.RFC3339, req.Period)
-	if err != nil {
-		return ReplayStepResponse{}, http.StatusBadRequest, fmt.Errorf("period：%w", err)
+	if req.Periods < 1 {
+		return ReplayStepResponse{}, replayFail(commonpb.ErrorCode_INVALID_PARAM, "periods 至少为 1")
 	}
+	realPeriod := time.Unix(req.Period, 0).UTC()
 	period, axisErr := s.axis.ToAxis(realPeriod)
 	if axisErr != nil || period.Before(s.from) || !period.Before(s.to) {
-		return ReplayStepResponse{}, http.StatusBadRequest, fmt.Errorf("周期 %s 不在回放区间 [%s, %s) 内或没有对齐", req.Period, s.axis.Format(s.from), s.axis.Format(s.to))
-	}
-	decisionAt, err := s.axis.FromAxisEnd(period.Add(s.step))
-	if err != nil {
-		return ReplayStepResponse{}, http.StatusInternalServerError, err
+		return ReplayStepResponse{}, replayFail(commonpb.ErrorCode_INVALID_PARAM, "周期 %s 不在回放区间 [%s, %s) 内或没有对齐",
+			realPeriod.Format(time.RFC3339), s.axis.Format(s.from), s.axis.Format(s.to))
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return ReplayStepResponse{}, http.StatusNotFound, fmt.Errorf("回放会话 %s 已关闭，请重新建立会话", req.ReplayID)
+		return ReplayStepResponse{}, replayFail(commonpb.ErrorCode_NOT_FOUND, "回放会话 %s 已关闭，请重新建立会话", req.ReplayID)
 	}
 	s.lastUsed = m.deps.Now()
 	started := time.Now()
-	params, applied, rejected, err := s.params(period, req.Params)
-	if err != nil {
-		return ReplayStepResponse{}, http.StatusBadRequest, err
-	}
-	current, plan, comp, err := s.compute(ctx, m.deps.Runner, period, params)
-	if err != nil {
-		return ReplayStepResponse{}, http.StatusInternalServerError, err
-	}
-	previous := s.cache[period.Add(-s.step).Unix()]
-	if previous == nil && !period.Add(-s.step).Before(s.start) {
-		prevParams, _, _, err := s.params(period.Add(-s.step), nil)
+	var rsp ReplayStepResponse
+	size := 0
+	requested := req.Params
+	for at := period; at.Before(s.to) && len(rsp.Periods) < req.Periods; at = at.Add(s.step) {
+		frame, err := s.stepPeriod(ctx, m.deps.Runner, at, requested)
 		if err != nil {
-			return ReplayStepResponse{}, http.StatusInternalServerError, err
+			return ReplayStepResponse{}, err
 		}
-		if previous, _, _, err = s.compute(ctx, m.deps.Runner, period.Add(-s.step), prevParams); err != nil {
-			return ReplayStepResponse{}, http.StatusInternalServerError, err
+		requested = nil // 请求的参数只给第一期，之后各期沿用
+		wire := replayPeriodToPB(frame)
+		// 每期在响应里是一个带长度前缀的字段：多算 10 字节的标签与长度。
+		n := proto.Size(wire) + 10
+		if size+n > m.maxStepBytes {
+			if len(rsp.Periods) == 0 {
+				return ReplayStepResponse{}, replayFail(commonpb.ErrorCode_INVALID_PARAM, "一期的因子帧约 %d 字节，超过单步上限 %d 字节：减少引用的列", n, m.maxStepBytes)
+			}
+			break
 		}
+		size += n
+		rsp.Periods = append(rsp.Periods, frame)
+		rsp.wire = append(rsp.wire, wire)
 	}
-	rsp := ReplayStepResponse{
-		ReplayID: s.id, Period: realPeriod.UTC().Format(time.RFC3339), DecisionAt: decisionAt.Format(time.RFC3339),
-		Subjects: make(map[string]ReplaySubjectFrame, len(s.subjects)), States: current.states,
-		AppliedParams: applied, RejectedParams: rejected,
+	rsp.ComputeMillis = time.Since(started).Milliseconds()
+	return rsp, nil
+}
+
+// stepPeriod 算一期并组装这一期的帧（调用方持有会话锁）。
+func (s *replaySession) stepPeriod(ctx context.Context, runner *pipeline.Runner, period time.Time, requested map[string]domain.ParamSnapshot) (ReplayPeriodFrame, error) {
+	params, applied, rejected, err := s.params(period, requested)
+	if err != nil {
+		return ReplayPeriodFrame{}, replayWrap(commonpb.ErrorCode_INVALID_PARAM, err)
+	}
+	current, err := s.compute(ctx, runner, period, params)
+	if err != nil {
+		return ReplayPeriodFrame{}, err
+	}
+	prevAt := period.Add(-s.step)
+	previous := s.cache[prevAt.Unix()]
+	if previous == nil && !prevAt.Before(s.start) {
+		prevParams, _, _, err := s.params(prevAt, nil)
+		if err != nil {
+			return ReplayPeriodFrame{}, err
+		}
+		if previous, err = s.compute(ctx, runner, prevAt, prevParams); err != nil {
+			return ReplayPeriodFrame{}, err
+		}
 	}
 	s.applied[period.Unix()] = applied
 	for at := range s.applied {
@@ -523,81 +545,90 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 			delete(s.applied, at)
 		}
 	}
-	wanted := s.sourceColumns(req.SourceColumns)
-	now, prev := period.Unix(), period.Add(-s.step).Unix()
-	next := period.Add(s.step).Unix()
+	realPeriod, err := s.axis.FromAxis(period)
+	if err != nil {
+		return ReplayPeriodFrame{}, err
+	}
+	frame := ReplayPeriodFrame{Period: realPeriod.Unix(), States: current.states, AppliedParams: applied, RejectedParams: rejected}
+	now, prev := period.Unix(), prevAt.Unix()
+	stepSecs := int64(s.step / time.Second)
 	for _, subject := range s.subjects {
-		closePrice, hasClose := s.view.ValueAt(subject, "close", now)
-		if _, present := s.view.Latest(subject); !present {
-			continue
-		}
-		frame := ReplaySubjectFrame{Source: map[string]float64{}}
-		present := false
-		for _, name := range wanted {
-			if v, ok := s.view.ValueAt(subject, name, now); ok {
-				frame.Source[name] = v
-				present = true
+		for _, sv := range s.view.Series(subject) {
+			// 这条序列本期在快照里没有行（还没上市、已经结束）时不出行；出不出行与请求了哪些列无关。
+			if !seriesHasRow(s.view, sv, now) {
+				continue
 			}
-			if v, ok := s.view.ValueAt(subject, name, prev); ok {
-				if frame.SourcePrev == nil {
-					frame.SourcePrev = map[string]float64{}
+			key := seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag}
+			row := ReplayRow{Series: key, Values: map[string]float64{}}
+			for _, name := range s.columns.source {
+				if v, ok := seriesValue(s.view, sv, name, now); ok {
+					row.Values[name] = v
 				}
-				frame.SourcePrev[name] = v
+				if v, ok := seriesValue(s.view, sv, name, prev); ok {
+					row.setPrevious(name, v)
+				}
 			}
-		}
-		if !present && !hasClose {
-			continue
-		}
-		if hasClose {
-			frame.Close, frame.Exec = closePrice, closePrice
-		}
-		if s.quote == "next_open" {
-			if v, ok := s.view.ValueAt(subject, "open", next); ok {
-				frame.Exec = v
-			} else {
-				frame.Exec = 0
+			for column, member := range s.columns.factors {
+				if v, ok := current.values[key][member][column]; ok {
+					row.Values[column] = v
+				}
+				if previous != nil {
+					if v, ok := previous.values[key][member][column]; ok {
+						row.setPrevious(column, v)
+					}
+				}
 			}
+			if s.columns.params {
+				row.Params = current.paramValues[subject]
+			}
+			if first, ok := s.seriesEarliest[key]; ok {
+				row.AgeBars = int((now-first.Unix())/stepSecs) + 1
+			}
+			frame.Rows = append(frame.Rows, row)
 		}
-		frame.Factors = current.values[subject]
-		frame.Params = current.paramValues[subject]
-		if previous != nil {
-			frame.FactorsPrev = previous.values[subject]
-		}
-		if first, ok := s.earliest[subject]; ok {
-			frame.AgeBars = int((period.Unix()-first.Unix())/int64(s.step/time.Second)) + 1
-		}
-		rsp.Subjects[subject] = frame
 	}
-	if req.WriteFactors {
-		current, lookup := m.deps.Sets.SetByID(s.set.Set.TaskID)
-		if lookup != SetFound {
-			return ReplayStepResponse{}, http.StatusConflict, errors.New("回放会话建立之后，任务已不在目录里（停用或删除），写回被拒绝：请关闭会话")
-		}
-		if taskUDFKey(current) != s.udfKey {
-			return ReplayStepResponse{}, http.StatusConflict, errors.New("回放会话建立之后，任务引用的自定义算子版本已经切换，写回被拒绝：请关闭会话并重新打开")
-		}
-		release := func() {}
-		if m.deps.Begin != nil {
-			var ok bool
-			if release, ok = m.deps.Begin(ctx, s.set.Set.TaskID); !ok {
-				return ReplayStepResponse{}, http.StatusConflict, errors.New("因子任务当前不允许写结果（暂停、恢复追赶或重置中），回放写回被拒绝")
-			}
-		}
-		rows, err := s.write(ctx, m.deps.Runner, plan, comp, period, m.batch())
-		release()
-		if err != nil {
-			return ReplayStepResponse{}, http.StatusBadGateway, err
-		}
-		rsp.Rows = rows
-	}
-	rsp.ComputeMillis = time.Since(started).Milliseconds()
 	// 只保留当期与上一期的结果，缓存不随回放长度增长。
 	for key := range s.cache {
-		if key < period.Add(-s.step).Unix() {
+		if key < prev {
 			delete(s.cache, key)
 		}
 	}
-	return rsp, http.StatusOK, nil
+	return frame, nil
+}
+
+func (r *ReplayRow) setPrevious(name string, v float64) {
+	if r.Previous == nil {
+		r.Previous = map[string]float64{}
+	}
+	r.Previous[name] = v
+}
+
+// seriesValue 返回一条序列在 atSec 那一根某个数值字段的值；没有这一根、值为 NaN 时 ok 为 false。
+// 不用 View.ValueAt：它在标的的各序列里取第一条覆盖这一时刻的，统一数据集上两条序列会拿到同一个值。
+func seriesValue(view *serieswindow.View, sv serieswindow.SeriesView, field string, atSec int64) (float64, bool) {
+	idx, ok := view.FieldIndex(field)
+	if !ok || atSec < sv.Start || atSec > sv.End(view.Step) {
+		return 0, false
+	}
+	value := sv.Cols[idx][(atSec-sv.Start)/view.Step]
+	if math.IsNaN(value) {
+		return 0, false
+	}
+	return value, true
+}
+
+// seriesHasRow 报告这条序列在 atSec 那一根有没有任何一个数值字段的值。
+func seriesHasRow(view *serieswindow.View, sv serieswindow.SeriesView, atSec int64) bool {
+	if atSec < sv.Start || atSec > sv.End(view.Step) {
+		return false
+	}
+	i := (atSec - sv.Start) / view.Step
+	for _, col := range sv.Cols {
+		if !math.IsNaN(col[i]) {
+			return true
+		}
+	}
+	return false
 }
 
 // udfHashes 返回现有回放会话引用的自定义算子版本：目录切换后这些版本仍不能卸载（会话的计算还要用）。
@@ -613,40 +644,6 @@ func (m *replayManager) udfHashes() map[string]bool {
 			out[ref.hash] = true
 		}
 	}
-	return out
-}
-
-func (m *replayManager) batch() int {
-	if m.deps.BatchOK != nil {
-		if n := m.deps.BatchOK(); n > 0 {
-			return n
-		}
-	}
-	return replayWriteBatchMin
-}
-
-// sourceColumns 返回要带回的源数据列：请求的列（只保留窗口里有的）加上 close、open。
-func (s *replaySession) sourceColumns(requested []string) []string {
-	has := map[string]bool{}
-	for _, name := range s.numeric {
-		has[name] = true
-	}
-	set := map[string]struct{}{}
-	if len(requested) == 0 {
-		for _, name := range s.numeric {
-			set[name] = struct{}{}
-		}
-	}
-	for _, name := range append([]string{"close", "open"}, requested...) {
-		if has[name] {
-			set[name] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(set))
-	for name := range set {
-		out = append(out, name)
-	}
-	sort.Strings(out)
 	return out
 }
 
@@ -714,11 +711,10 @@ func paramsDigest(params map[string]domain.ParamSnapshot) string {
 }
 
 // compute 用快照算一期（实时计算路径）；同一期、同一组参数已经算过时直接取缓存（调用方持有会话锁）。
-func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, period time.Time, params map[string]domain.ParamSnapshot) (*replayPeriod, pipeline.Plan, pipeline.Computation, error) {
+func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, period time.Time, params map[string]domain.ParamSnapshot) (*replayPeriod, error) {
 	digest := paramsDigest(params)
-	cached := s.cache[period.Unix()]
-	if cached != nil && cached.digest != digest {
-		cached = nil
+	if cached := s.cache[period.Unix()]; cached != nil && cached.digest == digest {
+		return cached, nil
 	}
 	// 本期的标的全集只含这一期已经上市（本地最早一根不晚于本期）的标的：未来才出现的标的不能改变早期周期的截面与「缺数」判定。
 	var universe []string
@@ -731,10 +727,10 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 	// 标的缺数就是它的序列缺数。
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
 		Set: s.set.Set, Members: s.set.Members, Params: params, PeriodTime: period,
-		UniverseSeries: pipeline.SubjectSeries(s.view, universe), CarryColumns: s.carry,
+		UniverseSeries: pipeline.SubjectSeries(s.view, universe),
 	})
 	if err != nil {
-		return nil, pipeline.Plan{}, pipeline.Computation{}, err
+		return nil, err
 	}
 	var available []string
 	for _, subject := range universe {
@@ -756,18 +752,15 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 			}
 		}
 	}
-	if cached != nil {
-		return cached, plan, pipeline.Computation{}, nil
-	}
 	loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: available,
 		AvailableSeries: pipeline.SubjectSeries(s.view, available), Frames: map[string]*storageio.Frame{}}
 	computation, err := runner.Compute(ctx, plan, loaded)
 	if err != nil {
-		return nil, plan, computation, fmt.Errorf("计算 %s：%w", s.axis.Format(period), err)
+		return nil, fmt.Errorf("计算 %s：%w", s.axis.Format(period), err)
 	}
 	values, err := pipeline.PeriodValues(plan, computation, period)
 	if err != nil {
-		return nil, plan, computation, err
+		return nil, err
 	}
 	states := make(map[string]ReplayFactorState, len(computation.FactorStates))
 	for key, state := range computation.FactorStates {
@@ -776,7 +769,7 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 	}
 	result := &replayPeriod{values: values, states: states, digest: digest, paramValues: paramValues(plan, universe)}
 	s.cache[period.Unix()] = result
-	return result, plan, computation, nil
+	return result, nil
 }
 
 // replayHistory 返回有 observed 成员时快照区间 [from, to) 的历史截面标的：按 localdata.HistoryRule，本任务范围是回放的候选标的，
@@ -809,61 +802,6 @@ func (s *replaySession) hasRow(subject string, at time.Time) bool {
 	return i < cols.Len() && cols.Times[i] == at.Unix()
 }
 
-// write 把本期因子结果写回结果数据集：用快照里这一期的源行组装（带携带列），与区间重算的写法相同，不发周期完成事件。
-func (s *replaySession) write(ctx context.Context, runner *pipeline.Runner, plan pipeline.Plan, comp pipeline.Computation, period time.Time, batch int) (int, error) {
-	if len(s.carry) == 0 {
-		return 0, errors.New("会话没有按 write_factors 打开：打开会话时要声明 write_factors")
-	}
-	if comp.Results == nil {
-		// 命中缓存时没有保留计算结果：重算这一期。
-		loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: plan.Available,
-			AvailableSeries: pipeline.SubjectSeries(s.view, plan.Available)}
-		var err error
-		if comp, err = runner.Compute(ctx, plan, loaded); err != nil {
-			return 0, err
-		}
-	}
-	frames := make(map[string]*storageio.Frame, len(s.subjects))
-	for _, subject := range s.subjects {
-		cols := s.cols[subject]
-		if cols == nil {
-			continue
-		}
-		target := seriesstore.NewColumns(cols.Fields, 1)
-		for i := 0; i < cols.Len(); i++ {
-			if cols.Times[i] == period.Unix() {
-				target.AppendRowFrom(cols, i)
-			}
-		}
-		if target.Len() > 0 {
-			frames[subject] = seriessync.ColumnsToFrame(subject, target, s.carry, s.types)
-		}
-	}
-	loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: plan.Available,
-		AvailableSeries: pipeline.SubjectSeries(s.view, plan.Available), Frames: frames}
-	rows, err := runner.Assemble(plan, loaded, comp)
-	if err != nil {
-		return 0, fmt.Errorf("组装 %s 的结果行：%w", s.axis.Format(period), err)
-	}
-	if err := runner.Write(ctx, plan, period, rows, batch); err != nil {
-		return 0, err
-	}
-	return len(rows), nil
-}
-
-type replayCloseRequest struct {
-	ReplayID string `json:"replay_id"`
-}
-
-func (m *replayManager) handleClose(rw http.ResponseWriter, r *http.Request) {
-	var req replayCloseRequest
-	if !decodeReplay(rw, r, &req) {
-		return
-	}
-	closed := m.closeSession(strings.TrimSpace(req.ReplayID))
-	writeJSON(rw, http.StatusOK, map[string]bool{"closed": closed})
-}
-
 // closeSession 等正在执行的 Step 结束之后才归还内存预算并移出会话表（Step 持有会话锁整个过程）：
 // 旧请求还握着整个快照时预算不能先还出去，否则新会话可以再次占用这部分预算；移出会话表也在这之后，
 // 等待期间会话引用的自定义算子版本仍被保留。
@@ -890,7 +828,7 @@ func (m *replayManager) closeSession(id string) bool {
 	return true
 }
 
-// Sweep 关闭长时间没有请求的会话（回放服务异常退出后不会来关）。
+// Sweep 关闭长时间没有请求的会话（调用方异常退出后不会来关）。
 func (m *replayManager) Sweep() int {
 	m.mu.Lock()
 	var stale []string
@@ -947,7 +885,7 @@ func uniqueStrings(in []string) []string {
 	return out
 }
 
-// paramValues 返回这一期各标的各成员实际用的参数（标的 → 成员键 → 参数名 → 值）：与实时结果行的 __params 一致。
+// paramValues 返回这一期各标的各成员实际用的参数（标的 → 成员键 → 参数名 → 值）。
 func paramValues(plan pipeline.Plan, universe []string) map[string]map[string]map[string]float64 {
 	out := make(map[string]map[string]map[string]float64, len(universe))
 	for _, subject := range universe {
@@ -960,7 +898,7 @@ func paramValues(plan pipeline.Plan, universe []string) map[string]map[string]ma
 	return out
 }
 
-// taskUDFKey 是任务成员引用的自定义算子绑定的指纹（成员键 → 名称@哈希）：回放会话据此判断期间是否切换过版本。
+// taskUDFKey 是任务成员引用的自定义算子绑定的指纹（成员键 → 名称@哈希）：会话建立时据此判断期间是否切换过版本。
 func taskUDFKey(set domain.EngineTask) string {
 	var parts []string
 	for _, member := range set.Members {

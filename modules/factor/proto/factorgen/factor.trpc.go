@@ -989,6 +989,98 @@ func RegisterFactorEngineService(s server.Service, svr FactorEngineService) {
 	}
 }
 
+// EngineControlService defines service.
+type EngineControlService interface {
+	// OpenReplay OpenReplay 建立会话：核对本地数据、按预热区间读快照、预留内存。同一个 replay_id 重复打开时先释放旧会话。
+	OpenReplay(ctx context.Context, req *OpenReplayReq) (*OpenReplayRsp, error)
+	// StepReplay StepReplay 从 period_time 起按顺序算最多 periods 期。单步响应不超过 3 MiB：放不下时只返回前面几期（至少 1 期），
+	//  一期就放不下时拒绝，要减少 columns。
+	StepReplay(ctx context.Context, req *StepReplayReq) (*StepReplayRsp, error)
+	// CloseReplay CloseReplay 结束会话并释放内存；会话不存在时 closed 为假。
+	CloseReplay(ctx context.Context, req *CloseReplayReq) (*CloseReplayRsp, error)
+}
+
+func EngineControlService_OpenReplay_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &OpenReplayReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).OpenReplay(ctx, reqbody.(*OpenReplayReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func EngineControlService_StepReplay_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &StepReplayReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).StepReplay(ctx, reqbody.(*StepReplayReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func EngineControlService_CloseReplay_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CloseReplayReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).CloseReplay(ctx, reqbody.(*CloseReplayReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// EngineControlServer_ServiceDesc descriptor for server.RegisterService.
+var EngineControlServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.factor.EngineControl",
+	HandlerType: ((*EngineControlService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.factor.EngineControl/OpenReplay",
+			Func: EngineControlService_OpenReplay_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.EngineControl/StepReplay",
+			Func: EngineControlService_StepReplay_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.EngineControl/CloseReplay",
+			Func: EngineControlService_CloseReplay_Handler,
+		},
+	},
+}
+
+// RegisterEngineControlService registers service.
+func RegisterEngineControlService(s server.Service, svr EngineControlService) {
+	if err := s.Register(&EngineControlServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("EngineControl register error:%v", err))
+	}
+}
+
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
 type UnimplementedFactorMgr struct{}
@@ -1116,6 +1208,25 @@ func (s *UnimplementedFactorEngine) GetTaskParams(ctx context.Context, req *GetT
 // GetUdfModule GetUdfModule 按版本哈希取一个自定义算子模块的 wasm 字节。
 func (s *UnimplementedFactorEngine) GetUdfModule(ctx context.Context, req *GetUdfModuleReq) (*GetUdfModuleRsp, error) {
 	return nil, errors.New("rpc GetUdfModule of service FactorEngine is not implemented")
+}
+
+type UnimplementedEngineControl struct{}
+
+// OpenReplay OpenReplay 建立会话：核对本地数据、按预热区间读快照、预留内存。同一个 replay_id 重复打开时先释放旧会话。
+func (s *UnimplementedEngineControl) OpenReplay(ctx context.Context, req *OpenReplayReq) (*OpenReplayRsp, error) {
+	return nil, errors.New("rpc OpenReplay of service EngineControl is not implemented")
+}
+
+// StepReplay StepReplay 从 period_time 起按顺序算最多 periods 期。单步响应不超过 3 MiB：放不下时只返回前面几期（至少 1 期），
+//
+//	一期就放不下时拒绝，要减少 columns。
+func (s *UnimplementedEngineControl) StepReplay(ctx context.Context, req *StepReplayReq) (*StepReplayRsp, error) {
+	return nil, errors.New("rpc StepReplay of service EngineControl is not implemented")
+}
+
+// CloseReplay CloseReplay 结束会话并释放内存；会话不存在时 closed 为假。
+func (s *UnimplementedEngineControl) CloseReplay(ctx context.Context, req *CloseReplayReq) (*CloseReplayRsp, error) {
+	return nil, errors.New("rpc CloseReplay of service EngineControl is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -2000,6 +2111,86 @@ func (c *FactorEngineClientProxyImpl) GetUdfModule(ctx context.Context, req *Get
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetUdfModuleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// EngineControlClientProxy defines service client proxy
+type EngineControlClientProxy interface {
+	// OpenReplay OpenReplay 建立会话：核对本地数据、按预热区间读快照、预留内存。同一个 replay_id 重复打开时先释放旧会话。
+	OpenReplay(ctx context.Context, req *OpenReplayReq, opts ...client.Option) (rsp *OpenReplayRsp, err error)
+	// StepReplay StepReplay 从 period_time 起按顺序算最多 periods 期。单步响应不超过 3 MiB：放不下时只返回前面几期（至少 1 期），
+	//  一期就放不下时拒绝，要减少 columns。
+	StepReplay(ctx context.Context, req *StepReplayReq, opts ...client.Option) (rsp *StepReplayRsp, err error)
+	// CloseReplay CloseReplay 结束会话并释放内存；会话不存在时 closed 为假。
+	CloseReplay(ctx context.Context, req *CloseReplayReq, opts ...client.Option) (rsp *CloseReplayRsp, err error)
+}
+
+type EngineControlClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewEngineControlClientProxy = func(opts ...client.Option) EngineControlClientProxy {
+	return &EngineControlClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *EngineControlClientProxyImpl) OpenReplay(ctx context.Context, req *OpenReplayReq, opts ...client.Option) (*OpenReplayRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/OpenReplay")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("OpenReplay")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &OpenReplayRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *EngineControlClientProxyImpl) StepReplay(ctx context.Context, req *StepReplayReq, opts ...client.Option) (*StepReplayRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/StepReplay")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("StepReplay")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &StepReplayRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *EngineControlClientProxyImpl) CloseReplay(ctx context.Context, req *CloseReplayReq, opts ...client.Option) (*CloseReplayRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/CloseReplay")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("CloseReplay")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CloseReplayRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

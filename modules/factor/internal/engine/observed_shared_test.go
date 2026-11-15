@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"math"
-	"net/http"
 	"sort"
 	"sync"
 	"testing"
@@ -226,16 +225,13 @@ func TestObservedSharedSourceIndependentOfOrder(t *testing.T) {
 	// 回放走真实路径：本地存储与数据层的登记。
 	obs, _ := sharedTasks()
 	runner := pipeline.NewRunner(nil, nil, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
-	m := newReplayManager(ReplayDeps{Sets: replayTasks{set: obs}, Source: sharedReplaySource{}, Columns: &sharedStorage{}, Store: replayStore,
+	m := newReplayManager(ReplayDeps{Sets: replayTasks{set: obs}, Source: sharedReplaySource{}, Store: replayStore,
 		Synced: sharedSynced().Subjects, Runner: runner})
-	ctx := context.Background()
-	_, status, err := m.Open(ctx, ReplayOpenRequest{ReplayID: "shared", TaskID: obs.Set.TaskID,
-		From: rt0.Add(10 * time.Minute).Format(time.RFC3339), To: rt0.Add(11 * time.Minute).Format(time.RFC3339)})
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, status)
-	step, _, err := m.Step(ctx, ReplayStepRequest{ReplayID: "shared", Period: rt0.Add(10 * time.Minute).Format(time.RFC3339)})
-	require.NoError(t, err)
-	require.Equal(t, math.Float64bits(values["obs-first"]), math.Float64bits(step.Subjects["A"].Factors["obs"]["obs"]), "回放")
+	open := replayOpenReq("shared", 10, 11, 0, "obs")
+	open.TaskId = obs.Set.TaskID
+	mustOpenReplay(t, m, open)
+	got := replayRowOf(mustStepOne(t, m, "shared", 10), "A", plainTag).GetValues()["obs"]
+	require.Equal(t, math.Float64bits(values["obs-first"]), math.Float64bits(got), "回放")
 }
 
 // sharedReplaySource 是回放的源数据集：在册的标的是 obs 任务的范围。

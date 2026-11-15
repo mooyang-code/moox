@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"math"
-	"net/http"
 	"testing"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,20 +81,15 @@ func TestReplayObservedHistoryIncludesDelisted(t *testing.T) {
 	rewrite("GONE", 200, 8)
 
 	ctx := context.Background()
-	open, status, err := m.Open(ctx, ReplayOpenRequest{ReplayID: "obs", TaskID: "ftask_replay",
-		From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339)})
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, status)
-	require.Equal(t, []string{"A", "B"}, open.Subjects)
+	open := mustOpenReplay(t, m, replayOpenReq("obs", 5, 10, 0, "obs"))
+	require.Equal(t, []string{"A", "B"}, open.GetSubjects())
 
 	live := pipeline.NewRunner(discardStore{}, localStoreData{store: store, src: src, history: []string{"GONE"}}, periodclock.Continuous{},
 		pipeline.Config{ComputeWorkers: 1})
 	want := map[int]float64{7: 1.0 / 3, 9: (1.0/3 + 0.5 + 0.5) / 3} // A 的值：第 7 分钟的截面有 GONE，第 8、9 分钟没有
 	for minute := 5; minute < 10; minute++ {
 		period := rt0.Add(time.Duration(minute) * time.Minute)
-		step, _, err := m.Step(ctx, ReplayStepRequest{ReplayID: "obs", Period: period.Format(time.RFC3339)})
-		require.NoError(t, err)
-		got := step.Subjects["A"].Factors["obs"]["obs"]
+		got := replayRowOf(mustStepOne(t, m, "obs", minute), "A", plainTag).GetValues()["obs"]
 		if expected, ok := want[minute]; ok {
 			require.InDelta(t, expected, got, 1e-12, "minute %d", minute)
 		}
@@ -109,7 +104,7 @@ func TestReplayObservedHistoryIncludesDelisted(t *testing.T) {
 		require.NoError(t, err)
 		values, err := pipeline.PeriodValues(plan, computation, period)
 		require.NoError(t, err)
-		liveValue := values["A"]["obs"]["obs"]
+		liveValue := values[seriesset.Series{SubjectID: "A", SeriesTag: plainTag}]["obs"]["obs"]
 		require.Equal(t, math.Float64bits(liveValue), math.Float64bits(got), "minute %d: replay %v, live %v", minute, got, liveValue)
 	}
 }

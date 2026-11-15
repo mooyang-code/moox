@@ -14,13 +14,17 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/factorname"
 	"github.com/stretchr/testify/require"
 )
 
-// 回放因子帧金样（批 3 T11 的前置 R2）：把现有回放夹具逐期得到的因子值、上一期因子值、年龄根数、成员状态与生效参数存成数据文件。
-// T11 会把回放改成 RPC 并重写帧的组装（按（标的, series_tag）出行、按列裁剪、一步多期），之后对着这份数据文件比，
-// 单序列数据集上要逐位一致。
+// 回放因子帧金样（批 3 T11 的前置 R2）：把回放夹具逐期得到的因子值、上一期因子值、年龄根数、成员状态与生效参数存成数据文件。
+// 金样在 T11 之前由 HTTP 接口生成；T11 把回放改成 EngineControl 的三个 RPC 方法并重写了帧的组装（按（标的, series_tag）出行、
+// 按列裁剪、一步多期），这里直接调 RPC 方法、按值对应抽出同样的记录，单序列数据集上逐位一致。
 //
 // 结构：每个值一行，键是（场景、步序、期、记录类型、标的、series_tag、成员、名字），不依赖现有响应结构的字段名与嵌套方式，
 // 字段换了名字或位置时按键对应比较即可。步序是会话里第几次请求：同一期可以带不同参数重复请求，所以期本身不够当键。
@@ -40,9 +44,10 @@ import (
 // 文件里的记录按（场景、步序（数值）、记录类型、标的、series_tag、成员、名字）排序后写出，与生成记录的先后无关：
 // 只要给出同一组值，写出的字节就相同。
 //
-// 现有夹具全是单序列：每个标的只有一条 series_tag 为 plainTag 的序列，现在的响应里不带 series_tag，金样按 plainTag 照实填。
-// 多序列（统一数据集两条序列都出行）由 T11 新增的用例覆盖，不在这份金样里。
-// 不进金样的：Close、Exec（T11 删除成交价字段）、Source（T11 改成按请求的列裁剪）、DecisionAt、ComputeMillis 与报错文字。
+// 现有夹具全是单序列：每个标的只有一条 series_tag 为 plainTag 的序列，series_tag 取响应行里的值。
+// 多序列（统一数据集两条序列都出行）由 TestReplayUnifiedDatasetEmitsOneRowPerSeries 覆盖，不在这份金样里。
+// 请求的列是全部成员输出列加 __params：行里的因子列按 OpenReplay 返回的成员输出列还原成（成员、名字）。
+// 不进金样的：源数据列、ComputeMillis 与报错文字。
 //
 // 浮点按 strconv.FormatFloat(v, 'g', -1, 64) 写，能精确还原，按文字比较就是位级比较。
 // 金样由当前代码生成，默认只比对；有意改变结果时用 UPDATE_BASELINE=1 重新生成，并在 PR 里说明原因：
@@ -63,7 +68,7 @@ type replayBaselineStep struct {
 type replayBaselineScenario struct {
 	name  string
 	setup func(t *testing.T) *replayManager
-	open  ReplayOpenRequest
+	open  *factorpb.OpenReplayReq
 	steps []replayBaselineStep
 }
 
@@ -76,9 +81,9 @@ func replayBaselineMinutes(from, to int) []replayBaselineStep {
 	return steps
 }
 
-func replayBaselineOpen(id string, from, to, extra int) ReplayOpenRequest {
-	return ReplayOpenRequest{ReplayID: id, TaskID: "ftask_replay", From: rt0.Add(time.Duration(from) * time.Minute).Format(time.RFC3339),
-		To: rt0.Add(time.Duration(to) * time.Minute).Format(time.RFC3339), ExtraPeriods: extra}
+// replayBaselineOpen 请求成员的全部输出列加 __params。
+func replayBaselineOpen(id string, from, to, extra int, outputs ...string) *factorpb.OpenReplayReq {
+	return replayOpenReq(id, from, to, extra, append(outputs, factorname.ParamsColumn)...)
 }
 
 // replayBaselinePmean 是参数用例的定义：窗口可调的均值。
@@ -92,7 +97,7 @@ func replayBaselineScenarios() []replayBaselineScenario {
 			// TestReplayOpenAndStep 的夹具：bias = ts_mean(close, 2)，GONE 的数据到不了终点被排除。
 			name:  "base",
 			setup: func(t *testing.T) *replayManager { m, _ := newReplayManagerForTest(t); return m },
-			open:  replayBaselineOpen("base", 5, 10, 1),
+			open:  replayBaselineOpen("base", 5, 10, 1, "bias"),
 			steps: replayBaselineMinutes(5, 10),
 		},
 		{
@@ -112,7 +117,7 @@ func replayBaselineScenarios() []replayBaselineScenario {
 				m.deps.Source = lateSource{}
 				return m
 			},
-			open:  replayBaselineOpen("late_listing", 5, 10, 1),
+			open:  replayBaselineOpen("late_listing", 5, 10, 1, "bias"),
 			steps: replayBaselineMinutes(5, 10),
 		},
 		{
@@ -127,7 +132,7 @@ func replayBaselineScenarios() []replayBaselineScenario {
 				}))
 				return m
 			},
-			open: replayBaselineOpen("tuned", 14, 17, 0),
+			open: replayBaselineOpen("tuned", 14, 17, 0, "pmean__var"),
 			steps: []replayBaselineStep{
 				{minute: 14},
 				{minute: 15},
@@ -148,7 +153,7 @@ func replayBaselineScenarios() []replayBaselineScenario {
 				}))
 				return m
 			},
-			open: replayBaselineOpen("fixed", 14, 17, 0),
+			open: replayBaselineOpen("fixed", 14, 17, 0, "pmean__4"),
 			steps: []replayBaselineStep{
 				{minute: 14},
 				{minute: 15},
@@ -183,7 +188,7 @@ func replayBaselineScenarios() []replayBaselineScenario {
 				rewrite("GONE", 200, 8)
 				return m
 			},
-			open:  replayBaselineOpen("observed", 5, 10, 0),
+			open:  replayBaselineOpen("observed", 5, 10, 0, "obs"),
 			steps: replayBaselineMinutes(5, 10),
 		},
 	}
@@ -200,50 +205,55 @@ func replayBaselineSortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// replayBaselineRecords 把一步的响应展开成记录：每个值一行。
-func replayBaselineRecords(scenario string, step int, rsp ReplayStepResponse) [][]string {
+// replayBaselineRecords 把一期的帧展开成记录：每个值一行。outputs 是 OpenReplay 返回的成员输出列（列名 → 成员键）。
+func replayBaselineRecords(scenario string, step int, outputs map[string]string, frame *factorpb.ReplayPeriod) [][]string {
 	var records [][]string
-	period := rsp.Period
+	period := time.Unix(frame.GetPeriodTime(), 0).UTC().Format(time.RFC3339)
 	add := func(kind, subject, tag, member, name, value string) {
 		records = append(records, []string{scenario, strconv.Itoa(step), period, kind, subject, tag, member, name, value})
 	}
-	addValues := func(kind, subject string, values map[string]map[string]float64) {
-		for _, member := range replayBaselineSortedKeys(values) {
-			for _, name := range replayBaselineSortedKeys(values[member]) {
-				add(kind, subject, plainTag, member, name, replayBaselineFloat(values[member][name]))
+	addColumns := func(kind, subject, tag string, values map[string]float64) {
+		for _, column := range replayBaselineSortedKeys(values) {
+			if member, ok := outputs[column]; ok {
+				add(kind, subject, tag, member, column, replayBaselineFloat(values[column]))
 			}
 		}
 	}
-	for _, subject := range replayBaselineSortedKeys(rsp.Subjects) {
-		frame := rsp.Subjects[subject]
-		addValues("factor", subject, frame.Factors)
-		addValues("factor_prev", subject, frame.FactorsPrev)
-		addValues("param", subject, frame.Params)
-		add("age_bars", subject, plainTag, "", "", strconv.Itoa(frame.AgeBars))
+	for _, row := range frame.GetRows() {
+		subject, tag := row.GetSubjectId(), row.GetSeriesTag()
+		addColumns("factor", subject, tag, row.GetValues())
+		addColumns("factor_prev", subject, tag, row.GetPrevious())
+		for _, member := range replayBaselineSortedKeys(row.GetParams()) {
+			values := row.GetParams()[member].GetValues()
+			for _, name := range replayBaselineSortedKeys(values) {
+				add("param", subject, tag, member, name, replayBaselineFloat(values[name]))
+			}
+		}
+		add("age_bars", subject, tag, "", "", strconv.Itoa(int(row.GetAgeBars())))
 	}
-	for _, member := range replayBaselineSortedKeys(rsp.States) {
-		state := rsp.States[member]
-		failed := append([]string(nil), state.FailedSubjects...)
+	for _, member := range replayBaselineSortedKeys(frame.GetStates()) {
+		state := frame.GetStates()[member]
+		failed := append([]string(nil), state.GetFailedSubjects()...)
 		sort.Strings(failed)
-		add("state.status", "", "", member, "", state.Status)
-		add("state.kind", "", "", member, "", state.Kind)
-		add("state.factor_id", "", "", member, "", state.FactorID)
-		add("state.definition_hash", "", "", member, "", state.DefinitionHash)
+		add("state.status", "", "", member, "", state.GetStatus())
+		add("state.kind", "", "", member, "", state.GetKind())
+		add("state.factor_id", "", "", member, "", state.GetFactorId())
+		add("state.definition_hash", "", "", member, "", state.GetDefinitionHash())
 		add("state.failed_subjects", "", "", member, "", strings.Join(failed, ";"))
 	}
-	for _, member := range replayBaselineSortedKeys(rsp.AppliedParams) {
-		snapshot := rsp.AppliedParams[member]
-		for _, name := range replayBaselineSortedKeys(snapshot) {
-			value := snapshot[name]
-			add("applied.default", "", "", member, name, replayBaselineFloat(value.Default))
-			for _, subject := range replayBaselineSortedKeys(value.Overrides) {
-				add("applied.override", subject, "", member, name, replayBaselineFloat(value.Overrides[subject]))
+	for _, applied := range frame.GetAppliedParams() {
+		member := applied.GetMemberKey()
+		for _, name := range replayBaselineSortedKeys(applied.GetParams()) {
+			value := applied.GetParams()[name]
+			add("applied.default", "", "", member, name, replayBaselineFloat(value.GetDefaultValue()))
+			for _, subject := range replayBaselineSortedKeys(value.GetOverrides()) {
+				add("applied.override", subject, "", member, name, replayBaselineFloat(value.GetOverrides()[subject]))
 			}
 		}
 	}
-	rejected := make([]string, 0, len(rsp.RejectedParams))
-	for _, rejection := range rsp.RejectedParams {
-		rejected = append(rejected, rejection.Member)
+	rejected := make([]string, 0, len(frame.GetRejectedParams()))
+	for _, rejection := range frame.GetRejectedParams() {
+		rejected = append(rejected, rejection.GetMemberKey())
 	}
 	sort.Strings(rejected)
 	for _, member := range rejected {
@@ -252,19 +262,27 @@ func replayBaselineRecords(scenario string, step int, rsp ReplayStepResponse) []
 	return records
 }
 
-// replayBaselineRun 跑一个场景，返回它的全部记录。
+// replayBaselineRun 跑一个场景，返回它的全部记录：每一步是一次只算一期的 StepReplay。
 func replayBaselineRun(t *testing.T, scenario replayBaselineScenario) [][]string {
 	t.Helper()
 	m := scenario.setup(t)
-	ctx := context.Background()
-	_, _, err := m.Open(ctx, scenario.open)
-	require.NoError(t, err, scenario.name)
+	open := mustOpenReplay(t, m, scenario.open)
+	outputs := map[string]string{}
+	for _, factor := range open.GetFactors() {
+		for _, column := range factor.GetOutputs() {
+			outputs[column] = factor.GetMemberKey()
+		}
+	}
 	var records [][]string
 	for i, step := range scenario.steps {
-		rsp, _, err := m.Step(ctx, ReplayStepRequest{ReplayID: scenario.open.ReplayID,
-			Period: rt0.Add(time.Duration(step.minute) * time.Minute).Format(time.RFC3339), Params: step.params})
-		require.NoError(t, err, "场景 %s 第 %d 步", scenario.name, i+1)
-		records = append(records, replayBaselineRecords(scenario.name, i+1, rsp)...)
+		var params []*factorpb.MemberParams
+		for _, member := range replayBaselineSortedKeys(step.params) {
+			params = append(params, &factorpb.MemberParams{MemberKey: member, Params: factorwire.SnapshotToPB(step.params[member])})
+		}
+		rsp := stepReplay(t, m, &factorpb.StepReplayReq{ReplayId: scenario.open.GetReplayId(), PeriodTime: replayMinuteUnix(step.minute), Periods: 1, Params: params})
+		require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), "场景 %s 第 %d 步：%s", scenario.name, i+1, rsp.GetRetInfo().GetMsg())
+		require.Len(t, rsp.GetPeriods(), 1)
+		records = append(records, replayBaselineRecords(scenario.name, i+1, outputs, rsp.GetPeriods()[0])...)
 	}
 	return records
 }

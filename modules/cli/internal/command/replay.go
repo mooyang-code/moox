@@ -101,4 +101,5 @@ func prepareReplayEndpoints(cmd *cobra.Command, args []string) ([]string, error)
 	return args, nil
 }
 
-func init() { rootCmd.AddCommand(replayCmd) }
+// 闭环回放的因子侧入口已随 T11 删除（引擎的 /v1/replay/* 改成 EngineControl 的 RPC，只给策略服务调），这个命令不再注册；
+// 代码随 T13 删除。

@@ -2017,8 +2017,9 @@ components:
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: false
-  # 外部程序：运行在登记主机上（通常是只能出站的因子机），以同名外部身份经 Access 访问系统，不经主机网关路由；
+  # 外部程序：运行在登记主机上（通常是只能出站的因子机），以同名外部身份经 Access 访问系统；
   # 由 systemd 用户服务托管，部署健康由 Monitor 经中转探测本机健康端口。
+  # 外部程序可以声明只监听本机的服务，由所在主机的网关路由（出站主机经 control 中转）。
   - id: factor-engine
     name: 因子引擎
     binary: moox-factor-engine
@@ -2030,11 +2031,31 @@ components:
       kind: readyz
       port: 11417
       ready_body: '"ready":true'
+    services:
+      # 回放“因子现算”：策略服务逐步调用，引擎按因子机本地快照现算。单步响应由引擎控制在 3 MiB 以内，包体上限用默认值。
+      - path: trpc.moox.factor.EngineControl
+        port: 11423
+        timeout_ms: 120000
+        # OpenReplay 要读整段本地快照、预留内存，与引擎侧的建会话超时（10 分钟）一致。
+        method_timeouts_ms:
+          OpenReplay: 600000
+        methods:
+          - OpenReplay
+          - StepReplay
+          - CloseReplay
+        acl:
+          - methods:
+              - OpenReplay
+              - StepReplay
+              - CloseReplay
+            callers:
+              - strategy
     doctor:
       role: factor-engine
       description: Factor compute engine that consumes period events and writes factor results through Access
       duties:
         - compute factor periods and recalculation jobs
+        - serve replay compute sessions to strategy through the host gateway
       inputs:
         - period completion events and source windows
       outputs:

@@ -24,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -93,8 +94,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if ctx == nil || s == nil || cfg == nil {
 		return nil, errors.New("factor engine context, server and config are required")
 	}
-	if s.Service(healthService) == nil {
-		return nil, fmt.Errorf("factor engine service %q is required", healthService)
+	for _, name := range []string{healthService, engineControlService} {
+		if s.Service(name) == nil {
+			return nil, fmt.Errorf("factor engine service %q is required", name)
+		}
 	}
 	bootID, err := randomHex(16)
 	if err != nil {
@@ -267,11 +270,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, r.preload.Run)
 	r.goRun(appCtx, follower.Run)
 	r.replays = newReplayManager(ReplayDeps{
-		Sets: r.catalog, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
-		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
-		Begin:   r.beginReplayWrite,
-		Pin:     r.pinTaskModules,
-		Synced:  synced.Subjects,
+		Sets: r.catalog, Source: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
+		Pin: r.pinTaskModules, Synced: synced.Subjects,
 	})
 	r.goRun(appCtx, r.replays.Run)
 	r.goRun(appCtx, func(ctx context.Context) {
@@ -280,9 +280,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	})
 
 	r.health.SnapshotFunc = r.healthSnapshot
-	if err := factorhealth.Register(s.Service(healthService), r.health, append(append(newLocalWriter(r.data, r.storage).routes(), r.lifecycleRoutes()...), r.replays.routes()...)...); err != nil {
+	if err := factorhealth.Register(s.Service(healthService), r.health, append(newLocalWriter(r.data, r.storage).routes(), r.lifecycleRoutes()...)...); err != nil {
 		return nil, fmt.Errorf("register factor engine health service: %w", err)
 	}
+	factorpb.RegisterEngineControlService(s.Service(engineControlService), replayService{m: r.replays})
 	r.health.SetReady(true)
 	log.InfoContextf(ctx, "factor_engine_started engine_id=%s boot_id=%s catalog_loaded=%t lease_conflict=%t",
 		r.identity.EngineID, bootID, r.catalog.Loaded(), r.lease.Conflict())
