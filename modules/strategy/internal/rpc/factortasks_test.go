@@ -80,7 +80,7 @@ func TestEnableBindsFactorTaskAndSnapshotsItsView(t *testing.T) {
 	}
 }
 
-// 校验与研究回放都按因子任务解析；回放必须给出任务；输出了 factor_params 的策略暂不支持研究回放。
+// 校验与研究回放都按因子任务解析；回放必须给出任务；声明了 factor_params 的策略不能用 View 来源回放（见 TestStartReplayInputSource）。
 func TestValidateAndReplayByFactorTask(t *testing.T) {
 	h := newHarness(t)
 	h.resolver.columns = []string{"close", "bias__var"}

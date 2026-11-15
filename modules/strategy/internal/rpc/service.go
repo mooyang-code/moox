@@ -39,6 +39,9 @@ type Resolver interface {
 	LoadLatest(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, now time.Time) (input.Loaded, error)
 	// ReplayWindow 校验并截断回放区间，返回截断后的终点与各市场校验所用的活动索引代次（市场 → 代次）。
 	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, map[string]string, error)
+	// ComputeReplayWindow 是“因子现算”来源的提交校验：不查主帧 View 的覆盖范围，终点截到最近一根已收盘的 bar 之前；返回截断后的终点、
+	// 各任务键的活动索引代次与主帧的序列数（估算单步大小用）。
+	ComputeReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, start, end, now time.Time) (time.Time, map[string]string, int, error)
 	// PoolReplayWindow 是策略池回放的区间校验：按每个成员各自的回看要求校验起点、截断终点，返回值同 ReplayWindow。
 	PoolReplayWindow(ctx context.Context, spaceID string, pooled input.PoolResolved, start, end, now time.Time) (time.Time, map[string]string, error)
 }

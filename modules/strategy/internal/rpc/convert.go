@@ -81,7 +81,7 @@ func replayProto(value store.Replay) *strategypb.Replay {
 		ReplayId: value.ReplayID, StrategyId: dereference(value.StrategyID), DslYaml: value.DSLYaml, SpaceId: value.SpaceID,
 		StartTime: formatTime(value.StartTime), EndTime: formatTime(value.EndTime), SpotFeeBps: value.SpotFeeBps, SwapFeeBps: value.SwapFeeBps, SlippageBps: value.SlippageBps, FundingColumn: value.FundingColumn, Status: value.Status,
 		MetricsJson: string(value.MetricsJSON), Error: value.Error, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
-		DslHash: value.DSLHash, InstanceId: dereference(value.InstanceID), SessionId: dereference(value.SessionID), Calendar: value.Calendar,
+		DslHash: value.DSLHash, InstanceId: dereference(value.InstanceID), SessionId: dereference(value.SessionID), Calendar: value.Calendar, Input: value.Input,
 	}
 	if len(value.Tasks) > 0 {
 		replay.Tasks = make(map[string]*strategypb.ReplayTask, len(value.Tasks))
@@ -97,7 +97,7 @@ func replayProto(value store.Replay) *strategypb.Replay {
 
 func replayBarProto(value store.ReplayBar) *strategypb.ReplayBar {
 	return &strategypb.ReplayBar{
-		BarEndTime: formatTime(value.BarEndTime), Status: value.Status, Targets: targetProtos(value.TargetsJSON), PositionsJson: string(value.PositionsJSON), SummaryJson: string(value.SummaryJSON),
+		BarEndTime: formatTime(value.BarEndTime), Status: value.Status, Targets: targetProtos(value.TargetsJSON), PositionsJson: string(value.PositionsJSON), SummaryJson: string(value.SummaryJSON), ParamsJson: string(value.ParamsJSON),
 		BarReturn: value.Return, Equity: value.Equity, Turnover: value.Turnover, Fee: value.Fee, SpotValue: value.SpotValue, SwapValue: value.SwapValue,
 		Holdings: int32(value.Holdings), Frozen: int32(value.Frozen), SkipReason: value.SkipReason, Unfilled: int32(value.Unfilled), Liquidated: int32(value.Liquidated),
 	}

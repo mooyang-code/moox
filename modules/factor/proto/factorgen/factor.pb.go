@@ -7924,7 +7924,7 @@ type OpenReplayReq struct {
 	// from、to 是回放区间（RFC3339，左闭右开），按任务频率对齐：决策周期是 data_time 落在其中的每一根 K 线。
 	From string `protobuf:"bytes,3,opt,name=from,proto3" json:"from,omitempty"`
 	To   string `protobuf:"bytes,4,opt,name=to,proto3" json:"to,omitempty"`
-	// extra_periods 是策略额外需要的回看根数（引用上一根的深度、年龄检查根数中较大的）：
+	// extra_periods 是策略额外需要的回看根数（引用上一根的深度，0 或 1；年龄按本地数据里序列的第一根算，与快照长度无关，不用算进来）：
 	// 预热起点 = from −（因子最大回看 − 1 + extra_periods）× 周期。
 	ExtraPeriods int32 `protobuf:"varint,5,opt,name=extra_periods,json=extraPeriods,proto3" json:"extra_periods,omitempty"`
 	// columns 是每行要返回的列（结果数据集里的列名）：成员的输出列、源数据集的数值列，以及 __params（各成员本期实际用的参数）。

@@ -9,8 +9,10 @@ import {
   replayFormFromReplay,
   replayMetricsLine,
   recentRange,
+  replayBarParams,
   replayFeeText,
   replayFunding,
+  replayInputLabel,
   replayPoolPeriods,
   replayStatusLabel,
   replayTasksText,
@@ -182,6 +184,14 @@ describe("replay model helpers", () => {
     expect(replayFeeText(single)).toBe("10 bps");
     expect(replayFeeText(mixed)).toBe("现货 10 bps、永续 5 bps");
     expect(replayFeeText({ ...single, slippage_bps: 3 }), "有滑点时写在手续费后面").toBe("10 bps，滑点 3 bps");
+    expect(replayInputLabel("compute")).toBe("因子现算");
+    expect(replayInputLabel("view")).toBe("结果 View");
+    expect(replayInputLabel(undefined)).toBe("结果 View");
+    expect(replayBarParams("{}")).toEqual([]);
+    expect(replayBarParams('{"b":{"y":{"default":2}},"a":{"x":{"default":1.5,"overrides":{"A":3}}}}')).toEqual([
+      "a x = 1.5（另有 1 个标的单独取值）",
+      "b y = 2"
+    ]);
     expect(replayUsesSwap(single)).toBe(false);
     expect(replayUsesSwap(mixed)).toBe(true);
     expect(replayUsesSwap(null)).toBe(false);

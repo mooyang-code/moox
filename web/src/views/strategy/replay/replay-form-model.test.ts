@@ -11,6 +11,7 @@ import {
   replayMarkets,
   replayPool,
   replaySourceOf,
+  replayTuned,
   validateReplayForm,
   wholeDays
 } from "./replay-form-model";
@@ -32,7 +33,8 @@ const base: ReplayFormState = {
   spot_fee_bps: 10,
   swap_fee_bps: 5,
   slippage_bps: 0,
-  funding_column: ""
+  funding_column: "",
+  input: "view"
 };
 
 describe("replay form model", () => {
@@ -213,5 +215,30 @@ describe("策略池回放表单", () => {
     );
     expect(replayDriftHint(form(both), [...members, both])).toBe("");
     expect(replayDriftHint({ ...form(started), instance_id: "i1" }, [...members, started])).toBe("");
+  });
+
+  it("因子数据来源：factor_params 的策略必须用因子现算；因子现算不支持策略池、两个任务与股票", () => {
+    const tuned = [
+      ...strategies,
+      {
+        strategy_id: "t1",
+        dsl_yaml: 'name: t\nmarket: {select: swap}\nfactor_params:\n  ma__var:\n    window: {default: "close"}\n'
+      }
+    ] as Strategy[];
+    const form = { ...base, strategy_id: "t1" };
+    expect(replayTuned(form, tuned)).toBe(true);
+    expect(replayTuned(base, tuned)).toBe(false);
+    expect(replayTuned({ ...base, strategy_id: "", instance_id: "i1", instance_strategy_id: "t1" }, tuned)).toBe(true);
+    expect(validateReplayForm(form, tuned)).toContain("因子现算");
+    expect(validateReplayForm({ ...form, input: "compute" }, tuned)).toBe("");
+    expect(
+      validateReplayForm({ ...base, strategy_id: "s1", tasks: { spot: "a", swap: "b" }, input: "compute" }, strategies)
+    ).toContain("只支持一个计算任务");
+    expect(
+      validateReplayForm(
+        { ...base, strategy_id: "s3", single_market: "equity", tasks: { equity: "e" }, input: "compute" },
+        strategies
+      )
+    ).toContain("股票");
   });
 });

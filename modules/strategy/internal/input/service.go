@@ -274,6 +274,39 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 	return end, generations, nil
 }
 
+// ComputeReplayWindow 是“因子现算”来源的提交校验：主帧不读 View，不按 View 的覆盖范围校验起点或截断终点（可回放的各期
+// 由因子引擎按本地数据在回放开始时给出），只把终点截到 now 时最近一根已收盘的 bar 之前（它可能还没同步到因子机本地，与
+// View 来源一样不回放最新一根）。返回截断后的终点、各任务键的活动索引代次（附加来源与参考市场执行时仍读 View；主帧任务
+// 只登记，不再按它复查），以及主帧的序列数（数据集的标的数 × 市场数，用来估算单步大小）。
+func (s Service) ComputeReplayWindow(ctx context.Context, spaceID string, resolved Resolved, start, end, now time.Time) (time.Time, map[string]string, int, error) {
+	if s.Client == nil {
+		return time.Time{}, nil, 0, errors.New("Storage 与 Factor 依赖未配置，不能回放")
+	}
+	closed, err := ClosedPeriod(resolved.Calendar, resolved.Bar, now)
+	if err != nil {
+		return time.Time{}, nil, 0, err
+	}
+	if end.After(closed.StorageStart) {
+		end = closed.StorageStart
+	}
+	if !end.After(start) {
+		return time.Time{}, nil, 0, fmt.Errorf("%w：最近一根已收盘的 bar 是 %s，回放只到它之前", ErrNoCompleteBar, PeriodLabel(resolved.Calendar, resolved.Bar, closed.StorageStart))
+	}
+	generations := make(map[string]string, len(resolved.Tasks))
+	for key, task := range resolved.AllTaskBindings() {
+		generation, err := s.Client.ViewGeneration(ctx, spaceID, task.ViewID)
+		if err != nil {
+			return time.Time{}, nil, 0, err
+		}
+		generations[key] = generation
+	}
+	subjects, err := s.Client.ListDatasetSubjects(ctx, spaceID, resolved.Primary().DatasetID)
+	if err != nil {
+		return time.Time{}, nil, 0, err
+	}
+	return end, generations, len(subjects) * len(resolved.Markets()), nil
+}
+
 // PoolReplayWindow 校验并截断策略池研究回放的区间：每个成员按自己的 min_age_bars 与回看校验起点、终点取各 View 各成员中最早的
 // （见 PoolWindow；研究回放不含最新一根）。返回截断后的终点与各市场校验所用的活动索引代次（市场 → 代次）。
 func (s Service) PoolReplayWindow(ctx context.Context, spaceID string, pooled PoolResolved, start, end, now time.Time) (time.Time, map[string]string, error) {

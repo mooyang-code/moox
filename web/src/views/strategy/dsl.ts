@@ -207,6 +207,8 @@ export interface DSLPreview {
   market: string;
   /** 策略池策略才有；此时 rules 为空。 */
   pool?: DSLPoolPreview;
+  /** 写了 factor_params（策略逐期求出可变成员下一期的参数）时为 true；回放只能用“因子现算”来源。没写时不出现。 */
+  tuned?: boolean;
 }
 
 /** 本地只做 YAML 与结构预检；字段、表达式与列的完整校验以服务端 ValidateStrategy 为准。 */
@@ -266,7 +268,8 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
       leverage: value.portfolio?.leverage === undefined ? "1" : String(value.portfolio.leverage),
       // 策略池不写 market：池涉及的市场是各成员所需市场的并集，选币和下单按成员自己的 market
       market: hasPool ? "成员市场的并集（各成员按自己的 market）" : describeMarket(value.market),
-      ...(pool ? { pool } : {})
+      ...(pool ? { pool } : {}),
+      ...(value.factor_params !== undefined ? { tuned: true } : {})
     },
     diagnostics
   };

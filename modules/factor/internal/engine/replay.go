@@ -170,7 +170,7 @@ type ReplayOpenRequest struct {
 	// From、To 是回放区间（RFC3339，左闭右开）：决策周期是 data_time 落在其中的每一根 K 线。
 	From string
 	To   string
-	// ExtraPeriods 是策略额外需要的回看根数（引用因子列的上一根深度、年龄检查根数中较大的）；预热起点 = from −（因子最大回看 − 1 + ExtraPeriods）。
+	// ExtraPeriods 是策略额外需要的回看根数（引用上一根的深度；年龄按本地数据里序列的第一根算，与快照长度无关）；预热起点 = from −（因子最大回看 − 1 + ExtraPeriods）。
 	ExtraPeriods int
 	// Columns 是每行要返回的列：成员输出列、源数据集的数值列与 __params。
 	Columns []string

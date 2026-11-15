@@ -179,6 +179,8 @@ export interface ReplayBarDetail {
   /** 现金不足时买入实际执行的比例（0~1）；没有缩减时为 null。 */
   buyScale: number | null;
   notes: string[];
+  /** 这一期因子实际生效的逐期提交参数，每个成员的每个参数一条说明；没有时为空列表（成员按自己的参数）。 */
+  params: string[];
 }
 
 function parseObject(raw?: string): any {
@@ -219,8 +221,29 @@ export function parseBarDetail(bar: ReplayBar): ReplayBarDetail {
     unfilled: list(ledger.unfilled).map(positionLabel),
     liquidated: list(ledger.liquidated).map(positionLabel),
     buyScale: ledger.buy_scale === undefined || ledger.buy_scale === null ? null : Number(ledger.buy_scale),
-    notes: list(summary.decision?.notes)
+    notes: list(summary.decision?.notes),
+    params: replayBarParams(bar.params_json)
   };
+}
+
+/** 回放主帧的因子数据来源说明。 */
+export function replayInputLabel(input?: string): string {
+  return input === "compute" ? "因子现算" : "结果 View";
+}
+
+/** 一期生效的逐期提交参数（params_json）：每个成员的每个参数一条“成员 参数 = 值”，有按标的覆盖时注明个数；按成员、参数名排序。 */
+export function replayBarParams(raw?: string): string[] {
+  const members = parseObject(raw);
+  const lines: string[] = [];
+  for (const member of Object.keys(members).sort()) {
+    const params = members[member] && typeof members[member] === "object" ? members[member] : {};
+    for (const name of Object.keys(params).sort()) {
+      const value = params[name] ?? {};
+      const overrides = value.overrides && typeof value.overrides === "object" ? Object.keys(value.overrides).length : 0;
+      lines.push(`${member} ${name} = ${Number(value.default ?? 0)}${overrides ? `（另有 ${overrides} 个标的单独取值）` : ""}`);
+    }
+  }
+  return lines;
 }
 
 /**
@@ -276,6 +299,7 @@ export function replayFormFromReplay(replay: Replay) {
     spot_fee_bps: replay.spot_fee_bps,
     swap_fee_bps: replay.swap_fee_bps,
     slippage_bps: replay.slippage_bps ?? 0,
-    funding_column: replay.funding_column ?? ""
+    funding_column: replay.funding_column ?? "",
+    input: replay.input === "compute" ? ("compute" as const) : ("view" as const)
   };
 }

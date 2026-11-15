@@ -73,7 +73,8 @@
                 <a-link class="mono" @click="router.push(detailLink(selected.instance_id))">{{ selected.instance_id }}</a-link
                 >，会话 <span class="mono">{{ selected.session_id }}</span></template
               >
-              · 计算任务 {{ replayTasksText(selected) }} · 区间 {{ replayRangeLabel(selected, displayZone) }} · 手续费
+              · 计算任务 {{ replayTasksText(selected) }} · 因子数据来源 {{ replayInputLabel(selected.input) }} · 区间
+              {{ replayRangeLabel(selected, displayZone) }} · 手续费
               {{ replayFeeText(selected) }}
               <template v-if="metrics?.first_bar_end">
                 · 实际首根 {{ formatInstant(metrics.first_bar_end, displayZone) }}，末根
@@ -189,6 +190,9 @@
                   </div>
                   <div v-if="barDetail(record).unfilled.length">未达成目标：{{ barDetail(record).unfilled.join("、") }}</div>
                   <div v-if="barDetail(record).liquidated.length">缺价清算：{{ barDetail(record).liquidated.join("、") }}</div>
+                  <div v-if="selected.input === 'compute'">
+                    生效参数：{{ barDetail(record).params.join("；") || "按成员自己的参数（这一期没有逐期提交的参数）" }}
+                  </div>
                   <div v-for="note in barDetail(record).notes" :key="note" class="muted">{{ note }}</div>
                   <a-table
                     v-if="barDetail(record).positions.length"
@@ -328,6 +332,7 @@ import {
   replayFeeText,
   replayFormFromReplay,
   replayFunding,
+  replayInputLabel,
   replayPoolPeriods,
   replayRangeLabel,
   replaySourceLabel,
@@ -403,7 +408,8 @@ const form = reactive<ReplayFormState>({
   spot_fee_bps: 10,
   swap_fee_bps: 10,
   slippage_bps: 0,
-  funding_column: ""
+  funding_column: "",
+  input: "view"
 });
 let chart: VChart | null = null;
 // 图表库体积很大（约 2MB）：第一次真正要画曲线时才加载，回放列表与创建表单不必等它。
@@ -842,7 +848,8 @@ async function start() {
       spot_fee_bps: Number(form.spot_fee_bps) || 0,
       swap_fee_bps: Number(form.swap_fee_bps) || 0,
       slippage_bps: Number(form.slippage_bps) || 0,
-      ...(fundingColumn ? { funding_column: fundingColumn } : {})
+      ...(fundingColumn ? { funding_column: fundingColumn } : {}),
+      input: form.input
     });
     if (gen !== generation) return;
     Message.success(

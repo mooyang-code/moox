@@ -111,7 +111,8 @@ function normalizeReplay(value: any): Replay {
     dsl_hash: value?.dsl_hash ?? "",
     instance_id: value?.instance_id ?? "",
     session_id: value?.session_id ?? "",
-    calendar: value?.calendar ?? ""
+    calendar: value?.calendar ?? "",
+    input: value?.input || "view"
   };
 }
 
@@ -122,6 +123,7 @@ function normalizeReplayBar(value: any): ReplayBar {
     targets: (value?.targets ?? []).map(normalizeTarget),
     positions_json: value?.positions_json || "{}",
     summary_json: value?.summary_json || "{}",
+    params_json: value?.params_json || "{}",
     bar_return: Number(value?.bar_return ?? 0),
     equity: Number(value?.equity ?? 0),
     turnover: Number(value?.turnover ?? 0),

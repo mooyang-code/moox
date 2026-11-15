@@ -47,6 +47,8 @@ type fakeResolver struct {
 	onResolve func()
 	// calendar 非空时解析结果使用该日历的日线（例如 cn_stock）。
 	calendar string
+	// series 是“因子现算”提交校验返回的主帧序列数（为 0 时按 3 个标的 × 市场数）。
+	series int
 }
 
 // TaskMarket：后缀 swap 的任务是永续，其余现货；taskMarkets 里登记的优先。
@@ -130,6 +132,25 @@ func (f *fakeResolver) ReplayWindow(_ context.Context, _ string, resolved input.
 		generations[market] = f.view.Generation
 	}
 	return end, generations, err
+}
+
+// ComputeReplayWindow 只把终点截到 now 之前的整点，代次取 view 的，序列数取 series（为 0 时按 3 个标的 × 市场数）。
+func (f *fakeResolver) ComputeReplayWindow(_ context.Context, _ string, resolved input.Resolved, start, end, now time.Time) (time.Time, map[string]string, int, error) {
+	if limit := now.Truncate(time.Hour).Add(-time.Hour); end.After(limit) {
+		end = limit
+	}
+	if !end.After(start) {
+		return time.Time{}, nil, 0, input.ErrNoCompleteBar
+	}
+	generations := make(map[string]string, len(resolved.Tasks))
+	for key := range resolved.AllTaskBindings() {
+		generations[key] = f.view.Generation
+	}
+	series := f.series
+	if series == 0 {
+		series = 3 * len(resolved.Markets())
+	}
+	return end, generations, series, nil
 }
 
 // fakeOwner 记录认领与释放；claimErr 让下一次认领失败。

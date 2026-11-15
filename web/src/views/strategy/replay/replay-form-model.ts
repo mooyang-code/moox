@@ -1,11 +1,11 @@
-import type { Strategy } from "@/api/strategy-types";
+import type { ReplayInput, Strategy } from "@/api/strategy-types";
 import type { FactorTask } from "@/api/factor/types";
 import { TASK_KEY_ORDER, marketRequirement, poolRequirement, type PoolRequirement } from "@/views/strategy/market-mode";
 import { parseDSL } from "@/views/strategy/dsl";
 import { freqSeconds } from "@/views/factor/shared/health";
 import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
 
-/** 回放表单的状态：来源三选一（实例会话 / 已保存定义 / DSL 草稿），其余为各市场的计算任务、区间、两个手续费与滑点。 */
+/** 回放表单的状态：来源三选一（实例会话 / 已保存定义 / DSL 草稿），其余为各市场的计算任务、因子数据来源、区间、两个手续费与滑点。 */
 export interface ReplayFormState {
   source: "definition" | "dsl";
   strategy_id: string;
@@ -24,6 +24,8 @@ export interface ReplayFormState {
   slippage_bps: number;
   /** 永续持仓结算资金费用的列（例如 funding_rate）；空串表示不计。 */
   funding_column: string;
+  /** 主帧的因子数据来源：view 读结果 View，compute 是因子现算。 */
+  input: ReplayInput;
   /** 从实例发起时实例引用的策略定义（页面按实例 ID 读回）；只用来判断是不是策略池，没读到时为空。 */
   instance_strategy_id?: string;
 }
@@ -59,6 +61,17 @@ export function replayIsPool(form: ReplayFormState, strategies: Strategy[]): boo
   if (!form.instance_id) return Boolean(replayPool(form, strategies));
   const text = strategies.find(item => item.strategy_id === form.instance_strategy_id)?.dsl_yaml ?? "";
   return Boolean(form.instance_strategy_id && parseDSL(text).preview?.pool);
+}
+
+/**
+ * 回放对象是不是声明了 factor_params 的策略（这种策略只能用因子现算来源回放）：从实例发起时按实例引用的定义（当前版本）判断，
+ * 实例的定义还没读到时按没声明处理（由后端校验）；其余来源看 DSL 本身。
+ */
+export function replayTuned(form: ReplayFormState, strategies: Strategy[]): boolean {
+  const text = form.instance_id
+    ? (strategies.find(item => item.strategy_id === form.instance_strategy_id)?.dsl_yaml ?? "")
+    : replayDslText(form, strategies);
+  return Boolean(parseDSL(text).preview?.tuned);
 }
 
 /** 要读的市场是否由 DSL 决定：写了 market，或是策略池（成员市场的并集）；否则要先选任务所属的市场。 */
@@ -103,6 +116,8 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
   const omitted = Boolean(form.instance_id) && !markets.length;
   if (!omitted && !markets.length) return "请选择策略的计算任务（策略没写 market 时先选任务所属的市场）";
   if (markets.some(market => !form.tasks[market])) return "请为策略用到的每个市场选择计算任务";
+  const inputError = replayInputError(form, strategies, markets);
+  if (inputError) return inputError;
   if (!form.range) return "请选择回放区间";
   if (form.range[1] <= form.range[0]) return "结束时间必须晚于开始时间";
   for (const fee of [Number(form.spot_fee_bps), Number(form.swap_fee_bps)]) {
@@ -112,6 +127,17 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
   if (!Number.isFinite(slippage) || slippage < 0 || slippage > 200) return "滑点需在 0～200 bps 之间";
   const funding = replayFundingColumn(form, strategies);
   if (funding && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(funding)) return "资金费列只能是 View 里的列名";
+  return "";
+}
+
+/** 因子数据来源的本地校验（与后端一致）：声明了 factor_params 的策略必须用因子现算；因子现算不支持策略池、两个计算任务与股票。 */
+function replayInputError(form: ReplayFormState, strategies: Strategy[], markets: string[]): string {
+  if (form.input !== "compute") {
+    return replayTuned(form, strategies) ? "声明了 factor_params 的策略只能用“因子现算”来源回放" : "";
+  }
+  if (replayIsPool(form, strategies)) return "“因子现算”来源不支持策略池";
+  if (markets.length > 1) return "“因子现算”只支持一个计算任务：现货加永续请用统一数据集上的任务，或改用结果 View";
+  if (markets.includes("equity")) return "“因子现算”暂不支持股票市场";
   return "";
 }
 

@@ -214,7 +214,7 @@ func (p *poolPass) end() time.Time {
 func (p *poolPass) step(ctx context.Context, bar input.PeriodBoundaries, state engine.State) (engine.Decision, map[string]float64, map[string]float64, error) {
 	results := make([]pool.MemberResult, 0, len(p.members))
 	for _, member := range p.members {
-		decision, err := evaluateBar(ctx, member.program, member.resolved, member.markets, nil, p.membership, member.segments, bar, state.Members[member.id])
+		decision, _, err := evaluateBar(ctx, member.program, member.resolved, member.markets, nil, p.membership, member.segments, bar, state.Members[member.id])
 		if err != nil {
 			return engine.Decision{}, nil, nil, fmt.Errorf("成员 %s：%w", member.id, err)
 		}
@@ -408,7 +408,7 @@ func (r *Runner) replayPool(ctx context.Context, job store.Replay, strategy dsl.
 			if err != nil {
 				return acc.finish(), err
 			}
-			if err := book.settle(ctx, bar, decision, prices, funding); err != nil {
+			if err := book.settle(ctx, bar, decision, prices, funding, nil); err != nil {
 				return acc.finish(), err
 			}
 			state = decision.State

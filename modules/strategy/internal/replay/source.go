@@ -20,14 +20,22 @@ type barSource interface {
 	Load(ctx context.Context, bars []input.PeriodBoundaries, nextParams engine.ParamSet) (map[string]marketSegment, error)
 	// End 是当前有效的终点（不含）：来源在读取过程中可能截短它（例如 View 重建了索引，按新索引复查剩余区间）。
 	End() time.Time
+	// Applied 是这一根（bar_start 的 Unix 秒）因子实际生效的、由回放逐期提交的可变成员参数，写进每期记录；
+	// View 来源没有逐期提交的参数，返回 nil。
+	Applied(key int64) engine.ParamSet
 	Close(ctx context.Context) error
 }
 
-// marketSegment 是一个市场一段读取的结果：行与年龄判定的历史，以及各附加来源这一段的行（来源名 → 行）。
+// marketSegment 是一个市场一段读取的结果：行与年龄判定的依据，以及各附加来源这一段的行（来源名 → 行）。
 type marketSegment struct {
 	rows    input.RangeRows
-	ages    *presence
+	ages    ageProber
 	sources map[string]input.RangeRows
+}
+
+// ageProber 给出一根 bar 判定 n 根年龄的探针：View 来源按读到的历史行（presence），“因子现算”来源按引擎给的根数（engineAges）。
+type ageProber interface {
+	probe(n int, bar input.PeriodBoundaries) input.AgeProbe
 }
 
 // replayMarket 是回放的一个市场：市场名、数据集的全部标的绑定（含已停用，回放中都视为活跃）与列出的标的（年龄判定用，
@@ -144,6 +152,9 @@ func (s *viewSource) references() []*replayMarket {
 }
 
 func (s *viewSource) End() time.Time { return s.end }
+
+// Applied 对 View 来源总是 nil：View 的行按当时提交的参数算好，回放不逐期提交参数。
+func (s *viewSource) Applied(int64) engine.ParamSet { return nil }
 
 // Close 丢掉暂存的行；读取器不持有连接，没有别的要释放。
 func (s *viewSource) Close(context.Context) error {

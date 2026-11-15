@@ -139,7 +139,12 @@ export interface Replay {
   session_id: string;
   /** 回放所用的日历（crypto_24x7 | cn_stock）：cn_stock 日线的区间按上海日期解释。 */
   calendar: string;
+  /** 主帧的因子数据来源：view 读结果 View；compute 是因子现算（经主机网关调因子引擎，按因子机本地 K 线与回放中的参数现算）。 */
+  input: ReplayInput | string;
 }
+
+/** 回放主帧的因子数据来源。 */
+export type ReplayInput = "view" | "compute";
 
 /** 回放中一个周期的记录；brief 列表不含目标、持仓与摘要 JSON。 */
 export interface ReplayBar {
@@ -148,6 +153,8 @@ export interface ReplayBar {
   targets: InstrumentTarget[];
   positions_json: string;
   summary_json: string;
+  /** 这一期因子实际生效的、由回放逐期提交的可变成员参数（成员键 → 参数名 → {default, overrides}）；只有因子现算的调参策略有内容。 */
+  params_json: string;
   bar_return: number;
   equity: number;
   turnover: number;
@@ -173,10 +180,12 @@ export interface StartReplayRequest {
   end_time: string;
   spot_fee_bps: number;
   swap_fee_bps: number;
-  /** 滑点（bps，0～1000）：成交价在收盘价上按方向加减这个比例。 */
+  /** 滑点（bps，0～200）：成交价在收盘价上按方向加减这个比例。 */
   slippage_bps: number;
   /** 可选：永续持仓按这一列结算资金费；不写不计。 */
   funding_column?: string;
+  /** 主帧的因子数据来源，不写按 view；声明了 factor_params 的策略必须用 compute。 */
+  input?: ReplayInput;
 }
 
 /** 发起回放的结果：任务与实际回放的根数、首末根 bar_end。 */

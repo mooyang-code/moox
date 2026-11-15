@@ -99,7 +99,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil
 	})
 	service.Warmer = warm
-	runner := &replay.Runner{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
+	// “因子现算”来源经同一个网关客户端调因子引擎的 EngineControl：不套 factor.timeout，超时按服务目录的路由超时。
+	runner := &replay.Runner{Store: db, Client: replayClient, Engine: input.NewEngineClient(gateway), ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
 	service.Replays = runner
 
 	observer, err := newInstanceObserver(db, prometheus.DefaultRegisterer, log.Warnf)
