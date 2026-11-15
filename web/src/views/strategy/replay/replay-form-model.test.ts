@@ -121,10 +121,10 @@ describe("replay form model", () => {
       expect(validateReplayForm({ ...base, [key]: Number.NaN }, strategies)).toContain("手续费");
       expect(validateReplayForm({ ...base, [key]: 0 }, strategies)).toBe("");
     }
-    for (const value of [-1, 1001, Number.NaN]) {
+    for (const value of [-1, 201, Number.NaN]) {
       expect(validateReplayForm({ ...base, slippage_bps: value }, strategies)).toContain("滑点");
     }
-    expect(validateReplayForm({ ...base, slippage_bps: 3 }, strategies)).toBe("");
+    expect(validateReplayForm({ ...base, slippage_bps: 200 }, strategies)).toBe("");
   });
 
   it("只选日期时区间吸附成显示的整天：起点零点，终点是最后一天的次日零点（按空间时区）", () => {

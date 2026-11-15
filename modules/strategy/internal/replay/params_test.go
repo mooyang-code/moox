@@ -138,3 +138,39 @@ func TestReplaySlippageReachesLedger(t *testing.T) {
 		t.Fatalf("局限说明应写明滑点：%v", slipped.Limitations)
 	}
 }
+
+// 批 3 T10：策略池成员用了 params() 时，启用时的预热（RunPool）与池回放都读 __params，成员取到 View 里记的实际参数（与实时求值成员时一致），
+// 只在 window=30 的期出目标，两者逐期一致。
+func TestPoolWarmUpAndReplayReadParams(t *testing.T) {
+	member := poolMember(t, "pm", "spot", "    filter: 'params(\"bias__var\", \"window\") > 20'\n    select: {top: 1}\n    allow_empty: true\n")
+	list := []input.PoolMemberDef{member}
+	raw := poolYaml("  allocation: {method: fixed, ratios: {pm: 1}}\n", "", list...)
+	repo := openStore(t)
+	client := &paramsClient{fakeClient: &fakeClient{marketType: "spot"}}
+	job := startPoolReplay(t, repo, client, "pp", raw, list, 10)
+	client.columns = nil
+	(&Runner{Store: repo, Client: client, ChunkBars: 3, InitialEquity: 1}).Execute(context.Background(), job)
+	if done, _ := replayMetrics(t, repo, "pp"); done.Status != store.ReplayDone {
+		t.Fatalf("池回放应完成：%+v", done)
+	}
+	if len(client.columns) == 0 {
+		t.Fatal("池回放应读 __params 列")
+	}
+	warm := &paramsClient{fakeClient: &fakeClient{marketType: "spot"}}
+	decisions := warmPool(t, warm, raw, list, 10, 4)
+	if len(warm.columns) == 0 {
+		t.Fatal("预热应读 __params 列")
+	}
+	bars := barsOf(t, repo, "pp")
+	requireSameAsWarmUp(t, bars, decisions)
+	for _, bar := range bars {
+		hour := int(bar.BarEndTime.Sub(origin)/time.Hour) - 1
+		targets := decodeTargets(t, bar)
+		if hour%2 == 0 && len(targets) != 1 {
+			t.Fatalf("第 %d 小时 window=30，池应有一个目标：%s", hour, bar.TargetsJSON)
+		}
+		if hour%2 != 0 && len(targets) != 0 {
+			t.Fatalf("第 %d 小时 window=10，池不应有目标：%s", hour, bar.TargetsJSON)
+		}
+	}
+}

@@ -94,7 +94,7 @@
       >
     </a-form-item>
     <a-form-item label="滑点（bps）">
-      <a-input-number v-model="form.slippage_bps" :min="0" :max="1000" :step="1" />
+      <a-input-number v-model="form.slippage_bps" :min="0" :max="200" :step="1" />
       <template #extra>成交价在收盘价上按方向加减这个比例：买入上浮、卖出下浮；0 表示按收盘价成交。</template>
     </a-form-item>
     <a-form-item v-if="usesSwap && !pooled" label="资金费列（可选）">

@@ -2841,7 +2841,7 @@ type StartReplayReq struct {
 	SpotFeeBps    float64           `protobuf:"fixed64,9,opt,name=spot_fee_bps,json=spotFeeBps,proto3" json:"spot_fee_bps,omitempty"`                                                                                        // 现货与股票的单边手续费（基点）
 	SwapFeeBps    float64           `protobuf:"fixed64,10,opt,name=swap_fee_bps,json=swapFeeBps,proto3" json:"swap_fee_bps,omitempty"`                                                                                       // 永续的单边手续费（基点）
 	FundingColumn string            `protobuf:"bytes,11,opt,name=funding_column,json=fundingColumn,proto3" json:"funding_column,omitempty"`                                                                                  // 可选：永续持仓按 View 里的这一列（本根累计的资金费率，例如 funding_rate）结算资金费；策略池不能写，改写池 DSL 的 fees.funding_column
-	SlippageBps   float64           `protobuf:"fixed64,12,opt,name=slippage_bps,json=slippageBps,proto3" json:"slippage_bps,omitempty"`                                                                                      // 可选：滑点（基点，0～1000）；成交价在收盘价上按方向加减这个比例，买入上浮、卖出下浮
+	SlippageBps   float64           `protobuf:"fixed64,12,opt,name=slippage_bps,json=slippageBps,proto3" json:"slippage_bps,omitempty"`                                                                                      // 可选：滑点（基点，0～200）；成交价在收盘价上按方向加减这个比例，买入上浮、卖出下浮
 }
 
 func (x *StartReplayReq) Reset() {

@@ -68,8 +68,12 @@ type Replay struct {
 	UpdatedAt    time.Time
 }
 
-// MaxReplayFeeBps 是回放单边手续费与滑点的上限（bps）。
+// MaxReplayFeeBps 是回放单边手续费的上限（bps）。
 const MaxReplayFeeBps = 1000
+
+// MaxReplaySlippageBps 是回放滑点的上限（bps）。（手续费率 + 滑点率）× 杠杆接近 1 时目标金额的迭代不收敛、成交后权益几乎归零
+// （1000 bps 配 10 倍杠杆只剩 0.5%），所以滑点比手续费收得更紧。
+const MaxReplaySlippageBps = 200
 
 // MaxActiveReplays 是每个空间同时排队与运行的回放上限：回放由一个执行循环逐个运行，排队过多只会让后发起的
 // 任务长时间等待，并让按个数清理失去意义。
@@ -204,10 +208,13 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 	if replay.StartTime.IsZero() || replay.EndTime.IsZero() || !replay.EndTime.After(replay.StartTime) {
 		return errors.New("回放区间必须满足 start < end")
 	}
-	for name, fee := range map[string]float64{"现货手续费": replay.SpotFeeBps, "永续手续费": replay.SwapFeeBps, "滑点": replay.SlippageBps} {
+	for name, fee := range map[string]float64{"现货手续费": replay.SpotFeeBps, "永续手续费": replay.SwapFeeBps} {
 		if math.IsNaN(fee) || fee < 0 || fee > MaxReplayFeeBps {
 			return fmt.Errorf("%s必须在 0 到 %d bps 之间", name, MaxReplayFeeBps)
 		}
+	}
+	if math.IsNaN(replay.SlippageBps) || replay.SlippageBps < 0 || replay.SlippageBps > MaxReplaySlippageBps {
+		return fmt.Errorf("滑点必须在 0 到 %d bps 之间", MaxReplaySlippageBps)
 	}
 	now, err := requireTime(replay.CreatedAt)
 	if err != nil {

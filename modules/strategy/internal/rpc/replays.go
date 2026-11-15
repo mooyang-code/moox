@@ -72,10 +72,13 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if !end.After(start) {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("end_time 必须晚于 start_time"))}, nil
 	}
-	for name, fee := range map[string]float64{"spot_fee_bps": req.GetSpotFeeBps(), "swap_fee_bps": req.GetSwapFeeBps(), "slippage_bps": req.GetSlippageBps()} {
+	for name, fee := range map[string]float64{"spot_fee_bps": req.GetSpotFeeBps(), "swap_fee_bps": req.GetSwapFeeBps()} {
 		if math.IsNaN(fee) || math.IsInf(fee, 0) || fee < 0 || fee > store.MaxReplayFeeBps {
 			return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("%s 必须在 0 到 %d 之间", name, store.MaxReplayFeeBps))}, nil
 		}
+	}
+	if slippage := req.GetSlippageBps(); math.IsNaN(slippage) || math.IsInf(slippage, 0) || slippage < 0 || slippage > store.MaxReplaySlippageBps {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("slippage_bps 必须在 0 到 %d 之间", store.MaxReplaySlippageBps))}, nil
 	}
 	if s.Resolver == nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("Storage 与 Factor 依赖未配置，不能回放"))}, nil

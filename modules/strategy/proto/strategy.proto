@@ -209,7 +209,7 @@ message StartReplayReq {
   double spot_fee_bps = 9;               // 现货与股票的单边手续费（基点）
   double swap_fee_bps = 10;              // 永续的单边手续费（基点）
   string funding_column = 11;            // 可选：永续持仓按 View 里的这一列（本根累计的资金费率，例如 funding_rate）结算资金费；策略池不能写，改写池 DSL 的 fees.funding_column
-  double slippage_bps = 12;              // 可选：滑点（基点，0～1000）；成交价在收盘价上按方向加减这个比例，买入上浮、卖出下浮
+  double slippage_bps = 12;              // 可选：滑点（基点，0～200）；成交价在收盘价上按方向加减这个比例，买入上浮、卖出下浮
 }
 message StartReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; int32 bar_count = 3; string first_bar_end = 4; string last_bar_end = 5; }
 message GetReplayReq { string replay_id = 1; }

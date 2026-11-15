@@ -711,8 +711,10 @@ func TestStartReplaySupportsSwapAndDualTasks(t *testing.T) {
 	if slipped.GetReplay().GetSlippageBps() != 3 {
 		t.Fatalf("回放应带上滑点：%+v", slipped.GetReplay())
 	}
-	badSlippage, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SlippageBps: -1})
-	requireFail(t, int32(badSlippage.GetRetInfo().GetCode()), badSlippage.GetRetInfo().GetMsg(), "slippage_bps")
+	for _, value := range []float64{-1, 201} {
+		badSlippage, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SlippageBps: value})
+		requireFail(t, int32(badSlippage.GetRetInfo().GetCode()), badSlippage.GetRetInfo().GetMsg(), "slippage_bps")
+	}
 }
 
 // 停用后把观察实例改挂组合账户再启用：规则状态在修改实例时清空，新账户不接手原来积累的理论状态；不改实例直接再启用则沿用。

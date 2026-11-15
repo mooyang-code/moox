@@ -109,7 +109,7 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
     if (!Number.isFinite(fee) || fee < 0 || fee > 1000) return "单边手续费需在 0～1000 bps 之间";
   }
   const slippage = Number(form.slippage_bps);
-  if (!Number.isFinite(slippage) || slippage < 0 || slippage > 1000) return "滑点需在 0～1000 bps 之间";
+  if (!Number.isFinite(slippage) || slippage < 0 || slippage > 200) return "滑点需在 0～200 bps 之间";
   const funding = replayFundingColumn(form, strategies);
   if (funding && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(funding)) return "资金费列只能是 View 里的列名";
   return "";

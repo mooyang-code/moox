@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     CHECK (c_status IN ('pending', 'running', 'done', 'failed', 'cancelled')),
     CHECK (c_spot_fee_bps >= 0 AND c_spot_fee_bps <= 1000),
     CHECK (c_swap_fee_bps >= 0 AND c_swap_fee_bps <= 1000),
-    CHECK (c_slippage_bps >= 0 AND c_slippage_bps <= 1000)
+    CHECK (c_slippage_bps >= 0 AND c_slippage_bps <= 200)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_replays_space ON t_strategy_replays (c_space_id, c_ctime);

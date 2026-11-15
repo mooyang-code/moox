@@ -385,8 +385,11 @@ func (r *Runner) replayPool(ctx context.Context, job store.Replay, strategy dsl.
 	for _, program := range pooled.Programs {
 		tags = tags || usesTags(program.Strategy)
 	}
-	acc.metrics.Limitations = append(limitations(r.liquidateAfter(), tags, resolved.Market.Has(dsl.MarketSwap), cfg.Spec.Fees.FundingColumn, job.SlippageBps),
-		"策略池：成员按回放发起时固化的成员版本求值，成员账本是按收盘价成交的模拟曲线（费率用池 DSL 的 fees），只用来分配资金；池目标由池级账本按回放任务的费率承接")
+	poolNote := "策略池：成员按回放发起时固化的成员版本求值，成员账本是按收盘价成交的模拟曲线（费率用池 DSL 的 fees），只用来分配资金；池目标由池级账本按回放任务的费率承接"
+	if job.SlippageBps > 0 {
+		poolNote = "策略池：成员按回放发起时固化的成员版本求值，成员账本是按收盘价成交的模拟曲线（费率用池 DSL 的 fees，不计滑点），只用来分配资金；池目标由池级账本按回放任务的费率与滑点承接"
+	}
+	acc.metrics.Limitations = append(limitations(r.liquidateAfter(), tags, resolved.Market.Has(dsl.MarketSwap), cfg.Spec.Fees.FundingColumn, job.SlippageBps), poolNote)
 	pass := newPoolPass(shared, job.SpaceID, resolved, pooled.Members, pooled.Programs, cfg, views, subjects, job, r, end, acc, abort, true)
 	book := r.newBook(job, resolved, acc)
 	state := engine.State{}
