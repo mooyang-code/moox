@@ -38,7 +38,7 @@ func planHandler(observed *[]marketfetch.Request, now *time.Time) *Handler {
 	return &Handler{NewMarketFetch: func() *marketfetch.Handler {
 		return &marketfetch.Handler{
 			Now:        func() time.Time { return *now },
-			NewStorage: func(string) (marketfetch.Storage, error) { return timerStorage{}, nil },
+			NewStorage: func() (marketfetch.Storage, error) { return timerStorage{}, nil },
 			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 				*observed = append(*observed, request)
 				return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil
@@ -134,7 +134,7 @@ func TestHandlerManualInvokeWritesRowsOnly(t *testing.T) {
 	var observed marketfetch.Request
 	handler := &Handler{NewMarketFetch: func() *marketfetch.Handler {
 		return &marketfetch.Handler{
-			NewStorage: func(string) (marketfetch.Storage, error) { return timerStorage{}, nil },
+			NewStorage: func() (marketfetch.Storage, error) { return timerStorage{}, nil },
 			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 				observed = request
 				return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil

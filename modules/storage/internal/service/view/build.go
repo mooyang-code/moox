@@ -268,7 +268,6 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, view *pb.View, sch
 		log.Warnf("storage view history backfill has no dataset columns space=%s view=%s", spaceID, viewID)
 		return 0, nil
 	}
-	auth := s.primaryAuthSnapshot()
 	perSeries := uint32(math.MaxUint32)
 	if periods < uint64(perSeries) {
 		perSeries = uint32(periods)
@@ -284,7 +283,7 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, view *pb.View, sch
 		}
 		pageCtx, cancel := context.WithTimeout(ctx, primaryHistoryPageReadTimeout)
 		rsp, err := readPrimaryTimeSeriesRowsLimited(pageCtx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: spaceID, DatasetId: view.GetDatasetId(),
+			SpaceId: spaceID, DatasetId: view.GetDatasetId(),
 			ColumnNames: columns, LatestPerSeries: perSeries, Page: &pb.Page{Size: uint32(pageSize), Cursor: cursor},
 		})
 		cancel()

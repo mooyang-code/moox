@@ -27,11 +27,9 @@ const (
 	klineGatewayNode   = "gateway-kline-e2e"
 	klineGatewayKeyID  = "moox-skill-e2e"
 	klineGatewaySecret = "gateway-kline-e2e-secret-0123456789"
-	klineStorageAppID  = "moox-skill"
-	klineStorageAppKey = "storage-kline-e2e-app-key"
 )
 
-func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
+func TestKlineRPCUsesNativeGatewayHMACACL(t *testing.T) {
 	storage := &klineStorageStub{requests: make(chan *pb.ReadTimeSeriesRowsReq, 4)}
 	storageAddress := startKlineStorage(t, storage)
 	gatewayTarget := startKlineNativeGateway(t, storageAddress)
@@ -53,9 +51,7 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 	output, err := command.Output()
 	require.NoError(t, err, "kline CLI diagnostics: %s", diagnostics.String())
 	require.NotContains(t, diagnostics.String(), klineGatewaySecret)
-	require.NotContains(t, diagnostics.String(), klineStorageAppKey)
 	require.NotContains(t, string(output), klineGatewaySecret)
-	require.NotContains(t, string(output), klineStorageAppKey)
 	var response pb.ReadTimeSeriesRowsRsp
 	require.NoError(t, protojson.Unmarshal(output, &response))
 	require.Len(t, response.GetRows(), 1)
@@ -64,8 +60,6 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 
 	select {
 	case req := <-storage.requests:
-		require.Equal(t, klineStorageAppID, req.GetAuthInfo().GetAppId())
-		require.Equal(t, klineStorageAppKey, req.GetAuthInfo().GetAppKey())
 		require.Equal(t, "crypto", req.GetSpaceId())
 		require.Equal(t, "dataset_binance_kline_1m", req.GetDatasetId())
 		require.Len(t, req.GetSelectors(), 1)
@@ -79,9 +73,7 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 	proxy := pb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(gatewayTarget, klineGatewayNode, credentials)...)
 	writeContext, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelWrite()
-	_, err = proxy.UpsertFields(writeContext, &pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: klineStorageAppID, AppKey: klineStorageAppKey},
-	})
+	_, err = proxy.UpsertFields(writeContext, &pb.PrimaryUpsertFieldsReq{})
 	require.Error(t, err)
 	// An external principal cannot borrow the operator signing identity.
 	require.NotContains(t, err.Error(), klineGatewaySecret)
@@ -134,9 +126,6 @@ type klineStorageStub struct {
 
 func (stub *klineStorageStub) ReadTimeSeriesRows(_ context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	stub.requests <- req
-	if req.GetAuthInfo().GetAppId() != klineStorageAppID || req.GetAuthInfo().GetAppKey() != klineStorageAppKey {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NO_AUTH, Msg: "invalid storage auth"}}, nil
-	}
 	return &pb.ReadTimeSeriesRowsRsp{
 		RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
 		Rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{
@@ -311,10 +300,7 @@ func (buffer *lockedBuffer) String() string {
 func writeKlineConfig(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "data-access.yaml")
-	content := fmt.Sprintf(`version: 1
-storage:
-  app_id: %q
-  app_key: %q
+	content := `version: 1
 data_types:
   crypto:
     default_exchange: binance
@@ -324,7 +310,7 @@ data_types:
         series_tag: venue:binance
         kline_datasets:
           1m: dataset_binance_kline_1m
-`, klineStorageAppID, klineStorageAppKey)
+`
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	return path
 }

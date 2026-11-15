@@ -86,26 +86,23 @@ func TestBuildSCFPackageSetsOutputMode0600(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
-func TestBuildSCFPackageDoesNotRenderStorageAuth(t *testing.T) {
+// 打包不读环境变量：本机环境里的密钥不会进代码包。
+func TestBuildSCFPackageDoesNotEmbedEnvironmentSecrets(t *testing.T) {
 	tmp := t.TempDir()
 	binary := filepath.Join(tmp, "main")
 	config := filepath.Join(tmp, "config")
 	out := filepath.Join(tmp, "package.zip")
 	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources", "market"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(config, "sources", "market", "binance.yaml"), []byte(`
 storage:
   bindings:
     spot:
-      auth_info:
-        app_id: "moox-collector"
-        app_key: ""
+      data_source_id: "binance"
 `), 0o644))
 
 	_, err := BuildSCFPackage(BuildSCFPackageOptions{EventBusCAPEM: testCAPEM(t), BinaryPath: binary, ConfigDir: config, OutPath: out})
 	require.NoError(t, err)
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "test-storage-secret")
 	t.Setenv("MOOX_EVENTBUS_NATS_PASSWORD", "test-eventbus-password")
 
 	_, err = BuildSCFPackage(BuildSCFPackageOptions{
@@ -125,31 +122,8 @@ storage:
 		content, err := io.ReadAll(rc)
 		require.NoError(t, err)
 		require.NoError(t, rc.Close())
-		assert.NotContains(t, string(content), "test-storage-secret")
 		assert.NotContains(t, string(content), "test-eventbus-password")
 	}
-}
-
-func TestValidateSCFPackageZipRejectsPlaceholderAuth(t *testing.T) {
-	tmp := t.TempDir()
-	out := filepath.Join(tmp, "package.zip")
-	file, err := os.Create(out)
-	require.NoError(t, err)
-	zw := zip.NewWriter(file)
-	writer, err := zw.Create("sources/market/binance.yaml")
-	require.NoError(t, err)
-	_, err = writer.Write([]byte(`
-storage:
-  bindings:
-    spot:
-      auth_info:
-        app_id: "moox-collector"
-        app_key: "binance-spot-collector"
-`))
-	require.NoError(t, err)
-	require.NoError(t, zw.Close())
-	require.NoError(t, file.Close())
-	require.ErrorContains(t, ValidateSCFPackageZip(out), "app_key")
 }
 
 func TestValidateSCFPackageZipRejectsSecretsAndInvalidCA(t *testing.T) {
@@ -175,18 +149,18 @@ func TestValidateSCFPackageZipRejectsSecretsAndInvalidCA(t *testing.T) {
 
 func TestValidateSCFPackageZipRejectsCredentialAssignmentsInScalarsAndLists(t *testing.T) {
 	for _, payload := range []string{
-		"note: MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret\n",
+		"note: MOOX_GATEWAY_SERVICE_SECRET_KEY=topsecret\n",
 		"notes:\n  - MOOX_EVENTBUS_NATS_PASSWORD=secret\n",
-		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret:\n",
-		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret\n",
-		"# \"MOOX_STORAGE_PRIMARY_AUTH_SECRET\": \"topsecret\"\n",
-		"# \"MOOX_STORAGE_PRIMARY_AUTH_SECRET\": \",topsecret\"\n",
-		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET: \"\"topsecret\n",
-		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET: null topsecret\n",
-		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET: ~ topsecret\n",
-		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET: null # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n",
-		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET: \"\" # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n",
-		"env:\n  - name: MOOX_STORAGE_PRIMARY_AUTH_SECRET\n    value: topsecret\n",
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY=topsecret:\n",
+		"# MOOX_GATEWAY_SERVICE_SECRET_KEY=topsecret\n",
+		"# \"MOOX_GATEWAY_SERVICE_SECRET_KEY\": \"topsecret\"\n",
+		"# \"MOOX_GATEWAY_SERVICE_SECRET_KEY\": \",topsecret\"\n",
+		"# MOOX_GATEWAY_SERVICE_SECRET_KEY: \"\"topsecret\n",
+		"# MOOX_GATEWAY_SERVICE_SECRET_KEY: null topsecret\n",
+		"# MOOX_GATEWAY_SERVICE_SECRET_KEY: ~ topsecret\n",
+		"# MOOX_GATEWAY_SERVICE_SECRET_KEY: null # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n",
+		"# MOOX_GATEWAY_SERVICE_SECRET_KEY: \"\" # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n",
+		"env:\n  - name: MOOX_GATEWAY_SERVICE_SECRET_KEY\n    value: topsecret\n",
 		"env:\n  - Name: MOOX_EVENTBUS_NATS_PASSWORD\n    Value: topsecret\n",
 	} {
 		path := writeTestPackage(t, map[string][]byte{
@@ -200,11 +174,11 @@ func TestValidateSCFPackageZipRejectsCredentialAssignmentsInScalarsAndLists(t *t
 
 func TestValidateSCFPackageZipAllowsEmptyCredentialPlaceholders(t *testing.T) {
 	for _, payload := range []string{
-		"MOOX_STORAGE_PRIMARY_AUTH_SECRET: null\n",
-		"MOOX_STORAGE_PRIMARY_AUTH_SECRET: ~\n",
-		"MOOX_STORAGE_PRIMARY_AUTH_SECRET: \"\"\n",
-		"MOOX_STORAGE_PRIMARY_AUTH_SECRET: '  '\n",
-		"MOOX_STORAGE_PRIMARY_AUTH_SECRET:",
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY: null\n",
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY: ~\n",
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY: \"\"\n",
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY: '  '\n",
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY:",
 	} {
 		path := writeTestPackage(t, map[string][]byte{
 			"certs/eventbus-ca.pem":     testCAPEM(t),
@@ -324,7 +298,7 @@ func TestBuildSCFPackageIncludesExactPublicCA(t *testing.T) {
 func TestBuildSCFPackageRealProfilesAreCredentialFree(t *testing.T) {
 	for _, profile := range []string{"market_data", "stockcn"} {
 		t.Run(profile, func(t *testing.T) {
-			t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "test-profile-storage-secret")
+			t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "test-profile-gateway-secret")
 			t.Setenv("MOOX_EVENTBUS_NATS_PASSWORD", "test-profile-eventbus-password")
 			tmp := t.TempDir()
 			binary := filepath.Join(tmp, "main")
@@ -342,7 +316,7 @@ func TestBuildSCFPackageRealProfilesAreCredentialFree(t *testing.T) {
 				content, err := io.ReadAll(rc)
 				require.NoError(t, err)
 				require.NoError(t, rc.Close())
-				assert.NotContains(t, string(content), "test-profile-storage-secret")
+				assert.NotContains(t, string(content), "test-profile-gateway-secret")
 				assert.NotContains(t, string(content), "test-profile-eventbus-password")
 			}
 		})

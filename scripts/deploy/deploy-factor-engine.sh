@@ -41,7 +41,6 @@ Options:
 
 Credentials expected in the secrets directory (regular files, mode 0600):
   access-factor-engine.key           External factor-engine signing key exported by Admin
-  storage-primary-auth.secret        MOOX_STORAGE_PRIMARY_AUTH_SECRET of the Storage deployment
   factor-eventbus.yaml               factor EventBus role credential (its ca_file next to it)
 EOF
 }
@@ -99,7 +98,7 @@ require_secret() {
 mkdir -p "${DEPLOY_DIR}/bin" "${DEPLOY_DIR}/config" "${DEPLOY_DIR}/data/engine" "${DEPLOY_DIR}/logs"
 mkdir -p "${SECRETS_DIR}"
 chmod 0700 "${SECRETS_DIR}"
-for secret in access-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
+for secret in access-factor-engine.key factor-eventbus.yaml; do
   require_secret "${secret}"
 done
 if [[ -n "${BINARY}" ]]; then
@@ -132,9 +131,6 @@ catalog_sync:
   interval: 1m
   offset: 45s
   state_file: ./data/engine/catalog.json
-
-storage:
-  auth_secret_file: ${SECRETS_DIR}/storage-primary-auth.secret
 
 eventbus:
   urls:

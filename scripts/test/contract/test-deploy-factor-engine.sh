@@ -9,7 +9,7 @@ mkdir -p "${DIR}/bin" "${DIR}/secrets"
 DIR="$(cd "${DIR}" && pwd -P)"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${DIR}/bin/moox-factor-engine"
 chmod +x "${DIR}/bin/moox-factor-engine"
-for secret in access-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
+for secret in access-factor-engine.key factor-eventbus.yaml; do
   printf 'secret-%s\n' "${secret}" >"${DIR}/secrets/${secret}"
   chmod 0600 "${DIR}/secrets/${secret}"
 done
@@ -37,6 +37,8 @@ grep -Fq 'access_id: "access@storage"' "${config}"
 grep -Fq "key_file: ${DIR}/secrets/access-factor-engine.key" "${config}"
 grep -Fq 'tls://control.example:4222' "${config}"
 ! grep -Eq '^database:' "${config}"
+# 引擎严格解析配置：Storage 已不需要请求体口令，不能再渲染 storage 段。
+! grep -Eq '^storage:' "${config}"
 grep -Eq '^compute:' "${config}"
 [[ -s "${DIR}/config/trpc_go.engine.yaml" ]]
 # 健康凭据按传入的文件安装，权限 0600。
@@ -82,9 +84,9 @@ if "${ROOT}/scripts/deploy/deploy-factor-engine.sh" "${install_args[@]}" >/dev/n
   exit 1
 fi
 chmod 0600 "${DIR}/secrets/access-factor-engine.key"
-rm "${DIR}/secrets/storage-primary-auth.secret"
+rm "${DIR}/secrets/factor-eventbus.yaml"
 if "${ROOT}/scripts/deploy/deploy-factor-engine.sh" "${install_args[@]}" >/dev/null 2>&1; then
-  echo "installer accepted a missing Storage auth secret" >&2
+  echo "installer accepted a missing EventBus credential" >&2
   exit 1
 fi
 

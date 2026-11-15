@@ -15,14 +15,9 @@ import (
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
-
-const skillConfigIdentity = "moox-skill"
-
-type skillSecretReader func(context.Context, setupconfig.Host, string) ([]byte, error)
 
 func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 	var file, space, output string
@@ -102,19 +97,11 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 		}
 		return transport, nil
 	}
-	read := func(ctx context.Context, host setupconfig.Host, path string) ([]byte, error) {
-		transport, err := transportFor(ctx, host)
-		if err != nil {
-			return nil, err
-		}
-		return readRemotePrivateFile(ctx, transport, path, nativeStorageEnvironmentLimit)
-	}
-
 	klineDatasets, err := loadSkillKlineDatasets(filepath.Join(defaultSetupConfigDir, "collection-tasks.yaml"))
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
 	}
-	config, err := buildSkillDataAccessConfig(ctx, snapshot, space, read, klineDatasets)
+	config, err := buildSkillDataAccessConfig(space, klineDatasets)
 	if err != nil {
 		return dataAccessConfig{}, err
 	}
@@ -136,14 +123,8 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 	return config, nil
 }
 
-func buildSkillDataAccessConfig(
-	ctx context.Context,
-	snapshot *setupconfig.Snapshot,
-	spaceID string,
-	read skillSecretReader,
-	klineDatasets skillKlineDatasets,
-) (dataAccessConfig, error) {
-	if snapshot == nil || read == nil || klineDatasets == nil {
+func buildSkillDataAccessConfig(spaceID string, klineDatasets skillKlineDatasets) (dataAccessConfig, error) {
+	if klineDatasets == nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: dependencies are required")
 	}
 	spaceID = strings.TrimSpace(spaceID)
@@ -153,22 +134,6 @@ func buildSkillDataAccessConfig(
 	if spaceID != "crypto" {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: unsupported space %q", spaceID)
 	}
-	storageHost := snapshot.Manifest.ControlHost()
-	if snapshot.Manifest.HasStorageHost() {
-		storageHost = snapshot.Manifest.StorageHost()
-	}
-	storageRoot := snapshot.Manifest.Paths.Resolved().StorageRoot
-
-	storageRaw, err := read(ctx, storageHost, nativeStorageEnvironmentPath(storageRoot))
-	if err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage auth unavailable")
-	}
-	secrets, err := parseNativeStorageRoleSecrets(storageRaw)
-	clear(storageRaw)
-	if err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage auth invalid")
-	}
-	storageAppKey := security.HMACSHA256Hex(secrets.Primary, []byte(skillConfigIdentity))
 	binanceKline, err := klineDatasets("crypto", "binance_spot")
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
@@ -183,7 +148,6 @@ func buildSkillDataAccessConfig(
 
 	return dataAccessConfig{
 		Version: 1,
-		Storage: dataStorageAuthConfig{AppID: skillConfigIdentity, AppKey: storageAppKey},
 		DataTypes: map[string]dataTypeConfig{
 			"crypto": {
 				DefaultExchange: "binance",

@@ -10,9 +10,6 @@ import (
 )
 
 const validDataAccessYAML = `version: 1
-storage:
-  app_id: moox-skill
-  app_key: storage-key
 data_types:
   crypto:
     default_exchange: binance

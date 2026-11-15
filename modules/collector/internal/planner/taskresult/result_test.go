@@ -160,7 +160,7 @@ func (f *resultMetadataFake) GetViewState(_ context.Context, req *storagepb.GetV
 
 func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 	fake := newResultMetadataFake()
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 	config := Config{Frequency: "1h", SubjectTags: []string{"binance_spot"}, OutputFields: []string{"close"}}
 	first, err := manager.Ensure(context.Background(), "crypto", "task-1", "kline", "spot", config)
 	require.NoError(t, err)
@@ -192,7 +192,7 @@ func TestEnsureOutputFieldsOnlyAddsDatasetColumns(t *testing.T) {
 		SpaceId: "crypto", ViewId: ids.ViewID, Name: "任务结果", DatasetId: ids.DatasetID, Status: "active",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-projection"},
 	}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 	require.NoError(t, manager.EnsureOutputFields(context.Background(), "crypto", "task-projection", ids.DatasetID, ids.ViewID, "kline", []string{"open", "close"}))
 
 	require.Equal(t, []string{"open", "close"}, fake.columnNames)
@@ -210,7 +210,7 @@ func TestEnsurePreservesExistingSubjectTagsWhenConfigOmitsTags(t *testing.T) {
 		Attributes:  map[string]string{"owner_module": "collector", "collector_task_id": "task-existing-tags"},
 		SubjectTags: []string{"binance_spot"},
 	}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 
 	_, err := manager.Ensure(context.Background(), "crypto", "task-existing-tags", "kline", "spot", Config{
 		Frequency: "1h",
@@ -227,7 +227,7 @@ func TestEnsureUpdatesExistingSubjectTagsWithRequestedScope(t *testing.T) {
 		Attributes:  map[string]string{"owner_module": "collector", "collector_task_id": "task-update-tags"},
 		SubjectTags: []string{"old_tag"},
 	}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 
 	_, err := manager.Ensure(context.Background(), "crypto", "task-update-tags", "kline", "spot", Config{
 		Frequency: "1h", SubjectTags: []string{"new_tag"},
@@ -238,7 +238,7 @@ func TestEnsureUpdatesExistingSubjectTagsWithRequestedScope(t *testing.T) {
 
 func TestEnsureDeclaresTheTaskFrequency(t *testing.T) {
 	fake := newResultMetadataFake()
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 	ids, err := manager.Ensure(context.Background(), "crypto", "task-5m", "kline", "spot", Config{Frequency: "5m"})
 	require.NoError(t, err)
 	require.Equal(t, "5m", fake.datasets[ids.DatasetID].GetFreq())
@@ -251,7 +251,7 @@ func TestEnsureDeclaresTheTaskFrequency(t *testing.T) {
 
 func TestEnsureWritesTheMarketCalendarAndAlignment(t *testing.T) {
 	fake := newResultMetadataFake()
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 	stock, err := manager.Ensure(context.Background(), "stockcn", "task-stock-5m", "kline", "equity", Config{Frequency: "5m"})
 	require.NoError(t, err)
 	attrs := fake.datasets[stock.DatasetID].GetAttributes()
@@ -282,7 +282,7 @@ func TestEnsureWritesTheMarketCalendarAndAlignment(t *testing.T) {
 func TestEnsureCompensatesDatasetWhenViewCreationFails(t *testing.T) {
 	fake := newResultMetadataFake()
 	fake.failView = true
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 	_, err := manager.Ensure(context.Background(), "crypto", "task-view-failure", "kline", "spot", Config{Frequency: "1h"})
 	require.Error(t, err)
 	ids := ResultIDs("crypto", "task-view-failure")
@@ -310,7 +310,7 @@ func TestInspectReportsTaskOwnedReadyResultAndLastDataTime(t *testing.T) {
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-inspect"},
 	}
 	fake.viewStates[ids.ViewID] = &storagepb.GetViewStateRsp{RetInfo: resultOK(), IndexId: "idx", IndexedFrom: "2026-09-01T00:00:00Z", IndexedTo: "2026-09-20T04:00:00Z"}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 
 	inspection, err := manager.Inspect(context.Background(), "crypto", "task-inspect")
 	require.NoError(t, err)
@@ -330,7 +330,7 @@ func TestInspectReportsPendingWhenResultMetadataIsIncomplete(t *testing.T) {
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-pending"},
 		Status:     "active",
 	}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 
 	inspection, err := manager.Inspect(context.Background(), "crypto", "task-pending")
 	require.NoError(t, err)
@@ -347,7 +347,7 @@ func TestInspectRejectsResultOwnedByAnotherTask(t *testing.T) {
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "other-task"},
 		Status:     "active",
 	}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 
 	_, err := manager.Inspect(context.Background(), "crypto", "task-inspect")
 	require.ErrorContains(t, err, "owned by another task")
@@ -411,7 +411,7 @@ func TestInspectIDsRejectsMetadataIdentityMismatch(t *testing.T) {
 			if tt.view != nil {
 				fake.views[ids.ViewID] = tt.view
 			}
-			manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+			manager := NewManagerWithAPI(fake)
 
 			_, err := manager.InspectIDs(context.Background(), "crypto", "task-inspect", ids)
 			require.ErrorIs(t, err, ErrResultContract)
@@ -438,7 +438,7 @@ func TestEnsureRejectsUnownedDatasetCollision(t *testing.T) {
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: map[string]string{"market_type": "spot"},
 	}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 	_, err := manager.Ensure(context.Background(), "crypto", "builtin-binance-spot-kline-1m", "kline", "spot", Config{
 		Frequency: "1m",
 	})
@@ -452,7 +452,7 @@ func TestDeleteRemovesTaskOwnedDatasetAndView(t *testing.T) {
 	attrs := map[string]string{"owner_module": "collector", "collector_task_id": taskID}
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: attrs}
 	fake.views[ids.ViewID] = &storagepb.View{ViewId: ids.ViewID, DatasetId: ids.DatasetID, Attributes: attrs}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 	require.NoError(t, manager.Delete(context.Background(), "crypto", ids))
 	_, datasetExists := fake.datasets[ids.DatasetID]
 	require.False(t, datasetExists)
@@ -481,7 +481,7 @@ func (f taggedResultMetadataFake) GetTag(_ context.Context, req *storagepb.GetTa
 
 func TestEnsureRecordsTheTagsSharedDataSource(t *testing.T) {
 	fake := taggedResultMetadataFake{newResultMetadataFake(), map[string]string{"binance_spot": "binance", "binance_swap": "binance", "okx_spot": "okx"}, nil}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 	ensure := func(taskID string, tags ...string) *storagepb.Dataset {
 		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{Frequency: "1m", SubjectTags: tags})
 		require.NoError(t, err)
@@ -520,7 +520,7 @@ func TestDeleteRefusesWhenExtraViewReferencesResultDatasetAndKeepsData(t *testin
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: attrs}
 	fake.views[ids.ViewID] = &storagepb.View{ViewId: ids.ViewID, DatasetId: ids.DatasetID, Attributes: attrs}
 	fake.views["manual-view"] = &storagepb.View{ViewId: "manual-view", DatasetId: ids.DatasetID}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 	err := manager.Delete(context.Background(), "crypto", ids)
 	require.ErrorIs(t, err, ErrResultContract)
 	require.Contains(t, err.Error(), "manual-view")
@@ -533,7 +533,7 @@ func TestEnsureMarksSpotSwapTagsAsUnifiedDataset(t *testing.T) {
 	fake := taggedResultMetadataFake{newResultMetadataFake(),
 		map[string]string{"binance_spot": "binance", "binance_swap": "binance", "okx_swap": "okx"},
 		map[string]string{"binance_spot": "spot", "binance_swap": "swap", "okx_swap": "swap"}}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 	ensure := func(taskID string, tags ...string) *storagepb.Dataset {
 		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{Frequency: "1m", SubjectTags: tags})
 		require.NoError(t, err)
@@ -553,7 +553,7 @@ func TestEnsureMarksSpotSwapTagsAsUnifiedDataset(t *testing.T) {
 // 资金费率只在显式选中时建列，列属性写 fill=zero（因子引擎没有这个属性就沿用上一根，会重复计费）。
 func TestEnsureColumnsCreatesFundingRateOnlyWhenSelected(t *testing.T) {
 	fake := newResultMetadataFake()
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 	manager.SetFieldOffers(marketdata.FieldOffers{{MarketID: "crypto", Instrument: "swap", ProviderID: "binance",
 		Spec: marketdata.FieldSpec{ID: "funding_rate", Name: "资金费率", Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}}})
 	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", storagepb.DataKind_DATA_KIND_TIME_SERIES, nil))
@@ -571,7 +571,7 @@ func TestEnsureColumnsCreatesFundingRateOnlyWhenSelected(t *testing.T) {
 
 // 未登记的市场报错，不当成连续交易的市场悄悄跳过 calendar、alignment。
 func TestEnsureRejectsUnregisteredMarket(t *testing.T) {
-	manager := NewManagerWithAPI(newResultMetadataFake(), &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(newResultMetadataFake())
 	_, err := manager.Ensure(context.Background(), "no_such_space", "task-unknown-5m", "kline", "equity", Config{Frequency: "5m"})
 	require.ErrorIs(t, err, barclock.ErrUnknownMarket)
 }
@@ -586,7 +586,7 @@ func TestInspectCoverageComesFromBuiltViewIndex(t *testing.T) {
 		SpaceId: "crypto", ViewId: ids.ViewID, DatasetId: ids.DatasetID, Status: "active",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-coverage", "indexed_to": "2026-09-19T00:00:00Z"},
 	}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager := NewManagerWithAPI(fake)
 
 	fake.viewStates[ids.ViewID] = &storagepb.GetViewStateRsp{RetInfo: resultOK(), IndexedTo: "2026-09-20T04:00:00Z"}
 	inspection, err := manager.Inspect(context.Background(), "crypto", "task-coverage")

@@ -58,7 +58,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			return err
 		}
 	}
-	registrar, err := marketstorage.NewGatewaySnapshotRegistrar(process.gateway, marketstorage.InstTypeSPOT)
+	registrar, err := marketstorage.NewGatewaySnapshotRegistrar(process.gateway)
 	if err != nil {
 		return fmt.Errorf("initialize snapshot registrar: %w", err)
 	}
@@ -73,13 +73,9 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	backend := cloudBackend{TencentFunctions: functions, packages: packages}
 	source := storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway))
 	operations := make(chan struct{}, cfg.SCFPlan.MaxConcurrentOperations)
-	auth, err := marketstorage.ResolveStorageAuthInfo(marketstorage.InstTypeSPOT)
-	if err != nil {
-		return fmt.Errorf("resolve storage auth: %w", err)
-	}
 	reconcilers := &fetchplan.Reconcilers{}
 	var autoScans sync.Map
-	checker := &klinecheck.Checker{Timeline: dbm.SeriesTimeline(), Rows: storageio.NewGatewayClient(process.gateway), Auth: auth, Absences: dbm.Backfill(), Fields: marketwiring.FieldOffers()}
+	checker := &klinecheck.Checker{Timeline: dbm.SeriesTimeline(), Rows: storageio.NewGatewayClient(process.gateway), Absences: dbm.Backfill(), Fields: marketwiring.FieldOffers()}
 	// 应有时间点与函数侧同一套过滤：只有该市场此频率的交易桶才应有 K 线。
 	checker.Calendar = markets.TradingBar
 	backfiller := &klinecheck.Backfiller{

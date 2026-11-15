@@ -360,9 +360,6 @@ func (c *testCloud) Delete(ctx context.Context, ref cloud.FunctionRef) error {
 	return c.TencentFunctions.Delete(ctx, ref)
 }
 
-// testStorageAppKeys 是基础环境里 Storage 应用密钥的假值（函数环境校验要求它存在且格式正确）。
-var testStorageAppKeys = `{"moox-collector":"` + strings.Repeat("c", 64) + `"}`
-
 // ----- 对账器夹具 -----
 
 type planHarness struct {
@@ -411,7 +408,7 @@ func (h *planHarness) buildReconciler() *PlanReconciler {
 	return &PlanReconciler{
 		SpaceID: "crypto", Options: testPlanOptions(),
 		Deploy: PlanDeploy{CloudAccountID: testAccount, PackageName: testPackageName, Namespace: "default", MemoryMB: 64, Networks: map[string]PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}},
-			BaseEnvironment: map[string]string{"MOOX_SPACE_ID": "crypto", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": testStorageAppKeys}},
+			BaseEnvironment: map[string]string{"MOOX_SPACE_ID": "crypto"}},
 		Groups: &GroupBuilder{Tasks: h.tasks, Symbols: h.symbols},
 		Store:  h.store, Storage: h.registrar, Cloud: h.cloud, Access: testSCFAccessEnvironment, Lateness: h.lateness, Activity: h.activity,
 		Now:       func() time.Time { return h.now },

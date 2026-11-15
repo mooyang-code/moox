@@ -19,7 +19,6 @@ archive_root="${tmp}/archive-root"
 mkdir -p "${secrets}"
 chmod 0700 "${secrets}"
 printf 'k%.0s' {1..40} >"${secrets}/access-archive-worker.key"
-printf 's%.0s' {1..40} >"${secrets}/storage-primary-auth.secret"
 chmod 0600 "${secrets}"/*
 # 假二进制：记下 check-config 校验的是哪份配置。
 printf '#!/bin/sh\nif [ "$1" = check-config ]; then echo "$3" >>"%s/check-config.log"; fi\nexit 0\n' "${tmp}" >"${tmp}/moox-archive-worker"
@@ -55,7 +54,7 @@ bash "${SCRIPT}" "${args[@]}" >"${tmp}/ok.log" 2>&1 || { cat "${tmp}/ok.log" >&2
 [[ -d "${archive_root}" ]] || fail "archive root was not created"
 config="${deploy}/config/app.yaml"
 for want in 'access_address: "access.example.test:11004"' 'access_id: "access@storage"' 'caller: archive-worker' 'key_id: "key-123"' \
-  "key_file: ${secrets}/access-archive-worker.key" "storage_auth_file: ${secrets}/storage-primary-auth.secret" 'worker_id: archive-worker@testhost' \
+  "key_file: ${secrets}/access-archive-worker.key" 'worker_id: archive-worker@testhost' \
   "root_dir: ${archive_root}" 'addr: 127.0.0.1:11418' 'export_format: csv.gz' 'page_rows: 500' \
   'max_bytes_per_second: 2MB'; do
   grep -qF -- "${want}" "${config}" || fail "rendered config misses: ${want}"

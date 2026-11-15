@@ -37,6 +37,6 @@ Admin 的密钥、Setup、部署诊断和浏览器测试空间管理复用命令
 
 Doctor 的 Monitor 与 SysDeploy 查询共用命令持有的 SSH 原生网关客户端；本地 CLI 配置只保存 Doctor 选项，严格拒绝未知字段、重复键和额外 YAML 文档。
 
-Metadata 的 `import/apply` 与 Storage `import` 用 `--file` 选择本地输入文件，另用 `--manifest ./moox.toml` 选择 SSH 主机；`data rows export --file ./moox.toml`、Doctor 和 Factor 初始化均经操作员网关访问原生 RPC。导入、导出及 Collector 清理仍使用独立 Storage 角色鉴权；通过 `--storage-auth-file` 或 `MOOX_STORAGE_PRIMARY_AUTH_SECRET` 提供，不复用网关签名密钥。建连失败且请求未发出时最多重试一次；请求可能已发出后的传输重试只允许只读方法与服务目录明确列出的幂等写方法。其他写请求结果未知时返回错误，由操作员核对状态后再决定是否重跑。
+Metadata 的 `import/apply` 与 Storage `import` 用 `--file` 选择本地输入文件，另用 `--manifest ./moox.toml` 选择 SSH 主机；`data rows export --file ./moox.toml`、Doctor 和 Factor 初始化均经操作员网关访问原生 RPC。Storage 请求不再带自己的口令，只靠网关的签名与访问控制。建连失败且请求未发出时最多重试一次；请求可能已发出后的传输重试只允许只读方法与服务目录明确列出的幂等写方法。其他写请求结果未知时返回错误，由操作员核对状态后再决定是否重跑。
 
 部署登记通过 SysDeploy `SyncHostDeployments` 同步主机的完整业务组件列表，主机组件由 Admin 自动补齐并保留既有启用/停用状态。Doctor 只读取主机和组件部署，健康地址来自服务目录。

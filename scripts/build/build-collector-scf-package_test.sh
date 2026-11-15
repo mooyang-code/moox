@@ -46,31 +46,31 @@ for credential_case in scalar list structured structured-cased null-key comment 
   credential_config="${TMP_ROOT}/config-${credential_case}"
   cp -R "${ROOT}/modules/collector/configs/scf/market_data" "${credential_config}"
   if [[ "${credential_case}" == "scalar" ]]; then
-    printf 'note: MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
+    printf 'note: MOOX_CLS_SECRET_KEY=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
   elif [[ "${credential_case}" == "list" ]]; then
     printf 'notes:\n  - MOOX_EVENTBUS_NATS_PASSWORD=secret\n' >"${credential_config}/sources/market/credential.yaml"
   elif [[ "${credential_case}" == "structured" ]]; then
-    printf 'env:\n  - name: MOOX_STORAGE_PRIMARY_AUTH_SECRET\n    value: topsecret\n' >"${credential_config}/sources/market/credential.yaml"
+    printf 'env:\n  - name: MOOX_CLS_SECRET_KEY\n    value: topsecret\n' >"${credential_config}/sources/market/credential.yaml"
   elif [[ "${credential_case}" == "structured-cased" ]]; then
     printf 'env:\n  - Name: MOOX_EVENTBUS_NATS_PASSWORD\n    Value: topsecret\n' >"${credential_config}/sources/market/credential.yaml"
   elif [[ "${credential_case}" == "null-key" ]]; then
-    printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret:\n' >"${credential_config}/sources/market/credential.yaml"
+    printf 'MOOX_CLS_SECRET_KEY=topsecret:\n' >"${credential_config}/sources/market/credential.yaml"
   elif [[ "${credential_case}" == "quoted-comment" ]]; then
-    printf '# "MOOX_STORAGE_PRIMARY_AUTH_SECRET": "topsecret"\n' >"${credential_config}/sources/market/credential.yaml"
+    printf '# "MOOX_CLS_SECRET_KEY": "topsecret"\n' >"${credential_config}/sources/market/credential.yaml"
   elif [[ "${credential_case}" == "quoted-punct-comment" ]]; then
-    printf '# "MOOX_STORAGE_PRIMARY_AUTH_SECRET": ",topsecret"\n' >"${credential_config}/sources/market/credential.yaml"
+    printf '# "MOOX_CLS_SECRET_KEY": ",topsecret"\n' >"${credential_config}/sources/market/credential.yaml"
   elif [[ "${credential_case}" == "empty-quote-tail" ]]; then
-    printf '# MOOX_STORAGE_PRIMARY_AUTH_SECRET: ""topsecret\n' >"${credential_config}/sources/market/credential.yaml"
+    printf '# MOOX_CLS_SECRET_KEY: ""topsecret\n' >"${credential_config}/sources/market/credential.yaml"
   elif [[ "${credential_case}" == "null-tail" ]]; then
-    printf '# MOOX_STORAGE_PRIMARY_AUTH_SECRET: null topsecret\n' >"${credential_config}/sources/market/credential.yaml"
+    printf '# MOOX_CLS_SECRET_KEY: null topsecret\n' >"${credential_config}/sources/market/credential.yaml"
   elif [[ "${credential_case}" == "tilde-tail" ]]; then
-    printf '# MOOX_STORAGE_PRIMARY_AUTH_SECRET: ~ topsecret\n' >"${credential_config}/sources/market/credential.yaml"
+    printf '# MOOX_CLS_SECRET_KEY: ~ topsecret\n' >"${credential_config}/sources/market/credential.yaml"
   elif [[ "${credential_case}" == "null-plus-comment-credential" ]]; then
-    printf '# MOOX_STORAGE_PRIMARY_AUTH_SECRET: null # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
+    printf '# MOOX_CLS_SECRET_KEY: null # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
   elif [[ "${credential_case}" == "empty-plus-comment-credential" ]]; then
-    printf '# MOOX_STORAGE_PRIMARY_AUTH_SECRET: "" # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
+    printf '# MOOX_CLS_SECRET_KEY: "" # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
   else
-    printf '# MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
+    printf '# MOOX_CLS_SECRET_KEY=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
   fi
   if PATH="${FAKE_BIN}:${PATH}" SCF_CONFIG_DIR="${credential_config}" SCF_SPACE_ID="market_data" OUT_PATH="${TMP_ROOT}/${credential_case}-credential.zip" \
     bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
@@ -84,11 +84,11 @@ for placeholder in null tilde empty quoted-whitespace implicit-null-eof; do
   placeholder_config="${TMP_ROOT}/config-placeholder-${placeholder}"
   cp -R "${ROOT}/modules/collector/configs/scf/market_data" "${placeholder_config}"
   case "${placeholder}" in
-    null) printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET: null\n' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
-    tilde) printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET: ~\n' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
-    empty) printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET: ""\n' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
-    quoted-whitespace) printf "MOOX_STORAGE_PRIMARY_AUTH_SECRET: '  '\\n" >"${placeholder_config}/sources/market/placeholder.yaml" ;;
-    implicit-null-eof) printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET:' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
+    null) printf 'MOOX_CLS_SECRET_KEY: null\n' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
+    tilde) printf 'MOOX_CLS_SECRET_KEY: ~\n' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
+    empty) printf 'MOOX_CLS_SECRET_KEY: ""\n' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
+    quoted-whitespace) printf "MOOX_CLS_SECRET_KEY: '  '\\n" >"${placeholder_config}/sources/market/placeholder.yaml" ;;
+    implicit-null-eof) printf 'MOOX_CLS_SECRET_KEY:' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
   esac
   placeholder_zip="${TMP_ROOT}/${placeholder}-placeholder.zip"
   PATH="${FAKE_BIN}:${PATH}" SCF_CONFIG_DIR="${placeholder_config}" SCF_SPACE_ID="market_data" OUT_PATH="${placeholder_zip}" \
@@ -150,13 +150,12 @@ grep -q ' main$' "${listing_path}"
 ! grep -q ' certs/' "${listing_path}"
 ! grep -q 'trpc_go.yaml' "${listing_path}"
 unzip -p "${package_path}" sources/market/binance.yaml >"${TMP_ROOT}/binance.yaml"
-! grep -Eq 'binance-spot-collector|binance-swap-collector|test-storage-secret|test-eventbus-password' "${TMP_ROOT}/binance.yaml"
-grep -q 'app_key: ""' "${TMP_ROOT}/binance.yaml"
+cmp "${TMP_ROOT}/binance.yaml" "${ROOT}/modules/collector/configs/scf/market_data/sources/market/binance.yaml"
 
 stock_package_path="${TMP_ROOT}/collector-stockcn-scf.zip"
 (
   cd "${TMP_ROOT}"
-  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="stockcn" SCF_ENTRYPOINT="market_data" MOOX_STORAGE_PRIMARY_AUTH_SECRET="test-storage-secret" MOOX_EVENTBUS_NATS_PASSWORD="test-eventbus-password" VERSION="contract-test" OUT_PATH="collector-stockcn-scf.zip" \
+  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="stockcn" SCF_ENTRYPOINT="market_data" MOOX_CLS_SECRET_KEY="test-cls-secret" MOOX_EVENTBUS_NATS_PASSWORD="test-eventbus-password" VERSION="contract-test" OUT_PATH="collector-stockcn-scf.zip" \
     bash "${ROOT}/scripts/build/build-collector-scf-package.sh"
 )
 stock_listing_path="${TMP_ROOT}/stock-listing.txt"
@@ -170,10 +169,9 @@ if grep -Eq 'calendar.yaml|route.yaml|market.yaml|sources/market/(sina|tencent|e
 fi
 ! grep -q 'trpc_go.yaml' "${stock_listing_path}"
 unzip -p "${stock_package_path}" sources/market/binance.yaml >"${TMP_ROOT}/stock-binance.yaml"
-! grep -Eq 'binance-spot-collector|binance-swap-collector|test-storage-secret|test-eventbus-password' "${TMP_ROOT}/stock-binance.yaml"
-grep -q 'app_key: ""' "${TMP_ROOT}/stock-binance.yaml"
+cmp "${TMP_ROOT}/stock-binance.yaml" "${ROOT}/modules/collector/configs/scf/stockcn/sources/market/binance.yaml"
 
-! unzip -p "${stock_package_path}" | grep -Eq 'test-storage-secret|test-eventbus-password'
+! unzip -p "${stock_package_path}" | grep -Eq 'test-cls-secret|test-eventbus-password'
 
 atomic_package_path="${TMP_ROOT}/collector-scf-atomic.zip"
 cp "${package_path}" "${atomic_package_path}"

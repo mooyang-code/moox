@@ -33,11 +33,11 @@ const jobDrainBudget = 40 * time.Second
 
 // newResampleRuntime 构造合成运行时；元数据或存储客户端不可用时返回错误，调用方按“合成关闭”处理。
 func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source *storagesource.DatasetSource, spaceIDs []string, bus *eventBusRuntime) (*resampleRuntime, error) {
-	metadataClient, err := marketstorage.NewGatewayResampleMetadataClient(process.gateway, marketstorage.InstTypeSPOT)
+	metadataClient, err := marketstorage.NewGatewayResampleMetadataClient(process.gateway)
 	if err != nil {
 		return nil, fmt.Errorf("metadata client: %w", err)
 	}
-	localStorage, err := marketstorage.NewGatewayResampleStorage(process.gateway, marketstorage.InstTypeSPOT)
+	localStorage, err := marketstorage.NewGatewayResampleStorage(process.gateway)
 	if err != nil {
 		return nil, fmt.Errorf("storage client: %w", err)
 	}
@@ -45,7 +45,7 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 	if !ok {
 		return nil, errors.New("Storage 适配器没有 DataView 方法")
 	}
-	catalog := &collectorresample.Catalog{Metadata: metadataClient.Client, Auth: metadataClient.Auth, View: view}
+	catalog := &collectorresample.Catalog{Metadata: metadataClient.Client, View: view}
 	k := cfg.KlineResample
 	metrics := collectorresample.NewMetrics(prometheus.DefaultRegisterer)
 	engine := &collectorresample.Engine{
@@ -55,7 +55,7 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 	if period, ok := localStorage.(collectorresample.PeriodStorage); ok {
 		engine.Period = period
 	}
-	if registrar, regErr := marketstorage.NewGatewaySnapshotRegistrar(process.gateway, marketstorage.InstTypeSPOT); regErr == nil {
+	if registrar, regErr := marketstorage.NewGatewaySnapshotRegistrar(process.gateway); regErr == nil {
 		engine.Snapshots = registrar
 	} else {
 		log.WarnContextf(process.ctx, "collector kline resample snapshot registration disabled: %v", regErr)

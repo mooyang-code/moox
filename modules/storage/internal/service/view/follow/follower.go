@@ -125,7 +125,7 @@ func (f *follower) read() (*pb.ReadDatasetChangesRsp, error) {
 	f.waiting = f.caughtUp
 	f.mu.Unlock()
 	rsp, err := f.m.opts.Reader.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{
-		AuthInfo: f.m.opts.Auth(), SpaceId: f.key.SpaceID, DatasetId: f.key.DatasetID, Cursor: cursor,
+		SpaceId: f.key.SpaceID, DatasetId: f.key.DatasetID, Cursor: cursor,
 		WaitMs: uint32(wait / time.Millisecond),
 	}, client.WithTimeout(wait+readTimeoutMargin))
 	f.mu.Lock()
@@ -306,7 +306,7 @@ func (f *follower) lastChangeBefore(ctx context.Context, head viewindex.ChangeCu
 	cursor := current
 	for cursor.Sequence < head.Sequence {
 		rsp, err := f.m.opts.Reader.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{
-			AuthInfo: f.m.opts.Auth(), SpaceId: f.key.SpaceID, DatasetId: f.key.DatasetID, Cursor: toPB(cursor), Limit: 2000,
+			SpaceId: f.key.SpaceID, DatasetId: f.key.DatasetID, Cursor: toPB(cursor), Limit: 2000,
 		}, client.WithTimeout(headReadTimeout))
 		if err = responseError(rsp, err); err != nil {
 			return need, fmt.Errorf("扫描变更日志：%w", err)

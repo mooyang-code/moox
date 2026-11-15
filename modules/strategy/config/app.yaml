@@ -19,13 +19,8 @@ gateway_client:
   key_id: ""
   key_file: ../../secrets/caller-strategy.key
 factor:
-  app_id: strategy
   timeout: 5s
 storage:
-  app_id: strategy
-  # AppKey/ViewAppKey are derived from the deployment's Storage auth secrets.
-  app_key: ""
-  view_app_key: ""
   # 跨主机经公网读 View，行数多时 5s 偶发超时；路由预算为 25s
   timeout: 20s
 evaluation:

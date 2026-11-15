@@ -186,7 +186,6 @@ func (p metadataProxy) GetViewState(ctx context.Context, req *storagepb.GetViewS
 
 type Manager struct {
 	metadata metadataAPI
-	auth     *storagepb.AuthInfo
 	// fields 是行情源目录里可用的附加字段：结果数据集里它们的列（类型、显示名、fill 属性）按字段定义生成。
 	fields marketdata.FieldOffers
 }
@@ -220,18 +219,18 @@ func extraColumnAttributes(spec marketdata.FieldSpec) map[string]string {
 
 // NewManager 用 Storage 元数据客户端与 DataView 客户端构造结果管理器；删除数据集时 Storage 服务端会一并删掉行。
 // DataView 客户端只用来读 View 的覆盖范围。
-func NewManager(client MetadataClient, view ViewStateClient, auth *storagepb.AuthInfo) *Manager {
-	if client == nil || view == nil || auth == nil {
+func NewManager(client MetadataClient, view ViewStateClient) *Manager {
+	if client == nil || view == nil {
 		return nil
 	}
-	return &Manager{metadata: metadataProxy{client: client, view: view}, auth: auth}
+	return &Manager{metadata: metadataProxy{client: client, view: view}}
 }
 
-func NewManagerWithAPI(metadata metadataAPI, auth *storagepb.AuthInfo) *Manager {
-	if metadata == nil || auth == nil {
+func NewManagerWithAPI(metadata metadataAPI) *Manager {
+	if metadata == nil {
 		return nil
 	}
-	return &Manager{metadata: metadata, auth: auth}
+	return &Manager{metadata: metadata}
 }
 
 type Config struct {
@@ -304,7 +303,7 @@ func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectT
 	}
 	markets := map[string]struct{}{}
 	for i, tagID := range subjectTags {
-		rsp, getErr := reader.GetTag(ctx, &storagepb.GetTagReq{AuthInfo: m.auth, SpaceId: spaceID, TagId: tagID})
+		rsp, getErr := reader.GetTag(ctx, &storagepb.GetTagReq{SpaceId: spaceID, TagId: tagID})
 		if getErr != nil || rsp == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || rsp.GetTag() == nil {
 			return "", "", metadataError("get result subject tag", getErr, func() *storagepb.RetInfo {
 				if rsp == nil {
@@ -358,14 +357,14 @@ func (m *Manager) Inspect(ctx context.Context, spaceID, taskID string) (Inspecti
 func (m *Manager) InspectIDs(ctx context.Context, spaceID, taskID string, ids IDs) (Inspection, error) {
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
 	inspection := Inspection{IDs: ids, Status: ResultStatusPending}
-	if m == nil || m.metadata == nil || m.auth == nil {
+	if m == nil || m.metadata == nil {
 		return inspectionWithError(inspection, fmt.Errorf("%w: task result metadata manager is not configured", ErrResultContract))
 	}
 	if spaceID == "" || taskID == "" {
 		return inspectionWithError(inspection, fmt.Errorf("%w: space_id and task_id are required", ErrResultContract))
 	}
 
-	datasetRsp, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: inspection.IDs.DatasetID})
+	datasetRsp, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: inspection.IDs.DatasetID})
 	if err != nil {
 		return inspectionWithError(inspection, fmt.Errorf("inspect result dataset: %w", err))
 	}
@@ -395,7 +394,7 @@ func (m *Manager) InspectIDs(ctx context.Context, spaceID, taskID string, ids ID
 		return inspectionWithError(inspection, classifyInspectionMetadataError("inspect result dataset", datasetRsp.GetRetInfo()))
 	}
 
-	viewRsp, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: inspection.IDs.ViewID})
+	viewRsp, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{SpaceId: spaceID, ViewId: inspection.IDs.ViewID})
 	if err != nil {
 		return inspectionWithError(inspection, fmt.Errorf("inspect result view: %w", err))
 	}
@@ -480,7 +479,7 @@ func classifyInspectionMetadataError(action string, ret *storagepb.RetInfo) erro
 // storage-view 还没登记这个 View、索引还没建好（首次建索引、断档重建中），或 storage-view 暂时不可用（传输失败、内部错误）时
 // 记日志后返回空，表示覆盖范围未知：storage-view 暂停或重启不能让任务结果清单整份失败。只有调用契约错误照常上报。
 func (m *Manager) viewIndexedRange(ctx context.Context, spaceID, viewID string) (string, string, error) {
-	state, err := m.metadata.GetViewState(ctx, &storagepb.GetViewStateReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: viewID})
+	state, err := m.metadata.GetViewState(ctx, &storagepb.GetViewStateReq{SpaceId: spaceID, ViewId: viewID})
 	if err != nil {
 		log.WarnContextf(ctx, "读取结果 View 索引状态失败，覆盖范围按未知处理 space=%s view=%s：%v", spaceID, viewID, err)
 		return "", "", nil
@@ -568,7 +567,7 @@ func resultCoverage(dataset *storagepb.Dataset, view *storagepb.View, indexedFro
 }
 
 func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketType string, cfg Config) (IDs, error) {
-	if m == nil || m.metadata == nil || m.auth == nil {
+	if m == nil || m.metadata == nil {
 		return IDs{}, fmt.Errorf("task result metadata manager is not configured")
 	}
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
@@ -605,7 +604,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	for key, value := range derived {
 		attrs[key] = value
 	}
-	get, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+	get, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
 		return IDs{}, fmt.Errorf("get result dataset: %w", err)
 	}
@@ -619,7 +618,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 			return IDs{}, columnsErr
 		}
 		// 数据集连同列在一次调用里建好，建好即可写入。
-		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: m.auth, Dataset: &storagepb.Dataset{
+		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: dataSourceID,
 			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Freq: datasetFrequency(kind, cfg.Frequency), Alignment: alignment, Attributes: attrs, SubjectTags: subjectTags,
 		}, Columns: columns})
@@ -661,7 +660,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 			for key, value := range missing {
 				updated.Attributes[key] = value
 			}
-			response, updateErr := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
+			response, updateErr := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{Dataset: updated})
 			if updateErr != nil || response == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 				return IDs{}, metadataError("update result dataset subject tags or data source", updateErr, func() *storagepb.RetInfo {
 					if response == nil {
@@ -698,10 +697,10 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 // UpdateSubjectTags updates the scope of an existing task-owned result Dataset
 // without reprovisioning its columns, View, or physical rows.
 func (m *Manager) UpdateSubjectTags(ctx context.Context, spaceID, datasetID string, tags []string) error {
-	if m == nil || m.metadata == nil || m.auth == nil {
+	if m == nil || m.metadata == nil {
 		return fmt.Errorf("task result metadata manager is not configured")
 	}
-	rsp, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
+	rsp, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
 		return fmt.Errorf("get result dataset for subject tags: %w", err)
 	}
@@ -718,7 +717,7 @@ func (m *Manager) UpdateSubjectTags(ctx context.Context, spaceID, datasetID stri
 	if sameSubjectTags(rsp.GetDataset().GetSubjectTags(), updated.GetSubjectTags()) {
 		return nil
 	}
-	result, err := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
+	result, err := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{Dataset: updated})
 	if err != nil {
 		return fmt.Errorf("update result dataset subject tags: %w", err)
 	}
@@ -735,13 +734,13 @@ func (m *Manager) UpdateSubjectTags(ctx context.Context, spaceID, datasetID stri
 
 // EnsureAllowedLateness 保证结果数据集的允许迟到时间（Storage 建立周期时读取）与任务设置一致；没有变化时不更新。
 func (m *Manager) EnsureAllowedLateness(ctx context.Context, spaceID, datasetID string, seconds int) error {
-	if m == nil || m.metadata == nil || m.auth == nil {
+	if m == nil || m.metadata == nil {
 		return fmt.Errorf("task result metadata manager is not configured")
 	}
 	if seconds <= 0 {
 		return fmt.Errorf("allowed lateness must be positive")
 	}
-	rsp, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
+	rsp, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
 		return fmt.Errorf("get result dataset for allowed lateness: %w", err)
 	}
@@ -757,7 +756,7 @@ func (m *Manager) EnsureAllowedLateness(ctx context.Context, spaceID, datasetID 
 	}
 	updated := proto.Clone(rsp.GetDataset()).(*storagepb.Dataset)
 	updated.AllowedLatenessSeconds = uint32(seconds)
-	result, err := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
+	result, err := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{Dataset: updated})
 	if err != nil {
 		return fmt.Errorf("update result dataset allowed lateness: %w", err)
 	}
@@ -773,7 +772,7 @@ func (m *Manager) EnsureAllowedLateness(ctx context.Context, spaceID, datasetID 
 
 // EnsureOutputFields 按任务的输出字段补齐结果数据集的列；View 的列跟着数据集走，由 storage-view 原地加进索引，不需要改 View。
 func (m *Manager) EnsureOutputFields(ctx context.Context, spaceID, taskID, datasetID, viewID, dataType string, outputFields []string) error {
-	if m == nil || m.metadata == nil || m.auth == nil {
+	if m == nil || m.metadata == nil {
 		return fmt.Errorf("task result metadata manager is not configured")
 	}
 	if len(outputFields) == 0 {
@@ -799,7 +798,7 @@ func (m *Manager) EnsureOutputFields(ctx context.Context, spaceID, taskID, datas
 
 // cleanupCreatedDataset 删掉本轮刚建的结果数据集；Storage 服务端一并删掉它的行。
 func (m *Manager) cleanupCreatedDataset(ctx context.Context, spaceID, datasetID string) error {
-	dataset, err := m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
+	dataset, err := m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil || !resultDeleteAccepted(retInfoDatasetDelete(dataset)) {
 		return metadataError("delete newly-created result dataset", err, retInfoDatasetDelete(dataset))
 	}
@@ -820,7 +819,7 @@ func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataTy
 			return nil
 		}
 		if !viewExists {
-			current, getErr := m.metadata.GetView(cleanupCtx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
+			current, getErr := m.metadata.GetView(cleanupCtx, &storagepb.GetViewReq{SpaceId: spaceID, ViewId: ids.ViewID})
 			if getErr != nil {
 				return fmt.Errorf("recheck result view ownership before cleanup: %w", getErr)
 			}
@@ -837,13 +836,13 @@ func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataTy
 			} else if current.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && current.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
 				return metadataError("recheck result view ownership before cleanup", nil, current.GetRetInfo())
 			}
-			view, deleteErr := m.metadata.DeleteView(cleanupCtx, &storagepb.DeleteViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
+			view, deleteErr := m.metadata.DeleteView(cleanupCtx, &storagepb.DeleteViewReq{SpaceId: spaceID, ViewId: ids.ViewID})
 			if deleteErr != nil || !resultDeleteAccepted(retInfoViewDelete(view)) {
 				return metadataError("cleanup result view", deleteErr, retInfoViewDelete(view))
 			}
 		}
 		if !datasetExists {
-			current, getErr := m.metadata.GetDataset(cleanupCtx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+			current, getErr := m.metadata.GetDataset(cleanupCtx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: ids.DatasetID})
 			if getErr != nil {
 				return fmt.Errorf("recheck result dataset ownership before cleanup: %w", getErr)
 			}
@@ -856,7 +855,7 @@ func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataTy
 			if current.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && current.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && current.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
 				return metadataError("recheck result dataset ownership before cleanup", nil, current.GetRetInfo())
 			}
-			dataset, deleteErr := m.metadata.DeleteDataset(cleanupCtx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+			dataset, deleteErr := m.metadata.DeleteDataset(cleanupCtx, &storagepb.DeleteDatasetReq{SpaceId: spaceID, DatasetId: ids.DatasetID})
 			if deleteErr != nil || !resultDeleteAccepted(retInfoDatasetDelete(dataset)) {
 				return metadataError("cleanup result dataset", deleteErr, retInfoDatasetDelete(dataset))
 			}
@@ -871,7 +870,7 @@ func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataTy
 }
 
 func (m *Manager) resultMetadataState(ctx context.Context, spaceID, taskID string, ids IDs) (bool, bool, error) {
-	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
 		return false, false, err
 	}
@@ -885,7 +884,7 @@ func (m *Manager) resultMetadataState(ctx context.Context, spaceID, taskID strin
 	if !datasetExists && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
 		return false, false, metadataError("get result dataset", nil, dataset.GetRetInfo())
 	}
-	view, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
+	view, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil {
 		return false, false, err
 	}
@@ -913,7 +912,7 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID string, 
 	}
 	for _, column := range columns {
 		column.SpaceId, column.DatasetId = spaceID, datasetID
-		resp, err := m.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: m.auth, Column: column})
+		resp, err := m.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{Column: column})
 		if err != nil || resp == nil || resp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return metadataError("create result dataset column", err, retInfoDatasetColumn(resp))
 		}
@@ -1077,7 +1076,7 @@ func resultColumnDisplayName(name string) string {
 }
 
 func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids IDs, kind storagepb.DataKind, cfg Config) error {
-	get, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
+	get, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil {
 		return fmt.Errorf("get result view: %w", err)
 	}
@@ -1090,7 +1089,7 @@ func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids ID
 		if kind == storagepb.DataKind_DATA_KIND_RECORD {
 			engine, grain = "bleve", []string{"subject_id", "version"}
 		}
-		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}, CreateOnly: true})
+		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}, CreateOnly: true})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return metadataError("create result view", createErr, retInfoView(created))
 		}
@@ -1179,10 +1178,10 @@ func ownedByTask(attributes map[string]string, taskID string) bool {
 }
 
 func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
-	if m == nil || m.metadata == nil || m.auth == nil {
+	if m == nil || m.metadata == nil {
 		return fmt.Errorf("task result metadata manager is not configured")
 	}
-	if _, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID}); err != nil {
+	if _, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: ids.DatasetID}); err != nil {
 		return fmt.Errorf("get result dataset: %w", err)
 	}
 	// 先确认没有结果自身 View 之外的引用：否则删掉自身 View 之后，删数据集会被外键拒绝，留下没有 View 的结果。
@@ -1190,11 +1189,11 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 		return err
 	}
 	// 删数据集时 Storage 服务端先删元数据再删行，这里不用单独删行。
-	view, err := m.metadata.DeleteView(ctx, &storagepb.DeleteViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
+	view, err := m.metadata.DeleteView(ctx, &storagepb.DeleteViewReq{SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil || !resultDeleteAccepted(retInfoViewDelete(view)) {
 		return metadataError("delete result view", err, retInfoViewDelete(view))
 	}
-	removed, err := m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+	removed, err := m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil || !resultDeleteAccepted(retInfoDatasetDelete(removed)) {
 		return metadataError("delete result dataset", err, retInfoDatasetDelete(removed))
 	}
@@ -1204,7 +1203,7 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 // ensureNoExtraViews 拒绝删除仍被其他 View 引用的结果 Dataset，此时数据必须完整保留。
 func (m *Manager) ensureNoExtraViews(ctx context.Context, spaceID string, ids IDs) error {
 	rsp, err := m.metadata.ListViews(ctx, &storagepb.ListViewsReq{
-		AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID,
+		SpaceId: spaceID, DatasetId: ids.DatasetID,
 		Page: &commonpb.Page{Page: 1, Size: 200},
 	})
 	if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
@@ -1250,7 +1249,7 @@ func (m *Manager) DeleteForTask(ctx context.Context, spaceID, taskID string, ids
 // without changing Storage state. Callers can use it before deleting local
 // runtime records so a rejected delete remains fully retryable.
 func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID string, ids IDs) error {
-	if m == nil || m.metadata == nil || m.auth == nil {
+	if m == nil || m.metadata == nil {
 		return fmt.Errorf("task result metadata manager is not configured")
 	}
 	if strings.TrimSpace(taskID) == "" {
@@ -1260,7 +1259,7 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 	if ids.DatasetID != base.DatasetID || strings.TrimSpace(ids.ViewID) == "" {
 		return fmt.Errorf("result Dataset identity is not the deterministic result of task %s", taskID)
 	}
-	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
 		return fmt.Errorf("get result dataset ownership: %w", err)
 	}
@@ -1276,7 +1275,7 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 	default:
 		return fmt.Errorf("get result dataset ownership: %s", dataset.GetRetInfo().GetMsg())
 	}
-	view, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
+	view, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil {
 		return fmt.Errorf("get result view ownership: %w", err)
 	}

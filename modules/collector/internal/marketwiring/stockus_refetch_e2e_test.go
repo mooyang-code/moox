@@ -154,7 +154,7 @@ func newUSRefetchHarness(t *testing.T, subjects []string, serveByCode func(code 
 	}
 	handler := NewHandler()
 	handler.Now = clock
-	handler.NewStorage = func(string) (marketfetch.Storage, error) { return h.storage, nil }
+	handler.NewStorage = func() (marketfetch.Storage, error) { return h.storage, nil }
 	handler.NewKlinePipeline = func(s marketfetch.Storage, market string, instrument marketdata.InstrumentType, frequency, provider string, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
 		require.Equal(t, "stockus", market)
 		require.Equal(t, marketdata.InstrumentEquity, instrument)

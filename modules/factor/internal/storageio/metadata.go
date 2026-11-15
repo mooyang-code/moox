@@ -91,7 +91,7 @@ func (c *Client) GetDataset(ctx context.Context, spaceID, datasetID string) (Dat
 	if err := c.metadataReady("get dataset"); err != nil {
 		return DatasetInfo{}, err
 	}
-	rsp, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	rsp, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
 		return DatasetInfo{}, rpcError("get dataset", err)
 	}
@@ -142,7 +142,7 @@ func (c *Client) ListColumns(ctx context.Context, spaceID, datasetID string) ([]
 	var out []ColumnInfo
 	for page := uint32(1); ; page++ {
 		rsp, err := c.metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{
-			AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID,
+			SpaceId: spaceID, DatasetId: datasetID,
 			Page: &commonpb.Page{Page: page, Size: 1000},
 		})
 		if err != nil {
@@ -178,7 +178,7 @@ func (c *Client) CreateResultDataset(ctx context.Context, spec ResultDatasetSpec
 		return err
 	}
 	expected := datasetFromResultSpec(spec)
-	existing, getErr := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.auth, SpaceId: spec.SpaceID, DatasetId: spec.DatasetID})
+	existing, getErr := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spec.SpaceID, DatasetId: spec.DatasetID})
 	if getErr != nil {
 		return rpcError("check result dataset", getErr)
 	}
@@ -199,7 +199,7 @@ func (c *Client) CreateResultDataset(ctx context.Context, spec ResultDatasetSpec
 		return err
 	}
 	// 数据集与列在同一事务里建好，返回前 Storage 已发布元数据缓存，建好即可写入。
-	created, err := c.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: c.auth, Dataset: expected, Columns: columns})
+	created, err := c.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{Dataset: expected, Columns: columns})
 	if err != nil {
 		return rpcError("create result dataset", err)
 	}
@@ -207,7 +207,7 @@ func (c *Client) CreateResultDataset(ctx context.Context, spec ResultDatasetSpec
 		return fmt.Errorf("%w: create result dataset returned an empty response", ErrInfra)
 	}
 	if created.GetRetInfo() != nil && created.GetRetInfo().GetCode() == commonpb.ErrorCode_CONFLICT {
-		current, readErr := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.auth, SpaceId: spec.SpaceID, DatasetId: spec.DatasetID})
+		current, readErr := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spec.SpaceID, DatasetId: spec.DatasetID})
 		if readErr != nil {
 			return rpcError("confirm existing result dataset", readErr)
 		}
@@ -235,7 +235,7 @@ func (c *Client) SetDatasetSubjectTags(ctx context.Context, spaceID, datasetID s
 	if err := c.metadataReady("set dataset subject tags"); err != nil {
 		return err
 	}
-	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
 		return rpcError("read dataset before setting subject tags", err)
 	}
@@ -247,7 +247,7 @@ func (c *Client) SetDatasetSubjectTags(ctx context.Context, spaceID, datasetID s
 	}
 	dataset := proto.Clone(current.GetDataset()).(*storagepb.Dataset)
 	dataset.SubjectTags = append([]string(nil), tags...)
-	updated, err := c.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: c.auth, Dataset: dataset})
+	updated, err := c.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{Dataset: dataset})
 	if err != nil {
 		return rpcError("set dataset subject tags", err)
 	}
@@ -269,7 +269,7 @@ func (c *Client) UpsertColumns(ctx context.Context, spaceID, datasetID string, c
 		return err
 	}
 	for _, column := range ordered {
-		rsp, err := c.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: c.auth, Column: column})
+		rsp, err := c.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{Column: column})
 		if err != nil {
 			return rpcError("upsert dataset column", err)
 		}
@@ -321,7 +321,7 @@ func (c *Client) CheckDatasetDeletable(ctx context.Context, spaceID, datasetID s
 	if err := c.metadataReady("check dataset before delete"); err != nil {
 		return err
 	}
-	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
 		return rpcError("get dataset before delete", err)
 	}
@@ -344,7 +344,7 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 	if err := c.metadataReady("delete dataset"); err != nil {
 		return err
 	}
-	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
 		return rpcError("get dataset before delete", err)
 	}
@@ -371,7 +371,7 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 		}
 	}
 	// Storage 在服务端一次删完：先删元数据，再删行；中途失败时重试同一个调用即可。
-	rsp, err := c.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	rsp, err := c.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
 		return rpcError("delete dataset", err)
 	}
@@ -390,7 +390,7 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 // ensureNoExtraViews 拒绝删除仍被默认 View 之外的 View 引用的结果 Dataset，此时数据必须完整保留。
 func (c *Client) ensureNoExtraViews(ctx context.Context, spaceID, datasetID string) error {
 	rsp, err := c.metadata.ListViews(ctx, &storagepb.ListViewsReq{
-		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID,
+		SpaceId: spaceID, DatasetId: datasetID,
 		Page: &commonpb.Page{Page: 1, Size: 200},
 	})
 	if err != nil {

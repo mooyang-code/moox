@@ -64,8 +64,8 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 	require.Equal(t, 19, collector["collector_retention"].(map[string]any)["max_rows_per_pass"])
 }
 
-func TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets(t *testing.T) {
-	identity := runtimeIdentity{StoragePrimarySecret: strings.Repeat("p", 32), StorageViewSecret: strings.Repeat("v", 32)}
+func TestControlEnvironmentCarriesNotificationAndHostPolicy(t *testing.T) {
+	identity := runtimeIdentity{HealthAccessKey: "a", HealthSecret: "s"}
 	components := []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr", "strategy"}
 	// 没配置告警推送地址也能部署 Monitor，渠道由用户稍后在管理台添加。
 	empty, err := unitEnvironment(setupconfig.Manifest{}, identity, "control", components)
@@ -78,21 +78,10 @@ func TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets(t *testing.
 	require.Equal(t, manifest.Notification.WebhookURL, env["monitor"]["MOOX_NOTIFICATION_WEBHOOK_URL"])
 	require.NotContains(t, env["admin"], "MOOX_NOTIFICATION_WEBHOOK_URL")
 	require.Equal(t, hostpolicy.Path(manifest.Paths.Resolved().DeployRoot), env["admin"]["MOOX_HOST_POLICY_FILE"])
-	for _, id := range []string{"eventbus", "console-proxy"} {
-		require.NotContains(t, env[id], "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
-	}
-	// Admin 的 Console 代浏览器调用 Storage，需要 Primary 与 View 两个角色密钥。
-	require.Equal(t, identity.StoragePrimarySecret, env["admin"]["MOOX_STORAGE_PRIMARY_AUTH_SECRET"])
-	require.Equal(t, identity.StorageViewSecret, env["admin"]["MOOX_STORAGE_VIEW_AUTH_SECRET"])
-	for _, id := range []string{"monitor", "collector", "factor-mgr", "strategy"} {
-		require.Equal(t, identity.StoragePrimarySecret, env[id]["MOOX_STORAGE_PRIMARY_AUTH_SECRET"])
-	}
 	// Collector 的空间名单取自本地库的管理集合，部署不再注入空间环境变量。
 	require.NotContains(t, env["collector"], "MOOX_SPACE_ID")
 	require.NotContains(t, env["collector"], "MOOX_SPACE_IDS")
 	require.NotContains(t, env["monitor"], "MOOX_SPACE_ID")
-	require.Equal(t, identity.StorageViewSecret, env["strategy"]["MOOX_STORAGE_VIEW_AUTH_SECRET"])
-	require.NotContains(t, env["monitor"], "MOOX_STORAGE_VIEW_AUTH_SECRET")
 }
 
 func TestControlPreflightRejectsUnreadyAndUnrelatedRuntime(t *testing.T) {

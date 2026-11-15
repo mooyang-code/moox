@@ -31,7 +31,7 @@ func TestReadWindowPagesUntilExhausted(t *testing.T) {
 			readRow("BTC", base, "venue:a", map[string]*storagepb.TypedValue{"close": double(1)}),
 		}, PageResult: &commonpb.PageResult{HasMore: false}},
 	}}
-	got, err := NewClient(primary, nil, nil).ReadWindow(context.Background(), ReadRequest{
+	got, err := NewClient(primary, nil).ReadWindow(context.Background(), ReadRequest{
 		SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Subjects: []string{"BTC", "ETH"},
 		Start: base.Add(-time.Minute), End: base.Add(2 * time.Minute), Columns: []string{"close"},
 	})
@@ -51,7 +51,7 @@ func TestReadWindowBoundsEachPageWithPageTimeout(t *testing.T) {
 		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base, "", map[string]*storagepb.TypedValue{"close": double(1)})}, PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "cursor-1"}},
 		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base.Add(time.Minute), "", map[string]*storagepb.TypedValue{"close": double(2)})}, PageResult: &commonpb.PageResult{HasMore: false}},
 	}}
-	_, err := NewClient(primary, nil, nil).ReadWindow(context.Background(), ReadRequest{
+	_, err := NewClient(primary, nil).ReadWindow(context.Background(), ReadRequest{
 		SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Subjects: []string{"BTC"},
 		Start: base, End: base.Add(2 * time.Minute), Columns: []string{"close"}, PageTimeout: 7 * time.Second,
 	})
@@ -75,7 +75,7 @@ func TestEarliestPeriodUsesBoundedAscendingSubjectBatches(t *testing.T) {
 		subjects[i] = fmt.Sprintf("subject-%03d", i)
 	}
 
-	got, found, err := NewClient(primary, nil, nil).EarliestPeriod(context.Background(), "crypto", "bars", "1m", subjects, []string{"close"})
+	got, found, err := NewClient(primary, nil).EarliestPeriod(context.Background(), "crypto", "bars", "1m", subjects, []string{"close"})
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, earlier, got)
@@ -98,7 +98,7 @@ func TestReadWindowSplitsSubjectsIntoSelectorBatches(t *testing.T) {
 	for i := range subjects {
 		subjects[i] = fmt.Sprintf("subject-%03d", i)
 	}
-	frames, err := NewClient(primary, nil, nil).ReadWindow(context.Background(), ReadRequest{
+	frames, err := NewClient(primary, nil).ReadWindow(context.Background(), ReadRequest{
 		SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Subjects: subjects,
 		Start: base, End: base.Add(time.Minute), Columns: []string{"close"},
 	})
@@ -114,7 +114,7 @@ func TestReadWindowSplitsSubjectsIntoSelectorBatches(t *testing.T) {
 func TestReadWindowRequestsAllSelectorsWithoutSeriesTag(t *testing.T) {
 	base := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{{PageResult: &commonpb.PageResult{}}}}
-	_, err := NewClient(primary, nil, nil).ReadWindow(context.Background(), ReadRequest{
+	_, err := NewClient(primary, nil).ReadWindow(context.Background(), ReadRequest{
 		SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Subjects: []string{"ETH", "BTC", "BTC"},
 		Start: base, End: base.Add(time.Minute), Columns: []string{"close"},
 	})
@@ -135,7 +135,7 @@ func TestWriteRowsEncodesNullFields(t *testing.T) {
 	metadata := &metadataFake{dataset: &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: "factor_result", Freq: "1m", Status: "active",
 	}}
-	store := NewClient(primary, metadata, nil)
+	store := NewClient(primary, metadata)
 	err := store.WriteRows(context.Background(), "crypto", "factor_result", []ResultRow{{
 		SubjectID: "BTC", DataTime: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC), SeriesTag: "venue:a",
 		Fields: map[string]any{"close": nil, "high": math.Inf(1), "low": math.NaN()},
@@ -159,15 +159,15 @@ func TestTransientErrorsWrapErrInfra(t *testing.T) {
 	} {
 		t.Run(err.Error(), func(t *testing.T) {
 			primary := &primaryFake{readErr: err}
-			_, gotErr := NewClient(primary, nil, nil).ReadWindow(context.Background(), validReadRequest())
+			_, gotErr := NewClient(primary, nil).ReadWindow(context.Background(), validReadRequest())
 			require.ErrorIs(t, gotErr, ErrInfra)
 		})
 	}
-	_, err := NewClient(&primaryFake{readRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_READY, Msg: "index not ready"}}, nil, nil).ReadWindow(context.Background(), validReadRequest())
+	_, err := NewClient(&primaryFake{readRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_READY, Msg: "index not ready"}}, nil).ReadWindow(context.Background(), validReadRequest())
 	require.ErrorIs(t, err, ErrInfra)
 
 	primary := &primaryFake{readRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "bad selector"}}
-	_, err = NewClient(primary, nil, nil).ReadWindow(context.Background(), validReadRequest())
+	_, err = NewClient(primary, nil).ReadWindow(context.Background(), validReadRequest())
 	require.Error(t, err)
 	require.False(t, errors.Is(err, ErrInfra))
 }
@@ -179,7 +179,7 @@ func TestReportComputedBuildsDeterministicEventID(t *testing.T) {
 		ComputedAt: time.Date(2026, 10, 4, 12, 0, 1, 0, time.UTC),
 	}
 	primary := &primaryFake{}
-	store := NewClient(primary, nil, nil)
+	store := NewClient(primary, nil)
 	require.NoError(t, store.ReportComputed(context.Background(), marker))
 	require.NoError(t, store.ReportComputed(context.Background(), marker))
 	require.Equal(t, "storage-marker-"+shortHash("producer-period", "crypto", "factor_result", "collector-event", "1791115200"), primary.reportIDs[0])
@@ -193,12 +193,12 @@ func TestReportComputedInvalidRequestIsNotRetried(t *testing.T) {
 		PeriodTime: 1791115200, Status: "complete", TriggerEventID: "collector-event",
 	}
 	primary := &primaryFake{reportRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "完成标记无法通过事件校验"}}
-	err := NewClient(primary, nil, nil).ReportComputed(context.Background(), marker)
+	err := NewClient(primary, nil).ReportComputed(context.Background(), marker)
 	require.Error(t, err)
 	require.False(t, errors.Is(err, ErrInfra))
 
 	primary = &primaryFake{reportRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "pebble unavailable"}}
-	err = NewClient(primary, nil, nil).ReportComputed(context.Background(), marker)
+	err = NewClient(primary, nil).ReportComputed(context.Background(), marker)
 	require.ErrorIs(t, err, ErrInfra)
 }
 
@@ -209,7 +209,7 @@ func TestComputedExistsNotFoundIsFalse(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			primary := &primaryFake{computedRsp: rsp}
-			found, err := NewClient(primary, nil, nil).ComputedExists(context.Background(), "crypto", "factor_result", "collector-event", 123)
+			found, err := NewClient(primary, nil).ComputedExists(context.Background(), "crypto", "factor_result", "collector-event", 123)
 			require.NoError(t, err)
 			require.False(t, found)
 			require.Equal(t, "factor_result", primary.computedReq.GetDatasetId())
@@ -230,7 +230,7 @@ func TestDatasetColumnsReturnsOnlyActiveBusinessColumns(t *testing.T) {
 			{ColumnName: "subject_id", OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, Status: "active"},
 		}, PageResult: &commonpb.PageResult{HasMore: false}},
 	}}
-	got, err := NewClient(nil, metadata, nil).DatasetColumns(context.Background(), "crypto", "bars")
+	got, err := NewClient(nil, metadata).DatasetColumns(context.Background(), "crypto", "bars")
 	require.NoError(t, err)
 	require.Equal(t, []string{"close", "open"}, got)
 	require.Len(t, metadata.columnRequests, 2)
@@ -243,7 +243,7 @@ func TestCreateResultDatasetUsesSourceOwnershipAndRetention(t *testing.T) {
 	metadata := &metadataFake{
 		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND, Msg: "missing"}}},
 	}
-	require.NoError(t, NewClient(nil, metadata, nil).CreateResultDataset(context.Background(), spec))
+	require.NoError(t, NewClient(nil, metadata).CreateResultDataset(context.Background(), spec))
 	require.Len(t, metadata.createRequests, 1)
 	dataset := metadata.createRequests[0].GetDataset()
 	require.Equal(t, spec.DataSourceID, dataset.GetDataSourceId())
@@ -262,7 +262,7 @@ func TestCreateResultDatasetTreatsDatasetNotFoundAsCreateable(t *testing.T) {
 	metadata := &metadataFake{
 		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND, Msg: "missing"}}},
 	}
-	require.NoError(t, NewClient(nil, metadata, nil).CreateResultDataset(context.Background(), spec))
+	require.NoError(t, NewClient(nil, metadata).CreateResultDataset(context.Background(), spec))
 	require.Len(t, metadata.createRequests, 1)
 }
 
@@ -272,11 +272,10 @@ func TestDeleteFactorResultDatasetIsOneStorageCall(t *testing.T) {
 		SpaceId: "crypto", DatasetId: "factor_result", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
 	}
 	metadata := &metadataFake{getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}}}
-	client := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+	client := NewClient(&primaryFake{}, metadata)
 
 	require.NoError(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
 	require.Len(t, metadata.deleteRequests, 1)
-	require.Equal(t, "factor", metadata.deleteRequests[0].GetAuthInfo().GetAppId())
 }
 
 // 删除中途失败时重试同一个调用即可完成。
@@ -291,7 +290,7 @@ func TestDeleteFactorResultDatasetRetriesAfterFailure(t *testing.T) {
 			{RetInfo: successRet()},
 		},
 	}
-	client := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+	client := NewClient(&primaryFake{}, metadata)
 
 	err := client.DeleteDataset(context.Background(), "crypto", "factor_result")
 	require.ErrorContains(t, err, "metadata unavailable")
@@ -305,7 +304,7 @@ func TestDeleteDatasetStillCallsStorageWhenMetadataIsGone(t *testing.T) {
 		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND}}},
 		deleteRsp:      &storagepb.DeleteDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND}},
 	}
-	client := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+	client := NewClient(&primaryFake{}, metadata)
 	require.NoError(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
 	require.Len(t, metadata.deleteRequests, 1)
 	require.Empty(t, metadata.viewCalls, "元数据已不在，不再删默认 View")
@@ -326,7 +325,7 @@ func TestDeleteDatasetRetryAfterMetadataDeletedStillDeletesRows(t *testing.T) {
 			{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND}},
 		},
 	}
-	client := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+	client := NewClient(&primaryFake{}, metadata)
 	require.Error(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
 	require.NoError(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
 	require.Len(t, metadata.deleteRequests, 2, "重试必须再调一次 DeleteDataset 删掉行")
@@ -337,7 +336,7 @@ func TestCreateResultDatasetRetryIsIdempotent(t *testing.T) {
 	existing := datasetFromResultSpec(spec)
 	existing.Status = DatasetStatusActive
 	metadata := &metadataFake{dataset: existing}
-	require.NoError(t, NewClient(nil, metadata, nil).CreateResultDataset(context.Background(), spec))
+	require.NoError(t, NewClient(nil, metadata).CreateResultDataset(context.Background(), spec))
 	require.Empty(t, metadata.createRequests)
 	require.Len(t, metadata.upsertRequests, 1)
 }
@@ -347,7 +346,7 @@ func TestSetDatasetSubjectTagsKeepsOtherFieldsAndRevision(t *testing.T) {
 		SpaceId: "crypto", DatasetId: "factor_result", Name: "因子结果", Revision: 7, Status: "active",
 		Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
 	}}
-	require.NoError(t, NewClient(nil, metadata, nil).SetDatasetSubjectTags(context.Background(), "crypto", "factor_result", []string{"binance_spot"}))
+	require.NoError(t, NewClient(nil, metadata).SetDatasetSubjectTags(context.Background(), "crypto", "factor_result", []string{"binance_spot"}))
 	require.Len(t, metadata.updateRequests, 1)
 	updated := metadata.updateRequests[0].GetDataset()
 	require.Equal(t, []string{"binance_spot"}, updated.GetSubjectTags())
@@ -573,7 +572,7 @@ func TestListDatasetSubjectsPagesActiveSubjects(t *testing.T) {
 			PageResult: &commonpb.PageResult{HasMore: true}},
 		{RetInfo: ok, DatasetSubjects: []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}}},
 	}}
-	c := NewClient(nil, meta, AuthInfo("req"))
+	c := NewClient(nil, meta)
 
 	subjects, err := c.ListDatasetSubjects(context.Background(), "crypto", "dataset_bars")
 
@@ -594,7 +593,7 @@ func TestDeleteFactorResultDatasetRefusesExtraViewsAndKeepsRows(t *testing.T) {
 		views:          []*storagepb.View{{ViewId: "view_x"}, {ViewId: "manual-view"}},
 	}
 	primary := &primaryFake{}
-	c := NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+	c := NewClient(primary, metadata)
 
 	err := c.DeleteDataset(context.Background(), "crypto", "dataset_x")
 	require.Error(t, err)
@@ -641,7 +640,7 @@ func TestReadDatasetChangesMapsRequestAndResponse(t *testing.T) {
 			}},
 		},
 	}}
-	c := NewClient(primary, &metadataFake{}, &commonpb.AuthInfo{AppId: "factor"})
+	c := NewClient(primary, &metadataFake{})
 	got, err := c.ReadDatasetChanges(context.Background(), "crypto", "d", &ChangeCursor{StoreID: "s1", Sequence: 7}, false, 100)
 	require.NoError(t, err)
 	require.Equal(t, uint32(100), primary.changeRequests[0].GetLimit())
@@ -696,7 +695,7 @@ func TestEnsureResultViewCreatesTheDefaultViewWithMaintenanceAttributes(t *testi
 	metadata := &metadataFake{
 		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}},
 	}
-	c := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "k"})
+	c := NewClient(&primaryFake{}, metadata)
 	require.NoError(t, c.EnsureResultView(t.Context(), "crypto", "dataset_factor_btc_1m"))
 	require.Len(t, metadata.createViewReqs, 1)
 	req := metadata.createViewReqs[0]
@@ -714,7 +713,7 @@ func TestEnsureResultViewCreatesTheDefaultViewWithMaintenanceAttributes(t *testi
 
 func TestEnsureResultViewLeavesAnExistingViewAloneButRejectsAnotherDatasetsView(t *testing.T) {
 	metadata := &metadataFake{getViewRsp: &storagepb.GetViewRsp{RetInfo: successRet(), View: &storagepb.View{ViewId: "view_factor_btc_1m", DatasetId: "dataset_factor_btc_1m"}}}
-	c := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "k"})
+	c := NewClient(&primaryFake{}, metadata)
 	require.NoError(t, c.EnsureResultView(t.Context(), "crypto", "dataset_factor_btc_1m"))
 	require.Empty(t, metadata.createViewReqs, "已有就不重建")
 
@@ -733,7 +732,7 @@ func TestDeleteFactorResultDatasetDeletesTheDefaultViewBeforeDataset(t *testing.
 		views:          []*storagepb.View{{ViewId: "view_factor_x"}},
 	}
 	primary := &primaryFake{}
-	c := NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "k"})
+	c := NewClient(primary, metadata)
 	require.NoError(t, c.DeleteDataset(t.Context(), "crypto", "dataset_factor_x"))
 	order = append(order, metadata.viewCalls...)
 	require.Equal(t, []string{"delete_view"}, order)

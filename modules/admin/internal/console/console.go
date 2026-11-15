@@ -231,21 +231,13 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		writeForwardError(ctx, w, errors.New("console gateway is unavailable"), headers)
 		return
 	}
-	if serviceID == "storage" {
-		spaceForBody := ""
-		if injectSpace {
-			spaceForBody = authorizedSpace
-		}
-		signed, err := signStorageBody(spec.Path, body, spaceForBody)
-		if errors.Is(err, errInvalidStorageBody) {
+	if serviceID == "storage" && injectSpace {
+		injected, err := injectStorageSpace(body, authorizedSpace)
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err != nil {
-			writeForwardError(ctx, w, err, headers)
-			return
-		}
-		body = signed
+		body = injected
 	}
 	response, err := target.Forward(ctx, spec.Path, method, codec.SerializationTypeJSON, body)
 	if err != nil {

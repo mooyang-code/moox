@@ -110,10 +110,6 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			}
 			seriesTag := selection.SeriesTag
 			req := &pb.ReadTimeSeriesRowsReq{
-				AuthInfo: &pb.AuthInfo{
-					AppId:  strings.TrimSpace(cfg.Storage.AppID),
-					AppKey: cfg.Storage.AppKey,
-				},
 				Selectors: []*pb.TimeSeriesSelector{{
 					SpaceId:   selection.SpaceID,
 					DatasetId: selection.DatasetID,
@@ -310,7 +306,7 @@ func klineColumns(columns []string) []string {
 func resolveMarketSeriesTag(ctx context.Context, reader timeSeriesReader, request *pb.ReadTimeSeriesRowsReq, symbol, market string) (string, error) {
 	selector := request.GetSelectors()[0]
 	probe := &pb.ReadTimeSeriesRowsReq{
-		AuthInfo: request.GetAuthInfo(), SpaceId: request.GetSpaceId(), DatasetId: request.GetDatasetId(),
+		SpaceId: request.GetSpaceId(), DatasetId: request.GetDatasetId(),
 		Selectors: []*pb.TimeSeriesSelector{{
 			SpaceId: selector.GetSpaceId(), DatasetId: selector.GetDatasetId(), SubjectId: selector.GetSubjectId(), Freq: selector.GetFreq(),
 		}},

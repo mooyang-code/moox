@@ -34,7 +34,7 @@ type App struct {
 
 // New 打开网关客户端并装配运行时、同步代理与本地执行端（不启动）。
 func New(cfg *Config, version string, registerer prometheus.Registerer) (*App, error) {
-	// 数据源适配器与 Storage 绑定都从这个文件读：WS 地址与限额、REST 端点、AppId。
+	// 数据源适配器从这个文件读 WS 地址与限额、REST 端点。
 	if err := os.Setenv("MOOX_STORAGE_MARKET_CONFIG", cfg.MarketConfig); err != nil {
 		return nil, err
 	}
@@ -50,8 +50,8 @@ func New(cfg *Config, version string, registerer prometheus.Registerer) (*App, e
 	app := &App{Config: cfg, Gateway: gateway}
 	app.dns = dnscache.New(dnscache.Config{Domains: endpointHosts(append(append([]string(nil), streamConfig.SpotEndpoints...), streamConfig.SwapEndpoints...))})
 	storageTimeout := time.Duration(cfg.StorageTimeoutMS) * time.Millisecond
-	newStorage := func(marketType string) (marketfetch.Storage, error) {
-		return marketfetch.NewMarketStorageForMarket(gateway, marketType)
+	newStorage := func() (marketfetch.Storage, error) {
+		return marketfetch.NewMarketStorage(gateway)
 	}
 	app.Executor = localexec.New(cfg.SpaceID, cfg.LocalExecutor.Concurrency, func() *marketfetch.Handler {
 		handler := marketwiring.NewHandler()
@@ -70,7 +70,7 @@ func New(cfg *Config, version string, registerer prometheus.Registerer) (*App, e
 		SpaceID:   cfg.SpaceID,
 		Providers: providers,
 		NewCommitter: func(market marketfetch.PlanMarket) (stream.PeriodCommitter, error) {
-			storage, err := newStorage(market.MarketType)
+			storage, err := newStorage()
 			if err != nil {
 				return nil, err
 			}

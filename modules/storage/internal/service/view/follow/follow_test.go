@@ -119,8 +119,8 @@ func (t *fakeTarget) snapshot() ([]string, viewindex.FollowState, int) {
 func newManager(t *testing.T, store *pebble.Store, persist time.Duration) *Manager {
 	t.Helper()
 	m, err := NewManager(context.Background(), Options{
-		Reader: storeReader{store}, Auth: func() *pb.AuthInfo { return &pb.AuthInfo{AppId: "storage-view"} },
-		Wait: 2 * time.Second, PersistInterval: persist,
+		Reader: storeReader{store},
+		Wait:   2 * time.Second, PersistInterval: persist,
 	})
 	require.NoError(t, err)
 	t.Cleanup(m.Close)
@@ -285,8 +285,8 @@ func TestWaitAppliedTimeoutDuringScanIsNotAnError(t *testing.T) {
 	store := openStore(t, filepath.Join(t.TempDir(), "db"))
 	block := &sync.Map{}
 	m, err := NewManager(context.Background(), Options{
-		Reader: blockingReader{inner: storeReader{store}, block: block}, Auth: func() *pb.AuthInfo { return &pb.AuthInfo{AppId: "storage-view"} },
-		Wait: 2 * time.Second, PersistInterval: time.Hour,
+		Reader: blockingReader{inner: storeReader{store}, block: block},
+		Wait:   2 * time.Second, PersistInterval: time.Hour,
 	})
 	require.NoError(t, err)
 	t.Cleanup(m.Close)

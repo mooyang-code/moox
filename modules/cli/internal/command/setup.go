@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -117,7 +116,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupMetadataImportCommand(deps),
 		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
-		newSetupStorageAuthCommand(deps),
 		newSetupHostStatusCommand(deps, defaultStatusEnv),
 		newSetupDeploymentStatusCommand(deps, defaultStatusEnv),
 	)
@@ -915,51 +913,6 @@ func verifySetupLogin(ctx context.Context, deps setupDeps, snapshot *setupconfig
 	}
 	login, err := deps.login(ctx, snapshot)
 	return login, "", err
-}
-
-var storageSecretValuePattern = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)
-
-func normalizeStorageInternalAuth(raw string) (string, error) {
-	return normalizeSecretEnv(raw, []string{
-		"MOOX_STORAGE_PRIMARY_AUTH_SECRET",
-		"MOOX_STORAGE_VIEW_AUTH_SECRET",
-	})
-}
-
-func normalizeSecretEnv(raw string, keys []string) (string, error) {
-	if len(raw) == 0 || len(raw) > 4096 {
-		return "", fmt.Errorf("invalid auth file")
-	}
-	allowed := make(map[string]struct{}, len(keys))
-	for _, key := range keys {
-		allowed[key] = struct{}{}
-	}
-	values := make(map[string]string, len(keys))
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if _, accepted := allowed[key]; !ok || !accepted || value == "" || !storageSecretValuePattern.MatchString(value) {
-			return "", fmt.Errorf("invalid auth entry")
-		}
-		if _, exists := values[key]; exists {
-			return "", fmt.Errorf("duplicate auth entry")
-		}
-		values[key] = value
-	}
-	var output strings.Builder
-	for _, key := range keys {
-		if values[key] == "" {
-			return "", fmt.Errorf("missing auth entry")
-		}
-		output.WriteString(key)
-		output.WriteByte('=')
-		output.WriteString(values[key])
-		output.WriteByte('\n')
-	}
-	return output.String(), nil
 }
 
 func defaultSetupImportMetadata(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, seedPath string, spaces []string) (metadataImportSummary, error) {

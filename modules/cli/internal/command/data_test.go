@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -45,18 +44,6 @@ func TestTimeSeriesSelectorSeriesTagPresence(t *testing.T) {
 	exact := timeSeriesSelectorForExport("dataset_spot_kline_1h", true)
 	require.NotNil(t, exact.SeriesTag)
 	assert.Equal(t, "venue:binance", exact.GetSeriesTag())
-}
-
-func TestDataPrimaryAuthUsesSecretFile(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
-	path := filepath.Join(t.TempDir(), "storage-auth.env")
-	require.NoError(t, os.WriteFile(path, []byte(
-		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-secret\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n",
-	), 0o600))
-	auth, err := dataPrimaryAuth(path)
-	require.NoError(t, err)
-	assert.Equal(t, "moox-cli-data-export", auth.GetAppId())
-	assert.Equal(t, security.HMACSHA256Hex("primary-secret", []byte("moox-cli-data-export")), auth.GetAppKey())
 }
 
 func TestWriteRowsExport(t *testing.T) {

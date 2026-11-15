@@ -72,7 +72,6 @@ External object store copies (all optional; with neither option object store cop
 
 Credentials expected in the secrets directory (regular files, mode 0600):
   access-archive-worker.key          External archive-worker signing key exported by Admin
-  storage-primary-auth.secret        MOOX_STORAGE_PRIMARY_AUTH_SECRET of the Storage deployment
   archive-object-store.env           Only with --object-store-endpoint: ACCESS_KEY_ID= / SECRET_ACCESS_KEY= lines
                                      (projected by moox-cli from the Admin secret named in [archive_object_store])
 EOF2
@@ -155,9 +154,7 @@ require_secret() {
 mkdir -p "${DEPLOY_DIR}/bin" "${DEPLOY_DIR}/config" "${DEPLOY_DIR}/logs" "${ROOT_DIR}"
 mkdir -p "${SECRETS_DIR}"
 chmod 0700 "${SECRETS_DIR}"
-for secret in access-archive-worker.key storage-primary-auth.secret; do
-  require_secret "${secret}"
-done
+require_secret access-archive-worker.key
 if [[ -n "${OS_ENDPOINT}" ]]; then
   require_secret archive-object-store.env
 fi
@@ -314,8 +311,6 @@ gateway_client:
   caller: archive-worker
   key_id: "${ACCESS_KEY_ID}"
   key_file: ${SECRETS_DIR}/access-archive-worker.key
-
-storage_auth_file: ${SECRETS_DIR}/storage-primary-auth.secret
 
 worker:
   worker_id: ${WORKER_ID}

@@ -141,19 +141,6 @@ func defaultCollectorPackageConfigDir(spaceID string) string {
 	return filepath.ToSlash(filepath.Join("scf", spaceID))
 }
 
-func collectorStoragePrimaryAuthSecret(raw []byte) (string, error) {
-	normalized, err := normalizeStorageInternalAuth(string(raw))
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(normalized, "\n") {
-		if value, ok := strings.CutPrefix(line, "MOOX_STORAGE_PRIMARY_AUTH_SECRET="); ok {
-			return value, nil
-		}
-	}
-	return "", fmt.Errorf("primary auth secret is missing")
-}
-
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version, entrypoint string) error {
 	if entrypoint != "market_data" {
 		return fmt.Errorf("unsupported collector SCF entrypoint %q", entrypoint)

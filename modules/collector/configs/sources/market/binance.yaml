@@ -25,20 +25,3 @@ stream:
   streams_per_message: 100
   messages_per_second: 5
   max_conn_age_hours: 24
-
-storage:
-  bindings:
-    spot:
-      data_source_id: "binance"
-      subject_type: "crypto_pair"
-      subject_market: "spot"
-      auth_info:
-        app_id: "moox-collector"
-        app_key: "binance-spot-collector"
-    swap:
-      data_source_id: "binance"
-      subject_type: "crypto_pair"
-      subject_market: "swap"
-      auth_info:
-        app_id: "moox-collector"
-        app_key: "binance-swap-collector"

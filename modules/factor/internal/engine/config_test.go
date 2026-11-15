@@ -42,7 +42,6 @@ func TestEngineConfigDefaultsAndPaths(t *testing.T) {
 	require.Equal(t, filepath.Join(root, "data/engine/catalog.json"), cfg.CatalogSync.StateFile)
 	require.Equal(t, "../secrets/access-factor-engine.key", cfg.GatewayClient.KeyFile)
 	require.Equal(t, "assigned-factor-engine-47", cfg.GatewayClient.KeyID)
-	require.Equal(t, filepath.Join(root, "secrets/storage-primary-auth.secret"), cfg.Storage.AuthSecretFile)
 	require.Equal(t, 500, cfg.Recalc.ChunkPeriods)
 	require.Equal(t, ByteSize(4<<30), cfg.Compute.MaxMemory)
 }

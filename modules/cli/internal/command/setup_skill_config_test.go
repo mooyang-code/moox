@@ -14,14 +14,10 @@ import (
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	testSkillGatewaySecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	testSkillPrimarySecret = "storage-primary-secret"
-)
+const testSkillGatewaySecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func TestWriteSkillConfigAtomicFailurePreservesExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data-access.yaml")
@@ -65,7 +61,6 @@ func testSkillDataAccessConfig() dataAccessConfig {
 	return dataAccessConfig{
 		GatewayClient: &gatewayclient.ExternalFileConfig{Address: "storage.example:11004", InstanceID: "access@storage", Caller: "moox-skill", KeyID: "assigned-skill-key-17", KeyFile: ".moox-skill-keys/fixture.key"}, SigningKey: testSkillGatewaySecret,
 		Version: 1,
-		Storage: dataStorageAuthConfig{AppID: "moox-skill", AppKey: security.HMACSHA256Hex(testSkillPrimarySecret, []byte("moox-skill"))},
 		DataTypes: map[string]dataTypeConfig{
 			"crypto": {
 				DefaultExchange: "binance",

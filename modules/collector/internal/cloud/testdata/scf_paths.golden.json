@@ -48,8 +48,7 @@
             "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "hash-transition",
             "MOOX_MARKET_FETCH_PLAN": "{\"v\":1,\"plan\":\"transition\"}",
             "MOOX_MARKET_FETCH_SUBJECT_COUNT": "40",
-            "MOOX_SPACE_ID": "crypto",
-            "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": "{\"moox-collector\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+            "MOOX_SPACE_ID": "crypto"
           },
           "timer": {
             "name": "moox-market-fetch-timer",
@@ -117,7 +116,6 @@
             "MOOX_MARKET_FETCH_PLAN": "{\"v\":1,\"plan\":\"final\"}",
             "MOOX_MARKET_FETCH_SUBJECT_COUNT": "42",
             "MOOX_SPACE_ID": "crypto",
-            "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": "{\"moox-collector\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
             "OPERATOR_EXTRA": "kept"
           },
           "timer": {
@@ -187,7 +185,6 @@
             "MOOX_MARKET_FETCH_PLAN": "{\"v\":1,\"plan\":\"final\"}",
             "MOOX_MARKET_FETCH_SUBJECT_COUNT": "42",
             "MOOX_SPACE_ID": "crypto",
-            "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": "{\"moox-collector\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
             "OPERATOR_EXTRA": "kept"
           },
           "timer": {
@@ -249,7 +246,6 @@
             "MOOX_MARKET_FETCH_PLAN": "{\"v\":1,\"plan\":\"final\"}",
             "MOOX_MARKET_FETCH_SUBJECT_COUNT": "42",
             "MOOX_SPACE_ID": "crypto",
-            "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": "{\"moox-collector\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
             "OPERATOR_EXTRA": "kept"
           },
           "timer": {
@@ -330,8 +326,7 @@
             "MOOX_CREATE_RESERVATION_ID": "fedcba9876543210fedcba9876543210",
             "MOOX_FETCH_TIMEOUT_SECONDS": "60",
             "MOOX_MARKET_FETCH_MODE": "backfill",
-            "MOOX_SPACE_ID": "crypto",
-            "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": "{\"moox-collector\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+            "MOOX_SPACE_ID": "crypto"
           },
           "timer": null,
           "reserved_concurrency_mem": 320,

@@ -63,8 +63,6 @@ func signedAdminRequest(t *testing.T, secret, key, sid, path string, body []byte
 func setupRequestAuthTest(t *testing.T) (*fakeRequestAuthStore, string, string, string) {
 	t.Helper()
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "encryption-key-for-tests")
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
-	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "view-secret")
 	secret, key, sid := "jwt-secret-for-request-auth", "signing-key", "sid-1"
 	encrypted, err := mooxsecurity.Encrypt(key, "encryption-key-for-tests")
 	require.NoError(t, err)

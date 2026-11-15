@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -14,12 +13,8 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"google.golang.org/protobuf/proto"
 )
-
-// AppID 是 worker 在 Storage 请求体角色认证里的 AppId，只用于识别调用方。
-const AppID = "archive"
 
 // Range 是一次区间读取的请求。
 type Range struct {
@@ -43,7 +38,6 @@ type Page struct {
 // Client 经网关读取 Storage。
 type Client struct {
 	gateway gatewayclient.Invoker
-	secret  string
 
 	mu    sync.Mutex
 	infos map[string][]ColumnInfo
@@ -68,17 +62,9 @@ func (c *Client) ColumnInfos(spaceID, datasetID string) []ColumnInfo {
 	return c.infos[spaceID+"/"+datasetID]
 }
 
-// New 创建客户端；secret 是 Storage 的 Primary 签名密钥（可空，仅用于没有开启认证的环境）。
-func New(gateway gatewayclient.Invoker, secret string) *Client {
-	return &Client{gateway: gateway, secret: strings.TrimSpace(secret)}
-}
-
-func (c *Client) auth() *commonpb.AuthInfo {
-	auth := &commonpb.AuthInfo{AppId: AppID, Operator: "archive-worker", RequestId: fmt.Sprintf("archive-worker-%d", time.Now().UnixNano())}
-	if c.secret != "" {
-		auth.AppKey = mooxsecurity.HMACSHA256Hex(c.secret, []byte(auth.AppId))
-	}
-	return auth
+// New 创建客户端。
+func New(gateway gatewayclient.Invoker) *Client {
+	return &Client{gateway: gateway}
 }
 
 const columnPageSize = 200
@@ -89,7 +75,7 @@ func (c *Client) Columns(ctx context.Context, spaceID, datasetID string) ([]stag
 	var infos []ColumnInfo
 	for page := uint32(1); ; page++ {
 		rsp := &storagepb.ListDatasetColumnsRsp{}
-		req := &storagepb.ListDatasetColumnsReq{AuthInfo: c.auth(), SpaceId: spaceID, DatasetId: datasetID, Page: &commonpb.Page{Page: page, Size: columnPageSize}}
+		req := &storagepb.ListDatasetColumnsReq{SpaceId: spaceID, DatasetId: datasetID, Page: &commonpb.Page{Page: page, Size: columnPageSize}}
 		if err := c.gateway.Invoke(ctx, "trpc.moox.storage.Metadata", "ListDatasetColumns", req, rsp); err != nil {
 			return nil, fmt.Errorf("list dataset columns %s/%s: %w", spaceID, datasetID, err)
 		}
@@ -163,7 +149,7 @@ func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
 	}
 	rsp := &storagepb.ReadTimeSeriesRowsRsp{}
 	call := &storagepb.ReadTimeSeriesRowsReq{
-		AuthInfo: c.auth(), SpaceId: req.SpaceID, DatasetId: req.DatasetID, ColumnNames: names,
+		SpaceId: req.SpaceID, DatasetId: req.DatasetID, ColumnNames: names,
 		TimeRange: &storagepb.TimeRange{StartTime: req.Start.UTC().Format(time.RFC3339Nano), EndTime: req.End.UTC().Format(time.RFC3339Nano)},
 		Page:      &commonpb.Page{Size: uint32(req.PageRows), Cursor: req.Cursor},
 	}
@@ -230,7 +216,7 @@ const changePageLimit = 2000
 
 // ReadChanges 从游标之后读一页数据集的变更日志；cursor 为 nil 时只取日志头部的位点。
 func (c *Client) ReadChanges(ctx context.Context, spaceID, datasetID string, cursor *ChangeCursor) (Changes, error) {
-	req := &storagepb.ReadDatasetChangesReq{AuthInfo: c.auth(), SpaceId: spaceID, DatasetId: datasetID, FromHead: cursor == nil, Limit: changePageLimit}
+	req := &storagepb.ReadDatasetChangesReq{SpaceId: spaceID, DatasetId: datasetID, FromHead: cursor == nil, Limit: changePageLimit}
 	if cursor != nil {
 		req.Cursor = &storagepb.DatasetChangeCursor{StoreId: cursor.StoreID, Sequence: cursor.Sequence}
 	}

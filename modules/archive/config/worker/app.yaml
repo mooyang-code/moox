@@ -1,14 +1,11 @@
 # moox-archive-worker 配置。worker 只出站：经固定的 Access 访问 Storage 与 archive-mgr。
-# key_file、storage_auth_file 相对本配置文件；root_dir 必须是绝对路径（不能放在 ~/Documents 下）。
+# key_file 相对本配置文件；root_dir 必须是绝对路径（不能放在 ~/Documents 下）。
 gateway_client:
   access_address: access.example.test:11004
   access_id: access@storage
   caller: archive-worker
   key_id: ""                     # 由 Admin 分配（moox-admin-cli keys export --caller archive-worker）
   key_file: ../secrets/access-archive-worker.key
-
-# 以 AppId archive 签名，只用于 Storage 识别调用方。
-storage_auth_file: ../secrets/storage-primary-auth.secret
 
 worker:
   worker_id: archive-worker@example-host   # 只是 worker 的名字，deploy-unit 写成 archive-worker@<主机>

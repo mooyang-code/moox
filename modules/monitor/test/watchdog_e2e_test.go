@@ -7,7 +7,6 @@ import (
 
 	monitorwatchdog "github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -48,7 +47,7 @@ func TestMarketCanaryUsesStoragePrimaryReadContract(t *testing.T) {
 		canaryRow(now.Add(-time.Minute), 101, 12),
 	}}
 	result := (monitorwatchdog.MarketCanary{
-		Reader: fixture, AuthInfo: &commonpb.AuthInfo{AppId: "monitor-market-canary", AppKey: "derived-key"},
+		Reader: fixture,
 		Config: monitorwatchdog.MarketCanaryConfig{
 			SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
 			SeriesTag: testStringPtr("venue:binance"),
@@ -69,8 +68,6 @@ func TestMarketCanaryUsesStoragePrimaryReadContract(t *testing.T) {
 	// 只读已收盘的桶（12:00 那根未收盘），按时间升序。
 	require.Equal(t, now.Add(-24*time.Minute).Format(time.RFC3339Nano), fixture.request.GetKeys()[0].GetTimeSeries().GetDataTime())
 	require.Equal(t, now.Add(-time.Minute).Format(time.RFC3339Nano), fixture.request.GetKeys()[23].GetTimeSeries().GetDataTime())
-	require.Equal(t, "monitor-market-canary", fixture.request.GetAuthInfo().GetAppId())
-	require.NotEmpty(t, fixture.request.GetAuthInfo().GetAppKey())
 }
 
 func testStringPtr(value string) *string {

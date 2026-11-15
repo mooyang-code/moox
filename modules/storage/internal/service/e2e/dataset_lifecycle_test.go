@@ -69,7 +69,6 @@ func TestDatasetLifecycleInPrimaryProcess(t *testing.T) {
 	seedLifecycleParents(t, ctx, store)
 	guard := &countingPanicStore{Store: store}
 	process := newPrimaryProcess(t, ctx, store, guard)
-	writeAuth := &pb.AuthInfo{AppId: "storage-primary"}
 	row := lifecycleRow()
 
 	dataset := createDataset(t, ctx, process.metadata, "dataset_a", "行情数据")
@@ -79,10 +78,10 @@ func TestDatasetLifecycleInPrimaryProcess(t *testing.T) {
 
 	// 建好即可写；之后的读写只用元数据缓存，不再访问 SQLite。
 	guard.EnableRuntimeOnly()
-	if got := primaryWrite(t, ctx, process.primary, writeAuth, row).GetRetInfo().GetCode(); got != pb.ErrorCode_SUCCESS {
+	if got := primaryWrite(t, ctx, process.primary, row).GetRetInfo().GetCode(); got != pb.ErrorCode_SUCCESS {
 		t.Fatalf("new Dataset write code=%s, want SUCCESS", got)
 	}
-	if got := readLifecycleValues(t, ctx, process.primary, writeAuth, row.GetKey()); len(got) != 1 || got[0] != "ok" {
+	if got := readLifecycleValues(t, ctx, process.primary, row.GetKey()); len(got) != 1 || got[0] != "ok" {
 		t.Fatalf("read after write=%v, want [ok]", got)
 	}
 	if got := guard.RuntimeSQLiteAccesses(); got != 0 {
@@ -94,11 +93,11 @@ func TestDatasetLifecycleInPrimaryProcess(t *testing.T) {
 	if disabled.GetStatus() != "disabled" {
 		t.Fatalf("disabled Dataset=%v", disabled)
 	}
-	if got := primaryWrite(t, ctx, process.primary, writeAuth, row).GetRetInfo().GetCode(); got == pb.ErrorCode_SUCCESS {
+	if got := primaryWrite(t, ctx, process.primary, row).GetRetInfo().GetCode(); got == pb.ErrorCode_SUCCESS {
 		t.Fatal("disabled Dataset accepted a write")
 	}
 	updateDataset(t, ctx, process.metadata, &pb.Dataset{SpaceId: "quant", DatasetId: "dataset_a", Name: "行情数据", Status: "active"})
-	if got := primaryWrite(t, ctx, process.primary, writeAuth, row).GetRetInfo().GetCode(); got != pb.ErrorCode_SUCCESS {
+	if got := primaryWrite(t, ctx, process.primary, row).GetRetInfo().GetCode(); got != pb.ErrorCode_SUCCESS {
 		t.Fatalf("re-enabled Dataset write code=%s, want SUCCESS", got)
 	}
 
@@ -110,7 +109,7 @@ func TestDatasetLifecycleInPrimaryProcess(t *testing.T) {
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("rows after delete=%v err=%v, want none", rows, err)
 	}
-	if got := primaryWrite(t, ctx, process.primary, writeAuth, row).GetRetInfo().GetCode(); got == pb.ErrorCode_SUCCESS {
+	if got := primaryWrite(t, ctx, process.primary, row).GetRetInfo().GetCode(); got == pb.ErrorCode_SUCCESS {
 		t.Fatal("deleted Dataset accepted a write")
 	}
 	// 绕过请求快照直接写存储层（相当于删除前就已通过校验的迟到写入）：拿到读锁后按最新元数据被拒绝。
@@ -122,17 +121,17 @@ func TestDatasetLifecycleInPrimaryProcess(t *testing.T) {
 	if recreated.GetStatus() != "active" || recreated.GetRevision() != 1 {
 		t.Fatalf("recreated Dataset=%v, want active revision 1", recreated)
 	}
-	if got := readLifecycleValues(t, ctx, process.primary, writeAuth, row.GetKey()); len(got) != 0 {
+	if got := readLifecycleValues(t, ctx, process.primary, row.GetKey()); len(got) != 0 {
 		t.Fatalf("recreated Dataset still has old rows: %v", got)
 	}
-	if got := primaryWrite(t, ctx, process.primary, writeAuth, row).GetRetInfo().GetCode(); got != pb.ErrorCode_SUCCESS {
+	if got := primaryWrite(t, ctx, process.primary, row).GetRetInfo().GetCode(); got != pb.ErrorCode_SUCCESS {
 		t.Fatalf("recreated Dataset write code=%s, want SUCCESS", got)
 	}
 }
 
-func readLifecycleValues(t *testing.T, ctx context.Context, primary *primarystore.Service, auth *pb.AuthInfo, key *pb.RowKey) []string {
+func readLifecycleValues(t *testing.T, ctx context.Context, primary *primarystore.Service, key *pb.RowKey) []string {
 	t.Helper()
-	rsp, err := primary.ReadRows(ctx, &pb.PrimaryReadRowsReq{AuthInfo: auth, Keys: []*pb.RowKey{key}, ColumnNames: []string{"value"}})
+	rsp, err := primary.ReadRows(ctx, &pb.PrimaryReadRowsReq{Keys: []*pb.RowKey{key}, ColumnNames: []string{"value"}})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("read rsp=%v err=%v", rsp, err)
 	}
@@ -199,9 +198,9 @@ func lifecycleRow() *pb.RowFieldUpsert {
 	}
 }
 
-func primaryWrite(t *testing.T, ctx context.Context, service *primarystore.Service, auth *pb.AuthInfo, row *pb.RowFieldUpsert) *pb.PrimaryUpsertFieldsRsp {
+func primaryWrite(t *testing.T, ctx context.Context, service *primarystore.Service, row *pb.RowFieldUpsert) *pb.PrimaryUpsertFieldsRsp {
 	t.Helper()
-	rsp, err := service.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row}}))
+	rsp, err := service.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{row}}))
 	if err != nil {
 		t.Fatalf("PrimaryStore write: rsp=%v err=%v", rsp, err)
 	}

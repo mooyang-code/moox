@@ -28,7 +28,7 @@ const wipeTimeout = 2 * time.Hour
 const pendingFile = "wipe-pending.json"
 
 // operatorIdentity 是操作员目录里绑定旧部署的文件。config.key（没有钥匙串时解密 moox.toml）和 known_hosts（已确认的指纹）要留在原处。
-var operatorIdentity = []string{"gateway-client.yaml", "gateway-bootstrap.json", "moox-ca.crt", "caller-moox-cli.key", "storage-internal-auth.env"}
+var operatorIdentity = []string{"gateway-client.yaml", "gateway-bootstrap.json", "moox-ca.crt", "caller-moox-cli.key"}
 
 // HostPlan 是一台主机的清除范围。
 type HostPlan struct {

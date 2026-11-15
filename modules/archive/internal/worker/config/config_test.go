@@ -50,9 +50,6 @@ func TestLoadAppliesTheDocumentedDefaults(t *testing.T) {
 	if cfg.StatePath() != filepath.Join(testRoot, ".state", "staging.db") {
 		t.Fatalf("state path = %s", cfg.StatePath())
 	}
-	if !strings.HasSuffix(filepath.ToSlash(cfg.StorageSecretPath()), "/secrets/storage-primary-auth.secret") {
-		t.Fatalf("storage secret path = %s", cfg.StorageSecretPath())
-	}
 	if pc := cfg.PacingConfig(); pc.MaxBytesPerSecond != 512<<10 || pc.Validate() != nil {
 		t.Fatalf("pacing config = %+v", pc)
 	}

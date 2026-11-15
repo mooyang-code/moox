@@ -122,7 +122,6 @@ type readyBenchPrimary interface {
 // 启动应用路径；ViewDataReady 经 EventBus 发布，由 readyWatcher 在订阅端接收计时。
 type readyBenchEnv interface {
 	Primary() readyBenchPrimary
-	Auth() *pb.AuthInfo
 	// SetPeriodClock 设置周期账本使用的时钟（登记快照、建立周期、判定截止都按它）。
 	SetPeriodClock(time.Time)
 	// Watcher 返回 ViewDataReady 的订阅端。
@@ -192,7 +191,7 @@ func runKlinePeriodBench(t *testing.T, ctx context.Context, env readyBenchEnv, d
 		series[i] = &pb.SeriesSnapshotEntry{SubjectId: subject, SeriesTag: "default"}
 	}
 	snapshot, err := env.Primary().RegisterSeriesSnapshot(ctx, &pb.PrimaryRegisterSeriesSnapshotReq{
-		AuthInfo: env.Auth(), SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Frequency: readyBenchFreq,
+		SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Frequency: readyBenchFreq,
 		Series: series, EffectiveFrom: readyBenchBase.Unix(),
 	})
 	if err != nil || snapshot.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -213,7 +212,7 @@ func runKlinePeriodBench(t *testing.T, ctx context.Context, env readyBenchEnv, d
 		for from := 0; from < len(items); from += per {
 			to := min(from+per, len(items))
 			rsp, err := env.Primary().CommitTimeSeriesBatch(ctx, &pb.PrimaryCommitTimeSeriesBatchReq{
-				AuthInfo: env.Auth(), Items: items[from:to],
+				Items: items[from:to],
 				Expectation: &pb.DatasetPeriodExpectation{
 					SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Frequency: readyBenchFreq, PeriodTime: period.Unix(),
 					SeriesHash: snapshot.GetSeriesHash(), ExpectedCount: snapshot.GetExpectedCount(),
@@ -307,7 +306,7 @@ func writeRowsInBatches(t *testing.T, ctx context.Context, env readyBenchEnv, da
 	for from := 0; from < len(rows); from += readyBenchWriteBatchRows {
 		to := min(from+readyBenchWriteBatchRows, len(rows))
 		rsp, err := env.Primary().UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{
-			AuthInfo: env.Auth(), SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Rows: rows[from:to],
+			SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Rows: rows[from:to],
 		})
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			t.Fatalf("写入 %s：rsp=%v err=%v", dataset.datasetID, rsp.GetRetInfo(), err)
@@ -322,7 +321,7 @@ func reportProducerCompleted(t *testing.T, ctx context.Context, env readyBenchEn
 		series = append(series, &pb.SeriesRef{SubjectId: subject, SeriesTag: "default"})
 	}
 	rsp, err := env.Primary().ReportDatasetPeriodCompleted(ctx, &pb.ReportDatasetPeriodCompletedReq{
-		AuthInfo: env.Auth(), SpaceId: readyBenchSpace,
+		SpaceId: readyBenchSpace,
 		Marker: &pb.DatasetPeriodCompletedMarker{
 			DatasetId: dataset.datasetID, Frequency: readyBenchFreq, PeriodTime: period.Unix(), Status: "complete",
 			UniverseSubjectIds: universe, UniverseSeries: series, CauseEventId: cause, CompletedAt: timestamppb.Now(),

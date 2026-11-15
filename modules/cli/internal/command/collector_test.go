@@ -12,14 +12,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestCollectorStoragePrimaryAuthSecretUsesNormalizedControlFile(t *testing.T) {
-	secret, err := collectorStoragePrimaryAuthSecret([]byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-secret\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"))
-	require.NoError(t, err)
-	assert.Equal(t, "primary-secret", secret)
-	_, err = collectorStoragePrimaryAuthSecret([]byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=old\nMOOX_STORAGE_PRIMARY_AUTH_SECRET=new\nMOOX_STORAGE_VIEW_AUTH_SECRET=view\n"))
-	assert.Error(t, err)
-}
-
 func TestDefaultCryptoCollectorTasksSelectOnlyKlineFields(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml"))
 	require.NoError(t, err)

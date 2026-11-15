@@ -2,7 +2,6 @@ package unitdeploy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -15,7 +14,6 @@ import (
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/mooyang-code/moox/packages/hostpolicy"
-	"github.com/mooyang-code/moox/packages/security"
 )
 
 func unitComponents(manifest setupconfig.Manifest, hostID, profile string) ([]string, error) {
@@ -51,9 +49,6 @@ func unitConfiguration(snapshot *setupconfig.Snapshot, profile string) ([]byte, 
 // defaultSpaceID 是 collector-stream 实例服务的空间（同一空间只部署一个实例）。
 const defaultSpaceID = "crypto"
 
-// collectorStorageAppID 是 Collector 与 SCF 函数写 Storage 的应用身份，collector-stream 沿用它。
-const collectorStorageAppID = "moox-collector"
-
 // serviceLogComponents 是接入了重要日志与 CLS 上报的组件，和 docs/模块/监控.md 的接入范围一致。
 var serviceLogComponents = []string{
 	"admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy", "eventbus",
@@ -77,16 +72,6 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			values["MOOX_LOG_CLS_MIN_LEVEL"] = cls.MinLevel
 			values["MOOX_LOG_CLS_SOURCE"] = hostID
 		}
-		if slices.Contains([]string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy", "admin"}, id) {
-			if len(identity.StoragePrimarySecret) < 32 || (id == "strategy" || id == "admin") && len(identity.StorageViewSecret) < 32 {
-				return nil, errors.New("control Storage clients require the original persistent role secrets")
-			}
-			values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"] = identity.StoragePrimarySecret
-			// Admin 的 Console 代浏览器调用 Storage，需要 Primary 与 View 两个角色密钥。
-			if id == "strategy" || id == "admin" {
-				values["MOOX_STORAGE_VIEW_AUTH_SECRET"] = identity.StorageViewSecret
-			}
-		}
 		if id == "monitor" {
 			// 告警推送渠道来自 moox.toml 的 [notification]；Monitor 首次建库时据此写入全局渠道，没填地址就不写，用户稍后在管理台添加。
 			values["MOOX_NOTIFICATION_CHANNEL_TYPE"] = manifest.Notification.ChannelType
@@ -102,30 +87,15 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			values["MOOX_HOST_POLICY_FILE"] = hostpolicy.Path(manifest.Paths.Resolved().DeployRoot)
 		}
 		if id == "collector-stream" {
-			// collector-stream 写 Storage 沿用 moox-collector 身份（周期 RPC 只接受 Collector 身份）：
-			// 在本机按 Storage 主密钥派生这一把应用密钥注入，主密钥不放到海外机。
-			if len(identity.StoragePrimarySecret) < 32 {
-				return nil, errors.New("collector-stream requires the original Storage primary secret to derive its app key")
-			}
-			keys, err := json.Marshal(map[string]string{collectorStorageAppID: security.HMACSHA256Hex(identity.StoragePrimarySecret, []byte(collectorStorageAppID))})
-			if err != nil {
-				return nil, err
-			}
-			values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"] = string(keys)
 			values["MOOX_SPACE_ID"] = defaultSpaceID
 		}
 		if id != "storage-primary" && id != "storage-view" {
 			continue
 		}
-		if len(identity.StoragePrimarySecret) < 32 || len(identity.StorageViewSecret) < 32 {
-			return nil, errors.New("Storage requires its original complete private admin identity; missing credentials cannot be regenerated during deployment")
-		}
 		values["MOOX_STORAGE_HOME"] = "./var/storage"
 		values["MOOX_STORAGE_ROLE"] = strings.TrimPrefix(id, "storage-")
 		values["MOOX_STORAGE_CONFIG"] = "config/storage.yaml"
 		values["MOOX_STORAGE_EVENTBUS_URL"] = manifest.EventBusURLFor(hostID)
-		values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"] = identity.StoragePrimarySecret
-		values["MOOX_STORAGE_VIEW_AUTH_SECRET"] = identity.StorageViewSecret
 		values["MOOX_STORAGE_PRIMARY_TARGET"] = "ip://127.0.0.1:20102"
 		values["MOOX_STORAGE_METADATA_TARGET"] = "ip://127.0.0.1:20100"
 		values["MOOX_STORAGE_VIEW_TARGET"] = "ip://127.0.0.1:20103"

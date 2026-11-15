@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -706,8 +705,7 @@ func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seed
 }
 
 type remoteSetupInitStorage struct {
-	transport setupssh.Client
-	gateway   commandGateway
+	gateway commandGateway
 }
 
 func defaultOpenSetupInitStorage(
@@ -715,11 +713,11 @@ func defaultOpenSetupInitStorage(
 	snapshot *setupconfig.Snapshot,
 	host string,
 ) (setupInitStorage, error) {
-	transport, gateway, err := openRemoteStorage(ctx, snapshot, host)
+	gateway, err := openRemoteStorage(ctx, snapshot, host)
 	if err != nil {
 		return nil, err
 	}
-	return &remoteSetupInitStorage{transport: transport, gateway: gateway}, nil
+	return &remoteSetupInitStorage{gateway: gateway}, nil
 }
 
 func (s *remoteSetupInitStorage) Apply(ctx context.Context, calls []metadataImportCall) (metadataImportSummary, error) {
@@ -734,16 +732,10 @@ func (s *remoteSetupInitStorage) Verify(ctx context.Context, calls []metadataImp
 }
 
 func (s *remoteSetupInitStorage) Close() error {
-	if s == nil {
+	if s == nil || s.gateway == nil {
 		return nil
 	}
-	if s.gateway != nil {
-		_ = s.gateway.Close()
-	}
-	if s.transport != nil {
-		return s.transport.Close()
-	}
-	return nil
+	return s.gateway.Close()
 }
 
 var _ setupInitStorage = (*remoteSetupInitStorage)(nil)

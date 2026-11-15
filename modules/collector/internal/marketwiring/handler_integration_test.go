@@ -72,7 +72,7 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 					storage := &capturedStorage{}
 					h := NewHandler()
 					h.Now = func() time.Time { return now }
-					h.NewStorage = func(string) (marketfetch.Storage, error) { return storage, nil }
+					h.NewStorage = func() (marketfetch.Storage, error) { return storage, nil }
 					// Replace only the network-bound registry. Production factory
 					// selection, pipeline configuration, handler and writes remain real.
 					h.NewKlinePipeline = func(s marketfetch.Storage, market string, instrument marketdata.InstrumentType, frequency, provider string, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {

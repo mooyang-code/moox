@@ -17,9 +17,8 @@ func (s *Service) extendViewSchemasRound(ctx context.Context) {
 	if metadata == nil {
 		return
 	}
-	auth := s.internalAuth()
 	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
+		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err == nil {
 			err = requireSuccess(rsp.GetRetInfo())
 		}

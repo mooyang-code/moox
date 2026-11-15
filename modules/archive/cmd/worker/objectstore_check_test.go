@@ -137,16 +137,15 @@ func TestCheckConfigLoadsTheWholeConfigAndTheCredentials(t *testing.T) {
 	secrets := filepath.Join(dir, "secrets")
 	_ = os.MkdirAll(secrets, 0o700)
 	for name, body := range map[string]string{
-		"access-archive-worker.key":   strings.Repeat("k", 40),
-		"storage-primary-auth.secret": strings.Repeat("s", 40),
-		"archive-object-store.env":    "ACCESS_KEY_ID=AKIDcheck\nSECRET_ACCESS_KEY=" + checkSecret + "\n",
+		"access-archive-worker.key": strings.Repeat("k", 40),
+		"archive-object-store.env":  "ACCESS_KEY_ID=AKIDcheck\nSECRET_ACCESS_KEY=" + checkSecret + "\n",
 	} {
 		if err := os.WriteFile(filepath.Join(secrets, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	base := "gateway_client:\n  access_address: access.example.test:11004\n  access_id: access@storage\n  caller: archive-worker\n  key_id: k1\n  key_file: " +
-		secrets + "/access-archive-worker.key\nstorage_auth_file: " + secrets + "/storage-primary-auth.secret\nworker:\n  worker_id: archive-worker@t\n  root_dir: /data/moox-archive\n"
+		secrets + "/access-archive-worker.key\nworker:\n  worker_id: archive-worker@t\n  root_dir: /data/moox-archive\n"
 	store := "object_store:\n  endpoint: cos.ap-nanjing.myqcloud.com\n  region: ap-nanjing\n  bucket: " + checkBucket + "\n  url_style: virtual\n  credentials_file: " + secrets + "/archive-object-store.env\n"
 	write := func(body string) string {
 		path := filepath.Join(dir, "app.yaml.new")

@@ -1,7 +1,6 @@
 package bootstrap
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/cnstock"
-	"github.com/mooyang-code/moox/packages/security"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/stretchr/testify/assert"
@@ -350,7 +348,6 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 }
 
 func TestFetchPlanDeployForcesTheSpaceIdentity(t *testing.T) {
-	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "env.json"), []byte(`{"MOOX_SPACE_ID":"crypto","OTHER":"x"}`), 0o600))
 	cfg := Default()
@@ -368,7 +365,6 @@ func TestFetchPlanDeployForcesTheSpaceIdentity(t *testing.T) {
 }
 
 func TestFetchPlanDeployBuildsTheBaseEnvironmentWithoutAFile(t *testing.T) {
-	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
 	cfg := Default()
 	cfg.sourcePath = filepath.Join(t.TempDir(), "app.yaml")
 	cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageName = "acct", "moox-collector-crypto-plan"
@@ -376,16 +372,8 @@ func TestFetchPlanDeployBuildsTheBaseEnvironmentWithoutAFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "crypto", deploy.BaseEnvironment["MOOX_SPACE_ID"])
 	require.Equal(t, "moox-collector-crypto-plan", deploy.PackageName)
-	// Storage 应用密钥由主密钥按应用 ID 派生，密钥本身不进入配置文件。
-	var keys map[string]string
-	require.NoError(t, json.Unmarshal([]byte(deploy.BaseEnvironment["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]), &keys))
-	require.Equal(t, security.HMACSHA256Hex("test-storage-primary-secret", []byte("moox-collector")), keys["moox-collector"])
-	require.Len(t, keys, 1)
-
-	// 主密钥缺失时明确报错，不下发没有密钥的函数。
-	t.Setenv(storageAuthSecretEnv, "")
-	_, err = cfg.fetchPlanDeploy("crypto")
-	require.ErrorContains(t, err, storageAuthSecretEnv)
+	// 函数写 Storage 不需要口令：内置环境只有空间身份。
+	require.Equal(t, map[string]string{"MOOX_SPACE_ID": "crypto"}, deploy.BaseEnvironment)
 }
 
 // 代码包只能按包名取最新；固定包 ID 的 package_id 已删除，旧配置里还写着它时严格解码直接报错。
@@ -414,7 +402,6 @@ func renderedTimerPlan(markets, spaces string) string {
 }
 
 func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
-	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
 	t.Run("crypto only", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing], swap: [ap-nanjing]}\n", "    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n")))
 		require.NoError(t, err)
@@ -533,7 +520,6 @@ func TestScfPlanFetchYAMLNotBeforeOverride(t *testing.T) {
 
 // CLI 渲染测试生成的真实产物（modules/cli/.../testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。
 func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
-	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
 	raw, err := os.ReadFile("../../../cli/internal/setup/config/testdata/scf_plan_rendered.yaml")
 	require.NoError(t, err)
 	cfg, err := Load(writeCollectorConfig(t, string(raw)))
@@ -571,7 +557,6 @@ func TestPerMarketFetchOverridesOnlyTheirMarket(t *testing.T) {
 }
 
 func TestPerMarketFetchYAMLIsStrictlyParsed(t *testing.T) {
-	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
 	cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing], swap: [ap-nanjing]}\n",
 		"    crypto: {package_name: pkg-crypto, namespace: ns-crypto, markets: {swap: {fetch: {not_before_ms: 9000}, lateness_s: 25}}}\n")))
 	require.NoError(t, err)

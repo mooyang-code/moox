@@ -29,7 +29,6 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/runner"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/source"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -85,10 +84,6 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 		return fmt.Errorf("open gateway client: %w", err)
 	}
 	defer func() { err = errors.Join(err, gateway.Close()) }()
-	secret, err := gatewayauth.ReadSigningSecret(cfg.StorageSecretPath())
-	if err != nil {
-		return fmt.Errorf("read storage auth file: %w", err)
-	}
 	store, err := staging.Open(cfg.StatePath(), staging.Options{CacheBytes: int64(cfg.Staging.CacheSize)})
 	if err != nil {
 		return fmt.Errorf("open staging database: %w", err)
@@ -109,7 +104,7 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 	files := export.Files{Root: cfg.Worker.RootDir, Format: cfg.Worker.ExportFormat}
 	worker := app.New(app.Options{
 		Config: cfg, Manager: manager.New(gateway), Staging: store, Files: files, Version: Version,
-		Runner:    &runner.Runner{Source: source.New(gateway, secret), Staging: store, Files: files, Pace: pacer, PageRows: cfg.Pacing.PageRows, Remote: remote},
+		Runner:    &runner.Runner{Source: source.New(gateway), Staging: store, Files: files, Pace: pacer, PageRows: cfg.Pacing.PageRows, Remote: remote},
 		DiskUsage: app.StatfsDiskUsage, Remote: remote, Pacer: pacer,
 	})
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
@@ -196,7 +191,7 @@ func serveData(addr string, handler http.Handler) (func() error, error) {
 	}, nil
 }
 
-// checkConfig 完整载入并校验配置，再读一遍凭据文件（Storage 签名密钥、对象存储凭据），不连网。
+// checkConfig 完整载入并校验配置，再读一遍对象存储凭据，不连网。
 // 部署脚本在重启服务之前先跑它：配置不对就不重启，旧进程继续跑。
 func checkConfig(args []string) error {
 	fs := flag.NewFlagSet("check-config", flag.ContinueOnError)
@@ -207,9 +202,6 @@ func checkConfig(args []string) error {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		return err
-	}
-	if _, err := gatewayauth.ReadSigningSecret(cfg.StorageSecretPath()); err != nil {
-		return fmt.Errorf("read storage auth file: %w", err)
 	}
 	if _, err := cfg.OpenObjectStore(); err != nil {
 		return err

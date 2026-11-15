@@ -25,7 +25,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/warmup"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -322,10 +321,7 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 
 // newInputClient 构造 Storage（Metadata、DataView）与 Factor 的窄适配，调用经 gatewayclient 发往本机主机网关。
 func newInputClient(cfg Config, gateway gatewayclient.Invoker) *input.RPCClient {
-	client := input.NewGatewayClient(gateway, cfg.Storage.Timeout, cfg.Factor.Timeout)
-	client.Auth = &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.AppKey, Operator: "strategy"}
-	client.ViewAuth = &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.ViewAppKey, Operator: "strategy"}
-	return client
+	return input.NewGatewayClient(gateway, cfg.Storage.Timeout, cfg.Factor.Timeout)
 }
 
 func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtime, state *health.State, consumer *eventconsumer.Consumer) func(context.Context) healthz.Response {

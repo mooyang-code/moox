@@ -93,13 +93,9 @@ func deployExternal(ctx context.Context, in externalInstall) (UnitResult, error)
 	if err != nil {
 		return result, err
 	}
-	if len(in.identity.StoragePrimarySecret) < 32 {
-		return result, errors.New("external program deployment requires the original Storage primary secret")
-	}
 	secrets := map[string][]byte{
-		program.keyFile:               []byte(credentials.Secret + "\n"),
-		"storage-primary-auth.secret": []byte(in.identity.StoragePrimarySecret + "\n"),
-		"health-auth.env":             []byte(healthEnvironment(in.identity)),
+		program.keyFile:   []byte(credentials.Secret + "\n"),
+		"health-auth.env": []byte(healthEnvironment(in.identity)),
 	}
 	if len(in.objectStoreEnv) > 0 {
 		secrets[objectStoreEnvFile] = append([]byte(nil), in.objectStoreEnv...)

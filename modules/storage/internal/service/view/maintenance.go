@@ -10,7 +10,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -195,9 +194,8 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 	s.setMetadataClient(opts.Metadata)
 	// 先清掉没有对应 View 的索引文件，再挂接。
 	s.removeOrphanIndexes(ctx, opts.Metadata)
-	auth := s.internalAuth()
 	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
+		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err != nil {
 			return err
 		}
@@ -253,11 +251,10 @@ func indexBuiltFor(view *pb.View, stats viewindex.ViewIndexStats) bool {
 }
 
 func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) error {
-	auth := s.internalAuth()
 	var firstErr error
 	activeViews := make(map[observability.ViewKey]struct{})
 	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
+		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err != nil {
 			return err
 		}
@@ -296,7 +293,7 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 				_, ok := activeViews[observability.ViewKey{SpaceID: spaceID, ViewID: viewID}]
 				return ok
 			})
-			s.forgetDeletedViews(ctx, opts.Metadata, auth)
+			s.forgetDeletedViews(ctx, opts.Metadata)
 			return firstErr
 		}
 	}
@@ -304,10 +301,10 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 
 // forgetDeletedViews 摘掉元数据里已经不存在的 View（停用的不算）：清掉运行时里的活动索引并从目录里去掉，
 // GetViewState 随之返回 VIEW_NOT_FOUND，索引文件当场删除。列出元数据失败时这一轮不动。
-func (s *Service) forgetDeletedViews(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo) {
+func (s *Service) forgetDeletedViews(ctx context.Context, metadata MetadataClient) {
 	existing := make(map[viewRef]struct{})
 	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Page: &pb.Page{Page: pageNo, Size: 100}})
+		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err == nil {
 			err = requireSuccess(rsp.GetRetInfo())
 		}
@@ -530,11 +527,6 @@ func (s *Service) observeActivatedViewWatermark(view *pb.View, indexID string) {
 		}
 	}
 	s.observeViewWatermark(indexID, view.GetDatasetId(), keys, true)
-}
-
-func (s *Service) internalAuth() *pb.AuthInfo {
-	const appID = "storage-view"
-	return &pb.AuthInfo{AppId: appID, AppKey: serviceauth.Key(s.authSecret, appID)}
 }
 
 func requireSuccess(ret *pb.RetInfo) error {

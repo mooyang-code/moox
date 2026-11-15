@@ -96,7 +96,7 @@ type PlanDeploy struct {
 	PackageName string
 	Namespace   string
 	MemoryMB    int
-	// BaseEnvironment 是函数的非受管环境（空间、Storage 应用密钥、日志服务等）。
+	// BaseEnvironment 是函数的非受管环境（空间、日志服务等）。
 	BaseEnvironment map[string]string
 	Networks        map[string]PlanNetwork
 	// NamespaceCapacity 为每个命名空间的函数数上限（0 表示不分片）。

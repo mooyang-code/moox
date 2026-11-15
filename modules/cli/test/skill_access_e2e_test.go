@@ -41,10 +41,8 @@ func TestSkillUsesProductionAccessWithoutOperatorFiles(t *testing.T) {
 	command.Stderr = &diagnostics
 	output, err := command.Output()
 	require.NoError(t, err, "Skill diagnostics: %s", diagnostics.String())
-	for _, secret := range []string{credential.Secret, klineStorageAppKey} {
-		require.NotContains(t, string(output), secret)
-		require.NotContains(t, diagnostics.String(), secret)
-	}
+	require.NotContains(t, string(output), credential.Secret)
+	require.NotContains(t, diagnostics.String(), credential.Secret)
 	var response pb.ReadTimeSeriesRowsRsp
 	require.NoError(t, protojson.Unmarshal(output, &response))
 	require.Len(t, response.GetRows(), 1)
@@ -52,7 +50,6 @@ func TestSkillUsesProductionAccessWithoutOperatorFiles(t *testing.T) {
 	select {
 	case req := <-storage.requests:
 		require.Equal(t, "crypto", req.GetSpaceId())
-		require.Equal(t, klineStorageAppID, req.GetAuthInfo().GetAppId())
 	case <-time.After(3 * time.Second):
 		t.Fatal("Storage did not receive the Skill query through Access")
 	}

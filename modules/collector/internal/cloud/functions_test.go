@@ -289,7 +289,7 @@ func TestEnsureRetriesTransientErrorsOnly(t *testing.T) {
 }
 
 // 碰云端之前就被拒绝，一条写请求都不发：环境带 EventBus 项（采集函数不连 EventBus）、超时不是 60、环境超长、
-// 缺 Storage 应用密钥或 Access 三项、定时函数不带采集计划、cron 不支持、代码包不可用。
+// 缺 Access 三项、定时函数不带采集计划、cron 不支持、代码包不可用。
 func TestEnsureRejectsInvalidSpecsBeforeAnyWrite(t *testing.T) {
 	ctx := context.Background()
 	for _, test := range []struct {
@@ -302,7 +302,6 @@ func TestEnsureRejectsInvalidSpecsBeforeAnyWrite(t *testing.T) {
 		{"外层超时不是 60", func(spec *FunctionSpec) { spec.TimeoutS = 30 }, "60"},
 		{"环境里的超时不是 60", func(spec *FunctionSpec) { spec.Environment["MOOX_FETCH_TIMEOUT_SECONDS"] = "30" }, "60"},
 		{"环境超长", func(spec *FunctionSpec) { spec.Environment["OPERATOR_EXTRA"] = strings.Repeat("x", 4096) }, "4096"},
-		{"缺 Storage 应用密钥", func(spec *FunctionSpec) { delete(spec.Environment, "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON") }, "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"},
 		{"缺 Access 地址", func(spec *FunctionSpec) { delete(spec.Environment, "MOOX_ACCESS_ADDRESS") }, "MOOX_ACCESS_ADDRESS"},
 		{"缺 Access 身份", func(spec *FunctionSpec) { delete(spec.Environment, "MOOX_ACCESS_ID") }, "MOOX_ACCESS_ID"},
 		{"缺调用方密钥", func(spec *FunctionSpec) { delete(spec.Environment, "MOOX_CALLER_KEY") }, "MOOX_CALLER_KEY"},
@@ -368,7 +367,7 @@ func TestEnsureAndUpgradeRejectInvalidMergedEnvironmentWithoutWrites(t *testing.
 	}
 }
 
-// 升级只换代码：环境沿用云上读回的值（含调用方密钥与 Storage 应用密钥，读回给包外的结果虽然去掉了它们），定时器不动；
+// 升级只换代码：环境沿用云上读回的值（含调用方密钥，读回给包外的结果虽然去掉了它），定时器不动；
 // 已经是新包时不发任何写请求。
 func TestUpgradeCodeKeepsRemoteEnvironmentIncludingSecrets(t *testing.T) {
 	ctx := context.Background()
@@ -394,7 +393,7 @@ func TestUpgradeCodeKeepsRemoteEnvironmentIncludingSecrets(t *testing.T) {
 	require.Empty(t, writes)
 }
 
-// 读回不带出调用方密钥与 Storage 应用密钥；Describe 带定时器的可用状态、Qualifier、Message，DescribeCode 不读定时器。
+// 读回不带出调用方密钥等密钥项；Describe 带定时器的可用状态、Qualifier、Message，DescribeCode 不读定时器。
 func TestDescribeStripsSecretsAndReadsTimer(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
@@ -416,7 +415,7 @@ func TestDescribeStripsSecretsAndReadsTimer(t *testing.T) {
 	require.Equal(t, "hash-final", state.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
 	require.Equal(t, "scf-key-2", state.Environment["MOOX_CALLER_KEY_ID"])
 	require.Equal(t, "fake-cls-secret-id", state.Environment["MOOX_CLS_SECRET_ID"], "公开标识不算密钥")
-	for _, key := range []string{"MOOX_CALLER_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_SECRET_KEY", "OPERATOR_API_TOKEN", "LEGACY_DB_PASSWORD", "LEGACY_CLIENT_SECRET", "LEGACY_CREDENTIALS"} {
+	for _, key := range []string{"MOOX_CALLER_KEY", "MOOX_CLS_SECRET_KEY", "OPERATOR_API_TOKEN", "LEGACY_DB_PASSWORD", "LEGACY_CLIENT_SECRET", "LEGACY_CREDENTIALS"} {
 		require.NotContains(t, state.Environment, key)
 	}
 	require.Equal(t, &AsyncRetryState{RetryNum: 0, MsgTTL: 60}, state.AsyncRetry)

@@ -109,11 +109,11 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if err := realtimeInventory.Refresh(ctx); err != nil {
 		return nil, fmt.Errorf("initialize collector realtime dataset inventory: %w", err)
 	}
-	resultMetadata, resultMetadataErr := marketstorage.NewGatewayResampleMetadataClient(process.gateway, marketstorage.InstTypeSPOT)
+	resultMetadata, resultMetadataErr := marketstorage.NewGatewayResampleMetadataClient(process.gateway)
 	if resultMetadataErr != nil {
 		return nil, fmt.Errorf("initialize collector result metadata client: %w", resultMetadataErr)
 	}
-	resultManager := collectorresult.NewManager(resultMetadata.Client, resultMetadata.View, resultMetadata.Auth)
+	resultManager := collectorresult.NewManager(resultMetadata.Client, resultMetadata.View)
 	resultManager.SetFieldOffers(marketwiring.FieldOffers())
 	if err := ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager); err != nil {
 		return nil, fmt.Errorf("initialize collector task results: %w", err)

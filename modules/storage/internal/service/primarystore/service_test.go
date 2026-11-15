@@ -12,23 +12,38 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
-func TestPrimaryWritesAndRequiresAuth(t *testing.T) {
+// 请求里已经没有 auth_info（原来的 1 号字段）。写入不需要调用方身份；
+// 带着旧字段的 protobuf 请求，这个字段按未知字段解出、不影响处理；JSON 请求带它会被 tRPC 拒绝（不丢弃未知字段）。
+func TestPrimaryWriteWithoutAuthInfo(t *testing.T) {
+	descriptor := (&pb.PrimaryUpsertFieldsReq{}).ProtoReflect().Descriptor()
+	require.Nil(t, descriptor.Fields().ByName("auth_info"))
+	require.Nil(t, descriptor.Fields().ByNumber(1))
+
 	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: openTestStore(t)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "ignored"}, Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.2}}}}}}}))
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("write rsp=%v err=%v", rsp, err)
-	}
-	bad, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key}}}))
-	if err != nil || bad.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
-		t.Fatalf("bad rsp=%v err=%v", bad, err)
-	}
+	current, err := proto.Marshal(fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.2}}}}}}}))
+	require.NoError(t, err)
+	// 旧调用方的编码：1 号字段是 AuthInfo{app_id = 1, app_key = 2}。
+	oldAuth := protowire.AppendString(protowire.AppendTag(nil, 1, protowire.BytesType), "moox-collector")
+	oldAuth = protowire.AppendString(protowire.AppendTag(oldAuth, 2, protowire.BytesType), "old-app-key")
+	legacy := append(protowire.AppendBytes(protowire.AppendTag(nil, 1, protowire.BytesType), oldAuth), current...)
+
+	req := &pb.PrimaryUpsertFieldsReq{}
+	require.NoError(t, codec.Unmarshal(codec.SerializationTypePB, legacy, req))
+	require.NotEmpty(t, req.ProtoReflect().GetUnknown(), "旧的 1 号字段只作为未知字段留下")
+	rsp, err := svc.UpsertFields(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), "ret_info=%v", rsp.GetRetInfo())
+
+	err = codec.Unmarshal(codec.SerializationTypeJSON, []byte(`{"space_id":"s","dataset_id":"d","auth_info":{"app_id":"moox-collector"}}`), &pb.PrimaryUpsertFieldsReq{})
+	require.ErrorContains(t, err, "auth_info")
 }
 
 // 元数据里没有或已停用的数据集，读写都在到达存储层之前被拒绝。
@@ -46,11 +61,11 @@ func TestPrimaryRejectsMissingOrDisabledDataset(t *testing.T) {
 			svc, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return singleDatasetSnapshot{dataset: dataset} }})
 			require.NoError(t, err)
 			key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-			rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "v", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "x"}}}}}}}))
+			rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "v", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "x"}}}}}}}))
 			require.NoError(t, err)
 			require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
 			// 读取按错误类别返回：不存在是 NOT_FOUND，已停用是参数错误，都不走框架错误。
-			read, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}, ColumnNames: []string{"v"}})
+			read, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{Keys: []*pb.RowKey{key}, ColumnNames: []string{"v"}})
 			require.NoError(t, err)
 			want := pb.ErrorCode_NOT_FOUND
 			if dataset != nil {
@@ -72,13 +87,13 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "allowed"}}}},
 	}
 	upsert, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "collector"}, Rows: []*pb.RowFieldUpsert{row},
+		Rows: []*pb.RowFieldUpsert{row},
 	}))
 	if err != nil || upsert.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("upsert rsp=%v err=%v", upsert, err)
 	}
 	completed, err := svc.ReportDatasetPeriodCompleted(context.Background(), &pb.ReportDatasetPeriodCompletedReq{
-		AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", Marker: &pb.DatasetPeriodCompletedMarker{
+		SpaceId: "space", Marker: &pb.DatasetPeriodCompletedMarker{
 			DatasetId: "factor-data", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", UniverseSubjectIds: []string{"BTC"},
 			UniverseSeries: []*pb.SeriesRef{{SubjectId: "BTC", SeriesTag: "default"}},
 			CauseEventId:   "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
@@ -147,13 +162,13 @@ func (periodAuthorizationSnapshot) ListDatasetColumns(string, string, *pb.Page) 
 }
 
 func TestCommitTimeSeriesBatchWriteAuthorization(t *testing.T) {
-	runPeriodAuthorizationCases(t, "commit", func(svc *Service, auth *pb.AuthInfo, exp *pb.DatasetPeriodExpectation) *pb.RetInfo {
+	runPeriodAuthorizationCases(t, "commit", func(svc *Service, exp *pb.DatasetPeriodExpectation) *pb.RetInfo {
 		row := &pb.RowFieldUpsert{Key: &pb.RowKey{
 			SpaceId: exp.GetSpaceId(), DatasetId: exp.GetDatasetId(),
 			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: exp.GetFrequency(), DataTime: "2026-09-30T00:00:00Z"}},
 		}}
 		rsp, err := svc.CommitTimeSeriesBatch(context.Background(), &pb.PrimaryCommitTimeSeriesBatchReq{
-			AuthInfo: auth, Expectation: exp, Items: []*pb.TimeSeriesBatchRow{{SeriesIndex: 0, Row: row}},
+			Expectation: exp, Items: []*pb.TimeSeriesBatchRow{{SeriesIndex: 0, Row: row}},
 		})
 		if err != nil {
 			t.Fatalf("CommitTimeSeriesBatch error: %v", err)
@@ -162,7 +177,7 @@ func TestCommitTimeSeriesBatchWriteAuthorization(t *testing.T) {
 	})
 }
 
-func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Service, *pb.AuthInfo, *pb.DatasetPeriodExpectation) *pb.RetInfo) {
+func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Service, *pb.DatasetPeriodExpectation) *pb.RetInfo) {
 	t.Helper()
 	validDataset := func() *pb.Dataset {
 		return &pb.Dataset{
@@ -175,32 +190,26 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 	}
 	tests := []struct {
 		name            string
-		appID           string
 		dataset         *pb.Dataset
 		includeDataset  bool
 		includeSnapshot bool
 		frequency       string
-		authorizeErr    error
 		wantCode        pb.ErrorCode
 	}{
-		{name: "collector owner", appID: "collector", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
-		{name: "any authorized caller and any role: SCF canary read-only caller", appID: "scf-market-canary", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
-		{name: "any authorized caller and any role: Factor caller", appID: "moox-factor", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
-		{name: "any authorized caller and any role: other module caller", appID: "admin", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
-		{name: "any authorized caller and any role: Factor-owned Dataset", appID: "collector", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
-		{name: "any authorized caller and any role: missing Dataset owner", appID: "collector", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"dataset_role": "raw_collection"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
-		{name: "any authorized caller and any role: wrong Dataset role", appID: "collector", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"owner_module": "collector", "dataset_role": "factor_result"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
-		{name: "snapshot Dataset identity mismatch", appID: "collector", dataset: &pb.Dataset{SpaceId: "other-space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Status: "active"}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "record Dataset kind", appID: "collector", dataset: withAttrs(pb.DataKind_DATA_KIND_RECORD, "1h", nil), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "invalid declared frequency", appID: "collector", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "forever", nil), includeDataset: true, includeSnapshot: true, frequency: "forever", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "frequency alias is not canonical", appID: "collector", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "unknown Dataset", appID: "collector", dataset: validDataset(), includeDataset: false, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "missing metadata snapshot", appID: "collector", dataset: validDataset(), includeDataset: true, includeSnapshot: false, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "HMAC rejects before metadata", appID: "collector", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", authorizeErr: errors.New("invalid HMAC"), wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "collector owner", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
+		{name: "any role: Factor-owned Dataset", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
+		{name: "any role: missing Dataset owner", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"dataset_role": "raw_collection"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
+		{name: "any role: wrong Dataset role", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"owner_module": "collector", "dataset_role": "factor_result"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
+		{name: "snapshot Dataset identity mismatch", dataset: &pb.Dataset{SpaceId: "other-space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Status: "active"}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "record Dataset kind", dataset: withAttrs(pb.DataKind_DATA_KIND_RECORD, "1h", nil), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "invalid declared frequency", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "forever", nil), includeDataset: true, includeSnapshot: true, frequency: "forever", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "frequency alias is not canonical", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "unknown Dataset", dataset: validDataset(), includeDataset: false, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "missing metadata snapshot", dataset: validDataset(), includeDataset: true, includeSnapshot: false, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
 	}
 	for _, tc := range tests {
 		t.Run(method+"/"+tc.name, func(t *testing.T) {
-			var commits, authorizerCalls, snapshotCalls int
+			var commits, snapshotCalls int
 			store := newHookStore(t)
 			store.commit = func(context.Context, pebble.DatasetPeriodExpectation, []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error) {
 				commits++
@@ -219,24 +228,12 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 					}
 					return periodAuthorizationSnapshot{datasets: datasets}
 				},
-				Authorizer: func(auth *pb.AuthInfo) error {
-					authorizerCalls++
-					if auth == nil || auth.GetAppId() == "" || auth.GetAppKey() == "" {
-						return errors.New("auth_info is invalid")
-					}
-					return tc.authorizeErr
-				},
 			})
 			require.NoError(t, err)
 			expectation := &pb.DatasetPeriodExpectation{SpaceId: "space", DatasetId: "dataset", Frequency: tc.frequency, PeriodTime: 123, SeriesHash: "hash", ExpectedCount: 1}
-			rsp := invoke(svc, &pb.AuthInfo{AppId: tc.appID, AppKey: "caller-key"}, expectation)
+			rsp := invoke(svc, expectation)
 			require.Equal(t, tc.wantCode, rsp.GetCode(), "ret_info=%v", rsp)
-			require.Equal(t, 1, authorizerCalls, "ordinary HMAC authorization must run first")
-			wantSnapshotCalls := 1
-			if tc.authorizeErr != nil {
-				wantSnapshotCalls = 0
-			}
-			require.Equal(t, wantSnapshotCalls, snapshotCalls, "unexpected request metadata snapshot access")
+			require.Equal(t, 1, snapshotCalls, "unexpected request metadata snapshot access")
 			if tc.wantCode == pb.ErrorCode_SUCCESS {
 				require.Equal(t, 1, commits)
 			} else {
@@ -266,8 +263,7 @@ func TestPrimaryWritesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 	// 一次请求只写一个数据集：两个空间里的同名数据集各写一次。
 	for _, item := range [][2]string{{"space-a", "a"}, {"space-b", "b"}} {
 		rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-			AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
-			Rows:     []*pb.RowFieldUpsert{row(item[0], item[1])},
+			Rows: []*pb.RowFieldUpsert{row(item[0], item[1])},
 		}))
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			t.Fatalf("write %s rsp=%v err=%v", item[0], rsp, err)
@@ -309,8 +305,7 @@ func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 	t1003 := time.Date(2026, 7, 28, 10, 3, 0, 0, time.UTC)
 	t1005 := t1003.Add(2 * time.Minute)
 	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"},
-		Rows:     []*pb.RowFieldUpsert{row("1m", t1003), row("1m", t1005), row("5m", t1003)},
+		Rows: []*pb.RowFieldUpsert{row("1m", t1003), row("1m", t1005), row("5m", t1003)},
 	}))
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write rsp=%v err=%v", rsp, err)
@@ -342,7 +337,6 @@ func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
 	}
 	at := time.Date(2026, 7, 28, 10, 5, 0, 0, time.UTC)
 	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"},
 		Rows: []*pb.RowFieldUpsert{{
 			Key: &pb.RowKey{
 				SpaceId: "crypto", DatasetId: "market_kline",
@@ -373,7 +367,6 @@ func TestPrimaryDoesNotObserveRecordDataset(t *testing.T) {
 		t.Fatal(err)
 	}
 	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"},
 		Rows: []*pb.RowFieldUpsert{{
 			Key: &pb.RowKey{
 				SpaceId: "crypto", DatasetId: "symbols",
@@ -410,7 +403,6 @@ func TestPrimaryReadPreservesRequestOrderAcrossDatasets(t *testing.T) {
 	}
 	keys := []*pb.RowKey{key("b", "first"), key("a", "second"), key("b", "third")}
 	rsp, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{
-		AuthInfo:    &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 		Keys:        keys,
 		ColumnNames: []string{"value"},
 	})
@@ -444,8 +436,7 @@ func TestPrimaryReadRowsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
 		return &pb.RowKey{SpaceId: "space", DatasetId: dataset, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: record, Version: "1"}}}
 	}
 	rsp, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
-		Keys:     []*pb.RowKey{key("dataset-a", "a"), key("dataset-b", "b")}, ColumnNames: []string{"value"},
+		Keys: []*pb.RowKey{key("dataset-a", "a"), key("dataset-b", "b")}, ColumnNames: []string{"value"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("read rsp=%v err=%v", rsp, err)
@@ -469,7 +460,6 @@ func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 		Rows: []*pb.RowFieldUpsert{{
 			Key:    &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r"}}},
 			Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "x"}}}},
@@ -488,7 +478,6 @@ func TestPrimaryReadRowsReturnsResolvedLatestRecordVersion(t *testing.T) {
 	for _, version := range []string{"1", "2"} {
 		key := &pb.RowKey{SpaceId: "space", DatasetId: "records", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: version}}}
 		rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-			AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 			Rows: []*pb.RowFieldUpsert{{
 				Key: key,
 				Fields: []*pb.FieldValue{{
@@ -501,7 +490,6 @@ func TestPrimaryReadRowsReturnsResolvedLatestRecordVersion(t *testing.T) {
 		}
 	}
 	rsp, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 		Keys: []*pb.RowKey{{
 			SpaceId: "space", DatasetId: "records",
 			Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r"}},
@@ -524,7 +512,6 @@ func TestPrimaryReadRowsRoundTripsThroughPebble(t *testing.T) {
 	}
 	rowKey := timeSeriesRowKey(key)
 	writeRsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 		Rows: []*pb.RowFieldUpsert{{
 			Key: rowKey,
 			Fields: []*pb.FieldValue{{
@@ -536,8 +523,7 @@ func TestPrimaryReadRowsRoundTripsThroughPebble(t *testing.T) {
 		t.Fatalf("write rsp=%v err=%v", writeRsp, err)
 	}
 	readRsp, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
-		Keys:     []*pb.RowKey{rowKey}, ColumnNames: []string{"close"},
+		Keys: []*pb.RowKey{rowKey}, ColumnNames: []string{"close"},
 	})
 	if err != nil || readRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS ||
 		len(readRsp.GetRows()) != 1 || readRsp.GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag() != "venue:binance" ||

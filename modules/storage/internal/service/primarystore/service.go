@@ -47,7 +47,6 @@ type Store interface {
 	GetDatasetPeriodCompletedMarker(ctx context.Context, spaceID, datasetID, causeEventID string, periodTime int64) (*eventpb.EventMessage, bool, error)
 }
 
-type Authorizer func(*pb.AuthInfo) error
 type SnapshotProvider func() metadata.RequestSnapshot
 type routeKey struct{ spaceID, datasetID string }
 type DatasetRunObserver interface {
@@ -63,7 +62,6 @@ type DeadlineRejectionObserver interface {
 type Service struct {
 	store     Store
 	validate  Validator
-	authorize Authorizer
 	snapshot  SnapshotProvider
 	metrics   DatasetRunObserver
 	rejection DeadlineRejectionObserver
@@ -72,7 +70,6 @@ type Service struct {
 type Options struct {
 	Store          Store
 	Validator      Validator
-	Authorizer     Authorizer
 	Snapshot       SnapshotProvider
 	DatasetMetrics DatasetRunObserver
 	// DeadlineRejections 为空时不记录截止拒绝。
@@ -84,7 +81,7 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("store is required")
 	}
 	return &Service{
-		store: opts.Store, validate: opts.Validator, authorize: opts.Authorizer,
+		store: opts.Store, validate: opts.Validator,
 		snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, rejection: opts.DeadlineRejections,
 	}, nil
 }
@@ -114,9 +111,6 @@ func (s *Service) requestContext(ctx context.Context) context.Context {
 func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) (*pb.PrimaryUpsertFieldsRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" || len(req.GetRows()) == 0 {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and rows are required"))}, nil
-	}
-	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	spaceID, datasetID := req.GetSpaceId(), req.GetDatasetId()
 	for _, row := range req.GetRows() {
@@ -248,9 +242,6 @@ func (s *Service) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq) (*pb
 	if len(req.GetColumnNames()) == 0 && len(req.GetAttributeKeys()) == 0 {
 		return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("column_names or attribute_keys are required"))}, nil
 	}
-	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	ctx = s.requestContext(ctx)
 	groups := make(map[routeKey][]*pb.RowKey)
 	order := make([]routeKey, 0)
@@ -313,16 +304,6 @@ func latestRecordIdentity(key *pb.RowKey) string {
 		return ""
 	}
 	return key.GetSpaceId() + "\x00" + key.GetDatasetId() + "\x00" + key.GetRecord().GetRecordId()
-}
-
-func (s *Service) authorizeRequest(auth *pb.AuthInfo) error {
-	if auth == nil {
-		return errors.New("auth_info is required")
-	}
-	if s.authorize != nil {
-		return s.authorize(auth)
-	}
-	return nil
 }
 
 func validateRow(ctx context.Context, row *pb.RowFieldUpsert, validator Validator) error {

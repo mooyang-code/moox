@@ -22,7 +22,7 @@ type managedIndexRef struct {
 // 或运行中摘除时文件没删掉。元数据里的每个 View（含停用的）都保留它所用引擎下的索引；元数据列不全时一个都不删。
 // 只在挂接索引之前调用：这时没有运行时、跟随器和查询在用这些文件。失败只记日志，不挡启动。
 func (s *Service) removeOrphanIndexes(ctx context.Context, metadata MetadataClient) {
-	owned, err := metadataIndexes(ctx, metadata, s.internalAuth())
+	owned, err := metadataIndexes(ctx, metadata)
 	if err != nil {
 		log.Warnf("storage view 启动时列出全部 View 失败，不清理孤立的索引文件：%v", err)
 		return
@@ -57,13 +57,10 @@ func (s *Service) removeOrphanIndexes(ctx context.Context, metadata MetadataClie
 }
 
 // metadataIndexes 列出元数据里全部 View（含停用的）各自的索引。分页信息不完整时不能断定已经列全，返回错误。
-func metadataIndexes(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo) (map[managedIndexRef]struct{}, error) {
+func metadataIndexes(ctx context.Context, metadata MetadataClient) (map[managedIndexRef]struct{}, error) {
 	owned := make(map[managedIndexRef]struct{})
 	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{
-			AuthInfo: auth,
-			Page:     &pb.Page{Page: pageNo, Size: 100},
-		})
+		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err != nil {
 			return nil, err
 		}

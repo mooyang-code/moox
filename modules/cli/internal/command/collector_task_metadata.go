@@ -8,7 +8,6 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"google.golang.org/protobuf/proto"
 )
 
 // collector task delete-result 经操作员 SSH 网关调 Storage 的 Metadata，删除采集结果的 View 与数据集。
@@ -31,35 +30,28 @@ type collectorStorageMetadataClient interface {
 
 type collectorStorageMetadataProxy struct {
 	gateway gatewayclient.Invoker
-	auth    *storagepb.AuthInfo
 }
 
-var newCollectorStorageMetadataClient = func(ctx context.Context, file, authFile string) (collectorStorageMetadataClient, io.Closer, error) {
+var newCollectorStorageMetadataClient = func(ctx context.Context, file string) (collectorStorageMetadataClient, io.Closer, error) {
 	if strings.TrimSpace(file) == "" {
 		return nil, nil, fmt.Errorf("删除采集结果要用 --file 指定 moox.toml（经操作员 SSH 网关访问 Storage）")
-	}
-	auth, err := storagePrimaryRoleAuth(authFile, "moox-collector")
-	if err != nil {
-		return nil, nil, err
 	}
 	gateway, err := openCommandGateway(ctx, file, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	return &collectorStorageMetadataProxy{gateway: gateway, auth: auth}, gateway, nil
+	return &collectorStorageMetadataProxy{gateway: gateway}, gateway, nil
 }
 
 func (c *collectorStorageMetadataProxy) DeleteDataset(ctx context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
 	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("Storage 元数据客户端不可用")
 	}
-	request := &storagepb.DeleteDatasetReq{}
-	if req != nil {
-		request = proto.Clone(req).(*storagepb.DeleteDatasetReq)
+	if req == nil {
+		req = &storagepb.DeleteDatasetReq{}
 	}
-	request.AuthInfo = c.auth
 	rsp := &storagepb.DeleteDatasetRsp{}
-	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteDataset", request, rsp)
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteDataset", req, rsp)
 	return rsp, err
 }
 
@@ -67,13 +59,11 @@ func (c *collectorStorageMetadataProxy) DeleteView(ctx context.Context, req *sto
 	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("Storage 元数据客户端不可用")
 	}
-	request := &storagepb.DeleteViewReq{}
-	if req != nil {
-		request = proto.Clone(req).(*storagepb.DeleteViewReq)
+	if req == nil {
+		req = &storagepb.DeleteViewReq{}
 	}
-	request.AuthInfo = c.auth
 	rsp := &storagepb.DeleteViewRsp{}
-	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteView", request, rsp)
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteView", req, rsp)
 	return rsp, err
 }
 

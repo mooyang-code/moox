@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/packages/seriesimport/runner"
 	"github.com/mooyang-code/moox/packages/seriesimport/target"
 	"github.com/spf13/cobra"
-	"google.golang.org/protobuf/proto"
 )
 
 const importStorageBatchRows = 1000
@@ -41,7 +40,6 @@ type importOptions struct {
 	DryRun         bool
 	Targets        []string
 	Manifest       string
-	AuthFile       string
 	ViewID         string
 	Engine         string
 	JobDB          string
@@ -89,7 +87,6 @@ func init() {
 	f.BoolVar(&importFlags.DryRun, "dry-run", false, "只校验不写入")
 	f.StringSliceVar(&importFlags.Targets, "target", []string{"storage", "factor"}, "写入目标：storage、factor")
 	f.StringVar(&importFlags.Manifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
-	f.StringVar(&importFlags.AuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
 	f.StringVar(&importFlags.ViewID, "view", "", "可选 View ID；写 Storage 后等该 View 跟上导入的写入")
 	f.StringVar(&importFlags.Engine, "engine", "", "因子引擎健康检查地址（本地写入接口挂在它上面）；不给时按 --file 里的 moox.toml 自动解析，没有 moox.toml 时用 http://127.0.0.1:11417")
 	f.StringVar(&importFlags.JobDB, "job-db", "./importer.db", "断点库路径")
@@ -183,11 +180,7 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 			}
 		}
 		if !opts.DryRun {
-			auth, err := storagePrimaryRoleAuth(opts.AuthFile, "moox-cli-data-import")
-			if err != nil {
-				return err
-			}
-			writer := gatewayStorageDataWriter{Gateway: gateway, SpaceID: opts.Space, Auth: auth}
+			writer := gatewayStorageDataWriter{Gateway: gateway, SpaceID: opts.Space}
 			targets = append(targets, &importStorageTarget{writer: writer, types: types, view: opts.ViewID, space: opts.Space, dataset: opts.Dataset})
 		}
 	} else {
@@ -506,7 +499,6 @@ type gatewayStorageImportMetadataClient struct {
 // gatewayStorageDataWriter 通过 tRPC 将数据写入 Access 服务。
 type gatewayStorageDataWriter struct {
 	Gateway gatewayclient.Invoker
-	Auth    *pb.AuthInfo
 	SpaceID string
 }
 
@@ -561,8 +553,8 @@ func (c gatewayStorageImportMetadataClient) ListDatasetSubjects(ctx context.Cont
 }
 
 func (w gatewayStorageDataWriter) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) error {
-	if req == nil || w.Auth == nil || w.SpaceID == "" {
-		return fmt.Errorf("Storage import requires a request, role authentication and space")
+	if req == nil || w.SpaceID == "" {
+		return fmt.Errorf("Storage 导入需要请求与空间")
 	}
 	for _, row := range req.GetRows() {
 		if row.GetKey().GetSpaceId() != w.SpaceID {
@@ -572,20 +564,16 @@ func (w gatewayStorageDataWriter) UpsertFields(ctx context.Context, req *pb.Prim
 	metadata := gatewayclient.CallMetadataFromContext(ctx)
 	metadata.SpaceID = w.SpaceID
 	ctx = gatewayclient.WithCallMetadata(ctx, metadata)
-	request := proto.Clone(req).(*pb.PrimaryUpsertFieldsReq)
-	request.AuthInfo = w.Auth
-	return postStorage(ctx, w.Gateway, accessServiceName, "UpsertFields", request, &pb.PrimaryUpsertFieldsRsp{})
+	return postStorage(ctx, w.Gateway, accessServiceName, "UpsertFields", req, &pb.PrimaryUpsertFieldsRsp{})
 }
 
-// WaitViewApplied 用写入身份调 DataView，等 View 跟上调用这一刻的变更日志头部；业务结果在响应的 ret_info 里，由调用方判断。
+// WaitViewApplied 调 DataView，等 View 跟上调用这一刻的变更日志头部；业务结果在响应的 ret_info 里，由调用方判断。
 func (w gatewayStorageDataWriter) WaitViewApplied(ctx context.Context, req *pb.WaitViewAppliedReq) (*pb.WaitViewAppliedRsp, error) {
-	if req == nil || w.Auth == nil {
-		return nil, errors.New("等待 View 跟上写入需要请求与写入身份")
+	if req == nil {
+		return nil, errors.New("等待 View 跟上写入需要请求")
 	}
 	rsp := &pb.WaitViewAppliedRsp{}
-	request := proto.Clone(req).(*pb.WaitViewAppliedReq)
-	request.AuthInfo = w.Auth
-	if err := postStorageRaw(ctx, w.Gateway, dataViewSvc, "WaitViewApplied", request, rsp); err != nil {
+	if err := postStorageRaw(ctx, w.Gateway, dataViewSvc, "WaitViewApplied", req, rsp); err != nil {
 		return nil, err
 	}
 	return rsp, nil

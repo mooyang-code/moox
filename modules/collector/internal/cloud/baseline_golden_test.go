@@ -64,7 +64,6 @@ func (baselineCLSEnvironment) Apply(_ context.Context, _ string, _ Credential, e
 func baselineBaseEnvironment() map[string]string {
 	return map[string]string{
 		"MOOX_SPACE_ID": baselineSpace,
-		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`,
 	}
 }
 

@@ -25,7 +25,6 @@ type Config struct {
 	Engine        IdentityConfig                   `yaml:"engine"`
 	Manager       ManagerConfig                    `yaml:"manager"`
 	CatalogSync   CatalogSyncConfig                `yaml:"catalog_sync"`
-	Storage       StorageConfig                    `yaml:"storage"`
 	EventBus      EventBusConfig                   `yaml:"eventbus"`
 	Compute       ComputeConfig                    `yaml:"compute"`
 	SeriesStore   SeriesStoreConfig                `yaml:"seriesstore"`
@@ -98,12 +97,6 @@ type ParamsConfig struct {
 type LifecycleConfig struct {
 	StateFile string        `yaml:"state_file"`
 	Interval  time.Duration `yaml:"interval"`
-}
-
-// StorageConfig supplies application authentication independently of the
-// external gateway credential.
-type StorageConfig struct {
-	AuthSecretFile string `yaml:"auth_secret_file"`
 }
 
 type EventBusConfig struct {
@@ -281,7 +274,6 @@ func Default() *Config {
 		Engine:        IdentityConfig{ID: "factor-engine@" + hostname, HeartbeatInterval: 10 * time.Second},
 		Manager:       ManagerConfig{Timeout: 30 * time.Second},
 		CatalogSync:   CatalogSyncConfig{Interval: time.Minute, Offset: 45 * time.Second, StateFile: "./data/engine/catalog.json"},
-		Storage:       StorageConfig{AuthSecretFile: "./secrets/storage-primary-auth.secret"},
 		EventBus:      EventBusConfig{FetchMaxWait: 10 * time.Second},
 		Compute:       ComputeConfig{Workers: min(4, runtime.NumCPU()), MaxMemory: 4 << 30},
 		SeriesStore:   SeriesStoreConfig{Dir: "./data/seriesstore", BlockCache: 512 << 20},
@@ -354,7 +346,7 @@ func (c *Config) applyDefaults() {
 
 func (c *Config) resolvePaths(root string) {
 	for _, path := range []*string{
-		&c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
+		&c.CatalogSync.StateFile, &c.EventBus.CredentialFile,
 		&c.Gap.LedgerDir, &c.Watermark.StateFile, &c.SeriesStore.Dir, &c.Lifecycle.StateFile, &c.Params.CacheFile, &c.UDF.Dir,
 	} {
 		value := strings.TrimSpace(*path)
@@ -381,7 +373,6 @@ func (c *Config) Validate() error {
 	}
 	require(c.CatalogSync.Interval >= 10*time.Second, "catalog_sync.interval must be at least 10s")
 	require(c.CatalogSync.Offset >= 0 && c.CatalogSync.Offset < c.CatalogSync.Interval, "catalog_sync.offset must be within [0, interval)")
-	require(strings.TrimSpace(c.Storage.AuthSecretFile) != "", "storage.auth_secret_file is required")
 	require(len(c.EventBus.URLs) > 0, "eventbus.urls must not be empty")
 	require(c.Compute.Workers > 0 && c.Compute.MaxMemory > 0, "compute.workers and compute.max_memory must be positive")
 	require(c.Pipeline.PeriodBudgetMin <= c.Pipeline.PeriodBudgetMax, "pipeline.period_budget_min must not exceed period_budget_max")

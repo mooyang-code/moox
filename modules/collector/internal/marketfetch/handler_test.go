@@ -25,7 +25,7 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, CandidateChain: []string{"sina", "tencent"}, MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Now: func() time.Time { return now }}
 	handler := &Handler{
-		NewStorage: func(string) (Storage, error) { return storage, nil },
+		NewStorage: func() (Storage, error) { return storage, nil },
 		NewKlinePipeline: func(s Storage, marketID string, instrument marketdata.InstrumentType, frequency, _ string, _ *FeedLimits) (*KlinePipeline, error) {
 			require.Equal(t, StockCNSpaceID, marketID)
 			require.Equal(t, marketdata.InstrumentEquity, instrument, "请求没写品种时按市场的标的规则由 market_type 决定")
@@ -61,7 +61,7 @@ func TestHandleRequestUsesCryptoSwapPipeline(t *testing.T) {
 	var product marketdata.InstrumentType
 	var gotLimits *FeedLimits
 	handler := &Handler{
-		NewStorage: func(string) (Storage, error) { return storage, nil },
+		NewStorage: func() (Storage, error) { return storage, nil },
 		NewKlinePipeline: func(s Storage, marketID string, got marketdata.InstrumentType, _, provider string, limits *FeedLimits) (*KlinePipeline, error) {
 			require.Equal(t, "crypto", marketID)
 			require.Equal(t, "binance", provider)
@@ -101,7 +101,7 @@ func TestHandleRequestAlignsStaleSpotSourceOntoSwapPipeline(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	handler := &Handler{
-		NewStorage: func(string) (Storage, error) { return storage, nil },
+		NewStorage: func() (Storage, error) { return storage, nil },
 		NewKlinePipeline: func(s Storage, _ string, got marketdata.InstrumentType, _, _ string, _ *FeedLimits) (*KlinePipeline, error) {
 			return &KlinePipeline{
 				Router: router, Storage: s, CandidateChain: []string{"binance"}, MarketID: "crypto",

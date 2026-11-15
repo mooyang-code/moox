@@ -26,7 +26,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/factorexpr"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -120,9 +119,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if r.gateway, err = cfg.GatewayClient.OpenExternal(cfg.sourcePath); err != nil {
 		return nil, err
 	}
-	if r.storage, err = newStorageClient(r.gateway, cfg.Storage); err != nil {
-		return nil, err
-	}
+	r.storage = newStorageClient(r.gateway)
 	if r.manager, err = NewManagerClient(r.gateway, cfg.Manager.Timeout, r.identity); err != nil {
 		return nil, err
 	}
@@ -542,16 +539,8 @@ func realPeriod(axis periodclock.Axis, period time.Time) time.Time {
 }
 
 // newStorageClient 返回包装了换算边界的 Storage 客户端（引擎与离线维护命令共用）。
-func newStorageClient(gateway gatewayclient.Invoker, cfg StorageConfig) (*storageio.Axis, error) {
-	secret, err := gatewayauth.ReadSigningSecret(cfg.AuthSecretFile)
-	if err != nil {
-		return nil, fmt.Errorf("read Storage auth secret: %w", err)
-	}
-	requestID, err := randomHex(8)
-	if err != nil {
-		return nil, err
-	}
-	return storageio.NewAxis(storageio.NewGatewayClient(gateway, storageio.NewAuthInfo("factor-engine-"+requestID, secret))), nil
+func newStorageClient(gateway gatewayclient.Invoker) *storageio.Axis {
+	return storageio.NewAxis(storageio.NewGatewayClient(gateway))
 }
 
 func randomHex(n int) (string, error) {

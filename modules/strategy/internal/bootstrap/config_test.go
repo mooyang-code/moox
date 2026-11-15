@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -68,33 +67,8 @@ replay:
 	}
 }
 
-func TestLoadDerivesStorageAppKeysFromRuntimeSecrets(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
-	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "view-secret")
-	cfg, err := Load(writeConfig(t, "database: ./strategy.sqlite\ngateway_client:\n  caller: strategy\n  key_file: /secrets/caller-strategy.key\nstorage:\n  app_id: strategy\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Storage.AppKey != serviceAuthKey("primary-secret", "strategy") || cfg.Storage.ViewAppKey != serviceAuthKey("view-secret", "strategy") {
-		t.Fatalf("Storage 密钥派生不符：%+v", cfg.Storage)
-	}
-}
-
-// Load 只解析配置，不读取签名密钥；缺少 Storage 角色密钥在打开网关客户端时拒绝。
-func TestOpenGatewayRequiresStorageKeys(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
-	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "")
-	cfg, err := Load(writeConfig(t, "database: ./strategy.sqlite\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cfg.OpenGateway(nil); err == nil || !strings.Contains(err.Error(), "app_key") {
-		t.Fatalf("缺少 app_key 应被拒绝：%v", err)
-	}
-	cfg.Storage.AppKey = "primary"
-	if _, err := cfg.OpenGateway(nil); err == nil || !strings.Contains(err.Error(), "view_app_key") {
-		t.Fatalf("缺少 view_app_key 应被拒绝：%v", err)
-	}
+// Load 只解析配置，不读取签名密钥；没有加载过配置时不能打开网关客户端。
+func TestOpenGatewayRequiresLoadedConfig(t *testing.T) {
 	if _, err := (Config{}).OpenGateway(nil); err == nil {
 		t.Fatal("没有加载过配置时不能打开网关客户端")
 	}

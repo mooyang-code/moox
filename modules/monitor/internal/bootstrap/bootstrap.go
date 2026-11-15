@@ -19,7 +19,6 @@ import (
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
@@ -118,27 +117,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	marketCanary, marketCanaryProbe, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, storageMetadata, collectorStatus, resultHook)
+	marketCanary, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, storageMetadata, collectorStatus, resultHook)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err
-	}
-	if marketCanaryProbe != nil {
-		probeCtx, cancelProbe := context.WithTimeout(runtimeCtx, 10*time.Second)
-		probeErr := marketCanaryProbe(probeCtx)
-		cancelProbe()
-		if probeErr != nil {
-			if watchdog.IsStorageAuthError(probeErr) {
-				// 监控进程不能因为被监控对象的问题起不来：这里只记错误日志，之后周期行情探针
-				// 每轮都会产出失败的检查结果并告警。密钥只在启动时读取，修复后要重启 Monitor。
-				log.ErrorContextf(ctx, "Monitor 启动时 Storage 认证被拒绝，继续启动；请同步 storage-internal-auth.env 后重启 Monitor，在此之前行情探针会持续失败: %v", probeErr)
-			} else {
-				// Primary 可能还在启动，或数据集还是空的，这些情况由周期行情探针上报。
-				log.WarnContextf(ctx, "monitor storage primary auth preflight deferred: %v", probeErr)
-			}
-		} else {
-			log.InfoContextf(ctx, "monitor storage primary auth preflight passed")
-		}
 	}
 	if err := retireObsoleteBusinessChecks(runtimeCtx, runtime.Repositories, cfg); err != nil {
 		_ = runtime.Close()

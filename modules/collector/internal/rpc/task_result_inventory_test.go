@@ -59,7 +59,7 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	service := &Service{
 		persistence:   db,
 		taskRepo:      db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
 	}
 
 	first, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 2}})
@@ -122,7 +122,7 @@ func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(
 	service := &Service{
 		persistence:        db,
 		taskRepo:           db.Tasks(),
-		resultManager:      taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		resultManager:      taskresult.NewManagerWithAPI(metadata),
 		inventorySnapshots: make(map[string]*taskResultInventorySnapshot, maxTaskResultInventorySnapshotsTotal),
 	}
 	for index := 0; index < maxTaskResultInventorySnapshotsPerSpace; index++ {
@@ -164,7 +164,7 @@ func TestGetTaskResultInventoryRejectsUnownedResultsAndMismatchedSnapshot(t *tes
 	}
 	require.NoError(t, db.Tasks().Create(ctx, task))
 	metadata := newTaskResultMetadataFake(ids, "another-task")
-	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})}
+	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata)}
 
 	response, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 10}})
 	require.NoError(t, err)
@@ -298,7 +298,7 @@ func newTaskResultInventoryConcurrentService(t *testing.T, taskCount int, delay 
 	}
 	return &Service{
 		persistence: db, taskRepo: db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
 	}, metadata, expected
 }
 

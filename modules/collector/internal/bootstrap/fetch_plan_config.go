@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
-	"github.com/mooyang-code/moox/packages/security"
 )
 
 // SCFPlanConfig 是定时触发采集的函数部署参数。网络（VPC、子网）按地域放在 scf_regions，
@@ -27,9 +26,8 @@ type SCFPlanConfig struct {
 	PackageName string `yaml:"package_name"`
 	Namespace   string `yaml:"namespace"`
 	MemoryMB    int    `yaml:"memory_mb"`
-	// BaseEnvironmentFile 是可选的额外非受管环境（JSON 对象），含密钥时权限应为 0600。空间身份与 Storage 应用密钥
-	// 由 Collector 自己生成（密钥由控制机身份里的 Storage 主密钥派生），日志服务在创建或更新函数时补齐，
-	// 所以通常不需要这个文件。
+	// BaseEnvironmentFile 是可选的额外非受管环境（JSON 对象），含密钥时权限应为 0600。空间身份由 Collector 自己写入，
+	// 日志服务在创建或更新函数时补齐，所以通常不需要这个文件。
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	SymbolsPerFunction  int    `yaml:"symbols_per_function"`
 	// MaxConcurrentOperations 限制各空间同时进行的云函数操作（建函数、改配置、换代码、设定时器、删除）。
@@ -385,34 +383,11 @@ func (c SCFPlanConfig) packageNameFor(spaceID string) string {
 	return c.PackageName
 }
 
-// storageAuthSecretEnv 是控制机 Collector 进程里 Storage 主密钥的环境变量名。
-const storageAuthSecretEnv = "MOOX_STORAGE_PRIMARY_AUTH_SECRET"
-
-// collectorStorageAppID 是函数写 Storage 使用的应用身份（Storage 绑定里允许的固定值）。
-const collectorStorageAppID = "moox-collector"
-
-// builtinPlanEnvironment 是 Collector 自己能生成的函数非受管环境：空间身份与 Storage 应用密钥。
-// 应用密钥由 Storage 主密钥按应用 ID 派生，与 Storage 校验方式一致；密钥不落配置文件。
-func builtinPlanEnvironment(getenv func(string) string) (map[string]string, error) {
-	secret := strings.TrimSpace(getenv(storageAuthSecretEnv))
-	if secret == "" {
-		return nil, fmt.Errorf("%s is not set; the Collector cannot derive the SCF Storage app key", storageAuthSecretEnv)
-	}
-	keys, err := json.Marshal(map[string]string{collectorStorageAppID: security.HMACSHA256Hex(secret, []byte(collectorStorageAppID))})
-	if err != nil {
-		return nil, err
-	}
-	return map[string]string{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": string(keys)}, nil
-}
-
 // fetchPlanDeploy 读取某个空间的非受管环境文件并生成部署参数。空间身份由对账器所属空间强制写入，
 // 不信任环境文件里的取值，避免一个空间的函数拿到另一个空间的身份。
 func (c *Config) fetchPlanDeploy(spaceID string) (fetchplan.PlanDeploy, error) {
 	override := c.SCFPlan.Spaces[strings.ToLower(spaceID)]
-	environment, err := builtinPlanEnvironment(os.Getenv)
-	if err != nil {
-		return fetchplan.PlanDeploy{}, err
-	}
+	environment := map[string]string{}
 	path := c.SCFPlan.BaseEnvironmentFile
 	if override.BaseEnvironmentFile != "" {
 		path = override.BaseEnvironmentFile
@@ -429,7 +404,7 @@ func (c *Config) fetchPlanDeploy(spaceID string) (fetchplan.PlanDeploy, error) {
 		if err := json.Unmarshal(raw, &extra); err != nil {
 			return fetchplan.PlanDeploy{}, fmt.Errorf("parse scf_plan.base_environment_file for space %s: %w", spaceID, err)
 		}
-		// 文件里的额外环境覆盖内置值（运维显式指定优先），空间身份仍由对账器强制写入。
+		// 文件里的额外环境原样带上，空间身份仍由对账器强制写入。
 		for key, value := range extra {
 			environment[key] = value
 		}

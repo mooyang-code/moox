@@ -50,7 +50,7 @@ func TestQueryRowsDetectsRevisionAndIndexChanges(t *testing.T) {
 		page(true, 5, "idx_a", tsRow("BTC-USDT", barStart, double(1))),
 		page(false, 6, "idx_a", tsRow("ETH-USDT", barStart, double(2))),
 	}}
-	rpc := &RPCClient{DataView: stub, ViewAuth: &commonpb.AuthInfo{AppId: "strategy"}}
+	rpc := &RPCClient{DataView: stub}
 	if _, _, err := rpc.QueryRows(context.Background(), "space", baseQuery()); !errors.Is(err, ErrStale) {
 		t.Fatalf("修订号变化应返回 ErrStale：%v", err)
 	}
@@ -58,12 +58,12 @@ func TestQueryRowsDetectsRevisionAndIndexChanges(t *testing.T) {
 		t.Fatalf("第二页应固定第一页的修订号：%+v", stub.requests[1])
 	}
 	stub = &dataViewStub{pages: []*storagepb.QueryTimeSeriesRowsRsp{page(false, 5, "idx_b", tsRow("BTC-USDT", barStart, double(1)))}}
-	rpc = &RPCClient{DataView: stub, ViewAuth: &commonpb.AuthInfo{AppId: "strategy"}}
+	rpc = &RPCClient{DataView: stub}
 	if _, _, err := rpc.QueryRows(context.Background(), "space", baseQuery()); !errors.Is(err, ErrStale) {
 		t.Fatalf("索引变化应返回 ErrStale：%v", err)
 	}
 	stub = &dataViewStub{pages: []*storagepb.QueryTimeSeriesRowsRsp{{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_READY, Msg: "active view index revision changed"}}}}
-	rpc = &RPCClient{DataView: stub, ViewAuth: &commonpb.AuthInfo{AppId: "strategy"}}
+	rpc = &RPCClient{DataView: stub}
 	if _, _, err := rpc.QueryRows(context.Background(), "space", baseQuery()); !errors.Is(err, ErrStale) {
 		t.Fatalf("Storage 报告索引变化应返回 ErrStale：%v", err)
 	}
@@ -76,7 +76,7 @@ func TestQueryRowsConcatenatesPagesAndConvertsValues(t *testing.T) {
 		page(true, 5, "idx_a", tsRow("BTC-USDT", barStart, double(1))),
 		page(false, 5, "idx_a", tsRow("ETH-USDT", barStart, text), tsRow("SOL-USDT", barStart, bad)),
 	}}
-	rpc := &RPCClient{DataView: stub, ViewAuth: &commonpb.AuthInfo{AppId: "strategy"}}
+	rpc := &RPCClient{DataView: stub}
 	rows, revision, err := rpc.QueryRows(context.Background(), "space", baseQuery())
 	if err != nil || revision != 5 || len(rows) != 3 {
 		t.Fatalf("分页拼接失败：rows=%d revision=%d err=%v", len(rows), revision, err)
@@ -90,7 +90,7 @@ func TestQueryRowsConcatenatesPagesAndConvertsValues(t *testing.T) {
 	if got := stub.requests[0].GetSelectors(); len(got) != 2 || got[0].GetSeriesTag() != "venue:binance" || got[0].GetDatasetId() != "ds" || got[0].GetFreq() != "1h" {
 		t.Fatalf("选择器不符：%+v", got)
 	}
-	if stub.requests[0].GetAuthInfo().GetAppId() != "strategy" || len(stub.requests[0].GetColumnNames()) != 1 {
+	if len(stub.requests[0].GetColumnNames()) != 1 {
 		t.Fatalf("请求头不符：%+v", stub.requests[0])
 	}
 	empty, _, err := rpc.QueryRows(context.Background(), "space", Query{ViewID: "view", ExpectedIndexID: "idx_a"})

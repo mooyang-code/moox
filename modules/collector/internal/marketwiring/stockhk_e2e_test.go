@@ -250,7 +250,7 @@ func TestStockHKRefetchAfterCloseOverwritesTheCloseBar(t *testing.T) {
 	clock := func() time.Time { return now }
 	handler := NewHandler()
 	handler.Now = clock
-	handler.NewStorage = func(string) (marketfetch.Storage, error) { return storage, nil }
+	handler.NewStorage = func() (marketfetch.Storage, error) { return storage, nil }
 	handler.NewKlinePipeline = func(s marketfetch.Storage, market string, instrument marketdata.InstrumentType, frequency, provider string, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
 		require.Equal(t, "stockhk", market)
 		require.Equal(t, marketdata.InstrumentEquity, instrument)

@@ -27,7 +27,7 @@ func (f attributeTagMetadataFake) GetTag(_ context.Context, req *storagepb.GetTa
 func TestEnsureStockHKResultUsesTheTagQuoteSourceAndStockColumns(t *testing.T) {
 	ensure := func(spaceID, taskID, tagID string, attrs map[string]string) (*storagepb.Dataset, []string) {
 		fake := attributeTagMetadataFake{newResultMetadataFake(), map[string]map[string]string{tagID: attrs}}
-		manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+		manager := NewManagerWithAPI(fake)
 		ids, err := manager.Ensure(context.Background(), spaceID, taskID, "kline", "", Config{Frequency: "5m", SubjectTags: []string{tagID}})
 		require.NoError(t, err)
 		return fake.datasets[ids.DatasetID], fake.columnNames

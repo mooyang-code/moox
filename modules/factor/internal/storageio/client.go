@@ -40,11 +40,10 @@ type MetadataClient interface {
 type Client struct {
 	primary  PrimaryStoreClient
 	metadata MetadataClient
-	auth     *commonpb.AuthInfo
 }
 
-func NewClient(primary PrimaryStoreClient, metadata MetadataClient, auth *commonpb.AuthInfo) *Client {
-	return &Client{primary: primary, metadata: metadata, auth: auth}
+func NewClient(primary PrimaryStoreClient, metadata MetadataClient) *Client {
+	return &Client{primary: primary, metadata: metadata}
 }
 
 type Frame struct {

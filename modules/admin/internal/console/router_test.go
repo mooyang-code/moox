@@ -76,7 +76,7 @@ func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
 	} {
 		t.Run(tc.name+"/"+tc.method, func(t *testing.T) {
 			_, secret, key, sid := setupRequestAuthTest(t)
-			body := []byte(" {\n \"space_id\": \"space-1\", \"auth_info\": {\"app_id\": \"browser\"}, \"value\": 1e+03 }\n")
+			body := []byte(" {\n \"space_id\": \"space-1\", \"page\": {\"page\": 1}, \"value\": 1e+03 }\n")
 			response := []byte(" {\"ret_info\": {\"code\": 0}, \"data\": [ 1, 2 ]} \n")
 			calls := 0
 			gateway := forwardFunc(func(ctx context.Context, service, method string, serialization int, raw []byte) ([]byte, error) {
@@ -84,20 +84,8 @@ func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
 				require.Equal(t, tc.path, service)
 				require.Equal(t, tc.method, method)
 				require.Equal(t, codec.SerializationTypeJSON, serialization)
-				if tc.name == "storage" {
-					var got map[string]any
-					require.NoError(t, json.Unmarshal(raw, &got))
-					auth := got["auth_info"].(map[string]any)
-					require.Equal(t, "admin-gateway", auth["app_id"])
-					secretEnv := "primary-secret"
-					if tc.path == storageViewServicePath {
-						secretEnv = "view-secret"
-					}
-					require.Equal(t, storageServiceAuthKey(secretEnv, "admin-gateway"), auth["app_key"])
-					require.Equal(t, "space-1", got["space_id"])
-				} else {
-					require.Equal(t, body, raw)
-				}
+				// 请求体已声明空间，不需要回填，Storage 与其他服务一样原样转发。
+				require.Equal(t, body, raw)
 				require.Equal(t, gatewayclient.CallMetadata{SpaceID: "space-1", UserID: "u1", TraceID: "trace-1"}, gatewayclient.CallMetadataFromContext(ctx))
 				return response, nil
 			})
@@ -385,27 +373,17 @@ func TestConsolePropagatesBodyDeclaredSpaceToDownstream(t *testing.T) {
 	require.Equal(t, "space-9", got.SpaceID)
 }
 
-// Storage 鉴权注入对 camelCase 别名只输出一份凭据。
-func TestSignStorageBodyNormalizesProtoJSONAliases(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
-	for _, body := range []string{
-		`{"authInfo":{"appId":"browser","appKey":"x","operator":"op"},"spaceId":"s"}`,
-		`{"auth_info":{"appId":"browser","appKey":"x","operator":"op"},"spaceId":"s"}`,
-		`{"space_id":"s"}`,
-	} {
-		out, err := signStorageBody("trpc.moox.storage.Metadata", []byte(body), "")
+// 空间回填对 camelCase 别名只输出一份 space_id；请求体不是 JSON 对象时报 400 用的错误。
+func TestInjectStorageSpaceNormalizesProtoJSONAlias(t *testing.T) {
+	for _, body := range []string{``, `{"spaceId":"","page":{"page":1}}`, `{"page":{"page":1}}`} {
+		out, err := injectStorageSpace([]byte(body), "s")
 		require.NoError(t, err)
 		var got map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal(out, &got))
-		require.NotContains(t, got, "authInfo")
-		var auth map[string]any
-		require.NoError(t, json.Unmarshal(got["auth_info"], &auth))
-		require.NotContains(t, auth, "appId")
-		require.NotContains(t, auth, "appKey")
-		require.Equal(t, "admin-gateway", auth["app_id"])
-		require.Equal(t, storageServiceAuthKey("primary-secret", "admin-gateway"), auth["app_key"])
+		require.NotContains(t, got, "spaceId")
+		require.JSONEq(t, `"s"`, string(got["space_id"]))
 	}
-	_, err := signStorageBody("trpc.moox.storage.Metadata", []byte(`null`), "")
+	_, err := injectStorageSpace([]byte(`null`), "s")
 	require.ErrorIs(t, err, errInvalidStorageBody)
 }
 

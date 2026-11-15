@@ -23,9 +23,6 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if req == nil || req.GetViewId() == "" {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view_id is required"))}, nil
 	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
-		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	if len(req.GetSelectors()) == 0 && req.GetTimeRange() == nil && req.GetFilter() == nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("query predicate is required"))}, nil
 	}
@@ -159,9 +156,6 @@ func (s *Service) readIndexRevision(ctx context.Context, indexID string, engine 
 func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
 	if req == nil || req.GetViewId() == "" {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view_id is required"))}, nil
-	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
-		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	if len(req.GetKeys()) == 0 && strings.TrimSpace(req.GetTextQuery()) == "" && req.GetFilter() == nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("query predicate is required"))}, nil

@@ -32,7 +32,7 @@ func (c *Client) ReportComputed(ctx context.Context, marker PeriodMarker) error 
 		return err
 	}
 	rsp, err := c.primary.ReportDatasetPeriodCompleted(ctx, &storagepb.ReportDatasetPeriodCompletedReq{
-		AuthInfo: c.auth, SpaceId: marker.SpaceID, Marker: protoMarker,
+		SpaceId: marker.SpaceID, Marker: protoMarker,
 	})
 	if err != nil {
 		return rpcError("report factor period computed", err)
@@ -92,7 +92,7 @@ func (c *Client) getComputed(ctx context.Context, spaceID, datasetID, triggerEve
 		return nil, errors.New("space_id, dataset_id, trigger_event_id and positive period_time are required")
 	}
 	rsp, err := c.primary.GetDatasetPeriodCompleted(ctx, &storagepb.GetDatasetPeriodCompletedReq{
-		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, CauseEventId: triggerEventID, PeriodTime: periodTime,
+		SpaceId: spaceID, DatasetId: datasetID, CauseEventId: triggerEventID, PeriodTime: periodTime,
 	})
 	if err != nil {
 		return nil, rpcError("get factor period computed", err)

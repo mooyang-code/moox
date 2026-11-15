@@ -128,7 +128,7 @@ func newGoldenHarness(t *testing.T) (*planHarness, *PlanReconciler, *string) {
 	r.Options.Markets = map[string][]string{"spot": {"ap-singapore"}}
 	r.Deploy.Namespace = "moox-collector"
 	r.Deploy.Networks = map[string]PlanNetwork{"ap-singapore": {VPCID: "vpc-fake", SubnetID: "subnet-fake"}}
-	r.Deploy.BaseEnvironment = map[string]string{"MOOX_SPACE_ID": "crypto", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`}
+	r.Deploy.BaseEnvironment = map[string]string{"MOOX_SPACE_ID": "crypto"}
 	r.Access = func(string) (map[string]string, error) {
 		return map[string]string{
 			"MOOX_ACCESS_ADDRESS": "access.example:11004", "MOOX_ACCESS_ID": "access@control-a", "MOOX_CALLER": "scf-collector",

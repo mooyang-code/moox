@@ -12,7 +12,6 @@ import (
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -39,7 +38,6 @@ func (r primaryFieldReader) ReadDatasetChanges(ctx context.Context, req *pb.Read
 
 func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	ctx := context.Background()
-	const secret = "e2e-secret"
 	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "node-a")})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +47,6 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth := &pb.AuthInfo{AppId: "storage-primary"}
 	tags := []string{"", "venue:binance", "venue:okx"}
 	closes := []float64{100, 101, 102}
 	keys := make([]*pb.RowKey, 0, len(tags))
@@ -62,10 +59,10 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 			doubleField("volume", float64(10+i)),
 		}})
 	}
-	if rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: writes})); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 3 {
+	if rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: writes})); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 3 {
 		t.Fatalf("primary write: rsp=%v err=%v", rsp, err)
 	}
-	read, err := primary.ReadRows(ctx, &pb.PrimaryReadRowsReq{AuthInfo: auth, Keys: keys, ColumnNames: []string{"close", "volume"}})
+	read, err := primary.ReadRows(ctx, &pb.PrimaryReadRowsReq{Keys: keys, ColumnNames: []string{"close", "volume"}})
 	if err != nil || read.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(read.GetRows()) != 3 {
 		t.Fatalf("primary read: rsp=%v err=%v", read, err)
 	}
@@ -86,12 +83,10 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 		{ColumnName: "volume", OriginId: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}
 	prebuildViewIndex(t, ctx, viewRoot, viewindex.ViewIndexSchema{SpaceID: "quant", ViewID: "prices-view", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "schema-1", Columns: columns}, nil)
-	view, err := viewservice.New(viewRoot, secret)
+	view, err := viewservice.New(viewRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	viewAuth := &pb.AuthInfo{AppId: "storage-primary", AppKey: serviceauth.Key(secret, "storage-primary")}
-	view.SetPrimaryAuth(auth)
 	view.SetPrimaryReader(primaryFieldReader{service: primary})
 	if err := view.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", Freq: "1m", Status: "active"},
 		viewindex.ViewIndexStats{Exists: true, DatasetID: "prices", ViewVersion: 1, SchemaHash: "schema-1", Columns: columns}); err != nil {
@@ -151,22 +146,22 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stopFollowing()
-	waitForSelectorStates(t, ctx, view, viewAuth, closes)
+	waitForSelectorStates(t, ctx, view, closes)
 
 	patch := &pb.RowFieldUpsert{Key: keys[1], Fields: []*pb.FieldValue{doubleField("close", 111)}}
-	if rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{patch}})); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	if rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{patch}})); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("field patch: rsp=%v err=%v", rsp, err)
 	}
 	closes[1] = 111
-	waitForSelectorStates(t, ctx, view, viewAuth, closes)
+	waitForSelectorStates(t, ctx, view, closes)
 }
 
-func waitForSelectorStates(t *testing.T, ctx context.Context, view *viewservice.Service, auth *pb.AuthInfo, closes []float64) {
+func waitForSelectorStates(t *testing.T, ctx context.Context, view *viewservice.Service, closes []float64) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		rsp, err := view.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: "quant", ViewId: "prices-view",
+			SpaceId: "quant", ViewId: "prices-view",
 			Selectors: []*pb.TimeSeriesSelector{{
 				SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m",
 			}},
@@ -186,7 +181,7 @@ func waitForSelectorStates(t *testing.T, ctx context.Context, view *viewservice.
 				}
 			}
 			if matches {
-				assertSelectorStates(t, ctx, view, auth, closes)
+				assertSelectorStates(t, ctx, view, closes)
 				return
 			}
 		}
@@ -220,12 +215,12 @@ func assertSeriesTagRows(t *testing.T, rows []*pb.RowFieldValues, tags []string,
 	}
 }
 
-func assertSelectorStates(t *testing.T, ctx context.Context, view *viewservice.Service, auth *pb.AuthInfo, closes []float64) {
+func assertSelectorStates(t *testing.T, ctx context.Context, view *viewservice.Service, closes []float64) {
 	t.Helper()
 	query := func(selector *pb.TimeSeriesSelector) []*pb.TimeSeriesRow {
 		t.Helper()
 		rsp, err := view.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: "quant", ViewId: "prices-view",
+			SpaceId: "quant", ViewId: "prices-view",
 			Selectors:   []*pb.TimeSeriesSelector{selector},
 			TimeRange:   &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z", EndTime: "2026-07-20T00:01:00Z"},
 			ColumnNames: []string{"close", "volume"},

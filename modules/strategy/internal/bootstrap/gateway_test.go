@@ -104,7 +104,6 @@ func (w *strategyGatewayWire) verify(ctx context.Context, service, method string
 
 type strategyStorageRequest interface {
 	proto.Message
-	GetAuthInfo() *commonpb.AuthInfo
 	GetSpaceId() string
 }
 
@@ -112,12 +111,8 @@ func (w *strategyGatewayWire) verifyStorage(ctx context.Context, service, method
 	if _, err := w.verify(ctx, "trpc.moox.storage."+service, method, req); err != nil {
 		return err
 	}
-	key := "fixture-primary-role-key"
-	if service == "DataView" {
-		key = "fixture-view-role-key"
-	}
-	if req.GetSpaceId() != "crypto" || !proto.Equal(req.GetAuthInfo(), &commonpb.AuthInfo{AppId: "strategy", AppKey: key, Operator: "strategy"}) {
-		return errors.New("strategy 的 Storage 空间或角色鉴权发生了变化")
+	if req.GetSpaceId() != "crypto" {
+		return errors.New("strategy 的 Storage 请求空间发生了变化")
 	}
 	return nil
 }
@@ -308,7 +303,7 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	directorypb.RegisterDirectoryService(svc, wire)
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
-	raw := fmt.Sprintf("database: %q\ngateway_client:\n  caller: strategy\n  key_id: %s\n  key_file: ../../secrets/caller-strategy.key\nstorage:\n  app_id: strategy\n  app_key: fixture-primary-role-key\n  view_app_key: fixture-view-role-key\n", filepath.Join(root, "data", "strategy", "strategy.db"), credentials.KeyID)
+	raw := fmt.Sprintf("database: %q\ngateway_client:\n  caller: strategy\n  key_id: %s\n  key_file: ../../secrets/caller-strategy.key\n", filepath.Join(root, "data", "strategy", "strategy.db"), credentials.KeyID)
 	if natsURL != "" {
 		raw += fmt.Sprintf("eventbus:\n  urls: [%q]\n", natsURL)
 	}

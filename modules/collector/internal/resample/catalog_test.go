@@ -186,7 +186,7 @@ func (f catalogViewStateFake) GetViewState(_ context.Context, req *storagepb.Get
 
 func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, domain.CollectionTask, *domain.CollectParams, storagesource.DatasetInfo, []domain.Subject) {
 	metadata := newCatalogMetadataFake(failAt)
-	catalog := &Catalog{Metadata: metadata, Auth: &storagepb.AuthInfo{AppId: "collector"}, View: catalogViewStateFake{metadata: metadata}}
+	catalog := &Catalog{Metadata: metadata, View: catalogViewStateFake{metadata: metadata}}
 	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-resample", DataType: "kline_resample"}
 	params := &domain.CollectParams{
 		Provider: "moox", MarketType: "spot",
@@ -313,19 +313,19 @@ func TestWaitTargetViewColumnsRetriesUntilColumnsAreBuilt(t *testing.T) {
 		{RetInfo: success, IndexId: "idx"},
 		{RetInfo: success, IndexId: "idx", Columns: []*storagepb.ViewColumn{{ColumnName: "close"}}},
 	}}
-	require.NoError(t, waitTargetViewColumns(context.Background(), state, nil, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 2*time.Second))
+	require.NoError(t, waitTargetViewColumns(context.Background(), state, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 2*time.Second))
 	assert.Equal(t, 3, state.index)
 }
 
 func TestWaitTargetViewColumnsReturnsNotReadyWhenTimeoutExpires(t *testing.T) {
 	state := &fakeViewState{states: []*storagepb.GetViewStateRsp{{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}}}
-	err := waitTargetViewColumns(context.Background(), state, nil, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 50*time.Millisecond)
+	err := waitTargetViewColumns(context.Background(), state, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 50*time.Millisecond)
 	assert.ErrorIs(t, err, ErrTargetViewNotReady)
 }
 
 func TestWaitTargetViewColumnsFailsOnOtherErrors(t *testing.T) {
 	state := &fakeViewState{states: []*storagepb.GetViewStateRsp{{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_NO_PERMISSION, Msg: "无权限"}}}}
-	err := waitTargetViewColumns(context.Background(), state, nil, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, time.Second)
+	err := waitTargetViewColumns(context.Background(), state, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, time.Second)
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrTargetViewNotReady)
 }

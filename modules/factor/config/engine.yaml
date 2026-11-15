@@ -22,10 +22,6 @@ catalog_sync:
   offset: 45s
   state_file: ./data/engine/catalog.json
 
-# Storage 请求体内的角色签名独立于 Access 身份。
-storage:
-  auth_secret_file: ./secrets/storage-primary-auth.secret
-
 eventbus:
   urls:
     - tls://127.0.0.1:4222

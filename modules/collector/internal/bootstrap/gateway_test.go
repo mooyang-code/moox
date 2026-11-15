@@ -75,17 +75,8 @@ func (w *collectorGatewayWire) verify(ctx context.Context, service, method strin
 	if err != nil {
 		return err
 	}
-	switch service {
-	case "trpc.moox.admin.ActivityLog":
-		if headers.Get("X-Space-Id") != "crypto" {
-			return errors.New("activity log space metadata changed")
-		}
-	case "trpc.moox.ops.SecretMgr":
-	default:
-		role, ok := request.(interface{ GetAuthInfo() *storagepb.AuthInfo })
-		if !ok || role.GetAuthInfo().GetAppId() != "moox-collector" || role.GetAuthInfo().GetAppKey() != "independent-storage-role-key" {
-			return errors.New("collector Storage role authentication changed")
-		}
+	if service == "trpc.moox.admin.ActivityLog" && headers.Get("X-Space-Id") != "crypto" {
+		return errors.New("activity log space metadata changed")
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -295,85 +286,84 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	runtime.gateway = gateway
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 	adapter := storageio.NewGatewayClient(gateway)
-	auth := &storagepb.AuthInfo{AppId: "moox-collector", AppKey: "independent-storage-role-key"}
 	t.Run("GetTag", func(t *testing.T) {
-		_, err := adapter.GetTag(t.Context(), &storagepb.GetTagReq{AuthInfo: auth})
+		_, err := adapter.GetTag(t.Context(), &storagepb.GetTagReq{})
 		require.NoError(t, err)
 	})
 	t.Run("GetDataset", func(t *testing.T) {
-		_, err := adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{AuthInfo: auth})
+		_, err := adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{})
 		require.NoError(t, err)
 	})
 	t.Run("CreateDataset", func(t *testing.T) {
-		_, err := adapter.CreateDataset(t.Context(), &storagepb.CreateDatasetReq{AuthInfo: auth})
+		_, err := adapter.CreateDataset(t.Context(), &storagepb.CreateDatasetReq{})
 		require.NoError(t, err)
 	})
 	t.Run("UpdateDataset", func(t *testing.T) {
-		_, err := adapter.UpdateDataset(t.Context(), &storagepb.UpdateDatasetReq{AuthInfo: auth})
+		_, err := adapter.UpdateDataset(t.Context(), &storagepb.UpdateDatasetReq{})
 		require.NoError(t, err)
 	})
 	t.Run("DeleteDataset", func(t *testing.T) {
-		_, err := adapter.DeleteDataset(t.Context(), &storagepb.DeleteDatasetReq{AuthInfo: auth})
+		_, err := adapter.DeleteDataset(t.Context(), &storagepb.DeleteDatasetReq{})
 		require.NoError(t, err)
 	})
 	t.Run("GetView", func(t *testing.T) {
-		_, err := adapter.GetView(t.Context(), &storagepb.GetViewReq{AuthInfo: auth})
+		_, err := adapter.GetView(t.Context(), &storagepb.GetViewReq{})
 		require.NoError(t, err)
 	})
 	t.Run("CreateView", func(t *testing.T) {
-		_, err := adapter.CreateView(t.Context(), &storagepb.CreateViewReq{AuthInfo: auth})
+		_, err := adapter.CreateView(t.Context(), &storagepb.CreateViewReq{})
 		require.NoError(t, err)
 	})
 	t.Run("DeleteView", func(t *testing.T) {
-		_, err := adapter.DeleteView(t.Context(), &storagepb.DeleteViewReq{AuthInfo: auth})
+		_, err := adapter.DeleteView(t.Context(), &storagepb.DeleteViewReq{})
 		require.NoError(t, err)
 	})
 	t.Run("UpsertDatasetColumn", func(t *testing.T) {
-		_, err := adapter.UpsertDatasetColumn(t.Context(), &storagepb.UpsertDatasetColumnReq{AuthInfo: auth})
+		_, err := adapter.UpsertDatasetColumn(t.Context(), &storagepb.UpsertDatasetColumnReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ResolveSubjects", func(t *testing.T) {
-		_, err := adapter.ResolveSubjects(t.Context(), &storagepb.ResolveSubjectsReq{AuthInfo: auth})
+		_, err := adapter.ResolveSubjects(t.Context(), &storagepb.ResolveSubjectsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ListDatasetColumns", func(t *testing.T) {
-		_, err := adapter.ListDatasetColumns(t.Context(), &storagepb.ListDatasetColumnsReq{AuthInfo: auth})
+		_, err := adapter.ListDatasetColumns(t.Context(), &storagepb.ListDatasetColumnsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ListTags", func(t *testing.T) {
-		_, err := adapter.ListTags(t.Context(), &storagepb.ListTagsReq{AuthInfo: auth})
+		_, err := adapter.ListTags(t.Context(), &storagepb.ListTagsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ApplyTagSnapshot", func(t *testing.T) {
-		_, err := adapter.ApplyTagSnapshot(t.Context(), &storagepb.ApplyTagSnapshotReq{AuthInfo: auth})
+		_, err := adapter.ApplyTagSnapshot(t.Context(), &storagepb.ApplyTagSnapshotReq{})
 		require.Error(t, err)
 	})
 	t.Run("UpdateSubjectAttributes", func(t *testing.T) {
-		_, err := adapter.UpdateSubjectAttributes(t.Context(), &storagepb.UpdateSubjectAttributesReq{AuthInfo: auth})
+		_, err := adapter.UpdateSubjectAttributes(t.Context(), &storagepb.UpdateSubjectAttributesReq{})
 		require.NoError(t, err)
 	})
 	t.Run("GetDataSource", func(t *testing.T) {
-		_, err := adapter.GetDataSource(t.Context(), &storagepb.GetDataSourceReq{AuthInfo: auth})
+		_, err := adapter.GetDataSource(t.Context(), &storagepb.GetDataSourceReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ListSubjects", func(t *testing.T) {
-		_, err := adapter.ListSubjects(t.Context(), &storagepb.ListSubjectsReq{AuthInfo: auth})
+		_, err := adapter.ListSubjects(t.Context(), &storagepb.ListSubjectsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("CommitTimeSeriesBatch", func(t *testing.T) {
-		_, err := adapter.CommitTimeSeriesBatch(t.Context(), &storagepb.PrimaryCommitTimeSeriesBatchReq{AuthInfo: auth})
+		_, err := adapter.CommitTimeSeriesBatch(t.Context(), &storagepb.PrimaryCommitTimeSeriesBatchReq{})
 		require.NoError(t, err)
 	})
 	t.Run("UpsertFields", func(t *testing.T) {
-		_, err := adapter.UpsertFields(t.Context(), &storagepb.PrimaryUpsertFieldsReq{AuthInfo: auth})
+		_, err := adapter.UpsertFields(t.Context(), &storagepb.PrimaryUpsertFieldsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ReadRows", func(t *testing.T) {
-		_, err := adapter.ReadRows(t.Context(), &storagepb.PrimaryReadRowsReq{AuthInfo: auth})
+		_, err := adapter.ReadRows(t.Context(), &storagepb.PrimaryReadRowsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("GetViewState", func(t *testing.T) {
-		_, err := adapter.GetViewState(t.Context(), &storagepb.GetViewStateReq{AuthInfo: auth})
+		_, err := adapter.GetViewState(t.Context(), &storagepb.GetViewStateReq{})
 		require.NoError(t, err)
 	})
 	wire.mu.Lock()
@@ -391,14 +381,14 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	require.Equal(t, 1, wire.calls["GetCloudCredential"])
 	require.Equal(t, 1, wire.calls["AppendActivityLogs"])
 	wire.mu.Unlock()
-	_, err = adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{AuthInfo: auth}, client.WithTarget("ip://192.0.2.99:1"))
+	_, err = adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{}, client.WithTarget("ip://192.0.2.99:1"))
 	require.Error(t, err)
 	cache := filepath.Join(data, "gatewayclient", "directory.json")
 	info, err := os.Stat(cache)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
 	require.NoError(t, runtime.Close())
-	_, err = adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{AuthInfo: auth})
+	_, err = adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{})
 	require.Error(t, err)
 }
 

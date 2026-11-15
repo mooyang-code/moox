@@ -85,7 +85,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	if err != nil {
 		return nil, fmt.Errorf("open factor Storage gateway client: %w", err)
 	}
-	storage := storageio.NewGatewayClient(runtime.gateway, storageio.AuthInfo(fmt.Sprintf("factor-mgr-%d", time.Now().UnixNano())))
+	storage := storageio.NewGatewayClient(runtime.gateway)
 
 	hub := enginehub.New(db, enginehub.WithEngineLeaseTTL(cfg.Engine.LeaseTTL), enginehub.WithJobLeaseTTL(cfg.Engine.JobLeaseTTL), enginehub.WithHeartbeatStore(db))
 	recalcService := recalc.NewService(db, recalc.WithSubjectProvider(storage))

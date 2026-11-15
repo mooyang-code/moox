@@ -29,10 +29,10 @@ var removedEnvironmentKeys = []string{
 	"MOOX_MARKET_FETCH_DNS_UPDATED_AT",
 }
 
-// secretEnvironmentKeys 与 secretEnvironmentSuffixes 是读回结果带出包外之前去掉的密钥项：调用方密钥、Storage 应用密钥、
-// CLS 写入密钥，以及名字按后缀看像密钥的项（接管的旧函数或基础环境文件里可能带着别的密钥）。
+// secretEnvironmentKeys 与 secretEnvironmentSuffixes 是读回结果带出包外之前去掉的密钥项：调用方密钥、CLS 写入密钥，
+// 以及名字按后缀看像密钥的项（接管的旧函数或基础环境文件里可能带着别的密钥）。
 var (
-	secretEnvironmentKeys     = []string{"MOOX_CALLER_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_SECRET_KEY"}
+	secretEnvironmentKeys     = []string{"MOOX_CALLER_KEY", "MOOX_CLS_SECRET_KEY"}
 	secretEnvironmentSuffixes = []string{"_KEY", "_SECRET", "_PASSWORD", "_TOKEN", "_CREDENTIALS"}
 )
 

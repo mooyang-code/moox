@@ -21,13 +21,7 @@ type dataAccessConfig struct {
 	GatewayClient *gatewayclient.ExternalFileConfig `yaml:"gateway_client,omitempty"`
 	SigningKey    string                            `yaml:"-"`
 	Version       int                               `yaml:"version"`
-	Storage       dataStorageAuthConfig             `yaml:"storage"`
 	DataTypes     map[string]dataTypeConfig         `yaml:"data_types"`
-}
-
-type dataStorageAuthConfig struct {
-	AppID  string `yaml:"app_id"`
-	AppKey string `yaml:"app_key"`
 }
 
 type dataTypeConfig struct {
@@ -146,8 +140,8 @@ func loadDataAccessConfig(explicitPath string) (dataAccessConfig, error) {
 }
 
 func (cfg dataAccessConfig) validateSkill() error {
-	if cfg.GatewayClient == nil || cfg.GatewayClient.Caller != "moox-skill" || cfg.Storage.AppID != "moox-skill" {
-		return fmt.Errorf("Skill requires the moox-skill Access and Storage identities")
+	if cfg.GatewayClient == nil || cfg.GatewayClient.Caller != "moox-skill" {
+		return fmt.Errorf("Skill 需要 moox-skill 外部身份的网关配置")
 	}
 	return cfg.validate()
 }
@@ -163,18 +157,6 @@ func (cfg dataAccessConfig) validate() error {
 	}
 	if cfg.Version != 1 {
 		return fmt.Errorf("version must be 1")
-	}
-	required := []struct {
-		name  string
-		value string
-	}{
-		{"storage.app_id", cfg.Storage.AppID},
-		{"storage.app_key", cfg.Storage.AppKey},
-	}
-	for _, field := range required {
-		if strings.TrimSpace(field.value) == "" {
-			return fmt.Errorf("%s is required", field.name)
-		}
 	}
 	if len(cfg.DataTypes) == 0 {
 		return fmt.Errorf("data_types is required")

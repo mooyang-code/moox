@@ -31,20 +31,19 @@ func TestStorageSeparatesSpacesAndRejectsEmptyRecordVersion(t *testing.T) {
 			Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: space}}}},
 		}
 	}
-	auth := &pb.AuthInfo{AppId: "storage-primary"}
 	for _, space := range []string{"space-a", "space-b"} {
-		rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row(space, "1")}}))
+		rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{row(space, "1")}}))
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 1 {
 			t.Fatalf("write %s rsp=%v err=%v", space, rsp, err)
 		}
 	}
 	for _, space := range []string{"space-a", "space-b"} {
-		read, err := primary.ReadRows(ctx, &pb.PrimaryReadRowsReq{AuthInfo: auth, Keys: []*pb.RowKey{key(space, "1")}, ColumnNames: []string{"value"}})
+		read, err := primary.ReadRows(ctx, &pb.PrimaryReadRowsReq{Keys: []*pb.RowKey{key(space, "1")}, ColumnNames: []string{"value"}})
 		if err != nil || len(read.GetRows()) != 1 || read.GetRows()[0].GetFields()[0].GetValue().GetStringValue() != space {
 			t.Fatalf("read %s rsp=%v err=%v", space, read, err)
 		}
 	}
-	bad, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row("space-a", "")}}))
+	bad, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{row("space-a", "")}}))
 	if err != nil || bad.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("empty version rsp=%v err=%v", bad, err)
 	}

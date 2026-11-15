@@ -59,7 +59,7 @@ func TestColumnsKeepsFieldAndCustomColumnsSortedAndSkipsSystemAndDisabled(t *tes
 			col("n", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "active"),
 		}},
 	}}
-	got, err := New(gw, "").Columns(context.Background(), "crypto", "ds")
+	got, err := New(gw).Columns(context.Background(), "crypto", "ds")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,18 +80,18 @@ func TestColumnsKeepsFieldAndCustomColumnsSortedAndSkipsSystemAndDisabled(t *tes
 func TestColumnsRejectsEmptyUnsupportedAndFailedCalls(t *testing.T) {
 	field := storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD
 	empty := &fakeGateway{columns: []*storagepb.ListDatasetColumnsRsp{{RetInfo: ok()}}}
-	if _, err := New(empty, "").Columns(context.Background(), "crypto", "ds"); err == nil || !strings.Contains(err.Error(), "no value columns") {
+	if _, err := New(empty).Columns(context.Background(), "crypto", "ds"); err == nil || !strings.Contains(err.Error(), "no value columns") {
 		t.Fatalf("err = %v", err)
 	}
 	weird := &fakeGateway{columns: []*storagepb.ListDatasetColumnsRsp{{RetInfo: ok(), Columns: []*storagepb.DatasetColumn{col("x", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, "active")}}}}
-	if _, err := New(weird, "").Columns(context.Background(), "crypto", "ds"); err == nil || !strings.Contains(err.Error(), "unsupported") {
+	if _, err := New(weird).Columns(context.Background(), "crypto", "ds"); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("err = %v", err)
 	}
 	denied := &fakeGateway{columns: []*storagepb.ListDatasetColumnsRsp{{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NO_PERMISSION, Msg: "denied"}}}}
-	if _, err := New(denied, "").Columns(context.Background(), "crypto", "ds"); err == nil {
+	if _, err := New(denied).Columns(context.Background(), "crypto", "ds"); err == nil {
 		t.Fatal("denied")
 	}
-	if _, err := New(&fakeGateway{fail: errors.New("EOF")}, "").Columns(context.Background(), "crypto", "ds"); err == nil {
+	if _, err := New(&fakeGateway{fail: errors.New("EOF")}).Columns(context.Background(), "crypto", "ds"); err == nil {
 		t.Fatal("transport error")
 	}
 }
@@ -123,7 +123,7 @@ func TestReadRangeConvertsRowsAndPassesTheCursorAndRange(t *testing.T) {
 		},
 	}}}
 	start, end := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
-	page, err := New(gw, "secret-secret-secret-secret-1234").ReadRange(context.Background(), Range{SpaceID: "crypto", DatasetID: "ds", Columns: cols, Start: start, End: end, Cursor: "c1", PageRows: 2000})
+	page, err := New(gw).ReadRange(context.Background(), Range{SpaceID: "crypto", DatasetID: "ds", Columns: cols, Start: start, End: end, Cursor: "c1", PageRows: 2000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,16 +142,13 @@ func TestReadRangeConvertsRowsAndPassesTheCursorAndRange(t *testing.T) {
 		len(req.GetSelectors()) != 0 || strings.Join(req.GetColumnNames(), ",") != "close,n,tag,ok" || req.GetLatestPerSeries() != 0 {
 		t.Fatalf("request = %v", req)
 	}
-	if auth := req.GetAuthInfo(); auth.GetAppId() != "archive" || auth.GetAppKey() == "" {
-		t.Fatalf("auth = %v", auth)
-	}
 }
 
 func TestReadRangeRejectsBadResponses(t *testing.T) {
 	cols := []staging.Column{{Name: "close", Type: "double"}}
 	call := func(rsp *storagepb.ReadTimeSeriesRowsRsp) error {
 		gw := &fakeGateway{reads: []*storagepb.ReadTimeSeriesRowsRsp{rsp}}
-		_, err := New(gw, "").ReadRange(context.Background(), Range{SpaceID: "c", DatasetID: "d", Columns: cols, PageRows: 10})
+		_, err := New(gw).ReadRange(context.Background(), Range{SpaceID: "c", DatasetID: "d", Columns: cols, PageRows: 10})
 		return err
 	}
 	if err := call(&storagepb.ReadTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "boom"}}); err == nil || !strings.Contains(err.Error(), "boom") {

@@ -30,7 +30,6 @@ func (f *fakeInvoker) Invoke(_ context.Context, svc, method string, req, rsp any
 }
 
 func TestGatewayDatasetsMapsStorageDatasets(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "s3cret-s3cret-s3cret-s3cret-s3cret")
 	inv := &fakeInvoker{rsp: &storagepb.GetDatasetRsp{
 		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
 		Dataset: &storagepb.Dataset{SpaceId: "crypto", DatasetId: "ds", Name: "K线", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", Retention: "168h"},
@@ -44,10 +43,6 @@ func TestGatewayDatasetsMapsStorageDatasets(t *testing.T) {
 	}
 	if inv.svc != "trpc.moox.storage.Metadata" || inv.meth != "GetDataset" || inv.last.GetSpaceId() != "crypto" || inv.last.GetDatasetId() != "ds" {
 		t.Fatalf("call = %s/%s %v", inv.svc, inv.meth, inv.last)
-	}
-	auth := inv.last.GetAuthInfo()
-	if auth.GetAppId() != "archive" || auth.GetAppKey() == "" || auth.GetOperator() != "archive-mgr" {
-		t.Fatalf("auth = %v", auth)
 	}
 }
 

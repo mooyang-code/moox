@@ -605,7 +605,7 @@ func TestWipeSurvivesNonUTF8Crontab(t *testing.T) {
 func TestArchiveLocalKeepsKeyAndFingerprints(t *testing.T) {
 	base := t.TempDir()
 	operator, state := filepath.Join(base, "moox"), filepath.Join(base, "state", "abc")
-	for _, name := range []string{"config.key", "known_hosts", "gateway-client.yaml", "gateway-bootstrap.json", "caller-moox-cli.key", "storage-internal-auth.env", "notes.txt"} {
+	for _, name := range []string{"config.key", "known_hosts", "gateway-client.yaml", "gateway-bootstrap.json", "caller-moox-cli.key", "notes.txt"} {
 		write(t, filepath.Join(operator, name), "x")
 	}
 	write(t, filepath.Join(state, "admin-software.json"), "{}")

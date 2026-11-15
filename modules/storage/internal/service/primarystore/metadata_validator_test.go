@@ -141,13 +141,12 @@ func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 	}
 	key := &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}}
 	write, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller"},
-		Rows:     []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}}}},
+		Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}}}},
 	}))
 	if err != nil || write.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || writes != 1 {
 		t.Fatalf("write=%v err=%v writes=%d", write, err, writes)
 	}
-	read, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}, ColumnNames: []string{"close"}})
+	read, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{Keys: []*pb.RowKey{key}, ColumnNames: []string{"close"}})
 	if err != nil || read.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || reads != 1 {
 		t.Fatalf("read=%v err=%v reads=%d", read, err, reads)
 	}

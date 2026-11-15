@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -57,12 +56,11 @@ func writeTestRows(t *testing.T, svc *Service, indexID string, schema viewindex.
 }
 
 func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
 	columns := []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 	schema := viewindex.ViewIndexSchema{SpaceID: "quant", ViewID: "prices-view", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "schema-1", Columns: columns}
 	indexID := prepareActiveIndex(t, svc, &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", Status: "active"}, schema)
@@ -71,7 +69,7 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	writeTestRows(t, svc, indexID, schema, []viewindex.RowWrite{{Key: viewindex.RowKey{Key: key}, Fields: []*pb.FieldValue{value}}})
 	tag := "venue:okx"
 	rsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "quant", ViewId: "prices-view",
+		SpaceId: "quant", ViewId: "prices-view",
 		Selectors:   []*pb.TimeSeriesSelector{{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &tag}},
 		ColumnNames: []string{"close"},
 	})
@@ -80,20 +78,6 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	}
 	if rsp.GetRows()[0].GetKey().GetSeriesTag() != tag {
 		t.Fatalf("query lost exact series tag: rsp=%v", rsp)
-	}
-}
-
-func TestViewServiceRequiresSecretAndAuth(t *testing.T) {
-	if _, err := New(filepath.Join(t.TempDir(), "views"), ""); err == nil {
-		t.Fatal("expected missing view auth secret to be rejected")
-	}
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{SpaceId: "s", ViewId: "v"})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
-		t.Fatalf("rsp=%v err=%v", rsp, err)
 	}
 }
 
@@ -122,7 +106,7 @@ func TestViewServiceDefersIncompatibleDuckDBSchemaToMetadataRecovery(t *testing.
 		t.Fatal(err)
 	}
 
-	if _, err = New(root, "view-secret"); err != nil {
+	if _, err = New(root); err != nil {
 		t.Fatalf("New() should defer existing index validation until metadata recovery: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(duckdbRoot, "legacy.duckdb")); err != nil {
@@ -131,12 +115,11 @@ func TestViewServiceDefersIncompatibleDuckDBSchemaToMetadataRecovery(t *testing.
 }
 
 func TestDataViewSupportsTimeRangeAndTextOnlyQueries(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
 	columns := []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}
 	prepare := func(id string) (string, viewindex.ViewIndexSchema) {
 		t.Helper()
@@ -155,7 +138,7 @@ func TestDataViewSupportsTimeRangeAndTextOnlyQueries(t *testing.T) {
 	}
 	writeTestRows(t, svc, timesID, timesSchema, timeRows)
 	timeRsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "space", ViewId: "times",
+		SpaceId: "space", ViewId: "times",
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z", EndTime: "2026-07-20T23:59:59Z"},
 	})
 	if err != nil || timeRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(timeRsp.GetRows()) != 1 {
@@ -165,7 +148,7 @@ func TestDataViewSupportsTimeRangeAndTextOnlyQueries(t *testing.T) {
 	recordsID, recordsSchema := prepare("records")
 	recordKey := &pb.RowKey{SpaceId: "space", DatasetId: "records", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
 	writeTestRows(t, svc, recordsID, recordsSchema, []viewindex.RowWrite{{Key: viewindex.RowKey{Key: recordKey}, Fields: []*pb.FieldValue{{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "market research"}}}}}})
-	recordRsp, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{AuthInfo: auth, SpaceId: "space", ViewId: "records", TextQuery: "research"})
+	recordRsp, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{SpaceId: "space", ViewId: "records", TextQuery: "research"})
 	if err != nil || recordRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(recordRsp.GetRows()) != 1 {
 		t.Fatalf("record rsp=%v err=%v", recordRsp, err)
 	}

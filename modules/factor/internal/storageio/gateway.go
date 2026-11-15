@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -17,11 +16,10 @@ var (
 	_ MetadataClient     = (*gatewayStorageClient)(nil)
 )
 
-// NewGatewayClient preserves Storage role authentication while the shared client
-// owns service discovery, request signing, timeouts and read-only retries.
-func NewGatewayClient(gateway gatewayclient.Invoker, auth *commonpb.AuthInfo) *Client {
+// NewGatewayClient 经共享网关客户端调用 Storage；服务发现、请求签名、超时与只读重试都由网关客户端负责。
+func NewGatewayClient(gateway gatewayclient.Invoker) *Client {
 	adapter := &gatewayStorageClient{gateway: gateway}
-	return NewClient(adapter, adapter, auth)
+	return NewClient(adapter, adapter)
 }
 
 func invokeStorage[T any](ctx context.Context, gateway gatewayclient.Invoker, service, method string, request any, options []client.Option) (*T, error) {

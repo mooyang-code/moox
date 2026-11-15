@@ -175,7 +175,7 @@ type planPush struct {
 }
 
 // planBaseKeys 是函数环境里的基础项（不由计划决定），比对时去掉。
-var planBaseKeys = []string{"MOOX_SPACE_ID", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"}
+var planBaseKeys = []string{"MOOX_SPACE_ID"}
 
 // planManagedEnvironment 去掉基础项，并把采集计划换成 SHA-256（对账器发出的环境用）。
 func planManagedEnvironment(environment map[string]string) map[string]string {

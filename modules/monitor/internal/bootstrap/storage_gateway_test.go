@@ -24,7 +24,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -113,9 +112,6 @@ func (w *monitorGatewayWire) ReadRows(ctx context.Context, req *storagepb.Primar
 	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "ReadRows", req); err != nil {
 		return nil, err
 	}
-	if !proto.Equal(req.GetAuthInfo(), storageauth.Primary("monitor")) {
-		return nil, errors.New("Storage role authentication changed")
-	}
 	return &storagepb.PrimaryReadRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
@@ -130,7 +126,6 @@ func (w *monitorGatewayWire) GetTaskResultInventory(ctx context.Context, req *co
 }
 
 func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "fixture-storage-primary-role-secret")
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://192.0.2.99:11003")
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
 	root := t.TempDir()
@@ -183,7 +178,7 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	rsp, err := runtime.StorageGateway.GetDataset(t.Context(), &storagepb.GetDatasetReq{SpaceId: "crypto", DatasetId: "dataset_crypto_kline_1m"})
 	require.NoError(t, err)
 	require.Equal(t, "crypto", rsp.GetDataset().GetSpaceId())
-	rows, err := runtime.StorageGateway.ReadRows(t.Context(), &storagepb.PrimaryReadRowsReq{AuthInfo: storageauth.Primary("monitor")})
+	rows, err := runtime.StorageGateway.ReadRows(t.Context(), &storagepb.PrimaryReadRowsReq{})
 	require.NoError(t, err)
 	require.Equal(t, storagepb.ErrorCode_SUCCESS, rows.GetRetInfo().GetCode())
 	inventory, err := monmetrics.NewCollectorInventoryGatewayClient(runtime.Gateway)

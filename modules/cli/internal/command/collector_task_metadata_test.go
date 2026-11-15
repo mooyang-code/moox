@@ -9,38 +9,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 代理发出的是请求的副本：换上自己的鉴权信息，不改调用方传入的请求。
-func TestCollectorStorageMetadataProxyClonesDeleteRequests(t *testing.T) {
-	originalAuth := &storagepb.AuthInfo{AppId: "original"}
+// 代理把删除请求原样发给 Storage 的 Metadata 服务。
+func TestCollectorStorageMetadataProxyForwardsDeleteRequests(t *testing.T) {
 	var seen []string
 	transport := storageGatewayCall(func(_ context.Context, service, method string, request, _ any) error {
 		require.Equal(t, metadataServiceName, service)
 		switch req := request.(type) {
 		case *storagepb.DeleteViewReq:
-			require.Equal(t, "collector", req.GetAuthInfo().GetAppId())
-			req.ViewId = "changed"
+			require.Equal(t, "v1", req.GetViewId())
 		case *storagepb.DeleteDatasetReq:
-			require.Equal(t, "collector", req.GetAuthInfo().GetAppId())
-			req.DatasetId = "changed"
+			require.Equal(t, "d1", req.GetDatasetId())
 		default:
 			t.Fatalf("unexpected request: %T", req)
 		}
 		seen = append(seen, method)
 		return nil
 	})
-	proxy := &collectorStorageMetadataProxy{gateway: transport, auth: &storagepb.AuthInfo{AppId: "collector"}}
+	proxy := &collectorStorageMetadataProxy{gateway: transport}
 
-	view := &storagepb.DeleteViewReq{SpaceId: "crypto", ViewId: "v1", AuthInfo: originalAuth}
-	_, err := proxy.DeleteView(context.Background(), view)
+	_, err := proxy.DeleteView(context.Background(), &storagepb.DeleteViewReq{SpaceId: "crypto", ViewId: "v1"})
 	require.NoError(t, err)
-	require.Same(t, originalAuth, view.GetAuthInfo())
-	require.Equal(t, "v1", view.GetViewId())
-
-	dataset := &storagepb.DeleteDatasetReq{SpaceId: "crypto", DatasetId: "d1", AuthInfo: originalAuth}
-	_, err = proxy.DeleteDataset(context.Background(), dataset)
+	_, err = proxy.DeleteDataset(context.Background(), &storagepb.DeleteDatasetReq{SpaceId: "crypto", DatasetId: "d1"})
 	require.NoError(t, err)
-	require.Same(t, originalAuth, dataset.GetAuthInfo())
-	require.Equal(t, "d1", dataset.GetDatasetId())
 	require.Equal(t, []string{"DeleteView", "DeleteDataset"}, seen)
 }
 

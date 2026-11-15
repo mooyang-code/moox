@@ -88,8 +88,6 @@ func TestDataKlineBuildsCatalogBackedRPCRequest(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	require.NotNil(t, reader.request)
-	assert.Equal(t, "moox-skill", reader.request.GetAuthInfo().GetAppId())
-	assert.Equal(t, "storage-key", reader.request.GetAuthInfo().GetAppKey())
 	assert.Equal(t, uint32(5), reader.request.GetPage().GetSize())
 	assert.Equal(t, uint32(0), reader.request.GetLatestPerSeries(), "给了时间范围时按区间读取")
 	assert.Equal(t, "2026-08-28T00:00:00Z", reader.request.GetTimeRange().GetStartTime())

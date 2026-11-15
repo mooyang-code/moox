@@ -14,13 +14,10 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
 )
-
-const storageOperationsSecret = "storage-operations-fixture-secret"
 
 type storageOperationsWire struct {
 	pb.UnimplementedMetadata
@@ -53,22 +50,22 @@ func (*storageOperationsWire) ListDatasetSubjects(context.Context, *pb.ListDatas
 	return &pb.ListDatasetSubjectsRsp{RetInfo: &pb.RetInfo{}, DatasetSubjects: []*pb.DatasetSubject{{SubjectId: "BTC-USDT", Status: "active"}}}, nil
 }
 
-func storageOperationAuth(ctx context.Context, auth *pb.AuthInfo, appID string) error {
-	if auth.GetAppId() != appID || auth.GetAppKey() != security.HMACSHA256Hex(storageOperationsSecret, []byte(appID)) || string(codec.Message(ctx).ServerMetaData()["X-Space-Id"]) != "crypto" {
-		return fmt.Errorf("invalid Storage role or trusted space")
+func storageOperationSpace(ctx context.Context) error {
+	if string(codec.Message(ctx).ServerMetaData()["X-Space-Id"]) != "crypto" {
+		return fmt.Errorf("missing trusted space")
 	}
 	return nil
 }
 
 func (*storageOperationsWire) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
-	if err := storageOperationAuth(ctx, req.GetAuthInfo(), "moox-cli-data-export"); err != nil {
+	if err := storageOperationSpace(ctx); err != nil {
 		return nil, err
 	}
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{}, Rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "prices", SubjectId: "BTC-USDT"}}}}, nil
 }
 
 func (w *storageOperationsWire) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) (*pb.PrimaryUpsertFieldsRsp, error) {
-	if err := storageOperationAuth(ctx, req.GetAuthInfo(), "moox-cli-data-import"); err != nil {
+	if err := storageOperationSpace(ctx); err != nil {
 		return nil, err
 	}
 	if len(req.GetRows()) != 1 || req.GetRows()[0].GetKey().GetSpaceId() != "crypto" || req.GetRows()[0].GetKey().GetDatasetId() != "prices" {
@@ -78,7 +75,8 @@ func (w *storageOperationsWire) UpsertFields(ctx context.Context, req *pb.Primar
 	return &pb.PrimaryUpsertFieldsRsp{RetInfo: &pb.RetInfo{}}, nil
 }
 
-func TestStorageOperationsUseSSHNativeGatewayAndIndependentRoleAuth(t *testing.T) {
+// 元数据导入、行导出、导入写入都经操作员 SSH 网关到达 Storage，请求只带网关写入的可信空间，不带 Storage 口令。
+func TestStorageOperationsUseSSHNativeGateway(t *testing.T) {
 	wire := &storageOperationsWire{}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -110,12 +108,11 @@ func TestStorageOperationsUseSSHNativeGatewayAndIndependentRoleAuth(t *testing.T
 	run := func(args ...string) []byte {
 		t.Helper()
 		command := exec.Command(binary, args...)
-		command.Env = append(os.Environ(), "HOME="+home, "MOOX_STORAGE_PRIMARY_AUTH_SECRET="+storageOperationsSecret)
+		command.Env = append(os.Environ(), "HOME="+home)
 		var diagnostics bytes.Buffer
 		command.Stderr = &diagnostics
 		out, err := command.Output()
 		require.NoError(t, err, "CLI diagnostics: %s", diagnostics.String())
-		require.NotContains(t, string(out)+diagnostics.String(), storageOperationsSecret)
 		require.NotContains(t, string(out)+diagnostics.String(), klineGatewaySecret)
 		return out
 	}

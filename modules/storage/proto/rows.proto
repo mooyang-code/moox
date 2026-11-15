@@ -93,7 +93,6 @@ message RecordRow {
 // 不带 selector 表示数据集的全部标的。精确键读取用 PrimaryStore.ReadRows。
 // 分页只用 page.size 与 page.cursor（顺序翻页，不能跳页）。
 message ReadTimeSeriesRowsReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string dataset_id = 3;
   // selectors 最多 100 个；每个带 subject_id 与 freq，series_tag 可选（不带表示该标的全部序列）。
@@ -111,7 +110,6 @@ message ReadTimeSeriesRowsReq {
 // Collector 的完整性检查先用它比对“应有根数”，只有根数不够的标的才读行定位缺口，读取量随缺口而不是随标的数增长。
 // 由主服务的 Pebble 存储回答。
 message CountTimeSeriesRowsReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string dataset_id = 3;
   // selectors 需要 subject_id 与 freq，同一请求属于同一数据集。
@@ -165,7 +163,6 @@ message DatasetChange {
 // ReadDatasetChangesReq 从持久化的变更日志里按序读取变更。日志与写入在同一个 Pebble batch 里提交，
 // 保留一段时间（默认 7 天）；游标早于保留起点、比头部还新或 store_id 对不上时返回 gap。
 message ReadDatasetChangesReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   // dataset_id 必填：只返回这个数据集的变更，游标仍按全部变更推进。
   string dataset_id = 3;

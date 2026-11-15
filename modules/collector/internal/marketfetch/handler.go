@@ -22,7 +22,7 @@ import (
 // Handler is the short-lived SCF action handler. Dependencies are built per
 // invocation so there is no resident worker, timer, or job lease in SCF.
 type Handler struct {
-	NewStorage func(string) (Storage, error)
+	NewStorage func() (Storage, error)
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the market-specific common pipeline; tests can prove the Timer
 	// contract without making an external exchange request.
@@ -77,8 +77,8 @@ func (h *Handler) prepareInvocation() (*Handler, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	invocation.NewStorage = func(market string) (Storage, error) {
-		return NewMarketStorageForMarket(gateway, market)
+	invocation.NewStorage = func() (Storage, error) {
+		return NewMarketStorage(gateway)
 	}
 	return &invocation, func() { _ = gateway.Close() }, nil
 }
@@ -158,7 +158,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 	}
 	budgetCtx, cancel := executionContext(ctx)
 	defer cancel()
-	storage, err := h.NewStorage(req.MarketType)
+	storage, err := h.NewStorage()
 	if err != nil {
 		return nil, err
 	}

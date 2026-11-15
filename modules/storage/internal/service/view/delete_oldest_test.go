@@ -65,7 +65,7 @@ func (e *oldestDeleterEngine) FinishOldestRowsDelete(_ context.Context, indexID 
 
 func deleteOldestTestService(backlog uint64) (*Service, *oldestDeleterEngine) {
 	engine := &oldestDeleterEngine{queryEngine: &queryEngine{}, backlog: backlog}
-	svc, _ := queryTestService(engine, true)
+	svc := queryTestService(engine, true)
 	engine.svc = svc
 	svc.catalogViews = map[viewRef]*pb.View{{spaceID: "space", viewID: "prices"}: {SpaceId: "space", ViewId: "prices", Freq: "1m"}}
 	svc.seriesBars = 10000

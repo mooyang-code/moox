@@ -102,7 +102,7 @@ func (w *factorGatewayWire) UpsertDatasetColumn(ctx context.Context, req *storag
 	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "UpsertDatasetColumn", req); err != nil {
 		return nil, err
 	}
-	if req.GetColumn().GetSpaceId() != "crypto" || req.GetColumn().GetDatasetId() != "bars" || req.GetColumn().GetColumnName() != "close" || !proto.Equal(req.GetAuthInfo(), storageio.AuthInfo("fixture-factor-request")) {
+	if req.GetColumn().GetSpaceId() != "crypto" || req.GetColumn().GetDatasetId() != "bars" || req.GetColumn().GetColumnName() != "close" {
 		return nil, errors.New("dataset column body changed")
 	}
 	w.mu.Lock()
@@ -115,9 +115,6 @@ func (w *factorGatewayWire) ReportDatasetPeriodCompleted(ctx context.Context, re
 	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "ReportDatasetPeriodCompleted", req); err != nil {
 		return nil, err
 	}
-	if !proto.Equal(req.GetAuthInfo(), storageio.AuthInfo("fixture-factor-request")) {
-		return nil, errors.New("Storage role authentication changed")
-	}
 	w.mu.Lock()
 	w.writes++
 	w.mu.Unlock()
@@ -125,7 +122,6 @@ func (w *factorGatewayWire) ReportDatasetPeriodCompleted(ctx context.Context, re
 }
 
 func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "fixture-storage-primary-role-secret")
 	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_TARGET", "ip://192.0.2.99:11003")
 	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
 	t.Setenv("MOOX_FACTOR_STORAGE_KEY_ID", "obsolete-key")
@@ -174,7 +170,7 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	gateway, err := cfg.OpenGateway(nil)
 	require.NoError(t, err)
 	runtime := &Runtime{gateway: gateway}
-	storage := storageio.NewGatewayClient(gateway, storageio.AuthInfo("fixture-factor-request"))
+	storage := storageio.NewGatewayClient(gateway)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 	rsp, err := storage.GetDataset(t.Context(), "crypto", "bars")
 	require.NoError(t, err)
@@ -196,6 +192,6 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	require.NoError(t, runtime.Close())
 	_, err = storage.GetDataset(t.Context(), "crypto", "bars")
 	require.Error(t, err)
-	_, err = storageio.NewGatewayClient(nil, nil).GetDataset(t.Context(), "crypto", "bars")
+	_, err = storageio.NewGatewayClient(nil).GetDataset(t.Context(), "crypto", "bars")
 	require.ErrorContains(t, err, "gateway client is required")
 }

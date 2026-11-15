@@ -1,11 +1,7 @@
 package tencent
 
 import (
-	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/url"
 	"regexp"
@@ -69,7 +65,6 @@ func ValidateCollectorMarketFetchEnvironment(values map[string]string) error {
 	}
 	for _, key := range []string{
 		"MOOX_SPACE_ID", "MOOX_CODE_PACKAGE_ID",
-		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON",
 		"MOOX_CLS_ENABLED", "MOOX_CLS_ENDPOINT", "MOOX_CLS_TOPIC_ID", "MOOX_CLS_TIMEOUT_MS",
 		"MOOX_CLS_SECRET_ID", "MOOX_CLS_SECRET_KEY",
 		"MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_EVENTBUS_NATS_TLS_CA_FILE",
@@ -77,9 +72,6 @@ func ValidateCollectorMarketFetchEnvironment(values map[string]string) error {
 		if strings.TrimSpace(values[key]) == "" {
 			return fmt.Errorf("collector market-fetch runtime environment requires %s", key)
 		}
-	}
-	if err := validateStorageAppKeys(values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]); err != nil {
-		return fmt.Errorf("collector market-fetch runtime environment has invalid MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON: %w", err)
 	}
 	if err := ValidateCollectorAccessEnvironment(values); err != nil {
 		return err
@@ -115,45 +107,6 @@ func validateCollectorRuntimeEndpoint(key, value, scheme string) error {
 	return nil
 }
 
-func validateStorageAppKeys(raw string) error {
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-		return fmt.Errorf("must be a JSON object")
-	}
-	seen := make(map[string]struct{})
-	for decoder.More() {
-		token, err := decoder.Token()
-		appID, ok := token.(string)
-		if err != nil || !ok || strings.TrimSpace(appID) == "" {
-			return fmt.Errorf("invalid app ID")
-		}
-		if _, duplicate := seen[appID]; duplicate {
-			return fmt.Errorf("duplicate app ID")
-		}
-		seen[appID] = struct{}{}
-		var key string
-		if err := decoder.Decode(&key); err != nil || len(key) != 64 {
-			return fmt.Errorf("app keys must be 64 hex characters")
-		}
-		if _, err := hex.DecodeString(key); err != nil {
-			return fmt.Errorf("app keys must be 64 hex characters")
-		}
-	}
-	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
-		return fmt.Errorf("invalid app-key object")
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("trailing JSON data")
-	}
-	if len(seen) == 0 {
-		return fmt.Errorf("app keys must not be empty")
-	}
-	if _, ok := seen["moox-collector"]; !ok {
-		return fmt.Errorf("app keys must include the moox-collector binding")
-	}
-	return nil
-}
-
 func SCFEnvironmentBytes(values map[string]string) int {
 	total := 0
 	for key, value := range values {
@@ -164,9 +117,6 @@ func SCFEnvironmentBytes(values map[string]string) int {
 
 // ValidateSCFEnvironment 校验合并后的完整环境，错误信息里不带任何密钥的值。
 func ValidateSCFEnvironment(values map[string]string) error {
-	if value, exists := values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"]; exists {
-		return fmt.Errorf("SCF environment must not contain MOOX_STORAGE_PRIMARY_AUTH_SECRET (value length: %d)", len(value))
-	}
 	size := SCFEnvironmentBytes(values)
 	if size <= SCFEnvironmentLimitBytes {
 		return nil
@@ -195,15 +145,12 @@ func validateCollectorPlanEnvironment(values map[string]string) error {
 		return err
 	}
 	for _, key := range []string{
-		"MOOX_SPACE_ID", "MOOX_CODE_PACKAGE_ID", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON",
+		"MOOX_SPACE_ID", "MOOX_CODE_PACKAGE_ID",
 		"MOOX_CLS_ENABLED", "MOOX_CLS_ENDPOINT", "MOOX_CLS_TOPIC_ID", "MOOX_CLS_TIMEOUT_MS", "MOOX_CLS_SECRET_ID", "MOOX_CLS_SECRET_KEY",
 	} {
 		if strings.TrimSpace(values[key]) == "" {
 			return fmt.Errorf("collector plan environment requires %s", key)
 		}
-	}
-	if err := validateStorageAppKeys(values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]); err != nil {
-		return fmt.Errorf("collector plan environment has invalid MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON: %w", err)
 	}
 	if err := ValidateCollectorAccessEnvironment(values); err != nil {
 		return err

@@ -300,7 +300,7 @@ func TestDeleteTaskRetainsResultMetadataWhenRequested(t *testing.T) {
 	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-retain", TaskName: "retain", Enabled: true}
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	metadata := newTaskResultMetadataFake(taskresult.ResultIDs(task.SpaceID, task.TaskID), task.TaskID)
-	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})}
+	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata)}
 
 	rsp, err := service.DeleteTask(context.Background(), &pb.DeleteTaskReq{SpaceId: task.SpaceID, TaskId: task.TaskID})
 	require.NoError(t, err)
@@ -318,7 +318,7 @@ func TestDeleteTaskPhysicallyDeletesOwnedResultAndManagerDeleteIsIdempotent(t *t
 	task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	metadata := newTaskResultMetadataFake(ids, task.TaskID)
-	manager := taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})
+	manager := taskresult.NewManagerWithAPI(metadata)
 	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: manager}
 
 	rsp, err := service.DeleteTask(context.Background(), &pb.DeleteTaskReq{SpaceId: task.SpaceID, TaskId: task.TaskID, DeleteResultData: true})
@@ -342,7 +342,7 @@ func TestDeleteTaskResultFailureLeavesDisabledTaskRetryable(t *testing.T) {
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	metadata := newTaskResultMetadataFake(ids, task.TaskID)
 	metadata.failDeleteDataset = true
-	manager := taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})
+	manager := taskresult.NewManagerWithAPI(metadata)
 	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: manager}
 
 	rsp, err := service.DeleteTask(context.Background(), &pb.DeleteTaskReq{SpaceId: task.SpaceID, TaskId: task.TaskID, DeleteResultData: true})
@@ -392,7 +392,7 @@ func TestGetTaskListDoesNotFanOutToStorageAndDetailInspectsOneTask(t *testing.T)
 	}
 	service := &Service{
 		taskRepo:      db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
 	}
 
 	list, err := service.GetTaskList(ctx, &pb.GetTaskListReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: taskCount}})
@@ -447,7 +447,7 @@ func TestGetTaskDetailDistinguishesResultContractFailureFromStorageFailure(t *te
 			test.prepare(metadata, ids)
 			service := &Service{
 				taskRepo:      db.Tasks(),
-				resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+				resultManager: taskresult.NewManagerWithAPI(metadata),
 			}
 			response, err := service.GetTaskDetail(context.Background(), &pb.GetTaskDetailReq{SpaceId: task.SpaceID, TaskId: task.TaskID})
 			require.NoError(t, err)
@@ -520,7 +520,7 @@ func TestCreateTasksWithDifferentIDsOwnDifferentResultDatasets(t *testing.T) {
 	ctx := context.Background()
 	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
 	service := &Service{
-		taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata),
 		datasetSrc: acceptingKlineDatasetSource{},
 	}
 	var datasets []string
@@ -674,7 +674,7 @@ func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 	require.NoError(t, err)
 	service := &Service{
 		taskRepo:      db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
 		datasetSrc:    acceptingKlineDatasetSource{},
 	}
 
@@ -733,7 +733,7 @@ func TestUpdateTaskRejectsChangingSubjectTags(t *testing.T) {
 	require.NoError(t, err)
 	service := &Service{
 		taskRepo:      db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
 		datasetSrc: validationDatasetSource{
 			ids.DatasetID: {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", SubjectTags: []string{"old_tag"}, Attributes: map[string]string{"market_type": "spot"}},
 		},
@@ -762,7 +762,7 @@ func TestCreateTaskCompensatesResultWhenDatasetValidationFails(t *testing.T) {
 	require.NoError(t, err)
 	service := &Service{
 		taskRepo:      db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
 		datasetSrc:    failingDatasetSource{},
 	}
 
@@ -1015,7 +1015,7 @@ func TestDeleteTaskRefusesResultDatasetStillReferencedByAnotherTask(t *testing.T
 	require.NoError(t, sqlErr)
 
 	metadata := newTaskResultMetadataFake(ids, owner.TaskID)
-	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})}
+	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata)}
 	rsp, err := service.DeleteTask(ctx, &pb.DeleteTaskReq{SpaceId: owner.SpaceID, TaskId: owner.TaskID, DeleteResultData: true})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
@@ -1140,7 +1140,7 @@ func TestCreateTaskIngestDefaultsToTheMarketValue(t *testing.T) {
 		metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
 		service := &Service{
 			taskRepo:      openCollectorTestStore(t).Tasks(),
-			resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+			resultManager: taskresult.NewManagerWithAPI(metadata),
 			datasetSrc:    acceptingKlineDatasetSource{},
 		}
 		values := map[string]any{"provider": "binance", "market_type": "spot", "subject_tags": []any{"binance_spot"}, "frequency": "1m"}
