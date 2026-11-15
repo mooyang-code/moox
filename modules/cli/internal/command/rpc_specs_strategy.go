@@ -11,7 +11,6 @@ func init() {
 	rpcGroupShort["strategy result"] = "策略每期结果"
 	rpcGroupShort["strategy target"] = "策略当前目标权重"
 	rpcGroupShort["strategy replay"] = "策略服务里的历史回放（逐期因子 → 策略 → 纸面成交的完整回放用顶层 replay 命令）"
-	rpcGroupShort["strategy template"] = "策略模板"
 	rpcGroupShort["strategy display"] = "策略实例的展示设置"
 
 	createInstanceFlags := []rpcFlag{
@@ -74,15 +73,6 @@ func init() {
 		rpcSpec{Path: []string{"strategy", "replay", "cancel"}, Short: "取消回放", Service: strategyMgr, Method: "CancelReplay",
 			Flags: []rpcFlag{reqFlag("replay-id", "replay_id", "回放 ID")}},
 
-		rpcSpec{Path: []string{"strategy", "template", "list"}, Short: "列出策略模板", Service: strategyMgr, Method: "ListStrategyTemplates"},
-		rpcSpec{Path: []string{"strategy", "template", "show"}, Short: "查看一个模板", Service: strategyMgr, Method: "GetStrategyTemplate",
-			Flags: []rpcFlag{reqFlag("template-id", "template_id", "模板 ID")}},
-		rpcSpec{Path: []string{"strategy", "template", "save"}, Short: "保存模板", Service: strategyMgr, Method: "SaveStrategyTemplate",
-			Flags: []rpcFlag{fileFlag("template-file", "template_yaml", "模板 YAML 文件；- 为标准输入", true)}},
-		rpcSpec{Path: []string{"strategy", "template", "delete"}, Short: "删除模板（默认只预览，--yes 才执行）", Service: strategyMgr, Method: "DeleteStrategyTemplate", Destructive: true,
-			Flags: []rpcFlag{reqFlag("template-id", "template_id", "模板 ID")}},
-		rpcSpec{Path: []string{"strategy", "template", "render"}, Short: "用变量渲染模板，得到策略 DSL", Service: strategyMgr, Method: "RenderStrategyTemplate",
-			Flags: []rpcFlag{reqFlag("template-id", "template_id", "模板 ID"), mapFlag("var", "variables", "模板变量 名=值，可重复"), strFlag("params-csv", "params_csv", "参数 CSV")}},
 
 		rpcSpec{Path: []string{"strategy", "display", "get"}, Short: "查看实例的展示设置", Service: strategyMgr, Method: "GetStrategyDisplaySettings",
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},

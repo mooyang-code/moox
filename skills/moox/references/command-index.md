@@ -412,11 +412,6 @@
 | `strategy result show` | 查看一期结果 |
 | `strategy show` | 查看一个策略定义 |
 | `strategy target list` | 查看实例当前的目标权重 |
-| `strategy template delete` | 删除模板（默认只预览，--yes 才执行） |
-| `strategy template list` | 列出策略模板 |
-| `strategy template render` | 用变量渲染模板，得到策略 DSL |
-| `strategy template save` | 保存模板 |
-| `strategy template show` | 查看一个模板 |
 | `strategy update` | 修改策略定义（引用它的实例要先停用） |
 | `strategy validate` | 试算策略 DSL（不落库） |
 

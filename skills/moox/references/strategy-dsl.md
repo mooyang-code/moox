@@ -290,26 +290,11 @@ stop:
 
 至少写一项；`loss`、`trailing` 取值 (0, 1)，`profit` 取值 (0, 10]。按收盘判断，不是盘中触价；View 必须有 `close`（`extreme` 时还要 `high`、`low`）。
 
-## 6. 策略模板
-
-模板是命名的 DSL 骨架 + 变量定义 + 可选的参数表样例行，生成的策略是普通策略定义，之后与模板脱钩。示例在 `modules/strategy/templates/tranche_example.yaml`。
-
-- 只替换**值为完整 `"{{变量}}"`** 的 YAML 标量；键里、部分包含的占位符一律拒绝；`name` 是内置变量。
-- 骨架带参数表时 `rows` 必须为空、`sample_row` 必填；字符串值与参数表单元格不能含花括号。
-- 本地校验与渲染：
-
-  ```bash
-  moox-strategy-cli template check <模板.yaml>
-  moox-strategy-cli template render <模板.yaml> --name demo [--var leverage=3] --params params.csv > demo.yaml
-  ```
-
-- 保存模板：`moox-cli strategy template save --template-file 模板.yaml`；`strategy template list|show|render|delete` 查看、渲染与删除（删除默认只预览，`--yes` 执行）。
-
-## 7. 校验、创建与上线
+## 6. 校验、创建与上线
 
 写入生产的策略定义和实例属于外部写操作，每一步先告诉用户并等确认。
 
-1. **本地先看语法**：模板用 `moox-strategy-cli template check`；普通 DSL 用 `moox-cli strategy validate`（只校验语法与结构，并在选定因子任务的结果 View 最近一期上试算一次，结果不落库；引用了不存在的列时报错带最接近的列名和该任务的全部列）。
+1. **本地先看语法**：用 `moox-cli strategy validate`（只校验语法与结构，并在选定因子任务的结果 View 最近一期上试算一次，结果不落库；引用了不存在的列时报错带最接近的列名和该任务的全部列）。
 
    ```bash
    moox-cli strategy validate --dsl-file s.yaml --factor-task spot=<现货任务> [--factor-task swap=<永续任务>]
@@ -338,7 +323,7 @@ stop:
 - 引用的因子定义哈希变了（见 [factor-dsl.md](factor-dsl.md)“修改已有因子的定义”），引用它的实例同样要重新启用。
 - 改动较大时，优先新建一份策略定义和观察实例并行跑一段时间，再切换。
 
-## 8. 常见错误
+## 7. 常见错误
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |

@@ -146,7 +146,7 @@ func TestDeleteInstanceRejectsActiveInstance(t *testing.T) {
 // 按 View 清理的年龄探针表）。新增的表没有分类时测试失败，提醒在 DeleteInstance 里处理或登记为全局表。
 func TestEveryStrategyTableIsClassifiedForInstanceDeletion(t *testing.T) {
 	repo := openTestStore(t)
-	global := map[string]bool{"t_strategy_defs": true, "t_strategy_def_versions": true, "t_strategy_templates": true}
+	global := map[string]bool{"t_strategy_defs": true, "t_strategy_def_versions": true}
 	// 没有 c_instance_id、由 DeleteInstance 另外清理的表：结果明细随结果、回放明细随回放、年龄探针按 View。
 	cleanedOtherwise := map[string]bool{"t_strategy_result_items": true, "t_strategy_replay_bars": true, "t_strategy_age_passed": true}
 	withInstance := map[string]bool{}

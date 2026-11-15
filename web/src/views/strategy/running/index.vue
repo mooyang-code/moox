@@ -219,7 +219,7 @@ usePolling(
   30_000,
   () => Boolean(spaceStore.selectedSpaceId)
 );
-/** 手动刷新顺带重读策略目录：别处（如 CLI、模板新建）新建的定义也能出现在筛选和创建实例的下拉里。 */
+/** 手动刷新顺带重读策略目录：别处（如 CLI）新建的定义也能出现在筛选和创建实例的下拉里。 */
 function manualRefresh() {
   store.invalidateStrategyCatalog();
   void Promise.all([refresh(), loadCatalog()]);
