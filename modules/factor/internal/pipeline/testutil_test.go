@@ -27,7 +27,7 @@ func (*fakeStore) ReadWindow(context.Context, storageio.ReadRequest) (map[string
 	return nil, fmt.Errorf("pipeline must not read windows from Storage")
 }
 
-func (*fakeStore) WriteRows(context.Context, string, string, string, []storageio.ResultRow) error {
+func (*fakeStore) WriteRows(context.Context, string, string, []storageio.ResultRow) error {
 	return nil
 }
 func (*fakeStore) ReportComputed(context.Context, storageio.PeriodMarker) error { return nil }

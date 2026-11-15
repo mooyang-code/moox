@@ -29,11 +29,11 @@ import type {
   Order,
   Page,
   PageResult,
-  PlaceManualOrderReq,
   SubmitOrderReq,
   Position,
   SummarizeAccountPnlReq,
   SummarizeAccountPnlRsp,
+  TargetLane,
   TradableInstrument,
   RetInfo,
   UnblockInstrumentReq,
@@ -262,19 +262,11 @@ export function flattenLogicalAccount(action_id: string, logical_account_id: str
   >("console", "FlattenLogicalAccount", { action_id, logical_account_id, reason }, { silent: true });
 }
 
+/** 人工下单的唯一入口：要不要先暂停组合由后端按控制模式决定。策略驱动的组合提交被顺延时响应里没有 order。 */
 export function submitOrder(req: SubmitOrderReq) {
-  return callTrade<SubmitOrderReq, { ret_info: RetInfo; action: OperatorAction; order: Order }>("console", "SubmitOrder", req, {
+  return callTrade<SubmitOrderReq, { ret_info: RetInfo; action: OperatorAction; order?: Order }>("console", "SubmitOrder", req, {
     silent: true
   });
-}
-
-export function placeManualOrder(req: PlaceManualOrderReq) {
-  return callTrade<PlaceManualOrderReq, { ret_info: RetInfo; action: OperatorAction; order?: Order }>(
-    "console",
-    "PlaceManualOrder",
-    req,
-    { silent: true }
-  );
 }
 
 export function cancelOrder(action_id: string, order_id: string, reason: string) {
@@ -294,7 +286,7 @@ export function getOperatorAction(action_id: string, options: { silent?: boolean
 }
 
 export function getLogicalAccountTarget(logical_account_id: string, options: { silent?: boolean } = {}) {
-  return callTrade<{ logical_account_id: string }, { ret_info: RetInfo; target?: LogicalAccountTarget }>(
+  return callTrade<{ logical_account_id: string }, { ret_info: RetInfo; target?: LogicalAccountTarget; lanes?: TargetLane[] }>(
     "console",
     "GetLogicalAccountTarget",
     { logical_account_id },

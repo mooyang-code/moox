@@ -226,7 +226,7 @@ func TestTargetExecutorDiscardsPendingChildWhenSessionChangesAfterPlace(t *testi
 	_, accepted, err := fixture.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-session-change",
 		InstanceID: "instance-1", SessionID: "session-1", StrategyID: "strategy-1",
-		BarEndTime: now.UnixMilli(), EffectiveAt: now.UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
+		BarEndTime: now.UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
 		AcceptedAt: now.UnixMilli(), Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}}, Status: StatusPending,
 	})
 	require.NoError(t, err)
@@ -496,6 +496,31 @@ func TestTargetExecutorOmittedTargetStillClosesPosition(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 1)
 	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
+}
+
+// 收敛中途组合已被别处暂停时，执行器的暂停不覆盖已有原因，目标仍记下本次的原因。
+func TestTargetExecutorPauseKeepsExistingPauseReason(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.target(t, nil)
+	ctx := context.Background()
+	logicalAccount, err := fixture.store.GetLogicalAccount(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "ACTIVE", logicalAccount.AutomationState)
+	target, err := fixture.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", store.MarginPauseReason())
+	}))
+
+	require.NoError(t, fixture.executor().pauseLogicalAccount(ctx, logicalAccount, target, "下单冲突"))
+
+	current, err := fixture.store.GetLogicalAccount(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "PAUSED", current.AutomationState)
+	require.Equal(t, store.MarginPauseReason(), current.PauseReason)
+	target, err = fixture.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "下单冲突", target.LastError)
 }
 
 // 旧目标的市价单挂着时等它结束，不撤单，也不下新单。
@@ -998,7 +1023,7 @@ func (f *targetFixture) target(t *testing.T, targets []store.InstrumentTarget) {
 		store.LogicalAccountTargetRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
 			TargetID: "target-current", InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
-			BarEndTime: f.now.UnixMilli(), EffectiveAt: f.now.UnixMilli(), ValidUntil: fixtureValidUntil(f.now),
+			BarEndTime: f.now.UnixMilli(), ValidUntil: fixtureValidUntil(f.now),
 			Targets: targets, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 		},
 	)

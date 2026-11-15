@@ -304,7 +304,7 @@ func (s *recalcPipelineStore) ReadWindow(_ context.Context, req storageio.ReadRe
 	return map[string]*storageio.Frame{"BTC": frame}, nil
 }
 
-func (s *recalcPipelineStore) WriteRows(_ context.Context, _, _, _ string, rows []storageio.ResultRow) error {
+func (s *recalcPipelineStore) WriteRows(_ context.Context, _, _ string, rows []storageio.ResultRow) error {
 	s.written = append(s.written, rows...)
 	return nil
 }

@@ -421,3 +421,37 @@ func TestImportWithManySeriesTagsOnlyNeedsTheColumn(t *testing.T) {
 		t.Fatalf("out = %s %q", out.Status, out.Message)
 	}
 }
+
+// 导出的归档文件能原样导回：含多个标的、同一标的多个 series_tag 的分区，导出后拿到另一个空的归档目录导入，
+// 整份通过校验，再导出的文件与原文件逐字节一致；在原目录重新导入则全部算“已存在相同”。
+func TestExportedFileImportsBackIntoTheArchive(t *testing.T) {
+	e := newEnv(t)
+	file := placeImport(t, e, "imp_1", "a.csv", historyCSV(
+		"2026-09-01T00:00:00Z,BTC,a,1.5,1",
+		"2026-09-01T00:00:00Z,BTC,b,1.6,1",
+		"2026-09-01T00:00:00Z,ETH,a,10.5,10",
+		"2026-09-01T00:01:00Z,BTC,a,2.5,2",
+		"2026-09-01T00:01:00Z,ETH,a,11.5,",
+		"2026-09-01T00:02:00Z,ETH,a,12.5,12",
+	))
+	out := e.importRun(file, false, nil)
+	if out.Status != "succeeded" || out.RowsAdded != 6 {
+		t.Fatalf("out = %+v", out)
+	}
+	path := report(out, "2026-09-01").GetFilePath()
+	exported := readFile(t, e.root, path)
+
+	fresh := newEnv(t)
+	back := fresh.importRun(placeImport(t, fresh, "imp_back", "import.csv", exported), false, nil)
+	if back.Status != "succeeded" || back.RowsAdded != 6 || back.Finalized != 1 {
+		t.Fatalf("导回 out = %+v", back)
+	}
+	if again := readFile(t, fresh.root, report(back, "2026-09-01").GetFilePath()); again != exported {
+		t.Fatalf("导回后再导出的文件与原文件不一致：\n%s\n原文件：\n%s", again, exported)
+	}
+
+	same := e.importRun(placeImport(t, e, "imp_same", "import.csv", exported), false, nil)
+	if same.Status != "succeeded" || same.Message != "导入 6 行（新增 0、已存在相同 6、已存在不同 0 未覆盖），涉及 1 个分区" {
+		t.Fatalf("原目录重新导入 out = %+v", same)
+	}
+}

@@ -31,7 +31,7 @@ func TestEventCenterAndCollectorAttentionBecomeBusinessChecks(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "ec-action", "callbackdispatcher", "callback-dispatcher@overseas", "moox_callbackdispatcher_attention_active", `{"kind":"action_failed","detail":"系统规则：平仓用完重试"}`, 1, now)
 		seedOverviewMetricForInstance(t, db, "co-source", "collector", "collector@control", "moox_collector_attention_active", `{"kind":"delist_source_failed","detail":"OKX 永续合约信息 连续 3 次失败：超时"}`, 1, now)
 		seedOverviewMetricForInstance(t, db, "co-key", "collector", "collector@control", "moox_collector_attention_active", `{"kind":"delist_readonly_key_missing","detail":""}`, 0, now)
-		// 未知种类被忽略。
+		// 未登记的种类被跳过，并按“服务加种类”打一次警告日志。
 		seedOverviewMetricForInstance(t, db, "co-unknown", "collector", "collector@control", "moox_collector_attention_active", `{"kind":"something_else","detail":"x"}`, 1, now)
 	})
 
@@ -46,6 +46,8 @@ func TestEventCenterAndCollectorAttentionBecomeBusinessChecks(t *testing.T) {
 	require.Contains(t, checks["collector_attention:delist_source_failed"].Reason, "OKX 永续合约信息")
 	require.Equal(t, "healthy", checks["collector_attention:delist_readonly_key_missing"].Status)
 	require.NotContains(t, checks, "collector_attention:something_else")
+	_, warned := warnedUnknownAttention.Load("collector\x00something_else")
+	require.True(t, warned, "未登记的种类要留下警告记录")
 	require.Empty(t, checks["trade_attention:target_rejected"].Kind, "Trade 的关注项不受影响")
 }
 

@@ -140,6 +140,10 @@ func (c *Client) Do(ctx context.Context, req *Request) ([]byte, error) {
 	if c == nil || c.HTTP == nil || req == nil {
 		return nil, &exchange.Error{Kind: exchange.ErrorNotReady, Err: errors.New("http client is not configured")}
 	}
+	// 只读报价缓存的上下文（管理台查询）不发任何请求：缓存里没有就按取不到处理。
+	if _, only := exchange.CachedQuotesOnly(ctx); only {
+		return nil, exchange.ErrQuoteNotCached
+	}
 	host := hostOf(c.BaseURL)
 	now := time.Now()
 	if until, reason := host.pausedUntil(now); !until.IsZero() {

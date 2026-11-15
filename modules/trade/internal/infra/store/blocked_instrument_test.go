@@ -12,14 +12,14 @@ func TestBlockedInstrumentLifecycleIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	record := BlockedInstrumentRecord{
 		Exchange: " binance ", MarketType: "spot", ExchangeSymbol: " FOOUSDT ",
-		Reason: "公告下架", SourceEventID: "evt-1", BlockedAt: 100,
+		Reason: "公告下架", SourceEventID: "evt-1", Owner: " exec-1 ", BlockedAt: 100,
 	}
 	created, err := s.BlockInstrument(ctx, record)
 	require.NoError(t, err)
 	require.True(t, created)
 
-	// 重复写入不改已有记录（保留首次的时间和原因），也不报错。
-	record.Reason, record.BlockedAt = "别的原因", 200
+	// 重复写入不改已有记录（保留首次的时间、原因和写入者），也不报错。
+	record.Reason, record.Owner, record.BlockedAt = "别的原因", "exec-2", 200
 	created, err = s.BlockInstrument(ctx, record)
 	require.NoError(t, err)
 	require.False(t, created)
@@ -28,7 +28,7 @@ func TestBlockedInstrumentLifecycleIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []BlockedInstrumentRecord{{
 		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT",
-		Reason: "公告下架", SourceEventID: "evt-1", BlockedAt: 100,
+		Reason: "公告下架", SourceEventID: "evt-1", Owner: "exec-1", BlockedAt: 100,
 	}}, records)
 
 	set := NewBlockedSet(records)

@@ -1,6 +1,6 @@
 <template>
   <a-layout-content class="layout-main-content">
-    <Tabs v-if="isTabs" />
+    <Tabs />
     <!-- 路由内容：跨路径导航时旧页面停留到新页面就绪，期间顶部有进度条；Suspense 的 fallback 只在新页面首次异步加载时出现 -->
     <router-view v-slot="{ Component, route }">
       <MainTransition>
@@ -26,7 +26,7 @@ import MainTransition from "@/components/main-transition/index.vue";
 import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";
 const themeStore = useThemeConfig();
-const { refreshPage, isTabs } = storeToRefs(themeStore);
+const { refreshPage } = storeToRefs(themeStore);
 </script>
 
 <style lang="scss" scoped>

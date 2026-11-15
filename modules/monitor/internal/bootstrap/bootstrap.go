@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitordeployment "github.com/mooyang-code/moox/modules/monitor/internal/deployment"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
@@ -23,7 +21,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -82,53 +79,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	// 只有登记主机上最近上报的采集器才产生上下线事件与通知；拓扑还没有同步过时不过滤。
-	hostRegistry.SetRegisteredHosts(registeredHosts(runtime.Repositories.Topology))
-
-	var presenceFailureMu sync.Mutex
-	presenceFailures := make(map[string]struct{})
-	presenceNotificationFailure := func(_ context.Context, transition hostmetrics.PresenceTransition, sendErr error) {
-		key := fmt.Sprintf("%s:%s:%s:%d", transition.AgentID, transition.From, transition.To, transition.ObservedAt.UnixNano())
-		presenceFailureMu.Lock()
-		if _, exists := presenceFailures[key]; exists {
-			presenceFailureMu.Unlock()
-			return
-		}
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer func() { cancel(); presenceFailureMu.Unlock() }()
-		err := runtime.Repositories.Alerts.CreateEvent(auditCtx, &domain.AlertEvent{
-			EventID:   uuid.NewString(),
-			SpaceID:   events.SystemSpaceID,
-			RuleID:    hostmetrics.PresenceRuleID,
-			CheckID:   hostmetrics.PresenceCheckID(transition.AgentID),
-			EventType: domain.AlertEventSendFailed,
-			Status:    domain.AlertStatusFiring,
-			Message:   "主机状态通知发送失败：" + sendErr.Error(),
-			CreatedAt: transition.ObservedAt,
-		})
-		if err != nil {
-			log.ErrorContextf(auditCtx, "record host presence notification failure agent_id=%s: %v", transition.AgentID, err)
-			return
-		}
-		if len(presenceFailures) >= 4096 {
-			presenceFailures = make(map[string]struct{})
-		}
-		presenceFailures[key] = struct{}{}
-	}
-	presenceProvider := runtime.alertSender
-	// The scanner and sample path use separate failure callbacks so a failed
-	// transition is audited exactly once.
-	// 两条路径共用同一个按主机串行的投递门，保证上下线通知顺序与主机当前状态一致。
-	presenceGate := newPresenceGate(func(ctx context.Context, agentID string) (string, error) {
-		return hostRegistry.Status(ctx, agentID)
-	})
-	presenceGate.gatewayAlive = gatewayHeartbeatAlive(runtime.Repositories.Gateways)
-	presenceSink := recordHostPresence(runtime.Repositories.Alerts, hostPresenceTransitionSinkWithGate(presenceProvider, nil, presenceGate))
-	presenceScannerSink := recordHostPresence(runtime.Repositories.Alerts, hostPresenceTransitionSinkWithGate(presenceProvider, presenceNotificationFailure, presenceGate))
-	hostSilence := hostmetrics.NewSilenceScanner(hostRegistry, hostmetrics.DefaultHostStaleAfter, presenceScannerSink)
-	// 观测输入（EventBus 上的主机快照与服务指标）中断或刚恢复时，所有 last_seen 都是旧的：冻结主机失联判定，只由"观测输入中断"这一条告警说明。
+	// 观测输入（EventBus 上的主机快照与服务指标）中断或刚恢复时，所有 last_seen 都是旧的：依赖它们的检查（含主机失联）全部冻结，只由"观测输入中断"这一条告警说明。
 	observation := func(now time.Time) observationState { return runtime.observationState(cfg.Observability.Enabled, now) }
-	hostSilence.SetSuspended(func(now time.Time) bool { return observation(now).Suspended })
 
 	hostSamples, err := store.WithDatabase(mgr, hostmetrics.NewSampleStore)
 	if err != nil {
@@ -137,22 +89,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	runtime.HostSamples = hostSamples
 	hostStore := hostmetrics.NewStore(hostSamples)
-	hostRuleCache, err := hostmetrics.NewRuleCache(hostmetrics.RuleCacheOptions{Repository: runtime.Repositories.Alerts})
-	if err != nil {
-		_ = runtime.Close()
-		return nil, err
-	}
-	runtime.HostRuleCache = hostRuleCache
-	if err := hostRuleCache.Start(runtimeCtx); err != nil {
-		log.WarnContextf(ctx, "host alert rule cache unavailable: %v", err)
-	}
-	hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{
-		Cache: hostRuleCache, Repository: runtime.Repositories.Alerts,
-		Notification: runtime.alertSender,
-	})
 	hostStore.SetRegistry(hostRegistry)
-	hostStore.SetPresenceTransitionSink(presenceSink)
-	hostStore.SetPresenceTransitionFailureSink(presenceNotificationFailure)
 
 	var storageMetadata *monmetrics.StorageAdapter
 	var metricsQuery *monmetrics.QueryService
@@ -192,12 +129,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		cancelProbe()
 		if probeErr != nil {
 			if watchdog.IsStorageAuthError(probeErr) {
-				_ = runtime.Close()
-				return nil, fmt.Errorf("monitor storage primary auth preflight failed; restart Monitor after synchronizing storage-internal-auth.env: %w", probeErr)
+				// 监控进程不能因为被监控对象的问题起不来：这里只记错误日志，之后周期行情探针
+				// 每轮都会产出失败的检查结果并告警。密钥只在启动时读取，修复后要重启 Monitor。
+				log.ErrorContextf(ctx, "Monitor 启动时 Storage 认证被拒绝，继续启动；请同步 storage-internal-auth.env 后重启 Monitor，在此之前行情探针会持续失败: %v", probeErr)
+			} else {
+				// Primary 可能还在启动，或数据集还是空的，这些情况由周期行情探针上报。
+				log.WarnContextf(ctx, "monitor storage primary auth preflight deferred: %v", probeErr)
 			}
-			// Primary may still be starting or the dataset may be empty. The
-			// periodic canary remains responsible for reporting those conditions.
-			log.WarnContextf(ctx, "monitor storage primary auth preflight deferred: %v", probeErr)
 		} else {
 			log.InfoContextf(ctx, "monitor storage primary auth preflight passed")
 		}
@@ -222,11 +160,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
 	}
 	marketFetchThresholds := monitorobservability.MarketFetchThresholds{
-		CoordinationStaleAfter:   cfg.MarketHealth.TimerCoordinationStaleAfter,
-		PendingGrace:             cfg.MarketHealth.TimerCoordinationPendingGrace,
-		LeaseGrace:               cfg.MarketHealth.TimerCoordinationLeaseGrace,
-		FeedFailureRateWindow:    cfg.MarketHealth.FeedFailureRateWindow,
-		FeedFailureRateThreshold: cfg.MarketHealth.FeedFailureRateThreshold,
+		CoordinationStaleAfter: cfg.MarketHealth.TimerCoordinationStaleAfter,
+		PendingGrace:           cfg.MarketHealth.TimerCoordinationPendingGrace,
+		LeaseGrace:             cfg.MarketHealth.TimerCoordinationLeaseGrace,
 	}
 	klineInventory, err := buildTaskResultInventory(cfg, runtime.Gateway)
 	if err != nil {
@@ -243,7 +179,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		klineFreshness.SetSubjectFirstSeenStore(store.NewSubjectFirstSeenRepository(runtime.Store))
 	}
 	runtime.klineFreshness = klineFreshness
-	businessFreshness := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
+	factsBuilder := &monitorobservability.Builder{
 		Metrics: metricsQuery, Hosts: hostStore,
 		Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways,
 		Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
@@ -251,14 +187,20 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		MarketFetchThresholds:      marketFetchThresholds,
 		Inventory:                  inventorySource(klineInventory),
 		Datasets:                   archivableDatasets(storageMetadata),
-	}, runtime.Repositories, resultHook, observation, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
+	}
+	businessFreshness := buildBusinessFreshnessReporterWithInterval(factsBuilder, runtime.Repositories, resultHook, observation, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
+	// 主机类检查在检查定时器每一轮的最前面执行（见 checkRound），先于部署探测、行情探针和业务评估。
+	hostChecksRun := buildHostCheckReporter(factsBuilder, runtime.Repositories, resultHook, observation)
+	runtime.businessEvaluation = businessFreshness != nil
 	watchdogRun := func(watchdogCtx context.Context) error {
 		var marketErr, freshnessErr error
 		if marketCanary != nil {
 			marketErr = marketCanary(watchdogCtx)
 		}
 		if businessFreshness != nil {
-			freshnessErr = businessFreshness(watchdogCtx)
+			if freshnessErr = businessFreshness(watchdogCtx); freshnessErr == nil {
+				runtime.businessEvaluatedAt.Store(time.Now().UnixNano())
+			}
 		}
 		// Timer-triggered market SCFs intentionally do not publish a per-batch
 		// completion event. Their health is derived from Storage/Dataset freshness
@@ -273,13 +215,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, watchdogRun); err != nil {
-		_ = runtime.Close()
-		return nil, err
-	}
-	if err := registerMonitorHostSilenceTimer(s, hostSilence, func(timerCtx context.Context) error {
-		return ensureDefaultHostAlertRules(timerCtx, runtime.Repositories, hostRegistry)
-	}); err != nil {
+	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, hostChecksRun, watchdogRun); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
@@ -347,34 +283,4 @@ func loadMonitorDatasetHealthPolicy(cfg *config.Config) (report.DatasetHealthPol
 		return report.DatasetHealthPolicy{}, fmt.Errorf("monitor Dataset health policy path is required")
 	}
 	return report.LoadDatasetHealthPolicy(cfg.Metrics.DatasetHealthPolicyPath)
-}
-
-// registeredHostsTTL 是登记主机集合的缓存时长：采集事件很频繁，拓扑快照的解析与校验不必每次都做。
-const registeredHostsTTL = 10 * time.Second
-
-// registeredHosts 从最近一次完整的部署拓扑读出登记主机；还没有拓扑快照时返回 nil（不按登记过滤）。
-func registeredHosts(topology *store.TopologyRepository) func(context.Context) (map[string]bool, error) {
-	var mu sync.Mutex
-	var cached map[string]bool
-	var loadedAt time.Time
-	return func(ctx context.Context) (map[string]bool, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if !loadedAt.IsZero() && time.Since(loadedAt) < registeredHostsTTL {
-			return cached, nil
-		}
-		snapshot, err := topology.Snapshot(ctx)
-		if err != nil {
-			return nil, err
-		}
-		hosts := map[string]bool(nil)
-		if snapshot != nil && len(snapshot.Hosts) > 0 {
-			hosts = make(map[string]bool, len(snapshot.Hosts))
-			for _, host := range snapshot.Hosts {
-				hosts[host.HostID] = true
-			}
-		}
-		cached, loadedAt = hosts, time.Now()
-		return hosts, nil
-	}
 }

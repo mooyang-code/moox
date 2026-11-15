@@ -1,8 +1,8 @@
 <template>
-  <!-- 窄屏只留用户菜单：明暗、全屏、布局与主题设置收起，不盖住左边的空间选择 -->
+  <!-- 窄屏只留用户菜单：明暗、全屏收起，不盖住左边的空间选择 -->
   <div class="header_setting" :class="isMobile && 'head-absolute-fix'">
     <!-- 切换黑夜模式 -->
-    <a-tooltip v-if="!isMobile" :content="$t(`system.${!darkMode ? 'switch-to-night-mode' : 'switch-to-daytime-mode'}`)">
+    <a-tooltip v-if="!isMobile" :content="darkMode ? '切换白天模式' : '切换黑夜模式'">
       <a-button size="mini" type="text" class="icon_btn" id="system-dark" @click="onNightMode">
         <template #icon>
           <icon-sun-fill :size="18" v-if="!darkMode" />
@@ -11,27 +11,11 @@
       </a-button>
     </a-tooltip>
     <!-- 全屏 -->
-    <a-tooltip v-if="!isMobile" :content="$t(`system.${fullScreen ? 'full-screen' : 'exit-full-screen'}`)">
+    <a-tooltip v-if="!isMobile" :content="fullScreen ? '全屏' : '退出全屏'">
       <a-button size="mini" type="text" class="icon_btn" id="system-fullscreen" @click="onFullScreen">
         <template #icon>
           <icon-fullscreen :size="18" v-if="fullScreen" />
           <icon-fullscreen-exit :size="18" v-else />
-        </template>
-      </a-button>
-    </a-tooltip>
-    <!-- 布局设置 -->
-    <a-tooltip v-if="!isMobile" :content="$t(`system.system-settings`)">
-      <a-button size="mini" type="text" class="icon_btn" id="system-settings" @click="onSystemSetting">
-        <template #icon>
-          <icon-settings :size="18" />
-        </template>
-      </a-button>
-    </a-tooltip>
-    <!-- 主题设置 -->
-    <a-tooltip v-if="!isMobile" :content="$t(`system.theme-settings`)">
-      <a-button size="mini" type="text" class="icon_btn" id="system-theme" @click="onThemeSetting">
-        <template #icon>
-          <icon-skin :size="18" />
         </template>
       </a-button>
     </a-tooltip>
@@ -53,19 +37,15 @@
         <a-doption @click="logOut">
           <template #default>
             <SvgIcon :name="'exit'" :size="18" />
-            <span class="margin-left-text">{{ $t(`system.logout`) }}</span>
+            <span class="margin-left-text">退出登录</span>
           </template>
         </a-doption>
       </template>
     </a-dropdown>
   </div>
-  <SystemSettings :system-open="systemOpen" @system-cancel="systemOpen = false" />
-  <ThemeSettings :theme-open="themeOpen" @theme-cancel="themeOpen = false" />
 </template>
 
 <script setup lang="ts">
-import SystemSettings from "@/layout/components/Header/components/system-settings/index.vue";
-import ThemeSettings from "@/layout/components/Header/components/theme-settings/index.vue";
 import { Modal } from "@arco-design/web-vue";
 import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
@@ -84,17 +64,6 @@ const { darkMode } = storeToRefs(themeStore);
 
 const avatarText = computed(() => (account.value.user.userName || "").trim().charAt(0).toUpperCase());
 
-// 系统设置
-const systemOpen = ref(false);
-const onSystemSetting = () => {
-  systemOpen.value = true;
-};
-
-// 主题设置
-const themeOpen = ref(false);
-const onThemeSetting = () => {
-  themeOpen.value = true;
-};
 // 全屏
 const fullScreen = ref(true);
 const onFullScreen = () => {
@@ -112,8 +81,7 @@ const onFullScreen = () => {
 // 黑暗模式
 const onNightMode = () => {
   darkMode.value = !darkMode.value;
-  let { setDarkMode } = useThemeMethods();
-  setDarkMode();
+  useThemeMethods().setDarkMode();
 };
 
 // 退出登录

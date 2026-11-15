@@ -46,7 +46,7 @@ func managedSpaces(ctx context.Context, cfg *Config, dbm *store.Store) ([]string
 }
 
 // registerFetchPlanManager 启动采集计划对账：管理集合里的每个空间一个独立协程。对账器始终启动，推送采集不依赖云函数配置。
-func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl) error {
+func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl, bus *eventBusRuntime) error {
 	managed := func(ctx context.Context) ([]string, error) { return managedSpaces(ctx, cfg, dbm) }
 	// 启动时先逐个云函数空间检查部署参数，配置错误尽早暴露。
 	for _, space := range cfg.scfSpaces() {
@@ -73,9 +73,15 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	backfiller := &klinecheck.Backfiller{
 		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: invoker, BaseCtx: process.ctx, Refill: true,
 		Paused: func(ctx context.Context, spaceID string) (bool, error) {
+			space := strings.ToLower(spaceID)
+			manual, err := dbm.FetchPlans().ManuallyPausedSpaces(ctx)
+			if err != nil || manual[space] {
+				// 手工暂停的空间不补采，系统恢复追赶时也一样。
+				return true, err
+			}
 			paused, err := dbm.FetchPlans().PausedSpaces(ctx)
-			// 恢复模式：暂停开关仍在（实时采集关闭），但补采要运行，补齐暂停区间。
-			return paused[strings.ToLower(spaceID)] && !control.Recovering(spaceID), err
+			// 恢复模式：系统暂停仍在（实时采集关闭），但补采要运行，补齐暂停区间。
+			return paused[space] && !control.Recovering(spaceID), err
 		},
 		// 并发上限：SCF 执行端受补采函数的预留并发硬性限制（5）；空间的数据集全部用本地执行端（collector-stream）补采时
 		// 不受这个限制，可以放大，补采（尤其是暂停恢复后补暂停区间）快得多。
@@ -109,10 +115,12 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			return marketfetch.PlanExecutorSCF, nil
 		},
 		Local: &localexec.Client{Gateway: process.gateway},
-		// 补采作业成功后通知因子：引擎立即推进连续水位、补算上游失败的标的。
-		Notify: klinecheck.FactorNotifier(process.gateway),
 		// 收市后整天重取：时刻取各市场 market.yaml 的 refetch_after_close_minutes，没配的市场不做。
 		CloseRefetch: markets.CloseRefetchDay, RefetchFrequency: routedFrequency,
+	}
+	if bus != nil {
+		// 补采作业结束后立刻把分块的补写通知封存成事件，不等维护轮或合成的定时器：因子引擎和合成都订阅这个事件。
+		backfiller.FlushNotices = bus.notices.Flush
 	}
 	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })
 	svc.SetKlineOps(backfiller)

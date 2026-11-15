@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Holding, Position } from "@/api/trade/types";
+import type { Holding, Position, TargetLane, TargetLaneState } from "@/api/trade/types";
 import { decimalAdd, decimalSub } from "../shared/order-rules";
 import {
   buildCoinRows,
@@ -15,6 +15,8 @@ const swap = (instrument_id: string, signed_quantity: string, mark_price = "") =
   ({ instrument_id, signed_quantity, mark_price, market_type: 2 }) as Position;
 const spot = (asset: string, quantity: string, instrument_id = `${asset}-USDT-SPOT`) =>
   ({ asset, quantity, instrument_id }) as Holding;
+/** 后端给的一条结论：0 未知、1 还会下单、2 已到位、3 低于最小下单额、4 市场规则顺延、5 不足一手、6 没有成员能下单 */
+const lane = (instrument_id: string, state: TargetLaneState, reason = ""): TargetLane => ({ instrument_id, state, reason });
 
 describe("持仓与目标按币合并", () => {
   it("同一个币的现货和永续合成一行，偏差分市场各算各的", () => {
@@ -24,6 +26,7 @@ describe("持仓与目标按币合并", () => {
         { instrument_id: "BTC-USDT-SWAP", quantity: "-1" }
       ],
       blocked: [],
+      lanes: [lane("BTC-USDT-SPOT", 1), lane("BTC-USDT-SWAP", 1)],
       swapPositions: [swap("BTC-USDT-SWAP", "-0.4")],
       spotHoldings: [spot("BTC", "1.5")],
       converged: false,
@@ -36,94 +39,106 @@ describe("持仓与目标按币合并", () => {
     expect(rows[0].deviationSwap).toBeCloseTo(0.6);
   });
 
-  it("未收敛时按下单设置的调仓阈值判断：阈值内算到位，阈值外算未到位；目标整体已到位全部算到位", () => {
-    const input = {
-      targets: [{ instrument_id: "ETH-USDT-SWAP", quantity: "10" }],
-      blocked: [],
-      spotHoldings: [],
-      hasTarget: true,
-      rebalance: { rebalance_threshold_mode: "TARGET_RATIO", rebalance_threshold_ratio: "0.05" }
-    };
-    const stateAt = (actual: string, converged = false) =>
-      buildCoinRows({ ...input, swapPositions: [swap("ETH-USDT-SWAP", actual)], converged })[0].state;
-    expect(stateAt("9.6")).toBe("ok");
-    expect(stateAt("9.5")).toBe("ok");
-    expect(stateAt("9.4")).toBe("off");
-    expect(stateAt("5")).toBe("off");
-    expect(stateAt("5", true)).toBe("ok");
-    // 阈值改成 10%：9.4 也在阈值内
-    const wide = { ...input.rebalance, rebalance_threshold_ratio: "0.1" };
-    expect(
-      buildCoinRows({ ...input, rebalance: wide, swapPositions: [swap("ETH-USDT-SWAP", "9.4")], converged: false })[0].state
-    ).toBe("ok");
-  });
-
-  it("拿不到下单设置时按后端默认的目标比例 5% 判断", () => {
+  it("是否到位只看后端给的结论，页面不按差额自己算；目标整体已到位全部算到位", () => {
     const input = {
       targets: [{ instrument_id: "ETH-USDT-SWAP", quantity: "10" }],
       blocked: [],
       spotHoldings: [],
       hasTarget: true
     };
-    expect(buildCoinRows({ ...input, swapPositions: [swap("ETH-USDT-SWAP", "9.6")], converged: false })[0].state).toBe("ok");
-    expect(buildCoinRows({ ...input, swapPositions: [swap("ETH-USDT-SWAP", "9.4")], converged: false })[0].state).toBe("off");
-  });
-
-  it("建仓、清仓、与目标反向时不看阈值，有差额就算未到位", () => {
-    const rebalance = { rebalance_threshold_mode: "TARGET_RATIO", rebalance_threshold_ratio: "1" };
-    const stateOf = (target: string, actual: string) =>
+    const rowAt = (actual: string, state: TargetLaneState, converged = false) =>
       buildCoinRows({
-        targets: [{ instrument_id: "ETH-USDT-SWAP", quantity: target }],
-        blocked: [],
-        swapPositions: actual === "0" ? [] : [swap("ETH-USDT-SWAP", actual)],
-        spotHoldings: [],
-        converged: false,
-        hasTarget: true,
-        rebalance
-      })[0].state;
-    expect(stateOf("10", "0")).toBe("off");
-    expect(stateOf("0", "2")).toBe("off");
-    expect(stateOf("10", "-2")).toBe("off");
-    expect(stateOf("10", "2")).toBe("ok");
-  });
-
-  it("按持仓比例的阈值只比数量；每期都调时有差额就算未到位", () => {
-    const stateOf = (mode: string, actual: string) =>
-      buildCoinRows({
-        targets: [{ instrument_id: "ETH-USDT-SWAP", quantity: "10" }],
-        blocked: [],
+        ...input,
+        lanes: [lane("ETH-USDT-SWAP", state)],
         swapPositions: [swap("ETH-USDT-SWAP", actual)],
-        spotHoldings: [],
-        converged: false,
-        hasTarget: true,
-        rebalance: { rebalance_threshold_mode: mode, rebalance_threshold_ratio: "0.1" }
-      })[0].state;
-    // 差额 1，持仓 11 × 0.1 = 1.1：在阈值内
-    expect(stateOf("POSITION_RATIO", "11")).toBe("ok");
-    // 差额 1.5，持仓 8.5 × 0.1 = 0.85：超出阈值
-    expect(stateOf("POSITION_RATIO", "8.5")).toBe("off");
-    expect(stateOf("ALWAYS", "9.99")).toBe("off");
-    expect(stateOf("ALWAYS", "10")).toBe("ok");
+        converged
+      })[0];
+    // 同样的差额，后端说到位就到位、说还会下单就未到位
+    expect(rowAt("5", 2)).toMatchObject({ state: "ok", offSwap: false });
+    expect(rowAt("5", 1)).toMatchObject({ state: "off", offSwap: true });
+    expect(rowAt("9.99", 1).state).toBe("off");
+    // 没有成员能下单：有差额没处理，算未到位，带上原因
+    expect(rowAt("5", 6).state).toBe("off");
+    expect(
+      buildCoinRows({
+        ...input,
+        lanes: [lane("ETH-USDT-SWAP", 6, "没有启用的成员支持该标的")],
+        swapPositions: [],
+        converged: false
+      })[0].settledReason
+    ).toBe("没有启用的成员支持该标的");
+    // 目标整体已收敛：后端不给结论，整页到位
+    expect(buildCoinRows({ ...input, lanes: [], swapPositions: [swap("ETH-USDT-SWAP", "5")], converged: true })[0].state).toBe(
+      "ok"
+    );
   });
 
-  it("按组合权益比例的阈值：差额金额低于权益 × 比例算到位；缺价格或缺权益时执行器照调，算未到位", () => {
-    const stateOf = (actual: string, markPrice: string, equity: number | null) =>
+  it("有差额但执行器不会下单：算到位，并写明原因", () => {
+    const rowOf = (state: TargetLaneState, reason = "") =>
       buildCoinRows({
         targets: [{ instrument_id: "ETH-USDT-SWAP", quantity: "10" }],
         blocked: [],
-        swapPositions: [swap("ETH-USDT-SWAP", actual, markPrice)],
+        lanes: [lane("ETH-USDT-SWAP", state, reason)],
+        swapPositions: [swap("ETH-USDT-SWAP", "9.99")],
         spotHoldings: [],
         converged: false,
-        hasTarget: true,
-        equity,
-        rebalance: { rebalance_threshold_mode: "EQUITY_RATIO", rebalance_threshold_ratio: "0.05" }
-      })[0].state;
-    // 权益 10000 × 0.05 = 500：差额 1 × 400 = 400 在阈值内，差额 2 × 400 = 800 超出
-    expect(stateOf("9", "400", 10000)).toBe("ok");
-    expect(stateOf("8", "400", 10000)).toBe("off");
-    expect(stateOf("5", "400", 10000)).toBe("off");
-    expect(stateOf("9", "", 10000)).toBe("off");
-    expect(stateOf("9", "400", null)).toBe("off");
+        hasTarget: true
+      })[0];
+    expect(rowOf(3)).toMatchObject({ state: "ok", settledReason: "差额低于最小下单额" });
+    expect(rowOf(5)).toMatchObject({ state: "ok", settledReason: "差额不足一手" });
+    expect(rowOf(4, "停牌")).toMatchObject({ state: "ok", settledReason: "停牌" });
+    expect(rowOf(2)).toMatchObject({ state: "ok", settledReason: "" });
+  });
+
+  it("后端判断不了（报价不在缓存里）或没给这个标的的结论：显示未知，不当成到位也不当成未到位", () => {
+    const input = {
+      targets: [{ instrument_id: "ETH-USDT-SWAP", quantity: "10" }],
+      blocked: [],
+      swapPositions: [swap("ETH-USDT-SWAP", "5")],
+      spotHoldings: [],
+      converged: false,
+      hasTarget: true
+    };
+    // state 缺失和 0 一样按未知处理
+    expect(buildCoinRows({ ...input, lanes: [{ instrument_id: "ETH-USDT-SWAP" }] })[0]).toMatchObject({
+      state: "unknown",
+      offSwap: false
+    });
+    expect(buildCoinRows({ ...input, lanes: [lane("ETH-USDT-SWAP", 0)] })[0].state).toBe("unknown");
+    expect(buildCoinRows({ ...input, lanes: [] })[0].state).toBe("unknown");
+    // 一个市场还会下单、另一个未知：整行算未到位
+    const mixed = buildCoinRows({
+      ...input,
+      targets: [...input.targets, { instrument_id: "ETH-USDT-SPOT", quantity: "1" }],
+      lanes: [lane("ETH-USDT-SWAP", 1)]
+    })[0];
+    expect(mixed).toMatchObject({ state: "off", offSwap: true, offSpot: false });
+  });
+
+  it("两个成员一多一空合计为 0：后端说还会下单就算未到位，不因为合计持仓为 0 当成到位", () => {
+    const [row] = buildCoinRows({
+      targets: [{ instrument_id: "BTC-USDT-SPOT", quantity: "1" }],
+      blocked: [],
+      lanes: [lane("BTC-USDT-SPOT", 2), lane("BTC-USDT-SWAP", 1)],
+      swapPositions: [swap("BTC-USDT-SWAP", "2"), swap("BTC-USDT-SWAP", "-2")],
+      spotHoldings: [spot("BTC", "1")],
+      converged: false,
+      hasTarget: true
+    });
+    expect(row).toMatchObject({ actualSwap: 0, state: "off", offSwap: true, offSpot: false });
+  });
+
+  it("没有目标的市场后端没给结论：执行器不管这部分持仓，不算未到位也不算未知", () => {
+    const [row] = buildCoinRows({
+      targets: [{ instrument_id: "BTC-USDT-SWAP", quantity: "-1" }],
+      blocked: [],
+      lanes: [lane("BTC-USDT-SWAP", 2)],
+      swapPositions: [swap("BTC-USDT-SWAP", "-1")],
+      spotHoldings: [spot("BTC", "1")],
+      converged: false,
+      hasTarget: true
+    });
+    expect(row).toMatchObject({ state: "ok", offSpot: false, offSwap: false });
   });
 
   it("有目标的币在另一个市场没有目标但有持仓：执行器按目标 0 平掉，算未到位，只给那个市场着色", () => {
@@ -131,6 +146,7 @@ describe("持仓与目标按币合并", () => {
       buildCoinRows({
         targets: [{ instrument_id: "BTC-USDT-SPOT", quantity: "1" }],
         blocked: [],
+        lanes: converged ? [] : [lane("BTC-USDT-SPOT", 2), lane("BTC-USDT-SWAP", 1)],
         swapPositions: [swap("BTC-USDT-SWAP", "2")],
         spotHoldings: [spot("BTC", "0.98")],
         converged,
@@ -140,13 +156,14 @@ describe("持仓与目标按币合并", () => {
     expect(build(true)).toMatchObject({ state: "ok", offSpot: false, offSwap: false });
   });
 
-  it("按市场记录未到位：永续超出阈值时，阈值内的现货不算", () => {
+  it("按市场记录未到位：永续还会下单时，已到位的现货不算", () => {
     const [row] = buildCoinRows({
       targets: [
         { instrument_id: "BTC-USDT-SPOT", quantity: "1" },
         { instrument_id: "BTC-USDT-SWAP", quantity: "-1" }
       ],
       blocked: [],
+      lanes: [lane("BTC-USDT-SPOT", 2), lane("BTC-USDT-SWAP", 1)],
       swapPositions: [swap("BTC-USDT-SWAP", "-0.5")],
       spotHoldings: [spot("BTC", "0.98")],
       converged: false,
@@ -159,6 +176,7 @@ describe("持仓与目标按币合并", () => {
     const rows = buildCoinRows({
       targets: [{ instrument_id: "DOGE-USDT-SPOT", quantity: "100" }],
       blocked: [{ instrument_id: "DOGE-USDT-SPOT", quantity: "100", reason: "低于最小下单额" }],
+      lanes: [],
       swapPositions: [swap("SOL-USDT-SWAP", "2")],
       spotHoldings: [spot("XRP", "50")],
       converged: false,
@@ -173,10 +191,11 @@ describe("持仓与目标按币合并", () => {
     expect(rows[0].blockedReason).toContain("最小下单额");
   });
 
-  it("被每小时上限顺延的目标不算未执行：状态按差额判断，原因单独放在顺延里", () => {
+  it("被每小时上限顺延的目标不算未执行：状态按后端的结论，原因单独放在顺延里", () => {
     const rows = buildCoinRows({
       targets: [{ instrument_id: "DOGE-USDT-SPOT", quantity: "100" }],
       blocked: [{ instrument_id: "DOGE-USDT-SPOT", quantity: "100", reason: "超出每小时上限，留到下一个整点", deferred: true }],
+      lanes: [lane("DOGE-USDT-SPOT", 1)],
       swapPositions: [],
       spotHoldings: [spot("DOGE", "10")],
       converged: false,
@@ -191,6 +210,7 @@ describe("持仓与目标按币合并", () => {
     const hold = buildCoinRows({
       targets: [{ instrument_id: "BTC-USDT-SWAP", quantity: "", hold: true }],
       blocked: [],
+      lanes: [lane("BTC-USDT-SWAP", 2)],
       swapPositions: [swap("BTC-USDT-SWAP", "3")],
       spotHoldings: [],
       converged: false,
@@ -200,6 +220,7 @@ describe("持仓与目标按币合并", () => {
     const manual = buildCoinRows({
       targets: [],
       blocked: [],
+      lanes: [],
       swapPositions: [swap("SOL-USDT-SWAP", "2")],
       spotHoldings: [spot("BTC", "0.2"), spot("USDT", "100", "")],
       converged: false,
@@ -218,6 +239,7 @@ describe("持仓与目标按币合并", () => {
         { instrument_id: "ETH-USDT-SWAP", quantity: "0" }
       ],
       blocked: [],
+      lanes: [lane("BTC-USDT-SWAP", 2), lane("ETH-USDT-SWAP", 2)],
       swapPositions: [swap("BTC-USDT-SWAP", "1")],
       spotHoldings: [],
       converged: false,
@@ -235,6 +257,7 @@ describe("持仓与目标按币合并", () => {
         { instrument_id: "BTC-USDT-SWAP", quantity: "-1" }
       ],
       blocked: [],
+      lanes: [],
       swapPositions: [swap("BTC-USDT-SWAP", "-0.4")],
       spotHoldings: [spot("BTC", "1.5")],
       converged: false,
@@ -255,6 +278,7 @@ describe("持仓与目标按币合并", () => {
         { instrument_id: "BTC-USDT-SWAP", quantity: "-0.00000001" }
       ],
       blocked: [],
+      lanes: [],
       swapPositions: [swap("BTC-USDT-SWAP", "123456.78912345"), swap("BTC-USDT-SWAP", "-0.1")],
       spotHoldings: [spot("BTC", "123456.78912345")],
       converged: false,
@@ -278,6 +302,7 @@ describe("持仓与目标按币合并", () => {
     const [hold] = buildCoinRows({
       targets: [{ instrument_id: "ETH-USDT-SWAP", quantity: "", hold: true }],
       blocked: [],
+      lanes: [],
       swapPositions: [swap("ETH-USDT-SWAP", "3")],
       spotHoldings: [],
       converged: false,
@@ -287,6 +312,7 @@ describe("持仓与目标按币合并", () => {
     const [buy] = buildCoinRows({
       targets: [{ instrument_id: "SOL-USDT-SWAP", quantity: "10" }],
       blocked: [],
+      lanes: [],
       swapPositions: [],
       spotHoldings: [],
       converged: false,
@@ -302,6 +328,7 @@ describe("持仓与目标按币合并", () => {
         { instrument_id: "BTC-USDT-SWAP", quantity: "0" }
       ],
       blocked: [],
+      lanes: [],
       swapPositions: [
         { ...swap("BTC-USDT-SWAP", "0.5"), trading_account_id: "A" },
         { ...swap("BTC-USDT-SWAP", "-2"), trading_account_id: "B" }
@@ -323,6 +350,7 @@ describe("持仓与目标按币合并", () => {
     const [row] = buildCoinRows({
       targets: [{ instrument_id: "600519.XSHG", quantity: "0" }],
       blocked: [],
+      lanes: [],
       swapPositions: [],
       spotHoldings: [
         { asset: "600519.XSHG", quantity: "100", instrument_id: "600519.XSHG", trading_account_id: "B" } as Holding,
@@ -351,6 +379,7 @@ describe("A 股持仓", () => {
     const rows = buildCoinRows({
       targets: [{ instrument_id: "600519.XSHG", quantity: "0" }],
       blocked: [{ instrument_id: "600519.XSHG", quantity: "-300", reason: "当日买入，次日可卖", deferred: true }],
+      lanes: [],
       swapPositions: [],
       spotHoldings: [{ asset: "600519.XSHG", quantity: "300", sellable: "100", instrument_id: "600519.XSHG" } as Holding],
       converged: true,
@@ -362,27 +391,28 @@ describe("A 股持仓", () => {
     expect(rowOrderHints(rows[0], "CNY")).toEqual([{ market: 3, instrumentId: "600519.XSHG", side: 2, quantity: "300" }]);
   });
 
-  it("未收敛时差额不足一手算到位；目标为 0 时零股会卖掉，算未到位", () => {
-    const stateOf = (target: string, actual: string) =>
+  it("股票的结论记在现货一列：不足一手算到位并写明原因；停牌已经在顺延里的不重复写", () => {
+    const rowOf = (
+      lanes: TargetLane[],
+      blocked: { instrument_id: string; quantity: string; reason: string; deferred: boolean }[] = []
+    ) =>
       buildCoinRows({
-        targets: [{ instrument_id: "600519.XSHG", quantity: target }],
-        blocked: [],
+        targets: [{ instrument_id: "600519.XSHG", quantity: "350" }],
+        blocked,
+        lanes,
         swapPositions: [],
-        spotHoldings:
-          actual === "0"
-            ? []
-            : [{ asset: "600519.XSHG", quantity: actual, sellable: actual, instrument_id: "600519.XSHG" } as Holding],
+        spotHoldings: [{ asset: "600519.XSHG", quantity: "300", sellable: "300", instrument_id: "600519.XSHG" } as Holding],
         converged: false,
-        hasTarget: true,
-        rebalance: { rebalance_threshold_mode: "TARGET_RATIO", rebalance_threshold_ratio: "0.05" }
-      })[0].state;
-    // 差额 50 股，超出 5% 但不足一手
-    expect(stateOf("350", "300")).toBe("ok");
-    // 建仓不足一手也视为已满足
-    expect(stateOf("80", "0")).toBe("ok");
-    // 差额整整一手且超出阈值
-    expect(stateOf("400", "300")).toBe("off");
-    expect(stateOf("0", "50")).toBe("off");
+        hasTarget: true
+      })[0];
+    expect(rowOf([lane("600519.XSHG", 5)])).toMatchObject({ state: "ok", settledReason: "差额不足一手" });
+    expect(rowOf([lane("600519.XSHG", 1)])).toMatchObject({ state: "off", offSpot: true });
+    expect(rowOf([lane("600519.XSHG", 4, "停牌")])).toMatchObject({ state: "ok", settledReason: "停牌" });
+    const deferred = rowOf(
+      [lane("600519.XSHG", 4, "停牌")],
+      [{ instrument_id: "600519.XSHG", quantity: "50", reason: "停牌", deferred: true }]
+    );
+    expect(deferred).toMatchObject({ state: "ok", deferredReason: "停牌", settledReason: "" });
   });
 });
 
@@ -402,6 +432,7 @@ describe("市值、开仓均价、未实现盈亏", () => {
     const [row] = buildCoinRows({
       targets: [],
       blocked: [],
+      lanes: [],
       swapPositions: [position("a", "-1", "2100", "100"), position("b", "-3", "1900", "-300")],
       spotHoldings: [],
       converged: false,
@@ -416,6 +447,7 @@ describe("市值、开仓均价、未实现盈亏", () => {
     const [row] = buildCoinRows({
       targets: [],
       blocked: [],
+      lanes: [],
       swapPositions: [swap("BTC-USDT-SWAP", "1")],
       spotHoldings: [],
       converged: false,
@@ -428,6 +460,7 @@ describe("市值、开仓均价、未实现盈亏", () => {
     const [row] = buildCoinRows({
       targets: [],
       blocked: [],
+      lanes: [],
       swapPositions: [position("a", "-1", "2100", "100")],
       spotHoldings: [{ asset: "ETH", quantity: "1", instrument_id: "ETH-USDT-SPOT", mark_price: "2000" } as Holding],
       converged: false,
@@ -441,6 +474,7 @@ describe("市值、开仓均价、未实现盈亏", () => {
     const rows = buildCoinRows({
       targets: [{ instrument_id: "BTC-USDT-SWAP", quantity: "1" }],
       blocked: [],
+      lanes: [],
       swapPositions: [],
       spotHoldings: [],
       converged: false,
@@ -451,6 +485,7 @@ describe("市值、开仓均价、未实现盈亏", () => {
     const withSpot = buildCoinRows({
       targets: [],
       blocked: [],
+      lanes: [],
       swapPositions: [],
       spotHoldings: [spot("BTC", "1")],
       converged: false,

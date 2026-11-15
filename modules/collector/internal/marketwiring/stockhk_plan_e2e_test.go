@@ -43,7 +43,7 @@ func TestStockHKPlanToFunctionRequests(t *testing.T) {
 		require.Equal(t, 5*time.Second, plan.StartDelay(scheduled, scheduled), "定时器准点触发时等 5 秒再取数")
 		require.Contains(t, name, "nanjing", "函数名带地域")
 
-		planned, err := plan.BuildRequests("stockhk", name, "req-"+name, scheduled, nil)
+		planned, err := plan.BuildRequests("stockhk", name, "req-"+name, scheduled)
 		require.NoError(t, err)
 		require.Len(t, planned, 1, name)
 		require.True(t, planned[0].Period.Equal(hkTime("2026-11-12 14:45:00")), "14:50 触发采 14:45 开始的那根")

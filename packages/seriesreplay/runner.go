@@ -344,7 +344,7 @@ func (r *Runner) factorStep(ctx context.Context, spec Spec, binding StrategyBind
 func evaluateRequest(spec Spec, binding StrategyBinding, t time.Time, frame FactorStepResponse, state json.RawMessage) StrategyEvaluateRequest {
 	rows := make(map[string]StrategyRow, len(frame.Subjects))
 	for subject, s := range frame.Subjects {
-		rows[subject] = StrategyRow{Source: s.Source, SourcePrev: s.SourcePrev, Factors: s.Factors, FactorsPrev: s.FactorsPrev, AgeBars: s.AgeBars}
+		rows[subject] = StrategyRow{Source: s.Source, SourcePrev: s.SourcePrev, Factors: s.Factors, FactorsPrev: s.FactorsPrev, Params: s.Params, AgeBars: s.AgeBars}
 	}
 	return StrategyEvaluateRequest{
 		ReplayID: spec.ReplayID, InstanceID: spec.InstanceID, DSLHash: binding.DSLHash, Period: t.Format(time.RFC3339),

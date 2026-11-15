@@ -21,7 +21,7 @@ func TestStockBasesLoadedAfterEventsArrivedFirst(t *testing.T) {
 	monday := time.Date(2026, 10, 12, 15, 0, 0, 0, shanghai)
 	input, _ := json.Marshal(store.InputRecord{Views: map[string]store.ViewInput{"view_a": {}}, Bar: "1d", Calendar: "cn_stock", BarStart: friday.Add(-15 * time.Hour)})
 	result := store.Result{ResultID: "r1", InstanceID: "i1", SessionID: "i1-session", BarEndTime: friday, ValidUntil: friday.Add(48 * time.Hour), Status: store.StatusOK, DSLHash: "sha256:demo",
-		InputJSON: input, TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: json.RawMessage(`{}`), SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone, CreatedAt: friday.Add(time.Minute)}
+		InputJSON: input, TargetsJSON: json.RawMessage(`[]`), SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone, CreatedAt: friday.Add(time.Minute)}
 	if _, _, err := repo.CommitResult(context.Background(), store.CommitRequest{Result: result, Now: friday.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}

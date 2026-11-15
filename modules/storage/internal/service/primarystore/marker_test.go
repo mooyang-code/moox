@@ -30,7 +30,7 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 		Key:    &pb.RowKey{SpaceId: "quant", DatasetId: "result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: 1}}}},
 	}
-	_, err = store.UpsertFields(ctx, "quant", "result", "", []*pb.RowFieldUpsert{row})
+	err = store.UpsertFields(ctx, "quant", "result", []*pb.RowFieldUpsert{row})
 	require.NoError(t, err)
 	var eventID string
 	for attempt := 0; attempt < 2; attempt++ {
@@ -47,11 +47,13 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 	require.True(t, got.GetFound())
 	require.Equal(t, eventID, got.GetEventId())
 	require.True(t, proto.Equal(marker, got.GetMarker()), "marker changed on readback: %v", got.GetMarker())
-	entries, err := store.ListOutbox(ctx, 0, 10)
+	page, err := store.ReadMarkerChanges(ctx, 0, 100)
 	require.NoError(t, err)
-	require.Len(t, entries, 1, "幂等重报不再追加 Outbox 条目；行写入不进 Outbox")
-	prepared, err := store.PrepareOutboxPublication(ctx, entries[0].ID, time.Now().UTC())
+	require.Len(t, page.Markers, 1, "幂等重报不再追加待转发的事件；行写入不产生事件")
+	prepared := page.Markers[0].Data
+	publishable, err := store.MarkerPublishable(prepared)
 	require.NoError(t, err)
+	require.True(t, publishable)
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	subject, err := registry.RenderSubject(events.DatasetPeriodCompleted, "quant", "result")
@@ -68,7 +70,7 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 	require.Equal(t, pb.ErrorCode_CONFLICT, conflict.GetRetInfo().GetCode())
 }
 
-func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutOutbox(t *testing.T) {
+func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutEvent(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
 	service, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return factorResultSnapshot{} }})
@@ -97,9 +99,9 @@ func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutOutbox(t *testi
 			rsp, err := service.ReportDatasetPeriodCompleted(ctx, &pb.ReportDatasetPeriodCompletedReq{AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "quant", Marker: marker})
 			require.NoError(t, err)
 			require.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-			entries, err := store.ListOutbox(ctx, 0, 10)
+			page, err := store.ReadMarkerChanges(ctx, 0, 100)
 			require.NoError(t, err)
-			require.Empty(t, entries)
+			require.Empty(t, page.Markers)
 		})
 	}
 }

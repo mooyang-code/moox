@@ -29,8 +29,7 @@ func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUps
 	return v.validateRow(ctx, row, v.snapshotReader(ctx))
 }
 
-// ValidateRows 校验一批行。数据集与列定义按 (space, dataset) 只查一次：快照查询是对全部元数据条目的线性扫描，
-// 逐行查询时一个 1000 行的请求要扫两千遍。检查顺序与逐行校验相同（数据集、行键、频率，再到列）。
+// ValidateRows 校验一批行。数据集与列定义按 (space, dataset) 只查一次。检查顺序与逐行校验相同（数据集、行键、频率，再到列）。
 func (v *MetadataValidator) ValidateRows(ctx context.Context, rows []*pb.RowFieldUpsert) error {
 	if v == nil {
 		return fmt.Errorf("metadata validator is not configured")
@@ -77,13 +76,6 @@ func (c *cachedRowValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUp
 func (v *MetadataValidator) snapshotReader(ctx context.Context) metadataReader {
 	if snapshot := metadata.RequestSnapshotFromContext(ctx); snapshot != nil {
 		return requestSnapshotReader{snapshot: snapshot}
-	}
-	if provider, ok := v.reader.(interface {
-		SnapshotReader() metadata.SnapshotReader
-	}); ok {
-		if snapshot := provider.SnapshotReader(); snapshot != nil {
-			return snapshot
-		}
 	}
 	return v.reader
 }

@@ -60,7 +60,7 @@ func TestCatchupAdvancesHoldState(t *testing.T) {
 	for n := 2; n <= 4; n++ {
 		h.now = barStart(n).Add(90 * time.Minute)
 		expectAck(t, h.deliver(n))
-		if got := h.resultAt(n); got.Status != store.StatusSkipped || got.SkipReason != store.SkipCatchup || string(got.RuleStatesJSON) == "{}" {
+		if got := h.resultAt(n); got.Status != store.StatusSkipped || got.SkipReason != store.SkipCatchup || h.stateAt(n) == "{}" {
 			t.Fatalf("追赶期应记为带规则状态的 skipped(catchup)：%+v", got)
 		}
 	}
@@ -68,7 +68,7 @@ func TestCatchupAdvancesHoldState(t *testing.T) {
 	h.now = barStart(5).Add(90 * time.Minute)
 	expectAck(t, h.deliver(5))
 	live, want := h.resultAt(5), control.resultAt(5)
-	if live.Status != store.StatusOK || string(live.TargetsJSON) != string(want.TargetsJSON) || string(live.RuleStatesJSON) != string(want.RuleStatesJSON) {
-		t.Fatalf("追赶后的结果应与连续运行一致：\n got  %s %s\n want %s %s", live.TargetsJSON, live.RuleStatesJSON, want.TargetsJSON, want.RuleStatesJSON)
+	if live.Status != store.StatusOK || string(live.TargetsJSON) != string(want.TargetsJSON) || h.stateAt(5) != control.stateAt(5) {
+		t.Fatalf("追赶后的结果应与连续运行一致：\n got  %s %s\n want %s %s", live.TargetsJSON, h.stateAt(5), want.TargetsJSON, control.stateAt(5))
 	}
 }

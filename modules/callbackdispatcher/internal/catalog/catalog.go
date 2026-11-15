@@ -146,6 +146,7 @@ var entries = []Entry{
 			{Key: "job_id", Title: "补采或合成作业的 ID"},
 			{Key: "confirmed_at", Title: "读回确认写入的时刻（UTC）"},
 			{Key: "series_tags", Title: "补写的序列（series_tag）；不出现表示数据集的全部序列"},
+			{Key: "absent", Title: "范围内补采确认行情源没有的 K 线（标的、series_tag、起止时刻）；没有时不出现"},
 		},
 	},
 	{

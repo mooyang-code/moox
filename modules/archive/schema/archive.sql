@@ -49,7 +49,7 @@ BEGIN
     UPDATE t_archive_tasks SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 归档运行：一次复核（scheduled）、手动、到点拉取（tick）、补拉区间（range）或导入本地 CSV（import）的执行；running 期间由租约标识持有的 worker
+-- 归档运行：一次复核（scheduled）、手动、到点拉取（tick）、补拉区间（range）或导入本地 CSV（import）的执行；running 期间靠运行租约（c_lease_token、c_lease_until）发现 worker 失联
 -- c_import_file 是导入运行在 worker 上的文件路径，c_overwrite 为 1 时同键已存在的行以导入文件为准
 CREATE TABLE IF NOT EXISTS t_archive_runs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +63,6 @@ CREATE TABLE IF NOT EXISTS t_archive_runs (
     c_scheduled_at DATETIME NOT NULL,
     c_started_at DATETIME,
     c_finished_at DATETIME,
-    c_worker_id TEXT NOT NULL DEFAULT '',
     c_lease_token TEXT NOT NULL DEFAULT '',
     c_lease_until DATETIME,
     c_subjects_total INTEGER NOT NULL DEFAULT 0,
@@ -106,7 +105,7 @@ BEGIN
 END;
 
 -- 归档分区：每个任务每个本地日（1d 及以上为月，归月规则见 8.1）一行；open 只在 worker 暂存区，exported 已有文件且可能重写，final 已定稿
--- c_worker_id 是最近一次登记该分区的 worker（只用于展示与排障）；c_remote_* 是对象存储副本，c_remote_key 相对对象存储的 prefix，
+-- 这份登记是 worker 本地暂存库丢失后的重建来源；c_remote_* 是对象存储副本，c_remote_key 相对对象存储的 prefix，
 -- c_remote_sha256 = c_file_sha256 且 c_remote_verified_at 非空时远端是当前版本（“已复制”）
 CREATE TABLE IF NOT EXISTS t_archive_partitions (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -116,7 +115,6 @@ CREATE TABLE IF NOT EXISTS t_archive_partitions (
     c_range_start DATETIME NOT NULL,
     c_range_end DATETIME NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'open',
-    c_worker_id TEXT NOT NULL,
     c_row_count INTEGER NOT NULL DEFAULT 0,
     c_subject_count INTEGER NOT NULL DEFAULT 0,
     c_min_data_time DATETIME,
@@ -157,13 +155,12 @@ BEGIN
     UPDATE t_archive_partitions SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 归档 worker：同一时刻只有一个 worker 持有活动租约（c_lease_until 未过期）；心跳刷新磁盘、暂存库、正在执行的运行与对象存储摘要
+-- 归档 worker：部署里只有一个 worker，表里只留最近心跳的那一行；心跳刷新磁盘、暂存库、正在执行的运行与对象存储摘要
 -- 磁盘取自 statfs：c_disk_total_bytes 总量、c_disk_used_bytes 已用、c_disk_free_bytes 可用（不含 root 保留空间）；
 -- c_min_free_bytes 是 worker 配置的下限，可用低于它时 worker 停止领取新运行
 CREATE TABLE IF NOT EXISTS t_archive_workers (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_worker_id TEXT NOT NULL,
-    c_instance_id TEXT NOT NULL DEFAULT '',
     c_version TEXT NOT NULL DEFAULT '',
     c_root_dir TEXT NOT NULL DEFAULT '',
     c_disk_total_bytes INTEGER NOT NULL DEFAULT 0,
@@ -174,7 +171,6 @@ CREATE TABLE IF NOT EXISTS t_archive_workers (
     c_maintaining INTEGER NOT NULL DEFAULT 0,
     c_pacing_json TEXT NOT NULL DEFAULT '{}',
     c_running_json TEXT NOT NULL DEFAULT '[]',
-    c_lease_until DATETIME,
     c_last_heartbeat_at DATETIME,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -7,12 +7,8 @@
 <script setup lang="ts">
 import { useThemeMethods } from "@/hooks/useThemeMethods";
 
-// 初始化主题
-const onTheme = () => {
-  let { initTheme } = useThemeMethods();
-  initTheme();
-};
-onTheme();
+// 按保存的偏好应用明暗主题
+useThemeMethods().setDarkMode();
 </script>
 
 <style lang="scss" scoped></style>

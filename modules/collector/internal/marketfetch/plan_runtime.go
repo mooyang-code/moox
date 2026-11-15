@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -50,12 +49,8 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 		return respond(err.Error())
 	}
 	applyPlanFetchEnvironment(plan.Fetch)
-	dnsRoutes, err := parseDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON"))
-	if err != nil {
-		return respond(err.Error())
-	}
 	httpclient.SetConnReuse(plan.Fetch.ConnReuse)
-	return h.RunPlan(ctx, plan, PlanRun{RequestID: requestID, FunctionName: functionName, Scheduled: scheduled, Entry: entry, DNSRoutes: dnsRoutes})
+	return h.RunPlan(ctx, plan, PlanRun{RequestID: requestID, FunctionName: functionName, Scheduled: scheduled, Entry: entry})
 }
 
 // PlanRun 是一次按计划执行的触发信息。
@@ -64,7 +59,6 @@ type PlanRun struct {
 	FunctionName string
 	Scheduled    time.Time
 	Entry        time.Time
-	DNSRoutes    map[string]sources.DNSResolution
 }
 
 // RunPlan 按计划与触发时间对到期的频率各执行一次（SCF 定时器与本地执行端共用），不读写进程环境。
@@ -80,7 +74,7 @@ func (h *Handler) RunPlan(ctx context.Context, plan *Plan, run PlanRun) (*model.
 	if entry.IsZero() {
 		entry = time.Now()
 	}
-	planned, err := plan.BuildRequests(spaceID, functionName, requestID, scheduled, run.DNSRoutes)
+	planned, err := plan.BuildRequests(spaceID, functionName, requestID, scheduled)
 	if err != nil {
 		return respond(false, err.Error(), nil)
 	}

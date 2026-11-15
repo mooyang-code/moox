@@ -327,8 +327,7 @@ import {
   resumeLogicalAccount,
   syncTradingAccount
 } from "@/api/trade";
-import type { LogicalAccount, LogicalAccountTarget, Order, TradingAccount } from "@/api/trade";
-import type { LogicalAccountWithSettings } from "@/api/trade/settings";
+import type { LogicalAccount, LogicalAccountTarget, Order, TargetLane, TradingAccount } from "@/api/trade";
 import { accountMapOf } from "../account-list";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
@@ -384,6 +383,8 @@ const loadError = ref("");
 const notFound = ref(false);
 const allAccounts = ref<TradingAccount[]>([]);
 const target = ref<LogicalAccountTarget | null>(null);
+// 后端按标的给的到位结论，和 target 同一次请求读回
+const targetLanes = ref<TargetLane[]>([]);
 const snapshot = ref<PositionSnapshot>({ swapPositions: [], spotHoldings: [] });
 const strategy = ref<StrategyLink | null>(null);
 // 关联策略读取失败：页头既没有关联策略也没有实例编号时写“策略读取失败”
@@ -425,10 +426,8 @@ const coinRows = computed(() =>
     swapPositions: snapshot.value.swapPositions,
     spotHoldings: snapshot.value.spotHoldings,
     converged: target.value?.status === "CONVERGED",
-    // 组合详情里带着当前生效的下单设置；读不出来时为空，按后端默认阈值判断
-    rebalance: (logical.value as LogicalAccountWithSettings | null)?.order_settings,
-    // 按组合权益比例的阈值：后端用组合最近一个权益采样点，页面用启用成员的权益合计，两者只差同步时刻
-    equity: totals.value.equity,
+    // 各标的是否到位由后端给（执行器自己的判断），页面不再按阈值重算
+    lanes: targetLanes.value,
     hasTarget: Boolean(target.value)
   })
 );
@@ -497,13 +496,14 @@ async function reload(background = false) {
   const options = { silent: background };
   const [logicalRsp, targetRsp, accountRsp] = await Promise.all([
     getLogicalAccount(id, options),
-    getLogicalAccountTarget(id, options).catch(() => ({ target: undefined })),
+    getLogicalAccountTarget(id, options).catch(() => ({ target: undefined, lanes: undefined })),
     listTradingAccounts({ page: { page: 1, size: 200 } }, options)
   ]);
   if (!request.isLatest() || id !== logicalId.value) return;
   loadError.value = "";
   logical.value = logicalRsp.logical_account;
   target.value = targetRsp.target || null;
+  targetLanes.value = targetRsp.lanes || [];
   allAccounts.value = accountRsp.accounts || [];
   const next = await loadPositionSnapshot(logicalRsp.logical_account, accounts.value, options).catch(() => null);
   if (next && request.isLatest() && id === logicalId.value) snapshot.value = next;
@@ -557,6 +557,7 @@ watch(
     tracker.reset();
     logical.value = null;
     target.value = null;
+    targetLanes.value = [];
     strategy.value = null;
     dayChange.value = null;
     snapshot.value = { swapPositions: [], spotHoldings: [] };

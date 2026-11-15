@@ -30,7 +30,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Schedule.MinLookback != 15*time.Minute || cfg.Run.LeaseTTL != 10*time.Minute ||
-		cfg.Worker.TakeoverWait != 45*time.Second || cfg.StagingRetention != 72*time.Hour || cfg.Database.Path != "./data/archive-mgr/archive.db" {
+		cfg.StagingRetention != 72*time.Hour || cfg.Database.Path != "./data/archive-mgr/archive.db" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
 	if cn := cfg.Space("StockCN"); cn.TZ != "Asia/Shanghai" || cn.LocalClose != "15:00" {
@@ -48,7 +48,6 @@ func TestLoadRejectsUnknownKeysMultipleDocumentsAndBadValues(t *testing.T) {
 		"wrong caller":   strings.Replace(minimal, "archive-mgr", "someone", 1),
 		"short lease":    minimal + "run:\n  lease_ttl: 10s\n",
 		"low lookback":   minimal + "schedule:\n  min_lookback: 5m\n",
-		"bad takeover":   minimal + "worker:\n  takeover_wait: 1s\n",
 		"bad retention":  minimal + "retention:\n  scheduled_success: 720h\n  other: 24h\n",
 		"short staging":  minimal + "staging_retention: 1h\n",
 		"bad tz":         minimal + "spaces:\n  crypto:\n    tz: Mars/Base\n",

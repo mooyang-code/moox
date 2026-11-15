@@ -20,8 +20,9 @@ import (
 //   - 行条目：时间序列行记标的与受影响的时间范围，记录型行记被写入的记录键。
 //   - 完成标记条目：内嵌整条标记消息的字节（写入方上报与账本判定两个写入点都记）。
 //
-// 与 outbox 不同，日志不随发布而删除，保留一段时间（默认 7 天），由保留期清理循环删除：
-// 因子机的本地副本靠它得知哪些区间被写入或修正，View 靠它跟随写入与完成标记；读到断档时由读取方重建基线。
+// 日志不随读取而删除，保留一段时间（默认 7 天），由保留期清理循环删除：
+// 因子机的本地副本靠它得知哪些区间被写入或修正，View 靠它跟随写入与完成标记，
+// 完成事件的转发协程靠它把完成标记发到 EventBus；读到断档时由读取方重建基线。
 const (
 	changeLogPrefix    = "__changelog/"
 	metaNextChangeSeq  = "__meta/next_change_seq"
@@ -72,7 +73,7 @@ func setUint64Meta(batch *cpebble.Batch, key string, value uint64, opts *cpebble
 	return batch.Set([]byte(key), data[:], opts)
 }
 
-// nextChangeSeq 返回下一个变更序号（从 1 开始）。调用方必须持有 outboxMu，所有写入都在它的保护下提交。
+// nextChangeSeq 返回下一个变更序号（从 1 开始）。调用方必须持有 changeMu，所有写入都在它的保护下提交。
 func (s *Store) nextChangeSeq() (uint64, error) {
 	return nextChangeSeqIn(s.db)
 }
@@ -89,7 +90,7 @@ func nextChangeSeqIn(r cpebble.Reader) (uint64, error) {
 }
 
 // stageChangeLocked 给一条变更分配序号与创建时间，追加进 batch。序号从数据库（不是 batch）读，
-// 所以一个 batch 只能追加一条变更：传入的 batch 里不能已有变更日志条目，否则序号会撞车。调用方必须持有 outboxMu，
+// 所以一个 batch 只能追加一条变更：传入的 batch 里不能已有变更日志条目，否则序号会撞车。调用方必须持有 changeMu，
 // 并在提交成功后调 noteChangeCommitted 唤醒等待新变更的读取。
 func (s *Store) stageChangeLocked(batch *cpebble.Batch, change *pb.DatasetChange) error {
 	seq, err := s.nextChangeSeq()
@@ -109,7 +110,7 @@ func (s *Store) stageChangeLocked(batch *cpebble.Batch, change *pb.DatasetChange
 	return setUint64Meta(batch, metaNextChangeSeq, seq+1, s.writeOptions)
 }
 
-// stageRowsChangeLocked 追加一次行写入的变更条目；ranges 与 records 都为空时不记。调用方必须持有 outboxMu。
+// stageRowsChangeLocked 追加一次行写入的变更条目；ranges 与 records 都为空时不记。调用方必须持有 changeMu。
 func (s *Store) stageRowsChangeLocked(batch *cpebble.Batch, spaceID, datasetID string, ranges []*pb.DatasetChangeRange, records []*pb.RecordRowKey) error {
 	if len(ranges) == 0 && len(records) == 0 {
 		return nil
@@ -354,9 +355,11 @@ type changeHeader struct {
 	spaceID   string
 	datasetID string
 	createdAt string
+	// hasMarker 为真表示这是一条完成标记条目。
+	hasMarker bool
 }
 
-// peekChange 用 protowire 只读 DatasetChange 的序号、空间、数据集与创建时间，跳过其余字段。
+// peekChange 用 protowire 只读 DatasetChange 的序号、空间、数据集、创建时间与是否带完成标记，跳过其余字段。
 func peekChange(raw []byte) (changeHeader, error) {
 	var head changeHeader
 	for len(raw) > 0 {
@@ -372,7 +375,7 @@ func peekChange(raw []byte) (changeHeader, error) {
 				return head, protowire.ParseError(m)
 			}
 			head.sequence, n = v, m
-		case (num == 2 || num == 3 || num == 5) && typ == protowire.BytesType:
+		case (num == 2 || num == 3 || num == 5 || num == 7) && typ == protowire.BytesType:
 			v, m := protowire.ConsumeBytes(raw)
 			if m < 0 {
 				return head, protowire.ParseError(m)
@@ -382,8 +385,10 @@ func peekChange(raw []byte) (changeHeader, error) {
 				head.spaceID = string(v)
 			case 3:
 				head.datasetID = string(v)
-			default:
+			case 5:
 				head.createdAt = string(v)
+			default:
+				head.hasMarker = len(v) > 0
 			}
 			n = m
 		default:
@@ -416,9 +421,9 @@ func (s *Store) cleanupChangeLogBatch(ctx context.Context, cutoff time.Time) (in
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	// 与写入共用 outboxMu：删除和追加互不穿插，序号元数据保持一致。
-	s.outboxMu.Lock()
-	defer s.outboxMu.Unlock()
+	// 与写入共用 changeMu：删除和追加互不穿插，序号元数据保持一致。
+	s.changeMu.Lock()
+	defer s.changeMu.Unlock()
 	// 只从头删：已清理到的序号之前没有条目，从它之后开始迭代，不必每批跨过已删条目留下的删除标记。
 	trimmed, err := readUint64Meta(s.db, metaChangeTrimmed)
 	if err != nil {

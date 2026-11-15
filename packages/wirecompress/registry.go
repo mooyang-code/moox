@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"runtime"
-	"strings"
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
@@ -27,10 +26,7 @@ const (
 
 type registryFile struct {
 	Dictionaries []dictEntry `yaml:"dictionaries"`
-	Bindings     struct {
-		Default string            `yaml:"default"`
-		Spaces  map[string]string `yaml:"spaces"`
-	} `yaml:"bindings"`
+	Default      string      `yaml:"default"`
 }
 
 type dictEntry struct {
@@ -74,18 +70,8 @@ type registry struct {
 	versions []*version
 	byType   map[int]*version
 	byID     map[uint32]*version
-	fallback *version
-	spaces   map[string]*version
-}
-
-// forSpace 返回空间当前绑定的字典版本；空间为空或没有专用字典时用默认字典。
-func (r *registry) forSpace(space string) *version {
-	if space = normalizeSpace(space); space != "" {
-		if v, ok := r.spaces[space]; ok {
-			return v
-		}
-	}
-	return r.fallback
+	// current 是编码使用的字典版本；解码按帧头里的字典 ID 在全部版本里找。
+	current *version
 }
 
 func (r *registry) dicts() [][]byte {
@@ -95,8 +81,6 @@ func (r *registry) dicts() [][]byte {
 	}
 	return out
 }
-
-func normalizeSpace(space string) string { return strings.ToLower(strings.TrimSpace(space)) }
 
 func concurrency() int { return min(runtime.GOMAXPROCS(0), 4) }
 
@@ -111,7 +95,7 @@ func parseRegistry(files fs.FS, raw []byte) (*registry, error) {
 	if len(file.Dictionaries) == 0 {
 		return nil, fmt.Errorf("字典注册表没有任何字典")
 	}
-	r := &registry{byType: map[int]*version{}, byID: map[uint32]*version{}, spaces: map[string]*version{}}
+	r := &registry{byType: map[int]*version{}, byID: map[uint32]*version{}}
 	byName := map[string]*version{}
 	seenFile := map[string]bool{}
 	for _, entry := range file.Dictionaries {
@@ -138,19 +122,9 @@ func parseRegistry(files fs.FS, raw []byte) (*registry, error) {
 		r.byID[v.id] = v
 		r.versions = append(r.versions, v)
 	}
-	r.fallback = byName[file.Bindings.Default]
-	if r.fallback == nil {
-		return nil, fmt.Errorf("默认绑定 %q 不是已有的字典版本", file.Bindings.Default)
-	}
-	for space, name := range file.Bindings.Spaces {
-		if space != normalizeSpace(space) || space == "" {
-			return nil, fmt.Errorf("空间 %q 必须是小写且不带空白", space)
-		}
-		v := byName[name]
-		if v == nil {
-			return nil, fmt.Errorf("空间 %s 绑定的 %q 不是已有的字典版本", space, name)
-		}
-		r.spaces[space] = v
+	r.current = byName[file.Default]
+	if r.current == nil {
+		return nil, fmt.Errorf("default %q 不是已有的字典版本", file.Default)
 	}
 	return r, nil
 }

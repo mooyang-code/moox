@@ -19,7 +19,7 @@ type deleteViewOptions struct {
 
 // runDeleteView 离线删除一个 View 的元数据，用在没有别的入口（控制台没有删除视图的页面）时下线单个 View。
 // 直接改 Metadata SQLite，所以 storage-view 必须已停止；不同的是它只删指定的一个，
-// 不会波及因子结果视图等其他动态视图。物理索引文件由 storage-view 的清理定时器在确认无引用后回收。
+// 不会波及因子结果视图等其他动态视图。物理索引文件由 storage-view 下次启动时按孤立文件删除。
 func runDeleteView(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("delete-view", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

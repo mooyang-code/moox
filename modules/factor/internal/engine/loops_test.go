@@ -370,7 +370,7 @@ func TestRecalcLoopExtendsLocalHistoryBeforeRunning(t *testing.T) {
 }
 
 // 任务刚建立、自动 init/start 还没走完时任务会被生命周期门禁挡住：在限定时间内重试，放行后继续跑完，
-// 不必等任务租约过期（15 分钟）才被重新领取；一直挡住时按原样返回，不报失败。
+// 一直挡住时归还作业（回到待领取，不等作业租约过期），不报失败。
 func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
 	var attempts int
 	executor := func(runner *planRecorder) *recalcexec.Executor {
@@ -389,7 +389,7 @@ func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
 	require.Len(t, runner.plans, 3, "放行后补算跑完")
 	require.Equal(t, jobStatusSucceeded, client.reports[len(client.reports)-1].status)
 
-	// 一直被挡住：超过等待时间后按没有任务处理，不报失败。
+	// 一直被挡住：超过等待时间后归还作业、按没有任务处理，不报失败。
 	client2 := &jobClientFake{job: testJob("BTC"), found: true}
 	runner2 := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
 	blocked := recalcexec.NewExecutor(runner2, recalcexec.WithGate(func(string) bool { return false }))
@@ -398,7 +398,40 @@ func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, found)
 	require.Empty(t, runner2.plans)
-	require.Empty(t, client2.reports, "被门禁挡住不报失败")
+	require.Equal(t, []string{jobStatusAccepted}, reportedStatuses(client2), "被门禁挡住只归还作业，不报失败")
+}
+
+// 停止时正在上报的分块因上下文取消而失败：仍按引擎停止处理，归还作业。
+func TestRecalcLoopGivesTheJobBackWhenTheReportFailsOnShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	stopping := recalcexec.NewExecutor(&hookRunner{inner: runner, after: func() { client.err = context.Canceled; cancel() }},
+		recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
+	loop := &recalcLoop{client: client, executor: stopping, source: &sourceFake{}, poll: time.Millisecond}
+
+	_, err := loop.RunOnce(ctx)
+
+	require.NoError(t, err)
+	statuses := reportedStatuses(client)
+	require.Equal(t, jobStatusAccepted, statuses[len(statuses)-1])
+}
+
+// 引擎停止时在跑的作业被归还：重启后立刻能重新领取，不等作业租约过期。
+func TestRecalcLoopGivesTheJobBackOnShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	stopping := recalcexec.NewExecutor(&hookRunner{inner: runner, after: cancel}, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
+	loop := &recalcLoop{client: client, executor: stopping, source: &sourceFake{}, poll: time.Millisecond}
+
+	_, err := loop.RunOnce(ctx)
+
+	require.NoError(t, err)
+	statuses := reportedStatuses(client)
+	require.NotEmpty(t, statuses)
+	require.Equal(t, jobStatusAccepted, statuses[len(statuses)-1])
+	require.NotContains(t, statuses, jobStatusFailed)
 }
 
 // 补算在算第一个周期之前先把本地数据拉到作业区间的终点：Storage 里比本地更新的周期（例如强制补采写入的）才读得到。

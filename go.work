@@ -23,8 +23,6 @@ use (
 	./modules/hostagent
 	./modules/hostagent/proto/hostagentgen
 	./modules/hostgateway
-	./modules/importer
-	./modules/replay
 	./modules/monitor
 	./modules/monitor/proto/monitorgen
 	./modules/storage
@@ -60,7 +58,6 @@ use (
 	./packages/notification
 	./packages/report
 	./packages/requestauth
-	./packages/routeprobe
 	./packages/security
 	./packages/seriesformat
 	./packages/seriesimport
@@ -75,7 +72,6 @@ use (
 	./packages/tradeeventpb
 	./packages/trpcretry
 	./packages/wirecompress
-	./tools/moox-mcp
 	./tools/zstddict
 	./web-host
 )

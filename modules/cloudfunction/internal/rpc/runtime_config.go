@@ -23,6 +23,13 @@ const (
 	maxSCFEnvironmentBytes = 4096
 )
 
+// retiredEnvironmentKeys 是已经废弃的受管环境变量：更新函数环境时从现有环境里删掉。
+var retiredEnvironmentKeys = []string{
+	"MOOX_MARKET_FETCH_DNS_ROUTES_JSON",
+	"MOOX_MARKET_FETCH_DNS_HASH",
+	"MOOX_MARKET_FETCH_DNS_UPDATED_AT",
+}
+
 var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_BINDING_HASH":        {},
 	"MOOX_ACCESS_ADDRESS":                   {},
@@ -42,9 +49,6 @@ var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_SUBJECTS":            {},
 	"MOOX_MARKET_FETCH_SYMBOLS_JSON":        {},
 	"MOOX_MARKET_FETCH_ASSIGNMENT_HASH":     {},
-	"MOOX_MARKET_FETCH_DNS_ROUTES_JSON":     {},
-	"MOOX_MARKET_FETCH_DNS_HASH":            {},
-	"MOOX_MARKET_FETCH_DNS_UPDATED_AT":      {},
 	"MOOX_MARKET_FETCH_ROUTE_VERSION":       {},
 	"MOOX_MARKET_FETCH_GROUP_ID":            {},
 	"MOOX_MARKET_FETCH_GROUP_COUNT":         {},
@@ -219,6 +223,13 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 		environment = make(map[string]string)
 	}
 	needsEnvironmentUpdate := !managedEnvironmentMatches(environment, item.GetManagedEnvironment())
+	// 已废弃的受管键不会再出现在下发的环境里：更新以现有环境为底，不显式删掉的话会一直留在按函数名接管的旧函数上。
+	for _, key := range retiredEnvironmentKeys {
+		if _, ok := environment[key]; ok {
+			delete(environment, key)
+			needsEnvironmentUpdate = true
+		}
+	}
 	for key, value := range item.GetManagedEnvironment() {
 		environment[key] = value
 	}
@@ -277,7 +288,7 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 		return "", mutationError(fmt.Errorf("ensure timer trigger for %s: %w", ref.FunctionName, err))
 	}
 	providerMutationStarted = true
-	metadata := map[string]any{"access_address": environment["MOOX_ACCESS_ADDRESS"], "access_id": environment["MOOX_ACCESS_ID"], "access_caller": environment["MOOX_CALLER"], "access_key_id": environment["MOOX_CALLER_KEY_ID"], "fetch_timeout_seconds": environment["MOOX_FETCH_TIMEOUT_SECONDS"], "dns_hash": environment["MOOX_MARKET_FETCH_DNS_HASH"], "dns_updated_at": environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_actual_type": trigger.Type, "timer_actual_enabled": trigger.Enabled, "timer_actual_cron": trigger.Cron, "timer_actual_qualifier": trigger.Qualifier, "timer_actual_message": trigger.Message, "timer_available_status": trigger.AvailableStatus, "timer_status_error": nil, "managed_environment_budget_bytes": scfManagedEnvironmentBudget(verified.Environment), "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	metadata := map[string]any{"access_address": environment["MOOX_ACCESS_ADDRESS"], "access_id": environment["MOOX_ACCESS_ID"], "access_caller": environment["MOOX_CALLER"], "access_key_id": environment["MOOX_CALLER_KEY_ID"], "fetch_timeout_seconds": environment["MOOX_FETCH_TIMEOUT_SECONDS"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_actual_type": trigger.Type, "timer_actual_enabled": trigger.Enabled, "timer_actual_cron": trigger.Cron, "timer_actual_qualifier": trigger.Qualifier, "timer_actual_message": trigger.Message, "timer_available_status": trigger.AvailableStatus, "timer_status_error": nil, "managed_environment_budget_bytes": scfManagedEnvironmentBudget(verified.Environment), "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
 	assignmentMetadata, err := assignmentRuntimeMetadata(item.GetManagedEnvironment())
 	if err != nil {
 		return "", mutationError(err)

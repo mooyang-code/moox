@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -47,6 +48,8 @@ type Options struct {
 type Store struct {
 	base  metadata.Reader
 	cache *snapshotcache.Cache[entry]
+	// datasets 是写路径用的只读视图：每次从底层取回元数据时整体换一份新的，已发出去的那份不再改动。
+	datasets atomic.Pointer[datasetViews]
 }
 
 // entry 保存一个缓存条目的值与错误信息。
@@ -71,34 +74,78 @@ type entry struct {
 	Payload       []byte   `json:"payload"`
 }
 
-// MetadataSnapshot is an immutable read view captured from one cache
-// publication. It is used by request-level validators to avoid mixing two
-// metadata generations during one write.
-type MetadataSnapshot struct {
-	items []entry
+// datasetKey 是数据集在只读视图里的键。
+type datasetKey struct{ spaceID, datasetID string }
+
+// datasetView 是写路径校验一个数据集所需的全部元数据：数据集本身与它的列定义（按底层返回的顺序）。
+type datasetView struct {
+	dataset *pb.Dataset
+	columns []*pb.DatasetColumn
 }
 
-func (s *Store) Snapshot() *MetadataSnapshot {
-	if s == nil || s.cache == nil {
-		return nil
-	}
-	raw := s.cache.Snapshot()
-	if raw == nil {
-		return nil
-	}
-	items := make([]entry, len(raw.Items))
-	for i, item := range raw.Items {
-		items[i] = item
-		items[i].Payload = append([]byte(nil), item.Payload...)
-		items[i].DatasetIDs = append([]string(nil), item.DatasetIDs...)
-	}
-	return &MetadataSnapshot{items: items}
+// datasetViews 按数据集索引的只读视图。建好之后不再修改，读取方共享其中的消息，不得改动。
+type datasetViews struct {
+	items map[datasetKey]*datasetView
 }
 
-func (s *Store) SnapshotReader() metadata.SnapshotReader { return s.Snapshot() }
+// GetDataset 返回视图里共享的数据集消息，调用方只读。
+func (v *datasetViews) GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool) {
+	if v == nil {
+		return nil, false
+	}
+	item := v.items[datasetKey{spaceID, datasetID}]
+	if item == nil || item.dataset == nil {
+		return nil, false
+	}
+	return item.dataset, true
+}
 
+// ListDatasetColumns 返回视图里共享的列定义（切片与消息都只读）。
+func (v *datasetViews) ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	if v == nil {
+		return nil, nil, errors.New("元数据缓存尚未发布")
+	}
+	var columns []*pb.DatasetColumn
+	if item := v.items[datasetKey{spaceID, datasetID}]; item != nil {
+		columns = item.columns
+	}
+	return pageItems(columns, page)
+}
+
+// buildDatasetViews 用一次取回的数据集与列定义建只读视图。消息各克隆一份，视图不与底层返回的对象共享内存。
+func buildDatasetViews(datasets []*pb.Dataset, columns []*pb.DatasetColumn) *datasetViews {
+	items := make(map[datasetKey]*datasetView, len(datasets))
+	for _, dataset := range datasets {
+		if dataset == nil {
+			continue
+		}
+		key := datasetKey{dataset.GetSpaceId(), dataset.GetDatasetId()}
+		items[key] = &datasetView{dataset: proto.Clone(dataset).(*pb.Dataset)}
+	}
+	for _, column := range columns {
+		if column == nil {
+			continue
+		}
+		key := datasetKey{column.GetSpaceId(), column.GetDatasetId()}
+		item := items[key]
+		if item == nil {
+			item = &datasetView{}
+			items[key] = item
+		}
+		item.columns = append(item.columns, proto.Clone(column).(*pb.DatasetColumn))
+	}
+	return &datasetViews{items: items}
+}
+
+// RequestSnapshot 返回当前的数据集只读视图，供一次写请求全程使用：只取一个指针，不拷贝元数据。
 func (s *Store) RequestSnapshot() metadata.RequestSnapshot {
-	return &requestSnapshot{snapshot: s.Snapshot()}
+	if s == nil {
+		return nil
+	}
+	if views := s.datasets.Load(); views != nil {
+		return views
+	}
+	return nil
 }
 
 var _ metadata.Reader = (*Store)(nil)
@@ -169,37 +216,6 @@ func (s *Store) Refresh(ctx context.Context) error {
 		return errors.New("metadata cache is not open")
 	}
 	return s.cache.Refresh(ctx)
-}
-
-func (s *MetadataSnapshot) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
-	return snapshotGetProto(s, ctx, kindDataset, spaceID, datasetID, func() *pb.Dataset { return &pb.Dataset{} })
-}
-
-func (s *MetadataSnapshot) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	items, err := snapshotDecodeEntries(s.snapshotList(kindDatasetColumn, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) && (datasetID == "" || item.DatasetID == datasetID)
-	}), func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
-type requestSnapshot struct{ snapshot *MetadataSnapshot }
-
-func (s *requestSnapshot) GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool) {
-	if s == nil || s.snapshot == nil {
-		return nil, false
-	}
-	item, err := s.snapshot.GetDataset(trpc.BackgroundContext(), spaceID, datasetID)
-	return item, err == nil
-}
-
-func (s *requestSnapshot) ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	if s == nil || s.snapshot == nil {
-		return nil, nil, errors.New("metadata snapshot is unavailable")
-	}
-	return s.snapshot.ListDatasetColumns(trpc.BackgroundContext(), spaceID, datasetID, page)
 }
 
 func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {
@@ -486,47 +502,6 @@ func (s *Store) listByIndex(indexName string, key ...string) []entry {
 	})
 }
 
-func (s *MetadataSnapshot) snapshotList(kind string, predicate func(entry) bool) []entry {
-	if s == nil {
-		return nil
-	}
-	out := make([]entry, 0)
-	for _, item := range s.items {
-		if item.Kind == kind && (predicate == nil || predicate(item)) {
-			out = append(out, item)
-		}
-	}
-	return out
-}
-
-func snapshotGetProto[T proto.Message](s *MetadataSnapshot, ctx context.Context, kind string, spaceID string, id string, newMessage func() T) (T, error) {
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			var zero T
-			return zero, err
-		}
-	}
-	for _, item := range s.snapshotList(kind, func(item entry) bool {
-		return item.SpaceID == spaceID && item.ID == id
-	}) {
-		return decodeEntry(item, newMessage)
-	}
-	var zero T
-	return zero, notFound(kind, spaceID, id)
-}
-
-func snapshotDecodeEntries[T proto.Message](items []entry, newMessage func() T) ([]T, error) {
-	out := make([]T, 0, len(items))
-	for _, item := range items {
-		value, err := decodeEntry(item, newMessage)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, value)
-	}
-	return out, nil
-}
-
 func (s *Store) fetchEntries(ctx context.Context) ([]entry, error) {
 	if snapshotter, ok := s.base.(interface {
 		WithReadSnapshot(context.Context, func(context.Context) error) error
@@ -542,9 +517,14 @@ func (s *Store) fetchEntries(ctx context.Context) ([]entry, error) {
 	return s.fetchEntriesFrom(ctx)
 }
 
+// fetchEntriesFrom 取回全部元数据条目；数据集与列定义同时建成新的只读视图并整体替换旧的。
+// 视图在这里（取数回调里）替换，早于缓存自己发布这一代：缓存拒绝这一代（建索引失败）或外层读事务收尾出错时，
+// 写路径看到的元数据会比 Metadata RPC 新一代，下次刷新成功后两边对齐。
 func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	var out []entry
 	var err error
+	var datasets []*pb.Dataset
+	var columns []*pb.DatasetColumn
 
 	if out, err = s.fetchSpaces(ctx, out); err != nil {
 		return nil, err
@@ -555,7 +535,7 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	if out, err = s.fetchSubjects(ctx, out); err != nil {
 		return nil, err
 	}
-	if out, err = s.fetchDatasets(ctx, out); err != nil {
+	if out, datasets, err = s.fetchDatasets(ctx, out); err != nil {
 		return nil, err
 	}
 	if out, err = s.fetchFieldGroups(ctx, out); err != nil {
@@ -564,12 +544,13 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	if out, err = s.fetchFields(ctx, out); err != nil {
 		return nil, err
 	}
-	if out, err = s.fetchDatasetColumns(ctx, out); err != nil {
+	if out, columns, err = s.fetchDatasetColumns(ctx, out); err != nil {
 		return nil, err
 	}
 	if out, err = s.fetchViews(ctx, out); err != nil {
 		return nil, err
 	}
+	s.datasets.Store(buildDatasetViews(datasets, columns))
 	return out, nil
 }
 
@@ -621,20 +602,20 @@ func (s *Store) fetchSubjects(ctx context.Context, out []entry) ([]entry, error)
 	return out, nil
 }
 
-func (s *Store) fetchDatasets(ctx context.Context, out []entry) ([]entry, error) {
+func (s *Store) fetchDatasets(ctx context.Context, out []entry) ([]entry, []*pb.Dataset, error) {
 	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.Dataset, *pb.PageResult, error) {
 		return s.base.ListDatasets(ctx, metadata.DatasetQuery{Page: page})
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, item := range items {
 		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freq: item.GetFreq(), Revision: item.GetRevision(), Status: item.GetStatus()}, item)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return out, nil
+	return out, items, nil
 }
 
 func (s *Store) fetchFields(ctx context.Context, out []entry) ([]entry, error) {
@@ -669,20 +650,20 @@ func (s *Store) fetchFieldGroups(ctx context.Context, out []entry) ([]entry, err
 	return out, nil
 }
 
-func (s *Store) fetchDatasetColumns(ctx context.Context, out []entry) ([]entry, error) {
+func (s *Store) fetchDatasetColumns(ctx context.Context, out []entry) ([]entry, []*pb.DatasetColumn, error) {
 	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 		return s.base.ListDatasetColumns(ctx, "", "", page)
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, item := range items {
 		out, err = appendEntry(out, entry{Kind: kindDatasetColumn, SpaceID: item.GetSpaceId(), DatasetID: item.GetDatasetId(), ID: compositeID(item.GetDatasetId(), item.GetColumnName()), ValueType: int32(item.GetValueType()), Status: item.GetStatus()}, item)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return out, nil
+	return out, items, nil
 }
 
 func (s *Store) fetchViews(ctx context.Context, out []entry) ([]entry, error) {
@@ -773,7 +754,8 @@ func pageItems[T any](items []T, page *pb.Page) ([]T, *pb.PageResult, error) {
 	if end > len(items) {
 		end = len(items)
 	}
-	return items[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint32(len(items)), HasMore: end < len(items)}, nil
+	// 容量截到长度：返回的切片可能来自各请求共享的只读视图，调用方 append 时必须另行分配，不能写进共享的底层数组。
+	return items[start:end:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint32(len(items)), HasMore: end < len(items)}, nil
 }
 
 func notFound(kind string, spaceID string, id string) error {

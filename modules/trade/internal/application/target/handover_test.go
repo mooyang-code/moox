@@ -33,7 +33,7 @@ func (f *targetFixture) handOverSession(t *testing.T, quantity string) {
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(ctx, store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TargetID: "target-next", InstanceID: "runner-2", SessionID: "session-2", StrategyID: "strategy-1",
-		BarEndTime: f.now.UnixMilli(), EffectiveAt: f.now.UnixMilli(), ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
+		BarEndTime: f.now.UnixMilli(), ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: quantity}}, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 	})
 	require.NoError(t, err)

@@ -76,7 +76,7 @@
 
 ## 存储（Storage）
 
-- **做什么**：storage-primary 管元数据目录（SQLite）和字段级事实（Pebble，含 Outbox、周期账本、保留期清理）；storage-view 管可重建的 View（DuckDB/Bleve）。
+- **做什么**：storage-primary 管元数据目录（SQLite）和字段级事实（Pebble，含周期账本、保留期清理，完成事件跟随变更日志转发）；storage-view 管可重建的 View（DuckDB/Bleve）。
 - **在哪**：存储机，两个角色同机。数据集建好即可写入，不需要激活。
 - **常用**：
   - 元数据：`metadata source|subject|tag|dataset|field|field-group|view list|show|create|update|delete`；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。
@@ -149,7 +149,7 @@
 - **主机网关**：每台主机一个，校验签名和服务目录 ACL 后转发到本机服务；管理台与 CLI 的所有调用都经过它。
 - **Access**：外部签名调用入口（SCF、因子引擎、Skill 读数据），存储机与海外机各一个。
 - **EventBus**：模块间异步事件（NATS JetStream），默认在存储机；`eventbus overview|streams|consumers|consumer|events` 只读查看。凭据轮换必须按 [`eventbus-credentials.md`](eventbus-credentials.md) 同步到所有客户端。
-- **出口代理**：海外机上为采集提供受限的 HTTPS 出口与 DNS。
+- **出口代理**：海外机上为采集提供受限的 HTTPS 出口。
 - SCF 与私有网络：[`private-network.md`](private-network.md)。
 
 ## 主机与运维
@@ -174,7 +174,6 @@
 ./bin/moox-cli archive tasks list|preview               # 列出任务；预览接下来的拉取、复核时刻与分区导出时间
 ./bin/moox-cli archive overview | runs list|get|cancel | partitions list|get
 ./bin/moox-cli archive tasks backfill|run|update|delete ...
-./bin/moox-cli archive worker retire --worker <ID> --yes # 退役换机后遗留的旧 worker 登记
 ./bin/moox-cli archive import template --space-id crypto --dataset-id <数据集>        # 导入文件的表头
 ./bin/moox-cli archive import --space-id crypto --dataset-id <数据集> --csv <文件.csv|.csv.gz> [--overwrite] --wait --yes
 ./bin/moox-cli archive tasks clear-unrecoverable --space-id crypto --dataset-id <数据集> --start <RFC3339> --end <RFC3339> --yes

@@ -76,8 +76,8 @@ func TestManagementConfigurationsRemoveHTTPAndKeepNativeListeners(t *testing.T) 
 	for path, required := range map[string]map[int]bool{
 		"factor/config/trpc_go.yaml":               {11403: false},
 		"strategy/config/trpc_go.yaml":             {11430: false},
-		"storage/config/trpc_go.yaml":              {20100: false, 20101: false, 20102: false, 20103: false},
-		"storage/config/trpc_go.primary.yaml":      {20100: false, 20101: false, 20102: false},
+		"storage/config/trpc_go.yaml":              {20100: false, 20102: false, 20103: false},
+		"storage/config/trpc_go.primary.yaml":      {20100: false, 20102: false},
 		"storage/config/storage_view/trpc_go.yaml": {20103: false},
 	} {
 		t.Run(path, func(t *testing.T) {

@@ -186,22 +186,11 @@ func TestArchiveAndSyncDeploymentsCommandsAreRegistered(t *testing.T) {
 	for _, c := range archiveCmd.Commands() {
 		found = append(found, c.Name())
 	}
-	assert.ElementsMatch(t, []string{"overview", "tasks", "runs", "partitions", "worker", "import"}, found)
+	assert.ElementsMatch(t, []string{"overview", "tasks", "runs", "partitions", "import"}, found)
 	setup := newSetupCommand(defaultSetupDeps())
 	sync, _, err := setup.Find([]string{"sync-deployments"})
 	require.NoError(t, err)
 	assert.Equal(t, "sync-deployments", sync.Name())
 	require.NotNil(t, sync.Flags().Lookup("host"))
 	require.NotNil(t, sync.Flags().Lookup("file"))
-}
-
-func TestArchiveWorkerRetireRequiresWorkerAndConfirmation(t *testing.T) {
-	g := &archiveFakeGateway{rsp: &archivepb.RetireArchiveWorkerRsp{RetInfo: ok(), Retired: true}}
-	useArchiveGateway(t, g)
-	var out bytes.Buffer
-	require.ErrorContains(t, runArchiveWorkerRetire(context.Background(), &out, archiveFlags{Yes: true}), "--worker")
-	require.ErrorContains(t, runArchiveWorkerRetire(context.Background(), &out, archiveFlags{WorkerID: "factor-old"}), "--yes")
-	require.NoError(t, runArchiveWorkerRetire(context.Background(), &out, archiveFlags{WorkerID: " archive-worker@old ", Yes: true}))
-	assert.Equal(t, "RetireArchiveWorker", g.method)
-	assert.Contains(t, out.String(), `"retired": true`)
 }

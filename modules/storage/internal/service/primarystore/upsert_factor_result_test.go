@@ -11,8 +11,8 @@ import (
 
 // factorRowsCall 是存储层收到的一次写入。
 type factorRowsCall struct {
-	spaceID, datasetID, commitID string
-	rows                         []*pb.RowFieldUpsert
+	spaceID, datasetID string
+	rows               []*pb.RowFieldUpsert
 }
 
 type factorRowsSnapshot struct {
@@ -46,9 +46,9 @@ func factorRowsRecord(field string) *pb.RowFieldUpsert {
 func newFactorResultService(t *testing.T, snapshot func() metadata.RequestSnapshot, calls *[]factorRowsCall) *Service {
 	t.Helper()
 	store := newHookStore(t)
-	store.upsert = func(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error) {
-		*calls = append(*calls, factorRowsCall{spaceID: spaceID, datasetID: datasetID, commitID: commitID, rows: rows})
-		return store.Store.UpsertFields(ctx, spaceID, datasetID, commitID, rows)
+	store.upsert = func(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
+		*calls = append(*calls, factorRowsCall{spaceID: spaceID, datasetID: datasetID, rows: rows})
+		return store.Store.UpsertFields(ctx, spaceID, datasetID, rows)
 	}
 	svc, err := New(Options{Store: store, Snapshot: snapshot, Validator: NewMetadataValidator(nil)})
 	if err != nil {
@@ -57,19 +57,19 @@ func newFactorResultService(t *testing.T, snapshot func() metadata.RequestSnapsh
 	return svc
 }
 
-func factorResultRequest(appID, commitID string, rows ...*pb.RowFieldUpsert) *pb.PrimaryUpsertFieldsReq {
-	return &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: appID}, SpaceId: "space", DatasetId: "result", CommitId: commitID, Rows: rows}
+func factorResultRequest(appID string, rows ...*pb.RowFieldUpsert) *pb.PrimaryUpsertFieldsReq {
+	return &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: appID}, SpaceId: "space", DatasetId: "result", Rows: rows}
 }
 
-// 请求的 space_id、dataset_id、commit_id 原样交给存储层。
-func TestUpsertFieldsPassesCommitToTheStore(t *testing.T) {
+// 请求的 space_id、dataset_id 原样交给存储层。
+func TestUpsertFieldsPassesDatasetToTheStore(t *testing.T) {
 	var calls []factorRowsCall
 	svc := newFactorResultService(t, factorRowsMetadata, &calls)
-	rsp, err := svc.UpsertFields(context.Background(), factorResultRequest("factor", "commit-1", factorRowsRecord("value")))
+	rsp, err := svc.UpsertFields(context.Background(), factorResultRequest("factor", factorRowsRecord("value")))
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 1 {
 		t.Fatalf("response=%v err=%v", rsp, err)
 	}
-	if len(calls) != 1 || calls[0].spaceID != "space" || calls[0].datasetID != "result" || calls[0].commitID != "commit-1" || len(calls[0].rows) != 1 {
+	if len(calls) != 1 || calls[0].spaceID != "space" || calls[0].datasetID != "result" || len(calls[0].rows) != 1 {
 		t.Fatalf("calls=%+v", calls)
 	}
 }
@@ -99,7 +99,7 @@ func TestUpsertFieldsRejectsBeforeWriting(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls []factorRowsCall
 			svc := newFactorResultService(t, tc.snapshot, &calls)
-			rsp, err := svc.UpsertFields(context.Background(), factorResultRequest("factor", "commit-1", tc.row))
+			rsp, err := svc.UpsertFields(context.Background(), factorResultRequest("factor", tc.row))
 			if err != nil || rsp.GetRetInfo().GetCode() != tc.code {
 				t.Fatalf("response=%v err=%v", rsp, err)
 			}
@@ -136,7 +136,7 @@ func TestUpsertFieldsForwardsTheParamsJSONColumn(t *testing.T) {
 	}
 
 	var calls []factorRowsCall
-	rsp, err := newFactorResultService(t, snapshot(true), &calls).UpsertFields(context.Background(), factorResultRequest("factor", "commit-params", row()))
+	rsp, err := newFactorResultService(t, snapshot(true), &calls).UpsertFields(context.Background(), factorResultRequest("factor", row()))
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("registered __params column: response=%v err=%v", rsp, err)
 	}
@@ -151,7 +151,7 @@ func TestUpsertFieldsForwardsTheParamsJSONColumn(t *testing.T) {
 	}
 
 	calls = nil
-	rsp, err = newFactorResultService(t, snapshot(false), &calls).UpsertFields(context.Background(), factorResultRequest("factor", "commit-params", row()))
+	rsp, err = newFactorResultService(t, snapshot(false), &calls).UpsertFields(context.Background(), factorResultRequest("factor", row()))
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM || len(calls) != 0 {
 		t.Fatalf("unregistered __params column: response=%v err=%v calls=%d", rsp, err, len(calls))
 	}

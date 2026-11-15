@@ -259,8 +259,8 @@ func TestExportWritesSortedGzipCSVThatKeepsEmptyStringsAndNulls(t *testing.T) {
 	want := strings.Join([]string{
 		`data_time,subject_id,series_tag,open,close,note,n`,
 		`2026-10-15T01:00:00Z,BTC,"",65432.12,2.0,"q""t",-1`,
-		`2026-10-15T01:01:00Z,BTC,"x,y",1.0,,,`,
 		`2026-10-15T01:00:00Z,ETH,"",3.0,4.0,"",2`,
+		`2026-10-15T01:01:00Z,BTC,"x,y",1.0,,,`,
 	}, "\n") + "\n"
 	if got := readGzip(t, dest); got != want {
 		t.Fatalf("csv =\n%s\nwant\n%s", got, want)
@@ -839,5 +839,23 @@ func TestParseCellReturnsStageValuesAndSeriesTagsAreRead(t *testing.T) {
 	_ = os.WriteFile(path, []byte("data_time,subject_id,series_tag,open\n2026-10-15T00:00:00Z,BTC,\"\",1\n2026-10-15T00:01:00Z,BTC,\"\",1\n"), 0o644)
 	if tags, err := FileSeriesTags(path, 2); err != nil || len(tags) != 1 || tags[0] != "" {
 		t.Fatalf("file tags = %q %v", tags, err)
+	}
+}
+
+func TestOpenRejectsAStagingDatabaseWithoutTheChangeCursorColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "staging.db")
+	store, err := Open(path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模拟旧版本建的库：task_state 没有位点列。
+	if _, err := store.db.Exec(`ALTER TABLE task_state DROP COLUMN change_sequence`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path, Options{}); err == nil || !strings.Contains(err.Error(), "change_sequence") || !strings.Contains(err.Error(), "删除 staging.db") {
+		t.Fatalf("err = %v", err)
 	}
 }

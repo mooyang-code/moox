@@ -71,9 +71,9 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	}
 	assertSeriesTagRows(t, read.GetRows(), tags, closes)
 
-	// 行写入只进变更日志，不进 Outbox。
-	if entries, err := store.ListOutbox(ctx, 0, 10); err != nil || len(entries) != 0 {
-		t.Fatalf("outbox entries=%v err=%v", entries, err)
+	// 行写入只记行条目，不产生待转发的完成事件。
+	if page, err := store.ReadMarkerChanges(ctx, 0, 100); err != nil || len(page.Markers) != 0 {
+		t.Fatalf("完成标记条目=%v err=%v", page.Markers, err)
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {

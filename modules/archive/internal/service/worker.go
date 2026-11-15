@@ -19,62 +19,44 @@ type WorkerService struct{ svc *Service }
 
 func (w *WorkerService) ArchiveWorkerHeartbeat(ctx context.Context, req *archivepb.ArchiveWorkerHeartbeatReq) (*archivepb.ArchiveWorkerHeartbeatRsp, error) {
 	s := w.svc
-	if strings.TrimSpace(req.GetWorkerId()) == "" || strings.TrimSpace(req.GetInstanceId()) == "" {
-		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: invalid(errors.New("worker_id 与 instance_id 不能为空"))}, nil
+	if strings.TrimSpace(req.GetWorkerId()) == "" {
+		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: invalid(errors.New("worker_id 不能为空"))}, nil
 	}
-	now := s.clock()
-	ttl := s.cfg.Worker.TakeoverWait
-	result, err := s.store.Heartbeat(ctx, store.Worker{
-		WorkerID: req.GetWorkerId(), InstanceID: req.GetInstanceId(), Version: req.GetVersion(), RootDir: req.GetRootDir(),
+	err := s.store.Heartbeat(ctx, store.Worker{
+		WorkerID: req.GetWorkerId(), Version: req.GetVersion(), RootDir: req.GetRootDir(),
 		DiskTotalBytes: req.GetDiskTotalBytes(), DiskFreeBytes: req.GetDiskFreeBytes(), DiskUsedBytes: req.GetDiskUsedBytes(), MinFreeBytes: req.GetMinFreeBytes(),
 		StagingBytes: req.GetStagingBytes(), Maintaining: req.GetMaintaining(), PacingJSON: req.GetPacingJson(), RunningRunIDs: req.GetRunningRunIds(),
 		ObjectStoreJSON: objectStoreToJSON(req.GetObjectStore()),
-	}, now, ttl)
+	}, s.clock())
 	if err != nil {
 		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: inner(err)}, nil
 	}
-	if result.Conflict {
-		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: conflict(fmt.Errorf("worker_id %q 已有另一个存活的实例，请先停止它", req.GetWorkerId()))}, nil
-	}
-	rsp := &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: success(), Active: result.Active, LeaseTtlSeconds: uint32(ttl / time.Second), Avoidance: avoidanceToPB(s.avoidance())}
-	canceled, err := s.store.RunningRunIDsCanceled(ctx, req.GetWorkerId(), req.GetRunningRunIds())
+	rsp := &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: success(), Avoidance: avoidanceToPB(s.avoidance())}
+	canceled, err := s.store.RunningRunIDsCanceled(ctx, req.GetRunningRunIds())
 	if err != nil {
 		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: inner(err)}, nil
 	}
 	rsp.CancelRunIds = canceled
-	if result.Active {
-		tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)
-		if err != nil {
-			return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: inner(err)}, nil
-		}
-		for _, t := range tasks {
-			rsp.Tasks = append(rsp.Tasks, &archivepb.TaskRef{SpaceId: t.SpaceID, DatasetId: t.DatasetID, TaskId: strconv.FormatInt(t.ID, 10)})
-		}
+	tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)
+	if err != nil {
+		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: inner(err)}, nil
+	}
+	for _, t := range tasks {
+		rsp.Tasks = append(rsp.Tasks, &archivepb.TaskRef{SpaceId: t.SpaceID, DatasetId: t.DatasetID, TaskId: strconv.FormatInt(t.ID, 10)})
 	}
 	return rsp, nil
 }
 
 func (w *WorkerService) PullArchiveRun(ctx context.Context, req *archivepb.PullArchiveRunReq) (*archivepb.PullArchiveRunRsp, error) {
 	s := w.svc
-	if strings.TrimSpace(req.GetWorkerId()) == "" || strings.TrimSpace(req.GetInstanceId()) == "" {
-		return &archivepb.PullArchiveRunRsp{RetInfo: invalid(errors.New("worker_id 与 instance_id 不能为空"))}, nil
-	}
 	now := s.clock()
-	active, err := s.store.IsActiveWorker(ctx, req.GetWorkerId(), req.GetInstanceId(), now)
-	if err != nil {
-		return &archivepb.PullArchiveRunRsp{RetInfo: inner(err)}, nil
-	}
-	if !active {
-		// 备用 worker 或租约已过期的实例什么都领不到，等心跳重新取得租约。
-		return &archivepb.PullArchiveRunRsp{RetInfo: success()}, nil
-	}
 	// 先取对象存储是否启用：放在领取之后出错，已领取的运行就只能等租约过期。
-	status, err := s.workerStatus(ctx, now)
+	status, err := s.workerStatus(ctx)
 	if err != nil {
 		return &archivepb.PullArchiveRunRsp{RetInfo: inner(err)}, nil
 	}
 	claimed, err := s.store.ClaimRuns(ctx, store.ClaimRequest{
-		WorkerID: req.GetWorkerId(), InstanceID: req.GetInstanceId(), FreeSlots: int(req.GetFreeSlots()), MaxStorageRuns: int(req.GetMaxStorageRuns()),
+		FreeSlots: int(req.GetFreeSlots()), MaxStorageRuns: int(req.GetMaxStorageRuns()),
 		BusyStorageRuns: int(req.GetBusyStorageRuns()), Now: now, LeaseTTL: s.cfg.Run.LeaseTTL,
 	})
 	if err != nil {
@@ -120,10 +102,10 @@ func (s *Service) assignment(c store.Claimed, registered []store.Partition) *arc
 
 func (w *WorkerService) ReportArchiveRunProgress(ctx context.Context, req *archivepb.ReportArchiveRunProgressReq) (*archivepb.ReportArchiveRunProgressRsp, error) {
 	s := w.svc
-	if req.GetRunId() == "" || req.GetLeaseToken() == "" || req.GetWorkerId() == "" {
-		return &archivepb.ReportArchiveRunProgressRsp{RetInfo: invalid(errors.New("run_id、lease_token、worker_id 不能为空"))}, nil
+	if req.GetRunId() == "" || req.GetLeaseToken() == "" {
+		return &archivepb.ReportArchiveRunProgressRsp{RetInfo: invalid(errors.New("run_id、lease_token 不能为空"))}, nil
 	}
-	canceled, err := s.store.Progress(ctx, req.GetRunId(), req.GetWorkerId(), req.GetLeaseToken(), store.RunStats{
+	canceled, err := s.store.Progress(ctx, req.GetRunId(), req.GetLeaseToken(), store.RunStats{
 		SubjectsTotal: req.GetSubjectsTotal(), SubjectsDone: req.GetSubjectsDone(), RequestCount: req.GetRequestCount(),
 		BytesRead: req.GetBytesRead(), RowsRead: req.GetRowsRead(),
 	}, s.clock(), s.cfg.Run.LeaseTTL)
@@ -135,8 +117,8 @@ func (w *WorkerService) ReportArchiveRunProgress(ctx context.Context, req *archi
 
 func (w *WorkerService) CompleteArchiveRun(ctx context.Context, req *archivepb.CompleteArchiveRunReq) (*archivepb.CompleteArchiveRunRsp, error) {
 	s := w.svc
-	if req.GetRunId() == "" || req.GetLeaseToken() == "" || req.GetWorkerId() == "" {
-		return &archivepb.CompleteArchiveRunRsp{RetInfo: invalid(errors.New("run_id、lease_token、worker_id 不能为空"))}, nil
+	if req.GetRunId() == "" || req.GetLeaseToken() == "" {
+		return &archivepb.CompleteArchiveRunRsp{RetInfo: invalid(errors.New("run_id、lease_token 不能为空"))}, nil
 	}
 	switch req.GetStatus() {
 	case store.RunSucceeded, store.RunFailed, store.RunCanceled:
@@ -156,7 +138,7 @@ func (w *WorkerService) CompleteArchiveRun(ctx context.Context, req *archivepb.C
 		unrecoverable = append(unrecoverable, store.Unrecoverable{SubjectID: item.GetSubjectId(), SeriesTag: item.GetSeriesTag(), StartTime: item.GetStartTime(), EndTime: item.GetEndTime()})
 	}
 	err = s.store.CompleteRun(ctx, store.CompleteRequest{
-		RunID: req.GetRunId(), WorkerID: req.GetWorkerId(), LeaseToken: req.GetLeaseToken(), Status: req.GetStatus(), Message: req.GetMessage(),
+		RunID: req.GetRunId(), LeaseToken: req.GetLeaseToken(), Status: req.GetStatus(), Message: req.GetMessage(),
 		Stats: store.RunStats{
 			SubjectsTotal: req.GetSubjectsTotal(), SubjectsDone: req.GetSubjectsDone(), RequestCount: req.GetRequestCount(), BytesRead: req.GetBytesRead(),
 			RowsRead: req.GetRowsRead(), RowsAdded: req.GetRowsAdded(), RowsChanged: req.GetRowsChanged(),
@@ -172,7 +154,7 @@ func (w *WorkerService) CompleteArchiveRun(ctx context.Context, req *archivepb.C
 }
 
 // registeredPartitionToPB 把一条分区登记转成下发给 worker 的报告（不带预览与列名，只用来补齐本地分区状态）。
-// 必须带上远端字段：新机器据此从对象存储取回本地没有的文件。
+// 必须带上远端字段：暂存库重建后据此从对象存储取回本地没有的文件。
 func registeredPartitionToPB(p store.Partition) *archivepb.PartitionReport {
 	return &archivepb.PartitionReport{
 		PartitionKey: p.PartitionKey, RangeStart: fmtRFC(p.RangeStart), RangeEnd: fmtRFC(p.RangeEnd), Status: p.Status,

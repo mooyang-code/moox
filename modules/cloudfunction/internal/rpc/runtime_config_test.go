@@ -108,5 +108,5 @@ func TestManagedEnvironmentMatchesOnlyCollectorOwnedValues(t *testing.T) {
 	current := map[string]string{"MOOX_MARKET_FETCH_SUBJECTS": "BTC-USDT", "SECRET": "keep"}
 	require.True(t, managedEnvironmentMatches(current, map[string]string{"MOOX_MARKET_FETCH_SUBJECTS": "BTC-USDT"}))
 	require.False(t, managedEnvironmentMatches(current, map[string]string{"MOOX_MARKET_FETCH_SUBJECTS": "ETH-USDT"}))
-	require.False(t, managedEnvironmentMatches(current, map[string]string{"MOOX_MARKET_FETCH_DNS_HASH": "missing"}))
+	require.False(t, managedEnvironmentMatches(current, map[string]string{"MOOX_MARKET_FETCH_ROUTE_VERSION": "missing"}))
 }

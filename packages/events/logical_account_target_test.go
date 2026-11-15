@@ -22,7 +22,6 @@ func TestLogicalAccountTargetWeightRequiresModernIdentity(t *testing.T) {
 		{name: "session", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.SessionId = "" }},
 		{name: "strategy", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.StrategyId = "" }},
 		{name: "bar end", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.BarEndTime = nil }},
-		{name: "effective at", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.EffectiveAt = nil }},
 		{name: "valid until", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.ValidUntil = nil }},
 		{name: "market missing", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "" }},
 		{name: "market unknown", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "FUTURES" }},
@@ -114,7 +113,6 @@ func validLogicalAccountTargetWeight() *tradeeventpb.LogicalAccountTargetWeightR
 		StrategyId:       "strategy-1",
 		LogicalAccountId: "logical-1",
 		BarEndTime:       bar,
-		EffectiveAt:      bar,
 		ValidUntil:       timestamppb.New(now.Add(time.Hour)),
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT",

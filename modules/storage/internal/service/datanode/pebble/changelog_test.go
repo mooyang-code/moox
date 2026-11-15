@@ -117,7 +117,7 @@ func TestChangeLogRecordsWritesInOrder(t *testing.T) {
 func TestChangeLogRecordsRecordKeys(t *testing.T) {
 	ctx := context.Background()
 	s := openChangeLogStore(t, 0)
-	_, err := s.UpsertFields(ctx, "s", "notes", "", []*pb.RowFieldUpsert{
+	err := s.UpsertFields(ctx, "s", "notes", []*pb.RowFieldUpsert{
 		recordRow("s", "notes", "b", "1"), recordRow("s", "notes", "a", "2"), recordRow("s", "notes", "a", "1"),
 	})
 	require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestChangeLogOrdersRowsMarkersAndRecords(t *testing.T) {
 	_, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, series[1], goldenPeriod, 1)}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", goldenPeriodStatus(t, store, goldenSpace, goldenDataset, goldenFreq, goldenPeriod.Unix()))
-	_, err = store.UpsertFields(ctx, goldenSpace, goldenDataset, "", []*pb.RowFieldUpsert{recordRow(goldenSpace, goldenDataset, "note", "1")})
+	err = store.UpsertFields(ctx, goldenSpace, goldenDataset, []*pb.RowFieldUpsert{recordRow(goldenSpace, goldenDataset, "note", "1")})
 	require.NoError(t, err)
 	marker := goldenProducerMarker("source-ready", goldenPeriod.Unix(), "complete")
 	marker.DatasetId = goldenDataset
@@ -175,7 +175,7 @@ func TestChangeLogOrdersRowsMarkersAndRecords(t *testing.T) {
 	require.Equal(t, []string{"ranges:" + series[0].SubjectID, "ranges:" + series[1].SubjectID, "marker:ledger", "records", "marker:producer"}, kinds)
 }
 
-// 两个标记写入点都进日志，条目内嵌的字节与 Outbox 里那条完全相同；截止判定的降级也进日志。
+// 两个标记写入点都进日志，转发协程读到的就是条目内嵌的那条消息；截止判定的降级也进日志。
 // 内容相同的重报不多记一条，同步点不进日志。
 func TestChangeLogRecordsBothMarkerWriters(t *testing.T) {
 	ctx := context.Background()
@@ -203,18 +203,18 @@ func TestChangeLogRecordsBothMarkerWriters(t *testing.T) {
 	changes := readAllChanges(t, store, goldenSpace, goldenDataset)
 	require.Len(t, changes, 3, "一次行写入 + 两条标记；重报不记")
 	require.NotEmpty(t, changes[0].GetRanges())
-	outbox := goldenMarkers(t, store, goldenSpace, goldenDataset)
-	require.Len(t, outbox, 2)
+	relayed := goldenMarkers(t, store, goldenSpace, goldenDataset)
+	require.Len(t, relayed, 2)
 	for i, want := range []string{"ledger", "producer"} {
 		message, payload := markerPayload(t, changes[i+1])
 		require.Equal(t, want, payload.GetSource())
 		require.Equal(t, goldenSpace, changes[i+1].GetSpaceId())
 		require.Equal(t, goldenDataset, changes[i+1].GetDatasetId())
-		wantRaw, err := proto.Marshal(outbox[i].message)
+		wantRaw, err := proto.Marshal(relayed[i].message)
 		require.NoError(t, err)
 		gotRaw, err := proto.Marshal(message)
 		require.NoError(t, err)
-		require.Equal(t, wantRaw, gotRaw, "日志里的标记与 Outbox 里的是同一条消息")
+		require.Equal(t, wantRaw, gotRaw, "转发读到的标记与日志里的是同一条消息")
 	}
 	_, payload := markerPayload(t, changes[1])
 	require.Equal(t, "degraded", payload.GetStatus())
@@ -249,8 +249,8 @@ func TestChangeLogPagingAndHasMore(t *testing.T) {
 // stageTestChange 直接追加一条变更条目，用来构造任意大小的完成标记条目。
 func stageTestChange(t *testing.T, s *Store, change *pb.DatasetChange) {
 	t.Helper()
-	s.outboxMu.Lock()
-	defer s.outboxMu.Unlock()
+	s.changeMu.Lock()
+	defer s.changeMu.Unlock()
 	batch := s.db.NewBatch()
 	defer batch.Close()
 	require.NoError(t, s.stageChangeLocked(batch, change))
@@ -412,19 +412,6 @@ func TestChangeLogCleanupKeepsRecentEntries(t *testing.T) {
 	require.Len(t, readAllChanges(t, s, "s", "d"), 1)
 }
 
-// 带 commit_id 的写入与其他时序写入一样记变更日志；同一 commit_id 的重复提交不再写入，也不多记一条。
-func TestCommitWritesAreChangeLoggedOnce(t *testing.T) {
-	ctx := context.Background()
-	s := openChangeLogStore(t, 0)
-	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	row := tsRow("BTCUSDT", "", base, 1)
-	for i := 0; i < 2; i++ {
-		_, err := s.UpsertFields(ctx, "s", "d", "commit-1", []*pb.RowFieldUpsert{row})
-		require.NoError(t, err)
-	}
-	require.Equal(t, uint64(1), mustHead(t, s).GetSequence())
-}
-
 // peekChange 读出的定位字段与完整解码一致，三种条目都能跳过其余字段。
 func TestPeekChangeMatchesFullDecode(t *testing.T) {
 	for _, change := range []*pb.DatasetChange{
@@ -436,7 +423,7 @@ func TestPeekChangeMatchesFullDecode(t *testing.T) {
 		require.NoError(t, err)
 		got, err := peekChange(raw)
 		require.NoError(t, err)
-		require.Equal(t, changeHeader{sequence: change.GetSequence(), spaceID: change.GetSpaceId(), datasetID: change.GetDatasetId(), createdAt: change.GetCreatedAt()}, got)
+		require.Equal(t, changeHeader{sequence: change.GetSequence(), spaceID: change.GetSpaceId(), datasetID: change.GetDatasetId(), createdAt: change.GetCreatedAt(), hasMarker: len(change.GetMarker()) > 0}, got)
 	}
 	_, err := peekChange([]byte{0x0a, 0x05, 'x'})
 	require.Error(t, err)
@@ -493,7 +480,7 @@ func TestReadDatasetChangesConcurrentWithCleanup(t *testing.T) {
 }
 
 // 行写入、能触发账本完成的周期提交、写入方标记三者并发：序号恰好 1..N；
-// 每条标记条目与它的 Outbox 条目字节相同；每期账本标记的序号大于该期最后一次行写入的序号。
+// 每期账本标记的序号大于该期最后一次行写入的序号。
 func TestChangeLogConcurrentWritersKeepSequenceAndOrder(t *testing.T) {
 	ctx := context.Background()
 	clock := newGoldenClock(goldenPeriod.Add(61 * time.Second))
@@ -524,7 +511,7 @@ func TestChangeLogConcurrentWritersKeepSequenceAndOrder(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 10; i++ {
 			row := goldenRow(goldenSpace, "plain", goldenFreq, series[0], goldenPeriod.Add(-time.Duration(i+1)*time.Minute), float64(i))
-			_, err := store.UpsertFields(ctx, goldenSpace, "plain", "", []*pb.RowFieldUpsert{row})
+			err := store.UpsertFields(ctx, goldenSpace, "plain", []*pb.RowFieldUpsert{row})
 			assert.NoError(t, err)
 		}
 	}()
@@ -543,14 +530,6 @@ func TestChangeLogConcurrentWritersKeepSequenceAndOrder(t *testing.T) {
 	wg.Wait()
 	require.Equal(t, "complete", goldenPeriodStatus(t, store, goldenSpace, "bars-0", goldenFreq, goldenPeriod.Unix()))
 
-	outbox := map[string][]byte{}
-	entries, err := store.ListOutbox(ctx, 0, 10000)
-	require.NoError(t, err)
-	for _, entry := range entries {
-		message := &eventpb.EventMessage{}
-		require.NoError(t, proto.Unmarshal(entry.Data, message))
-		outbox[message.GetEventId()] = entry.Data
-	}
 	var all []*pb.DatasetChange
 	for _, dataset := range datasets {
 		changes := readAllChanges(t, store, goldenSpace, dataset)
@@ -562,8 +541,7 @@ func TestChangeLogConcurrentWritersKeepSequenceAndOrder(t *testing.T) {
 				continue
 			}
 			markers++
-			message, payload := markerPayload(t, change)
-			require.Equal(t, outbox[message.GetEventId()], change.GetMarker(), "标记条目与 Outbox 条目字节相同")
+			_, payload := markerPayload(t, change)
 			if payload.GetSource() == markerSourceLedger {
 				require.Greater(t, change.GetSequence(), lastRow, "账本标记排在该期最后一次行写入之后")
 			}

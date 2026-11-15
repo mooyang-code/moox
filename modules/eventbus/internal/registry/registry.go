@@ -43,7 +43,7 @@ func (r *Registry) Reconcile(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 	for i := range r.cfg.Streams {
-		if err := reconcileStream(ctx, r.js, &r.cfg.Streams[i], r.cfg); err != nil {
+		if err := reconcileStream(ctx, r.js, &r.cfg.Streams[i]); err != nil {
 			return Result{}, err
 		}
 	}
@@ -126,13 +126,10 @@ func streamConfig(s *config.StreamConfig) *nats.StreamConfig {
 	if duplicates == 0 {
 		duplicates = 2 * time.Minute
 	}
-	return &nats.StreamConfig{Name: s.Name, Description: s.Description, Subjects: append([]string(nil), s.Subjects...), Retention: retention, Storage: storage, Replicas: s.Replicas, MaxAge: s.MaxAge, MaxBytes: s.MaxBytes, MaxMsgs: s.MaxMsgs, Discard: discard, Duplicates: duplicates}
+	return &nats.StreamConfig{Name: s.Name, Description: s.Description, Subjects: append([]string(nil), s.Subjects...), Retention: retention, Storage: storage, Replicas: 1, MaxAge: s.MaxAge, MaxBytes: s.MaxBytes, MaxMsgs: s.MaxMsgs, Discard: discard, Duplicates: duplicates}
 }
 
-func reconcileStream(ctx context.Context, js nats.JetStreamContext, spec *config.StreamConfig, cfg *config.Config) error {
-	if spec.Replicas > 1 && (!cfg.Broker.Cluster.Enabled || spec.Replicas > len(cfg.Broker.Cluster.Routes)+1) {
-		return fmt.Errorf("stream %q replicas=%d exceed reachable cluster size", spec.Name, spec.Replicas)
-	}
+func reconcileStream(ctx context.Context, js nats.JetStreamContext, spec *config.StreamConfig) error {
 	want := streamConfig(spec)
 	got, err := js.StreamInfo(spec.Name, nats.Context(ctx))
 	if errors.Is(err, nats.ErrStreamNotFound) {

@@ -45,11 +45,6 @@ server:
       network: "5 * * * * *"
       protocol: timer
       timeout: 10000
-    - name: trpc.moox.collector.dns.timer
-      port: 11414
-      network: "*/30 * * * * *"
-      protocol: timer
-      timeout: 10000
     - name: trpc.moox.collector.subject_tags.timer
       port: 11416
       network: "30 * * * * *"

@@ -217,7 +217,6 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 		Symbol:    strings.TrimSpace(req.ProviderSymbol),
 		SubjectID: strings.TrimSpace(req.SubjectID),
 		Interval:  providerInterval,
-		DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
 	}
 	exchangeKlines, err := a.klineCollector.fetchKlinesOnce(ctx, params, &exchange.KlineRequest{
 		Symbol:    params.Symbol,
@@ -280,7 +279,6 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 		SpaceID:   marketID,
 		DatasetID: "instruments",
 		InstType:  instType,
-		DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
 	})
 	symbols = a.symbolCollector.filterSymbols(fetched)
 	if len(symbols) == 0 && fetchErr == nil {
@@ -466,17 +464,6 @@ func normalizeBarStart(openTime time.Time, frequency marketdata.Frequency) time.
 	day := time.Date(openTime.Year(), openTime.Month(), openTime.Day(), 0, 0, 0, 0, time.UTC)
 	daysSinceMonday := (int(day.Weekday()) + 6) % 7
 	return day.AddDate(0, 0, -daysSinceMonday)
-}
-
-func marketDataDNSRoutes(routes map[string][]string) map[string]sources.DNSResolution {
-	if len(routes) == 0 {
-		return nil
-	}
-	result := make(map[string]sources.DNSResolution, len(routes))
-	for host, ips := range routes {
-		result[host] = sources.DNSResolution{IPs: append([]string(nil), ips...)}
-	}
-	return result
 }
 
 func decimalToFloat64(value interface{ Float64() (float64, error) }) (float64, error) {

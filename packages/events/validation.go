@@ -264,6 +264,20 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 	if payload.GetConfirmedAt() == nil || payload.GetConfirmedAt().CheckValid() != nil {
 		return fmt.Errorf("collector kline backfilled confirmed_at is invalid")
 	}
+	for _, absent := range payload.GetAbsent() {
+		if !validRequiredToken(absent.GetSubjectId()) {
+			return fmt.Errorf("collector kline backfilled absent subject_id %q is invalid", absent.GetSubjectId())
+		}
+		if tag := absent.GetSeriesTag(); tag != "" {
+			if err := validateSeriesTag(tag); err != nil {
+				return fmt.Errorf("collector kline backfilled absent series_tag %q: %w", tag, err)
+			}
+		}
+		from, to := absent.GetStart(), absent.GetEnd()
+		if from == nil || to == nil || from.CheckValid() != nil || to.CheckValid() != nil || !to.AsTime().After(from.AsTime()) {
+			return fmt.Errorf("collector kline backfilled absent range is invalid")
+		}
+	}
 	switch payload.GetOrigin() {
 	case "auto", "manual", "force", "resample":
 		return nil
@@ -330,21 +344,18 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 	if strings.TrimSpace(payload.GetInstanceId()) == "" || strings.TrimSpace(payload.GetSessionId()) == "" || strings.TrimSpace(payload.GetStrategyId()) == "" {
 		return fmt.Errorf("trade target weight session identity is incomplete")
 	}
-	if payload.GetBarEndTime() == nil || payload.GetEffectiveAt() == nil || payload.GetValidUntil() == nil {
+	if payload.GetBarEndTime() == nil || payload.GetValidUntil() == nil {
 		return fmt.Errorf("trade target weight timestamps are required")
 	}
 	for name, timestamp := range map[string]*timestamppb.Timestamp{
-		"bar_end_time": payload.GetBarEndTime(), "effective_at": payload.GetEffectiveAt(), "valid_until": payload.GetValidUntil(),
+		"bar_end_time": payload.GetBarEndTime(), "valid_until": payload.GetValidUntil(),
 	} {
 		if err := timestamp.CheckValid(); err != nil {
 			return fmt.Errorf("trade target weight %s: %w", name, err)
 		}
 	}
-	if !payload.GetEffectiveAt().AsTime().Equal(payload.GetBarEndTime().AsTime()) {
-		return fmt.Errorf("trade target weight effective_at must equal bar_end_time")
-	}
-	if !payload.GetValidUntil().AsTime().After(payload.GetEffectiveAt().AsTime()) {
-		return fmt.Errorf("trade target weight valid_until must be after effective_at")
+	if !payload.GetValidUntil().AsTime().After(payload.GetBarEndTime().AsTime()) {
+		return fmt.Errorf("trade target weight valid_until must be after bar_end_time")
 	}
 	type instrumentKey struct{ instrumentID, marketType string }
 	seenInstruments := make(map[instrumentKey]struct{}, len(payload.GetTargets()))

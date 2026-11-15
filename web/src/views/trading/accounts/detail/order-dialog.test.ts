@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
   getExecutionCapabilities: vi.fn(),
   listTradableInstruments: vi.fn(),
   submitOrder: vi.fn(),
-  placeManualOrder: vi.fn(),
   getOperatorAction: vi.fn(),
   getOrder: vi.fn()
 }));
@@ -108,7 +107,6 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ capabilities: { can_place_order: true, order_types: [1, 2], fill_policies: [1, 2, 3] } });
   mocks.submitOrder.mockReset().mockResolvedValue(accepted());
-  mocks.placeManualOrder.mockReset().mockResolvedValue(accepted());
   mocks.getOperatorAction.mockReset().mockResolvedValue({ action: accepted().action });
   mocks.getOrder.mockReset().mockResolvedValue({ order: accepted().order });
 });
@@ -129,7 +127,7 @@ describe("下单对话框", () => {
     expect(document.body.textContent).not.toContain("读取这个执行账户的下单能力失败");
   });
 
-  it("自主下单走普通提交并带绝对截止时间，不接管；请求带标的所在市场", async () => {
+  it("自主下单带绝对截止时间，页面不提示接管；请求带组合和标的所在市场", async () => {
     const vm = await openEntry();
     expect(document.body.textContent).not.toContain("提交前会暂停整个组合账户");
     expect(await vm.submitManual()).toBe(true);
@@ -143,7 +141,6 @@ describe("下单对话框", () => {
         deadline_at: String(Date.parse("2030-01-01T12:00:00Z"))
       })
     );
-    expect(mocks.placeManualOrder).not.toHaveBeenCalled();
     expect(tracker.submittedOrder.value?.state).toBe("PENDING");
     expect(submitted).toBe(1);
   });
@@ -153,8 +150,10 @@ describe("下单对话框", () => {
     const vm = await openEntry("paper", "BTC-USDT-SWAP");
     expect(document.body.textContent).toContain("接管并下单");
     await vm.submitManual();
-    expect(mocks.placeManualOrder).toHaveBeenCalledWith(expect.objectContaining({ market_type: 2, position_side: 1 }));
-    expect(mocks.submitOrder).not.toHaveBeenCalled();
+    // 和自主下单是同一个接口，要不要先暂停由后端按控制模式决定
+    expect(mocks.submitOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ logical_account_id: "logical", market_type: 2, position_side: 1 })
+    );
   });
 
   it("响应码非零时保留操作编号，查询暂时失败也继续轮询", async () => {
@@ -249,7 +248,7 @@ describe("下单对话框", () => {
     logicalRef.value = makeLogical({ control_mode: 1 });
     const vm = await openEntry();
     const deferredAction = { ...accepted().action, action_type: "MANUAL_ORDER", result_json: "{}" };
-    mocks.placeManualOrder.mockResolvedValue({ ret_info: { code: 0 }, action: deferredAction });
+    mocks.submitOrder.mockResolvedValue({ ret_info: { code: 0 }, action: deferredAction });
     mocks.getOperatorAction.mockResolvedValue({ action: deferredAction });
     await vm.submitManual();
     await vi.advanceTimersByTimeAsync(1600);

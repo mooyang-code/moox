@@ -48,7 +48,6 @@ type Run struct {
 	ScheduledAt   time.Time
 	StartedAt     time.Time
 	FinishedAt    time.Time
-	WorkerID      string
 	LeaseToken    string
 	LeaseUntil    time.Time
 	Stats         RunStats
@@ -61,7 +60,7 @@ type Run struct {
 }
 
 const runColumns = `c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at, c_started_at, c_finished_at,
-c_worker_id, c_lease_token, c_lease_until, c_subjects_total, c_subjects_done, c_request_count, c_bytes_read, c_rows_read, c_rows_added,
+c_lease_token, c_lease_until, c_subjects_total, c_subjects_done, c_request_count, c_bytes_read, c_rows_read, c_rows_added,
 c_rows_changed, c_partitions_exported, c_partitions_finalized, c_unrecoverable_json, c_message, c_ctime, c_partitions_uploaded,
 COALESCE(c_import_file, ''), c_overwrite`
 
@@ -70,7 +69,7 @@ func scanRun(row rowScanner) (Run, error) {
 	var rangeStart, rangeEnd, scheduled, started, finished, leaseUntil, created timeValue
 	var unrecoverable string
 	err := row.Scan(&r.RunID, &r.SpaceID, &r.DatasetID, &r.Kind, &rangeStart, &rangeEnd, &r.Status, &scheduled, &started, &finished,
-		&r.WorkerID, &r.LeaseToken, &leaseUntil, &r.Stats.SubjectsTotal, &r.Stats.SubjectsDone, &r.Stats.RequestCount, &r.Stats.BytesRead,
+		&r.LeaseToken, &leaseUntil, &r.Stats.SubjectsTotal, &r.Stats.SubjectsDone, &r.Stats.RequestCount, &r.Stats.BytesRead,
 		&r.Stats.RowsRead, &r.Stats.RowsAdded, &r.Stats.RowsChanged, &r.Stats.PartitionsExported, &r.Stats.PartitionsFinalized,
 		&unrecoverable, &r.Message, &created, &r.Stats.PartitionsUploaded, &r.ImportFile, &r.Overwrite)
 	if err != nil {
@@ -258,11 +257,8 @@ func (s *Store) CancelRun(ctx context.Context, runID, spaceID string, now time.T
 
 // ClaimRequest 是 worker 领取运行的参数。
 type ClaimRequest struct {
-	WorkerID string
-	// InstanceID 非空时，领取事务内再核对该实例仍持有未过期的活动租约，避免旧实例在被接管的瞬间继续领取。
-	InstanceID string
-	FreeSlots  int
-	// MaxStorageRuns 是读 Storage 的运行（导入除外）同时运行的上限，0 表示不限；BusyStorageRuns 是该 worker 已在运行的这类运行数。
+	FreeSlots int
+	// MaxStorageRuns 是读 Storage 的运行（导入除外）同时运行的上限，0 表示不限；BusyStorageRuns 是 worker 已在运行的这类运行数。
 	MaxStorageRuns  int
 	BusyStorageRuns int
 	Now             time.Time
@@ -276,25 +272,12 @@ type Claimed struct {
 }
 
 // ClaimRuns 在一个事务里按计划时刻从早到晚选出不超过空闲槽数和读 Storage 并发上限的排队运行，写入运行租约后返回。
-// 任务派给任何持有活动租约的 worker：分区登记带着远端副本，新 worker 按登记恢复，读回时本地缺文件就从对象存储取回。
 func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, error) {
 	if req.FreeSlots <= 0 {
 		return nil, nil
 	}
 	var claimed []Claimed
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		if req.InstanceID != "" {
-			worker, err := scanWorker(tx.QueryRowContext(ctx, queryRuns5, req.WorkerID))
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			if !worker.Active(req.Now) || worker.InstanceID != req.InstanceID {
-				return nil
-			}
-		}
 		rows, err := tx.QueryContext(ctx, queryRuns6)
 		if err != nil {
 			return err
@@ -349,11 +332,11 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 				continue
 			}
 			token := newToken()
-			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'running', c_started_at = ?, c_worker_id = ?, c_lease_token = ?, c_lease_until = ?
-WHERE c_run_id = ? AND c_status = 'queued'`, fmtTime(req.Now), req.WorkerID, token, fmtTime(req.Now.Add(req.LeaseTTL)), run.RunID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'running', c_started_at = ?, c_lease_token = ?, c_lease_until = ?
+WHERE c_run_id = ? AND c_status = 'queued'`, fmtTime(req.Now), token, fmtTime(req.Now.Add(req.LeaseTTL)), run.RunID); err != nil {
 				return err
 			}
-			run.Status, run.StartedAt, run.WorkerID, run.LeaseToken, run.LeaseUntil = RunRunning, req.Now, req.WorkerID, token, req.Now.Add(req.LeaseTTL)
+			run.Status, run.StartedAt, run.LeaseToken, run.LeaseUntil = RunRunning, req.Now, token, req.Now.Add(req.LeaseTTL)
 			if readsStorage {
 				busy++
 			}
@@ -365,8 +348,8 @@ WHERE c_run_id = ? AND c_status = 'queued'`, fmtTime(req.Now), req.WorkerID, tok
 	return claimed, err
 }
 
-// Progress 续租并更新进度。运行已被取消、已结束或租约不属于调用方时返回 canceled=true。
-func (s *Store) Progress(ctx context.Context, runID, workerID, leaseToken string, stats RunStats, now time.Time, ttl time.Duration) (canceled bool, err error) {
+// Progress 续租并更新进度。运行已被取消、已结束或租约令牌不符时返回 canceled=true。
+func (s *Store) Progress(ctx context.Context, runID, leaseToken string, stats RunStats, now time.Time, ttl time.Duration) (canceled bool, err error) {
 	err = s.tx(ctx, func(tx *sql.Tx) error {
 		run, err := scanRun(tx.QueryRowContext(ctx, queryRuns1, runID))
 		if errors.Is(err, sql.ErrNoRows) {
@@ -375,7 +358,7 @@ func (s *Store) Progress(ctx context.Context, runID, workerID, leaseToken string
 		if err != nil {
 			return err
 		}
-		if run.Status != RunRunning || run.LeaseToken != leaseToken || run.WorkerID != workerID {
+		if run.Status != RunRunning || run.LeaseToken != leaseToken {
 			canceled = true
 			return nil
 		}
@@ -398,7 +381,7 @@ WHERE c_status = 'running' AND c_lease_until IS NOT NULL AND c_lease_until < ?`,
 }
 
 // RunningRunIDsCanceled 返回给定运行 ID 中已被取消、已结束或不存在的（worker 应停止这些运行）。
-func (s *Store) RunningRunIDsCanceled(ctx context.Context, workerID string, runIDs []string) ([]string, error) {
+func (s *Store) RunningRunIDsCanceled(ctx context.Context, runIDs []string) ([]string, error) {
 	var out []string
 	for _, id := range runIDs {
 		run, err := s.GetRun(ctx, id)
@@ -409,7 +392,7 @@ func (s *Store) RunningRunIDsCanceled(ctx context.Context, workerID string, runI
 		if err != nil {
 			return nil, err
 		}
-		if run.Status != RunRunning || run.WorkerID != workerID {
+		if run.Status != RunRunning {
 			out = append(out, id)
 		}
 	}
@@ -465,7 +448,6 @@ FROM t_archive_tasks t WHERE (? = '' OR t.c_space_id = ?))`
 WHERE x.c_space_id = t.c_space_id AND x.c_dataset_id = t.c_dataset_id AND x.c_kind IN ('scheduled', 'manual')
 ORDER BY x.c_scheduled_at DESC, x.c_id DESC LIMIT 1)
 FROM t_archive_tasks t WHERE (? = '' OR t.c_space_id = ?))`
-	queryRuns5 = `SELECT ` + workerColumns + ` FROM t_archive_workers WHERE c_worker_id = ?`
 	queryRuns6 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_status = 'queued' ORDER BY c_scheduled_at, c_id`
 	queryRuns7 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`
 )

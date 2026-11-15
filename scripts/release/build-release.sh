@@ -40,7 +40,7 @@ mkdir -p "${STAGE}/${BUNDLE}"
 git -C "${ROOT}" archive "${COMMIT}" | tar -x -C "${STAGE}/${BUNDLE}"
 
 server_targets=(admin host-gateway eventbus console-proxy egress-proxy web-host cloudfunction collector collector-stream collector-scf
-  factor-mgr factor-engine archive-mgr archive-worker strategy strategy-cli trade trade-cli callback-dispatcher callback-dispatcher-cli monitor monitor-cli
+  factor-mgr factor-engine archive-mgr archive-worker strategy strategy-cli trade callback-dispatcher monitor
   hostagent access storage-cli storage)
 VERSION="${VERSION}" GIT_COMMIT="${COMMIT:0:8}" \
   bash "${ROOT}/scripts/build/build-linux-local.sh" --out "${STAGE}/binaries" "${server_targets[@]}"

@@ -50,18 +50,10 @@
             <a-descriptions-item label="执行器 ID">
               <span class="mono">{{ worker.worker_id || "—" }}</span>
             </a-descriptions-item>
-            <a-descriptions-item label="版本 / 实例">
-              <span class="mono">{{ worker.version || "—" }} / {{ worker.instance_id || "—" }}</span>
+            <a-descriptions-item label="版本">
+              <span class="mono">{{ worker.version || "—" }}</span>
             </a-descriptions-item>
           </a-descriptions>
-          <div v-if="staleWorkers.length" class="note">
-            另有 {{ staleWorkers.length }} 个过期的执行器登记，确认不再使用后可以退役：<code
-              >moox-cli archive worker retire --worker &lt;ID&gt; --yes</code
-            >
-            <div v-for="item in staleWorkers" :key="item.worker_id" class="muted mono">
-              {{ item.worker_id }} · 最后心跳 {{ formatInstant(item.last_heartbeat_at, "UTC") }}
-            </div>
-          </div>
         </section>
 
         <section class="block" aria-label="对象存储">
@@ -196,7 +188,6 @@ function retry() {
 }
 
 const worker = computed(() => overview.value?.worker);
-const staleWorkers = computed(() => overview.value?.stale_workers || []);
 const store = computed(() => worker.value?.object_store);
 const builtin = computed(() => isBuiltinObjectStore(store.value?.endpoint));
 const disk = computed(() => diskStatus(worker.value));

@@ -608,6 +608,7 @@ func runFetchPlanPause(ctx context.Context, out io.Writer, flags klineRangeFlags
 	}
 	return printJSON(out, map[string]any{
 		"status": "paused", "space_id": flags.SpaceID, "timers_disabled": rsp.GetTimersDisabled(),
-		"note": "已触发、仍在执行的采集调用不在其内：再等过 SCF 函数的执行超时，并确认 Storage 不再有该空间的写入",
+		"note":        "已触发、仍在执行的采集调用不在其内：再等过 SCF 函数的执行超时，并确认 Storage 不再有该空间的写入",
+		"factor_note": "该空间上若有启用的因子任务，请同时对这些任务执行 moox-cli lifecycle pause --task-id <因子任务 ID>：否则下一次系统暂停恢复会卡在因子追赶（卡住后暂停这些任务即可放开）",
 	})
 }

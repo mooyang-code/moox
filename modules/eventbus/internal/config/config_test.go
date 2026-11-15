@@ -40,16 +40,14 @@ func TestRejectMissingGovernedEventFamily(t *testing.T) {
 
 func TestRejectUnsafeAndInvalidConfiguration(t *testing.T) {
 	tests := map[string]func(*Config){
-		"root store":           func(c *Config) { c.Broker.StoreDir = "/" },
-		"duplicate stream":     func(c *Config) { c.Streams = append(c.Streams, c.Streams[0]) },
-		"bad TLS":              func(c *Config) { c.Broker.TLS.Enabled = true; c.Broker.TLS.CertFile = "cert" },
-		"bad auth":             func(c *Config) { c.Broker.Auth.Enabled = true },
-		"cluster default name": func(c *Config) { c.Broker.Cluster.Enabled = true },
+		"root store":       func(c *Config) { c.Broker.StoreDir = "/" },
+		"duplicate stream": func(c *Config) { c.Streams = append(c.Streams, c.Streams[0]) },
+		"bad TLS":          func(c *Config) { c.Broker.TLS.Enabled = true; c.Broker.TLS.CertFile = "cert" },
+		"bad auth":         func(c *Config) { c.Broker.Auth.Enabled = true },
 		"overlap": func(c *Config) {
 			c.Streams[0].Subjects = []string{"moox.event.observability.>"}
 		},
 		"negative duplicates": func(c *Config) { c.Streams[0].Duplicates = -time.Second },
-		"replicas":            func(c *Config) { c.Streams[0].Replicas = 2 },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

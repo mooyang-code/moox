@@ -8,7 +8,6 @@
 
 ```bash
 ./scripts/build/build.sh cloudfunction
-./scripts/build/build.sh cloudfunction-cli
 go test -count=1 ./modules/cloudfunction/...
 ```
 

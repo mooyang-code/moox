@@ -94,7 +94,7 @@ func TestRemoteHealthRuleAppliesOnlyWhenEnabled(t *testing.T) {
 	base := store.Task{SpaceID: "crypto", DatasetID: "ds", Freq: "1m", PartitionUnit: "day", Retention: "168h", Status: store.StatusEnabled,
 		IntervalSeconds: 3600, CreatedAt: now.Add(-240 * time.Hour), LastSuccessAt: now.Add(-10 * time.Minute)}
 	eval := func(enabled bool, age time.Duration, lastErr string) (string, string) {
-		return evaluateHealth(healthInput{Now: now, Task: base, WorkerActive: true, Lookback: 15 * time.Minute, SpaceTZ: "UTC", RemoteEnabled: enabled,
+		return evaluateHealth(healthInput{Now: now, Task: base, Lookback: 15 * time.Minute, SpaceTZ: "UTC", RemoteEnabled: enabled,
 			Remote: store.RemoteBacklog{Unreplicated: 2, OldestExportedAt: now.Add(-age), OldestKey: "2026-10-13", LastError: lastErr}})
 	}
 	if level, _ := eval(false, 100*time.Hour, ""); level != HealthOK {
@@ -118,7 +118,7 @@ func TestRemoteReplicaFlowsThroughHeartbeatTasksAndPartitions(t *testing.T) {
 	ctx := context.Background()
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
 	beat := func() {
-		rsp, err := h.worker.ArchiveWorkerHeartbeat(ctx, &archivepb.ArchiveWorkerHeartbeatReq{WorkerId: "w1", InstanceId: "i1", RootDir: "/data/archive",
+		rsp, err := h.worker.ArchiveWorkerHeartbeat(ctx, &archivepb.ArchiveWorkerHeartbeatReq{WorkerId: "w1", RootDir: "/data/archive",
 			ObjectStore: &archivepb.ObjectStoreInfo{Endpoint: "cos.ap-nanjing.myqcloud.com", Bucket: "moox-archive-1250000000", Prefix: "moox-archive/", StorageClass: "STANDARD_IA", UrlStyle: "virtual"}})
 		if err != nil {
 			t.Fatal(err)
@@ -130,7 +130,7 @@ func TestRemoteReplicaFlowsThroughHeartbeatTasksAndPartitions(t *testing.T) {
 	if os := overview.GetWorker().GetObjectStore(); os.GetEndpoint() != "cos.ap-nanjing.myqcloud.com" || os.GetStorageClass() != "STANDARD_IA" || os.GetUrlStyle() != "virtual" {
 		t.Fatalf("总览里的对象存储 = %v", os)
 	}
-	run := h.pull("w1", "i1", 1)[0]
+	run := h.pull(1)[0]
 	report := func(key, sha, exportedAt, remoteSHA, remoteErr string) *archivepb.PartitionReport {
 		r := &archivepb.PartitionReport{PartitionKey: key, Status: "exported", RangeStart: key + "T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z", RowCount: 10, SubjectCount: 1,
 			FilePath: "crypto/ds_1m/2026/" + key + ".csv.gz", FileBytes: 100, FileSha256: sha, ExportCount: 1, ExportedAt: exportedAt, RemoteError: remoteErr}
@@ -139,7 +139,7 @@ func TestRemoteReplicaFlowsThroughHeartbeatTasksAndPartitions(t *testing.T) {
 		}
 		return r
 	}
-	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded", PartitionsUploaded: 1,
+	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded", PartitionsUploaded: 1,
 		Partitions: []*archivepb.PartitionReport{
 			report("2026-10-16", "aaa111", "2026-10-17T00:30:00Z", "aaa111", ""),
 			report("2026-10-15", "bbb222", "2026-10-15T00:30:00Z", "", "上传 x: 访问被拒绝"),
@@ -174,7 +174,7 @@ func TestRemoteReplicaFlowsThroughHeartbeatTasksAndPartitions(t *testing.T) {
 		t.Fatalf("health = %s %s", task.GetHealth(), task.GetHealthReason())
 	}
 	// worker 不再报告对象存储（最近一次心跳的记录）：远端规则不生效，计数为 0，分区 remote_state 为 off。
-	rsp, _ := h.worker.ArchiveWorkerHeartbeat(ctx, &archivepb.ArchiveWorkerHeartbeatReq{WorkerId: "w1", InstanceId: "i1"})
+	rsp, _ := h.worker.ArchiveWorkerHeartbeat(ctx, &archivepb.ArchiveWorkerHeartbeatReq{WorkerId: "w1"})
 	requireOK(t, rsp.GetRetInfo())
 	tasks, _ = h.mgr.ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{})
 	if task := tasks.GetTasks()[0]; strings.Contains(task.GetHealthReason(), "远端副本") || task.GetRemotePendingCount() != 0 || task.GetRemoteVerifiedCount() != 0 {
@@ -189,8 +189,7 @@ func TestRemoteReplicaFlowsThroughHeartbeatTasksAndPartitions(t *testing.T) {
 // 重导出后计时从新的导出时间算：新版本刚导出，旧版本远端副本不算数，但还没到 24 小时。
 func TestRemoteHealthRestartsFromTheNewExport(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	in := healthInput{Now: now, Task: store.Task{Retention: "168h", Status: store.StatusEnabled, IntervalSeconds: 3600, LastSuccessAt: now}, WorkerActive: true,
-		RemoteEnabled: true, Remote: store.RemoteBacklog{Unreplicated: 1, OldestExportedAt: now.Add(-time.Hour), OldestKey: "2026-10-01"}}
+	in := healthInput{Now: now, Task: store.Task{Retention: "168h", Status: store.StatusEnabled, IntervalSeconds: 3600, LastSuccessAt: now}, RemoteEnabled: true, Remote: store.RemoteBacklog{Unreplicated: 1, OldestExportedAt: now.Add(-time.Hour), OldestKey: "2026-10-01"}}
 	if level, reason := evaluateHealth(in); level != HealthOK {
 		t.Fatalf("重导出 1 小时内 = %s %s", level, reason)
 	}

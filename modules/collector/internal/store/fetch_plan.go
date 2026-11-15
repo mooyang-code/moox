@@ -199,18 +199,21 @@ func (r *FetchPlanRepository) ListAll(ctx context.Context, spaceID string) ([]*F
 type fetchPlanPauseRow struct {
 	ID      int64  `gorm:"column:c_id;primaryKey;autoIncrement"`
 	SpaceID string `gorm:"column:c_space_id"`
-	Paused  bool   `gorm:"column:c_paused"`
 }
 
 func (fetchPlanPauseRow) TableName() string { return "t_collector_fetch_plan_pauses" }
 
-// PausedSpaces 返回当前处于暂停状态的空间。
+// PausedSpaces 返回当前处于暂停状态的空间：手工暂停或系统暂停任一个在，空间就是暂停的。
 func (r *FetchPlanRepository) PausedSpaces(ctx context.Context) (map[string]bool, error) {
+	return r.pausedWhere(ctx, "c_paused = ? OR c_system_paused = ?", true, true)
+}
+
+func (r *FetchPlanRepository) pausedWhere(ctx context.Context, query string, args ...any) (map[string]bool, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("fetch plan repository is not initialized")
 	}
 	var rows []fetchPlanPauseRow
-	if err := r.db.WithContext(ctx).Where("c_paused = ?", true).Find(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where(query, args...).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make(map[string]bool, len(rows))
@@ -220,8 +223,23 @@ func (r *FetchPlanRepository) PausedSpaces(ctx context.Context) (map[string]bool
 	return out, nil
 }
 
-// SetPaused 保存空间的暂停开关；相同取值重复保存没有副作用。
+// ManuallyPausedSpaces 只返回手工暂停的空间：系统恢复追赶时这些空间不补采，也不计入追赶进度。
+func (r *FetchPlanRepository) ManuallyPausedSpaces(ctx context.Context) (map[string]bool, error) {
+	return r.pausedWhere(ctx, "c_paused = ?", true)
+}
+
+// SetPaused 保存空间的手工暂停开关（collector fetch-plan pause|resume）；相同取值重复保存没有副作用。
 func (r *FetchPlanRepository) SetPaused(ctx context.Context, spaceID string, paused bool) error {
+	return r.setPauseColumn(ctx, "c_paused", spaceID, paused)
+}
+
+// SetSystemPaused 保存空间的系统暂停开关（模块生命周期的暂停、恢复、放行）。它和手工开关各占一列，
+// 系统放行不会放开手工暂停的空间，手工恢复也不会放开系统暂停。
+func (r *FetchPlanRepository) SetSystemPaused(ctx context.Context, spaceID string, paused bool) error {
+	return r.setPauseColumn(ctx, "c_system_paused", spaceID, paused)
+}
+
+func (r *FetchPlanRepository) setPauseColumn(ctx context.Context, column, spaceID string, paused bool) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("fetch plan repository is not initialized")
 	}
@@ -229,8 +247,8 @@ func (r *FetchPlanRepository) SetPaused(ctx context.Context, spaceID string, pau
 	if spaceID == "" {
 		return errors.New("space_id is required")
 	}
-	return r.db.WithContext(ctx).Exec(`
-		INSERT INTO t_collector_fetch_plan_pauses (c_space_id, c_paused) VALUES (?, ?)
-		ON CONFLICT(c_space_id) DO UPDATE SET c_paused = excluded.c_paused
-	`, spaceID, paused).Error
+	return r.db.WithContext(ctx).Exec(fmt.Sprintf(`
+		INSERT INTO t_collector_fetch_plan_pauses (c_space_id, %[1]s) VALUES (?, ?)
+		ON CONFLICT(c_space_id) DO UPDATE SET %[1]s = excluded.%[1]s
+	`, column), spaceID, paused).Error
 }

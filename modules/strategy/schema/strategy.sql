@@ -53,14 +53,13 @@ CREATE TABLE IF NOT EXISTS t_strategy_instance_tasks (
 
 -- 每次启用产生一个会话，固化当时的 DSL 版本与绑定解析。
 -- 策略池会话另有：c_members_json 是固化的成员（策略 ID、DSL 文本与哈希、各自的绑定解析），非池为空串；
--- c_warm_state 是预热完成时的引擎状态，c_warmed_through 是预热推进到的最后一期（bar_end，毫秒），NULL 表示预热还没完成
+-- c_warmed_through 是预热推进到的最后一期（bar_end，毫秒），NULL 表示预热还没完成；预热出的引擎状态写在 t_strategy_states
 CREATE TABLE IF NOT EXISTS t_strategy_sessions (
     c_session_id TEXT NOT NULL PRIMARY KEY,
     c_instance_id TEXT NOT NULL,
     c_dsl_hash TEXT NOT NULL,
     c_resolved_json TEXT NOT NULL,
     c_members_json TEXT NOT NULL DEFAULT '',
-    c_warm_state TEXT NOT NULL DEFAULT '',
     c_warmed_through INTEGER,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_closed_at DATETIME,
@@ -70,7 +69,21 @@ CREATE TABLE IF NOT EXISTS t_strategy_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_sessions_instance ON t_strategy_sessions (c_instance_id, c_ctime);
 
--- 每个处理过的周期一行：ok 带目标与规则状态，skipped 带原因；ok 行参与目标投递。
+-- 规则状态：每个实例一行，是引擎下一期求值的起点（各规则的状态与组合目标，策略池另有成员状态与池账本），与结果在同一个事务里更新。
+-- c_bar_end_time 是状态推进到的那一期（bar_end，毫秒）；c_session_id、c_dsl_hash 是它当前所属的会话与 DSL 版本。
+-- 新会话固化的 DSL 版本、绑定解析与成员和它所属会话的完全一致时改挂到新会话继续沿用，否则删除，从头开始
+CREATE TABLE IF NOT EXISTS t_strategy_states (
+    c_instance_id TEXT NOT NULL PRIMARY KEY,
+    c_session_id TEXT NOT NULL,
+    c_dsl_hash TEXT NOT NULL,
+    c_bar_end_time INTEGER NOT NULL,
+    c_state_json TEXT NOT NULL,
+    c_mtime DATETIME NOT NULL,
+    FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id),
+    FOREIGN KEY (c_session_id) REFERENCES t_strategy_sessions (c_session_id)
+);
+
+-- 每个处理过的周期一行：ok 带目标，skipped 带原因；ok 行参与目标投递。
 -- c_next_params_json 是这一期算出的下一期可变成员参数（没有可变成员时为空），与结果在同一个事务里写入；
 -- c_params_delivered_at 是它被因子侧接受的时间，c_params_error 是被因子侧明确拒绝的原因（不再重试）。
 CREATE TABLE IF NOT EXISTS t_strategy_results (
@@ -84,7 +97,6 @@ CREATE TABLE IF NOT EXISTS t_strategy_results (
     c_dsl_hash TEXT NOT NULL,
     c_input_json TEXT NOT NULL,
     c_targets_json TEXT NOT NULL,
-    c_rule_states_json TEXT NOT NULL,
     c_summary_json TEXT NOT NULL,
     c_event_data BLOB,
     c_publish_status TEXT NOT NULL DEFAULT 'none',

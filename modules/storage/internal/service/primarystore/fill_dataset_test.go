@@ -44,7 +44,7 @@ func openTestStore(t *testing.T) *pebble.Store {
 // hookStore 在真实 Pebble 库上按需替换个别方法，用于注入失败或记录调用。
 type hookStore struct {
 	*pebble.Store
-	upsert       func(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error)
+	upsert       func(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error
 	readRows     func(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error)
 	readSeries   func(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
 	countSeries  func(ctx context.Context, req *pb.CountTimeSeriesRowsReq) ([]*pb.SubjectRowCount, error)
@@ -53,11 +53,11 @@ type hookStore struct {
 	appendMarker func(ctx context.Context, raw []byte) (string, error)
 }
 
-func (s *hookStore) UpsertFields(ctx context.Context, spaceID, datasetID, commitID string, rows []*pb.RowFieldUpsert) (bool, error) {
+func (s *hookStore) UpsertFields(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
 	if s.upsert != nil {
-		return s.upsert(ctx, spaceID, datasetID, commitID, rows)
+		return s.upsert(ctx, spaceID, datasetID, rows)
 	}
-	return s.Store.UpsertFields(ctx, spaceID, datasetID, commitID, rows)
+	return s.Store.UpsertFields(ctx, spaceID, datasetID, rows)
 }
 
 func (s *hookStore) ReadRows(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error) {

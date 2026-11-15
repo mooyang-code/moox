@@ -76,13 +76,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import {
-  getExecutionCapabilities,
-  listTradableInstruments,
-  placeManualOrder,
-  submitOrder,
-  TradeResponseError
-} from "@/api/trade";
+import { getExecutionCapabilities, listTradableInstruments, submitOrder, TradeResponseError } from "@/api/trade";
 import type { ExecutionCapabilities, LogicalAccount, SubmitOrderReq, TradableInstrument, TradingAccount } from "@/api/trade";
 import { createClientId } from "@/utils/client-id";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -116,7 +110,7 @@ const capabilities = ref<ExecutionCapabilities | null>(null);
 const instruments = ref<TradableInstrument[]>([]);
 // 下单能力或可交易标的读取失败：订单类型、标的会是空的，要在对话框里说明原因并给重试，不能等提交时才提示。
 const memberLoadError = ref("");
-const pendingSubmission = ref<{ mode: 1 | 2; request: SubmitOrderReq } | null>(null);
+const pendingSubmission = ref<SubmitOrderReq | null>(null);
 const capabilityRequests = createLatestRequestGuard();
 const manualForm = reactive({
   action_id: "",
@@ -203,14 +197,14 @@ function loadMember() {
 function openManual(accountId: string, instrumentId = "", prefill: { side?: 1 | 2; quantity?: string } = {}) {
   if (![1, 2].includes(props.logical.control_mode)) return;
   if (pendingSubmission.value) {
-    const pending = pendingSubmission.value.request;
+    const pending = pendingSubmission.value;
     if (pending.trading_account_id !== accountId || pending.logical_account_id !== props.logical.logical_account_id) {
       Message.warning("另一个账户的请求仍待确认，请先查询原操作");
       return;
     }
     visible.value = true;
     props.tracker.start(pending.action_id, observed => {
-      if (pendingSubmission.value?.request.action_id === observed.action_id) {
+      if (pendingSubmission.value?.action_id === observed.action_id) {
         pendingSubmission.value = null;
         visible.value = false;
       }
@@ -280,22 +274,19 @@ async function submitManual() {
     const instrumentId = manualForm.instrument_id.trim().toUpperCase();
     const market = marketOfInstrument(instrumentId);
     pendingSubmission.value = {
-      mode: props.logical.control_mode as 1 | 2,
-      request: {
-        ...manualForm,
-        logical_account_id: props.logical.logical_account_id,
-        action_id: manualForm.action_id.trim(),
-        client_order_id: manualForm.client_order_id.trim(),
-        instrument_id: instrumentId,
-        market_type: market,
-        // 只有永续有持仓方向，现货不传
-        position_side: market === 2 ? 1 : undefined,
-        quantity: manualForm.quantity.trim(),
-        fill_policy: manualForm.order_type === 1 ? 0 : manualForm.fill_policy,
-        limit_price: manualForm.order_type === 2 ? manualForm.limit_price.trim() : undefined,
-        reason: manualForm.reason.trim(),
-        deadline_at: deadline === undefined ? undefined : String(deadline)
-      }
+      ...manualForm,
+      logical_account_id: props.logical.logical_account_id,
+      action_id: manualForm.action_id.trim(),
+      client_order_id: manualForm.client_order_id.trim(),
+      instrument_id: instrumentId,
+      market_type: market,
+      // 只有永续有持仓方向，现货不传
+      position_side: market === 2 ? 1 : undefined,
+      quantity: manualForm.quantity.trim(),
+      fill_policy: manualForm.order_type === 1 ? 0 : manualForm.fill_policy,
+      limit_price: manualForm.order_type === 2 ? manualForm.limit_price.trim() : undefined,
+      reason: manualForm.reason.trim(),
+      deadline_at: deadline === undefined ? undefined : String(deadline)
     };
   }
   const pending = pendingSubmission.value;
@@ -303,9 +294,9 @@ async function submitManual() {
   submitting.value = true;
   submissionError.value = "";
   try {
-    const { logical_account_id: logicalId, ...manualRequest } = pending.request;
-    const rsp = pending.mode === 2 ? await submitOrder(pending.request) : await placeManualOrder(manualRequest);
-    if (props.logical.logical_account_id !== logicalId) return true;
+    // 要不要先暂停组合由后端按控制模式决定，两种组合都走这一个接口
+    const rsp = await submitOrder(pending);
+    if (props.logical.logical_account_id !== pending.logical_account_id) return true;
     pendingSubmission.value = null;
     tracker.action.value = rsp.action;
     tracker.submittedOrder.value = rsp.order?.order_id ? rsp.order : null;
@@ -314,10 +305,10 @@ async function submitManual() {
     emit("submitted");
     return true;
   } catch (error) {
-    if (props.logical.logical_account_id !== pending.request.logical_account_id) return false;
+    if (props.logical.logical_account_id !== pending.logical_account_id) return false;
     submissionError.value = error instanceof Error ? error.message : "请求未确认";
     if (error instanceof TradeResponseError) {
-      if (error.response.action?.action_id === pending.request.action_id) {
+      if (error.response.action?.action_id === pending.action_id) {
         tracker.action.value = error.response.action;
         tracker.submittedOrder.value = error.response.order?.order_id ? error.response.order : null;
         pendingSubmission.value = null;
@@ -348,8 +339,8 @@ async function submitManual() {
         return false;
       }
     }
-    tracker.start(pending.request.action_id, observed => {
-      if (pendingSubmission.value?.request.action_id === observed.action_id) {
+    tracker.start(pending.action_id, observed => {
+      if (pendingSubmission.value?.action_id === observed.action_id) {
         pendingSubmission.value = null;
         visible.value = false;
       }

@@ -40,6 +40,7 @@ func TestAllSQLCreatesExactlyStrategyTables(t *testing.T) {
 		"t_strategy_result_items",
 		"t_strategy_results",
 		"t_strategy_sessions",
+		"t_strategy_states",
 		"t_strategy_templates",
 	}
 	if !reflect.DeepEqual(tables, want) {
@@ -57,8 +58,9 @@ func TestStrategySchemaColumns(t *testing.T) {
 		"t_strategy_instances":        {"c_instance_id", "c_strategy_id", "c_space_id", "c_logical_account_id", "c_enabled", "c_session_id", "c_resolved_json", "c_health", "c_ctime", "c_mtime"},
 		"t_strategy_instance_tasks":   {"c_instance_id", "c_source", "c_market", "c_factor_task_id"},
 		"t_strategy_ready_events":     {"c_instance_id", "c_session_id", "c_view_id", "c_bar_end_time", "c_event_id", "c_event_bytes", "c_ctime"},
-		"t_strategy_sessions":         {"c_session_id", "c_instance_id", "c_dsl_hash", "c_resolved_json", "c_members_json", "c_warm_state", "c_warmed_through", "c_ctime", "c_closed_at"},
-		"t_strategy_results":          {"c_result_id", "c_instance_id", "c_session_id", "c_bar_end_time", "c_valid_until", "c_status", "c_skip_reason", "c_dsl_hash", "c_input_json", "c_targets_json", "c_rule_states_json", "c_summary_json", "c_event_data", "c_publish_status", "c_next_params_json", "c_params_delivered_at", "c_params_error", "c_ctime"},
+		"t_strategy_sessions":         {"c_session_id", "c_instance_id", "c_dsl_hash", "c_resolved_json", "c_members_json", "c_warmed_through", "c_ctime", "c_closed_at"},
+		"t_strategy_states":           {"c_instance_id", "c_session_id", "c_dsl_hash", "c_bar_end_time", "c_state_json", "c_mtime"},
+		"t_strategy_results":          {"c_result_id", "c_instance_id", "c_session_id", "c_bar_end_time", "c_valid_until", "c_status", "c_skip_reason", "c_dsl_hash", "c_input_json", "c_targets_json", "c_summary_json", "c_event_data", "c_publish_status", "c_next_params_json", "c_params_delivered_at", "c_params_error", "c_ctime"},
 		"t_strategy_result_items":     {"c_result_id", "c_rule_id", "c_instrument_id", "c_market", "c_stage", "c_score", "c_rank", "c_weight", "c_reason", "c_scale", "c_ctime"},
 		"t_strategy_replays":          {"c_replay_id", "c_strategy_id", "c_instance_id", "c_session_id", "c_dsl_yaml", "c_dsl_hash", "c_calendar", "c_space_id", "c_tasks_json", "c_start_time", "c_end_time", "c_spot_fee_bps", "c_swap_fee_bps", "c_factors_json", "c_members_json", "c_funding_column", "c_status", "c_progress_time", "c_metrics_json", "c_error", "c_ctime", "c_mtime"},
 		"t_strategy_templates":        {"c_template_id", "c_name", "c_description", "c_template_yaml", "c_ctime", "c_mtime"},
@@ -96,7 +98,7 @@ func TestStrategySchemaIndexesAndConstraints(t *testing.T) {
 			t.Errorf("schema 缺少 %q", part)
 		}
 	}
-	for _, obsolete := range []string{"state_json", "data_revision", "input_bindings_json", "snapshot_json", "c_topic", "c_payload"} {
+	for _, obsolete := range []string{"c_rule_states_json", "c_warm_state", "data_revision", "input_bindings_json", "snapshot_json", "c_topic", "c_payload"} {
 		if strings.Contains(strings.ToLower(sql), obsolete) {
 			t.Errorf("schema 仍包含过时列 %q", obsolete)
 		}
@@ -113,7 +115,7 @@ func TestResultItemsCascadeOnResultDelete(t *testing.T) {
 		`INSERT INTO t_strategy_def_versions (c_dsl_hash, c_dsl_yaml) VALUES ('h', 'name: n')`,
 		`INSERT INTO t_strategy_instances (c_instance_id, c_strategy_id, c_space_id) VALUES ('i', 's', 'sp')`,
 		`INSERT INTO t_strategy_sessions (c_session_id, c_instance_id, c_dsl_hash, c_resolved_json) VALUES ('se', 'i', 'h', '{}')`,
-		`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json) VALUES ('r', 'i', 'se', 1, 2, 'ok', 'h', '{}', '[]', '{}', '{}')`,
+		`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_dsl_hash, c_input_json, c_targets_json, c_summary_json) VALUES ('r', 'i', 'se', 1, 2, 'ok', 'h', '{}', '[]', '{}')`,
 		`INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_stage, c_ctime) VALUES ('r', 'rule', 'BTC-USDT', 'weighted', '2026-10-01 00:00:00')`,
 		`DELETE FROM t_strategy_results WHERE c_result_id = 'r'`,
 	}

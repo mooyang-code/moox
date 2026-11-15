@@ -59,7 +59,6 @@ export default defineConfig(({ mode }) => {
             
             // UI组件库 - 按需分割
             'arco-base': ['@arco-design/web-vue'],
-            'arco-utils': ['@arco-design/color'],
             
             // 工具库 - 最基础的
             'utils-core': ['axios'],

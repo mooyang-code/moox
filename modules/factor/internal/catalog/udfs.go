@@ -413,17 +413,28 @@ func (s *Service) noRunningJobs(ctx context.Context, tasks []string) Prerequisit
 	p := Prerequisite{Name: "受影响任务没有已领取且未结束的补算作业"}
 	var running []string
 	for _, taskID := range tasks {
-		jobs, err := s.db.ListRecalcJobs(ctx, store.RecalcJobFilter{TaskID: taskID, Statuses: []string{store.RecalcStatusRunning}})
+		jobs, err := s.db.ListRecalcJobs(ctx, store.RecalcJobFilter{TaskID: taskID, Statuses: []string{store.RecalcStatusAccepted, store.RecalcStatusRunning}})
 		if err != nil {
 			p.Detail = "读取补算作业失败：" + err.Error()
 			return p
 		}
 		for _, job := range jobs {
+			// 领取过又被引擎归还的作业状态回到 accepted，但绑定已经固化：重新领取后仍按旧版本写完剩下的范围，同样要先取消。
+			if job.Status == store.RecalcStatusAccepted {
+				_, pinned, err := s.db.JobBindings(ctx, job.JobID)
+				if err != nil {
+					p.Detail = "读取补算作业的绑定失败：" + err.Error()
+					return p
+				}
+				if !pinned {
+					continue
+				}
+			}
 			running = append(running, job.JobID+"（任务 "+taskID+"）")
 		}
 	}
 	if len(running) > 0 {
-		p.Detail = "有已领取的补算作业，先用 CancelRecalcJob 取消（引擎暂停期间不会领取新作业）：" + strings.Join(running, "、")
+		p.Detail = "有已领取的补算作业（含领取后被引擎归还、等待重新领取的），先用 CancelRecalcJob 取消（引擎暂停期间不会领取新作业）：" + strings.Join(running, "、")
 		return p
 	}
 	p.OK = true

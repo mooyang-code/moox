@@ -284,7 +284,7 @@ func RunPool(ctx context.Context, run PoolRun) (PoolRunResult, error) {
 		return PoolRunResult{}, err
 	}
 	if len(bars) == 0 {
-		return PoolRunResult{}, errors.New("历史推进的区间内没有完整的 bar")
+		return PoolRunResult{}, fmt.Errorf("%w：历史推进的区间内没有完整的 bar", input.ErrNoCompleteBar)
 	}
 	abort := run.Abort
 	if abort == nil {

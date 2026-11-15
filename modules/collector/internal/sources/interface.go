@@ -1,8 +1,6 @@
 package sources
 
 import (
-	"net"
-	"strings"
 	"time"
 )
 
@@ -15,56 +13,10 @@ type CollectParams struct {
 	SubjectID string // MooX 数据对象ID: BTC-USDT，用于写入 storage
 	Interval  string // 周期（K线用）: 1m, 5m, 1h
 	Live      bool   // 是否由实时调度触发；闭合 K 线仍直接写入 Storage
-	// DNSRoutes is the control-plane DNS snapshot carried by a short-lived
-	// SCF task. The source keeps the original hostname for TLS SNI and uses the
-	// resolved IPs only for the TCP dial.
-	DNSRoutes map[string]DNSResolution
 }
 
-// DNSResolution is intentionally small: the scheduler only needs the
-// hostname-to-address mapping captured before dispatching an SCF invocation.
+// DNSResolution 是一个域名解析到的地址，collector-stream 的本地 DNS 缓存（dnscache）使用。
 type DNSResolution struct {
-	IPs        []string          `json:"ips,omitempty"`
-	ResolvedAt time.Time         `json:"resolved_at,omitempty"`
-	LatencyMS  map[string]uint32 `json:"latency_ms,omitempty"`
-}
-
-const maxDNSIPsPerLookup = 8
-
-// NormalizeDNSHost returns the canonical key used by both the control-plane
-// snapshot and source clients. DNS names are case-insensitive and a trailing
-// root dot is presentation-only; keeping one representation prevents a valid
-// SCF snapshot from being silently missed during lookup.
-func NormalizeDNSHost(host string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-}
-
-// DNSIPs returns a defensive copy of the addresses for host.
-func (p *CollectParams) DNSIPs(host string) []string {
-	if p == nil || p.DNSRoutes == nil {
-		return nil
-	}
-	canonicalHost := NormalizeDNSHost(host)
-	route, ok := p.DNSRoutes[canonicalHost]
-	if !ok {
-		return nil
-	}
-	result := make([]string, 0, len(route.IPs))
-	seen := make(map[string]struct{}, len(route.IPs))
-	for _, rawIP := range route.IPs {
-		if len(result) >= maxDNSIPsPerLookup {
-			break
-		}
-		ip := net.ParseIP(strings.TrimSpace(rawIP))
-		if ip == nil {
-			continue
-		}
-		value := ip.String()
-		if _, exists := seen[value]; exists {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
+	IPs        []string  `json:"ips,omitempty"`
+	ResolvedAt time.Time `json:"resolved_at,omitempty"`
 }

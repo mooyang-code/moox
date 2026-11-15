@@ -86,9 +86,9 @@ func (t target) flattenAt() time.Time { return t.DelistAt.Add(-flattenLead) }
 func (t target) reviewAt() time.Time  { return t.DelistAt.Add(-reviewLead) }
 func (t target) verifyAt() time.Time  { return t.DelistAt.Add(verifyDelay) }
 
-// blockReason 是写入下架名单时的说明，只用于审计。
-func blockReason(execution store.Execution, t target) string {
-	return fmt.Sprintf("下架：%s，下架时间 %s（事件中心执行记录 %s）", t.describe(), t.DelistAt.UTC().Format(time.RFC3339), execution.ExecutionID)
+// blockReason 是写入下架名单时的说明，只用于展示和审计；这一项是谁写的另由写入者字段记录。
+func blockReason(t target) string {
+	return fmt.Sprintf("下架：%s，下架时间 %s", t.describe(), t.DelistAt.UTC().Format(time.RFC3339))
 }
 
 // flattenReason 是平仓的说明。它只由合并时不会变的字段（执行记录、轮次、标的）生成，建行时存下，之后一律读回使用：

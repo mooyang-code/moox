@@ -278,10 +278,6 @@ type Controller struct {
 	checks  map[string][]Check
 
 	reset resetState
-
-	// generation、wasOpen 记录模块的暂停代次（见 ModuleGeneration），只在进程内保存。
-	generation uint64
-	wasOpen    bool
 }
 
 type record struct {
@@ -381,7 +377,6 @@ func New(opts Options) (*Controller, error) {
 }
 
 func (c *Controller) save() error {
-	c.trackOpen()
 	if c.opts.StateFile == "" {
 		return nil
 	}

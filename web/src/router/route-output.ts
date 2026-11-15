@@ -1,7 +1,6 @@
 import pinia from "@/store/index";
 import { storeToRefs } from "pinia";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
-import { useThemeConfig } from "@/store/modules/theme-config";
 import { deepClone, arrayFlattened } from "@/utils/index";
 import { useRoutingMethod } from "@/hooks/useRoutingMethod";
 
@@ -22,8 +21,6 @@ export function linearArray(tree: any) {
  */
 export const currentlyRoute = (current: any) => {
   const route = deepCloneRoute(current);
-  const themeStore = useThemeConfig();
-  const { isTabs } = storeToRefs(themeStore);
   const store = useRoutesConfigStore(pinia);
   const { tabsList, routeList } = storeToRefs(store);
   // tabs无数据则默认添加首页
@@ -47,8 +44,8 @@ export const currentlyRoute = (current: any) => {
   // 外链（非内嵌）不进标签栏
   if (route.meta.link && !route.meta.iframe) return;
 
-  // 存入tabs栏数据，条件：开启tabs
-  if (isTabs.value) store.setTabs(route);
+  // 存入tabs栏数据
+  store.setTabs(route);
 };
 
 /**

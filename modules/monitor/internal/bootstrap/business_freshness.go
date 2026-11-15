@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
@@ -74,7 +75,8 @@ func buildBusinessFreshnessReporterWithInterval(
 		items := make(map[string]businessFreshnessItem, len(overview.Services)+len(overview.Datasets)+len(overview.BusinessChecks)+1)
 		suppressed := make(map[string]struct{})
 		retired := make(map[string]struct{})
-		frozenGateway := make(map[string]bool)
+		// 本轮保持原状态的检查：信号无法确认的网关检查。
+		frozenChecks := make(map[string]bool)
 		// 每台主机的网关三项信号（心跳、实例冲突、路由同步）合并成一条检查：任何一项异常都要处理，没必要分三处告警。
 		type gatewayHost struct {
 			unknown, unhealthy bool
@@ -89,7 +91,7 @@ func buildBusinessFreshnessReporterWithInterval(
 				key := events.SystemSpaceID + "\x00" + relayCheckID(signal.HostID)
 				item, frozen := relayItem(signal, relayDownSince, overview.GeneratedAt)
 				if frozen {
-					frozenGateway[key] = true
+					frozenChecks[key] = true
 				} else {
 					items[key] = item
 				}
@@ -121,7 +123,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			key := events.SystemSpaceID + "\x00" + checkID
 			// 没有任何异常信号、但有信号无法确认时保持原状态，不伪造成功去恢复既有告警。
 			if host.unknown && !host.unhealthy {
-				frozenGateway[key] = true
+				frozenChecks[key] = true
 				continue
 			}
 			reason := "网关心跳、实例与路由同步正常"
@@ -341,6 +343,10 @@ func buildBusinessFreshnessReporterWithInterval(
 			if strings.HasPrefix(check.CheckID, "market_canary:") || strings.HasPrefix(check.CheckID, tagCheckPrefix) {
 				continue
 			}
+			// 主机类检查由独立先跑的主机检查（buildHostCheckReporter）独占其状态更新，理由同上。
+			if _, _, ok := hostmetrics.ParseCheckID(check.CheckID); ok {
+				continue
+			}
 			if strings.HasPrefix(check.CheckID, "kline_freshness:") {
 				if !klineEvaluationRan {
 					continue
@@ -355,7 +361,7 @@ func buildBusinessFreshnessReporterWithInterval(
 				continue
 			}
 			key := check.SpaceID + "\x00" + check.CheckID
-			if frozenGateway[key] {
+			if frozenChecks[key] {
 				continue
 			}
 			if _, covered := retired[key]; covered {
@@ -413,98 +419,120 @@ func buildBusinessFreshnessReporterWithInterval(
 			return fmt.Errorf("business freshness checks exceed limit %d", maxFreshnessChecks)
 		}
 
-		checks := make(map[string]domain.Check, len(items))
-		for key, item := range items {
-			check, err := repositories.Checks.Get(ctx, item.spaceID, item.checkID)
-			switch {
-			case err == nil:
-				if !check.Enabled {
-					// K 线检查曾因关闭新鲜度监控而退役：重新开启后，当前任务清单仍期望的检查必须恢复启用（规则随后重建）
-					reenableKline := strings.HasPrefix(item.checkID, "kline_freshness:") && item.reason != noLongerExpected
-					// 数据集新鲜度检查因被 K 线新鲜度覆盖而停用，覆盖解除（K 线评估失败、规则移除）后需要恢复兜底。
-					reenableDataset := strings.HasPrefix(item.checkID, "dataset:") && item.reason != noLongerExpected
-					if strings.HasPrefix(item.checkID, "gateway:") || strings.HasPrefix(item.checkID, "reporter:") || reenableKline || reenableDataset {
-						check.Enabled = true
-						if err := repositories.Checks.Update(ctx, check); err != nil {
-							return err
-						}
-					} else {
-						delete(items, key)
-						continue
-					}
-				}
-				if item.name != "" && check.Name != item.name {
-					check.Name = item.name
-					if err := repositories.Checks.Update(ctx, check); err != nil {
-						return err
-					}
-				}
-				checks[key] = *check
-			case errors.Is(err, gorm.ErrRecordNotFound):
-				intervalSeconds := 30
-				if strings.HasPrefix(item.checkID, "kline_freshness:") {
-					intervalSeconds = klineIntervalSeconds
-				}
-				check := domain.Check{
-					SpaceID: item.spaceID, CheckID: item.checkID, Name: item.name,
-					GroupName: "business", Kind: domain.CheckKindExternal,
-					Source: domain.CheckSourceObservability, Enabled: true,
-					IntervalSeconds: intervalSeconds, TimeoutMS: 20000,
-				}
-				if err := repositories.Checks.Create(ctx, &check); err != nil {
-					return err
-				}
-				checks[key] = check
-			default:
-				return err
-			}
-		}
-		if err := ensureDefaultCheckAlertRules(ctx, repositories); err != nil {
-			return err
-		}
-
-		now := time.Now().UTC()
-		var errs []error
-		for key, item := range items {
-			check, ok := checks[key]
-			if !ok {
-				continue
-			}
-			if strings.HasPrefix(check.CheckID, "kline_freshness:") && check.IntervalSeconds != klineIntervalSeconds {
-				check.IntervalSeconds = klineIntervalSeconds
-			}
-			status := domain.CheckStatusDown
-			if item.success {
-				status = domain.CheckStatusOK
-				if item.degraded {
-					status = domain.CheckStatusDegraded
-				}
-			}
-			result := domain.CheckResult{
-				ResultID: domain.ScopedResultID(item.spaceID, item.checkID, now),
-				SpaceID:  item.spaceID, CheckID: item.checkID, InstanceID: "monitor",
-				Success: item.success, Connected: item.success, Status: status,
-				ErrorMessage: item.reason, RawError: item.rawError, BodyExcerpt: item.diagnostic, CheckedAt: now, CreatedAt: now,
-			}
-			inserted, err := repositories.Results.InsertIfAbsent(ctx, &result)
-			if err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			if !inserted {
-				continue
-			}
-			check.LastCheckedAt = &now
-			if err := repositories.Checks.Update(ctx, &check); err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			if hook != nil {
-				hook(ctx, check, result)
-			}
-		}
-		return errors.Join(errs...)
+		_, err = writeCheckResults(ctx, repositories, items, klineIntervalSeconds, hook, func(ctx context.Context, _ []domain.Check) error {
+			return ensureDefaultCheckAlertRules(ctx, repositories)
+		})
+		return err
 	}
+}
+
+// writeCheckResults 把一轮算出的检查结果落库并交给告警评估：补建或更新检查记录、补齐默认告警规则（ensureRules）、
+// 写结果、调用 hook。业务评估和主机类检查共用。返回实际写入了结果的项（键同 items）。
+func writeCheckResults(
+	ctx context.Context,
+	repositories *store.Repositories,
+	items map[string]businessFreshnessItem,
+	klineIntervalSeconds int,
+	hook func(context.Context, domain.Check, domain.CheckResult),
+	ensureRules func(context.Context, []domain.Check) error,
+) (map[string]bool, error) {
+	checks := make(map[string]domain.Check, len(items))
+	for key, item := range items {
+		check, err := repositories.Checks.Get(ctx, item.spaceID, item.checkID)
+		switch {
+		case err == nil:
+			if !check.Enabled {
+				// K 线检查曾因关闭新鲜度监控而退役：重新开启后，当前任务清单仍期望的检查必须恢复启用（规则随后重建）
+				reenableKline := strings.HasPrefix(item.checkID, "kline_freshness:") && item.reason != noLongerExpected
+				// 数据集新鲜度检查因被 K 线新鲜度覆盖而停用，覆盖解除（K 线评估失败、规则移除）后需要恢复兜底。
+				reenableDataset := strings.HasPrefix(item.checkID, "dataset:") && item.reason != noLongerExpected
+				if strings.HasPrefix(item.checkID, "gateway:") || strings.HasPrefix(item.checkID, "reporter:") || reenableKline || reenableDataset {
+					check.Enabled = true
+					if err := repositories.Checks.Update(ctx, check); err != nil {
+						return nil, err
+					}
+				} else {
+					delete(items, key)
+					continue
+				}
+			}
+			if item.name != "" && check.Name != item.name {
+				check.Name = item.name
+				if err := repositories.Checks.Update(ctx, check); err != nil {
+					return nil, err
+				}
+			}
+			checks[key] = *check
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			intervalSeconds := 30
+			if strings.HasPrefix(item.checkID, "kline_freshness:") {
+				intervalSeconds = klineIntervalSeconds
+			}
+			check := domain.Check{
+				SpaceID: item.spaceID, CheckID: item.checkID, Name: item.name,
+				GroupName: "business", Kind: domain.CheckKindExternal,
+				Source: domain.CheckSourceObservability, Enabled: true,
+				IntervalSeconds: intervalSeconds, TimeoutMS: 20000,
+			}
+			if err := repositories.Checks.Create(ctx, &check); err != nil {
+				return nil, err
+			}
+			checks[key] = check
+		default:
+			return nil, err
+		}
+	}
+	ensured := make([]domain.Check, 0, len(checks))
+	for _, check := range checks {
+		ensured = append(ensured, check)
+	}
+	if err := ensureRules(ctx, ensured); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	var errs []error
+	written := make(map[string]bool, len(items))
+	for key, item := range items {
+		check, ok := checks[key]
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(check.CheckID, "kline_freshness:") && check.IntervalSeconds != klineIntervalSeconds {
+			check.IntervalSeconds = klineIntervalSeconds
+		}
+		status := domain.CheckStatusDown
+		if item.success {
+			status = domain.CheckStatusOK
+			if item.degraded {
+				status = domain.CheckStatusDegraded
+			}
+		}
+		result := domain.CheckResult{
+			ResultID: domain.ScopedResultID(item.spaceID, item.checkID, now),
+			SpaceID:  item.spaceID, CheckID: item.checkID, InstanceID: "monitor",
+			Success: item.success, Connected: item.success, Status: status,
+			ErrorMessage: item.reason, RawError: item.rawError, BodyExcerpt: item.diagnostic, CheckedAt: now, CreatedAt: now,
+		}
+		inserted, err := repositories.Results.InsertIfAbsent(ctx, &result)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !inserted {
+			continue
+		}
+		check.LastCheckedAt = &now
+		if err := repositories.Checks.Update(ctx, &check); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if hook != nil {
+			hook(ctx, check, result)
+		}
+		written[key] = true
+	}
+	return written, errors.Join(errs...)
 }
 
 // observationIngestCheckID 是"观测输入"检查：观测消费者连上时通过，没连上时失败，说明其他检查为什么冻结。

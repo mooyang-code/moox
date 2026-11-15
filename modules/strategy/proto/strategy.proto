@@ -59,13 +59,12 @@ message StrategyResult {
   repeated InstrumentTarget targets = 9;
   string summary_json = 10;              // |U|、各规则 |E|、|G|、|A|、|M|、各阶段数量、gross、net、换手、现金
   string input_json = 11;                // view_id、bar_start、事件 ID、各因子 definition_hash
-  string rule_states_json = 12;
-  string publish_status = 13;            // none | pending | sent | cancelled
-  string created_at = 14;
+  string publish_status = 12;            // none | pending | sent | cancelled
+  string created_at = 13;
   // 这一期算出的下一期可变成员参数（JSON：成员键 → 参数名 → {default, overrides}）；没有可变成员时为空。
-  string next_params_json = 15;
-  string params_delivered_at = 16;       // 被因子侧接受的时间；空表示还没送达
-  string params_error = 17;              // 被因子侧明确拒绝的原因（不再重试）
+  string next_params_json = 14;
+  string params_delivered_at = 15;       // 被因子侧接受的时间；空表示还没送达
+  string params_error = 16;              // 被因子侧明确拒绝的原因（不再重试）
 }
 
 // StrategyResultItem 是一条规则下一个标的的解释。

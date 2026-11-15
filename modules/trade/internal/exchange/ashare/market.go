@@ -186,6 +186,10 @@ func (m *Market) LoadInstruments(ctx context.Context) ([]exchange.Instrument, er
 // PrefetchQuotes 一次取回一批标的的快照（腾讯每次最多 60 只，超过分批），2 秒内取过的不再取；
 // 2 秒内取价失败过的代码也不再请求，直接返回那次的错误。
 func (m *Market) PrefetchQuotes(ctx context.Context, keys []exchange.SymbolKey) error {
+	// 只读报价缓存的上下文（管理台查询）不取新快照。
+	if _, only := exchange.CachedQuotesOnly(ctx); only {
+		return nil
+	}
 	now := m.now()
 	var missing []string
 	var recentFailure error
@@ -260,6 +264,9 @@ func (m *Market) snapshot(ctx context.Context, key exchange.SymbolKey) (cachedQu
 	m.quoteMu.Lock()
 	cached, ok := m.quotes[key.Symbol]
 	m.quoteMu.Unlock()
+	if maxAge, only := exchange.CachedQuotesOnly(ctx); only && (!ok || m.now().Sub(cached.fetchedAt) > maxAge) {
+		return cachedQuote{}, exchange.ErrQuoteNotCached
+	}
 	if !ok {
 		return cachedQuote{}, &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("腾讯行情没有标的 %s", key.Symbol)}
 	}

@@ -203,7 +203,7 @@ func TestSourcesEndpointListsPreparedSources(t *testing.T) {
 	require.JSONEq(t, `{"sources":null}`, rec.Body.String())
 }
 
-// contractStorage 的字段与导入服务契约样例（modules/importer/target/testdata/write_request.json）一致。
+// contractStorage 的字段与导入写入请求的契约样例一致。
 type contractStorage struct{ localdata.Storage }
 
 func (contractStorage) ListColumns(context.Context, string, string) ([]storageio.ColumnInfo, error) {

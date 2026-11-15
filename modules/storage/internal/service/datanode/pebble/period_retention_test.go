@@ -60,52 +60,6 @@ func TestCleanupExpiredBucketsRemovesLedgerAndMarkersBeforeCutoff(t *testing.T) 
 	}
 }
 
-// commit 标记固定保留 7 天：7 天内同一 commit_id 重放识别为重复，超过 7 天当作新提交；清理只删 7 天之前的日桶。
-func TestCommitMarkerKeepsSevenDays(t *testing.T) {
-	ctx := context.Background()
-	day := time.Date(2026, 11, 1, 23, 30, 0, 0, time.UTC)
-	clock := newGoldenClock(day)
-	store := newGoldenStore(t, clock)
-	row := func(value float64) []*pb.RowFieldUpsert {
-		return []*pb.RowFieldUpsert{{
-			Key:    &pb.RowKey{SpaceId: goldenSpace, DatasetId: "factor_result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r1", Version: "1"}}},
-			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}}}},
-		}}
-	}
-	written, err := store.UpsertFields(ctx, goldenSpace, "factor_result", "commit-1", row(1))
-	require.NoError(t, err)
-	require.True(t, written)
-
-	for _, offset := range []time.Duration{time.Hour, 3 * 24 * time.Hour, 7 * 24 * time.Hour} {
-		clock.set(day.Add(offset))
-		written, err = store.UpsertFields(ctx, goldenSpace, "factor_result", "commit-1", row(1))
-		require.NoError(t, err)
-		require.False(t, written, "%s 后的同内容重放是重复提交", offset)
-		_, err = store.UpsertFields(ctx, goldenSpace, "factor_result", "commit-1", row(2))
-		var conflict CommitConflictError
-		require.ErrorAs(t, err, &conflict, "%s 后内容不同仍是冲突", offset)
-	}
-
-	// 7 天日桶之内的清理不删除这条标记。
-	require.NoError(t, store.CleanupExpiredCommits(ctx, day.Add(7*24*time.Hour)))
-	_, found, err := store.findCommitMarker(goldenSpace, "factor_result", "commit-1", day.Add(7*24*time.Hour))
-	require.NoError(t, err)
-	require.True(t, found)
-
-	// 超过 7 天：不再识别，清理也删掉了旧日桶。
-	later := day.Add(8 * 24 * time.Hour)
-	require.NoError(t, store.CleanupExpiredCommits(ctx, later))
-	_, err = store.readPeriodValue(commitMarkerKey(commitDay(day), goldenSpace, "factor_result", "commit-1"))
-	require.Error(t, err, "8 天前的日桶已删除")
-	clock.set(later)
-	written, err = store.UpsertFields(ctx, goldenSpace, "factor_result", "commit-1", row(2))
-	require.NoError(t, err)
-	require.True(t, written, "超过 7 天的同一 commit_id 当作新提交")
-	value, found := goldenStoredClose(t, store, row(0)[0].GetKey())
-	require.True(t, found)
-	require.Equal(t, 2.0, value)
-}
-
 // 每秒的窗口扫描只看各（数据集、频率）最近一段；启动后的全量扫描补上窗口之外的到期周期。
 func TestPeriodFinalizerWindowSkipsOldWaitingPeriods(t *testing.T) {
 	ctx := context.Background()

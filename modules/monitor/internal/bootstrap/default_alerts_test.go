@@ -4,7 +4,6 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
@@ -66,57 +65,32 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestEnsureDefaultHostAlertRulesCoversRegisteredAgent(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test")
-	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	if err != nil {
-		t.Fatal(err)
+// 主机类检查的默认规则：失联与 host-agent 停报失败一次即告警（停报满 3 分钟才会失败）；
+// 资源检查按采样次数——CPU、磁盘约 3 分钟，内存约 5 分钟。恢复都只要成功一次。
+func TestDefaultRulesForHostChecksKeepTheirOwnTiming(t *testing.T) {
+	repositories := openMonitorTestRepositories(t)
+	want := map[string]int{
+		hostmetrics.CheckKindPresence: 1, hostmetrics.CheckKindAgent: 1,
+		hostmetrics.HostMetricCPU: 3, hostmetrics.HostMetricMemory: 5, hostmetrics.HostMetricFilesystemUsage: 3,
 	}
-	t.Cleanup(func() { _ = manager.Close() })
-	if err := manager.ApplySchema(schema.SQL()); err != nil {
-		t.Fatal(err)
-	}
-	repositories := manager.Repositories()
-	registry, err := store.WithDatabase(manager, hostmetrics.NewRegistry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := registry.Observe(t.Context(), hostmetrics.HostObservation{
-		AgentID: "agent-a", Hostname: "host-a", BootID: "boot-a", EventID: "event-a", OccurredAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureDefaultHostAlertRules(t.Context(), repositories, registry); err != nil {
-		t.Fatal(err)
-	}
-	rules, err := repositories.Alerts.ListRules(t.Context(), events.SystemSpaceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var hostRules int
-	for _, rule := range rules {
-		if _, _, ok := hostmetrics.ParseHostRuleKey(rule.CheckID); ok {
-			hostRules++
-			_, metric, _ := hostmetrics.ParseHostRuleKey(rule.CheckID)
-			// HostAgent 每分钟采样：CPU、磁盘约 3 分钟，内存约 5 分钟。
-			wantFailureThreshold := map[string]int{hostmetrics.HostMetricCPU: 3, hostmetrics.HostMetricMemory: 5, hostmetrics.HostMetricFilesystemUsage: 3}[metric]
-			if rule.FailureThreshold != wantFailureThreshold {
-				t.Fatalf("host %s failure threshold = %d, want %d", metric, rule.FailureThreshold, wantFailureThreshold)
-			}
-			if metric == hostmetrics.HostMetricFilesystemUsage && rule.Description != `{"threshold":85,"recovery_threshold":80}` {
-				t.Fatalf("filesystem alert definition = %s", rule.Description)
-			}
-			// CPU 的阈值要能抓住“某个进程把几核主机吃到八九成”这种持续高负载：80%、约 3 分钟。
-			if metric == hostmetrics.HostMetricCPU && rule.Description != `{"threshold":80,"recovery_threshold":70}` {
-				t.Fatalf("cpu alert definition = %s", rule.Description)
-			}
-			if metric == hostmetrics.HostMetricMemory && rule.Description != `{"threshold":90,"recovery_threshold":80}` {
-				t.Fatalf("memory alert definition = %s", rule.Description)
-			}
+	for kind := range want {
+		check := &domain.Check{SpaceID: events.SystemSpaceID, CheckID: hostmetrics.CheckID("agent-a", kind), Name: kind, GroupName: "business",
+			Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
+		if err := repositories.Checks.Create(t.Context(), check); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if hostRules != 3 {
-		t.Fatalf("host rules = %d, want 3 (cpu, memory, filesystem_usage)", hostRules)
+	if err := ensureDefaultCheckAlertRules(t.Context(), repositories); err != nil {
+		t.Fatal(err)
+	}
+	for kind, failures := range want {
+		rule, err := repositories.Alerts.GetRule(t.Context(), events.SystemSpaceID, "default:"+hostmetrics.CheckID("agent-a", kind))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rule.FailureThreshold != failures || rule.SuccessThreshold != 1 || !rule.SendOnResolved || rule.MinimumReminderIntervalSeconds != 300 {
+			t.Fatalf("%s rule = %+v", kind, rule)
+		}
 	}
 }
 

@@ -1,4 +1,4 @@
-// Package store persists archive tasks, runs, partitions and worker leases in SQLite.
+// Package store persists archive tasks, runs, partitions and the worker heartbeat in SQLite.
 package store
 
 import (
@@ -21,7 +21,7 @@ import (
 var (
 	// ErrNotFound 表示记录不存在。
 	ErrNotFound = errors.New("archive record not found")
-	// ErrConflict 表示唯一性或状态冲突（例如数据集已有任务、重复的 worker 实例）。
+	// ErrConflict 表示唯一性或状态冲突（例如数据集已有任务、运行已结束）。
 	ErrConflict = errors.New("archive store conflict")
 	// ErrHasPartitions 表示任务已有分区登记，不能删除。
 	ErrHasPartitions = errors.New("archive task has partitions")

@@ -132,7 +132,7 @@ var unitSpecs = map[string]unitComponentSpec{
 	"web-host":      {}, // The frontend is embedded in the prebuilt web-host executable.
 	"admin":         {[]string{"moox-admin-cli"}, []unitAsset{configAsset("admin", "admin"), schemaAsset("admin", "admin")}},
 	"eventbus":      {assets: []unitAsset{configAsset("eventbus", "eventbus")}},
-	"monitor": {[]string{"moox-monitor-cli"}, []unitAsset{
+	"monitor": {assets: []unitAsset{
 		configAsset("monitor", "monitor"), schemaAsset("monitor", "monitor"),
 		{"config/setup/dataset-health-policy.yaml", "monitor/config/dataset-health-policy.yaml", false},
 	}},
@@ -143,7 +143,7 @@ var unitSpecs = map[string]unitComponentSpec{
 		// 各市场的路由与数据源运行参数编在 Collector 二进制里，不用打包。
 		{"modules/collector/configs/sources", "collector/configs/sources", true},
 	}},
-	"cloudfunction": {[]string{"moox-cloudfunction-cli"}, []unitAsset{configAsset("cloudfunction", "cloudfunction"), schemaAsset("cloudfunction", "cloudfunction")}},
+	"cloudfunction": {assets: []unitAsset{configAsset("cloudfunction", "cloudfunction"), schemaAsset("cloudfunction", "cloudfunction")}},
 	"factor-mgr": {[]string{"moox-factor-mgr-cli"}, []unitAsset{
 		{"modules/factor/config/app.yaml", "factor-mgr/config/app.yaml", false},
 		{"modules/factor/config/trpc_go.yaml", "factor-mgr/config/trpc_go.yaml", false},
@@ -166,14 +166,14 @@ var unitSpecs = map[string]unitComponentSpec{
 	}},
 	"access":       {assets: []unitAsset{configAsset("access", "access")}},
 	"egress-proxy": {assets: []unitAsset{configAsset("egressproxy", "egress-proxy")}},
-	"trade":        {[]string{"moox-trade-cli"}, []unitAsset{configAsset("trade", "trade"), schemaAsset("trade", "trade")}},
+	"trade":        {assets: []unitAsset{configAsset("trade", "trade"), schemaAsset("trade", "trade")}},
 	"collector-stream": {assets: []unitAsset{
 		{"modules/collector/config/stream/app.yaml", "collector-stream/config/app.yaml", false},
 		{"modules/collector/config/stream/trpc_go.yaml", "collector-stream/config/trpc_go.yaml", false},
 		// 数据源配置（WS 地址与限额、REST 端点、Storage 绑定）与 Collector 同一份。
 		{"modules/collector/configs/sources/market/binance.yaml", "collector-stream/config/sources/market/binance.yaml", false},
 	}},
-	"callback-dispatcher": {[]string{"moox-callback-dispatcher-cli"}, []unitAsset{configAsset("callbackdispatcher", "callback-dispatcher"), schemaAsset("callbackdispatcher", "callback-dispatcher")}},
+	"callback-dispatcher": {assets: []unitAsset{configAsset("callbackdispatcher", "callback-dispatcher"), schemaAsset("callbackdispatcher", "callback-dispatcher")}},
 	// 外部程序的目录布局与仓库一致（scripts/deploy、deploy/systemd、modules/...），安装脚本据此按相对位置找到服务模板与框架配置。
 	"factor-engine": {assets: []unitAsset{
 		{"scripts/deploy/deploy-factor-engine.sh", "factor-engine/scripts/deploy/deploy-factor-engine.sh", false},

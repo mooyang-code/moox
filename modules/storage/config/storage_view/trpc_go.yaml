@@ -37,11 +37,6 @@ server:
       # Gathering bounded View metrics can read tens of thousands of series;
       # keep the 30-second cadence while allowing one report to complete.
       timeout: 60000
-    - name: trpc.moox.storage.view.cleanup.timer
-      port: 20308
-      network: "*/30 * * * * *"
-      protocol: timer
-      timeout: 20000
 
 client:
   filter:

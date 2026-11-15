@@ -18,7 +18,7 @@ func Handler(state *State) http.Handler {
 const InstanceStorageView = "storage-view"
 
 // SnapshotForRole 将进程存活与就绪分开判断：Storage View 恢复活动索引并开始跟随变更日志后才就绪。
-// 主服务的 Outbox 积压与 EventBus 连接只作为明细上报、不影响就绪：EventBus 故障时元数据与读写照常服务。
+// 主服务的完成事件转发积压与 EventBus 连接只作为明细上报、不影响就绪：EventBus 故障时元数据与读写照常服务。
 func SnapshotForRole(instance string, metrics *observability.ViewMetrics) healthz.SnapshotFunc {
 	return func(context.Context) healthz.Response {
 		snapshot := metrics.Snapshot()

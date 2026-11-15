@@ -254,6 +254,19 @@ func (h *harness) resultAt(n int) store.Result {
 	return result
 }
 
+// stateAt 返回实例当前的规则状态（JSON），并要求它正好推进到第 n 期：状态与结果同事务写入，每个实例只有一行。
+func (h *harness) stateAt(n int) string {
+	h.t.Helper()
+	state, found, err := h.repo.GetState(context.Background(), "i1")
+	if err != nil || !found {
+		h.t.Fatalf("实例没有规则状态：found=%v err=%v", found, err)
+	}
+	if want := barStart(n).Add(time.Hour); !state.BarEndTime.Equal(want) || state.SessionID != h.session {
+		h.t.Fatalf("规则状态推进到 %s（会话 %s），期望第 %d 期 %s（会话 %s）", state.BarEndTime, state.SessionID, n, want, h.session)
+	}
+	return string(state.StateJSON)
+}
+
 func (h *harness) noResultAt(n int) {
 	h.t.Helper()
 	if _, found, err := h.repo.ResultAtBar(context.Background(), "i1", h.session, barStart(n).Add(time.Hour)); err != nil || found {
@@ -331,8 +344,8 @@ func TestHandleRestoresStateFromLatestOkAcrossSkipAndRestart(t *testing.T) {
 		t.Fatalf("buffer 应保留上一次 ok 决策持有的 A、B：%v", got)
 	}
 	var state engine.State
-	if err := json.Unmarshal(third.RuleStatesJSON, &state); err != nil || len(state.Rules["r"].Held) != 2 {
-		t.Fatalf("规则状态不符：%s err=%v", third.RuleStatesJSON, err)
+	if err := json.Unmarshal([]byte(h.stateAt(4)), &state); err != nil || len(state.Rules["r"].Held) != 2 {
+		t.Fatalf("规则状态不符：%s err=%v", h.stateAt(4), err)
 	}
 	if cancelled, _ := h.repo.GetResult(context.Background(), first.ResultID); cancelled.PublishStatus != store.PublishCancelled {
 		t.Fatalf("新的 ok 决策应取消旧的待投递结果：%+v", cancelled)
@@ -554,7 +567,7 @@ func TestHandleCASConflictReevaluates(t *testing.T) {
 			return
 		}
 		injected = true
-		result := store.Result{ResultID: "injected", InstanceID: "i1", SessionID: h.session, BarEndTime: barStart(2).Add(time.Hour), ValidUntil: barStart(2).Add(3 * time.Hour), Status: store.StatusSkipped, SkipReason: "factor_missing", DSLHash: dsl.Hash([]byte(rankDSL)), InputJSON: json.RawMessage(`{}`), TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: json.RawMessage(`{}`), SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
+		result := store.Result{ResultID: "injected", InstanceID: "i1", SessionID: h.session, BarEndTime: barStart(2).Add(time.Hour), ValidUntil: barStart(2).Add(3 * time.Hour), Status: store.StatusSkipped, SkipReason: "factor_missing", DSLHash: dsl.Hash([]byte(rankDSL)), InputJSON: json.RawMessage(`{}`), TargetsJSON: json.RawMessage(`[]`), SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
 		if _, _, err := h.repo.CommitResult(context.Background(), store.CommitRequest{Result: result, Now: h.now}); err != nil {
 			t.Fatal(err)
 		}

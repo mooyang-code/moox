@@ -40,7 +40,7 @@ type fakeManager struct {
 }
 
 func newFakeManager() *fakeManager {
-	return &fakeManager{heartbeat: &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 45}, completed: make(chan struct{}, 16)}
+	return &fakeManager{heartbeat: &archivepb.ArchiveWorkerHeartbeatRsp{}, completed: make(chan struct{}, 16)}
 }
 
 func (f *fakeManager) Heartbeat(_ context.Context, req *archivepb.ArchiveWorkerHeartbeatReq) (*archivepb.ArchiveWorkerHeartbeatRsp, error) {
@@ -172,7 +172,7 @@ func newHarness(t *testing.T) *harness {
 	files := export.Files{Root: root}
 	r := &runner.Runner{Source: h.src, Staging: store, Files: files, Pace: instantPacer{}, PageRows: 2000, Now: func() time.Time { return h.now }, ReadAttempts: 1}
 	h.app = New(Options{
-		Config: h.cfg, Manager: h.mgr, Runner: r, Staging: store, Files: files, InstanceID: "i1", Version: "test",
+		Config: h.cfg, Manager: h.mgr, Runner: r, Staging: store, Files: files, Version: "test",
 		Now: func() time.Time { return h.now },
 		Sleep: func(ctx context.Context, d time.Duration) error {
 			h.slept = append(h.slept, d)
@@ -242,11 +242,11 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	h.app.mu.Lock()
 	h.app.running["r1"] = &activeRun{assignment: assignment("r1", nil), cancel: func() { cancelled = true }}
 	h.app.mu.Unlock()
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, CancelRunIds: []string{"r1", "ghost"},
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{CancelRunIds: []string{"r1", "ghost"},
 		Tasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "7"}}}
 	tasks := h.app.heartbeatOnce(ctx)
 	req := h.mgr.heartbeats[0]
-	if req.GetWorkerId() != "w1" || req.GetInstanceId() != "i1" || req.GetVersion() != "test" || req.GetRootDir() != h.root || req.GetDiskTotalBytes() != 200<<30 ||
+	if req.GetWorkerId() != "w1" || req.GetVersion() != "test" || req.GetRootDir() != h.root || req.GetDiskTotalBytes() != 200<<30 ||
 		req.GetDiskFreeBytes() != 100<<30 || req.GetDiskUsedBytes() != 90<<30 || req.GetMinFreeBytes() != uint64(h.cfg.Worker.MinFreeBytes) || h.cfg.Worker.MinFreeBytes <= 0 ||
 		len(req.GetRunningRunIds()) != 1 || !strings.Contains(req.GetPacingJson(), "max_concurrent_runs") {
 		t.Fatalf("heartbeat = %v", req)
@@ -254,17 +254,12 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	if !cancelled || !h.app.running["r1"].stop.Load() {
 		t.Fatal("mgr 要求取消的运行应被取消")
 	}
-	if len(tasks) != 1 || tasks["crypto/ds_1m"] != "7" || h.app.leaseTTL != 30*time.Second {
-		t.Fatalf("tasks=%v ttl=%s", tasks, h.app.leaseTTL)
+	if len(tasks) != 1 || tasks["crypto/ds_1m"] != "7" {
+		t.Fatalf("tasks=%v", tasks)
 	}
-	// 不是活动 worker：任务列表不可用。
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: false, LeaseTtlSeconds: 30}
-	if tasks := h.app.heartbeatOnce(ctx); tasks != nil {
-		t.Fatalf("非活动 worker 不应拿到任务列表: %v", tasks)
-	}
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30}
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{}
 	if tasks := h.app.heartbeatOnce(ctx); tasks == nil || len(tasks) != 0 {
-		t.Fatalf("活动 worker 没有任务时应拿到空列表: %v", tasks)
+		t.Fatalf("没有任务时应拿到空列表: %v", tasks)
 	}
 	if h.app.Snapshot().DiskInsufficient {
 		t.Fatal("可用空间高于下限时不算磁盘不足")
@@ -302,7 +297,7 @@ func TestHeartbeatAppliesAvoidanceRulesToThePacer(t *testing.T) {
 	if js := h.mgr.heartbeats[0].GetPacingJson(); !strings.Contains(js, `"source":"config"`) || !strings.Contains(js, `"every_minutes":1`) {
 		t.Fatalf("未收到下发时报 app.yaml 的值: %s", js)
 	}
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, Avoidance: &archivepb.AvoidanceRules{
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Avoidance: &archivepb.AvoidanceRules{
 		EveryMinutes: 5, BeforeSeconds: 5, AfterSeconds: 25, Basis: "stockcn：5m", ComputedAt: "2026-11-08T10:00:00Z",
 	}}
 	h.app.heartbeatOnce(ctx) // 本次心跳报的仍是旧值，回包后替换
@@ -319,15 +314,15 @@ func TestHeartbeatAppliesAvoidanceRulesToThePacer(t *testing.T) {
 		t.Fatalf("应报生效值: %s", js)
 	}
 	// 不合法的规则被忽略；回包没有规则时保留。
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, Avoidance: &archivepb.AvoidanceRules{EveryMinutes: 7}}
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Avoidance: &archivepb.AvoidanceRules{EveryMinutes: 7}}
 	h.app.heartbeatOnce(ctx)
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30}
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{}
 	h.app.heartbeatOnce(ctx)
 	if r := pacer.Rules(); r.EveryMinutes != 5 {
 		t.Fatalf("应保留原规则: %+v", r)
 	}
 	// 带整点窗口的规则。
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, Avoidance: &archivepb.AvoidanceRules{
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Avoidance: &archivepb.AvoidanceRules{
 		EveryMinutes: 1, BeforeSeconds: 5, AfterSeconds: 25, HourQuietFrom: "58:00", HourQuietUntil: "04:00",
 	}}
 	h.app.heartbeatOnce(ctx)
@@ -336,30 +331,23 @@ func TestHeartbeatAppliesAvoidanceRulesToThePacer(t *testing.T) {
 	}
 }
 
-func TestHeartbeatConflictAndFailuresStopPulling(t *testing.T) {
+func TestPullStartsAfterTheFirstHeartbeat(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
+	if h.canPull(ctx) {
+		t.Fatal("首次心跳成功之前不领取")
+	}
 	h.app.heartbeatOnce(ctx)
 	if !h.app.Snapshot().Ready || !h.canPull(ctx) {
 		t.Fatal("首次心跳成功后应就绪并可领取")
 	}
-	h.mgr.heartbeatErr = errors.Join(manager.ErrConflict, errors.New("duplicate"))
-	h.app.heartbeatOnce(ctx)
-	if h.canPull(ctx) || h.app.Snapshot().Active || h.app.Snapshot().LastError == "" {
-		t.Fatalf("冲突后应不活动: %+v", h.app.Snapshot())
-	}
-	// 普通失败：保留活动状态，但租约超过有效期后不再领取。
-	h.mgr.heartbeatErr = nil
-	h.app.heartbeatOnce(ctx)
+	// 心跳失败只记下错误，不影响领取。
 	h.mgr.heartbeatErr = errors.New("timeout")
 	h.app.heartbeatOnce(ctx)
-	if !h.canPull(ctx) {
-		t.Fatal("租约有效期内仍可领取")
+	if !h.canPull(ctx) || h.app.Snapshot().LastError == "" {
+		t.Fatalf("心跳失败后仍可领取并记下错误: %+v", h.app.Snapshot())
 	}
 	h.now = h.now.Add(46 * time.Second)
-	if h.canPull(ctx) {
-		t.Fatal("超过租约有效期应停止领取")
-	}
 	if snap := h.app.Snapshot(); snap.Ready {
 		t.Fatalf("心跳长时间失败应不就绪: %+v", snap)
 	}
@@ -404,7 +392,7 @@ func TestPullHonorsSlotsLeaseMaintenanceAndDisk(t *testing.T) {
 		t.Fatalf("pulls = %d", len(h.mgr.pulls))
 	}
 	req := h.mgr.pulls[0]
-	if req.GetFreeSlots() != 1 || req.GetMaxStorageRuns() != 2 || req.GetWorkerId() != "w1" || req.GetInstanceId() != "i1" || req.GetBusyStorageRuns() != 2 {
+	if req.GetFreeSlots() != 1 || req.GetMaxStorageRuns() != 2 || req.GetBusyStorageRuns() != 2 {
 		t.Fatalf("pull = %v", req)
 	}
 	// 槽满：不拉取。
@@ -448,7 +436,7 @@ func TestPulledRunsAreExecutedAndReportedWithStatsAndPartitions(t *testing.T) {
 	h.app.heartbeatOnce(ctx)
 	h.app.pullOnce(ctx)
 	req := h.waitComplete()
-	if req.GetRunId() != "r1" || req.GetLeaseToken() != "tok-r1" || req.GetWorkerId() != "w1" || req.GetStatus() != "succeeded" ||
+	if req.GetRunId() != "r1" || req.GetLeaseToken() != "tok-r1" || req.GetStatus() != "succeeded" ||
 		req.GetRowsRead() != 50 || req.GetRowsAdded() != 50 || req.GetRequestCount() < 1 || req.GetSubjectsDone() != 1 {
 		t.Fatalf("complete = %v", req)
 	}
@@ -481,7 +469,7 @@ func TestIndependentProgressTimerRenewsTheLeaseAndHonorsCancellation(t *testing.
 	}
 	h.mgr.mu.Lock()
 	defer h.mgr.mu.Unlock()
-	if len(h.mgr.progresses) == 0 || h.mgr.progresses[0].GetLeaseToken() != "tok-r1" || h.mgr.progresses[0].GetWorkerId() != "w1" {
+	if len(h.mgr.progresses) == 0 || h.mgr.progresses[0].GetLeaseToken() != "tok-r1" {
 		t.Fatalf("progresses = %v", h.mgr.progresses)
 	}
 }
@@ -568,7 +556,7 @@ func TestMaintenanceWaitsForInFlightPullsThenReconcilesWithAFreshTaskList(t *tes
 	go func() { h.app.pullOnce(ctx); close(pulled) }()
 	<-entered
 	h.mgr.mu.Lock()
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 45, Tasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "1"}}}
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Tasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "1"}}}
 	h.mgr.mu.Unlock()
 	h.app.maintainOnce(ctx)
 	if got := stagedTasks(t, h, "gone", "ds_1m"); !got["gone"] || !got["ds_1m"] {
@@ -597,14 +585,12 @@ func TestMaintenanceSkipsReconcileWhenTheTaskListIsUnavailable(t *testing.T) {
 	h.seed("ds_1m", "1")
 	h.mgr.heartbeatErr = errors.New("mgr down")
 	h.app.maintainOnce(ctx)
-	h.mgr.heartbeatErr = nil
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: false}
-	h.app.maintainOnce(ctx)
 	if got := stagedTasks(t, h, "ds_1m"); !got["ds_1m"] {
 		t.Fatal("拿不到任务列表时不能对账删除")
 	}
+	h.mgr.heartbeatErr = nil
 	// 任务被删除后重建（ID 变了）：对账同样清掉旧状态。
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, Tasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "2"}}}
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Tasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "2"}}}
 	h.app.maintainOnce(ctx)
 	if got := stagedTasks(t, h, "ds_1m"); got["ds_1m"] {
 		t.Fatal("任务 ID 变了应清掉旧状态")
@@ -733,7 +719,7 @@ func TestRunStartsCleansLeftoversAndStopsGracefully(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	// 用真实睡眠的 App 运行主循环，验证取消后能退出。
-	real := New(Options{Config: h.cfg, Manager: h.mgr, Runner: h.app.opts.Runner, Staging: h.store, Files: h.app.opts.Files, InstanceID: "i1", DiskUsage: h.app.opts.DiskUsage})
+	real := New(Options{Config: h.cfg, Manager: h.mgr, Runner: h.app.opts.Runner, Staging: h.store, Files: h.app.opts.Files, DiskUsage: h.app.opts.DiskUsage})
 	go func() { done <- real.Run(ctx) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -830,4 +816,8 @@ func TestImportDirectoryIsRemovedOnlyAfterTheManagerConfirmsSuccess(t *testing.T
 	if _, err := os.Stat(rejected); err != nil {
 		t.Fatalf("mgr 没有确认时应保留导入目录: %v", err)
 	}
+}
+
+func (f *fakeSource) ReadChanges(context.Context, string, string, *source.ChangeCursor) (source.Changes, error) {
+	return source.Changes{Next: source.ChangeCursor{StoreID: "store"}}, nil
 }

@@ -1,5 +1,5 @@
 // Package enginehub is moox-factor-mgr's side of the compute engine contract:
-// it holds the single-engine lease, keeps the latest heartbeat, assembles the
+// it records which engine process is current, keeps the latest heartbeat, assembles the
 // hashed catalog snapshot and leases recalc jobs to the engine.
 package enginehub
 
@@ -15,8 +15,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// ErrLeaseConflict means another engine holds the live engine lease.
-var ErrLeaseConflict = errors.New("factor engine lease is held by another engine")
+// ErrLeaseConflict 表示调用方不是当前登记的引擎进程：另一个 engine_id 的引擎还在心跳，或者调用方已被重启后的新进程顶替。
+var ErrLeaseConflict = errors.New("因子引擎已由另一个引擎进程登记")
 
 // Store is the catalog and job storage the hub reads and leases from.
 type Store interface {
@@ -41,8 +41,7 @@ const (
 
 type Option func(*Hub)
 
-// WithEngineLeaseTTL sets how long a heartbeat keeps an engine online and
-// holding the lease.
+// WithEngineLeaseTTL 设置心跳的新鲜期：超过这个时长没有心跳，引擎显示为离线，别的 engine_id 也可以登记。
 func WithEngineLeaseTTL(ttl time.Duration) Option { return func(h *Hub) { h.engineTTL = ttl } }
 
 // WithJobLeaseTTL sets how long a pulled recalc job stays leased without a
@@ -93,18 +92,16 @@ func New(db Store, options ...Option) *Hub {
 	return h
 }
 
-// Heartbeat records the engine's status and renews its lease. While another
-// engine's lease is live the heartbeat is rejected with ErrLeaseConflict.
+// Heartbeat 登记当前引擎进程并记下它上报的状态。系统只有一个引擎：同一 engine_id 换了 boot_id 就是它重启了，
+// 新进程立刻顶替旧进程，不用等旧心跳过期。另一个 engine_id 在当前引擎心跳还新鲜时来心跳，说明误起了第二个引擎，
+// 以 ErrLeaseConflict 拒绝（它的 /readyz 会显示 lease_conflict，提示停掉多余的那个）。
 func (h *Hub) Heartbeat(ctx context.Context, id domain.EngineIdentity, status domain.EngineStatus) (time.Duration, error) {
 	if id.EngineID == "" {
 		return 0, errors.New("engine_id is required")
 	}
 	now := h.now().UTC()
 	h.mu.Lock()
-	// A live lease is held by one process: another engine id, or the same id
-	// from another boot (a copied config), is rejected until the lease lapses.
-	if h.engine != nil && now.Before(h.engine.lastSeen.Add(h.engineTTL)) &&
-		(h.engine.identity.EngineID != id.EngineID || h.engine.identity.BootID != id.BootID) {
+	if h.engine != nil && h.engine.identity.EngineID != id.EngineID && now.Before(h.engine.lastSeen.Add(h.engineTTL)) {
 		h.mu.Unlock()
 		return 0, fmt.Errorf("%w: %s (boot %s)", ErrLeaseConflict, h.engine.identity.EngineID, h.engine.identity.BootID)
 	}
@@ -185,8 +182,8 @@ func (h *Hub) withOfflineLag(state *engineState, now time.Time) []domain.TaskRun
 	return out
 }
 
-// holdsLease 要求 engine_id 与 boot_id 都和当前持有租约的进程一致：同一 engine_id 的新进程接管后，旧进程的任务请求
-// （心跳之外的 Pull/Report）不能再续租或完成任务，与心跳的实例隔离一致。
+// holdsLease 要求 engine_id 与 boot_id 都和当前登记的进程一致且心跳新鲜：同一 engine_id 的新进程顶替后，
+// 旧进程残留的请求（Pull/Report 等）不能再续租或完成作业。
 func (h *Hub) holdsLease(id domain.EngineIdentity, now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -194,7 +191,7 @@ func (h *Hub) holdsLease(id domain.EngineIdentity, now time.Time) bool {
 		now.Before(h.engine.lastSeen.Add(h.engineTTL))
 }
 
-// HoldsLease 报告 id 是否是当前持有引擎租约的进程（冻结参数等只允许持有租约的引擎调用）。
+// HoldsLease 报告 id 是否是当前登记的引擎进程（冻结参数等只允许它调用）。
 func (h *Hub) HoldsLease(id domain.EngineIdentity) bool { return h.holdsLease(id, h.now().UTC()) }
 
 func (h *Hub) isReady(taskID string) bool {

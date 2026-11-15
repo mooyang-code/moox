@@ -206,6 +206,8 @@ type period struct {
 	timing     periodTiming
 	// shadow 为真表示实例在预热：目标事件带影子标记。
 	shadow bool
+	// clearState 为真表示实例的规则状态无法解析：随本期的 skipped 记录同事务清掉。
+	clearState bool
 	// memberResults 是策略池所有成员在就绪判断阶段都没通过时各成员的原因：skipped 记录的摘要据此写成员状态。
 	memberResults []pool.MemberResult
 }
@@ -215,7 +217,7 @@ type periodTiming struct {
 	start time.Time
 	load  time.Duration // 读取输入（View 元数据与行数据）
 	eval  time.Duration // 读取上期状态并求值
-	// 求值的三段：读上期结果（SQLite）、解析上期规则状态（JSON）、引擎求值。
+	// 求值的三段：读实例的规则状态（SQLite）、解析规则状态（JSON）、引擎求值。
 	evalLatest, evalDecode, evalRun time.Duration
 	commit                          time.Duration // 结果提交
 }
@@ -409,7 +411,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		if !validUntil.After(h.now()) {
 			return h.commitStateOnly(ctx, p, *decision, loaded, store.SkipExpired, "求值完成时有效期已过")
 		}
-		result, items, err := h.buildResult(p, *decision, loaded)
+		result, items, state, err := h.buildResult(p, *decision, loaded)
 		if err != nil {
 			return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 		}
@@ -419,7 +421,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 			return h.commitSkipped(ctx, p, input.SkipConfigError, paramsErr.Error())
 		}
 		result.NextParamsJSON = next
-		_, created, err := h.Store.CommitResult(ctx, store.CommitRequest{Result: result, Items: items, ExpectedLatestResultID: &expected, Now: h.now()})
+		_, created, err := h.Store.CommitResult(ctx, store.CommitRequest{Result: result, Items: items, State: state, ExpectedLatestResultID: &expected, Now: h.now()})
 		p.timing.commit = h.now().Sub(commitStart)
 		switch {
 		case err == nil:
@@ -508,33 +510,42 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	return &decision, loaded, nil
 }
 
-// previousState 读取上期的引擎状态；实例还没有带状态的结果时，策略池取会话里预热完成时的状态，其余从零开始。
-// 状态记录损坏时本期记为 skipped(config_error)，返回 ok 为 false。
+// previousState 读取实例的规则状态（每个实例一行，见 store.State）作为本期求值的起点；还没有状态时从零开始。
+// 返回 ok 为 false 表示本期已作为 skipped 落库：
+//   - 状态已经推进到本期或更晚（重新启用后沿用了上一个会话的状态，而这一期在上一个会话里求值过）：记 out_of_order，不重复推进；
+//   - 状态无法解析：普通策略清掉状态、本期记 config_error，下一期从头开始；策略池的状态要靠预热重建，只记 config_error；
+//   - 策略池没有状态（预热的结果与状态同事务写入，正常不会出现）：记 config_error。
 func (h *Handler) previousState(ctx context.Context, p *period) (engine.State, bool, error) {
 	rt := p.runtime
 	previous := engine.State{}
 	start := h.now()
-	last, found, err := h.Store.LatestState(ctx, p.instance.InstanceID, rt.sessionID)
+	row, found, err := h.Store.GetState(ctx, p.instance.InstanceID)
 	p.timing.evalLatest = h.now().Sub(start)
 	if err != nil {
 		return previous, false, err
 	}
-	if found {
-		decodeStart := h.now()
-		err := json.Unmarshal(last.RuleStatesJSON, &previous)
-		p.timing.evalDecode = h.now().Sub(decodeStart)
-		if err != nil {
-			h.logf("实例 %s 上期结果 %s 的规则状态无法解析：%v", p.instance.InstanceID, last.ResultID, err)
-			return previous, false, h.commitSkipped(ctx, p, input.SkipConfigError, "上期结果的规则状态无法解析（记录已损坏），请停用后重新启用实例")
+	if !found || row.SessionID != rt.sessionID {
+		if rt.pool != nil {
+			return previous, false, h.commitSkipped(ctx, p, input.SkipConfigError, "策略池没有可用的规则状态，请停用后重新启用实例（会重新预热）")
 		}
 		return previous, true, nil
 	}
-	if rt.pool != nil {
-		if previous, err = rt.pool.initialState(); err != nil {
-			return previous, false, h.commitSkipped(ctx, p, input.SkipConfigError, "会话里的预热状态无法解析，请停用后重新启用实例")
-		}
+	if !p.boundary.BarEnd.After(row.BarEndTime) {
+		return previous, false, h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("规则状态已推进到 %s，这一期不再求值", input.BarEndLabel(rt.resolved.Calendar, rt.resolved.Bar, row.BarEndTime)))
 	}
-	return previous, true, nil
+	decodeStart := h.now()
+	err = json.Unmarshal(row.StateJSON, &previous)
+	p.timing.evalDecode = h.now().Sub(decodeStart)
+	if err == nil {
+		return previous, true, nil
+	}
+	h.logf("实例 %s 的规则状态（推进到 %s）无法解析：%v", p.instance.InstanceID, row.BarEndTime.Format(time.RFC3339), err)
+	if rt.pool != nil {
+		return engine.State{}, false, h.commitSkipped(ctx, p, input.SkipConfigError, "策略池的规则状态无法解析（记录已损坏），请停用后重新启用实例（会重新预热）")
+	}
+	// 清状态与这条 config_error 记录在同一个事务里：不会出现状态清了而记录没写。
+	p.clearState = true
+	return engine.State{}, false, h.commitSkipped(ctx, p, input.SkipConfigError, "规则状态无法解析（记录已损坏），已清空，下一期从头开始")
 }
 
 // withReads 执行一组读取：活动索引换了就丢弃事件内缓存的元数据后整体重读；配置类问题返回 skip；基础设施错误按（事件, 实例）计尝试次数，
@@ -600,14 +611,14 @@ func (h *Handler) advanceState(ctx context.Context, p *period, payload *storagep
 	return h.commitStateOnly(ctx, p, *decision, loaded, reason, detail)
 }
 
-// commitStateOnly 把一次求值只当作状态推进写成 skipped(reason)：不带目标、不投递，规则状态留给下一期恢复。
+// commitStateOnly 把一次求值只当作状态推进写成 skipped(reason)：不带目标、不投递，推进后的规则状态与这条记录同事务写进实例的状态行。
 // 决策不是 ok（守门跳过）时只记 skipped(reason)。
 func (h *Handler) commitStateOnly(ctx context.Context, p *period, decision engine.Decision, loaded input.Loaded, reason, detail string) error {
 	if decision.Status != engine.StatusOK {
 		return h.commitSkipped(ctx, p, reason, detail)
 	}
 	decision.Status, decision.SkipReason, decision.Targets = engine.StatusSkipped, reason, nil
-	result, _, err := h.buildResult(p, decision, loaded)
+	result, _, state, err := h.buildResult(p, decision, loaded)
 	if err != nil {
 		return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 	}
@@ -616,43 +627,43 @@ func (h *Handler) commitStateOnly(ctx context.Context, p *period, decision engin
 	if result.InputJSON, err = json.Marshal(record); err != nil {
 		return err
 	}
-	return h.commitSkippedResult(ctx, p, result, reason, detail)
+	return h.commitSkippedResult(ctx, p, result, state, reason, detail)
 }
 
-// buildResult 把决策转成存储行；ok 且绑定账户的结果携带目标事件。
-func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.Loaded) (store.Result, []store.ResultItem, error) {
+// buildResult 把决策转成存储行与求值之后的规则状态（随结果同事务写进实例的状态行）；ok 且绑定账户的结果携带目标事件。
+func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.Loaded) (store.Result, []store.ResultItem, json.RawMessage, error) {
 	resultID, err := store.NewID()
 	if err != nil {
-		return store.Result{}, nil, err
+		return store.Result{}, nil, nil, err
 	}
 	targets, targetsJSON, err := EncodeTargets(decision.Targets)
 	if err != nil {
-		return store.Result{}, nil, err
+		return store.Result{}, nil, nil, err
 	}
 	states, err := json.Marshal(decision.State)
 	if err != nil {
-		return store.Result{}, nil, err
+		return store.Result{}, nil, nil, err
 	}
 	summary, err := EncodeSummary(decision.Summary, loaded.Sets.Notes)
 	if err != nil {
-		return store.Result{}, nil, err
+		return store.Result{}, nil, nil, err
 	}
 	record := p.input
 	record.Detail = ""
 	inputJSON, err := json.Marshal(record)
 	if err != nil {
-		return store.Result{}, nil, err
+		return store.Result{}, nil, nil, err
 	}
 	now := h.now()
 	result := store.Result{
 		ResultID: resultID, InstanceID: p.instance.InstanceID, SessionID: p.runtime.sessionID,
 		BarEndTime: p.boundary.BarEnd, ValidUntil: p.validUntil, Status: decision.Status, SkipReason: decision.SkipReason, DSLHash: p.runtime.dslHash,
-		InputJSON: inputJSON, TargetsJSON: targetsJSON, RuleStatesJSON: states, SummaryJSON: summary, PublishStatus: store.PublishNone, CreatedAt: now,
+		InputJSON: inputJSON, TargetsJSON: targetsJSON, SummaryJSON: summary, PublishStatus: store.PublishNone, CreatedAt: now,
 	}
 	if decision.Status == engine.StatusOK && p.instance.LogicalAccountID != nil {
 		event, err := MarshalTargetEvent(p.instance, result, targets, p.shadow)
 		if err != nil {
-			return store.Result{}, nil, err
+			return store.Result{}, nil, nil, err
 		}
 		result.EventData = event
 		result.PublishStatus = store.PublishPending
@@ -660,10 +671,10 @@ func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.
 	if decision.Status == engine.StatusSkipped {
 		result.TargetsJSON = json.RawMessage(`[]`)
 	}
-	return result, ResultItems(decision.Items), nil
+	return result, ResultItems(decision.Items), states, nil
 }
 
-// commitSkipped 写入一条 skipped 记录；实例已停用时视为无事可做。
+// commitSkipped 写入一条没有求值的 skipped 记录，规则状态不动；实例已停用时视为无事可做。
 func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail string) error {
 	if p.runtime == nil || p.runtime.sessionID == "" {
 		return nil
@@ -678,26 +689,22 @@ func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail s
 	if err != nil {
 		return err
 	}
-	states, err := h.carriedState(ctx, p)
-	if err != nil {
-		return err
-	}
-	summary, err := h.carriedSummary(p, states, reason, detail)
+	summary, err := h.carriedSummary(ctx, p, reason, detail)
 	if err != nil {
 		return err
 	}
 	result := store.Result{
 		ResultID: resultID, InstanceID: p.instance.InstanceID, SessionID: p.runtime.sessionID,
 		BarEndTime: p.boundary.BarEnd, ValidUntil: p.validUntil, Status: store.StatusSkipped, SkipReason: reason, DSLHash: p.runtime.dslHash,
-		InputJSON: inputJSON, TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: states, SummaryJSON: summary,
+		InputJSON: inputJSON, TargetsJSON: json.RawMessage(`[]`), SummaryJSON: summary,
 		PublishStatus: store.PublishNone, CreatedAt: h.now(),
 	}
-	return h.commitSkippedResult(ctx, p, result, reason, detail)
+	return h.commitSkippedResult(ctx, p, result, nil, reason, detail)
 }
 
-// commitSkippedResult 写入已构造好的 skipped 记录；实例已停用时视为无事可做。
-func (h *Handler) commitSkippedResult(ctx context.Context, p *period, result store.Result, reason, detail string) error {
-	_, created, err := h.Store.CommitResult(ctx, store.CommitRequest{Result: result, Now: h.now()})
+// commitSkippedResult 写入已构造好的 skipped 记录；state 非空时是求值推进后的规则状态，同事务写入。实例已停用时视为无事可做。
+func (h *Handler) commitSkippedResult(ctx context.Context, p *period, result store.Result, state json.RawMessage, reason, detail string) error {
+	_, created, err := h.Store.CommitResult(ctx, store.CommitRequest{Result: result, State: state, ClearState: p.clearState && len(state) == 0, Now: h.now()})
 	if err != nil {
 		if errors.Is(err, store.ErrResultInstanceNotActive) {
 			return nil

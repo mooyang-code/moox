@@ -19,7 +19,7 @@ import (
 
 const monitorLifecycleRefresh = 30 * time.Second
 
-// alertSender 是三处告警推送共用的发送器工厂：暂停、恢复追赶、重置期间静默（只记录），否则发给全部通知渠道。
+// alertSender 是告警推送的发送器工厂（告警评估、静默结束时的汇总共用）：暂停、恢复追赶、重置期间静默（只记录），否则发给全部通知渠道。
 func (r *Runtime) alertSender(ctx context.Context) (notification.Sender, error) {
 	if life := r.life.Load(); life != nil && life.Halted(lifecycle.Ref{}) {
 		return nil, nil

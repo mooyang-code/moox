@@ -281,7 +281,7 @@ func TestArchiveImportRefusesToUploadWhenTheWorkerIsNotOnTheDeployedHost(t *test
 	g.workerID = "archive-worker@old"
 	local := writeLocalCSV(t, "a.csv", "data_time,subject_id,close\n")
 	err := runArchiveImport(context.Background(), io.Discard, archiveFlags{SpaceID: "crypto", DatasetID: "ds", CSV: local, Yes: true})
-	require.ErrorContains(t, err, `活动的归档 worker 是 "archive-worker@old"`)
+	require.ErrorContains(t, err, `在线的归档 worker 是 "archive-worker@old"`)
 	require.ErrorContains(t, err, `主机是 factor（对应 worker "archive-worker@factor"）`)
 	assert.NotContains(t, *calls, "exec")
 	assert.NotContains(t, *calls, "upload")

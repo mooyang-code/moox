@@ -23,7 +23,6 @@ type Config struct {
 	sourcePath    string                   `yaml:"-"`
 	Database      DatabaseConfig           `yaml:"database"`
 	Run           RunConfig                `yaml:"run"`
-	Worker        WorkerConfig             `yaml:"worker"`
 	Schedule      ScheduleConfig           `yaml:"schedule"`
 	Retention     RetentionConfig          `yaml:"retention"`
 	// StagingRetention 是 worker 暂存区保留最近多久的数据，之后分区定稿。
@@ -40,12 +39,6 @@ type DatabaseConfig struct {
 type RunConfig struct {
 	// LeaseTTL 是运行租约的有效期，进度上报时续租。
 	LeaseTTL time.Duration `yaml:"lease_ttl"`
-}
-
-// WorkerConfig 控制 worker 的租约。
-type WorkerConfig struct {
-	// TakeoverWait 是旧 worker 停止心跳多久之后新 worker 才能接管，同时也是心跳续租的有效期。
-	TakeoverWait time.Duration `yaml:"takeover_wait"`
 }
 
 // ScheduleConfig 是复核的读取规则（拉取边界与检查节奏是代码常量，见 schedule 包）。
@@ -100,7 +93,6 @@ func Default() *Config {
 		GatewayClient:    gatewayclient.FileConfig{Caller: Caller, KeyFile: "../../secrets/caller-archive-mgr.key"},
 		Database:         DatabaseConfig{Path: "./data/archive-mgr/archive.db"},
 		Run:              RunConfig{LeaseTTL: 10 * time.Minute},
-		Worker:           WorkerConfig{TakeoverWait: 45 * time.Second},
 		Schedule:         ScheduleConfig{MinLookback: 15 * time.Minute},
 		Retention:        RetentionConfig{ScheduledSuccess: 30 * 24 * time.Hour, Other: 90 * 24 * time.Hour},
 		StagingRetention: 72 * time.Hour,
@@ -135,9 +127,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Run.LeaseTTL < time.Minute {
 		return fmt.Errorf("run.lease_ttl 不能小于 1 分钟")
-	}
-	if c.Worker.TakeoverWait < 15*time.Second {
-		return fmt.Errorf("worker.takeover_wait 不能小于 15 秒")
 	}
 	if c.Schedule.MinLookback < 15*time.Minute {
 		return fmt.Errorf("schedule.min_lookback 不能小于 15 分钟")

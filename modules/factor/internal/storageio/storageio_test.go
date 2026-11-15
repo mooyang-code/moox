@@ -136,7 +136,7 @@ func TestWriteRowsEncodesNullFields(t *testing.T) {
 		SpaceId: "crypto", DatasetId: "factor_result", Freq: "1m", Status: "active",
 	}}
 	store := NewClient(primary, metadata, nil)
-	err := store.WriteRows(context.Background(), "crypto", "factor_result", "commit-1", []ResultRow{{
+	err := store.WriteRows(context.Background(), "crypto", "factor_result", []ResultRow{{
 		SubjectID: "BTC", DataTime: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC), SeriesTag: "venue:a",
 		Fields: map[string]any{"close": nil, "high": math.Inf(1), "low": math.NaN()},
 	}})
@@ -150,22 +150,6 @@ func TestWriteRowsEncodesNullFields(t *testing.T) {
 		require.IsType(t, &storagepb.TypedValue_NullValue{}, field.GetValue().GetValue())
 		require.Equal(t, storagepb.NullValue_NULL_VALUE_NULL, field.GetValue().GetNullValue())
 	}
-}
-
-func TestCommitIDIsDeterministic(t *testing.T) {
-	at := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
-	left := []ResultRow{{SubjectID: "BTC", DataTime: at, SeriesTag: "venue:a", Fields: map[string]any{"z": 2, "a": "x"}}}
-	right := []ResultRow{{SubjectID: "BTC", DataTime: at, SeriesTag: "venue:a", Fields: map[string]any{"a": "x", "z": 2}}}
-	require.Equal(t, CommitID("set-1", at.Unix(), left), CommitID("set-1", at.Unix(), right))
-	require.Equal(t,
-		CommitID("set-1", at.Unix(), []ResultRow{{SubjectID: "BTC", DataTime: at, Fields: map[string]any{"close": int(1)}}}),
-		CommitID("set-1", at.Unix(), []ResultRow{{SubjectID: "BTC", DataTime: at, Fields: map[string]any{"close": int64(1)}}}),
-	)
-	require.Equal(t,
-		CommitID("set-1", at.Unix(), []ResultRow{{SubjectID: "BTC", DataTime: at, Fields: map[string]any{"close": math.NaN()}}}),
-		CommitID("set-1", at.Unix(), []ResultRow{{SubjectID: "BTC", DataTime: at, Fields: map[string]any{"close": nil}}}),
-	)
-	require.NotEqual(t, CommitID("set-1", at.Unix(), left), CommitID("set-2", at.Unix(), left))
 }
 
 func TestTransientErrorsWrapErrInfra(t *testing.T) {

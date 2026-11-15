@@ -8,8 +8,7 @@ vi.mock("@/store/modules/theme-config", async () => {
   const { ref } = await import("vue");
   return {
     useThemeConfig: defineStore("theme-config-test", () => ({
-      refreshPage: ref(true),
-      isTabs: ref(false)
+      refreshPage: ref(true)
     }))
   };
 });

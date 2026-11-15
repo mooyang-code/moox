@@ -145,7 +145,7 @@ provider = " Tencent "`, 1)
 	}
 }
 
-func TestLoadRejectsAddressAliasesAndDNSResolver(t *testing.T) {
+func TestLoadRejectsAddressAliasesAndRemovedEgressDNS(t *testing.T) {
 	for name, body := range map[string]string{
 		"DNS alias": strings.Replace(validManifest, `address = "192.0.2.10"`, `address = "CONTROL.example.test"`, 1) + `
 [hosts.compute]
@@ -165,8 +165,9 @@ ssh = { username = "ubuntu" }
 		})
 	}
 	root := t.TempDir()
-	_, err := Load(writeManifest(t, root, validManifest+"[dns_resolver]\ntrade_node = 'compute'\n", 0o600), root)
-	require.ErrorContains(t, err, "[egress_proxy.dns]")
+	_, err := Load(writeManifest(t, root, validManifest+"[egress_proxy.dns]\ndomains = ['api.binance.com']\n", 0o600), root)
+	require.ErrorContains(t, err, "[egress_proxy.dns] 已删除")
+	require.ErrorContains(t, err, "config migrate")
 }
 
 // 客户端与 EventBus 同机用回环地址，其余主机用 EventBus 所在主机的对外地址；

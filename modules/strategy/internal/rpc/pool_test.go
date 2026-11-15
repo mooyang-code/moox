@@ -179,7 +179,7 @@ func TestPoolEnableFreezesMembers(t *testing.T) {
 	if members[0].ID != "a" || members[0].StrategyID != "member_spot" || members[0].DSLYaml != spotMemberDSL || members[0].DSLHash != dsl.Hash([]byte(spotMemberDSL)) || members[1].DSLYaml != swapMemberDSL {
 		t.Fatalf("固化的成员不符：%+v", members)
 	}
-	if session.WarmedThrough != nil || session.WarmState != "" {
+	if session.WarmedThrough != nil {
 		t.Fatalf("预热结果在预热完成前为空：%+v", session)
 	}
 	if len(h.owner.claims) != 0 {

@@ -165,7 +165,7 @@ func (f *fakeStorage) EarliestPeriod(_ context.Context, _, _, _ string, subjects
 func (f *fakeStorage) DatasetColumns(context.Context, string, string) ([]string, error) {
 	return []string{"close", "volume"}, nil
 }
-func (f *fakeStorage) WriteRows(_ context.Context, _, _, _ string, rows []storageio.ResultRow) error {
+func (f *fakeStorage) WriteRows(_ context.Context, _, _ string, rows []storageio.ResultRow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, r := range rows {

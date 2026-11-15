@@ -1,0 +1,98 @@
+package relay
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"google.golang.org/protobuf/proto"
+)
+
+// JetStreamPublisher 把一条完成标记发布到它所属数据集的主题。传输层的消息 ID 就是事件 ID，重发不变。
+type JetStreamPublisher struct {
+	publisher *events.Publisher
+	client    *jetstream.Client
+}
+
+func (p *JetStreamPublisher) PublishMessage(ctx context.Context, data []byte) error {
+	_, err := p.PublishMessageWithAck(ctx, data)
+	return err
+}
+
+func (p *JetStreamPublisher) PublishMessageWithAck(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {
+	if p == nil || p.publisher == nil {
+		return nil, errors.New("storage eventbus client is nil")
+	}
+	_, _, err := validateDatasetEvent(data)
+	if err != nil {
+		return nil, err
+	}
+	message := new(eventpb.EventMessage)
+	if err := proto.Unmarshal(data, message); err != nil {
+		return nil, err
+	}
+	return p.publisher.PublishMessage(ctx, message)
+}
+
+// Reconnect 在 EventBus 重启后替换底层 NATS 连接。转发协程只在连续发布失败后调用它，
+// 游标不动，直到之后的发布成功。
+func (p *JetStreamPublisher) Reconnect(ctx context.Context) error {
+	if p == nil || p.client == nil {
+		return errors.New("storage eventbus client is nil")
+	}
+	return p.client.Reconnect(ctx)
+}
+
+func (p *JetStreamPublisher) Ready() bool {
+	return p != nil && p.client != nil && p.publisher != nil && p.client.Ready()
+}
+
+func validateDatasetEvent(data []byte) (string, string, error) {
+	message := &eventpb.EventMessage{}
+	if err := proto.Unmarshal(data, message); err != nil {
+		return "", "", err
+	}
+	if message.GetEventId() == "" || message.GetSubjectId() == "" || message.GetSpaceId() == "" {
+		return "", "", errors.New("dataset event envelope is incomplete")
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return "", "", err
+	}
+	event, ok := registry.Lookup(message.GetEventName(), message.GetEventVersion())
+	if !ok || !relayedEvent(event) {
+		return "", "", fmt.Errorf("不支持转发的事件 %s@%d", message.GetEventName(), message.GetEventVersion())
+	}
+	subject, err := registry.RenderSubject(event, message.GetSpaceId(), message.GetSubjectId())
+	if err != nil {
+		return "", "", err
+	}
+	if _, _, err := events.DecodeRaw(registry, data, subject, message.GetEventId(), events.ContentType); err != nil {
+		return "", "", fmt.Errorf("validate dataset event: %w", err)
+	}
+	return subject, message.GetEventId(), nil
+}
+
+// relayedEvent 报告事件能否转发：只转发周期完成事件。
+func relayedEvent(event events.Event) bool {
+	return event.Name() == events.DatasetPeriodCompleted.Name() && event.Version() == events.DatasetPeriodCompleted.Version()
+}
+
+func NewJetStreamPublisher(client *jetstream.Client) *JetStreamPublisher {
+	if client == nil {
+		return &JetStreamPublisher{}
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return &JetStreamPublisher{}
+	}
+	publisher, err := events.NewPublisher(client, registry)
+	if err != nil {
+		return &JetStreamPublisher{}
+	}
+	// 事件信封由发布器默认压缩；所有消费端经 events.DecodeRaw 透明解压。
+	return &JetStreamPublisher{publisher: publisher, client: client}
+}

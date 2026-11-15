@@ -41,7 +41,7 @@ func (c *clock) Set(t time.Time) {
 // fakeTrade 是假的 Trade：名单、持仓和清仓操作都在内存里，清仓按操作号幂等。
 type fakeTrade struct {
 	mu sync.Mutex
-	// blocked 是下架名单：标的 → 第一个写入者的原因（重复写入保留第一个，和 Trade 一样）。
+	// blocked 是下架名单：标的 → 第一个写入者（重复写入保留第一个，和 Trade 一样）；手工写入的没有写入者。
 	blocked map[action.InstrumentRef]string
 	holders []action.Holder
 	// ignorePaperOnly 模拟违约的 Trade：paperOnly 为真也返回全部持有者。
@@ -97,11 +97,11 @@ func (f *fakeTrade) isBlocked() bool {
 	return blocked
 }
 
-// setBlocked 直接改名单（不经过处理器）：写入的原因是“手工”，不带任何执行记录的标记。
+// setBlocked 直接改名单（不经过处理器）：没有写入者。
 func (f *fakeTrade) setBlocked(blocked bool) {
 	f.mu.Lock()
 	if blocked {
-		f.blocked[foo] = "手工"
+		f.blocked[foo] = ""
 	} else {
 		delete(f.blocked, foo)
 	}
@@ -131,7 +131,7 @@ func (f *fakeTrade) enter(method string) error {
 	return f.errs[method]
 }
 
-func (f *fakeTrade) BlockInstrument(ctx context.Context, instrument action.InstrumentRef, reason, eventID string) (action.BlockResult, error) {
+func (f *fakeTrade) BlockInstrument(ctx context.Context, instrument action.InstrumentRef, reason, eventID, owner string) (action.BlockResult, error) {
 	f.mu.Lock()
 	hook := f.blockHook
 	f.mu.Unlock()
@@ -145,7 +145,7 @@ func (f *fakeTrade) BlockInstrument(ctx context.Context, instrument action.Instr
 	}
 	_, exists := f.blocked[instrument]
 	if !exists {
-		f.blocked[instrument] = reason
+		f.blocked[instrument] = owner
 	}
 	created := !exists
 	return action.BlockResult{InstrumentUnknown: f.unknown, Created: created}, nil
@@ -176,8 +176,8 @@ func (f *fakeTrade) ListBlockedInstruments(context.Context) ([]action.BlockedIns
 		return nil, err
 	}
 	var list []action.BlockedInstrument
-	for instrument, reason := range f.blocked {
-		list = append(list, action.BlockedInstrument{Instrument: instrument, Reason: reason})
+	for instrument, owner := range f.blocked {
+		list = append(list, action.BlockedInstrument{Instrument: instrument, Reason: "下架", Owner: owner})
 	}
 	return list, nil
 }

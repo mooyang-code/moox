@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"strconv"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -64,23 +62,7 @@ func alertObject(spaceID, checkID string, facts observability.Overview) *pb.Heal
 	return object
 }
 
-// alertSeverity 区分告警轻重：critical 表示服务不可用、数据中断、主机失联或网关异常；
-// warning 表示还在工作但有风险，例如资源超过阈值、运行指标上报中断、采集任务清单过期、指标序列新增过快、
-// 只需提醒的关注项（缺币安只读 Key：现货下架改为手工登记）。
-func alertSeverity(checkID string, object *pb.HealthObject) string {
-	switch {
-	case object.Kind == "reporter", object.Kind == "metrics_ingest", checkID == monmetrics.TaskResultInventoryCheckID:
-		return "warning"
-	case object.AttentionKind != "" && observability.AttentionIsWarning(object.Kind, object.AttentionKind):
-		return "warning"
-	case object.Type == "host" && hostmetrics.MetricLabel(object.Kind) != "":
-		return "warning"
-	default:
-		return "critical"
-	}
-}
-
-// fallbackTitle 在检查名称缺失时（主机阈值、主机失联没有检查记录）用身份字段拼出标题。
+// fallbackTitle 在检查记录已经不在时（例如对象删除后检查被清理，告警经过里还留着它）用身份字段拼出标题。
 func fallbackTitle(checkID string, object *pb.HealthObject, facts observability.Overview) string {
 	switch {
 	case object.Type == "component":
@@ -142,24 +124,15 @@ func (t *checkTitles) title(ctx context.Context, spaceID, checkID string, object
 	return name, nil
 }
 
-// eventReason 取告警事件记录的问题描述：主机阈值告警由事件里的指标值和阈值生成，其余告警取 payload 的 reason。
+// eventReason 取告警事件记录的问题描述（payload 的 reason）。
 func eventReason(event domain.AlertEvent) string {
 	var payload struct {
-		Reason    string   `json:"reason"`
-		Metric    string   `json:"metric"`
-		Value     *float64 `json:"value"`
-		Threshold *float64 `json:"threshold"`
+		Reason string `json:"reason"`
 	}
 	if json.Unmarshal([]byte(event.Payload), &payload) != nil {
 		return ""
 	}
-	if payload.Reason != "" {
-		return ChineseReason(payload.Reason)
-	}
-	if label := hostmetrics.MetricLabel(payload.Metric); label != "" && payload.Value != nil && payload.Threshold != nil {
-		return fmt.Sprintf("%s %.1f%%，超过阈值 %s%%", label, *payload.Value, strconv.FormatFloat(*payload.Threshold, 'f', -1, 64))
-	}
-	return ""
+	return ChineseReason(payload.Reason)
 }
 
 // eventProcessLimit 是页面上一条告警列出的进程数。
@@ -168,27 +141,8 @@ const eventProcessLimit = 5
 // eventProcesses 取告警事件里记下的进程排行（主机 CPU、内存告警在触发和提醒时记录），按告警的指标排好：
 // 内存告警按内存、CPU 告警按 CPU，和推送正文同一个规则。没有时返回 nil。
 func eventProcesses(event domain.AlertEvent) []*pb.AlertProcess {
-	var payload struct {
-		Metric       string `json:"metric"`
-		TopProcesses []struct {
-			PID        uint32   `json:"pid"`
-			Name       string   `json:"name"`
-			RSSBytes   uint64   `json:"rss_bytes"`
-			CPUPercent *float64 `json:"cpu_percent"`
-		} `json:"top_processes"`
-	}
-	if json.Unmarshal([]byte(event.Payload), &payload) != nil || len(payload.TopProcesses) == 0 {
-		return nil
-	}
-	items := make([]alerttext.Process, 0, len(payload.TopProcesses))
-	for _, item := range payload.TopProcesses {
-		process := alerttext.Process{PID: item.PID, Name: item.Name, RSSBytes: item.RSSBytes}
-		if item.CPUPercent != nil {
-			process.CPUPercent, process.CPUAvailable = *item.CPUPercent, true
-		}
-		items = append(items, process)
-	}
-	ranked := alerttext.RankProcesses(items, payload.Metric == hostmetrics.HostMetricMemory, eventProcessLimit)
+	detail := alerttext.DecodeProcessDetail(event.Payload)
+	ranked := alerttext.RankProcesses(detail.TopProcesses, detail.ByMemory(), eventProcessLimit)
 	if len(ranked) == 0 {
 		return nil
 	}
@@ -205,7 +159,7 @@ func (b Builder) projectAlert(ctx context.Context, state domain.AlertState, fact
 	if err != nil {
 		return nil, err
 	}
-	alert := &pb.HealthAlert{Id: state.DedupeKey, Severity: alertSeverity(state.CheckID, object), Object: object, Title: title, Reason: "监控项持续异常", LastCheckedAt: stamp(state.UpdatedAt)}
+	alert := &pb.HealthAlert{Id: state.DedupeKey, Severity: alerting.Severity(state.CheckID), Object: object, Title: title, Reason: "监控项持续异常", LastCheckedAt: stamp(state.UpdatedAt)}
 	if state.TriggeredAt != nil {
 		alert.TriggeredAt = stamp(*state.TriggeredAt)
 	}
@@ -254,13 +208,7 @@ func (b Builder) projectAlert(ctx context.Context, state domain.AlertState, fact
 			return nil, err
 		}
 		if event != nil {
-			if reason := eventReason(*event); reason != "" {
-				alert.Reason = reason
-			}
 			alert.Processes = eventProcesses(*event)
-			if alert.LastCheckedAt == "" {
-				alert.LastCheckedAt = stamp(event.CreatedAt)
-			}
 		}
 	}
 	return alert, nil

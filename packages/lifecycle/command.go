@@ -239,6 +239,9 @@ func (c *Controller) transition(ctx context.Context, req Request) (Object, error
 		case r.Stage == StageReady || r.Stage.Active():
 			r.Resume = r.Stage
 			r.Pause = info
+			// 模块恢复追赶期间被暂停的对象不再参与本次追赶（与“手动暂停的对象不参与恢复”一致），否则它没追平会一直挡住模块。
+			r.catchupMember = false
+			r.catchup = nil
 			c.markPausedSince(r)
 			c.set(r, StagePaused, reason, &changes)
 		case ref == (Ref{}) && kind == PauseSystem && r.Stage != StageResetting && r.Stage != StageResetFailed:

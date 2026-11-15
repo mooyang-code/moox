@@ -11,11 +11,15 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/storagepb"
 	nats "github.com/nats-io/nats.go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const ConsumerName = "factor_collector_period_v1"
+
+// BackfilledConsumerName 是 K 线补写事件（event.collector.kline.backfilled，MOOX_COLLECTOR）的持久消费者。
+const BackfilledConsumerName = "factor_kline_backfilled_v1"
 
 type ConsumerConfig struct {
 	URLs               []string
@@ -37,6 +41,8 @@ type ConsumerConfig struct {
 	Begin func(ctx context.Context, taskID string, live bool) (func(), bool)
 	// Params 非空时在开算每一期之前取参；为空时全部按成员自己的参数计算。
 	Params trigger.ParamSelector
+	// OnBackfilled 非空时另建一个持久消费者订阅 K 线补写事件，每条事件调用一次（只更新内存状态，不返回错误）。
+	OnBackfilled func(spaceID string, payload *storagepb.CollectorKlineBackfilled)
 }
 
 // ackWaitHeartbeats is how many InProgress heartbeats may be missed before a
@@ -87,8 +93,10 @@ type Consumer struct {
 	sets     trigger.TaskLocator
 	handler  *Handler
 	consumer *events.Consumer
-	client   *jetstream.Client
-	runner   *jetstream.Runner
+	// backfilled 是 K 线补写事件的消费者，与周期完成共用一个连接。
+	backfilled *events.Consumer
+	client     *jetstream.Client
+	runner     *jetstream.Runner
 
 	mu                 sync.RWMutex
 	filters            []string
@@ -161,6 +169,31 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.TaskLocat
 			log.ErrorContextf(runCtx, "factor period consumer error: %v", err)
 		}),
 	})
+	if cfg.OnBackfilled != nil {
+		c.backfilled, err = events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
+			Name: BackfilledConsumerName, Event: events.CollectorKlineBackfilled,
+			AckWait: time.Minute, MaxDeliver: 5, MaxAckPending: cfg.MaxAckPending,
+			FetchMaxWait: cfg.FetchMaxWait, DeliverPolicy: nats.DeliverNewPolicy,
+			DeliverDecodeErrors: true,
+		})
+		if err != nil {
+			cancel()
+			_ = consumer.Close()
+			_ = client.Close()
+			return nil, err
+		}
+		backfilledRunner := jetstream.NewRunner(c.backfilled, backfilledHandler{registry: registry, notify: cfg.OnBackfilled}, jetstream.RunnerConfig{
+			BatchSize: cfg.MaxAckPending,
+			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+				log.ErrorContextf(runCtx, "factor kline backfilled consumer error: %v", err)
+			}),
+		})
+		c.runWG.Add(1)
+		go func() {
+			defer c.runWG.Done()
+			runUntilCancelled(runCtx, backfilledRunner.Run)
+		}()
+	}
 	c.ready.Store(true)
 	c.runWG.Add(1)
 	go func() {
@@ -170,9 +203,29 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.TaskLocat
 	return c, nil
 }
 
+// backfilledHandler 把 K 线补写事件交给引擎；事件只更新内存里的状态，解码不了的直接终止，其余一律 ACK。
+type backfilledHandler struct {
+	registry *events.Registry
+	notify   func(spaceID string, payload *storagepb.CollectorKlineBackfilled)
+}
+
+// Handle 实现 jetstream.DeliveryHandler。
+func (h backfilledHandler) Handle(_ context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+	if delivery == nil || delivery.DecodeError != nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("K 线补写事件无法解码")}
+	}
+	message, value, err := events.DecodeRaw(h.registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+	payload, ok := value.(*storagepb.CollectorKlineBackfilled)
+	if err != nil || message == nil || !ok {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("拒绝 K 线补写事件: %v", err)}
+	}
+	h.notify(message.GetSpaceId(), payload)
+	return jetstream.HandlerResult{Decision: jetstream.ACK}
+}
+
 func (c *Consumer) Ready() bool { return c != nil && c.ready.Load() }
 
-// Advance 在任务的通道里按连续水位推进一次（追赶循环、补齐通知）。
+// Advance 在任务的通道里按连续水位推进一次（追赶循环、K 线补写事件）。
 func (c *Consumer) Advance(ctx context.Context, taskID string) error {
 	if c == nil || c.handler == nil {
 		return nil
@@ -240,6 +293,9 @@ func (c *Consumer) Close() error {
 		}
 		if c.consumer != nil {
 			closeErr = c.consumer.Close()
+		}
+		if c.backfilled != nil {
+			closeErr = errors.Join(closeErr, c.backfilled.Close())
 		}
 		c.runWG.Wait()
 		if c.handler != nil {

@@ -393,7 +393,7 @@ export function unarchivedDatasets(datasets: Dataset[], tasks: ArchiveTask[]): D
 
 /**
  * 状态行下方的提醒：和某个任务的健康原因完全相同的（“<dataset_id>：<health_reason>”）任务表已经显示，过滤掉；
- * 其余照常显示，例如“<dataset_id>：分区登记在 worker X，当前活动 worker 是 Y，运行不会派给它”不在健康原因里。
+ * 其余照常显示，例如“归档 worker 不在线”不在健康原因里。
  */
 export function systemAlerts(alerts: string[] | undefined, tasks: Pick<ArchiveTask, "dataset_id" | "health_reason">[]): string[] {
   const shown = new Set(tasks.filter(task => task.health_reason).map(task => `${task.dataset_id}：${task.health_reason}`));

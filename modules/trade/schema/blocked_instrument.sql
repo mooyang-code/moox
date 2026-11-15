@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS t_trade_blocked_instruments (
     c_base_asset TEXT NOT NULL DEFAULT '',
     c_reason TEXT NOT NULL,
     c_source_event_id TEXT NOT NULL DEFAULT '',
+    -- 写入者：谁把这个标的加进名单的（事件中心的下架处理写它的执行记录 ID）。重复写入不改已有的行，所以它始终是第一个写入者
+    c_owner TEXT NOT NULL DEFAULT '',
     c_blocked_at INTEGER NOT NULL,
     PRIMARY KEY (c_exchange, c_market_type, c_exchange_symbol),
     CHECK (c_exchange <> ''),

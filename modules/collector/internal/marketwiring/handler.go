@@ -4,7 +4,6 @@ package marketwiring
 
 import (
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -50,31 +49,6 @@ func DefaultSourceID(marketID, provider, instrumentType string) string {
 		return ""
 	}
 	return entry.Key.SourceID
-}
-
-// FeedLabels 返回 feed 指标里市场、数据源、路由标签允许的取值：市场取已登记的市场，数据源取行情源目录，
-// 路由按目录生成——按路由分配的是 <市场>_<品种>_kline_<频率>，单一来源的是 <数据源>_<品种>_kline_<频率>
-// （有路由文件的市场里不归路由管的品种，路由 ID 不带频率，不在允许的取值里，标签记为 unknown）；
-// 标的快照的路由 ID 一并保留。
-func FeedLabels() marketfetch.FeedLabels {
-	labels := marketfetch.FeedLabels{Markets: markets.IDs()}
-	add := func(list *[]string, value string) {
-		if !slices.Contains(*list, value) {
-			*list = append(*list, value)
-		}
-	}
-	for _, entry := range catalog.Default().Entries() {
-		add(&labels.Providers, entry.Key.ProviderID)
-		owner := entry.Key.ProviderID + "_" + string(entry.Instrument)
-		if entry.RouteSource {
-			owner = string(entry.MarketID) + "_" + string(entry.Instrument)
-			add(&labels.Routes, string(entry.MarketID)+"_instrument_v1")
-		} else {
-			add(&labels.Routes, owner+"_instrument_v1")
-		}
-		add(&labels.KlineRoutePrefixes, owner+"_kline_")
-	}
-	return labels
 }
 
 // planPeriodValid 是采集计划的周期过滤：周期开始时刻必须是该市场此频率的一个交易桶。连续交易的市场每个周期都执行；

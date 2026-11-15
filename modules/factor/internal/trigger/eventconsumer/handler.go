@@ -80,7 +80,7 @@ func (h *Handler) SetCatchupGate(gate func(taskID string) bool) { h.catchupGate 
 // SetContinuity 打开连续水位推进；必须在开始消费之前调用。
 func (h *Handler) SetContinuity(continuity *Continuity) { h.continuity = continuity }
 
-// Advance 在任务的通道里按连续水位推进一次（追赶循环与补齐通知调用）。
+// Advance 在任务的通道里按连续水位推进一次（追赶循环与K 线补写事件调用）。
 func (h *Handler) Advance(ctx context.Context, taskID string) error {
 	if h == nil || h.continuity == nil {
 		return nil

@@ -141,17 +141,10 @@ func hasBlockStep(steps []store.DelistAction) bool {
 	return false
 }
 
-// blockOwnerMarker 是写进名单原因里的执行记录标记。名单遇到重复写入时保留第一个写入者的原因，所以名单里这一项的原因带着谁的标记，
-// 就说明是谁写的；不能靠写名单时 Trade 返回的 created 记：写的响应丢了再重试，拿到的就是 created=false。
-// 只按执行记录 ID 匹配（原因里的下架时间在改期后会变）。
-func blockOwnerMarker(executionID string) string {
-	return "事件中心执行记录 " + executionID + "）"
-}
-
 // release 解除禁止买入。调用时必须已持有这个标的的锁。attempted 为假表示这条记录从没尝试过写名单。
 //   - 真实下架（ALL）：尝试过写名单就一律解除。同标的的演练还没结束时，它下一次推进前查名单发现不在了会自己停下，代价只是一次模拟盘演练；
 //     不解除的话，已发起的平仓会继续卖（Trade 只在解除禁止时才停下清仓）。
-//   - 演练（PAPER_ONLY）：只解除“自己写进名单的那一条”——名单里这一项的原因带着自己的执行记录 ID，并且同标的没有未取消的真实下架
+//   - 演练（PAPER_ONLY）：只解除“自己写进名单的那一条”——名单里这一项的写入者是自己的执行记录 ID，并且同标的没有未取消的真实下架
 //     （含已结束的，结束的真实下架按设计保留名单）。名单里没有这一项就没有要解除的。否则演练的结束或取消会把真实下架的名单解除，
 //     持有这个币的组合就卡在被禁止里。
 //
@@ -184,7 +177,8 @@ func (h *Handler) release(ctx context.Context, execution store.Execution, tgt ta
 	return nil
 }
 
-// ownsListedBlock 查名单里这个标的的这一项是不是这条记录写的。
+// ownsListedBlock 查名单里这个标的的这一项是不是这条记录写的：写名单时把执行记录 ID 作为写入者传给 Trade，名单遇到重复写入
+// 保留第一个写入者。不能靠写名单时 Trade 返回的 created 记：写的响应丢了再重试，拿到的就是 created=false。
 func (h *Handler) ownsListedBlock(ctx context.Context, execution store.Execution, tgt target) (bool, error) {
 	callCtx, cancel := h.tradeCtx(ctx)
 	defer cancel()
@@ -197,7 +191,7 @@ func (h *Handler) ownsListedBlock(ctx context.Context, execution store.Execution
 	}
 	for _, item := range blocked {
 		if normalizeRef(item.Instrument) == tgt.Instrument {
-			return strings.Contains(item.Reason, blockOwnerMarker(execution.ExecutionID)), nil
+			return item.Owner == execution.ExecutionID, nil
 		}
 	}
 	return false, nil
@@ -445,12 +439,12 @@ func (r *run) ensureBlocked(ctx context.Context) (outcome action.Outcome, finish
 	blockKey := stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}
 	step := r.steps[blockKey]
 	step.Round, step.Kind, step.Exchange = RoundBlock, store.DelistKindBlock, r.target.Instrument.Exchange
-	step.Reason = blockReason(r.execution, r.target)
+	step.Reason = blockReason(r.target)
 	// 重新写名单就不再是“自己解除过”，旧的解除待重试结论（连同它对应的下架时间）也作废。
 	step.SelfReleased, step.ReleaseVerdict, step.PlannedDelistAt = false, "", 0
 
 	// 调用 Trade 之前先把这一行存下：Trade 可能已经写入而响应丢了（超时、网关抖动），或者写入之后进程就退出了，
-	// 之后取消和演练结束靠这一行知道“这条记录尝试过写名单”，再按名单里原因带的执行记录 ID 判断是不是自己写的。
+	// 之后取消和演练结束靠这一行知道“这条记录尝试过写名单”，再按名单里这一项的写入者判断是不是自己写的。
 	step.Status, step.Error, step.Result = store.DelistPending, "", "正在写入禁止名单"
 	step.Attempts++
 	if err := r.save(ctx, step); err != nil {
@@ -458,7 +452,7 @@ func (r *run) ensureBlocked(ctx context.Context) (outcome action.Outcome, finish
 	}
 
 	callCtx, cancel := r.h.tradeCtx(ctx)
-	result, blockErr := r.h.Trade.BlockInstrument(callCtx, r.target.Instrument, step.Reason, r.execution.EventID)
+	result, blockErr := r.h.Trade.BlockInstrument(callCtx, r.target.Instrument, step.Reason, r.execution.EventID, r.execution.ExecutionID)
 	cancel()
 	if blockErr != nil {
 		step.Status, step.Error = store.DelistPending, blockErr.Error()

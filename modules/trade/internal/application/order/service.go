@@ -540,7 +540,7 @@ func (s *Service) checkTargetAuthorization(
 			return ErrTargetOwnerConflict
 		}
 		now := s.now().UTC().UnixMilli()
-		if now < currentTarget.EffectiveAt || now >= currentTarget.ValidUntil {
+		if now < currentTarget.BarEndTime || now >= currentTarget.ValidUntil {
 			return ErrTargetExpired
 		}
 	}

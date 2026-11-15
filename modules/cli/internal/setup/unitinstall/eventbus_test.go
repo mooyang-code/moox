@@ -44,7 +44,7 @@ func eventBusProjectionFixture(t *testing.T) (string, string, PrepareOptions) {
 		raw := "version: 1\nurls: [tls://127.0.0.1:4222]\nusername: " + eventBusUsername(role) + "\n" + tokenField + ": synthetic-token-at-least-32-bytes-" + role + "\nca_file: ca.pem\n"
 		require.NoError(t, os.WriteFile(filepath.Join(source, role+".yaml"), []byte(raw), 0o600))
 	}
-	for name, raw := range map[string]string{"eventbus/config/app.yaml": "broker: {cluster: {enabled: false}}\ninternal_client: {}\n", "monitor/config/app.yaml": "observability: {enabled: true}\n"} {
+	for name, raw := range map[string]string{"eventbus/config/app.yaml": "broker: {}\ninternal_client: {}\n", "monitor/config/app.yaml": "observability: {enabled: true}\n"} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(destination, name)), 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(destination, name), []byte(raw), 0o600))
 	}

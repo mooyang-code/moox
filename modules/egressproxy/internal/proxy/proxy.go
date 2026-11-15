@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
-	"github.com/mooyang-code/moox/modules/egressproxy/internal/resolver"
 	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	_ "github.com/mooyang-code/moox/packages/gatewayauth/nativewire"
@@ -31,17 +30,15 @@ const (
 )
 
 type Options struct {
-	Domains  []string
-	Resolver *resolver.Resolver
+	Domains []string
 	// HTTPClient is an explicit fixture seam; production uses a direct,
 	// TLS-verified transport with public-address checks and no environment proxy.
 	HTTPClient *http.Client
 }
 
 type Proxy struct {
-	domains  domainpolicy.Matcher
-	resolver *resolver.Resolver
-	client   *http.Client
+	domains domainpolicy.Matcher
+	client  *http.Client
 }
 
 func New(options Options) (*Proxy, error) {
@@ -60,7 +57,7 @@ func New(options Options) (*Proxy, error) {
 		client = *options.HTTPClient
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Proxy{domains: domains, resolver: options.Resolver, client: &client}, nil
+	return &Proxy{domains: domains, client: &client}, nil
 }
 
 func (p *Proxy) Close() { p.client.CloseIdleConnections() }
@@ -213,34 +210,4 @@ func decodedBody(response *http.Response) ([]byte, error) {
 		return nil, errors.New("egress decompressed response exceeds 32 MiB")
 	}
 	return body, nil
-}
-
-func (p *Proxy) ResolveDomains(ctx context.Context, req *egresspb.ResolveDomainsReq) (*egresspb.ResolveDomainsRsp, error) {
-	if req == nil {
-		return &egresspb.ResolveDomainsRsp{RetInfo: ret(commonpb.ErrorCode_INVALID_PARAM, "request is required")}, nil
-	}
-	if p == nil || p.resolver == nil {
-		return &egresspb.ResolveDomainsRsp{RetInfo: ret(commonpb.ErrorCode_INNER_ERR, "DNS resolver is unavailable")}, nil
-	}
-	results, err := p.resolver.Resolve(ctx, req.Domains, int(req.MaxIpsPerDomain))
-	if err != nil {
-		code := commonpb.ErrorCode_INNER_ERR
-		if errors.Is(err, resolver.ErrInvalidDomain) {
-			code = commonpb.ErrorCode_INVALID_PARAM
-		}
-		return &egresspb.ResolveDomainsRsp{RetInfo: ret(code, err.Error())}, nil
-	}
-	rsp := &egresspb.ResolveDomainsRsp{RetInfo: ret(commonpb.ErrorCode_SUCCESS, "")}
-	for _, result := range results {
-		if result.Unresolved || len(result.IPs) == 0 {
-			rsp.UnresolvedDomains = append(rsp.UnresolvedDomains, result.Domain)
-			continue
-		}
-		item := &egresspb.DomainResolution{Domain: result.Domain}
-		for _, ip := range result.IPs {
-			item.Ips = append(item.Ips, &egresspb.ResolvedIP{Ip: ip.IP, TcpConnectLatencyMs: ip.TCPConnectLatencyMS})
-		}
-		rsp.Resolutions = append(rsp.Resolutions, item)
-	}
-	return rsp, nil
 }

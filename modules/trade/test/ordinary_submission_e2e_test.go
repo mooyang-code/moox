@@ -66,8 +66,8 @@ func TestOrdinaryPaperRPCWorkerFillAndReplay(t *testing.T) {
 			_, err = f.sync.SyncAccount(ctx, accountID)
 			require.NoError(t, err)
 			service := &operator.Service{Store: db, Orders: f.orders, Syncer: syncBridge{service: f.sync}, Prices: logicalAccountE2EPriceSource{at: testNow}, Now: func() time.Time { return testNow }}
-			h := &rpc.ExecutionServer{Store: db, SubmitOrdinary: func(ctx context.Context, c rpc.SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
-				result, err := service.SubmitOrder(ctx, operator.SubmitOrderCommand{LogicalAccountID: c.LogicalAccountID, ManualOrderCommand: operator.ManualOrderCommand{
+			h := &rpc.ExecutionServer{Store: db, Submit: func(ctx context.Context, c rpc.SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
+				result, err := service.PlaceOrder(ctx, operator.SubmitOrderCommand{LogicalAccountID: c.LogicalAccountID, ManualOrderCommand: operator.ManualOrderCommand{
 					SpaceID: c.SpaceID, ActionID: c.ActionID, TradingAccountID: c.TradingAccountID, ClientOrderID: c.ClientOrderID,
 					InstrumentID: c.InstrumentID, Type: c.OrderType, FillPolicy: c.FillPolicy, Side: c.Side, PositionSide: c.PositionSide,
 					Quantity: c.Quantity, LimitPrice: c.LimitPrice, Reason: c.Reason, DeadlineAt: c.DeadlineAt,

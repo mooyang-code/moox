@@ -15,9 +15,8 @@ type HeartbeatClient interface {
 	Heartbeat(ctx context.Context, status domain.EngineStatus) (time.Duration, error)
 }
 
-// leaseState tracks whether the manager told this engine that another engine
-// holds the lease. Only an explicit conflict stops work: an unreachable
-// manager keeps the last state, so a manager outage never stops computation.
+// leaseState 记录管理端是否明确拒绝了本引擎的心跳（另一个 engine_id 的引擎还在心跳）。只有明确的拒绝才停止工作：
+// 管理端不可达时保持上一次的状态，管理端故障不会让计算停下。
 type leaseState struct {
 	mu        sync.RWMutex
 	conflict  bool

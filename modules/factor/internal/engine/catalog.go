@@ -319,3 +319,18 @@ func sameTaskIDs(left, right []domain.EngineTask) bool {
 }
 
 var _ trigger.TaskLocator = (*CatalogCache)(nil)
+
+// Set returns one set of the snapshot.
+func (c *CatalogCache) Set(taskID string) (domain.EngineTask, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.loaded {
+		return domain.EngineTask{}, errors.New("factor catalog is not available: the manager is unreachable and no snapshot was saved")
+	}
+	for _, set := range c.sets {
+		if set.Set.TaskID == taskID {
+			return set, nil
+		}
+	}
+	return domain.EngineTask{}, fmt.Errorf("factor task %q is not enabled in the catalog", taskID)
+}

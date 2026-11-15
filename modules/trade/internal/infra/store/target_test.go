@@ -187,7 +187,7 @@ func TestAcceptLogicalAccountTargetRejectsInvalidInput(t *testing.T) {
 		{"target", func(v *LogicalAccountTargetRecord) { v.TargetID = "" }},
 		{"instance", func(v *LogicalAccountTargetRecord) { v.InstanceID = "" }},
 		{"session", func(v *LogicalAccountTargetRecord) { v.SessionID = "" }},
-		{"validity", func(v *LogicalAccountTargetRecord) { v.ValidUntil = v.EffectiveAt }},
+		{"validity", func(v *LogicalAccountTargetRecord) { v.ValidUntil = v.BarEndTime }},
 		{"sequence overflow", func(v *LogicalAccountTargetRecord) {
 			v.CommandSequence = uint64(math.MaxInt64) + 1
 		}},
@@ -234,7 +234,6 @@ func validLogicalAccountTarget() LogicalAccountTargetRecord {
 // setTargetBar 把目标放在基准之后第 n 根 K 线。
 func setTargetBar(record *LogicalAccountTargetRecord, n int64) {
 	record.BarEndTime = targetBarBase + n
-	record.EffectiveAt = record.BarEndTime
 	record.CommandSequence = 0
 }
 
@@ -295,7 +294,7 @@ func TestInsertTargetReceiptRequiresEquityOnlyForConvertedTargets(t *testing.T) 
 	ctx := context.Background()
 	receipt := func(id, quantityTargets string) TargetReceiptRecord {
 		return TargetReceiptRecord{SpaceID: "space-1", TargetID: id, LogicalAccountID: "logical-1", RunnerID: "runner-1", CommandSequence: 1,
-			InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1", BarEndTime: 1, EffectiveAt: 1, ValidUntil: 2,
+			InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1", BarEndTime: 1, ValidUntil: 2,
 			RequestHash: "hash-" + id, SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: quantityTargets, AcceptedAt: 1}
 	}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {

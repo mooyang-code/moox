@@ -11,7 +11,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/egressproxy/internal/config"
 	"github.com/mooyang-code/moox/modules/egressproxy/internal/proxy"
-	"github.com/mooyang-code/moox/modules/egressproxy/internal/resolver"
 	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
@@ -42,11 +41,7 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config.Config) error {
-	metrics, err := resolver.NewMetrics(nil)
-	if err != nil {
-		return err
-	}
-	handler, err := proxy.New(proxy.Options{Domains: cfg.Domains, Resolver: resolver.New(cfg.DNS.ResolverConfig(metrics))})
+	handler, err := proxy.New(proxy.Options{Domains: cfg.Domains})
 	if err != nil {
 		return err
 	}

@@ -115,13 +115,27 @@ type goldenMarker struct {
 	payload *storageeventpb.DatasetPeriodCompleted
 }
 
-// goldenMarkers 列出 Outbox 里某数据集的周期完成事件，按 Outbox 顺序。
+// listMarkerChanges 列出变更日志里的全部完成标记条目，也就是转发协程要发的全部事件，按提交顺序。
+func listMarkerChanges(t *testing.T, store *Store) []MarkerChange {
+	t.Helper()
+	var out []MarkerChange
+	after := uint64(0)
+	for {
+		page, err := store.ReadMarkerChanges(context.Background(), after, maxChangeLimit)
+		require.NoError(t, err)
+		out = append(out, page.Markers...)
+		if !page.HasMore {
+			return out
+		}
+		after = page.Scanned
+	}
+}
+
+// goldenMarkers 列出某数据集的周期完成事件，按提交顺序。
 func goldenMarkers(t *testing.T, store *Store, spaceID, datasetID string) []goldenMarker {
 	t.Helper()
-	entries, err := store.ListOutbox(context.Background(), 0, 10000)
-	require.NoError(t, err)
 	var out []goldenMarker
-	for _, entry := range entries {
+	for _, entry := range listMarkerChanges(t, store) {
 		message := &eventpb.EventMessage{}
 		require.NoError(t, proto.Unmarshal(entry.Data, message))
 		if message.GetEventName() != events.DatasetPeriodCompleted.Name() || message.GetSpaceId() != spaceID || message.GetSubjectId() != datasetID {
@@ -132,12 +146,4 @@ func goldenMarkers(t *testing.T, store *Store, spaceID, datasetID string) []gold
 		out = append(out, goldenMarker{message: message, payload: payload})
 	}
 	return out
-}
-
-// goldenOutboxCount 返回 Outbox 里的条目总数。
-func goldenOutboxCount(t *testing.T, store *Store) int {
-	t.Helper()
-	entries, err := store.ListOutbox(context.Background(), 0, 10000)
-	require.NoError(t, err)
-	return len(entries)
 }

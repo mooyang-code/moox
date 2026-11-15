@@ -39,7 +39,8 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 	}
 }
 
-func TestCleanupExpiredBucketsDoesNotCreateOutboxEvent(t *testing.T) {
+// 过期清理不产生完成标记，也就不会有事件发出去。
+func TestCleanupExpiredBucketsDoesNotCreateMarker(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
@@ -59,21 +60,17 @@ func TestCleanupExpiredBucketsDoesNotCreateOutboxEvent(t *testing.T) {
 	if err := upsertTestRows(store, ctx, []*pb.RowFieldUpsert{row}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := store.ListOutbox(ctx, 0, 10)
-	if err != nil || len(before) != 0 {
-		t.Fatalf("outbox before cleanup = %v, %v", before, err)
+	before := listMarkerChanges(t, store)
+	if len(before) != 0 {
+		t.Fatalf("清理前的完成标记 = %v", before)
 	}
 
 	deleted, err := store.CleanupExpiredBuckets(ctx, "s", "d", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
 	if err != nil || deleted == 0 {
 		t.Fatalf("cleanup deleted_ranges=%d err=%v", deleted, err)
 	}
-	after, err := store.ListOutbox(ctx, 0, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(after) != len(before) {
-		t.Fatalf("outbox count changed after cleanup: before=%d after=%d", len(before), len(after))
+	if after := listMarkerChanges(t, store); len(after) != len(before) {
+		t.Fatalf("清理后完成标记条数变了: before=%d after=%d", len(before), len(after))
 	}
 }
 
@@ -103,7 +100,7 @@ func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
 }
 
 func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), BucketDuration: time.Hour})
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db")})
 	if err != nil {
 		t.Fatal(err)
 	}

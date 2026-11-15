@@ -635,7 +635,7 @@ func (r *PlanReconciler) holdMissingDatasets(ctx context.Context, desired *Desir
 
 // functionEnvironment 构造受管环境：采集计划、Access 入口、超时。
 func (r *PlanReconciler) functionEnvironment(region string, plan *Plan) (map[string]string, error) {
-	encoded, err := EncodePlan(r.SpaceID, plan)
+	encoded, err := EncodePlan(plan)
 	if err != nil {
 		return nil, err
 	}

@@ -155,19 +155,23 @@ func TestLatestRunKeepsEngineLag(t *testing.T) {
 	require.Equal(t, "task_b", hub.LatestRun("task_b").TaskID)
 }
 
-func TestHeartbeatRejectsSameEngineFromAnotherBoot(t *testing.T) {
-	hub, _, clock := newTestHub(t)
+// 同一 engine_id 换了 boot_id 是引擎重启：新进程立刻顶替旧进程，不用等旧心跳过期。
+func TestRestartedEngineTakesOverImmediately(t *testing.T) {
+	hub, _, _ := newTestHub(t)
 	_, err := hub.Heartbeat(context.Background(), engineA, domain.EngineStatus{})
 	require.NoError(t, err)
-	copied := engineA
-	copied.BootID = "boot-copy"
+	restarted := engineA
+	restarted.BootID = "boot-restarted"
 
-	_, err = hub.Heartbeat(context.Background(), copied, domain.EngineStatus{})
-	require.ErrorIs(t, err, ErrLeaseConflict)
-
-	clock.Advance(46 * time.Second)
-	_, err = hub.Heartbeat(context.Background(), copied, domain.EngineStatus{})
-	require.NoError(t, err, "a restarted engine takes over once the old boot's lease lapses")
+	_, err = hub.Heartbeat(context.Background(), restarted, domain.EngineStatus{})
+	require.NoError(t, err, "重启后的引擎不等旧心跳过期")
+	require.True(t, hub.HoldsLease(restarted))
+	require.False(t, hub.HoldsLease(engineA), "旧进程已被顶替")
+	info, _, ok, err := hub.Engine(context.Background())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "boot-restarted", info.BootID)
+	require.True(t, info.Online)
 }
 
 func WithClock(now func() time.Time) Option { return func(h *Hub) { h.now = now } }

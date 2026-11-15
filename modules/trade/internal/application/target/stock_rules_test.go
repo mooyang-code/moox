@@ -122,7 +122,7 @@ func (f *stockFixture) target(t *testing.T, targets ...store.InstrumentTarget) s
 	record := store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TargetID: "target-current", InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
-		BarEndTime: f.now.UnixMilli(), EffectiveAt: f.now.UnixMilli(), ValidUntil: validUntil.UnixMilli(),
+		BarEndTime: f.now.UnixMilli(), ValidUntil: validUntil.UnixMilli(),
 		Targets: targets, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 	}
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), record)

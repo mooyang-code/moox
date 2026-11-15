@@ -245,7 +245,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 	_, accepted, err := tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "stress-target",
 		InstanceID: testRunner, SessionID: "session-e2e", StrategyID: "stress",
-		BarEndTime: testNow.UnixMilli(), EffectiveAt: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
+		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
 		Targets: targets, Status: targetapp.StatusPending, AcceptedAt: testNow.UnixMilli(),
 	})
 	require.NoError(t, err)

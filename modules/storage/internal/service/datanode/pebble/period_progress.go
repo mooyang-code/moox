@@ -259,17 +259,17 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 	if err != nil {
 		return DatasetPeriodResult{}, err
 	}
-	// 行的准备（编码 KV、整理变更范围）不依赖变更序号，放在 outboxMu 之外；周期状态仍由 periodMu 保护。
+	// 行的准备（编码 KV、整理变更范围）不依赖变更序号，放在 changeMu 之外；周期状态仍由 periodMu 保护。
 	write, err := s.prepareRowsWrite(ctx, exp.SpaceID, exp.DatasetID, normalizedRows)
 	if err != nil {
 		return DatasetPeriodResult{}, err
 	}
 	defer write.batch.Close()
-	s.outboxMu.Lock()
+	s.changeMu.Lock()
 	err = s.commitRowsWriteLocked(ctx, write, func(batch *cpebble.Batch) error {
 		return batch.Set(key, recordRaw, s.writeOptions)
 	})
-	s.outboxMu.Unlock()
+	s.changeMu.Unlock()
 	if err != nil {
 		return DatasetPeriodResult{}, err
 	}
@@ -291,8 +291,8 @@ func periodCommitReceipt(record periodRecord, targets []byte) DatasetPeriodResul
 }
 
 // finalizePeriodLocked 判定一期：序列齐了是完成，过了截止是降级，否则仍等待。判定出终态时，
-// 账本状态、完成标记与 Outbox 条目在同一个批次里提交。exp 须带完整快照。
-// 调用方持有 datasetWriteMu 读锁与 periodMu，这里只再取 outboxMu。
+// 账本状态、完成标记与它的变更日志条目在同一个批次里提交。exp 须带完整快照。
+// 调用方持有 datasetWriteMu 读锁与 periodMu，这里只再取 changeMu。
 func (s *Store) finalizePeriodLocked(ctx context.Context, exp DatasetPeriodExpectation, record periodRecord, now time.Time) (periodRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return record, err
@@ -333,8 +333,8 @@ func (s *Store) finalizePeriodLocked(ctx context.Context, exp DatasetPeriodExpec
 	if err != nil {
 		return record, err
 	}
-	s.outboxMu.Lock()
-	defer s.outboxMu.Unlock()
+	s.changeMu.Lock()
+	defer s.changeMu.Unlock()
 	batch := s.db.NewBatch()
 	defer batch.Close()
 	if err := batch.Set(periodKey(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime), recordRaw, s.writeOptions); err != nil {
@@ -348,7 +348,7 @@ func (s *Store) finalizePeriodLocked(ctx context.Context, exp DatasetPeriodExpec
 		return record, err
 	}
 	if written {
-		s.noteMarkerCommitted(now.UTC())
+		s.noteMarkerCommitted()
 	}
 	return finalized, nil
 }

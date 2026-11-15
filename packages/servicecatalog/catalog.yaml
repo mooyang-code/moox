@@ -982,7 +982,6 @@ components:
           - ValidateFactorSpec
           - PreviewFactor
           - ListFactorFunctions
-          - NotifyPeriodsFilled
           - ListFactorCategories
           - UpsertFactorCategory
           - DeleteFactorCategory
@@ -1060,11 +1059,6 @@ components:
               - GetFactorParams
             callers:
               - strategy
-          # 补采补齐通知：因子据此立即推进连续水位并补算上游失败的标的。
-          - methods:
-              - NotifyPeriodsFilled
-            callers:
-              - collector
       - path: trpc.moox.factor.FactorEngine
         port: 11405
         timeout_ms: 120000
@@ -1131,7 +1125,6 @@ components:
           - GetArchiveRun
           - ListArchivePartitions
           - GetArchivePartition
-          - RetireArchiveWorker
           - PrepareArchiveImport
           - ImportArchiveFile
           - ClearArchiveUnrecoverable
@@ -1162,10 +1155,6 @@ components:
               - GetArchivePartition
             callers:
               - console
-              - moox-cli
-          - methods:
-              - RetireArchiveWorker
-            callers:
               - moox-cli
           # CSV 导入与清除无法补齐区间：只给 moox-cli（导入要经 SSH 把文件传到 worker 所在主机）。
           - methods:
@@ -1348,8 +1337,6 @@ components:
     scope: any
     replicas: single
     protected: false
-    ports:
-      - 20101
     health:
       kind: readyz
       port: 20210
@@ -1612,7 +1599,7 @@ components:
       description: Storage 元数据与事实数据主服务
       duties:
         - 管理空间、数据集、字段与视图
-        - 持久化数据集字段、周期完成状态与发件箱
+        - 持久化数据集字段与周期完成状态，跟随变更日志转发完成事件
         - 向 EventBus 发布周期完成等跨机事件
       inputs:
         - 元数据管理与数据读写请求
@@ -1751,25 +1738,20 @@ components:
         max_body_bytes: 50331648
         methods:
           - Do
-          - ResolveDomains
-        read_only_methods:
-          - ResolveDomains
         acl:
           - methods:
               - Do
-              - ResolveDomains
             callers:
               - collector
     doctor:
       role: egress-proxy
-      description: 受限网络出口与 DNS 解析服务
+      description: 受限网络出口
       duties:
         - 按域名白名单代理 Collector 请求
-        - 解析域名并返回连通性结果
       inputs:
-        - Collector 的出口请求与域名解析请求
+        - Collector 的出口请求
       outputs:
-        - 上游响应与域名地址
+        - 上游响应
       dependencies: []
       transport: reporter
       functional_observability: not_applicable
@@ -1828,7 +1810,6 @@ components:
           - PauseLogicalAccount
           - ResumeLogicalAccount
           - FlattenLogicalAccount
-          - PlaceManualOrder
           - SubmitOrder
           - CancelOrder
           - GetOperatorAction
@@ -1895,7 +1876,6 @@ components:
               - PauseLogicalAccount
               - ResumeLogicalAccount
               - FlattenLogicalAccount
-              - PlaceManualOrder
               - SubmitOrder
               - CancelOrder
               - GetOperatorAction
@@ -2159,6 +2139,7 @@ principals:
       - service: trpc.moox.storage.PrimaryStore
         methods:
           - ReadTimeSeriesRows
+          - ReadDatasetChanges
       - service: trpc.moox.storage.Metadata
         methods:
           - GetDataset

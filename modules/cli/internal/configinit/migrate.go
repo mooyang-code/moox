@@ -130,6 +130,8 @@ type MigrateReport struct {
 	SCF         *SCFImportReport `json:"scf,omitempty"`
 	// RemovedTLSMode 记录删掉了 tls_mode 的主机：管理台只用内部证书，这项配置已删除。
 	RemovedTLSMode []string `json:"removed_tls_mode,omitempty"`
+	// RemovedEgressDNS 为 true 表示删掉了 [egress_proxy.dns]：DNS 快照已删除，这一段不再使用。
+	RemovedEgressDNS bool `json:"removed_egress_dns,omitempty"`
 	// LoggingCLSAdded 为 true 表示这次补上了 [logging.cls]。
 	LoggingCLSAdded bool `json:"logging_cls_added,omitempty"`
 	// FactorsEnabled 记录 --set-factors-enabled 的结果。
@@ -453,6 +455,7 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 	}
 	renameDeploymentComponents(blocks, report)
 	removeRetiredComponents(blocks, report)
+	blocks = removeEgressDNS(blocks, report)
 	for i := range blocks {
 		if blocks[i].header == "factors.definitions" && blocks[i].array {
 			change, err := migrateFactorBlock(&blocks[i], library)
@@ -489,6 +492,25 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 		out = append(out, b.lines...)
 	}
 	return []byte(strings.Join(out, "\n")), nil
+}
+
+// removeEgressDNS 删掉已不再使用的 [egress_proxy.dns] 整个表；表末尾属于下一个表的空行和说明注释留下。
+func removeEgressDNS(blocks []block, report *MigrateReport) []block {
+	at := slices.IndexFunc(blocks, func(b block) bool { return b.header == "egress_proxy.dns" && !b.array })
+	if at < 1 {
+		return blocks
+	}
+	lines := blocks[at].lines
+	last := len(lines) - 1
+	for last > 0 {
+		if text := strings.TrimSpace(lines[last]); text != "" && !strings.HasPrefix(text, "#") {
+			break
+		}
+		last--
+	}
+	blocks[at-1].lines = append(blocks[at-1].lines, lines[last+1:]...)
+	report.RemovedEgressDNS = true
+	return slices.Delete(blocks, at, at+1)
 }
 
 // factorExternalPrograms 是因子机上部署的两个外部程序组件。

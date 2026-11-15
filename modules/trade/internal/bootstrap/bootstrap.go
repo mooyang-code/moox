@@ -458,27 +458,9 @@ func initialize(
 		},
 		&rpc.ExecutionServer{
 			Store: tradeStore,
-			PlaceManual: func(
-				callCtx context.Context,
-				command rpc.ManualOrderCommand,
-			) (store.OperatorActionRecord, store.OrderRecord, error) {
-				result, placeErr := operatorService.PlaceManualOrder(
-					callCtx,
-					operatorapp.ManualOrderCommand{
-						SpaceID: command.SpaceID, ActionID: command.ActionID,
-						TradingAccountID: command.TradingAccountID,
-						ClientOrderID:    command.ClientOrderID,
-						InstrumentID:     command.InstrumentID,
-						Type:             command.OrderType, FillPolicy: command.FillPolicy,
-						Side: command.Side, PositionSide: command.PositionSide,
-						Quantity: command.Quantity, LimitPrice: command.LimitPrice,
-						Reason: command.Reason, DeadlineAt: command.DeadlineAt,
-					},
-				)
-				return result.Action, result.Order, placeErr
-			},
-			SubmitOrdinary: func(callCtx context.Context, command rpc.SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
-				result, submitErr := operatorService.SubmitOrder(callCtx, operatorapp.SubmitOrderCommand{
+			Lanes: targetExecutor.LaneStatuses,
+			Submit: func(callCtx context.Context, command rpc.SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
+				result, submitErr := operatorService.PlaceOrder(callCtx, operatorapp.SubmitOrderCommand{
 					LogicalAccountID: command.LogicalAccountID,
 					ManualOrderCommand: operatorapp.ManualOrderCommand{
 						SpaceID: command.SpaceID, ActionID: command.ActionID,

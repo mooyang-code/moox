@@ -38,12 +38,12 @@ func TestManualPersistedFailureMapsToInvalidParam(t *testing.T) {
 				t.Fatal(err)
 			}
 			service := &operator.Service{Store: db, Orders: &orderapp.Service{Store: db}, Syncer: manualReplayDependencies{}, Prices: manualReplayDependencies{}}
-			h := &ExecutionServer{Store: db, PlaceManual: func(ctx context.Context, c ManualOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
-				result, err := service.PlaceManualOrder(ctx, operator.ManualOrderCommand{SpaceID: c.SpaceID, ActionID: c.ActionID, TradingAccountID: c.TradingAccountID, ClientOrderID: c.ClientOrderID, InstrumentID: c.InstrumentID, Type: c.OrderType, FillPolicy: c.FillPolicy, Side: c.Side, PositionSide: c.PositionSide, Quantity: c.Quantity, LimitPrice: c.LimitPrice, Reason: c.Reason})
+			h := &ExecutionServer{Store: db, Submit: func(ctx context.Context, c SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
+				result, err := service.PlaceOrder(ctx, operator.SubmitOrderCommand{LogicalAccountID: c.LogicalAccountID, ManualOrderCommand: operator.ManualOrderCommand{SpaceID: c.SpaceID, ActionID: c.ActionID, TradingAccountID: c.TradingAccountID, ClientOrderID: c.ClientOrderID, InstrumentID: c.InstrumentID, Type: c.OrderType, FillPolicy: c.FillPolicy, Side: c.Side, PositionSide: c.PositionSide, Quantity: c.Quantity, LimitPrice: c.LimitPrice, Reason: c.Reason}})
 				return result.Action, result.Order, err
 			}}
 			for attempt := 0; attempt < 2; attempt++ {
-				rsp, err := h.PlaceManualOrder(ctx, &tradepb.PlaceManualOrderReq{ActionId: "action-1", TradingAccountId: "account-1", ClientOrderId: "client-1", InstrumentId: "BTC-USDT", OrderType: tradepb.OrderType_ORDER_TYPE_MARKET, Side: tradepb.OrderSide_ORDER_SIDE_BUY, PositionSide: tradepb.PositionSide_POSITION_SIDE_NET, Quantity: "1", Reason: "manual intervention"})
+				rsp, err := h.SubmitOrder(ctx, &tradepb.SubmitOrderReq{ActionId: "action-1", LogicalAccountId: "logical-1", TradingAccountId: "account-1", ClientOrderId: "client-1", InstrumentId: "BTC-USDT", OrderType: tradepb.OrderType_ORDER_TYPE_MARKET, Side: tradepb.OrderSide_ORDER_SIDE_BUY, PositionSide: tradepb.PositionSide_POSITION_SIDE_NET, Quantity: "1", Reason: "manual intervention"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -68,11 +68,11 @@ func TestCorruptManualResultTakesPrecedenceOverInvalidRecord(t *testing.T) {
 
 func TestManualRunningDiagnosticDoesNotHideStorageFailure(t *testing.T) {
 	for _, failure := range []error{nil, errors.New("database unavailable")} {
-		h := &ExecutionServer{Store: rpcStoreWithAccount(t), PlaceManual: func(context.Context, ManualOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
+		h := &ExecutionServer{Store: rpcStoreWithAccount(t), Submit: func(context.Context, SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
 			return store.OperatorActionRecord{ActionID: "action-1", Status: "RUNNING", LastError: "submission outcome unknown"}, store.OrderRecord{}, failure
 		}}
-		rsp, err := h.PlaceManualOrder(spacecontext.WithSpaceID(context.Background(), "space-1"), &tradepb.PlaceManualOrderReq{
-			ActionId: "action-1", TradingAccountId: "account-1", ClientOrderId: "client-1", InstrumentId: "BTC-USDT",
+		rsp, err := h.SubmitOrder(spacecontext.WithSpaceID(context.Background(), "space-1"), &tradepb.SubmitOrderReq{
+			ActionId: "action-1", LogicalAccountId: "logical-1", TradingAccountId: "account-1", ClientOrderId: "client-1", InstrumentId: "BTC-USDT",
 			OrderType: tradepb.OrderType_ORDER_TYPE_MARKET, Side: tradepb.OrderSide_ORDER_SIDE_BUY,
 			PositionSide: tradepb.PositionSide_POSITION_SIDE_NET, Quantity: "1", Reason: "manual intervention",
 		})
@@ -128,13 +128,13 @@ func TestOrderConversionPreservesOwnershipAndExecutionFields(t *testing.T) {
 	}
 }
 
-func TestPlaceManualOrderUsesServerOwnedApplicationPath(t *testing.T) {
-	var got ManualOrderCommand
+func TestSubmitOrderUsesServerOwnedApplicationPath(t *testing.T) {
+	var got SubmitOrderCommand
 	handler := &ExecutionServer{
 		Store: rpcStoreWithAccount(t),
-		PlaceManual: func(
+		Submit: func(
 			_ context.Context,
-			command ManualOrderCommand,
+			command SubmitOrderCommand,
 		) (store.OperatorActionRecord, store.OrderRecord, error) {
 			got = command
 			return store.OperatorActionRecord{
@@ -146,10 +146,10 @@ func TestPlaceManualOrderUsesServerOwnedApplicationPath(t *testing.T) {
 			}, nil
 		},
 	}
-	response, err := handler.PlaceManualOrder(
+	response, err := handler.SubmitOrder(
 		spacecontext.WithSpaceID(context.Background(), "space-1"),
-		&tradepb.PlaceManualOrderReq{
-			ActionId: "action-1", TradingAccountId: "account-1",
+		&tradepb.SubmitOrderReq{
+			ActionId: "action-1", LogicalAccountId: "logical-1", TradingAccountId: "account-1",
 			ClientOrderId: "client-1", InstrumentId: "BTC-USDT",
 			OrderType:    tradepb.OrderType_ORDER_TYPE_MARKET,
 			Side:         tradepb.OrderSide_ORDER_SIDE_BUY,

@@ -373,10 +373,10 @@ func TestBackfillAndRunNowRules(t *testing.T) {
 	requireCode(t, noTask.GetRetInfo(), commonpb.ErrorCode_NOT_FOUND, "")
 }
 
-func (h *harness) heartbeat(worker, instance string, running ...string) *archivepb.ArchiveWorkerHeartbeatRsp {
+func (h *harness) heartbeat(worker string, running ...string) *archivepb.ArchiveWorkerHeartbeatRsp {
 	h.t.Helper()
 	rsp, err := h.worker.ArchiveWorkerHeartbeat(context.Background(), &archivepb.ArchiveWorkerHeartbeatReq{
-		WorkerId: worker, InstanceId: instance, Version: "test", RootDir: "/data/archive", DiskTotalBytes: 100, DiskFreeBytes: 60, DiskUsedBytes: 35,
+		WorkerId: worker, Version: "test", RootDir: "/data/archive", DiskTotalBytes: 100, DiskFreeBytes: 60, DiskUsedBytes: 35,
 		MinFreeBytes: 20, RunningRunIds: running,
 	})
 	if err != nil {
@@ -385,9 +385,9 @@ func (h *harness) heartbeat(worker, instance string, running ...string) *archive
 	return rsp
 }
 
-func (h *harness) pull(worker, instance string, slots uint32) []*archivepb.RunAssignment {
+func (h *harness) pull(slots uint32) []*archivepb.RunAssignment {
 	h.t.Helper()
-	rsp, err := h.worker.PullArchiveRun(context.Background(), &archivepb.PullArchiveRunReq{WorkerId: worker, InstanceId: instance, FreeSlots: slots, MaxStorageRuns: 2})
+	rsp, err := h.worker.PullArchiveRun(context.Background(), &archivepb.PullArchiveRunReq{FreeSlots: slots, MaxStorageRuns: 2})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -398,26 +398,12 @@ func (h *harness) pull(worker, instance string, slots uint32) []*archivepb.RunAs
 func TestWorkerLeaseAndPullFlow(t *testing.T) {
 	h := newHarness(t)
 	requireOK(t, h.create("ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = "2026-10-15T00:00:00Z" }).GetRetInfo())
-	if runs := h.pull("w1", "i1", 2); len(runs) != 0 {
-		t.Fatalf("没有心跳取得租约前领不到运行: %v", runs)
-	}
-	hb := h.heartbeat("w1", "i1")
+	hb := h.heartbeat("w1")
 	requireOK(t, hb.GetRetInfo())
-	if !hb.GetActive() || hb.GetLeaseTtlSeconds() != 45 {
-		t.Fatalf("heartbeat = %v", hb)
-	}
-	// 备用 worker 不活动，也领不到。
-	standby := h.heartbeat("w2", "j1")
-	if standby.GetActive() {
-		t.Fatal("w2 不应活动")
-	}
-	if runs := h.pull("w2", "j1", 2); len(runs) != 0 {
-		t.Fatalf("备用 worker 领到了运行: %v", runs)
-	}
-	dup := h.heartbeat("w1", "i2")
-	requireCode(t, dup.GetRetInfo(), commonpb.ErrorCode_CONFLICT, "另一个存活的实例")
+	// worker 重启（新进程、同一身份）后再心跳照常成功，不用等旧心跳过期就能领取。
+	requireOK(t, h.heartbeat("w1").GetRetInfo())
 
-	runs := h.pull("w1", "i1", 2)
+	runs := h.pull(2)
 	if len(runs) != 1 {
 		t.Fatalf("runs = %v", runs)
 	}
@@ -428,18 +414,18 @@ func TestWorkerLeaseAndPullFlow(t *testing.T) {
 		run.GetPurpose() != "data" || run.GetDirName() != "ds-1m" {
 		t.Fatalf("assignment = %v", run)
 	}
-	if more := h.pull("w1", "i1", 2); len(more) != 0 {
+	if more := h.pull(2); len(more) != 0 {
 		t.Fatalf("同一任务同时只有一个运行: %v", more)
 	}
 
 	progress, _ := h.worker.ReportArchiveRunProgress(context.Background(), &archivepb.ReportArchiveRunProgressReq{
-		WorkerId: "w1", RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), SubjectsTotal: 5, SubjectsDone: 2, RequestCount: 3, BytesRead: 100, RowsRead: 40,
+		RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), SubjectsTotal: 5, SubjectsDone: 2, RequestCount: 3, BytesRead: 100, RowsRead: 40,
 	})
 	requireOK(t, progress.GetRetInfo())
 	if progress.GetCanceled() {
 		t.Fatal("不应取消")
 	}
-	wrong, _ := h.worker.ReportArchiveRunProgress(context.Background(), &archivepb.ReportArchiveRunProgressReq{WorkerId: "w1", RunId: run.GetRunId(), LeaseToken: "x"})
+	wrong, _ := h.worker.ReportArchiveRunProgress(context.Background(), &archivepb.ReportArchiveRunProgressReq{RunId: run.GetRunId(), LeaseToken: "x"})
 	if !wrong.GetCanceled() {
 		t.Fatal("租约不对应视为取消")
 	}
@@ -449,11 +435,11 @@ func TestWorkerLeaseAndPullFlow(t *testing.T) {
 	// 用户取消：下一次心跳让 worker 停止这条运行。
 	cancel, _ := h.mgr.CancelArchiveRun(context.Background(), &archivepb.CancelArchiveRunReq{RunId: run.GetRunId()})
 	requireOK(t, cancel.GetRetInfo())
-	hb = h.heartbeat("w1", "i1", run.GetRunId())
+	hb = h.heartbeat("w1", run.GetRunId())
 	if len(hb.GetCancelRunIds()) != 1 || hb.GetCancelRunIds()[0] != run.GetRunId() {
 		t.Fatalf("heartbeat = %v", hb)
 	}
-	gone, _ := h.worker.ReportArchiveRunProgress(context.Background(), &archivepb.ReportArchiveRunProgressReq{WorkerId: "w1", RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken()})
+	gone, _ := h.worker.ReportArchiveRunProgress(context.Background(), &archivepb.ReportArchiveRunProgressReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken()})
 	if !gone.GetCanceled() {
 		t.Fatal("取消后进度上报应返回 canceled")
 	}
@@ -462,11 +448,11 @@ func TestWorkerLeaseAndPullFlow(t *testing.T) {
 func TestCompleteArchiveRunRegistersPartitionsAndRejectsBadReports(t *testing.T) {
 	h := newHarness(t)
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
-	h.heartbeat("w1", "i1")
-	run := h.pull("w1", "i1", 1)[0]
+	h.heartbeat("w1")
+	run := h.pull(1)[0]
 	ctx := context.Background()
 	base := func() *archivepb.CompleteArchiveRunReq {
-		return &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded"}
+		return &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded"}
 	}
 	for name, mutate := range map[string]func(*archivepb.CompleteArchiveRunReq){
 		"bad status": func(r *archivepb.CompleteArchiveRunReq) { r.Status = "done" },
@@ -514,7 +500,7 @@ func TestCompleteArchiveRunRegistersPartitionsAndRejectsBadReports(t *testing.T)
 
 	parts, _ := h.mgr.ListArchivePartitions(context.Background(), &archivepb.ListArchivePartitionsReq{SpaceId: "crypto", DatasetId: "ds_1m", FromMonth: "2026-10", ToMonth: "2026-10"})
 	requireOK(t, parts.GetRetInfo())
-	if len(parts.GetPartitions()) != 1 || parts.GetPartitions()[0].GetFileSha256() != "abc" || parts.GetPartitions()[0].GetWorkerId() != "w1" {
+	if len(parts.GetPartitions()) != 1 || parts.GetPartitions()[0].GetFileSha256() != "abc" {
 		t.Fatalf("partitions = %v", parts.GetPartitions())
 	}
 	none, _ := h.mgr.ListArchivePartitions(context.Background(), &archivepb.ListArchivePartitionsReq{SpaceId: "crypto", DatasetId: "ds_1m", FromMonth: "2026-11"})
@@ -539,32 +525,23 @@ func TestCompleteArchiveRunRegistersPartitionsAndRejectsBadReports(t *testing.T)
 	}
 	run2, _ := h.mgr.RunArchiveTaskNow(ctx, &archivepb.RunArchiveTaskNowReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, run2.GetRetInfo())
-	h.heartbeat("w2", "other")
-	// M3：分区登记在 w1，w1 的租约过期、w2 接管后，任务照样派给 w2，上报被接受，登记的 worker 变成 w2。
+	// 换了 worker_id（换机器）之后，任务照样能领取，下发的登记带着已有分区，上报被接受。
 	h.now = h.now.Add(2 * time.Minute)
-	if hb := h.heartbeat("w2", "other"); !hb.GetActive() {
-		t.Fatal("w1 租约过期后 w2 应接管")
-	}
-	runs := h.pull("w2", "other", 1)
+	h.heartbeat("w2")
+	runs := h.pull(1)
 	if len(runs) != 1 {
-		t.Fatalf("分区登记在 w1 的任务也应派给 w2: %v", runs)
+		t.Fatalf("换了 worker_id 之后任务也应能领取: %v", runs)
 	}
 	if regs := runs[0].GetRegisteredPartitions(); len(regs) != 1 || regs[0].GetFileSha256() != "abc" {
 		t.Fatalf("下发的登记 = %v", regs)
 	}
-	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{WorkerId: "w2", RunId: runs[0].GetRunId(), LeaseToken: runs[0].GetLeaseToken(), Status: "succeeded",
+	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: runs[0].GetRunId(), LeaseToken: runs[0].GetLeaseToken(), Status: "succeeded",
 		Partitions: []*archivepb.PartitionReport{{PartitionKey: "2026-10-16", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z", Status: "exported", RowCount: 100, SubjectCount: 2,
 			FilePath: "crypto/ds_1m/2026-10-16.csv.gz", FileSha256: "abc", ExportedAt: "2026-10-17T01:05:00Z"}}})
 	requireOK(t, done.GetRetInfo())
 	part, _ := h.mgr.GetArchivePartition(context.Background(), &archivepb.GetArchivePartitionReq{SpaceId: "crypto", DatasetId: "ds_1m", PartitionKey: "2026-10-16"})
-	if part.GetPartition().GetWorkerId() != "w2" || part.GetPartition().GetFileBytes() != 10 {
-		t.Fatalf("登记的 worker 应变成 w2、大小不被冲成 0: %v", part.GetPartition())
-	}
-	overview, _ := h.mgr.GetArchiveOverview(context.Background(), &archivepb.GetArchiveOverviewReq{})
-	for _, alert := range overview.GetAlerts() {
-		if strings.Contains(alert, "分区登记在 worker") {
-			t.Fatalf("总览不应再有分区归属告警: %v", overview.GetAlerts())
-		}
+	if part.GetPartition().GetFileBytes() != 10 {
+		t.Fatalf("大小不应被冲成 0: %v", part.GetPartition())
 	}
 }
 
@@ -573,9 +550,9 @@ func TestDeleteArchiveTaskNotifiesTheWorkerAndKeepsPartitionedTasks(t *testing.T
 	ctx := context.Background()
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
 	requireOK(t, h.create("ds_1h", nil).GetRetInfo())
-	h.heartbeat("w1", "i1")
-	run := h.pull("w1", "i1", 1)[0]
-	done := &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded", Partitions: []*archivepb.PartitionReport{{
+	h.heartbeat("w1")
+	run := h.pull(1)[0]
+	done := &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded", Partitions: []*archivepb.PartitionReport{{
 		PartitionKey: "2026-10-16", Status: "exported", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z", FilePath: "f", FileSha256: "abc",
 	}}}
 	requireOK(t, func() *commonpb.RetInfo { r, _ := h.worker.CompleteArchiveRun(ctx, done); return r.GetRetInfo() }())
@@ -590,8 +567,8 @@ func TestDeleteArchiveTaskNotifiesTheWorkerAndKeepsPartitionedTasks(t *testing.T
 	deleted, _ := h.mgr.DeleteArchiveTask(ctx, &archivepb.DeleteArchiveTaskReq{SpaceId: "crypto", DatasetId: other})
 	requireOK(t, deleted.GetRetInfo())
 	// 心跳带回当前全部任务：被删的任务不在列表里，worker 维护时据此清理它的暂存状态。
-	hb := h.heartbeat("w1", "i1")
-	if !hb.GetActive() || len(hb.GetTasks()) != 1 || hb.GetTasks()[0].GetDatasetId() != partitioned || hb.GetTasks()[0].GetTaskId() == "" {
+	hb := h.heartbeat("w1")
+	if len(hb.GetTasks()) != 1 || hb.GetTasks()[0].GetDatasetId() != partitioned || hb.GetTasks()[0].GetTaskId() == "" {
 		t.Fatalf("heartbeat = %v", hb)
 	}
 }
@@ -601,8 +578,8 @@ func TestMaintainRecoversLostLeases(t *testing.T) {
 	ctx := context.Background()
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
 	// 领取后 worker 失联：租约过期，运行被标为失败，任务健康提示失败。
-	h.heartbeat("w1", "i1")
-	claimed := h.pull("w1", "i1", 1)
+	h.heartbeat("w1")
+	claimed := h.pull(1)
 	if len(claimed) != 1 {
 		t.Fatalf("claimed = %v", claimed)
 	}
@@ -626,10 +603,10 @@ func at(h, m, sec int) time.Time { return time.Date(2026, 10, 17, h, m, sec, 0, 
 // finishQueued 让 worker 领取并成功完成全部排队中的运行，返回下发的参数。
 func (h *harness) finishQueued() []*archivepb.RunAssignment {
 	h.t.Helper()
-	h.heartbeat("w1", "i1")
-	runs := h.pull("w1", "i1", 10)
+	h.heartbeat("w1")
+	runs := h.pull(10)
 	for _, run := range runs {
-		rsp, _ := h.worker.CompleteArchiveRun(context.Background(), &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded"})
+		rsp, _ := h.worker.CompleteArchiveRun(context.Background(), &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded"})
 		requireOK(h.t, rsp.GetRetInfo())
 	}
 	return runs
@@ -679,8 +656,8 @@ func TestTriggerGeneratesReviewsAndTicksByBoundary(t *testing.T) {
 		t.Fatal("不到点不应写运行记录")
 	}
 	// 复核还在运行：到点也跳过，累加跳过次数，边界不前进。
-	h.heartbeat("w1", "i1")
-	review := h.pull("w1", "i1", 1)[0]
+	h.heartbeat("w1")
+	review := h.pull(1)[0]
 	if review.GetKind() != "scheduled" || review.GetBackfillFrom() != "2026-10-15T00:00:00Z" || review.GetIntervalSeconds() != 3600 {
 		t.Fatalf("复核下发 = %v", review)
 	}
@@ -689,7 +666,7 @@ func TestTriggerGeneratesReviewsAndTicksByBoundary(t *testing.T) {
 	if task := h.task("crypto", "ds_1m"); task.ConsecutiveSkips != 2 || !task.LastBoundary.Equal(at(1, 10, 0)) || len(h.allRuns()) != 1 {
 		t.Fatalf("跳过后 = %+v", task)
 	}
-	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: review.GetRunId(), LeaseToken: review.GetLeaseToken(), Status: "succeeded"})
+	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: review.GetRunId(), LeaseToken: review.GetLeaseToken(), Status: "succeeded"})
 	requireOK(t, done.GetRetInfo())
 	reviewed := h.task("crypto", "ds_1m")
 	if !reviewed.LastSuccessAt.Equal(at(1, 10, 40)) || !reviewed.BackfillFrom.IsZero() {
@@ -841,7 +818,7 @@ func TestHealthLevelsFollowTheDesignTable(t *testing.T) {
 	base := store.Task{SpaceID: "crypto", DatasetID: "ds", Freq: "1m", PartitionUnit: "day", Retention: "168h", Status: store.StatusEnabled,
 		IntervalSeconds: 3600, CreatedAt: now.Add(-24 * time.Hour), LastSuccessAt: now.Add(-10 * time.Minute)}
 	eval := func(mutate func(*healthInput)) (string, string) {
-		in := healthInput{Now: now, Task: base, WorkerActive: true, Lookback: 15 * time.Minute, SpaceTZ: "UTC"}
+		in := healthInput{Now: now, Task: base, Lookback: 15 * time.Minute, SpaceTZ: "UTC"}
 		if mutate != nil {
 			mutate(&in)
 		}
@@ -888,15 +865,15 @@ func TestHealthLevelsFollowTheDesignTable(t *testing.T) {
 	if level, _ := eval(func(in *healthInput) { in.Task.Retention = "" }); level != HealthError {
 		t.Fatalf("读不到保留期时应显示异常，不能当永久: %s", level)
 	}
-	// 有到期运行时活动 worker 离线超过 30 分钟 → 异常；30 分钟内只是排队。
+	// 有到期运行时 worker 离线超过 30 分钟 → 异常；30 分钟内只是排队。
 	queuedLong := now.Add(-45 * time.Minute)
 	if level, _ := eval(func(in *healthInput) {
-		in.WorkerActive, in.OldestQueued, in.WorkerLastSeen = false, queuedLong, now.Add(-40*time.Minute)
+		in.OldestQueued, in.WorkerLastSeen = queuedLong, now.Add(-40*time.Minute)
 	}); level != HealthError {
 		t.Fatalf("worker offline = %s", level)
 	}
 	if level, _ := eval(func(in *healthInput) {
-		in.WorkerActive, in.OldestQueued, in.WorkerLastSeen = false, now.Add(-10*time.Minute), now.Add(-9*time.Minute)
+		in.OldestQueued, in.WorkerLastSeen = now.Add(-10*time.Minute), now.Add(-9*time.Minute)
 	}); level != HealthOK {
 		t.Fatalf("recently offline = %s", level)
 	}
@@ -952,11 +929,11 @@ func TestOverviewReportsWorkersRunsAndAlerts(t *testing.T) {
 	if empty.GetWorker() != nil || empty.GetTaskCount() != 1 || empty.GetEnabledTaskCount() != 1 || empty.GetQueuedRunCount() != 1 {
 		t.Fatalf("overview = %v", empty)
 	}
-	if len(empty.GetAlerts()) != 1 || !strings.Contains(empty.GetAlerts()[0], "没有活动") {
+	if len(empty.GetAlerts()) != 1 || !strings.Contains(empty.GetAlerts()[0], "不在线") {
 		t.Fatalf("alerts = %v", empty.GetAlerts())
 	}
-	h.heartbeat("w1", "i1")
-	h.pull("w1", "i1", 1)
+	h.heartbeat("w1")
+	h.pull(1)
 	full, _ := h.mgr.GetArchiveOverview(ctx, &archivepb.GetArchiveOverviewReq{})
 	if full.GetWorker().GetWorkerId() != "w1" || !full.GetWorker().GetActive() || full.GetWorker().GetRootDir() != "/data/archive" || len(full.GetRunningRuns()) != 1 || full.GetQueuedRunCount() != 0 ||
 		full.GetWorker().GetDiskTotalBytes() != 100 || full.GetWorker().GetDiskFreeBytes() != 60 || full.GetWorker().GetDiskUsedBytes() != 35 || full.GetWorker().GetMinFreeBytes() != 20 {
@@ -968,7 +945,7 @@ func TestOverviewReportsWorkersRunsAndAlerts(t *testing.T) {
 	h.now = h.now.Add(10 * time.Minute)
 	stale, _ := h.mgr.GetArchiveOverview(ctx, &archivepb.GetArchiveOverviewReq{})
 	if stale.GetWorker() == nil || stale.GetWorker().GetActive() {
-		t.Fatalf("租约过期的 worker 仍应展示但标为不活动: %v", stale.GetWorker())
+		t.Fatalf("停止心跳的 worker 仍应展示但标为不在线: %v", stale.GetWorker())
 	}
 }
 
@@ -976,15 +953,15 @@ func TestRecreatedTaskGetsANewTaskID(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
-	h.heartbeat("w1", "i1")
-	first := h.heartbeat("w1", "i1").GetTasks()[0].GetTaskId()
+	h.heartbeat("w1")
+	first := h.heartbeat("w1").GetTasks()[0].GetTaskId()
 	deleted, _ := h.mgr.DeleteArchiveTask(ctx, &archivepb.DeleteArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, deleted.GetRetInfo())
-	if hb := h.heartbeat("w1", "i1"); !hb.GetActive() || len(hb.GetTasks()) != 0 {
+	if hb := h.heartbeat("w1"); len(hb.GetTasks()) != 0 {
 		t.Fatalf("删除后任务列表应为空: %v", hb)
 	}
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
-	hb := h.heartbeat("w1", "i1")
+	hb := h.heartbeat("w1")
 	if len(hb.GetTasks()) != 1 || hb.GetTasks()[0].GetTaskId() == first {
 		t.Fatalf("重建的任务必须换新的 task_id，worker 才会丢弃旧状态: %v（旧 %s）", hb.GetTasks(), first)
 	}
@@ -994,10 +971,10 @@ func TestShrinkingPartitionReportIsRejected(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
-	h.heartbeat("w1", "i1")
+	h.heartbeat("w1")
 	complete := func(rows, subjects uint64) *commonpb.RetInfo {
-		run := h.pull("w1", "i1", 1)[0]
-		r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded",
+		run := h.pull(1)[0]
+		r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded",
 			Partitions: []*archivepb.PartitionReport{{PartitionKey: "2026-10-16", Status: "exported", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z",
 				FilePath: "f", FileSha256: "abc", RowCount: rows, SubjectCount: subjects}}})
 		return r.GetRetInfo()
@@ -1021,8 +998,8 @@ func TestShrinkingPartitionReportIsRejected(t *testing.T) {
 	// 不带分区的上报（例如排队时被取消）不能清掉被拒原因。
 	empty, _ := h.mgr.RunArchiveTaskNow(ctx, &archivepb.RunArchiveTaskNowReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, empty.GetRetInfo())
-	emptyRun := h.pull("w1", "i1", 1)[0]
-	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: emptyRun.GetRunId(), LeaseToken: emptyRun.GetLeaseToken(), Status: "canceled"})
+	emptyRun := h.pull(1)[0]
+	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: emptyRun.GetRunId(), LeaseToken: emptyRun.GetLeaseToken(), Status: "canceled"})
 	requireOK(t, r.GetRetInfo())
 	if task, _ := h.store.GetTask(ctx, "crypto", "ds_1m"); task.BlockedReason == "" {
 		t.Fatal("不带分区的上报清掉了被拒原因")
@@ -1042,12 +1019,12 @@ func TestSuccessfulRunClearsBackfillAndAssignmentCarriesRegistry(t *testing.T) {
 	requireOK(t, h.create("ds_1m", func(r *archivepb.CreateArchiveTaskReq) {
 		r.BackfillFrom = h.now.Add(-48 * time.Hour).Format(time.RFC3339)
 	}).GetRetInfo())
-	h.heartbeat("w1", "i1")
-	run := h.pull("w1", "i1", 1)[0]
+	h.heartbeat("w1")
+	run := h.pull(1)[0]
 	if run.GetBackfillFrom() == "" || run.GetLastSuccessAt() != "" || run.GetTaskId() == "" {
 		t.Fatalf("首次运行应带回补起点、没有水位: %v", run)
 	}
-	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{WorkerId: "w1", RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded",
+	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded",
 		Partitions: []*archivepb.PartitionReport{{PartitionKey: "2026-10-16", Status: "final", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z",
 			FilePath: "f", FileSha256: "abc", RowCount: 10, SubjectCount: 1, FinalizedAt: "2026-10-20T00:00:00Z"}},
 		Unrecoverable: []*archivepb.UnrecoverableRange{{StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}}})
@@ -1058,7 +1035,7 @@ func TestSuccessfulRunClearsBackfillAndAssignmentCarriesRegistry(t *testing.T) {
 	}
 	now, _ := h.mgr.RunArchiveTaskNow(ctx, &archivepb.RunArchiveTaskNowReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, now.GetRetInfo())
-	next := h.pull("w1", "i1", 1)[0]
+	next := h.pull(1)[0]
 	if next.GetBackfillFrom() != "" || next.GetLastSuccessAt() == "" || len(next.GetRegisteredPartitions()) != 1 || next.GetRegisteredPartitions()[0].GetStatus() != "final" {
 		t.Fatalf("下发应带水位与分区登记、不再带回补起点: %v", next)
 	}

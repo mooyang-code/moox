@@ -114,14 +114,14 @@ func (c *Client) instrument(instrument action.InstrumentRef) (tradepb.Exchange, 
 }
 
 // BlockInstrument 把标的写进下架名单。
-func (c *Client) BlockInstrument(ctx context.Context, instrument action.InstrumentRef, reason, eventID string) (action.BlockResult, error) {
+func (c *Client) BlockInstrument(ctx context.Context, instrument action.InstrumentRef, reason, eventID, owner string) (action.BlockResult, error) {
 	exchange, market, err := c.instrument(instrument)
 	if err != nil {
 		return action.BlockResult{}, err
 	}
 	response := new(tradepb.BlockInstrumentRsp)
 	if err := c.invoke(ctx, "BlockInstrument", "", &tradepb.BlockInstrumentReq{
-		Exchange: exchange, MarketType: market, ExchangeSymbol: instrument.ExchangeSymbol, Reason: reason, EventId: eventID,
+		Exchange: exchange, MarketType: market, ExchangeSymbol: instrument.ExchangeSymbol, Reason: reason, EventId: eventID, Owner: owner,
 	}, response); err != nil {
 		return action.BlockResult{}, err
 	}
@@ -160,6 +160,7 @@ func (c *Client) ListBlockedInstruments(ctx context.Context) ([]action.BlockedIn
 		list = append(list, action.BlockedInstrument{
 			Instrument: action.InstrumentRef{Exchange: fromExchange(item.GetExchange()), Market: fromMarket(item.GetMarketType()), ExchangeSymbol: item.GetExchangeSymbol()},
 			Reason:     item.GetReason(),
+			Owner:      item.GetOwner(),
 		})
 	}
 	return list, nil

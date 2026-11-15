@@ -61,7 +61,7 @@ func TestKlineCommitterWritesTheSameRowsAsTheSCFPipeline(t *testing.T) {
 	require.NoError(t, err)
 	scf := &capturingPeriodStorage{}
 	pipeline := &KlinePipeline{Router: router, Storage: scf, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto", InstrumentType: marketdata.InstrumentSwap, SourceID: "swap_http"}
-	requests, err := plan.BuildRequests("crypto", "fn", "req", period.Add(time.Minute), nil)
+	requests, err := plan.BuildRequests("crypto", "fn", "req", period.Add(time.Minute))
 	require.NoError(t, err)
 	require.Len(t, requests, 1)
 	pipeline.DatasetID = requests[0].Request.DatasetID

@@ -14,7 +14,6 @@ const result = (patch: Partial<StrategyResult> = {}): StrategyResult => ({
   targets: [],
   summary_json: "{}",
   input_json: "{}",
-  rule_states_json: "{}",
   publish_status: "none",
   created_at: "",
   next_params_json: "",

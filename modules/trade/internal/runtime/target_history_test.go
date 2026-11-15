@@ -39,7 +39,7 @@ func TestTargetHistoryPrunerDeletesOnlyRowsExpiredMoreThanSevenDays(t *testing.T
 				SpaceID: "space-1", TargetID: fmt.Sprintf("target-%d", i), RunnerID: "runner-1@session-1",
 				LogicalAccountID: "logical-1", CommandSequence: uint64(barEnd),
 				InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
-				BarEndTime: barEnd, EffectiveAt: barEnd, ValidUntil: validUntil.UnixMilli(),
+				BarEndTime: barEnd, ValidUntil: validUntil.UnixMilli(),
 				RequestHash: "hash", WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]",
 				AcceptedAt: barEnd,
 			}); err != nil {

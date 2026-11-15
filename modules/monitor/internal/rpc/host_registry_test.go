@@ -22,14 +22,12 @@ func TestListHostAgentsReadsPersistedPresenceAfterRestart(t *testing.T) {
 
 	registry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
 	require.NoError(t, err)
-	t0 := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
+	t0 := time.Now().UTC().Add(-4 * time.Minute).Truncate(time.Second)
 	_, err = registry.Observe(ctx, hostmetrics.HostObservation{
 		AgentID: "agent-a", Hostname: "host-a", BootID: "boot-a",
 		OccurredAt: t0, EventID: "event-0",
 	})
 	require.NoError(t, err)
-	scanner := hostmetrics.NewSilenceScanner(registry, 90*time.Second, nil)
-	require.NoError(t, scanner.Scan(ctx, t0.Add(91*time.Second)))
 
 	restartedRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
 	require.NoError(t, err)
@@ -41,5 +39,5 @@ func TestListHostAgentsReadsPersistedPresenceAfterRestart(t *testing.T) {
 	require.Len(t, rsp.GetAgents(), 1)
 	require.Equal(t, "agent-a", rsp.GetAgents()[0].GetAgentId())
 	require.False(t, rsp.GetAgents()[0].GetReachable())
-	require.GreaterOrEqual(t, rsp.GetAgents()[0].GetStaleSeconds(), int64(91))
+	require.GreaterOrEqual(t, rsp.GetAgents()[0].GetStaleSeconds(), int64(240))
 }

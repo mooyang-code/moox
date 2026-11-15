@@ -98,7 +98,8 @@ type BlockResult struct {
 }
 
 // Block 把标的写进下架名单。能从标的表查到的记下内部标的 ID 和基础资产（只用于展示和审计），查不到的留空。
-func (s *Service) Block(ctx context.Context, key Key, reason, eventID string) (BlockResult, error) {
+// owner 是写入者的标识，已在名单里时保留第一个写入者。
+func (s *Service) Block(ctx context.Context, key Key, reason, eventID, owner string) (BlockResult, error) {
 	if err := s.ready(); err != nil {
 		return BlockResult{}, err
 	}
@@ -116,7 +117,7 @@ func (s *Service) Block(ctx context.Context, key Key, reason, eventID string) (B
 	created, err := s.Store.BlockInstrument(ctx, store.BlockedInstrumentRecord{
 		Exchange: key.Exchange, MarketType: key.MarketType, ExchangeSymbol: key.ExchangeSymbol,
 		InstrumentID: instrument.InstrumentID, BaseAsset: instrument.BaseAsset,
-		Reason: reason, SourceEventID: strings.TrimSpace(eventID), BlockedAt: s.now().UnixMilli(),
+		Reason: reason, SourceEventID: strings.TrimSpace(eventID), Owner: owner, BlockedAt: s.now().UnixMilli(),
 	})
 	if err != nil {
 		return BlockResult{}, err

@@ -182,7 +182,7 @@ func (s *Service) startViewMaintenanceLoop(ctx context.Context, opts Maintenance
 	return func() { cancel(); <-done }
 }
 
-// RestoreActiveViews 只挂接已经建好的索引文件，不建新索引，可以在连 EventBus 之前运行，不拖住实时流。
+// RestoreActiveViews 在启动时清掉孤立的索引文件，再挂接已经建好的索引文件；不建新索引，可以在连 EventBus 之前运行，不拖住实时流。
 // 没有文件、没建完（没记下跟随进度）或不属于它（删除后同 ID 重建）的 View 不挂接，由维护流程重新建。
 func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOptions) error {
 	if opts.Metadata == nil {
@@ -193,6 +193,8 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 	s.maintenance = opts
 	s.mu.Unlock()
 	s.setMetadataClient(opts.Metadata)
+	// 先清掉没有对应 View 的索引文件，再挂接。
+	s.removeOrphanIndexes(ctx, opts.Metadata)
 	auth := s.internalAuth()
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
@@ -301,7 +303,7 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 }
 
 // forgetDeletedViews 摘掉元数据里已经不存在的 View（停用的不算）：清掉运行时里的活动索引并从目录里去掉，
-// GetViewState 随之返回 VIEW_NOT_FOUND，索引文件不再受保护，由退役清理回收。列出元数据失败时这一轮不动。
+// GetViewState 随之返回 VIEW_NOT_FOUND，索引文件当场删除。列出元数据失败时这一轮不动。
 func (s *Service) forgetDeletedViews(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo) {
 	existing := make(map[viewRef]struct{})
 	for pageNo := uint32(1); ; pageNo++ {
@@ -316,7 +318,7 @@ func (s *Service) forgetDeletedViews(ctx context.Context, metadata MetadataClien
 		for _, view := range rsp.GetViews() {
 			existing[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}] = struct{}{}
 		}
-		// 与退役清理一样：分页信息不完整时不能断定已经列全，这一轮不摘。
+		// 分页信息不完整时不能断定已经列全，这一轮不摘。
 		page := rsp.GetPageResult()
 		if page == nil {
 			log.Warnf("storage view 列出全部 View 没有分页信息，这一轮不回收已删除的 View")
@@ -340,18 +342,42 @@ func (s *Service) forgetDeletedViews(ctx context.Context, metadata MetadataClien
 	s.mu.RUnlock()
 	for ref, runtime := range removed {
 		s.followManager().Stop(ref.spaceID, ref.viewID)
+		indexID := viewindex.ViewIndexID(ref.spaceID, ref.viewID)
 		runtime.mu.Lock()
 		runtime.clearActiveLocked()
 		runtime.building = ""
 		s.mu.Lock()
+		// 只有确实摘掉了这个运行时才删文件：映射里已经换成别的运行时（同名 View 重新建过）时，文件属于新的那个。
+		var engine viewindex.Engine
 		if s.views[ref] == runtime {
+			engine = s.engines[s.indexEngine[indexID]]
 			delete(s.views, ref)
 			delete(s.catalogViews, ref)
-			s.forgetIndexLocked(viewindex.ViewIndexID(ref.spaceID, ref.viewID))
+			s.forgetIndexLocked(indexID)
 		}
 		s.mu.Unlock()
+		// View 已经从目录里去掉，新的查询找不到它；跟随器已停，这里再拿索引写锁，等正在进行的写入、加列、删除最旧数据结束后
+		// 关闭并删除文件（引擎关闭时等已经开始的查询跑完）。删不掉只记日志，文件留到下次启动时按孤立文件清理。
+		s.removeDetachedIndex(ctx, engine, indexID)
 		runtime.mu.Unlock()
 		log.Infof("storage view 已删除的 View 不再挂接 space=%s view=%s", ref.spaceID, ref.viewID)
+	}
+}
+
+// removeDetachedIndex 删除刚摘除的 View 的索引文件。调用方持有运行时锁，View 已不在目录里。
+func (s *Service) removeDetachedIndex(ctx context.Context, engine viewindex.Engine, indexID string) {
+	if engine == nil {
+		return
+	}
+	// 停服时也要删完：这一步不跟着请求取消。
+	ctx = context.WithoutCancel(ctx)
+	release, err := s.indexWriteGate(indexID).lock(ctx)
+	if err == nil {
+		err = engine.Remove(ctx, indexID)
+		release()
+	}
+	if err != nil {
+		log.Errorf("storage view 删除已摘除 View 的索引文件失败，留到下次启动清理 index_id=%s：%v", indexID, err)
 	}
 }
 

@@ -149,7 +149,7 @@
   <text class="chip-note" x="489" y="758.0" text-anchor="middle">内置算子 + wasm 自定义算子</text>
   <rect x="354" y="778" width="270" height="46" rx="7" fill="#fffbeb" stroke="#fcd34d" stroke-opacity="0.7"/>
   <text class="chip-text" x="489" y="798.0" text-anchor="middle">结果写入与周期上报</text>
-  <text class="chip-note" x="489" y="814.0" text-anchor="middle">commit_id 幂等写入</text>
+  <text class="chip-note" x="489" y="814.0" text-anchor="middle">写入结果行，上报完成标记</text>
   <path class="data" d="M489,712 L489,720" marker-end="url(#m-data)"/>
   <path class="data" d="M489,768 L489,776" marker-end="url(#m-data)"/>
   <path class="ctrl" d="M336,745 L350,745" marker-end="url(#m-ctrl)"/>

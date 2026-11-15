@@ -1,11 +1,9 @@
 // Package wirecompress 是系统内部传输与编码统一使用的压缩：zstd 加训练字典。
 //
-// 字典按空间绑定：空间有专用字典就用专用字典，否则用默认字典。字典版本不可变，
-// 解码只看 zstd 帧头里的字典 ID，不需要知道空间。
+// 编码用注册表里 default 指向的字典版本。字典版本不可变，解码只看 zstd 帧头里的字典 ID。
 package wirecompress
 
 import (
-	"context"
 	"errors"
 	"fmt"
 
@@ -41,26 +39,8 @@ var (
 	ErrCorrupt = errors.New("corrupt zstd frame")
 )
 
-type spaceKey struct{}
-
-// WithSpace 把空间写进 context，供请求本身不带空间字段的调用指定字典。
-func WithSpace(ctx context.Context, space string) context.Context {
-	return context.WithValue(ctx, spaceKey{}, space)
-}
-
-// SpaceOf 返回调用应使用的空间：context 里显式指定的优先，其次是请求对象顶层的 GetSpaceId()，都没有返回空串。
-func SpaceOf(ctx context.Context, request any) string {
-	if space, _ := ctx.Value(spaceKey{}).(string); space != "" {
-		return space
-	}
-	if carrier, ok := request.(interface{ GetSpaceId() string }); ok {
-		return carrier.GetSpaceId()
-	}
-	return ""
-}
-
-// CompressType 返回空间当前绑定的字典版本对应的 tRPC 压缩类型号。
-func CompressType(space string) int { return global.forSpace(space).compressType }
+// CompressType 返回当前字典版本对应的 tRPC 压缩类型号。
+func CompressType() int { return global.current.compressType }
 
 // Known 报告压缩类型号是否是本包注册的字典版本。
 func Known(compressType int) bool {
@@ -68,9 +48,9 @@ func Known(compressType int) bool {
 	return ok
 }
 
-// Encode 用空间绑定的字典压缩；空输入返回 nil。
-func Encode(use Use, space string, src []byte) []byte {
-	return encodeWith(use, global.forSpace(space), src)
+// Encode 用当前字典版本压缩；空输入返回 nil。
+func Encode(use Use, src []byte) []byte {
+	return encodeWith(use, global.current, src)
 }
 
 func encodeWith(use Use, v *version, src []byte) []byte {

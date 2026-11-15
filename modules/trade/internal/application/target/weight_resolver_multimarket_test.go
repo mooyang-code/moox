@@ -73,7 +73,7 @@ func newMixedResolverStore(t *testing.T, fundSettings string) *store.Store {
 func mixedRequest(targets ...*tradeeventpb.InstrumentWeightTarget) *tradeeventpb.LogicalAccountTargetWeightRequested {
 	return &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "target-1", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
-		BarEndTime: timestamppb.New(time.UnixMilli(1000)), EffectiveAt: timestamppb.New(time.UnixMilli(1000)), ValidUntil: timestamppb.New(time.UnixMilli(61000)),
+		BarEndTime: timestamppb.New(time.UnixMilli(1000)), ValidUntil: timestamppb.New(time.UnixMilli(61000)),
 		Targets: targets,
 	}
 }

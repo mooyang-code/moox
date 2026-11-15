@@ -139,24 +139,18 @@ case "${TARGET_MODULE}" in
     build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
     build_web_host
     build_go modules/cloudfunction ./cmd/server moox-cloudfunction 0
-    build_go modules/cloudfunction ./cmd/cli moox-cloudfunction-cli 0
     build_go modules/collector ./cmd/server moox-collector 0
     build_go modules/collector ./cmd/cli moox-collector-cli 0
     build_go modules/collector ./cmd/stream moox-collector-stream 0
     build_go modules/factor ./cmd/mgr moox-factor-mgr 0
     build_go modules/factor ./cmd/cli moox-factor-mgr-cli 0
     build_go modules/factor ./cmd/engine moox-factor-engine 0
-    build_go modules/importer ./cmd/importer moox-importer 0
-    build_go modules/replay ./cmd/replay moox-replay 0
     build_go modules/archive ./cmd/mgr moox-archive-mgr 0
     build_go modules/strategy ./cmd/server moox-strategy 0
     build_go modules/strategy ./cmd/cli moox-strategy-cli 0
     build_go modules/trade ./cmd/server moox-trade 0
-    build_go modules/trade ./cmd/cli moox-trade-cli 0
     build_go modules/callbackdispatcher ./cmd/server moox-callback-dispatcher 0
-    build_go modules/callbackdispatcher ./cmd/cli moox-callback-dispatcher-cli 0
     build_go modules/monitor ./cmd/server moox-monitor 0
-    build_go modules/monitor ./cmd/cli moox-monitor-cli 0
     if [[ "${TARGET_GOOS}" == "linux" ]]; then build_hostagent; fi
     build_storage
     build_storage_cli
@@ -192,10 +186,6 @@ case "${TARGET_MODULE}" in
     ;;
   cloudfunction)
     build_go modules/cloudfunction ./cmd/server moox-cloudfunction 0
-    build_go modules/cloudfunction ./cmd/cli moox-cloudfunction-cli 0
-    ;;
-  cloudfunction-cli)
-    build_go modules/cloudfunction ./cmd/cli moox-cloudfunction-cli 0
     ;;
   collector)
     build_go modules/collector ./cmd/server moox-collector 0
@@ -214,12 +204,6 @@ case "${TARGET_MODULE}" in
   factor-mgr)
     build_go modules/factor ./cmd/mgr moox-factor-mgr 0
     build_go modules/factor ./cmd/cli moox-factor-mgr-cli 0
-    ;;
-  importer)
-    build_go modules/importer ./cmd/importer moox-importer 0
-    ;;
-  replay)
-    build_go modules/replay ./cmd/replay moox-replay 0
     ;;
   factor-engine)
     build_go modules/factor ./cmd/engine moox-factor-engine 0
@@ -242,18 +226,10 @@ case "${TARGET_MODULE}" in
     ;;
   trade)
     build_go modules/trade ./cmd/server moox-trade 0
-    build_go modules/trade ./cmd/cli moox-trade-cli 0
-    ;;
-  trade-cli)
-    build_go modules/trade ./cmd/cli moox-trade-cli 0
     ;;
   callback-dispatcher)
     # 纯 Go，可交叉编译；事件中心是独立部署单元。
     build_go modules/callbackdispatcher ./cmd/server moox-callback-dispatcher 0
-    build_go modules/callbackdispatcher ./cmd/cli moox-callback-dispatcher-cli 0
-    ;;
-  callback-dispatcher-cli)
-    build_go modules/callbackdispatcher ./cmd/cli moox-callback-dispatcher-cli 0
     ;;
   storage)
     build_storage
@@ -273,10 +249,6 @@ case "${TARGET_MODULE}" in
     ;;
   monitor)
     build_go modules/monitor ./cmd/server moox-monitor 0
-    build_go modules/monitor ./cmd/cli moox-monitor-cli 0
-    ;;
-  monitor-cli)
-    build_go modules/monitor ./cmd/cli moox-monitor-cli 0
     ;;
   hostagent)
     build_hostagent

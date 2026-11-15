@@ -23,6 +23,8 @@ import (
 type Source interface {
 	Columns(ctx context.Context, spaceID, datasetID string) ([]staging.Column, error)
 	ReadRange(ctx context.Context, req source.Range) (source.Page, error)
+	// ReadChanges 从游标之后读一页变更日志；cursor 为 nil 时只取日志头部的位点。
+	ReadChanges(ctx context.Context, spaceID, datasetID string, cursor *source.ChangeCursor) (source.Changes, error)
 }
 
 // Pacer 控制请求节奏。
@@ -104,6 +106,8 @@ type runState struct {
 	// same 是同键已存在且值相同的行数；differ 是只补空缺时同键已存在但值不同、没有写入的行数（只有导入用到）。
 	same   uint64
 	differ uint64
+	// nextCursor 是本次运行开始时变更日志已扫描到的位点；复核与手动运行成功后落盘。
+	nextCursor *source.ChangeCursor
 }
 
 func (r *Runner) now() time.Time {
@@ -114,6 +118,7 @@ func (r *Runner) now() time.Time {
 }
 
 // Execute 执行一次运行。report 在每页之后调用，返回 true 表示运行已被取消。
+// 复核与手动运行先按 Storage 的变更日志重读回看窗口之外被改动的分区（见 lateRanges）。
 // 每读完一个分区块就导出、定稿到期的分区，并（复核与手动运行）把续读起点记进暂存库；全部读完才推进水位（补拉与到点拉取不推进）。
 // 出错或取消时已提交的批次留在暂存区，水位不推进，下次从续读起点接着读；返回的 Outcome 仍带上待上报的分区登记。
 func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report func(Progress) bool) (out *Outcome, err error) {
@@ -189,6 +194,25 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	}
 	out.Unrecoverable = unrecoverable
 	resumable := !fixedRange(a)
+	if resumable {
+		// 回看窗口之外的晚到写入：按变更日志找出被改动的分区，先把改动范围重读一遍，每块读完就导出、定稿。
+		windowStart := s.started
+		if len(ranges) > 0 {
+			windowStart = ranges[0][0]
+		}
+		for _, rng := range s.lateRanges(ctx, windowStart) {
+			if err := s.readChunk(ctx, rng[0], rng[1]); err != nil {
+				return out, err
+			}
+			if err := s.exportDue(ctx, out, time.Time{}); err != nil {
+				return out, err
+			}
+			s.uploadPending(ctx, out)
+			if err := s.finalize(ctx, out, false, time.Time{}); err != nil {
+				return out, err
+			}
+		}
+	}
 	for i, rng := range ranges {
 		if err := s.readChunk(ctx, rng[0], rng[1]); err != nil {
 			return out, err
@@ -221,6 +245,11 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	s.uploadPending(ctx, out)
 	if err := s.finalize(ctx, out, resumable, time.Time{}); err != nil {
 		return out, err
+	}
+	if s.nextCursor != nil {
+		if err := r.Staging.SetChangeCursor(ctx, s.task.SpaceID, s.task.DatasetID, s.nextCursor.StoreID, s.nextCursor.Sequence); err != nil {
+			return out, err
+		}
 	}
 	// 上传失败不让运行失败（文件已经在本地），只写进消息；健康等级按远端副本规则反映。
 	out.Message = s.successMessage()

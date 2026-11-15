@@ -125,11 +125,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.stopCatalog = stopCatalog
 
-	filled := factorrpc.NewFilledInbox()
 	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)),
-		factorrpc.WithPreviewer(preview.New(storageio.NewAxis(storage), previewWorkers, preview.WithUDF(udfhost.New(previewRuntime), fetchModule))), factorrpc.WithFilledInbox(filled))
+		factorrpc.WithPreviewer(preview.New(storageio.NewAxis(storage), previewWorkers, preview.WithUDF(udfhost.New(previewRuntime), fetchModule))))
 	factorpb.RegisterFactorMgrService(s.Service(factorMgrService), factorService)
-	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub, catalogService, filled))
+	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub, catalogService))
 
 	runtime.health.SnapshotFunc = withLifecycle(runtime.healthSnapshot(db), life)
 	if err := registerMetricsReporter(s, hub); err != nil {

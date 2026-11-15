@@ -321,8 +321,8 @@ func targetDeliveryWithTargets(
 			SessionId: "session-e2e", StrategyId: "strategy-e2e",
 			LogicalAccountId: testLogicalAccount,
 			Targets:          targets,
-			BarEndTime:       timestamppb.New(bar), EffectiveAt: timestamppb.New(bar),
-			ValidUntil: timestamppb.New(bar.Add(time.Hour)),
+			BarEndTime:       timestamppb.New(bar),
+			ValidUntil:       timestamppb.New(bar.Add(time.Hour)),
 		},
 		events.PublishOptions{
 			EventID: targetID, OccurredAt: now,

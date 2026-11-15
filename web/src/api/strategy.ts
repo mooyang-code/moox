@@ -63,7 +63,6 @@ function normalizeResult(value: any): StrategyResult {
     targets: (value?.targets ?? []).map(normalizeTarget),
     summary_json: value?.summary_json || "{}",
     input_json: value?.input_json || "{}",
-    rule_states_json: value?.rule_states_json || "{}",
     publish_status: value?.publish_status ?? "",
     created_at: value?.created_at ?? "",
     next_params_json: value?.next_params_json ?? "",
@@ -81,7 +80,8 @@ function normalizeItem(value: any): StrategyResultItem {
     score: value?.score ?? "",
     rank: Number(value?.rank ?? 0),
     weight: value?.weight ?? "",
-    reason: value?.reason ?? ""
+    reason: value?.reason ?? "",
+    scale: value?.scale ?? ""
   };
 }
 

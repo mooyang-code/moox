@@ -42,16 +42,15 @@ type DiskUsage func(path string) (total, used, free uint64, err error)
 
 // Options 是 App 的依赖。
 type Options struct {
-	Config     *config.Config
-	Manager    manager.Client
-	Runner     *runner.Runner
-	Staging    *staging.Store
-	Files      export.Files
-	InstanceID string
-	Version    string
-	Now        func() time.Time
-	Sleep      func(ctx context.Context, d time.Duration) error
-	DiskUsage  DiskUsage
+	Config    *config.Config
+	Manager   manager.Client
+	Runner    *runner.Runner
+	Staging   *staging.Store
+	Files     export.Files
+	Version   string
+	Now       func() time.Time
+	Sleep     func(ctx context.Context, d time.Duration) error
+	DiskUsage DiskUsage
 	// Remote 是对象存储客户端；nil 表示没有配置。心跳带上它的摘要，每天维护时抽查远端副本。
 	Remote *objectstore.Client
 	// Pacer 是与 Runner 共用的节奏控制：心跳回包里的避让规则替换它的生效规则；nil 时不接收（测试）。
@@ -70,8 +69,6 @@ type App struct {
 	opts Options
 
 	mu              sync.Mutex
-	active          bool
-	leaseTTL        time.Duration
 	lastHeartbeatOK time.Time
 	lastError       string
 	maintaining     bool
@@ -111,7 +108,7 @@ func New(opts Options) *App {
 			}
 		}
 	}
-	return &App{opts: opts, running: map[string]*activeRun{}, datasetSlots: map[string]chan struct{}{}, leaseTTL: 45 * time.Second, progressEvery: progressEvery}
+	return &App{opts: opts, running: map[string]*activeRun{}, datasetSlots: map[string]chan struct{}{}, progressEvery: progressEvery}
 }
 
 // Start 启动时的清理：残留的 .partial 文件。
@@ -224,7 +221,7 @@ func (a *App) probeOnce(ctx context.Context) {
 	}
 }
 
-// heartbeatOnce 发送一次心跳。本实例是活动 worker 时 mgr 下发当前全部任务，返回它们（键 "space/dataset"，值 task_id）；否则返回 nil。
+// heartbeatOnce 发送一次心跳。mgr 回包带当前全部任务，返回它们（键 "space/dataset"，值 task_id）；心跳失败返回 nil。
 func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	cfg := a.opts.Config
 	total, used, free, derr := a.opts.DiskUsage(cfg.Worker.RootDir)
@@ -242,7 +239,7 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 	rsp, err := a.opts.Manager.Heartbeat(callCtx, &archivepb.ArchiveWorkerHeartbeatReq{
-		WorkerId: cfg.Worker.WorkerID, InstanceId: a.opts.InstanceID, Version: a.opts.Version, RootDir: cfg.Worker.RootDir,
+		WorkerId: cfg.Worker.WorkerID, Version: a.opts.Version, RootDir: cfg.Worker.RootDir,
 		DiskTotalBytes: total, DiskFreeBytes: free, DiskUsedBytes: used, MinFreeBytes: uint64(cfg.Worker.MinFreeBytes),
 		StagingBytes: uint64(a.opts.Staging.FileBytes()), Maintaining: maintaining, PacingJson: string(pacingJSON), RunningRunIds: a.runningIDs(),
 		ObjectStore: a.objectStoreInfo(),
@@ -251,30 +248,17 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	defer a.mu.Unlock()
 	if err != nil {
 		a.lastError = err.Error()
-		if errors.Is(err, manager.ErrConflict) {
-			// 同一个 worker_id 已有另一个存活的实例：本实例不领取运行。
-			a.active = false
-			log.Errorf("archive worker heartbeat conflict: %v", err)
-		} else {
-			log.Warnf("archive worker heartbeat failed: %v", err)
-		}
+		log.Warnf("archive worker heartbeat failed: %v", err)
 		return nil
 	}
 	a.lastError = ""
 	a.lastHeartbeatOK = a.opts.Now()
 	a.applyAvoidance(rsp.GetAvoidance())
-	a.active = rsp.GetActive()
-	if ttl := time.Duration(rsp.GetLeaseTtlSeconds()) * time.Second; ttl > 0 {
-		a.leaseTTL = ttl
-	}
 	for _, id := range rsp.GetCancelRunIds() {
 		if r, ok := a.running[id]; ok {
 			r.stop.Store(true)
 			r.cancel()
 		}
-	}
-	if !rsp.GetActive() {
-		return nil
 	}
 	tasks := make(map[string]string, len(rsp.GetTasks()))
 	for _, ref := range rsp.GetTasks() {
@@ -341,7 +325,7 @@ func (a *App) pullOnce(ctx context.Context) {
 			busy++
 		}
 	}
-	if free > 0 && !blocked && a.active && !a.lastHeartbeatOK.IsZero() && a.opts.Now().Sub(a.lastHeartbeatOK) < a.leaseTTL {
+	if free > 0 && !blocked && !a.lastHeartbeatOK.IsZero() {
 		// 与维护的「开始」在同一把锁里决定：登记了 pulling 之后，维护会等这次领取登记完运行才继续。
 		a.pulling++
 	} else {
@@ -360,7 +344,7 @@ func (a *App) pullOnce(ctx context.Context) {
 	callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 	rsp, err := a.opts.Manager.Pull(callCtx, &archivepb.PullArchiveRunReq{
-		WorkerId: cfg.Worker.WorkerID, InstanceId: a.opts.InstanceID, FreeSlots: uint32(free),
+		FreeSlots:      uint32(free),
 		MaxStorageRuns: uint32(cfg.Pacing.MaxStorageRuns), BusyStorageRuns: busy,
 	})
 	if err != nil {
@@ -423,7 +407,7 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 		p := latest.Load()
 		callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 		rsp, err := a.opts.Manager.Progress(callCtx, &archivepb.ReportArchiveRunProgressReq{
-			WorkerId: a.opts.Config.Worker.WorkerID, RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken(),
+			RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken(),
 			SubjectsDone: p.SubjectsDone, RequestCount: p.RequestCount, BytesRead: p.BytesRead, RowsRead: p.RowsRead,
 		})
 		cancel()
@@ -462,7 +446,7 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 	}
 	defer stopTick()
 
-	req := &archivepb.CompleteArchiveRunReq{WorkerId: a.opts.Config.Worker.WorkerID, RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken()}
+	req := &archivepb.CompleteArchiveRunReq{RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken()}
 	var reported []string
 	// 同数据集的串行保护延续到完成上报和确认清理之后：否则取消的旧运行的迟到上报可能覆盖新运行刚登记的分区。
 	release, err := a.acquireDataset(ctx, run)
@@ -636,7 +620,6 @@ func fmtTime(t time.Time) string {
 // Snapshot 是健康检查用的状态。
 type Snapshot struct {
 	Ready       bool
-	Active      bool
 	Running     int
 	Maintaining bool
 	// DiskInsufficient：可用空间低于下限，已停止领取新运行。
@@ -650,7 +633,7 @@ func (a *App) Snapshot() Snapshot {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return Snapshot{
-		Ready:  !a.lastHeartbeatOK.IsZero() && a.opts.Now().Sub(a.lastHeartbeatOK) < 3*a.opts.Config.Worker.HeartbeatInterval,
-		Active: a.active, Running: len(a.running), Maintaining: a.maintaining, DiskInsufficient: a.diskInsufficient, DiskFree: a.diskFree, LastError: a.lastError,
+		Ready:   !a.lastHeartbeatOK.IsZero() && a.opts.Now().Sub(a.lastHeartbeatOK) < 3*a.opts.Config.Worker.HeartbeatInterval,
+		Running: len(a.running), Maintaining: a.maintaining, DiskInsufficient: a.diskInsufficient, DiskFree: a.diskFree, LastError: a.lastError,
 	}
 }

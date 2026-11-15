@@ -56,7 +56,7 @@ func (p *Publisher) Publish(ctx context.Context, event Event, payload proto.Mess
 	if err != nil {
 		return nil, fmt.Errorf("marshal event message: %w", err)
 	}
-	body, contentType := p.pack(encoded.Message.GetSpaceId(), body)
+	body, contentType := p.pack(body)
 	return p.client.PublishRaw(ctx, encoded.Subject, opts.EventID, body, contentType)
 }
 
@@ -74,6 +74,6 @@ func (p *Publisher) PublishMessage(ctx context.Context, message *eventpb.EventMe
 	if err != nil {
 		return nil, fmt.Errorf("marshal event message: %w", err)
 	}
-	body, contentType := p.pack(message.GetSpaceId(), body)
+	body, contentType := p.pack(body)
 	return p.client.PublishRaw(ctx, subject, message.GetEventId(), body, contentType)
 }

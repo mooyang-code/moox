@@ -19,7 +19,7 @@ func okResult(id, instanceID, sessionID string, bar int, publish PublishStatus) 
 	result := Result{
 		ResultID: id, InstanceID: instanceID, SessionID: sessionID, BarEndTime: barEnd, ValidUntil: barEnd.Add(2 * time.Hour),
 		Status: StatusOK, DSLHash: testHash, InputJSON: inputJSON("view_a", map[string]string{"ma": "h1"}),
-		TargetsJSON: json.RawMessage(`[{"instrument_id":"BTC-USDT","target_weight":"0.5"}]`), RuleStatesJSON: json.RawMessage(`{"r":{"held":["BTC-USDT"]}}`),
+		TargetsJSON: json.RawMessage(`[{"instrument_id":"BTC-USDT","target_weight":"0.5"}]`),
 		SummaryJSON: json.RawMessage(`{"universe":1}`), PublishStatus: publish, CreatedAt: barEnd.Add(time.Second),
 	}
 	if publish == PublishPending {
@@ -33,7 +33,7 @@ func skippedResult(id, instanceID, sessionID string, bar int, reason string) Res
 	return Result{
 		ResultID: id, InstanceID: instanceID, SessionID: sessionID, BarEndTime: barEnd, ValidUntil: barEnd.Add(2 * time.Hour),
 		Status: StatusSkipped, SkipReason: reason, DSLHash: testHash, InputJSON: inputJSON("view_a", map[string]string{"ma": "h1"}),
-		TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: json.RawMessage(`{}`), SummaryJSON: json.RawMessage(`{}`),
+		TargetsJSON: json.RawMessage(`[]`), SummaryJSON: json.RawMessage(`{}`),
 		PublishStatus: PublishNone, CreatedAt: barEnd.Add(time.Second),
 	}
 }

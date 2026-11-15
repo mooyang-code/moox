@@ -33,6 +33,15 @@ describe("instance toggle flow", () => {
     expect(api.setInstanceEnabled).not.toHaveBeenCalled();
   });
 
+  it("启用确认框提示规则状态会沿用，停用确认框不提", () => {
+    confirmInstanceToggle("i-1", true);
+    expect(lastDialog().content).toContain("会沿用停用前的持有记录、止损入场价和冷却");
+    expect(lastDialog().content).toContain("先清空规则状态再启用");
+    expect(lastDialog().content).toContain("moox-cli strategy instance update 原样提交一次，或改一下策略 DSL");
+    confirmInstanceToggle("i-1", false);
+    expect(lastDialog().content).not.toContain("沿用");
+  });
+
   it("tells the user nothing changed when the dialog is dismissed", () => {
     const hooks = { onStart: vi.fn(), onSettled: vi.fn() };
     confirmInstanceToggle("i-1", true, hooks);

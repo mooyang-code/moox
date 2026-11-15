@@ -22,7 +22,7 @@ import (
 // 用的都是第一次开算时的参数。FactorMgr 不可达时用本地缓存的最近一次读到的值，计算不阻塞在参数上；
 // 读到的提交值目标期晚于本期（超前）时同样用缓存的值并告警。积压追赶时引擎不等策略。
 
-// GetTaskParams 读取任务各可变成员最近一次被接受的提交；只有持有引擎租约的进程能读。
+// GetTaskParams 读取任务各可变成员最近一次被接受的提交；只有管理端当前登记的引擎进程能读。
 func (c *ManagerClient) GetTaskParams(ctx context.Context, taskID string) ([]factorwire.MemberParamState, error) {
 	var rsp factorpb.GetTaskParamsRsp
 	req := &factorpb.GetTaskParamsReq{Engine: factorwire.EngineIdentityToPB(c.identity), TaskId: taskID}
@@ -105,7 +105,7 @@ func newParamSelector(manager paramManager, file string, timeout time.Duration) 
 func cacheKey(taskID, memberKey string) string { return taskID + "/" + memberKey }
 
 // Select 返回任务在 period 这一期各可变成员用的参数。这一期已有进行中记录时直接用它；否则读取提交值、记成进行中记录并落盘后返回。
-// 租约冲突（另一个引擎接管）返回错误，这一期不算；落盘失败也返回错误（按基础设施错误让这一期重试，不能带着没落盘的参数开算）。
+// 管理端拒绝（本进程不是当前登记的引擎）返回错误，这一期不算；落盘失败也返回错误（按基础设施错误让这一期重试，不能带着没落盘的参数开算）。
 func (s *paramSelector) Select(ctx context.Context, task domain.FactorTask, members []domain.MemberDef, period time.Time) (map[string]domain.ParamSnapshot, error) {
 	var vars []domain.MemberDef
 	for _, member := range members {

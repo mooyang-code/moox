@@ -79,7 +79,6 @@ func New(cfg *config.Config) (*Server, error) {
 	if cfg.Broker.ClientAdvertise != "" {
 		opts.ClientAdvertise = cfg.Broker.ClientAdvertise
 	}
-	var clusterTLS *tls.Config
 	if cfg.Broker.Auth.Enabled {
 		if cfg.Broker.Auth.UsersFile != "" {
 			users, err := loadUsersFile(cfg.Broker.Auth.UsersFile)
@@ -114,27 +113,6 @@ func New(cfg *config.Config) (*Server, error) {
 			tlsConfig.RootCAs, tlsConfig.ClientCAs = pool, pool
 		}
 		opts.TLSConfig = tlsConfig
-		clusterTLS = tlsConfig.Clone()
-	}
-	if cfg.Broker.Cluster.Enabled {
-		opts.Cluster = natsserver.ClusterOpts{Name: cfg.Broker.Cluster.Name, Host: cfg.Broker.Cluster.Host, Port: cfg.Broker.Cluster.Port}
-		if clusterTLS != nil {
-			opts.Cluster.TLSConfig = clusterTLS
-		}
-		if username, password := clusterCredentials(cfg); username != "" {
-			// Route connections authenticate separately from client connections.
-			// Copy credentials into ClusterOpts or clustered nodes cannot form a
-			// route even though local clients authenticate successfully.
-			opts.Cluster.Username = username
-			opts.Cluster.Password = password
-		}
-		for _, route := range cfg.Broker.Cluster.Routes {
-			u, err := url.Parse(route)
-			if err != nil || u.Scheme == "" || u.Host == "" {
-				return nil, fmt.Errorf("invalid cluster route %q", route)
-			}
-			opts.Routes = append(opts.Routes, u)
-		}
 	}
 	ns, err := natsserver.NewServer(opts)
 	if err != nil {
@@ -262,13 +240,6 @@ func loadUsersFile(path string) ([]*natsserver.User, error) {
 		})
 	}
 	return users, nil
-}
-
-func clusterCredentials(cfg *config.Config) (string, string) {
-	if cfg == nil || !cfg.Broker.Cluster.Enabled || !cfg.Broker.Auth.Enabled {
-		return "", ""
-	}
-	return cfg.Broker.Auth.Username, cfg.Broker.Auth.Password
 }
 
 func (s *Server) Start(ctx context.Context) error {

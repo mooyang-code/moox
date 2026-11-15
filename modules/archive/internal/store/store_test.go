@@ -244,7 +244,7 @@ func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndStorageLimit(t *testing.T) {
 		}
 	}
 	// 读 Storage 的运行最多 2 个：按计划时刻领取 a 与 b，c 被上限挡住。
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 2, Now: t0, LeaseTTL: 10 * time.Minute})
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, MaxStorageRuns: 2, Now: t0, LeaseTTL: 10 * time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,20 +252,20 @@ func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndStorageLimit(t *testing.T) {
 		t.Fatalf("claimed = %+v", claimed)
 	}
 	for _, c := range claimed {
-		if c.Run.Status != RunRunning || c.Run.LeaseToken == "" || !c.Run.LeaseUntil.Equal(t0.Add(10*time.Minute)) || c.Run.WorkerID != "w1" {
+		if c.Run.Status != RunRunning || c.Run.LeaseToken == "" || !c.Run.LeaseUntil.Equal(t0.Add(10*time.Minute)) {
 			t.Fatalf("run = %+v", c.Run)
 		}
 	}
 	// worker 自己报告的占用也算：已在运行 2 个，c 仍领不到。
-	again, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 1, MaxStorageRuns: 2, BusyStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
+	again, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 1, MaxStorageRuns: 2, BusyStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(again) != 0 {
 		t.Fatalf("again = %+v err=%v", again, err)
 	}
 	// 没有空闲槽就什么都不领。
-	if none, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 0, Now: t0, LeaseTTL: time.Minute}); len(none) != 0 {
+	if none, _ := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 0, Now: t0, LeaseTTL: time.Minute}); len(none) != 0 {
 		t.Fatalf("none = %+v", none)
 	}
-	last, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 5, MaxStorageRuns: 3, BusyStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
+	last, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 5, MaxStorageRuns: 3, BusyStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(last) != 1 || last[0].Task.DatasetID != "c" {
 		t.Fatalf("last = %+v err=%v", last, err)
 	}
@@ -287,7 +287,7 @@ func TestClaimRunsLetsImportBypassStorageLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 读 Storage 的名额已被 worker 占满（上限 1）：manual 领不到，import 照样领取。
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 1, BusyStorageRuns: 1, Now: t0, LeaseTTL: time.Minute})
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, MaxStorageRuns: 1, BusyStorageRuns: 1, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(claimed) != 1 || claimed[0].Run.Kind != KindImport {
 		t.Fatalf("claimed = %+v err=%v", claimed, err)
 	}
@@ -316,22 +316,22 @@ func TestImportCoexistsWithQueuedRunsButTaskRunsOneAtATime(t *testing.T) {
 		t.Fatalf("第二条导入应冲突: %v", err)
 	}
 	// 读 Storage 的名额已满：manual 领不到，导入领到；同一次领取里不会再领同任务的 manual。
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 1, BusyStorageRuns: 1, Now: t0, LeaseTTL: time.Minute})
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, MaxStorageRuns: 1, BusyStorageRuns: 1, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(claimed) != 1 || claimed[0].Run.RunID != imp.RunID {
 		t.Fatalf("claimed = %+v err=%v", claimed, err)
 	}
 	// 导入运行中：即使读 Storage 的名额有空，同任务的 manual 也不领取；导入运行中时再建导入冲突。
-	again, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
+	again, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, MaxStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(again) != 0 {
 		t.Fatalf("again = %+v err=%v", again, err)
 	}
 	if _, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0); !errors.Is(err, ErrConflict) {
 		t.Fatalf("导入运行中再建导入应冲突: %v", err)
 	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: imp.RunID, WorkerID: "w1", LeaseToken: claimed[0].Run.LeaseToken, Status: RunSucceeded, Now: t0}); err != nil {
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: imp.RunID, LeaseToken: claimed[0].Run.LeaseToken, Status: RunSucceeded, Now: t0}); err != nil {
 		t.Fatal(err)
 	}
-	last, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
+	last, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, MaxStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(last) != 1 || last[0].Run.Kind != KindManual {
 		t.Fatalf("last = %+v err=%v", last, err)
 	}
@@ -351,7 +351,7 @@ func TestClaimRunsTakesOneRunPerTaskWithinOneClaim(t *testing.T) {
 	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}, t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, Now: t0, LeaseTTL: time.Minute})
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(claimed) != 1 || claimed[0].Run.RunID != manual.RunID {
 		t.Fatalf("claimed = %+v err=%v", claimed, err)
 	}
@@ -372,7 +372,7 @@ func TestClaimRunsImportDoesNotConsumeStorageSlotWithinOneClaim(t *testing.T) {
 	if _, err := s.CreateRun(ctx, "crypto", "plain", RunSpec{Kind: KindManual}, t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 1, Now: t0, LeaseTTL: time.Minute})
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, MaxStorageRuns: 1, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(claimed) != 2 || claimed[0].Run.Kind != KindImport || claimed[1].Task.DatasetID != "plain" {
 		t.Fatalf("claimed = %+v err=%v", claimed, err)
 	}
@@ -394,45 +394,14 @@ func finishedPartition(key string, status string) Partition {
 	return p
 }
 
-// M3：任务不再钉死在登记分区的 worker 上，换了活动 worker 也能领取，登记的 worker 跟着最近一次上报变。
-func TestClaimRunsGivesAPartitionedTaskToAnyActiveWorker(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	mustTask(t, s, "crypto", "ds1", true)
-	claimed, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 1, Now: t0, LeaseTTL: time.Minute})
-	if len(claimed) != 1 {
-		t.Fatal("w1 应能领取")
-	}
-	c := claimed[0]
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0,
-		Partitions: []Partition{finishedPartition("2026-10-16", PartitionExported)}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	other, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w2", FreeSlots: 1, Now: t0, LeaseTTL: time.Minute})
-	if len(other) != 1 {
-		t.Fatalf("分区登记在 w1 的任务也应能派给 w2: %+v", other)
-	}
-	c2 := other[0]
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c2.Run.RunID, WorkerID: "w2", LeaseToken: c2.Run.LeaseToken, Status: RunSucceeded, Now: t0,
-		Partitions: []Partition{finishedPartition("2026-10-16", PartitionExported)}}); err != nil {
-		t.Fatalf("w2 的上报应被接受: %v", err)
-	}
-	if got, _ := s.GetPartition(ctx, "crypto", "ds1", "2026-10-16"); got.WorkerID != "w2" {
-		t.Fatalf("登记的 worker 应变成 w2: %q", got.WorkerID)
-	}
-}
-
 func TestCompleteRunRegistersPartitionsAndAdvancesTaskState(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
-	c := mustClaim(t, s, "w1", t0)
+	c := mustClaim(t, s, t0)
 	final := t0.Add(-72 * time.Hour)
 	err := s.CompleteRun(ctx, CompleteRequest{
-		RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(time.Minute),
+		RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(time.Minute),
 		Stats:         RunStats{SubjectsTotal: 2, SubjectsDone: 2, RequestCount: 3, BytesRead: 10, RowsRead: 20, RowsAdded: 18, RowsChanged: 2, PartitionsExported: 1, PartitionsFinalized: 1},
 		Unrecoverable: []Unrecoverable{{SubjectID: "BTC", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}},
 		Partitions:    []Partition{finishedPartition("2026-10-16", PartitionExported), finishedPartition("2026-10-14", PartitionFinal), finishedPartition("2026-10-17", PartitionOpen)},
@@ -451,11 +420,11 @@ func TestCompleteRunRegistersPartitionsAndAdvancesTaskState(t *testing.T) {
 	}
 	// 定稿边界只前进不回退。
 	c2, _ := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0.Add(time.Hour))
-	claimed := mustClaim(t, s, "w1", t0.Add(time.Hour))
+	claimed := mustClaim(t, s, t0.Add(time.Hour))
 	if claimed.Run.RunID != c2.RunID {
 		t.Fatal("unexpected run")
 	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c2.RunID, WorkerID: "w1", LeaseToken: claimed.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(2 * time.Hour), FinalUntil: final.Add(-24 * time.Hour)}); err != nil {
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c2.RunID, LeaseToken: claimed.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(2 * time.Hour), FinalUntil: final.Add(-24 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.FinalUntil.Equal(final) {
@@ -466,7 +435,7 @@ func TestCompleteRunRegistersPartitionsAndAdvancesTaskState(t *testing.T) {
 		t.Fatalf("parts=%v total=%d err=%v", parts, total, err)
 	}
 	exported, err := s.GetPartition(ctx, "crypto", "ds1", "2026-10-16")
-	if err != nil || exported.FileSHA256 != "abc" || exported.ExportCount != 1 || len(exported.Columns) != 2 || exported.WorkerID != "w1" || exported.LastRunID != c.Run.RunID {
+	if err != nil || exported.FileSHA256 != "abc" || exported.ExportCount != 1 || len(exported.Columns) != 2 || exported.LastRunID != c.Run.RunID {
 		t.Fatalf("partition = %+v err=%v", exported, err)
 	}
 	ranged, _, _ := s.ListPartitions(ctx, "crypto", "ds1", "2026-10-15", "2026-10-16", 10, 0)
@@ -479,9 +448,9 @@ func TestCompleteRunRegistersPartitionsAndAdvancesTaskState(t *testing.T) {
 	}
 }
 
-func mustClaim(t *testing.T, s *Store, worker string, now time.Time) Claimed {
+func mustClaim(t *testing.T, s *Store, now time.Time) Claimed {
 	t.Helper()
-	claimed, err := s.ClaimRuns(context.Background(), ClaimRequest{WorkerID: worker, FreeSlots: 1, Now: now, LeaseTTL: 10 * time.Minute})
+	claimed, err := s.ClaimRuns(context.Background(), ClaimRequest{FreeSlots: 1, Now: now, LeaseTTL: 10 * time.Minute})
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim = %v err=%v", claimed, err)
 	}
@@ -492,29 +461,26 @@ func TestCompleteRunRejectsWrongLeaseOrFinishedRunsAndBadPartitions(t *testing.T
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
-	c := mustClaim(t, s, "w1", t0)
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: "wrong", Status: RunSucceeded, Now: t0}); !errors.Is(err, ErrConflict) {
+	c := mustClaim(t, s, t0)
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: "wrong", Status: RunSucceeded, Now: t0}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("wrong token: %v", err)
 	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w2", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0}); !errors.Is(err, ErrConflict) {
-		t.Fatalf("wrong worker: %v", err)
-	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: "weird", Now: t0}); err == nil {
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: "weird", Now: t0}); err == nil {
 		t.Fatal("非法状态必须报错")
 	}
 	bad := finishedPartition("2026-10-16", PartitionExported)
 	bad.FilePath = ""
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0, Partitions: []Partition{bad}}); err == nil {
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0, Partitions: []Partition{bad}}); err == nil {
 		t.Fatal("exported 分区没有文件路径必须报错")
 	}
 	// 失败的事务不能留下半个结果：运行仍在 running。
 	if run, _ := s.GetRun(ctx, c.Run.RunID); run.Status != RunRunning {
 		t.Fatalf("事务应整体回滚: %+v", run)
 	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunFailed, Message: "boom", Now: t0}); err != nil {
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunFailed, Message: "boom", Now: t0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0}); !errors.Is(err, ErrConflict) {
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("已结束的运行不能再完成: %v", err)
 	}
 	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.LastSuccessAt.IsZero() {
@@ -526,10 +492,10 @@ func TestReopenKeepsTheFileAndTheRemoteCopy(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
-	c := mustClaim(t, s, "w1", t0)
+	c := mustClaim(t, s, t0)
 	final := finishedPartition("2026-10-14", PartitionFinal)
 	final.Remote = Remote{Key: "crypto/ds1/2026-10-14.abc.csv.gz", SHA256: "abc", ETag: "md5", UploadedAt: t0, VerifiedAt: t0}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0,
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0,
 		Partitions: []Partition{final}}); err != nil {
 		t.Fatal(err)
 	}
@@ -537,10 +503,10 @@ func TestReopenKeepsTheFileAndTheRemoteCopy(t *testing.T) {
 	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindRange, RangeStart: t0.Add(-time.Hour), RangeEnd: t0}, t0); err != nil {
 		t.Fatal(err)
 	}
-	c2 := mustClaim(t, s, "w1", t0)
+	c2 := mustClaim(t, s, t0)
 	reopened := finishedPartition("2026-10-14", PartitionOpen)
 	reopened.RowCount = 101
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c2.Run.RunID, WorkerID: "w1", LeaseToken: c2.Run.LeaseToken, Status: RunSucceeded, Now: t0, Partitions: []Partition{reopened}}); err != nil {
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c2.Run.RunID, LeaseToken: c2.Run.LeaseToken, Status: RunSucceeded, Now: t0, Partitions: []Partition{reopened}}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.GetPartition(ctx, "crypto", "ds1", "2026-10-14")
@@ -559,9 +525,6 @@ func TestReopenKeepsTheFileAndTheRemoteCopy(t *testing.T) {
 func upsert(t *testing.T, s *Store, p Partition) error {
 	t.Helper()
 	p.SpaceID, p.DatasetID = "crypto", "ds1"
-	if p.WorkerID == "" {
-		p.WorkerID = "w1"
-	}
 	return s.tx(context.Background(), func(tx *sql.Tx) error { return upsertPartition(context.Background(), tx, p) })
 }
 
@@ -743,17 +706,17 @@ func TestCreateTaskKeepsDirNamesUniquePerSpaceAndPurpose(t *testing.T) {
 func TestHeartbeatStoresDiskUsageAndTheFreeSpaceFloor(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	w := Worker{WorkerID: "w1", InstanceID: "i1", DiskTotalBytes: 2000, DiskFreeBytes: 1600, DiskUsedBytes: 300, MinFreeBytes: 500}
-	if _, err := s.Heartbeat(ctx, w, t0, time.Minute); err != nil {
+	w := Worker{WorkerID: "w1", DiskTotalBytes: 2000, DiskFreeBytes: 1600, DiskUsedBytes: 300, MinFreeBytes: 500}
+	if err := s.Heartbeat(ctx, w, t0); err != nil {
 		t.Fatal(err)
 	}
 	w.DiskFreeBytes, w.DiskUsedBytes = 400, 1500
-	if _, err := s.Heartbeat(ctx, w, t0.Add(time.Second), time.Minute); err != nil {
+	if err := s.Heartbeat(ctx, w, t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	workers, _ := s.ListWorkers(ctx)
-	if len(workers) != 1 || workers[0].DiskTotalBytes != 2000 || workers[0].DiskFreeBytes != 400 || workers[0].DiskUsedBytes != 1500 || workers[0].MinFreeBytes != 500 {
-		t.Fatalf("workers = %+v", workers)
+	got, ok, _ := s.GetWorker(ctx)
+	if !ok || got.DiskTotalBytes != 2000 || got.DiskFreeBytes != 400 || got.DiskUsedBytes != 1500 || got.MinFreeBytes != 500 {
+		t.Fatalf("worker = %+v", got)
 	}
 }
 
@@ -761,22 +724,21 @@ func TestHeartbeatStoresTheObjectStoreSummaryAndRunsStoreUploads(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	summary := `{"endpoint":"cos.ap-nanjing.myqcloud.com","bucket":"b-1"}`
-	if _, err := s.Heartbeat(ctx, Worker{WorkerID: "w1", InstanceID: "i1", ObjectStoreJSON: summary}, t0, time.Minute); err != nil {
+	if err := s.Heartbeat(ctx, Worker{WorkerID: "w1", ObjectStoreJSON: summary}, t0); err != nil {
 		t.Fatal(err)
 	}
-	workers, _ := s.ListWorkers(ctx)
-	if len(workers) != 1 || workers[0].ObjectStoreJSON != summary {
-		t.Fatalf("workers = %+v", workers)
+	if got, ok, _ := s.GetWorker(ctx); !ok || got.ObjectStoreJSON != summary {
+		t.Fatalf("worker = %+v", got)
 	}
-	if _, err := s.Heartbeat(ctx, Worker{WorkerID: "w1", InstanceID: "i1"}, t0.Add(time.Second), time.Minute); err != nil {
+	if err := s.Heartbeat(ctx, Worker{WorkerID: "w1"}, t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if workers, _ := s.ListWorkers(ctx); workers[0].ObjectStoreJSON != "{}" {
-		t.Fatalf("没配对象存储时存 {}: %q", workers[0].ObjectStoreJSON)
+	if got, _, _ := s.GetWorker(ctx); got.ObjectStoreJSON != "{}" {
+		t.Fatalf("没配对象存储时存 {}: %q", got.ObjectStoreJSON)
 	}
 	mustTask(t, s, "crypto", "ds1", true)
-	c := mustClaim(t, s, "w1", t0)
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0,
+	c := mustClaim(t, s, t0)
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0,
 		Stats: RunStats{PartitionsUploaded: 3}}); err != nil {
 		t.Fatal(err)
 	}
@@ -789,8 +751,8 @@ func TestProgressRenewsLeaseAndSignalsCancellation(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
-	c := mustClaim(t, s, "w1", t0)
-	canceled, err := s.Progress(ctx, c.Run.RunID, "w1", c.Run.LeaseToken, RunStats{SubjectsTotal: 5, SubjectsDone: 2, RequestCount: 7, BytesRead: 99, RowsRead: 12}, t0.Add(5*time.Minute), 10*time.Minute)
+	c := mustClaim(t, s, t0)
+	canceled, err := s.Progress(ctx, c.Run.RunID, c.Run.LeaseToken, RunStats{SubjectsTotal: 5, SubjectsDone: 2, RequestCount: 7, BytesRead: 99, RowsRead: 12}, t0.Add(5*time.Minute), 10*time.Minute)
 	if err != nil || canceled {
 		t.Fatalf("canceled=%v err=%v", canceled, err)
 	}
@@ -798,25 +760,25 @@ func TestProgressRenewsLeaseAndSignalsCancellation(t *testing.T) {
 	if !run.LeaseUntil.Equal(t0.Add(15*time.Minute)) || run.Stats.SubjectsDone != 2 || run.Stats.RequestCount != 7 {
 		t.Fatalf("run = %+v", run)
 	}
-	if wrong, _ := s.Progress(ctx, c.Run.RunID, "w1", "bad", RunStats{}, t0, time.Minute); !wrong {
+	if wrong, _ := s.Progress(ctx, c.Run.RunID, "bad", RunStats{}, t0, time.Minute); !wrong {
 		t.Fatal("租约不对应视为取消")
 	}
-	if _, err := s.Progress(ctx, "nope", "w1", "x", RunStats{}, t0, time.Minute); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Progress(ctx, "nope", "x", RunStats{}, t0, time.Minute); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown run: %v", err)
 	}
 	cancelledRun, err := s.CancelRun(ctx, c.Run.RunID, "crypto", t0.Add(6*time.Minute))
 	if err != nil || cancelledRun.Status != RunCanceled {
 		t.Fatalf("cancel = %+v err=%v", cancelledRun, err)
 	}
-	if gone, _ := s.Progress(ctx, c.Run.RunID, "w1", c.Run.LeaseToken, RunStats{}, t0, time.Minute); !gone {
+	if gone, _ := s.Progress(ctx, c.Run.RunID, c.Run.LeaseToken, RunStats{}, t0, time.Minute); !gone {
 		t.Fatal("取消后 worker 应得知")
 	}
-	ids, err := s.RunningRunIDsCanceled(ctx, "w1", []string{c.Run.RunID, "ghost"})
+	ids, err := s.RunningRunIDsCanceled(ctx, []string{c.Run.RunID, "ghost"})
 	if err != nil || len(ids) != 2 {
 		t.Fatalf("canceled ids = %v err=%v", ids, err)
 	}
 	// 取消后的运行仍接受 worker 的收尾统计，状态保持 canceled，已导出的分区照常登记。
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunFailed, Now: t0.Add(7 * time.Minute),
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunFailed, Now: t0.Add(7 * time.Minute),
 		Stats: RunStats{RowsRead: 50}, Partitions: []Partition{finishedPartition("2026-10-16", PartitionExported)}}); err != nil {
 		t.Fatal(err)
 	}
@@ -852,7 +814,7 @@ func TestExpireLeasesFailsLostRunsAndCleanupHonorsRetention(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
-	c := mustClaim(t, s, "w1", t0)
+	c := mustClaim(t, s, t0)
 	if n, err := s.ExpireLeases(ctx, t0.Add(9*time.Minute)); err != nil || n != 0 {
 		t.Fatalf("租约未过期: n=%d err=%v", n, err)
 	}
@@ -885,12 +847,12 @@ func TestExpireLeasesFailsLostRunsAndCleanupHonorsRetention(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		claimed, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 5, Now: at, LeaseTTL: time.Minute})
+		claimed, _ := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 5, Now: at, LeaseTTL: time.Minute})
 		if len(claimed) != 2 {
 			t.Fatalf("claimed = %v", claimed)
 		}
 		for _, cl := range claimed {
-			if err := s.CompleteRun(ctx, CompleteRequest{RunID: cl.Run.RunID, WorkerID: "w1", LeaseToken: cl.Run.LeaseToken, Status: RunSucceeded, Now: at.Add(time.Second)}); err != nil {
+			if err := s.CompleteRun(ctx, CompleteRequest{RunID: cl.Run.RunID, LeaseToken: cl.Run.LeaseToken, Status: RunSucceeded, Now: at.Add(time.Second)}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -922,11 +884,11 @@ func TestDeleteTaskRefusesTasksWithPartitionsOrRunningRuns(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
-	c := mustClaim(t, s, "w1", t0)
+	c := mustClaim(t, s, t0)
 	if _, err := s.DeleteTask(ctx, "crypto", "ds1"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("运行中的任务不能删除: %v", err)
 	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0,
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0,
 		Partitions: []Partition{finishedPartition("2026-10-16", PartitionExported)}}); err != nil {
 		t.Fatal(err)
 	}
@@ -942,57 +904,6 @@ func TestDeleteTaskRefusesTasksWithPartitionsOrRunningRuns(t *testing.T) {
 	}
 	if _, err := s.DeleteTask(ctx, "crypto", "ds2"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("again: %v", err)
-	}
-}
-
-func TestHeartbeatKeepsASingleActiveWorkerAndDetectsDuplicateInstances(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	w1 := Worker{WorkerID: "w1", InstanceID: "i1", Version: "v1", RootDir: "/data", DiskTotalBytes: 100, DiskFreeBytes: 50, RunningRunIDs: []string{"r1"}}
-	res, err := s.Heartbeat(ctx, w1, t0, 45*time.Second)
-	if err != nil || !res.Active || res.Conflict {
-		t.Fatalf("first heartbeat = %+v err=%v", res, err)
-	}
-	// 另一个 worker 在 w1 租约内心跳：不活动。
-	res, err = s.Heartbeat(ctx, Worker{WorkerID: "w2", InstanceID: "j1"}, t0.Add(10*time.Second), 45*time.Second)
-	if err != nil || res.Active || res.Conflict {
-		t.Fatalf("w2 = %+v err=%v", res, err)
-	}
-	// 同一 worker_id 的第二个实例：冲突。
-	res, err = s.Heartbeat(ctx, Worker{WorkerID: "w1", InstanceID: "i2"}, t0.Add(10*time.Second), 45*time.Second)
-	if err != nil || !res.Conflict || res.Active {
-		t.Fatalf("duplicate = %+v err=%v", res, err)
-	}
-	if ok, _ := s.IsActiveWorker(ctx, "w1", "i1", t0.Add(20*time.Second)); !ok {
-		t.Fatal("w1/i1 应是活动实例")
-	}
-	if ok, _ := s.IsActiveWorker(ctx, "w1", "i2", t0.Add(20*time.Second)); ok {
-		t.Fatal("w1/i2 不是活动实例")
-	}
-	// 45 秒无心跳后 w2 可以接管；w1 恢复后发现自己不再活动。
-	later := t0.Add(60 * time.Second)
-	res, err = s.Heartbeat(ctx, Worker{WorkerID: "w2", InstanceID: "j1"}, later, 45*time.Second)
-	if err != nil || !res.Active {
-		t.Fatalf("takeover = %+v err=%v", res, err)
-	}
-	res, _ = s.Heartbeat(ctx, w1, later.Add(time.Second), 45*time.Second)
-	if res.Active {
-		t.Fatal("w1 在 w2 持有租约期间不应活动")
-	}
-	if ok, _ := s.IsActiveWorker(ctx, "w2", "j1", later.Add(time.Second)); !ok {
-		t.Fatal("w2 持有租约")
-	}
-	// 同一 worker_id 的旧实例租约过期后，新实例可以接管。
-	res, err = s.Heartbeat(ctx, Worker{WorkerID: "w2", InstanceID: "j2"}, later.Add(2*time.Minute), 45*time.Second)
-	if err != nil || !res.Active || res.Conflict {
-		t.Fatalf("instance takeover = %+v err=%v", res, err)
-	}
-	workers, err := s.ListWorkers(ctx)
-	if err != nil || len(workers) != 2 || workers[0].WorkerID != "w2" || !workers[0].Active(later.Add(2*time.Minute)) {
-		t.Fatalf("workers = %+v err=%v", workers, err)
-	}
-	if workers[1].RunningRunIDs == nil || len(workers[1].RunningRunIDs) != 1 || workers[1].RootDir != "/data" {
-		t.Fatalf("w1 状态没有保存: %+v", workers[1])
 	}
 }
 
@@ -1020,11 +931,11 @@ func TestCanceledRunsAcceptOneCompletionAndNeverAdvanceTheTask(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
-	c := mustClaim(t, s, "w1", t0)
+	c := mustClaim(t, s, t0)
 	if _, err := s.CancelRun(ctx, c.Run.RunID, "crypto", t0.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	complete := CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(2 * time.Minute),
+	complete := CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(2 * time.Minute),
 		FinalUntil: t0.Add(-time.Hour), Partitions: []Partition{finishedPartition("2026-10-16", PartitionExported)}}
 	if err := s.CompleteRun(ctx, complete); err != nil {
 		t.Fatal(err)
@@ -1046,50 +957,24 @@ func TestLastSuccessOnlyMovesForward(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
-	first := mustClaim(t, s, "w1", t0.Add(10*time.Minute))
+	first := mustClaim(t, s, t0.Add(10*time.Minute))
 	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindRange, RangeStart: t0.Add(-time.Hour), RangeEnd: t0}, t0); err == nil {
 		t.Fatal("第一条运行还没结束，不能再生成")
 	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: first.Run.RunID, WorkerID: "w1", LeaseToken: first.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(11 * time.Minute)}); err != nil {
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: first.Run.RunID, LeaseToken: first.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(11 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	// 一个开始更早的运行迟到完成（例如租约过期后被重新派发的旧令牌）不能让最近成功时间回退。
 	older, _ := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0)
-	claimed := mustClaim(t, s, "w1", t0.Add(5*time.Minute))
+	claimed := mustClaim(t, s, t0.Add(5*time.Minute))
 	if claimed.Run.RunID != older.RunID {
 		t.Fatal("unexpected run")
 	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: older.RunID, WorkerID: "w1", LeaseToken: claimed.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(12 * time.Minute)}); err != nil {
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: older.RunID, LeaseToken: claimed.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(12 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.LastSuccessAt.Equal(t0.Add(10 * time.Minute)) {
 		t.Fatalf("last_success_at 回退了: %s", got.LastSuccessAt)
-	}
-}
-
-func TestClaimRunsRechecksTheInstanceInsideTheTransaction(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	mustTask(t, s, "crypto", "ds1", true)
-	if _, err := s.Heartbeat(ctx, Worker{WorkerID: "w1", InstanceID: "i1"}, t0, 45*time.Second); err != nil {
-		t.Fatal(err)
-	}
-	// 租约过期后 w2 接管；w1 的旧实例还带着已过检查的状态来领取，必须领不到。
-	later := t0.Add(time.Minute)
-	if res, _ := s.Heartbeat(ctx, Worker{WorkerID: "w2", InstanceID: "j1"}, later, 45*time.Second); !res.Active {
-		t.Fatal("w2 应接管")
-	}
-	if claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", InstanceID: "i1", FreeSlots: 1, Now: later, LeaseTTL: time.Minute}); err != nil || len(claimed) != 0 {
-		t.Fatalf("旧实例不应再领取: %v err=%v", claimed, err)
-	}
-	if claimed, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", InstanceID: "stale", FreeSlots: 1, Now: t0, LeaseTTL: time.Minute}); len(claimed) != 0 {
-		t.Fatalf("实例 ID 不匹配不应领取: %v", claimed)
-	}
-	if claimed, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "ghost", InstanceID: "x", FreeSlots: 1, Now: t0, LeaseTTL: time.Minute}); len(claimed) != 0 {
-		t.Fatalf("没有登记的 worker 不应领取: %v", claimed)
-	}
-	if claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w2", InstanceID: "j1", FreeSlots: 1, Now: later, LeaseTTL: time.Minute}); err != nil || len(claimed) != 1 {
-		t.Fatalf("活动实例可以领取: %v err=%v", claimed, err)
 	}
 }
 
@@ -1146,7 +1031,7 @@ func TestManualRunPreemptsQueuedTick(t *testing.T) {
 	if len(canceled) != 1 || canceled[0].Kind != KindTick {
 		t.Fatalf("被让位的 tick 应标为取消: %+v", canceled)
 	}
-	if _, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w", FreeSlots: 1, Now: t0.Add(2 * time.Second), LeaseTTL: time.Minute}); err != nil {
+	if _, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 1, Now: t0.Add(2 * time.Second), LeaseTTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindRange, RangeStart: t0.Add(-time.Hour), RangeEnd: t0}, t0.Add(3*time.Second)); !errors.Is(err, ErrConflict) {
@@ -1212,5 +1097,32 @@ func TestClearUnrecoverableKeepsPartlyOverlappingRanges(t *testing.T) {
 	}
 	if _, err := s.ClearUnrecoverable(ctx, "crypto", "nope", start, end); err != ErrNotFound {
 		t.Fatalf("不存在的任务: %v", err)
+	}
+}
+
+// 部署里只有一个 worker：表里只留最近心跳的那一行，换了 worker_id 旧行随之删除。
+func TestHeartbeatKeepsOnlyTheLatestWorker(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	if _, ok, err := s.GetWorker(ctx); err != nil || ok {
+		t.Fatalf("没有心跳时不应有 worker: ok=%v err=%v", ok, err)
+	}
+	w1 := Worker{WorkerID: "w1", Version: "v1", RootDir: "/data", DiskTotalBytes: 100, DiskFreeBytes: 50, RunningRunIDs: []string{"r1"}}
+	if err := s.Heartbeat(ctx, w1, t0); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetWorker(ctx)
+	if err != nil || !ok || got.WorkerID != "w1" || got.RootDir != "/data" || len(got.RunningRunIDs) != 1 || !got.LastHeartbeat.Equal(t0) {
+		t.Fatalf("worker = %+v ok=%v err=%v", got, ok, err)
+	}
+	if err := s.Heartbeat(ctx, Worker{WorkerID: "w2"}, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_archive_workers`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("rows = %d err=%v", rows, err)
+	}
+	if got, _, _ := s.GetWorker(ctx); got.WorkerID != "w2" || !got.LastHeartbeat.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("worker = %+v", got)
 	}
 }

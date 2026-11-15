@@ -98,21 +98,6 @@ message TaskResultInventoryEntry {
   bool enabled = 14;
   bool ownership_verified = 15;
   string result_status = 16; // ready/pending/error
-  // Canary candidate fields are populated only when the current task series
-  // set is proven to contain exactly one row and both result identities are
-  // owned by this task. Otherwise availability stays false and these fields
-  // remain empty/default.
-  bool canary_candidate_available = 17;
-  string subject_id = 18;
-  string provider_symbol = 19;
-  string provider = 20;
-  string source_id = 21;
-  string market_type = 22;
-  string series_tag = 23;
-  uint32 series_index = 24;
-  string series_hash = 25;
-  uint32 expected_count = 26;
-  repeated string output_fields = 27;
   // allowed_lateness_seconds 是该结果数据集周期的允许迟到时间；Monitor 据此判断新鲜度。
   int32 allowed_lateness_seconds = 28;
 }

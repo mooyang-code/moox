@@ -2,30 +2,6 @@
   "alerts": [
     {
       "dataset": null,
-      "id": "host-presence:PHYSICAL01",
-      "last_checked_at": "2026-10-09T12:00:00Z",
-      "object": {
-        "agent_id": "PHYSICAL01",
-        "attention_kind": "",
-        "component_id": "",
-        "dataset_id": "",
-        "freq": "",
-        "host_id": "offline",
-        "kind": "presence",
-        "producer": "",
-        "space_id": "",
-        "type": "host"
-      },
-      "processes": [],
-      "raw_error": "",
-      "reason": "主机采集代理超过三分钟未上报，主机可能宕机、断网，或采集代理已停止",
-      "recovering": false,
-      "severity": "critical",
-      "title": "主机 offline · 失联",
-      "triggered_at": "2026-10-09T11:53:00Z"
-    },
-    {
-      "dataset": null,
       "id": "host-alert",
       "last_checked_at": "2026-10-09T12:00:00Z",
       "object": {
@@ -226,11 +202,11 @@
       "cpu_available": false,
       "cpu_cores": 0,
       "cpu_percent": 0,
-      "cpu_threshold": 0,
+      "cpu_threshold": 80,
       "disk_available": false,
       "disk_mountpoint": "",
       "disk_percent": 0,
-      "disk_threshold": 0,
+      "disk_threshold": 85,
       "disk_total_bytes": "0",
       "disk_used_bytes": "0",
       "gateway_signals": [
@@ -252,11 +228,11 @@
       "last_reported_at": "2026-10-09T11:50:00Z",
       "memory_available": false,
       "memory_percent": 0,
-      "memory_threshold": 0,
+      "memory_threshold": 90,
       "memory_total_bytes": "0",
       "memory_used_bytes": "0",
       "metrics_available": false,
-      "reason": "主机网关心跳已中断",
+      "reason": "主机采集代理超过 3 分钟没有上报，主机网关心跳也已停止，主机可能宕机或断网",
       "status": "down"
     }
   ],
@@ -334,7 +310,7 @@
     }
   ],
   "summary": {
-    "alert_count": 2,
+    "alert_count": 1,
     "attention_count": 6,
     "components": {
       "attention_count": 1,

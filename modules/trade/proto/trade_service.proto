@@ -148,7 +148,6 @@ message LogicalAccount {
   repeated string readiness_reasons = 12;
   int64 created_at = 13;
   int64 updated_at = 14;
-  int64 owner_generation = 15;
   // Strategy lifecycle identity of the current owner.
   string owner_instance_id = 16;
   string owner_session_id = 17;
@@ -320,7 +319,6 @@ message LogicalAccountTarget {
   string session_id = 12;
   string strategy_id = 13;
   int64 bar_end_time = 14;
-  int64 effective_at = 15;
   int64 valid_until = 16;
 }
 
@@ -624,31 +622,11 @@ message FlattenTradingAccountRsp {
   OperatorAction action = 2;
 }
 
-message PlaceManualOrderReq {
-  string action_id = 1;
-  string trading_account_id = 2;
-  string client_order_id = 3;
-  string instrument_id = 4;
-  OrderType order_type = 5;
-  FillPolicy fill_policy = 6;
-  OrderSide side = 7;
-  PositionSide position_side = 8;
-  string quantity = 9;
-  optional string limit_price = 10;
-  string reason = 11;
-  // Unix milliseconds; zero freezes the server default at first acceptance.
-  int64 deadline_at = 12;
-  // 订单所在市场。账户开通了多个市场时必填；只开通一个市场时可省略，按它处理。
-  MarketType market_type = 13;
-}
-message PlaceManualOrderRsp {
-  common.RetInfo ret_info = 1;
-  OperatorAction action = 2;
-  Order order = 3;
-}
-
-// Ordinary admission for a MANUAL logical account. It does not pause or cancel
-// other orders and returns durable acceptance, not exchange acceptance or a fill.
+// 人工下单，由 Trade 按组合的控制模式选流程：
+// - 策略驱动的组合：先暂停组合并撤销活动的 TARGET 订单，再下单，完成后保持 PAUSED；
+// - 自主下单的组合：不暂停、不撤别的订单，只在本地受理并冻结资金，交易所提交由后台完成，
+//   返回的是受理结果，不代表交易所已接受或已成交。
+// trading_account_id 必须是 logical_account_id 里启用的成员。
 message SubmitOrderReq {
   string action_id = 1;
   string logical_account_id = 2;
@@ -695,9 +673,37 @@ message GetOperatorActionRsp {
 message GetLogicalAccountTargetReq {
   string logical_account_id = 1;
 }
+// 执行器对目标里一条标的的结论，和它下单时用的是同一个判断。
+enum TargetLaneState {
+  // 判断要用的报价不在缓存里，说不准（查询不向交易所取价）。JSON 里照常输出 0。
+  TARGET_LANE_STATE_UNKNOWN = 0;
+  // 有差额，执行器在组合活动且目标有效时会为它下单。
+  TARGET_LANE_STATE_WILL_ORDER = 1;
+  // 已到位：差额为 0、在调仓阈值之内、目标是保持当前持仓，或剩下的零头不到交易所最小数量、最小名义金额。
+  TARGET_LANE_STATE_IN_PLACE = 2;
+  // 差额低于设置的最小下单额，视为已满足。
+  TARGET_LANE_STATE_BELOW_MIN_NOTIONAL = 3;
+  // 按市场规则暂时不能交易（停牌、涨停、跌停、当日买入次日可卖），reason 是具体原因。
+  TARGET_LANE_STATE_MARKET_DEFERRED = 4;
+  // 整手交易的市场里差额不足一手，视为已满足。
+  TARGET_LANE_STATE_BELOW_LOT = 5;
+  // 有差额但下不了单（没有成员支持、开新仓不到交易所最小值），要人处理，reason 是原因。
+  TARGET_LANE_STATE_BLOCKED = 6;
+}
+
+message TargetLane {
+  string instrument_id = 1;
+  TargetLaneState state = 2;
+  string reason = 3;
+}
+
 message GetLogicalAccountTargetRsp {
   common.RetInfo ret_info = 1;
   LogicalAccountTarget target = 2;
+  // 按标的给出执行器的结论：目标里的标的，和目标之外、执行器管着的持仓各一条。
+  // 执行器整项跳过的标的（下架名单里已不能交易的、正在做下架清仓的）、被排除的持仓（套利底仓的对冲腿、不受管的现货）没有。
+  // 目标已收敛（CONVERGED）时不算，为空；成员或设置读不出来时也为空。没有列出的标的按未知处理。
+  repeated TargetLane lanes = 3;
 }
 
 message GetOrderReq {
@@ -893,7 +899,6 @@ service TradeConsoleService {
   rpc PauseLogicalAccount(PauseLogicalAccountReq) returns (PauseLogicalAccountRsp);
   rpc ResumeLogicalAccount(ResumeLogicalAccountReq) returns (ResumeLogicalAccountRsp);
   rpc FlattenLogicalAccount(FlattenLogicalAccountReq) returns (FlattenLogicalAccountRsp);
-  rpc PlaceManualOrder(PlaceManualOrderReq) returns (PlaceManualOrderRsp);
   rpc SubmitOrder(SubmitOrderReq) returns (SubmitOrderRsp);
   rpc CancelOrder(CancelOrderReq) returns (CancelOrderRsp);
   rpc GetOperatorAction(GetOperatorActionReq) returns (GetOperatorActionRsp);
@@ -966,13 +971,15 @@ message BlockInstrumentReq {
   string reason = 4;
   // 来源事件 ID，只用于审计。
   string event_id = 5;
+  // 写入者的标识（事件中心的下架处理传它的执行记录 ID）。已在名单里时保留第一个写入者；可以为空。
+  string owner = 6;
 }
 message BlockInstrumentRsp {
   common.RetInfo ret_info = 1;
   // true 表示 Trade 无此标的（用户没开通对应市场的账户）：照常写入名单，不算失败。
   bool instrument_unknown = 2;
-  // false 表示标的已经在名单里，没有改动：已在名单里时保留第一个写入者的原因（事件中心依赖这个跨模块约定，
-  // 演练按名单原因里带的执行记录 ID 判断这一项是不是自己写的，不能靠 created——写名单的响应丢了再重试拿到的就是 false）。
+  // false 表示标的已经在名单里，没有改动（原因、写入者都保留第一次写入的）。写名单的响应丢了再重试拿到的也是 false，
+  // 所以“这一项是不是自己写的”要看名单项的 owner，不能看它。
   bool created = 3;
 }
 
@@ -994,11 +1001,12 @@ message BlockedInstrument {
   // 写入时能从标的表查到的内部标的 ID 和基础资产，只用于展示和审计，查不到为空。
   string instrument_id = 4;
   string base_asset = 5;
-  // 写入名单时的原因。同一个标的重复写入时保留第一个写入者的原因，不会被后来者覆盖（事件中心依赖这个跨模块约定：
-  // 原因里带着写入者的执行记录 ID，据此判断这一项是谁写的）。
+  // 写入名单时的原因，只用于展示和审计。
   string reason = 6;
   string source_event_id = 7;
   int64 blocked_at = 8;
+  // 写入者的标识：第一个把它写进名单的调用方传的 owner，后来的重复写入不会覆盖；没传为空。
+  string owner = 9;
 }
 message ListBlockedInstrumentsReq {}
 message ListBlockedInstrumentsRsp {

@@ -24,7 +24,7 @@ func commitParams(t *testing.T, repo *store.Store, instanceID string, bar int, d
 	}
 	id := fmt.Sprintf("%s-r%d", instanceID, bar)
 	result := store.Result{ResultID: id, InstanceID: instanceID, SessionID: instanceID + "-session", BarEndTime: barEnd, ValidUntil: barEnd.Add(2 * time.Hour), Status: store.StatusOK, DSLHash: "sha256:demo",
-		InputJSON: json.RawMessage(`{}`), TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: json.RawMessage(`{}`), SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone,
+		InputJSON: json.RawMessage(`{}`), TargetsJSON: json.RawMessage(`[]`), SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone,
 		NextParamsJSON: next, CreatedAt: barEnd}
 	if _, _, err := repo.CommitResult(context.Background(), store.CommitRequest{Result: result, Now: barEnd}); err != nil {
 		t.Fatal(err)

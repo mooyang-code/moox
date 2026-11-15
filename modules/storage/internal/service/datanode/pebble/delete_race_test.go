@@ -41,7 +41,7 @@ func TestDeleteDatasetRowsRemovesRowsOfAWriteAdmittedBeforeIt(t *testing.T) {
 
 	writeErr := make(chan error, 1)
 	go func() {
-		_, err := store.UpsertFields(ctx, "s", "racing", "", []*pb.RowFieldUpsert{row})
+		err := store.UpsertFields(ctx, "s", "racing", []*pb.RowFieldUpsert{row})
 		writeErr <- err
 	}()
 	<-entered
@@ -68,7 +68,7 @@ func TestDeleteDatasetRowsRemovesRowsOfAWriteAdmittedBeforeIt(t *testing.T) {
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("rows after delete=%v err=%v, want the admitted write removed", rows, err)
 	}
-	if _, err := store.UpsertFields(ctx, "s", "racing", "", []*pb.RowFieldUpsert{row}); !errors.Is(err, ErrDatasetDeleted) {
+	if err := store.UpsertFields(ctx, "s", "racing", []*pb.RowFieldUpsert{row}); !errors.Is(err, ErrDatasetDeleted) {
 		t.Fatalf("write after delete err=%v, want ErrDatasetDeleted", err)
 	}
 }
@@ -86,7 +86,6 @@ func TestErrorCodeClassifiesStorageErrors(t *testing.T) {
 		{"wrapped validation", errors.Join(errors.New("ctx"), ValidationErrorFor("bad")), pb.ErrorCode_INVALID_PARAM},
 		{"deadline passed", PeriodDeadlinePassedError{Deadline: 1}, pb.ErrorCode_INVALID_PARAM},
 		{"marker conflict", ConflictError{EventID: "e"}, pb.ErrorCode_CONFLICT},
-		{"commit conflict", CommitConflictError{CommitID: "c"}, pb.ErrorCode_CONFLICT},
 		{"period conflict", PeriodConflictError{}, pb.ErrorCode_CONFLICT},
 		{"stale effective_from", StaleEffectiveFromError{}, pb.ErrorCode_CONFLICT},
 		{"hash mismatch", PeriodHashMismatchError{}, pb.ErrorCode_CONFLICT},

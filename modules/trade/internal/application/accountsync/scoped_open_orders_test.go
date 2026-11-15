@@ -43,7 +43,7 @@ func seedSpotAccountWithTargetAndHoldings(t *testing.T, tradeStore *store.Store)
 		}
 		_, _, err := tx.AcceptLogicalAccountTarget(store.LogicalAccountTargetRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-1", InstanceID: "runner-1", SessionID: "session-1",
-			StrategyID: "strategy-1", BarEndTime: 1, EffectiveAt: 1, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
+			StrategyID: "strategy-1", BarEndTime: 1, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 			Targets: []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "1"}}, Status: "PENDING", AcceptedAt: 1,
 		})
 		return err

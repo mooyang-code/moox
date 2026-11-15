@@ -22,6 +22,9 @@ const (
 	canonicalTimeLayout         = "2006-01-02T15:04:05.000000000Z"
 )
 
+// BucketDuration 是时序行键的时间桶宽度。它是物理键的一部分，固定为 24 小时：改动后已有的行按键读不到。
+const BucketDuration = 24 * time.Hour
+
 func appendPart(dst []byte, value string) []byte {
 	return appendRawPart(dst, []byte(value))
 }
@@ -37,7 +40,7 @@ func appendRawPart(dst []byte, value []byte) []byte {
 	return append(dst, 0, 0)
 }
 
-func rowParts(key *pb.RowKey, bucketDuration time.Duration) (kind byte, parts [][]byte, err error) {
+func rowParts(key *pb.RowKey) (kind byte, parts [][]byte, err error) {
 	if key == nil || key.GetSpaceId() == "" || key.GetDatasetId() == "" {
 		return 0, nil, invalid("row key space_id and dataset_id are required")
 	}
@@ -52,11 +55,8 @@ func rowParts(key *pb.RowKey, bucketDuration time.Duration) (kind byte, parts []
 		if parseErr != nil {
 			return 0, nil, invalidf("invalid data_time: %w", parseErr)
 		}
-		if bucketDuration <= 0 {
-			bucketDuration = 24 * time.Hour
-		}
 		at = at.UTC()
-		bucket := at.Truncate(bucketDuration).Format(canonicalTimeLayout)
+		bucket := at.Truncate(BucketDuration).Format(canonicalTimeLayout)
 		dataTime := at.Format(canonicalTimeLayout)
 		if tagErr := rowidentity.ValidateSeriesTag(row.GetSeriesTag()); tagErr != nil {
 			return 0, nil, invalidf("invalid series_tag: %w", tagErr)
@@ -85,14 +85,14 @@ func NormalizeRowKey(key *pb.RowKey) (*pb.RowKey, error) {
 		}
 		row.DataTime = at.UTC().Format(canonicalTimeLayout)
 	}
-	if _, _, err := rowParts(normalized, 24*time.Hour); err != nil {
+	if _, _, err := rowParts(normalized); err != nil {
 		return nil, err
 	}
 	return normalized, nil
 }
 
-func encodeRowPrefix(key *pb.RowKey, bucketDuration time.Duration) ([]byte, error) {
-	kind, parts, err := rowParts(key, bucketDuration)
+func encodeRowPrefix(key *pb.RowKey) ([]byte, error) {
+	kind, parts, err := rowParts(key)
 	if err != nil {
 		return nil, err
 	}
@@ -103,11 +103,11 @@ func encodeRowPrefix(key *pb.RowKey, bucketDuration time.Duration) ([]byte, erro
 	return out, nil
 }
 
-func encodeFieldKey(key *pb.RowKey, fieldID string, bucketDuration time.Duration) ([]byte, error) {
+func encodeFieldKey(key *pb.RowKey, fieldID string) ([]byte, error) {
 	if fieldID == "" {
 		return nil, invalid("field_id is required")
 	}
-	prefix, err := encodeRowPrefix(key, bucketDuration)
+	prefix, err := encodeRowPrefix(key)
 	if err != nil {
 		return nil, err
 	}
@@ -115,11 +115,11 @@ func encodeFieldKey(key *pb.RowKey, fieldID string, bucketDuration time.Duration
 	return appendPart(out, fieldID), nil
 }
 
-func encodeAttributeKey(key *pb.RowKey, attribute string, bucketDuration time.Duration) ([]byte, error) {
+func encodeAttributeKey(key *pb.RowKey, attribute string) ([]byte, error) {
 	if attribute == "" {
 		return nil, invalid("attribute key is required")
 	}
-	prefix, err := encodeRowPrefix(key, bucketDuration)
+	prefix, err := encodeRowPrefix(key)
 	if err != nil {
 		return nil, err
 	}
@@ -127,8 +127,8 @@ func encodeAttributeKey(key *pb.RowKey, attribute string, bucketDuration time.Du
 	return appendPart(out, attribute), nil
 }
 
-func encodeNamespacePrefix(namespace byte, key *pb.RowKey, bucketDuration time.Duration) ([]byte, error) {
-	prefix, err := encodeRowPrefix(key, bucketDuration)
+func encodeNamespacePrefix(namespace byte, key *pb.RowKey) ([]byte, error) {
+	prefix, err := encodeRowPrefix(key)
 	if err != nil {
 		return nil, err
 	}
@@ -139,8 +139,8 @@ func encodeNamespacePrefix(namespace byte, key *pb.RowKey, bucketDuration time.D
 // orders data_time before subject/frequency so a backfill cursor can seek
 // directly to the next logical row instead of rescanning a subject-first day
 // bucket on every page.
-func encodeHistoryKey(key *pb.RowKey, bucketDuration time.Duration) ([]byte, error) {
-	kind, parts, err := rowParts(key, bucketDuration)
+func encodeHistoryKey(key *pb.RowKey) ([]byte, error) {
+	kind, parts, err := rowParts(key)
 	if err != nil {
 		return nil, err
 	}
@@ -158,8 +158,8 @@ func encodeHistoryKey(key *pb.RowKey, bucketDuration time.Duration) ([]byte, err
 // namespace. It complements the time-first history index: rebuilds can seek
 // directly to one subject/frequency and read only its recent rows instead of
 // walking the entire dataset history.
-func encodeSeriesHistoryKey(key *pb.RowKey, bucketDuration time.Duration) ([]byte, error) {
-	kind, parts, err := rowParts(key, bucketDuration)
+func encodeSeriesHistoryKey(key *pb.RowKey) ([]byte, error) {
+	kind, parts, err := rowParts(key)
 	if err != nil {
 		return nil, err
 	}

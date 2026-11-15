@@ -95,17 +95,14 @@ func (r *WeightResolver) Resolve(ctx context.Context, request *tradeeventpb.Logi
 	if r == nil || r.Store == nil || r.Prices == nil || r.Equity == nil {
 		return WeightConversion{}, fmt.Errorf("%w: target weight resolver is not configured", ErrPermanent)
 	}
-	if request == nil || request.GetTargetId() == "" || request.GetLogicalAccountId() == "" || request.GetInstanceId() == "" || request.GetSessionId() == "" || request.GetStrategyId() == "" || request.GetBarEndTime() == nil || request.GetEffectiveAt() == nil || request.GetValidUntil() == nil {
+	if request == nil || request.GetTargetId() == "" || request.GetLogicalAccountId() == "" || request.GetInstanceId() == "" || request.GetSessionId() == "" || request.GetStrategyId() == "" || request.GetBarEndTime() == nil || request.GetValidUntil() == nil {
 		return WeightConversion{}, fmt.Errorf("%w: target weight request is incomplete", ErrPermanent)
 	}
 	if err := request.GetBarEndTime().CheckValid(); err != nil {
 		return WeightConversion{}, fmt.Errorf("%w: invalid bar_end_time: %v", ErrPermanent, err)
 	}
-	if err := request.GetEffectiveAt().CheckValid(); err != nil || !request.GetEffectiveAt().AsTime().Equal(request.GetBarEndTime().AsTime()) {
-		return WeightConversion{}, fmt.Errorf("%w: effective_at must equal bar_end_time", ErrPermanent)
-	}
-	if err := request.GetValidUntil().CheckValid(); err != nil || !request.GetValidUntil().AsTime().After(request.GetEffectiveAt().AsTime()) {
-		return WeightConversion{}, fmt.Errorf("%w: valid_until must be after effective_at", ErrPermanent)
+	if err := request.GetValidUntil().CheckValid(); err != nil || !request.GetValidUntil().AsTime().After(request.GetBarEndTime().AsTime()) {
+		return WeightConversion{}, fmt.Errorf("%w: valid_until must be after bar_end_time", ErrPermanent)
 	}
 	requestHash, weightsJSON, orderedWeights, err := canonicalWeights(request)
 	if err != nil {
@@ -530,10 +527,9 @@ func canonicalWeights(request *tradeeventpb.LogicalAccountTargetWeightRequested)
 		SessionID        string          `json:"session_id"`
 		StrategyID       string          `json:"strategy_id"`
 		BarEndTime       string          `json:"bar_end_time"`
-		EffectiveAt      string          `json:"effective_at"`
 		ValidUntil       string          `json:"valid_until"`
 		Targets          []orderedWeight `json:"targets"`
-	}{TargetID: request.GetTargetId(), InstanceID: request.GetInstanceId(), LogicalAccountID: request.GetLogicalAccountId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(), BarEndTime: request.GetBarEndTime().AsTime().UTC().Format(time.RFC3339Nano), EffectiveAt: request.GetEffectiveAt().AsTime().UTC().Format(time.RFC3339Nano), ValidUntil: request.GetValidUntil().AsTime().UTC().Format(time.RFC3339Nano), Targets: weights}
+	}{TargetID: request.GetTargetId(), InstanceID: request.GetInstanceId(), LogicalAccountID: request.GetLogicalAccountId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(), BarEndTime: request.GetBarEndTime().AsTime().UTC().Format(time.RFC3339Nano), ValidUntil: request.GetValidUntil().AsTime().UTC().Format(time.RFC3339Nano), Targets: weights}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", "", nil, err

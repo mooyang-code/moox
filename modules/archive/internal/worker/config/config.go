@@ -199,7 +199,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("worker.min_free_bytes 不能为负")
 	}
 	if w.HeartbeatInterval < time.Second || w.HeartbeatInterval > 15*time.Second {
-		return fmt.Errorf("worker.heartbeat_interval 必须在 1s 到 15s 之间（mgr 45 秒无心跳即接管）")
+		return fmt.Errorf("worker.heartbeat_interval 必须在 1s 到 15s 之间")
 	}
 	if w.PullInterval < time.Second {
 		return fmt.Errorf("worker.pull_interval 不能小于 1s")

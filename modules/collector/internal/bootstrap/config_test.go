@@ -85,23 +85,10 @@ func TestCollectorRPCListenersUseNativeLoopbackOnly(t *testing.T) {
 	require.True(t, foundCollectMgr)
 }
 
-func TestMarketFetchSpaceIDUsesConfiguredMarketForScheduler(t *testing.T) {
-	t.Setenv("MOOX_SPACE_IDS", "")
-	t.Setenv("MOOX_SPACE_ID", "stockcn")
-	if got := marketFetchSpaceID(); got != "stockcn" {
-		t.Fatalf("marketFetchSpaceID() = %q, want stockcn", got)
-	}
-}
-
-func TestMarketFetchSpaceIDsSupportsMultipleSpacesAndDeduplicates(t *testing.T) {
-	got := parseMarketFetchSpaceIDs(" stockcn, crypto, STOCKCN,,crypto ")
-	assert.Equal(t, []string{"stockcn", "crypto"}, got)
-}
-
-func TestMarketFetchSpaceIDsPrefersPluralEnvironment(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "stockcn")
-	t.Setenv("MOOX_SPACE_IDS", "crypto,stockcn")
-	assert.Equal(t, []string{"crypto", "stockcn"}, marketFetchSpaceIDs())
+// 合成覆盖 barclock 登记的全部市场，不读环境变量；Admin 的 collectorEventBusSpaces 要与这份名单一致。
+func TestResampleSpaceIDsCoverAllRegisteredMarkets(t *testing.T) {
+	t.Setenv("MOOX_SPACE_IDS", "crypto")
+	assert.Equal(t, []string{"crypto", "stockcn", "stockhk", "stockus"}, resampleSpaceIDs())
 }
 
 func TestLoadKlineResampleConfig(t *testing.T) {
@@ -244,25 +231,18 @@ func TestLoadRejectsMissingFile(t *testing.T) {
 func TestLoadEgressProxyUsesSharedGateway(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, `egress_proxy:
   domains: ["*.binance.com", "data-api.binance.vision"]
-  dns:
-    domains: [FAPI.BINANCE.COM., api.binance.com]
-    request_timeout: 2s
 `))
 	require.NoError(t, err)
-	require.True(t, cfg.EgressProxy.DNS.Enabled())
-	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, cfg.EgressProxy.DNS.Domains)
-	require.Equal(t, 2*time.Second, cfg.EgressProxy.DNS.RequestTimeout)
+	require.Equal(t, []string{"*.binance.com", "data-api.binance.vision"}, cfg.EgressProxy.Domains)
 }
+
 func TestLoadRejectsInvalidEgressProxy(t *testing.T) {
 	for _, raw := range []string{
 		"dns_resolver: {enabled: true}",
 		"egress_proxy: {target: 'ip://old.example:11003'}",
 		"egress_proxy: {domains: [binance.com.evil/path]}",
-		"egress_proxy: {dns: {domains: ['*.binance.com']}}",
-		"egress_proxy: {dns: {domains: [api.binance.com, API.BINANCE.COM.]}}",
-		"egress_proxy: {dns: {request_timeout: 0s}}",
-		"egress_proxy: {dns: {request_timeout: 61s}}",
-		"egress_proxy: {dns: {node_id: old}}",
+		"egress_proxy: {dns: {domains: [api.binance.com]}}",
+		"dns: {domains: [api.binance.com]}",
 	} {
 		_, err := Load(writeCollectorConfig(t, raw))
 		require.Error(t, err, raw)

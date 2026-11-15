@@ -52,7 +52,7 @@ func TestExternalGatewayOwnerTrade(t *testing.T) {
 	proxy := tradepb.NewTradeConsoleServiceClientProxy(client.WithTarget("ip://"+listener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(3*time.Second))
 	var created *tradepb.CreatePaperSimulationRsp
 	require.Eventually(t, func() bool {
-		created, err = proxy.CreatePaperSimulation(context.Background(), &tradepb.CreatePaperSimulationReq{AccountName: "gateway-paper", LogicalAccountName: "gateway-strategy", Exchange: tradepb.Exchange_EXCHANGE_BINANCE, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY}, client.WithMetaData("X-Space-Id", []byte("space-gateway-e2e")))
+		created, err = proxy.CreatePaperSimulation(context.Background(), &tradepb.CreatePaperSimulationReq{AccountName: "gateway-paper", LogicalAccountName: "gateway-strategy", Exchange: tradepb.Exchange_EXCHANGE_BINANCE, Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT}, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY}, client.WithMetaData("X-Space-Id", []byte("space-gateway-e2e")))
 		return err == nil
 	}, 5*time.Second, 20*time.Millisecond)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created)

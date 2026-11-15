@@ -25,7 +25,7 @@ func TestSessionTransitionRollsBackWhenTargetDeleteFails(t *testing.T) {
 	target, accepted, err := s.AcceptLogicalAccountTarget(ctx, LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-1",
 		InstanceID: "instance-1", SessionID: "session-1", StrategyID: "strategy-1",
-		BarEndTime: bar, EffectiveAt: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
+		BarEndTime: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
 		Targets: []InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
 	})
 	require.NoError(t, err)
@@ -34,7 +34,7 @@ func TestSessionTransitionRollsBackWhenTargetDeleteFails(t *testing.T) {
 		return tx.InsertTargetReceipt(TargetReceiptRecord{
 			SpaceID: target.SpaceID, LogicalAccountID: target.LogicalAccountID, TargetID: target.TargetID,
 			InstanceID: target.InstanceID, SessionID: target.SessionID, StrategyID: target.StrategyID,
-			BarEndTime: target.BarEndTime, EffectiveAt: target.EffectiveAt, ValidUntil: target.ValidUntil,
+			BarEndTime: target.BarEndTime, ValidUntil: target.ValidUntil,
 			RequestHash: "hash", WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", AcceptedAt: target.AcceptedAt,
 		})
 	}))
@@ -108,7 +108,7 @@ func TestAuthorizedSessionReplacesStaleTargetAtSameOrEarlierBar(t *testing.T) {
 			first := LogicalAccountTargetRecord{
 				SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-1",
 				InstanceID: "instance-1", SessionID: "session-1", StrategyID: "strategy-1",
-				BarEndTime: bar, EffectiveAt: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
+				BarEndTime: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
 				Targets: []InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
 			}
 			_, accepted, err := s.AcceptLogicalAccountTarget(ctx, first)
@@ -133,7 +133,6 @@ func TestAuthorizedSessionReplacesStaleTargetAtSameOrEarlierBar(t *testing.T) {
 			second := first
 			second.TargetID, second.SessionID = "target-2", "session-2"
 			second.BarEndTime += offset.Milliseconds()
-			second.EffectiveAt = second.BarEndTime
 			_, accepted, err = s.AcceptLogicalAccountTarget(ctx, second)
 			require.NoError(t, err)
 			require.True(t, accepted)
@@ -191,7 +190,7 @@ func TestSessionAuthorizationCASAndTargetPeriod(t *testing.T) {
 	target := LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-1",
 		InstanceID: "instance-1", SessionID: "session-1", StrategyID: "strategy-1",
-		BarEndTime: bar, EffectiveAt: bar, ValidUntil: validUntil,
+		BarEndTime: bar, ValidUntil: validUntil,
 		Targets: []InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}},
 		Status:  "PENDING", AcceptedAt: now.UnixMilli(),
 	}

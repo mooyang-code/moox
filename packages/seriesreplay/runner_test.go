@@ -316,3 +316,29 @@ func TestBuildSummary(t *testing.T) {
 	require.Equal(t, 1, s.RejectedOrders)
 	require.Equal(t, 2, s.SkippedPeriods)
 }
+
+// 因子帧里每个标的实际用的参数要原样进到策略求值请求，否则策略表达式的 params() 全是 NaN。
+func TestEvaluateRequestForwardsSubjectParams(t *testing.T) {
+	params := map[string]map[string]float64{"ma_fast__var": {"window": 20}}
+	raw, err := json.Marshal(map[string]any{"subjects": map[string]any{"A": map[string]any{"source": map[string]float64{"close": 1}, "params": params}}})
+	require.NoError(t, err)
+	var frame FactorStepResponse
+	require.NoError(t, json.Unmarshal(raw, &frame))
+
+	request := evaluateRequest(Spec{ReplayID: "r1", InstanceID: "i1"}, StrategyBinding{DSLHash: "dsl1"}, t0, frame, nil)
+	require.Equal(t, params, request.Rows["A"].Params)
+
+	body, err := json.Marshal(request)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"ma_fast__var":{"window":20}}`, gjsonParams(t, body))
+}
+
+// gjsonParams 取出请求体里 rows.A.params 的原文，核对线上字段名。
+func gjsonParams(t *testing.T, body []byte) string {
+	t.Helper()
+	var decoded struct {
+		Rows map[string]map[string]json.RawMessage `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal(body, &decoded))
+	return string(decoded.Rows["A"]["params"])
+}

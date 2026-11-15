@@ -35,7 +35,7 @@ func openStore(t *testing.T, path string) *pebble.Store {
 
 func writeRow(t *testing.T, store *pebble.Store, datasetID, subject string, at time.Time) {
 	t.Helper()
-	_, err := store.UpsertFields(context.Background(), "s", datasetID, "", []*pb.RowFieldUpsert{{
+	err := store.UpsertFields(context.Background(), "s", datasetID, []*pb.RowFieldUpsert{{
 		Key: &pb.RowKey{SpaceId: "s", DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 			SubjectId: subject, Freq: "5m", DataTime: at.Format(time.RFC3339Nano),
 		}}},

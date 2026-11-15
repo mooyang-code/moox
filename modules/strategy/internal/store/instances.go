@@ -301,6 +301,7 @@ func (s *Store) GetInstance(ctx context.Context, instanceID string) (Instance, e
 }
 
 // UpdateInstance 修改停用且无会话实例的定义与账户绑定。因子任务在创建时写定，不能修改（也不写这一列）。
+// 同一个事务里清掉实例的规则状态：状态是按原来的定义和账户积累的理论持仓，换了账户或定义之后不能接着用。
 func (s *Store) UpdateInstance(ctx context.Context, instance Instance) error {
 	if err := validateInstanceIdentity(instance); err != nil {
 		return err
@@ -331,6 +332,9 @@ func (s *Store) UpdateInstance(ctx context.Context, instance Instance) error {
 			return errors.New("实例不能迁移到其他空间")
 		}
 		if err := requireLiveDefinition(tx, instance.StrategyID); err != nil {
+			return err
+		}
+		if err := tx.Exec(sqlDeleteState, instance.InstanceID).Error; err != nil {
 			return err
 		}
 		return tx.Exec(sqlUpdateInstance, instance.StrategyID, stringValue(instance.LogicalAccountID), now, instance.InstanceID).Error

@@ -576,7 +576,6 @@ service FactorMgr {
   rpc ValidateFactorSpec(ValidateFactorSpecReq) returns (ValidateFactorSpecRsp);
   rpc PreviewFactor(PreviewFactorReq) returns (PreviewFactorRsp);
   rpc ListFactorFunctions(ListFactorFunctionsReq) returns (ListFactorFunctionsRsp);
-  rpc NotifyPeriodsFilled(NotifyPeriodsFilledReq) returns (NotifyPeriodsFilledRsp);
   rpc ListFactorCategories(ListFactorCategoriesReq) returns (ListFactorCategoriesRsp);
   rpc UpsertFactorCategory(UpsertFactorCategoryReq) returns (UpsertFactorCategoryRsp);
   rpc DeleteFactorCategory(DeleteFactorCategoryReq) returns (DeleteFactorCategoryRsp);
@@ -765,29 +764,6 @@ message TaskWatermarkStatus {
   string blocked_reason = 6;
 }
 
-// PeriodsFilled 是补采补齐了一段周期的通知：absent_subjects 是补采确认行情源没有的标的。
-message PeriodsFilled {
-  string space_id = 1;
-  string dataset_id = 2;
-  string frequency = 3;
-  // [from, to) 是补齐的 K 线开始时间范围（Unix 秒）。
-  int64 from = 4;
-  int64 to = 5;
-  repeated string absent_subjects = 6;
-  // absent_series 是统一数据集（同一数据集里有多个 series_tag）上按序列确认行情源没有的（标的、series_tag）：
-  // 只扣这一条序列，同标的的另一个市场照常计算；单序列数据集不带，仍用 absent_subjects。
-  repeated SeriesRef absent_series = 7;
-}
-
-// NotifyPeriodsFilled 由 Collector 在补采作业成功后调用；因子管理服务在引擎心跳响应里转交，引擎据此立即推进水位并补算。
-message NotifyPeriodsFilledReq {
-  repeated PeriodsFilled filled = 1;
-}
-
-message NotifyPeriodsFilledRsp {
-  common.RetInfo ret_info = 1;
-}
-
 message EngineHeartbeatReq {
   EngineIdentity engine = 1;
   EngineRuntimeStatus status = 2;
@@ -795,8 +771,6 @@ message EngineHeartbeatReq {
 message EngineHeartbeatRsp {
   common.RetInfo ret_info = 1;
   int64 lease_ttl_seconds = 2;
-  // filled 是自上次心跳以来收到的补齐通知（只交给持有租约的引擎）。
-  repeated PeriodsFilled filled = 3;
 }
 
 message PullRecalcJobReq { EngineIdentity engine = 1; }

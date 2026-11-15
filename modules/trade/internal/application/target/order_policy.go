@@ -30,6 +30,9 @@ type laneEnv struct {
 	// hourly 是本自然小时已提交的目标子单金额（键：内部标的 ID），配置了每小时上限、第一次要用时才查订单表。
 	hourly       map[string]shared.Decimal
 	hourlyLoaded bool
+	// quoteMissing 记下按金额比较的阈值因为取不到报价而没生效的标的（键：内部标的 ID）。
+	// 执行器照常下单；只读缓存的查询（LaneStatuses）据此把结论标成“未知”。
+	quoteMissing map[string]bool
 }
 
 // errOrderSettingsUnreadable 表示下单设置读不出来：这个组合不下单，原因写进目标。
@@ -125,12 +128,17 @@ func (env *laneEnv) withinRebalanceThreshold(
 	case ordersettings.ThresholdPositionRatio:
 		quote, ok := env.quotes[instrumentID]
 		if !ok {
+			env.noteQuoteMissing(instrumentID)
 			return false
 		}
 		return diff.Mul(quote.Price).Cmp(confirmed.Abs().Mul(quote.Price).Mul(settings.ThresholdRatio)) < 0
 	case ordersettings.ThresholdEquityRatio:
+		if !env.equityKnown {
+			return false
+		}
 		quote, ok := env.quotes[instrumentID]
-		if !ok || !env.equityKnown {
+		if !ok {
+			env.noteQuoteMissing(instrumentID)
 			return false
 		}
 		return diff.Mul(quote.Price).Cmp(env.equity.Mul(settings.ThresholdRatio)) < 0
@@ -138,15 +146,29 @@ func (env *laneEnv) withinRebalanceThreshold(
 	return false
 }
 
-// belowConfiguredMinimum 判断子单金额是否低于设置的最小下单额（现货、合约各一个值）。
-// 合约的减仓和清仓不受它限制：低于门槛的剩余仓位也要能平掉。交易所自己的最小名义金额另行判断，
+// noteQuoteMissing 记下这个标的的阈值因为取不到报价没生效。
+func (env *laneEnv) noteQuoteMissing(instrumentID string) {
+	if env.quoteMissing == nil {
+		env.quoteMissing = make(map[string]bool)
+	}
+	env.quoteMissing[instrumentID] = true
+}
+
+// configuredMinimum 返回这一笔适用的最小下单额（现货、合约各一个值）；不适用时 applies 为假。
+// 合约的减仓和清仓不受它限制：低于门槛的剩余仓位也要能平掉。
+func (env *laneEnv) configuredMinimum(candidate laneAction) (minimum shared.Decimal, applies bool) {
+	if candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly {
+		return shared.Zero(), false
+	}
+	minimum = env.settings.MinNotional(candidate.instrument.MarketType)
+	return minimum, minimum.Cmp(shared.Zero()) > 0
+}
+
+// belowConfiguredMinimum 判断子单金额是否低于设置的最小下单额。交易所自己的最小名义金额另行判断，
 // OKX 没有最小名义金额，它的最小数量（minSz）在取整时已经保证金额不低于 minSz × 价格。
 func (env *laneEnv) belowConfiguredMinimum(candidate laneAction, quantity, price shared.Decimal) bool {
-	if candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly {
-		return false
-	}
-	minimum := env.settings.MinNotional(candidate.instrument.MarketType)
-	return minimum.Cmp(shared.Zero()) > 0 && quantity.Mul(price).Cmp(minimum) < 0
+	minimum, applies := env.configuredMinimum(candidate)
+	return applies && quantity.Mul(price).Cmp(minimum) < 0
 }
 
 // hourWindow 返回当前时刻所在自然小时（UTC）的起止。

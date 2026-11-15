@@ -18,7 +18,6 @@ import (
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	paperexec "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
@@ -46,7 +45,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	console := &rpc.ConsoleServer{Store: db, Paper: &papersimulation.Service{Store: db}, LogicalAccountServer: &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}}
-	created, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{AccountName: "external-paper", LogicalAccountName: "external-strategy", Exchange: tradepb.Exchange_EXCHANGE_BINANCE, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY})
+	created, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{AccountName: "external-paper", LogicalAccountName: "external-strategy", Exchange: tradepb.Exchange_EXCHANGE_BINANCE, Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT}, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo())
 	logicalID, testAccount := created.GetLogicalAccount().GetLogicalAccountId(), created.GetAccount().GetTradingAccountId()
@@ -131,8 +130,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	require.Equal(t, "instance-e2e", receipt.InstanceID)
 	require.Equal(t, "session-e2e", receipt.SessionID)
 	require.Equal(t, "strategy-e2e", receipt.StrategyID)
-	require.Equal(t, receipt.BarEndTime, receipt.EffectiveAt)
-	require.Greater(t, receipt.ValidUntil, receipt.EffectiveAt)
+	require.Greater(t, receipt.ValidUntil, receipt.BarEndTime)
 	require.NotEmpty(t, receipt.RequestHash)
 	require.Equal(t, "100000", receipt.Equity)
 	require.JSONEq(t, `[{"instrument_id":"BTC-USDT","target_weight":"0.5"}]`, receipt.WeightsJSON)

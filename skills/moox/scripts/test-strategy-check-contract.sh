@@ -10,20 +10,27 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/moox-strategy-check.XXXXXX")"
 trap 'rm -rf "${TMP}"' EXIT
 fail() { echo "strategy check contract: $*" >&2; exit 1; }
 
-python3 -I - "${TMP}/strategy.sqlite" <<'PY'
+# 策略库直接用仓库里的建表语句建：脚本查的表和列要与真实 schema 对得上，schema 改了而脚本没跟上时这里就会失败。
+SCHEMA="${SCRIPT_DIR}/../../../modules/strategy/schema/strategy.sql"
+[[ -f "${SCHEMA}" ]] || fail "找不到策略库的建表语句：${SCHEMA}"
+python3 -I - "${TMP}/strategy.sqlite" "${SCHEMA}" <<'PY'
 import json, sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
-c.execute("CREATE TABLE t_strategy_results (c_instance_id TEXT, c_bar_end_time INTEGER, c_status TEXT, c_skip_reason TEXT, c_targets_json TEXT, c_rule_states_json TEXT)")
+c.executescript(open(sys.argv[2], encoding="utf-8").read())
 base = 1793037600000  # 2026-10-26T18:00:00Z
 rows = [
-    ("inst-a", base, "ok", "", [{"instrument_id": "BTC-USDT", "market": "swap", "target_weight": "0.5"}], "x" * 100),
-    ("inst-a", base + 300000, "ok", "", [{"instrument_id": "BTC-USDT", "market": "swap", "target_weight": "0.7284"}, {"instrument_id": "ETH-USDT", "market": "swap", "target_weight": "0.1"}, {"instrument_id": "BTC-USDT", "market": "spot", "target_weight": "0.05"}], "x" * 200),
+    ("inst-a", base, "ok", "", [{"instrument_id": "BTC-USDT", "market": "swap", "target_weight": "0.5"}]),
+    ("inst-a", base + 300000, "ok", "", [{"instrument_id": "BTC-USDT", "market": "swap", "target_weight": "0.7284"}, {"instrument_id": "ETH-USDT", "market": "swap", "target_weight": "0.1"}, {"instrument_id": "BTC-USDT", "market": "spot", "target_weight": "0.05"}]),
     # 同一个标的同时有现货和永续目标：两条都要保留，不能互相覆盖
-    ("inst-a", base + 600000, "ok", "", [{"instrument_id": "ETH-USDT", "market": "swap", "target_weight": "0.25"}, {"instrument_id": "ETH-USDT", "market": "spot", "target_weight": "0.3"}], "x" * 200),
-    ("inst-a", base + 900000, "skipped", "expired", [], "x" * 200),
+    ("inst-a", base + 600000, "ok", "", [{"instrument_id": "ETH-USDT", "market": "swap", "target_weight": "0.25"}, {"instrument_id": "ETH-USDT", "market": "spot", "target_weight": "0.3"}]),
+    ("inst-a", base + 900000, "skipped", "expired", []),
 ]
-for iid, bar, status, reason, targets, states in rows:
-    c.execute("INSERT INTO t_strategy_results VALUES (?, ?, ?, ?, ?, ?)", (iid, bar, status, reason, json.dumps(targets), states))
+for n, (iid, bar, status, reason, targets) in enumerate(rows):
+    c.execute("INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json) "
+              "VALUES (?, ?, 'sess-a', ?, ?, ?, ?, 'sha256:a', '{}', ?, '{}')", ("res-%d" % n, iid, bar, bar + 600000, status, reason, json.dumps(targets)))
+# 规则状态每个实例一行：200 字节，推进到最后一个求值的期
+c.execute("INSERT INTO t_strategy_states (c_instance_id, c_session_id, c_dsl_hash, c_bar_end_time, c_state_json, c_mtime) VALUES ('inst-a', 'sess-a', 'sha256:a', ?, ?, '2026-10-26 18:15:00')",
+          (base + 900000, "x" * 200))
 c.commit()
 PY
 
@@ -34,13 +41,14 @@ python3 -I -c 'import json,sys; t=json.load(open(sys.argv[1]))["A"]; assert sort
 python3 -I - "${TMP}/strategy.sqlite" <<'PY'
 import json, sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
-c.execute("CREATE TABLE t_strategy_replays (c_replay_id TEXT)")
-c.execute("CREATE TABLE t_strategy_replay_bars (c_replay_id TEXT, c_bar_end_time INTEGER, c_status TEXT, c_skip_reason TEXT, c_targets_json TEXT)")
-c.execute("INSERT INTO t_strategy_replays VALUES ('rp-1')")
+c.execute("INSERT INTO t_strategy_replays (c_replay_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_status) "
+          "VALUES ('rp-1', 'name: demo', 'sha256:a', 'crypto_24x7', 'space', '{}', 1, 2, 'done')")
 base = 1793037600000  # 2026-10-26T18:00:00Z
 targets = [{"instrument_id": "BTC-USDT", "market": "spot", "target_weight": "0.6"}, {"instrument_id": "BTC-USDT", "market": "swap", "target_weight": "-0.4"}]
-c.execute("INSERT INTO t_strategy_replay_bars VALUES ('rp-1', ?, 'ok', '', ?)", (base, json.dumps(targets)))
-c.execute("INSERT INTO t_strategy_replay_bars VALUES ('rp-1', ?, 'skipped', 'no_data', '[]')", (base + 300000,))
+insert = ("INSERT INTO t_strategy_replay_bars (c_replay_id, c_bar_end_time, c_status, c_skip_reason, c_targets_json, c_positions_json, c_summary_json) "
+          "VALUES ('rp-1', ?, ?, ?, ?, '{}', '{}')")
+c.execute(insert, (base, "ok", "", json.dumps(targets)))
+c.execute(insert, (base + 300000, "skipped", "no_data", "[]"))
 c.commit()
 PY
 python3 -I "${CHECK}" targets --db "${TMP}/strategy.sqlite" --replay P=rp-1 --instance A=inst-a --output "${TMP}/replay_targets.json" 2>/dev/null
@@ -57,7 +65,8 @@ set -e
 
 summary="$(python3 -I "${CHECK}" summary --db "${TMP}/strategy.sqlite" --instance A=inst-a)"
 grep -q "跳过原因 {'expired': 1}" <<<"${summary}" || fail "summary 应列出跳过原因：${summary}"
-grep -q "最大 200" <<<"${summary}" || fail "summary 应给出状态体积"
+grep -q "当前 200 字节" <<<"${summary}" || fail "summary 应给出当前规则状态的体积：${summary}"
+grep -q "推进到 2026-10-26T18:15:00Z" <<<"${summary}" || fail "summary 应给出规则状态推进到的那一期：${summary}"
 
 cat > "${TMP}/ref.csv" <<'EOF'
 bar_end,market,instrument_id,weight

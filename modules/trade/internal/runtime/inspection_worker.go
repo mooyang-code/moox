@@ -27,9 +27,9 @@ type InspectionReinspector interface {
 	ReinspectUncounted(context.Context, string) (accountapp.ReinspectResult, error)
 }
 
-// LogicalAccountPauser 暂停组合账户。
+// LogicalAccountPauser 只在组合的状态和暂停原因仍是预期值时暂停组合账户，返回是否改了。
 type LogicalAccountPauser interface {
-	Pause(ctx context.Context, spaceID, logicalAccountID, reason string) (store.LogicalAccountRecord, error)
+	PauseIf(ctx context.Context, spaceID, logicalAccountID, expectedState, expectedReason, reason string) (bool, error)
 }
 
 // InspectionWorker 每小时复查实盘账户的密钥：账户类型变了或出现阻断项就暂停所在组合（自动暂停会告警），
@@ -121,7 +121,8 @@ func (w *InspectionWorker) Handle(ctx context.Context, spaceID, tradingAccountID
 	if result.Blocked {
 		reason = "交易账户检测发现阻断项：" + blockerSummary(result.Inspection)
 	}
-	_, err = w.Logical.Pause(ctx, spaceID, logical.LogicalAccountID, store.AutoPauseReason(reason))
+	// 上面读到的状态可能已经过期：只在组合仍在自动执行时暂停，不覆盖别处（如风控）刚写的原因。
+	_, err = w.Logical.PauseIf(ctx, spaceID, logical.LogicalAccountID, "ACTIVE", "", store.AutoPauseReason(reason))
 	return err
 }
 

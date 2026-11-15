@@ -67,6 +67,19 @@ func (s *Snapshot[T]) Get(ctx context.Context, load func(context.Context) (T, er
 	}
 }
 
+// Peek 返回已有的快照和取得时间，不重新取：没有快照，或快照比 maxAge 旧时 ok 为 false。
+func (s *Snapshot[T]) Peek(maxAge time.Duration) (value T, at time.Time, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.at.IsZero() {
+		return value, time.Time{}, false
+	}
+	if age := time.Since(s.at); age < 0 || age > maxAge {
+		return value, time.Time{}, false
+	}
+	return s.value, s.at.UTC(), true
+}
+
 // load 调用一次 load 并发布结果；load panic 时同样清掉在取标记、唤醒等待者，再把 panic 抛出去。
 func (s *Snapshot[T]) load(ctx context.Context, load func(context.Context) (T, error), done chan struct{}) (value T, at time.Time, err error) {
 	finished := false

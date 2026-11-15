@@ -51,8 +51,6 @@ type Plan struct {
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞、失败都不写任何字段（尤其不写失效 NULL），也不写 carry 列。
 	// 用于空洞补齐后的恢复。
 	FillOnly bool
-	// CommitSalt 非空时混入提交 ID，保证「期望重写」的写入不被相同内容的旧回执吞掉；补算与含空洞失效写入每次执行取新值。
-	CommitSalt string
 	// HistorySubjects 只在有成员写了 cross_section_history: observed 时才有：本地存储里在读取区间内有数据、但不在 Available
 	// （也不是上游失败）的标的，例如已下架或移出全集的标的。它们只读本地历史、不同步、不输出结果，只放进面板参与 observed
 	// 成员的历史截面；由 Run 在内存预检之前向数据层取得（HistorySource）。

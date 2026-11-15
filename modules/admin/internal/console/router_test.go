@@ -479,7 +479,6 @@ func TestConsoleHasNoDeploymentWriteRoutes(t *testing.T) {
 		"/api/admin/sysdeploy/SetDeploymentStatus",
 		"/api/admin/sysdeploy/SyncHostDeployments",
 		"/api/admin/sysdeploy/DeleteHost",
-		"/api/admin/archive/RetireArchiveWorker",
 		"/api/admin/archive/PrepareArchiveImport",
 		"/api/admin/archive/ImportArchiveFile",
 		"/api/admin/archive/ClearArchiveUnrecoverable",

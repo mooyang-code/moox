@@ -62,7 +62,7 @@ func TestSnapshotForRole_ViewReadyAfterRestoreAndFollowing(t *testing.T) {
 	assert.False(t, state.Snapshot(context.Background()).Ready)
 }
 
-// 主服务的 Outbox 积压与 EventBus 断连只上报、不影响就绪：EventBus 故障时 primary 照常服务。
+// 主服务的完成事件转发积压与 EventBus 断连只上报、不影响就绪：EventBus 故障时 primary 照常服务。
 func TestSnapshotForRole_PrimaryStaysReadyWithOutboxBacklog(t *testing.T) {
 	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
 	require.NoError(t, err)

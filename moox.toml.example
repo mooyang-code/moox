@@ -453,13 +453,3 @@ factor = ["factor-engine", "archive-worker"]
 
 [egress_proxy]
 http_domains = ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]
-
-[egress_proxy.dns]
-refresh_interval_seconds = 300
-request_timeout_ms = 3000
-lookup_timeout_ms = 1500
-probe_timeout_ms = 500
-probe_port = 443
-cache_ttl_seconds = 300
-max_ips_per_domain = 4
-domains = ["data-api.binance.vision", "api.binance.com", "fapi.binance.com"]

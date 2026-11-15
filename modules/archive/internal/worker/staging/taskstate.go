@@ -64,6 +64,23 @@ ON CONFLICT (space_id, dataset_id) DO UPDATE SET scan_watermark = excluded.scan_
 	return err
 }
 
+// ChangeCursor 返回任务读 Storage 变更日志的位点（上一次完整成功的复核或手动运行开始时已扫描到的位置）；没有时 ok 为假。
+func (s *Store) ChangeCursor(ctx context.Context, spaceID, datasetID string) (storeID string, sequence uint64, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT change_store_id, change_sequence FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&storeID, &sequence)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	return storeID, sequence, err == nil && storeID != "", err
+}
+
+// SetChangeCursor 记下变更日志的位点。
+func (s *Store) SetChangeCursor(ctx context.Context, spaceID, datasetID, storeID string, sequence uint64) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, change_store_id, change_sequence) VALUES (?, ?, ?, ?)
+ON CONFLICT (space_id, dataset_id) DO UPDATE SET change_store_id = excluded.change_store_id, change_sequence = excluded.change_sequence`,
+		spaceID, datasetID, storeID, sequence)
+	return err
+}
+
 // BindTask 把数据集的暂存状态绑定到任务 ID，并记下任务的用途与目录名。本地已绑定的 ID 与 taskID 不同，说明任务被删除后重建过：
 // 旧任务遗留的水位、起点、暂存数据和分区状态一律丢弃，新任务从自己的设置开始。目录名建好后不改，同一任务 ID 不会变。
 func (s *Store) BindTask(ctx context.Context, task Task, taskID string) error {

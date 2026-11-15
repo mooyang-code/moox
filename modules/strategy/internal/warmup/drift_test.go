@@ -44,11 +44,11 @@ func barIndexAt(t *testing.T, hours int) int64 {
 	return bar.BarIndex
 }
 
-// warmedDrift 返回会话预热结果里池的 drift 状态。
-func warmedDrift(t *testing.T, session store.Session) *pool.DriftState {
+// warmedDrift 返回预热出的状态里池的 drift 状态。
+func warmedDrift(t *testing.T, raw json.RawMessage) *pool.DriftState {
 	t.Helper()
 	var state engine.State
-	if err := json.Unmarshal([]byte(session.WarmState), &state); err != nil {
+	if err := json.Unmarshal(raw, &state); err != nil {
 		t.Fatal(err)
 	}
 	decoded, err := pool.DecodeState(state.Pool)
@@ -82,11 +82,12 @@ func TestDriftWarmUpStartsAtAllocationStart(t *testing.T) {
 	if !first.WarmedThrough.Equal(origin.Add(100 * time.Hour)) {
 		t.Fatalf("预热终点 %v", first.WarmedThrough)
 	}
-	if drift := warmedDrift(t, first); drift == nil || drift.Start != barIndexAt(t, 80) {
+	firstState := h.state(t)
+	if drift := warmedDrift(t, firstState.StateJSON); drift == nil || drift.Start != barIndexAt(t, 80) {
 		t.Fatalf("漂移起点应是 allocation.start 那一根：%+v", drift)
 	}
 
-	// 停用再启用：旧会话关闭，新会话从 start 重新预热，不带旧会话的任何状态。
+	// 停用再启用（DSL、绑定与成员都没变，期间没有新收盘的期）：旧会话关闭，状态原样挂到新会话，不重新预热。
 	ctx := context.Background()
 	previous := "session-1"
 	if err := h.repo.DisableInstance(ctx, "i1", &previous, nil, "", origin); err != nil {
@@ -107,8 +108,9 @@ func TestDriftWarmUpStartsAtAllocationStart(t *testing.T) {
 		second, err = h.repo.GetSession(ctx, next)
 		return err == nil && second.WarmedThrough != nil
 	})
-	if second.WarmState != first.WarmState {
-		t.Fatalf("重新启用后应从 start 重新预热、结果与第一次相同：\n第一次 %s\n第二次 %s", first.WarmState, second.WarmState)
+	secondState := h.state(t)
+	if secondState.SessionID != next || !secondState.BarEndTime.Equal(*second.WarmedThrough) || string(secondState.StateJSON) != string(firstState.StateJSON) {
+		t.Fatalf("重新启用后应沿用原来的状态：\n第一次 %s\n第二次 %+v", firstState.StateJSON, secondState)
 	}
 }
 
@@ -178,7 +180,7 @@ func TestDriftWarmUpInitialRatiosLandOnAt(t *testing.T) {
 	}
 	h.manager.Start(context.Background(), "i1", "session-1")
 	eventually(t, "预热完成", func() bool { return h.session(t).WarmedThrough != nil })
-	if drift := warmedDrift(t, h.session(t)); drift == nil || drift.Start != barIndexAt(t, 90) {
+	if drift := warmedDrift(t, h.state(t).StateJSON); drift == nil || drift.Start != barIndexAt(t, 90) {
 		t.Fatalf("预热状态的漂移起点应是 at：%+v", drift)
 	}
 }

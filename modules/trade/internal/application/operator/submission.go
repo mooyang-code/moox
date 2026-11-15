@@ -27,6 +27,39 @@ type submissionRequest struct {
 	LogicalAccountID string `json:"logical_account_id"`
 }
 
+// PlaceOrder 是人工下单的唯一入口，按组合的控制模式选流程：
+//   - 自主下单的组合（MANUAL）：SubmitOrder，不暂停组合、不撤别的订单，本地受理后由后台提交；
+//   - 策略驱动的组合：PlaceManualOrder，先暂停组合、撤掉活动的 TARGET 订单再下单，完成后保持暂停。
+//
+// 同一个 action_id 重试时沿用第一次受理的流程，不因为期间控制模式或成员关系变了换一条。
+// 执行账户必须是 command.LogicalAccountID 的成员：页面是在这个组合里发起的，不能暂停到别的组合上。
+func (s *Service) PlaceOrder(ctx context.Context, command SubmitOrderCommand) (ManualOrderResult, error) {
+	if s == nil || s.Store == nil {
+		return ManualOrderResult{}, ErrServiceConfig
+	}
+	existing, err := s.Store.GetOperatorAction(ctx, command.SpaceID, command.ActionID)
+	switch {
+	case err == nil && existing.ActionType == string(operatordomain.ActionSubmitOrder):
+		return s.SubmitOrder(ctx, command)
+	case err == nil:
+		// 接管下单的重试；动作类型对不上的也交给它，按幂等冲突拒绝。
+		return s.PlaceManualOrder(ctx, command.ManualOrderCommand)
+	case !errors.Is(err, gorm.ErrRecordNotFound):
+		return ManualOrderResult{}, err
+	}
+	owner, _, err := s.Store.FindLogicalAccountByTradingAccount(ctx, command.SpaceID, command.TradingAccountID)
+	if err != nil {
+		return ManualOrderResult{}, err
+	}
+	if owner.ControlMode == "MANUAL" {
+		return s.SubmitOrder(ctx, command)
+	}
+	if owner.LogicalAccountID != command.LogicalAccountID {
+		return ManualOrderResult{}, fmt.Errorf("%w: 执行账户不在这个组合里", ErrInvalidCommand)
+	}
+	return s.PlaceManualOrder(ctx, command.ManualOrderCommand)
+}
+
 // SubmitOrder only accepts and reserves locally. The worker owns exchange I/O.
 func (s *Service) SubmitOrder(ctx context.Context, command SubmitOrderCommand) (result ManualOrderResult, retErr error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)

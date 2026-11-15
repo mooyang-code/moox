@@ -6,15 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/attention"
-	"github.com/mooyang-code/moox/modules/collector/internal/dnscache"
-	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/eastmoneylimit"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
@@ -25,11 +21,11 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	collectorresult "github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
@@ -61,9 +57,6 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if err != nil {
 		log.ErrorContextf(ctx, "加载 collector 配置失败: %v", err)
 		return nil, err
-	}
-	if spaceID := marketFetchSpaceID(); spaceID == "" {
-		return nil, fmt.Errorf("MOOX_SPACE_ID is required for collector market scheduling")
 	}
 	dbm, err := store.Open(&store.Options{
 		Path:            cfg.Database.Path,
@@ -140,41 +133,8 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		FieldOffers: marketwiring.FieldOffers(),
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
-	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer, marketwiring.FeedLabels())
+	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
 	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
-	dnsDomains := append([]string(nil), cfg.DNS.Domains...)
-	if cfg.EgressProxy.DNS.Enabled() {
-		dnsDomains = append(dnsDomains, cfg.EgressProxy.DNS.Domains...)
-	}
-	localDNS := dnscache.New(dnscache.Config{Domains: dnsDomains, RefreshInterval: cfg.DNS.RefreshInterval, ResolveTimeout: cfg.DNS.ResolveTimeout, Nameservers: cfg.DNS.Nameservers})
-	var remoteDNS collectordns.DomainResolver
-	if cfg.EgressProxy.DNS.Enabled() {
-		remoteDNS = collectordns.NewEgressClient(process.gateway, cfg.EgressProxy.DNS.RequestTimeout)
-	}
-	refreshInterval, cacheTTL := cfg.DNS.RefreshInterval, cfg.EgressProxy.DNS.CacheTTL
-	if cfg.EgressProxy.DNS.Enabled() {
-		refreshInterval = cfg.EgressProxy.DNS.RefreshInterval
-	} else {
-		cacheTTL = 0 // preserve dnscache's last-good local snapshot semantics
-	}
-	var dnsMetrics *collectordns.Metrics
-	if metrics, metricsErr := collectordns.NewMetrics(prometheus.DefaultRegisterer); metricsErr != nil {
-		log.WarnContextf(ctx, "collector DNS resolver metrics disabled: %v", metricsErr)
-	} else {
-		dnsMetrics = metrics
-	}
-	dnsPersistencePath := ""
-	if cfg.EgressProxy.DNS.Enabled() {
-		dnsPersistencePath = filepath.Join(filepath.Dir(cfg.Database.Path), "dns_resolver_snapshot.json")
-	}
-	dnsSnapshot := collectordns.NewCoordinator(collectordns.CoordinatorConfig{Local: localDNS, Remote: remoteDNS, RemoteDomains: cfg.EgressProxy.DNS.Domains, Domains: dnsDomains, Interval: refreshInterval, CacheTTL: cacheTTL, Metrics: dnsMetrics, PersistencePath: dnsPersistencePath})
-	if err := dnsSnapshot.RestoreLastGoodSnapshot(); err != nil {
-		log.WarnContextf(ctx, "restore collector DNS last-good snapshot failed: %v", err)
-	}
-	if err := dnsSnapshot.Refresh(ctx); err != nil {
-		log.WarnContextf(ctx, "collector initial DNS snapshot refresh failed: %v", err)
-	}
-	registerDNSRefreshSchedule(s, dnsSnapshot, process)
 	subjectSyncer, err := registerSubjectSyncRuntime(s, cfg, process, dbm.TagSyncRuns())
 	if err != nil {
 		return nil, err
@@ -198,10 +158,10 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	}
 	bus.start(process)
 	control := &collectorControl{}
-	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control); err != nil {
+	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control, bus); err != nil {
 		return nil, err
 	}
-	if err := registerHealth(s, cfg, dbm, process, control, dnsSnapshot); err != nil {
+	if err := registerHealth(s, cfg, dbm, process, control); err != nil {
 		return nil, err
 	}
 	registerMetricsReporter(s, realtimeInventory)
@@ -346,16 +306,12 @@ func metricsTimerHandler(inventory realtimeInventoryReconciler, reporter metrics
 	}
 }
 
-type dnsStatusProvider interface {
-	Status() collectordns.Status
-}
-
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, control *collectorControl, dns ...dnsStatusProvider) error {
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, control *collectorControl) error {
 	if cfg == nil {
 		return nil
 	}
 	state := health.New("collector", "collector", "", "")
-	state.SnapshotFunc = collectorHealthSnapshot(cfg, dbm, state, dns...)
+	state.SnapshotFunc = collectorHealthSnapshot(cfg, dbm, state)
 	if s == nil {
 		return fmt.Errorf("collector health service is unavailable")
 	}
@@ -380,7 +336,7 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Ru
 	return nil
 }
 
-func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State, dns ...dnsStatusProvider) healthz.SnapshotFunc {
+func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		// Do not synchronously ping SQLite from /readyz. The collector's single
 		// SQLite connection is intentionally shared by the scheduler and the
@@ -393,79 +349,21 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State,
 			"database":       databaseReady,
 			"gateway_caller": cfg.GatewayClient.Caller,
 		}
-		if cfg.EgressProxy.DNS.Enabled() {
-			if len(dns) > 0 && dns[0] != nil {
-				status := dns[0].Status()
-				rsp.Details["dns_resolver"] = map[string]any{
-					"enabled":             true,
-					"source":              status.Source,
-					"hash":                status.Hash,
-					"route_count":         status.RouteCount,
-					"route_age_seconds":   status.RouteAgeSeconds,
-					"last_refresh_at":     formatHealthTime(status.LastRefreshAt),
-					"last_success_at":     formatHealthTime(status.LastSuccessAt),
-					"last_error_category": status.LastErrorCategory,
-				}
-			} else {
-				rsp.Details["dns_resolver"] = map[string]any{"enabled": true, "source": "unavailable"}
-			}
-		} else {
-			rsp.Details["dns_resolver"] = map[string]any{"enabled": false, "source": "local"}
-		}
 		return rsp
 	}
 }
 
-func formatHealthTime(value time.Time) string {
-	if value.IsZero() {
-		return ""
-	}
-	return value.UTC().Format(time.RFC3339Nano)
-}
-
-type dnsSnapshotter interface {
-	Due(time.Time) bool
-	Refresh(context.Context) error
-	Snapshot() map[string]sources.DNSResolution
-}
-
-func registerDNSRefreshSchedule(s *server.Server, cache dnsSnapshotter, process *Runtime) {
-	if s == nil || cache == nil {
-		return
-	}
-	service := s.Service("trpc.moox.collector.dns.timer")
-	if service == nil {
-		log.Warn("collector DNS timer service is not configured, skip register")
-		return
-	}
-	timer.RegisterHandlerService(service, func(ctx context.Context) error {
-		if !cache.Due(time.Now().UTC()) {
-			return nil
-		}
-		process.launch(func() {
-			if err := cache.Refresh(process.ctx); err != nil {
-				log.WarnContextf(ctx, "collector DNS snapshot refresh failed: %v", err)
-			}
-		})
-		return nil
-	})
-}
-
 // registerCollectorBackground 启动 Collector 的后台任务：K 线重采样与保留期清理。
+// 维护与清理每轮现取管理集合（managedSpaces，与采集计划同一份名单）；合成覆盖 barclock 登记的全部市场。
 // 实时行情采集已全部由 SCF 定时器按采集计划触发（见 registerFetchPlanManager），这里不再有任何行情调度。
 func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, metrics *marketfetch.Metrics, process *Runtime, bus *eventBusRuntime) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
 	metadataSource := storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway))
-	spaceIDs := marketFetchSpaceIDs()
-	if len(spaceIDs) == 0 {
-		log.Warn("collector background tasks have no configured spaces")
-		return
-	}
 	var resample *resampleRuntime
 	if cfg.KlineResample.Enabled {
-		runtime, resampleErr := newResampleRuntime(process, dbm, cfg, metadataSource, spaceIDs, bus)
+		runtime, resampleErr := newResampleRuntime(process, dbm, cfg, metadataSource, resampleSpaceIDs(), bus)
 		if resampleErr != nil {
 			log.WarnContextf(process.ctx, "collector kline resample disabled: %v", resampleErr)
 		} else {
@@ -478,6 +376,25 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 	maintenanceRunner := marketfetch.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.offset(), retentionConfig.timeout(), func(passCtx context.Context) error {
 		now := time.Now().UTC()
 		var passErrors []error
+		// 先封存搁置的补写通知再清理：合成关闭时没有合成定时器来封存，补采作业结束时那一次失败的话只剩这里兜底，
+		// 否则没封存的通知过了保留期会被直接清掉。
+		if bus != nil {
+			if err := sealStaleNotices(passCtx, bus.notices, now); err != nil {
+				passErrors = append(passErrors, fmt.Errorf("封存补写通知: %w", err))
+			}
+		}
+		// 补写通知与发件箱的清理不分空间，每轮都做：合成关闭、当前没有任何空间在管理集合里时也一样。
+		if err := cleanupNoticeState(passCtx, dbm.Resample(), now); err != nil {
+			passErrors = append(passErrors, err)
+		}
+		// 每轮现取管理集合（与采集计划同一份名单），任务增删、空间启停后下一轮就生效。
+		spaceIDs, err := managedSpaces(passCtx, cfg, dbm)
+		if err != nil {
+			return errors.Join(append(passErrors, fmt.Errorf("读取管理集合失败: %w", err))...)
+		}
+		if len(spaceIDs) == 0 {
+			return errors.Join(passErrors...)
+		}
 		for _, spaceID := range spaceIDs {
 			metrics.ObserveMaintenanceDeletes(spaceID, nil)
 		}
@@ -489,11 +406,6 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 			}
 			spaceID := spaceIDs[(start+offset)%len(spaceIDs)]
 			deletedRows := make(map[string]int64)
-			if resample != nil && offset == 0 {
-				if err := resample.cleanup(passCtx, now); err != nil {
-					passErrors = append(passErrors, err)
-				}
-			}
 			backfillDeleted, err := dbm.Backfill().CleanupFinishedJobs(passCtx, spaceID, now.Add(-autoBackfillRetention), now.Add(-manualBackfillRetention),
 				maintenanceBudget(retentionConfig.MaxRowsPerPass, len(spaceIDs), offset))
 			if err != nil {
@@ -566,36 +478,13 @@ func nextMaintenanceSpaceCursor(current, spaces int) int {
 	return (current + 1) % spaces
 }
 
-func marketFetchSpaceID() string {
-	spaceIDs := marketFetchSpaceIDs()
-	if len(spaceIDs) == 0 {
-		return ""
-	}
-	return spaceIDs[0]
-}
-
-func marketFetchSpaceIDs() []string {
-	raw := strings.TrimSpace(os.Getenv("MOOX_SPACE_IDS"))
-	if raw == "" {
-		raw = os.Getenv("MOOX_SPACE_ID")
-	}
-	return parseMarketFetchSpaceIDs(raw)
-}
-
-func parseMarketFetchSpaceIDs(raw string) []string {
-	seen := make(map[string]struct{})
-	spaceIDs := make([]string, 0, 2)
-	for _, value := range strings.Split(raw, ",") {
-		spaceID := strings.TrimSpace(value)
-		if spaceID == "" {
-			continue
-		}
-		key := strings.ToLower(spaceID)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		spaceIDs = append(spaceIDs, spaceID)
+// resampleSpaceIDs 返回 K 线合成的消费者与兜底检查覆盖的空间：barclock 登记的全部市场（没有登记交易日历的空间本来就不能合成）。
+// 名单是固定的，新建合成任务不需要重启；Collector 的 EventBus 凭据也按这份名单授权。
+func resampleSpaceIDs() []string {
+	markets := barclock.Markets()
+	spaceIDs := make([]string, 0, len(markets))
+	for _, market := range markets {
+		spaceIDs = append(spaceIDs, market.ID)
 	}
 	return spaceIDs
 }

@@ -124,7 +124,7 @@ func admitTarget(
 	}
 	// 过期最先判断：停用再启用策略后，旧会话还在路上的目标多半已经过期，按过期终止，不当成授权冲突告警。
 	// 目标可能早于生效时刻送到（策略与交易的时钟、传输不完全对齐）：有效期内照常接收，执行器保持 PENDING
-	// 到 effective_at 才执行，过了 valid_until 才终止。
+	// 到 bar_end_time 才执行，过了 valid_until 才终止。
 	if !now.Before(request.GetValidUntil().AsTime()) {
 		return admittedTarget{}, jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}, true
 	}
@@ -252,7 +252,6 @@ func acceptTarget(
 		AcceptedAt:       now.UnixMilli(),
 	}
 	record.BarEndTime = request.GetBarEndTime().AsTime().UTC().UnixMilli()
-	record.EffectiveAt = request.GetEffectiveAt().AsTime().UTC().UnixMilli()
 	record.ValidUntil = request.GetValidUntil().AsTime().UTC().UnixMilli()
 	timeout := opts.ResolveTimeout
 	if timeout <= 0 {
@@ -275,7 +274,7 @@ func acceptTarget(
 	// Keep the historical receipt index unique across independent sessions.
 	receiptRunnerID := instanceID + "@" + request.GetSessionId()
 	receipt := store.TargetReceiptRecord{
-		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), RunnerID: receiptRunnerID, InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(), LogicalAccountID: request.GetLogicalAccountId(), CommandSequence: sequence, BarEndTime: record.BarEndTime, EffectiveAt: record.EffectiveAt, ValidUntil: record.ValidUntil, RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime, ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets), AcceptedAt: now.UnixMilli(),
+		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), RunnerID: receiptRunnerID, InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(), LogicalAccountID: request.GetLogicalAccountId(), CommandSequence: sequence, BarEndTime: record.BarEndTime, ValidUntil: record.ValidUntil, RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime, ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets), AcceptedAt: now.UnixMilli(),
 	}
 	var accepted bool
 	_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt)

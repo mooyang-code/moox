@@ -11,25 +11,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RenderEgressConfig writes the independent HTTP and DNS upstream policy.
+// RenderEgressConfig 写出口代理的 HTTP 域名白名单。
 func RenderEgressConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("runtime_config: snapshot is required")
 	}
-	cfg := snapshot.Manifest.EgressProxy
-	dns := cfg.DNS
-	raw, err := replaceYAMLMapping(existing, "domains", valueNode(normalizedDomains(cfg.HTTPDomains)))
-	if err != nil {
-		return nil, err
-	}
-	return replaceYAMLMapping(raw, "dns", orderedMapping(
-		mappingField{"domains", normalizedDomains(dns.Domains)},
-		mappingField{"lookup_timeout_ms", dns.LookupTimeoutMS},
-		mappingField{"probe_timeout_ms", dns.ProbeTimeoutMS},
-		mappingField{"probe_port", dns.ProbePort},
-		mappingField{"cache_ttl_seconds", dns.CacheTTLSeconds},
-		mappingField{"max_ips_per_domain", dns.MaxIPsPerDomain},
-	))
+	return replaceYAMLMapping(existing, "domains", valueNode(normalizedDomains(snapshot.Manifest.EgressProxy.HTTPDomains)))
 }
 
 // RenderCollectorRuntimeConfig renders Collector's egress and SCF settings; the scf-collector key ID is filled in at install time from host material.
@@ -37,21 +24,9 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 	if snapshot == nil {
 		return nil, fmt.Errorf("runtime_config: snapshot is required")
 	}
-	cfg := snapshot.Manifest.EgressProxy
-	dns := cfg.DNS
 	rendered, err := replaceYAMLMapping(existing, "egress_proxy", orderedMapping(
-		mappingField{"domains", normalizedDomains(cfg.HTTPDomains)},
-		mappingField{"dns", orderedMapping(
-			mappingField{"domains", normalizedDomains(dns.Domains)},
-			mappingField{"refresh_interval", durationSeconds(dns.RefreshIntervalSeconds)},
-			mappingField{"request_timeout", durationMilliseconds(dns.RequestTimeoutMS)},
-			mappingField{"cache_ttl", durationSeconds(dns.CacheTTLSeconds)},
-		)},
+		mappingField{"domains", normalizedDomains(snapshot.Manifest.EgressProxy.HTTPDomains)},
 	))
-	if err != nil {
-		return nil, err
-	}
-	rendered, err = replaceYAMLMapping(rendered, "dns_resolver", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -177,14 +152,6 @@ func normalizedDomains(domains []string) []string {
 		result[i] = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
 	}
 	return result
-}
-
-func durationSeconds(value int) string {
-	return fmt.Sprintf("%ds", value)
-}
-
-func durationMilliseconds(value int) string {
-	return fmt.Sprintf("%dms", value)
 }
 
 type mappingField struct {

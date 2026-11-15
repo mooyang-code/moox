@@ -415,7 +415,7 @@ func (m *MgrService) ListArchivePartitions(ctx context.Context, req *archivepb.L
 	if err != nil {
 		return &archivepb.ListArchivePartitionsRsp{RetInfo: inner(err)}, nil
 	}
-	status, err := m.svc.workerStatus(ctx, m.svc.clock())
+	status, err := m.svc.workerStatus(ctx)
 	if err != nil {
 		return &archivepb.ListArchivePartitionsRsp{RetInfo: inner(err)}, nil
 	}
@@ -435,7 +435,7 @@ func (m *MgrService) GetArchivePartition(ctx context.Context, req *archivepb.Get
 	if err != nil {
 		return &archivepb.GetArchivePartitionRsp{RetInfo: fail(err)}, nil
 	}
-	status, err := m.svc.workerStatus(ctx, m.svc.clock())
+	status, err := m.svc.workerStatus(ctx)
 	if err != nil {
 		return &archivepb.GetArchivePartitionRsp{RetInfo: inner(err)}, nil
 	}
@@ -600,7 +600,7 @@ func (s *Service) taskViews(ctx context.Context, space string, tasks []store.Tas
 	if err != nil {
 		return nil, err
 	}
-	status, err := s.workerStatus(ctx, now)
+	status, err := s.workerStatus(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +614,7 @@ func (s *Service) taskViews(ctx context.Context, space string, tasks []store.Tas
 	for _, task := range tasks {
 		key := task.SpaceID + "/" + task.DatasetID
 		view := s.taskToPB(task, now)
-		in := healthInput{Now: now, Task: task, OpenParts: openByTask[key], OldestQueued: queued[key], WorkerActive: status.active, WorkerLastSeen: status.lastSeen,
+		in := healthInput{Now: now, Task: task, OpenParts: openByTask[key], OldestQueued: queued[key], WorkerLastSeen: status.lastSeen,
 			Lookback: s.cfg.Schedule.MinLookback, SpaceTZ: s.cfg.Space(task.SpaceID).TZ, SpaceLocalClose: s.cfg.Space(task.SpaceID).LocalClose,
 			RemoteEnabled: status.remoteEnabled, Remote: backlogs[key]}
 		if run, ok := lastRuns[key]; ok {
@@ -661,39 +661,19 @@ func (s *Service) oldestQueued(ctx context.Context, space string) (map[string]ti
 
 // workerState 是 worker 的汇总状态。
 type workerState struct {
-	// active：有活动 worker；lastSeen：任一 worker 最近一次心跳的时间。
-	active   bool
+	// lastSeen：worker 最近一次心跳的时间，从未心跳时为零值。
 	lastSeen time.Time
-	// remoteEnabled：对象存储已启用。有活动 worker 时看它，没有时看最近一次心跳的那条 worker 记录；没有任何记录时视为未启用。
+	// remoteEnabled：worker 最近一次心跳报告启用了对象存储；从未心跳时视为未启用。
 	remoteEnabled bool
 }
 
 // workerStatus 汇总 worker 的状态。
-func (s *Service) workerStatus(ctx context.Context, now time.Time) (workerState, error) {
-	workers, err := s.store.ListWorkers(ctx)
-	if err != nil {
+func (s *Service) workerStatus(ctx context.Context) (workerState, error) {
+	w, ok, err := s.store.GetWorker(ctx)
+	if err != nil || !ok {
 		return workerState{}, err
 	}
-	var out workerState
-	var reference *store.Worker
-	for i, w := range workers {
-		switch {
-		case w.Active(now) && (reference == nil || !reference.Active(now)):
-			reference = &workers[i]
-		case reference == nil || !reference.Active(now) && w.LastHeartbeat.After(reference.LastHeartbeat):
-			reference = &workers[i]
-		}
-		if w.Active(now) {
-			out.active = true
-		}
-		if w.LastHeartbeat.After(out.lastSeen) {
-			out.lastSeen = w.LastHeartbeat
-		}
-	}
-	if reference != nil {
-		out.remoteEnabled = objectStoreFromJSON(reference.ObjectStoreJSON).GetEndpoint() != ""
-	}
-	return out, nil
+	return workerState{lastSeen: w.LastHeartbeat, remoteEnabled: objectStoreFromJSON(w.ObjectStoreJSON).GetEndpoint() != ""}, nil
 }
 
 func (m *MgrService) GetArchiveOverview(ctx context.Context, _ *archivepb.GetArchiveOverviewReq) (*archivepb.GetArchiveOverviewRsp, error) {
@@ -704,23 +684,12 @@ func (m *MgrService) GetArchiveOverview(ctx context.Context, _ *archivepb.GetArc
 	}
 	now := s.clock()
 	rsp := &archivepb.GetArchiveOverviewRsp{RetInfo: success(), Avoidance: avoidanceToPB(s.avoidance())}
-	workers, err := s.store.ListWorkers(ctx)
+	worker, ok, err := s.store.GetWorker(ctx)
 	if err != nil {
 		return &archivepb.GetArchiveOverviewRsp{RetInfo: inner(err)}, nil
 	}
-	var activeWorker string
-	for _, w := range workers {
-		info := workerToPB(w, now)
-		if w.Active(now) && rsp.Worker == nil {
-			rsp.Worker = info
-			activeWorker = w.WorkerID
-		} else {
-			rsp.StaleWorkers = append(rsp.StaleWorkers, info)
-		}
-	}
-	if rsp.Worker == nil && len(rsp.StaleWorkers) > 0 {
-		rsp.Worker = rsp.StaleWorkers[0]
-		rsp.StaleWorkers = rsp.StaleWorkers[1:]
+	if ok {
+		rsp.Worker = workerToPB(worker, now)
 	}
 	active, err := s.store.ListActiveRuns(ctx, space)
 	if err != nil {
@@ -753,8 +722,8 @@ func (m *MgrService) GetArchiveOverview(ctx context.Context, _ *archivepb.GetArc
 			rsp.Alerts = append(rsp.Alerts, fmt.Sprintf("%s：%s", v.GetDatasetId(), v.GetHealthReason()))
 		}
 	}
-	if rsp.EnabledTaskCount > 0 && activeWorker == "" {
-		rsp.Alerts = append(rsp.Alerts, "没有活动的归档 worker")
+	if rsp.EnabledTaskCount > 0 && !rsp.GetWorker().GetActive() {
+		rsp.Alerts = append(rsp.Alerts, "归档 worker 不在线")
 	}
 	sort.Strings(rsp.Alerts)
 	return rsp, nil

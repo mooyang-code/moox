@@ -9,7 +9,7 @@
     @cancel="handleCancel"
     unmount-on-close
   >
-    <div :class="asideDark ? 'aside dark' : 'aside'">
+    <div class="aside">
       <Logo />
       <a-layout-sider class="layout_side" :width="220">
         <a-scrollbar style="height: 100%; overflow: auto" outer-class="scrollbar"><Menu :route-tree="routeTree" /></a-scrollbar>
@@ -25,7 +25,7 @@ import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
 const themeStore = useThemeConfig();
-const { collapsed, asideDark } = storeToRefs(themeStore);
+const { collapsed } = storeToRefs(themeStore);
 const routerStore = useRoutesConfigStore();
 const { routeTree } = storeToRefs(routerStore);
 
@@ -39,9 +39,6 @@ const handleCancel = () => {
   display: flex;
   flex-direction: column;
   height: 100vh;
-}
-.dark {
-  background: #232324;
 }
 .layout_side {
   flex: 1;

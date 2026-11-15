@@ -118,8 +118,9 @@ type Backfiller struct {
 	// Executor 返回数据集的补采执行端（scf 或 local），为空时按 scf；Local 是本地执行端（collector-stream 里的 MarketFetchExecutor）。
 	Executor func(ctx context.Context, spaceID, datasetID string) (string, error)
 	Local    Invoker
-	// Notify 在补采作业成功后调用（补齐通知：因子据此立即推进连续水位并补算），失败只记日志；absent 是确认行情源没有的标的。
-	Notify func(ctx context.Context, filled []FilledRange) error
+	// FlushNotices 在补采作业结束后调用：把分块成功时记下的补写通知封存成 event.collector.kline.backfilled
+	// （因子据此立即推进连续水位并补算，合成据此重算）。失败只记日志，通知留在库里，由维护轮（合成开启时还有合成的定时器）再封存。
+	FlushNotices func(ctx context.Context) error
 	// Paused 报告空间是否处于采集暂停；暂停期间不再认领分块（含补位），已在执行的分块自然结束。为空表示不暂停。
 	Paused func(ctx context.Context, spaceID string) (bool, error)
 	// BaseCtx 是异步执行分块的上下文（进程生命周期）。
@@ -143,24 +144,6 @@ type Backfiller struct {
 	workers        sync.WaitGroup
 	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
 	tickMu sync.Mutex
-}
-
-// FilledRange 是补采补齐的一段（数据集, 频率, [From, To)）。
-type FilledRange struct {
-	SpaceID   string
-	DatasetID string
-	Frequency string
-	From, To  time.Time
-	Absent    []string
-	// AbsentSeries 是统一数据集上按序列确认行情源没有的（标的、series_tag）：只扣这一条序列，同标的的另一个市场照常算。
-	// 单序列数据集的确认缺失（series_tag 为空）仍用 Absent。
-	AbsentSeries []FilledSeries
-}
-
-// FilledSeries 是一条序列的身份：标的加 series_tag。
-type FilledSeries struct {
-	SubjectID string
-	SeriesTag string
 }
 
 func (b *Backfiller) now() time.Time {
@@ -329,7 +312,12 @@ func (b *Backfiller) List(ctx context.Context, spaceID string, filter store.Back
 
 // Cancel 取消作业：尚未开始的分块不再执行，运行中的分块等其结束。
 func (b *Backfiller) Cancel(ctx context.Context, jobID string) error {
-	return b.Store.CancelJob(ctx, jobID)
+	if err := b.Store.CancelJob(ctx, jobID); err != nil {
+		return err
+	}
+	// 取消前已成功的分块记了补写通知，一并发出。
+	b.flushNotices(ctx, jobID)
+	return nil
 }
 
 // Retry 把已失败作业的失败分块退回待执行，由下一次调度继续执行；返回退回的分块数。
@@ -404,8 +392,9 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 			}
 			if status == store.BackfillSucceeded {
 				b.advanceWatermark(ctx, job)
-				b.notifyFilled(ctx, job)
 			}
+			// 失败的作业里已成功的分块也记了补写通知，一并发出。
+			b.flushNotices(ctx, job.JobID)
 		}
 	}
 	return nil
@@ -711,65 +700,13 @@ func bars(chunk store.BackfillChunk) int {
 	return barCount(frequency, chunk.From, chunk.To)
 }
 
-// notifyFilled 在作业成功后按（数据集, 频率）发补齐通知。通知只是加快下游，失败只记日志（因子另有定时读回保底）。
-// 确认没有的标的按库里的已确认缺失逐条带出精确的数据集、频率、标的与区间（进程重启不丢）。
-func (b *Backfiller) notifyFilled(ctx context.Context, job store.BackfillJob) {
-	if b.Notify == nil {
+// flushNotices 在作业结束后把补写通知封存成事件。
+func (b *Backfiller) flushNotices(ctx context.Context, jobID string) {
+	if b.FlushNotices == nil {
 		return
 	}
-	_, chunks, err := b.Store.GetJob(ctx, job.JobID)
-	if err != nil {
-		log.WarnContextf(ctx, "collector backfill filled notification skipped job=%s: %v", job.JobID, err)
-		return
-	}
-	ranges := map[string]*FilledRange{}
-	var order []string
-	for _, chunk := range chunks {
-		key := chunk.DatasetID + "|" + chunk.Frequency
-		item := ranges[key]
-		if item == nil {
-			item = &FilledRange{SpaceID: job.SpaceID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, From: chunk.From, To: chunk.To}
-			ranges[key] = item
-			order = append(order, key)
-		}
-		if chunk.From.Before(item.From) {
-			item.From = chunk.From
-		}
-		if chunk.To.After(item.To) {
-			item.To = chunk.To
-		}
-	}
-	filled := make([]FilledRange, 0, len(order))
-	for _, key := range order {
-		item := *ranges[key]
-		filled = append(filled, item)
-		absences, err := b.Store.AbsencesIn(ctx, job.SpaceID, item.DatasetID, item.Frequency, "", nil, item.From, item.To)
-		if err != nil {
-			log.WarnContextf(ctx, "collector backfill filled notification skips source absences job=%s dataset=%s: %v", job.JobID, item.DatasetID, err)
-			continue
-		}
-		for _, absence := range absences {
-			from, to := absence.From, absence.To
-			if from.Before(item.From) {
-				from = item.From
-			}
-			if to.After(item.To) {
-				to = item.To
-			}
-			confirmed := FilledRange{SpaceID: job.SpaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, From: from, To: to}
-			if absence.SeriesTag != "" {
-				confirmed.AbsentSeries = []FilledSeries{{SubjectID: absence.SubjectID, SeriesTag: absence.SeriesTag}}
-			} else {
-				confirmed.Absent = []string{absence.SubjectID}
-			}
-			filled = append(filled, confirmed)
-		}
-	}
-	if len(filled) == 0 {
-		return
-	}
-	if err := b.Notify(ctx, filled); err != nil {
-		log.WarnContextf(ctx, "collector backfill filled notification failed job=%s: %v", job.JobID, err)
+	if err := b.FlushNotices(ctx); err != nil {
+		log.WarnContextf(ctx, "collector backfill notice flush failed job=%s: %v", jobID, err)
 	}
 }
 

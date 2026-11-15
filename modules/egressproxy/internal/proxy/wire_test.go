@@ -49,9 +49,6 @@ func TestNativePBAndJSONWire(t *testing.T) {
 		require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 		require.Equal(t, int32(429), rsp.Status)
 		require.Equal(t, `{"retry":true}`, string(rsp.Body))
-		dns, err := proxyClient.ResolveDomains(context.Background(), &egresspb.ResolveDomainsReq{Domains: []string{"api.binance.com"}})
-		require.NoError(t, err)
-		require.Equal(t, commonpb.ErrorCode_INNER_ERR, dns.GetRetInfo().GetCode())
 		denied := request()
 		denied.Host = "evil.test"
 		rsp, err = proxyClient.Do(context.Background(), denied)

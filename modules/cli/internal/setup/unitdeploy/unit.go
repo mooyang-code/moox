@@ -48,7 +48,7 @@ func unitConfiguration(snapshot *setupconfig.Snapshot, profile string) ([]byte, 
 	return nil, nil
 }
 
-// defaultSpaceID 是 Collector 行情调度的默认空间。
+// defaultSpaceID 是 collector-stream 实例服务的空间（同一空间只部署一个实例）。
 const defaultSpaceID = "crypto"
 
 // collectorStorageAppID 是 Collector 与 SCF 函数写 Storage 的应用身份，collector-stream 沿用它。
@@ -100,11 +100,6 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 		if id == "admin" {
 			// 证书巡检每次从本机主机策略缓存读取告警渠道（HostAgent 从 Monitor 同步）。
 			values["MOOX_HOST_POLICY_FILE"] = hostpolicy.Path(manifest.Paths.Resolved().DeployRoot)
-		}
-		if id == "collector" {
-			// Collector 的行情调度必须有目标空间；与旧部署脚本一致，默认 crypto。
-			values["MOOX_SPACE_ID"] = defaultSpaceID
-			values["MOOX_SPACE_IDS"] = defaultSpaceID
 		}
 		if id == "collector-stream" {
 			// collector-stream 写 Storage 沿用 moox-collector 身份（周期 RPC 只接受 Collector 身份）：

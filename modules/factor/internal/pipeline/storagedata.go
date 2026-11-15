@@ -13,7 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
-// storageData 是直接读 Storage 的数据层：用于管理端试算和 run-once 诊断（没有本地时序存储、标的又很少），
+// storageData 是直接读 Storage 的数据层：用于管理端试算（没有本地时序存储、标的又很少），
 // 直接从 Storage 读回看窗口，转成管线需要的列式视图。数值字段进视图，其余列只出现在目标区间的行里。
 // 引擎的正式计算不用它，走本地时序存储与内存窗口（localdata）。
 type storageData struct {

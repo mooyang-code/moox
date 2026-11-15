@@ -145,7 +145,7 @@ func (s *Store) Stats(ctx context.Context, task Task, p PartitionState) (Partiti
 	return out, nil
 }
 
-// ExportCSV 把分区的暂存行按 subject_id, data_time, series_tag 排序后以 CSV 写到 w（格式见 csvio.go，表头为
+// ExportCSV 把分区的暂存行按 data_time, subject_id, series_tag 排序后以 CSV 写到 w：顺序与导入要求的一致，导出的文件能原样导回（格式见 csvio.go，表头为
 // data_time,subject_id,series_tag,<值列…>）。流式写出，不在内存里攒整个分区；压缩、落盘与 sha256 由调用方负责。
 func (s *Store) ExportCSV(ctx context.Context, task Task, p PartitionState, out io.Writer) error {
 	if err := task.Validate(); err != nil {
@@ -165,7 +165,7 @@ func (s *Store) ExportCSV(ctx context.Context, task Task, p PartitionState, out 
 	if len(cols) > 0 {
 		selectCols = ", " + strings.Join(cols, ", ")
 	}
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT t.data_time, t.subject_id, t.series_tag%s FROM %s t WHERE t.data_time >= ? AND t.data_time < ? ORDER BY t.subject_id, t.data_time, t.series_tag`,
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT t.data_time, t.subject_id, t.series_tag%s FROM %s t WHERE t.data_time >= ? AND t.data_time < ? ORDER BY t.data_time, t.subject_id, t.series_tag`,
 		selectCols, quote(task.Table())), nanos(p.Start), nanos(p.End))
 	if err != nil {
 		return err

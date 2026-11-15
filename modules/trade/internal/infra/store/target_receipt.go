@@ -20,7 +20,6 @@ type TargetReceiptRecord struct {
 	SessionID           string
 	StrategyID          string
 	BarEndTime          int64
-	EffectiveAt         int64
 	ValidUntil          int64
 	RequestHash         string
 	SignalTime          int64
@@ -42,7 +41,6 @@ type targetReceiptRow struct {
 	SessionID           string `gorm:"column:c_session_id"`
 	StrategyID          string `gorm:"column:c_strategy_id"`
 	BarEndTime          int64  `gorm:"column:c_bar_end_time"`
-	EffectiveAt         int64  `gorm:"column:c_effective_at"`
 	ValidUntil          int64  `gorm:"column:c_valid_until"`
 	RequestHash         string `gorm:"column:c_request_hash"`
 	SignalTime          int64  `gorm:"column:c_signal_time"`
@@ -58,7 +56,7 @@ func (tx *Tx) InsertTargetReceipt(record TargetReceiptRecord) error {
 	if record.SpaceID == "" || record.TargetID == "" || record.LogicalAccountID == "" || record.RequestHash == "" || record.AcceptedAt <= 0 {
 		return fmt.Errorf("%w: incomplete target receipt", ErrInvalidRecord)
 	}
-	if record.InstanceID == "" || record.SessionID == "" || record.StrategyID == "" || record.BarEndTime <= 0 || record.EffectiveAt != record.BarEndTime || record.ValidUntil <= record.EffectiveAt {
+	if record.InstanceID == "" || record.SessionID == "" || record.StrategyID == "" || record.BarEndTime <= 0 || record.ValidUntil <= record.BarEndTime {
 		return fmt.Errorf("%w: incomplete target receipt session contract", ErrInvalidRecord)
 	}
 	for name, raw := range map[string]string{"weights": record.WeightsJSON, "reference_prices": record.ReferencePricesJSON, "quantity_targets": record.QuantityTargetsJSON} {
@@ -88,7 +86,7 @@ func (tx *Tx) InsertTargetReceipt(record TargetReceiptRecord) error {
 	}
 	err := tx.db.Exec(execInsertTargetReceipt, record.SpaceID, record.TargetID, record.RunnerID, record.LogicalAccountID,
 		record.CommandSequence, record.InstanceID, record.SessionID, record.StrategyID,
-		record.BarEndTime, record.EffectiveAt, record.ValidUntil,
+		record.BarEndTime, record.ValidUntil,
 		record.RequestHash, record.SignalTime, record.WeightsJSON,
 		record.Equity, record.EquitySourceTime, record.ReferencePricesJSON,
 		record.QuantityTargetsJSON, record.AcceptedAt).Error
@@ -136,7 +134,7 @@ func (s *Store) ListTargetReceiptsSince(ctx context.Context, spaceID, logicalAcc
 }
 
 func (r targetReceiptRow) targetReceipt() TargetReceiptRecord {
-	return TargetReceiptRecord{SpaceID: r.SpaceID, TargetID: r.TargetID, RunnerID: r.RunnerID, LogicalAccountID: r.LogicalAccountID, CommandSequence: r.CommandSequence, InstanceID: r.InstanceID, SessionID: r.SessionID, StrategyID: r.StrategyID, BarEndTime: r.BarEndTime, EffectiveAt: r.EffectiveAt, ValidUntil: r.ValidUntil, RequestHash: r.RequestHash, SignalTime: r.SignalTime, WeightsJSON: r.WeightsJSON, Equity: r.Equity, EquitySourceTime: r.EquitySourceTime, ReferencePricesJSON: r.ReferencePricesJSON, QuantityTargetsJSON: r.QuantityTargetsJSON, AcceptedAt: r.AcceptedAt}
+	return TargetReceiptRecord{SpaceID: r.SpaceID, TargetID: r.TargetID, RunnerID: r.RunnerID, LogicalAccountID: r.LogicalAccountID, CommandSequence: r.CommandSequence, InstanceID: r.InstanceID, SessionID: r.SessionID, StrategyID: r.StrategyID, BarEndTime: r.BarEndTime, ValidUntil: r.ValidUntil, RequestHash: r.RequestHash, SignalTime: r.SignalTime, WeightsJSON: r.WeightsJSON, Equity: r.Equity, EquitySourceTime: r.EquitySourceTime, ReferencePricesJSON: r.ReferencePricesJSON, QuantityTargetsJSON: r.QuantityTargetsJSON, AcceptedAt: r.AcceptedAt}
 }
 
 func (r TargetReceiptRecord) AcceptedAtTime() time.Time { return time.UnixMilli(r.AcceptedAt).UTC() }
@@ -173,7 +171,7 @@ func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, targe
 		// validity window before receipt replay. A stale duplicate must not turn
 		// an old accepted receipt into a way around session/expiry fencing.
 		if target.InstanceID != "" || target.SessionID != "" || target.BarEndTime != 0 || target.ValidUntil != 0 {
-			if receipt.InstanceID != target.InstanceID || receipt.SessionID != target.SessionID || receipt.StrategyID != target.StrategyID || receipt.BarEndTime != target.BarEndTime || receipt.EffectiveAt != target.EffectiveAt || receipt.ValidUntil != target.ValidUntil {
+			if receipt.InstanceID != target.InstanceID || receipt.SessionID != target.SessionID || receipt.StrategyID != target.StrategyID || receipt.BarEndTime != target.BarEndTime || receipt.ValidUntil != target.ValidUntil {
 				return fmt.Errorf("%w: target and receipt session contract mismatch", ErrInvalidRecord)
 			}
 			if account.OwnerInstanceID != target.InstanceID || account.OwnerSessionID != target.SessionID {
@@ -181,7 +179,7 @@ func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, targe
 			}
 			now := time.Now().UTC().UnixMilli()
 			if now >= target.ValidUntil {
-				return fmt.Errorf("%w: target validity window [%d,%d), now=%d", ErrTargetExpired, target.EffectiveAt, target.ValidUntil, now)
+				return fmt.Errorf("%w: target validity window [%d,%d), now=%d", ErrTargetExpired, target.BarEndTime, target.ValidUntil, now)
 			}
 		}
 		var existing targetReceiptRow
@@ -212,11 +210,11 @@ const (
 	execInsertTargetReceipt = `INSERT INTO t_logical_account_target_receipts (
 			c_space_id, c_target_id, c_runner_id, c_logical_account_id,
 			c_command_sequence, c_instance_id, c_session_id, c_strategy_id,
-			c_bar_end_time, c_effective_at, c_valid_until,
+			c_bar_end_time, c_valid_until,
 			c_request_hash, c_signal_time, c_weights_json,
 			c_equity, c_equity_source_time, c_reference_prices_json,
 			c_quantity_targets_json, c_accepted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	// 用 rowid 子查询限制每批行数：SQLite 默认不支持 DELETE ... LIMIT。c_valid_until 排在大 JSON 列之前，判断不用读溢出页。
 	execDeleteTargetReceiptsBefore = `DELETE FROM t_logical_account_target_receipts WHERE rowid IN (
 			SELECT rowid FROM t_logical_account_target_receipts WHERE c_valid_until < ? LIMIT ?

@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/notification"
 	"gorm.io/gorm"
 )
@@ -29,6 +27,11 @@ func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repos
 	if err != nil {
 		return err
 	}
+	return ensureDefaultRules(ctx, repositories, checks)
+}
+
+// ensureDefaultRules 给这些检查补齐（或按当前默认值更新）默认告警规则。
+func ensureDefaultRules(ctx context.Context, repositories *store.Repositories, checks []domain.Check) error {
 	for _, check := range checks {
 		failureThreshold, successThreshold := 3, 2
 		if check.Kind == domain.CheckKindExternal {
@@ -36,6 +39,9 @@ func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repos
 		}
 		if strings.HasPrefix(check.CheckID, "kline_freshness:") {
 			successThreshold = 2
+		}
+		if failures, ok := hostCheckFailureThreshold(check.CheckID); ok {
+			failureThreshold, successThreshold = failures, 1
 		}
 		rule := &domain.AlertRule{
 			SpaceID: check.SpaceID, RuleID: "default:" + check.CheckID, CheckID: check.CheckID,
@@ -108,59 +114,6 @@ func listAllMonitorChecks(ctx context.Context, repositories *store.Repositories)
 		}
 	}
 	return nil, fmt.Errorf("default alert checks exceed %d pages", maxDefaultCheckPages)
-}
-
-// 主机资源告警需要连续超过阈值的采样次数。HostAgent 每分钟采样一次（整分 0 秒），
-// CPU 3 次约 3 分钟、内存 5 次约 5 分钟、磁盘 3 次约 3 分钟。
-var hostFailureThresholds = map[string]int{
-	hostmetrics.HostMetricCPU:             3,
-	hostmetrics.HostMetricMemory:          5,
-	hostmetrics.HostMetricFilesystemUsage: 3,
-}
-
-func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Repositories, registry *hostmetrics.Registry) error {
-	if repositories == nil || registry == nil {
-		return fmt.Errorf("default host alerts require repositories and registry")
-	}
-	agents, err := registry.List(ctx, time.Now().UTC())
-	if err != nil {
-		return err
-	}
-	definitions := map[string]string{
-		// CPU 阈值取 80%、连续约 3 分钟：2026-10-14 两个 1h 因子任务回填，Storage 吃掉 4 核主机的
-		// 330%–380% CPU（整机 82%–95%），读窗口一再超时，却没有一次连续 5 分钟都不低于 90%，原来的规则一条告警也没出。
-		hostmetrics.HostMetricCPU:    `{"threshold":80,"recovery_threshold":70}`,
-		hostmetrics.HostMetricMemory: `{"threshold":90,"recovery_threshold":80}`,
-		// 磁盘写满是 Storage / View 故障的首要原因：在写满之前尽早告警，留出清理时间。
-		hostmetrics.HostMetricFilesystemUsage: `{"threshold":85,"recovery_threshold":80}`,
-	}
-	for _, agent := range agents {
-		for metric, definition := range definitions {
-			failureThreshold := hostFailureThresholds[metric]
-			checkID := hostmetrics.HostRuleKey(agent.AgentID, metric)
-			rule := &domain.AlertRule{
-				SpaceID: events.SystemSpaceID, RuleID: "default:" + checkID, CheckID: checkID,
-				FailureThreshold: failureThreshold, SuccessThreshold: 1,
-				MinimumReminderIntervalSeconds: 300, SendOnResolved: true, Enabled: true,
-				Description: definition,
-			}
-			existing, err := repositories.Alerts.GetRule(ctx, rule.SpaceID, rule.RuleID)
-			switch {
-			case err == nil:
-				rule.ID = existing.ID
-				if err := repositories.Alerts.UpdateRule(ctx, rule); err != nil {
-					return err
-				}
-			case errors.Is(err, gorm.ErrRecordNotFound):
-				if err := repositories.Alerts.CreateRule(ctx, rule); err != nil {
-					return err
-				}
-			default:
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 // seedNotificationChannel 在首次建库时按部署配置（MOOX_NOTIFICATION_*）写入第一个推送渠道；没有配置推送地址时不写入。

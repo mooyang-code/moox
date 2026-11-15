@@ -16,10 +16,10 @@ import (
 //
 //	data：清运行数据——补采作业与分块、自动补采水位、历史扫描、行情源缺失、合成快照与历史作业、补写通知与事件发件箱、流采集工作进程心跳、标签标的同步的运行结果；
 //	      保留采集任务、采集计划、采集方式、标的排除（配置）；
-//	all ：再清采集任务（含标签、序列）、采集计划、采集方式、标的排除，回到新部署的状态（采集任务由启动时的种子重新写入）。
+//	all ：再清采集任务（含绑定的标签）、采集计划、采集方式、标的排除，回到新部署的状态（采集任务由启动时的种子重新写入）。
 //
-// 采集暂停开关表（t_collector_fetch_plan_pauses）两个范围都不清：它承载生命周期的暂停，重置期间必须保持暂停（实时采集关闭），
-// 到用户重置后第一次 init 才放开（AfterReset）。重置**不动云函数本身**：SCF 部署包是外部资源；
+// 采集暂停开关表（t_collector_fetch_plan_pauses）两个范围都不清：它承载生命周期的系统暂停和手工暂停，重置期间必须保持暂停（实时采集关闭），
+// 到用户重置后第一次 init 才放开系统暂停（AfterReset）；手工暂停不受重置影响，要用 collector fetch-plan resume 恢复。重置**不动云函数本身**：SCF 部署包是外部资源；
 // 但执行前要求所有空间的 SCF 定时器已确认停用（暂停时已停用），否则采集计划被删后定时器会成为没人管理的孤儿。
 
 var (
@@ -29,10 +29,10 @@ var (
 		"t_collector_stream_workers", "t_collector_tag_sync_runs",
 	}
 	collectorConfigTables = []string{
-		"t_collector_tasks", "t_collector_task_tags", "t_collector_task_series", "t_collector_fetch_plans",
+		"t_collector_tasks", "t_collector_task_tags", "t_collector_fetch_plans",
 		"t_collector_ingest_modes", "t_collector_subject_exclusions",
 	}
-	// 生命周期状态：不清，由 AfterReset 在用户 init 后放开。
+	// 暂停开关：不清，系统暂停由 AfterReset 在用户 init 后放开，手工暂停保留。
 	collectorStateTables = []string{"t_collector_fetch_plan_pauses"}
 )
 
@@ -49,7 +49,7 @@ func collectorResetSpec(db *store.Store, dbPath string, control *collectorContro
 			return lifecycle.ResetPlanInfo{}, nil, err
 		}
 		info := lifecycle.ResetPlanInfo{
-			Keeps: []string{"数据库表结构", "采集暂停开关（重置期间保持暂停，重置后第一次 init 才放开）", "云函数本身（SCF 部署包是外部资源）", "发布内的配置文件", "生命周期状态文件"},
+			Keeps: []string{"数据库表结构", "采集暂停开关（重置期间保持暂停，重置后第一次 init 放开系统暂停，手工暂停保留）", "云函数本身（SCF 部署包是外部资源）", "发布内的配置文件", "生命周期状态文件"},
 			Notes: []string{"重置后采集计划要由采集任务重新生成；Storage 数据被清空时还要对每个有采集计划的空间执行 collector fetch-plan reregister"},
 		}
 		if unclassified, _ := lifecycle.ClassifyTables(actual, collectorDataTables, collectorConfigTables, collectorStateTables); len(unclassified) > 0 {
@@ -151,7 +151,7 @@ func (c *collectorControl) quiesceBackfill(ctx context.Context) error {
 	return nil
 }
 
-// afterReset 在重置后用户第一次 init 时放开采集暂停开关，实时采集随对账协程恢复。
+// afterReset 在重置后用户第一次 init 时放开系统暂停（手工暂停的空间保持暂停），实时采集随对账协程恢复。
 func (c *collectorControl) afterReset(ctx context.Context) {
 	c.setRecovering(false)
 	if err := c.setPaused(ctx, false); err != nil {

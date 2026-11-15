@@ -2,8 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -145,11 +143,6 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 		if err != nil {
 			return Outcome{StageDurations: outcome.StageDurations}, err
 		}
-		// 补算使用每次执行唯一的提交 ID：Storage 对相同提交 ID、相同内容直接返回成功而不再写字段，
-		// 补算必须保证「期望重写就一定重写」。普通实时写入保持内容寻址去重。
-		if plan.CommitSalt == "" && plan.Mode == ModeRecalc {
-			plan.CommitSalt = newCommitSalt()
-		}
 		stage = time.Now()
 		computation, err = r.Compute(ctx, plan, loaded)
 		loaded.View.Release() // 读租约只覆盖单次计算（设计 4.1）
@@ -242,15 +235,6 @@ func mergeOutcomeDurations(outcome, previous Outcome) Outcome {
 		outcome.StageDurations[name] = duration
 	}
 	return outcome
-}
-
-// newCommitSalt 生成每次执行唯一的提交 ID 盐。
-func newCommitSalt() string {
-	buf := make([]byte, 8)
-	if _, err := rand.Read(buf); err != nil {
-		return time.Now().UTC().Format("20060102150405.000000000")
-	}
-	return hex.EncodeToString(buf)
 }
 
 // recordWarming 把实时周期里因预热中被跳过的 (因子, 标的, 周期) 记入账本：这些结果本期没有算，marker 照常按失败标的上报，

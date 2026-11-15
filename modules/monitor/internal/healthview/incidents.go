@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -104,7 +105,7 @@ func (b Builder) incidents(ctx context.Context, spaceID string, facts observabil
 		}
 		out = append(out, &pb.AlertIncident{
 			Id:            item.key.space + ":" + item.key.check + "@" + stamp(item.sortTime()),
-			Severity:      alertSeverity(item.key.check, object),
+			Severity:      alerting.Severity(item.key.check),
 			Object:        object,
 			Title:         title,
 			Reason:        item.reason,

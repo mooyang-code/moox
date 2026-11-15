@@ -159,13 +159,13 @@ func (s *Axis) EarliestPeriod(ctx context.Context, spaceID, datasetID, freq stri
 	return at, true, nil
 }
 
-func (s *Axis) WriteRows(ctx context.Context, spaceID, datasetID, commitID string, rows []ResultRow) error {
+func (s *Axis) WriteRows(ctx context.Context, spaceID, datasetID string, rows []ResultRow) error {
 	axis, ok, err := s.datasetAxis(ctx, spaceID, datasetID)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return s.Backend.WriteRows(ctx, spaceID, datasetID, commitID, rows)
+		return s.Backend.WriteRows(ctx, spaceID, datasetID, rows)
 	}
 	out := make([]ResultRow, len(rows))
 	for i, row := range rows {
@@ -174,7 +174,7 @@ func (s *Axis) WriteRows(ctx context.Context, spaceID, datasetID, commitID strin
 			return fmt.Errorf("结果行 %d 的 data_time：%w", i, err)
 		}
 	}
-	return s.Backend.WriteRows(ctx, spaceID, datasetID, commitID, out)
+	return s.Backend.WriteRows(ctx, spaceID, datasetID, out)
 }
 
 func (s *Axis) ReportComputed(ctx context.Context, marker PeriodMarker) error {

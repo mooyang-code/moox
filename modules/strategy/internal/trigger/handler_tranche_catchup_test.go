@@ -75,7 +75,7 @@ func TestCatchupAdvancesTrancheStateSoLiveResultMatchesUninterruptedRun(t *testi
 		if got.Status != store.StatusSkipped || got.SkipReason != store.SkipCatchup || len(got.EventData) != 0 || string(got.TargetsJSON) != "[]" {
 			t.Fatalf("追赶期应记为不发目标的 skipped(catchup)：%+v", got)
 		}
-		if string(got.RuleStatesJSON) == "{}" {
+		if h.stateAt(n) == "{}" {
 			t.Fatalf("追赶期应记录推进后的规则状态")
 		}
 	}
@@ -89,8 +89,8 @@ func TestCatchupAdvancesTrancheStateSoLiveResultMatchesUninterruptedRun(t *testi
 	if string(live.TargetsJSON) != string(want.TargetsJSON) {
 		t.Fatalf("追赶后的目标应与连续运行一致：\n got  %s\n want %s", live.TargetsJSON, want.TargetsJSON)
 	}
-	if string(live.RuleStatesJSON) != string(want.RuleStatesJSON) {
-		t.Fatalf("追赶后的规则状态应与连续运行一致：\n got  %s\n want %s", live.RuleStatesJSON, want.RuleStatesJSON)
+	if got, want := h.stateAt(4), control.stateAt(4); got != want {
+		t.Fatalf("追赶后的规则状态应与连续运行一致：\n got  %s\n want %s", got, want)
 	}
 }
 
@@ -108,12 +108,12 @@ func TestExpiredPeriodAdvancesTrancheState(t *testing.T) {
 	h.now = barStart(2).Add(10 * time.Hour) // 远超有效期
 	expectAck(t, h.deliver(2))
 	late := h.resultAt(2)
-	if late.Status != store.StatusSkipped || late.SkipReason != store.SkipExpired || string(late.RuleStatesJSON) == "{}" {
+	if late.Status != store.StatusSkipped || late.SkipReason != store.SkipExpired || h.stateAt(2) == "{}" {
 		t.Fatalf("迟到周期应记为带状态的 skipped(expired)：%+v", late)
 	}
 	h.now = barStart(3).Add(90 * time.Minute)
 	expectAck(t, h.deliver(3))
-	if got, want := h.resultAt(3), control.resultAt(3); string(got.RuleStatesJSON) != string(want.RuleStatesJSON) || string(got.TargetsJSON) != string(want.TargetsJSON) {
+	if got, want := h.resultAt(3), control.resultAt(3); h.stateAt(3) != control.stateAt(3) || string(got.TargetsJSON) != string(want.TargetsJSON) {
 		t.Fatalf("迟到周期之后的结果应与连续运行一致：\n got  %s\n want %s", got.TargetsJSON, want.TargetsJSON)
 	}
 }
@@ -149,13 +149,13 @@ func TestCatchupAdvancesStateForRankStrategy(t *testing.T) {
 	mode = ModeCatchup
 	h.now = barStart(2).Add(90 * time.Minute)
 	expectAck(t, h.deliver(2))
-	if got := h.resultAt(2); got.SkipReason != store.SkipCatchup || len(got.EventData) != 0 || string(got.RuleStatesJSON) == "{}" {
+	if got := h.resultAt(2); got.SkipReason != store.SkipCatchup || len(got.EventData) != 0 || h.stateAt(2) == "{}" {
 		t.Fatalf("追赶期应记为带状态、不发目标的 skipped(catchup)：%+v", got)
 	}
 	mode = ModeLive
 	h.now = barStart(3).Add(90 * time.Minute)
 	expectAck(t, h.deliver(3))
-	if got, want := h.resultAt(3), control.resultAt(3); string(got.RuleStatesJSON) != string(want.RuleStatesJSON) || string(got.TargetsJSON) != string(want.TargetsJSON) {
+	if got, want := h.resultAt(3), control.resultAt(3); h.stateAt(3) != control.stateAt(3) || string(got.TargetsJSON) != string(want.TargetsJSON) {
 		t.Fatalf("追赶后的结果应与连续运行一致：\n got  %s\n want %s", got.TargetsJSON, want.TargetsJSON)
 	}
 }

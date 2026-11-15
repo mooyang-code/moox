@@ -107,9 +107,8 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 		log.Warnf("archive worker object store %s uses plain HTTP (use_tls: false); only for a private network", cfg.ObjectStore.Endpoint)
 	}
 	files := export.Files{Root: cfg.Worker.RootDir, Format: cfg.Worker.ExportFormat}
-	instance := newInstanceID()
 	worker := app.New(app.Options{
-		Config: cfg, Manager: manager.New(gateway), Staging: store, Files: files, InstanceID: instance, Version: Version,
+		Config: cfg, Manager: manager.New(gateway), Staging: store, Files: files, Version: Version,
 		Runner:    &runner.Runner{Source: source.New(gateway, secret), Staging: store, Files: files, Pace: pacer, PageRows: cfg.Pacing.PageRows, Remote: remote},
 		DiskUsage: app.StatfsDiskUsage, Remote: remote, Pacer: pacer,
 	})
@@ -129,17 +128,8 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, shutdownData()) }()
-	log.Infof("moox-archive-worker %s started worker_id=%s instance=%s root=%s", Version, cfg.Worker.WorkerID, instance, cfg.Worker.RootDir)
+	log.Infof("moox-archive-worker %s started worker_id=%s root=%s", Version, cfg.Worker.WorkerID, cfg.Worker.RootDir)
 	return worker.Run(ctx)
-}
-
-func newInstanceID() string {
-	var raw [8]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		panic(err)
-	}
-	host, _ := os.Hostname()
-	return fmt.Sprintf("%s-%d-%s", host, os.Getpid(), hex.EncodeToString(raw[:]))
 }
 
 // serveHealth 在本机地址上提供 /healthz /readyz /metrics，接受 MOOX_HEALTH_AUTH_* 环境配置的签名校验。
@@ -162,7 +152,7 @@ func serveHealth(addr string, worker *app.App) (func() error, error) {
 		}
 		return healthz.Response{
 			Module: "archive-worker", Ready: snap.Ready, Status: status, Time: time.Now().UTC(),
-			Details: map[string]any{"active": snap.Active, "running": snap.Running, "maintaining": snap.Maintaining, "disk_insufficient": snap.DiskInsufficient, "disk_free_bytes": snap.DiskFree, "reasons": reasons},
+			Details: map[string]any{"running": snap.Running, "maintaining": snap.Maintaining, "disk_insufficient": snap.DiskInsufficient, "disk_free_bytes": snap.DiskFree, "reasons": reasons},
 		}
 	}
 	state.SetReady(true)

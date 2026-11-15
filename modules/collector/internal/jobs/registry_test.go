@@ -38,14 +38,13 @@ func TestJobDefinitionByDataTypeReturnsKlineFields(t *testing.T) {
 	if !ok {
 		t.Fatalf("kline definition not found")
 	}
-	if len(def.Fields) != 2 {
-		t.Fatalf("len(kline fields) = %d, want 2", len(def.Fields))
+	if len(def.Fields) != 1 {
+		t.Fatalf("len(kline fields) = %d, want 1", len(def.Fields))
 	}
-	if def.Fields[1].FieldKey != "intervals" {
-		t.Fatalf("second kline field = %q, want intervals", def.Fields[1].FieldKey)
+	if def.Fields[0].FieldKey != "frequency" {
+		t.Fatalf("kline field = %q, want frequency", def.Fields[0].FieldKey)
 	}
-	defaults, ok := def.Fields[1].DefaultValue.([]any)
-	if !ok || len(defaults) != 1 || defaults[0] != "1m" {
-		t.Fatalf("kline interval default = %#v, want [1m]", def.Fields[1].DefaultValue)
+	if def.Fields[0].DefaultValue != "1m" {
+		t.Fatalf("kline frequency default = %#v, want 1m", def.Fields[0].DefaultValue)
 	}
 }

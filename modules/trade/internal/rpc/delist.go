@@ -41,7 +41,7 @@ func (s *ConsoleServer) BlockInstrument(ctx context.Context, req *tradepb.BlockI
 	if s.Delist == nil {
 		return &tradepb.BlockInstrumentRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
-	result, err := s.Delist.Block(ctx, delistKey(req.GetExchange(), req.GetMarketType(), req.GetExchangeSymbol()), req.GetReason(), req.GetEventId())
+	result, err := s.Delist.Block(ctx, delistKey(req.GetExchange(), req.GetMarketType(), req.GetExchangeSymbol()), req.GetReason(), req.GetEventId(), req.GetOwner())
 	return &tradepb.BlockInstrumentRsp{
 		RetInfo: errorInfo(err), InstrumentUnknown: result.InstrumentUnknown, Created: result.Created,
 	}, nil
@@ -73,7 +73,7 @@ func (s *ConsoleServer) ListBlockedInstruments(ctx context.Context, req *tradepb
 		rsp.Instruments = append(rsp.Instruments, &tradepb.BlockedInstrument{
 			Exchange: exchangeToPB(record.Exchange), MarketType: marketToPB(record.MarketType), ExchangeSymbol: record.ExchangeSymbol,
 			InstrumentId: record.InstrumentID, BaseAsset: record.BaseAsset, Reason: record.Reason,
-			SourceEventId: record.SourceEventID, BlockedAt: record.BlockedAt,
+			SourceEventId: record.SourceEventID, BlockedAt: record.BlockedAt, Owner: record.Owner,
 		})
 	}
 	return rsp, nil

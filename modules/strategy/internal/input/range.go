@@ -131,6 +131,9 @@ func historyNeed(resolved Resolved, program *dsl.Program) (int, string) {
 	return need, strings.Join(sources, "、")
 }
 
+// ErrNoCompleteBar 表示区间的起点已经在 View 最后一根完整的 bar 之后：区间内还没有可以推进的数据。
+var ErrNoCompleteBar = errors.New("回放区间内没有完整的数据")
+
 // EarlyStartError 表示回放起点早于可用起点：起点之前不够 min_age_bars 与 bars[-1] 要求的历史。
 type EarlyStartError struct {
 	// First 是区间内的第一根；Coverage 是活跃序列的覆盖起点；Earliest 是可用起点（都是 bar_start）。
@@ -228,7 +231,7 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 		end = limit
 	}
 	if !end.After(start) {
-		return time.Time{}, fmt.Errorf("回放区间内没有完整的数据：View %s 最后一根完整的 bar 是 %s", view.ViewID, label(last))
+		return time.Time{}, fmt.Errorf("%w：View %s 最后一根完整的 bar 是 %s", ErrNoCompleteBar, view.ViewID, label(last))
 	}
 	// 先反向判断历史够不够：从覆盖起点往后推 need−1 根可能越过 A 股内嵌日历的末尾，会被误报成日历需要更新。
 	bound := last

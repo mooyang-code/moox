@@ -12,7 +12,6 @@ import (
 func TestRenderEgressAndCollectorSeparatePolicyFromRouting(t *testing.T) {
 	snapshot := &Snapshot{Manifest: Manifest{EgressProxy: EgressProxy{
 		HTTPDomains: []string{"*.binance.com", "data-api.binance.vision"},
-		DNS:         EgressDNS{Domains: []string{"FAPI.BINANCE.COM."}, RefreshIntervalSeconds: 300, RequestTimeoutMS: 3000, LookupTimeoutMS: 1500, ProbeTimeoutMS: 500, ProbePort: 443, CacheTTLSeconds: 300, MaxIPsPerDomain: 4},
 	}}}
 	raw, err := RenderEgressConfig(snapshot, []byte("unrelated: keep\n"))
 	require.NoError(t, err)
@@ -20,17 +19,12 @@ func TestRenderEgressAndCollectorSeparatePolicyFromRouting(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal(raw, &got))
 	require.Equal(t, "keep", got["unrelated"])
 	require.Equal(t, []any{"*.binance.com", "data-api.binance.vision"}, got["domains"])
-	require.Equal(t, []any{"fapi.binance.com"}, got["dns"].(map[string]any)["domains"])
-	raw, err = RenderCollectorRuntimeConfig(snapshot, []byte("database: {path: keep.db}\ndns_resolver: {target: old}\n"))
+	require.NotContains(t, got, "dns")
+	raw, err = RenderCollectorRuntimeConfig(snapshot, []byte("database: {path: keep.db}\n"))
 	require.NoError(t, err)
 	require.NoError(t, yaml.Unmarshal(raw, &got))
 	require.Equal(t, "keep.db", got["database"].(map[string]any)["path"])
-	require.NotContains(t, got, "dns_resolver")
-	dns := got["egress_proxy"].(map[string]any)["dns"].(map[string]any)
-	require.Equal(t, "300s", dns["refresh_interval"])
-	require.Equal(t, "3000ms", dns["request_timeout"])
-	require.NotContains(t, dns, "target")
-	require.NotContains(t, dns, "node_id")
+	require.Equal(t, map[string]any{"domains": []any{"*.binance.com", "data-api.binance.vision"}}, got["egress_proxy"])
 }
 
 func TestRenderCollectorRuntimeConfigIncludesRetentionPolicy(t *testing.T) {

@@ -264,3 +264,24 @@ func TestFetchPlanPauseSwitchIsPersistedPerSpace(t *testing.T) {
 	require.Equal(t, map[string]bool{"stockcn": true}, paused)
 	require.Error(t, repo.SetPaused(ctx, " ", true))
 }
+
+// 手工暂停和系统暂停各占一列：任一个在空间就是暂停的，清掉一个不影响另一个。
+func TestFetchPlanManualAndSystemPausesAreIndependent(t *testing.T) {
+	ctx := context.Background()
+	repo := openPlanTestStore(t).FetchPlans()
+	require.NoError(t, repo.SetPaused(ctx, "crypto", true))
+	require.NoError(t, repo.SetSystemPaused(ctx, "crypto", true))
+	require.NoError(t, repo.SetSystemPaused(ctx, "stockcn", true))
+
+	require.NoError(t, repo.SetSystemPaused(ctx, "crypto", false))
+	require.NoError(t, repo.SetSystemPaused(ctx, "stockcn", false))
+	paused, err := repo.PausedSpaces(ctx)
+	require.NoError(t, err)
+	require.Equal(t, map[string]bool{"crypto": true}, paused, "系统恢复后手工暂停的空间保持暂停")
+
+	require.NoError(t, repo.SetSystemPaused(ctx, "crypto", true))
+	require.NoError(t, repo.SetPaused(ctx, "crypto", false))
+	paused, _ = repo.PausedSpaces(ctx)
+	require.Equal(t, map[string]bool{"crypto": true}, paused, "手工恢复不放开系统暂停")
+	require.Error(t, repo.SetSystemPaused(ctx, " ", true))
+}

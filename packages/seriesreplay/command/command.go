@@ -1,4 +1,4 @@
-// Package command 是回放命令行的共用实现：moox-replay 与 moox-cli replay 都调用它。
+// Package command 是回放命令行的实现，由 moox-cli replay 调用。
 //
 //	start    [--task-id <因子任务>] --instance-id <策略实例> --from <起> --to <止> [--replay-id <ID>] [--quote next_open|close] [--write-factors] ...
 //	         开始一次回放；用同样的参数（或只给 --replay-id）再次执行就是续跑。前台运行，Ctrl-C 中断后可续跑。

@@ -34,7 +34,6 @@ type Config struct {
 	// EventBus 是 Collector 到 EventBus 的连接，K 线合成与下架检测共用；不配置时不发布任何事件，合成只靠兜底检查。
 	EventBus    eventbus.Config   `yaml:"event_bus"`
 	Health      HealthConfig      `yaml:"health"`
-	DNS         DNSConfig         `yaml:"dns"`
 	EgressProxy EgressProxyConfig `yaml:"egress_proxy"`
 	// Delist 是下架检测的开关，安装时按拓扑渲染：没有出口代理（没配海外机）时关掉自动检测。
 	Delist      DelistConfig       `yaml:"delist"`
@@ -143,34 +142,16 @@ type HealthConfig struct {
 	Addr string `yaml:"addr"`
 }
 
-// DNSConfig controls the small control-plane DNS snapshot sent with SCF
-// requests. Empty nameservers use the host resolver.
-type DNSConfig struct {
-	Domains         []string      `yaml:"domains"`
-	RefreshInterval time.Duration `yaml:"refresh_interval"`
-	ResolveTimeout  time.Duration `yaml:"resolve_timeout"`
-	Nameservers     []string      `yaml:"nameservers"`
-}
-
 // DelistConfig 控制下架检测。AutoDetect 为 false 时不轮询币安现货、币安 U 本位、OKX 永续三个来源，
 // 手工登记（collector delist register）照常可用。默认 true：配置里没写时保持自动检测。
 type DelistConfig struct {
 	AutoDetect bool `yaml:"auto_detect"`
 }
 
-// EgressProxyConfig selects HTTP domains and DNS snapshots through the shared gateway.
+// EgressProxyConfig 是经共享网关走出口代理的 HTTP 域名。
 type EgressProxyConfig struct {
-	Domains []string        `yaml:"domains"`
-	DNS     EgressDNSConfig `yaml:"dns"`
+	Domains []string `yaml:"domains"`
 }
-type EgressDNSConfig struct {
-	Domains         []string      `yaml:"domains"`
-	RefreshInterval time.Duration `yaml:"refresh_interval"`
-	RequestTimeout  time.Duration `yaml:"request_timeout"`
-	CacheTTL        time.Duration `yaml:"cache_ttl"`
-}
-
-func (c EgressDNSConfig) Enabled() bool { return len(c.Domains) > 0 }
 
 // Load reads YAML config from path.
 func Load(path string) (*Config, error) {
@@ -236,22 +217,6 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
 	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_DOMAINS"); v != "" {
-		c.DNS.Domains = splitCSV(v)
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_NAMESERVERS"); v != "" {
-		c.DNS.Nameservers = splitCSV(v)
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_REFRESH_INTERVAL"); v != "" {
-		if parsed, err := time.ParseDuration(v); err == nil {
-			c.DNS.RefreshInterval = parsed
-		}
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVE_TIMEOUT"); v != "" {
-		if parsed, err := time.ParseDuration(v); err == nil {
-			c.DNS.ResolveTimeout = parsed
-		}
-	}
 }
 
 func (c *Config) validateSCFAccess() error {
@@ -271,22 +236,6 @@ func (c *Config) validateSCFAccess() error {
 func (c *Config) validateEgressProxy() error {
 	if _, err := domainpolicy.New(c.EgressProxy.Domains); err != nil {
 		return fmt.Errorf("egress_proxy.domains: %w", err)
-	}
-	dns := &c.EgressProxy.DNS
-	if len(dns.Domains) > 16 {
-		return fmt.Errorf("egress_proxy.dns supports at most 16 domains")
-	}
-	seen := map[string]bool{}
-	for i, raw := range dns.Domains {
-		domain, ok := domainpolicy.Host(strings.TrimSpace(raw))
-		if !ok || seen[domain] {
-			return fmt.Errorf("egress_proxy.dns domain %q is invalid or duplicated", raw)
-		}
-		seen[domain] = true
-		dns.Domains[i] = domain
-	}
-	if dns.RefreshInterval <= 0 || dns.RequestTimeout <= 0 || dns.RequestTimeout > 60*time.Second || dns.CacheTTL <= 0 {
-		return fmt.Errorf("egress_proxy.dns intervals must be positive and request_timeout at most 60s")
 	}
 	return nil
 }
@@ -351,16 +300,7 @@ func Default() *Config {
 		Health: HealthConfig{
 			Addr: ":11412",
 		},
-		DNS: DNSConfig{
-			Domains:         []string{"data-api.binance.vision", "api.binance.com", "fapi.binance.com"},
-			RefreshInterval: 5 * time.Minute,
-			ResolveTimeout:  5 * time.Second,
-		},
-		EgressProxy: EgressProxyConfig{Domains: []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}, DNS: EgressDNSConfig{
-			RefreshInterval: 5 * time.Minute,
-			RequestTimeout:  3 * time.Second,
-			CacheTTL:        5 * time.Minute,
-		}},
+		EgressProxy: EgressProxyConfig{Domains: []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}},
 	}
 }
 

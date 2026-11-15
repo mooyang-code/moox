@@ -15,7 +15,7 @@
 
 | 命令 | 说明 |
 | --- | --- |
-| `archive import` | 把本地 CSV（归档格式，`--csv`）作为历史数据直接导进归档，不经 Storage：同键已存在默认只补空缺，`--overwrite` 覆盖（必须带齐全部值列），有一行不对就整份拒绝；上传前确认任务没有运行中的运行或排队中的另一条导入、活动 worker 与 moox.toml 部署的主机一致，经 SSH 上传到 archive-worker 所在主机；冲突时用 `--import-id <id>` 跳过上传重试，`--wait` 等结束，`--yes` 确认 |
+| `archive import` | 把本地 CSV（归档格式，`--csv`）作为历史数据直接导进归档，不经 Storage：同键已存在默认只补空缺，`--overwrite` 覆盖（必须带齐全部值列），有一行不对就整份拒绝；上传前确认任务没有运行中的运行或排队中的另一条导入、在线的归档 worker 与 moox.toml 部署的主机一致，经 SSH 上传到 archive-worker 所在主机；冲突时用 `--import-id <id>` 跳过上传重试，`--wait` 等结束，`--yes` 确认 |
 | `archive import template` | 打印导入文件的表头 data_time,subject_id,series_tag,<值列…> |
 | `archive overview` | worker、正在执行的运行与告警总览 |
 | `archive partitions get` | 查看分区详情（状态、文件、sha256、预览） |
@@ -32,7 +32,6 @@
 | `archive tasks preview` | 预览接下来 5 次拉取、3 次复核、复核读取区间与分区导出时间 |
 | `archive tasks run` | 立即运行一次（同复核） |
 | `archive tasks update` | 修改拉取间隔、回补起点或启停任务 |
-| `archive worker retire` | 退役一个不再使用的 worker 登记（例如换机后的旧记录） |
 
 ## cloud：云函数：云账户、函数实例、SCF 导入与代码包（调用 CloudFunctionMgr）
 

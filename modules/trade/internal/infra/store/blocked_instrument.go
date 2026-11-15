@@ -17,7 +17,9 @@ type BlockedInstrumentRecord struct {
 	BaseAsset      string
 	Reason         string
 	SourceEventID  string
-	BlockedAt      int64
+	// Owner 是写入者的标识（事件中心下架处理的执行记录 ID）；重复写入保留第一个写入者。
+	Owner     string
+	BlockedAt int64
 }
 
 type blockedInstrumentRow struct {
@@ -28,23 +30,24 @@ type blockedInstrumentRow struct {
 	BaseAsset      string `gorm:"column:c_base_asset"`
 	Reason         string `gorm:"column:c_reason"`
 	SourceEventID  string `gorm:"column:c_source_event_id"`
+	Owner          string `gorm:"column:c_owner"`
 	BlockedAt      int64  `gorm:"column:c_blocked_at"`
 }
 
 const (
-	// 重复写入保留首次的写入时间和原因，不改已有的行。
+	// 重复写入保留首次的写入时间、原因和写入者，不改已有的行。
 	sqlInsertBlockedInstrument = `
 		INSERT INTO t_trade_blocked_instruments (
 			c_exchange, c_market_type, c_exchange_symbol,
-			c_instrument_id, c_base_asset, c_reason, c_source_event_id, c_blocked_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			c_instrument_id, c_base_asset, c_reason, c_source_event_id, c_owner, c_blocked_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (c_exchange, c_market_type, c_exchange_symbol) DO NOTHING`
 	sqlDeleteBlockedInstrument = `
 		DELETE FROM t_trade_blocked_instruments
 		WHERE c_exchange = ? AND c_market_type = ? AND c_exchange_symbol = ?`
 	sqlListBlockedInstruments = `
 		SELECT c_exchange, c_market_type, c_exchange_symbol, c_instrument_id, c_base_asset,
-			c_reason, c_source_event_id, c_blocked_at
+			c_reason, c_source_event_id, c_owner, c_blocked_at
 		FROM t_trade_blocked_instruments
 		ORDER BY c_blocked_at, c_exchange, c_market_type, c_exchange_symbol`
 )
@@ -63,7 +66,7 @@ func (s *Store) BlockInstrument(ctx context.Context, record BlockedInstrumentRec
 	}
 	result := s.db.WithContext(ctx).Exec(sqlInsertBlockedInstrument,
 		record.Exchange, record.MarketType, record.ExchangeSymbol,
-		record.InstrumentID, record.BaseAsset, record.Reason, record.SourceEventID, record.BlockedAt)
+		record.InstrumentID, record.BaseAsset, record.Reason, record.SourceEventID, strings.TrimSpace(record.Owner), record.BlockedAt)
 	if err := writeError(result.Error); err != nil {
 		return false, err
 	}

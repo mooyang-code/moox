@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
-	"github.com/mooyang-code/moox/modules/egressproxy/internal/resolver"
 	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
@@ -197,35 +196,6 @@ func TestDecodedLimitRejectsCompressedExpansionAndMalformedEncoding(t *testing.T
 	body, err := decodedBody(&http.Response{Header: http.Header{}, Body: io.NopCloser(io.LimitReader(zeroReader{}, MaxResponseBytes))})
 	require.NoError(t, err)
 	require.Len(t, body, MaxResponseBytes)
-}
-
-func TestDNSRPCPreservesSortedResultsCacheAndUnresolvedDomains(t *testing.T) {
-	var lookups atomic.Int32
-	dns := resolver.New(resolver.Config{Domains: []string{"api.binance.com"}, LookupHost: func(context.Context, string) ([]string, error) {
-		lookups.Add(1)
-		return []string{"8.8.4.4", "127.0.0.1", "8.8.8.8", "8.8.4.4"}, nil
-	}, DialContext: func(context.Context, string, string) (net.Conn, error) {
-		left, right := net.Pipe()
-		_ = right.Close()
-		return left, nil
-	}})
-	p, err := New(Options{Resolver: dns})
-	require.NoError(t, err)
-	t.Cleanup(p.Close)
-	for i := 0; i < 2; i++ {
-		rsp, err := p.ResolveDomains(context.Background(), &egresspb.ResolveDomainsReq{Domains: []string{"missing.test", "API.BINANCE.COM.", "api.binance.com"}, MaxIpsPerDomain: 1})
-		require.NoError(t, err)
-		require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-		require.Equal(t, []string{"missing.test"}, rsp.UnresolvedDomains)
-		require.Len(t, rsp.Resolutions, 1)
-		require.Equal(t, "api.binance.com", rsp.Resolutions[0].Domain)
-		require.Len(t, rsp.Resolutions[0].Ips, 1)
-		require.Contains(t, []string{"8.8.4.4", "8.8.8.8"}, rsp.Resolutions[0].Ips[0].Ip)
-	}
-	require.Equal(t, int32(1), lookups.Load())
-	rsp, err := p.ResolveDomains(context.Background(), &egresspb.ResolveDomainsReq{Domains: []string{"127.0.0.1"}})
-	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }
 
 func TestPublicDialChecksAddressesOnceAndNeverDialsPrivateIPs(t *testing.T) {

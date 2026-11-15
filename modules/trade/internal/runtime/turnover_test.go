@@ -42,7 +42,7 @@ func TestRequiredTurnoverDropsStaleBaseline(t *testing.T) {
 	receipts := []store.TargetReceiptRecord{
 		{AcceptedAt: 100, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"}]`,
 			ReferencePricesJSON: `{"BTC":{"price":"100"}}`},
-		{AcceptedAt: 10_000, EffectiveAt: 10_000, ValidUntil: 10_060,
+		{AcceptedAt: 10_000, BarEndTime: 10_000, ValidUntil: 10_060,
 			QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"}]`, ReferencePricesJSON: `{"BTC":{"price":"100"}}`},
 	}
 	required, err := requiredTurnover(receipts, 1_000)

@@ -49,12 +49,15 @@ result("dataset:firing:1m", "数据落后 3 根")
 check("dataset:gone:1m", 1)
 result("dataset:gone:1m", RETIRED)
 check("deployment:control:admin", 1, "deployment", "components")
+# 主机类检查和其他业务检查一样有检查记录，它的默认规则不是孤儿。
+check("host:abcd:cpu", 1)
+result("host:abcd:cpu", "CPU 使用率 20.0%")
 db.execute("INSERT INTO t_monitor_alert_rules (c_space_id, c_rule_id, c_check_id, c_failure_threshold, c_success_threshold, c_enabled, c_description) "
            "VALUES ('crypto', 'default:dataset:firing:1m', 'dataset:firing:1m', 1, 1, 1, 'Default MooX monitoring notification')")
 db.execute("INSERT INTO t_monitor_alert_rules (c_space_id, c_rule_id, c_check_id, c_failure_threshold, c_success_threshold, c_enabled, c_description) "
            "VALUES ('crypto', 'default:dataset:orphan:1m', 'dataset:orphan:1m', 1, 1, 1, 'Default MooX monitoring notification')")
 db.execute("INSERT INTO t_monitor_alert_rules (c_space_id, c_rule_id, c_check_id, c_failure_threshold, c_success_threshold, c_enabled, c_description) "
-           "VALUES ('mooxsys', 'default:host:abcd:cpu', 'host:abcd:cpu', 3, 1, 1, '{\"threshold\":80}')")
+           "VALUES ('crypto', 'default:host:abcd:cpu', 'host:abcd:cpu', 3, 1, 1, 'Default MooX monitoring notification')")
 db.execute("INSERT INTO t_monitor_alert_states (c_space_id, c_rule_id, c_check_id, c_status, c_triggered_at) "
            "VALUES ('crypto', 'default:dataset:firing:1m', 'dataset:firing:1m', 'firing', ?)", (old,))
 db.execute("INSERT INTO t_monitor_alert_states (c_space_id, c_rule_id, c_check_id, c_status) "
@@ -82,10 +85,10 @@ out="$("${SCRIPT}" --host control)" || fail "脚本执行失败：${out}"
 grep -q "default:dataset:firing:1m \[firing\]" <<<"${out}" || fail "缺少未恢复告警：${out}"
 grep -q "最近一次检查：数据落后 3 根" <<<"${out}" || fail "缺少最近一次检查结果：${out}"
 grep -q "default:other:1m" <<<"${out}" && fail "ok 状态的告警不该列出"
-grep -q "启用 · observability · business：2" <<<"${out}" || fail "检查概况不对：${out}"
+grep -q "启用 · observability · business：3" <<<"${out}" || fail "检查概况不对：${out}"
 grep -q -- "- dataset:gone:1m" <<<"${out}" || fail "缺少失效但未清理的检查：${out}"
 grep -q -- "- default:dataset:orphan:1m" <<<"${out}" || fail "缺少孤儿规则：${out}"
-grep -q "default:host:abcd:cpu" <<<"${out}" && fail "主机规则不该算孤儿"
+grep -q "default:host:abcd:cpu" <<<"${out}" && fail "有检查记录的主机规则不该算孤儿"
 grep -q "view_quiet_kline_1h" <<<"${out}" || fail "缺少静默视图序列：${out}"
 grep -q "view_live_kline_1m" <<<"${out}" && fail "刚上报的视图不该列为静默"
 grep -q "monitor_stale_checks_pruned count=1" <<<"${out}" || fail "缺少清理日志：${out}"

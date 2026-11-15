@@ -11,7 +11,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
-	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/rs/xid"
@@ -292,9 +291,6 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 		ResultStatus: "pending", AllowedLatenessSeconds: int32(latenessSeconds),
 	}
 	if !task.Enabled {
-		if err := s.inspectDisabledTaskResult(ctx, entry, task, params, ids); err != nil {
-			return nil, err
-		}
 		return entry, nil
 	}
 	if task.PrepareState == domain.PrepareStateError {
@@ -314,66 +310,7 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 	entry.ResultStatus = inspection.Status
 	entry.OwnershipVerified = inspection.Dataset != nil && inspection.View != nil
 	entry.ViewLastDataTime = strings.TrimSpace(inspection.LastDataTime)
-	if entry.OwnershipVerified {
-		s.setCanaryCandidate(entry, task, params, s.singleTaskCanarySeries(ctx, task))
-	}
 	return entry, nil
-}
-
-func (s *Service) inspectDisabledTaskResult(ctx context.Context, entry *pb.TaskResultInventoryEntry, task domain.CollectionTask, params *domain.CollectParams, ids taskresult.IDs) error {
-	if entry == nil || params == nil || s == nil || s.resultManager == nil {
-		return nil
-	}
-	series := s.singleTaskCanarySeries(ctx, task)
-	if series == nil {
-		return nil
-	}
-	inspection, err := s.resultManager.InspectIDs(ctx, task.SpaceID, task.TaskID, ids)
-	if err != nil {
-		entry.ResultStatus = "error"
-		return nil
-	}
-	entry.ResultStatus = inspection.Status
-	entry.OwnershipVerified = inspection.Dataset != nil && inspection.View != nil
-	entry.ViewLastDataTime = strings.TrimSpace(inspection.LastDataTime)
-	if !entry.OwnershipVerified {
-		return nil
-	}
-	s.setCanaryCandidate(entry, task, params, series)
-	return nil
-}
-
-func (s *Service) singleTaskCanarySeries(ctx context.Context, task domain.CollectionTask) *domain.TaskSeries {
-	if s == nil || s.taskRepo == nil {
-		return nil
-	}
-	series, single, err := s.taskRepo.ReadSingleTaskSeries(ctx, task.SpaceID, task.TaskID)
-	if err != nil || !single || series == nil {
-		return nil
-	}
-	seriesKey := domain.CanonicalSeriesKey(series.Provider, series.SourceID, series.MarketType, series.SubjectID, series.SeriesTag)
-	if series.SubjectID == "" || series.ProviderSymbol == "" || series.Provider == "" || series.SourceID == "" || series.MarketType == "" || series.SeriesTag == "" ||
-		series.SeriesIndex != 0 || series.SeriesKey != seriesKey || strings.TrimSpace(task.SeriesHash) == "" || task.SeriesHash != domain.SeriesSetHash([]string{seriesKey}) {
-		return nil
-	}
-	return series
-}
-
-func (s *Service) setCanaryCandidate(entry *pb.TaskResultInventoryEntry, task domain.CollectionTask, params *domain.CollectParams, series *domain.TaskSeries) {
-	if entry == nil || params == nil || series == nil {
-		return
-	}
-	entry.CanaryCandidateAvailable = true
-	entry.SubjectId = series.SubjectID
-	entry.ProviderSymbol = series.ProviderSymbol
-	entry.Provider = series.Provider
-	entry.SourceId = series.SourceID
-	entry.MarketType = series.MarketType
-	entry.SeriesTag = series.SeriesTag
-	entry.SeriesIndex = series.SeriesIndex
-	entry.SeriesHash = task.SeriesHash
-	entry.ExpectedCount = 1
-	entry.OutputFields = append([]string(nil), params.OutputFields...)
 }
 
 // allowedLatenessSeconds 返回任务结果数据集的允许迟到时间：任务参数优先，否则取市场 market.yaml 里的默认值；市场未登记时报错。

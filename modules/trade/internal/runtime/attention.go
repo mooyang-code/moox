@@ -207,7 +207,7 @@ func (w *AttentionWorker) noteTarget(
 	switch target.Status {
 	case targetapp.StatusBlocked:
 		// 目标有效期是 2 根 K 线。
-		bar := time.Duration(target.ValidUntil-target.EffectiveAt) * time.Millisecond / 2
+		bar := time.Duration(target.ValidUntil-target.BarEndTime) * time.Millisecond / 2
 		// 策略每根 K 线都发新目标，起始时间要跨目标保留，不能用目标的接收时间。
 		since, seen := w.blockedSince[logical.LogicalAccountID]
 		if !seen {
@@ -326,7 +326,7 @@ func requiredTurnover(receipts []store.TargetReceiptRecord, since int64) (float6
 	required := 0.0
 	// 窗口前的基准和窗口内第一张相隔超过两个目标有效期（策略停过），持仓不再等于基准，改为从空仓算起。
 	if len(receipts) > 1 && receipts[0].AcceptedAt <= since {
-		interval := receipts[1].ValidUntil - receipts[1].EffectiveAt
+		interval := receipts[1].ValidUntil - receipts[1].BarEndTime
 		if interval > 0 && receipts[1].AcceptedAt-receipts[0].AcceptedAt > 2*interval {
 			receipts = receipts[1:]
 		}

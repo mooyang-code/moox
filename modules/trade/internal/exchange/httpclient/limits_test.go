@@ -160,3 +160,13 @@ func TestQueryRateLimitDoesNotPauseOrders(t *testing.T) {
 	require.EqualValues(t, 1, orders.Load())
 	require.True(t, client.Status().OrdersPausedUntil.IsZero())
 }
+
+// 只读报价缓存的上下文（管理台查询）一个请求都不发。
+func TestDoRefusesCachedQuotesOnlyContext(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	defer server.Close()
+	_, err := New(server.URL).Do(exchange.WithCachedQuotes(context.Background(), time.Minute), &Request{Path: "/"})
+	require.ErrorIs(t, err, exchange.ErrQuoteNotCached)
+	require.Zero(t, calls.Load())
+}

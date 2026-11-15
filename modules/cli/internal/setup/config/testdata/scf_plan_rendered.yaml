@@ -6,12 +6,6 @@ delist:
 egress_proxy:
   domains:
     - '*.binance.com'
-  dns:
-    domains:
-      - fapi.binance.com
-    refresh_interval: 300s
-    request_timeout: 3000ms
-    cache_ttl: 300s
 scf_access:
   access_address: 2.2.2.2:11004
   access_id: access@storage

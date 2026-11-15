@@ -55,10 +55,6 @@
 
 因此 `normal_7709` 已有开发环境的完整 setup/count、日线和分钟 K 线解码证据；日线标准化、当日未收盘过滤、北交所有效样本以及目标 SCF 地域验证仍未完成，`ex_classic_7727` 和 `ex_mac_7727` 也不能推进启用门禁。
 
-## 线路探测
-
-`tdx.RouteProber` 只接受 TCP 候选，并根据 SourceID 选择对应的握手/登录探针。线路评分使用实际目标 `host:port` 的协议响应，不移植 tdx-go 需要特权 ICMP 的实现。`routeprobe` 快照按 SCF 地域、Provider、Source 和 Transport 隔离。
-
 SCF 不做主动限频、全局配额或冷却。随机公网出口是部署事实，不是规避上游限制的功能承诺。
 
 ## Wire Spike 命令

@@ -218,6 +218,16 @@ func newPoolHarness(t *testing.T, poolYaml string, memberIDs ...string) *harness
 	return h
 }
 
+// state 返回实例当前的规则状态行（预热出的状态与预热终点同事务写入）。
+func (h *harness) state(t *testing.T) store.State {
+	t.Helper()
+	state, found, err := h.repo.GetState(context.Background(), "i1")
+	if err != nil || !found {
+		t.Fatalf("实例没有规则状态：found=%v err=%v", found, err)
+	}
+	return state
+}
+
 func (h *harness) session(t *testing.T) store.Session {
 	t.Helper()
 	session, err := h.repo.GetSession(context.Background(), "session-1")
@@ -250,7 +260,11 @@ func TestWarmUpWritesStateAndReleasesTheGate(t *testing.T) {
 		t.Fatalf("预热终点 %v，期望 %v", session.WarmedThrough, want)
 	}
 	var state engine.State
-	if err := json.Unmarshal([]byte(session.WarmState), &state); err != nil {
+	row := h.state(t)
+	if row.SessionID != "session-1" || !row.BarEndTime.Equal(*session.WarmedThrough) {
+		t.Fatalf("预热出的状态应挂在本会话上、推进到预热终点：%+v", row)
+	}
+	if err := json.Unmarshal(row.StateJSON, &state); err != nil {
 		t.Fatal(err)
 	}
 	poolState, err := pool.DecodeState(state.Pool)
@@ -483,7 +497,7 @@ func checkFirstLiveMatchesLongRun(t *testing.T, poolYaml string, memberIDs ...st
 		t.Fatalf("池明细（比例、净值、择时）不逐位一致：\n实时 %s\n历史 %s", gotMembers, wantMembers)
 	}
 	var liveState engine.State
-	if err := json.Unmarshal(live.RuleStatesJSON, &liveState); err != nil {
+	if err := json.Unmarshal(h.state(t).StateJSON, &liveState); err != nil {
 		t.Fatal(err)
 	}
 	if string(liveState.Pool) != string(want.State.Pool) {

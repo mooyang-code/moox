@@ -158,6 +158,75 @@ func TestReportRejectsEngineWithoutLease(t *testing.T) {
 	require.ErrorIs(t, err, ErrLeaseConflict)
 }
 
+// 引擎归还作业（被门禁挡住、引擎停止）后，作业回到待领取并保留进度：下一次领取立刻拿到，不等作业租约过期；旧令牌失效。
+func TestReleasedJobIsPullableImmediately(t *testing.T) {
+	hub, db, _ := newTestHub(t)
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	hub.SetResultReady("task_a", true)
+	seedJob(t, db, "job-1", "task_a")
+	leaseEngineA(t, hub)
+	job, _, found, err := hub.Pull(context.Background(), engineA)
+	require.NoError(t, err)
+	require.True(t, found)
+	_, err = hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "", nil)
+	require.NoError(t, err)
+	_, _, found, err = hub.Pull(context.Background(), engineA)
+	require.NoError(t, err)
+	require.False(t, found, "作业租约未过期时不会被再次领取")
+
+	// 归还时带的进度不作数（这里故意给一个更早的值），以管理端已记下的为准。
+	released, err := hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(100, 0), store.RecalcStatusAccepted, "", nil)
+	require.NoError(t, err)
+	require.Equal(t, store.RecalcStatusAccepted, released.Status)
+	require.Equal(t, int64(300), released.ProgressTime)
+	require.Zero(t, released.LeaseExpiresAt)
+
+	again, _, found, err := hub.Pull(context.Background(), engineA)
+	require.NoError(t, err)
+	require.True(t, found, "归还后立刻可以重新领取")
+	require.Equal(t, job.JobID, again.JobID)
+	require.Equal(t, int64(300), again.ProgressTime, "从已上报的进度续跑")
+	require.NotEqual(t, job.LeaseToken, again.LeaseToken)
+	_, err = hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(400, 0), store.RecalcStatusRunning, "", nil)
+	require.ErrorIs(t, err, store.ErrConflict, "归还前的令牌不能再上报")
+}
+
+// 被门禁挡住而归还的作业排到后面：下一次领取拿到别的作业，不会每轮都抢在前面；归还不清掉已记下的降级说明。
+func TestReleasedJobGoesBehindOtherPullableJobs(t *testing.T) {
+	hub, db, clock := newTestHub(t)
+	for _, taskID := range []string{"task_a", "task_b"} {
+		seedTask(t, db, taskID, map[string]string{"bias": domain.MemberStatusEnabled})
+		hub.SetResultReady(taskID, true)
+		seedJob(t, db, "job-"+taskID, taskID)
+	}
+	// 作业的创建时间取真实时钟：把测试时钟拨到它之后，归还写下的修改时间才晚于另一个作业。
+	clock.now = time.Now().Add(time.Hour).UTC()
+	leaseEngineA(t, hub)
+	ctx := context.Background()
+	first, _, found, err := hub.Pull(ctx, engineA)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "job-task_a", first.JobID)
+	_, err = hub.Report(ctx, engineA, first.JobID, first.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "degraded: failed_subjects=1", nil)
+	require.NoError(t, err)
+
+	clock.Advance(time.Second)
+	released, err := hub.Report(ctx, engineA, first.JobID, first.LeaseToken, time.Unix(300, 0), store.RecalcStatusAccepted, "", nil)
+	require.NoError(t, err)
+	require.Equal(t, "degraded: failed_subjects=1", released.Error, "归还不清掉降级说明")
+
+	second, _, found, err := hub.Pull(ctx, engineA)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "job-task_b", second.JobID, "归还的作业排到后面")
+	_, err = hub.Report(ctx, engineA, second.JobID, second.LeaseToken, time.Unix(600, 0), store.RecalcStatusSucceeded, "", nil)
+	require.NoError(t, err)
+	third, _, found, err := hub.Pull(ctx, engineA)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "job-task_a", third.JobID)
+}
+
 // 同一 engine_id 的新进程（不同 boot_id）接管后，旧进程的 Pull/Report 不能再续租或完成任务。
 func TestOldBootOfSameEngineCannotPullOrReportAfterTakeover(t *testing.T) {
 	hub, db, clock := newTestHub(t)
@@ -167,7 +236,7 @@ func TestOldBootOfSameEngineCannotPullOrReportAfterTakeover(t *testing.T) {
 	leaseEngineA(t, hub)
 	job, _, _, err := hub.Pull(context.Background(), engineA)
 	require.NoError(t, err)
-	clock.Advance(46 * time.Second)
+	clock.Advance(5 * time.Second)
 	restarted := engineA
 	restarted.BootID = engineA.BootID + "-restarted"
 	_, err = hub.Heartbeat(context.Background(), restarted, domain.EngineStatus{})

@@ -88,6 +88,23 @@ func (r *BackfillRepository) AbsencesIn(ctx context.Context, spaceID, datasetID,
 	return out, nil
 }
 
+// LatestAbsencesIn 返回数据集在 [from, to) 内全部标的已确认缺失的区间里结束时间最新的 limit 段（从新到旧）。
+func (r *BackfillRepository) LatestAbsencesIn(ctx context.Context, spaceID, datasetID, frequency string, from, to time.Time, limit int) ([]SourceAbsence, error) {
+	if err := r.ready(); err != nil {
+		return nil, err
+	}
+	var rows []sourceAbsenceRow
+	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_from < ? AND c_to > ?", spaceID, datasetID, frequency, to.UTC(), from.UTC()).
+		Order("c_to DESC, c_subject_id, c_series_tag").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]SourceAbsence, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, SourceAbsence{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, SeriesTag: row.SeriesTag, From: row.From, To: row.To, Bars: row.Bars, CreatedAt: row.CreatedAt})
+	}
+	return out, nil
+}
+
 // AbsentBars 返回空间每个“数据集|频率”已确认缺失的总根数。
 func (r *BackfillRepository) AbsentBars(ctx context.Context, spaceID string) (map[string]int, error) {
 	if err := r.ready(); err != nil {

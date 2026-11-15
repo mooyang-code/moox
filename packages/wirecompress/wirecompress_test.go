@@ -2,7 +2,6 @@ package wirecompress
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -35,13 +34,13 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	decoder := NewDecoder(UseTRPC, 1<<20)
 	for _, size := range []int{1, 2, 100, 1000, 20000} {
 		src := sample(size)
-		out := Encode(UseTRPC, "", src)
+		out := Encode(UseTRPC, src)
 		require.Less(t, len(out), len(src), "size=%d", size)
 		got, err := decoder.Decode(out)
 		require.NoError(t, err)
 		require.Equal(t, src, got)
 	}
-	one := Encode(UseEvent, "crypto", []byte{7})
+	one := Encode(UseEvent, []byte{7})
 	got, err := NewDecoder(UseEvent, 16).Decode(one)
 	require.NoError(t, err)
 	require.Equal(t, []byte{7}, got)
@@ -53,7 +52,7 @@ func TestLargePayloadRoundTrip(t *testing.T) {
 	for len(src) < 6<<20 {
 		src = append(src, sample(2000)...)
 	}
-	frame := Encode(UseTRPC, "", src)
+	frame := Encode(UseTRPC, src)
 	require.Less(t, len(frame), len(src)/4)
 	got, err := NewDecoder(UseTRPC, 8<<20).Decode(frame)
 	require.NoError(t, err)
@@ -61,7 +60,7 @@ func TestLargePayloadRoundTrip(t *testing.T) {
 }
 
 func TestEmptyInput(t *testing.T) {
-	require.Nil(t, Encode(UseTRPC, "", nil))
+	require.Nil(t, Encode(UseTRPC, nil))
 	out, err := NewDecoder(UseTRPC, 16).Decode(nil)
 	require.NoError(t, err)
 	require.Empty(t, out)
@@ -69,7 +68,7 @@ func TestEmptyInput(t *testing.T) {
 
 func TestDecodeBoundaries(t *testing.T) {
 	src := bytes.Repeat([]byte("0123456789abcdef"), 4096) // 64KB
-	frame := Encode(UseTRPC, "", src)
+	frame := Encode(UseTRPC, src)
 	got, err := NewDecoder(UseTRPC, len(src)).Decode(frame)
 	require.NoError(t, err, "刚好等于上限")
 	require.Equal(t, src, got)
@@ -79,7 +78,7 @@ func TestDecodeBoundaries(t *testing.T) {
 
 func TestLimitIsolation(t *testing.T) {
 	src := bytes.Repeat([]byte("abcdefgh"), 256*1024) // 2MB
-	frame := Encode(UseTRPC, "", src)
+	frame := Encode(UseTRPC, src)
 	_, err := NewDecoder(UsePlan, 1<<20).Decode(frame)
 	require.ErrorIs(t, err, ErrTooLarge)
 	got, err := NewDecoder(UseTRPC, 64<<20).Decode(frame)
@@ -118,8 +117,8 @@ func TestFrameWithoutContentSizeIsRejected(t *testing.T) {
 func TestConcatenatedFramesAreRejectedDuringDecode(t *testing.T) {
 	first := bytes.Repeat([]byte("x"), 1<<20)
 	second := bytes.Repeat([]byte("y"), 1<<20)
-	a := Encode(UseTRPC, "", first)
-	b := Encode(UseTRPC, "", second)
+	a := Encode(UseTRPC, first)
+	b := Encode(UseTRPC, second)
 	_, err := NewDecoder(UseTRPC, 1<<20).Decode(append(append([]byte{}, a...), b...))
 	require.Error(t, err, "第一帧刚好用满上限，后面再拼一帧必须被拒绝")
 	require.True(t, errors.Is(err, ErrTooLarge) || errors.Is(err, ErrCorrupt), "got %v", err)
@@ -245,7 +244,7 @@ func TestAttackFramesAreRejectedBeforeAllocation(t *testing.T) {
 
 func TestCorruptAndTruncatedFrames(t *testing.T) {
 	decoder := NewDecoder(UseTRPC, 1<<20)
-	frame := Encode(UseTRPC, "", sample(500))
+	frame := Encode(UseTRPC, sample(500))
 	for _, bad := range [][]byte{
 		{0x00, 0x01, 0x02},
 		frame[:len(frame)/2],
@@ -282,7 +281,7 @@ func TestConcurrentEncodeDecode(t *testing.T) {
 			defer wg.Done()
 			src := sample(50 + i*10)
 			for j := 0; j < 50; j++ {
-				got, err := decoder.Decode(Encode(UseEvent, "", src))
+				got, err := decoder.Decode(Encode(UseEvent, src))
 				require.NoError(t, err)
 				require.Equal(t, src, got)
 			}
@@ -290,18 +289,6 @@ func TestConcurrentEncodeDecode(t *testing.T) {
 	}
 	wg.Wait()
 }
-
-func TestSpaceOf(t *testing.T) {
-	require.Equal(t, "", SpaceOf(context.Background(), nil))
-	require.Equal(t, "crypto", SpaceOf(context.Background(), spaced{"crypto"}))
-	require.Equal(t, "ashare", SpaceOf(WithSpace(context.Background(), "ashare"), spaced{"crypto"}), "context 优先")
-	require.Equal(t, "crypto", SpaceOf(WithSpace(context.Background(), ""), spaced{"crypto"}), "空的 context 值不覆盖请求")
-	require.Equal(t, "", SpaceOf(context.Background(), struct{}{}))
-}
-
-type spaced struct{ space string }
-
-func (s spaced) GetSpaceId() string { return s.space }
 
 func TestTRPCCompressorRegistered(t *testing.T) {
 	require.NotNil(t, codec.GetCompressor(32))
@@ -319,18 +306,17 @@ func TestTRPCCompressorRegistered(t *testing.T) {
 }
 
 func TestShippedRegistry(t *testing.T) {
-	require.Equal(t, 32, CompressType(""))
-	require.Equal(t, 32, CompressType("crypto"))
-	require.Equal(t, "default-v1", global.fallback.name)
-	require.Equal(t, uint32(0x4D580001), global.fallback.id)
+	require.Equal(t, 32, CompressType())
+	require.Equal(t, "default-v1", global.current.name)
+	require.Equal(t, uint32(0x4D580001), global.current.id)
 	// 默认字典真的被用到了（帧头里带字典 ID）
 	var header zstd.Header
-	require.NoError(t, header.Decode(Encode(UseTRPC, "", sample(10))))
+	require.NoError(t, header.Decode(Encode(UseTRPC, sample(10))))
 	require.Equal(t, uint32(0x4D580001), header.DictionaryID)
 	require.True(t, header.HasFCS)
 }
 
-// --- 注册表校验与空间绑定 ---
+// --- 注册表校验与版本演进 ---
 
 func buildTestDict(t *testing.T, id uint32) []byte {
 	t.Helper()
@@ -359,16 +345,11 @@ func TestRegistryValidation(t *testing.T) {
 dictionaries:
   - {name: a-v1, file: a.zdict, id: 0x4D580001, compress_type: 32}
   - {name: b-v1, file: b.zdict, id: 0x4D580002, compress_type: 33}
-bindings:
-  default: a-v1
-  spaces: {ashare: b-v1}
+default: a-v1
 `
 	reg, err := parseRegistry(files, []byte(good))
 	require.NoError(t, err)
-	require.Equal(t, "b-v1", reg.forSpace("ashare").name)
-	require.Equal(t, "b-v1", reg.forSpace("  AShare ").name, "空间大小写和空白不敏感")
-	require.Equal(t, "a-v1", reg.forSpace("crypto").name)
-	require.Equal(t, "a-v1", reg.forSpace("").name)
+	require.Equal(t, "a-v1", reg.current.name)
 
 	cases := map[string]string{
 		"重复 ID":     strings.Replace(good, "id: 0x4D580002", "id: 0x4D580001", 1),
@@ -378,12 +359,10 @@ bindings:
 		"类型号太小":     strings.Replace(good, "compress_type: 33", "compress_type: 7", 1),
 		"类型号太大":     strings.Replace(good, "compress_type: 33", "compress_type: 256", 1),
 		"文件 ID 不一致": strings.Replace(good, "id: 0x4D580002", "id: 0x4D580009", 1),
-		"默认绑定不存在":   strings.Replace(good, "default: a-v1", "default: nope", 1),
-		"空间绑定不存在":   strings.Replace(good, "ashare: b-v1", "ashare: nope", 1),
-		"空间名带大写":    strings.Replace(good, "ashare:", "AShare:", 1),
+		"默认版本不存在":   strings.Replace(good, "default: a-v1", "default: nope", 1),
 		"未知字段":      good + "extra: 1\n",
 		"文件不存在":     strings.Replace(good, "file: b.zdict", "file: missing.zdict", 1),
-		"没有任何字典":    "dictionaries: []\nbindings: {default: x}\n",
+		"没有任何字典":    "dictionaries: []\ndefault: x\n",
 	}
 	for name, raw := range cases {
 		_, err := parseRegistry(files, []byte(raw))
@@ -398,25 +377,23 @@ bindings:
 	require.Error(t, err, "魔数不对")
 }
 
-func TestSpaceBindingAndVersionEvolution(t *testing.T) {
+func TestVersionEvolution(t *testing.T) {
 	d1, d2 := buildTestDict(t, 0x4D580001), buildTestDict(t, 0x4D580002)
 	files := fsWith(t, map[string][]byte{"a.zdict": d1, "b.zdict": d2})
 	v1Only := `
 dictionaries:
   - {name: default-v1, file: a.zdict, id: 0x4D580001, compress_type: 32}
   - {name: default-v2, file: b.zdict, id: 0x4D580002, compress_type: 34}
-bindings:
-  default: default-v1
-  spaces: {}
+default: default-v1
 `
-	bound := strings.Replace(v1Only, "default: default-v1", "default: default-v2", 1)
+	bound := strings.Replace(v1Only, "default: default-v1\n", "default: default-v2\n", 1)
 	before, err := parseRegistry(files, []byte(v1Only))
 	require.NoError(t, err)
 	after, err := parseRegistry(files, []byte(bound))
 	require.NoError(t, err)
 
 	src := sample(80)
-	// 绑定在 v1 时：v2 的数据（滞后/超前的对端）同样能被解开；绑定切到 v2 后：v1 的数据仍能解开。
+	// default 指向 v1 时：v2 的数据（滞后/超前的对端）同样能被解开；切到 v2 后：v1 的数据仍能解开。
 	oldFrame := encodeWith(UseTRPC, before.byType[32], src)
 	newFrame := encodeWith(UseTRPC, before.byType[34], src)
 	for _, reg := range []*registry{before, after} {
@@ -433,6 +410,6 @@ bindings:
 	require.Equal(t, uint32(0x4D580001), h.DictionaryID)
 	require.NoError(t, h.Decode(newFrame))
 	require.Equal(t, uint32(0x4D580002), h.DictionaryID)
-	require.Equal(t, 32, before.forSpace("x").compressType)
-	require.Equal(t, 34, after.forSpace("x").compressType)
+	require.Equal(t, 32, before.current.compressType)
+	require.Equal(t, 34, after.current.compressType)
 }

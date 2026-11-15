@@ -56,7 +56,6 @@ export interface StrategyResult {
   targets: InstrumentTarget[];
   summary_json: string;
   input_json: string;
-  rule_states_json: string;
   publish_status: "none" | "pending" | "sent" | "cancelled" | string;
   created_at: string;
   /** 这一期算出的下一期可变成员参数（JSON：成员键 → 参数名 → {default, overrides}）；没有可变成员时为空串。 */

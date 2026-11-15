@@ -182,7 +182,7 @@ func (e *Evaluator) recordAndSend(ctx context.Context, check domain.Check, resul
 	if sender == nil {
 		return nil
 	}
-	sendErr := sender.Send(ctx, notification.Message{Key: event.DedupeKey, Severity: notificationSeverity(eventType), Title: event.Check.Name, Body: event.Message})
+	sendErr := sender.Send(ctx, notification.Message{Key: event.DedupeKey, Severity: notificationSeverity(eventType, check.CheckID), Title: event.Check.Name, Body: event.Message})
 	if notifier.IsPartial(sendErr) {
 		// 已有渠道送达：只记录失败的渠道，不按未送达重试，免得已收到的群重复收到。发送可能已耗尽父 context，
 		// 记录用不受取消影响的短期限 context；记录失败也只写日志，不能让调用方把这条通知当成未送达而整体重发。
@@ -209,17 +209,6 @@ func (e *Evaluator) recordSendFailure(ctx context.Context, check domain.Check, r
 	return sendErr
 }
 
-func notificationSeverity(eventType string) notification.Severity {
-	switch eventType {
-	case domain.AlertEventResolved:
-		return notification.SeverityInfo
-	case domain.AlertEventReminder:
-		return notification.SeverityWarning
-	default:
-		return notification.SeverityCritical
-	}
-}
-
 func (e *Evaluator) recordEvent(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule, state *domain.AlertState, eventType, message string) error {
 	if message == "" {
 		message = eventMessage(eventType, check, result, state)
@@ -238,7 +227,15 @@ func (e *Evaluator) recordEvent(ctx context.Context, check domain.Check, result 
 
 func (e *Evaluator) recordEventObject(ctx context.Context, event Event) error {
 	// payload 记录结构化的问题描述，概览按它展示告警经过，不再解析推送正文。
-	payload, err := json.Marshal(map[string]string{"reason": alerttext.Reason(strings.TrimSpace(event.Result.ErrorMessage))})
+	// 检查结果附带进程排行时（主机 CPU、内存检查）一并记下：进程事后退出或被杀掉，仍能查到当时是谁占的；恢复事件不带。
+	fields := struct {
+		Reason string `json:"reason"`
+		alerttext.ProcessDetail
+	}{Reason: alerttext.Reason(strings.TrimSpace(event.Result.ErrorMessage))}
+	if event.EventType != domain.AlertEventResolved {
+		fields.ProcessDetail = alerttext.DecodeProcessDetail(event.Result.BodyExcerpt)
+	}
+	payload, err := json.Marshal(fields)
 	if err != nil {
 		return err
 	}
@@ -268,6 +265,9 @@ func reminderDue(last *time.Time, now time.Time, intervalSeconds int) bool {
 func dedupeKey(rule domain.AlertRule, check domain.Check) string {
 	return rule.RuleID + ":" + check.CheckID
 }
+
+// messageProcessLimit 是推送正文里列出的进程数；事件里保留完整的排行。
+const messageProcessLimit = 3
 
 // eventMessage is the notification body: one short line per fact, in the
 // order people need them. The check's name is the title.
@@ -302,6 +302,13 @@ func eventMessage(eventType string, check domain.Check, result domain.CheckResul
 		lines = append(lines, "状态：新告警")
 		if reason != "" {
 			lines = append(lines, "问题："+reason)
+		}
+	}
+	if eventType == domain.AlertEventTriggered || eventType == domain.AlertEventReminder {
+		detail := alerttext.DecodeProcessDetail(result.BodyExcerpt)
+		if top := alerttext.TopProcesses(detail.TopProcesses, detail.ByMemory(), messageProcessLimit); top != "" {
+			// 整机的使用率是全部核的百分比，进程的 CPU 按单核计（和 top 一样），这里注明，免得两个数对不上。
+			lines = append(lines, "占用最高（进程 CPU 按单核计）："+top)
 		}
 	}
 	if !result.CheckedAt.IsZero() {
