@@ -1,7 +1,3 @@
-// Package cloud 是 Collector 内部调腾讯云的包（原 CloudFunction 模块）：云函数的读回与幂等部署、定时器、调用与清点，
-// 代码包与云账号，以及经网关读 Admin 的云账号密钥、CLS 上报环境补齐。
-//
-// 只有控制面（采集计划的对账器）引用它；云函数程序与 collector-stream 不得引用（见 internal/depcheck）。
 package cloud
 
 import (

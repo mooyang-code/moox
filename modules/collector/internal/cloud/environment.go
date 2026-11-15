@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -28,8 +29,12 @@ var removedEnvironmentKeys = []string{
 	"MOOX_MARKET_FETCH_DNS_UPDATED_AT",
 }
 
-// secretEnvironmentKeys 是读回结果带出包外之前去掉的密钥项：调用方密钥、Storage 应用密钥、CLS 写入密钥。
-var secretEnvironmentKeys = []string{"MOOX_CALLER_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_SECRET_KEY"}
+// secretEnvironmentKeys 与 secretEnvironmentSuffixes 是读回结果带出包外之前去掉的密钥项：调用方密钥、Storage 应用密钥、
+// CLS 写入密钥，以及名字按后缀看像密钥的项（接管的旧函数或基础环境文件里可能带着别的密钥）。
+var (
+	secretEnvironmentKeys     = []string{"MOOX_CALLER_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_SECRET_KEY"}
+	secretEnvironmentSuffixes = []string{"_KEY", "_SECRET", "_PASSWORD", "_TOKEN", "_CREDENTIALS"}
+)
 
 // mergeEnvironment 以云上现有环境为底，删掉废弃键，再覆盖期望值。
 func mergeEnvironment(current, desired map[string]string) map[string]string {
@@ -56,16 +61,39 @@ func environmentCovers(current, want map[string]string) bool {
 	return true
 }
 
+// environmentMatches 判断云上环境已经是期望的样子：期望的每一项都在且相等，并且没有要删掉的废弃键（创建预留号、DNS 键）。
+// 云上还带着废弃键时算不一致，让 Ensure 写一次把它们删掉。
+func environmentMatches(current, want map[string]string) bool {
+	for _, key := range removedEnvironmentKeys {
+		if _, ok := current[key]; ok {
+			return false
+		}
+	}
+	return environmentCovers(current, want)
+}
+
 // publicEnvironment 返回去掉密钥项的环境副本，供包外比对与展示。
 func publicEnvironment(values map[string]string) map[string]string {
 	out := make(map[string]string, len(values))
 	for key, value := range values {
-		out[key] = value
-	}
-	for _, key := range secretEnvironmentKeys {
-		delete(out, key)
+		if !isSecretEnvironmentKey(key) {
+			out[key] = value
+		}
 	}
 	return out
+}
+
+func isSecretEnvironmentKey(key string) bool {
+	if slices.Contains(secretEnvironmentKeys, key) {
+		return true
+	}
+	upper := strings.ToUpper(key)
+	for _, suffix := range secretEnvironmentSuffixes {
+		if strings.HasSuffix(upper, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // validateEnvironment 校验写给函数的完整环境。cloud 包只管两种函数：带采集计划的定时采集函数与补采函数；

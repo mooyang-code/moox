@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -109,11 +110,21 @@ type FunctionState struct {
 	Status string
 	// PackageID 取自环境变量 MOOX_CODE_PACKAGE_ID。
 	PackageID string
-	// Environment 已经去掉调用方密钥、Storage 应用密钥与 CLS 写入密钥。
+	// Environment 已经去掉密钥项（见 publicEnvironment）。
 	Environment map[string]string
 	// Timer 只有 Describe 带；DescribeCode 不读定时器。云上没有定时器时为 nil。
-	Timer  *TimerState
-	ReadAt time.Time
+	Timer *TimerState
+	// AsyncRetry 是异步重试配置的读回，只有 Describe 带；云上没有显式配置时为 nil。
+	AsyncRetry *AsyncRetryState
+	// ReservedMem 是预留并发内存（MB）的读回，只有 Describe 带；没有设置时为 0。
+	ReservedMem int64
+	ReadAt      time.Time
+}
+
+// AsyncRetryState 是异步重试配置的读回。期望是不重试（RetryNum 0）、消息保留 60 秒。
+type AsyncRetryState struct {
+	RetryNum int64
+	MsgTTL   int64
 }
 
 // InvokeResult 是一次调用的结果。
@@ -236,7 +247,7 @@ func (f *TencentFunctions) describe(ctx context.Context, ref FunctionRef, withTi
 		return FunctionState{}, err
 	}
 	info, err := s.client.GetFunction(ctx, ref.scf())
-	if isNotFound(err) {
+	if isFunctionNotFound(err) {
 		return FunctionState{ReadAt: f.now()}, nil
 	}
 	if err != nil {
@@ -250,6 +261,16 @@ func (f *TencentFunctions) describe(ctx context.Context, ref FunctionRef, withTi
 		}
 		if trigger != nil {
 			state.Timer = &TimerState{Timer: Timer{Cron: trigger.Cron, Enabled: trigger.Enabled}, AvailableStatus: trigger.AvailableStatus, Qualifier: trigger.Qualifier, Message: trigger.Message}
+		}
+		async, err := s.client.GetFunctionEventInvokeConfig(ctx, ref.scf())
+		if err != nil && !isConfigNotFound(err) {
+			return FunctionState{}, fmt.Errorf("读取云函数 %s 的异步重试配置失败: %w", ref.Name, err)
+		}
+		if async != nil && async.Configured {
+			state.AsyncRetry = &AsyncRetryState{RetryNum: async.RetryNum, MsgTTL: async.MsgTTL}
+		}
+		if state.ReservedMem, err = s.client.GetReservedConcurrencyConfig(ctx, ref.scf()); err != nil && !isConfigNotFound(err) {
+			return FunctionState{}, fmt.Errorf("读取云函数 %s 的预留并发失败: %w", ref.Name, err)
 		}
 	}
 	state.ReadAt = f.now()
@@ -294,7 +315,7 @@ func (f *TencentFunctions) ensureOnce(ctx context.Context, s session, spec Funct
 	// 第 1 步：读函数，并在任何写请求之前算出、校验要写的完整环境。
 	info, err := s.client.GetFunction(ctx, ref)
 	exists := err == nil
-	if err != nil && !isNotFound(err) {
+	if err != nil && !isFunctionNotFound(err) {
 		return fmt.Errorf("读取云函数 %s 失败: %w", name, err)
 	}
 	status := ""
@@ -312,7 +333,7 @@ func (f *TencentFunctions) ensureOnce(ctx context.Context, s session, spec Funct
 	}
 	if strings.EqualFold(status, "CreateFailed") {
 		log.WarnContextf(ctx, "[Collector-Cloud] 云函数 %s 建失败了，先删掉再重建", name)
-		if err := s.client.DeleteFunction(ctx, ref); err != nil && !isNotFound(err) {
+		if err := s.client.DeleteFunction(ctx, ref); err != nil && !isFunctionNotFound(err) {
 			return fmt.Errorf("删除建失败的云函数 %s 失败: %w", name, err)
 		}
 		if err := waitDeleted(ctx, s.client, ref); err != nil {
@@ -348,13 +369,18 @@ func (f *TencentFunctions) ensureOnce(ctx context.Context, s session, spec Funct
 	}
 
 	// 第 4 步：环境与配置。换过代码时必须写一次（包 ID 跟这一步一起写），UpdateFailed 也必须重做一次。
-	if repairUpdate || codeReplaced || !environmentCovers(info.Environment, environment) || configDiffers(info, spec) {
-		if _, err := s.client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
-			FunctionRef: ref, Environment: environment, MemorySize: spec.MemoryMB, Timeout: spec.TimeoutS,
-			MaxInstanceConcurrency: functionMaxConcurrency, PublicNetStatus: functionPublicNet, VpcID: spec.VPCID, SubnetID: spec.SubnetID,
+	// 环境单独变化时只带环境与超时；配置（内存、并发、公网、VPC）不一致时才一起带上。
+	if fullConfig := configDiffers(info, spec); repairUpdate || codeReplaced || fullConfig || !environmentMatches(info.Environment, environment) {
+		request := tencentscf.UpdateFunctionConfigurationRequest{
+			FunctionRef: ref, Environment: environment, Timeout: spec.TimeoutS,
 			// 只在紧跟换代码的这次清掉腾讯云自带的日志投递（Collector 用自己的 CLS 写入）。
 			ClearNativeCLS: codeReplaced,
-		}); err != nil {
+		}
+		if fullConfig {
+			request.MemorySize, request.MaxInstanceConcurrency, request.PublicNetStatus = spec.MemoryMB, functionMaxConcurrency, functionPublicNet
+			request.VpcID, request.SubnetID = spec.VPCID, spec.SubnetID
+		}
+		if _, err := s.client.UpdateFunctionConfiguration(ctx, request); err != nil {
 			return fmt.Errorf("云函数 %s 改环境与配置失败: %w", name, err)
 		}
 		if _, err := waitActive(ctx, s.client, ref, nil); err != nil {
@@ -365,10 +391,10 @@ func (f *TencentFunctions) ensureOnce(ctx context.Context, s session, spec Funct
 		return err
 	}
 
-	// 第 5 步：读回校验。
-	verified, err := s.client.GetFunction(ctx, ref)
+	// 第 5 步：读回校验。写异步重试、预留并发之后函数可能短暂进入 Updating，先等回到 Active。
+	verified, err := waitActive(ctx, s.client, ref, nil)
 	if err != nil {
-		return fmt.Errorf("读回云函数 %s 失败: %w", name, err)
+		return err
 	}
 	if err := verifyFunction(verified, spec, environment); err != nil {
 		return err
@@ -432,7 +458,7 @@ func (f *TencentFunctions) UpgradeCode(ctx context.Context, ref FunctionRef, pkg
 	return withRetry(ctx, ref.Name, func() error {
 		scfRef := ref.scf()
 		info, err := s.client.GetFunction(ctx, scfRef)
-		if isNotFound(err) {
+		if isFunctionNotFound(err) {
 			return fmt.Errorf("%w：%s", ErrFunctionNotFound, ref.Name)
 		}
 		if err != nil {
@@ -442,7 +468,8 @@ func (f *TencentFunctions) UpgradeCode(ctx context.Context, ref FunctionRef, pkg
 			return err
 		}
 		if strings.TrimSpace(info.Environment[packageIDKey]) == pkg.PackageID {
-			return nil
+			// 已经是新包：顺带修正异步重试（读回一致就不写），保留每次升级都自愈的老行为。
+			return ensureExtras(ctx, s.client, scfRef, 0)
 		}
 		// 环境沿用云上读回的值（升级不会把正在过渡的环境改回去），只换包 ID；换代码之前先校验，环境不合规就一条都不发。
 		environment := mergeEnvironment(info.Environment, map[string]string{packageIDKey: pkg.PackageID})
@@ -461,11 +488,14 @@ func (f *TencentFunctions) UpgradeCode(ctx context.Context, ref FunctionRef, pkg
 		if _, err := waitActive(ctx, s.client, scfRef, nil); err != nil {
 			return err
 		}
-		verified, err := s.client.GetFunction(ctx, scfRef)
-		if err != nil {
-			return fmt.Errorf("读回云函数 %s 失败: %w", ref.Name, err)
+		if err := ensureExtras(ctx, s.client, scfRef, 0); err != nil {
+			return err
 		}
-		if !environmentCovers(verified.Environment, environment) {
+		verified, err := waitActive(ctx, s.client, scfRef, nil)
+		if err != nil {
+			return err
+		}
+		if !environmentMatches(verified.Environment, environment) {
 			return fmt.Errorf("云函数 %s 升级后读回的环境与写入的不一致", ref.Name)
 		}
 		return nil
@@ -491,16 +521,17 @@ func (f *TencentFunctions) SetTimer(ctx context.Context, ref FunctionRef, timer 
 	return withRetry(ctx, ref.Name, func() error {
 		scfRef := ref.scf()
 		info, err := s.client.GetFunction(ctx, scfRef)
-		if isNotFound(err) {
+		if isFunctionNotFound(err) {
 			return fmt.Errorf("%w：%s", ErrFunctionNotFound, ref.Name)
 		}
 		if err != nil {
 			return fmt.Errorf("读取云函数 %s 失败: %w", ref.Name, err)
 		}
-		if info, err = waitActive(ctx, s.client, scfRef, info); err != nil {
-			return err
-		}
+		// 停用不看函数状态、不等 Active：函数卡在 UpdateFailed、CreateFailed 时定时器也必须能停（暂停与重置靠它）。
 		if timer.Enabled {
+			if info, err = waitActive(ctx, s.client, scfRef, info); err != nil {
+				return err
+			}
 			current := strings.TrimSpace(info.Environment[packageIDKey])
 			if strings.TrimSpace(wantPackageID) == "" || current != strings.TrimSpace(wantPackageID) {
 				return fmt.Errorf("%w：云函数 %s 的代码包是 %q，期望 %q，先升级再启用定时器", ErrPackageBehind, ref.Name, current, wantPackageID)
@@ -524,10 +555,10 @@ func (f *TencentFunctions) Delete(ctx context.Context, ref FunctionRef) error {
 	defer lockFunction(ref)()
 	return withRetry(ctx, ref.Name, func() error {
 		scfRef := ref.scf()
-		if err := s.client.DeleteTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: scfRef, Name: timerTriggerName, Qualifier: timerTriggerQualifier}); err != nil && !isNotFound(err) {
+		if err := s.client.DeleteTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: scfRef, Name: timerTriggerName, Qualifier: timerTriggerQualifier}); err != nil && !isTriggerNotFound(err) && !isFunctionNotFound(err) {
 			return fmt.Errorf("删除云函数 %s 的定时器失败: %w", ref.Name, err)
 		}
-		if err := s.client.DeleteFunction(ctx, scfRef); err != nil && !isNotFound(err) {
+		if err := s.client.DeleteFunction(ctx, scfRef); err != nil && !isFunctionNotFound(err) {
 			return fmt.Errorf("删除云函数 %s 失败: %w", ref.Name, err)
 		}
 		return waitDeleted(ctx, s.client, scfRef)
@@ -675,7 +706,7 @@ func verifyFunction(info *tencentscf.FunctionInfo, spec FunctionSpec, environmen
 	if got := info.Environment[packageIDKey]; got != spec.Package.PackageID {
 		return fmt.Errorf("云函数 %s 读回的代码包是 %q，期望 %q", name, got, spec.Package.PackageID)
 	}
-	if !environmentCovers(info.Environment, environment) {
+	if !environmentMatches(info.Environment, environment) {
 		return fmt.Errorf("云函数 %s 读回的环境与写入的不一致", name)
 	}
 	if configDiffers(info, spec) {
@@ -689,7 +720,7 @@ func verifyFunction(info *tencentscf.FunctionInfo, spec FunctionSpec, environmen
 func ensureExtras(ctx context.Context, client scfClient, ref tencentscf.FunctionRef, reservedMem int64) error {
 	// 没配置过时腾讯云可能直接回“不存在”：当作没有配置，照常去写。
 	async, err := client.GetFunctionEventInvokeConfig(ctx, ref)
-	if err != nil && !isNotFound(err) {
+	if err != nil && !isConfigNotFound(err) {
 		return fmt.Errorf("读取云函数 %s 的异步重试配置失败: %w", ref.FunctionName, err)
 	}
 	if async == nil || !async.Configured || async.RetryNum != asyncRetryNum || async.MsgTTL != asyncMsgTTL {
@@ -701,14 +732,14 @@ func ensureExtras(ctx context.Context, client scfClient, ref tencentscf.Function
 		return nil
 	}
 	current, err := client.GetReservedConcurrencyConfig(ctx, ref)
-	if err != nil && !isNotFound(err) {
+	if err != nil && !isConfigNotFound(err) {
 		return fmt.Errorf("读取云函数 %s 的预留并发失败: %w", ref.FunctionName, err)
 	}
 	if current == reservedMem {
 		return nil
 	}
 	if err := client.PutReservedConcurrencyConfig(ctx, tencentscf.PutReservedConcurrencyConfigRequest{FunctionRef: ref, ReservedConcurrencyMem: reservedMem}); err != nil {
-		return fmt.Errorf("设置云函数 %s 的预留并发失败: %w", ref.FunctionName, err)
+		return quotaOr(fmt.Errorf("设置云函数 %s 的预留并发失败: %w", ref.FunctionName, err), err)
 	}
 	return nil
 }
@@ -716,7 +747,7 @@ func ensureExtras(ctx context.Context, client scfClient, ref tencentscf.Function
 // readTimer 读定时器；云上没有时返回 nil。
 func readTimer(ctx context.Context, client scfClient, ref tencentscf.FunctionRef) (*tencentscf.TimerTriggerInfo, error) {
 	trigger, err := client.GetTimerTrigger(ctx, ref, timerTriggerName)
-	if isNotFound(err) {
+	if isTriggerNotFound(err) {
 		return nil, nil
 	}
 	return trigger, err
@@ -745,7 +776,7 @@ func waitActive(ctx context.Context, client scfClient, ref tencentscf.FunctionRe
 	for {
 		if current == nil {
 			info, err := client.GetFunction(waitCtx, ref)
-			if err != nil && !isNotFound(err) && !isTransientError(err) {
+			if err != nil && !isFunctionNotFound(err) && !isTransientError(err) {
 				return nil, fmt.Errorf("读取云函数 %s 的状态失败: %w", ref.FunctionName, err)
 			}
 			current = info
@@ -772,7 +803,7 @@ func waitDeleted(ctx context.Context, client scfClient, ref tencentscf.FunctionR
 	defer cancel()
 	for {
 		_, err := client.GetFunction(waitCtx, ref)
-		if isNotFound(err) {
+		if isFunctionNotFound(err) {
 			return nil
 		}
 		if err != nil && !isTransientError(err) {
@@ -818,19 +849,53 @@ func quotaOr(err, cause error) error {
 	return err
 }
 
-// isQuotaError 判断腾讯云的错误码是不是配额超限（LimitExceeded.Function、LimitExceeded.Namespace 等）。
-// 限频是 RequestLimitExceeded，不以 LimitExceeded. 开头，不算配额。
+// quotaErrorCodes 是腾讯云的函数个数与命名空间配额超限错误码。LimitExceeded.Memory、.Timeout、.MsgTTL 这类是参数越界，
+// 限频是 RequestLimitExceeded，都不算配额。
+var quotaErrorCodes = []string{"LimitExceeded.Function", "LimitExceeded.Namespace"}
+
+// isQuotaError 判断腾讯云的错误是不是函数个数或命名空间配额超限。
 func isQuotaError(err error) bool {
 	var sdkErr *tcerrors.TencentCloudSDKError
-	return errors.As(err, &sdkErr) && strings.HasPrefix(sdkErr.GetCode(), "LimitExceeded.")
+	return errors.As(err, &sdkErr) && slices.Contains(quotaErrorCodes, sdkErr.GetCode())
 }
 
-func isNotFound(err error) bool {
+// 资源不存在的错误码。只认这几个：例如密钥失效时的 AuthFailure.SecretIdNotFound 不能当成函数不存在。
+var (
+	functionNotFoundCodes = []string{"ResourceNotFound.Function", "ResourceNotFound.FunctionName", "ResourceNotFound.Namespace"}
+	triggerNotFoundCodes  = []string{"ResourceNotFound.Trigger", "ResourceNotFound.Timer"}
+)
+
+// isFunctionNotFound 判断错误是不是“函数（或它所在的命名空间）不存在”。
+func isFunctionNotFound(err error) bool { return hasErrorCode(err, functionNotFoundCodes) }
+
+// isTriggerNotFound 判断错误是不是“定时器不存在”。
+func isTriggerNotFound(err error) bool { return hasErrorCode(err, triggerNotFoundCodes) }
+
+// isConfigNotFound 判断读异步重试、预留并发得到的是不是“没有配置”（任意 ResourceNotFound.*）：没配置过时照常去写。
+func isConfigNotFound(err error) bool {
+	var sdkErr *tcerrors.TencentCloudSDKError
+	if errors.As(err, &sdkErr) {
+		return strings.HasPrefix(sdkErr.GetCode(), "ResourceNotFound.")
+	}
+	return err != nil && strings.Contains(err.Error(), "ResourceNotFound.")
+}
+
+// hasErrorCode 判断腾讯云 SDK 错误的错误码是不是 codes 之一。不是 SDK 错误（测试里的假腾讯云）时按错误文本里的错误码匹配。
+func hasErrorCode(err error, codes []string) bool {
 	if err == nil {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "resourcenotfound") || strings.Contains(message, "not found")
+	var sdkErr *tcerrors.TencentCloudSDKError
+	if errors.As(err, &sdkErr) {
+		return slices.Contains(codes, sdkErr.GetCode())
+	}
+	message := err.Error()
+	for _, code := range codes {
+		if strings.Contains(message, code) {
+			return true
+		}
+	}
+	return false
 }
 
 // isTransientError 判断是不是值得重试的瞬时错误（网络、限频、超时、5xx）。参数、权限、不存在、配额错误不重试。

@@ -72,14 +72,20 @@ type scriptedSCF struct {
 
 	mu sync.Mutex
 	// createErrs、codeErrs、getErrs 依次作为对应请求的返回错误（用完后照常执行）。
-	createErrs []error
-	codeErrs   []error
-	getErrs    []error
+	createErrs      []error
+	codeErrs        []error
+	getErrs         []error
+	deleteTimerErrs []error
+	reservedErrs    []error
 	// afterCreate、beforeConfig 在对应请求之后、之前调用。
 	afterCreate  func()
 	beforeConfig func()
 	// acceptUpdateFailed 为 true 时，函数是 UpdateFailed 也接受换代码与改配置（模拟腾讯云允许对更新失败的函数重做更新）。
 	acceptUpdateFailed bool
+	// acceptTimerWhileFailed 为 true 时，函数在 UpdateFailed、CreateFailed 时也接受改定时器（模拟腾讯云允许，没有在真机上确认）。
+	acceptTimerWhileFailed bool
+	// configRequests 记下每一次改配置的请求。
+	configRequests []tencentscf.UpdateFunctionConfigurationRequest
 	// slowWrites 让每个写请求都停一会，好让并发的写有机会撞上。
 	slowWrites time.Duration
 
@@ -177,6 +183,9 @@ func (s *scriptedSCF) UpdateFunctionConfiguration(ctx context.Context, req tence
 	}
 	done, _ := s.begin("UpdateFunctionConfiguration", req.FunctionRef, true, nil)
 	defer done()
+	s.mu.Lock()
+	s.configRequests = append(s.configRequests, req)
+	s.mu.Unlock()
 	s.reviveUpdateFailed(req.FunctionRef)
 	return s.baselineSCF.UpdateFunctionConfiguration(ctx, req)
 }
@@ -184,6 +193,23 @@ func (s *scriptedSCF) UpdateFunctionConfiguration(ctx context.Context, req tence
 func (s *scriptedSCF) EnsureTimerTrigger(ctx context.Context, req tencentscf.TimerTriggerRequest) (*tencentscf.TimerTriggerInfo, error) {
 	done, _ := s.begin("EnsureTimerTrigger", req.FunctionRef, true, nil)
 	defer done()
+	if s.acceptTimerWhileFailed {
+		// 暂时当作 Active 写定时器，写完恢复原来的失败状态。
+		s.baselineSCF.mu.Lock()
+		function, ok := s.baselineSCF.functions[baselineKey(req.FunctionRef)]
+		status := ""
+		if ok {
+			status, function.info.Status = function.info.Status, "Active"
+		}
+		s.baselineSCF.mu.Unlock()
+		if ok {
+			defer func() {
+				s.baselineSCF.mu.Lock()
+				function.info.Status = status
+				s.baselineSCF.mu.Unlock()
+			}()
+		}
+	}
 	return s.baselineSCF.EnsureTimerTrigger(ctx, req)
 }
 
@@ -194,9 +220,21 @@ func (s *scriptedSCF) GetTimerTrigger(ctx context.Context, ref tencentscf.Functi
 }
 
 func (s *scriptedSCF) DeleteTimerTrigger(ctx context.Context, req tencentscf.TimerTriggerRequest) error {
-	done, _ := s.begin("DeleteTimerTrigger", req.FunctionRef, true, nil)
+	done, err := s.begin("DeleteTimerTrigger", req.FunctionRef, true, &s.deleteTimerErrs)
 	defer done()
+	if err != nil {
+		return err
+	}
 	return s.baselineSCF.DeleteTimerTrigger(ctx, req)
+}
+
+func (s *scriptedSCF) PutReservedConcurrencyConfig(ctx context.Context, req tencentscf.PutReservedConcurrencyConfigRequest) error {
+	done, err := s.begin("PutReservedConcurrencyConfig", req.FunctionRef, true, &s.reservedErrs)
+	defer done()
+	if err != nil {
+		return err
+	}
+	return s.baselineSCF.PutReservedConcurrencyConfig(ctx, req)
 }
 
 func (s *scriptedSCF) InvokeFunction(ctx context.Context, req tencentscf.InvokeFunctionRequest) (*tencentscf.InvokeFunctionResponse, error) {

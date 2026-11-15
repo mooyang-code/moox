@@ -399,6 +399,13 @@ func TestDescribeStripsSecretsAndReadsTimer(t *testing.T) {
 	ctx := context.Background()
 	fake := newBaselineSCF()
 	seedTimerFunction(fake, "Active", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
+	fake.mutate(baselineRef, func(function *baselineFunction) {
+		function.info.Environment["OPERATOR_API_TOKEN"] = "t"
+		function.info.Environment["LEGACY_DB_PASSWORD"] = "p"
+		function.info.Environment["LEGACY_CLIENT_SECRET"] = "s"
+		function.info.Environment["LEGACY_CREDENTIALS"] = "c"
+		function.reservedMem = 320
+	})
 	client := newScriptedSCF(fake)
 	functions := newTestFunctions(t, client)
 	state, err := functions.Describe(ctx, timerRef)
@@ -408,9 +415,12 @@ func TestDescribeStripsSecretsAndReadsTimer(t *testing.T) {
 	require.Equal(t, baselineOldPackage, state.PackageID)
 	require.Equal(t, "hash-final", state.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
 	require.Equal(t, "scf-key-2", state.Environment["MOOX_CALLER_KEY_ID"])
-	for _, key := range []string{"MOOX_CALLER_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_SECRET_KEY"} {
+	require.Equal(t, "fake-cls-secret-id", state.Environment["MOOX_CLS_SECRET_ID"], "公开标识不算密钥")
+	for _, key := range []string{"MOOX_CALLER_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_SECRET_KEY", "OPERATOR_API_TOKEN", "LEGACY_DB_PASSWORD", "LEGACY_CLIENT_SECRET", "LEGACY_CREDENTIALS"} {
 		require.NotContains(t, state.Environment, key)
 	}
+	require.Equal(t, &AsyncRetryState{RetryNum: 0, MsgTTL: 60}, state.AsyncRetry)
+	require.Equal(t, int64(320), state.ReservedMem)
 	require.Equal(t, &TimerState{Timer: Timer{Cron: "5 * * * * * *", Enabled: true}, AvailableStatus: "Available", Qualifier: "$LATEST", Message: timerTriggerMessage}, state.Timer)
 	require.False(t, state.ReadAt.IsZero())
 
@@ -600,4 +610,122 @@ func TestEnsureTreatsNotFoundExtrasAsUnconfigured(t *testing.T) {
 	function := functionState(t, fake, baselineBackfillRef)
 	require.Equal(t, &baselineAsyncRetry{RetryNum: 0, MsgTTL: 60}, function.AsyncRetry)
 	require.Equal(t, int64(320), function.ReservedConcurrencyMem)
+}
+
+// 函数卡在 UpdateFailed、CreateFailed 时定时器开着：停用不等 Active、不看状态，直接停掉；启用照样要求 Active。
+// 假设腾讯云允许给失败状态的函数改定时器（scriptedSCF.acceptTimerWhileFailed 模拟，没有在真机上确认）。
+func TestSetTimerDisablesTimerOfFailedFunction(t *testing.T) {
+	ctx := context.Background()
+	for _, status := range []string{"UpdateFailed", "CreateFailed"} {
+		t.Run(status, func(t *testing.T) {
+			fake := newBaselineSCF()
+			seedTimerFunction(fake, status, baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
+			client := newScriptedSCF(fake)
+			client.acceptTimerWhileFailed = true
+			functions := newTestFunctions(t, client)
+			require.Error(t, functions.SetTimer(ctx, timerRef, Timer{Cron: "5 * * * * * *", Enabled: true}, baselineOldPackage), "失败状态的函数不能启用定时器")
+			require.Zero(t, client.count("EnsureTimerTrigger"))
+			require.NoError(t, functions.SetTimer(ctx, timerRef, Timer{Cron: "5 * * * * * *"}, ""))
+			function := functionState(t, fake, baselineRef)
+			require.False(t, function.Timer.Enabled)
+			require.Equal(t, status, function.Status, "停用不碰函数本身")
+		})
+	}
+}
+
+// 密钥失效（AuthFailure.SecretIdNotFound）不能被当成函数不存在：读回报错，删除不能当成功。
+func TestAuthFailureIsNotMistakenForMissingFunction(t *testing.T) {
+	ctx := context.Background()
+	authErr := func() error {
+		return tcerrors.NewTencentCloudSDKError("AuthFailure.SecretIdNotFound", "SecretId not found", "req-1")
+	}
+	fake := newBaselineSCF()
+	seedTimerFunction(fake, "Active", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
+
+	client := newScriptedSCF(fake)
+	client.getErrs = []error{authErr()}
+	_, err := newTestFunctions(t, client).Describe(ctx, timerRef)
+	require.ErrorContains(t, err, "AuthFailure.SecretIdNotFound")
+
+	client = newScriptedSCF(fake)
+	client.deleteTimerErrs = []error{authErr()}
+	require.ErrorContains(t, newTestFunctions(t, client).Delete(ctx, timerRef), "AuthFailure.SecretIdNotFound")
+	require.Zero(t, client.count("DeleteFunction"), "定时器没删掉就不往下删函数")
+	require.True(t, functionState(t, fake, baselineRef).Timer.Enabled)
+
+	client = newScriptedSCF(fake)
+	client.getErrs = []error{authErr()}
+	require.ErrorContains(t, newTestFunctions(t, client).SetTimer(ctx, timerRef, Timer{}, ""), "AuthFailure.SecretIdNotFound")
+	require.NotErrorIs(t, newTestFunctions(t, client).SetTimer(ctx, timerRef, Timer{}, ""), ErrFunctionNotFound)
+
+	for _, test := range []struct {
+		err             error
+		function, timer bool
+	}{
+		{tcerrors.NewTencentCloudSDKError("ResourceNotFound.Function", "", ""), true, false},
+		{tcerrors.NewTencentCloudSDKError("ResourceNotFound.FunctionName", "", ""), true, false},
+		{tcerrors.NewTencentCloudSDKError("ResourceNotFound.Namespace", "", ""), true, false},
+		{tcerrors.NewTencentCloudSDKError("ResourceNotFound.Trigger", "", ""), false, true},
+		{tcerrors.NewTencentCloudSDKError("ResourceNotFound.Timer", "", ""), false, true},
+		{authErr(), false, false},
+		{tcerrors.NewTencentCloudSDKError("InvalidParameter", "Function not found in cache", ""), false, false},
+		{errors.New("something not found"), false, false},
+		{errors.New("ResourceNotFound.FunctionName"), true, false},
+	} {
+		require.Equal(t, test.function, isFunctionNotFound(test.err), test.err.Error())
+		require.Equal(t, test.timer, isTriggerNotFound(test.err), test.err.Error())
+	}
+}
+
+// 只有函数个数与命名空间配额算 quota；LimitExceeded.Memory 等参数越界不算；补采函数设预留并发超配额同样报 quota。
+func TestOnlyFunctionAndNamespaceLimitsAreQuota(t *testing.T) {
+	ctx := context.Background()
+	for _, code := range []string{"LimitExceeded.Memory", "LimitExceeded.Timeout", "LimitExceeded.MsgTTL", "LimitExceeded.RetryNum", "LimitExceeded.InitTimeout"} {
+		require.False(t, isQuotaError(tcerrors.NewTencentCloudSDKError(code, "", "")), code)
+		client := newScriptedSCF(newBaselineSCF())
+		client.createErrs = []error{tcerrors.NewTencentCloudSDKError(code, "参数越界", "req-1")}
+		require.NotErrorIs(t, newTestFunctions(t, client).Ensure(ctx, finalSpec("v1")), ErrQuota, code)
+	}
+	client := newScriptedSCF(newBaselineSCF())
+	client.reservedErrs = []error{tcerrors.NewTencentCloudSDKError("LimitExceeded.Function", "超过上限", "req-1")}
+	require.ErrorIs(t, newTestFunctions(t, client).Ensure(ctx, backfillSpec()), ErrQuota)
+	require.Equal(t, 1, client.count("PutReservedConcurrencyConfig"), "配额超限不重试")
+}
+
+// 云上只剩废弃键（旧的创建预留号）不同：Ensure 写一次把它删掉，之后不再写；环境单独变化时改配置只带环境与超时。
+func TestEnsureRemovesStaleKeysWithEnvironmentOnlyUpdate(t *testing.T) {
+	ctx := context.Background()
+	fake := newBaselineSCF()
+	environment := timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2")
+	environment["MOOX_CREATE_RESERVATION_ID"] = "old-reservation"
+	seedTimerFunction(fake, "Active", baselineOldPackage, environment, enabledTimer("5 * * * * * *"))
+	client := newScriptedSCF(fake)
+	functions := newTestFunctions(t, client)
+	require.NoError(t, functions.Ensure(ctx, finalSpec("v1")))
+	require.Len(t, client.configRequests, 1)
+	request := client.configRequests[0]
+	require.Equal(t, int64(60), request.Timeout)
+	require.Zero(t, request.MemorySize, "配置没变时不带内存")
+	require.Zero(t, request.MaxInstanceConcurrency)
+	require.Empty(t, request.PublicNetStatus)
+	require.Empty(t, request.VpcID)
+	require.False(t, request.ClearNativeCLS)
+	require.NotContains(t, functionState(t, fake, baselineRef).Environment, "MOOX_CREATE_RESERVATION_ID")
+
+	fake.resetWrites()
+	require.NoError(t, functions.Ensure(ctx, finalSpec("v1")))
+	writes, _ := fake.snapshot()
+	require.Empty(t, writes)
+}
+
+// 已经在新包上的函数再升级一次：不换代码，只顺带补上缺的异步重试（每次升级都自愈的老行为）。
+func TestUpgradeCodeRepairsAsyncRetryWhenAlreadyCurrent(t *testing.T) {
+	ctx := context.Background()
+	fake := newBaselineSCF()
+	seedTimerFunction(fake, "Active", baselineNewPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
+	fake.mutate(baselineRef, func(function *baselineFunction) { function.asyncRetry = nil })
+	require.NoError(t, newTestFunctions(t, fake).UpgradeCode(ctx, timerRef, baselinePackage("v2")))
+	writes, _ := fake.snapshot()
+	require.Len(t, writes, 1)
+	require.True(t, strings.HasPrefix(writes[0], "UpdateFunctionEventInvokeConfig "))
 }
