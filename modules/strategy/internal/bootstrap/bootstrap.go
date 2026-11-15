@@ -64,17 +64,23 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err := db.ApplySchema(schema.AllSQL()); err != nil {
 		return nil, nil, fmt.Errorf("应用策略 schema 失败：%w", err)
 	}
-	if interrupted, err := db.MarkRunningReplaysInterrupted(ctx, time.Now()); err != nil {
-		return nil, nil, fmt.Errorf("标记中断的回放失败：%w", err)
-	} else if interrupted > 0 {
-		log.Infof("进程重启：%d 个运行中的回放已标记为 failed(interrupted)", interrupted)
-	}
 	// 访问 Storage、FactorMgr 与 Trade 统一经本机主机网关（strategy 身份）；网关客户端由本进程持有，各适配器只借用。
 	gateway, err := cfg.OpenGateway(func(err error) { log.Warnf("strategy 网关目录刷新失败：%v", err) })
 	if err != nil {
 		return nil, nil, fmt.Errorf("打开 strategy 的网关客户端：%w", err)
 	}
 	closers = append(closers, gateway.Close)
+	// “因子现算”来源经同一个网关客户端调因子引擎的 EngineControl：不套 factor.timeout，超时按服务目录的路由超时。
+	engineClient := input.NewEngineClient(gateway)
+	// 先关掉上次运行中途退出的“因子现算”回放留在因子引擎上的会话，再把遗留的运行中回放标成 interrupted。
+	if err := replay.CloseInterruptedSessions(ctx, db, engineClient, log.Warnf); err != nil {
+		return nil, nil, fmt.Errorf("读取运行中的回放失败：%w", err)
+	}
+	if interrupted, err := db.MarkRunningReplaysInterrupted(ctx, time.Now()); err != nil {
+		return nil, nil, fmt.Errorf("标记中断的回放失败：%w", err)
+	} else if interrupted > 0 {
+		log.Infof("进程重启：%d 个运行中的回放已标记为 failed(interrupted)", interrupted)
+	}
 	eventRuntime, err := newEventBusRuntime(db, cfg)
 	if err != nil {
 		return nil, nil, err
@@ -99,8 +105,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil
 	})
 	service.Warmer = warm
-	// “因子现算”来源经同一个网关客户端调因子引擎的 EngineControl：不套 factor.timeout，超时按服务目录的路由超时。
-	runner := &replay.Runner{Store: db, Client: replayClient, Engine: input.NewEngineClient(gateway), ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
+	runner := &replay.Runner{Store: db, Client: replayClient, Engine: engineClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
 	service.Replays = runner
 
 	observer, err := newInstanceObserver(db, prometheus.DefaultRegisterer, log.Warnf)

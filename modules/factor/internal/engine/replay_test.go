@@ -216,17 +216,56 @@ func TestReplayUniverseExcludesNotYetListedSubjects(t *testing.T) {
 
 type lateSource struct{ replaySource }
 
+// 本地的填充行（同步补的缺失周期：OHLC 取上一根收盘）与实时一样不算本期有行：HOLE 第 10、11 分钟是填充行，这两期不出行、
+// 也不算本期可用；第 12 分钟恢复真实行后照常出行。
+func TestReplaySkipsFilledRows(t *testing.T) {
+	m, _ := newReplayManagerForTest(t)
+	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "dataset_a", Freq: "1m"}
+	fields := []seriesstore.Field{{Name: "close", Type: seriesstore.TypeFloat64}, {Name: "open", Type: seriesstore.TypeFloat64}}
+	cols := seriesstore.NewColumns(fields, 18)
+	for i := 0; i < 20; i++ {
+		if i == 10 || i == 11 {
+			continue
+		}
+		cols.AppendRow(rt0.Add(time.Duration(i)*time.Minute), plainTag, false, seriesstore.Float(200+float64(i)), seriesstore.Float(200+float64(i)))
+	}
+	_, err := m.deps.Store.WriteRange(context.Background(), src, seriesstore.SubjectWrite{Subject: "HOLE", From: rt0, To: rt0.Add(20 * time.Minute), Rows: cols},
+		seriesstore.WriteOptions{FillGaps: true})
+	require.NoError(t, err)
+	m.deps.Source = holeSource{}
+	mustOpenReplay(t, m, replayOpenReq("r_hole", 8, 14, 1, "bias", "close"))
+	hole := m.session("r_hole").view.Series("HOLE")
+	require.Len(t, hole, 1)
+	require.True(t, hole[0].Filled[(replayMinuteUnix(10)-hole[0].Start)/60], "夹具：第 10 分钟是同步补的填充行")
+	require.NotNil(t, replayRowOf(mustStepOne(t, m, "r_hole", 9), "HOLE", plainTag))
+	for _, minute := range []int{10, 11} {
+		period := mustStepOne(t, m, "r_hole", minute)
+		require.False(t, replayHasSubject(period, "HOLE"), "第 %d 分钟是填充行，不出行", minute)
+		require.NotNil(t, replayRowOf(period, "A", plainTag))
+	}
+	back := replayRowOf(mustStepOne(t, m, "r_hole", 12), "HOLE", plainTag)
+	require.NotNil(t, back, "恢复真实行后照常出行")
+	require.Equal(t, 212.0, back.GetValues()["close"])
+}
+
+type holeSource struct{ replaySource }
+
+func (holeSource) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return []string{"A", "B", "HOLE"}, nil
+}
+
 func (lateSource) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
 	return []string{"A", "B", "LATE"}, nil
 }
 
-// 多数标的的本地数据不够预热区间：因子前段是空值，回放没有意义，拒绝建立会话并提示回补；显式允许后建立并报告不足的标的数。
+// 多数标的的本地数据不够预热区间：因子前段是空值，回放没有意义，拒绝建立会话并提示先补齐本地历史；显式允许后建立并报告不足的标的数。
 func TestReplayOpenRejectsShortWarmupUnlessAllowed(t *testing.T) {
 	m, _ := newReplayManagerForTest(t)
 	req := replayOpenReq("r10", 1, 5, 1, "bias")
 	rsp := openReplay(t, m, req)
 	require.Equal(t, commonpb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode())
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), "回补")
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "请先补齐本地历史再发起")
+	require.NotContains(t, rsp.GetRetInfo().GetMsg(), "确认接受短预热", "策略侧没有放行短预热的选项")
 
 	req.AllowShortWarmup = true
 	rsp = mustOpenReplay(t, m, req)

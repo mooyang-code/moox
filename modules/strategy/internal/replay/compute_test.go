@@ -42,6 +42,9 @@ type fakeEngine struct {
 	periods []int64
 	steps   []*factorpb.StepReplayReq
 	closed  int
+	// closedIDs 是 CloseReplay 收到的回放 ID；closeErr 非空时 CloseReplay 转发失败。
+	closedIDs []string
+	closeErr  error
 	// applied 是各期生效的请求参数（期次 → window）。
 	applied map[int64]float64
 }
@@ -178,8 +181,12 @@ func (e *fakeEngine) viewValues(id string, hour int) map[string]float64 {
 	return values
 }
 
-func (e *fakeEngine) CloseReplay(context.Context, *factorpb.CloseReplayReq, ...client.Option) (*factorpb.CloseReplayRsp, error) {
+func (e *fakeEngine) CloseReplay(_ context.Context, req *factorpb.CloseReplayReq, _ ...client.Option) (*factorpb.CloseReplayRsp, error) {
 	e.closed++
+	e.closedIDs = append(e.closedIDs, req.GetReplayId())
+	if e.closeErr != nil {
+		return nil, e.closeErr
+	}
 	return &factorpb.CloseReplayRsp{RetInfo: &commonpb.RetInfo{}, Closed: true}, nil
 }
 
@@ -203,6 +210,8 @@ func startComputeReplay(t *testing.T, repo *store.Store, client input.Client, id
 
 // 引擎给出与 View 相同的行时，“因子现算”与 View 来源的逐期记录（目标、账本、摘要、收益）完全一致：覆盖缺价清算、现金缓冲、
 // 年龄判定（引擎的根数与 View 的探针结论相同）、bars[-1] 与歧义；每步只返回 2 期（截断）不影响结果。
+// 这只证明数据通路（行的整理、年龄、上一根、分段与截断）：不覆盖标的全集的差别——引擎只取源数据集当前在册、本地数据覆盖到
+// 最后一期的标的，截面因子的全集可能比 View 当时的小，这里的假引擎直接给出 View 的行，不模拟它。
 func TestComputeSourceMatchesViewSource(t *testing.T) {
 	for _, scenario := range goldenScenarios() {
 		for _, truncate := range []int{0, 2} {
@@ -233,6 +242,7 @@ func TestComputeSourceMatchesViewSource(t *testing.T) {
 				var metrics Metrics
 				require.NoError(t, json.Unmarshal(done.MetricsJSON, &metrics))
 				require.Contains(t, strings.Join(metrics.Limitations, "\n"), "因子现算")
+				require.Contains(t, strings.Join(metrics.Limitations, "\n"), "数据集登记 3 个标的，参与 3 个", "局限说明写明登记数与参与数")
 
 				// 按 OpenReplay 给出的各期推进：请求的期次连续，从不越过区间末尾，截断时从下一期接着请求。
 				require.Equal(t, boolInt(scenario.dsl == previousDSL), engine.open.GetExtraPeriods(), "只有用到 bars[-1] 才多预热一根")
@@ -407,6 +417,13 @@ func TestComputeTunedDropsParamsRejectedByEngine(t *testing.T) {
 	require.Equal(t, "{}", string(bars[1].ParamsJSON), "被拒绝的参数不留在记录里")
 	require.Equal(t, "B", tunedPick(t, bars[1]), "被拒绝后按成员自己的参数（20）")
 	require.Equal(t, 30.0, requested(engine, 2))
+	var summary struct {
+		Decision struct {
+			Notes []string `json:"notes"`
+		} `json:"decision"`
+	}
+	require.NoError(t, json.Unmarshal(bars[1].SummaryJSON, &summary))
+	require.Contains(t, strings.Join(summary.Decision.Notes, "\n"), "因子引擎拒绝了成员 f__var 这一期的参数（参数 window 不满足联合约束）", "拒绝原因写进这一期的说明")
 	for i, want := range []float64{0, 0, 30, 30} {
 		require.Equal(t, want, paramsWindow(t, bars[i]), "第 %d 期记录的生效参数", i)
 	}
@@ -469,10 +486,10 @@ func TestComputeSourceEngineFailures(t *testing.T) {
 		require.Len(t, engine.steps, 1)
 	})
 	t.Run("建会话转发失败", func(t *testing.T) {
-		engine := &fakeEngine{openErr: errors.New("gateway forward failed")}
+		engine := &fakeEngine{openErr: errors.New("gateway forward failed"), closeErr: errors.New("gateway forward failed")}
 		done := run(t, engine)
 		require.Contains(t, done.Error, "因子引擎不在线")
-		require.Equal(t, 0, engine.closed, "没有建立的会话不用关")
+		require.Equal(t, []string{"f1"}, engine.closedIDs, "结果未知：引擎可能已登记会话，尽力关一次（关不上只记日志）")
 	})
 	t.Run("引擎的成员定义与发起时不一致", func(t *testing.T) {
 		engine := &fakeEngine{factors: []*factorpb.ReplayFactor{{MemberKey: "mom", FactorId: "mom", Kind: "fixed", DefinitionHash: "sha256:other"}}}
@@ -493,18 +510,18 @@ func TestComputeSourceEngineFailures(t *testing.T) {
 	})
 }
 
-// 每步期数：按“序列数 × 列数 × 20 字节”控制在 3 MiB 以内、不超过分段根数；调参固定 1 期；一期就超过上限时拒绝。
+// 每步期数：按“序列数 × 列数 × 48 字节”控制在 3 MiB 以内、不超过分段根数；调参固定 1 期；一期就超过上限时拒绝。
 func TestComputeStepPeriods(t *testing.T) {
 	for _, tc := range []struct {
 		series, columns, limit int
 		tuned                  bool
 		want                   int
 	}{
-		{500, 10, 1000, false, 31},
+		{500, 10, 1000, false, 13},
 		{3, 3, 50, false, 50},
-		{5000, 10, 50, false, 3},
+		{1000, 10, 50, false, 6},
 		{3, 3, 50, true, 1},
-		{30000, 4, 50, false, 1},
+		{6000, 10, 50, false, 1},
 	} {
 		got, err := ComputeStepPeriods(tc.series, tc.columns, tc.tuned, tc.limit)
 		require.NoError(t, err)
@@ -548,7 +565,12 @@ func (e *viewEngine) OpenReplay(_ context.Context, req *factorpb.OpenReplayReq, 
 			}
 		}
 	}
-	return &factorpb.OpenReplayRsp{RetInfo: &commonpb.RetInfo{}, ReplayId: req.GetReplayId(), PeriodTimes: e.periods, StepSeconds: 3600}, nil
+	subjects, _ := e.client.ListDatasetSubjects(context.Background(), "crypto", "")
+	ids := make([]string, 0, len(subjects))
+	for _, subject := range subjects {
+		ids = append(ids, subject.SubjectID)
+	}
+	return &factorpb.OpenReplayRsp{RetInfo: &commonpb.RetInfo{}, ReplayId: req.GetReplayId(), Subjects: ids, PeriodTimes: e.periods, StepSeconds: 3600}, nil
 }
 
 func (e *viewEngine) StepReplay(_ context.Context, req *factorpb.StepReplayReq, _ ...client.Option) (*factorpb.StepReplayRsp, error) {
@@ -636,4 +658,28 @@ func TestComputeSourceMatchesViewSourceOnMarkets(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 进程重启：先逐个关掉“因子现算”运行中回放留在因子引擎上的会话（View 来源的不用关，关不上只记日志），再标成 interrupted。
+func TestCloseInterruptedSessionsBeforeMarkingInterrupted(t *testing.T) {
+	repo := openStore(t)
+	ctx := context.Background()
+	for i, item := range []struct{ id, input string }{{"c1", store.ReplayInputCompute}, {"v1", store.ReplayInputView}, {"c2", store.ReplayInputCompute}, {"c3", store.ReplayInputCompute}} {
+		require.NoError(t, repo.CreateReplay(ctx, store.Replay{ReplayID: item.id, DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", SpaceID: "crypto", Input: item.input,
+			Tasks: map[string]store.ReplayTask{"spot": spotTask}, StartTime: origin, EndTime: origin.Add(time.Hour), CreatedAt: origin.Add(time.Duration(i) * time.Second)}))
+	}
+	// 按登记先后认领：c1、v1、c2 运行中，c3 还在排队。
+	for range 3 {
+		_, found, err := repo.ClaimNextReplay(ctx, origin)
+		require.NoError(t, err)
+		require.True(t, found)
+	}
+	engine := &fakeEngine{closeErr: errors.New("connection refused")}
+	var logs []string
+	require.NoError(t, CloseInterruptedSessions(ctx, repo, engine, func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }))
+	require.Equal(t, []string{"c1", "c2"}, engine.closedIDs, "只关运行中的因子现算回放，逐个关闭")
+	require.Len(t, logs, 2, "关不上只记日志")
+	interrupted, err := repo.MarkRunningReplaysInterrupted(ctx, origin)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), interrupted)
 }

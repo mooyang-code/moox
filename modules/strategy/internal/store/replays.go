@@ -186,6 +186,8 @@ const (
 	sqlCancelReplay = `UPDATE t_strategy_replays SET c_status = 'cancelled', c_mtime = ? WHERE c_replay_id = ? AND c_status IN ('pending', 'running')`
 	// sqlSelectReplayStatus 只读取回放状态。
 	sqlSelectReplayStatus = `SELECT c_status FROM t_strategy_replays WHERE c_replay_id = ?`
+	// sqlSelectRunningReplaysOfInput 列出某种输入来源的运行中回放（启动时先关掉“因子现算”遗留在因子引擎上的会话）。
+	sqlSelectRunningReplaysOfInput = `SELECT c_replay_id FROM t_strategy_replays WHERE c_status = 'running' AND c_input = ? ORDER BY c_replay_id`
 	// sqlMarkRunningReplaysInterrupted 把遗留的运行中回放标记为 failed(interrupted)。
 	sqlMarkRunningReplaysInterrupted = `UPDATE t_strategy_replays SET c_status = 'failed', c_error = 'interrupted', c_mtime = ? WHERE c_status = 'running'`
 	// sqlInsertReplayBar 写入一个周期的回放记录。
@@ -422,6 +424,13 @@ func (s *Store) ReplayStatus(ctx context.Context, replayID string) (string, erro
 		return "", ErrNotFound
 	}
 	return status, nil
+}
+
+// RunningReplayIDs 返回某种输入来源（ReplayInputView 或 ReplayInputCompute）的运行中回放，按 ID 排序。
+func (s *Store) RunningReplayIDs(ctx context.Context, input string) ([]string, error) {
+	var ids []string
+	err := s.db.WithContext(ctx).Raw(sqlSelectRunningReplaysOfInput, input).Scan(&ids).Error
+	return ids, err
 }
 
 // MarkRunningReplaysInterrupted 在进程启动时把遗留的 running 任务标记为 failed(interrupted)，已写入的 bars 保留。

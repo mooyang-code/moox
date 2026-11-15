@@ -424,6 +424,11 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 				decision.Summary.Notes = append(decision.Summary.Notes, outcome.Notes...)
 			}
 			key := bar.StorageStart.Unix()
+			// 引擎拒绝的参数（这一期沿用上一期生效的）写进这一期的说明与日志：持续被拒时结果看起来有效、其实没有调参。
+			if rejected := source.Rejected(key); len(rejected) > 0 {
+				decision.Summary.Notes = append(decision.Summary.Notes, rejected...)
+				r.logf("回放 %s 周期 %s：%s", job.ReplayID, bar.BarEnd.UTC().Format(time.RFC3339), strings.Join(rejected, "；"))
+			}
 			if err := book.settle(ctx, bar, decision, barPrices(replayMarkets, segments, key), barFunding(replayMarkets, segments, key, job.FundingColumn), source.Applied(key)); err != nil {
 				return acc.finish(), err
 			}

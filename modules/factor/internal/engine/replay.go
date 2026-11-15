@@ -122,7 +122,6 @@ type replaySession struct {
 	lookback int
 	columns  replayColumns
 	view     *serieswindow.View
-	cols     map[string]*seriesstore.Columns
 	// earliest 是标的在本地数据里的第一根（各 series_tag 取最早）：本期的标的全集只含已经上市的标的。
 	earliest map[string]time.Time
 	// seriesEarliest 是每条序列在本地数据里的第一根：年龄按序列算。
@@ -323,7 +322,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		}
 	}
 	if shortCount*2 > len(subjects) && !req.AllowShortWarmup {
-		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_CONFLICT, "%d/%d 个标的的本地数据晚于预热起点 %s（例如 %s），因子前段会是空值：先回补或导入更早的历史（moox-factor-engine backfill / moox-cli import），或确认接受短预热后重新发起",
+		return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_CONFLICT, "%d/%d 个标的的本地数据晚于预热起点 %s（例如 %s），因子前段会是空值：请先补齐本地历史再发起（moox-factor-engine backfill / moox-cli import）",
 			shortCount, len(subjects), axis.Format(start), strings.Join(shortSamples, "、"))
 	}
 	// observed 成员：历史截面还要用本地存储里在快照区间内有数据、但不在回放标的里的标的（含已下架的），与实时计算同一口径。
@@ -367,7 +366,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	}
 	session := &replaySession{
 		id: req.ReplayID, set: set, src: src, axis: axis, step: step, from: from, to: to, start: start,
-		subjects: subjects, history: history, lookback: lookback, columns: columns, view: view, cols: snapshot,
+		subjects: subjects, history: history, lookback: lookback, columns: columns, view: view,
 		earliest: earliest, seriesEarliest: seriesEarliest, release: release,
 		cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
 	}
@@ -617,12 +616,16 @@ func seriesValue(view *serieswindow.View, sv serieswindow.SeriesView, field stri
 	return value, true
 }
 
-// seriesHasRow 报告这条序列在 atSec 那一根有没有任何一个数值字段的值。
+// seriesHasRow 报告这条序列在 atSec 那一根有没有真实的源行：有任何一个数值字段的值、且不是填充行。填充行是同步补上的缺失周期
+// （OHLC 取上一根收盘、成交量为 0），与实时一样不算本期有行（实时把目标那一根是填充行的序列判为本期不可用，见 localdata.missingTagsAt）。
 func seriesHasRow(view *serieswindow.View, sv serieswindow.SeriesView, atSec int64) bool {
 	if atSec < sv.Start || atSec > sv.End(view.Step) {
 		return false
 	}
 	i := (atSec - sv.Start) / view.Step
+	if int(i) < len(sv.Filled) && sv.Filled[i] {
+		return false
+	}
 	for _, col := range sv.Cols {
 		if !math.IsNaN(col[i]) {
 			return true
@@ -732,9 +735,18 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 	if err != nil {
 		return nil, err
 	}
+	// 本期可用按序列判断，与实时一致：这条序列本期有真实的源行（填充行不算）；至少有一条可用序列的标的才是可用标的。
 	var available []string
+	var availableSeries []seriesset.Series
 	for _, subject := range universe {
-		if _, ok := s.view.ValueAt(subject, "close", period.Unix()); ok || s.hasRow(subject, period) {
+		has := false
+		for _, sv := range s.view.Series(subject) {
+			if seriesHasRow(s.view, sv, period.Unix()) {
+				has = true
+				availableSeries = append(availableSeries, seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag})
+			}
+		}
+		if has {
 			available = append(available, subject)
 		}
 	}
@@ -753,7 +765,7 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 		}
 	}
 	loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: available,
-		AvailableSeries: pipeline.SubjectSeries(s.view, available), Frames: map[string]*storageio.Frame{}}
+		AvailableSeries: availableSeries, Frames: map[string]*storageio.Frame{}}
 	computation, err := runner.Compute(ctx, plan, loaded)
 	if err != nil {
 		return nil, fmt.Errorf("计算 %s：%w", s.axis.Format(period), err)
@@ -791,15 +803,6 @@ func (m *replayManager) replayHistory(ctx context.Context, src seriesstore.Sourc
 	}
 	return localdata.HistoryCandidates(m.deps.Store, src, from, to,
 		localdata.HistoryRule{Exclude: subjects, Own: candidates, Synced: append(synced, candidates...)})
-}
-
-func (s *replaySession) hasRow(subject string, at time.Time) bool {
-	cols := s.cols[subject]
-	if cols == nil {
-		return false
-	}
-	i := sort.Search(cols.Len(), func(i int) bool { return cols.Times[i] >= at.Unix() })
-	return i < cols.Len() && cols.Times[i] == at.Unix()
 }
 
 // closeSession 等正在执行的 Step 结束之后才归还内存预算并移出会话表（Step 持有会话锁整个过程）：

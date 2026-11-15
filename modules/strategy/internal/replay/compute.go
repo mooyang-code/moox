@@ -25,8 +25,8 @@ import (
 const (
 	// computeStepBytes 是单步响应的目标上限（引擎侧同样按 3 MiB 截断，服务包体上限是默认的 4 MiB）。
 	computeStepBytes = 3 << 20
-	// computeValueBytes 是估算单步大小时每个值的字节数（列名、序列化开销都算在内）。
-	computeValueBytes = 20
+	// computeValueBytes 是估算单步大小时每个值的字节数：引擎每行除了本期的值还带上一期的同名列，列名与序列化开销都算在内。
+	computeValueBytes = 48
 	// computeCloseTimeout 是结束会话的超时：回放已经结束，关不上只影响引擎侧的内存，由引擎 6 小时闲置清理兜底。
 	computeCloseTimeout = 30 * time.Second
 	noteCompute         = "compute"
@@ -79,7 +79,7 @@ func ComputeColumns(program *dsl.Program, fundingColumn string) []string {
 	return columns
 }
 
-// ComputeStepPeriods 返回“因子现算”每步请求的期数：按“序列数 × 列数 × 每个值约 20 字节”估算一期的大小，单步控制在 3 MiB 以内、
+// ComputeStepPeriods 返回“因子现算”每步请求的期数：按“序列数 × 列数 × 每个值约 48 字节”估算一期的大小，单步控制在 3 MiB 以内、
 // 至少 1 期，再不超过 limit（与 View 来源的分段一致，取消与进度按段生效）；声明了 factor_params 时（tuned）固定 1 期：
 // 下一期的参数要等这一期求值之后才有。一期就超过 3 MiB 时返回错误（提交时拒绝，提示减少引用的列）。
 func ComputeStepPeriods(series, columns int, tuned bool, limit int) (int, error) {
@@ -112,14 +112,40 @@ type computeSource struct {
 	bars    []input.PeriodBoundaries
 	// stepPeriods 是每步请求的期数。
 	stepPeriods int
-	// applied 是最近一段各期实际生效的逐期提交参数（bar_start 的 Unix 秒 → 参数）。
-	applied map[int64]engine.ParamSet
+	// applied 是最近一段各期实际生效的逐期提交参数（bar_start 的 Unix 秒 → 参数）；rejected 是同一段各期被引擎拒绝的参数的说明。
+	applied  map[int64]engine.ParamSet
+	rejected map[int64][]string
 	// note 是写进局限说明的会话概况：被引擎排除的标的、预热不足的标的。
 	note   string
 	opened bool
 	// tail 是上一段最后一期（bar_start 为 tailAt）的行：策略用到 bars[-1] 时，下一段第一期的上一根读它。
 	tail   []input.Row
 	tailAt time.Time
+}
+
+// CloseInterruptedSessions 在进程启动、把遗留的运行中回放标成 interrupted 之前调用：逐个关掉“因子现算”回放留在因子引擎上的会话
+// （进程在回放中途退出时没人关，会话占着整段快照的内存与准入预留，要等引擎 6 小时闲置清理）。尽力而为：关不上只记日志，
+// 会话不存在时引擎返回 closed=false、不报错。返回读取运行中回放的错误。
+func CloseInterruptedSessions(ctx context.Context, repo *store.Store, engine input.EngineClient, logf func(format string, args ...any)) error {
+	if repo == nil || engine == nil {
+		return nil
+	}
+	ids, err := repo.RunningReplayIDs(ctx, store.ReplayInputCompute)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		closeCtx, cancel := context.WithTimeout(ctx, computeCloseTimeout)
+		rsp, err := engine.CloseReplay(closeCtx, &factorpb.CloseReplayReq{ReplayId: id})
+		cancel()
+		if err == nil {
+			err = engineRetError("CloseReplay", rsp.GetRetInfo())
+		}
+		if err != nil && logf != nil {
+			logf("进程重启：结束回放 %s 留在因子引擎上的会话失败（由引擎闲置清理）：%v；原始错误：%v", id, err, input.RawCause(err))
+		}
+	}
+	return nil
 }
 
 // newComputeSource 建立“因子现算”的会话：按提交的区间（bars 的首尾）调 OpenReplay，可回放的各期以引擎给出的为准；
@@ -159,6 +185,9 @@ func (r *Runner) newComputeSource(ctx context.Context, job store.Replay, resolve
 		To: bars[len(bars)-1].BarEnd.UTC().Format(time.RFC3339), ExtraPeriods: int32(extra), Columns: columns,
 	})
 	if err != nil {
+		// 结果未知：引擎可能已经登记了会话（例如响应在中转上丢了、或超时），尽力关一次；会话不存在时引擎返回 closed=false、不报错。
+		source.opened = true
+		_ = source.Close(ctx)
 		return nil, &engineOfflineError{method: "OpenReplay", raw: err}
 	}
 	if err := engineRetError("OpenReplay", rsp.GetRetInfo()); err != nil {
@@ -208,13 +237,19 @@ func (s *computeSource) adopt(rsp *factorpb.OpenReplayRsp) error {
 	}
 	var parts []string
 	parts = append(parts, "因子现算：主帧的因子按因子机本地 K 线与回放中的参数重新计算，不读 View 的历史值；年龄按因子机本地数据的根数判断；附加来源与参考市场仍读 View")
+	// 引擎的候选只取源数据集当前在册（active）的标的，名单里消失的标的（不论何时下架，包括回放区间之后才下架的）不是候选、也不在
+	// excluded 里；候选里本地数据不覆盖回放最后一期的再被排除。所以按数据集登记的个数与实际参与的个数说明差额。
+	listed := len(s.markets[0].subjects)
+	coverage := fmt.Sprintf("数据集登记 %d 个标的，参与 %d 个：只取源数据集当前在册、且本地数据覆盖到回放最后一期的标的，已下架的（不论何时下架）整段不参与，截面因子按较小的全集算，结果有幸存者偏差",
+		listed, len(rsp.GetSubjects()))
 	if excluded := rsp.GetExcluded(); len(excluded) > 0 {
 		samples := make([]string, 0, 3)
 		for _, item := range excluded[:min(3, len(excluded))] {
 			samples = append(samples, item.GetSubjectId()+"（"+item.GetReason()+"）")
 		}
-		parts = append(parts, fmt.Sprintf("%d 个标的的本地数据不覆盖回放区间，整段不参与（例如 %s）；区间内下架的标的也在其中，结果有幸存者偏差", len(excluded), strings.Join(samples, "、")))
+		coverage += fmt.Sprintf("（在册但本地数据不覆盖的 %d 个，例如 %s）", len(excluded), strings.Join(samples, "、"))
 	}
+	parts = append(parts, coverage)
 	if short := rsp.GetShortWarmup(); short > 0 {
 		parts = append(parts, fmt.Sprintf("%d 个标的的本地数据晚于预热起点，因子前段为空值（例如 %s）", short, strings.Join(rsp.GetShortSamples(), "、")))
 	}
@@ -237,6 +272,8 @@ func (s *computeSource) End() time.Time {
 }
 
 func (s *computeSource) Applied(key int64) engine.ParamSet { return s.applied[key] }
+
+func (s *computeSource) Rejected(key int64) []string { return s.rejected[key] }
 
 // Close 结束引擎上的会话。回放可能因取消或失败结束（ctx 也许已结束），所以用不随它取消的上下文另设超时；关不上只记日志。
 func (s *computeSource) Close(ctx context.Context) error {
@@ -274,6 +311,7 @@ func (s *computeSource) Load(ctx context.Context, segment []input.PeriodBoundari
 	var last []input.Row
 	ages := make(map[string]map[int64]map[string]int, len(s.markets))
 	s.applied = make(map[int64]engine.ParamSet, len(segment))
+	s.rejected = make(map[int64][]string)
 	params := paramsToPB(nextParams)
 	for cursor := first; cursor < want; {
 		if err := s.abort(ctx); err != nil {
@@ -306,6 +344,9 @@ func (s *computeSource) Load(ctx context.Context, segment []input.PeriodBoundari
 				s.recordAge(ages, at.Unix(), row)
 			}
 			s.applied[at.Unix()] = appliedParams(period.GetAppliedParams())
+			for _, rejection := range period.GetRejectedParams() {
+				s.rejected[at.Unix()] = append(s.rejected[at.Unix()], fmt.Sprintf("因子引擎拒绝了成员 %s 这一期的参数（%s），沿用上一期生效的参数", rejection.GetMemberKey(), rejection.GetReason()))
+			}
 		}
 		cursor += len(periods)
 		params = nil // 请求的参数只给这一段的第一期，之后引擎沿用

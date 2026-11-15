@@ -23,6 +23,8 @@ type barSource interface {
 	// Applied 是这一根（bar_start 的 Unix 秒）因子实际生效的、由回放逐期提交的可变成员参数，写进每期记录；
 	// View 来源没有逐期提交的参数，返回 nil。
 	Applied(key int64) engine.ParamSet
+	// Rejected 是这一根被因子引擎拒绝的逐期提交参数的说明（成员与原因），并进这一期摘要的 notes；View 来源返回 nil。
+	Rejected(key int64) []string
 	Close(ctx context.Context) error
 }
 
@@ -155,6 +157,9 @@ func (s *viewSource) End() time.Time { return s.end }
 
 // Applied 对 View 来源总是 nil：View 的行按当时提交的参数算好，回放不逐期提交参数。
 func (s *viewSource) Applied(int64) engine.ParamSet { return nil }
+
+// Rejected 对 View 来源总是 nil。
+func (s *viewSource) Rejected(int64) []string { return nil }
 
 // Close 丢掉暂存的行；读取器不持有连接，没有别的要释放。
 func (s *viewSource) Close(context.Context) error {
