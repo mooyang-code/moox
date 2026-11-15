@@ -1,0 +1,1566 @@
+[
+ {
+  "name": "single_market_then_subject_change",
+  "dispatches": [
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "kind": "create",
+    "creates": [
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:bd51a3889e6725db23f74ab9249a8267e8135316b0caae49c1fbb9f11e3ffd4e",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-000",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "7c227f7a30fc5b3b39980882d6c64ff7"
+     },
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:2de130950e67bb828097983d6ca9de1f64122085f0be01c2c33e3d122e24b2a1",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-001",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "6eef97414d1aef98386f159575442615"
+     },
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-002",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:7ecdc883edf74c37a31fe2434c3d0dc7f4aef98ec873edaf330197c8b3e3e247",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-002",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-002",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "10666b63139300e62aa0cf360d134b87"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:bd51a3889e6725db23f74ab9249a8267e8135316b0caae49c1fbb9f11e3ffd4e",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:2de130950e67bb828097983d6ca9de1f64122085f0be01c2c33e3d122e24b2a1",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-002",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:7ecdc883edf74c37a31fe2434c3d0dc7f4aef98ec873edaf330197c8b3e3e247",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:37:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "8b1cd728aa555c25",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:8b1cd728aa555c25084c262eed2d2cc7640f9782fa021645dd044c89b1f47fa8",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "23b95f85d04ac35d",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:23b95f85d04ac35df00dbffa035cd87cee2d0c5a6f1338b40e0640057afb67ec",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-002",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "643c5c8fc51671ca",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:643c5c8fc51671ca094469aafe583f7af67cfef48b3e61ac7a1f5472484949e5",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "19"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:40:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "054f1f27089cefbe",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:054f1f27089cefbe1eccac771e9b10b1b55606b3a8ab3979f4f6a57d30c35651",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c88a6fbaf66df3bb",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:c88a6fbaf66df3bb90661d88fdcf5d84ade66d8f8b3fbe4d0eecb75690228f39",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-002",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "24e2721f8942d9f9",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:24e2721f8942d9f96fcdb6c88b8a13f57d4d44fe83f7419eda30c8723ce633df",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "19"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "retire_functions",
+  "dispatches": [
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "kind": "create",
+    "creates": [
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:bd51a3889e6725db23f74ab9249a8267e8135316b0caae49c1fbb9f11e3ffd4e",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-000",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "7c227f7a30fc5b3b39980882d6c64ff7"
+     },
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:2de130950e67bb828097983d6ca9de1f64122085f0be01c2c33e3d122e24b2a1",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-001",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "6eef97414d1aef98386f159575442615"
+     },
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-002",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:7ecdc883edf74c37a31fe2434c3d0dc7f4aef98ec873edaf330197c8b3e3e247",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-002",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-002",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "10666b63139300e62aa0cf360d134b87"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:bd51a3889e6725db23f74ab9249a8267e8135316b0caae49c1fbb9f11e3ffd4e",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:2de130950e67bb828097983d6ca9de1f64122085f0be01c2c33e3d122e24b2a1",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-002",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:7ecdc883edf74c37a31fe2434c3d0dc7f4aef98ec873edaf330197c8b3e3e247",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:37:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "1ea297d4882eedc2",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:1ea297d4882eedc211b4836ac7d39ca911970c9c6cdafa6c3419a81fc149c57b",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "40"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "84f60e37b309ff7c",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:84f60e37b309ff7c454236231ebe1f505e9019f78dcd9845e8090352a1c7b1d1",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-002",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "860a3cdd35f02e6a",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:860a3cdd35f02e6abb1611987443dbfab661206123c32daba205e4a11badfad8",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:40:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7c6ef6620b7dd0bf",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:7c6ef6620b7dd0bfd10365c539c6443578290bd5701d4ba76274cd26b4208501",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "40"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "84f60e37b309ff7c",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:84f60e37b309ff7c454236231ebe1f505e9019f78dcd9845e8090352a1c7b1d1",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": false,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-002",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "860a3cdd35f02e6a",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:860a3cdd35f02e6abb1611987443dbfab661206123c32daba205e4a11badfad8",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": false,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "handoff_scf_stream_scf",
+  "dispatches": [
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "kind": "create",
+    "creates": [
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c081f98af983a968",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:c081f98af983a968ebf5f75e17bc34d1b15eef9a1942d37588adb142bae8b0eb",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-000",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "7c227f7a30fc5b3b39980882d6c64ff7"
+     },
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "dd8fd7b01b52b71b",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:dd8fd7b01b52b71bd3776a473b169bd64dc7e476e75146f1b0ded8cdea8ef40d",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-001",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "6eef97414d1aef98386f159575442615"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c081f98af983a968",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:c081f98af983a968ebf5f75e17bc34d1b15eef9a1942d37588adb142bae8b0eb",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "dd8fd7b01b52b71b",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:dd8fd7b01b52b71bd3776a473b169bd64dc7e476e75146f1b0ded8cdea8ef40d",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T09:00:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "babd49de6bece89e",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:babd49de6bece89e8f8db99a9c1b4f0e43ce98f8d96b3ddc3deb27cb5faa4eea",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "9f193e74e263cc5e",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:9f193e74e263cc5ec8c128d204aa291bd5fef5a44b87b86cb6f0ce526eee8506",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T10:00:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "babd49de6bece89e",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:babd49de6bece89e8f8db99a9c1b4f0e43ce98f8d96b3ddc3deb27cb5faa4eea",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": false,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "9f193e74e263cc5e",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:9f193e74e263cc5ec8c128d204aa291bd5fef5a44b87b86cb6f0ce526eee8506",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": false,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T10:00:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "67b9274e0407bded",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:67b9274e0407bded7cade38f540d8248f2ed87c522ae01676502bc55e6dc3311",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7b73dbbda533af8c",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:7b73dbbda533af8cad4064c208068c6304df14286b8d24663093f32620b764c5",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "handoff_scf_local",
+  "dispatches": [
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "kind": "create",
+    "creates": [
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c4f66b1046a1783f",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:c4f66b1046a1783fb3913f1e957b172cd411e8c749437899fa952d8267ce5513",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-000",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "7c227f7a30fc5b3b39980882d6c64ff7"
+     },
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "51a0a896bcac3407",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:51a0a896bcac34078ebc09e7e81342aa4475ccfd0e216b8d00e9b79415290cb5",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-001",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "6eef97414d1aef98386f159575442615"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c4f66b1046a1783f",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:c4f66b1046a1783fb3913f1e957b172cd411e8c749437899fa952d8267ce5513",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "51a0a896bcac3407",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:51a0a896bcac34078ebc09e7e81342aa4475ccfd0e216b8d00e9b79415290cb5",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:37:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ce89c938edd9389",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:7ce89c938edd93897acad35d9d451ccdf29dadd14e6ed24836a16413fcda4ab9",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "11b3e70efc9834f7",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:11b3e70efc9834f7e51949afafb0591b367183eae85a2dd8835677e1bee3aae5",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:41:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ce89c938edd9389",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:7ce89c938edd93897acad35d9d451ccdf29dadd14e6ed24836a16413fcda4ab9",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": false,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "11b3e70efc9834f7",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:11b3e70efc9834f7e51949afafb0591b367183eae85a2dd8835677e1bee3aae5",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+      },
+      "timer_enabled": false,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "unified_dataset_then_subject_change",
+  "dispatches": [
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "kind": "create",
+    "creates": [
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2f53473f7b9aef4c",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:2f53473f7b9aef4c2d88f1a3902306822438b11ec05095ea8a740345c5251c9e",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-000",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "7c227f7a30fc5b3b39980882d6c64ff7"
+     },
+     {
+      "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c2137e876921cee2",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:c2137e876921cee22cd3c635b18d3736485c8ba86b97b93755ecde7b55613e3f",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-spot-nanjing-001",
+       "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "6eef97414d1aef98386f159575442615"
+     },
+     {
+      "name": "moox-fetch-plan-crypto-swap-hongkong-000",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-hongkong",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "89f38f37f01055db",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:89f38f37f01055db501b007b0948ec7110c40c54d07ac5869722c3d113eae74b",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-2",
+       "timeout": "60",
+       "vpc_id": "vpc-2"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-swap-hongkong-000",
+       "instance_id": "moox-fetch-plan-crypto-swap-hongkong-000",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "909bb66e039abed6e422cd1d8f328e95"
+     },
+     {
+      "name": "moox-fetch-plan-crypto-swap-hongkong-001",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "timer",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-hongkong",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "ecf90b9880e0e11e",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:ecf90b9880e0e11e1ebc4e9d7c1142a06a5ea461eaf490c66aa616d780d168d5",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "subnet_id": "subnet-2",
+       "timeout": "60",
+       "vpc_id": "vpc-2"
+      },
+      "metadata": {
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-crypto-swap-hongkong-001",
+       "instance_id": "moox-fetch-plan-crypto-swap-hongkong-001",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "65c5ee71c14b61aa0912230eff424ff6"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2f53473f7b9aef4c",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:2f53473f7b9aef4c2d88f1a3902306822438b11ec05095ea8a740345c5251c9e",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c2137e876921cee2",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:c2137e876921cee22cd3c635b18d3736485c8ba86b97b93755ecde7b55613e3f",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-swap-hongkong-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "89f38f37f01055db",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:89f38f37f01055db501b007b0948ec7110c40c54d07ac5869722c3d113eae74b",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-swap-hongkong-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "ecf90b9880e0e11e",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:ecf90b9880e0e11e1ebc4e9d7c1142a06a5ea461eaf490c66aa616d780d168d5",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:37:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "6d7e01c63c617653",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:6d7e01c63c617653a0be06ac01f63a1955546822310dc64873bc1847ef8a4284",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "4417a843fec559c4",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:4417a843fec559c4aa1b8ccf4e44d27680052ef037ee9d37d2fc11530f185884",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "9"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-swap-hongkong-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "240ea1765068093e",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:240ea1765068093eefce6deab4dc015bb718018bcfc725ea61465b12089f4e4e",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-swap-hongkong-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "0f7aba5b4bff75d2",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:0f7aba5b4bff75d2793a55e3453229eb5ecfc876831d05694736b978a35085c7",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "9"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:40:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "92e4c4ce719f1e10",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:92e4c4ce719f1e1090fd588d8830349282d713c42b0c220da164f022c9b4a54f",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "b0c446add04a98e8",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:b0c446add04a98e86326670a3ced852c4fd7e088e6e791c2ea7443717889ca9e",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "9"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-swap-hongkong-000",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "87e1010e2afb1700",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:87e1010e2afb17004f2f0fe8dd8136f382cddf3d1e15071e5c754bfbe002a0a6",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-swap-hongkong-001",
+      "managed_environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c60e654020fd0f5b",
+       "MOOX_MARKET_FETCH_PLAN": "sha256:c60e654020fd0f5bbe90815d2d62b4a0aa49824a936d575fe5dcb284496950ea",
+       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "9"
+      },
+      "timer_enabled": true,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "disable_all",
+  "dispatches": [
+   {
+    "at": "2026-10-12T08:37:20Z",
+    "kind": "runtime_config",
+    "runtime_configs": [
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-000",
+      "managed_environment": {},
+      "timer_enabled": false,
+      "timer_cron": "0 * * * * * *"
+     },
+     {
+      "instance_id": "moox-fetch-plan-crypto-spot-nanjing-001",
+      "managed_environment": {},
+      "timer_enabled": false,
+      "timer_cron": "0 * * * * * *"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "upgrade_code",
+  "dispatches": [
+   {
+    "at": "2026-10-12T10:37:20Z",
+    "kind": "deploy",
+    "functions": [
+     "moox-fetch-plan-crypto-spot-nanjing-000",
+     "moox-fetch-plan-crypto-spot-nanjing-001"
+    ],
+    "package_id": "pkg-new"
+   }
+  ]
+ },
+ {
+  "name": "backfill_function",
+  "dispatches": [
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "kind": "create",
+    "creates": [
+     {
+      "name": "moox-fetch-plan-backfill-crypto-spot-nanjing",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "invoke",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_MODE": "backfill",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "reserved_concurrency_mem": "320",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "access_fingerprint": "043084e2aa45bfff5c6d9843a9691dd4",
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-backfill-crypto-spot-nanjing",
+       "instance_id": "moox-fetch-plan-backfill-crypto-spot-nanjing",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "0758a606ed6885878237a30f61ed434d"
+     }
+    ]
+   },
+   {
+    "at": "2026-10-12T08:31:20Z",
+    "kind": "deploy",
+    "functions": [
+     "moox-fetch-plan-backfill-crypto-spot-nanjing"
+    ],
+    "package_id": "pkg-new"
+   },
+   {
+    "at": "2026-10-12T08:32:20Z",
+    "kind": "delete",
+    "functions": [
+     "moox-fetch-plan-backfill-crypto-spot-nanjing"
+    ]
+   },
+   {
+    "at": "2026-10-12T08:32:20Z",
+    "kind": "create",
+    "creates": [
+     {
+      "name": "moox-fetch-plan-backfill-crypto-spot-nanjing",
+      "cloud_account_id": "acct",
+      "function_type": "scf-event",
+      "trigger_type": "invoke",
+      "runtime": "Go1",
+      "handler": "main",
+      "namespace": "default",
+      "region": "ap-nanjing",
+      "package_id": "pkg-new",
+      "environment": {
+       "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+       "MOOX_ACCESS_ID": "access@storage",
+       "MOOX_CALLER": "scf-collector",
+       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "MOOX_CALLER_KEY_ID": "assigned-scf-key-18",
+       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+       "MOOX_MARKET_FETCH_MODE": "backfill",
+       "MOOX_SPACE_ID": "crypto"
+      },
+      "config": {
+       "max_instance_concurrency": "1",
+       "memory_size": "64",
+       "public_net_status": "ENABLE",
+       "reserved_concurrency_mem": "320",
+       "subnet_id": "subnet-1",
+       "timeout": "60",
+       "vpc_id": "vpc-1"
+      },
+      "metadata": {
+       "access_fingerprint": "d9d87a1af746bb42098a608ad7417cbd",
+       "function_mode": "kline",
+       "function_name": "moox-fetch-plan-backfill-crypto-spot-nanjing",
+       "instance_id": "moox-fetch-plan-backfill-crypto-spot-nanjing",
+       "memory_size": 64,
+       "timeout_seconds": 60,
+       "workload_type": "market_fetcher"
+      },
+      "create_reservation_id": "0758a606ed6885878237a30f61ed434d"
+     }
+    ]
+   }
+  ]
+ }
+]

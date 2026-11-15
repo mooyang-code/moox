@@ -455,12 +455,15 @@ func (p *Plan) StandbyFor(scheduled time.Time) int {
 	return p.Fetch.StandbyMS
 }
 
+// PlanDatasetKey 返回采集计划里数据集的键“数据集|频率”。键的写法只在这里定义。
+func PlanDatasetKey(datasetID, frequency string) string { return datasetID + "|" + frequency }
+
 // PlanDatasetKeyOf 返回计划中数据集的“数据集|频率”键。
 func PlanDatasetKeyOf(dataset PlanDataset) string {
-	return dataset.DatasetID + "|" + dataset.Frequency
+	return PlanDatasetKey(dataset.DatasetID, dataset.Frequency)
 }
 
-// symbolsOrNil 返回计划里出现过的标的集合；计划为空返回 nil。
+// SymbolsOrNil 返回计划里出现过的标的集合；计划为空返回 nil。
 func (p *Plan) SymbolsOrNil() map[string]struct{} {
 	if p == nil {
 		return nil
@@ -476,12 +479,13 @@ func (p *Plan) SymbolsOrNil() map[string]struct{} {
 	return subjects
 }
 
+// HasSubject 判断标的是否出现在计划的任何一份里。
 func (p *Plan) HasSubject(id string) bool {
 	_, ok := p.SymbolsOrNil()[id]
 	return ok
 }
 
-// pruneExceptions 去掉不再出现在任何份里的标的的例外与交易对。
+// PruneExceptions 去掉不再出现在任何份里的标的的例外与交易对。
 func (p *Plan) PruneExceptions() {
 	subjects := p.SymbolsOrNil()
 	for key := range p.Pairs {

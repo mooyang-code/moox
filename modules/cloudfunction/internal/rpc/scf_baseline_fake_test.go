@@ -19,13 +19,19 @@ import (
 //   - UpdateFunctionConfiguration 的环境整份替换；内存、超时、并发、公网为零值时保持不变；
 //     VPC 只在请求带了或要求清除时才变。
 //   - EnsureTimerTrigger 没有就建、有就按请求改，读回的可用状态固定为 Available。
-//   - 函数建好、改完都立即是 Active，不模拟 Creating、Updating。
+//   - 建函数、换代码、改配置之后，函数先停在 Creating 或 Updating，被读过 pendingReads 次后才回到 Active
+//     （pendingReads 为 0 时立即 Active）。函数不是 Active 时，换代码、改配置、设定时器、预留并发、
+//     异步重试这些写请求一律被拒绝：真实的腾讯云也是这样，调用方必须先等到 Active。
 type baselineSCF struct {
-	mu         sync.Mutex
-	namespaces map[string]struct{}
-	functions  map[string]*baselineFunction
+	mu sync.Mutex
+	// pendingReads 是每次建函数、换代码、改配置之后，函数回到 Active 之前要被读的次数。
+	pendingReads int
+	namespaces   map[string]struct{}
+	functions    map[string]*baselineFunction
 	// writes 是写请求的先后顺序，每项一行。只读请求（GetFunction、GetTimerTrigger）不记。
 	writes []string
+	// rejected 是因为函数不是 Active 而被拒绝的写请求（不计入 writes）。
+	rejected []string
 }
 
 // baselineFunction 是假腾讯云里一个函数的全部状态。
@@ -36,11 +42,13 @@ type baselineFunction struct {
 	cosBucket   string
 	cosRegion   string
 	cosObject   string
-	// nativeCLSCleared 记录最近一次改配置是否要求清掉 SCF 自带的日志投递。
+	// nativeCLSCleared 记录 SCF 自带的日志投递是否已被清掉：清过一次就一直是清过，后面不带清除标记的改配置不会把它恢复。
 	nativeCLSCleared bool
-	timer            *tencentscf.TimerTriggerInfo
-	reservedMem      int64
-	asyncRetry       *baselineAsyncRetry
+	// pending 是函数回到 Active 之前还要被读的次数。
+	pending     int
+	timer       *tencentscf.TimerTriggerInfo
+	reservedMem int64
+	asyncRetry  *baselineAsyncRetry
 }
 
 type baselineAsyncRetry struct {
@@ -169,6 +177,13 @@ func (f *baselineSCF) snapshot() ([]string, baselineState) {
 	return append([]string(nil), f.writes...), state
 }
 
+// rejectedWrites 返回因为函数不是 Active 而被拒绝的写请求。
+func (f *baselineSCF) rejectedWrites() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.rejected...)
+}
+
 func (f *baselineSCF) EnsureNamespace(_ context.Context, region, namespace string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -189,7 +204,30 @@ func (f *baselineSCF) GetFunction(_ context.Context, ref tencentscf.FunctionRef)
 	}
 	info := function.info
 	info.Environment = copyBaselineEnvironment(function.info.Environment)
+	if function.pending > 0 {
+		// 这一次读到的还是过渡状态；读够次数之后回到 Active。
+		function.pending--
+		if function.pending == 0 {
+			function.info.Status = "Active"
+		}
+	}
 	return &info, nil
+}
+
+// transition 让函数进入过渡状态（调用方已持有锁）。
+func (f *baselineSCF) transition(function *baselineFunction, status string) {
+	if f.pendingReads > 0 {
+		function.info.Status, function.pending = status, f.pendingReads
+	}
+}
+
+// requireActive 在函数不是 Active 时拒绝写请求（调用方已持有锁）。
+func (f *baselineSCF) requireActive(operation, key string, function *baselineFunction) error {
+	if function.info.Status == "Active" {
+		return nil
+	}
+	f.rejected = append(f.rejected, fmt.Sprintf("%s %s status=%s", operation, key, function.info.Status))
+	return fmt.Errorf("FailedOperation.FunctionStatusError: %s 在函数状态为 %s 时不能执行", operation, function.info.Status)
 }
 
 func (f *baselineSCF) CreateFunction(_ context.Context, req tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error) {
@@ -209,6 +247,7 @@ func (f *baselineSCF) CreateFunction(_ context.Context, req tencentscf.CreateFun
 		cosBucket: req.COSBucket, cosRegion: req.COSRegion, cosObject: req.COSObject,
 	}
 	f.functions[key] = function
+	f.transition(function, "Creating")
 	f.record("CreateFunction %s %s", key, function.packageMarker())
 	return &tencentscf.CreateFunctionResponse{}, nil
 }
@@ -233,7 +272,11 @@ func (f *baselineSCF) UpdateFunctionCode(_ context.Context, req tencentscf.Updat
 	if !ok {
 		return nil, errors.New("ResourceNotFound.FunctionName")
 	}
+	if err := f.requireActive("UpdateFunctionCode", key, function); err != nil {
+		return nil, err
+	}
 	function.handler, function.cosBucket, function.cosRegion, function.cosObject = req.Handler, req.COSBucket, req.COSRegion, req.COSObject
+	f.transition(function, "Updating")
 	f.record("UpdateFunctionCode %s %s", key, function.packageMarker())
 	return &tencentscf.UpdateFunctionCodeResponse{}, nil
 }
@@ -245,6 +288,9 @@ func (f *baselineSCF) UpdateFunctionConfiguration(_ context.Context, req tencent
 	function, ok := f.functions[key]
 	if !ok {
 		return nil, errors.New("ResourceNotFound.FunctionName")
+	}
+	if err := f.requireActive("UpdateFunctionConfiguration", key, function); err != nil {
+		return nil, err
 	}
 	function.info.Environment = copyBaselineEnvironment(req.Environment)
 	if req.MemorySize > 0 {
@@ -264,7 +310,10 @@ func (f *baselineSCF) UpdateFunctionConfiguration(_ context.Context, req tencent
 	} else if strings.TrimSpace(req.VpcID) != "" || strings.TrimSpace(req.SubnetID) != "" {
 		function.info.VpcID, function.info.SubnetID = strings.TrimSpace(req.VpcID), strings.TrimSpace(req.SubnetID)
 	}
-	function.nativeCLSCleared = req.ClearNativeCLS
+	if req.ClearNativeCLS {
+		function.nativeCLSCleared = true
+	}
+	f.transition(function, "Updating")
 	f.record("UpdateFunctionConfiguration %s %s", key, function.packageMarker())
 	return &tencentscf.UpdateFunctionConfigurationResponse{}, nil
 }
@@ -276,6 +325,9 @@ func (f *baselineSCF) EnsureTimerTrigger(_ context.Context, req tencentscf.Timer
 	function, ok := f.functions[key]
 	if !ok {
 		return nil, errors.New("ResourceNotFound.FunctionName")
+	}
+	if err := f.requireActive("EnsureTimerTrigger", key, function); err != nil {
+		return nil, err
 	}
 	function.timer = &tencentscf.TimerTriggerInfo{Name: req.Name, Type: "timer", Cron: req.Cron, Enabled: req.Enabled, AvailableStatus: "Available", Qualifier: req.Qualifier, Message: req.Message}
 	f.record("EnsureTimerTrigger %s cron=%q enabled=%t %s", key, req.Cron, req.Enabled, function.packageMarker())
@@ -320,6 +372,9 @@ func (f *baselineSCF) PutReservedConcurrencyConfig(_ context.Context, req tencen
 	if !ok {
 		return errors.New("ResourceNotFound.FunctionName")
 	}
+	if err := f.requireActive("PutReservedConcurrencyConfig", key, function); err != nil {
+		return err
+	}
 	function.reservedMem = req.ReservedConcurrencyMem
 	f.record("PutReservedConcurrencyConfig %s mem=%d", key, req.ReservedConcurrencyMem)
 	return nil
@@ -333,6 +388,9 @@ func (f *baselineSCF) UpdateFunctionEventInvokeConfig(_ context.Context, req ten
 	function, ok := f.functions[key]
 	if !ok {
 		return nil, errors.New("ResourceNotFound.FunctionName")
+	}
+	if err := f.requireActive("UpdateFunctionEventInvokeConfig", key, function); err != nil {
+		return nil, err
 	}
 	function.asyncRetry = &baselineAsyncRetry{RetryNum: req.RetryNum, MsgTTL: req.MsgTTL}
 	f.record("UpdateFunctionEventInvokeConfig %s retry=%d msg_ttl=%d", key, req.RetryNum, req.MsgTTL)

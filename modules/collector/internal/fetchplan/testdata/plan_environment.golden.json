@@ -574,6 +574,128 @@
   ]
  },
  {
+  "name": "handoff_scf_local",
+  "plans": [
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c4f66b1046a1783f",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNsAU9CACyTB8XsIV0Wr/mGD/ZhDSg4gPklnKnlBLmAwOHcAiHcNz/////////27Zt27Zt23bbtm3btm3bkjmSIckiGZIhSYZkSOJdKWZVhPx2SyJDRIaqyiReeFWnFNehGAhBFcb5iIUVOyUwIk8ccuUYRCGn9/JfNozan/GMAwECA4ABA3CoodzagqJ/AQGHEAkBQVcHElgBwnJXVE45hTrDZiAMFIVEIYwIQ7H4ARQRDrlGRzjIghqBYItMOOgK7DCFIw4ADbCXFg7q/uuIAvIvf3Ta/mZdxEy4ta4uHykQe14qkCqC42ACbH0VSKaZgHbzBGm4vOvPYQEtOPIb7IDgIJX4QPm7OGilQQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c4f66b1046a1783f",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNsAU9CACyTB8XsIV0Wr/mGD/ZhDSg4gPklnKnlBLmAwOHcAiHcNz/////////27Zt27Zt23bbtm3btm3bkjmSIckiGZIhSYZkSOJdKWZVhPx2SyJDRIaqyiReeFWnFNehGAhBFcb5iIUVOyUwIk8ccuUYRCGn9/JfNozan/GMAwECA4ABA3CoodzagqJ/AQGHEAkBQVcHElgBwnJXVE45hTrDZiAMFIVEIYwIQ7H4ARQRDrlGRzjIghqBYItMOOgK7DCFIw4ADbCXFg7q/uuIAvIvf3Ta/mZdxEy4ta4uHykQe14qkCqC42ACbH0VSKaZgHbzBGm4vOvPYQEtOPIb7IDgIJX4QPm7OGilQQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": true,
+     "retired": false,
+     "transitional_cron": "0 * * * * * *",
+     "final_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "51a0a896bcac3407",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNqgEVBQAyhxUWoCUZA0BkFqJtk2bx6t2S8pts/n9XAYcccshh3lX9MxHvzJJG0qCkQf+vCm7x32vYBCMU4mbgYyqjq31CqQpLJ28PZbON8Yf4G5TMkLVYaxAQFICiAiD8asUnK1QzQGWr/lihVGfLTJYgYISIt6++ZVtizzUViNDj3jIAkr4KuIgJUPKeQMDkHQgaFpRwCH4D5xQcUIwPxIqLg3EROwM=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10"
+     },
+     "final_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "51a0a896bcac3407",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNqgEVBQAyhxUWoCUZA0BkFqJtk2bx6t2S8pts/n9XAYcccshh3lX9MxHvzJJG0qCkQf+vCm7x32vYBCMU4mbgYyqjq31CqQpLJ28PZbON8Yf4G5TMkLVYaxAQFICiAiD8asUnK1QzQGWr/lihVGfLTJYgYISIt6++ZVtizzUViNDj3jIAkr4KuIgJUPKeQMDkHQgaFpRwCH4D5xQcUIwPxIqLg3EROwM=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10"
+     }
+    }
+   ],
+   [
+    {
+     "name": "local-crypto-spot",
+     "executor": "local",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "transitional_plan": "KLUv/WMBAFhNxwaNCQDyjiYakDfJm2WNXDhB9paNjsXMDEkpf0opzdv/RxBJkRRJkZz/////////t23btm3btu22bdu2bdu2JUmSJEmSJMlCxwqZmZ0VskJmVsgKmZWdY0wpd7/dklaFqgrV3dUMGzt3h0mHhEQwCpeQ01OWiinHFUqZ2Th+zIEY5gePr/YVKXX2KXaKJQ4CiACEGQjpYBgADAYOCYKEFCABgIaokdjYgqKlDxGHEAEBAVcDEjjA4DC5IyKHHEFH0ABrhKocMHAwYsTgwIEmB9Cs4ZCAqQ2HKpAR8Cwrh0MtAZjwcAgDIAAYBohDtf4u2QHFLj+GW5LIWUSa4e1hBf2ude1rnYHJX7WHH7DtaOCY/QLqNxage42PPx4G+s5XeaB8nAeIsRD0AdQDvAGQQFOKgz/aBg==",
+     "final_plan": "KLUv/WMBAFhNxwaNCQDyjiYakDfJm2WNXDhB9paNjsXMDEkpf0opzdv/RxBJkRRJkZz/////////t23btm3btu22bdu2bdu2JUmSJEmSJMlCxwqZmZ0VskJmVsgKmZWdY0wpd7/dklaFqgrV3dUMGzt3h0mHhEQwCpeQ01OWiinHFUqZ2Th+zIEY5gePr/YVKXX2KXaKJQ4CiACEGQjpYBgADAYOCYKEFCABgIaokdjYgqKlDxGHEAEBAVcDEjjA4DC5IyKHHEFH0ABrhKocMHAwYsTgwIEmB9Cs4ZCAqQ2HKpAR8Cwrh0MtAZjwcAgDIAAYBohDtf4u2QHFLj+GW5LIWUSa4e1hBf2ude1rnYHJX7WHH7DtaOCY/QLqNxage42PPx4G+s5XeaB8nAeIsRD0AdQDvAGQQFOKgz/aBg=="
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true,
+     "transitional_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ce89c938edd9389",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNKQbdCAAyjSEZoCfJB2y62RqTLXdqafwn/FJ+mVLq1P8KBolIRDIYCgLsg0Sk+////////3/btm3btm3bbtu2bdu2bds6xzokaazDOiTrsA5ZvDOmFDNCfrtl1amqU2ZmFjc8M2SMK8EgFAUzjvMVjWIKskIp8gUiZ9BRGIJ6N//mo1T7K7xCAoGBA8CBAXOoodjbwqJ/AQGHEAlBQVcHEhiBQHCw2BWVU05BncJmD7QwWAAXc5nxFwPRQiKwCgqSLQewiXBIMDjCUSrYEIy00ISDgsDuUjgiATAAttfCQQn/yqGA4sv/Q01BtIJGFtxamC7PE4idRyow3cJxhgKWfhXIz5mA0PMEqV/epVhYMNwdf4OjKTjQER9kcRcHWikI",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true,
+     "transitional_cron": "0 * * * * * *",
+     "transitional_environment": {
+      "MOOX_ACCESS_ADDRESS": "storage.example:11004",
+      "MOOX_ACCESS_ID": "access@storage",
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "11b3e70efc9834f7",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNIwKNBQCyhxcYoCcNB0yK2RoTsndqafYbRMqLiABX1cQBqaSSjuMgeAJSSd3Mu79qJuKdFtEipUXqP5pJtv4Rnz7iEMb4KRq77CwvurFllgZpMyoMK7rOY+ax2LrLXus1w4BQCBQsI/wPTH1cFOPAbAuuqP8xIxUTCKb6w0x1hWSJtBMhYsnVF6qP2BukAtR4vIMDrqevAhFgAkiqJ3A9eceYwgLPzoLfIDoFBwjjA1dxcTCOdmc=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+     }
+    }
+   ]
+  ]
+ },
+ {
   "name": "unified_dataset_then_subject_change",
   "plans": [
    [

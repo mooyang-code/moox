@@ -96,8 +96,6 @@ type DesiredState struct {
 	Functions map[string]*PlanFunction
 }
 
-func planDatasetKey(datasetID, frequency string) string { return datasetID + "|" + frequency }
-
 func planMarketKey(group TaskGroup) string {
 	return strings.Join([]string{group.Provider, group.SourceID, group.MarketType, group.MarketID, group.InstrumentType}, "/")
 }
@@ -160,7 +158,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		if executor == marketfetch.PlanExecutorStreaming && !marketdata.SupportsStream(frequency) {
 			return nil, fmt.Errorf("dataset %s %s cannot be collected by stream", group.DatasetID, group.Frequency)
 		}
-		datasetKey := planDatasetKey(group.DatasetID, group.Frequency)
+		datasetKey := marketfetch.PlanDatasetKey(group.DatasetID, group.Frequency)
 		dataset := state.Datasets[datasetKey]
 		latenessS := opts.latenessFor(group, executor)
 		if dataset == nil {

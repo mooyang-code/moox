@@ -1,6 +1,7 @@
 package fetchplan
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -39,14 +40,23 @@ type planRouteBaselineFunction struct {
 	RequestKeys []string               `json:"requests"`
 }
 
-// planRouteBaseline 是记录文件的内容。前两段属于执行面，这里原样保留、不解码。
+// planRouteBaseline 是这边算出来的四段。
 type planRouteBaseline struct {
-	RouteIDs    json.RawMessage                      `json:"route_ids"`
-	Assignments json.RawMessage                      `json:"assignments"`
-	FleetSizes  map[string]int                       `json:"fleet_sizes"`
-	FetchLimits map[string]marketfetch.PlanFetch     `json:"fetch_limits"`
-	Datasets    map[string]PlanDatasetState          `json:"datasets"`
-	Functions   map[string]planRouteBaselineFunction `json:"functions"`
+	FleetSizes  map[string]int
+	FetchLimits map[string]marketfetch.PlanFetch
+	Datasets    map[string]PlanDatasetState
+	Functions   map[string]planRouteBaselineFunction
+}
+
+// planRouteBaselineRecord 是记录文件的内容，六段都不解码：前两段属于执行面，后四段按字节比对。
+// 不能把记录解码成当前的结构体再编码回去比——结构体字段增删改名时两边会一起变，比不出差别。
+type planRouteBaselineRecord struct {
+	RouteIDs    json.RawMessage `json:"route_ids"`
+	Assignments json.RawMessage `json:"assignments"`
+	FleetSizes  json.RawMessage `json:"fleet_sizes"`
+	FetchLimits json.RawMessage `json:"fetch_limits"`
+	Datasets    json.RawMessage `json:"datasets"`
+	Functions   json.RawMessage `json:"functions"`
 }
 
 func baselineSHA(value any) string {
@@ -133,26 +143,32 @@ func TestPlanRouteBaseline(t *testing.T) {
 
 	recorded, err := os.ReadFile(planRouteBaselineFile)
 	require.NoError(t, err)
-	var want planRouteBaseline
+	var want planRouteBaselineRecord
 	require.NoError(t, json.Unmarshal(recorded, &want))
-	if os.Getenv("MOOX_UPDATE_GOLDEN") == "1" {
+	sections := []struct {
+		name string
+		want *json.RawMessage
+		got  any
+	}{{"函数个数估算", &want.FleetSizes, got.FleetSizes}, {"并发与熔断推导", &want.FetchLimits, got.FetchLimits}, {"数据集", &want.Datasets, got.Datasets}, {"函数与请求", &want.Functions, got.Functions}}
+	update := os.Getenv("MOOX_UPDATE_GOLDEN") == "1"
+	for _, section := range sections {
+		gotRaw, err := json.Marshal(section.got)
+		require.NoError(t, err)
+		if update {
+			*section.want = gotRaw
+			continue
+		}
+		// 记录文件里这一段的原文去掉空白后，必须与这边编码出来的字节相同。
+		var wantRaw bytes.Buffer
+		require.NoError(t, json.Compact(&wantRaw, *section.want))
+		require.Equal(t, wantRaw.String(), string(gotRaw), "%s与改造前记录的不一致", section.name)
+	}
+	if update {
 		// 只重写自己的四段，执行面的两段保持原样。
-		want.FleetSizes, want.FetchLimits, want.Datasets, want.Functions = got.FleetSizes, got.FetchLimits, got.Datasets, got.Functions
 		raw, err := json.MarshalIndent(want, "", "  ")
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(planRouteBaselineFile, append(raw, '\n'), 0o644))
 		return
-	}
-	// 逐段按记录文件的写法比对：重新编码后的文本必须相同。
-	for _, section := range []struct {
-		name      string
-		want, got any
-	}{{"函数个数估算", want.FleetSizes, got.FleetSizes}, {"并发与熔断推导", want.FetchLimits, got.FetchLimits}, {"数据集", want.Datasets, got.Datasets}, {"函数与请求", want.Functions, got.Functions}} {
-		wantRaw, err := json.MarshalIndent(section.want, "", "  ")
-		require.NoError(t, err)
-		gotRaw, err := json.MarshalIndent(section.got, "", "  ")
-		require.NoError(t, err)
-		require.Equal(t, string(wantRaw), string(gotRaw), "%s与改造前记录的不一致", section.name)
 	}
 	// 抽查一项，防止记录文件本身被改坏。
 	require.Equal(t, 38, got.FleetSizes["5m/300"])
