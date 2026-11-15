@@ -126,8 +126,11 @@ func (r *PlanReconciler) packageGate(ctx context.Context) error {
 		if err != nil {
 			return r.fail("cloud", fmt.Errorf("cannot tell whether cloud functions need the missing code package: %w", err))
 		}
-		if len(refs) > 0 {
-			return r.fail("package", r.packageError())
+		for _, ref := range refs {
+			// 只看本空间的函数：前缀相同的别的空间（crypto 与 crypto-x）不算。
+			if r.ownsFunctionName(ref.Name) {
+				return r.fail("package", r.packageError())
+			}
 		}
 	}
 	return nil

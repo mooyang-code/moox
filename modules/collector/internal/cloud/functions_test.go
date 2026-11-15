@@ -770,3 +770,21 @@ func TestUpgradeCodeRepairsAsyncRetryWhenAlreadyCurrent(t *testing.T) {
 	require.Len(t, writes, 1)
 	require.True(t, strings.HasPrefix(writes[0], "UpdateFunctionEventInvokeConfig "))
 }
+
+// 读回时异步重试或预留并发读失败只记日志：对账不比对这两项，函数不能因此算作没读到。
+func TestDescribeToleratesAsyncRetryReadFailures(t *testing.T) {
+	fake := newBaselineSCF()
+	seedTimerFunction(fake, "Active", baselineOldPackage, timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
+	client := newScriptedSCF(fake)
+	client.BeforeRead = func(name string, _ tencentscf.FunctionRef) error {
+		if name == "GetFunctionEventInvokeConfig" {
+			return errors.New("InternalError: async config unavailable")
+		}
+		return nil
+	}
+	state, err := newTestFunctions(t, client).Describe(context.Background(), timerRef)
+	require.NoError(t, err)
+	require.True(t, state.Exists)
+	require.NotNil(t, state.Timer)
+	require.Nil(t, state.AsyncRetry)
+}

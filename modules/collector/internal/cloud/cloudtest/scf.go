@@ -761,3 +761,13 @@ func (s *Scripted) UpdateFunctionEventInvokeConfig(ctx context.Context, req tenc
 	}
 	return s.SCF.UpdateFunctionEventInvokeConfig(ctx, req)
 }
+
+// GetFunctionEventInvokeConfig 经 begin 记数，可注入读失败。
+func (s *Scripted) GetFunctionEventInvokeConfig(ctx context.Context, ref tencentscf.FunctionRef) (*tencentscf.EventInvokeConfig, error) {
+	done, err := s.begin("GetFunctionEventInvokeConfig", ref, false, nil)
+	defer done()
+	if err != nil {
+		return nil, err
+	}
+	return s.SCF.GetFunctionEventInvokeConfig(ctx, ref)
+}

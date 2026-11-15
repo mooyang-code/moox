@@ -326,14 +326,13 @@ func (s *Service) fillCloudReadbacks(spaceID string, functions []*pb.CollectorFu
 	if reconciler == nil {
 		return
 	}
-	readbacks := reconciler.Readbacks()
 	latest := strings.TrimSpace(reconciler.LatestPackageID())
 	packageLatest := func(packageID string) bool { return latest != "" && packageID == latest }
 	for _, function := range functions {
 		if function.GetExecutor() != marketfetch.PlanExecutorSCF {
 			continue
 		}
-		if readback, ok := readbacks[function.GetName()]; ok {
+		if readback, ok := reconciler.TimerReadback(function.GetName(), function.GetRegion()); ok {
 			applyCloudReadback(function, readback, packageLatest)
 		}
 	}

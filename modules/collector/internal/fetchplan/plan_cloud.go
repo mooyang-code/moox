@@ -162,8 +162,9 @@ func (r *PlanReconciler) pausingHook(op *functionOp) func() bool {
 }
 
 // startEnsure 起一个“按期望内容 Ensure”的操作（定时函数，可能打开定时器）。
-func (r *PlanReconciler) startEnsure(name, key string, spec cloud.FunctionSpec) (*functionOp, error) {
-	return r.ops().start(name, key, true, func(ctx context.Context, op *functionOp) error {
+func (r *PlanReconciler) startEnsure(key string, spec cloud.FunctionSpec) (*functionOp, error) {
+	ref := spec.Ref
+	return r.ops().start(refKey(ref), key, true, func(ctx context.Context, op *functionOp) error {
 		spec, err := r.withPackage(ctx, op, spec)
 		if err != nil {
 			return err
@@ -172,7 +173,7 @@ func (r *PlanReconciler) startEnsure(name, key string, spec cloud.FunctionSpec) 
 		if err := r.Cloud.Ensure(ctx, spec); err != nil {
 			return err
 		}
-		r.noteWritten(name, op.packageID)
+		r.noteWritten(ref, op.packageID)
 		return nil
 	})
 }
@@ -180,7 +181,7 @@ func (r *PlanReconciler) startEnsure(name, key string, spec cloud.FunctionSpec) 
 // startDisableTimer 起一个“只停定时器”的操作：退役、暂停、计划外的函数都走它，不走 Ensure（函数卡在失败状态时也能停）。
 // 函数已经不在云上时算成功。
 func (r *PlanReconciler) startDisableTimer(ref cloud.FunctionRef, key string) (*functionOp, error) {
-	return r.ops().start(ref.Name, key, false, func(ctx context.Context, op *functionOp) error {
+	return r.ops().start(refKey(ref), key, false, func(ctx context.Context, op *functionOp) error {
 		if err := r.Cloud.SetTimer(ctx, ref, cloud.Timer{}, ""); err != nil && !errors.Is(err, cloud.ErrFunctionNotFound) {
 			return err
 		}
@@ -191,7 +192,7 @@ func (r *PlanReconciler) startDisableTimer(ref cloud.FunctionRef, key string) (*
 // startUpgrade 起一个“只换代码”的操作：环境取云上读回的值，不动定时器。UpgradeCode 失败而函数处于失败状态
 // （UpdateFailed、CreateFailed）时退回 Ensure（只有 Ensure 会重做更新、删掉重建）；fallback 为空表示没有可退回的期望内容。
 func (r *PlanReconciler) startUpgrade(ref cloud.FunctionRef, fallback *cloud.FunctionSpec) (*functionOp, error) {
-	return r.ops().start(ref.Name, opKeyUpgrade, fallback != nil && fallback.Timer != nil, func(ctx context.Context, op *functionOp) error {
+	return r.ops().start(refKey(ref), opKeyUpgrade, fallback != nil && fallback.Timer != nil, func(ctx context.Context, op *functionOp) error {
 		pkg, err := r.latestPackage(ctx)
 		if err != nil {
 			return err
@@ -199,7 +200,7 @@ func (r *PlanReconciler) startUpgrade(ref cloud.FunctionRef, fallback *cloud.Fun
 		op.packageID = pkg.PackageID
 		err = r.Cloud.UpgradeCode(ctx, ref, pkg)
 		if err == nil {
-			r.noteWritten(ref.Name, pkg.PackageID)
+			r.noteWritten(ref, pkg.PackageID)
 			return nil
 		}
 		if fallback == nil || ctx.Err() != nil || errors.Is(err, cloud.ErrFunctionNotFound) {
@@ -215,7 +216,7 @@ func (r *PlanReconciler) startUpgrade(ref cloud.FunctionRef, fallback *cloud.Fun
 		if ensureErr := r.Cloud.Ensure(ctx, spec); ensureErr != nil {
 			return fmt.Errorf("升级失败（%v），退回 Ensure 也失败: %w", err, ensureErr)
 		}
-		r.noteWritten(ref.Name, pkg.PackageID)
+		r.noteWritten(ref, pkg.PackageID)
 		return nil
 	})
 }
@@ -257,7 +258,8 @@ type FunctionReadback struct {
 	Error string
 }
 
-func (r *PlanReconciler) storeReadback(name string, readback FunctionReadback) {
+func (r *PlanReconciler) storeReadback(ref cloud.FunctionRef, readback FunctionReadback) {
+	name := refKey(ref)
 	r.readMu.Lock()
 	defer r.readMu.Unlock()
 	if r.readbacks == nil {
@@ -273,7 +275,8 @@ func (r *PlanReconciler) storeReadback(name string, readback FunctionReadback) {
 }
 
 // noteWritten 在操作成功写入代码包之后更新读回缓存里的代码包，两分钟一次的升级检查据此跳过刚升级过的函数。
-func (r *PlanReconciler) noteWritten(name, packageID string) {
+func (r *PlanReconciler) noteWritten(ref cloud.FunctionRef, packageID string) {
+	name := refKey(ref)
 	r.readMu.Lock()
 	defer r.readMu.Unlock()
 	if readback, ok := r.readbacks[name]; ok && packageID != "" {
@@ -282,21 +285,15 @@ func (r *PlanReconciler) noteWritten(name, packageID string) {
 	}
 }
 
-// Readbacks 返回最近一次读回的副本（函数名 → 读回）。
-func (r *PlanReconciler) Readbacks() map[string]FunctionReadback {
-	r.readMu.Lock()
-	defer r.readMu.Unlock()
-	out := make(map[string]FunctionReadback, len(r.readbacks))
-	for name, readback := range r.readbacks {
-		out[name] = readback
-	}
-	return out
+// TimerReadback 返回定时函数（按函数名与地域，命名空间按部署参数算出）最近一次的读回；没有读回时第二个返回值为 false。
+func (r *PlanReconciler) TimerReadback(name, region string) (FunctionReadback, bool) {
+	return r.cachedReadback(r.functionRef(name, region))
 }
 
-func (r *PlanReconciler) cachedReadback(name string) (FunctionReadback, bool) {
+func (r *PlanReconciler) cachedReadback(ref cloud.FunctionRef) (FunctionReadback, bool) {
 	r.readMu.Lock()
 	defer r.readMu.Unlock()
-	readback, ok := r.readbacks[name]
+	readback, ok := r.readbacks[refKey(ref)]
 	return readback, ok
 }
 
@@ -304,10 +301,10 @@ func (r *PlanReconciler) cachedReadback(name string) (FunctionReadback, bool) {
 func (r *PlanReconciler) describe(ctx context.Context, ref cloud.FunctionRef) (cloud.FunctionState, error) {
 	state, err := r.Cloud.Describe(ctx, ref)
 	if err != nil {
-		r.storeReadback(ref.Name, FunctionReadback{FunctionState: cloud.FunctionState{ReadAt: r.now()}, Error: err.Error()})
+		r.storeReadback(ref, FunctionReadback{FunctionState: cloud.FunctionState{ReadAt: r.now()}, Error: err.Error()})
 		return state, err
 	}
-	r.storeReadback(ref.Name, FunctionReadback{FunctionState: state})
+	r.storeReadback(ref, FunctionReadback{FunctionState: state})
 	return state, nil
 }
 
@@ -383,7 +380,8 @@ func (r *PlanReconciler) planRegions() []string {
 	return regions
 }
 
-// plannedNames 返回本空间计划里应有的全部云函数名：已生效计划、未生效计划里的定时函数，以及各市场的补采函数。
+// plannedNames 返回本空间计划里应有的全部云函数（键是 refKey：地域/命名空间/函数名）：已生效计划、未生效计划里的定时函数，
+// 以及各市场的补采函数。同名函数在别的命名空间里的副本（例如命名空间配置改过之后留下的）不算计划内。
 func (r *PlanReconciler) plannedNames(ctx context.Context) (map[string]cloud.FunctionRef, error) {
 	names := map[string]cloud.FunctionRef{}
 	for _, load := range []func(context.Context, string) (*store.FetchPlanRecord, error){r.Store.LatestApplied, r.Store.Open} {
@@ -400,14 +398,15 @@ func (r *PlanReconciler) plannedNames(ctx context.Context) (map[string]cloud.Fun
 		}
 		for name, function := range content.Functions {
 			if function.IsSCF() {
-				names[name] = r.functionRef(name, function.Region)
+				ref := r.functionRef(name, function.Region)
+				names[refKey(ref)] = ref
 			}
 		}
 	}
 	for market := range r.Options.Markets {
 		if region, ok := r.BackfillRegion(market); ok {
 			ref := r.backfillRef(market, region)
-			names[ref.Name] = ref
+			names[refKey(ref)] = ref
 		}
 	}
 	return names, nil
@@ -426,7 +425,7 @@ func (r *PlanReconciler) scanUnplanned(ctx context.Context, planned map[string]c
 			return nil, err
 		}
 		for _, ref := range refs {
-			if _, ok := planned[ref.Name]; ok || !r.ownsFunctionName(ref.Name) {
+			if _, ok := planned[refKey(ref)]; ok || !r.ownsFunctionName(ref.Name) {
 				continue
 			}
 			out = append(out, ref)
@@ -478,9 +477,10 @@ func (r *PlanReconciler) ListCloudFunctions(ctx context.Context) ([]CloudFunctio
 	}
 	running := r.ops().runningKeys()
 	var views []CloudFunctionView
-	for _, name := range sortedKeys(planned) {
-		ref := planned[name]
-		view := CloudFunctionView{Name: name, Region: ref.Region, Namespace: ref.Namespace, Kind: "backfill", ExpectedPackageID: pkg, Operation: running[name]}
+	for _, key := range sortedKeys(planned) {
+		ref := planned[key]
+		name := ref.Name
+		view := CloudFunctionView{Name: name, Region: ref.Region, Namespace: ref.Namespace, Kind: "backfill", ExpectedPackageID: pkg, Operation: running[key]}
 		target, timer := expected[name]
 		if timer {
 			view.Kind, view.ExpectedCron = "timer", target.Cron
@@ -489,7 +489,7 @@ func (r *PlanReconciler) ListCloudFunctions(ctx context.Context) ([]CloudFunctio
 			}
 		}
 		state, readErr := r.describe(ctx, ref)
-		view.Readback, _ = r.cachedReadback(name)
+		view.Readback, _ = r.cachedReadback(ref)
 		if readErr == nil && state.Exists {
 			view.PackageLatest = pkg == "" || state.PackageID == pkg
 			if timer {
@@ -506,12 +506,12 @@ func (r *PlanReconciler) ListCloudFunctions(ctx context.Context) ([]CloudFunctio
 		return nil, err
 	}
 	for _, ref := range unplanned {
-		view := CloudFunctionView{Name: ref.Name, Region: ref.Region, Namespace: ref.Namespace, Kind: "timer", Unplanned: true, ExpectedPackageID: pkg, Operation: running[ref.Name]}
+		view := CloudFunctionView{Name: ref.Name, Region: ref.Region, Namespace: ref.Namespace, Kind: "timer", Unplanned: true, ExpectedPackageID: pkg, Operation: running[refKey(ref)]}
 		if state, readErr := r.describe(ctx, ref); readErr == nil && state.Exists {
 			view.TimerMatches = state.Timer == nil || !state.Timer.Enabled
 			view.PackageLatest = pkg == "" || state.PackageID == pkg
 		}
-		view.Readback, _ = r.cachedReadback(ref.Name)
+		view.Readback, _ = r.cachedReadback(ref)
 		views = append(views, view)
 	}
 	return views, nil
@@ -541,15 +541,33 @@ func (r *PlanReconciler) viewTargets(ctx context.Context) (map[string]functionTa
 
 // FunctionDeletion 是 DeleteCloudFunctions 里一个函数的结果。
 type FunctionDeletion struct {
-	Name   string
-	Region string
+	Name      string
+	Region    string
+	Namespace string
 	// Done 为 true 表示已从云上删掉；为 false 时 Error 说明原因（还在删时 Error 为空，稍后用 ListCloudFunctions 查看）。
 	Done  bool
 	Error string
 }
 
+// belongs 判断云上一个函数是不是本空间的：在计划里（按地域、命名空间、函数名），或者函数名符合本空间的命名格式
+// （ownsFunctionName：排除其他已配置空间按同样规则能生成的名字），或者是本空间某个市场的补采函数。
+func (r *PlanReconciler) belongs(ref cloud.FunctionRef, planned map[string]cloud.FunctionRef) bool {
+	if _, ok := planned[refKey(ref)]; ok || r.ownsFunctionName(ref.Name) {
+		return true
+	}
+	for market, regions := range r.Options.Markets {
+		for _, region := range regions {
+			if ref.Name == BackfillFunctionName(r.SpaceID, market, region) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // DeleteCloudFunctions 按名字或前缀删除本空间的云函数（经操作表）。计划里的函数删掉后，下一轮对账立即读回并重建。
 // names 与 prefix 至少给一个；prefix 必须以本空间的函数名前缀（moox-fetch-plan-<空间>- 或补采函数前缀）开头。
+// 只删本空间的函数（见 belongs）：前缀相同的别的空间（例如 crypto 与 crypto-x）的函数不碰，按名字点到别的空间的函数直接拒绝。
 func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, names []string, prefix string) ([]FunctionDeletion, error) {
 	prefix = strings.TrimSpace(prefix)
 	if len(names) == 0 && prefix == "" {
@@ -564,6 +582,12 @@ func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, names []strin
 			wanted[name] = true
 		}
 	}
+	planned, err := r.plannedNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var results []FunctionDeletion
+	found := map[string]bool{}
 	var refs []cloud.FunctionRef
 	for _, region := range r.planRegions() {
 		listPrefix := prefix
@@ -575,54 +599,66 @@ func (r *PlanReconciler) DeleteCloudFunctions(ctx context.Context, names []strin
 			return nil, err
 		}
 		for _, ref := range listed {
-			if prefix != "" || wanted[ref.Name] {
-				refs = append(refs, ref)
+			if prefix == "" && !wanted[ref.Name] {
+				continue
 			}
+			found[ref.Name] = true
+			if !r.belongs(ref, planned) {
+				if prefix == "" {
+					results = append(results, FunctionDeletion{Name: ref.Name, Region: ref.Region, Namespace: ref.Namespace,
+						Error: fmt.Sprintf("函数 %s 不属于空间 %s（不在它的计划里，也不符合它的命名格式），不删；要删就用它所属空间的命令", ref.Name, r.SpaceID)})
+				}
+				continue
+			}
+			refs = append(refs, ref)
 		}
 	}
-	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
-	results := make([]FunctionDeletion, 0, len(refs))
-	var started []*functionOp
+	sort.Slice(refs, func(i, j int) bool { return refKey(refs[i]) < refKey(refs[j]) })
+	type pending struct {
+		index int
+		op    *functionOp
+	}
+	var started []pending
 	for _, ref := range refs {
 		ref := ref
-		op, err := r.ops().start(ref.Name, opKeyDelete, false, func(ctx context.Context, _ *functionOp) error {
+		op, err := r.ops().start(refKey(ref), opKeyDelete, false, func(ctx context.Context, _ *functionOp) error {
 			if err := r.Cloud.Delete(ctx, ref); err != nil {
 				return err
 			}
-			// 下一轮对账立即读回：计划里的函数随即重建，不用等一小时。
+			// 下一轮对账立即读回：计划里的函数随即重建，不用等一小时；补采函数的就绪缓存也作废，下一次补采重建。
 			r.verifyRequested.Store(true)
 			r.readMu.Lock()
-			delete(r.readbacks, ref.Name)
+			delete(r.readbacks, refKey(ref))
 			r.readMu.Unlock()
+			r.backfillMu.Lock()
+			delete(r.backfillReady, ref.Name)
+			r.backfillMu.Unlock()
 			return nil
 		})
-		result := FunctionDeletion{Name: ref.Name, Region: ref.Region}
+		result := FunctionDeletion{Name: ref.Name, Region: ref.Region, Namespace: ref.Namespace}
 		if err != nil {
 			result.Error = err.Error()
 		} else {
-			started = append(started, op)
+			started = append(started, pending{index: len(results), op: op})
 		}
 		results = append(results, result)
 	}
-	r.ops().wait(ctx, started, r.roundWait(ctx))
-	for index := range results {
-		if results[index].Error != "" {
-			continue
-		}
-		if op := r.ops().take(results[index].Name, opKeyDelete); op != nil {
-			if op.err != nil {
-				results[index].Error = op.err.Error()
+	ops := make([]*functionOp, 0, len(started))
+	for _, item := range started {
+		ops = append(ops, item.op)
+	}
+	r.ops().wait(ctx, ops, r.roundWait(ctx))
+	for _, item := range started {
+		if done := r.ops().take(item.op.name, opKeyDelete); done != nil {
+			if done.err != nil {
+				results[item.index].Error = done.err.Error()
 			} else {
-				results[index].Done = true
+				results[item.index].Done = true
 			}
 		}
 	}
-	for name := range wanted {
-		found := false
-		for _, result := range results {
-			found = found || result.Name == name
-		}
-		if !found {
+	for _, name := range sortedKeys(wanted) {
+		if !found[name] {
 			results = append(results, FunctionDeletion{Name: name, Error: "云上没有这个函数"})
 		}
 	}

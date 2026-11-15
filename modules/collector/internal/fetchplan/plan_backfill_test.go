@@ -91,7 +91,7 @@ func TestBackfillJobThatFinishesInTimeReleasesTheLease(t *testing.T) {
 	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
 	require.Equal(t, name, got)
-	require.False(t, r.ops().busy(name))
+	require.False(t, r.ops().busy(opKeyOf(name)))
 	require.Nil(t, r.ops().current(name), "结果已被取走")
 	_, ready := r.backfillRefs[name]
 	require.True(t, ready, "补采调用能按名字找到函数")
@@ -105,7 +105,7 @@ func TestBackfillSubmitFailureReleasesTheLease(t *testing.T) {
 	_, err := r.EnsureBackfillFunction(context.Background(), "spot")
 	require.Error(t, err)
 	require.NotErrorIs(t, err, errBackfillFunctionPending)
-	require.False(t, r.ops().busy(name))
+	require.False(t, r.ops().busy(opKeyOf(name)))
 	_, exists := h.cloudFunction(name)
 	require.False(t, exists)
 
@@ -158,13 +158,13 @@ func TestBackfillLeaseHeldByRealtimeIsRetriedLaterWithoutTrackingAJob(t *testing
 	gate := make(chan struct{})
 	t.Cleanup(func() { close(gate) })
 	timer := planFunctionNames(t, 60)[0]
-	_, err := r.ops().start(timer, planOpKey(1, planStageTransition), true, func(context.Context, *functionOp) error { <-gate; return nil })
+	_, err := r.ops().start(opKeyOf(timer), planOpKey(1, planStageTransition), true, func(context.Context, *functionOp) error { <-gate; return nil })
 	require.NoError(t, err)
 
 	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
 	require.Equal(t, name, got)
-	require.True(t, r.ops().busy(timer), "实时函数的操作不受影响")
+	require.True(t, r.ops().busy(opKeyOf(timer)), "实时函数的操作不受影响")
 }
 
 // 暂停期间（系统暂停、恢复追赶）补采函数照常创建：它没有定时器，不算“可能打开定时器”的操作。

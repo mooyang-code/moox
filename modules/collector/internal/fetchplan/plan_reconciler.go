@@ -297,6 +297,8 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 		r.issue = issue
 		r.issueMu.Unlock()
 	}()
+	// 跨轮才结束的操作失败了：本轮照常推进，但结束时按失败返回，不刷新对账成功。
+	collectErr := r.collectFinishedOps(ctx)
 	r.refreshPackageIfAvailable(ctx)
 	if err := r.packageGate(ctx); err != nil {
 		return err
@@ -320,10 +322,16 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 		if err := r.verifyUntouched(ctx, open); err != nil {
 			log.WarnContextf(ctx, "collector fetch plan verification skipped space=%s: %v", r.SpaceID, err)
 		}
-		return r.advance(ctx, open)
+		if err := r.advance(ctx, open); err != nil {
+			return err
+		}
+		return collectErr
 	}
 	if err := r.planChange(ctx); err != nil {
 		return err
+	}
+	if collectErr != nil {
+		return collectErr
 	}
 	// 没有未生效的计划（或本轮刚把计划推进到生效）：对账成功。
 	// 在跑的云端操作只要还没超过卡住年龄就不影响成功：大批量升级可能连续跑十几分钟；
@@ -599,7 +607,7 @@ func (r *PlanReconciler) validateContent(content *FetchPlanContent) error {
 			if err != nil {
 				return fmt.Errorf("function %s: %w", name, err)
 			}
-			merged := map[string]string{"MOOX_CODE_PACKAGE_ID": r.packageID(), "MOOX_CREATE_RESERVATION_ID": "00000000-0000-0000-0000-000000000000"}
+			merged := map[string]string{"MOOX_CODE_PACKAGE_ID": r.packageID()}
 			for key, value := range r.Deploy.BaseEnvironment {
 				merged[key] = value
 			}
@@ -805,14 +813,17 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 		// 定时器因为暂停被设成停用的成功不算确认：下一轮（恢复之后）重推。
 	}
 	var started []*functionOp
+	names := map[string]string{} // 操作表的键 → 函数名
 	for _, name := range cloudNames {
-		if op := ops.take(name, key); op != nil {
+		opName := refKey(r.functionRef(name, content.Functions[name].Region))
+		names[opName] = name
+		if op := ops.take(opName, key); op != nil {
 			settle(name, op)
 			if op.confirmed() || op.err != nil {
 				continue
 			}
 		}
-		if ops.busy(name) {
+		if ops.busy(opName) {
 			continue // 另一个操作在跑：本轮跳过，等它结束
 		}
 		op, err := r.startStage(content, content.Functions[name], key, stage)
@@ -829,7 +840,7 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 	ops.wait(ctx, started, r.roundWait(ctx))
 	for _, op := range started {
 		if done := ops.take(op.name, key); done != nil {
-			settle(op.name, done)
+			settle(names[op.name], done)
 		}
 	}
 	if changed || len(failures) > 0 {
@@ -857,7 +868,7 @@ func (r *PlanReconciler) startStage(content *FetchPlanContent, function *PlanFun
 	if err != nil {
 		return nil, err
 	}
-	return r.startEnsure(function.Name, key, spec)
+	return r.startEnsure(key, spec)
 }
 
 // allConfirmed 判断这一阶段需要下发的项都已确认。
@@ -1130,7 +1141,7 @@ func (r *PlanReconciler) finalDiffers(content *FetchPlanContent, function *PlanF
 
 // verifyUntouched 在有未生效计划时，对不受该计划影响的已生效函数做云端校验。
 func (r *PlanReconciler) verifyUntouched(ctx context.Context, open *store.FetchPlanRecord) error {
-	if !r.lastVerified.IsZero() && r.now().Sub(r.lastVerified) < planVerifyInterval {
+	if !r.verifyRequested.Load() && !r.lastVerified.IsZero() && r.now().Sub(r.lastVerified) < planVerifyInterval {
 		return nil
 	}
 	applied, err := r.Store.LatestApplied(ctx, r.SpaceID)
@@ -1178,10 +1189,10 @@ func (r *PlanReconciler) upgradeLaggingFunctions(ctx context.Context) error {
 		if started >= runtimeConfigBatchSize {
 			break // 每次检查最多一批，下一次检查接着升级
 		}
-		if r.ops().busy(name) {
+		if r.ops().busy(refKey(refs[name])) {
 			continue
 		}
-		readback, ok := r.cachedReadback(name)
+		readback, ok := r.cachedReadback(refs[name])
 		if !ok || readback.Error != "" {
 			state, err := r.Cloud.DescribeCode(ctx, refs[name])
 			if err != nil {
@@ -1189,7 +1200,7 @@ func (r *PlanReconciler) upgradeLaggingFunctions(ctx context.Context) error {
 				continue
 			}
 			readback = FunctionReadback{FunctionState: state, CodeOnly: true}
-			r.storeReadback(name, readback)
+			r.storeReadback(refs[name], readback)
 		}
 		if !readback.Exists || strings.TrimSpace(readback.PackageID) == "" || readback.PackageID == pkg {
 			continue
@@ -1238,14 +1249,21 @@ func (r *PlanReconciler) timerFunctionRefs(ctx context.Context) (map[string]clou
 // Qualifier、Message）不一致的起 Ensure（期望内容按已确认的状态算）；只是代码包落后的起 UpgradeCode。
 // 同时停掉计划外的同前缀函数的定时器。有函数这次没读到或修复还在跑时，5 分钟后再读，不宣布核对完成。
 func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*PlanFunction) error {
-	if len(applied) == 0 {
-		return nil
-	}
 	requested := r.verifyRequested.Load()
 	if !requested && !r.lastVerified.IsZero() && r.now().Sub(r.lastVerified) < planVerifyInterval {
 		return nil
 	}
 	r.verifyRequested.Store(false)
+	if len(applied) == 0 {
+		// 没有已生效的云函数（例如全部切到了推送）：计划外的同前缀函数照样要停。
+		if err := r.disableUnplanned(ctx); err != nil {
+			log.WarnContextf(ctx, "collector fetch plan cannot list unplanned functions space=%s: %v", r.SpaceID, err)
+			r.lastVerified = r.now().Add(planVerifyRetry - planVerifyInterval)
+			return nil
+		}
+		r.lastVerified = r.now()
+		return nil
+	}
 	targets, err := r.confirmedTargets(ctx)
 	if err != nil {
 		return r.fail("store", err)
@@ -1265,7 +1283,7 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 			return r.fail("environment", fmt.Errorf("function %s: %w", name, err))
 		}
 		specs[name] = spec
-		if ops.busy(name) {
+		if ops.busy(refKey(spec.Ref)) {
 			unverified++
 			continue
 		}
@@ -1324,7 +1342,7 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 		}
 	}
 	for _, name := range repair {
-		op, err := r.startEnsure(name, opKeyRepair, specs[name])
+		op, err := r.startEnsure(opKeyRepair, specs[name])
 		startOp(op, err, opKeyRepair)
 	}
 	for _, name := range upgrade {
@@ -1334,7 +1352,7 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	}
 	for _, name := range egress {
 		spec := specs[name]
-		op, err := r.ops().start(name, opKeyEgress, true, func(ctx context.Context, op *functionOp) error {
+		op, err := r.ops().start(refKey(spec.Ref), opKeyEgress, true, func(ctx context.Context, op *functionOp) error {
 			if err := r.Cloud.Delete(ctx, spec.Ref); err != nil {
 				return err
 			}
@@ -1392,14 +1410,33 @@ func (r *PlanReconciler) disableUnplanned(ctx context.Context) error {
 		return err
 	}
 	for _, ref := range unplanned {
-		if r.ops().busy(ref.Name) {
+		if r.ops().busy(refKey(ref)) {
 			continue
 		}
-		if _, err := r.startDisableTimer(ref, opKeyUnplanned); err == nil {
-			log.WarnContextf(ctx, "collector fetch plan stops the timer of an unplanned function space=%s function=%s namespace=%s region=%s", r.SpaceID, ref.Name, ref.Namespace, ref.Region)
-		}
+		// 结果在下一轮由 collectFinishedOps 取走：成功才记“已停”，失败按 cloud 报。
+		_, _ = r.startDisableTimer(ref, opKeyUnplanned)
 	}
 	return nil
+}
+
+// collectFinishedOps 取走跨轮才结束的读回修复、升级、出口去重、计划外停用的结果（当轮没等到、也没别的取走方），
+// 失败计入对账失败（opFailure），不让卡了十几分钟才失败的操作悄悄消失。只在持有 r.mu 的对账协程里调用。
+// 计划推进（plan=…）、补采、删除、停用、启用的结果各有取走方，这里不动。
+func (r *PlanReconciler) collectFinishedOps(ctx context.Context) error {
+	var first error
+	for _, op := range r.ops().takeFinished(opKeyRepair, opKeyUpgrade, opKeyEgress, opKeyUnplanned) {
+		if op.err != nil {
+			log.WarnContextf(ctx, "collector fetch plan cloud operation failed space=%s operation=%s function=%s: %v", r.SpaceID, op.key, op.name, op.err)
+			if err := r.opFailure(fmt.Errorf("%s %s: %w", op.key, op.name, op.err)); first == nil {
+				first = err
+			}
+			continue
+		}
+		if op.key == opKeyUnplanned {
+			log.WarnContextf(ctx, "collector fetch plan stopped the timer of an unplanned function space=%s function=%s; delete it with moox-cli collector function delete", r.SpaceID, op.name)
+		}
+	}
+	return first
 }
 
 // logPlan 写入活动日志：计划创建（标的变更）与计划生效。写入失败返回错误，下一轮重试；幂等键保证不重复。
@@ -1539,7 +1576,7 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	if ready() {
 		return name, nil
 	}
-	if op := r.ops().take(name, key); op != nil {
+	if op := r.ops().take(refKey(ref), key); op != nil {
 		if err := settle(op); err != nil {
 			return "", err
 		}
@@ -1547,14 +1584,14 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 			return name, nil
 		}
 	}
-	if r.ops().busy(name) {
+	if r.ops().busy(refKey(ref)) {
 		return "", fmt.Errorf("backfill function %s: %w", name, errBackfillFunctionPending)
 	}
 	spec, err := r.backfillSpec(ref, access)
 	if err != nil {
 		return "", err
 	}
-	op, err := r.ops().start(name, key, false, func(ctx context.Context, op *functionOp) error {
+	op, err := r.ops().start(refKey(ref), key, false, func(ctx context.Context, op *functionOp) error {
 		spec, err := r.withPackage(ctx, op, spec)
 		if err != nil {
 			return err
@@ -1565,7 +1602,7 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 		return "", fmt.Errorf("backfill function %s: %w", name, err)
 	}
 	r.ops().wait(ctx, []*functionOp{op}, r.roundWait(ctx))
-	done := r.ops().take(name, key)
+	done := r.ops().take(refKey(ref), key)
 	if done == nil {
 		return "", fmt.Errorf("backfill function %s: %w", name, errBackfillFunctionPending)
 	}

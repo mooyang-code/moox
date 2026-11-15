@@ -276,15 +276,20 @@ func (f *TencentFunctions) describe(ctx context.Context, ref FunctionRef, withTi
 		if trigger != nil {
 			state.Timer = &TimerState{Timer: Timer{Cron: trigger.Cron, Enabled: trigger.Enabled}, AvailableStatus: trigger.AvailableStatus, Qualifier: trigger.Qualifier, Message: trigger.Message}
 		}
+		// 异步重试与预留并发只用于展示（对账不比对这两项，Ensure 自己会读、会改）：读失败只记日志，不让函数算作没读到。
 		async, err := s.client.GetFunctionEventInvokeConfig(ctx, ref.scf())
 		if err != nil && !isConfigNotFound(err) {
-			return FunctionState{}, fmt.Errorf("读取云函数 %s 的异步重试配置失败: %w", ref.Name, err)
+			log.WarnContextf(ctx, "[Collector-Cloud] 读取云函数 %s 的异步重试配置失败: %v", ref.Name, err)
 		}
-		if async != nil && async.Configured {
+		if err == nil && async != nil && async.Configured {
 			state.AsyncRetry = &AsyncRetryState{RetryNum: async.RetryNum, MsgTTL: async.MsgTTL}
 		}
-		if state.ReservedMem, err = s.client.GetReservedConcurrencyConfig(ctx, ref.scf()); err != nil && !isConfigNotFound(err) {
-			return FunctionState{}, fmt.Errorf("读取云函数 %s 的预留并发失败: %w", ref.Name, err)
+		reserved, err := s.client.GetReservedConcurrencyConfig(ctx, ref.scf())
+		if err != nil && !isConfigNotFound(err) {
+			log.WarnContextf(ctx, "[Collector-Cloud] 读取云函数 %s 的预留并发失败: %v", ref.Name, err)
+		}
+		if err == nil {
+			state.ReservedMem = reserved
 		}
 	}
 	state.ReadAt = f.now()

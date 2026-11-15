@@ -400,6 +400,14 @@ func (h *planHarness) setSubjects(count int) {
 }
 
 func (h *planHarness) reconciler() *PlanReconciler {
+	r := h.buildReconciler()
+	// 测试结束时取消它还在跑的云端操作（不等）：cloud 包的函数锁是进程内全局的，
+	// 留着的操作会占住同名函数的锁，拖慢后面用同样函数名的测试。
+	h.t.Cleanup(func() { r.ops().cancelAll() })
+	return r
+}
+
+func (h *planHarness) buildReconciler() *PlanReconciler {
 	return &PlanReconciler{
 		SpaceID: "crypto", Options: testPlanOptions(),
 		Deploy: PlanDeploy{CloudAccountID: testAccount, PackageName: testPackageName, Namespace: "default", MemoryMB: 64, Networks: map[string]PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}},
@@ -449,6 +457,12 @@ func scfRef(name string) tencentscf.FunctionRef {
 		region = "ap-" + parts[len(parts)-1]
 	}
 	return tencentscf.FunctionRef{Region: region, Namespace: "default", FunctionName: name}
+}
+
+// opKeyOf 返回函数在操作表与读回缓存里的键（地域/命名空间/函数名，测试里命名空间是 default）。
+func opKeyOf(name string) string {
+	ref := scfRef(name)
+	return ref.Region + "/" + ref.Namespace + "/" + name
 }
 
 // cloudFunction 返回云上一个函数的状态；没有时第二个返回值为 false。

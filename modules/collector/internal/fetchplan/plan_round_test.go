@@ -284,7 +284,7 @@ func TestDriftRepairStillRunningIsInFlightNotAFailure(t *testing.T) {
 	repairAt := h.now
 	require.NoError(t, h.reconcile(r))
 	requireNoFailure(t, metrics)
-	require.True(t, r.ops().busy(name), "修复操作还在跑，结束前不会重复起")
+	require.True(t, r.ops().busy(opKeyOf(name)), "修复操作还在跑，结束前不会重复起")
 	require.True(t, r.lastVerified.Before(h.now), "还没核对完毕，几分钟后再读回")
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
 	require.Equal(t, float64(repairAt.Unix()), testutil.ToFloat64(metrics.assignmentPendingSince.WithLabelValues("crypto")))
@@ -358,7 +358,7 @@ func TestDriftRepairThatFinishedWithFailuresIsStillAFailure(t *testing.T) {
 	require.Error(t, h.reconcile(r))
 	require.Equal(t, float64(1), failureLabel(metrics, "cloud"))
 	require.Equal(t, verifiedBefore, r.lastVerified, "有失败项：不更新读回时间，下一轮继续修复")
-	require.False(t, r.ops().busy(name), "已结束的失败操作不算在跑")
+	require.False(t, r.ops().busy(opKeyOf(name)), "已结束的失败操作不算在跑")
 	require.Equal(t, "tampered", h.mustFunction(name).Info.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
 }
 

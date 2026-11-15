@@ -39,6 +39,7 @@ var (
 )
 
 // functionOps 记录每个函数当前在跑的那一个云端操作，以及结束后还没被取走的结果。
+// 键是函数在云上的位置（地域/命名空间/函数名，见 refKey）：同名函数在别的命名空间里的副本是另一个函数。
 type functionOps struct {
 	mu      sync.Mutex
 	running map[string]*functionOp
@@ -83,6 +84,11 @@ func (op *functionOp) finished() bool {
 // confirmed 报告操作已经成功结束，并且定时器没有因为暂停被改成停用。
 func (op *functionOp) confirmed() bool {
 	return op.err == nil && !op.timerSuppressed.Load()
+}
+
+// refKey 是函数在操作表与读回缓存里的键：地域/命名空间/函数名。
+func refKey(ref cloud.FunctionRef) string {
+	return ref.Region + "/" + ref.Namespace + "/" + ref.Name
 }
 
 func newFunctionOps(slots chan struct{}, pausing func() bool, now func() time.Time) *functionOps {
@@ -159,6 +165,27 @@ func (o *functionOps) take(name, key string) *functionOp {
 	}
 	delete(o.running, name)
 	return op
+}
+
+// takeFinished 取走用途在 keys 里、已经结束的全部操作结果（跨轮才结束、当轮没被取走的那些）。
+func (o *functionOps) takeFinished(keys ...string) []*functionOp {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var out []*functionOp
+	for name, op := range o.running {
+		if !op.finished() {
+			continue
+		}
+		for _, key := range keys {
+			if op.key == key {
+				out = append(out, op)
+				delete(o.running, name)
+				break
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	return out
 }
 
 // wait 等这些操作结束，最多等 budget；返回时可能还有没结束的。
@@ -238,6 +265,15 @@ func (o *functionOps) runningKeys() map[string]string {
 		}
 	}
 	return out
+}
+
+// cancelAll 取消全部在跑的操作，不等它们返回（测试结束时用）。
+func (o *functionOps) cancelAll() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, op := range o.running {
+		op.cancel()
+	}
 }
 
 // stop 取消全部操作并等它们返回。close 为 true（进程退出）时之后不再接受新操作；

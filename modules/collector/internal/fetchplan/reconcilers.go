@@ -14,6 +14,8 @@ import (
 type Reconcilers struct {
 	mu     sync.Mutex
 	spaces map[string]*PlanReconciler
+	// all 是登记过的全部对账器：暂停期间在旧对账器上起的补采、删除操作，恢复后旧对账器被替换，退出时也要停掉。
+	all []*PlanReconciler
 }
 
 // Store 登记空间的对账器。
@@ -24,6 +26,7 @@ func (s *Reconcilers) Store(spaceID string, reconciler *PlanReconciler) {
 		s.spaces = map[string]*PlanReconciler{}
 	}
 	s.spaces[strings.ToLower(strings.TrimSpace(spaceID))] = reconciler
+	s.all = append(s.all, reconciler)
 }
 
 // Get 返回空间的对账器；空间不在对账的管理集合里时返回 nil。
@@ -50,13 +53,10 @@ func (s *Reconcilers) Invoke(ctx context.Context, spaceID, functionName string, 
 	return reconciler.InvokeBackfill(ctx, functionName, event)
 }
 
-// Close 在进程退出时取消全部空间在跑的云端操作并等它们返回，之后不再接受新操作。
+// Close 在进程退出时取消登记过的全部对账器（含被替换的旧对账器）在跑的云端操作并等它们返回，之后不再接受新操作。
 func (s *Reconcilers) Close() {
 	s.mu.Lock()
-	all := make([]*PlanReconciler, 0, len(s.spaces))
-	for _, reconciler := range s.spaces {
-		all = append(all, reconciler)
-	}
+	all := append([]*PlanReconciler(nil), s.all...)
 	s.mu.Unlock()
 	for _, reconciler := range all {
 		reconciler.StopOperations(true)

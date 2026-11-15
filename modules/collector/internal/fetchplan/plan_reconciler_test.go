@@ -623,7 +623,7 @@ func TestInFlightPlanJobsAlsoBlockAuxiliaryChanges(t *testing.T) {
 		function.Info.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "tampered"
 	})
 	release := make(chan struct{})
-	_, err := r.ops().start(names[0], planOpKey(99, planStageTransition), true, func(ctx context.Context, _ *functionOp) error { <-release; return nil })
+	_, err := r.ops().start(opKeyOf(names[0]), planOpKey(99, planStageTransition), true, func(ctx context.Context, _ *functionOp) error { <-release; return nil })
 	require.NoError(t, err)
 	h.now = h.now.Add(2 * time.Hour)
 	ensures := h.cloud.countOps("ensure", names[0])
@@ -658,7 +658,7 @@ func TestDisableAllWaitsForInFlightEnablingJobs(t *testing.T) {
 	h.applyFirstPlan(r)
 	target := h.cloudTimers()[0]
 	release := make(chan struct{})
-	op, err := r.ops().start(target, opKeyEnable, true, func(ctx context.Context, _ *functionOp) error {
+	op, err := r.ops().start(opKeyOf(target), opKeyEnable, true, func(ctx context.Context, _ *functionOp) error {
 		<-release
 		return r.Cloud.SetTimer(ctx, r.functionRef(target, "ap-nanjing"), cloud.Timer{Cron: "0 * * * * * *", Enabled: true}, "pkg")
 	})
@@ -989,7 +989,7 @@ func TestEnableAllWaitsForInFlightJobs(t *testing.T) {
 	resumed := h.reconciler()
 	target := h.cloudTimers()[0]
 	release := make(chan struct{})
-	_, err = resumed.ops().start(target, opKeyRepair, true, func(ctx context.Context, _ *functionOp) error { <-release; return nil })
+	_, err = resumed.ops().start(opKeyOf(target), opKeyRepair, true, func(ctx context.Context, _ *functionOp) error { <-release; return nil })
 	require.NoError(t, err)
 	done, err = resumed.EnableAll(context.Background())
 	require.NoError(t, err)

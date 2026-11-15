@@ -54,7 +54,7 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 	var firstErr error
 	for _, name := range sortedKeys(refs) {
 		// 上一次调用起的停用已经成功结束：不再起（第 7 步的读回会确认）；失败了就重起。
-		if done := ops.take(name, opKeyDisable); done != nil && done.err == nil {
+		if done := ops.take(refKey(refs[name]), opKeyDisable); done != nil && done.err == nil {
 			continue
 		}
 		op, err := r.startDisableTimer(refs[name], opKeyDisable)
@@ -93,7 +93,7 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 	return r.finishDisable(), nil
 }
 
-// EnableAll 启用已生效计划里全部函数的定时器，与 DisableAll 对称：恢复采集或进程重启后立即核对云端并补上，
+// EnableAll 启用全部函数的定时器（期望按已确认的状态算，见 confirmedTargets），与 DisableAll 对称：恢复采集或进程重启后立即核对云端并补上，
 // 不等对账逐轮读回。启用之前先让落后的函数跟上最新的代码包（环境的编码格式随代码版本变化，先启用会出现“旧代码读新环境”）：
 // 有函数还在旧代码包上就先起 UpgradeCode，升级没成功之前返回 errCodeUpgradePending，一个都不启用。
 // 返回 true 表示没有遗留项：没有在跑的操作，且需要启用的函数都已确认。缺失的函数交给对账重建。
@@ -102,7 +102,9 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("plan reconciliation already running")
 	}
 	defer r.mu.Unlock()
-	targets, err := r.appliedTargets(ctx)
+	_ = r.collectFinishedOps(ctx) // 失败已计入对账失败
+	// 期望按已确认的状态算：进程重启时未生效计划里已确认过渡的函数要保持过渡的 cron，不能按已生效计划改回旧 cron。
+	targets, err := r.confirmedTargets(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -120,7 +122,7 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 	var lagging []*functionOp
 	for _, name := range sortedKeys(targets) {
 		ref := r.functionRef(name, targets[name].Region)
-		if ops.busy(name) {
+		if ops.busy(refKey(ref)) {
 			deferred++
 			continue
 		}
@@ -171,7 +173,7 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 		if target.Cron == "" || TimerMatches(states[name].Timer, target.Cron) {
 			continue
 		}
-		op, err := r.ops().start(name, opKeyEnable, true, func(ctx context.Context, _ *functionOp) error {
+		op, err := r.ops().start(refKey(r.functionRef(name, target.Region)), opKeyEnable, true, func(ctx context.Context, _ *functionOp) error {
 			return r.Cloud.SetTimer(ctx, r.functionRef(name, target.Region), cloud.Timer{Cron: target.Cron, Enabled: true}, pkg)
 		})
 		if err != nil {
@@ -195,24 +197,6 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 	}
 	r.lastVerified = time.Time{} // 启用之后让下一轮对账立即读回校验
 	return allOK, nil
-}
-
-// appliedTargets 返回最近一份已生效计划里的定时函数。
-func (r *PlanReconciler) appliedTargets(ctx context.Context) (map[string]functionTarget, error) {
-	applied, err := r.Store.LatestApplied(ctx, r.SpaceID)
-	if err != nil || applied == nil {
-		return nil, err
-	}
-	content, err := decodeFetchPlanContent(applied.Plan)
-	if err != nil {
-		return nil, err
-	}
-	functions, _ := content.Applied()
-	targets := map[string]functionTarget{}
-	for name, function := range scfFunctions(functions) {
-		targets[name] = functionTarget{Name: name, Region: function.Region, Plan: function.Plan, Cron: function.Cron}
-	}
-	return targets, nil
 }
 
 // invalidateConfirmations 作废未完成计划里的下发与收尾确认（保留 Registered 与原 P）：停用之后这些确认不再代表云端状态，

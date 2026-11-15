@@ -139,22 +139,26 @@ func TestPauseCancelsQueuedOperationsAndWaitsForRunningOnes(t *testing.T) {
 	resumed.Operations = make(chan struct{}, 1)
 	resumed.opWaitMax = 30 * time.Millisecond
 	release := make(chan struct{})
-	busy, err := resumed.ops().start(names[1], opKeyRepair, true, func(ctx context.Context, _ *functionOp) error { <-release; return nil })
+	busy, err := resumed.ops().start(opKeyOf(names[1]), opKeyRepair, true, func(ctx context.Context, _ *functionOp) error { <-release; return nil })
 	require.NoError(t, err)
 	waitHolding(t, resumed, busy)
 	// 排队的 Ensure：恢复后的启用（它拿不到名额）。
 	spec, err := resumed.desiredSpec(functionTarget{Name: names[0], Region: "ap-nanjing", Plan: h.cloudPlan(names[0]), Cron: "0 * * * * * *"})
 	require.NoError(t, err)
-	queued, err := resumed.startEnsure(names[0], opKeyRepair, spec)
+	queued, err := resumed.startEnsure(opKeyRepair, spec)
 	require.NoError(t, err)
 
 	done, err = resumed.DisableAll(context.Background())
 	require.NoError(t, err)
 	require.False(t, done, "在跑的操作没结束")
-	<-queued.done
+	select {
+	case <-queued.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("排队的操作没有被取消")
+	}
 	require.ErrorIs(t, queued.err, context.Canceled, "排队的操作被取消")
 	require.Zero(t, h.cloud.countOps("ensure", names[0])-1, "排队的 Ensure 一次也没碰云端")
-	_, err = resumed.startEnsure(names[0], opKeyRepair, spec)
+	_, err = resumed.startEnsure(opKeyRepair, spec)
 	require.ErrorIs(t, err, errOpPausing, "正在暂停时不再起可能打开定时器的操作")
 
 	close(release)
