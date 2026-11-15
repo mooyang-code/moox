@@ -203,7 +203,7 @@ export const staticRoutes = [
       {
         path: "/ops/logs",
         name: "ops-logs",
-        component: () => import("@/views/ops/logs/index.vue"),
+        component: () => import("@/views/ops/log-center/index.vue"),
         meta: { title: "ops-logs", reuseOnQuery: true }
       },
       {

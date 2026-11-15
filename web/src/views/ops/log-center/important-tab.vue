@@ -1,107 +1,107 @@
 <template>
   <div class="logs-page">
-      <header class="logs-head">
-        <div>
-          <h2>重要日志</h2>
-          <p class="muted">各服务的错误日志和关键事件（进程启动、暂停与恢复等），保留 30 天。普通日志在本机文件或 CLS 里查。</p>
-        </div>
-        <a-button :loading="loading" @click="reload">刷新</a-button>
-      </header>
+    <header class="logs-head">
+      <div>
+        <h2>重要日志</h2>
+        <p class="muted">各服务的错误日志和关键事件（进程启动、暂停与恢复等），保留 30 天。普通日志在本机文件或 CLS 里查。</p>
+      </div>
+      <a-button :loading="loading" @click="reload">刷新</a-button>
+    </header>
 
-      <form class="logs-filters" aria-label="筛选" @submit.prevent="reload">
-        <a-input v-model="filters.component" aria-label="组件" placeholder="组件，如 storage-primary" allow-clear />
-        <a-input v-model="filters.host_id" aria-label="主机" placeholder="主机 ID，如 storage" allow-clear />
-        <a-select v-model="filters.level" aria-label="级别">
-          <a-option value="">错误和关键事件</a-option>
-          <a-option value="error">只看错误</a-option>
-        </a-select>
-        <a-select v-model="filters.range" aria-label="时间范围" @change="pickRange">
-          <a-option value="24h">最近 24 小时</a-option>
-          <a-option value="7d">最近 7 天</a-option>
-          <a-option value="30d">最近 30 天</a-option>
-        </a-select>
-        <a-input v-model="filters.keyword" aria-label="关键字" placeholder="在正文、事件名、代码位置里查找" allow-clear />
-        <a-button html-type="submit" type="primary">查询</a-button>
-      </form>
+    <form class="logs-filters" aria-label="筛选" @submit.prevent="reload">
+      <a-input v-model="filters.component" aria-label="组件" placeholder="组件，如 storage-primary" allow-clear />
+      <a-input v-model="filters.host_id" aria-label="主机" placeholder="主机 ID，如 storage" allow-clear />
+      <a-select v-model="filters.level" aria-label="级别">
+        <a-option value="">错误和关键事件</a-option>
+        <a-option value="error">只看错误</a-option>
+      </a-select>
+      <a-select v-model="filters.range" aria-label="时间范围" @change="pickRange">
+        <a-option value="24h">最近 24 小时</a-option>
+        <a-option value="7d">最近 7 天</a-option>
+        <a-option value="30d">最近 30 天</a-option>
+      </a-select>
+      <a-input v-model="filters.keyword" aria-label="关键字" placeholder="在正文、事件名、代码位置里查找" allow-clear />
+      <a-button html-type="submit" type="primary">查询</a-button>
+    </form>
 
-      <p v-if="shown.custom" class="logs-window">
-        只看 {{ formatMs(shown.window.startMs) }} 到 {{ formatMs(shown.window.endMs) }} 之间的记录
-        <button type="button" class="logs-link" @click="clearWindow">回到{{ rangeLabel(shown.range) }}</button>
-      </p>
-      <a-alert v-if="error" type="error" class="logs-error">{{ error }}</a-alert>
-      <section v-if="totals.errors + totals.events" class="logs-chart" aria-label="按时间的分布">
-        <div class="logs-chart__bars">
-          <button
-            v-for="bar in bars"
-            :key="bar.startMs"
-            type="button"
-            class="logs-bar"
-            :disabled="!(bar.errors + bar.events)"
-            :title="barTitle(bar)"
-            :aria-label="barTitle(bar)"
-            @click="pickBar(bar)"
+    <p v-if="shown.custom" class="logs-window">
+      只看 {{ formatMs(shown.window.startMs) }} 到 {{ formatMs(shown.window.endMs) }} 之间的记录
+      <button type="button" class="logs-link" @click="clearWindow">回到{{ rangeLabel(shown.range) }}</button>
+    </p>
+    <a-alert v-if="error" type="error" class="logs-error">{{ error }}</a-alert>
+    <section v-if="totals.errors + totals.events" class="logs-chart" aria-label="按时间的分布">
+      <div class="logs-chart__bars">
+        <button
+          v-for="bar in bars"
+          :key="bar.startMs"
+          type="button"
+          class="logs-bar"
+          :disabled="!(bar.errors + bar.events)"
+          :title="barTitle(bar)"
+          :aria-label="barTitle(bar)"
+          @click="pickBar(bar)"
+        >
+          <span class="logs-bar__events" :style="{ height: barHeight(bar.events) }" />
+          <span class="logs-bar__errors" :style="{ height: barHeight(bar.errors) }" />
+        </button>
+      </div>
+      <div class="logs-chart__axis">
+        <span>{{ formatMs(bars[0].startMs) }}</span>
+        <span class="logs-chart__legend">
+          <i class="is-error" />错误 {{ totals.errors }} <i class="is-event" />事件 {{ totals.events }}；点一根柱子只看那段时间
+        </span>
+        <span>{{ formatMs(bars[bars.length - 1].endMs) }}</span>
+      </div>
+    </section>
+
+    <div class="logs-table-wrap">
+      <table class="logs-table" aria-label="重要日志">
+        <colgroup>
+          <col style="width: 200px" />
+          <col style="width: 72px" />
+          <col style="width: 96px" />
+          <col style="width: 150px" />
+          <col />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>级别</th>
+            <th>主机</th>
+            <th>组件</th>
+            <th>内容</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="record in records"
+            :key="record.id"
+            class="logs-row"
+            tabindex="0"
+            @click="open(record)"
+            @keydown.enter="open(record)"
           >
-            <span class="logs-bar__events" :style="{ height: barHeight(bar.events) }" />
-            <span class="logs-bar__errors" :style="{ height: barHeight(bar.errors) }" />
-          </button>
-        </div>
-        <div class="logs-chart__axis">
-          <span>{{ formatMs(bars[0].startMs) }}</span>
-          <span class="logs-chart__legend">
-            <i class="is-error" />错误 {{ totals.errors }} <i class="is-event" />事件 {{ totals.events }}；点一根柱子只看那段时间
-          </span>
-          <span>{{ formatMs(bars[bars.length - 1].endMs) }}</span>
-        </div>
-      </section>
-
-      <div class="logs-table-wrap">
-        <table class="logs-table" aria-label="重要日志">
-          <colgroup>
-            <col style="width: 200px" />
-            <col style="width: 72px" />
-            <col style="width: 96px" />
-            <col style="width: 150px" />
-            <col />
-          </colgroup>
-          <thead>
-            <tr>
-              <th>时间</th>
-              <th>级别</th>
-              <th>主机</th>
-              <th>组件</th>
-              <th>内容</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="record in records"
-              :key="record.id"
-              class="logs-row"
-              tabindex="0"
-              @click="open(record)"
-              @keydown.enter="open(record)"
-            >
-              <td>{{ formatTime(record.logged_at) }}</td>
-              <td>
-                <span class="logs-level" :class="`is-${levelTone(record)}`">{{ levelLabel(record) }}</span>
-              </td>
-              <td>{{ record.host_id || "--" }}</td>
-              <td>{{ record.component || "--" }}</td>
-              <td class="logs-message">
-                <span v-if="record.event" class="logs-event">{{ record.event }}</span>
-                {{ firstLine(record.message) }}
-                <span v-if="mergedCount(record)" class="muted">（此前同一位置另有 {{ mergedCount(record) }} 条被合并）</span>
-              </td>
-            </tr>
-            <tr v-if="!records.length">
-              <td colspan="5" class="logs-empty">{{ loading ? "加载中…" : "没有符合条件的日志" }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-if="hasMore" class="logs-more">
-        <a-button :loading="loadingMore" @click="loadMore">加载更早的日志</a-button>
-      </div>
+            <td>{{ formatTime(record.logged_at) }}</td>
+            <td>
+              <span class="logs-level" :class="`is-${levelTone(record)}`">{{ levelLabel(record) }}</span>
+            </td>
+            <td>{{ record.host_id || "--" }}</td>
+            <td>{{ record.component || "--" }}</td>
+            <td class="logs-message">
+              <span v-if="record.event" class="logs-event">{{ record.event }}</span>
+              {{ firstLine(record.message) }}
+              <span v-if="mergedCount(record)" class="muted">（此前同一位置另有 {{ mergedCount(record) }} 条被合并）</span>
+            </td>
+          </tr>
+          <tr v-if="!records.length">
+            <td colspan="5" class="logs-empty">{{ loading ? "加载中…" : "没有符合条件的日志" }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="hasMore" class="logs-more">
+      <a-button :loading="loadingMore" @click="loadMore">加载更早的日志</a-button>
+    </div>
 
     <a-drawer v-model:visible="detailVisible" title="日志详情" width="min(720px, 100vw)" :footer="false">
       <dl v-if="selected" class="logs-detail">
