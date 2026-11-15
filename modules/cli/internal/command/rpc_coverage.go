@@ -7,10 +7,7 @@ const (
 	sshReason               = "管理台的交互式 SSH 终端与文件管理；命令行用 host exec、host get、host put 代替"
 	authReason              = "管理台的登录与会话；moox-cli 用自己的网关身份，不需要登录"
 	cloudAccountWriteReason = "云账号的新建与修改在管理台运行状态页“函数”区的“云账号”对话框做（初始账号由 setup init 登记）；密钥本身在“设置 › 密钥”"
-	// 批 2：云账号、代码包、云函数搬进 CollectMgr，函数实例、作业与发布租约整个取消。T7 删除这两个服务的代码与目录登记，
-	// 在那之前它们仍在服务目录里，管理台与 moox-cli 都已不再调用。
-	removedServiceReason = "批 2 取消了这个服务（T7 删除），管理台与 moox-cli 都不再调用；云账号、代码包、云函数改用 collector account、collector package、collector function"
-	spaceDupReason       = "与 SpaceMgr 同名；管理台走 SpaceMgr（space 命令），Storage 里的空间元数据由 metadata apply 与 setup 维护"
+	spaceDupReason          = "与 SpaceMgr 同名；管理台走 SpaceMgr（space 命令），Storage 里的空间元数据由 metadata apply 与 setup 维护"
 )
 
 // handWrittenCoverage 记录不是规格表生成、而是手写实现的命令各自覆盖了管理台的哪些接口（接口 → 命令路径）。
@@ -110,30 +107,6 @@ var consoleOnly = map[string]string{
 	"trpc.moox.ops.SecretMgr/ToggleSecretStatus": secretWriteReason,
 	"trpc.moox.ops.SecretMgr/ExportSecrets":      "密钥整包导出带口令，moox-cli 无权调用，由用户在管理台操作",
 	"trpc.moox.ops.SecretMgr/ImportSecrets":      "密钥整包导入带口令，moox-cli 无权调用，由用户在管理台操作",
-
-	"trpc.moox.cloudfunction.CloudFunctionMgr/ListFunctionInstances":                      removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/InvokeFunction":                             removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/SubmitCreateFunctionInstances":              removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/SubmitDeployFunctionInstances":              removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/SubmitDeleteFunctionInstances":              removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/GetFunctionJob":                             removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/SubmitUpdateFunctionInstanceRuntimeConfigs": removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/ListCloudAccounts":                          removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/CreateCloudAccount":                         removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/UpdateCloudAccount":                         removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/DeleteCloudAccount":                         removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/ListCloudRegions":                           removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/PreviewSCFFunctions":                        removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/ImportSCFFunctions":                         removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/GetPackageList":                             removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/GetPackageDetail":                           removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/DeletePackage":                              removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/GetPackageDownloadURL":                      removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/InitPackageUpload":                          removedServiceReason,
-	"trpc.moox.cloudfunction.CloudFunctionMgr/CompletePackageUpload":                      removedServiceReason,
-	"trpc.moox.admin.CollectorPublishLease/AcquireCollectorPublishLease":                  removedServiceReason,
-	"trpc.moox.admin.CollectorPublishLease/RenewCollectorPublishLease":                    removedServiceReason,
-	"trpc.moox.admin.CollectorPublishLease/ReleaseCollectorPublishLease":                  removedServiceReason,
 
 	"trpc.moox.storage.Metadata/CreateSpace": spaceDupReason,
 	"trpc.moox.storage.Metadata/UpdateSpace": spaceDupReason,

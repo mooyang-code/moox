@@ -9,8 +9,6 @@ use (
 	./modules/callbackdispatcher
 	./modules/callbackdispatcher/proto/callbackdispatchergen
 	./modules/cli
-	./modules/cloudfunction
-	./modules/cloudfunction/proto/cloudfunctiongen
 	./modules/collector
 	./modules/collector/proto/collectorgen
 	./modules/consoleproxy

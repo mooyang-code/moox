@@ -1,5 +1,5 @@
 // Package marketfetch 是采集的执行面：Plan 的结构与编解码、取数流水线、周期提交、路由与单次调用的上报，
-// 云函数程序与 collector-stream 里跑的就是这一包。它不得引入控制面（fetchplan）、Collector 的库（store）与 CloudFunction 的协议。
+// 云函数程序与 collector-stream 里跑的就是这一包。它不得引入控制面（fetchplan、调腾讯云的 cloud）与 Collector 的库（store）。
 package marketfetch
 
 import (

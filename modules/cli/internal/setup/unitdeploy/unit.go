@@ -56,7 +56,7 @@ const collectorStorageAppID = "moox-collector"
 
 // serviceLogComponents 是接入了重要日志与 CLS 上报的组件，和 docs/模块/监控.md 的接入范围一致。
 var serviceLogComponents = []string{
-	"admin", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy", "eventbus",
+	"admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy", "eventbus",
 	"storage-primary", "storage-view", "trade", "collector-stream", "callback-dispatcher",
 }
 
@@ -67,7 +67,7 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 		values := maps.Clone(health)
 		environment[id] = values
 		// 服务日志上报 CLS：只给接入了日志上报的组件（main 引入了 logcls 的那些）写入，别的组件不拿这把密钥。
-		// 变量名用 MOOX_LOG_CLS_ 前缀，和云函数、CloudFunction 自己的 MOOX_CLS_* 分开（那一组是采集日志的主题和另一把密钥）。
+		// 变量名用 MOOX_LOG_CLS_ 前缀，和云函数、Collector 开通采集日志用的 MOOX_CLS_* 分开（那一组是采集日志的主题和另一把密钥）。
 		if cls := manifest.Logging.CLS; cls.Enabled && slices.Contains(serviceLogComponents, id) {
 			values["MOOX_LOG_CLS_ENABLED"] = "true"
 			values["MOOX_LOG_CLS_ENDPOINT"] = cls.Endpoint
@@ -93,8 +93,8 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			values["MOOX_NOTIFICATION_WEBHOOK_URL"] = manifest.Notification.WebhookURL
 			values["MOOX_NOTIFICATION_SECRET"] = manifest.Notification.Secret
 		}
-		if id == "cloudfunction" {
-			// 开通采集日志主题时的保留天数来自 moox.toml 的 [logging] retention_days（只在创建主题时生效）。
+		if id == "collector" {
+			// Collector 建函数时开通采集日志主题，保留天数来自 moox.toml 的 [logging] retention_days（只在创建主题时生效）。
 			values["MOOX_CLS_RETENTION_DAYS"] = strconv.FormatInt(manifest.Logging.RetentionDays, 10)
 		}
 		if id == "admin" {

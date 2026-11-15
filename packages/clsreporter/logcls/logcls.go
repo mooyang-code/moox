@@ -5,7 +5,7 @@
 //   - 运行环境里启用了 CLS 时，警告及以上的日志和关键事件另外上报到腾讯云日志服务；没有启用时这一路不存在。
 //
 // CLS 的环境变量是 MOOX_LOG_CLS_ENABLED、_ENDPOINT、_TOPIC_ID、_SECRET_ID、_SECRET_KEY、_SOURCE、_TIMEOUT_MS，含义与云函数的
-// MOOX_CLS_* 相同（见 clsreporter.ConfigFromEnv），只是前缀不同：云函数和 CloudFunction 的那一组指向采集日志的主题和另一把密钥，
+// MOOX_CLS_* 相同（见 clsreporter.ConfigFromEnv），只是前缀不同：云函数和 Collector（开通采集日志）的那一组指向采集日志的主题和另一把密钥，
 // 两组不能混用。另有 MOOX_LOG_CLS_MIN_LEVEL（默认 warn）控制上报的最低级别；关键事件不论级别都上报。
 //
 // 上报走明文 HTTP（SDK 写死），所以日志里不要写密钥和完整的 Webhook 地址。
@@ -62,7 +62,7 @@ func setup(getenv func(string) string) {
 }
 
 // serviceLogEnv 把 clsreporter 按 MOOX_CLS_* 取的值换成服务日志自己的前缀 MOOX_LOG_CLS_*。
-// 两组不能混：MOOX_CLS_* 是云函数采集日志用的，指向另一个主题和另一把密钥，CloudFunction 进程的环境里两组可能同时存在。
+// 两组不能混：MOOX_CLS_* 是云函数采集日志用的，指向另一个主题和另一把密钥，Collector 进程的环境里两组可能同时存在。
 func serviceLogEnv(getenv func(string) string) func(string) string {
 	return func(key string) string {
 		return getenv(strings.Replace(key, "MOOX_CLS_", "MOOX_LOG_CLS_", 1))

@@ -27,7 +27,6 @@ func seededAdminDB(t *testing.T) (string, *sql.DB) {
 	for _, q := range []string{
 		"INSERT INTO t_spaces (c_space_id, c_name) VALUES ('crypto', '加密货币市场'), ('team-a', '甲组')",
 		"INSERT INTO t_activity_logs (c_source, c_category, c_title) VALUES ('x', 'y', 'z'), ('x', 'y', 'w')",
-		"INSERT INTO t_collector_publish_leases (c_space_id) VALUES ('team-a')",
 	} {
 		_, err := sqlDB.Exec(q)
 		require.NoError(t, err, q)
@@ -66,7 +65,6 @@ func TestBusinessResetScopes(t *testing.T) {
 	require.Equal(t, "ok", res.Status)
 	require.EqualValues(t, 2, res.Deleted["t_activity_logs"])
 	require.Equal(t, 0, countRows(t, db, "t_activity_logs"))
-	require.Equal(t, 0, countRows(t, db, "t_collector_publish_leases"))
 	require.Equal(t, 2, countRows(t, db, "t_spaces"), "data 范围不动业务空间")
 	require.FileExists(t, res.Backup)
 

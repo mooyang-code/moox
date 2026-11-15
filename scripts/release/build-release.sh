@@ -39,7 +39,7 @@ BUNDLE="moox-${VERSION}"
 mkdir -p "${STAGE}/${BUNDLE}"
 git -C "${ROOT}" archive "${COMMIT}" | tar -x -C "${STAGE}/${BUNDLE}"
 
-server_targets=(admin host-gateway eventbus console-proxy egress-proxy web-host cloudfunction collector collector-stream collector-scf
+server_targets=(admin host-gateway eventbus console-proxy egress-proxy web-host collector collector-stream collector-scf
   factor-mgr factor-engine archive-mgr archive-worker strategy strategy-cli trade callback-dispatcher monitor
   hostagent access storage-cli storage)
 VERSION="${VERSION}" GIT_COMMIT="${COMMIT:0:8}" \

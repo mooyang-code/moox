@@ -26,7 +26,7 @@ const hosts: DeploymentHost[] = [
   { host_id: "factor", address: "198.51.100.20", region: "lan", status: "enabled", reachability: "outbound" }
 ];
 const layout: Record<string, string[]> = {
-  control: ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"],
+  control: ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "factor-mgr", "strategy"],
   storage: ["storage-primary", "storage-view", "access", "archive-worker"],
   overseas: ["trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"],
   factor: ["factor-engine"]

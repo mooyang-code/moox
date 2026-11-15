@@ -33,8 +33,6 @@ const LAYER_OF: Record<string, TopologyLayer> = {
   eventbus: "control",
   collector: "business",
   "collector-stream": "business",
-  // 批 2 T7 删除 cloudfunction 组件；在那之前它仍在服务目录里、仍在部署，只是不再出现在采集数据流上。
-  cloudfunction: "business",
   "factor-mgr": "business",
   "factor-engine": "business",
   "archive-worker": "business",

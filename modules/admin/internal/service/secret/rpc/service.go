@@ -157,7 +157,7 @@ func (s *Service) GetCloudCredential(ctx context.Context, req *pb.GetCloudCreden
 		log.ErrorContextf(ctx, "[Secret] GetCloudCredential failed: %v", err)
 		return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥失败")}, nil
 	}
-	// 状态必须明确是 active：空状态不当作启用，和原来 CloudFunction 在客户端的校验一致。
+	// 状态必须明确是 active：空状态不当作启用。
 	if record.Category != "cloud" || record.Provider != "tencent" || record.Status != "active" {
 		return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "只能读取类别为 cloud、厂商为 tencent 且已启用的秘钥")}, nil
 	}

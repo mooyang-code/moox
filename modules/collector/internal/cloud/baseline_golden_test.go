@@ -16,7 +16,7 @@ import (
 
 // 批 2 的金样比对（腾讯云客户端这一层）。
 //
-// testdata/scf_paths.golden.json 是 T0 用 CloudFunction 的旧实现跑出来的（原件在 modules/cloudfunction/internal/rpc/testdata），
+// testdata/scf_paths.golden.json 是 T0 用原 CloudFunction 模块的旧实现跑出来的（该模块已在批 2 删除），
 // 这里用同一个假腾讯云（scf_baseline_fake_test.go）驱动 Ensure、UpgradeCode、SetTimer、Delete 跑同样的六条路径。
 // 比对的是每条路径结束时假腾讯云里的最终状态（环境、配置、定时器），只允许一处不同：环境里没有 MOOX_CREATE_RESERVATION_ID。
 // 另外按函数名过滤断言三条顺序约束（assertBaselineOrder）。请求次数多了少了不算差别。

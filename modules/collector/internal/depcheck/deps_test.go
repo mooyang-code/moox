@@ -80,14 +80,13 @@ func TestExecutionBinaryDependenciesMatchBaseline(t *testing.T) {
 }
 
 // controlPlanePackages 是执行面程序的依赖里不得出现的包：Collector 的库与 SQLite 驱动、控制面（含调腾讯云的 cloud 包）、
-// CloudFunction 与 Admin 的协议和客户端。
-// 不写裸的 cloudfunction：云函数程序引的第三方包 github.com/tencentyun/scf-go-lib/cloudfunction 是合法依赖。
+// Admin 的协议和客户端。
 var controlPlanePackages = []string{
 	"/modules/collector/internal/store", "/modules/collector/internal/fetchplan",
-	"/modules/collector/internal/egressbalance", "/modules/collector/internal/cloud", "/modules/cloudfunction", "/modules/admin/", "gorm.io/", "sqlite",
+	"/modules/collector/internal/egressbalance", "/modules/collector/internal/cloud", "/modules/admin/", "gorm.io/", "sqlite",
 }
 
-// 云函数程序与 collector-stream 不带 store、SQLite 驱动、控制面、CloudFunction 与 Admin 的协议。
+// 云函数程序与 collector-stream 不带 store、SQLite 驱动、控制面与 Admin 的协议。
 func TestExecutionBinariesExcludeControlPlane(t *testing.T) {
 	for _, target := range executionBinaries {
 		for _, dependency := range listDependencies(t, target) {

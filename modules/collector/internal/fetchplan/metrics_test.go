@@ -138,8 +138,8 @@ func metricLabels(metric *dto.Metric) map[string]string {
 
 func TestMetricsFailureReasonWhitelist(t *testing.T) {
 	require.Equal(t, "quota", normalizeAssignmentFailureReason("quota"))
-	// 白名单之外（包括已删除的 publish_lease_held、旧名 cloudfunction）一律归为 cloud。
-	require.Equal(t, "cloud", normalizeAssignmentFailureReason("publish_lease_held"))
+	// 白名单之外（包括已删除的原因、旧名 cloudfunction）一律归为 cloud。
+	require.Equal(t, "cloud", normalizeAssignmentFailureReason("something_removed"))
 	require.Equal(t, "cloud", normalizeAssignmentFailureReason("cloudfunction"))
 	require.Equal(t, "rules", normalizeAssignmentFailureReason(" rules "))
 }

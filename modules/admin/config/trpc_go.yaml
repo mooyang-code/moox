@@ -9,9 +9,8 @@ server:
     - masking
     - opentelemetry
     - prometheus
-  # FunctionInstance SCF inventory scans may inspect many functions across regions.
-  # Keep the Admin BFF envelope aligned with the 900s SCF budget plus transport
-  # headroom used by the FunctionInstance route.
+  # Admin BFF 的总时限与网关路由允许的最长超时（960 秒）一致；
+  # 归档分区副本下载不另设整体超时，受 Console 服务的时限约束。
   timeout: 960000
   admin:
     ip: 127.0.0.1
@@ -24,8 +23,7 @@ server:
       port: 11000
       network: tcp
       protocol: http_no_protocol
-      # The control gateway also carries long-running FunctionInstance previews.
-      # Keep its request deadline above the deployment route timeout.
+      # 归档分区副本下载经 Console 流式转发，请求时限不低于路由超时。
       timeout: 960000
     - name: trpc.moox.admin.Health
       ip: 127.0.0.1
@@ -75,13 +73,6 @@ server:
       protocol: trpc
       transport: go-net
       timeout: 30000
-    - name: trpc.moox.admin.CollectorPublishLease
-      ip: 127.0.0.1
-      port: 11111
-      network: tcp
-      protocol: trpc
-      transport: go-net
-      timeout: 10000
     - name: trpc.moox.admin.ActivityLog
       ip: 127.0.0.1
       port: 11113
@@ -111,12 +102,6 @@ server:
       network: "0 0 0 * * *"
       protocol: timer
       timeout: 30000
-    # Daily system garbage collection, offset from midnight jobs and the top of the hour.
-    - name: trpc.moox.admin.garbage_collection.timer
-      port: 11308
-      network: "0 47 3 * * *"
-      protocol: timer
-      timeout: 900000
 
 client:
   filter:

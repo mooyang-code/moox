@@ -40,11 +40,11 @@
   ],
   "components": [
     {
-      "component_id": "cloudfunction",
+      "component_id": "archive-mgr",
       "host_id": "control",
       "instances": [],
       "lifecycle": null,
-      "name": "云函数管理服务",
+      "name": "数据归档管理服务",
       "probe": {
         "checked_at": "",
         "raw_error": "",

@@ -138,7 +138,6 @@ case "${TARGET_MODULE}" in
     build_go modules/consoleproxy ./cmd/server moox-console-proxy 0
     build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
     build_web_host
-    build_go modules/cloudfunction ./cmd/server moox-cloudfunction 0
     build_go modules/collector ./cmd/server moox-collector 0
     build_go modules/collector ./cmd/cli moox-collector-cli 0
     build_go modules/collector ./cmd/stream moox-collector-stream 0
@@ -183,9 +182,6 @@ case "${TARGET_MODULE}" in
     ;;
   console-proxy)
     build_go modules/consoleproxy ./cmd/server moox-console-proxy 0
-    ;;
-  cloudfunction)
-    build_go modules/cloudfunction ./cmd/server moox-cloudfunction 0
     ;;
   collector)
     build_go modules/collector ./cmd/server moox-collector 0

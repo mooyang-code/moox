@@ -152,7 +152,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	require.NoError(t, wrongCA.Close())
 	_, err = e2eRawCall(configs["storage"].Server.RemoteAddr, e2eTrust(t, filepath.Join(root, "wrong-public", "moox-ca.crt"), "storage"), primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, headers)
 	require.Error(t, err, "a different CA must not reuse the successful TLS connection")
-	_, err = e2eRawCall(configs["control"].Server.LocalAddr, nil, "trpc.moox.admin.CollectorPublishLease", "ValidateCollectorPublishLease", codec.SerializationTypePB, nil, signedE2E(t, console.Credentials(), "control", "trpc.moox.admin.CollectorPublishLease", "ValidateCollectorPublishLease", nil))
+	_, err = e2eRawCall(configs["control"].Server.LocalAddr, nil, "trpc.moox.admin.ActivityLog", "AppendActivityLogs", codec.SerializationTypePB, nil, signedE2E(t, console.Credentials(), "control", "trpc.moox.admin.ActivityLog", "AppendActivityLogs", nil))
 	require.ErrorContains(t, err, "not allowed", "console must be denied at the gateway itself")
 	t.Log("SCENARIO PASS tls-trust-plaintext-acl-and-durable-replay")
 

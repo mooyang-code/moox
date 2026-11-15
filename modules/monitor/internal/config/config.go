@@ -127,9 +127,6 @@ type MarketCanaryConfig struct {
 type MarketHealthConfig struct {
 	TimerCoordinationStaleAfter   time.Duration `yaml:"timer_coordination_stale_after"`
 	TimerCoordinationPendingGrace time.Duration `yaml:"timer_coordination_pending_grace"`
-	// TimerCoordinationLeaseGrace 是「发布租约被占用」的宽限期：Admin 明确答复租约或在途操作占用仍被持有时，
-	// 在这段时间内按协调进行中处理；超过仍未恢复才告警。这是告警策略，不是恢复时间的上界。
-	TimerCoordinationLeaseGrace time.Duration `yaml:"timer_coordination_lease_grace"`
 }
 
 type KlineFreshnessConfig struct {
@@ -218,7 +215,7 @@ func Default() *Config {
 		// Canary subjects name concrete collection results, so they come only
 		// from deployment config; without subjects the canary stays disabled.
 		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
-		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, TimerCoordinationLeaseGrace: 10 * time.Minute},
+		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute},
 		KlineFreshness: KlineFreshnessConfig{
 			Enabled: false, SpaceIDs: registeredMarketIDs(), EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
@@ -296,9 +293,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MarketHealth.TimerCoordinationPendingGrace == 0 {
 		c.MarketHealth.TimerCoordinationPendingGrace = marketHealthDefaults.TimerCoordinationPendingGrace
-	}
-	if c.MarketHealth.TimerCoordinationLeaseGrace == 0 {
-		c.MarketHealth.TimerCoordinationLeaseGrace = marketHealthDefaults.TimerCoordinationLeaseGrace
 	}
 	klineDefaults := Default().KlineFreshness
 	if c.KlineFreshness.EvaluationInterval == 0 {
@@ -439,9 +433,6 @@ func (c *Config) Validate() error {
 	}
 	if c.MarketHealth.TimerCoordinationPendingGrace <= 0 {
 		return fmt.Errorf("market_health.timer_coordination_pending_grace must be positive")
-	}
-	if c.MarketHealth.TimerCoordinationLeaseGrace <= 0 {
-		return fmt.Errorf("market_health.timer_coordination_lease_grace must be positive")
 	}
 	for id, target := range c.Deployment.HTTPS {
 		if err := target.Validate(); err != nil {
