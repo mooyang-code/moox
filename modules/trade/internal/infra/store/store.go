@@ -6,7 +6,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/trade/internal/infra/cache"
+	"log"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -14,10 +15,21 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/cache"
 	"github.com/mooyang-code/moox/modules/trade/schema"
 	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+// gormLogger 保留 GORM 的慢查询和出错日志，去掉 ErrRecordNotFound（仓储把它当普通的“没有”返回，
+// 例如组合还没有目标）和终端颜色。ParameterizedQueries 让日志里的 SQL 只留占位符，账户配置不随语句写进日志。
+var gormLogger = logger.New(log.New(os.Stdout, "", log.LstdFlags), logger.Config{
+	SlowThreshold:             200 * time.Millisecond,
+	LogLevel:                  logger.Warn,
+	IgnoreRecordNotFoundError: true,
+	ParameterizedQueries:      true,
+})
 
 const (
 	sqliteBusyTimeoutMS = 5000
@@ -101,7 +113,7 @@ func Open(path string) (*Store, error) {
 		path,
 		sqliteBusyTimeoutMS,
 	)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormLogger})
 	if err != nil {
 		return nil, fmt.Errorf("open trade store: %w", err)
 	}
@@ -136,7 +148,7 @@ func Open(path string) (*Store, error) {
 // openReadOnly 在同一个库文件上打开只读连接池：query_only 拒绝一切写入；WAL 模式已经记在库文件里，不用再设。
 func openReadOnly(path string) (*gorm.DB, error) {
 	dsn := fmt.Sprintf("%s?_pragma=query_only(1)&_pragma=busy_timeout(%d)", path, sqliteBusyTimeoutMS)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormLogger})
 	if err != nil {
 		return nil, fmt.Errorf("打开交易库只读连接：%w", err)
 	}

@@ -35,6 +35,11 @@ func TestModuleHealthItemsFlagFailingModulesOnly(t *testing.T) {
 		// factor's latest run failed, but within its MaxLag of a success.
 		{"factor", report.ModuleMetricLastSuccess, "factor-calculation", now.Add(-3 * time.Minute)},
 		{"factor", report.ModuleMetricLastError, "factor-calculation", now.Add(-time.Minute)},
+		// collector 最近一次失败在 2 小时前，之后再没有运行（闲置），判健康。
+		{"collector", report.ModuleMetricLastSuccess, "collector-market-data", now.Add(-3 * time.Hour)},
+		{"collector", report.ModuleMetricLastError, "collector-market-data", now.Add(-2 * time.Hour)},
+		// cloudfunction 从没成功过、50 分钟前失败：还在闲置判定窗口内，仍判失败（每小时跑一次的模块不能在两次运行之间恢复）。
+		{"cloudfunction", report.ModuleMetricLastError, "cloudfunction-jobs", now.Add(-50 * time.Minute)},
 	}
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
 		for index, item := range samples {
@@ -54,12 +59,16 @@ func TestModuleHealthItemsFlagFailingModulesOnly(t *testing.T) {
 	for _, item := range items {
 		byID[item.checkID] = item
 	}
-	require.Len(t, byID, 3, "modules that never reported a run get no check")
+	require.Len(t, byID, 5, "modules that never reported a run get no check")
 	require.False(t, byID["module:strategy-targets"].success)
 	require.Equal(t, "策略目标生成", byID["module:strategy-targets"].name)
 	require.Contains(t, byID["module:strategy-targets"].reason, "已 1 小时没有成功运行")
 	require.True(t, byID["module:trade-rebalance"].success)
 	require.True(t, byID["module:factor-calculation"].success)
+	require.True(t, byID["module:collector-market-data"].success)
+	require.Contains(t, byID["module:collector-market-data"].reason, "之后已 2 小时没有新的运行，按闲置处理")
+	require.False(t, byID["module:cloudfunction-jobs"].success)
+	require.Contains(t, byID["module:cloudfunction-jobs"].reason, "且从未成功过")
 }
 
 func TestKlineReasonTextForViewBehindCompletedPeriod(t *testing.T) {
