@@ -264,12 +264,36 @@ func TestTargetWorkerReportsAcceptedAndRejectedOutcomes(t *testing.T) {
 	worker.observe(targetapp.Result{Status: targetapp.StatusConverging}, nil, now)
 	worker.observe(targetapp.Result{Status: targetapp.StatusBlocked}, nil, now)
 	worker.observe(targetapp.Result{}, errors.New("failed"), now)
+	// 暂停（组合暂停自动执行、时段外、目标未生效）不算一次运行，不上报；过期、被取代按正常结束计。
+	worker.observe(targetapp.Result{Status: targetapp.StatusPaused}, nil, now)
+	worker.observe(targetapp.Result{Status: targetapp.StatusPaused, Action: "stop"}, nil, now)
+	worker.observe(targetapp.Result{Status: targetapp.StatusExpired}, nil, now)
+	worker.observe(targetapp.Result{Status: targetapp.StatusSuperseded}, nil, now)
 
 	require.Equal(t, []string{
 		"target_commit/success/trade-rebalance",
 		"target_commit/rejected/trade-rebalance",
 		"target_commit/error/trade-rebalance",
+		"target_commit/success/trade-rebalance",
+		"target_commit/success/trade-rebalance",
 	}, metrics.runs)
+}
+
+// 全量扫描列出目标之后、收敛之前目标被删掉（会话释放、组合解绑）：不算运行失败，也不让模块显示未就绪。
+func TestTargetWorkerFullScanSkipsTargetDeletedBeforeConverge(t *testing.T) {
+	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
+		{SpaceID: "space-1", LogicalAccountID: "logical-1", Status: targetapp.StatusPending},
+	}}
+	metrics := &targetMetricsStub{}
+	worker := &TargetWorker{Store: targets, Metrics: metrics, Executor: targetConvergeFunc(
+		func(context.Context, string, string) (targetapp.Result, error) {
+			return targetapp.Result{}, gorm.ErrRecordNotFound
+		},
+	)}
+
+	require.NoError(t, worker.runActive(context.Background()))
+	require.Empty(t, metrics.runs)
+	require.Empty(t, worker.Snapshot().TargetErrors)
 }
 
 func TestTargetWorkerWakeIsCoalescedAndCancellationStopsRun(t *testing.T) {
