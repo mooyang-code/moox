@@ -410,3 +410,78 @@ type unifiedSource struct{ replaySource }
 func (unifiedSource) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
 	return []string{"A"}, nil
 }
+
+// replayCrossSectionUnified 建一个统一数据集上的截面因子会话：rk = cs_rank(close)，不开部分全集。A、B 的现货、永续都覆盖
+// 第 0～19 分钟，C 的现货也覆盖第 0～19 分钟，永续只覆盖 [swapFrom, swapTo]。永续的收盘价 A > B > C。
+func replayCrossSectionUnified(t *testing.T, swapFrom, swapTo int) *replayManager {
+	t.Helper()
+	def := domain.MustDefinition("rk", "rk", "output: cs_rank(close)\n")
+	m, _ := newReplayManagerWithTask(t, uncompiled(domain.EngineTask{
+		Set: domain.FactorTask{TaskID: "ftask_replay", SpaceID: "crypto", SourceDatasetID: "dataset_cs", Freq: "1m",
+			ResultDatasetID: "result_dataset_cs", Status: domain.TaskStatusEnabled},
+		Members: domain.AsMembers(def), ResultReady: true,
+	}))
+	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "dataset_cs", Freq: "1m"}
+	fields := []seriesstore.Field{{Name: "close", Type: seriesstore.TypeFloat64}, {Name: "open", Type: seriesstore.TypeFloat64}}
+	for subject, base := range map[string]float64{"A": 300, "B": 200, "C": 100} {
+		cols := seriesstore.NewColumns(fields, 40)
+		for i := 0; i < 20; i++ {
+			at := rt0.Add(time.Duration(i) * time.Minute)
+			cols.AppendRow(at, "spot", false, seriesstore.Float(base/10+float64(i)), seriesstore.Float(base/10+float64(i)))
+			if subject != "C" || (i >= swapFrom && i <= swapTo) {
+				cols.AppendRow(at, "swap", false, seriesstore.Float(base+float64(i)), seriesstore.Float(base+float64(i)))
+			}
+		}
+		_, err := m.deps.Store.WriteRange(context.Background(), src, seriesstore.SubjectWrite{Subject: subject, From: rt0, To: rt0.Add(20 * time.Minute), Rows: cols}, seriesstore.WriteOptions{})
+		require.NoError(t, err)
+	}
+	m.deps.Source = crossSectionSource{}
+	return m
+}
+
+type crossSectionSource struct{ replaySource }
+
+func (crossSectionSource) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return []string{"A", "B", "C"}, nil
+}
+
+// swapRanks 返回一期里各标的永续序列的 rk（没有这一行或没有 rk 时不出现）。
+func swapRanks(period *factorpb.ReplayPeriod) map[string]float64 {
+	out := map[string]float64{}
+	for _, row := range period.GetRows() {
+		if value, ok := row.GetValues()["rk"]; ok && row.GetSeriesTag() == "swap" {
+			out[row.GetSubjectId()] = value
+		}
+	}
+	return out
+}
+
+// 统一数据集上的截面因子（不开部分全集）：本期的序列全集只含本期已经开始、还没结束的序列。C 的永续第 12 分钟才上市，
+// 上市之前 A、B 的永续照常排序、成员 complete；上市之后三个标的的永续都参与排序。
+func TestReplayCrossSectionWithLateListedSeries(t *testing.T) {
+	m := replayCrossSectionUnified(t, 12, 19)
+	mustOpenReplay(t, m, replayOpenReq("cs_late", 5, 15, 0, "rk", "close"))
+	before := mustStepOne(t, m, "cs_late", 9)
+	require.Equal(t, map[string]float64{"A": 1, "B": 0.5}, swapRanks(before), "C 的永续还没上市，不算缺失")
+	require.Equal(t, "complete", before.GetStates()["rk"].GetStatus())
+	require.Nil(t, replayRowOf(before, "C", "swap"))
+	after := mustStepOne(t, m, "cs_late", 13)
+	ranks := swapRanks(after)
+	require.Len(t, ranks, 3, "上市之后三个标的的永续都参与排序")
+	require.Greater(t, ranks["A"], ranks["B"])
+	require.Greater(t, ranks["B"], ranks["C"])
+	require.Equal(t, "complete", after.GetStates()["rk"].GetStatus())
+}
+
+// 反向：C 的永续第 8 分钟之后就没有数据（早结束），之后的期次 A、B 的永续照常排序、成员 complete；结束之前三个都参与。
+func TestReplayCrossSectionWithEarlyEndedSeries(t *testing.T) {
+	m := replayCrossSectionUnified(t, 0, 8)
+	mustOpenReplay(t, m, replayOpenReq("cs_end", 5, 15, 0, "rk", "close"))
+	before := mustStepOne(t, m, "cs_end", 7)
+	require.Len(t, swapRanks(before), 3)
+	require.Equal(t, "complete", before.GetStates()["rk"].GetStatus())
+	after := mustStepOne(t, m, "cs_end", 10)
+	require.Equal(t, map[string]float64{"A": 1, "B": 0.5}, swapRanks(after), "C 的永续已经结束，不算缺失")
+	require.Equal(t, "complete", after.GetStates()["rk"].GetStatus())
+	require.Nil(t, replayRowOf(after, "C", "swap"))
+}

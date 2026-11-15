@@ -616,6 +616,19 @@ func seriesValue(view *serieswindow.View, sv serieswindow.SeriesView, field stri
 	return value, true
 }
 
+// periodSeries 返回这些标的在 atSec 那一期已经开始、还没结束（sv.Start ≤ atSec ≤ 最后一根）的序列，按标的、序列的先后。
+func periodSeries(view *serieswindow.View, subjects []string, atSec int64) []seriesset.Series {
+	var out []seriesset.Series
+	for _, subject := range subjects {
+		for _, sv := range view.Series(subject) {
+			if sv.N > 0 && sv.Start <= atSec && atSec <= sv.End(view.Step) {
+				out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag})
+			}
+		}
+	}
+	return out
+}
+
 // seriesHasRow 报告这条序列在 atSec 那一根有没有真实的源行：有任何一个数值字段的值、且不是填充行。填充行是同步补上的缺失周期
 // （OHLC 取上一根收盘、成交量为 0），与实时一样不算本期有行（实时把目标那一根是填充行的序列判为本期不可用，见 localdata.missingTagsAt）。
 func seriesHasRow(view *serieswindow.View, sv serieswindow.SeriesView, atSec int64) bool {
@@ -726,11 +739,12 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 			universe = append(universe, subject)
 		}
 	}
-	// 回放按标的选范围：序列全集取“标的 × 快照里它的 series_tag”，本期可用的标的它的各条序列都算可用，
-	// 标的缺数就是它的序列缺数。
+	// 回放按标的选范围：本期的序列全集取这些标的在快照里本期已经开始、还没结束的序列（实时取完成事件的序列全集）。
+	// 不能取快照里出现过的全部序列：统一数据集上永续晚上市或早结束时，那条序列在这一期本来就不存在，记成缺失会让
+	// 不允许部分全集的截面因子整个 tag 被跳过。
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
 		Set: s.set.Set, Members: s.set.Members, Params: params, PeriodTime: period,
-		UniverseSeries: pipeline.SubjectSeries(s.view, universe),
+		UniverseSeries: periodSeries(s.view, universe, period.Unix()),
 	})
 	if err != nil {
 		return nil, err
