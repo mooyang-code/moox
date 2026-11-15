@@ -38,6 +38,8 @@ type SecretMgrService interface {
 	ImportSecrets(ctx context.Context, req *ImportSecretsReq) (*ImportSecretsRsp, error)
 
 	GetReadonlyExchangeKey(ctx context.Context, req *GetReadonlyExchangeKeyReq) (*GetReadonlyExchangeKeyRsp, error)
+
+	GetCloudCredential(ctx context.Context, req *GetCloudCredentialReq) (*GetCloudCredentialRsp, error)
 }
 
 func SecretMgrService_ListSecrets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -220,6 +222,24 @@ func SecretMgrService_GetReadonlyExchangeKey_Handler(svr interface{}, ctx contex
 	return rsp, nil
 }
 
+func SecretMgrService_GetCloudCredential_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetCloudCredentialReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SecretMgrService).GetCloudCredential(ctx, reqbody.(*GetCloudCredentialReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // SecretMgrServer_ServiceDesc descriptor for server.RegisterService.
 var SecretMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.ops.SecretMgr",
@@ -265,6 +285,10 @@ var SecretMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.ops.SecretMgr/GetReadonlyExchangeKey",
 			Func: SecretMgrService_GetReadonlyExchangeKey_Handler,
 		},
+		{
+			Name: "/trpc.moox.ops.SecretMgr/GetCloudCredential",
+			Func: SecretMgrService_GetCloudCredential_Handler,
+		},
 	},
 }
 
@@ -309,6 +333,9 @@ func (s *UnimplementedSecretMgr) ImportSecrets(ctx context.Context, req *ImportS
 func (s *UnimplementedSecretMgr) GetReadonlyExchangeKey(ctx context.Context, req *GetReadonlyExchangeKeyReq) (*GetReadonlyExchangeKeyRsp, error) {
 	return nil, errors.New("rpc GetReadonlyExchangeKey of service SecretMgr is not implemented")
 }
+func (s *UnimplementedSecretMgr) GetCloudCredential(ctx context.Context, req *GetCloudCredentialReq) (*GetCloudCredentialRsp, error) {
+	return nil, errors.New("rpc GetCloudCredential of service SecretMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -337,6 +364,8 @@ type SecretMgrClientProxy interface {
 	ImportSecrets(ctx context.Context, req *ImportSecretsReq, opts ...client.Option) (rsp *ImportSecretsRsp, err error)
 
 	GetReadonlyExchangeKey(ctx context.Context, req *GetReadonlyExchangeKeyReq, opts ...client.Option) (rsp *GetReadonlyExchangeKeyRsp, err error)
+
+	GetCloudCredential(ctx context.Context, req *GetCloudCredentialReq, opts ...client.Option) (rsp *GetCloudCredentialRsp, err error)
 }
 
 type SecretMgrClientProxyImpl struct {
@@ -542,6 +571,26 @@ func (c *SecretMgrClientProxyImpl) GetReadonlyExchangeKey(ctx context.Context, r
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetReadonlyExchangeKeyRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SecretMgrClientProxyImpl) GetCloudCredential(ctx context.Context, req *GetCloudCredentialReq, opts ...client.Option) (*GetCloudCredentialRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SecretMgr/GetCloudCredential")
+	msg.WithCalleeServiceName(SecretMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SecretMgr")
+	msg.WithCalleeMethod("GetCloudCredential")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetCloudCredentialRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

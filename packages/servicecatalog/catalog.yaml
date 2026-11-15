@@ -256,11 +256,13 @@ components:
           - ExportSecrets
           - ImportSecrets
           - GetReadonlyExchangeKey
+          - GetCloudCredential
         read_only_methods:
           - ListSecrets
           - GetSecret
           - GetSecretValue
           - GetReadonlyExchangeKey
+          - GetCloudCredential
         acl:
           - methods:
               - ListSecrets
@@ -288,6 +290,12 @@ components:
           # GetSecretValue 没法按调用方限定，所以用专用方法授权，Collector 拿不到 Trade 的交易密钥。
           - methods:
               - GetReadonlyExchangeKey
+            callers:
+              - collector
+          # Collector 调腾讯云只能读云账号密钥：SecretMgr 在服务端校验类别 cloud、厂商 tencent、状态 active，
+          # 不满足就拒绝，Collector 因此拿不到交易所等其他类别的密钥。
+          - methods:
+              - GetCloudCredential
             callers:
               - collector
       - path: trpc.moox.ops.SysDeploy

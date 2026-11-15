@@ -384,3 +384,45 @@ CREATE TABLE IF NOT EXISTS t_collector_delist_notices (
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_delist_notices_instrument ON t_collector_delist_notices (c_exchange, c_market, c_symbol, c_scope, c_id);
+
+-- 云账号：Collector 调腾讯云用的账号，密钥本身在 Admin 的 SecretMgr（c_credential_secret_id 指向它，类别 cloud、厂商 tencent）。
+-- c_cos_region、c_cos_bucket 是代码包上传用的 COS 桶。重置时保留。
+CREATE TABLE IF NOT EXISTS t_collector_cloud_accounts (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_account_id TEXT NOT NULL,
+    c_account_name TEXT NOT NULL DEFAULT '',
+    c_provider TEXT NOT NULL DEFAULT 'tencent',
+    c_credential_secret_id TEXT NOT NULL,
+    c_app_id TEXT NOT NULL DEFAULT '',
+    c_cos_region TEXT NOT NULL DEFAULT '',
+    c_cos_bucket TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (c_account_id)
+);
+
+-- 云函数代码包：每次上传一行，c_status 从 pending（已发上传地址）变成 available（COS 对象已核对）。
+-- 函数总是滚动到同一包名的最新可用包；每个（空间、包名）只留最新 3 个可用包，更早的连同 COS 对象删除，
+-- 超过 6 小时仍是 pending 的也删除。重置时保留。
+CREATE TABLE IF NOT EXISTS t_collector_function_packages (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_package_id TEXT NOT NULL,
+    c_package_name TEXT NOT NULL,
+    c_version TEXT NOT NULL DEFAULT '',
+    c_runtime TEXT NOT NULL DEFAULT '',
+    c_file_size INTEGER NOT NULL DEFAULT 0,
+    c_file_md5 TEXT NOT NULL DEFAULT '',
+    c_cloud_account_id TEXT NOT NULL,
+    c_cos_region TEXT NOT NULL DEFAULT '',
+    c_cos_bucket TEXT NOT NULL DEFAULT '',
+    c_cos_path TEXT NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('pending', 'available')),
+    UNIQUE (c_space_id, c_package_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_function_packages_name
+ON t_collector_function_packages (c_space_id, c_package_name, c_id);

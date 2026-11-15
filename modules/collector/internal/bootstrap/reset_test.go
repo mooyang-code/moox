@@ -49,6 +49,10 @@ func TestCollectorResetKeepsPauseFlagUntilTheFirstInit(t *testing.T) {
 	require.NoError(t, err)
 	_, err = sqlDB.Exec(`INSERT INTO t_collector_backfill_watermarks (c_space_id, c_dataset_id, c_frequency, c_scanned_until) VALUES ('crypto', 'ds', '1m', CURRENT_TIMESTAMP)`)
 	require.NoError(t, err)
+	_, err = sqlDB.Exec(`INSERT INTO t_collector_cloud_accounts (c_account_id, c_credential_secret_id) VALUES ('account-a', 'secret-a')`)
+	require.NoError(t, err)
+	_, err = sqlDB.Exec(`INSERT INTO t_collector_function_packages (c_space_id, c_package_id, c_package_name, c_cloud_account_id, c_status) VALUES ('crypto', 'pkg-1', 'collector', 'account-a', 'available')`)
+	require.NoError(t, err)
 
 	_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem})
 	require.NoError(t, err)
@@ -67,6 +71,11 @@ func TestCollectorResetKeepsPauseFlagUntilTheFirstInit(t *testing.T) {
 	var left int
 	require.NoError(t, sqlDB.QueryRow("SELECT COUNT(*) FROM t_collector_backfill_watermarks").Scan(&left))
 	require.Zero(t, left, "运行数据被清掉")
+	for _, table := range []string{"t_collector_cloud_accounts", "t_collector_function_packages"} {
+		var kept int
+		require.NoError(t, sqlDB.QueryRow("SELECT COUNT(*) FROM "+table).Scan(&kept))
+		require.Equal(t, 1, kept, "云账号与代码包登记的是云上的外部资源，重置时保留：%s", table)
+	}
 
 	paused, err = db.FetchPlans().PausedSpaces(ctx)
 	require.NoError(t, err)

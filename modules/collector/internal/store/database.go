@@ -40,6 +40,8 @@ type Store struct {
 	backfill   *BackfillRepository
 	resample   *ResampleStateRepository
 	delist     *DelistNoticeRepository
+	accounts   *CloudAccountRepository
+	packages   *FunctionPackageRepository
 }
 
 // DeleteTaskRuntime removes all Collector-owned execution state for one task
@@ -124,6 +126,8 @@ func Open(opts *Options) (*Store, error) {
 	s.backfill = NewBackfillRepository(db)
 	s.resample = NewResampleStateRepository(db)
 	s.delist = NewDelistNoticeRepository(db)
+	s.accounts = NewCloudAccountRepository(db)
+	s.packages = NewFunctionPackageRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
 	return s, nil
@@ -191,6 +195,22 @@ func (s *Store) DelistNotices() *DelistNoticeRepository {
 		return nil
 	}
 	return s.delist
+}
+
+// CloudAccounts 返回云账号仓库。
+func (s *Store) CloudAccounts() *CloudAccountRepository {
+	if s == nil {
+		return nil
+	}
+	return s.accounts
+}
+
+// FunctionPackages 返回云函数代码包仓库。
+func (s *Store) FunctionPackages() *FunctionPackageRepository {
+	if s == nil {
+		return nil
+	}
+	return s.packages
 }
 
 // Backfill returns the K-line backfill job repository.

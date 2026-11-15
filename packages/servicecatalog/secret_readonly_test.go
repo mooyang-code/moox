@@ -43,3 +43,36 @@ func TestCollectorOnlyReadsReadonlyExchangeKeyIdentifier(t *testing.T) {
 		}
 	}
 }
+
+// Collector 调腾讯云只能读云账号密钥：只放行 GetCloudCredential（服务端校验类别 cloud、厂商 tencent、已启用），
+// 拿不到 GetSecretValue，也就拿不到交易所等其他类别的密钥。
+func TestCollectorOnlyReadsCloudCredentialThroughDedicatedMethod(t *testing.T) {
+	c := mustCatalog(t)
+	if !c.Allowed("collector", secretMgr, "GetCloudCredential") {
+		t.Fatal("collector must read the cloud account credential")
+	}
+	if c.Allowed("collector", secretMgr, "GetSecretValue") {
+		t.Fatal("collector must not call SecretMgr.GetSecretValue")
+	}
+	service, ok := c.Service(secretMgr)
+	if !ok {
+		t.Fatal("SecretMgr is not declared")
+	}
+	if !slices.Contains(service.ReadOnlyMethods, "GetCloudCredential") {
+		t.Fatal("GetCloudCredential is read only")
+	}
+	var callers []string
+	for _, grant := range service.ACL {
+		if slices.Contains(grant.Methods, "GetCloudCredential") {
+			callers = append(callers, grant.Callers...)
+		}
+	}
+	if !slices.Equal(callers, []string{"collector"}) {
+		t.Fatalf("GetCloudCredential callers = %v, want only collector", callers)
+	}
+	for _, caller := range []string{"console", "moox-cli", "trade", "cloudfunction", "access", "scf-collector", "collector-stream", "monitor"} {
+		if c.Allowed(caller, secretMgr, "GetCloudCredential") {
+			t.Fatalf("unexpected GetCloudCredential grant: %s", caller)
+		}
+	}
+}
