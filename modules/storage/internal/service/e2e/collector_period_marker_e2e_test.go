@@ -85,7 +85,7 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 
 	// 截止时间 = 收盘（+1m）+ 允许迟到 15s。
 	deadline := period.Add(time.Minute + 15*time.Second)
-	set, err := seriesset.Canonicalize([]seriesset.Series{{SubjectID: "BTC-USDT"}, {SubjectID: "ETH-USDT"}})
+	set, err := seriesset.Canonicalize([]seriesset.Series{{SubjectID: "BTC-USDT", SeriesTag: "default"}, {SubjectID: "ETH-USDT", SeriesTag: "default"}})
 	require.NoError(t, err)
 	now.Store(period.Add(-time.Minute).UnixNano())
 	snapshot, err := store.RegisterSeriesSnapshot(ctx, "crypto", "dataset-period-marker-e2e", "1m", set.Series, period.Unix())
@@ -98,7 +98,7 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	}
 	row := &storagegen.RowFieldUpsert{
 		Key: &storagegen.RowKey{SpaceId: expectation.SpaceID, DatasetId: expectation.DatasetID, Kind: &storagegen.RowKey_TimeSeries{TimeSeries: &storagegen.TimeSeriesRowKey{
-			SubjectId: "BTC-USDT", Freq: expectation.Frequency, DataTime: period.Format(time.RFC3339Nano),
+			SubjectId: "BTC-USDT", SeriesTag: "default", Freq: expectation.Frequency, DataTime: period.Format(time.RFC3339Nano),
 		}}},
 		Fields: []*storagegen.FieldValue{{FieldId: "close", Value: &storagegen.TypedValue{Value: &storagegen.TypedValue_DoubleValue{DoubleValue: 68000}}}},
 	}

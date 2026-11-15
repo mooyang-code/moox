@@ -69,8 +69,8 @@ type PeriodMarker struct {
 	Status           string
 	UniverseSubjects []string
 	FailedSubjects   []string
-	// UniverseSeries、FailedSeries 是按序列（标的、series_tag）的期望全集与失败名单：只有统一数据集（多个 series_tag）才有，
-	// 单序列数据集为空，按标的字段处理。
+	// UniverseSeries、FailedSeries 是按序列（标的、series_tag）的期望全集与失败名单：按序列处理的计划才有。
+	// 实时计算的计划来自源数据集的周期完成事件，事件总带序列全集，所以实时的标记总带。
 	UniverseSeries []seriesset.Series
 	FailedSeries   []seriesset.Series
 	Factors        []FactorState

@@ -32,9 +32,8 @@ message DatasetPeriodCompleted {
   // detail_type、detail 是写入方自定义的明细（不透明字节），Storage 原样保存并透传，不解析。
   string detail_type = 12;
   bytes detail = 13;
-  // universe_series、failed_series 是按序列（标的、series_tag）的期望全集与失败名单：只有同一数据集含多个 series_tag
-  // （统一数据集）时才填；单序列数据集为空，消费方按 universe_subject_ids、failed_subjects 处理。
-  // 失败名单是全集的子集；原有的按标的字段口径不变（标的的任一序列失败，该标的记入 failed_subjects）。
+  // universe_series、failed_series 是按序列（标的、series_tag）的期望全集与失败名单，所有数据集都带。
+  // 失败名单是全集的子集；按标的字段的口径不变（标的的任一序列失败，该标的记入 failed_subjects）。
   repeated SeriesRef universe_series = 14;
   repeated SeriesRef failed_series = 15;
 }

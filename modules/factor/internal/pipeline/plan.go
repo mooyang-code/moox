@@ -19,7 +19,7 @@ type LiveInput struct {
 	PeriodTime     time.Time
 	Universe       []string
 	UpstreamFailed []string
-	// UniverseSeries、UpstreamFailedSeries 是统一数据集事件里按序列的全集与失败名单；非空时按序列处理（见 Plan.ExpectedSeries）。
+	// UniverseSeries、UpstreamFailedSeries 是周期完成事件里按序列的全集与失败名单（所有数据集的事件都带）；非空时按序列处理（见 Plan.ExpectedSeries）。
 	UniverseSeries       []seriesset.Series
 	UpstreamFailedSeries []seriesset.Series
 	CarryColumns         []string

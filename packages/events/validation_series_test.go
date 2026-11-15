@@ -51,6 +51,9 @@ func TestDatasetPeriodCompletedSeriesValidation(t *testing.T) {
 			p.UniverseSeries[3].SeriesTag, p.FailedSeries[0].SeriesTag = "market:swap\n", "market:swap\n"
 		},
 		"failed series without universe": func(p *storagepb.DatasetPeriodCompleted) { p.UniverseSeries = nil },
+		"universe series missing": func(p *storagepb.DatasetPeriodCompleted) {
+			p.UniverseSeries, p.FailedSeries = nil, nil
+		},
 		"complete has failed series": func(p *storagepb.DatasetPeriodCompleted) {
 			p.Status = "complete"
 			p.FailedSubjects = nil

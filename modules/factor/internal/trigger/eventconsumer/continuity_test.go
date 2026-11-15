@@ -43,7 +43,7 @@ func (p *periodRows) ReadWindow(_ context.Context, req storageio.ReadRequest) (m
 	for _, subject := range req.Subjects {
 		frame := &storageio.Frame{SubjectID: subject}
 		if p.present[req.Start.Unix()][subject] {
-			frame.Rows = [][]any{{req.Start, "default", 1.0}}
+			frame.Rows = [][]any{{req.Start, testSeriesTag, 1.0}}
 		}
 		frames[subject] = frame
 	}
@@ -74,6 +74,18 @@ func minus(all []string, drop ...string) []string {
 	return out
 }
 
+// testSeriesTag 是单序列数据集测试用的 series_tag。
+const testSeriesTag = "venue:binance"
+
+// singleTagRefs 把标的配上 testSeriesTag，作为事件里的序列名单。
+func singleTagRefs(subjects []string) []*storagepb.SeriesRef {
+	refs := make([]*storagepb.SeriesRef, 0, len(subjects))
+	for _, subject := range subjects {
+		refs = append(refs, &storagepb.SeriesRef{SubjectId: subject, SeriesTag: testSeriesTag})
+	}
+	return refs
+}
+
 func periodDelivery(t *testing.T, eventID string, period time.Time, universe, failed []string) *jetstream.Delivery {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
@@ -84,7 +96,8 @@ func periodDelivery(t *testing.T, eventID string, period time.Time, universe, fa
 	}
 	payload := &storagepb.DatasetPeriodCompleted{
 		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: status, Source: "ledger", SnapshotRef: "scope-1",
-		UniverseSubjectIds: universe, FailedSubjects: failed, CompletedAt: timestamppb.New(period.Add(time.Minute)),
+		UniverseSubjectIds: universe, FailedSubjects: failed, UniverseSeries: singleTagRefs(universe), FailedSeries: singleTagRefs(failed),
+		CompletedAt: timestamppb.New(period.Add(time.Minute)),
 	}
 	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{EventID: eventID, OccurredAt: period.Add(time.Minute), SpaceID: "crypto", SubjectID: "bars"})
 	require.NoError(t, err)

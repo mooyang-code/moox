@@ -121,41 +121,26 @@ func (t *PeriodTrigger) OnPeriod(ctx context.Context, spaceID string, payload *s
 	return errors.Join(errs...)
 }
 
-// periodMembers 由周期完成事件算出每条源序列可以合成的成员。
-// 事件带序列名单（统一数据集）时按序列判断：失败的序列不合成，其他序列照常；
-// 没有序列名单时按标的判断（失败的标的不合成），所有源序列用同一组标的。
+// periodMembers 由周期完成事件的序列名单算出每条源序列可以合成的成员：失败的序列不合成，其他序列照常。
 func periodMembers(task *Task, payload *storagepb.DatasetPeriodCompleted) Members {
-	if len(payload.GetUniverseSeries()) > 0 {
-		failed := make(map[string]struct{}, len(payload.GetFailedSeries()))
-		for _, series := range payload.GetFailedSeries() {
-			failed[seriesset.CanonicalKey(series.GetSubjectId(), series.GetSeriesTag())] = struct{}{}
-		}
-		wanted := make(map[string]struct{}, len(task.Tags))
-		for _, tag := range task.Tags {
-			wanted[tag] = struct{}{}
-		}
-		members := Members{}
-		for _, series := range payload.GetUniverseSeries() {
-			if _, ok := wanted[series.GetSeriesTag()]; !ok {
-				continue
-			}
-			if _, bad := failed[seriesset.CanonicalKey(series.GetSubjectId(), series.GetSeriesTag())]; !bad {
-				members[series.GetSeriesTag()] = append(members[series.GetSeriesTag()], series.GetSubjectId())
-			}
-		}
-		return members.normalized()
+	failed := make(map[string]struct{}, len(payload.GetFailedSeries()))
+	for _, series := range payload.GetFailedSeries() {
+		failed[seriesset.CanonicalKey(series.GetSubjectId(), series.GetSeriesTag())] = struct{}{}
 	}
-	failed := make(map[string]struct{}, len(payload.GetFailedSubjects()))
-	for _, subject := range payload.GetFailedSubjects() {
-		failed[subject] = struct{}{}
+	wanted := make(map[string]struct{}, len(task.Tags))
+	for _, tag := range task.Tags {
+		wanted[tag] = struct{}{}
 	}
-	subjects := make([]string, 0, len(payload.GetUniverseSubjectIds()))
-	for _, subject := range payload.GetUniverseSubjectIds() {
-		if _, bad := failed[subject]; !bad {
-			subjects = append(subjects, subject)
+	members := Members{}
+	for _, series := range payload.GetUniverseSeries() {
+		if _, ok := wanted[series.GetSeriesTag()]; !ok {
+			continue
+		}
+		if _, bad := failed[seriesset.CanonicalKey(series.GetSubjectId(), series.GetSeriesTag())]; !bad {
+			members[series.GetSeriesTag()] = append(members[series.GetSeriesTag()], series.GetSubjectId())
 		}
 	}
-	return SingleTagMembers(task, subjects)
+	return members.normalized()
 }
 
 // BackfillTrigger 处理 event.collector.kline.backfilled：源数据被补写后，对依赖它的合成任务提交历史合成作业。

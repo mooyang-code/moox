@@ -124,7 +124,7 @@ func TestDatasetPeriodCompletedAllowsEmptySubjectIDs(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
 	payload := validLedgerPeriodCompleted(timestamppb.Now())
-	payload.UniverseSubjectIds = nil
+	payload.UniverseSubjectIds, payload.UniverseSeries = nil, nil
 	payload.Frequency = "1H"
 	payload.PeriodTime = 1
 	_, err = registry.Encode(DatasetPeriodCompleted, payload, validationOptions("event-1", "space", "dataset"))

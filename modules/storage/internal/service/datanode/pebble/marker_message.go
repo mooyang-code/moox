@@ -26,7 +26,7 @@ type LedgerPeriodCompleted struct {
 	SnapshotRef        string
 	UniverseSubjectIDs []string
 	FailedSubjects     []string
-	// UniverseSeries、FailedSeries 是按序列的全集与失败名单，只有快照含多个 series_tag（统一数据集）时才有。
+	// UniverseSeries、FailedSeries 是按序列（标的、series_tag）的全集与失败名单。
 	UniverseSeries []*storageeventpb.SeriesRef
 	FailedSeries   []*storageeventpb.SeriesRef
 	CompletedAt    *timestamppb.Timestamp
