@@ -11,6 +11,8 @@ import (
 
 type reregisterStore struct {
 	open, applied *store.FetchPlanRecord
+	// reregisterErr 是 ReregisterAppliedPlan 的返回值，用来模拟事务里的复查。
+	reregisterErr error
 }
 
 func (s *reregisterStore) Open(context.Context, string) (*store.FetchPlanRecord, error) {
@@ -20,6 +22,9 @@ func (s *reregisterStore) LatestApplied(context.Context, string) (*store.FetchPl
 	return s.applied, nil
 }
 func (s *reregisterStore) ReregisterAppliedPlan(_ context.Context, _ int64, plan string) error {
+	if s.reregisterErr != nil {
+		return s.reregisterErr
+	}
 	s.applied.Plan = plan
 	return nil
 }
@@ -70,4 +75,12 @@ func TestClearRegisteredSnapshotsRefusesWithAnOpenPlanOrNoAppliedPlan(t *testing
 	require.ErrorIs(t, err, ErrReregisterNoPlan)
 	_, err = ClearRegisteredSnapshots(ctx, &reregisterStore{applied: &store.FetchPlanRecord{ID: 1, Plan: `{"datasets":{"a|1m":{"hash":"x","gone":true}}}`}}, "crypto")
 	require.ErrorIs(t, err, ErrReregisterNoPlan, "只剩已退役的数据集时没有可重新登记的")
+}
+
+// 事务外查过没有未生效计划，对账器随后建了一份：事务里的复查拒绝（store.ErrFetchPlanOpen），按“有未生效计划”返回。
+func TestClearRegisteredSnapshotsMapsTheInTransactionOpenPlanCheck(t *testing.T) {
+	plans := &reregisterStore{applied: &store.FetchPlanRecord{ID: 1, Plan: `{"datasets":{"a|1m":{"hash":"x"}}}`}, reregisterErr: store.ErrFetchPlanOpen}
+	_, err := ClearRegisteredSnapshots(context.Background(), plans, "crypto")
+	require.ErrorIs(t, err, ErrReregisterPlanOpen)
+	require.Equal(t, `{"datasets":{"a|1m":{"hash":"x"}}}`, plans.applied.Plan)
 }

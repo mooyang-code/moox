@@ -174,6 +174,8 @@ func (r *FetchPlanRepository) SavePlan(ctx context.Context, id int64, plan strin
 // ReregisterAppliedPlan 改写一份已生效计划的内容，并在同一个事务里删掉该空间的全部时间线行。只给维护命令用：
 // Storage 数据被清空后，把数据集标记为“快照未登记”，让下一轮对账重新登记（见 fetchplan.ClearRegisteredSnapshots）；
 // 此前的时间线连同数据一起作废，重新登记后从新的生效周期写起。普通流程只改未生效的计划（SavePlan）。
+// 该空间有未生效的计划时返回 ErrFetchPlanOpen：调用方在事务外查过一次，但两步之间对账器可能刚建了新计划，
+// 这里在事务里再查一次，否则删时间线会把新计划刚写的行一起删掉。
 func (r *FetchPlanRepository) ReregisterAppliedPlan(ctx context.Context, id int64, plan string) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("fetch plan repository is not initialized")
@@ -189,6 +191,13 @@ func (r *FetchPlanRepository) ReregisterAppliedPlan(ctx context.Context, id int6
 		}
 		if found.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
+		}
+		var open int64
+		if err := tx.Model(&fetchPlanRow{}).Where("c_space_id = ? AND c_status <> ?", row.SpaceID, FetchPlanApplied).Count(&open).Error; err != nil {
+			return err
+		}
+		if open > 0 {
+			return ErrFetchPlanOpen
 		}
 		if err := tx.Model(&fetchPlanRow{}).Where("c_id = ?", id).Updates(map[string]any{"c_plan": plan, "c_mtime": time.Now().UTC()}).Error; err != nil {
 			return err

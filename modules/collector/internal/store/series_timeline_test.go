@@ -92,7 +92,7 @@ func TestSeriesTimelineIsWrittenWithThePlanRecord(t *testing.T) {
 	require.Equal(t, []SeriesTimelineEntry{timelineEntry("crypto", "gone", 100), timelineEntry("crypto", "a", 100, "BTC-USDT")}, got)
 }
 
-// 重新登记改写已生效计划，并在同一个事务里删掉该空间的全部时间线行；目标不是已生效计划时什么都不动。
+// 重新登记改写已生效计划，并在同一个事务里删掉该空间的全部时间线行；目标不是已生效计划、或该空间有未生效的计划时什么都不动。
 func TestReregisterAppliedPlanDeletesTheSpaceTimeline(t *testing.T) {
 	ctx := context.Background()
 	db := openPlanTestStore(t)
@@ -111,6 +111,16 @@ func TestReregisterAppliedPlanDeletesTheSpaceTimeline(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 2, "拒绝时时间线不动")
 
+	// 调用方在事务外查过“没有未生效计划”之后，对账器又建了新计划（open）：事务里复查到它，拒绝并保留时间线与计划内容。
+	require.NoError(t, plans.Update(ctx, open.ID, FetchPlanApplying, "{}", "", timelineEntry("crypto", "a", 200, "BTC-USDT", "ETH-USDT")))
+	require.ErrorIs(t, plans.ReregisterAppliedPlan(ctx, applied.ID, `{"v":"cleared"}`), ErrFetchPlanOpen)
+	got, err = timeline.ListBySpace(ctx, "crypto")
+	require.NoError(t, err)
+	require.Len(t, got, 3, "新计划刚写的时间线行没有被删")
+	history, err := plans.ListAll(ctx, "crypto")
+	require.NoError(t, err)
+	require.Equal(t, `{"v":1}`, history[0].Plan, "拒绝时已生效计划不改写")
+
 	require.NoError(t, plans.Update(ctx, open.ID, FetchPlanApplied, "{}", ""))
 	require.NoError(t, plans.ReregisterAppliedPlan(ctx, applied.ID, `{"v":"cleared"}`))
 	got, err = timeline.ListBySpace(ctx, "crypto")
@@ -119,7 +129,7 @@ func TestReregisterAppliedPlanDeletesTheSpaceTimeline(t *testing.T) {
 	kept, err := timeline.ListBySpace(ctx, "stockcn")
 	require.NoError(t, err)
 	require.Len(t, kept, 1)
-	history, err := plans.ListAll(ctx, "crypto")
+	history, err = plans.ListAll(ctx, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, `{"v":"cleared"}`, history[0].Plan)
 }

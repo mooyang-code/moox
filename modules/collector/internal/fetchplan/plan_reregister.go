@@ -19,7 +19,7 @@ var ErrReregisterNoPlan = errors.New("space has no applied fetch plan")
 type PlanReregisterStore interface {
 	Open(ctx context.Context, spaceID string) (*store.FetchPlanRecord, error)
 	LatestApplied(ctx context.Context, spaceID string) (*store.FetchPlanRecord, error)
-	// ReregisterAppliedPlan 改写已生效计划，并在同一个事务里删掉该空间的全部时间线行。
+	// ReregisterAppliedPlan 改写已生效计划，并在同一个事务里删掉该空间的全部时间线行；该空间有未生效计划时返回 store.ErrFetchPlanOpen。
 	ReregisterAppliedPlan(ctx context.Context, id int64, plan string) error
 }
 
@@ -58,6 +58,10 @@ func ClearRegisteredSnapshots(ctx context.Context, plans PlanReregisterStore, sp
 		return nil, ErrReregisterNoPlan
 	}
 	if err := plans.ReregisterAppliedPlan(ctx, applied.ID, mustJSON(content)); err != nil {
+		// 上面查过没有未生效计划，但对账器可能在这之后刚建了一份：事务里的复查会拒绝，按同样的原因返回。
+		if errors.Is(err, store.ErrFetchPlanOpen) {
+			return nil, ErrReregisterPlanOpen
+		}
 		return nil, fmt.Errorf("update applied fetch plan: %w", err)
 	}
 	return keys, nil

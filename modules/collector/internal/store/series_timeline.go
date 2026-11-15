@@ -41,6 +41,7 @@ func (seriesTimelineRow) TableName() string { return "t_collector_series_timelin
 
 // SeriesTimelineRepository 保存标的时间线。行只由采集计划的对账写入（见 FetchPlanRepository 的 Create、Update、
 // ReregisterAppliedPlan，都与计划记录在同一个事务里），检查、补采、历史扫描、收盘重取、健康度只读。
+// 读取按写入先后重放；同一生效点后写的覆盖先写的；重新登记时整空间删除。
 type SeriesTimelineRepository struct{ db *gorm.DB }
 
 func NewSeriesTimelineRepository(db *gorm.DB) *SeriesTimelineRepository {

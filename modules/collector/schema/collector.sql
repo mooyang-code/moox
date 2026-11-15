@@ -84,10 +84,11 @@ BEGIN
     UPDATE t_collector_fetch_plans SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 标的时间线：一个采集数据集的一个频率从 c_effective_from（K 线开始时间，Unix 秒）起应有的序列，只追加。
+-- 标的时间线：一个采集数据集的一个频率从 c_effective_from（K 线开始时间，Unix 秒）起应有的序列。
 -- c_series 是登记给 Storage 的那份序列（标的加序列标签）；'[]' 表示从这一刻起不再采集。
--- 行与采集计划记录在同一个事务里写入：序列行在 Storage 确认登记之后，停止行在计划建立时；重新登记时整个空间的行一起删掉。
--- 读取按 c_id 先后重放：一段的结束时间是同一数据集同一频率后一行的生效点。合成目标数据集不在这张表里。
+-- 行与采集计划记录在同一个事务里写入：序列行在 Storage 确认登记之后，停止行在计划建立时。
+-- 按写入先后（c_id）重放：一段的结束时间是同一数据集同一频率后一行的生效点；同一生效点后写的覆盖先写的；
+-- 重新登记时整个空间的行一起删除。合成目标数据集不在这张表里。
 CREATE TABLE IF NOT EXISTS t_collector_series_timeline (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
