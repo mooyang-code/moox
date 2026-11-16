@@ -31,12 +31,14 @@ type Unit struct {
 }
 
 type Request struct {
-	Version        int                 `json:"version"`
-	DeploymentRoot string              `json:"deployment_root"`
-	Topology       hostbundle.Topology `json:"topology"`
-	Host           Unit                `json:"host"`
-	Control        Unit                `json:"control"`
-	InitialAdmin   *AdminUser          `json:"initial_admin,omitempty"`
+	Version        int    `json:"version"`
+	DeploymentRoot string `json:"deployment_root"`
+	// RuntimeID 是操作电脑首次安装时生成的随机标识，目标机在 identity/runtime.json 记它的摘要。
+	RuntimeID    string              `json:"runtime_id"`
+	Topology     hostbundle.Topology `json:"topology"`
+	Host         Unit                `json:"host"`
+	Control      Unit                `json:"control"`
+	InitialAdmin *AdminUser          `json:"initial_admin,omitempty"`
 }
 
 // AdminUser is a private, create-only seed. It never resets an existing user's

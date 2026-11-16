@@ -4,7 +4,8 @@ import { Message } from "@arco-design/web-vue";
 import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess } from "../ret-info";
 import type { ControlResponse } from "./types";
-import { expireBrowserSession, installSpaceAwareSignedClient } from "./signed-client";
+import { installSpaceAwareClient } from "./space-client";
+import { AuthSessionExpiredError } from "./auth-errors";
 import { StaleSpaceRequestError } from "./stale-space";
 import { explainTransportError } from "../network-error";
 
@@ -25,7 +26,7 @@ const reportedErrors = new WeakSet<object>();
 let serverClockOffset: number | null = null;
 
 /** 按最近一次响应的 Date 头换算的服务端当前时间（毫秒）；还没有读到 Date 头时返回 null。浏览器时钟可能与服务端不一致，
- *  比较服务端给出的时间戳时用它。跨域时网关要暴露 Date 头才读得到。 */
+ *  比较服务端给出的时间戳时用它。 */
 export function serverNow(): number | null {
   return serverClockOffset === null ? null : Date.now() + serverClockOffset;
 }
@@ -54,11 +55,6 @@ export function reportControlError(error: unknown) {
   if (typeof error === "object" && error !== null) reportedErrors.add(error);
 }
 
-function readAccessTokenFromConfig(config?: AxiosRequestConfig): string {
-  const headers = (config?.headers || {}) as Record<string, string | undefined>;
-  return headers.Authorization || headers["X-Access-Token"] || "";
-}
-
 function assertControlSuccess<T>(rsp: ControlResponse<T>): T {
   if (!rsp.ret_info) {
     throw new Error("control response missing ret_info");
@@ -76,14 +72,11 @@ export async function callControl<TReq extends object, TRsp>(
   req: TReq,
   config?: AxiosRequestConfig
 ): Promise<TRsp> {
-  if (!localStorage.getItem("user-info") && !readAccessTokenFromConfig(config)) {
-    throw await expireBrowserSession("未登录或登录态已失效，请重新登录后再访问管理接口");
-  }
   const rsp = await adminClient.post<ControlResponse<TRsp>>(`/api/admin/${service}/${method}`, req, config);
   return assertControlSuccess<TRsp>(rsp.data);
 }
 
-installSpaceAwareSignedClient(adminClient);
+installSpaceAwareClient(adminClient);
 
 adminClient.interceptors.response.use(
   rsp => {
@@ -101,7 +94,9 @@ adminClient.interceptors.response.use(
     if (error instanceof StaleSpaceRequestError) return Promise.reject(error);
     const data = error?.response?.data as ControlResponse<unknown> | undefined;
     const message = data?.ret_info?.msg || explainTransportError(error, "Control 请求失败");
-    const reportedError = new ControlRequestError(message, data);
+    // 401 是会话失效：交给调用方 AuthSessionExpiredError，页面据此按已退出处理（跳登录页由请求层统一做）
+    const reportedError =
+      error?.response?.status === 401 ? new AuthSessionExpiredError(message) : new ControlRequestError(message, data);
     if (!error?.config?.silentError) reportControlError(reportedError);
     return Promise.reject(reportedError);
   }

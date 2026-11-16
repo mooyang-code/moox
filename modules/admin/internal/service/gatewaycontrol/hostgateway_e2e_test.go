@@ -40,7 +40,7 @@ import (
 const primaryPath = "trpc.moox.storage.PrimaryStore"
 
 // This gate runs production gateway executables against the real Admin service,
-// SQLite topology/key store, durable nonces and deployment PKI. Separate Linux
+// SQLite topology/key store, in-memory nonces and deployment PKI. Separate Linux
 // loopback IPs preserve the canonical remote port without endpoint overrides.
 // Both pure Go executables may be cross-compiled on the developer's machine.
 func TestHostGatewayRealAdminE2E(t *testing.T) {

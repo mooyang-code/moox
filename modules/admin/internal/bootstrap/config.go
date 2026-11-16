@@ -66,12 +66,6 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 		return nil, err
 	}
 	console.SetConfig(consoleCfg)
-	if len(strings.TrimSpace(consoleCfg.JWT.SecretKey)) < 32 {
-		return nil, fmt.Errorf("jwt.secret_key must contain at least 32 characters")
-	}
-	if err := validateConsoleCORS(consoleCfg); err != nil {
-		return nil, err
-	}
 	log.Info("控制台配置加载成功")
 
 	// 5. 创建配置对象
@@ -194,30 +188,4 @@ func loadEncryptionKey() error {
 		return fmt.Errorf("read admin encryption key file: %w", err)
 	}
 	return os.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", strings.TrimSpace(string(raw)))
-}
-
-func validateConsoleCORS(cfg *console.Config) error {
-	if cfg == nil {
-		return fmt.Errorf("console config is nil")
-	}
-	if len(cfg.CORS.AllowedOrigins) == 0 {
-		if cfg.Console.Debug {
-			log.Warn("cors.allowed_origins 未配置，非 debug 环境将无法设置 CORS 响应头")
-			return nil
-		}
-		return fmt.Errorf("cors.allowed_origins must not be empty when console.debug is false")
-	}
-	if !cfg.Console.Debug && consoleContainsWildcardOrigin(cfg.CORS.AllowedOrigins) {
-		log.Warn("生产环境 cors.allowed_origins 包含 '*'，建议改为具体前端域名")
-	}
-	return nil
-}
-
-func consoleContainsWildcardOrigin(origins []string) bool {
-	for _, origin := range origins {
-		if strings.TrimSpace(origin) == "*" {
-			return true
-		}
-	}
-	return false
 }

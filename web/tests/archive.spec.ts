@@ -69,7 +69,7 @@ test("任务详情：分区页签和月份筛选进 URL，刷新后不变，后�
   await expect(page).not.toHaveURL(/from=2026-10/);
 });
 
-test("分区下载：已校验的取 ticket 后下载，未就绪的置灰", async ({ page }) => {
+test("分区下载：已校验的直接下载（同源带 Cookie，不取票据），未就绪的置灰", async ({ page }) => {
   await page.goto("/#/archive/tasks?task=ds_kline_1m&tab=partitions");
   const table = page.locator(".task-partitions");
   await expect(table).toContainText("crypto/collect/binance-spot-kline-1m/2026/20261107.csv.gz");
@@ -78,10 +78,8 @@ test("分区下载：已校验的取 ticket 后下载，未就绪的置灰", asy
   const download = page.waitForEvent("download");
   await buttons.first().click();
   expect((await download).suggestedFilename()).toBe("binance-spot-kline-1m_2026-11-07.csv.gz");
-  expect(calls.bodies.IssueRawSessionTicket?.at(-1)).toMatchObject({
-    operation: "archive_download",
-    session_id: "crypto/ds_kline_1m"
-  });
+  expect(calls.bodies.IssueRawSessionTicket).toBeUndefined();
+  expect(calls.bodies.PartitionDownload?.at(-1)).not.toHaveProperty("ticket");
   expect(calls.bodies.PartitionDownload?.at(-1)).toMatchObject({
     space: "crypto",
     dataset: "ds_kline_1m",
@@ -89,7 +87,7 @@ test("分区下载：已校验的取 ticket 后下载，未就绪的置灰", asy
   });
 });
 
-test("最新数据：标的进 URL，表头写读取水位，更早翻页带 before 且重新取 ticket", async ({ page }) => {
+test("最新数据：标的进 URL，表头写读取水位，更早翻页带 before", async ({ page }) => {
   await page.goto("/#/archive/tasks?task=ds_kline_1m&tab=recent&subject=BTC-USDT");
   const drawer = page.locator(".arco-drawer");
   await expect(drawer.locator(".arco-tabs-tab-active")).toHaveText("最新数据");
@@ -99,13 +97,10 @@ test("最新数据：标的进 URL，表头写读取水位，更早翻页带 bef
   await expect(rows).toHaveCount(200);
   expect(calls.bodies.RecentRows?.at(-1)).toMatchObject({ space: "crypto", dataset: "ds_kline_1m", subject: "BTC-USDT" });
   expect(calls.bodies.RecentRows?.at(-1)).not.toHaveProperty("before");
-  const tickets = calls.bodies.IssueRawSessionTicket?.length || 0;
-  expect(calls.bodies.IssueRawSessionTicket?.at(-1)).toMatchObject({ operation: "archive_recent" });
   await drawer.getByRole("button", { name: "更早" }).click();
   await expect(rows).toHaveCount(3);
   expect(calls.bodies.RecentRows?.at(-1)?.before).toBeTruthy();
-  expect(calls.bodies.IssueRawSessionTicket?.length).toBe(tickets + 1);
-  expect(calls.bodies.IssueRawSessionTicket?.at(-1)).toMatchObject({ operation: "archive_recent" });
+  expect(calls.bodies.IssueRawSessionTicket).toBeUndefined();
 });
 
 test("归档任务页：归档服务返回 500 时显示失败和重试、没有“正常”，两轮轮询后全局错误提示不超过一条", async ({ page }) => {

@@ -217,8 +217,6 @@ async function gateway(route: Route) {
           page_result: { total: 1 }
         })
       });
-    case "IssueRawSessionTicket":
-      return route.fulfill({ json: ok({ ticket: `ticket-${(calls.bodies[method] || []).length}`, expires_at: 0 }) });
     case "RecentRows":
       return route.fulfill({
         json: { columns: recentColumns, rows: recentRows(url.searchParams.get("before")), staged_until: iso(NOW - MINUTE) }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -23,31 +24,52 @@ import (
 
 var instancePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
-type NonceConsumer interface {
-	ConsumeGatewayControlNonce(context.Context, string, string, time.Duration) (bool, error)
-}
-
 type Service struct {
 	db            *gorm.DB
 	controlHostID string
 	master        string
 	keys          *keys.Store
-	nonces        NonceConsumer
+	nonces        *nonceCache
 	now           func() time.Time
 }
 
 func (*Service) String() string     { return "GatewayControl{per-host authenticated snapshots}" }
 func (s *Service) GoString() string { return s.String() }
 
-func NewService(db *gorm.DB, controlHostID, encryptionKey string, nonces NonceConsumer) (*Service, error) {
-	if !servicecatalog.ValidHostID(controlHostID) || nonces == nil {
-		return nil, errors.New("gateway control requires canonical control host and durable nonce store")
+func NewService(db *gorm.DB, controlHostID, encryptionKey string) (*Service, error) {
+	if !servicecatalog.ValidHostID(controlHostID) {
+		return nil, errors.New("gateway control requires canonical control host")
 	}
 	store, err := keys.NewStore(db, encryptionKey)
 	if err != nil {
 		return nil, err
 	}
-	return &Service{db: db, controlHostID: controlHostID, master: encryptionKey, keys: store, nonces: nonces, now: time.Now}, nil
+	return &Service{db: db, controlHostID: controlHostID, master: encryptionKey, keys: store, nonces: newNonceCache(), now: time.Now}, nil
+}
+
+// nonceCache 是网关控制请求的防重放记录，只在进程内存里：Admin 重启后签名窗口内的请求可以重放一次，
+// 按单用户原则接受（T14 会删掉这一层二次验签）。过期的记录在写入时顺手清掉。
+type nonceCache struct {
+	mu      sync.Mutex
+	expires map[string]time.Time
+}
+
+func newNonceCache() *nonceCache { return &nonceCache{expires: make(map[string]time.Time)} }
+
+// consume 记下 nonce；同一个 nonce 在 ttl 内第二次出现时返回 false。
+func (c *nonceCache) consume(key string, ttl time.Duration, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for seen, expiresAt := range c.expires {
+		if !now.Before(expiresAt) {
+			delete(c.expires, seen)
+		}
+	}
+	if _, replayed := c.expires[key]; replayed {
+		return false
+	}
+	c.expires[key] = now.Add(ttl)
+	return true
 }
 
 type verifiedCaller struct{}

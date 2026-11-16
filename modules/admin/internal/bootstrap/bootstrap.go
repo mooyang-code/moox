@@ -6,7 +6,6 @@ import (
 	"time"
 
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
-	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
@@ -46,13 +45,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "注册TRPC服务失败: %v", err)
 		return nil, err
 	}
-	cache, err := authdao.NewCacheDBFromBadger(services.DBManager.GetCache())
-	if err != nil {
-		return nil, fmt.Errorf("create auth cache cleanup handle: %w", err)
-	}
-	if err := registerAuthCacheCleanupTimer(s, cache); err != nil {
-		return nil, err
-	}
 	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB())); err != nil {
 		return nil, err
 	}
@@ -60,35 +52,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "应用初始化完成")
 	s.RegisterOnShutdown(services.closeGateways)
-	s.RegisterOnShutdown(func() {
-		if err := services.DBManager.CloseCache(); err != nil {
-			log.Errorf("close badger cache: %v", err)
-		}
-	})
 	initialized = true
 	return s, nil
-}
-
-const authCacheCleanupTimerService = "trpc.moox.admin.auth_cache_cleanup.timer"
-
-type authCacheCleaner interface {
-	RunValueLogGC(context.Context) error
-}
-
-func registerAuthCacheCleanupTimer(s *server.Server, cleaner authCacheCleaner) error {
-	if s == nil || cleaner == nil {
-		return fmt.Errorf("auth cache cleanup timer requires server and cache")
-	}
-	service := s.Service(authCacheCleanupTimerService)
-	if service == nil {
-		return fmt.Errorf("auth cache cleanup timer service %q is not configured", authCacheCleanupTimerService)
-	}
-	job, err := timerjob.New("admin_auth_cache_cleanup", time.Minute, cleaner.RunValueLogGC)
-	if err != nil {
-		return err
-	}
-	timer.RegisterHandlerService(service, job.Handle)
-	return nil
 }
 
 func registerMetricsReporter(s *server.Server) {

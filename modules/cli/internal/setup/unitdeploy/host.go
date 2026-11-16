@@ -87,8 +87,8 @@ func saveJSON(root *os.Root, name string, value any, replace bool) error {
 }
 
 func runtimeBinding(identity runtimeIdentity) string {
-	// 与目标机上 unitbootstrap.bindRuntimeIdentity 的键集合一致。
-	raw, _ := json.Marshal(map[string]string{"MOOX_ADMIN_JWT_SECRET_KEY": identity.JWTSecret})
+	// 与目标机上 unitbootstrap.bindRuntimeIdentity 的摘要算法一致。
+	raw, _ := json.Marshal(map[string]string{"runtime_id": identity.RuntimeID})
 	return "sha256:" + sha(raw)
 }
 

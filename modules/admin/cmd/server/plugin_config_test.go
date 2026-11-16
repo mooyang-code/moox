@@ -7,9 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dgraph-io/badger/v4"
 	"github.com/glebarez/sqlite"
-	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
@@ -58,12 +56,7 @@ func TestConfiguredGatewayControlFiltersPreserveSignedWireBytes(t *testing.T) {
 	require.NoError(t, err)
 	key, err := keyStore.Current(context.Background(), "host-gateway@control")
 	require.NoError(t, err)
-	badgerDB, err := badger.Open(badger.DefaultOptions(filepath.Join(dir, "cache")).WithLogger(nil))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, badgerDB.Close()) })
-	cache, err := authdao.NewCacheDBFromBadger(badgerDB)
-	require.NoError(t, err)
-	implementation, err := gatewaycontrol.NewService(db, "control", master, authdao.NewUserDAO(db, cache))
+	implementation, err := gatewaycontrol.NewService(db, "control", master)
 	require.NoError(t, err)
 	cfg, err := trpc.LoadConfig("../../config/trpc_go.yaml")
 	require.NoError(t, err)

@@ -173,13 +173,11 @@ func TestEventBusFirewallIPRejectsAmbiguousDNS(t *testing.T) {
 	require.ErrorContains(t, err, "exactly one IPv4")
 }
 
-func TestSetupControlFirewallRulesIncludeBrowserAndServicePorts(t *testing.T) {
+func TestSetupControlFirewallRulesOnlyOpenBrowserPort(t *testing.T) {
 	rules := setupControlFirewallRules()
-	require.Len(t, rules, 2, "只用内部证书，不开 80 端口")
+	require.Len(t, rules, 1, "只用内部证书，不开 80 端口；没有进程监听 11001")
 	assert.Equal(t, "9527", rules[0].Ports)
 	assert.Equal(t, "MooX browser HTTPS", rules[0].Description)
-	assert.Equal(t, "11001", rules[1].Ports)
-	assert.Equal(t, "MooX service HTTPS", rules[1].Description)
 	for _, rule := range rules {
 		assert.Equal(t, "TCP", rule.Protocol)
 		assert.Equal(t, "0.0.0.0/0", rule.CidrBlock)
@@ -232,7 +230,7 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 	assert.Contains(t, ports("control"), "4222")
 	assert.Contains(t, ports("control"), "11003", "出站主机经 control 的 11003 反向连接")
 	assert.Equal(t, []string{"11003"}, ports("storage"))
-	assert.Equal(t, []string{"11003", "11200"}, ports("compute"))
+	assert.Equal(t, []string{"11003"}, ports("compute"), "Trade 的 11200 只听本机，不放行")
 
 	// 只能出站的主机不接受入站连接，不作为防火墙目标。
 	compute := manifest.HostCatalog["compute"]

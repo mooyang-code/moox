@@ -1,31 +1,21 @@
 import { AxiosHeaders, type AxiosInstance, type AxiosRequestConfig, type InternalAxiosRequestConfig } from "axios";
-import { clearSigningSessions, createNonce, loadSigningSession, signRequest } from "@/utils/request-signing";
 import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration } from "./space-header";
 import { AuthSessionExpiredError } from "./auth-errors";
 import { StaleSpaceRequestError } from "./stale-space";
 
-interface PersistedAuth {
-  token?: string;
-  sessionId?: string;
-  expiresAt?: number;
+// 登录会话在 HttpOnly Cookie 里，页面脚本读不到也不用管：同源请求由浏览器自动带上。
+// 这里只做两件事：服务端说会话失效（401）时回到登录页；切换空间时取消旧空间的在途读取。
+
+let sessionExpiredListener: (() => void) | null = null;
+
+/** 用户信息 store 在创建时登记：会话失效时清掉页面里的账号，路由守卫才不会把人从登录页推回首页。 */
+export function setSessionExpiredListener(listener: (() => void) | null): void {
+  sessionExpiredListener = listener;
 }
 
-export function readPersistedAuth(): PersistedAuth {
-  try {
-    return JSON.parse(localStorage.getItem("user-info") || "{}");
-  } catch {
-    return {};
-  }
-}
-
-export async function clearBrowserSession(): Promise<void> {
-  localStorage.removeItem("user-info");
-  await clearSigningSessions();
-}
-
-/** 会话过期：清掉会话并带着当前地址去登录页，登录后回到原页面。 */
-export async function expireBrowserSession(message?: string): Promise<AuthSessionExpiredError> {
-  await clearBrowserSession();
+/** 会话过期：清掉页面里的账号并带着当前地址去登录页，登录后回到原页面。 */
+export function expireBrowserSession(message?: string): AuthSessionExpiredError {
+  sessionExpiredListener?.();
   const current = window.location.hash.replace(/^#/, "");
   if (!current.startsWith("/login")) {
     window.location.hash = current && current !== "/" ? `#/login?redirect=${encodeURIComponent(current)}` : "#/login";
@@ -33,54 +23,11 @@ export async function expireBrowserSession(message?: string): Promise<AuthSessio
   return new AuthSessionExpiredError(message);
 }
 
-async function signConfig(config: InternalAxiosRequestConfig): Promise<InternalAxiosRequestConfig> {
-  const auth = readPersistedAuth();
-  const now = Math.floor(Date.now() / 1000);
-  const session = auth.sessionId ? await loadSigningSession(auth.sessionId) : null;
-  // 等待签名密钥期间用户可能已经重新登录：旧会话的读取结果不能用来清除或签署新会话，改用最新会话重来
-  if (readPersistedAuth().sessionId !== auth.sessionId) return signConfig(config);
-  if (!auth.token || !auth.sessionId || !auth.expiresAt || auth.expiresAt <= now || !session) {
-    throw await expireBrowserSession();
-  }
-
-  const body = config.data == null ? "" : typeof config.data === "string" ? config.data : JSON.stringify(config.data);
-  config.data = body;
-  const url = new URL(config.url || "/", window.location.origin);
-  const timestamp = now;
-  const nonce = createNonce();
-  const signature = await signRequest(session.key, {
-    method: config.method || "GET",
-    path: url.pathname,
-    body,
-    headers: {
-      "X-App-Id": config.headers.get("X-App-Id"),
-      "X-App-Key": config.headers.get("X-App-Key"),
-      "X-Space-Id": config.headers.get("X-Space-Id")
-    },
-    timestamp,
-    nonce
-  });
-  config.authSessionId = auth.sessionId; // 记录请求所属会话，迟到的旧会话 401 不能清除新登录的会话
-  config.headers.Authorization = auth.token;
-  config.headers["X-Access-Token"] = auth.token;
-  config.headers["X-Moox-Timestamp"] = String(timestamp);
-  config.headers["X-Moox-Nonce"] = nonce;
-  config.headers["X-Moox-Signature"] = signature;
-  return config;
-}
-
-/** 请求发出时的会话已经被重新登录替换：它的 401 只说明旧会话失效，不能清除当前会话。 */
-function belongsToReplacedSession(config: { authSessionId?: string } | undefined): boolean {
-  const requestSession = config?.authSessionId;
-  const currentSession = readPersistedAuth().sessionId;
-  return Boolean(requestSession && currentSession && requestSession !== currentSession);
-}
-
-export function installSignedClient(client: AxiosInstance): void {
-  client.interceptors.request.use(signConfig);
-  client.interceptors.response.use(undefined, async error => {
-    if (error?.response?.status === 401 && !belongsToReplacedSession(error?.config)) {
-      await expireBrowserSession();
+/** 只有 401 算会话失效；403（来源不对）、429 等照常报错，不跳登录页。登录探测（authProbe）的 401 由调用方处理。 */
+function installSessionExpiry(client: AxiosInstance): void {
+  client.interceptors.response.use(undefined, error => {
+    if (error?.response?.status === 401 && !error?.config?.authProbe) {
+      expireBrowserSession();
     }
     return Promise.reject(error);
   });
@@ -130,8 +77,8 @@ async function ensureSpaceSelected(): Promise<void> {
 
 declare module "axios" {
   interface AxiosRequestConfig {
-    /** 签名时记录的登录会话 ID。 */
-    authSessionId?: string;
+    /** 登录探测（取用户信息、登录、退出）：401 只说明没有登录，不跳登录页，由调用方处理。 */
+    authProbe?: boolean;
     /** 请求拦截器自动注入 X-Space-Id 时记录的空间；调用方显式指定空间的请求不带这个标记。 */
     injectedSpaceId?: string;
     /** 与 injectedSpaceId 同时记录的空间代次，用来识别 A→B→A 之后返回的旧请求。 */
@@ -181,7 +128,7 @@ function hasExplicitSpace(config: AxiosRequestConfig | undefined): boolean {
 }
 
 /** 发起时就登记并与取消信号竞速：切换空间的那一刻调用方立即收到 StaleSpaceRequestError，
- *  不依赖请求内部（IndexedDB 读取、签名等）何时结束，也就不会晚于新空间的任何响应。 */
+ *  不依赖请求内部何时结束，也就不会晚于新空间的任何响应。 */
 function runSpaceRead<T>(
   url: string,
   config: AxiosRequestConfig | undefined,
@@ -225,7 +172,7 @@ function runSpaceRead<T>(
   return Promise.race([request, cancelled]);
 }
 
-export function installSpaceAwareSignedClient(client: AxiosInstance): void {
+export function installSpaceAwareClient(client: AxiosInstance): void {
   // 测试替身可能只实现拦截器；真实 Axios 实例才有这些方法
   if (typeof client.post === "function") {
     const post = client.post.bind(client);
@@ -253,8 +200,7 @@ export function installSpaceAwareSignedClient(client: AxiosInstance): void {
       return Promise.reject(error);
     }
   );
-  // Axios executes request interceptors in reverse registration order.
-  installSignedClient(client);
+  installSessionExpiry(client);
   client.interceptors.request.use(async config => {
     if (!config.headers.get("X-Space-Id") && !independentOfSelectedSpace(config.url)) await ensureSpaceSelected();
     const spaceId = readSelectedSpaceId();

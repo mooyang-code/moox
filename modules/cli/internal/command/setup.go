@@ -980,15 +980,12 @@ func isPublicFirewallIP(address string) bool {
 		!ip.IsLinkLocalUnicast() && !ip.IsMulticast()
 }
 
+// setupControlFirewallRules 是控制机上浏览器入口的放行规则；没有进程监听 11001，不放行它。
 func setupControlFirewallRules() []cloudtencent.CreateFirewallRulesOptions {
 	return []cloudtencent.CreateFirewallRulesOptions{
 		{
 			Protocol: "TCP", Ports: "9527", CidrBlock: "0.0.0.0/0",
 			Action: "ACCEPT", Description: "MooX browser HTTPS",
-		},
-		{
-			Protocol: "TCP", Ports: "11001", CidrBlock: "0.0.0.0/0",
-			Action: "ACCEPT", Description: "MooX service HTTPS",
 		},
 	}
 }

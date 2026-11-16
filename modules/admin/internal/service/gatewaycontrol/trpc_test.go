@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dgraph-io/badger/v4"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -128,9 +127,10 @@ func TestRealTRPCVerifiesExactPBAndJSONBytesBeforeDecoding(t *testing.T) {
 	}
 }
 
-func TestRealTRPCReplaySurvivesControlRestartAndRotation(t *testing.T) {
+// 防重放记录只在进程内存里：同一进程内重放被拒；Admin 重启后签名窗口内能重放一次，按单用户原则接受（T14 删掉这一层）。
+func TestRealTRPCRejectsReplayAndAcceptsRotatedKeys(t *testing.T) {
 	f := newControlFixture(t)
-	address, svc := startControlWire(t, f.service)
+	address, _ := startControlWire(t, f.service)
 	old, err := f.keys.Current(context.Background(), "host-gateway@storage")
 	require.NoError(t, err)
 	body, err := codec.Marshal(codec.SerializationTypePB, &pb.PullSnapshotReq{HostId: "storage"})
@@ -138,14 +138,6 @@ func TestRealTRPCReplaySurvivesControlRestartAndRotation(t *testing.T) {
 	headers := signControl(t, old.Credentials(), "PullSnapshot", "control", body)
 	_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypePB, body, headers)
 	require.NoError(t, err)
-	_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypePB, body, headers)
-	require.ErrorContains(t, err, "replayed")
-	require.NoError(t, svc.Close(nil))
-	require.NoError(t, f.badger.Close())
-	f.badger, err = badger.Open(badger.DefaultOptions(f.cachePath).WithLogger(nil))
-	require.NoError(t, err)
-	f.service = f.newService(t, f.db)
-	address, _ = startControlWire(t, f.service)
 	_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypePB, body, headers)
 	require.ErrorContains(t, err, "replayed")
 	current, err := f.keys.Rotate(context.Background(), old.Caller)
@@ -160,6 +152,16 @@ func TestRealTRPCReplaySurvivesControlRestartAndRotation(t *testing.T) {
 	require.ErrorContains(t, err, "authentication failed")
 	_, err = controlClient(address, current.Credentials()).PullSnapshot(context.Background(), &pb.PullSnapshotReq{HostId: "storage"})
 	require.NoError(t, err)
+}
+
+func TestNonceCacheExpiresAndSweeps(t *testing.T) {
+	cache := newNonceCache()
+	now := time.Unix(1_800_000_000, 0)
+	require.True(t, cache.consume("k1", time.Minute, now))
+	require.False(t, cache.consume("k1", time.Minute, now.Add(59*time.Second)))
+	require.True(t, cache.consume("k2", time.Minute, now.Add(time.Minute)))
+	require.Len(t, cache.expires, 1, "过期的 k1 写入时被清掉")
+	require.True(t, cache.consume("k1", time.Minute, now.Add(time.Minute)))
 }
 
 func TestRealTRPCRejectsWrongTargetMissingHeadersUnknownMethodsAndOversize(t *testing.T) {
@@ -187,14 +189,4 @@ func TestRealTRPCRejectsWrongTargetMissingHeadersUnknownMethodsAndOversize(t *te
 	headers["x-moox-caller"] = []string{key.Caller}
 	_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypePB, body, headers)
 	require.Error(t, err)
-}
-
-func TestRealTRPCFailsClosedWhenDurableNonceStoreIsUnavailable(t *testing.T) {
-	f := newControlFixture(t)
-	address, _ := startControlWire(t, f.service)
-	key, err := f.keys.Current(context.Background(), "host-gateway@storage")
-	require.NoError(t, err)
-	require.NoError(t, f.badger.Close())
-	_, err = controlClient(address, key.Credentials()).PullSnapshot(context.Background(), &pb.PullSnapshotReq{HostId: "storage"})
-	require.ErrorContains(t, err, "replay store unavailable")
 }

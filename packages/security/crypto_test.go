@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -127,44 +126,6 @@ func TestHashPasswordRejectsMoreThan72Bytes(t *testing.T) {
 	_, err := HashPassword(strings.Repeat("a", 73))
 	if !errors.Is(err, bcrypt.ErrPasswordTooLong) {
 		t.Fatalf("HashPassword error = %v, want bcrypt.ErrPasswordTooLong", err)
-	}
-}
-
-func TestTokenSignAndParse(t *testing.T) {
-	token, err := SignToken(map[string]any{"user_id": "u1", "token_type": "access"}, "jwt-secret", "moox-admin", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	claims, err := ParseToken(token, "jwt-secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if claims["user_id"] != "u1" || claims["token_type"] != "access" {
-		t.Fatalf("claims=%v", claims)
-	}
-	if _, err := ParseToken(token, "wrong-secret"); err == nil {
-		t.Fatal("ParseToken accepted the wrong secret")
-	}
-}
-
-func TestParseTokenRejectsNonHS256(t *testing.T) {
-	token := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxIn0."
-	if _, err := ParseToken(token, "secret"); err == nil {
-		t.Fatal("ParseToken accepted a non-HS256 token")
-	}
-}
-
-func TestNewSalt(t *testing.T) {
-	first, err := NewSalt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := NewSalt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(first) != 32 || len(second) != 32 || first == second {
-		t.Fatalf("salts=%q,%q", first, second)
 	}
 }
 

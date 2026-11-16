@@ -10,9 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dgraph-io/badger/v4"
 	"github.com/glebarez/sqlite"
-	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -25,13 +23,12 @@ import (
 const fixtureMaster = "fixture-only-gateway-control-master-0123456789"
 
 type controlFixture struct {
-	service         *Service
-	db              *gorm.DB
-	path, cachePath string
-	badger          *badger.DB
-	keys            *keys.Store
-	topology        *sysdeploy.TopologyDAO
-	clock           atomic.Int64
+	service  *Service
+	db       *gorm.DB
+	path     string
+	keys     *keys.Store
+	topology *sysdeploy.TopologyDAO
+	clock    atomic.Int64
 }
 
 func openControlDB(t *testing.T, path string) *gorm.DB {
@@ -47,7 +44,7 @@ func openControlDB(t *testing.T, path string) *gorm.DB {
 func newControlFixture(t *testing.T) *controlFixture {
 	t.Helper()
 	dir := t.TempDir()
-	f := &controlFixture{path: filepath.Join(dir, "admin.db"), cachePath: filepath.Join(dir, "badger")}
+	f := &controlFixture{path: filepath.Join(dir, "admin.db")}
 	f.db = openControlDB(t, f.path)
 	require.NoError(t, f.db.Exec(schema.AdminSQL()).Error)
 	var err error
@@ -62,13 +59,6 @@ func newControlFixture(t *testing.T) *controlFixture {
 	require.NoError(t, err)
 	_, err = f.keys.EnsureAll(context.Background())
 	require.NoError(t, err)
-	f.badger, err = badger.Open(badger.DefaultOptions(f.cachePath).WithLogger(nil))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if !f.badger.IsClosed() {
-			require.NoError(t, f.badger.Close())
-		}
-	})
 	f.service = f.newService(t, f.db)
 	f.clock.Store(time.Now().UnixNano())
 	f.service.now = func() time.Time { return time.Unix(0, f.clock.Load()) }
@@ -77,9 +67,7 @@ func newControlFixture(t *testing.T) *controlFixture {
 
 func (f *controlFixture) newService(t *testing.T, db *gorm.DB) *Service {
 	t.Helper()
-	cache, err := authdao.NewCacheDBFromBadger(f.badger)
-	require.NoError(t, err)
-	service, err := NewService(db, "control", fixtureMaster, authdao.NewUserDAO(db, cache))
+	service, err := NewService(db, "control", fixtureMaster)
 	require.NoError(t, err)
 	return service
 }
@@ -300,15 +288,13 @@ func TestMissingMasterCopiesFailClosedUntilExplicitProvisioning(t *testing.T) {
 	after := f.snapshot(t, "control")
 	require.NotEqual(t, before.Hash, after.Hash)
 	require.True(t, slices.ContainsFunc(after.VerificationKeys, func(key *pb.GatewayVerificationKey) bool { return key.Caller == "host-gateway@new-host" }))
-	wrong, err := NewService(f.db, "control", "wrong-master-fixture", f.service.nonces)
+	wrong, err := NewService(f.db, "control", "wrong-master-fixture")
 	require.NoError(t, err)
 	response, err = wrong.PullSnapshot(hostContext("control"), &pb.PullSnapshotReq{HostId: "control"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, response.GetRetInfo().GetCode())
 	require.Nil(t, response.Snapshot)
-	_, err = NewService(f.db, "control", fixtureMaster, nil)
-	require.Error(t, err)
-	_, err = NewService(f.db, "old_node", fixtureMaster, f.service.nonces)
+	_, err = NewService(f.db, "old_node", fixtureMaster)
 	require.Error(t, err)
 }
 

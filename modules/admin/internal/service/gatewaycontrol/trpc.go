@@ -70,11 +70,7 @@ func (s *Service) authenticate(ctx context.Context, path, method string, body []
 	if err != nil {
 		return nil, errors.New("gateway control authentication failed")
 	}
-	consumed, err := s.nonces.ConsumeGatewayControlNonce(ctx, claims.KeyID, claims.Nonce, claims.TTL)
-	if err != nil {
-		return nil, errors.New("gateway control replay store unavailable")
-	}
-	if !consumed {
+	if !s.nonces.consume(claims.KeyID+"\x00"+claims.Nonce, claims.TTL, s.now()) {
 		return nil, errors.New("gateway control request replayed")
 	}
 	return context.WithValue(ctx, verifiedCaller{}, claims.Caller), nil

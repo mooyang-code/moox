@@ -12,9 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -141,76 +139,4 @@ func VerifyPassword(password, encodedHash string) bool {
 		return false
 	}
 	return bcrypt.CompareHashAndPassword([]byte(encodedHash), []byte(password)) == nil
-}
-
-// SignToken signs generic claims with HS256. Business-specific claim
-// validation belongs to the caller, not this package.
-func SignToken(claims map[string]any, secret, issuer string, ttl time.Duration) (string, error) {
-	if secret == "" {
-		return "", ErrEmptySecret
-	}
-	if ttl <= 0 {
-		return "", errors.New("token ttl must be positive")
-	}
-	now := time.Now()
-	jwtClaims := jwt.MapClaims{}
-	for key, value := range claims {
-		jwtClaims[key] = value
-	}
-	jwtClaims["iat"] = now.Unix()
-	jwtClaims["nbf"] = now.Unix()
-	jwtClaims["exp"] = now.Add(ttl).Unix()
-	if issuer != "" {
-		jwtClaims["iss"] = issuer
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwtClaims)
-	signed, err := token.SignedString([]byte(secret))
-	if err != nil {
-		return "", fmt.Errorf("sign token: %w", err)
-	}
-	return signed, nil
-}
-
-// ParseToken verifies an HS256 token and returns its generic claims.
-func ParseToken(raw, secret string) (map[string]any, error) {
-	if raw == "" {
-		return nil, errors.New("token cannot be empty")
-	}
-	if secret == "" {
-		return nil, ErrEmptySecret
-	}
-	token, err := jwt.ParseWithClaims(raw, jwt.MapClaims{}, func(token *jwt.Token) (any, error) {
-		if token.Method == nil {
-			return nil, errors.New("token signing method is missing")
-		}
-		method, ok := token.Method.(*jwt.SigningMethodHMAC)
-		if !ok || method.Alg() != jwt.SigningMethodHS256.Alg() {
-			return nil, fmt.Errorf("unexpected signing method: %s", token.Method.Alg())
-		}
-		return []byte(secret), nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("parse token: %w", err)
-	}
-	if !token.Valid {
-		return nil, errors.New("token is invalid")
-	}
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return nil, errors.New("token claims have unexpected type")
-	}
-	result := make(map[string]any, len(claims))
-	for key, value := range claims {
-		result[key] = value
-	}
-	return result, nil
-}
-
-// NewSalt returns a random 16-byte salt encoded as lowercase hexadecimal.
-func NewSalt() (string, error) {
-	buf := make([]byte, 16)
-	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
-		return "", fmt.Errorf("generate salt: %w", err)
-	}
-	return hex.EncodeToString(buf), nil
 }

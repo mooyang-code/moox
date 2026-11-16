@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -21,21 +20,19 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/consoleclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
-	"github.com/mooyang-code/moox/packages/requestauth"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
-// fakeConsole 按真实协议实现管理台的登录、签名校验和配置备份接口。
+// fakeConsole 按真实协议实现管理台的登录（下发会话 Cookie）、Cookie 与 Origin 校验和配置备份接口。
 type fakeConsole struct {
-	t        *testing.T
-	server   *httptest.Server
-	password string
-	mu       sync.Mutex
-	envelope string
-	signed   int
+	t             *testing.T
+	server        *httptest.Server
+	password      string
+	mu            sync.Mutex
+	envelope      string
+	authenticated int
 }
 
-const fakeSigningKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+const fakeSessionID = "fake-session-id"
 
 func newFakeConsole(t *testing.T, password string) *fakeConsole {
 	f := &fakeConsole{t: t, password: password}
@@ -48,33 +45,27 @@ func (f *fakeConsole) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	write := func(v any) { _ = json.NewEncoder(w).Encode(v) }
 	switch r.URL.Path {
-	case "/api/admin/auth/GetLoginSalt":
-		// protojson 会把 int64 编成字符串，客户端要能接住。
-		write(map[string]any{"ret_info": map[string]any{"code": 0}, "salt": "salt-1", "timestamp": "1700000000"})
 	case "/api/admin/auth/Login":
 		var req struct {
-			Username     string `json:"username"`
-			PasswordHash string `json:"password_hash"`
-			Salt         string `json:"salt"`
-			Timestamp    int64  `json:"timestamp"`
+			Username string `json:"username"`
+			Password string `json:"password"`
 		}
 		_ = json.Unmarshal(body, &req)
-		plain, err := mooxsecurity.Decrypt(req.PasswordHash, req.Salt+strconv.FormatInt(req.Timestamp, 10))
-		if err != nil || plain != f.password || req.Username != "admin" {
+		if req.Password != f.password || req.Username != "admin" || r.Header.Get("Origin") != "https://"+r.Host {
 			write(map[string]any{"ret_info": map[string]any{"code": 3, "msg": "用户名或密码错误"}})
 			return
 		}
-		write(map[string]any{"ret_info": map[string]any{"code": 0}, "access_token": "token-1", "request_signing_key": fakeSigningKey})
+		http.SetCookie(w, &http.Cookie{Name: "moox_session", Value: fakeSessionID, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+		write(map[string]any{"ret_info": map[string]any{"code": 0}, "expires_at": "1700086400"})
 	case "/api/admin/setup/PutConfigBackup", "/api/admin/setup/GetConfigBackup":
-		timestamp, _ := strconv.ParseInt(r.Header.Get("X-Moox-Timestamp"), 10, 64)
-		material := requestauth.Material{Method: r.Method, Path: r.URL.EscapedPath(), Body: body, Timestamp: timestamp, Nonce: r.Header.Get("X-Moox-Nonce")}
-		if r.Header.Get("Authorization") != "token-1" || requestauth.Verify(fakeSigningKey, material, r.Header.Get("X-Moox-Signature")) != nil {
+		cookie, err := r.Cookie("moox_session")
+		if err != nil || cookie.Value != fakeSessionID || r.Header.Get("Origin") != "https://"+r.Host {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.signed++
+		f.authenticated++
 		if strings.HasSuffix(r.URL.Path, "PutConfigBackup") {
 			var req struct {
 				Envelope string `json:"envelope"`
@@ -128,8 +119,8 @@ func TestBackupUploadsAnEnvelopeOnlyTheAdminPasswordOpens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.UpdatedAt.Unix() != 1700000100 || console.signed != 1 {
-		t.Fatalf("结果 = %+v，签名请求 %d 次", result, console.signed)
+	if result.UpdatedAt.Unix() != 1700000100 || console.authenticated != 1 {
+		t.Fatalf("结果 = %+v，带会话的请求 %d 次", result, console.authenticated)
 	}
 	if strings.Contains(console.envelope, "Adm1n-P@ss") || strings.Contains(console.envelope, "[admin]") {
 		t.Fatal("服务端收到的备份不应含明文")

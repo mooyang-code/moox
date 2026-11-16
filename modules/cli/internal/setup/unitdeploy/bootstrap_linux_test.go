@@ -515,33 +515,43 @@ func nativeAdminLogin(t *testing.T, username, password string) {
 	nativeAdminLoginAt(t, &http.Client{Timeout: 10 * time.Second}, "http://127.0.0.1:11000", username, password)
 }
 
+// nativeAdminLoginAt 像浏览器一样登录：明文密码换会话 Cookie，再带着 Cookie 取一次用户信息。直连 11000 时 Origin
+// 写成 https://<那个地址>，与 Admin 的同站规则一致。
 func nativeAdminLoginAt(t *testing.T, client *http.Client, endpoint, username, password string) {
 	t.Helper()
+	origin := "https://" + strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
+	var sessionCookie *http.Cookie
 	call := func(method string, request, response proto.Message) {
 		raw, err := protojson.Marshal(request)
 		require.NoError(t, err)
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint+"/api/admin/auth/"+method, bytes.NewReader(raw))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", origin)
+		if sessionCookie != nil {
+			req.AddCookie(sessionCookie)
+		}
 		result, err := client.Do(req)
 		require.NoError(t, err)
 		defer result.Body.Close()
 		require.Equal(t, http.StatusOK, result.StatusCode)
+		for _, cookie := range result.Cookies() {
+			if cookie.Name == "moox_session" {
+				require.True(t, cookie.HttpOnly && cookie.Secure && cookie.SameSite == http.SameSiteStrictMode, "session cookie attributes")
+				sessionCookie = &http.Cookie{Name: cookie.Name, Value: cookie.Value}
+			}
+		}
 		body, err := io.ReadAll(io.LimitReader(result.Body, 128<<10))
 		require.NoError(t, err)
 		require.NoError(t, protojson.Unmarshal(body, response), "Admin login response must follow its protocol")
 	}
-	var salt adminpb.GetLoginSaltRsp
-	call("GetLoginSalt", &adminpb.GetLoginSaltReq{Username: username}, &salt)
-	require.NotNil(t, salt.GetRetInfo())
-	require.Zero(t, salt.GetRetInfo().GetCode())
-	require.NotEmpty(t, salt.GetSalt())
-	encrypted, err := mooxsecurity.Encrypt(password, salt.GetSalt()+strconv.FormatInt(salt.GetTimestamp(), 10))
-	require.NoError(t, err)
 	var login adminpb.LoginRsp
-	call("Login", &adminpb.LoginReq{Username: username, PasswordHash: encrypted, Salt: salt.GetSalt(), Timestamp: salt.GetTimestamp(), DeviceId: "native-admin-gate"}, &login)
+	call("Login", &adminpb.LoginReq{Username: username, Password: password}, &login)
 	require.NotNil(t, login.GetRetInfo())
 	require.Zero(t, login.GetRetInfo().GetCode(), "the initialized administrator must be able to log in")
-	require.NotEmpty(t, login.GetAccessToken())
-	require.NotEmpty(t, login.GetRequestSigningKey())
+	require.NotNil(t, sessionCookie, "login must issue the session cookie")
+	var info adminpb.GetUserInfoRsp
+	call("GetUserInfo", &adminpb.GetUserInfoReq{}, &info)
+	require.Zero(t, info.GetRetInfo().GetCode())
+	require.Equal(t, username, info.GetUserInfo().GetUsername())
 }

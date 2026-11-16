@@ -46,7 +46,6 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 	if err != nil {
 		return request, nil, err
 	}
-	request.Control.Environment["admin"]["MOOX_ADMIN_JWT_SECRET_KEY"] = identity.JWTSecret
 	if options.Release != "" {
 		if err := checkControlDependencyRecords(snapshot, root, components); err != nil {
 			return request, nil, err

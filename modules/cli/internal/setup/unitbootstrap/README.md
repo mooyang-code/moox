@@ -20,7 +20,7 @@
 
 实际服务场景使用 control 软件包中的 Admin、Web Host、Console Proxy，以及完整 host 单元；测试不启动 broker，并验证 EventBus 不可用时 HostAgent 仍可就绪。它不替代全部 control 组件或跨主机业务验收。顶层 CLI 的 admin/control、其他主机与业务单元部署、版本升级已由 `unitdeploy` 接入，生产验收仍需独立执行。
 
-请求可显式指定 `control.components` 为完整部署清单的唯一子集，必须包含 Admin；身份包仍按完整拓扑验证。核心子集升级到完整集合可以复用已有数据库、MooX CA 和 EventBus 身份，不能把仍在部署清单中的已安装组件缩减掉。全局健康/JWT 凭据在 `identity/runtime.json` 持久绑定，变化或既有部署缺失该绑定时在启停前拒绝，不能因本机状态丢失自动替换凭据。完成日志与 current 已不匹配的旧请求在设置 bootstrap 标记前拒绝。
+请求可显式指定 `control.components` 为完整部署清单的唯一子集，必须包含 Admin；身份包仍按完整拓扑验证。核心子集升级到完整集合可以复用已有数据库、MooX CA 和 EventBus 身份，不能把仍在部署清单中的已安装组件缩减掉。请求里的运行标识（操作电脑首次安装时生成的随机值，不是密钥）在 `identity/runtime.json` 持久绑定，变化或既有部署缺失该绑定时在启停前拒绝，不能因本机状态丢失自动替换。完成日志与 current 已不匹配的旧请求在设置 bootstrap 标记前拒绝。
 
 代理的内部 CA 在首次安装时自动创建；上一版已含 Console Proxy 却没有回执时拒绝创建，不替换原有 CA。`identity/console-proxy/receipt.json` 先记录 pending，完整材料在同级 `material/` 同步并原子发布后记录 ready；该目录独立于发布快照和候选清理。未发布的生成阶段可恢复，消费后材料丢失、损坏或主机不匹配则拒绝自动重新生成。升级复制最新关闭发布的状态，同时校验根身份与持久凭据一致。
 

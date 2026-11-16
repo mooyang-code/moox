@@ -377,7 +377,9 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 }
 
 // probeHealth 在组件给 Monitor 的上报缺失或过期时，经 SSH 在目标机上请求它的本机 /readyz：
-// 应答就绪算通过（上报链路的问题由 reporter_coverage 单独报），应答未就绪或连不上端口算失败，SSH 连不上记为无法判断。
+// 应答就绪只说明进程活着，Monitor 与 setup verify 仍按上报缺失记它停止，所以记为警告（整体是降级，不是健康）；
+// 应答未就绪或连不上端口算失败，SSH 连不上记为无法判断。不走 Reporter 的组件（主机采集器、代报的因子引擎与
+// 归档 worker）没有 reporter_coverage 检查，这一项就是它们上报中断时唯一的信号，不能判通过。
 func (r *diagnoseRunner) probeHealth(ctx context.Context, id string, component *monitorpb.DoctorExpectedComponent) core.CheckResult {
 	const stale = "the component report to Monitor is missing or stale"
 	port := 0
@@ -396,7 +398,7 @@ func (r *diagnoseRunner) probeHealth(ctx context.Context, id string, component *
 	if err != nil {
 		return checkResult(id, core.StatusFail, stale+"; the local /readyz probe over SSH failed", err, "restart_service_manually")
 	}
-	result := checkResult(id, core.StatusPass, stale+", but the local /readyz probe over SSH answered ready", nil)
+	result := checkResult(id, core.StatusWarn, "进程就绪，但给 Monitor 的上报缺失或过期", nil, "verify_eventbus_credentials", "restart_service_manually")
 	result.Observations = []core.Observation{{Source: "ssh_health", ObservedAt: probe.ObservedAt, Summary: "local /readyz over SSH", Digest: probe.Digest}}
 	return result
 }

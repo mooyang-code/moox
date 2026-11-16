@@ -2,71 +2,34 @@ package console
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
-	"time"
 
 	"gopkg.in/yaml.v2"
 )
 
-// 全局配置供控制台权限和限流插件使用。
+// 全局配置供控制台的来源校验和登录限流使用。
 var (
 	consoleConfig *Config
 	configMutex   sync.RWMutex
 )
 
-// CORSConfig 跨域配置
-type CORSConfig struct {
-	AllowedOrigins []string `yaml:"allowed_origins"`
-}
-
 // Config 控制台服务配置
 type Config struct {
-	JWT       JWTConfig       `yaml:"jwt"`        // JWT配置
 	Console   ConsoleConfig   `yaml:"console"`    // 控制台配置
 	RateLimit RateLimitConfig `yaml:"rate_limit"` // 限流配置
-	CORS      CORSConfig      `yaml:"cors"`       // 跨域配置
-	Security  SecurityConfig  `yaml:"security"`
-}
-
-type SecurityConfig struct {
-	RequestClockSkew time.Duration `yaml:"request_clock_skew"`
-	NonceTTL         time.Duration `yaml:"nonce_ttl"`
-}
-
-// JWTConfig JWT配置
-type JWTConfig struct {
-	SecretKey string `yaml:"secret_key"` // JWT密钥
 }
 
 // ConsoleConfig 控制台配置
 type ConsoleConfig struct {
-	Debug         bool     `yaml:"debug"`           // 是否开启调试模式
-	NoAuthMethods []string `yaml:"no_auth_methods"` // 不需要鉴权的接口列表
+	// AllowedOrigins 是本站之外还接受的 Origin（例如 http://localhost:9527），只给本机开发经开发服务器代理时用，生产留空。
+	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
-// ServiceDetail 服务详细配置
-type ServiceDetail struct {
-	Address string
-	Path    string
-	// GatewayURL/GatewayNode identify an authenticated remote Node Gateway for
-	// browser BFF calls (currently the dedicated TradeConsole surface). When
-	// empty, callers use the direct in-process tRPC endpoint above.
-	GatewayURL  string
-	GatewayNode string
-	// Timeout is the maximum duration the Admin BFF may wait for this
-	// deployment. Provider-backed read operations can legitimately outlive
-	// the short default used by ordinary control-plane calls.
-	Timeout time.Duration
-}
-
-// RateLimitConfig 限流配置
+// RateLimitConfig 限流配置：只对列出的接口限流（登录等免会话或敏感接口），没列出的不限。
 type RateLimitConfig struct {
-	// 全局默认限流配置
-	DefaultQPS   int `yaml:"default_qps"`   // 默认QPS限制
-	DefaultBurst int `yaml:"default_burst"` // 默认突发流量
-
-	// 按接口配置限流
 	MethodLimits map[string]MethodLimit `yaml:"method_limits"`
 }
 
@@ -92,20 +55,25 @@ func GetConfig() *Config {
 
 // LoadConfig 加载配置文件
 func LoadConfig() (*Config, error) {
-	// 读取配置文件
-	configPath := "./config/console.yaml"
-	yamlFile, err := os.ReadFile(configPath)
+	yamlFile, err := os.ReadFile("./config/console.yaml")
 	if err != nil {
 		return nil, fmt.Errorf("读取配置文件失败: %+v", err)
 	}
-
-	// 解析YAML到Config结构
 	var config Config
 	if err := yaml.Unmarshal(yamlFile, &config); err != nil {
 		return nil, fmt.Errorf("解析YAML失败: %+v", err)
 	}
-	if secret := os.Getenv("MOOX_ADMIN_JWT_SECRET_KEY"); secret != "" {
-		config.JWT.SecretKey = secret
+	for _, origin := range config.Console.AllowedOrigins {
+		if !validOrigin(origin) {
+			return nil, fmt.Errorf("console.allowed_origins 里的 %q 不是合法的来源，要写成 scheme://主机[:端口]，不能用 *", origin)
+		}
 	}
 	return &config, nil
+}
+
+// validOrigin 判断是不是浏览器 Origin 头的形式：只有协议、主机和可选端口。
+func validOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && !strings.Contains(u.Host, "*") &&
+		u.User == nil && u.Path == "" && u.RawQuery == "" && u.Fragment == ""
 }

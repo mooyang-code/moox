@@ -257,9 +257,13 @@ func TestUnitPreparationLinuxFailureDoesNotPublishOrReplaceCurrent(t *testing.T)
 	require.NoError(t, os.Symlink(host.Directory, filepath.Join(options.UnitRoot, "current")))
 	_, err = prepareWithHelper(t, options)
 	require.Error(t, err)
+	// 新的版本号本身合法，靠多出一个不属于这个单元的组件环境让准备失败：失败时不能发布出这个版本。
 	options.ReleaseID = "invalid"
+	options.Environment["trade"] = syntheticEnvironment()
 	_, err = prepareWithHelper(t, options)
-	require.Error(t, err)
+	require.ErrorContains(t, err, "runtime environment")
+	delete(options.Environment, "trade")
+	// 再用一份不合格的配置覆盖，在暂存目录里失败。
 	options.Overrides["host-gateway/config/app.yaml"] = options.Overrides["host-agent/config/eventbus.yaml"]
 	_, err = prepareWithHelper(t, options)
 	require.Error(t, err)

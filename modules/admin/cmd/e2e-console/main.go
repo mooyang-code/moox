@@ -2,10 +2,8 @@
 package main
 
 import (
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,44 +12,41 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/mooyang-code/moox/packages/requestauth"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
+// sessionCookie 是管理台的会话 Cookie 名（与 Admin 的 session.CookieName 一致）。
+const sessionCookie = "moox_session"
+
+// client 像浏览器一样调用管理台：登录拿到会话 Cookie，之后每个请求带上它；POST 带本站 Origin。
 type client struct {
-	base, token, key, space string
-	http                    *http.Client
+	base    string
+	session *http.Cookie
+	http    *http.Client
 }
 
 func (c *client) call(path, space, body string) (int, string) {
-	nonceRaw := make([]byte, 32)
-	_, _ = rand.Read(nonceRaw)
-	nonce := hex.EncodeToString(nonceRaw)
-	ts := time.Now().Unix()
-	request, _ := http.NewRequest(http.MethodPost, c.base+path, strings.NewReader(body))
+	request, err := http.NewRequest(http.MethodPost, c.base+path, strings.NewReader(body))
+	if err != nil {
+		return 0, err.Error()
+	}
 	request.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		headers := map[string]string{}
-		if space != "" {
-			headers["X-Space-Id"] = space
-			request.Header.Set("X-Space-Id", space)
-		}
-		sig, err := requestauth.Sign(c.key, requestauth.Material{Method: http.MethodPost, Path: path, Body: []byte(body), Headers: headers, Timestamp: ts, Nonce: nonce})
-		if err != nil {
-			return 0, err.Error()
-		}
-		request.Header.Set("Authorization", c.token)
-		request.Header.Set("X-Access-Token", c.token)
-		request.Header.Set("X-Moox-Timestamp", fmt.Sprint(ts))
-		request.Header.Set("X-Moox-Nonce", nonce)
-		request.Header.Set("X-Moox-Signature", sig)
+	request.Header.Set("Origin", c.base)
+	if space != "" {
+		request.Header.Set("X-Space-Id", space)
+	}
+	if c.session != nil {
+		request.AddCookie(c.session)
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return 0, err.Error()
 	}
 	defer response.Body.Close()
+	for _, cookie := range response.Cookies() {
+		if cookie.Name == sessionCookie && cookie.Value != "" {
+			c.session = &http.Cookie{Name: cookie.Name, Value: cookie.Value}
+		}
+	}
 	raw, err := io.ReadAll(response.Body)
 	if err != nil {
 		return 0, "读取响应失败: " + err.Error()
@@ -81,32 +76,14 @@ func main() {
 		}
 		tlsConfig.RootCAs = pool
 	}
-	c := &client{base: *base, http: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}}
-	code, raw := c.call("/api/admin/auth/GetLoginSalt", "", fmt.Sprintf(`{"username":%q}`, *user))
-	var salt struct {
-		Salt      string `json:"salt"`
-		Timestamp int64  `json:"timestamp,string"`
-	}
-	if code != 200 || json.Unmarshal([]byte(raw), &salt) != nil || salt.Salt == "" {
-		fmt.Println("GetLoginSalt 失败, http =", code)
-		os.Exit(1)
-	}
-	enc, err := mooxsecurity.Encrypt(password, salt.Salt+fmt.Sprint(salt.Timestamp))
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	code, raw = c.call("/api/admin/auth/Login", "", fmt.Sprintf(`{"username":%q,"password_hash":%q,"salt":%q,"timestamp":%d}`, *user, enc, salt.Salt, salt.Timestamp))
-	var login struct {
-		Token string `json:"access_token"`
-		Key   string `json:"request_signing_key"`
-	}
-	if code != 200 || json.Unmarshal([]byte(raw), &login) != nil || login.Token == "" {
+	c := &client{base: strings.TrimRight(*base, "/"), http: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}}
+	loginBody, _ := json.Marshal(map[string]string{"username": *user, "password": password})
+	code, raw := c.call("/api/admin/auth/Login", "", string(loginBody))
+	if !businessOK(code, raw) || c.session == nil {
 		fmt.Println("Login 失败, http =", code, retMessage(raw))
 		os.Exit(1)
 	}
-	c.token, c.key = login.Token, login.Key
-	fmt.Println("登录成功: 已获得会话与请求签名密钥")
+	fmt.Println("登录成功: 已获得会话 Cookie")
 	createFailed := 0
 	if *createSpaces {
 		for _, sp := range []struct{ id, name, owner, market, tz, attrs string }{
@@ -177,7 +154,7 @@ func businessOK(code int, raw string) bool {
 	return body.RetInfo.Code.String() == "0"
 }
 
-// retMessage 只取出响应里的错误提示，避免把认证响应里的令牌写入日志。
+// retMessage 只取出响应里的错误提示，不回显响应的其余内容。
 func retMessage(raw string) string {
 	var body struct {
 		RetInfo struct {

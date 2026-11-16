@@ -3,9 +3,9 @@
   "summary": {
     "components": 20,
     "services": 26,
-    "methods": 338,
-    "read_only_methods": 154,
-    "retryable_methods": 155,
+    "methods": 336,
+    "read_only_methods": 153,
+    "retryable_methods": 154,
     "callers": 26,
     "principals": 5
   },
@@ -1080,21 +1080,9 @@
       "console_name": "auth",
       "methods": [
         {
-          "name": "GetLoginSalt",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
           "name": "GetUserInfo",
           "read_only": true,
           "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "IssueRawSessionTicket",
-          "read_only": false,
-          "retryable": false,
           "timeout_ms": 5000
         },
         {
@@ -2424,9 +2412,7 @@
       "trpc.moox.factor.FactorMgr/UpdateFactor",
       "trpc.moox.factor.FactorMgr/UpsertFactorCategory",
       "trpc.moox.factor.FactorMgr/ValidateFactorSpec",
-      "trpc.moox.infra.Auth/GetLoginSalt",
       "trpc.moox.infra.Auth/GetUserInfo",
-      "trpc.moox.infra.Auth/IssueRawSessionTicket",
       "trpc.moox.infra.Auth/Login",
       "trpc.moox.infra.Auth/Logout",
       "trpc.moox.monitor.MonitorMgr/AddNotificationChannel",

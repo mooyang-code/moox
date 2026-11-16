@@ -2,6 +2,7 @@ package unitruntime
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -17,7 +18,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/failure"
-	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
@@ -446,10 +446,12 @@ func (s *runtimeState) start(ctx context.Context, component Component) (Status, 
 	// Inherit ordinary OS settings, replacing every MOOX variable with the
 	// explicit environment of this release. Operator-side MOOX secrets cannot
 	// accidentally become an unrelated service's environment.
-	bootID, err := requestauth.NewNonce()
-	if err != nil {
+	// 启动标识是 32 字节随机数的十六进制（与 validDigest 的格式一致）。
+	bootRaw := make([]byte, 32)
+	if _, err := rand.Read(bootRaw); err != nil {
 		return status, err
 	}
+	bootID := hex.EncodeToString(bootRaw)
 	values["MOOX_BOOT_ID"] = bootID
 	command.Env = componentEnvironment(values)
 	detachCommand(command)

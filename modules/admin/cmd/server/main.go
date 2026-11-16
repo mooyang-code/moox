@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	_ "github.com/mooyang-code/moox/modules/admin/internal/console"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
 	"github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"

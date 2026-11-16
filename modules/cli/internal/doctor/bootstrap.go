@@ -32,7 +32,8 @@ type BootstrapOptions struct {
 	CheckIDs                                                  []string
 	Client                                                    DeploymentClient
 	MonitorClient                                             DoctorContextClient
-	// Probe 请求组件只听本机的健康端口；bootstrap 只查本节点，所以总是直接请求本机 127.0.0.1。
+	// Probe 请求组件只听本机的健康端口：查的是本机时直接请求 127.0.0.1，带远端 --node 时经 SSH 转发到目标机的 127.0.0.1。
+	// SSH 连不上时 bootstrap 把这一项记为失败并建议重启服务（diagnose 同样情况记为无法判断）。
 	Probe         HealthProbe
 	Now           func() time.Time
 	ProbeWritable func(context.Context, string, string) error
@@ -370,7 +371,7 @@ func validateManifestChecksumFile(path, want string) error {
 	return nil
 }
 
-// probe 在本节点上请求组件的健康端口。
+// probe 请求 --node 所指节点上组件的健康端口（远端节点经 SSH 转发）。
 func (r *bootstrapRunner) probe(ctx context.Context, component core.Component, path string) (ProbeResult, error) {
 	if r.options.Probe == nil {
 		return ProbeResult{}, fmt.Errorf("health probe is unavailable")

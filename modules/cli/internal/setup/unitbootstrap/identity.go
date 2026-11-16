@@ -19,19 +19,17 @@ type runtimeBinding struct {
 	SHA256  string `json:"sha256"`
 }
 
-// Bind the fleet's runtime credentials outside release snapshots before any
-// process stops. Losing native state never authorizes replacing the JWT
-// identity on an already initialized deployment. 健康端口只听本机、不验签，没有健康密钥。
+// 在任何进程停下之前，把这次初始化的运行标识绑定到发布快照之外。本机状态丢失不授权替换已初始化部署的标识。
+// 运行标识是操作电脑首次安装时生成的随机值，不是密钥（健康端口与管理台登录都不再需要部署时下发的密钥）。
 func bindRuntimeIdentity(deployment *os.Root, input inputs) error {
-	const key = "MOOX_ADMIN_JWT_SECRET_KEY"
-	value := input.request.Control.Environment["admin"][key]
+	value := input.request.RuntimeID
 	if len(value) < 32 {
-		return errors.New("bootstrap requires a valid persistent JWT identity")
+		return errors.New("bootstrap requires a valid persistent runtime identity")
 	}
 	if len(value) > 4096 || !utf8.ValidString(value) || strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
-		return errors.New("bootstrap runtime identity must contain bounded canonical secrets")
+		return errors.New("bootstrap runtime identity must be bounded canonical text")
 	}
-	raw, err := json.Marshal(map[string]string{key: value})
+	raw, err := json.Marshal(map[string]string{"runtime_id": value})
 	if err != nil {
 		return err
 	}

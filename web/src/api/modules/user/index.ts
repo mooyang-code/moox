@@ -1,40 +1,22 @@
 import { callControl } from "@/api/admin/http";
-import { secureLoginManager } from "@/utils/crypto";
 
-export const loginAPI = async (data: { username: string; password: string }) => {
-  return await secureLoginManager.login(data.username, data.password);
-};
+export interface LoginResult {
+  user_info?: Record<string, any>;
+  expires_at?: number;
+}
 
-export const getUserInfoAPI = async (accessToken: string) => {
-  try {
-    return await callControl<Record<string, never>, { user_info?: Record<string, any> }>(
-      "auth",
-      "GetUserInfo",
-      {},
-      {
-        headers: {
-          Authorization: accessToken,
-          "X-Access-Token": accessToken
-        }
-      }
-    );
-  } catch (error: unknown) {
-    console.error("获取用户信息失败:", error);
-    throw error;
-  }
-};
+/** 登录：密码明文交给 HTTPS 保护；成功后会话在 HttpOnly Cookie 里，响应体里没有会话信息。错误由登录页自己提示。 */
+export const loginAPI = (data: { username: string; password: string }) =>
+  callControl<{ username: string; password: string }, LoginResult>("auth", "Login", data, { silentError: true, authProbe: true });
 
-export const logoutAPI = () => callControl<Record<string, never>, Record<string, never>>("auth", "Logout", {});
-
-/**
- * 一次性 ticket 的操作。SSH 三个操作的 sessionId 是 SSH 会话 ID；
- * 归档的下载与最新数据填 "<空间>/<数据集>"，请求里的 space、dataset 必须与它一致，ticket 只能用一次（翻页要重新取）。
- */
-export type RawSessionTicketOperation = "ssh_ws" | "sftp_download" | "sftp_upload" | "archive_download" | "archive_recent";
-
-export const issueRawSessionTicketAPI = (operation: RawSessionTicketOperation, sessionId: string) =>
-  callControl<{ operation: string; session_id: string }, { ticket: string; expires_at: number }>(
+/** 取当前登录用户；401 说明没有登录，由调用方（路由守卫、登录页）处理，不弹提示、不自动跳转。 */
+export const getUserInfoAPI = () =>
+  callControl<Record<string, never>, { user_info?: Record<string, any> }>(
     "auth",
-    "IssueRawSessionTicket",
-    { operation, session_id: sessionId }
+    "GetUserInfo",
+    {},
+    { silentError: true, authProbe: true }
   );
+
+export const logoutAPI = () =>
+  callControl<Record<string, never>, Record<string, never>>("auth", "Logout", {}, { silentError: true, authProbe: true });

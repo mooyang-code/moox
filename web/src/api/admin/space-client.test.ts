@@ -1,19 +1,17 @@
-import "fake-indexeddb/auto";
 import { AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { selectedSpaceGeneration, setSelectedSpaceIdCache } from "./space-header";
 import { StaleSpaceRequestError } from "./stale-space";
 import { AuthSessionExpiredError } from "./auth-errors";
-import { saveSigningSession } from "@/utils/request-signing";
-import { expireBrowserSession, installSpaceAwareSignedClient, setSpaceInitializer } from "./signed-client";
+import { expireBrowserSession, installSpaceAwareClient, setSessionExpiredListener, setSpaceInitializer } from "./space-client";
 
 afterEach(() => {
-  localStorage.removeItem("user-info");
+  setSessionExpiredListener(null);
   window.location.hash = "#/";
 });
 
-describe("installSpaceAwareSignedClient", () => {
-  it("registers the Space header interceptor after signing so Axios executes it first", async () => {
+describe("installSpaceAwareClient", () => {
+  it("registers only the Space header interceptor: no signing headers, the browser carries the session cookie", async () => {
     const handlers: Array<
       (config: InternalAxiosRequestConfig) => InternalAxiosRequestConfig | Promise<InternalAxiosRequestConfig>
     > = [];
@@ -29,91 +27,69 @@ describe("installSpaceAwareSignedClient", () => {
     };
     setSelectedSpaceIdCache("space-1");
 
-    installSpaceAwareSignedClient(client as never);
+    installSpaceAwareClient(client as never);
 
-    expect(handlers).toHaveLength(2);
-    const config = { headers: new AxiosHeaders() } as InternalAxiosRequestConfig;
-    const prepared = await handlers[1](config);
+    expect(handlers).toHaveLength(1);
+    const config = { headers: new AxiosHeaders(), url: "/api/admin/x/Get" } as InternalAxiosRequestConfig;
+    const prepared = await handlers[0](config);
     expect(prepared.headers.get("X-Space-Id")).toBe("space-1");
+    for (const name of ["Authorization", "X-Access-Token", "X-Moox-Signature", "X-Moox-Nonce", "X-Moox-Timestamp"]) {
+      expect(prepared.headers.get(name)).toBeUndefined();
+    }
     setSelectedSpaceIdCache("");
   });
 
-  it("clears the browser session and redirects when authentication expires", async () => {
-    localStorage.setItem("user-info", JSON.stringify({ token: "token", sessionId: "session" }));
+  it("clears the account and redirects with the current page when the session expires", () => {
+    const cleared = vi.fn();
+    setSessionExpiredListener(cleared);
     window.location.hash = "#/collector/tasks";
 
-    const error = await expireBrowserSession();
+    const error = expireBrowserSession();
 
     expect(error).toBeInstanceOf(AuthSessionExpiredError);
-    expect(localStorage.getItem("user-info")).toBeNull();
+    expect(cleared).toHaveBeenCalledTimes(1);
     // 带着原地址去登录页，登录后回到采集任务页
     expect(window.location.hash).toBe(`#/login?redirect=${encodeURIComponent("/collector/tasks")}`);
   });
 
-  it("does not wrap the login page in another redirect", async () => {
+  it("does not wrap the login page in another redirect", () => {
     window.location.hash = "#/login?redirect=%2Fhome";
-    await expireBrowserSession();
+    expireBrowserSession();
     expect(window.location.hash).toBe("#/login?redirect=%2Fhome");
   });
 
   function responseErrorHandler() {
-    let handler: ((error: unknown) => Promise<unknown>) | undefined;
+    const handlers: Array<(error: unknown) => Promise<unknown>> = [];
     const client = {
       interceptors: {
         request: { use: () => undefined },
-        response: { use: (_ok: unknown, onError: (error: unknown) => Promise<unknown>) => (handler = onError) }
+        response: { use: (_ok: unknown, onError?: (error: unknown) => Promise<unknown>) => onError && handlers.push(onError) }
       }
     };
-    installSpaceAwareSignedClient(client as never);
-    return handler!;
+    installSpaceAwareClient(client as never);
+    return handlers[handlers.length - 1];
   }
 
-  it("keeps the new login when a late 401 belongs to a replaced session", async () => {
-    localStorage.setItem("user-info", JSON.stringify({ token: "new", sessionId: "session-2" }));
+  it("expires the session only on 401, and never for login probes or other statuses", async () => {
+    const cleared = vi.fn();
+    setSessionExpiredListener(cleared);
     window.location.hash = "#/collector/tasks";
     const onError = responseErrorHandler();
 
-    const lateError = { response: { status: 401 }, config: { authSessionId: "session-1" } };
-    await expect(onError(lateError)).rejects.toBe(lateError);
-
-    expect(localStorage.getItem("user-info")).not.toBeNull();
+    for (const error of [
+      { response: { status: 403 }, config: {} },
+      { response: { status: 429 }, config: {} },
+      { response: { status: 401 }, config: { authProbe: true } }
+    ]) {
+      await expect(onError(error)).rejects.toBe(error);
+    }
+    expect(cleared).not.toHaveBeenCalled();
     expect(window.location.hash).toBe("#/collector/tasks");
-  });
 
-  it("expires the browser session when the 401 belongs to the current session", async () => {
-    localStorage.setItem("user-info", JSON.stringify({ token: "t", sessionId: "session-1" }));
-    const onError = responseErrorHandler();
-
-    const error = { response: { status: 401 }, config: { authSessionId: "session-1" } };
-    await expect(onError(error)).rejects.toBe(error);
-
-    expect(localStorage.getItem("user-info")).toBeNull();
-    expect(window.location.hash).toBe("#/login");
-  });
-
-  it("re-signs with the new session instead of expiring it when the user logs in again during signing", async () => {
-    const handlers: Array<(config: InternalAxiosRequestConfig) => Promise<InternalAxiosRequestConfig>> = [];
-    const client = {
-      interceptors: { request: { use: (handler: never) => handlers.push(handler) }, response: { use: () => undefined } }
-    };
-    installSpaceAwareSignedClient(client as never);
-    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-    // 新会话的签名密钥已就绪；旧会话 session-1 没有密钥，读取期间用户登录成了 session-2
-    await saveSigningSession({ sessionId: "session-2", rawKeyHex: "00".repeat(32), expiresAt });
-    localStorage.setItem("user-info", JSON.stringify({ token: "old", sessionId: "session-1", expiresAt }));
-    window.location.hash = "#/collector/tasks";
-    const pending = handlers[0]({
-      headers: new AxiosHeaders(),
-      url: "/api/admin/x/Get",
-      method: "post"
-    } as InternalAxiosRequestConfig);
-    localStorage.setItem("user-info", JSON.stringify({ token: "new", sessionId: "session-2", expiresAt }));
-
-    const prepared = await pending;
-
-    expect(prepared.headers.Authorization).toBe("new");
-    expect(window.location.hash).toBe("#/collector/tasks");
-    expect(localStorage.getItem("user-info")).not.toBeNull();
+    const expired = { response: { status: 401 }, config: {} };
+    await expect(onError(expired)).rejects.toBe(expired);
+    expect(cleared).toHaveBeenCalledTimes(1);
+    expect(window.location.hash).toBe(`#/login?redirect=${encodeURIComponent("/collector/tasks")}`);
   });
 
   function spaceHandler() {
@@ -121,8 +97,8 @@ describe("installSpaceAwareSignedClient", () => {
     const client = {
       interceptors: { request: { use: (handler: never) => handlers.push(handler) }, response: { use: () => undefined } }
     };
-    installSpaceAwareSignedClient(client as never);
-    return handlers[1];
+    installSpaceAwareClient(client as never);
+    return handlers[0];
   }
 
   it("waits for the Space initializer before sending a Space-scoped request without a selected Space", async () => {
@@ -193,7 +169,7 @@ describe("installSpaceAwareSignedClient", () => {
         request: { use: () => undefined },
         response: {
           use: (ok?: ResponseOk, err?: ResponseErr) => {
-            // 只记录第一个登记的响应拦截器（空间过期处理），后面登记的是签名层自己的
+            // 只记录第一个登记的响应拦截器（空间过期处理），后面登记的是会话失效处理
             if (captured) return;
             captured = true;
             if (ok) onOk = ok;
@@ -202,7 +178,7 @@ describe("installSpaceAwareSignedClient", () => {
         }
       }
     };
-    installSpaceAwareSignedClient(client as never);
+    installSpaceAwareClient(client as never);
     setSelectedSpaceIdCache("space-b");
     const gen = selectedSpaceGeneration();
 
@@ -250,7 +226,7 @@ describe("installSpaceAwareSignedClient", () => {
     setSelectedSpaceIdCache("");
   });
 
-  it("rejects in-flight space reads the moment the Space changes, independent of signing/IndexedDB progress", async () => {
+  it("rejects in-flight space reads the moment the Space changes, independent of request progress", async () => {
     setSelectedSpaceIdCache("space-a");
     const seen: Array<{ url: string; signal?: AbortSignal }> = [];
     const hang = (url: string, _data?: unknown, config?: { signal?: AbortSignal }) => {
@@ -263,7 +239,7 @@ describe("installSpaceAwareSignedClient", () => {
       get: hang,
       request: (config: { url?: string; signal?: AbortSignal }) => hang(config.url || "", undefined, config)
     };
-    installSpaceAwareSignedClient(client as never);
+    installSpaceAwareClient(client as never);
     const read = client.post("/api/admin/collector/GetTask", {});
     void client.post("/api/admin/sysdeploy/GetCatalog", {});
     void client.post("/api/admin/callback-dispatcher/ListEventRules", {});
@@ -300,7 +276,7 @@ describe("installSpaceAwareSignedClient", () => {
         return new Promise(() => undefined);
       }
     };
-    installSpaceAwareSignedClient(client as never);
+    installSpaceAwareClient(client as never);
     const read = client.post("/api/admin/collector/GetTask", {});
     const outcome = read.then(
       () => "resolved",

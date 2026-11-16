@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dgraph-io/badger/v4"
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	"gorm.io/gorm"
@@ -15,8 +14,7 @@ import (
 
 // Manager 数据库管理器，负责数据库初始化和连接管理
 type Manager struct {
-	db    *gorm.DB
-	cache *badger.DB
+	db *gorm.DB
 }
 
 // NewManager 创建数据库管理器
@@ -49,50 +47,10 @@ func (dm *Manager) Initialize(dbCfg *config.DatabaseConfig) error {
 	return nil
 }
 
-// InitializeCache 初始化缓存（BadgerDB）
-func (dm *Manager) InitializeCache(cacheDir string) error {
-	if cacheDir == "" {
-		cacheDir = "./data/badger"
-	}
-
-	// 确保目录存在
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return fmt.Errorf("failed to create cache directory: %w", err)
-	}
-
-	opts := badger.DefaultOptions(cacheDir)
-	opts.Logger = nil // 禁用 BadgerDB 的默认日志
-	// 这里只有登录盐、会话和 nonce，默认值会预分配 2GB 的 vlog 和 128MB 的 memtable 文件，发布复制状态时要展开成实心文件。
-	opts.ValueLogFileSize = 16 << 20
-	opts.MemTableSize = 8 << 20
-
-	cache, err := badger.Open(opts)
-	if err != nil {
-		return fmt.Errorf("failed to open cache: %w", err)
-	}
-
-	dm.cache = cache
-	log.Infof("初始化BadgerDB缓存: %s", cacheDir)
-	return nil
-}
-
 // GetDB 获取数据库连接（仅供需要原始db的API层使用）
 // 注意：业务逻辑应通过DAO访问数据库，避免直接使用此方法
 func (dm *Manager) GetDB() *gorm.DB {
 	return dm.db
-}
-
-// CloseCache 关闭缓存，退出时调用：关闭后 vlog 截断到实际大小。
-func (dm *Manager) CloseCache() error {
-	if dm.cache == nil {
-		return nil
-	}
-	return dm.cache.Close()
-}
-
-// GetCache 获取缓存连接
-func (dm *Manager) GetCache() *badger.DB {
-	return dm.cache
 }
 
 func buildSQLiteDSN(dbPath string) string {

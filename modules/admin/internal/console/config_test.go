@@ -1,61 +1,67 @@
 package console
 
 import (
-	"github.com/gorilla/mux"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gorilla/mux"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSetConfig_GetConfig_RoundTrip_ShouldWork(t *testing.T) {
-	cfg := &Config{
-		JWT:  JWTConfig{SecretKey: "secret"},
-		CORS: CORSConfig{AllowedOrigins: []string{"https://app.example.com"}},
-	}
+	cfg := &Config{Console: ConsoleConfig{AllowedOrigins: []string{"http://localhost:9527"}}}
 	SetConfig(cfg)
-	got := GetConfig()
-	assert.Equal(t, cfg.JWT.SecretKey, got.JWT.SecretKey)
-	assert.Equal(t, cfg.CORS.AllowedOrigins, got.CORS.AllowedOrigins)
+	assert.Equal(t, cfg.Console.AllowedOrigins, GetConfig().Console.AllowedOrigins)
 }
 
-func TestApplyCORSHeaders_EmptyOriginWithWildcard_ShouldSetStar(t *testing.T) {
-	SetConfig(&Config{CORS: CORSConfig{AllowedOrigins: []string{"*"}}})
-	rr := httptest.NewRecorder()
-	applyCORSHeaders(rr, "")
-	assert.Equal(t, "*", rr.Header().Get("Access-Control-Allow-Origin"))
-}
-
-func TestLoadConfig_ValidYAML_ShouldParse(t *testing.T) {
+func loadConsoleConfigFrom(t *testing.T, content string) (*Config, error) {
+	t.Helper()
 	dir := t.TempDir()
-	configDir := filepath.Join(dir, "config")
-	require.NoError(t, os.MkdirAll(configDir, 0o755))
-	content := `jwt:
-  secret_key: test-secret
-console:
-  debug: true
-cors:
-  allowed_origins:
-    - "*"
-rate_limit:
-  default_qps: 100
-  default_burst: 200
-`
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "console.yaml"), []byte(content), 0o644))
-
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "config"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "console.yaml"), []byte(content), 0o644))
 	origWD, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(dir))
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
+	return LoadConfig()
+}
 
+func TestLoadConfig_ValidYAML_ShouldParse(t *testing.T) {
+	cfg, err := loadConsoleConfigFrom(t, `console:
+  allowed_origins:
+    - "http://localhost:9527"
+rate_limit:
+  method_limits:
+    "/api/admin/auth/Login":
+      qps: 1
+      burst: 2
+`)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"http://localhost:9527"}, cfg.Console.AllowedOrigins)
+	assert.Equal(t, 2, cfg.RateLimit.MethodLimits["/api/admin/auth/Login"].Burst)
+}
+
+// 仓库里的 console.yaml 生产不放开任何别的来源。
+func TestShippedConsoleConfigHasNoExtraOrigins(t *testing.T) {
+	origWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(filepath.Join("..", "..")))
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
-	assert.Equal(t, "test-secret", cfg.JWT.SecretKey)
-	assert.True(t, cfg.Console.Debug)
-	assert.Equal(t, 100, cfg.RateLimit.DefaultQPS)
+	assert.Empty(t, cfg.Console.AllowedOrigins)
+	assert.Contains(t, cfg.RateLimit.MethodLimits, "/api/admin/auth/Login")
+}
+
+func TestLoadConfig_RejectsInvalidOrigins(t *testing.T) {
+	for _, origin := range []string{"*", "https://*.example.com", "localhost:9527", "https://a.example/path", "ftp://a.example"} {
+		_, err := loadConsoleConfigFrom(t, "console:\n  allowed_origins:\n    - \""+origin+"\"\n")
+		require.ErrorContains(t, err, "console.allowed_origins", origin)
+	}
 }
 
 func TestLoadConfig_MissingFile_ShouldError(t *testing.T) {
@@ -70,8 +76,8 @@ func TestLoadConfig_MissingFile_ShouldError(t *testing.T) {
 }
 
 func TestAdminRouterKeepsBrowserRoutesAndRejectsMachineSurfaces(t *testing.T) {
-	hr := newTestRouter(t, nil, nil)
-	router := hr.buildControlRouter()
+	SetConfig(&Config{})
+	router := newTestRouter(t, nil, nil, nil).buildControlRouter()
 	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/admin/health", "/api/gateway-control/routes", "/api/gateway-control/status"} {
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
@@ -79,15 +85,15 @@ func TestAdminRouterKeepsBrowserRoutesAndRejectsMachineSurfaces(t *testing.T) {
 			t.Fatalf("admin router exposed %s: %d", path, rr.Code)
 		}
 	}
-
-	for _, path := range []string{
-		"/api/admin/auth/GetLoginSalt",
-	} {
-		request := httptest.NewRequest(http.MethodGet, path, nil)
-		match := &mux.RouteMatch{}
-		if !router.Match(request, match) {
-			t.Fatalf("admin router did not register %s", path)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		if !router.Match(httptest.NewRequest(method, "/api/admin/auth/Login", nil), &mux.RouteMatch{}) {
+			t.Fatalf("admin router did not register %s", method)
 		}
+	}
+	for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodOptions} {
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, httptest.NewRequest(method, "/api/admin/auth/Login", nil))
+		require.Equal(t, http.StatusNotFound, rr.Code, "没有跨域预检，也不收别的方法：%s", method)
 	}
 
 	machineRR := httptest.NewRecorder()

@@ -23,8 +23,7 @@ describe("frontend network contract", () => {
   });
 
   it("keeps auth and raw routes under the same-origin Admin gateway", () => {
-    expect(source).toContain("/api/admin/auth/GetLoginSalt");
-    expect(source).toContain("/api/admin/auth/Login");
+    expect(normalizeSource(source)).toContain('callControl<{username:string;password:string},LoginResult>("auth","Login"');
     expect(source).toContain("/api/admin/ssh/WsConnect");
     expect(source).toContain("/api/admin/ssh/SftpDownload");
     expect(source).toContain("/api/admin/ssh/SftpUpload");
@@ -33,6 +32,13 @@ describe("frontend network contract", () => {
     expect(archiveRaw).toContain("/api/admin/archive/${method}");
     expect(archiveRaw).toContain('"PartitionDownload"');
     expect(archiveRaw).toContain('"RecentRows"');
+  });
+
+  // 会话在 HttpOnly Cookie 里：页面不再取盐值、加密密码、签名请求、换票据，也不在本地存令牌。
+  it("relies on the session cookie instead of tokens, signatures or tickets", () => {
+    expect(source).not.toMatch(/GetLoginSalt|IssueRawSessionTicket|request-signing|X-Moox-Signature|ticket=/);
+    expect(source).not.toMatch(/Authorization|X-Access-Token|access_token|request_signing_key/);
+    expect(source).not.toMatch(/VITE_ADMIN_ORIGIN|withCredentials:\s*true/);
   });
 
   it("uploads to external pre-signed URLs without session credentials", () => {

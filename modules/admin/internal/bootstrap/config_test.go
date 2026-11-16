@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"trpc.group/trpc-go/trpc-go"
+	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -46,40 +46,6 @@ func TestValidateSetupListenerRequiresDedicatedService(t *testing.T) {
 	err := validateSetupListener(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "trpc.moox.admin.Setup")
-}
-
-func TestGatewayContainsWildcardOrigin_HasWildcard_ShouldReturnTrue(t *testing.T) {
-	assert.True(t, consoleContainsWildcardOrigin([]string{"https://a.com", "*"}))
-}
-
-func TestGatewayContainsWildcardOrigin_NoWildcard_ShouldReturnFalse(t *testing.T) {
-	assert.False(t, consoleContainsWildcardOrigin([]string{"https://a.com", "https://b.com"}))
-}
-
-func TestValidateGatewayCORS_NilConfig_ShouldError(t *testing.T) {
-	err := validateConsoleCORS(nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nil")
-}
-
-func TestValidateGatewayCORS_ProdEmptyOrigins_ShouldError(t *testing.T) {
-	cfg := &console.Config{Console: console.ConsoleConfig{Debug: false}}
-	err := validateConsoleCORS(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cors.allowed_origins")
-}
-
-func TestValidateGatewayCORS_DebugEmptyOrigins_ShouldPass(t *testing.T) {
-	cfg := &console.Config{Console: console.ConsoleConfig{Debug: true}}
-	require.NoError(t, validateConsoleCORS(cfg))
-}
-
-func TestValidateGatewayCORS_WithOrigins_ShouldPass(t *testing.T) {
-	cfg := &console.Config{
-		Console: console.ConsoleConfig{Debug: false},
-		CORS:    console.CORSConfig{AllowedOrigins: []string{"https://admin.example.com"}},
-	}
-	require.NoError(t, validateConsoleCORS(cfg))
 }
 
 func TestLoadEncryptionKey_FromEnv_ShouldPass(t *testing.T) {
@@ -126,13 +92,11 @@ func setupBootstrapConfigDir(t *testing.T) string {
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "app.yaml"), []byte(`database:
   path: ./data/admin.db
 `), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "console.yaml"), []byte(`jwt:
-  secret_key: test-secret-key-32bytes-long-123456
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "console.yaml"), []byte(`session:
+  ttl: 12h
 console:
-  debug: true
-cors:
   allowed_origins:
-    - "*"
+    - "http://localhost:9527"
 `), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "trpc_go.yaml"), []byte(`server:
   service:
@@ -166,7 +130,8 @@ func TestLoadConfigs_ValidFiles_ShouldLoadAllModules(t *testing.T) {
 	assert.NotNil(t, cfg.Auth)
 	assert.NotNil(t, cfg.Console)
 	assert.Equal(t, "admin-node-test", cfg.AdminNodeID)
-	assert.Equal(t, "test-secret-key-32bytes-long-123456", cfg.Console.JWT.SecretKey)
+	assert.Equal(t, 12*time.Hour, cfg.Auth.Session.TTL)
+	assert.Equal(t, []string{"http://localhost:9527"}, cfg.Console.Console.AllowedOrigins)
 }
 
 func TestLoadConfigs_MissingAdminNodeID_ShouldFailAtStartup(t *testing.T) {
@@ -179,19 +144,11 @@ func TestLoadConfigs_MissingAdminNodeID_ShouldFailAtStartup(t *testing.T) {
 	assert.Contains(t, err.Error(), "MOOX_ADMIN_NODE_ID")
 }
 
-func TestLoadConfigs_EmptyJWTSecret_ShouldError(t *testing.T) {
+func TestLoadConfigs_RejectsWildcardDevelopmentOrigin(t *testing.T) {
 	dir := setupBootstrapConfigDir(t)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "console.yaml"), []byte(`jwt:
-  secret_key: ""
-console:
-  debug: true
-cors:
-  allowed_origins:
-    - "*"
-`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "console.yaml"), []byte("console:\n  allowed_origins:\n    - \"*\"\n"), 0o644))
 	_, err := loadConfigsForTest(t)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "jwt.secret_key")
+	require.ErrorContains(t, err, "console.allowed_origins")
 }
 
 func TestRegisterMetricsReporter_MissingService_ShouldSkip(t *testing.T) {

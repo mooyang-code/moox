@@ -1,10 +1,9 @@
 import { gatewayURL } from "@/api/gateway";
-import { issueRawSessionTicketAPI, type RawSessionTicketOperation } from "@/api/modules/user";
 import type { ArchiveRecentRowsRsp } from "./types";
 
 /**
  * 归档分区下载与最新数据走 Admin 的裸 HTTP（/api/admin/archive/PartitionDownload|RecentRows），由 Admin 转给归档执行器的数据端口。
- * 鉴权用一次性 ticket：资源填 "<空间>/<数据集>"，与 query 里的 space、dataset 必须一致；每次下载、每翻一页都要重新取。
+ * 与页面同源，浏览器自动带上会话 Cookie，不需要票据。
  * 失败时响应体是 JSON {code, msg, success}，msg 是给人看的中文，抛出的 ArchiveRawError 带上它和状态码。
  */
 export class ArchiveRawError extends Error {
@@ -19,7 +18,8 @@ export class ArchiveRawError extends Error {
 
 /** 响应体读不出 msg 时按状态码给的说明，与 Admin 转发器、执行器数据端口的错误口径一致。 */
 const STATUS_TEXT: Record<number, string> = {
-  401: "链接已失效，请重试",
+  401: "登录已失效，请重新登录后再试",
+  403: "请求来源不是管理台页面，已拒绝",
   404: "执行器上找不到这个任务或分区",
   409: "远端副本或数据集说明还没有就绪",
   429: "同时下载的数量已达上限，请稍后再试",
@@ -30,7 +30,7 @@ const STATUS_TEXT: Record<number, string> = {
 };
 
 async function rawError(response: Response): Promise<ArchiveRawError> {
-  // 401 是一次性 ticket 已用过或过期（鉴权层的响应体是 {ret_info:{code,msg}}，msg 不适合直接给人看）：重新点一次就会取新的
+  // 401 是会话失效（鉴权层的响应体是 {ret_info:{code,msg}}），按状态码说明
   if (response.status === 401) return new ArchiveRawError(STATUS_TEXT[401], 401);
   let message = "";
   try {
@@ -43,11 +43,8 @@ async function rawError(response: Response): Promise<ArchiveRawError> {
   return new ArchiveRawError(message || STATUS_TEXT[response.status] || `请求失败（HTTP ${response.status}）`, response.status);
 }
 
-async function rawURL(operation: RawSessionTicketOperation, method: string, params: Record<string, string | number | undefined>) {
-  const space = String(params.space || "");
-  const dataset = String(params.dataset || "");
-  const { ticket } = await issueRawSessionTicketAPI(operation, `${space}/${dataset}`);
-  const query = Object.entries({ ticket, ...params })
+function rawURL(method: string, params: Record<string, string | number | undefined>) {
+  const query = Object.entries(params)
     .filter(([, value]) => value !== undefined && value !== "")
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
     .join("&");
@@ -66,8 +63,7 @@ export interface ArchiveRecentRowsReq {
 
 /** 某个标的在执行器暂存库里最近的行（按 data_time 倒序）。 */
 export async function fetchArchiveRecentRows(req: ArchiveRecentRowsReq, signal?: AbortSignal): Promise<ArchiveRecentRowsRsp> {
-  const url = await rawURL("archive_recent", "RecentRows", { ...req });
-  const response = await fetch(url, { signal, cache: "no-store" });
+  const response = await fetch(rawURL("RecentRows", { ...req }), { signal, cache: "no-store", credentials: "same-origin" });
   if (!response.ok) throw await rawError(response);
   return (await response.json()) as ArchiveRecentRowsRsp;
 }
@@ -101,8 +97,7 @@ export async function downloadArchivePartition(
   signal?: AbortSignal
 ): Promise<ArchiveDownload> {
   const { fallbackName, ...params } = req;
-  const url = await rawURL("archive_download", "PartitionDownload", params);
-  const response = await fetch(url, { signal, cache: "no-store" });
+  const response = await fetch(rawURL("PartitionDownload", params), { signal, cache: "no-store", credentials: "same-origin" });
   if (!response.ok) throw await rawError(response);
   // 链路上某层做了内容压缩时，Content-Length 是压缩后的长度，与读到的（已解压）字节数不可比，不核对
   const encoding = (response.headers.get("Content-Encoding") || "identity").trim().toLowerCase();

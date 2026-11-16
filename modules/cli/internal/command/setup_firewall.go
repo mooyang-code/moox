@@ -278,9 +278,9 @@ func setupFirewallTargets(manifest setupconfig.Manifest) ([]setupFirewallTarget,
 	tradeNode := strings.TrimSpace(manifest.ComponentHost("trade"))
 	for _, host := range manifest.Hosts() {
 		if strings.EqualFold(strings.TrimSpace(host.Name), tradeNode) {
+			// Trade 的服务端口 11200 只听本机，经主机网关 11003 进入，不放行。
 			add(host, []cloudtencent.CreateFirewallRulesOptions{
 				{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX service gateway native"},
-				{Protocol: "TCP", Ports: "11200", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX Trade console"},
 			})
 		}
 	}

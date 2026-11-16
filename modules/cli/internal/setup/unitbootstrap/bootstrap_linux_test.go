@@ -54,13 +54,13 @@ func bootstrapFixture(t *testing.T) (Request, string) {
 	for _, id := range components {
 		request.Control.Environment[id] = environment()
 	}
-	request.Control.Environment["admin"]["MOOX_ADMIN_JWT_SECRET_KEY"] = "synthetic-bootstrap-jwt-secret-at-least-32-bytes"
+	request.RuntimeID = "synthetic-bootstrap-runtime-identity-at-least-32-bytes"
 	write := func(name, raw string) string {
 		filename := filepath.Join(root, name)
 		require.NoError(t, os.WriteFile(filename, []byte(raw), 0o600))
 		return filename
 	}
-	request.Control.Overrides["admin/config/console.yaml"] = write("console.yaml", "jwt:\n  secret_key: ''\n  access_expired: 24h\nconsole:\n  debug: false\ncors:\n  allowed_origins: [https://localhost:9527]\n")
+	request.Control.Overrides["admin/config/console.yaml"] = write("console.yaml", "session:\n  ttl: 24h\nconsole:\n  allowed_origins: []\n")
 	request.Control.Overrides["console-proxy/config/app.yaml"] = write("proxy.yaml", "public:\n  host: localhost\n  bind: 127.0.0.1\n  port: 9527\n  http3: false\ntls:\n  storage_root: ../data/caddy/caddy\n  ca_baseline: ../data/caddy/internal-ca.sha256\n  ca_publish_dir: ../certs/caddy\nupstreams:\n  admin: 127.0.0.1:11000\n  web: 127.0.0.1:9528\nhealth:\n  listen: 127.0.0.1:19528\nlifecycle:\n  drain_timeout: 2s\n  engine_stop_timeout: 1s\n  cleanup_margin: 1s\n  startup_timeout: 15s\n")
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -84,7 +84,7 @@ func runBootstrap(t *testing.T, request Request, root string) (Result, error) {
 	require.NoError(t, os.WriteFile(filename, append(raw, '\n'), 0o600))
 	command := exec.CommandContext(t.Context(), os.Getenv("MOOX_RUNTIME_BINARY"), "bootstrap", "--request", filename)
 	output, err := command.CombinedOutput()
-	require.NotContains(t, string(output), "synthetic-bootstrap-jwt-secret")
+	require.NotContains(t, string(output), "synthetic-initial-admin-password")
 	require.NotContains(t, string(output), "PRIVATE KEY")
 	if err != nil {
 		return Result{}, fmt.Errorf("bootstrap helper: %w: %s", err, output)
@@ -200,9 +200,8 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	}
 	require.Equal(t, "initial", description(initial.ControlDirectory))
 	require.Equal(t, "rerun", description(upgraded.ControlDirectory))
-	// Credential changes are rejected before stopping. Use an invalid runtime
-	// duration to keep exercising an actual activation failure and rollback.
-	require.NoError(t, os.WriteFile(request.Control.Overrides["admin/config/console.yaml"], []byte("jwt:\n  secret_key: ''\n  access_expired: invalid-duration\nconsole:\n  debug: false\n"), 0o600))
+	// 运行标识变化在停进程之前就被拒绝；这里用 Admin 读不了的会话时长，制造一次真正的激活失败并回滚。
+	require.NoError(t, os.WriteFile(request.Control.Overrides["admin/config/console.yaml"], []byte("session:\n  ttl: invalid-duration\n"), 0o600))
 	_, err = runBootstrap(t, request, root)
 	require.Error(t, err)
 	journalRaw, err := os.ReadFile(filepath.Join(request.DeploymentRoot, "bootstrap/workflow.json"))

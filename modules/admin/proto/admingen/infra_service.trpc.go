@@ -19,34 +19,12 @@ import (
 
 // AuthService defines service.
 type AuthService interface {
-	// GetLoginSalt 获取登录盐值
-	GetLoginSalt(ctx context.Context, req *GetLoginSaltReq) (*GetLoginSaltRsp, error)
 	// Login 用户登录
 	Login(ctx context.Context, req *LoginReq) (*LoginRsp, error)
-
+	// Logout 退出登录，删除当前会话
 	Logout(ctx context.Context, req *LogoutReq) (*LogoutRsp, error)
-
-	IssueRawSessionTicket(ctx context.Context, req *IssueRawSessionTicketReq) (*IssueRawSessionTicketRsp, error)
 	// GetUserInfo 获取用户信息
 	GetUserInfo(ctx context.Context, req *GetUserInfoReq) (*GetUserInfoRsp, error)
-}
-
-func AuthService_GetLoginSalt_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetLoginSaltReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AuthService).GetLoginSalt(ctx, reqbody.(*GetLoginSaltReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
 }
 
 func AuthService_Login_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -85,24 +63,6 @@ func AuthService_Logout_Handler(svr interface{}, ctx context.Context, f server.F
 	return rsp, nil
 }
 
-func AuthService_IssueRawSessionTicket_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &IssueRawSessionTicketReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AuthService).IssueRawSessionTicket(ctx, reqbody.(*IssueRawSessionTicketReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func AuthService_GetUserInfo_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetUserInfoReq{}
 	filters, err := f(req)
@@ -127,20 +87,12 @@ var AuthServer_ServiceDesc = server.ServiceDesc{
 	HandlerType: ((*AuthService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.infra.Auth/GetLoginSalt",
-			Func: AuthService_GetLoginSalt_Handler,
-		},
-		{
 			Name: "/trpc.moox.infra.Auth/Login",
 			Func: AuthService_Login_Handler,
 		},
 		{
 			Name: "/trpc.moox.infra.Auth/Logout",
 			Func: AuthService_Logout_Handler,
-		},
-		{
-			Name: "/trpc.moox.infra.Auth/IssueRawSessionTicket",
-			Func: AuthService_IssueRawSessionTicket_Handler,
 		},
 		{
 			Name: "/trpc.moox.infra.Auth/GetUserInfo",
@@ -160,20 +112,14 @@ func RegisterAuthService(s server.Service, svr AuthService) {
 
 type UnimplementedAuth struct{}
 
-// GetLoginSalt 获取登录盐值
-func (s *UnimplementedAuth) GetLoginSalt(ctx context.Context, req *GetLoginSaltReq) (*GetLoginSaltRsp, error) {
-	return nil, errors.New("rpc GetLoginSalt of service Auth is not implemented")
-}
-
 // Login 用户登录
 func (s *UnimplementedAuth) Login(ctx context.Context, req *LoginReq) (*LoginRsp, error) {
 	return nil, errors.New("rpc Login of service Auth is not implemented")
 }
+
+// Logout 退出登录，删除当前会话
 func (s *UnimplementedAuth) Logout(ctx context.Context, req *LogoutReq) (*LogoutRsp, error) {
 	return nil, errors.New("rpc Logout of service Auth is not implemented")
-}
-func (s *UnimplementedAuth) IssueRawSessionTicket(ctx context.Context, req *IssueRawSessionTicketReq) (*IssueRawSessionTicketRsp, error) {
-	return nil, errors.New("rpc IssueRawSessionTicket of service Auth is not implemented")
 }
 
 // GetUserInfo 获取用户信息
@@ -189,14 +135,10 @@ func (s *UnimplementedAuth) GetUserInfo(ctx context.Context, req *GetUserInfoReq
 
 // AuthClientProxy defines service client proxy
 type AuthClientProxy interface {
-	// GetLoginSalt 获取登录盐值
-	GetLoginSalt(ctx context.Context, req *GetLoginSaltReq, opts ...client.Option) (rsp *GetLoginSaltRsp, err error)
 	// Login 用户登录
 	Login(ctx context.Context, req *LoginReq, opts ...client.Option) (rsp *LoginRsp, err error)
-
+	// Logout 退出登录，删除当前会话
 	Logout(ctx context.Context, req *LogoutReq, opts ...client.Option) (rsp *LogoutRsp, err error)
-
-	IssueRawSessionTicket(ctx context.Context, req *IssueRawSessionTicketReq, opts ...client.Option) (rsp *IssueRawSessionTicketRsp, err error)
 	// GetUserInfo 获取用户信息
 	GetUserInfo(ctx context.Context, req *GetUserInfoReq, opts ...client.Option) (rsp *GetUserInfoRsp, err error)
 }
@@ -208,26 +150,6 @@ type AuthClientProxyImpl struct {
 
 var NewAuthClientProxy = func(opts ...client.Option) AuthClientProxy {
 	return &AuthClientProxyImpl{client: client.DefaultClient, opts: opts}
-}
-
-func (c *AuthClientProxyImpl) GetLoginSalt(ctx context.Context, req *GetLoginSaltReq, opts ...client.Option) (*GetLoginSaltRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.infra.Auth/GetLoginSalt")
-	msg.WithCalleeServiceName(AuthServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("infra")
-	msg.WithCalleeService("Auth")
-	msg.WithCalleeMethod("GetLoginSalt")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetLoginSaltRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
 }
 
 func (c *AuthClientProxyImpl) Login(ctx context.Context, req *LoginReq, opts ...client.Option) (*LoginRsp, error) {
@@ -264,26 +186,6 @@ func (c *AuthClientProxyImpl) Logout(ctx context.Context, req *LogoutReq, opts .
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &LogoutRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *AuthClientProxyImpl) IssueRawSessionTicket(ctx context.Context, req *IssueRawSessionTicketReq, opts ...client.Option) (*IssueRawSessionTicketRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.infra.Auth/IssueRawSessionTicket")
-	msg.WithCalleeServiceName(AuthServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("infra")
-	msg.WithCalleeService("Auth")
-	msg.WithCalleeMethod("IssueRawSessionTicket")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &IssueRawSessionTicketRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

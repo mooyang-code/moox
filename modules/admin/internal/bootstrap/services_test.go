@@ -28,11 +28,6 @@ func setupBootstrapTestDB(t *testing.T) *database.Manager {
 
 func TestCreateCoreServices_ValidDB_ShouldCreateServices(t *testing.T) {
 	mgr := setupBootstrapTestDB(t)
-	defer func() {
-		if mgr.GetCache() != nil {
-			_ = mgr.GetCache().Close()
-		}
-	}()
 
 	cfg := &Config{App: &config.AppConfig{}, AdminNodeID: "admin-node-test"}
 	services, err := createCoreServices(context.Background(), mgr, cfg)
@@ -55,11 +50,6 @@ func TestInitializeDatabase_ValidPath_ShouldOpenDB(t *testing.T) {
 
 func TestStartBackgroundServices_FullFlow_ShouldPass(t *testing.T) {
 	mgr := setupBootstrapTestDB(t)
-	defer func() {
-		if mgr.GetCache() != nil {
-			_ = mgr.GetCache().Close()
-		}
-	}()
 
 	cfg := &Config{
 		AdminNodeID: "admin-node-test",

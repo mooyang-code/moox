@@ -5,7 +5,7 @@ const transport = vi.hoisted(() => ({ responseUse: vi.fn() }));
 vi.mock("axios", () => ({
   default: { create: () => ({ post: vi.fn(), interceptors: { response: { use: transport.responseUse } } }) }
 }));
-vi.mock("./signed-client", () => ({ installSpaceAwareSignedClient: vi.fn(), expireBrowserSession: vi.fn() }));
+vi.mock("./space-client", () => ({ installSpaceAwareClient: vi.fn() }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { error: vi.fn() } }));
 
 import { recordServerDate, serverNow } from "./http";

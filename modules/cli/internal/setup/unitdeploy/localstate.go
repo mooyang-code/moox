@@ -101,7 +101,7 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 	raw, err := os.ReadFile(filepath.Join(stateDir, "runtime-identity.json"))
 	if err == nil {
 		var identity runtimeIdentity
-		if json.Unmarshal(raw, &identity) == nil && identity.JWTSecret != "" {
+		if json.Unmarshal(raw, &identity) == nil && identity.RuntimeID != "" {
 			state.RuntimeSHA256 = runtimeBinding(identity)
 		}
 	}

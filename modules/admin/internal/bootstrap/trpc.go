@@ -9,7 +9,7 @@ import (
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/archiveproxy"
 	authsvr "github.com/mooyang-code/moox/modules/admin/internal/service/auth"
-	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
 	setuprpc "github.com/mooyang-code/moox/modules/admin/internal/service/setup/rpc"
@@ -44,26 +44,24 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		}
 		return rpc.Register(desc, implementation)
 	}
-	// 1. 注册认证服务
+	// 1. 注册认证服务。浏览器会话只放在进程内存里，认证服务与控制台共用这一份。
 	log.Info("正在初始化认证服务...")
-	authImp, err := authsvr.NewService(cfg.Auth, services.DBManager)
+	sessions, err := session.NewStore(cfg.Auth.Session.TTL)
+	if err != nil {
+		return err
+	}
+	authImp, err := authsvr.NewService(cfg.Auth, services.DBManager, sessions)
 	if err != nil {
 		return err
 	}
 	if err := register(&adminpb.AuthServer_ServiceDesc, authImp); err != nil {
 		return err
 	}
-	// Auth initializes the shared durable Badger cache. GatewayControl uses its
-	// own nonce namespace, independent of each host gateway's local nonce DB.
-	cache, err := authdao.NewCacheDBFromBadger(services.DBManager.GetCache())
-	if err != nil {
-		return err
-	}
 	master, err := adminsecurity.GetEncryptionKey()
 	if err != nil {
 		return err
 	}
-	control, err := gatewaycontrol.NewService(services.DBManager.GetDB(), cfg.AdminNodeID, master, authdao.NewUserDAO(services.DBManager.GetDB(), cache))
+	control, err := gatewaycontrol.NewService(services.DBManager.GetDB(), cfg.AdminNodeID, master)
 	if err != nil {
 		return err
 	}
@@ -85,8 +83,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 	console.SetRawSessionOwnerVerifier(services.SSHService.SessionBelongsToUser)
-	// 注册 SSH 裸 HTTP 处理器。每次连接/传输必须先通过已签名的管理 RPC
-	// 获取与操作类型绑定的一次性 ticket；session_id 本身不承担鉴权。
+	// 注册 SSH 裸 HTTP 处理器。和 RPC 一样按会话 Cookie 鉴权，另外要求 session_id 是当前用户建的 SSH 会话。
 	console.RegisterRawHandler("ssh", "WsConnect", console.RawHandler(sshrpc.WebSocketConnectHandler(services.SSHService)))
 	console.RegisterRawHandler("ssh", "SftpDownload", console.RawHandler(sshrpc.SftpDownloadHandler(services.SSHService)))
 	console.RegisterRawHandler("ssh", "SftpUpload", console.RawHandler(sshrpc.SftpUploadHandler(services.SSHService)))
@@ -116,12 +113,12 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	if err != nil {
 		return err
 	}
-	if err := console.InitConsoleServices(s, local, gateway, services.SpaceMgr); err != nil {
+	if err := console.InitConsoleServices(s, local, gateway, sessions, services.SpaceMgr); err != nil {
 		_ = gateway.Close()
 		return err
 	}
 	services.consoleGateway = gateway
-	// 归档的分区副本下载与最新数据预览：裸 HTTP 处理器，先消费与 <空间>/<数据集> 绑定的一次性 ticket，
+	// 归档的分区副本下载与最新数据预览：裸 HTTP 处理器，按会话 Cookie 鉴权后，
 	// 再按拓扑里唯一启用的 archive-worker 部署转发到它的数据端口（本机直连，只出站主机经 console 网关客户端中转）。
 	if err := registerArchiveProxy(services, cfg.AdminNodeID, gateway); err != nil {
 		services.closeGateways()

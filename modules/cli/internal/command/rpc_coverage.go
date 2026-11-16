@@ -107,11 +107,9 @@ var cliOnlyCoverage = map[string]string{
 var consoleOnly = map[string]string{
 	"trpc.moox.collector.CollectMgr/CreateCloudAccount": cloudAccountWriteReason,
 	"trpc.moox.collector.CollectMgr/UpdateCloudAccount": cloudAccountWriteReason,
-	"trpc.moox.infra.Auth/GetLoginSalt":                 authReason,
 	"trpc.moox.infra.Auth/Login":                        authReason,
 	"trpc.moox.infra.Auth/Logout":                       authReason,
 	"trpc.moox.infra.Auth/GetUserInfo":                  authReason,
-	"trpc.moox.infra.Auth/IssueRawSessionTicket":        authReason,
 
 	"trpc.moox.ops.Ssh/CreateSession":     sshReason,
 	"trpc.moox.ops.Ssh/DisconnectSession": sshReason,

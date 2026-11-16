@@ -3,7 +3,7 @@ import { Message } from "@arco-design/web-vue";
 import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess } from "../ret-info";
 import type { OperatorAction, Order, RetInfo } from "./types";
-import { installSpaceAwareSignedClient } from "../admin/signed-client";
+import { installSpaceAwareClient } from "../admin/space-client";
 import { explainTransportError } from "../network-error";
 
 const tradeServiceMap = {
@@ -152,7 +152,7 @@ export async function callTrade<TReq extends object, TRsp extends { ret_info: Re
   return rsp.data;
 }
 
-installSpaceAwareSignedClient(tradeClient);
+installSpaceAwareClient(tradeClient);
 
 tradeClient.interceptors.response.use(
   rsp => {

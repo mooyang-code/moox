@@ -12,10 +12,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/errs"
 )
 
-const (
-	maxResponseBytes      = 1 << 20
-	TradeGatewayHTTPSPort = 11001
-)
+const maxResponseBytes = 1 << 20
 
 type Client struct {
 	gateway gatewayclient.Invoker

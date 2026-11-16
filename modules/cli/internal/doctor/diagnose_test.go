@@ -184,7 +184,8 @@ func TestRunDiagnoseDisabledModuleDoesNotFailHealthCheck(t *testing.T) {
 	require.Equal(t, core.ConclusionHealthy, result.Conclusion)
 }
 
-// 上报缺失或过期时经 SSH 在目标机上请求本机 /readyz：就绪算通过，端口不通或未就绪算失败，SSH 连不上记为无法判断。
+// 上报缺失或过期时经 SSH 在目标机上请求本机 /readyz：就绪只记警告（Monitor 仍按停止上报算），端口不通或未就绪算失败，
+// SSH 连不上记为无法判断。
 func TestRunDiagnoseProbesMissingHealthReportOverSSH(t *testing.T) {
 	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", NodeId: "node-a", Expected: true}}}
 	id := "service.health:factor-mgr@node-a"
@@ -201,7 +202,9 @@ func TestRunDiagnoseProbesMissingHealthReportOverSSH(t *testing.T) {
 			return ProbeResult{StatusCode: 200}, result
 		}
 	}
-	require.Equal(t, core.StatusPass, run(probe(nil)).Status)
+	ready := run(probe(nil))
+	require.Equal(t, core.StatusWarn, ready.Status)
+	require.Equal(t, "进程就绪，但给 Monitor 的上报缺失或过期", ready.Summary)
 	require.Equal(t, []string{"node-a:11414/readyz"}, asked, "请求目标机上 factor-mgr 的本机健康端口")
 	require.Equal(t, core.StatusFail, run(probe(errors.New("probe returned HTTP 503"))).Status)
 	unreachable := run(probe(fmt.Errorf("%w node-a: dial timeout", ErrNodeUnreachable)))
@@ -227,6 +230,38 @@ func TestRunDiagnoseHealthCoversHostSnapshotAndDelegatedComponents(t *testing.T)
 				require.NotEqual(t, core.StatusPass, reportValue.CheckByID(id).Status, id)
 			} else {
 				require.Equal(t, core.StatusPass, reportValue.CheckByID(id).Status, id)
+			}
+		}
+	}
+}
+
+// 上报过期、SSH 探测本机 /readyz 就绪时，整体结论不能是健康：host-agent（主机快照）、因子引擎与归档 worker（管理端代报）
+// 没有 reporter_coverage 检查，这一项是它们上报中断时唯一的信号；走 Reporter 的组件同样不能判通过。上报新鲜且就绪才是健康。
+func TestRunDiagnoseStaleReportWithReadyProbeIsNotHealthy(t *testing.T) {
+	components := []struct{ id, node string }{{"host-agent", "factor"}, {"factor-engine", "factor"}, {"archive-worker", "factor"}, {"factor-mgr", "control"}}
+	for _, stale := range []bool{true, false} {
+		for _, component := range components {
+			snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t),
+				ExpectedComponents: []*monitorpb.DoctorExpectedComponent{{ComponentId: component.id, NodeId: component.node, Expected: true}},
+				HealthObservations: []*monitorpb.DoctorObservation{{Kind: "health", ComponentId: component.id, NodeId: component.node, Status: "OK", Stale: stale}},
+			}
+			id := "service.health:" + component.id + "@" + component.node
+			probes := 0
+			ready := func(context.Context, string, int, string) (ProbeResult, error) {
+				probes++
+				return ProbeResult{StatusCode: 200}, nil
+			}
+			reportValue, err := RunDiagnose(context.Background(), DiagnoseOptions{NodeID: component.node, CheckIDs: []string{id}, Client: contextClientStub{rsp: snapshot}, Probe: ready})
+			require.NoError(t, err)
+			check := reportValue.CheckByID(id)
+			if stale {
+				require.Equal(t, core.StatusWarn, check.Status, component.id)
+				require.Equal(t, 1, probes, "上报过期时经 SSH 探测：%s", component.id)
+				require.Equal(t, core.ConclusionDegraded, reportValue.Conclusion, component.id)
+			} else {
+				require.Equal(t, core.StatusPass, check.Status, component.id)
+				require.Zero(t, probes, "上报新鲜时不探测：%s", component.id)
+				require.Equal(t, core.ConclusionHealthy, reportValue.Conclusion, component.id)
 			}
 		}
 	}

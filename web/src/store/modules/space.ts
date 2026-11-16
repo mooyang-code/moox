@@ -2,7 +2,7 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { listSpaces } from "@/api/admin/spaces";
 import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
-import { setSpaceInitializer } from "@/api/admin/signed-client";
+import { setSpaceInitializer } from "@/api/admin/space-client";
 import type { Space } from "@/api/admin/types";
 
 /**

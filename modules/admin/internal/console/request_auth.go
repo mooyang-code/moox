@@ -1,34 +1,35 @@
 package console
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
+	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 
-	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
-	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	"github.com/mooyang-code/moox/packages/requestauth"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
-type requestAuthStore interface {
-	GetSigningSession(context.Context, string) (*authmodel.RequestSigningSession, error)
-	ConsumeSessionNonce(context.Context, string, string, time.Duration) (bool, error)
-	ConsumeRawSessionTicket(context.Context, string) (*authmodel.RawSessionTicket, error)
+// 浏览器鉴权：每个请求只看会话 Cookie（HttpOnly、Secure、SameSite=Strict）。非 GET 请求和 WebSocket 握手
+// 另外要求 Origin 等于本站或配置里的开发来源；缺少 Origin 一律拒绝，命令行客户端要自己带上。
+// Origin 不对返回 403，没有会话或会话过期返回 401，前端只把 401 当成掉线。
+
+// middlewareResp 控制台拒绝请求时的响应体，保持 {ret_info} 格式与业务 RPC 一致。
+type middlewareResp struct {
+	RetInfo *pb.RetInfo `json:"ret_info"`
 }
 
-var requestAuthState struct {
-	sync.RWMutex
-	store requestAuthStore
+// loginRoute 是唯一不需要会话的接口。写死在这里，不从配置读：配置写错就可能放开别的方法。
+const loginRoute = "auth/Login"
+
+// logoutRoute 退出后控制台清除 Cookie。
+const logoutRoute = "auth/Logout"
+
+// rawRoutes 是裸 HTTP 路由：三个 SSH 流式路由与归档的下载、最新数据。它们和 RPC 一样按会话 Cookie 鉴权。
+var rawRoutes = map[string]bool{
+	"ssh/WsConnect": true, "ssh/SftpDownload": true, "ssh/SftpUpload": true,
+	"archive/PartitionDownload": true, "archive/RecentRows": true,
 }
 
 var rawSessionOwnerState struct {
@@ -36,6 +37,7 @@ var rawSessionOwnerState struct {
 	verify func(sessionID, userID string) bool
 }
 
+// SetRawSessionOwnerVerifier 登记 SSH 会话归属的判断：SSH 裸路由的 session_id 必须是当前登录用户建的。
 func SetRawSessionOwnerVerifier(verify func(sessionID, userID string) bool) {
 	rawSessionOwnerState.Lock()
 	rawSessionOwnerState.verify = verify
@@ -46,165 +48,86 @@ func rawSessionBelongsToUser(sessionID, userID string) bool {
 	rawSessionOwnerState.RLock()
 	verify := rawSessionOwnerState.verify
 	rawSessionOwnerState.RUnlock()
-	return verify != nil && verify(sessionID, userID)
+	return verify != nil && sessionID != "" && verify(sessionID, userID)
 }
 
-func SetRequestAuthStore(store requestAuthStore) {
-	requestAuthState.Lock()
-	requestAuthState.store = store
-	requestAuthState.Unlock()
+// needsOriginCheck 判断请求是否要核对 Origin：非 GET 请求与 WebSocket 握手（握手是 GET，按升级头和路由判断）。
+func needsOriginCheck(r *http.Request, route string) bool {
+	return r.Method != http.MethodGet || r.Header.Get("Upgrade") != "" || route == "ssh/WsConnect"
 }
 
-func getRequestAuthStore() requestAuthStore {
-	requestAuthState.RLock()
-	defer requestAuthState.RUnlock()
-	return requestAuthState.store
-}
-
-func verifyAdminRequest(r *http.Request, body []byte) (*accessClaims, error) {
-	claims, ok := validateAccessToken(r.Context(), accessTokenFromHTTP(r))
-	if !ok {
-		return nil, errors.New("invalid access token")
+// originAllowed 要求恰好一个 Origin 头，且等于 https://<Host> 或配置里的开发来源。
+// T10 之前 Admin 在 Caddy 后面，Caddy 原样转发 Host 并已拒绝别的 Host。
+func originAllowed(r *http.Request, allowed []string) bool {
+	values := r.Header.Values("Origin")
+	if len(values) != 1 || values[0] == "" {
+		return false
 	}
-	store := getRequestAuthStore()
-	if store == nil {
-		return nil, errors.New("request auth store is unavailable")
+	origin := values[0]
+	if r.Host != "" && strings.EqualFold(origin, "https://"+r.Host) {
+		return true
 	}
-	session, err := store.GetSigningSession(r.Context(), claims.SessionID)
-	if err != nil || session.UserID != claims.UserID || !time.Now().Before(session.ExpiresAt) {
-		return nil, errors.New("invalid signing session")
-	}
-	timestamp, err := strconv.ParseInt(r.Header.Get("X-Moox-Timestamp"), 10, 64)
-	if err != nil {
-		return nil, errors.New("invalid request timestamp")
-	}
-	skew := time.Minute
-	nonceTTL := 2 * time.Minute
-	if cfg := GetConfig(); cfg != nil {
-		if cfg.Security.RequestClockSkew > 0 {
-			skew = cfg.Security.RequestClockSkew
-		}
-		if cfg.Security.NonceTTL > 0 {
-			nonceTTL = cfg.Security.NonceTTL
+	for _, item := range allowed {
+		if strings.EqualFold(origin, strings.TrimSpace(item)) {
+			return true
 		}
 	}
-	// nonce 至少保存到签名窗口结束（前后各 skew），配置更短时按窗口取整上调。
-	if minimum := 2*skew + time.Second; nonceTTL < minimum {
-		nonceTTL = minimum
+	return false
+}
+
+// requestSession 按 Cookie 查会话。Cookie 的值不写日志。
+func (hr *HTTPRouter) requestSession(r *http.Request) (session.Session, bool) {
+	if hr.sessions == nil {
+		return session.Session{}, false
 	}
-	requestTime := time.Unix(timestamp, 0)
-	if delta := time.Since(requestTime); delta > skew || delta < -skew {
-		return nil, errors.New("request timestamp outside allowed window")
-	}
-	nonce := r.Header.Get("X-Moox-Nonce")
-	material := requestauth.Material{Method: r.Method, Path: r.URL.EscapedPath(), Body: body, Headers: signedGatewayHeaders(r), Timestamp: timestamp, Nonce: nonce}
-	encryptionKey, err := adminsecurity.GetEncryptionKey()
+	cookie, err := r.Cookie(session.CookieName)
 	if err != nil {
-		return nil, errors.New("encryption key unavailable")
+		return session.Session{}, false
 	}
-	secret, err := mooxsecurity.Decrypt(session.EncryptedSecret, encryptionKey)
-	if err != nil {
-		return nil, errors.New("invalid signing session secret")
-	}
-	if err := requestauth.Verify(secret, material, r.Header.Get("X-Moox-Signature")); err != nil {
-		return nil, fmt.Errorf("invalid request signature: %w", err)
-	}
-	consumed, err := store.ConsumeSessionNonce(r.Context(), claims.SessionID, nonce, nonceTTL)
-	if err != nil || !consumed {
-		return nil, errors.New("request nonce was already used")
-	}
-	return claims, nil
+	return hr.sessions.Get(cookie.Value)
 }
 
-func readAndRestoreBody(r *http.Request) ([]byte, error) {
-	if r.Body == nil {
-		return nil, nil
+// clientIP 是登录锁定和登录记录用的来源 IP。T10 之前请求都经 Caddy 转来，取 Caddy 追加在 X-Forwarded-For
+// 最后一段的对端地址（前面几段是客户端自己能写的，不可信）；取不到时用连接的对端地址。T10 改成只用连接对端地址。
+func clientIP(r *http.Request) string {
+	if values := r.Header.Values("X-Forwarded-For"); len(values) > 0 {
+		parts := strings.Split(values[len(values)-1], ",")
+		if ip := net.ParseIP(strings.TrimSpace(parts[len(parts)-1])); ip != nil {
+			return ip.String()
+		}
 	}
-	body, err := readBoundedBody(r.Body)
-	if err != nil {
-		return nil, err
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
 	}
-	_ = r.Body.Close()
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	return body, nil
+	return r.RemoteAddr
 }
 
-func accessTokenFromHTTP(r *http.Request) string {
-	token := strings.TrimSpace(r.Header.Get("Authorization"))
-	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
-		token = strings.TrimSpace(token[7:])
-	}
-	if token == "" {
-		token = strings.TrimSpace(r.Header.Get("X-Access-Token"))
-	}
-	return token
+func setSessionCookie(w http.ResponseWriter, created session.Session, ttl int) {
+	http.SetCookie(w, &http.Cookie{
+		Name: session.CookieName, Value: created.ID, Path: "/",
+		Expires: created.ExpiresAt, MaxAge: ttl,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
+	})
 }
 
-func sessionIDForLog(r *http.Request) string {
-	claims, ok := validateAccessToken(r.Context(), accessTokenFromHTTP(r))
-	if !ok {
-		return ""
-	}
-	return claims.SessionID
+// clearSessionCookie 让浏览器删掉会话 Cookie（属性与下发时相同）。
+func clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name: session.CookieName, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
+	})
 }
 
-func shouldSkipAdminRequestAuth(path string) bool { return ShouldSkipAuth(path) }
+func writeConsoleRejection(w http.ResponseWriter, status int, code pb.ErrorCode, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(&middlewareResp{RetInfo: &pb.RetInfo{Code: code, Msg: msg}})
+}
 
 func writeAdminAuthFailure(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	_ = json.NewEncoder(w).Encode(&middlewareResp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NO_AUTH, Msg: "访问令牌无效，请退出重新登录(gateway)"}})
+	writeConsoleRejection(w, http.StatusUnauthorized, pb.ErrorCode_NO_AUTH, "登录已失效，请重新登录")
 }
 
-// rawRouteOperations 是裸 HTTP 路由与它接受的 ticket 操作：三个 SSH 流式路由与归档的下载、最新数据两个路由。
-var rawRouteOperations = map[string]string{
-	"ssh/WsConnect": "ssh_ws", "ssh/SftpDownload": "sftp_download", "ssh/SftpUpload": "sftp_upload",
-	"archive/PartitionDownload": authmodel.RawOperationArchiveDownload, "archive/RecentRows": authmodel.RawOperationArchiveRecent,
-}
-
-func isRawTicketPath(path string) bool {
-	_, ok := rawRouteOperations[strings.TrimPrefix(path, "/api/admin/")]
-	return ok
-}
-
-func validateRawRouteTicket(r *http.Request, serviceID, method string) (*accessClaims, error) {
-	operation, ok := rawRouteOperations[serviceID+"/"+method]
-	if !ok {
-		return nil, errors.New("raw route does not accept tickets")
-	}
-	store := getRequestAuthStore()
-	if store == nil {
-		return nil, errors.New("request auth store is unavailable")
-	}
-	ticket, err := store.ConsumeRawSessionTicket(r.Context(), r.URL.Query().Get("ticket"))
-	if err != nil || ticket.Operation != operation || !time.Now().Before(ticket.ExpiresAt) {
-		return nil, errors.New("invalid raw route ticket")
-	}
-	if err := rawTicketResourceMatches(r, ticket); err != nil {
-		return nil, err
-	}
-	session, err := store.GetSigningSession(r.Context(), ticket.SessionID)
-	if err != nil || session.UserID != ticket.UserID || !time.Now().Before(session.ExpiresAt) {
-		return nil, errors.New("invalid raw route session")
-	}
-	return &accessClaims{UserID: ticket.UserID, SessionID: ticket.SessionID, ExpiresAt: session.ExpiresAt}, nil
-}
-
-// rawTicketResourceMatches 核对请求与 ticket 绑定的资源：SSH 路由的 session_id 必须是 ticket 的会话且属于同一用户；
-// 归档路由不涉及 SSH 会话，核对 query 里的 space、dataset 与 ticket 资源 "<空间>/<数据集>" 一致（单用户，不另做空间授权）。
-func rawTicketResourceMatches(r *http.Request, ticket *authmodel.RawSessionTicket) error {
-	query := r.URL.Query()
-	switch ticket.Operation {
-	case authmodel.RawOperationArchiveDownload, authmodel.RawOperationArchiveRecent:
-		space, dataset := query.Get("space"), query.Get("dataset")
-		if !authmodel.ValidArchiveResourcePart(space) || !authmodel.ValidArchiveResourcePart(dataset) || space+"/"+dataset != ticket.ResourceSessionID {
-			return errors.New("raw route archive resource does not match ticket")
-		}
-		return nil
-	}
-	requestSessionID := query.Get("session_id")
-	if requestSessionID == "" || requestSessionID != ticket.ResourceSessionID || !rawSessionBelongsToUser(requestSessionID, ticket.UserID) {
-		return errors.New("raw route session does not match ticket owner")
-	}
-	return nil
+func writeOriginRejected(w http.ResponseWriter) {
+	writeConsoleRejection(w, http.StatusForbidden, pb.ErrorCode_NO_AUTH, "请求来源不是管理台页面，已拒绝")
 }
