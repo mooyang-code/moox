@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -33,13 +34,13 @@ import (
 func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "trade", "config", "app.yaml")
-	keyPath := filepath.Join(root, "secrets", "caller-trade.key")
+	keyPath := filepath.Join(root, "secrets", "host.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
 	for _, path := range []string{configPath, keyPath, caPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
 	}
-	credentials := gatewayauth.Credentials{Caller: "trade", KeyID: "admin-assigned-trade-key-42", Secret: "trade-fixture-signing-key-at-least-32-bytes"}
-	require.NoError(t, os.WriteFile(keyPath, []byte(credentials.Secret+"\n"), 0600))
+	credentials := authtest.Component("trade", "control")
+	require.NoError(t, os.WriteFile(keyPath, []byte(gatewayauth.EncodeSigningKey(credentials.Key)+"\n"), 0600))
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
@@ -85,7 +86,7 @@ func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 			for name, value := range message.ServerMetaData() {
 				headers.Set(name, string(value))
 			}
-			claims, err := gatewayauth.Verify(credentials, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: "control", Callee: "trpc.moox.ops.SecretMgr", Func: "GetSecretValue", Body: body}, headers, time.Now())
+			claims, err := authtest.Verify(credentials, gatewayauth.Request{TargetNode: "control", Callee: "trpc.moox.ops.SecretMgr", Func: "GetSecretValue", Body: body}, headers, time.Now())
 			if err != nil {
 				return nil, err
 			}
@@ -109,7 +110,7 @@ func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	data := filepath.Join(root, "data", "trade")
-	raw := "database:\n  path: " + filepath.Join(data, "trade.db") + "\ngateway_client:\n  caller: trade\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-trade.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
+	raw := "database:\n  path: " + filepath.Join(data, "trade.db") + "\ngateway_client:\n  caller: trade\n  key_file: ../../secrets/host.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
 	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0600))
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)

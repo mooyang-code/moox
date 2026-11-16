@@ -1,6 +1,6 @@
 # moox-host-gateway
 
-每台主机一个的服务网关：按原始 PB/JSON 字节校验 HMAC，依据 Admin 下发的完整快照和 `servicecatalog` ACL，将请求转发到本机固定 loopback 端口。
+每台主机一个的服务网关：按原始 PB/JSON 字节校验调用方的 ed25519 签名（只持有公钥），依据 Admin 下发的完整快照和 `servicecatalog` ACL，将请求转发到本机固定 loopback 端口。
 
 ## 构建与测试
 
@@ -13,7 +13,7 @@ go test -count=1 ./modules/hostgateway/...
 
 `config/app.yaml` 使用 `packages/servicecatalog/hostgatewayconfig` 的共享配置结构；`config/trpc_go.yaml` 配置刷新与指标定时器。离线 Admin bootstrap 输出主机配置、MooX CA、主机证书和调用方密钥，运行端只读取已有身份文件。
 
-- `11003`：TLS tRPC，使用独立 MooX 私有 CA 验证主机 ID；服务请求仍须 HMAC。
+- `11003`：TLS tRPC，使用独立 MooX 私有 CA 验证主机 ID；服务请求仍须调用方签名。
 - `127.0.0.1:11002`：本机 tRPC 转发与只读 Directory。Directory 仅包含主机和服务目录。
 - `11012`：`/healthz`、`/readyz` 和指标入口，只听 127.0.0.1、不验签。
 
@@ -21,7 +21,7 @@ control 网关直接访问 `127.0.0.1:11112`；其他主机经 control 的 TLS �
 
 快照默认每 5 秒刷新，客户端 Directory 默认每 5 秒刷新，为 15 秒部署可见性留出处理时间。路由、目录和校验密钥一起保存在 `data/host-gateway/snapshot.pb`，Unix 目录和文件分别要求 0700、0600。控制面故障时使用最后有效缓存；同步或心跳超过 90 秒未成功会降低就绪状态。权限撤回先应用到内存，落盘失败会持续重试。nonce 使用独立的持久化存储。
 
-真实 Admin 联调是单独的必跑门禁，避免业务模块互相导入内部实现。测试位于 Admin 的 `gatewaycontrol` 包，使用 `hostgateway_e2e` 构建标签；以真实 SQLite、Badger、PKI、GatewayControl 和生产网关二进制运行。执行端要求 Linux 的两个 loopback IP，预留 `127.0.0.1:11112/20102` 和 `127.0.0.{1,2}:11002/11003/11012`。纯 Go 产物可在本机交叉编译后传到 Linux，运行脚本不编译：
+真实 Admin 联调是单独的必跑门禁，避免业务模块互相导入内部实现。测试位于 Admin 的 `gatewaycontrol` 包，使用 `hostgateway_e2e` 构建标签；以真实 SQLite、PKI、GatewayControl 和生产网关二进制运行。执行端要求 Linux 的两个 loopback IP，预留 `127.0.0.1:11112/20102` 和 `127.0.0.{1,2}:11002/11003/11012`。纯 Go 产物可在本机交叉编译后传到 Linux，运行脚本不编译：
 
 ```bash
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go -C modules/hostgateway build \

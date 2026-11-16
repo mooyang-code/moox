@@ -130,13 +130,13 @@ func TestMonitorStorageUsesConfiguredIdentityInsteadOfLegacyEnvironment(t *testi
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
 	cfg, err := Load(writeConfig(t, `gateway_client:
   caller: monitor
-  key_id: admin-assigned-monitor-key
-  key_file: ../../secrets/caller-monitor.key
+  host_id: control
+  key_file: ../../secrets/host.key
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GatewayClient.Caller != "monitor" || cfg.GatewayClient.KeyID != "admin-assigned-monitor-key" || cfg.GatewayClient.KeyFile != "../../secrets/caller-monitor.key" {
+	if cfg.GatewayClient.Caller != "monitor" || cfg.GatewayClient.HostID != "control" || cfg.GatewayClient.KeyFile != "../../secrets/host.key" {
 		t.Fatalf("gateway identity was overridden: %+v", cfg.GatewayClient)
 	}
 
@@ -147,7 +147,7 @@ func TestMonitorRejectsOldAndInvalidGatewayConfiguration(t *testing.T) {
 		"metrics:\n  storage:\n    gateway_target: ip://127.0.0.1:11003\n",
 		"metrics:\n  host_storage:\n    hmac_key_file: legacy.key\n",
 		"gateway_client:\n  target: ip://127.0.0.1:11003\n",
-		"gateway_client:\n  key_id: first\n  key_id: second\n",
+		"gateway_client:\n  host_id: first\n  host_id: second\n",
 		"gateway_client:\n  caller: archive\n",
 		"gateway_client:\n  caller: monitor\n---\ngateway_client:\n  caller: archive\n",
 	} {

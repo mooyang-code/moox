@@ -67,6 +67,8 @@ func (b Builder) buildServices(ctx context.Context, now time.Time, hosts []HostS
 		case SourceHostSnapshot:
 			item = withHostSnapshot(item, hosts)
 		case SourceDelegated:
+			// 代报的行不带主机：按组件名对到这条部署上，下面不再把它算成未登记的进程。
+			registered[deploymentKey("", deployment.ComponentID)] = true
 			item = withReporters(item, byDeployment[deploymentKey("", deployment.ComponentID)])
 			item.BootChanges = boots[deploymentKey("", deployment.ComponentID)]
 		default:
@@ -78,8 +80,7 @@ func (b Builder) buildServices(ctx context.Context, now time.Time, hosts []HostS
 		}
 		services = append(services, item)
 	}
-	// Catalog principals run outside host deployments (for example SCF). Their
-	// metrics remain available to business checks without inventing deployments.
+	// 外部身份（如 SCF 函数）不在主机部署里：它们的上报照常给业务检查用，不算未登记的进程。
 	external := make(map[string]bool)
 	for _, principal := range snapshot.Catalog.ExternalIdentities() {
 		external[principal] = true

@@ -1,53 +1,42 @@
-// Package identitybundle verifies and transfers issued host material. It never
-// creates trust roots or reads the operator manifest.
+// Package identitybundle 校验并取回控制机签发的主机身份包：主机签名私钥（新签发时）、主机证书、根证书，
+// 控制机另有 scf-collector 的私钥。它不生成信任根，也不读操作电脑的配置文件。
 package identitybundle
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"io/fs"
+	"net"
 	"path"
+	"reflect"
 	"slices"
 	"strings"
-	"unicode"
-	"unicode/utf8"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
-	"gopkg.in/yaml.v3"
 )
 
 const maxMetadata = 128 << 10
 
+// Options 是校验一台主机身份包用的期望值。
 type Options struct {
-	HostID, ControlHostID, Address, PrivateAddress, ControlAddress string
+	HostID, ControlHostID, Address, PrivateAddress string
 	// Outbound 表示目标是只能出站的主机：网关证书必须同时带 ClientAuth，用来与 control 建立反向连接。
-	Outbound                 bool
-	Components               []string
-	ExpectedCA, ExpectedHash string
-	AllowOperator            bool
-}
-
-// Material retains private bytes without exporting them through JSON or fmt.
-type Material struct {
-	metadata hostbundle.Metadata
-	files    map[string][]byte
-}
-
-func (*Material) String() string               { return "MooXHostMaterial{private payload omitted}" }
-func (m *Material) GoString() string           { return m.String() }
-func (*Material) MarshalJSON() ([]byte, error) { return []byte(`{"private_material":"omitted"}`), nil }
-func (m *Material) Metadata() hostbundle.Metadata {
-	copy := m.metadata
-	copy.Files = slices.Clone(copy.Files)
-	copy.Credentials = slices.Clone(copy.Credentials)
-	return copy
+	Outbound bool
+	// Collector 表示这台主机部署了 collector：身份包要带 scf-collector 的公钥（私钥只在新签发时有）。
+	Collector bool
+	// ExpectedCA 是固定的 MooX CA 指纹（操作电脑第一次部署控制机时记下的）。
+	ExpectedCA string
 }
 
 func digest(raw []byte) string { hash := sha256.Sum256(raw); return hex.EncodeToString(hash[:]) }
@@ -70,156 +59,214 @@ func canonical(raw []byte, out any) error {
 func privatePath(name string) bool {
 	return fs.ValidPath(name) && name != "." && len(name) <= 512 && !strings.ContainsAny(name, "\\\x00\r\n")
 }
-func validKeyID(value string) bool {
-	return value != "" && len(value) <= 128 && utf8.ValidString(value) && !strings.ContainsAny(value, "/\\") && !strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
-}
-func wanted(options Options) ([]string, error) {
-	if !servicecatalog.ValidHostID(options.HostID) || !servicecatalog.ValidHostID(options.ControlHostID) || !servicecatalog.ValidHostAddress(options.Address) || !servicecatalog.ValidHostAddress(options.ControlAddress) || options.PrivateAddress != "" && !servicecatalog.ValidHostAddress(options.PrivateAddress) || !validHash(options.ExpectedCA) || !validHash(options.ExpectedHash) || options.AllowOperator && options.HostID != options.ControlHostID {
-		return nil, errors.New("host material requires canonical topology and pinned CA/snapshot identities")
+
+// wantedFiles 是清单应当列出的文件（排序后）：证书三件套，加这次新签发的私钥。
+func wantedFiles(metadata hostbundle.Metadata) []string {
+	files := []string{hostbundle.HostCertificateFile, hostbundle.HostTLSKeyFile, hostbundle.CAFile}
+	if metadata.SignKeyIssued {
+		files = append(files, hostbundle.HostKeyFile)
 	}
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return nil, err
+	if metadata.SCFCollectorKeyIssued {
+		files = append(files, hostbundle.SCFCollectorKeyFile)
 	}
-	callers := []string{"host-agent", "host-gateway@" + options.HostID}
-	seen := map[string]bool{}
-	for _, id := range options.Components {
-		component, ok := catalog.Component(id)
-		if !ok || seen[id] || component.Scope == servicecatalog.ScopeControl && options.HostID != options.ControlHostID {
-			return nil, errors.New("host material components do not match a valid target deployment")
-		}
-		seen[id] = true
-		if id != "host-gateway" {
-			callers = append(callers, id)
-		}
-		// 浏览器入口在 Admin 里：console 签名身份跟着 admin 下发。
-		if id == "admin" {
-			callers = append(callers, "console")
-		}
-		if id == "collector" {
-			callers = append(callers, "scf-collector")
-		}
-	}
-	if options.AllowOperator {
-		callers = append(callers, "moox-cli")
-	}
-	slices.Sort(callers)
-	return slices.Compact(callers), nil
+	slices.Sort(files)
+	return files
 }
 
 func validateMetadata(metadata hostbundle.Metadata, options Options) error {
-	callers, err := wanted(options)
-	if err != nil {
-		return err
+	if !servicecatalog.ValidHostID(options.HostID) || !servicecatalog.ValidHostID(options.ControlHostID) || !servicecatalog.ValidHostAddress(options.Address) ||
+		options.PrivateAddress != "" && !servicecatalog.ValidHostAddress(options.PrivateAddress) || !validHash(options.ExpectedCA) {
+		return errors.New("host material requires canonical topology and a pinned CA")
 	}
-	if metadata.Version != 1 || metadata.HostID != options.HostID || metadata.ControlHostID != options.ControlHostID || metadata.CA.SHA256 != options.ExpectedCA || metadata.ExpectedHash != options.ExpectedHash || metadata.ConfigFile != "host-gateway/config/app.yaml" || len(metadata.Credentials) != len(callers) || len(metadata.Files) == 0 || len(metadata.Files) > 256 || !path.IsAbs(metadata.BundleDir) || metadata.BundleDir == "/" || len(metadata.BundleDir) > 4096 || path.Clean(metadata.BundleDir) != metadata.BundleDir || strings.ContainsAny(metadata.BundleDir, "\\\x00\r\n") {
+	if metadata.Version != 2 || metadata.HostID != options.HostID || metadata.ControlHostID != options.ControlHostID || metadata.CA.SHA256 != options.ExpectedCA ||
+		!path.IsAbs(metadata.BundleDir) || metadata.BundleDir == "/" || len(metadata.BundleDir) > 4096 || path.Clean(metadata.BundleDir) != metadata.BundleDir || strings.ContainsAny(metadata.BundleDir, "\\\x00\r\n") {
 		return errors.New("host material metadata does not match its expected topology and identity")
 	}
-	previous := ""
-	keyIDs := map[string]bool{}
-	allowed := map[string]bool{metadata.ConfigFile: true, "certs/moox-ca.crt": true, "certs/host-gateway/server.crt": true, "certs/host-gateway/server.key": true}
-	for _, credential := range metadata.Credentials {
-		name := credential.Caller
-		if name == "host-gateway@"+metadata.HostID {
-			name = "host-gateway"
-		}
-		file := "secrets/caller-" + name + ".key"
-		if name == "moox-cli" {
-			file = "operator/caller-moox-cli.key"
-		}
-		if credential.Caller <= previous || !slices.Contains(callers, credential.Caller) || credential.KeyFile != file || !validKeyID(credential.KeyID) || keyIDs[credential.KeyID] || !privatePath(credential.KeyFile) {
-			return errors.New("host material has an unrelated, repeated or misplaced credential")
-		}
-		keyIDs[credential.KeyID] = true
-		allowed[credential.KeyFile] = true
-		if name == "moox-cli" {
-			allowed["operator/gateway-client.yaml"] = true
-		}
-		previous = credential.Caller
+	if _, err := gatewayauth.ParsePublicKey(metadata.SignPublicKey); err != nil {
+		return errors.New("host material has no valid host signing public key")
 	}
-	wantVerification := ""
-	if slices.Contains(options.Components, "access") {
-		wantVerification = "secrets/access/access-verification.json"
+	// scf-collector 的公钥只属于部署了 collector 的主机；别的主机的身份包带它就是越界。
+	_, scfErr := gatewayauth.ParsePublicKey(metadata.SCFCollectorPublicKey)
+	if options.Collector != (metadata.SCFCollectorPublicKey != "") || options.Collector && scfErr != nil || metadata.SCFCollectorKeyIssued && !options.Collector {
+		return errors.New("host material scf-collector identity does not match the deployment")
 	}
-	if metadata.VerificationFile != wantVerification {
-		return errors.New("host material Access verification table does not match deployment")
+	wanted := wantedFiles(metadata)
+	if len(metadata.Files) != len(wanted) {
+		return errors.New("host material inventory contains missing or unrelated files")
 	}
-	if wantVerification != "" {
-		allowed[wantVerification] = true
-	}
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return err
-	}
-	previous = ""
 	var total int64
-	for _, file := range metadata.Files {
+	for i, file := range metadata.Files {
 		total += file.Size
-		if !privatePath(file.Path) || file.Path <= previous || file.Path == "bundle.json" || !validHash(file.SHA256) || file.Size <= 0 || file.Size > 1<<20 || total > 16<<20 {
-			return errors.New("host material file inventory is invalid or exceeds limits")
+		if file.Path != wanted[i] || !privatePath(file.Path) || !validHash(file.SHA256) || file.Size <= 0 || file.Size > 1<<20 || total > 16<<20 {
+			return errors.New("host material inventory contains missing or unrelated files")
 		}
-		if !allowed[file.Path] {
-			external := wantVerification != "" && path.Dir(file.Path) == path.Dir(wantVerification) && strings.HasSuffix(file.Path, ".key") && slices.ContainsFunc(catalog.ExternalIdentities(), func(id string) bool {
-				return strings.HasPrefix(path.Base(file.Path), "caller-"+id+"-")
-			})
-			if !external {
-				return errors.New("host material inventory contains a file outside its target identities")
-			}
-		}
-		previous = file.Path
 	}
 	return nil
 }
 
-func verify(metadata hostbundle.Metadata, files map[string][]byte, options Options) (*Material, error) {
-	allowed := map[string]bool{metadata.ConfigFile: true, "certs/moox-ca.crt": true, "certs/host-gateway/server.crt": true, "certs/host-gateway/server.key": true}
-	credentials := []gatewayauth.Credentials{}
-	gatewayKeyID := ""
-	for _, credential := range metadata.Credentials {
-		allowed[credential.KeyFile] = true
-		secret, err := signingSecret(files[credential.KeyFile])
-		if err != nil {
-			return nil, err
-		}
-		credentials = append(credentials, gatewayauth.Credentials{Caller: credential.Caller, KeyID: credential.KeyID, Secret: secret})
-		if credential.Caller == "host-gateway@"+options.HostID {
-			gatewayKeyID = credential.KeyID
-		}
-		if credential.Caller == "moox-cli" {
-			allowed["operator/gateway-client.yaml"] = true
-			config, err := yaml.Marshal(hostbundle.OperatorConfig{Caller: "moox-cli", KeyID: credential.KeyID, KeyFile: "caller-moox-cli.key"})
-			if err != nil || !bytes.Equal(config, files["operator/gateway-client.yaml"]) {
-				return nil, errors.New("host material operator configuration differs from its assigned identity")
-			}
-		}
+// Download 由已校验主机密钥的 SSH 连接实现。
+type Download func(context.Context, string, io.Writer) (int64, error)
+
+type boundedBuffer struct {
+	buffer   bytes.Buffer
+	limit    int64
+	overflow bool
+}
+
+func (b *boundedBuffer) Write(raw []byte) (int, error) {
+	if int64(len(raw)) > b.limit-int64(b.buffer.Len()) {
+		b.overflow = true
+		return 0, errors.New("host material download exceeded declared size")
 	}
-	if metadata.VerificationFile != "" {
-		access, err := verifyAccess(files, metadata.VerificationFile, allowed)
-		if err != nil {
-			return nil, err
-		}
-		credentials = append(credentials, access...)
-	}
-	if _, err := gatewayauth.NewCredentialRegistry(credentials); err != nil {
-		return nil, errors.New("host material credential registry is invalid")
-	}
-	if len(files) != len(allowed) {
-		return nil, errors.New("host material contains missing or unrelated payload files")
-	}
-	for name := range files {
-		if !allowed[name] {
-			return nil, errors.New("host material contains a payload outside its target identities")
-		}
-	}
-	config, err := hostgatewayconfig.Decode(bytes.NewReader(files[metadata.ConfigFile]))
-	if err != nil {
-		return nil, errors.New("host material gateway configuration is invalid")
-	}
-	if config != hostgatewayconfig.Default(options.HostID, options.ControlHostID, options.ControlAddress, gatewayKeyID) {
-		return nil, errors.New("host material gateway configuration differs from target topology")
-	}
-	if err := verifyCertificates(metadata, files, options); err != nil {
+	return b.buffer.Write(raw)
+}
+
+func downloadFile(ctx context.Context, download Download, source string, max int64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Material{metadata: metadata, files: files}, nil
+	buffer := &boundedBuffer{limit: max}
+	n, err := download(ctx, source, buffer)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err != nil || buffer.overflow || n != int64(buffer.buffer.Len()) || n == 0 {
+		return nil, errors.New("host material download failed or returned an invalid byte count")
+	}
+	return buffer.buffer.Bytes(), nil
+}
+
+// Fetch 按 Admin 返回的清单把身份包取回内存并逐项校验：清单与期望的主机、CA 一致，每个文件的大小与摘要对得上，
+// 私钥对应清单里的公钥，证书在固定的 CA 下验得过。返回文件名 → 内容。
+func Fetch(ctx context.Context, download Download, source hostbundle.Metadata, options Options) (map[string][]byte, error) {
+	if download == nil {
+		return nil, errors.New("host material requires a verified SSH downloader")
+	}
+	if err := validateMetadata(source, options); err != nil {
+		return nil, err
+	}
+	raw, err := downloadFile(ctx, download, path.Join(source.BundleDir, "bundle.json"), maxMetadata)
+	if err != nil {
+		return nil, err
+	}
+	var metadata hostbundle.Metadata
+	if err := canonical(raw, &metadata); err != nil {
+		return nil, err
+	}
+	if !reflect.DeepEqual(metadata, source) {
+		return nil, errors.New("downloaded host material differs from the Admin response")
+	}
+	files := map[string][]byte{}
+	for _, item := range source.Files {
+		content, err := downloadFile(ctx, download, path.Join(source.BundleDir, item.Path), item.Size)
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(content)) != item.Size || digest(content) != item.SHA256 {
+			return nil, errors.New("downloaded host material digest or length differs from its inventory")
+		}
+		files[item.Path] = content
+	}
+	for name, public := range map[string]string{hostbundle.HostKeyFile: source.SignPublicKey, hostbundle.SCFCollectorKeyFile: source.SCFCollectorPublicKey} {
+		content, issued := files[name]
+		if !issued {
+			continue
+		}
+		key, err := gatewayauth.ParseSigningKey(string(content))
+		if err != nil || gatewayauth.EncodePublicKey(gatewayauth.Credentials{Key: key}.PublicKey()) != public {
+			return nil, errors.New("host material signing key does not match its registered public key")
+		}
+	}
+	if err := verifyCertificates(source, files, options); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func onePEM(raw []byte, kind string) ([]byte, error) {
+	// 前后不能有多余内容，也不能有第二个 PEM 块：根证书后面不能跟着私钥。
+	block, rest := pem.Decode(raw)
+	if block == nil || block.Type != kind || len(block.Headers) != 0 || !bytes.Equal(bytes.TrimSpace(raw), bytes.TrimSpace(pem.EncodeToMemory(block))) || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, errors.New("host material requires a single PEM block of the expected type")
+	}
+	return block.Bytes, nil
+}
+
+func certificate(raw []byte, info hostbundle.CertificateInfo) (*x509.Certificate, error) {
+	der, err := onePEM(raw, "CERTIFICATE")
+	if err != nil {
+		return nil, err
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil || digest(der) != info.SHA256 || cert.SerialNumber.Text(16) != info.Serial || !cert.NotAfter.Equal(info.NotAfter) {
+		return nil, errors.New("host material certificate differs from its public metadata")
+	}
+	return cert, nil
+}
+
+func verifyCertificates(metadata hostbundle.Metadata, files map[string][]byte, options Options) error {
+	ca, err := certificate(files[hostbundle.CAFile], metadata.CA.CertificateInfo)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	if !ca.IsCA || !ca.BasicConstraintsValid || ca.KeyUsage&x509.KeyUsageCertSign == 0 || now.Before(ca.NotBefore) || !now.Before(ca.NotAfter) || ca.CheckSignatureFrom(ca) != nil {
+		return errors.New("host material CA is not a valid current self-signed trust root")
+	}
+	leaf, err := certificate(files[hostbundle.HostCertificateFile], metadata.Certificate)
+	if err != nil {
+		return err
+	}
+	if leaf.IsCA || leaf.Subject.CommonName != options.HostID || len(leaf.EmailAddresses) != 0 || len(leaf.URIs) != 0 {
+		return errors.New("host material leaf certificate does not identify its target host")
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(ca)
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: options.HostID, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+		return errors.New("host material leaf certificate does not verify under the pinned CA")
+	}
+	// 只有出站主机的网关证书带 ClientAuth；直达主机的证书不能用于反向连接。
+	usages := []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	if options.Outbound {
+		usages = append(usages, x509.ExtKeyUsageClientAuth)
+	}
+	if !slices.Equal(leaf.ExtKeyUsage, usages) || len(leaf.UnknownExtKeyUsage) != 0 {
+		return errors.New("host material leaf certificate key usage does not match the host reachability")
+	}
+	names, ips := []string{options.HostID}, []string{}
+	for _, address := range []string{options.Address, options.PrivateAddress} {
+		if address == "" {
+			continue
+		}
+		if ip := net.ParseIP(address); ip != nil {
+			ips = append(ips, ip.String())
+		} else {
+			names = append(names, strings.ToLower(address))
+		}
+	}
+	slices.Sort(names)
+	names = slices.Compact(names)
+	slices.Sort(ips)
+	ips = slices.Compact(ips)
+	actualNames := slices.Clone(leaf.DNSNames)
+	actualIPs := make([]string, 0, len(leaf.IPAddresses))
+	for _, ip := range leaf.IPAddresses {
+		actualIPs = append(actualIPs, ip.String())
+	}
+	slices.Sort(actualNames)
+	slices.Sort(actualIPs)
+	if !slices.Equal(names, actualNames) || !slices.Equal(ips, actualIPs) {
+		return errors.New("host material certificate SAN differs from target public/private addresses")
+	}
+	key, err := onePEM(files[hostbundle.HostTLSKeyFile], "PRIVATE KEY")
+	if err != nil {
+		return err
+	}
+	if _, err := x509.ParsePKCS8PrivateKey(key); err != nil {
+		return errors.New("host material leaf private key is invalid")
+	}
+	if _, err := tls.X509KeyPair(files[hostbundle.HostCertificateFile], files[hostbundle.HostTLSKeyFile]); err != nil {
+		return errors.New("host material leaf private key does not match its certificate")
+	}
+	return nil
 }

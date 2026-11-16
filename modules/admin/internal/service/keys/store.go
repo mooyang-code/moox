@@ -1,475 +1,167 @@
-// Package keys owns the encrypted master copies of gateway signing keys.
-// Deployments reuse Current; Rotate starts an overlap, and Retire ends it only
-// after the operator has confirmed the replacement is in use.
+// Package keys 登记与读取调用方的签名公钥：每台主机一把（t_hosts.c_sign_public_key），
+// 不属于主机的身份各一把（t_identity_keys）。Admin 不保存任何签名私钥；一个身份只有一把公钥，换密钥没有新旧并存。
 package keys
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"slices"
-	"sort"
-	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
-	ErrInvalidCaller   = errors.New("unregistered gateway caller")
-	ErrKeyNotFound     = errors.New("gateway key is not provisioned")
-	ErrInvalidKeyring  = errors.New("invalid encrypted gateway keyring")
-	ErrRotationPending = errors.New("previous gateway key must be retired before another rotation")
-	ErrActiveKey       = errors.New("cannot retire the current signing key")
+	ErrInvalidIdentity  = errors.New("不是可以登记公钥的身份：只有 moox-cli 与服务目录里的外部身份")
+	ErrInvalidPublicKey = errors.New("签名公钥必须是 base64 编码的 32 字节 ed25519 公钥")
+	ErrNotRegistered    = errors.New("没有登记签名公钥")
 )
 
-const maxRingBytes = 16 << 10
-
-// SigningKey deliberately omits the secret from formatting and JSON. Exporters
-// must explicitly request Credentials and write its Secret to a private file.
-type SigningKey struct {
-	Caller string `json:"caller"`
-	KeyID  string `json:"key_id"`
-	secret string
+// IdentityKey 是一个不属于主机的身份登记的公钥（base64）。
+type IdentityKey struct {
+	Identity  string    `gorm:"column:c_identity;primaryKey" json:"identity"`
+	PublicKey string    `gorm:"column:c_sign_public_key" json:"public_key"`
+	UpdatedAt time.Time `gorm:"column:c_mtime" json:"updated_at"`
 }
 
-func (k SigningKey) Credentials() gatewayauth.Credentials {
-	return gatewayauth.Credentials{Caller: k.Caller, KeyID: k.KeyID, Secret: k.secret}
-}
+func (IdentityKey) TableName() string { return "t_identity_keys" }
 
-func (k SigningKey) String() string {
-	return fmt.Sprintf("SigningKey{caller:%s key_id:%s}", k.Caller, k.KeyID)
-}
-func (k SigningKey) GoString() string { return k.String() }
-
-type KeyInfo struct {
-	KeyID     string `json:"key_id"`
-	Current   bool   `json:"current"`
-	CreatedAt int64  `json:"created_at_unix"`
-}
-
-type Info struct {
-	Caller string    `json:"caller"`
-	Keys   []KeyInfo `json:"keys"`
-}
-
-// VerificationKey carries material only to snapshot/Access exporters. Both
-// current and retiring keys remain valid until explicit retirement.
-type VerificationKey struct {
-	Caller string `json:"caller"`
-	KeyID  string `json:"key_id"`
-	Secret []byte `json:"-"`
-}
-
-func (k VerificationKey) String() string {
-	return fmt.Sprintf("VerificationKey{caller:%s key_id:%s}", k.Caller, k.KeyID)
-}
-func (k VerificationKey) GoString() string { return k.String() }
-
-type entry struct {
-	KeyID     string `json:"key_id"`
-	Secret    string `json:"secret"`
-	CreatedAt int64  `json:"created_at_unix"`
-}
-
-type keyring struct {
-	Version int     `json:"version"`
-	Caller  string  `json:"caller"`
-	Current string  `json:"current_key_id"`
-	Entries []entry `json:"keys"`
+// HostKey 是一台主机登记的签名公钥（base64）；还没签发过身份包的主机为空。
+type HostKey struct {
+	HostID    string `json:"host_id"`
+	PublicKey string `json:"public_key"`
 }
 
 type Store struct {
 	db      *gorm.DB
-	master  string
 	catalog servicecatalog.Catalog
 }
 
-func (*Store) String() string     { return "GatewayKeyStore{encrypted master copies}" }
-func (s *Store) GoString() string { return s.String() }
-
-// NewStore never creates schema, generates a master key, or seeds callers.
-func NewStore(db *gorm.DB, encryptionKey string) (*Store, error) {
-	if db == nil || strings.TrimSpace(encryptionKey) == "" || encryptionKey != strings.TrimSpace(encryptionKey) {
-		return nil, errors.New("gateway keys require database and encryption key")
+// NewStore 不建表、不生成任何密钥。
+func NewStore(db *gorm.DB) (*Store, error) {
+	if db == nil {
+		return nil, errors.New("签名公钥登记需要数据库")
 	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: db, master: encryptionKey, catalog: catalog}, nil
+	return &Store{db: db, catalog: catalog}, nil
 }
 
-func (s *Store) validateCaller(tx *gorm.DB, caller string) error {
-	if strings.HasPrefix(caller, "host-gateway@") {
-		host := strings.TrimPrefix(caller, "host-gateway@")
-		if !servicecatalog.ValidHostID(host) {
-			return ErrInvalidCaller
-		}
-		var count int64
-		if err := tx.Table("t_hosts").Where("c_host_id = ?", host).Count(&count).Error; err != nil {
-			return err
-		}
-		if count != 1 {
-			return ErrInvalidCaller
-		}
-		return nil
-	}
-	if caller == "console" || caller == "moox-cli" {
-		return nil
-	}
-	// Gateways have a per-host identity, never a fleet-wide signing key.
-	if _, ok := s.catalog.Component(caller); ok && caller != "host-gateway" {
-		return nil
-	}
-	if s.isExternal(caller) {
-		return nil
-	}
-	return ErrInvalidCaller
+// ValidIdentity 报告名字是不是可以登记公钥的身份。组件名、console、host-gateway 都不行：
+// 它们用主机密钥签名，登记成身份会让持有这把私钥的人不经主机就冒充它们。
+func (s *Store) ValidIdentity(identity string) bool {
+	return identity == servicecatalog.OperatorMooxCLI || s.catalog.ExternalIdentity(identity)
 }
 
-func (s *Store) isExternal(caller string) bool {
-	return s.catalog.ExternalIdentity(caller)
-}
-
-func (s *Store) mutate(ctx context.Context, fn func(*gorm.DB) error) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Reserve SQLite's writer before read/modify/write, including an empty
-		// table, so independent live/offline stores cannot lose a rotation.
-		if err := tx.Exec("UPDATE t_secrets SET c_id = c_id WHERE 0").Error; err != nil {
-			return err
-		}
-		return fn(tx)
-	})
-}
-
-func (s *Store) read(tx *gorm.DB, caller string) (keyring, error) {
-	var rows []model.Secret
-	if err := tx.Where("c_secret_id = ?", model.GatewayKeyringIDPrefix+caller).Find(&rows).Error; err != nil {
-		return keyring{}, err
+func (s *Store) check(identity, publicKey string) error {
+	if !s.ValidIdentity(identity) {
+		return ErrInvalidIdentity
 	}
-	if len(rows) == 0 {
-		return keyring{}, ErrKeyNotFound
-	}
-	if len(rows) != 1 {
-		return keyring{}, ErrInvalidKeyring
-	}
-	row := rows[0]
-	if row.IsDeleted || row.SecretType != model.GatewayKeyringType || row.Category != "gateway" || row.Provider != "moox" || row.Status != "active" || len(row.SecretValue) > 2*maxRingBytes {
-		return keyring{}, ErrInvalidKeyring
-	}
-	plain, err := security.Decrypt(row.SecretValue, s.master)
-	if err != nil || len(plain) > maxRingBytes {
-		return keyring{}, ErrInvalidKeyring
-	}
-	var ring keyring
-	decoder := json.NewDecoder(strings.NewReader(plain))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&ring); err != nil {
-		return keyring{}, ErrInvalidKeyring
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return keyring{}, ErrInvalidKeyring
-	}
-	if !validRing(ring, caller) || row.KeyID != ring.Current {
-		return keyring{}, ErrInvalidKeyring
-	}
-	return ring, nil
-}
-
-func validRing(ring keyring, caller string) bool {
-	if ring.Version != 1 || ring.Caller != caller || len(ring.Entries) < 1 || len(ring.Entries) > 2 {
-		return false
-	}
-	seen := map[string]bool{}
-	current := false
-	for _, item := range ring.Entries {
-		id, err := hex.DecodeString(item.KeyID)
-		if err != nil || len(id) != 16 || item.KeyID != strings.ToLower(item.KeyID) || seen[item.KeyID] || item.CreatedAt <= 0 {
-			return false
-		}
-		secret, err := base64.RawURLEncoding.DecodeString(item.Secret)
-		if err != nil || len(secret) != 32 || base64.RawURLEncoding.EncodeToString(secret) != item.Secret {
-			return false
-		}
-		seen[item.KeyID] = true
-		current = current || item.KeyID == ring.Current
-	}
-	return current
-}
-
-func newEntry() (entry, error) {
-	id := make([]byte, 16)
-	secret := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, id); err != nil {
-		return entry{}, errors.New("generate gateway key ID")
-	}
-	if _, err := io.ReadFull(rand.Reader, secret); err != nil {
-		return entry{}, errors.New("generate gateway signing key")
-	}
-	return entry{KeyID: hex.EncodeToString(id), Secret: base64.RawURLEncoding.EncodeToString(secret), CreatedAt: time.Now().Unix()}, nil
-}
-
-func (s *Store) write(tx *gorm.DB, ring keyring, create bool) error {
-	raw, err := json.Marshal(ring)
-	if err != nil {
-		return err
-	}
-	ciphertext, err := security.Encrypt(string(raw), s.master)
-	if err != nil {
-		return errors.New("encrypt gateway keyring")
-	}
-	id := model.GatewayKeyringIDPrefix + ring.Caller
-	if create {
-		return tx.Create(&model.Secret{
-			SpaceID: events.SystemSpaceID, SecretID: id, Name: "Gateway caller " + ring.Caller,
-			Category: "gateway", Provider: "moox", SecretType: model.GatewayKeyringType,
-			KeyID: ring.Current, SecretValue: ciphertext, Status: "active", ExtraConfig: "{}",
-			Creator: "gateway-keys", CreateTime: time.Now().UTC(), ModifyTime: time.Now().UTC(),
-		}).Error
-	}
-	result := tx.Model(&model.Secret{}).Where("c_secret_id = ? AND c_is_deleted = 0", id).
-		Updates(map[string]any{"c_key_id": ring.Current, "c_secret_value": ciphertext, "c_mtime": time.Now().UTC()})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return ErrInvalidKeyring
+	if _, err := gatewayauth.ParsePublicKey(publicKey); err != nil {
+		return ErrInvalidPublicKey
 	}
 	return nil
 }
 
-func currentKey(ring keyring) SigningKey {
-	for _, item := range ring.Entries {
-		if item.KeyID == ring.Current {
-			return SigningKey{Caller: ring.Caller, KeyID: item.KeyID, secret: item.Secret}
-		}
-	}
-	return SigningKey{} // read always validates the current entry.
-}
-
-func (s *Store) ensure(tx *gorm.DB, caller string) (SigningKey, error) {
-	ring, err := s.read(tx, caller)
-	if err == nil {
-		return currentKey(ring), nil
-	}
-	if !errors.Is(err, ErrKeyNotFound) {
-		return SigningKey{}, err
-	}
-	item, err := newEntry()
-	if err != nil {
-		return SigningKey{}, err
-	}
-	ring = keyring{Version: 1, Caller: caller, Current: item.KeyID, Entries: []entry{item}}
-	if err := s.write(tx, ring, true); err != nil {
-		return SigningKey{}, err
-	}
-	return currentKey(ring), nil
-}
-
-func (s *Store) Ensure(ctx context.Context, caller string) (SigningKey, error) {
-	var key SigningKey
-	err := s.mutate(ctx, func(tx *gorm.DB) error {
-		if err := s.validateCaller(tx, caller); err != nil {
-			return err
-		}
-		var err error
-		key, err = s.ensure(tx, caller)
+// SetIdentity 登记或替换一个身份的公钥。替换后旧私钥的签名在各网关拿到新快照后（几秒内）失效。
+func (s *Store) SetIdentity(ctx context.Context, identity, publicKey string) error {
+	if err := s.check(identity, publicKey); err != nil {
 		return err
-	})
-	if err != nil {
-		return SigningKey{}, err
 	}
-	return key, nil
+	row := IdentityKey{Identity: identity, PublicKey: publicKey, UpdatedAt: time.Now().UTC()}
+	return s.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_identity"}}, UpdateAll: true}).Create(&row).Error
 }
 
-// EnsureAll provisions the catalog's callers and all registered host gateway
-// identities in one transaction. Existing material is never regenerated.
-func (s *Store) EnsureAll(ctx context.Context) ([]SigningKey, error) {
-	var keys []SigningKey
-	err := s.mutate(ctx, func(tx *gorm.DB) error {
-		callers := []string{"console", "moox-cli"}
-		for _, component := range s.catalog.Components {
-			// 外部程序组件以同名外部身份访问系统，密钥环由下面的外部身份统一生成；第三方程序（SeaweedFS）不签名。
-			if component.ID != "host-gateway" && !component.ExternalProgram && !component.ThirdParty {
-				callers = append(callers, component.ID)
-			}
-		}
-		callers = append(callers, s.catalog.ExternalIdentities()...)
-		var hosts []string
-		if err := tx.Table("t_hosts").Order("c_host_id").Pluck("c_host_id", &hosts).Error; err != nil {
-			return err
-		}
-		if len(hosts) > 1024 {
-			return ErrInvalidCaller
-		}
-		for _, host := range hosts {
-			if !servicecatalog.ValidHostID(host) {
-				return ErrInvalidCaller
-			}
-			callers = append(callers, "host-gateway@"+host)
-		}
-		sort.Strings(callers)
-		for _, caller := range callers {
-			key, err := s.ensure(tx, caller)
-			if err != nil {
-				return err
-			}
-			keys = append(keys, key)
-		}
-		return nil
-	})
-	if err != nil {
+// EnsureIdentity 只在这个身份还没登记时写入，返回登记着的公钥（bootstrap 用：重复执行不改已有内容）。
+func (s *Store) EnsureIdentity(ctx context.Context, identity, publicKey string) (string, error) {
+	if err := s.check(identity, publicKey); err != nil {
+		return "", err
+	}
+	row := IdentityKey{Identity: identity, PublicKey: publicKey, UpdatedAt: time.Now().UTC()}
+	if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+		return "", err
+	}
+	return s.Identity(ctx, identity)
+}
+
+// Identity 返回一个身份登记的公钥。
+func (s *Store) Identity(ctx context.Context, identity string) (string, error) {
+	var rows []IdentityKey
+	if err := s.db.WithContext(ctx).Where("c_identity = ?", identity).Find(&rows).Error; err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		return "", ErrNotRegistered
+	}
+	return rows[0].PublicKey, nil
+}
+
+// DeleteIdentity 删除一个身份的公钥，它的私钥随即不能再用。
+func (s *Store) DeleteIdentity(ctx context.Context, identity string) error {
+	result := s.db.WithContext(ctx).Where("c_identity = ?", identity).Delete(&IdentityKey{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotRegistered
+	}
+	return nil
+}
+
+// Identities 按名字顺序返回登记着的全部身份公钥。库里不是合法身份或公钥格式不对的行（只可能是手工改库）不返回。
+func (s *Store) Identities(ctx context.Context) ([]IdentityKey, error) {
+	var rows []IdentityKey
+	if err := s.db.WithContext(ctx).Order("c_identity").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	return keys, nil
+	return slices.DeleteFunc(rows, func(row IdentityKey) bool { return s.check(row.Identity, row.PublicKey) != nil }), nil
 }
 
-func (s *Store) Current(ctx context.Context, caller string) (SigningKey, error) {
-	var key SigningKey
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := s.validateCaller(tx, caller); err != nil {
-			return err
-		}
-		ring, err := s.read(tx, caller)
-		if err == nil {
-			key = currentKey(ring)
-		}
-		return err
-	})
-	if err != nil {
-		return SigningKey{}, err
+// HostPublicKey 返回一台主机登记的签名公钥；主机没登记时报错，登记了但还没签发过时为空。
+func (s *Store) HostPublicKey(ctx context.Context, hostID string) (string, error) {
+	var keys []string
+	if err := s.db.WithContext(ctx).Table("t_hosts").Where("c_host_id = ?", hostID).Pluck("c_sign_public_key", &keys).Error; err != nil {
+		return "", err
 	}
-	return key, nil
-}
-
-func (s *Store) Rotate(ctx context.Context, caller string) (SigningKey, error) {
-	var key SigningKey
-	err := s.mutate(ctx, func(tx *gorm.DB) error {
-		if err := s.validateCaller(tx, caller); err != nil {
-			return err
-		}
-		ring, err := s.read(tx, caller)
-		if err != nil {
-			return err
-		}
-		if len(ring.Entries) == 2 {
-			return ErrRotationPending
-		}
-		item, err := newEntry()
-		if err != nil {
-			return err
-		}
-		ring.Current = item.KeyID
-		ring.Entries = append(ring.Entries, item)
-		if err := s.write(tx, ring, false); err != nil {
-			return err
-		}
-		key = currentKey(ring)
-		return nil
-	})
-	if err != nil {
-		return SigningKey{}, err
+	if len(keys) != 1 {
+		return "", gorm.ErrRecordNotFound
 	}
-	return key, nil
+	return keys[0], nil
 }
 
-func (s *Store) Retire(ctx context.Context, caller, keyID string) error {
-	return s.mutate(ctx, func(tx *gorm.DB) error {
-		if err := s.validateCaller(tx, caller); err != nil {
-			return err
-		}
-		ring, err := s.read(tx, caller)
-		if err != nil {
-			return err
-		}
-		if ring.Current == keyID {
-			return ErrActiveKey
-		}
-		index := slices.IndexFunc(ring.Entries, func(item entry) bool { return item.KeyID == keyID })
-		if index < 0 {
-			return ErrKeyNotFound
-		}
-		ring.Entries = slices.Delete(ring.Entries, index, index+1)
-		return s.write(tx, ring, false)
-	})
-}
-
-func (s *Store) Info(ctx context.Context, caller string) (Info, error) {
-	var info Info
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := s.validateCaller(tx, caller); err != nil {
-			return err
-		}
-		ring, err := s.read(tx, caller)
-		if err != nil {
-			return err
-		}
-		info.Caller = ring.Caller
-		for _, item := range ring.Entries {
-			info.Keys = append(info.Keys, KeyInfo{KeyID: item.KeyID, Current: item.KeyID == ring.Current, CreatedAt: item.CreatedAt})
-		}
-		slices.SortFunc(info.Keys, func(a, b KeyInfo) int { return strings.Compare(a.KeyID, b.KeyID) })
-		return nil
-	})
-	return info, err
-}
-
-// InternalVerification never accepts external principals. The caller list must
-// come from the target host's compiled ACL, not all callers in the fleet.
-func (s *Store) InternalVerification(ctx context.Context, callers []string) ([]VerificationKey, error) {
-	return s.verification(ctx, callers, false)
-}
-
-func (s *Store) ExternalVerification(ctx context.Context) ([]VerificationKey, error) {
-	return s.verification(ctx, s.catalog.ExternalIdentities(), true)
-}
-
-func (s *Store) verification(ctx context.Context, callers []string, external bool) ([]VerificationKey, error) {
-	if len(callers) > 1100 {
-		return nil, ErrInvalidCaller
+// SetHostPublicKey 写一台已登记主机的签名公钥（签发身份包时）。
+func (s *Store) SetHostPublicKey(ctx context.Context, hostID, publicKey string) error {
+	if _, err := gatewayauth.ParsePublicKey(publicKey); err != nil {
+		return ErrInvalidPublicKey
 	}
-	callers = slices.Clone(callers)
-	sort.Strings(callers)
-	callers = slices.Compact(callers)
-	keys := []VerificationKey{}
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, caller := range callers {
-			if s.isExternal(caller) != external {
-				return ErrInvalidCaller
-			}
-			if err := s.validateCaller(tx, caller); err != nil {
-				return err
-			}
-			ring, err := s.read(tx, caller)
-			if err != nil {
-				return err
-			}
-			for _, item := range ring.Entries {
-				keys = append(keys, VerificationKey{Caller: caller, KeyID: item.KeyID, Secret: bytes.Clone([]byte(item.Secret))})
-			}
-		}
-		return nil
-	})
-	if err != nil {
+	result := s.db.WithContext(ctx).Table("t_hosts").Where("c_host_id = ?", hostID).
+		Updates(map[string]any{"c_sign_public_key": publicKey, "c_mtime": time.Now().UTC()})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+// Hosts 按主机 ID 顺序返回全部登记主机的签名公钥。
+func (s *Store) Hosts(ctx context.Context) ([]HostKey, error) {
+	var rows []struct {
+		HostID    string `gorm:"column:c_host_id"`
+		PublicKey string `gorm:"column:c_sign_public_key"`
+	}
+	if err := s.db.WithContext(ctx).Table("t_hosts").Select("c_host_id, c_sign_public_key").Order("c_host_id").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	slices.SortFunc(keys, func(a, b VerificationKey) int {
-		if a.Caller != b.Caller {
-			return strings.Compare(a.Caller, b.Caller)
-		}
-		return strings.Compare(a.KeyID, b.KeyID)
-	})
-	return keys, nil
+	hosts := make([]HostKey, 0, len(rows))
+	for _, row := range rows {
+		hosts = append(hosts, HostKey{HostID: row.HostID, PublicKey: row.PublicKey})
+	}
+	return hosts, nil
 }

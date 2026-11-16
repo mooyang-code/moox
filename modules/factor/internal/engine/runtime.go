@@ -120,7 +120,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		}
 	}()
 
-	if r.gateway, err = cfg.GatewayClient.OpenExternal(cfg.sourcePath); err != nil {
+	if r.gateway, err = cfg.OpenGateway(); err != nil {
 		return nil, err
 	}
 	r.storage = newStorageClient(r.gateway)

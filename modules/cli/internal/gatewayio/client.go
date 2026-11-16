@@ -1,28 +1,28 @@
-// Package gatewayio owns the operator's signed gateway client and SSH tunnels.
+// Package gatewayio 持有操作电脑的网关客户端与 SSH 隧道：以 moox-cli 的身份、用这台电脑上的私钥签名。
 package gatewayio
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"gopkg.in/yaml.v3"
 )
 
-// OperatorCAFile 是操作端身份目录里的 MooX CA 文件名，由身份安装写入。
-const OperatorCAFile = "moox-ca.crt"
+// 操作电脑身份目录（~/.config/moox）里的两个文件：moox-cli 的签名私钥（setup operator 生成），
+// 以及部署控制机时记下的 MooX CA 根证书。
+const (
+	OperatorKeyFile = "moox-cli.key"
+	OperatorCAFile  = "moox-ca.crt"
+)
 
 // Client owns all connections, including the directory source borrowed by the
 // shared client. Closing it first joins directory refresh, then closes SSH.
@@ -41,7 +41,7 @@ type sshHost struct {
 	identityFiles           []string
 }
 
-// Open 按 moox.toml 的主机经 SSH 隧道连到各主机网关，使用本机 ~/.config/moox 下的操作员身份。
+// Open 按 moox.toml 的主机经 SSH 隧道连到各主机网关，用本机 ~/.config/moox/moox-cli.key 签名。
 func Open(ctx context.Context, cfg *topology.Config) (*Client, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -55,22 +55,18 @@ func Open(ctx context.Context, cfg *topology.Config) (*Client, error) {
 		hosts = append(hosts, sshHost{name: host.Name, address: host.Address, username: host.Username, port: host.Port, identityFiles: host.IdentityFiles()})
 	}
 	options := setupssh.Options{Timeout: 5 * time.Second}
-	return open(ctx, hosts, cfg.ControlHost().Name, filepath.Join(home, ".config", "moox", "gateway-client.yaml"), options)
+	return open(ctx, hosts, cfg.ControlHost().Name, filepath.Join(home, ".config", "moox"), options)
 }
 
-func open(ctx context.Context, hosts []sshHost, control, identityPath string, options setupssh.Options) (*Client, error) {
+func open(ctx context.Context, hosts []sshHost, control, identityDirectory string, options setupssh.Options) (*Client, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("gateway tunnel requires a live context and setup configuration")
 	}
-	identity, err := loadIdentity(identityPath)
-	if err != nil {
-		return nil, err
+	keyPath := filepath.Join(identityDirectory, OperatorKeyFile)
+	if _, err := os.Lstat(keyPath); os.IsNotExist(err) {
+		return nil, errors.New("admin_not_ready: 这台电脑没有 moox-cli 的签名私钥。系统还没装时运行 setup validate 看下一步；已经装好、换了电脑时运行 moox-cli setup operator --register")
 	}
-	keyPath := identity.KeyFile
-	if !filepath.IsAbs(keyPath) {
-		keyPath = filepath.Join(filepath.Dir(identityPath), keyPath)
-	}
-	secret, err := gatewayauth.ReadSigningSecret(keyPath)
+	key, err := gatewayauth.ReadSigningKey(keyPath)
 	if err != nil {
 		return nil, fmt.Errorf("load operator signing key: %w", err)
 	}
@@ -84,13 +80,13 @@ func open(ctx context.Context, hosts []sshHost, control, identityPath string, op
 		resolver.hosts[host.name] = host
 	}
 	source := &directorySource{control: control, tunnels: resolver}
-	// 安装操作端身份时一并保存的 MooX CA；连接只能出站的主机（经 control 中转）时用它校验证书。
-	caFile := filepath.Join(filepath.Dir(identityPath), OperatorCAFile)
+	// 部署控制机时记下的 MooX CA；连接只能出站的主机（经 control 中转）时用它校验证书。
+	caFile := filepath.Join(identityDirectory, OperatorCAFile)
 	if _, err := os.Stat(caFile); err != nil {
 		caFile = ""
 	}
 	shared, err := gatewayclient.New(gatewayclient.Config{
-		Mode: gatewayclient.Tunnel, Credentials: gatewayauth.Credentials{Caller: "moox-cli", KeyID: identity.KeyID, Secret: secret},
+		Mode: gatewayclient.Tunnel, Credentials: gatewayauth.Credentials{Caller: "moox-cli", Key: key},
 		Source: source, Tunnels: resolver, CAFile: caFile,
 	})
 	if err != nil {
@@ -99,39 +95,6 @@ func open(ctx context.Context, hosts []sshHost, control, identityPath string, op
 		return nil, err
 	}
 	return &Client{Client: shared, source: source, tunnels: resolver}, nil
-}
-
-func loadIdentity(path string) (gatewayclient.FileConfig, error) {
-	var config gatewayclient.FileConfig
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return config, errors.New("admin_not_ready: 这台电脑没有网关身份，admin 还没有完成；运行 setup validate 看下一步")
-	}
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() > 4096 {
-		return config, errors.New("operator gateway configuration must be a regular 0600 file of at most 4096 bytes")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return config, err
-	}
-	defer file.Close()
-	decoder := yaml.NewDecoder(io.LimitReader(file, 4097))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&config); err != nil {
-		return config, fmt.Errorf("decode operator gateway configuration: %w", err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return config, errors.New("operator gateway configuration requires exactly one YAML document")
-	}
-	if config.Caller != "moox-cli" || config.KeyID == "" {
-		return config, errors.New("operator gateway configuration requires caller moox-cli and an Admin-assigned key_id")
-	}
-	if len(config.KeyID) > 128 || strings.ContainsAny(config.KeyID, "/\\") || strings.ContainsFunc(config.KeyID, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) ||
-		config.KeyFile == "" || config.KeyFile != strings.TrimSpace(config.KeyFile) || strings.ContainsAny(config.KeyFile, "\x00\r\n") {
-		return config, errors.New("operator gateway configuration has an invalid key_id or key_file")
-	}
-	return config, nil
 }
 
 func (c *Client) Close() error {

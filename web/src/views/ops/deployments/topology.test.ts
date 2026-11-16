@@ -75,7 +75,7 @@ describe("service topology", () => {
     expect(edge(edges, key("control", "strategy"), key("overseas", "trade"))).toMatchObject({ route: "relay" });
     expect(edge(edges, key("control", "collector"), key("control", "admin"))).toMatchObject({ route: "local" });
     expect(edge(edges, key("control", "monitor"), key("storage", "host-agent"))).toMatchObject({ category: "monitor" });
-    // 每台主机网关以 host-gateway@<主机> 身份拉取 Admin 快照。
+    // 每台主机网关以 host-gateway 的身份（用本机的主机密钥签名）拉取 Admin 快照。
     for (const host of hosts)
       expect(edge(edges, key(host.host_id, "host-gateway"), key("control", "admin"))).toMatchObject({ category: "ops" });
     expect(edges.some(item => item.from === item.to)).toBe(false);
@@ -89,7 +89,7 @@ describe("service topology", () => {
     // 因子引擎、归档 Worker 是登记在主机上的外部程序组件，不再作为外部节点。
     expect(ids).not.toContain("ext:factor-engine");
     expect(ids).not.toContain("ext:archive-worker");
-    // FactorEngine 的方法只有外部身份 factor-engine 能调：因子机上的因子引擎经外部接入到因子管理。
+    // FactorEngine 的方法只有 factor-engine 能调：因子机上的因子引擎用主机密钥直连控制机网关到因子管理，不经外部接入。
     expect(edge(topology.edges, key("factor", "factor-engine"), key("control", "factor-mgr"))).toMatchObject({
       category: "business",
       services: ["trpc.moox.factor.FactorEngine"]

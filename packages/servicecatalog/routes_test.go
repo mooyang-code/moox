@@ -127,8 +127,8 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":  {180, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "abd59b7c5cfe5fd99a1da644e8c251debc18fd0bebb6c2793a71d07013830439"},
-		"storage":  {65, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "4304606d48e8f9f3aa00d7da895c7fbf6058a9c512c60ff9518f148b091d7cef"},
+		"control":  {180, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-engine", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}, "09b9a75f9dccc1a38fdd6b6ccaf0a50f953f5d41151f5f55223c65ad23dd1a53"},
+		"storage":  {65, []string{"access", "archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "strategy"}, "a750908af3c3a7b4e30a046ea5696c2ed3917e448689f799a547908a3eedb921"},
 		"overseas": {64, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "2a99e829e1d556006975d4b2e8f42b6651acf6a22df3438d11446fdf4cdba2ad"},
 	}
 	for _, host := range p.Hosts {
@@ -168,12 +168,12 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 					t.Fatalf("compiled ACL widened: %s %s/%s", caller, route.ServicePath, route.Method)
 				}
 			}
-			if route.ServicePath == GatewayControlPath && !slices.Equal(route.Callers, []string{"host-gateway@control", "host-gateway@overseas", "host-gateway@storage"}) {
+			if route.ServicePath == GatewayControlPath && !slices.Equal(route.Callers, []string{"host-gateway"}) {
 				t.Fatal("GatewayControl key scope is incorrect")
 			}
 		}
 		for _, caller := range compiled.VerificationCallers {
-			if strings.Contains(caller, "*") || slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill", "collector-operator"}, caller) {
+			if strings.Contains(caller, "*") || strings.Contains(caller, "@") || slices.Contains([]string{"scf-collector", "moox-skill", "collector-operator"}, caller) {
 				t.Fatalf("unexpanded or external verification scope %q", caller)
 			}
 		}
@@ -286,8 +286,9 @@ func TestDisabledHostAndDeploymentWithdrawRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(control.VerificationCallers, "host-gateway@overseas") {
-		t.Fatal("disabled host cannot fetch disabled snapshot")
+	// 停用的主机仍要验签取到“已停用”的快照：它的网关还在签名调用方里，别的组件不在。
+	if !slices.Contains(control.VerificationCallers, "host-gateway") || !slices.Equal(c.SigningCallers(p)["overseas"], []string{"host-gateway"}) {
+		t.Fatalf("disabled host cannot fetch disabled snapshot: %v", c.SigningCallers(p)["overseas"])
 	}
 	p = productionTopology()
 	for i := range p.Deployments {
@@ -370,16 +371,17 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 	if !slices.Equal(list.Callers, []string{"console", "monitor", "moox-cli", "strategy"}) || !list.ReadOnly {
 		t.Fatalf("ListArchiveTasks 只读方法允许 monitor 与 strategy: %+v", list)
 	}
-	// ArchiveWorker 的方法只有外部身份 archive-worker 能调，网关上的调用方是代它转发的 access。
+	// ArchiveWorker 的方法只有归档 worker 能调：它用所在主机的密钥直接到网关，不经 access。
 	pull := routes["trpc.moox.archive.ArchiveWorker/PullArchiveRun"]
-	if !slices.Equal(pull.Callers, []string{"access"}) {
+	if !slices.Equal(pull.Callers, []string{"archive-worker"}) {
 		t.Fatalf("PullArchiveRun callers = %v", pull.Callers)
 	}
-	if !c.PrincipalAllowed("archive-worker", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") ||
-		c.PrincipalAllowed("archive-worker", "trpc.moox.archive.ArchiveMgr", "CreateArchiveTask") ||
-		c.PrincipalAllowed("archive-worker", "trpc.moox.storage.PrimaryStore", "UpsertFields") ||
-		c.PrincipalAllowed("factor-engine", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") {
-		t.Fatal("archive-worker 的外部白名单边界不对")
+	if !c.Allowed("archive-worker", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") ||
+		c.PrincipalAllowed("archive-worker", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") ||
+		c.Allowed("archive-worker", "trpc.moox.archive.ArchiveMgr", "CreateArchiveTask") ||
+		c.Allowed("archive-worker", "trpc.moox.storage.PrimaryStore", "UpsertFields") ||
+		c.Allowed("factor-engine", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") {
+		t.Fatal("archive-worker 能调的方法边界不对")
 	}
 }
 
@@ -507,14 +509,13 @@ func TestOutboundFactorHostDoesNotRelayHealthPorts(t *testing.T) {
 	if err := c.ValidateTopology(direct); err != nil {
 		t.Fatal(err)
 	}
-	// 外部程序不是网关调用方：全部路由的调用方里没有它们，外部身份只经 access 进入。
+	// 外部程序是普通的网关调用方：只出现在 callers 里写了它的方法上。
 	for _, route := range control.Routes {
-		if slices.Contains(route.Callers, "factor-engine") || slices.Contains(route.Callers, "archive-worker") {
-			t.Fatalf("external program is a gateway caller: %+v", route)
+		for _, id := range []string{"factor-engine", "archive-worker"} {
+			if slices.Contains(route.Callers, id) != c.Allowed(id, route.ServicePath, route.Method) {
+				t.Fatalf("external program route callers differ from the catalog: %+v", route)
+			}
 		}
-	}
-	if slices.Contains(control.VerificationCallers, "factor-engine") || slices.Contains(control.VerificationCallers, "archive-worker") {
-		t.Fatalf("external program is a verification caller: %v", control.VerificationCallers)
 	}
 	// 停用主机后，中转许可随之撤销。
 	for i := range p.Hosts {

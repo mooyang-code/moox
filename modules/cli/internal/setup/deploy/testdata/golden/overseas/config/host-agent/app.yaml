@@ -6,4 +6,4 @@ host_id: overseas
 # Optional display name. Deployment association always uses host_id.
 host_name: ""
 host_policy_path: /data/moox/data/host-agent/host-policy.json
-gateway_client: {caller: host-agent, key_id: key-host-agent, key_file: /data/moox/secrets/caller-host-agent.key, host_id: overseas, local_address: '127.0.0.1:11002', ca_file: /data/moox/secrets/moox-ca.crt}
+gateway_client: {caller: host-agent, key_file: /data/moox/secrets/host.key, host_id: overseas, local_address: '127.0.0.1:11002', ca_file: /data/moox/secrets/moox-ca.crt}

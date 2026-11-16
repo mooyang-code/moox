@@ -1,11 +1,11 @@
-# moox-archive-worker 配置。worker 只出站：经固定的 Access 访问 Storage 与 archive-mgr。
-# 这里是开发用的默认值：部署（moox-cli setup deploy）渲染时把身份、路径与对象存储换成这台主机的实际值，路径都是绝对路径。
+# moox-archive-worker 配置。worker 只出站：用所在主机的签名私钥，经本机网关取目录，再直连存储机与控制机的网关访问 Storage 与 archive-mgr。
+# 这里是开发用的默认值：部署（moox-cli setup deploy）渲染时把主机 ID、路径与对象存储换成这台主机的实际值，路径都是绝对路径。
 gateway_client:
-  access_address: access.example.test:11004
-  access_id: access@storage
   caller: archive-worker
-  key_id: ""                     # 由 Admin 分配（moox-admin-cli keys export --caller archive-worker）
-  key_file: ../secrets/access-archive-worker.key
+  key_file: ../../secrets/host.key
+  host_id: ""
+  local_address: 127.0.0.1:11002
+  ca_file: ../../secrets/moox-ca.crt
 
 worker:
   worker_id: archive-worker@example-host   # 只是 worker 的名字，部署写成 archive-worker@<主机>

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/wirecompress"
 	"github.com/stretchr/testify/require"
@@ -28,7 +28,7 @@ func TestCrossHostEndpointsAlwaysCompress(t *testing.T) {
 	require.True(t, ep.compress, "SSH 隧道经公网到达目标主机")
 
 	// External：经 Access。
-	external := newTestClient(t, Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: "scf-collector", KeyID: "k", Secret: "fixture-key"},
+	external := newTestClient(t, Config{Mode: External, Credentials: authtest.Identity("scf-collector"),
 		AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"})
 	ep, err = external.endpoint(context.Background(), secretService, "")
 	require.NoError(t, err)

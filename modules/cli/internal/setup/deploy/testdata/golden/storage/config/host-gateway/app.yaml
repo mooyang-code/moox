@@ -11,8 +11,6 @@ tls:
 control:
     host_id: control
     target: 203.0.113.10:11003
-    caller: host-gateway@storage
-    key_id: key-host-gateway
-    key_file: /data/moox/secrets/caller-host-gateway.key
+    key_file: /data/moox/secrets/host.key
 store:
     path: /data/moox/data/host-gateway

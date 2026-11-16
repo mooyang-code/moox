@@ -15,8 +15,8 @@
 - `Allowed` 供控制台与主机网关共用；外部接入使用 `PrincipalAllowed`。外部身份不能直接进入主机网关，它们能调的方法自动授予 `access`。
 - `ReadOnly` 识别只读方法；`Retryable` 还包含标了 `idempotent` 的幂等写方法，当前是 `PrimaryStore.CommitTimeSeriesBatch`。是否实际重试还受客户端错误分类与剩余预算约束。
 - 路由按单个 service path / method 编译，保留方法与调用方的对应关系。
-- `host-gateway` 编译时展开为已登记主机的 `host-gateway@{主机}`；控制服务仍须校验调用方主机与请求中的主机一致。
-- `CompiledHost.Hash` 是路由定义哈希。GatewayControl 应把实际下发的校验密钥及 KeyID 加入最终快照哈希，保证密钥轮换能触发更新。
+- `host-gateway` 是每台主机网关的调用方名字（用所在主机的密钥签名，签名主机另由签名头给出）；控制服务仍须校验签名主机与请求中的主机一致。`SigningCallers` 给出每台主机上可以用主机密钥签名的调用方。
+- `CompiledHost.Hash` 是路由定义哈希。GatewayControl 把实际下发的校验公钥一起算进最终快照哈希，换密钥就会触发更新。
 
 访问控制基线：`testdata/acl-baseline.json`（每个调用方、外部身份能调的方法）与 `testdata/compile-baseline.json`（固定拓扑下每台主机的路由编译结果），`baseline_test.go` 每次测试逐项核对。改了目录或编译逻辑之后按 `baseline_gen_test.go` 文件头的用法重新生成，看过差异再提交。
 

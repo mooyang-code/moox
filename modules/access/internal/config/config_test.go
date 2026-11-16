@@ -11,8 +11,7 @@ import (
 
 const example = `gateway_client:
   caller: access
-  key_id: assigned-internal-access-75
-  key_file: ../../secrets/caller-access.key
+  key_file: ../../secrets/host.key
 verification_file: ../../secrets/access/access-verification.json
 nonce_path: ../../data/access/nonces.db
 `

@@ -2,11 +2,10 @@ github.com/mooyang-code/moox/packages/frequency
 github.com/mooyang-code/moox/modules/collector/internal/domain
 github.com/mooyang-code/moox/packages/commonpb
 github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen
+github.com/mooyang-code/moox/packages/security
+github.com/mooyang-code/moox/packages/gatewayauth
 github.com/mooyang-code/moox/packages/wirecompress
 github.com/mooyang-code/moox/packages/gatewayauth/nativewire
-github.com/mooyang-code/moox/packages/security
-github.com/mooyang-code/moox/packages/requestauth
-github.com/mooyang-code/moox/packages/gatewayauth
 github.com/mooyang-code/moox/packages/gatewayclient/relay
 github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen
 github.com/mooyang-code/moox/packages/servicecatalog

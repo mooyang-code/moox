@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -196,11 +195,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err := cache.Prepare(); err != nil {
 		return err
 	}
-	nonces, err := store.OpenNonces(filepath.Join(cfg.Store.Path, "nonces"))
-	if err != nil {
-		return err
-	}
-	defer nonces.Close()
+	// 防重放记录只在内存里：早于本进程启动时间的签名一律拒绝，所以重启不会放过重放。
+	started := time.Now()
+	replay := gatewayauth.NewReplay(started)
 	runtime := New(Options{HostID: cfg.Host.ID, Snapshots: cache, Control: control, Health: health})
 	initialCtx, cancelInitial := context.WithTimeout(ctx, 15*time.Second)
 	err = runtime.Initialize(initialCtx)
@@ -208,8 +205,8 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err != nil {
 		return err
 	}
-	health.SetStorageCheck(func() error { return errors.Join(cache.Check(), nonces.Check()) })
-	proxy, err := router.NewService(router.ServiceOptions{State: runtime.State(), Nonces: nonces, Metrics: health})
+	health.SetStorageCheck(cache.Check)
+	proxy, err := router.NewService(router.ServiceOptions{State: runtime.State(), Replay: replay, Metrics: health})
 	if err != nil {
 		return err
 	}
@@ -220,6 +217,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err := registerMetricsReporter(timers, health.Readiness); err != nil {
 		return err
 	}
+	// 签名时间只精确到秒：等过了启动时刻所在的这一秒再开始监听（最多 1 秒）。这样监听之后才签的请求一定不早于启动时间，
+	// 启动前签好、监听后才到的请求被拒后，调用方立即重签的那一次也一定能过。
+	time.Sleep(time.Until(started.Truncate(time.Second).Add(time.Second)))
 	opened, err := listener.Open(ctx, cfg, material)
 	if err != nil {
 		return err
@@ -228,7 +228,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	relayCtx, stopRelay := context.WithCancel(ctx)
 	defer stopRelay()
 	if cfg.Host.ID == cfg.Control.HostID {
-		server, err := relay.NewServer(relay.ServerOptions{State: runtime.State(), Nonces: nonces})
+		server, err := relay.NewServer(relay.ServerOptions{State: runtime.State(), Replay: replay})
 		if err != nil {
 			return err
 		}

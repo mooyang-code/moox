@@ -27,6 +27,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -76,8 +77,7 @@ func (w *monitorGatewayWire) verify(ctx context.Context, service, method string,
 	if err != nil {
 		return err
 	}
-	claims, err := gatewayauth.Verify(w.credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method,
-		TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
+	claims, err := authtest.Verify(w.credentials, gatewayauth.Request{TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
 	if err != nil {
 		return err
 	}
@@ -129,13 +129,13 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
 	root := t.TempDir()
 	configPath := filepath.Join(root, "monitor", "config", "app.yaml")
-	keyPath := filepath.Join(root, "secrets", "caller-monitor.key")
+	keyPath := filepath.Join(root, "secrets", "host.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
 	for _, path := range []string{configPath, keyPath, caPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	}
-	credentials := gatewayauth.Credentials{Caller: "monitor", KeyID: "admin-assigned-monitor-key-97", Secret: "monitor-signing-fixture-key-at-least-32-bytes"}
-	require.NoError(t, os.WriteFile(keyPath, []byte(credentials.Secret+"\n"), 0o600))
+	credentials := authtest.Component("monitor", "control")
+	require.NoError(t, os.WriteFile(keyPath, []byte(gatewayauth.EncodeSigningKey(credentials.Key)+"\n"), 0o600))
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
@@ -159,7 +159,7 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	data := filepath.Join(root, "data", "monitor")
-	raw := "deployment:\n  enabled: false\ndatabase:\n  path: " + filepath.Join(data, "monitor.db") + "\ngateway_client:\n  caller: monitor\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-monitor.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
+	raw := "deployment:\n  enabled: false\ndatabase:\n  path: " + filepath.Join(data, "monitor.db") + "\ngateway_client:\n  caller: monitor\n  key_file: ../../secrets/host.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
 	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0o600))
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)

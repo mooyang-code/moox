@@ -142,7 +142,7 @@ func Load(path string) (*Config, error) {
 
 func Default() *Config {
 	return &Config{
-		GatewayClient: gatewayclient.FileConfig{Caller: "monitor", KeyFile: "../../secrets/caller-monitor.key"},
+		GatewayClient: gatewayclient.FileConfig{Caller: "monitor", KeyFile: "../../secrets/host.key"},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/monitor/monitor.db",

@@ -2,12 +2,14 @@ package bootstrap
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -32,13 +34,12 @@ func TestConsoleGatewayStartsFromDatabaseWhileHostGatewayIsOffline(t *testing.T)
 		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "collector"}},
 		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
 	}))
-	store, err := keys.NewStore(db, "fixture-console-master")
-	require.NoError(t, err)
-	_, err = store.Ensure(ctx, "console")
-	require.NoError(t, err)
+	// 管理台用控制机的主机密钥、以 console 的身份签名。
+	keyFile := filepath.Join(t.TempDir(), "host.key")
+	require.NoError(t, os.WriteFile(keyFile, []byte(gatewayauth.EncodeSigningKey(authtest.Key("host/control"))+"\n"), 0o600))
 	watch, _ := certificateWatchFixture(t, 365*24*time.Hour, 365*24*time.Hour)
 	t.Setenv("MOOX_ADMIN_PKI_DIR", watch.PKIDir)
-	client, err := newConsoleGateway(ctx, db, "control", "fixture-console-master")
+	client, err := newConsoleGateway(db, "control", keyFile)
 	require.NoError(t, err, "startup must not contact 127.0.0.1:11002")
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	first := client.Directory()
@@ -56,8 +57,13 @@ func TestConsoleGatewayStartsFromDatabaseWhileHostGatewayIsOffline(t *testing.T)
 	cancel()
 	_, err = source.Fetch(canceled, "")
 	require.Error(t, err)
-	_, err = newConsoleGateway(ctx, db, "control", "wrong-master")
-	require.Error(t, err, "invalid master must not create a replacement signing identity")
+	_, err = newConsoleGateway(db, "control", filepath.Join(t.TempDir(), "missing.key"))
+	require.Error(t, err, "没有主机私钥时不启动，也不会另造一个签名身份")
+	t.Setenv("MOOX_ADMIN_HOST_KEY_FILE", "")
+	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY_FILE", "/data/moox/secrets/admin-master.key")
+	require.Equal(t, "/data/moox/secrets/host.key", hostKeyFile())
+	t.Setenv("MOOX_ADMIN_HOST_KEY_FILE", "/elsewhere/host.key")
+	require.Equal(t, "/elsewhere/host.key", hostKeyFile())
 }
 
 func TestLocalServiceFiltersPreserveGlobalAndServiceOrder(t *testing.T) {

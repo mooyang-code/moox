@@ -16,8 +16,7 @@ import (
 
 const maxRequestBytes = 64 << 10
 
-// ServerOption applies only to this listener, after tRPC's configured options.
-// Other Admin listeners retain their normal PB/JSON decoding and filters.
+// ServerOption 只作用在这个监听上；Admin 的其他监听照常解码 PB/JSON、走各自的过滤器。
 func ServerOption() server.Option {
 	return func(options *server.Options) {
 		if options.ServiceName == servicecatalog.GatewayControlPath {
@@ -41,39 +40,20 @@ func Register(service server.Service, implementation *Service) error {
 	return service.Register(description, implementation)
 }
 
-func (s *Service) authenticate(ctx context.Context, path, method string, body []byte) (context.Context, error) {
+// verified 取出网关写的签名主机头。这个头只可能来自本机网关：服务只听回环端口，网关在入口剥掉了外面带进来的同名头。
+func verified(ctx context.Context) (context.Context, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	message := codec.Message(ctx)
 	headers := http.Header{}
-	for key, value := range message.ServerMetaData() {
+	for key, value := range codec.Message(ctx).ServerMetaData() {
 		headers.Add(key, string(value))
 	}
-	callers := headers.Values("X-Moox-Caller")
-	if len(callers) != 1 || !strings.HasPrefix(callers[0], "host-gateway@") || !servicecatalog.ValidHostID(strings.TrimPrefix(callers[0], "host-gateway@")) {
-		return nil, errors.New("gateway control authentication failed")
+	hosts := headers.Values(gatewayauth.HeaderVerifiedHost)
+	if len(hosts) != 1 || !servicecatalog.ValidHostID(hosts[0]) {
+		return nil, errors.New("gateway control requires the verified signing host")
 	}
-	keys, err := s.keys.InternalVerification(ctx, callers)
-	if err != nil {
-		return nil, errors.New("gateway control authentication failed")
-	}
-	credentials := make([]gatewayauth.Credentials, 0, len(keys))
-	for _, key := range keys {
-		credentials = append(credentials, gatewayauth.Credentials{Caller: key.Caller, KeyID: key.KeyID, Secret: string(key.Secret)})
-	}
-	registry, err := gatewayauth.NewCredentialRegistry(credentials)
-	if err != nil {
-		return nil, errors.New("gateway control authentication failed")
-	}
-	claims, err := registry.Verify(gatewayauth.Request{Method: "POST", Path: path, TargetNode: s.controlHostID, Callee: servicecatalog.GatewayControlPath, Func: method, Body: body}, headers, s.now())
-	if err != nil {
-		return nil, errors.New("gateway control authentication failed")
-	}
-	if !s.nonces.consume(claims.KeyID+"\x00"+claims.Nonce, claims.TTL, s.now()) {
-		return nil, errors.New("gateway control request replayed")
-	}
-	return context.WithValue(ctx, verifiedCaller{}, claims.Caller), nil
+	return context.WithValue(ctx, verifiedHost{}, hosts[0]), nil
 }
 
 func (s *Service) handle(_ interface{}, ctx context.Context, decode server.FilterFunc) (interface{}, error) {
@@ -97,7 +77,7 @@ func (s *Service) handle(_ interface{}, ctx context.Context, decode server.Filte
 		if path != "/"+servicecatalog.GatewayControlPath+"/"+method || method != "PullSnapshot" && method != "ReportStatus" {
 			return nil, errors.New("unknown gateway control method")
 		}
-		verified, err := s.authenticate(ctx, path, method, body.Data)
+		verified, err := verified(ctx)
 		if err != nil {
 			return nil, err
 		}

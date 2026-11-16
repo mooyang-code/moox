@@ -18,7 +18,7 @@ func RenderEgressConfig(cfg *Config, existing []byte) ([]byte, error) {
 	return replaceYAMLMapping(existing, "domains", valueNode(normalizedDomains(cfg.EgressProxy.HTTPDomains)))
 }
 
-// RenderCollectorRuntimeConfig 在 Collector 配置里写入出口代理、SCF 采集计划与执行记录保留；scf-collector 的 key_id 在安装时由主机材料填入。
+// RenderCollectorRuntimeConfig 在 Collector 配置里写入出口代理、SCF 采集计划与执行记录保留；scf-collector 的私钥路径在部署渲染时换成绝对路径。
 func RenderCollectorRuntimeConfig(cfg *Config, existing []byte) ([]byte, error) {
 	if cfg == nil {
 		return nil, errors.New("runtime_config: config is required")
@@ -136,7 +136,7 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 // SCFAccessIdentity 返回函数调用 Access 的固定身份与默认入口（存储机的 Access，没有存储机时是控制机）；
 // 各地域的私网入口由 [scf_plan] 渲染到 scf_plan.access_routes。
 func SCFAccessIdentity(cfg *Config) map[string]string {
-	base := map[string]string{"caller": "scf-collector", "key_id": "", "key_file": "../../secrets/caller-scf-collector.key"}
+	base := map[string]string{"caller": "scf-collector", "key_file": "../../secrets/scf-collector.key"}
 	host := cfg.StorageHost()
 	if host.Address == "" {
 		host = cfg.ControlHost()

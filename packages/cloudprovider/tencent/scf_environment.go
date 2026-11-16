@@ -1,6 +1,8 @@
 package tencent
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/url"
@@ -22,8 +24,9 @@ func ValidateCollectorTimerEnvironment(values map[string]string) error {
 	return ValidateCollectorMarketFetchEnvironment(values)
 }
 
-// ValidateCollectorAccessEnvironment validates the five fields shared by
-// native Claim and Storage calls, without disclosing credential contents.
+// ValidateCollectorAccessEnvironment 校验函数经外部入口访问系统用的五个变量，报错里不带私钥内容。
+// MOOX_CALLER_KEY 是 scf-collector 的 ed25519 私钥（base64 的 32 字节种子）；MOOX_CALLER_KEY_ID 是它的公钥指纹，
+// 只用来判断云上函数的环境是不是还是当前这把密钥，不参与签名。
 func ValidateCollectorAccessEnvironment(values map[string]string) error {
 	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
 		if strings.TrimSpace(values[key]) == "" {
@@ -43,8 +46,7 @@ func ValidateCollectorAccessEnvironment(values map[string]string) error {
 	if len(keyID) > 128 || strings.ContainsAny(keyID, "/\\") || strings.ContainsFunc(keyID, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
 		return fmt.Errorf("collector Access environment has invalid MOOX_CALLER_KEY_ID")
 	}
-	key := values["MOOX_CALLER_KEY"]
-	if len(key) < 32 || len(key) > 4096 || strings.ContainsFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+	if seed, err := base64.StdEncoding.DecodeString(values["MOOX_CALLER_KEY"]); err != nil || len(seed) != ed25519.SeedSize {
 		return fmt.Errorf("collector Access environment has invalid MOOX_CALLER_KEY")
 	}
 	return nil

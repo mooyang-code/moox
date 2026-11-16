@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -33,29 +34,19 @@ func exampleConfig(t *testing.T, extra string) *topology.Config {
 	return &cfg
 }
 
-// fakeIdentity 造一份形状和真的一样的身份材料：密钥内容是固定的假值。
+// fakeIdentity 造一份形状和真的一样的身份材料：新签发的主机签名私钥、证书、根证书，内容是固定的假值。
 func fakeIdentity(t *testing.T, cfg *topology.Config, catalog servicecatalog.Catalog, host string, components []string) Identity {
 	t.Helper()
-	identity := Identity{KeyIDs: map[string]string{}, Secrets: map[string][]byte{}, EventBus: map[string][]byte{"ca.pem": []byte("fake-eventbus-ca\n")}}
-	callers := append([]string{"host-gateway"}, components...)
-	if slices.Contains(components, "admin") {
-		callers = append(callers, "console")
-	}
+	identity := Identity{SignPublicKey: "public-key-of-" + host, Secrets: map[string][]byte{}, EventBus: map[string][]byte{"ca.pem": []byte("fake-eventbus-ca\n")}}
+	identity.Secrets["host.key"] = []byte("private-key-of-" + host + "\n")
 	if slices.Contains(components, "collector") {
-		callers = append(callers, "scf-collector")
-	}
-	for _, caller := range callers {
-		if caller == "seaweedfs" {
-			continue
-		}
-		identity.KeyIDs[caller] = "key-" + caller
-		identity.Secrets["caller-"+caller+".key"] = []byte("secret-of-" + caller + "\n")
+		identity.SCFCollectorPublicKey = "public-key-of-scf-collector"
+		identity.Secrets["scf-collector.key"] = []byte("private-key-of-scf-collector\n")
 	}
 	identity.Secrets["moox-ca.crt"], identity.Secrets["host.crt"], identity.Secrets["host.tls.key"] = []byte("ca\n"), []byte("cert\n"), []byte("key\n")
 	if slices.Contains(components, "access") {
 		identity.Secrets["access/access-verification.json"] = []byte("{}\n")
 	}
-	identity.Gateway = hostgatewayconfig.Default(host, cfg.ControlHost().Name, cfg.ControlHost().Address, "key-host-gateway")
 	for _, id := range components {
 		component, _ := catalog.Component(id)
 		for _, role := range component.EventBusRoles() {
@@ -228,6 +219,13 @@ func TestRenderWritesIdentityAndRuntimeEnvironment(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "/data/moox/secrets/host.crt", gateway.TLS.CertificateFile)
 	require.Equal(t, "/data/moox/data/host-gateway", gateway.Store.Path)
+	// 网关配置由部署按拓扑生成：本机的主机签名私钥，控制机上直连本机 Admin，其余主机经控制机的跨主机端口。
+	require.Equal(t, "/data/moox/secrets/host.key", gateway.Control.KeyFile)
+	require.Equal(t, "127.0.0.1:11112", gateway.Control.Target)
+	storageGateway, err := hostgatewayconfig.Decode(strings.NewReader(string(storage.Files["config/host-gateway/app.yaml"].Data)))
+	require.NoError(t, err)
+	require.Equal(t, "storage", storageGateway.Host.ID)
+	require.Equal(t, net.JoinHostPort(cfg.ControlHost().Address, "11003"), storageGateway.Control.Target)
 }
 
 func TestUnitOnlyListsSameHostDependenciesAndHasNoNetworkTarget(t *testing.T) {
@@ -307,11 +305,48 @@ func TestFingerprintIgnoresReissuedHostCertificate(t *testing.T) {
 	second, err := Render(request)
 	require.NoError(t, err)
 	require.Equal(t, first.Fingerprints, second.Fingerprints, "主机证书每次签发都不同，不能让每次部署都重启网关")
-	request.Identity.Secrets["caller-trade.key"] = []byte("rotated\n")
-	third, err := Render(request)
+	// 例行升级：密钥没换，身份包里没有私钥文件。指纹不变，不重启。
+	delete(request.Identity.Secrets, "host.key")
+	kept, err := Render(request)
 	require.NoError(t, err)
-	require.NotEqual(t, first.Fingerprints["trade"], third.Fingerprints["trade"], "换了密钥要重启用它的组件")
-	require.Equal(t, first.Fingerprints["egress-proxy"], third.Fingerprints["egress-proxy"])
+	require.Equal(t, first.Fingerprints, kept.Fingerprints, "密钥没换时不能因为包里没有私钥文件而重启")
+	require.NotContains(t, kept.Files, "secrets/host.key", "没签发新私钥时不写这个文件，目标机上的原样沿用")
+	// 换了主机签名密钥：这台主机上用它签名的组件都要重启；第三方程序不签名，不受影响。
+	request.Identity.SignPublicKey = "rotated-public-key"
+	request.Identity.Secrets["host.key"] = []byte("rotated\n")
+	rotated, err := Render(request)
+	require.NoError(t, err)
+	for _, id := range components {
+		require.NotEqual(t, first.Fingerprints[id], rotated.Fingerprints[id], "换了主机密钥要重启 %s", id)
+	}
+}
+
+// scf-collector 的密钥只影响 collector；公钥表变了只影响 access。
+func TestFingerprintFollowsOnlyTheKeysAComponentUses(t *testing.T) {
+	cfg := exampleConfig(t, "")
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	for host, sensitive := range map[string]string{"control": "collector", "storage": "access"} {
+		components, err := cfg.HostComponents(host)
+		require.NoError(t, err)
+		request := Request{Config: cfg, Catalog: catalog, Host: cfg.HostByID(host), Components: components, HostComponents: components, ReadSource: readRepository, Identity: fakeIdentity(t, cfg, catalog, host, components)}
+		first, err := Render(request)
+		require.NoError(t, err)
+		if sensitive == "collector" {
+			request.Identity.SCFCollectorPublicKey = "rotated-scf-public-key"
+		} else {
+			request.Identity.Secrets["access/access-verification.json"] = []byte("{\"identities\":[1]}\n")
+		}
+		second, err := Render(request)
+		require.NoError(t, err)
+		for _, id := range components {
+			if id == sensitive {
+				require.NotEqual(t, first.Fingerprints[id], second.Fingerprints[id], id)
+			} else {
+				require.Equal(t, first.Fingerprints[id], second.Fingerprints[id], id)
+			}
+		}
+	}
 }
 
 func TestEnvironmentFileEscapesValues(t *testing.T) {

@@ -254,7 +254,7 @@ func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
 				continue
 			}
 			for _, method := range service.Methods {
-				callers := c.routeCallers(method, t.Hosts)
+				callers := c.routeCallers(method)
 				if len(callers) == 0 {
 					continue
 				}
@@ -325,7 +325,7 @@ func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 			}
 			for _, service := range component.Services {
 				for _, method := range service.Methods {
-					for _, caller := range c.routeCallers(method, t.Hosts) {
+					for _, caller := range c.routeCallers(method) {
 						gateway[caller] = true
 					}
 				}
@@ -416,24 +416,16 @@ func (r RelayTarget) Allowed(caller string, port int) bool {
 	return false
 }
 
-// routeCallers 是网关上这条路由的调用方：人操作身份按 operators，host-gateway 展开成每台已登记主机的网关，
-// 外部身份统一由 access 代为转发。
-func (c Catalog) routeCallers(method Method, hosts []Host) []string {
+// routeCallers 是网关上这条路由的调用方：人操作身份按 operators，外部身份统一由 access 代为转发，其余照 callers。
+func (c Catalog) routeCallers(method Method) []string {
 	set := map[string]bool{}
 	for _, operator := range method.OperatorList() {
 		set[operator] = true
 	}
 	for _, caller := range method.Callers {
-		switch {
-		case caller == hostGatewayCaller:
-			// Disabled hosts must still authenticate to obtain their disabled
-			// snapshot. Removed hosts disappear from this scope immediately.
-			for _, host := range hosts {
-				set[hostGatewayCaller+"@"+host.ID] = true
-			}
-		case c.ExternalIdentity(caller):
+		if c.ExternalIdentity(caller) {
 			set["access"] = true
-		default:
+		} else {
 			set[caller] = true
 		}
 	}
@@ -442,6 +434,33 @@ func (c Catalog) routeCallers(method Method, hosts []Host) []string {
 		callers = append(callers, caller)
 	}
 	sort.Strings(callers)
+	return callers
+}
+
+// SigningCallers 返回每台已登记主机上可以用主机密钥签名的调用方（排序后）：这台主机上启用的组件（第三方程序不签名），
+// 部署了 admin 的主机另有 console（管理台代浏览器调用时的身份）。每台主机的网关都在内：停用的主机没有别的调用方，
+// 但它的网关仍要验签取到“已停用”的快照。
+func (c Catalog) SigningCallers(t Topology) map[string][]string {
+	enabled := map[string]bool{}
+	callers := map[string][]string{}
+	for _, host := range t.Hosts {
+		enabled[host.ID] = host.Status == Enabled
+		callers[host.ID] = []string{hostGatewayCaller}
+	}
+	for _, deployment := range t.Deployments {
+		component, ok := c.Component(deployment.ComponentID)
+		if !ok || component.ThirdParty || deployment.Status != Enabled || !enabled[deployment.HostID] {
+			continue
+		}
+		callers[deployment.HostID] = append(callers[deployment.HostID], component.ID)
+		if component.ID == "admin" {
+			callers[deployment.HostID] = append(callers[deployment.HostID], OperatorConsole)
+		}
+	}
+	for id := range callers {
+		sort.Strings(callers[id])
+		callers[id] = slices.Compact(callers[id])
+	}
 	return callers
 }
 

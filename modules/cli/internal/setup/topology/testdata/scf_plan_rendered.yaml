@@ -10,8 +10,7 @@ scf_access:
   access_address: 2.2.2.2:11004
   access_id: access@storage
   caller: scf-collector
-  key_file: ../../secrets/caller-scf-collector.key
-  key_id: ""
+  key_file: ../../secrets/scf-collector.key
 scf_regions:
   ap-hongkong:
     subnet_id: subnet-hk

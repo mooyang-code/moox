@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -444,9 +445,12 @@ func (c *Config) scfPlanAccessEnvironment(region string) (map[string]string, err
 	if !filepath.IsAbs(keyPath) {
 		keyPath = filepath.Join(filepath.Dir(c.sourcePath), keyPath)
 	}
-	secret, err := gatewayauth.ReadSigningSecret(keyPath)
+	// 每次都重读私钥文件：控制机重新签发 scf-collector 的密钥后，下一轮对账就把新密钥写进函数环境。
+	key, err := gatewayauth.ReadSigningKey(keyPath)
 	if err != nil {
 		return nil, fmt.Errorf("SCF Access signing key: %w", err)
 	}
-	return map[string]string{"MOOX_ACCESS_ADDRESS": config.Address, "MOOX_ACCESS_ID": config.InstanceID, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": config.KeyID, "MOOX_CALLER_KEY": secret}, nil
+	// MOOX_CALLER_KEY_ID 是公钥的十六进制，对账用它看出云上函数还带着旧密钥。
+	public := gatewayauth.Credentials{Key: key}.PublicKey()
+	return map[string]string{"MOOX_ACCESS_ADDRESS": config.Address, "MOOX_ACCESS_ID": config.InstanceID, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": hex.EncodeToString(public), "MOOX_CALLER_KEY": gatewayauth.EncodeSigningKey(key)}, nil
 }

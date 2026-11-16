@@ -18,7 +18,6 @@ require (
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
@@ -140,7 +139,6 @@ replace (
 	github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 	github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 	github.com/mooyang-code/moox/packages/notification => ../../packages/notification
-	github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 	github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
 	github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
 )

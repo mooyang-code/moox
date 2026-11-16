@@ -386,7 +386,7 @@ func TestUpgradeCodeKeepsRemoteEnvironmentIncludingSecrets(t *testing.T) {
 	for key, value := range transition {
 		require.Equal(t, value, function.Environment[key], "升级保留过渡环境里的 %s", key)
 	}
-	require.Equal(t, strings.Repeat("b", 64), function.Environment["MOOX_CALLER_KEY"])
+	require.Equal(t, strings.Repeat("b", 43)+"=", function.Environment["MOOX_CALLER_KEY"])
 
 	fake.ResetWrites()
 	require.NoError(t, functions.UpgradeCode(ctx, timerRef, baselinePackage("v2")))

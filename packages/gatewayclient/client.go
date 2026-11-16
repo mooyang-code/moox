@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	// 注册原生 tRPC 帧的压缩与包体上限；所有经网关的客户端都要用同一套。
+	_ "github.com/mooyang-code/moox/packages/gatewayauth/nativewire"
 	"github.com/mooyang-code/moox/packages/gatewayclient/relay"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -173,8 +175,12 @@ func New(config Config) (*Client, error) {
 	if config.Credentials.Caller == "" {
 		return nil, fmt.Errorf("gateway caller is required")
 	}
-	if _, err := gatewayauth.Sign(config.Credentials, gatewayauth.Request{Method: "POST", Path: "/validate", TargetNode: "bootstrap"}, time.Now()); err != nil {
+	if _, err := gatewayauth.Sign(config.Credentials, gatewayauth.Request{TargetNode: "bootstrap"}, time.Now()); err != nil {
 		return nil, err
+	}
+	// 组件用所在主机的密钥签名，签名主机就是本机；不属于主机的身份（moox-cli 与外部身份）不带签名主机。
+	if (config.Mode == Internal) != (config.Credentials.Host != "") || config.Mode == Internal && config.Credentials.Host != config.LocalHostID {
+		return nil, fmt.Errorf("gateway client signing host does not match its mode")
 	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
@@ -403,13 +409,13 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	failedHost := ""
-	connectRetried := false
+	connectRetried, resigned := false, false
 	for attempt := 0; attempt < 2; attempt++ {
 		ep, err := c.endpoint(ctx, service, failedHost)
 		if err != nil {
 			return nil, err
 		}
-		headers, err := gatewayauth.Sign(c.config.Credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method, TargetNode: ep.target, Caller: c.config.Credentials.Caller, Callee: service, Func: method, Body: body}, time.Now())
+		headers, err := gatewayauth.Sign(c.config.Credentials, gatewayauth.Request{TargetNode: ep.target, Callee: service, Func: method, Body: body}, time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -448,8 +454,25 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 			continue
 		}
 		code := errs.Code(err)
-		// 服务撤离后旧目录的调用方可能先在验签处失败（撤离同时撤销了调用方验证密钥），也需要刷新目录。
-		refresh := code == errs.RetClientNetErr || code == errs.RetServerNoService || code == errs.RetServerAuthFail
+		// 网关（或外部入口）自己拒签：验签在转发之前，请求没有到达服务，对所有方法（包括写）都重新签名重发一次。
+		// 常见原因是网关刚重启（早于它启动时间的签名被拒）或部署刚变、快照还没跟上，所以先刷新目录。
+		// 服务自己返回的鉴权类错误是别的错误码，不走这里。
+		if code == gatewayauth.RetRejected {
+			giveUp := resigned || ctx.Err() != nil || noRetry(ctx) || remainingBudget(ctx) < minRetryRemaining
+			c.reportFailure(CallFailure{Service: service, Method: method, Target: ep.target, Attempt: attempt, Retrying: !giveUp, Remaining: remainingBudget(ctx), Err: err})
+			if giveUp {
+				return nil, err
+			}
+			if c.config.Mode != External {
+				if refreshErr := c.Refresh(ctx); refreshErr != nil {
+					c.report(refreshErr)
+				}
+			}
+			resigned = true
+			attempt = -1
+			continue
+		}
+		refresh := code == errs.RetClientNetErr || code == errs.RetServerNoService
 		// 响应读取阶段失败（连接已被对端关闭或重置）与超时、网络错误一样，请求可能已经发出。
 		retry := refresh || code == errs.RetClientTimeout || code == errs.RetClientReadFrameErr
 		if refresh && c.config.Mode != External {

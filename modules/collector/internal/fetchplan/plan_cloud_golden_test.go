@@ -132,7 +132,7 @@ func newGoldenHarness(t *testing.T) (*planHarness, *PlanReconciler, *string) {
 	r.Access = func(string) (map[string]string, error) {
 		return map[string]string{
 			"MOOX_ACCESS_ADDRESS": "access.example:11004", "MOOX_ACCESS_ID": "access@control-a", "MOOX_CALLER": "scf-collector",
-			"MOOX_CALLER_KEY_ID": keyID, "MOOX_CALLER_KEY": strings.Repeat("b", 64),
+			"MOOX_CALLER_KEY_ID": keyID, "MOOX_CALLER_KEY": strings.Repeat("b", 43) + "=",
 		}, nil
 	}
 	return h, r, &keyID

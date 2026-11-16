@@ -44,7 +44,6 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/molecule-man/go-brrr v1.3.0 // indirect
 	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
@@ -94,7 +93,6 @@ require (
 replace (
 	github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
-	github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 	github.com/mooyang-code/moox/packages/security => ../../packages/security
 	github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
 )

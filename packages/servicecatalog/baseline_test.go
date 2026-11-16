@@ -105,7 +105,7 @@ func checkACLBaseline(t *testing.T, c Catalog) {
 	}
 
 	// 调用方全集：基线里的每个调用方都要核对，目录新增的组件或外部身份也必须已经进了基线。
-	universe := map[string]bool{"console": true, "moox-cli": true, "access": true, "host-gateway@control": true}
+	universe := map[string]bool{"console": true, "moox-cli": true, "access": true, "host-gateway": true}
 	for _, component := range c.Components {
 		universe[component.ID] = true
 	}
@@ -127,12 +127,9 @@ func checkACLBaseline(t *testing.T, c Catalog) {
 			checked++
 		}
 	}
-	// 基线之外的调用方写法：任一主机的 host-gateway 与 host-gateway@control 相同；通配写法、空值与未知调用方一律拒绝。
-	for _, caller := range []string{"host-gateway@storage", "host-gateway@factor", "host-gateway@*", "host-gateway@", "*", "", "unknown", "Console"} {
+	// 基线之外的调用方写法：旧的 host-gateway@{主机}、通配写法、空值与未知调用方一律拒绝。
+	for _, caller := range []string{"host-gateway@control", "host-gateway@storage", "host-gateway@*", "host-gateway@", "*", "", "unknown", "Console"} {
 		allowed := map[string]bool{}
-		if caller == "host-gateway@storage" || caller == "host-gateway@factor" {
-			allowed = setOf(baseline.Callers["host-gateway@control"])
-		}
 		for _, p := range all {
 			key := p.path + "/" + p.method
 			if got := c.Allowed(caller, p.path, p.method); got != allowed[key] {

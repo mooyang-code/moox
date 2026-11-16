@@ -108,8 +108,6 @@ func TestSystemGatewayKeysAreInvisibleAndImmutableThroughGenericDAO(t *testing.T
 	regular.Description = "visible description"
 	require.NoError(t, d.Create(ctx, regular))
 	for _, row := range []*model.Secret{
-		{SecretID: model.GatewayKeyringIDPrefix + "console", SecretType: "api_key"},
-		{SecretID: "opaque-system-record", SecretType: model.GatewayKeyringType},
 		{SecretID: model.SSHHostSecretID("storage"), SecretType: "password"},
 	} {
 		row.Name = "system"
@@ -128,11 +126,7 @@ func TestSystemGatewayKeysAreInvisibleAndImmutableThroughGenericDAO(t *testing.T
 		forged := sampleSecret()
 		forged.SecretID = row.SecretID
 		err = d.Update(ctx, forged)
-		if row.SecretType == model.GatewayKeyringType {
-			require.ErrorIs(t, err, ErrSecretNotFound)
-		} else {
-			require.ErrorIs(t, err, ErrSystemSecret)
-		}
+		require.ErrorIs(t, err, ErrSystemSecret)
 		var actual model.Secret
 		require.NoError(t, db.First(&actual, row.ID).Error)
 		require.Equal(t, row.SecretValue, actual.SecretValue)

@@ -18,7 +18,6 @@ func writeEngineConfig(t *testing.T, ledgerDir string) string {
 	require.NoError(t, err)
 	text := strings.Replace(string(raw), "ledger_dir: ./data/gap", "ledger_dir: "+ledgerDir, 1)
 	require.NotEqual(t, string(raw), text, "示例配置里应有 ledger_dir")
-	text = strings.Replace(text, `key_id: ""`, "key_id: test-key", 1) // 示例配置里故意留空的必填项
 	path := filepath.Join(t.TempDir(), "engine.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(text), 0o600))
 	return path

@@ -13,6 +13,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
@@ -108,7 +109,7 @@ func wipeTradeNote(manifest *topology.Config, plan deployscan.Plan) string {
 }
 
 // executeSetupWipe 并行清空清除范围里的全部主机并确认结果，setup wipe 和 setup install 共用。一台失败时全部重跑，清空脚本可重复执行。
-// 全部清空之后删掉这台电脑上的操作员身份与缓存的管理台证书：重装的控制机会生成新的 CA 与密钥。
+// 全部清空之后删掉这台电脑上的操作员身份（moox-cli 的私钥、控制机根证书与它的指纹）与缓存的管理台证书：重装的控制机会生成新的 CA，moox-cli 的密钥也重新生成。
 func executeSetupWipe(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, plan deployscan.Plan, operatorDir string) ([]deployscan.HostResult, error) {
 	manifest := snapshot.Manifest
 	results := make([]deployscan.HostResult, len(plan.Hosts))
@@ -132,7 +133,7 @@ func executeSetupWipe(ctx context.Context, deps setupDeps, snapshot *setupSnapsh
 	if left := deployscan.BuildPlan(reports); len(left.Hosts) != 0 {
 		return nil, fmt.Errorf("wipe_incomplete: 清空后主机 %s 上还有东西，重新运行 setup wipe 会接着清", left.Hosts[0].Host)
 	}
-	if err := deploy.RemoveOperatorIdentity(operatorDir); err != nil {
+	if err := identitybundle.RemoveOperatorIdentity(operatorDir); err != nil {
 		return nil, fmt.Errorf("主机已清空，这台电脑上的操作员身份没有删掉：%w", err)
 	}
 	if err := os.Remove(tlstrust.CAPath(manifest.ControlHost().Address)); err != nil && !os.IsNotExist(err) {

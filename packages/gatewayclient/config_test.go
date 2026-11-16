@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -34,11 +35,11 @@ func testFileConfigDeployment(t *testing.T, relativeCA bool) {
 	t.Helper()
 	root := t.TempDir()
 	moduleConfig := filepath.Join(root, "config", "admin", "app.yaml")
-	keyFile := filepath.Join(root, "secrets", "caller-admin.key")
+	keyFile := filepath.Join(root, "secrets", "host.key")
 	for _, path := range []string{moduleConfig, keyFile} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	}
-	require.NoError(t, os.WriteFile(keyFile, []byte("admin-signing-fixture-key-at-least-32-bytes\n"), 0o600))
+	require.NoError(t, os.WriteFile(keyFile, []byte(gatewayauth.EncodeSigningKey(authtest.Key("host/storage"))+"\n"), 0o600))
 	ca, _, _ := testCertificates(t)
 	configuredCA := ca
 	if relativeCA {
@@ -66,13 +67,14 @@ func testFileConfigDeployment(t *testing.T, relativeCA bool) {
 	// Legacy environment values must not select a host or supply a signing key.
 	t.Setenv("MOOX_SERVICE_GATEWAY_TARGET", "ip://192.0.2.99:11001")
 	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "wrong-host")
-	config := FileConfig{Caller: "admin", KeyID: "independent-admin-key-22", KeyFile: "../../secrets/caller-admin.key",
+	config := FileConfig{Caller: "admin", KeyFile: "../../secrets/host.key",
 		HostID: "storage", LocalAddress: listener.Addr().String(), CAFile: configuredCA}
 	data := filepath.Join(root, "data", "admin")
 	client, err := config.OpenInternal(moduleConfig, data, nil)
 	require.NoError(t, err)
 	require.Equal(t, "admin", client.config.Credentials.Caller)
-	require.Equal(t, config.KeyID, client.config.Credentials.KeyID)
+	// 组件用所在主机的密钥签名，签名主机就是 gateway_client.host_id。
+	require.Equal(t, authtest.Component("admin", "storage"), client.config.Credentials)
 	require.Equal(t, "storage", client.config.LocalHostID)
 	require.Equal(t, listener.Addr().String(), client.config.LocalAddress)
 	require.Equal(t, ca, client.config.CAFile)
@@ -97,18 +99,12 @@ func testFileConfigDeployment(t *testing.T, relativeCA bool) {
 	missing.CAFile = ""
 	_, err = missing.OpenInternal(moduleConfig, data, nil)
 	require.ErrorContains(t, err, "ca_file")
-
-	config.KeyID = ""
-	_, err = config.OpenInternal(moduleConfig, data, nil)
-	require.ErrorContains(t, err, "requires key_id")
 }
 
 func TestFileConfigRejectsInvalidIdentityAndPaths(t *testing.T) {
 	for _, config := range []FileConfig{
 		{Caller: "unknown", KeyFile: "key"},
 		{Caller: "host-gateway", KeyFile: "key"},
-		{Caller: "admin", KeyID: "bad key", KeyFile: "key"},
-		{Caller: "admin", KeyID: "../key", KeyFile: "key"},
 		{Caller: "admin", KeyFile: " key"},
 		{Caller: "admin", KeyFile: ""},
 		{Caller: "admin", KeyFile: "key", HostID: "Storage"},
@@ -129,7 +125,7 @@ func TestExternalFileConfigRealTRPCUsesAssignedCredentialAndFixedInstance(t *tes
 	t.Setenv("MOOX_ACCESS_ID", "access@unrelated")
 	for _, principal := range []struct{ caller, service, method string }{
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch"},
-		{"factor-engine", "trpc.moox.factor.FactorEngine", "SyncEngineCatalog"},
+		{"collector-operator", "trpc.moox.collector.CollectMgr", "SyncSubjects"},
 		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows"},
 	} {
 		t.Run(principal.caller, func(t *testing.T) {
@@ -137,16 +133,15 @@ func TestExternalFileConfigRealTRPCUsesAssignedCredentialAndFixedInstance(t *tes
 			configPath := filepath.Join(root, "config", "app.yaml")
 			keyPath := filepath.Join(root, "secrets", "external.key")
 			require.NoError(t, os.MkdirAll(filepath.Dir(keyPath), 0o700))
-			secret := "external-fixture-signing-key-at-least-32-bytes"
-			require.NoError(t, os.WriteFile(keyPath, []byte(secret+"\n"), 0o600))
+			require.NoError(t, os.WriteFile(keyPath, []byte(gatewayauth.EncodeSigningKey(authtest.Identity(principal.caller).Key)+"\n"), 0o600))
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
 			require.NoError(t, err)
 			counted := &countingListener{Listener: listener}
-			credential := gatewayauth.Credentials{Caller: principal.caller, KeyID: "assigned-external-key-83", Secret: secret}
+			credential := authtest.Identity(principal.caller)
 			metadata := CallMetadata{SpaceID: "crypto", TraceID: "external-config-fixture"}
 			startWireServer(t, counted, credential, "access@storage", metadata)
 			var config ExternalFileConfig
-			decoder := yaml.NewDecoder(strings.NewReader("access_address: " + listener.Addr().String() + "\naccess_id: access@storage\ncaller: " + principal.caller + "\nkey_id: " + credential.KeyID + "\nkey_file: ../secrets/external.key\n"))
+			decoder := yaml.NewDecoder(strings.NewReader("access_address: " + listener.Addr().String() + "\naccess_id: access@storage\ncaller: " + principal.caller + "\nkey_file: ../secrets/external.key\n"))
 			decoder.KnownFields(true)
 			require.NoError(t, decoder.Decode(&config))
 			client, err := config.OpenExternal(configPath)
@@ -190,7 +185,7 @@ func TestExternalFileConfigRealTRPCUsesAssignedCredentialAndFixedInstance(t *tes
 
 func TestExternalFileConfigRejectsPublicConfigurationBeforeReadingKeys(t *testing.T) {
 	valid := ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage",
-		Caller: "moox-skill", KeyID: "assigned-skill-45", KeyFile: "../secrets/skill.key"}
+		Caller: "moox-skill", KeyFile: "../secrets/skill.key"}
 	for _, change := range []struct {
 		name string
 		edit func(*ExternalFileConfig)
@@ -202,10 +197,7 @@ func TestExternalFileConfigRejectsPublicConfigurationBeforeReadingKeys(t *testin
 		{"unknown-host-id", func(c *ExternalFileConfig) { c.InstanceID = "access@Storage" }},
 		{"internal-caller", func(c *ExternalFileConfig) { c.Caller = "collector" }},
 		{"unknown-caller", func(c *ExternalFileConfig) { c.Caller = "other" }},
-		{"empty-key-id", func(c *ExternalFileConfig) { c.KeyID = "" }},
-		{"key-id-path", func(c *ExternalFileConfig) { c.KeyID = "../key" }},
-		{"key-id-whitespace", func(c *ExternalFileConfig) { c.KeyID = "key id" }},
-		{"long-key-id", func(c *ExternalFileConfig) { c.KeyID = strings.Repeat("x", 129) }},
+		{"component-caller", func(c *ExternalFileConfig) { c.Caller = "factor-engine" }},
 		{"empty-key-file", func(c *ExternalFileConfig) { c.KeyFile = "" }},
 		{"key-file-whitespace", func(c *ExternalFileConfig) { c.KeyFile = " key" }},
 		{"key-file-control", func(c *ExternalFileConfig) { c.KeyFile = "key\x00" }},
@@ -228,20 +220,20 @@ func TestExternalFileConfigPrivateKeyCannotFallBackToEnvironment(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "environment-signing-key-at-least-32-bytes")
 	root := t.TempDir()
 	config := ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage",
-		Caller: "factor-engine", KeyID: "assigned-factor-key-19", KeyFile: filepath.Join(root, "missing.key")}
+		Caller: "moox-skill", KeyFile: filepath.Join(root, "missing.key")}
 	_, err := config.OpenExternal(filepath.Join(root, "app.yaml"))
 	require.ErrorContains(t, err, "load gateway signing key")
 	keyPath := filepath.Join(root, "invalid.key")
 	require.NoError(t, os.WriteFile(keyPath, []byte("short-key"), 0o600))
 	config.KeyFile = keyPath
 	_, err = config.OpenExternal(filepath.Join(root, "app.yaml"))
-	require.ErrorContains(t, err, "at least 32 bytes")
-	secret := "valid-signing-key-at-least-32-bytes"
+	require.ErrorContains(t, err, "32 字节")
+	secret := gatewayauth.EncodeSigningKey(authtest.Key("fixture"))
 	require.NoError(t, os.WriteFile(keyPath, []byte(secret), 0o600))
 	config.KeyFile = filepath.Join(root, "symlink.key")
 	require.NoError(t, os.Symlink(keyPath, config.KeyFile))
 	_, err = config.OpenExternal(filepath.Join(root, "app.yaml"))
-	require.ErrorContains(t, err, "not a symlink")
+	require.ErrorContains(t, err, "符号链接")
 	require.NotContains(t, err.Error(), secret)
 	config.KeyFile = keyPath
 	client, err := config.OpenExternal(filepath.Join(root, "app.yaml"))

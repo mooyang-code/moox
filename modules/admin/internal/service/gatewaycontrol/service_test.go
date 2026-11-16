@@ -2,8 +2,8 @@ package gatewaycontrol
 
 import (
 	"context"
+	"crypto/ed25519"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,12 +15,12 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
-
-const fixtureMaster = "fixture-only-gateway-control-master-0123456789"
 
 type controlFixture struct {
 	service  *Service
@@ -55,10 +55,13 @@ func newControlFixture(t *testing.T) *controlFixture {
 		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
 		{HostID: "overseas", Address: "compute.example.test", Components: []string{"access", "trade"}},
 	}))
-	f.keys, err = keys.NewStore(f.db, fixtureMaster)
+	f.keys, err = keys.NewStore(f.db)
 	require.NoError(t, err)
-	_, err = f.keys.EnsureAll(context.Background())
-	require.NoError(t, err)
+	// 三台主机都签发过身份包，操作电脑登记了 moox-cli。
+	for _, host := range []string{"control", "storage", "overseas"} {
+		require.NoError(t, f.keys.SetHostPublicKey(context.Background(), host, publicKey("host/"+host)))
+	}
+	require.NoError(t, f.keys.SetIdentity(context.Background(), "moox-cli", publicKey("moox-cli")))
 	f.service = f.newService(t, f.db)
 	f.clock.Store(time.Now().UnixNano())
 	f.service.now = func() time.Time { return time.Unix(0, f.clock.Load()) }
@@ -67,13 +70,27 @@ func newControlFixture(t *testing.T) *controlFixture {
 
 func (f *controlFixture) newService(t *testing.T, db *gorm.DB) *Service {
 	t.Helper()
-	service, err := NewService(db, "control", fixtureMaster)
+	service, err := NewService(db, "control")
 	require.NoError(t, err)
 	return service
 }
 
+func publicKey(label string) string {
+	return gatewayauth.EncodePublicKey(authtest.Key(label).Public().(ed25519.PublicKey))
+}
+
+// hostContext 模拟网关验过签名之后的上下文：签名主机是 host。
 func hostContext(host string) context.Context {
-	return context.WithValue(context.Background(), verifiedCaller{}, "host-gateway@"+host)
+	return context.WithValue(context.Background(), verifiedHost{}, host)
+}
+
+func verificationKey(snapshot *pb.HostGatewaySnapshot, host, identity string) *pb.GatewayVerificationKey {
+	for _, key := range snapshot.VerificationKeys {
+		if key.HostId == host && key.Identity == identity {
+			return key
+		}
+	}
+	return nil
 }
 
 func (f *controlFixture) snapshot(t *testing.T, host string) *pb.HostGatewaySnapshot {
@@ -86,44 +103,54 @@ func (f *controlFixture) snapshot(t *testing.T, host string) *pb.HostGatewaySnap
 	return rsp.Snapshot
 }
 
-func TestSnapshotsCoverActualKeysAndOnlyTargetHostPermissions(t *testing.T) {
+// 快照里只有公钥：每台主机一把，连同部署在它上面的调用方；外加不属于主机的身份。换公钥就换快照，没有新旧并存。
+func TestSnapshotsCarryPublicKeysByHostAndIdentity(t *testing.T) {
 	f := newControlFixture(t)
 	ctx := context.Background()
 	storage := f.snapshot(t, "storage")
 	require.NotEmpty(t, storage.Hash)
+	require.Len(t, storage.VerificationKeys, 4)
+	control := verificationKey(storage, "control", "")
+	require.Equal(t, publicKey("host/control"), gatewayauth.EncodePublicKey(control.PublicKey))
+	require.Equal(t, []string{"admin", "collector", "console", "host-agent", "host-gateway"}, control.Callers)
+	require.Equal(t, []string{"access", "host-agent", "host-gateway", "trade"}, verificationKey(storage, "overseas", "").Callers)
+	require.Equal(t, publicKey("moox-cli"), gatewayauth.EncodePublicKey(verificationKey(storage, "", "moox-cli").PublicKey))
 	for _, key := range storage.VerificationKeys {
-		require.NotContains(t, []string{"scf-collector", "factor-engine", "moox-skill", "admin", "host-gateway@overseas"}, key.Caller)
+		require.NotContains(t, key.Callers, "moox-cli", "非主机身份不能出现在主机的调用方里")
 	}
 	unchanged, err := f.service.PullSnapshot(hostContext("storage"), &pb.PullSnapshotReq{HostId: "storage", CurrentHash: storage.Hash})
 	require.NoError(t, err)
 	require.False(t, unchanged.Changed)
-	require.Nil(t, unchanged.Snapshot, "unchanged responses must not retransmit secrets")
-	old, err := f.keys.Current(ctx, "console")
-	require.NoError(t, err)
-	current, err := f.keys.Rotate(ctx, "console")
-	require.NoError(t, err)
+	require.Nil(t, unchanged.Snapshot)
+
+	// 换操作电脑：moox-cli 的公钥被替换，快照里只剩新的那把。
+	require.NoError(t, f.keys.SetIdentity(ctx, "moox-cli", publicKey("moox-cli-new")))
+	replaced := f.snapshot(t, "storage")
+	require.NotEqual(t, storage.Hash, replaced.Hash)
+	require.Len(t, replaced.VerificationKeys, 4)
+	require.Equal(t, publicKey("moox-cli-new"), gatewayauth.EncodePublicKey(verificationKey(replaced, "", "moox-cli").PublicKey))
+	// 换主机密钥同理。
+	require.NoError(t, f.keys.SetHostPublicKey(ctx, "overseas", publicKey("host/overseas-new")))
 	rotated := f.snapshot(t, "storage")
-	require.NotEqual(t, storage.Hash, rotated.Hash)
-	for _, id := range []string{old.KeyID, current.KeyID} {
-		require.True(t, slices.ContainsFunc(rotated.VerificationKeys, func(key *pb.GatewayVerificationKey) bool {
-			return key.Caller == "console" && key.KeyId == id && key.ExpiresAtUnix == 0
-		}))
-	}
-	_, err = f.keys.Rotate(ctx, "factor-engine")
-	require.NoError(t, err)
-	require.Equal(t, rotated.Hash, f.snapshot(t, "storage").Hash, "external rotations never enter host snapshots")
-	require.NoError(t, f.keys.Retire(ctx, "console", old.KeyID))
-	retired := f.snapshot(t, "storage")
-	require.NotEqual(t, rotated.Hash, retired.Hash)
-	require.False(t, slices.ContainsFunc(retired.VerificationKeys, func(key *pb.GatewayVerificationKey) bool { return key.KeyId == old.KeyID }))
-	retired.VerificationKeys[0].Secret[0] ^= 1
-	require.NotEqual(t, retired.VerificationKeys[0].Secret, f.snapshot(t, "storage").VerificationKeys[0].Secret)
+	require.NotEqual(t, replaced.Hash, rotated.Hash)
+	require.Equal(t, publicKey("host/overseas-new"), gatewayauth.EncodePublicKey(verificationKey(rotated, "overseas", "").PublicKey))
+	// 外部身份的公钥也在快照里（外部入口并入网关后要用）；主机网关上它们仍然调不了任何方法。
+	require.NoError(t, f.keys.SetIdentity(ctx, "moox-skill", publicKey("moox-skill")))
+	require.NotNil(t, verificationKey(f.snapshot(t, "storage"), "", "moox-skill"))
+	// 还没签发过身份包的主机没有公钥。
+	require.NoError(t, f.db.Exec("UPDATE t_hosts SET c_sign_public_key = '' WHERE c_host_id = 'overseas'").Error)
+	require.Nil(t, verificationKey(f.snapshot(t, "storage"), "overseas", ""))
+	require.NoError(t, f.keys.SetHostPublicKey(ctx, "overseas", publicKey("host/overseas")))
+
+	// 停用的主机：别的主机快照里它只剩网关这一个调用方（它还要验签取“已停用”的快照），它上面的组件不能再签名。
 	require.NoError(t, f.topology.SetHostStatus(ctx, "storage", servicecatalog.Disabled))
 	disabled := f.snapshot(t, "storage")
 	require.True(t, disabled.Disabled)
 	require.Empty(t, disabled.Routes)
-	require.Empty(t, disabled.VerificationKeys)
 	require.NotContains(t, disabled.Directory.Hosts, "storage")
+	require.Equal(t, []string{"host-gateway"}, verificationKey(f.snapshot(t, "control"), "storage", "").Callers)
+
+	// 一台主机只能取自己的快照；没有验过的签名主机时拒绝。
 	_, err = f.service.PullSnapshot(hostContext("control"), &pb.PullSnapshotReq{HostId: "storage"})
 	require.Error(t, err)
 	_, err = f.service.PullSnapshot(ctx, &pb.PullSnapshotReq{HostId: "control"})
@@ -143,12 +170,11 @@ func TestSnapshotReadsTopologyAndKeysFromOneDatabaseState(t *testing.T) {
 			if err := writer.Exec("UPDATE t_hosts SET c_address='new.storage.example.test' WHERE c_host_id='storage'").Error; err != nil {
 				return err
 			}
-			store, err := keys.NewStore(writer, fixtureMaster)
+			store, err := keys.NewStore(writer)
 			if err != nil {
 				return err
 			}
-			_, err = store.Rotate(context.Background(), "console")
-			return err
+			return store.SetIdentity(context.Background(), "moox-skill", publicKey("moox-skill"))
 		}))
 	}))
 	t.Cleanup(func() { _ = f.db.Callback().Query().Remove("fixture:rotate-after-topology") })
@@ -272,29 +298,21 @@ func TestIndependentStatusWritersSerializeInstanceHistory(t *testing.T) {
 	require.Empty(t, status.ConflictInstanceID)
 }
 
-func TestMissingMasterCopiesFailClosedUntilExplicitProvisioning(t *testing.T) {
+// 新登记、还没签发身份包的主机不影响别的主机取快照，读快照也不会替它生成密钥；签发之后它的公钥才进快照。
+func TestNewHostWithoutKeyDoesNotBlockSnapshots(t *testing.T) {
 	f := newControlFixture(t)
 	ctx := context.Background()
 	before := f.snapshot(t, "control")
 	require.NoError(t, f.topology.SyncHostDeployments(ctx, sysdeploy.HostSpec{HostID: "new-host", Address: "new.example.test"}))
-	response, err := f.service.PullSnapshot(hostContext("control"), &pb.PullSnapshotReq{HostId: "control"})
+	pending := f.snapshot(t, "control")
+	require.NotEqual(t, before.Hash, pending.Hash)
+	require.Nil(t, verificationKey(pending, "new-host", ""))
+	key, err := f.keys.HostPublicKey(ctx, "new-host")
 	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_INNER_ERR, response.GetRetInfo().GetCode())
-	require.Nil(t, response.Snapshot)
-	_, err = f.keys.Current(ctx, "host-gateway@new-host")
-	require.ErrorIs(t, err, keys.ErrKeyNotFound, "snapshot reads must not generate deployment secrets")
-	_, err = f.keys.EnsureAll(ctx)
-	require.NoError(t, err)
-	after := f.snapshot(t, "control")
-	require.NotEqual(t, before.Hash, after.Hash)
-	require.True(t, slices.ContainsFunc(after.VerificationKeys, func(key *pb.GatewayVerificationKey) bool { return key.Caller == "host-gateway@new-host" }))
-	wrong, err := NewService(f.db, "control", "wrong-master-fixture")
-	require.NoError(t, err)
-	response, err = wrong.PullSnapshot(hostContext("control"), &pb.PullSnapshotReq{HostId: "control"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_INNER_ERR, response.GetRetInfo().GetCode())
-	require.Nil(t, response.Snapshot)
-	_, err = NewService(f.db, "old_node", fixtureMaster)
+	require.Empty(t, key, "读快照不生成密钥")
+	require.NoError(t, f.keys.SetHostPublicKey(ctx, "new-host", publicKey("host/new-host")))
+	require.Equal(t, []string{"host-agent", "host-gateway"}, verificationKey(f.snapshot(t, "control"), "new-host", "").Callers)
+	_, err = NewService(f.db, "old_node")
 	require.Error(t, err)
 }
 

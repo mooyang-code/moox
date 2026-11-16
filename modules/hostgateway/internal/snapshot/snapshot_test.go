@@ -1,7 +1,6 @@
 package snapshot
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,24 +12,28 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestViewOwnsCompleteSnapshotAndEnforcesRotationExpiry(t *testing.T) {
+func TestViewOwnsCompleteSnapshotAndVerifiesByHostKey(t *testing.T) {
 	raw := testsnapshot.New(t, "storage", "storage-primary")
-	credential := testsnapshot.Credential("collector")
-	key := &pb.GatewayVerificationKey{Caller: "collector", KeyId: "rotated-collector", Secret: []byte(strings.Repeat("r", 64)), ExpiresAtUnix: time.Now().Add(time.Hour).Unix()}
-	raw.VerificationKeys = append(raw.VerificationKeys, key)
-	testsnapshot.Rehash(t, raw)
 	view, err := Build("storage", raw)
 	require.NoError(t, err)
-	request := gatewayauth.Request{Method: "POST", Path: "/trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows", Callee: "trpc.moox.storage.PrimaryStore", Func: "ReadTimeSeriesRows", TargetNode: "storage", Body: []byte("bytes")}
-	for _, cred := range []gatewayauth.Credentials{credential, {Caller: "collector", KeyID: key.KeyId, Secret: string(key.Secret)}} {
-		headers, err := gatewayauth.Sign(cred, request, time.Now())
+	request := gatewayauth.Request{Callee: "trpc.moox.storage.PrimaryStore", Func: "ReadTimeSeriesRows", TargetNode: "storage", Body: []byte("bytes")}
+	verify := func(credentials gatewayauth.Credentials) error {
+		headers, err := gatewayauth.Sign(credentials, request, time.Now())
 		require.NoError(t, err)
 		_, err = view.Verify(request, headers, time.Now())
-		require.NoError(t, err)
-		if cred.KeyID == key.KeyId {
-			_, err = view.Verify(request, headers, time.Unix(key.ExpiresAtUnix, 0))
-			require.Error(t, err)
-		}
+		return err
+	}
+	require.NoError(t, verify(testsnapshot.Credential("collector", "control")))
+	require.NoError(t, verify(testsnapshot.Credential("storage-primary", "storage")))
+	require.NoError(t, verify(testsnapshot.Credential("moox-cli", "")))
+	// 调用方不在签名主机上、用别的主机的密钥自称这台主机、没登记的身份，都验不过；失败原因不外露。
+	for _, credentials := range []gatewayauth.Credentials{
+		testsnapshot.Credential("collector", "storage"),
+		{Caller: "collector", Host: "control", Key: testsnapshot.HostKey("storage")},
+		testsnapshot.Credential("moox-skill", ""),
+	} {
+		err := verify(credentials)
+		require.EqualError(t, err, "host gateway authentication failed")
 	}
 	route, ok := view.Resolve("trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows")
 	require.True(t, ok)
@@ -38,15 +41,29 @@ func TestViewOwnsCompleteSnapshotAndEnforcesRotationExpiry(t *testing.T) {
 	route, ok = view.Resolve("trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows")
 	require.True(t, ok)
 	require.NotContains(t, route.Callers, "changed")
+	// 视图持有自己的副本：改输入或改取出的副本都不影响它。
 	raw.Hash = "changed"
-	raw.VerificationKeys[0].Secret[0] ^= 1
+	raw.VerificationKeys[0].PublicKey[0] ^= 1
 	require.NotEqual(t, raw.Hash, view.Hash())
 	copy := view.Proto()
-	copy.VerificationKeys[0].Secret[0] ^= 1
+	copy.VerificationKeys[0].PublicKey[0] ^= 1
 	require.False(t, proto.Equal(copy, view.Proto()))
-	for _, key := range view.Proto().VerificationKeys {
-		require.NotContains(t, fmt.Sprintf("%+v %#v", view, view), string(key.Secret))
-	}
+	require.NoError(t, verify(testsnapshot.Credential("collector", "control")))
+}
+
+// 身份公钥只认 moox-cli 与目录里的外部身份：登记成组件名的身份公钥被忽略，持有它的人不能不带签名主机冒充组件。
+func TestIdentityKeyNamedLikeComponentIsIgnored(t *testing.T) {
+	raw := testsnapshot.New(t, "storage", "storage-primary")
+	rogue := testsnapshot.Credential("trade", "")
+	raw.VerificationKeys = append(raw.VerificationKeys, &pb.GatewayVerificationKey{Identity: "trade", PublicKey: rogue.PublicKey()})
+	testsnapshot.Rehash(t, raw)
+	view, err := Build("storage", raw)
+	require.NoError(t, err)
+	request := gatewayauth.Request{Callee: "trpc.moox.storage.PrimaryStore", Func: "ReadTimeSeriesRows", TargetNode: "storage"}
+	headers, err := gatewayauth.Sign(rogue, request, time.Now())
+	require.NoError(t, err)
+	_, err = view.Verify(request, headers, time.Now())
+	require.Error(t, err)
 }
 
 func TestRejectSnapshotCorruptionAndPrivilegeExpansion(t *testing.T) {
@@ -65,13 +82,19 @@ func TestRejectSnapshotCorruptionAndPrivilegeExpansion(t *testing.T) {
 		"duplicate caller": func(s *pb.HostGatewaySnapshot) {
 			s.Routes[0].Callers = append(s.Routes[0].Callers, s.Routes[0].Callers[0])
 		},
-		"missing keys": func(s *pb.HostGatewaySnapshot) { s.VerificationKeys = nil },
 		"duplicate key": func(s *pb.HostGatewaySnapshot) {
 			s.VerificationKeys = append(s.VerificationKeys, s.VerificationKeys[0])
 		},
-		"out of scope key":  func(s *pb.HostGatewaySnapshot) { s.VerificationKeys[0].Caller = "moox-skill" },
-		"short secret":      func(s *pb.HostGatewaySnapshot) { s.VerificationKeys[0].Secret = []byte("short") },
-		"negative expiry":   func(s *pb.HostGatewaySnapshot) { s.VerificationKeys[0].ExpiresAtUnix = -1 },
+		"host key with identity": func(s *pb.HostGatewaySnapshot) { s.VerificationKeys[0].Identity = "moox-cli" },
+		"invalid host":           func(s *pb.HostGatewaySnapshot) { s.VerificationKeys[0].HostId = "Bad Host" },
+		"short public key":       func(s *pb.HostGatewaySnapshot) { s.VerificationKeys[0].PublicKey = []byte("short") },
+		"identity as host caller": func(s *pb.HostGatewaySnapshot) {
+			s.VerificationKeys[0].Callers = append(s.VerificationKeys[0].Callers, "moox-cli")
+		},
+		"identity with callers": func(s *pb.HostGatewaySnapshot) {
+			last := s.VerificationKeys[len(s.VerificationKeys)-1]
+			last.Callers = []string{"trade"}
+		},
 		"directory missing": func(s *pb.HostGatewaySnapshot) { s.Directory = nil },
 		"directory hash":    func(s *pb.HostGatewaySnapshot) { s.Directory.Version = "bad" },
 		"disabled mismatch": func(s *pb.HostGatewaySnapshot) { s.Disabled = true },

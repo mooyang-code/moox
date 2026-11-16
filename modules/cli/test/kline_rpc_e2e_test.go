@@ -18,16 +18,17 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
+	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-const (
-	klineGatewayNode   = "gateway-kline-e2e"
-	klineGatewayKeyID  = "moox-skill-e2e"
-	klineGatewaySecret = "gateway-kline-e2e-secret-0123456789"
-)
+const klineGatewayNode = "gateway-kline-e2e"
+
+// klineGatewaySecret 是测试里 moox-cli 私钥文件的内容：任何输出里都不应出现它。
+var klineGatewaySecret = gatewayauth.EncodeSigningKey(authtest.Identity("moox-cli").Key)
 
 func TestKlineRPCUsesNativeGatewayHMACACL(t *testing.T) {
 	storage := &klineStorageStub{requests: make(chan *pb.ReadTimeSeriesRowsReq, 4)}
@@ -69,13 +70,17 @@ func TestKlineRPCUsesNativeGatewayHMACACL(t *testing.T) {
 		t.Fatal("storage did not receive ReadTimeSeriesRows")
 	}
 
-	credentials := gatewayauth.Credentials{KeyID: klineGatewayKeyID, Caller: "moox-skill", Secret: klineGatewaySecret}
-	proxy := pb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(gatewayTarget, klineGatewayNode, credentials)...)
+	// 外部身份用自己的私钥直接到主机网关：网关上没有它的公钥，调不了任何方法，更借不到 moox-cli 的身份。
+	headers, err := gatewayauth.Sign(authtest.Identity("moox-skill"), gatewayauth.Request{TargetNode: klineGatewayNode, Callee: "trpc.moox.storage.PrimaryStore", Func: "UpsertFields"}, time.Now())
+	require.NoError(t, err)
+	options := []client.Option{client.WithTarget(gatewayTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
+	for key, values := range headers {
+		options = append(options, client.WithMetaData(key, []byte(values[0])))
+	}
 	writeContext, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelWrite()
-	_, err = proxy.UpsertFields(writeContext, &pb.PrimaryUpsertFieldsReq{})
+	_, err = pb.NewPrimaryStoreClientProxy(options...).UpsertFields(writeContext, &pb.PrimaryUpsertFieldsReq{})
 	require.Error(t, err)
-	// An external principal cannot borrow the operator signing identity.
 	require.NotContains(t, err.Error(), klineGatewaySecret)
 	require.Equal(t, int32(0), storage.writeCalls.Load(), "write RPC must be rejected before reaching Storage")
 }
@@ -88,8 +93,6 @@ func TestKlineRPCHelperEarlyExitRemainsObservableDuringCleanup(t *testing.T) {
 		"--node-id", klineGatewayNode,
 		"--upstream-addr", "not-an-address",
 		"--ready-file", readyFile,
-		"--nonce-dir", filepath.Join(t.TempDir(), "nonces"),
-		"--key-id", klineGatewayKeyID,
 	)
 
 	select {
@@ -174,8 +177,6 @@ func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 		"--node-id", klineGatewayNode,
 		"--upstream-addr", upstreamAddress,
 		"--ready-file", readyFile,
-		"--nonce-dir", filepath.Join(tempDir, "nonces"),
-		"--key-id", klineGatewayKeyID,
 	)
 	t.Cleanup(func() {
 		if process.stop(5 * time.Second) {
@@ -214,7 +215,7 @@ func startGatewayHelperProcess(t *testing.T, helper string, args ...string) *gat
 		command:  exec.Command(helper, args...),
 		waitDone: make(chan struct{}),
 	}
-	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+klineGatewaySecret)
+	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_PUBLIC_KEY="+gatewayauth.EncodePublicKey(authtest.Identity("moox-cli").PublicKey()))
 	process.command.Stdout = &process.logs
 	process.command.Stderr = &process.logs
 	require.NoError(t, process.command.Start())
@@ -324,8 +325,7 @@ func writeKlineOperator(t *testing.T, gatewayTarget string) (string, string) {
 	knownHosts := filepath.Join(directory, "known_hosts")
 	require.NoError(t, os.WriteFile(knownHosts, nil, 0600))
 	host := testfixture.GatewaySSH(t, klineGatewayNode, strings.TrimPrefix(gatewayTarget, "ip://"), knownHosts)
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "caller-moox-cli.key"), []byte(klineGatewaySecret+"\n"), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "gateway-client.yaml"), []byte("caller: moox-cli\nkey_id: "+klineGatewayKeyID+"\nkey_file: caller-moox-cli.key\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "moox-cli.key"), []byte(klineGatewaySecret+"\n"), 0600))
 	manifest := filepath.Join(home, "moox.toml")
 	raw := fmt.Sprintf("[eventbus]\nport=4222\n[hosts.%s]\naddress='127.0.0.1'\n[hosts.%s.ssh]\nport=%d\nusername='%s'\nprivate_key_file='%s'\n[deployments]\n%s=['admin','eventbus']\n", host.Name, host.Name, host.Port, host.Username, host.PrivateKeyFile, host.Name)
 	require.NoError(t, os.WriteFile(manifest, []byte(raw), 0600))

@@ -3,6 +3,8 @@ package adminclient
 import (
 	"context"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"net"
 	"os"
 	"path/filepath"
@@ -107,8 +109,7 @@ func TestCollectorTaskWorkflowUsesNativeGatewayJSONAndInventoryPB(t *testing.T) 
 	require.NoError(t, os.WriteFile(knownHosts, nil, 0o600))
 	snapshot := &topology.Config{}
 	testfixture.SetHost(snapshot, testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts), "admin", "eventbus")
-	require.NoError(t, os.WriteFile(filepath.Join(operator, "gateway-client.yaml"), []byte("caller: moox-cli\nkey_id: admin-assigned-cli-7\nkey_file: caller-moox-cli.key\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(operator, "caller-moox-cli.key"), []byte("operator-signing-secret-at-least-32-bytes"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(operator, "moox-cli.key"), []byte(gatewayauth.EncodeSigningKey(authtest.Identity("moox-cli").Key)+"\n"), 0o600))
 	gateway, err := gatewayio.Open(context.Background(), snapshot)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })

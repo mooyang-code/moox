@@ -18,7 +18,7 @@ func TestValidateSCFEnvironmentIncludesAllCredentialsAndRedactsValues(t *testing
 
 func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *testing.T) {
 	valid := map[string]string{
-		"MOOX_CALLER": "scf-collector", "MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 64),
+		"MOOX_CALLER": "scf-collector", "MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 43) + "=",
 		"MOOX_SPACE_ID": "stockcn", "MOOX_CODE_PACKAGE_ID": "collector_dev_00000000-0000-0000-0000-000000000000",
 		"MOOX_CLS_ENABLED": "true", "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com", "MOOX_CLS_TOPIC_ID": "topic", "MOOX_CLS_TIMEOUT_MS": "3000", "MOOX_CLS_SECRET_ID": "cls-id", "MOOX_CLS_SECRET_KEY": "cls-secret",
 		"MOOX_EVENTBUS_NATS_URL": "tls://eventbus.example:4222", "MOOX_EVENTBUS_NATS_USERNAME": "collector", "MOOX_EVENTBUS_NATS_PASSWORD": "bus-secret", "MOOX_EVENTBUS_NATS_TLS_CA_FILE": "certs/eventbus-ca.pem",

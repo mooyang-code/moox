@@ -162,7 +162,7 @@ cd moox-${VER}
 > 不清空就保留全部数据，只把程序和配置重新部署一遍。
 
 - **用户同意清空**：`setup install` 带 `--wipe <预检里的 wipe.digest>`（见第 4 节），清空和后面的部署都算在这次确认内。单独清空用 `./bin/moox-cli setup wipe --yes --expect <预览里的 plan.digest>`。
-  - 清空会同时删掉这台电脑上的操作员身份（`~/.config/moox` 下的网关身份与密钥）：重装的控制机会生成新的 CA 与密钥。
+  - 清空会同时删掉这台电脑上的操作员身份（`~/.config/moox` 下 `moox-cli` 的签名私钥、控制机根证书与它的指纹）：重装的控制机会生成新的 CA，`moox-cli` 的密钥也在下一次安装的第一步重新生成。
   - 中途失败后再运行一次会接着清：重新取预览，范围变了要重新询问。
   - 云上的采集计划函数默认不删：同一云账号可能有其他环境。要清理时加 `--clean-functions` 预览，用户确认后再带 `--clean-functions --expect-functions <functions_digest>`。
 - **用户不清空**：按“升级到新版本”处理。
@@ -179,6 +179,7 @@ cd moox-${VER}
 
 - 预检输出路线、安装步骤（`steps`，每一步带可以单独运行的命令）、`manual_steps`，装过时还有清空范围（`wipe`）。
 - 带 `--yes` 后按顺序执行，进度逐行输出到标准错误：
+  0. 准备这台电脑的操作身份（`setup operator`）：没有 `~/.config/moox/moox-cli.key` 就生成一把签名私钥，有就复用；它的公钥在下一步部署控制机时登记；
   1. 放行防火墙端口；
   2. 控制机先装 Admin、主机网关和 HostAgent（其余主机要向 Admin 要身份材料）；
   3. 带 EventBus、Storage 的主机（默认是存储机）；
@@ -190,6 +191,7 @@ cd moox-${VER}
   9. 备份配置、`setup start` 启动空间、`setup verify` 验收。
 - 每台主机的部署做的事：把登记同步到 Admin，目标机按产物包清单下载组件包（下载不了时由这台电脑下载再推送），向控制机要身份材料，
   渲染配置、环境文件和单元文件，装好后按启动顺序重启有变化的组件，写 `version.json`，再等这次装的组件就绪。
+  每台主机有一把签名私钥（`<部署根>/secrets/host.key`，本机组件共用）：例行部署不换它，只重新签发主机证书；私钥丢了或和控制机登记的对不上时会自动签发新的。
 - **中途失败修好后重跑同一条命令**：每一步都可以重做，没有变化的组件不会重启。报错里有“单独重跑这一步”的命令，也可以只重跑那一步再继续。
 - 装过的机器不带 `--wipe` 重跑就是原地重新部署，数据保留。
 
@@ -252,8 +254,10 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 取回的是 `moox.toml` 与 `moox.secrets.toml` 两份。如实告诉用户：
 
 - `setup validate`、`setup status`、`setup logs`、`setup firewall`、`config backup` 这类只靠 SSH、云密钥或管理台登录的命令，取回配置后就能用（SSH 密钥路径要重新核对）。
-- 经网关调用的命令（`doctor`、`collector`、`factor`、`trade` 等）和其余主机的 `setup deploy` 要这台电脑有操作员身份。
-  重新部署一次控制机（`setup deploy --host control`）会给这台电脑装上：它重新执行 Admin 的初始化（只建不改），没有变化的组件不重启。这一步还没有在真机上验证过，做之前告诉用户。
+- 经网关调用的命令（`doctor`、`collector`、`factor`、`trade` 等）和其余主机的 `setup deploy` 要这台电脑有操作员身份。新电脑上按顺序做两步（都要先问用户）：
+  1. `./bin/moox-cli setup operator --register`：在这台电脑生成 `moox-cli` 的签名私钥，并经 SSH 把公钥登记到控制机。它**替换**原来登记的公钥，原来那台电脑随即不能再用，两台电脑不能同时用。约 10 秒后各主机网关生效。
+  2. `./bin/moox-cli setup deploy --host control`：取回控制机的根证书（之后部署别的主机、连因子机都要用）；它重新执行 Admin 的初始化（只建不改），没有变化的组件不重启。
+  这两步还没有在真机上验证过，做之前告诉用户。
 - 不要手动拷贝或恢复 `~/.config/moox` 下的身份文件。
 
 ## 升级到新版本
@@ -282,8 +286,11 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `install_failed` | 目标机上的安装脚本失败，后面是最后一行原因（启动某个服务失败、Storage 元数据库初始化失败、内置对象存储没有就绪等） | 按原因用 `setup logs --host <主机> --component <组件> --journal` 看启动输出；修好后重跑 |
 | `not_ready` | 这次装的组件到时限还没就绪，括号里是原因（`readyz 503`、健康端口连不上、服务状态） | 用 `setup logs` 看日志。多半是它依赖的组件还没装（按安装顺序补上）或配置有误；什么都没变就不要反复重试 |
 | `control_admin_failed` | 控制机上的 `moox-admin-cli` 执行失败（初始化 Admin、导出身份材料） | 看报错的最后一行；控制机还没装过时先 `setup deploy --host <控制机>` |
-| `control_not_ready` | 这台电脑没有控制机的操作员身份 | 先 `setup deploy --host <控制机>`；换了电脑见“保留数据与换电脑” |
-| `operator_identity_failed` | 这台电脑上留着另一套部署的操作员身份（线上清空重装过，CA 变了） | 确认线上确实是重装的之后，按报错删掉 `~/.config/moox` 下列出的文件再重跑 |
+| `control_not_ready` | 这台电脑没有记下控制机的根证书指纹 | 先 `setup deploy --host <控制机>`；换了电脑见“保留数据与换电脑” |
+| `operator_key_missing` | 这台电脑没有 `moox-cli` 的签名私钥 | 全新安装：`setup operator`（`setup install` 会自己做）；已经装好的系统换了电脑：`setup operator --register` |
+| `operator_key_mismatch` | 控制机上登记的 `moox-cli` 公钥不是这台电脑的 | 问用户是不是换了电脑；是的话 `setup operator --register`（原电脑随即不能用） |
+| `rotate_unsupported` | 对控制机用了 `--rotate-host-key` | 控制机的签名密钥不单独换，按报错的做法 |
+| `operator_trust_failed` | 这台电脑上记着另一套部署的控制机根证书（线上清空重装过，CA 变了） | 确认线上确实是重装的之后，按报错删掉 `~/.config/moox` 下列出的两个文件再重跑 |
 | `identity_invalid` | 从控制机取回的身份材料校验没通过（主机地址、组件和 Admin 里登记的不一致，或 CA 对不上） | 核对 `moox.toml` 里这台主机的地址和 `[deployments]`，`setup sync-deployments --host <主机> --yes` 后重跑 |
 | `component_not_on_host` | `--component` 写的组件不在这台主机上 | 按报错列出的组件改 |
 | `binary_dir_required`、`binary_missing` | 在源码目录里部署，没给或缺编译好的 Linux 二进制 | 用户安装应在产物包目录里运行；维护者见 [`native-release.md`](native-release.md) |
@@ -303,7 +310,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `kline_not_arrived` | 到超时还没有 K 线，或缺失超过 5% | 看 `collector status` 和 `setup logs --host <海外机> --component collector-stream` |
 | `factor_not_advancing` | 启用的 1m 因子任务没有前进，或最近一期失败 | 看 `factor status` 和 `setup logs --host <因子机> --component factor-engine` |
 | `strategy_not_running` | 启用的策略实例没有运行会话 | 看 `strategy instance show` 和 `setup logs --host <控制机> --component strategy` |
-| `admin_not_ready` | 这台电脑没有网关身份 | 同 `control_not_ready` |
+| `admin_not_ready` | 这台电脑没有 `moox-cli` 的签名私钥 | 同 `operator_key_missing` |
 | `logs_failed` | 读不到目标机的日志 | 检查 SSH 连接；读不到就向用户说明，不要上机 |
 | `wipe_scope_changed` | 清空范围和预览不一致，没有清空任何主机 | 重新预览并确认 |
 | `wipe_incomplete`、`deployment_wipe_failed` | 清空没做完 | 重新运行 `setup wipe` 接着清，清完才能安装 |

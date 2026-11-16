@@ -33,6 +33,7 @@ type setupInstallOptions struct {
 
 // 安装步骤的种类。
 const (
+	installOperator     = "operator"
 	installFirewall     = "firewall"
 	installDeploy       = "deploy"
 	installInitMetadata = "init-metadata"
@@ -54,14 +55,14 @@ type setupInstallStep struct {
 // dependencyComponents 是控制机上其余组件启动前就要在的组件：Collector 等启动时要连 EventBus 与 Storage 核对元数据。
 var dependencyComponents = []string{"eventbus", "storage-primary", "storage-view"}
 
-// externalProgramComponents 是经 Access 进入系统的外部程序：它们所在的主机排在最后装。
+// externalProgramComponents 是外部程序：它们依赖控制机上的管理端与存储机，所在的主机排在最后装。
 var externalProgramComponents = []string{"factor-engine", "archive-worker"}
 
 func hostHasAny(manifest *topology.Config, host string, components []string) bool {
 	return slices.ContainsFunc(manifest.Deployments[host], func(id string) bool { return slices.Contains(components, id) })
 }
 
-// setupInstallSteps 排出安装顺序：防火墙；控制机先装 Admin 与主机级组件（别的主机要向它要身份）；
+// setupInstallSteps 排出安装顺序：这台电脑的 moox-cli 签名私钥（已有就复用，重跑不换）；防火墙；控制机先装 Admin 与主机级组件（别的主机要向它要身份）；
 // 再装带 EventBus、Storage 的主机；导入业务空间与元数据（Collector 启动要它）；控制机其余组件；其余主机（外部程序所在的排最后）；
 // 统一等一次全部就绪；完整初始化（云账号、日志服务、采集计划、告警渠道——这些要等 Collector、Monitor 起来）；备份配置；启动空间；验收。
 func setupInstallSteps(manifest *topology.Config, spaceID string) []setupInstallStep {
@@ -79,7 +80,7 @@ func setupInstallSteps(manifest *topology.Config, spaceID string) []setupInstall
 		}
 		return setupInstallStep{Kind: installDeploy, Host: host, Components: components, Command: command}
 	}
-	steps := []setupInstallStep{{Kind: installFirewall, Command: "moox-cli setup firewall --yes"}, deployStep(control, first)}
+	steps := []setupInstallStep{{Kind: installOperator, Command: "moox-cli setup operator"}, {Kind: installFirewall, Command: "moox-cli setup firewall --yes"}, deployStep(control, first)}
 	var later, last []string
 	for _, host := range manifest.Hosts() {
 		switch {
@@ -216,6 +217,10 @@ func executeSetupInstallStep(cmd *cobra.Command, deps setupDeps, snapshot *setup
 	ctx := cmd.Context()
 	storageHost := snapshot.Manifest.StorageHost().Name
 	switch step.Kind {
+	case installOperator:
+		// 公钥在下一步部署控制机时由 bootstrap 登记；已经登记过别的公钥时那一步会报错并提示 --register。
+		_, _, err := deps.ensureOperatorKey(options.source.operatorDir)
+		return err
 	case installFirewall:
 		summary, err := deps.ensureFirewall(ctx, snapshot)
 		if err == nil && summary.Status != "" && summary.Status != "ready" {

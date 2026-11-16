@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -55,7 +56,7 @@ func testDirectory(t *testing.T, hosts ...string) servicecatalog.Directory {
 }
 
 func tunnelConfig(source DirectorySource) Config {
-	return Config{Mode: Tunnel, Credentials: gatewayauth.Credentials{Caller: "moox-cli", KeyID: "test", Secret: "test-secret"},
+	return Config{Mode: Tunnel, Credentials: authtest.Identity("moox-cli"),
 		Source: source, RefreshInterval: time.Hour, Tunnels: tunnelFunc(func(context.Context, string) (string, error) { return "127.0.0.1:12345", nil })}
 }
 
@@ -104,7 +105,7 @@ func TestReadRetryMovesHostAndResignsWhileWritesRunOnce(t *testing.T) {
 				calls++
 				require.Equal(t, body, raw)
 				require.Equal(t, codec.SerializationTypeJSON, serialization)
-				claims, err := gatewayauth.Verify(c.config.Credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method, TargetNode: ep.target, Callee: service, Func: method, Body: raw}, headers, time.Now())
+				claims, err := authtest.Verify(c.config.Credentials, gatewayauth.Request{TargetNode: ep.target, Callee: service, Func: method, Body: raw}, headers, time.Now())
 				require.NoError(t, err)
 				if calls == 1 {
 					require.Equal(t, "a", ep.target)
@@ -134,7 +135,7 @@ func TestInternalSelectsLocalOtherwiseTLSWithPrivateCA(t *testing.T) {
 	source := &sourceStub{directory: testDirectory(t, "b", "a")}
 	config := tunnelConfig(source)
 	config.Mode = Internal
-	config.LocalHostID = "b"
+	config.LocalHostID, config.Credentials = "b", authtest.Component("monitor", "b")
 	config.Tunnels = nil
 	config.CAFile = ca
 	c := newTestClient(t, config)
@@ -156,7 +157,7 @@ func TestEndpointHonorsRequestedHost(t *testing.T) {
 	source := &sourceStub{directory: testDirectory(t, "b", "a")}
 	config := tunnelConfig(source)
 	config.Mode = Internal
-	config.LocalHostID = "b"
+	config.LocalHostID, config.Credentials = "b", authtest.Component("monitor", "b")
 	config.Tunnels = nil
 	config.CAFile = ca
 	c := newTestClient(t, config)
@@ -172,7 +173,7 @@ func TestEndpointHonorsRequestedHost(t *testing.T) {
 }
 
 func TestExternalWhitelistAndTunnelLoopbackBoundary(t *testing.T) {
-	config := Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: "moox-skill", KeyID: "skill", Secret: "secret"}, AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"}
+	config := Config{Mode: External, Credentials: authtest.Identity("moox-skill"), AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"}
 	c := newTestClient(t, config)
 	c.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
 		t.Fatal("forbidden call reached transport")
@@ -207,7 +208,7 @@ func TestExternalReadsResignRetriesAndWritesRunOnce(t *testing.T) {
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "UpsertFields", 1},
 	} {
 		t.Run(call.method, func(t *testing.T) {
-			config := Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: call.caller, KeyID: "assigned-scf-key-71", Secret: "fixture-key"},
+			config := Config{Mode: External, Credentials: authtest.Identity(call.caller),
 				AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"}
 			client := newTestClient(t, config)
 			body := []byte{0x0a, 1, 'a', 0x0a, 1, 'b'}
@@ -218,8 +219,7 @@ func TestExternalReadsResignRetriesAndWritesRunOnce(t *testing.T) {
 				require.Equal(t, endpoint{address: config.AccessAddress, target: config.AccessInstanceID, compress: true}, ep)
 				require.Equal(t, codec.SerializationTypePB, serialization)
 				require.Equal(t, body, raw)
-				claims, err := gatewayauth.Verify(config.Credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method,
-					TargetNode: config.AccessInstanceID, Callee: service, Func: method, Body: raw}, headers, time.Now())
+				claims, err := authtest.Verify(config.Credentials, gatewayauth.Request{TargetNode: config.AccessInstanceID, Callee: service, Func: method, Body: raw}, headers, time.Now())
 				require.NoError(t, err)
 				require.False(t, nonces[claims.Nonce], "every send must use a fresh nonce")
 				nonces[claims.Nonce] = true
@@ -341,23 +341,63 @@ func TestRefreshRetriesPersistingUnchangedDirectoryAfterCacheWriteFailure(t *tes
 	require.Equal(t, source.directory.Version, cached.Version, "磁盘恢复后缓存应补写为当前目录")
 }
 
-// 主机网关验签失败（服务撤离同时撤销了调用方密钥）时，只读调用刷新目录并改投新主机。
-func TestReadRetryRefreshesOnGatewayAuthFailure(t *testing.T) {
-	source := &sourceStub{directory: testDirectory(t, "b", "a")}
-	c := newTestClient(t, tunnelConfig(source))
-	calls := 0
-	c.invoke = func(_ context.Context, ep endpoint, _, _ string, _ int, raw []byte, _ http.Header) ([]byte, error) {
-		calls++
-		if calls == 1 {
-			return nil, errs.NewFrameError(errs.RetServerAuthFail, "host gateway authentication failed")
+// 网关自己拒签（专用错误码）说明请求没有到达服务：刷新目录后重新签名重发一次，写方法也一样；重发用新的 nonce。
+func TestGatewayRejectionIsResignedAndResentOnceForAllMethods(t *testing.T) {
+	for _, method := range []string{"GetSecret", "UpdateSecret"} {
+		source := &sourceStub{directory: testDirectory(t, "a")}
+		c := newTestClient(t, tunnelConfig(source))
+		refreshed := source.calls
+		var nonces []string
+		c.invoke = func(_ context.Context, _ endpoint, _, _ string, _ int, raw []byte, headers http.Header) ([]byte, error) {
+			nonces = append(nonces, headers.Get("X-Moox-Nonce"))
+			if len(nonces) == 1 {
+				return nil, errs.NewFrameError(gatewayauth.RetRejected, "host gateway rejected the request signature or caller")
+			}
+			return raw, nil
 		}
-		require.NotEqual(t, "a", ep.target)
-		return raw, nil
+		_, err := c.Forward(context.Background(), secretService, method, codec.SerializationTypeJSON, []byte(`{}`))
+		require.NoError(t, err, method)
+		require.Len(t, nonces, 2, method)
+		require.NotEqual(t, nonces[0], nonces[1], "重发必须重新签名")
+		require.Greater(t, source.calls, refreshed, "重发前刷新目录")
 	}
-	_, err := c.Forward(context.Background(), secretService, "GetSecret", codec.SerializationTypeJSON, []byte(`{}`))
-	require.NoError(t, err)
+}
+
+// 重签之后仍被拒就报错，不再重发；调用方声明不重试时一次也不重发。
+func TestGatewayRejectionIsNotResentTwice(t *testing.T) {
+	c := newTestClient(t, tunnelConfig(&sourceStub{directory: testDirectory(t, "a")}))
+	calls := 0
+	c.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
+		calls++
+		return nil, errs.NewFrameError(gatewayauth.RetRejected, "host gateway rejected the request signature or caller")
+	}
+	_, err := c.Forward(context.Background(), secretService, "UpdateSecret", codec.SerializationTypeJSON, []byte(`{}`))
+	require.Equal(t, gatewayauth.RetRejected, int(errs.Code(err)))
 	require.Equal(t, 2, calls)
-	require.GreaterOrEqual(t, source.calls, 2)
+	calls = 0
+	_, err = c.Forward(WithoutRetry(context.Background()), secretService, "UpdateSecret", codec.SerializationTypeJSON, []byte(`{}`))
+	require.Error(t, err)
+	require.Equal(t, 1, calls)
+}
+
+// 别的错误不重发：服务自己返回的鉴权类错误、业务错误，对写方法都只发一次（对只读方法也不因鉴权错误重发）。
+func TestServiceErrorsAreNotResentAsGatewayRejections(t *testing.T) {
+	for _, failure := range []error{
+		errs.NewFrameError(errs.RetServerAuthFail, "service authentication failed"),
+		errs.New(12345, "business error"),
+	} {
+		for _, method := range []string{"GetSecret", "UpdateSecret"} {
+			c := newTestClient(t, tunnelConfig(&sourceStub{directory: testDirectory(t, "a")}))
+			calls := 0
+			c.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
+				calls++
+				return nil, failure
+			}
+			_, err := c.Forward(context.Background(), secretService, method, codec.SerializationTypeJSON, []byte(`{}`))
+			require.Error(t, err)
+			require.Equal(t, 1, calls, "%s %v", method, failure)
+		}
+	}
 }
 
 func TestWithoutRetryLeavesRetriesToTheCaller(t *testing.T) {
@@ -396,6 +436,7 @@ func TestRelayEndpointForOutboundHost(t *testing.T) {
 	require.NoError(t, err)
 	config := tunnelConfig(&sourceStub{directory: directory})
 	config.Mode, config.Tunnels, config.CAFile, config.LocalHostID = Internal, nil, ca, "storage"
+	config.Credentials = authtest.Component("monitor", "storage")
 	route := func(config Config) (endpoint, error) {
 		return newTestClient(t, config).endpoint(context.Background(), secretService, "")
 	}
@@ -405,12 +446,12 @@ func TestRelayEndpointForOutboundHost(t *testing.T) {
 	require.Equal(t, "home", ep.serverName)
 	require.Equal(t, &relayRoute{controlAddress: "control.example.test:11003", controlHost: "control", target: "home", caFile: ca, credentials: config.Credentials}, ep.relay)
 
-	config.LocalHostID = "control"
+	config.LocalHostID, config.Credentials = "control", authtest.Component("monitor", "control")
 	ep, err = route(config)
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1:11003", ep.relay.controlAddress)
 
-	config.LocalHostID = "home"
+	config.LocalHostID, config.Credentials = "home", authtest.Component("monitor", "home")
 	ep, err = route(config)
 	require.NoError(t, err)
 	require.Nil(t, ep.relay, "目标主机自己走本机网关")

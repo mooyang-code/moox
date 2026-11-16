@@ -2,21 +2,19 @@ package router
 
 import (
 	"context"
-	"errors"
 	"net"
 	"net/http"
-	"path/filepath"
-	"strings"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
-	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testrpc"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -26,40 +24,6 @@ import (
 
 const primary = "trpc.moox.storage.PrimaryStore"
 
-func TestControlUpstreamPreservesSignatureWithoutReusingNonceForRetry(t *testing.T) {
-	opened, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	credential := testsnapshot.Credential("host-gateway@storage")
-	body := []byte{0x0a, 7, 's', 't', 'o', 'r', 'a', 'g', 'e'}
-	var calls atomic.Int32
-	testrpc.Serve(t, opened, servicecatalog.GatewayControlPath, func(ctx context.Context, raw []byte) ([]byte, error) {
-		calls.Add(1)
-		headers := http.Header{}
-		for key, value := range codec.Message(ctx).ServerMetaData() {
-			if strings.EqualFold(key, "x-moox-extra") {
-				return nil, errors.New("unsigned gateway metadata leaked")
-			}
-			headers.Add(key, string(value))
-		}
-		_, err := gatewayauth.Verify(credential, gatewayauth.Request{Method: "POST", Path: "/" + servicecatalog.GatewayControlPath + "/PullSnapshot", TargetNode: "control", Callee: servicecatalog.GatewayControlPath, Func: "PullSnapshot", Body: raw}, headers, time.Now())
-		if err != nil {
-			return nil, err
-		}
-		return nil, errs.NewFrameError(errs.RetClientNetErr, "verified control request")
-	})
-	headers, err := testrpc.Signed(credential, "control", servicecatalog.GatewayControlPath, "PullSnapshot", body)
-	require.NoError(t, err)
-	metadata := codec.MetaData{"x-moox-extra": []byte("unsigned")}
-	for key := range headers {
-		metadata[key] = []byte(headers.Get(key))
-	}
-	u := NewUpstream()
-	defer u.Close()
-	_, err = u.Forward(context.Background(), servicecatalog.Route{Address: opened.Addr().String(), ServicePath: servicecatalog.GatewayControlPath, Method: "PullSnapshot", ReadOnly: true, TimeoutMS: 1000}, codec.SerializationTypePB, body, metadata)
-	require.ErrorContains(t, err, "verified control request")
-	require.EqualValues(t, 1, calls.Load(), "the origin must sign every control retry with a new nonce")
-}
-
 type forwardFunc func(context.Context, servicecatalog.Route, int, []byte, codec.MetaData) ([]byte, error)
 
 func (f forwardFunc) Forward(ctx context.Context, route servicecatalog.Route, serialization int, body []byte, metadata codec.MetaData) ([]byte, error) {
@@ -68,12 +32,9 @@ func (f forwardFunc) Forward(ctx context.Context, route servicecatalog.Route, se
 
 func proxyFixture(t *testing.T, forwarder Forwarder) (*Proxy, *snapshot.State) {
 	t.Helper()
-	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, nonces.Close()) })
 	state := &snapshot.State{}
 	applySnapshot(t, state, testsnapshot.New(t, "storage", "storage-primary"))
-	p, err := NewService(ServiceOptions{State: state, Nonces: nonces, Forwarder: forwarder})
+	p, err := NewService(ServiceOptions{State: state, Replay: gatewayauth.NewReplay(time.Now().Add(-time.Minute)), Forwarder: forwarder})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, p.Close()) })
 	return p, state
@@ -107,11 +68,25 @@ func dispatch(ctx context.Context, p *Proxy, method string, body []byte, headers
 	return response.(*codec.Body).Data, nil
 }
 
+// signed 以部署在 control 上的组件身份签名（夹具把被测主机之外的调用方都放在 control 上）。
 func signed(t *testing.T, caller, method string, body []byte) http.Header {
 	t.Helper()
-	headers, err := testrpc.Signed(testsnapshot.Credential(caller), "storage", primary, method, body)
+	return signedBy(t, testsnapshot.Credential(caller, "control"), method, body)
+}
+
+func signedBy(t *testing.T, credentials gatewayauth.Credentials, method string, body []byte) http.Header {
+	t.Helper()
+	headers, err := testrpc.Signed(credentials, "storage", primary, method, body)
 	require.NoError(t, err)
 	return headers
+}
+
+// requireRejected 断言网关自己拒签：专用错误码，且不透露具体原因。
+func requireRejected(t *testing.T, err error, message string) {
+	t.Helper()
+	require.Error(t, err, message)
+	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), message)
+	require.NotContains(t, err.Error(), "nonce", message)
 }
 
 func TestProxyRejectsUnauthorizedOrAlteredCallsBeforeUpstream(t *testing.T) {
@@ -121,18 +96,18 @@ func TestProxyRejectsUnauthorizedOrAlteredCallsBeforeUpstream(t *testing.T) {
 		require.Equal(t, "127.0.0.1:20102", route.Address)
 		return body, nil
 	}))
-	for _, denied := range []struct{ caller, method, contains string }{
-		{"console", "ReadTimeSeriesRows", "not allowed"},
-		{"moox-skill", "ReadTimeSeriesRows", "authentication failed"},
-		{"collector", "NotRegistered", "not deployed"},
-	} {
-		_, err := dispatch(context.Background(), p, denied.method, nil, signed(t, denied.caller, denied.method, nil))
-		require.ErrorContains(t, err, denied.contains)
-	}
-	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", []byte("altered"), signed(t, "collector", "ReadTimeSeriesRows", []byte("original")))
-	require.ErrorContains(t, err, "authentication failed")
+	// 调用名单之外的调用方、没有登记公钥的身份。
+	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "trade", "ReadTimeSeriesRows", nil))
+	requireRejected(t, err, "trade 不在 ReadTimeSeriesRows 的名单里")
+	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signedBy(t, testsnapshot.Credential("moox-skill", ""), "ReadTimeSeriesRows", nil))
+	requireRejected(t, err, "外部身份不能直接到主机网关")
+	_, err = dispatch(context.Background(), p, "NotRegistered", nil, signed(t, "collector", "NotRegistered", nil))
+	require.ErrorContains(t, err, "not deployed")
+	// 签名之后改了请求体或方法。
+	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", []byte("altered"), signed(t, "collector", "ReadTimeSeriesRows", []byte("original")))
+	requireRejected(t, err, "请求体被改")
 	_, err = dispatch(context.Background(), p, "UpsertFields", nil, signed(t, "collector", "ReadTimeSeriesRows", nil))
-	require.ErrorContains(t, err, "authentication failed")
+	requireRejected(t, err, "方法被改")
 	require.Zero(t, calls.Load())
 	body := []byte{0x0a, 1, 'a', 0x0a, 1, 'b'}
 	headers := signed(t, "collector", "ReadTimeSeriesRows", body)
@@ -140,8 +115,104 @@ func TestProxyRejectsUnauthorizedOrAlteredCallsBeforeUpstream(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, body, response)
 	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", body, headers)
-	require.ErrorContains(t, err, "replayed")
+	requireRejected(t, err, "同一个签名第二次出现")
 	require.EqualValues(t, 1, calls.Load())
+}
+
+// 外部身份即使在快照里登记了公钥，在主机网关上也调不了任何方法（只能经外部入口）。
+func TestProxyRejectsExternalIdentityEvenWithRegisteredKey(t *testing.T) {
+	p, state := proxyFixture(t, forwardFunc(func(context.Context, servicecatalog.Route, int, []byte, codec.MetaData) ([]byte, error) {
+		t.Fatal("外部身份的请求不应到达上游")
+		return nil, nil
+	}))
+	raw := state.Load().Proto()
+	skill := testsnapshot.Credential("moox-skill", "")
+	raw.VerificationKeys = append(raw.VerificationKeys, &pb.GatewayVerificationKey{Identity: "moox-skill", PublicKey: skill.PublicKey()})
+	applySnapshot(t, state, raw)
+	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signedBy(t, skill, "ReadTimeSeriesRows", nil))
+	requireRejected(t, err, "moox-skill 直接到主机网关")
+}
+
+// 别的主机的密钥不能冒充：自称另一台主机、自称没部署在本机的组件、冒充 moox-cli，都在转发之前被拒。
+func TestProxyRejectsImpersonationWithAnotherHostsKey(t *testing.T) {
+	var calls atomic.Int32
+	p, _ := proxyFixture(t, forwardFunc(func(_ context.Context, _ servicecatalog.Route, _ int, body []byte, _ codec.MetaData) ([]byte, error) {
+		calls.Add(1)
+		return body, nil
+	}))
+	storageKey := testsnapshot.HostKey("storage")
+	for name, credentials := range map[string]gatewayauth.Credentials{
+		"用存储机的密钥自称控制机上的 collector": {Caller: "collector", Host: "control", Key: storageKey},
+		"collector 没有部署在存储机上":      {Caller: "collector", Host: "storage", Key: storageKey},
+		"用主机密钥冒充 moox-cli":         {Caller: "moox-cli", Key: storageKey},
+		"用主机密钥带主机头自称 moox-cli":     {Caller: "moox-cli", Host: "storage", Key: storageKey},
+		"没有登记的主机":                  {Caller: "collector", Host: "unknown", Key: storageKey},
+		"用 moox-cli 的密钥自称控制机上的组件":  {Caller: "collector", Host: "control", Key: testsnapshot.Credential("moox-cli", "").Key},
+	} {
+		_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signedBy(t, credentials, "ReadTimeSeriesRows", nil))
+		requireRejected(t, err, name)
+	}
+	require.Zero(t, calls.Load(), "冒充的请求不应到达上游")
+	// 对照：同样的请求由 moox-cli 用自己的密钥签名就能通过。
+	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signedBy(t, testsnapshot.Credential("moox-cli", ""), "ReadTimeSeriesRows", nil))
+	require.NoError(t, err, "moox-cli 用自己的密钥")
+	require.EqualValues(t, 1, calls.Load())
+}
+
+// 换密钥没有新旧并存：快照里换成新公钥后，旧私钥的签名立即被拒；新私钥通过。
+func TestProxyRejectsOldKeyAfterRotation(t *testing.T) {
+	p, state := proxyFixture(t, forwardFunc(func(_ context.Context, _ servicecatalog.Route, _ int, body []byte, _ codec.MetaData) ([]byte, error) {
+		return body, nil
+	}))
+	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "collector", "ReadTimeSeriesRows", nil))
+	require.NoError(t, err)
+	rotated := authtest.Component("collector", "rotated-control")
+	rotated.Host = "control"
+	raw := state.Load().Proto()
+	for _, key := range raw.VerificationKeys {
+		if key.HostId == "control" {
+			key.PublicKey = rotated.PublicKey()
+		}
+	}
+	applySnapshot(t, state, raw)
+	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "collector", "ReadTimeSeriesRows", nil))
+	requireRejected(t, err, "旧私钥")
+	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signedBy(t, rotated, "ReadTimeSeriesRows", nil))
+	require.NoError(t, err)
+}
+
+// 防重放记录只在内存里：签名时间早于网关进程启动时间的请求被拒（重启前用过的签名不能在重启后重放）。
+func TestProxyRejectsSignaturesOlderThanProcessStart(t *testing.T) {
+	p, _ := proxyFixture(t, forwardFunc(func(_ context.Context, _ servicecatalog.Route, _ int, body []byte, _ codec.MetaData) ([]byte, error) {
+		return body, nil
+	}))
+	headers := signed(t, "collector", "ReadTimeSeriesRows", nil)
+	p.options.Replay = gatewayauth.NewReplay(time.Now().Add(5 * time.Second))
+	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, headers)
+	requireRejected(t, err, "重启前签的请求")
+}
+
+// 外面带进来的 x-moox- 头不往后传（包括调用方伪造的“已验签主机”头）；只有 GatewayControl 收到网关写的签名主机 ID。
+func TestProxyStripsGatewayHeadersAndTellsGatewayControlTheVerifiedHost(t *testing.T) {
+	var seen codec.MetaData
+	p, _ := proxyFixture(t, forwardFunc(func(_ context.Context, _ servicecatalog.Route, _ int, body []byte, metadata codec.MetaData) ([]byte, error) {
+		seen = metadata
+		return body, nil
+	}))
+	headers := signed(t, "collector", "ReadTimeSeriesRows", nil)
+	headers.Set("X-Moox-Verified-Host", "storage")
+	headers.Set("x-moox-extra", "private")
+	headers.Set("trace-fixture", "preserved")
+	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, headers)
+	require.NoError(t, err)
+	require.Equal(t, codec.MetaData{http.CanonicalHeaderKey("trace-fixture"): []byte("preserved")}, seen)
+
+	inbound := codec.MetaData{"X-Moox-Verified-Host": []byte("control"), "x-moox-signature": []byte("s"), "trace": []byte("kept")}
+	forwarded := upstreamMetadata(servicecatalog.GatewayControlPath, gatewayauth.Claims{Caller: "host-gateway", Host: "storage"}, inbound)
+	require.Equal(t, codec.MetaData{gatewayauth.HeaderVerifiedHost: []byte("storage"), "trace": []byte("kept")}, forwarded, "只认验过的签名主机")
+	// 非主机身份没有签名主机：头在，值为空，GatewayControl 据此拒绝。
+	forwarded = upstreamMetadata(servicecatalog.GatewayControlPath, gatewayauth.Claims{Caller: "moox-cli"}, inbound)
+	require.Equal(t, "", string(forwarded[gatewayauth.HeaderVerifiedHost]))
 }
 
 func TestProxyAppliesCallerChangesWithoutRestart(t *testing.T) {
@@ -159,16 +230,13 @@ func TestProxyAppliesCallerChangesWithoutRestart(t *testing.T) {
 		}
 		route.Callers = callers
 	}
-	var keys []*pb.GatewayVerificationKey
+	// factor-mgr 从它所在主机上撤走：路由的名单与签名主机上的调用方里都不再有它。
 	for _, key := range revoked.VerificationKeys {
-		if key.Caller != "factor-mgr" {
-			keys = append(keys, key)
-		}
+		key.Callers = slices.DeleteFunc(key.Callers, func(caller string) bool { return caller == "factor-mgr" })
 	}
-	revoked.VerificationKeys = keys
 	applySnapshot(t, state, revoked)
 	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "factor-mgr", "ReadTimeSeriesRows", nil))
-	require.ErrorContains(t, err, "authentication failed")
+	requireRejected(t, err, "撤走的组件")
 	applySnapshot(t, state, original)
 	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "factor-mgr", "ReadTimeSeriesRows", nil))
 	require.NoError(t, err)
@@ -186,7 +254,7 @@ func TestProxyAppliesCallerChangesWithoutRestart(t *testing.T) {
 	require.Equal(t, errs.RetServerNoService, errs.Code(err), "客户端依赖该错误码刷新目录并重试")
 }
 
-func TestProxyBodyLimitsDeadlinesAndReplayStoreFailure(t *testing.T) {
+func TestProxyBodyLimitsAndDeadlines(t *testing.T) {
 	var calls atomic.Int32
 	tooLarge := make([]byte, (32<<20)+1)
 	p, _ := proxyFixture(t, forwardFunc(func(ctx context.Context, route servicecatalog.Route, _ int, _ []byte, _ codec.MetaData) ([]byte, error) {
@@ -210,19 +278,10 @@ func TestProxyBodyLimitsDeadlinesAndReplayStoreFailure(t *testing.T) {
 	defer cancel()
 	_, err = dispatch(ctx, p, "ReadTimeSeriesRows", nil, signed(t, "collector", "ReadTimeSeriesRows", nil))
 	require.Equal(t, errs.RetClientTimeout, errs.Code(err))
-	// A failed durable nonce write must never reach the backend.
-	p.options.Nonces = unavailableNonces{}
-	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "collector", "ReadTimeSeriesRows", nil))
-	require.ErrorContains(t, err, "replay store unavailable")
 }
 
-type unavailableNonces struct{}
-
-func (unavailableNonces) Consume(context.Context, string, string, time.Duration) (bool, error) {
-	return false, errors.New("synthetic failure")
-}
-
-func TestUpstreamOnlyRetriesReadsAndStripsGatewayMetadata(t *testing.T) {
+// 上游只对只读方法重试；交给它的元数据原样传给被调服务（x-moox- 头已由路由层筛掉）。
+func TestUpstreamOnlyRetriesReads(t *testing.T) {
 	opened, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	var calls atomic.Int32
@@ -230,19 +289,14 @@ func TestUpstreamOnlyRetriesReadsAndStripsGatewayMetadata(t *testing.T) {
 	testrpc.Serve(t, opened, primary, func(ctx context.Context, _ []byte) ([]byte, error) {
 		calls.Add(1)
 		metadata := codec.Message(ctx).ServerMetaData()
-		for key := range metadata {
-			if strings.HasPrefix(strings.ToLower(key), "x-moox-") {
-				invalidMetadata.Store(true)
-			}
-		}
-		if string(metadata["trace-fixture"]) != "preserved" {
+		if string(metadata["trace-fixture"]) != "preserved" || string(metadata[gatewayauth.HeaderVerifiedHost]) != "control" {
 			invalidMetadata.Store(true)
 		}
 		return nil, errs.NewFrameError(errs.RetClientNetErr, "synthetic connection failure")
 	})
 	u := NewUpstream()
 	defer u.Close()
-	metadata := codec.MetaData{"X-Moox-Signature": []byte("secret"), "x-moox-extra": []byte("private"), "trace-fixture": []byte("preserved")}
+	metadata := codec.MetaData{gatewayauth.HeaderVerifiedHost: []byte("control"), "trace-fixture": []byte("preserved")}
 	for _, readOnly := range []bool{true, false} {
 		calls.Store(0)
 		method := "UpsertFields"
@@ -258,5 +312,4 @@ func TestUpstreamOnlyRetriesReadsAndStripsGatewayMetadata(t *testing.T) {
 		require.Equal(t, expected, calls.Load())
 	}
 	require.False(t, invalidMetadata.Load())
-	require.Equal(t, []byte("secret"), metadata["X-Moox-Signature"])
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -66,8 +67,7 @@ func (w *factorGatewayWire) verify(ctx context.Context, service, method string, 
 	if err != nil {
 		return err
 	}
-	claims, err := gatewayauth.Verify(w.credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method,
-		TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
+	claims, err := authtest.Verify(w.credentials, gatewayauth.Request{TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
 	if err != nil {
 		return err
 	}
@@ -127,13 +127,13 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	t.Setenv("MOOX_FACTOR_STORAGE_HMAC_KEY_FILE", "/nonexistent/obsolete-factor.key")
 	root := t.TempDir()
 	configPath := filepath.Join(root, "factor-mgr", "config", "app.yaml")
-	keyPath := filepath.Join(root, "secrets", "caller-factor-mgr.key")
+	keyPath := filepath.Join(root, "secrets", "host.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
 	for _, path := range []string{configPath, keyPath, caPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	}
-	credentials := gatewayauth.Credentials{Caller: "factor-mgr", KeyID: "admin-assigned-factor-mgr-key-97", Secret: "factor-mgr-signing-fixture-key-at-least-32-bytes"}
-	require.NoError(t, os.WriteFile(keyPath, []byte(credentials.Secret+"\n"), 0o600))
+	credentials := authtest.Component("factor-mgr", "control")
+	require.NoError(t, os.WriteFile(keyPath, []byte(gatewayauth.EncodeSigningKey(credentials.Key)+"\n"), 0o600))
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
@@ -155,7 +155,7 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	data := filepath.Join(root, "data", "factor-mgr")
-	raw := "database:\n  path: " + filepath.Join(data, "factor-mgr.db") + "\ngateway_client:\n  caller: factor-mgr\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-factor-mgr.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
+	raw := "database:\n  path: " + filepath.Join(data, "factor-mgr.db") + "\ngateway_client:\n  caller: factor-mgr\n  key_file: ../../secrets/host.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
 	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0o600))
 	cfg, err := Load(configPath)
 	require.NoError(t, err)

@@ -19,13 +19,14 @@ message HostGatewayRoute {
   bool read_only = 8;
 }
 
+// 一把校验公钥，快照里没有秘密。host_id 非空是主机密钥：这台主机上的组件共用，callers 是部署在这台主机上、
+// 可以用它签名的调用方；host_id 为空是不属于主机的身份（moox-cli 等），identity 是身份名。
 message GatewayVerificationKey {
-  string caller = 1;
-  string key_id = 2;
-  bytes secret = 3;
-  // Zero means valid until explicitly retired, including rotation overlap.
-  // A positive value limits verification to this Unix deadline.
-  int64 expires_at_unix = 4;
+  string host_id = 1;
+  string identity = 2;
+  // ed25519 公钥，32 字节。
+  bytes public_key = 3;
+  repeated string callers = 4;
 }
 
 // 一台出站主机允许经 control 中转连接的端口与调用方，只出现在 control 的快照里。
@@ -87,8 +88,8 @@ message ReportStatusRsp {
   common.RetInfo ret_info = 1;
 }
 
-// Only host-gateway@<host_id> may call these methods. The service validates
-// both the signed caller and the request host; key material never enters logs.
+// 只有各主机的网关能调：控制机网关验过签名后转给本机的 Admin，并把验过的签名主机 ID 放在 x-moox-verified-host
+// 元数据头里（控制机网关自己直连时也带上）；服务要求请求里的 host_id 与它一致。
 service GatewayControl {
   rpc PullSnapshot(PullSnapshotReq) returns (PullSnapshotRsp);
   rpc ReportStatus(ReportStatusReq) returns (ReportStatusRsp);

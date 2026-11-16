@@ -13,6 +13,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout)) }
@@ -27,6 +28,8 @@ func run(arguments []string, output io.Writer) int {
 		err = checkConfig(arguments[1:], output)
 	case "routes":
 		err = printRoutes(arguments[1:], output)
+	case "sign-public-key":
+		err = printSignPublicKey(arguments[1:], output)
 	case "health":
 		err = checkHealth(arguments[1:], output)
 	default:
@@ -56,6 +59,26 @@ func checkConfig(arguments []string, output io.Writer) error {
 		return err
 	}
 	_, _ = fmt.Fprintln(output, "configuration valid")
+	return nil
+}
+
+// printSignPublicKey 打印一个签名私钥文件对应的公钥（base64）。部署用它核对目标机上的私钥和 Admin 登记的公钥是否一致，
+// 私钥本身不离开这台主机。
+func printSignPublicKey(arguments []string, output io.Writer) error {
+	flags := flag.NewFlagSet("sign-public-key", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	path := flags.String("key-file", "", "签名私钥文件")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *path == "" {
+		return errors.New("sign-public-key 需要 --key-file，不接受其他参数")
+	}
+	key, err := gatewayauth.ReadSigningKey(*path)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(output, gatewayauth.EncodePublicKey(gatewayauth.Credentials{Key: key}.PublicKey()))
 	return nil
 }
 

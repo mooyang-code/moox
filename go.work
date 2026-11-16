@@ -54,7 +54,6 @@ use (
 	./packages/netguard
 	./packages/notification
 	./packages/report
-	./packages/requestauth
 	./packages/security
 	./packages/seriesformat
 	./packages/seriesimport

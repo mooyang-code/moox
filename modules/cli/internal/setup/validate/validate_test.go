@@ -122,14 +122,15 @@ func TestRunPreservesHostOrderAndRedactsErrors(t *testing.T) {
 func TestRunRejectsIncompleteDeploymentsBeforeTouchingHosts(t *testing.T) {
 	snapshot := validationSnapshot(t)
 	components := snapshot.Deployments["control"]
-	snapshot.Deployments["control"] = slices.DeleteFunc(components, func(id string) bool { return id == "archive-mgr" })
+	snapshot.Deployments["control"] = slices.DeleteFunc(components, func(id string) bool { return id == "collector" })
 	identity := &fakeIdentity{}
 	sshChecker := &fakeSSHChecker{errs: map[string]error{}}
 
 	result, err := Run(context.Background(), snapshot, Dependencies{Identity: identity, SSH: sshChecker})
 	require.ErrorIs(t, err, ErrValidationFailed)
-	assert.ErrorContains(t, err, "archive-mgr")
-	assert.ErrorContains(t, err, "给主机 control 加上 archive-mgr")
+	// 外部身份 collector-operator 能调 Collector 的方法：没有 Collector，Access 会一直等不到这项服务。
+	assert.ErrorContains(t, err, "collector")
+	assert.ErrorContains(t, err, "给主机 control 加上 collector")
 	assert.Equal(t, "deployment_incomplete", result.Checks[1].Code)
 	assert.Empty(t, sshChecker.calls)
 	assert.Zero(t, identity.calls)

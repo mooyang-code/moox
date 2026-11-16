@@ -1,5 +1,4 @@
-// Package hostbundle defines the public metadata of issued host identity material.
-// Private key contents never belong in this wire contract.
+// Package hostbundle 定义主机身份包的公开清单；私钥内容不出现在这些类型里。
 package hostbundle
 
 import "time"
@@ -45,20 +44,6 @@ type CAInfo struct {
 	Created bool `json:"created"`
 }
 
-type Credential struct {
-	Caller  string `json:"caller"`
-	KeyID   string `json:"key_id"`
-	KeyFile string `json:"key_file"`
-}
-
-// OperatorConfig is the public YAML exported beside the bootstrap operator key.
-// Keeping this wire type here avoids importing an RPC client into host tools.
-type OperatorConfig struct {
-	Caller  string `yaml:"caller"`
-	KeyID   string `yaml:"key_id"`
-	KeyFile string `yaml:"key_file"`
-}
-
 type File struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
@@ -83,16 +68,32 @@ type ClientMetadata struct {
 // ServerFiles are the extra files of a Server export, in sorted order.
 var ServerFiles = []string{"server-key.pem", "server.pem", "users.yaml"}
 
+// 身份包里的文件名。host.key、scf-collector.key 只在这次新签发了对应私钥时才有。
+const (
+	HostKeyFile         = "host.key"
+	HostCertificateFile = "host.crt"
+	HostTLSKeyFile      = "host.tls.key"
+	CAFile              = "moox-ca.crt"
+	SCFCollectorKeyFile = "scf-collector.key"
+)
+
+// Metadata 是一台主机身份包的公开清单：主机签名私钥（新签发时）、主机证书、根证书；控制机另有 scf-collector 的私钥。
+// 公钥都是 base64 的 32 字节 ed25519 公钥，是 Admin 里登记的那一把。
 type Metadata struct {
-	Version          int             `json:"version"`
-	HostID           string          `json:"host_id"`
-	ControlHostID    string          `json:"control_host_id"`
-	BundleDir        string          `json:"bundle_dir"`
-	ConfigFile       string          `json:"config_file"`
-	VerificationFile string          `json:"verification_file,omitempty"`
-	ExpectedHash     string          `json:"expected_hash"`
-	CA               CAInfo          `json:"ca"`
-	Certificate      CertificateInfo `json:"certificate"`
-	Credentials      []Credential    `json:"credentials"`
-	Files            []File          `json:"files"`
+	Version       int    `json:"version"`
+	HostID        string `json:"host_id"`
+	ControlHostID string `json:"control_host_id"`
+	BundleDir     string `json:"bundle_dir"`
+	// SignPublicKey 是这台主机登记的签名公钥；SignKeyIssued 为真表示这次新生成了私钥（包里有 host.key），
+	// 为假表示目标机上的私钥和登记的一致、原样沿用。
+	SignPublicKey string `json:"sign_public_key"`
+	SignKeyIssued bool   `json:"sign_key_issued"`
+	// SCFCollectorPublicKey 只在部署了 collector 的主机（控制机）上有。
+	SCFCollectorPublicKey string `json:"scf_collector_public_key,omitempty"`
+	SCFCollectorKeyIssued bool   `json:"scf_collector_key_issued,omitempty"`
+	// OperatorPublicKey 是 Admin 里登记的 moox-cli 公钥，只有 bootstrap 返回。
+	OperatorPublicKey string          `json:"operator_public_key,omitempty"`
+	CA                CAInfo          `json:"ca"`
+	Certificate       CertificateInfo `json:"certificate"`
+	Files             []File          `json:"files"`
 }

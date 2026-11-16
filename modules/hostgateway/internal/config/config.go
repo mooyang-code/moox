@@ -12,6 +12,7 @@ type Config = hostgatewayconfig.Config
 
 func Load(path string) (Config, error) { return hostgatewayconfig.Load(path) }
 
+// LoadIdentity 读主机证书与主机签名私钥；网关以 host-gateway 的身份、用所在主机的密钥签名。
 func LoadIdentity(cfg Config) (*tlsconfig.Material, gatewayauth.Credentials, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, gatewayauth.Credentials{}, err
@@ -20,9 +21,9 @@ func LoadIdentity(cfg Config) (*tlsconfig.Material, gatewayauth.Credentials, err
 	if err != nil {
 		return nil, gatewayauth.Credentials{}, err
 	}
-	secret, err := gatewayauth.ReadSigningSecret(cfg.Control.KeyFile)
+	key, err := gatewayauth.ReadSigningKey(cfg.Control.KeyFile)
 	if err != nil {
 		return nil, gatewayauth.Credentials{}, err
 	}
-	return material, gatewayauth.Credentials{Caller: cfg.Control.Caller, KeyID: cfg.Control.KeyID, Secret: secret}, nil
+	return material, gatewayauth.Credentials{Caller: "host-gateway", Host: cfg.Host.ID, Key: key}, nil
 }

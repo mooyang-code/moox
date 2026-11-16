@@ -158,8 +158,6 @@ type KlineResampleConfig struct {
 	// HistoryBucketsPerRound 是历史合成作业每轮最多推进的桶数；HistoryMaxJobs 是每轮最多推进的作业数。
 	HistoryBucketsPerRound int `yaml:"history_buckets_per_round"`
 	HistoryMaxJobs         int `yaml:"history_max_jobs"`
-	// LegacyEventBus 只用来识别旧配置：EventBus 连接已经移到顶层 event_bus，旧位置出现就给出明确的报错（见 validateKlineResample）。
-	LegacyEventBus any `yaml:"event_bus"`
 	// MaxReadKeys 是单次读取源/目标行的键数上限。
 	MaxReadKeys int `yaml:"max_read_keys"`
 }
@@ -251,10 +249,6 @@ func (c *Config) validateSCFAccess() error {
 	if c.SCFAccess.Caller != "scf-collector" {
 		return fmt.Errorf("scf_access.caller must be scf-collector")
 	}
-	// Offline Collector configuration can precede Admin credential assignment.
-	if c.SCFAccess.KeyID == "" {
-		return nil
-	}
 	if err := c.SCFAccess.Validate(); err != nil {
 		return fmt.Errorf("scf_access: %w", err)
 	}
@@ -270,9 +264,6 @@ func (c *Config) validateEgressProxy() error {
 
 func (c *Config) validateKlineResample() error {
 	k := c.KlineResample
-	if k.LegacyEventBus != nil {
-		return fmt.Errorf("kline_resample.event_bus 已经移到顶层 event_bus：K 线合成与下架检测共用一条 EventBus 连接。请重新部署 Collector（moox-cli setup deploy），或把这一段从 kline_resample 下移到顶层")
-	}
 	if k.ScanTimeout <= 0 || k.ExecTimeout <= 0 || k.FallbackGrace <= 0 {
 		return fmt.Errorf("kline_resample durations must be positive")
 	}
@@ -302,7 +293,7 @@ func (c *Config) validateCollectorRetention() error {
 // Default returns safe local defaults.
 func Default() *Config {
 	return &Config{
-		GatewayClient: gatewayclient.FileConfig{Caller: "collector", KeyFile: "../../secrets/caller-collector.key"},
+		GatewayClient: gatewayclient.FileConfig{Caller: "collector", KeyFile: "../../secrets/host.key"},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/moox_collector.db",
@@ -317,7 +308,7 @@ func Default() *Config {
 		Stream:       defaultStreamConfig(),
 		Cloud:        CloudConfig{CLS: cloud.DefaultCLSConfig()},
 		Delist:       DelistConfig{AutoDetect: true},
-		SCFAccess:    gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
+		SCFAccess:    gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/scf-collector.key"},
 		CollectorRetention: CollectorRetentionConfig{
 			MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000,
 		},

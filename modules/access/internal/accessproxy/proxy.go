@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -23,19 +24,19 @@ type NonceStore interface {
 	Consume(context.Context, string, string, time.Duration) (bool, error)
 }
 
-// Forwarder borrows the process-owned internal gateway client. The client
-// signs as access and selects the destination using the current directory.
+// Forwarder 是进程持有的内部网关客户端：以 access 的身份、用所在主机的密钥签名，按当前目录选目标主机。
 type Forwarder interface {
 	Forward(context.Context, string, string, int, []byte) ([]byte, error)
 }
 
 type Options struct {
-	HostID      string
-	Credentials *gatewayauth.CredentialRegistry
-	Gateway     Forwarder
-	Nonces      NonceStore
-	Registerer  prometheus.Registerer
-	Now         func() time.Time
+	HostID string
+	// Keys 是外部身份的公钥表。
+	Keys       *gatewayauth.Keys
+	Gateway    Forwarder
+	Nonces     NonceStore
+	Registerer prometheus.Registerer
+	Now        func() time.Time
 }
 
 type Proxy struct {
@@ -45,8 +46,8 @@ type Proxy struct {
 }
 
 func New(options Options) (*Proxy, error) {
-	if !servicecatalog.ValidHostID(options.HostID) || options.Credentials == nil || options.Gateway == nil || options.Nonces == nil {
-		return nil, errors.New("access requires a canonical host ID, credential registry, internal gateway and durable nonce store")
+	if !servicecatalog.ValidHostID(options.HostID) || options.Keys == nil || options.Gateway == nil || options.Nonces == nil {
+		return nil, errors.New("access requires a canonical host ID, identity public keys, internal gateway and durable nonce store")
 	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
@@ -81,9 +82,14 @@ func (p *Proxy) deny(caller, service, method, reason, message string) (*codec.Bo
 	return nil, errors.New(message)
 }
 
-// Forward verifies the fixed access@host signature and catalog grant before
-// passing the original PB/JSON bytes to the internal gateway client. External
-// user IDs and roles are not trusted application authorization context.
+// reject 记一次拒签并返回专用错误码；具体原因只进指标，不回给调用方。
+func (p *Proxy) reject(caller, service, method, reason string) (*codec.Body, error) {
+	_, _ = p.deny(caller, service, method, reason, "")
+	return nil, errs.NewFrameError(gatewayauth.RetRejected, "access rejected the request signature or caller")
+}
+
+// Forward 先校验外部身份对 access@{主机} 的签名、防重放与调用名单，再把原始的 PB/JSON 字节交给内部网关客户端。
+// 这三步任何一步不过都返回拒签专用错误码：请求没有往后转，调用方可以重新签名重发一次。
 func (p *Proxy) Forward(ctx context.Context, body *codec.Body) (*codec.Body, error) {
 	if p == nil {
 		return nil, errors.New("access proxy is unavailable")
@@ -113,22 +119,21 @@ func (p *Proxy) Forward(ctx context.Context, body *codec.Body) (*codec.Body, err
 	for key, value := range message.ServerMetaData() {
 		headers.Add(key, string(value))
 	}
-	claims, err := p.options.Credentials.Verify(gatewayauth.Request{
-		Method: http.MethodPost, Path: path, TargetNode: "access@" + p.options.HostID,
-		Callee: service, Func: method, Body: body.Data,
+	claims, err := p.options.Keys.Verify(gatewayauth.Request{
+		TargetNode: "access@" + p.options.HostID, Callee: service, Func: method, Body: body.Data,
 	}, headers, p.options.Now())
 	if err != nil {
-		return p.deny("", service, method, "authentication", "access authentication failed")
+		return p.reject("", service, method, "authentication")
 	}
 	if !p.catalog.PrincipalAllowed(claims.Caller, service, method) {
-		return p.deny(claims.Caller, service, method, "permission", "access caller is not allowed for this method")
+		return p.reject(claims.Caller, service, method, "permission")
 	}
-	consumed, err := p.options.Nonces.Consume(ctx, "access:"+p.options.HostID+":"+claims.KeyID, claims.Nonce, claims.TTL)
+	consumed, err := p.options.Nonces.Consume(ctx, "access:"+p.options.HostID+":"+claims.Caller, claims.Nonce, claims.TTL)
 	if err != nil {
 		return p.deny(claims.Caller, service, method, "nonce_store", "access replay store unavailable")
 	}
 	if !consumed {
-		return p.deny(claims.Caller, service, method, "replay", "access request replayed")
+		return p.reject(claims.Caller, service, method, "replay")
 	}
 	metadata := gatewayclient.CallMetadata{}
 	for name, output := range map[string]*string{"X-Space-Id": &metadata.SpaceID, "X-Trace-Id": &metadata.TraceID} {

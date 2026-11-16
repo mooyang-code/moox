@@ -20,6 +20,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
@@ -264,9 +265,10 @@ func TestSetupInstallRunsStepsInDependencyOrder(t *testing.T) {
 func TestSetupInstallStepsKeepDependenciesOnControlInFirstPass(t *testing.T) {
 	snapshot := testSetupSnapshot(t)
 	steps := setupInstallSteps(snapshot.Manifest, "stockcn")
-	require.Equal(t, installDeploy, steps[1].Kind)
-	require.Equal(t, []string{"admin", "host-gateway", "host-agent", "eventbus", "storage-primary"}, steps[1].Components)
-	require.Equal(t, installInitMetadata, steps[2].Kind)
+	require.Equal(t, installOperator, steps[0].Kind, "第一步准备这台电脑的 moox-cli 签名私钥，控制机 bootstrap 时登记它的公钥")
+	require.Equal(t, installDeploy, steps[2].Kind)
+	require.Equal(t, []string{"admin", "host-gateway", "host-agent", "eventbus", "storage-primary"}, steps[2].Components)
+	require.Equal(t, installInitMetadata, steps[3].Kind)
 }
 
 // 重跑：已经装过时不带 --wipe 就是原地再做一遍，每一步照常执行、不出错，也不清空。
@@ -278,10 +280,18 @@ func TestSetupInstallRerunRepeatsStepsWithoutWiping(t *testing.T) {
 	require.ErrorContains(t, err, "moox-cli setup deploy --host overseas", "给出单独重跑这一步的命令")
 	require.NotContains(t, h.calls, "init", "失败之后的步骤不执行")
 
+	// 第一步生成了这台电脑的 moox-cli 私钥；重跑复用同一把，否则控制机上登记的公钥就对不上了。
+	keyFile := filepath.Join(h.operator, identitybundle.OperatorKeyFile)
+	firstKey, err := os.ReadFile(keyFile)
+	require.NoError(t, err)
+
 	h.fail, h.calls = "", nil
 	h.markInstalled()
 	_, err = h.run("install", "--space-id", "crypto", "--yes")
 	require.NoError(t, err)
+	again, err := os.ReadFile(keyFile)
+	require.NoError(t, err)
+	require.Equal(t, firstKey, again, "重跑不换 moox-cli 的密钥")
 	require.Contains(t, h.calls, "deploy:control:admin,host-gateway,host-agent")
 	require.Contains(t, h.calls, "verify")
 	for _, call := range h.calls {
@@ -292,8 +302,13 @@ func TestSetupInstallRerunRepeatsStepsWithoutWiping(t *testing.T) {
 func TestSetupInstallWipesOnlyWithMatchingDigest(t *testing.T) {
 	h := newInstallHarness(t)
 	h.markInstalled()
-	require.NoError(t, os.WriteFile(filepath.Join(h.operator, "gateway-client.yaml"), []byte("caller: moox-cli\n"), 0o600))
-	_, err := h.run("install", "--space-id", "crypto", "--yes", "--wipe", "sha256:other")
+	// 上一套部署留下的操作员身份：moox-cli 的私钥、控制机根证书与它的指纹。
+	oldKey, _, err := identitybundle.EnsureSigningKeyFile(filepath.Join(h.operator, identitybundle.OperatorKeyFile))
+	require.NoError(t, err)
+	for _, name := range []string{identitybundle.OperatorPinFile, identitybundle.OperatorCAFile} {
+		require.NoError(t, os.WriteFile(filepath.Join(h.operator, name), []byte("old\n"), 0o600))
+	}
+	_, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", "sha256:other")
 	require.ErrorContains(t, err, "wipe_scope_changed")
 	require.Empty(t, h.calls)
 
@@ -305,7 +320,12 @@ func TestSetupInstallWipesOnlyWithMatchingDigest(t *testing.T) {
 	wiped := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return !strings.HasPrefix(call, "wipe:") })
 	require.Len(t, wiped, 4)
 	require.Less(t, slices.IndexFunc(h.calls, func(call string) bool { return strings.HasPrefix(call, "wipe:") }), slices.Index(h.calls, "firewall"))
-	require.NoFileExists(t, filepath.Join(h.operator, "gateway-client.yaml"), "清空之后删掉这台电脑上的操作员身份")
+	// 清空之后删掉这台电脑上的操作员身份；紧接着的安装第一步生成一把新的 moox-cli 私钥。
+	require.NoFileExists(t, filepath.Join(h.operator, identitybundle.OperatorPinFile))
+	require.NoFileExists(t, filepath.Join(h.operator, identitybundle.OperatorCAFile))
+	newKey, err := identitybundle.ReadOperatorKey(h.operator)
+	require.NoError(t, err)
+	require.NotEqual(t, identitybundle.PublicKey(oldKey), identitybundle.PublicKey(newKey))
 
 	// 没装过时带 --wipe 是多余的，直接拒绝。
 	h.calls = nil
@@ -343,9 +363,10 @@ func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	h := newInstallHarness(t)
 	h.markInstalled()
 	h.report("factor").ArchiveKB, h.report("factor").SeaweedFSKB = 2048, 4096
-	require.NoError(t, os.WriteFile(filepath.Join(h.operator, "gateway-client.yaml"), []byte("caller: moox-cli\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(h.operator, "caller-moox-cli-abc.key"), []byte("k\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(h.operator, "unrelated.txt"), []byte("keep\n"), 0o600))
+	operatorFiles := []string{identitybundle.OperatorKeyFile, identitybundle.OperatorPinFile, identitybundle.OperatorCAFile}
+	for _, name := range append(operatorFiles, "unrelated.txt") {
+		require.NoError(t, os.WriteFile(filepath.Join(h.operator, name), []byte("keep\n"), 0o600))
+	}
 
 	out, err := h.run("wipe")
 	require.NoError(t, err)
@@ -361,7 +382,7 @@ func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	require.EqualValues(t, 4096, factor["seaweedfs_kb"], "预览里单独列出内置对象存储数据的大小")
 	require.Empty(t, h.calls, "预览不清空")
 	require.Contains(t, preview["note"], "主机 overseas 上有 Trade：清空会删除 Trade 库，先确认没有持仓和挂单")
-	require.FileExists(t, filepath.Join(h.operator, "gateway-client.yaml"))
+	require.FileExists(t, filepath.Join(h.operator, identitybundle.OperatorKeyFile))
 
 	_, err = h.run("wipe", "--yes")
 	require.ErrorContains(t, err, "--expect")
@@ -373,23 +394,25 @@ func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out, `"status":"wiped"`)
 	require.ElementsMatch(t, []string{"wipe:control", "wipe:storage", "wipe:overseas", "wipe:factor"}, h.calls)
-	require.NoFileExists(t, filepath.Join(h.operator, "gateway-client.yaml"))
-	require.NoFileExists(t, filepath.Join(h.operator, "caller-moox-cli-abc.key"))
-	require.FileExists(t, filepath.Join(h.operator, "unrelated.txt"), "只删部署写入的操作员身份")
+	// moox-cli 的私钥、控制机根证书与它的指纹都删掉：重装的控制机是新的 CA，操作身份也重新生成。
+	for _, name := range operatorFiles {
+		require.NoFileExists(t, filepath.Join(h.operator, name))
+	}
+	require.FileExists(t, filepath.Join(h.operator, "unrelated.txt"), "只删操作员身份")
 }
 
 // 一台清空失败时报错并保留操作员身份，重跑接着清。
 func TestSetupWipeReportsFailedHostAndKeepsOperatorIdentity(t *testing.T) {
 	h := newInstallHarness(t)
 	h.markInstalled()
-	require.NoError(t, os.WriteFile(filepath.Join(h.operator, "gateway-client.yaml"), []byte("caller: moox-cli\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(h.operator, identitybundle.OperatorKeyFile), []byte("keep\n"), 0o600))
 	out, err := h.run("wipe")
 	require.NoError(t, err)
 	digest := parsePreview(t, out)["plan"].(map[string]any)["digest"].(string)
 	h.fail = "wipe:storage"
 	_, err = h.run("wipe", "--yes", "--expect", digest)
 	require.ErrorContains(t, err, "boom wipe:storage")
-	require.FileExists(t, filepath.Join(h.operator, "gateway-client.yaml"))
+	require.FileExists(t, filepath.Join(h.operator, identitybundle.OperatorKeyFile))
 }
 
 func TestSetupDeployPassesHostComponentsAndSources(t *testing.T) {

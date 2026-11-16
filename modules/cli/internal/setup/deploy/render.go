@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net"
 	"path"
 	"slices"
 	"sort"
@@ -39,13 +38,13 @@ const defaultStreamSpace = "crypto"
 // localGatewayAddress 是本机主机网关给同机组件用的入口。
 const localGatewayAddress = "127.0.0.1:11002"
 
-// Identity 是从控制机取到并校验过的身份材料，按新布局摆放。
+// Identity 是从控制机取到并校验过的身份材料，按部署根布局摆放。
 type Identity struct {
-	// KeyIDs 是调用方 → Admin 分配的 key_id（本机各组件、console、scf-collector，以及外部程序自己的外部身份）。
-	KeyIDs map[string]string
-	// Gateway 是身份包里这台主机的网关配置（路径在渲染时换成新布局的绝对路径）。
-	Gateway hostgatewayconfig.Config
-	// Secrets 是 secrets/ 下的文件（相对路径 → 内容）：caller-*.key、moox-ca.crt、host.crt、host.tls.key、access/*。
+	// SignPublicKey 是这台主机登记的签名公钥；SCFCollectorPublicKey 只在部署了 collector 的主机上有。
+	// 它们进组件的指纹：换了密钥，用它签名的组件就要重启；没换时私钥文件不在 Secrets 里，目标机上的原样沿用。
+	SignPublicKey, SCFCollectorPublicKey string
+	// Secrets 是 secrets/ 下这次要写的文件（相对路径 → 内容）：moox-ca.crt、host.crt、host.tls.key，新签发时的 host.key 与
+	// scf-collector.key，以及 access 的公钥表 access/*。
 	Secrets map[string][]byte
 	// EventBus 是导出的 EventBus 材料（文件名 → 内容）：ca.pem、<角色>.yaml，EventBus 所在主机另有 server.pem、server-key.pem、users.yaml。
 	EventBus map[string][]byte
@@ -138,14 +137,21 @@ func (r *renderer) use(component, name string) {
 	}
 }
 
-// fingerprint 对组件用到的文件（路径、权限、内容）和单元文件算摘要。主机证书每次签发都不同，不算在内，
-// 否则每次部署都会重启主机网关；证书本身照常覆盖。
+// fingerprint 对组件用到的文件（路径、权限、内容）、单元文件和它签名用的公钥算摘要。主机证书每次签发都不同，不算在内，
+// 否则每次部署都会重启主机网关；证书本身照常覆盖。私钥文件只在新签发时才在包里，所以算公钥、不算私钥文件：
+// 密钥没换时指纹不变，换了就变。
 func (r *renderer) fingerprint(component string) string {
 	names := slices.Clone(r.used[component])
 	sort.Strings(names)
 	hash := sha256.New()
+	if spec, _ := r.Catalog.Component(component); !spec.ThirdParty {
+		fmt.Fprintf(hash, "sign-public-key\x00%s\x00", r.Identity.SignPublicKey)
+		if component == "collector" {
+			fmt.Fprintf(hash, "scf-collector-public-key\x00%s\x00", r.Identity.SCFCollectorPublicKey)
+		}
+	}
 	for _, name := range names {
-		if name == "secrets/host.crt" || name == "secrets/host.tls.key" {
+		if name == "secrets/host.crt" || name == "secrets/host.tls.key" || name == "secrets/host.key" || name == "secrets/scf-collector.key" {
 			continue
 		}
 		file := r.out.Files[name]
@@ -211,12 +217,10 @@ func (r *renderer) secretsOf(component servicecatalog.Component) []string {
 	if component.ThirdParty {
 		return nil
 	}
-	names := []string{"secrets/caller-" + component.ID + ".key", "secrets/moox-ca.crt"}
+	names := []string{"secrets/moox-ca.crt"}
 	switch component.ID {
 	case "host-gateway":
 		names = append(names, "secrets/host.crt", "secrets/host.tls.key")
-	case "collector":
-		names = append(names, "secrets/caller-scf-collector.key")
 	case "access":
 		for name := range r.Identity.Secrets {
 			if strings.HasPrefix(name, "access/") {
@@ -309,6 +313,8 @@ func (r *renderer) environment(component servicecatalog.Component, values map[st
 		values["MOOX_ADMIN_NODE_ID"] = r.Host.Name
 		values["MOOX_ADMIN_ENCRYPTION_KEY_FILE"] = layout.Secret("admin-master.key")
 		values["MOOX_ADMIN_PKI_DIR"] = layout.Secret("pki")
+		// 管理台代浏览器调用各服务时用控制机的主机密钥、以 console 的身份签名。
+		values["MOOX_ADMIN_HOST_KEY_FILE"] = layout.Secret("host.key")
 		values["MOOX_ADMIN_DB_PATH"] = path.Join(layout.Data(id), "admin.db")
 		// 浏览器入口由 Admin 自己监听：证书用 MooX CA 签，Host 必须等于控制机地址。
 		values["MOOX_ADMIN_WEB_LISTEN"], values["MOOX_ADMIN_WEB_ADDRESS"] = "0.0.0.0:9527", r.Host.Address
@@ -410,12 +416,11 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			set("database.path", path.Join(data, "moox_collector.db"))
 			set("event_bus.urls", []string{url})
 			set("event_bus.credential_file", credential)
-			if r.Identity.KeyIDs["scf-collector"] == "" {
-				return nil, errors.New("身份材料里没有 scf-collector 的 key_id")
+			if r.Identity.SCFCollectorPublicKey == "" {
+				return nil, errors.New("身份材料里没有 scf-collector 的公钥")
 			}
 			set("scf_access.caller", "scf-collector")
-			set("scf_access.key_id", r.Identity.KeyIDs["scf-collector"])
-			set("scf_access.key_file", layout.Secret("caller-scf-collector.key"))
+			set("scf_access.key_file", layout.Secret("scf-collector.key"))
 		case "collector-stream":
 			set("data_dir", data)
 			set("market_config", path.Join(layout.Config(id), "sources/market/binance.yaml"))
@@ -479,49 +484,20 @@ func logWriters(document *yaml.Node) []*yaml.Node {
 	return configs
 }
 
-// gatewayClient 写 gateway_client 段。外部程序（因子引擎、归档 worker）经固定的 Access 进入；其余组件连本机主机网关。
+// gatewayClient 写 gateway_client 段：组件都用本机的主机签名私钥、连本机主机网关。
 func (r *renderer) gatewayClient(component servicecatalog.Component, client *yaml.Node) error {
-	id := component.ID
-	keyID := r.Identity.KeyIDs[id]
-	if keyID == "" {
-		return fmt.Errorf("身份材料里没有 %s 的 key_id", id)
+	if r.Identity.SignPublicKey == "" {
+		return errors.New("身份材料里没有这台主机的签名公钥")
 	}
-	fields := [][2]string{{"caller", id}, {"key_id", keyID}, {"key_file", r.layout.Secret("caller-" + id + ".key")}}
-	if component.ExternalProgram {
-		address, accessID, err := externalAccess(r.Config)
-		if err != nil {
-			return err
-		}
-		fields = append(fields, [2]string{"access_address", address}, [2]string{"access_id", accessID})
-	} else {
-		fields = append(fields, [2]string{"host_id", r.Host.Name}, [2]string{"local_address", localGatewayAddress}, [2]string{"ca_file", r.layout.Secret("moox-ca.crt")})
-	}
-	for _, field := range fields {
+	for _, field := range [][2]string{
+		{"caller", component.ID}, {"key_file", r.layout.Secret("host.key")},
+		{"host_id", r.Host.Name}, {"local_address", localGatewayAddress}, {"ca_file", r.layout.Secret("moox-ca.crt")},
+	} {
 		if err := setPath(client, field[0], field[1], true); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// externalAccess 取外部程序使用的 Access：Access 可以部署在多台主机上，优先用与 Storage primary 同一台的那个，
-// 没有时取主机 ID 排序最前的一台。
-func externalAccess(cfg *topology.Config) (address, id string, err error) {
-	var hosts []string
-	for host, components := range cfg.Deployments {
-		if slices.Contains(components, "access") {
-			hosts = append(hosts, host)
-		}
-	}
-	if len(hosts) == 0 {
-		return "", "", errors.New("因子引擎、归档 worker 要经 access 进入系统，[deployments] 里没有主机部署 access")
-	}
-	sort.Strings(hosts)
-	chosen := hosts[0]
-	if storage := cfg.ComponentHost("storage-primary"); slices.Contains(hosts, storage) {
-		chosen = storage
-	}
-	return net.JoinHostPort(cfg.HostByID(chosen).Address, "11004"), "access@" + chosen, nil
 }
 
 // objectStore 是归档 worker 的 object_store 段：没配 [archive_object_store] 时用本机内置的 SeaweedFS。
@@ -552,12 +528,10 @@ func (r *renderer) generated(component servicecatalog.Component, environment map
 	id, layout := component.ID, r.layout
 	switch id {
 	case "host-gateway":
-		config := r.Identity.Gateway
-		if config.Host.ID != r.Host.Name {
-			return errors.New("身份材料里的主机网关配置不属于这台主机")
-		}
+		control := r.Config.ControlHost()
+		config := hostgatewayconfig.Default(r.Host.Name, control.Name, control.Address)
 		config.TLS = hostgatewayconfig.TLS{CertificateFile: layout.Secret("host.crt"), KeyFile: layout.Secret("host.tls.key"), CAFile: layout.Secret("moox-ca.crt")}
-		config.Control.KeyFile = layout.Secret("caller-host-gateway.key")
+		config.Control.KeyFile = layout.Secret("host.key")
 		config.Store.Path = layout.Data(id)
 		raw, err := hostgatewayconfig.Encode(config)
 		if err != nil {

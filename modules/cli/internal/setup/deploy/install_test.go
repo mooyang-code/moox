@@ -99,7 +99,7 @@ func applyEntries(list string, keep ...string) map[string]File {
 		"version.json":                    {Data: []byte(`{"version":"dev"}` + "\n"), Mode: 0o600},
 		"config/host-gateway/app.yaml":    {Data: []byte("host:\n  id: control\n"), Mode: 0o600},
 		"config/host-agent/app.yaml":      {Data: []byte("version: 1\n"), Mode: 0o600},
-		"secrets/caller-host-agent.key":   {Data: []byte("secret\n"), Mode: 0o600},
+		"secrets/host.key":                {Data: []byte("secret\n"), Mode: 0o600},
 		"secrets/env/host-agent.env":      {Data: []byte("MOOX_NODE_ID=\"control\"\n"), Mode: 0o600},
 		"secrets/eventbus/ca.pem":         {Data: []byte("ca\n"), Mode: 0o600},
 		"units/moox-host-gateway.service": {Data: []byte("[Unit]\nDescription=MooX host-gateway\n"), Mode: 0o644},
@@ -150,7 +150,7 @@ func TestInstallScriptInstallsHostGatewayAndHostAgent(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(layout.Config("host-agent"), "stale.yaml"), "配置按组件整目录替换")
 	require.FileExists(t, filepath.Join(layout.Config("host-agent"), "app.yaml"))
 	require.FileExists(t, layout.Secret("admin-master.key"), "目标机自己生成的秘密不碰")
-	for _, name := range []string{layout.Secret("caller-host-agent.key"), layout.Env("host-agent"), layout.Version()} {
+	for _, name := range []string{layout.Secret("host.key"), layout.Env("host-agent"), layout.Version()} {
 		info, err := os.Stat(name)
 		require.NoError(t, err)
 		require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), name)

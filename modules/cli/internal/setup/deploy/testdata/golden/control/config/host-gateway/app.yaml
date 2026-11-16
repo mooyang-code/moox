@@ -11,8 +11,6 @@ tls:
 control:
     host_id: control
     target: 127.0.0.1:11112
-    caller: host-gateway@control
-    key_id: key-host-gateway
-    key_file: /data/moox/secrets/caller-host-gateway.key
+    key_file: /data/moox/secrets/host.key
 store:
     path: /data/moox/data/host-gateway

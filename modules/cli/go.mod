@@ -53,7 +53,6 @@ require (
 	github.com/mooyang-code/moox/packages/lifecycle v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/seriesformat v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/seriesimport v0.0.0-00010101000000-000000000000
@@ -152,7 +151,6 @@ replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gate
 
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 
-replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 

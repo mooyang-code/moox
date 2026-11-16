@@ -20,27 +20,13 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testrpc"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"
 )
-
-type relayNonces struct {
-	mu   sync.Mutex
-	seen map[string]bool
-}
-
-func (n *relayNonces) Consume(_ context.Context, namespace, nonce string, _ time.Duration) (bool, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.seen[namespace+nonce] {
-		return false, nil
-	}
-	n.seen[namespace+nonce] = true
-	return true, nil
-}
 
 type staticDirectory struct{ directory servicecatalog.Directory }
 
@@ -69,7 +55,7 @@ func TestRelayRPCThroughControlCarriesOnlyCiphertext(t *testing.T) {
 	view, err := snapshot.Build("control", testsnapshot.NewWithOutbound(t, "control", "home"))
 	require.NoError(t, err)
 	state.Apply(view)
-	cfg := hostgatewayconfig.Default("control", "control", "127.0.0.1", "fixture-key")
+	cfg := hostgatewayconfig.Default("control", "control", "127.0.0.1")
 	cfg.TLS = testcert.Files(t, ca, "control", nil)
 	cfg.Server.RemoteAddr, cfg.Server.LocalAddr, cfg.Server.HealthAddr = testrpc.Address(t), testrpc.Address(t), testrpc.Address(t)
 	cfg.Store.Path = filepath.Join(t.TempDir(), "cache")
@@ -78,7 +64,7 @@ func TestRelayRPCThroughControlCarriesOnlyCiphertext(t *testing.T) {
 	opened, err := listener.Open(t.Context(), cfg, controlTLS)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = opened.Close() })
-	server, err := relay.NewServer(relay.ServerOptions{State: state, Nonces: &relayNonces{seen: map[string]bool{}}})
+	server, err := relay.NewServer(relay.ServerOptions{State: state, Replay: gatewayauth.NewReplay(time.Now().Add(-time.Minute))})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = server.Close() })
 	opened.SetRelay(server)
@@ -109,7 +95,7 @@ func TestRelayRPCThroughControlCarriesOnlyCiphertext(t *testing.T) {
 	var dials atomic.Int32
 	client, err := relay.NewClient(relay.ClientOptions{
 		HostID: "home", ControlHost: "control", Target: opened.Remote.Addr().String(), TLS: relayTLS,
-		Credentials: testsnapshot.Credential("host-gateway@home"),
+		Credentials: testsnapshot.Credential("host-gateway", "home"),
 		Active:      func() bool { return true },
 		Allowed:     func(port int) bool { return port == servicecatalog.HostGatewayRemotePort },
 		DialLocal: func(int) (net.Conn, error) {
@@ -136,7 +122,7 @@ func TestRelayRPCThroughControlCarriesOnlyCiphertext(t *testing.T) {
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
 	caller, err := gatewayclient.New(gatewayclient.Config{
-		Mode: gatewayclient.Tunnel, Credentials: testsnapshot.Credential("moox-cli"), CAFile: homePaths.CAFile,
+		Mode: gatewayclient.Tunnel, Credentials: testsnapshot.Credential("moox-cli", ""), CAFile: homePaths.CAFile,
 		Source: staticDirectory{directory: directory}, Tunnels: relayTunnels{control: opened.Remote.Addr().String()},
 		Serialization: codec.SerializationTypeJSON,
 	})

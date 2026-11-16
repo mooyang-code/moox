@@ -140,7 +140,7 @@ func TestEveryHealthListenerBindsLoopbackOnly(t *testing.T) {
 	}
 	// 部署生成主机网关配置用的是代码里的默认值，不是仓库里的 app.yaml。
 	gateway, _ := catalog.Component("host-gateway")
-	if got := hostgatewayconfig.Default("storage", "control", "192.0.2.1", "fixture-key").Server.HealthAddr; got != want(gateway.Health.Port) {
+	if got := hostgatewayconfig.Default("storage", "control", "192.0.2.1").Server.HealthAddr; got != want(gateway.Health.Port) {
 		t.Errorf("hostgatewayconfig.Default 的 health_addr = %q，必须是 %q", got, want(gateway.Health.Port))
 	}
 }

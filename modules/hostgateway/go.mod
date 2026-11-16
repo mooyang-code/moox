@@ -5,7 +5,6 @@ go 1.27.3
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 
 require (
-	github.com/dgraph-io/badger/v4 v4.7.0
 	github.com/hashicorp/yamux v0.1.2
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
@@ -15,7 +14,6 @@ require (
 	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
@@ -31,7 +29,6 @@ require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
@@ -103,7 +100,6 @@ replace github.com/mooyang-code/moox/packages/trpcretry => ../../packages/trpcre
 
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 
-replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 
 replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
 

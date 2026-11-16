@@ -24,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
@@ -32,25 +33,26 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/errs"
 )
 
 // This runs the complete host gateway Run entrypoint. The control peer here is
 // a signed tRPC protocol fixture; real Admin integration is a separate gate.
 func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 	ca := testcert.New(t, nil)
-	credential := testsnapshot.Credential("host-gateway@storage")
-	cfg := hostgatewayconfig.Default("storage", "control", "127.0.0.1", credential.KeyID)
+	credential := testsnapshot.Credential("host-gateway", "storage")
+	cfg := hostgatewayconfig.Default("storage", "control", "127.0.0.1")
 	cfg.TLS = testcert.Files(t, ca, "storage", nil)
 	cfg.Server.RemoteAddr, cfg.Server.LocalAddr, cfg.Server.HealthAddr = testrpc.Address(t), testrpc.Address(t), testrpc.Address(t)
 	cfg.Store.Path = filepath.Join(t.TempDir(), "cache")
-	cfg.Control.KeyFile = filepath.Join(t.TempDir(), "caller.key")
-	require.NoError(t, os.WriteFile(cfg.Control.KeyFile, []byte(credential.Secret+"\n"), 0o600))
+	cfg.Control.KeyFile = filepath.Join(t.TempDir(), "host.key")
+	require.NoError(t, os.WriteFile(cfg.Control.KeyFile, []byte(gatewayauth.EncodeSigningKey(credential.Key)+"\n"), 0o600))
 	controlTLS, err := tlsconfig.Load("control", testcert.Files(t, ca, "control", nil))
 	require.NoError(t, err)
 	controlSocket, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	cfg.Control.Target = controlSocket.Addr().String()
-	raw := testsnapshot.New(t, "storage", "storage-primary")
+	raw := testsnapshot.New(t, "storage", "storage-primary", "monitor")
 	reports := make(chan *pb.ReportStatusReq, 10)
 	testrpc.Serve(t, tls.NewListener(controlSocket, controlTLS.Server()), servicecatalog.GatewayControlPath, func(ctx context.Context, body []byte) ([]byte, error) {
 		message := codec.Message(ctx)
@@ -59,7 +61,7 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 		for k, v := range message.ServerMetaData() {
 			headers.Add(k, string(v))
 		}
-		_, err := gatewayauth.Verify(credential, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: "control", Callee: servicecatalog.GatewayControlPath, Func: method, Body: body}, headers, time.Now())
+		_, err := authtest.Verify(credential, gatewayauth.Request{TargetNode: "control", Callee: servicecatalog.GatewayControlPath, Func: method, Body: body}, headers, time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +137,7 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 	_ = ready.Body.Close()
 	require.Equal(t, http.StatusOK, ready.StatusCode)
 	client, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, LocalHostID: "storage", LocalAddress: cfg.Server.LocalAddr, CAFile: cfg.TLS.CAFile,
-		Credentials: testsnapshot.Credential("collector"), Serialization: codec.SerializationTypePB, Timeout: 3 * time.Second})
+		Credentials: testsnapshot.Credential("monitor", "storage"), Serialization: codec.SerializationTypePB, Timeout: 3 * time.Second})
 	require.NoError(t, err)
 	defer client.Close()
 	object := &wrapperspb.StringValue{}
@@ -153,18 +155,22 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 			serialization int
 			body          []byte
 		}{{codec.SerializationTypePB, []byte{0x0a, 0x01, 'a', 0x0a, 0x01, 'b'}}, {codec.SerializationTypeJSON, []byte(" { \"x\": 1 }\n")}} {
-			headers, err := testrpc.Signed(testsnapshot.Credential("collector"), "storage", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", payload.body)
+			headers, err := testrpc.Signed(testsnapshot.Credential("collector", "control"), "storage", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", payload.body)
 			require.NoError(t, err)
 			response, err := testrpc.Call(context.Background(), endpoint.address, endpoint.trust, "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", payload.serialization, payload.body, headers)
 			require.NoError(t, err)
 			require.Equal(t, payload.body, response)
 			_, err = testrpc.Call(context.Background(), endpoint.address, endpoint.trust, "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", payload.serialization, payload.body, headers)
-			require.ErrorContains(t, err, "replayed")
+			require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "同一个签名第二次出现")
 		}
 	}
 	before := calls.Load()
 	for _, denied := range []struct{ caller, service, method string }{{"console", "trpc.moox.storage.PrimaryStore", "CollectGarbage"}, {"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows"}, {"collector", "trpc.moox.ops.SecretMgr", "GetSecretValue"}} {
-		headers, err := testrpc.Signed(testsnapshot.Credential(denied.caller), "storage", denied.service, denied.method, nil)
+		host := "control"
+		if denied.caller == "moox-skill" {
+			host = ""
+		}
+		headers, err := testrpc.Signed(testsnapshot.Credential(denied.caller, host), "storage", denied.service, denied.method, nil)
 		require.NoError(t, err)
 		_, err = testrpc.Call(context.Background(), cfg.Server.LocalAddr, nil, denied.service, denied.method, codec.SerializationTypePB, nil, headers)
 		require.Error(t, err)

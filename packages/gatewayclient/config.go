@@ -5,19 +5,16 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"unicode"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-// FileConfig contains a caller's public identity and private key location.
-// KeyID is assigned by Admin; it is independent from the caller name.
-// HostID、LocalAddress、CAFile 由部署写进每个组件的 gateway_client 段：本机的主机 ID、本机网关 11002 的地址、
-// MooX CA 根证书；组件不再去找相邻目录里的主机网关配置。
+// FileConfig 是组件的 gateway_client 段：调用方（组件 ID）与本机的主机签名私钥。
+// HostID、LocalAddress、CAFile 由部署写进每个组件的配置：本机的主机 ID、本机网关 11002 的地址、MooX CA 根证书。
 type FileConfig struct {
-	Caller  string `yaml:"caller"`
-	KeyID   string `yaml:"key_id"`
+	Caller string `yaml:"caller"`
+	// KeyFile 是这台主机的签名私钥（部署根下的 secrets/host.key），本机全部组件共用；相对路径按模块配置文件所在目录解析。
 	KeyFile string `yaml:"key_file"`
 	HostID  string `yaml:"host_id"`
 	// LocalAddress 是本机网关的回环地址，部署写 127.0.0.1:11002。
@@ -28,19 +25,16 @@ type FileConfig struct {
 	Pool PoolConfig `yaml:"pool"`
 }
 
-// ExternalFileConfig selects one fixed Access instance, without directory
-// discovery or host gateway configuration. Credentials belong to an external
-// principal; KeyID is assigned by Admin independently from Caller.
+// ExternalFileConfig 是外部身份（moox-skill、collector-operator、scf-collector）的配置：固定的一个外部入口，
+// 不做目录发现。KeyFile 是这个身份自己的签名私钥。
 type ExternalFileConfig struct {
 	Address    string `yaml:"access_address"`
 	InstanceID string `yaml:"access_id"`
 	Caller     string `yaml:"caller"`
-	KeyID      string `yaml:"key_id"`
 	KeyFile    string `yaml:"key_file"`
 }
 
-// Validate checks the public configuration without opening private files.
-// An unset KeyID permits offline commands; OpenInternal requires it.
+// Validate 只检查公开字段，不打开私钥文件。
 func (c FileConfig) Validate() error {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
@@ -62,24 +56,17 @@ func (c FileConfig) Validate() error {
 	if c.CAFile != strings.TrimSpace(c.CAFile) || strings.ContainsAny(c.CAFile, "\x00\r\n") {
 		return errors.New("gateway_client.ca_file is invalid")
 	}
-	return validateCredentialFile(c.KeyID, c.KeyFile, false)
+	return validateKeyFile(c.KeyFile)
 }
 
-func validateCredentialFile(keyID, keyFile string, required bool) error {
-	if required && keyID == "" {
-		return errors.New("gateway_client.key_id is required")
-	}
-	if len(keyID) > 128 || strings.ContainsAny(keyID, "/\\") || strings.ContainsFunc(keyID, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
-		return errors.New("gateway_client.key_id must be a bounded credential identifier")
-	}
+func validateKeyFile(keyFile string) error {
 	if keyFile == "" || keyFile != strings.TrimSpace(keyFile) || strings.ContainsAny(keyFile, "\x00\r\n") {
 		return errors.New("gateway_client.key_file is required")
 	}
 	return nil
 }
 
-// Validate checks public fields without reading the signing key. External
-// clients require their assigned KeyID even before opening a connection.
+// Validate 只检查公开字段，不读签名私钥。
 func (c ExternalFileConfig) Validate() error {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
@@ -88,7 +75,7 @@ func (c ExternalFileConfig) Validate() error {
 	if err := validateExternalIdentity(catalog, c.Caller, c.Address, c.InstanceID); err != nil {
 		return err
 	}
-	return validateCredentialFile(c.KeyID, c.KeyFile, true)
+	return validateKeyFile(c.KeyFile)
 }
 
 func validateExternalIdentity(catalog servicecatalog.Catalog, caller, address, instanceID string) error {
@@ -101,16 +88,16 @@ func validateExternalIdentity(catalog servicecatalog.Catalog, caller, address, i
 	return errors.New("unknown external principal")
 }
 
-func fileCredentials(configPath, caller, keyID, keyFile string) (gatewayauth.Credentials, error) {
+func fileCredentials(configPath, caller, host, keyFile string) (gatewayauth.Credentials, error) {
 	keyPath := keyFile
 	if !filepath.IsAbs(keyPath) {
 		keyPath = filepath.Join(filepath.Dir(configPath), keyPath)
 	}
-	secret, err := gatewayauth.ReadSigningSecret(keyPath)
+	key, err := gatewayauth.ReadSigningKey(keyPath)
 	if err != nil {
 		return gatewayauth.Credentials{}, fmt.Errorf("load gateway signing key: %w", err)
 	}
-	return gatewayauth.Credentials{Caller: caller, KeyID: keyID, Secret: secret}, nil
+	return gatewayauth.Credentials{Caller: caller, Host: host, Key: key}, nil
 }
 
 // OpenExternal resolves key_file relative to the component configuration and
@@ -128,7 +115,7 @@ func (c ExternalFileConfig) OpenExternal(moduleConfigPath string) (*Client, erro
 	if err != nil {
 		return nil, err
 	}
-	credentials, err := fileCredentials(configPath, c.Caller, c.KeyID, c.KeyFile)
+	credentials, err := fileCredentials(configPath, c.Caller, "", c.KeyFile)
 	if err != nil {
 		return nil, err
 	}
@@ -141,8 +128,8 @@ func (c FileConfig) OpenInternal(moduleConfigPath, dataDirectory string, onRefre
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	if c.KeyID == "" || moduleConfigPath == "" || dataDirectory == "" {
-		return nil, errors.New("gateway client requires key_id, module configuration path and data directory")
+	if moduleConfigPath == "" || dataDirectory == "" {
+		return nil, errors.New("gateway client requires module configuration path and data directory")
 	}
 	if !hostID.MatchString(c.HostID) || c.LocalAddress == "" || c.CAFile == "" {
 		return nil, errors.New("gateway_client 要写 host_id、local_address 与 ca_file（由部署渲染）")
@@ -151,7 +138,7 @@ func (c FileConfig) OpenInternal(moduleConfigPath, dataDirectory string, onRefre
 	if err != nil {
 		return nil, err
 	}
-	credentials, err := fileCredentials(configPath, c.Caller, c.KeyID, c.KeyFile)
+	credentials, err := fileCredentials(configPath, c.Caller, c.HostID, c.KeyFile)
 	if err != nil {
 		return nil, err
 	}

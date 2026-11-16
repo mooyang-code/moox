@@ -59,6 +59,8 @@ type Options struct {
 	Bundle          *bundle.Manifest
 	// OperatorDirectory 是这台电脑的操作员身份目录（~/.config/moox）。
 	OperatorDirectory string
+	// RotateHostKey 显式要求换掉这台主机的签名密钥：旧私钥立即作废，这台主机上的组件都要重启。控制机之外的主机才支持。
+	RotateHostKey bool
 	// Version、Commit 写进 version.json。
 	Version, Commit string
 	Dial            Dial
@@ -183,10 +185,11 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 	}
 
 	// 身份材料。
-	identity, err := options.identity(ctx, target, catalog, host, control, selected, existing == nil)
+	identity, issued, err := options.identity(ctx, target, catalog, host, control, selected, existing == nil)
 	if err != nil {
 		return result, err
 	}
+	result.Warnings = append(result.Warnings, issued.warnings...)
 	request := Request{Config: cfg, Catalog: catalog, Host: host, Components: selected, HostComponents: hostComponents, ReadSource: options.readSource, Identity: identity}
 	if cfg.Logging.CLS.Enabled {
 		if options.Secrets == nil {
@@ -260,6 +263,27 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 		}
 		result.Components = append(result.Components, ComponentResult{ID: id, Action: action})
 		options.logf("%s %s: %s", host.Name, id, action)
+	}
+	// 主机签名密钥换了：这次没部署、但已经装着的组件还拿着旧私钥，一并重启（只重启正在运行的）。
+	if issued.hostKey && existing != nil {
+		others := []string{}
+		for id := range existing.Components {
+			if slices.Contains(hostComponents, id) && !slices.Contains(selected, id) {
+				others = append(others, id)
+			}
+		}
+		if others, err = catalog.StartOrder(others); err != nil {
+			return result, err
+		}
+		for _, id := range others {
+			if component, _ := catalog.Component(id); component.ThirdParty {
+				continue
+			}
+			options.logf("%s %s: 主机签名密钥换了，重启", host.Name, id)
+			if output, err := target.Run(ctx, []string{"systemctl", "--user", "try-restart", UnitName(id)}, nil); err != nil {
+				return result, fmt.Errorf("restart_failed: 主机 %s 的签名密钥换了，但组件 %s 没有重启成功：%s", host.Name, id, lastLine(output.Stderr))
+			}
+		}
 	}
 	return result, waitComponents(ctx, target, catalog, host.Name, &result, options.ReadyTimeout)
 }
@@ -567,9 +591,18 @@ func addLocalFile(archive *tar.Writer, name, local string) error {
 	return err
 }
 
-// identity 取这台主机的身份材料。控制机先执行 bootstrap（并装好这台电脑的操作员身份），其余主机先把登记同步到 Admin 再让控制机导出。
-func (o Options) identity(ctx context.Context, target setupssh.Client, catalog servicecatalog.Catalog, host, control topology.Host, selected []string, fresh bool) (Identity, error) {
+// issuedKeys 记这次部署有没有新签发签名密钥，以及要转告用户的提醒。
+type issuedKeys struct {
+	hostKey  bool
+	warnings []string
+}
+
+// identity 取这台主机的身份材料。控制机先执行 bootstrap（登记这台电脑的 moox-cli 公钥），其余主机先把登记同步到 Admin 再让控制机签发。
+// 目标机上的签名私钥和 Admin 登记的公钥一致时不换密钥，身份包里只有重新签发的主机证书。
+func (o Options) identity(ctx context.Context, target setupssh.Client, catalog servicecatalog.Catalog, host, control topology.Host, selected []string, fresh bool) (Identity, issuedKeys, error) {
 	cfg, layout := o.Config, Layout{Root: o.Config.Paths.DeployRoot}
+	var issued issuedKeys
+	fail := func(err error) (Identity, issuedKeys, error) { return Identity{}, issued, err }
 	roles, server := []string{}, slices.Contains(selected, "eventbus")
 	for _, id := range selected {
 		component, _ := catalog.Component(id)
@@ -580,66 +613,103 @@ func (o Options) identity(ctx context.Context, target setupssh.Client, catalog s
 
 	suffix := make([]byte, 8)
 	if _, err := rand.Read(suffix); err != nil {
-		return Identity{}, err
+		return fail(err)
 	}
 	stage := path.Join(layout.Root, ".export-"+hex.EncodeToString(suffix))
 	source := target
 	if host.Name != control.Name {
 		var err error
 		if source, err = o.Dial(ctx, control); err != nil {
-			return Identity{}, err
+			return fail(err)
 		}
 		defer source.Close()
 	}
-	// 导出的身份材料用完就从控制机上删掉。
+	// 签发出来的身份材料用完就从控制机上删掉。
 	defer func() { _, _ = source.Run(context.WithoutCancel(ctx), []string{"rm", "-rf", "--", stage}, nil) }()
 
+	current := readCurrentKeys(ctx, target, layout, slices.Contains(cfg.Deployments[host.Name], "collector"))
 	var metadata hostbundle.Metadata
-	var material identitybundle.Options
 	if host.Name == control.Name {
 		if o.Secrets == nil {
-			return Identity{}, errors.New("部署控制机要读 moox.secrets.toml 里的初始管理员")
+			return fail(errors.New("部署控制机要读 moox.secrets.toml 里的初始管理员"))
 		}
-		// 全新的控制机会生成新的 CA：这台电脑上留着的旧操作员身份对不上，先删掉。
+		if o.RotateHostKey {
+			return fail(errors.New("rotate_unsupported: 控制机的签名密钥不单独更换：删掉控制机上的 " + layout.Secret(hostbundle.HostKeyFile) + " 再重新部署控制机，会签发新的"))
+		}
+		operator, err := identitybundle.ReadOperatorKey(o.OperatorDirectory)
+		if err != nil {
+			return fail(fmt.Errorf("operator_key_missing: 这台电脑没有 moox-cli 的签名私钥（%w）。先运行 moox-cli setup operator", err))
+		}
+		// 全新的控制机会生成新的 CA：这台电脑上记着的旧指纹与根证书对不上，先删掉。moox-cli 的私钥留着，bootstrap 登记的就是它。
 		if fresh {
-			if err := RemoveOperatorIdentity(o.OperatorDirectory); err != nil {
-				return Identity{}, err
+			if err := identitybundle.RemoveOperatorTrust(o.OperatorDirectory); err != nil {
+				return fail(err)
 			}
 		}
-		var err error
-		if metadata, err = bootstrapControl(ctx, source, cfg, o.Secrets.Admin, stage); err != nil {
-			return Identity{}, err
+		if metadata, err = bootstrapControl(ctx, source, cfg, o.Secrets.Admin, identitybundle.PublicKey(operator), current, stage); err != nil {
+			return fail(err)
 		}
-		material = materialOptions(cfg, host, metadata.CA.SHA256, metadata.ExpectedHash, true)
-		if err := os.MkdirAll(o.OperatorDirectory, 0o700); err != nil {
-			return Identity{}, err
-		}
-		if err := identitybundle.InstallOperator(ctx, source.Download, metadata, material, o.OperatorDirectory); err != nil {
-			return Identity{}, fmt.Errorf("operator_identity_failed: 这台电脑的操作员身份没有装上：%w。如果线上是另一套部署清空后重装的，先删掉 %s 下的 gateway-client.yaml、gateway-bootstrap.json、moox-ca.crt 与 caller-moox-cli-*.key 再重跑", err, o.OperatorDirectory)
+		// bootstrap 不改已经登记的公钥：控制机上登记的是另一台电脑的，就要显式换过来。
+		if metadata.OperatorPublicKey != identitybundle.PublicKey(operator) {
+			return fail(errors.New("operator_key_mismatch: 控制机上登记的 moox-cli 公钥不是这台电脑的。换了操作电脑的话运行 moox-cli setup operator --register（原来那台电脑随即不能再用）"))
 		}
 	} else {
 		pin, err := identitybundle.ReadOperatorPin(o.OperatorDirectory)
 		if err != nil || pin.ControlHostID != control.Name {
-			return Identity{}, fmt.Errorf("control_not_ready: 这台电脑没有控制机 %s 的操作员身份，先运行 moox-cli setup deploy --host %s", control.Name, control.Name)
+			return fail(fmt.Errorf("control_not_ready: 这台电脑没有控制机 %s 的根证书指纹，先运行 moox-cli setup deploy --host %s", control.Name, control.Name))
 		}
 		if o.SyncHost != nil {
 			if err := o.SyncHost(ctx, host.Name); err != nil {
-				return Identity{}, fmt.Errorf("同步主机 %s 的登记到 Admin: %w", host.Name, err)
+				return fail(fmt.Errorf("同步主机 %s 的登记到 Admin: %w", host.Name, err))
 			}
 		}
-		if metadata, err = exportHostBundle(ctx, source, cfg, host.Name, stage); err != nil {
-			return Identity{}, err
+		if metadata, err = exportHostBundle(ctx, source, cfg, host.Name, current, o.RotateHostKey, stage); err != nil {
+			return fail(err)
 		}
-		material = materialOptions(cfg, host, pin.CA, metadata.ExpectedHash, false)
 	}
 	var clients hostbundle.ClientMetadata
 	if len(roles) != 0 {
 		var err error
 		if clients, err = exportEventBus(ctx, source, cfg, roles, server, stage); err != nil {
-			return Identity{}, err
+			return fail(err)
 		}
 	}
-	return fetchIdentity(ctx, source, metadata, material, clients, roles)
+	ca := metadata.CA.SHA256
+	if host.Name != control.Name {
+		pin, _ := identitybundle.ReadOperatorPin(o.OperatorDirectory)
+		ca = pin.CA
+	}
+	identity, err := fetchIdentity(ctx, source, metadata, materialOptions(cfg, host, ca), clients, roles)
+	if err != nil {
+		return fail(err)
+	}
+	if host.Name == control.Name {
+		// 控制机的身份包经 SSH 取回并校验过：把它的根证书与指纹记到这台电脑，之后取别的主机的身份包都按它校验。
+		if err := identitybundle.InstallOperatorTrust(o.OperatorDirectory, metadata, identity.Secrets[hostbundle.CAFile]); err != nil {
+			return fail(fmt.Errorf("operator_trust_failed: 这台电脑没有记下控制机的根证书：%w。如果线上是另一套部署清空后重装的，先删掉 %s 下的 %s 与 %s 再重跑",
+				err, o.OperatorDirectory, identitybundle.OperatorPinFile, identitybundle.OperatorCAFile))
+		}
+	}
+	issued.hostKey = metadata.SignKeyIssued
+	if metadata.SignKeyIssued {
+		o.logf("%s: 签发了新的主机签名密钥", host.Name)
+	}
+	// 外部入口的公钥表（临时，T16 删）。
+	if slices.Contains(selected, "access") {
+		table, err := accessVerification(ctx, source, cfg, catalog)
+		if err != nil {
+			return fail(err)
+		}
+		identity.Secrets[accessVerificationFile] = table
+	}
+	// scf-collector 换了密钥：已经装着的 access 要拿到新公钥，函数才能继续写入；采集计划的下一轮对账会把新私钥写进函数环境。
+	if metadata.SCFCollectorKeyIssued && !fresh {
+		o.logf("%s: 签发了新的 scf-collector 密钥，更新各台 access 的公钥表", host.Name)
+		for name, err := range SyncAccessIdentities(ctx, o.Dial, source, cfg) {
+			issued.warnings = append(issued.warnings, fmt.Sprintf("scf-collector 的密钥换了，但主机 %s 上的 access 还没拿到新公钥（%v）。运行 moox-cli setup deploy --host %s --component access", name, err, name))
+		}
+	}
+	return identity, issued, nil
 }
 
 // lastLine 取远端标准错误的最后一行作为原因（脚本与 moox-admin-cli 的报错不含秘密），截到 300 字节。

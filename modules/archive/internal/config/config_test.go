@@ -20,8 +20,7 @@ func writeConfig(t *testing.T, body string) string {
 const minimal = `
 gateway_client:
   caller: archive-mgr
-  key_id: abc
-  key_file: ../../secrets/caller-archive-mgr.key
+  key_file: ../../secrets/host.key
 `
 
 func TestLoadAppliesDefaults(t *testing.T) {

@@ -5,10 +5,6 @@ version: 2
 identities:
   - id: scf-collector
     external: true
-  - id: factor-engine
-    external: true
-  - id: archive-worker
-    external: true
   # 采集名单干预的旁路程序（不在部署拓扑里）：只放行排除名单三个方法与 SyncSubjects。
   - id: collector-operator
     external: true
@@ -1501,7 +1497,7 @@ components:
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: false
-  # 外部程序：运行在登记主机上（通常是只能出站的因子机），以同名外部身份经 Access 访问系统；
+  # 外部程序：运行在登记主机上（通常是只能出站的因子机），和别的组件一样用所在主机的密钥、以自己的组件 ID 签名，直连存储机与控制机的主机网关；
   # 由 systemd 用户服务托管；健康由管理端按心跳代报给 Monitor（doctor.transport: delegated），Monitor 不探测健康端口。
   # 外部程序可以声明只监听本机的服务，由所在主机的网关路由（出站主机经 control 中转）。
   - id: factor-engine
@@ -1514,7 +1510,7 @@ components:
     config_files:
       - from: modules/factor/config/engine.yaml
       - {from: modules/factor/config/trpc_go.engine.yaml, to: trpc_go.yaml}
-    after: [host-gateway, factor-mgr, access]
+    after: [host-gateway, factor-mgr]
     credentials: ["eventbus:factor-eventbus"]
     external_program: true
     health:
@@ -1560,7 +1556,7 @@ components:
             operators: [moox-cli]
     doctor:
       role: factor-engine
-      description: Factor compute engine that consumes period events and writes factor results through Access
+      description: Factor compute engine that consumes period events and writes factor results through the storage host gateway
       duties:
         - compute factor periods and recalculation jobs
         - serve replay compute sessions to strategy through the host gateway
@@ -1570,7 +1566,7 @@ components:
         - factor result rows and period markers
       dependencies:
         - factor-mgr
-        - access
+        - storage-primary
       transport: delegated
       functional_observability: deferred
       config_paths:
@@ -1589,7 +1585,7 @@ components:
     args: ["-config={config}/app.yaml"]
     config_files:
       - from: modules/archive/config/worker/app.yaml
-    after: [host-gateway, archive-mgr, access, seaweedfs]
+    after: [host-gateway, archive-mgr, seaweedfs]
     external_program: true
     health:
       port: 11418
@@ -1609,7 +1605,7 @@ components:
         - archive partitions
       dependencies:
         - archive-mgr
-        - access
+        - storage-primary
       transport: delegated
       functional_observability: deferred
       config_paths:

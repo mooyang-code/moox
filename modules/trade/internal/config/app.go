@@ -51,7 +51,7 @@ func DefaultConfig() *AppConfig {
 			Path: "./data/moox_trade.db",
 		},
 		Runtime:       RuntimeConfig{},
-		GatewayClient: gatewayclient.FileConfig{Caller: "trade", KeyFile: "../../secrets/caller-trade.key"},
+		GatewayClient: gatewayclient.FileConfig{Caller: "trade", KeyFile: "../../secrets/host.key"},
 		EventBus:      EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer},
 	}
 }

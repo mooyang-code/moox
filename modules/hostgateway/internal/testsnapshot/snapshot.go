@@ -2,8 +2,9 @@
 package testsnapshot
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
-	"encoding/hex"
+	"slices"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -80,17 +81,39 @@ func build(t testing.TB, hostID, outbound string, components []string) *pb.HostG
 		}
 		raw.Relays = append(raw.Relays, item)
 	}
-	for _, caller := range compiled.VerificationCallers {
-		credential := Credential(caller)
-		raw.VerificationKeys = append(raw.VerificationKeys, &pb.GatewayVerificationKey{Caller: caller, KeyId: credential.KeyID, Secret: []byte(credential.Secret)})
+	// 每台主机一把校验公钥，连同部署在它上面的调用方；非主机身份只有 moox-cli。
+	signing := catalog.SigningCallers(topology)
+	// 测试拓扑只部署了被测主机要的组件。为了让别的调用方也能签名，夹具把其余组件（与 console）都算作部署在 control 上；
+	// “调用方必须在签名主机上”另有专门的测试。
+	for _, component := range catalog.Components {
+		if !component.ThirdParty {
+			signing["control"] = append(signing["control"], component.ID)
+		}
 	}
+	signing["control"] = append(signing["control"], servicecatalog.OperatorConsole)
+	slices.Sort(signing["control"])
+	signing["control"] = slices.Compact(signing["control"])
+	for _, host := range topology.Hosts {
+		raw.VerificationKeys = append(raw.VerificationKeys, &pb.GatewayVerificationKey{HostId: host.ID, PublicKey: HostKey(host.ID).Public().(ed25519.PublicKey), Callers: signing[host.ID]})
+	}
+	raw.VerificationKeys = append(raw.VerificationKeys, &pb.GatewayVerificationKey{Identity: "moox-cli", PublicKey: Credential("moox-cli", "").PublicKey()})
 	Rehash(t, raw)
 	return raw
 }
 
-func Credential(caller string) gatewayauth.Credentials {
-	sum := sha256.Sum256([]byte("synthetic-only/" + caller))
-	return gatewayauth.Credentials{Caller: caller, KeyID: "test-" + caller, Secret: hex.EncodeToString(sum[:])}
+// HostKey 是测试里一台主机的签名私钥（由主机 ID 派生，只用于测试）。
+func HostKey(hostID string) ed25519.PrivateKey {
+	seed := sha256.Sum256([]byte("synthetic-only/host/" + hostID))
+	return ed25519.NewKeyFromSeed(seed[:])
+}
+
+// Credential 返回测试用的签名身份：host 非空时是那台主机上的调用方，用主机密钥；为空时是不属于主机的身份。
+func Credential(caller, host string) gatewayauth.Credentials {
+	if host != "" {
+		return gatewayauth.Credentials{Caller: caller, Host: host, Key: HostKey(host)}
+	}
+	seed := sha256.Sum256([]byte("synthetic-only/identity/" + caller))
+	return gatewayauth.Credentials{Caller: caller, Key: ed25519.NewKeyFromSeed(seed[:])}
 }
 
 func Rehash(t testing.TB, raw *pb.HostGatewaySnapshot) {

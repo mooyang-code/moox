@@ -90,7 +90,7 @@ func Load(path string) (*Config, error) {
 // Default 返回带默认值的配置。
 func Default() *Config {
 	return &Config{
-		GatewayClient:    gatewayclient.FileConfig{Caller: Caller, KeyFile: "../../secrets/caller-archive-mgr.key"},
+		GatewayClient:    gatewayclient.FileConfig{Caller: Caller, KeyFile: "../../secrets/host.key"},
 		Database:         DatabaseConfig{Path: "./data/archive-mgr/archive.db"},
 		Run:              RunConfig{LeaseTTL: 10 * time.Minute},
 		Schedule:         ScheduleConfig{MinLookback: 15 * time.Minute},

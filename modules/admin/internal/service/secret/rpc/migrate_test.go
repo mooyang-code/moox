@@ -95,7 +95,7 @@ func TestExportThenImportSecretsKeepsIDsAndValues(t *testing.T) {
 			SecretValue: "plain-okx-secret", ExtraConfig: `{"passphrase":"p@ss"}`, Status: "active", Creator: "alice"},
 		model.Secret{SecretID: "sec_ssh", Name: "跳板机", Category: "ssh", SecretType: "ssh_key", SecretValue: "-----BEGIN KEY-----", Status: "inactive"},
 		model.Secret{SecretID: model.ConfigBackupID, Name: "MooX 配置备份", Category: "other", SecretValue: "MOOX-CONFIG-BACKUP v1\n..."},
-		model.Secret{SecretID: model.GatewayKeyringIDPrefix + "console", Name: "Gateway", Category: "other", SecretType: model.GatewayKeyringType, SecretValue: "k"},
+		model.Secret{SecretID: model.SSHHostSecretID("storage"), Name: "SSH", Category: model.SSHCategory, SecretType: "password", SecretValue: "k"},
 		model.Secret{SpaceID: "mooxsys", SecretID: "eb-admin", Name: "EventBus internal-admin", Category: "eventbus", Provider: "moox_eventbus",
 			SecretType: "token", KeyID: "eventbus_internal_admin", SecretValue: "source-env-token"},
 	)

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/wirecompress"
@@ -25,6 +26,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/server"
 	"trpc.group/trpc-go/trpc-go/transport"
 )
@@ -45,13 +47,11 @@ func (f nonceFunc) Consume(ctx context.Context, ns, nonce string, ttl time.Durat
 
 func fixtureProxy(t *testing.T, gateway Forwarder) (*Proxy, gatewayauth.Credentials) {
 	t.Helper()
-	credential := gatewayauth.Credentials{Caller: "scf-collector", KeyID: "assigned-scf-38", Secret: "fixture-external-key-at-least-32-bytes"}
-	registry, err := gatewayauth.NewCredentialRegistry([]gatewayauth.Credentials{credential})
-	require.NoError(t, err)
+	credential := authtest.Identity("scf-collector")
 	nonces, err := OpenSQLiteNonces(filepath.Join(t.TempDir(), "nonces.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, nonces.Close()) })
-	proxy, err := New(Options{HostID: "storage", Credentials: registry, Gateway: gateway, Nonces: nonces, Registerer: prometheus.NewRegistry()})
+	proxy, err := New(Options{HostID: "storage", Keys: authtest.Keys(credential), Gateway: gateway, Nonces: nonces, Registerer: prometheus.NewRegistry()})
 	require.NoError(t, err)
 	return proxy, credential
 }
@@ -63,7 +63,7 @@ func signedContext(t *testing.T, credential gatewayauth.Credentials, target, ser
 	path := "/" + service + "/" + method
 	message.WithServerRPCName(path)
 	message.WithSerializationType(codec.SerializationTypePB)
-	headers, err := gatewayauth.Sign(credential, gatewayauth.Request{Method: "POST", Path: path, TargetNode: target, Callee: service, Func: method, Body: body}, time.Now())
+	headers, err := gatewayauth.Sign(credential, gatewayauth.Request{TargetNode: target, Callee: service, Func: method, Body: body}, time.Now())
 	require.NoError(t, err)
 	metadata := codec.MetaData{}
 	for key, values := range headers {
@@ -89,7 +89,7 @@ func TestProxyUsesOnlyCatalogGrantsAndRecordsDeniedMethods(t *testing.T) {
 	require.Equal(t, 2, called)
 	for _, method := range []string{"ReadTimeSeriesRows", "ReportDatasetPeriodCompleted", "ReadRows", "unbounded-untrusted-method"} {
 		_, err := proxy.Forward(signedContext(t, credential, "access@storage", primaryService, method, body), &codec.Body{Data: body})
-		require.ErrorContains(t, err, "not allowed")
+		require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err))
 		label := method
 		if strings.HasPrefix(method, "unbounded-") {
 			label = "unknown"
@@ -107,7 +107,7 @@ func TestProxyRejectsReplayTamperingWrongInstanceUnknownCallerAndNonceFailure(t 
 	_, err := proxy.Forward(ctx, &codec.Body{Data: body})
 	require.NoError(t, err)
 	_, err = proxy.Forward(ctx, &codec.Body{Data: body})
-	require.ErrorContains(t, err, "replayed")
+	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "重放")
 	require.Equal(t, 1.0, testutil.ToFloat64(proxy.denials.WithLabelValues("scf-collector", primaryService, "CommitTimeSeriesBatch", "replay")))
 	for _, wrong := range []struct {
 		credential gatewayauth.Credentials
@@ -115,27 +115,37 @@ func TestProxyRejectsReplayTamperingWrongInstanceUnknownCallerAndNonceFailure(t 
 		body       []byte
 	}{
 		{credential, "storage", body}, {credential, "access@overseas", body}, {credential, "access@storage", []byte("tampered")},
-		{gatewayauth.Credentials{Caller: "scf-collector", KeyID: "unknown-key", Secret: credential.Secret}, "access@storage", body},
+		// 别人的私钥自称 scf-collector；主机密钥带着签名主机自称 scf-collector；没登记的身份。
+		{gatewayauth.Credentials{Caller: "scf-collector", Key: authtest.Key("someone-else")}, "access@storage", body},
+		{gatewayauth.Credentials{Caller: "scf-collector", Host: "storage", Key: credential.Key}, "access@storage", body},
+		{authtest.Identity("moox-skill"), "access@storage", body},
 	} {
 		_, err := proxy.Forward(signedContext(t, wrong.credential, wrong.target, primaryService, "CommitTimeSeriesBatch", wrong.body), &codec.Body{Data: body})
-		require.ErrorContains(t, err, "authentication failed")
+		require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "%v %s", wrong.credential, wrong.target)
+		require.NotContains(t, err.Error(), "nonce")
 	}
-	unknown := credential
-	unknown.Caller = "unregistered"
-	proxy.options.Credentials, err = gatewayauth.NewCredentialRegistry([]gatewayauth.Credentials{unknown})
+	// 公钥表里有、但不是外部身份的名字（moox-cli、别的名字）：验签能过，名单不放行。
+	for _, unknown := range []gatewayauth.Credentials{authtest.Identity("moox-cli"), authtest.Identity("unregistered")} {
+		proxy.options.Keys = authtest.Keys(unknown)
+		_, err = proxy.Forward(signedContext(t, unknown, "access@storage", primaryService, "CommitTimeSeriesBatch", body), &codec.Body{Data: body})
+		require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), unknown.Caller)
+	}
+	require.Equal(t, 2.0, testutil.ToFloat64(proxy.denials.WithLabelValues("unknown", primaryService, "CommitTimeSeriesBatch", "permission")))
+	// 换公钥没有新旧并存：表里换成新公钥后，旧私钥的签名被拒。
+	rotated := gatewayauth.Credentials{Caller: "scf-collector", Key: authtest.Key("rotated")}
+	proxy.options.Keys = authtest.Keys(rotated)
+	_, err = proxy.Forward(signedContext(t, credential, "access@storage", primaryService, "CommitTimeSeriesBatch", body), &codec.Body{Data: body})
+	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "旧私钥")
+	_, err = proxy.Forward(signedContext(t, rotated, "access@storage", primaryService, "CommitTimeSeriesBatch", body), &codec.Body{Data: body})
 	require.NoError(t, err)
-	_, err = proxy.Forward(signedContext(t, unknown, "access@storage", primaryService, "CommitTimeSeriesBatch", body), &codec.Body{Data: body})
-	require.ErrorContains(t, err, "not allowed")
-	require.Equal(t, 1.0, testutil.ToFloat64(proxy.denials.WithLabelValues("unknown", primaryService, "CommitTimeSeriesBatch", "permission")))
-	proxy.options.Credentials, err = gatewayauth.NewCredentialRegistry([]gatewayauth.Credentials{credential})
-	require.NoError(t, err)
+	proxy.options.Keys = authtest.Keys(credential)
 	proxy.options.Nonces = nonceFunc(func(context.Context, string, string, time.Duration) (bool, error) {
 		return false, errors.New("unavailable")
 	})
 	_, err = proxy.Forward(signedContext(t, credential, "access@storage", primaryService, "CommitTimeSeriesBatch", body), &codec.Body{Data: body})
 	require.ErrorContains(t, err, "replay store unavailable")
-	require.Equal(t, 1, called)
-	_, err = New(Options{HostID: "storage", Credentials: proxy.options.Credentials, Gateway: proxy.options.Gateway})
+	require.Equal(t, 2, called)
+	_, err = New(Options{HostID: "storage", Keys: proxy.options.Keys, Gateway: proxy.options.Gateway})
 	require.ErrorContains(t, err, "durable nonce store")
 }
 
@@ -185,14 +195,14 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"storage": {Address: "storage.example.test"}}, Services: map[string][]string{}}
 	credentials := []gatewayauth.Credentials{}
 	for _, principal := range catalog.ExternalIdentities() {
-		credentials = append(credentials, gatewayauth.Credentials{Caller: principal, KeyID: "assigned-" + principal + "-73", Secret: "fixture-external-signing-key-at-least-32-bytes"})
+		credentials = append(credentials, authtest.Identity(principal))
 		for _, grant := range catalog.Grants(principal) {
 			directory.Services[grant.Service] = []string{"storage"}
 		}
 	}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
-	internal := gatewayauth.Credentials{Caller: "access", KeyID: "assigned-internal-access-85", Secret: "fixture-internal-access-signing-key-at-least-32-bytes"}
+	internal := authtest.Component("access", "storage")
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	upstream := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
@@ -209,7 +219,7 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 			for key, value := range message.ServerMetaData() {
 				headers.Add(key, string(value))
 			}
-			_, err := gatewayauth.Verify(internal, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: "storage", Callee: service, Func: method, Body: request.Data}, headers, time.Now())
+			_, err := authtest.Verify(internal, gatewayauth.Request{TargetNode: "storage", Callee: service, Func: method, Body: request.Data}, headers, time.Now())
 			if err != nil {
 				return nil, err
 			}
@@ -225,8 +235,7 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
 	proxy, _ := fixtureProxy(t, gateway)
-	proxy.options.Credentials, err = gatewayauth.NewCredentialRegistry(credentials)
-	require.NoError(t, err)
+	proxy.options.Keys = authtest.Keys(credentials...)
 	accessListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	access := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(accessListener), server.WithAddress(accessListener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithCurrentSerializationType(codec.SerializationTypeNoop))

@@ -12,6 +12,7 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	accesskit "github.com/mooyang-code/moox/packages/gatewayclient/testkit"
 	"github.com/stretchr/testify/require"
@@ -20,17 +21,18 @@ import (
 
 func TestSkillUsesProductionAccessWithoutOperatorFiles(t *testing.T) {
 	storage := &klineStorageStub{requests: make(chan *pb.ReadTimeSeriesRowsReq, 4)}
-	credential := gatewayauth.Credentials{Caller: "moox-skill", KeyID: "assigned-skill-key-73", Secret: "fixture-skill-external-signing-key-at-least-32-bytes"}
+	credential := authtest.Identity("moox-skill")
 	access := accesskit.StartAccess(t, accesskit.AccessOptions{
 		AccessBinary: buildAccessServer(t), GatewayBinary: buildGatewayE2EHelper(t), HostID: klineGatewayNode,
 		StorageAddress: startKlineStorage(t, storage), ExternalCredentials: []gatewayauth.Credentials{credential},
 	})
 	configPath := writeKlineConfig(t)
 	keyPath := filepath.Join(filepath.Dir(configPath), "assigned-skill.key")
-	require.NoError(t, os.WriteFile(keyPath, []byte(credential.Secret), 0o600))
+	secret := gatewayauth.EncodeSigningKey(credential.Key)
+	require.NoError(t, os.WriteFile(keyPath, []byte(secret+"\n"), 0o600))
 	original, err := os.ReadFile(configPath)
 	require.NoError(t, err)
-	config := fmt.Sprintf("gateway_client:\n  access_address: %q\n  access_id: %q\n  caller: moox-skill\n  key_id: %q\n  key_file: assigned-skill.key\n", access.Address, access.InstanceID, credential.KeyID)
+	config := fmt.Sprintf("gateway_client:\n  access_address: %q\n  access_id: %q\n  caller: moox-skill\n  key_file: assigned-skill.key\n", access.Address, access.InstanceID)
 	require.NoError(t, os.WriteFile(configPath, append([]byte(config), original...), 0o600))
 	binary := buildMooxCLI(t)
 	command := exec.Command(binary, "data", "skill", "kline", "get", "--config", configPath,
@@ -41,8 +43,8 @@ func TestSkillUsesProductionAccessWithoutOperatorFiles(t *testing.T) {
 	command.Stderr = &diagnostics
 	output, err := command.Output()
 	require.NoError(t, err, "Skill diagnostics: %s", diagnostics.String())
-	require.NotContains(t, string(output), credential.Secret)
-	require.NotContains(t, diagnostics.String(), credential.Secret)
+	require.NotContains(t, string(output), secret)
+	require.NotContains(t, diagnostics.String(), secret)
 	var response pb.ReadTimeSeriesRowsRsp
 	require.NoError(t, protojson.Unmarshal(output, &response))
 	require.Len(t, response.GetRows(), 1)
@@ -61,7 +63,7 @@ func TestSkillUsesProductionAccessWithoutOperatorFiles(t *testing.T) {
 	err = gateway.Invoke(ctx, "trpc.moox.storage.PrimaryStore", "UpsertFields", &pb.PrimaryUpsertFieldsReq{}, &pb.PrimaryUpsertFieldsRsp{})
 	require.Error(t, err, "the Skill principal must be rejected before a write reaches Storage")
 	require.Zero(t, storage.writeCalls.Load())
-	require.NotContains(t, err.Error(), credential.Secret)
+	require.NotContains(t, err.Error(), secret)
 }
 
 func buildAccessServer(t *testing.T) string {

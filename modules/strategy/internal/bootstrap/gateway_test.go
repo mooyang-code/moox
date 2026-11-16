@@ -26,6 +26,7 @@ import (
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -95,8 +96,7 @@ func (w *strategyGatewayWire) verify(ctx context.Context, service, method string
 	if err != nil {
 		return gatewayauth.Claims{}, err
 	}
-	claims, err := gatewayauth.Verify(w.credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method,
-		TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
+	claims, err := authtest.Verify(w.credentials, gatewayauth.Request{TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
 	if err != nil {
 		return gatewayauth.Claims{}, err
 	}
@@ -272,13 +272,13 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	t.Helper()
 	root := t.TempDir()
 	configPath := filepath.Join(root, "strategy", "config", "app.yaml")
-	keyPath := filepath.Join(root, "secrets", "caller-strategy.key")
+	keyPath := filepath.Join(root, "secrets", "host.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
 	for _, path := range []string{configPath, keyPath, caPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	}
-	credentials := gatewayauth.Credentials{Caller: "strategy", KeyID: "admin-assigned-strategy-key-48", Secret: "strategy-signing-fixture-secret-at-least-32-bytes"}
-	require.NoError(t, os.WriteFile(keyPath, []byte(credentials.Secret+"\n"), 0o600))
+	credentials := authtest.Component("strategy", "control")
+	require.NoError(t, os.WriteFile(keyPath, []byte(gatewayauth.EncodeSigningKey(credentials.Key)+"\n"), 0o600))
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
@@ -304,7 +304,7 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	directorypb.RegisterDirectoryService(svc, wire)
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
-	raw := fmt.Sprintf("database: %q\ngateway_client:\n  caller: strategy\n  key_id: %s\n  key_file: ../../secrets/caller-strategy.key\n  host_id: control\n  local_address: "+listener.Addr().String()+"\n  ca_file: "+caPath+"\n", filepath.Join(root, "data", "strategy", "strategy.db"), credentials.KeyID)
+	raw := fmt.Sprintf("database: %q\ngateway_client:\n  caller: strategy\n  key_file: ../../secrets/host.key\n  host_id: control\n  local_address: "+listener.Addr().String()+"\n  ca_file: "+caPath+"\n", filepath.Join(root, "data", "strategy", "strategy.db"))
 	if natsURL != "" {
 		raw += fmt.Sprintf("eventbus:\n  urls: [%q]\n", natsURL)
 	}

@@ -3,8 +3,8 @@ database:
 
 gateway_client:
   caller: factor-mgr
-  key_id: ""
-  key_file: ../../secrets/caller-factor-mgr.key
+  # 本机的主机签名私钥，这台主机上的组件共用。
+  key_file: ../../secrets/host.key
   # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
   host_id: ""
   local_address: 127.0.0.1:11002

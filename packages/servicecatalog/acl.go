@@ -1,15 +1,11 @@
 package servicecatalog
 
-import (
-	"slices"
-	"strings"
-)
+import "slices"
 
-// hostGatewayCaller 是 callers 里对每台主机网关的写法，网关以 host-gateway@{主机} 的身份调用。
+// hostGatewayCaller 是每台主机网关的调用方名字：网关用所在主机的密钥、以 host-gateway 的身份签名，签名主机另由签名头给出。
 const hostGatewayCaller = "host-gateway"
 
-// Allowed is shared by the console and host gateways. External identities
-// never authenticate to a host gateway: only access may forward their requests.
+// Allowed 报告调用方能否经主机网关调用这个方法，管理台与主机网关共用。外部身份不能直接到主机网关，只能由 access 代为转发。
 func (c Catalog) Allowed(caller, servicePath, method string) bool {
 	m, ok := c.method(servicePath, method)
 	if !ok {
@@ -20,9 +16,7 @@ func (c Catalog) Allowed(caller, servicePath, method string) bool {
 		return slices.Contains(m.OperatorList(), caller)
 	case caller == "access":
 		return c.externallyCallable(m)
-	case strings.HasPrefix(caller, hostGatewayCaller+"@"):
-		return identifier.MatchString(strings.TrimPrefix(caller, hostGatewayCaller+"@")) && slices.Contains(m.Callers, hostGatewayCaller)
-	case caller == hostGatewayCaller || c.ExternalIdentity(caller):
+	case c.ExternalIdentity(caller):
 		return false
 	}
 	return slices.Contains(m.Callers, caller)

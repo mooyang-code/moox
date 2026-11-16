@@ -1,7 +1,7 @@
 gateway_client:
   caller: access
-  key_id: key-access
-  key_file: /data/moox/secrets/caller-access.key
+  # 本机的主机签名私钥，这台主机上的组件共用。
+  key_file: /data/moox/secrets/host.key
   # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
   host_id: storage
   local_address: 127.0.0.1:11002
@@ -11,6 +11,6 @@ gateway_client:
   pool:
     min_idle: 32
     max_idle: 64
-# Admin keys export-access publishes this registry and versioned private keys.
+# 外部身份的公钥表：部署从 Admin 列出登记的身份公钥后写到这里。
 verification_file: /data/moox/secrets/access/access-verification.json
 nonce_path: /data/moox/data/access/nonces.db

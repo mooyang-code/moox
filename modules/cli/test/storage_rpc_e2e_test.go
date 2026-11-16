@@ -95,7 +95,7 @@ func TestStorageOperationsUseSSHNativeGateway(t *testing.T) {
 	})
 	dir := t.TempDir()
 	ready := filepath.Join(dir, "ready")
-	process := startGatewayHelperProcess(t, buildGatewayE2EHelper(t), "--mode", "storage-native", "--node-id", klineGatewayNode, "--upstream-addr", listener.Addr().String(), "--ready-file", ready, "--nonce-dir", filepath.Join(dir, "nonces"), "--key-id", klineGatewayKeyID)
+	process := startGatewayHelperProcess(t, buildGatewayE2EHelper(t), "--mode", "storage-native", "--node-id", klineGatewayNode, "--upstream-addr", listener.Addr().String(), "--ready-file", ready)
 	t.Cleanup(func() {
 		if process.stop(5 * time.Second) {
 			t.Errorf("Storage gateway required kill: %s", process.logs.String())

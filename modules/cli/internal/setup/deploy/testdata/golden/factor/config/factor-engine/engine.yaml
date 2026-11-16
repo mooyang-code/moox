@@ -4,14 +4,14 @@ engine:
   # 稳定的引擎 ID；为空时取 factor-engine@<主机名>
   id: factor-engine@factor
   heartbeat_interval: 10s
-# Storage 与 Factor Manager 共用同一固定 Access 及外部身份。
-# key_file 相对本配置文件；其余运行文件相对安装根目录。
+# 引擎用所在主机的签名私钥，经本机网关取目录，再直连存储机与控制机的网关。
+# 这里是开发用的默认值：部署渲染时把主机 ID 与路径换成这台主机的实际值（绝对路径）。
 gateway_client:
-  access_address: 203.0.113.11:11004
-  access_id: access@storage
   caller: factor-engine
-  key_id: key-factor-engine
-  key_file: /data/moox/secrets/caller-factor-engine.key
+  key_file: /data/moox/secrets/host.key
+  host_id: factor
+  local_address: 127.0.0.1:11002
+  ca_file: /data/moox/secrets/moox-ca.crt
 manager:
   timeout: 30s
 # 按 UTC 对齐：每 interval 的第 offset 拉取一次目录

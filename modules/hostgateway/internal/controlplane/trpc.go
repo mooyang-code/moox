@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 	"unicode"
@@ -34,7 +35,7 @@ func NewRPC(cfg hostgatewayconfig.Config, material *tlsconfig.Material, credenti
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if material == nil || material.HostID() != cfg.Host.ID || credentials.Caller != cfg.Control.Caller || credentials.KeyID != cfg.Control.KeyID || len(credentials.Secret) < 32 ||
+	if material == nil || material.HostID() != cfg.Host.ID || credentials.Caller != "host-gateway" || credentials.Host != cfg.Host.ID || credentials.PublicKey() == nil ||
 		version == "" || len(version) > 128 || version != strings.TrimSpace(version) || strings.ContainsFunc(version, unicode.IsControl) {
 		return nil, errors.New("control client requires matching TLS/signing identity and version")
 	}
@@ -115,9 +116,12 @@ func (c *RPCClient) invoke(parent context.Context, method string, req, rsp proto
 		return errors.New("encode GatewayControl request")
 	}
 	path := "/" + servicecatalog.GatewayControlPath + "/" + method
-	headers, err := gatewayauth.Sign(c.credentials, gatewayauth.Request{Method: "POST", Path: path, TargetNode: c.cfg.Control.HostID, Callee: servicecatalog.GatewayControlPath, Func: method, Body: encoded}, time.Now())
-	if err != nil {
-		return errors.New("sign GatewayControl request")
+	// 控制机网关直连本机的 Admin（回环端口，不验签），自己带上签名主机头；其余主机经控制机网关，由它验签后写这个头。
+	headers := http.Header{gatewayauth.HeaderVerifiedHost: {c.cfg.Host.ID}}
+	if c.cfg.Host.ID != c.cfg.Control.HostID {
+		if headers, err = gatewayauth.Sign(c.credentials, gatewayauth.Request{TargetNode: c.cfg.Control.HostID, Callee: servicecatalog.GatewayControlPath, Func: method, Body: encoded}, time.Now()); err != nil {
+			return errors.New("sign GatewayControl request")
+		}
 	}
 	ctx, message := codec.WithNewMessage(ctx)
 	defer codec.PutBackMessage(message)

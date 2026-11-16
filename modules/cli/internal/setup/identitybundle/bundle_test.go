@@ -10,25 +10,20 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
-	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
 type fixture struct {
@@ -53,73 +48,36 @@ func certificateInfo(cert *x509.Certificate) hostbundle.CertificateInfo {
 	return hostbundle.CertificateInfo{SHA256: digest(cert.Raw), Serial: cert.SerialNumber.Text(16), NotAfter: cert.NotAfter.UTC()}
 }
 
-func newFixture(t *testing.T, host string, components []string, operator bool) *fixture {
+func keyFile(label string) []byte {
+	return []byte(gatewayauth.EncodeSigningKey(authtest.Key(label)) + "\n")
+}
+
+// newFixture 造一份新签发的身份包：host 的主机签名私钥、证书与根证书；collector 为真时另有 scf-collector 的私钥。
+func newFixture(t *testing.T, host string, collector bool) *fixture {
 	t.Helper()
-	f := &fixture{
-		options: Options{HostID: host, ControlHostID: "control", Address: "192.0.2.2", PrivateAddress: "10.0.0.2", ControlAddress: "192.0.2.1", Components: components, ExpectedHash: strings.Repeat("a", 64), AllowOperator: operator},
-		files:   map[string][]byte{},
-	}
-	now := time.Now().UTC().Truncate(time.Second)
+	f := &fixture{options: Options{HostID: host, ControlHostID: "control", Address: "192.0.2.2", PrivateAddress: "10.0.0.2", Collector: collector}, files: map[string][]byte{}}
 	var err error
 	f.caKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test-only-root"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(365 * 24 * time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign}
-	der, err := x509.CreateCertificate(rand.Reader, ca, ca, &f.caKey.PublicKey, f.caKey)
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "MooX CA"}, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &f.caKey.PublicKey, f.caKey)
 	require.NoError(t, err)
 	f.ca, err = x509.ParseCertificate(der)
 	require.NoError(t, err)
+	f.files[hostbundle.CAFile] = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	f.options.ExpectedCA = digest(der)
-	f.files["certs/moox-ca.crt"] = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	f.metadata = hostbundle.Metadata{Version: 2, HostID: host, ControlHostID: "control", BundleDir: "/data/moox/.export-1/bundles/host-bundle-1",
+		CA: hostbundle.CAInfo{CertificateInfo: certificateInfo(f.ca)}, SignKeyIssued: true, SignPublicKey: PublicKey(authtest.Key("host/" + host))}
+	f.files[hostbundle.HostKeyFile] = keyFile("host/" + host)
+	if collector {
+		f.metadata.SCFCollectorKeyIssued, f.metadata.SCFCollectorPublicKey = true, PublicKey(authtest.Key("scf"))
+		f.files[hostbundle.SCFCollectorKeyFile] = keyFile("scf")
+	}
 	f.leafKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	f.leaf = &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: host}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(30 * 24 * time.Hour), BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, DNSNames: []string{host}, IPAddresses: []net.IP{net.ParseIP(f.options.Address), net.ParseIP(f.options.PrivateAddress)}}
-	f.metadata = hostbundle.Metadata{Version: 1, HostID: host, ControlHostID: "control", BundleDir: "/private-test/host-bundle-original", ConfigFile: "host-gateway/config/app.yaml", ExpectedHash: f.options.ExpectedHash, CA: hostbundle.CAInfo{CertificateInfo: certificateInfo(f.ca)}}
+	f.leaf = &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: host}, DNSNames: []string{host}, IPAddresses: []net.IP{net.ParseIP("192.0.2.2"), net.ParseIP("10.0.0.2")},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	f.signLeaf(t)
-	callers, err := wanted(f.options)
-	require.NoError(t, err)
-	gatewayKey := ""
-	for i, caller := range callers {
-		name := caller
-		if caller == "host-gateway@"+host {
-			name = "host-gateway"
-		}
-		keyFile := "secrets/caller-" + name + ".key"
-		keyID := fmt.Sprintf("test-key-%d", i)
-		if caller == "moox-cli" {
-			keyFile = "operator/caller-moox-cli.key"
-			raw, err := yaml.Marshal(hostbundle.OperatorConfig{Caller: caller, KeyID: keyID, KeyFile: "caller-moox-cli.key"})
-			require.NoError(t, err)
-			f.files["operator/gateway-client.yaml"] = raw
-		}
-		f.files[keyFile] = []byte(strings.Repeat(fmt.Sprint(i), 48) + "\n")
-		f.metadata.Credentials = append(f.metadata.Credentials, hostbundle.Credential{Caller: caller, KeyID: keyID, KeyFile: keyFile})
-		if name == "host-gateway" {
-			gatewayKey = keyID
-		}
-	}
-	f.files[f.metadata.ConfigFile], err = hostgatewayconfig.Encode(hostgatewayconfig.Default(host, "control", f.options.ControlAddress, gatewayKey))
-	require.NoError(t, err)
-	if slices.Contains(components, "access") {
-		f.metadata.VerificationFile = "secrets/access/access-verification.json"
-		catalog, err := servicecatalog.LoadEmbedded()
-		require.NoError(t, err)
-		table := accessTable{Version: 1}
-		for _, principal := range catalog.ExternalIdentities() {
-			// Both current and retiring keys remain valid during rotation.
-			for _, generation := range []string{"current", "retiring"} {
-				keyID := principal + "-" + generation
-				name := "caller-" + principal + "-" + keyID + ".key"
-				table.Credentials = append(table.Credentials, accessCredential{KeyID: keyID, Caller: principal, SecretFile: name})
-				f.files["secrets/access/"+name] = []byte(strings.Repeat("external-test-secret-", 3) + "\n")
-			}
-		}
-		slices.SortFunc(table.Credentials, func(a, b accessCredential) int {
-			return strings.Compare(a.Caller+"\x00"+a.KeyID, b.Caller+"\x00"+b.KeyID)
-		})
-		raw, err := json.Marshal(table)
-		require.NoError(t, err)
-		f.files[f.metadata.VerificationFile] = append(raw, '\n')
-	}
 	f.inventory()
 	return f
 }
@@ -131,10 +89,10 @@ func (f *fixture) signLeaf(t *testing.T) {
 	cert, err := x509.ParseCertificate(der)
 	require.NoError(t, err)
 	f.metadata.Certificate = certificateInfo(cert)
-	f.files["certs/host-gateway/server.crt"] = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	f.files[hostbundle.HostCertificateFile] = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	key, err := x509.MarshalPKCS8PrivateKey(f.leafKey)
 	require.NoError(t, err)
-	f.files["certs/host-gateway/server.key"] = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})
+	f.files[hostbundle.HostTLSKeyFile] = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})
 }
 
 func (f *fixture) inventory() {
@@ -143,25 +101,6 @@ func (f *fixture) inventory() {
 		f.metadata.Files = append(f.metadata.Files, hostbundle.File{Path: name, SHA256: digest(raw), Size: int64(len(raw))})
 	}
 	slices.SortFunc(f.metadata.Files, func(a, b hostbundle.File) int { return strings.Compare(a.Path, b.Path) })
-}
-
-func (f *fixture) encoded(t *testing.T) []byte {
-	t.Helper()
-	raw, err := json.Marshal(f.metadata)
-	require.NoError(t, err)
-	return append(raw, '\n')
-}
-
-func (f *fixture) write(t *testing.T) string {
-	t.Helper()
-	directory := privateParent(t)
-	for name, raw := range f.files {
-		filename := filepath.Join(directory, filepath.FromSlash(name))
-		require.NoError(t, os.MkdirAll(filepath.Dir(filename), 0o700))
-		require.NoError(t, os.WriteFile(filename, raw, 0o600))
-	}
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "bundle.json"), f.encoded(t), 0o600))
-	return directory
 }
 
 func (f *fixture) download(t *testing.T) Download {
@@ -174,7 +113,9 @@ func (f *fixture) download(t *testing.T) Download {
 		relative := strings.TrimPrefix(name, f.metadata.BundleDir+"/")
 		raw, ok := f.files[relative]
 		if relative == "bundle.json" {
-			raw, ok = f.encoded(t), true
+			encoded, err := json.Marshal(f.metadata)
+			require.NoError(t, err)
+			raw, ok = append(encoded, '\n'), true
 		}
 		if !ok {
 			return 0, os.ErrNotExist
@@ -183,344 +124,148 @@ func (f *fixture) download(t *testing.T) Download {
 	}
 }
 
-func TestHostMaterialSeparatesTargetAndOperatorIdentities(t *testing.T) {
-	for _, target := range []struct {
-		host       string
-		components []string
-		operator   bool
-	}{
-		{"control", []string{"admin", "access"}, true},
-		{"storage", []string{"storage-primary", "storage-view"}, false},
-		{"compute1", []string{"access", "egress-proxy", "trade"}, false},
-		{"host-only", nil, false},
+func (f *fixture) fetch(t *testing.T) (map[string][]byte, error) {
+	t.Helper()
+	return Fetch(context.Background(), f.download(t), f.metadata, f.options)
+}
+
+func TestFetchReturnsVerifiedHostMaterial(t *testing.T) {
+	storage := newFixture(t, "storage", false)
+	files, err := storage.fetch(t)
+	require.NoError(t, err)
+	require.Len(t, files, 4)
+	require.Equal(t, keyFile("host/storage"), files[hostbundle.HostKeyFile])
+
+	control := newFixture(t, "control", true)
+	files, err = control.fetch(t)
+	require.NoError(t, err)
+	require.Len(t, files, 5)
+	require.Equal(t, keyFile("scf"), files[hostbundle.SCFCollectorKeyFile])
+
+	// 例行升级：目标机上的私钥原样沿用，包里只有证书三件套。
+	delete(storage.files, hostbundle.HostKeyFile)
+	storage.metadata.SignKeyIssued = false
+	storage.inventory()
+	files, err = storage.fetch(t)
+	require.NoError(t, err)
+	require.Len(t, files, 3)
+	require.NotContains(t, files, hostbundle.HostKeyFile)
+}
+
+// 清单与期望的主机、CA、部署对不上，或带了不该有的文件，一律拒绝。
+func TestFetchRejectsWrongTopologyTrustAndInventory(t *testing.T) {
+	for name, mutate := range map[string]func(*fixture){
+		"别的主机":                     func(f *fixture) { f.options.HostID = "overseas" },
+		"别的控制机":                    func(f *fixture) { f.options.ControlHostID = "other" },
+		"别的 CA":                    func(f *fixture) { f.options.ExpectedCA = strings.Repeat("b", 64) },
+		"没固定 CA":                   func(f *fixture) { f.options.ExpectedCA = "" },
+		"版本不对":                     func(f *fixture) { f.metadata.Version = 1 },
+		"包目录是相对路径":                 func(f *fixture) { f.metadata.BundleDir = "bundles/x" },
+		"公钥不合法":                    func(f *fixture) { f.metadata.SignPublicKey = "bad" },
+		"声称签发了却没有私钥":               func(f *fixture) { delete(f.files, hostbundle.HostKeyFile); f.inventory() },
+		"没声称签发却带了私钥":               func(f *fixture) { f.metadata.SignKeyIssued = false },
+		"多带了文件":                    func(f *fixture) { f.files["admin-master.key"] = []byte("x"); f.inventory() },
+		"多带了 CA 私钥":                func(f *fixture) { f.files["ca.key"] = []byte("x"); f.inventory() },
+		"没部署 collector 却带了 scf 公钥": func(f *fixture) { f.metadata.SCFCollectorPublicKey = PublicKey(authtest.Key("scf")) },
+		"没部署 collector 却带了 scf 私钥": func(f *fixture) {
+			f.metadata.SCFCollectorPublicKey, f.metadata.SCFCollectorKeyIssued = PublicKey(authtest.Key("scf")), true
+			f.files[hostbundle.SCFCollectorKeyFile] = keyFile("scf")
+			f.inventory()
+		},
+		"部署了 collector 却没有 scf 公钥": func(f *fixture) { f.options.Collector = true },
 	} {
-		t.Run(target.host, func(t *testing.T) {
-			f := newFixture(t, target.host, target.components, target.operator)
-			material, err := Load(t.Context(), f.write(t), f.options)
-			require.NoError(t, err)
-			require.Equal(t, f.metadata, material.Metadata())
-			raw, err := json.Marshal(material)
-			require.NoError(t, err)
-			for _, output := range []string{string(raw), fmt.Sprint(material), fmt.Sprintf("%#v", material)} {
-				require.NotContains(t, output, string(f.files["secrets/caller-host-agent.key"]))
-				require.NotContains(t, output, "PRIVATE KEY")
-			}
-			copy := material.Metadata()
-			copy.Files[0].Path = "changed"
-			copy.Credentials[0].KeyID = "changed"
-			require.Equal(t, f.metadata, material.Metadata())
-		})
+		f := newFixture(t, "storage", false)
+		mutate(f)
+		_, err := f.fetch(t)
+		require.Error(t, err, name)
 	}
 }
 
-func TestHostMaterialRejectsWrongTopologyAndTrust(t *testing.T) {
-	changes := map[string]func(*fixture){
-		"wrong host":            func(f *fixture) { f.options.HostID = "other" },
-		"wrong control":         func(f *fixture) { f.options.ControlHostID = "other" },
-		"wrong address":         func(f *fixture) { f.options.Address = "192.0.2.99" },
-		"wrong private address": func(f *fixture) { f.options.PrivateAddress = "10.0.0.99" },
-		"wrong control address": func(f *fixture) { f.options.ControlAddress = "192.0.2.99" },
-		"wrong CA":              func(f *fixture) { f.options.ExpectedCA = strings.Repeat("b", 64) },
-		"wrong snapshot":        func(f *fixture) { f.options.ExpectedHash = strings.Repeat("b", 64) },
-		"incomplete deployment": func(f *fixture) { f.options.Components = nil },
-		"control on business":   func(f *fixture) { f.options.Components = []string{"admin"} },
-		"operator on business":  func(f *fixture) { f.options.AllowOperator = true },
-		"duplicate deployment":  func(f *fixture) { f.options.Components = append(f.options.Components, "trade") },
-		"root source":           func(f *fixture) { f.metadata.BundleDir = "/" },
-		"traversal source":      func(f *fixture) { f.metadata.BundleDir = "/private-test/../other" },
-		"unrelated caller":      func(f *fixture) { f.metadata.Credentials[0].Caller = "moox-cli" },
-		"missing key ID":        func(f *fixture) { f.metadata.Credentials[0].KeyID = "" },
-		"duplicate key ID":      func(f *fixture) { f.metadata.Credentials[0].KeyID = f.metadata.Credentials[1].KeyID },
-		"misplaced key":         func(f *fixture) { f.metadata.Credentials[0].KeyFile = "operator/caller-moox-cli.key" },
-		"unbounded size":        func(f *fixture) { f.metadata.Files[0].Size = 1 << 21 },
-		"path escape":           func(f *fixture) { f.metadata.Files[0].Path = "../secret" },
-	}
-	for name, change := range changes {
-		t.Run(name, func(t *testing.T) {
-			f := newFixture(t, "compute1", []string{"trade"}, false)
-			change(f)
-			_, err := Load(t.Context(), f.write(t), f.options)
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestHostMaterialRejectsInvalidContentsWithMatchingInventory(t *testing.T) {
-	changes := map[string]func(*testing.T, *fixture){
-		"wrong SAN": func(t *testing.T, f *fixture) {
-			f.leaf.DNSNames = append(f.leaf.DNSNames, "unrelated.example")
+// 清单没问题、内容被换掉：私钥对不上登记的公钥、证书不是固定 CA 签的、证书不属于这台主机，都拒绝；报错里不带私钥内容。
+func TestFetchRejectsInvalidContents(t *testing.T) {
+	for name, mutate := range map[string]func(*testing.T, *fixture){
+		"主机私钥对不上公钥":   func(_ *testing.T, f *fixture) { f.files[hostbundle.HostKeyFile] = keyFile("another") },
+		"主机私钥不是合法种子":  func(_ *testing.T, f *fixture) { f.files[hostbundle.HostKeyFile] = []byte("not-a-key\n") },
+		"scf 私钥对不上公钥": func(_ *testing.T, f *fixture) { f.files[hostbundle.SCFCollectorKeyFile] = keyFile("another") },
+		"证书是给别的主机的": func(t *testing.T, f *fixture) {
+			f.leaf.Subject.CommonName, f.leaf.DNSNames = "overseas", []string{"overseas"}
 			f.signLeaf(t)
 		},
-		"missing private SAN": func(t *testing.T, f *fixture) { f.leaf.IPAddresses = f.leaf.IPAddresses[:1]; f.signLeaf(t) },
-		"wrong common name":   func(t *testing.T, f *fixture) { f.leaf.Subject.CommonName = "other"; f.signLeaf(t) },
-		"expired leaf": func(t *testing.T, f *fixture) {
-			f.leaf.NotBefore = time.Now().Add(-2 * time.Hour)
-			f.leaf.NotAfter = time.Now().Add(-time.Hour)
+		"证书多了地址": func(t *testing.T, f *fixture) {
+			f.leaf.IPAddresses = append(f.leaf.IPAddresses, net.ParseIP("203.0.113.9"))
 			f.signLeaf(t)
 		},
-		"client certificate": func(t *testing.T, f *fixture) {
-			f.leaf.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+		"直达主机的证书带了 ClientAuth": func(t *testing.T, f *fixture) {
+			f.leaf.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
 			f.signLeaf(t)
 		},
-		"leaf is CA": func(t *testing.T, f *fixture) { f.leaf.IsCA = true; f.signLeaf(t) },
-		"wrong private key": func(t *testing.T, f *fixture) {
-			other := newFixture(t, "other", nil, false)
-			f.files["certs/host-gateway/server.key"] = other.files["certs/host-gateway/server.key"]
+		"证书不是固定 CA 签的": func(t *testing.T, f *fixture) {
+			other := newFixture(t, "control", true)
+			f.ca, f.caKey = other.ca, other.caKey
+			f.signLeaf(t)
 		},
-		"extra PEM": func(t *testing.T, f *fixture) {
-			f.files["certs/moox-ca.crt"] = append(f.files["certs/moox-ca.crt"], f.files["certs/host-gateway/server.key"]...)
-		},
-		"forbidden master": func(t *testing.T, f *fixture) {
-			f.files["secrets/master.key"] = []byte(strings.Repeat("never-export", 4))
-		},
-		"forbidden CA key": func(t *testing.T, f *fixture) { f.files["certs/ca.key"] = f.files["certs/host-gateway/server.key"] },
-		"short secret":     func(t *testing.T, f *fixture) { f.files["secrets/caller-host-agent.key"] = []byte("short\n") },
-		"oversized raw secret": func(t *testing.T, f *fixture) {
-			f.files["secrets/caller-host-agent.key"] = []byte(strings.Repeat(" ", 4096) + strings.Repeat("a", 32))
-		},
-		"secret whitespace": func(t *testing.T, f *fixture) {
-			f.files["secrets/caller-host-agent.key"] = []byte(strings.Repeat("a", 32) + " internal-space\n")
-		},
-		"gateway redirected": func(t *testing.T, f *fixture) {
-			config := hostgatewayconfig.Default(f.options.HostID, "control", "192.0.2.99", f.metadata.Credentials[1].KeyID)
-			raw, err := hostgatewayconfig.Encode(config)
+		"证书私钥对不上": func(t *testing.T, f *fixture) {
+			other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			require.NoError(t, err)
-			f.files[f.metadata.ConfigFile] = raw
-		},
-		"operator redirected": func(t *testing.T, f *fixture) {
-			f.files["operator/gateway-client.yaml"] = []byte("caller: admin\nkey_id: other\nkey_file: /tmp/unrelated\n")
-		},
-		"certificate metadata": func(t *testing.T, f *fixture) { f.metadata.Certificate.Serial = "ffff" },
-		"CA metadata":          func(t *testing.T, f *fixture) { f.metadata.CA.Serial = "ffff" },
-	}
-	for name, change := range changes {
-		t.Run(name, func(t *testing.T) {
-			f := newFixture(t, "control", []string{"admin", "access"}, true)
-			change(t, f)
-			f.inventory()
-			_, err := Load(t.Context(), f.write(t), f.options)
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestHostMaterialRejectsAccessIdentityEscapes(t *testing.T) {
-	changes := map[string]func(*accessTable, *fixture){
-		"internal principal": func(table *accessTable, f *fixture) { table.Credentials[0].Caller = "host-agent" },
-		"missing external principal": func(table *accessTable, f *fixture) {
-			first := table.Credentials[0].Caller
-			table.Credentials = slices.DeleteFunc(table.Credentials, func(e accessCredential) bool { return e.Caller == first })
-		},
-		"path escape": func(table *accessTable, f *fixture) { table.Credentials[0].SecretFile = "../../caller-host-agent.key" },
-		"duplicate entry": func(table *accessTable, f *fixture) {
-			table.Credentials = append(table.Credentials, table.Credentials[0])
-		},
-		"repeated internal key ID": func(table *accessTable, f *fixture) {
-			entry := &table.Credentials[0]
-			entry.KeyID = f.metadata.Credentials[0].KeyID
-			entry.SecretFile = "caller-" + entry.Caller + "-" + entry.KeyID + ".key"
-			f.files["secrets/access/"+entry.SecretFile] = []byte(strings.Repeat("a", 48))
-		},
-		"missing secret": func(table *accessTable, f *fixture) {
-			delete(f.files, "secrets/access/"+table.Credentials[0].SecretFile)
-		},
-	}
-	for name, change := range changes {
-		t.Run(name, func(t *testing.T) {
-			f := newFixture(t, "compute1", []string{"access"}, false)
-			var table accessTable
-			require.NoError(t, json.Unmarshal(f.files[f.metadata.VerificationFile], &table))
-			change(&table, f)
-			raw, err := json.Marshal(table)
+			der, err := x509.MarshalPKCS8PrivateKey(other)
 			require.NoError(t, err)
-			f.files[f.metadata.VerificationFile] = append(raw, '\n')
-			f.inventory()
-			_, err = Load(t.Context(), f.write(t), f.options)
-			require.Error(t, err)
-		})
+			f.files[hostbundle.HostTLSKeyFile] = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+		},
+		"根证书后面跟着别的内容": func(_ *testing.T, f *fixture) {
+			f.files[hostbundle.CAFile] = append(f.files[hostbundle.CAFile], f.files[hostbundle.HostTLSKeyFile]...)
+		},
+	} {
+		f := newFixture(t, "control", true)
+		mutate(t, f)
+		f.inventory()
+		_, err := f.fetch(t)
+		require.Error(t, err, name)
+		require.NotContains(t, err.Error(), strings.TrimSpace(string(keyFile("host/control"))), name)
 	}
-}
-
-func TestHostMaterialRejectsUnsafeFilesAndNoncanonicalJSON(t *testing.T) {
-	changes := map[string]func(*testing.T, string, *fixture){
-		"file permissions": func(t *testing.T, dir string, f *fixture) {
-			require.NoError(t, os.Chmod(filepath.Join(dir, "certs/moox-ca.crt"), 0o644))
-		},
-		"directory permissions": func(t *testing.T, dir string, f *fixture) {
-			require.NoError(t, os.Chmod(filepath.Join(dir, "secrets"), 0o755))
-		},
-		"root permissions": func(t *testing.T, dir string, f *fixture) { require.NoError(t, os.Chmod(dir, 0o755)) },
-		"symlink payload": func(t *testing.T, dir string, f *fixture) {
-			name := filepath.Join(dir, "secrets/caller-host-agent.key")
-			raw, err := os.ReadFile(name)
-			require.NoError(t, err)
-			other := filepath.Join(privateParent(t), "other.key")
-			require.NoError(t, os.WriteFile(other, raw, 0o600))
-			require.NoError(t, os.Remove(name))
-			require.NoError(t, os.Symlink(other, name))
-		},
-		"unlisted file": func(t *testing.T, dir string, f *fixture) {
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "extra"), []byte("extra"), 0o600))
-		},
-		"unlisted directory": func(t *testing.T, dir string, f *fixture) {
-			require.NoError(t, os.Mkdir(filepath.Join(dir, "extra"), 0o700))
-		},
-		"bad digest": func(t *testing.T, dir string, f *fixture) {
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "secrets/caller-host-agent.key"), []byte(strings.Repeat("x", 48)+"\n"), 0o600))
-		},
-		"duplicate field": func(t *testing.T, dir string, f *fixture) {
-			raw := f.encoded(t)
-			raw = append([]byte(`{"version":1,`), raw[1:]...)
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "bundle.json"), raw, 0o600))
-		},
-		"unknown field": func(t *testing.T, dir string, f *fixture) {
-			raw := f.encoded(t)
-			raw = append([]byte(`{"extra":1,`), raw[1:]...)
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "bundle.json"), raw, 0o600))
-		},
-		"multiple documents": func(t *testing.T, dir string, f *fixture) {
-			raw := append(f.encoded(t), []byte("{}\n")...)
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "bundle.json"), raw, 0o600))
-		},
-	}
-	for name, change := range changes {
-		t.Run(name, func(t *testing.T) {
-			f := newFixture(t, "storage", []string{"storage-primary"}, false)
-			dir := f.write(t)
-			change(t, dir, f)
-			_, err := Load(t.Context(), dir, f.options)
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestHostMaterialFetchPinsAndBoundsEveryTransfer(t *testing.T) {
-	f := newFixture(t, "compute1", []string{"access", "trade"}, false)
-	destination := filepath.Join(privateParent(t), "fetched")
-	_, err := Fetch(t.Context(), f.download(t), f.metadata, f.options, destination)
-	require.NoError(t, err)
-	_, err = Load(t.Context(), destination, f.options)
-	require.NoError(t, err)
-	for _, scenario := range []string{"overflow", "false count", "wrong digest", "source mismatch", "private error", "cancelled"} {
-		t.Run(scenario, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			download := f.download(t)
-			bad := func(ctx context.Context, name string, out io.Writer) (int64, error) {
-				if path.Base(name) == "bundle.json" && scenario != "source mismatch" {
-					return download(ctx, name, out)
-				}
-				switch scenario {
-				case "overflow":
-					return io.Copy(out, bytes.NewReader(make([]byte, 2<<20)))
-				case "false count":
-					n, err := download(ctx, name, out)
-					return n + 1, err
-				case "wrong digest":
-					raw := bytes.Repeat([]byte("x"), len(f.files[strings.TrimPrefix(name, f.metadata.BundleDir+"/")]))
-					n, err := out.Write(raw)
-					return int64(n), err
-				case "source mismatch":
-					source := f.metadata
-					source.Certificate.Serial = "changed"
-					raw, err := json.Marshal(source)
-					require.NoError(t, err)
-					n, err := out.Write(append(raw, '\n'))
-					return int64(n), err
-				case "private error":
-					return 0, errors.New("PRIVATE-MATERIAL-MUST-NOT-LEAK")
-				case "cancelled":
-					cancel()
-					return download(ctx, name, out)
-				}
-				panic("unexpected scenario")
-			}
-			destination := filepath.Join(privateParent(t), "failed")
-			material, err := Fetch(ctx, bad, f.metadata, f.options, destination)
-			require.Error(t, err)
-			require.Nil(t, material)
-			require.NotContains(t, err.Error(), "PRIVATE-MATERIAL-MUST-NOT-LEAK")
-			entries, err := os.ReadDir(filepath.Dir(destination))
-			require.NoError(t, err)
-			require.Empty(t, entries)
-		})
-	}
-	badOptions := f.options
-	badOptions.ExpectedCA = strings.Repeat("b", 64)
-	_, err = Fetch(t.Context(), func(context.Context, string, io.Writer) (int64, error) {
-		t.Fatal("must reject before any download")
-		return 0, nil
-	}, f.metadata, badOptions, filepath.Join(privateParent(t), "bad"))
-	require.Error(t, err)
-}
-
-func TestHostMaterialPublicationPreservesExistingObjectsAndConcurrentWinner(t *testing.T) {
-	f := newFixture(t, "host-only", nil, false)
-	for _, kind := range []string{"file", "directory", "symlink"} {
-		t.Run(kind, func(t *testing.T) {
-			parent := privateParent(t)
-			destination := filepath.Join(parent, "existing")
-			switch kind {
-			case "file":
-				require.NoError(t, os.WriteFile(destination, []byte("keep"), 0o600))
-			case "directory":
-				require.NoError(t, os.Mkdir(destination, 0o700))
-				require.NoError(t, os.WriteFile(filepath.Join(destination, "marker"), []byte("keep"), 0o600))
-			case "symlink":
-				require.NoError(t, os.Symlink("missing-target", destination))
-			}
-			before, err := os.Lstat(destination)
-			require.NoError(t, err)
-			material, err := Fetch(t.Context(), f.download(t), f.metadata, f.options, destination)
-			require.Error(t, err)
-			require.Nil(t, material)
-			after, err := os.Lstat(destination)
-			require.NoError(t, err)
-			require.True(t, os.SameFile(before, after))
-			entries, err := os.ReadDir(parent)
-			require.NoError(t, err)
-			require.Len(t, entries, 1)
-		})
-	}
-	destination := filepath.Join(privateParent(t), "winner")
-	var wait sync.WaitGroup
-	results := make(chan error, 2)
-	for range 2 {
-		wait.Go(func() {
-			_, err := Fetch(t.Context(), f.download(t), f.metadata, f.options, destination)
-			results <- err
-		})
-	}
-	wait.Wait()
-	close(results)
-	success := 0
-	for err := range results {
-		if err == nil {
-			success++
-		}
-	}
-	require.Equal(t, 1, success)
-	_, err := Load(t.Context(), destination, f.options)
-	require.NoError(t, err)
-	entries, err := os.ReadDir(filepath.Dir(destination))
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-}
-
-// 证书用途必须与主机可达性一致：出站主机需要 ClientAuth，直达主机不能带 ClientAuth。
-func TestHostMaterialCertificateUsageFollowsReachability(t *testing.T) {
-	f := newFixture(t, "compute1", []string{"trade"}, false)
+	// 只能出站的主机反过来必须带 ClientAuth。
+	f := newFixture(t, "factor", false)
 	f.options.Outbound = true
-	_, err := Load(t.Context(), f.write(t), f.options)
-	require.ErrorContains(t, err, "key usage")
-
-	f = newFixture(t, "compute1", []string{"trade"}, false)
+	_, err := f.fetch(t)
+	require.Error(t, err)
 	f.leaf.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
 	f.signLeaf(t)
 	f.inventory()
-	_, err = Load(t.Context(), f.write(t), f.options)
-	require.ErrorContains(t, err, "key usage")
-	f.options.Outbound = true
-	_, err = Load(t.Context(), f.write(t), f.options)
+	_, err = f.fetch(t)
 	require.NoError(t, err)
+}
+
+// 传输过程：清单与 Admin 的回答不一致、文件大小或摘要对不上、超出声明的大小、中途取消，都拒绝。
+func TestFetchPinsAndBoundsEveryTransfer(t *testing.T) {
+	f := newFixture(t, "storage", false)
+	_, err := Fetch(context.Background(), nil, f.metadata, f.options)
+	require.Error(t, err)
+	tamper := func(name string, change func([]byte) []byte) Download {
+		inner := f.download(t)
+		return func(ctx context.Context, source string, out io.Writer) (int64, error) {
+			if !strings.HasSuffix(source, "/"+name) {
+				return inner(ctx, source, out)
+			}
+			var buffer bytes.Buffer
+			if _, err := inner(ctx, source, &buffer); err != nil {
+				return 0, err
+			}
+			return io.Copy(out, bytes.NewReader(change(buffer.Bytes())))
+		}
+	}
+	for name, download := range map[string]Download{
+		"清单被换": tamper("bundle.json", func(raw []byte) []byte {
+			return bytes.Replace(raw, []byte(`"host_id":"storage"`), []byte(`"host_id":"control"`), 1)
+		}),
+		"清单不规范": tamper("bundle.json", func(raw []byte) []byte { return append([]byte(" "), raw...) }),
+		"内容被改":  tamper(hostbundle.HostCertificateFile, func(raw []byte) []byte { raw[len(raw)/2] ^= 1; return raw }),
+		"内容变长":  tamper(hostbundle.HostKeyFile, func(raw []byte) []byte { return append(raw, 'x') }),
+		"内容为空":  tamper(hostbundle.CAFile, func([]byte) []byte { return nil }),
+	} {
+		_, err := Fetch(context.Background(), download, f.metadata, f.options)
+		require.Error(t, err, name)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = Fetch(canceled, f.download(t), f.metadata, f.options)
+	require.ErrorIs(t, err, context.Canceled)
 }

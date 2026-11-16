@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -78,7 +79,7 @@ func startWireServer(t *testing.T, listener net.Listener, credentials gatewayaut
 			}
 			body := input.(*codec.Body).Data
 			service, method, _ := strings.Cut(strings.TrimPrefix(message.ServerRPCName(), "/"), "/")
-			claims, err := gatewayauth.Verify(credentials, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: target, Callee: service, Func: method, Body: body}, headers, time.Now())
+			claims, err := authtest.Verify(credentials, gatewayauth.Request{TargetNode: target, Callee: service, Func: method, Body: body}, headers, time.Now())
 			if err != nil {
 				return nil, err
 			}
@@ -154,11 +155,11 @@ func TestRealTRPCTLSRejectsWrongCAAndHostAfterSuccessfulCall(t *testing.T) {
 	require.NoError(t, err)
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12})
 	require.NoError(t, err)
-	creds := gatewayauth.Credentials{Caller: "moox-cli", KeyID: "test", Secret: "secret"}
+	creds := authtest.Identity("moox-cli")
 	counted := &countingListener{Listener: listener}
 	startWireServer(t, counted, creds, "storage")
 	body := []byte(`{"id":1}`)
-	headers, err := gatewayauth.Sign(creds, gatewayauth.Request{Method: "POST", Path: "/" + secretService + "/GetSecret", TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
+	headers, err := gatewayauth.Sign(creds, gatewayauth.Request{TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -168,7 +169,7 @@ func TestRealTRPCTLSRejectsWrongCAAndHostAfterSuccessfulCall(t *testing.T) {
 	rsp, err := pool.invoke(ctx, ep, secretService, "GetSecret", codec.SerializationTypeJSON, body, headers)
 	require.NoError(t, err)
 	require.Equal(t, body, rsp)
-	headers, err = gatewayauth.Sign(creds, gatewayauth.Request{Method: "POST", Path: "/" + secretService + "/GetSecret", TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
+	headers, err = gatewayauth.Sign(creds, gatewayauth.Request{TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
 	require.NoError(t, err)
 	_, err = pool.invoke(ctx, ep, secretService, "GetSecret", codec.SerializationTypeJSON, body, headers)
 	require.NoError(t, err)
@@ -226,9 +227,9 @@ func TestRealTRPCZstdCompressionKeepsSignedBodyAndShrinksWire(t *testing.T) {
 		base, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
 		listener := &byteCountingListener{Listener: base}
-		creds := gatewayauth.Credentials{Caller: "moox-cli", KeyID: "test", Secret: "secret"}
+		creds := authtest.Identity("moox-cli")
 		startWireServer(t, listener, creds, "storage")
-		headers, err := gatewayauth.Sign(creds, gatewayauth.Request{Method: "POST", Path: "/" + secretService + "/GetSecret", TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
+		headers, err := gatewayauth.Sign(creds, gatewayauth.Request{TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
 		require.NoError(t, err)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

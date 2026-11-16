@@ -50,7 +50,7 @@ cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY bash scripts/build/build-linux-local.
 
 ## 3. 清空
 
-清空一律用 `setup wipe`，不要手工 `rm`。它逐台停用并删除全部 `moox-*` 用户服务，杀掉可执行文件在部署根里的进程，清空部署根下的内容（保留目录本身，否则要 sudo 重建），再删掉这台电脑上的操作员身份。
+清空一律用 `setup wipe`，不要手工 `rm`。它逐台停用并删除全部 `moox-*` 用户服务，杀掉可执行文件在部署根里的进程，清空部署根下的内容（保留目录本身，否则要 sudo 重建），再删掉这台电脑上的操作员身份（`moox-cli` 的签名私钥、控制机根证书与它的指纹）。
 
 因子机的 `/data/moox/import`、归档文件 `/data/moox/archive` 和内置对象存储的数据 `/data/moox/data/seaweedfs` 都在部署根下，会一起清掉；预览里单独列出后两项的大小。导入包要留下先挪走：`mkdir -p ~/moox-import-keep && mv /data/moox/import/* ~/moox-import-keep/`。
 
@@ -75,8 +75,9 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 
 | 步 | 做什么 | 备注 |
 | --- | --- | --- |
+| 0 | `setup operator` | 这台电脑没有 `~/.config/moox/moox-cli.key` 就生成一把签名私钥，有就复用（重跑不换） |
 | 1 | 防火墙 | 放行各主机对外的端口 |
-| 2 | `setup deploy --host control --component admin,host-gateway,host-agent` | 先在控制机上执行 `moox-admin-cli bootstrap`（建库、CA、主密钥、管理员、登记全部主机与部署、各调用方密钥，只建不改），再装这三个组件；这台电脑的操作员身份同时装好 |
+| 2 | `setup deploy --host control --component admin,host-gateway,host-agent` | 先在控制机上执行 `moox-admin-cli bootstrap`（建库、CA、主密钥、管理员、登记全部主机与部署、登记这台电脑的 `moox-cli` 公钥、签发控制机的签名密钥，只建不改），再装这三个组件；控制机的根证书同时记到这台电脑 |
 | 3 | `setup deploy --host storage` | Storage、EventBus、存储机上的 Access；Storage 主库启动前自动初始化元数据库 |
 | 4 | `setup init --stage storage` | 业务空间、初始秘密、元数据。Collector 启动时要核对内置任务的元数据，所以排在控制机其余组件之前 |
 | 5 | `setup deploy --host control` | 控制机其余组件（Monitor、Collector、因子管理、归档管理、策略） |
@@ -270,7 +271,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 | `binary_missing` | `--binary-dir` 里缺某个组件的二进制或配套命令行 | 按第 2 节的目标清单补编 |
 | `not_ready`，某个组件一直 `readyz 503` 或健康端口连不上 | 组件启动失败或依赖没起来 | `setup logs --host <主机> --component <组件> --journal` 看启动输出，再看文件日志 |
 | 控制机第一次部署时 `control_admin_failed` | `moox-admin-cli bootstrap` 失败 | 看报错最后一行；多半是配置里的主机地址、组件不满足服务目录的要求 |
-| `operator_identity_failed` | 这台电脑留着上一套部署的操作员身份（没用 `setup wipe` 清空） | 按报错删掉 `~/.config/moox` 下列出的文件再重跑 |
+| `operator_trust_failed` | 这台电脑记着上一套部署的控制机根证书（没用 `setup wipe` 清空） | 按报错删掉 `~/.config/moox` 下列出的两个文件再重跑 |
 | 管理台打开是“前端没有打包进这个程序” | moox-admin 编译时没有带上前端 | 按第 2 节重新构建 admin 后 `setup deploy --host control --component admin` |
 | `setup trust-browser` 报 `browser_trust_manual` | 没有终端或 sudo 失败 | 把错误里的命令交给用户在自己的终端运行 |
 | `setup start` 报 `CreateFactorTask failed ... metadata row not found` | 种子里有源数据集不存在的因子任务 | 见第 4 节“`setup start` 的已知限制” |

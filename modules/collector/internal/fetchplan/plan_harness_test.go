@@ -513,7 +513,7 @@ func (h *planHarness) remove(name string) {
 }
 
 func testSCFAccessEnvironment(string) (map[string]string, error) {
-	return map[string]string{"MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER": "scf-collector", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 64)}, nil
+	return map[string]string{"MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER": "scf-collector", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 43) + "="}, nil
 }
 
 var errTestBoom = errors.New("boom")

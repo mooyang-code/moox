@@ -27,7 +27,7 @@ const echoService = "trpc.moox.test.Echo"
 func fixture(t *testing.T) (hostgatewayconfig.Config, *tlsconfig.Material) {
 	t.Helper()
 	paths := testcert.Files(t, testcert.New(t, nil), "storage", nil)
-	cfg := hostgatewayconfig.Default("storage", "control", "192.0.2.1", "fixture-key")
+	cfg := hostgatewayconfig.Default("storage", "control", "192.0.2.1")
 	cfg.TLS, cfg.Store.Path = paths, filepath.Join(t.TempDir(), "cache")
 	reserved := make([]net.Listener, 3)
 	for i := range reserved {
@@ -166,7 +166,7 @@ func TestListenerRollbackAndIdentityValidation(t *testing.T) {
 	cfg, material := fixture(t)
 	_, err := Open(context.Background(), cfg, nil)
 	require.Error(t, err)
-	cfg.Host.ID, cfg.Control.Caller = "compute", "host-gateway@compute"
+	cfg.Host.ID = "compute"
 	_, err = Open(context.Background(), cfg, material)
 	require.ErrorContains(t, err, "for this host")
 	cfg, material = fixture(t)

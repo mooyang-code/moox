@@ -3,16 +3,15 @@
 package snapshot
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
-	"unicode"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -30,20 +29,14 @@ type State struct{ current atomic.Pointer[View] }
 func (s *State) Load() *View   { return s.current.Load() }
 func (s *State) Apply(v *View) { s.current.Store(v) }
 
-type verification struct {
-	credentials gatewayauth.Credentials
-	expires     int64
-}
-
 type View struct {
 	raw       *pb.HostGatewaySnapshot
 	routes    map[string]servicecatalog.Route
-	keys      map[string]verification
+	keys      *gatewayauth.Keys
 	directory servicecatalog.Directory
 	relays    map[string]servicecatalog.RelayTarget
 }
 
-// String/GoString deliberately exclude verification material.
 func (v *View) String() string {
 	return fmt.Sprintf("HostSnapshot{host=%s hash=%s routes=%d}", v.HostID(), v.Hash(), v.Count())
 }
@@ -75,25 +68,18 @@ func (v *View) Resolve(service, method string) (servicecatalog.Route, bool) {
 	return route, ok
 }
 
+// Verify 校验签名与时间窗：带签名主机的用该主机的公钥，并要求调用方确实部署在那台主机上；不带的用非主机身份的公钥。
+// 失败原因不回给调用方。
 func (v *View) Verify(request gatewayauth.Request, headers http.Header, now time.Time) (gatewayauth.Claims, error) {
-	ids := headers.Values("X-Moox-Key-Id")
-	if len(ids) != 1 {
-		return gatewayauth.Claims{}, errors.New("host gateway authentication failed")
-	}
-	key, found := v.keys[ids[0]]
-	if !found || key.expires > 0 && now.Unix() >= key.expires {
-		return gatewayauth.Claims{}, errors.New("host gateway authentication failed")
-	}
-	claims, err := gatewayauth.Verify(key.credentials, request, headers, now)
+	claims, err := v.keys.Verify(request, headers, now)
 	if err != nil {
 		return gatewayauth.Claims{}, errors.New("host gateway authentication failed")
 	}
 	return claims, nil
 }
 
-// Build owns its input and rejects a mismatched hash, noncanonical routing or
-// out-of-scope verification keys. Network addresses can never redirect RPCs
-// away from the catalog's fixed loopback service port.
+// Build 复制输入，哈希不符、路由与内嵌目录不一致或校验公钥格式不对时拒绝整份快照。
+// 路由地址只能是目录里固定的本机回环端口。
 func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
 	bad := func(reason string) (*View, error) { return nil, fmt.Errorf("%w: %s", ErrInvalid, reason) }
 	if !servicecatalog.ValidHostID(hostID) || raw == nil || raw.HostId != hostID || raw.SchemaVersion != 1 ||
@@ -125,8 +111,7 @@ func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
 			return bad("unknown directory service")
 		}
 	}
-	v := &View{raw: owned, routes: map[string]servicecatalog.Route{}, keys: map[string]verification{}, directory: dir, relays: map[string]servicecatalog.RelayTarget{}}
-	callers := map[string]bool{}
+	v := &View{raw: owned, routes: map[string]servicecatalog.Route{}, directory: dir, relays: map[string]servicecatalog.RelayTarget{}}
 	if len(owned.Relays) > 1024 {
 		return bad("too many relays")
 	}
@@ -144,11 +129,6 @@ func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
 		_, duplicate := v.relays[target.HostID]
 		if duplicate || dir.Hosts[target.HostID].Relay != hostID || !catalog.ValidRelay(target) {
 			return bad("relay differs from directory or catalog")
-		}
-		for _, port := range target.Ports {
-			for _, caller := range port.Callers {
-				callers[caller] = true
-			}
 		}
 		v.relays[target.HostID] = target
 	}
@@ -187,7 +167,7 @@ func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
 			if !catalog.Allowed(caller, route.ServicePath, route.Method) || seen[caller] {
 				return bad("route caller")
 			}
-			seen[caller], callers[caller] = true, true
+			seen[caller] = true
 		}
 		key := route.ServicePath + "/" + route.Method
 		if _, duplicate := v.routes[key]; duplicate {
@@ -196,32 +176,32 @@ func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
 		v.routes[key] = servicecatalog.Route{ComponentID: route.ComponentId, ServicePath: route.ServicePath, Method: route.Method,
 			Address: route.Address, TimeoutMS: route.TimeoutMs, MaxBodyBytes: route.MaxBodyBytes, ReadOnly: route.ReadOnly, Callers: slices.Clone(route.Callers)}
 	}
-	counts := map[string]int{}
+	// 校验公钥：每台登记主机一把（连同部署在它上面的调用方），加不属于主机的身份。身份名只认 moox-cli 与目录里的外部身份，
+	// 别的名字忽略：否则登记成组件名的身份公钥会让持有它的人冒充组件。
+	hosts, identities := map[string]gatewayauth.HostKey{}, map[string]ed25519.PublicKey{}
 	for _, key := range owned.VerificationKeys {
-		if key == nil || len(key.ProtoReflect().GetUnknown()) != 0 || !callers[key.Caller] || !keyID(key.KeyId) ||
-			len(key.Secret) < 32 || len(key.Secret) > 4096 || key.ExpiresAtUnix < 0 {
-			return bad("verification key scope or fields")
+		if key == nil || len(key.ProtoReflect().GetUnknown()) != 0 || len(key.PublicKey) != ed25519.PublicKeySize || len(key.Callers) > 256 {
+			return bad("verification key fields")
 		}
-		if _, duplicate := v.keys[key.KeyId]; duplicate {
-			return bad("duplicate key ID")
+		if key.HostId == "" {
+			_, duplicate := identities[key.Identity]
+			if duplicate || len(key.Callers) != 0 {
+				return bad("verification identity")
+			}
+			if key.Identity == servicecatalog.OperatorMooxCLI || catalog.ExternalIdentity(key.Identity) {
+				identities[key.Identity] = key.PublicKey
+			}
+			continue
 		}
-		counts[key.Caller]++
-		if counts[key.Caller] > 2 {
-			return bad("more than two keys per caller")
+		if _, duplicate := hosts[key.HostId]; duplicate || key.Identity != "" || !servicecatalog.ValidHostID(key.HostId) {
+			return bad("verification host")
 		}
-		v.keys[key.KeyId] = verification{credentials: gatewayauth.Credentials{Caller: key.Caller, KeyID: key.KeyId, Secret: string(key.Secret)}, expires: key.ExpiresAtUnix}
+		hosts[key.HostId] = gatewayauth.HostKey{PublicKey: key.PublicKey, Callers: key.Callers}
 	}
-	for caller := range callers {
-		if counts[caller] == 0 {
-			return bad("missing verification key")
-		}
+	if v.keys, err = gatewayauth.NewKeys(hosts, identities); err != nil {
+		return bad("verification keys")
 	}
 	return v, nil
-}
-
-func keyID(id string) bool {
-	return id != "" && len(id) <= 128 && !strings.ContainsAny(id, "/\\") &&
-		!strings.ContainsFunc(id, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
 }
 
 func decodeDirectory(raw *directorypb.ServiceDirectory) (servicecatalog.Directory, error) {

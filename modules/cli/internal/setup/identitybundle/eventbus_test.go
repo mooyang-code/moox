@@ -16,10 +16,10 @@ import (
 )
 
 func TestEventBusClientRelayPinsFilesAndRejectsBrokerKeysAndChangedBytes(t *testing.T) {
-	f := newFixture(t, "control", []string{"admin", "eventbus"}, false)
+	f := newFixture(t, "control", false)
 	roles := []string{"hostagent-publisher", "metrics-publisher"}
-	metadata := hostbundle.ClientMetadata{Version: 1, Status: "ok", OutputDir: "/control/material-exports/client-only", Roles: roles, CA: digest(f.files["certs/moox-ca.crt"])}
-	files := map[string][]byte{"ca.pem": f.files["certs/moox-ca.crt"], "hostagent-publisher.yaml": []byte("synthetic-private-host-token\n"), "metrics-publisher.yaml": []byte("synthetic-private-metrics-token\n")}
+	metadata := hostbundle.ClientMetadata{Version: 1, Status: "ok", OutputDir: "/control/material-exports/client-only", Roles: roles, CA: digest(f.files[hostbundle.CAFile])}
+	files := map[string][]byte{"ca.pem": f.files[hostbundle.CAFile], "hostagent-publisher.yaml": []byte("synthetic-private-host-token\n"), "metrics-publisher.yaml": []byte("synthetic-private-metrics-token\n")}
 	for name, raw := range files {
 		metadata.Files = append(metadata.Files, hostbundle.File{Path: name, SHA256: digest(raw), Size: int64(len(raw))})
 	}
@@ -63,17 +63,17 @@ func TestEventBusClientRelayPinsFilesAndRejectsBrokerKeysAndChangedBytes(t *test
 // 服务端导出（给运行 broker 的主机）多带证书、私钥和用户表；缺一个、多一个或清单没有声明 Server 都必须被拒绝，
 // 普通的客户端导出也不能夹带这三个文件。
 func TestEventBusServerExportCarriesBrokerMaterialOnlyWhenDeclared(t *testing.T) {
-	f := newFixture(t, "storage", []string{"eventbus"}, false)
+	f := newFixture(t, "storage", false)
 	roles := []string{"eventbus-internal-admin", "metrics-publisher"}
 	build := func(server bool, extra map[string][]byte) (hostbundle.ClientMetadata, map[string][]byte) {
-		files := map[string][]byte{"ca.pem": f.files["certs/moox-ca.crt"], "eventbus-internal-admin.yaml": []byte("synthetic-internal-admin\n"), "metrics-publisher.yaml": []byte("synthetic-metrics\n")}
+		files := map[string][]byte{"ca.pem": f.files[hostbundle.CAFile], "eventbus-internal-admin.yaml": []byte("synthetic-internal-admin\n"), "metrics-publisher.yaml": []byte("synthetic-metrics\n")}
 		if server {
 			files["server.pem"], files["server-key.pem"], files["users.yaml"] = []byte("cert\n"), []byte("key\n"), []byte("users:\n")
 		}
 		for name, raw := range extra {
 			files[name] = raw
 		}
-		metadata := hostbundle.ClientMetadata{Version: 1, Status: "ok", OutputDir: "/storage/material-exports/eventbus", Roles: roles, CA: digest(f.files["certs/moox-ca.crt"]), Server: server}
+		metadata := hostbundle.ClientMetadata{Version: 1, Status: "ok", OutputDir: "/storage/material-exports/eventbus", Roles: roles, CA: digest(f.files[hostbundle.CAFile]), Server: server}
 		for name, raw := range files {
 			metadata.Files = append(metadata.Files, hostbundle.File{Path: name, SHA256: digest(raw), Size: int64(len(raw))})
 		}

@@ -19,7 +19,12 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 )
 
-const defaultRepairTimeout = 2 * time.Minute
+// defaultRepairTimeout 是 repair-view 的整体时限。要明显大于 storage-view 单元的 TimeoutStopSec（120 秒）：
+// 停得慢时不能让命令自己的超时先到。
+const defaultRepairTimeout = 10 * time.Minute
+
+// restoreStorageViewCommand 是 storage-view 被停掉之后恢复它的命令，报错与提示里原样给出。
+const restoreStorageViewCommand = "moox-cli setup start-component --host <存储机> --component storage-view --yes"
 
 // repairViewOptions 是 repair-view 的参数：重建指定 View。
 type repairViewOptions struct {
@@ -154,17 +159,25 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 	if opts.dryRun {
 		return writeOperationResult(stdout, operationResult{Module: "storage", Action: "repair-view", Status: "dry_run", Summary: summary})
 	}
-	if err := stopStorageView(ctx); err != nil {
-		return fmt.Errorf("停掉 storage-view：%w", err)
-	}
+	// 恢复要在停之前就登记好：systemctl disable --now 停得慢、被命令的超时打断时，单元可能已经被停用（disabled），
+	// 不恢复的话之后每次部署都会把它当成用户停用的、不再拉起。--restart=false 时不自动恢复，但把恢复命令告诉用户。
 	started := false
 	defer func() {
-		if !started && opts.restart {
-			if err := startStorageView(context.Background()); err != nil {
-				fmt.Fprintf(stderr, "恢复 storage-view 失败，请执行 moox-cli setup start-component --host <存储机> --component storage-view --yes：%v\n", err)
-			}
+		if started {
+			return
+		}
+		if !opts.restart {
+			fmt.Fprintf(stderr, "storage-view 保持停用（--restart=false）；要恢复时执行 %s\n", restoreStorageViewCommand)
+			return
+		}
+		// 用新的上下文：走到这里时命令自己的时限可能已经到了。
+		if err := startStorageView(context.Background()); err != nil {
+			fmt.Fprintf(stderr, "恢复 storage-view 失败，请执行 %s：%v\n", restoreStorageViewCommand, err)
 		}
 	}()
+	if err := stopStorageView(ctx); err != nil {
+		return fmt.Errorf("停掉 storage-view：%w。storage-view 可能已经被停用；命令结束时会尝试恢复，没恢复成功就执行 %s", err, restoreStorageViewCommand)
+	}
 	removed, err := purgeRepairViewIndexes(viewIndexRoot, engine, indexID)
 	if err != nil {
 		return fmt.Errorf("删除 View 索引：%w", err)

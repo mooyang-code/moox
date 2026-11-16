@@ -55,7 +55,7 @@ type RetentionConfig struct {
 // Default 返回默认配置。
 func Default() *Config {
 	return &Config{
-		GatewayClient: gatewayclient.FileConfig{Caller: "callback-dispatcher", KeyFile: "../../secrets/caller-callback-dispatcher.key"},
+		GatewayClient: gatewayclient.FileConfig{Caller: "callback-dispatcher", KeyFile: "../../secrets/host.key"},
 		Database:      DatabaseConfig{Path: "./data/moox_callback_dispatcher.db"},
 		EventBus:      EventBusConfig{URLs: []string{"nats://127.0.0.1:4222"}},
 		Delivery: DeliveryConfig{

@@ -21,15 +21,11 @@ make test-deployment-packages
 
 K 线读取和 SCF 金丝雀的 Storage 核验使用 `gatewayclient` 隧道模式：先经 control 的 SSH 隧道读取 Directory，再按主机 ID 复用到对应主机 `127.0.0.1:11002` 的 SSH 隧道。SSH 地址与主机密钥取自 `moox.toml` 和操作员的已知主机库；Directory 中的公网地址不用于直连。关闭命令时释放目录连接、RPC 连接与 SSH 隧道，失效的 SSH 连接在下一次解析时重建。
 
-操作员身份安装为 `~/.config/moox/gateway-client.yaml` 与 `caller-moox-cli.key`，均为 0600 普通文件。Admin bootstrap 的 `operator/` 目录一并导出这两个文件；实际取回安装由部署阶段完成。配置中的 KeyID 必须使用 Admin 返回的值：
+操作员身份是 `~/.config/moox/moox-cli.key`：`moox-cli` 的 ed25519 签名私钥（0600 普通文件），只在这台电脑上生成。`setup operator` 生成它（已有就复用），
+`setup install` 的第一步就是它；公钥在部署控制机时由 bootstrap 登记，已经装好的系统换电脑用 `setup operator --register`（经 SSH 在控制机上替换登记的公钥，原电脑随即不能用）。
+同目录下的 `gateway-bootstrap.json`、`moox-ca.crt` 是部署控制机时记下的 MooX CA 指纹与根证书，之后取别的主机的身份包都按它校验。`setup wipe` 清空全部主机后把这三个文件一起删掉。
 
-```yaml
-caller: moox-cli
-key_id: <Admin 分配的公开 KeyID>
-key_file: caller-moox-cli.key
-```
-
-`data kline get --file /absolute/path/moox.toml --config /absolute/path/data-access.yaml ...` 使用前者选择 SSH 主机，后者只包含 Storage 读取角色凭据与数据集目录；`setup export-skill-config` 不导出网关签名密钥。Collector 清单使用对象调用，任务 CRUD 使用原始 JSON 转发，两者复用金丝雀命令持有的同一 SSH 网关客户端。
+`data kline get --file /absolute/path/moox.toml --config /absolute/path/data-access.yaml ...` 使用前者选择 SSH 主机，后者只包含 Storage 读取角色凭据与数据集目录；`setup export-skill-config` 在本机生成 `moox-skill` 的签名私钥（存在 `~/.config/moox/moox-skill.key`，反复导出是同一把）、把公钥登记到控制机，并把私钥抄一份到输出文件旁边的 `.moox-skill-keys/`。Collector 清单使用对象调用，任务 CRUD 使用原始 JSON 转发，两者复用金丝雀命令持有的同一 SSH 网关客户端。
 
 云账号、代码包与云函数的命令（`collector account`、`collector package`、`collector function`）调 Collector 的 CollectMgr，使用同一 SSH 网关入口。相关命令的 `--file` 默认 `./moox.toml`，用于选择可信 SSH 主机；COS 文件上传仍使用返回的预签名 HTTPS 地址。读回、删除与出口探测采用服务目录中的方法超时，命令退出统一关闭连接。
 

@@ -11,14 +11,17 @@ import (
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	// 注册原生 tRPC 帧的压缩与包体上限：跨主机进来的请求是压缩过的，网关进程必须认得。
+	_ "github.com/mooyang-code/moox/packages/gatewayauth/nativewire"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-type nonceConsumer interface {
-	Consume(context.Context, string, string, time.Duration) (bool, error)
+// replayGuard 是进程内的防重放检查（gatewayauth.Replay）。
+type replayGuard interface {
+	Accept(gatewayauth.Claims, time.Time) error
 }
 type Metrics interface {
 	AuthFailed()
@@ -33,7 +36,7 @@ type Forwarder interface {
 
 type ServiceOptions struct {
 	State     *snapshot.State
-	Nonces    nonceConsumer
+	Replay    replayGuard
 	Metrics   Metrics
 	Now       func() time.Time
 	Forwarder Forwarder
@@ -46,8 +49,8 @@ type Proxy struct {
 }
 
 func NewService(options ServiceOptions) (*Proxy, error) {
-	if options.State == nil || options.Nonces == nil {
-		return nil, errors.New("host gateway requires snapshot and durable nonce store")
+	if options.State == nil || options.Replay == nil {
+		return nil, errors.New("host gateway requires snapshot and replay guard")
 	}
 	if options.Now == nil {
 		options.Now = time.Now
@@ -110,14 +113,25 @@ func (p *Proxy) handle(_ interface{}, ctx context.Context, decode server.FilterF
 		for key, value := range message.ServerMetaData() {
 			headers.Add(key, string(value))
 		}
-		claims, err := view.Verify(gatewayauth.Request{Method: "POST", Path: path, TargetNode: view.HostID(), Callee: service, Func: method, Body: body}, headers, p.options.Now())
-		if err != nil {
+		// 验签、时间窗、防重放、调用名单任何一步不过都在转发之前拒绝，统一返回专用错误码：
+		// 请求没有到达服务，调用方可以重新签名重发一次（写方法也一样）。原因只记指标，不回给调用方。
+		reject := func(replayed bool) (interface{}, error) {
 			status = http.StatusUnauthorized
 			if p.options.Metrics != nil {
-				p.options.Metrics.AuthFailed()
+				if replayed {
+					p.options.Metrics.ReplayFailed()
+				} else {
+					p.options.Metrics.AuthFailed()
+				}
 			}
-			// 框架级鉴权失败码：调用方据此刷新目录（服务撤离会同时撤销调用方密钥）。
-			return nil, errs.NewFrameError(errs.RetServerAuthFail, err.Error())
+			return nil, errs.NewFrameError(gatewayauth.RetRejected, "host gateway rejected the request signature or caller")
+		}
+		claims, err := view.Verify(gatewayauth.Request{TargetNode: view.HostID(), Callee: service, Func: method, Body: body}, headers, p.options.Now())
+		if err != nil {
+			return reject(false)
+		}
+		if err := p.options.Replay.Accept(claims, p.options.Now()); err != nil {
+			return reject(true)
 		}
 		if view.Disabled() {
 			status = http.StatusServiceUnavailable
@@ -132,27 +146,19 @@ func (p *Proxy) handle(_ interface{}, ctx context.Context, decode server.FilterF
 		labelService, labelMethod = route.ComponentID, method
 		if !p.catalog.Allowed(claims.Caller, service, method) || !slices.Contains(route.Callers, claims.Caller) {
 			status = http.StatusForbidden
-			return nil, errors.New("caller is not allowed for service/method")
+			if p.options.Metrics != nil {
+				p.options.Metrics.AuthFailed()
+			}
+			return nil, errs.NewFrameError(gatewayauth.RetRejected, "host gateway rejected the request signature or caller")
 		}
 		if int64(len(body)) > route.MaxBodyBytes {
 			status = http.StatusRequestEntityTooLarge
 			return nil, errors.New("host gateway request exceeds route body limit")
 		}
-		consumed, err := p.options.Nonces.Consume(ctx, "host-gateway:"+claims.KeyID, claims.Nonce, claims.TTL)
-		if err != nil {
-			status = http.StatusServiceUnavailable
-			return nil, errors.New("host gateway replay store unavailable")
-		}
-		if !consumed {
-			status = http.StatusUnauthorized
-			if p.options.Metrics != nil {
-				p.options.Metrics.ReplayFailed()
-			}
-			return nil, errors.New("host gateway request replayed")
-		}
+		metadata := upstreamMetadata(service, claims, message.ServerMetaData())
 		upstreamCtx, cancel := context.WithTimeout(ctx, time.Duration(route.TimeoutMS)*time.Millisecond)
 		defer cancel()
-		response, err := p.options.Forwarder.Forward(upstreamCtx, route, serialization, body, message.ServerMetaData())
+		response, err := p.options.Forwarder.Forward(upstreamCtx, route, serialization, body, metadata)
 		if err != nil {
 			status = http.StatusBadGateway
 			if p.options.Metrics != nil {
@@ -167,6 +173,21 @@ func (p *Proxy) handle(_ interface{}, ctx context.Context, decode server.FilterF
 		status = http.StatusOK
 		return &codec.Body{Data: response}, nil
 	})
+}
+
+// upstreamMetadata 是转给本机被调服务的元数据：外面带进来的 x-moox- 头一律不往后传（签名到网关为止）；
+// 只有 GatewayControl 另外收到网关写的、验过的签名主机 ID，它用这个头认是哪台主机的网关在调。
+func upstreamMetadata(service string, claims gatewayauth.Claims, inbound codec.MetaData) codec.MetaData {
+	metadata := codec.MetaData{}
+	for key, value := range inbound {
+		if !strings.HasPrefix(strings.ToLower(key), "x-moox-") {
+			metadata[key] = value
+		}
+	}
+	if service == servicecatalog.GatewayControlPath {
+		metadata[gatewayauth.HeaderVerifiedHost] = []byte(claims.Host)
+	}
+	return metadata
 }
 
 func (p *Proxy) String() string {

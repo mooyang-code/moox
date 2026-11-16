@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -63,13 +64,13 @@ func ParseBytes(raw string) (int64, error) {
 
 // Config 是 worker 的应用配置（config/app.yaml）。
 type Config struct {
-	GatewayClient gatewayclient.ExternalFileConfig `yaml:"gateway_client"`
-	Worker        WorkerSection                    `yaml:"worker"`
-	Staging       StagingSection                   `yaml:"staging"`
-	Pacing        PacingSection                    `yaml:"pacing"`
-	Health        HealthSection                    `yaml:"health"`
-	DataAPI       DataAPISection                   `yaml:"data_api"`
-	Maintenance   MaintenanceSection               `yaml:"maintenance"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	Worker        WorkerSection            `yaml:"worker"`
+	Staging       StagingSection           `yaml:"staging"`
+	Pacing        PacingSection            `yaml:"pacing"`
+	Health        HealthSection            `yaml:"health"`
+	DataAPI       DataAPISection           `yaml:"data_api"`
+	Maintenance   MaintenanceSection       `yaml:"maintenance"`
 	// ObjectStore 是导出文件的对象存储副本；整段省略（nil）表示不使用。
 	ObjectStore *objectstore.Config `yaml:"object_store"`
 	sourcePath  string
@@ -347,10 +348,13 @@ func (c *Config) StatePath() string {
 	return filepath.Join(c.Worker.RootDir, ".state", "staging.db")
 }
 
-// OpenGateway 打开经 Access 的外部网关客户端。
+// OpenGateway 打开 worker 的网关客户端：worker 和别的组件一样用所在主机的密钥签名，经本机网关取目录，
+// 再按目录直连存储机与控制机的网关。目录缓存放在暂存库旁边。
 func (c *Config) OpenGateway() (*gatewayclient.Client, error) {
 	if c.sourcePath == "" {
 		return nil, fmt.Errorf("worker 网关客户端需要先载入配置文件")
 	}
-	return c.GatewayClient.OpenExternal(c.sourcePath)
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.StatePath()), func(err error) {
+		log.Printf("archive-worker 刷新服务目录失败: %v", err)
+	})
 }

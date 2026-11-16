@@ -50,8 +50,7 @@ func TestLocalDirectoryVersionsPBJSONAndNoVerificationKeys(t *testing.T) {
 		require.NoError(t, codec.Unmarshal(serialization, body, response))
 		require.True(t, response.Changed)
 		for _, key := range first.Proto().VerificationKeys {
-			require.NotContains(t, string(body), key.KeyId)
-			require.NotContains(t, string(body), string(key.Secret))
+			require.NotContains(t, string(body), string(key.PublicKey))
 		}
 	}
 	// A deployment withdrawal changes the directory on the very next request.

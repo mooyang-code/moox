@@ -6,7 +6,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
-	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/archiveproxy"
 	authsvr "github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
@@ -18,7 +17,6 @@ import (
 	sysdeployrpc "github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy/rpc"
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
-	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -57,11 +55,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	if err := register(&adminpb.AuthServer_ServiceDesc, authImp); err != nil {
 		return err
 	}
-	master, err := adminsecurity.GetEncryptionKey()
-	if err != nil {
-		return err
-	}
-	control, err := gatewaycontrol.NewService(services.DBManager.GetDB(), cfg.AdminNodeID, master)
+	control, err := gatewaycontrol.NewService(services.DBManager.GetDB(), cfg.AdminNodeID)
 	if err != nil {
 		return err
 	}
@@ -109,7 +103,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 
-	gateway, err := newConsoleGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master)
+	gateway, err := newConsoleGateway(services.DBManager.GetDB(), cfg.AdminNodeID, hostKeyFile())
 	if err != nil {
 		return err
 	}

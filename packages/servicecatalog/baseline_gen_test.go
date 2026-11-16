@@ -78,14 +78,13 @@ func TestGenerateACLBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const hostGateway = "host-gateway@control"
 	out := baselineFile{
-		Note:       "批 4 T0 记下的服务目录访问控制基线：callers 是 Allowed(调用方, 服务, 方法) 为真的“服务/方法”集合，principals 是 PrincipalAllowed 为真的集合；host-gateway@* 用 host-gateway@control 代表。T3 用它核对新旧结果一致。",
+		Note:       "批 4 T0 记下的服务目录访问控制基线：callers 是 Allowed(调用方, 服务, 方法) 为真的“服务/方法”集合，principals 是 PrincipalAllowed 为真的集合；host-gateway 是每台主机的网关（签名主机另由签名头给出）。改服务目录后重新生成并人工看差异，访问控制不得变宽。",
 		Callers:    map[string][]string{},
 		Principals: map[string][]string{},
 		RelayHTTP:  []baselineRelay{},
 	}
-	callers := map[string]bool{"console": true, "moox-cli": true, "access": true, hostGateway: true}
+	callers := map[string]bool{"console": true, "moox-cli": true, "access": true, hostGatewayCaller: true}
 	type pair struct{ path, method string }
 	all := []pair{}
 	for _, component := range c.Components {
@@ -114,9 +113,6 @@ func TestGenerateACLBaseline(t *testing.T) {
 			}
 			for _, method := range service.Methods {
 				for _, caller := range method.Callers {
-					if caller == hostGatewayCaller {
-						caller = hostGateway
-					}
 					callers[caller] = true
 				}
 			}

@@ -91,7 +91,7 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("解析策略配置路径失败：%w", err)
 	}
-	c := Config{sourcePath: absolute, GatewayClient: gatewayclient.FileConfig{Caller: "strategy", KeyFile: "../../secrets/caller-strategy.key"}}
+	c := Config{sourcePath: absolute, GatewayClient: gatewayclient.FileConfig{Caller: "strategy", KeyFile: "../../secrets/host.key"}}
 	// 严格解析：未知字段（例如已经删除的 gateway_url、target）直接报错，不静默忽略。
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)

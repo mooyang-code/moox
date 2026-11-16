@@ -30,7 +30,7 @@ func TestCompleteSnapshotPersistenceAndCorruption(t *testing.T) {
 		require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
 	}
 	raw := view.Proto()
-	raw.VerificationKeys[0].Secret[0] ^= 1
+	raw.VerificationKeys[0].PublicKey[0] ^= 1
 	encoded, err := proto.Marshal(raw)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cache.Path(), encoded, 0o600))

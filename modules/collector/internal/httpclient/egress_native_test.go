@@ -27,6 +27,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -154,9 +155,9 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 		}
 	})
 	ready := filepath.Join(root, "gateway.ready")
-	credential := gatewayauth.Credentials{Caller: "collector", KeyID: "assigned-egress-collector-13", Secret: "fixture-egress-collector-key-at-least-32-bytes"}
-	cmd := exec.Command(binary, "-mode=egress-native", "-node-id=overseas", "-upstream-addr="+listener.Addr().String(), "-ready-file="+ready, "-nonce-dir="+filepath.Join(root, "nonces"), "-key-id="+credential.KeyID)
-	cmd.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+credential.Secret)
+	credential := authtest.Component("collector", "overseas")
+	cmd := exec.Command(binary, "-mode=egress-native", "-node-id=overseas", "-upstream-addr="+listener.Addr().String(), "-ready-file="+ready)
+	cmd.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_PUBLIC_KEY="+gatewayauth.EncodePublicKey(credential.PublicKey()))
 	logFile, err := os.Create(filepath.Join(root, "gateway.log"))
 	require.NoError(t, err)
 	cmd.Stdout, cmd.Stderr = logFile, logFile

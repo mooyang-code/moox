@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS t_hosts (
     c_ssh_user TEXT NOT NULL DEFAULT '',
     -- 首次连接记录的主机密钥指纹，格式为“地址:端口 指纹”，地址或端口变化后自然失效
     c_ssh_fingerprint TEXT NOT NULL DEFAULT '',
+    -- 这台主机的签名公钥（base64 的 32 字节 ed25519 公钥），本机全部组件共用；空表示还没签发过身份包。私钥只在主机上
+    c_sign_public_key TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('enabled', 'disabled')),
@@ -78,6 +80,13 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_hosts SET c_mtime = CURRENT_TIMESTAMP WHERE c_host_id = OLD.c_host_id;
 END;
+
+-- 不属于主机的签名身份的公钥：moox-cli、scf-collector、moox-skill、collector-operator。一个身份一把，没有新旧并存
+CREATE TABLE IF NOT EXISTS t_identity_keys (
+    c_identity TEXT NOT NULL PRIMARY KEY,
+    c_sign_public_key TEXT NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS t_deployments (
     c_host_id TEXT NOT NULL,

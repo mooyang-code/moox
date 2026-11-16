@@ -9,7 +9,7 @@ import (
 
 func TestConfigRoundTripAndReleaseRelativePaths(t *testing.T) {
 	for _, host := range []string{"control", "overseas"} {
-		config := Default(host, "control", "2001:db8::1", "fixture-key-id")
+		config := Default(host, "control", "2001:db8::1")
 		raw, err := Encode(config)
 		if err != nil {
 			t.Fatal(err)
@@ -27,7 +27,7 @@ func TestConfigRoundTripAndReleaseRelativePaths(t *testing.T) {
 			t.Fatal(err)
 		}
 		base := filepath.Dir(filepath.Dir(dir))
-		if loaded.Host != config.Host || loaded.Control.KeyID != config.Control.KeyID || loaded.Control.KeyFile != filepath.Join(base, "secrets", "caller-host-gateway.key") || loaded.TLS.CAFile != filepath.Join(base, "certs", "moox-ca.crt") || loaded.Store.Path != filepath.Join(base, "data", "host-gateway") {
+		if loaded.Host != config.Host || loaded.Control.KeyFile != filepath.Join(base, "secrets", "host.key") || loaded.TLS.CAFile != filepath.Join(base, "secrets", "moox-ca.crt") || loaded.Store.Path != filepath.Join(base, "data", "host-gateway") {
 			t.Fatalf("incorrect release path resolution: %+v", loaded)
 		}
 		want := "[2001:db8::1]:11003"
@@ -44,9 +44,6 @@ func TestConfigRejectsInvalidIdentityListenersAndControlEndpoint(t *testing.T) {
 	for _, change := range []func(*Config){
 		func(c *Config) { c.Host.ID = "Control" },
 		func(c *Config) { c.Control.HostID = "../control" },
-		func(c *Config) { c.Control.Caller = "host-gateway@storage" },
-		func(c *Config) { c.Control.KeyID = "" },
-		func(c *Config) { c.Control.KeyID = "key\x01" },
 		func(c *Config) { c.Server.LocalAddr = "0.0.0.0:11002" },
 		func(c *Config) { c.Server.HealthAddr = "0.0.0.0:11012" },
 		func(c *Config) { c.Server.RemoteAddr = "localhost:11003" },
@@ -57,7 +54,7 @@ func TestConfigRejectsInvalidIdentityListenersAndControlEndpoint(t *testing.T) {
 		func(c *Config) { c.TLS.CAFile = "" },
 		func(c *Config) { c.Control.KeyFile = "bad\npath" },
 	} {
-		config := Default("control", "control", "192.0.2.1", "fixture-key")
+		config := Default("control", "control", "192.0.2.1")
 		change(&config)
 		if err := config.Validate(); err == nil {
 			t.Fatalf("accepted invalid configuration: %+v", config)
@@ -66,7 +63,7 @@ func TestConfigRejectsInvalidIdentityListenersAndControlEndpoint(t *testing.T) {
 }
 
 func TestConfigStrictBoundedYAMLNeverEchoesUnknownValues(t *testing.T) {
-	raw, err := Encode(Default("control", "control", "192.0.2.1", "fixture-key"))
+	raw, err := Encode(Default("control", "control", "192.0.2.1"))
 	if err != nil {
 		t.Fatal(err)
 	}

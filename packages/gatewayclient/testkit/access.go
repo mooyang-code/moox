@@ -46,12 +46,14 @@ type Access struct {
 func StartAccess(t *testing.T, options AccessOptions) Access {
 	t.Helper()
 	root := t.TempDir()
-	internal := gatewayauth.Credentials{Caller: "access", KeyID: "assigned-internal-access-85", Secret: "fixture-internal-access-signing-key-at-least-32-bytes"}
+	// access 和别的组件一样用所在主机的密钥签名。
+	hostKey, err := gatewayauth.GenerateSigningKey()
+	require.NoError(t, err)
+	internal := gatewayauth.Credentials{Caller: "access", Host: options.HostID, Key: hostKey}
 	gatewayReady := filepath.Join(root, "gateway.ready")
-	gateway := start(t, root, options.GatewayBinary, append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+internal.Secret),
+	gateway := start(t, root, options.GatewayBinary, append(os.Environ(), "MOOX_GATEWAY_E2E_PUBLIC_KEY="+gatewayauth.EncodePublicKey(internal.PublicKey())),
 		"-mode=access-native", "-node-id="+options.HostID, "-upstream-addr="+options.StorageAddress,
-		"-ready-file="+gatewayReady,
-		"-nonce-dir="+filepath.Join(root, "gateway-nonces"), "-key-id="+internal.KeyID)
+		"-ready-file="+gatewayReady)
 	var gatewayAddress string
 	wait(t, gateway, func() bool {
 		value, err := os.ReadFile(gatewayReady)
@@ -62,19 +64,17 @@ func StartAccess(t *testing.T, options AccessOptions) Access {
 	})
 	caPath := filepath.Join(root, "ca.crt")
 	writeCA(t, caPath)
-	write(t, filepath.Join(root, "secrets/access.key"), []byte(internal.Secret))
+	write(t, filepath.Join(root, "secrets/host.key"), []byte(gatewayauth.EncodeSigningKey(hostKey)+"\n"))
 	entries := make([]map[string]string, 0, len(options.ExternalCredentials))
-	for index, credential := range options.ExternalCredentials {
-		file := fmt.Sprintf("external-%d.key", index)
-		write(t, filepath.Join(root, "secrets", file), []byte(credential.Secret))
-		entries = append(entries, map[string]string{"caller": credential.Caller, "key_id": credential.KeyID, "secret_file": file})
+	for _, credential := range options.ExternalCredentials {
+		entries = append(entries, map[string]string{"identity": credential.Caller, "public_key": gatewayauth.EncodePublicKey(credential.PublicKey())})
 	}
-	registry, err := json.Marshal(map[string]any{"version": 1, "credentials": entries})
+	registry, err := json.Marshal(map[string]any{"version": 2, "identities": entries})
 	require.NoError(t, err)
 	write(t, filepath.Join(root, "secrets/verification.json"), registry)
 	app := map[string]any{
 		"gateway_client": map[string]string{
-			"caller": "access", "key_id": internal.KeyID, "key_file": "../../secrets/access.key",
+			"caller": "access", "key_file": "../../secrets/host.key",
 			"host_id": options.HostID, "local_address": gatewayAddress, "ca_file": caPath,
 		},
 		"verification_file": "../../secrets/verification.json", "nonce_path": "../../data/access/nonces.db",

@@ -30,7 +30,6 @@ require (
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/seriesset v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
@@ -205,7 +204,6 @@ replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/s
 
 replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
 
-replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
 

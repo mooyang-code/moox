@@ -1,59 +1,76 @@
 package identitybundle
 
 import (
-	"context"
-	"io"
 	"os"
-	"path"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
-func TestOperatorInstallationDownloadsOnlyAssignedIdentityAndPreservesPin(t *testing.T) {
-	f := newFixture(t, "control", []string{"admin", "access"}, true)
-	allowed := map[string]bool{"bundle.json": true, "operator/gateway-client.yaml": true, "operator/caller-moox-cli.key": true, "certs/moox-ca.crt": true}
-	download := func(ctx context.Context, name string, out io.Writer) (int64, error) {
-		require.True(t, allowed[name[len(f.metadata.BundleDir)+1:]], "must not transfer another component's private material")
-		return f.download(t)(ctx, name, out)
-	}
-	directory := privateParent(t)
-	metadata := f.metadata
-	for range 2 {
-		require.NoError(t, InstallOperator(t.Context(), download, metadata, f.options, directory))
-	}
-	raw, err := os.ReadFile(filepath.Join(directory, "gateway-client.yaml"))
+// moox-cli 的私钥只在操作电脑上生成：已有就原样复用（重跑安装不换密钥），没有才生成；文件 0600。
+func TestEnsureSigningKeyFileCreatesOnceAndReuses(t *testing.T) {
+	directory := filepath.Join(privateParent(t), "moox")
+	path := filepath.Join(directory, OperatorKeyFile)
+	first, created, err := EnsureSigningKeyFile(path)
 	require.NoError(t, err)
-	var config hostbundle.OperatorConfig
-	require.NoError(t, yaml.Unmarshal(raw, &config))
-	require.Equal(t, "moox-cli", config.Caller)
-	secret, err := gatewayauth.ReadSigningSecret(config.KeyFile)
+	require.True(t, created)
+	info, err := os.Stat(path)
 	require.NoError(t, err)
-	require.Equal(t, strings.TrimSpace(string(f.files["operator/caller-moox-cli.key"])), secret)
-	ca, err := os.ReadFile(filepath.Join(directory, "moox-ca.crt"))
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	second, created, err := EnsureSigningKeyFile(path)
 	require.NoError(t, err)
-	require.Equal(t, f.files["certs/moox-ca.crt"], ca, "经中转连接出站主机需要 MooX CA")
-	for _, name := range []string{"gateway-client.yaml", "gateway-bootstrap.json", "moox-ca.crt", filepath.Base(config.KeyFile)} {
-		info, err := os.Stat(filepath.Join(directory, name))
-		require.NoError(t, err)
-		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
-	}
-	other := newFixture(t, "control", []string{"admin", "access"}, true)
-	require.ErrorContains(t, InstallOperator(t.Context(), other.download(t), other.metadata, other.options, directory), "another control CA")
-	after, err := os.ReadFile(filepath.Join(directory, "gateway-client.yaml"))
+	require.False(t, created)
+	require.True(t, first.Equal(second))
+	loaded, err := ReadOperatorKey(directory)
 	require.NoError(t, err)
-	require.Equal(t, raw, after)
-	badDownload := func(ctx context.Context, name string, out io.Writer) (int64, error) {
-		if path.Base(name) == "caller-moox-cli.key" {
-			n, err := out.Write([]byte("tampered"))
-			return int64(n), err
-		}
-		return download(ctx, name, out)
-	}
-	require.Error(t, InstallOperator(t.Context(), badDownload, metadata, f.options, privateParent(t)))
+	require.Equal(t, PublicKey(first), PublicKey(loaded))
+	_, err = gatewayauth.ParsePublicKey(PublicKey(first))
+	require.NoError(t, err)
+	// 文件坏了或权限放宽了：不悄悄换一把新的。
+	require.NoError(t, os.Chmod(path, 0o644))
+	_, _, err = EnsureSigningKeyFile(path)
+	require.Error(t, err)
+	require.NoError(t, os.Chmod(path, 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("corrupt\n"), 0o600))
+	_, _, err = EnsureSigningKeyFile(path)
+	require.Error(t, err)
+}
+
+// 操作电脑只存公开的信任信息（控制机与 CA 的指纹、根证书）；已经记了另一套 CA 时拒绝覆盖；清空后才能换。
+func TestOperatorTrustPinsOneControlCA(t *testing.T) {
+	directory := filepath.Join(privateParent(t), "moox")
+	_, _, err := EnsureSigningKeyFile(filepath.Join(directory, OperatorKeyFile))
+	require.NoError(t, err)
+	first := newFixture(t, "control", true)
+	require.NoError(t, InstallOperatorTrust(directory, first.metadata, first.files[hostbundle.CAFile]))
+	require.NoError(t, InstallOperatorTrust(directory, first.metadata, first.files[hostbundle.CAFile]), "重跑不报错")
+	pin, err := ReadOperatorPin(directory)
+	require.NoError(t, err)
+	require.Equal(t, OperatorPin{ControlHostID: "control", CA: first.options.ExpectedCA}, pin)
+	ca, err := os.ReadFile(filepath.Join(directory, OperatorCAFile))
+	require.NoError(t, err)
+	require.Equal(t, first.files[hostbundle.CAFile], ca)
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	require.Len(t, entries, 3, "只有私钥、指纹与根证书")
+
+	other := newFixture(t, "control", true)
+	require.Error(t, InstallOperatorTrust(directory, other.metadata, other.files[hostbundle.CAFile]), "另一套 CA")
+	require.Error(t, InstallOperatorTrust(directory, first.metadata, other.files[hostbundle.CAFile]), "根证书和清单对不上")
+
+	// 全新的控制机：清掉指纹与根证书，私钥留着（新控制机登记的就是它）。
+	require.NoError(t, RemoveOperatorTrust(directory))
+	_, err = ReadOperatorPin(directory)
+	require.Error(t, err)
+	_, err = ReadOperatorKey(directory)
+	require.NoError(t, err)
+	require.NoError(t, InstallOperatorTrust(directory, other.metadata, other.files[hostbundle.CAFile]))
+	// 清空全部主机之后：连私钥一起删。
+	require.NoError(t, RemoveOperatorIdentity(directory))
+	_, err = ReadOperatorKey(directory)
+	require.Error(t, err)
+	require.NoError(t, RemoveOperatorIdentity(directory), "没有东西可删时不报错")
 }

@@ -3,7 +3,6 @@
 package relay
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -15,11 +14,13 @@ import (
 
 	"github.com/hashicorp/yamux"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	protocol "github.com/mooyang-code/moox/packages/gatewayclient/relay"
 )
 
-type nonceConsumer interface {
-	Consume(context.Context, string, string, time.Duration) (bool, error)
+// replayGuard 是进程内的防重放检查（gatewayauth.Replay），与 RPC 入口共用一份。
+type replayGuard interface {
+	Accept(gatewayauth.Claims, time.Time) error
 }
 
 // Limits 限制中转资源，防止单个来源或会话耗尽 control。
@@ -40,7 +41,7 @@ func (l Limits) withDefaults() Limits {
 
 type ServerOptions struct {
 	State  *snapshot.State
-	Nonces nonceConsumer
+	Replay replayGuard
 	Limits Limits
 	Now    func() time.Time
 	Warn   func(string)
@@ -79,8 +80,8 @@ type Server struct {
 }
 
 func NewServer(options ServerOptions) (*Server, error) {
-	if options.State == nil || options.Nonces == nil {
-		return nil, errors.New("relay server requires snapshot and durable nonce store")
+	if options.State == nil || options.Replay == nil {
+		return nil, errors.New("relay server requires snapshot and replay guard")
 	}
 	if options.Now == nil {
 		options.Now = time.Now
@@ -106,42 +107,36 @@ func reply(conn net.Conn, message string) {
 	_ = protocol.WriteFrame(conn, protocol.Reply{Error: message})
 }
 
-// verify 读取并校验签名前导，返回已消费 nonce 的调用方。
-func (s *Server) verify(conn net.Conn, method string, body any) (*snapshot.View, string, error) {
+// verify 读取并校验签名前导，返回验过签、过了防重放的调用方。
+func (s *Server) verify(conn net.Conn, method string, body any) (*snapshot.View, gatewayauth.Claims, error) {
 	view := s.options.State.Load()
 	if view == nil {
-		return nil, "", errors.New("gateway snapshot not initialized")
+		return nil, gatewayauth.Claims{}, errors.New("gateway snapshot not initialized")
 	}
 	var signed protocol.Signed
 	if err := protocol.ReadFrame(conn, &signed); err != nil {
-		return nil, "", errors.New("invalid relay preamble")
+		return nil, gatewayauth.Claims{}, errors.New("invalid relay preamble")
 	}
 	if err := protocol.Decode(signed.Body, body); err != nil {
-		return nil, "", err
+		return nil, gatewayauth.Claims{}, err
 	}
 	claims, err := view.Verify(signed.Request(method, view.HostID()), signed.Headers, s.options.Now())
 	if err != nil {
-		return nil, "", errors.New("relay authentication failed")
+		return nil, gatewayauth.Claims{}, errors.New("relay authentication failed")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	consumed, err := s.options.Nonces.Consume(ctx, "host-gateway-relay:"+claims.KeyID, claims.Nonce, claims.TTL)
-	if err != nil {
-		return nil, "", errors.New("relay replay store unavailable")
+	if err := s.options.Replay.Accept(claims, s.options.Now()); err != nil {
+		return nil, gatewayauth.Claims{}, errors.New("relay request replayed")
 	}
-	if !consumed {
-		return nil, "", errors.New("relay request replayed")
-	}
-	return view, claims.Caller, nil
+	return view, claims, nil
 }
 
 // HandleAttach 接管一条已完成 TLS 握手（ALPN 为 attach、已校验客户端证书链）的连接。
 func (s *Server) HandleAttach(conn *tls.Conn) {
 	_ = conn.SetDeadline(time.Now().Add(protocol.PreambleTimeout))
 	var attach protocol.Attach
-	view, caller, err := s.verify(conn, protocol.MethodAttach, &attach)
+	view, claims, err := s.verify(conn, protocol.MethodAttach, &attach)
 	if err == nil {
-		err = s.checkAttach(conn, view, caller, attach)
+		err = s.checkAttach(conn, view, claims, attach)
 	}
 	if err != nil {
 		reply(conn, err.Error())
@@ -188,8 +183,8 @@ func (s *Server) HandleAttach(conn *tls.Conn) {
 	}()
 }
 
-func (s *Server) checkAttach(conn *tls.Conn, view *snapshot.View, caller string, attach protocol.Attach) error {
-	if attach.InstanceID == "" || len(attach.InstanceID) > 128 || caller != "host-gateway@"+attach.HostID {
+func (s *Server) checkAttach(conn *tls.Conn, view *snapshot.View, claims gatewayauth.Claims, attach protocol.Attach) error {
+	if attach.InstanceID == "" || len(attach.InstanceID) > 128 || claims.Caller != "host-gateway" || claims.Host != attach.HostID {
 		return errors.New("relay attach identity mismatch")
 	}
 	// 只接受目录里由本机中转、且仍启用的出站主机（停用的主机不在目录里）。
@@ -207,10 +202,10 @@ func (s *Server) checkAttach(conn *tls.Conn, view *snapshot.View, caller string,
 func (s *Server) HandleOpen(conn *tls.Conn) {
 	_ = conn.SetDeadline(time.Now().Add(protocol.PreambleTimeout))
 	var open protocol.Open
-	view, caller, err := s.verify(conn, protocol.MethodOpen, &open)
+	view, claims, err := s.verify(conn, protocol.MethodOpen, &open)
 	if err == nil {
 		target, ok := view.Relay(open.HostID)
-		if !ok || !target.Allowed(caller, open.Port) {
+		if !ok || !target.Allowed(claims.Caller, open.Port) {
 			err = errors.New("relay target or port is not allowed for this caller")
 		}
 	}

@@ -56,14 +56,7 @@ func (s *setupSource) resolve() error {
 	if s.root, err = filepath.Abs(source); err != nil {
 		return err
 	}
-	if s.operatorDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		s.operatorDir = filepath.Join(home, ".config", "moox")
-	}
-	if s.operatorDir, err = filepath.Abs(s.operatorDir); err != nil {
+	if err := s.resolveOperatorDir(); err != nil {
 		return err
 	}
 	if s.binaryDir != "" {
@@ -80,6 +73,20 @@ func (s *setupSource) resolve() error {
 	}
 	s.bundle = &manifest
 	return nil
+}
+
+// resolveOperatorDir 把操作员身份目录补成绝对路径，默认 ~/.config/moox。
+func (s *setupSource) resolveOperatorDir() error {
+	if s.operatorDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		s.operatorDir = filepath.Join(home, ".config", "moox")
+	}
+	var err error
+	s.operatorDir, err = filepath.Abs(s.operatorDir)
+	return err
 }
 
 // deployOptions 组出一台主机的部署参数。
@@ -126,14 +133,17 @@ func setupComponentOnHost(manifest *topology.Config, hostID, component string) (
 func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 	var file, host string
 	var components []string
+	var rotateHostKey bool
 	var source setupSource
 	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "把一台主机部署成 moox.toml 描述的样子：放二进制、渲染配置、按顺序重启有变化的组件，等它们就绪",
 		Long: `部署一台主机上的全部组件，或用 --component 只部署其中几个。每个组件是一个 systemd 用户服务 moox-<组件>。
 重跑同一条命令就是再做一遍：没有变化的组件不重启；上次装好之后被停用（setup stop）的组件只更新文件、保持停用。
-控制机每次部署都会先执行 moox-admin-cli bootstrap（建库、CA、主密钥、管理员、登记主机与部署，只建不改）；
+控制机每次部署都会先执行 moox-admin-cli bootstrap（建库、CA、主密钥、管理员、登记主机与部署、登记这台电脑的 moox-cli 公钥，只建不改）；
 其余主机先把登记同步到 Admin，再向控制机要身份材料。只部署个别组件时，服务目录变了会把这台主机的主机网关一起升级。
+每台主机有一把签名私钥（secrets/host.key），本机全部组件共用，Admin 只登记公钥。例行部署不换它：目标机上的私钥和登记的公钥一致就沿用，
+只重新签发主机证书；私钥丢了或对不上时会签发新的。--rotate-host-key 显式换掉它：旧私钥立即作废，这台主机上的组件全部重启。
 在源码目录里要用 --binary-dir 指定预先编译好的 Linux 二进制；在产物包目录里目标机按清单下载组件包。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -148,7 +158,9 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 			if err := setupvalidate.CheckDeployments(snapshot.Manifest); err != nil {
 				return err
 			}
-			result, err := deps.deployHost(cmd.Context(), source.deployOptions(cmd, snapshot, file, host, components))
+			options := source.deployOptions(cmd, snapshot, file, host, components)
+			options.RotateHostKey = rotateHostKey
+			result, err := deps.deployHost(cmd.Context(), options)
 			if len(result.Components) != 0 || len(result.Warnings) != 0 {
 				if writeErr := writeSetupJSON(cmd, result); writeErr != nil {
 					return writeErr
@@ -160,6 +172,7 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 的路径（同目录要有 moox.secrets.toml）")
 	cmd.Flags().StringVar(&host, "host", "", "主机 ID")
 	cmd.Flags().StringSliceVar(&components, "component", nil, "只部署这些组件（逗号分隔或重复写）；不写部署这台主机的全部组件")
+	cmd.Flags().BoolVar(&rotateHostKey, "rotate-host-key", false, "换掉这台主机的签名密钥（旧私钥立即作废，本机组件全部重启）；控制机不支持")
 	source.flags(cmd)
 	_ = cmd.MarkFlagRequired("host")
 	return cmd

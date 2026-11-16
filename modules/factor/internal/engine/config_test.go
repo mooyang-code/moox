@@ -10,11 +10,9 @@ import (
 )
 
 const minimalEngineConfig = `gateway_client:
-  access_address: storage.example:11004
-  access_id: access@storage
   caller: factor-engine
-  key_id: assigned-factor-engine-47
-  key_file: ../secrets/access-factor-engine.key
+  key_file: ../../secrets/host.key
+  host_id: factor
 eventbus:
   urls: [tls://control.example:4222]
 `
@@ -40,8 +38,9 @@ func TestEngineConfigDefaultsAndPaths(t *testing.T) {
 	require.Equal(t, time.Minute, cfg.CatalogSync.Interval)
 	require.Equal(t, 45*time.Second, cfg.CatalogSync.Offset)
 	require.Equal(t, filepath.Join(root, "data/engine/catalog.json"), cfg.CatalogSync.StateFile)
-	require.Equal(t, "../secrets/access-factor-engine.key", cfg.GatewayClient.KeyFile)
-	require.Equal(t, "assigned-factor-engine-47", cfg.GatewayClient.KeyID)
+	require.Equal(t, "../../secrets/host.key", cfg.GatewayClient.KeyFile)
+	require.Equal(t, "factor", cfg.GatewayClient.HostID)
+	require.Equal(t, "127.0.0.1:11002", cfg.GatewayClient.LocalAddress)
 	require.Equal(t, 500, cfg.Recalc.ChunkPeriods)
 	require.Equal(t, ByteSize(4<<30), cfg.Compute.MaxMemory)
 }
@@ -51,9 +50,12 @@ func TestEngineConfigRejectsDatabaseSection(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestEngineConfigRequiresCompleteExternalGateway(t *testing.T) {
-	_, err := Load(writeEngineConfig(t, "eventbus:\n  urls: [nats://127.0.0.1:4222]\n"))
-	require.ErrorContains(t, err, "access address")
+// 主机 ID 由部署渲染：没有它时配置能载入（离线命令要用），但打不开网关客户端。
+func TestEngineGatewayRequiresRenderedHostID(t *testing.T) {
+	cfg, err := Load(writeEngineConfig(t, "eventbus:\n  urls: [nats://127.0.0.1:4222]\n"))
+	require.NoError(t, err)
+	_, err = cfg.OpenGateway()
+	require.ErrorContains(t, err, "host_id")
 }
 
 func TestEngineConfigRejectsOffsetNotLessThanInterval(t *testing.T) {

@@ -41,7 +41,7 @@ func startAdminGateway(t *testing.T, wire *adminRPCWire) string {
 	t.Cleanup(func() { _ = service.Close(nil) })
 	temp := t.TempDir()
 	ready := filepath.Join(temp, "ready")
-	process := startGatewayHelperProcess(t, buildGatewayE2EHelper(t), "--mode", "doctor-native", "--node-id", klineGatewayNode, "--upstream-addr", listener.Addr().String(), "--ready-file", ready, "--nonce-dir", filepath.Join(temp, "nonces"), "--key-id", klineGatewayKeyID)
+	process := startGatewayHelperProcess(t, buildGatewayE2EHelper(t), "--mode", "doctor-native", "--node-id", klineGatewayNode, "--upstream-addr", listener.Addr().String(), "--ready-file", ready)
 	t.Cleanup(func() {
 		if process.stop(5 * time.Second) {
 			t.Errorf("Admin gateway required kill: %s", process.logs.String())

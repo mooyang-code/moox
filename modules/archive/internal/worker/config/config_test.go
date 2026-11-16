@@ -21,11 +21,9 @@ func write(t *testing.T, body string) string {
 
 var base = `
 gateway_client:
-  access_address: access.example.test:11004
-  access_id: access@storage
   caller: archive-worker
-  key_id: abc123
-  key_file: ../secrets/access-archive-worker.key
+  key_file: ../../secrets/host.key
+  host_id: factor
 worker:
   worker_id: archive-worker@testhost
   root_dir: ` + testRoot + `
@@ -132,21 +130,21 @@ func TestParseBytesAndClock(t *testing.T) {
 	}
 }
 
-func TestShippedWorkerConfigParsesOnceTheCredentialsAreFilledIn(t *testing.T) {
+func TestShippedWorkerConfigParses(t *testing.T) {
 	raw, err := os.ReadFile("../../../config/worker/app.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := strings.Replace(string(raw), `key_id: ""`, "key_id: abc123", 1)
-	cfg, err := Load(write(t, body))
+	cfg, err := Load(write(t, string(raw)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GatewayClient.Caller != Caller || cfg.Worker.RootDir != testRoot {
+	if cfg.GatewayClient.Caller != Caller || cfg.Worker.RootDir != testRoot || cfg.GatewayClient.KeyFile != "../../secrets/host.key" {
 		t.Fatalf("shipped = %+v", cfg)
 	}
-	if _, err := Load(write(t, string(raw))); err == nil {
-		t.Fatal("没有填 key_id 的示例配置不应通过校验")
+	// 主机 ID 由部署渲染；示例配置里是空的，打不开网关客户端。
+	if _, err := cfg.OpenGateway(); err == nil || !strings.Contains(err.Error(), "host_id") {
+		t.Fatalf("没有主机 ID 时不应打开网关客户端: %v", err)
 	}
 }
 

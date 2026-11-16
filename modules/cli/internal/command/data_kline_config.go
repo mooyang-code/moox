@@ -19,7 +19,6 @@ const (
 
 type dataAccessConfig struct {
 	GatewayClient *gatewayclient.ExternalFileConfig `yaml:"gateway_client,omitempty"`
-	SigningKey    string                            `yaml:"-"`
 	Version       int                               `yaml:"version"`
 	DataTypes     map[string]dataTypeConfig         `yaml:"data_types"`
 }

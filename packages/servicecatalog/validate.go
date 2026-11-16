@@ -24,11 +24,11 @@ func (c Catalog) Validate() error {
 	}
 	ids, binaries, paths := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	consoleRoutes := map[string]string{}
-	external := map[string]bool{}
+	components, external := map[string]bool{}, map[string]bool{}
 	for _, component := range c.Components {
-		external[component.ID] = component.ExternalProgram
+		components[component.ID], external[component.ID] = true, component.ExternalProgram
 	}
-	identities, err := c.validateIdentities(external)
+	identities, err := c.validateIdentities(components)
 	if err != nil {
 		return err
 	}
@@ -166,25 +166,19 @@ func (c Catalog) Validate() error {
 			return fmt.Errorf("external identity %q is not a caller of any method", id)
 		}
 	}
-	for _, component := range c.Components {
-		if component.ExternalProgram && !c.ExternalIdentity(component.ID) {
-			return fmt.Errorf("external program %q requires an external identity with the same ID", component.ID)
-		}
-	}
 	if len(c.ExternalIdentities()) != 0 && !ids["access"] {
 		return fmt.Errorf("external identities require the access component")
 	}
 	return nil
 }
 
-// validateIdentities 校验 identities：ID 合法、不重复，不能是人操作身份或保留的调用方写法；
-// 与组件同名时那个组件必须是外部程序（它以同名外部身份访问系统）。目前只有外部身份。
-func (c Catalog) validateIdentities(external map[string]bool) (map[string]bool, error) {
+// validateIdentities 校验 identities：ID 合法、不重复，不能是人操作身份、保留的调用方写法或组件 ID
+// （组件用所在主机的密钥签名，同名的非主机身份会让持有身份私钥的人冒充组件）。目前只有外部身份。
+func (c Catalog) validateIdentities(components map[string]bool) (map[string]bool, error) {
 	identities := map[string]bool{}
 	for _, identity := range c.Identities {
 		reserved := slices.Contains([]string{OperatorConsole, OperatorMooxCLI, "access", hostGatewayCaller}, identity.ID)
-		program, component := external[identity.ID]
-		if !identifier.MatchString(identity.ID) || identities[identity.ID] || reserved || component && !program {
+		if !identifier.MatchString(identity.ID) || identities[identity.ID] || reserved || components[identity.ID] {
 			return nil, fmt.Errorf("invalid or duplicate identity %q", identity.ID)
 		}
 		if !identity.External {

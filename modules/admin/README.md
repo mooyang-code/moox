@@ -18,15 +18,24 @@ go test -count=1 ./modules/admin/...
 
 ## 离线初始化与恢复
 
-`moox-admin-cli bootstrap` 不依赖运行中的服务，参数为 `--topology-file`、`--db-path`、`--encryption-key-file`、`--pki-dir`、`--output-dir`。拓扑输入是部署 CLI 提取的 0600 JSON（版本 1），只含 `control_host_id` 和 `hosts`；每台主机包含 `host_id`、`address`、可选的 `private_address`、`region`、`description` 及完整业务 `components` 列表。主机组件由 DAO 自动维护，不能出现在该列表中。
+`moox-admin-cli bootstrap` 不依赖运行中的服务，参数为 `--topology-file`、`--db-path`、`--encryption-key-file`、`--pki-dir`、`--output-dir`、`--operator-public-key`，
+以及可选的 `--current-sign-public-key`、`--current-scf-collector-public-key`（目标机上现有私钥的公钥）。拓扑输入是部署 CLI 提取的 0600 JSON（版本 1），只含 `control_host_id` 和 `hosts`；每台主机包含 `host_id`、`address`、可选的 `private_address`、`region`、`description` 及完整业务 `components` 列表。主机组件由 DAO 自动维护，不能出现在该列表中。
 
-命令建立 schema，按与在线 API 相同的校验在一个事务内写入拓扑和全部调用方密钥，验证或生成 MooX CA，提交后发布完整的 control 网关配置、证书与签名文件。输出只有包目录、相对路径、KeyID、证书摘要和逐文件摘要等元数据，包中的 `bundle.json` 保存同一份清单。配置路径统一为 `host-gateway/config/app.yaml`。主密钥与 CA 始终留在持久目录；输出中的 `operator/caller-moox-cli.key` 及 `operator/gateway-client.yaml` 只供部署端取回，配置记录实际分配的 KeyID 与相对密钥路径。Admin 启动时将 `MOOX_ADMIN_ENCRYPTION_KEY_FILE` 指向同一份持久主密钥。
+命令建立 schema，按与在线 API 相同的校验在一个事务内写入拓扑、登记操作电脑的 `moox-cli` 公钥（只在还没登记时写入，重复执行不改）、决定控制机的签名密钥，验证或生成 MooX CA，提交后发布控制机的身份包。
+签名密钥的规则：目标机上现有私钥的公钥和登记的一致就原样沿用，包里没有私钥；不一致或没有时生成一把新的 ed25519 私钥、登记公钥，私钥只写进这一次的身份包，Admin 不保留。
+部署了 collector 的主机另管 `scf-collector` 的私钥，规则相同。输出只有包目录、公钥、证书摘要和逐文件摘要等元数据，包中的 `bundle.json` 保存同一份清单。主密钥与 CA 始终留在持久目录。
+Admin 启动时将 `MOOX_ADMIN_ENCRYPTION_KEY_FILE` 指向同一份持久主密钥，`MOOX_ADMIN_HOST_KEY_FILE` 指向控制机的主机签名私钥（管理台以 `console` 的身份用它签名）。
 
-重跑复用 CA、主密钥和调用方密钥，保留主机与组件启停状态；每次部署重新签发叶证书。已存在加密记录却丢失主密钥，或已有网关密钥却丢失 CA 时，必须恢复原件。数据库提交后的输出错误可直接重跑，失败暂存目录不会成为可安装包。
+重跑复用 CA、主密钥和已登记的公钥，保留主机与组件启停状态；每次部署重新签发主机证书。已存在加密记录却丢失主密钥，或已经登记过签名公钥却丢失 CA 时，必须恢复原件。
+数据库提交后的输出错误可直接重跑：这次生成的私钥没有送到目标机，下一次目标机上的公钥和登记的对不上，会再签发一把。失败暂存目录不会成为可安装包。
 
-后续主机部署先通过 `SyncHostDeployments` 登记，再经 control 的可信 SSH 执行 `moox-admin-cli host-bundle --host-id <目标主机> --control-host-id <控制主机> --db-path <现有数据库> --encryption-key-file <持久主密钥> --pki-dir <持久CA目录> --output-dir <私密输出父目录>`。该命令只使用现有数据库、主密钥和 CA，从持久拓扑读取目标地址与完整部署，事务性地生成缺少的调用方密钥、复用已有 KeyID，再为本次部署重签叶证书并发布新的 0700 包；所有文件为 0600。停用主机和组件的材料也可导出，启停状态保持不变。未登记主机、错误控制主机、丢失或损坏的身份材料均拒绝继续。
+后续主机部署先通过 `SyncHostDeployments` 登记，再经 control 的可信 SSH 执行 `moox-admin-cli host-bundle --host-id <目标主机> --control-host-id <控制主机> --db-path <现有数据库> --encryption-key-file <持久主密钥> --pki-dir <持久CA目录> --output-dir <私密输出父目录> [--current-sign-public-key <公钥>] [--rotate-sign-key]`。
+该命令只使用现有数据库和 CA，从持久拓扑读取目标地址与完整部署，按上面的规则决定这台主机的签名密钥（`--rotate-sign-key` 显式更换），再为本次部署重签主机证书并发布新的 0700 包；所有文件为 0600。
+停用主机的材料也可签发，启停状态保持不变。未登记主机、错误控制主机、丢失或损坏的 CA 都会失败，不发布任何包。
 
-普通主机包只包含目标主机和它所部署组件的签名身份；control 才包含 `console`，正常重部署不导出操作员身份。包含 Access 的主机另有 `secrets/access/access-verification.json` 及外部调用方验证文件，保留轮换重叠期，退役后下次导出移除旧项；内部身份不进入该表。CA 私钥和 Admin 主密钥不进入任何输出包。`bundle.json` 的 `files` 覆盖全部载荷文件（自身除外），记录 SHA256 与长度，供部署端传输时核对。
+身份包里只有：`host.key`（新签发时）、`host.crt`、`host.tls.key`、`moox-ca.crt`，控制机另有 `scf-collector.key`（新签发时），以及清单 `bundle.json`。
+CA 私钥和 Admin 主密钥不进入任何输出包。`bundle.json` 的 `files` 覆盖全部载荷文件（自身除外），记录 SHA256 与长度，供部署端传输时核对。
+`moox-admin-cli keys set|list|delete` 登记、列出、删除不属于主机的身份的公钥（`moox-cli`、`scf-collector`、`moox-skill`、`collector-operator`）；组件名与 `console` 不能登记成身份。
 
 离线恢复使用 `host set-status` 或 `deployment set-status`，两者均要求 `--db-path`、`--control-host-id`、`--host-id`、`--status enabled|disabled`；后者还要求 `--component-id`。数据库必须是已有的 0600 普通文件，恢复命令不会建表。受保护对象及目录校验规则与在线 API 相同。
 

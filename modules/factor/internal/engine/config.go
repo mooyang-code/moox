@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,24 +21,24 @@ import (
 )
 
 type Config struct {
-	GatewayClient gatewayclient.ExternalFileConfig `yaml:"gateway_client"`
-	sourcePath    string                           `yaml:"-"`
-	Engine        IdentityConfig                   `yaml:"engine"`
-	Manager       ManagerConfig                    `yaml:"manager"`
-	CatalogSync   CatalogSyncConfig                `yaml:"catalog_sync"`
-	EventBus      EventBusConfig                   `yaml:"eventbus"`
-	Compute       ComputeConfig                    `yaml:"compute"`
-	SeriesStore   SeriesStoreConfig                `yaml:"seriesstore"`
-	Window        WindowConfig                     `yaml:"window"`
-	Memory        MemoryConfig                     `yaml:"memory"`
-	Sync          SyncConfig                       `yaml:"sync"`
-	Pipeline      PipelineConfig                   `yaml:"pipeline"`
-	Recalc        RecalcConfig                     `yaml:"recalc"`
-	Gap           GapConfig                        `yaml:"gap"`
-	Watermark     WatermarkConfig                  `yaml:"watermark"`
-	Lifecycle     LifecycleConfig                  `yaml:"lifecycle"`
-	Params        ParamsConfig                     `yaml:"params"`
-	UDF           UDFConfig                        `yaml:"udf"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	sourcePath    string                   `yaml:"-"`
+	Engine        IdentityConfig           `yaml:"engine"`
+	Manager       ManagerConfig            `yaml:"manager"`
+	CatalogSync   CatalogSyncConfig        `yaml:"catalog_sync"`
+	EventBus      EventBusConfig           `yaml:"eventbus"`
+	Compute       ComputeConfig            `yaml:"compute"`
+	SeriesStore   SeriesStoreConfig        `yaml:"seriesstore"`
+	Window        WindowConfig             `yaml:"window"`
+	Memory        MemoryConfig             `yaml:"memory"`
+	Sync          SyncConfig               `yaml:"sync"`
+	Pipeline      PipelineConfig           `yaml:"pipeline"`
+	Recalc        RecalcConfig             `yaml:"recalc"`
+	Gap           GapConfig                `yaml:"gap"`
+	Watermark     WatermarkConfig          `yaml:"watermark"`
+	Lifecycle     LifecycleConfig          `yaml:"lifecycle"`
+	Params        ParamsConfig             `yaml:"params"`
+	UDF           UDFConfig                `yaml:"udf"`
 }
 
 // UDFConfig 是自定义算子（wasm UDF）的运行参数；整段可选，不写时全部取默认值（设计 11.2、11.3）。
@@ -270,7 +271,7 @@ func Default() *Config {
 		hostname = short
 	}
 	return &Config{
-		GatewayClient: gatewayclient.ExternalFileConfig{Caller: "factor-engine", KeyFile: "../secrets/access-factor-engine.key"},
+		GatewayClient: gatewayclient.FileConfig{Caller: "factor-engine", KeyFile: "../../secrets/host.key", LocalAddress: "127.0.0.1:11002", CAFile: "../../secrets/moox-ca.crt"},
 		Engine:        IdentityConfig{ID: "factor-engine@" + hostname, HeartbeatInterval: 10 * time.Second},
 		Manager:       ManagerConfig{Timeout: 30 * time.Second},
 		CatalogSync:   CatalogSyncConfig{Interval: time.Minute, Offset: 45 * time.Second, StateFile: "./data/engine/catalog.json"},
@@ -418,4 +419,12 @@ func setInt(target *int, fallback int) {
 	if *target == 0 {
 		*target = fallback
 	}
+}
+
+// OpenGateway 打开引擎的网关客户端：引擎和别的组件一样用所在主机的密钥签名，经本机网关取目录，
+// 再按目录直连存储机与控制机的网关。目录缓存放在目录同步状态文件旁边。
+func (c *Config) OpenGateway() (*gatewayclient.Client, error) {
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.CatalogSync.StateFile), func(err error) {
+		log.Printf("factor-engine directory refresh failed: %v", err)
+	})
 }

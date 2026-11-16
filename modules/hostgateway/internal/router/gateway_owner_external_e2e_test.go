@@ -24,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testrpc"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -84,9 +85,8 @@ func TestExternalGatewayOwnerHandler(t *testing.T) {
 	write("gateway-ca.pem", caPEM)
 	unrelated, _ := ownerCertificates(t)
 	write("unrelated-ca.pem", unrelated)
-	credentials := testsnapshot.Credential("strategy")
-	write("caller-key-id", []byte(credentials.KeyID))
-	write("caller-key", []byte(credentials.Secret))
+	// 策略服务在 control 上，用 control 的主机密钥签名。
+	write("caller-key", []byte(gatewayauth.EncodeSigningKey(testsnapshot.HostKey("control"))))
 	raw := testsnapshot.New(t, ownerHostID, "trade")
 	require.Equal(t, "127.0.0.1:11200", string(read("trade-ready")))
 	testsnapshot.Rehash(t, raw)
@@ -154,7 +154,7 @@ func TestExternalGatewayOwnerHandler(t *testing.T) {
 	// Exercise the CLI deployment probe's JSON-over-native contract against
 	// the actual Trade handler, including ambiguous space metadata.
 	checkPermission := func(method string, body []byte, ambiguousSpace bool) {
-		headers, err := testrpc.Signed(testsnapshot.Credential("moox-cli"), ownerHostID, ownerTradePath, method, body)
+		headers, err := testrpc.Signed(testsnapshot.Credential("moox-cli", ""), ownerHostID, ownerTradePath, method, body)
 		require.NoError(t, err)
 		if ambiguousSpace {
 			headers["X-Space-Id"] = []string{"space-gateway-e2e"}

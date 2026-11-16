@@ -15,11 +15,11 @@ import (
 )
 
 func TestSharedConfigurationAndPrivateIdentity(t *testing.T) {
-	cfg := hostgatewayconfig.Default("storage", "control", "192.0.2.1", "fixture-key")
+	cfg := hostgatewayconfig.Default("storage", "control", "192.0.2.1")
 	cfg.TLS = testcert.Files(t, testcert.New(t, nil), "storage", nil)
-	cfg.Control.KeyFile = filepath.Join(t.TempDir(), "caller.key")
-	credential := testsnapshot.Credential(cfg.Control.Caller)
-	require.NoError(t, os.WriteFile(cfg.Control.KeyFile, []byte(credential.Secret+"\n"), 0o600))
+	cfg.Control.KeyFile = filepath.Join(t.TempDir(), "host.key")
+	credential := testsnapshot.Credential("host-gateway", "storage")
+	require.NoError(t, os.WriteFile(cfg.Control.KeyFile, []byte(gatewayauth.EncodeSigningKey(credential.Key)+"\n"), 0o600))
 	encoded, err := hostgatewayconfig.Encode(cfg)
 	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "app.yaml")
@@ -29,9 +29,8 @@ func TestSharedConfigurationAndPrivateIdentity(t *testing.T) {
 	material, signing, err := LoadIdentity(loaded)
 	require.NoError(t, err)
 	require.Equal(t, cfg.Host.ID, material.HostID())
-	require.Equal(t, cfg.Control.Caller, signing.Caller)
-	require.Equal(t, cfg.Control.KeyID, signing.KeyID)
-	require.Equal(t, credential.Secret, signing.Secret)
+	// 网关以 host-gateway 的身份、用所在主机的密钥签名。
+	require.Equal(t, credential, signing)
 	if runtime.GOOS != "windows" {
 		require.NoError(t, os.Chmod(cfg.Control.KeyFile, 0o644))
 		_, _, err := LoadIdentity(cfg)
@@ -40,7 +39,7 @@ func TestSharedConfigurationAndPrivateIdentity(t *testing.T) {
 	}
 	for _, invalid := range []string{"short", strings.Repeat("x", 4097), strings.Repeat("x", 32) + "\n" + strings.Repeat("y", 32)} {
 		require.NoError(t, os.WriteFile(cfg.Control.KeyFile, []byte(invalid), 0o600))
-		_, err := gatewayauth.ReadSigningSecret(cfg.Control.KeyFile)
+		_, err := gatewayauth.ReadSigningKey(cfg.Control.KeyFile)
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), invalid)
 	}

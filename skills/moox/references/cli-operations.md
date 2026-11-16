@@ -64,7 +64,7 @@ View 自己跟随 Primary 的变更日志，落后时先按 [`view-catchup.md`](
 | `--view-id` | 无，必填 | 要重建的 View |
 | `--storage-conf` | `<部署根>/config/storage-primary/storage.yaml` | Primary 的配置（元数据库在这里） |
 | `--view-conf` | `<部署根>/config/storage-view/storage.yaml` | View 的配置（索引目录在这里） |
-| `--timeout` | `2m` | 总操作超时 |
+| `--timeout` | `10m` | 总操作超时（要明显大于 storage-view 停止时限 120 秒） |
 | `--restart` | `true` | 完成后恢复 `storage-view` |
 | `--yes` | `false` | 执行变更确认 |
 | `--dry-run` | 不带 `--yes` 时自动加上 | 只检查，不停服务、不改状态 |

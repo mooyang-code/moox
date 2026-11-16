@@ -16,8 +16,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "./data/factor/factor.db", cfg.Database.Path)
 	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
-	require.Empty(t, cfg.GatewayClient.KeyID)
-	require.Equal(t, "../../secrets/caller-factor-mgr.key", cfg.GatewayClient.KeyFile)
+	require.Equal(t, "../../secrets/host.key", cfg.GatewayClient.KeyFile)
 	require.Equal(t, 45*time.Second, cfg.Engine.LeaseTTL)
 	require.Equal(t, 15*time.Minute, cfg.Engine.JobLeaseTTL)
 }
@@ -48,7 +47,7 @@ func TestFactorConfigRejectsOldOrInvalidGatewayIdentity(t *testing.T) {
 		"storage:\n  gateway_target: ip://127.0.0.1:11003\n",
 		"gateway_client:\n  target: ip://127.0.0.1:11003\n",
 		"gateway_client:\n  caller: factor\n",
-		"gateway_client:\n  key_id: first\n  key_id: second\n",
+		"gateway_client:\n  host_id: first\n  host_id: second\n",
 		"gateway_client:\n  caller: factor-mgr\n---\nengine:\n  lease_ttl: 60s\n",
 	} {
 		t.Run(raw, func(t *testing.T) {

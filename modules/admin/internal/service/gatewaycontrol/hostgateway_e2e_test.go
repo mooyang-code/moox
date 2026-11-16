@@ -25,6 +25,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
@@ -32,6 +33,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/pool/connpool"
 	"trpc.group/trpc-go/trpc-go/server"
 	"trpc.group/trpc-go/trpc-go/transport"
@@ -40,7 +42,8 @@ import (
 const primaryPath = "trpc.moox.storage.PrimaryStore"
 
 // This gate runs production gateway executables against the real Admin service,
-// SQLite topology/key store, in-memory nonces and deployment PKI. Separate Linux
+// SQLite topology/public-key store and deployment PKI. 调用方用所在主机的测试密钥签名：control 上是 collector，
+// storage 上是 monitor。 Separate Linux
 // loopback IPs preserve the canonical remote port without endpoint overrides.
 // Both pure Go executables may be cross-compiled on the developer's machine.
 // closeE2EClient 关掉测试里的网关客户端。场景里网关进程重启过，客户端池里留着的旧 TLS 连接对端已经不在，
@@ -64,7 +67,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	f.service.now = time.Now
 	ctx := context.Background()
 	controlSpec := sysdeploy.HostSpec{HostID: "control", Address: "127.0.0.1", Components: []string{"admin", "collector"}}
-	storageSpec := sysdeploy.HostSpec{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-primary", "storage-view"}}
+	storageSpec := sysdeploy.HostSpec{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-primary", "storage-view", "monitor"}}
 	require.NoError(t, f.topology.SyncHosts(ctx, []sysdeploy.HostSpec{controlSpec, storageSpec}))
 
 	opened, err := net.Listen("tcp", "127.0.0.1:11112")
@@ -84,15 +87,13 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	require.NoError(t, err)
 	configs := map[string]hostgatewayconfig.Config{}
 	for _, host := range []struct{ id, ip string }{{"control", "127.0.0.1"}, {"storage", "127.0.0.2"}} {
-		key, err := f.keys.Current(ctx, "host-gateway@"+host.id)
-		require.NoError(t, err)
 		issued, err := ca.Issue(pki.HostIdentity{HostID: host.id, Address: host.ip}, filepath.Join(root, host.id, "identity"))
 		require.NoError(t, err)
-		cfg := hostgatewayconfig.Default(host.id, "control", "127.0.0.1", key.KeyID)
+		cfg := hostgatewayconfig.Default(host.id, "control", "127.0.0.1")
 		cfg.Server = hostgatewayconfig.Server{LocalAddr: net.JoinHostPort(host.ip, "11002"), RemoteAddr: net.JoinHostPort(host.ip, "11003"), HealthAddr: net.JoinHostPort(host.ip, "11012")}
 		cfg.TLS = hostgatewayconfig.TLS{CertificateFile: issued.Certificate, KeyFile: issued.Key, CAFile: issued.CA}
-		cfg.Store.Path, cfg.Control.KeyFile = filepath.Join(root, host.id, "cache"), filepath.Join(root, host.id, "caller.key")
-		require.NoError(t, os.WriteFile(cfg.Control.KeyFile, []byte(key.Credentials().Secret+"\n"), 0o600))
+		cfg.Store.Path, cfg.Control.KeyFile = filepath.Join(root, host.id, "cache"), filepath.Join(root, host.id, "host.key")
+		require.NoError(t, os.WriteFile(cfg.Control.KeyFile, []byte(gatewayauth.EncodeSigningKey(authtest.Key("host/"+host.id))+"\n"), 0o600))
 		configs[host.id] = cfg
 	}
 	controlProcess := startGatewayExecutable(t, binary, framework, configs["control"])
@@ -109,14 +110,12 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	initialInstance := f.status(t).InstanceID
 	initialControlInstance := controlProcess.instance(t, f)
 
-	collector, err := f.keys.Current(ctx, "collector")
-	require.NoError(t, err)
-	console, err := f.keys.Current(ctx, "console")
-	require.NoError(t, err)
+	collector, console := authtest.Component("collector", "control"), authtest.Component("console", "control")
+	local := map[string]gatewayauth.Credentials{"control": collector, "storage": authtest.Component("monitor", "storage")}
 	clients := map[string]*gatewayclient.Client{}
 	for _, host := range []string{"control", "storage"} {
 		cfg := configs[host]
-		c, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: collector.Credentials(), LocalHostID: host, LocalAddress: cfg.Server.LocalAddr, CAFile: cfg.TLS.CAFile, Serialization: codec.SerializationTypePB, Timeout: 2 * time.Second})
+		c, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: local[host], LocalHostID: host, LocalAddress: cfg.Server.LocalAddr, CAFile: cfg.TLS.CAFile, Serialization: codec.SerializationTypePB, Timeout: 2 * time.Second})
 		require.NoError(t, err)
 		t.Cleanup(func() { closeE2EClient(t, c) })
 		clients[host] = c
@@ -134,7 +133,11 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, payload.raw, result)
 		}
-		browser, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: console.Credentials(), LocalHostID: host, LocalAddress: cfg.Server.LocalAddr, CAFile: cfg.TLS.CAFile, Serialization: codec.SerializationTypeJSON, Timeout: 2 * time.Second})
+		// 管理台只在部署了 admin 的控制机上。
+		if host != "control" {
+			continue
+		}
+		browser, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: console, LocalHostID: host, LocalAddress: cfg.Server.LocalAddr, CAFile: cfg.TLS.CAFile, Serialization: codec.SerializationTypeJSON, Timeout: 2 * time.Second})
 		require.NoError(t, err)
 		raw := []byte(" { \"fixture\" : true }\n")
 		resultJSON, err := browser.Forward(ctx, primaryPath, "UpsertFields", codec.SerializationTypeJSON, raw)
@@ -146,12 +149,12 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 
 	storageTLS := e2eTrust(t, configs["storage"].TLS.CAFile, "storage")
 	body := []byte{0x0a, 1, 'x'}
-	headers := signedE2E(t, collector.Credentials(), "storage", primaryPath, "ReadTimeSeriesRows", body)
+	headers := signedE2E(t, collector, "storage", primaryPath, "ReadTimeSeriesRows", body)
 	_, err = e2eRawCall(configs["storage"].Server.RemoteAddr, storageTLS, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, headers)
 	require.NoError(t, err)
 	_, err = e2eRawCall(configs["storage"].Server.RemoteAddr, storageTLS, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, headers)
-	require.ErrorContains(t, err, "replayed")
-	_, err = e2eRawCall(configs["storage"].Server.RemoteAddr, nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, collector.Credentials(), "storage", primaryPath, "ReadTimeSeriesRows", body))
+	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "同一个签名第二次出现")
+	_, err = e2eRawCall(configs["storage"].Server.RemoteAddr, nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, collector, "storage", primaryPath, "ReadTimeSeriesRows", body))
 	require.Error(t, err, "remote listener must reject plaintext")
 	wrongCA, err := pki.Open(filepath.Join(root, "wrong-pki"))
 	require.NoError(t, err)
@@ -162,19 +165,27 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	require.NoError(t, wrongCA.Close())
 	_, err = e2eRawCall(configs["storage"].Server.RemoteAddr, e2eTrust(t, filepath.Join(root, "wrong-public", "moox-ca.crt"), "storage"), primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, headers)
 	require.Error(t, err, "a different CA must not reuse the successful TLS connection")
-	_, err = e2eRawCall(configs["control"].Server.LocalAddr, nil, "trpc.moox.admin.ActivityLog", "AppendActivityLogs", codec.SerializationTypePB, nil, signedE2E(t, console.Credentials(), "control", "trpc.moox.admin.ActivityLog", "AppendActivityLogs", nil))
-	require.ErrorContains(t, err, "not allowed", "console must be denied at the gateway itself")
+	_, err = e2eRawCall(configs["control"].Server.LocalAddr, nil, "trpc.moox.admin.ActivityLog", "AppendActivityLogs", codec.SerializationTypePB, nil, signedE2E(t, console, "control", "trpc.moox.admin.ActivityLog", "AppendActivityLogs", nil))
+	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "console must be denied at the gateway itself")
+	// 别的主机的密钥不能冒充：用存储机的密钥自称控制机上的 collector，或自称部署在存储机上的 collector，都被拒。
+	for _, forged := range []gatewayauth.Credentials{
+		{Caller: "collector", Host: "control", Key: authtest.Key("host/storage")},
+		{Caller: "collector", Host: "storage", Key: authtest.Key("host/storage")},
+	} {
+		_, err = e2eRawCall(configs["storage"].Server.RemoteAddr, storageTLS, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, forged, "storage", primaryPath, "ReadTimeSeriesRows", body))
+		require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "forged %v", forged)
+	}
 	t.Log("SCENARIO PASS tls-trust-plaintext-acl-and-durable-replay")
 
 	// A newly registered host is also a new caller. Its signature must become
 	// accepted through the already running control gateway after the next pull.
 	require.NoError(t, f.topology.SyncHostDeployments(ctx, sysdeploy.HostSpec{HostID: "joining", Address: "127.0.0.3"}))
-	joining, err := f.keys.Ensure(ctx, "host-gateway@joining")
-	require.NoError(t, err)
+	require.NoError(t, f.keys.SetHostPublicKey(ctx, "joining", publicKey("host/joining")))
+	joining := authtest.Component("host-gateway", "joining")
 	joiningBody, err := codec.Marshal(codec.SerializationTypePB, &pb.PullSnapshotReq{HostId: "joining"})
 	require.NoError(t, err)
 	waitForE2E(t, 15*time.Second, "new caller accepted without gateway restart", func() bool {
-		raw, err := e2eRawCall(configs["control"].Server.RemoteAddr, e2eTrust(t, configs["control"].TLS.CAFile, "control"), servicecatalog.GatewayControlPath, "PullSnapshot", codec.SerializationTypePB, joiningBody, signControl(t, joining.Credentials(), "PullSnapshot", "control", joiningBody))
+		raw, err := e2eRawCall(configs["control"].Server.RemoteAddr, e2eTrust(t, configs["control"].TLS.CAFile, "control"), servicecatalog.GatewayControlPath, "PullSnapshot", codec.SerializationTypePB, joiningBody, signedE2E(t, joining, "control", servicecatalog.GatewayControlPath, "PullSnapshot", joiningBody))
 		if err != nil {
 			return false
 		}
@@ -192,7 +203,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		return err != nil && (strings.Contains(err.Error(), "no enabled deployment") || strings.Contains(err.Error(), "not deployed"))
 	})
 	require.NoError(t, f.topology.SyncHosts(ctx, []sysdeploy.HostSpec{
-		{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-view"}},
+		{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-view", "monitor"}},
 		{HostID: "control", Address: "127.0.0.1", Components: append(slices.Clone(controlSpec.Components), "storage-primary")},
 	}))
 	waitForE2E(t, 15*time.Second, "existing clients automatically switch deployment target", func() bool {
@@ -210,7 +221,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	// The old gateway must also withdraw its local route, independent of what
 	// the caller's Directory already knows.
 	waitForE2E(t, 15*time.Second, "old gateway route withdrawn", func() bool {
-		_, err := e2eRawCall(configs["storage"].Server.LocalAddr, nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, collector.Credentials(), "storage", primaryPath, "ReadTimeSeriesRows", body))
+		_, err := e2eRawCall(configs["storage"].Server.LocalAddr, nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, collector, "storage", primaryPath, "ReadTimeSeriesRows", body))
 		return err != nil && strings.Contains(err.Error(), "not deployed")
 	})
 	t.Log("SCENARIO PASS deployment-withdrawal-and-automatic-target-switch")
@@ -250,7 +261,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, e2eHealth(t, configs["control"].Server.HealthAddr))
 	// A fresh client reads the restarted gateway's cached Directory, then uses
 	// cached routes and verification keys while Admin is still unavailable.
-	restarted, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: collector.Credentials(), LocalHostID: "control", LocalAddress: configs["control"].Server.LocalAddr, CAFile: configs["control"].TLS.CAFile, Serialization: codec.SerializationTypePB, Timeout: 2 * time.Second})
+	restarted, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: collector, LocalHostID: "control", LocalAddress: configs["control"].Server.LocalAddr, CAFile: configs["control"].TLS.CAFile, Serialization: codec.SerializationTypePB, Timeout: 2 * time.Second})
 	require.NoError(t, err)
 	defer restarted.Close()
 	result, err = restarted.Forward(ctx, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body)
@@ -369,7 +380,7 @@ func startEchoBackend(t *testing.T, calls *atomic.Int64) {
 
 func signedE2E(t *testing.T, credential gatewayauth.Credentials, host, service, method string, body []byte) http.Header {
 	t.Helper()
-	headers, err := gatewayauth.Sign(credential, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method, TargetNode: host, Callee: service, Func: method, Body: body}, time.Now())
+	headers, err := gatewayauth.Sign(credential, gatewayauth.Request{TargetNode: host, Callee: service, Func: method, Body: body}, time.Now())
 	require.NoError(t, err)
 	return headers
 }

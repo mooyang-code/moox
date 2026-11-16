@@ -37,7 +37,7 @@ func Reconcile(ctx context.Context, cfg *Config, req ReconcileRequest) (Reconcil
 	if cfg == nil {
 		return ReconcileSummary{}, errors.New("factor engine config is required")
 	}
-	gateway, err := cfg.GatewayClient.OpenExternal(cfg.sourcePath)
+	gateway, err := cfg.OpenGateway()
 	if err != nil {
 		return ReconcileSummary{}, err
 	}
@@ -92,7 +92,7 @@ func Backfill(ctx context.Context, cfg *Config, req BackfillRequest) (BackfillSu
 	if cfg == nil {
 		return BackfillSummary{}, errors.New("factor engine config is required")
 	}
-	gateway, err := cfg.GatewayClient.OpenExternal(cfg.sourcePath)
+	gateway, err := cfg.OpenGateway()
 	if err != nil {
 		return BackfillSummary{}, err
 	}

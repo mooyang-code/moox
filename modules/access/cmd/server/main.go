@@ -57,7 +57,7 @@ func run(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	defer nonces.Close()
-	credentials, err := gatewayauth.LoadCredentialRegistry(cfg.VerificationFile)
+	keys, err := gatewayauth.LoadIdentityFile(cfg.VerificationFile)
 	if err != nil {
 		return err
 	}
@@ -74,7 +74,7 @@ func run(ctx context.Context, cfg config.Config) error {
 		log.Printf("access gateway call failed service=%s method=%s target=%s attempt=%d connect_failed=%t retrying=%t remaining=%s err=%v",
 			f.Service, f.Method, f.Target, f.Attempt, f.ConnectFailed, f.Retrying, f.Remaining.Round(time.Millisecond), f.Err)
 	})
-	proxy, err := accessproxy.New(accessproxy.Options{HostID: gateway.LocalHostID(), Credentials: credentials, Gateway: gateway, Nonces: nonces})
+	proxy, err := accessproxy.New(accessproxy.Options{HostID: gateway.LocalHostID(), Keys: keys, Gateway: gateway, Nonces: nonces})
 	if err != nil {
 		return err
 	}

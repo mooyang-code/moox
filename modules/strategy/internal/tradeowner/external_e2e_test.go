@@ -31,7 +31,9 @@ func TestExternalStrategyGatewayOwnerClient(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1", host)
 	require.Equal(t, "11003", port)
-	credentials := gatewayauth.Credentials{Caller: "strategy", KeyID: read("caller-key-id"), Secret: read("caller-key")}
+	key, err := gatewayauth.ParseSigningKey(read("caller-key"))
+	require.NoError(t, err)
+	credentials := gatewayauth.Credentials{Caller: "strategy", Host: "control", Key: key}
 	open := func(caFile string, credentials gatewayauth.Credentials) (*gatewayclient.Client, error) {
 		return gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: credentials, LocalHostID: "control", LocalAddress: read("directory-ready"), CAFile: caFile, CachePath: filepath.Join(t.TempDir(), "directory.json")})
 	}
@@ -51,7 +53,8 @@ func TestExternalStrategyGatewayOwnerClient(t *testing.T) {
 	require.Error(t, New(Config{}, untrusted).CheckAccount(ctx, space, id, []string{"spot"}))
 	require.NoError(t, untrusted.Close())
 	wrongCredentials := credentials
-	wrongCredentials.Secret = "wrong-e2e-secret"
+	wrongCredentials.Key, err = gatewayauth.GenerateSigningKey()
+	require.NoError(t, err)
 	wrong, err := open(filepath.Join(coord, "gateway-ca.pem"), wrongCredentials)
 	require.NoError(t, err)
 	require.Error(t, New(Config{}, wrong).CloseSession(ctx, space, id, instance, session, startedAt))

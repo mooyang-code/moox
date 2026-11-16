@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"net"
 	"path/filepath"
 	"testing"
@@ -20,7 +21,6 @@ import (
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
-	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/plugin"
 	"trpc.group/trpc-go/trpc-go/server"
 	"trpc.group/trpc-go/trpc-go/transport"
@@ -38,8 +38,8 @@ func TestPluginConfigInitializes(t *testing.T) {
 	}
 }
 
-func TestConfiguredGatewayControlFiltersPreserveSignedWireBytes(t *testing.T) {
-	const master = "fixture-only-configured-control-master-0123456789"
+// 按生产配置起的 GatewayControl 监听：配置里的过滤器不能改动请求与快照的字节，签名主机头照常传到服务。
+func TestConfiguredGatewayControlFiltersPreserveWireBytes(t *testing.T) {
 	dir := t.TempDir()
 	db, err := gorm.Open(sqlite.Open(filepath.Join(dir, "admin.db")), &gorm.Config{})
 	require.NoError(t, err)
@@ -50,13 +50,10 @@ func TestConfiguredGatewayControlFiltersPreserveSignedWireBytes(t *testing.T) {
 	topology, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
 	require.NoError(t, topology.SyncHostDeployments(context.Background(), sysdeploy.HostSpec{HostID: "control", Address: "control.example.test", Components: []string{"admin"}}))
-	keyStore, err := keys.NewStore(db, master)
+	keyStore, err := keys.NewStore(db)
 	require.NoError(t, err)
-	_, err = keyStore.EnsureAll(context.Background())
-	require.NoError(t, err)
-	key, err := keyStore.Current(context.Background(), "host-gateway@control")
-	require.NoError(t, err)
-	implementation, err := gatewaycontrol.NewService(db, "control", master)
+	require.NoError(t, keyStore.SetHostPublicKey(context.Background(), "control", gatewayauth.EncodePublicKey(authtest.Component("host-gateway", "control").PublicKey())))
+	implementation, err := gatewaycontrol.NewService(db, "control")
 	require.NoError(t, err)
 	cfg, err := trpc.LoadConfig("../../config/trpc_go.yaml")
 	require.NoError(t, err)
@@ -82,12 +79,12 @@ func TestConfiguredGatewayControlFiltersPreserveSignedWireBytes(t *testing.T) {
 	require.NoError(t, gatewaycontrol.Register(svc, implementation))
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
-	proxy := pb.NewGatewayControlClientProxy(client.WithTransport(transport.NewClientTransport()), client.WithTarget("ip://"+listener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(3*time.Second), client.WithCurrentSerializationType(codec.SerializationTypeNoop), client.WithFilter(gatewayauth.NewTRPCClientFilter(key.Credentials(), "control", nil)))
+	proxy := pb.NewGatewayControlClientProxy(client.WithTransport(transport.NewClientTransport()), client.WithTarget("ip://"+listener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(3*time.Second), client.WithMetaData(gatewayauth.HeaderVerifiedHost, []byte("control")))
 	response, err := proxy.PullSnapshot(context.Background(), &pb.PullSnapshotReq{HostId: "control"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
 	require.True(t, response.Changed)
 	hash, err := pb.SnapshotHash(response.Snapshot)
 	require.NoError(t, err)
-	require.Equal(t, hash, response.Snapshot.Hash, "configured filters must preserve snapshot key material")
+	require.Equal(t, hash, response.Snapshot.Hash, "configured filters must preserve snapshot bytes")
 }

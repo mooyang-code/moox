@@ -9,7 +9,6 @@ import (
 	"slices"
 	"time"
 
-	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -118,11 +117,7 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
-	encryptionKey, err := adminsecurity.GetEncryptionKey()
-	if err != nil {
-		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
-	}
-	compiled, snapshot, err := dao.CompileSnapshot(ctx, req.GetHostId(), encryptionKey)
+	compiled, snapshot, err := dao.CompileSnapshot(ctx, req.GetHostId())
 	compiledAt := time.Now().UTC().Format(time.RFC3339Nano)
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil

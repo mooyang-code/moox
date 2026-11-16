@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,27 +13,23 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
-	"github.com/mooyang-code/moox/modules/admin/internal/privatefiles"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
-	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
 func newBootstrapFixture(t *testing.T) bootstrapOptions {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "private")
 	require.NoError(t, os.Mkdir(dir, 0o700))
-	opts := bootstrapOptions{topologyFile: filepath.Join(dir, "topology.json"), dbPath: filepath.Join(dir, "data", "admin.db"), masterFile: filepath.Join(dir, "secrets", "admin-encryption.key"), pkiDir: filepath.Join(dir, "secrets", "pki"), outputDir: filepath.Join(dir, "bundles")}
+	opts := bootstrapOptions{topologyFile: filepath.Join(dir, "topology.json"), dbPath: filepath.Join(dir, "data", "admin.db"), masterFile: filepath.Join(dir, "secrets", "admin-encryption.key"), pkiDir: filepath.Join(dir, "secrets", "pki"), outputDir: filepath.Join(dir, "bundles"),
+		operatorPublicKey: identityPublicKey("operator")}
 	writeBootstrapTopology(t, opts, hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{
 		{HostID: "control", Address: "192.0.2.1", PrivateAddress: "control.internal.example.test", Components: []string{"admin", "collector"}},
 		{HostID: "storage", Address: "192.0.2.2", Components: []string{"storage-primary", "storage-view"}},
@@ -51,7 +46,20 @@ func writeBootstrapTopology(t *testing.T, opts bootstrapOptions, topology hostbu
 }
 
 func bootstrapArguments(opts bootstrapOptions) []string {
-	return []string{"bootstrap", "--topology-file", opts.topologyFile, "--db-path", opts.dbPath, "--encryption-key-file", opts.masterFile, "--pki-dir", opts.pkiDir, "--output-dir", opts.outputDir}
+	args := []string{"bootstrap", "--topology-file", opts.topologyFile, "--db-path", opts.dbPath, "--encryption-key-file", opts.masterFile, "--pki-dir", opts.pkiDir, "--output-dir", opts.outputDir,
+		"--operator-public-key", opts.operatorPublicKey}
+	return append(args, currentKeyArguments(opts.current)...)
+}
+
+func currentKeyArguments(current currentKeys) []string {
+	var args []string
+	if current.host != "" {
+		args = append(args, "--current-sign-public-key", current.host)
+	}
+	if current.scfCollector != "" {
+		args = append(args, "--current-scf-collector-public-key", current.scfCollector)
+	}
+	return args
 }
 
 func runBootstrapFixture(t *testing.T, opts bootstrapOptions) hostbundle.Metadata {
@@ -64,150 +72,172 @@ func runBootstrapFixture(t *testing.T, opts bootstrapOptions) hostbundle.Metadat
 	return result
 }
 
-func TestBootstrapEmptyEnvironmentExportsWorkingCredentialsCertificateAndConfig(t *testing.T) {
+// bundleFiles 是身份包目录里的文件名（排序后）。
+func bundleFiles(t *testing.T, metadata hostbundle.Metadata) []string {
+	t.Helper()
+	entries, err := os.ReadDir(metadata.BundleDir)
+	require.NoError(t, err)
+	names := []string{}
+	for _, entry := range entries {
+		require.False(t, entry.IsDir(), entry.Name())
+		info, err := entry.Info()
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), entry.Name())
+		names = append(names, entry.Name())
+	}
+	slices.Sort(names)
+	return names
+}
+
+// bundleKeyPublic 读身份包里一把签名私钥对应的公钥，并确认清单与输出里都没有私钥内容。
+func bundleKeyPublic(t *testing.T, metadata hostbundle.Metadata, name string) string {
+	t.Helper()
+	key, err := gatewayauth.ReadSigningKey(filepath.Join(metadata.BundleDir, name))
+	require.NoError(t, err)
+	manifest, err := os.ReadFile(filepath.Join(metadata.BundleDir, "bundle.json"))
+	require.NoError(t, err)
+	require.NotContains(t, string(manifest), gatewayauth.EncodeSigningKey(key))
+	return gatewayauth.EncodePublicKey(gatewayauth.Credentials{Key: key}.PublicKey())
+}
+
+func registeredKeys(t *testing.T, opts bootstrapOptions) (hosts map[string]string, identities map[string]string) {
+	t.Helper()
+	db, err := openAdminCLIDB(opts.dbPath)
+	require.NoError(t, err)
+	defer closeAdminCLIDB(db)
+	store, err := keys.NewStore(db)
+	require.NoError(t, err)
+	hosts, identities = map[string]string{}, map[string]string{}
+	hostRows, err := store.Hosts(context.Background())
+	require.NoError(t, err)
+	for _, row := range hostRows {
+		hosts[row.HostID] = row.PublicKey
+	}
+	identityRows, err := store.Identities(context.Background())
+	require.NoError(t, err)
+	for _, row := range identityRows {
+		identities[row.Identity] = row.PublicKey
+	}
+	return hosts, identities
+}
+
+// 空环境：建库、CA、主密钥，登记全部主机；控制机的身份包里有主机签名私钥、主机证书、根证书与 scf-collector 的私钥，
+// 公钥登记在 Admin；操作电脑的 moox-cli 只登记公钥，包里没有它的私钥。
+func TestBootstrapEmptyEnvironmentIssuesHostKeyAndRegistersOperator(t *testing.T) {
 	opts := newBootstrapFixture(t)
 	result := runBootstrapFixture(t, opts)
 	require.True(t, result.CA.Created)
-	require.Len(t, result.ExpectedHash, 64)
-	operatorConfig := filepath.Join(result.BundleDir, "operator", "gateway-client.yaml")
-	rawOperator, err := os.ReadFile(operatorConfig)
+	require.Equal(t, 2, result.Version)
+	require.True(t, result.SignKeyIssued)
+	require.True(t, result.SCFCollectorKeyIssued)
+	require.Equal(t, opts.operatorPublicKey, result.OperatorPublicKey)
+	require.Equal(t, []string{"bundle.json", "host.crt", "host.key", "host.tls.key", "moox-ca.crt", "scf-collector.key"}, bundleFiles(t, result))
+	require.Equal(t, result.SignPublicKey, bundleKeyPublic(t, result, hostbundle.HostKeyFile))
+	require.Equal(t, result.SCFCollectorPublicKey, bundleKeyPublic(t, result, hostbundle.SCFCollectorKeyFile))
+	require.NotEqual(t, result.SignPublicKey, result.SCFCollectorPublicKey)
+
+	hosts, identities := registeredKeys(t, opts)
+	require.Equal(t, map[string]string{"control": result.SignPublicKey, "storage": "", "overseas": ""}, hosts, "别的主机到自己签发身份包时才有公钥")
+	require.Equal(t, map[string]string{"moox-cli": opts.operatorPublicKey, "scf-collector": result.SCFCollectorPublicKey}, identities)
+
+	// 主机证书：由 MooX CA 签给控制机的地址。
+	pair, err := tls.LoadX509KeyPair(filepath.Join(result.BundleDir, hostbundle.HostCertificateFile), filepath.Join(result.BundleDir, hostbundle.HostTLSKeyFile))
 	require.NoError(t, err)
-	var operator gatewayclient.FileConfig
-	require.NoError(t, yaml.Unmarshal(rawOperator, &operator))
-	require.Equal(t, "moox-cli", operator.Caller)
-	var operatorKeyID string
-	for _, credential := range result.Credentials {
-		if credential.Caller == "moox-cli" {
-			operatorKeyID = credential.KeyID
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	require.NoError(t, err)
+	roots := x509.NewCertPool()
+	ca, err := os.ReadFile(filepath.Join(result.BundleDir, hostbundle.CAFile))
+	require.NoError(t, err)
+	require.True(t, roots.AppendCertsFromPEM(ca))
+	for _, name := range []string{"control", "192.0.2.1", "control.internal.example.test"} {
+		_, err := leaf.Verify(x509.VerifyOptions{Roots: roots, DNSName: name})
+		require.NoError(t, err, name)
+	}
+	// Admin 主密钥与 CA 私钥不进包。
+	for _, name := range []string{opts.masterFile, filepath.Join(opts.pkiDir, "ca.key")} {
+		secret, err := os.ReadFile(name)
+		require.NoError(t, err)
+		for _, file := range bundleFiles(t, result) {
+			raw, err := os.ReadFile(filepath.Join(result.BundleDir, file))
+			require.NoError(t, err)
+			require.NotContains(t, string(raw), strings.TrimSpace(string(secret)), file)
 		}
 	}
-	require.NotEmpty(t, operatorKeyID)
-	require.NotEqual(t, "moox-cli", operatorKeyID)
-	require.Equal(t, operatorKeyID, operator.KeyID)
-	require.Equal(t, "caller-moox-cli.key", operator.KeyFile)
-	info, err := os.Stat(operatorConfig)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
-	config, err := hostgatewayconfig.Load(filepath.Join(result.BundleDir, result.ConfigFile))
-	require.NoError(t, err)
-	require.Equal(t, "control", config.Host.ID)
-	require.Equal(t, "127.0.0.1:11112", config.Control.Target)
-	key, err := gatewayauth.CredentialsFromKeyFile(config.Control.KeyID, config.Control.KeyFile)
-	require.NoError(t, err)
-	key.Caller = config.Control.Caller
-	master, err := privatefiles.Read(opts.masterFile, 8192)
-	require.NoError(t, err)
+	// 快照里是公钥：控制机的主机密钥连同它上面的调用方，加两个非主机身份。
 	db, err := openAdminCLIDB(opts.dbPath)
 	require.NoError(t, err)
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	hosts, deployments, err := dao.Read(context.Background())
+	_, snapshot, err := dao.CompileSnapshot(context.Background(), "control")
 	require.NoError(t, err)
-	require.Len(t, hosts, 3)
-	require.Len(t, deployments, 12)
-	_, snapshot, err := dao.CompileSnapshot(context.Background(), "control", strings.TrimSpace(string(master)))
-	require.NoError(t, err)
-	require.Equal(t, result.ExpectedHash, snapshot.Hash)
-	var verification []gatewayauth.Credentials
-	for _, entry := range snapshot.VerificationKeys {
-		verification = append(verification, gatewayauth.Credentials{Caller: entry.Caller, KeyID: entry.KeyId, Secret: string(entry.Secret)})
-	}
-	registry, err := gatewayauth.NewCredentialRegistry(verification)
-	require.NoError(t, err)
-	request := gatewayauth.Request{Method: "POST", Path: "/trpc.moox.admin.GatewayControl/PullSnapshot", TargetNode: "control", Callee: "trpc.moox.admin.GatewayControl", Func: "PullSnapshot", Body: []byte("fixture body")}
-	header, err := gatewayauth.Sign(key, request, time.Now())
-	require.NoError(t, err)
-	claims, err := registry.Verify(request, header, time.Now())
-	require.NoError(t, err)
-	require.Equal(t, key.Caller, claims.Caller)
-	rootPEM, err := os.ReadFile(config.TLS.CAFile)
-	require.NoError(t, err)
-	roots := x509.NewCertPool()
-	require.True(t, roots.AppendCertsFromPEM(rootPEM))
-	pair, err := tls.LoadX509KeyPair(config.TLS.CertificateFile, config.TLS.KeyFile)
-	require.NoError(t, err)
-	cert, err := x509.ParseCertificate(pair.Certificate[0])
-	require.NoError(t, err)
-	for _, name := range []string{"control", "192.0.2.1", "control.internal.example.test"} {
-		_, err := cert.Verify(x509.VerifyOptions{Roots: roots, DNSName: name})
-		require.NoError(t, err)
-	}
-	_, err = cert.Verify(x509.VerifyOptions{Roots: roots, DNSName: "storage"})
-	require.Error(t, err)
-	metadata, err := os.ReadFile(filepath.Join(result.BundleDir, "bundle.json"))
-	require.NoError(t, err)
-	require.NotContains(t, string(metadata), key.Secret)
-	require.NotContains(t, string(metadata), strings.TrimSpace(string(master)))
-	var callers []string
-	for _, entry := range result.Credentials {
-		require.NotContains(t, entry.Caller, "@storage")
-		require.NotContains(t, entry.Caller, "@overseas")
-		require.False(t, slices.Contains([]string{"factor-engine", "trade"}, entry.Caller))
-		callers = append(callers, entry.Caller)
-	}
-	require.Contains(t, callers, "scf-collector", "部署了 Collector 的主机要带上交给采集云函数的 scf-collector 身份")
-	require.NoError(t, filepath.WalkDir(result.BundleDir, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		require.NoError(t, err)
-		want := os.FileMode(0o600)
-		if entry.IsDir() {
-			want = 0o700
-		}
-		require.Equal(t, want, info.Mode().Perm(), path)
-		return nil
-	}))
-	block, _ := pem.Decode(rootPEM)
-	require.NotNil(t, block)
-	ca, err := x509.ParseCertificate(block.Bytes)
-	require.NoError(t, err)
-	require.True(t, ca.IsCA)
+	require.Len(t, snapshot.VerificationKeys, 3)
+	index := slices.IndexFunc(snapshot.VerificationKeys, func(key *pb.GatewayVerificationKey) bool { return key.HostId == "control" })
+	require.Equal(t, result.SignPublicKey, gatewayauth.EncodePublicKey(snapshot.VerificationKeys[index].PublicKey))
+	require.Equal(t, []string{"admin", "collector", "console", "host-agent", "host-gateway"}, snapshot.VerificationKeys[index].Callers)
 }
 
-func TestBootstrapRetryKeepsMasterCAKeysAndDisabledStates(t *testing.T) {
+// 重跑（例行升级、续证书）：目标机上的私钥和登记的一致就不换密钥，包里没有私钥；主密钥、CA、停用状态、已登记的操作电脑公钥都不变。
+func TestBootstrapRetryKeepsKeysMasterCAAndDisabledStates(t *testing.T) {
 	opts := newBootstrapFixture(t)
 	first := runBootstrapFixture(t, opts)
 	master, err := os.ReadFile(opts.masterFile)
 	require.NoError(t, err)
-	root, err := os.ReadFile(filepath.Join(opts.pkiDir, "ca.crt"))
-	require.NoError(t, err)
-	recovery := func(kind, host, status string, extra ...string) {
-		t.Helper()
-		args := append([]string{kind, "set-status", "--db-path", opts.dbPath, "--control-host-id", "control", "--host-id", host, "--status", status}, extra...)
-		require.NoError(t, runTopologyRecoveryCommand(args, nil, nil))
-	}
-	recovery("host", "overseas", "disabled")
-	recovery("deployment", "control", "disabled", "--component-id", "collector")
-	again := runBootstrapFixture(t, opts)
-	require.False(t, again.CA.Created)
-	require.Equal(t, first.CA.CertificateInfo, again.CA.CertificateInfo)
-	require.Equal(t, first.Credentials, again.Credentials)
-	require.NotEqual(t, first.BundleDir, again.BundleDir)
-	againMaster, err := os.ReadFile(opts.masterFile)
-	require.NoError(t, err)
-	require.Equal(t, master, againMaster)
-	againRoot, err := os.ReadFile(filepath.Join(opts.pkiDir, "ca.crt"))
-	require.NoError(t, err)
-	require.Equal(t, root, againRoot)
 	db, err := openAdminCLIDB(opts.dbPath)
 	require.NoError(t, err)
-	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	compiled, err := dao.Compile(context.Background(), "overseas")
+	require.NoError(t, dao.SetHostStatus(context.Background(), "storage", "disabled"))
+	closeAdminCLIDB(db)
+
+	opts.current = currentKeys{host: first.SignPublicKey, scfCollector: first.SCFCollectorPublicKey}
+	// 另一台电脑的公钥：bootstrap 不改已经登记的那一把（换电脑走 setup operator --register）。
+	opts.operatorPublicKey = identityPublicKey("another-computer")
+	second := runBootstrapFixture(t, opts)
+	require.False(t, second.CA.Created)
+	require.Equal(t, first.CA.CertificateInfo, second.CA.CertificateInfo)
+	require.False(t, second.SignKeyIssued)
+	require.False(t, second.SCFCollectorKeyIssued)
+	require.Equal(t, first.SignPublicKey, second.SignPublicKey)
+	require.Equal(t, first.SCFCollectorPublicKey, second.SCFCollectorPublicKey)
+	require.Equal(t, first.OperatorPublicKey, second.OperatorPublicKey)
+	require.Equal(t, []string{"bundle.json", "host.crt", "host.tls.key", "moox-ca.crt"}, bundleFiles(t, second))
+	require.NotEqual(t, first.Certificate.Serial, second.Certificate.Serial, "证书每次重新签发")
+	again, err := os.ReadFile(opts.masterFile)
 	require.NoError(t, err)
-	require.True(t, compiled.Disabled)
-	control, err := dao.Compile(context.Background(), "control")
+	require.Equal(t, master, again)
+	db, err = openAdminCLIDB(opts.dbPath)
 	require.NoError(t, err)
-	require.False(t, slices.ContainsFunc(control.Routes, func(r servicecatalog.Route) bool { return r.ComponentID == "collector" }))
-	recovery("host", "overseas", "enabled")
-	recovery("deployment", "control", "enabled", "--component-id", "collector")
-	recovered := runBootstrapFixture(t, opts)
-	require.Equal(t, first.ExpectedHash, recovered.ExpectedHash)
-	require.Equal(t, first.Credentials, recovered.Credentials)
+	defer closeAdminCLIDB(db)
+	dao, err = sysdeploy.NewTopologyDAO(db, "control")
+	require.NoError(t, err)
+	hosts, _, err := dao.Read(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "disabled", hosts[slices.IndexFunc(hosts, func(h sysdeploy.HostRecord) bool { return h.HostID == "storage" })].Status)
+}
+
+// 目标机上没有私钥（或和登记的对不上）：新生成一把并登记，旧公钥随即不在了，没有新旧并存。
+func TestBootstrapReissuesWhenTargetKeyIsMissingOrDifferent(t *testing.T) {
+	opts := newBootstrapFixture(t)
+	first := runBootstrapFixture(t, opts)
+	for _, current := range []currentKeys{{}, {host: identityPublicKey("stale"), scfCollector: identityPublicKey("stale-scf")}} {
+		opts.current = current
+		next := runBootstrapFixture(t, opts)
+		require.True(t, next.SignKeyIssued)
+		require.True(t, next.SCFCollectorKeyIssued)
+		require.NotEqual(t, first.SignPublicKey, next.SignPublicKey)
+		require.Equal(t, next.SignPublicKey, bundleKeyPublic(t, next, hostbundle.HostKeyFile))
+		hosts, identities := registeredKeys(t, opts)
+		require.Equal(t, next.SignPublicKey, hosts["control"])
+		require.Equal(t, next.SCFCollectorPublicKey, identities["scf-collector"])
+		first = next
+	}
+	// 只丢了 scf-collector 的私钥：主机密钥不动。
+	opts.current = currentKeys{host: first.SignPublicKey}
+	next := runBootstrapFixture(t, opts)
+	require.False(t, next.SignKeyIssued)
+	require.True(t, next.SCFCollectorKeyIssued)
+	require.Equal(t, []string{"bundle.json", "host.crt", "host.tls.key", "moox-ca.crt", "scf-collector.key"}, bundleFiles(t, next))
 }
 
 func TestBootstrapRejectsInvalidTopologyBeforeCreatingTrustMaterial(t *testing.T) {
@@ -230,137 +260,44 @@ func TestBootstrapRejectsInvalidTopologyBeforeCreatingTrustMaterial(t *testing.T
 			_, err := os.Lstat(path)
 			require.True(t, os.IsNotExist(err), path)
 		}
-		db, err := openAdminCLIDB(opts.dbPath)
-		require.NoError(t, err)
-		var count int64
-		require.NoError(t, db.Table("t_hosts").Count(&count).Error)
-		require.Zero(t, count)
-		closeAdminCLIDB(db)
+		hosts, identities := registeredKeys(t, opts)
+		require.Empty(t, hosts)
+		require.Empty(t, identities)
 	}
 }
 
-func TestBootstrapRejectsLostOrCorruptTrustAndRollsBackTopology(t *testing.T) {
-	for _, damage := range []string{"master-missing", "master-wrong", "ca-missing", "ca-corrupt"} {
-		t.Run(damage, func(t *testing.T) {
-			opts := newBootstrapFixture(t)
-			first := runBootstrapFixture(t, opts)
-			topology, err := readBootstrapTopology(opts.topologyFile)
-			require.NoError(t, err)
-			topology.Hosts[1].Description = "must roll back"
-			writeBootstrapTopology(t, opts, topology)
-			switch damage {
-			case "master-missing":
-				require.NoError(t, os.Remove(opts.masterFile))
-			case "master-wrong":
-				require.NoError(t, os.WriteFile(opts.masterFile, []byte("different-fixture-only-master-0123456789"), 0o600))
-			case "ca-missing":
-				require.NoError(t, os.RemoveAll(opts.pkiDir))
-			case "ca-corrupt":
-				require.NoError(t, os.WriteFile(filepath.Join(opts.pkiDir, "ca.crt"), []byte("broken fixture"), 0o600))
-			}
-			var out bytes.Buffer
-			require.Error(t, runBootstrapCommand(bootstrapArguments(opts), &out, nil))
-			require.Empty(t, out.String())
-			files, err := os.ReadDir(opts.outputDir)
-			require.NoError(t, err)
-			require.Len(t, files, 1)
-			require.Equal(t, filepath.Base(first.BundleDir), files[0].Name())
-			db, err := openAdminCLIDB(opts.dbPath)
-			require.NoError(t, err)
-			var description string
-			require.NoError(t, db.Table("t_hosts").Select("c_description").Where("c_host_id = 'storage'").Scan(&description).Error)
-			require.Empty(t, description)
-			closeAdminCLIDB(db)
-			if damage == "master-missing" {
-				_, err := os.Lstat(opts.masterFile)
-				require.True(t, os.IsNotExist(err), "must not regenerate a missing master")
-			}
-			if damage == "ca-missing" {
-				_, err := os.Lstat(opts.pkiDir)
-				require.True(t, os.IsNotExist(err), "must not regenerate a lost CA")
-			}
-		})
-	}
-}
-
-func TestBootstrapFailedOutputCanRetryWithoutRotatingIdentity(t *testing.T) {
+// 库里已经登记过签名公钥、CA 目录却没了：不悄悄换一个新的信任根，库里的内容也不动。
+func TestBootstrapRejectsLostTrustRootAndRollsBack(t *testing.T) {
 	opts := newBootstrapFixture(t)
-	require.NoError(t, os.Mkdir(opts.outputDir, 0o755))
-	var out bytes.Buffer
-	require.Error(t, runBootstrapCommand(bootstrapArguments(opts), &out, nil))
-	require.Empty(t, out.String())
-	files, err := os.ReadDir(opts.outputDir)
-	require.NoError(t, err)
-	require.Empty(t, files)
-	master, err := privatefiles.Read(opts.masterFile, 8192)
-	require.NoError(t, err)
-	db, err := openAdminCLIDB(opts.dbPath)
-	require.NoError(t, err)
-	store, err := keys.NewStore(db, strings.TrimSpace(string(master)))
-	require.NoError(t, err)
-	key, err := store.Current(context.Background(), "host-gateway@control")
-	require.NoError(t, err)
-	closeAdminCLIDB(db)
-	require.NoError(t, os.Chmod(opts.outputDir, 0o700))
+	first := runBootstrapFixture(t, opts)
+	require.NoError(t, os.Rename(opts.pkiDir, opts.pkiDir+".lost"))
+	opts.current = currentKeys{}
+	err := runBootstrapCommand(bootstrapArguments(opts), nil, nil)
+	require.ErrorIs(t, err, pki.ErrInvalidCA)
+	hosts, _ := registeredKeys(t, opts)
+	require.Equal(t, first.SignPublicKey, hosts["control"], "失败时不换掉已登记的公钥")
+	require.NoError(t, os.Rename(opts.pkiDir+".lost", opts.pkiDir))
+	opts.current = currentKeys{host: first.SignPublicKey, scfCollector: first.SCFCollectorPublicKey}
+	require.False(t, runBootstrapFixture(t, opts).SignKeyIssued)
+}
+
+// 身份包没写出去（输出目录不可用）：这次生成的私钥就丢了。重跑时目标机上的公钥和登记的对不上，会再签发一把，能自己恢复。
+func TestBootstrapBundleFailureRecoversOnRetry(t *testing.T) {
+	opts := newBootstrapFixture(t)
+	require.NoError(t, os.WriteFile(opts.outputDir, []byte("not a directory"), 0o600))
+	require.Error(t, runBootstrapCommand(bootstrapArguments(opts), nil, nil))
+	require.NoError(t, os.Remove(opts.outputDir))
 	result := runBootstrapFixture(t, opts)
-	require.False(t, result.CA.Created)
-	require.True(t, slices.ContainsFunc(result.Credentials, func(c hostbundle.Credential) bool { return c.Caller == key.Caller && c.KeyID == key.KeyID }))
+	require.True(t, result.SignKeyIssued)
+	hosts, _ := registeredKeys(t, opts)
+	require.Equal(t, result.SignPublicKey, hosts["control"])
+	entries, err := os.ReadDir(opts.outputDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "没有留下半个包")
 }
 
-func TestBootstrapDatabaseFailureRollsBackTopologyAndPartialKeys(t *testing.T) {
-	opts := newBootstrapFixture(t)
-	require.NoError(t, prepareBootstrapDatabase(opts.dbPath))
-	require.NoError(t, ensureAdminSchema(opts.dbPath))
-	db, err := openAdminCLIDB(opts.dbPath)
-	require.NoError(t, err)
-	defer closeAdminCLIDB(db)
-	require.NoError(t, db.Exec(`CREATE TRIGGER fail_bootstrap_key BEFORE INSERT ON t_secrets
-	WHEN NEW.c_secret_id = '`+secretmodel.GatewayKeyringIDPrefix+`storage-view'
-BEGIN SELECT RAISE(ABORT, 'fixture key persistence failure'); END`).Error)
-	var out bytes.Buffer
-	require.Error(t, runBootstrapCommand(bootstrapArguments(opts), &out, nil))
-	require.Empty(t, out.String())
-	for _, table := range []string{"t_hosts", "t_deployments", "t_secrets"} {
-		var count int64
-		require.NoError(t, db.Table(table).Count(&count).Error)
-		require.Zero(t, count, table)
-	}
-	master, err := privatefiles.Read(opts.masterFile, 8192)
-	require.NoError(t, err)
-	for _, path := range []string{opts.pkiDir, opts.outputDir} {
-		_, err := os.Lstat(path)
-		require.True(t, os.IsNotExist(err))
-	}
-	require.NoError(t, db.Exec("DROP TRIGGER fail_bootstrap_key").Error)
-	runBootstrapFixture(t, opts)
-	again, err := privatefiles.Read(opts.masterFile, 8192)
-	require.NoError(t, err)
-	require.Equal(t, master, again)
-}
-
-func TestBootstrapBundleFailureCleansStageAndRetryReusesCommittedKeys(t *testing.T) {
-	opts := newBootstrapFixture(t)
-	ca, err := pki.Open(opts.pkiDir)
-	require.NoError(t, err)
-	info, err := ca.EnsureCA()
-	require.NoError(t, err)
-	require.NoError(t, ca.Close())
-	// Issue writes the staged certificate before updating the public inventory.
-	// An invalid inventory path exercises failure after private files exist.
-	require.NoError(t, os.WriteFile(filepath.Join(opts.pkiDir, "hosts"), []byte("fixture"), 0o600))
-	var out bytes.Buffer
-	require.Error(t, runBootstrapCommand(bootstrapArguments(opts), &out, nil))
-	require.Empty(t, out.String())
-	files, err := os.ReadDir(opts.outputDir)
-	require.NoError(t, err)
-	require.Empty(t, files, "a failed bundle must leave no staging directory")
-	require.NoError(t, os.Remove(filepath.Join(opts.pkiDir, "hosts")))
-	result := runBootstrapFixture(t, opts)
-	require.Equal(t, info.CertificateInfo, result.CA.CertificateInfo)
-	require.False(t, result.CA.Created)
-}
-
-func TestBootstrapConcurrentProcessesReuseAllIdentityMaterial(t *testing.T) {
+// 几个进程同时 bootstrap：由文件锁排队，CA 只建一次；最后登记的主机公钥属于其中一个完整的身份包。
+func TestBootstrapConcurrentProcessesShareOneTrustRoot(t *testing.T) {
 	opts := newBootstrapFixture(t)
 	executable, err := os.Executable()
 	require.NoError(t, err)
@@ -380,6 +317,7 @@ func TestBootstrapConcurrentProcessesReuseAllIdentityMaterial(t *testing.T) {
 	wait.Wait()
 	created := 0
 	var first hostbundle.Metadata
+	issued := []string{}
 	for i, err := range errors {
 		require.NoError(t, err, outputs[i].String())
 		var result hostbundle.Metadata
@@ -388,13 +326,15 @@ func TestBootstrapConcurrentProcessesReuseAllIdentityMaterial(t *testing.T) {
 			first = result
 		}
 		require.Equal(t, first.CA.CertificateInfo, result.CA.CertificateInfo)
-		require.Equal(t, first.ExpectedHash, result.ExpectedHash)
-		require.Equal(t, first.Credentials, result.Credentials)
+		require.Equal(t, opts.operatorPublicKey, result.OperatorPublicKey)
+		issued = append(issued, result.SignPublicKey)
 		if result.CA.Created {
 			created++
 		}
 	}
 	require.Equal(t, 1, created)
+	hosts, _ := registeredKeys(t, opts)
+	require.Contains(t, issued, hosts["control"])
 	files, err := os.ReadDir(opts.outputDir)
 	require.NoError(t, err)
 	require.Len(t, files, writers)
@@ -419,6 +359,26 @@ func TestBootstrapSubprocess(t *testing.T) {
 func TestBootstrapRejectsFlagsAndStrictInputBeforeDatabaseCreation(t *testing.T) {
 	for _, args := range [][]string{{}, {"bootstrap"}, {"bootstrap", "unexpected"}, {"bootstrap", "--unknown"}} {
 		require.Error(t, runBootstrapCommand(args, nil, nil))
+	}
+	// 没有（或不是合法的）操作电脑公钥、现有公钥格式不对：在建库之前拒绝。
+	for _, mutate := range []func(*bootstrapOptions){
+		func(o *bootstrapOptions) { o.operatorPublicKey = "" },
+		func(o *bootstrapOptions) { o.operatorPublicKey = "not-a-public-key" },
+		func(o *bootstrapOptions) {
+			o.operatorPublicKey = gatewayauth.EncodeSigningKey(authtest.Key("private")) + "x"
+		},
+		func(o *bootstrapOptions) { o.current.host = "bad" },
+		func(o *bootstrapOptions) { o.current.scfCollector = "bad" },
+	} {
+		opts := newBootstrapFixture(t)
+		mutate(&opts)
+		args := bootstrapArguments(opts)
+		if opts.operatorPublicKey == "" {
+			args = slices.DeleteFunc(args, func(arg string) bool { return arg == "--operator-public-key" || arg == "" })
+		}
+		require.Error(t, runBootstrapCommand(args, nil, nil))
+		_, err := os.Lstat(opts.dbPath)
+		require.True(t, os.IsNotExist(err))
 	}
 	for _, raw := range []string{
 		`{"version":1,"control_host_id":"control","hosts":[],"ssh_password":"fixture-do-not-echo"}`,

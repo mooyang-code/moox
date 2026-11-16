@@ -30,12 +30,12 @@ func startControlWire(t *testing.T, implementation *Service) (string, server.Ser
 	return listener.Addr().String(), svc
 }
 
-func controlClient(address string, credentials gatewayauth.Credentials) pb.GatewayControlClientProxy {
+// controlClient 模拟控制机网关转发过来的调用：带上它验过的签名主机。
+func controlClient(address, verifiedHost string) pb.GatewayControlClientProxy {
 	return pb.NewGatewayControlClientProxy(
 		client.WithTransport(transport.NewClientTransport()), client.WithTarget("ip://"+address),
 		client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(3*time.Second),
-		client.WithCurrentSerializationType(codec.SerializationTypeNoop),
-		client.WithFilter(gatewayauth.NewTRPCClientFilter(credentials, "control", nil)),
+		client.WithMetaData(gatewayauth.HeaderVerifiedHost, []byte(verifiedHost)),
 	)
 }
 
@@ -58,19 +58,15 @@ func rawControlCall(address, method string, serialization int, body []byte, head
 	return response.Data, err
 }
 
-func signControl(t *testing.T, credentials gatewayauth.Credentials, method, target string, body []byte) http.Header {
-	t.Helper()
-	headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{Method: "POST", Path: "/" + servicecatalog.GatewayControlPath + "/" + method, TargetNode: target, Callee: servicecatalog.GatewayControlPath, Func: method, Body: body}, time.Now())
-	require.NoError(t, err)
-	return headers
+func verifiedHeader(host string) http.Header {
+	return http.Header{gatewayauth.HeaderVerifiedHost: {host}}
 }
 
-func TestRealTRPCSnapshotHeartbeatAndCallerIsolation(t *testing.T) {
+// 网关验过签之后转进来的调用：按签名主机头认主机，一台主机只能取自己的快照、报自己的心跳。
+func TestRealTRPCSnapshotHeartbeatAndHostIsolation(t *testing.T) {
 	f := newControlFixture(t)
 	address, _ := startControlWire(t, f.service)
-	key, err := f.keys.Current(context.Background(), "host-gateway@storage")
-	require.NoError(t, err)
-	proxy := controlClient(address, key.Credentials())
+	proxy := controlClient(address, "storage")
 	response, err := proxy.PullSnapshot(context.Background(), &pb.PullSnapshotReq{HostId: "storage"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
@@ -91,102 +87,47 @@ func TestRealTRPCSnapshotHeartbeatAndCallerIsolation(t *testing.T) {
 	require.Error(t, err)
 	_, err = proxy.ReportStatus(context.Background(), &pb.ReportStatusReq{HostId: "control", InstanceId: "forged", Version: "v-test"})
 	require.Error(t, err)
-	for _, caller := range []string{"moox-cli", "console", "factor-engine"} {
-		key, err := f.keys.Current(context.Background(), caller)
-		require.NoError(t, err)
-		_, err = controlClient(address, key.Credentials()).PullSnapshot(context.Background(), &pb.PullSnapshotReq{HostId: "storage"})
-		require.Error(t, err, caller)
-	}
 }
 
-func TestRealTRPCVerifiesExactPBAndJSONBytesBeforeDecoding(t *testing.T) {
+func TestRealTRPCAcceptsPBAndJSON(t *testing.T) {
 	f := newControlFixture(t)
 	address, _ := startControlWire(t, f.service)
-	key, err := f.keys.Current(context.Background(), "host-gateway@storage")
-	require.NoError(t, err)
 	for _, tc := range []struct {
 		serialization int
 		body          []byte
 	}{
-		{codec.SerializationTypePB, []byte{0x0a, 7, 's', 't', 'o', 'r', 'a', 'g', 'e', 0x0a, 7, 's', 't', 'o', 'r', 'a', 'g', 'e'}},
+		{codec.SerializationTypePB, []byte{0x0a, 7, 's', 't', 'o', 'r', 'a', 'g', 'e'}},
 		{codec.SerializationTypeJSON, []byte(" { \"host_id\" : \"storage\" }\n")},
 	} {
-		headers := signControl(t, key.Credentials(), "PullSnapshot", "control", tc.body)
-		raw, err := rawControlCall(address, "PullSnapshot", tc.serialization, tc.body, headers)
+		raw, err := rawControlCall(address, "PullSnapshot", tc.serialization, tc.body, verifiedHeader("storage"))
 		require.NoError(t, err)
 		var response pb.PullSnapshotRsp
 		require.NoError(t, codec.Unmarshal(tc.serialization, raw, &response))
 		require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
 		require.True(t, response.Changed)
-		// Same decoded protobuf/JSON value, different bytes: the signature fails.
-		canonical, err := codec.Marshal(tc.serialization, &pb.PullSnapshotReq{HostId: "storage"})
-		require.NoError(t, err)
-		headers = signControl(t, key.Credentials(), "PullSnapshot", "control", canonical)
-		_, err = rawControlCall(address, "PullSnapshot", tc.serialization, tc.body, headers)
-		require.ErrorContains(t, err, "authentication failed")
 	}
 }
 
-// 防重放记录只在进程内存里：同一进程内重放被拒；Admin 重启后签名窗口内能重放一次，按单用户原则接受（T14 删掉这一层）。
-func TestRealTRPCRejectsReplayAndAcceptsRotatedKeys(t *testing.T) {
+// 没有签名主机头（没经过网关）、头不是合法主机、头重复、未知方法、超大请求都拒绝。非主机身份经网关进来时头是空的，同样拒绝。
+func TestRealTRPCRejectsMissingOrInvalidVerifiedHostUnknownMethodsAndOversize(t *testing.T) {
 	f := newControlFixture(t)
 	address, _ := startControlWire(t, f.service)
-	old, err := f.keys.Current(context.Background(), "host-gateway@storage")
-	require.NoError(t, err)
-	body, err := codec.Marshal(codec.SerializationTypePB, &pb.PullSnapshotReq{HostId: "storage"})
-	require.NoError(t, err)
-	headers := signControl(t, old.Credentials(), "PullSnapshot", "control", body)
-	_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypePB, body, headers)
-	require.NoError(t, err)
-	_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypePB, body, headers)
-	require.ErrorContains(t, err, "replayed")
-	current, err := f.keys.Rotate(context.Background(), old.Caller)
-	require.NoError(t, err)
-	for _, key := range []gatewayauth.Credentials{old.Credentials(), current.Credentials()} {
-		response, err := controlClient(address, key).PullSnapshot(context.Background(), &pb.PullSnapshotReq{HostId: "storage"})
-		require.NoError(t, err)
-		require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
-	}
-	require.NoError(t, f.keys.Retire(context.Background(), old.Caller, old.KeyID))
-	_, err = controlClient(address, old.Credentials()).PullSnapshot(context.Background(), &pb.PullSnapshotReq{HostId: "storage"})
-	require.ErrorContains(t, err, "authentication failed")
-	_, err = controlClient(address, current.Credentials()).PullSnapshot(context.Background(), &pb.PullSnapshotReq{HostId: "storage"})
-	require.NoError(t, err)
-}
-
-func TestNonceCacheExpiresAndSweeps(t *testing.T) {
-	cache := newNonceCache()
-	now := time.Unix(1_800_000_000, 0)
-	require.True(t, cache.consume("k1", time.Minute, now))
-	require.False(t, cache.consume("k1", time.Minute, now.Add(59*time.Second)))
-	require.True(t, cache.consume("k2", time.Minute, now.Add(time.Minute)))
-	require.Len(t, cache.expires, 1, "过期的 k1 写入时被清掉")
-	require.True(t, cache.consume("k1", time.Minute, now.Add(time.Minute)))
-}
-
-func TestRealTRPCRejectsWrongTargetMissingHeadersUnknownMethodsAndOversize(t *testing.T) {
-	f := newControlFixture(t)
-	address, _ := startControlWire(t, f.service)
-	key, err := f.keys.Current(context.Background(), "host-gateway@storage")
-	require.NoError(t, err)
 	body, err := codec.Marshal(codec.SerializationTypePB, &pb.PullSnapshotReq{HostId: "storage"})
 	require.NoError(t, err)
 	_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypePB, body, nil)
-	require.Error(t, err)
-	headers := signControl(t, key.Credentials(), "PullSnapshot", "storage", body)
+	require.ErrorContains(t, err, "verified signing host")
+	for _, host := range []string{"", "Storage", "host-gateway@storage", "../storage"} {
+		_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypePB, body, verifiedHeader(host))
+		require.ErrorContains(t, err, "verified signing host", host)
+	}
+	// 大小写不同的同名头在 tRPC 的元数据表里并存，按重复处理。
+	headers := verifiedHeader("storage")
+	headers["x-moox-verified-host"] = []string{"control"}
 	_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypePB, body, headers)
-	require.Error(t, err)
-	headers = signControl(t, key.Credentials(), "Unknown", "control", body)
-	_, err = rawControlCall(address, "Unknown", codec.SerializationTypePB, body, headers)
+	require.ErrorContains(t, err, "verified signing host")
+	_, err = rawControlCall(address, "Unknown", codec.SerializationTypePB, body, verifiedHeader("storage"))
 	require.Error(t, err)
 	large := []byte(strings.Repeat(" ", maxRequestBytes+1))
-	headers = signControl(t, key.Credentials(), "PullSnapshot", "control", large)
-	_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypeJSON, large, headers)
+	_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypeJSON, large, verifiedHeader("storage"))
 	require.ErrorContains(t, err, "size")
-	// Different case spellings survive tRPC's metadata map and must still count
-	// as duplicate HTTP authentication headers.
-	headers = signControl(t, key.Credentials(), "PullSnapshot", "control", body)
-	headers["x-moox-caller"] = []string{key.Caller}
-	_, err = rawControlCall(address, "PullSnapshot", codec.SerializationTypePB, body, headers)
-	require.Error(t, err)
 }

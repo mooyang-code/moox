@@ -3,8 +3,11 @@ package sysdeploy_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"net"
 	"path/filepath"
 	"testing"
@@ -73,10 +76,12 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 		response, err := proxy.SyncHostDeployments(ctx, spec)
 		check(response.GetRetInfo(), err)
 	}
-	keyStore, err := keys.NewStore(db, master)
+	keyStore, err := keys.NewStore(db)
 	require.NoError(t, err)
-	_, err = keyStore.EnsureAll(ctx)
-	require.NoError(t, err)
+	publicKey := func(label string) string {
+		return gatewayauth.EncodePublicKey(authtest.Key(label).Public().(ed25519.PublicKey))
+	}
+	require.NoError(t, keyStore.SetHostPublicKey(ctx, "storage", publicKey("host/storage")))
 	hosts, err = proxy.ListHosts(ctx, &pb.ListDeploymentHostsReq{})
 	check(hosts.GetRetInfo(), err)
 	require.Len(t, hosts.GetHosts(), 2)
@@ -104,11 +109,10 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.WithinDuration(t, time.Now(), compiledAt, 5*time.Second)
 	require.NotEmpty(t, routes.GetRoutes())
 	require.NotEmpty(t, routes.GetGatewayStatus().GetExpectedHash())
-	require.NotEqual(t, routes.GetDefinitionHash(), routes.GetGatewayStatus().GetExpectedHash(), "definition hash must not stand in for the final signed-key snapshot hash")
+	require.NotEqual(t, routes.GetDefinitionHash(), routes.GetGatewayStatus().GetExpectedHash(), "definition hash must not stand in for the final snapshot hash, which covers the public keys")
 	require.Empty(t, routes.GetGatewayStatus().GetLastSeenAt(), "reading desired state must not create a heartbeat")
 	definitionHash, expectedHash := routes.GetDefinitionHash(), routes.GetGatewayStatus().GetExpectedHash()
-	_, err = keyStore.Rotate(ctx, "console")
-	require.NoError(t, err)
+	require.NoError(t, keyStore.SetHostPublicKey(ctx, "storage", publicKey("host/storage-rotated")))
 	routes, err = proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "storage"})
 	check(routes.GetRetInfo(), err)
 	require.Equal(t, definitionHash, routes.GetDefinitionHash(), "key rotation does not change route definitions")
@@ -116,7 +120,7 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.Empty(t, routes.GetGatewayStatus().GetLastSeenAt())
 	topology, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	_, snapshot, err := topology.CompileSnapshot(ctx, "storage", master)
+	_, snapshot, err := topology.CompileSnapshot(ctx, "storage")
 	require.NoError(t, err)
 	require.Equal(t, snapshot.GetHash(), routes.GetGatewayStatus().GetExpectedHash())
 	routes, err = proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "unknown"})

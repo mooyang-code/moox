@@ -2,9 +2,17 @@ package engine
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +21,9 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -22,13 +32,31 @@ import (
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-const testEngineSecret = "0123456789abcdef0123456789abcdef"
+// managerDirectory 是固定的服务目录：测试里 factor-mgr 的服务就在引擎所在的主机上，请求经本机网关入口进来。
+type managerDirectory struct{ directory servicecatalog.Directory }
+
+func (d managerDirectory) Fetch(_ context.Context, version string) (gatewayclient.DirectoryUpdate, error) {
+	return gatewayclient.DirectoryUpdate{Changed: version != d.directory.Version, Directory: d.directory}, nil
+}
+
+func testCAFile(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, ca, ca, &key.PublicKey, key)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "ca.crt")
+	require.NoError(t, os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
+	return path
+}
 
 func managerClientFor(t *testing.T, handler func(context.Context, string, []byte) (proto.Message, error)) *ManagerClient {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	credentials := gatewayauth.Credentials{Caller: "factor-engine", KeyID: "assigned-engine-key-38", Secret: testEngineSecret}
+	// 引擎是普通调用方：用所在主机（factor）的密钥、以自己的组件 ID 签名。
+	credentials := authtest.Component("factor-engine", "factor")
 	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithCurrentSerializationType(codec.SerializationTypeNoop), server.WithServiceName(managerServicePath))
 	require.NoError(t, service.Register(&server.ServiceDesc{ServiceName: managerServicePath, HandlerType: ((*interface{})(nil)), Methods: []server.Method{{Name: "*", Func: func(_ interface{}, ctx context.Context, decode server.FilterFunc) (interface{}, error) {
 		request := &codec.Body{}
@@ -43,7 +71,7 @@ func managerClientFor(t *testing.T, handler func(context.Context, string, []byte
 			for key, value := range message.ServerMetaData() {
 				headers.Add(key, string(value))
 			}
-			_, err := gatewayauth.Verify(credentials, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: "access@storage", Callee: managerServicePath, Func: method, Body: request.Data}, headers, time.Now())
+			_, err := authtest.Verify(credentials, gatewayauth.Request{TargetNode: "factor", Callee: managerServicePath, Func: method, Body: request.Data}, headers, time.Now())
 			if err != nil {
 				return nil, err
 			}
@@ -57,7 +85,11 @@ func managerClientFor(t *testing.T, handler func(context.Context, string, []byte
 	}}}}, struct{}{}))
 	go func() { _ = service.Serve() }()
 	t.Cleanup(func() { _ = service.Close(nil) })
-	gateway, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.External, Credentials: credentials, AccessAddress: listener.Addr().String(), AccessInstanceID: "access@storage"})
+	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"factor": {Address: "127.0.0.1"}}, Services: map[string][]string{managerServicePath: {"factor"}}}
+	directory.Version, err = directory.VersionHash()
+	require.NoError(t, err)
+	gateway, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: credentials, LocalHostID: "factor", LocalAddress: listener.Addr().String(),
+		CAFile: testCAFile(t), Source: managerDirectory{directory}, Serialization: codec.SerializationTypePB})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
 	client, err := NewManagerClient(gateway, 5*time.Second, domain.EngineIdentity{EngineID: "factor-engine@mac", BootID: "boot", Version: "v1"})
@@ -65,7 +97,7 @@ func managerClientFor(t *testing.T, handler func(context.Context, string, []byte
 	return client
 }
 
-func TestManagerClientSignsNativeRequestsWithAssignedExternalIdentity(t *testing.T) {
+func TestManagerClientSignsNativeRequestsAsHostComponent(t *testing.T) {
 	client := managerClientFor(t, func(_ context.Context, method string, body []byte) (proto.Message, error) {
 		require.Equal(t, "SyncEngineCatalog", method)
 		var req factorpb.SyncEngineCatalogReq

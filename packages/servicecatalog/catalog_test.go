@@ -138,18 +138,7 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"host gateway on business service", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"host-gateway"} }},
 		{"unsafe doctor path", func(c *Catalog) { c.Components[0].Doctor.WritablePaths = []string{"../outside"} }},
 		{"unknown dependency", func(c *Catalog) { c.Components[0].Doctor.Dependencies = []string{"unknown"} }},
-		{"regular component shares an external principal ID", func(c *Catalog) { componentPtr(c, "factor-engine").ExternalProgram = false }},
-		{"external program without its identity", func(c *Catalog) {
-			c.Identities = slices.DeleteFunc(c.Identities, func(identity Identity) bool { return identity.ID == "factor-engine" })
-			for i := range c.Components {
-				for j := range c.Components[i].Services {
-					for k := range c.Components[i].Services[j].Methods {
-						method := &c.Components[i].Services[j].Methods[k]
-						method.Callers = slices.DeleteFunc(method.Callers, func(caller string) bool { return caller == "factor-engine" })
-					}
-				}
-			}
-		}},
+		{"identity shares an external program ID", func(c *Catalog) { c.Identities = append(c.Identities, Identity{ID: "factor-engine", External: true}) }},
 		{"external program declares a port", func(c *Catalog) { componentPtr(c, "archive-worker").Ports = []int{11999} }},
 		{"external program service reuses its health port", func(c *Catalog) {
 			componentPtr(c, "factor-engine").Services[0].Port = componentPtr(c, "factor-engine").Health.Port
@@ -261,10 +250,14 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
 		{"access", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", true},
 		{"access", "trpc.moox.storage.Metadata", "DeleteDataset", false},
-		{"factor-engine", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", false},
+		{"factor-engine", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", true},
+		{"factor-engine", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
+		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", false},
 		{"access", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", true},
-		{"host-gateway@control", GatewayControlPath, "PullSnapshot", true},
-		{"host-gateway", GatewayControlPath, "PullSnapshot", false},
+		{"access", "trpc.moox.factor.FactorEngine", "EngineHeartbeat", false},
+		{"host-gateway", GatewayControlPath, "PullSnapshot", true},
+		{"host-gateway", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", false},
+		{"host-gateway@control", GatewayControlPath, "PullSnapshot", false},
 		{"host-gateway@*", GatewayControlPath, "PullSnapshot", false},
 		{"host-gateway@../escape", GatewayControlPath, "PullSnapshot", false},
 		{"console", GatewayControlPath, "PullSnapshot", false},
@@ -282,12 +275,10 @@ func TestExternalPrincipalWhitelistIsExact(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string]map[string][]string{
 		"scf-collector":      {"trpc.moox.storage.PrimaryStore": {"CommitTimeSeriesBatch", "UpsertFields"}},
-		"factor-engine":      {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted"}, "trpc.moox.storage.Metadata": {"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}, "trpc.moox.factor.FactorEngine": {"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress", "GetTaskParams", "GetUdfModule"}},
-		"archive-worker":     {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges"}, "trpc.moox.storage.Metadata": {"GetDataset", "ListDatasetColumns"}, "trpc.moox.archive.ArchiveWorker": {"ArchiveWorkerHeartbeat", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}},
 		"moox-skill":         {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows"}},
 		"collector-operator": {"trpc.moox.collector.CollectMgr": {"SetSubjectExclusions", "ClearSubjectExclusions", "ListSubjectExclusions", "SyncSubjects"}},
 	}
-	if !slices.Equal(c.ExternalIdentities(), []string{"scf-collector", "factor-engine", "archive-worker", "collector-operator", "moox-skill"}) {
+	if !slices.Equal(c.ExternalIdentities(), []string{"scf-collector", "collector-operator", "moox-skill"}) {
 		t.Fatalf("unexpected external identities %v", c.ExternalIdentities())
 	}
 	for _, principal := range c.ExternalIdentities() {
@@ -440,9 +431,6 @@ func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 			if !c.Allowed("factor-mgr", "trpc.moox.storage."+service, method) {
 				t.Errorf("Factor internal method is denied: %s/%s", service, method)
 			}
-			if c.Allowed("factor-engine", "trpc.moox.storage."+service, method) {
-				t.Errorf("external engine may not authenticate directly to host gateways: %s/%s", service, method)
-			}
 		}
 	}
 	for service, methods := range map[string][]string{
@@ -457,10 +445,14 @@ func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 	}
 }
 
-// 外部程序组件：以同名外部身份经 Access 访问系统，自己不能直接调任何方法；可以声明只经网关路由的服务（因子引擎的
-// EngineControl），不能声明其他端口。
+// 外部程序组件：和别的组件一样用所在主机的密钥签名，能调的方法就是 callers 里写了它的那些（与改成普通调用方之前
+// 经 Access 能调的完全相同），不是外部身份、不能经 Access 进入；可以声明只经网关路由的服务（因子引擎的 EngineControl），不能声明其他端口。
 func TestExternalProgramComponents(t *testing.T) {
 	c := mustCatalog(t)
+	want := map[string]map[string][]string{
+		"factor-engine":  {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted"}, "trpc.moox.storage.Metadata": {"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}, "trpc.moox.factor.FactorEngine": {"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress", "GetTaskParams", "GetUdfModule"}},
+		"archive-worker": {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges"}, "trpc.moox.storage.Metadata": {"GetDataset", "ListDatasetColumns"}, "trpc.moox.archive.ArchiveWorker": {"ArchiveWorkerHeartbeat", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}},
+	}
 	for _, id := range []string{"factor-engine", "archive-worker"} {
 		component, ok := c.Component(id)
 		if !ok || !component.ExternalProgram {
@@ -469,14 +461,14 @@ func TestExternalProgramComponents(t *testing.T) {
 		if len(component.Ports) != 0 || component.Health.Port == 0 {
 			t.Fatalf("external program %s must not own extra ports", id)
 		}
-		if !c.ExternalIdentity(id) || len(c.Grants(id)) == 0 {
-			t.Fatalf("%s must be an external identity with grants", id)
+		if c.ExternalIdentity(id) {
+			t.Fatalf("%s must not be an external identity", id)
 		}
 		for _, other := range c.Components {
 			for _, service := range other.Services {
 				for _, method := range service.MethodNames() {
-					if c.Allowed(id, service.Path, method) {
-						t.Fatalf("%s is an internal caller of %s/%s", id, service.Path, method)
+					if c.Allowed(id, service.Path, method) != slices.Contains(want[id][service.Path], method) || c.PrincipalAllowed(id, service.Path, method) {
+						t.Fatalf("%s 能调的方法变了：%s/%s", id, service.Path, method)
 					}
 				}
 			}
@@ -608,10 +600,10 @@ func TestMissingGrantsNamesTheProvidingComponent(t *testing.T) {
 	if missing := catalog.MissingGrants(all); len(missing) != 0 {
 		t.Fatalf("全部部署时不应缺项: %+v", missing)
 	}
-	without := slices.DeleteFunc(slices.Clone(all), func(id string) bool { return id == "archive-mgr" })
+	without := slices.DeleteFunc(slices.Clone(all), func(id string) bool { return id == "collector" })
 	missing := catalog.MissingGrants(without)
-	if len(missing) != 1 || missing[0].Component != "archive-mgr" || missing[0].Service != "trpc.moox.archive.ArchiveWorker" {
-		t.Fatalf("应指出缺 archive-mgr: %+v", missing)
+	if len(missing) != 1 || missing[0].Component != "collector" || missing[0].Service != "trpc.moox.collector.CollectMgr" {
+		t.Fatalf("应指出缺 collector: %+v", missing)
 	}
 }
 

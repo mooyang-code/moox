@@ -1,7 +1,7 @@
 gateway_client:
   caller: collector
-  key_id: key-collector
-  key_file: /data/moox/secrets/caller-collector.key
+  # 本机的主机签名私钥，这台主机上的组件共用。
+  key_file: /data/moox/secrets/host.key
   # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
   host_id: control
   local_address: 127.0.0.1:11002
@@ -86,13 +86,12 @@ subject_sync:
       instrument_type: spot
       cron: "10 8 * * *"
       timezone: Asia/Shanghai
-# 外部 SCF 身份由 Admin 分配；按地域的地址由发布器根据 VPC 路由生成。
+# 函数的签名身份 scf-collector：私钥随控制机的身份包签发，Collector 发布函数时写进函数环境；按地域的地址由发布器根据 VPC 路由生成。
 scf_access:
   access_address: 203.0.113.11:11004
   access_id: access@storage
   caller: scf-collector
-  key_file: /data/moox/secrets/caller-scf-collector.key
-  key_id: key-scf-collector
+  key_file: /data/moox/secrets/scf-collector.key
 # Collector 直接调腾讯云（原 CloudFunction 服务的两段配置）。
 cloud:
   tencent_scf:

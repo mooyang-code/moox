@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
@@ -73,7 +74,7 @@ func TestConnectFailureRetriesWritesWithAFreshNonce(t *testing.T) {
 			c := newTestClient(t, tunnelConfig(source))
 			var nonces []string
 			c.invoke = func(ctx context.Context, ep endpoint, service, method string, _ int, raw []byte, headers http.Header) ([]byte, error) {
-				claims, err := gatewayauth.Verify(c.config.Credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method, TargetNode: ep.target, Callee: service, Func: method, Body: raw}, headers, time.Now())
+				claims, err := authtest.Verify(c.config.Credentials, gatewayauth.Request{TargetNode: ep.target, Callee: service, Func: method, Body: raw}, headers, time.Now())
 				require.NoError(t, err)
 				nonces = append(nonces, claims.Nonce)
 				if len(nonces) == 1 {
@@ -176,7 +177,7 @@ func TestPoolGetFailureMarksTheCall(t *testing.T) {
 
 func externalCollector(t *testing.T) *Client {
 	t.Helper()
-	return newTestClient(t, Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: "scf-collector", KeyID: "assigned-scf-key-71", Secret: "fixture-key"},
+	return newTestClient(t, Config{Mode: External, Credentials: authtest.Identity("scf-collector"),
 		AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"})
 }
 
@@ -223,7 +224,7 @@ func TestRetryBudgetOnlyLimitsIdempotentWrites(t *testing.T) {
 	require.Equal(t, 1, calls, "剩余预算不足时幂等写放弃重发，交给补采")
 
 	// 只读方法保持改动前的行为：只要调用还没过期就重试，不受 minRetryRemaining 约束。
-	reader := newTestClient(t, Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: "moox-skill", KeyID: "assigned-scf-key-71", Secret: "fixture-key"},
+	reader := newTestClient(t, Config{Mode: External, Credentials: authtest.Identity("moox-skill"),
 		AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"})
 	readCalls := 0
 	reader.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
