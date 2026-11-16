@@ -740,7 +740,7 @@ func (s *remoteSetupInitStorage) Close() error {
 
 var _ setupInitStorage = (*remoteSetupInitStorage)(nil)
 
-// setupBrowserTrustSummary 说明管理台内部 CA 的信任还要用户自己做：不做时管理台能打开，但浏览器有安全提示。
+// setupBrowserTrustSummary 说明 MooX CA 的信任还要用户自己做：不做时管理台能打开，但浏览器有安全提示。
 type setupBrowserTrustSummary struct {
 	Status        string `json:"status"`
 	CAPath        string `json:"ca_path"`

@@ -18,7 +18,7 @@ control 必须相互独立，且不能占用 `bootstrap`、`bootstrap-input`、`
 
 核心阶段保留全部主机、部署和签名身份，只安装控制机的 Admin、Host Gateway、Host Agent。EventBus 的身份在 admin 阶段签发，
 broker 通过独立 `eventbus` profile 安装到拓扑指定的主机。输出 `stage=admin-ready`，不能据此认定完整部署成功。待 Storage、Access、
-出口代理、交易和计算依赖就绪后，外层流程才升级完整 control 部署并激活 Console Proxy。
+出口代理、交易和计算依赖就绪后，外层流程才升级完整 control 部署。
 已有的完整控制服务不能通过核心请求被缩减。
 
 `--state-dir` 默认为 `~/.local/state/moox/setup/<部署绑定摘要>`；其中保留 0700 目录、

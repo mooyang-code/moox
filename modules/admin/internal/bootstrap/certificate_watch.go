@@ -42,16 +42,19 @@ type certificateWatch struct {
 	Senders func() []notification.Sender
 }
 
-func newCertificateWatchFromEnvironment(db *gorm.DB) certificateWatch {
-	dir := strings.TrimSpace(os.Getenv("MOOX_ADMIN_PKI_DIR"))
-	if dir == "" {
-		if master := strings.TrimSpace(os.Getenv("MOOX_ADMIN_ENCRYPTION_KEY_FILE")); master != "" {
-			dir = filepath.Join(filepath.Dir(master), "pki")
-		} else {
-			dir = filepath.Join("..", "secrets", "pki")
-		}
+// adminPKIDir 是 MooX CA 所在目录：MOOX_ADMIN_PKI_DIR；没设时用 Admin 主密钥同目录下的 pki/，都没有时是 ../secrets/pki。
+func adminPKIDir() string {
+	if dir := strings.TrimSpace(os.Getenv("MOOX_ADMIN_PKI_DIR")); dir != "" {
+		return dir
 	}
-	watch := certificateWatch{PKIDir: dir, Now: time.Now, Hosts: func(ctx context.Context) ([]pki.HostIdentity, error) {
+	if master := strings.TrimSpace(os.Getenv("MOOX_ADMIN_ENCRYPTION_KEY_FILE")); master != "" {
+		return filepath.Join(filepath.Dir(master), "pki")
+	}
+	return filepath.Join("..", "secrets", "pki")
+}
+
+func newCertificateWatchFromEnvironment(db *gorm.DB) certificateWatch {
+	watch := certificateWatch{PKIDir: adminPKIDir(), Now: time.Now, Hosts: func(ctx context.Context) ([]pki.HostIdentity, error) {
 		if db == nil {
 			return nil, errors.New("host certificate inventory requires the Admin database")
 		}

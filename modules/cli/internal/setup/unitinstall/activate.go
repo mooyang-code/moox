@@ -116,20 +116,6 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 		if err != nil {
 			return err
 		}
-		proxy := slices.Contains(candidate.Components, "console-proxy")
-		previousProxy := proxy && slices.Contains(previous.Components, "console-proxy")
-		previousCA := ""
-		if proxy {
-			if err := validateProxyPaths(candidate); err != nil {
-				return err
-			}
-		}
-		if previousProxy {
-			previousCA, err = proxyState(ctx, previous)
-			if err != nil {
-				return err
-			}
-		}
 		allowed := []string{candidate.Directory}
 		if current != "" {
 			allowed = append(allowed, current)
@@ -176,12 +162,6 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 				return fail(err)
 			}
 		}
-		if previousProxy {
-			stoppedCA, err := proxyState(ctx, previous)
-			if err != nil || stoppedCA != previousCA {
-				return fail(errors.New("stopped proxy CA does not match its pre-stop identity"))
-			}
-		}
 		if err := writeActivation(unit, &journal, "copying"); err != nil {
 			return fail(err)
 		}
@@ -198,12 +178,6 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 		}
 		if _, err := ReadInstalled(ctx, candidate.Directory); err != nil {
 			return fail(err)
-		}
-		if proxy {
-			copiedCA, err := proxyState(ctx, candidate)
-			if err != nil || (previousProxy && copiedCA != previousCA) {
-				return fail(errors.New("copied/imported proxy CA identity failed validation"))
-			}
 		}
 		if err := ctx.Err(); err != nil {
 			return fail(err)
@@ -225,12 +199,6 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 			for _, component := range started.Components {
 				if component.State != "paused" && !component.Ready {
 					return fail(errors.New("activated component did not become ready"))
-				}
-				if component.ID == "console-proxy" && component.Ready {
-					activeCA, err := proxyState(ctx, candidate)
-					if err != nil || (previousProxy && activeCA != previousCA) {
-						return fail(errors.New("activated proxy CA identity failed validation"))
-					}
 				}
 			}
 		}

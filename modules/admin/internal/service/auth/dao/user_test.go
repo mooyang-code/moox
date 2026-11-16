@@ -16,6 +16,10 @@ func setupUserTestDB(t *testing.T, users ...*model.User) *UserDAO {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 共享内存库在最后一个连接关闭时才销毁；不关的话 -count=N 的下一轮会读到上一轮的数据。
+	if sqlDB, err := db.DB(); err == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
 	for _, user := range users {
 		require.NoError(t, db.Create(user).Error)

@@ -19,7 +19,7 @@ func (f topologyInvoker) Invoke(ctx context.Context, service, method string, req
 func TestSyncHostDeploymentsSendsCompleteCanonicalInventoryWithLabelAndConsoleSSH(t *testing.T) {
 	snapshot := clientSnapshot(t)
 	host := snapshot.Manifest.ControlHost()
-	snapshot.Manifest.Deployments[host.Name] = []string{"web-host", "monitor", "console-proxy", "admin", "eventbus"}
+	snapshot.Manifest.Deployments[host.Name] = []string{"strategy", "monitor", "collector", "admin", "eventbus"}
 	calls := 0
 	gateway := topologyInvoker(func(_ context.Context, service, method string, req, rsp any) error {
 		calls++
@@ -28,7 +28,7 @@ func TestSyncHostDeploymentsSendsCompleteCanonicalInventoryWithLabelAndConsoleSS
 		request := req.(*pb.SyncHostDeploymentsReq)
 		require.Equal(t, host.Name, request.GetHostId())
 		require.Equal(t, host.Address, request.GetAddress())
-		require.Equal(t, []string{"admin", "console-proxy", "eventbus", "monitor", "web-host"}, request.GetComponentIds())
+		require.Equal(t, []string{"admin", "collector", "eventbus", "monitor", "strategy"}, request.GetComponentIds())
 		require.Equal(t, "控制机", request.GetLabel())
 		require.Equal(t, int32(22), request.GetSshPort())
 		require.Equal(t, "ubuntu", request.GetSshUser())
@@ -82,7 +82,7 @@ reachability = "outbound"
 ssh = { username = "builder", password = "outbound-password" }
 
 [deployments]
-control = ["admin", "console-proxy", "web-host", "eventbus"]
+control = ["admin", "eventbus"]
 storage = []
 factor = ["factor-engine", "archive-worker"]
 `

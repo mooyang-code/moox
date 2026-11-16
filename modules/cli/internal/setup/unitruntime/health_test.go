@@ -28,8 +28,8 @@ func TestRuntimeHealthBindsResponseToRunningBinary(t *testing.T) {
 	require.NoError(t, err)
 	port, err := strconv.Atoi(rawPort)
 	require.NoError(t, err)
-	state := runtimeState{catalog: servicecatalog.Catalog{Components: []servicecatalog.Component{{ID: "console-proxy", Health: servicecatalog.Health{Port: port}}}}}
-	component := Component{ID: "console-proxy"}
+	state := runtimeState{catalog: servicecatalog.Catalog{Components: []servicecatalog.Component{{ID: "monitor", Health: servicecatalog.Health{Port: port}}}}}
+	component := Component{ID: "monitor"}
 	for _, readiness := range []bool{false, true} {
 		ready, err := state.probe(context.Background(), component, pidRecord{BinarySHA256: "running-binary", BootID: "current-boot"}, readiness)
 		require.NoError(t, err)

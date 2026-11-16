@@ -26,7 +26,7 @@ const hosts: DeploymentHost[] = [
   { host_id: "factor", address: "198.51.100.20", region: "lan", status: "enabled", reachability: "outbound" }
 ];
 const layout: Record<string, string[]> = {
-  control: ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "factor-mgr", "strategy"],
+  control: ["admin", "eventbus", "monitor", "collector", "factor-mgr", "strategy"],
   storage: ["storage-primary", "storage-view", "access", "archive-worker"],
   overseas: ["trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"],
   factor: ["factor-engine"]
@@ -95,8 +95,11 @@ describe("service topology", () => {
       services: ["trpc.moox.factor.FactorEngine"]
     });
     expect(edge(topology.edges, "ext:scf-collector", key("storage", "storage-primary"))?.via).toContain("access");
-    expect(edge(topology.edges, "ext:console", key("control", "console-proxy"))).toMatchObject({ category: "entry" });
-    expect(edge(topology.edges, key("control", "console-proxy"), key("control", "admin"))).toMatchObject({ category: "entry" });
+    // 浏览器直接连 Admin 的 9527，没有单独的代理与静态页面进程。
+    const entry = topology.edges.find(
+      item => item.from === "ext:console" && item.to === key("control", "admin") && item.category === "entry"
+    );
+    expect(entry?.services).toEqual(["HTTPS :9527"]);
     expect(edge(topology.edges, "ext:console", key("control", "strategy"))).toMatchObject({ category: "ops" });
     expect(topology.unplaced).toEqual(["数据归档管理服务"]);
   });

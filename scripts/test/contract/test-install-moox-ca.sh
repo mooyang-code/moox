@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
-SCRIPT="${ROOT}/scripts/deploy/install-caddy-ca.sh"
+SCRIPT="${ROOT}/scripts/deploy/install-moox-ca.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/moox-ca-install.XXXXXX")
 trap 'rm -rf "${TMP}"' EXIT
 

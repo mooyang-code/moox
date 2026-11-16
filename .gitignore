@@ -102,9 +102,9 @@ cover.out.tmp
 # Local debug screenshots at repo root
 /*.png
 
-# Local web-host build artifact (use ./bin)
-/web-host/web-host
-/web-host/moox-web-host
+# 构建 admin 时 scripts/build/build.sh 临时拷进来内嵌的前端（编译完即删），只提交占位文件
+/modules/admin/internal/webui/dist/*
+!/modules/admin/internal/webui/dist/.gitkeep
 
 # VitePress
 node_modules/

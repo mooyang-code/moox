@@ -229,7 +229,7 @@ ssh = {username="fixture",password="synthetic-ssh-password"}
 address = "127.0.0.3"
 ssh = {username="fixture",password="synthetic-ssh-password"}
 [deployments]
-control = ["admin","eventbus","console-proxy","web-host","monitor","collector","factor-mgr","strategy","access","egress-proxy","trade","storage-primary","storage-view"]
+control = ["admin","eventbus","monitor","collector","factor-mgr","strategy","access","egress-proxy","trade","storage-primary","storage-view"]
 storage = ["access"]
 compute1 = ["access"]
 `, deployment, filepath.Join(deployment, "units", "prod"), filepath.Join(deployment, "storage"), target.Port)
@@ -276,7 +276,7 @@ compute1 = ["access"]
 	require.True(t, os.IsNotExist(err), "custom control root must not create a second default unit")
 	passwordHash := nativeAdminPasswordHash(t, initial.Bootstrap.ControlDirectory, snapshot.Manifest.Admin.Username)
 	require.True(t, mooxsecurity.VerifyPassword(snapshot.Manifest.Admin.Password, passwordHash))
-	nativeAdminLogin(t, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password)
+	nativeAdminLogin(t, initial.Bootstrap.HostDirectory, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password)
 	status := func(directory string) unitruntime.Result {
 		output, err := exec.CommandContext(t.Context(), os.Getenv("MOOX_RUNTIME_BINARY"), "status", "--plan", filepath.Join(directory, "runtime.json")).CombinedOutput()
 		require.NoError(t, err, "%s", output)
@@ -292,8 +292,6 @@ compute1 = ["access"]
 		require.True(t, item.Ready, item.ID)
 		require.Positive(t, item.PID)
 	}
-	_, err = os.Stat(filepath.Join(deployment, "identity", "console-proxy"))
-	require.True(t, os.IsNotExist(err), "admin staging must not consume proxy CA creation authorization")
 	operator, err := os.ReadFile(initial.OperatorConfig)
 	require.NoError(t, err)
 	var identity struct {
@@ -450,18 +448,12 @@ compute1 = ["access"]
 		full, err := BootstrapControl(t.Context(), snapshot, promotion)
 		require.NoError(t, err)
 		require.Equal(t, "control-ready", full.Stage)
-		require.Len(t, full.Components, 8, "every control component must run（EventBus 已是独立单元，不在控制单元里）")
+		require.Len(t, full.Components, 6, "every control component must run（EventBus 已是独立单元，不在控制单元里）")
 		require.NotEqual(t, initial.Bootstrap.ControlDirectory, full.Bootstrap.ControlDirectory)
 		require.Equal(t, initial.Bootstrap.CAFingerprint, full.Bootstrap.CAFingerprint)
 		require.Equal(t, passwordHash, nativeAdminPasswordHash(t, full.Bootstrap.ControlDirectory, snapshot.Manifest.Admin.Username))
 		fullStatus := status(full.Bootstrap.ControlDirectory)
-		ca, err := os.ReadFile(filepath.Join(full.Bootstrap.ControlDirectory, "console-proxy/certs/caddy/root.crt"))
-		require.NoError(t, err)
-		pool := x509.NewCertPool()
-		require.True(t, pool.AppendCertsFromPEM(ca))
-		httpsTransport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
-		defer httpsTransport.CloseIdleConnections()
-		client := &http.Client{Transport: httpsTransport, Timeout: 10 * time.Second}
+		client := nativeAdminClient(t, full.Bootstrap.HostDirectory)
 		response, err := client.Get("https://127.0.0.1:9527/")
 		require.NoError(t, err)
 		_, err = io.Copy(io.Discard, response.Body)
@@ -488,7 +480,7 @@ compute1 = ["access"]
 		require.Equal(t, "control-ready", resumedControl.Stage)
 		unchanged := status(full.Bootstrap.ControlDirectory)
 		require.Equal(t, unchanged, status(full.Bootstrap.ControlDirectory))
-		t.Log("all eight control services, trusted HTTPS page/login, immutable retry, pause/resume and original authorization binding passed")
+		t.Log("all control services, trusted HTTPS page/login, immutable retry, pause/resume and original authorization binding passed")
 	} else {
 		t.Fatal("native business Linux gate requires MOOX_BUSINESS_BINARY_DIRECTORY")
 	}
@@ -510,13 +502,26 @@ func nativeAdminPasswordHash(t *testing.T, release, username string) string {
 	return user.Hash
 }
 
-func nativeAdminLogin(t *testing.T, username, password string) {
+// nativeAdminClient 是信任 MooX CA 的 HTTPS 客户端：Admin 自己监听 9527，证书由它用 MooX CA 签，SAN 是控制机地址（这里是 127.0.0.1）。
+// MooX CA 的公开副本随 host 单元的身份投放在 certs/moox-ca.crt。
+func nativeAdminClient(t *testing.T, hostDirectory string) *http.Client {
 	t.Helper()
-	nativeAdminLoginAt(t, &http.Client{Timeout: 10 * time.Second}, "http://127.0.0.1:11000", username, password)
+	ca, err := os.ReadFile(filepath.Join(hostDirectory, "certs/moox-ca.crt"))
+	require.NoError(t, err)
+	pool := x509.NewCertPool()
+	require.True(t, pool.AppendCertsFromPEM(ca))
+	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
+	t.Cleanup(transport.CloseIdleConnections)
+	return &http.Client{Transport: transport, Timeout: 10 * time.Second}
 }
 
-// nativeAdminLoginAt 像浏览器一样登录：明文密码换会话 Cookie，再带着 Cookie 取一次用户信息。直连 11000 时 Origin
-// 写成 https://<那个地址>，与 Admin 的同站规则一致。
+func nativeAdminLogin(t *testing.T, hostDirectory, username, password string) {
+	t.Helper()
+	nativeAdminLoginAt(t, nativeAdminClient(t, hostDirectory), "https://127.0.0.1:9527", username, password)
+}
+
+// nativeAdminLoginAt 像浏览器一样登录：明文密码换会话 Cookie，再带着 Cookie 取一次用户信息。Origin 写成 https://<入口地址>，
+// 与 Admin 的同站规则一致。
 func nativeAdminLoginAt(t *testing.T, client *http.Client, endpoint, username, password string) {
 	t.Helper()
 	origin := "https://" + strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
@@ -536,7 +541,7 @@ func nativeAdminLoginAt(t *testing.T, client *http.Client, endpoint, username, p
 		defer result.Body.Close()
 		require.Equal(t, http.StatusOK, result.StatusCode)
 		for _, cookie := range result.Cookies() {
-			if cookie.Name == "moox_session" {
+			if cookie.Name == "__Host-moox_session" {
 				require.True(t, cookie.HttpOnly && cookie.Secure && cookie.SameSite == http.SameSiteStrictMode, "session cookie attributes")
 				sessionCookie = &http.Cookie{Name: cookie.Name, Value: cookie.Value}
 			}

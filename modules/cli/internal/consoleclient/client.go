@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-// DefaultPort 是管理台 HTTPS 入口（console-proxy）的端口。
+// DefaultPort 是管理台 HTTPS 入口（Admin 自己监听）的端口。
 const DefaultPort = 9527
 
 // UntrustedError 表示管理台的证书不被这台电脑信任（例如用的是 MooX 内部 CA）；
@@ -48,7 +48,7 @@ type Options struct {
 }
 
 // sessionCookie 是管理台的会话 Cookie 名（与 Admin 的 session.CookieName 一致）。
-const sessionCookie = "moox_session"
+const sessionCookie = "__Host-moox_session"
 
 // Client 是登录后的管理台会话。
 type Client struct {

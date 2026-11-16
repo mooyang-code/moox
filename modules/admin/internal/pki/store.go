@@ -360,3 +360,67 @@ func (s *Store) ExportCA(outputDir string) (hostbundle.CertificateInfo, error) {
 	}
 	return certificateInfo(ca), nil
 }
+
+// CACertificate 返回校验过的 MooX CA 根证书（PEM 原文与解析结果）。只读，不创建、不修复。
+func (s *Store) CACertificate() ([]byte, *x509.Certificate, error) {
+	lock, err := s.lock()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer lock.Close()
+	cert, _, raw, err := s.loadCA()
+	if err != nil {
+		return nil, nil, err
+	}
+	return raw, cert, nil
+}
+
+// IssueWebCertificate 给管理台网页入口签一张服务端证书，只在内存里返回 PEM：不写 hosts/，不动主机证书，也不换 CA。
+// SAN 只有 address（IP 或域名），有效期 lifetime，不超过 CA 本身的到期时间。
+func (s *Store) IssueWebCertificate(address string, lifetime time.Duration) (certPEM, keyPEM []byte, err error) {
+	if !servicecatalog.ValidHostAddress(address) || lifetime <= 0 {
+		return nil, nil, errors.New("web certificate requires a bare IP or DNS address and a positive lifetime")
+	}
+	lock, err := s.lock()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer lock.Close()
+	ca, caKey, _, err := s.loadCA()
+	if err != nil {
+		return nil, nil, err
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	serial, err := serialNumber()
+	if err != nil {
+		return nil, nil, err
+	}
+	now := s.now().UTC().Truncate(time.Second)
+	notAfter := now.Add(lifetime)
+	if ca.NotAfter.Before(notAfter) {
+		notAfter = ca.NotAfter
+	}
+	template := &x509.Certificate{
+		SerialNumber: serial, Subject: pkix.Name{CommonName: address},
+		NotBefore: now.Add(-5 * time.Minute), NotAfter: notAfter,
+		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	if ip := net.ParseIP(address); ip != nil {
+		template.IPAddresses = []net.IP{ip}
+	} else {
+		template.DNSNames = []string{strings.ToLower(address)}
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	encodedKey, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encodedKey}), nil
+}

@@ -48,7 +48,7 @@ func bootstrapFixture(t *testing.T) (Request, string) {
 	environment := func() map[string]string { return map[string]string{} }
 	// EventBus 是独立单元，不在控制单元里：拓扑把它登记在控制机上（客户端据此得到连接地址），但控制单元只装下面这几个。
 	// 这里没有任何 broker 在运行，HostAgent 照样必须就绪（就绪不依赖 EventBus）。
-	components := []string{"admin", "web-host", "console-proxy"}
+	components := []string{"admin"}
 	request := Request{Version: 1, DeploymentRoot: deployment, Topology: hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{{HostID: "control", Address: "127.0.0.1", Description: "initial", Components: append(append([]string(nil), components...), "eventbus")}}}, Host: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_HOST_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_HOST_SHA256"), UnitRoot: filepath.Join(deployment, "host"), Environment: map[string]map[string]string{"host-gateway": environment(), "host-agent": environment()}, Overrides: map[string]string{}}, Control: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_CONTROL_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_CONTROL_SHA256"), UnitRoot: filepath.Join(deployment, "control"), Environment: map[string]map[string]string{}, Overrides: map[string]string{}, Components: components}}
 	request.InitialAdmin = &AdminUser{Username: "admin", Password: "synthetic-initial-admin-password"}
 	for _, id := range components {
@@ -61,7 +61,6 @@ func bootstrapFixture(t *testing.T) (Request, string) {
 		return filename
 	}
 	request.Control.Overrides["admin/config/console.yaml"] = write("console.yaml", "session:\n  ttl: 24h\nconsole:\n  allowed_origins: []\n")
-	request.Control.Overrides["console-proxy/config/app.yaml"] = write("proxy.yaml", "public:\n  host: localhost\n  bind: 127.0.0.1\n  port: 9527\n  http3: false\ntls:\n  storage_root: ../data/caddy/caddy\n  ca_baseline: ../data/caddy/internal-ca.sha256\n  ca_publish_dir: ../certs/caddy\nupstreams:\n  admin: 127.0.0.1:11000\n  web: 127.0.0.1:9528\nhealth:\n  listen: 127.0.0.1:19528\nlifecycle:\n  drain_timeout: 2s\n  engine_stop_timeout: 1s\n  cleanup_margin: 1s\n  startup_timeout: 15s\n")
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -157,19 +156,21 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 			require.True(t, status.Ready, "repaired %s", status.ID)
 		}
 	}
-	ca, err := os.ReadFile(filepath.Join(initial.ControlDirectory, "console-proxy/certs/caddy/root.crt"))
+	// 浏览器入口由 Admin 自己监听 9527，证书用 MooX CA 签（SAN 是控制机地址）；/ca/root.crt 给出的就是这张根证书。
+	ca, err := os.ReadFile(filepath.Join(initial.HostDirectory, "certs/moox-ca.crt"))
 	require.NoError(t, err)
 	pool := x509.NewCertPool()
 	require.True(t, pool.AppendCertsFromPEM(ca))
-	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost", MinVersion: tls.VersionTLS12}}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12}}
 	defer transport.CloseIdleConnections()
 	client := http.Client{Transport: transport, Timeout: 10 * time.Second}
-	response, err := client.Get("https://localhost:9527/")
+	response, err := client.Get("https://127.0.0.1:9527/ca/root.crt")
 	require.NoError(t, err)
-	_, err = io.Copy(io.Discard, response.Body)
+	served, err := io.ReadAll(response.Body)
 	response.Body.Close()
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Equal(t, string(ca), string(served))
 	request.Topology.Hosts[0].Description = "rerun"
 	request.InitialAdmin = &AdminUser{Username: "admin", Password: "synthetic-new-password-must-not-reset"}
 	upgraded, err := runBootstrap(t, request, root)
@@ -185,9 +186,9 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	initialBusCA, err := os.ReadFile(busCA)
 	require.NoError(t, err)
 	require.Equal(t, initialBusCA, upgradedBusCA, "EventBus TLS identity survives upgrades")
-	newCA, err := os.ReadFile(filepath.Join(upgraded.ControlDirectory, "console-proxy/certs/caddy/root.crt"))
+	newCA, err := os.ReadFile(filepath.Join(upgraded.HostDirectory, "certs/moox-ca.crt"))
 	require.NoError(t, err)
-	require.Equal(t, ca, newCA)
+	require.Equal(t, ca, newCA, "离线重跑不换 MooX CA")
 	description := func(directory string) string {
 		db, err := gorm.Open(sqlite.Open(filepath.Join(directory, "admin/data/admin.db")), &gorm.Config{})
 		require.NoError(t, err)
@@ -247,7 +248,7 @@ func TestBootstrapLinuxSIGKILLAtAdminStartupRecoversWholeHost(t *testing.T) {
 	exit, ok := err.(*exec.ExitError)
 	require.True(t, ok)
 	require.Equal(t, syscall.SIGKILL, exit.Sys().(syscall.WaitStatus).Signal())
-	issuedProxyCA, err := os.ReadFile(filepath.Join(captured.Control.Candidate, "console-proxy/certs/caddy/root.crt"))
+	issuedCA, err := os.ReadFile(filepath.Join(captured.Host.Candidate, "certs/moox-ca.crt"))
 	require.NoError(t, err)
 	issuedRole, err := jetstream.LoadCredentialFile(filepath.Join(captured.Host.Candidate, "host-agent/config/eventbus.yaml"))
 	require.NoError(t, err)
@@ -277,9 +278,9 @@ func TestBootstrapLinuxSIGKILLAtAdminStartupRecoversWholeHost(t *testing.T) {
 	recoveredBusCA, err := os.ReadFile(filepath.Join(recovered.HostDirectory, "host-agent/secrets/eventbus/ca.pem"))
 	require.NoError(t, err)
 	require.Equal(t, issuedBusCA, recoveredBusCA, "SIGKILL recovery must retain the EventBus TLS identity")
-	recoveredProxyCA, err := os.ReadFile(filepath.Join(recovered.ControlDirectory, "console-proxy/certs/caddy/root.crt"))
+	recoveredCA, err := os.ReadFile(filepath.Join(recovered.HostDirectory, "certs/moox-ca.crt"))
 	require.NoError(t, err)
-	require.Equal(t, issuedProxyCA, recoveredProxyCA, "SIGKILL recovery must retain the one-time proxy CA")
+	require.Equal(t, issuedCA, recoveredCA, "SIGKILL recovery must retain the MooX CA")
 	require.NotEqual(t, captured.Control.Candidate, recovered.ControlDirectory)
 	for _, directory := range []string{recovered.HostDirectory, recovered.ControlDirectory} {
 		for _, status := range runtimeStatus(t, directory).Components {

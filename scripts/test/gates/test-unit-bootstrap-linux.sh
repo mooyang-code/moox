@@ -29,7 +29,6 @@ required=[
     'TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether',
     'TestBootstrapLinuxSIGKILLAtAdminStartupRecoversWholeHost',
     'TestBootstrapLinuxOfflineChildHoldsLockAndDiesWithParent',
-    'TestBootstrapLinuxProxyCAConsumesAuthorization',
 ]
 for name in required:
     if not re.search(r'^--- PASS: '+re.escape(name)+r' \(',log,re.M):

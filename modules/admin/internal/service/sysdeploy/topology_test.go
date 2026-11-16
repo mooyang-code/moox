@@ -16,7 +16,7 @@ import (
 
 func topologySpecs() []HostSpec {
 	return []HostSpec{
-		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
+		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "collector"}},
 		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
 		{HostID: "overseas", Address: "compute.example.test", Components: []string{"trade", "access"}},
 	}
@@ -79,7 +79,7 @@ func TestTopologyRejectsInvalidSynchronizationWithoutChangingDatabase(t *testing
 	}{
 		{"unknown component", func(s []HostSpec) []HostSpec { s[0].Components = append(s[0].Components, "unknown"); return s }},
 		{"protected removal", func(s []HostSpec) []HostSpec { s[0].Components = []string{"collector"}; return s }},
-		{"control scope", func(s []HostSpec) []HostSpec { s[1].Components = append(s[1].Components, "console-proxy"); return s }},
+		{"control scope", func(s []HostSpec) []HostSpec { s[1].Components = append(s[1].Components, "admin"); return s }},
 		{"replica limit", func(s []HostSpec) []HostSpec { s[2].Components = append(s[2].Components, "collector"); return s }},
 		{"duplicate component", func(s []HostSpec) []HostSpec { s[2].Components = []string{"access", "access"}; return s }},
 		{"automatic component", func(s []HostSpec) []HostSpec { s[2].Components = []string{"host-gateway"}; return s }},
@@ -154,7 +154,7 @@ func TestConcurrentTopologyWritersCannotEnableTwoSingleReplicas(t *testing.T) {
 	second, err := NewTopologyDAO(db, "control")
 	require.NoError(t, err)
 	specs := topologySpecs()
-	specs[0].Components = []string{"admin", "console-proxy", "web-host"}
+	specs[0].Components = []string{"admin"}
 	require.NoError(t, first.SyncHosts(context.Background(), specs))
 	start, results := make(chan struct{}), make(chan error, 2)
 	for _, item := range []struct {

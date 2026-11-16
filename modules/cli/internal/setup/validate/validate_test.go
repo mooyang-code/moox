@@ -80,7 +80,7 @@ username = "ubuntu"
 password = "recognizable-compute-password"
 
 [deployments]
-control = ["admin", "console-proxy", "web-host", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
+control = ["admin", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
 overseas = []
 `
 	path := filepath.Join(root, "moox.toml")

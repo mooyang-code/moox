@@ -54,7 +54,7 @@ channel_type = "wecom"
 webhook_url = ""
 
 [deployments]
-control = ["admin", "console-proxy", "web-host", "eventbus"]
+control = ["admin", "eventbus"]
 `
 
 func writeManifest(t *testing.T, root, body string, mode os.FileMode) string {
@@ -625,16 +625,16 @@ func TestDeploymentsRejectAmbiguousOrInvalidComponents(t *testing.T) {
 	}}
 	for _, deployments := range []map[string][]string{
 		{"missing": {"trade"}}, {"compute": {"missing"}}, {"compute": {"trade", "trade"}},
-		{"control": {"admin", "console-proxy", "web-host", "trade"}, "compute": {"trade"}},
-		{"compute": {"host-gateway"}}, {"compute": {"admin"}}, {"compute": {"web-host"}},
+		{"control": {"admin", "trade"}, "compute": {"trade"}},
+		{"compute": {"host-gateway"}}, {"compute": {"admin"}},
 	} {
 		if _, ok := deployments["control"]; !ok {
-			deployments["control"] = []string{"admin", "console-proxy", "web-host", "eventbus"}
+			deployments["control"] = []string{"admin", "eventbus"}
 		}
 		m.Deployments = deployments
 		require.Error(t, validateDeployments(&m))
 	}
-	m.Deployments = map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "compute": {"trade", "egress-proxy"}}
+	m.Deployments = map[string][]string{"control": {"admin", "eventbus"}, "compute": {"trade", "egress-proxy"}}
 	require.NoError(t, validateDeployments(&m))
 	require.Equal(t, "compute", m.ComponentHost("trade"))
 }
@@ -690,7 +690,7 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{"eventbus invalid port", strings.Replace(validManifest, "port = 4222", "port = 70000", 1), "eventbus.port"},
 		{"eventbus tls disabled", strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), "eventbus.tls_enabled"},
 		{"missing eventbus deployment", strings.Replace(validManifest, `, "eventbus"`, "", 1), "deployments must include eventbus"},
-		{"protected component missing", strings.Replace(validManifest, `"console-proxy", `, "", 1), "protected component"},
+		{"admin missing", strings.Replace(validManifest, `"admin", `, "", 1), "control host must exist"},
 		{"unknown deployment", validManifest + "unknown = [\"trade\"]\n", "deployments host ID"},
 		{"automatic component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "由系统自动部署"},
 		{"retired component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "storage-node"`, 1), "config migrate --yes"},

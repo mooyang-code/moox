@@ -87,6 +87,13 @@ func TestHandleGatewayRequest_InvalidParams_ShouldReturnBadRequest(t *testing.T)
 	require.Error(t, err)
 }
 
-func TestGetConsoleHandleInstance_ShouldReturnSingleton(t *testing.T) {
-	assert.Same(t, GetConsoleHandleInstance(), GetConsoleHandleInstance())
+func TestNewHandlerRequiresConfigAndDependencies(t *testing.T) {
+	SetConfig(nil)
+	_, err := NewHandler(nil, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "控制台配置未初始化")
+	SetConfig(&Config{})
+	t.Cleanup(func() { SetConfig(nil) })
+	_, err = NewHandler(nil, nil, nil)
+	assert.Error(t, err)
 }

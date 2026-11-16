@@ -210,14 +210,31 @@ func TestCertificateWatchMissingHostInventoryDoesNotBlockControlStartup(t *testi
 	require.NoError(t, os.Remove(filepath.Join(watch.PKIDir, "hosts", "storage.crt")))
 	s := &server.Server{}
 	s.AddService(certificateWatchTimerService, server.New(server.WithServiceName(certificateWatchTimerService), server.WithProtocol("timer")))
-	require.NoError(t, registerCertificateWatchTimer(context.Background(), s, watch))
+	require.NoError(t, registerCertificateWatchTimer(context.Background(), s, watch, nil))
 	require.Len(t, sender.messages, 1)
 	require.Contains(t, sender.messages[0].Body, "host_gateway@storage")
 	// Future timer runs continue to report the problem until issuance completes.
 	require.Error(t, watch.Validate(context.Background()))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	require.ErrorIs(t, registerCertificateWatchTimer(ctx, s, watch), context.Canceled)
+	require.ErrorIs(t, registerCertificateWatchTimer(ctx, s, watch, nil), context.Canceled)
+}
+
+type countingRenewer struct{ calls int }
+
+func (r *countingRenewer) RefreshCertificate(context.Context) error {
+	r.calls++
+	return nil
+}
+
+// 网页证书的每日检查挂在证书巡检的定时器上：注册时先跑一次，之后每天跑。
+func TestCertificateWatchTimerAlsoRenewsWebCertificate(t *testing.T) {
+	watch, _ := certificateWatchFixture(t, 365*24*time.Hour, 180*24*time.Hour)
+	s := &server.Server{}
+	s.AddService(certificateWatchTimerService, server.New(server.WithServiceName(certificateWatchTimerService), server.WithProtocol("timer")))
+	web := &countingRenewer{}
+	require.NoError(t, registerCertificateWatchTimer(context.Background(), s, watch, web))
+	require.Equal(t, 1, web.calls)
 }
 
 func TestCertificateWatchRetainsSeparateEventBusCAAndBoundsNotifications(t *testing.T) {

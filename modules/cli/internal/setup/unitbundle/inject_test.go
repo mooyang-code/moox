@@ -11,10 +11,10 @@ import (
 )
 
 func TestHostMaterialInjectsOnlySelectedUnitIdentities(t *testing.T) {
-	f := newFixture(t, "control", []string{"admin", "console-proxy", "access"}, true)
+	f := newFixture(t, "control", []string{"admin", "access"}, true)
 	material, err := Load(t.Context(), f.write(t), f.options)
 	require.NoError(t, err)
-	for _, components := range [][]string{{"host-gateway", "host-agent"}, {"admin", "console-proxy"}, {"access"}} {
+	for _, components := range [][]string{{"host-gateway", "host-agent"}, {"admin"}, {"access"}} {
 		t.Run(components[0], func(t *testing.T) {
 			directory := privateParent(t)
 			if components[0] == "host-gateway" {
@@ -41,8 +41,9 @@ func TestHostMaterialInjectsOnlySelectedUnitIdentities(t *testing.T) {
 				_, err := os.Lstat(filepath.Join(directory, "certs"))
 				require.True(t, os.IsNotExist(err))
 			}
-			if slices.Contains(components, "console-proxy") {
-				require.Len(t, projection.Credentials, 3)
+			// console 签名身份跟着 admin 投放。
+			if slices.Contains(components, "admin") {
+				require.Len(t, projection.Credentials, 2)
 				require.FileExists(t, filepath.Join(directory, "secrets/caller-console.key"))
 			}
 			if slices.Contains(components, "access") {

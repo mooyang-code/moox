@@ -25,8 +25,6 @@ export const EDGE_CATEGORIES: { key: EdgeCategory; label: string }[] = [
   { key: "ops", label: "运维管控" }
 ];
 const LAYER_OF: Record<string, TopologyLayer> = {
-  "console-proxy": "entry",
-  "web-host": "entry",
   access: "entry",
   admin: "control",
   monitor: "control",
@@ -56,12 +54,8 @@ const EXTERNAL_LABELS: Record<string, { name: string; note: string }> = {
   "collector-operator": { name: "采集运维", note: "外部调用方" },
   "moox-skill": { name: "Skill", note: "外部调用方" }
 };
-// 管理台入口由 console-proxy 固定分流：静态资源到 web-host，/api/admin/* 到 admin。
-const ENTRY_LINKS: { from: string; to: string; label: string }[] = [
-  { from: "ext:console", to: "console-proxy", label: "HTTPS :9527" },
-  { from: "console-proxy", to: "web-host", label: "静态资源 :9528" },
-  { from: "console-proxy", to: "admin", label: "/api/admin/*" }
-];
+// 管理台入口是 Admin 自己监听的 HTTPS 9527：静态页面、根证书下载与 /api/admin/* 都在这里。
+const ENTRY_LINKS: { from: string; to: string; label: string }[] = [{ from: "ext:console", to: "admin", label: "HTTPS :9527" }];
 
 // 数据流向：行情从源头进入存储，再驱动视图、因子、策略与交易。
 // kind：data 为同步调用/写入，event 经消息总线投递，control 为调度控制。
@@ -325,7 +319,7 @@ function categoryOf(caller: string, isComponent: boolean): EdgeCategory {
   return isComponent ? "business" : "entry";
 }
 function viaOf(caller: string) {
-  if (caller === "console") return "经 console-proxy → Admin 以 console 身份转发";
+  if (caller === "console") return "经 Admin 的 9527 入口以 console 身份转发";
   if (caller === "host-gateway") return "主机网关拉取路由快照";
   return "";
 }

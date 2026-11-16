@@ -31,6 +31,10 @@ func newLoginFixture(t *testing.T) *loginFixture {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 共享内存库在最后一个连接关闭时才销毁；不关的话 -count=N 的下一轮会读到上一轮的数据。
+	if sqlDB, err := db.DB(); err == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
 	passwordHash, err := mooxsecurity.HashPassword(testPassword)
 	require.NoError(t, err)
@@ -95,6 +99,29 @@ func TestLoginRejectsInvalidFormatAndCallsOutsideConsole(t *testing.T) {
 	direct, err := f.svc.Login(context.Background(), &pb.LoginReq{Username: "admin", Password: testPassword})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_INNER_ERR, direct.GetRetInfo().GetCode())
+}
+
+// 用户不存在时也对固定的占位哈希做一次 bcrypt 校验，和密码错误耗时一致，不能借响应时间判断用户名是否存在。
+func TestLoginUnknownUserStillRunsOneBcryptCheck(t *testing.T) {
+	f := newLoginFixture(t)
+	original := verifyPassword
+	t.Cleanup(func() { verifyPassword = original })
+	var hashes []string
+	verifyPassword = func(password, hash string) bool {
+		hashes = append(hashes, hash)
+		return original(password, hash)
+	}
+	rsp, _ := f.login(t, "nobody", testPassword, "203.0.113.7")
+	assert.Equal(t, wrongCredentials, rsp.GetRetInfo().GetMsg())
+	require.Equal(t, []string{placeholderPasswordHash()}, hashes, "查不到用户也做了一次校验")
+	assert.Regexp(t, `^\$2[aby]\$10\$`, hashes[0], "占位哈希与真实密码同一种 bcrypt、同一代价")
+	assert.False(t, original(testPassword, hashes[0]), "占位哈希不对应任何能登录的密码")
+
+	hashes = nil
+	rsp, _ = f.login(t, "admin", "wrong", "203.0.113.8")
+	assert.Equal(t, wrongCredentials, rsp.GetRetInfo().GetMsg())
+	require.Len(t, hashes, 1, "密码错误同样只做一次校验")
+	assert.NotEqual(t, placeholderPasswordHash(), hashes[0])
 }
 
 func TestLoginUnknownUserAndWrongPasswordGiveSameMessage(t *testing.T) {

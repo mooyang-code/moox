@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -52,7 +51,7 @@ func releaseCatalogFixture(t *testing.T, release string, catalog []byte) string 
 	require.NoError(t, os.Chmod(path, 0o644))
 	manifest := map[string]any{
 		"version": 1, "profile": "control", "catalog_sha256": value,
-		"files": []map[string]any{{"path": "bin/moox-web-host", "sha256": "sha256:" + strings.Repeat("0", 64)}, {"path": releaseCatalogPath, "sha256": value}},
+		"files": []map[string]any{{"path": "bin/moox-strategy", "sha256": "sha256:" + strings.Repeat("0", 64)}, {"path": releaseCatalogPath, "sha256": value}},
 	}
 	raw, err := json.Marshal(manifest)
 	require.NoError(t, err)
@@ -78,23 +77,15 @@ func fixtureEnvironment() map[string]string {
 	}
 }
 
-func proxyBudgetFixture(t *testing.T, release, drain, engine, cleanup, startup string) {
-	t.Helper()
-	path := filepath.Join(release, "console-proxy", "config", "app.yaml")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	raw := "public:\n  host: localhost\nlifecycle:\n  drain_timeout: " + drain + "\n  engine_stop_timeout: " + engine + "\n  cleanup_margin: " + cleanup + "\n  startup_timeout: " + startup + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
-}
-
 func TestRuntimePlanValidatesCatalogPhysicalReleaseAndPrivateEnvironment(t *testing.T) {
-	path, plan := planFixture(t, "console-proxy", "web-host")
+	path, plan := planFixture(t, "monitor", "strategy")
 	loaded, err := LoadPlan(path)
 	require.NoError(t, err)
 	require.Equal(t, plan, loaded)
-	selected, err := plan.selectComponents([]string{"web-host", "console-proxy"})
+	selected, err := plan.selectComponents([]string{"strategy", "monitor"})
 	require.NoError(t, err)
-	require.Equal(t, "web-host", selected[0].ID)
-	for _, ids := range [][]string{{"web-host", "web-host"}, {"admin"}, {"../admin"}} {
+	require.Equal(t, "strategy", selected[0].ID)
+	for _, ids := range [][]string{{"strategy", "strategy"}, {"admin"}, {"../admin"}} {
 		_, err := plan.selectComponents(ids)
 		require.Error(t, err)
 	}
@@ -133,8 +124,7 @@ func TestRuntimePlanValidatesCatalogPhysicalReleaseAndPrivateEnvironment(t *test
 // runtime 升级后服务目录变了：已安装的发布按它自带、并经计划与包清单核对过的目录读取，新 runtime 仍能读取和停止它；
 // 候选发布必须用本 runtime 的目录。
 func TestInstalledReleaseUsesItsOwnCatalogWhileCandidateMustMatchRuntime(t *testing.T) {
-	path, plan := planFixture(t, "console-proxy", "web-host")
-	proxyBudgetFixture(t, plan.ReleaseRoot, "30s", "10s", "5s", "1m")
+	path, plan := planFixture(t, "monitor", "strategy")
 	placeholderBinaries(t, plan)
 	_, err := LoadCandidatePlan(path)
 	require.NoError(t, err, "a release packaged with this runtime's catalog is a valid candidate")
@@ -147,7 +137,7 @@ func TestInstalledReleaseUsesItsOwnCatalogWhileCandidateMustMatchRuntime(t *test
 	require.NoError(t, ValidateRelease(path))
 	catalog, err := releaseCatalog(loaded)
 	require.NoError(t, err)
-	_, ok := catalog.Component("web-host")
+	_, ok := catalog.Component("strategy")
 	require.True(t, ok)
 
 	_, err = LoadCandidatePlan(path)
@@ -172,7 +162,7 @@ func placeholderBinaries(t *testing.T, plan Plan) {
 
 // 发布自带的目录被改动（与计划、包清单记录的哈希不符）、包清单不一致或文件缺失时，已安装发布也拒绝读取。
 func TestInstalledReleaseRejectsTamperedOrMissingCatalog(t *testing.T) {
-	path, plan := planFixture(t, "web-host")
+	path, plan := planFixture(t, "strategy")
 	plan = olderCatalogFixture(t, path, plan)
 	catalogPath := filepath.Join(plan.ReleaseRoot, releaseCatalogPath)
 	original, err := os.ReadFile(catalogPath)
@@ -203,7 +193,7 @@ func TestInstalledReleaseRejectsTamperedOrMissingCatalog(t *testing.T) {
 }
 
 func TestRuntimeEnvironmentRejectsExecutionOverridesUnsafeFilesAndOversizeInput(t *testing.T) {
-	_, plan := planFixture(t, "web-host")
+	_, plan := planFixture(t, "strategy")
 	component := plan.Components[0]
 	for _, values := range []any{
 		map[string]string{"PATH": "/fixture"},
@@ -227,21 +217,4 @@ func TestRuntimeEnvironmentRejectsExecutionOverridesUnsafeFilesAndOversizeInput(
 	require.NoError(t, os.WriteFile(component.EnvironmentFile, []byte(strings.Repeat("x", maxPrivateBytes+1)), 0o600))
 	_, err = loadEnvironment(component)
 	require.Error(t, err)
-}
-
-func TestRuntimeProxyBudgetUsesAllConfiguredPhasesAndRejectsFallbacks(t *testing.T) {
-	_, plan := planFixture(t, "console-proxy")
-	proxyBudgetFixture(t, plan.ReleaseRoot, "30s", "10s", "5s", "3m")
-	stop, startup, err := lifecycleBudgets(plan.ReleaseRoot, "console-proxy")
-	require.NoError(t, err)
-	require.Equal(t, 45*time.Second, stop)
-	require.Equal(t, 3*time.Minute, startup)
-	for _, duration := range []string{"0s", "-1s", "11m", "bad", ""} {
-		proxyBudgetFixture(t, plan.ReleaseRoot, duration, "10s", "5s", "3m")
-		_, _, err := lifecycleBudgets(plan.ReleaseRoot, "console-proxy")
-		require.Error(t, err)
-	}
-	stop, _, err = lifecycleBudgets(plan.ReleaseRoot, "web-host")
-	require.NoError(t, err)
-	require.Equal(t, DefaultStopTimeout, stop)
 }

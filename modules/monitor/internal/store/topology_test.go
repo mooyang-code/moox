@@ -20,7 +20,7 @@ func TestTopologyPersistsFullRegistration(t *testing.T) {
 	require.NoError(t, err)
 	snapshot := domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(),
 		Hosts:       []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
-		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "web-host", Status: "disabled"}},
+		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "strategy", Status: "disabled"}},
 	}
 	err = manager.Repositories().Topology.Reconcile(t.Context(), snapshot)
 	require.NoError(t, err)
@@ -32,11 +32,11 @@ func TestTopologyPersistsFullRegistration(t *testing.T) {
 	before, err := repos.Topology.Snapshot(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, snapshot, *before)
-	component, _ := before.Catalog.Component("web-host")
-	require.Equal(t, 19527, component.Health.Port)
+	component, _ := before.Catalog.Component("strategy")
+	require.Equal(t, 11431, component.Health.Port)
 	// 拓扑不合法时不写入，库里仍是上一份完整拓扑。
 	invalid := snapshot
-	invalid.Deployments = []domain.TopologyDeployment{{HostID: "missing-host", ComponentID: "web-host", Status: "enabled"}}
+	invalid.Deployments = []domain.TopologyDeployment{{HostID: "missing-host", ComponentID: "strategy", Status: "enabled"}}
 	require.Error(t, repos.Topology.Reconcile(t.Context(), invalid))
 	after, err := repos.Topology.Snapshot(t.Context())
 	require.NoError(t, err)

@@ -398,7 +398,7 @@ root="$1"
 printf 'df:\n'
 df -h "$root" /
 printf 'processes:\n'
-ps -eo pid,stat,cmd | grep -E 'moox-|caddy' | grep -v grep || true
+ps -eo pid,stat,cmd | grep -E 'moox-' | grep -v grep || true
 printf 'sizes:\n'
 du -xh --max-depth=2 "$root/data" "$root/logs" 2>/dev/null | sort -h | tail -40 || true
 printf 'staged archives:\n'
@@ -488,22 +488,11 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 					return err
 				}
 			}
-			tradeConsoleHost := ""
-			tradeConsolePort := 0
-			if tradeNode := snapshot.Manifest.ComponentHost("trade"); tradeNode != "" {
-				tradeHost, tradeErr := findSetupHost(snapshot.Manifest, tradeNode)
-				if tradeErr != nil {
-					return tradeErr
-				}
-				tradeConsoleHost = tradeHost.Address
-				tradeConsolePort = 11200
-			}
+			// 不再输出 Trade 的地址与端口：11200 只听本机，外面连不上。
 			return writeSetupJSON(cmd, map[string]any{
-				"status":             "rendered",
-				"egress_output":      egressOutput,
-				"collector_output":   collectorOutput,
-				"trade_console_host": tradeConsoleHost,
-				"trade_console_port": tradeConsolePort,
+				"status":           "rendered",
+				"egress_output":    egressOutput,
+				"collector_output": collectorOutput,
 			})
 		},
 	}
@@ -896,7 +885,7 @@ func defaultSetupDeps() setupDeps {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost().Address)
 			// 这里只校验登录，用取回的根证书连接，不碰本机信任库。
 			if err := refreshSetupConsoleCA(ctx, snapshot.Manifest); err != nil {
-				return setupclient.LoginResult{}, fmt.Errorf("browser_ca_trust_failed: 无法从管理台服务器取回内部 CA 根证书: %w", err)
+				return setupclient.LoginResult{}, fmt.Errorf("browser_ca_trust_failed: 无法从管理台服务器取回 MooX CA 根证书: %w", err)
 			}
 			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
 		},
@@ -1049,10 +1038,10 @@ func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupconfig.Snapsh
 		return fmt.Errorf("browser_ca_trust_failed: resolve repository root: %w", err)
 	}
 	host := snapshot.Manifest.ControlHost()
-	// 原生 control 单元把内部 CA 根证书发布在 current/console-proxy 下；先经 SSH 取回到本机缓存再安装信任，
+	// 管理台的 HTTPS 证书由 MooX CA 签发；先经 SSH 从控制机取回 MooX CA 根证书到本机缓存再安装信任，
 	// 不依赖本机残留的旧证书副本。
 	if err := refreshSetupConsoleCA(ctx, snapshot.Manifest); err != nil {
-		return fmt.Errorf("browser_ca_trust_failed: 无法从管理台服务器取回内部 CA 根证书: %w", err)
+		return fmt.Errorf("browser_ca_trust_failed: 无法从管理台服务器取回 MooX CA 根证书: %w", err)
 	}
 	caPath := tlstrust.CAPath(host.Address)
 	if !setupHasTerminal() {
@@ -1080,7 +1069,7 @@ func manualBrowserTrustCommand(caPath string) string {
 	if runtime.GOOS == "darwin" {
 		return "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain " + caPath
 	}
-	return "sudo scripts/deploy/install-caddy-ca.sh --ca-file " + caPath
+	return "sudo scripts/deploy/install-moox-ca.sh --ca-file " + caPath
 }
 
 // refreshSetupConsoleCA 在测试里替换。

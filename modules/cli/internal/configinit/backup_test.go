@@ -55,10 +55,10 @@ func (f *fakeConsole) serve(w http.ResponseWriter, r *http.Request) {
 			write(map[string]any{"ret_info": map[string]any{"code": 3, "msg": "用户名或密码错误"}})
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "moox_session", Value: fakeSessionID, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+		http.SetCookie(w, &http.Cookie{Name: "__Host-moox_session", Value: fakeSessionID, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 		write(map[string]any{"ret_info": map[string]any{"code": 0}, "expires_at": "1700086400"})
 	case "/api/admin/setup/PutConfigBackup", "/api/admin/setup/GetConfigBackup":
-		cookie, err := r.Cookie("moox_session")
+		cookie, err := r.Cookie("__Host-moox_session")
 		if err != nil || cookie.Value != fakeSessionID || r.Header.Get("Origin") != "https://"+r.Host {
 			w.WriteHeader(http.StatusUnauthorized)
 			return

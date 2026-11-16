@@ -170,8 +170,8 @@ const mkdirLoading = ref(false);
 const newDirName = ref("");
 
 // ---------- 上传相关 ----------
+// 会话 ID 只放在地址栏参数里（控制台按它核对会话归属），表单里只有目标目录。
 const uploadFormData = computed(() => ({
-  session_id: resolvedSessionId.value,
   path: currentDir.value
 }));
 
@@ -288,12 +288,10 @@ const uploadFile = async (option: {
 }) => {
   // 上传开始时固定会话与目标目录：上传期间用户可能进入了别的目录，不能改传到后来浏览的目录
   const sessionId = resolvedSessionId.value;
-  const uploadSessionField = uploadFormData.value.session_id;
   const targetPath = uploadFormData.value.path;
   try {
     const url = getSftpUploadUrl(sessionId);
     const formData = new FormData();
-    formData.append("session_id", uploadSessionField);
     formData.append("path", targetPath);
     formData.append("file", option.fileItem.file!);
     const response = await fetch(url, { method: "POST", body: formData, credentials: "same-origin" });

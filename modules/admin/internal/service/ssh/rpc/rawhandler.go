@@ -109,7 +109,8 @@ func SftpDownloadHandler(svc ssh.Service) http.HandlerFunc {
 }
 
 // SftpUploadHandler 返回 SFTP 文件上传处理器（multipart）。
-// form: session_id, path, file[] (multipart files)
+// query: session_id；form: path, file[]（multipart 文件）。
+// 会话 ID 只认地址栏参数：控制台入口核对归属的就是它，表单里的同名字段一概不看。
 func SftpUploadHandler(svc ssh.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -117,8 +118,8 @@ func SftpUploadHandler(svc ssh.Service) http.HandlerFunc {
 			writeRawError(w, http.StatusBadRequest, "获取上传文件失败")
 			return
 		}
-		sessionID := r.FormValue("session_id")
-		dstPath := r.FormValue("path")
+		sessionID := r.URL.Query().Get("session_id")
+		dstPath := r.PostFormValue("path")
 		if sessionID == "" || dstPath == "" {
 			writeRawError(w, http.StatusBadRequest, "session_id/path 不能为空")
 			return

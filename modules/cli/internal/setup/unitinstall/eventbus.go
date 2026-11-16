@@ -69,9 +69,6 @@ func eventBusUsername(role string) string {
 func EventBusRoles(components []string) []string {
 	roles := []string{}
 	for _, id := range components {
-		if id == "console-proxy" || id == "web-host" {
-			continue
-		}
 		if role := eventBusRole(id); role != "" {
 			roles = append(roles, role)
 		}
@@ -135,9 +132,6 @@ func projectEventBus(root *os.Root, options *PrepareOptions, components []string
 		return errors.New("issued EventBus CA is invalid")
 	}
 	for _, id := range components {
-		if id == "console-proxy" || id == "web-host" {
-			continue
-		}
 		values := options.Environment[id]
 		if values == nil {
 			values = map[string]string{}

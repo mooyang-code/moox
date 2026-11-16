@@ -31,7 +31,8 @@ type hostBundleMaterial struct {
 
 func hostSigningCallers(host hostbundle.Host, operator bool) []string {
 	callers := append([]string{"host-agent", "host-gateway@" + host.HostID}, host.Components...)
-	if slices.Contains(host.Components, "console-proxy") {
+	// 浏览器入口在 Admin 里：console 签名身份跟着 admin 下发。
+	if slices.Contains(host.Components, "admin") {
 		callers = append(callers, "console")
 	}
 	if slices.Contains(host.Components, "collector") {

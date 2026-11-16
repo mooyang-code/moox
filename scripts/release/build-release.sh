@@ -8,7 +8,7 @@
 #   SHA256SUMS
 #
 # 用法：scripts/release/build-release.sh v0.2.0 [输出目录，默认 dist/<版本>]
-# 要求：工作区干净；本机有固定版本的 Go 与正在运行的 Docker（Storage 需要 CGO；web-host 编译时也在 Docker 里按当前源码构建前端，不用仓库里提交的内嵌资源）。
+# 要求：工作区干净；本机有固定版本的 Go 与正在运行的 Docker（Storage 需要 CGO；admin 编译时也在 Docker 里按当前源码构建前端并内嵌）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -39,7 +39,7 @@ BUNDLE="moox-${VERSION}"
 mkdir -p "${STAGE}/${BUNDLE}"
 git -C "${ROOT}" archive "${COMMIT}" | tar -x -C "${STAGE}/${BUNDLE}"
 
-server_targets=(admin host-gateway eventbus console-proxy egress-proxy web-host collector collector-stream collector-scf
+server_targets=(admin host-gateway eventbus egress-proxy collector collector-stream collector-scf
   factor-mgr factor-engine archive-mgr archive-worker strategy strategy-cli trade callback-dispatcher monitor
   hostagent access storage-cli storage)
 VERSION="${VERSION}" GIT_COMMIT="${COMMIT:0:8}" \

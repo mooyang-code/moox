@@ -16,7 +16,7 @@ func TestComponentStatusSinceSurvivesRestartAndChangesOnlyOnTransition(t *testin
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.SQL()))
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-	rows := []domain.ComponentHealthState{{HostID: "control", ComponentID: "web-host", Status: "down"}}
+	rows := []domain.ComponentHealthState{{HostID: "control", ComponentID: "strategy", Status: "down"}}
 	require.NoError(t, db.Repositories().ComponentHealth.Reconcile(t.Context(), rows, now))
 	require.NoError(t, db.Close())
 	db, err = Open(path)

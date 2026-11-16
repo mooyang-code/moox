@@ -69,7 +69,7 @@ func TestVerifyPublicLoginUsesCookieSessionAndLogsOut(t *testing.T) {
 	assert.NotContains(t, result.LoginAPI, "recognizable-session-id")
 }
 
-func TestVerifyPublicLoginTrustsOnlyFetchedCaddyCA(t *testing.T) {
+func TestVerifyPublicLoginTrustsOnlyFetchedConsoleCA(t *testing.T) {
 	console := &fakeLoginConsole{}
 	server := httptest.NewTLSServer(http.HandlerFunc(console.serve))
 	defer server.Close()

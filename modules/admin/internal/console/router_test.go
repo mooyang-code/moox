@@ -218,7 +218,8 @@ func TestConsoleUsesGeneratedLocalHandlersAndVerifiedUserContext(t *testing.T) {
 	router := newTestRouter(t, store, local, gateway).buildControlRouter()
 	rr := httptest.NewRecorder()
 	login := browserRequest(t, session.Session{}, "/api/admin/auth/Login", "", []byte(`{"username":"alice","password":"x"}`))
-	login.Header.Set("X-Forwarded-For", "6.6.6.6, 203.0.113.9")
+	login.RemoteAddr = "203.0.113.9:40000"
+	login.Header.Set("X-Forwarded-For", "6.6.6.6")
 	router.ServeHTTP(rr, login)
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(t, "alice", implementation.username)

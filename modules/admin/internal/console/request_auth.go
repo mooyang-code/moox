@@ -57,7 +57,7 @@ func needsOriginCheck(r *http.Request, route string) bool {
 }
 
 // originAllowed 要求恰好一个 Origin 头，且等于 https://<Host> 或配置里的开发来源。
-// T10 之前 Admin 在 Caddy 后面，Caddy 原样转发 Host 并已拒绝别的 Host。
+// Host 已由 Admin 的浏览器入口（9527）核对过等于控制机地址；浏览器的 Host 与 Origin 都带着 :9527。
 func originAllowed(r *http.Request, allowed []string) bool {
 	values := r.Header.Values("Origin")
 	if len(values) != 1 || values[0] == "" {
@@ -87,15 +87,8 @@ func (hr *HTTPRouter) requestSession(r *http.Request) (session.Session, bool) {
 	return hr.sessions.Get(cookie.Value)
 }
 
-// clientIP 是登录锁定和登录记录用的来源 IP。T10 之前请求都经 Caddy 转来，取 Caddy 追加在 X-Forwarded-For
-// 最后一段的对端地址（前面几段是客户端自己能写的，不可信）；取不到时用连接的对端地址。T10 改成只用连接对端地址。
+// clientIP 是登录锁定和登录记录用的来源 IP：9527 由 Admin 直接监听，取连接的对端地址；请求头里的转发地址一概不认。
 func clientIP(r *http.Request) string {
-	if values := r.Header.Values("X-Forwarded-For"); len(values) > 0 {
-		parts := strings.Split(values[len(values)-1], ",")
-		if ip := net.ParseIP(strings.TrimSpace(parts[len(parts)-1])); ip != nil {
-			return ip.String()
-		}
-	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host
 	}

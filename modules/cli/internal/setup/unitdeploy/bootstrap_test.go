@@ -36,7 +36,7 @@ tls_enabled = true
 address = "192.0.2.10"
 ssh = {username="fixture"}
 [deployments]
-control = ["admin","eventbus","console-proxy","web-host"]
+control = ["admin","eventbus"]
 `
 	directory, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -92,7 +92,7 @@ func TestRuntimeIdentityIsPrivatePersistentAndBoundToTarget(t *testing.T) {
 
 func TestAdminBuildUsesOnlyLocalPureGoAndFrontendTools(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{"web", "web-host", "tools"} {
+	for _, name := range []string{"web", "tools"} {
 		require.NoError(t, os.Mkdir(filepath.Join(root, name), 0o700))
 	}
 	log := filepath.Join(root, "build.log")
@@ -109,7 +109,7 @@ func TestAdminBuildUsesOnlyLocalPureGoAndFrontendTools(t *testing.T) {
 	raw, err := os.ReadFile(log)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	require.Len(t, lines, 13)
+	require.Len(t, lines, 11)
 	for _, line := range lines {
 		require.Contains(t, line, "|0|linux|arm64|unset|")
 		require.NotContains(t, line, "storage")
@@ -117,9 +117,9 @@ func TestAdminBuildUsesOnlyLocalPureGoAndFrontendTools(t *testing.T) {
 	require.Contains(t, string(raw), "pnpm|0|linux|arm64|unset|install --frozen-lockfile")
 	require.Contains(t, string(raw), "pnpm|0|linux|arm64|unset|run build:prod")
 	require.NotContains(t, "\n"+string(raw), "\nnpm|")
-	// 不再执行 make statik（它会改写仓库里的 statik.go）；build.sh 编译 web-host 时按已构建的 web/dist 现场生成内嵌前端。
+	// 不执行 make；build.sh 编译 admin 时直接内嵌已构建的 web/dist。
 	require.NotContains(t, "\n"+string(raw), "\nmake|")
-	require.Contains(t, string(raw), "build.sh web-host|ready=1")
+	require.Contains(t, string(raw), "build.sh admin|ready=1")
 	require.Contains(t, string(raw), "build.sh host-gateway")
 }
 

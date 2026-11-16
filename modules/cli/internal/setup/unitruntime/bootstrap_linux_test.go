@@ -34,7 +34,7 @@ func runBootstrapFixture(path string) error {
 }
 
 func TestRuntimeLinuxInterruptedBootstrapBlocksAllUnitsAndScopedRecovery(t *testing.T) {
-	path, plan := planFixture(t, "web-host")
+	path, plan := planFixture(t, "strategy")
 	otherPath, other := planFixture(t, "host-agent")
 	other.DeploymentRoot = plan.DeploymentRoot
 	writeFixture(t, otherPath, other)
@@ -108,7 +108,7 @@ func TestRuntimeLinuxInterruptedBootstrapBlocksAllUnitsAndScopedRecovery(t *test
 	})
 	require.NoError(t, err)
 	require.NoFileExists(t, filepath.Join(plan.DeploymentRoot, "run/bootstrap.json"))
-	require.FileExists(t, filepath.Join(plan.DeploymentRoot, "run/paused/web-host"))
+	require.FileExists(t, filepath.Join(plan.DeploymentRoot, "run/paused/strategy"))
 	require.Error(t, expired.UseLock(t.Context(), func(Options) error { return nil }))
 	require.Error(t, expired.EndBootstrap())
 	_, err = Execute(t.Context(), path, "status", nil, escaped)

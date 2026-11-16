@@ -57,7 +57,7 @@ func operators(ids ...string) *[]string { return &ids }
 
 func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 	c := mustCatalog(t)
-	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "console-proxy": 19528, "web-host": 19527, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418}
+	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418}
 	if len(c.Components) != len(want) {
 		t.Fatalf("components = %d", len(c.Components))
 	}
@@ -65,16 +65,17 @@ func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 		if component.Health.Port != want[component.ID] {
 			t.Fatalf("incorrect health for %s", component.ID)
 		}
-		if component.Protected != slices.Contains([]string{"host-gateway", "console-proxy", "web-host", "admin"}, component.ID) {
+		if component.Protected != slices.Contains([]string{"host-gateway", "admin"}, component.ID) {
 			t.Fatalf("incorrect protection for %s", component.ID)
 		}
 		if (component.Replicas == Multi) != (component.ID == "access") {
 			t.Fatalf("incorrect replicas for %s", component.ID)
 		}
 	}
-	proxy, _ := c.Component("console-proxy")
-	if proxy.Scope != ScopeControl || !slices.Equal(proxy.Ports, []int{9527}) {
-		t.Fatal("console proxy registration is incorrect")
+	// 浏览器入口 9527 由 Admin 自己监听。
+	admin, _ := c.Component("admin")
+	if admin.Scope != ScopeControl || !slices.Equal(admin.Ports, []int{9527}) {
+		t.Fatal("admin browser entry registration is incorrect")
 	}
 }
 
@@ -93,7 +94,7 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		mutate func(*Catalog)
 	}{
 		{"duplicate component", func(c *Catalog) { c.Components = append(c.Components, c.Components[0]) }},
-		{"binary alias", func(c *Catalog) { componentPtr(c, "console-proxy").Binary = "caddy" }},
+		{"binary alias", func(c *Catalog) { componentPtr(c, "admin").Binary = "caddy" }},
 		{"invalid scope", func(c *Catalog) { c.Components[0].Scope = "arbitrary" }},
 		{"invalid replicas", func(c *Catalog) { c.Components[0].Replicas = "unlimited" }},
 		{"host multi", func(c *Catalog) { c.Components[0].Replicas = Multi }},

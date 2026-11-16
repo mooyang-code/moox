@@ -27,9 +27,9 @@ func TestHealthOverviewRPCV2CarriesIdentityIndependentSignalsAndStatusSince(t *t
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	err = repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now, Hosts: []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}}, Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "web-host", Status: "enabled"}}})
+	err = repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now, Hosts: []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}}, Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "strategy", Status: "enabled"}}})
 	require.NoError(t, err)
-	require.NoError(t, repos.ComponentHealth.Reconcile(t.Context(), []domain.ComponentHealthState{{HostID: "control", ComponentID: "web-host", Status: "down"}}, now.Add(-time.Minute)))
+	require.NoError(t, repos.ComponentHealth.Reconcile(t.Context(), []domain.ComponentHealthState{{HostID: "control", ComponentID: "strategy", Status: "down"}}, now.Add(-time.Minute)))
 	facts := &observability.Builder{Topology: repos.Topology, Now: func() time.Time { return now }}
 	service := New(repos, Options{HealthView: &healthview.Builder{Facts: facts, ComponentHealth: repos.ComponentHealth, Now: func() time.Time { return now }}})
 	rsp, err := service.GetHealthOverview(t.Context(), nil)
@@ -38,7 +38,7 @@ func TestHealthOverviewRPCV2CarriesIdentityIndependentSignalsAndStatusSince(t *t
 	require.Len(t, rsp.Overview.Components, 1)
 	component := rsp.Overview.Components[0]
 	require.Equal(t, "control", component.HostId)
-	require.Equal(t, "web-host", component.ComponentId)
+	require.Equal(t, "strategy", component.ComponentId)
 	require.Equal(t, now.Add(-time.Minute).Format(time.RFC3339Nano), component.StatusSince)
 	require.Equal(t, "unknown", component.Reporter.Status, "从未上报")
 	require.Empty(t, component.Reporter.CheckedAt)

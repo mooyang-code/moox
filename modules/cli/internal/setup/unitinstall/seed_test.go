@@ -12,7 +12,7 @@ import (
 
 func TestStateSeedBindsIndependentBytesAndRefusesMutation(t *testing.T) {
 	unit := privateParent(t)
-	prepared := Prepared{Version: 1, HostID: "control", DeploymentRoot: unit, UnitRoot: unit, Profile: "control", Directory: filepath.Join(unit, "releases/new"), Components: []string{"admin", "web-host"}}
+	prepared := Prepared{Version: 1, HostID: "control", DeploymentRoot: unit, UnitRoot: unit, Profile: "control", Directory: filepath.Join(unit, "releases/new"), Components: []string{"admin", "monitor"}}
 	seed := StateSeed{Version: 1, HostID: prepared.HostID, DeploymentRoot: unit, UnitRoot: unit, Profile: prepared.Profile, Directory: filepath.Join(unit, "state-imports/first"), ReleaseDirectory: prepared.Directory, Paths: []string{"admin/data"}}
 	require.NoError(t, os.MkdirAll(filepath.Join(seed.Directory, "admin/data"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(prepared.Directory, "admin"), 0o700))

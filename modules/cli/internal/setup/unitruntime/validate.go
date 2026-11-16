@@ -21,7 +21,7 @@ func validate(planPath string, candidate bool) error {
 	}
 	state := runtimeState{plan: plan, catalog: catalog}
 	for _, component := range plan.Components {
-		if _, _, _, err := state.prepare(component); err != nil {
+		if _, err := state.prepare(component); err != nil {
 			return err
 		}
 	}

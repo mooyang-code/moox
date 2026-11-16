@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
-SCRIPT="${ROOT}/skills/moox/scripts/caddy-ca.sh"
+SCRIPT="${ROOT}/skills/moox/scripts/moox-ca.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/moox-skill-ca.XXXXXX")
 trap 'rm -rf "${TMP}"' EXIT
 mkdir -p "${TMP}/bin" "${TMP}/CA path with 'quote'"
@@ -65,8 +65,11 @@ grep -Fq 'curl --cacert' <<<"${help_out}"
 if "${SCRIPT}" fetch --target localhost --deploy-dir "${TMP}" --output "${TMP}/root.key" >/dev/null 2>&1; then
   echo 'FAIL: private-key output path accepted' >&2; exit 1
 fi
-mkdir -p "${TMP}/deploy/certs/caddy"
-cp "${CA_FILE}" "${TMP}/deploy/certs/caddy/root.crt"
+mkdir -p "${TMP}/deploy/host/current/certs"
+cp "${CA_FILE}" "${TMP}/deploy/host/current/certs/moox-ca.crt"
+# fetch 从部署根下 MooX CA 的位置取回根证书，输出指纹。
+fetched=$("${SCRIPT}" fetch --target localhost --deploy-dir "${TMP}/deploy" --output "${TMP}/fetched.crt" --expected-fingerprint "${FINGERPRINT}")
+[[ "${fetched}" == "${FINGERPRINT}" ]] || { echo "FAIL: fetch returned ${fetched}" >&2; exit 1; }
 : >"${TMP}/install.log"
 PATH="${TMP}/bin:${PATH}" MOCK_TRUSTED=0 MOCK_FINGERPRINT_HEX="${FINGERPRINT_HEX}" MOCK_LOG="${TMP}/install.log" \
   "${SCRIPT}" install-target --target localhost --deploy-dir "${TMP}/deploy" >/dev/null
@@ -80,10 +83,10 @@ set -e
 
 REMOTE_HOME="${TMP}/remote-home"
 REMOTE_DEPLOY="${REMOTE_HOME}/target path"
-mkdir -p "${REMOTE_DEPLOY}/certs/caddy" "${REMOTE_DEPLOY}/lib"
-cp "${CA_FILE}" "${REMOTE_DEPLOY}/certs/caddy/root.crt"
-cp "${ROOT}/scripts/deploy/install-caddy-ca.sh" "${REMOTE_DEPLOY}/lib/install-caddy-ca.sh"
-chmod +x "${REMOTE_DEPLOY}/lib/install-caddy-ca.sh"
+mkdir -p "${REMOTE_DEPLOY}/host/current/certs" "${REMOTE_DEPLOY}/lib"
+cp "${CA_FILE}" "${REMOTE_DEPLOY}/host/current/certs/moox-ca.crt"
+cp "${ROOT}/scripts/deploy/install-moox-ca.sh" "${REMOTE_DEPLOY}/lib/install-moox-ca.sh"
+chmod +x "${REMOTE_DEPLOY}/lib/install-moox-ca.sh"
 : >"${TMP}/remote-install.log"
 HOME="${REMOTE_HOME}" PATH="${TMP}/bin:${PATH}" MOCK_TRUSTED=0 MOCK_FINGERPRINT_HEX="${FINGERPRINT_HEX}" MOCK_LOG="${TMP}/remote-install.log" \
   "${SCRIPT}" install-target --target user@example --deploy-dir '~/target path' --non-interactive >/dev/null

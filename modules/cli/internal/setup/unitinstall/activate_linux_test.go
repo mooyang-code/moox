@@ -69,11 +69,35 @@ func controlActivationOptions(t *testing.T) PrepareOptions {
 	require.NoError(t, os.Mkdir(options.UnitRoot, 0o700))
 	options.Profile = "control"
 	options.Archive, options.SHA256 = os.Getenv("MOOX_UNIT_INSTALL_CONTROL_ARCHIVE"), os.Getenv("MOOX_UNIT_INSTALL_CONTROL_SHA256")
-	options.Components = []string{"web-host"}
-	options.Environment = map[string]map[string]string{"web-host": syntheticEnvironment()}
-	options.Environment["web-host"]["MOOX_WEB_HOST_ADDR"] = "127.0.0.1:0"
+	// T10 之后控制机上没有不依赖别的组件就能起来的进程，这里用真实 Admin：
+	// 首次激活经状态导入带上离线 bootstrap 出的数据库（见 activateFirstAdmin），主密钥与 CA 放在发布之外。
+	trust := privateParent(t)
+	admin := syntheticEnvironment()
+	admin["MOOX_ADMIN_NODE_ID"] = "control"
+	admin["MOOX_ADMIN_ENCRYPTION_KEY_FILE"] = filepath.Join(trust, "admin-master.key")
+	admin["MOOX_ADMIN_PKI_DIR"] = filepath.Join(trust, "pki")
+	admin["MOOX_ADMIN_DB_PATH"] = "./data/admin.db"
+	admin["MOOX_ADMIN_WEB_LISTEN"] = "127.0.0.1:0"
+	admin["MOOX_ADMIN_WEB_ADDRESS"] = "127.0.0.1"
+	options.Components = []string{"admin"}
+	options.Environment = map[string]map[string]string{"admin": admin}
 	options.Overrides = nil
 	return options
+}
+
+// activateFirstAdmin 首次激活 control 单元：和五步 bootstrap 一样，先用发布自带的 moox-admin-cli 离线建库，
+// 封存成状态导入再激活，Admin 才能起来。之后的发布从上一版复制 admin/data。
+func activateFirstAdmin(t *testing.T, options PrepareOptions, first Prepared) (Activation, error) {
+	t.Helper()
+	imports := filepath.Join(options.UnitRoot, "state-imports")
+	require.NoError(t, os.MkdirAll(imports, 0o700))
+	seed := filepath.Join(imports, filepath.Base(first.Directory))
+	require.NoError(t, os.MkdirAll(filepath.Join(seed, "admin/data"), 0o700))
+	environment := options.Environment["admin"]
+	bootstrapOfflineAdmin(t, filepath.Join(first.Directory, "bin/moox-admin-cli"), filepath.Join(seed, "admin/data/admin.db"), environment["MOOX_ADMIN_ENCRYPTION_KEY_FILE"], environment["MOOX_ADMIN_PKI_DIR"], "initial")
+	reference, err := sealWithHelper(t, SealStateOptions{Directory: seed, ReleaseDirectory: first.Directory, Paths: []string{"admin/data"}})
+	require.NoError(t, err)
+	return activationCommand(t, "activate", "--directory", first.Directory, "--state-seed", reference.Directory, "--state-seed-sha256", reference.SHA256)
 }
 
 func cleanupActivation(t *testing.T, prepared Prepared) {
@@ -98,7 +122,7 @@ func TestUnitActivationLinuxCompositeAbortRemovesOnlyItsFirstInstallation(t *tes
 	first, err := prepareWithHelper(t, options)
 	require.NoError(t, err)
 	cleanupActivation(t, first)
-	_, err = activationCommand(t, "activate", "--directory", first.Directory)
+	_, err = activateFirstAdmin(t, options, first)
 	require.NoError(t, err)
 	_, err = activationCommand(t, "rollback", "--unit-root", options.UnitRoot)
 	require.Error(t, err, "operator rollback still requires an older snapshot")
@@ -118,19 +142,18 @@ func TestUnitActivationLinuxCompositeAbortRemovesOnlyItsFirstInstallation(t *tes
 	require.NoError(t, err, "composite recovery is repeatable")
 }
 
-func TestUnitActivationLinuxUsesActualWebHostCopiesStateAndRollsBack(t *testing.T) {
+func TestUnitActivationLinuxUsesActualAdminCopiesStateAndRollsBack(t *testing.T) {
 	options := controlActivationOptions(t)
 	first, err := prepareWithHelper(t, options)
 	require.NoError(t, err)
 	cleanupActivation(t, first)
-	active, err := activationCommand(t, "activate", "--directory", first.Directory)
+	active, err := activateFirstAdmin(t, options, first)
 	require.NoError(t, err)
 	require.Equal(t, "active", active.Phase)
 	started := runScript(t, first.Directory, "status").Components[0]
 	require.Positive(t, started.PID)
-	data := filepath.Join(first.Directory, "web-host/data")
-	require.NoError(t, os.Mkdir(data, 0o700))
-	file := filepath.Join(data, "snapshot")
+	// admin/data 已由状态导入建好，这里再放一个文件，核对升级时独立复制、回滚时各自保留。
+	file := filepath.Join(first.Directory, "admin/data/snapshot")
 	require.NoError(t, os.WriteFile(file, []byte("pre-upgrade-state"), 0o600))
 	options.ReleaseID = "second"
 	second, err := prepareWithHelper(t, options)
@@ -142,7 +165,7 @@ func TestUnitActivationLinuxUsesActualWebHostCopiesStateAndRollsBack(t *testing.
 	require.Equal(t, second.Directory, currentTarget(t, options.UnitRoot))
 	require.NotEqual(t, started.PID, runScript(t, second.Directory, "status").Components[0].PID)
 	require.NoFileExists(t, "/proc/"+strconv.Itoa(started.PID)+"/exe")
-	copyPath := filepath.Join(second.Directory, "web-host/data/snapshot")
+	copyPath := filepath.Join(second.Directory, "admin/data/snapshot")
 	raw, err := os.ReadFile(copyPath)
 	require.NoError(t, err)
 	require.Equal(t, "pre-upgrade-state", string(raw))
@@ -232,7 +255,7 @@ func TestUnitActivationLinuxReplacesAndRollsBackAcrossServiceCatalogChange(t *te
 	first, err := prepareWithHelper(t, options)
 	require.NoError(t, err)
 	cleanupActivation(t, first)
-	_, err = activationCommand(t, "activate", "--directory", first.Directory)
+	_, err = activateFirstAdmin(t, options, first)
 	require.NoError(t, err)
 	started := runScript(t, first.Directory, "status").Components[0]
 	require.Positive(t, started.PID)
@@ -265,10 +288,10 @@ func TestUnitActivationLinuxFailedStartAndInterruptedPhasesRecover(t *testing.T)
 	first, err := prepareWithHelper(t, options)
 	require.NoError(t, err)
 	cleanupActivation(t, first)
-	_, err = activationCommand(t, "activate", "--directory", first.Directory)
+	_, err = activateFirstAdmin(t, options, first)
 	require.NoError(t, err)
 	options.ReleaseID = "bad"
-	options.Environment["web-host"]["MOOX_WEB_HOST_ADDR"] = "invalid-address"
+	options.Environment["admin"]["MOOX_ADMIN_WEB_LISTEN"] = "invalid-address"
 	failed, err := prepareWithHelper(t, options)
 	require.NoError(t, err)
 	_, err = activationCommand(t, "activate", "--directory", failed.Directory)
@@ -276,7 +299,7 @@ func TestUnitActivationLinuxFailedStartAndInterruptedPhasesRecover(t *testing.T)
 	require.Equal(t, first.Directory, currentTarget(t, options.UnitRoot))
 	require.Positive(t, runScript(t, first.Directory, "status").Components[0].PID)
 	require.NoFileExists(t, filepath.Join(options.DeploymentRoot, "run/installation.json"))
-	options.Environment["web-host"]["MOOX_WEB_HOST_ADDR"] = "127.0.0.1:0"
+	options.Environment["admin"]["MOOX_ADMIN_WEB_LISTEN"] = "127.0.0.1:0"
 	for _, phase := range []string{"stopping", "copying", "switching", "starting"} {
 		t.Run(phase, func(t *testing.T) {
 			options.ReleaseID = "interrupted-" + phase
@@ -287,7 +310,7 @@ func TestUnitActivationLinuxFailedStartAndInterruptedPhasesRecover(t *testing.T)
 				unit, err := fsutil.OpenPhysicalRoot(options.UnitRoot, false)
 				require.NoError(t, err)
 				defer unit.Close()
-				journal := Activation{Version: 1, HostID: first.HostID, DeploymentRoot: options.DeploymentRoot, UnitRoot: options.UnitRoot, Profile: "control", Directory: next.Directory, PreviousDirectory: first.Directory, StartComponents: []string{"web-host"}, PreviousRunning: []string{"web-host"}}
+				journal := Activation{Version: 1, HostID: first.HostID, DeploymentRoot: options.DeploymentRoot, UnitRoot: options.UnitRoot, Profile: "control", Directory: next.Directory, PreviousDirectory: first.Directory, StartComponents: []string{"admin"}, PreviousRunning: []string{"admin"}}
 				require.NoError(t, writeActivation(unit, &journal, phase))
 				_, err = guard.Execute(t.Context(), planPath(first), "stop", nil)
 				require.NoError(t, err)
@@ -312,7 +335,7 @@ func TestUnitActivationLinuxRefusesAComponentOwnedByAnotherUnit(t *testing.T) {
 	first, err := prepareWithHelper(t, options)
 	require.NoError(t, err)
 	cleanupActivation(t, first)
-	_, err = activationCommand(t, "activate", "--directory", first.Directory)
+	_, err = activateFirstAdmin(t, options, first)
 	require.NoError(t, err)
 	pid := runScript(t, first.Directory, "status").Components[0].PID
 	options.UnitRoot = filepath.Join(filepath.Dir(options.UnitRoot), "unrelated unit")

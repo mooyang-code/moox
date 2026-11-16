@@ -43,13 +43,27 @@ const primaryPath = "trpc.moox.storage.PrimaryStore"
 // SQLite topology/key store, in-memory nonces and deployment PKI. Separate Linux
 // loopback IPs preserve the canonical remote port without endpoint overrides.
 // Both pure Go executables may be cross-compiled on the developer's machine.
+// closeE2EClient 关掉测试里的网关客户端。场景里网关进程重启过，客户端池里留着的旧 TLS 连接对端已经不在，
+// 关闭时发 close_notify 会报 broken pipe 或连接被重置：连接本来就要关，这类错误不算失败。
+func closeE2EClient(t *testing.T, c *gatewayclient.Client) {
+	t.Helper()
+	if err := c.Close(); err != nil && !peerAlreadyGone(err) {
+		t.Errorf("关闭网关客户端失败：%v", err)
+	}
+}
+
+func peerAlreadyGone(err error) bool {
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) ||
+		strings.Contains(err.Error(), "failed to send closeNotify alert") || strings.Contains(err.Error(), "broken pipe")
+}
+
 func TestHostGatewayRealAdminE2E(t *testing.T) {
 	binary := requiredE2EFile(t, "MOOX_HOST_GATEWAY_E2E_BINARY")
 	framework := requiredE2EFile(t, "MOOX_HOST_GATEWAY_E2E_TRPC_CONFIG")
 	f := newControlFixture(t)
 	f.service.now = time.Now
 	ctx := context.Background()
-	controlSpec := sysdeploy.HostSpec{HostID: "control", Address: "127.0.0.1", Components: []string{"admin", "console-proxy", "web-host", "collector"}}
+	controlSpec := sysdeploy.HostSpec{HostID: "control", Address: "127.0.0.1", Components: []string{"admin", "collector"}}
 	storageSpec := sysdeploy.HostSpec{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-primary", "storage-view"}}
 	require.NoError(t, f.topology.SyncHosts(ctx, []sysdeploy.HostSpec{controlSpec, storageSpec}))
 
@@ -104,7 +118,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		cfg := configs[host]
 		c, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: collector.Credentials(), LocalHostID: host, LocalAddress: cfg.Server.LocalAddr, CAFile: cfg.TLS.CAFile, Serialization: codec.SerializationTypePB, Timeout: 2 * time.Second})
 		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
+		t.Cleanup(func() { closeE2EClient(t, c) })
 		clients[host] = c
 		var result wrapperspb.StringValue
 		require.NoError(t, c.Invoke(ctx, primaryPath, "ReadTimeSeriesRows", wrapperspb.String("object through "+host), &result))

@@ -49,7 +49,7 @@ username = "ubuntu"
 password = "other-ssh-password"
 
 [deployments]
-control = ["admin", "console-proxy", "web-host", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
+control = ["admin", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
 overseas = %s
 
 [[exchange_keys]]

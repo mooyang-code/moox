@@ -211,7 +211,7 @@ func buildAdminLocally(ctx context.Context, repository, bin, arch string, log io
 				environment = append(environment, value)
 			}
 		}
-		// MOOX_WEB_DIST_READY：前端已在下面用 pnpm 构建到 web/dist，build.sh 编译 web-host 时不再用 Docker 重建，直接按它现场生成内嵌前端。
+		// MOOX_WEB_DIST_READY：前端已在下面用 pnpm 构建到 web/dist，build.sh 编译 admin 时不再用 Docker 重建，直接内嵌 web/dist。
 		command.Env = append(environment, "CGO_ENABLED=0", "GOTOOLCHAIN=local", "TARGET_GOOS=linux", "TARGET_GOARCH="+arch, "BIN_DIR="+bin, "MOOX_WEB_DIST_READY=1")
 		if err := command.Run(); err != nil {
 			return errors.New("local admin build failed; see build diagnostics")
@@ -225,7 +225,7 @@ func buildAdminLocally(ctx context.Context, repository, bin, arch string, log io
 	if err := run(filepath.Join(repository, "web"), "pnpm", "run", "build:prod"); err != nil {
 		return err
 	}
-	for _, target := range []string{"host-gateway", "hostagent", "admin", "eventbus", "console-proxy", "web-host", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"} {
+	for _, target := range []string{"host-gateway", "hostagent", "admin", "eventbus", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"} {
 		if err := run(repository, "bash", filepath.Join(repository, "scripts/build/build.sh"), target); err != nil {
 			return err
 		}

@@ -35,10 +35,10 @@ cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY ./scripts/build/build.sh cli
 cd <主仓库根> && $WT/bin/moox-cli setup build-linux --module storage --source-dir $WT
 ```
 
-- **前端随 web-host 现场构建**：`scripts/build/build.sh web-host` 编译时按当前源码构建前端（默认在本机 Docker 里，macOS 先 `colima start`；
-  `setup bootstrap`/`setup release build` 先用本机 pnpm 构建好 `web/dist` 再交给它），内嵌资源生成到临时目录、用 `go build -overlay` 编译，
-  不用也不改仓库里提交的 `web-host/internal/statik/statik.go`。想先跑前端测试和代码检查：`cd $WT && bash scripts/build/build-web-docker.sh --check`。
-  `web/dist` 缺少 `static/js` 时构建直接失败（否则会把占位页嵌进 web-host，管理台打不开）。
+- **前端随 admin 现场构建**：`scripts/build/build.sh admin` 编译时按当前源码构建前端（默认在本机 Docker 里，macOS 先 `colima start`；
+  `setup bootstrap`/`setup release build` 先用本机 pnpm 构建好 `web/dist` 再交给它），编译前拷进 `modules/admin/internal/webui/dist`、编译完删掉。
+  想先跑前端测试和代码检查：`cd $WT && bash scripts/build/build-web-docker.sh --check`。
+  `web/dist` 缺少 `static/js` 时构建直接失败（否则管理台只有“前端没有打包进这个程序”的提示页）。
 - 纯 Go 组件由 bootstrap / deploy-unit 在本机交叉编译。想提前确认能编译：逐个 `go.work` 模块 `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...`，
   **跑完立刻检查并删除模块目录里生成的二进制**（单个 main 的模块会在目录里留文件，如 `tools/zstddict/zstddict`；`git add -A` 会把它们提交）。
 - 改动已提交并推送，CI 通过；线上二进制必须能对应到一个提交。
@@ -83,18 +83,18 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 | 4 | `$CLI setup deploy-unit --host storage --profile storage --binary-dir $WT/bin` | Storage 必须带第 2 节构建的 Linux CGO 制品 |
 | 5 | `$CLI setup init --stage storage --config-dir $WT/config/setup --storage-host storage` | 业务空间、导入元数据（数据集建好即可写入）。必须在 control 之前 |
 | 6 | `$CLI setup deploy-unit --host storage --profile access`，再 `--host overseas --profile access`，再 `--host overseas --profile egress-proxy` | **存储机和海外机都要装 Access**，漏了海外机会出现“外接入（overseas）连接被拒绝”告警 |
-| 7 | `$CLI setup bootstrap --stage control` | 首次安装自动创建管理台内部 CA；失败的发布目录由下一次尝试自动清理 |
+| 7 | `$CLI setup bootstrap --stage control` | 控制机其余组件；管理台 9527 由 Admin 自己监听（第 1 步起就有），证书用 MooX CA 签；失败的发布目录由下一次尝试自动清理 |
 | 8 | `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 云账户、日志服务和默认因子任务；业务空间和元数据第 5 步已写入，这里只核对 |
 | 9 | `$CLI setup deploy-unit --host overseas --profile collector-stream`，再 `--profile trade` | 必须在 control 就绪之后：collector-stream 启动后向 Collector 发心跳。`[deployments]` 里登记了 `callback-dispatcher`（事件中心）的主机，再 `--profile callback-dispatcher`（也在 trade 之后；它连 EventBus，不依赖 control） |
 | 9b | `$CLI trade inspect-credential --exchange EXCHANGE_BINANCE --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-main` | 仅当 `moox.toml` 里有 `[[exchange_keys]]`，且在 `trade` 部署之后：`setup apply` 排在 Trade 部署之前，它当时只写入密钥、不检测。**逐把检测 `readonly = true` 以外的密钥**（固定 ID 是 `exchange-<交易所>-<环境>-<名称>`，OKX 用 `EXCHANGE_OKX`，测试网用 `ACCOUNT_ENVIRONMENT_TESTNET`），在海外机上经 Trade 检测，不向交易所下单；看 `blockers` 有无阻断项。输出里 `检测没有完成` 只是交易所接口暂时不可用，稍后重试，不代表密钥有问题 |
 | 10 | `$CLI setup sync-deployments --host factor --yes`，再 `deploy-unit --host factor --profile factor-engine`，再 `--profile archive-worker` | 因子机外部程序，systemd 用户服务；引擎安装时自动按本机内存校准窗口与内存预算（`tune --write`） |
 
-### 信任内部 CA（用户自己做）
+### 信任 MooX CA（用户自己做）
 
 `setup init` 不碰信任库，也不等这一步。信任要这台电脑的管理员授权，Agent 的 shell 没有终端，做不了。`setup validate` 把它放在 `manual_steps`，安装结束时转告用户：
 
 ```bash
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.moox/certs/moox-caddy-root-<控制机地址>.crt
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.moox/certs/moox-ca-<控制机地址>.crt
 ```
 
 用户也可以在自己的终端运行 `setup trust-browser`。不做时管理台能打开，但浏览器有安全提示；其他设备从登录页下载根证书。重装后 CA 是新的，旧证书留在钥匙串里，由用户自行清理。
@@ -261,7 +261,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 | `moox.toml must be in repository root` | CLI 要求 moox.toml 在仓库根 | 在主仓库根目录运行，worktree 用 `--source-dir` |
 | control 阶段失败，重试结果相同 | 软件制品绑定在 admin 的状态目录，重试不会带上新代码 | 修代码后换新状态目录，从 admin 重来 |
 | control 阶段 `target_not_ready` 或 `target_process_exited`，Monitor 没起来 | Monitor 的定时器首次运行时依赖的服务还没起来，错误让进程退出 | 看候选发布目录 `/data/moox/prod/releases/bootstrap-*/<组件>/logs/trpc.log`；代码已改为跳过本轮，但同类问题仍可能出现在别的组件 |
-| 管理台打开是空白/占位页 | web-host 内嵌了占位前端（`web/dist` 不完整） | 按第 2 节重新构建 web-host；`web/dist` 不完整时构建现在会直接失败 |
+| 管理台打开是“前端没有打包进这个程序” | moox-admin 编译时没有带上前端（`web/dist` 不完整或没经 `build.sh admin`） | 按第 2 节重新构建 admin；`web/dist` 不完整时构建会直接失败 |
 | `setup trust-browser` 报 `browser_trust_manual` | 没有终端或 sudo 失败 | 把错误里的命令交给用户在自己的终端运行 |
 | `setup init` 报 `CreateFactorTask failed ... metadata row not found` | `moox.toml` 里有源数据集不存在的因子任务 | 见第 4 节“步骤 8 的已知限制” |
 | 因子 `factor_memory_budget_exceeded`、`status=degraded rows=0` | 引擎 `compute.max_memory` 太小（旧脚本写死 1GiB，默认因子 EMA 一期约 1.1GB） | 脚本已改 4GiB 并在安装时自动 `tune --write`；已装的机器改 `engine.yaml` 后重启引擎 |

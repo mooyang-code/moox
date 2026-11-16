@@ -32,6 +32,7 @@ func InitAuthServiceImpl(cfg *config.Config, dbManager *database.Manager, sessio
 	if cfg == nil || sessions == nil {
 		return nil, fmt.Errorf("认证服务需要配置与会话表")
 	}
+	placeholderPasswordHash()
 	return &AuthServiceImpl{
 		cfg:      cfg,
 		userDAO:  dao.NewUserDAO(db),

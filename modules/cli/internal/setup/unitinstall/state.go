@@ -13,7 +13,7 @@ import (
 )
 
 func lifecycleOrder(ids []string) []string {
-	order := []string{"admin", "eventbus", "host-gateway", "host-agent", "storage-primary", "storage-view", "egress-proxy", "access", "trade", "callback-dispatcher", "monitor", "collector", "collector-stream", "factor-mgr", "archive-mgr", "strategy", "web-host", "console-proxy"}
+	order := []string{"admin", "eventbus", "host-gateway", "host-agent", "storage-primary", "storage-view", "egress-proxy", "access", "trade", "callback-dispatcher", "monitor", "collector", "collector-stream", "factor-mgr", "archive-mgr", "strategy"}
 	result := slices.Clone(ids)
 	slices.SortStableFunc(result, func(a, b string) int { return slices.Index(order, a) - slices.Index(order, b) })
 	return result
@@ -25,9 +25,6 @@ func mutablePaths(prepared Prepared, logs bool) []string {
 		paths = append(paths, id+"/data", id+"/var")
 		if logs {
 			paths = append(paths, id+"/log", id+"/logs")
-		}
-		if id == "console-proxy" {
-			paths = append(paths, id+"/certs")
 		}
 	}
 	slices.Sort(paths)

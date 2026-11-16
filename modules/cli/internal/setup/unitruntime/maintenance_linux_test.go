@@ -12,8 +12,8 @@ import (
 )
 
 func TestRuntimeLinuxScopedMaintenanceSerializesAndBoundsLifecycle(t *testing.T) {
-	path, plan := planFixture(t, "web-host")
-	otherPath, other := planFixture(t, "web-host")
+	path, plan := planFixture(t, "strategy")
+	otherPath, other := planFixture(t, "strategy")
 	var expired *Maintenance
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -24,7 +24,7 @@ func TestRuntimeLinuxScopedMaintenanceSerializesAndBoundsLifecycle(t *testing.T)
 		require.Equal(t, "stopped", result.Components[0].State)
 		_, err = guard.Execute(ctx, otherPath, "pause", nil)
 		require.Error(t, err)
-		require.NoFileExists(t, filepath.Join(other.DeploymentRoot, "run", "paused", "web-host"))
+		require.NoFileExists(t, filepath.Join(other.DeploymentRoot, "run", "paused", "strategy"))
 		checked, err := Execute(ctx, path, "healthcheck", nil, Options{})
 		require.NoError(t, err)
 		require.True(t, checked.Skipped)
@@ -41,7 +41,7 @@ func TestRuntimeLinuxScopedMaintenanceSerializesAndBoundsLifecycle(t *testing.T)
 	require.NoError(t, err)
 	_, err = expired.Execute(t.Context(), path, "resume", nil)
 	require.Error(t, err)
-	require.FileExists(t, filepath.Join(plan.DeploymentRoot, "run", "paused", "web-host"))
+	require.FileExists(t, filepath.Join(plan.DeploymentRoot, "run", "paused", "strategy"))
 	called := false
 	err = WithMaintenance(t.Context(), plan.DeploymentRoot, "other-host", Options{}, func(*Maintenance) error { called = true; return nil })
 	require.Error(t, err)
@@ -59,7 +59,7 @@ func TestRuntimeLinuxScopedMaintenanceSerializesAndBoundsLifecycle(t *testing.T)
 }
 
 func TestRuntimeLinuxInterruptedInstallationBlocksAutomaticStartsUntilRecovery(t *testing.T) {
-	path, plan := planFixture(t, "web-host")
+	path, plan := planFixture(t, "strategy")
 	unitRoot := filepath.Dir(filepath.Dir(plan.ReleaseRoot))
 	err := WithMaintenance(t.Context(), plan.DeploymentRoot, plan.HostID, Options{}, func(guard *Maintenance) error {
 		return guard.BeginInstallation(t.Context(), unitRoot, plan.ReleaseRoot)
@@ -75,7 +75,7 @@ func TestRuntimeLinuxInterruptedInstallationBlocksAutomaticStartsUntilRecovery(t
 	_, err = Execute(t.Context(), path, "pause", nil, Options{})
 	require.NoError(t, err)
 	err = WithMaintenance(t.Context(), plan.DeploymentRoot, plan.HostID, Options{}, func(guard *Maintenance) error {
-		otherPath, other := planFixture(t, "web-host")
+		otherPath, other := planFixture(t, "strategy")
 		_ = otherPath
 		require.Error(t, guard.BeginInstallation(t.Context(), filepath.Dir(filepath.Dir(other.ReleaseRoot)), other.ReleaseRoot))
 		require.NoError(t, guard.BeginInstallation(t.Context(), unitRoot, plan.ReleaseRoot))
@@ -86,5 +86,5 @@ func TestRuntimeLinuxInterruptedInstallationBlocksAutomaticStartsUntilRecovery(t
 	})
 	require.NoError(t, err)
 	require.NoFileExists(t, filepath.Join(plan.DeploymentRoot, "run/installation.json"))
-	require.FileExists(t, filepath.Join(plan.DeploymentRoot, "run/paused/web-host"))
+	require.FileExists(t, filepath.Join(plan.DeploymentRoot, "run/paused/strategy"))
 }

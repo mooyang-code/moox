@@ -161,7 +161,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		missing := []string{}
 		required := []string{"host-gateway", "host-agent"}
 		if _, control := r.deployments["admin"]; control {
-			required = append(required, "admin", "console-proxy", "web-host")
+			required = append(required, "admin")
 		}
 		for _, id := range required {
 			if _, exists := r.deployments[id]; !exists {

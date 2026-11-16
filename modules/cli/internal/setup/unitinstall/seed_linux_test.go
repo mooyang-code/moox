@@ -31,19 +31,9 @@ func sealWithHelper(t *testing.T, options SealStateOptions) (StateSeedReference,
 	return reference, nil
 }
 
-func TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot(t *testing.T) {
-	options := controlActivationOptions(t)
-	options.Components = []string{"admin", "web-host"}
-	options.Environment["admin"] = syntheticEnvironment()
-	tools, err := prepareWithHelper(t, options)
-	require.NoError(t, err)
-	adminCLI := filepath.Join(tools.Directory, "bin/moox-admin-cli")
-	seedRoot := filepath.Join(options.UnitRoot, "state-imports")
-	require.NoError(t, os.Mkdir(seedRoot, 0o700))
-	firstSeed := filepath.Join(seedRoot, "initial")
-	require.NoError(t, os.MkdirAll(filepath.Join(firstSeed, "admin/data"), 0o700))
-	// Normalize only the public synthetic topology. No operator moox.toml is
-	// read, copied or transported, and master/CA private files stay outside seed.
+// offlineAdminHosts 取门禁夹具里的三台主机（公开的合成拓扑），给离线 Admin bootstrap 用。不读运维的 moox.toml。
+func offlineAdminHosts(t *testing.T) []map[string]any {
+	t.Helper()
 	raw, err := os.ReadFile(os.Getenv("MOOX_HOST_MATERIAL_FIXTURE"))
 	require.NoError(t, err)
 	var issued []struct {
@@ -53,34 +43,53 @@ func TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot(t 
 	hosts := []map[string]any{}
 	for _, item := range issued {
 		if !item.Options.AllowOperator {
-			hosts = append(hosts, map[string]any{"host_id": item.Options.HostID, "address": item.Options.Address, "private_address": item.Options.PrivateAddress, "region": "", "description": "initial", "components": item.Options.Components})
+			hosts = append(hosts, map[string]any{"host_id": item.Options.HostID, "address": item.Options.Address, "private_address": item.Options.PrivateAddress, "region": "", "description": "", "components": item.Options.Components})
 		}
 	}
 	require.Len(t, hosts, 3)
+	return hosts
+}
+
+// bootstrapOfflineAdmin 用发布自带的 moox-admin-cli 离线 bootstrap：建库、主密钥与 CA（已有的复用），返回身份包元数据。
+// 主密钥与 CA 私钥留在 master、pki，不进状态导入目录。
+func bootstrapOfflineAdmin(t *testing.T, adminCLI, db, master, pki, description string) hostbundle.Metadata {
+	t.Helper()
+	hosts := offlineAdminHosts(t)
+	for _, host := range hosts {
+		host["description"] = description
+	}
+	topology, err := json.Marshal(map[string]any{"version": 1, "control_host_id": "control", "hosts": hosts})
+	require.NoError(t, err)
+	topologyPath := filepath.Join(privateParent(t), "topology.json")
+	require.NoError(t, os.WriteFile(topologyPath, topology, 0o600))
+	output, err := exec.CommandContext(t.Context(), adminCLI, "bootstrap", "--topology-file", topologyPath, "--db-path", db, "--encryption-key-file", master, "--pki-dir", pki, "--output-dir", filepath.Join(privateParent(t), "bundles")).CombinedOutput()
+	require.NoError(t, err, "real offline Admin bootstrap must succeed")
+	require.NotContains(t, string(output), "PRIVATE KEY")
+	var metadata hostbundle.Metadata
+	require.NoError(t, json.Unmarshal(output, &metadata))
+	return metadata
+}
+
+func TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot(t *testing.T) {
+	options := controlActivationOptions(t)
+	tools, err := prepareWithHelper(t, options)
+	require.NoError(t, err)
+	adminCLI := filepath.Join(tools.Directory, "bin/moox-admin-cli")
+	seedRoot := filepath.Join(options.UnitRoot, "state-imports")
+	require.NoError(t, os.Mkdir(seedRoot, 0o700))
+	firstSeed := filepath.Join(seedRoot, "initial")
+	require.NoError(t, os.MkdirAll(filepath.Join(firstSeed, "admin/data"), 0o700))
 	trust := privateParent(t)
 	master, pki := filepath.Join(trust, "admin-master.key"), filepath.Join(trust, "pki")
 	bootstrap := func(directory, description string) hostbundle.Metadata {
 		t.Helper()
-		for _, host := range hosts {
-			host["description"] = description
-		}
-		topology, err := json.Marshal(map[string]any{"version": 1, "control_host_id": "control", "hosts": hosts})
-		require.NoError(t, err)
-		topologyPath := filepath.Join(trust, "topology.json")
-		require.NoError(t, os.WriteFile(topologyPath, topology, 0o600))
-		output, err := exec.CommandContext(t.Context(), adminCLI, "bootstrap", "--topology-file", topologyPath, "--db-path", filepath.Join(directory, "admin/data/admin.db"), "--encryption-key-file", master, "--pki-dir", pki, "--output-dir", filepath.Join(privateParent(t), "bundles")).CombinedOutput()
-		require.NoError(t, err, "real offline Admin bootstrap must succeed")
-		require.NotContains(t, string(output), "PRIVATE KEY")
-		var metadata hostbundle.Metadata
-		require.NoError(t, json.Unmarshal(output, &metadata))
-		return metadata
+		return bootstrapOfflineAdmin(t, adminCLI, filepath.Join(directory, "admin/data/admin.db"), master, pki, description)
 	}
 	material := bootstrap(firstSeed, "initial")
 	options.MaterialDirectory = material.BundleDir
 	options.MaterialOptions.AllowOperator = true
 	options.MaterialOptions.ExpectedCA = material.CA.SHA256
 	options.MaterialOptions.ExpectedHash = material.ExpectedHash
-	options.Environment["admin"]["MOOX_ADMIN_NODE_ID"] = "control"
 	options.Environment["admin"]["MOOX_ADMIN_ENCRYPTION_KEY_FILE"] = master
 	options.Environment["admin"]["MOOX_ADMIN_PKI_DIR"] = pki
 	// Replace the unstarted host unit with identities issued by this actual
@@ -107,11 +116,11 @@ func TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot(t 
 	repeated, err := sealWithHelper(t, sealOptions)
 	require.NoError(t, err)
 	require.Equal(t, reference, repeated)
-	_, err = activationCommand(t, "activate", "--directory", first.Directory, "--components", "web-host", "--state-seed", reference.Directory, "--state-seed-sha256", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	_, err = activationCommand(t, "activate", "--directory", first.Directory, "--components", "admin", "--state-seed", reference.Directory, "--state-seed-sha256", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	require.Error(t, err)
 	_, err = os.Lstat(filepath.Join(options.UnitRoot, "activation.json"))
 	require.True(t, os.IsNotExist(err), "bad input must fail before an activation journal is written")
-	active, err := activationCommand(t, "activate", "--directory", first.Directory, "--components", "web-host", "--state-seed", reference.Directory, "--state-seed-sha256", reference.SHA256)
+	active, err := activationCommand(t, "activate", "--directory", first.Directory, "--components", "admin", "--state-seed", reference.Directory, "--state-seed-sha256", reference.SHA256)
 	require.NoError(t, err)
 	require.Equal(t, reference.SHA256, active.StateSeedSHA256)
 	firstDB := filepath.Join(first.Directory, "admin/data/admin.db")
@@ -136,17 +145,19 @@ func TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot(t 
 	require.NoError(t, err)
 	_, err = ReadPrepared(t.Context(), first.Directory)
 	require.Error(t, err)
-	firstPID := runScript(t, first.Directory, "status", "--components", "web-host").Components[0].PID
+	firstPID := runScript(t, first.Directory, "status", "--components", "admin").Components[0].PID
 	require.NoError(t, os.RemoveAll(firstSeed))
-	_, err = activationCommand(t, "activate", "--directory", first.Directory, "--components", "web-host", "--state-seed", reference.Directory, "--state-seed-sha256", reference.SHA256)
+	_, err = activationCommand(t, "activate", "--directory", first.Directory, "--components", "admin", "--state-seed", reference.Directory, "--state-seed-sha256", reference.SHA256)
 	require.NoError(t, err, "completed activation does not depend on keeping the consumed import source")
-	require.Equal(t, firstPID, runScript(t, first.Directory, "status", "--components", "web-host").Components[0].PID)
-	// Admin has not been started in this test. Its database is closed before
-	// the offline rerun; this does not claim the complete five-step bootstrap.
+	require.Equal(t, firstPID, runScript(t, first.Directory, "status", "--components", "admin").Components[0].PID)
+	// 离线重跑要读关闭着的数据库：先停 Admin 再复制，重跑完再启动。这里不代替完整的五步 bootstrap 验收。
+	runScript(t, first.Directory, "stop", "--components", "admin")
 	secondSeed := filepath.Join(seedRoot, "rerun")
 	require.NoError(t, os.Mkdir(secondSeed, 0o700))
 	require.NoError(t, CopyOfflineState(t.Context(), first.Directory, secondSeed, []string{"admin/data"}))
 	rerunMaterial := bootstrap(secondSeed, "rerun")
+	firstPID = runScript(t, first.Directory, "start", "--components", "admin").Components[0].PID
+	require.Positive(t, firstPID)
 	require.Equal(t, material.CA.SHA256, rerunMaterial.CA.SHA256)
 	require.Equal(t, material.Credentials, rerunMaterial.Credentials)
 	options.ReleaseID, options.MaterialDirectory = "rerun-control", rerunMaterial.BundleDir
@@ -160,12 +171,12 @@ func TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot(t 
 	changed := append([]byte(nil), snapshot...)
 	changed[len(changed)-1] ^= 1
 	require.NoError(t, os.WriteFile(seedDB, changed, 0o600))
-	_, err = activationCommand(t, "activate", "--directory", second.Directory, "--components", "web-host", "--state-seed", secondReference.Directory, "--state-seed-sha256", secondReference.SHA256)
+	_, err = activationCommand(t, "activate", "--directory", second.Directory, "--components", "admin", "--state-seed", secondReference.Directory, "--state-seed-sha256", secondReference.SHA256)
 	require.Error(t, err, "a same-size snapshot mutation must fail before stopping old services")
 	require.Equal(t, first.Directory, currentTarget(t, options.UnitRoot))
-	require.Equal(t, firstPID, runScript(t, first.Directory, "status", "--components", "web-host").Components[0].PID)
+	require.Equal(t, firstPID, runScript(t, first.Directory, "status", "--components", "admin").Components[0].PID)
 	require.NoError(t, os.WriteFile(seedDB, snapshot, 0o600))
-	_, err = activationCommand(t, "activate", "--directory", second.Directory, "--components", "web-host", "--state-seed", secondReference.Directory, "--state-seed-sha256", secondReference.SHA256)
+	_, err = activationCommand(t, "activate", "--directory", second.Directory, "--components", "admin", "--state-seed", secondReference.Directory, "--state-seed-sha256", secondReference.SHA256)
 	require.NoError(t, err)
 	require.Equal(t, "rerun", readDescription(filepath.Join(second.Directory, "admin/data/admin.db")))
 	require.Equal(t, "initial", readDescription(firstDB), "old release must remain the independent pre-rerun snapshot")

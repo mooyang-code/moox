@@ -47,7 +47,8 @@ func (m *Material) Inject(ctx context.Context, directory string, components []st
 			host = true
 		}
 		wanted[id] = true
-		if id == "console-proxy" {
+		// 浏览器入口在 Admin 里：console 签名身份跟着 admin 投放。
+		if id == "admin" {
 			wanted["console"] = true
 		}
 		if id == "collector" {

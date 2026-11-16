@@ -67,7 +67,7 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	_, err = servicecatalog.Decode(bytes.NewBufferString(catalog.GetCatalogYaml()))
 	require.NoError(t, err)
 	for _, spec := range []*pb.SyncHostDeploymentsReq{
-		{HostId: "control", Address: "control.example.test", ComponentIds: []string{"admin", "console-proxy", "web-host"}},
+		{HostId: "control", Address: "control.example.test", ComponentIds: []string{"admin"}},
 		{HostId: "storage", Address: "storage.example.test", ComponentIds: []string{"storage-primary"}},
 	} {
 		response, err := proxy.SyncHostDeployments(ctx, spec)

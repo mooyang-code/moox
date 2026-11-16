@@ -15,7 +15,7 @@ import (
 )
 
 // sessionCookie 是管理台的会话 Cookie 名（与 Admin 的 session.CookieName 一致）。
-const sessionCookie = "moox_session"
+const sessionCookie = "__Host-moox_session"
 
 // client 像浏览器一样调用管理台：登录拿到会话 Cookie，之后每个请求带上它；POST 带本站 Origin。
 type client struct {

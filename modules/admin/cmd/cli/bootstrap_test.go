@@ -36,7 +36,7 @@ func newBootstrapFixture(t *testing.T) bootstrapOptions {
 	require.NoError(t, os.Mkdir(dir, 0o700))
 	opts := bootstrapOptions{topologyFile: filepath.Join(dir, "topology.json"), dbPath: filepath.Join(dir, "data", "admin.db"), masterFile: filepath.Join(dir, "secrets", "admin-encryption.key"), pkiDir: filepath.Join(dir, "secrets", "pki"), outputDir: filepath.Join(dir, "bundles")}
 	writeBootstrapTopology(t, opts, hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{
-		{HostID: "control", Address: "192.0.2.1", PrivateAddress: "control.internal.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
+		{HostID: "control", Address: "192.0.2.1", PrivateAddress: "control.internal.example.test", Components: []string{"admin", "collector"}},
 		{HostID: "storage", Address: "192.0.2.2", Components: []string{"storage-primary", "storage-view"}},
 		{HostID: "overseas", Address: "192.0.2.3", Components: []string{"access", "trade"}},
 	}})
@@ -105,7 +105,7 @@ func TestBootstrapEmptyEnvironmentExportsWorkingCredentialsCertificateAndConfig(
 	hosts, deployments, err := dao.Read(context.Background())
 	require.NoError(t, err)
 	require.Len(t, hosts, 3)
-	require.Len(t, deployments, 14)
+	require.Len(t, deployments, 12)
 	_, snapshot, err := dao.CompileSnapshot(context.Background(), "control", strings.TrimSpace(string(master)))
 	require.NoError(t, err)
 	require.Equal(t, result.ExpectedHash, snapshot.Hash)
@@ -213,7 +213,7 @@ func TestBootstrapRetryKeepsMasterCAKeysAndDisabledStates(t *testing.T) {
 func TestBootstrapRejectsInvalidTopologyBeforeCreatingTrustMaterial(t *testing.T) {
 	for _, mutate := range []func(*hostbundle.Topology){
 		func(t *hostbundle.Topology) { t.Hosts[1].Components = append(t.Hosts[1].Components, "collector") },
-		func(t *hostbundle.Topology) { t.Hosts[0].Components = []string{"admin"} },
+		func(t *hostbundle.Topology) { t.Hosts[0].Components = []string{"collector"} },
 		func(t *hostbundle.Topology) { t.Hosts[1].HostID = t.Hosts[0].HostID },
 		func(t *hostbundle.Topology) { t.Hosts[1].Address = "http://invalid" },
 		func(t *hostbundle.Topology) { t.Hosts[1].Components = []string{"host-gateway"} },

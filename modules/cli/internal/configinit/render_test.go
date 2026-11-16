@@ -73,7 +73,7 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 		t.Fatalf("主机 = %+v", manifest.HostCatalog)
 	}
 	// 角色到组件的映射与示例模板的部署一致。
-	if !slices.Equal(manifest.Deployments["control"], []string{"console-proxy", "web-host", "admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}) ||
+	if !slices.Equal(manifest.Deployments["control"], []string{"admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}) ||
 		!slices.Equal(manifest.Deployments["storage"], []string{"storage-primary", "storage-view", "access", "eventbus"}) ||
 		!slices.Equal(manifest.Deployments["overseas"], []string{"trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"}) {
 		t.Fatalf("部署 = %+v", manifest.Deployments)
@@ -156,7 +156,7 @@ func TestControlCanShareAServerWithStorageOrOverseas(t *testing.T) {
 		if len(manifest.HostCatalog) != 2 {
 			t.Fatalf("%s：应只有两台主机，实际 %v", target.role, manifest.HostCatalog)
 		}
-		if manifest.ComponentHost("admin") != target.host || manifest.ComponentHost("console-proxy") != target.host {
+		if manifest.ComponentHost("admin") != target.host || manifest.ComponentHost("monitor") != target.host {
 			t.Fatalf("%s：管理台组件应放到 %s，实际 %+v", target.role, target.host, manifest.Deployments)
 		}
 		// EventBus 是独立单元，默认放在存储机上（Storage 内部的事件流量最大），不跟着管理台组件走。

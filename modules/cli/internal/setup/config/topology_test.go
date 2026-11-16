@@ -189,7 +189,7 @@ ssh = { username = "ubuntu" }
 	assert.Equal(t, "tls://192.0.2.10:4222", onControl.EventBusURLFor("storage"))
 	assert.Equal(t, "192.0.2.10", onControl.EventBus.PublicAddress)
 
-	onStorage := load(strings.Replace(validManifest, `control = ["admin", "console-proxy", "web-host", "eventbus"]`, `control = ["admin", "console-proxy", "web-host"]
+	onStorage := load(strings.Replace(validManifest, `control = ["admin", "eventbus"]`, `control = ["admin"]
 storage = ["eventbus"]`, 1) + `
 [hosts.storage]
 address = "192.0.2.20"

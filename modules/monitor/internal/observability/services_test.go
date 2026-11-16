@@ -39,7 +39,7 @@ func TestReverseReconciliationUsesAllDeploymentsAndExactIdentity(t *testing.T) {
 		Deployments: []domain.TopologyDeployment{
 			{HostID: "control", ComponentID: "collector", Status: "enabled"},
 			{HostID: "control", ComponentID: "factor-mgr", Status: "enabled"},
-			{HostID: "control", ComponentID: "web-host", Status: "enabled"},
+			{HostID: "control", ComponentID: "archive-mgr", Status: "enabled"},
 			{HostID: "control", ComponentID: "egress-proxy", Status: "disabled"},
 			{HostID: "disabled-host", ComponentID: "collector", Status: "enabled"},
 		},
@@ -64,7 +64,7 @@ func TestReverseReconciliationUsesAllDeploymentsAndExactIdentity(t *testing.T) {
 		require.Equal(t, "missing", missing.ReporterStatus, "登记了部署却没有上报")
 		require.Equal(t, "down", missing.Status, "已启用的部署从没上报，进程没起来，与未就绪一样严重")
 		require.True(t, missing.LastSeenAt.IsZero())
-		require.Equal(t, "missing", byKey[deploymentKey("control", "web-host")].ReporterStatus, "不再有不要求上报的组件")
+		require.Equal(t, "missing", byKey[deploymentKey("control", "archive-mgr")].ReporterStatus, "不再有不要求上报的组件")
 		for _, key := range []string{deploymentKey("control", "egress-proxy"), deploymentKey("disabled-host", "collector")} {
 			require.False(t, byKey[key].Enabled)
 			require.Equal(t, "disabled", byKey[key].Status)

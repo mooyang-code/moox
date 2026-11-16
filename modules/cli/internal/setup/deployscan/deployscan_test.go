@@ -705,7 +705,7 @@ func stepsManifest() setupconfig.Manifest {
 	return setupconfig.Manifest{
 		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.10"}, "storage": {Address: "198.51.100.11"}, "overseas": {Address: "198.51.100.12"}, "factor": {Address: "192.0.2.30"}},
 		Deployments: map[string][]string{
-			"control":  {"admin", "monitor", "console-proxy"},
+			"control":  {"admin", "monitor", "collector"},
 			"storage":  {"storage-primary", "access", "eventbus"},
 			"overseas": {"access", "egress-proxy", "trade", "collector-stream"},
 			"factor":   {"factor-engine", "archive-worker"},
@@ -766,7 +766,7 @@ func TestNextStepsFollowTopologyAndProgress(t *testing.T) {
 func TestArchiveLocalTakesTheOldConsoleCert(t *testing.T) {
 	operator, state := filepath.Join(t.TempDir(), "operator"), filepath.Join(t.TempDir(), "state")
 	require.NoError(t, os.MkdirAll(operator, 0o700))
-	cert := filepath.Join(t.TempDir(), "moox-caddy-root-a.crt")
+	cert := filepath.Join(t.TempDir(), "moox-ca-a.crt")
 	require.NoError(t, os.WriteFile(cert, []byte("old"), 0o600))
 	archived, err := ArchiveLocal(operator, state, cert, time.Unix(0, 0))
 	require.NoError(t, err)

@@ -88,7 +88,7 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 
 func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 	root := t.TempDir()
-	script := filepath.Join(root, "scripts", "deploy", "install-caddy-ca.sh")
+	script := filepath.Join(root, "scripts", "deploy", "install-moox-ca.sh")
 	marker := filepath.Join(root, "installed")
 	require.NoError(t, os.MkdirAll(filepath.Dir(script), 0o755))
 	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --check '*) test -f \"$MARKER\";;\n  *) : >\"$MARKER\";;\nesac\n"), 0o700))
@@ -126,7 +126,7 @@ func TestSetupRenderRuntimeConfigUsesOneSnapshot(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"render-runtime-config", "--file", "moox.toml", "--egress-output", egressPath, "--collector-output", collectorPath})
 	require.NoError(t, cmd.Execute())
-	require.JSONEq(t, fmt.Sprintf(`{"status":"rendered","egress_output":%q,"collector_output":%q,"trade_console_host":"","trade_console_port":0}`, egressPath, collectorPath), output.String())
+	require.JSONEq(t, fmt.Sprintf(`{"status":"rendered","egress_output":%q,"collector_output":%q}`, egressPath, collectorPath), output.String())
 	egressRaw, err := os.ReadFile(egressPath)
 	require.NoError(t, err)
 	require.Contains(t, string(egressRaw), "domains:")
@@ -210,7 +210,7 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 	manifest := setupconfig.Manifest{
 		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "203.0.113.8"}, "storage": {Address: "203.0.113.10"}, "compute": {Address: "203.0.113.9"}},
 		EventBus:    setupconfig.EventBus{PublicAddress: "203.0.113.8", Port: 4222},
-		Deployments: map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "storage": {"storage-primary"}, "compute": {"trade"}},
+		Deployments: map[string][]string{"control": {"admin", "eventbus"}, "storage": {"storage-primary"}, "compute": {"trade"}},
 	}
 	targets := mustFirewallTargets(t, manifest)
 	require.Len(t, targets, 3)
@@ -285,7 +285,7 @@ func TestSetupFirewallTargetsFollowEventBusPlacement(t *testing.T) {
 	manifest := setupconfig.Manifest{
 		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "203.0.113.8"}, "storage": {Address: "203.0.113.10"}, "factor": {Address: "192.168.0.103", Reachability: "outbound"}},
 		EventBus:    setupconfig.EventBus{Port: 4222},
-		Deployments: map[string][]string{"control": {"admin", "console-proxy", "web-host"}, "storage": {"storage-primary", "eventbus"}, "factor": {"factor-engine"}},
+		Deployments: map[string][]string{"control": {"admin"}, "storage": {"storage-primary", "eventbus"}, "factor": {"factor-engine"}},
 	}
 	portsOn := func(targets []setupFirewallTarget, name string) []string {
 		for _, target := range targets {
@@ -369,7 +369,7 @@ username = "ubuntu"
 password = "other-ssh-password"
 
 [deployments]
-control = ["admin", "console-proxy", "web-host", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
+control = ["admin", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
 compute = []
 `)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))

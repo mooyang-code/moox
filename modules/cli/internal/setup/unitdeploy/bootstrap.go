@@ -140,7 +140,7 @@ func adminRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host,
 // BootstrapAdmin establishes Admin and both host components. EventBus is its own
 // unit, installed by deploy-unit on the host that [deployments] names; its
 // credentials are still issued here, inside Admin's database. Its result
-// deliberately says admin-ready: fleet services and Console Proxy are installed
+// deliberately says admin-ready: the remaining control services are installed
 // by the outer workflow once Storage and other dependencies exist.
 func BootstrapAdmin(ctx context.Context, snapshot *setupconfig.Snapshot, options DeployOptions) (BootstrapResult, error) {
 	return bootstrap(ctx, snapshot, options, nil)

@@ -74,7 +74,7 @@ func controlTemplates(ctx context.Context, transport setupssh.Client, request un
 	}
 	names := []string{}
 	for _, id := range components {
-		if slices.Contains([]string{"console-proxy", "monitor", "collector"}, id) {
+		if slices.Contains([]string{"monitor", "collector"}, id) {
 			names = append(names, id+"/config/app.yaml")
 		}
 	}
@@ -113,9 +113,8 @@ tar -xzf "$archive" -C "$stage" --no-same-owner --no-same-permissions -- "$@"`, 
 // from files that may have changed in the worktree after the admin build.
 func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, components []string) (map[string][]byte, error) {
 	result := map[string][]byte{}
-	control := snapshot.Manifest.ControlHost()
 	for _, id := range components {
-		if !slices.Contains([]string{"console-proxy", "monitor", "collector"}, id) {
+		if !slices.Contains([]string{"monitor", "collector"}, id) {
 			continue
 		}
 		name := id + "/config/app.yaml"
@@ -140,14 +139,7 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 			}
 			return value, nil
 		}
-		switch id {
-		case "console-proxy":
-			public, err := mapping("public")
-			if err != nil {
-				return nil, err
-			}
-			public["host"] = control.Address
-		case "monitor":
+		if id == "monitor" {
 			metrics, err := mapping("metrics")
 			if err != nil {
 				return nil, err

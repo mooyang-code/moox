@@ -1,4 +1,4 @@
-// Package tlstrust 管理操作员本机对管理台内部 CA 的信任。
+// Package tlstrust 管理操作员本机对 MooX CA（管理台 HTTPS 证书的签发者）的信任。
 package tlstrust
 
 import (
@@ -16,6 +16,7 @@ import (
 
 type FileCAStore struct{}
 
+// CAPath 是本机缓存的 MooX CA 根证书：~/.moox/certs/moox-ca-{控制机地址}.crt。
 func CAPath(publicHost string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -27,7 +28,7 @@ func CAPath(publicHost string) string {
 		}
 		return '_'
 	}, publicHost)
-	return filepath.Join(home, ".moox", "certs", "moox-caddy-root-"+safe+".crt")
+	return filepath.Join(home, ".moox", "certs", "moox-ca-"+safe+".crt")
 }
 
 func (FileCAStore) Save(publicHost string, raw []byte) error {
@@ -82,17 +83,15 @@ func Fingerprint(caPath string) string {
 // ErrBrowserCATrust 标记操作员本机信任控制台 CA 失败。
 var ErrBrowserCATrust = errors.New("browser_ca_trust_failed")
 
-// EnsureLocalCATrust checks and, when needed, installs the public Caddy root
-// certificate into the operator machine's trust store. The repository script
-// owns the platform-specific trust-store details and prompts for elevation
-// only when the current user cannot perform the operation directly.
+// EnsureLocalCATrust 检查本机是否信任 MooX CA 根证书，没信任时装进系统信任库。各平台信任库的细节由仓库里的
+// scripts/deploy/install-moox-ca.sh 负责，只有当前用户权限不够时它才请求管理员授权。
 func EnsureLocalCATrust(ctx context.Context, repositoryRoot, caPath string) error {
 	repositoryRoot = strings.TrimSpace(repositoryRoot)
 	caPath = strings.TrimSpace(caPath)
 	if repositoryRoot == "" || caPath == "" {
 		return fmt.Errorf("%w: installer or CA path is empty", ErrBrowserCATrust)
 	}
-	script := filepath.Join(repositoryRoot, "scripts", "deploy", "install-caddy-ca.sh")
+	script := filepath.Join(repositoryRoot, "scripts", "deploy", "install-moox-ca.sh")
 	info, err := os.Stat(script)
 	if err != nil || !info.Mode().IsRegular() {
 		return fmt.Errorf("%w: installer not found at %s", ErrBrowserCATrust, script)

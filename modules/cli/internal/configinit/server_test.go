@@ -221,7 +221,7 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 		t.Fatalf("角色顺序 = %v", keys)
 	}
 	// 用户只看到用途说明，不看到组件 ID（主机 ID 与角色键同名，会出现在页面脚本里）。
-	for _, id := range []string{"storage-primary", "console-proxy", "egress-proxy", "factor-mgr"} {
+	for _, id := range []string{"storage-primary", "archive-mgr", "egress-proxy", "factor-mgr"} {
 		if strings.Contains(body, id) {
 			t.Fatalf("页面不应展示组件 ID %q", id)
 		}

@@ -439,7 +439,7 @@ ssh = { port = 22, username = "builder" }
 
 # host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。
 [deployments]
-control = ["console-proxy", "web-host", "admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"]
+control = ["admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"]
 # eventbus 是独立单元，可以放在任意一台直达主机上，用 setup deploy-unit --profile eventbus 安装；放在存储机上时 Storage 的周期完成与就绪事件走回环。
 # 客户端与它同机时连回环地址，否则连它所在主机的对外地址。
 storage = ["storage-primary", "storage-view", "access", "eventbus"]

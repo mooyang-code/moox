@@ -203,7 +203,7 @@ cd moox-${VER}
 管理台用内部证书。信任要这台电脑的管理员授权，Agent 做不了，也不阻塞安装：`setup validate` 把它放在 `manual_steps`，安装结束时把下面的命令交给用户在自己的终端运行，不要替用户清理钥匙串里的这张证书。
 
 ```bash
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.moox/certs/moox-caddy-root-<管理台地址>.crt
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.moox/certs/moox-ca-<管理台地址>.crt
 ```
 
 不做时管理台能打开，但浏览器有安全提示；其他设备从登录页下载根证书。
@@ -266,7 +266,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `verify_read_failed` | 到超时还读不到验收数据，组件没起来或连接不通 | 看错误里的组件，用 `setup logs` 查 |
 | `browser_trust_manual` | 信任要管理员授权，没有终端或安装失败 | 把错误里的命令交给用户在自己的终端运行，不影响继续安装 |
 | `control_dependency_not_ready` | Storage 或出口代理单元没就绪或被暂停 | 按报错运行 `setup deploy-unit`；被暂停时先确认原因，再运行报错里的 `resume.sh`，不要用 `system resume` |
-| `browser_ca_trust_failed` | 从管理台服务器取不回内部根证书 | 检查 SSH 和 control 是否已装好，用 `setup logs --component console-proxy` 查 |
+| `browser_ca_trust_failed` | 从管理台服务器取不回 MooX CA 根证书 | 检查 SSH 和 control 是否已装好（根证书在 `<部署根>/host/current/certs/moox-ca.crt`），用 `setup logs --component admin` 查 |
 | `deployment_config_changed` | 首次 control 成功前，主机、路径、管理员或版本变了 | 换回原配置和原版本重跑；要用新配置就清空重装，清空前问用户 |
 | `bootstrap_interrupted` | 目标机上一次部署没结束，这次请求不同 | 换回原配置重跑同一条命令，恢复后再改 |
 | `restart_failed` | 组件重启失败、处于暂停状态，或外部程序没启用 | 看错误原因；用 `setup logs` 查，不要重发单元 |

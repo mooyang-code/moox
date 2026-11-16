@@ -89,7 +89,7 @@ type unitComponentSpec struct {
 
 var unitProfiles = map[string][]string{
 	"host":    {"host-gateway", "host-agent"},
-	"control": {"console-proxy", "web-host", "admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"},
+	"control": {"admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"},
 	// EventBus 是独立单元：由 [deployments] 决定装在哪台主机（与 Storage 同机最省跨机流量），不再属于控制单元。
 	"eventbus":     {"eventbus"},
 	"storage":      {"storage-primary", "storage-view"},
@@ -128,10 +128,9 @@ var unitSpecs = map[string]unitComponentSpec{
 		{"modules/hostagent/config/app.yaml", "host-agent/config/app.yaml", false},
 		{"modules/hostagent/config/trpc_go.yaml", "host-agent/config/trpc_go.yaml", false},
 	}},
-	"console-proxy": {assets: []unitAsset{configAsset("consoleproxy", "console-proxy")}},
-	"web-host":      {}, // The frontend is embedded in the prebuilt web-host executable.
-	"admin":         {[]string{"moox-admin-cli"}, []unitAsset{configAsset("admin", "admin"), schemaAsset("admin", "admin")}},
-	"eventbus":      {assets: []unitAsset{configAsset("eventbus", "eventbus")}},
+	// 管理台前端内嵌在 moox-admin 里（build.sh 编译 admin 时内嵌 web/dist）。
+	"admin":    {[]string{"moox-admin-cli"}, []unitAsset{configAsset("admin", "admin"), schemaAsset("admin", "admin")}},
+	"eventbus": {assets: []unitAsset{configAsset("eventbus", "eventbus")}},
 	"monitor": {assets: []unitAsset{
 		configAsset("monitor", "monitor"), schemaAsset("monitor", "monitor"),
 		{"config/setup/dataset-health-policy.yaml", "monitor/config/dataset-health-policy.yaml", false},

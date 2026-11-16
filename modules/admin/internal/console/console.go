@@ -5,41 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 
 	"github.com/gorilla/mux"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
 	"github.com/mooyang-code/moox/modules/admin/internal/spacecontext"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/log"
-	"trpc.group/trpc-go/trpc-go/server"
 )
 
 // ============================================================================
 // 控制台处理器
 // ============================================================================
 
-var (
-	consoleHandleInstance *ConsoleHandle
-	consoleHandleOnce     sync.Once
-)
-
-// ConsoleHandle 控制台处理器（保留单例以承载 HTTPRequestHandler）。
+// ConsoleHandle 控制台处理器，承载 HTTPRequestHandler。
 type ConsoleHandle struct {
 	requestHandler *HTTPRequestHandler
-}
-
-// GetConsoleHandleInstance 返回控制台处理器的全局单例实例
-func GetConsoleHandleInstance() *ConsoleHandle {
-	consoleHandleOnce.Do(func() {
-		consoleHandleInstance = NewConsoleHandle()
-	})
-	return consoleHandleInstance
 }
 
 var NewConsoleHandle = func() *ConsoleHandle {
@@ -88,20 +72,20 @@ func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCFo
 	}, nil
 }
 
-func RegisterConsoleHTTPHandlers(s *server.Server, local *LocalDispatcher, gateway RPCForwarder, sessions *session.Store, authorizers ...SpaceAuthorizer) error {
-	router, err := NewHTTPRouter(GetConsoleHandleInstance(), local, gateway, sessions, authorizers...)
+// NewHandler 在两个分派器都就绪后建浏览器接口 /api/admin/{服务}/{方法} 的处理器，交给 Admin 的浏览器入口（9527）；
+// sessions 是与认证服务共用的会话表。
+func NewHandler(local *LocalDispatcher, gateway RPCForwarder, sessions *session.Store, authorizers ...SpaceAuthorizer) (http.Handler, error) {
+	if GetConfig() == nil {
+		return nil, errors.New("控制台配置未初始化")
+	}
+	if local == nil || gateway == nil || sessions == nil {
+		return nil, errors.New("控制台需要本地分派器、网关客户端及会话表")
+	}
+	router, err := NewHTTPRouter(NewConsoleHandle(), local, gateway, sessions, authorizers...)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return router.setupRoutes(s)
-}
-
-// setupRoutes 设置路由
-func (hr *HTTPRouter) setupRoutes(s *server.Server) error {
-	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.admin.Console"), hr.buildControlRouter()); err != nil {
-		return err
-	}
-	return nil
+	return router.buildControlRouter(), nil
 }
 
 func (hr *HTTPRouter) buildControlRouter() *mux.Router {

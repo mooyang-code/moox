@@ -3,6 +3,7 @@ package impl
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
 	authutils "github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
@@ -14,6 +15,19 @@ import (
 
 // 用户不存在与密码错误给同一句话，不让人借提示判断用户名是否存在。
 const wrongCredentials = "用户名或密码错误"
+
+// placeholderPasswordHash 是用户不存在时拿来做一次 bcrypt 校验的固定哈希（与真实密码同一种哈希、同一代价），
+// 让“用户不存在”和“密码错误”耗时一致，不能借响应时间判断用户名是否存在。服务初始化时先算好。
+var placeholderPasswordHash = sync.OnceValue(func() string {
+	hash, err := mooxsecurity.HashPassword("moox-login-timing-placeholder")
+	if err != nil {
+		panic(fmt.Sprintf("生成登录占位哈希失败: %v", err))
+	}
+	return hash
+})
+
+// verifyPassword 在测试里替换，用来确认用户不存在时也做了一次校验。
+var verifyPassword = mooxsecurity.VerifyPassword
 
 // Login 用户登录：密码是明文（HTTPS 保护），bcrypt 校验通过后新建会话。会话 ID 交给控制台写进 Cookie，不进响应体。
 func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, error) {
@@ -32,7 +46,11 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	}
 
 	user, err := s.userDAO.GetUserByUsername(ctx, req.GetUsername())
-	if err != nil || !mooxsecurity.VerifyPassword(req.GetPassword(), user.PasswordHash) {
+	hash := placeholderPasswordHash()
+	if err == nil {
+		hash = user.PasswordHash
+	}
+	if !verifyPassword(req.GetPassword(), hash) || err != nil {
 		s.failures.fail(req.GetUsername(), login.ClientIP, s.cfg.Security, now)
 		return loginRejected(pb.ErrorCode_NO_AUTH, wrongCredentials), nil
 	}

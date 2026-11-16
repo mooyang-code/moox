@@ -57,8 +57,8 @@ func TestEmbeddedManifestMatchesSharedCatalog(t *testing.T) {
 			t.Errorf("Doctor metadata differs from catalog for %s", component.ID)
 		}
 	}
-	if got := manifestServices["console-proxy"]; got.HealthPort != 19528 || got.Transport != TransportReporter {
-		t.Fatalf("console proxy health contract: %+v", got)
+	if got := manifestServices["admin"]; got.HealthPort != 11010 || got.Transport != TransportReporter {
+		t.Fatalf("admin health contract: %+v", got)
 	}
 }
 

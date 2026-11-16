@@ -352,6 +352,8 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 			}
 			values["MOOX_ADMIN_NODE_ID"], values["MOOX_ADMIN_ENCRYPTION_KEY_FILE"], values["MOOX_ADMIN_PKI_DIR"] = j.HostID, master, pki
 			values["MOOX_ADMIN_DB_PATH"] = "./data/admin.db"
+			// 浏览器入口由 Admin 自己监听：证书用上面的 MooX CA 签，Host 必须等于控制机地址。
+			values["MOOX_ADMIN_WEB_LISTEN"], values["MOOX_ADMIN_WEB_ADDRESS"] = "0.0.0.0:9527", control.Address
 		}
 		options := unitinstall.PrepareOptions{Archive: unit.Archive, SHA256: unit.SHA256, Profile: profile, DeploymentRoot: request.DeploymentRoot, UnitRoot: unit.UnitRoot, HostUnitRoot: request.Host.UnitRoot, ReleaseID: j.Attempt, MaterialDirectory: metadata.BundleDir, MaterialOptions: materialOptions, Components: components, Environment: environment, Overrides: overrides}
 		options.EventBusDirectory, options.EventBusURL = eventBusDirectory, eventBusURL
@@ -378,10 +380,6 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 			}
 		}
 	}
-	proxySource, err := proxyCheckpoint(ctx, input, j, prepared[1], attempt, lock)
-	if err != nil {
-		return err
-	}
 	controlRoot, err := fsutil.OpenPhysicalRoot(request.Control.UnitRoot, false)
 	if err != nil {
 		return err
@@ -402,14 +400,7 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 	if err := unitinstall.CopyOfflineState(ctx, checkpoint, seedDirectory, []string{"admin/data"}); err != nil {
 		return err
 	}
-	seedPaths := []string{"admin/data"}
-	if proxySource != "" {
-		if err := unitinstall.CopyOfflineState(ctx, proxySource, seedDirectory, proxyPaths); err != nil {
-			return err
-		}
-		seedPaths = append(seedPaths, proxyPaths...)
-	}
-	seed, err := unitinstall.SealState(ctx, unitinstall.SealStateOptions{Directory: seedDirectory, ReleaseDirectory: prepared[1].Directory, PreviousDirectory: j.Control.Previous, Paths: seedPaths}, lock)
+	seed, err := unitinstall.SealState(ctx, unitinstall.SealStateOptions{Directory: seedDirectory, ReleaseDirectory: prepared[1].Directory, PreviousDirectory: j.Control.Previous, Paths: []string{"admin/data"}}, lock)
 	if err != nil {
 		return err
 	}

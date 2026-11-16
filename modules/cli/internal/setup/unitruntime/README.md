@@ -13,8 +13,8 @@
   "catalog_sha256": "sha256:<当前内嵌服务目录摘要>",
   "components": [
     {
-      "id": "console-proxy",
-      "environment_file": "/data/moox/prod/releases/release-id/secrets/runtime-console-proxy.json"
+      "id": "monitor",
+      "environment_file": "/data/moox/prod/releases/release-id/secrets/runtime-monitor.json"
     }
   ]
 }
@@ -30,7 +30,7 @@
 - `pids/<组件>.json` 保存进程启动时的 executable/device/inode、UID、Linux start ticks、制品摘要、随机 boot ID 及启停预算。Linux pidfd 将信号绑定到原进程，身份不符拒绝发送信号。
 - `draining/<组件>` 保存已发送 TERM 的时间和完整预算。停止取消或中断后保留，守护不得重启；再次显式停止继续原预算，完成后清理。
 
-console-proxy 必须在它的 0600 `config/app.yaml` 中明确声明 `drain_timeout`、`engine_stop_timeout`、`cleanup_margin` 和 `startup_timeout`，每项为正且不超过 10 分钟。外层停止等待前三项之和；使用运行中的旧发布记录，新的更短配置不能缩短它。其余组件使用两分钟停止预算。超过预算后再次核对原进程身份，才通过 pidfd 发送 KILL，并观察进程确实退出后释放锁、清理记录或启动替代进程。
+每个组件使用两分钟停止预算、三分钟启动预算，启动时写进 PID 记录；停止按运行中进程的记录走。超过预算后再次核对原进程身份，才通过 pidfd 发送 KILL，并观察进程确实退出后释放锁、清理记录或启动替代进程。
 
 守护只用带 HMAC 的 loopback `/healthz` 决定是否重启；`/readyz` 暂不可用不触发重启。健康认证失败、重定向或返回的制品身份不符会报告错误，不自动结束进程。HTTP 请求不使用环境代理或跟随重定向。
 
@@ -53,13 +53,12 @@ make test-unit-runtime
 TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh runtime
 ```
 
-Linux 完整门禁执行事先构建的测试制品和真实运行助手/console-proxy，不在执行主机编译：
+Linux 完整门禁执行事先构建的测试制品和真实运行助手，不在执行主机编译：
 
 ```bash
 MOOX_UNIT_RUNTIME_TEST_BINARY=/absolute/path/unitruntime.test \
 MOOX_RUNTIME_BINARY=/absolute/path/moox-runtime \
-MOOX_RUNTIME_PROXY_BINARY=/absolute/path/moox-console-proxy \
 make test-unit-runtime-linux
 ```
 
-门禁要求十四组 Linux 内核/真实代理场景全部执行，不允许跳过。普通模块测试缺少真实代理制品时会跳过那一项，不能作为完整门禁证据。测试需要独占合成服务的健康端口；已有业务占用时，可在支持的 Linux 上用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-runtime-linux.sh` 隔离运行，不停止现有业务。[发布准备层](../unitinstall/README.md) 已生成七个生命周期包装脚本，并在同一维护锁下写入身份、私密运行计划和环境；`prepare --request PATH` 准备新发布，`inspect-release --directory PATH` 核验尚未启动的候选目录。发布激活/回滚已共用本运行层，并以持久安装标记保护安装器退出后的恢复。实际 CLI 部署和 bootstrap 已由 `unitdeploy` 接线；进程暂停/恢复直接使用本助手的 `pause/resume`，没有 `setup pause/resume` 命令。Linux 门禁通过仍不代表跨主机业务或生产验收完成。
+门禁要求列出的 Linux 内核场景全部执行，不允许跳过。测试需要独占合成服务的健康端口；已有业务占用时，可在支持的 Linux 上用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-runtime-linux.sh` 隔离运行，不停止现有业务。[发布准备层](../unitinstall/README.md) 已生成七个生命周期包装脚本，并在同一维护锁下写入身份、私密运行计划和环境；`prepare --request PATH` 准备新发布，`inspect-release --directory PATH` 核验尚未启动的候选目录。发布激活/回滚已共用本运行层，并以持久安装标记保护安装器退出后的恢复。实际 CLI 部署和 bootstrap 已由 `unitdeploy` 接线；进程暂停/恢复直接使用本助手的 `pause/resume`，没有 `setup pause/resume` 命令。Linux 门禁通过仍不代表跨主机业务或生产验收完成。

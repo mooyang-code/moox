@@ -27,7 +27,7 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "bootstrap",
 		Short: "通过已核验 SSH 初始化核心或完整控制服务",
-		Long:  "--stage admin 初始化 Admin、EventBus、Host Gateway、Host Agent，保留全量拓扑并安装本机操作员身份；--stage control 在 Storage/出口依赖实际就绪后，用原始软件和凭据部署完整 control 部署及 Console Proxy。首次安装自动创建管理台内部 CA。纯 Go 和前端默认在本机构建；只有三个 Storage CGO 服务使用 compile_host。重试必须保留原 state-dir、原配置和原授权；完整舰队、云资源及正式验收继续由外层流程完成。",
+		Long:  "--stage admin 初始化 Admin、EventBus、Host Gateway、Host Agent，保留全量拓扑并安装本机操作员身份；--stage control 在 Storage/出口依赖实际就绪后，用原始软件和凭据部署完整 control 部署。管理台 9527 由 Admin 自己监听，证书用 MooX CA 签。纯 Go 和前端默认在本机构建；只有三个 Storage CGO 服务使用 compile_host。重试必须保留原 state-dir、原配置和原授权；完整舰队、云资源及正式验收继续由外层流程完成。",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if stage != "admin" && stage != "control" {

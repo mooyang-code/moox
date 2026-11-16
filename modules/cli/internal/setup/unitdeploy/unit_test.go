@@ -96,8 +96,8 @@ func TestUnitEnvironmentCarriesServiceLogCLS(t *testing.T) {
 func TestUnitEnvironmentCarriesLogRetentionForCollector(t *testing.T) {
 	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "192.0.2.1"}}}
 	manifest.Logging.RetentionDays = 7
-	environment, err := unitEnvironment(manifest, "control", []string{"collector", "web-host"})
+	environment, err := unitEnvironment(manifest, "control", []string{"collector", "strategy"})
 	require.NoError(t, err)
 	require.Equal(t, "7", environment["collector"]["MOOX_CLS_RETENTION_DAYS"])
-	require.NotContains(t, environment["web-host"], "MOOX_CLS_RETENTION_DAYS")
+	require.NotContains(t, environment["strategy"], "MOOX_CLS_RETENTION_DAYS")
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 测试里管理台的地址：Caddy 原样转发 Host，浏览器的 Origin 是 https://<Host>。
+// 测试里管理台的地址：浏览器发来的 Host 带着 :9527，Origin 是 https://<Host>。
 const (
 	testHost   = "control.example:9527"
 	testOrigin = "https://" + testHost
@@ -76,23 +76,16 @@ func TestNeedsOriginCheckCoversWritesAndWebSocketHandshake(t *testing.T) {
 	assert.False(t, needsOriginCheck(get, "archive/PartitionDownload"), "下载是普通 GET")
 }
 
-func TestClientIPUsesLastForwardedForSegment(t *testing.T) {
+// 9527 由 Admin 直接监听：来源 IP 只取连接对端地址，请求头里的转发地址客户端自己就能写，一概不认。
+func TestClientIPUsesConnectionPeerOnly(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/", nil)
-	r.RemoteAddr = "127.0.0.1:50000"
-	r.Header.Set("X-Forwarded-For", "6.6.6.6, 203.0.113.9")
-	assert.Equal(t, "203.0.113.9", clientIP(r), "前面几段是客户端自己写的，只认 Caddy 追加的最后一段")
-
-	r.Header.Del("X-Forwarded-For")
-	r.Header.Add("X-Forwarded-For", "6.6.6.6")
-	r.Header.Add("X-Forwarded-For", "198.51.100.4")
-	assert.Equal(t, "198.51.100.4", clientIP(r), "多行时取最后一行")
-
-	r.Header.Set("X-Forwarded-For", "not-an-ip")
-	assert.Equal(t, "127.0.0.1", clientIP(r), "解析不了时用连接对端地址")
-	r.Header.Del("X-Forwarded-For")
+	r.RemoteAddr = "203.0.113.9:50000"
+	r.Header.Set("X-Forwarded-For", "6.6.6.6, 198.51.100.4")
 	r.Header.Set("X-Client-Ip", "6.6.6.6")
 	r.Header.Set("X-Real-IP", "6.6.6.6")
-	assert.Equal(t, "127.0.0.1", clientIP(r), "X-Client-Ip、X-Real-IP 都不再认")
+	assert.Equal(t, "203.0.113.9", clientIP(r))
+	r.RemoteAddr = "[2001:db8::9]:50000"
+	assert.Equal(t, "2001:db8::9", clientIP(r))
 }
 
 func TestSessionCookieAttributes(t *testing.T) {
@@ -100,7 +93,8 @@ func TestSessionCookieAttributes(t *testing.T) {
 	expires := time.Now().Add(24 * time.Hour)
 	setSessionCookie(rr, session.Session{ID: "sid-value", ExpiresAt: expires}, 86400)
 	cookie := rr.Result().Cookies()[0]
-	assert.Equal(t, session.CookieName, cookie.Name)
+	assert.Equal(t, "__Host-moox_session", cookie.Name, "__Host- 前缀：只认 Secure、Path=/、不带 Domain 的 Cookie")
+	assert.Empty(t, cookie.Domain)
 	assert.Equal(t, "sid-value", cookie.Value)
 	assert.True(t, cookie.HttpOnly)
 	assert.True(t, cookie.Secure)

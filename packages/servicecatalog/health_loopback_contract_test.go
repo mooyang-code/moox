@@ -29,8 +29,6 @@ type healthListener struct {
 var healthListeners = map[string][]healthListener{
 	"host-gateway":        {{kind: "key", file: "modules/hostgateway/config/app.yaml", key: "server.health_addr"}},
 	"host-agent":          {{kind: "trpc", file: "modules/hostagent/config/trpc_go.yaml"}},
-	"console-proxy":       {{kind: "key", file: "modules/consoleproxy/config/app.yaml", key: "health.listen"}},
-	"web-host":            {{kind: "text", file: "web-host/main.go", key: `envOr("MOOX_WEB_HOST_HEALTH_ADDR", "127.0.0.1:19527")`}},
 	"admin":               {{kind: "trpc", file: "modules/admin/config/trpc_go.yaml"}},
 	"eventbus":            {{kind: "trpc", file: "modules/eventbus/config/trpc_go.yaml"}},
 	"monitor":             {{kind: "trpc", file: "modules/monitor/config/trpc_go.yaml"}},

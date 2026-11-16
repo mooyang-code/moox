@@ -39,7 +39,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 
 | 主机 | 单元 | 组件 id（二进制名 `moox-<id>`） |
 | --- | --- | --- |
-| 控制机 | `prod` | `admin` `monitor` `collector` `factor-mgr` `archive-mgr` `strategy` `web-host` `console-proxy` |
+| 控制机 | `prod` | `admin` `monitor` `collector` `factor-mgr` `archive-mgr` `strategy` |
 | Storage 主机 | `storage` | `storage-primary` `storage-view`（**同一份二进制，两个文件名**） |
 | 每台主机 | `host` | `host-gateway` `host-agent` |
 | 存储机 | `eventbus` | `eventbus`（2026-10-27 起在存储机，见下） |
@@ -170,14 +170,12 @@ systemctl --user restart moox-factor-engine.service
 - 管理端租约 TTL 45 秒：新进程会先报 `lease conflict`，约 45 秒后接管，期间因子不出结果；重启后各因子任务要重新预热几分钟，这期间数据集显示“数据积累中”但不告警。
 - 引擎配置在 `<安装目录>/config/engine.yaml`，改前备份；账本重置用 `moox-factor-engine reset-gap-ledger`（引擎必须已停止）。
 
-**前端 `web-host`**（发布到控制机 `prod` 单元；现在也走 `native-release.sh` 的标准流程，放在这里是因为它多了构建前端这一步）：
+**前端**（内嵌在 `moox-admin` 里，随 admin 发布到控制机 `prod` 单元；放在这里是因为它多了构建前端这一步）：
 
-1. 和其他组件一样在干净工作树里 `native-release.sh build web-host`（本机 Docker 要在运行，macOS 先 `colima start`）。
-   `build.sh` 编译 web-host 时会先在 Docker 里按当前提交的 `web/` 源码构建前端，再把内嵌资源生成到临时目录、用 `go build -overlay` 编译，
-   **不用也不改仓库里提交的 `web-host/internal/statik/statik.go`**（那份只在有人手工更新时才变，2026-11-10 有人直接拿它编译，线上前端整体回退到 11-03）。
-   构建输出里有一行“moox-web-host 内嵌前端：static/js/index-<哈希>.js”，记下来。
-   国内网络取不到 statik 工具时（报“生成内嵌前端失败”）先设 `GOPROXY=https://mirrors.tencent.com/go,direct` 再重试。
-2. 用 `native-release.sh install --host control --unit prod --file <BUILT 输出的路径> --restart web-host` 装。
+1. 和其他组件一样在干净工作树里 `native-release.sh build admin`（本机 Docker 要在运行，macOS 先 `colima start`）。
+   `build.sh` 编译 admin 时会先在 Docker 里按当前提交的 `web/` 源码构建前端，编译前拷进 `modules/admin/internal/webui/dist`、编译完删掉，不改动已提交的文件
+   （2026-11-10 有人按提交编译带上过时前端，线上整体回退到 11-03）。构建输出里有一行“moox-admin 内嵌前端：static/js/index-<哈希>.js”，记下来。
+2. 用 `native-release.sh install --host control --unit prod --file <BUILT 输出的路径> --restart admin` 装。
 3. 线上验证：`curl -sk https://<control 地址>:9527/ | grep -o 'static/js/index-[^"]*\.js'` 应等于第 1 步记下的入口文件；需要时再 curl 入口文件检索新菜单或文案。页面需登录，由用户自己在浏览器验证。
 
 ## 发布后验证（只读）

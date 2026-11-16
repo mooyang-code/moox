@@ -17,13 +17,14 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"gopkg.in/yaml.v3"
 )
 
 const (
-	DefaultStopTimeout = 2 * time.Minute
-	maxStopTimeout     = 30 * time.Minute
-	maxPrivateBytes    = 1 << 20
+	// 每个组件停止、启动的时限；pid 记录里存的是启动时的值，停止按记录走。
+	DefaultStopTimeout    = 2 * time.Minute
+	DefaultStartupTimeout = 3 * time.Minute
+	maxStopTimeout        = 30 * time.Minute
+	maxPrivateBytes       = 1 << 20
 
 	// 每个发布自带它打包时的服务目录与包清单（unitpackage 写入），清单记录目录文件的哈希。
 	releaseCatalogPath  = "config/servicecatalog/catalog.yaml"
@@ -272,37 +273,4 @@ func loadEnvironment(component Component) (map[string]string, error) {
 		}
 	}
 	return values, nil
-}
-
-// lifecycleBudgets reads the actual proxy release's explicit lifecycle. No
-// shorter hardcoded fallback may override the engine's configured grace time.
-func lifecycleBudgets(releaseRoot, componentID string) (time.Duration, time.Duration, error) {
-	if componentID != "console-proxy" {
-		return DefaultStopTimeout, 3 * time.Minute, nil
-	}
-	raw, err := readPrivate(filepath.Join(releaseRoot, "console-proxy", "config", "app.yaml"))
-	if err != nil {
-		return 0, 0, err
-	}
-	var config struct {
-		Lifecycle struct {
-			Drain   string `yaml:"drain_timeout"`
-			Engine  string `yaml:"engine_stop_timeout"`
-			Cleanup string `yaml:"cleanup_margin"`
-			Startup string `yaml:"startup_timeout"`
-		} `yaml:"lifecycle"`
-	}
-	decoder := yaml.NewDecoder(bytes.NewReader(raw))
-	if decoder.Decode(&config) != nil || decoder.Decode(new(any)) != io.EOF {
-		return 0, 0, errors.New("proxy lifecycle requires one valid configuration document")
-	}
-	var durations []time.Duration
-	for _, value := range []string{config.Lifecycle.Drain, config.Lifecycle.Engine, config.Lifecycle.Cleanup, config.Lifecycle.Startup} {
-		duration, err := time.ParseDuration(value)
-		if err != nil || duration <= 0 || duration > 10*time.Minute {
-			return 0, 0, errors.New("proxy lifecycle durations must be explicit, positive and at most 10m each")
-		}
-		durations = append(durations, duration)
-	}
-	return durations[0] + durations[1] + durations[2], durations[3], nil
 }

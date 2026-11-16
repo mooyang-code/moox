@@ -29,7 +29,7 @@ func writeCachedConsoleCA(t *testing.T, address string) string {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Test Caddy Root"},
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Test MooX Root"},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
 	}

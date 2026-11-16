@@ -44,7 +44,7 @@ func RunComponentChild(planPath, componentID string) error {
 	if err != nil || !alive || actual != *record.Launcher {
 		return errIdentity
 	}
-	values, _, _, err := state.prepare(components[0])
+	values, err := state.prepare(components[0])
 	if err != nil || values["MOOX_BINARY_SHA256"] != record.BinarySHA256 {
 		return errors.New("recorded release changed before component exec")
 	}

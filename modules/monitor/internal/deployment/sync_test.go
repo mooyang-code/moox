@@ -30,7 +30,7 @@ func testSnapshot(t *testing.T) Snapshot {
 			{HostId: "storage", Address: "storage.example.test", PrivateAddress: "2001:db8::2", Region: "ap-guangzhou", Status: "enabled"},
 		},
 		Deployments: []*adminpb.ComponentDeployment{
-			{HostId: "control", ComponentId: "console-proxy", Status: "enabled"},
+			{HostId: "control", ComponentId: "admin", Status: "enabled"},
 			{HostId: "storage", ComponentId: "storage-primary", Status: "enabled"},
 		},
 	}

@@ -68,7 +68,7 @@ username = "ubuntu"
 password = "recognizable-compute-password"
 
 [deployments]
-control = ["admin", "console-proxy", "web-host", "eventbus"]
+control = ["admin", "eventbus"]
 compute = []
 ` + extra
 	path := filepath.Join(root, "moox.toml")

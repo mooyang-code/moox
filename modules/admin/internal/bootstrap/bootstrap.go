@@ -2,10 +2,13 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
+	"github.com/mooyang-code/moox/modules/admin/internal/webserver"
+	"github.com/mooyang-code/moox/modules/admin/internal/webui"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
@@ -45,12 +48,26 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "注册TRPC服务失败: %v", err)
 		return nil, err
 	}
-	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB())); err != nil {
+	// 4. 浏览器入口（9527）：启动时检查或签发网页证书，之后随证书巡检每天检查一次。
+	web, err := webserver.New(cfg.Web, services.consoleHandler, webui.FS())
+	if err != nil {
+		return nil, err
+	}
+	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB()), web); err != nil {
 		return nil, err
 	}
 	registerMetricsReporter(s)
+	if err := web.Start(); err != nil {
+		return nil, err
+	}
 
 	log.InfoContextf(ctx, "应用初始化完成")
+	// 钩子按注册顺序执行：先停浏览器入口、等在途请求（最多 30 秒），再关转发用的网关客户端。
+	s.RegisterOnShutdown(func() {
+		if err := web.Shutdown(); err != nil {
+			log.Warnf("浏览器入口停机时仍有请求未完成，已断开：%v", err)
+		}
+	})
 	s.RegisterOnShutdown(services.closeGateways)
 	initialized = true
 	return s, nil
@@ -74,7 +91,12 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func registerCertificateWatchTimer(ctx context.Context, s *server.Server, watch certificateWatch) error {
+// certificateRenewer 是浏览器入口：每天随证书巡检检查一次网页证书，剩余不足 30 天就重签。
+type certificateRenewer interface {
+	RefreshCertificate(context.Context) error
+}
+
+func registerCertificateWatchTimer(ctx context.Context, s *server.Server, watch certificateWatch, web certificateRenewer) error {
 	if s == nil {
 		return fmt.Errorf("certificate watch timer requires server")
 	}
@@ -82,7 +104,13 @@ func registerCertificateWatchTimer(ctx context.Context, s *server.Server, watch 
 	if service == nil {
 		return fmt.Errorf("certificate watch timer service %q is not configured", certificateWatchTimerService)
 	}
-	job, err := timerjob.New("admin_certificate_watch", certificateWatchTimeout, watch.Validate)
+	job, err := timerjob.New("admin_certificate_watch", certificateWatchTimeout, func(ctx context.Context) error {
+		var renewErr error
+		if web != nil {
+			renewErr = web.RefreshCertificate(ctx)
+		}
+		return errors.Join(renewErr, watch.Validate(ctx))
+	})
 	if err != nil {
 		return err
 	}

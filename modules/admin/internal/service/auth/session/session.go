@@ -12,8 +12,9 @@ import (
 	"time"
 )
 
-// CookieName 是会话 Cookie 的名字。
-const CookieName = "moox_session"
+// CookieName 是会话 Cookie 的名字。__Host- 前缀让浏览器只接受 Secure、Path=/、不带 Domain 的这个 Cookie，
+// 别的子域或明文页面写不进同名 Cookie；控制台下发时的属性正好满足。
+const CookieName = "__Host-moox_session"
 
 // Session 是一次登录。过期时间从登录时算起，不随使用顺延。
 type Session struct {

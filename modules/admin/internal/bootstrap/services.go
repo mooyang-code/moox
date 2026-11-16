@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
@@ -43,6 +44,8 @@ type Services struct {
 	ActivityLog *activitylog.Service
 
 	consoleGateway *gatewayclient.Client
+	// consoleHandler 处理浏览器的 /api/admin/*，挂在浏览器入口（9527）上。
+	consoleHandler http.Handler
 }
 
 func (s *Services) closeGateways() {

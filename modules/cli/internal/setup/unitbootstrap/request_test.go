@@ -64,7 +64,7 @@ func TestBootstrapPublicOutputBoundAndJournalIdentities(t *testing.T) {
 	require.False(t, validDigest("sha256:"+string(make([]byte, 64))))
 	require.False(t, validAttempt("../escape"))
 	require.False(t, validAttempt(".hidden"))
-	require.Equal(t, []string{"web-host"}, remaining([]string{"admin", "eventbus", "web-host"}, "admin", "eventbus"))
+	require.Equal(t, []string{"monitor"}, remaining([]string{"admin", "eventbus", "monitor"}, "admin", "eventbus"))
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	require.NoError(t, os.Chmod(root, 0o700))

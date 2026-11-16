@@ -29,30 +29,27 @@ func (c controlTransport) Run(_ context.Context, args []string, _ io.Reader) (se
 func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *testing.T) {
 	directory := t.TempDir()
 	for id, template := range map[string]string{
-		"console-proxy": "public: {host: localhost, port: 9527, http3: true}\ntls: {storage_root: ../data/caddy/caddy}\nlifecycle: {drain_timeout: 91s}\n",
-		"monitor":       "deployment: {enabled: true}\nmetrics: {enabled: true, no_data_intervals: 7}\n",
-		"collector":     "database: {path: ./data/collector.db}\nscf_access: {key_id: original-scf-id}\nperiod_readiness: {grace: 7m}\n",
-		"factor-mgr":    "engine: {lease_ttl: 73s}\n",
+		"monitor":    "deployment: {enabled: true}\nmetrics: {enabled: true, no_data_intervals: 7}\n",
+		"collector":  "database: {path: ./data/collector.db}\nscf_access: {key_id: original-scf-id}\nperiod_readiness: {grace: 7m}\n",
+		"factor-mgr": "engine: {lease_ttl: 73s}\n",
 	} {
 		parent := filepath.Join(directory, id, "config")
 		require.NoError(t, os.MkdirAll(parent, 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(parent, "app.yaml"), []byte(template), 0o600))
 	}
-	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "2001:db8::10"}, "storage1": {Address: "192.0.2.20"}}, Deployments: map[string][]string{"control": {"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr"}, "storage1": {"storage-primary", "storage-view"}}, CollectorRetention: setupconfig.CollectorRetention{MaintenanceInterval: "2m", MaxRowsPerPass: 19}}}
-	components := []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr"}
+	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "2001:db8::10"}, "storage1": {Address: "192.0.2.20"}}, Deployments: map[string][]string{"control": {"admin", "eventbus", "monitor", "collector", "factor-mgr"}, "storage1": {"storage-primary", "storage-view"}}, CollectorRetention: setupconfig.CollectorRetention{MaintenanceInterval: "2m", MaxRowsPerPass: 19}}}
+	components := []string{"admin", "eventbus", "monitor", "collector", "factor-mgr"}
 	rendered, err := controlConfigurations(snapshot, directory, components)
 	require.NoError(t, err)
-	require.Len(t, rendered, 3, "factor-mgr 的模板原样使用，不再改写")
+	require.Len(t, rendered, 2, "admin、factor-mgr 的模板原样使用，不再改写")
 	require.NotContains(t, rendered, "factor-mgr/config/app.yaml")
 	decode := func(name string) map[string]any {
 		var value map[string]any
 		require.NoError(t, yaml.Unmarshal(rendered[name+"/config/app.yaml"], &value))
 		return value
 	}
-	proxy, monitor, collector := decode("console-proxy"), decode("monitor"), decode("collector")
-	require.Equal(t, "2001:db8::10", proxy["public"].(map[string]any)["host"])
-	require.NotContains(t, proxy["tls"], "mode", "Console Proxy 严格解析配置，不能再带 mode")
-	require.Equal(t, "91s", proxy["lifecycle"].(map[string]any)["drain_timeout"])
+	require.NotContains(t, rendered, "admin/config/app.yaml")
+	monitor, collector := decode("monitor"), decode("collector")
 	require.Equal(t, map[string]any{"enabled": true}, monitor["deployment"], "Monitor 不再探测组件，部署段不写探测地址")
 	require.Equal(t, 7, monitor["metrics"].(map[string]any)["no_data_intervals"])
 	require.Equal(t, "config/dataset-health-policy.yaml", monitor["metrics"].(map[string]any)["dataset_health_policy_path"])
@@ -62,7 +59,7 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 }
 
 func TestControlEnvironmentCarriesNotificationAndHostPolicy(t *testing.T) {
-	components := []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr", "strategy"}
+	components := []string{"admin", "eventbus", "monitor", "collector", "factor-mgr", "strategy"}
 	// 没配置告警推送地址也能部署 Monitor，渠道由用户稍后在管理台添加。
 	empty, err := unitEnvironment(setupconfig.Manifest{}, "control", components)
 	require.NoError(t, err)

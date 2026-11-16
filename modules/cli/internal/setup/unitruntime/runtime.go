@@ -230,7 +230,7 @@ func (s *runtimeState) executeComponent(ctx context.Context, component Component
 		return status, err
 	case "resume":
 		// Validate the new release before clearing a persistent pause.
-		if _, _, _, err := s.prepare(component); err != nil {
+		if _, err := s.prepare(component); err != nil {
 			return Status{ID: component.ID, State: "paused"}, err
 		}
 		if draining, err := stateExists(s.draining, component.ID); err != nil {
@@ -359,48 +359,40 @@ func (s *runtimeState) inspect(ctx context.Context, component Component) (Status
 
 func componentArguments(id string) []string {
 	switch id {
-	case "console-proxy":
-		return []string{"serve", "-config=config/app.yaml"}
 	case "host-gateway", "access", "egress-proxy", "factor-mgr", "archive-mgr", "collector-stream":
 		return []string{"-config=config/app.yaml", "-conf=config/trpc_go.yaml"}
-	case "web-host":
-		return nil
 	default:
 		return []string{"-conf=config/trpc_go.yaml"}
 	}
 }
 
-func (s *runtimeState) prepare(component Component) (map[string]string, time.Duration, time.Duration, error) {
+func (s *runtimeState) prepare(component Component) (map[string]string, error) {
 	values, err := loadEnvironment(component)
 	if err != nil {
-		return nil, 0, 0, err
-	}
-	stop, startup, err := lifecycleBudgets(s.plan.ReleaseRoot, component.ID)
-	if err != nil {
-		return nil, 0, 0, err
+		return nil, err
 	}
 	catalog, _ := s.catalog.Component(component.ID)
 	binary := filepath.Join(s.plan.ReleaseRoot, "bin", catalog.Binary)
 	info, err := os.Lstat(binary)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o755 || !ownerMatches(info) {
-		return nil, 0, 0, errors.New("runtime executable must be an owned regular 0755 release binary")
+		return nil, errors.New("runtime executable must be an owned regular 0755 release binary")
 	}
 	if err := physicalDirectory(filepath.Join(s.plan.ReleaseRoot, component.ID)); err != nil {
-		return nil, 0, 0, err
+		return nil, err
 	}
 	file, err := os.Open(binary)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, err
 	}
 	defer file.Close()
 	digest := sha256.New()
 	if _, err := io.Copy(digest, file); err != nil {
-		return nil, 0, 0, err
+		return nil, err
 	}
 	values["MOOX_BINARY_SHA256"] = hex.EncodeToString(digest.Sum(nil))
 	values["MOOX_NODE_ID"], values["MOOX_SERVICE_NAME"] = s.plan.HostID, component.ID
 	values["MOOX_INSTANCE_ID"] = component.ID + "@" + s.plan.HostID
-	return values, stop, startup, nil
+	return values, nil
 }
 
 func (s *runtimeState) start(ctx context.Context, component Component) (Status, error) {
@@ -419,7 +411,8 @@ func (s *runtimeState) start(ctx context.Context, component Component) (Status, 
 		status.Ready, err = s.probe(ctx, component, record, true)
 		return status, err
 	}
-	values, stop, startup, err := s.prepare(component)
+	values, err := s.prepare(component)
+	stop, startup := DefaultStopTimeout, DefaultStartupTimeout
 	if err != nil {
 		return status, err
 	}

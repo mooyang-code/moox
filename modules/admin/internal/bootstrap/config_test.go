@@ -118,6 +118,9 @@ console:
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	t.Setenv("MOOX_ADMIN_NODE_ID", "admin-node-test")
+	t.Setenv("MOOX_ADMIN_WEB_ADDRESS", "203.0.113.10")
+	t.Setenv("MOOX_ADMIN_WEB_LISTEN", "")
+	t.Setenv("MOOX_ADMIN_PKI_DIR", "/fixture/secrets/pki")
 	return dir
 }
 
@@ -132,6 +135,25 @@ func TestLoadConfigs_ValidFiles_ShouldLoadAllModules(t *testing.T) {
 	assert.Equal(t, "admin-node-test", cfg.AdminNodeID)
 	assert.Equal(t, 12*time.Hour, cfg.Auth.Session.TTL)
 	assert.Equal(t, []string{"http://localhost:9527"}, cfg.Console.Console.AllowedOrigins)
+	assert.Equal(t, "0.0.0.0:9527", cfg.Web.Listen, "浏览器入口默认监听 9527")
+	assert.Equal(t, "203.0.113.10", cfg.Web.Address)
+	assert.Equal(t, "/fixture/secrets/pki", cfg.Web.PKIDir, "网页证书用 MooX CA 签")
+	assert.Equal(t, filepath.Join(filepath.Dir(cfg.App.Database.Path), "web-cert"), cfg.Web.CertDir, "网页证书放在 Admin 数据目录")
+}
+
+func TestLoadConfigs_WebEntryRequiresControlAddress(t *testing.T) {
+	for _, address := range []string{"", "203.0.113.10:9527", "https://203.0.113.10"} {
+		setupBootstrapConfigDir(t)
+		t.Setenv("MOOX_ADMIN_WEB_ADDRESS", address)
+		_, err := loadConfigsForTest(t)
+		require.Error(t, err, address)
+		assert.Contains(t, err.Error(), "MOOX_ADMIN_WEB_ADDRESS")
+	}
+	setupBootstrapConfigDir(t)
+	t.Setenv("MOOX_ADMIN_WEB_LISTEN", "127.0.0.1:19527")
+	cfg, err := loadConfigsForTest(t)
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1:19527", cfg.Web.Listen)
 }
 
 func TestLoadConfigs_MissingAdminNodeID_ShouldFailAtStartup(t *testing.T) {

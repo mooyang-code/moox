@@ -113,11 +113,12 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	if err != nil {
 		return err
 	}
-	if err := console.InitConsoleServices(s, local, gateway, sessions, services.SpaceMgr); err != nil {
+	handler, err := console.NewHandler(local, gateway, sessions, services.SpaceMgr)
+	if err != nil {
 		_ = gateway.Close()
 		return err
 	}
-	services.consoleGateway = gateway
+	services.consoleGateway, services.consoleHandler = gateway, handler
 	// 归档的分区副本下载与最新数据预览：裸 HTTP 处理器，按会话 Cookie 鉴权后，
 	// 再按拓扑里唯一启用的 archive-worker 部署转发到它的数据端口（本机直连，只出站主机经 console 网关客户端中转）。
 	if err := registerArchiveProxy(services, cfg.AdminNodeID, gateway); err != nil {

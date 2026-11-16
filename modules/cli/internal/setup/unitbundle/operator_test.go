@@ -16,7 +16,7 @@ import (
 )
 
 func TestOperatorInstallationDownloadsOnlyAssignedIdentityAndPreservesPin(t *testing.T) {
-	f := newFixture(t, "control", []string{"admin", "console-proxy", "access"}, true)
+	f := newFixture(t, "control", []string{"admin", "access"}, true)
 	allowed := map[string]bool{"bundle.json": true, "operator/gateway-client.yaml": true, "operator/caller-moox-cli.key": true, "certs/moox-ca.crt": true}
 	download := func(ctx context.Context, name string, out io.Writer) (int64, error) {
 		require.True(t, allowed[name[len(f.metadata.BundleDir)+1:]], "must not transfer another component's private material")
@@ -44,7 +44,7 @@ func TestOperatorInstallationDownloadsOnlyAssignedIdentityAndPreservesPin(t *tes
 		require.NoError(t, err)
 		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 	}
-	other := newFixture(t, "control", []string{"admin", "console-proxy", "access"}, true)
+	other := newFixture(t, "control", []string{"admin", "access"}, true)
 	require.ErrorContains(t, InstallOperator(t.Context(), other.download(t), other.metadata, other.options, directory), "another control CA")
 	after, err := os.ReadFile(filepath.Join(directory, "gateway-client.yaml"))
 	require.NoError(t, err)

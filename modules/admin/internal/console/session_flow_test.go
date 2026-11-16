@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -66,13 +67,15 @@ type flowResult struct {
 	cookies []*http.Cookie
 }
 
-func flowCall(t *testing.T, router *mux.Router, path, body, cookie, forwardedFor string) flowResult {
+// flowCall 发一个浏览器请求；peer 是连接的对端 IP（空着用 198.51.100.7），请求头里另带一个伪造的转发地址。
+func flowCall(t *testing.T, router *mux.Router, path, body, cookie, peer string) flowResult {
 	t.Helper()
 	r := browserRequest(t, session.Session{ID: cookie}, path, "", []byte(body))
-	r.RemoteAddr = "127.0.0.1:40000" // Caddy 在本机
-	if forwardedFor != "" {
-		r.Header.Set("X-Forwarded-For", forwardedFor)
+	if peer == "" {
+		peer = "198.51.100.7"
 	}
+	r.RemoteAddr = net.JoinHostPort(peer, "40000")
+	r.Header.Set("X-Forwarded-For", "6.6.6.6")
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, r)
 	var parsed struct {
@@ -115,7 +118,8 @@ func TestBrowserSessionLifecycleWithRealAuthService(t *testing.T) {
 	require.Equal(t, http.StatusOK, info.code)
 	require.Equal(t, pb.ErrorCode_SUCCESS, info.retCode)
 	assert.Contains(t, info.body, `"username":"admin"`)
-	assert.Contains(t, info.body, "198.51.100.7", "上次登录 IP 是 Caddy 追加的地址")
+	assert.Contains(t, info.body, "198.51.100.7", "上次登录 IP 是连接的对端地址")
+	assert.NotContains(t, info.body, "6.6.6.6", "不认请求头里的转发地址")
 
 	logout := flowCall(t, router, "/api/admin/auth/Logout", `{}`, cookie.Value, "")
 	require.Equal(t, http.StatusOK, logout.code)
@@ -140,15 +144,15 @@ func TestBrowserSessionExpires(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, flowCall(t, router, "/api/admin/auth/GetUserInfo", `{}`, created.ID, "").code)
 }
 
-// 经 HTTP 入口连续输错 5 次锁定；锁定按 Caddy 追加的最后一段 IP 计，客户端改第一段绕不过去；别的 IP 不受影响。
-func TestBrowserLoginLockoutKeysOnLastForwardedFor(t *testing.T) {
+// 经 HTTP 入口连续输错 5 次锁定；锁定按连接的对端 IP 计，改请求头里的转发地址绕不过去；别的 IP 不受影响。
+func TestBrowserLoginLockoutKeysOnConnectionPeer(t *testing.T) {
 	router, _ := newSessionFlowRouter(t, time.Hour)
 	for attempt := 1; attempt <= 5; attempt++ {
-		wrong := flowCall(t, router, "/api/admin/auth/Login", loginBody("wrong"), "", "10.0.0."+string(rune('0'+attempt))+", 203.0.113.9")
+		wrong := flowCall(t, router, "/api/admin/auth/Login", loginBody("wrong"), "", "203.0.113.9")
 		require.Equal(t, "用户名或密码错误", wrong.msg, "第 %d 次", attempt)
 		require.Empty(t, wrong.cookies)
 	}
-	locked := flowCall(t, router, "/api/admin/auth/Login", loginBody(flowPassword), "", "6.6.6.6, 203.0.113.9")
+	locked := flowCall(t, router, "/api/admin/auth/Login", loginBody(flowPassword), "", "203.0.113.9")
 	assert.Equal(t, pb.ErrorCode_NO_AUTH, locked.retCode)
 	assert.Equal(t, "账户已被锁定，请稍后再试", locked.msg)
 	assert.Empty(t, locked.cookies)

@@ -128,7 +128,7 @@ func renderConfigurations(root *os.Root, options PrepareOptions, components []st
 		keys[credential.Caller] = credential.KeyID
 	}
 	for _, id := range components {
-		if id == "host-gateway" || id == "web-host" {
+		if id == "host-gateway" {
 			continue
 		}
 		directory := id + "/config"

@@ -46,19 +46,19 @@
       "status_since": ""
     },
     {
-      "component_id": "console-proxy",
+      "component_id": "egress-proxy",
       "host_id": "control",
       "instances": [
         {
           "boot_id": "boot-1",
-          "instance_id": "proxy-1",
+          "instance_id": "egress-1",
           "last_reported_at": "2026-10-09T12:00:00Z",
           "status": "healthy",
           "version": "v2"
         }
       ],
       "lifecycle": null,
-      "name": "目录中的控制台入口",
+      "name": "目录中的出口代理",
       "not_ready_reason": "",
       "readiness": "ready",
       "reason": "监控上报正常",
@@ -90,11 +90,11 @@
       "status_since": ""
     },
     {
-      "component_id": "web-host",
+      "component_id": "monitor",
       "host_id": "control",
       "instances": [],
       "lifecycle": null,
-      "name": "控制台前端",
+      "name": "监控服务",
       "not_ready_reason": "上游连不上",
       "readiness": "not_ready",
       "reason": "未就绪：上游连不上",
@@ -108,11 +108,11 @@
       "status_since": ""
     },
     {
-      "component_id": "web-host",
+      "component_id": "monitor",
       "host_id": "offline",
       "instances": [],
       "lifecycle": null,
-      "name": "控制台前端",
+      "name": "监控服务",
       "not_ready_reason": "",
       "readiness": "",
       "reason": "已停止上报",

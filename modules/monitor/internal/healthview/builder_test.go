@@ -24,15 +24,15 @@ func TestOverviewV2MixedFactsSnapshot(t *testing.T) {
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
 	for i := range catalog.Components {
-		if catalog.Components[i].ID == "console-proxy" {
-			catalog.Components[i].Name = "目录中的控制台入口"
+		if catalog.Components[i].ID == "egress-proxy" {
+			catalog.Components[i].Name = "目录中的出口代理"
 		}
 	}
 	facts := observability.Overview{GeneratedAt: now, TopologyKnown: true, Topology: &domain.TopologySnapshot{Catalog: catalog, Hosts: []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}, {HostID: "offline", Address: "offline.test", Status: "enabled"}}},
 		Services: []observability.ServiceStatus{
-			{NodeID: "control", ServiceName: "console-proxy", Enabled: true, Status: "healthy", Reason: "reporter fresh", ReporterStatus: "healthy", Readiness: "ready", LastSeenAt: now, Instances: []observability.ReporterInstance{{InstanceID: "proxy-1", BootID: "boot-1", Version: "v2", Status: "healthy", LastSeenAt: now}}},
-			{NodeID: "control", ServiceName: "web-host", Enabled: true, Status: "down", Reason: "未就绪：上游连不上", ReporterStatus: "healthy", Readiness: "not_ready", NotReadyReason: "上游连不上", LastSeenAt: now},
-			{NodeID: "offline", ServiceName: "web-host", Enabled: true, Status: "stale", Reason: "reporter stale", ReporterStatus: "stale", LastSeenAt: now.Add(-10 * time.Minute)},
+			{NodeID: "control", ServiceName: "egress-proxy", Enabled: true, Status: "healthy", Reason: "reporter fresh", ReporterStatus: "healthy", Readiness: "ready", LastSeenAt: now, Instances: []observability.ReporterInstance{{InstanceID: "egress-1", BootID: "boot-1", Version: "v2", Status: "healthy", LastSeenAt: now}}},
+			{NodeID: "control", ServiceName: "monitor", Enabled: true, Status: "down", Reason: "未就绪：上游连不上", ReporterStatus: "healthy", Readiness: "not_ready", NotReadyReason: "上游连不上", LastSeenAt: now},
+			{NodeID: "offline", ServiceName: "monitor", Enabled: true, Status: "stale", Reason: "reporter stale", ReporterStatus: "stale", LastSeenAt: now.Add(-10 * time.Minute)},
 			{NodeID: "control", ServiceName: "eventbus", Enabled: true, Status: "unknown", Reason: "reporter missing", ReporterStatus: "missing"},
 			{NodeID: "control", ServiceName: "archive-mgr", Status: "disabled", Reason: "部署已停用", ReporterStatus: "missing"},
 		},
@@ -47,16 +47,16 @@ func TestOverviewV2MixedFactsSnapshot(t *testing.T) {
 	view.Alerts = append(view.Alerts, hostAlert)
 	view.Summary.AlertCount = int32(len(view.Alerts))
 	require.Len(t, view.Components, 5)
-	require.Equal(t, "目录中的控制台入口", view.Components[1].Name)
+	require.Equal(t, "目录中的出口代理", view.Components[1].Name)
 	require.Equal(t, "healthy", view.Components[1].Status)
-	var webHost *pb.HealthComponent
+	var monitorStatus *pb.HealthComponent
 	for _, component := range view.Components {
-		if component.HostId == "control" && component.ComponentId == "web-host" {
-			webHost = component
+		if component.HostId == "control" && component.ComponentId == "monitor" {
+			monitorStatus = component
 		}
 	}
-	require.Equal(t, "down", webHost.Status, "上报了未就绪的组件是异常")
-	require.Equal(t, "上游连不上", webHost.NotReadyReason)
+	require.Equal(t, "down", monitorStatus.Status, "上报了未就绪的组件是异常")
+	require.Equal(t, "上游连不上", monitorStatus.NotReadyReason)
 	require.Len(t, view.Hosts, 2, "没有 host_id 的采集器不进入主机列表")
 	require.Equal(t, "control", view.Hosts[0].HostId, "hostname alone must not consume the registered control host")
 	require.Equal(t, "unknown", view.Hosts[0].Status, "登记主机没有上报采集器时显示未上报")
@@ -87,7 +87,7 @@ func TestActiveHostAlertsAndRecoveryKeepCauseAndLatestCheckSeparate(t *testing.T
 	require.NoError(t, manager.ApplySchema(schema.SQL()))
 	repos := manager.Repositories()
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-	checkID := "ready:control:web-host"
+	checkID := "ready:control:strategy"
 	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: checkID, Name: "任意名称", Kind: domain.CheckKindExternal, Enabled: true}))
 	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "failed", CheckID: checkID, Status: "down", ErrorMessage: "组件未就绪：证书过期", RawError: "x509: 原始错误\ncertificate expired", CheckedAt: now.Add(-time.Hour)}))
 	for i := 0; i < 20; i++ {
@@ -110,7 +110,7 @@ func TestActiveHostAlertsAndRecoveryKeepCauseAndLatestCheckSeparate(t *testing.T
 			require.Equal(t, "CPU 使用率 95.0%，超过阈值 80%", alert.Reason, "主机告警和其他告警一样，原因取最近一次失败的检查结果")
 			require.Equal(t, "warning", alert.Severity)
 		} else {
-			require.Equal(t, "web-host", alert.Object.ComponentId)
+			require.Equal(t, "strategy", alert.Object.ComponentId)
 			require.Equal(t, "x509: 原始错误\ncertificate expired", alert.RawError)
 			require.Equal(t, stamp(now.Add(19*time.Second)), alert.LastCheckedAt)
 			require.Equal(t, stamp(now), alert.TriggeredAt)

@@ -70,7 +70,6 @@ export default defineConfig({
           { text: '出口代理', link: '/模块/出口代理' },
           { text: '事件总线', link: '/模块/事件总线' },
           { text: '事件中心', link: '/模块/事件中心' },
-          { text: '控制台代理', link: '/模块/控制台代理' },
         ],
       },
       {

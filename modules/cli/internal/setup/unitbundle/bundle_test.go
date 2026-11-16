@@ -189,7 +189,7 @@ func TestHostMaterialSeparatesTargetAndOperatorIdentities(t *testing.T) {
 		components []string
 		operator   bool
 	}{
-		{"control", []string{"admin", "console-proxy", "access"}, true},
+		{"control", []string{"admin", "access"}, true},
 		{"storage", []string{"storage-primary", "storage-view"}, false},
 		{"compute1", []string{"access", "egress-proxy", "trade"}, false},
 		{"host-only", nil, false},

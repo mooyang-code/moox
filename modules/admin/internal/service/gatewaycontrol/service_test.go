@@ -51,7 +51,7 @@ func newControlFixture(t *testing.T) *controlFixture {
 	f.topology, err = sysdeploy.NewTopologyDAO(f.db, "control")
 	require.NoError(t, err)
 	require.NoError(t, f.topology.SyncHosts(context.Background(), []sysdeploy.HostSpec{
-		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
+		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "collector"}},
 		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
 		{HostID: "overseas", Address: "compute.example.test", Components: []string{"access", "trade"}},
 	}))

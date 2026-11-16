@@ -266,24 +266,24 @@ describe("monitor page", () => {
       components: [
         {
           host_id: "control",
-          component_id: "web-host",
-          name: "控制台前端",
+          component_id: "monitor",
+          name: "监控服务",
           status: "down",
           reason: "未就绪：证书已过期",
           reporter: { status: "healthy", reason: "监控上报正常" },
           readiness: "not_ready",
           not_ready_reason: raw
         },
-        { host_id: "storage", component_id: "web-host", name: "控制台前端", status: "healthy" }
+        { host_id: "storage", component_id: "monitor", name: "监控服务", status: "healthy" }
       ],
       unregistered: [{ host_id: "control", component_id: "rogue", name: "rogue", reason: "进程在上报，但没有部署记录" }]
     });
     await flushPromises();
     expect(page.findAll(".host-row")).toHaveLength(2);
-    expect(page.find(".issues").text()).toContain("控制台前端（control）");
+    expect(page.find(".issues").text()).toContain("监控服务（control）");
     expect(page.find(".issues").text()).toContain("未登记进程 rogue（control）");
     await page.find(".component-chip").trigger("click");
-    expect(page.find(".detail").text()).toContain("control · web-host");
+    expect(page.find(".detail").text()).toContain("control · monitor");
     expect(page.find(".detail").text()).toContain("就绪 · 未就绪");
     expect(page.find(".detail").text()).toContain(raw);
     expect(page.find(".detail").text()).not.toContain("探测");

@@ -60,7 +60,7 @@ func verifyPublicLogin(ctx context.Context, baseURL, username, password string, 
 }
 
 // sessionCookie 是管理台的会话 Cookie 名（与 Admin 的 session.CookieName 一致）。
-const sessionCookie = "moox_session"
+const sessionCookie = "__Host-moox_session"
 
 // publicConsole 是带会话 Cookie 的管理台客户端：登录响应里的 Cookie 记下来，之后的请求带上；每个请求带本站 Origin。
 type publicConsole struct {

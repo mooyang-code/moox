@@ -106,8 +106,8 @@ func loginForBackup(ctx context.Context, manifest setupconfig.Manifest) (*consol
 // refreshConsoleCA 在测试里替换。
 var refreshConsoleCA = RefreshConsoleCA
 
-// RefreshConsoleCA 用配置里的 SSH 登录管理台服务器，读取原生 control 单元 console-proxy 发布的根证书（公开证书），
-// 校验是 CA 证书后更新本机缓存。
+// RefreshConsoleCA 用配置里的 SSH 登录管理台服务器，读取部署在那里的 MooX CA 根证书（公开证书，管理台的 HTTPS
+// 证书由它签发），校验是 CA 证书后更新本机缓存。旧部署里它随 host 单元投放在 {部署根}/host/current/certs/moox-ca.crt。
 func RefreshConsoleCA(ctx context.Context, manifest setupconfig.Manifest) error {
 	host := manifest.ControlHost()
 	client, err := setupssh.Dial(ctx, setupssh.Target{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username}, host.Password, setupssh.Options{Timeout: 15 * time.Second})
@@ -115,15 +115,15 @@ func RefreshConsoleCA(ctx context.Context, manifest setupconfig.Manifest) error 
 		return err
 	}
 	defer client.Close()
-	result, err := client.Run(ctx, []string{"sh", "-c", `cat -- "$1/current/console-proxy/certs/caddy/root.crt"`, "moox-read-console-ca", manifest.Paths.ControlRoot}, nil)
+	result, err := client.Run(ctx, []string{"sh", "-c", `cat -- "$1/host/current/certs/moox-ca.crt"`, "moox-read-moox-ca", manifest.Paths.DeployRoot}, nil)
 	if err != nil {
 		return fmt.Errorf("读取根证书失败")
 	}
 	return tlstrust.FileCAStore{}.Save(host.Address, []byte(result.Stdout))
 }
 
-// consoleRoots 返回校验管理台证书用的根证书：系统信任，加上部署时缓存在本机的管理台内部 CA 根证书（如果有）。
-// 管理台用内部 CA 时，原来部署的电脑上就有这张根证书，备份不需要再改系统信任。
+// consoleRoots 返回校验管理台证书用的根证书：系统信任，加上部署时缓存在本机的 MooX CA 根证书（如果有）。
+// 原来部署的电脑上就有这张根证书，备份不需要再改系统信任。
 func consoleRoots(address string) *x509.CertPool {
 	pool, err := x509.SystemCertPool()
 	if err != nil || pool == nil {

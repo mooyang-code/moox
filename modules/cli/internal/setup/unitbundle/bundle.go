@@ -96,7 +96,8 @@ func wanted(options Options) ([]string, error) {
 		if id != "host-gateway" {
 			callers = append(callers, id)
 		}
-		if id == "console-proxy" {
+		// 浏览器入口在 Admin 里：console 签名身份跟着 admin 下发。
+		if id == "admin" {
 			callers = append(callers, "console")
 		}
 		if id == "collector" {

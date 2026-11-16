@@ -270,9 +270,6 @@ func validateUnitManifest(manifest Manifest, observed map[string]File) error {
 			}
 			if asset.tree && strings.HasSuffix(asset.source, "/config") {
 				required := []string{"app.yaml", "trpc_go.yaml"}
-				if component.ID == "console-proxy" {
-					required = []string{"app.yaml"}
-				}
 				if component.ID == "admin" {
 					required = append(required, "console.yaml")
 				}

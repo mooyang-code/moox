@@ -144,6 +144,19 @@ func executableFixture(t *testing.T, plan Plan) {
 	}
 }
 
+// recordStopBudget 把运行中组件 pid 记录里的停止时限改成 budget：停止按记录走，用例借此缩短等待。
+func recordStopBudget(t *testing.T, plan Plan, budget time.Duration) {
+	t.Helper()
+	state, err := openRuntime(plan)
+	require.NoError(t, err)
+	defer state.close()
+	record, alive, err := state.record(plan.Components[0])
+	require.NoError(t, err)
+	require.True(t, alive)
+	record.StopTimeout = budget
+	require.NoError(t, writeState(state.pids, plan.Components[0].ID+".json", record))
+}
+
 func runRuntime(t *testing.T, path, operation string, ids ...string) Result {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -209,8 +222,7 @@ func TestRuntimeLinuxProcessIdentityRemainsCoherentAcrossExec(t *testing.T) {
 }
 
 func TestRuntimeLinuxPausePersistsAcrossReleaseAndAllAutomaticStarts(t *testing.T) {
-	path, plan := planFixture(t, "console-proxy")
-	proxyBudgetFixture(t, plan.ReleaseRoot, "1s", "1s", "1s", "5s")
+	path, plan := planFixture(t, "monitor")
 	executableFixture(t, plan)
 	cleanupRuntime(t, path)
 	started := runRuntime(t, path, "start")
@@ -222,10 +234,9 @@ func TestRuntimeLinuxPausePersistsAcrossReleaseAndAllAutomaticStarts(t *testing.
 		require.Equal(t, "paused", result.Components[0].State)
 		require.Zero(t, result.Components[0].PID)
 	}
-	newPath, next := planFixture(t, "console-proxy")
+	newPath, next := planFixture(t, "monitor")
 	next.DeploymentRoot = plan.DeploymentRoot
 	writeFixture(t, newPath, next)
-	proxyBudgetFixture(t, next.ReleaseRoot, "1s", "1s", "1s", "5s")
 	executableFixture(t, next)
 	cleanupRuntime(t, newPath)
 	require.Equal(t, "paused", runRuntime(t, newPath, "start").Components[0].State)
@@ -234,15 +245,14 @@ func TestRuntimeLinuxPausePersistsAcrossReleaseAndAllAutomaticStarts(t *testing.
 	require.True(t, resumed.Components[0].Ready)
 	require.NotEqual(t, started.Components[0].PID, resumed.Components[0].PID)
 	var record pidRecord
-	require.NoError(t, privateJSON(filepath.Join(plan.DeploymentRoot, "run", "pids", "console-proxy.json"), &record))
+	require.NoError(t, privateJSON(filepath.Join(plan.DeploymentRoot, "run", "pids", "monitor.json"), &record))
 	require.Equal(t, next.ReleaseRoot, record.ReleaseRoot)
 }
 
 // runtime 升级后服务目录变了：旧目录打包的已安装发布仍能被新 runtime 查询、停止（组件定义取发布自带的目录），
 // 之后由用新目录打包的发布接替。
 func TestRuntimeLinuxManagesReleasePackagedWithAnOlderCatalog(t *testing.T) {
-	path, plan := planFixture(t, "console-proxy")
-	proxyBudgetFixture(t, plan.ReleaseRoot, "1s", "1s", "1s", "5s")
+	path, plan := planFixture(t, "monitor")
 	executableFixture(t, plan)
 	plan = olderCatalogFixture(t, path, plan)
 	cleanupRuntime(t, path)
@@ -254,10 +264,9 @@ func TestRuntimeLinuxManagesReleasePackagedWithAnOlderCatalog(t *testing.T) {
 	require.Equal(t, "stopped", stopped.Components[0].State)
 	require.Zero(t, stopped.Components[0].PID)
 
-	newPath, next := planFixture(t, "console-proxy")
+	newPath, next := planFixture(t, "monitor")
 	next.DeploymentRoot = plan.DeploymentRoot
 	writeFixture(t, newPath, next)
-	proxyBudgetFixture(t, next.ReleaseRoot, "1s", "1s", "1s", "5s")
 	executableFixture(t, next)
 	cleanupRuntime(t, newPath)
 	resumed := runRuntime(t, newPath, "start")
@@ -266,24 +275,23 @@ func TestRuntimeLinuxManagesReleasePackagedWithAnOlderCatalog(t *testing.T) {
 }
 
 func TestRuntimeLinuxUsesRunningReleaseBudgetBeforeForceAndKeepsDrainOnCancellation(t *testing.T) {
-	path, plan := planFixture(t, "console-proxy")
-	proxyBudgetFixture(t, plan.ReleaseRoot, "1s", "1s", "1s", "5s")
+	path, plan := planFixture(t, "monitor")
 	values := fixtureEnvironment()
 	values["MOOX_RUNTIME_TEST_TERM_DELAY"] = "1200ms"
 	writeFixture(t, plan.Components[0].EnvironmentFile, values)
 	executableFixture(t, plan)
 	cleanupRuntime(t, path)
 	runRuntime(t, path, "start")
-	// A new release with a shorter budget must not shorten the running
-	// process's recorded drain + engine + cleanup allowance.
-	newPath, next := planFixture(t, "console-proxy")
+	// 停止按运行中进程 pid 记录里的时限走，不按新发布的默认时限：记录里改成 100ms，
+	// 进程收到 TERM 要 1.2 秒才退，按记录就会被强制结束，按新发布的 2 分钟则不会。
+	recordStopBudget(t, plan, 100*time.Millisecond)
+	newPath, next := planFixture(t, "monitor")
 	next.DeploymentRoot = plan.DeploymentRoot
 	writeFixture(t, newPath, next)
-	proxyBudgetFixture(t, next.ReleaseRoot, "1ms", "1ms", "1ms", "5s")
 	before := time.Now()
 	stopped := runRuntime(t, newPath, "stop")
-	require.False(t, stopped.Components[0].Forced)
-	require.GreaterOrEqual(t, time.Since(before), 1100*time.Millisecond)
+	require.True(t, stopped.Components[0].Forced)
+	require.Less(t, time.Since(before), 1100*time.Millisecond)
 	runRuntime(t, path, "start")
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	_, err := Execute(ctx, path, "stop", nil, Options{})
@@ -304,14 +312,14 @@ func TestRuntimeLinuxUsesRunningReleaseBudgetBeforeForceAndKeepsDrainOnCancellat
 }
 
 func TestRuntimeLinuxForceWaitsFullBudgetAndObservesExit(t *testing.T) {
-	path, plan := planFixture(t, "console-proxy")
-	proxyBudgetFixture(t, plan.ReleaseRoot, "100ms", "100ms", "100ms", "5s")
+	path, plan := planFixture(t, "monitor")
 	values := fixtureEnvironment()
 	values["MOOX_RUNTIME_TEST_IGNORE_TERM"] = "1"
 	writeFixture(t, plan.Components[0].EnvironmentFile, values)
 	executableFixture(t, plan)
 	cleanupRuntime(t, path)
 	started := runRuntime(t, path, "start")
+	recordStopBudget(t, plan, 300*time.Millisecond)
 	before := time.Now()
 	stopped := runRuntime(t, path, "stop")
 	require.GreaterOrEqual(t, time.Since(before), 300*time.Millisecond)
@@ -319,12 +327,12 @@ func TestRuntimeLinuxForceWaitsFullBudgetAndObservesExit(t *testing.T) {
 	_, alive, err := readProcess(started.Components[0].PID)
 	require.NoError(t, err)
 	require.False(t, alive)
-	require.NoFileExists(t, filepath.Join(plan.DeploymentRoot, "run", "pids", "console-proxy.json"))
-	require.NoFileExists(t, filepath.Join(plan.DeploymentRoot, "run", "draining", "console-proxy"))
+	require.NoFileExists(t, filepath.Join(plan.DeploymentRoot, "run", "pids", "monitor.json"))
+	require.NoFileExists(t, filepath.Join(plan.DeploymentRoot, "run", "draining", "monitor"))
 }
 
 func TestRuntimeLinuxWatchdogUsesLivenessAndDoesNotRestartForReadiness(t *testing.T) {
-	path, plan := planFixture(t, "web-host")
+	path, plan := planFixture(t, "strategy")
 	values := fixtureEnvironment()
 	marker := filepath.Join(plan.ReleaseRoot, "not-ready")
 	values["MOOX_RUNTIME_TEST_NOT_READY"] = marker
@@ -350,7 +358,7 @@ func TestRuntimeLinuxWatchdogUsesLivenessAndDoesNotRestartForReadiness(t *testin
 }
 
 func TestRuntimeLinuxMaintenanceLockSkipCancellationAndInheritedDescriptor(t *testing.T) {
-	path, plan := planFixture(t, "web-host")
+	path, plan := planFixture(t, "strategy")
 	state, err := openRuntime(plan)
 	require.NoError(t, err)
 	defer state.close()
@@ -372,7 +380,7 @@ func TestRuntimeLinuxMaintenanceLockSkipCancellationAndInheritedDescriptor(t *te
 	_, err = Execute(ctx, path, "pause", nil, Options{})
 	cancel()
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.NoFileExists(t, filepath.Join(plan.DeploymentRoot, "run", "paused", "web-host"))
+	require.NoFileExists(t, filepath.Join(plan.DeploymentRoot, "run", "paused", "strategy"))
 	result, err := Execute(context.Background(), path, "status", nil, Options{MaintenanceLockHeld: true, MaintenanceLockFD: int(lock.Fd())})
 	require.NoError(t, err)
 	require.Equal(t, "stopped", result.Components[0].State)
@@ -394,8 +402,7 @@ func TestRuntimeLinuxMaintenanceLockSkipCancellationAndInheritedDescriptor(t *te
 }
 
 func TestRuntimeLinuxWatchdogRestartsFailedLivenessWithRunningGraceBudget(t *testing.T) {
-	path, plan := planFixture(t, "console-proxy")
-	proxyBudgetFixture(t, plan.ReleaseRoot, "1s", "1s", "1s", "5s")
+	path, plan := planFixture(t, "monitor")
 	values := fixtureEnvironment()
 	marker := filepath.Join(plan.ReleaseRoot, "not-live")
 	values["MOOX_RUNTIME_TEST_NOT_LIVE"] = marker
@@ -417,8 +424,7 @@ func TestRuntimeLinuxWatchdogRestartsFailedLivenessWithRunningGraceBudget(t *tes
 }
 
 func TestRuntimeLinuxCancelledPauseMarksAllTargetsAndHostIdentityIsPersistent(t *testing.T) {
-	path, plan := planFixture(t, "web-host", "console-proxy")
-	proxyBudgetFixture(t, plan.ReleaseRoot, "1s", "1s", "1s", "5s")
+	path, plan := planFixture(t, "strategy", "monitor")
 	values := fixtureEnvironment()
 	values["MOOX_RUNTIME_TEST_TERM_DELAY"] = "500ms"
 	writeFixture(t, plan.Components[1].EnvironmentFile, values)
@@ -429,7 +435,7 @@ func TestRuntimeLinuxCancelledPauseMarksAllTargetsAndHostIdentityIsPersistent(t 
 	_, err := Execute(ctx, path, "pause", nil, Options{})
 	cancel()
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	for _, id := range []string{"web-host", "console-proxy"} {
+	for _, id := range []string{"strategy", "monitor"} {
 		require.FileExists(t, filepath.Join(plan.DeploymentRoot, "run", "paused", id))
 		require.Equal(t, "paused", runRuntime(t, path, "healthcheck", id).Components[0].State)
 	}
@@ -444,7 +450,7 @@ func TestRuntimeLinuxCancelledPauseMarksAllTargetsAndHostIdentityIsPersistent(t 
 
 func TestRuntimeLinuxRefusesUnrelatedOrReusedPIDAndDoesNotExposeSecrets(t *testing.T) {
 	t.Setenv("MOOX_OPERATOR_SHOULD_NOT_LEAK", "fixture-operator-secret")
-	path, plan := planFixture(t, "web-host")
+	path, plan := planFixture(t, "strategy")
 	values := fixtureEnvironment()
 	proof := filepath.Join(plan.ReleaseRoot, "child-proof.json")
 	values["MOOX_RUNTIME_TEST_PROOF"] = proof
@@ -470,13 +476,13 @@ func TestRuntimeLinuxRefusesUnrelatedOrReusedPIDAndDoesNotExposeSecrets(t *testi
 	require.True(t, alive)
 	wrong := actual
 	wrong.StartTicks = "1"
-	require.NoError(t, writeState(state.pids, "web-host.json", wrong))
+	require.NoError(t, writeState(state.pids, "strategy.json", wrong))
 	_, err = Execute(context.Background(), path, "stop", nil, Options{})
 	require.ErrorIs(t, err, errIdentity)
 	_, alive, err = readProcess(actual.PID)
 	require.NoError(t, err)
 	require.True(t, alive)
-	require.NoError(t, writeState(state.pids, "web-host.json", actual))
+	require.NoError(t, writeState(state.pids, "strategy.json", actual))
 	runRuntime(t, path, "stop")
 	sleep, err := os.ReadFile("/bin/sleep")
 	require.NoError(t, err)
@@ -490,17 +496,17 @@ func TestRuntimeLinuxRefusesUnrelatedOrReusedPIDAndDoesNotExposeSecrets(t *testi
 	require.True(t, alive)
 	wrong = actual
 	wrong.processIdentity = identity
-	require.NoError(t, writeState(state.pids, "web-host.json", wrong))
+	require.NoError(t, writeState(state.pids, "strategy.json", wrong))
 	_, err = Execute(context.Background(), path, "stop", nil, Options{})
 	require.ErrorIs(t, err, errIdentity)
 	require.NoError(t, unrelated.Process.Signal(syscall.Signal(0)))
-	require.NoError(t, removeState(state.pids, "web-host.json"))
+	require.NoError(t, removeState(state.pids, "strategy.json"))
 }
 
 // 主机重启后：PID 记录指向的 PID 已被无关进程复用、还留着被关机打断的停止中标记。守护检查要识别出这是上次开机的残留，
 // 清理后拉起组件，并且不碰那个无关进程；同一次开机内再检查不重复清理。
 func TestRuntimeLinuxRebootClearsReusedPIDAndInterruptedDrain(t *testing.T) {
-	path, plan := planFixture(t, "web-host")
+	path, plan := planFixture(t, "strategy")
 	executableFixture(t, plan)
 	cleanupRuntime(t, path)
 	runRuntime(t, path, "start")
@@ -526,11 +532,11 @@ func TestRuntimeLinuxRebootClearsReusedPIDAndInterruptedDrain(t *testing.T) {
 	stale.processIdentity = identity
 	stale.Launcher = nil
 	stale.KernelBootID = "00000000-0000-0000-0000-000000000000"
-	require.NoError(t, writeState(state.pids, "web-host.json", stale))
-	require.NoError(t, writeState(state.draining, "web-host", drainRecord{PID: identity.PID, StartTicks: identity.StartTicks, KernelBootID: stale.KernelBootID, StartedAt: time.Now().UTC(), Budget: time.Second, TermSent: true}))
+	require.NoError(t, writeState(state.pids, "strategy.json", stale))
+	require.NoError(t, writeState(state.draining, "strategy", drainRecord{PID: identity.PID, StartTicks: identity.StartTicks, KernelBootID: stale.KernelBootID, StartedAt: time.Now().UTC(), Budget: time.Second, TermSent: true}))
 
 	checked := runRuntime(t, path, "healthcheck")
-	require.Equal(t, []BootRecovery{{Component: "web-host", Kind: "draining"}, {Component: "web-host", Kind: "pid"}}, checked.BootRecovered)
+	require.Equal(t, []BootRecovery{{Component: "strategy", Kind: "draining"}, {Component: "strategy", Kind: "pid"}}, checked.BootRecovered)
 	require.Equal(t, "running", checked.Components[0].State)
 	require.True(t, checked.Components[0].Ready)
 	require.Equal(t, "started", checked.Components[0].Action)
@@ -545,8 +551,7 @@ func TestRuntimeLinuxRebootClearsReusedPIDAndInterruptedDrain(t *testing.T) {
 func TestRuntimeLinuxStartBarrierRejectsUnrecordedChildAndRecoversDurableLaunch(t *testing.T) {
 	for _, phase := range []string{"unrecorded-parent-exit", "recorded-before-exec", "recorded-after-exec"} {
 		t.Run(phase, func(t *testing.T) {
-			path, plan := planFixture(t, "console-proxy")
-			proxyBudgetFixture(t, plan.ReleaseRoot, "100ms", "100ms", "100ms", "5s")
+			path, plan := planFixture(t, "monitor")
 			executableFixture(t, plan)
 			cleanupRuntime(t, path)
 			binary := os.Getenv("MOOX_RUNTIME_BINARY")
@@ -559,7 +564,7 @@ func TestRuntimeLinuxStartBarrierRejectsUnrecordedChildAndRecoversDurableLaunch(
 			require.NoError(t, err)
 			defer release.Close()
 			defer gate.Close()
-			child := exec.Command(binary, "exec-component", path, "console-proxy")
+			child := exec.Command(binary, "exec-component", path, "monitor")
 			child.ExtraFiles = []*os.File{gate}
 			child.Env = componentEnvironment(fixtureEnvironment())
 			require.NoError(t, child.Start())
@@ -583,14 +588,15 @@ func TestRuntimeLinuxStartBarrierRejectsUnrecordedChildAndRecoversDurableLaunch(
 			launch, alive, err := readProcess(child.Process.Pid)
 			require.NoError(t, err)
 			require.True(t, alive)
-			final, err := releaseIdentity(launch, filepath.Join(plan.ReleaseRoot, "bin", "moox-console-proxy"))
+			final, err := releaseIdentity(launch, filepath.Join(plan.ReleaseRoot, "bin", "moox-monitor"))
 			require.NoError(t, err)
-			values, stop, startup, err := state.prepare(plan.Components[0])
+			values, err := state.prepare(plan.Components[0])
 			require.NoError(t, err)
+			stop, startup := DefaultStopTimeout, DefaultStartupTimeout
 			kernelBoot, err := readKernelBootID()
 			require.NoError(t, err)
-			record := pidRecord{processIdentity: final, HostID: plan.HostID, ComponentID: "console-proxy", ReleaseRoot: plan.ReleaseRoot, StopTimeout: stop, BinarySHA256: values["MOOX_BINARY_SHA256"], BootID: strings.Repeat("a", 64), KernelBootID: kernelBoot, StartedAt: time.Now().UTC(), StartupTimeout: startup, Launcher: &launch}
-			require.NoError(t, writeState(state.pids, "console-proxy.json", record))
+			record := pidRecord{processIdentity: final, HostID: plan.HostID, ComponentID: "monitor", ReleaseRoot: plan.ReleaseRoot, StopTimeout: stop, BinarySHA256: values["MOOX_BINARY_SHA256"], BootID: strings.Repeat("a", 64), KernelBootID: kernelBoot, StartedAt: time.Now().UTC(), StartupTimeout: startup, Launcher: &launch}
+			require.NoError(t, writeState(state.pids, "monitor.json", record))
 			if phase == "recorded-after-exec" {
 				_, err = release.Write([]byte{1})
 				require.NoError(t, err)
@@ -625,7 +631,7 @@ func freePort(t *testing.T) int {
 }
 
 func TestRuntimeLinuxClearPortsStopsLeftoverInsideDeployment(t *testing.T) {
-	_, plan := planFixture(t, "console-proxy")
+	_, plan := planFixture(t, "monitor")
 	state, err := openRuntime(plan)
 	require.NoError(t, err)
 	defer state.close()
@@ -646,17 +652,17 @@ func TestRuntimeLinuxClearPortsStopsLeftoverInsideDeployment(t *testing.T) {
 		return err == nil && len(holders) == 1
 	}, 5*time.Second, 20*time.Millisecond)
 
-	require.NoError(t, state.clearPorts(context.Background(), Component{ID: "console-proxy"}, []int{port}, 2*time.Second))
+	require.NoError(t, state.clearPorts(context.Background(), Component{ID: "monitor"}, []int{port}, 2*time.Second))
 	holders, err := portHolders([]int{port})
 	require.NoError(t, err)
 	require.Empty(t, holders)
-	log, err := os.ReadFile(filepath.Join(plan.DeploymentRoot, "run", "logs", "console-proxy.log"))
+	log, err := os.ReadFile(filepath.Join(plan.DeploymentRoot, "run", "logs", "monitor.log"))
 	require.NoError(t, err)
 	require.Contains(t, string(log), "残留进程")
 }
 
 func TestRuntimeLinuxClearPortsRefusesForeignProgram(t *testing.T) {
-	_, plan := planFixture(t, "console-proxy")
+	_, plan := planFixture(t, "monitor")
 	state, err := openRuntime(plan)
 	require.NoError(t, err)
 	defer state.close()
@@ -665,7 +671,7 @@ func TestRuntimeLinuxClearPortsRefusesForeignProgram(t *testing.T) {
 	defer listener.Close()
 	port := listener.Addr().(*net.TCPAddr).Port
 
-	err = state.clearPorts(context.Background(), Component{ID: "console-proxy"}, []int{port}, time.Second)
+	err = state.clearPorts(context.Background(), Component{ID: "monitor"}, []int{port}, time.Second)
 	var coded *failure.Coded
 	require.ErrorAs(t, err, &coded)
 	require.Equal(t, failure.TargetPortInUse, coded.Code)
@@ -676,12 +682,12 @@ func TestRuntimeLinuxClearPortsRefusesForeignProgram(t *testing.T) {
 }
 
 func TestRuntimeLinuxStartupFailureNamesTheCause(t *testing.T) {
-	_, plan := planFixture(t, "console-proxy")
+	_, plan := planFixture(t, "monitor")
 	state, err := openRuntime(plan)
 	require.NoError(t, err)
 	defer state.close()
-	component := Component{ID: "console-proxy"}
-	logs := filepath.Join(plan.DeploymentRoot, "run", "logs", "console-proxy.log")
+	component := Component{ID: "monitor"}
+	logs := filepath.Join(plan.DeploymentRoot, "run", "logs", "monitor.log")
 	require.NoError(t, os.WriteFile(logs, []byte("old: listen tcp 0.0.0.0:1111: bind: address already in use\n"), 0o600))
 	info, err := os.Stat(logs)
 	require.NoError(t, err)
@@ -693,7 +699,7 @@ func TestRuntimeLinuxStartupFailureNamesTheCause(t *testing.T) {
 
 	got, detail := code(state.startupFailure(component, true, nil, info.Size()))
 	require.Equal(t, failure.TargetProcessExited, got, "上一次启动的日志不算数")
-	require.Equal(t, "component=console-proxy", detail)
+	require.Equal(t, "component=monitor", detail)
 
 	file, err := os.OpenFile(logs, os.O_APPEND|os.O_WRONLY, 0o600)
 	require.NoError(t, err)
@@ -711,7 +717,7 @@ func TestRuntimeLinuxStartupFailureNamesTheCause(t *testing.T) {
 	many := strings.Split(strings.Repeat("trpc.moox.some.ServiceNameThatIsLong,", 30), ",")
 	_, detail = code(state.startupFailure(component, false, many, info.Size()))
 	require.Less(t, len(detail), 400)
-	require.Contains(t, detail, "component=console-proxy")
+	require.Contains(t, detail, "component=monitor")
 	_, detail = code(state.startupFailure(component, false, []string{strings.Repeat("a", 350)}, info.Size()))
 	require.Less(t, len(detail), 400, "只有一项且很长时也不能出错")
 }

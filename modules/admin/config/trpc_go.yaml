@@ -9,8 +9,8 @@ server:
     - masking
     - opentelemetry
     - prometheus
-  # Admin BFF 的总时限与网关路由允许的最长超时（960 秒）一致；
-  # 归档分区副本下载不另设整体超时，受 Console 服务的时限约束。
+  # 各 RPC 服务的默认时限上限，与网关路由允许的最长超时（960 秒）一致。
+  # 浏览器入口（9527）不在这里：它由 Admin 自己用标准库监听，接口时限由控制台处理器按服务目录控制。
   timeout: 960000
   admin:
     ip: 127.0.0.1
@@ -18,13 +18,6 @@ server:
     read_timeout: 3000
     write_timeout: 960000
   service:
-    - name: trpc.moox.admin.Console
-      ip: 127.0.0.1
-      port: 11000
-      network: tcp
-      protocol: http_no_protocol
-      # 归档分区副本下载经 Console 流式转发，请求时限不低于路由超时。
-      timeout: 960000
     - name: trpc.moox.admin.Health
       ip: 127.0.0.1
       port: 11010

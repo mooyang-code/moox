@@ -325,7 +325,7 @@ func seedEventBusDeployment(t *testing.T, dbPath string) {
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
 	require.NoError(t, err)
-	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "console-proxy", "web-host", "eventbus"}}}))
+	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "eventbus"}}}))
 }
 
 func eventBusACLBlock(yaml, username string) string {
@@ -570,7 +570,7 @@ func TestEventBusURLFollowsRemoteDeploymentAndRejectsDisabledHost(t *testing.T) 
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
 	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{
-		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host"}},
+		{HostID: "control", Address: "control.example.test", Components: []string{"admin"}},
 		{HostID: "bus", Address: "bus.example.test", Components: []string{"eventbus"}},
 	}))
 	address, err := eventBusNATSURL(db, "control")
@@ -613,7 +613,7 @@ func TestEventBusCredentialsRotateTLSAfterEventBusMoves(t *testing.T) {
 	topology, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
 	require.NoError(t, err)
 	require.NoError(t, topology.SyncHosts(t.Context(), []sysdeploy.HostSpec{
-		{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "console-proxy", "web-host"}},
+		{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin"}},
 		{HostID: "storage-1", Address: "203.0.113.20", Components: []string{"eventbus"}},
 	}))
 	closeAdminCLIDB(db)

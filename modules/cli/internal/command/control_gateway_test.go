@@ -50,7 +50,7 @@ func TestCommandGatewaySurvivesCanceledOperationAndThenCloses(t *testing.T) {
 	knownHosts := filepath.Join(config, "known_hosts")
 	require.NoError(t, os.WriteFile(knownHosts, nil, 0600))
 	snapshot := &setupconfig.Snapshot{}
-	testfixture.SetHost(&snapshot.Manifest, testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts), "admin", "console-proxy", "web-host", "eventbus")
+	testfixture.SetHost(&snapshot.Manifest, testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts), "admin", "eventbus")
 	require.NoError(t, os.WriteFile(filepath.Join(config, "gateway-client.yaml"), []byte("caller: moox-cli\nkey_id: assigned-command-key\nkey_file: caller-moox-cli.key\n"), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(config, "caller-moox-cli.key"), []byte("command-fixture-secret-at-least-32-bytes"), 0600))
 	ctx, cancel := context.WithCancel(t.Context())

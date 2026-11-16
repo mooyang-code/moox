@@ -22,7 +22,7 @@ func productionTopology() Topology {
 		}
 	}
 	for host, ids := range map[string][]string{
-		"control":  {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "factor-mgr", "strategy"},
+		"control":  {"admin", "eventbus", "monitor", "collector", "factor-mgr", "strategy"},
 		"storage":  {"storage-primary", "storage-view", "access"},
 		"overseas": {"access", "egress-proxy", "trade", "collector-stream", "callback-dispatcher"},
 	} {
@@ -40,7 +40,7 @@ func TestTopologyRejectsInvalidDeploymentsAtomically(t *testing.T) {
 	}{
 		{"control component elsewhere", func(c *Catalog, p *Topology) {
 			for i := range p.Deployments {
-				if p.Deployments[i].ComponentID == "console-proxy" {
+				if p.Deployments[i].ComponentID == "admin" {
 					p.Deployments[i].HostID = "storage"
 				}
 			}

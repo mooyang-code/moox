@@ -95,77 +95,15 @@ components:
         - free_disk_space
         - restart_service_manually
       required_in_default_profile: false
-  - id: console-proxy
-    name: 控制台代理
-    binary: moox-console-proxy
-    scope: control
-    replicas: single
-    protected: true
-    ports:
-      - 9527
-    health:
-      port: 19528
-    doctor:
-      role: console-proxy
-      description: 内嵌 Caddy 的控制台 HTTPS 代理
-      duties:
-        - 终止浏览器 TLS 并转发控制台与静态资源请求
-        - 保留 CA 与续期状态并排空完整流式请求
-      inputs:
-        - HTTPS 浏览器请求
-        - Caddy 证书状态
-      outputs:
-        - Admin 与 web-host 响应
-        - 内部鉴权诊断
-      dependencies:
-        - admin
-        - web-host
-      transport: reporter
-      functional_observability: not_applicable
-      config_paths:
-        - console-proxy/config/app.yaml
-      writable_paths:
-        - data/caddy
-        - certs/caddy
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: true
-  - id: web-host
-    name: 控制台前端
-    binary: moox-web-host
-    scope: control
-    replicas: single
-    protected: true
-    ports:
-      - 9528
-    health:
-      port: 19527
-    doctor:
-      role: web-host
-      description: Embedded MooX administration web host
-      duties:
-        - serve static administration assets
-      inputs:
-        - HTTP requests
-      outputs:
-        - web assets
-      dependencies: []
-      transport: reporter
-      functional_observability: not_applicable
-      config_paths: []
-      writable_paths:
-        - data/web-host
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: true
   - id: admin
     name: 管理后台
     binary: moox-admin
     scope: control
     replicas: single
     protected: true
+    # 9527 是浏览器入口（HTTPS、静态页面与根证书下载），由 Admin 自己监听。
     ports:
-      - 11000
+      - 9527
     health:
       port: 11010
     services:

@@ -81,12 +81,12 @@ func TestMonitorCoverageComponentCatalog(t *testing.T) {
 			t.Errorf("%s: missing health port", name)
 		}
 	}
-	proxy, ok := components["console-proxy"]
+	admin, ok := components["admin"]
 	if !ok {
-		t.Fatal("console-proxy component is missing")
+		t.Fatal("admin component is missing")
 	}
-	if proxy.Doctor.Transport != "reporter" || proxy.Health.Port != 19528 {
-		t.Error("console-proxy diagnostics contract changed")
+	if admin.Doctor.Transport != "reporter" || admin.Health.Port != 11010 {
+		t.Error("admin diagnostics contract changed")
 	}
 }
 
