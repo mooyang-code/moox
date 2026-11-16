@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -12,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 func newSetupWipeCommand(deps setupDeps) *cobra.Command {
@@ -57,6 +60,9 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 			}
 			if !yes {
 				preview := map[string]any{"action": "wipe", "route": deployscan.Route(reports), "plan": plan}
+				if note := wipeTradeNote(snapshot.Manifest, plan); note != "" {
+					preview["note"] = note
+				}
 				if cleanFunctions {
 					// 同一云账号可能有其他环境，单列出来让用户确认。
 					preview["functions"], preview["functions_digest"] = functions, setupFunctionsDigest(functions)
@@ -86,6 +92,20 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().BoolVar(&cleanFunctions, "clean-functions", false, "同时清理云上的采集计划函数：预览单列，同一云账号可能有其他环境，要用户单独确认")
 	cmd.Flags().StringVar(&expectFunctions, "expect-functions", "", "预览输出的 functions_digest，清单变了会拒绝")
 	return cmd
+}
+
+// wipeTradeNote 在清空范围里有装着 Trade 的主机时给出提醒；只是提示，不检查持仓。
+func wipeTradeNote(manifest *topology.Config, plan deployscan.Plan) string {
+	var hosts []string
+	for _, host := range plan.Hosts {
+		if slices.Contains(manifest.Deployments[host.Host], "trade") || slices.Contains(host.Units, deploy.UnitName("trade")) {
+			hosts = append(hosts, host.Host)
+		}
+	}
+	if len(hosts) == 0 {
+		return ""
+	}
+	return "主机 " + strings.Join(hosts, "、") + " 上有 Trade：清空会删除 Trade 库，先确认没有持仓和挂单"
 }
 
 // executeSetupWipe 并行清空清除范围里的全部主机并确认结果，setup wipe 和 setup install 共用。一台失败时全部重跑，清空脚本可重复执行。

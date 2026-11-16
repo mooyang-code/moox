@@ -178,6 +178,29 @@ func TestRenderedConfigsUseAbsolutePaths(t *testing.T) {
 	}
 }
 
+// 因子引擎按配置文件所在目录解析相对路径，而 config/<组件> 每次部署整目录替换：引擎配置里的每个路径项
+// （modules/factor/internal/engine/config.go 的 resolvePaths 列出的八项，加上网关密钥）都要渲染出来，并且落在数据目录或秘密目录。
+// 模板里不写的项会用引擎的相对默认值，上面“没有相对路径”的检查看不到它，所以这里逐项点名。
+func TestRenderedFactorEngineConfigSetsEveryPath(t *testing.T) {
+	cfg := exampleConfig(t, "")
+	output, _ := renderHost(t, cfg, cfg.ComponentHost("factor-engine"))
+	document, err := parseYAML(output.Files["config/factor-engine/engine.yaml"].Data)
+	require.NoError(t, err)
+	data := "/data/moox/data/factor-engine/"
+	for key, prefix := range map[string]string{
+		"catalog_sync.state_file": data, "seriesstore.dir": data, "gap.ledger_dir": data, "watermark.state_file": data,
+		"lifecycle.state_file": data, "params.cache_file": data, "udf.dir": data,
+		"eventbus.credential_file": "/data/moox/secrets/", "gateway_client.key_file": "/data/moox/secrets/",
+	} {
+		node := document.Content[0]
+		for _, part := range strings.Split(key, ".") {
+			node = member(node, part)
+			require.NotNil(t, node, "engine.yaml 没有渲染 %s", key)
+		}
+		require.True(t, strings.HasPrefix(node.Value, prefix), "%s = %q，应在 %s 下", key, node.Value, prefix)
+	}
+}
+
 func TestRenderWritesIdentityAndRuntimeEnvironment(t *testing.T) {
 	cfg := exampleConfig(t, "")
 	cfg.Logging.CLS = topology.LoggingCLS{Enabled: true, Endpoint: "ap-nanjing.cls.tencentcs.com", TopicID: "topic-1", MinLevel: "warn"}

@@ -66,10 +66,9 @@ type Options struct {
 	SyncHost func(ctx context.Context, hostID string) error
 	// ObjectStoreSecret 读归档 worker 外部对象存储的凭据文件内容（配了 [archive_object_store] 时）。
 	ObjectStoreSecret func(ctx context.Context, secretID string) ([]byte, error)
-	// Log 接收进度；ReadyTimeout 为 0 用默认值；SkipReady 为真时不等就绪（setup install 最后统一等）。
+	// Log 接收进度；ReadyTimeout 为 0 用默认值。
 	Log          io.Writer
 	ReadyTimeout time.Duration
-	SkipReady    bool
 }
 
 // ComponentResult 是一个组件这次部署的结果。Action：started（新装或原来没在运行）、restarted、unchanged、paused（已被停用，只装了文件）。
@@ -261,9 +260,6 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 		}
 		result.Components = append(result.Components, ComponentResult{ID: id, Action: action})
 		options.logf("%s %s: %s", host.Name, id, action)
-	}
-	if options.SkipReady {
-		return result, nil
 	}
 	return result, waitComponents(ctx, target, catalog, host.Name, &result, options.ReadyTimeout)
 }

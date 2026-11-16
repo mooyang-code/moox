@@ -181,6 +181,9 @@ func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupSnapshot
 		if status.Route == deployscan.RouteInstalled {
 			preview["wipe"] = plan
 			preview["note"] = "目标机装过：不带 --wipe 是原地重新部署（升级），数据保留；带 --wipe <wipe.digest> 是彻底清空后重装"
+			if note := wipeTradeNote(snapshot.Manifest, plan); note != "" {
+				preview["note"] = preview["note"].(string) + "。" + note
+			}
 		}
 		return writePreview(cmd, preview)
 	}
@@ -258,6 +261,7 @@ func executeSetupInstallStep(cmd *cobra.Command, deps setupDeps, snapshot *setup
 }
 
 // waitSetupAllReady 统一等一次全部主机上的全部组件就绪（已被停用的不等）。
+// 按是否停用（is-enabled）排除，不按当时是否在运行：崩溃后正在自动重启的组件也要等到就绪。
 func waitSetupAllReady(ctx context.Context, deps setupDeps, snapshot *setupSnapshot) error {
 	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{})
 	if err != nil {
@@ -276,10 +280,10 @@ func waitSetupAllReady(ctx context.Context, deps setupDeps, snapshot *setupSnaps
 				errs[i] = err
 				return
 			}
-			// 用户停用的组件（单元在、没在运行且不是这次装的）不等：只等在运行的单元。
+			// 用户停用的组件不等，其余的都要等到就绪。
 			at := slices.IndexFunc(reports, func(report deployscan.HostReport) bool { return report.Host == host.Name })
 			if at >= 0 {
-				components = slices.DeleteFunc(components, func(id string) bool { return !slices.Contains(reports[at].Active, deploy.UnitName(id)) })
+				components = slices.DeleteFunc(components, func(id string) bool { return slices.Contains(reports[at].Disabled, deploy.UnitName(id)) })
 			}
 			pending, err := deps.waitReady(ctx, host, components, setupReadyTimeout)
 			if err != nil {

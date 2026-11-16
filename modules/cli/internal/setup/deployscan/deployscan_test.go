@@ -197,6 +197,7 @@ func newScriptEnv(t *testing.T, withSystemd bool) scriptEnv {
 		}
 		write("systemctl", `echo "$@" >> "`+env.log+`"
 if [ "$2" = is-active ]; then shift 2; for u in "$@"; do if [ "$u" = moox-admin.service ]; then echo active; else echo inactive; fi; done; fi
+if [ "$2" = is-enabled ]; then shift 2; for u in "$@"; do if [ "$u" = moox-admin.service ]; then echo enabled; else echo disabled; fi; done; fi
 exit 0
 `)
 		write("loginctl", "echo yes\n")
@@ -276,6 +277,7 @@ func TestInspectScriptIsReadOnlyAndReportsLayout(t *testing.T) {
 		require.Positive(t, result.DiskFreeKB)
 		if withSystemd {
 			require.Equal(t, []string{"moox-admin.service"}, result.Active)
+			require.Equal(t, []string{"moox-monitor.service"}, result.Disabled)
 			require.True(t, result.Linger)
 		} else {
 			require.Empty(t, result.Active)

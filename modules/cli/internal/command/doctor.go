@@ -96,7 +96,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 	var checks []string
 	cmd := &cobra.Command{
 		Use:          mode,
-		Short:        map[string]string{"bootstrap": "检查新部署各模块的安装与配置", "diagnose": "按 Monitor 的事实诊断本机的模块；操作电脑上看远端用 setup logs"}[mode],
+		Short:        map[string]string{"bootstrap": "检查新部署各模块的安装与配置", "diagnose": "按 Monitor 的事实诊断一台主机上的模块：--node 指定主机（默认本机），远端经 SSH 读健康端口与服务状态"}[mode],
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		PreRunE: func(_ *cobra.Command, _ []string) error {

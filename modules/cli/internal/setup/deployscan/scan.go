@@ -59,6 +59,8 @@ type HostReport struct {
 	Units []string `json:"units"`
 	// Active 是其中 systemctl --user is-active 为 active 的单元。
 	Active []string `json:"active"`
+	// Disabled 是其中 systemctl --user is-enabled 为 disabled 的单元：被用户停用的组件。
+	Disabled []string `json:"disabled"`
 	// Processes 是可执行文件在部署根里的进程数。
 	Processes int `json:"processes"`
 	// ArchiveKB、SeaweedFSKB 是 <部署根>/archive 与 <部署根>/data/seaweedfs 的占用；-1 表示不存在或没有统计（Options.Sizes 为假）。
@@ -92,6 +94,7 @@ type inspectResult struct {
 	VersionText string   `json:"version_text"`
 	Units       []string `json:"units"`
 	Active      []string `json:"active"`
+	Disabled    []string `json:"disabled"`
 	Processes   int      `json:"processes"`
 	ArchiveKB   int64    `json:"archive_kb"`
 	SeaweedFSKB int64    `json:"seaweedfs_kb"`
@@ -151,7 +154,7 @@ func inspect(ctx context.Context, dial Dial, host topology.Host, root string, si
 	if text := []byte(result.VersionText); result.Installed && json.Valid(text) {
 		report.Version = json.RawMessage(text)
 	}
-	report.Units, report.Active, report.Processes = nonNil(result.Units), nonNil(result.Active), result.Processes
+	report.Units, report.Active, report.Disabled, report.Processes = nonNil(result.Units), nonNil(result.Active), nonNil(result.Disabled), result.Processes
 	report.ArchiveKB, report.SeaweedFSKB, report.DiskFreeKB = result.ArchiveKB, result.SeaweedFSKB, result.DiskFreeKB
 	report.Linger, report.Journald = result.Linger, result.Journald
 	return report, nil

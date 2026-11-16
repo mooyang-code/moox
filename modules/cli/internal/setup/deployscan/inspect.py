@@ -35,7 +35,7 @@ root, sizes = request.get("root"), bool(request.get("sizes"))
 if not valid_root(root):
     fail("deploy root must be a clean absolute path other than /")
 report = {"root": root, "root_exists": os.path.isdir(root), "entries": [], "installed": False, "version_text": "",
-          "units": [], "active": [], "processes": 0, "archive_kb": -1, "seaweedfs_kb": -1, "disk_free_kb": -1,
+          "units": [], "active": [], "disabled": [], "processes": 0, "archive_kb": -1, "seaweedfs_kb": -1, "disk_free_kb": -1,
           "linger": False, "journald": os.path.isdir("/var/log/journal")}
 if report["root_exists"]:
     report["entries"] = sorted(os.listdir(root))
@@ -62,6 +62,8 @@ if os.path.isdir(units_dir):
 if report["units"]:
     states = run(["systemctl", "--user", "is-active"] + report["units"]).splitlines()
     report["active"] = [unit for unit, state in zip(report["units"], states) if state.strip() == "active"]
+    states = run(["systemctl", "--user", "is-enabled"] + report["units"]).splitlines()
+    report["disabled"] = [unit for unit, state in zip(report["units"], states) if state.strip() == "disabled"]
 real_root = os.path.realpath(root)
 if os.path.isdir("/proc"):
     for pid in os.listdir("/proc"):

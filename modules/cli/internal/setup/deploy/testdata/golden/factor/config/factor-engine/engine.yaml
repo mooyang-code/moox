@@ -71,6 +71,12 @@ watermark:
   task_ratios: {} # 按任务 ID 覆盖阈值
   poll_interval: 10s # 阻塞或落后时读回 Storage 继续推进的间隔（保底）
   max_periods: 30 # 一次推进最多处理的周期数
+# 系统暂停与恢复的本地状态：重启后按它决定继续暂停还是运行。
+lifecycle:
+  state_file: /data/moox/data/factor-engine/engine/lifecycle.json
+# 自定义函数（wasm 模块）的本地存储目录。
+udf:
+  dir: /data/moox/data/factor-engine/udf
 # 可变成员的取参：开算前向 FactorMgr 读取策略最近一次提交的参数，记成这一期的"进行中记录"并落盘后才开始计算，
 # 这一期的完成标记写成功后才清掉；FactorMgr 不可达时用本地缓存的最近一次读到的值。
 params:

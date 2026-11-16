@@ -447,6 +447,9 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			set("gap.ledger_dir", path.Join(data, "gap"))
 			set("watermark.state_file", path.Join(data, "engine/watermarks.json"))
 			set("params.cache_file", path.Join(data, "engine/param_cache.json"))
+			// 这两项也要放进数据目录：config/<组件> 每次部署整目录替换，留在那里暂停状态和 UDF 缓存会被删掉。
+			set("lifecycle.state_file", path.Join(data, "engine/lifecycle.json"))
+			set("udf.dir", path.Join(data, "udf"))
 		case "archive-worker":
 			set("worker.worker_id", id+"@"+r.Host.Name)
 			set("worker.root_dir", path.Join(layout.Root, "archive"))

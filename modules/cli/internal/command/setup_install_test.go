@@ -360,6 +360,7 @@ func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	require.EqualValues(t, 2048, factor["archive_kb"], "预览里单独列出归档目录的大小")
 	require.EqualValues(t, 4096, factor["seaweedfs_kb"], "预览里单独列出内置对象存储数据的大小")
 	require.Empty(t, h.calls, "预览不清空")
+	require.Contains(t, preview["note"], "主机 overseas 上有 Trade：清空会删除 Trade 库，先确认没有持仓和挂单")
 	require.FileExists(t, filepath.Join(h.operator, "gateway-client.yaml"))
 
 	_, err = h.run("wipe", "--yes")
@@ -493,4 +494,24 @@ func TestSetupInitPassesSourceDirectory(t *testing.T) {
 	_, err = h.run("init", "--source-dir", source, "--config-dir", "seeds")
 	require.NoError(t, err)
 	require.Equal(t, "seeds", h.seedDirs[len(h.seedDirs)-1])
+}
+
+// 统一等就绪按是否停用排除组件：崩溃后正在自动重启的（单元在、没在运行、没被停用）也要等；被停用的不等。
+func TestSetupInstallWaitsForEveryComponentThatIsNotDisabled(t *testing.T) {
+	h := newInstallHarness(t)
+	overseas := h.report("overseas")
+	overseas.Units = []string{"moox-trade.service", "moox-access.service", "moox-callback-dispatcher.service"}
+	overseas.Active = []string{"moox-access.service"}
+	overseas.Disabled = []string{"moox-callback-dispatcher.service"}
+	waited := map[string][]string{}
+	h.deps.waitReady = func(_ context.Context, host topology.Host, components []string, _ time.Duration) (map[string]string, error) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		waited[host.Name] = components
+		return nil, nil
+	}
+	require.NoError(t, waitSetupAllReady(context.Background(), h.deps, h.snapshot))
+	require.Contains(t, waited["overseas"], "trade", "没在运行但没被停用的组件要等")
+	require.Contains(t, waited["overseas"], "access")
+	require.NotContains(t, waited["overseas"], "callback-dispatcher", "被停用的组件不等")
 }
