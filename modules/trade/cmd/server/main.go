@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	_ "github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	_ "trpc.group/trpc-go/trpc-filter/masking"
@@ -16,11 +17,13 @@ import (
 )
 
 func main() {
+	// 业务配置的位置；要在 trpc.NewServer 解析命令行之前定义。
+	configPath := flag.String("config", "config/app.yaml", "trade 业务配置")
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer()
 	trpclog.InstallServiceName("trade")
 
-	server, err := bootstrap.Initialize(ctx, s)
+	server, err := bootstrap.Initialize(ctx, s, *configPath)
 	if err != nil {
 		log.Fatalf("moox-trade 初始化失败: %v", err)
 	}

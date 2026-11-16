@@ -1,0 +1,16 @@
+gateway_client:
+  caller: access
+  key_id: key-access
+  key_file: /data/moox/secrets/caller-access.key
+  # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
+  host_id: overseas
+  local_address: 127.0.0.1:11002
+  ca_file: /data/moox/secrets/moox-ca.crt
+  # 整分钟突发：约 42 个采集函数在 1.5 秒内写入，实测峰值并发约 24 条（函数起跑不再错开，同时写入的函数更多，没有重新测峰值）；保持 32 条连接常驻（预热），
+  # 请求路径上不再现建跨境 TLS 连接，空闲上限 64 留出余量。
+  pool:
+    min_idle: 32
+    max_idle: 64
+# Admin keys export-access publishes this registry and versioned private keys.
+verification_file: /data/moox/secrets/access/access-verification.json
+nonce_path: /data/moox/data/access/nonces.db

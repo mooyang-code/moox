@@ -8,4 +8,4 @@
 
 程序使用 `--config config/app.yaml --conf config/trpc_go.yaml`。健康端口 11441 只听 127.0.0.1，提供不验签的 `/healthz`、`/readyz` 与 `/metrics`；部署设置 `MOOX_INSTANCE_ID`。配置严格拒绝未知字段、重复键与额外 YAML 文档。关闭时先撤下就绪状态，再停止 RPC 并释放 HTTP 空闲连接。
 
-本机执行 `go test -race ./...` 与 `go vet ./...`。纯 Go Linux 目标在本机关闭 CGO 交叉编译；原生安装使用 `moox-cli setup deploy-unit --host <主机ID> --profile egress-proxy`，见[部署与运维](../../docs/部署与运维.md)。
+本机执行 `go test -race ./...` 与 `go vet ./...`。纯 Go Linux 目标在本机关闭 CGO 交叉编译；部署使用 `moox-cli setup deploy --host <主机ID> --component egress-proxy`，见[部署与运维](../../docs/部署与运维.md)。

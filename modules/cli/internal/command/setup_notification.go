@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"strings"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -58,15 +57,15 @@ func ensureInitialNotification(ctx context.Context, gateway gatewayclient.Invoke
 }
 
 // defaultSetupEnsureNotification 是 setup init 的告警渠道一步：没有填地址时不连网关。
-func defaultSetupEnsureNotification(ctx context.Context, snapshot *setupconfig.Snapshot) (*setupNotificationSummary, error) {
+func defaultSetupEnsureNotification(ctx context.Context, snapshot *setupSnapshot) (*setupNotificationSummary, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("notification: setup configuration is missing")
 	}
-	initial := snapshot.Manifest.Notification
+	initial := snapshot.Secrets.Notification
 	if strings.TrimSpace(initial.WebhookURL) == "" {
 		return ensureInitialNotification(ctx, nil, initial)
 	}
-	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
+	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
 	if err != nil {
 		return nil, fmt.Errorf("notification: open gateway: %w", err)
 	}

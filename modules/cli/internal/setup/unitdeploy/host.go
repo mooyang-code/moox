@@ -309,7 +309,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		if err != nil {
 			return result, err
 		}
-		syncErr := setupclient.New(gateway).SyncHostDeployments(ctx, snapshot, host.Name)
+		syncErr := setupclient.New(gateway).SyncHostDeployments(ctx, snapshot.Config(), host.Name)
 		closeErr := gateway.Close()
 		if err := errors.Join(syncErr, closeErr); err != nil {
 			return result, err

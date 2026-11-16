@@ -6,9 +6,37 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 )
+
+// LocalState 是这台电脑上旧部署路径（T13 删除）的部署状态，只读取，不创建。
+type LocalState struct {
+	// RuntimeSHA256 是本机身份的绑定哈希；为空表示没有本机状态。
+	RuntimeSHA256 string
+	AdminReady    bool
+	ControlReady  bool
+	OperatorPin   bool
+	UnitRecords   bool
+	// WipePending 表示上次旧的 setup wipe 没有做完。
+	WipePending bool
+	// StaleBinding 表示这份本机状态不是当前配置和版本生成的：旧状态里的软件和身份绑定着原来的配置，不能接着装。
+	StaleBinding bool
+	// BindingConfig 是生成这份本机状态的配置文件路径。
+	BindingConfig string
+	// Units 是已经部署成功的单元，键是 主机/profile。
+	Units map[string]bool
+	// InitStorage、InitReady 表示 setup init --stage storage、setup init 已完成。
+	InitStorage bool
+	InitReady   bool
+	// BackedUp 表示 setup install 做过配置备份。
+	BackedUp bool
+	// Started 是已启动的空间，见 setup start。
+	Started map[string]bool
+	// Verified 是验收通过的空间，见 setup verify。
+	Verified map[string]bool
+}
+
+// wipePendingFile 是旧的 setup wipe 在操作员目录里留下的未完成标记。
+const wipePendingFile = "wipe-pending.json"
 
 // Binding 记录一次首次安装用的部署配置和版本。本机状态里的软件和身份只对它们有效。
 type Binding struct {
@@ -89,8 +117,8 @@ func VerifiedStep(spaceID string) string { return "verify-ready-" + spaceID + ".
 
 // ReadLocalState 只读取这台电脑上的部署状态：不建目录、不生成密钥，文件不存在就算没有。
 // current 是这次命令用的配置和版本；本机没有记录或记录不一致时，这份状态不能用来继续安装。
-func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.LocalState {
-	state := deployscan.LocalState{WipePending: deployscan.ReadPending(operatorDir) != nil, StaleBinding: true}
+func ReadLocalState(stateDir, operatorDir string, current Binding) LocalState {
+	state := LocalState{WipePending: fileExists(filepath.Join(operatorDir, wipePendingFile)), StaleBinding: true}
 	if raw, err := os.ReadFile(filepath.Join(stateDir, bindingFile)); err == nil {
 		var recorded Binding
 		if json.Unmarshal(raw, &recorded) == nil {

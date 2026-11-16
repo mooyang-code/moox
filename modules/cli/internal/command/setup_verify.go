@@ -13,8 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/verify"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
@@ -30,7 +28,6 @@ const requiredPasses = 2
 func newSetupVerifyCommand(deps setupDeps) *cobra.Command {
 	var file, spaceID string
 	var timeout time.Duration
-	var options unitdeploy.DeployOptions
 	cmd := &cobra.Command{
 		Use:   "verify",
 		Short: "验收一个空间：K 线入库、因子前进、策略在运行才算通过，只读",
@@ -48,10 +45,7 @@ K 线缺失不超过 5% 算通过：到截止时间就带缺口结算，缺口�
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			if err := resolveSetupUnitOptions(snapshot, "", &options); err != nil {
-				return err
-			}
-			checks, err := runSetupVerifySpace(cmd.Context(), file, snapshot, options, spaceID, timeout)
+			checks, err := runSetupVerifySpace(cmd.Context(), file, snapshot, spaceID, timeout)
 			if err != nil && checks == nil {
 				return err
 			}
@@ -64,14 +58,12 @@ K 线缺失不超过 5% 算通过：到截止时间就带缺口结算，缺口�
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&spaceID, "space-id", "", "要验收的空间")
 	cmd.Flags().DurationVar(&timeout, "timeout", 6*time.Minute, "最长等多久")
-	cmd.Flags().StringVar(&options.StateDirectory, "state-dir", "", "持久私有部署状态目录（默认和 bootstrap 相同）")
-	cmd.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	return cmd
 }
 
-// runSetupVerifySpace 验收一个空间，通过时写记录。检查项有失败时同时返回 checks 和错误。
-func runSetupVerifySpace(ctx context.Context, file string, snapshot *setupconfig.Snapshot, options unitdeploy.DeployOptions, spaceID string, timeout time.Duration) ([]verify.Check, error) {
-	gateway, err := openCommandGateway(ctx, file, snapshot.Config())
+// runSetupVerifySpace 验收一个空间。检查项有失败时同时返回 checks 和错误。
+func runSetupVerifySpace(ctx context.Context, file string, snapshot *setupSnapshot, spaceID string, timeout time.Duration) ([]verify.Check, error) {
+	gateway, err := openCommandGateway(ctx, file, snapshot.Manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +90,7 @@ func runSetupVerifySpace(ctx context.Context, file string, snapshot *setupconfig
 	if len(failures) != 0 {
 		return checks, errors.New(strings.Join(failures, "\n"))
 	}
-	return checks, unitdeploy.MarkStep(options.StateDirectory, unitdeploy.VerifiedStep(spaceID))
+	return checks, nil
 }
 
 // setupVerifySource 读一轮验收的数据。baseline 是本次验收开始时各因子任务的最后一期。

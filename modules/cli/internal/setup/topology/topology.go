@@ -312,6 +312,10 @@ func validateDeployRoot(paths *Paths) error {
 	return nil
 }
 
+// ReadFile 用读配置时的同一套校验读一个文件：只读普通文件（不跟随符号链接）、不超过 1 MiB；
+// private 为 true（秘密文件）时还要求 0600、属于当前用户，读取时没有被替换。config get/set/edit/backup/encrypt 都用它。
+func ReadFile(path string, private bool) ([]byte, error) { return readRegularFile(path, private) }
+
 // readRegularFile 只读普通文件（不跟随符号链接），大小不超过 1 MiB。private 为 true 时（秘密文件）还要求 0600 且属于当前用户。
 func readRegularFile(path string, private bool) ([]byte, error) {
 	name := filepath.Base(path)

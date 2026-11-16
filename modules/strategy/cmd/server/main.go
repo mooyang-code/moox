@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+
 	"github.com/mooyang-code/moox/modules/strategy/internal/bootstrap"
 	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
@@ -13,10 +15,12 @@ import (
 )
 
 func main() {
+	// 业务配置的位置；要在 trpc.NewServer 解析命令行之前定义。
+	configPath := flag.String("config", "config/app.yaml", "strategy 业务配置")
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer()
 	trpclog.InstallServiceName("strategy")
-	cfg, err := bootstrap.Load("./config/app.yaml")
+	cfg, err := bootstrap.Load(*configPath)
 	if err != nil {
 		log.Fatalf("加载策略配置失败：%v", err)
 	}

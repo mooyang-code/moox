@@ -13,8 +13,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,7 +78,7 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 }
 
 func TestSetupInitRunsStagesInOrder(t *testing.T) {
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	stages := []string{}
 	storage := &fakeSetupInitStorage{record: func(stage string) {
 		stages = append(stages, stage)
@@ -97,37 +95,37 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 				Calls:  make([]metadataImportCall, 3),
 			}, nil
 		},
-		load: func(string) (*setupconfig.Snapshot, error) {
+		load: func(string) (*setupSnapshot, error) {
 			stages = append(stages, "load-config")
 			return snapshot, nil
 		},
-		ensureFirewall: func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
+		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			stages = append(stages, "firewall")
 			return setupFirewallSummary{Status: "ready", Targets: 3}, nil
 		},
-		applySpaces: func(_ context.Context, _ *setupconfig.Snapshot, got []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySpaces: func(_ context.Context, _ *setupSnapshot, got []setupclient.Space) (setupclient.ApplyResult, error) {
 			stages = append(stages, "admin-apply")
 			require.Equal(t, spaces, got)
 			return setupclient.ApplyResult{Action: "created", Spaces: 1, SpacesCreated: 1}, nil
 		},
-		statusSpaces: func(_ context.Context, _ *setupconfig.Snapshot, got []setupclient.Space) (setupclient.StatusResult, error) {
+		statusSpaces: func(_ context.Context, _ *setupSnapshot, got []setupclient.Space) (setupclient.StatusResult, error) {
 			stages = append(stages, "admin-status")
 			require.Equal(t, spaces, got)
 			return setupclient.StatusResult{State: "completed", Spaces: 1}, nil
 		},
-		ensureNotification: func(context.Context, *setupconfig.Snapshot) (*setupNotificationSummary, error) {
+		ensureNotification: func(context.Context, *setupSnapshot) (*setupNotificationSummary, error) {
 			stages = append(stages, "notification")
 			return &setupNotificationSummary{Status: notificationKept, Existing: 1}, nil
 		},
-		registerCloudAccounts: func(context.Context, *setupconfig.Snapshot) (*setupCloudAccountSummary, error) {
+		registerCloudAccounts: func(context.Context, *setupSnapshot) (*setupCloudAccountSummary, error) {
 			stages = append(stages, "cloud-accounts")
 			return &setupCloudAccountSummary{Enabled: true, Planned: 1, Registered: 1}, nil
 		},
-		login: func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
+		login: func(context.Context, *setupSnapshot) (setupclient.LoginResult, error) {
 			stages = append(stages, "login")
 			return setupclient.LoginResult{LoginAPI: "valid"}, nil
 		},
-		openInitStorage: func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error) {
+		openInitStorage: func(context.Context, *setupSnapshot, string) (setupInitStorage, error) {
 			return storage, nil
 		},
 	}
@@ -171,22 +169,22 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 }
 
 func TestSetupInitStopsAfterAdminFailure(t *testing.T) {
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	stages := []string{}
 	cmd := newSetupCommand(setupDeps{
 		loadInitBundle: func(string) (setupInitBundle, error) {
 			stages = append(stages, "load-bundle")
 			return setupInitBundle{}, nil
 		},
-		load: func(string) (*setupconfig.Snapshot, error) {
+		load: func(string) (*setupSnapshot, error) {
 			stages = append(stages, "load-config")
 			return snapshot, nil
 		},
-		ensureFirewall: func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
+		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			stages = append(stages, "firewall")
 			return setupFirewallSummary{Status: "ready"}, nil
 		},
-		applySpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
 			stages = append(stages, "admin-apply")
 			return setupclient.ApplyResult{}, errors.New("setup_invalid")
 		},
@@ -197,15 +195,15 @@ func TestSetupInitStopsAfterAdminFailure(t *testing.T) {
 }
 
 func TestSetupInitStopsOnPartialFirewall(t *testing.T) {
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	adminApplied := false
 	cmd := newSetupCommand(setupDeps{
 		loadInitBundle: func(string) (setupInitBundle, error) { return setupInitBundle{}, nil },
-		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		ensureFirewall: func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
+		load:           func(string) (*setupSnapshot, error) { return snapshot, nil },
+		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			return setupFirewallSummary{Status: "partial", Targets: 3, Skipped: 1}, nil
 		},
-		applySpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
 			adminApplied = true
 			return setupclient.ApplyResult{}, nil
 		},
@@ -388,25 +386,25 @@ func testCanonicalTimeSeriesView(spaceID, viewID, datasetID string) seedView {
 }
 
 func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	storage := &fakeSetupInitStorage{}
 	monitor := useFakeMonitorChannels(t, 0)
 	cmd := newSetupCommand(setupDeps{
 		loadInitBundle: func(string) (setupInitBundle, error) { return setupInitBundle{}, nil },
-		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		ensureFirewall: func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
+		load:           func(string) (*setupSnapshot, error) { return snapshot, nil },
+		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			return setupFirewallSummary{Status: "ready"}, nil
 		},
-		applySpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
 			return setupclient.ApplyResult{Action: "unchanged"}, nil
 		},
-		statusSpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error) {
+		statusSpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.StatusResult, error) {
 			return setupclient.StatusResult{State: "completed"}, nil
 		},
-		login: func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
+		login: func(context.Context, *setupSnapshot) (setupclient.LoginResult, error) {
 			return setupclient.LoginResult{LoginAPI: "valid"}, nil
 		},
-		openInitStorage: func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error) {
+		openInitStorage: func(context.Context, *setupSnapshot, string) (setupInitStorage, error) {
 			return storage, nil
 		},
 	})
@@ -429,28 +427,28 @@ func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
 // 管理台已有渠道、密钥时 setup init 不改写：Monitor 已有任何渠道就不加；管理员、云密钥、交易所密钥由 ApplySetup 只建不改
 // （服务端返回 kept / exists），CLI 不另外写，也不拿秘密文件里的密码去校验登录。
 func TestSetupInitKeepsExistingChannelsAndSecrets(t *testing.T) {
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	monitor := useFakeMonitorChannels(t, 2)
 	applied, logins := 0, 0
 	cmd := newSetupCommand(setupDeps{
 		loadInitBundle: func(string) (setupInitBundle, error) { return setupInitBundle{}, nil },
-		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		ensureFirewall: func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
+		load:           func(string) (*setupSnapshot, error) { return snapshot, nil },
+		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			return setupFirewallSummary{Status: "ready"}, nil
 		},
-		applySpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
 			applied++
 			return setupclient.ApplyResult{Action: "unchanged", Kept: []string{"admin", "tencent_cloud"},
 				ExchangeKeys: []setupclient.ExchangeKeyResult{{SecretID: "exchange-binance-production-main", State: setupclient.ExchangeKeyExists}}}, nil
 		},
-		statusSpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error) {
+		statusSpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.StatusResult, error) {
 			return setupclient.StatusResult{State: "completed"}, nil
 		},
-		login: func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
+		login: func(context.Context, *setupSnapshot) (setupclient.LoginResult, error) {
 			logins++
 			return setupclient.LoginResult{}, errors.New("login_failed")
 		},
-		openInitStorage: func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error) {
+		openInitStorage: func(context.Context, *setupSnapshot, string) (setupInitStorage, error) {
 			return &fakeSetupInitStorage{}, nil
 		},
 	})
@@ -561,33 +559,4 @@ func (clsReadyAPI) CreateTopic(context.Context, tencent.CLSCreateTopicOptions) (
 func (clsReadyAPI) CreateIndex(context.Context, string) (string, error) { return "", nil }
 func (clsReadyAPI) EnsureIndexFields(context.Context, string, []tencent.CLSIndexField) (bool, string, error) {
 	return true, "r", nil
-}
-
-type seedProbeStorage struct {
-	fakeSetupInitStorage
-	applied   int
-	applyRuns int
-}
-
-func (s *seedProbeStorage) Apply(context.Context, []metadataImportCall) (metadataImportSummary, error) {
-	s.applyRuns++
-	return metadataImportSummary{Applied: s.applied}, nil
-}
-
-func TestSetupMetadataImportedRequiresSameSeedAndLiveSpaces(t *testing.T) {
-	calls := []metadataImportCall{{Resource: "spaces", Method: "CreateSpace", Request: &storagepb.CreateSpaceReq{Space: &storagepb.Space{SpaceId: "crypto"}}}}
-	seed, err := metadataSeedDigest(calls)
-	require.NoError(t, err)
-	storage := &seedProbeStorage{}
-	imported, err := setupMetadataImported(context.Background(), storage, setupInitBundle{Calls: calls})
-	require.NoError(t, err)
-	require.False(t, imported, "没有记录时要导入")
-	imported, _ = setupMetadataImported(context.Background(), storage, setupInitBundle{Calls: calls, ImportedSeed: "other"})
-	require.False(t, imported, "种子变了要导入")
-	require.Zero(t, storage.applyRuns)
-	imported, _ = setupMetadataImported(context.Background(), storage, setupInitBundle{Calls: calls, ImportedSeed: seed})
-	require.True(t, imported)
-	storage.applied = 1
-	imported, _ = setupMetadataImported(context.Background(), storage, setupInitBundle{Calls: calls, ImportedSeed: seed})
-	require.False(t, imported, "空间被重置过要重新导入")
 }

@@ -5,6 +5,10 @@ gateway_client:
   caller: callback-dispatcher
   key_id: ""
   key_file: ../../secrets/caller-callback-dispatcher.key
+  # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
+  host_id: ""
+  local_address: 127.0.0.1:11002
+  ca_file: ../../secrets/moox-ca.crt
 
 database:
   path: ./data/moox_callback_dispatcher.db

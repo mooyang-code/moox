@@ -11,7 +11,6 @@ import (
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"gopkg.in/yaml.v3"
@@ -21,48 +20,36 @@ import (
 )
 
 func TestFileConfigUsesDeploymentIdentityAndCachedDirectory(t *testing.T) {
-	for _, shared := range []bool{false, true} {
-		name := "same-root"
-		if shared {
-			name = "shared-host-unit"
+	for _, relative := range []bool{false, true} {
+		name := "absolute-ca"
+		if relative {
+			name = "relative-ca"
 		}
-		t.Run(name, func(t *testing.T) { testFileConfigDeployment(t, shared) })
+		t.Run(name, func(t *testing.T) { testFileConfigDeployment(t, relative) })
 	}
 }
 
-func testFileConfigDeployment(t *testing.T, shared bool) {
+// 组件的 gateway_client 段直接写主机 ID、本机网关地址与 CA：不读相邻目录里的主机网关配置，也不认旧的环境变量。
+func testFileConfigDeployment(t *testing.T, relativeCA bool) {
 	t.Helper()
 	root := t.TempDir()
-	moduleConfig := filepath.Join(root, "admin", "config", "app.yaml")
-	hostConfig := filepath.Join(root, "host-gateway", "config", "app.yaml")
-	if shared {
-		hostConfig = filepath.Join(t.TempDir(), "host-unit", "host-gateway", "config", "app.yaml")
-	}
+	moduleConfig := filepath.Join(root, "config", "admin", "app.yaml")
 	keyFile := filepath.Join(root, "secrets", "caller-admin.key")
-	for _, path := range []string{moduleConfig, hostConfig, keyFile} {
+	for _, path := range []string{moduleConfig, keyFile} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	}
 	require.NoError(t, os.WriteFile(keyFile, []byte("admin-signing-fixture-key-at-least-32-bytes\n"), 0o600))
 	ca, _, _ := testCertificates(t)
-	host := hostgatewayconfig.Default("storage", "control", "192.0.2.1", "host-signing-key")
-	host.TLS.CAFile = ca
-	if shared {
-		physicalCA := filepath.Join(filepath.Dir(hostConfig), "..", "..", "certs", "moox-ca.crt")
+	configuredCA := ca
+	if relativeCA {
 		pem, err := os.ReadFile(ca)
 		require.NoError(t, err)
-		require.NoError(t, os.MkdirAll(filepath.Dir(physicalCA), 0o700))
-		require.NoError(t, os.WriteFile(physicalCA, pem, 0o600))
-		ca, err = filepath.EvalSymlinks(physicalCA)
-		require.NoError(t, err)
-		host.TLS.CAFile = "../../certs/moox-ca.crt"
-		require.NoError(t, os.Symlink(filepath.Dir(filepath.Dir(hostConfig)), filepath.Join(root, "host-gateway")))
+		ca = filepath.Join(root, "secrets", "moox-ca.crt")
+		require.NoError(t, os.WriteFile(ca, pem, 0o600))
+		configuredCA = "../../secrets/moox-ca.crt"
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	host.Server.LocalAddr = listener.Addr().String()
-	encoded, err := hostgatewayconfig.Encode(host)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(hostConfig, encoded, 0o600))
 	directory := testDirectory(t, "storage")
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	directorypb.RegisterDirectoryService(svc, directoryServiceFunc(func(_ context.Context, req *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
@@ -79,7 +66,8 @@ func testFileConfigDeployment(t *testing.T, shared bool) {
 	// Legacy environment values must not select a host or supply a signing key.
 	t.Setenv("MOOX_SERVICE_GATEWAY_TARGET", "ip://192.0.2.99:11001")
 	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "wrong-host")
-	config := FileConfig{Caller: "admin", KeyID: "independent-admin-key-22", KeyFile: "../../secrets/caller-admin.key"}
+	config := FileConfig{Caller: "admin", KeyID: "independent-admin-key-22", KeyFile: "../../secrets/caller-admin.key",
+		HostID: "storage", LocalAddress: listener.Addr().String(), CAFile: configuredCA}
 	data := filepath.Join(root, "data", "admin")
 	client, err := config.OpenInternal(moduleConfig, data, nil)
 	require.NoError(t, err)
@@ -101,6 +89,15 @@ func testFileConfigDeployment(t *testing.T, shared bool) {
 	require.Equal(t, directory, client.Directory())
 	require.NoError(t, client.Close())
 
+	missing := config
+	missing.HostID = ""
+	_, err = missing.OpenInternal(moduleConfig, data, nil)
+	require.ErrorContains(t, err, "host_id")
+	missing = config
+	missing.CAFile = ""
+	_, err = missing.OpenInternal(moduleConfig, data, nil)
+	require.ErrorContains(t, err, "ca_file")
+
 	config.KeyID = ""
 	_, err = config.OpenInternal(moduleConfig, data, nil)
 	require.ErrorContains(t, err, "requires key_id")
@@ -114,6 +111,9 @@ func TestFileConfigRejectsInvalidIdentityAndPaths(t *testing.T) {
 		{Caller: "admin", KeyID: "../key", KeyFile: "key"},
 		{Caller: "admin", KeyFile: " key"},
 		{Caller: "admin", KeyFile: ""},
+		{Caller: "admin", KeyFile: "key", HostID: "Storage"},
+		{Caller: "admin", KeyFile: "key", LocalAddress: "192.0.2.1:11002"},
+		{Caller: "admin", KeyFile: "key", CAFile: " ca.crt"},
 	} {
 		require.Error(t, config.Validate())
 	}

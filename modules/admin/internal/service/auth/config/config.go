@@ -25,9 +25,8 @@ type SecurityConfig struct {
 	LockDuration    time.Duration `yaml:"lock_duration"`
 }
 
-// LoadConfig 加载配置文件（认证配置在 console.yaml 里）
-func LoadConfig() (*Config, error) {
-	configPath := "./config/console.yaml"
+// LoadConfig 加载认证配置（在 console.yaml 里，与业务配置 app.yaml 同一目录）。
+func LoadConfig(configPath string) (*Config, error) {
 	yamlFile, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("读取配置文件失败: %+v", err)

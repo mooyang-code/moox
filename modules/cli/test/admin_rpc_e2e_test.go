@@ -2,9 +2,7 @@ package test
 
 import (
 	"context"
-	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,7 +12,6 @@ import (
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -60,13 +57,7 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	t.Setenv("HOME", home)
 	cfg, err := topology.Load(manifest)
 	require.NoError(t, err)
-	// setup 下的客户端还读旧格式的 moox.toml（T12 改到新配置包）：另写一份旧格式的，主机与新格式的一致。
-	legacy := t.TempDir()
-	host := cfg.ControlHost()
-	legacyRaw := fmt.Sprintf("[admin]\nusername='admin'\npassword='admin-test'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-test'\n[eventbus]\nport=4222\ntls_enabled=true\n[hosts.%s]\naddress='127.0.0.1'\n[hosts.%s.ssh]\nport=%d\nusername='%s'\nprivate_key_file='%s'\n[deployments]\n%s=['admin','eventbus']\n", host.Name, host.Name, host.Port, host.Username, host.PrivateKeyFile, host.Name)
-	require.NoError(t, os.WriteFile(filepath.Join(legacy, "moox.toml"), []byte(legacyRaw), 0o600))
-	snapshot, err := setupconfig.Load(filepath.Join(legacy, "moox.toml"), legacy)
-	require.NoError(t, err)
+	secrets := &topology.Secrets{Admin: topology.Admin{Username: "admin", Password: "admin-test"}, TencentCloud: topology.TencentCloud{SecretID: "AKID-test", SecretKey: "cloud-test"}}
 	gateway, err := gatewayio.Open(t.Context(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
@@ -75,13 +66,13 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "fixture-secret", secret.SecretValue)
 	setup := setupclient.New(gateway)
-	status, err := setup.Status(t.Context(), snapshot)
+	status, err := setup.Status(t.Context(), secrets)
 	require.NoError(t, err)
 	require.Equal(t, "ready", status.State)
-	applied, err := setup.Apply(t.Context(), snapshot)
+	applied, err := setup.Apply(t.Context(), secrets)
 	require.NoError(t, err)
 	require.Equal(t, "created", applied.Action)
-	require.NoError(t, setup.SyncHostDeployments(t.Context(), snapshot, snapshot.Manifest.ControlHost().Name))
+	require.NoError(t, setup.SyncHostDeployments(t.Context(), cfg, cfg.ControlHost().Name))
 	doctor := doctorcli.New(gateway)
 	doctorContext, err := doctor.GetDoctorContext(t.Context(), &monitorpb.GetDoctorContextReq{NodeId: "control"})
 	require.NoError(t, err)

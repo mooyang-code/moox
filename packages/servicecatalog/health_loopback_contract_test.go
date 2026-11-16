@@ -101,6 +101,10 @@ func TestEveryHealthListenerBindsLoopbackOnly(t *testing.T) {
 	}
 	want := func(port int) string { return net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) }
 	for _, component := range catalog.Components {
+		if component.ThirdParty {
+			// 第三方程序（内置 SeaweedFS）没有健康端口，它的端口由 args 里的 -ip.bind=127.0.0.1 绑在本机。
+			continue
+		}
 		listeners, ok := healthListeners[component.ID]
 		if !ok || len(listeners) == 0 {
 			t.Errorf("%s 没有登记健康监听的出处，无法确认它只听本机", component.ID)

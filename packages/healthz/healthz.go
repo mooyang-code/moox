@@ -59,8 +59,8 @@ type State struct {
 func NewState(module, instance, version, commit string) *State {
 	return &State{
 		Module: module, InstanceID: instance, Version: runtimeValue(version, "MOOX_VERSION"), GitCommit: runtimeValue(commit, "MOOX_GIT_COMMIT"),
-		BinarySHA256: os.Getenv("MOOX_BINARY_SHA256"),
-		BootID:       os.Getenv("MOOX_BOOT_ID"), BuildTime: os.Getenv("MOOX_BUILD_TIME"),
+		BinarySHA256: processBinarySHA256(),
+		BootID:       processBootID(), BuildTime: os.Getenv("MOOX_BUILD_TIME"),
 		ConfigHash: os.Getenv("MOOX_CONFIG_HASH"), DatasetHealthPolicyHash: os.Getenv("MOOX_DATASET_HEALTH_POLICY_HASH"),
 		StartedAt: time.Now().UTC(),
 	}
@@ -234,8 +234,8 @@ func Base(module, instanceID, version, gitCommit string, start time.Time, ready 
 		Status:                  status,
 		Version:                 runtimeValue(version, "MOOX_VERSION"),
 		GitCommit:               runtimeValue(gitCommit, "MOOX_GIT_COMMIT"),
-		BinarySHA256:            strings.TrimSpace(os.Getenv("MOOX_BINARY_SHA256")),
-		BootID:                  os.Getenv("MOOX_BOOT_ID"),
+		BinarySHA256:            processBinarySHA256(),
+		BootID:                  processBootID(),
 		BuildTime:               os.Getenv("MOOX_BUILD_TIME"),
 		ConfigHash:              os.Getenv("MOOX_CONFIG_HASH"),
 		DatasetHealthPolicyHash: os.Getenv("MOOX_DATASET_HEALTH_POLICY_HASH"),

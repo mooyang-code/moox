@@ -44,7 +44,7 @@ Go 编排器通过 `Maintenance.UseLock` 同步调用准备、封存、激活等
 
 Linux 读取进程的可执行文件时，先打开 `/proc/PID/exe` 固定同一执行镜像，再从该描述符读取路径和 inode，避免 exec 切换瞬间拼出不一致的身份。内核回归持续在同一 PID 上切换两个真实 ELF，要求每次快照中的路径与 inode 一致。
 
-软件准备另提供 `extract --archive PATH --sha256 DIGEST --profile PROFILE --destination NEW_DIR`，只为助手所在 Linux 平台解包已核验软件。它复用独立的[软件包模块](../unitpackage/README.md)，原子发布到新目录且不覆盖已有对象；不写 current、运行计划、身份或持久数据，也不启动服务。准备阶段可以在当前版本运行时执行，后续激活仍须使用共用维护锁。
+软件准备另提供 `extract --archive PATH --sha256 DIGEST --profile PROFILE --destination NEW_DIR`，只为助手所在 Linux 平台解包已核验软件。它复用独立的软件包模块（unitpackage），原子发布到新目录且不覆盖已有对象；不写 current、运行计划、身份或持久数据，也不启动服务。准备阶段可以在当前版本运行时执行，后续激活仍须使用共用维护锁。
 
 身份检查提供 `inspect-bundle`，复用独立的[身份消费模块](../unitbundle/README.md)，按调用方提供的拓扑、CA 和快照核对私密目录，仅输出公开清单。
 

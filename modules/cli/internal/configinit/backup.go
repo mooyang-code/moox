@@ -146,7 +146,7 @@ func loginForBackup(ctx context.Context, pair ConfigPair) (*consoleclient.Client
 var refreshConsoleCA = RefreshConsoleCA
 
 // RefreshConsoleCA 用配置里的 SSH 登录管理台服务器，读取部署在那里的 MooX CA 根证书（公开证书，管理台的 HTTPS
-// 证书由它签发），校验是 CA 证书后更新本机缓存。旧部署里它随 host 单元投放在 {部署根}/host/current/certs/moox-ca.crt。
+// 证书由它签发），校验是 CA 证书后更新本机缓存。它在 {部署根}/secrets/moox-ca.crt，每台主机都有一份。
 func RefreshConsoleCA(ctx context.Context, cfg *topology.Config) error {
 	if cfg == nil {
 		return errors.New("没有部署配置，无法连接管理台服务器")
@@ -157,7 +157,7 @@ func RefreshConsoleCA(ctx context.Context, cfg *topology.Config) error {
 		return err
 	}
 	defer client.Close()
-	result, err := client.Run(ctx, []string{"sh", "-c", `cat -- "$1/host/current/certs/moox-ca.crt"`, "moox-read-moox-ca", cfg.Paths.DeployRoot}, nil)
+	result, err := client.Run(ctx, []string{"sh", "-c", `cat -- "$1/secrets/moox-ca.crt"`, "moox-read-moox-ca", cfg.Paths.DeployRoot}, nil)
 	if err != nil {
 		return fmt.Errorf("读取根证书失败")
 	}

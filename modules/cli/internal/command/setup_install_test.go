@@ -9,38 +9,83 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
-// installHarness 在 wipeHarness 上把部署步骤都换成记录调用。
+// fourHostSnapshot 是示例拓扑：控制机、存储机（带 EventBus）、海外机、只能出站的因子机。
+func fourHostSnapshot(t *testing.T) *setupSnapshot {
+	t.Helper()
+	cfg, err := topology.Parse([]byte(`[hosts.control]
+address = "203.0.113.10"
+ssh = { port = 22, username = "ubuntu" }
+
+[hosts.storage]
+address = "203.0.113.11"
+ssh = { port = 22, username = "ubuntu" }
+
+[hosts.overseas]
+address = "203.0.113.12"
+ssh = { port = 22, username = "ubuntu" }
+
+[hosts.factor]
+address = "192.0.2.30"
+reachability = "outbound"
+ssh = { port = 22, username = "builder" }
+
+[deployments]
+control = ["admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"]
+storage = ["storage-primary", "storage-view", "access", "eventbus"]
+overseas = ["trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"]
+factor = ["factor-engine", "archive-worker"]
+`))
+	require.NoError(t, err)
+	secrets, err := topology.ParseSecrets([]byte(`[admin]
+username = "admin"
+password = "admin-test-password"
+
+[tencent_cloud]
+secret_id = "AKID-test-secret"
+secret_key = "cloud-test-secret"
+`))
+	require.NoError(t, err)
+	return &setupSnapshot{Manifest: &cfg, Secrets: &secrets}
+}
+
+// installHarness 把部署、初始化、启动和验收都换成记录调用；reports 是只读检测的结果，清空后变成空机。
 type installHarness struct {
-	*wipeHarness
-	mu          sync.Mutex
-	calls       []string
-	fail        string
-	unreachable bool
+	t        *testing.T
+	snapshot *setupSnapshot
+	deps     setupDeps
+	mu       sync.Mutex
+	calls    []string
+	fail     string
+	reports  []deployscan.HostReport
+	operator string
+	source   string
 }
 
 func newInstallHarness(t *testing.T) *installHarness {
 	t.Helper()
-	h := &installHarness{wipeHarness: newWipeHarness(t)}
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, bundle.ManifestName), []byte(`{"version":1,"release":"v0.0.0","commit":"0123456789abcdef0123456789abcdef01234567","units":{"host":{"file":"host.tar.gz"}},"files":["a"]}`), 0o644))
-	// setup start 要读内置任务文件，找出需手动启用的任务。
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "config", "setup"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "config", "setup", "collection-tasks.yaml"), []byte("tasks: []\n"), 0o644))
-	t.Chdir(root)
-	deployments := h.snapshot.Manifest.Deployments
-	deployments["compute"] = append(slices.Clone(deployments["compute"]), "collector-stream", "egress-proxy")
+	h := &installHarness{t: t, snapshot: fourHostSnapshot(t), operator: t.TempDir()}
+	// setup start 要读源码目录里的内置采集任务与因子种子。
+	h.source = startRepository(t)
+	seedDir := filepath.Join(h.source, "config", "setup")
+	writeLibrary(t, filepath.Join(seedDir, "factors"), "lib.yaml")
+	require.NoError(t, os.WriteFile(filepath.Join(seedDir, "factor-tasks.yaml"), []byte(testSeed), 0o600))
+	for _, host := range h.snapshot.Manifest.Hosts() {
+		h.reports = append(h.reports, deployscan.HostReport{Host: host.Name, Root: "/data/moox", Linger: true, Journald: true, DiskFreeKB: 50 << 20, ArchiveKB: -1, SeaweedFSKB: -1})
+	}
 	record := func(name string) error {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -50,205 +95,365 @@ func newInstallHarness(t *testing.T) *installHarness {
 		}
 		return nil
 	}
-	h.deps.checkDownload = func(context.Context, setupconfig.Manifest, unitdeploy.DeployOptions, string) (bool, error) {
-		return !h.unreachable, nil
-	}
-	h.deps.prefetch = func(context.Context, setupconfig.Manifest, unitdeploy.DeployOptions, string) error { return nil }
-	h.deps.localReachable = func(context.Context, unitdeploy.DeployOptions) bool { return false }
-	h.deps.ensureFirewall = func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
-		return setupFirewallSummary{Status: "ready"}, record("firewall")
-	}
-	h.deps.ensureRelayFirewall = h.deps.ensureFirewall
-	h.deps.bootstrapAdmin = func(context.Context, *setupconfig.Snapshot, unitdeploy.DeployOptions) (unitdeploy.BootstrapResult, error) {
-		return unitdeploy.BootstrapResult{}, record("admin")
-	}
-	h.deps.bootstrapControl = func(context.Context, *setupconfig.Snapshot, unitdeploy.ControlOptions) (unitdeploy.BootstrapResult, error) {
-		return unitdeploy.BootstrapResult{}, record("control")
-	}
-	h.deps.deployHost = func(_ context.Context, _ *setupconfig.Snapshot, options unitdeploy.HostOptions) (unitdeploy.HostResult, error) {
-		return unitdeploy.HostResult{}, record("host:" + options.HostID)
-	}
-	h.deps.deployUnit = func(_ context.Context, _ *setupconfig.Snapshot, options unitdeploy.UnitOptions) (unitdeploy.UnitResult, error) {
-		return unitdeploy.UnitResult{}, record("unit:" + options.Profile)
-	}
-	h.deps.installWatchdog = func(context.Context, *setupconfig.Snapshot, setupconfig.Host, bool) (json.RawMessage, error) {
-		return json.RawMessage(`{}`), nil
-	}
-	h.deps.loadInitBundle = func(string) (setupInitBundle, error) { return setupInitBundle{}, nil }
-	h.deps.initMetadata = func(context.Context, *setupconfig.Snapshot, string, setupInitBundle) (setupInitStorageSummary, error) {
-		return setupInitStorageSummary{}, record("init-storage")
-	}
-	h.deps.initStorage = func(context.Context, *setupconfig.Snapshot, string, string, string, setupInitBundle) (setupInitSummary, error) {
-		return setupInitSummary{}, record("init")
-	}
-	h.deps.backupConfig = func(context.Context, string) error { return record("backup") }
-	h.deps.verifySpace = func(context.Context, string, *setupconfig.Snapshot, unitdeploy.DeployOptions, string) error {
-		return record("verify")
-	}
-	h.deps.openStart = func(context.Context, string, *setupconfig.Snapshot) (setupStartClient, func(), error) {
-		if err := record("start"); err != nil {
-			return nil, nil, err
-		}
-		client := startClient()
-		client.tasks = []adminclient.CollectionTaskSummary{{TaskID: "a"}}
-		return client, func() {}, nil
+	h.deps = setupDeps{
+		load:           func(string) (*setupSnapshot, error) { return h.snapshot, nil },
+		loadInitBundle: func(string) (setupInitBundle, error) { return setupInitBundle{}, nil },
+		scanDeployment: func(_ context.Context, _ *setupSnapshot, options deployscan.Options) ([]deployscan.HostReport, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return slices.DeleteFunc(slices.Clone(h.reports), func(report deployscan.HostReport) bool { return options.Host != "" && report.Host != options.Host }), nil
+		},
+		wipeHost: func(_ context.Context, host topology.Host, root string) (deployscan.HostResult, error) {
+			if err := record("wipe:" + host.Name); err != nil {
+				return deployscan.HostResult{}, err
+			}
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			for i := range h.reports {
+				if h.reports[i].Host == host.Name {
+					h.reports[i].Entries, h.reports[i].Units, h.reports[i].Active, h.reports[i].Installed, h.reports[i].Version = nil, nil, nil, false, nil
+				}
+			}
+			return deployscan.HostResult{Host: host.Name}, nil
+		},
+		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
+			return setupFirewallSummary{Status: "ready"}, record("firewall")
+		},
+		deployHost: func(_ context.Context, options deploy.Options) (deploy.Result, error) {
+			name := "deploy:" + options.HostID
+			if len(options.Components) != 0 {
+				name += ":" + strings.Join(options.Components, ",")
+			}
+			return deploy.Result{Host: options.HostID}, record(name)
+		},
+		waitReady: func(_ context.Context, host topology.Host, _ []string, _ time.Duration) (map[string]string, error) {
+			return nil, record("ready:" + host.Name)
+		},
+		initMetadata: func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error) {
+			return setupInitStorageSummary{}, record("init-metadata")
+		},
+		initStorage: func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitSummary, error) {
+			return setupInitSummary{}, record("init")
+		},
+		openInitFactor: func(context.Context, *setupSnapshot) (setupInitFactor, error) { return &fakeSetupInitFactor{}, nil },
+		backupConfig:   func(context.Context, string) error { return record("backup") },
+		verifySpace:    func(context.Context, string, *setupSnapshot, string) error { return record("verify") },
+		openStart: func(context.Context, string, *setupSnapshot) (setupStartClient, func(), error) {
+			if err := record("start"); err != nil {
+				return nil, nil, err
+			}
+			client := startClient()
+			client.tasks = []adminclient.CollectionTaskSummary{{TaskID: "a"}}
+			return client, func() {}, nil
+		},
 	}
 	return h
 }
 
-func (h *installHarness) position(t *testing.T, name string) int {
-	t.Helper()
-	for i, call := range h.calls {
-		if call == name {
-			return i
-		}
+// run 执行一条 setup 子命令；install、deploy、wipe 另带上临时的操作员身份目录。
+func (h *installHarness) run(args ...string) (string, error) {
+	h.t.Helper()
+	cmd := newSetupCommand(h.deps)
+	var out, stderr bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	args = append(args, "--file", "moox.toml")
+	if slices.Contains([]string{"install", "deploy", "wipe"}, args[0]) {
+		args = append(args, "--operator-dir", h.operator)
 	}
-	t.Fatalf("没有执行 %s：%v", name, h.calls)
-	return -1
+	if slices.Contains([]string{"install", "deploy"}, args[0]) {
+		args = append(args, "--source-dir", h.source)
+	}
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return out.String(), err
 }
 
-func freshReports(h *installHarness) {
+func (h *installHarness) report(host string) *deployscan.HostReport {
 	for i := range h.reports {
-		h.reports[i].Entries, h.reports[i].Units, h.reports[i].RuntimeSHA256 = nil, nil, ""
+		if h.reports[i].Host == host {
+			return &h.reports[i]
+		}
+	}
+	h.t.Fatalf("没有主机 %s", host)
+	return nil
+}
+
+func (h *installHarness) markInstalled() {
+	for i := range h.reports {
+		h.reports[i].Installed, h.reports[i].Version = true, json.RawMessage(`{"version":"v0.0.1"}`)
+		h.reports[i].Entries, h.reports[i].Units = []string{"bin", "version.json"}, []string{"moox-host-gateway.service"}
 	}
 }
 
 // 真实入口用的依赖不能有空函数：测试里注入假依赖时看不出这个问题，到真机上才空指针崩溃。
 func TestDefaultSetupDepsHaveNoNilFunction(t *testing.T) {
-	deps := reflect.ValueOf(completeSetupDeps(defaultSetupDeps()))
+	deps := reflect.ValueOf(completeSetupDeps(setupDeps{}))
 	for i := range deps.NumField() {
-		if deps.Field(i).Kind() == reflect.Func {
-			assert.False(t, deps.Field(i).IsNil(), "setupDeps.%s 没有默认值", deps.Type().Field(i).Name)
-		}
+		assert.False(t, deps.Field(i).IsNil(), "setupDeps.%s 没有默认值", deps.Type().Field(i).Name)
 	}
-}
-
-func TestSetupInstallDefaultBootstrapCallbacksRejectInvalidSnapshot(t *testing.T) {
-	deps := completeSetupDeps(defaultSetupDeps())
-	t.Run("admin", func(t *testing.T) {
-		_, err := deps.bootstrapAdmin(context.Background(), nil, unitdeploy.DeployOptions{})
-		require.ErrorContains(t, err, "unchanged private setup snapshot")
-	})
-	t.Run("control", func(t *testing.T) {
-		_, err := deps.bootstrapControl(context.Background(), nil, unitdeploy.ControlOptions{})
-		require.ErrorContains(t, err, "unchanged private setup snapshot")
-	})
 }
 
 func TestSetupInstallPreviewChangesNothing(t *testing.T) {
 	h := newInstallHarness(t)
-	freshReports(h)
-	out, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto")
+	out, err := h.run("install", "--space-id", "crypto")
 	require.NoError(t, err)
-	require.Contains(t, out, `"preview": true`)
+	preview := parsePreview(t, out)
+	require.Equal(t, "install", preview["action"])
+	require.Equal(t, deployscan.RouteFresh, preview["route"])
+	require.NotContains(t, preview, "wipe", "没装过时没有清空范围")
 	require.Empty(t, h.calls, "预检不改任何东西")
+
+	// 装过时预检带上清空范围（含归档与内置对象存储的大小）与提醒。
+	h.markInstalled()
+	h.report("factor").ArchiveKB, h.report("factor").SeaweedFSKB = 2048, 4096
+	out, err = h.run("install", "--space-id", "crypto")
+	require.NoError(t, err)
+	preview = parsePreview(t, out)
+	require.Equal(t, deployscan.RouteInstalled, preview["route"])
+	wipe := preview["wipe"].(map[string]any)
+	require.NotEmpty(t, wipe["digest"])
+	require.Equal(t, deployscan.Notice, wipe["notice"])
+	require.Empty(t, h.calls)
 }
 
-func TestSetupInstallFreshRunsStepsInDependencyOrder(t *testing.T) {
+// 顺序：控制机先装 Admin 与主机级组件，再装带 EventBus、Storage 的主机，导入元数据，控制机其余组件，其余主机（因子机最后），
+// 统一等一次全部就绪，然后才是完整初始化（告警渠道要等 Monitor 起来）、备份、启动、验收。
+func TestSetupInstallRunsStepsInDependencyOrder(t *testing.T) {
 	h := newInstallHarness(t)
-	freshReports(h)
-	out, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto", "--yes")
+	out, err := h.run("install", "--space-id", "crypto", "--yes")
 	require.NoError(t, err)
 	require.Contains(t, out, `"status":"installed"`)
-	require.Less(t, h.position(t, "firewall"), h.position(t, "admin"))
-	require.Less(t, h.position(t, "admin"), h.position(t, "unit:storage"))
-	require.Less(t, h.position(t, "init-storage"), h.position(t, "control"))
-	require.Less(t, h.position(t, "control"), h.position(t, "init"))
-	require.Less(t, h.position(t, "start"), h.position(t, "verify"), "启动之后才验收")
-}
-
-func TestSetupInstallExistingRequiresConfirmedWipe(t *testing.T) {
-	h := newInstallHarness(t)
-	_, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto", "--yes", "--wipe", "wrong")
-	require.ErrorContains(t, err, "wipe_scope_changed")
-	require.Empty(t, h.wiped)
-	require.Empty(t, h.calls)
-	require.Nil(t, deployscan.ReadPending(h.operator))
-}
-
-func TestSetupInstallWipesThenDeploys(t *testing.T) {
-	h := newInstallHarness(t)
-	digest := h.digest(t)
-	_, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto", "--yes", "--wipe", digest)
-	require.NoError(t, err)
-	require.Len(t, h.wiped, len(h.reports))
-	require.Nil(t, deployscan.ReadPending(h.operator), "清除确认后删掉标记")
-	h.position(t, "admin")
-}
-
-func TestSetupInstallStopsOnFailedStepAndReportsRerun(t *testing.T) {
-	h := newInstallHarness(t)
-	freshReports(h)
-	h.fail = "control"
-	_, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto", "--yes")
-	require.ErrorContains(t, err, "重跑同一条命令")
-	require.Equal(t, -1, func() int {
+	ready := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return !strings.HasPrefix(call, "ready:") })
+	require.Len(t, ready, 4, "最后对四台主机各等一次就绪")
+	sequence := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return strings.HasPrefix(call, "ready:") })
+	require.Equal(t, []string{
+		"firewall",
+		"deploy:control:admin,host-gateway,host-agent",
+		"deploy:storage",
+		"init-metadata",
+		"deploy:control",
+		"deploy:overseas",
+		"deploy:factor",
+		"init",
+		"backup",
+		"start",
+		"verify",
+	}, sequence)
+	// 全部部署完之后才等就绪，完整初始化在等就绪之后。
+	last := func(prefix string) int {
+		at := -1
 		for i, call := range h.calls {
-			if call == "init" {
-				return i
+			if strings.HasPrefix(call, prefix) {
+				at = i
 			}
 		}
-		return -1
-	}(), "失败后不进入下一组")
-}
-
-func TestSetupInstallStopsBeforeWipeWhenNothingCanDownload(t *testing.T) {
-	h := newInstallHarness(t)
-	h.unreachable = true
-	digest := h.digest(t)
-	_, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto", "--yes", "--wipe", digest)
-	require.ErrorContains(t, err, "download_failed")
-	require.Empty(t, h.wiped, "下载不了就不能动旧部署")
-}
-
-func TestSetupInstallRefusesSpaceWithoutPrerequisites(t *testing.T) {
-	h := newInstallHarness(t)
-	_, err := h.run(t, newSetupInstallCommand, "--space-id", "stockcn")
-	require.ErrorContains(t, err, "start_prerequisite_missing")
-}
-
-func TestSetupInstallChecksDiskBeforeTouchingAnything(t *testing.T) {
-	h := newInstallHarness(t)
-	freshReports(h)
-	for i := range h.reports {
-		h.reports[i].DiskFreeKB = 1
+		return at
 	}
-	_, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto", "--yes")
-	require.ErrorContains(t, err, "disk_insufficient")
-	require.Empty(t, h.calls, "空间不够不能开始")
+	require.Less(t, last("deploy:"), slices.IndexFunc(h.calls, func(call string) bool { return strings.HasPrefix(call, "ready:") }))
+	require.Less(t, last("ready:"), slices.Index(h.calls, "init"))
 }
 
-func TestInstallDiskCountsSpaceFreedByWipe(t *testing.T) {
-	report := deployscan.HostReport{Host: "control", DiskFreeKB: 1, SizesKB: map[string]int64{"/data/moox": 20 << 20}}
-	require.Empty(t, installDiskWarnings([]deployscan.HostReport{report}, "control", true), "清除后空间够用")
-	require.NotEmpty(t, installDiskWarnings([]deployscan.HostReport{report}, "control", false))
+// 单机拓扑：控制机第一次就要带上 EventBus 与 Storage，否则导入元数据时 Storage 还不在。
+func TestSetupInstallStepsKeepDependenciesOnControlInFirstPass(t *testing.T) {
+	snapshot := testSetupSnapshot(t)
+	steps := setupInstallSteps(snapshot.Manifest, "stockcn")
+	require.Equal(t, installDeploy, steps[1].Kind)
+	require.Equal(t, []string{"admin", "host-gateway", "host-agent", "eventbus", "storage-primary"}, steps[1].Components)
+	require.Equal(t, installInitMetadata, steps[2].Kind)
 }
 
-func TestBundleDirectoryWithoutServerBinariesWorks(t *testing.T) {
-	repository, err := filepath.Abs("../../../..")
-	require.NoError(t, err)
+// 重跑：已经装过时不带 --wipe 就是原地再做一遍，每一步照常执行、不出错，也不清空。
+func TestSetupInstallRerunRepeatsStepsWithoutWiping(t *testing.T) {
 	h := newInstallHarness(t)
-	root, err := os.Getwd()
+	h.fail = "deploy:overseas"
+	_, err := h.run("install", "--space-id", "crypto", "--yes")
+	require.ErrorContains(t, err, "install_step_failed")
+	require.ErrorContains(t, err, "moox-cli setup deploy --host overseas", "给出单独重跑这一步的命令")
+	require.NotContains(t, h.calls, "init", "失败之后的步骤不执行")
+
+	h.fail, h.calls = "", nil
+	h.markInstalled()
+	_, err = h.run("install", "--space-id", "crypto", "--yes")
 	require.NoError(t, err)
-	require.NoError(t, os.RemoveAll(filepath.Join(root, "config")))
-	require.NoError(t, os.CopyFS(filepath.Join(root, "config/setup"), os.DirFS(filepath.Join(repository, "config/setup"))))
-	options := unitdeploy.DeployOptions{StateDirectory: h.state, OperatorDirectory: h.operator}
-	require.NoError(t, resolveSetupUnitOptions(h.snapshot, "", &options))
-	require.NotNil(t, options.Bundle, "在产物包目录里按清单下载")
-	require.Empty(t, options.BinaryDirectory)
-	require.NoDirExists(t, filepath.Join(root, "bin"))
-	bundle, err := loadSetupInitBundle(filepath.Join(root, "config/setup"))
-	require.NoError(t, err, "setup init 只读种子，不需要服务器程序")
-	require.NotEmpty(t, bundle.Calls)
-	cmd := newSetupValidateCommand(h.deps)
-	cmd.SetOut(&bytes.Buffer{})
-	cmd.SetArgs([]string{"--state-dir", h.state, "--operator-dir", h.operator})
-	require.NoError(t, cmd.ExecuteContext(context.Background()), "setup validate 不需要服务器程序")
+	require.Contains(t, h.calls, "deploy:control:admin,host-gateway,host-agent")
+	require.Contains(t, h.calls, "verify")
+	for _, call := range h.calls {
+		require.False(t, strings.HasPrefix(call, "wipe:"), "不带 --wipe 不清空")
+	}
 }
 
-func TestSetupInstallRefusesOutsideBundle(t *testing.T) {
+func TestSetupInstallWipesOnlyWithMatchingDigest(t *testing.T) {
 	h := newInstallHarness(t)
-	t.Chdir(t.TempDir())
-	_, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto")
-	require.ErrorContains(t, err, "产物包目录")
+	h.markInstalled()
+	require.NoError(t, os.WriteFile(filepath.Join(h.operator, "gateway-client.yaml"), []byte("caller: moox-cli\n"), 0o600))
+	_, err := h.run("install", "--space-id", "crypto", "--yes", "--wipe", "sha256:other")
+	require.ErrorContains(t, err, "wipe_scope_changed")
+	require.Empty(t, h.calls)
+
+	out, err := h.run("install", "--space-id", "crypto")
+	require.NoError(t, err)
+	digest := parsePreview(t, out)["wipe"].(map[string]any)["digest"].(string)
+	_, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", digest)
+	require.NoError(t, err)
+	wiped := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return !strings.HasPrefix(call, "wipe:") })
+	require.Len(t, wiped, 4)
+	require.Less(t, slices.IndexFunc(h.calls, func(call string) bool { return strings.HasPrefix(call, "wipe:") }), slices.Index(h.calls, "firewall"))
+	require.NoFileExists(t, filepath.Join(h.operator, "gateway-client.yaml"), "清空之后删掉这台电脑上的操作员身份")
+
+	// 没装过时带 --wipe 是多余的，直接拒绝。
+	h.calls = nil
+	_, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", digest)
+	require.ErrorContains(t, err, "wipe_not_needed")
+}
+
+func TestSetupInstallStopsBeforeAnythingWhenLingerIsOff(t *testing.T) {
+	h := newInstallHarness(t)
+	h.report("overseas").Linger = false
+	out, err := h.run("install", "--space-id", "crypto")
+	require.NoError(t, err)
+	manual := parsePreview(t, out)["manual_steps"].([]any)
+	require.Len(t, manual, 1)
+	require.Contains(t, manual[0], "sudo loginctl enable-linger ubuntu")
+	_, err = h.run("install", "--space-id", "crypto", "--yes")
+	require.ErrorContains(t, err, "manual_steps_required")
+	require.Empty(t, h.calls)
+}
+
+func TestSetupInstallFailsWhenComponentsNeverBecomeReady(t *testing.T) {
+	h := newInstallHarness(t)
+	h.deps.waitReady = func(_ context.Context, host topology.Host, _ []string, _ time.Duration) (map[string]string, error) {
+		if host.Name == "overseas" {
+			return map[string]string{"trade": "readyz 503"}, nil
+		}
+		return nil, nil
+	}
+	_, err := h.run("install", "--space-id", "crypto", "--yes")
+	require.ErrorContains(t, err, "overseas/trade（readyz 503）")
+	require.NotContains(t, h.calls, "init")
+}
+
+func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
+	h := newInstallHarness(t)
+	h.markInstalled()
+	h.report("factor").ArchiveKB, h.report("factor").SeaweedFSKB = 2048, 4096
+	require.NoError(t, os.WriteFile(filepath.Join(h.operator, "gateway-client.yaml"), []byte("caller: moox-cli\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(h.operator, "caller-moox-cli-abc.key"), []byte("k\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(h.operator, "unrelated.txt"), []byte("keep\n"), 0o600))
+
+	out, err := h.run("wipe")
+	require.NoError(t, err)
+	preview := parsePreview(t, out)
+	plan := preview["plan"].(map[string]any)
+	require.Equal(t, deployscan.Notice, plan["notice"])
+	hosts := plan["hosts"].([]any)
+	require.Len(t, hosts, 4)
+	at := slices.IndexFunc(hosts, func(host any) bool { return host.(map[string]any)["host"] == "factor" })
+	require.GreaterOrEqual(t, at, 0)
+	factor := hosts[at].(map[string]any)
+	require.EqualValues(t, 2048, factor["archive_kb"], "预览里单独列出归档目录的大小")
+	require.EqualValues(t, 4096, factor["seaweedfs_kb"], "预览里单独列出内置对象存储数据的大小")
+	require.Empty(t, h.calls, "预览不清空")
+	require.FileExists(t, filepath.Join(h.operator, "gateway-client.yaml"))
+
+	_, err = h.run("wipe", "--yes")
+	require.ErrorContains(t, err, "--expect")
+	_, err = h.run("wipe", "--yes", "--expect", "sha256:other")
+	require.ErrorContains(t, err, "wipe_scope_changed")
+	require.Empty(t, h.calls)
+
+	out, err = h.run("wipe", "--yes", "--expect", plan["digest"].(string))
+	require.NoError(t, err)
+	require.Contains(t, out, `"status":"wiped"`)
+	require.ElementsMatch(t, []string{"wipe:control", "wipe:storage", "wipe:overseas", "wipe:factor"}, h.calls)
+	require.NoFileExists(t, filepath.Join(h.operator, "gateway-client.yaml"))
+	require.NoFileExists(t, filepath.Join(h.operator, "caller-moox-cli-abc.key"))
+	require.FileExists(t, filepath.Join(h.operator, "unrelated.txt"), "只删部署写入的操作员身份")
+}
+
+// 一台清空失败时报错并保留操作员身份，重跑接着清。
+func TestSetupWipeReportsFailedHostAndKeepsOperatorIdentity(t *testing.T) {
+	h := newInstallHarness(t)
+	h.markInstalled()
+	require.NoError(t, os.WriteFile(filepath.Join(h.operator, "gateway-client.yaml"), []byte("caller: moox-cli\n"), 0o600))
+	out, err := h.run("wipe")
+	require.NoError(t, err)
+	digest := parsePreview(t, out)["plan"].(map[string]any)["digest"].(string)
+	h.fail = "wipe:storage"
+	_, err = h.run("wipe", "--yes", "--expect", digest)
+	require.ErrorContains(t, err, "boom wipe:storage")
+	require.FileExists(t, filepath.Join(h.operator, "gateway-client.yaml"))
+}
+
+func TestSetupDeployPassesHostComponentsAndSources(t *testing.T) {
+	h := newInstallHarness(t)
+	var got deploy.Options
+	h.deps.deployHost = func(_ context.Context, options deploy.Options) (deploy.Result, error) {
+		got = options
+		return deploy.Result{Host: options.HostID, Components: []deploy.ComponentResult{{ID: "monitor", Action: "restarted", Ready: true}}}, nil
+	}
+	binaries := t.TempDir()
+	out, err := h.run("deploy", "--host", "control", "--component", "monitor,collector", "--binary-dir", binaries)
+	require.NoError(t, err)
+	require.Contains(t, out, `"action":"restarted"`)
+	require.Equal(t, "control", got.HostID)
+	require.Equal(t, []string{"monitor", "collector"}, got.Components)
+	require.Equal(t, binaries, got.BinaryDirectory)
+	require.Equal(t, h.operator, got.OperatorDirectory)
+	require.NotNil(t, got.SyncHost)
+	require.NotNil(t, got.Dial)
+	require.Nil(t, got.Bundle, "源码目录里没有产物包清单")
+
+	// 部署失败时已有的结果照样输出，退出码非 0。
+	h.deps.deployHost = func(_ context.Context, options deploy.Options) (deploy.Result, error) {
+		return deploy.Result{Host: options.HostID, Components: []deploy.ComponentResult{{ID: "monitor", Action: "started", Detail: "readyz 503"}}}, errors.New("not_ready: monitor")
+	}
+	out, err = h.run("deploy", "--host", "control")
+	require.ErrorContains(t, err, "not_ready")
+	require.Contains(t, out, "readyz 503")
+}
+
+func TestSetupOperateCommandsPreviewAndValidateComponent(t *testing.T) {
+	h := newInstallHarness(t)
+	var operations []string
+	h.deps.operate = func(_ context.Context, host topology.Host, component, operation string) (string, error) {
+		operations = append(operations, host.Name+"/"+component+"/"+operation)
+		return "active", nil
+	}
+	for _, command := range []string{"restart", "stop", "start-component"} {
+		before := len(operations)
+		out, err := h.run(command, "--host", "factor", "--component", "seaweedfs")
+		require.NoError(t, err)
+		require.Equal(t, "moox-seaweedfs.service", parsePreview(t, out)["unit"], "内置对象存储也是这台主机上的一个组件")
+		require.Len(t, operations, before, "没有 --yes 只预览")
+		_, err = h.run(command, "--host", "factor", "--component", "seaweedfs", "--yes")
+		require.NoError(t, err)
+	}
+	require.Equal(t, []string{"factor/seaweedfs/restart", "factor/seaweedfs/stop", "factor/seaweedfs/start"}, operations)
+	_, err := h.run("restart", "--host", "storage", "--component", "monitor", "--yes")
+	require.ErrorContains(t, err, "主机 storage 上没有组件 monitor")
+	_, err = h.run("restart", "--host", "nowhere", "--component", "monitor", "--yes")
+	require.ErrorContains(t, err, "没有主机 nowhere")
+}
+
+func TestSetupLogsReadsOneComponentOrWholeHost(t *testing.T) {
+	h := newInstallHarness(t)
+	var got []string
+	var gotJournal bool
+	h.deps.readLogs = func(_ context.Context, host topology.Host, root string, components []string, pattern string, lines int, journal bool) ([]deploy.LogSection, error) {
+		require.Equal(t, "/data/moox", root)
+		got, gotJournal = components, journal
+		return []deploy.LogSection{{Component: components[0], Source: "/data/moox/logs/" + components[0] + "/trpc.log", Text: "line\n"}}, nil
+	}
+	out, err := h.run("logs", "--host", "storage", "--component", "eventbus", "--journal")
+	require.NoError(t, err)
+	require.Equal(t, []string{"eventbus"}, got)
+	require.True(t, gotJournal)
+	require.Contains(t, out, "trpc.log")
+	_, err = h.run("logs", "--host", "storage")
+	require.NoError(t, err)
+	require.Contains(t, got, "host-gateway")
+	require.Contains(t, got, "storage-view")
+	_, err = h.run("logs", "--host", "storage", "--component", "trade")
+	require.ErrorContains(t, err, "主机 storage 上没有组件 trade")
 }

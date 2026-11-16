@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"os"
 	"slices"
 
@@ -25,8 +26,12 @@ var Version = "dev"
 const monitorService = "trpc.moox.monitor.MonitorMgr"
 
 func main() {
+	// 业务配置的位置；要在 trpc.NewServer 解析命令行之前定义，读配置放在 NewServer 之后。
+	configPath := flag.String("config", "config/app.yaml", "host-agent 业务配置")
 	ctx := trpc.BackgroundContext()
-	cfg, err := config.Load("./config/app.yaml")
+	s := trpc.NewServer()
+	trpclog.InstallServiceName("hostagent")
+	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Errorf("host-agent config failed: %v", err)
 		os.Exit(1)
@@ -36,8 +41,6 @@ func main() {
 		log.Errorf("host-agent startup failed: %v", err)
 		os.Exit(1)
 	}
-	s := trpc.NewServer()
-	trpclog.InstallServiceName("hostagent")
 	if err := rpc.Register(s, a); err != nil {
 		log.Errorf("host-agent register failed: %v", err)
 		os.Exit(1)

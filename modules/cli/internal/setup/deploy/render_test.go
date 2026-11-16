@@ -1,0 +1,325 @@
+package deploy
+
+import (
+	"os"
+	"path"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
+)
+
+// repositoryRoot 是仓库根：渲染测试直接读仓库里的配置模板、单元模板与示例配置。
+const repositoryRoot = "../../../../.."
+
+func readRepository(name string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(repositoryRoot, filepath.FromSlash(name)))
+}
+
+func exampleConfig(t *testing.T, extra string) *topology.Config {
+	t.Helper()
+	raw, err := readRepository("moox.toml.example")
+	require.NoError(t, err)
+	cfg, err := topology.Parse(append(raw, []byte(extra)...))
+	require.NoError(t, err)
+	return &cfg
+}
+
+// fakeIdentity 造一份形状和真的一样的身份材料：密钥内容是固定的假值。
+func fakeIdentity(t *testing.T, cfg *topology.Config, catalog servicecatalog.Catalog, host string, components []string) Identity {
+	t.Helper()
+	identity := Identity{KeyIDs: map[string]string{}, Secrets: map[string][]byte{}, EventBus: map[string][]byte{"ca.pem": []byte("fake-eventbus-ca\n")}}
+	callers := append([]string{"host-gateway"}, components...)
+	if slices.Contains(components, "admin") {
+		callers = append(callers, "console")
+	}
+	if slices.Contains(components, "collector") {
+		callers = append(callers, "scf-collector")
+	}
+	for _, caller := range callers {
+		if caller == "seaweedfs" {
+			continue
+		}
+		identity.KeyIDs[caller] = "key-" + caller
+		identity.Secrets["caller-"+caller+".key"] = []byte("secret-of-" + caller + "\n")
+	}
+	identity.Secrets["moox-ca.crt"], identity.Secrets["host.crt"], identity.Secrets["host.tls.key"] = []byte("ca\n"), []byte("cert\n"), []byte("key\n")
+	if slices.Contains(components, "access") {
+		identity.Secrets["access/access-verification.json"] = []byte("{}\n")
+	}
+	identity.Gateway = hostgatewayconfig.Default(host, cfg.ControlHost().Name, cfg.ControlHost().Address, "key-host-gateway")
+	for _, id := range components {
+		component, _ := catalog.Component(id)
+		for _, role := range component.EventBusRoles() {
+			identity.EventBus[role+".yaml"] = []byte("version: 1\nurls:\n  - tls://203.0.113.11:4222\nusername: " + role + "\ntoken: fake-token-" + role + "\nca_file: ca.pem\n")
+		}
+	}
+	for _, name := range []string{"server.pem", "server-key.pem", "users.yaml"} {
+		identity.EventBus[name] = []byte("fake " + name + "\n")
+	}
+	return identity
+}
+
+func renderHost(t *testing.T, cfg *topology.Config, host string) (Output, []string) {
+	t.Helper()
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	components, err := cfg.HostComponents(host)
+	require.NoError(t, err)
+	output, err := Render(Request{
+		Config: cfg, Catalog: catalog, Host: cfg.HostByID(host), Components: components, HostComponents: components,
+		ReadSource: readRepository, Identity: fakeIdentity(t, cfg, catalog, host, components),
+		CLS: topology.CLSWriter{WriterSecretID: "cls-id", WriterSecretKey: "cls-key"},
+	})
+	require.NoError(t, err)
+	return output, components
+}
+
+// goldenFile 报告一个渲染结果要不要进金样：业务配置、环境文件与单元文件。tRPC 框架配置只改了日志目录，另外核对。
+func goldenFile(name string) bool {
+	if strings.HasPrefix(name, "secrets/env/") {
+		return true
+	}
+	return strings.HasPrefix(name, "config/") && slices.Contains([]string{"app.yaml", "storage.yaml", "engine.yaml"}, path.Base(name))
+}
+
+func compareGolden(t *testing.T, name string, actual []byte) {
+	t.Helper()
+	golden := filepath.Join("testdata", "golden", filepath.FromSlash(name))
+	if os.Getenv("MOOX_UPDATE_GOLDEN") == "1" {
+		require.NoError(t, os.MkdirAll(filepath.Dir(golden), 0o755))
+		require.NoError(t, os.WriteFile(golden, actual, 0o644))
+		return
+	}
+	expected, err := os.ReadFile(golden)
+	require.NoError(t, err, "缺金样 %s：确认渲染结果后设 MOOX_UPDATE_GOLDEN=1 重新生成", golden)
+	require.Equal(t, string(expected), string(actual), "%s 和金样不一致；确认变化符合预期后设 MOOX_UPDATE_GOLDEN=1 重新生成", name)
+}
+
+// 每个组件的配置、环境文件、单元文件各一份金样：按示例配置的四台主机渲染全部组件。
+func TestRenderMatchesGoldenForEveryComponent(t *testing.T) {
+	cfg := exampleConfig(t, "")
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	seen := map[string]bool{}
+	for _, host := range cfg.Hosts() {
+		output, components := renderHost(t, cfg, host.Name)
+		for _, id := range components {
+			seen[id] = true
+			require.NotEmpty(t, output.Fingerprints[id], id)
+			require.Contains(t, output.Units, UnitName(id))
+			compareGolden(t, path.Join(host.Name, "units", UnitName(id)), output.Units[UnitName(id)])
+		}
+		names := []string{}
+		for name := range output.Files {
+			if goldenFile(name) {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			compareGolden(t, path.Join(host.Name, name), output.Files[name].Data)
+		}
+	}
+	for _, component := range catalog.Components {
+		require.True(t, seen[component.ID], "示例配置没有覆盖组件 %s", component.ID)
+	}
+}
+
+// 渲染出的配置里路径都是绝对路径：不能留下相对工作目录或家目录的写法；tRPC 文件日志写到 logs/<组件>/。
+func TestRenderedConfigsUseAbsolutePaths(t *testing.T) {
+	cfg := exampleConfig(t, "")
+	for _, host := range cfg.Hosts() {
+		output, components := renderHost(t, cfg, host.Name)
+		for name, file := range output.Files {
+			if !strings.HasPrefix(name, "config/") || path.Ext(name) != ".yaml" {
+				continue
+			}
+			// 这三份是原样带上的业务种子与数据源参数，不含本机路径。
+			if slices.Contains([]string{"collection-tasks.yaml", "dataset-health-policy.yaml", "binance.yaml"}, path.Base(name)) {
+				continue
+			}
+			var document yaml.Node
+			require.NoError(t, yaml.Unmarshal(file.Data, &document), name)
+			var walk func(node *yaml.Node)
+			walk = func(node *yaml.Node) {
+				if node.Kind == yaml.ScalarNode && node.Tag == "!!str" {
+					for _, prefix := range []string{"./", "../", "~/"} {
+						require.False(t, strings.HasPrefix(node.Value, prefix), "%s 里还有相对路径 %q", name, node.Value)
+					}
+				}
+				for _, child := range node.Content {
+					walk(child)
+				}
+			}
+			walk(&document)
+		}
+		for _, id := range components {
+			raw, ok := output.Files[path.Join("config", id, "trpc_go.yaml")]
+			if !ok {
+				continue
+			}
+			document, err := parseYAML(raw.Data)
+			require.NoError(t, err)
+			for _, writer := range logWriters(document) {
+				require.Equal(t, "/data/moox/logs/"+id, member(writer, "log_path").Value, id)
+				require.Equal(t, "50", member(writer, "max_size").Value, "%s 的文件日志单个 50MiB", id)
+				require.Equal(t, "5", member(writer, "max_backups").Value, "%s 的文件日志保留 5 份", id)
+			}
+		}
+	}
+}
+
+func TestRenderWritesIdentityAndRuntimeEnvironment(t *testing.T) {
+	cfg := exampleConfig(t, "")
+	cfg.Logging.CLS = topology.LoggingCLS{Enabled: true, Endpoint: "ap-nanjing.cls.tencentcs.com", TopicID: "topic-1", MinLevel: "warn"}
+	output, _ := renderHost(t, cfg, "control")
+	collector := string(output.Files["secrets/env/collector.env"].Data)
+	require.Contains(t, collector, `MOOX_INSTANCE_ID="collector@control"`)
+	require.Contains(t, collector, `MOOX_NODE_ID="control"`)
+	require.Contains(t, collector, `MOOX_EVENTBUS_URL="tls://203.0.113.11:4222"`, "EventBus 不在控制机上，连它所在主机的对外地址")
+	require.Contains(t, collector, `MOOX_LOG_CLS_SECRET_KEY="cls-key"`)
+	require.NotContains(t, collector, "MOOX_BOOT_ID", "启动标识由进程自己生成")
+	require.NotContains(t, collector, "MOOX_BINARY_SHA256", "二进制摘要由进程启动时自己算")
+	// host-agent 没有声明 cls 凭据，拿不到写入密钥。
+	require.NotContains(t, string(output.Files["secrets/env/host-agent.env"].Data), "MOOX_LOG_CLS")
+	// 环境文件与全部秘密文件都是 0600。
+	for name, file := range output.Files {
+		require.Equal(t, os.FileMode(0o600), file.Mode, name)
+	}
+	storage, _ := renderHost(t, cfg, "storage")
+	require.Contains(t, string(storage.Files["secrets/env/storage-primary.env"].Data), `MOOX_EVENTBUS_URL="tls://127.0.0.1:4222"`, "和 EventBus 同机用回环地址")
+	require.Contains(t, string(storage.Files["secrets/eventbus/storage-eventbus.yaml"].Data), "ca_file: /data/moox/secrets/eventbus/ca.pem")
+	require.Contains(t, storage.Files, "secrets/eventbus/users.yaml")
+	require.NotContains(t, output.Files, "secrets/eventbus/users.yaml", "broker 的用户表只在 EventBus 所在主机")
+	// 主机网关配置里的路径换成新布局。
+	gateway, err := hostgatewayconfig.Decode(strings.NewReader(string(output.Files["config/host-gateway/app.yaml"].Data)))
+	require.NoError(t, err)
+	require.Equal(t, "/data/moox/secrets/host.crt", gateway.TLS.CertificateFile)
+	require.Equal(t, "/data/moox/data/host-gateway", gateway.Store.Path)
+}
+
+func TestUnitOnlyListsSameHostDependenciesAndHasNoNetworkTarget(t *testing.T) {
+	cfg := exampleConfig(t, "")
+	control, _ := renderHost(t, cfg, "control")
+	collector := string(control.Units["moox-collector.service"])
+	// collector 的 after 里有 eventbus、storage-primary，它们不在控制机上，不写进 After=。
+	require.Contains(t, collector, "After=moox-host-gateway.service moox-admin.service\n")
+	require.NotContains(t, collector, "network-online.target")
+	require.Contains(t, collector, "UnsetEnvironment=HTTP_PROXY HTTPS_PROXY http_proxy https_proxy\n")
+	require.Contains(t, collector, "ExecStart=/data/moox/bin/moox-collector -config=/data/moox/config/collector/app.yaml -conf=/data/moox/config/collector/trpc_go.yaml\n")
+	require.Contains(t, collector, "WorkingDirectory=/data/moox/data/collector\n")
+	require.Contains(t, collector, "EnvironmentFile=/data/moox/secrets/env/collector.env\n")
+	require.Contains(t, collector, "TimeoutStopSec=120\n")
+	factor, components := renderHost(t, cfg, "factor")
+	require.Contains(t, components, "seaweedfs", "没配外部对象存储时，装了 archive-worker 的主机带内置对象存储")
+	require.Contains(t, string(factor.Units["moox-archive-worker.service"]), "moox-seaweedfs.service")
+	require.Contains(t, string(factor.Units["moox-seaweedfs.service"]), "-s3.config=/data/moox/secrets/seaweedfs/s3.json")
+	require.Contains(t, string(factor.Files["config/archive-worker/app.yaml"].Data), "endpoint: 127.0.0.1:11473")
+}
+
+func TestExternalObjectStoreReplacesBuiltin(t *testing.T) {
+	cfg := exampleConfig(t, "\n[archive_object_store]\nendpoint = \"cos.ap-nanjing.myqcloud.com\"\nregion = \"ap-nanjing\"\nbucket = \"moox-archive-1250000000\"\nurl_style = \"virtual\"\nsecret_id = \"archive-cos\"\n")
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	components, err := cfg.HostComponents("factor")
+	require.NoError(t, err)
+	require.NotContains(t, components, "seaweedfs")
+	request := Request{Config: cfg, Catalog: catalog, Host: cfg.HostByID("factor"), Components: components, HostComponents: components, ReadSource: readRepository, Identity: fakeIdentity(t, cfg, catalog, "factor", components)}
+	_, err = Render(request)
+	require.ErrorContains(t, err, "没有取到它的密钥")
+	request.ObjectStoreEnv = []byte("ACCESS_KEY_ID=a\nSECRET_ACCESS_KEY=b\n")
+	output, err := Render(request)
+	require.NoError(t, err)
+	require.Equal(t, "ACCESS_KEY_ID=a\nSECRET_ACCESS_KEY=b\n", string(output.Files["secrets/archive-object-store.env"].Data))
+	require.Contains(t, string(output.Files["config/archive-worker/app.yaml"].Data), "endpoint: cos.ap-nanjing.myqcloud.com")
+}
+
+func TestOverridesApplyAfterRenderingAndRejectUnknownPaths(t *testing.T) {
+	cfg := exampleConfig(t, "\n[overrides.\"factor-engine\".\"engine.yaml\"]\n\"window.lookback\" = 60000\n\"compute.max_memory\" = \"8GiB\"\n")
+	output, _ := renderHost(t, cfg, "factor")
+	engine := string(output.Files["config/factor-engine/engine.yaml"].Data)
+	require.Contains(t, engine, "lookback: 60000")
+	require.Contains(t, engine, "max_memory: 8GiB")
+	// 覆盖项算进指纹：改了调参，下次部署会重启这个组件。
+	plain, _ := renderHost(t, exampleConfig(t, ""), "factor")
+	require.NotEqual(t, plain.Fingerprints["factor-engine"], output.Fingerprints["factor-engine"])
+	require.Equal(t, plain.Fingerprints["archive-worker"], output.Fingerprints["archive-worker"])
+	// 别的主机上没有这个组件，这一项不影响它们。
+	_, _ = renderHost(t, cfg, "control")
+
+	for extra, message := range map[string]string{
+		"\n[overrides.\"factor-engine\".\"engine.yaml\"]\n\"window.no_such_key\" = 1\n": "键路径 window.no_such_key 不存在",
+		"\n[overrides.\"factor-engine\".\"engine.yaml\"]\n\"nothing.lookback\" = 1\n":   "键路径 nothing.lookback 不存在",
+		"\n[overrides.\"factor-engine\".\"missing.yaml\"]\n\"a\" = 1\n":                 "没有 YAML 配置文件 missing.yaml",
+	} {
+		cfg := exampleConfig(t, extra)
+		catalog, err := servicecatalog.LoadEmbedded()
+		require.NoError(t, err)
+		components, err := cfg.HostComponents("factor")
+		require.NoError(t, err)
+		_, err = Render(Request{Config: cfg, Catalog: catalog, Host: cfg.HostByID("factor"), Components: components, HostComponents: components, ReadSource: readRepository, Identity: fakeIdentity(t, cfg, catalog, "factor", components)})
+		require.ErrorContains(t, err, message)
+	}
+}
+
+func TestFingerprintIgnoresReissuedHostCertificate(t *testing.T) {
+	cfg := exampleConfig(t, "")
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	components, err := cfg.HostComponents("overseas")
+	require.NoError(t, err)
+	request := Request{Config: cfg, Catalog: catalog, Host: cfg.HostByID("overseas"), Components: components, HostComponents: components, ReadSource: readRepository, Identity: fakeIdentity(t, cfg, catalog, "overseas", components)}
+	first, err := Render(request)
+	require.NoError(t, err)
+	request.Identity.Secrets["host.crt"], request.Identity.Secrets["host.tls.key"] = []byte("reissued\n"), []byte("reissued-key\n")
+	second, err := Render(request)
+	require.NoError(t, err)
+	require.Equal(t, first.Fingerprints, second.Fingerprints, "主机证书每次签发都不同，不能让每次部署都重启网关")
+	request.Identity.Secrets["caller-trade.key"] = []byte("rotated\n")
+	third, err := Render(request)
+	require.NoError(t, err)
+	require.NotEqual(t, first.Fingerprints["trade"], third.Fingerprints["trade"], "换了密钥要重启用它的组件")
+	require.Equal(t, first.Fingerprints["egress-proxy"], third.Fingerprints["egress-proxy"])
+}
+
+func TestEnvironmentFileEscapesValues(t *testing.T) {
+	raw, err := encodeEnvironment(map[string]string{"B": `a"b\c`, "A": "plain value"})
+	require.NoError(t, err)
+	require.Equal(t, "A=\"plain value\"\nB=\"a\\\"b\\\\c\"\n", string(raw))
+	_, err = encodeEnvironment(map[string]string{"A": "line\nbreak"})
+	require.Error(t, err)
+}
+
+func TestStatusAndVersionChange(t *testing.T) {
+	version, err := ParseVersion([]byte(`{"version":"v0.0.2","commit":"abc","catalog_sha256":"sha256:x","deployed_at":"2026-11-16T00:00:00Z","components":{"admin":{"binaries":{"moox-admin":"aa"},"fingerprint":"sha256:1"}}}`))
+	require.NoError(t, err)
+	require.False(t, version.changed("admin", ComponentVersion{Binaries: map[string]string{"moox-admin": "aa"}, Fingerprint: "sha256:1"}))
+	require.True(t, version.changed("admin", ComponentVersion{Binaries: map[string]string{"moox-admin": "bb"}, Fingerprint: "sha256:1"}))
+	require.True(t, version.changed("admin", ComponentVersion{Binaries: map[string]string{"moox-admin": "aa"}, Fingerprint: "sha256:2"}))
+	require.True(t, version.changed("monitor", ComponentVersion{}))
+	var none *Version
+	require.True(t, none.changed("admin", ComponentVersion{}))
+	require.False(t, none.known("admin"))
+	empty, err := ParseVersion(nil)
+	require.NoError(t, err)
+	require.Nil(t, empty)
+
+	status := Status("control", []string{"host-gateway", "admin", "monitor"}, version,
+		[]string{"moox-admin.service", "moox-host-gateway.service", "moox-old.service"}, []string{"moox-admin.service"})
+	require.True(t, status.Installed)
+	require.Equal(t, "v0.0.2", status.Version)
+	require.Equal(t, []ComponentStatus{
+		{ID: "host-gateway", State: "inactive"}, {ID: "admin", State: "active", Installed: true},
+		{ID: "monitor", State: "missing"}, {ID: "old", State: "inactive"},
+	}, status.Components)
+	require.False(t, Status("storage", []string{"eventbus"}, nil, nil, nil).Installed)
+}

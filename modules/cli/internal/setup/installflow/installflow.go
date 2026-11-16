@@ -10,8 +10,6 @@ import (
 	"io"
 	"sync"
 	"time"
-
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 )
 
 // StepTimeout 是单步的总时限：维护锁排队本身没有上限，不能让安装无限等下去。
@@ -41,11 +39,21 @@ func (p *Progress) Event(event string, fields map[string]any) {
 	}
 }
 
+// Step 是一个安装步骤。Group 相同的步骤可以并行，同一主机串行；Command 是手工运行的命令。
+type Step struct {
+	Kind    string `json:"kind"`
+	Host    string `json:"host,omitempty"`
+	Unit    string `json:"unit,omitempty"`
+	Space   string `json:"space,omitempty"`
+	Group   int    `json:"group"`
+	Command string `json:"command"`
+}
+
 // Execute 执行一步。
-type Execute func(context.Context, deployscan.Step) error
+type Execute func(context.Context, Step) error
 
 // Run 按组执行步骤。一步失败后，其他主机做完手上这一步就停在安全点，重跑时跳过已完成的步骤。
-func Run(ctx context.Context, steps []deployscan.Step, execute Execute, progress *Progress) error {
+func Run(ctx context.Context, steps []Step, execute Execute, progress *Progress) error {
 	for start := 0; start < len(steps); {
 		end := start
 		for end < len(steps) && steps[end].Group == steps[start].Group {
@@ -59,8 +67,8 @@ func Run(ctx context.Context, steps []deployscan.Step, execute Execute, progress
 	return nil
 }
 
-func runGroup(ctx context.Context, steps []deployscan.Step, execute Execute, progress *Progress) error {
-	lanes := map[string][]deployscan.Step{}
+func runGroup(ctx context.Context, steps []Step, execute Execute, progress *Progress) error {
+	lanes := map[string][]Step{}
 	order := []string{}
 	for _, step := range steps {
 		if _, seen := lanes[step.Host]; !seen {
@@ -97,7 +105,7 @@ func runGroup(ctx context.Context, steps []deployscan.Step, execute Execute, pro
 	return errors.Join(failures...)
 }
 
-func runStep(ctx context.Context, step deployscan.Step, execute Execute, progress *Progress) error {
+func runStep(ctx context.Context, step Step, execute Execute, progress *Progress) error {
 	started := time.Now()
 	progress.Event("step_started", map[string]any{"step": step.Command})
 	stepCtx, cancel := context.WithTimeout(ctx, StepTimeout)

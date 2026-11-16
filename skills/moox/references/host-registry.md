@@ -14,19 +14,19 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 | `control` | 控制机 | Admin、Monitor、Collector（含云函数管理）、因子管理、策略、控制台 |
 | `storage` | 存储机 | Storage primary/view、EventBus、Access |
 | `overseas` | 海外机 | Trade、Access、EgressProxy、Collector Stream |
-| `factor` | 因子机 | 因子引擎、归档 Worker（外部程序，原生部署使用 Linux，可以是内网机器） |
+| `factor` | 因子机 | 因子引擎、归档 Worker、内置对象存储（Linux，可以是内网机器） |
 
 `moox.toml` 里 `[hosts.<ID>]` 写 `label`（不写时按 ID 生成）、`address`、`region`、`ssh = { port, username }`；
-`[deployments]` 按主机 ID 列出业务组件，`host-gateway` 与 `host-agent` 自动补齐。控制台终端只对配了 SSH 密码或私钥文件、
+`[deployments]` 按主机 ID 列出业务组件，`host-gateway` 与 `host-agent` 自动补齐。控制台终端只对配了 SSH 私钥文件（`ssh.private_key_file`）、
 且不是 `reachability = "outbound"` 的主机开放，其余主机在主机列表里置灰。
 
 ## 新增并部署一台机器
 
-1. 由用户准备含新 `[hosts.<ID>]` 与 `[deployments]` 的配置。当前 `config edit` 只能修改既有主机的 SSH 登录方式，地址、地域、用途只读，不能新增主机；明文配置可由用户自行编辑后用 `config encrypt` 加密，已有加密配置目前没有新增主机的表单入口。Agent 不读取或代改秘密配置。
-2. `moox-cli setup validate --file ./moox.toml`；`host_key_unknown` 时按 [`install.md`](install.md) 通过独立可信渠道核对指纹后 `setup trust-host`。
-3. `moox-cli setup deploy-host --host <ID>` 安装 Host Gateway 与 Host Agent，并把主机登记到 Admin。
-4. 按该主机登记的业务组件逐个 `setup deploy-unit --host <ID> --profile <单元>`；命令只安装 `[deployments]` 里登记在该主机上的单元。
-5. 需要调整已登记主机的组件清单时，`setup sync-deployments --host <ID>` 把 `moox.toml` 里的完整部署同步给 Admin（保留已有的启停状态）。
+1. 由用户在明文的 `moox.toml` 里加上新的 `[hosts.<ID>]` 与 `[deployments]`（拓扑直接编辑这份文件；秘密在 `moox.secrets.toml`，Agent 不读取或代改）。
+2. `moox-cli setup validate --file ./moox.toml`；`host_key_unknown` 时按 [`install.md`](install.md) 通过独立可信渠道核对指纹后 `setup trust-host`；`manual_steps` 里有 linger 时让用户先在那台机器上执行。
+3. `moox-cli setup deploy --host <ID>`：把主机与它的部署登记到 Admin，装好主机网关、HostAgent 和 `[deployments]` 里登记在这台主机上的全部组件，并等它们就绪。
+4. 之后调整这台主机的组件清单：改 `[deployments]` 后再 `setup deploy --host <ID>`（多出来的组件会被停掉并删掉服务，数据目录留着）。
+   只想把登记同步给 Admin、不动目标机时用 `setup sync-deployments --host <ID>`（保留已有的启停状态）。
 
 ## 启用、停用、移除
 
@@ -45,34 +45,33 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 - 外部程序（`factor-engine`、`archive-worker`）停用时先经 SSH 停掉并核对 systemd 服务已停止，再改登记；启用时先改登记再启动并等待就绪。
 - 停用主机会先逐个停掉它上面启用的外部程序，全部成功后才改主机状态；恢复主机时只启动启用部署的外部程序，单独停用的保持停用。
 - 停用主机上不能单独启用外部程序。
-- `setup remove-host` 只删 Admin 里的登记（清空部署、路由，主机的网关身份和控制台 SSH 信息随之失效），不会停止或删除目标机上的进程与文件：执行前先在目标机停掉这台主机的全部组件。
+- `setup remove-host` 只删 Admin 里的登记（清空部署、路由，主机的网关身份和控制台 SSH 信息随之失效），不会停止或删除目标机上的进程与文件：执行前先用 `setup stop --host <ID> --component <组件> --yes` 逐个停掉这台主机的组件。
+- 只是临时停一个组件、不改登记：`setup stop` / `setup start-component`（`systemctl --user disable --now` / `enable --now`）。被停用的组件在之后的部署里只更新文件、保持停用。
 
 ## 外部程序
 
-`factor-engine` 与 `archive-worker` 是服务目录里的外部程序组件：软件包随 release 交付，由 systemd **用户服务**托管（目标机需开启 linger），
-健康检查经 control 网关中转到 11417 / 11418 的探测端口，Monitor 与 `moox-cli doctor` 按这个口径判断，调用方走 Access 的外部身份。
+`factor-engine` 与 `archive-worker` 是服务目录里的外部程序组件：和其他组件一样由 `setup deploy` 部署成 systemd **用户服务**（目标机需开启 linger），
+区别是它们作为调用方不连本机网关，而是用同名的外部身份经 Access 进入系统。健康端口（11417 / 11418）只听本机，Monitor 看上报，`moox-cli doctor` 经 SSH 在目标机上请求。
 归档 Worker 另有只听 127.0.0.1 的数据端口 11428（管理台下载分区与看最新数据，只有 Admin 经 control 中转进入）；只支持装在 control 或只出站主机上，装在其他可直达主机上时这两个网页功能不可用。
 
 ```bash
-./bin/moox-cli setup release fetch --release <ID> --source-dir .   # release 里要有两个外部程序
-./bin/moox-cli setup deploy-unit --host factor --profile factor-engine --release <ID>
-./bin/moox-cli setup deploy-unit --host factor --profile archive-worker --release <ID>
+./bin/moox-cli setup deploy --host factor                               # 整台
+./bin/moox-cli setup deploy --host factor --component factor-engine     # 只部署一个
 ```
 
-- 主机或部署在 Admin 里已停用时，安装只落文件、不启动。
-- 归档根目录取 `moox.toml` 的 `[paths] archive_root`。
-- `moox.toml` 有 `[archive_object_store]` 时，部署 archive-worker 会从 Admin 读出 `secret_id` 指向的密钥（提供方 `s3`、已启用）投影成 `secrets/archive-object-store.env`，并在重启前用新二进制 `check-config` 校验配置；
-  读密钥失败或校验不过时部署停下，旧配置与旧进程不动。没有这一段时部署会装好并启动内置 SeaweedFS（`moox-seaweedfs`，只听 127.0.0.1，和归档文件同盘）。
-  用外部 S3 时换机器不用拷归档目录（读回时从远端取回）；用内置 SeaweedFS 时要把归档目录和 `<部署根>/seaweedfs` 一起拷。
-- 退役一个外部程序：`setup deployment disable --component <组件> --yes`（先停服务再改登记），之后从 `[deployments]` 删除条目并 `setup sync-deployments`。
+- 归档文件在 `<部署根>/archive`，导入包放在 `<部署根>/import`。
+- `moox.toml` 有 `[archive_object_store]` 时，部署 archive-worker 会从 Admin 读出 `secret_id` 指向的密钥（提供方 `s3`、已启用）写成 `<部署根>/secrets/archive-object-store.env`；读密钥失败时部署停下，旧配置与旧进程不动。
+  没有这一段时，这台主机会多一个内置对象存储组件 `seaweedfs`（服务 `moox-seaweedfs`，只听 127.0.0.1，数据在 `<部署根>/data/seaweedfs`，访问密钥在目标机上生成一次后一直沿用）。
+  用外部 S3 时换机器不用拷归档目录（读回时从远端取回）；用内置对象存储时要把 `<部署根>/archive` 和 `<部署根>/data/seaweedfs` 一起拷。
+- 退役一个外部程序：`setup deployment disable --component <组件> --yes`（先停服务再改登记），之后从 `[deployments]` 删除条目并 `setup deploy --host <ID>`。
 
 ## 全新部署
 
 项目未上线时允许清空重来（不做平滑迁移）。每一个破坏性步骤都先列清单、由用户确认再执行：
 
-1. 运行 `setup wipe`：停止各主机的守护与全部单元，清空部署目录，删除两个外部程序的服务与安装目录，并归档本机状态。先看预览，再带 `--yes --expect <digest>` 执行。
-2. 到腾讯云控制台清理由系统创建的 SCF 函数与触发器（`moox-fetch-plan-` 开头），`setup wipe` 不清理它们。
-3. 按 [`install.md`](install.md) 的顺序重新初始化，外部程序放在 `setup init` 之后部署。
+1. 运行 `setup wipe`：逐台停用并删除全部 `moox-*` 用户服务，杀掉部署根里的进程，清空部署根，并删掉这台电脑上的操作员身份。先看预览，再带 `--yes --expect <digest>` 执行。
+2. 到腾讯云控制台清理由系统创建的 SCF 函数与触发器（`moox-fetch-plan-` 开头），或在 `setup wipe` 时带 `--clean-functions`（预览单列，要用户单独确认）。
+3. 按 [`install.md`](install.md) 用 `setup install` 重新安装。
 
 ## 主机监控
 

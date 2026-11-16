@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/require"
 )
@@ -169,4 +170,35 @@ func TestScriptIsASCII(t *testing.T) {
 	for _, r := range fetchScript {
 		require.Less(t, r, rune(128), "python3 -c 在 C 语言环境下可能读不了非 ASCII 内容")
 	}
+}
+
+// 新部署把下载放在部署根下的隐藏目录里：给了 StagingDir 就只写那里，不建 <部署根>/staging。
+func TestStagingDirOverride(t *testing.T) {
+	body, file := fixture(t, 1<<20)
+	root := t.TempDir()
+	staging := filepath.Join(root, ".staging")
+	request := Request{DeployRoot: root, StagingDir: staging, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
+	require.NoError(t, Run(t.Context(), localTransport{}, request))
+	raw, err := os.ReadFile(StagingPathIn(staging, file.SHA256, file.Name))
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(body, raw))
+	require.NoDirExists(t, filepath.Join(root, "staging"))
+	request.StagingDir = "relative/staging"
+	require.ErrorIs(t, Run(t.Context(), localTransport{}, request), ErrNoSource, "下载目录必须是绝对路径")
+}
+
+func TestComponentFilesFollowManifest(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	manifest := bundle.Manifest{Release: "v9.9.9", Components: map[string]bundle.Artifact{
+		"host-gateway": {File: "moox-host-gateway_v9.9.9_linux_amd64.tar.gz", SHA256: digest, Size: 3, Binaries: map[string]string{"moox-host-gateway": digest}},
+		"host-agent":   {File: "moox-host-agent_v9.9.9_linux_amd64.tar.gz", SHA256: digest, Size: 4, Binaries: map[string]string{"moox-host-agent": digest}},
+	}}
+	files, err := ComponentFiles(manifest, []string{"host-gateway", "host-agent", "host-gateway"})
+	require.NoError(t, err)
+	require.Equal(t, []File{
+		{Name: "moox-host-gateway_v9.9.9_linux_amd64.tar.gz", SHA256: digest, Size: 3},
+		{Name: "moox-host-agent_v9.9.9_linux_amd64.tar.gz", SHA256: digest, Size: 4},
+	}, files)
+	_, err = ComponentFiles(manifest, []string{"trade"})
+	require.ErrorContains(t, err, "bundle_incomplete")
 }

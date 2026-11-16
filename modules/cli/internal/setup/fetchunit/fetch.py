@@ -1,8 +1,9 @@
-"""Download deployment unit packages on the target host. Reads JSON on stdin, prints JSON progress lines.
+"""Download release artifacts (one package per component) on the target host. Reads JSON on stdin, prints JSON progress lines.
 
 Source choice: fetch 1 MB from each address within 3 seconds and rank by bytes received; status codes do not count.
 Download: at most `connections` ranged connections into a temporary file, 3 retries per segment, next source on failure.
-Finish: verify SHA256, sync, rename to <deploy root>/staging/<digest>/<name>. An interrupted process downloads again.
+Finish: verify SHA256, sync, rename to <staging dir>/<digest>/<name>; the staging dir defaults to <deploy root>/staging.
+An interrupted process downloads again.
 """
 import hashlib
 import json
@@ -216,7 +217,10 @@ def prune(staging, release):
 def main():
     os.umask(0o077)
     request = json.load(sys.stdin)
-    staging = os.path.join(request['deploy_root'], 'staging')
+    staging = request.get('staging_dir') or os.path.join(request['deploy_root'], 'staging')
+    if not os.path.isabs(staging):
+        emit('failed', reason='staging_dir must be absolute')
+        return 3
     if request.get('probe_only'):
         name = request['files'][0]['name']
         candidates, scores = rank(request['urls'], name)

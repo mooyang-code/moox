@@ -16,14 +16,15 @@ type Config struct {
 }
 
 type DoctorConfig struct {
-	NodeID                  string `yaml:"node_id"`
-	ReleaseRoot             string `yaml:"release_root"`
+	NodeID string `yaml:"node_id"`
+	// DeployRoot 是节点的部署根；为空时用 moox.toml 的 paths.deploy_root，读不到时是 /data/moox。
+	DeployRoot string `yaml:"deploy_root"`
+	// DatasetHealthPolicyPath 是数据集健康策略；相对路径相对当前目录（仓库或产物包目录）。
 	DatasetHealthPolicyPath string `yaml:"dataset_health_policy_path"`
 }
 
 func (c *Config) EffectiveDoctor() DoctorConfig {
 	value := DoctorConfig{
-		ReleaseRoot:             ".",
 		DatasetHealthPolicyPath: "config/setup/dataset-health-policy.yaml",
 	}
 	if c != nil {
@@ -40,8 +41,8 @@ func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
 	if source.NodeID != "" {
 		target.NodeID = source.NodeID
 	}
-	if source.ReleaseRoot != "" {
-		target.ReleaseRoot = source.ReleaseRoot
+	if source.DeployRoot != "" {
+		target.DeployRoot = source.DeployRoot
 	}
 	if source.DatasetHealthPolicyPath != "" {
 		target.DatasetHealthPolicyPath = source.DatasetHealthPolicyPath
@@ -50,7 +51,7 @@ func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
 
 func overrideDoctorFromEnv(value *DoctorConfig) {
 	for name, target := range map[string]*string{
-		"MOOX_NODE_ID": &value.NodeID, "MOOX_RELEASE_ROOT": &value.ReleaseRoot,
+		"MOOX_NODE_ID": &value.NodeID, "MOOX_DEPLOY_ROOT": &value.DeployRoot,
 		"MOOX_DATASET_HEALTH_POLICY": &value.DatasetHealthPolicyPath,
 	} {
 		if raw := os.Getenv(name); raw != "" {

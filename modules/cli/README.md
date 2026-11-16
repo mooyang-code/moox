@@ -13,7 +13,7 @@ go test -count=1 ./modules/cli/...
 make test-deployment-packages
 ```
 
-`setup package --profile <host|control|eventbus|storage|access|egress-proxy|trade|collector-stream|callback-dispatcher|factor-engine|archive-worker> --binary-dir <目标制品目录> --output <包.tar.gz>` 打包已编译的 Linux 软件和 Git 跟踪的配置模板；`setup package inspect <包.tar.gz>` 校验组件、平台、文件与摘要。这两个命令不加载 `moox.toml`。原生安装器已接入运行配置、身份材料、启停脚本以及 admin/control、主机和业务单元部署，详见[按组件边界打包](../../docs/模块/命令行工具.md#13-按组件边界打包)。
+`setup deploy --host <主机> [--component a,b]` 把一台主机部署成 `moox.toml` 描述的样子，`setup install` 按顺序装完整个系统；`setup package-components` 给发布脚本按服务目录打每个组件一个包。详见[命令行工具](../../docs/模块/命令行工具.md)与[部署与运维](../../docs/部署与运维.md)。
 
 ## 配置
 

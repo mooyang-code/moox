@@ -247,5 +247,5 @@ func loadConfigsForTest(t *testing.T) (*Config, error) {
 	previous := trpc.ServerConfigPath
 	trpc.ServerConfigPath = "./config/trpc_go.yaml"
 	t.Cleanup(func() { trpc.ServerConfigPath = previous })
-	return LoadConfigs(context.Background())
+	return LoadConfigs(context.Background(), "./config/app.yaml")
 }

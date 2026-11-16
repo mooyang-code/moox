@@ -157,10 +157,10 @@
 
 - 新增、部署、启停、移除主机和部署，外部程序（因子引擎、归档 Worker）的安装与退役：[`host-registry.md`](host-registry.md)。管理台对这些只读；查询用 `host list|deployments|routes|catalog|directory`、`host agent status|snapshot|run-once --host <主机>`。
 - 要在某台主机上执行一条命令或传文件：`host exec --host <ID> -- <命令>`、`host get|put`（经 SSH，退出码透传；只能出站的主机不能 SSH）。会改动主机的命令先把完整命令给用户确认。
-- 升级已安装的单元：[`native-release.md`](native-release.md)；主机代理：[`host-agent.md`](host-agent.md)。
+- 部署、升级与回滚：[`native-release.md`](native-release.md)；主机代理：[`host-agent.md`](host-agent.md)。
 - 腾讯云：`setup firewall`（按拓扑放行所需端口）、`ops tencent lighthouse firewall add|open`（单独加规则；`open` 用控制面登记的云账户凭证，凭证不打印）、`setup reboot-host`（重启无响应的主机）、
   `setup attach-scf-vpc`（为函数绑定 VPC 子网）、`setup inspect-scf|invoke-scf`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|prepare|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
-- 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup package inspect <包>` 校验部署包的组件边界、平台与摘要。
+- 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup status` 看各主机的版本与组件状态，`setup logs` 看组件日志。
 
 ## 归档
 

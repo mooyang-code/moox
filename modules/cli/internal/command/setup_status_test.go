@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,7 +56,7 @@ type fakeServices struct {
 	failOn   string
 }
 
-func (f fakeServices) Stop(_ context.Context, host setupconfig.Host, component string) error {
+func (f fakeServices) Stop(_ context.Context, host topology.Host, component string) error {
 	*f.calls = append(*f.calls, "stop:"+host.Name+"/"+component)
 	if f.failStop[component] {
 		return errors.New("service still running")
@@ -64,7 +64,7 @@ func (f fakeServices) Stop(_ context.Context, host setupconfig.Host, component s
 	return nil
 }
 
-func (f fakeServices) Start(_ context.Context, host setupconfig.Host, component, _ string) error {
+func (f fakeServices) Start(_ context.Context, host topology.Host, component string) error {
 	*f.calls = append(*f.calls, "start:"+host.Name+"/"+component)
 	if f.failOn == component {
 		return errors.New("not ready")
@@ -82,11 +82,10 @@ func statusFixture() (statusEnv, *fakeRegistry, *[]string) {
 	}
 	var calls []string
 	env := statusEnv{
-		registry:   registry,
-		services:   fakeServices{calls: &calls, failStop: map[string]bool{}},
-		deployRoot: "/data/moox",
-		external:   func(component string) bool { return component == "factor-engine" || component == "archive-worker" },
-		host:       func(id string) (setupconfig.Host, error) { return setupconfig.Host{Name: id}, nil },
+		registry: registry,
+		services: fakeServices{calls: &calls, failStop: map[string]bool{}},
+		external: func(component string) bool { return component == "factor-engine" || component == "archive-worker" },
+		host:     func(id string) (topology.Host, error) { return topology.Host{Name: id}, nil },
 	}
 	return env, registry, &calls
 }

@@ -26,9 +26,9 @@ import sys
 from collections import Counter
 from decimal import ROUND_DOWN, Decimal
 
-REMOTE_DB = '$(readlink -f /data/moox/prod/current)/strategy/data/strategy.sqlite'
+REMOTE_DB = '/data/moox/data/strategy/strategy.sqlite'
 ENGINE_LOG = '/data/moox/factor-engine/logs/factor-engine.log'
-STRATEGY_LOG = '/data/moox/prod/current/strategy/logs/trpc.log'
+STRATEGY_LOG = '/data/moox/logs/strategy/trpc.log'
 UTC = dt.timezone.utc
 
 # 在策略库上执行的只读查询；本地直接执行，远程经 SSH 交给控制机上的 python3。

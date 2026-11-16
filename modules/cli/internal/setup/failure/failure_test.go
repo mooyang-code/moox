@@ -53,19 +53,24 @@ func TestDetailTravelsOnlyWhenSafe(t *testing.T) {
 	}
 }
 
-// 每个错误码都要在 skill 的处理表里有一行，否则 Agent 遇到它只能自己想办法。
-func TestEveryCodeIsDocumentedInSkill(t *testing.T) {
+// 操作机在安装路径上报的错误码都要在 skill 的处理表里有一行，否则 Agent 遇到它只能自己想办法。
+// 本包 Explanations 里的错误码属于旧的单元安装器，随它一起删除，不再写进 install.md。
+func TestOperatorCodesAreDocumentedInSkill(t *testing.T) {
 	raw, err := os.ReadFile("../../../../../skills/moox/references/install.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for code := range Explanations {
-		if !strings.Contains(string(raw), "`"+code+"`") {
-			t.Errorf("install.md 的处理表缺少错误码 %s", code)
-		}
-	}
-	// 操作机自己报的错误码。
-	for _, code := range []string{"no_collection_tasks", "functions_unread", "functions_delete_failed", "start_prerequisite_missing", "wipe_outside_processes", "bundle_version_mismatch", "target_arch_unsupported", "download_failed", "verify_read_failed", "browser_trust_manual", "browser_ca_trust_failed", "control_dependency_not_ready", "deployment_config_changed", "bootstrap_interrupted", "restart_failed", "restart_unverified", "collection_not_started", "kline_not_arrived", "factor_not_advancing", "strategy_not_running", "ssh_disconnected", "deployment_incomplete", "disk_insufficient", "admin_not_ready", "host_not_ready", "init_storage_required", "logs_unavailable"} {
+	for _, code := range []string{
+		"linger_required", "manual_steps_required", "target_prepare_failed", "install_failed", "not_ready",
+		"control_admin_failed", "control_not_ready", "operator_identity_failed", "identity_invalid",
+		"component_not_on_host", "binary_dir_required", "binary_missing", "version_invalid",
+		"deployment_incomplete", "install_step_failed", "component_operation_failed", "logs_failed",
+		"wipe_scope_changed", "wipe_incomplete", "deployment_wipe_failed", "wipe_not_needed",
+		"bundle_incomplete", "bundle_version_mismatch", "target_arch_unsupported", "no_download_source", "download_failed",
+		"no_collection_tasks", "functions_unread", "functions_delete_failed", "start_prerequisite_missing",
+		"verify_read_failed", "browser_trust_manual", "browser_ca_trust_failed", "collection_not_started",
+		"kline_not_arrived", "factor_not_advancing", "strategy_not_running", "admin_not_ready",
+	} {
 		if !strings.Contains(string(raw), "`"+code+"`") {
 			t.Errorf("install.md 的处理表缺少错误码 %s", code)
 		}

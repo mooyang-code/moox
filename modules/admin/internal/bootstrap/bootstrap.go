@@ -18,13 +18,12 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-// Initialize 初始化应用
-// 这是应用启动的统一入口，完成所有初始化工作
-func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
+// Initialize 初始化应用：这是应用启动的统一入口，configPath 是业务配置 app.yaml（-config）。
+func Initialize(ctx context.Context, s *server.Server, configPath string) (*server.Server, error) {
 	log.InfoContextf(ctx, "开始初始化应用...")
 
 	// 1. 加载配置
-	cfg, err := LoadConfigs(ctx)
+	cfg, err := LoadConfigs(ctx, configPath)
 	if err != nil {
 		log.ErrorContextf(ctx, "加载配置失败: %v", err)
 		return nil, err

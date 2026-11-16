@@ -1,16 +1,14 @@
 package report
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/report/logsink"
 )
 
 const (
@@ -136,27 +134,9 @@ func (c Config) validateIdentity() error {
 	return nil
 }
 
-var (
-	bootIDOnce sync.Once
-	bootID     string
-)
-
 // processBootID 是本进程的启动标识：部署注入了 MOOX_BOOT_ID 就用它，否则在进程内生成一次随机值。
-// 同一进程里的多个上报共用这一个值，Monitor 按它的变化数启动次数（“反复重启”检查）。
-func processBootID() string {
-	bootIDOnce.Do(func() {
-		if bootID = firstEnv("MOOX_BOOT_ID"); bootID != "" {
-			return
-		}
-		var raw [16]byte
-		if _, err := rand.Read(raw[:]); err != nil {
-			bootID = strconv.FormatInt(time.Now().UnixNano(), 36)
-			return
-		}
-		bootID = hex.EncodeToString(raw[:])
-	})
-	return bootID
-}
+// 同一进程里的指标上报、日志上报与健康端口共用这一个值，Monitor 按它的变化数启动次数（“反复重启”检查）。
+func processBootID() string { return logsink.ProcessBootID() }
 
 func firstEnv(names ...string) string {
 	for _, name := range names {

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,55 +27,40 @@ func (f *fakeForwarder) Invoke(ctx context.Context, service, method string, req,
 	return (testfixture.HandlerGateway{Handler: f.handler}).Invoke(ctx, service, method, req, rsp)
 }
 
-func clientSnapshot(t *testing.T) *setupconfig.Snapshot {
-	snapshot, _ := clientSnapshotWithPath(t)
-	return snapshot
-}
-
-func clientSnapshotWithPath(t *testing.T) (*setupconfig.Snapshot, string) {
+// clientSecrets 是测试用的秘密文件内容，extra 可以在后面追加一段 TOML（例如 [[exchange_keys]]）。
+func clientSecrets(t *testing.T, extra string) *topology.Secrets {
 	t.Helper()
-	return clientSnapshotWithExtra(t, "")
-}
-
-// clientSnapshotWithExtra 在基础配置后面追加一段 TOML（例如 [[exchange_keys]]）。
-func clientSnapshotWithExtra(t *testing.T, extra string) (*setupconfig.Snapshot, string) {
-	t.Helper()
-	root := t.TempDir()
-	body := `[admin]
+	secrets, err := topology.ParseSecrets([]byte(`[admin]
 username = "admin"
 password = "recognizable-admin-password"
 
 [tencent_cloud]
 secret_id = "recognizable-secret-id"
 secret_key = "recognizable-secret-key"
+` + extra))
+	require.NoError(t, err)
+	return &secrets
+}
 
-[eventbus]
-port = 4222
-tls_enabled = true
-
-[hosts.control]
+// clientConfig 是测试用的拓扑：控制机配了私钥（文件在临时目录），另有一台直达主机。
+func clientConfig(t *testing.T) *topology.Config {
+	t.Helper()
+	key := filepath.Join(t.TempDir(), "id_ed25519")
+	require.NoError(t, os.WriteFile(key, []byte("PRIVATE KEY BODY\n"), 0o600))
+	cfg, err := topology.Parse([]byte(`[hosts.control]
 address = "eventbus.example.test"
-[hosts.control.ssh]
-port = 22
-username = "ubuntu"
-password = "recognizable-control-password"
+ssh = { port = 22, username = "ubuntu", private_key_file = "` + key + `" }
 
 [hosts.compute]
 address = "192.0.2.11"
-[hosts.compute.ssh]
-port = 22
-username = "ubuntu"
-password = "recognizable-compute-password"
+ssh = { port = 22, username = "ubuntu" }
 
 [deployments]
 control = ["admin", "eventbus"]
 compute = []
-` + extra
-	path := filepath.Join(root, "moox.toml")
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-	snapshot, err := setupconfig.Load(path, root)
+`))
 	require.NoError(t, err)
-	return snapshot, path
+	return &cfg
 }
 
 func TestApplyUsesCommandGateway(t *testing.T) {
@@ -91,7 +76,7 @@ func TestApplyUsesCommandGateway(t *testing.T) {
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(forwarder).Apply(context.Background(), clientSnapshot(t))
+	result, err := New(forwarder).Apply(context.Background(), clientSecrets(t, ""))
 	require.NoError(t, err)
 	assert.Equal(t, "created", result.Action)
 	assert.Equal(t, "trpc.moox.admin.Setup", forwarder.remote)
@@ -117,7 +102,7 @@ func TestApplyWithSpacesMapsAdminSpaceContractAndCounts(t *testing.T) {
 		Status: "active", AttributesJSON: `{"managed_by":"moox-cli"}`,
 	}}
 
-	result, err := New(forwarder).ApplyWithSpaces(context.Background(), clientSnapshot(t), spaces)
+	result, err := New(forwarder).ApplyWithSpaces(context.Background(), clientSecrets(t, ""), spaces)
 	require.NoError(t, err)
 	require.Len(t, capturedRequest.GetSpaces(), 1)
 	assert.Equal(t, "stockcn", capturedRequest.GetSpaces()[0].GetSpaceId())
@@ -140,7 +125,7 @@ func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(forwarder).Status(context.Background(), clientSnapshot(t))
+	result, err := New(forwarder).Status(context.Background(), clientSecrets(t, ""))
 	require.NoError(t, err)
 	assert.Equal(t, "completed", result.State)
 	assert.Equal(t, "recognizable-admin-password", capturedRequest.GetAdmin().GetPassword())
@@ -159,7 +144,7 @@ func TestStatusWithSpacesReturnsSpaceCount(t *testing.T) {
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(forwarder).StatusWithSpaces(context.Background(), clientSnapshot(t), []Space{{
+	result, err := New(forwarder).StatusWithSpaces(context.Background(), clientSecrets(t, ""), []Space{{
 		SpaceID: "crypto", Name: "加密货币市场", Market: "crypto",
 		Timezone: "UTC", Status: "active", AttributesJSON: "{}",
 	}})
@@ -181,22 +166,13 @@ func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {
 			forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = io.WriteString(w, tt.body)
 			})}
-			_, err := New(forwarder).Apply(context.Background(), clientSnapshot(t))
+			_, err := New(forwarder).Apply(context.Background(), clientSecrets(t, ""))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
 			assert.NotContains(t, err.Error(), "recognizable-secret-key")
 			assert.NotContains(t, err.Error(), "recognizable-admin-password")
 		})
 	}
-}
-
-func TestApplyDetectsManifestMutationBeforeRequest(t *testing.T) {
-	snapshot, path := clientSnapshotWithPath(t)
-	require.NoError(t, os.WriteFile(path, []byte("changed"), 0o600))
-	forwarder := &fakeForwarder{handler: http.NotFoundHandler()}
-	_, err := New(forwarder).Apply(context.Background(), snapshot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "config_changed")
 }
 
 func TestApplyAndStatusCarryExchangeKeysBothWays(t *testing.T) {
@@ -217,7 +193,7 @@ api_key = "okx-key"
 secret_key = "okx-secret"
 passphrase = "recognizable-passphrase"
 `
-	snapshot, _ := clientSnapshotWithExtra(t, extra)
+	snapshot := clientSecrets(t, extra)
 	var applyRequest pb.ApplySetupReq
 	var statusRequest pb.GetSetupStatusReq
 	results := []*pb.SetupExchangeKeyResult{
@@ -279,7 +255,7 @@ api_key = "k"
 secret_key = "s"
 readonly = true
 `
-	snapshot, _ := clientSnapshotWithExtra(t, extra)
+	snapshot := clientSecrets(t, extra)
 	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		var response []byte
 		if request.URL.Path == "/trpc.moox.admin.Setup/ApplySetup" {
@@ -297,7 +273,7 @@ readonly = true
 	assert.Contains(t, err.Error(), "setup_admin_outdated")
 
 	// 没有交易所密钥时不受影响。
-	plain, _ := clientSnapshotWithExtra(t, "")
+	plain := clientSecrets(t, "")
 	_, err = New(forwarder).Apply(context.Background(), plain)
 	require.NoError(t, err)
 }

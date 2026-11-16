@@ -19,4 +19,4 @@ TARGET_GOOS=linux TARGET_GOARCH=amd64 bash scripts/build/build.sh access
 
 健康检查使用 `11014`：只听 127.0.0.1、不验签。逐方法超时与请求体上限来自组件目录，拒绝指标为 `moox_access_denials_total`。独立部署 profile 为 `access`，本组件使用纯 Go SQLite，可在本机关闭 CGO 构建 Linux 制品。
 
-原生 `setup deploy-unit --profile access` 已接入身份导出、校验文件安装和配置渲染；实际网络放行与运行状态以部署结果和健康检查为准。外部调用方的完整逐方法白名单见[外部接入](../../docs/模块/外部接入.md)。
+`moox-cli setup deploy` 部署 access 时从 Admin 导出身份与校验文件（`<部署根>/secrets/access/`）并渲染配置；实际网络放行与运行状态以部署结果和健康检查为准。外部调用方的完整逐方法白名单见[外部接入](../../docs/模块/外部接入.md)。

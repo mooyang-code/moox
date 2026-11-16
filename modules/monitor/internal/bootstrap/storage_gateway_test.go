@@ -29,7 +29,6 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -130,10 +129,9 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
 	root := t.TempDir()
 	configPath := filepath.Join(root, "monitor", "config", "app.yaml")
-	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
 	keyPath := filepath.Join(root, "secrets", "caller-monitor.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
-	for _, path := range []string{configPath, hostPath, keyPath, caPath} {
+	for _, path := range []string{configPath, keyPath, caPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	}
 	credentials := gatewayauth.Credentials{Caller: "monitor", KeyID: "admin-assigned-monitor-key-97", Secret: "monitor-signing-fixture-key-at-least-32-bytes"}
@@ -146,12 +144,6 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	host := hostgatewayconfig.Default("control", "control", "192.0.2.1", "host-fixture-key")
-	host.Server.LocalAddr = listener.Addr().String()
-	host.TLS.CAFile = caPath
-	encoded, err := hostgatewayconfig.Encode(host)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(hostPath, encoded, 0o600))
 	directory := servicecatalog.Directory{Services: map[string][]string{
 		"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.collector.CollectMgr": {"control"}, "trpc.moox.ops.SysDeploy": {"control"},
 	}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
@@ -167,7 +159,7 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	data := filepath.Join(root, "data", "monitor")
-	raw := "deployment:\n  enabled: false\ndatabase:\n  path: " + filepath.Join(data, "monitor.db") + "\ngateway_client:\n  caller: monitor\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-monitor.key\n"
+	raw := "deployment:\n  enabled: false\ndatabase:\n  path: " + filepath.Join(data, "monitor.db") + "\ngateway_client:\n  caller: monitor\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-monitor.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
 	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0o600))
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)

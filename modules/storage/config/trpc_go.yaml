@@ -85,6 +85,6 @@ plugins:
           filename: trpc.log                      #本地文件日志文件名
           roll_type: size                         #文件滚动类型,size为按大小滚动
           max_age: 7                              #最大日志保留天数
-          max_size: 10                            #本地文件滚动日志的大小 单位 MB
+          max_size: 50                            #本地文件滚动日志的大小 单位 MB
           max_backups: 5                         #最大日志文件数
           compress:  false                        #日志文件是否压缩

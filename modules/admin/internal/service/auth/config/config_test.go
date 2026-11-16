@@ -20,7 +20,7 @@ func loadFrom(t *testing.T, content string) (*Config, error) {
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(dir))
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
-	return LoadConfig()
+	return LoadConfig("./config/console.yaml")
 }
 
 func TestConfig_LoadConfig_ValidYAML_ShouldParseFields(t *testing.T) {
@@ -57,7 +57,7 @@ func TestConfig_LoadConfig_MissingFile_ShouldReturnError(t *testing.T) {
 	require.NoError(t, os.Chdir(dir))
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
 
-	_, err = LoadConfig()
+	_, err = LoadConfig("./config/console.yaml")
 	assert.Error(t, err)
 }
 

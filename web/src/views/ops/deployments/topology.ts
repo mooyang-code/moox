@@ -41,6 +41,7 @@ const LAYER_OF: Record<string, TopologyLayer> = {
   "egress-proxy": "business",
   "storage-primary": "storage",
   "storage-view": "storage",
+  seaweedfs: "storage",
   "host-gateway": "infra",
   "host-agent": "infra"
 };

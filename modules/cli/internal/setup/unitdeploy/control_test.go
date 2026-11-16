@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/mooyang-code/moox/packages/hostpolicy"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -136,42 +137,22 @@ func TestLatestUnitConfigurationReadsNewestRecord(t *testing.T) {
 	require.Equal(t, "sha256:new", digest)
 }
 
-func TestBundleSoftwareRecordsRemoteArtifact(t *testing.T) {
-	manifest := &bundle.Manifest{Release: "v9.9.9", Units: map[string]bundle.Artifact{
-		"host": {File: "moox-unit-host_v9.9.9_linux_amd64.tar.gz", SHA256: "abc", Size: 7, Manifest: []byte(`{"profile":"host","files":[{"path":"bin/moox-runtime","sha256":"sha256:def"}]}`)},
+// 发布包从 version 2 起按组件出包，旧部署路径一律拒绝，提示改用新命令。
+func TestLegacyPathRefusesComponentBundle(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	manifest := &bundle.Manifest{Version: bundle.ManifestVersion, Release: "v9.9.9", Commit: strings.Repeat("a", 40), Components: map[string]bundle.Artifact{
+		"host-gateway": {File: "moox-host-gateway_v9.9.9_linux_amd64.tar.gz", SHA256: digest, Size: 7, Binaries: map[string]string{"moox-host-gateway": digest}},
 	}}
-	item, err := bundleSoftware(manifest, "host", "amd64")
-	require.NoError(t, err)
-	require.Empty(t, item.Archive, "软件不在这台电脑上")
-	require.Equal(t, "/data/moox/staging/abc/moox-unit-host_v9.9.9_linux_amd64.tar.gz", artifactPath("/data/moox", item))
-	digest, err := packageHelperSHA(item)
-	require.NoError(t, err)
-	require.Equal(t, "def", digest)
+	_, err := bundleSoftware(manifest, "host", "amd64")
+	require.ErrorIs(t, err, errLegacyBundle)
 	_, err = bundleSoftware(manifest, "host", "arm64")
 	require.ErrorContains(t, err, "target_arch_unsupported")
-	_, err = bundleSoftware(manifest, "trade", "amd64")
-	require.ErrorContains(t, err, "bundle_incomplete")
-}
-
-func TestFetchedReleaseCanBeRead(t *testing.T) {
 	state, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	require.NoError(t, os.Chmod(state, 0o700))
-	unit := func(profile, extra string) bundle.Artifact {
-		return bundle.Artifact{File: profile + ".tar.gz", SHA256: "abc", Size: 1, Manifest: []byte(`{"profile":"` + profile + `"` + extra + `}`)}
-	}
-	manifest := &bundle.Manifest{Release: "v9.9.9", Commit: strings.Repeat("a", 40), Units: map[string]bundle.Artifact{
-		"host": unit("host", `,"files":[{"path":"bin/moox-runtime","sha256":"sha256:def"}]`), "control": unit("control", ""),
-	}}
 	_, err = FetchRelease(state, "r1", manifest)
-	require.NoError(t, err)
-	root, err := privateRoot(state)
-	require.NoError(t, err)
-	defer root.Close()
-	release, exists, err := readRelease(t.Context(), root, "r1", "amd64")
-	require.NoError(t, err, "登记的版本要读得出来，否则 --release 全部不可用")
-	require.True(t, exists)
-	require.Equal(t, "def", release.HelperSHA256)
+	require.ErrorIs(t, err, errLegacyBundle)
+	require.Equal(t, "/data/moox/staging/abc/moox-unit-host_v9.9.9_linux_amd64.tar.gz", artifactPath("/data/moox", unitpackage.Result{SHA256: "sha256:abc", RemoteFile: "moox-unit-host_v9.9.9_linux_amd64.tar.gz"}))
 }
 
 func TestExternalUnpackCreatesPrivateStage(t *testing.T) {

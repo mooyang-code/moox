@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/config"
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
@@ -122,24 +124,31 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			// 外部程序（systemd 用户服务）的状态同样经 SSH（本机则直接执行）读取。读不到 moox.toml 时只能查本机。
 			probe := doctorcli.LocalHealthProbe(doctorCfg.NodeID)
 			var systemd doctorcli.SystemdChecker
-			var deployRoot string
-			if remote := loadHostRemote(file, doctorCfg.NodeID); remote != nil {
+			var readFile func(context.Context, string, string) ([]byte, error)
+			deployRoot := firstNonEmpty(doctorCfg.DeployRoot, topology.DefaultDeployRoot)
+			remote := loadHostRemote(file, doctorCfg.NodeID)
+			if remote != nil {
 				defer remote.Close()
 				systemd, probe = remote.Systemd(), remote.HealthProbe()
-				deployRoot = remote.manifest.Paths.DeployRoot
+				readFile = func(ctx context.Context, node, path string) ([]byte, error) {
+					out, err := remote.Run(ctx, node, []string{"cat", "--", path})
+					return []byte(out), err
+				}
+				if doctorCfg.DeployRoot == "" {
+					deployRoot = remote.manifest.Paths.DeployRoot
+				}
 			}
 			var reportValue core.Report
 			switch mode {
 			case "bootstrap":
 				reportValue, err = doctorcli.RunBootstrap(cmd.Context(), doctorcli.BootstrapOptions{
-					NodeID: nodeID, LocalNodeID: doctorCfg.NodeID, ReleaseRoot: doctorCfg.ReleaseRoot,
-					DatasetHealthPolicyPath: resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.DatasetHealthPolicyPath),
-					CheckIDs:                checks, Client: client, MonitorClient: client, Probe: probe,
-					Systemd: systemd, DeployRoot: deployRoot,
+					NodeID: nodeID, LocalNodeID: doctorCfg.NodeID, DatasetHealthPolicyPath: doctorCfg.DatasetHealthPolicyPath,
+					CheckIDs: checks, Client: client, MonitorClient: client, Probe: probe,
+					Systemd: systemd, DeployRoot: deployRoot, ReadFile: readFile,
 				})
 			case "diagnose":
-				if doctorCfg.ReleaseRoot == "" {
-					fmt.Fprintln(cmd.ErrOrStderr(), "提示：这台电脑没有部署目录，diagnose 只查本机；看目标机日志用 moox-cli setup logs --host <主机> --component <组件>")
+				if remote == nil {
+					fmt.Fprintln(cmd.ErrOrStderr(), "提示：读不到 moox.toml，diagnose 只查本机；看目标机日志用 moox-cli setup logs --host <主机> --component <组件>")
 				}
 				reportValue, err = doctorcli.RunDiagnose(cmd.Context(), doctorcli.DiagnoseOptions{
 					NodeID: nodeID, CheckIDs: checks, Client: client, Systemd: systemd, Probe: probe,
@@ -208,11 +217,4 @@ func doctorExitCode(conclusion core.Conclusion) int {
 	default:
 		return 3
 	}
-}
-
-func resolveReleasePath(root, path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	return filepath.Join(root, path)
 }

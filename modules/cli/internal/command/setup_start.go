@@ -14,8 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 )
 
@@ -81,7 +80,7 @@ type setupStartInstance struct {
 
 func newSetupStartCommand(deps setupDeps) *cobra.Command {
 	var file, spaceID string
-	var options unitdeploy.DeployOptions
+	var source setupSource
 	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "启动一个空间：启用采集任务，导入默认因子任务，创建默认示例策略",
@@ -97,7 +96,7 @@ func newSetupStartCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			if err := resolveSetupUnitOptions(snapshot, "", &options); err != nil {
+			if err := source.resolve(); err != nil {
 				return err
 			}
 			if err := setupStartPrerequisites(snapshot.Manifest, spaceID); err != nil {
@@ -108,11 +107,8 @@ func newSetupStartCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer closeClient()
-			summary, err := runSetupStart(cmd.Context(), deps, client, snapshot, options.RepositoryRoot, spaceID, setupStartPollDefault)
+			summary, err := runSetupStart(cmd.Context(), deps, client, snapshot, source.root, spaceID, setupStartPollDefault)
 			if err != nil {
-				return err
-			}
-			if err := unitdeploy.MarkStep(options.StateDirectory, unitdeploy.StartedStep(spaceID)); err != nil {
 				return err
 			}
 			return writeSetupJSON(cmd, summary)
@@ -120,26 +116,25 @@ func newSetupStartCommand(deps setupDeps) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&spaceID, "space-id", "", "要启动的空间，比如 crypto")
-	cmd.Flags().StringVar(&options.StateDirectory, "state-dir", "", "持久私有部署状态目录（默认和 bootstrap 相同）")
-	cmd.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
+	cmd.Flags().StringVar(&source.sourceDir, "source-dir", "", "源码或产物包目录（默认当前目录）：默认因子任务 config/setup/factor-tasks.yaml 从这里读")
 	return cmd
 }
 
 // setupStartPrerequisites 只查这个空间需要的东西：走 collector-stream 的空间要海外机，其他空间只能走云函数。
-func setupStartPrerequisites(manifest setupconfig.Manifest, spaceID string) error {
+func setupStartPrerequisites(manifest *topology.Config, spaceID string) error {
 	if spaceID == streamSpace {
 		if manifest.ComponentHost("collector-stream") == "" || manifest.ComponentHost("egress-proxy") == "" {
 			return errors.New("start_prerequisite_missing: crypto 需要海外机上的 collector-stream 和出口代理，运行 setup validate 看拓扑")
 		}
 		return nil
 	}
-	if manifest.SCFEnabled() && slices.ContainsFunc(manifest.SCFPlan.Spaces, func(space setupconfig.SCFPlanSpace) bool { return space.SpaceID == spaceID }) {
+	if manifest.SCFEnabled() && slices.ContainsFunc(manifest.SCFPlan.Spaces, func(space topology.SCFPlanSpace) bool { return space.SpaceID == spaceID }) {
 		return nil
 	}
 	return fmt.Errorf("start_prerequisite_missing: %s 目前只能走云函数，要在 [scf_plan] 里配置这个空间", spaceID)
 }
 
-func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient, snapshot *setupconfig.Snapshot, repository, spaceID string, poll time.Duration) (setupStartSummary, error) {
+func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient, snapshot *setupSnapshot, repository, spaceID string, poll time.Duration) (setupStartSummary, error) {
 	summary := setupStartSummary{Status: "started", SpaceID: spaceID, Strategy: "skipped"}
 	manifest := snapshot.Manifest
 	tasks, err := client.Tasks(ctx, spaceID)
@@ -285,7 +280,7 @@ func setupStartWaitPlan(ctx context.Context, client setupStartClient, spaceID st
 }
 
 // setupStartFactors 导入种子文件里这个空间的因子任务（定义是全局的，一起导入），返回导入的任务 ID。
-func setupStartFactors(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, repository, spaceID string) ([]string, error) {
+func setupStartFactors(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, repository, spaceID string) ([]string, error) {
 	plan, err := loadFactorPlan(filepath.Join(repository, filepath.FromSlash(defaultFactorSeed)), snapshot.Manifest.StoragePolicy(), spaceID)
 	if err != nil {
 		return nil, err
@@ -294,6 +289,8 @@ func setupStartFactors(ctx context.Context, deps setupDeps, snapshot *setupconfi
 	if len(plan.Tasks) == 0 {
 		return nil, nil
 	}
+	// 上次成员加进去了、启用那一步没做完时，重跑接着启用（只有导入默认种子这样做，手动的 factor task apply 不会）。
+	plan.ResumeDisabled = true
 	service, err := deps.openInitFactor(ctx, snapshot)
 	if err != nil {
 		return nil, err
@@ -341,8 +338,8 @@ func setupStartStrategy(ctx context.Context, client setupStartClient, repository
 // gatewayStartClient 是 setupStartClient 的线上实现。
 type gatewayStartClient struct{ gateway setupVerifyGateway }
 
-func defaultSetupOpenStart(ctx context.Context, file string, snapshot *setupconfig.Snapshot) (setupStartClient, func(), error) {
-	gateway, err := openCommandGateway(ctx, file, snapshot.Config())
+func defaultSetupOpenStart(ctx context.Context, file string, snapshot *setupSnapshot) (setupStartClient, func(), error) {
+	gateway, err := openCommandGateway(ctx, file, snapshot.Manifest)
 	if err != nil {
 		return nil, nil, err
 	}

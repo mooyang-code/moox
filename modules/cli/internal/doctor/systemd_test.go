@@ -60,7 +60,7 @@ func supervisorSnapshot(t *testing.T, node string) *monitorpb.GetDoctorContextRs
 	}
 }
 
-func TestDiagnoseChecksTheSystemdSupervisorOfExternalPrograms(t *testing.T) {
+func TestDiagnoseChecksTheSystemdSupervisorOfEveryComponent(t *testing.T) {
 	snapshot := supervisorSnapshot(t, "factor")
 	var asked []string
 	options := DiagnoseOptions{
@@ -75,16 +75,19 @@ func TestDiagnoseChecksTheSystemdSupervisorOfExternalPrograms(t *testing.T) {
 	check := result.CheckByID("service.supervisor:factor-engine@factor")
 	require.NotNil(t, check)
 	assert.Equal(t, core.StatusFail, check.Status, "active 但 disabled 不通过")
-	assert.Equal(t, []string{"factor/moox-factor-engine"}, asked)
+	assert.Equal(t, []string{"factor/moox-factor-engine.service"}, asked)
 
 	options.Systemd = nil
 	result, err = RunDiagnose(t.Context(), options)
 	require.NoError(t, err)
 	assert.Equal(t, core.StatusUnknown, result.CheckByID("service.supervisor:factor-engine@factor").Status)
 
-	// 普通组件不产生托管检查。
+	// 普通组件同样由 systemd 托管；第三方程序与未知组件不在诊断清单里。
 	manifest, err := core.LoadEmbeddedManifest()
 	require.NoError(t, err)
-	_, systemd := systemdUnit(manifest, "access")
+	unit, systemd := systemdUnit(manifest, "access")
+	assert.True(t, systemd)
+	assert.Equal(t, "moox-access.service", unit)
+	_, systemd = systemdUnit(manifest, "seaweedfs")
 	assert.False(t, systemd)
 }

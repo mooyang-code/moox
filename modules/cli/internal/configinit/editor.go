@@ -184,22 +184,10 @@ func (e *editorSession) load() (loaded, error) {
 	return out, nil
 }
 
-// readConfigFile 只读普通文件，不超过 1 MiB；private 为 true（秘密文件）时还要求只有本人可读写，与 CLI 读秘密文件的要求一致。
+// readConfigFile 与 CLI 读配置用同一套校验（topology.ReadFile）：只读普通文件、不跟随符号链接、不超过 1 MiB；
+// private 为 true（秘密文件）时还要求 0600 且属于本人、读取时没被替换。
 func readConfigFile(path string, private bool) ([]byte, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("读不到 %s", path)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s 必须是普通文件", path)
-	}
-	if private && runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
-		return nil, fmt.Errorf("%s 的权限必须是 0600（只有本人可读写）", path)
-	}
-	if info.Size() > 1<<20 {
-		return nil, fmt.Errorf("%s 超过 1 MiB", path)
-	}
-	return os.ReadFile(path)
+	return topology.ReadFile(path, private)
 }
 
 func (e *editorSession) current(w http.ResponseWriter, r *http.Request) (loaded, bool) {

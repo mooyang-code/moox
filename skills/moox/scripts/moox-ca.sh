@@ -4,8 +4,8 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 COMMAND=${1:-}; shift || true
 TARGET= DEPLOY_DIR= OUTPUT= CA_FILE= EXPECTED= NON_INTERACTIVE=0
 while [[ $# -gt 0 ]]; do case "$1" in --target) TARGET=${2:?}; shift 2;; --deploy-dir) DEPLOY_DIR=${2:?}; shift 2;; --output) OUTPUT=${2:?}; shift 2;; --ca-file) CA_FILE=${2:?}; shift 2;; --expected-fingerprint) EXPECTED=${2:?}; shift 2;; --non-interactive) NON_INTERACTIVE=1; shift;; *) echo "unknown option: $1" >&2; exit 2;; esac; done
-# MooX CA 根证书在部署根下的位置（旧部署随 host 单元投放；管理台 9527 的 HTTPS 证书由它签发）。
-CA_RELATIVE=host/current/certs/moox-ca.crt
+# MooX CA 根证书在部署根下的位置（每台主机都有一份公开证书；管理台 9527 的 HTTPS 证书由它签发）。
+CA_RELATIVE=secrets/moox-ca.crt
 reject_key_path() { [[ "$1" != *.key && "$1" != *root.key* ]] || { echo 'private-key paths are forbidden' >&2; exit 1; }; }
 inspect() { grep -q -- 'PRIVATE KEY' "$1" && { echo 'private keys are forbidden' >&2; exit 1; }; openssl x509 -in "$1" -noout -subject -dates -fingerprint -sha256; openssl x509 -in "$1" -noout -text | grep -Eq 'CA:TRUE' || { echo 'certificate is not a CA' >&2; exit 1; }; }
 case "${COMMAND}" in

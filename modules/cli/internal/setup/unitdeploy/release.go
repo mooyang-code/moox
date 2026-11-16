@@ -44,12 +44,9 @@ func FetchRelease(stateDirectory, id string, manifest *bundle.Manifest) (Release
 	if !validReleaseID(id) {
 		return release, errors.New("release ID must be 1-40 lowercase letters, digits, dots or dashes")
 	}
-	for profile := range manifest.Units {
-		item, err := bundleSoftware(manifest, profile, "amd64")
-		if err != nil {
-			return release, err
-		}
-		release.Packages[profile] = item
+	// 发布包改成按组件出包后没有部署单元，旧路径不能登记它（T13 删除）。
+	if manifest != nil {
+		return release, errLegacyBundle
 	}
 	digest, err := packageHelperSHA(release.Packages["host"])
 	if err != nil {

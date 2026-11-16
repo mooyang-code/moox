@@ -11,8 +11,9 @@ import (
 	"strings"
 	"unicode"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/spf13/cobra"
@@ -53,9 +54,6 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("encode skill config: %w", err)
 			}
-			if err := snapshot.VerifyUnchanged(); err != nil {
-				return fmt.Errorf("config_changed")
-			}
 			if err := writeSkillSigningKey(output, config); err != nil {
 				return err
 			}
@@ -74,7 +72,7 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
-func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Snapshot, space string) (dataAccessConfig, error) {
+func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupSnapshot, space string) (dataAccessConfig, error) {
 	if snapshot == nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: setup snapshot is required")
 	}
@@ -84,7 +82,7 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 			_ = transport.Close()
 		}
 	}()
-	transportFor := func(ctx context.Context, host setupconfig.Host) (setupssh.Client, error) {
+	transportFor := func(ctx context.Context, host topology.Host) (setupssh.Client, error) {
 		key := host.Name + "\x00" + host.Address
 		transport := transports[key]
 		if transport == nil {
@@ -109,12 +107,12 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 	if err != nil {
 		return dataAccessConfig{}, err
 	}
-	credentials, err := exportRemoteExternalCaller(ctx, control, snapshot.Manifest.Paths.Resolved().ControlRoot, snapshot.Manifest.Paths.Resolved().DeployRoot, "moox-skill")
+	credentials, err := deploy.ExportCaller(ctx, control, snapshot.Manifest, "moox-skill")
 	if err != nil {
 		return dataAccessConfig{}, err
 	}
 	host := snapshot.Manifest.StorageHost()
-	if !snapshot.Manifest.HasStorageHost() {
+	if host.Name == "" {
 		host = snapshot.Manifest.ControlHost()
 	}
 	digest := sha256.Sum256([]byte(credentials.KeyID))

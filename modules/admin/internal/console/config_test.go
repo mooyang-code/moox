@@ -27,7 +27,7 @@ func loadConsoleConfigFrom(t *testing.T, content string) (*Config, error) {
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(dir))
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
-	return LoadConfig()
+	return LoadConfig("./config/console.yaml")
 }
 
 func TestLoadConfig_ValidYAML_ShouldParse(t *testing.T) {
@@ -51,7 +51,7 @@ func TestShippedConsoleConfigHasNoExtraOrigins(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(filepath.Join("..", "..")))
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
-	cfg, err := LoadConfig()
+	cfg, err := LoadConfig("./config/console.yaml")
 	require.NoError(t, err)
 	assert.Empty(t, cfg.Console.AllowedOrigins)
 	assert.Contains(t, cfg.RateLimit.MethodLimits, "/api/admin/auth/Login")
@@ -71,7 +71,7 @@ func TestLoadConfig_MissingFile_ShouldError(t *testing.T) {
 	require.NoError(t, os.Chdir(dir))
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
 
-	_, err = LoadConfig()
+	_, err = LoadConfig("./config/console.yaml")
 	require.Error(t, err)
 }
 

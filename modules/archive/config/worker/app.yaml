@@ -1,5 +1,5 @@
 # moox-archive-worker 配置。worker 只出站：经固定的 Access 访问 Storage 与 archive-mgr。
-# key_file 相对本配置文件；root_dir 必须是绝对路径（不能放在 ~/Documents 下）。
+# 这里是开发用的默认值：部署（moox-cli setup deploy）渲染时把身份、路径与对象存储换成这台主机的实际值，路径都是绝对路径。
 gateway_client:
   access_address: access.example.test:11004
   access_id: access@storage
@@ -8,7 +8,7 @@ gateway_client:
   key_file: ../secrets/access-archive-worker.key
 
 worker:
-  worker_id: archive-worker@example-host   # 只是 worker 的名字，deploy-unit 写成 archive-worker@<主机>
+  worker_id: archive-worker@example-host   # 只是 worker 的名字，部署写成 archive-worker@<主机>
   root_dir: /data/moox-archive
   export_format: csv.gz             # csv.gz（默认）或 csv
   min_free_bytes: 5GB

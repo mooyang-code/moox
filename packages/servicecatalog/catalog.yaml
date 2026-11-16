@@ -21,6 +21,11 @@ components:
     scope: host
     replicas: single
     protected: true
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    tools: [moox-host-gateway-cli]
+    config_files:
+      - from: modules/hostgateway/config/trpc_go.yaml
+    after: [admin]
     ports:
       - 11002
       - 11003
@@ -55,6 +60,13 @@ components:
     scope: host
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    tools: [moox-host-agent-cli]
+    config_files:
+      - from: modules/hostagent/config/app.yaml
+      - from: modules/hostagent/config/trpc_go.yaml
+    after: [host-gateway, eventbus]
+    credentials: ["eventbus:hostagent-publisher"]
     health:
       port: 11425
     services:
@@ -101,6 +113,14 @@ components:
     scope: control
     replicas: single
     protected: true
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    tools: [moox-admin-cli]
+    config_files:
+      - from: modules/admin/config/app.yaml
+      - from: modules/admin/config/console.yaml
+      - from: modules/admin/config/trpc_go.yaml
+    after: [eventbus]
+    credentials: [cls]
     # 9527 是浏览器入口（HTTPS、静态页面与根证书下载），由 Admin 自己监听。
     ports:
       - 9527
@@ -280,6 +300,11 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    config_files:
+      - from: modules/eventbus/config/app.yaml
+      - from: modules/eventbus/config/trpc_go.yaml
+    credentials: ["eventbus:internal-admin", cls]
     ports:
       - 4222
     health:
@@ -328,6 +353,13 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    config_files:
+      - from: modules/monitor/config/app.yaml
+      - from: modules/monitor/config/trpc_go.yaml
+      - from: config/setup/dataset-health-policy.yaml
+    after: [host-gateway, eventbus]
+    credentials: ["eventbus:monitor-observability", cls]
     health:
       port: 11409
     services:
@@ -393,6 +425,15 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    tools: [moox-collector-cli]
+    config_files:
+      - from: modules/collector/config/app.yaml
+      - from: modules/collector/config/trpc_go.yaml
+      - from: config/setup/collection-tasks.yaml
+      - {from: modules/collector/configs/sources/market/binance.yaml, to: sources/market/binance.yaml}
+    after: [host-gateway, admin, eventbus, storage-primary]
+    credentials: ["eventbus:collector-eventbus", cls]
     health:
       port: 11412
     services:
@@ -555,6 +596,13 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    config_files:
+      - from: modules/collector/config/stream/app.yaml
+      - from: modules/collector/config/stream/trpc_go.yaml
+      - {from: modules/collector/configs/sources/market/binance.yaml, to: sources/market/binance.yaml}
+    after: [host-gateway, collector, storage-primary]
+    credentials: [cls]
     health:
       port: 11451
     services:
@@ -598,6 +646,13 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    tools: [moox-factor-mgr-cli]
+    config_files:
+      - from: modules/factor/config/app.yaml
+      - from: modules/factor/config/trpc_go.yaml
+    after: [host-gateway, storage-primary]
+    credentials: [cls]
     health:
       port: 11414
     services:
@@ -726,6 +781,12 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    config_files:
+      - from: modules/archive/config/app.yaml
+      - from: modules/archive/config/trpc_go.yaml
+    after: [host-gateway, storage-primary, collector]
+    credentials: [cls]
     health:
       port: 11416
     services:
@@ -824,6 +885,13 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    tools: [moox-strategy-cli]
+    config_files:
+      - from: modules/strategy/config/app.yaml
+      - from: modules/strategy/config/trpc_go.yaml
+    after: [host-gateway, factor-mgr, storage-view, eventbus]
+    credentials: ["eventbus:strategy-eventbus", cls]
     health:
       port: 11431
     services:
@@ -907,6 +975,14 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-conf={config}/trpc_go.yaml"]
+    tools: [moox-storage-cli]
+    config_files:
+      - {from: modules/storage/config/trpc_go.primary.yaml, to: trpc_go.yaml}
+      - {from: modules/storage/config/storage.primary.yaml, to: storage.yaml}
+      - from: modules/storage/schema/metadata.sql
+    after: [host-gateway, eventbus]
+    credentials: ["eventbus:storage-eventbus", cls]
     health:
       port: 20210
     services:
@@ -1089,6 +1165,12 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-conf={config}/trpc_go.yaml"]
+    config_files:
+      - from: modules/storage/config/storage_view/trpc_go.yaml
+      - from: modules/storage/config/storage.yaml
+    after: [host-gateway, eventbus, storage-primary]
+    credentials: ["eventbus:storage-eventbus", cls]
     health:
       port: 20211
     services:
@@ -1144,6 +1226,11 @@ components:
     scope: any
     replicas: multi
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    config_files:
+      - from: modules/access/config/app.yaml
+      - from: modules/access/config/trpc_go.yaml
+    after: [host-gateway]
     ports:
       - 11004
     health:
@@ -1176,6 +1263,11 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    config_files:
+      - from: modules/egressproxy/config/app.yaml
+      - from: modules/egressproxy/config/trpc_go.yaml
+    after: [host-gateway]
     health:
       port: 11441
     services:
@@ -1214,6 +1306,12 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    config_files:
+      - from: modules/trade/config/app.yaml
+      - from: modules/trade/config/trpc_go.yaml
+    after: [host-gateway, eventbus, admin]
+    credentials: ["eventbus:trade-eventbus", cls]
     health:
       port: 11210
     services:
@@ -1344,6 +1442,12 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
+    config_files:
+      - from: modules/callbackdispatcher/config/app.yaml
+      - from: modules/callbackdispatcher/config/trpc_go.yaml
+    after: [host-gateway, eventbus]
+    credentials: ["eventbus:callback-dispatcher-eventbus", cls]
     health:
       port: 11461
     services:
@@ -1406,6 +1510,12 @@ components:
     scope: any
     replicas: single
     protected: false
+    args: ["serve", "-config={config}/engine.yaml", "-conf={config}/trpc_go.yaml"]
+    config_files:
+      - from: modules/factor/config/engine.yaml
+      - {from: modules/factor/config/trpc_go.engine.yaml, to: trpc_go.yaml}
+    after: [host-gateway, factor-mgr, access]
+    credentials: ["eventbus:factor-eventbus"]
     external_program: true
     health:
       port: 11417
@@ -1470,14 +1580,16 @@ components:
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: false
-      supervisor: systemd_user
-      unit: moox-factor-engine
   - id: archive-worker
     name: 数据归档执行器
     binary: moox-archive-worker
     scope: any
     replicas: single
     protected: false
+    args: ["-config={config}/app.yaml"]
+    config_files:
+      - from: modules/archive/config/worker/app.yaml
+    after: [host-gateway, archive-mgr, access, seaweedfs]
     external_program: true
     health:
       port: 11418
@@ -1507,5 +1619,17 @@ components:
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: false
-      supervisor: systemd_user
-      unit: moox-archive-worker
+  # 内置对象存储（第三方程序 SeaweedFS，固定版本见 scripts/build/seaweedfs-sha256.txt）：只给同机的 archive-worker 用，
+  # 所有端口只听 127.0.0.1（gRPC 端口为 HTTP 端口 + 10000）；访问密钥在目标机上生成一次，桶由部署脚本建。
+  # 不写在 [deployments] 里：装了 archive-worker 且没配 [archive_object_store] 的主机自动部署它。
+  - id: seaweedfs
+    name: 内置对象存储
+    binary: weed
+    scope: any
+    replicas: single
+    protected: false
+    third_party: true
+    args: ["-logtostderr=true", "server", "-dir={data}", "-ip=127.0.0.1", "-ip.bind=127.0.0.1", "-master.port=11470", "-master.port.grpc=21470", "-master.telemetry=false", "-master.volumeSizeLimitMB=1024", "-volume.port=11471", "-volume.port.grpc=21471", "-volume.max=0", "-filer", "-filer.port=11472", "-filer.port.grpc=21472", "-s3", "-s3.port=11473", "-s3.port.grpc=21473", "-s3.port.iceberg=0", "-s3.port.lance=0", "-s3.config={secrets}/seaweedfs/s3.json"]
+    ports: [11470, 11471, 11472, 11473, 21470, 21471, 21472, 21473]
+    health:
+      port: 0

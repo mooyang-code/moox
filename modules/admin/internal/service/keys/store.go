@@ -301,8 +301,8 @@ func (s *Store) EnsureAll(ctx context.Context) ([]SigningKey, error) {
 	err := s.mutate(ctx, func(tx *gorm.DB) error {
 		callers := []string{"console", "moox-cli"}
 		for _, component := range s.catalog.Components {
-			// 外部程序组件以同名外部身份访问系统，密钥环由下面的外部身份统一生成。
-			if component.ID != "host-gateway" && !component.ExternalProgram {
+			// 外部程序组件以同名外部身份访问系统，密钥环由下面的外部身份统一生成；第三方程序（SeaweedFS）不签名。
+			if component.ID != "host-gateway" && !component.ExternalProgram && !component.ThirdParty {
 				callers = append(callers, component.ID)
 			}
 		}

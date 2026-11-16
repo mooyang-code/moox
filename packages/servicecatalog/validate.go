@@ -13,7 +13,8 @@ var (
 	identifier  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 	servicePath = regexp.MustCompile(`^trpc\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$`)
 	methodName  = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
-	unitName    = regexp.MustCompile(`^moox-[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	binaryName  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
+	placeholder = regexp.MustCompile(`\{[a-z]+\}`)
 	hostLabel   = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
 )
 
@@ -32,7 +33,12 @@ func (c Catalog) Validate() error {
 		return err
 	}
 	for _, component := range c.Components {
-		if !identifier.MatchString(component.ID) || component.Name == "" || component.Binary != "moox-"+component.ID {
+		binaryOK := component.Binary == "moox-"+component.ID
+		if component.ThirdParty {
+			// 第三方程序的二进制保留原名（weed），只要求是一个普通文件名。
+			binaryOK = binaryName.MatchString(component.Binary) && !strings.HasPrefix(component.Binary, "moox-")
+		}
+		if !identifier.MatchString(component.ID) || component.Name == "" || !binaryOK {
 			return fmt.Errorf("component %q requires a canonical ID, name and binary", component.ID)
 		}
 		if ids[component.ID] || binaries[component.Binary] {
@@ -59,8 +65,12 @@ func (c Catalog) Validate() error {
 			ports[port] = true
 			return nil
 		}
-		// 每个组件都有健康端口。
-		if err := addPort(component.Health.Port); err != nil {
+		// 每个组件都有健康端口；第三方程序没有 /healthz、/readyz，不声明健康端口，也不能声明服务。
+		if component.ThirdParty {
+			if component.Health.Port != 0 || len(component.Services) != 0 || component.ExternalProgram || component.RelayHTTP != nil || component.Scope != ScopeAny {
+				return fmt.Errorf("third-party component %q cannot declare health, services, relay or a non-any scope", component.ID)
+			}
+		} else if err := addPort(component.Health.Port); err != nil {
 			return err
 		}
 		for _, port := range component.Ports {
@@ -113,7 +123,13 @@ func (c Catalog) Validate() error {
 			}
 		}
 	}
+	if err := c.validateDeployFields(ids); err != nil {
+		return err
+	}
 	for _, component := range c.Components {
+		if component.ThirdParty {
+			continue
+		}
 		if err := validateDoctor(component, ids); err != nil {
 			return err
 		}
@@ -250,12 +266,6 @@ func validateDoctor(component Component, ids map[string]bool) error {
 	if !slices.Contains([]string{"reporter", "host_snapshot", "delegated"}, d.Transport) || !slices.Contains([]string{"active", "deferred", "not_applicable"}, d.FunctionalObservability) {
 		return fmt.Errorf("component %q has invalid doctor transport or observability", component.ID)
 	}
-	if err := ValidateSupervisor(d.Supervisor, d.Unit); err != nil {
-		return fmt.Errorf("component %q: %w", component.ID, err)
-	}
-	if component.ExternalProgram && d.Supervisor != SupervisorSystemdUser {
-		return fmt.Errorf("external program %q must be supervised by systemd_user", component.ID)
-	}
 	seen := map[string]bool{}
 	for _, dep := range d.Dependencies {
 		if !ids[dep] || dep == component.ID || seen[dep] {
@@ -273,23 +283,6 @@ func validateDoctor(component Component, ids map[string]bool) error {
 		if !slices.Contains(allowed, action) {
 			return fmt.Errorf("component %q has unknown recovery action %q", component.ID, action)
 		}
-	}
-	return nil
-}
-
-// ValidateSupervisor 校验进程托管方式与单元名的组合：systemd_user 必须带合法的单元名，其余托管方式不能带单元名。
-func ValidateSupervisor(supervisor, unit string) error {
-	switch supervisor {
-	case "", SupervisorMooxRuntime:
-		if unit != "" {
-			return fmt.Errorf("unit is only valid for supervisor %s", SupervisorSystemdUser)
-		}
-	case SupervisorSystemdUser:
-		if !unitName.MatchString(unit) {
-			return fmt.Errorf("supervisor %s requires a valid unit name", SupervisorSystemdUser)
-		}
-	default:
-		return fmt.Errorf("unknown supervisor %q", supervisor)
 	}
 	return nil
 }

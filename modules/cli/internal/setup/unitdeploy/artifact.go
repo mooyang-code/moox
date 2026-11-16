@@ -2,7 +2,6 @@ package unitdeploy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -21,21 +20,15 @@ import (
 // downloads 报告软件由目标机下载：在产物包目录里运行，并且没有指定本机二进制。
 func (o DeployOptions) downloads() bool { return o.Bundle != nil && o.BinaryDirectory == "" }
 
-// bundleSoftware 从产物包清单取一个单元的软件记录。Archive 为空表示软件不在这台电脑上。
+// errLegacyBundle 是旧部署路径遇到按组件出的发布包时的错误：发布包从 version 2 起没有部署单元，旧路径只剩源码目录可用（T13 删除）。
+var errLegacyBundle = errors.New("bundle_unsupported: 旧部署路径不支持按组件出的发布包，请用 setup deploy / setup install")
+
+// bundleSoftware 原来从产物包清单取一个单元的软件记录；发布包改成按组件出包后旧路径一律拒绝。
 func bundleSoftware(manifest *bundle.Manifest, profile, arch string) (unitpackage.Result, error) {
-	var result unitpackage.Result
 	if arch != "amd64" {
-		return result, fmt.Errorf("target_arch_unsupported: 发布只有 linux/amd64，目标机是 %s", arch)
+		return unitpackage.Result{}, fmt.Errorf("target_arch_unsupported: 发布只有 linux/amd64，目标机是 %s", arch)
 	}
-	artifact, ok := manifest.Units[profile]
-	if !ok {
-		return result, fmt.Errorf("bundle_incomplete: 产物包 %s 没有 %s 单元", manifest.Release, profile)
-	}
-	if err := json.Unmarshal(artifact.Manifest, &result.Manifest); err != nil || result.Manifest.Profile != profile {
-		return result, fmt.Errorf("bundle_incomplete: 产物包 %s 的 %s 单元清单无效", manifest.Release, profile)
-	}
-	result.SHA256, result.RemoteFile, result.Size, result.Release = "sha256:"+artifact.SHA256, artifact.File, artifact.Size, manifest.Release
-	return result, nil
+	return unitpackage.Result{}, errLegacyBundle
 }
 
 // packageHelperSHA 从 host 包清单取运行助手的摘要。
@@ -137,17 +130,9 @@ func HostUnits(manifest setupconfig.Manifest, hostID string) []string {
 	return units
 }
 
-// prefetchRequest 组织一台主机的下载请求。
+// prefetchRequest 原来组织一台主机按单元的下载请求；发布包改成按组件出包后旧路径一律拒绝。
 func prefetchRequest(manifest setupconfig.Manifest, bundleManifest *bundle.Manifest, hostID string) (fetchunit.Request, error) {
-	request := fetchunit.Request{DeployRoot: manifest.Paths.Resolved().DeployRoot, Release: bundleManifest.Release, URLs: fetchunit.Sources(bundleManifest.Release)}
-	for _, unit := range HostUnits(manifest, hostID) {
-		artifact, ok := bundleManifest.Units[unit]
-		if !ok {
-			return request, fmt.Errorf("bundle_incomplete: 产物包 %s 没有 %s 单元", bundleManifest.Release, unit)
-		}
-		request.Files = append(request.Files, fetchunit.File{Name: artifact.File, SHA256: artifact.SHA256, Size: artifact.Size})
-	}
-	return request, nil
+	return fetchunit.Request{DeployRoot: manifest.Paths.Resolved().DeployRoot, Release: bundleManifest.Release}, errLegacyBundle
 }
 
 func dialHost(ctx context.Context, host setupconfig.Host, options DeployOptions) (setupssh.Client, error) {
@@ -183,9 +168,10 @@ func CheckDownload(ctx context.Context, manifest setupconfig.Manifest, options D
 	return fetchunit.Reachable(ctx, transport, request), nil
 }
 
-// LocalDownloadReachable 实测这台电脑能不能从发布页下载。
+// LocalDownloadReachable 实测这台电脑能不能从发布页下载（按主机网关的组件包试）。
 func LocalDownloadReachable(ctx context.Context, options DeployOptions) bool {
-	return fetchunit.LocalReachable(ctx, fetchunit.Sources(options.Bundle.Release), options.Bundle.Units["host"].File)
+	artifact, ok := options.Bundle.Component("host-gateway")
+	return ok && fetchunit.LocalReachable(ctx, fetchunit.Sources(options.Bundle.Release), artifact.File)
 }
 
 // Prefetch 让一台主机下载它要的全部单元。失败不致命：部署时还会换源和本机推送。

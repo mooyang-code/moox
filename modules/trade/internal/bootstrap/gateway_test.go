@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"math/big"
@@ -34,10 +33,9 @@ import (
 func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "trade", "config", "app.yaml")
-	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
 	keyPath := filepath.Join(root, "secrets", "caller-trade.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
-	for _, path := range []string{configPath, hostPath, keyPath, caPath} {
+	for _, path := range []string{configPath, keyPath, caPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
 	}
 	credentials := gatewayauth.Credentials{Caller: "trade", KeyID: "admin-assigned-trade-key-42", Secret: "trade-fixture-signing-key-at-least-32-bytes"}
@@ -50,12 +48,6 @@ func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	host := hostgatewayconfig.Default("control", "control", "192.0.2.1", "host-fixture-key")
-	host.Server.LocalAddr = listener.Addr().String()
-	host.TLS.CAFile = caPath
-	encoded, err := hostgatewayconfig.Encode(host)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(hostPath, encoded, 0600))
 	directory := servicecatalog.Directory{Services: map[string][]string{"trpc.moox.ops.SecretMgr": {"control"}}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
@@ -117,7 +109,7 @@ func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	data := filepath.Join(root, "data", "trade")
-	raw := "database:\n  path: " + filepath.Join(data, "trade.db") + "\ngateway_client:\n  caller: trade\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-trade.key\n"
+	raw := "database:\n  path: " + filepath.Join(data, "trade.db") + "\ngateway_client:\n  caller: trade\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-trade.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
 	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0600))
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)

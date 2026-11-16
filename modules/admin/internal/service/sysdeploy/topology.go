@@ -193,7 +193,8 @@ func (d *TopologyDAO) propose(hosts []HostRecord, deployments []DeploymentRecord
 	wanted := map[string]bool{}
 	for _, id := range spec.Components {
 		component, ok := d.catalog.Component(id)
-		if !ok || wanted[id] || component.Scope == servicecatalog.ScopeHost {
+		// 第三方程序（SeaweedFS）不登记：它不上报，部署由 moox-cli 按拓扑推出来。
+		if !ok || wanted[id] || component.Scope == servicecatalog.ScopeHost || component.ThirdParty {
 			return nil, nil, fmt.Errorf("%w: unknown, duplicate or automatic component %q", ErrInvalidTopology, id)
 		}
 		wanted[id] = true

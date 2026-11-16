@@ -3,6 +3,7 @@ package configinit
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 func TestGetConfigMasksSecretsUnlessRevealed(t *testing.T) {
@@ -39,6 +41,85 @@ func TestGetConfigMasksSecretsUnlessRevealed(t *testing.T) {
 	// 在 moox.toml 里找秘密段：提示去秘密文件里找。
 	_, err = GetConfig(configPath, "admin.password", false, keys)
 	require.ErrorContains(t, err, "加 --file "+secretsPath)
+}
+
+// 秘密文件默认整份打码，只有用来辨认是哪一项的键（用户名、渠道类型、交易所密钥的名称、交易所、环境、只读）看得见：
+// 告警 Webhook 地址里带着企业微信的 key、钉钉的 access_token，不能明文打到终端或 Agent 对话里。
+func TestGetConfigMasksTheWholeSecretsFileExceptIdentifyingKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, topology.SecretsFileName)
+	const webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=wecom-key-123"
+	plain := `[admin]
+username = "admin"
+password = "Adm1n-P@ss"
+
+[tencent_cloud]
+secret_id = "AKIDexample"
+secret_key = "sk-example"
+
+[notification]
+channel_type = "wecom"
+webhook_url = "` + webhook + `"
+
+[[exchange_keys]]
+name = "main"
+exchange = "binance"
+environment = "production"
+api_key = "api-example"
+secret_key = "secret-example"
+readonly = true
+`
+	require.NoError(t, os.WriteFile(path, []byte(plain), 0o600))
+	keys := &configcrypt.MemoryStore{}
+
+	whole, err := GetConfig(path, "", false, keys)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(whole)
+	require.NoError(t, err)
+	for _, secret := range []string{webhook, "wecom-key-123", "Adm1n-P@ss", "AKIDexample", "sk-example", "api-example", "secret-example"} {
+		require.NotContains(t, string(encoded), secret)
+	}
+	notification, err := GetConfig(path, "notification", false, keys)
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"channel_type": "wecom", "webhook_url": MaskedValue}, notification)
+	url, err := GetConfig(path, "notification.webhook_url", false, keys)
+	require.NoError(t, err)
+	require.Equal(t, MaskedValue, url)
+	exchange, err := GetConfig(path, "exchange_keys.0", false, keys)
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"name": "main", "exchange": "binance", "environment": "production", "api_key": MaskedValue, "secret_key": MaskedValue, "readonly": true}, exchange)
+
+	url, err = GetConfig(path, "notification.webhook_url", true, keys)
+	require.NoError(t, err)
+	require.Equal(t, webhook, url, "--reveal 才明文")
+}
+
+// config 各命令读秘密文件用 CLI 同一套校验：符号链接、不属于本人的文件都拒绝。
+func TestConfigCommandsRefuseSymlinkedOrForeignSecretsFiles(t *testing.T) {
+	configPath, secretsPath, keys := pairFixture(t)
+	real := filepath.Join(t.TempDir(), "elsewhere.toml")
+	raw, err := os.ReadFile(secretsPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(real, raw, 0o600))
+	require.NoError(t, os.Remove(secretsPath))
+	require.NoError(t, os.Symlink(real, secretsPath))
+	_, err = GetConfig(secretsPath, "admin", false, keys)
+	require.ErrorContains(t, err, "普通文件")
+	_, err = SetConfig(secretsPath, "admin.username", "ops", false, keys, nil)
+	require.ErrorContains(t, err, "普通文件")
+	_, err = readConfigFile(secretsPath, true)
+	require.ErrorContains(t, err, "普通文件")
+	_ = configPath
+
+	if os.Geteuid() == 0 {
+		t.Skip("以 root 运行时找不到不属于本人的文件")
+	}
+	foreign := "/etc/hosts"
+	if _, err := os.Lstat(foreign); err != nil {
+		t.Skip("没有可用的系统文件")
+	}
+	_, err = readConfigFile(foreign, true)
+	require.ErrorContains(t, err, "属于当前用户")
 }
 
 func TestGetConfigRejectsUnknownPathAndIndexesArrays(t *testing.T) {

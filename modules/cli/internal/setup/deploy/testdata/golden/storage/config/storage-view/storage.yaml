@@ -1,0 +1,20 @@
+storage:
+  root: /data/moox/data/storage-view
+  # Dataset retention and View limits rendered by moox-cli from moox.toml.
+  policy_file: /data/moox/config/storage-view/storage-policy.json
+  roles:
+    - primary
+    - view
+  metadata:
+    path: /data/moox/data/storage-view/metadata/storage_metadata.db
+  devices:
+    pebble_path: /data/moox/data/storage-view/pebble
+    view_index_root: /data/moox/data/storage-view/view-indexes
+  eventbus:
+    credential_file: /data/moox/secrets/eventbus/storage-eventbus.yaml
+  view:
+    # 首次建索引时按页读取主库历史并串行请求，避免对 Storage 形成突发压力。
+    backfill_page_size: 2000
+    backfill_request_interval: 100ms
+    # 定时删除最旧数据（每分钟第 10 秒触发、偶数分钟执行）：每个序列只保留最新的 bars 根，每批最多删除这么多行最旧数据。
+    delete_oldest_batch_size: 2000

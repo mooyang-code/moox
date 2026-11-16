@@ -9,12 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRunKeepsDependencyOrderAndSameHostSerial(t *testing.T) {
-	steps := []deployscan.Step{
+	steps := []Step{
 		{Group: 1, Host: "control", Command: "admin"},
 		{Group: 2, Host: "storage", Command: "storage-1"},
 		{Group: 2, Host: "storage", Command: "storage-2"},
@@ -24,7 +23,7 @@ func TestRunKeepsDependencyOrderAndSameHostSerial(t *testing.T) {
 	var mu sync.Mutex
 	finished := []string{}
 	var output bytes.Buffer
-	err := Run(context.Background(), steps, func(_ context.Context, step deployscan.Step) error {
+	err := Run(context.Background(), steps, func(_ context.Context, step Step) error {
 		time.Sleep(5 * time.Millisecond)
 		mu.Lock()
 		defer mu.Unlock()
@@ -47,14 +46,14 @@ func TestRunKeepsDependencyOrderAndSameHostSerial(t *testing.T) {
 }
 
 func TestRunStopsLaterGroupsAndOtherLanesAfterFailure(t *testing.T) {
-	steps := []deployscan.Step{
+	steps := []Step{
 		{Group: 1, Host: "a", Command: "a-1"},
 		{Group: 1, Host: "b", Command: "b-1"},
 		{Group: 1, Host: "b", Command: "b-2"},
 		{Group: 2, Host: "a", Command: "later"},
 	}
 	ran := sync.Map{}
-	err := Run(context.Background(), steps, func(_ context.Context, step deployscan.Step) error {
+	err := Run(context.Background(), steps, func(_ context.Context, step Step) error {
 		ran.Store(step.Command, true)
 		if step.Command == "a-1" {
 			return errors.New("boom")

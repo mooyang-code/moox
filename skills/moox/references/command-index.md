@@ -301,10 +301,8 @@
 | 命令 | 说明 |
 | --- | --- |
 | `setup attach-scf-vpc` | 为腾讯云函数绑定 VPC 子网（默认只预览，--yes 才绑定） |
-| `setup bootstrap` | 通过已核验 SSH 初始化核心或完整控制服务 |
 | `setup build-linux` | 在本机 Docker 里构建需要 CGO 的 Linux 二进制 |
-| `setup deploy-host` | 通过已核验 SSH 部署指定主机的 Host Gateway 与 Host Agent |
-| `setup deploy-unit` | 通过已核验 SSH 部署业务单元 |
+| `setup deploy` | 把一台主机部署成 moox.toml 描述的样子：放二进制、渲染配置、按顺序重启有变化的组件，等它们就绪（`--component` 只部署个别组件） |
 | `setup deployment disable` | 停用部署：外部程序先停服务并核对已停止，再改登记；普通组件只改登记 |
 | `setup deployment enable` | 启用部署：外部程序要求主机已启用，先改登记再启动服务；普通组件只改登记 |
 | `setup export-skill-config` | 导出 Skill 使用的最小数据访问配置 |
@@ -315,25 +313,24 @@
 | `setup hosts` | 列出可选的部署主机（不输出密码） |
 | `setup init` | 导入默认空间与元数据，写入初始秘密（管理员、云密钥、交易所密钥、告警渠道，只建不改） |
 | `setup verify` | 验收一个空间：K 线入库、因子前进、策略在运行才算通过，只读 |
-| `setup logs` | 只读查看组件在主机上的日志，包括失败回滚的发布目录，密钥字段已遮掉 |
+| `setup logs` | 只读查看组件在主机上的日志：先看文件日志（logs/<组件>/），没有再看 journald 里这个服务的输出 |
 | `setup inspect-scf` | 检查腾讯云函数网络配置 |
-| `setup install` | 一条命令装完：预检、下载、清除旧部署、防火墙、部署、初始化、启动和验收（默认只预检） |
+| `setup install` | 一条命令装完：防火墙、逐台部署、初始化、启动和验收（默认只预检） |
 | `setup invoke-scf` | 直接调用腾讯云函数 |
 | `setup metadata-import` | 通过 Storage SSH 隧道导入选定业务空间 |
-| `setup package inspect` | 校验部署包的组件边界、平台、文件与摘要 |
+| `setup package-components` | 按服务目录把编译好的 Linux 二进制打成每个组件一个包（发布脚本用） |
 | `setup reboot-host` | 重启无响应的腾讯云主机（默认只预览，--yes 才重启） |
-| `setup release build` | 在本机构建并打包一个版本的全部纯 Go 单元 |
-| `setup release fetch` | 用当前产物包登记一个版本，目标机部署时下载 |
 | `setup remove-host` | 从 Admin 删除一台已不在 moox.toml 里的主机（默认只预览） |
-| `setup restart` | 重启主机上的单个组件（默认只预览，--yes 才重启） |
+| `setup restart` | 重启一个组件（systemctl --user restart；默认只预览，--yes 才执行） |
 | `setup start` | 启动一个空间：启用采集任务，导入默认因子任务，创建默认示例策略 |
-| `setup status` | 检查初始化记录状态 |
+| `setup start-component` | 恢复一个被停掉的组件并开机自启（systemctl --user enable --now；默认只预览） |
+| `setup status` | 只读查看各主机的部署状态：version.json 里的版本，以及每个组件的用户服务是否在运行 |
+| `setup stop` | 停掉一个组件并不再开机自启（systemctl --user disable --now；之后的部署保持停用；默认只预览） |
 | `setup sync-deployments` | 把 moox.toml 中指定主机的组件部署同步给 Admin（生成网关路由；默认只预览，--yes 才执行） |
 | `setup trust-browser` | 检查并安装管理台浏览器证书信任 |
 | `setup trust-host` | 确认并记录 SSH 主机指纹 |
-| `setup validate` | 校验初始化配置和连接，并报告目标机器的部署情况、发布路线（route）和接下来要运行的命令（next_steps） |
-| `setup watchdog` | 在各主机安装（或移除）主机级守护与告警策略种子 |
-| `setup wipe` | 彻底清除 moox.toml 所列主机上全部 MooX 旧程序和数据（默认只预览，不可恢复） |
+| `setup validate` | 校验两份配置和连接，并报告各主机的部署情况（route）和接下来要运行的命令（next_steps） |
+| `setup wipe` | 彻底清空 moox.toml 所列主机上的 MooX 部署（默认只预览，不可恢复） |
 
 ## space：空间：一组相互隔离的业务数据（调用 SpaceMgr）
 

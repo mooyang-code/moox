@@ -1,0 +1,19 @@
+# collector-stream：接收交易所 WebSocket 收盘 K 线按周期提交 Storage，同进程提供本地执行端（补采与本地定时拉取）。
+# 计划（订阅哪些标的、截止、提交预留）全部来自 Collector，这里只有进程级参数。
+gateway_client:
+  caller: collector-stream
+  key_id: key-collector-stream
+  key_file: /data/moox/secrets/caller-collector-stream.key
+  # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
+  host_id: overseas
+  local_address: 127.0.0.1:11002
+  ca_file: /data/moox/secrets/moox-ca.crt
+# 服务的空间；部署时由 MOOX_SPACE_ID 给出时可以留空。
+space_id: ""
+instance_id: ""
+data_dir: /data/moox/data/collector-stream
+# 相对本文件所在目录。
+market_config: /data/moox/config/collector-stream/sources/market/binance.yaml
+storage_timeout_ms: 4000
+local_executor:
+  concurrency: 4

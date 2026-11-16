@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use for everything about the MooX quant system (MooX 量化系统) — installing and deploying it from release artifacts (安装, 部署, 初始化, 免密登录, moox-cli config init, setup bootstrap/deploy-host/deploy-unit/init), upgrading or rolling back production units (发布, 上线, 升级, 回滚, native release, service catalog rollout, 全新部署, 清空重装), and day-to-day management through moox-cli and gateway call (采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记). Also covers querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情 queries, factor expression DSL (因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子), strategy DSL (策略 DSL, rank 规则, ValidateStrategy, 策略迁移, 选币策略), 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Linux Host Agent monitoring, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud firewall, CLS log queries, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance, and the moox-cli command set that covers the 管理台 (空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易只读, host exec, 命令覆盖).
+description: Use for everything about the MooX quant system (MooX 量化系统) — installing and deploying it from release artifacts (安装, 部署, 初始化, 免密登录, moox-cli config init, setup install/deploy/init/status/logs), upgrading or rolling back production hosts (发布, 上线, 升级, 回滚, setup deploy, service catalog rollout, 全新部署, 清空重装), and day-to-day management through moox-cli and gateway call (采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记). Also covers querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情 queries, factor expression DSL (因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子), strategy DSL (策略 DSL, rank 规则, ValidateStrategy, 策略迁移, 选币策略), 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Linux Host Agent monitoring, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud firewall, CLS log queries, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance, and the moox-cli command set that covers the 管理台 (空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易只读, host exec, 命令覆盖).
 ---
 
 # MooX
@@ -10,13 +10,13 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 ## 安全边界（每次都要遵守）
 
-- **`moox.toml` 是加密的私有配置**：Agent 不直接读取、打印、复制或 `source` 这个文件；要看配置用 `moox-cli config get <路径>`（密钥打码），改单个值用 `moox-cli config set 表.键=值`（见 [`references/config-access.md`](references/config-access.md)）。Agent 也不打开 `config init` / `config edit` / `config restore` 的本机页面；
+- **配置是两份文件**：`moox.toml` 是明文的拓扑与部署参数（没有秘密，可以直接看和改）；同目录的 `moox.secrets.toml` 是加密的秘密，Agent 不直接读取、打印、复制或 `source` 它；要看用 `moox-cli config get --file ./moox.secrets.toml <路径>`（默认打码），改单个值用 `moox-cli config set 表.键=值`（见 [`references/config-access.md`](references/config-access.md)）。Agent 也不打开 `config init` / `config edit` / `config restore` 的本机页面；
   只有 `moox-cli` 自己读取其中的密钥。用户要看或改配置时运行 `./bin/moox-cli config edit`，让用户在自己的浏览器里操作。
 - **密码与密钥不经过 Agent**：SSH 密码只在 `config init` 的免密登录页面里由用户输入一次；交易所、云账户等密钥由用户在管理台“设置 › 密钥”自己填写。
 - **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`collector function delete`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
-  部署类命令（`setup bootstrap`、`deploy-host`、`deploy-unit`、`init`）没有预览：执行前把 `setup validate` 输出的 `next_steps`（连同防火墙放行内容）作为部署计划一次给用户确认，确认后依次执行，只在计划变化或失败时再问；`setup wipe` 要按 [`references/install.md`](references/install.md) 第 3 节询问用户，并带预览里的 `--expect` 执行；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
+  `setup install` 不带 `--yes` 是预检：把它输出的步骤（连同防火墙放行内容、`manual_steps`）作为部署计划一次给用户确认，确认后带 `--yes` 执行，只在计划变化或失败时再问；单独的 `setup deploy`、`setup init` 没有预览，执行前同样先向用户说明会动哪台主机、哪些组件会重启；`setup wipe` 要按 [`references/install.md`](references/install.md) 第 3 节询问用户，并带预览里的 `--expect` 执行；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
 - **`gateway call` 取不到密钥明文，也不能改密钥**：它拒绝返回密钥明文或完整 webhook 的方法，以及密钥的新建、修改、启停、删除；云账户等凭证由专用命令在进程内使用，不会打印。`secret list|show` 只给打码后的信息。
-- **本机状态和线上密钥不碰**：不读取、不打印 `~/.local/state/moox/setup/`（请求文件含 SSH 私钥）、线上的 `secrets/` 和 `identity/`；不手工写入或恢复 `runtime-identity.json`、`admin-ready.json`；不在目标机器上手动执行 `moox-runtime bootstrap`；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。
+- **本机身份和线上密钥不碰**：不读取、不打印、不手工拷贝或恢复 `~/.config/moox/` 下的操作员身份，也不读线上部署根的 `secrets/`；不在目标机器上手动执行 `moox-admin-cli bootstrap`、手工改 `version.json` 或单元文件；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。
 - **只在用户明确要求时发布或升级**，并且只发布用户点名的组件。
 - 交易模块已支持现货、永续多市场执行（按策略目标自动下单，管理台上人工下单、撤单、清仓；保证金率风控触发时系统自动减仓），但人工写操作由用户在管理台自己做：Agent 只用 `trade …` 查询，不代用户创建或修改实盘账户、下单、撤单、清仓或解除下架禁止（下架名单由用户在管理台交易页查看与解除），也不向交易所下真实订单。实盘前必须先跑测试网冒烟（`modules/trade/scripts/testnet-smoke.sh`，由用户或维护者执行，Agent 不执行）；币安统一账户的现货买单资金来源等未核对项要等用户本人小额实测（见 `docs/模块/交易.md` 第 12 节）。
 
@@ -31,7 +31,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 | 取采集的 K 线等数据 | [`references/data-query.md`](references/data-query.md) |
 | 首页“N 项需要处理”、告警、数据长时间未更新 | [`references/monitor-attention.md`](references/monitor-attention.md) |
 | 新增、部署、启停、移除机器；因子引擎与归档 Worker | [`references/host-registry.md`](references/host-registry.md) |
-| 升级、回滚已安装的单元 | [`references/native-release.md`](references/native-release.md) |
+| 从源码目录部署、升级、回滚（维护者） | [`references/native-release.md`](references/native-release.md) |
 | 清空生产后按默认配置重装 | [`references/fresh-deploy.md`](references/fresh-deploy.md) |
 | 写因子、转换 Python 因子、修改已有因子 | [`references/factor-dsl.md`](references/factor-dsl.md) |
 | 自定义算子（Rust → wasm） | [`references/udf.md`](references/udf.md) |
@@ -62,17 +62,17 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **排查顺序固定**：先看 CLI 给出的错误码和原因，查 [`references/install.md`](references/install.md) 的常见问题；再用 `setup logs --host <主机> --component <组件>` 看日志（只读，不用再次授权）；还看不清就停下，向用户说清停在哪一步、已确认的事实和不确定的地方。不把产物包源码当主要排查手段，路线走不通时不要自己绕路。
 - **重试**：重试前先说明这次改变了什么；什么都没变就不重试。只有 `ssh_disconnected` 可以直接用同样的参数重跑。
 - **下结论要有证据**：没看到错误码或日志，不说“产物有问题”，不建议回退版本，不把资源不足、端口竞态这类猜测写成结论。
-- **不手工处理进程**：不 `kill`、不上机 `stop`，也不用重启机器解决部署问题，这些都绕过了维护锁和身份核对。端口被占时按占用者处理：非 MooX 程序问用户；旧部署按 `route` 走升级或 `setup wipe`；失败尝试的残留由 CLI 自动清理。
+- **不手工处理进程**：不 `kill`、不上机 `stop`，也不用重启机器解决部署问题，这些都绕过了维护锁和身份核对。端口被占时按占用者处理：非 MooX 程序问用户；装过的机器按 `route` 走原地重新部署或 `setup wipe`；失败尝试的残留由 CLI 自动清理。
 - **View 内存**：`moox-storage-view` 常驻内存约为全部 View 索引文件大小的 2.5～3 倍，首次建索引时再加最大索引的 1～1.5 倍。用户新建 View、给 View 加标的或因子列、
   调大 `[storage_retention] view_rows_per_series` 或放宽 `[storage_view.max_age]` 时，按 [`references/storage.md`](references/storage.md) 估算并提醒余量；
   办法是换更大的机器、减少根数、缩短年龄上限或减少 View，不要建议调高单个 DuckDB 的内存上限。
-- **配置变更**：`moox.toml` 的改动（保留期、View 设置等）只有重新安装对应单元才生效（`setup release build` 加该单元的命令带 `--release`）；只换二进制保留已安装的配置。
-  缩短保留期会在下次清理时删数据，先跟用户确认。不要手改主机上的配置文件。
+- **配置变更**：`moox.toml` 的改动（保留期、View 设置等）要重新部署对应主机才生效（`setup deploy --host <主机>`，配置每次部署都重新渲染）；个别组件要调的值写在 `[overrides]` 里。
+  缩短保留期会在下次清理时删数据，先跟用户确认。不要手改主机上的配置文件，下次部署会被覆盖。
 - **View 与因子恢复**：先分别量 Primary、View、Factor 三层水位；不要手删 View 索引或 Factor 的 durable consumer，用 `moox-cli` 的对应命令（先 dry-run）；View 跟随变更日志，没有 consumer。
 - **主机与部署**：`t_hosts` / `t_deployments` 是唯一登记处，增删启停只走 `moox-cli setup …`，管理台只读。
 - **监控告警**：先判断是真问题、已删除对象的残留，还是重启造成的瞬时现象；不要手改 `monitor.db`，不要把重启当修复手段。
 - **采集或计划有问题**：不删任务、不用 `host exec` 改数据库、不用维护者脚本。先看 `collector status --space-id <空间>` 和 `setup verify` 给出的原因，走不通就停下来汇报。
-- **重启单个组件**：用 `setup restart --host <主机> --component <组件> --yes`，不重发整个单元。
+- **重启单个组件**：用 `setup restart --host <主机> --component <组件> --yes`，不用重新部署整台主机；临时停掉用 `setup stop`，恢复用 `setup start-component`。
 - **初始化后**：提醒用户在自己的终端让浏览器信任管理台 CA（[`references/install.md`](references/install.md) 第 5 节），不要替用户清理钥匙串里的这张证书。
 
 ### EventBus 凭据

@@ -56,8 +56,9 @@ var startedAt = time.Now()
 // maxChildNotional 是下单校验的单笔金额硬上限；目标拆单的单笔上限在组合的下单设置里，不能超过它。
 const maxChildNotional = ordersettings.MaxChildNotionalCeiling
 
-func Initialize(ctx context.Context, serverInstance *server.Server) (*server.Server, error) {
-	cfg, err := config.Load("./config/app.yaml")
+// Initialize 读 configPath 指向的业务配置（-config）并装配服务。
+func Initialize(ctx context.Context, serverInstance *server.Server, configPath string) (*server.Server, error) {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, err
 	}

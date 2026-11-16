@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -13,11 +14,11 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/configinit"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	"github.com/mooyang-code/moox/modules/cli/internal/tencenthost"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
@@ -26,48 +27,47 @@ import (
 
 const defaultSetupFile = "./moox.toml"
 
+// setupSnapshot 是 setup 命令读到的两份配置：Manifest 是明文的 moox.toml，Secrets 是解开的 moox.secrets.toml。
+type setupSnapshot struct {
+	Manifest *topology.Config
+	Secrets  *topology.Secrets
+}
+
 type setupDeps struct {
-	bootstrapAdmin        setupAdminBootstrap
-	bootstrapControl      setupControlBootstrap
-	deployHost            setupHostDeploy
-	deployUnit            setupUnitDeploy
-	buildRelease          setupReleaseBuild
-	load                  func(string) (*setupconfig.Snapshot, error)
+	load                  func(string) (*setupSnapshot, error)
 	loadInitBundle        func(string) (setupInitBundle, error)
-	validate              func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
-	trustHost             func(context.Context, *setupconfig.Snapshot, string, string) error
-	status                func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
-	applySpaces           func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error)
-	statusSpaces          func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
-	registerCloudAccounts func(context.Context, *setupconfig.Snapshot) (*setupCloudAccountSummary, error)
-	provisionCLS          func(context.Context, *setupconfig.Snapshot) (*setupCLSSummary, error)
-	ensureSCFPlan         func(context.Context, *setupconfig.Snapshot) (*setupSCFPlanSummary, error)
-	login                 func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
-	openInitStorage       func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
-	openInitFactor        func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error)
+	validate              func(context.Context, *setupSnapshot) (setupvalidate.Result, error)
+	trustHost             func(context.Context, *setupSnapshot, string, string) error
+	applySpaces           func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error)
+	statusSpaces          func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.StatusResult, error)
+	registerCloudAccounts func(context.Context, *setupSnapshot) (*setupCloudAccountSummary, error)
+	provisionCLS          func(context.Context, *setupSnapshot) (*setupCLSSummary, error)
+	ensureSCFPlan         func(context.Context, *setupSnapshot) (*setupSCFPlanSummary, error)
+	login                 func(context.Context, *setupSnapshot) (setupclient.LoginResult, error)
+	openInitStorage       func(context.Context, *setupSnapshot, string) (setupInitStorage, error)
+	openInitFactor        func(context.Context, *setupSnapshot) (setupInitFactor, error)
 	// ensureNotification 在 Monitor 还没有任何告警渠道时写入初始渠道（只建不改）；测试里替换。
-	ensureNotification  func(context.Context, *setupconfig.Snapshot) (*setupNotificationSummary, error)
-	initStorage         func(context.Context, *setupconfig.Snapshot, string, string, string, setupInitBundle) (setupInitSummary, error)
-	initMetadata        func(context.Context, *setupconfig.Snapshot, string, setupInitBundle) (setupInitStorageSummary, error)
-	installWatchdog     func(context.Context, *setupconfig.Snapshot, setupconfig.Host, bool) (json.RawMessage, error)
-	importMetadata      func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
-	exportSkillConfig   func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
-	ensureFirewall      func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
-	ensureRelayFirewall func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
-	// scanDeployment 检测目标机器的部署情况；测试里为空时跳过检测。
-	scanDeployment   func(context.Context, *setupconfig.Snapshot, deployscan.Options) ([]deployscan.HostReport, error)
-	wipeHost         func(context.Context, setupconfig.Host, string, []string, bool) (deployscan.HostResult, error)
-	restartComponent func(context.Context, setupRestartTarget) (json.RawMessage, error)
-	openStart        func(context.Context, string, *setupconfig.Snapshot) (setupStartClient, func(), error)
+	ensureNotification  func(context.Context, *setupSnapshot) (*setupNotificationSummary, error)
+	initStorage         func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitSummary, error)
+	initMetadata        func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error)
+	importMetadata      func(context.Context, *setupSnapshot, string, string, []string) (metadataImportSummary, error)
+	exportSkillConfig   func(context.Context, *setupSnapshot, string) (dataAccessConfig, error)
+	ensureFirewall      func(context.Context, *setupSnapshot) (setupFirewallSummary, error)
+	ensureRelayFirewall func(context.Context, *setupSnapshot) (setupFirewallSummary, error)
+	// scanDeployment 只读检测目标机器的部署情况；wipeHost 清空一台主机。
+	scanDeployment func(context.Context, *setupSnapshot, deployscan.Options) ([]deployscan.HostReport, error)
+	wipeHost       func(context.Context, topology.Host, string) (deployscan.HostResult, error)
+	// deployHost 部署一台主机；waitReady 等一台主机上的一组组件就绪，返回到时限还没就绪的组件与原因。
+	deployHost func(context.Context, deploy.Options) (deploy.Result, error)
+	waitReady  func(context.Context, topology.Host, []string, time.Duration) (map[string]string, error)
+	// operate 对一个组件的用户服务执行 restart、stop、start；readLogs 读组件日志。
+	operate   func(context.Context, topology.Host, string, string) (string, error)
+	readLogs  func(context.Context, topology.Host, string, []string, string, int, bool) ([]deploy.LogSection, error)
+	openStart func(context.Context, string, *setupSnapshot) (setupStartClient, func(), error)
 	// backupConfig、verifySpace 是 setup install 的最后两步，测试里替换。
 	backupConfig func(context.Context, string) error
-	// checkDownload、prefetch、localReachable 连目标机和下载源，测试里替换。
-	checkDownload  func(context.Context, setupconfig.Manifest, unitdeploy.DeployOptions, string) (bool, error)
-	prefetch       func(context.Context, setupconfig.Manifest, unitdeploy.DeployOptions, string) error
-	localReachable func(context.Context, unitdeploy.DeployOptions) bool
-	verifySpace    func(context.Context, string, *setupconfig.Snapshot, unitdeploy.DeployOptions, string) error
-	regionCloud    func(setupconfig.Manifest, string) (setupFunctionCloud, error)
-	readLogs       func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
+	verifySpace  func(context.Context, string, *setupSnapshot, string) error
+	regionCloud  func(*setupSnapshot, string) (setupFunctionCloud, error)
 }
 
 func init() {
@@ -82,32 +82,30 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		SilenceUsage: true,
 	}
 	cmd.AddCommand(
+		newSetupInstallCommand(deps),
+		newSetupDeployCommand(deps),
 		newSetupInitCommand(deps),
-		newSetupWipeCommand(deps),
+		newSetupStartCommand(deps),
+		newSetupVerifyCommand(deps),
+		newSetupValidateCommand(deps),
+		newSetupStatusCommand(deps),
 		newSetupLogsCommand(deps),
 		newSetupRestartCommand(deps),
-		newSetupStartCommand(deps),
-		newSetupInstallCommand(deps),
-		newSetupVerifyCommand(deps),
+		newSetupStopCommand(deps),
+		newSetupStartComponentCommand(deps),
+		newSetupWipeCommand(deps),
 		newSetupHostsCommand(deps),
 		newSetupSyncDeploymentsCommand(deps),
 		newSetupRemoveHostCommand(deps),
-		newSetupValidateCommand(deps),
 		newSetupTrustHostCommand(deps),
 		newSetupTrustBrowserCommand(deps),
 		newSetupBuildLinuxCommand(deps),
-		newSetupBootstrapCommand(deps),
-		newSetupDeployHostCommand(deps),
-		newSetupDeployUnitCommand(deps),
-		newSetupReleaseCommand(deps),
-		newSetupPackageCommand(),
-		newSetupStatusCommand(deps),
+		newSetupPackageComponentsCommand(),
 		newSetupRebootHostCommand(deps),
 		newSetupHostDiagnosticsCommand(deps),
 		newSetupInspectSCFCommand(deps),
 		newSetupAttachSCFVPCCommand(deps),
 		newSetupInvokeSCFCommand(deps),
-		newSetupWatchdogCommand(deps),
 		newSetupMetadataImportCommand(deps),
 		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
@@ -133,15 +131,15 @@ func newSetupInspectSCFCommand(deps setupDeps) *cobra.Command {
 			defer clearSetupSecrets(snapshot)
 			region = strings.TrimSpace(region)
 			if region == "" {
-				region = snapshot.Manifest.TencentCloud.Region
+				region = snapshot.Manifest.CloudRegion()
 			}
 			namespace = firstNonEmpty(namespace, "default")
 			if strings.TrimSpace(functionName) == "" {
 				return fmt.Errorf("--function is required")
 			}
 			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
-				SecretID:  snapshot.Manifest.TencentCloud.SecretID,
-				SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
+				SecretID:  snapshot.Secrets.TencentCloud.SecretID,
+				SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
 				Region:    region,
 			})
 			if err != nil {
@@ -187,13 +185,13 @@ func newSetupAttachSCFVPCCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			region = firstNonEmpty(strings.TrimSpace(region), snapshot.Manifest.TencentCloud.Region)
+			region = firstNonEmpty(strings.TrimSpace(region), snapshot.Manifest.CloudRegion())
 			namespace = firstNonEmpty(strings.TrimSpace(namespace), "default")
 			if strings.TrimSpace(functionName) == "" || strings.TrimSpace(vpcID) == "" || strings.TrimSpace(subnetID) == "" {
 				return fmt.Errorf("--function, --vpc-id and --subnet-id are required")
 			}
 			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
-				SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey, Region: region,
+				SecretID: snapshot.Secrets.TencentCloud.SecretID, SecretKey: snapshot.Secrets.TencentCloud.SecretKey, Region: region,
 			})
 			if err != nil {
 				return err
@@ -244,7 +242,7 @@ func newSetupInvokeSCFCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			region = firstNonEmpty(strings.TrimSpace(region), snapshot.Manifest.TencentCloud.Region)
+			region = firstNonEmpty(strings.TrimSpace(region), snapshot.Manifest.CloudRegion())
 			namespace = firstNonEmpty(strings.TrimSpace(namespace), "default")
 			if strings.TrimSpace(functionName) == "" {
 				return fmt.Errorf("--function is required")
@@ -255,7 +253,7 @@ func newSetupInvokeSCFCommand(deps setupDeps) *cobra.Command {
 					return fmt.Errorf("event json invalid: %w", err)
 				}
 			}
-			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey, Region: region})
+			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{SecretID: snapshot.Secrets.TencentCloud.SecretID, SecretKey: snapshot.Secrets.TencentCloud.SecretKey, Region: region})
 			if err != nil {
 				return err
 			}
@@ -299,17 +297,17 @@ func newSetupRebootHostCommand(deps setupDeps) *cobra.Command {
 				return fmt.Errorf("reboot_host_provider_unsupported")
 			}
 			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
-				SecretID:  snapshot.Manifest.TencentCloud.SecretID,
-				SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
-				Region:    snapshot.Manifest.TencentCloud.Region,
+				SecretID:  snapshot.Secrets.TencentCloud.SecretID,
+				SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
+				Region:    snapshot.Manifest.CloudRegion(),
 			})
 			if err != nil {
 				return err
 			}
 			lighthouse, lighthouseErr := cloudtencent.NewClient(cloudtencent.ClientOptions{
-				SecretID:  snapshot.Manifest.TencentCloud.SecretID,
-				SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
-				Region:    snapshot.Manifest.TencentCloud.Region,
+				SecretID:  snapshot.Secrets.TencentCloud.SecretID,
+				SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
+				Region:    snapshot.Manifest.CloudRegion(),
 			})
 			if lighthouseErr != nil {
 				return lighthouseErr
@@ -333,8 +331,8 @@ func newSetupRebootHostCommand(deps setupDeps) *cobra.Command {
 				requestID, err = lighthouse.ForRegion(instance.Region).RebootInstance(ctx, instance.InstanceID)
 			case cloudtencent.KindCVM:
 				cvm, cvmErr := cloudtencent.NewCVMClient(cloudtencent.ClientOptions{
-					SecretID:  snapshot.Manifest.TencentCloud.SecretID,
-					SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
+					SecretID:  snapshot.Secrets.TencentCloud.SecretID,
+					SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
 					Region:    instance.Region,
 				})
 				if cvmErr != nil {
@@ -381,13 +379,7 @@ func newSetupHostDiagnosticsCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer transport.Close()
-			paths := snapshot.Manifest.Paths.Resolved()
-			root := paths.DeployRoot
-			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
-				root = paths.ControlRoot
-			} else if snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost().Name) {
-				root = paths.StorageRoot
-			}
+			root := snapshot.Manifest.Paths.DeployRoot
 			result, err := transport.Run(cmd.Context(), []string{"sh", "-lc", `set -eu
 root="$1"
 printf 'df:\n'
@@ -396,14 +388,8 @@ printf 'processes:\n'
 ps -eo pid,stat,cmd | grep -E 'moox-' | grep -v grep || true
 printf 'sizes:\n'
 du -xh --max-depth=2 "$root/data" "$root/logs" 2>/dev/null | sort -h | tail -40 || true
-printf 'staged archives:\n'
-ls -lh /tmp/moox-control-*.tar.gz /tmp/moox-storage-*.tar.gz 2>/dev/null || true
-printf 'recent service errors:\n'
-for name in eventbus collector factor gateway storage storage-primary storage-view; do
-  for log in "$root/logs/$name/stdout.log" "$root/logs/$name/stderr.log" "$root/logs/$name.log"; do
-    if [ -f "$log" ]; then echo "--- $log"; tail -30 "$log"; fi
-  done
-done
+printf 'services:\n'
+systemctl --user list-units 'moox-*' --no-pager --no-legend 2>/dev/null || true
 `, "moox-host-diagnostics", root}, nil)
 			if err != nil {
 				return fmt.Errorf("host_diagnostics_failed: %v", err)
@@ -439,48 +425,16 @@ func newSetupHostsCommand(deps setupDeps) *cobra.Command {
 			switch {
 			case host.Name == snapshot.Manifest.ControlHost().Name:
 				role = "control"
-			case snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost().Name):
+			case snapshot.Manifest.StorageHost().Name != "" && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost().Name):
 				role = "storage"
-			case snapshot.Manifest.HasViewHost() && strings.EqualFold(host.Name, snapshot.Manifest.ViewHost().Name):
+			case snapshot.Manifest.ComponentHost("storage-view") != "" && strings.EqualFold(host.Name, snapshot.Manifest.HostByID(snapshot.Manifest.ComponentHost("storage-view")).Name):
 				role = "view"
 			}
 			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Provider: host.Provider, Role: role})
 		}
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
-		}
 		return writeSetupJSON(cmd, map[string]any{"hosts": hosts})
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	return cmd
-}
-
-func newSetupValidateCommand(deps setupDeps) *cobra.Command {
-	var file string
-	var options unitdeploy.DeployOptions
-	cmd := &cobra.Command{Use: "validate", Short: "校验初始化配置和连接，并报告目标机器的部署情况、发布路线（route）和接下来要运行的命令（next_steps）", RunE: func(cmd *cobra.Command, _ []string) error {
-		snapshot, err := deps.load(file)
-		if err != nil {
-			return err
-		}
-		defer clearSetupSecrets(snapshot)
-		result, err := deps.validate(cmd.Context(), snapshot)
-		output := setupValidateOutput{Result: result}
-		var deployment error
-		if err == nil && deps.scanDeployment != nil {
-			output.Deployment, deployment = setupDeploymentStatus(cmd.Context(), deps, snapshot, &options)
-		}
-		if encodeErr := writeSetupJSON(cmd, output); encodeErr != nil {
-			return encodeErr
-		}
-		if err != nil {
-			return err
-		}
-		return deployment
-	}}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&options.StateDirectory, "state-dir", "", "持久私有部署状态目录（默认和 bootstrap 相同）")
-	cmd.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	return cmd
 }
 
@@ -494,9 +448,6 @@ func newSetupTrustHostCommand(deps setupDeps) *cobra.Command {
 		defer clearSetupSecrets(snapshot)
 		if err := deps.trustHost(cmd.Context(), snapshot, host, fingerprint); err != nil {
 			return err
-		}
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
 		}
 		return writeSetupJSON(cmd, map[string]string{"host": host, "status": "trusted"})
 	}}
@@ -530,30 +481,9 @@ func newSetupTrustBrowserCommand(deps setupDeps) *cobra.Command {
 				"fingerprint":    trust.Fingerprint,
 				"other_machines": trust.OtherMachines,
 			}
-			if err := snapshot.VerifyUnchanged(); err != nil {
-				return fmt.Errorf("config_changed")
-			}
 			return writeSetupJSON(cmd, result)
 		},
 	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	return cmd
-}
-
-func newSetupStatusCommand(deps setupDeps) *cobra.Command {
-	var file string
-	cmd := &cobra.Command{Use: "status", Short: "检查初始化记录状态", RunE: func(cmd *cobra.Command, _ []string) error {
-		snapshot, err := deps.load(file)
-		if err != nil {
-			return err
-		}
-		defer clearSetupSecrets(snapshot)
-		result, err := deps.status(cmd.Context(), snapshot)
-		if err != nil {
-			return err
-		}
-		return writeSetupJSON(cmd, result)
-	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	return cmd
 }
@@ -571,9 +501,6 @@ func newSetupMetadataImportCommand(deps setupDeps) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
-		}
 		return writeSetupJSON(cmd, result)
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
@@ -585,174 +512,125 @@ func newSetupMetadataImportCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
-// completeSetupDeps 是默认依赖的唯一补全入口。子命令里不要再判空补默认值：那样只改到子命令自己的副本，
-// 聚合命令 setup install 拿到的还是空的。
+// completeSetupDeps 是默认依赖的唯一补全入口：测试只替换自己关心的那几项，其余用默认实现。
+// 子命令里不要再判空补默认值：那样只改到子命令自己的副本，聚合命令 setup install 拿到的还是空的。
 func completeSetupDeps(deps setupDeps) setupDeps {
 	defaults := defaultSetupDeps()
-	if deps.bootstrapAdmin == nil {
-		deps.bootstrapAdmin = defaults.bootstrapAdmin
-	}
-	if deps.bootstrapControl == nil {
-		deps.bootstrapControl = defaults.bootstrapControl
-	}
-	if deps.deployHost == nil {
-		deps.deployHost = defaults.deployHost
-	}
-	if deps.deployUnit == nil {
-		deps.deployUnit = defaults.deployUnit
-	}
-	if deps.buildRelease == nil {
-		deps.buildRelease = defaults.buildRelease
-	}
-	if deps.backupConfig == nil {
-		deps.backupConfig = defaults.backupConfig
-	}
-	if deps.verifySpace == nil {
-		deps.verifySpace = defaults.verifySpace
-	}
-	if deps.checkDownload == nil {
-		deps.checkDownload, deps.prefetch, deps.localReachable = defaults.checkDownload, defaults.prefetch, defaults.localReachable
-	}
-	if deps.regionCloud == nil {
-		deps.regionCloud = defaults.regionCloud
-	}
-	if deps.load == nil {
-		deps.load = defaults.load
-	}
-	if deps.loadInitBundle == nil {
-		deps.loadInitBundle = defaults.loadInitBundle
-	}
-	if deps.validate == nil {
-		deps.validate = defaults.validate
-	}
-	if deps.trustHost == nil {
-		deps.trustHost = defaults.trustHost
-	}
-	if deps.status == nil {
-		deps.status = defaults.status
-	}
-	if deps.applySpaces == nil {
-		deps.applySpaces = defaults.applySpaces
-	}
-	if deps.statusSpaces == nil {
-		deps.statusSpaces = defaults.statusSpaces
-	}
-	if deps.registerCloudAccounts == nil {
-		deps.registerCloudAccounts = defaults.registerCloudAccounts
-	}
-	if deps.provisionCLS == nil {
-		deps.provisionCLS = defaults.provisionCLS
-	}
-	if deps.ensureSCFPlan == nil {
-		deps.ensureSCFPlan = defaults.ensureSCFPlan
-	}
-	if deps.login == nil {
-		deps.login = defaults.login
-	}
-	if deps.openInitStorage == nil {
-		deps.openInitStorage = defaults.openInitStorage
-	}
-	if deps.openInitFactor == nil {
-		deps.openInitFactor = defaults.openInitFactor
-	}
-	if deps.ensureNotification == nil {
-		deps.ensureNotification = defaults.ensureNotification
-	}
+	fillSetupDep(&deps.load, defaults.load)
+	fillSetupDep(&deps.loadInitBundle, defaults.loadInitBundle)
+	fillSetupDep(&deps.validate, defaults.validate)
+	fillSetupDep(&deps.trustHost, defaults.trustHost)
+	fillSetupDep(&deps.applySpaces, defaults.applySpaces)
+	fillSetupDep(&deps.statusSpaces, defaults.statusSpaces)
+	fillSetupDep(&deps.registerCloudAccounts, defaults.registerCloudAccounts)
+	fillSetupDep(&deps.provisionCLS, defaults.provisionCLS)
+	fillSetupDep(&deps.ensureSCFPlan, defaults.ensureSCFPlan)
+	fillSetupDep(&deps.login, defaults.login)
+	fillSetupDep(&deps.openInitStorage, defaults.openInitStorage)
+	fillSetupDep(&deps.openInitFactor, defaults.openInitFactor)
+	fillSetupDep(&deps.ensureNotification, defaults.ensureNotification)
+	fillSetupDep(&deps.importMetadata, defaults.importMetadata)
+	fillSetupDep(&deps.exportSkillConfig, defaults.exportSkillConfig)
+	fillSetupDep(&deps.ensureFirewall, defaults.ensureFirewall)
+	fillSetupDep(&deps.ensureRelayFirewall, defaults.ensureRelayFirewall)
+	fillSetupDep(&deps.scanDeployment, defaults.scanDeployment)
+	fillSetupDep(&deps.wipeHost, defaults.wipeHost)
+	fillSetupDep(&deps.deployHost, defaults.deployHost)
+	fillSetupDep(&deps.waitReady, defaults.waitReady)
+	fillSetupDep(&deps.operate, defaults.operate)
+	fillSetupDep(&deps.readLogs, defaults.readLogs)
+	fillSetupDep(&deps.openStart, defaults.openStart)
+	fillSetupDep(&deps.backupConfig, defaults.backupConfig)
+	fillSetupDep(&deps.verifySpace, defaults.verifySpace)
+	fillSetupDep(&deps.regionCloud, defaults.regionCloud)
 	if deps.initStorage == nil {
-		deps.initStorage = func(ctx context.Context, snapshot *setupconfig.Snapshot, file, configDir, storageHost string, bundle setupInitBundle) (setupInitSummary, error) {
-			return runSetupInit(ctx, deps, snapshot, file, configDir, storageHost, bundle)
+		deps.initStorage = func(ctx context.Context, snapshot *setupSnapshot, storageHost string, bundle setupInitBundle) (setupInitSummary, error) {
+			return runSetupInit(ctx, deps, snapshot, storageHost, bundle)
 		}
 	}
 	if deps.initMetadata == nil {
-		deps.initMetadata = func(ctx context.Context, snapshot *setupconfig.Snapshot, storageHost string, bundle setupInitBundle) (setupInitStorageSummary, error) {
+		deps.initMetadata = func(ctx context.Context, snapshot *setupSnapshot, storageHost string, bundle setupInitBundle) (setupInitStorageSummary, error) {
 			return runSetupInitMetadata(ctx, deps, snapshot, storageHost, bundle)
 		}
-	}
-	if deps.installWatchdog == nil {
-		deps.installWatchdog = defaults.installWatchdog
-	}
-	if deps.importMetadata == nil {
-		deps.importMetadata = defaults.importMetadata
-	}
-	if deps.exportSkillConfig == nil {
-		deps.exportSkillConfig = defaults.exportSkillConfig
-	}
-	if deps.ensureRelayFirewall == nil {
-		deps.ensureRelayFirewall = defaults.ensureRelayFirewall
-	}
-	if deps.ensureFirewall == nil {
-		deps.ensureFirewall = defaults.ensureFirewall
 	}
 	return deps
 }
 
+// fillSetupDep 在一项依赖为空时填上默认实现。
+func fillSetupDep[T any](field *T, fallback T) {
+	if reflect.ValueOf(*field).IsNil() {
+		*field = fallback
+	}
+}
+
+// loadSetupSnapshot 读 moox.toml 与同目录的 moox.secrets.toml，并核对两份文件之间的关联。
+func loadSetupSnapshot(path string) (*setupSnapshot, error) {
+	cfg, err := topology.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	secrets, err := topology.LoadSecrets(cfg.Path())
+	if err != nil {
+		return nil, err
+	}
+	if err := secrets.CheckFor(cfg); err != nil {
+		return nil, err
+	}
+	return &setupSnapshot{Manifest: cfg, Secrets: secrets}, nil
+}
+
 func defaultSetupDeps() setupDeps {
 	return setupDeps{
-		load: func(path string) (*setupconfig.Snapshot, error) {
-			root, err := os.Getwd()
-			if err != nil {
-				return nil, fmt.Errorf("config_invalid")
-			}
-			return setupconfig.Load(path, root)
-		},
-		bootstrapAdmin:   unitdeploy.BootstrapAdmin,
-		bootstrapControl: unitdeploy.BootstrapControl,
-		deployHost:       unitdeploy.DeployHost,
-		deployUnit:       unitdeploy.DeployUnit,
-		buildRelease:     unitdeploy.BuildRelease,
+		load: loadSetupSnapshot,
 		backupConfig: func(ctx context.Context, file string) error {
 			_, err := backupConfigFile(ctx, file)
 			return err
 		},
-		verifySpace: func(ctx context.Context, file string, snapshot *setupconfig.Snapshot, options unitdeploy.DeployOptions, spaceID string) error {
-			_, err := runSetupVerifySpace(ctx, file, snapshot, options, spaceID, setupVerifyTimeout)
+		verifySpace: func(ctx context.Context, file string, snapshot *setupSnapshot, spaceID string) error {
+			_, err := runSetupVerifySpace(ctx, file, snapshot, spaceID, setupVerifyTimeout)
 			return err
 		},
-		checkDownload:         unitdeploy.CheckDownload,
-		prefetch:              unitdeploy.Prefetch,
-		localReachable:        unitdeploy.LocalDownloadReachable,
 		regionCloud:           defaultSetupRegionCloud,
 		loadInitBundle:        loadSetupInitBundle,
 		scanDeployment:        defaultSetupScanDeployment,
 		wipeHost:              defaultSetupWipeHost,
+		deployHost:            deploy.Deploy,
+		waitReady:             defaultSetupWaitReady,
+		operate:               defaultSetupOperate,
 		readLogs:              defaultSetupReadLogs,
-		restartComponent:      defaultSetupRestartComponent,
 		openStart:             defaultSetupOpenStart,
 		validate:              defaultSetupValidate,
 		trustHost:             defaultSetupTrustHost,
-		status:                defaultSetupStatus,
 		applySpaces:           defaultSetupApplyWithSpaces,
 		statusSpaces:          defaultSetupStatusWithSpaces,
 		registerCloudAccounts: defaultSetupRegisterCloudAccounts,
 		provisionCLS:          defaultSetupProvisionCLS,
 		ensureSCFPlan:         defaultSetupEnsureSCFPlan,
 		openInitStorage:       defaultOpenSetupInitStorage,
-		openInitFactor: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupInitFactor, error) {
-			return defaultOpenSetupFactor(ctx, snapshot.Config())
+		openInitFactor: func(ctx context.Context, snapshot *setupSnapshot) (setupInitFactor, error) {
+			return defaultOpenSetupFactor(ctx, snapshot.Manifest)
 		},
 		ensureNotification:  defaultSetupEnsureNotification,
-		initStorage:         nil,
-		installWatchdog:     defaultSetupInstallWatchdog,
 		importMetadata:      defaultSetupImportMetadata,
 		exportSkillConfig:   defaultSetupExportSkillConfig,
 		ensureFirewall:      defaultSetupEnsureFirewall,
 		ensureRelayFirewall: setupEnsureRelayFirewall,
-		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
+		login: func(ctx context.Context, snapshot *setupSnapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost().Address)
 			// 这里只校验登录，用取回的根证书连接，不碰本机信任库。
-			if err := refreshSetupConsoleCA(ctx, snapshot.Config()); err != nil {
+			if err := refreshSetupConsoleCA(ctx, snapshot.Manifest); err != nil {
 				return setupclient.LoginResult{}, fmt.Errorf("browser_ca_trust_failed: 无法从管理台服务器取回 MooX CA 根证书: %w", err)
 			}
-			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
+			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Secrets.Admin.Username, snapshot.Secrets.Admin.Password, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
 		},
 	}
 }
 
 // loginSkippedKeptAdmin 是管理员以管理台为准保留时跳过登录校验的说明。
-const loginSkippedKeptAdmin = "管理员以管理台为准（管理台改过密码或用户名），没有用 moox.toml 的密码校验登录"
+const loginSkippedKeptAdmin = "管理员以管理台为准（管理台改过密码或用户名），没有用秘密文件里的密码校验登录"
 
-// verifySetupLogin 用 moox.toml 的管理员校验管理台能登录；管理员被保留（kept 含 admin）时 moox.toml 的密码不是现在的密码，跳过校验并返回说明。
-func verifySetupLogin(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, kept []string) (setupclient.LoginResult, string, error) {
+// verifySetupLogin 用秘密文件里的管理员校验管理台能登录；管理员被保留（kept 含 admin）时秘密文件里的密码不是现在的密码，跳过校验并返回说明。
+func verifySetupLogin(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, kept []string) (setupclient.LoginResult, string, error) {
 	if slices.Contains(kept, "admin") {
 		return setupclient.LoginResult{}, loginSkippedKeptAdmin, nil
 	}
@@ -760,8 +638,8 @@ func verifySetupLogin(ctx context.Context, deps setupDeps, snapshot *setupconfig
 	return login, "", err
 }
 
-func defaultSetupImportMetadata(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, seedPath string, spaces []string) (metadataImportSummary, error) {
-	status, err := defaultSetupStatus(ctx, snapshot)
+func defaultSetupImportMetadata(ctx context.Context, snapshot *setupSnapshot, hostName, seedPath string, spaces []string) (metadataImportSummary, error) {
+	status, err := defaultSetupStatusWithSpaces(ctx, snapshot, nil)
 	if err != nil || status.State != "completed" {
 		return metadataImportSummary{}, fmt.Errorf("setup_incomplete")
 	}
@@ -781,7 +659,7 @@ func defaultSetupImportMetadata(ctx context.Context, snapshot *setupconfig.Snaps
 	if err != nil {
 		return metadataImportSummary{}, err
 	}
-	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
+	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
 	if err != nil {
 		return metadataImportSummary{}, err
 	}
@@ -789,19 +667,19 @@ func defaultSetupImportMetadata(ctx context.Context, snapshot *setupconfig.Snaps
 	return runMetadataImport(ctx, gateway, calls, true)
 }
 
-func defaultSetupValidate(ctx context.Context, snapshot *setupconfig.Snapshot) (setupvalidate.Result, error) {
+func defaultSetupValidate(ctx context.Context, snapshot *setupSnapshot) (setupvalidate.Result, error) {
 	identity, err := cloudtencent.NewIdentityValidator(cloudtencent.IdentityOptions{Credentials: cloudtencent.Credentials{
-		SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
+		SecretID: snapshot.Secrets.TencentCloud.SecretID, SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
 	}})
 	if err != nil {
 		return setupvalidate.Result{}, fmt.Errorf("tencent_auth_failed")
 	}
-	return setupvalidate.Run(ctx, snapshot, setupvalidate.Dependencies{Identity: identity, SSH: commandSSHChecker{}})
+	return setupvalidate.Run(ctx, snapshot.Manifest, setupvalidate.Dependencies{Identity: identity, SSH: commandSSHChecker{}})
 }
 
 type commandSSHChecker struct{}
 
-func (commandSSHChecker) Check(ctx context.Context, host setupconfig.Host) error {
+func (commandSSHChecker) Check(ctx context.Context, host topology.Host) error {
 	client, err := dialSetupHost(ctx, host)
 	if err != nil {
 		return err
@@ -810,7 +688,7 @@ func (commandSSHChecker) Check(ctx context.Context, host setupconfig.Host) error
 	return client.Check(ctx)
 }
 
-func defaultSetupTrustHost(ctx context.Context, snapshot *setupconfig.Snapshot, name, fingerprint string) error {
+func defaultSetupTrustHost(ctx context.Context, snapshot *setupSnapshot, name, fingerprint string) error {
 	host, err := findSetupTrustHost(snapshot.Manifest, name)
 	if err != nil {
 		return err
@@ -885,7 +763,7 @@ func eventBusFirewallIP(
 	return "", fmt.Errorf("EventBus DNS address has no IPv4 address")
 }
 
-func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupconfig.Snapshot) error {
+func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupSnapshot) error {
 	if snapshot == nil {
 		return fmt.Errorf("browser_ca_trust_failed: setup configuration is missing")
 	}
@@ -896,7 +774,7 @@ func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupconfig.Snapsh
 	host := snapshot.Manifest.ControlHost()
 	// 管理台的 HTTPS 证书由 MooX CA 签发；先经 SSH 从控制机取回 MooX CA 根证书到本机缓存再安装信任，
 	// 不依赖本机残留的旧证书副本。
-	if err := refreshSetupConsoleCA(ctx, snapshot.Config()); err != nil {
+	if err := refreshSetupConsoleCA(ctx, snapshot.Manifest); err != nil {
 		return fmt.Errorf("browser_ca_trust_failed: 无法从管理台服务器取回 MooX CA 根证书: %w", err)
 	}
 	caPath := tlstrust.CAPath(host.Address)
@@ -931,77 +809,68 @@ func manualBrowserTrustCommand(caPath string) string {
 // refreshSetupConsoleCA 在测试里替换。
 var refreshSetupConsoleCA = configinit.RefreshConsoleCA
 
-func defaultSetupStatus(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.StatusResult, error) {
-	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
-	if err != nil {
-		return setupclient.StatusResult{}, err
-	}
-	defer gateway.Close()
-	return setupclient.New(gateway).Status(ctx, snapshot)
-}
-
 func defaultSetupApplyWithSpaces(
 	ctx context.Context,
-	snapshot *setupconfig.Snapshot,
+	snapshot *setupSnapshot,
 	spaces []setupclient.Space,
 ) (setupclient.ApplyResult, error) {
-	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
+	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
 	if err != nil {
 		return setupclient.ApplyResult{}, err
 	}
 	defer gateway.Close()
-	return setupclient.New(gateway).ApplyWithSpaces(ctx, snapshot, spaces)
+	return setupclient.New(gateway).ApplyWithSpaces(ctx, snapshot.Secrets, spaces)
 }
 
 func defaultSetupStatusWithSpaces(
 	ctx context.Context,
-	snapshot *setupconfig.Snapshot,
+	snapshot *setupSnapshot,
 	spaces []setupclient.Space,
 ) (setupclient.StatusResult, error) {
-	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
+	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
 	if err != nil {
 		return setupclient.StatusResult{}, err
 	}
 	defer gateway.Close()
-	return setupclient.New(gateway).StatusWithSpaces(ctx, snapshot, spaces)
+	return setupclient.New(gateway).StatusWithSpaces(ctx, snapshot.Secrets, spaces)
 }
 
-func dialSetupHost(ctx context.Context, host setupconfig.Host) (setupssh.Client, error) {
-	return setupssh.Dial(ctx, sshTarget(host), host.Password, setupssh.Options{Timeout: 15 * time.Second})
+func dialSetupHost(ctx context.Context, host topology.Host) (setupssh.Client, error) {
+	return dialHost(ctx, host)
 }
 
-func sshTarget(host setupconfig.Host) setupssh.Target {
+func sshTarget(host topology.Host) setupssh.Target {
 	return setupssh.Target{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username}
 }
 
-func findSetupHost(manifest setupconfig.Manifest, name string) (setupconfig.Host, error) {
+func findSetupHost(manifest *topology.Config, name string) (topology.Host, error) {
 	for _, host := range manifest.Hosts() {
 		if strings.EqualFold(host.Name, strings.TrimSpace(name)) {
 			return host, nil
 		}
 	}
-	return setupconfig.Host{}, fmt.Errorf("setup_host_not_found")
+	return topology.Host{}, fmt.Errorf("setup_host_not_found")
 }
 
-func resolveStorageDeploymentHost(manifest setupconfig.Manifest, name string) (setupconfig.Host, error) {
+func resolveStorageDeploymentHost(manifest *topology.Config, name string) (topology.Host, error) {
 	name = strings.TrimSpace(name)
-	if name == "" && manifest.HasStorageHost() {
+	if name == "" && manifest.StorageHost().Name != "" {
 		name = manifest.StorageHost().Name
 	}
 	host, err := findSetupHost(manifest, name)
 	if err != nil {
-		return setupconfig.Host{}, err
+		return topology.Host{}, err
 	}
-	if manifest.HasStorageHost() && !strings.EqualFold(host.Name, manifest.StorageHost().Name) {
-		return setupconfig.Host{}, fmt.Errorf("storage_host_required")
+	if manifest.StorageHost().Name != "" && !strings.EqualFold(host.Name, manifest.StorageHost().Name) {
+		return topology.Host{}, fmt.Errorf("storage_host_required")
 	}
-	if manifest.HasViewHost() && !sameHostEndpoint(host, manifest.ViewHost()) {
-		return setupconfig.Host{}, fmt.Errorf("storage_view_hosts_must_share_endpoint")
+	if manifest.ComponentHost("storage-view") != "" && !sameHostEndpoint(host, manifest.HostByID(manifest.ComponentHost("storage-view"))) {
+		return topology.Host{}, fmt.Errorf("storage_view_hosts_must_share_endpoint")
 	}
 	return host, nil
 }
 
-func sameHostEndpoint(left, right setupconfig.Host) bool {
+func sameHostEndpoint(left, right topology.Host) bool {
 	leftAddress := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(left.Address)), ".")
 	rightAddress := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(right.Address)), ".")
 	if parsed := net.ParseIP(leftAddress); parsed != nil {
@@ -1013,29 +882,13 @@ func sameHostEndpoint(left, right setupconfig.Host) bool {
 	return leftAddress == rightAddress && left.Port == right.Port
 }
 
-func findSetupTrustHost(manifest setupconfig.Manifest, name string) (setupconfig.Host, error) {
+func findSetupTrustHost(manifest *topology.Config, name string) (topology.Host, error) {
 	return findSetupHost(manifest, name)
 }
 
-func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
-	if snapshot == nil {
-		return
-	}
-	snapshot.Manifest.Admin.Password = ""
-	snapshot.Manifest.TencentCloud.SecretID = ""
-	snapshot.Manifest.TencentCloud.SecretKey = ""
-	snapshot.Manifest.Notification.WebhookURL = ""
-	snapshot.Manifest.Notification.Secret = ""
-	snapshot.Manifest.Logging.CLS.WriterSecretID = ""
-	snapshot.Manifest.Logging.CLS.WriterSecretKey = ""
-	for i := range snapshot.Manifest.ExchangeKeys {
-		snapshot.Manifest.ExchangeKeys[i].APIKey = ""
-		snapshot.Manifest.ExchangeKeys[i].SecretKey = ""
-		snapshot.Manifest.ExchangeKeys[i].Passphrase = ""
-	}
-	for id, definition := range snapshot.Manifest.HostCatalog {
-		definition.SSH.Password = ""
-		snapshot.Manifest.HostCatalog[id] = definition
+func clearSetupSecrets(snapshot *setupSnapshot) {
+	if snapshot != nil {
+		snapshot.Secrets.Clear()
 	}
 }
 

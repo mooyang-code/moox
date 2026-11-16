@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
@@ -21,12 +22,14 @@ import (
 
 func main() {
 	defer shutdownTracing()
+	// 业务配置的位置（console.yaml 在同一目录）；要在 trpc.NewServer 解析命令行之前定义。
+	configPath := flag.String("config", "config/app.yaml", "admin 业务配置")
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer(gatewaycontrol.ServerOption())
 	trpclog.InstallServiceName("admin")
 
 	// 初始化应用（加载配置、启动后台服务、注册 trpc 服务）
-	server, err := bootstrap.Initialize(ctx, s)
+	server, err := bootstrap.Initialize(ctx, s, *configPath)
 	if err != nil {
 		log.Fatalf("应用初始化失败: %v", err)
 	}

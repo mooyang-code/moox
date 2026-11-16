@@ -9,15 +9,21 @@ import (
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 )
 
 // FileConfig contains a caller's public identity and private key location.
 // KeyID is assigned by Admin; it is independent from the caller name.
+// HostID、LocalAddress、CAFile 由部署写进每个组件的 gateway_client 段：本机的主机 ID、本机网关 11002 的地址、
+// MooX CA 根证书；组件不再去找相邻目录里的主机网关配置。
 type FileConfig struct {
 	Caller  string `yaml:"caller"`
 	KeyID   string `yaml:"key_id"`
 	KeyFile string `yaml:"key_file"`
+	HostID  string `yaml:"host_id"`
+	// LocalAddress 是本机网关的回环地址，部署写 127.0.0.1:11002。
+	LocalAddress string `yaml:"local_address"`
+	// CAFile 是 MooX CA 根证书；相对路径按模块配置文件所在目录解析。
+	CAFile string `yaml:"ca_file"`
 	// Pool 调整连接本机与跨主机网关的连接池；省略时使用默认。
 	Pool PoolConfig `yaml:"pool"`
 }
@@ -46,6 +52,15 @@ func (c FileConfig) Validate() error {
 	}
 	if err := c.Pool.Validate(); err != nil {
 		return err
+	}
+	if c.HostID != "" && !hostID.MatchString(c.HostID) {
+		return errors.New("gateway_client.host_id must be a canonical host ID")
+	}
+	if c.LocalAddress != "" && !loopbackAddress(c.LocalAddress) {
+		return errors.New("gateway_client.local_address must be a loopback address")
+	}
+	if c.CAFile != strings.TrimSpace(c.CAFile) || strings.ContainsAny(c.CAFile, "\x00\r\n") {
+		return errors.New("gateway_client.ca_file is invalid")
 	}
 	return validateCredentialFile(c.KeyID, c.KeyFile, false)
 }
@@ -120,16 +135,17 @@ func (c ExternalFileConfig) OpenExternal(moduleConfigPath string) (*Client, erro
 	return New(Config{Mode: External, Credentials: credentials, AccessAddress: c.Address, AccessInstanceID: c.InstanceID})
 }
 
-// OpenInternal uses the canonical release layout: <root>/<module>/config/app.yaml
-// and <root>/host-gateway/config/app.yaml. Host identity, loopback address and CA
-// come from the host gateway configuration. The key path is relative to the
-// module configuration; the directory cache belongs to the module data directory.
+// OpenInternal 用 gateway_client 段里的主机 ID、本机网关地址与 CA 连本机网关。key_file、ca_file 的相对路径
+// 按模块配置文件所在目录解析；目录缓存放在模块的数据目录下。
 func (c FileConfig) OpenInternal(moduleConfigPath, dataDirectory string, onRefreshError func(error)) (*Client, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	if c.KeyID == "" || moduleConfigPath == "" || dataDirectory == "" {
 		return nil, errors.New("gateway client requires key_id, module configuration path and data directory")
+	}
+	if !hostID.MatchString(c.HostID) || c.LocalAddress == "" || c.CAFile == "" {
+		return nil, errors.New("gateway_client 要写 host_id、local_address 与 ca_file（由部署渲染）")
 	}
 	configPath, err := filepath.Abs(moduleConfigPath)
 	if err != nil {
@@ -139,17 +155,9 @@ func (c FileConfig) OpenInternal(moduleConfigPath, dataDirectory string, onRefre
 	if err != nil {
 		return nil, err
 	}
-	hostPath := filepath.Join(filepath.Dir(configPath), "..", "..", "host-gateway", "config", "app.yaml")
-	// Business units may live on a different mount and expose the independently
-	// installed host unit through a directory symlink. Relative CA paths belong
-	// to that host unit, rather than to the business release containing the view.
-	hostPath, err = filepath.EvalSymlinks(hostPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve local host gateway configuration: %w", err)
-	}
-	host, err := hostgatewayconfig.Load(hostPath)
-	if err != nil {
-		return nil, fmt.Errorf("load local host gateway configuration: %w", err)
+	caFile := c.CAFile
+	if !filepath.IsAbs(caFile) {
+		caFile = filepath.Join(filepath.Dir(configPath), caFile)
 	}
 	cachePath, err := filepath.Abs(filepath.Join(dataDirectory, "gatewayclient", "directory.json"))
 	if err != nil {
@@ -157,7 +165,7 @@ func (c FileConfig) OpenInternal(moduleConfigPath, dataDirectory string, onRefre
 	}
 	return New(Config{
 		Mode: Internal, Credentials: credentials,
-		LocalHostID: host.Host.ID, LocalAddress: host.Server.LocalAddr, CAFile: host.TLS.CAFile,
+		LocalHostID: c.HostID, LocalAddress: c.LocalAddress, CAFile: caFile,
 		CachePath: cachePath, Pool: c.Pool, OnRefreshError: onRefreshError,
 	})
 }

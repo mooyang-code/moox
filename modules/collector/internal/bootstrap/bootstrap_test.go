@@ -154,3 +154,28 @@ func TestFreshDatabaseSeedsBuiltinTasksWithTheMarketDefaultIngest(t *testing.T) 
 	require.NoError(t, err)
 	require.Empty(t, resample.Ingest)
 }
+
+// 启动时核对任务元数据：Storage 暂时不可用时在进程内重试直到成功，不退出；进程被停止（ctx 结束）时才返回错误。
+func TestRetryUntilDoneRetriesUntilStorageAnswers(t *testing.T) {
+	attempts := 0
+	err := retryUntilDone(context.Background(), time.Millisecond, func(context.Context) error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("storage unavailable")
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, attempts)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	attempts = 0
+	err = retryUntilDone(ctx, time.Hour, func(context.Context) error {
+		attempts++
+		cancel()
+		return errors.New("storage unavailable")
+	})
+	require.ErrorContains(t, err, "storage unavailable")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, attempts)
+}

@@ -69,9 +69,9 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 2. **补写内置任务。** 前提是控制机上整个 Collector 所在单元已经按新版发布：新的 `moox-collector-cli` 和新的 `collection-tasks.yaml` 都在主机上（旧版 `moox-collector-cli` 不认识种子里的 `start` 键，会报错）。在控制机上执行（`<控制机>` 是 `moox.toml` 里控制机的主机名称；路径按默认部署根 `/data/moox`、单元 `prod`，先 `ls` 确认文件存在）：
 
    ```bash
-   ./bin/moox-cli host exec --host <控制机> -- /data/moox/prod/current/bin/moox-collector-cli init \
-     --db-path /data/moox/prod/current/collector/data/moox_collector.db \
-     --seed-file /data/moox/prod/current/collector/config/collection-tasks.yaml
+   ./bin/moox-cli host exec --host <控制机> -- /data/moox/bin/moox-collector-cli init \
+     --db-path /data/moox/data/collector/moox_collector.db \
+     --seed-file /data/moox/config/collector/collection-tasks.yaml
    ```
 
    - 它只新建库里没有的（空间, 任务 ID），已有任务（包括用户改过、停用的）不动；输出里 `tasks_created` 是补写的个数，`tasks_unchanged` 是已存在的个数。同时会执行一次建表语句（`CREATE TABLE IF NOT EXISTS`，对已有的表没有影响）。
@@ -175,38 +175,34 @@ output: fin_net_profit_parent_ttm / fin_equity_parent
 - 成员加入时是停用的，`factor member enable` 之后才计算。启用不会自动补算历史，需要历史因子值时用 `factor recalc submit --space-id stockcn --task-id <任务> --from 2025-11-01T00:00:00Z --to 2026-11-11T00:00:00Z`（`--from`、`--to` 只接受 RFC3339，左闭右开，不能只写日期）。
 - 前复权价本身（以当前这一根为基准）：k 根之前的前复权收盘价是 `delay(close, k) * delay(adj_factor, k) / adj_factor`。只算涨幅、偏离这类比值时用后复权价即可，结果相同。
 - 财务字段为空（金融类公司没有的科目、缺上年数据的滚动值）时因子值也为空。
-- 把这个因子任务和成员写进自己的因子任务文件，以后重装时用 `factor task apply --file` 导入。`mom_adj`、`roe_ttm` 已在内置因子库 `modules/factor/factors/stockcn_daily.yaml` 里（库里还有下面“内置的估值与筹码因子”列出的 9 个）。格式同 `config/setup/factor-tasks.yaml`（键名与下面的 TOML 写法一致，改成 yaml），再导入：
+- 把这个因子任务和成员写进自己的因子任务文件，以后重装时用 `factor task apply --file` 导入。`mom_adj`、`roe_ttm` 已在内置因子库 `modules/factor/factors/stockcn_daily.yaml` 里（库里还有下面“内置的估值与筹码因子”列出的 9 个）。文件格式同仓库的 `config/setup/factor-tasks.yaml`，三项都要写：`source_dir`（因子库目录，相对这个文件所在的目录）、`tasks`、`definitions`。例如在仓库根目录建 `my-factors.yaml`：
 
-  ```toml
-  [[factors.tasks]]
-  id = "<日线因子任务>"
-  name = "A股日线"
-  space_id = "stockcn"
-  source_dataset_id = "dataset_<task_id>"
-  freq = "1d"
-  members = [
-    { factor = "mom_adj" },
-    { factor = "roe_ttm" },
-  ]
-
-  [[factors.definitions]]
-  factor_id = "mom_adj"
-  file = "stockcn_daily.yaml"
-
-  [[factors.definitions]]
-  factor_id = "roe_ttm"
-  file = "stockcn_daily.yaml"
+  ```yaml
+  # 因子库目录，相对这个文件所在的目录
+  source_dir: modules/factor/factors
+  tasks:
+    - id: <日线因子任务>
+      name: A股日线
+      space_id: stockcn
+      source_dataset_id: dataset_<task_id>
+      freq: 1d
+      members:
+        - {factor: mom_adj}
+        - {factor: roe_ttm}
+  definitions:
+    - {factor_id: mom_adj, file: stockcn_daily.yaml}
+    - {factor_id: roe_ttm, file: stockcn_daily.yaml}
   ```
 
   ```bash
   ./bin/moox-cli factor task apply --file ./my-factors.yaml
   ```
 
-  自己写的因子不在因子库里时，先把它加进 `factors.source_dir` 下的库文件，否则校验报“因子库里没有因子”。
+  自己写的因子不在因子库里时，先把它加进 `source_dir` 下的库文件，否则校验报“因子库里没有因子”。
 
 ### 内置的估值与筹码因子
 
-内置因子库 `stockcn_daily.yaml` 里另有 9 个因子，源数据集要带对应的附加字段（内置任务 `dasftksvjhj2jom4vhj0` 都带）。用法与上面相同：`moox.toml` 里加 `[[factors.definitions]]`（`file = "stockcn_daily.yaml"`）和任务成员，`setup start` 导入，或用 `factor create --spec-file` 手工建。
+内置因子库 `stockcn_daily.yaml` 里另有 9 个因子，源数据集要带对应的附加字段（内置任务 `dasftksvjhj2jom4vhj0` 都带）。用法与上面相同：在自己的因子任务文件（或仓库的种子 `config/setup/factor-tasks.yaml`）的 `definitions` 里加一行（`file: stockcn_daily.yaml`），任务的 `members` 里加成员，再用 `factor task apply --file` 导入（改的是种子时由 `setup start` 导入），或用 `factor create --spec-file` 手工建。
 
 | 因子 ID | 含义 | 用到的附加字段 |
 | --- | --- | --- |

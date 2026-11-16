@@ -96,6 +96,10 @@ type setupFactorPlan struct {
 	Definitions []setupFactorDefinition
 	// Warnings 是不阻止导入但用户应该知道的配置关联问题。
 	Warnings []string
+	// ResumeDisabled 只给 setup start 导入默认种子用（命令行不暴露）：线上成员停用、文件里启用、参数一致时，
+	// 当作上次加了成员但启用那一步没做完，补调一次启用，而不是记冲突。用户手动执行的 factor task apply 保持 false，
+	// 不会把在管理台里手工停用的成员重新启用。
+	ResumeDisabled bool
 }
 
 func (p setupFactorPlan) memberCount() int {
@@ -432,6 +436,7 @@ const (
 	itemConflict   = "conflict"    // 与线上的不一致
 	itemOrphan     = "orphan"      // 线上任务里有、文件里没有的成员：只报告，不移除
 	itemNotWritten = "not_written" // 线上没有，但因为有冲突整份没有写入
+	itemEnabled    = "enabled"     // 已加入但停用的成员，这次接着启用（只在 setup start 导入默认种子时出现）
 )
 
 // setupFactorItem 是一项的处理结果：分类、定义、任务或成员。成员项带成员键与全部列名。
@@ -580,6 +585,13 @@ type factorTaskWrite struct {
 	// create 为真时建任务；resume 表示是接着完成上次被中断的创建，不算新建。members 是要加的成员及其逐项结果的序号。
 	create, resume bool
 	members        []factorMemberWrite
+	// enable 是已加入但还停用、要接着启用的成员（只在 ResumeDisabled 时出现）。
+	enable []factorMemberEnable
+}
+
+type factorMemberEnable struct {
+	memberKey string
+	item      int
 }
 
 type factorMemberWrite struct {
@@ -692,11 +704,11 @@ func (r *remoteSetupFactor) review(ctx context.Context, plan setupFactorPlan, su
 		record(setupFactorItem{Kind: "definition", ID: def.FactorID, Result: itemExists})
 	}
 	for _, task := range plan.Tasks {
-		write, err := r.reviewTask(ctx, task, defaults, changed, record)
+		write, err := r.reviewTask(ctx, task, defaults, changed, plan.ResumeDisabled, record)
 		if err != nil {
 			return writes, err
 		}
-		if write.create || len(write.members) > 0 {
+		if write.create || len(write.members) > 0 || len(write.enable) > 0 {
 			writes.tasks = append(writes.tasks, write)
 		}
 	}
@@ -717,7 +729,8 @@ func (r *remoteSetupFactor) review(ctx context.Context, plan setupFactorPlan, su
 }
 
 // reviewTask 核对一个任务：线上没有就整个新建；身份不同记冲突；已有时逐个核对成员。
-func (r *remoteSetupFactor) reviewTask(ctx context.Context, task setupFactorTask, defaults map[string]map[string]float64, changed map[string]bool, record func(setupFactorItem) int) (factorTaskWrite, error) {
+// resumeDisabled 为真时，线上停用、文件启用的同参数成员记为待启用（见 setupFactorPlan.ResumeDisabled）。
+func (r *remoteSetupFactor) reviewTask(ctx context.Context, task setupFactorTask, defaults map[string]map[string]float64, changed map[string]bool, resumeDisabled bool, record func(setupFactorItem) int) (factorTaskWrite, error) {
 	write := factorTaskWrite{task: task}
 	get := factorAPIResponse{}
 	err := r.call(ctx, "GetFactorTask", map[string]any{"task_id": task.TaskID}, &get)
@@ -792,6 +805,12 @@ func (r *remoteSetupFactor) reviewTask(ctx context.Context, task setupFactorTask
 				Detail: "可变成员已存在但默认参数不同；参数加成员之后不能改，需要的话先移除成员再重新加入"})
 		case found == nil:
 			addMember(planned)
+		case resumeDisabled && found.Status == "disabled" && planned.Status == "enabled":
+			// 上次成员加进去了、启用那一步失败或被中断：补调一次启用。
+			matched[found.MemberKey] = true
+			index := record(setupFactorItem{Kind: "member", ID: label, Result: itemCreated, MemberKey: found.MemberKey, Columns: found.OutputColumns,
+				Detail: "上次加入后没有启用，会接着启用"})
+			write.enable = append(write.enable, factorMemberEnable{memberKey: found.MemberKey, item: index})
 		case found.Status != planned.Status:
 			matched[found.MemberKey] = true
 			record(setupFactorItem{Kind: "member", ID: label, Result: itemConflict, MemberKey: found.MemberKey,
@@ -867,11 +886,18 @@ func (r *remoteSetupFactor) write(ctx context.Context, writes factorWrites, summ
 			summary.MembersCreated++
 			summary.Items[planned.item].MemberKey, summary.Items[planned.item].Columns = member.MemberKey, member.OutputColumns
 		}
+		for _, pending := range write.enable {
+			status := factorAPIResponse{}
+			if err := r.call(ctx, "SetTaskMemberStatus", map[string]any{"task_id": task.TaskID, "member_key": pending.memberKey, "status": "enabled"}, &status); err != nil {
+				return err
+			}
+			summary.Items[pending.item].Result = itemEnabled
+		}
 	}
 	return nil
 }
 
-var factorItemLabels = map[string]string{itemExists: "已存在", itemCreated: "新建", itemConflict: "与线上不同", itemOrphan: "文件里没有", itemNotWritten: "线上没有（因有冲突未写入）"}
+var factorItemLabels = map[string]string{itemExists: "已存在", itemCreated: "新建", itemConflict: "与线上不同", itemOrphan: "文件里没有", itemNotWritten: "线上没有（因有冲突未写入）", itemEnabled: "接着启用"}
 
 var factorKindLabels = map[string]string{"category": "分类", "task": "任务", "definition": "定义", "member": "成员"}
 

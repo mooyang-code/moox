@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -40,8 +41,9 @@ import (
 
 var collectorStartedAt = time.Now()
 
-// Initialize loads config, initializes persistence, and registers RPC services.
-func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
+// Initialize 读 configPath 指向的业务配置（-config），初始化存储并注册 RPC 服务。
+// 内置采集任务种子 collection-tasks.yaml 与业务配置在同一目录。
+func Initialize(ctx context.Context, s *server.Server, configPath string) (*Runtime, error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
@@ -55,7 +57,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	}()
 	log.InfoContextf(ctx, "开始初始化 moox-collector...")
 
-	cfg, err := Load("./config/app.yaml")
+	cfg, err := Load(configPath)
 	if err != nil {
 		log.ErrorContextf(ctx, "加载 collector 配置失败: %v", err)
 		return nil, err
@@ -77,7 +79,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		log.ErrorContextf(ctx, "初始化 collector schema 失败: %v", err)
 		return nil, err
 	}
-	if err := seedBuiltinTasks(ctx, dbm.Tasks(), builtinTasksPath); err != nil {
+	if err := seedBuiltinTasks(ctx, dbm.Tasks(), filepath.Join(filepath.Dir(configPath), builtinTasksFile)); err != nil {
 		log.ErrorContextf(ctx, "写入内置采集任务失败: %v", err)
 		return nil, err
 	}
@@ -116,7 +118,11 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	}
 	resultManager := collectorresult.NewManager(resultMetadata.Client, resultMetadata.View)
 	resultManager.SetFieldOffers(marketwiring.FieldOffers())
-	if err := ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager); err != nil {
+	// 启动时要连 Storage 核对内置任务的元数据。安装顺序保证首装时它已就绪；以后重启时 Storage 恰好不可用，
+	// 就在进程内每 5 秒重试，不退出。
+	if err := retryUntilDone(ctx, taskResultMetadataRetryInterval, func(ctx context.Context) error {
+		return ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager)
+	}); err != nil {
 		return nil, fmt.Errorf("initialize collector task results: %w", err)
 	}
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
@@ -163,6 +169,27 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	keepRuntime = true
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
 	return process, nil
+}
+
+// taskResultMetadataRetryInterval 是启动时核对任务元数据失败后的重试间隔。
+const taskResultMetadataRetryInterval = 5 * time.Second
+
+// retryUntilDone 反复执行 do，直到成功或 ctx 结束（返回最后一次的错误）；每次失败记一条警告。
+func retryUntilDone(ctx context.Context, interval time.Duration, do func(context.Context) error) error {
+	for attempt := 1; ; attempt++ {
+		err := do(ctx)
+		if err == nil {
+			return nil
+		}
+		log.WarnContextf(ctx, "核对任务元数据失败（第 %d 次，%s 后重试）：%v", attempt, interval, err)
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, manager *collectorresult.Manager) error {

@@ -12,7 +12,6 @@ github.com/mooyang-code/moox/packages/gatewayauth
 github.com/mooyang-code/moox/packages/gatewayclient/relay
 github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen
 github.com/mooyang-code/moox/packages/servicecatalog
-github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig
 github.com/mooyang-code/moox/packages/gatewayclient
 github.com/mooyang-code/moox/packages/security/domainpolicy
 github.com/mooyang-code/moox/modules/collector/internal/httpclient

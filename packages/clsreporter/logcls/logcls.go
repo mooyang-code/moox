@@ -51,7 +51,7 @@ func setup(getenv func(string) string) {
 	}
 	identity := logsink.Identity{
 		ServiceName: strings.TrimSpace(getenv("MOOX_SERVICE_NAME")), InstanceID: strings.TrimSpace(getenv("MOOX_INSTANCE_ID")),
-		NodeID: strings.TrimSpace(getenv("MOOX_NODE_ID")), BootID: strings.TrimSpace(getenv("MOOX_BOOT_ID")),
+		NodeID: strings.TrimSpace(getenv("MOOX_NODE_ID")), BootID: logsink.ProcessBootID(),
 	}
 	logsink.SetShipper(identity, level, func(ctx context.Context, identity logsink.Identity, records []logsink.Record) error {
 		for _, record := range records {

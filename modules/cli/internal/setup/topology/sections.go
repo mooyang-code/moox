@@ -191,13 +191,22 @@ func (o Overrides) validate() error {
 	if err != nil {
 		return err
 	}
+	// 少写一层时（[overrides."组件"] 下直接写键路径，或 [overrides] 下写 "组件" = 值），解析库把标量解进表类型会留下 nil，
+	// 也不算没解析的键：这里必须拦下，否则这条调参悄悄不生效。
+	layout := `写成 [overrides."<组件>"."<配置文件名>"] 下面的 "<键路径>" = 值`
 	for component, files := range o {
 		if _, ok := catalog.Component(component); !ok {
 			return fmt.Errorf("config_invalid: [overrides.%q] 的组件不在服务目录里", component)
 		}
+		if files == nil {
+			return fmt.Errorf("config_invalid: [overrides] 下的 %q 不是表：%s", component, layout)
+		}
 		for file, values := range files {
 			if file == "" || file != path.Base(file) || file == "." || file == ".." || strings.ContainsAny(file, "\\\x00") {
 				return fmt.Errorf("config_invalid: [overrides.%q.%q] 的配置文件名只写文件名，不带目录", component, file)
+			}
+			if values == nil {
+				return fmt.Errorf("config_invalid: [overrides.%q] 下的 %q 不是表：少写了配置文件名这一层，%s", component, file, layout)
 			}
 			for key, value := range values {
 				where := fmt.Sprintf("[overrides.%q.%q] 的 %q", component, file, key)

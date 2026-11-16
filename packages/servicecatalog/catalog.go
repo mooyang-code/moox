@@ -7,8 +7,10 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"path"
 	"slices"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -59,7 +61,73 @@ type Component struct {
 	// RelayHTTP 是外部程序只听回环地址的 HTTP 端口：装在只出站主机上时，声明的调用方可经 control 中转连接它
 	// （归档 worker 的下载与预览）。端口本身不验签，由 control 的中转按调用方白名单放行。
 	RelayHTTP *RelayHTTP `yaml:"relay_http,omitempty" json:"relay_http,omitempty"`
+	// ThirdParty 标记第三方程序（内置对象存储 SeaweedFS）：二进制不叫 moox-*、没有健康端口，
+	// 不签名、不上报、不登记到 Admin；部署由 moox-cli 按拓扑推出来，不写在 [deployments] 里。
+	ThirdParty bool `yaml:"third_party,omitempty" json:"third_party,omitempty"`
+
+	// 以下是部署字段（moox-cli setup deploy 用）。占位 {root}、{config}、{data}、{logs}、{secrets} 在部署时
+	// 换成部署根、config/<组件>、data/<组件>、logs/<组件>、secrets 的绝对路径。
+
+	// Args 是 ExecStart 里二进制之后的参数。
+	Args []string `yaml:"args" json:"args,omitempty"`
+	// Tools 是随组件装进 bin/ 的配套命令行。
+	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+	// ConfigFiles 是从仓库复制到 config/<组件>/ 再由部署渲染的文件；部署生成的文件（主机网关的 app.yaml、存储策略）不在这里。
+	ConfigFiles []ConfigFile `yaml:"config_files,omitempty" json:"config_files,omitempty"`
+	// After 是要先启动的组件（systemd 的 After=）：只对同一台主机上的组件生效，不在同一台的只作说明，
+	// 依赖没起来时组件自己重试或退出，由 systemd 再拉起。
+	After []string `yaml:"after,omitempty" json:"after,omitempty"`
+	// StopTimeoutSec 是停止的最长等待（TimeoutStopSec），省略为 DefaultStopTimeoutSec。
+	StopTimeoutSec int `yaml:"stop_timeout_sec,omitempty" json:"stop_timeout_sec,omitempty"`
+	// Credentials 是部署要给它的凭据：eventbus:<角色> 是 EventBus 角色文件；cls 是服务日志上报 CLS 的写入密钥。
+	// 除 host-agent 与第三方程序外，每个组件还隐含一个 eventbus:metrics-publisher（上报指标）。
+	Credentials []string `yaml:"credentials,omitempty" json:"credentials,omitempty"`
 }
+
+// DefaultStopTimeoutSec 是组件停止的默认最长等待。
+const DefaultStopTimeoutSec = 120
+
+// ConfigFile 是一个要放进 config/<组件>/ 的文件。
+type ConfigFile struct {
+	// From 是仓库里的源文件（相对仓库根）。
+	From string `yaml:"from" json:"from"`
+	// To 是在 config/<组件>/ 下的相对路径，省略为 From 的文件名。
+	To string `yaml:"to,omitempty" json:"to,omitempty"`
+}
+
+// Target 是这个文件在 config/<组件>/ 下的相对路径。
+func (f ConfigFile) Target() string {
+	if f.To != "" {
+		return f.To
+	}
+	return path.Base(f.From)
+}
+
+// StopTimeout 是组件的停止等待秒数。
+func (c Component) StopTimeout() int {
+	if c.StopTimeoutSec > 0 {
+		return c.StopTimeoutSec
+	}
+	return DefaultStopTimeoutSec
+}
+
+// EventBusRoles 是组件要的 EventBus 角色（含隐含的 metrics-publisher），已排序。
+func (c Component) EventBusRoles() []string {
+	roles := []string{}
+	for _, credential := range c.Credentials {
+		if role, ok := strings.CutPrefix(credential, "eventbus:"); ok {
+			roles = append(roles, role)
+		}
+	}
+	if !c.ThirdParty && c.ID != "host-agent" {
+		roles = append(roles, "metrics-publisher")
+	}
+	sort.Strings(roles)
+	return slices.Compact(roles)
+}
+
+// HasCredential 报告组件是否声明了某项凭据（例如 cls）。
+func (c Component) HasCredential(name string) bool { return slices.Contains(c.Credentials, name) }
 
 // RelayHTTP 是可经中转连接的本机 HTTP 端口与允许打开它的内置调用方。
 type RelayHTTP struct {
@@ -149,16 +217,10 @@ type Doctor struct {
 	WritablePaths            []string `yaml:"writable_paths" json:"writable_paths"`
 	RecoveryActionIDs        []string `yaml:"recovery_action_ids" json:"recovery_action_ids"`
 	RequiredInDefaultProfile bool     `yaml:"required_in_default_profile" json:"required_in_default_profile"`
-	// Supervisor 是进程的托管方式：moox_runtime（默认，由 moox-runtime 看护）或 systemd_user（systemd 用户服务）。
-	Supervisor string `yaml:"supervisor,omitempty" json:"supervisor,omitempty"`
-	// Unit 是 systemd 用户服务的单元名，只有 systemd_user 托管的组件才有。
-	Unit string `yaml:"unit,omitempty" json:"unit,omitempty"`
 }
 
-const (
-	SupervisorMooxRuntime = "moox_runtime"
-	SupervisorSystemdUser = "systemd_user"
-)
+// UnitName 是组件的 systemd 用户服务名：全部组件都由 systemd 用户服务托管。
+func UnitName(componentID string) string { return "moox-" + componentID + ".service" }
 
 //go:embed catalog.yaml
 var embedded []byte

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -280,4 +281,64 @@ func DefaultHostLabel(hostID string) string {
 		return label + " " + match[2]
 	}
 	return label
+}
+
+// EventBusURLFor 是 hostID 这台主机上的客户端连 EventBus 用的地址：与 EventBus 同机用回环地址，否则用 EventBus 所在主机的对外地址。
+func (c *Config) EventBusURLFor(hostID string) string {
+	bus := c.EventBusHost()
+	address := bus.Address
+	if hostID == bus.Name {
+		address = "127.0.0.1"
+	}
+	return "tls://" + net.JoinHostPort(address, strconv.Itoa(c.EventBus.Port))
+}
+
+// EventBusAdvertiseAddress 是 EventBus 对外宣告给其他主机的地址（broker 的 client_advertise），始终是它所在主机的对外地址。
+func (c *Config) EventBusAdvertiseAddress() string {
+	return net.JoinHostPort(c.EventBusHost().Address, strconv.Itoa(c.EventBus.Port))
+}
+
+// ConsoleSSH 是同步给管理台的主机 SSH 登录信息（管理台的终端用）。
+type ConsoleSSH struct {
+	Port       int
+	User       string
+	PrivateKey string
+}
+
+// ConsoleSSH 返回要同步给管理台的 SSH 信息：只能出站的主机、没有配 private_key_file 的主机返回 nil（管理台里终端置灰）。
+// 私钥文件在本机读取。
+func (h Host) ConsoleSSH() (*ConsoleSSH, error) {
+	if h.Reachability != "" || h.PrivateKeyFile == "" {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(ExpandHome(h.PrivateKeyFile))
+	if err != nil {
+		return nil, fmt.Errorf("主机 %s 的 ssh.private_key_file 读取失败: %w", h.Name, err)
+	}
+	if strings.TrimSpace(string(raw)) == "" {
+		return nil, fmt.Errorf("主机 %s 的 ssh.private_key_file 是空文件", h.Name)
+	}
+	return &ConsoleSSH{Port: h.Port, User: h.Username, PrivateKey: string(raw)}, nil
+}
+
+// HostComponents 是一台主机上要部署的全部组件：每台主机都有的主机级组件、[deployments] 里写的组件，
+// 以及按拓扑推出来的内置对象存储（装了 archive-worker 且没配外部对象存储的主机）。顺序是启动顺序。
+func (c *Config) HostComponents(hostID string) ([]string, error) {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := c.HostCatalog[hostID]; !ok {
+		return nil, fmt.Errorf("moox.toml 里没有主机 %s", hostID)
+	}
+	ids := []string{}
+	for _, component := range catalog.Components {
+		switch {
+		case component.Scope == servicecatalog.ScopeHost, slices.Contains(c.Deployments[hostID], component.ID):
+			ids = append(ids, component.ID)
+		case component.ID == "seaweedfs" && c.ArchiveObjectStore == nil && slices.Contains(c.Deployments[hostID], "archive-worker"):
+			ids = append(ids, component.ID)
+		}
+	}
+	return catalog.StartOrder(ids)
 }

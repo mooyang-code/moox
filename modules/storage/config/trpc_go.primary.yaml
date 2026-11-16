@@ -62,6 +62,6 @@ plugins:
           filename: trpc.log
           roll_type: size
           max_age: 7
-          max_size: 10
+          max_size: 50
           max_backups: 5
           compress: false

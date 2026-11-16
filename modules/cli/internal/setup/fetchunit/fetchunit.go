@@ -1,4 +1,5 @@
-// Package fetchunit 让目标机自己下载部署单元包。目标机并行下载，互不影响；都下载不了时由操作机下载再推送。
+// Package fetchunit 让目标机自己下载发布附件（每个组件一个包，见 bundle.PackageComponents）。
+// 目标机并行下载，互不影响；都下载不了时由操作机下载再推送。
 package fetchunit
 
 import (
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 )
 
@@ -39,7 +41,9 @@ type File struct {
 
 // Request 是下发给目标机脚本的请求。URLs 是带 {file} 占位的地址模板。
 type Request struct {
-	DeployRoot  string   `json:"deploy_root"`
+	DeployRoot string `json:"deploy_root"`
+	// StagingDir 是放下载文件的目录（绝对路径），为空时是 <DeployRoot>/staging。
+	StagingDir  string   `json:"staging_dir,omitempty"`
 	Release     string   `json:"release"`
 	Files       []File   `json:"files"`
 	URLs        []string `json:"urls"`
@@ -59,9 +63,32 @@ func Sources(release string) []string {
 	}
 }
 
-// StagingPath 是文件在目标机上的位置。
+// StagingPath 是文件在目标机上的位置（StagingDir 为空时）。
 func StagingPath(deployRoot, sha256, name string) string {
-	return path.Join(deployRoot, "staging", sha256, name)
+	return StagingPathIn(path.Join(deployRoot, "staging"), sha256, name)
+}
+
+// StagingPathIn 是文件在给定下载目录里的位置：<目录>/<摘要>/<文件名>，和 Request.StagingDir 配套使用。
+func StagingPathIn(stagingDir, sha256, name string) string {
+	return path.Join(stagingDir, sha256, name)
+}
+
+// ComponentFiles 由发布清单取出一组组件的包，作为 Request.Files；同一个包只列一次，清单里没有的组件报错。
+func ComponentFiles(manifest bundle.Manifest, components []string) ([]File, error) {
+	files := make([]File, 0, len(components))
+	seen := map[string]bool{}
+	for _, id := range components {
+		artifact, ok := manifest.Component(id)
+		if !ok {
+			return nil, fmt.Errorf("bundle_incomplete: 产物包 %s 没有组件 %s 的包", manifest.Release, id)
+		}
+		if seen[artifact.File] {
+			continue
+		}
+		seen[artifact.File] = true
+		files = append(files, File{Name: artifact.File, SHA256: artifact.SHA256, Size: artifact.Size})
+	}
+	return files, nil
 }
 
 // Run 在目标机上运行下载脚本；所有源都失败时返回 ErrNoSource。

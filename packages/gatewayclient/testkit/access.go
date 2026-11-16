@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -63,12 +62,6 @@ func StartAccess(t *testing.T, options AccessOptions) Access {
 	})
 	caPath := filepath.Join(root, "ca.crt")
 	writeCA(t, caPath)
-	host := hostgatewayconfig.Default(options.HostID, "fixture-control", "192.0.2.1", "assigned-host-key-12")
-	host.Server.LocalAddr = gatewayAddress
-	host.TLS.CAFile = caPath
-	hostBytes, err := hostgatewayconfig.Encode(host)
-	require.NoError(t, err)
-	write(t, filepath.Join(root, "host-gateway/config/app.yaml"), hostBytes)
 	write(t, filepath.Join(root, "secrets/access.key"), []byte(internal.Secret))
 	entries := make([]map[string]string, 0, len(options.ExternalCredentials))
 	for index, credential := range options.ExternalCredentials {
@@ -80,7 +73,10 @@ func StartAccess(t *testing.T, options AccessOptions) Access {
 	require.NoError(t, err)
 	write(t, filepath.Join(root, "secrets/verification.json"), registry)
 	app := map[string]any{
-		"gateway_client":    map[string]string{"caller": "access", "key_id": internal.KeyID, "key_file": "../../secrets/access.key"},
+		"gateway_client": map[string]string{
+			"caller": "access", "key_id": internal.KeyID, "key_file": "../../secrets/access.key",
+			"host_id": options.HostID, "local_address": gatewayAddress, "ca_file": caPath,
+		},
 		"verification_file": "../../secrets/verification.json", "nonce_path": "../../data/access/nonces.db",
 	}
 	appBytes, err := yaml.Marshal(app)

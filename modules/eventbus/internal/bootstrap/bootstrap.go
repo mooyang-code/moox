@@ -32,8 +32,9 @@ type Runtime struct {
 	Health   *health.Server
 }
 
-func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
-	rt, err := Start(ctx, s, "./config/app.yaml")
+// Initialize 读 configPath 指向的业务配置（-config）并启动 broker。
+func Initialize(ctx context.Context, s *server.Server, configPath string) (*server.Server, error) {
+	rt, err := Start(ctx, s, configPath)
 	if err != nil {
 		return nil, err
 	}

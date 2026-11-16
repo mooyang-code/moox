@@ -36,6 +36,8 @@ type fakeFactorMgr struct {
 	createdTasks       []map[string]any
 	// existingCategories 是线上已有的分类（ID → 名称）。
 	existingCategories map[string]string
+	// failStatus 为真时 SetTaskMemberStatus 返回错误（模拟启用那一步失败或被中断）。
+	failStatus bool
 }
 
 func newFakeFactorMgr() *fakeFactorMgr {
@@ -137,6 +139,9 @@ func (f *fakeFactorMgr) CallGatewayJSON(_ context.Context, service string, metho
 		f.members[taskID] = append(f.members[taskID], member)
 		result.Member = member
 	case "SetTaskMemberStatus":
+		if f.failStatus {
+			return errors.New("connection reset")
+		}
 		taskID, key := request["task_id"].(string), request["member_key"].(string)
 		for index := range f.members[taskID] {
 			if f.members[taskID][index].MemberKey == key {
@@ -467,6 +472,66 @@ func TestFactorTaskApplyResumesAPendingTask(t *testing.T) {
 	require.Equal(t, 1, fake.callsOf("CreateFactorTask"))
 	require.Zero(t, result.TasksCreated)
 	require.Equal(t, 1, result.MembersCreated)
+}
+
+// 成员加进去了、启用那一步失败：线上留下“已加入、停用”的成员。setup start 导入默认种子时（ResumeDisabled）重跑能接着启用；
+// 用户手动执行的 factor task apply 仍把它当差异报出来，不会把管理台里手工停用的成员重新启用。
+func TestFactorTaskApplyResumesAnInterruptedEnable(t *testing.T) {
+	fake := newFakeFactorMgr()
+	fake.paramDecls["bias"] = []factorAPIParam{{Name: "window", DefaultValue: 5}}
+	fake.failStatus = true
+	applier, _ := newApplier(fake)
+	_, err := applier.Apply(context.Background(), testSetupPlan())
+	require.ErrorContains(t, err, "connection reset")
+	require.Equal(t, "disabled", fake.members["ftask_prices_1m"][0].Status, "启用失败后成员停在停用")
+	fake.failStatus = false
+
+	fake.calls = nil
+	manual, _ := newApplier(fake)
+	result, err := manual.Apply(context.Background(), testSetupPlan())
+	require.ErrorContains(t, err, "一项都没有写入")
+	require.Equal(t, 1, result.Conflicts)
+	require.Contains(t, result.Items[len(result.Items)-1].Detail, "状态：线上 disabled，文件 enabled")
+	require.Zero(t, fake.writeCalls(), "手动执行不发启用")
+
+	fake.calls = nil
+	plan := testSetupPlan()
+	plan.ResumeDisabled = true
+	resumed, out := newApplier(fake)
+	result, err = resumed.Apply(context.Background(), plan)
+	require.NoError(t, err)
+	require.Zero(t, result.Conflicts)
+	require.Equal(t, 1, fake.callsOf("SetTaskMemberStatus"))
+	require.Zero(t, fake.callsOf("AddTaskMember"), "不重复加成员")
+	require.Equal(t, "enabled", fake.members["ftask_prices_1m"][0].Status)
+	member := result.Items[len(result.Items)-1]
+	require.Equal(t, itemEnabled, member.Result)
+	require.Equal(t, "bias", member.MemberKey)
+	require.Contains(t, out.String(), "接着启用")
+
+	// 启用之后再跑一次：全部已存在，不发写调用。
+	fake.calls = nil
+	again, _ := newApplier(fake)
+	_, err = again.Apply(context.Background(), plan)
+	require.NoError(t, err)
+	require.Zero(t, fake.writeCalls())
+}
+
+// ResumeDisabled 只补启用：线上启用、文件停用的反向情况仍是差异，不会去停用线上的成员。
+func TestFactorTaskApplyResumeDisabledOnlyEnables(t *testing.T) {
+	plan := testSetupPlan()
+	plan.ResumeDisabled = true
+	plan.Tasks[0].Members[0].Status = "disabled"
+	fake := newFakeFactorMgr()
+	fake.definitions["bias"] = plan.Definitions[0]
+	fake.paramDecls["bias"] = []factorAPIParam{{Name: "window", DefaultValue: 5}}
+	fake.tasks["ftask_prices_1m"] = setupFactorTask{TaskID: "ftask_prices_1m", Name: "行情因子", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}
+	fake.members["ftask_prices_1m"] = []factorAPIMember{{TaskID: "ftask_prices_1m", FactorID: "bias", MemberKey: "bias", Kind: "fixed", Status: "enabled", Params: map[string]float64{"window": 5}}}
+	applier, _ := newApplier(fake)
+	result, err := applier.Apply(context.Background(), plan)
+	require.Error(t, err)
+	require.Equal(t, 1, result.Conflicts)
+	require.Zero(t, fake.writeCalls())
 }
 
 // 命令本身：有差异时退出码非 0，摘要的 status 是 conflict。

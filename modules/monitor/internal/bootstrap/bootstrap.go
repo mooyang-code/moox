@@ -27,13 +27,14 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
+// Initialize 读 configPath 指向的业务配置（-config，部署时是 config/monitor/app.yaml 的绝对路径）并装配服务。
+func Initialize(ctx context.Context, s *server.Server, configPath string) (*server.Server, error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
 	log.InfoContextf(ctx, "开始初始化 moox-monitor...")
 
-	cfg, err := config.Load("./config/app.yaml")
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.ErrorContextf(ctx, "加载 monitor 配置失败: %v", err)
 		return nil, err

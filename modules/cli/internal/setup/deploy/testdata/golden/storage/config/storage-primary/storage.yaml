@@ -1,0 +1,12 @@
+storage:
+  root: /data/moox/data/storage-primary
+  # Dataset retention and View limits rendered by moox-cli from moox.toml.
+  policy_file: /data/moox/config/storage-primary/storage-policy.json
+  roles:
+    - primary
+  metadata:
+    path: /data/moox/data/storage-primary/metadata/storage_metadata.db
+  devices:
+    pebble_path: /data/moox/data/storage-primary/pebble
+  eventbus:
+    credential_file: /data/moox/secrets/eventbus/storage-eventbus.yaml

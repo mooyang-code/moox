@@ -57,7 +57,7 @@ func operators(ids ...string) *[]string { return &ids }
 
 func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 	c := mustCatalog(t)
-	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418}
+	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418, "seaweedfs": 0}
 	if len(c.Components) != len(want) {
 		t.Fatalf("components = %d", len(c.Components))
 	}
@@ -177,11 +177,29 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 			componentPtr(c, "archive-worker").RelayHTTP.Port = HostGatewayRemotePort
 		}},
 		{"relay_http port out of range", func(c *Catalog) { componentPtr(c, "archive-worker").RelayHTTP.Port = 70000 }},
-		{"external program outside systemd", func(c *Catalog) { componentPtr(c, "factor-engine").Doctor.Supervisor = SupervisorMooxRuntime }},
-		{"systemd unit is missing", func(c *Catalog) { componentPtr(c, "factor-engine").Doctor.Unit = "" }},
-		{"systemd unit is malformed", func(c *Catalog) { componentPtr(c, "factor-engine").Doctor.Unit = "../factor" }},
-		{"unit without systemd", func(c *Catalog) { componentPtr(c, "monitor").Doctor.Unit = "moox-monitor" }},
-		{"unknown supervisor", func(c *Catalog) { componentPtr(c, "monitor").Doctor.Supervisor = "launchd" }},
+		{"component without args", func(c *Catalog) { componentPtr(c, "monitor").Args = nil }},
+		{"arg with unknown placeholder", func(c *Catalog) { componentPtr(c, "monitor").Args = []string{"-conf={release}/trpc_go.yaml"} }},
+		{"arg with shell quoting", func(c *Catalog) { componentPtr(c, "monitor").Args = []string{"-conf='x'"} }},
+		{"tool without moox prefix", func(c *Catalog) { componentPtr(c, "collector").Tools = []string{"collector-cli"} }},
+		{"tool shared by two components", func(c *Catalog) { componentPtr(c, "trade").Tools = []string{"moox-collector-cli"} }},
+		{"config file escapes repository", func(c *Catalog) {
+			componentPtr(c, "monitor").ConfigFiles = []ConfigFile{{From: "../moox.toml"}}
+		}},
+		{"config file duplicate target", func(c *Catalog) {
+			componentPtr(c, "monitor").ConfigFiles = []ConfigFile{{From: "a/app.yaml"}, {From: "b/app.yaml"}}
+		}},
+		{"after unknown component", func(c *Catalog) { componentPtr(c, "monitor").After = []string{"nobody"} }},
+		{"after itself", func(c *Catalog) { componentPtr(c, "monitor").After = []string{"monitor"} }},
+		{"after cycle", func(c *Catalog) { componentPtr(c, "eventbus").After = []string{"monitor"} }},
+		{"stop timeout too long", func(c *Catalog) { componentPtr(c, "monitor").StopTimeoutSec = 3600 }},
+		{"unknown credential", func(c *Catalog) { componentPtr(c, "monitor").Credentials = []string{"ssh"} }},
+		{"explicit metrics publisher", func(c *Catalog) {
+			componentPtr(c, "monitor").Credentials = []string{"eventbus:metrics-publisher"}
+		}},
+		{"third party with credentials", func(c *Catalog) { componentPtr(c, "seaweedfs").Credentials = []string{"cls"} }},
+		{"third party with health port", func(c *Catalog) { componentPtr(c, "seaweedfs").Health.Port = 11474 }},
+		{"third party with moox binary", func(c *Catalog) { componentPtr(c, "seaweedfs").Binary = "moox-seaweedfs" }},
+		{"moox component with foreign binary", func(c *Catalog) { componentPtr(c, "monitor").Binary = "monitor" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -445,7 +463,7 @@ func TestExternalProgramComponents(t *testing.T) {
 	c := mustCatalog(t)
 	for _, id := range []string{"factor-engine", "archive-worker"} {
 		component, ok := c.Component(id)
-		if !ok || !component.ExternalProgram || component.Doctor.Supervisor != SupervisorSystemdUser || component.Doctor.Unit != "moox-"+id {
+		if !ok || !component.ExternalProgram {
 			t.Fatalf("external program %s is not registered correctly: %+v", id, component)
 		}
 		if len(component.Ports) != 0 || component.Health.Port == 0 {
@@ -499,11 +517,52 @@ func TestExternalProgramComponents(t *testing.T) {
 	if !c.LocalRelayPort(11428) || c.LocalRelayPort(11418) || c.LocalRelayPort(22) {
 		t.Fatal("local relay ports must be relay_http ports only: health ports are not relayed")
 	}
-	if err := ValidateSupervisor("", ""); err != nil {
+}
+
+// 部署字段：启动顺序按 after 排，同一台主机上依赖在前；第三方程序只有 SeaweedFS，不拿凭据、不进隐含的指标角色。
+func TestDeployFieldsOrderAndCredentials(t *testing.T) {
+	c := mustCatalog(t)
+	order, err := c.StartOrder([]string{"strategy", "host-agent", "collector", "host-gateway", "admin", "monitor", "factor-mgr", "archive-mgr"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateSupervisor(SupervisorSystemdUser, "moox-factor-engine"); err != nil {
-		t.Fatal(err)
+	want := []string{"admin", "host-gateway", "host-agent", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}
+	if !slices.Equal(order, want) {
+		t.Fatalf("control order = %v, want %v", order, want)
+	}
+	if order, err = c.StartOrder([]string{"archive-worker", "seaweedfs", "host-gateway"}); err != nil || !slices.Equal(order, []string{"host-gateway", "seaweedfs", "archive-worker"}) {
+		t.Fatalf("factor order = %v, %v", order, err)
+	}
+	for _, component := range c.Components {
+		if len(component.Args) == 0 {
+			t.Fatalf("%s has no args", component.ID)
+		}
+		if component.StopTimeout() != DefaultStopTimeoutSec {
+			t.Fatalf("%s stop timeout = %d", component.ID, component.StopTimeout())
+		}
+	}
+	weed, _ := c.Component("seaweedfs")
+	if !weed.ThirdParty || weed.Binary != "weed" || len(weed.EventBusRoles()) != 0 || weed.Health.Port != 0 {
+		t.Fatalf("seaweedfs = %+v", weed)
+	}
+	collector, _ := c.Component("collector")
+	if !slices.Equal(collector.EventBusRoles(), []string{"collector-eventbus", "metrics-publisher"}) || !collector.HasCredential("cls") {
+		t.Fatalf("collector credentials = %v", collector.Credentials)
+	}
+	agent, _ := c.Component("host-agent")
+	if !slices.Equal(agent.EventBusRoles(), []string{"hostagent-publisher"}) {
+		t.Fatalf("host-agent roles = %v", agent.EventBusRoles())
+	}
+	primary, _ := c.Component("storage-primary")
+	targets := []string{}
+	for _, file := range primary.ConfigFiles {
+		targets = append(targets, file.Target())
+	}
+	if !slices.Equal(targets, []string{"trpc_go.yaml", "storage.yaml", "metadata.sql"}) {
+		t.Fatalf("storage-primary config files = %v", targets)
+	}
+	if UnitName("collector") != "moox-collector.service" {
+		t.Fatal(UnitName("collector"))
 	}
 }
 

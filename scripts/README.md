@@ -13,6 +13,6 @@
 | `test/e2e/` | 需要真实进程或外部依赖的端到端测试 |
 | `test/gates/` | 执行预构建制品的 Linux 部署与运行时门禁 |
 
-部署软件包由 `build/package-deployment.sh` 生成；原生发布助手位于 `skills/moox/scripts/native-release.sh`，运行时操作由 `moox-runtime` 提供。
+发布产物由 `release/build-release.sh` 生成（每个组件一个包，由 `moox-cli setup package-components` 按服务目录打）；部署、启停与日志都由 `moox-cli setup` 完成，目标机上的安装脚本内嵌在 CLI 里（`modules/cli/internal/setup/deploy/install.sh`）。
 
 脚本应通过 `${BASH_SOURCE[0]}` 计算仓库根目录，不依赖当前工作目录。跨目录调用必须使用完整的规范路径。

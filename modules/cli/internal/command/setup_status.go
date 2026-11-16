@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
 )
@@ -24,17 +24,16 @@ type statusRegistry interface {
 }
 
 type externalServices interface {
-	Stop(ctx context.Context, host setupconfig.Host, component string) error
-	Start(ctx context.Context, host setupconfig.Host, component, deployRoot string) error
+	Stop(ctx context.Context, host topology.Host, component string) error
+	Start(ctx context.Context, host topology.Host, component string) error
 }
 
 // statusEnv 是启停需要的外部能力；测试里替换。
 type statusEnv struct {
-	registry   statusRegistry
-	services   externalServices
-	host       func(id string) (setupconfig.Host, error)
-	deployRoot string
-	external   func(component string) bool
+	registry statusRegistry
+	services externalServices
+	host     func(id string) (topology.Host, error)
+	external func(component string) bool
 }
 
 type statusStep struct {
@@ -60,25 +59,33 @@ func isExternalComponent(component string) bool {
 }
 
 type sshServices struct {
-	open func(context.Context, setupconfig.Host) (setupssh.Client, error)
+	open func(context.Context, topology.Host) (setupssh.Client, error)
 }
 
-func (s sshServices) Stop(ctx context.Context, host setupconfig.Host, component string) error {
+// Stop 停掉外部程序并不再开机自启，核对它确实停了。
+func (s sshServices) Stop(ctx context.Context, host topology.Host, component string) error {
+	return s.operate(ctx, host, component, deploy.OperationStop, "")
+}
+
+// Start 恢复外部程序并开机自启，核对它确实在运行。
+func (s sshServices) Start(ctx context.Context, host topology.Host, component string) error {
+	return s.operate(ctx, host, component, deploy.OperationStart, "active")
+}
+
+func (s sshServices) operate(ctx context.Context, host topology.Host, component, operation, want string) error {
 	client, err := s.open(ctx, host)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
-	return unitdeploy.StopExternalService(ctx, client, component)
-}
-
-func (s sshServices) Start(ctx context.Context, host setupconfig.Host, component, deployRoot string) error {
-	client, err := s.open(ctx, host)
+	state, err := deploy.Operate(ctx, client, component, operation)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
-	return unitdeploy.StartExternalService(ctx, client, component, deployRoot)
+	if want != "" && state != want {
+		return fmt.Errorf("%s 上的 %s 执行 %s 之后状态是 %s，不是 %s", host.Name, component, operation, state, want)
+	}
+	return nil
 }
 
 type registrySnapshot struct {
@@ -163,7 +170,7 @@ func changeHostStatus(ctx context.Context, env statusEnv, hostID string, enable,
 		case step.Action == "stop-service":
 			stepErr = env.services.Stop(ctx, host, step.Component)
 		case step.Action == "start-service":
-			stepErr = env.services.Start(ctx, host, step.Component, env.deployRoot)
+			stepErr = env.services.Start(ctx, host, step.Component)
 		default:
 			stepErr = env.registry.SetHostStatus(ctx, hostID, target)
 		}
@@ -221,7 +228,7 @@ func changeDeploymentStatus(ctx context.Context, env statusEnv, hostID, componen
 		return report, nil
 	}
 	report.Status = "applied"
-	var host setupconfig.Host
+	var host topology.Host
 	if external {
 		if host, err = env.host(hostID); err != nil {
 			return report, err
@@ -234,7 +241,7 @@ func changeDeploymentStatus(ctx context.Context, env statusEnv, hostID, componen
 		case step.Action == "stop-service":
 			stepErr = env.services.Stop(ctx, host, component)
 		case step.Action == "start-service":
-			stepErr = env.services.Start(ctx, host, component, env.deployRoot)
+			stepErr = env.services.Start(ctx, host, component)
 		default:
 			stepErr = env.registry.SetDeploymentStatus(ctx, hostID, component, target)
 		}
@@ -252,22 +259,21 @@ func changeDeploymentStatus(ctx context.Context, env statusEnv, hostID, componen
 }
 
 // defaultStatusEnv 用操作员网关与已核验的 SSH 装配启停环境；返回的 close 释放网关。
-func defaultStatusEnv(ctx context.Context, file string, snapshot *setupconfig.Snapshot) (statusEnv, func(), error) {
-	gateway, err := openCommandGateway(ctx, file, snapshot.Config())
+func defaultStatusEnv(ctx context.Context, file string, snapshot *setupSnapshot) (statusEnv, func(), error) {
+	gateway, err := openCommandGateway(ctx, file, snapshot.Manifest)
 	if err != nil {
 		return statusEnv{}, nil, err
 	}
 	env := statusEnv{
 		registry: setupclient.New(gateway),
-		services: sshServices{open: func(ctx context.Context, host setupconfig.Host) (setupssh.Client, error) {
+		services: sshServices{open: func(ctx context.Context, host topology.Host) (setupssh.Client, error) {
 			return dialSetupHost(ctx, host)
 		}},
-		deployRoot: snapshot.Manifest.Paths.Resolved().DeployRoot,
-		external:   isExternalComponent,
-		host: func(id string) (setupconfig.Host, error) {
+		external: isExternalComponent,
+		host: func(id string) (topology.Host, error) {
 			host := snapshot.Manifest.HostByID(id)
 			if host.Name == "" {
-				return setupconfig.Host{}, fmt.Errorf("moox.toml 里没有主机 %s", id)
+				return topology.Host{}, fmt.Errorf("moox.toml 里没有主机 %s", id)
 			}
 			return host, nil
 		},
@@ -275,7 +281,7 @@ func defaultStatusEnv(ctx context.Context, file string, snapshot *setupconfig.Sn
 	return env, func() { _ = gateway.Close() }, nil
 }
 
-func newSetupHostStatusCommand(deps setupDeps, newEnv func(context.Context, string, *setupconfig.Snapshot) (statusEnv, func(), error)) *cobra.Command {
+func newSetupHostStatusCommand(deps setupDeps, newEnv func(context.Context, string, *setupSnapshot) (statusEnv, func(), error)) *cobra.Command {
 	host := &cobra.Command{Use: "host", Short: "启用或停用一台已登记的主机（默认只预览）"}
 	for _, enable := range []bool{true, false} {
 		var file, hostID string
@@ -318,7 +324,7 @@ func newSetupHostStatusCommand(deps setupDeps, newEnv func(context.Context, stri
 	return host
 }
 
-func newSetupDeploymentStatusCommand(deps setupDeps, newEnv func(context.Context, string, *setupconfig.Snapshot) (statusEnv, func(), error)) *cobra.Command {
+func newSetupDeploymentStatusCommand(deps setupDeps, newEnv func(context.Context, string, *setupSnapshot) (statusEnv, func(), error)) *cobra.Command {
 	deployment := &cobra.Command{Use: "deployment", Short: "启用或停用一个组件部署（默认只预览）"}
 	for _, enable := range []bool{true, false} {
 		var file, hostID, component string

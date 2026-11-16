@@ -8,16 +8,18 @@
 ## 读：`moox-cli config get`
 
 ```bash
-moox-cli config get                                   # 整份配置（JSON，密钥已打码）
+moox-cli config get                                   # 整份 moox.toml（JSON，明文文件里没有秘密）
 moox-cli config get hosts.storage                     # 一个表
 moox-cli config get storage_retention.defaults.5m     # 一个值
 moox-cli config get deployments.control.0            # 数组用序号，从 0 开始
-moox-cli config get --file ./moox.secrets.toml exchange_keys.0   # 第一把交易所密钥：api_key、secret_key、passphrase 显示为 ***
+moox-cli config get --file ./moox.secrets.toml exchange_keys.0   # 第一把交易所密钥：只看得到 name、exchange、environment、readonly，其余显示为 ***
+moox-cli config get --file ./moox.secrets.toml notification      # 告警渠道：channel_type 可见，webhook_url、secret 显示为 ***
 moox-cli config get hosts.storage.address
 ```
 
 - 路径用点号分隔；路径不存在时报错并列出该层可用的键。
-- 键名含 `password`、`passphrase`、`secret`、`token`、`api_key`、`access_key`、`private_key` 的值显示为 `***`（以 `_file`、`_path` 结尾的路径类键不打码），包括内嵌表里的，例如 `ssh = { password = "…" }`。
+- 秘密文件默认整份打码：只有用来辨认是哪一项的键可见（`username`、`channel_type`、`name`、`exchange`、`environment`、`readonly`），其余的值（密码、云密钥、交易所密钥、告警 Webhook 地址与签名密钥、CLS 写入密钥）都显示为 `***`。Webhook 地址里带着企业微信的 `key`、钉钉的 `access_token`，同样是秘密。空值不打码，看得出没填。
+- `moox.toml` 是明文，正常不含秘密；万一写了，键名含 `password`、`passphrase`、`secret`、`token`、`api_key`、`access_key`、`private_key` 的值也显示为 `***`（以 `_file`、`_path` 结尾的路径类键不打码）。
 - `--reveal` 输出明文。**只有任务确实需要这个值才用**（例如用管理员账号登录管理台做页面检查），并且：只把值放进环境变量或标准输入传给下一条命令，不要打印到对话、日志、文档、提交里。要登录管理台时读 `admin.username` 与 `admin.password` 两项即可，不要取整份。
 - 需要的只是“某项有没有配、是什么模式”时，用不加 `--reveal` 的结果就够了。
 

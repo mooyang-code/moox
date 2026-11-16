@@ -29,12 +29,12 @@ type Config struct {
 	Web webserver.Config
 }
 
-// LoadConfigs 加载系统中各个模块配置
-func LoadConfigs(ctx context.Context) (*Config, error) {
+// LoadConfigs 加载系统中各个模块配置：configPath 是业务配置 app.yaml（-config），console.yaml 在同一目录。
+func LoadConfigs(ctx context.Context, configPath string) (*Config, error) {
 	log.Info("正在加载应用配置...")
 
 	// 1. 加载应用配置
-	appCfg, err := config.Load("./config/app.yaml")
+	appCfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -61,14 +61,15 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 	log.Info("应用配置加载成功")
 
 	// 2. 加载认证配置
-	authCfg, err := authcfg.LoadConfig()
+	consolePath := filepath.Join(filepath.Dir(configPath), "console.yaml")
+	authCfg, err := authcfg.LoadConfig(consolePath)
 	if err != nil {
 		return nil, err
 	}
 	log.Info("认证配置加载成功")
 
 	// 3. 加载控制台配置
-	consoleCfg, err := console.LoadConfig()
+	consoleCfg, err := console.LoadConfig(consolePath)
 	if err != nil {
 		return nil, err
 	}

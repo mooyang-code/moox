@@ -27,12 +27,12 @@ func newSetupSyncDeploymentsCommand(deps setupDeps) *cobra.Command {
 			if !yes {
 				return writePreview(cmd, map[string]any{"action": "sync_deployments", "host": host, "components": snapshot.Manifest.Deployments[host]})
 			}
-			gateway, err := openCommandGateway(cmd.Context(), file, snapshot.Config())
+			gateway, err := openCommandGateway(cmd.Context(), file, snapshot.Manifest)
 			if err != nil {
 				return err
 			}
 			defer gateway.Close()
-			if err := setupclient.New(gateway).SyncHostDeployments(cmd.Context(), snapshot, host); err != nil {
+			if err := setupclient.New(gateway).SyncHostDeployments(cmd.Context(), snapshot.Manifest, host); err != nil {
 				return err
 			}
 			return writeSetupJSON(cmd, map[string]any{"status": "ok", "host": host, "components": snapshot.Manifest.Deployments[host]})

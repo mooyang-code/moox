@@ -10,8 +10,8 @@ import os
 import sqlite3
 import sys
 
-DB = os.environ.get("MOOX_MONITOR_DB", "/data/moox/prod/current/monitor/data/monitor/monitor.db")
-LOG = os.environ.get("MOOX_MONITOR_LOG", "/data/moox/prod/current/monitor/logs/trpc.log")
+DB = os.environ.get("MOOX_MONITOR_DB", "/data/moox/data/monitor/monitor.db")
+LOG = os.environ.get("MOOX_MONITOR_LOG", "/data/moox/logs/monitor/trpc.log")
 RETIRED = "已停用或移除，不再检查"
 NO_DATA_AFTER = datetime.timedelta(minutes=2)
 

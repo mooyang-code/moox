@@ -82,11 +82,12 @@ func (r *Runtime) start(ctx context.Context, name string, run func(context.Conte
 }
 
 // Initialize 加载配置、打开数据库、注册 RPC 与健康检查，并启动后台循环。
-func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
+// configPath 是业务配置（-config）。
+func Initialize(ctx context.Context, s *server.Server, configPath string) (*server.Server, error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	cfg, err := config.Load("./config/app.yaml")
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, err
 	}

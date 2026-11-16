@@ -23,7 +23,11 @@ const MaskedValue = "***"
 
 var secretKeyPattern = regexp.MustCompile(`(?i)(password|passphrase|secret|token|api_key|access_key|private_key)`)
 
-// isSecretKey 判断键名是不是密钥类（路径类的 *_file、*_path 不算）。
+// secretsVisibleKeys 是秘密文件里默认就能看到的键：都不是秘密，用来辨认是哪一项。其余的值（密码、密钥、Webhook 地址等）
+// 在秘密文件里一律打码，加 --reveal 才明文。
+var secretsVisibleKeys = map[string]bool{"username": true, "channel_type": true, "name": true, "exchange": true, "environment": true, "readonly": true}
+
+// isSecretKey 判断 moox.toml 里的键名是不是密钥类（路径类的 *_file、*_path 不算）。
 func isSecretKey(key string) bool {
 	k := strings.ToLower(key)
 	if strings.HasSuffix(k, "_file") || strings.HasSuffix(k, "_path") {
@@ -110,7 +114,7 @@ func GetConfig(path, target string, reveal bool, keys configcrypt.KeyStore) (any
 	if i := strings.LastIndex(target, "."); i >= 0 {
 		last = target[i+1:]
 	}
-	return maskSecrets(node, last), nil
+	return maskSecrets(node, last, isSecretsFile(path)), nil
 }
 
 func sortedKeys(m map[string]any) []string {
@@ -122,28 +126,34 @@ func sortedKeys(m map[string]any) []string {
 	return keys
 }
 
-func maskSecrets(node any, key string) any {
+// maskSecrets 给值打码：秘密文件（secretsFile）里除 secretsVisibleKeys 外一律打码；moox.toml 里只给密钥类键名打码。
+// 空值不打码（看得出没填）。
+func maskSecrets(node any, key string, secretsFile bool) any {
 	switch v := node.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for k, child := range v {
-			out[k] = maskSecrets(child, k)
+			out[k] = maskSecrets(child, k, secretsFile)
 		}
 		return out
 	case []map[string]any:
 		out := make([]any, len(v))
 		for i, child := range v {
-			out[i] = maskSecrets(child, key)
+			out[i] = maskSecrets(child, key, secretsFile)
 		}
 		return out
 	case []any:
 		out := make([]any, len(v))
 		for i, child := range v {
-			out[i] = maskSecrets(child, key)
+			out[i] = maskSecrets(child, key, secretsFile)
 		}
 		return out
 	default:
-		if isSecretKey(key) && fmt.Sprint(v) != "" {
+		secret := isSecretKey(key)
+		if secretsFile {
+			secret = !secretsVisibleKeys[strings.ToLower(key)]
+		}
+		if secret && fmt.Sprint(v) != "" {
 			return MaskedValue
 		}
 		return node

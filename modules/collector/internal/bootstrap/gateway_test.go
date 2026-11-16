@@ -26,7 +26,6 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -240,10 +239,9 @@ func (w collectorDataViewWire) GetViewState(ctx context.Context, request *storag
 func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "collector", "config", "app.yaml")
-	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
 	keyPath := filepath.Join(root, "secrets", "caller-collector.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
-	for _, path := range []string{configPath, hostPath, keyPath, caPath} {
+	for _, path := range []string{configPath, keyPath, caPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
 	}
 	credentials := gatewayauth.Credentials{Caller: "collector", KeyID: "admin-assigned-collector-key-42", Secret: "collector-fixture-signing-key-at-least-32-bytes"}
@@ -256,12 +254,6 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	host := hostgatewayconfig.Default("control", "control", "192.0.2.1", "host-fixture-key")
-	host.Server.LocalAddr = listener.Addr().String()
-	host.TLS.CAFile = caPath
-	encoded, err := hostgatewayconfig.Encode(host)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(hostPath, encoded, 0600))
 	directory := servicecatalog.Directory{Services: map[string][]string{"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.storage.DataView": {"control"}, "trpc.moox.ops.SecretMgr": {"control"}, "trpc.moox.admin.ActivityLog": {"control"}}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
@@ -276,7 +268,7 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	data := filepath.Join(root, "data", "collector")
-	raw := "database:\n  path: " + filepath.Join(data, "collector.db") + "\ngateway_client:\n  caller: collector\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-collector.key\n"
+	raw := "database:\n  path: " + filepath.Join(data, "collector.db") + "\ngateway_client:\n  caller: collector\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-collector.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
 	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0600))
 	cfg, err := Load(configPath)
 	require.NoError(t, err)

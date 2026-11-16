@@ -46,7 +46,7 @@ func writeCachedConsoleCA(t *testing.T, address string) string {
 
 func TestSetupInitSummaryReportsBrowserTrustForInternalCA(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	control := snapshot.Manifest.ControlHost()
 	want := writeCachedConsoleCA(t, control.Address)
 
@@ -77,7 +77,7 @@ func TestSetupBrowserTrustWithoutTerminalPrintsManualCommand(t *testing.T) {
 	t.Cleanup(func() { refreshSetupConsoleCA, setupHasTerminal = refresh, terminal })
 	refreshSetupConsoleCA = func(context.Context, *topology.Config) error { return nil }
 	setupHasTerminal = func() bool { return false }
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	err := ensureSetupBrowserCATrust(context.Background(), snapshot)
 	require.ErrorContains(t, err, "browser_trust_manual")
 	require.ErrorContains(t, err, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
@@ -93,7 +93,7 @@ func TestEnsureSetupBrowserCATrustRefreshesNativeControlCA(t *testing.T) {
 		return errors.New("ssh unavailable")
 	}
 
-	err := ensureSetupBrowserCATrust(context.Background(), setupSnapshot(t))
+	err := ensureSetupBrowserCATrust(context.Background(), testSetupSnapshot(t))
 	require.ErrorContains(t, err, "browser_ca_trust_failed")
 	require.True(t, strings.Contains(err.Error(), "ssh unavailable"))
 	require.Equal(t, 1, calls)

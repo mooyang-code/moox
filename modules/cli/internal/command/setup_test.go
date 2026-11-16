@@ -5,14 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 
-	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/assert"
@@ -21,21 +21,21 @@ import (
 
 func TestSetupCommandContractAndSecrecy(t *testing.T) {
 	t.Parallel()
-	snapshot := setupSnapshot(t)
-	secrets := []string{"admin-test-password", "control-ssh-password", "other-ssh-password", "AKID-test-secret", "cloud-test-secret"}
+	snapshot := testSetupSnapshot(t)
+	secrets := []string{"admin-test-password", "AKID-test-secret", "cloud-test-secret", "webhook/send?key=test"}
 	validateCalls := 0
 	deps := setupDeps{
-		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		validate: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
+		load: func(string) (*setupSnapshot, error) { return snapshot, nil },
+		validate: func(context.Context, *setupSnapshot) (setupvalidate.Result, error) {
 			validateCalls++
 			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
 		},
-		trustHost: func(context.Context, *setupconfig.Snapshot, string, string) error { return nil },
-		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
-			return setupclient.StatusResult{State: "completed", Users: 1, Secrets: 1}, nil
-		},
-		login: func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
-			return setupclient.LoginResult{LoginAPI: "valid"}, nil
+		trustHost: func(context.Context, *setupSnapshot, string, string) error { return nil },
+		scanDeployment: func(context.Context, *setupSnapshot, deployscan.Options) ([]deployscan.HostReport, error) {
+			return []deployscan.HostReport{
+				{Host: "control", Installed: true, Version: json.RawMessage(`{"version":"v0.0.2","components":{"admin":{}}}`), Units: []string{"moox-admin.service"}, Active: []string{"moox-admin.service"}, Linger: true, Journald: true, DiskFreeKB: 50 << 20},
+				{Host: "compute", Linger: false, Journald: false, DiskFreeKB: 1 << 20},
+			}, nil
 		},
 	}
 
@@ -46,8 +46,9 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 	}{
 		{name: "validate", args: []string{"validate", "--file", "moox.toml"}, key: "checks"},
 		{name: "trust", args: []string{"trust-host", "--file", "moox.toml", "--host", "control", "--fingerprint", "SHA256:test"}, key: "status"},
-		{name: "status", args: []string{"status", "--file", "moox.toml"}, key: "state"},
+		{name: "status", args: []string{"status", "--file", "moox.toml"}, key: "hosts"},
 	}
+	outputs := map[string]string{}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			cmd := newSetupCommand(deps)
@@ -63,10 +64,27 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 			for _, secret := range secrets {
 				require.NotContains(t, combined, secret)
 			}
-			require.NotContains(t, combined, "将使用默认配置")
+			outputs[test.name] = stdout.String()
 		})
 	}
 	require.Equal(t, 1, validateCalls, "validate must validate the full manifest")
+
+	// validate：一台装过就是 installed；没开 linger 的主机给出要用户执行的命令，journald 没持久化、磁盘不够只提醒。
+	var validated setupValidateOutput
+	require.NoError(t, json.Unmarshal([]byte(outputs["validate"]), &validated))
+	require.Equal(t, deployscan.RouteInstalled, validated.Deployment.Route)
+	require.Len(t, validated.Deployment.ManualSteps, 1)
+	require.Contains(t, validated.Deployment.ManualSteps[0], "sudo loginctl enable-linger ubuntu")
+	require.Len(t, validated.Deployment.Warnings, 2)
+	require.NotEmpty(t, validated.Deployment.NextSteps)
+
+	// status：读 version.json 与各组件的用户服务状态。
+	var status setupStatusOutput
+	require.NoError(t, json.Unmarshal([]byte(outputs["status"]), &status))
+	require.Equal(t, "v0.0.2", status.Hosts[0].Version)
+	require.Contains(t, status.Hosts[0].Components, deploy.ComponentStatus{ID: "admin", State: "active", Installed: true})
+	require.Contains(t, status.Hosts[0].Components, deploy.ComponentStatus{ID: "collector", State: "missing"})
+	require.False(t, status.Hosts[1].Installed)
 }
 
 func TestSetupHelpListsWorkflowCommands(t *testing.T) {
@@ -76,11 +94,12 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "build-linux", "status", "deploy-host", "deploy-unit", "bootstrap", "release", "watchdog", "metadata-import", "export-skill-config", "firewall"} {
-		require.Contains(t, output.String(), name)
+	for _, name := range []string{"install", "deploy", "init", "start", "verify", "validate", "status", "logs", "restart", "stop", "start-component", "wipe", "hosts", "trust-host", "trust-browser", "build-linux", "metadata-import", "export-skill-config", "firewall"} {
+		require.Contains(t, output.String(), "  "+name+" ")
 	}
-	// 已删除的命令：初始秘密由 setup init 写入，因子任务由 setup start 与 factor task apply 导入，运行配置由部署渲染。
-	for _, removed := range []string{"apply ", "factors ", "render-runtime-config"} {
+	// 已删除的命令：初始秘密由 setup init 写入，因子任务由 setup start 与 factor task apply 导入，运行配置由部署渲染；
+	// 旧部署路径的命令（bootstrap、deploy-host、deploy-unit、release、watchdog、package）已从注册表摘掉。
+	for _, removed := range []string{"apply ", "factors ", "render-runtime-config", "bootstrap", "deploy-host", "deploy-unit", "release ", "watchdog", "package "} {
 		require.NotContains(t, output.String(), "  "+removed)
 	}
 }
@@ -93,7 +112,7 @@ func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --check '*) test -f \"$MARKER\";;\n  *) : >\"$MARKER\";;\nesac\n"), 0o700))
 	t.Setenv("MARKER", marker)
 	t.Chdir(root)
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	original, terminal := refreshSetupConsoleCA, setupHasTerminal
 	t.Cleanup(func() { refreshSetupConsoleCA, setupHasTerminal = original, terminal })
 	setupHasTerminal = func() bool { return true }
@@ -102,7 +121,7 @@ func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 		refreshed++
 		return nil
 	}
-	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupSnapshot, error) { return snapshot, nil }})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"trust-browser", "--file", "moox.toml"})
@@ -114,8 +133,8 @@ func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 
 func TestSetupHostsListsSanitizedManifestHosts(t *testing.T) {
 	t.Parallel()
-	snapshot := setupSnapshot(t)
-	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	snapshot := testSetupSnapshot(t)
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupSnapshot, error) { return snapshot, nil }})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"hosts", "--file", "moox.toml"})
@@ -126,7 +145,7 @@ func TestSetupHostsListsSanitizedManifestHosts(t *testing.T) {
 	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
 	require.Equal(t, []string{"control", "compute"}, []string{result.Hosts[0].Name, result.Hosts[1].Name})
 	require.Equal(t, "control", result.Hosts[0].Role)
-	for _, secret := range []string{"admin-test-password", "control-ssh-password", "other-ssh-password", "AKID-test-secret", "cloud-test-secret"} {
+	for _, secret := range []string{"admin-test-password", "AKID-test-secret", "cloud-test-secret"} {
 		require.NotContains(t, output.String(), secret)
 	}
 }
@@ -184,9 +203,9 @@ func TestSetupRuntimeFirewallRulesAreServicePortsAndEventBusRuleIsSeparate(t *te
 }
 
 func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
-	manifest := setupconfig.Manifest{
-		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "203.0.113.8"}, "storage": {Address: "203.0.113.10"}, "compute": {Address: "203.0.113.9"}},
-		EventBus:    setupconfig.EventBus{PublicAddress: "203.0.113.8", Port: 4222},
+	manifest := &topology.Config{
+		HostCatalog: map[string]topology.HostDefinition{"control": {Address: "203.0.113.8"}, "storage": {Address: "203.0.113.10"}, "compute": {Address: "203.0.113.9"}},
+		EventBus:    topology.EventBus{Port: 4222},
 		Deployments: map[string][]string{"control": {"admin", "eventbus"}, "storage": {"storage-primary"}, "compute": {"trade"}},
 	}
 	targets := mustFirewallTargets(t, manifest)
@@ -223,7 +242,7 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 	assert.Equal(t, "4222", relay[0].Rules[1].Ports)
 }
 
-func mustFirewallTargets(t *testing.T, manifest setupconfig.Manifest) []setupFirewallTarget {
+func mustFirewallTargets(t *testing.T, manifest *topology.Config) []setupFirewallTarget {
 	t.Helper()
 	targets, err := setupFirewallTargets(manifest)
 	require.NoError(t, err)
@@ -232,13 +251,13 @@ func mustFirewallTargets(t *testing.T, manifest setupconfig.Manifest) []setupFir
 
 // 健康端口只听本机、不验签：任何主机的防火墙都不放行健康端口（包括自动补入的主机网关与主机采集器）。
 func TestSetupFirewallOpensNoHealthPort(t *testing.T) {
-	manifest := setupconfig.Manifest{
-		HostCatalog: map[string]setupconfig.HostDefinition{
+	manifest := &topology.Config{
+		HostCatalog: map[string]topology.HostDefinition{
 			"control": {Address: "203.0.113.8", Region: "ap-shanghai"},
 			"storage": {Address: "203.0.113.10", Region: "ap-guangzhou"},
 			"edge":    {Address: "203.0.113.11", Region: "ap-hongkong"},
 		},
-		EventBus:    setupconfig.EventBus{Port: 4222},
+		EventBus:    topology.EventBus{Port: 4222},
 		Deployments: map[string][]string{"control": {"admin", "monitor"}, "storage": {"storage-primary", "eventbus"}, "edge": {"trade"}},
 	}
 	catalog, err := servicecatalog.LoadEmbedded()
@@ -259,9 +278,9 @@ func TestSetupFirewallOpensNoHealthPort(t *testing.T) {
 
 // EventBus 部署在存储机：4222 只在存储机上放行，控制机不再放行；出站主机接入需要的规则也跟着分到两台主机上。
 func TestSetupFirewallTargetsFollowEventBusPlacement(t *testing.T) {
-	manifest := setupconfig.Manifest{
-		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "203.0.113.8"}, "storage": {Address: "203.0.113.10"}, "factor": {Address: "192.168.0.103", Reachability: "outbound"}},
-		EventBus:    setupconfig.EventBus{Port: 4222},
+	manifest := &topology.Config{
+		HostCatalog: map[string]topology.HostDefinition{"control": {Address: "203.0.113.8"}, "storage": {Address: "203.0.113.10"}, "factor": {Address: "192.168.0.103", Reachability: "outbound"}},
+		EventBus:    topology.EventBus{Port: 4222},
 		Deployments: map[string][]string{"control": {"admin"}, "storage": {"storage-primary", "eventbus"}, "factor": {"factor-engine"}},
 	}
 	portsOn := func(targets []setupFirewallTarget, name string) []string {
@@ -289,12 +308,12 @@ func TestSetupFirewallTargetsFollowEventBusPlacement(t *testing.T) {
 
 func TestSetupMetadataImportPassesExplicitHostAndSpaces(t *testing.T) {
 	t.Parallel()
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	var host, seed string
 	var spaces []string
 	cmd := newSetupCommand(setupDeps{
-		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		importMetadata: func(_ context.Context, _ *setupconfig.Snapshot, selectedHost, selectedSeed string, selectedSpaces []string) (metadataImportSummary, error) {
+		load: func(string) (*setupSnapshot, error) { return snapshot, nil },
+		importMetadata: func(_ context.Context, _ *setupSnapshot, selectedHost, selectedSeed string, selectedSpaces []string) (metadataImportSummary, error) {
 			host, seed, spaces = selectedHost, selectedSeed, append([]string(nil), selectedSpaces...)
 			return metadataImportSummary{Status: "ok", Planned: 12, Applied: 12}, nil
 		},
@@ -311,11 +330,26 @@ func TestSetupMetadataImportPassesExplicitHostAndSpaces(t *testing.T) {
 	require.Equal(t, 12, result.Applied)
 }
 
-func setupSnapshot(t *testing.T) *setupconfig.Snapshot {
+// testSetupSnapshot 是测试用的两份配置：控制机带 Storage 与 EventBus，另有一台空主机；秘密里的值都是可辨认的假值。
+func testSetupSnapshot(t *testing.T) *setupSnapshot {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "moox.toml")
-	raw := []byte(`[admin]
+	cfg, err := topology.Parse([]byte(`[eventbus]
+port = 4333
+
+[hosts.control]
+address = "203.0.113.8"
+ssh = { port = 22, username = "ubuntu" }
+
+[hosts.compute]
+address = "203.0.113.9"
+ssh = { port = 22, username = "ubuntu" }
+
+[deployments]
+control = ["admin", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
+compute = []
+`))
+	require.NoError(t, err)
+	secrets, err := topology.ParseSecrets([]byte(`[admin]
 username = "admin"
 password = "admin-test-password"
 
@@ -323,34 +357,10 @@ password = "admin-test-password"
 secret_id = "AKID-test-secret"
 secret_key = "cloud-test-secret"
 
-[eventbus]
-port = 4333
-tls_enabled = true
-
 [notification]
 channel_type = "wecom"
 webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
-
-[hosts.control]
-address = "203.0.113.8"
-[hosts.control.ssh]
-port = 22
-username = "ubuntu"
-password = "control-ssh-password"
-
-[hosts.compute]
-address = "203.0.113.9"
-[hosts.compute.ssh]
-port = 22
-username = "ubuntu"
-password = "other-ssh-password"
-
-[deployments]
-control = ["admin", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
-compute = []
-`)
-	require.NoError(t, os.WriteFile(path, raw, 0o600))
-	snapshot, err := setupconfig.Load(path, dir)
+`))
 	require.NoError(t, err)
-	return snapshot
+	return &setupSnapshot{Manifest: &cfg, Secrets: &secrets}
 }

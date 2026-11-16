@@ -53,9 +53,9 @@ func GetConfig() *Config {
 	return consoleConfig
 }
 
-// LoadConfig 加载配置文件
-func LoadConfig() (*Config, error) {
-	yamlFile, err := os.ReadFile("./config/console.yaml")
+// LoadConfig 加载控制台配置 console.yaml（与业务配置 app.yaml 同一目录）。
+func LoadConfig(path string) (*Config, error) {
+	yamlFile, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("读取配置文件失败: %+v", err)
 	}

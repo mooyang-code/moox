@@ -1,145 +1,122 @@
-// Package deployscan 检测目标机器上的 MooX 部署情况，决定发布走哪条路线，并在用户同意后彻底清除旧部署。
+// Package deployscan 按新的部署布局检测各主机（部署根、version.json、moox-* 用户单元、部署根里的进程），
+// 判定是“没装过”还是“装过”，并在用户确认后清空部署（setup wipe）。
 //
-// 检测不改动部署：不建目录、不生成密钥，也不把任何密钥带回操作机（只读打开 SQLite 时可能留下 -shm、-wal 文件）。
+// 检测只读：不建目录、不改文件，也不把任何密钥带回操作机（只读 version.json 这份公开的部署记录）。
+// 目标机上的检测与清空是内嵌的 python3 脚本（只用标准库），参数以 JSON 经 SSH 的 argv 传入，不经 shell 拼接。
 package deployscan
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"path"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 //go:embed inspect.py
 var inspectScript string
 
-// inspectTimeout 限制一台主机的检测时长：要遍历部署目录，慢盘上可能很久，但不能一直挂住。
+//go:embed wipe.py
+var wipeScript string
+
+// inspectTimeout 限制一台主机的检测时长：统计归档目录大小要遍历文件，慢盘上可能很久，但不能一直挂住。
 const inspectTimeout = 10 * time.Minute
 
-// 目标机上 Trade 的状态。
+// 路线：任一主机有 version.json 就是“装过”，否则“没装过”。
 const (
-	TradeNone       = "none"       // 没有 Trade 单元
-	TradeClear      = "clear"      // 没有实盘账户
-	TradeLive       = "live"       // 有实盘账户
-	TradeUnreadable = "unreadable" // 文件存在但读不出
+	RouteFresh     = "fresh"
+	RouteInstalled = "installed"
 )
 
-// DirReport 是部署根之外的一个候选目录（外部程序目录或归档目录）。
-// Marked 表示能看到 MooX 自己的文件；没有标记的目录不算 MooX 的，不计入残留，也绝不清除。
-type DirReport struct {
-	Path    string `json:"path"`
-	Empty   bool   `json:"empty"`
-	Marked  bool   `json:"marked"`
-	Symlink bool   `json:"symlink"`
-	Foreign bool   `json:"foreign"`
-}
-
-// RegisteredHost 是旧部署 t_hosts 里登记的一台主机。
-type RegisteredHost struct {
-	ID      string `json:"id"`
-	Address string `json:"address"`
-}
+// Notice 是清空预览里固定的提醒：秘密文件只是初始值，管理台里后来改的、新加的密钥只在线上有。
+const Notice = "管理台里改过的密钥只在线上有，清空前先在管理台导出"
 
 // HostReport 是一台主机的检测结果。
 type HostReport struct {
-	Host             string            `json:"host"`
-	Address          string            `json:"address"`
-	Home             string            `json:"home"`
-	RootExists       bool              `json:"root_exists"`
-	Entries          []string          `json:"entries"`
-	OwnerOK          bool              `json:"owner_ok"`
-	ModeOK           bool              `json:"mode_ok"`
-	ParentWritable   bool              `json:"parent_writable"`
-	ForeignFiles     bool              `json:"foreign_files"`
-	Markers          bool              `json:"markers"`
-	Cron             bool              `json:"cron"`
-	Services         []string          `json:"services"`
-	ExternalDirs     []DirReport       `json:"external_dirs"`
-	ArchiveDirs      []DirReport       `json:"archive_dirs"`
-	ProcessesInside  int               `json:"processes_inside"`
-	ProcessesOutside []string          `json:"processes_outside"`
-	PortsOccupied    []int             `json:"ports_occupied"`
-	RuntimeSHA256    string            `json:"runtime_sha256,omitempty"`
-	Units            map[string]string `json:"units"`
-	Trade            string            `json:"trade"`
-	RegisteredHosts  []RegisteredHost  `json:"registered_hosts"`
-	SizesKB          map[string]int64  `json:"sizes_kb,omitempty"`
-	// HelperRunning 表示目标机上还有部署助手在运行。
-	HelperRunning bool `json:"helper_running"`
-	// StagingKB 是已下载的软件包占用的空间，它们不算遗留。
-	StagingKB int64 `json:"staging_kb"`
-	// DiskFreeKB 是部署目录所在磁盘的可用空间，-1 表示没查到。
+	Host    string `json:"host"`
+	Address string `json:"address"`
+	Root    string `json:"root"`
+	// RootExists 表示部署根是一个目录。
+	RootExists bool `json:"root_exists"`
+	// Entries 是部署根下第一层条目（排序）。
+	Entries []string `json:"entries"`
+	// Installed 表示部署根下有 version.json，这台主机用新路径装过。
+	Installed bool `json:"installed"`
+	// Version 是 version.json 的原文（不超过 64 KiB）；没有或不是合法 JSON 时为空。
+	Version json.RawMessage `json:"version,omitempty"`
+	// Units 是 ~/.config/systemd/user 下的 moox-*.service（排序）。
+	Units []string `json:"units"`
+	// Active 是其中 systemctl --user is-active 为 active 的单元。
+	Active []string `json:"active"`
+	// Processes 是可执行文件在部署根里的进程数。
+	Processes int `json:"processes"`
+	// ArchiveKB、SeaweedFSKB 是 <部署根>/archive 与 <部署根>/data/seaweedfs 的占用；-1 表示不存在或没有统计（Options.Sizes 为假）。
+	ArchiveKB   int64 `json:"archive_kb"`
+	SeaweedFSKB int64 `json:"seaweedfs_kb"`
+	// DiskFreeKB 是部署根所在盘的可用空间（部署根不存在时取最近的上级目录），-1 表示查不到。
 	DiskFreeKB int64 `json:"disk_free_kb"`
-	// ReclaimableKB 是下一次部署开始时会自动清掉的空间（失败尝试的残留），只在 Options.Reclaim 时统计。
-	ReclaimableKB int64 `json:"reclaimable_kb,omitempty"`
-	// LastAttempt 是最近一次 bootstrap 的阶段，只有管理台机有。
-	LastAttempt string `json:"last_attempt,omitempty"`
-}
-
-// Empty 报告这台主机是否干净：部署根、看护、外部服务和归档都没有残留。半清的机器不算空机。
-func (r HostReport) Empty() bool {
-	if len(r.Entries) != 0 || r.Cron || len(r.Services) != 0 || r.ProcessesInside != 0 {
-		return false
-	}
-	for _, dir := range append(slices.Clone(r.ArchiveDirs), r.ExternalDirs...) {
-		if dir.Marked && !dir.Empty {
-			return false
-		}
-	}
-	return true
+	// Linger 表示部署用户开了 linger（loginctl show-user <用户> -p Linger 为 yes）；没开时用户登出后服务会被停掉。
+	Linger bool `json:"linger"`
+	// Journald 表示 /var/log/journal 存在（journald 持久化）。
+	Journald bool `json:"journald"`
 }
 
 // Options 是一次检测的参数。
 type Options struct {
-	// Sizes 为 true 时统计目录占用，只在清除预览里需要。
-	Sizes bool
-	// Reclaim 为 true 时统计可自动回收的空间。
-	Reclaim bool
-	// Host 不为空时只检测这一台主机。
+	// Host 非空时只检测这一台主机。
 	Host string
+	// Sizes 为真时统计归档目录与 SeaweedFS 数据的大小，只在清空预览里需要。
+	Sizes bool
 }
 
 // Dial 连接一台主机。
-type Dial func(context.Context, setupconfig.Host) (setupssh.Client, error)
+type Dial func(context.Context, topology.Host) (setupssh.Client, error)
 
-// Scan 只读检测全部主机。
-func Scan(ctx context.Context, manifest setupconfig.Manifest, dial Dial, options Options) ([]HostReport, error) {
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return nil, err
+// inspectResult 是 inspect.py 的输出：version.json 以文本带回，由这里判断是不是合法 JSON，保留原文字节。
+type inspectResult struct {
+	Root        string   `json:"root"`
+	RootExists  bool     `json:"root_exists"`
+	Entries     []string `json:"entries"`
+	Installed   bool     `json:"installed"`
+	VersionText string   `json:"version_text"`
+	Units       []string `json:"units"`
+	Active      []string `json:"active"`
+	Processes   int      `json:"processes"`
+	ArchiveKB   int64    `json:"archive_kb"`
+	SeaweedFSKB int64    `json:"seaweedfs_kb"`
+	DiskFreeKB  int64    `json:"disk_free_kb"`
+	Linger      bool     `json:"linger"`
+	Journald    bool     `json:"journald"`
+}
+
+// Scan 只读检测全部主机（并行），结果按 cfg.Hosts() 的顺序。
+func Scan(ctx context.Context, cfg *topology.Config, dial Dial, options Options) ([]HostReport, error) {
+	if cfg == nil || dial == nil {
+		return nil, errors.New("deployment inspection requires the topology and an SSH dialer")
 	}
-	paths := manifest.Paths.Resolved()
-	control := manifest.ControlHost().Name
-	hosts := manifest.Hosts()
-	selected := slices.DeleteFunc(slices.Clone(hosts), func(host setupconfig.Host) bool { return options.Host != "" && host.Name != options.Host })
-	// 并行检测，结果保持主机顺序：清除范围的摘要依赖这个顺序。
-	reports := make([]HostReport, len(selected))
-	errs := make([]error, len(selected))
+	hosts := slices.DeleteFunc(cfg.Hosts(), func(host topology.Host) bool { return options.Host != "" && host.Name != options.Host })
+	if options.Host != "" && len(hosts) == 0 {
+		return nil, fmt.Errorf("moox.toml 里没有主机 %s", options.Host)
+	}
+	reports := make([]HostReport, len(hosts))
+	errs := make([]error, len(hosts))
 	var workers sync.WaitGroup
-	for i, host := range selected {
-		request := map[string]any{"deploy_root": paths.DeployRoot, "ports": hostPorts(manifest, catalog, host.Name), "sizes": options.Sizes, "reclaim": options.Reclaim}
-		// 归档目录只在跑 archive-worker 的主机上属于 MooX，别的主机上同名目录是用户自己的。
-		if slices.Contains(manifest.Deployments[host.Name], "archive-worker") {
-			request["archive_root"] = paths.ArchiveRoot
-		}
-		if host.Name == control {
-			request["admin_db"] = path.Join(paths.ControlRoot, "current/admin/data/admin.db")
-		}
+	for i, host := range hosts {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			reports[i], errs[i] = inspect(ctx, dial, host, request)
+			reports[i], errs[i] = inspect(ctx, dial, host, cfg.Paths.DeployRoot, options.Sizes)
 		}()
 	}
 	workers.Wait()
@@ -149,9 +126,9 @@ func Scan(ctx context.Context, manifest setupconfig.Manifest, dial Dial, options
 	return reports, nil
 }
 
-func inspect(ctx context.Context, dial Dial, host setupconfig.Host, request map[string]any) (HostReport, error) {
-	report := HostReport{Host: host.Name, Address: host.Address}
-	raw, err := json.Marshal(request)
+func inspect(ctx context.Context, dial Dial, host topology.Host, root string, sizes bool) (HostReport, error) {
+	report := HostReport{Host: host.Name, Address: host.Address, Root: root}
+	request, err := json.Marshal(map[string]any{"root": root, "sizes": sizes})
 	if err != nil {
 		return report, err
 	}
@@ -162,15 +139,114 @@ func inspect(ctx context.Context, dial Dial, host setupconfig.Host, request map[
 		return report, err
 	}
 	defer transport.Close()
-	output, err := transport.Run(ctx, []string{"python3", "-c", inspectScript, string(raw)}, nil)
+	output, err := transport.Run(ctx, []string{"python3", "-c", inspectScript, string(request)}, nil)
 	if err != nil {
-		return report, fmt.Errorf("deployment_inspection_failed: host %s 检测失败或超时，详细输出已隐藏", host.Name)
+		return report, fmt.Errorf("deployment_inspection_failed: 主机 %s 检测失败或超时（要有 python3）：%s", host.Name, lastLine(output.Stderr))
 	}
-	if err := decode(output.Stdout, &report); err != nil {
-		return report, fmt.Errorf("host %s: deployment inspection returned invalid metadata", host.Name)
+	var result inspectResult
+	if err := decode(output.Stdout, &result); err != nil || result.Root != root {
+		return report, fmt.Errorf("deployment_inspection_failed: 主机 %s 的检测结果无法解析", host.Name)
 	}
-	report.Host, report.Address = host.Name, host.Address
+	report.RootExists, report.Entries, report.Installed = result.RootExists, nonNil(result.Entries), result.Installed
+	if text := []byte(result.VersionText); result.Installed && json.Valid(text) {
+		report.Version = json.RawMessage(text)
+	}
+	report.Units, report.Active, report.Processes = nonNil(result.Units), nonNil(result.Active), result.Processes
+	report.ArchiveKB, report.SeaweedFSKB, report.DiskFreeKB = result.ArchiveKB, result.SeaweedFSKB, result.DiskFreeKB
+	report.Linger, report.Journald = result.Linger, result.Journald
 	return report, nil
+}
+
+// Route 判定路线：任一主机装过（有 version.json）就是 installed，否则 fresh。
+func Route(reports []HostReport) string {
+	if slices.ContainsFunc(reports, func(report HostReport) bool { return report.Installed }) {
+		return RouteInstalled
+	}
+	return RouteFresh
+}
+
+// PlanHost 是清空范围里的一台主机。
+type PlanHost struct {
+	Host        string   `json:"host"`
+	Root        string   `json:"root"`
+	Units       []string `json:"units"`
+	Processes   int      `json:"processes"`
+	Entries     []string `json:"entries"`
+	ArchiveKB   int64    `json:"archive_kb"`
+	SeaweedFSKB int64    `json:"seaweedfs_kb"`
+}
+
+// Plan 是清空预览：Digest 是清空范围的摘要，执行时要和预览一致（--expect）。
+type Plan struct {
+	Digest string     `json:"digest"`
+	Hosts  []PlanHost `json:"hosts"`
+	Notice string     `json:"notice"`
+}
+
+// BuildPlan 只列有东西要清的主机（部署根里有条目、有 moox-* 单元或部署根里还有进程）。摘要覆盖每台的根、单元、条目与进程数，
+// 不含大小与磁盘空间：它们随时间变化，不代表范围变了。
+func BuildPlan(reports []HostReport) Plan {
+	plan := Plan{Hosts: []PlanHost{}, Notice: Notice}
+	for _, report := range reports {
+		if len(report.Entries) == 0 && len(report.Units) == 0 && report.Processes == 0 {
+			continue
+		}
+		plan.Hosts = append(plan.Hosts, PlanHost{
+			Host: report.Host, Root: report.Root, Units: nonNil(report.Units), Processes: report.Processes,
+			Entries: nonNil(report.Entries), ArchiveKB: report.ArchiveKB, SeaweedFSKB: report.SeaweedFSKB,
+		})
+	}
+	type scope struct {
+		Host      string   `json:"host"`
+		Root      string   `json:"root"`
+		Units     []string `json:"units"`
+		Entries   []string `json:"entries"`
+		Processes int      `json:"processes"`
+	}
+	scopes := make([]scope, 0, len(plan.Hosts))
+	for _, host := range plan.Hosts {
+		scopes = append(scopes, scope{Host: host.Host, Root: host.Root, Units: host.Units, Entries: host.Entries, Processes: host.Processes})
+	}
+	raw, _ := json.Marshal(scopes)
+	sum := sha256.Sum256(raw)
+	plan.Digest = "sha256:" + hex.EncodeToString(sum[:])
+	return plan
+}
+
+// HostResult 是一台主机清空的结果：停用删除的单元、杀掉的进程数、删掉的部署根条目。
+// SystemdError 不为空表示 systemctl 有操作没成功（例如没有用户实例）：进程照样杀、文件照样清。
+type HostResult struct {
+	Host         string   `json:"host"`
+	Units        []string `json:"units"`
+	Killed       int      `json:"killed"`
+	Removed      []string `json:"removed"`
+	SystemdError string   `json:"systemd_error,omitempty"`
+}
+
+// Wipe 清空一台主机：停用并删除全部 moox-* 用户单元，杀掉可执行文件在部署根里的进程，清空部署根下的内容（保留根目录）。
+func Wipe(ctx context.Context, dial Dial, host topology.Host, root string) (HostResult, error) {
+	result := HostResult{Host: host.Name}
+	if dial == nil {
+		return result, errors.New("deployment wipe requires an SSH dialer")
+	}
+	request, err := json.Marshal(map[string]string{"root": root})
+	if err != nil {
+		return result, err
+	}
+	transport, err := dial(ctx, host)
+	if err != nil {
+		return result, err
+	}
+	defer transport.Close()
+	output, err := transport.Run(ctx, []string{"python3", "-c", wipeScript, string(request)}, nil)
+	if err != nil {
+		return result, fmt.Errorf("deployment_wipe_failed: 主机 %s 清空失败：%s", host.Name, lastLine(output.Stderr))
+	}
+	if err := decode(output.Stdout, &result); err != nil {
+		return HostResult{Host: host.Name}, fmt.Errorf("deployment_wipe_failed: 主机 %s 的清空结果无法解析", host.Name)
+	}
+	result.Host, result.Units, result.Removed = host.Name, nonNil(result.Units), nonNil(result.Removed)
+	return result, nil
 }
 
 func decode(raw string, out any) error {
@@ -185,18 +261,22 @@ func decode(raw string, out any) error {
 	return nil
 }
 
-// hostPorts 是这台主机上的组件要用的端口。
-func hostPorts(manifest setupconfig.Manifest, catalog servicecatalog.Catalog, host string) []int {
-	ids := manifest.Deployments[host]
-	ports := []int{}
-	for _, component := range catalog.Components {
-		if component.Scope == "host" || slices.Contains(ids, component.ID) {
-			ports = append(ports, component.AllPorts()...)
-		}
+// lastLine 取脚本标准错误的最后一行作为原因（脚本自己的报错不含秘密），截到 200 字节。
+func lastLine(stderr string) string {
+	lines := bytes.Split(bytes.TrimSpace([]byte(stderr)), []byte("\n"))
+	line := strings.TrimSpace(string(lines[len(lines)-1]))
+	if len(line) > 200 {
+		line = line[:200]
 	}
-	if slices.Contains(ids, "eventbus") {
-		ports = append(ports, manifest.EventBus.Port)
+	if line == "" {
+		return "没有输出"
 	}
-	slices.Sort(ports)
-	return slices.Compact(ports)
+	return line
+}
+
+func nonNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }

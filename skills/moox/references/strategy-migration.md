@@ -80,11 +80,12 @@ local/<名称>/                     # 加入 .git/info/exclude，不进仓库
   convert.py                       # 只用 ast 读源文件，不执行用户代码
   factors.yaml                     # 转写出的因子定义（用 import 写入系统，不进仓库的因子库）
   out/<策略>.yaml                  # 策略 DSL
-  out/moox_fragment.toml           # 因子任务成员片段
-  apply_moox_toml.sh               # 把片段合入用户的 moox.toml（演练 / --apply，写前备份，不打印配置内容）
+  out/factor-tasks.yaml            # 因子任务文件（格式同 config/setup/factor-tasks.yaml），用 factor task apply --file 导入
 ```
 
-用户的 `moox.toml` 是加密文件。按 [install.md](install.md) 的规则，Agent 不读取、不打印它的内容，只通过 CLI 写入片段。
+因子任务不再写进 `moox.toml`：新的配置包遇到 `[[factors.*]]` 会拒绝整份文件。转换脚本输出一份独立的因子任务文件
+（`source_dir`、`tasks`、`definitions` 三项），用 `moox-cli factor task apply --file local/<名称>/out/factor-tasks.yaml` 导入：
+它先只读核对，线上已有同 ID 且内容不同时逐项列出差异、一项都不写。不需要合并脚本，也不碰用户的 `moox.toml`。
 
 ### 4.2 转换脚本的要求
 
@@ -235,7 +236,7 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance <策略名
 - 每层的结论和数字。表格包括：规则数、比对期数、一致期数、最大差；稳态耗时 p50 / p95；对现有链路的影响。
 - 没做到的层、精度边界、还在进行中的验收。
 - 验收过程中对生产造成的任何影响，如实写出原因、范围和恢复时间。
-- 上线时的手工改动，例如因子机 `engine.yaml` 里的 `compute.workers`：重装单元会被覆盖，需要补回。
+- 上线时的手工改动，例如因子机 `engine.yaml` 里的 `compute.workers`：写进 `moox.toml` 的 `[overrides."factor-engine"."engine.yaml"]`（`"compute.workers" = 4`），重新部署不会丢；直接改目标机上的文件会在下次部署时被覆盖。
 
 ## 6. 上线
 
@@ -243,7 +244,7 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance <策略名
 
 1. **因子侧先于策略**：factor-mgr、因子引擎。只换二进制；因子机的 `engine.yaml` 不重装。发布后确认现有任务每期都正常。
 2. **strategy 与 admin（管理台内嵌在 admin 里）**：发布后确认现有实例仍然每期都是 ok。
-3. **写入因子**：因子定义用 `moox-factor-mgr-cli import --file local/<名称>/factors.yaml` 或管理台写入；因子任务成员用 `apply_moox_toml.sh` 先演练、再 `--apply`，然后执行 `moox-cli factor task apply --file <因子任务文件>`。新任务要复用因子机上已有的预热数据，不要另导一份。
+3. **写入因子**：因子定义用 `moox-factor-mgr-cli import --file local/<名称>/factors.yaml` 或管理台写入；因子任务与成员直接执行 `moox-cli factor task apply --file local/<名称>/out/factor-tasks.yaml`（有差异时它不写入、退出码非 0，先看输出再决定）。新任务要复用因子机上已有的预热数据，不要另导一份。
 4. **建策略**：建策略定义；读回 DSL 核对（5.2 节）；建观察实例，关联各自的因子任务，不挂账户。
 5. **分批启用**：先启用最便宜的那个，观察 1 小时内引擎内存、单期耗时，以及现有任务的耗时，再启用下一个。
 6. **首期检查**：规则数、选中币数符合预期；状态在 256 KB 以内。

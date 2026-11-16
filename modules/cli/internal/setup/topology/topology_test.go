@@ -148,6 +148,9 @@ func TestOverridesAreValidatedButNotApplied(t *testing.T) {
 		"文件名带目录":  {"[overrides.\"collector\".\"config/app.yaml\"]\n\"a\" = 1\n", "只写文件名"},
 		"键路径有空段":  {"[overrides.\"collector\".\"app.yaml\"]\n\"a..b\" = 1\n", "键路径"},
 		"值是数组":    {"[overrides.\"collector\".\"app.yaml\"]\n\"a\" = [1, 2]\n", "值只能是"},
+		// 少写一层：解析库会把标量解成 nil 的表，也不报没解析的键，必须由校验拦下，否则调参悄悄不生效。
+		"少写配置文件名": {"[overrides.\"factor-engine\"]\n\"window.lookback\" = 50000\n", "少写了配置文件名这一层"},
+		"少写组件表":   {"[overrides]\n\"factor-engine\" = 1\n", "不是表"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Parse([]byte(validConfig + "\n" + tc.body))

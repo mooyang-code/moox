@@ -65,8 +65,8 @@ grep -Fq 'curl --cacert' <<<"${help_out}"
 if "${SCRIPT}" fetch --target localhost --deploy-dir "${TMP}" --output "${TMP}/root.key" >/dev/null 2>&1; then
   echo 'FAIL: private-key output path accepted' >&2; exit 1
 fi
-mkdir -p "${TMP}/deploy/host/current/certs"
-cp "${CA_FILE}" "${TMP}/deploy/host/current/certs/moox-ca.crt"
+mkdir -p "${TMP}/deploy/secrets"
+cp "${CA_FILE}" "${TMP}/deploy/secrets/moox-ca.crt"
 # fetch 从部署根下 MooX CA 的位置取回根证书，输出指纹。
 fetched=$("${SCRIPT}" fetch --target localhost --deploy-dir "${TMP}/deploy" --output "${TMP}/fetched.crt" --expected-fingerprint "${FINGERPRINT}")
 [[ "${fetched}" == "${FINGERPRINT}" ]] || { echo "FAIL: fetch returned ${fetched}" >&2; exit 1; }
@@ -83,8 +83,8 @@ set -e
 
 REMOTE_HOME="${TMP}/remote-home"
 REMOTE_DEPLOY="${REMOTE_HOME}/target path"
-mkdir -p "${REMOTE_DEPLOY}/host/current/certs" "${REMOTE_DEPLOY}/lib"
-cp "${CA_FILE}" "${REMOTE_DEPLOY}/host/current/certs/moox-ca.crt"
+mkdir -p "${REMOTE_DEPLOY}/secrets" "${REMOTE_DEPLOY}/lib"
+cp "${CA_FILE}" "${REMOTE_DEPLOY}/secrets/moox-ca.crt"
 cp "${ROOT}/scripts/deploy/install-moox-ca.sh" "${REMOTE_DEPLOY}/lib/install-moox-ca.sh"
 chmod +x "${REMOTE_DEPLOY}/lib/install-moox-ca.sh"
 : >"${TMP}/remote-install.log"

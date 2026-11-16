@@ -21,7 +21,7 @@ type DiagnoseOptions struct {
 	NodeID   string
 	CheckIDs []string
 	Client   ContextClient
-	// Systemd 检查 systemd_user 托管的组件（外部程序）的服务状态；为空时这类组件的托管状态记为无法判断。
+	// Systemd 检查组件 systemd 用户服务的状态（全部组件都由 systemd 用户服务托管）；为空时托管状态记为无法判断。
 	Systemd SystemdChecker
 	// Probe 在上报缺失或过期时经 SSH 在目标机上请求组件的本机 /readyz；为空时这种情况只能记为无法判断。
 	Probe        HealthProbe
