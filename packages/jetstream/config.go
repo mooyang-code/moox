@@ -32,6 +32,9 @@ type Config struct {
 	MaxPayload    int
 	// AsyncErrorHandler receives connection-level errors such as permission denials.
 	AsyncErrorHandler func(error)
+	// ConnectionStateHandler 在连接断开（connected=false，err 可能为空）与重连成功（connected=true）时被调用；
+	// 首次连接成功不调用。回调在 nats.go 的回调协程里执行，不能阻塞。
+	ConnectionStateHandler func(connected bool, err error)
 }
 
 // ConfigFromEnv applies the deployment-wide EventBus connection contract to a

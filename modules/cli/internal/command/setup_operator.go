@@ -50,7 +50,7 @@ func newSetupOperatorCommand(deps setupDeps) *cobra.Command {
 		Long: `moox-cli 用这台电脑上的一把 ed25519 私钥（~/.config/moox/moox-cli.key）给发往各主机网关的请求签名，控制机只登记公钥。
 不带参数：本机已有私钥就原样复用，没有才生成；不连任何主机。全新安装时 setup install 的第一步就是它，公钥在部署控制机时登记。
 --register：经 SSH 在控制机上把这台电脑的公钥登记为 moox-cli 的公钥，用于已经装好的系统换操作电脑。它会替换原来登记的公钥，
-原来那台电脑随即不能再用（两台电脑不能同时用）。能 SSH 上控制机就能登记。各主机网关在几秒内认新公钥。`,
+原来那台电脑随即不能再用（两台电脑不能同时用）。这台电脑要能 SSH 上控制机，并且能解开 moox.secrets.toml（解密密钥在系统钥匙串，没有钥匙串的机器在 ~/.config/moox/config.key）。各主机网关在几秒内认新公钥。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := source.resolveOperatorDir(); err != nil {

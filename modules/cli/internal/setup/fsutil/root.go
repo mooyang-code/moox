@@ -15,7 +15,10 @@ func OpenPhysicalRoot(name string, private bool) (*os.Root, error) {
 	}
 	physical, err := filepath.EvalSymlinks(name)
 	if err != nil || physical != name {
-		return nil, errors.New("private material directory must be physical")
+		if err == nil {
+			return nil, fmt.Errorf("private material directory must be physical: %s 的路径里有符号链接，请改用它的实际路径 %s", name, physical)
+		}
+		return nil, fmt.Errorf("private material directory must be physical: %s 不存在或无法解析", name)
 	}
 	info, err := os.Lstat(name)
 	if err != nil || !info.IsDir() || !Owned(info) || info.Mode().Perm()&0o022 != 0 || private && info.Mode().Perm() != 0o700 {

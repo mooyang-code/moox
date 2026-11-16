@@ -226,3 +226,62 @@ func reserveTestPort(t *testing.T) int {
 	}
 	return port
 }
+
+// 服务端停掉时回调报告断开，重新起来后报告重连；首次连接成功不回调。
+func TestConnectionStateHandlerReportsDisconnectAndReconnect(t *testing.T) {
+	port := reserveTestPort(t)
+	storeDir := t.TempDir()
+	start := func() *natsserver.Server {
+		srv, err := natsserver.NewServer(&natsserver.Options{
+			Host: "127.0.0.1", Port: port, JetStream: true, StoreDir: storeDir, NoLog: true, NoSigs: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		go srv.Start()
+		if !srv.ReadyForConnections(5 * time.Second) {
+			srv.Shutdown()
+			t.Fatal("nats server not ready")
+		}
+		return srv
+	}
+
+	srv := start()
+	states := make(chan bool, 8)
+	client, err := Connect(context.Background(), Config{
+		URLs: []string{fmt.Sprintf("nats://127.0.0.1:%d", port)}, Name: "connection-state-test",
+		ReconnectWait:          10 * time.Millisecond,
+		ConnectionStateHandler: func(connected bool, _ error) { states <- connected },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	select {
+	case state := <-states:
+		t.Fatalf("首次连接不应回调，收到 connected=%v", state)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	srv.Shutdown()
+	srv.WaitForShutdown()
+	select {
+	case state := <-states:
+		if state {
+			t.Fatal("服务端停掉后应先报告断开")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("没有收到断开回调")
+	}
+
+	srv = start()
+	defer srv.Shutdown()
+	select {
+	case state := <-states:
+		if !state {
+			t.Fatal("服务端恢复后应报告重连")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("没有收到重连回调")
+	}
+}

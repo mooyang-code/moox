@@ -132,6 +132,7 @@ func buildMonitorMarketCanary(
 	metricsStorage *monmetrics.StorageAdapter,
 	tagRuns TagSyncStatusSource,
 	hook func(context.Context, domain.Check, domain.CheckResult),
+	halted func(context.Context) bool,
 ) (func(context.Context) error, error) {
 	if cfg == nil || !cfg.MarketCanary.Enabled {
 		return nil, nil
@@ -184,6 +185,10 @@ func buildMonitorMarketCanary(
 		return nil, err
 	}
 	run := func(runCtx context.Context) error {
+		// Collector 模块暂停或恢复追赶时采集是有意停下的：本轮不跑探针，检查保持原状态。
+		if halted != nil && halted(runCtx) {
+			return nil
+		}
 		var errs []error
 		for _, canary := range canaries {
 			result := canary.Run(runCtx)

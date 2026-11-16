@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"crypto/sha256"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 )
 
 func TestReporterExpectationUsesStableDeploymentIdentity(t *testing.T) {
@@ -228,4 +230,94 @@ func counterValue(t *testing.T, name string, labels map[string]string) float64 {
 		}
 	}
 	return 0
+}
+
+// EventBus 断开时观测输入立即转为未就绪（依赖它的检查冻结），重连后置回并重新开始恢复宽限期；
+// 本轮连接收尾之后迟到的回调不再改状态。
+func TestObservabilityConnectionHandlerFollowsEventBusConnection(t *testing.T) {
+	r := &Runtime{}
+	var stopped atomic.Bool
+	handler := observabilityConnectionHandler(r, &stopped)
+	r.setObservabilityIngestState(true, nil)
+	past := time.Now().Add(-time.Hour).UnixNano()
+	r.ingestReadySince.Store(past)
+	require.False(t, r.observationState(true, time.Now()).Suspended)
+
+	handler(false, nil)
+	state := r.observationState(true, time.Now())
+	require.True(t, state.Suspended)
+	require.False(t, state.Ready)
+	require.Equal(t, reasonEventbus, state.Reason)
+
+	handler(true, nil)
+	state = r.observationState(true, time.Now())
+	require.True(t, state.Ready)
+	require.True(t, state.Suspended, "重连后重新进入恢复宽限期")
+	require.Greater(t, r.ingestReadySince.Load(), past)
+
+	stopped.Store(true)
+	handler(false, nil)
+	require.True(t, r.ObservabilityIngestReady.Load(), "连接收尾后的回调不改状态")
+}
+
+// Collector 模块暂停或恢复追赶时采集是有意停下的：K 线结果检查不评估（不新增失败结果），放行后恢复评估。
+func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	messages, err := store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m"}`
+	_, err = store.WithDatabase(manager, func(db *gorm.DB) error {
+		for _, row := range []monmetrics.MetricLatest{
+			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
+			{SeriesID: "subjects", MetricName: monmetrics.ViewOutputSubjectsMetric, MetricType: "gauge", LabelsJSON: labels, Value: 1, ObservedAt: now},
+		} {
+			require.NoError(t, db.Create(&row).Error)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	query := monmetrics.NewQueryService(messages, nil)
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	repos := manager.Repositories()
+	require.NoError(t, repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now,
+		Hosts:       []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
+		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "collector", Status: "enabled"}},
+	}))
+	report := func(stage string) {
+		require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: timestamppb.New(now)},
+			&metricspb.MetricReport{ServiceName: "collector", NodeId: "control", InstanceId: "collector@control", BootId: "boot-1",
+				Lifecycle: &metricspb.ModuleLifecycle{Stage: stage}}))
+	}
+	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
+	}}, 20)
+	builder := &monitorobservability.Builder{Metrics: query, Checks: repos.Checks, Topology: repos.Topology, Results: repos.Results, Now: func() time.Time { return now }}
+	run := buildBusinessFreshnessReporter(builder, repos, nil, evaluator)
+	const id = "kline_freshness:crypto:view:1m"
+
+	for _, stage := range []string{"paused", "resuming"} {
+		report(stage)
+		services, err := builder.Services(t.Context(), now)
+		require.NoError(t, err)
+		require.True(t, collectorHalted(services), stage)
+		require.NoError(t, run(t.Context()))
+		results, err := repos.Results.Recent(t.Context(), "crypto", id, 10)
+		require.NoError(t, err)
+		require.Empty(t, results, "Collector %s 时不评估 K 线结果", stage)
+	}
+
+	report("running")
+	services, err := builder.Services(t.Context(), now)
+	require.NoError(t, err)
+	require.False(t, collectorHalted(services))
+	require.NoError(t, run(t.Context()))
+	results, err := repos.Results.Recent(t.Context(), "crypto", id, 10)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.False(t, results[0].Success, "放行后照常判定")
 }

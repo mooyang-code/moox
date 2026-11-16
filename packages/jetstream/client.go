@@ -199,6 +199,12 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 			cfg.AsyncErrorHandler(err)
 		}))
 	}
+	if handler := cfg.ConnectionStateHandler; handler != nil {
+		opts = append(opts,
+			nats.DisconnectErrHandler(func(_ *nats.Conn, err error) { handler(false, err) }),
+			nats.ReconnectHandler(func(*nats.Conn) { handler(true, nil) }),
+		)
+	}
 	reconnectBuffer := cfg.ReconnectBufferBytes
 	if reconnectBuffer == 0 {
 		reconnectBuffer = -1

@@ -23,6 +23,8 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "export-skill-config",
 		Short: "导出 Skill 使用的最小数据访问配置",
+		Long: `导出的文件固定包含 crypto（币安现货 K 线）与 stockcn（沪深 300 K 线）两类数据的读取配置，一次导出就够，
+不用按空间各导一份。--space-id 目前只接受 crypto。`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			space = strings.TrimSpace(space)
 			output = strings.TrimSpace(output)
@@ -72,7 +74,7 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&space, "space-id", "", "要导出的 SCF Space ID")
+	cmd.Flags().StringVar(&space, "space-id", "", "目前只接受 crypto；导出的文件里同时带 stockcn 的读取配置")
 	cmd.Flags().StringVar(&output, "output", "", "Skill 数据访问配置输出路径")
 	cmd.Flags().StringVar(&source.operatorDir, "operator-dir", "", "这台电脑的操作员身份目录（默认 ~/.config/moox），moox-skill 的私钥存在这里")
 	_ = cmd.MarkFlagRequired("space-id")
@@ -182,7 +184,7 @@ func buildSkillDataAccessConfig(spaceID string, klineDatasets skillKlineDatasets
 		spaceID = "crypto"
 	}
 	if spaceID != "crypto" {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: unsupported space %q", spaceID)
+		return dataAccessConfig{}, fmt.Errorf("skill_config: unsupported space %q：--space-id 只接受 crypto，导出的文件里已经同时带 stockcn 的读取配置，不用按空间各导一份", spaceID)
 	}
 	binanceKline, err := klineDatasets("crypto", "binance_spot")
 	if err != nil {

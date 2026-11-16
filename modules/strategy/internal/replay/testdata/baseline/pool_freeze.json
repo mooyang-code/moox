@@ -336,7 +336,7 @@
           "pool": {
             "drift": {
               "freeze": {
-                "change": 0.03018375857346456,
+                "change": 0.030183758573464337,
                 "frozen": true,
                 "triggered": true,
                 "until": 496735
@@ -485,7 +485,7 @@
           "pool": {
             "drift": {
               "freeze": {
-                "change": -0.10678057550812159,
+                "change": -0.1067805755081217,
                 "frozen": true,
                 "triggered": true,
                 "until": 496736
@@ -634,7 +634,7 @@
           "pool": {
             "drift": {
               "freeze": {
-                "change": -0.029470806680779282,
+                "change": -0.02947080668077895,
                 "frozen": true,
                 "triggered": true,
                 "until": 496737
@@ -1519,7 +1519,7 @@
           "pool": {
             "drift": {
               "freeze": {
-                "change": 0.03196901890008941,
+                "change": 0.031969018900089186,
                 "frozen": true,
                 "triggered": true,
                 "until": 496743
@@ -1960,7 +1960,7 @@
           "pool": {
             "drift": {
               "freeze": {
-                "change": -0.1063316651816325,
+                "change": -0.10633166518163262,
                 "frozen": true,
                 "triggered": true,
                 "until": 496746
@@ -2255,7 +2255,7 @@
           "pool": {
             "drift": {
               "freeze": {
-                "change": 0.03156250688421447,
+                "change": 0.03156250688421425,
                 "frozen": true,
                 "triggered": true,
                 "until": 496748
@@ -3280,7 +3280,7 @@
           "pool": {
             "drift": {
               "freeze": {
-                "change": 0.029602030018090142,
+                "change": 0.02960203001808992,
                 "frozen": true,
                 "triggered": true,
                 "until": 496755

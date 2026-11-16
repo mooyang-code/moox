@@ -241,3 +241,12 @@ func TestOpenBundleRejectsTamperedOrForeignFiles(t *testing.T) {
 	_, err = sealBundle(nil, "short", time.Now())
 	require.ErrorIs(t, err, errWeakPassphrase)
 }
+
+// 不带条数时返回第一页，不是空列表。
+func TestListSecretsDefaultsToFirstPageWithoutLimit(t *testing.T) {
+	service := NewService(newMemSecrets(model.Secret{SecretID: "a"}, model.Secret{SecretID: "b"}))
+	rsp, err := service.ListSecrets(context.Background(), &pb.ListSecretsReq{})
+	require.NoError(t, err)
+	require.Len(t, rsp.GetSecrets(), 2)
+	require.EqualValues(t, 2, rsp.GetTotal())
+}

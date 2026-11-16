@@ -57,7 +57,7 @@ K 线缺失不超过 5% 算通过：到截止时间就带缺口结算，缺口�
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&spaceID, "space-id", "", "要验收的空间")
-	cmd.Flags().DurationVar(&timeout, "timeout", 6*time.Minute, "最长等多久")
+	cmd.Flags().DurationVar(&timeout, "timeout", setupVerifyTimeout, "最长等多久")
 	return cmd
 }
 

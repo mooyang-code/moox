@@ -259,6 +259,8 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
   1. `./bin/moox-cli setup operator --register`：在这台电脑生成 `moox-cli` 的签名私钥，并经 SSH 把公钥登记到控制机。它**替换**原来登记的公钥，原来那台电脑随即不能再用，两台电脑不能同时用。约 10 秒后各主机网关生效。
   2. `./bin/moox-cli setup deploy --host control`：取回控制机的根证书（之后部署别的主机、连因子机都要用）；它重新执行 Admin 的初始化（只建不改），没有变化的组件不重启。
   这两步还没有在真机上验证过，做之前告诉用户。
+- 这两步和 `setup status` 都要先解开 `moox.secrets.toml`：用 `config restore` 取回的配置已经按这台电脑的密钥加密，直接可用；两份配置是从原电脑直接拷过来的，还要把解密密钥带过来（在原电脑的系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`），否则报“这台电脑上没有解密秘密文件的密钥”，改用 `config restore`。
+- 身份目录（默认 `~/.config/moox`）的路径里不能有符号链接：报 `private material directory must be physical` 时按提示用 `--operator-dir` 指到实际路径。
 - 不要手动拷贝或恢复 `~/.config/moox` 下的身份文件。
 
 ## 升级到新版本

@@ -117,7 +117,12 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		_ = runtime.Close()
 		return nil, err
 	}
-	marketCanary, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, storageMetadata, collectorStatus, resultHook)
+	// 行情探针先于业务评估执行，拿不到本轮概览：直接读各服务最近一次上报判断 Collector 是否暂停，读不到时照常跑探针。
+	canaryHalted := func(ctx context.Context) bool {
+		services, err := (monitorobservability.Builder{Metrics: metricsQuery, Topology: runtime.Repositories.Topology}).Services(ctx, time.Now().UTC())
+		return err == nil && collectorHalted(services)
+	}
+	marketCanary, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, storageMetadata, collectorStatus, resultHook, canaryHalted)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err

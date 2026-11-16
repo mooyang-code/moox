@@ -101,6 +101,12 @@ func (b Builder) buildServices(ctx context.Context, now time.Time, hosts []HostS
 	return services, unregistered, snapshot, nil
 }
 
+// Services 只给出各登记部署按最近一次上报得到的状态（含模块级生命周期），不构建整份概览；主机快照类组件不带主机事实。
+func (b Builder) Services(ctx context.Context, now time.Time) ([]ServiceStatus, error) {
+	services, _, _, err := b.buildServices(ctx, now, nil)
+	return services, err
+}
+
 // componentSource 按目录里组件的上报方式（doctor.transport）给出它健康的来源。
 func componentSource(component servicecatalog.Component) string {
 	switch component.Doctor.Transport {

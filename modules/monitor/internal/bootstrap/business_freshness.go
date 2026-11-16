@@ -13,6 +13,7 @@ import (
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
@@ -123,7 +124,8 @@ func buildBusinessFreshnessReporterWithInterval(
 		if len(klineEvaluators) == 0 || klineEvaluators[0] == nil {
 			coveredDatasets, coveredViews = nil, nil
 		}
-		if len(klineEvaluators) > 0 && klineEvaluators[0] != nil &&
+		// Collector 模块暂停或恢复追赶时采集是有意停下的：本轮不评估 K 线结果，已有检查保持原状态（不新增告警，也不恢复）。
+		if len(klineEvaluators) > 0 && klineEvaluators[0] != nil && !collectorHalted(overview.Services) &&
 			(lastKlineEvaluation.IsZero() || overview.GeneratedAt.Sub(lastKlineEvaluation) >= klineInterval) {
 			lastKlineEvaluation = overview.GeneratedAt
 			klineEvaluationRan = true
@@ -505,6 +507,20 @@ func writeCheckResults(
 		written[key] = true
 	}
 	return written, errors.Join(errs...)
+}
+
+// collectorHalted 报告 Collector 模块是否处于暂停或恢复追赶：按它最近一次新鲜上报带的生命周期判断，
+// 上报不新鲜或没有生命周期时算没有暂停。
+func collectorHalted(services []monitorobservability.ServiceStatus) bool {
+	for _, service := range services {
+		if service.ServiceName != "collector" || service.Lifecycle == nil {
+			continue
+		}
+		if stage := lifecycle.Stage(service.Lifecycle.Stage); stage == lifecycle.StagePaused || stage == lifecycle.StageResuming {
+			return true
+		}
+	}
+	return false
 }
 
 // observationIngestCheckID 是"观测输入"检查：观测消费者连上时通过，没连上时失败，说明其他检查为什么冻结。

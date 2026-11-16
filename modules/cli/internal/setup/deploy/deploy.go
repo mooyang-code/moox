@@ -681,7 +681,7 @@ func (o Options) identity(ctx context.Context, target setupssh.Client, catalog s
 	if host.Name == control.Name {
 		// 控制机的身份包经 SSH 取回并校验过：把它的根证书与指纹记到这台电脑，之后取别的主机的身份包都按它校验。
 		if err := identitybundle.InstallOperatorTrust(o.OperatorDirectory, metadata, identity.Secrets[hostbundle.CAFile]); err != nil {
-			return fail(fmt.Errorf("operator_trust_failed: 这台电脑没有记下控制机的根证书：%w。如果线上是另一套部署清空后重装的，先删掉 %s 下的 %s 与 %s 再重跑",
+			return fail(fmt.Errorf("operator_trust_failed: 这台电脑没有记下控制机的根证书：%w。原因是身份目录的路径或权限时按上面的提示改（路径里有符号链接就用 --operator-dir 指到实际路径）；原因是根证书与已记下的不一致、线上是另一套部署清空后重装的，先删掉 %s 下的 %s 与 %s 再重跑",
 				err, o.OperatorDirectory, identitybundle.OperatorPinFile, identitybundle.OperatorCAFile))
 		}
 	}

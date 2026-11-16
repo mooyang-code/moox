@@ -58,6 +58,9 @@ func NewService(svc secret.Service) *Service {
 
 // ========== 秘钥 CRUD ==========
 
+// defaultListSecretsLimit 是 ListSecrets 不带条数时的每页条数。
+const defaultListSecretsLimit = 50
+
 // ListSecrets 列出秘钥。
 func (s *Service) ListSecrets(ctx context.Context, req *pb.ListSecretsReq) (*pb.ListSecretsRsp, error) {
 	filters := &dao.SecretFilters{
@@ -66,7 +69,12 @@ func (s *Service) ListSecrets(ctx context.Context, req *pb.ListSecretsReq) (*pb.
 		Provider: req.GetProvider(),
 		Status:   req.GetStatus(),
 	}
-	secrets, total, err := s.svc.ListSecrets(ctx, int(req.GetOffset()), int(req.GetLimit()), filters)
+	// 不带条数时返回第一页，而不是空列表。
+	limit := int(req.GetLimit())
+	if limit <= 0 {
+		limit = defaultListSecretsLimit
+	}
+	secrets, total, err := s.svc.ListSecrets(ctx, int(req.GetOffset()), limit, filters)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Secret] ListSecrets failed: %v", err)
 		return &pb.ListSecretsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥列表失败")}, nil

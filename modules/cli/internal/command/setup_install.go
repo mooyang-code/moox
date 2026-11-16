@@ -19,7 +19,7 @@ import (
 
 // setupVerifyTimeout 是 setup install 里验收的时限；setupReadyTimeout 是最后统一等全部组件就绪的时限。
 const (
-	setupVerifyTimeout = 6 * time.Minute
+	setupVerifyTimeout = 10 * time.Minute
 	setupReadyTimeout  = 5 * time.Minute
 )
 
