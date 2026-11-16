@@ -26,7 +26,7 @@
 ## 事件中心
 
 - **做什么**：接收 EventBus 里可以配置规则的事件（数据集一期完成、View 数据就绪、K 线补写、标的即将下架），按用户配置的规则向用户自己的接口发通知（带 HMAC 签名，失败自动重试），或者执行系统动作（标的下架时禁止买入、下架前平仓；处理器随交易计划 T27 之后上线）。管理台叫「事件中心」。
-- **在哪**：独立单元 `callback-dispatcher`，默认海外机（`[deployments]` 决定）；该主机必须能访问到用户的通知地址。
+- **在哪**：组件 `callback-dispatcher`，默认海外机（`[deployments]` 决定）；该主机必须能访问到用户的通知地址。
 - **常用**：
 
 ```bash
@@ -123,7 +123,7 @@
 ## 交易（只读）
 
 - **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘；实盘风控：下架名单（名单标的只减不增，下架前由事件中心清仓）、保证金率监控（目前只监控币安生产环境的实盘账户，跌破阈值自动暂停组合并按比例减仓）。
-- **在哪**：独立单元 `trade`，默认海外机（`[deployments]` 决定）。
+- **在哪**：组件 `trade`，默认海外机（`[deployments]` 决定）。
 - **常用**（都是只读，写操作由用户在管理台做）：
 
 ```bash
@@ -157,7 +157,7 @@
 
 - 新增、部署、启停、移除主机和部署，外部程序（因子引擎、归档 Worker）的安装与退役：[`host-registry.md`](host-registry.md)。管理台对这些只读；查询用 `host list|deployments|routes|catalog|directory`、`host agent status|snapshot|run-once --host <主机>`。
 - 要在某台主机上执行一条命令或传文件：`host exec --host <ID> -- <命令>`、`host get|put`（经 SSH，退出码透传；只能出站的主机不能 SSH）。会改动主机的命令先把完整命令给用户确认。
-- 部署、升级与回滚：[`native-release.md`](native-release.md)；主机代理：[`host-agent.md`](host-agent.md)。
+- 部署、升级与回滚：[`source-deploy.md`](source-deploy.md)；主机代理：[`host-agent.md`](host-agent.md)。
 - 腾讯云：`setup firewall`（按拓扑放行所需端口）、`ops tencent lighthouse firewall add|open`（单独加规则；`open` 用控制面登记的云账户凭证，凭证不打印）、`setup reboot-host`（重启无响应的主机）、
   `setup attach-scf-vpc`（为函数绑定 VPC 子网）、`setup inspect-scf|invoke-scf`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|prepare|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
 - 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup status` 看各主机的版本与组件状态，`setup logs` 看组件日志。

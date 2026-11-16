@@ -45,13 +45,8 @@ func (c Catalog) Validate() error {
 			return fmt.Errorf("duplicate component %q", component.ID)
 		}
 		ids[component.ID], binaries[component.Binary] = true, true
-		if !slices.Contains([]string{ScopeHost, ScopeControl, ScopeAny}, component.Scope) || !slices.Contains([]string{Single, Multi}, component.Replicas) {
+		if !slices.Contains([]string{ScopeHost, ScopeControl, ScopeAny}, component.Scope) || component.Replicas != Single {
 			return fmt.Errorf("component %q has invalid scope or replicas", component.ID)
-		}
-		// Host components have one instance on each host. The single limit is
-		// per host for this scope, rather than one instance for the whole fleet.
-		if component.Scope == ScopeHost && component.Replicas != Single {
-			return fmt.Errorf("host component %q must be single per host", component.ID)
 		}
 		// 外部程序可以声明服务（只监听本机，经所在主机的网关路由），但不能声明其他端口。
 		if component.ExternalProgram && len(component.Ports) != 0 {

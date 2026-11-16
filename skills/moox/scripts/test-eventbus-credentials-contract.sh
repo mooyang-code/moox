@@ -22,9 +22,7 @@ done
 
 for required in \
   'fan-out' \
-  'host-agent/config/eventbus.yaml' \
   'setup deploy --host' \
-  'MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64' \
   'Authorization Violation' \
   'certificate signature failure' \
   'FIN-WAIT-2' \

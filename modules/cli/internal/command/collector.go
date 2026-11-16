@@ -25,8 +25,6 @@ type collectorPackageOptions struct {
 	Entrypoint       string
 	CLSLogsetID      string
 	CLSTopicID       string
-	EventBusCAPEM    []byte
-	EventBusCAFile   string
 }
 
 var collectorPackageFlags collectorPackageOptions
@@ -74,23 +72,9 @@ func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions)
 	cmd.Flags().StringVar(&opts.Out, "out", "", "output zip path")
 	cmd.Flags().StringVar(&opts.ConfigDir, "config", "", "collector config directory")
 	cmd.Flags().StringVar(&opts.CLSTopicID, "cls-topic-id", "", "central CLS topic id used by SCF warning/error logs")
-	cmd.Flags().StringVar(&opts.EventBusCAFile, "eventbus-ca-file", "", "public EventBus CA PEM to package (no credentials)")
 }
 
 func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions) (*collectorpackager.BuildSCFPackageResult, error) {
-	if len(opts.EventBusCAPEM) == 0 && strings.TrimSpace(opts.EventBusCAFile) != "" {
-		var err error
-		opts.EventBusCAPEM, err = os.ReadFile(opts.EventBusCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read public EventBus CA file: %w", err)
-		}
-	}
-	// EventBus CA 可选：采集计划函数不连 EventBus，只有旧链路的包才携带。
-	if len(opts.EventBusCAPEM) > 0 {
-		if err := collectorpackager.ValidateEventBusCAPEM(opts.EventBusCAPEM); err != nil {
-			return nil, fmt.Errorf("public EventBus CA is invalid: %w", err)
-		}
-	}
 	collectorRoot, err := resolveCollectorRoot(opts.CollectorRoot)
 	if err != nil {
 		return nil, err
@@ -126,10 +110,9 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 		return nil, err
 	}
 	return collectorpackager.BuildSCFPackage(collectorpackager.BuildSCFPackageOptions{
-		BinaryPath:    binaryPath,
-		ConfigDir:     configDir,
-		OutPath:       outPath,
-		EventBusCAPEM: opts.EventBusCAPEM,
+		BinaryPath: binaryPath,
+		ConfigDir:  configDir,
+		OutPath:    outPath,
 	})
 }
 

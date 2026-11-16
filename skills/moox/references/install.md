@@ -1,7 +1,7 @@
 # 安装、部署与初始化（基于发布产物）
 
 外部用户第一次安装 MooX 时按本文执行：下载发布产物，不需要在本机编译。
-维护者自己清空重装生产按 [`fresh-deploy.md`](fresh-deploy.md)，从源码目录部署和升级按 [`native-release.md`](native-release.md)。
+维护者自己清空重装生产按 [`fresh-deploy.md`](fresh-deploy.md)，从源码目录部署和升级按 [`source-deploy.md`](source-deploy.md)。
 
 ## 先测网络，选下载源
 
@@ -274,7 +274,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 - 每台主机只重启二进制或配置有变化的组件；整台部署总是带着主机网关，服务目录变化不需要另外处理。
 - 升级只动程序和配置，数据目录（`data/`）不碰。配置每次部署都从这个版本的模板重新渲染，手工调过的值要写在 `[overrides]` 里才会保留。
 - 回滚：用旧版本的产物包目录和 CLI 再部署一遍。数据库结构只增不减的版本可以这样回退；发布说明里写了“不可回退”的版本不行。
-- 维护者从源码目录部署见 [`native-release.md`](native-release.md)。
+- 维护者从源码目录部署见 [`source-deploy.md`](source-deploy.md)。
 
 ## 常见问题
 
@@ -293,7 +293,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `operator_trust_failed` | 这台电脑上记着另一套部署的控制机根证书（线上清空重装过，CA 变了） | 确认线上确实是重装的之后，按报错删掉 `~/.config/moox` 下列出的两个文件再重跑 |
 | `identity_invalid` | 从控制机取回的身份材料校验没通过（主机地址、组件和 Admin 里登记的不一致，或 CA 对不上） | 核对 `moox.toml` 里这台主机的地址和 `[deployments]`，`setup sync-deployments --host <主机> --yes` 后重跑 |
 | `component_not_on_host` | `--component` 写的组件不在这台主机上 | 按报错列出的组件改 |
-| `binary_dir_required`、`binary_missing` | 在源码目录里部署，没给或缺编译好的 Linux 二进制 | 用户安装应在产物包目录里运行；维护者见 [`native-release.md`](native-release.md) |
+| `binary_dir_required`、`binary_missing` | 在源码目录里部署，没给或缺编译好的 Linux 二进制 | 用户安装应在产物包目录里运行；维护者见 [`source-deploy.md`](source-deploy.md) |
 | `version_invalid` | 目标机的 `version.json` 损坏 | 告诉用户；确认后删掉它重跑（会把全部组件当成有变化重启一遍） |
 | `config_invalid: [overrides…]` | `[overrides]` 写错：组件没有这个配置文件，或键路径不存在 | 按报错改 `moox.toml`；键路径以渲染出的配置为准（目标机 `<部署根>/config/<组件>/`） |
 | `install_step_failed` | `setup install` 的某一步失败，后面是那一步的原因和单独重跑它的命令 | 按原因处理后重跑同一条 `setup install` |

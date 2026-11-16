@@ -12,39 +12,8 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"trpc.group/trpc-go/trpc-go/codec"
 )
-
-// 请求里已经没有 auth_info（原来的 1 号字段）。写入不需要调用方身份；
-// 带着旧字段的 protobuf 请求，这个字段按未知字段解出、不影响处理；JSON 请求带它会被 tRPC 拒绝（不丢弃未知字段）。
-func TestPrimaryWriteWithoutAuthInfo(t *testing.T) {
-	descriptor := (&pb.PrimaryUpsertFieldsReq{}).ProtoReflect().Descriptor()
-	require.Nil(t, descriptor.Fields().ByName("auth_info"))
-	require.Nil(t, descriptor.Fields().ByNumber(1))
-
-	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: openTestStore(t)})
-	require.NoError(t, err)
-	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-	current, err := proto.Marshal(fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.2}}}}}}}))
-	require.NoError(t, err)
-	// 旧调用方的编码：1 号字段是 AuthInfo{app_id = 1, app_key = 2}。
-	oldAuth := protowire.AppendString(protowire.AppendTag(nil, 1, protowire.BytesType), "moox-collector")
-	oldAuth = protowire.AppendString(protowire.AppendTag(oldAuth, 2, protowire.BytesType), "old-app-key")
-	legacy := append(protowire.AppendBytes(protowire.AppendTag(nil, 1, protowire.BytesType), oldAuth), current...)
-
-	req := &pb.PrimaryUpsertFieldsReq{}
-	require.NoError(t, codec.Unmarshal(codec.SerializationTypePB, legacy, req))
-	require.NotEmpty(t, req.ProtoReflect().GetUnknown(), "旧的 1 号字段只作为未知字段留下")
-	rsp, err := svc.UpsertFields(context.Background(), req)
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), "ret_info=%v", rsp.GetRetInfo())
-
-	err = codec.Unmarshal(codec.SerializationTypeJSON, []byte(`{"space_id":"s","dataset_id":"d","auth_info":{"app_id":"moox-collector"}}`), &pb.PrimaryUpsertFieldsReq{})
-	require.ErrorContains(t, err, "auth_info")
-}
 
 // 元数据里没有或已停用的数据集，读写都在到达存储层之前被拒绝。
 func TestPrimaryRejectsMissingOrDisabledDataset(t *testing.T) {

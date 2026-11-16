@@ -10,7 +10,6 @@ import (
 func TestMethodLimitersDefaultsAndConfigOverrides(t *testing.T) {
 	limiters := newMethodLimiters(nil)
 	assert.Contains(t, limiters, "/api/admin/auth/Login")
-	assert.NotContains(t, limiters, "/api/admin/auth/GetLoginSalt")
 	assert.Equal(t, 2, limiters["/api/admin/auth/Login"].Burst())
 
 	limiters = newMethodLimiters(&Config{RateLimit: RateLimitConfig{MethodLimits: map[string]MethodLimit{"/api/admin/auth/Login": {QPS: 3, Burst: 7}}}})

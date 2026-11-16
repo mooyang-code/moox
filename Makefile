@@ -41,13 +41,10 @@ test-event-contracts:
 test-eventbus-topology:
 	cd modules/eventbus && go test ./...
 
-.PHONY: test-host-gateway-control-e2e
-test-host-gateway-control-e2e:
-	bash scripts/test/gates/test-host-gateway-control-e2e.sh
-
-.PHONY: test-eventbus-host-cert-e2e
-test-eventbus-host-cert-e2e:
-	bash scripts/test/gates/test-eventbus-host-cert-e2e.sh
+# 起真实进程的联调：编译产物后依次跑 scripts/test/gates/ 下的脚本。主机网关那一条要 Linux 的 127.0.0.2，别的系统上跳过。
+.PHONY: test-e2e-gates
+test-e2e-gates:
+	bash scripts/test/gates/run-e2e-gates.sh
 
 test-kline-resample:
 	bash scripts/test/e2e/test-kline-resample.sh
@@ -110,7 +107,7 @@ PROTO_CHECK := $(if $(SKIP_PROTO_CHECK),,proto-check)
 # make verify 由下面几组检查组成，PR 上的 CI 按组并行运行（make verify-ci-<组>）；本机和自托管运行器的 make verify 仍然依次全跑。
 # 新增检查时放进某一组，verify 与各组自动保持一致。组之间互不依赖：需要前端依赖的检查都放在 web 组，由 test-web 先安装。
 VERIFY_PR_UNITS := test-deployment-packages test-host-deployment test-host-identity-bundles check-go-module-graph $(PROTO_CHECK) test-greenfield-contract
-VERIFY_PR_CONTRACTS := test-event-contracts test-eventbus-topology test-storage-seed-contract test-build-linux-local-contract test-collector-scf-package-contract test-release-bundle-manifest
+VERIFY_PR_CONTRACTS := test-event-contracts test-eventbus-topology test-storage-seed-contract test-build-linux-local-contract test-collector-scf-package-contract test-release-bundle-manifest test-e2e-gates
 VERIFY_CORE_CHECKS := check-boundaries test-quality-gates test-docs-architecture test-moox-ca test-skill-contracts
 VERIFY_STORAGE_CHECKS := test-storage-boundary test-storage-consistency
 

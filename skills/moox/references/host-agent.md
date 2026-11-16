@@ -17,7 +17,7 @@ Host Agent 与 Host Gateway 是每台主机都有的主机级组件，不写在 
 
 健康端口只听 127.0.0.1、不验签：在目标机上 `curl http://127.0.0.1:11425/readyz` 即可，远程连不上；操作电脑上用 `moox-cli doctor` 经 SSH 代为请求。
 
-升级：`setup deploy --host <主机ID> --component host-agent`（见 [`native-release.md`](native-release.md)），二进制、配置和凭据一起更新。
+升级：`setup deploy --host <主机ID> --component host-agent`（见 [`source-deploy.md`](source-deploy.md)），二进制、配置和凭据一起更新。
 
 ## 凭据轮换
 

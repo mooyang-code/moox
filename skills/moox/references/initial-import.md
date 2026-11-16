@@ -12,7 +12,7 @@ Agent 按下面的步骤逐步执行，每一步的输出都要核对再进入�
 
 - 数据集与采集任务已建好（K 线数据集由采集任务创建，见 `moox-cli collector task create`），标签成员已就绪，实时采集（WS 或拉取）已在写入。
 - 该数据源**还没有启用的因子任务与策略实例**（初始导入期间本数据集的 View 会积压，追平之后再启用）。
-- 工具：`moox-cli` 必须是仓库当前版本（`go build -o <临时目录>/moox-cli ./cmd/moox-cli`，在 `modules/cli`）；`bin/` 里的旧版读不了新的 `moox.toml`。
+- 工具：`moox-cli` 必须是仓库当前版本（`go build -o <临时目录>/moox-cli ./cmd/moox-cli`，在 `modules/cli`），与线上部署的版本一致。
 - 代理是否保留以当前网络环境为准；下面的示例对 MooX 内网 / SSH 调用移除 HTTP(S) 代理，不代表其他工具只有 git 才能使用代理。
 
 ## 1. 导入包（用户按这个格式整理）

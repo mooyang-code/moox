@@ -68,7 +68,7 @@ func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 		if component.Protected != slices.Contains([]string{"host-gateway", "admin"}, component.ID) {
 			t.Fatalf("incorrect protection for %s", component.ID)
 		}
-		if component.Replicas == Multi {
+		if component.Replicas != Single {
 			t.Fatalf("incorrect replicas for %s", component.ID)
 		}
 	}
@@ -97,7 +97,7 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"binary alias", func(c *Catalog) { componentPtr(c, "admin").Binary = "caddy" }},
 		{"invalid scope", func(c *Catalog) { c.Components[0].Scope = "arbitrary" }},
 		{"invalid replicas", func(c *Catalog) { c.Components[0].Replicas = "unlimited" }},
-		{"host multi", func(c *Catalog) { c.Components[0].Replicas = Multi }},
+		{"multi replicas", func(c *Catalog) { c.Components[0].Replicas = "multi" }},
 		{"missing health port", func(c *Catalog) { c.Components[0].Health.Port = 0 }},
 		{"duplicate port", func(c *Catalog) { c.Components[0].Ports = append(c.Components[0].Ports, 11012) }},
 		{"unknown caller", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"typo"} }},

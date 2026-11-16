@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -79,6 +80,10 @@ func newInstallEnv(t *testing.T) (*localClient, Layout, string) {
 	t.Helper()
 	for _, tool := range []string{"bash", "flock", "tar", "install"} {
 		if _, err := exec.LookPath(tool); err != nil {
+			// Linux 上缺工具算失败：CI 在 Linux 上跑这些用例，不能悄悄跳过。
+			if runtime.GOOS == "linux" {
+				t.Fatalf("本机没有 %s：安装脚本的测试需要它", tool)
+			}
 			t.Skipf("本机没有 %s：安装脚本的测试在 Linux 上跑", tool)
 		}
 	}

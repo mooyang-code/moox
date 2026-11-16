@@ -24,14 +24,14 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 | 用户想做什么 | 读这个 |
 | --- | --- |
-| 第一次安装、部署、初始化，或者新电脑发布到已有旧程序的机器（下载产物，不用编译；一开始先测 GitHub 与 CNB 的网络，选更快的下载源） | [`references/install.md`](references/install.md) |
+| 第一次安装、部署、初始化，或者在新电脑上接管已经装好的机器（下载产物，不用编译；一开始先测 GitHub 与 CNB 的网络，选更快的下载源） | [`references/install.md`](references/install.md) |
 | 了解各模块、日常管理命令速查 | [`references/modules.md`](references/modules.md) |
 | 全部命令一览（含低频命令，每个命令一行） | [`references/command-index.md`](references/command-index.md) |
 | 管理台上的操作在命令行怎么做（专用命令对照表；少数底层接口用 `gateway call`） | [`references/api-recipes.md`](references/api-recipes.md) |
 | 取采集的 K 线等数据 | [`references/data-query.md`](references/data-query.md) |
 | 首页“N 项需要处理”、告警、数据长时间未更新 | [`references/monitor-attention.md`](references/monitor-attention.md) |
 | 新增、部署、启停、移除机器；因子引擎与归档 Worker | [`references/host-registry.md`](references/host-registry.md) |
-| 从源码目录部署、升级、回滚（维护者） | [`references/native-release.md`](references/native-release.md) |
+| 从源码目录部署、升级、回滚（维护者） | [`references/source-deploy.md`](references/source-deploy.md) |
 | 清空生产后按默认配置重装 | [`references/fresh-deploy.md`](references/fresh-deploy.md) |
 | 写因子、转换 Python 因子、修改已有因子 | [`references/factor-dsl.md`](references/factor-dsl.md) |
 | 自定义算子（Rust → wasm） | [`references/udf.md`](references/udf.md) |
@@ -52,7 +52,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - 产物包里有 `moox-bundle.json`：`setup` 命令自动使用包内预编译的 linux/amd64 程序，不需要 git、Go、Docker 或 Node。
 - 管理台上的操作和各模块的主要操作都有专用命令（`factor`、`strategy`、`space`、`metadata`、`collector`（含云账号、代码包与云函数）、`monitor`、`eventbus`、`host`、`secret`、`trade` 只读等），先用 `./bin/moox-cli <命令> --help` 看参数；命令对照表见 [`references/api-recipes.md`](references/api-recipes.md)。
 - 没有专用命令的底层接口：`./bin/moox-cli gateway methods [关键字]` 查有哪些方法，`./bin/moox-cli gateway call <服务> <方法> --data @请求.json` 调用；业务失败时退出码非 0。
-- 命令按 `moox.toml` 里的 SSH 配置连接各台主机，经操作员网关调各模块的 RPC；`lifecycle`、`system`、`import` 也一样，不需要手工建隧道或设置健康密钥环境变量。要在某台主机上执行命令或传文件用 `host exec|get|put`。
+- 命令按 `moox.toml` 里的 SSH 配置连接各台主机，以 `moox-cli` 的身份签名调各模块的 RPC；`lifecycle`、`system`、`import` 也一样，隧道由命令自己建。要在某台主机上执行命令或传文件用 `host exec|get|put`。
 - 带 `--space-id` 的命令默认空间是 `crypto`；时间范围用 `--from` / `--to`（RFC3339，左闭右开）。
 - 本机有 HTTP 代理时，执行前 `env -u HTTP_PROXY -u HTTPS_PROXY`，否则到主机的直连会被挡住。
 - 耗时的命令（部署、初始化、导入）放后台运行，盯输出里的 `*-ready` 与报错。

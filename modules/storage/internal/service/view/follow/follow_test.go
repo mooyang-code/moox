@@ -267,17 +267,28 @@ func TestFailingFollowerDoesNotBlockOthers(t *testing.T) {
 }
 
 // blockingReader 在 block 打开后让按游标的读取一直等到调用方的截止时间，模拟预扫描很慢。
+// 读取返回时再查一次：block 打开之前已经进入长轮询的读取（跟随器自己的那一次）也拿不到之后写入的变更，
+// 否则它被写入唤醒后先一步应用，等待方就会看到“已跟上”。
 type blockingReader struct {
 	inner storeReader
 	block *sync.Map
 }
 
 func (r blockingReader) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq, opts ...client.Option) (*pb.ReadDatasetChangesRsp, error) {
-	if on, _ := r.block.Load("on"); on == true && !req.GetFromHead() {
+	blocked := func() bool {
+		on, _ := r.block.Load("on")
+		return on == true && !req.GetFromHead()
+	}
+	if blocked() {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	return r.inner.ReadDatasetChanges(ctx, req, opts...)
+	rsp, err := r.inner.ReadDatasetChanges(ctx, req, opts...)
+	if blocked() {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return rsp, err
 }
 
 // 等待时长用完时预扫描还没扫到头部：回答“还没跟上”，不是错误。

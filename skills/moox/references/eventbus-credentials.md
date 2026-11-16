@@ -1,6 +1,6 @@
 # EventBus 证书与口令同步
 
-每个 NATS role token 是**一份权威材料、多台机器上的多份副本**。
+每个 NATS role token 是**一份权威材料、多台机器上的多份副本**。云函数不连 EventBus，没有它的副本。
 权威材料由 Admin 保存；每次 `setup deploy` 从 Admin 导出这台主机上各组件需要的角色，写到 `<部署根>/secrets/eventbus/`。
 **单角色 token 轮换必须同步 broker 与所有使用该角色的客户端（包括同机使用 `tls://127.0.0.1:4222` 的服务），每一个都拿到自己的 role 文件并成功重连才算完成。**
 
@@ -23,7 +23,7 @@ EventBus 没有自己的证书和 CA：服务端证书就是它所在主机的�
 生成与轮换只通过 `skills/moox/scripts/eventbus-credentials.sh`（Admin CLI）。
 不要把 token 或私钥写进命令行、聊天、git 或任何制品。
 
-`internal-admin.yaml` 是 EventBus 自身的内部管理凭据，只随 `eventbus` 组件装到 EventBus 所在主机，不分发给其他组件。Storage 不再消费 JetStream（View 跟随 Primary 的变更日志），没有要代为维护的 consumer。
+`internal-admin.yaml` 是 EventBus 自身的内部管理凭据，只随 `eventbus` 组件装到 EventBus 所在主机，不分发给其他组件。Storage 不消费 JetStream（View 跟随 Primary 的变更日志），没有要代为维护的 consumer。
 
 `rotate --credential <NATS用户名> --confirm` 立即替换 Admin 中该角色的 token，不保留双 token 过渡期；运行中的 broker 仍使用已加载的用户表，新 token 要在导出并安装新的 `users.yaml`、重启 EventBus 后才实际生效。因此必须同时安排 broker 与使用方更新。
 
@@ -49,10 +49,9 @@ broker 的用户表只随 `eventbus` 组件下发（`export-clients --server`）
 | 程序 | 副本 | 同步方式 |
 |---|---|---|
 | EventBus 自己 | EventBus 所在主机的 `users.yaml`、`internal-admin.yaml`，以及这台主机的主机证书 | `setup deploy --host <EventBus 所在主机>` |
-| 每台主机的 Host Agent | `secrets/eventbus/hostagent-publisher.yaml`（旧布局是 `host-agent/config/eventbus.yaml`） | 每台主机 `setup deploy --host <主机>` |
+| 每台主机的 Host Agent | `secrets/eventbus/hostagent-publisher.yaml` | 每台主机 `setup deploy --host <主机>` |
 | 控制机、存储机、海外机上的服务 | 各自的 `<角色>.yaml` 与人人都有的 `metrics-publisher.yaml` | 每台主机 `setup deploy --host <主机>` |
 | 因子引擎 | 因子机的 `factor-eventbus.yaml` | `setup deploy --host <因子机>` |
-| 显式启用指标 Reporter 的定制 SCF（可选） | 函数环境里的 `MOOX_EVENTBUS_NATS_URL/USERNAME/PASSWORD` 与 `MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64`（指标 EventBus URL、凭据与 MooX CA 根证书） | 仅此类定制函数需要更新其实际配置并重新发布；当前计划采集与补采 SCF 的标准部署不连接 EventBus |
 
 `setup deploy` 每次都重新导出并写入凭据：凭据变了的组件会被重启，没变的不动。只部署个别组件（`--component`）时只更新这些组件的角色文件。
 
@@ -73,17 +72,15 @@ Collector 的发布权限也会随版本多一个主题（`moox.event.collector.
 1. 在控制机上执行 `rotate --credential <NATS用户名> --confirm`（数据库 `<部署根>/data/admin/admin.db`，主密钥 `<部署根>/secrets/admin-master.key`）。不要打印 token。
 2. 先部署 EventBus 所在主机（`setup deploy --host <主机>`），再部署控制机，确认控制机上的客户端恢复。
 3. 对 **moox.toml 里每一台主机** 执行 `setup deploy --host <主机>`，包括只出站的因子机。这就是 fan-out：每台都做完才算完成。
-4. 若存在显式启用 EventBus 指标 Reporter 的定制 SCF，更新并重新发布这些函数。标准计划采集与补采 SCF 不需要因这次轮换重发。
-5. 验收全部通过后才收工。
+4. 验收全部通过后才收工。
 
 ## 验收（禁止凭“进程在跑”收工）
 
 - 每台主机的 `secrets/moox-ca.crt` 的 SHA-256 与控制机的根证书一致。
 - Host Agent：Monitor 收到新样本，日志没有 `Authorization Violation` / `certificate signature failure`。
 - EventBus `ss`：`FIN-WAIT-2` 不因某一客户端 IP 持续堆积。
-- Storage View：不再刷 `delivery ack failed: nats: connection closed`。
+- Storage View：日志里没有 `delivery ack failed: nats: connection closed`。
 - Monitor：Host snapshot 与 View 水位在轮换后继续前进。
-- 定制 SCF（若启用了指标 Reporter）：新请求能使用 MooX CA 根证书与角色凭据成功发布；标准 SCF 不以此为验收条件。
 
 ## 常见借口
 

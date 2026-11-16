@@ -38,7 +38,7 @@ Storage 的路径都在存储机的部署根（默认 `/data/moox`）下：
 ## 禁止
 
 - 不 dry-run 就 `--yes`；不带 `--yes` 的修改命令
-- 把 EventBus token、HMAC 打进命令行、日志或聊天（Storage 维护命令不需要 EventBus 凭据，见 [`cli-operations.md`](cli-operations.md)）
+- 把 EventBus token、签名私钥打进命令行、日志或聊天（Storage 维护命令不需要 EventBus 凭据，见 [`cli-operations.md`](cli-operations.md)）
 - 用 `repair-view` 当常规追平
 - 只重启 View 就宣布 kline 已追平（要看 `follow_lag` 回落、View 输出水位追上 Primary）
 - 给首次建索引补发就绪事件。Factor 的实时入口是周期完成事件（`DatasetPeriodCompleted`），计算窗口来自因子机本地时序副本，由 PrimaryStore 增量同步；历史结果需要修正时使用显式 Recalc
@@ -67,7 +67,7 @@ redelivery，再按 `task` 查看 `factor_period_lag_seconds`、`factor_last_per
 
 | 现象 | 判断 | 动作 |
 |---|---|---|
-| durable pending 持续增长，最旧事件周期远早于当前时间 | 输入周期积压 | 检查 Factor 是否运行、因子任务是否 enabled、Storage Gateway 可达性和 `AckWait`；不要删除 consumer，恢复后由 JetStream 重投 |
+| durable pending 持续增长，最旧事件周期远早于当前时间 | 输入周期积压 | 检查 Factor 是否运行、因子任务是否 enabled、到存储机主机网关的连通性和 `AckWait`；不要删除 consumer，恢复后由 JetStream 重投 |
 | pending 低但 lag 或任务执行器 backlog 高 | 单个或多个因子任务处理较慢 | 对照 `factor_period_duration_seconds{task,stage}` 定位 read、compute、write 或 report 阶段 |
 | `factor_failures_total` 增长 | 因子或标的数据失败 | 检查对应因子错误、输入列和上游缺失 subject；基础设施错误会重试，业务失败会进入周期终态 |
 | pending 低但水位停住，`blocked_since` 非零 | 连续水位被零提交或超阈值缺失阻塞 | 看任务水位与缺失标的，先补采或确认行情源缺失，不能以 pending 低判健康 |

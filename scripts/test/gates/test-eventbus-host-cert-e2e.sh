@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # 真实 EventBus 进程联调：服务端用所在主机的主机证书，客户端用 MooX CA 根证书校验，主题权限按角色令牌。
-# 这个脚本不编译，先在构建机上备好两个产物（Linux 上跑就按 Linux 编译）：
+# 这个脚本不编译，两个产物由 run-e2e-gates.sh（make test-e2e-gates）备好；要单独跑时（Linux 上跑就按 Linux 编译）：
 # go -C modules/eventbus build -o /tmp/moox-eventbus-e2e ./cmd/server
 # go -C modules/admin test -c -tags eventbus_e2e -o /tmp/moox-admin-eventbus-e2e ./cmd/cli
 

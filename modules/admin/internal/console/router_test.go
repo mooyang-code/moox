@@ -105,7 +105,7 @@ func TestConsoleRejectsMachineMethodsAndNonCatalogAliasesBeforeDispatch(t *testi
 		"trade/CloseTargetSession", "trade_console/ListOrders", "collectmgr/GetTaskList",
 		"factormgr/ListFactors", "moox_monitor/GetHealthOverview", "collector_market_runtime/ClaimTimerBatch",
 		"storage-primary/ListFields", "storage-view/QueryTimeSeriesRows", "storage/ApplyReplica",
-		"auth/GetLoginSalt", "auth/IssueRawSessionTicket", "auth/login", "auth/Unknown", "unknown/ListFields",
+		"auth/login", "auth/Unknown", "unknown/ListFields",
 	} {
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/admin/"+suffix, strings.NewReader(`{}`)))

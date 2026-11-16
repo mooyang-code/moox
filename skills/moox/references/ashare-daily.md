@@ -17,15 +17,12 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 
 ## 0. 前提
 
-- 线上的 Collector、云函数代码包、策略、管理台已经是带这项能力的版本。旧版程序不认识这些字段，会把它们丢掉；升级见 [`native-release.md`](native-release.md)。
-  发布顺序是 Collector（连同云函数代码包）先于管理台（内嵌在 `admin` 里，发布 admin）：新版管理台的输出字段清单取自 Collector 的响应。
-- 这一版发布之后要回滚 Collector，必须按单元回退（二进制和随单元发布的 `collection-tasks.yaml` 一起回到旧版），不能只把二进制换回旧版：旧版 Collector（包括这一版之前线上在跑的版本）每次启动都先严格解析这个文件，不管任务表是否为空，读到 `start` 键就启动失败；从这一版起，任务表非空时才不读这个文件。
 - stockcn 空间走云函数采集，`moox.toml` 的 `[scf_plan]` 里要有这个空间。
 - 确认 5m 的 A 股采集已经正常（`./bin/moox-cli collector status --space-id stockcn`），再打开日线。
 
 ## 1. 确认字段目录里有这些字段
 
-管理台的字段显示名和分组取自 Storage 的字段目录。全新安装时已随种子导入；从旧版本升级上来的部署要补导入。先看有没有：
+管理台的字段显示名和分组取自 Storage 的字段目录。全新安装时已随种子导入。先看有没有：
 
 ```bash
 ./bin/moox-cli metadata field list --space-id stockcn --group-id adjust      # 应有 adj_factor
@@ -66,7 +63,7 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 内置任务只在任务表为空时自动写入，已有部署里不会自动出现。`task list` 里没有它们时，按下面的顺序做，每一步改线上数据前先给用户看命令：
 
 1. **先导入字段目录**（第 1 步）。字段目录没导入不会让 Collector 启动失败（结果数据集的列由 Collector 自己建，不查字段目录），但管理台上这些列没有显示名和分组，所以放在前面一次做完。
-2. **补写内置任务。** 前提是控制机上整个 Collector 所在单元已经按新版发布：新的 `moox-collector-cli` 和新的 `collection-tasks.yaml` 都在主机上（旧版 `moox-collector-cli` 不认识种子里的 `start` 键，会报错）。在控制机上执行（`<控制机>` 是 `moox.toml` 里控制机的主机名称；路径按默认部署根 `/data/moox`、单元 `prod`，先 `ls` 确认文件存在）：
+2. **补写内置任务。** 在控制机上执行（`<控制机>` 是 `moox.toml` 里控制机的主机 ID；路径按默认部署根 `/data/moox`，先 `ls` 确认文件存在）：
 
    ```bash
    ./bin/moox-cli host exec --host <控制机> -- /data/moox/bin/moox-collector-cli init \
@@ -76,7 +73,6 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 
    - 它只新建库里没有的（空间, 任务 ID），已有任务（包括用户改过、停用的）不动；输出里 `tasks_created` 是补写的个数，`tasks_unchanged` 是已存在的个数。同时会执行一次建表语句（`CREATE TABLE IF NOT EXISTS`，对已有的表没有影响）。
    - 种子里的其他内置任务如果用户以前删过，也会被补回来（停用状态）。执行前用 `task list` 对一下，补回来又不需要的再用 `collector task delete` 删（默认只预览，`--yes` 才执行；默认连结果数据集和 View 一起删，要保留结果加 `--keep-result`）。
-   - 确实需要单独传种子文件时（主机上的 `moox-collector-cli` 已是新版，只有 yaml 是旧的），传到 `/tmp`：`./bin/moox-cli host put --host <控制机> config/setup/collection-tasks.yaml /tmp/collection-tasks.yaml`，再把 `--seed-file` 指向 `/tmp/collection-tasks.yaml`。不要放进 `/data/moox/prod/current` 下面：那会改动发布目录的文件清单，下次升级报 `prepared release inventory changed`。
 3. **重启 Collector。** Collector 只在启动时给任务建结果数据集和 View：
 
    ```bash
@@ -85,9 +81,6 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
    ```
 
 4. **启用。** 用 2a 的 `collector task update --enabled=true`。
-
-**从旧的内置任务升级上来的部署**（库里有 `dasftksvjhj2jom4vhhg`“A 股日线（复权、行业、财务）”，它没有换手率和股本字段）：已有任务不能新增输出字段，所以按上面 1～4 步补写并启用新任务 `dasftksvjhj2jom4vhj0`，按第 3、4 节补历史、新建日线因子任务；新任务连续几个交易日齐全后，按这个顺序清掉旧的：先把绑在旧日线因子任务上的策略实例按新因子任务重建、删掉旧实例；再删旧日线因子任务，并从 `moox.toml` 里去掉它；最后删旧采集任务（`collector task delete`，默认只预览，默认连结果数据集一起删）。采集任务删除时不检查有没有因子任务还在读它的结果，顺序反了旧因子任务会读不到源数据。
-旧任务不能只停用：它已经不在种子的 `start: manual` 名单里，停用状态下一次 `setup start --space-id stockcn` 会把它启用（升级前一直没启用过的旧任务也一样，升级后先删掉它再跑 `setup start`）。策略实例与因子任务的绑定不能改，所以只能重建。
 
 不要改用 `collector task create` 新建同名任务：新建的任务 ID 是随机的，和内置任务的固定 ID 不同，结果数据集 ID 也就不同，文档、因子配置里按固定 ID 写的地方都对不上。只有需要“字段组合与内置任务不同”的日线任务时才新建（`--output-field` 会替换默认字段，要的字段列全；这个参数可以重复写，每次用逗号分隔）：
 
@@ -271,7 +264,7 @@ portfolio: {max_missing: 0.2}
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| `collector task update` 报“输出字段只能减少，不能新增” | 想给已有任务加字段 | 新建采集任务（2b）和因子任务。旧任务是内置的 `dasftksvjhj2jom4vhhg` 时按 2b 末尾的顺序删除，不要只停用（停用的会被 `setup start` 重新启用）；自己建的旧任务按需停用或删除 |
+| `collector task update` 报“输出字段只能减少，不能新增” | 想给已有任务加字段 | 新建采集任务（2b）和因子任务；原来的任务按需停用或删除 |
 | 管理台新建任务时看不到复权、行业、财务、换手率、股本字段 | 字段目录没导入；或标签不是 A 股股票、频率不是 `1d` | 第 1 步补导入；检查标签和频率 |
 | 某天的日线整只股票没有行 | 五个附加来源里有一个当时报错，带附加字段的任务整行不写（纯日线任务不受影响）。其中“选股器的数据还停在某天”表示取数时东方财富还没更新到这个交易日 | 等自动补采（隔一天），或手工 `kline backfill` 那一天 |
 | 某只股票 `adj_factor` 一直为空 | 新浪复权接口对少数标的返回空列表 | 目前没有别的来源；因子里按缺数处理 |

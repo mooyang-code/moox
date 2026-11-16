@@ -20,7 +20,6 @@ const (
 	ScopeControl              = "control"
 	ScopeAny                  = "any"
 	Single                    = "single"
-	Multi                     = "multi"
 	Enabled                   = "enabled"
 	Disabled                  = "disabled"
 	GatewayControlPath        = "trpc.moox.admin.GatewayControl"

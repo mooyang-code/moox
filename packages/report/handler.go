@@ -108,7 +108,7 @@ func (h *Handler) fillReport(ctx context.Context, report *metricspb.MetricReport
 // runTimeout 是 Run 里单次上报的时限。
 const runTimeout = 10 * time.Second
 
-// Run 每个上报周期上报一次，直到 ctx 结束；给没有 tRPC 定时服务的进程（collector-stream、egress-proxy、access）用。
+// Run 每个上报周期上报一次，直到 ctx 结束；给没有 tRPC 定时服务的进程（collector-stream、egress-proxy）用。
 // 启动时先报一次；失败由 Handle 记日志，下一周期重试。
 func (h *Handler) Run(ctx context.Context) {
 	ticker := time.NewTicker(h.cfg.Interval)

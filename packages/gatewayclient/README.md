@@ -30,7 +30,7 @@ gateway_client:
 
 `Config.Mode` 支持三种方式：
 
-- `local`（`Internal`）：从本机 `127.0.0.1:11002` 取得目录，优先调用本机服务；跨主机连接目标的 TLS `11003`，只信任 `CAFile` 指定的 MooX 私有 CA，并使用主机 ID 校验证书名称。
+- `local`（`Internal`）：从本机 `127.0.0.1:11002` 取得目录；目标服务在本机时直连它的回环端口（不签名、不压缩、不查调用名单），在别的主机时连目标的 TLS `11003`，只信任 `CAFile` 指定的 MooX CA，并使用主机 ID 校验证书名称；只能出站的主机经 control 中转。
 - `entry`（`External`）：使用固定的 `EntryAddress`（入口主机网关的 `11004`）与 `EntryHost`（入口主机 ID），不获取目录；按照外部调用方的逐方法白名单发送签名请求。
 - `tunnel`（`Tunnel`）：供 `moox-cli` 使用，调用方提供目录来源与 SSH 隧道管理器；解析结果必须是字面 IP 的 loopback 地址。
 

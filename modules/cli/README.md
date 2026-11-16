@@ -25,14 +25,14 @@ K 线读取和 SCF 金丝雀的 Storage 核验使用 `gatewayclient` 隧道模�
 `setup install` 的第一步就是它；公钥在部署控制机时由 bootstrap 登记，已经装好的系统换电脑用 `setup operator --register`（经 SSH 在控制机上替换登记的公钥，原电脑随即不能用）。
 同目录下的 `gateway-bootstrap.json`、`moox-ca.crt` 是部署控制机时记下的 MooX CA 指纹与根证书，之后取别的主机的身份包都按它校验。`setup wipe` 清空全部主机后把这三个文件一起删掉。
 
-`data kline get --file /absolute/path/moox.toml --config /absolute/path/data-access.yaml ...` 使用前者选择 SSH 主机，后者只包含 Storage 读取角色凭据与数据集目录；`setup export-skill-config` 在本机生成 `moox-skill` 的签名私钥（存在 `~/.config/moox/moox-skill.key`，反复导出是同一把）、把公钥登记到控制机，并把私钥抄一份到输出文件旁边的 `.moox-skill-keys/`。Collector 清单使用对象调用，任务 CRUD 使用原始 JSON 转发，两者复用金丝雀命令持有的同一 SSH 网关客户端。
+`data kline get --file /absolute/path/moox.toml --config /absolute/path/data-access.yaml ...` 使用前者选择 SSH 主机，后者只有外部入口与 `moox-skill` 身份（`gateway_client`）和数据集目录；`setup export-skill-config` 在本机生成 `moox-skill` 的签名私钥（存在 `~/.config/moox/moox-skill.key`，反复导出是同一把）、把公钥登记到控制机，并把私钥抄一份到输出文件旁边的 `.moox-skill-keys/`。Collector 清单使用对象调用，任务 CRUD 使用原始 JSON 转发，两者复用命令持有的同一个隧道客户端。
 
-云账号、代码包与云函数的命令（`collector account`、`collector package`、`collector function`）调 Collector 的 CollectMgr，使用同一 SSH 网关入口。相关命令的 `--file` 默认 `./moox.toml`，用于选择可信 SSH 主机；COS 文件上传仍使用返回的预签名 HTTPS 地址。读回、删除与出口探测采用服务目录中的方法超时，命令退出统一关闭连接。
+云账号、代码包与云函数的命令（`collector account`、`collector package`、`collector function`）调 Collector 的 CollectMgr，走同一条 SSH 隧道进主机网关。相关命令的 `--file` 默认 `./moox.toml`，用于选择可信 SSH 主机；COS 文件上传仍使用返回的预签名 HTTPS 地址。读回、删除与出口探测采用服务目录中的方法超时，命令退出统一关闭连接。
 
-Admin 的密钥、Setup、部署诊断和浏览器测试空间管理复用命令持有的 SSH 网关客户端。`doctor bootstrap/diagnose --file <moox.toml>` 从同一操作员身份访问 SysDeploy；Monitor 与 Storage 管理入口同样复用这一客户端。发布和部署回滚在操作取消后仍可用独立清理上下文复用连接；命令结束时统一释放。
+Admin 的密钥、Setup、部署诊断和浏览器测试空间管理复用命令持有的隧道客户端。`doctor bootstrap/diagnose --file <moox.toml>` 从同一操作员身份访问 SysDeploy；Monitor 与 Storage 管理入口同样复用这一客户端，命令结束时统一释放。
 
-Doctor 的 Monitor 与 SysDeploy 查询共用命令持有的 SSH 原生网关客户端；本地 CLI 配置只保存 Doctor 选项，严格拒绝未知字段、重复键和额外 YAML 文档。
+Doctor 的 Monitor 与 SysDeploy 查询共用命令持有的隧道客户端；本地 CLI 配置只保存 Doctor 选项，严格拒绝未知字段、重复键和额外 YAML 文档。
 
-Metadata 的 `import/apply` 与 Storage `import` 用 `--file` 选择本地输入文件，另用 `--manifest ./moox.toml` 选择 SSH 主机；`data rows export --file ./moox.toml`、Doctor 和 Factor 初始化均经操作员网关访问原生 RPC。Storage 请求不再带自己的口令，只靠网关的签名与访问控制。建连失败且请求未发出时最多重试一次；请求可能已发出后的传输重试只允许只读方法与服务目录明确列出的幂等写方法。其他写请求结果未知时返回错误，由操作员核对状态后再决定是否重跑。
+Metadata 的 `import/apply` 与 Storage `import` 用 `--file` 选择本地输入文件，另用 `--manifest ./moox.toml` 选择 SSH 主机；`data rows export --file ./moox.toml`、Doctor 和 Factor 初始化均经操作员网关访问原生 RPC。Storage 没有自己的调用方凭据，只靠网关的签名与访问控制。建连失败且请求未发出时最多重试一次；请求可能已发出后的传输重试只允许只读方法与服务目录明确列出的幂等写方法。其他写请求结果未知时返回错误，由操作员核对状态后再决定是否重跑。
 
 部署登记通过 SysDeploy `SyncHostDeployments` 同步主机的完整业务组件列表，主机组件由 Admin 自动补齐并保留既有启用/停用状态。Doctor 只读取主机和组件部署，健康地址来自服务目录。

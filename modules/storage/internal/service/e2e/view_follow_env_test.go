@@ -85,7 +85,13 @@ func (e *followEnv) CountViewRows(ctx context.Context, viewID, subject string, s
 // WaitApplied 等 View 跟上当前的日志头部。
 func (e *followEnv) WaitApplied(t *testing.T, ctx context.Context, viewID string) {
 	t.Helper()
+	// 索引建好（GetViewState 能看到）到跟随器登记之间有一小段间隔，这期间服务回答 VIEW_NOT_READY，按契约重试。
+	deadline := time.Now().Add(30 * time.Second)
 	rsp, err := e.view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: readyBenchSpace, ViewId: viewID, WaitTimeoutMs: 20000})
+	for err == nil && rsp.GetRetInfo().GetCode() == pb.ErrorCode_VIEW_NOT_READY && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		rsp, err = e.view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: readyBenchSpace, ViewId: viewID, WaitTimeoutMs: 20000})
+	}
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || !rsp.GetApplied() {
 		t.Fatalf("等 View %s 跟上变更日志：rsp=%v err=%v", viewID, rsp, err)
 	}
