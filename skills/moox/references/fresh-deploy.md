@@ -63,6 +63,8 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 从批 1（Storage 合并与 View 跟随变更日志）之前的版本重装时，**先**运行 `moox-cli config migrate --yes` 删掉 `[deployments]` 里的 `storage-node`（留着它 `setup wipe` 也会拒绝配置），**再** `setup wipe`；然后按 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 1 全新部署注意”核对其余项（两段 `mooxsys` 保留期可删）和归档 worker 配置；因子机本地库被清空后要重新做初始数据导入。
 
+从批 4 三进程合一之前的版本重装时同样**先** `config migrate --yes`：它删掉 `[deployments] control` 里的 `console-proxy`、`web-host`（已并入 admin），留着它们所有命令都会拒绝配置。
+
 从批 2（采集改造）之前的版本重装时同样**先** `config migrate --yes`：它删掉 `[deployments]` 里的 `cloudfunction`（以及更早的 `cloudnode`）和 `[[scf_plan.spaces]]` 下的 `default_ingest`、`default_executor`，留着它们所有命令都会拒绝配置；其余项见 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 2 全新部署注意”。
 
 ### 本机状态
@@ -145,7 +147,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 2. `moox-cli doctor alerts --file ./moox.toml`：新对象会先有“尚未上报 / 尚无成功运行”，等一个周期；1h 数据集要等第一个整点之后。长时间不消的告警按提示排查。
 3. 一条链路至少跑通一期：`moox-cli collector status --space-id crypto`（各数据集 `level: ok`）→ 因子机 `/data/moox/factor-engine/logs/factor-engine.log` 里 `factor_period_done ... status=complete rows=<标的数>`
    （`status=degraded rows=0` 说明有问题，常见是 `factor_memory_budget_exceeded`，看内存配置）。
-4. 管理台能打开：`curl --cacert <CA> --resolve <控制机>:9527:<控制机> https://<控制机>:9527/`，首页引用的 `static/js/*.js` 返回 200 且体积正常（占位页的首页也是 200，不能只看首页）。
+4. 管理台能打开：`curl --cacert <CA> --resolve <控制机>:9527:<控制机> https://<控制机>:9527/`，首页返回 200 且引用的 `static/js/*.js` 也返回 200、体积正常；返回 503 和“前端没有打包进这个程序”说明 admin 编译时没带上前端。
 
 ### 全新部署后的验收
 

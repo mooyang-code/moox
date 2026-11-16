@@ -134,15 +134,9 @@ func Run(ctx context.Context, request Request) (result Result, returnErr error) 
 			return failure.New(failure.TargetPartialInstall, "bootstrap requires both existing units or an empty control host")
 		}
 		if j.Control.Previous != "" {
-			previous, err := unitinstall.ReadInstalled(ctx, j.Control.Previous)
-			if err != nil {
-				return err
-			}
 			control := request.Topology.Hosts[slices.IndexFunc(request.Topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == j.HostID })]
-			for _, id := range previous.Components {
-				if slices.Contains(control.Components, id) && !slices.Contains(input.components, id) {
-					return failure.New(failure.TargetSubsetInstalled, "bootstrap cannot narrow an installed control deployment to a admin subset")
-				}
+			if err := refuseNarrowing(ctx, j.Control.Previous, control, input.components); err != nil {
+				return err
 			}
 		}
 		pruneAttempts(request, j)
@@ -435,4 +429,21 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 		return err
 	}
 	return writeJournal(root, j, "complete")
+}
+
+// readInstalled 读已安装的发布；测试里换成伪造的上一版。
+var readInstalled = unitinstall.ReadInstalled
+
+// refuseNarrowing 拒绝把已经装好的完整控制单元缩小：上一版装着、拓扑里也登记在控制机上的组件，这次请求必须仍然包含。
+func refuseNarrowing(ctx context.Context, previousDirectory string, control hostbundle.Host, requested []string) error {
+	previous, err := readInstalled(ctx, previousDirectory)
+	if err != nil {
+		return err
+	}
+	for _, id := range previous.Components {
+		if slices.Contains(control.Components, id) && !slices.Contains(requested, id) {
+			return failure.New(failure.TargetSubsetInstalled, "bootstrap cannot narrow an installed control deployment to a admin subset")
+		}
+	}
+	return nil
 }

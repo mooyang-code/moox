@@ -242,7 +242,7 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance <策略名
 按 [native-release.md](native-release.md) 和项目里的执行计划执行。顺序如下：
 
 1. **因子侧先于策略**：factor-mgr、因子引擎。只换二进制；因子机的 `engine.yaml` 不重装。发布后确认现有任务每期都正常。
-2. **strategy 与 web-host**：发布后确认现有实例仍然每期都是 ok。
+2. **strategy 与 admin（管理台内嵌在 admin 里）**：发布后确认现有实例仍然每期都是 ok。
 3. **写入因子**：因子定义用 `moox-factor-mgr-cli import --file local/<名称>/factors.yaml` 或管理台写入；因子任务成员用 `apply_moox_toml.sh` 先演练、再 `--apply`，然后执行 `moox-cli setup factors`。新任务要复用因子机上已有的预热数据，不要另导一份。
 4. **建策略**：建策略定义；读回 DSL 核对（5.2 节）；建观察实例，关联各自的因子任务，不挂账户。
 5. **分批启用**：先启用最便宜的那个，观察 1 小时内引擎内存、单期耗时，以及现有任务的耗时，再启用下一个。

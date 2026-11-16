@@ -36,9 +36,16 @@ func shouldGzipForwardResponse(respBody []byte, acceptEncoding string) bool {
 		return false
 	}
 	for _, encoding := range strings.Split(acceptEncoding, ",") {
-		if strings.EqualFold(strings.TrimSpace(strings.SplitN(encoding, ";", 2)[0]), "gzip") {
-			return true
+		coding, params, _ := strings.Cut(encoding, ";")
+		if !strings.EqualFold(strings.TrimSpace(coding), "gzip") {
+			continue
 		}
+		// gzip;q=0 表示客户端明确不接受 gzip。
+		if q, ok := strings.CutPrefix(strings.TrimSpace(params), "q="); ok {
+			value, err := strconv.ParseFloat(strings.TrimSpace(q), 64)
+			return err == nil && value > 0
+		}
+		return true
 	}
 	return false
 }

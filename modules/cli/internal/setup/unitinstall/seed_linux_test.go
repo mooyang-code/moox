@@ -74,7 +74,11 @@ func TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot(t 
 	options := controlActivationOptions(t)
 	tools, err := prepareWithHelper(t, options)
 	require.NoError(t, err)
-	adminCLI := filepath.Join(tools.Directory, "bin/moox-admin-cli")
+	// 激活成功后 PruneReleases 只留当前与上一版发布，这个没激活过的工具发布会被清掉；后面离线重跑还要用 moox-admin-cli，先拷出来。
+	adminCLI := filepath.Join(privateParent(t), "moox-admin-cli")
+	binary, err := os.ReadFile(filepath.Join(tools.Directory, "bin/moox-admin-cli"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(adminCLI, binary, 0o700))
 	seedRoot := filepath.Join(options.UnitRoot, "state-imports")
 	require.NoError(t, os.Mkdir(seedRoot, 0o700))
 	firstSeed := filepath.Join(seedRoot, "initial")

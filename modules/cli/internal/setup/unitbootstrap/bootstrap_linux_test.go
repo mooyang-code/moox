@@ -136,14 +136,6 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	require.Equal(t, initial, repeated)
 	require.Equal(t, host, runtimeStatus(t, initial.HostDirectory))
 	require.Equal(t, control, runtimeStatus(t, initial.ControlDirectory))
-	partial := request
-	partial.Control.Components = []string{"admin"}
-	partial.Control.Environment = map[string]map[string]string{"admin": request.Control.Environment["admin"]}
-	partial.Control.Overrides = map[string]string{"admin/config/console.yaml": request.Control.Overrides["admin/config/console.yaml"]}
-	_, err = runBootstrap(t, partial, root)
-	require.ErrorContains(t, err, "cannot narrow")
-	require.Equal(t, host, runtimeStatus(t, initial.HostDirectory))
-	require.Equal(t, control, runtimeStatus(t, initial.ControlDirectory))
 	for _, directory := range []string{initial.ControlDirectory, initial.HostDirectory} {
 		output, err := exec.CommandContext(t.Context(), os.Getenv("MOOX_RUNTIME_BINARY"), "stop", "--plan", filepath.Join(directory, "runtime.json")).CombinedOutput()
 		require.NoError(t, err, "simulate host reboot: %s", output)
@@ -214,9 +206,16 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 		current, err := os.Readlink(filepath.Join(item.unit, "current"))
 		require.NoError(t, err)
 		require.Equal(t, item.directory, current)
-		for _, status := range runtimeStatus(t, item.directory).Components {
-			require.True(t, status.Ready, "recovered %s", status.ID)
-		}
+		// 回滚时 Admin 重启过，主机网关的就绪看它下一次定时同步与上报（每 5 秒），只采样一次偶尔会赶上没同步完的那几秒。
+		require.Eventually(t, func() bool {
+			for _, status := range runtimeStatus(t, item.directory).Components {
+				if status.State != "running" || !status.Ready {
+					t.Logf("waiting for recovered %s: state=%s readiness=%s", status.ID, status.State, status.ReadinessError)
+					return false
+				}
+			}
+			return true
+		}, 30*time.Second, time.Second, "回滚后全部组件要恢复就绪")
 	}
 	_, err = os.Lstat(filepath.Join(request.DeploymentRoot, "run/bootstrap.json"))
 	require.True(t, os.IsNotExist(err))

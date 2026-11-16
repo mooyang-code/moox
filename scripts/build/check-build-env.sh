@@ -6,7 +6,7 @@
 #   场景（默认 all）：
 #     build    构建纯 Go 的 Linux 二进制（交叉编译）：git、固定版本的 Go
 #     cgo      build + 构建 Storage（DuckDB，需要 CGO）：Docker 在运行
-#     web      build + 构建前端与 Web Host：Node、pnpm
+#     web      build + 构建前端（内嵌进 admin）：Node、pnpm
 #     verify   build + 推送前本地预检（scripts/ci/local-verify.sh）：make、rg、python3、jq、rsync、Node、pnpm
 #     release  cgo + 发布到线上主机：ssh、scp
 #     all      以上全部

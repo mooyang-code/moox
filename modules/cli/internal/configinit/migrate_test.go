@@ -191,6 +191,37 @@ func TestMigrateRemovesRetiredCloudNodeComponent(t *testing.T) {
 	require.Contains(t, string(plain), `"collector", "factor-mgr"`)
 }
 
+// console-proxy、web-host 已并入 admin：旧配置的 control 里还写着它们时所有命令都拒绝配置，config edit、config set 也修不了；
+// migrate 把两个组件都删掉并写进报告，之后配置通过校验，重复执行不再变化。
+func TestMigrateRemovesRetiredConsoleProxyAndWebHost(t *testing.T) {
+	text := sampleText(t)
+	require.Contains(t, text, `control = ["admin", `)
+	text = strings.Replace(text, `control = ["admin", `, `control = ["console-proxy", "web-host", "admin", `, 1)
+	_, err := setupconfig.Parse([]byte(text))
+	require.ErrorContains(t, err, `"console-proxy"`)
+	require.ErrorContains(t, err, "config migrate --yes")
+	path, root, keys := migrateFixture(t, text)
+
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true})
+	require.NoError(t, err)
+	require.Equal(t, []ComponentRemoval{{Component: "console-proxy", Changes: 1}, {Component: "web-host", Changes: 1}}, report.RemovedComponents)
+	require.True(t, report.Valid && report.Written)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	require.NotContains(t, string(plain), `"console-proxy"`)
+	require.NotContains(t, string(plain), `"web-host"`)
+	require.Contains(t, string(plain), `control = ["admin", `)
+	_, err = setupconfig.Parse(plain)
+	require.NoError(t, err)
+
+	again, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys})
+	require.NoError(t, err)
+	require.False(t, again.Changed)
+	require.Empty(t, again.RemovedComponents)
+}
+
 // 旧的 [placements] 表改名为 [deployments]：新版解析器不再认旧表，migrate 负责转换，而且可以重复执行。
 func TestMigrateRenamesLegacyPlacementsTable(t *testing.T) {
 	header := regexp.MustCompile(`(?m)^\[deployments\]$`)

@@ -30,7 +30,7 @@
       <strong>SHA-256 指纹</strong>
       <a-spin v-if="loading" />
       <code v-else-if="fingerprint">{{ fingerprint }}</code>
-      <span v-else class="ca-hint">当前环境没有提供根证书（未使用内置 CA，或页面不是由控制台代理提供）。</span>
+      <span v-else class="ca-hint">没有取到根证书指纹（页面不是由管理台的 9527 入口提供，例如本机开发服务器没有代理 /ca）。</span>
     </div>
     <a-alert type="warning" class="ca-alert">
       这个页面和安装包是经由尚未被信任的连接下载的，包里的一切都可能被替换，包内指纹只能防误操作。请以运维人员或另一台已信任主机上看到的指纹为准
