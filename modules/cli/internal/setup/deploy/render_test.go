@@ -44,9 +44,6 @@ func fakeIdentity(t *testing.T, cfg *topology.Config, catalog servicecatalog.Cat
 		identity.Secrets["scf-collector.key"] = []byte("private-key-of-scf-collector\n")
 	}
 	identity.Secrets["moox-ca.crt"], identity.Secrets["host.crt"], identity.Secrets["host.tls.key"] = []byte("ca\n"), []byte("cert\n"), []byte("key\n")
-	if slices.Contains(components, "access") {
-		identity.Secrets["access/access-verification.json"] = []byte("{}\n")
-	}
 	for _, id := range components {
 		component, _ := catalog.Component(id)
 		for _, role := range component.EventBusRoles() {
@@ -321,12 +318,12 @@ func TestFingerprintIgnoresReissuedHostCertificate(t *testing.T) {
 	}
 }
 
-// scf-collector 的密钥只影响 collector；公钥表变了只影响 access。
+// scf-collector 的密钥只影响 collector；开不开外部入口只影响主机网关（它的配置里多一个监听地址）。
 func TestFingerprintFollowsOnlyTheKeysAComponentUses(t *testing.T) {
 	cfg := exampleConfig(t, "")
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	for host, sensitive := range map[string]string{"control": "collector", "storage": "access"} {
+	for host, sensitive := range map[string]string{"control": "collector", "storage": "host-gateway"} {
 		components, err := cfg.HostComponents(host)
 		require.NoError(t, err)
 		request := Request{Config: cfg, Catalog: catalog, Host: cfg.HostByID(host), Components: components, HostComponents: components, ReadSource: readRepository, Identity: fakeIdentity(t, cfg, catalog, host, components)}
@@ -335,7 +332,9 @@ func TestFingerprintFollowsOnlyTheKeysAComponentUses(t *testing.T) {
 		if sensitive == "collector" {
 			request.Identity.SCFCollectorPublicKey = "rotated-scf-public-key"
 		} else {
-			request.Identity.Secrets["access/access-verification.json"] = []byte("{\"identities\":[1]}\n")
+			require.True(t, request.Host.ExternalEntry, "示例配置里存储机开外部入口")
+			require.Contains(t, string(first.Files["config/host-gateway/app.yaml"].Data), "external_addr: 0.0.0.0:11004")
+			request.Host.ExternalEntry = false
 		}
 		second, err := Render(request)
 		require.NoError(t, err)

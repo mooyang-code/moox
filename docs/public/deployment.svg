@@ -86,7 +86,7 @@
   <rect x="336" y="474" width="238" height="32" rx="7" fill="#eef2ff" stroke="#a5b4fc" stroke-opacity="0.7"/>
   <text class="chip-text" x="455" y="494.5" text-anchor="middle">事件总线</text>
   <rect x="336" y="514" width="238" height="32" rx="7" fill="#eef2ff" stroke="#a5b4fc" stroke-opacity="0.7"/>
-  <text class="chip-text" x="455" y="534.5" text-anchor="middle">外部接入 Access</text>
+  <text class="chip-text" x="455" y="534.5" text-anchor="middle">网关外部入口 :11004</text>
   <rect x="336" y="646" width="238" height="32" rx="7" fill="#ffffff" stroke="#a5b4fc" stroke-dasharray="5 3"/>
   <text class="gw" x="455" y="666.5" text-anchor="middle">主机网关 · 主机代理</text>
   <rect x="610" y="290" width="270" height="404" rx="12" fill="#ffffff" stroke="#7dd3fc" stroke-width="1.3" filter="url(#shadow)"/>
@@ -103,7 +103,7 @@
   <rect x="626" y="434" width="238" height="32" rx="7" fill="#f0f9ff" stroke="#7dd3fc" stroke-opacity="0.7"/>
   <text class="chip-text" x="745" y="454.5" text-anchor="middle">交易执行（目标收敛、模拟盘）</text>
   <rect x="626" y="474" width="238" height="32" rx="7" fill="#f0f9ff" stroke="#7dd3fc" stroke-opacity="0.7"/>
-  <text class="chip-text" x="745" y="494.5" text-anchor="middle">外部接入 Access</text>
+  <text class="chip-text" x="745" y="494.5" text-anchor="middle">网关外部入口 :11004</text>
   <rect x="626" y="646" width="238" height="32" rx="7" fill="#ffffff" stroke="#7dd3fc" stroke-dasharray="5 3"/>
   <text class="gw" x="745" y="666.5" text-anchor="middle">主机网关 · 主机代理</text>
   <rect x="900" y="290" width="270" height="404" rx="12" fill="#ffffff" stroke="#fcd34d" stroke-width="1.3" filter="url(#shadow)"/>

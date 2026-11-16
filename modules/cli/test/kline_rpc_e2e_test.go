@@ -217,11 +217,17 @@ type gatewayHelperProcess struct {
 
 func startGatewayHelperProcess(t *testing.T, helper string, args ...string) *gatewayHelperProcess {
 	t.Helper()
+	return startGatewayHelperProcessFor(t, helper, "moox-cli", args...)
+}
+
+// startGatewayHelperProcessFor 起夹具网关，并把 identity 这个非主机身份的测试公钥交给它登记。
+func startGatewayHelperProcessFor(t *testing.T, helper, identity string, args ...string) *gatewayHelperProcess {
+	t.Helper()
 	process := &gatewayHelperProcess{
 		command:  exec.Command(helper, args...),
 		waitDone: make(chan struct{}),
 	}
-	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_PUBLIC_KEY="+gatewayauth.EncodePublicKey(authtest.Identity("moox-cli").PublicKey()))
+	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_PUBLIC_KEY="+gatewayauth.EncodePublicKey(authtest.Identity(identity).PublicKey()))
 	process.command.Stdout = &process.logs
 	process.command.Stderr = &process.logs
 	require.NoError(t, process.command.Start())

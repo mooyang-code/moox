@@ -24,6 +24,8 @@ message DeploymentHost {
   // 控制台终端使用的 SSH 端口与用户；端口为 0 表示控制台不能 SSH 到这台主机。凭据与指纹不外传。
   int32 ssh_port = 11;
   string ssh_user = 12;
+  // 这台主机的网关是否开外部入口（11004）。
+  bool external_entry = 13;
 }
 
 message ComponentDeployment {
@@ -144,6 +146,8 @@ message SyncHostDeploymentsReq {
   string ssh_auth_type = 11;
   string ssh_secret = 12;
   string ssh_passphrase = 13;
+  // 这台主机的网关是否开外部入口（11004）；只能出站的主机不能开。
+  bool external_entry = 14;
 }
 message SyncHostDeploymentsRsp {
   trpc.moox.common.RetInfo ret_info = 1;

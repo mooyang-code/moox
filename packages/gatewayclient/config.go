@@ -28,10 +28,11 @@ type FileConfig struct {
 // ExternalFileConfig 是外部身份（moox-skill、collector-operator、scf-collector）的配置：固定的一个外部入口，
 // 不做目录发现。KeyFile 是这个身份自己的签名私钥。
 type ExternalFileConfig struct {
-	Address    string `yaml:"access_address"`
-	InstanceID string `yaml:"access_id"`
-	Caller     string `yaml:"caller"`
-	KeyFile    string `yaml:"key_file"`
+	// Address 是入口主机网关的外部入口地址（主机地址加 11004），Host 是这台主机的 ID（签名的目标主机）。
+	Address string `yaml:"entry_address"`
+	Host    string `yaml:"entry_host"`
+	Caller  string `yaml:"caller"`
+	KeyFile string `yaml:"key_file"`
 }
 
 // Validate 只检查公开字段，不打开私钥文件。
@@ -72,15 +73,15 @@ func (c ExternalFileConfig) Validate() error {
 	if err != nil {
 		return err
 	}
-	if err := validateExternalIdentity(catalog, c.Caller, c.Address, c.InstanceID); err != nil {
+	if err := validateExternalIdentity(catalog, c.Caller, c.Address, c.Host); err != nil {
 		return err
 	}
 	return validateKeyFile(c.KeyFile)
 }
 
-func validateExternalIdentity(catalog servicecatalog.Catalog, caller, address, instanceID string) error {
-	if !validAddress(address) || !strings.HasPrefix(instanceID, "access@") || !hostID.MatchString(strings.TrimPrefix(instanceID, "access@")) {
-		return errors.New("external client requires an access address and access@host instance ID")
+func validateExternalIdentity(catalog servicecatalog.Catalog, caller, address, entryHost string) error {
+	if !validAddress(address) || !hostID.MatchString(entryHost) {
+		return errors.New("external client requires an entry address and entry host ID")
 	}
 	if catalog.ExternalIdentity(caller) {
 		return nil
@@ -119,7 +120,7 @@ func (c ExternalFileConfig) OpenExternal(moduleConfigPath string) (*Client, erro
 	if err != nil {
 		return nil, err
 	}
-	return New(Config{Mode: External, Credentials: credentials, AccessAddress: c.Address, AccessInstanceID: c.InstanceID})
+	return New(Config{Mode: External, Credentials: credentials, EntryAddress: c.Address, EntryHost: c.Host})
 }
 
 // OpenInternal 用 gateway_client 段里的主机 ID、本机网关地址与 CA 连本机网关。key_file、ca_file 的相对路径

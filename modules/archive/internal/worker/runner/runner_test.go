@@ -441,9 +441,9 @@ func TestReadFailuresAreRetriedThenReportedWithoutAdvancing(t *testing.T) {
 		t.Fatalf("两次失败后重试成功: %+v", out)
 	}
 	e2 := newEnv(t)
-	e2.src.failAll = errors.New("access unreachable")
+	e2.src.failAll = errors.New("storage unreachable")
 	out := e2.run(2000, nil, nil)
-	if out.Status != "failed" || !strings.Contains(out.Message, "access unreachable") {
+	if out.Status != "failed" || !strings.Contains(out.Message, "storage unreachable") {
 		t.Fatalf("out = %+v", out)
 	}
 	if len(e2.src.requests) != 3 {
@@ -523,7 +523,7 @@ func TestFirstRunRetryReadsFromTheSameStartAfterAFailure(t *testing.T) {
 	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
 	e.src.rows = rows("BTC", day, 60, 1)
 	// 第一次运行：01:04:43 开始，第一块（前一天 23:48:43 起）的读取就失败（只试 1 次），没有续读起点。
-	e.src.failAll = errors.New("access unreachable")
+	e.src.failAll = errors.New("storage unreachable")
 	r := e.runner(20)
 	r.ReadAttempts = 1
 	out, err := r.Execute(context.Background(), e.assignment(nil), nil)

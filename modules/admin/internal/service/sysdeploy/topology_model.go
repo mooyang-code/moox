@@ -12,6 +12,7 @@ type HostRecord struct {
 	Region         string `gorm:"column:c_region"`
 	Status         string `gorm:"column:c_status"`
 	Reachability   string `gorm:"column:c_reachability"`
+	ExternalEntry  bool   `gorm:"column:c_external_entry"`
 	Description    string `gorm:"column:c_description"`
 	// SSHPort 为 0 表示控制台不能 SSH；指纹由 SSH 服务首次连接时写回，同步不会改它。
 	SSHPort        int    `gorm:"column:c_ssh_port"`
@@ -71,9 +72,11 @@ type HostSpec struct {
 	PrivateAddress string
 	// Reachability 为空或 direct 表示可直达，outbound 表示只能出站。
 	Reachability string
-	Region       string
-	Description  string
-	Components   []string
+	// ExternalEntry 表示这台主机的网关开外部入口（11004）。
+	ExternalEntry bool
+	Region        string
+	Description   string
+	Components    []string
 	// SSH 为空表示控制台不能 SSH 到这台主机，已存的凭据同时被清除。
 	SSH *SSHSpec
 }

@@ -23,8 +23,10 @@ message SnapshotHost {
   // direct / outbound
   string reachability = 4;
   bool enabled = 5;
+  // 这台主机的网关是否开外部入口（11004）。别的网关只认它带来源头（X-Moox-Origin-Caller）转过来的请求。
+  bool external_entry = 6;
   // ed25519 公钥，32 字节；还没签发过身份包的主机为空，它的请求在各网关上验不过。
-  bytes sign_public_key = 6;
+  bytes sign_public_key = 7;
 }
 
 message SnapshotDeployment {

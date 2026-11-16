@@ -27,7 +27,7 @@ type Config struct {
 	GatewayClient gatewayclient.FileConfig         `yaml:"gateway_client"`
 	sourcePath    string                           `yaml:"-"`
 	Database      DatabaseConfig                   `yaml:"database"`
-	SCFAccess     gatewayclient.ExternalFileConfig `yaml:"scf_access"`
+	SCFEntry      gatewayclient.ExternalFileConfig `yaml:"scf_entry"`
 	// SCFRegions 是各地域的函数网络；SCFMarkets 是每个空间、市场使用的地域；SCFPlan 是函数部署参数。
 	SCFRegions         map[string]fetchplan.PlanNetwork `yaml:"scf_regions"`
 	SCFMarkets         map[string]map[string][]string   `yaml:"scf_markets"`
@@ -112,11 +112,11 @@ type DatabaseConfig struct {
 	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
 }
 
-// SCFAccessEndpoint is the fixed endpoint selected for one function region.
+// SCFEntryEndpoint is the fixed endpoint selected for one function region.
 // The publisher supplies private endpoints only after verifying its VPC route.
-type SCFAccessEndpoint struct {
-	Address    string `yaml:"access_address"`
-	InstanceID string `yaml:"access_id"`
+type SCFEntryEndpoint struct {
+	Address string `yaml:"entry_address"`
+	Host    string `yaml:"entry_host"`
 }
 
 // CollectorRetentionConfig bounds the process-level execution-history cleanup.
@@ -212,7 +212,7 @@ func Load(path string) (*Config, error) {
 	if err := cfg.EgressLimits.Eastmoney.Validate(); err != nil {
 		return nil, fmt.Errorf("egress_limits.eastmoney: %w", err)
 	}
-	if err := cfg.validateSCFAccess(); err != nil {
+	if err := cfg.validateSCFEntry(); err != nil {
 		return nil, err
 	}
 	if err := cfg.Stream.validate(); err != nil {
@@ -245,12 +245,12 @@ func (c *Config) applyEnv() {
 	}
 }
 
-func (c *Config) validateSCFAccess() error {
-	if c.SCFAccess.Caller != "scf-collector" {
-		return fmt.Errorf("scf_access.caller must be scf-collector")
+func (c *Config) validateSCFEntry() error {
+	if c.SCFEntry.Caller != "scf-collector" {
+		return fmt.Errorf("scf_entry.caller must be scf-collector")
 	}
-	if err := c.SCFAccess.Validate(); err != nil {
-		return fmt.Errorf("scf_access: %w", err)
+	if err := c.SCFEntry.Validate(); err != nil {
+		return fmt.Errorf("scf_entry: %w", err)
 	}
 	return nil
 }
@@ -308,7 +308,7 @@ func Default() *Config {
 		Stream:       defaultStreamConfig(),
 		Cloud:        CloudConfig{CLS: cloud.DefaultCLSConfig()},
 		Delist:       DelistConfig{AutoDetect: true},
-		SCFAccess:    gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/scf-collector.key"},
+		SCFEntry:     gatewayclient.ExternalFileConfig{Address: "entry.example.test:11004", Host: "storage", Caller: "scf-collector", KeyFile: "../../secrets/scf-collector.key"},
 		CollectorRetention: CollectorRetentionConfig{
 			MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000,
 		},

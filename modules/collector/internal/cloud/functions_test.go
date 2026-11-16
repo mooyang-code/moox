@@ -290,7 +290,7 @@ func TestEnsureRetriesTransientErrorsOnly(t *testing.T) {
 }
 
 // 碰云端之前就被拒绝，一条写请求都不发：环境带 EventBus 项（采集函数不连 EventBus）、超时不是 60、环境超长、
-// 缺 Access 三项、定时函数不带采集计划、cron 不支持、代码包不可用。
+// 缺外部入口三项、定时函数不带采集计划、cron 不支持、代码包不可用。
 func TestEnsureRejectsInvalidSpecsBeforeAnyWrite(t *testing.T) {
 	ctx := context.Background()
 	for _, test := range []struct {
@@ -303,8 +303,8 @@ func TestEnsureRejectsInvalidSpecsBeforeAnyWrite(t *testing.T) {
 		{"外层超时不是 60", func(spec *FunctionSpec) { spec.TimeoutS = 30 }, "60"},
 		{"环境里的超时不是 60", func(spec *FunctionSpec) { spec.Environment["MOOX_FETCH_TIMEOUT_SECONDS"] = "30" }, "60"},
 		{"环境超长", func(spec *FunctionSpec) { spec.Environment["OPERATOR_EXTRA"] = strings.Repeat("x", 4096) }, "4096"},
-		{"缺 Access 地址", func(spec *FunctionSpec) { delete(spec.Environment, "MOOX_ACCESS_ADDRESS") }, "MOOX_ACCESS_ADDRESS"},
-		{"缺 Access 身份", func(spec *FunctionSpec) { delete(spec.Environment, "MOOX_ACCESS_ID") }, "MOOX_ACCESS_ID"},
+		{"缺外部入口地址", func(spec *FunctionSpec) { delete(spec.Environment, "MOOX_ENTRY_ADDRESS") }, "MOOX_ENTRY_ADDRESS"},
+		{"缺外部入口身份", func(spec *FunctionSpec) { delete(spec.Environment, "MOOX_ENTRY_HOST") }, "MOOX_ENTRY_HOST"},
 		{"缺调用方密钥", func(spec *FunctionSpec) { delete(spec.Environment, "MOOX_CALLER_KEY") }, "MOOX_CALLER_KEY"},
 		{"调用方不是 scf-collector", func(spec *FunctionSpec) { spec.Environment["MOOX_CALLER"] = "strategy" }, "scf-collector"},
 		{"定时函数不带采集计划", func(spec *FunctionSpec) { delete(spec.Environment, "MOOX_MARKET_FETCH_PLAN") }, "MOOX_MARKET_FETCH_PLAN"},

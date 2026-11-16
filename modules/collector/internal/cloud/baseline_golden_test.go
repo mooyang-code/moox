@@ -67,9 +67,9 @@ func baselineBaseEnvironment() map[string]string {
 	}
 }
 
-func baselineAccessEnvironment(keyID string) map[string]string {
+func baselineEntryEnvironment(keyID string) map[string]string {
 	return map[string]string{
-		"MOOX_ACCESS_ADDRESS": "access.example:11004", "MOOX_ACCESS_ID": "access@control-a", "MOOX_CALLER": "scf-collector",
+		"MOOX_ENTRY_ADDRESS": "entry.example:11004", "MOOX_ENTRY_HOST": "control-a", "MOOX_CALLER": "scf-collector",
 		"MOOX_CALLER_KEY_ID": keyID, "MOOX_CALLER_KEY": strings.Repeat("b", 43) + "=",
 	}
 }
@@ -79,7 +79,7 @@ func baselineManagedEnvironment(plan, hash, count, keyID string) map[string]stri
 		"MOOX_MARKET_FETCH_PLAN": plan, "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": hash,
 		"MOOX_MARKET_FETCH_SUBJECT_COUNT": count, "MOOX_FETCH_TIMEOUT_SECONDS": "60",
 	}
-	for key, value := range baselineAccessEnvironment(keyID) {
+	for key, value := range baselineEntryEnvironment(keyID) {
 		environment[key] = value
 	}
 	return environment
@@ -96,7 +96,7 @@ func timerEnvironment(plan, hash, count, keyID string) map[string]string {
 
 func backfillEnvironment() map[string]string {
 	environment := map[string]string{"MOOX_MARKET_FETCH_MODE": "backfill", "MOOX_FETCH_TIMEOUT_SECONDS": "60"}
-	for key, value := range baselineAccessEnvironment("scf-key-1") {
+	for key, value := range baselineEntryEnvironment("scf-key-1") {
 		environment[key] = value
 	}
 	for key, value := range baselineBaseEnvironment() {

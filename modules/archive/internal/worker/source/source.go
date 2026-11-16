@@ -1,4 +1,4 @@
-// Package source reads dataset columns and time-range rows from Storage through the Access gateway.
+// Package source reads dataset columns and time-range rows from Storage through the host gateway.
 package source
 
 import (

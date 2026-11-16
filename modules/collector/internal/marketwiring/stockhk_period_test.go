@@ -45,7 +45,7 @@ func TestPlanPeriodValidStockHK(t *testing.T) {
 	}
 }
 
-// 云函数在这些时刻被定时器触发时直接返回 no_work，不连 Access、不取数。
+// 云函数在这些时刻被定时器触发时直接返回 no_work，不连外部入口、不取数。
 func TestStockHKTimerReturnsNoWorkOutsideSessions(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "stockhk")
 	options := fetchplan.PlanOptions{SpaceID: "stockhk", Markets: map[string][]string{"equity": {"ap-nanjing"}}, DefaultLatenessS: 90,

@@ -85,9 +85,9 @@ func TestDiagnoseChecksTheSystemdSupervisorOfEveryComponent(t *testing.T) {
 	// 普通组件同样由 systemd 托管；第三方程序与未知组件不在诊断清单里。
 	manifest, err := core.LoadEmbeddedManifest()
 	require.NoError(t, err)
-	unit, systemd := systemdUnit(manifest, "access")
+	unit, systemd := systemdUnit(manifest, "trade")
 	assert.True(t, systemd)
-	assert.Equal(t, "moox-access.service", unit)
+	assert.Equal(t, "moox-trade.service", unit)
 	_, systemd = systemdUnit(manifest, "seaweedfs")
 	assert.False(t, systemd)
 }

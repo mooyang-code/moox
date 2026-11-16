@@ -82,7 +82,7 @@ func TestPostStorageRawAndRetInfo(t *testing.T) {
 }
 
 func TestCheckStorageRetInfoRejectsFailure(t *testing.T) {
-	err := checkStorageRetInfo("Access", "Write", &pb.ReadTimeSeriesRowsRsp{
+	err := checkStorageRetInfo("PrimaryStore", "Write", &pb.ReadTimeSeriesRowsRsp{
 		RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "boom"},
 	})
 	require.Error(t, err)

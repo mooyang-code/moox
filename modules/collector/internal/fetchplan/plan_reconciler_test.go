@@ -87,7 +87,7 @@ func TestPlanReconcilerFullLifecycle(t *testing.T) {
 		require.True(t, function.Timer.Enabled, name)
 		require.Equal(t, "0 * * * * * *", function.Timer.Cron)
 		require.Len(t, h.cloudPlan(name).Datasets[0].Copies, 1)
-		require.Equal(t, "access@storage", function.Info.Environment["MOOX_ACCESS_ID"])
+		require.Equal(t, "storage", function.Info.Environment["MOOX_ENTRY_HOST"])
 		require.Equal(t, "pkg", function.Info.Environment["MOOX_CODE_PACKAGE_ID"])
 		require.NotContains(t, function.Info.Environment, "MOOX_CREATE_RESERVATION_ID")
 	}
@@ -394,7 +394,7 @@ func TestPlanReconcilerRetiredFunctionsGetAValidCronWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestPlanReconcilerRecreatesMissingFunctionsAndDetectsAccessDrift(t *testing.T) {
+func TestPlanReconcilerRecreatesMissingFunctionsAndDetectsEntryDrift(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
 	h.applyFirstPlan(r)
@@ -407,9 +407,9 @@ func TestPlanReconcilerRecreatesMissingFunctionsAndDetectsAccessDrift(t *testing
 	require.Equal(t, created+1, h.cloud.client.Count("CreateFunction"), "a function deleted in the cloud is rebuilt from the applied plan")
 	require.True(t, h.timerEnabled(names[0]))
 
-	// 调用方密钥轮换：Access 指纹不一致的函数下一次读回时按新身份重推。
-	r.Access = func(region string) (map[string]string, error) {
-		access, err := testSCFAccessEnvironment(region)
+	// 调用方密钥轮换：外部入口指纹不一致的函数下一次读回时按新身份重推。
+	r.Entry = func(region string) (map[string]string, error) {
+		access, err := testSCFEntryEnvironment(region)
 		access["MOOX_CALLER_KEY_ID"] = "assigned-scf-key-18"
 		return access, err
 	}
@@ -878,7 +878,7 @@ func TestBackfillFunctionIsNeverDowngradedByAStaleCaller(t *testing.T) {
 }
 
 // 访问入口或调用方身份变了（主机改名、密钥轮换）：Ensure 按当前身份改写环境（不再删掉重建），之后不再重复。
-func TestBackfillFunctionIsRecreatedWhenAccessIdentityChanges(t *testing.T) {
+func TestBackfillFunctionIsRecreatedWhenEntryIdentityChanges(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
 	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
@@ -890,15 +890,15 @@ func TestBackfillFunctionIsRecreatedWhenAccessIdentityChanges(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ensures, h.cloud.countOps("ensure", name), "身份一致时不再写")
 
-	r.Access = func(region string) (map[string]string, error) {
-		access, err := testSCFAccessEnvironment(region)
-		access["MOOX_ACCESS_ID"] = "access@overseas"
+	r.Entry = func(region string) (map[string]string, error) {
+		access, err := testSCFEntryEnvironment(region)
+		access["MOOX_ENTRY_HOST"] = "overseas"
 		return access, err
 	}
 	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
 	require.Equal(t, ensures+1, h.cloud.countOps("ensure", name), "访问入口变了要重新 Ensure")
-	require.Equal(t, "access@overseas", h.mustFunction(name).Info.Environment["MOOX_ACCESS_ID"])
+	require.Equal(t, "overseas", h.mustFunction(name).Info.Environment["MOOX_ENTRY_HOST"])
 	require.Zero(t, h.cloud.client.Count("DeleteFunction"))
 	require.Equal(t, 1, h.cloud.client.Count("CreateFunction"))
 }

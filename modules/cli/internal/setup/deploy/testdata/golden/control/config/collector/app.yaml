@@ -87,10 +87,10 @@ subject_sync:
       cron: "10 8 * * *"
       timezone: Asia/Shanghai
 # 函数的签名身份 scf-collector：私钥随控制机的身份包签发，Collector 发布函数时写进函数环境；按地域的地址由发布器根据 VPC 路由生成。
-scf_access:
-  access_address: 203.0.113.11:11004
-  access_id: access@storage
+scf_entry:
   caller: scf-collector
+  entry_address: 203.0.113.11:11004
+  entry_host: storage
   key_file: /data/moox/secrets/scf-collector.key
 # Collector 直接调腾讯云（原 CloudFunction 服务的两段配置）。
 cloud:

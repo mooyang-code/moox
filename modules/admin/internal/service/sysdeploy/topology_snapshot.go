@@ -27,7 +27,7 @@ func (d *TopologyDAO) Snapshot(ctx context.Context) (*pb.HostGatewaySnapshot, er
 			// 登记的公钥读不出来时按没有公钥处理。
 			public, _ := gatewayauth.ParsePublicKey(host.SignPublicKey)
 			snapshot.Hosts = append(snapshot.Hosts, &pb.SnapshotHost{HostId: host.HostID, Address: host.Address, PrivateAddress: host.PrivateAddress,
-				Reachability: servicecatalog.ReachabilityName(host.Reachability), Enabled: host.Status == servicecatalog.Enabled, SignPublicKey: public})
+				Reachability: servicecatalog.ReachabilityName(host.Reachability), Enabled: host.Status == servicecatalog.Enabled, ExternalEntry: host.ExternalEntry, SignPublicKey: public})
 		}
 		for _, deployment := range deployments {
 			snapshot.Deployments = append(snapshot.Deployments, &pb.SnapshotDeployment{HostId: deployment.HostID, ComponentId: deployment.ComponentID, Enabled: deployment.Status == servicecatalog.Enabled})

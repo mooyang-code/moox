@@ -31,18 +31,18 @@ type deploymentSourceStub struct {
 
 func TestBuilderKeepsEveryHostDeploymentAndDoesNotInferMissingDefaults(t *testing.T) {
 	builder := Builder{Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{
-		{ComponentId: "access", HostId: "node-a", Status: "enabled"},
-		{ComponentId: "access", HostId: "node-b", Status: "disabled"},
+		{ComponentId: "trade", HostId: "node-a", Status: "enabled"},
+		{ComponentId: "trade", HostId: "node-b", Status: "disabled"},
 	}}}
-	got, err := builder.Build(t.Context(), "", []string{"access", "collector"}, nil)
+	got, err := builder.Build(t.Context(), "", []string{"trade", "collector"}, nil)
 	require.NoError(t, err)
 	require.Len(t, got.ExpectedComponents, 3)
 	byHost := map[string]ExpectedComponent{}
 	for _, component := range got.ExpectedComponents {
 		byHost[component.NodeID+":"+component.ComponentID] = component
 	}
-	require.True(t, byHost["node-a:access"].Expected)
-	require.False(t, byHost["node-b:access"].Expected)
+	require.True(t, byHost["node-a:trade"].Expected)
+	require.False(t, byHost["node-b:trade"].Expected)
 	require.False(t, byHost[":collector"].Expected, "catalog defaults must not invent a deployment")
 }
 

@@ -202,14 +202,11 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 	if err != nil {
 		return result, err
 	}
-	// 只部署个别组件时发现目标机的私钥丢了或对不上、签发了新的：同样要整台部署，从头按整台再做一遍
-	//（新私钥还没落到目标机，那一遍会再签发一次）。
-	if issued.hostKey && !full {
+	if redeployWholeHost(issued.hostKey, full, existing != nil) {
 		options.logf("%s: 签发了新的主机签名密钥，改为整台部署", host.Name)
 		options.Components = nil
 		return Deploy(ctx, options)
 	}
-	result.Warnings = append(result.Warnings, issued.warnings...)
 	request := Request{Config: cfg, Catalog: catalog, Host: host, Components: selected, HostComponents: hostComponents, ReadSource: options.readSource, Identity: identity}
 	if cfg.Logging.CLS.Enabled {
 		if options.Secrets == nil {
@@ -590,10 +587,9 @@ func addLocalFile(archive *tar.Writer, name, local string) error {
 	return err
 }
 
-// issuedKeys 记这次部署有没有新签发签名密钥，以及要转告用户的提醒。
+// issuedKeys 记这次部署有没有新签发主机签名密钥。
 type issuedKeys struct {
-	hostKey  bool
-	warnings []string
+	hostKey bool
 }
 
 // identity 取这台主机的身份材料。控制机先执行 bootstrap（登记这台电脑的 moox-cli 公钥），其余主机先把登记同步到 Admin 再让控制机签发。
@@ -693,21 +689,6 @@ func (o Options) identity(ctx context.Context, target setupssh.Client, catalog s
 	if metadata.SignKeyIssued {
 		o.logf("%s: 签发了新的主机签名密钥", host.Name)
 	}
-	// 外部入口的公钥表（临时，T16 删）。
-	if slices.Contains(selected, "access") {
-		table, err := accessVerification(ctx, source, cfg, catalog)
-		if err != nil {
-			return fail(err)
-		}
-		identity.Secrets[accessVerificationFile] = table
-	}
-	// scf-collector 换了密钥：已经装着的 access 要拿到新公钥，函数才能继续写入；采集计划的下一轮对账会把新私钥写进函数环境。
-	if metadata.SCFCollectorKeyIssued && !fresh {
-		o.logf("%s: 签发了新的 scf-collector 密钥，更新各台 access 的公钥表", host.Name)
-		for name, err := range SyncAccessIdentities(ctx, o.Dial, source, cfg) {
-			issued.warnings = append(issued.warnings, fmt.Sprintf("scf-collector 的密钥换了，但主机 %s 上的 access 还没拿到新公钥（%v）。运行 moox-cli setup deploy --host %s --component access", name, err, name))
-		}
-	}
 	return identity, issued, nil
 }
 
@@ -722,4 +703,11 @@ func lastLine(stderr string) string {
 		return "没有输出"
 	}
 	return line
+}
+
+// redeployWholeHost 报告只部署个别组件的这一次要不要改成整台部署：已经装过的主机上发现私钥丢了或对不上、签发了新的，
+// 已装的其余组件也要换上新私钥，所以从头按整台再做一遍（新私钥还没落到目标机，那一遍会再签发一次）。
+// 全新主机没有已装的组件，签发私钥是必然的，按选中的组件装即可（首次安装先只给控制机装 admin 与网关）。
+func redeployWholeHost(issuedHostKey, full, installed bool) bool {
+	return issuedHostKey && !full && installed
 }

@@ -5,7 +5,7 @@ Use this reference when a MooX collector cloud function does not run on its Time
 ## How Realtime Collection Works
 
 1. Collector (one reconciler per space) computes the fetch plan, registers series snapshots in Storage and writes the plan into each function's SCF environment (`MOOX_*` variables). Functions keep their Timer trigger enabled.
-2. At each Timer tick the function derives the (dataset, subject) work from the plan and the event time, fetches the providers concurrently, and writes through Access (`11004`) as the `scf-collector` external identity: `CommitTimeSeriesBatch` (and `UpsertFields` for backfill rows). The Access address and instance identity are derived from the deployment manifest.
+2. At each Timer tick the function derives the (dataset, subject) work from the plan and the event time, fetches the providers concurrently, and writes through the entry host gateway's external entry (`11004`) as the `scf-collector` external identity: `CommitTimeSeriesBatch` (and `UpsertFields` for backfill rows). The entry address and entry host ID (`MOOX_ENTRY_ADDRESS`, `MOOX_ENTRY_HOST`) are derived from the deployment manifest.
 3. The default plan/backfill path does not call Collector or require EventBus; an explicitly configured metrics Reporter can publish to EventBus. Provider requests can retry or switch endpoints within the invocation budget. Final failures are logged to CLS (`market_fetch_item_failure`, `market_fetch_batch`); Collector repairs remaining gaps through backfill instead of re-dispatching an old completion batch.
 4. Gaps are found by `moox-cli collector kline check` and repaired by `kline backfill` or the Collector's automatic backfill.
 5. Storage lazily creates a period on its first valid commit, completes it as soon as all expected series arrive, or finalizes it as degraded at the deadline; completion is announced with `DatasetPeriodCompleted` (`source=ledger`). A period with zero commits has no ledger or completion event. Crypto defaults to WS/local; use this Timer workflow only for datasets actually assigned to SCF.
@@ -26,7 +26,7 @@ Never paste SecretKey, service auth secret, SSH password or signed headers into 
 1. No package: local build or COS upload failed.
 2. No function or Timer disabled: the reconciler could not reach Tencent SCF (Monitor's market-fetch check shows the failure reason, such as `cloud` or `quota`); it repairs the function on the next readback.
 3. Timer fires but nothing is fetched: the plan in the function environment has no entry for this period (check `moox-cli collector fetch-plan`), or the event time is past the lateness deadline.
-4. Fetch succeeds but no Storage rows: Access write failed (principal/method allowlist, wrong Storage application key).
+4. Fetch succeeds but no Storage rows: the write through the external entry failed (identity/method allowlist, stale `scf-collector` key; see `moox_gateway_external_denials_total` on the entry host gateway).
 5. Rows written but the View is empty: inspect the View consumer and `storage-view` logs. For historical backfills, first check `[storage_view.max_age]` and `moox_storage_view_expired_rows_dropped_total{space,freq}`: expired rows are deliberately dropped at View write time, including factor results, while processing still succeeds. Primary retention is independent (default crypto 1m: Primary 35d, View 7d).
 6. Preserve `git status --short` before touching code.
 
@@ -67,7 +67,7 @@ Use the `cls-query` skill when available. Query one Timer tick first, then widen
 | --- | --- |
 | No invocation at the expected tick | Timer disabled, wrong cron, or function not deployed |
 | Provider errors for most subjects | egress IP blocked or provider down; run `moox-cli collector function probe-egress` |
-| Commit rejected | series snapshot mismatch (plan in the environment is stale) or Access principal/method allowlist |
+| Commit rejected | series snapshot mismatch (plan in the environment is stale) or the external identity/method allowlist |
 
 ## K-line Data Verification
 
@@ -79,5 +79,5 @@ Use the `cls-query` skill when available. Query one Timer tick first, then widen
 
 - Timer disabled or cron drift after a manual change in the Tencent console.
 - Function environment not updated after a task or subject change (stale plan).
-- Access target or principal missing for the function's region.
+- No external entry host (`external_entry = true` with a private address) for the function's region.
 - Provider throttling or egress IP blocked for the region.

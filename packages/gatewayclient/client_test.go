@@ -323,7 +323,7 @@ func TestEndpointHonorsRequestedHost(t *testing.T) {
 }
 
 func TestExternalWhitelistAndTunnelLoopbackBoundary(t *testing.T) {
-	config := Config{Mode: External, Credentials: authtest.Identity("moox-skill"), AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"}
+	config := Config{Mode: External, Credentials: authtest.Identity("moox-skill"), EntryAddress: "entry.example.test:11004", EntryHost: "storage"}
 	c := newTestClient(t, config)
 	c.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
 		t.Fatal("forbidden call reached transport")
@@ -331,10 +331,10 @@ func TestExternalWhitelistAndTunnelLoopbackBoundary(t *testing.T) {
 	}
 	_, err := c.Forward(context.Background(), secretService, "GetSecretValue", codec.SerializationTypePB, nil)
 	require.ErrorContains(t, err, "not allowed")
-	config.AccessInstanceID = "storage"
+	config.EntryHost = "access@storage"
 	_, err = New(config)
-	require.Error(t, err)
-	config.AccessInstanceID = "access@storage"
+	require.Error(t, err, "入口主机写的是主机 ID，不带前缀")
+	config.EntryHost = "storage"
 	config.Source = &sourceStub{}
 	_, err = New(config)
 	require.ErrorContains(t, err, "does not use directory")
@@ -359,17 +359,17 @@ func TestExternalReadsResignRetriesAndWritesRunOnce(t *testing.T) {
 	} {
 		t.Run(call.method, func(t *testing.T) {
 			config := Config{Mode: External, Credentials: authtest.Identity(call.caller),
-				AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"}
+				EntryAddress: "entry.example.test:11004", EntryHost: "storage"}
 			client := newTestClient(t, config)
 			body := []byte{0x0a, 1, 'a', 0x0a, 1, 'b'}
 			attempts := 0
 			nonces := map[string]bool{}
 			client.invoke = func(_ context.Context, ep endpoint, service, method string, serialization int, raw []byte, headers http.Header) ([]byte, error) {
 				attempts++
-				require.Equal(t, endpoint{address: config.AccessAddress, target: config.AccessInstanceID, compress: true}, ep)
+				require.Equal(t, endpoint{address: config.EntryAddress, target: config.EntryHost, compress: true}, ep)
 				require.Equal(t, codec.SerializationTypePB, serialization)
 				require.Equal(t, body, raw)
-				claims, err := authtest.Verify(config.Credentials, gatewayauth.Request{TargetNode: config.AccessInstanceID, Callee: service, Func: method, Body: raw}, headers, time.Now())
+				claims, err := authtest.Verify(config.Credentials, gatewayauth.Request{TargetNode: config.EntryHost, Callee: service, Func: method, Body: raw}, headers, time.Now())
 				require.NoError(t, err)
 				require.False(t, nonces[claims.Nonce], "every send must use a fresh nonce")
 				nonces[claims.Nonce] = true
@@ -626,4 +626,40 @@ func TestRelayEndpointForOutboundHost(t *testing.T) {
 	ep, err = route(tunnel)
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1:23456", ep.relay.controlAddress)
+}
+
+// 入口主机的网关替外部身份转发：以 host-gateway 的身份签名，带上来源头；能不能调看的是那个外部身份，
+// 不带来源头时 host-gateway 自己调不了业务方法。
+func TestHostGatewayForwardsExternalIdentityWithOriginCallerHeader(t *testing.T) {
+	const storage = "trpc.moox.storage.PrimaryStore"
+	update := DirectoryUpdate{
+		Hosts: []servicecatalog.Host{
+			{ID: "a", Address: "a.example.test", Status: servicecatalog.Enabled},
+			{ID: "b", Address: "b.example.test", Status: servicecatalog.Enabled, ExternalEntry: true},
+		},
+		Deployments: []servicecatalog.Deployment{{HostID: "a", ComponentID: "storage-primary", Status: servicecatalog.Enabled}},
+	}
+	config := internalConfig(t, &sourceStub{directory: versioned(t, update)}, "b")
+	config.Credentials = authtest.Component("host-gateway", "b")
+	c := newTestClient(t, config)
+	var seen []http.Header
+	c.invoke = func(_ context.Context, ep endpoint, service, method string, _ int, raw []byte, headers http.Header) ([]byte, error) {
+		require.Equal(t, "a", ep.target)
+		_, err := authtest.Verify(config.Credentials, gatewayauth.Request{TargetNode: "a", Callee: service, Func: method, Body: raw}, headers, time.Now())
+		require.NoError(t, err, "签名的是入口主机的 host-gateway")
+		seen = append(seen, headers)
+		return raw, nil
+	}
+	_, err := c.Forward(WithOriginCaller(context.Background(), "scf-collector"), storage, "CommitTimeSeriesBatch", codec.SerializationTypePB, nil)
+	require.NoError(t, err)
+	require.Len(t, seen, 1)
+	require.Equal(t, []string{"scf-collector"}, seen[0].Values(gatewayauth.HeaderOriginCaller))
+
+	_, err = c.Forward(WithOriginCaller(context.Background(), "moox-skill"), storage, "CommitTimeSeriesBatch", codec.SerializationTypePB, nil)
+	require.ErrorContains(t, err, "not allowed", "moox-skill 不在写入方法的名单上")
+	_, err = c.Forward(WithOriginCaller(context.Background(), "moox-cli"), storage, "CommitTimeSeriesBatch", codec.SerializationTypePB, nil)
+	require.ErrorContains(t, err, "not allowed", "来源只能是外部身份")
+	_, err = c.Forward(context.Background(), storage, "CommitTimeSeriesBatch", codec.SerializationTypePB, nil)
+	require.ErrorContains(t, err, "not allowed", "不带来源时 host-gateway 调不了业务方法")
+	require.Len(t, seen, 1)
 }

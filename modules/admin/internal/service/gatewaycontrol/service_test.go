@@ -54,7 +54,7 @@ func newControlFixture(t *testing.T) *controlFixture {
 	require.NoError(t, f.topology.SyncHosts(context.Background(), []sysdeploy.HostSpec{
 		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "collector"}},
 		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
-		{HostID: "overseas", Address: "compute.example.test", Components: []string{"access", "trade"}},
+		{HostID: "overseas", Address: "compute.example.test", Components: []string{"egress-proxy", "trade"}},
 	}))
 	f.keys, err = keys.NewStore(f.db)
 	require.NoError(t, err)
@@ -173,7 +173,7 @@ func TestSnapshotsCarryHostsDeploymentsAndPublicKeys(t *testing.T) {
 	require.Len(t, storage.Deployments, 2+2+2+3*2)
 	for host, components := range map[string][]string{
 		"control": {"admin", "collector", "host-agent", "host-gateway"}, "storage": {"storage-primary", "storage-view", "host-agent", "host-gateway"},
-		"overseas": {"access", "trade", "host-agent", "host-gateway"},
+		"overseas": {"egress-proxy", "trade", "host-agent", "host-gateway"},
 	} {
 		for _, component := range components {
 			deployment := snapshotDeployment(storage, host, component)
@@ -186,7 +186,7 @@ func TestSnapshotsCarryHostsDeploymentsAndPublicKeys(t *testing.T) {
 	// 网关据此算出的调用名单：主机密钥只能替部署在它上面的调用方签名，console 只在部署了 admin 的主机上。
 	callers := signingCallers(t, storage)
 	require.Equal(t, []string{"admin", "collector", "console", "host-agent", "host-gateway"}, callers["control"])
-	require.Equal(t, []string{"access", "host-agent", "host-gateway", "trade"}, callers["overseas"])
+	require.Equal(t, []string{"egress-proxy", "host-agent", "host-gateway", "trade"}, callers["overseas"])
 	for host, list := range callers {
 		require.NotContains(t, list, "moox-cli", "非主机身份不能出现在主机 %s 的调用方里", host)
 	}
@@ -216,9 +216,17 @@ func TestSnapshotsCarryHostsDeploymentsAndPublicKeys(t *testing.T) {
 	rotated := f.snapshot(t, "storage")
 	require.NotEqual(t, replaced.Hash, rotated.Hash)
 	require.Equal(t, publicKey("host/overseas-new"), gatewayauth.EncodePublicKey(snapshotHost(rotated, "overseas").SignPublicKey))
-	// 外部身份的公钥也在快照里（外部入口并入网关后要用）；主机网关上它们仍然调不了任何方法。
+	// 外部身份的公钥也在快照里：外部入口（11004）用它验签；11002、11003 上它们调不了任何方法。
 	require.NoError(t, f.keys.SetIdentity(ctx, "moox-skill", publicKey("moox-skill")))
 	require.NotNil(t, snapshotIdentity(f.snapshot(t, "storage"), "moox-skill"))
+	// 外部入口的登记随快照下发；只能出站的主机不能登记成外部入口。
+	require.False(t, snapshotHost(f.snapshot(t, "storage"), "storage").ExternalEntry)
+	entry := sysdeploy.HostSpec{HostID: "storage", Address: "storage.example.test", ExternalEntry: true, Components: []string{"storage-primary", "storage-view"}}
+	require.NoError(t, f.topology.SyncHostDeployments(ctx, entry))
+	require.True(t, snapshotHost(f.snapshot(t, "storage"), "storage").ExternalEntry)
+	require.False(t, snapshotHost(f.snapshot(t, "storage"), "overseas").ExternalEntry)
+	entry.Reachability = servicecatalog.ReachabilityOutbound
+	require.ErrorIs(t, f.topology.SyncHostDeployments(ctx, entry), sysdeploy.ErrInvalidTopology)
 	// 还没签发过身份包的主机没有公钥，但主机本身仍在快照里。
 	require.NoError(t, f.db.Exec("UPDATE t_hosts SET c_sign_public_key = '' WHERE c_host_id = 'overseas'").Error)
 	require.Empty(t, snapshotHost(f.snapshot(t, "storage"), "overseas").SignPublicKey)

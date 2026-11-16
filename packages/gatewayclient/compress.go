@@ -8,7 +8,7 @@ import (
 
 type compressTypeKey struct{}
 
-// WithCompressType 让转发原始字节的调用方（例如 Access）沿用入站帧的压缩类型。
+// WithCompressType 让转发原始字节的调用方（主机网关的外部入口）沿用入站帧的压缩类型。
 // 不是 wirecompress 注册过的类型（例如 0，未压缩）时忽略，用当前字典版本。
 func WithCompressType(ctx context.Context, compressType int) context.Context {
 	if !wirecompress.Known(compressType) {

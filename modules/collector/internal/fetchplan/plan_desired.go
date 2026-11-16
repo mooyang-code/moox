@@ -15,7 +15,7 @@ import (
 // DefaultSymbolsPerFunction 是每个定时函数默认负责的标的数（现货与合约相同）。
 const DefaultSymbolsPerFunction = 50
 
-// PlanNetwork 是某地域的 SCF 网络：函数绑定该地域内的 VPC，通过私网访问同地域的 Access。
+// PlanNetwork 是某地域的 SCF 网络：函数绑定该地域内的 VPC，通过私网访问同地域的外部入口。
 type PlanNetwork struct {
 	VPCID    string `yaml:"vpc_id" json:"vpc_id"`
 	SubnetID string `yaml:"subnet_id" json:"subnet_id"`

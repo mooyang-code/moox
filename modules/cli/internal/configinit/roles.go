@@ -35,6 +35,8 @@ type Role struct {
 	exampleHost string
 	hostID      string
 	components  []string
+	// externalEntry 取自示例模板：这个角色的主机开不开外部入口。
+	externalEntry bool
 }
 
 // Recommend 是建议配置；0 表示不比较。
@@ -92,11 +94,12 @@ var roleCatalog = []Role{
 	},
 }
 
-// loadRoles 从示例模板读出各角色的组件部署、主机 ID 与默认值，避免在代码里再抄一份。
+// loadRoles 从示例模板读出各角色的组件部署、主机 ID、是否开外部入口与默认值，避免在代码里再抄一份。
 func loadRoles() ([]Role, error) {
 	var example struct {
 		Hosts map[string]struct {
-			SSH struct {
+			ExternalEntry bool `toml:"external_entry"`
+			SSH           struct {
 				Username string `toml:"username"`
 			} `toml:"ssh"`
 		} `toml:"hosts"`
@@ -116,6 +119,7 @@ func loadRoles() ([]Role, error) {
 			role.hostID = role.exampleHost
 			role.SSHUser = host.SSH.Username
 			role.components = append([]string(nil), placed...)
+			role.externalEntry = host.ExternalEntry
 		}
 		roles[i] = role
 	}

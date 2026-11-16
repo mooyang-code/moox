@@ -89,4 +89,4 @@ Collector 的发布权限也会随版本多一个主题（`moox.event.collector.
 
 - 把 token/私钥写进 argv、日志、git 或 skill 测试夹具以外的仓库文件。
 - 为修连通性关闭 TLS 校验或改用 `nats://` 公网明文。
-- 把跨主机 EventBus URL 擅自改成未签入证书的内网地址。当前签发验证部署记录中的对外地址与 `127.0.0.1`；同机应使用回环，跨机使用登记的对外地址。外部 SCF 的 Access 路由与此独立，见 `private-network.md`。
+- 把跨主机 EventBus URL 擅自改成未签入证书的内网地址。当前签发验证部署记录中的对外地址与 `127.0.0.1`；同机应使用回环，跨机使用登记的对外地址。外部 SCF 的入口（主机网关的外部入口）与此独立，见 `private-network.md`。

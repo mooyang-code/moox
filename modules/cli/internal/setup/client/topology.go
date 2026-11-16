@@ -34,7 +34,7 @@ func (c *Client) SyncHostDeployments(ctx context.Context, cfg *topology.Config, 
 	slices.Sort(components)
 	request := &pb.SyncHostDeploymentsReq{
 		HostId: hostID, Label: host.Label, Address: host.Address, PrivateAddress: host.PrivateAddress,
-		Region: host.Region, Reachability: servicecatalog.ReachabilityName(host.Reachability), ComponentIds: components,
+		Region: host.Region, Reachability: servicecatalog.ReachabilityName(host.Reachability), ExternalEntry: host.ExternalEntry, ComponentIds: components,
 	}
 	// 直达主机配了私钥才把 SSH 登录信息交给控制台；其余主机的 SSH 在控制台里置灰（Admin 同时清除旧凭据）。
 	ssh, err := host.ConsoleSSH()

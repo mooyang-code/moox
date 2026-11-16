@@ -1,6 +1,7 @@
 // Command e2e-helper 给跨模块测试起一个只有路由层的主机网关：验签、防重放、调用名单、按部署算路由都走真实代码，
 // 上游地址换成测试给的回环地址。测试调用方的公钥从环境变量 MOOX_GATEWAY_E2E_PUBLIC_KEY 读（base64）；
-// moox-cli 按非主机身份登记，其余调用方按“部署在本机、用本机的主机密钥签名”登记。生产不用它。
+// moox-cli 与外部身份按非主机身份登记，其余调用方按“部署在本机、用本机的主机密钥签名”登记。
+// entry-native 模式下本机登记成外部入口，监听上挂的是外部入口（生产里的 11004）。生产不用它。
 package main
 
 import (
@@ -28,7 +29,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "kline-native", "access-native, kline-native, storage-native, doctor-native or admin-native")
+	mode := flag.String("mode", "kline-native", "entry-native, kline-native, storage-native, doctor-native or admin-native")
 	nodeID := flag.String("node-id", "", "test host ID")
 	upstream := flag.String("upstream-addr", "", "loopback fixture upstream")
 	address := flag.String("listen-addr", "127.0.0.1:0", "fixture listener")
@@ -39,7 +40,7 @@ func main() {
 		components []string
 		caller     string
 	}{
-		"access-native":  {[]string{"storage-primary"}, "access"},
+		"entry-native":   {[]string{"storage-primary"}, "moox-skill"},
 		"kline-native":   {[]string{"storage-primary"}, servicecatalog.OperatorMooxCLI},
 		"storage-native": {[]string{"storage-primary", "storage-view"}, servicecatalog.OperatorMooxCLI},
 		"doctor-native":  {[]string{"admin", "monitor"}, servicecatalog.OperatorMooxCLI},
@@ -92,7 +93,9 @@ func run(hostID string, components []string, caller, upstreamAddress, listenAddr
 			addresses[service.Path] = upstreamAddress
 		}
 	}
-	if caller == servicecatalog.OperatorMooxCLI {
+	external := catalog.ExternalIdentity(caller)
+	raw.Hosts[0].ExternalEntry = external
+	if caller == servicecatalog.OperatorMooxCLI || external {
 		raw.Identities = []*pb.SnapshotIdentity{{Identity: caller, SignPublicKey: public}}
 	} else {
 		// 调用方也算部署在本机，用本机的主机密钥签名。
@@ -125,7 +128,11 @@ func run(hostID string, components []string, caller, upstreamAddress, listenAddr
 	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()),
 		server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.hostgateway.Fixture"),
 		server.WithCurrentSerializationType(codec.SerializationTypeNoop))
-	if err := proxy.Register(service); err != nil {
+	register := proxy.Register
+	if external {
+		register = proxy.RegisterExternal
+	}
+	if err := register(service); err != nil {
 		return err
 	}
 	if err := directory.Register(service, state); err != nil {

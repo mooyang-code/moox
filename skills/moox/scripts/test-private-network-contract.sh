@@ -18,20 +18,20 @@ grep -Fq '### Tencent Private Network' "${SKILL}" || fail "SKILL.md is missing t
 grep -Fq 'references/private-network.md' "${INSTALL}" || fail "install.md does not point agents at private-network.md"
 
 description="$(sed -n 's/^description: //p' "${SKILL}" | head -1)"
-for trigger in 'CCN' '云联网' 'SCF 公网' 'SCF VPC' '内网组网' 'private-network' 'MOOX_ACCESS_ADDRESS'; do
+for trigger in 'CCN' '云联网' 'SCF 公网' 'SCF VPC' '内网组网' 'private-network' 'MOOX_ENTRY_ADDRESS'; do
   grep -Fq "${trigger}" <<<"${description}" || fail "skill description is missing the ${trigger} trigger"
 done
 
-# 示例配置必须说明 SCF 经同地域 Access 私网地址接入。
-for required in 'scf_plan.regions' 'access_host' 'private_address'; do
+# 示例配置必须说明 SCF 经同地域入口主机的私网地址接入。
+for required in 'scf_plan.regions' 'entry_host' 'private_address'; do
   grep -Fq "${required}" "${TEMPLATE}" || fail "example is missing ${required} guidance"
 done
 
 for required in \
   'private_address' \
-  'access_host' \
+  'entry_host' \
   'scf_plan.regions' \
-  'MOOX_ACCESS_ADDRESS' \
+  'MOOX_ENTRY_ADDRESS' \
   'public_net_status' \
   'ModifyInstancesVpcAttribute' \
   'MOOX_PUBLIC_HOST' \

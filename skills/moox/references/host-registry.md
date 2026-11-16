@@ -12,8 +12,8 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 | 主机 ID | 中文名 | 运行 |
 | --- | --- | --- |
 | `control` | 控制机 | Admin、Monitor、Collector（含云函数管理）、因子管理、策略、控制台 |
-| `storage` | 存储机 | Storage primary/view、EventBus、Access |
-| `overseas` | 海外机 | Trade、Access、EgressProxy、Collector Stream |
+| `storage` | 存储机 | Storage primary/view、EventBus；网关开外部入口（`external_entry = true`） |
+| `overseas` | 海外机 | Trade、EgressProxy、Collector Stream；网关开外部入口 |
 | `factor` | 因子机 | 因子引擎、归档 Worker、内置对象存储（Linux，可以是内网机器） |
 
 `moox.toml` 里 `[hosts.<ID>]` 写 `label`（不写时按 ID 生成）、`address`、`region`、`ssh = { port, username }`；

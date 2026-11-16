@@ -215,7 +215,7 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 
 // hostSpec 把离线拓扑里的主机转换成部署同步的输入；SSH 凭据随主机一起写入。
 func hostSpec(h hostbundle.Host) sysdeploy.HostSpec {
-	spec := sysdeploy.HostSpec{HostID: h.HostID, Label: h.Label, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Reachability: h.Reachability, Description: h.Description, Components: h.Components}
+	spec := sysdeploy.HostSpec{HostID: h.HostID, Label: h.Label, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Reachability: h.Reachability, ExternalEntry: h.ExternalEntry, Description: h.Description, Components: h.Components}
 	if h.SSH != nil && h.SSH.Port != 0 {
 		ssh := &sysdeploy.SSHSpec{Port: h.SSH.Port, User: h.SSH.User}
 		if h.SSH.AuthType == "private_key" {

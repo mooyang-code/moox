@@ -24,8 +24,8 @@ func productionTopology() Topology {
 	}
 	for host, ids := range map[string][]string{
 		"control":  {"admin", "eventbus", "monitor", "collector", "factor-mgr", "strategy"},
-		"storage":  {"storage-primary", "storage-view", "access"},
-		"overseas": {"access", "egress-proxy", "trade", "collector-stream", "callback-dispatcher"},
+		"storage":  {"storage-primary", "storage-view"},
+		"overseas": {"egress-proxy", "trade", "collector-stream", "callback-dispatcher"},
 	} {
 		for _, id := range ids {
 			t.Deployments = append(t.Deployments, Deployment{HostID: host, ComponentID: id, Status: Enabled})
@@ -53,7 +53,7 @@ func TestTopologyRejectsInvalidDeploymentsAtomically(t *testing.T) {
 			p.Hosts[2].Status = Disabled
 			p.Deployments = append(p.Deployments, Deployment{HostID: "overseas", ComponentID: "collector", Status: Enabled})
 		}},
-		{"same-host port conflict", func(c *Catalog, p *Topology) { componentPtr(c, "access").Health.Port = 11012 }},
+		{"same-host port conflict", func(c *Catalog, p *Topology) { componentPtr(c, "trade").Health.Port = 11012 }},
 		{"unknown host", func(c *Catalog, p *Topology) { p.Deployments[0].HostID = "unknown" }},
 		{"unknown component", func(c *Catalog, p *Topology) { p.Deployments[0].ComponentID = "unknown" }},
 		{"duplicate deployment", func(c *Catalog, p *Topology) { p.Deployments = append(p.Deployments, p.Deployments[0]) }},
@@ -146,8 +146,8 @@ func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 		routes  int
 		callers []string
 	}{
-		"control":  {179, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-engine", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
-		"storage":  {65, []string{"access", "archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "strategy"}},
+		"control":  {179, []string{"archive-mgr", "collector", "collector-operator", "collector-stream", "console", "factor-engine", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
+		"storage":  {65, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "moox-skill", "scf-collector", "strategy"}},
 		"overseas": {64, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}},
 	}
 	for _, host := range p.Hosts {
@@ -187,7 +187,8 @@ func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 				t.Fatalf("route forwards to another host: %+v", route)
 			}
 			for _, caller := range route.Callers {
-				if !c.Allowed(caller, route.ServicePath, route.Method) {
+				// 外部身份在名单上，但只能从外部入口进来（PrincipalAllowed）；其余调用方按 Allowed。
+				if !c.Allowed(caller, route.ServicePath, route.Method) && !c.PrincipalAllowed(caller, route.ServicePath, route.Method) {
 					t.Fatalf("compiled ACL widened: %s %s/%s", caller, route.ServicePath, route.Method)
 				}
 			}
@@ -196,15 +197,12 @@ func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 			}
 		}
 		for _, caller := range callers {
-			if strings.Contains(caller, "*") || strings.Contains(caller, "@") || slices.Contains([]string{"scf-collector", "moox-skill", "collector-operator"}, caller) {
-				t.Fatalf("unexpanded or external caller scope %q", caller)
+			if strings.Contains(caller, "*") || strings.Contains(caller, "@") || caller == "access" {
+				t.Fatalf("unexpanded or removed caller scope %q", caller)
 			}
-		}
-		if (host.ID == "overseas") && slices.Contains(callers, "access") {
-			t.Fatal("access must not have permission to trade or egress")
-		}
-		if (host.ID == "storage" || host.ID == "control") && !slices.Contains(callers, "access") {
-			t.Fatal("external whitelist did not add access")
+			if host.ID == "overseas" && c.ExternalIdentity(caller) {
+				t.Fatalf("外部身份 %s 不该出现在海外机（Trade、出口代理）的名单上", caller)
+			}
 		}
 		t.Logf("%s routes=%d callers=%v", host.ID, len(compiled.Routes), callers)
 	}
@@ -417,7 +415,7 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 	if !slices.Equal(list.Callers, []string{"console", "monitor", "moox-cli", "strategy"}) || !list.ReadOnly {
 		t.Fatalf("ListArchiveTasks 只读方法允许 monitor 与 strategy: %+v", list)
 	}
-	// ArchiveWorker 的方法只有归档 worker 能调：它用所在主机的密钥直接到网关，不经 access。
+	// ArchiveWorker 的方法只有归档 worker 能调：它用所在主机的密钥直接到网关，不是外部身份。
 	pull := routes["trpc.moox.archive.ArchiveWorker/PullArchiveRun"]
 	if !slices.Equal(pull.Callers, []string{"archive-worker"}) {
 		t.Fatalf("PullArchiveRun callers = %v", pull.Callers)
@@ -482,7 +480,7 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 	}
 }
 
-// 因子机是只能出站的主机：外部程序以外部身份经 Access 访问系统，不是网关调用方；组件健康只看上报，它们的健康端口不进中转许可。
+// 因子机是只能出站的主机：组件健康只看上报，它们的健康端口不进中转许可。
 // 因子引擎声明的服务另见 TestExternalProgramServiceRoutesThroughItsHostGateway。
 func TestOutboundFactorHostDoesNotRelayHealthPorts(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()

@@ -166,9 +166,6 @@ func (c Catalog) Validate() error {
 			return fmt.Errorf("external identity %q is not a caller of any method", id)
 		}
 	}
-	if len(c.ExternalIdentities()) != 0 && !ids["access"] {
-		return fmt.Errorf("external identities require the access component")
-	}
 	return nil
 }
 
@@ -177,7 +174,7 @@ func (c Catalog) Validate() error {
 func (c Catalog) validateIdentities(components map[string]bool) (map[string]bool, error) {
 	identities := map[string]bool{}
 	for _, identity := range c.Identities {
-		reserved := slices.Contains([]string{OperatorConsole, OperatorMooxCLI, "access", hostGatewayCaller}, identity.ID)
+		reserved := slices.Contains([]string{OperatorConsole, OperatorMooxCLI, hostGatewayCaller}, identity.ID)
 		if !identifier.MatchString(identity.ID) || identities[identity.ID] || reserved || components[identity.ID] {
 			return nil, fmt.Errorf("invalid or duplicate identity %q", identity.ID)
 		}
@@ -190,7 +187,7 @@ func (c Catalog) validateIdentities(components map[string]bool) (map[string]bool
 }
 
 // validateMethodCallers 校验方法的 callers 与 operators。callers 只能是组件或 identities 里的身份，不重复；
-// 人操作的 console、moox-cli 只能写在 operators 里；access 由外部身份推出，不能直接写；host-gateway 只用于 GatewayControl。
+// 人操作的 console、moox-cli 只能写在 operators 里；host-gateway 只用于 GatewayControl。
 func validateMethodCallers(servicePath string, method Method, ids, identities map[string]bool) error {
 	seen := map[string]bool{}
 	for _, caller := range method.Callers {
@@ -205,8 +202,6 @@ func validateMethodCallers(servicePath string, method Method, ids, identities ma
 			}
 		case caller == OperatorConsole || caller == OperatorMooxCLI:
 			return fmt.Errorf("service %q method %q lists %q in callers; use operators", servicePath, method.Name, caller)
-		case caller == "access":
-			return fmt.Errorf("service %q method %q lists access; it follows from external identities", servicePath, method.Name)
 		case !ids[caller] && !identities[caller]:
 			return fmt.Errorf("service %q method %q has unknown caller %q", servicePath, method.Name, caller)
 		}
@@ -224,7 +219,7 @@ func validateMethodCallers(servicePath string, method Method, ids, identities ma
 }
 
 // validateRelayHTTP 校验外部程序的 relay_http：调用方只能是内置调用方（非外部组件、console、moox-cli），不重复；
-// 端口不能与目录里任何其他组件的端口相同，ValidRelay 只凭端口号区分健康端口与 relay_http 端口，撞上就有歧义。
+// 端口不能与目录里任何其他组件的端口相同：中转许可只凭端口号认 relay_http 端口，撞上就有歧义。
 func (c Catalog) validateRelayHTTP(component Component, ids, external map[string]bool) error {
 	relay := component.RelayHTTP
 	if relay == nil {

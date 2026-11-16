@@ -120,8 +120,8 @@ func TestExternalFileConfigRealTRPCUsesAssignedCredentialAndFixedInstance(t *tes
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "unrelated-key")
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "unrelated-signing-key-at-least-32-bytes")
 	t.Setenv("MOOX_GATEWAY_CALLER", "admin")
-	t.Setenv("MOOX_ACCESS_ADDRESS", "192.0.2.99:1")
-	t.Setenv("MOOX_ACCESS_ID", "access@unrelated")
+	t.Setenv("MOOX_ENTRY_ADDRESS", "192.0.2.99:1")
+	t.Setenv("MOOX_ENTRY_HOST", "unrelated")
 	for _, principal := range []struct{ caller, service, method string }{
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch"},
 		{"collector-operator", "trpc.moox.collector.CollectMgr", "SyncSubjects"},
@@ -138,9 +138,9 @@ func TestExternalFileConfigRealTRPCUsesAssignedCredentialAndFixedInstance(t *tes
 			counted := &countingListener{Listener: listener}
 			credential := authtest.Identity(principal.caller)
 			metadata := CallMetadata{SpaceID: "crypto", TraceID: "external-config-fixture"}
-			startWireServer(t, counted, credential, "access@storage", metadata)
+			startWireServer(t, counted, credential, "storage", metadata)
 			var config ExternalFileConfig
-			decoder := yaml.NewDecoder(strings.NewReader("access_address: " + listener.Addr().String() + "\naccess_id: access@storage\ncaller: " + principal.caller + "\nkey_file: ../secrets/external.key\n"))
+			decoder := yaml.NewDecoder(strings.NewReader("entry_address: " + listener.Addr().String() + "\nentry_host: storage\ncaller: " + principal.caller + "\nkey_file: ../secrets/external.key\n"))
 			decoder.KnownFields(true)
 			require.NoError(t, decoder.Decode(&config))
 			client, err := config.OpenExternal(configPath)
@@ -183,17 +183,17 @@ func TestExternalFileConfigRealTRPCUsesAssignedCredentialAndFixedInstance(t *tes
 }
 
 func TestExternalFileConfigRejectsPublicConfigurationBeforeReadingKeys(t *testing.T) {
-	valid := ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage",
+	valid := ExternalFileConfig{Address: "entry.example.test:11004", Host: "storage",
 		Caller: "moox-skill", KeyFile: "../secrets/skill.key"}
 	for _, change := range []struct {
 		name string
 		edit func(*ExternalFileConfig)
 	}{
-		{"url", func(c *ExternalFileConfig) { c.Address = "ip://access.example.test:11004" }},
-		{"missing-port", func(c *ExternalFileConfig) { c.Address = "access.example.test" }},
-		{"invalid-port", func(c *ExternalFileConfig) { c.Address = "access.example.test:65536" }},
-		{"bare-host-id", func(c *ExternalFileConfig) { c.InstanceID = "storage" }},
-		{"unknown-host-id", func(c *ExternalFileConfig) { c.InstanceID = "access@Storage" }},
+		{"url", func(c *ExternalFileConfig) { c.Address = "ip://entry.example.test:11004" }},
+		{"missing-port", func(c *ExternalFileConfig) { c.Address = "entry.example.test" }},
+		{"invalid-port", func(c *ExternalFileConfig) { c.Address = "entry.example.test:65536" }},
+		{"prefixed-host-id", func(c *ExternalFileConfig) { c.Host = "access@storage" }},
+		{"unknown-host-id", func(c *ExternalFileConfig) { c.Host = "Storage" }},
 		{"internal-caller", func(c *ExternalFileConfig) { c.Caller = "collector" }},
 		{"unknown-caller", func(c *ExternalFileConfig) { c.Caller = "other" }},
 		{"component-caller", func(c *ExternalFileConfig) { c.Caller = "factor-engine" }},
@@ -218,7 +218,7 @@ func TestExternalFileConfigRejectsPublicConfigurationBeforeReadingKeys(t *testin
 func TestExternalFileConfigPrivateKeyCannotFallBackToEnvironment(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "environment-signing-key-at-least-32-bytes")
 	root := t.TempDir()
-	config := ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage",
+	config := ExternalFileConfig{Address: "entry.example.test:11004", Host: "storage",
 		Caller: "moox-skill", KeyFile: filepath.Join(root, "missing.key")}
 	_, err := config.OpenExternal(filepath.Join(root, "app.yaml"))
 	require.ErrorContains(t, err, "load gateway signing key")

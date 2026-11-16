@@ -25,6 +25,7 @@ components:
     ports:
       - 11002
       - 11003
+      - 11004
     health:
       port: 11012
     doctor:
@@ -33,8 +34,10 @@ components:
       duties:
         - 同步路由、服务目录与校验密钥
         - 校验签名和 ACL 并仅转发本机服务
+        - 标了外部入口的主机另开 11004，接收外部身份的签名请求，目标不在本机时以 host-gateway 身份转给目标主机
       inputs:
         - 签名 tRPC 请求
+        - 外部身份（scf-collector、moox-skill、collector-operator）的签名 tRPC 请求
         - GatewayControl 快照
       outputs:
         - 本机服务响应
@@ -498,7 +501,7 @@ components:
             read_only: true
           - name: SetIngestMode
             operators: [moox-cli]
-          # 采集名单干预：控制台、moox-cli；旁路程序用外部身份 collector-operator 经 Access 调用。
+          # 采集名单干预：控制台、moox-cli；旁路程序用外部身份 collector-operator 从外部入口调用。
           - name: SetSubjectExclusions
             callers: [collector-operator]
           - name: ClearSubjectExclusions
@@ -1214,43 +1217,6 @@ components:
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: true
-  - id: access
-    name: 外部接入
-    binary: moox-access
-    scope: any
-    replicas: multi
-    protected: false
-    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
-    config_files:
-      - from: modules/access/config/app.yaml
-      - from: modules/access/config/trpc_go.yaml
-    after: [host-gateway]
-    ports:
-      - 11004
-    health:
-      port: 11014
-    doctor:
-      role: access
-      description: 外部签名 tRPC 接入与重新签名转发
-      duties:
-        - 校验外部调用方签名、防重放与逐方法白名单
-        - 以 access 身份转发原始请求字节
-      inputs:
-        - 外部调用方的签名 tRPC 请求
-      outputs:
-        - 主机网关返回的原始响应
-      dependencies:
-        - host-gateway
-      transport: reporter
-      functional_observability: not_applicable
-      config_paths:
-        - access/config/app.yaml
-        - access/config/trpc_go.yaml
-      writable_paths:
-        - data/access
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: false
   - id: egress-proxy
     name: 出口代理
     binary: moox-egress-proxy

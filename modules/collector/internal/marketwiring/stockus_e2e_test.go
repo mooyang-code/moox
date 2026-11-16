@@ -179,7 +179,7 @@ func TestPlanPeriodValidStockUS(t *testing.T) {
 	}
 }
 
-// 云函数在这些时刻被定时器触发时直接返回 no_work，不连 Access、不取数：开盘前、收市后、周末、节假日（2026-11-26）、半日市 13:00 之后。
+// 云函数在这些时刻被定时器触发时直接返回 no_work，不连外部入口、不取数：开盘前、收市后、周末、节假日（2026-11-26）、半日市 13:00 之后。
 // 触发时刻是周期的收盘时刻（北京时间）：22:35 触发对应 22:30～22:35 这个周期。
 func TestStockUSTimerReturnsNoWorkOutsideSessions(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "stockus")

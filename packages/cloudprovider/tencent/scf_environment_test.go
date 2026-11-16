@@ -18,7 +18,7 @@ func TestValidateSCFEnvironmentIncludesAllCredentialsAndRedactsValues(t *testing
 
 func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *testing.T) {
 	valid := map[string]string{
-		"MOOX_CALLER": "scf-collector", "MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 43) + "=",
+		"MOOX_CALLER": "scf-collector", "MOOX_ENTRY_ADDRESS": "storage.example:11004", "MOOX_ENTRY_HOST": "storage", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 43) + "=",
 		"MOOX_SPACE_ID": "stockcn", "MOOX_CODE_PACKAGE_ID": "collector_dev_00000000-0000-0000-0000-000000000000",
 		"MOOX_CLS_ENABLED": "true", "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com", "MOOX_CLS_TOPIC_ID": "topic", "MOOX_CLS_TIMEOUT_MS": "3000", "MOOX_CLS_SECRET_ID": "cls-id", "MOOX_CLS_SECRET_KEY": "cls-secret",
 		"MOOX_EVENTBUS_NATS_URL": "tls://eventbus.example:4222", "MOOX_EVENTBUS_NATS_USERNAME": "collector", "MOOX_EVENTBUS_NATS_PASSWORD": "bus-secret", "MOOX_EVENTBUS_NATS_TLS_CA_FILE": "certs/eventbus-ca.pem",
@@ -40,10 +40,10 @@ func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *tes
 	}
 	invoke["MOOX_FETCH_TIMEOUT_SECONDS"] = "90"
 	if err := ValidateCollectorMarketFetchEnvironment(invoke); err != nil {
-		t.Fatalf("Invoke has its own timeout and shares Access: %v", err)
+		t.Fatalf("Invoke has its own timeout and shares the entry: %v", err)
 	}
 	if err := ValidateCollectorTimerEnvironment(invoke); err != nil {
-		t.Fatalf("Timer shares the same Access connection: %v", err)
+		t.Fatalf("Timer shares the same entry connection: %v", err)
 	}
 	for key := range valid {
 		t.Run("missing "+key, func(t *testing.T) {
@@ -59,8 +59,8 @@ func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *tes
 	}
 	for _, test := range []struct{ key, value string }{
 		{"MOOX_CALLER", "collector"},
-		{"MOOX_ACCESS_ADDRESS", "localhost:11004"}, {"MOOX_ACCESS_ADDRESS", "storage.example:0"}, {"MOOX_ACCESS_ADDRESS", "ip://storage.example:11004"}, {"MOOX_ACCESS_ADDRESS", "storage.example:11004/path"},
-		{"MOOX_ACCESS_ID", "storage"}, {"MOOX_ACCESS_ID", "access@bad_node"}, {"MOOX_CALLER_KEY_ID", "bad key"}, {"MOOX_CALLER_KEY_ID", ""}, {"MOOX_CALLER_KEY", "short"}, {"MOOX_CALLER_KEY", strings.Repeat("a", 4097)}, {"MOOX_CALLER_KEY", strings.Repeat("a", 32) + "\n"},
+		{"MOOX_ENTRY_ADDRESS", "localhost:11004"}, {"MOOX_ENTRY_ADDRESS", "storage.example:0"}, {"MOOX_ENTRY_ADDRESS", "ip://storage.example:11004"}, {"MOOX_ENTRY_ADDRESS", "storage.example:11004/path"},
+		{"MOOX_ENTRY_HOST", "access@storage"}, {"MOOX_ENTRY_HOST", "bad_node"}, {"MOOX_CALLER_KEY_ID", "bad key"}, {"MOOX_CALLER_KEY_ID", ""}, {"MOOX_CALLER_KEY", "short"}, {"MOOX_CALLER_KEY", strings.Repeat("a", 4097)}, {"MOOX_CALLER_KEY", strings.Repeat("a", 32) + "\n"},
 		{"MOOX_EVENTBUS_NATS_URL", "nats://eventbus.example:4222"}, {"MOOX_CLS_ENABLED", "false"}, {"MOOX_CLS_TIMEOUT_MS", "invalid"}, {"MOOX_EVENTBUS_NATS_TLS_CA_FILE", "/tmp/ca.pem"},
 	} {
 		t.Run("invalid "+test.key+" "+test.value, func(t *testing.T) {

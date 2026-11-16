@@ -32,8 +32,8 @@ moox-cli setup init \
 `metadata.yaml` 创建 Admin 业务空间并完成 Storage 元数据初始化；Monitor 的
 `dataset-health-policy.yaml` 和 Collector 的 `collection-tasks.yaml` 由打包与原生安装流程放入各组件配置目录，分别在模块启动时读取。
 
-启用 SCF 时，每个采集地域都要有一台同地域、带私网地址的 Access 主机；函数在该地域 VPC 里经
-Access 私网地址认领和写入，规则见 `skills/moox/references/private-network.md`。
+启用 SCF 时，每个采集地域都要有一台同地域、带私网地址、写了 `external_entry = true` 的入口主机；函数在该地域 VPC 里经
+它的外部入口私网地址写入，规则见 `skills/moox/references/private-network.md`。
 
 默认因子任务在 `factor-tasks.yaml`：`tasks` 声明因子任务（`id`、`name`、`space_id`、`source_dataset_id`、`freq`），
 任务的成员用内嵌的 `members` 写：`{factor: ema, params: {span: 20, warmup: 50000}}` 是固定成员，`{factor: ma, var: true}` 是可变成员（由关联的策略逐期提交参数）；

@@ -63,9 +63,11 @@ type Host struct {
 	SSHPort  int
 	SSHUser  string
 	// Outbound 为 true 表示只能出站（因子机），经 control 网关的反向连接中转。
-	Outbound   bool
-	Components []string
-	// 以下是识别到的私有网络，只有存储服务器用到：A 股云函数在它的 VPC 里经私网地址访问它上面的 Access。
+	Outbound bool
+	// ExternalEntry 为 true 表示这台主机的网关开外部入口（11004）。
+	ExternalEntry bool
+	Components    []string
+	// 以下是识别到的私有网络，只有云函数的入口主机用到：A 股云函数在它的 VPC 里经私网地址访问它的外部入口。
 	PrivateAddress string
 	VpcID          string
 	SubnetID       string
@@ -177,6 +179,7 @@ func (r *Request) buildTopology(ctx context.Context, env Environment) error {
 			}
 			target := &r.hosts[index]
 			target.Components = append(target.Components, role.components...)
+			target.ExternalEntry = target.ExternalEntry || role.externalEntry
 			continue
 		}
 		host, err := item.server.host(ctx, env, r.Tencent, role, catalog)
@@ -251,7 +254,7 @@ func (s *Server) host(ctx context.Context, env Environment, keys Keys, role Role
 	return Host{
 		ID: role.hostID, Address: s.Address, Region: instance.Region, Provider: "tencent",
 		SSHPort: target.SSHPort, SSHUser: target.SSHUser, Components: append([]string(nil), role.components...),
-		PrivateAddress: instance.PrivateIP, VpcID: instance.VpcID, SubnetID: instance.SubnetID,
+		ExternalEntry: role.externalEntry, PrivateAddress: instance.PrivateIP, VpcID: instance.VpcID, SubnetID: instance.SubnetID,
 	}, nil
 }
 

@@ -38,7 +38,7 @@ cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY ./scripts/build/build.sh cli
 # 全部组件的 Linux 二进制（纯 Go 交叉编译；Storage 与前端在本机 Docker 里，macOS 先 colima start），产物在 $WT/bin-linux
 cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY bash scripts/build/build-linux-local.sh --out $WT/bin-linux \
   admin host-gateway hostagent eventbus egress-proxy collector collector-stream factor-mgr factor-engine \
-  archive-mgr archive-worker strategy strategy-cli trade callback-dispatcher monitor access storage-cli storage
+  archive-mgr archive-worker strategy strategy-cli trade callback-dispatcher monitor storage-cli storage
 ```
 
 - 目标清单和 `scripts/release/build-release.sh` 里的 `server_targets` 一致（去掉 `collector-scf`）；`archive-worker` 这个目标会带上内置对象存储的 `weed`。
@@ -78,10 +78,10 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 0 | `setup operator` | 这台电脑没有 `~/.config/moox/moox-cli.key` 就生成一把签名私钥，有就复用（重跑不换） |
 | 1 | 防火墙 | 放行各主机对外的端口 |
 | 2 | `setup deploy --host control --component admin,host-gateway,host-agent` | 先在控制机上执行 `moox-admin-cli bootstrap`（建库、CA、主密钥、管理员、登记全部主机与部署、登记这台电脑的 `moox-cli` 公钥、签发控制机的签名密钥，只建不改），再装这三个组件；控制机的根证书同时记到这台电脑 |
-| 3 | `setup deploy --host storage` | Storage、EventBus、存储机上的 Access；Storage 主库启动前自动初始化元数据库 |
+| 3 | `setup deploy --host storage` | Storage、EventBus，存储机的网关同时开外部入口（11004）；Storage 主库启动前自动初始化元数据库 |
 | 4 | `setup init --stage storage` | 业务空间、初始秘密、元数据。Collector 启动时要核对内置任务的元数据，所以排在控制机其余组件之前 |
 | 5 | `setup deploy --host control` | 控制机其余组件（Monitor、Collector、因子管理、归档管理、策略） |
-| 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、Access、出口代理、collector-stream、事件中心）；因子机（因子引擎、归档 worker、内置对象存储）排最后 |
+| 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream、事件中心，网关开外部入口）；因子机（因子引擎、归档 worker、内置对象存储）排最后 |
 | 7 | 等全部组件就绪 | 各台的本机 `/readyz` |
 | 8 | `setup init` | 告警渠道、云账户、日志服务、采集计划、登录校验（这些要等 Collector、Monitor 起来） |
 | 9 | 备份配置、`setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入 |
@@ -125,9 +125,9 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 ### A 股空间（stockcn）
 
-`config init` 第一步验证密钥时同时取到账号 AppId，识别服务器时拿到它们的 VPC、子网与私网 IP，据此自动生成 stockcn 的 `[scf_plan]`：函数入口优先选存储服务器所在地域（函数与 Storage 同地域，写入全程走内网），存储服务器不可用时退而选其他带 Access 且有可用 VPC 的主机（如海外服务器）（云账号引用 Admin 里的 `tencent-default`，代码包桶 `moox-scf-<管理台地域>-<AppId>` 首次上传时自动创建）；没有任何可用入口主机时不生成、要手工补（入口主机要有可绑定的 VPC、所在地域支持云函数、同地域的其他主机在同一个 VPC），或者子用户没有 CAM 读权限取不到 AppId（页面会提示）。只有生成计划时才给入口主机写 `private_address`。`setup init` 据此登记云账号。
+`config init` 第一步验证密钥时同时取到账号 AppId，识别服务器时拿到它们的 VPC、子网与私网 IP，据此自动生成 stockcn 的 `[scf_plan]`：函数入口优先选存储服务器所在地域（函数与 Storage 同地域，写入全程走内网），存储服务器不可用时退而选其他开了外部入口（`external_entry = true`）且有可用 VPC 的主机（如海外服务器）（云账号引用 Admin 里的 `tencent-default`，代码包桶 `moox-scf-<管理台地域>-<AppId>` 首次上传时自动创建）；没有任何可用入口主机时不生成、要手工补（入口主机要有可绑定的 VPC、所在地域支持云函数、同地域的其他主机在同一个 VPC），或者子用户没有 CAM 读权限取不到 AppId（页面会提示）。只有生成计划时才给入口主机写 `private_address`。`setup init` 据此登记云账号。
 
-`setup start --space-id stockcn` 的前提是 `[scf_plan]` 打开并配了 stockcn（见 `moox.toml.example`：`[[scf_plan.spaces]] space_id = "stockcn"`，`markets.equity` 写入口主机所在地域，优先存储机所在地域，该地域要有带 access 组件、配了 `private_address` 的主机）。它依次：
+`setup start --space-id stockcn` 的前提是 `[scf_plan]` 打开并配了 stockcn（见 `moox.toml.example`：`[[scf_plan.spaces]] space_id = "stockcn"`，`markets.equity` 写入口主机所在地域，优先存储机所在地域，该地域要有写了 `external_entry = true`、配了 `private_address` 的主机）。它依次：
 
 1. 启用任务时，任务绑定的标签还没有成员（全新部署时自动标签要等 Collector 下一轮标签巡检才首次同步）就先立即同步再启用：沪深 300 成分标签 `cn_hs300`（属性 `sync.index = "000300"`，东方财富成分接口，之后每天 08:40 自动同步，接口失败时保留旧成员）；
 2. 启用“A 股 K 线 5m”任务并触发对账，Collector 建出 SCF 计划（300 只，函数个数按各源权重、限速和标的数估算，约 4 个，每 5 分钟触发一次、收盘后 1 秒同时取数，午休、收盘后、非交易日函数直接返回 `no_work`）；
@@ -277,7 +277,6 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 | `setup start` 报 `CreateFactorTask failed ... metadata row not found` | 种子里有源数据集不存在的因子任务 | 见第 4 节“`setup start` 的已知限制” |
 | 因子 `factor_memory_budget_exceeded`、`status=degraded rows=0` | 引擎 `compute.max_memory` 装不下一期计算 | 按第 4 节用 `tune` 的建议值写 `[overrides]` 后重新部署因子引擎 |
 | 引擎重启后一段时间 `lease conflict`、`not_ready` | 旧租约还没过期 | 等几十秒，再等窗口载入（约 20 秒）和 warming |
-| 告警“外部接入（overseas）连接被拒绝” | 海外机的 `[deployments]` 里没有 `access` | 补上后 `setup deploy --host overseas` |
 | 仓库里多出二进制文件 | `go build ./...` 交叉编译在单 main 模块里留了产物 | 立即删除；别 `git add -A` |
 
 ## 8. 收尾

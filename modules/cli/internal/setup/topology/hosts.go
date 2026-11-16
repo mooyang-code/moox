@@ -35,8 +35,10 @@ type HostDefinition struct {
 	Region         string `toml:"region"`
 	Provider       string `toml:"provider"`
 	// Reachability：direct（默认）或 outbound（只能出站，经控制机网关反向连接）。
-	Reachability string    `toml:"reachability"`
-	SSH          SSHConfig `toml:"ssh"`
+	Reachability string `toml:"reachability"`
+	// ExternalEntry：这台主机的网关开外部入口（11004），云函数、Skill、采集名单工具从这里进来。只能出站的主机不能开。
+	ExternalEntry bool      `toml:"external_entry"`
+	SSH           SSHConfig `toml:"ssh"`
 }
 
 func (d *HostDefinition) normalize() {
@@ -59,7 +61,9 @@ type Host struct {
 	Region         string
 	Provider       string
 	// Reachability 为空表示可直达，outbound 表示只能出站。
-	Reachability   string
+	Reachability string
+	// ExternalEntry 表示这台主机的网关开外部入口（11004）。
+	ExternalEntry  bool
 	Port           int
 	Username       string
 	PrivateKeyFile string
@@ -95,9 +99,23 @@ func (c *Config) HostByID(id string) Host {
 	}
 	return Host{
 		Name: id, Label: label, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region,
-		Provider: definition.Provider, Reachability: reachability, Port: definition.SSH.Port, Username: definition.SSH.Username,
+		Provider: definition.Provider, Reachability: reachability, ExternalEntry: definition.ExternalEntry, Port: definition.SSH.Port, Username: definition.SSH.Username,
 		PrivateKeyFile: definition.SSH.PrivateKeyFile,
 	}
+}
+
+// EntryHost 返回默认的外部入口主机：存储机标了 external_entry 就用它（多数外部调用的目标是 Storage，少一跳），
+// 否则取第一台标了的主机；没有主机标外部入口时返回空。
+func (c *Config) EntryHost() Host {
+	if storage := c.StorageHost(); storage.ExternalEntry {
+		return storage
+	}
+	for _, host := range c.Hosts() {
+		if host.ExternalEntry {
+			return host
+		}
+	}
+	return Host{}
 }
 
 // ComponentHost 返回单副本组件所在的主机；组件不在任何主机上或在多台主机上时返回空。
@@ -157,7 +175,7 @@ func (c *Config) Topology() (servicecatalog.Topology, error) {
 	}
 	topology := servicecatalog.Topology{ControlHostID: c.ComponentHost("admin")}
 	for _, host := range c.Hosts() {
-		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: servicecatalog.Enabled, Reachability: host.Reachability})
+		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: servicecatalog.Enabled, Reachability: host.Reachability, ExternalEntry: host.ExternalEntry})
 		for _, component := range catalog.Components {
 			if component.Scope == servicecatalog.ScopeHost {
 				topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host.Name, ComponentID: component.ID, Status: servicecatalog.Enabled})
@@ -199,6 +217,9 @@ func validateHostCatalog(catalog map[string]HostDefinition) error {
 		}
 		if _, ok := servicecatalog.ParseReachability(definition.Reachability); !ok {
 			return fmt.Errorf("config_invalid: %s.reachability must be direct or outbound", path)
+		}
+		if reachability, _ := servicecatalog.ParseReachability(definition.Reachability); definition.ExternalEntry && reachability == servicecatalog.ReachabilityOutbound {
+			return fmt.Errorf("config_invalid: %s.external_entry 不能和 reachability = \"outbound\" 一起用：外部入口要能从外面连进来", path)
 		}
 		address := strings.ToLower(strings.TrimSuffix(definition.Address, "."))
 		if ip := net.ParseIP(address); ip != nil {

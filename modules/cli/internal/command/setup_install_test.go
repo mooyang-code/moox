@@ -46,8 +46,8 @@ ssh = { port = 22, username = "builder" }
 
 [deployments]
 control = ["admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"]
-storage = ["storage-primary", "storage-view", "access", "eventbus"]
-overseas = ["trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"]
+storage = ["storage-primary", "storage-view", "eventbus"]
+overseas = ["trade", "egress-proxy", "collector-stream", "callback-dispatcher"]
 factor = ["factor-engine", "archive-worker"]
 `))
 	require.NoError(t, err)
@@ -523,8 +523,8 @@ func TestSetupInitPassesSourceDirectory(t *testing.T) {
 func TestSetupInstallWaitsForEveryComponentThatIsNotDisabled(t *testing.T) {
 	h := newInstallHarness(t)
 	overseas := h.report("overseas")
-	overseas.Units = []string{"moox-trade.service", "moox-access.service", "moox-callback-dispatcher.service"}
-	overseas.Active = []string{"moox-access.service"}
+	overseas.Units = []string{"moox-trade.service", "moox-egress-proxy.service", "moox-callback-dispatcher.service"}
+	overseas.Active = []string{"moox-egress-proxy.service"}
 	overseas.Disabled = []string{"moox-callback-dispatcher.service"}
 	waited := map[string][]string{}
 	h.deps.waitReady = func(_ context.Context, host topology.Host, components []string, _ time.Duration) (map[string]string, error) {
@@ -535,6 +535,6 @@ func TestSetupInstallWaitsForEveryComponentThatIsNotDisabled(t *testing.T) {
 	}
 	require.NoError(t, waitSetupAllReady(context.Background(), h.deps, h.snapshot))
 	require.Contains(t, waited["overseas"], "trade", "没在运行但没被停用的组件要等")
-	require.Contains(t, waited["overseas"], "access")
+	require.Contains(t, waited["overseas"], "egress-proxy")
 	require.NotContains(t, waited["overseas"], "callback-dispatcher", "被停用的组件不等")
 }

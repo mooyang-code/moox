@@ -48,6 +48,8 @@ func TestConfigRejectsInvalidIdentityListenersAndControlEndpoint(t *testing.T) {
 		func(c *Config) { c.Server.HealthAddr = "0.0.0.0:11012" },
 		func(c *Config) { c.Server.RemoteAddr = "localhost:11003" },
 		func(c *Config) { c.Server.HealthAddr = c.Server.RemoteAddr },
+		func(c *Config) { c.Server.ExternalAddr = "localhost:11004" },
+		func(c *Config) { c.Server.ExternalAddr = c.Server.RemoteAddr },
 		func(c *Config) { c.Control.Target = "https://control:11003" },
 		func(c *Config) { c.Control.Target = "127.0.0.1:11003" },
 		func(c *Config) { c.Control.Target = "192.0.2.1:11112" },
@@ -78,5 +80,23 @@ func TestConfigStrictBoundedYAMLNeverEchoesUnknownValues(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), "fixture-do-not-echo") {
 			t.Fatalf("expected redacted validation error, got %v", err)
 		}
+	}
+}
+
+// 外部入口的监听地址可选：不写就不开；入口主机上部署写成 0.0.0.0:11004，经编码、载入后原样保留。
+func TestExternalEntryAddressIsOptionalAndRoundTrips(t *testing.T) {
+	config := Default("storage", "control", "192.0.2.1")
+	raw, err := Encode(config)
+	if err != nil || strings.Contains(string(raw), "external_addr") {
+		t.Fatalf("没开外部入口时不该写 external_addr：%v\n%s", err, raw)
+	}
+	config.Server.ExternalAddr = ExternalEntryAddr
+	raw, err = Encode(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Decode(strings.NewReader(string(raw)))
+	if err != nil || loaded.Server.ExternalAddr != "0.0.0.0:11004" {
+		t.Fatalf("external_addr = %q, err = %v", loaded.Server.ExternalAddr, err)
 	}
 }

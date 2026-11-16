@@ -57,7 +57,7 @@ func operators(ids ...string) *[]string { return &ids }
 
 func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 	c := mustCatalog(t)
-	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418, "seaweedfs": 0}
+	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418, "seaweedfs": 0}
 	if len(c.Components) != len(want) {
 		t.Fatalf("components = %d", len(c.Components))
 	}
@@ -68,7 +68,7 @@ func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 		if component.Protected != slices.Contains([]string{"host-gateway", "admin"}, component.ID) {
 			t.Fatalf("incorrect protection for %s", component.ID)
 		}
-		if (component.Replicas == Multi) != (component.ID == "access") {
+		if component.Replicas == Multi {
 			t.Fatalf("incorrect replicas for %s", component.ID)
 		}
 	}
@@ -104,7 +104,6 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"wildcard caller", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"*"} }},
 		{"duplicate caller", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"monitor", "monitor"} }},
 		{"operator written as caller", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"console"} }},
-		{"access written as caller", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"access"} }},
 		{"host gateway instance as caller", func(c *Catalog) {
 			methodPtr(c, GatewayControlPath, "PullSnapshot").Callers = []string{"host-gateway@*"}
 		}},
@@ -233,7 +232,7 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"console", "trpc.moox.factor.EngineControl", "OpenReplay", false},
 		{"moox-cli", "trpc.moox.factor.EngineControl", "StepReplay", false},
 		{"monitor", "trpc.moox.factor.EngineControl", "CloseReplay", false},
-		{"access", "trpc.moox.factor.EngineControl", "OpenReplay", false},
+		{"scf-collector", "trpc.moox.factor.EngineControl", "OpenReplay", false},
 		{"strategy", "trpc.moox.trade.TradeConsoleService", "GetLogicalAccount", true},
 		{"strategy", "trpc.moox.trade.TradeConsoleService", "SubmitOrder", false},
 		{"strategy", "trpc.moox.trade.TradeConsoleService", "PauseLogicalAccount", false},
@@ -248,13 +247,12 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"moox-cli", "trpc.moox.trade.TradeConsoleService", "ListShadowTargets", true},
 		{"strategy", "trpc.moox.trade.TradeConsoleService", "ListShadowTargets", false},
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
-		{"access", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", true},
-		{"access", "trpc.moox.storage.Metadata", "DeleteDataset", false},
+		// 已删除的 access 身份什么都调不了。
+		{"access", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
 		{"factor-engine", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", true},
 		{"factor-engine", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
 		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", false},
-		{"access", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", true},
-		{"access", "trpc.moox.factor.FactorEngine", "EngineHeartbeat", false},
+		{"access", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", false},
 		{"host-gateway", GatewayControlPath, "PullSnapshot", true},
 		{"host-gateway", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", false},
 		{"host-gateway@control", GatewayControlPath, "PullSnapshot", false},
@@ -445,8 +443,8 @@ func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 	}
 }
 
-// 外部程序组件：和别的组件一样用所在主机的密钥签名，能调的方法就是 callers 里写了它的那些（与改成普通调用方之前
-// 经 Access 能调的完全相同），不是外部身份、不能经 Access 进入；可以声明只经网关路由的服务（因子引擎的 EngineControl），不能声明其他端口。
+// 外部程序组件：和别的组件一样用所在主机的密钥签名，能调的方法就是 callers 里写了它的那些，
+// 不是外部身份、不能从外部入口进来；可以声明只经网关路由的服务（因子引擎的 EngineControl），不能声明其他端口。
 func TestExternalProgramComponents(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string]map[string][]string{
@@ -585,25 +583,6 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 		if !c.Allowed("console", tc.path, tc.method) {
 			t.Fatalf("console lost read access to %s/%s", tc.path, tc.method)
 		}
-	}
-}
-
-func TestMissingGrantsNamesTheProvidingComponent(t *testing.T) {
-	catalog, err := LoadEmbedded()
-	if err != nil {
-		t.Fatal(err)
-	}
-	all := make([]string, 0, len(catalog.Components))
-	for _, component := range catalog.Components {
-		all = append(all, component.ID)
-	}
-	if missing := catalog.MissingGrants(all); len(missing) != 0 {
-		t.Fatalf("全部部署时不应缺项: %+v", missing)
-	}
-	without := slices.DeleteFunc(slices.Clone(all), func(id string) bool { return id == "collector" })
-	missing := catalog.MissingGrants(without)
-	if len(missing) != 1 || missing[0].Component != "collector" || missing[0].Service != "trpc.moox.collector.CollectMgr" {
-		t.Fatalf("应指出缺 collector: %+v", missing)
 	}
 }
 

@@ -1,6 +1,6 @@
 # moox-storage
 
-数据存储：primary（元数据、字段级事实、周期完成事件转发、周期账本、保留期清理）与 view（可重建 View）两个角色。外部访问由独立的 `modules/access` 模块代理。
+数据存储：primary（元数据、字段级事实、周期完成事件转发、周期账本、保留期清理）与 view（可重建 View）两个角色。外部身份（云函数、Skill）经主机网关的外部入口访问。
 
 设计文档：[存储](../../docs/模块/存储.md)
 
@@ -14,7 +14,7 @@ go test -count=1 ./modules/storage/...
 
 ## 配置
 
-`config/storage*.yaml` 与 `config/trpc_go*.yaml` 按角色区分，`config/storage_view/` 为 View 角色配置；Access 配置在 `modules/access/config/`，元数据 schema 在 `schema/metadata.sql`。需要 DuckDB 的 Linux 制品在本机的 Docker 编译镜像里构建（`moox-cli setup build-linux`，见 [构建手册](../../docs/构建手册.md)）。
+`config/storage*.yaml` 与 `config/trpc_go*.yaml` 按角色区分，`config/storage_view/` 为 View 角色配置；元数据 schema 在 `schema/metadata.sql`。需要 DuckDB 的 Linux 制品在本机的 Docker 编译镜像里构建（`moox-cli setup build-linux`，见 [构建手册](../../docs/构建手册.md)）。
 
 Metadata 20100、PrimaryStore 20102 与 DataView 20103 仅提供 loopback 原生 tRPC；20200/20201/20202 已删除。CLI 运维经操作员 SSH 网关访问，独立健康 HTTP 保留。
 

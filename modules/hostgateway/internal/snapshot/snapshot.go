@@ -37,6 +37,8 @@ type View struct {
 	routes   map[string]servicecatalog.Route
 	keys     *gatewayauth.Keys
 	relays   map[string]servicecatalog.RelayTarget
+	topology servicecatalog.Topology
+	entries  map[string]bool
 }
 
 func (v *View) String() string {
@@ -51,6 +53,15 @@ func (v *View) Proto() *pb.HostGatewaySnapshot {
 	return proto.Clone(v.raw).(*pb.HostGatewaySnapshot)
 }
 func (v *View) Directory() servicecatalog.Directory { return v.compiled.Directory.Clone() }
+
+// Topology 返回快照里的主机与部署，本进程内的网关客户端按它展开目录。
+func (v *View) Topology() ([]servicecatalog.Host, []servicecatalog.Deployment) {
+	return slices.Clone(v.topology.Hosts), slices.Clone(v.topology.Deployments)
+}
+
+// ExternalEntry 报告这台主机是否登记成外部入口：只有这样的主机才接外部身份的请求，
+// 别的网关也只认它带来源头转过来的请求。
+func (v *View) ExternalEntry(hostID string) bool { return v.entries[hostID] }
 
 // Routes 返回本机的路由（按服务、方法排序），给诊断命令用。
 func (v *View) Routes() []servicecatalog.Route { return slices.Clone(v.compiled.Routes) }
@@ -107,7 +118,7 @@ func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
 		return nil, err
 	}
 	var hosts []servicecatalog.Host
-	public := map[string]ed25519.PublicKey{}
+	public, entries := map[string]ed25519.PublicKey{}, map[string]bool{}
 	for _, host := range owned.Hosts {
 		if host == nil || len(host.ProtoReflect().GetUnknown()) != 0 || !servicecatalog.ValidHostID(host.HostId) || !servicecatalog.ValidHostAddress(host.Address) ||
 			host.PrivateAddress != "" && !servicecatalog.ValidHostAddress(host.PrivateAddress) || len(host.SignPublicKey) != 0 && len(host.SignPublicKey) != ed25519.PublicKeySize {
@@ -119,7 +130,9 @@ func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
 		}
 		// 还没签发过身份包的主机没有公钥，它的请求验不过。
 		public[host.HostId] = host.SignPublicKey
-		hosts = append(hosts, servicecatalog.Host{ID: host.HostId, Address: host.Address, PrivateAddress: host.PrivateAddress, Status: statusName(host.Enabled), Reachability: reachability})
+		// 停用的主机不算入口：它带来源头转过来的请求不认。
+		entries[host.HostId] = host.ExternalEntry && host.Enabled
+		hosts = append(hosts, servicecatalog.Host{ID: host.HostId, Address: host.Address, PrivateAddress: host.PrivateAddress, Status: statusName(host.Enabled), Reachability: reachability, ExternalEntry: host.ExternalEntry})
 	}
 	if _, ok := public[hostID]; !ok {
 		return bad("local host is not in the snapshot")
@@ -146,7 +159,7 @@ func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
 		return bad("directory")
 	}
 	compiled.Directory.Version = owned.Hash
-	v := &View{hostID: hostID, raw: owned, compiled: compiled, routes: map[string]servicecatalog.Route{}, relays: map[string]servicecatalog.RelayTarget{}}
+	v := &View{hostID: hostID, raw: owned, compiled: compiled, routes: map[string]servicecatalog.Route{}, relays: map[string]servicecatalog.RelayTarget{}, topology: topology, entries: entries}
 	for _, route := range compiled.Routes {
 		v.routes[route.ServicePath+"/"+route.Method] = route
 	}

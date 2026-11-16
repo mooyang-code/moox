@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	cloudprovider "github.com/mooyang-code/moox/packages/cloudprovider"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 const maxHostWorkers = 4
@@ -44,10 +42,7 @@ func Run(ctx context.Context, cfg *topology.Config, deps Dependencies) (Result, 
 	if cfg == nil || deps.Identity == nil || deps.SSH == nil {
 		return result, fmt.Errorf("%w: dependencies_invalid", ErrValidationFailed)
 	}
-	result, err := configResult(cfg)
-	if err != nil {
-		return result, err
-	}
+	result.Checks = append(result.Checks, Check{Name: "config", Status: "valid"})
 
 	if _, err := deps.Identity.GetCallerIdentity(ctx); err != nil {
 		result.Checks = append(result.Checks, Check{Name: "tencent_cloud", Status: "invalid", Code: "tencent_auth_failed"})
@@ -55,51 +50,6 @@ func Run(ctx context.Context, cfg *topology.Config, deps Dependencies) (Result, 
 	}
 	result.Checks = append(result.Checks, Check{Name: "tencent_cloud", Status: "valid"})
 	return appendHostChecks(ctx, deps.SSH, result, cfg.Hosts())
-}
-
-func configResult(cfg *topology.Config) (Result, error) {
-	result := Result{}
-	result.Checks = append(result.Checks, Check{Name: "config", Status: "valid"})
-	if err := CheckDeployments(cfg); err != nil {
-		result.Checks = append(result.Checks, Check{Name: "deployments", Status: "invalid", Code: "deployment_incomplete", Detail: err.Error()})
-		return result, fmt.Errorf("%w: %w", ErrValidationFailed, err)
-	}
-	result.Checks = append(result.Checks, Check{Name: "deployments", Status: "valid"})
-	return result, nil
-}
-
-// controlComponents 是可以直接加到管理台主机上的组件；Storage 这类组件对放置有要求，不能这样补。
-var controlComponents = []string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}
-
-// CheckDeployments 确认配置里的部署完整：授权服务都有组件提供。这是纯配置检查，不连接任何主机，
-// 缺组件时部署到一半才会以“未就绪”的形式暴露，所以在动手之前就要报出来。
-func CheckDeployments(manifest *topology.Config) error {
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return err
-	}
-	deployed := []string{}
-	for _, components := range manifest.Deployments {
-		deployed = append(deployed, components...)
-	}
-	missing := catalog.MissingGrants(deployed)
-	if len(missing) == 0 {
-		return nil
-	}
-	control := manifest.ControlHost().Name
-	components := make([]string, 0, len(missing))
-	for _, item := range missing {
-		if !slices.Contains(components, item.Component) {
-			components = append(components, item.Component)
-		}
-	}
-	for _, id := range components {
-		if !slices.Contains(controlComponents, id) {
-			return fmt.Errorf("deployment_incomplete: [deployments] 缺少组件 %s，Access 会一直无法就绪；把现有 moox.toml 改名后重新运行 config init 生成配置", strings.Join(components, "、"))
-		}
-	}
-	return fmt.Errorf("deployment_incomplete: [deployments] 缺少组件 %s，Access 会一直无法就绪；在 moox.toml 的 [deployments] 里给主机 %s 加上 %s，再重新校验",
-		strings.Join(components, "、"), control, strings.Join(components, "、"))
 }
 
 func appendHostChecks(ctx context.Context, checker SSHChecker, result Result, hosts []topology.Host) (Result, error) {

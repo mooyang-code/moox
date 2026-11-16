@@ -410,7 +410,7 @@ func (h *planHarness) buildReconciler() *PlanReconciler {
 		Deploy: PlanDeploy{CloudAccountID: testAccount, PackageName: testPackageName, Namespace: "default", MemoryMB: 64, Networks: map[string]PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}},
 			BaseEnvironment: map[string]string{"MOOX_SPACE_ID": "crypto"}},
 		Groups: &GroupBuilder{Tasks: h.tasks, Symbols: h.symbols},
-		Store:  h.store, Storage: h.registrar, Cloud: h.cloud, Access: testSCFAccessEnvironment, Lateness: h.lateness, Activity: h.activity,
+		Store:  h.store, Storage: h.registrar, Cloud: h.cloud, Entry: testSCFEntryEnvironment, Lateness: h.lateness, Activity: h.activity,
 		Now:       func() time.Time { return h.now },
 		opWaitMax: 5 * time.Second,
 		sleep:     func(_ context.Context, d time.Duration) error { h.now = h.now.Add(d); return nil },
@@ -512,8 +512,8 @@ func (h *planHarness) remove(name string) {
 	require.NoError(h.t, h.scf.DeleteFunction(context.Background(), scfRef(name)))
 }
 
-func testSCFAccessEnvironment(string) (map[string]string, error) {
-	return map[string]string{"MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER": "scf-collector", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 43) + "="}, nil
+func testSCFEntryEnvironment(string) (map[string]string, error) {
+	return map[string]string{"MOOX_ENTRY_ADDRESS": "storage.example:11004", "MOOX_ENTRY_HOST": "storage", "MOOX_CALLER": "scf-collector", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 43) + "="}, nil
 }
 
 var errTestBoom = errors.New("boom")

@@ -131,7 +131,7 @@ type PlanReconciler struct {
 	Store    planStore
 	Storage  PlanSnapshotRegistrar
 	Cloud    planCloud
-	Access   func(region string) (map[string]string, error)
+	Entry    func(region string) (map[string]string, error)
 	Lateness PlanLatenessSetter
 	Activity ActivityLogger
 	Metrics  *ControlMetrics
@@ -196,7 +196,7 @@ type PlanReconciler struct {
 	// sleep 替换本轮内的等待（测试用）。
 	sleep func(context.Context, time.Duration) error
 
-	// 补采函数：多个补采协程并发调用时串行，backfillReady 缓存已确认就绪的“代码包|Access 指纹”（受 backfillMu 保护）；
+	// 补采函数：多个补采协程并发调用时串行，backfillReady 缓存已确认就绪的“代码包|外部入口指纹”（受 backfillMu 保护）；
 	// backfillRefs 是补采函数在云上的位置（受 readMu 保护）。
 	backfillMu    sync.Mutex
 	backfillReady map[string]string
@@ -558,7 +558,7 @@ func (r *PlanReconciler) holdMissingDatasets(ctx context.Context, desired *Desir
 	return hold
 }
 
-// functionEnvironment 构造受管环境：采集计划、Access 入口、超时。
+// functionEnvironment 构造受管环境：采集计划、外部入口、超时。
 func (r *PlanReconciler) functionEnvironment(region string, plan *marketfetch.Plan) (map[string]string, error) {
 	encoded, err := marketfetch.EncodePlan(plan)
 	if err != nil {
@@ -575,17 +575,17 @@ func (r *PlanReconciler) functionEnvironment(region string, plan *marketfetch.Pl
 		"MOOX_MARKET_FETCH_SUBJECT_COUNT":   strconv.Itoa(count),
 		"MOOX_FETCH_TIMEOUT_SECONDS":        strconv.Itoa(tencent.CollectorTimerTimeoutSeconds),
 	}
-	if r.Access == nil {
-		return nil, errors.New("SCF Access environment is required")
+	if r.Entry == nil {
+		return nil, errors.New("SCF entry environment is required")
 	}
-	access, err := r.Access(region)
+	access, err := r.Entry(region)
 	if err != nil {
 		return nil, err
 	}
-	if err := tencent.ValidateCollectorAccessEnvironment(access); err != nil {
+	if err := tencent.ValidateCollectorEntryEnvironment(access); err != nil {
 		return nil, err
 	}
-	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
+	for _, key := range []string{"MOOX_ENTRY_ADDRESS", "MOOX_ENTRY_HOST", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
 		if value, ok := access[key]; ok {
 			environment[key] = value
 		}
@@ -1304,7 +1304,7 @@ func (r *PlanReconciler) timerFunctionRefs(ctx context.Context) (map[string]clou
 	return refs, nil
 }
 
-// verifyFleet 每小时读回一次已生效计划的函数：不存在、受管环境（分配哈希、Access 三项）或定时器（cron、开关、可用状态、
+// verifyFleet 每小时读回一次已生效计划的函数：不存在、受管环境（分配哈希、外部入口三项）或定时器（cron、开关、可用状态、
 // Qualifier、Message）不一致的起 Ensure（期望内容按已确认的状态算）；只是代码包落后的起 UpgradeCode。
 // 同时停掉计划外的同前缀函数的定时器。有函数这次没读到或修复还在跑时，5 分钟后再读，不宣布核对完成。
 func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*PlanFunction) error {
@@ -1578,7 +1578,7 @@ func (r *PlanReconciler) backfillSpec(ref cloud.FunctionRef, access map[string]s
 		return cloud.FunctionSpec{}, fmt.Errorf("region %s has no VPC and subnet configured", ref.Region)
 	}
 	environment := map[string]string{"MOOX_MARKET_FETCH_MODE": "backfill", "MOOX_FETCH_TIMEOUT_SECONDS": strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)}
-	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
+	for _, key := range []string{"MOOX_ENTRY_ADDRESS", "MOOX_ENTRY_HOST", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
 		if value, ok := access[key]; ok {
 			environment[key] = value
 		}
@@ -1596,7 +1596,7 @@ func (r *PlanReconciler) backfillSpec(ref cloud.FunctionRef, access map[string]s
 }
 
 // EnsureBackfillFunction 保证该市场的补采函数就绪（与定时函数同一代码包，不带定时器），返回函数名。
-// 就绪缓存里已有它、并且代码包与 Access 指纹（Access 入口与调用方身份）都没变就直接返回；否则没有操作在跑就起一个 Ensure，
+// 就绪缓存里已有它、并且代码包与外部入口指纹（外部入口与调用方身份）都没变就直接返回；否则没有操作在跑就起一个 Ensure，
 // 本次调用等一会儿，做完了就返回函数名，还在做就返回“仍在创建”（errBackfillFunctionPending），调用方下一轮再试。
 // 补采函数没有定时器，暂停期间照常创建（恢复追赶时系统暂停还开着，补采却要跑）。
 func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType string) (string, error) {
@@ -1607,16 +1607,16 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	if !ok {
 		return "", fmt.Errorf("no SCF region is configured for market %s", marketType)
 	}
-	if r.Access == nil {
-		return "", errors.New("SCF Access environment is required")
+	if r.Entry == nil {
+		return "", errors.New("SCF entry environment is required")
 	}
-	access, err := r.Access(region)
+	access, err := r.Entry(region)
 	if err != nil {
 		return "", err
 	}
 	ref := r.backfillRef(marketType, region)
 	name := ref.Name
-	fingerprint := backfillAccessFingerprint(access)
+	fingerprint := backfillEntryFingerprint(access)
 	key := opKeyBackfill + "|" + fingerprint
 	r.readMu.Lock()
 	if r.backfillRefs == nil {
@@ -1675,13 +1675,13 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	return name, nil
 }
 
-// backfillAccessFingerprint 由 Access 地址、实例、调用方与密钥 ID 算出指纹，不含密钥本身。
-func backfillAccessFingerprint(access map[string]string) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{access["MOOX_ACCESS_ADDRESS"], access["MOOX_ACCESS_ID"], access["MOOX_CALLER"], access["MOOX_CALLER_KEY_ID"]}, "\x00")))
+// backfillEntryFingerprint 由外部入口地址、实例、调用方与密钥 ID 算出指纹，不含密钥本身。
+func backfillEntryFingerprint(access map[string]string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{access["MOOX_ENTRY_ADDRESS"], access["MOOX_ENTRY_HOST"], access["MOOX_CALLER"], access["MOOX_CALLER_KEY_ID"]}, "\x00")))
 	return hex.EncodeToString(sum[:16])
 }
 
-// markBackfillReady 记下补采函数已确认的“代码包|Access 指纹”。
+// markBackfillReady 记下补采函数已确认的“代码包|外部入口指纹”。
 func (r *PlanReconciler) markBackfillReady(name, key string) {
 	if r.backfillReady == nil {
 		r.backfillReady = map[string]string{}

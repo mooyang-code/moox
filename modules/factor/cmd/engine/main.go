@@ -1,7 +1,6 @@
 // moox-factor-engine consumes collector period events, computes factors with
 // the factorexpr expression engine and writes results to Storage. It only dials out: to
-// moox-factor-mgr through the service gateway, to EventBus and to
-// access.
+// moox-factor-mgr and Storage through the host gateways, and to EventBus.
 package main
 
 import (

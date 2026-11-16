@@ -471,7 +471,7 @@ type gatewayStorageImportMetadataClient struct {
 	Gateway gatewayclient.Invoker
 }
 
-// gatewayStorageDataWriter 通过 tRPC 将数据写入 Access 服务。
+// gatewayStorageDataWriter 经主机网关把数据写入 Storage。
 type gatewayStorageDataWriter struct {
 	Gateway gatewayclient.Invoker
 	SpaceID string

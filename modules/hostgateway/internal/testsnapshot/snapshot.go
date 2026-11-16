@@ -107,3 +107,23 @@ func Deployment(t testing.TB, raw *pb.HostGatewaySnapshot, hostID, componentID s
 	t.Fatalf("快照里没有部署 %s/%s", hostID, componentID)
 	return nil
 }
+
+// AddHost 往快照里加一台可直达的主机（带主机级组件与派生的公钥），entry 表示它登记成外部入口。加完要 Rehash。
+func AddHost(t testing.TB, raw *pb.HostGatewaySnapshot, hostID, address string, entry bool) {
+	t.Helper()
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.Hosts = append(raw.Hosts, &pb.SnapshotHost{HostId: hostID, Address: address, Reachability: servicecatalog.ReachabilityDirect, Enabled: true, ExternalEntry: entry, SignPublicKey: HostKey(hostID).Public().(ed25519.PublicKey)})
+	for _, c := range catalog.Components {
+		if c.Scope == servicecatalog.ScopeHost {
+			raw.Deployments = append(raw.Deployments, &pb.SnapshotDeployment{HostId: hostID, ComponentId: c.ID, Enabled: true})
+		}
+	}
+}
+
+// AddIdentity 登记一个不属于主机的身份（公钥由 Credential 派生）。加完要 Rehash。
+func AddIdentity(raw *pb.HostGatewaySnapshot, identity string) {
+	raw.Identities = append(raw.Identities, &pb.SnapshotIdentity{Identity: identity, SignPublicKey: Credential(identity, "").PublicKey()})
+}

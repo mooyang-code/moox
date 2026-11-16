@@ -1,5 +1,5 @@
 // Package gatewayclient provides signed object calls and raw tRPC forwarding
-// through the host gateway, fixed external access, or SSH tunnels.
+// through the host gateway, a fixed external entry, or SSH tunnels.
 package gatewayclient
 
 import (
@@ -31,7 +31,7 @@ import (
 
 const (
 	Internal = "local"
-	External = "access"
+	External = "entry"
 	Tunnel   = "tunnel"
 )
 
@@ -53,17 +53,18 @@ type Invoker interface {
 }
 
 type Config struct {
-	Mode             string
-	Credentials      gatewayauth.Credentials
-	LocalHostID      string
-	LocalAddress     string
-	CAFile           string
-	Source           DirectorySource
-	CachePath        string
-	Tunnels          TunnelResolver
-	AccessAddress    string
-	AccessInstanceID string
-	Serialization    int
+	Mode         string
+	Credentials  gatewayauth.Credentials
+	LocalHostID  string
+	LocalAddress string
+	CAFile       string
+	Source       DirectorySource
+	CachePath    string
+	Tunnels      TunnelResolver
+	// EntryAddress、EntryHost 是外部身份用的固定入口：入口主机网关的外部入口地址（11004）与这台主机的 ID。
+	EntryAddress  string
+	EntryHost     string
+	Serialization int
 	// Pool 调整连接本机/跨主机网关的连接池（Internal 与 Tunnel 模式）；零值使用默认。
 	Pool             PoolConfig
 	Timeout          time.Duration
@@ -225,7 +226,7 @@ func New(config Config) (*Client, error) {
 		}
 		// 隧道模式平时不需要 CA；连接出站主机时要用它校验 control 与目标网关的证书。
 	case External:
-		if err := validateExternalIdentity(catalog, config.Credentials.Caller, config.AccessAddress, config.AccessInstanceID); err != nil {
+		if err := validateExternalIdentity(catalog, config.Credentials.Caller, config.EntryAddress, config.EntryHost); err != nil {
 			return nil, err
 		}
 		if config.Source != nil || config.CachePath != "" || config.Tunnels != nil {
@@ -396,8 +397,13 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 		return nil, fmt.Errorf("forward requires PB or JSON serialization")
 	}
 	allowed := c.catalog.Allowed(c.config.Credentials.Caller, service, method)
-	if c.config.Mode == External {
+	origin := originCallerFrom(ctx)
+	switch {
+	case c.config.Mode == External:
 		allowed = c.catalog.PrincipalAllowed(c.config.Credentials.Caller, service, method)
+	case origin != "":
+		// 入口主机的网关替外部身份转发：能不能调看的是那个外部身份。
+		allowed = c.catalog.PrincipalAllowed(origin, service, method)
 	}
 	spec, _ := c.catalog.Service(service)
 	limit := spec.MaxBodyBytes
@@ -428,6 +434,9 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 			}
 			if headers, err = gatewayauth.Sign(c.config.Credentials, gatewayauth.Request{TargetNode: ep.target, Callee: service, Func: method, Body: body}, time.Now()); err != nil {
 				return nil, err
+			}
+			if origin != "" {
+				headers.Set(gatewayauth.HeaderOriginCaller, origin)
 			}
 		}
 		metadata := CallMetadataFromContext(ctx)
@@ -508,7 +517,7 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 
 func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoint, error) {
 	if c.config.Mode == External {
-		return endpoint{address: c.config.AccessAddress, target: c.config.AccessInstanceID, compress: true}, nil
+		return endpoint{address: c.config.EntryAddress, target: c.config.EntryHost, compress: true}, nil
 	}
 	c.mu.RLock()
 	// Published directory maps are immutable. Keep one coherent snapshot without

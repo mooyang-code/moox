@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use for everything about the MooX quant system (MooX 量化系统) — installing and deploying it from release artifacts (安装, 部署, 初始化, 免密登录, moox-cli config init, setup install/deploy/init/status/logs), upgrading or rolling back production hosts (发布, 上线, 升级, 回滚, setup deploy, service catalog rollout, 全新部署, 清空重装), and day-to-day management through moox-cli and gateway call (采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记). Also covers querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情 queries, factor expression DSL (因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子), strategy DSL (策略 DSL, rank 规则, ValidateStrategy, 策略迁移, 选币策略), 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Linux Host Agent monitoring, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud firewall, CLS log queries, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance, and the moox-cli command set that covers the 管理台 (空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易只读, host exec, 命令覆盖).
+description: Use for everything about the MooX quant system (MooX 量化系统) — installing and deploying it from release artifacts (安装, 部署, 初始化, 免密登录, moox-cli config init, setup install/deploy/init/status/logs), upgrading or rolling back production hosts (发布, 上线, 升级, 回滚, setup deploy, service catalog rollout, 全新部署, 清空重装), and day-to-day management through moox-cli and gateway call (采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记). Also covers querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情 queries, factor expression DSL (因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子), strategy DSL (策略 DSL, rank 规则, ValidateStrategy, 策略迁移, 选币策略), 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Linux Host Agent monitoring, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud firewall, CLS log queries, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ENTRY_ADDRESS, 外部入口, external_entry, and control-plane maintenance, and the moox-cli command set that covers the 管理台 (空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易只读, host exec, 命令覆盖).
 ---
 
 # MooX
@@ -83,8 +83,8 @@ Control `export` does not update Host Agents on other machines：控制机上的
 
 ### Tencent Private Network
 
-SCF 函数运行在各地域的 VPC 里，只经同地域 Access 主机的私网地址（`11004`）访问 MooX，不直连 Storage 或 EventBus。
-`[scf_plan]` 里的每个地域都要有一台配置了 `region` 与 `private_address` 的 Access 主机；不要创建云联网（CCN）；函数需要访问公网行情源时保持 `public_net_status=ENABLE`。
+SCF 函数运行在各地域的 VPC 里，只经同地域入口主机网关的外部入口（私网地址的 `11004`）访问 MooX，不直连 Storage 或 EventBus。
+`[scf_plan]` 里的每个地域都要有一台配置了 `region`、`private_address` 并写了 `external_entry = true` 的主机；不要创建云联网（CCN）；函数需要访问公网行情源时保持 `public_net_status=ENABLE`。
 配置规则与验收证据见 [`references/private-network.md`](references/private-network.md)。
 
 ### 腾讯云 CLS 日志

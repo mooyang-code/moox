@@ -18,9 +18,9 @@ vi.mock("@/api/monitor", () => ({ monitorApi: { getOverview: vi.fn() } }));
 vi.mock("@/api/admin/http", () => ({ callControl: vi.fn(), reportControlError: vi.fn() }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn() } }));
 const component: CatalogComponent = {
-  id: "access",
-  name: "外部接入",
-  binary: "moox-access",
+  id: "egress-proxy",
+  name: "出口代理",
+  binary: "moox-egress-proxy",
   scope: "any",
   replicas: "multi",
   protected: false,
@@ -36,7 +36,7 @@ const component: CatalogComponent = {
     }
   ]
 };
-const definition = (name = "外部接入"): CatalogResponse => ({
+const definition = (name = "出口代理"): CatalogResponse => ({
   catalog_yaml: stringify(
     {
       version: 2,
@@ -56,7 +56,7 @@ const hostRows: DeploymentHost[] = [
   { host_id: "storage", address: "storage.example.test", status: "enabled" }
 ];
 const deploymentItems: ComponentDeployment[] = hostRows.flatMap(host =>
-  ["host-gateway", "access"].map(component_id => ({ host_id: host.host_id, component_id, status: "enabled" }))
+  ["host-gateway", "egress-proxy"].map(component_id => ({ host_id: host.host_id, component_id, status: "enabled" }))
 );
 const box = defineComponent({ template: "<div><slot /></div>" });
 const input = defineComponent({
@@ -120,14 +120,20 @@ beforeEach(() => {
     gateway_status: { expected_hash: "new", applied_hash: "new", last_seen_at: "2026-10-09T12:00:00Z" },
     routes: [
       {
-        component_id: "access",
+        component_id: "egress-proxy",
         service_path: "test.Service",
         method: "Read",
         address: "127.0.0.1:11011",
         callers: ["reader"],
         read_only: true
       },
-      { component_id: "access", service_path: "test.Service", method: "Write", address: "127.0.0.1:11011", callers: ["writer"] }
+      {
+        component_id: "egress-proxy",
+        service_path: "test.Service",
+        method: "Write",
+        address: "127.0.0.1:11011",
+        callers: ["writer"]
+      }
     ]
   }));
   vi.mocked(monitorApi.getOverview).mockResolvedValue({
@@ -136,11 +142,11 @@ beforeEach(() => {
       components: [
         {
           host_id: "c-main",
-          component_id: "access",
+          component_id: "egress-proxy",
           status: "healthy",
           instances: [{ instance_id: "process-a", version: "v1", status: "healthy" }]
         },
-        { host_id: "storage", component_id: "access", status: "down", reason: "服务不可达" }
+        { host_id: "storage", component_id: "egress-proxy", status: "down", reason: "服务不可达" }
       ],
       unregistered: [{ host_id: "other", component_id: "collector", reason: "部署未登记" }]
     }
@@ -161,7 +167,7 @@ describe("deployment page", () => {
     expect(page.text()).toContain("moox skill");
     // 控制台没有任何启停开关：主机与部署的启停只能通过 moox skill。
     expect(page.findAll('[role="switch"]')).toHaveLength(0);
-    expect(page.find('[aria-label="storage access 启用状态"]').exists()).toBe(false);
+    expect(page.find('[aria-label="storage egress-proxy 启用状态"]').exists()).toBe(false);
     expect(page.find('[aria-label="主机 storage 启用状态"]').exists()).toBe(false);
   });
   it("shows the host's Chinese label next to its ID and marks external programs", async () => {
@@ -175,7 +181,7 @@ describe("deployment page", () => {
     expect(group.text()).toContain("已启用");
   });
   it("selects the exact host and component from Monitor links and keeps a closed drawer closed on polling", async () => {
-    const { page } = await render({ tab: "services", host_id: "storage", component_id: "access" });
+    const { page } = await render({ tab: "services", host_id: "storage", component_id: "egress-proxy" });
     expect(page.findAll(".host-group[data-host-id]")).toHaveLength(1);
     expect(page.get(".drawer").text()).toContain("storage.example.test");
     expect(page.get(".drawer").text()).toContain("服务不可达");
@@ -192,14 +198,14 @@ describe("deployment page", () => {
         components: [
           {
             host_id: "storage",
-            component_id: "access",
+            component_id: "egress-proxy",
             status: "down",
             reporter: { status: "unknown", raw_error: reporterError }
           }
         ]
       }
     });
-    const { page } = await render({ host_id: "storage", component_id: "access" });
+    const { page } = await render({ host_id: "storage", component_id: "egress-proxy" });
     expect(
       page
         .get(".drawer")
@@ -209,7 +215,7 @@ describe("deployment page", () => {
     expect(page.get(".drawer").text()).not.toContain("主动探测");
   });
   it("keeps unknown locator targets explicit instead of selecting a different host", async () => {
-    const { page } = await render({ host_id: "missing", component_id: "access" });
+    const { page } = await render({ host_id: "missing", component_id: "egress-proxy" });
     expect(page.text()).toContain("未找到主机 missing");
     expect(page.findAll(".host-group[data-host-id]")).toHaveLength(0);
     expect(page.find(".drawer").exists()).toBe(false);
@@ -224,15 +230,15 @@ describe("deployment page", () => {
     expect(router.currentRoute.value.query.filter).toBeUndefined();
     wrapper?.unmount();
     const reopened = await render({ filter: "abnormal" });
-    expect(reopened.page.find('[data-host-id="c-main"] [data-component-id="access"]').exists()).toBe(false);
+    expect(reopened.page.find('[data-host-id="c-main"] [data-component-id="egress-proxy"]').exists()).toBe(false);
   });
 
   it("filters services by health without treating enabled deployments as online", async () => {
     const { page } = await render();
     await page.get('[aria-label="部署状态筛选"]').setValue("abnormal");
     await flushPromises();
-    expect(page.find('[data-host-id="c-main"] [data-component-id="access"]').exists()).toBe(false);
-    expect(page.find('[data-host-id="storage"] [data-component-id="access"]').exists()).toBe(true);
+    expect(page.find('[data-host-id="c-main"] [data-component-id="egress-proxy"]').exists()).toBe(false);
+    expect(page.find('[data-host-id="storage"] [data-component-id="egress-proxy"]').exists()).toBe(true);
   });
   it("shows per-method callers and combines caller/method filters on the route tab", async () => {
     const { page, router } = await render({ tab: "routes", host_id: "storage" });
@@ -256,7 +262,7 @@ describe("deployment page", () => {
     expect(page.findAll("path.edge")).toHaveLength(0);
     await page.get('[aria-label="拓扑视图"]').setValue("calls");
     expect(page.findAll("path.edge")).toHaveLength(4);
-    await page.get('[aria-label="storage 外部接入 异常"]').trigger("click");
+    await page.get('[aria-label="storage 出口代理 异常"]').trigger("click");
     expect(page.get(".focus-bar").text()).toContain("被调用 1");
     expect(page.get(".focus-bar").text()).toContain("reader");
     await page.findAll(".focus-bar button")[0].trigger("click");
@@ -289,15 +295,15 @@ describe("deployment page", () => {
     vi.mocked(monitorApi.getOverview).mockResolvedValue({
       overview: {
         topology_known: true,
-        components: [{ host_id: "storage", component_id: "access", status: "disabled" }],
+        components: [{ host_id: "storage", component_id: "egress-proxy", status: "disabled" }],
         unregistered: [
-          { host_id: "storage", component_id: "access", reason: "刚登记但尚未对账" },
+          { host_id: "storage", component_id: "egress-proxy", reason: "刚登记但尚未对账" },
           { host_id: "other", component_id: "collector", reason: "确实未登记" }
         ]
       }
     });
     const { page } = await render();
-    expect(page.get('[data-host-id="storage"] [data-component-id="access"]').text()).toContain("未知");
+    expect(page.get('[data-host-id="storage"] [data-component-id="egress-proxy"]').text()).toContain("未知");
     expect(page.text()).not.toContain("刚登记但尚未对账");
     expect(page.text()).toContain("确实未登记");
   });
@@ -307,7 +313,7 @@ describe("deployment page", () => {
     await page.get('[aria-label="刷新部署状态"]').trigger("click");
     await flushPromises();
     expect(page.text()).toContain("Admin unavailable");
-    expect(page.get('[data-host-id="c-main"] [data-component-id="access"]').text()).toContain("未知");
+    expect(page.get('[data-host-id="c-main"] [data-component-id="egress-proxy"]').text()).toContain("未知");
   });
   it("persists a route host selection through polling", async () => {
     const { page, router } = await render({ tab: "routes", host_id: "storage" });

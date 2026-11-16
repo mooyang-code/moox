@@ -17,6 +17,8 @@ type Host struct {
 	Status         string `json:"status"`
 	// Reachability 为空表示可直达；ReachabilityOutbound 表示只能出站（家庭网络等），进入它的连接经 control 网关中转。
 	Reachability string `json:"reachability,omitempty"`
+	// ExternalEntry 表示这台主机的网关开外部入口（11004）：外部身份从这里进来，目标不在本机时由它转给目标主机。
+	ExternalEntry bool `json:"external_entry,omitempty"`
 }
 
 // ReachabilityOutbound 标记只能出站的主机：它的网关主动与 control 网关保持反向连接。
@@ -46,6 +48,9 @@ func ReachabilityName(value string) string {
 
 // HostGatewayRemotePort 是主机网关的跨主机 TLS 端口。
 const HostGatewayRemotePort = 11003
+
+// HostGatewayExternalPort 是主机网关的外部入口端口（明文加签名），只有标了外部入口的主机才监听。
+const HostGatewayExternalPort = 11004
 
 // adminComponent 只部署在控制机上：按它认控制机，部署了它的主机另有 console 这个调用方。
 const adminComponent = "admin"
@@ -88,7 +93,8 @@ type Directory struct {
 	Hosts    map[string]DirectoryHost `json:"hosts"`
 }
 
-// Route 是一个方法和能调它的调用方，各主机的网关按拓扑与内嵌目录自己算，不随快照下发。
+// Route 是一个方法和名单上的调用方，各主机的网关按拓扑与内嵌目录自己算，不随快照下发。
+// Callers 里的外部身份不能直接到 11002、11003：它们从外部入口进来，或由入口主机的网关带着来源头转过来。
 type Route struct {
 	ComponentID  string   `json:"component_id"`
 	ServicePath  string   `json:"service_path"`
@@ -153,6 +159,12 @@ func (c Catalog) ValidateTopology(t Topology) error {
 	}
 	if control.Reachability == ReachabilityOutbound {
 		return fmt.Errorf("control host must be directly reachable")
+	}
+	for _, host := range t.Hosts {
+		// 外部入口要能从外面连进来。
+		if host.ExternalEntry && host.Reachability == ReachabilityOutbound {
+			return fmt.Errorf("outbound-only host %q cannot be an external entry", host.ID)
+		}
 	}
 	deployments := map[string]Deployment{}
 	singles := map[string]string{}
@@ -324,6 +336,10 @@ func (c Catalog) relayTargets(t Topology) []RelayTarget {
 			for _, service := range component.Services {
 				for _, method := range service.Methods {
 					for _, caller := range c.routeCallers(method) {
+						// 外部身份自己不连出站主机：入口主机的网关以 host-gateway 身份替它打开中转流。
+						if c.ExternalIdentity(caller) {
+							caller = hostGatewayCaller
+						}
 						gateway[caller] = true
 					}
 				}
@@ -384,18 +400,14 @@ func (r RelayTarget) Allowed(caller string, port int) bool {
 	return false
 }
 
-// routeCallers 是网关上这条路由的调用方：人操作身份按 operators，外部身份统一由 access 代为转发，其余照 callers。
+// routeCallers 是网关上这条路由的调用方：人操作身份按 operators，其余照 callers（含外部身份）。
 func (c Catalog) routeCallers(method Method) []string {
 	set := map[string]bool{}
 	for _, operator := range method.OperatorList() {
 		set[operator] = true
 	}
 	for _, caller := range method.Callers {
-		if c.ExternalIdentity(caller) {
-			set["access"] = true
-		} else {
-			set[caller] = true
-		}
+		set[caller] = true
 	}
 	callers := make([]string, 0, len(set))
 	for caller := range set {

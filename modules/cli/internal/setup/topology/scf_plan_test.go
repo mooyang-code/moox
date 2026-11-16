@@ -13,10 +13,10 @@ func scfPlanTestConfig() *Config {
 	return &Config{
 		HostCatalog: map[string]HostDefinition{
 			"control":  {Address: "1.1.1.1", Region: "ap-guangzhou", PrivateAddress: "10.0.0.1"},
-			"storage":  {Address: "2.2.2.2", Region: "ap-nanjing", PrivateAddress: "10.206.0.5"},
-			"overseas": {Address: "3.3.3.3", Region: "ap-hongkong", PrivateAddress: "172.19.32.13"},
+			"storage":  {Address: "2.2.2.2", Region: "ap-nanjing", PrivateAddress: "10.206.0.5", ExternalEntry: true},
+			"overseas": {Address: "3.3.3.3", Region: "ap-hongkong", PrivateAddress: "172.19.32.13", ExternalEntry: true},
 		},
-		Deployments: map[string][]string{"control": {"admin", "collector"}, "storage": {"storage-primary", "access"}, "overseas": {"access"}},
+		Deployments: map[string][]string{"control": {"admin", "collector"}, "storage": {"storage-primary"}, "overseas": {"trade"}},
 		SCFPlan: SCFPlan{
 			Enabled: true, CloudAccount: account,
 			Regions: map[string]SCFPlanRegion{"ap-hongkong": {VPCID: "vpc-hk", SubnetID: "subnet-hk"}},
@@ -45,7 +45,7 @@ func TestSCFPlanDefaultsAndRenderedCollectorConfig(t *testing.T) {
 	require.Equal(t, 128, plan["memory_mb"])
 	require.Equal(t, 50, plan["symbols_per_function"])
 	require.NotContains(t, plan, "package_id", "代码包只写名称，固定 ID 不再渲染")
-	require.Equal(t, map[string]any{"ap-hongkong": map[string]any{"access_address": "172.19.32.13:11004", "access_id": "access@overseas"}}, plan["access_routes"])
+	require.Equal(t, map[string]any{"ap-hongkong": map[string]any{"entry_address": "172.19.32.13:11004", "entry_host": "overseas"}}, plan["entry_routes"])
 	require.Equal(t, map[string]any{"crypto": map[string]any{"package_name": "moox-collector-crypto-plan", "namespace": "moox-crypto-plan"}}, plan["spaces"])
 
 	// 渲染幂等：对自己的输出再渲染结果不变。
@@ -77,8 +77,12 @@ func TestSCFPlanValidationRejectsIncompleteOrInconsistentSettings(t *testing.T) 
 		"missing vpc":        func(m *Config) { m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{} },
 		"unused region":      func(m *Config) { m.SCFPlan.Regions["ap-nanjing"] = SCFPlanRegion{VPCID: "v", SubnetID: "s"} },
 		"unsupported region": func(m *Config) { m.SCFPlan.Spaces[0].Markets["spot"] = []string{"mars-1"} },
-		"no access host":     func(m *Config) { m.Deployments["overseas"] = nil },
-		"access has no VPC ip": func(m *Config) {
+		"no entry host": func(m *Config) {
+			definition := m.HostCatalog["overseas"]
+			definition.ExternalEntry = false
+			m.HostCatalog["overseas"] = definition
+		},
+		"entry has no VPC ip": func(m *Config) {
 			definition := m.HostCatalog["overseas"]
 			definition.PrivateAddress = ""
 			m.HostCatalog["overseas"] = definition
@@ -100,45 +104,42 @@ func TestSCFPlanValidationRejectsIncompleteOrInconsistentSettings(t *testing.T) 
 	require.NoError(t, manifest.CheckSCFPlan())
 }
 
-func TestSCFPlanAccessSelectionHandlesSeveralHostsInOneRegion(t *testing.T) {
+func TestSCFPlanEntrySelectionHandlesSeveralHostsInOneRegion(t *testing.T) {
 	manifest := scfPlanTestConfig()
-	manifest.HostCatalog["compute-2"] = HostDefinition{Address: "4.4.4.4", Region: "ap-hongkong", PrivateAddress: "172.19.32.14"}
-	manifest.HostCatalog["compute-0"] = HostDefinition{Address: "5.5.5.5", Region: "ap-hongkong"} // 没有私网地址
-	manifest.Deployments["compute-2"] = []string{"access"}
-	manifest.Deployments["compute-0"] = []string{"access"}
+	manifest.HostCatalog["compute-2"] = HostDefinition{Address: "4.4.4.4", Region: "ap-hongkong", PrivateAddress: "172.19.32.14", ExternalEntry: true}
+	manifest.HostCatalog["compute-0"] = HostDefinition{Address: "5.5.5.5", Region: "ap-hongkong", ExternalEntry: true} // 没有私网地址
 
 	// 两台都有私网地址：必须显式指定。
-	_, _, err := manifest.SCFPlanAccess("ap-hongkong")
-	require.ErrorContains(t, err, "access_host")
-	require.ErrorContains(t, manifest.CheckSCFPlan(), "access_host")
+	_, _, err := manifest.SCFPlanEntry("ap-hongkong")
+	require.ErrorContains(t, err, "entry_host")
+	require.ErrorContains(t, manifest.CheckSCFPlan(), "entry_host")
 
 	region := manifest.SCFPlan.Regions["ap-hongkong"]
-	region.AccessHost = "compute-2"
+	region.EntryHost = "compute-2"
 	manifest.SCFPlan.Regions["ap-hongkong"] = region
-	address, id, err := manifest.SCFPlanAccess("ap-hongkong")
+	address, id, err := manifest.SCFPlanEntry("ap-hongkong")
 	require.NoError(t, err)
 	require.Equal(t, "172.19.32.14:11004", address)
-	require.Equal(t, "access@compute-2", id)
+	require.Equal(t, "compute-2", id)
 	require.NoError(t, manifest.CheckSCFPlan())
 
 	// 指定的主机没有私网地址、或不在该地域：明确拒绝。
-	region.AccessHost = "compute-0"
+	region.EntryHost = "compute-0"
 	manifest.SCFPlan.Regions["ap-hongkong"] = region
-	_, _, err = manifest.SCFPlanAccess("ap-hongkong")
+	_, _, err = manifest.SCFPlanEntry("ap-hongkong")
 	require.ErrorContains(t, err, "private_address")
-	region.AccessHost = "storage"
+	region.EntryHost = "storage"
 	manifest.SCFPlan.Regions["ap-hongkong"] = region
-	_, _, err = manifest.SCFPlanAccess("ap-hongkong")
-	require.ErrorContains(t, err, "not an access host in that region")
+	_, _, err = manifest.SCFPlanEntry("ap-hongkong")
+	require.ErrorContains(t, err, "not an external entry host in that region")
 
 	// 第一台（按名称排序）没有私网地址、只有一台可用：自动选可用的那台。
 	manifest = scfPlanTestConfig()
-	manifest.HostCatalog["a-compute"] = HostDefinition{Address: "6.6.6.6", Region: "ap-hongkong"}
-	manifest.Deployments["a-compute"] = []string{"access"}
-	address, id, err = manifest.SCFPlanAccess("ap-hongkong")
+	manifest.HostCatalog["a-compute"] = HostDefinition{Address: "6.6.6.6", Region: "ap-hongkong", ExternalEntry: true}
+	address, id, err = manifest.SCFPlanEntry("ap-hongkong")
 	require.NoError(t, err)
 	require.Equal(t, "172.19.32.13:11004", address)
-	require.Equal(t, "access@overseas", id)
+	require.Equal(t, "overseas", id)
 }
 
 // 渲染产物夹具：Collector 的 bootstrap 测试用真实 Load 读取同一份文件，两端字段名、键与必填项不一致时任一侧测试都会失败。
@@ -153,7 +154,7 @@ func TestSCFPlanRenderedCollectorConfigMatchesTheSharedFixture(t *testing.T) {
 	manifest.EgressProxy = EgressProxy{HTTPDomains: []string{"*.binance.com"}}
 	manifest.CollectorRetention = CollectorRetention{MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000}
 	// 模板与新版 Collector 的 config/app.yaml 一样带 delist 段（渲染只替换、不新增）。
-	rendered, err := RenderCollectorRuntimeConfig(manifest, []byte("gateway_client:\n  caller: collector\n  key_file: ./caller-collector.key\ndelist:\n  auto_detect: true\n"))
+	rendered, err := RenderCollectorRuntimeConfig(manifest, []byte("gateway_client:\n  caller: collector\n  key_file: ../../secrets/host.key\ndelist:\n  auto_detect: true\n"))
 	require.NoError(t, err)
 	if os.Getenv("MOOX_UPDATE_GOLDEN") == "1" {
 		require.NoError(t, os.WriteFile(scfPlanRenderedFixture, rendered, 0o644))

@@ -20,7 +20,7 @@ func TestRemoveRegisteredHostClearsDeploymentsAndDeletesHost(t *testing.T) {
 			rsp.(*pb.ListDeploymentHostsRsp).Hosts = []*pb.DeploymentHost{{HostId: "legacy-1", Address: "198.51.100.7", Region: "ap-hongkong", Reachability: "direct"}}
 		case "trpc.moox.ops.SysDeploy/ListDeployments":
 			rsp.(*pb.ListDeploymentsRsp).RetInfo = &pb.RetInfo{}
-			rsp.(*pb.ListDeploymentsRsp).Deployments = []*pb.ComponentDeployment{{HostId: "legacy-1", ComponentId: "trade"}, {HostId: "legacy-1", ComponentId: "access"}}
+			rsp.(*pb.ListDeploymentsRsp).Deployments = []*pb.ComponentDeployment{{HostId: "legacy-1", ComponentId: "trade"}, {HostId: "legacy-1", ComponentId: "egress-proxy"}}
 		case "trpc.moox.ops.SysDeploy/SyncHostDeployments":
 			request := req.(*pb.SyncHostDeploymentsReq)
 			require.Equal(t, "legacy-1", request.GetHostId())
@@ -39,7 +39,7 @@ func TestRemoveRegisteredHostClearsDeploymentsAndDeletesHost(t *testing.T) {
 	host, found, err := client.RegisteredHostByID(t.Context(), "legacy-1")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, RegisteredHost{HostID: "legacy-1", Address: "198.51.100.7", Components: []string{"access", "trade"}}, host)
+	require.Equal(t, RegisteredHost{HostID: "legacy-1", Address: "198.51.100.7", Components: []string{"egress-proxy", "trade"}}, host)
 
 	calls = nil
 	require.NoError(t, client.RemoveRegisteredHost(t.Context(), host))

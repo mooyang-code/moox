@@ -148,7 +148,7 @@
 ## 网关与接入
 
 - **主机网关**：每台主机一个，校验签名和服务目录 ACL 后转发到本机服务；管理台与 CLI 的所有调用都经过它。
-- **Access**：外部签名调用入口（SCF、因子引擎、Skill 读数据），存储机与海外机各一个。
+- **外部入口**：主机网关在登记成外部入口的主机（默认存储机与海外机）上另开的 `11004`，SCF、Skill、采集名单工具的签名调用从这里进来；不是独立的组件。
 - **EventBus**：模块间异步事件（NATS JetStream），默认在存储机；`eventbus overview|streams|consumers|consumer|events` 只读查看。凭据轮换必须按 [`eventbus-credentials.md`](eventbus-credentials.md) 同步到所有客户端。
 - **出口代理**：海外机上为采集提供受限的 HTTPS 出口。
 - SCF 与私有网络：[`private-network.md`](private-network.md)。

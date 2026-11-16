@@ -7,7 +7,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
-// NewMarketStorage borrows the invocation's single Access client.
+// NewMarketStorage borrows the invocation's single 外部入口 client.
 func NewMarketStorage(gateway gatewayclient.Invoker) (Storage, error) {
 	storage, err := marketstorage.NewGatewayBatchStorage(gateway)
 	if err != nil {

@@ -67,13 +67,13 @@ func (h *Handler) spaceID() string {
 	return strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
 }
 
-// prepareInvocation 为这次调用建立一条到 Access 的连接给 Storage 适配器使用；注入的适配器由调用方负责。
+// prepareInvocation 为这次调用建立一条到外部入口的连接给 Storage 适配器使用；注入的适配器由调用方负责。
 func (h *Handler) prepareInvocation() (*Handler, func(), error) {
 	invocation := *h
 	if invocation.NewStorage != nil {
 		return &invocation, func() {}, nil
 	}
-	gateway, err := newSCFAccessClient()
+	gateway, err := newSCFEntryClient()
 	if err != nil {
 		return nil, nil, err
 	}

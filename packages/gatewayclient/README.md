@@ -14,14 +14,14 @@
 
 ```yaml
 gateway_client:
-  access_address: access.example.test:11004
-  access_id: access@storage
+  entry_address: entry.example.test:11004   # 入口主机地址加 11004
+  entry_host: storage                       # 入口主机的 ID
   caller: moox-skill
   key_file: .moox-skill-keys/moox-skill.key
 ```
 
 此入口复用内部客户端的私密文件校验，但不读取主机配置、目录缓存、SSH 或环境凭据；密钥文件缺失或无效即失败。客户端由外部进程持有并关闭。SCF 无需配置文件，由函数入口显式读取部署环境里的私钥，
-再通过 `New(Config{Mode: External, ...})` 传入固定 Access 与签名身份；共享包不会查找环境变量。外部请求的签名目标始终是 `access@<主机>`，不带签名主机；禁止的方法在发送前拒绝。
+再通过 `New(Config{Mode: External, ...})` 传入固定的外部入口与签名身份；共享包不会查找环境变量。外部请求的签名目标是入口主机的 ID，不带签名主机；禁止的方法在发送前拒绝。
 
 网关（或外部入口）自己拒签时返回专用错误码 `gatewayauth.RetRejected`：验签、时间窗、防重放、调用名单任何一步不过都是它，请求没有到达服务。客户端收到后刷新目录、
 重新签名重发一次，对写方法也一样；重签后仍被拒就报错。服务自己返回的鉴权类错误不重发。
@@ -31,7 +31,7 @@ gateway_client:
 `Config.Mode` 支持三种方式：
 
 - `local`（`Internal`）：从本机 `127.0.0.1:11002` 取得目录，优先调用本机服务；跨主机连接目标的 TLS `11003`，只信任 `CAFile` 指定的 MooX 私有 CA，并使用主机 ID 校验证书名称。
-- `access`（`External`）：使用固定的 `AccessAddress` 与 `access@<主机>` 实例 ID，不获取目录；按照外部调用方的逐方法白名单发送签名请求。
+- `entry`（`External`）：使用固定的 `EntryAddress`（入口主机网关的 `11004`）与 `EntryHost`（入口主机 ID），不获取目录；按照外部调用方的逐方法白名单发送签名请求。
 - `tunnel`（`Tunnel`）：供 `moox-cli` 使用，调用方提供目录来源与 SSH 隧道管理器；解析结果必须是字面 IP 的 loopback 地址。
 
 内部与隧道客户端构造时取得有效目录，失败时可以使用已校验的落盘缓存；两者均不可用则启动失败。目录默认每 5 秒刷新；网络错误、服务不存在或网关拒签时立即刷新（外部客户端没有目录）。
@@ -42,4 +42,4 @@ gateway_client:
 
 每个客户端持有自己的连接池。tRPC SDK 的默认池不区分 CA/SNI，本包按 TLS 身份隔离池，并保留同一身份的长连接。CA 配置在客户端生命周期内固定；修改 CA 后须重建客户端。`Close` 停止刷新并关闭持有的连接。`NewLocalDirectorySource` 创建的来源有独立的 `Close`；由调用方传入的来源及隧道由调用方管理生命周期。自定义目录来源必须遵守 context 取消，刷新错误回调应及时返回。
 
-主机网关、Access 与业务调用方已接入本包；实际运行入口见各模块的 `cmd/`。本包离线测试不代表多主机网络或生产部署已经验收。
+主机网关与业务调用方已接入本包；入口主机的网关用进程内的客户端（`WithOriginCaller`）以 `host-gateway` 的身份把外部身份的请求转给目标主机，别的调用方不要用这个选项；实际运行入口见各模块的 `cmd/`。本包离线测试不代表多主机网络或生产部署已经验收。

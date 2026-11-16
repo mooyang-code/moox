@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
-	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 )
 
 // setupVerifyTimeout 是 setup install 里验收的时限；setupReadyTimeout 是最后统一等全部组件就绪的时限。
@@ -129,9 +128,6 @@ func newSetupInstallCommand(deps setupDeps) *cobra.Command {
 			}
 			defer clearSetupSecrets(snapshot)
 			if err := options.source.resolve(); err != nil {
-				return err
-			}
-			if err := setupvalidate.CheckDeployments(snapshot.Manifest); err != nil {
 				return err
 			}
 			if err := setupStartPrerequisites(snapshot.Manifest, options.spaceID); err != nil {

@@ -41,7 +41,7 @@ func bootstrapTopology(cfg *topology.Config) (hostbundle.Topology, error) {
 	for _, host := range cfg.Hosts() {
 		components := slices.Clone(cfg.Deployments[host.Name])
 		slices.Sort(components)
-		entry := hostbundle.Host{HostID: host.Name, Label: host.Label, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Components: components, Reachability: host.Reachability}
+		entry := hostbundle.Host{HostID: host.Name, Label: host.Label, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Components: components, Reachability: host.Reachability, ExternalEntry: host.ExternalEntry}
 		ssh, err := host.ConsoleSSH()
 		if err != nil {
 			return result, err

@@ -156,9 +156,6 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 			if err := source.resolve(); err != nil {
 				return err
 			}
-			if err := setupvalidate.CheckDeployments(snapshot.Manifest); err != nil {
-				return err
-			}
 			options := source.deployOptions(cmd, snapshot, file, host, components)
 			options.RotateHostKey = rotateHostKey
 			result, err := deps.deployHost(cmd.Context(), options)
@@ -309,7 +306,7 @@ func newSetupLogsCommand(deps setupDeps) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 的路径")
 	cmd.Flags().StringVar(&host, "host", "", "主机 ID")
-	cmd.Flags().StringVar(&component, "component", "", "组件 ID，比如 monitor、access；不写看全部")
+	cmd.Flags().StringVar(&component, "component", "", "组件 ID，比如 monitor、host-gateway；不写看全部")
 	cmd.Flags().IntVar(&lines, "lines", 100, "每个组件看最后多少行（1 到 5000）")
 	cmd.Flags().StringVar(&grep, "grep", "", "只看含这段文字的行（按原文匹配）")
 	cmd.Flags().BoolVar(&journal, "journal", false, "只看 journald 里的标准输出与标准错误")

@@ -31,8 +31,8 @@ func TestCollectorOnlyReadsReadonlyExchangeKeyIdentifier(t *testing.T) {
 	if callers := method.Callers; !slices.Equal(callers, []string{"collector"}) || len(method.OperatorList()) != 0 {
 		t.Fatalf("GetReadonlyExchangeKey callers = %v, want only collector", callers)
 	}
-	// 其他调用方（含 Access 对外身份与外部程序）都不能调用。
-	for _, caller := range []string{"console", "moox-cli", "trade", "access", "scf-collector", "collector-stream", "monitor"} {
+	// 其他调用方（含外部身份与外部程序）都不能调用。
+	for _, caller := range []string{"console", "moox-cli", "trade", "host-gateway", "scf-collector", "collector-stream", "monitor"} {
 		if c.Allowed(caller, secretMgr, "GetReadonlyExchangeKey") {
 			t.Fatalf("unexpected GetReadonlyExchangeKey grant: %s", caller)
 		}
@@ -60,7 +60,7 @@ func TestCollectorOnlyReadsCloudCredentialThroughDedicatedMethod(t *testing.T) {
 	if callers := method.Callers; !slices.Equal(callers, []string{"collector"}) || len(method.OperatorList()) != 0 {
 		t.Fatalf("GetCloudCredential callers = %v, want only collector", callers)
 	}
-	for _, caller := range []string{"console", "moox-cli", "trade", "access", "scf-collector", "collector-stream", "monitor"} {
+	for _, caller := range []string{"console", "moox-cli", "trade", "host-gateway", "scf-collector", "collector-stream", "monitor"} {
 		if c.Allowed(caller, secretMgr, "GetCloudCredential") {
 			t.Fatalf("unexpected GetCloudCredential grant: %s", caller)
 		}

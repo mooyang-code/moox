@@ -31,7 +31,9 @@ type Host struct {
 	Components     []string `json:"components"`
 	// Reachability 为空表示可直达，outbound 表示只能出站。
 	Reachability string `json:"reachability,omitempty"`
-	SSH          *SSH   `json:"ssh,omitempty"`
+	// ExternalEntry 表示这台主机的网关开外部入口（11004）。
+	ExternalEntry bool `json:"external_entry,omitempty"`
+	SSH           *SSH `json:"ssh,omitempty"`
 }
 
 type CertificateInfo struct {

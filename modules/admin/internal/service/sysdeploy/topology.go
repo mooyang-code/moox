@@ -62,7 +62,7 @@ func (d *TopologyDAO) topology(hosts []HostRecord, deployments []DeploymentRecor
 	t := servicecatalog.Topology{ControlHostID: d.controlHostID}
 	for _, h := range hosts {
 		reachability, _ := servicecatalog.ParseReachability(h.Reachability)
-		t.Hosts = append(t.Hosts, servicecatalog.Host{ID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: reachability})
+		t.Hosts = append(t.Hosts, servicecatalog.Host{ID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: reachability, ExternalEntry: h.ExternalEntry})
 	}
 	for _, p := range deployments {
 		t.Deployments = append(t.Deployments, servicecatalog.Deployment{HostID: p.HostID, ComponentID: p.ComponentID, Status: p.Status})
@@ -156,7 +156,7 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 			}
 			host.UpdatedAt = time.Now().UTC()
 			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_host_id"}}, DoUpdates: clause.AssignmentColumns([]string{
-				"c_label", "c_address", "c_private_address", "c_region", "c_reachability", "c_description", "c_ssh_port", "c_ssh_user", "c_mtime",
+				"c_label", "c_address", "c_private_address", "c_region", "c_reachability", "c_external_entry", "c_description", "c_ssh_port", "c_ssh_user", "c_mtime",
 			})}).Create(&host).Error; err != nil {
 				return err
 			}
@@ -210,7 +210,7 @@ func (d *TopologyDAO) propose(hosts []HostRecord, deployments []DeploymentRecord
 			wanted[component.ID] = true
 		}
 	}
-	host := HostRecord{HostID: spec.HostID, Label: spec.Label, Address: spec.Address, PrivateAddress: spec.PrivateAddress, Region: spec.Region, Reachability: servicecatalog.ReachabilityName(reachability), Description: spec.Description, SSHPort: sshPort, SSHUser: sshUser, Status: servicecatalog.Enabled}
+	host := HostRecord{HostID: spec.HostID, Label: spec.Label, Address: spec.Address, PrivateAddress: spec.PrivateAddress, Region: spec.Region, Reachability: servicecatalog.ReachabilityName(reachability), ExternalEntry: spec.ExternalEntry, Description: spec.Description, SSHPort: sshPort, SSHUser: sshUser, Status: servicecatalog.Enabled}
 	if i := slices.IndexFunc(hosts, func(h HostRecord) bool { return h.HostID == spec.HostID }); i >= 0 {
 		host.Status, host.CreatedAt, host.SSHFingerprint = hosts[i].Status, hosts[i].CreatedAt, hosts[i].SSHFingerprint
 		hosts[i] = host

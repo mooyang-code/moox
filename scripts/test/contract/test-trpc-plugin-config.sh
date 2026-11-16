@@ -143,9 +143,8 @@ if rg -n 'filterextensions' modules/*/config/trpc_go*.yaml modules/*/cmd/server/
 	fail 'filterextensions must remain deferred until method policies diverge'
 fi
 
-# Access 是对外签名入口（11004），按设计监听所有地址；其余服务端只监听回环。
+# tRPC 框架配置里的服务端只监听回环；对外的端口（11003、外部入口 11004）由主机网关自己的 app.yaml 配置。
 for config in modules/*/config/trpc_go*.yaml; do
-	[[ "${config}" == modules/access/config/trpc_go.yaml ]] && continue
 	assert_loopback_server_services "${config}"
 done
 

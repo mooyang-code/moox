@@ -22,7 +22,7 @@ Use this skill for MooX production-like debugging that crosses local code, remot
 - Prefer `moox-cli` commands and bundled MooX scripts over manually repeating fragile Tencent API calls.
 - For destructive operations, confirm the target resource name, region, namespace, account, and package version before acting.
 - Treat old standalone collector repository paths as historical only; current collector code and SCF package build logic live under `modules/collector`.
-- For frontend requests, management APIs must go through `/api/admin`; service-to-service calls are signed tRPC through the local host gateway (`packages/gatewayclient`, loopback `11002`, cross-host TLS `11003`), and external callers (SCF, factor engine, Skill) go through Access on `11004` with their own signed identity.
+- For frontend requests, management APIs must go through `/api/admin`; service-to-service calls are signed tRPC through the local host gateway (`packages/gatewayclient`, loopback `11002`, cross-host TLS `11003`), and external callers (SCF, Skill, the collector-operator tool) enter through the external entry (`11004`) of an entry host's gateway with their own signed identity; the factor engine and archive worker are ordinary components that sign with the factor host key and use `11003`.
 
 ## Boundary Checklist
 
@@ -34,7 +34,7 @@ Use this order unless evidence points elsewhere:
 4. Timer path: the trigger is enabled with the expected cron (same command; unplanned functions are listed separately with their timers stopped).
 5. Plan: confirm the dataset uses SCF (stream/local has a separate executor); the function environment carries the current fetch plan (`collector fetch-plan`).
 6. Execution: CLS logs show per-subject provider results.
-7. Storage: `CommitTimeSeriesBatch` succeeds through access.
+7. Storage: `CommitTimeSeriesBatch` succeeds through the gateway external entry.
 8. Result: rows appear in the task's result View for the space, subject and frequency.
 
 ## Evidence To Preserve

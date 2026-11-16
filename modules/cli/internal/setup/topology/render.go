@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -41,7 +43,7 @@ func RenderCollectorRuntimeConfig(cfg *Config, existing []byte) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	access := SCFAccessIdentity(cfg)
+	entry := SCFEntryIdentity(cfg)
 	var prior map[string]any
 	if len(existing) > 0 {
 		if err := yaml.Unmarshal(existing, &prior); err != nil {
@@ -59,11 +61,7 @@ func RenderCollectorRuntimeConfig(cfg *Config, existing []byte) ([]byte, error) 
 			return nil, err
 		}
 	}
-	rendered, err = replaceYAMLMapping(rendered, "scf_access", valueNode(access))
-	if err != nil {
-		return nil, err
-	}
-	rendered, err = replaceYAMLMapping(rendered, "scf_access_routes", nil)
+	rendered, err = replaceYAMLMapping(rendered, "scf_entry", valueNode(entry))
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +79,7 @@ func RenderCollectorRuntimeConfig(cfg *Config, existing []byte) ([]byte, error) 
 }
 
 // renderSCFPlanBlocks 渲染 Timer 采集计划的 Collector 配置：scf_regions（地域网络）、scf_markets（空间与市场的运行地域）、
-// scf_plan（云账号、代码包名称、命名空间、各地域 Access 私网入口）。未启用时三块一并移除：这只关掉云函数，推送采集不受影响。
+// scf_plan（云账号、代码包名称、命名空间、各地域外部入口的私网地址）。未启用时三块一并移除：这只关掉云函数，推送采集不受影响。
 // 代码包只写名称：Collector 总是使用该名称的最新可用版本，上传新版本后不需要改配置或重启。
 func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 	plan := cfg.SCFPlan
@@ -95,15 +93,15 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 		return rendered, nil
 	}
 	regions := map[string]map[string]string{}
-	access := map[string]map[string]string{}
+	entries := map[string]map[string]string{}
 	for _, region := range cfg.SCFPlanRegionNames() {
 		network := plan.Regions[region]
 		regions[region] = map[string]string{"vpc_id": network.VPCID, "subnet_id": network.SubnetID}
-		address, id, accessErr := cfg.SCFPlanAccess(region)
-		if accessErr != nil {
-			return nil, accessErr
+		address, host, entryErr := cfg.SCFPlanEntry(region)
+		if entryErr != nil {
+			return nil, entryErr
 		}
-		access[region] = map[string]string{"access_address": address, "access_id": id}
+		entries[region] = map[string]string{"entry_address": address, "entry_host": host}
 	}
 	markets := map[string]map[string][]string{}
 	spaces := map[string]map[string]any{}
@@ -129,21 +127,17 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 	if plan.AssumedEgressIPs > 0 {
 		fields = append(fields, mappingField{"assumed_egress_ips", plan.AssumedEgressIPs})
 	}
-	fields = append(fields, mappingField{"access_routes", access}, mappingField{"spaces", spaces})
+	fields = append(fields, mappingField{"entry_routes", entries}, mappingField{"spaces", spaces})
 	return replaceYAMLMapping(rendered, "scf_plan", orderedMapping(fields...))
 }
 
-// SCFAccessIdentity 返回函数调用 Access 的固定身份与默认入口（存储机的 Access，没有存储机时是控制机）；
-// 各地域的私网入口由 [scf_plan] 渲染到 scf_plan.access_routes。
-func SCFAccessIdentity(cfg *Config) map[string]string {
+// SCFEntryIdentity 返回函数的固定签名身份与默认的外部入口（见 Config.EntryHost）；
+// 各地域的私网入口由 [scf_plan] 渲染到 scf_plan.entry_routes。没有主机标外部入口时不写入口，保留模板里的占位。
+func SCFEntryIdentity(cfg *Config) map[string]string {
 	base := map[string]string{"caller": "scf-collector", "key_file": "../../secrets/scf-collector.key"}
-	host := cfg.StorageHost()
-	if host.Address == "" {
-		host = cfg.ControlHost()
-	}
-	if host.Address != "" {
-		base["access_address"] = net.JoinHostPort(host.Address, "11004")
-		base["access_id"] = "access@" + host.Name
+	if host := cfg.EntryHost(); host.Address != "" {
+		base["entry_address"] = net.JoinHostPort(host.Address, strconv.Itoa(servicecatalog.HostGatewayExternalPort))
+		base["entry_host"] = host.Name
 	}
 	return base
 }

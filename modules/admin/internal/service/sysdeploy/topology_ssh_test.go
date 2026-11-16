@@ -157,12 +157,12 @@ func TestServiceClosesSessionsAfterSyncAndDelete(t *testing.T) {
 	service.SetSessionCloser(closer)
 	ctx := context.Background()
 
-	rsp, err := service.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "overseas", Address: "compute.example.test", ComponentIds: []string{"trade", "access"}, Label: "海外机", SshPort: 22, SshUser: "u", SshAuthType: "password", SshSecret: "p"})
+	rsp, err := service.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "overseas", Address: "compute.example.test", ComponentIds: []string{"trade", "egress-proxy"}, Label: "海外机", SshPort: 22, SshUser: "u", SshAuthType: "password", SshSecret: "p"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.Equal(t, []string{"overseas"}, closer.hosts)
 
-	bad, err := service.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "overseas", Address: "compute.example.test", ComponentIds: []string{"trade", "access"}, SshPort: 22, SshUser: "u", SshAuthType: "password"})
+	bad, err := service.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "overseas", Address: "compute.example.test", ComponentIds: []string{"trade", "egress-proxy"}, SshPort: 22, SshUser: "u", SshAuthType: "password"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
 	require.Len(t, closer.hosts, 1, "失败的同步不关闭会话")

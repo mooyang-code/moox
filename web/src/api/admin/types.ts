@@ -44,6 +44,8 @@ export interface DeploymentHost {
   status: DeploymentStatus;
   /** direct：可直达；outbound：只能出站，经控制主机网关反向连接中转 */
   reachability?: "direct" | "outbound";
+  /** 这台主机的网关是否开外部入口（11004），云函数、Skill 等外部身份从这里进来 */
+  external_entry?: boolean;
   description?: string;
   created_at?: string;
   updated_at?: string;
@@ -89,7 +91,7 @@ export interface CatalogComponent {
 }
 export interface ComponentCatalog {
   version: number;
-  /** 不对应部署的调用身份；external 为真的经外部接入 access 进入。 */
+  /** 不对应部署的调用身份；external 为真的从入口主机网关的外部入口（11004）进入。 */
   identities: { id: string; external: boolean }[];
   components: CatalogComponent[];
 }

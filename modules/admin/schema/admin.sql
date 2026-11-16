@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS t_hosts (
     c_status TEXT NOT NULL DEFAULT 'enabled',
     -- direct：可直达；outbound：只能出站，经 control 网关反向连接中转
     c_reachability TEXT NOT NULL DEFAULT 'direct',
+    -- 1：这台主机的网关开外部入口（11004），外部身份从这里进来
+    c_external_entry INTEGER NOT NULL DEFAULT 0,
     c_description TEXT NOT NULL DEFAULT '',
     -- 0 表示控制台不能 SSH 到这台主机
     c_ssh_port INTEGER NOT NULL DEFAULT 0,
@@ -69,6 +71,7 @@ CREATE TABLE IF NOT EXISTS t_hosts (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('enabled', 'disabled')),
     CHECK (c_reachability IN ('direct', 'outbound')),
+    CHECK (c_external_entry IN (0, 1)),
     CHECK (c_ssh_port BETWEEN 0 AND 65535),
     UNIQUE (c_address)
 );

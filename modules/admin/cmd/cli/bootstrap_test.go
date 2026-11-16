@@ -34,7 +34,7 @@ func newBootstrapFixture(t *testing.T) bootstrapOptions {
 	writeBootstrapTopology(t, opts, hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{
 		{HostID: "control", Address: "192.0.2.1", PrivateAddress: "control.internal.example.test", Components: []string{"admin", "collector"}},
 		{HostID: "storage", Address: "192.0.2.2", Components: []string{"storage-primary", "storage-view"}},
-		{HostID: "overseas", Address: "192.0.2.3", Components: []string{"access", "trade"}},
+		{HostID: "overseas", Address: "192.0.2.3", Components: []string{"egress-proxy", "trade"}},
 	}})
 	return opts
 }

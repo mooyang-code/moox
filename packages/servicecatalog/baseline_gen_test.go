@@ -84,7 +84,7 @@ func TestGenerateACLBaseline(t *testing.T) {
 		Principals: map[string][]string{},
 		RelayHTTP:  []baselineRelay{},
 	}
-	callers := map[string]bool{"console": true, "moox-cli": true, "access": true, hostGatewayCaller: true}
+	callers := map[string]bool{"console": true, "moox-cli": true, hostGatewayCaller: true}
 	type pair struct{ path, method string }
 	all := []pair{}
 	for _, component := range c.Components {

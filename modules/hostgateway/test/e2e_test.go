@@ -44,6 +44,8 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 	cfg := hostgatewayconfig.Default("storage", "control", "127.0.0.1")
 	cfg.TLS = testcert.Files(t, ca, "storage", nil)
 	cfg.Server.RemoteAddr, cfg.Server.LocalAddr, cfg.Server.HealthAddr = testrpc.Address(t), testrpc.Address(t), testrpc.Address(t)
+	// 存储机登记成外部入口：网关多开一个明文监听。
+	cfg.Server.ExternalAddr = testrpc.Address(t)
 	cfg.Store.Path = filepath.Join(t.TempDir(), "cache")
 	cfg.Control.KeyFile = filepath.Join(t.TempDir(), "host.key")
 	require.NoError(t, os.WriteFile(cfg.Control.KeyFile, []byte(gatewayauth.EncodeSigningKey(credential.Key)+"\n"), 0o600))
@@ -53,6 +55,9 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 	require.NoError(t, err)
 	cfg.Control.Target = controlSocket.Addr().String()
 	raw := testsnapshot.New(t, "storage", "storage-primary", "monitor")
+	testsnapshot.Host(t, raw, "storage").ExternalEntry = true
+	testsnapshot.AddIdentity(raw, "moox-skill")
+	testsnapshot.Rehash(t, raw)
 	reports := make(chan *pb.ReportStatusReq, 10)
 	testrpc.Serve(t, tls.NewListener(controlSocket, controlTLS.Server()), servicecatalog.GatewayControlPath, func(ctx context.Context, body []byte) ([]byte, error) {
 		message := codec.Message(ctx)
@@ -191,6 +196,27 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 		require.Error(t, err)
 	}
 	require.Equal(t, before, calls.Load())
+	// 外部入口：外部身份调名单上的方法转到本机服务；名单外的方法、组件的签名都在入口被拒；外部入口上没有目录服务。
+	skill := testsnapshot.Credential("moox-skill", "")
+	entryBody := []byte{0x0a, 0x01, 'e'}
+	headers, err = testrpc.Signed(skill, "storage", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", entryBody)
+	require.NoError(t, err)
+	response, err := testrpc.Call(context.Background(), cfg.Server.ExternalAddr, nil, "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", codec.SerializationTypePB, entryBody, headers)
+	require.NoError(t, err)
+	require.Equal(t, entryBody, response)
+	require.Equal(t, before+1, calls.Load())
+	for _, denied := range []struct {
+		credentials gatewayauth.Credentials
+		method      string
+	}{{skill, "UpsertFields"}, {testsnapshot.Credential("collector", "control"), "ReadTimeSeriesRows"}} {
+		headers, err := testrpc.Signed(denied.credentials, "storage", "trpc.moox.storage.PrimaryStore", denied.method, nil)
+		require.NoError(t, err)
+		_, err = testrpc.Call(context.Background(), cfg.Server.ExternalAddr, nil, "trpc.moox.storage.PrimaryStore", denied.method, codec.SerializationTypePB, nil, headers)
+		require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "%s 经外部入口调 %s", denied.credentials.Caller, denied.method)
+	}
+	_, err = testrpc.Call(context.Background(), cfg.Server.ExternalAddr, nil, "trpc.moox.hostgateway.Directory", "GetDirectory", codec.SerializationTypePB, nil, nil)
+	require.Error(t, err)
+	require.Equal(t, before+1, calls.Load())
 	_, err = testrpc.Call(context.Background(), cfg.Server.RemoteAddr, trust, "trpc.moox.hostgateway.Directory", "GetDirectory", codec.SerializationTypePB, nil, nil)
 	require.Error(t, err)
 	view, err := store.NewSnapshots(cfg.Store.Path, "storage").Load()

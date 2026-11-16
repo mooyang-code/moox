@@ -40,7 +40,7 @@ echo "下载源: $SRC"
 
   | 角色 | 必需 | 建议配置 | 跑什么 |
   | --- | --- | --- | --- |
-  | 存储机 | 是 | 4 核 16G、100G 磁盘 | Storage、EventBus、Access |
+  | 存储机 | 是 | 4 核 16G、100G 磁盘 | Storage、EventBus，网关开外部入口 |
   | 管理台 | 是，可与存储机或海外机共用 | 2 核 4G | Admin、管理台、Monitor、Collector、因子管理、策略 |
   | 海外机 | 采集加密货币行情时需要（建议香港） | 2 核 4G | WS 行情推送、出口代理、交易执行 |
   | 因子机 | 可选，可以是家里或局域网的 Linux 机器 | 8 核 16G | 因子引擎、归档 Worker（systemd 用户服务） |
@@ -217,7 +217,7 @@ cd moox-${VER}
 
 ## 5. 初始化
 
-启用 SCF 采集（`[scf_plan] enabled = true`）时，先按 `references/private-network.md` 为每个采集地域配置同地域的 Access 主机与 VPC。
+启用 SCF 采集（`[scf_plan] enabled = true`）时，先按 `references/private-network.md` 为每个采集地域配置同地域的入口主机（`external_entry = true`）与 VPC。
 
 `setup install` 已经包含初始化；单独运行时：`setup init --stage storage` 只写业务空间、初始秘密（管理员、腾讯云密钥、交易所密钥，只建不改）并导入元数据（数据集建好即为 active，不需要另外激活）；
 不带 `--stage` 的 `setup init` 在全部组件装好后运行，依次完成防火墙核对、业务空间与初始秘密、告警渠道、云账户、日志服务、采集计划、元数据核对，已经做过的不会重复写入。
@@ -296,7 +296,6 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `binary_dir_required`、`binary_missing` | 在源码目录里部署，没给或缺编译好的 Linux 二进制 | 用户安装应在产物包目录里运行；维护者见 [`native-release.md`](native-release.md) |
 | `version_invalid` | 目标机的 `version.json` 损坏 | 告诉用户；确认后删掉它重跑（会把全部组件当成有变化重启一遍） |
 | `config_invalid: [overrides…]` | `[overrides]` 写错：组件没有这个配置文件，或键路径不存在 | 按报错改 `moox.toml`；键路径以渲染出的配置为准（目标机 `<部署根>/config/<组件>/`） |
-| `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错处理：能补的直接编辑 `moox.toml` 的 `[deployments]`；要重新生成的先把旧的两份配置改名，再 `config init`。然后 `setup validate` |
 | `install_step_failed` | `setup install` 的某一步失败，后面是那一步的原因和单独重跑它的命令 | 按原因处理后重跑同一条 `setup install` |
 | `start_prerequisite_missing` | crypto 缺 collector-stream 或出口代理，其他空间没配 `[scf_plan]` | 告诉用户缺什么，按 `setup validate` 处理 |
 | `no_collection_tasks` | 这个空间没有任何 K 线任务，`--space-id` 写错或种子没写入（任务都停用时验收跳过，不报错） | 核对空间，看 `collector task list`；不要手工改数据库 |

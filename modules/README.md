@@ -9,7 +9,6 @@ MooX 的业务模块。每个模块是独立的 Go module（由仓库根目录 `
 | [hostgateway](./hostgateway/) | `moox-host-gateway`、`moox-host-gateway-cli` | 每台机器的主机网关 | [主机网关](../docs/模块/主机网关.md) |
 | [eventbus](./eventbus/) | `moox-eventbus` | NATS JetStream 事件总线 | [事件总线](../docs/模块/事件总线.md) |
 | [storage](./storage/) | `moox-storage-{primary,view}`、`moox-storage-cli` | 元数据、事实存储与 View | [存储](../docs/模块/存储.md) |
-| [access](./access/) | `moox-access` | 外部签名 tRPC 接入 | [外部接入](../docs/模块/外部接入.md) |
 | [egressproxy](./egressproxy/) | `moox-egress-proxy` | 受限 HTTPS 出口与 DNS 解析 | [出口代理](../docs/模块/出口代理.md) |
 | [collector](./collector/) | `moox-collector`、`moox-collector-stream`、`moox-collector-scf`、`moox-collector-cli` | 采集控制面（含云账号、代码包与云函数管理）、WS 执行端与 SCF Timer 运行时 | [采集](../docs/模块/采集.md) |
 | [callbackdispatcher](./callbackdispatcher/) | `moox-callback-dispatcher` | 事件中心：按规则向用户接口发通知或执行系统动作 | [事件中心](../docs/模块/事件中心.md) |

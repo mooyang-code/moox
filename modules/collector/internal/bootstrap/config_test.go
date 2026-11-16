@@ -284,7 +284,7 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 	valid := func() *Config {
 		cfg := Default()
 		cfg.SCFRegions = map[string]fetchplan.PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}}
-		cfg.SCFPlan.AccessRoutes = map[string]SCFAccessEndpoint{"ap-nanjing": {Address: "10.0.0.5:11004", InstanceID: "access@storage"}}
+		cfg.SCFPlan.EntryRoutes = map[string]SCFEntryEndpoint{"ap-nanjing": {Address: "10.0.0.5:11004", Host: "storage"}}
 		cfg.SCFMarkets = map[string]map[string][]string{"crypto": {"spot": {"ap-nanjing"}}}
 		cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageName, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "scf-env.json"
 		return cfg
@@ -300,8 +300,8 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 	require.Equal(t, []string{"crypto", "stockcn"}, mergeSpaces([]string{"stockcn"}, []string{"crypto", "", "STOCKCN"}))
 
 	noRoute := valid()
-	noRoute.SCFPlan.AccessRoutes = nil
-	require.ErrorContains(t, noRoute.validateSCFPlan(), "same-region Access route")
+	noRoute.SCFPlan.EntryRoutes = nil
+	require.ErrorContains(t, noRoute.validateSCFPlan(), "same-region entry route")
 	noNetwork := valid()
 	noNetwork.SCFRegions = nil
 	require.ErrorContains(t, noNetwork.validateSCFPlan(), "VPC and subnet")
@@ -367,8 +367,8 @@ func renderedTimerPlan(markets, spaces string) string {
   cloud_account_id: acct
   memory_mb: 128
   symbols_per_function: 50
-  access_routes:
-    ap-nanjing: {access_address: "10.0.0.5:11004", access_id: access@storage}
+  entry_routes:
+    ap-nanjing: {entry_address: "10.0.0.5:11004", entry_host: storage}
   spaces:
 ` + spaces
 }
@@ -504,7 +504,7 @@ func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
 		require.Contains(t, deploy.Networks, "ap-hongkong")
 	}
 	require.NotNil(t, cfg.SCFPlan.autoSizing("stockcn"), "渲染产物里只有包名与命名空间，stockcn 的估算参数仍应补回")
-	route, err := cfg.scfPlanAccessEnvironmentRoute("ap-hongkong")
+	route, err := cfg.scfPlanEntryEnvironmentRoute("ap-hongkong")
 	require.NoError(t, err)
 	require.Equal(t, "172.19.32.13:11004", route.Address)
 }

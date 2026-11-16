@@ -140,7 +140,6 @@ case "${TARGET_MODULE}" in
     if [[ "${TARGET_GOOS}" == "linux" ]]; then build_hostagent; fi
     build_storage
     build_storage_cli
-    build_go modules/access ./cmd/server moox-access 0
     ;;
   cli)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
@@ -212,9 +211,6 @@ case "${TARGET_MODULE}" in
     ;;
   storage-cgo)
     build_storage
-    ;;
-  access)
-    build_go modules/access ./cmd/server moox-access 0
     ;;
   storage-primary)
     build_go modules/storage ./cmd/server moox-storage-primary 1

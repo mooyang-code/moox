@@ -20,7 +20,7 @@ import (
 )
 
 // SCFPlanConfig 是定时触发采集的函数部署参数。网络（VPC、子网）按地域放在 scf_regions，
-// 每个空间与市场使用的地域放在 scf_markets，函数访问 Access 的私网入口沿用 scf_access_routes。
+// 每个空间与市场使用的地域放在 scf_markets，函数访问外部入口的私网地址放在 entry_routes。
 type SCFPlanConfig struct {
 	CloudAccountID string `yaml:"cloud_account_id"`
 	// PackageName 是代码包的包名：每轮取这个包名最新的可用代码包（上传新版本后函数自动升级）。
@@ -35,10 +35,9 @@ type SCFPlanConfig struct {
 	MaxConcurrentOperations int `yaml:"max_concurrent_operations"`
 	// AssumedEgressIPs 是函数出口 IP 个数的估计（用 moox-cli collector function probe-egress 实测），只用于频控估算与告警。
 	AssumedEgressIPs int `yaml:"assumed_egress_ips"`
-	// AccessRoutes 是采集计划函数访问 Access 的私网入口（按地域）。与旧链路的 scf_access_routes 分开：
-	// 旧 Invoke 函数不在 VPC 内，仍走公网入口，直到 6b 清理。
-	AccessRoutes map[string]SCFAccessEndpoint `yaml:"access_routes"`
-	Fetch        SCFPlanFetchConfig           `yaml:"fetch"`
+	// EntryRoutes 是采集计划函数访问外部入口的私网地址（按地域）。
+	EntryRoutes map[string]SCFEntryEndpoint `yaml:"entry_routes"`
+	Fetch       SCFPlanFetchConfig          `yaml:"fetch"`
 	// Spaces 是按空间的覆盖项：每函数标的数与拉取参数（stockcn 与 crypto 的限流、取数时刻不同）。
 	Spaces map[string]SCFPlanSpaceConfig `yaml:"spaces"`
 }
@@ -322,7 +321,7 @@ func mergeSpaces(lists ...[]string) []string {
 	return all
 }
 
-// validateSCFPlan 检查采集计划配置：每个地域必须有 VPC、子网与同地域 Access 私网入口。
+// validateSCFPlan 检查采集计划配置：每个地域必须有 VPC、子网与同地域外部入口私网地址。
 func (c *Config) validateSCFPlan() error {
 	if len(c.SCFMarkets) == 0 {
 		return nil
@@ -368,8 +367,8 @@ func (c *Config) validateSCFPlan() error {
 				if !ok || network.VPCID == "" || network.SubnetID == "" {
 					return fmt.Errorf("scf_markets[%s][%s] region %s has no VPC and subnet in scf_regions", space, market, region)
 				}
-				if _, ok := plan.AccessRoutes[region]; !ok {
-					return fmt.Errorf("scf_markets[%s][%s] region %s has no same-region Access route in scf_plan.access_routes", space, market, region)
+				if _, ok := plan.EntryRoutes[region]; !ok {
+					return fmt.Errorf("scf_markets[%s][%s] region %s has no same-region entry route in scf_plan.entry_routes", space, market, region)
 				}
 			}
 		}
@@ -421,25 +420,25 @@ func (c *Config) fetchPlanDeploy(spaceID string) (fetchplan.PlanDeploy, error) {
 	}, nil
 }
 
-// scfPlanAccessEnvironmentRoute 返回某地域的 Access 私网入口配置。
-func (c *Config) scfPlanAccessEnvironmentRoute(region string) (SCFAccessEndpoint, error) {
-	route, ok := c.SCFPlan.AccessRoutes[strings.ToLower(strings.TrimSpace(region))]
+// scfPlanEntryEnvironmentRoute 返回某地域的外部入口私网地址配置。
+func (c *Config) scfPlanEntryEnvironmentRoute(region string) (SCFEntryEndpoint, error) {
+	route, ok := c.SCFPlan.EntryRoutes[strings.ToLower(strings.TrimSpace(region))]
 	if !ok {
-		return SCFAccessEndpoint{}, fmt.Errorf("region %s has no Access route in scf_plan.access_routes", region)
+		return SCFEntryEndpoint{}, fmt.Errorf("region %s has no entry route in scf_plan.entry_routes", region)
 	}
 	return route, nil
 }
 
-// scfPlanAccessEnvironment 返回采集计划函数在某地域使用的 Access 环境：私网入口与调用方密钥。
-func (c *Config) scfPlanAccessEnvironment(region string) (map[string]string, error) {
-	route, err := c.scfPlanAccessEnvironmentRoute(region)
+// scfPlanEntryEnvironment 返回采集计划函数在某地域使用的外部入口环境：私网入口与调用方密钥。
+func (c *Config) scfPlanEntryEnvironment(region string) (map[string]string, error) {
+	route, err := c.scfPlanEntryEnvironmentRoute(region)
 	if err != nil {
 		return nil, err
 	}
-	config := c.SCFAccess
-	config.Address, config.InstanceID = route.Address, route.InstanceID
+	config := c.SCFEntry
+	config.Address, config.Host = route.Address, route.Host
 	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("scf_plan.access_routes[%s]: %w", region, err)
+		return nil, fmt.Errorf("scf_plan.entry_routes[%s]: %w", region, err)
 	}
 	keyPath := config.KeyFile
 	if !filepath.IsAbs(keyPath) {
@@ -448,9 +447,9 @@ func (c *Config) scfPlanAccessEnvironment(region string) (map[string]string, err
 	// 每次都重读私钥文件：控制机重新签发 scf-collector 的密钥后，下一轮对账就把新密钥写进函数环境。
 	key, err := gatewayauth.ReadSigningKey(keyPath)
 	if err != nil {
-		return nil, fmt.Errorf("SCF Access signing key: %w", err)
+		return nil, fmt.Errorf("SCF entry signing key: %w", err)
 	}
 	// MOOX_CALLER_KEY_ID 是公钥的十六进制，对账用它看出云上函数还带着旧密钥。
 	public := gatewayauth.Credentials{Key: key}.PublicKey()
-	return map[string]string{"MOOX_ACCESS_ADDRESS": config.Address, "MOOX_ACCESS_ID": config.InstanceID, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": hex.EncodeToString(public), "MOOX_CALLER_KEY": gatewayauth.EncodeSigningKey(key)}, nil
+	return map[string]string{"MOOX_ENTRY_ADDRESS": config.Address, "MOOX_ENTRY_HOST": config.Host, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": hex.EncodeToString(public), "MOOX_CALLER_KEY": gatewayauth.EncodeSigningKey(key)}, nil
 }

@@ -57,11 +57,9 @@ type setupDeps struct {
 	// ensureOperatorKey 确保这台电脑的身份目录里有 moox-cli 的签名私钥（已有就复用），返回公钥与是否新生成。
 	ensureOperatorKey func(string) (string, bool, error)
 	// registerIdentity 经 SSH 在控制机上登记（替换）一个不属于主机的身份的公钥。
-	registerIdentity func(context.Context, *setupSnapshot, string, string) error
-	// syncAccessIdentities 把最新的外部身份公钥表推到各台 access（临时，外部入口并入主机网关后删除），返回要转告用户的提醒。
-	syncAccessIdentities func(context.Context, *setupSnapshot) []string
-	ensureFirewall       func(context.Context, *setupSnapshot) (setupFirewallSummary, error)
-	ensureRelayFirewall  func(context.Context, *setupSnapshot) (setupFirewallSummary, error)
+	registerIdentity    func(context.Context, *setupSnapshot, string, string) error
+	ensureFirewall      func(context.Context, *setupSnapshot) (setupFirewallSummary, error)
+	ensureRelayFirewall func(context.Context, *setupSnapshot) (setupFirewallSummary, error)
 	// scanDeployment 只读检测目标机器的部署情况；wipeHost 清空一台主机。
 	scanDeployment func(context.Context, *setupSnapshot, deployscan.Options) ([]deployscan.HostReport, error)
 	wipeHost       func(context.Context, topology.Host, string) (deployscan.HostResult, error)
@@ -159,15 +157,15 @@ func newSetupInspectSCFCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			accessAddress := ""
+			entryAddress := ""
 			if fn.Environment != nil {
-				accessAddress = fn.Environment["MOOX_ACCESS_ADDRESS"]
+				entryAddress = fn.Environment["MOOX_ENTRY_ADDRESS"]
 			}
 			return writeSetupJSON(cmd, map[string]any{
 				"region": region, "namespace": namespace, "function": functionName,
 				"status": fn.Status, "vpc_id": fn.VpcID, "subnet_id": fn.SubnetID,
 				"public_net_status": fn.PublicNetStatus,
-				"access_address":    accessAddress,
+				"entry_address":     entryAddress,
 			})
 		},
 	}
@@ -543,7 +541,6 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.exportSkillConfig, defaults.exportSkillConfig)
 	fillSetupDep(&deps.ensureOperatorKey, defaults.ensureOperatorKey)
 	fillSetupDep(&deps.registerIdentity, defaults.registerIdentity)
-	fillSetupDep(&deps.syncAccessIdentities, defaults.syncAccessIdentities)
 	fillSetupDep(&deps.ensureFirewall, defaults.ensureFirewall)
 	fillSetupDep(&deps.ensureRelayFirewall, defaults.ensureRelayFirewall)
 	fillSetupDep(&deps.scanDeployment, defaults.scanDeployment)
@@ -623,14 +620,13 @@ func defaultSetupDeps() setupDeps {
 		openInitFactor: func(ctx context.Context, snapshot *setupSnapshot) (setupInitFactor, error) {
 			return defaultOpenSetupFactor(ctx, snapshot.Manifest)
 		},
-		ensureNotification:   defaultSetupEnsureNotification,
-		importMetadata:       defaultSetupImportMetadata,
-		exportSkillConfig:    defaultSetupExportSkillConfig,
-		ensureOperatorKey:    defaultSetupEnsureOperatorKey,
-		registerIdentity:     defaultSetupRegisterIdentity,
-		syncAccessIdentities: defaultSetupSyncAccessIdentities,
-		ensureFirewall:       defaultSetupEnsureFirewall,
-		ensureRelayFirewall:  setupEnsureRelayFirewall,
+		ensureNotification:  defaultSetupEnsureNotification,
+		importMetadata:      defaultSetupImportMetadata,
+		exportSkillConfig:   defaultSetupExportSkillConfig,
+		ensureOperatorKey:   defaultSetupEnsureOperatorKey,
+		registerIdentity:    defaultSetupRegisterIdentity,
+		ensureFirewall:      defaultSetupEnsureFirewall,
+		ensureRelayFirewall: setupEnsureRelayFirewall,
 		login: func(ctx context.Context, snapshot *setupSnapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost().Address)
 			// 这里只校验登录，用取回的根证书连接，不碰本机信任库。

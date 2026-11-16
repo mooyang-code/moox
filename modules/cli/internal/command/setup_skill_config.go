@@ -6,12 +6,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -57,8 +58,7 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			master := filepath.Join(source.operatorDir, "moox-skill.key")
-			notes, err := ensureAndRegisterIdentity(cmd.Context(), deps, snapshot, "moox-skill", master)
-			if err != nil {
+			if err := ensureAndRegisterIdentity(cmd.Context(), deps, snapshot, "moox-skill", master); err != nil {
 				return err
 			}
 			keyFile := filepath.Join(filepath.Dir(output), config.GatewayClient.KeyFile)
@@ -68,7 +68,7 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 			if err := writeSkillConfigAtomic0600(output, raw, os.Rename); err != nil {
 				return fmt.Errorf("write skill config: %w", err)
 			}
-			return writeSetupJSON(cmd, map[string]any{"status": "exported", "output": output, "key_file": keyFile, "notes": notes})
+			return writeSetupJSON(cmd, map[string]any{"status": "exported", "output": output, "key_file": keyFile})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
@@ -96,11 +96,11 @@ func defaultSetupExportSkillConfig(_ context.Context, snapshot *setupSnapshot, s
 	if err != nil {
 		return dataAccessConfig{}, err
 	}
-	host := snapshot.Manifest.StorageHost()
+	host := snapshot.Manifest.EntryHost()
 	if host.Name == "" {
-		host = snapshot.Manifest.ControlHost()
+		return dataAccessConfig{}, fmt.Errorf("skill_config: 没有主机开外部入口；在 moox.toml 里给存储机的 [hosts.<主机>] 加上 external_entry = true，重新部署那台主机后再导出")
 	}
-	config.GatewayClient = &gatewayclient.ExternalFileConfig{Address: net.JoinHostPort(host.Address, "11004"), InstanceID: "access@" + host.Name, Caller: "moox-skill", KeyFile: skillKeyFile}
+	config.GatewayClient = &gatewayclient.ExternalFileConfig{Address: net.JoinHostPort(host.Address, strconv.Itoa(servicecatalog.HostGatewayExternalPort)), Host: host.Name, Caller: "moox-skill", KeyFile: skillKeyFile}
 	return config, nil
 }
 
@@ -121,37 +121,20 @@ func copySkillKey(master, target string) error {
 }
 
 // ensureAndRegisterIdentity 给一个外部身份准备签名私钥并登记公钥：私钥文件已有就复用、没有才在本机生成（所在目录只有自己能进），
-// 公钥经 SSH 登记到控制机（替换原来登记的，一个身份只有一把），再把公钥表推到各台外部入口。返回要转告用户的提醒。
-func ensureAndRegisterIdentity(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, identity, keyFile string) ([]string, error) {
+// 公钥经 SSH 登记到控制机（替换原来登记的，一个身份只有一把）。公钥随网关快照下发，各台网关几秒内就认新公钥。
+func ensureAndRegisterIdentity(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, identity, keyFile string) error {
 	directory := filepath.Dir(keyFile)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return nil, err
+		return err
 	}
 	if info, err := os.Lstat(directory); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
-		return nil, fmt.Errorf("签名私钥所在的目录 %s 必须是权限 0700 的目录，不能是符号链接", directory)
+		return fmt.Errorf("签名私钥所在的目录 %s 必须是权限 0700 的目录，不能是符号链接", directory)
 	}
 	key, _, err := identitybundle.EnsureSigningKeyFile(keyFile)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := deps.registerIdentity(ctx, snapshot, identity, identitybundle.PublicKey(key)); err != nil {
-		return nil, err
-	}
-	return deps.syncAccessIdentities(ctx, snapshot), nil
-}
-
-// defaultSetupSyncAccessIdentities 把最新的外部身份公钥表推到各台 access；推不到的主机只提醒，不算失败。
-func defaultSetupSyncAccessIdentities(ctx context.Context, snapshot *setupSnapshot) []string {
-	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost())
-	if err != nil {
-		return []string{fmt.Sprintf("公钥已登记，但没连上控制机去更新外部入口的公钥表（%v）。对装了 access 的主机运行 moox-cli setup deploy --host <主机> --component access", err)}
-	}
-	defer control.Close()
-	notes := []string{}
-	for host, err := range deploy.SyncAccessIdentities(ctx, dialSetupHost, control, snapshot.Manifest) {
-		notes = append(notes, fmt.Sprintf("公钥已登记，但主机 %s 上的 access 还没拿到（%v）。运行 moox-cli setup deploy --host %s --component access", host, err, host))
-	}
-	return notes
+	return deps.registerIdentity(ctx, snapshot, identity, identitybundle.PublicKey(key))
 }
 
 func newSetupRegisterIdentityCommand(deps setupDeps) *cobra.Command {
@@ -160,7 +143,7 @@ func newSetupRegisterIdentityCommand(deps setupDeps) *cobra.Command {
 		Use:   "register-identity",
 		Short: "给不属于主机的外部身份准备签名私钥并登记公钥（如采集名单干预工具的 collector-operator）",
 		Long: `外部身份（collector-operator、moox-skill）的私钥只在使用它的电脑上：这条命令在 --key-file 生成一把（已有就复用），
-经 SSH 把公钥登记到控制机，并更新各外部入口的公钥表。一个身份只有一把公钥，再登记一次就是替换，旧私钥随即不能用。
+经 SSH 把公钥登记到控制机，各台网关几秒内随快照认到。一个身份只有一把公钥，再登记一次就是替换，旧私钥随即不能用。
 moox-skill 平时用 setup export-skill-config（它会顺带登记）；moox-cli 自己的密钥用 setup operator。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -176,11 +159,10 @@ moox-skill 平时用 setup export-skill-config（它会顺带登记）；moox-cl
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			notes, err := ensureAndRegisterIdentity(cmd.Context(), deps, snapshot, identity, path)
-			if err != nil {
+			if err := ensureAndRegisterIdentity(cmd.Context(), deps, snapshot, identity, path); err != nil {
 				return err
 			}
-			return writeSetupJSON(cmd, map[string]any{"status": "registered", "identity": identity, "key_file": path, "notes": notes})
+			return writeSetupJSON(cmd, map[string]any{"status": "registered", "identity": identity, "key_file": path})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 的路径")

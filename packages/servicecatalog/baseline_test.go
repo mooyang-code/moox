@@ -105,7 +105,7 @@ func checkACLBaseline(t *testing.T, c Catalog) {
 	}
 
 	// 调用方全集：基线里的每个调用方都要核对，目录新增的组件或外部身份也必须已经进了基线。
-	universe := map[string]bool{"console": true, "moox-cli": true, "access": true, "host-gateway": true}
+	universe := map[string]bool{"console": true, "moox-cli": true, "host-gateway": true}
 	for _, component := range c.Components {
 		universe[component.ID] = true
 	}

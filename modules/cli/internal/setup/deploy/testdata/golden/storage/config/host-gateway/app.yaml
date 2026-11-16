@@ -4,6 +4,7 @@ server:
     remote_addr: 0.0.0.0:11003
     local_addr: 127.0.0.1:11002
     health_addr: 127.0.0.1:11012
+    external_addr: 0.0.0.0:11004
 tls:
     cert_file: /data/moox/secrets/host.crt
     key_file: /data/moox/secrets/host.tls.key

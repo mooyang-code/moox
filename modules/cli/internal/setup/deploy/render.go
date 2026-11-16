@@ -44,7 +44,7 @@ type Identity struct {
 	// 它们进组件的指纹：换了密钥，用它签名的组件就要重启；没换时私钥文件不在 Secrets 里，目标机上的原样沿用。
 	SignPublicKey, SCFCollectorPublicKey string
 	// Secrets 是 secrets/ 下这次要写的文件（相对路径 → 内容）：moox-ca.crt、host.crt、host.tls.key，新签发时的 host.key 与
-	// scf-collector.key，以及 access 的公钥表 access/*。
+	// scf-collector.key。
 	Secrets map[string][]byte
 	// EventBus 是导出的 EventBus 材料（文件名 → 内容）：ca.pem、<角色>.yaml，EventBus 所在主机另有 server.pem、server-key.pem、users.yaml。
 	EventBus map[string][]byte
@@ -218,15 +218,8 @@ func (r *renderer) secretsOf(component servicecatalog.Component) []string {
 		return nil
 	}
 	names := []string{"secrets/moox-ca.crt"}
-	switch component.ID {
-	case "host-gateway":
+	if component.ID == "host-gateway" {
 		names = append(names, "secrets/host.crt", "secrets/host.tls.key")
-	case "access":
-		for name := range r.Identity.Secrets {
-			if strings.HasPrefix(name, "access/") {
-				names = append(names, "secrets/"+name)
-			}
-		}
 	}
 	return names
 }
@@ -419,8 +412,8 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			if r.Identity.SCFCollectorPublicKey == "" {
 				return nil, errors.New("身份材料里没有 scf-collector 的公钥")
 			}
-			set("scf_access.caller", "scf-collector")
-			set("scf_access.key_file", layout.Secret("scf-collector.key"))
+			set("scf_entry.caller", "scf-collector")
+			set("scf_entry.key_file", layout.Secret("scf-collector.key"))
 		case "collector-stream":
 			set("data_dir", data)
 			set("market_config", path.Join(layout.Config(id), "sources/market/binance.yaml"))
@@ -432,9 +425,6 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			set("database", path.Join(data, "strategy.sqlite"))
 			set("eventbus.urls", []string{url})
 			set("eventbus.credential_file", credential)
-		case "access":
-			set("verification_file", layout.Secret("access/access-verification.json"))
-			set("nonce_path", path.Join(data, "nonces.db"))
 		case "trade":
 			set("database.path", path.Join(data, "moox_trade.db"))
 			set("eventbus.urls", []string{url})
@@ -533,6 +523,10 @@ func (r *renderer) generated(component servicecatalog.Component, environment map
 		config.TLS = hostgatewayconfig.TLS{CertificateFile: layout.Secret("host.crt"), KeyFile: layout.Secret("host.tls.key"), CAFile: layout.Secret("moox-ca.crt")}
 		config.Control.KeyFile = layout.Secret("host.key")
 		config.Store.Path = layout.Data(id)
+		// 标了外部入口的主机，网关多开 11004。
+		if r.Host.ExternalEntry {
+			config.Server.ExternalAddr = hostgatewayconfig.ExternalEntryAddr
+		}
 		raw, err := hostgatewayconfig.Encode(config)
 		if err != nil {
 			return err

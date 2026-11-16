@@ -1,15 +1,15 @@
 gateway_client:
   caller: collector
-  key_file: ./caller-collector.key
+  key_file: ../../secrets/host.key
 delist:
   auto_detect: false
 egress_proxy:
   domains:
     - '*.binance.com'
-scf_access:
-  access_address: 2.2.2.2:11004
-  access_id: access@storage
+scf_entry:
   caller: scf-collector
+  entry_address: 2.2.2.2:11004
+  entry_host: storage
   key_file: ../../secrets/scf-collector.key
 scf_regions:
   ap-hongkong:
@@ -28,10 +28,10 @@ scf_plan:
   cloud_account_id: tencent-scf
   memory_mb: 128
   symbols_per_function: 50
-  access_routes:
+  entry_routes:
     ap-hongkong:
-      access_address: 172.19.32.13:11004
-      access_id: access@overseas
+      entry_address: 172.19.32.13:11004
+      entry_host: overseas
   spaces:
     crypto:
       namespace: moox-crypto-plan

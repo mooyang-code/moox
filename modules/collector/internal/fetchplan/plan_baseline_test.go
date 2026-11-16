@@ -30,7 +30,7 @@ import (
 // 比对按“函数在每个时刻被要求成为的样子”换算（见 planPushesFromGolden 与 planPushesFromCalls）：
 //   - 旧的“建函数 + 同一时刻的运行配置” = 新的一次 Ensure（建函数与下发环境、定时器合成一次）；
 //   - 旧的只停定时器的运行配置（退役、暂停）= 新的 SetTimer(停用)；
-//   - 旧的部署（只换代码）= 新的 UpgradeCode；补采函数的部署、Access 变了之后的“删掉再建” = 新的一次 Ensure（就地改写）。
+//   - 旧的部署（只换代码）= 新的 UpgradeCode；补采函数的部署、外部入口变了之后的“删掉再建” = 新的一次 Ensure（就地改写）。
 // 比的是受管环境（采集计划换成 SHA-256）、定时器、代码包；创建预留号、函数元数据这些旧实现的附带项不再存在，不比。
 
 // planBaselineFunction 是一份计划里一个函数的记录。
@@ -265,7 +265,7 @@ func planPushesFromGolden(t *testing.T, dispatches []planDispatch) []planPush {
 			}
 		case "delete":
 			for _, name := range dispatch.Functions {
-				// 补采函数 Access 变了时旧实现删掉再建；新实现就地 Ensure，删除那一步不再有（紧跟的建函数换算成 push）。
+				// 补采函数外部入口变了时旧实现删掉再建；新实现就地 Ensure，删除那一步不再有（紧跟的建函数换算成 push）。
 				require.Contains(t, name, "backfill", "金样里只有补采函数的删除")
 				deleted[name] = true
 			}
@@ -471,8 +471,8 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		h.now = h.now.Add(time.Minute)
 		_, err = r.EnsureBackfillFunction(context.Background(), "spot")
 		require.NoError(t, err)
-		r.Access = func(string) (map[string]string, error) {
-			access, _ := testSCFAccessEnvironment("")
+		r.Entry = func(string) (map[string]string, error) {
+			access, _ := testSCFEntryEnvironment("")
 			access["MOOX_CALLER_KEY_ID"] = "assigned-scf-key-18"
 			return access, nil
 		}

@@ -91,7 +91,7 @@ func TestNetworkClientUpdateSCFNetworkSendsEmptyVpcToUnbind(t *testing.T) {
 		_, _ = w.Write([]byte(`{"Response":{"RequestId":"req-scf"}}`))
 	})
 	if err := client.UpdateSCFNetwork(context.Background(), "default", "moox-fetcher-1", "", "", "ENABLE", map[string]string{
-		"MOOX_ACCESS_ADDRESS": "146.56.196.204:11004",
+		"MOOX_ENTRY_ADDRESS": "146.56.196.204:11004",
 	}); err != nil {
 		t.Fatal(err)
 	}

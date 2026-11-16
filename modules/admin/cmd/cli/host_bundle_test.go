@@ -55,7 +55,7 @@ func TestHostBundleIssuesOneKeyPerHostAndReusesItOnRedeploy(t *testing.T) {
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
 	require.NoError(t, dao.SetHostStatus(context.Background(), "storage", "disabled"))
-	require.NoError(t, dao.SetDeploymentStatus(context.Background(), "overseas", "access", "disabled"))
+	require.NoError(t, dao.SetDeploymentStatus(context.Background(), "overseas", "egress-proxy", "disabled"))
 	beforeHosts, beforePlacements, err := dao.Read(context.Background())
 	require.NoError(t, err)
 	closeAdminCLIDB(db)

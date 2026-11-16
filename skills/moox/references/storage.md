@@ -1,6 +1,6 @@
 # Storage 职责与边界
 
-当前 `modules/storage` 有 primary、view 两个角色；外部 RPC 入口是独立的 `modules/access`。
+当前 `modules/storage` 有 primary、view 两个角色；外部身份（云函数、Skill）从主机网关的外部入口（`11004`）进来。
 
 - SQLite：primary 保存空间、标的、标签、数据集、字段和 View 元数据。
 - Pebble：primary 在同一进程内保存字段级时序/记录事实、采集周期账本与行变更日志；完成事件跟随变更日志转发到 EventBus。

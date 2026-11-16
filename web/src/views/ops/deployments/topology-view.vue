@@ -112,6 +112,7 @@
             <strong>{{ host.host.host_id }}</strong>
             <a-tag v-if="host.isControl" size="small">控制主机</a-tag>
             <a-tag v-if="host.host.reachability === 'outbound'" size="small">只能出站</a-tag>
+            <a-tag v-if="host.host.external_entry" size="small">外部入口</a-tag>
             <a-tag v-if="host.host.status === 'disabled'" size="small">已停用</a-tag>
             <span class="host-health">
               <span v-if="host.counts.down" class="down">{{ host.counts.down }} 异常</span>
@@ -207,7 +208,7 @@
       >
       <template v-else
         >调用关系依据组件目录里各方法的调用方（callers 与
-        operators）推导，外部身份经外部接入转发；消息总线的事件订阅见「数据流向」。</template
+        operators）推导，外部身份从入口主机网关的外部入口进来；消息总线的事件订阅见「数据流向」。</template
       >
       <template v-if="topology.unplaced.length">目录中未部署：{{ topology.unplaced.join("、") }}。</template>
     </p>

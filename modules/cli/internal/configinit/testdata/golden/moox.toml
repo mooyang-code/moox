@@ -164,12 +164,12 @@ enabled = false
 # cos_region = "ap-guangzhou"
 # cos_bucket = "moox-scf-guangzhou-<app_id>"
 
-# 函数在地域 VPC 内运行，通过同地域主机的私网地址访问 Access：
-# 该地域必须有一台 [hosts.<id>] 配置了 region 与 private_address、并在 [deployments] 里带 access 组件。
+# 函数在地域 VPC 内运行，通过同地域主机的私网地址访问外部入口（主机网关的 11004）：
+# 该地域必须有一台 [hosts.<id>] 配置了 region 与 private_address，并写了 external_entry = true。
 # [scf_plan.regions.ap-hongkong]
 # vpc_id = "vpc-xxxxxxxx"
 # subnet_id = "subnet-xxxxxxxx"
-# access_host = "overseas"   # 同地域有多台带私网地址的 access 主机时必须指定入口主机
+# entry_host = "overseas"   # 同地域有多台带私网地址的入口主机时必须指定
 
 # [[scf_plan.spaces]]
 # space_id = "crypto"
@@ -181,13 +181,13 @@ enabled = false
 # swap = ["ap-hongkong"]
 
 # config init 会按第一步密钥的 AppId 与入口主机的 VPC、子网、私网 IP 自动生成下面 A 股这一套：入口优先选存储服务器所在地域（同地域走内网），
-# 存储服务器没有可用的私有网络时退而选其他带 Access 的主机（如海外服务器）。
-# A 股：沪深 300 成分股 5m K 线，函数优先放在存储机所在地域（该地域要有带 access 组件、配了 private_address 的主机），
+# 存储服务器没有可用的私有网络时退而选其他开了外部入口的主机（如海外服务器）。
+# A 股：沪深 300 成分股 5m K 线，函数优先放在存储机所在地域（该地域要有写了 external_entry = true、配了 private_address 的主机），
 # 每 5 分钟触发一次，午休、收盘后、非交易日函数直接返回不采集。
 # [scf_plan.regions.ap-nanjing]
 # vpc_id = "vpc-xxxxxxxx"
 # subnet_id = "subnet-xxxxxxxx"
-# access_host = "storage"
+# entry_host = "storage"
 # [[scf_plan.spaces]]
 # space_id = "stockcn"
 # [scf_plan.spaces.markets]
@@ -225,6 +225,7 @@ ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519"
 [hosts.storage]
 label = "存储机"
 address = "198.51.100.11"
+external_entry = true
 region = "ap-nanjing"
 provider = "tencent"
 ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519" }
@@ -232,6 +233,7 @@ ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519"
 [hosts.overseas]
 label = "海外机"
 address = "198.51.100.12"
+external_entry = true
 region = "ap-hongkong"
 provider = "tencent"
 ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519" }
@@ -239,8 +241,8 @@ ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519"
 # host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。
 [deployments]
 control = ["admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"]
-storage = ["storage-primary", "storage-view", "access", "eventbus"]
-overseas = ["trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"]
+storage = ["storage-primary", "storage-view", "eventbus"]
+overseas = ["trade", "egress-proxy", "collector-stream", "callback-dispatcher"]
 
 [egress_proxy]
 http_domains = ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]

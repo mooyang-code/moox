@@ -43,6 +43,7 @@ func TestSnapshotHashCoversHostsDeploymentsAndKeysWithoutMutatingInput(t *testin
 		"private address":  func(m *HostGatewaySnapshot) { m.Hosts[1].PrivateAddress = "10.0.0.3" },
 		"reachability":     func(m *HostGatewaySnapshot) { m.Hosts[1].Reachability = "outbound" },
 		"host disabled":    func(m *HostGatewaySnapshot) { m.Hosts[1].Enabled = false },
+		"external entry":   func(m *HostGatewaySnapshot) { m.Hosts[1].ExternalEntry = true },
 		"host added": func(m *HostGatewaySnapshot) {
 			m.Hosts = append(m.Hosts, &SnapshotHost{HostId: "overseas", Address: "192.0.2.4"})
 		},

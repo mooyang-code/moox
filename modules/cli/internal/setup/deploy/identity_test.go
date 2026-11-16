@@ -243,7 +243,7 @@ func (f *identityFixture) options(host string) Options {
 		SyncHost: func(_ context.Context, hostID string) error { f.synced = append(f.synced, hostID); return nil }}
 }
 
-// run 取一台主机的身份材料。选哪些组件只决定要不要一并取 EventBus 角色文件与 access 的公钥表；
+// run 取一台主机的身份材料。选哪些组件只决定要不要一并取 EventBus 角色文件；
 // 这里选不带 EventBus 角色的第三方程序，只看主机身份包这一部分。
 func (f *identityFixture) run(options Options, target *fakeHost, fresh bool) (Identity, issuedKeys, error) {
 	return options.identity(context.Background(), target, f.catalog, f.cfg.HostByID(options.HostID), f.cfg.ControlHost(), []string{"seaweedfs"}, fresh)
@@ -356,26 +356,4 @@ func TestHostIdentityIsIssuedByControlAndVerifiedAgainstPinnedCA(t *testing.T) {
 	f.control.admin = other
 	_, _, err = f.run(f.options("storage"), storage, false)
 	require.ErrorContains(t, err, "identity_invalid")
-}
-
-// access 的公钥表（临时，外部入口并入主机网关后删除）：只收目录里的外部身份，moox-cli 不经外部入口，不进表。
-func TestAccessVerificationListsOnlyExternalIdentities(t *testing.T) {
-	f := newIdentityFixture(t)
-	f.admin.operator, _ = f.admin.newKey()
-	skill, _ := f.admin.newKey()
-	scf, _ := f.admin.newKey()
-	f.admin.external = map[string]string{"moox-skill": skill, "scf-collector": scf}
-	table, err := accessVerification(context.Background(), f.control, f.cfg, f.catalog)
-	require.NoError(t, err)
-	var decoded struct {
-		Version    int           `json:"version"`
-		Identities []IdentityKey `json:"identities"`
-	}
-	require.NoError(t, json.Unmarshal(table, &decoded))
-	require.Equal(t, 2, decoded.Version)
-	require.Equal(t, []IdentityKey{{Identity: "moox-skill", PublicKey: skill}, {Identity: "scf-collector", PublicKey: scf}}, decoded.Identities)
-	// 控制机上登记的公钥不合法时不生成表。
-	f.admin.external["moox-skill"] = "corrupt"
-	_, err = accessVerification(context.Background(), f.control, f.cfg, f.catalog)
-	require.ErrorContains(t, err, "control_admin_failed")
 }

@@ -3,7 +3,6 @@ package validate
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sync"
 	"testing"
 
@@ -26,8 +25,8 @@ func TestRunReportsUnknownHostFingerprint(t *testing.T) {
 	}}
 	result, err := Run(context.Background(), snapshot, Dependencies{Identity: &fakeIdentity{}, SSH: checker})
 	require.Error(t, err)
-	assert.Equal(t, "host_key_unknown", result.Checks[3].Code)
-	assert.Equal(t, "SHA256:verified-out-of-band", result.Checks[3].Fingerprint)
+	assert.Equal(t, "host_key_unknown", result.Checks[2].Code)
+	assert.Equal(t, "SHA256:verified-out-of-band", result.Checks[2].Fingerprint)
 }
 
 func (f *fakeIdentity) GetCallerIdentity(context.Context) (cloudprovider.CallerIdentity, error) {
@@ -75,7 +74,6 @@ func TestRunChecksIdentityThenHosts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []Check{
 		{Name: "config", Status: "valid"},
-		{Name: "deployments", Status: "valid"},
 		{Name: "tencent_cloud", Status: "valid"},
 		{Name: "host:control", Status: "valid"},
 		{Name: "host:overseas", Status: "valid"},
@@ -93,7 +91,6 @@ func TestRunStopsBeforeSSHWhenIdentityFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, []Check{
 		{Name: "config", Status: "valid"},
-		{Name: "deployments", Status: "valid"},
 		{Name: "tencent_cloud", Status: "invalid", Code: "tencent_auth_failed"},
 	}, result.Checks)
 	assert.Empty(t, sshChecker.calls)
@@ -111,27 +108,9 @@ func TestRunPreservesHostOrderAndRedactsErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, []Check{
 		{Name: "config", Status: "valid"},
-		{Name: "deployments", Status: "valid"},
 		{Name: "tencent_cloud", Status: "valid"},
 		{Name: "host:control", Status: "valid"},
 		{Name: "host:overseas", Status: "invalid", Code: "ssh_validation_failed"},
 	}, result.Checks)
 	assert.NotContains(t, err.Error(), "recognizable-compute-password")
-}
-
-func TestRunRejectsIncompleteDeploymentsBeforeTouchingHosts(t *testing.T) {
-	snapshot := validationSnapshot(t)
-	components := snapshot.Deployments["control"]
-	snapshot.Deployments["control"] = slices.DeleteFunc(components, func(id string) bool { return id == "collector" })
-	identity := &fakeIdentity{}
-	sshChecker := &fakeSSHChecker{errs: map[string]error{}}
-
-	result, err := Run(context.Background(), snapshot, Dependencies{Identity: identity, SSH: sshChecker})
-	require.ErrorIs(t, err, ErrValidationFailed)
-	// 外部身份 collector-operator 能调 Collector 的方法：没有 Collector，Access 会一直等不到这项服务。
-	assert.ErrorContains(t, err, "collector")
-	assert.ErrorContains(t, err, "给主机 control 加上 collector")
-	assert.Equal(t, "deployment_incomplete", result.Checks[1].Code)
-	assert.Empty(t, sshChecker.calls)
-	assert.Zero(t, identity.calls)
 }

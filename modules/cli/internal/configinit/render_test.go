@@ -12,7 +12,6 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 // sampleRequest 是三台独立的腾讯云服务器（存储、管理台、海外），不配因子计算机（地址用文档保留的测试网段）。
@@ -97,8 +96,8 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 	}
 	// 角色到组件的映射与示例模板的部署一致。
 	if !slices.Equal(manifest.Deployments["control"], []string{"admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}) ||
-		!slices.Equal(manifest.Deployments["storage"], []string{"storage-primary", "storage-view", "access", "eventbus"}) ||
-		!slices.Equal(manifest.Deployments["overseas"], []string{"trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"}) {
+		!slices.Equal(manifest.Deployments["storage"], []string{"storage-primary", "storage-view", "eventbus"}) ||
+		!slices.Equal(manifest.Deployments["overseas"], []string{"trade", "egress-proxy", "collector-stream", "callback-dispatcher"}) {
 		t.Fatalf("部署 = %+v", manifest.Deployments)
 	}
 	if manifest.EventBusHost().Address != manifest.HostCatalog["storage"].Address {
@@ -418,8 +417,8 @@ func TestRenderAllowsEmptyWebhook(t *testing.T) {
 	}
 }
 
-// 配置页能生成的每种拓扑都要部署完整，否则新用户都会卡在 Access 未就绪。
-func TestEveryGeneratedTopologyIsComplete(t *testing.T) {
+// 配置页能生成的每种拓扑都有外部入口（云函数、Skill 要从它进来），并且不会把只能出站的因子机标成入口。
+func TestEveryGeneratedTopologyHasAnExternalEntry(t *testing.T) {
 	factorServer := &SSHTarget{Address: "192.0.2.30", SSHUser: "builder"}
 	cases := map[string]func(*Request){
 		"全部":      func(r *Request) { r.Servers.Factor = factorServer },
@@ -431,16 +430,17 @@ func TestEveryGeneratedTopologyIsComplete(t *testing.T) {
 	for name, change := range cases {
 		request := sampleRequest()
 		change(&request)
-		catalog, err := servicecatalog.LoadEmbedded()
-		if err != nil {
-			t.Fatal(err)
+		manifest := render(t, request)
+		if entry := manifest.EntryHost(); entry.Name != manifest.StorageHost().Name || entry.Name == "" {
+			t.Fatalf("%s: 默认外部入口应是存储机，得到 %q", name, entry.Name)
 		}
-		var deployed []string
-		for _, components := range render(t, request).Deployments {
-			deployed = append(deployed, components...)
-		}
-		if missing := catalog.MissingGrants(deployed); len(missing) > 0 {
-			t.Fatalf("%s: 缺组件 %+v", name, missing)
+		for _, host := range manifest.Hosts() {
+			if host.ExternalEntry && host.Reachability != "" {
+				t.Fatalf("%s: 只能出站的主机 %s 被标成了外部入口", name, host.Name)
+			}
+			if slices.Contains(manifest.Deployments[host.Name], "access") {
+				t.Fatalf("%s: 生成的配置里还有已删除的 access 组件", name)
+			}
 		}
 	}
 }
@@ -464,7 +464,7 @@ func TestRenderPlansStockCNCloudFunctionsInTheStorageVPC(t *testing.T) {
 		t.Fatalf("云账号 = %+v", account)
 	}
 	region := manifest.SCFPlan.Regions["ap-nanjing"]
-	if region.VPCID != "vpc-abc" || region.SubnetID != "subnet-def" || region.AccessHost != "storage" {
+	if region.VPCID != "vpc-abc" || region.SubnetID != "subnet-def" || region.EntryHost != "storage" {
 		t.Fatalf("地域网络 = %+v", region)
 	}
 	if len(manifest.SCFPlan.Spaces) != 1 || manifest.SCFPlan.Spaces[0].SpaceID != "stockcn" || !slices.Equal(manifest.SCFPlan.Spaces[0].Markets["equity"], []string{"ap-nanjing"}) {
@@ -519,7 +519,7 @@ func TestRenderCloudFunctionPlanGuards(t *testing.T) {
 	}
 }
 
-// 入口主机优先选存储服务器（同地域走内网）；存储服务器是轻量服务器没有可用 VPC 时，退而选海外服务器的 Access。
+// 入口主机优先选存储服务器（同地域走内网）；存储服务器是轻量服务器没有可用 VPC 时，退而选海外服务器的外部入口。
 func TestRenderPrefersStorageRegionForCloudFunctions(t *testing.T) {
 	plan := func(cloud *fakeCloud) renderedManifest {
 		rendered, err := Render(context.Background(), ptr(sampleRequest()), testEnv(cloud, &fakeProber{report: linuxReport()}))
@@ -532,14 +532,14 @@ func TestRenderPrefersStorageRegionForCloudFunctions(t *testing.T) {
 	both.instances["198.51.100.11"] = Instance{Kind: "cvm", Region: "ap-nanjing", Name: "storage", VpcID: "vpc-nj", SubnetID: "subnet-nj", PrivateIP: "10.0.0.5"}
 	both.instances["198.51.100.12"] = Instance{Kind: "cvm", Region: "ap-hongkong", Name: "hk", VpcID: "vpc-hk", SubnetID: "subnet-hk", PrivateIP: "172.19.0.5"}
 	manifest := plan(both)
-	if got := manifest.SCFPlan.Spaces[0].Markets["equity"]; !slices.Equal(got, []string{"ap-nanjing"}) || manifest.SCFPlan.Regions["ap-nanjing"].AccessHost != "storage" {
+	if got := manifest.SCFPlan.Spaces[0].Markets["equity"]; !slices.Equal(got, []string{"ap-nanjing"}) || manifest.SCFPlan.Regions["ap-nanjing"].EntryHost != "storage" {
 		t.Fatalf("存储服务器可用时应选它所在地域：%v", got)
 	}
 
 	fallback := newFakeCloud() // 存储服务器是轻量服务器（没有 VPC）
 	fallback.instances["198.51.100.12"] = Instance{Kind: "cvm", Region: "ap-hongkong", Name: "hk", VpcID: "vpc-hk", SubnetID: "subnet-hk", PrivateIP: "172.19.0.5"}
 	manifest = plan(fallback)
-	if !manifest.SCFEnabled() || manifest.SCFPlan.Regions["ap-hongkong"].AccessHost != "overseas" || !slices.Equal(manifest.SCFPlan.Spaces[0].Markets["equity"], []string{"ap-hongkong"}) {
+	if !manifest.SCFEnabled() || manifest.SCFPlan.Regions["ap-hongkong"].EntryHost != "overseas" || !slices.Equal(manifest.SCFPlan.Spaces[0].Markets["equity"], []string{"ap-hongkong"}) {
 		t.Fatalf("存储服务器不可用时应退到海外服务器：%+v", manifest.SCFPlan)
 	}
 }

@@ -71,7 +71,7 @@
   <path class="ctrl" d="M808,170 L754,170" marker-end="url(#m-ctrl)"/>
   <text class="l-ctrl" x="781" y="162" text-anchor="middle">采集计划</text>
   <path class="data" d="M570,244 L570,336" marker-end="url(#m-data)"/>
-  <text class="l-data" x="562" y="284" text-anchor="end">K 线写入（Access 签名接入）</text>
+  <text class="l-data" x="562" y="284" text-anchor="end">K 线写入（网关外部入口签名接入）</text>
   <path class="data" d="M990,244 L990,290 L700,290 L700,336" marker-end="url(#m-data)"/>
   <text class="l-data" x="708" y="282">补采与重采样写入</text>
   <rect x="30" y="300" width="1140" height="226" rx="14" fill="#f8f9ff" stroke="#a5b4fc" stroke-width="1.3"/>

@@ -319,9 +319,9 @@ func TimerMatches(timer *cloud.TimerState, cron string) bool {
 		timer.Qualifier == timerTriggerQualifier && timer.Message == timerTriggerMessage
 }
 
-// managedDrift 判断读回的受管环境（分配哈希、Access 入口与调用方身份）与期望不一致。
+// managedDrift 判断读回的受管环境（分配哈希、外部入口与调用方身份）与期望不一致。
 func managedDrift(environment, want map[string]string) bool {
-	for _, key := range []string{"MOOX_MARKET_FETCH_ASSIGNMENT_HASH", "MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER_KEY_ID"} {
+	for _, key := range []string{"MOOX_MARKET_FETCH_ASSIGNMENT_HASH", "MOOX_ENTRY_ADDRESS", "MOOX_ENTRY_HOST", "MOOX_CALLER_KEY_ID"} {
 		if environment[key] != want[key] {
 			return true
 		}

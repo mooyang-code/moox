@@ -32,7 +32,8 @@
                   <small v-if="group.host.label" class="host-id">{{ group.host.host_id }}</small>
                   <a-tag v-if="group.host.host_id === controlHostId">控制主机 · 受保护</a-tag
                   ><a-tag v-if="group.host.status === 'disabled'">已停用</a-tag
-                  ><a-tag v-if="group.host.reachability === 'outbound'">只能出站 · 经控制主机中转</a-tag>
+                  ><a-tag v-if="group.host.reachability === 'outbound'">只能出站 · 经控制主机中转</a-tag
+                  ><a-tag v-if="group.host.external_entry">外部入口 :11004</a-tag>
                 </h3>
                 <p>
                   {{ group.host.address }}

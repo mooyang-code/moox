@@ -36,8 +36,8 @@ describe("SysDeploy v2", () => {
   it("keeps deployment identity separate for the same component on different hosts", async () => {
     call.mockResolvedValue({
       deployments: [
-        { host_id: "a", component_id: "access", status: "enabled" },
-        { host_id: "b", component_id: "access", status: "disabled" }
+        { host_id: "a", component_id: "egress-proxy", status: "enabled" },
+        { host_id: "b", component_id: "egress-proxy", status: "disabled" }
       ]
     });
     expect(await listAllDeployments()).toHaveLength(2);

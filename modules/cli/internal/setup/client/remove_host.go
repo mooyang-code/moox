@@ -70,7 +70,7 @@ func (c *Client) RemoveRegisteredHost(ctx context.Context, host RegisteredHost) 
 	current := listed.GetHosts()[i]
 	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "SyncHostDeployments", &pb.SyncHostDeploymentsReq{
 		HostId: current.GetHostId(), Label: current.GetLabel(), Address: current.GetAddress(), PrivateAddress: current.GetPrivateAddress(),
-		Region: current.GetRegion(), Reachability: current.GetReachability(), Description: current.GetDescription(),
+		Region: current.GetRegion(), Reachability: current.GetReachability(), ExternalEntry: current.GetExternalEntry(), Description: current.GetDescription(),
 	}, sync); err != nil {
 		return err
 	}

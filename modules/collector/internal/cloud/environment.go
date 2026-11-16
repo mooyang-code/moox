@@ -100,7 +100,7 @@ func isSecretEnvironmentKey(key string) bool {
 }
 
 // validateEnvironment 校验写给函数的完整环境。cloud 包只管两种函数：带采集计划的定时采集函数与补采函数；
-// 两者都不连 EventBus（环境里出现 EventBus 项直接拒绝），都经 Access 写 Storage、带 CLS 上报配置，单次运行超时都是 60 秒，
+// 两者都不连 EventBus（环境里出现 EventBus 项直接拒绝），都经外部入口写 Storage、带 CLS 上报配置，单次运行超时都是 60 秒，
 // 合计不超过 4096 字节。
 func validateEnvironment(values map[string]string) error {
 	if strings.TrimSpace(values[planKey]) == "" && strings.TrimSpace(values[modeKey]) != "backfill" {

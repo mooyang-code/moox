@@ -36,7 +36,7 @@ func TestBackfillFunctionIsCreatedOnFirstUse(t *testing.T) {
 	require.Equal(t, int64(320), function.ReservedMem)
 	require.Equal(t, "pkg-v1", function.Info.Environment["MOOX_CODE_PACKAGE_ID"])
 	require.Equal(t, "packages/pkg-v1.zip", function.COSObject)
-	require.Equal(t, "access@storage", function.Info.Environment["MOOX_ACCESS_ID"])
+	require.Equal(t, "storage", function.Info.Environment["MOOX_ENTRY_HOST"])
 	require.Equal(t, 1, h.cloud.client.Count("CreateFunction"))
 }
 

@@ -211,7 +211,17 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		return err
 	}
 	health.SetStorageCheck(cache.Check)
-	proxy, err := router.NewService(router.ServiceOptions{State: runtime.State(), Replay: replay, Metrics: health})
+	serviceOptions := router.ServiceOptions{State: runtime.State(), Replay: replay, Metrics: health}
+	// 外部入口：只有配置了 external_addr 的主机才开（部署按主机登记的 external_entry 渲染）。
+	if cfg.Server.ExternalAddr != "" {
+		forwarder, err := openEntryForwarder(cfg, credentials, runtime.State())
+		if err != nil {
+			return err
+		}
+		defer forwarder.Close()
+		serviceOptions.Remote = forwarder
+	}
+	proxy, err := router.NewService(serviceOptions)
 	if err != nil {
 		return err
 	}
@@ -259,8 +269,19 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err := directory.Register(local, runtime.State()); err != nil {
 		return err
 	}
+	entries := []interface{ Close(chan struct{}) error }{remote, local}
 	healthServer := newHealthHTTPServer(health.Handler())
-	results := make(chan serverResult, 4)
+	results := make(chan serverResult, 5)
+	servers := 4
+	if opened.External != nil {
+		external := listener.TRPC(opened.External, "trpc.moox.hostgateway.External", drain)
+		if err := proxy.RegisterExternal(external); err != nil {
+			return err
+		}
+		entries = append(entries, external)
+		servers++
+		go func() { results <- serverResult{"external tRPC", external.Serve()} }()
+	}
 	go func() { results <- serverResult{"remote tRPC", remote.Serve()} }()
 	go func() { results <- serverResult{"local tRPC", local.Serve()} }()
 	go func() {
@@ -289,9 +310,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	}
 	// 先拒绝新请求，再等待已接纳的请求。
 	drain.Begin()
-	// 两个入口并行排空，总等待不超过 DrainTimeout。
+	// 各入口并行排空，总等待不超过 DrainTimeout。
 	var draining sync.WaitGroup
-	for _, service := range []interface{ Close(chan struct{}) error }{remote, local} {
+	for _, service := range entries {
 		draining.Add(1)
 		go func() {
 			defer draining.Done()
@@ -300,7 +321,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	}
 	draining.Wait()
 	closeTimers()
-	for completed < 4 {
+	for completed < servers {
 		<-results
 		completed++
 	}

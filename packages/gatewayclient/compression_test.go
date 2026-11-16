@@ -16,7 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-// 跨主机调用恒定压缩：远端网关、经 control 中转、SSH 隧道、Access 都压缩；本机回环从不压缩。
+// 跨主机调用恒定压缩：远端网关、经 control 中转、SSH 隧道、外部入口都压缩；本机回环从不压缩。
 func TestCrossHostEndpointsAlwaysCompress(t *testing.T) {
 	directory := testDirectory(t, "a", "b")
 
@@ -26,12 +26,12 @@ func TestCrossHostEndpointsAlwaysCompress(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ep.compress, "SSH 隧道经公网到达目标主机")
 
-	// External：经 Access。
+	// External：经外部入口。
 	external := newTestClient(t, Config{Mode: External, Credentials: authtest.Identity("scf-collector"),
-		AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"})
+		EntryAddress: "entry.example.test:11004", EntryHost: "storage"})
 	ep, err = external.endpoint(context.Background(), secretService, "")
 	require.NoError(t, err)
-	require.True(t, ep.compress, "经 Access 的调用")
+	require.True(t, ep.compress, "经外部入口的调用")
 
 	// Internal：本机服务直连不压缩，远端主机与中转压缩。
 	internal := newTestClient(t, internalConfig(t, &sourceStub{directory: directory}, "a"))

@@ -33,7 +33,7 @@ func TestWriteSkillConfigAtomicFailurePreservesExistingFile(t *testing.T) {
 
 func testSkillDataAccessConfig() dataAccessConfig {
 	return dataAccessConfig{
-		GatewayClient: &gatewayclient.ExternalFileConfig{Address: "storage.example:11004", InstanceID: "access@storage", Caller: "moox-skill", KeyFile: ".moox-skill-keys/moox-skill.key"},
+		GatewayClient: &gatewayclient.ExternalFileConfig{Address: "storage.example:11004", Host: "storage", Caller: "moox-skill", KeyFile: ".moox-skill-keys/moox-skill.key"},
 		Version:       1,
 		DataTypes: map[string]dataTypeConfig{
 			"crypto": {
@@ -52,12 +52,10 @@ func testSkillDataAccessConfig() dataAccessConfig {
 	}
 }
 
-// identityHarness 记下登记与推送公钥表的调用，不连任何主机。
+// identityHarness 记下登记公钥的调用，不连任何主机。
 type identityHarness struct {
 	deps       setupDeps
 	registered [][2]string
-	synced     int
-	failures   []string
 }
 
 func newIdentityHarness(t *testing.T) *identityHarness {
@@ -72,10 +70,6 @@ func newIdentityHarness(t *testing.T) *identityHarness {
 		registerIdentity: func(_ context.Context, _ *setupSnapshot, identity, publicKey string) error {
 			h.registered = append(h.registered, [2]string{identity, publicKey})
 			return nil
-		},
-		syncAccessIdentities: func(context.Context, *setupSnapshot) []string {
-			h.synced++
-			return h.failures
 		},
 	}
 	return h
@@ -115,7 +109,6 @@ func TestExportSkillConfigGeneratesKeyLocallyAndRegistersPublicKey(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o700), directory.Mode().Perm())
 	require.Equal(t, [][2]string{{"moox-skill", identitybundle.PublicKey(key)}}, h.registered)
-	require.Equal(t, 1, h.synced, "登记之后把公钥表推到外部入口")
 	raw, err := os.ReadFile(output)
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), gatewayauth.EncodeSigningKey(key), "配置文件里只有私钥的路径")
@@ -144,14 +137,14 @@ func TestExportSkillConfigGeneratesKeyLocallyAndRegistersPublicKey(t *testing.T)
 
 func TestRegisterIdentityCommand(t *testing.T) {
 	h := newIdentityHarness(t)
-	h.failures = []string{"主机 overseas 上的 access 还没拿到"}
 	keyFile := filepath.Join(t.TempDir(), "keys", "collector-operator.key")
 	result, err := h.run(t, "register-identity", "--identity", "collector-operator", "--key-file", keyFile)
 	require.NoError(t, err)
 	key, err := gatewayauth.ReadSigningKey(keyFile)
 	require.NoError(t, err)
 	require.Equal(t, [][2]string{{"collector-operator", identitybundle.PublicKey(key)}}, h.registered)
-	require.Equal(t, []any{"主机 overseas 上的 access 还没拿到"}, result["notes"], "推不到的主机只提醒")
+	require.Equal(t, "registered", result["status"])
+	require.NotContains(t, result, "notes", "公钥随网关快照下发，登记完不用再推到哪台主机")
 	// 只能登记外部身份：组件名、moox-cli、scf-collector（它的私钥随控制机的身份包签发）都不行。
 	for _, identity := range []string{"moox-cli", "trade", "console", "scf-collector", "factor-engine"} {
 		_, err := h.run(t, "register-identity", "--identity", identity, "--key-file", keyFile)
@@ -179,5 +172,4 @@ func TestSetupOperatorReusesKeyAndRegistersOnRequest(t *testing.T) {
 	require.Equal(t, true, second["registered"])
 	require.Equal(t, first["public_key"], second["public_key"])
 	require.Equal(t, [][2]string{{"moox-cli", identitybundle.PublicKey(key)}}, h.registered)
-	require.Zero(t, h.synced, "moox-cli 不经外部入口")
 }

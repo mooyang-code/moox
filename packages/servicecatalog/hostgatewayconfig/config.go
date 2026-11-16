@@ -33,7 +33,12 @@ type Server struct {
 	RemoteAddr string `yaml:"remote_addr"`
 	LocalAddr  string `yaml:"local_addr"`
 	HealthAddr string `yaml:"health_addr"`
+	// ExternalAddr 是外部入口的明文监听地址；只有登记成外部入口的主机才写（部署渲染成 ExternalEntryAddr），不写就不开。
+	ExternalAddr string `yaml:"external_addr,omitempty"`
 }
+
+// ExternalEntryAddr 是外部入口主机上网关的外部入口监听地址。
+const ExternalEntryAddr = "0.0.0.0:11004"
 
 type TLS struct {
 	CertificateFile string `yaml:"cert_file"`
@@ -84,15 +89,19 @@ func (c Config) Validate() error {
 		return errors.New("host/control IDs must be canonical")
 	}
 	ports := map[int]bool{}
-	for _, listener := range []struct{ name, address string }{
+	listeners := []struct{ name, address string }{
 		{"remote_addr", c.Server.RemoteAddr}, {"local_addr", c.Server.LocalAddr}, {"health_addr", c.Server.HealthAddr},
-	} {
+	}
+	if c.Server.ExternalAddr != "" {
+		listeners = append(listeners, struct{ name, address string }{"external_addr", c.Server.ExternalAddr})
+	}
+	for _, listener := range listeners {
 		host, port, err := endpoint(listener.address, true)
 		if err != nil {
 			return fmt.Errorf("server.%s: %w", listener.name, err)
 		}
 		// 本机入口和健康端口都只听回环地址：健康端口不验签，只给同机进程与经 SSH 的诊断用。
-		if listener.name != "remote_addr" && !net.ParseIP(host).IsLoopback() {
+		if (listener.name == "local_addr" || listener.name == "health_addr") && !net.ParseIP(host).IsLoopback() {
 			return fmt.Errorf("server.%s must bind a loopback IP", listener.name)
 		}
 		if ports[port] {

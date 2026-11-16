@@ -1688,7 +1688,7 @@ var coordinationFailureTexts = []struct{ reason, text string }{
 	{"dataset", "数据集属性（允许迟到）设置失败：请检查 Storage 连接和数据集配置"},
 	{"activity", "采集计划活动日志未写入，计划保持未生效：请检查 Admin 的活动日志服务"},
 	{"preflight", "创建新采集计划前的检查未通过：请检查数据源前置条件，例如 A 股交易日历的覆盖期"},
-	{"capacity", "采集计划无法放进函数：请检查每函数标的数（symbols_per_function）、环境变量大小和 Access 配置"},
+	{"capacity", "采集计划无法放进函数：请检查每函数标的数（symbols_per_function）、环境变量大小和外部入口配置"},
 }
 
 // coordinationFailureText 返回当前失败原因集合对应的告警文案；没有专属文案时给出通用提示。

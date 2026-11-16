@@ -50,6 +50,17 @@ func TestParseRepositoryExample(t *testing.T) {
 	assert.Equal(t, "storage", cfg.EventBusHost().Name)
 	assert.True(t, cfg.HasEgressProxy())
 	assert.Equal(t, "outbound", cfg.HostByID("factor").Reachability)
+	// 外部入口：存储机、海外机开，控制机、因子机不开；默认入口是存储机。
+	assert.True(t, cfg.HostByID("storage").ExternalEntry)
+	assert.True(t, cfg.HostByID("overseas").ExternalEntry)
+	assert.False(t, cfg.HostByID("control").ExternalEntry)
+	assert.False(t, cfg.HostByID("factor").ExternalEntry)
+	assert.Equal(t, "storage", cfg.EntryHost().Name)
+	topology, err := cfg.Topology()
+	require.NoError(t, err)
+	for _, host := range topology.Hosts {
+		assert.Equal(t, host.ID == "storage" || host.ID == "overseas", host.ExternalEntry, host.ID)
+	}
 	assert.Empty(t, cfg.Overrides)
 	assert.Equal(t, int64(DefaultLogRetentionDays), cfg.Logging.RetentionDays)
 }
@@ -118,12 +129,14 @@ func TestParseRejectsOldEncryptedFormat(t *testing.T) {
 
 func TestParseValidatesTopology(t *testing.T) {
 	for name, tc := range map[string]struct{ body, want string }{
-		"没有 eventbus":  {strings.Replace(validConfig, `, "eventbus"`, "", 1), "deployments must include eventbus"},
-		"组件不在目录里":      {strings.Replace(validConfig, `"eventbus"`, `"eventbus", "storage-node"`, 1), "不在服务目录里"},
-		"主机级组件":        {strings.Replace(validConfig, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "由系统自动部署"},
-		"部署根是相对路径":     {"[paths]\ndeploy_root = \"data\"\n" + validConfig, "paths.deploy_root"},
-		"CLS 缺主题":      {validConfig + "\n[logging.cls]\nenabled = true\nendpoint = \"ap-guangzhou.cls.tencentcs.com\"\n", "logging.cls.topic_id"},
-		"Collector 维护": {validConfig + "\n[collector_retention]\nmaintenance_offset = \"2m\"\n", "maintenance_offset"},
+		"没有 eventbus":    {strings.Replace(validConfig, `, "eventbus"`, "", 1), "deployments must include eventbus"},
+		"组件不在目录里":        {strings.Replace(validConfig, `"eventbus"`, `"eventbus", "storage-node"`, 1), "不在服务目录里"},
+		"已删除的 access 组件": {strings.Replace(validConfig, `"eventbus"`, `"eventbus", "access"`, 1), "不在服务目录里"},
+		"只能出站的主机开外部入口":   {strings.Replace(validConfig, `region = "ap-nanjing"`, "reachability = \"outbound\"\nexternal_entry = true", 1), "external_entry"},
+		"主机级组件":          {strings.Replace(validConfig, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "由系统自动部署"},
+		"部署根是相对路径":       {"[paths]\ndeploy_root = \"data\"\n" + validConfig, "paths.deploy_root"},
+		"CLS 缺主题":        {validConfig + "\n[logging.cls]\nenabled = true\nendpoint = \"ap-guangzhou.cls.tencentcs.com\"\n", "logging.cls.topic_id"},
+		"Collector 维护":   {validConfig + "\n[collector_retention]\nmaintenance_offset = \"2m\"\n", "maintenance_offset"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Parse([]byte(tc.body))

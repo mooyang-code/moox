@@ -18,7 +18,7 @@ func topologySpecs() []HostSpec {
 	return []HostSpec{
 		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "collector"}},
 		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
-		{HostID: "overseas", Address: "compute.example.test", Components: []string{"trade", "access"}},
+		{HostID: "overseas", Address: "compute.example.test", Components: []string{"trade", "egress-proxy"}},
 	}
 }
 
@@ -44,7 +44,7 @@ func TestTopologySyncPreservesStateAndRebuildsDirectory(t *testing.T) {
 	control.Components = append(control.Components, "monitor")
 	require.NoError(t, dao.SyncHostDeployments(ctx, control))
 	compute := topologySpecs()[2]
-	compute.Components = []string{"access"}
+	compute.Components = []string{"egress-proxy"}
 	require.NoError(t, dao.SyncHostDeployments(ctx, compute))
 	hosts, deployments, err := dao.Read(ctx)
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestTopologyRejectsInvalidSynchronizationWithoutChangingDatabase(t *testing
 		{"protected removal", func(s []HostSpec) []HostSpec { s[0].Components = []string{"collector"}; return s }},
 		{"control scope", func(s []HostSpec) []HostSpec { s[1].Components = append(s[1].Components, "admin"); return s }},
 		{"replica limit", func(s []HostSpec) []HostSpec { s[2].Components = append(s[2].Components, "collector"); return s }},
-		{"duplicate component", func(s []HostSpec) []HostSpec { s[2].Components = []string{"access", "access"}; return s }},
+		{"duplicate component", func(s []HostSpec) []HostSpec { s[2].Components = []string{"egress-proxy", "egress-proxy"}; return s }},
 		{"automatic component", func(s []HostSpec) []HostSpec { s[2].Components = []string{"host-gateway"}; return s }},
 		{"duplicate address", func(s []HostSpec) []HostSpec { s[2].Address = s[0].Address; return s }},
 		{"region too long", func(s []HostSpec) []HostSpec { s[2].Region = strings.Repeat("r", 129); return s }},

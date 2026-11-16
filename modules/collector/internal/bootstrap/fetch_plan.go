@@ -182,7 +182,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				Groups: &fetchplan.GroupBuilder{
 					Tasks: dbm.Tasks(), Symbols: source, ResolveSourceID: marketwiring.DefaultSourceID, ResolveSymbol: marketwiring.ResolveSymbol,
 				},
-				Store: dbm.FetchPlans(), Storage: registrar, Cloud: backend, Access: cfg.scfPlanAccessEnvironment, Lateness: results,
+				Store: dbm.FetchPlans(), Storage: registrar, Cloud: backend, Entry: cfg.scfPlanEntryEnvironment, Lateness: results,
 				Activity: admin, Metrics: metrics, Operations: operations, OtherSpaces: otherSCFSpaces(cfg.SCFMarkets, spaceID),
 				Workers:      dbm.StreamWorkers(),
 				StreamOnline: func(ctx context.Context) (bool, error) { return stream.Online(ctx, spaceID) },
