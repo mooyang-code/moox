@@ -98,6 +98,9 @@ func ensureAdminSchema(dbPath string) error {
 
 func initSQLiteDSN(dbPath string) string {
 	pragmas := []string{
+		// 命令行和运行中的 Admin 同时用这个库：事务一开始就拿写锁（BEGIN IMMEDIATE），拿不到按 busy_timeout 等。
+		// 默认的延迟事务先读后写，中间 Admin 提交过一次就立即报 database is locked，不等待（重跑部署时 bootstrap 会撞上）。
+		"_txlock=immediate",
 		"_pragma=foreign_keys(1)",
 		"_pragma=journal_mode(WAL)",
 		"_pragma=synchronous(FULL)",

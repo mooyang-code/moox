@@ -59,6 +59,7 @@ server/.claude/
 # Monorepo runtime/build artifacts. 真实运行数据应放到部署目录或 var，
 # 仓库中只保留源码、配置模板、schema、文档和测试样例。
 /bin/
+/bin-linux/
 /data/
 /log/
 /logs/

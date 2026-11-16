@@ -185,6 +185,10 @@ func fetchIdentity(ctx context.Context, control setupssh.Client, bundle hostbund
 		return identity, err
 	}
 	defer os.RemoveAll(temporary)
+	// macOS 的临时目录在 /var 下，/var 是指向 /private/var 的符号链接；身份材料只认不经符号链接的真实路径。
+	if temporary, err = filepath.EvalSymlinks(temporary); err != nil {
+		return identity, err
+	}
 	local := filepath.Join(temporary, "bundle")
 	if _, err := unitbundle.Fetch(ctx, control.Download, bundle, options, local); err != nil {
 		return identity, fmt.Errorf("identity_invalid: 主机 %s 的身份包校验没有通过：%w", options.HostID, err)

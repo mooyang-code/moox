@@ -64,6 +64,15 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 **新的 `setup wipe` 只认新布局。** 线上还是旧部署（进程由 `moox-runtime` 管、crontab 看护、目录是 `<单元>/current`）时，它看不到旧的看护和单元，清不干净：
 这一次要用旧版本构建的 `moox-cli` 加旧格式的 `moox.toml` 清空，清完再用新 CLI 和两份新配置安装。旧格式的配置新 CLI 不认（整份加密、带 `[factors]` 等段都会被拒绝并指出是哪一段），用 `config init` 重新生成，自己的因子任务剪成单独的 yaml 用 `factor task apply --file` 导入。
+Agent 没法填 `config init` 的网页表单时，按 [`config-access.md`](config-access.md)“不经录入页生成两份配置”手工生成。
+
+旧 CLI 清空之后还要手工清三样（2026-11-16 检查点 B 实际遇到），否则会和新部署打架：
+
+- 各主机 `<部署根>/staging`（旧的上传暂存目录，旧 wipe 不清，每台 0.5～1.4G）：`rm -rf /data/moox/staging`。新 CLI 的 `setup validate` 这时仍报 `route: fresh`，但 `entries` 里能看到它。
+- 旧部署给单元加的 drop-in 目录 `~/.config/systemd/user/moox-*.service.d/`（海外机上有 `moox-host-agent.service.d/health.conf`，引用已不存在的环境文件、把健康端口绑到 `0.0.0.0`）：新单元同名，不删会让新的 `moox-host-agent` 起不来。删掉后 `systemctl --user daemon-reload`。新的 `setup wipe` 只删 `moox-*.service` 文件，不认 drop-in 目录。
+- `~/.config/systemd/user/` 下改过名的旧单元文件（如 `*.service.retired-*`）：删掉。
+
+**清云函数的顺序**：Collector 还在运行时用 `collector function delete` 删计划内的函数，下一轮对账（几分钟内）会把它们重新建出来，清空前删等于白删。正确做法是先清空、重装，新 Collector 把旧函数列为计划外（`collector function list` 的 `unplanned`，定时器已被停用），这时再按第 6 节“全新部署后的验收”第 4 步删除，不会重建。
 
 ## 4. 安装
 
@@ -86,6 +95,7 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 8 | `setup init` | 告警渠道、云账户、日志服务、采集计划、登录校验（这些要等 Collector、Monitor 起来） |
 | 9 | 备份配置、`setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入 |
 
+- `setup verify` 不把“有限保留期的数据集还没有归档任务”算作没装好（全新安装一定没有归档任务，这一项在 `doctor alerts` 里照常显示）：装完后按需要用 `moox-cli archive tasks create` 或管理台“数据归档 › 归档任务”建任务。
 - 任何一步失败先看原因和日志（`setup logs --host <主机> --component <组件> --journal`），修好后重跑同一条 `setup install`：每一步都可以重做，没有变化的组件不重启。
 - 改了代码要重新构建二进制再重跑；`setup deploy` 按二进制摘要判断哪些组件有变化。
 - 另一个空间装完后再启动：`$CLI setup start --source-dir $WT --space-id stockcn`（`setup start` 没有预览，不带 `--yes`）、`$CLI setup verify --space-id stockcn`。
@@ -148,7 +158,8 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 
 ## 6. 验收
 
-1. 四台主机的组件都在运行：`$CLI setup status --file ./moox.toml` 里每台 `installed: true`、各组件 `state: active`；再逐台 `$CLI doctor diagnose --file ./moox.toml --node <主机>`（`control`、`storage`、`overseas`、`factor`）看各组件的健康检查与上报；`doctor bootstrap` 只能查运行它的那台机器，在操作电脑上验收目标机不用它。没开 linger 的主机在 `setup install` 预检的 `manual_steps` 里就会列出。
+1. 四台主机的组件都在运行：`$CLI setup status --file ./moox.toml` 里每台 `installed: true`、各组件 `state: active`；再逐台 `$CLI doctor diagnose --file ./moox.toml --node <主机>`（`control`、`storage`、`overseas`、`factor`）看各组件的健康检查与上报
+   （刚装完时结论是 `INCONCLUSIVE`、退出码 3，唯一没过的是 `host.disk_forecast`“磁盘预测历史不足”，属于正常，其余检查都应是 PASS 或 SKIPPED）；`doctor bootstrap` 只能查运行它的那台机器，在操作电脑上验收目标机不用它。没开 linger 的主机在 `setup install` 预检的 `manual_steps` 里就会列出。
 2. `moox-cli doctor alerts --file ./moox.toml`：新对象会先有“尚未上报 / 尚无成功运行”，等一个周期；1h 数据集要等第一个整点之后。长时间不消的告警按提示排查。
 3. 一条链路至少跑通一期：`moox-cli collector status --space-id crypto`（各数据集 `level: ok`）→ 因子引擎的输出（`$CLI setup logs --host factor --component factor-engine --journal --grep factor_period_done`）里 `factor_period_done ... status=complete rows=<标的数>`
    （`status=degraded rows=0` 说明有问题，常见是 `factor_memory_budget_exceeded`，看内存配置）。

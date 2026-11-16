@@ -376,7 +376,7 @@
 </template>
 
 <script setup lang="ts">
-import { useSpaceStore } from "@/store/modules/space";
+import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
@@ -577,7 +577,8 @@ const nameSpaces = computed(() => {
 const requestedNameSpaces = new Set<string>();
 watch(nameSpaces, spaces => {
   for (const space of spaces) {
-    if (requestedNameSpaces.has(space)) continue;
+    // 系统空间只是“不属于任何市场”的范围标签，Storage 里没有它，去读只会被拒绝。
+    if (isSystemSpace(space) || requestedNameSpaces.has(space)) continue;
     requestedNameSpaces.add(space);
     void Promise.all([listAllDatasets(space, { spaceId: space }), listAllViews(space, { spaceId: space })])
       .then(([datasets, views]) => {

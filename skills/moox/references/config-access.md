@@ -50,6 +50,17 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
 - 新电脑：`moox-cli config restore` 从管理台恢复。
 - `config get` 报“这台电脑上没有解密秘密文件的密钥”：文件来自另一台电脑或钥匙串条目被删，用 `config restore`；不要重新生成密钥覆盖。
 
+## 不经录入页生成两份配置（Agent 重装自己的环境、从旧格式搬过来）
+
+`config init` 是本机网页表单，Agent 填不了。已有一套旧配置（或已知全部取值）时手工生成：
+
+1. **`moox.toml`**：复制 `moox.toml.example`，改 `[hosts.*]`（地址、`private_address`、地域、SSH 用户与 `private_key_file`；只支持密钥登录，旧配置里的 SSH 密码不搬）、`[deployments]`、`[storage_retention]`、`[scf_plan]`（云账号、地域的 VPC 与子网、各空间；某个空间的每函数标的数写在它自己的 `[[scf_plan.spaces]]` 里，如 A 股 `symbols_per_function = 16`）。
+   旧值用旧版本 CLI 的 `config get <段>` 读（默认打码，拓扑类的值都看得到）；`credential_secret_id` 被打码，填 `tencent-default`。`[factors]` 段不搬（默认任务在 `config/setup/factor-tasks.yaml`）。文件权限 0600。
+2. **`moox.secrets.toml`**：写一个小脚本，用旧 CLI 的 `config get --reveal admin|tencent_cloud|notification|exchange_keys` 逐段取值（只在脚本进程内，不打印），按 `moox.secrets.toml.example` 的结构写出明文文件（0600，`O_EXCL` 新建），随即 `moox-cli config encrypt --file ./moox.toml` 加密。
+   之后用 `moox-cli config get --file ./moox.secrets.toml` 核对（应全是 `***`，交易所密钥条数对得上）。
+   注意旧版本 CLI 的 `config get notification` 不带 `--reveal` 也会把 `webhook_url` 明文打印出来（打码规则漏了这个键，新 CLI 已打码）：看旧配置时不要单独读这一段，也不要读整份。
+3. `moox-cli setup validate --file ./moox.toml`：四台 `valid`、`route: fresh`、`manual_steps` 为空（没开 linger 的主机会列在这里）。
+
 ## 例子：把 5m 保留期调到 240 天
 
 ```bash

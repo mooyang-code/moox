@@ -94,10 +94,12 @@ func RunDiagnose(ctx context.Context, options DiagnoseOptions) (core.Report, err
 func diagnoseSpecs(manifest core.Manifest, snapshot *monitorpb.GetDoctorContextRsp, healthChecks []report.ModuleHealthCheck) []core.CheckSpec {
 	specs := []core.CheckSpec{{ID: "diagnose.context"}}
 	health := map[string]string{}
+	expectedHere := map[string]bool{}
 	freshnessByModule := map[string]string{}
 	for _, component := range snapshot.GetExpectedComponents() {
 		scope := component.GetComponentId() + "@" + component.GetNodeId()
 		health[component.GetComponentId()] = "service.health:" + scope
+		expectedHere[component.GetComponentId()] = component.GetExpected()
 		specs = append(specs, core.CheckSpec{ID: health[component.GetComponentId()], OptionalDependencies: []string{"diagnose.context"}})
 		if _, systemd := systemdUnit(manifest, component.GetComponentId()); systemd {
 			specs = append(specs, core.CheckSpec{ID: "service.supervisor:" + scope, OptionalDependencies: []string{"diagnose.context"}})
@@ -105,7 +107,9 @@ func diagnoseSpecs(manifest core.Manifest, snapshot *monitorpb.GetDoctorContextR
 	}
 	deps := []string{}
 	for _, id := range []string{"eventbus", "monitor"} {
-		if health[id] != "" {
+		// EventBus、Monitor 不在被诊断的这台主机上时，它们在这里的健康检查结果是“跳过”，不能当必需依赖：
+		// 否则两者不同机的拓扑里每台主机的上报链路检查都因“依赖被跳过”而失败。
+		if health[id] != "" && expectedHere[id] {
 			deps = append(deps, health[id])
 		}
 	}
