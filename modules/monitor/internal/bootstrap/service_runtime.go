@@ -31,7 +31,6 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 		HostStore:     hostStore,
 		DoctorContext: doctorContext,
 		HealthView:    health,
-		HostWatchdog:  cfg.HostPolicy.Watchdog,
 		Lifecycle:     runtime.life.Load,
 	}))
 }

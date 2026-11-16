@@ -98,7 +98,7 @@ func TestLoadRejectsLegacyKlineResampleEventBusWithGuidance(t *testing.T) {
 `))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "已经移到顶层 event_bus")
-	assert.Contains(t, err.Error(), "重新渲染配置")
+	assert.Contains(t, err.Error(), "重新部署 Collector")
 }
 
 func TestLoadKlineResampleDefaultsHaveNoEventBus(t *testing.T) {

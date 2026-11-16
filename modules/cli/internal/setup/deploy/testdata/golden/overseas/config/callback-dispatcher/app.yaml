@@ -11,7 +11,7 @@ gateway_client:
   ca_file: /data/moox/secrets/moox-ca.crt
 database:
   path: /data/moox/data/callback-dispatcher/moox_callback_dispatcher.db
-# EventBus 连接；安装时由 unitinstall 改写为实际地址和凭据路径。
+# EventBus 连接；部署渲染时改写为实际地址和凭据路径。
 eventbus:
   urls:
     - tls://203.0.113.11:4222

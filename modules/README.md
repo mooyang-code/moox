@@ -19,8 +19,8 @@ MooX 的业务模块。每个模块是独立的 Go module（由仓库根目录 `
 | [monitor](./monitor/) | `moox-monitor` | 健康检查与告警 | [监控](../docs/模块/监控.md) |
 | [hostagent](./hostagent/) | `moox-host-agent`、`moox-host-agent-cli` | 主机资源采集 | [主机代理](../docs/模块/主机代理.md) |
 | [archive](./archive/) | `moox-archive-mgr`、`moox-archive-worker` | 定时拉取、SQLite 暂存与 CSV/CSV.GZ 归档 | [归档](../docs/模块/归档.md) |
-| [cli](./cli/) | `moox-cli`、`moox-runtime` | 运维命令行与 Linux 原生进程管理 | [命令行工具](../docs/模块/命令行工具.md) |
+| [cli](./cli/) | `moox-cli` | 运维命令行与部署 | [命令行工具](../docs/模块/命令行工具.md) |
 
 构建单个目标：`./scripts/build/build.sh <target>`（例如 `admin`、`storage`、`collector-scf`、`factor-engine`）；
-`make build` 构建脚本的 `all` 目标，SCF 包和 `archive-worker` 需另选目标；`moox-runtime`、HostAgent 仅在 Linux 构建。
+`make build` 构建脚本的 `all` 目标，SCF 包和 `archive-worker` 需另选目标；HostAgent 仅在 Linux 构建。
 完整条件见[构建手册](../docs/构建手册.md)，部署见[部署与运维](../docs/部署与运维.md)。

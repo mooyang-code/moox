@@ -11,7 +11,7 @@
 | `marketdata/` | 行情日历维护和校验 |
 | `test/contract/` | 源码、配置和打包契约测试 |
 | `test/e2e/` | 需要真实进程或外部依赖的端到端测试 |
-| `test/gates/` | 执行预构建制品的 Linux 部署与运行时门禁 |
+| `test/gates/` | 执行预构建制品的 Linux 门禁（主机网关与 Admin 的端到端） |
 
 发布产物由 `release/build-release.sh` 生成（每个组件一个包，由 `moox-cli setup package-components` 按服务目录打）；部署、启停与日志都由 `moox-cli setup` 完成，目标机上的安装脚本内嵌在 CLI 里（`modules/cli/internal/setup/deploy/install.sh`）。
 

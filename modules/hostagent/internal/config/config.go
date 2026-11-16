@@ -17,7 +17,7 @@ type Config struct {
 	EventBusConfig string `yaml:"eventbus_config"`
 	HostName       string `yaml:"host_name"`
 	// GatewayClient 与 HostPolicyPath 由部署渲染；两者都设置时 HostAgent 定期从 Monitor 拉取主机策略，
-	// 写入 HostPolicyPath（<部署根>/run/host-policy.json）。独立运行的 HostAgent 留空，不拉取。
+	// 写入 HostPolicyPath（<部署根>/data/host-agent/host-policy.json）。独立运行的 HostAgent 留空，不拉取。
 	GatewayClient  gatewayclient.FileConfig `yaml:"gateway_client"`
 	HostPolicyPath string                   `yaml:"host_policy_path"`
 	sourcePath     string

@@ -185,7 +185,7 @@ Agent 会按 [安装与初始化](skills/moox/references/install.md) 执行部�
 
 ![监控告警](docs/public/screenshots/monitor.webp)
 
-**服务拓扑**：按主机展示数据流向与调用关系。主机与部署单元的增删、启停统一通过 `moox-cli` 执行，管理台提供只读视图。
+**服务拓扑**：按主机展示数据流向与调用关系。主机与组件的增删、启停统一通过 `moox-cli` 执行，管理台提供只读视图。
 
 ![服务拓扑](docs/public/screenshots/topology.webp)
 

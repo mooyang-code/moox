@@ -2,7 +2,7 @@
 
 Source choice: fetch 1 MB from each address within 3 seconds and rank by bytes received; status codes do not count.
 Download: at most `connections` ranged connections into a temporary file, 3 retries per segment, next source on failure.
-Finish: verify SHA256, sync, rename to <staging dir>/<digest>/<name>; the staging dir defaults to <deploy root>/staging.
+Finish: verify SHA256, sync, rename to <staging dir>/<digest>/<name>; the staging dir comes from the request.
 An interrupted process downloads again.
 """
 import hashlib
@@ -66,23 +66,7 @@ def rank(templates, name):
     return [template for template in ordered if scores.get(template, 0) > 0], scores
 
 
-class Limiter:
-    """Shared byte budget per second; zero means unlimited."""
-
-    def __init__(self, rate):
-        self.rate, self.lock, self.window, self.used = rate, threading.Lock(), time.monotonic(), 0
-
-    def take(self, count):
-        if self.rate <= 0:
-            return
-        with self.lock:
-            self.used += count
-            wait = self.used / float(self.rate) - (time.monotonic() - self.window)
-        if wait > 0:
-            time.sleep(wait)
-
-
-def fetch_range(url, descriptor, start, end, limiter):
+def fetch_range(url, descriptor, start, end):
     request = urllib.request.Request(url, headers={'Range': 'bytes=%d-%d' % (start, end)})
     with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
         if response.status != 206:
@@ -94,10 +78,9 @@ def fetch_range(url, descriptor, start, end, limiter):
                 raise ValueError('short')
             os.pwrite(descriptor, block, offset)
             offset += len(block)
-            limiter.take(len(block))
 
 
-def fetch_segments(url, descriptor, size, connections, limiter):
+def fetch_segments(url, descriptor, size, connections):
     pending = [(start, min(start + SEGMENT_BYTES, size) - 1) for start in range(0, size, SEGMENT_BYTES)]
     pending.reverse()
     lock = threading.Lock()
@@ -111,7 +94,7 @@ def fetch_segments(url, descriptor, size, connections, limiter):
                 start, end = pending.pop()
             for attempt in range(RETRIES):
                 try:
-                    fetch_range(url, descriptor, start, end, limiter)
+                    fetch_range(url, descriptor, start, end)
                     break
                 except (OSError, ValueError) as error:
                     if attempt == RETRIES - 1:
@@ -152,7 +135,7 @@ def present(path, size, sha256):
         return False
 
 
-def download(item, staging, request, limiter):
+def download(item, staging, request):
     directory = os.path.join(staging, item['sha256'])
     final = os.path.join(directory, item['name'])
     if present(final, item['size'], item['sha256']):
@@ -171,7 +154,7 @@ def download(item, staging, request, limiter):
         descriptor = os.open(temporary, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
         try:
             os.ftruncate(descriptor, item['size'])
-            fetch_segments(url, descriptor, item['size'], request.get('connections') or 4, limiter)
+            fetch_segments(url, descriptor, item['size'], request.get('connections') or 4)
             os.fsync(descriptor)
         except (OSError, ValueError) as error:
             last = str(error)
@@ -217,20 +200,14 @@ def prune(staging, release):
 def main():
     os.umask(0o077)
     request = json.load(sys.stdin)
-    staging = request.get('staging_dir') or os.path.join(request['deploy_root'], 'staging')
+    staging = request.get('staging_dir') or ''
     if not os.path.isabs(staging):
         emit('failed', reason='staging_dir must be absolute')
         return 3
-    if request.get('probe_only'):
-        name = request['files'][0]['name']
-        candidates, scores = rank(request['urls'], name)
-        emit('probe', reachable=len(candidates), scores=dict((re.sub(r'/[^/]*$', '', key), value) for key, value in scores.items()))
-        return 0 if candidates else 3
-    limiter = Limiter(request.get('rate_limit') or 0)
     try:
         os.makedirs(staging, 0o700, exist_ok=True)
         for item in request['files']:
-            download(item, staging, request, limiter)
+            download(item, staging, request)
             with open(os.path.join(staging, item['sha256'], '.release'), 'w') as stream:
                 stream.write(request['release'])
     except (OSError, ValueError) as error:

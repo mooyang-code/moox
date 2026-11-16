@@ -50,7 +50,7 @@ bin/moox-cli collector function list --file ./moox.toml --space-id crypto --drif
 ## Control Plane Checks
 
 ```bash
-rg -n "fetch plan|backfill|Collector-Cloud|Collector-TencentSCF" /data/moox/run/logs/collector.log
+rg -n "fetch plan|backfill|Collector-Cloud|Collector-TencentSCF" /data/moox/logs/collector/trpc.log
 ```
 
 Check these boundaries:

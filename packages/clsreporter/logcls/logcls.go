@@ -32,7 +32,7 @@ func init() {
 func setup(getenv func(string) string) {
 	cfg, enabled, err := clsreporter.ConfigFromEnv(serviceLogEnv(getenv))
 	if err != nil {
-		// 这里不能用 tRPC 日志（日志插件正在装配）；写到标准错误，由主机守护的输出文件留存。
+		// 这里不能用 tRPC 日志（日志插件正在装配）；写到标准错误，由 journald 留存。
 		fmt.Fprintf(os.Stderr, "logcls: CLS 日志上报没有启用：%v\n", err)
 		return
 	}

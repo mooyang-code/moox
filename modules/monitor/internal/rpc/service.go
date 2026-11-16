@@ -3,7 +3,6 @@ package rpc
 import (
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
@@ -21,8 +20,6 @@ type Options struct {
 	HostStore     *hostmetrics.Store
 	DoctorContext *doctor.Builder
 	HealthView    *healthview.Builder
-	// HostWatchdog 是 GetHostPolicy 下发的主机守护参数。
-	HostWatchdog config.HostWatchdogConfig
 	// Lifecycle 返回 Monitor 的生命周期控制器（健康检查注册时才创建，之前为 nil）：告警屏蔽复用它的暂停。
 	Lifecycle func() *lifecycle.Controller
 }
@@ -31,7 +28,6 @@ type Service struct {
 	alerts        *store.AlertRepository
 	notifications *store.NotificationRepository
 	logs          *store.LogRecordRepository
-	hostWatchdog  config.HostWatchdogConfig
 	startedAt     time.Time
 	hostStore     *hostmetrics.Store
 	doctorContext *doctor.Builder
@@ -47,7 +43,6 @@ func New(repos *store.Repositories, opts Options) *Service {
 		alerts:        repos.Alerts,
 		notifications: repos.Notifications,
 		logs:          repos.Logs,
-		hostWatchdog:  opts.HostWatchdog,
 		startedAt:     opts.StartedAt,
 		hostStore:     opts.HostStore,
 		doctorContext: opts.DoctorContext,

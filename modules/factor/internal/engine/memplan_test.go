@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,34 +26,13 @@ func TestConfigValueRoundsToMiB(t *testing.T) {
 	require.Equal(t, "1536MiB", ConfigValue(gib+gib/2+12345))
 }
 
-func TestTuneConfigWritesOnlyUnsetValuesAndKeepsComments(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "engine.yaml")
-	original := "# 引擎配置\ncompute:\n  workers: 4\n  max_memory: 1GiB   # 单次计算上限\nwindow:\n  max_memory: 0\nmemory:\n  total_budget: 0\n"
-	require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+// 建议值按 moox.toml 的覆盖表打印，键路径是引擎配置里已有的三项。
+func TestOverridesPrintMemoryPlanAsTopologyTable(t *testing.T) {
 	plan := PlanMemory(32*gib, 16, 4, 512<<20)
-
-	changes, err := TuneConfig(path, plan, false)
-	require.NoError(t, err)
-	require.Len(t, changes, 3)
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.Contains(t, string(raw), "# 引擎配置")
-	require.Contains(t, string(raw), "# 单次计算上限")
-	cfg, err := Load(path)
-	if err == nil {
-		require.Equal(t, ByteSize(plan.TotalBudget>>20<<20), cfg.Memory.TotalBudget)
-	}
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
-
-	// 已经设置过的值再次调优不动；用户改过的值也不覆盖。
-	changes, err = TuneConfig(path, plan, false)
-	require.NoError(t, err)
-	require.Empty(t, changes)
-	changes, err = TuneConfig(path, PlanMemory(64*gib, 16, 4, 512<<20), true)
-	require.NoError(t, err)
-	require.Len(t, changes, 3, "force 覆盖已有值")
+	require.Equal(t, "[overrides.\"factor-engine\".\"engine.yaml\"]\n"+
+		"\"memory.total_budget\" = \""+ConfigValue(plan.TotalBudget)+"\"\n"+
+		"\"window.max_memory\" = \""+ConfigValue(plan.Window)+"\"\n"+
+		"\"compute.max_memory\" = \""+ConfigValue(plan.Compute)+"\"\n", plan.Overrides())
 }
 
 func TestWindowEstimateMatchesDocExamples(t *testing.T) {

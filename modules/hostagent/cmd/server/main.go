@@ -63,7 +63,7 @@ func main() {
 }
 
 // startPolicySync 在部署配置了主机策略缓存时，定期经网关从 Monitor 拉取主机策略。
-// 打不开网关客户端只记录错误、不影响采样：主机守护会继续使用部署时写入的种子。
+// 打不开网关客户端只记录错误、不影响采样：本机继续使用上一次同步到的策略缓存。
 func startPolicySync(ctx context.Context, cfg *config.Config) func() {
 	if !cfg.PolicySyncEnabled() {
 		return func() {}

@@ -9,7 +9,6 @@
 ```bash
 ./scripts/build/build.sh factor-mgr
 ./scripts/build/build.sh factor-engine
-scripts/deploy/deploy-factor-engine.sh --help
 go test -count=1 ./modules/factor/...
 ```
 

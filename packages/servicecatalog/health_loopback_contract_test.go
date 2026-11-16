@@ -1,7 +1,7 @@
 package servicecatalog_test
 
 // 健康端口只听本机的契约（批 4 T8）：/healthz、/readyz、/metrics 不验签，只给同机进程与 moox-cli doctor 经 SSH 在目标机上请求，
-// 所以每个组件的健康监听在仓库模板里都必须是 127.0.0.1，部署渲染也不改写它（unitinstall/render.go）。
+// 所以每个组件的健康监听在仓库模板里都必须是 127.0.0.1，部署渲染也不改写它（modules/cli/internal/setup/deploy/render.go）。
 // 新加组件时要在 healthListeners 里登记它的健康监听在哪，否则这里失败。
 
 import (
@@ -44,10 +44,7 @@ var healthListeners = map[string][]healthListener{
 	"trade":               {{kind: "trpc", file: "modules/trade/config/trpc_go.yaml"}},
 	"callback-dispatcher": {{kind: "trpc", file: "modules/callbackdispatcher/config/trpc_go.yaml"}},
 	"factor-engine":       {{kind: "trpc", file: "modules/factor/config/trpc_go.engine.yaml"}},
-	"archive-worker": {
-		{kind: "key", file: "modules/archive/config/worker/app.yaml", key: "health.addr"},
-		{kind: "text", file: "scripts/deploy/deploy-archive-worker.sh", key: "health:\n  addr: 127.0.0.1:11418\n"},
-	},
+	"archive-worker":      {{kind: "key", file: "modules/archive/config/worker/app.yaml", key: "health.addr"}},
 }
 
 func repoFile(t *testing.T, name string) []byte {
@@ -130,10 +127,6 @@ func TestEveryHealthListenerBindsLoopbackOnly(t *testing.T) {
 			case "key":
 				if got := yamlValue(t, listener.file, listener.key); got != want(port) {
 					t.Errorf("%s：%s 的 %s = %q，必须是 %q", listener.file, component.ID, listener.key, got, want(port))
-				}
-			case "text":
-				if !strings.Contains(string(repoFile(t, listener.file)), listener.key) {
-					t.Errorf("%s：%s 的健康监听不再是 %q", listener.file, component.ID, listener.key)
 				}
 			default:
 				t.Fatalf("unknown listener kind %q", listener.kind)

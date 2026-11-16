@@ -13,7 +13,7 @@ gateway_client:
 database:
   path: ./data/moox_callback_dispatcher.db
 
-# EventBus 连接；安装时由 unitinstall 改写为实际地址和凭据路径。
+# EventBus 连接；部署渲染时改写为实际地址和凭据路径。
 eventbus:
   urls: ["nats://127.0.0.1:4222"]
   credential_file: ~/.config/moox/eventbus/callback-dispatcher-eventbus.yaml

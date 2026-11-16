@@ -4,8 +4,6 @@
 维护者在本机构建 Linux 二进制（含 CGO 的 Storage 在 Docker 里构建），再逐台部署。构建环境见 [`docs/构建手册.md`](../../../docs/构建手册.md)。
 外部用户用发布产物升级，按 [`install.md`](install.md) 的“升级到新版本”；清空重装按 [`fresh-deploy.md`](fresh-deploy.md)。
 
-`skills/moox/scripts/native-release.sh` 只认旧布局（`<单元>/current`、`moox-runtime`），新部署不要用它，它会随旧部署代码一起删除。
-
 ## 先确认再动手
 
 - 用户明确说“发布/部署/上线某某”才发布，并且只发布他点名的组件；不要顺手带上别的组件。发布前向用户复述：哪些组件、哪些主机、是否涉及服务目录、哪些组件会重启。

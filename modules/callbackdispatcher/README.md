@@ -13,7 +13,7 @@ go test -count=1 ./modules/callbackdispatcher/...
 
 ## 配置
 
-`config/app.yaml`、`config/trpc_go.yaml`；数据库结构在 `schema/`。事件中心是独立部署单元（组件 ID `callback-dispatcher`），由 `[deployments]` 决定装在哪台主机，默认海外机。部署主机必须能访问到用户填写的通知地址。
+`config/app.yaml`、`config/trpc_go.yaml`；数据库结构在 `schema/`。事件中心是独立的组件（组件 ID `callback-dispatcher`），由 `[deployments]` 决定装在哪台主机，默认海外机。部署主机必须能访问到用户填写的通知地址。
 
 - 服务 `CallbackDispatcherService` 仅在 loopback 11460 提供原生 tRPC，由主机网关转发；调用方是 `console` 和 `moox-cli`。它是全局服务，不分空间。
 - 健康检查 11461。只有数据库不可用才算没就绪；EventBus 连不上只在详情里体现，服务每分钟重试连接，EventBus 晚于事件中心启动也能自动连上。

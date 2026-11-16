@@ -62,16 +62,6 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 中途失败后再运行一次会接着清。CLI 默认不清理云函数：重装后 Collector 按函数名接管同名函数，计划外的旧函数被停掉定时器、等人工删除，见第 6 节“全新部署后的验收”第 4 步。
 
-**新的 `setup wipe` 只认新布局。** 线上还是旧部署（进程由 `moox-runtime` 管、crontab 看护、目录是 `<单元>/current`）时，它看不到旧的看护和单元，清不干净：
-这一次要用旧版本构建的 `moox-cli` 加旧格式的 `moox.toml` 清空，清完再用新 CLI 和两份新配置安装。旧格式的配置新 CLI 不认（整份加密、带 `[factors]` 等段都会被拒绝并指出是哪一段），用 `config init` 重新生成，自己的因子任务剪成单独的 yaml 用 `factor task apply --file` 导入。
-Agent 没法填 `config init` 的网页表单时，按 [`config-access.md`](config-access.md)“不经录入页生成两份配置”手工生成。
-
-旧 CLI 清空之后还要手工清三样（2026-11-16 检查点 B 实际遇到），否则会和新部署打架：
-
-- 各主机 `<部署根>/staging`（旧的上传暂存目录，旧 wipe 不清，每台 0.5～1.4G）：`rm -rf /data/moox/staging`。新 CLI 的 `setup validate` 这时仍报 `route: fresh`，但 `entries` 里能看到它。
-- 旧部署给单元加的 drop-in 目录 `~/.config/systemd/user/moox-*.service.d/`（海外机上有 `moox-host-agent.service.d/health.conf`，引用已不存在的环境文件、把健康端口绑到 `0.0.0.0`）：新单元同名，不删会让新的 `moox-host-agent` 起不来。删掉后 `systemctl --user daemon-reload`。新的 `setup wipe` 只删 `moox-*.service` 文件，不认 drop-in 目录。
-- `~/.config/systemd/user/` 下改过名的旧单元文件（如 `*.service.retired-*`）：删掉。
-
 **清云函数的顺序**：Collector 还在运行时用 `collector function delete` 删计划内的函数，下一轮对账（几分钟内）会把它们重新建出来，清空前删等于白删。正确做法是先清空、重装，新 Collector 把旧函数列为计划外（`collector function list` 的 `unplanned`，定时器已被停用），这时再按第 6 节“全新部署后的验收”第 4 步删除，不会重建。
 
 ## 4. 安装
@@ -189,7 +179,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
    $CLI collector fetch-plan --space-id stockcn
    $CLI collector function list --space-id stockcn
    ```
-   计划在 10 分钟内变成已生效，Collector 日志里没有 `already exists`；函数列表里每个函数存在、定时器一致、代码包最新。旧部署留下、不在计划里的函数列在 `unplanned`，第一次读回之后定时器都是停用（第二片及以后的命名空间里的也是）。
+   计划在 10 分钟内变成已生效，Collector 日志里没有 `already exists`；函数列表里每个函数存在、定时器一致、代码包最新。上一次安装留下、不在计划里的函数列在 `unplanned`，第一次读回之后定时器都是停用（第二片及以后的命名空间里的也是）。
    按各行给出的删除命令（`collector function delete --space-id stockcn --name <函数名> --namespace <命名空间> --region <地域>`，先不带 `--yes` 看预览）清掉之后，列表里不再出现。
    全新库里 crypto 的内置任务采集方式是 `stream`，Collector 启动没有因为写内置任务失败而退出。
 5. **采集方式**：`$CLI collector ingest-mode get --space-id crypto` 全是 `stream`，`--space-id stockcn` 全是 `scf`。再选一个 crypto 的 1h 数据集做一次往返切换（分钟第 20～40 秒执行）：

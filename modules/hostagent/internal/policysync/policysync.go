@@ -1,5 +1,5 @@
-// Package policysync 定期从 Monitor 拉取主机策略（告警渠道与主机守护参数），写入 <部署根>/run/host-policy.json。
-// moox-runtime watch 与证书巡检只读这个文件；拉取失败时保留旧文件，控制面不可用也不影响主机侧告警。
+// Package policysync 定期从 Monitor 拉取主机策略（全部告警渠道），写入 <部署根>/data/host-agent/host-policy.json。
+// 本机的对端检查与证书巡检只读这个文件；拉取失败时保留旧文件，控制面不可用也不影响主机侧告警。
 // 拉取的结果同时是非控制机对控制机与 Monitor 的直推依据（见 Watch）。
 package policysync
 
@@ -117,7 +117,7 @@ func (s *Syncer) write(rsp *monitorpb.GetHostPolicyRsp) (Result, error) {
 		return "", fmt.Errorf("monitor returned an invalid host policy: %w", err)
 	}
 	existing, readErr := hostpolicy.Read(s.path)
-	if readErr == nil && existing.Source == hostpolicy.SourceMonitor && existing.ContentHash == policy.Hash() {
+	if readErr == nil && existing.ContentHash == policy.Hash() {
 		policyVersion.Set(float64(existing.Version))
 		return Unchanged, nil
 	}
@@ -138,16 +138,9 @@ func (s *Syncer) write(rsp *monitorpb.GetHostPolicyRsp) (Result, error) {
 }
 
 func fromResponse(rsp *monitorpb.GetHostPolicyRsp, now time.Time) hostpolicy.Policy {
-	policy := hostpolicy.Policy{Source: hostpolicy.SourceMonitor, FetchedAt: now, NotificationChannels: []hostpolicy.Channel{}}
+	policy := hostpolicy.Policy{FetchedAt: now, NotificationChannels: []hostpolicy.Channel{}}
 	for _, channel := range rsp.GetChannels() {
 		policy.NotificationChannels = append(policy.NotificationChannels, hostpolicy.Channel{Type: channel.GetChannelType(), WebhookURL: channel.GetWebhookUrl(), Secret: channel.GetSecret()})
-	}
-	if w := rsp.GetWatchdog(); w != nil {
-		policy.Watchdog = hostpolicy.Watchdog{
-			Disabled: w.GetDisabled(), MergeWindow: w.GetMergeWindow(), CrashLoopFailures: int(w.GetCrashLoopFailures()),
-			CrashLoopWindow: w.GetCrashLoopWindow(), CrashLoopRetry: w.GetCrashLoopRetry(), CrashLoopSlow: w.GetCrashLoopSlow(),
-			StableAfter: w.GetStableAfter(), NotReadyAlert: w.GetNotReadyAlert(),
-		}
 	}
 	return policy
 }

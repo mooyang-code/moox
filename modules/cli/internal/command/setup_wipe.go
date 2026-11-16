@@ -27,8 +27,7 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 		Long: `逐台停用并删除全部 moox-* 用户服务，杀掉可执行文件在部署根里的全部进程，清空部署根下的内容（保留目录本身），
 再删掉这台电脑上的操作员身份。归档文件（archive/）和内置对象存储的数据（data/seaweedfs/）都在部署根下，会一起清掉，预览里单独列出它们的大小。
 不带 --yes 只预览；执行要带 --yes --expect <预览里的 digest>，范围变了会拒绝。
-云函数默认不清理（--clean-functions 才清）；不在 moox.toml 里的主机也不清理。中途失败后再运行一次会接着清。
-只认新的部署布局：从旧部署（moox-runtime 管进程）过来的主机要用旧版 moox-cli 清空。`,
+云函数默认不清理（--clean-functions 才清）；不在 moox.toml 里的主机也不清理。中途失败后再运行一次会接着清。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if yes && expect == "" {

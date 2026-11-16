@@ -97,7 +97,7 @@ func TestWatchPushesMonitorRestartLoopAndRecovers(t *testing.T) {
 
 // 拉取的结果交给直推判断：响应里的 Monitor 启动时间传过去，失败时传错误。
 func TestSyncerHandsFetchResultToWatch(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "run", "host-policy.json")
+	path := filepath.Join(t.TempDir(), "host-agent", "host-policy.json")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	var fetchErr error
 	syncer, err := New(path, func(context.Context) (*monitorpb.GetHostPolicyRsp, error) {

@@ -29,9 +29,6 @@ var fetchScript string
 // DefaultConnections 是每台目标机同时下载的连接数：四台各 8 连接时实测有连接拿不到数据。
 const DefaultConnections = 4
 
-// UpgradeRateLimit 是升级时的默认限速（字节/秒），避免挤占海外机的实时采集。
-const UpgradeRateLimit = 8 << 20
-
 // File 是要下载的一个文件。Name 在发布页上的文件名，SHA256 不带前缀。
 type File struct {
 	Name   string `json:"name"`
@@ -41,15 +38,12 @@ type File struct {
 
 // Request 是下发给目标机脚本的请求。URLs 是带 {file} 占位的地址模板。
 type Request struct {
-	DeployRoot string `json:"deploy_root"`
-	// StagingDir 是放下载文件的目录（绝对路径），为空时是 <DeployRoot>/staging。
-	StagingDir  string   `json:"staging_dir,omitempty"`
+	// StagingDir 是放下载文件的目录（绝对路径）。
+	StagingDir  string   `json:"staging_dir"`
 	Release     string   `json:"release"`
 	Files       []File   `json:"files"`
 	URLs        []string `json:"urls"`
 	Connections int      `json:"connections"`
-	RateLimit   int64    `json:"rate_limit,omitempty"`
-	ProbeOnly   bool     `json:"probe_only,omitempty"`
 }
 
 // ErrNoSource 表示目标机上所有下载源都不可用。
@@ -63,13 +57,8 @@ func Sources(release string) []string {
 	}
 }
 
-// StagingPath 是文件在目标机上的位置（StagingDir 为空时）。
-func StagingPath(deployRoot, sha256, name string) string {
-	return StagingPathIn(path.Join(deployRoot, "staging"), sha256, name)
-}
-
-// StagingPathIn 是文件在给定下载目录里的位置：<目录>/<摘要>/<文件名>，和 Request.StagingDir 配套使用。
-func StagingPathIn(stagingDir, sha256, name string) string {
+// StagingPath 是文件在下载目录里的位置：<目录>/<摘要>/<文件名>。
+func StagingPath(stagingDir, sha256, name string) string {
 	return path.Join(stagingDir, sha256, name)
 }
 
@@ -125,12 +114,6 @@ func lastReason(stdout string) string {
 	return "目标机下载失败"
 }
 
-// Reachable 只测下载源，不下载，供预检判断要不要退回本机推送。
-func Reachable(ctx context.Context, transport setupssh.Client, request Request) bool {
-	request.ProbeOnly = true
-	return Run(ctx, transport, request) == nil
-}
-
 // Local 在操作机上下载一个文件并校验，结果放在 directory 下。已有且摘要正确时不重新下载。
 func Local(ctx context.Context, urls []string, file File, directory string) (string, error) {
 	final := filepath.Join(directory, file.SHA256, file.Name)
@@ -148,28 +131,6 @@ func Local(ctx context.Context, urls []string, file File, directory string) (str
 		}
 	}
 	return "", fmt.Errorf("download_failed: 这台电脑也下载不了 %s: %w", file.Name, last)
-}
-
-// LocalReachable 实测这台电脑能不能从发布页下载：取 1MB，目标机都下载不了时要靠它。
-func LocalReachable(ctx context.Context, urls []string, name string) bool {
-	client := &http.Client{Timeout: 10 * time.Second}
-	for _, template := range urls {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.ReplaceAll(template, "{file}", name), nil)
-		if err != nil {
-			continue
-		}
-		request.Header.Set("Range", "bytes=0-1048575")
-		response, err := client.Do(request)
-		if err != nil {
-			continue
-		}
-		received, _ := io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
-		response.Body.Close()
-		if response.StatusCode < 300 && received > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func localFetch(ctx context.Context, client *http.Client, url string, file File, final string) error {

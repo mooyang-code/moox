@@ -30,20 +30,6 @@ func TestValidateRepairViewRequiresConfirmation(t *testing.T) {
 	}
 }
 
-func TestResolveRepairPackageRootWalksUpFromStorageConfig(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "start.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configDir := filepath.Join(root, "storage", "config")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := resolveRepairPackageRoot("", filepath.Join(configDir, "storage.yaml")); got != root {
-		t.Fatalf("package root = %q, want %q", got, root)
-	}
-}
-
 func TestPurgeRepairViewIndexesRemovesIndexAndWAL(t *testing.T) {
 	root := t.TempDir()
 	duckRoot := filepath.Join(root, "duckdb")
@@ -68,7 +54,7 @@ func TestPurgeRepairViewIndexesRemovesIndexAndWAL(t *testing.T) {
 	}
 }
 
-// repair-view 按顺序暂停 storage-view、删索引文件、再恢复；元数据不动。
+// repair-view 按顺序停掉 storage-view、删索引文件、再恢复；元数据不动。索引目录取自 storage-view 自己的配置。
 func TestRepairViewRebuildsTheNamedView(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "metadata.db")
@@ -77,8 +63,12 @@ func TestRepairViewRebuildsTheNamedView(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(confPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	conf := "storage:\n  metadata:\n    path: " + dbPath + "\n  devices:\n    view_index_root: " + indexRoot + "\n"
+	conf := "storage:\n  metadata:\n    path: " + dbPath + "\n  devices:\n    view_index_root: " + filepath.Join(root, "primary-has-no-indexes") + "\n"
 	if err := os.WriteFile(confPath, []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	viewConfPath := filepath.Join(root, "config", "storage-view.yaml")
+	if err := os.WriteFile(viewConfPath, []byte("storage:\n  devices:\n    view_index_root: "+indexRoot+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	id := viewindex.ViewIndexID("space", "view")
@@ -102,19 +92,19 @@ func TestRepairViewRebuildsTheNamedView(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls []string
-	previous := runRepairLifecycle
-	runRepairLifecycle = func(_ context.Context, _, action string, _ io.Writer) error {
-		calls = append(calls, action)
-		return nil
+	previous := systemctlUser
+	systemctlUser = func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		return nil, nil
 	}
-	t.Cleanup(func() { runRepairLifecycle = previous })
+	t.Cleanup(func() { systemctlUser = previous })
 
 	var out bytes.Buffer
-	if err := runRepairView([]string{"--space-id", "space", "--view-id", "view", "--storage-conf", confPath, "--package-root", root, "--yes"}, &out, io.Discard); err != nil {
+	if err := runRepairView([]string{"--space-id", "space", "--view-id", "view", "--storage-conf", confPath, "--view-conf", viewConfPath, "--yes"}, &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(calls, ",") != "pause,resume" {
-		t.Fatalf("lifecycle calls = %v", calls)
+	if strings.Join(calls, ",") != "disable --now moox-storage-view.service,enable --now moox-storage-view.service" {
+		t.Fatalf("systemctl calls = %v", calls)
 	}
 	if _, err := os.Stat(filepath.Join(indexRoot, "duckdb", id+".duckdb")); !os.IsNotExist(err) {
 		t.Fatalf("索引文件应已删除，stat err=%v", err)

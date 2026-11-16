@@ -271,7 +271,7 @@ func (c *Config) validateEgressProxy() error {
 func (c *Config) validateKlineResample() error {
 	k := c.KlineResample
 	if k.LegacyEventBus != nil {
-		return fmt.Errorf("kline_resample.event_bus 已经移到顶层 event_bus：K 线合成与下架检测共用一条 EventBus 连接。请用新版 setup（unitinstall）重新渲染配置，或把这一段从 kline_resample 下移到顶层")
+		return fmt.Errorf("kline_resample.event_bus 已经移到顶层 event_bus：K 线合成与下架检测共用一条 EventBus 连接。请重新部署 Collector（moox-cli setup deploy），或把这一段从 kline_resample 下移到顶层")
 	}
 	if k.ScanTimeout <= 0 || k.ExecTimeout <= 0 || k.FallbackGrace <= 0 {
 		return fmt.Errorf("kline_resample durations must be positive")

@@ -242,7 +242,7 @@ func backfill(args []string, out io.Writer) error {
 	return json.NewEncoder(out).Encode(summary)
 }
 
-// tune 按本机内存给出内存配置建议（设计第 8 节）；--write 把建议写进 engine.yaml（只写还没设置过的项，--force 覆盖）。
+// tune 按本机内存给出内存配置建议（设计第 8 节），只打印：建议值按 moox.toml 的覆盖表给出，由用户写进 moox.toml 后重新部署生效。
 func tune(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("tune", flag.ContinueOnError)
 	app := fs.String("config", "config/engine.yaml", "factor engine config")
@@ -251,8 +251,6 @@ func tune(args []string, out io.Writer) error {
 	cpus := fs.Int("cpus", runtime.NumCPU(), "CPU 核数")
 	series := fs.Int("series", 0, "计划启用的序列总数（标的数 × series_tag 数，所有数据源合计）；给出后按回看数量 N 估算窗口内存并与建议的窗口上限比较")
 	fields := fs.Int("fields", 7, "数据集的数值字段数（用于窗口内存估算）")
-	write := fs.Bool("write", false, "把建议写进配置文件")
-	force := fs.Bool("force", false, "覆盖已经设置过的值")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -283,22 +281,6 @@ func tune(args []string, out io.Writer) error {
 			}
 		}
 	}
-	if !*write {
-		_, err = fmt.Fprintln(out, "加 --write 写入配置文件")
-		return err
-	}
-	changes, err := engine.TuneConfig(*app, plan, *force)
-	if err != nil {
-		return err
-	}
-	if len(changes) == 0 {
-		_, err = fmt.Fprintln(out, "配置里的相关项都已设置，没有改动（--force 可覆盖）")
-		return err
-	}
-	for _, change := range changes {
-		if _, err := fmt.Fprintf(out, "已写入 %s：%s → %s\n", change.Path, change.Old, change.New); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err = fmt.Fprintf(out, "\n要采用这些值，把下面这段写进 moox.toml，再执行 moox-cli setup deploy --host <因子机> --component factor-engine：\n%s", plan.Overrides())
+	return err
 }

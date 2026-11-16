@@ -46,7 +46,7 @@ echo "下载源: $SRC"
   | 因子机 | 可选，可以是家里或局域网的 Linux 机器 | 8 核 16G | 因子引擎、归档 Worker（systemd 用户服务） |
 
 - **本机**：macOS 或 Linux，能 SSH 到上面的服务器。**Windows 现在只能使用只读命令，部署走不通**，用户用 Windows 时提前说明。
-- **有没有旧部署**（在填配置之前问）：“目标机器上有旧部署吗？要保留数据吗？”
+- **有没有装过**（在填配置之前问）：“目标机器上已经装过 MooX 吗？要保留数据吗？”
   - 要保留：按下面“保留数据与换电脑”一节处理。
   - 不保留或不清楚：继续往下，第 3 节会实际检测。
 - **启动哪个空间**：加密货币用 `crypto`（需要海外机），A 股用 `stockcn`（需要配 `[scf_plan]`）。采集任务默认停用，安装时只启动选定的空间。
@@ -59,7 +59,7 @@ echo "下载源: $SRC"
 | 文件 | 说明 |
 | --- | --- |
 | `moox-bundle_${VER}_linux_amd64.tar.gz` | 部署产物包：仓库文件快照和附件清单，约 12MB，不含服务器程序 |
-| `moox-unit-<单元>_${VER}_linux_amd64.tar.gz` | 各部署单元，目标机自己并行下载，不用手工下载 |
+| `moox-<组件>_${VER}_linux_amd64.tar.gz` | 每个组件一个包，目标机自己并行下载，不用手工下载 |
 | `moox-cli_${VER}_darwin_arm64.tar.gz` / `darwin_amd64` / `linux_amd64` / `linux_arm64` / `windows_amd64.zip` | 本机命令行 |
 | `SHA256SUMS` | 校验和 |
 
@@ -145,7 +145,6 @@ cd moox-${VER}
 
 - **linger**：组件都是 systemd 用户服务，部署用户没开 linger 时登出后服务会被停掉。`manual_steps` 里是 `sudo loginctl enable-linger <用户>`，要用户在那台机器上执行。
 - **journald**：组件的标准输出与标准错误（崩溃信息、启动失败的原因）在 journald 里。没有持久化（`/var/log/journal` 不存在）时重启后看不到之前的输出，建议用户执行 `warnings` 里的命令。
-- 检测只认新的部署布局。目标机上是很旧的部署（没有 `version.json`、进程由 `moox-runtime` 管）时 `route` 会是 `fresh`，但端口被占着，装不上：要先用当时的旧版 `moox-cli` 清空。
 
 `route` 是 `installed`、用户要清空时先取预览（不会改动任何东西）：
 

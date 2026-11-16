@@ -9,15 +9,6 @@ import (
 	"strings"
 )
 
-// TightenPrivate 把属于当前用户、别人不可写的目录收紧到 0700。其他情况不动目录，交给 OpenPhysicalRoot 报错。
-func TightenPrivate(name string) error {
-	info, err := os.Lstat(name)
-	if err != nil || !info.IsDir() || !Owned(info) || info.Mode().Perm()&0o022 != 0 || info.Mode().Perm() == 0o700 {
-		return nil
-	}
-	return os.Chmod(name, 0o700)
-}
-
 func OpenPhysicalRoot(name string, private bool) (*os.Root, error) {
 	if name == "" || !filepath.IsAbs(name) || filepath.Clean(name) != name || name == string(filepath.Separator) || strings.ContainsAny(name, "\x00\r\n") {
 		return nil, errors.New("private material requires an absolute clean directory")

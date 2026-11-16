@@ -69,7 +69,7 @@ func deadServer(t *testing.T) *httptest.Server {
 func TestDownloadsWithRangeAndVerifies(t *testing.T) {
 	body, file := fixture(t, 40<<20)
 	root := t.TempDir()
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
+	request := Request{StagingDir: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
 	require.NoError(t, Run(t.Context(), localTransport{}, request))
 	raw, err := os.ReadFile(StagingPath(root, file.SHA256, file.Name))
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestExistingFileIsNotDownloadedAgain(t *testing.T) {
 	body, file := fixture(t, 1<<20)
 	root := t.TempDir()
 	var hits atomic.Int64
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, &hits).URL + "/{file}"}}
+	request := Request{StagingDir: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, &hits).URL + "/{file}"}}
 	require.NoError(t, Run(t.Context(), localTransport{}, request))
 	hits.Store(0)
 	require.NoError(t, Run(t.Context(), localTransport{}, request))
@@ -95,7 +95,7 @@ func TestFallsBackToSecondSourceOnBadDigest(t *testing.T) {
 	corrupt := bytes.Clone(body)
 	corrupt[10] ^= 0xff
 	root := t.TempDir()
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{
+	request := Request{StagingDir: root, Release: "v1", Files: []File{file}, URLs: []string{
 		rangeServer(t, corrupt, nil).URL + "/{file}", rangeServer(t, body, nil).URL + "/{file}",
 	}}
 	require.NoError(t, Run(t.Context(), localTransport{}, request))
@@ -107,27 +107,16 @@ func TestFallsBackToSecondSourceOnBadDigest(t *testing.T) {
 func TestAllSourcesFailing(t *testing.T) {
 	_, file := fixture(t, 1<<20)
 	root := t.TempDir()
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{deadServer(t).URL + "/{file}"}}
+	request := Request{StagingDir: root, Release: "v1", Files: []File{file}, URLs: []string{deadServer(t).URL + "/{file}"}}
 	require.ErrorIs(t, Run(t.Context(), localTransport{}, request), ErrNoSource)
 	require.NoFileExists(t, StagingPath(root, file.SHA256, file.Name))
-	require.False(t, Reachable(t.Context(), localTransport{}, request))
-}
-
-func TestProbeChangesNothingOnTarget(t *testing.T) {
-	body, file := fixture(t, 1<<20)
-	root := filepath.Join(t.TempDir(), "moox")
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
-	require.True(t, Reachable(t.Context(), localTransport{}, request))
-	require.NoDirExists(t, root, "预检不能改目标机")
-	require.True(t, LocalReachable(t.Context(), request.URLs, file.Name))
-	require.False(t, LocalReachable(t.Context(), []string{deadServer(t).URL + "/{file}"}, file.Name))
 }
 
 func TestWrongDigestNeverLandsInStaging(t *testing.T) {
 	body, file := fixture(t, 1<<20)
 	file.SHA256 = strings.Repeat("0", 64)
 	root := t.TempDir()
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
+	request := Request{StagingDir: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
 	require.ErrorIs(t, Run(t.Context(), localTransport{}, request), ErrNoSource)
 	require.NoFileExists(t, StagingPath(root, file.SHA256, file.Name))
 }
@@ -139,11 +128,11 @@ func TestKeepsOnlyTwoReleases(t *testing.T) {
 		body = append(body, release...)
 		digest := sha256.Sum256(body)
 		file.SHA256, file.Size = hex.EncodeToString(digest[:]), int64(len(body))
-		request := Request{DeployRoot: root, Release: release, Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
+		request := Request{StagingDir: root, Release: release, Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
 		require.NoError(t, Run(t.Context(), localTransport{}, request))
 		time.Sleep(20 * time.Millisecond)
 	}
-	entries, err := os.ReadDir(filepath.Join(root, "staging"))
+	entries, err := os.ReadDir(root)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 }
@@ -172,17 +161,16 @@ func TestScriptIsASCII(t *testing.T) {
 	}
 }
 
-// 新部署把下载放在部署根下的隐藏目录里：给了 StagingDir 就只写那里，不建 <部署根>/staging。
-func TestStagingDirOverride(t *testing.T) {
+// 下载只写进 StagingDir，而且必须是绝对路径。
+func TestStagingDirMustBeAbsolute(t *testing.T) {
 	body, file := fixture(t, 1<<20)
 	root := t.TempDir()
 	staging := filepath.Join(root, ".staging")
-	request := Request{DeployRoot: root, StagingDir: staging, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
+	request := Request{StagingDir: staging, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
 	require.NoError(t, Run(t.Context(), localTransport{}, request))
-	raw, err := os.ReadFile(StagingPathIn(staging, file.SHA256, file.Name))
+	raw, err := os.ReadFile(StagingPath(staging, file.SHA256, file.Name))
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(body, raw))
-	require.NoDirExists(t, filepath.Join(root, "staging"))
 	request.StagingDir = "relative/staging"
 	require.ErrorIs(t, Run(t.Context(), localTransport{}, request), ErrNoSource, "下载目录必须是绝对路径")
 }

@@ -20,14 +20,14 @@
 
 ## 生产路径（不要混用）
 
-原生 Storage 单元的路径按部署清单解析，常见示例：
+Storage 的路径都在存储机的部署根（默认 `/data/moox`）下：
 
-- 包根 `--package-root /data/moox/storage/current`（`moox-cli storage …` 缺省自动补上），其中包含 `pause.sh` / `resume.sh` / `status.sh`。
-- 业务配置 `--storage-conf /data/moox/storage/current/storage-view/config/storage.yaml`（同样缺省自动补上）；不要传 `trpc_go.yaml`。
+- 业务配置 `--storage-conf /data/moox/config/storage-primary/storage.yaml`、`--view-conf /data/moox/config/storage-view/storage.yaml`（`moox-cli storage …` 缺省自动补上）；不要传 `trpc_go.yaml`。
+- `storage-view` 的停启是它的 systemd 用户服务 `moox-storage-view`：`moox-cli setup stop|start-component --host <存储机> --component storage-view --yes`。
 - 每个 View 一个跟随协程读 Primary 的变更日志，没有 View 的 JetStream 消费者，也没有消费并发参数。
-- 元数据库与 Pebble 都属于 `storage-primary` 组件，View 索引属于 `storage-view`。不要把旧平铺目录或操作机的路径当作当前主机路径。
+- 元数据库与 Pebble 在 `data/storage-primary/`，View 索引在 `data/storage-view/`。不要把操作机的路径当作存储机上的路径。
 
-控制面：`/data/moox/prod`；Storage 单元在 Storage 主机的 `/data/moox/storage/current`，不要往其他主机发 Storage。
+各主机的部署根相同；Storage 只在存储机上，不要往其他主机部署 Storage。
 
 ## Storage View 容量
 

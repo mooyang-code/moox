@@ -4,7 +4,7 @@ package deploy
 //   - 身份包里每个调用方的 HMAC 密钥落到 secrets/caller-<调用方>.key（T14 换成每主机一把 ed25519 私钥后删除）；
 //   - access 组件的校验文件落到 secrets/access/（T16 外部入口并入主机网关后删除）；
 //   - 因子引擎、归档 worker 的外部身份密钥，以及操作电脑的 moox-cli 密钥，经 SSH 从控制机取（T14 删除）。
-// 身份材料由控制机上的 moox-admin-cli 导出，校验与本地落盘用 unitbundle 里现成的函数。
+// 身份材料由控制机上的 moox-admin-cli 导出，校验与本地落盘用 identitybundle 里现成的函数。
 
 import (
 	"bytes"
@@ -22,9 +22,9 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
@@ -167,18 +167,18 @@ func exportEventBus(ctx context.Context, control setupssh.Client, cfg *topology.
 }
 
 // materialOptions 是校验一台主机身份包用的期望值。
-func materialOptions(cfg *topology.Config, host topology.Host, ca, hash string, operator bool) unitbundle.Options {
+func materialOptions(cfg *topology.Config, host topology.Host, ca, hash string, operator bool) identitybundle.Options {
 	control := cfg.ControlHost()
 	components := slices.Clone(cfg.Deployments[host.Name])
 	slices.Sort(components)
-	return unitbundle.Options{
+	return identitybundle.Options{
 		HostID: host.Name, ControlHostID: control.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, ControlAddress: control.Address,
 		Outbound: host.Reachability != "", Components: components, ExpectedCA: ca, ExpectedHash: hash, AllowOperator: operator,
 	}
 }
 
 // fetchIdentity 把控制机导出的身份包与 EventBus 材料取回本机临时目录、校验，再按新布局整理成 Identity。临时目录用完即删。
-func fetchIdentity(ctx context.Context, control setupssh.Client, bundle hostbundle.Metadata, options unitbundle.Options, clients hostbundle.ClientMetadata, roles []string) (Identity, error) {
+func fetchIdentity(ctx context.Context, control setupssh.Client, bundle hostbundle.Metadata, options identitybundle.Options, clients hostbundle.ClientMetadata, roles []string) (Identity, error) {
 	identity := Identity{KeyIDs: map[string]string{}, Secrets: map[string][]byte{}, EventBus: map[string][]byte{}}
 	temporary, err := os.MkdirTemp("", "moox-identity-")
 	if err != nil {
@@ -190,7 +190,7 @@ func fetchIdentity(ctx context.Context, control setupssh.Client, bundle hostbund
 		return identity, err
 	}
 	local := filepath.Join(temporary, "bundle")
-	if _, err := unitbundle.Fetch(ctx, control.Download, bundle, options, local); err != nil {
+	if _, err := identitybundle.Fetch(ctx, control.Download, bundle, options, local); err != nil {
 		return identity, fmt.Errorf("identity_invalid: 主机 %s 的身份包校验没有通过：%w", options.HostID, err)
 	}
 	root, err := fsutil.OpenPhysicalRoot(local, true)
@@ -230,7 +230,7 @@ func fetchIdentity(ctx context.Context, control setupssh.Client, bundle hostbund
 		return identity, nil
 	}
 	localClients := filepath.Join(temporary, "eventbus")
-	if err := unitbundle.FetchEventBusClients(ctx, control.Download, clients, roles, localClients); err != nil {
+	if err := identitybundle.FetchEventBusClients(ctx, control.Download, clients, roles, localClients); err != nil {
 		return identity, fmt.Errorf("identity_invalid: EventBus 凭据校验没有通过：%w", err)
 	}
 	clientRoot, err := fsutil.OpenPhysicalRoot(localClients, true)

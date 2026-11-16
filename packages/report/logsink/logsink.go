@@ -300,7 +300,7 @@ func (l *lane) attach(identity Identity, deliver Deliver) bool {
 }
 
 // reportFailure 把发送失败写到标准错误，每分钟最多一行。这里不能用 tRPC 日志（会重新进队列）；
-// 标准错误由主机守护收进 run/logs/<组件>.log，配置错了（密钥、主题、权限）时至少在那里看得到。
+// 标准错误进 journald（journalctl --user -u moox-<组件>），配置错了（密钥、主题、权限）时至少在那里看得到。
 func (l *lane) reportFailure(err error, count int) {
 	now := time.Now()
 	if last := l.lastFailureReport.Load(); last != 0 && now.UnixNano()-last < int64(failureReportInterval) {

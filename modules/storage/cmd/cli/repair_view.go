@@ -16,7 +16,6 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 )
 
@@ -27,7 +26,7 @@ type repairViewOptions struct {
 	spaceID     string
 	viewID      string
 	storageConf string
-	packageRoot string
+	viewConf    string
 	timeout     time.Duration
 	yes         bool
 	dryRun      bool
@@ -45,10 +44,32 @@ type repairViewSummary struct {
 	Warnings           []string `json:"warnings,omitempty"`
 }
 
-// runRepairLifecycle 暂停、恢复 storage-view（pause / resume：stop 之后主机守护会把它拉起）；测试替换它，不真的启动服务。
-var runRepairLifecycle = runStorageViewLifecycle
+// storageViewUnit 是 storage-view 的 systemd 用户服务。
+const storageViewUnit = "moox-storage-view.service"
 
-// runRepairView 重建指定 View：暂停 storage-view、删除 View 的索引文件，恢复后由维护流程从 Primary 重新建索引并跟随变更日志。
+// systemctlUser 执行 systemctl --user 并返回输出；测试替换它，不真的停启服务。
+var systemctlUser = func(ctx context.Context, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, "systemctl", append([]string{"--user"}, args...)...).CombinedOutput()
+}
+
+// stopStorageView 停掉 storage-view 并取消开机自启（和 moox-cli setup stop 是同一个操作），停着的期间部署也不会把它拉起。
+func stopStorageView(ctx context.Context) error {
+	return runSystemctlUser(ctx, "disable", "--now", storageViewUnit)
+}
+
+// startStorageView 恢复 storage-view 并开机自启（和 moox-cli setup start-component 是同一个操作）。
+func startStorageView(ctx context.Context) error {
+	return runSystemctlUser(ctx, "enable", "--now", storageViewUnit)
+}
+
+func runSystemctlUser(ctx context.Context, args ...string) error {
+	if output, err := systemctlUser(ctx, args...); err != nil {
+		return fmt.Errorf("systemctl --user %s：%w：%s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// runRepairView 重建指定 View：停掉 storage-view、删除 View 的索引文件，恢复后由维护流程从 Primary 重新建索引并跟随变更日志。
 // View 的已建状态只在索引文件里，元数据不用改。
 func runRepairView(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs := flag.NewFlagSet("repair-view", flag.ContinueOnError)
@@ -56,11 +77,11 @@ func runRepairView(args []string, stdout io.Writer, stderr io.Writer) error {
 	opts := repairViewOptions{timeout: defaultRepairTimeout, restart: true}
 	fs.StringVar(&opts.spaceID, "space-id", "", "View 所在空间 ID")
 	fs.StringVar(&opts.viewID, "view-id", "", "View ID")
-	fs.StringVar(&opts.storageConf, "storage-conf", defaultRepairStorageConfigPath(), "storage.yaml 路径")
-	fs.StringVar(&opts.packageRoot, "package-root", "", "含 pause.sh、resume.sh 的 Storage 部署包根目录")
+	fs.StringVar(&opts.storageConf, "storage-conf", defaultStorageConfigPath(), "storage-primary 的 storage.yaml 路径（元数据库在这里）")
+	fs.StringVar(&opts.viewConf, "view-conf", "", "storage-view 的 storage.yaml 路径（View 索引目录在这里）；不给时用 --storage-conf")
 	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "整个操作的超时")
 	fs.BoolVar(&opts.yes, "yes", false, "确认删除 View 的索引并重建")
-	fs.BoolVar(&opts.dryRun, "dry-run", false, "只查看 View，不暂停服务、不改状态")
+	fs.BoolVar(&opts.dryRun, "dry-run", false, "只查看 View，不停服务、不改状态")
 	fs.BoolVar(&opts.restart, "restart", opts.restart, "完成后恢复 storage-view")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -98,7 +119,7 @@ func writeRepairViewUsage(fs *flag.FlagSet, stdout io.Writer) {
 		stdout = io.Discard
 	}
 	fmt.Fprintln(stdout, "用法: moox-cli storage repair-view --space-id <space> --view-id <view> --yes")
-	fmt.Fprintln(stdout, "操作: 暂停 storage-view、删除 View 的索引文件，恢复后从 Primary 重新建索引")
+	fmt.Fprintln(stdout, "操作: 停掉 storage-view、删除 View 的索引文件，恢复后从 Primary 重新建索引")
 	fs.SetOutput(stdout)
 	fs.PrintDefaults()
 }
@@ -108,8 +129,14 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 	if err != nil {
 		return err
 	}
-	packageRoot := resolveRepairPackageRoot(opts.packageRoot, opts.storageConf)
-	storage = resolveRepairStoragePaths(storage, packageRoot, opts.storageConf)
+	viewIndexRoot := storage.Devices.ViewIndexRoot
+	if strings.TrimSpace(opts.viewConf) != "" {
+		view, err := loadStorage(opts.viewConf)
+		if err != nil {
+			return err
+		}
+		viewIndexRoot = view.Devices.ViewIndexRoot
+	}
 	dbPath := metadataDBPath(storage)
 	engine, err := inspectRepairView(ctx, dbPath, opts.spaceID, opts.viewID)
 	if err != nil {
@@ -127,132 +154,30 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 	if opts.dryRun {
 		return writeOperationResult(stdout, operationResult{Module: "storage", Action: "repair-view", Status: "dry_run", Summary: summary})
 	}
-	if err := runRepairLifecycle(ctx, packageRoot, "pause", stderr); err != nil {
-		return fmt.Errorf("暂停 storage-view：%w", err)
+	if err := stopStorageView(ctx); err != nil {
+		return fmt.Errorf("停掉 storage-view：%w", err)
 	}
 	started := false
 	defer func() {
 		if !started && opts.restart {
-			_ = runRepairLifecycle(context.Background(), packageRoot, "resume", stderr)
+			if err := startStorageView(context.Background()); err != nil {
+				fmt.Fprintf(stderr, "恢复 storage-view 失败，请执行 moox-cli setup start-component --host <存储机> --component storage-view --yes：%v\n", err)
+			}
 		}
 	}()
-	removed, err := purgeRepairViewIndexes(storage.Devices.ViewIndexRoot, engine, indexID)
+	removed, err := purgeRepairViewIndexes(viewIndexRoot, engine, indexID)
 	if err != nil {
 		return fmt.Errorf("删除 View 索引：%w", err)
 	}
 	summary.ViewIndexesRemoved = removed
 	if opts.restart {
-		if err := runRepairLifecycle(ctx, packageRoot, "resume", stderr); err != nil {
+		if err := startStorageView(ctx); err != nil {
 			return fmt.Errorf("恢复 storage-view：%w", err)
 		}
 		started = true
 		summary.Restarted = true
 	}
 	return writeOperationResult(stdout, operationResult{Module: "storage", Action: "repair-view", Status: "ok", Summary: summary})
-}
-
-func defaultRepairStorageConfigPath() string {
-	if configured := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG")); configured != "" {
-		return configured
-	}
-	if packageRoot := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PACKAGE_ROOT")); packageRoot != "" {
-		return filepath.Join(packageRoot, "config", "storage.yaml")
-	}
-	for _, candidate := range []string{filepath.Join("config", "storage.yaml"), filepath.Join("storage", "config", "storage.yaml")} {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return defaultStorageConfigPath()
-}
-
-func resolveRepairPackageRoot(configured, configPath string) string {
-	if root := strings.TrimSpace(configured); root != "" {
-		return findLifecycleRoot(root)
-	}
-	if root := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PACKAGE_ROOT")); root != "" {
-		return findLifecycleRoot(root)
-	}
-	if abs, err := filepath.Abs(configPath); err == nil {
-		return findLifecycleRoot(filepath.Dir(filepath.Dir(abs)))
-	}
-	return "."
-}
-
-// Config files live under <deploy-root>/storage/config while lifecycle
-// scripts live at <deploy-root>. Accept either layout so the destructive CLI
-// cannot accidentally operate on a data-only subdirectory.
-func findLifecycleRoot(candidate string) string {
-	candidate = filepath.Clean(candidate)
-	for current := candidate; ; current = filepath.Dir(current) {
-		if _, err := os.Stat(filepath.Join(current, "start.sh")); err == nil {
-			return current
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return candidate
-		}
-	}
-}
-
-// nativeComponentDirs 返回原生部署里 storage-primary、storage-view 两个组件的目录（都存在才算原生布局）。
-func nativeComponentDirs(packageRoot string) (primary, view string, ok bool) {
-	root := strings.TrimSpace(packageRoot)
-	if root == "" {
-		return "", "", false
-	}
-	dirs := [2]string{filepath.Join(root, "storage-primary"), filepath.Join(root, "storage-view")}
-	for _, dir := range dirs {
-		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-			return "", "", false
-		}
-	}
-	return dirs[0], dirs[1], true
-}
-
-// resolveRepairStoragePaths 把配置里的相对数据路径解析成绝对路径。
-//
-// 原生部署里两个角色各有目录与配置（<包根>/<组件>/config/storage.yaml），配置里的数据路径（./var/storage/...）
-// 相对于所属组件的目录，而不是相对于被读取的那一份配置：元数据库与 Pebble 在 storage-primary，
-// View 索引在 storage-view。只按被读取配置所在的组件目录解析，会把索引指到不存在的目录。
-// 没有这两个组件目录时（单目录布局）按配置所在目录解析。
-func resolveRepairStoragePaths(storage storageconfig.StorageConfig, packageRoot, configPath string) storageconfig.StorageConfig {
-	if primary, view, ok := nativeComponentDirs(packageRoot); ok {
-		join := func(dir, path string) string {
-			if strings.TrimSpace(path) == "" || filepath.IsAbs(path) {
-				return path
-			}
-			return filepath.Clean(filepath.Join(dir, path))
-		}
-		storage.Root = join(primary, storage.Root)
-		storage.Metadata.Path = join(primary, storage.Metadata.Path)
-		storage.Devices.PebblePath = join(primary, storage.Devices.PebblePath)
-		storage.Devices.ViewIndexRoot = join(view, storage.Devices.ViewIndexRoot)
-		return storage
-	}
-	return resolveSingleDirStoragePaths(storage, packageRoot, configPath)
-}
-
-func resolveSingleDirStoragePaths(storage storageconfig.StorageConfig, packageRoot, configPath string) storageconfig.StorageConfig {
-	// Runtime configs use paths relative to their component directory while
-	// lifecycle scripts live at the deployment root. Keep those bases separate:
-	// <deploy>/storage/config/storage.yaml with root ../data/storage resolves to
-	// <deploy>/data/storage, not <deploy>/../data/storage.
-	base := strings.TrimSpace(packageRoot)
-	if abs, err := filepath.Abs(configPath); err == nil {
-		base = filepath.Dir(filepath.Dir(abs))
-	}
-	resolve := func(path string) string {
-		if strings.TrimSpace(path) == "" || filepath.IsAbs(path) {
-			return path
-		}
-		return filepath.Clean(filepath.Join(base, path))
-	}
-	storage.Root = resolve(storage.Root)
-	storage.Metadata.Path = resolve(storage.Metadata.Path)
-	storage.Devices.PebblePath = resolve(storage.Devices.PebblePath)
-	storage.Devices.ViewIndexRoot = resolve(storage.Devices.ViewIndexRoot)
-	return storage
 }
 
 // inspectRepairView 确认 View 存在并返回它的引擎。
@@ -318,38 +243,4 @@ func purgeRepairViewIndexes(root, engine string, indexIDs ...string) ([]string, 
 		removed = append(removed, path)
 	}
 	return removed, nil
-}
-
-// lifecycleScriptArgs 是传给 pause.sh / resume.sh 的参数。原生部署的脚本转给 moox-runtime，它不接受位置参数：
-// 整个 Storage 单元（serviceName 为 "storage"）不带参数，单个组件用 --components 选择。
-func lifecycleScriptArgs(serviceName string) []string {
-	serviceName = strings.TrimSpace(serviceName)
-	if serviceName == "" || serviceName == "storage" {
-		return nil
-	}
-	return []string{"--components", serviceName}
-}
-
-func runStorageViewLifecycle(ctx context.Context, packageRoot, action string, stderr io.Writer) error {
-	return runStorageComponentLifecycle(ctx, packageRoot, action, "storage-view", stderr)
-}
-
-func runStorageComponentLifecycle(ctx context.Context, packageRoot, action, serviceName string, stderr io.Writer) error {
-	packageRoot = strings.TrimSpace(packageRoot)
-	if packageRoot == "" {
-		return errors.New("storage package root is empty; pass --package-root")
-	}
-	script := filepath.Join(packageRoot, action+".sh")
-	if info, err := os.Stat(script); err != nil || info.IsDir() {
-		return fmt.Errorf("storage package %s is unavailable", packageRoot)
-	}
-	cmd := exec.CommandContext(ctx, script, lifecycleScriptArgs(serviceName)...)
-	cmd.Dir = packageRoot
-	cmd.Stderr = stderr
-	cmd.Stdout = stderr
-	cmd.Env = append([]string(nil), os.Environ()...)
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	return nil
 }

@@ -500,8 +500,8 @@ func TestExternalProgramComponents(t *testing.T) {
 			t.Fatalf("EngineControl/%s ACL: strategy=%t moox-cli=%t console=%t", method, c.Allowed("strategy", control.Path, method), c.Allowed(OperatorMooxCLI, control.Path, method), c.Allowed(OperatorConsole, control.Path, method))
 		}
 	}
-	if !slices.Contains(engine.AllPorts(), 11423) || c.LocalRelayPort(11423) {
-		t.Fatalf("EngineControl 的端口计入组件端口，但不能直接中转: %v", engine.AllPorts())
+	if !slices.Contains(componentPorts(engine), 11423) || c.LocalRelayPort(11423) {
+		t.Fatalf("EngineControl 的端口计入组件端口，但不能直接中转: %v", componentPorts(engine))
 	}
 	if worker, _ := c.Component("archive-worker"); len(worker.Services) != 0 {
 		t.Fatalf("archive-worker services = %+v", worker.Services)
@@ -511,8 +511,8 @@ func TestExternalProgramComponents(t *testing.T) {
 	if worker.RelayHTTP == nil || worker.RelayHTTP.Port != 11428 || !slices.Equal(worker.RelayHTTP.Callers, []string{"console"}) {
 		t.Fatalf("archive-worker relay_http = %+v", worker.RelayHTTP)
 	}
-	if !slices.Contains(worker.AllPorts(), 11428) || !slices.Contains(worker.AllPorts(), 11418) {
-		t.Fatalf("archive-worker ports = %v", worker.AllPorts())
+	if !slices.Contains(componentPorts(worker), 11428) || !slices.Contains(componentPorts(worker), 11418) {
+		t.Fatalf("archive-worker ports = %v", componentPorts(worker))
 	}
 	if !c.LocalRelayPort(11428) || c.LocalRelayPort(11418) || c.LocalRelayPort(22) {
 		t.Fatal("local relay ports must be relay_http ports only: health ports are not relayed")

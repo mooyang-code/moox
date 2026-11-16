@@ -39,11 +39,6 @@ while IFS= read -r -d '' module; do
       # goom relies on disabled inlining for its method interception tests.
       test_flags+=(-gcflags=all=-l -ldflags=-s=false)
       ;;
-    modules/cli)
-      # unitinstall、unitbootstrap 等包的 Linux 用例会启动真实的 Admin，它的 RPC 与健康端口是固定的；
-      # 包之间并行会抢这些端口，偶发 "release process did not become ready"，所以这个模块的包依次运行。
-      test_flags+=(-p 1)
-      ;;
   esac
   (cd "${ROOT}/${module}" && go test "${test_flags[@]}" ./...)
   echo "==> go vet ${module}"

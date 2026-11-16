@@ -30,7 +30,7 @@ go test -count=1 ./modules/admin/...
 
 离线恢复使用 `host set-status` 或 `deployment set-status`，两者均要求 `--db-path`、`--control-host-id`、`--host-id`、`--status enabled|disabled`；后者还要求 `--component-id`。数据库必须是已有的 0600 普通文件，恢复命令不会建表。受保护对象及目录校验规则与在线 API 相同。
 
-原生部署 CLI 已通过 `unitbootstrap`、`unitdeploy` 和 `unitinstall` 接入 SSH 导出取回、摘要校验、配置身份注入及操作员身份安装；部署操作见[部署与运维](../../docs/部署与运维.md)。代码能力不代表任一环境已经完成部署，实际状态以部署记录与就绪检查为准。
+`moox-cli setup deploy` 经 SSH 从控制机取回身份包，校验摘要后把身份与配置装到目标机，并安装操作员身份；部署操作见[部署与运维](../../docs/部署与运维.md)。代码能力不代表任一环境已经完成部署，实际状态以部署记录与就绪检查为准。
 
 ## 证书巡检
 

@@ -14,7 +14,6 @@ import (
 	"time"
 	"unicode"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -39,9 +38,7 @@ type Client struct {
 type sshHost struct {
 	name, address, username string
 	port                    int
-	// password 只有旧格式的 moox.toml 会有（T13 随旧部署代码删除）；新格式只支持密钥登录。
-	password      string
-	identityFiles []string
+	identityFiles           []string
 }
 
 // Open 按 moox.toml 的主机经 SSH 隧道连到各主机网关，使用本机 ~/.config/moox 下的操作员身份。
@@ -59,18 +56,6 @@ func Open(ctx context.Context, cfg *topology.Config) (*Client, error) {
 	}
 	options := setupssh.Options{Timeout: 5 * time.Second}
 	return open(ctx, hosts, cfg.ControlHost().Name, filepath.Join(home, ".config", "moox", "gateway-client.yaml"), options)
-}
-
-// OpenWithIdentity 用指定的操作员身份打开，给还读旧格式 moox.toml 的旧部署代码用（T13 删除）。
-func OpenWithIdentity(ctx context.Context, snapshot *setupconfig.Snapshot, identityPath string, options setupssh.Options) (*Client, error) {
-	if snapshot == nil {
-		return nil, errors.New("gateway tunnel requires a live context and setup configuration")
-	}
-	hosts := make([]sshHost, 0, len(snapshot.Manifest.HostCatalog))
-	for _, host := range snapshot.Manifest.Hosts() {
-		hosts = append(hosts, sshHost{name: host.Name, address: host.Address, username: host.Username, port: host.Port, password: host.Password, identityFiles: options.IdentityFiles})
-	}
-	return open(ctx, hosts, snapshot.Manifest.ControlHost().Name, identityPath, options)
 }
 
 func open(ctx context.Context, hosts []sshHost, control, identityPath string, options setupssh.Options) (*Client, error) {
@@ -211,7 +196,7 @@ func (t *tunnels) forward(ctx context.Context, key, hostID, remote string) (stri
 	}
 	options := t.options
 	options.IdentityFiles = host.identityFiles
-	transport, err := setupssh.Dial(ctx, setupssh.Target{Name: host.name, Address: host.address, Port: host.port, Username: host.username}, host.password, options)
+	transport, err := setupssh.Dial(ctx, setupssh.Target{Name: host.name, Address: host.address, Port: host.port, Username: host.username}, "", options)
 	if err != nil {
 		return "", fmt.Errorf("open gateway SSH tunnel for %s: %w", hostID, err)
 	}

@@ -17,7 +17,7 @@ usage() {
   cat >&2 <<'EOF'
 用法：monitor-db-check.sh [--host <别名>]
 
-  --host  主机别名，默认 control（控制机）；对应 ~/.moox-release.env 里的 MOOX_RELEASE_HOST_CONTROL=user@host，与 native-release.sh 相同。
+  --host  主机别名，默认 control（控制机）；对应 ~/.moox-release.env 里的 MOOX_RELEASE_HOST_CONTROL=user@host。
 
 数据库与日志路径默认是控制机部署根 /data/moox 下的标准位置（data/monitor/monitor.db、logs/monitor/trpc.log）；非标准部署时在本机设置环境变量
 MOOX_MONITOR_DB、MOOX_MONITOR_LOG（控制机上的路径），脚本会带到控制机执行。

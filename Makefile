@@ -105,7 +105,7 @@ PROTO_CHECK := $(if $(SKIP_PROTO_CHECK),,proto-check)
 
 # make verify 由下面几组检查组成，PR 上的 CI 按组并行运行（make verify-ci-<组>）；本机和自托管运行器的 make verify 仍然依次全跑。
 # 新增检查时放进某一组，verify 与各组自动保持一致。组之间互不依赖：需要前端依赖的检查都放在 web 组，由 test-web 先安装。
-VERIFY_PR_UNITS := test-deployment-packages test-host-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph $(PROTO_CHECK) test-greenfield-contract test-unit-admin
+VERIFY_PR_UNITS := test-deployment-packages test-host-deployment test-host-identity-bundles check-go-module-graph $(PROTO_CHECK) test-greenfield-contract
 VERIFY_PR_CONTRACTS := test-event-contracts test-eventbus-topology test-storage-seed-contract test-build-linux-local-contract test-collector-scf-package-contract test-release-bundle-manifest
 VERIFY_CORE_CHECKS := check-boundaries test-quality-gates test-docs-architecture test-moox-ca test-skill-contracts
 VERIFY_STORAGE_CHECKS := test-storage-boundary test-storage-consistency
@@ -144,7 +144,6 @@ test-skill-contracts:
 	bash skills/moox/scripts/test-data-query-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
-	bash skills/moox/scripts/test-native-release.sh
 	bash skills/moox/scripts/test-factor-convert-contract.sh
 	bash skills/moox/scripts/test-strategy-check-contract.sh
 	bash skills/moox/scripts/test-monitor-db-check.sh
@@ -183,49 +182,15 @@ clean:
 	rm -rf bin release dist
 	find modules -type d \( -name bin -o -name release -o -name .cache \) -prune -exec rm -rf {} +
 
-.PHONY: test-deployment-packages test-unit-package-linux
+.PHONY: test-deployment-packages
 test-deployment-packages:
-	go test ./modules/cli/internal/setup/unitpackage ./modules/cli/internal/command -run 'TestUnit|TestSetupPackage'
-
-test-unit-package-linux:
-	bash scripts/test/gates/test-unit-package-linux.sh
+	go test ./modules/cli/internal/setup/bundle ./modules/cli/internal/setup/fetchunit ./modules/cli/internal/setup/deploy ./modules/cli/internal/setup/deployscan
 
 .PHONY: test-host-deployment
 test-host-deployment:
 	go test ./modules/admin/internal/service/sysdeploy/... ./modules/admin/cmd/cli ./modules/cli/internal/setup/client ./modules/cli/internal/doctor ./modules/cli/internal/command -run 'TestHostTopologyAPIOverRealTRPC|TestTopology|TestSyncHostDeployments|TestDoctorDeployments'
 
-.PHONY: test-host-identity-bundles test-unit-bundle-linux
+.PHONY: test-host-identity-bundles
 test-host-identity-bundles:
 	go test ./modules/admin/cmd/cli ./modules/admin/internal/pki ./packages/gatewayclient ./packages/servicecatalog/hostgatewayconfig -run 'TestBootstrap|TestHostBundle|TestInfo|TestPersistentCA|TestFileConfig'
-	go test ./modules/cli/internal/setup/unitbundle
-
-test-unit-bundle-linux:
-	bash scripts/test/gates/test-unit-bundle-linux.sh
-
-.PHONY: test-unit-runtime test-unit-runtime-linux
-.PHONY: test-unit-install test-unit-install-linux
-.PHONY: test-unit-bootstrap test-unit-bootstrap-linux
-.PHONY: test-unit-admin test-unit-admin-linux
-test-unit-admin:
-	go test ./modules/cli/internal/setup/unitdeploy
-
-test-unit-admin-linux:
-	bash scripts/test/gates/test-unit-admin-linux.sh
-
-test-unit-bootstrap:
-	go test ./modules/cli/internal/setup/unitbootstrap
-
-test-unit-bootstrap-linux:
-	bash scripts/test/gates/test-unit-bootstrap-linux.sh
-
-test-unit-install:
-	go test ./modules/cli/internal/setup/unitinstall
-
-test-unit-install-linux:
-	bash scripts/test/gates/test-unit-install-linux.sh
-
-test-unit-runtime:
-	go test ./modules/cli/internal/setup/unitruntime ./modules/cli/cmd/moox-runtime
-
-test-unit-runtime-linux:
-	bash scripts/test/gates/test-unit-runtime-linux.sh
+	go test ./modules/cli/internal/setup/identitybundle

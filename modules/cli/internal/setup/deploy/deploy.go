@@ -25,9 +25,9 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fetchunit"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 )
@@ -437,7 +437,7 @@ func (o Options) installBinaries(ctx context.Context, target setupssh.Client, la
 	}
 	o.logf("%s: 下载 %d 个组件包", o.HostID, len(files))
 	urls := fetchunit.Sources(o.Bundle.Release)
-	err = fetchunit.Run(ctx, target, fetchunit.Request{DeployRoot: layout.Root, StagingDir: layout.Staging(), Release: o.Bundle.Release, Files: files, URLs: urls})
+	err = fetchunit.Run(ctx, target, fetchunit.Request{StagingDir: layout.Staging(), Release: o.Bundle.Release, Files: files, URLs: urls})
 	if errors.Is(err, fetchunit.ErrNoSource) {
 		// 目标机连不上下载源：由这台电脑下载再推送。
 		o.logf("%s: 目标机下载失败（%v），改由这台电脑下载后推送", o.HostID, err)
@@ -450,7 +450,7 @@ func (o Options) installBinaries(ctx context.Context, target setupssh.Client, la
 			if localErr != nil {
 				return localErr
 			}
-			if err = uploadFile(ctx, target, local, fetchunit.StagingPathIn(layout.Staging(), file.SHA256, file.Name)); err != nil {
+			if err = uploadFile(ctx, target, local, fetchunit.StagingPath(layout.Staging(), file.SHA256, file.Name)); err != nil {
 				return err
 			}
 		}
@@ -460,7 +460,7 @@ func (o Options) installBinaries(ctx context.Context, target setupssh.Client, la
 	}
 	var list bytes.Buffer
 	for _, file := range files {
-		fmt.Fprintln(&list, fetchunit.StagingPathIn(layout.Staging(), file.SHA256, file.Name))
+		fmt.Fprintln(&list, fetchunit.StagingPath(layout.Staging(), file.SHA256, file.Name))
 	}
 	if output, err := runInstall(ctx, target, layout, "binaries", map[string]File{"packages.list": {Data: list.Bytes(), Mode: 0o600}}, nil); err != nil {
 		return fmt.Errorf("install_failed: 主机 %s 放二进制失败：%s", o.HostID, lastLine(output.Stderr))
@@ -595,7 +595,7 @@ func (o Options) identity(ctx context.Context, target setupssh.Client, catalog s
 	defer func() { _, _ = source.Run(context.WithoutCancel(ctx), []string{"rm", "-rf", "--", stage}, nil) }()
 
 	var metadata hostbundle.Metadata
-	var material unitbundle.Options
+	var material identitybundle.Options
 	if host.Name == control.Name {
 		if o.Secrets == nil {
 			return Identity{}, errors.New("部署控制机要读 moox.secrets.toml 里的初始管理员")
@@ -614,11 +614,11 @@ func (o Options) identity(ctx context.Context, target setupssh.Client, catalog s
 		if err := os.MkdirAll(o.OperatorDirectory, 0o700); err != nil {
 			return Identity{}, err
 		}
-		if err := unitbundle.InstallOperator(ctx, source.Download, metadata, material, o.OperatorDirectory); err != nil {
+		if err := identitybundle.InstallOperator(ctx, source.Download, metadata, material, o.OperatorDirectory); err != nil {
 			return Identity{}, fmt.Errorf("operator_identity_failed: 这台电脑的操作员身份没有装上：%w。如果线上是另一套部署清空后重装的，先删掉 %s 下的 gateway-client.yaml、gateway-bootstrap.json、moox-ca.crt 与 caller-moox-cli-*.key 再重跑", err, o.OperatorDirectory)
 		}
 	} else {
-		pin, err := unitbundle.ReadOperatorPin(o.OperatorDirectory)
+		pin, err := identitybundle.ReadOperatorPin(o.OperatorDirectory)
 		if err != nil || pin.ControlHostID != control.Name {
 			return Identity{}, fmt.Errorf("control_not_ready: 这台电脑没有控制机 %s 的操作员身份，先运行 moox-cli setup deploy --host %s", control.Name, control.Name)
 		}
