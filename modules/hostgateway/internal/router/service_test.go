@@ -212,6 +212,9 @@ func TestProxyStripsGatewayHeadersAndTellsGatewayControlTheVerifiedHost(t *testi
 	inbound[gatewayauth.HeaderVerifiedCaller] = []byte("console")
 	forwarded = upstreamMetadata(servicecatalog.SecretMgrPath, gatewayauth.Claims{Caller: "trade", Host: "overseas"}, inbound)
 	require.Equal(t, codec.MetaData{gatewayauth.HeaderVerifiedCaller: []byte("trade"), "trace": []byte("kept")}, forwarded)
+	// moox-cli 用身份密钥签名、没有签名主机：不写头，SecretMgr 不按组件限制它。
+	forwarded = upstreamMetadata(servicecatalog.SecretMgrPath, gatewayauth.Claims{Caller: "moox-cli"}, inbound)
+	require.Equal(t, codec.MetaData{"trace": []byte("kept")}, forwarded)
 	forwarded = upstreamMetadata("trpc.moox.storage.PrimaryStore", gatewayauth.Claims{Caller: "trade", Host: "overseas"}, inbound)
 	require.Equal(t, codec.MetaData{"trace": []byte("kept")}, forwarded)
 }

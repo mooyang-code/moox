@@ -120,15 +120,12 @@ func (s *Service) GetSecretValue(ctx context.Context, req *pb.GetSecretValueReq)
 	return &pb.GetSecretValueRsp{RetInfo: retOK(), Secret: secretModelToPlainPB(secretRecord)}, nil
 }
 
-// hostGatewayCaller 是外部身份（moox-cli）的请求经别的主机网关转来时网关验到的签名方：它不是组件。
-const hostGatewayCaller = "host-gateway"
-
 // componentCaller 返回经主机网关以组件身份调用时网关验过签的调用方名字（目前只有 trade 在 GetSecretValue 的名单上）；
-// 控制台、moox-cli 与控制机上的同机直连没有这个头，返回空。头由本机网关在验签后写入，外面带进来的同名头在网关入口被剥掉。
+// 控制台、moox-cli（没有签名主机，网关不写头）与控制机上的同机直连没有这个头，返回空。头由本机网关在验签后写入，外面带进来的同名头在网关入口被剥掉。
 // 组件调用方只给交易所密钥：别的主机上的进程拿着主机密钥以 trade 的身份签名，也取不走云账号等其他类别的密钥。
 func componentCaller(ctx context.Context) string {
 	for key, value := range codec.Message(ctx).ServerMetaData() {
-		if http.CanonicalHeaderKey(key) == gatewayauth.HeaderVerifiedCaller && string(value) != hostGatewayCaller {
+		if http.CanonicalHeaderKey(key) == gatewayauth.HeaderVerifiedCaller {
 			return string(value)
 		}
 	}

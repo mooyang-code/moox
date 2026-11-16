@@ -88,7 +88,6 @@ func TestGetSecretValueLimitsComponentCallersToExchangeSecrets(t *testing.T) {
 	require.NotContains(t, rejected.String(), "cloud-secret-value")
 	require.Equal(t, "exchange-secret-value", get("trade", "exchange-binance").GetSecret().GetSecretValue())
 
-	for _, caller := range []string{"", "host-gateway"} {
-		require.Equal(t, "cloud-secret-value", get(caller, "cloud-tencent-main").GetSecret().GetSecretValue(), "调用方 %q 不受限制", caller)
-	}
+	// 没有头（控制台、moox-cli、同机直连）不受限制；网关只对主机密钥签名的调用方写头。
+	require.Equal(t, "cloud-secret-value", get("", "cloud-tencent-main").GetSecret().GetSecretValue())
 }

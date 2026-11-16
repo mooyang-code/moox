@@ -283,7 +283,8 @@ func (p *Proxy) forwardLocal(ctx context.Context, route servicecatalog.Route, re
 
 // upstreamMetadata 是转给本机被调服务的元数据：外面带进来的 x-moox- 头一律不往后传（签名到网关为止）；
 // 只有 GatewayControl 另外收到网关写的、验过的签名主机 ID，它用这个头认是哪台主机的网关在调；
-// SecretMgr 另外收到验过签的调用方名字，它据此限定组件调用方能取的密钥类别。
+// SecretMgr 另外收到验过签的组件调用方名字（只在请求由主机密钥签名时写），它据此限定组件能取的密钥类别；
+// moox-cli 用自己的身份密钥签名、没有签名主机，不写这个头，不受类别限制。
 func upstreamMetadata(service string, claims gatewayauth.Claims, inbound codec.MetaData) codec.MetaData {
 	metadata := codec.MetaData{}
 	for key, value := range inbound {
@@ -294,7 +295,7 @@ func upstreamMetadata(service string, claims gatewayauth.Claims, inbound codec.M
 	if service == servicecatalog.GatewayControlPath {
 		metadata[gatewayauth.HeaderVerifiedHost] = []byte(claims.Host)
 	}
-	if service == servicecatalog.SecretMgrPath {
+	if service == servicecatalog.SecretMgrPath && claims.Host != "" {
 		metadata[gatewayauth.HeaderVerifiedCaller] = []byte(claims.Caller)
 	}
 	return metadata

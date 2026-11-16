@@ -234,7 +234,10 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	}
 	// 签名时间只精确到秒：等过了启动时刻所在的这一秒再开始监听（最多 1 秒）。这样监听之后才签的请求一定不早于启动时间，
 	// 启动前签好、监听后才到的请求被拒后，调用方立即重签的那一次也一定能过。
-	time.Sleep(time.Until(started.Truncate(time.Second).Add(time.Second)))
+	// 睡眠按单调时钟走，期间墙上时钟被回拨时会提前醒来，所以按墙上时钟复查。
+	for target := started.Truncate(time.Second).Add(time.Second); time.Now().Before(target); {
+		time.Sleep(time.Until(target))
+	}
 	opened, err := listener.Open(ctx, cfg, material)
 	if err != nil {
 		return err
