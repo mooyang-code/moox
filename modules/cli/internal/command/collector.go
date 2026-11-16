@@ -190,5 +190,8 @@ func resolveCollectorRoot(explicit string) (string, error) {
 			return filepath.Abs(candidate)
 		}
 	}
-	return "", fmt.Errorf("collector root not found; pass --collector-root")
+	if explicit != "" {
+		return "", fmt.Errorf("collector root not found：%s 下没有 cmd/scf/market_data/main.go，核对 --source-dir 或 --collector-root", explicit)
+	}
+	return "", fmt.Errorf("collector root not found：当前目录不是仓库根或 Collector 模块目录，带 --collector-root（setup 命令带 --source-dir）")
 }

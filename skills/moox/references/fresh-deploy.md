@@ -11,7 +11,9 @@
 
 - 两份配置：明文的 `moox.toml`（主机、部署、部署参数）和同目录加密的 `moox.secrets.toml`（管理员、云密钥、交易所密钥、告警渠道）。可以放在任意目录，命令用 `--file <moox.toml 路径>` 指过去。
   Agent 不直接读秘密文件、不打印密钥，要看用 `moox-cli config get`（默认打码）。改之前先备份两份文件。
-- 代码在独立 worktree 时，用 worktree 里构建的 CLI，并用 `--source-dir <worktree>` 指向源码（配置模板、单元模板、种子都从这里读）；种子目录用 `--config-dir <worktree>/config/setup`。
+- 代码在独立 worktree 时，用 worktree 里构建的 CLI，并用 `--source-dir <worktree>` 指向源码：配置模板、单元模板、元数据种子（`config/setup`）、云函数代码包（`modules/collector`）、默认因子任务和默认策略都从这里取，不看运行命令时的当前目录。
+  `setup install` 把同一个目录传给它里面的每一步；单独跑 `setup deploy`、`setup init`、`setup start` 时各自带上同一个 `--source-dir`，否则按当前目录取（在主仓库根运行就会把主仓库那个分支的云函数代码传上去）。种子不在 `<源码目录>/config/setup` 时才写 `--config-dir`。
+  产物包（没有源码）安装也是这个参数：指到解压后的产物包目录，云函数程序按清单下载预编译的，不在本机编译。
 - 跑 CLI 前 `env -u HTTP_PROXY -u HTTPS_PROXY`（本机代理会挡住到主机的直连）。
 - 本机就是编译机：所有二进制都在本机构建（纯 Go 交叉编译，Storage 与前端进本机 Docker），不登录任何主机去编译。
 - 每台主机一个部署根（默认 `/data/moox`），组件是 systemd 用户服务 `moox-<组件>`。布局见 [`docs/部署与运维.md`](../../../docs/部署与运维.md)。
@@ -66,8 +68,8 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 ## 4. 安装
 
 ```bash
-$CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linux --config-dir $WT/config/setup --space-id crypto         # 预检
-$CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linux --config-dir $WT/config/setup --space-id crypto --yes
+$CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linux --space-id crypto         # 预检
+$CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linux --space-id crypto --yes
 ```
 
 预检输出安装步骤（`steps`），每一步带可以单独运行的命令。带 `--yes` 后依次：
@@ -86,7 +88,7 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 
 - 任何一步失败先看原因和日志（`setup logs --host <主机> --component <组件> --journal`），修好后重跑同一条 `setup install`：每一步都可以重做，没有变化的组件不重启。
 - 改了代码要重新构建二进制再重跑；`setup deploy` 按二进制摘要判断哪些组件有变化。
-- 另一个空间装完后再启动：`$CLI setup start --space-id stockcn --yes`、`$CLI setup verify --space-id stockcn`。
+- 另一个空间装完后再启动：`$CLI setup start --source-dir $WT --space-id stockcn`（`setup start` 没有预览，不带 `--yes`）、`$CLI setup verify --space-id stockcn`。
 - 交易所密钥：`setup init` 只写入、不检测。Trade 装好后逐把检测 `readonly = true` 以外的密钥：
   `$CLI trade inspect-credential --exchange EXCHANGE_BINANCE --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-main`
   （固定 ID 是 `exchange-<交易所>-<环境>-<名称>`，OKX 用 `EXCHANGE_OKX`，测试网用 `ACCOUNT_ENVIRONMENT_TESTNET`），看 `blockers` 有无阻断项；`检测没有完成` 只是交易所接口暂时不可用，稍后重试。
@@ -106,7 +108,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 ### `setup start` 的已知限制
 
 `setup start` 会逐项导入 `config/setup/factor-tasks.yaml` 里这个空间的因子任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认有三个因子任务：crypto 的 `ftask_spot_1m`、`ftask_swap_1m` 与 A 股的 `ftask_cn_5m`（源数据集都由 Collector 的默认采集任务创建）；没有因子机时跳过因子；crypto 要海外机，没有海外机时 `setup start --space-id crypto` 本来就不能运行。
-导入中断（成员加进去了、还没启用）后重跑 `setup start` 会接着启用；手动的 `factor task apply --file` 不会替你启用线上停用的成员，仍按差异报出来。
+导入中断（成员加进去了、还没启用）后重跑 `setup start` 会接着启用。已知差别：它分不清“导入中断”和“人工停用”，在管理台手工停用的默认因子成员，重跑 `setup start` 后会被重新启用，要停用的重跑后再停一次；手动的 `factor task apply --file` 不会替你启用线上停用的成员，仍按差异报出来。
 自己的因子任务文件里指向自定义数据集的任务（例如手工建的 5m 采集任务的数据集）在全新系统里没有源数据；建好对应采集任务后再 `factor task apply --file` 导入。
 
 ## 5. 默认初始化的范围
@@ -146,7 +148,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 
 ## 6. 验收
 
-1. 四台主机的组件都在运行：`$CLI setup status --file ./moox.toml` 里每台 `installed: true`、各组件 `state: active`；`$CLI doctor bootstrap --file ./moox.toml` 的自启动检查通过（开机自启、运行中、linger）。
+1. 四台主机的组件都在运行：`$CLI setup status --file ./moox.toml` 里每台 `installed: true`、各组件 `state: active`；再逐台 `$CLI doctor diagnose --file ./moox.toml --node <主机>`（`control`、`storage`、`overseas`、`factor`）看各组件的健康检查与上报；`doctor bootstrap` 只能查运行它的那台机器，在操作电脑上验收目标机不用它。没开 linger 的主机在 `setup install` 预检的 `manual_steps` 里就会列出。
 2. `moox-cli doctor alerts --file ./moox.toml`：新对象会先有“尚未上报 / 尚无成功运行”，等一个周期；1h 数据集要等第一个整点之后。长时间不消的告警按提示排查。
 3. 一条链路至少跑通一期：`moox-cli collector status --space-id crypto`（各数据集 `level: ok`）→ 因子引擎的输出（`$CLI setup logs --host factor --component factor-engine --journal --grep factor_period_done`）里 `factor_period_done ... status=complete rows=<标的数>`
    （`status=degraded rows=0` 说明有问题，常见是 `factor_memory_budget_exceeded`，看内存配置）。
@@ -162,7 +164,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 第 8、9 步要在腾讯云控制台动手，第 21 步会真实下单、只在测试网或模拟盘账户上做，这几步都先问用户。
 
 1. **配置**：`[deployments]` 里没有 `cloudfunction`、`cloudnode`，`[[scf_plan.spaces]]` 里没有 `default_ingest`、`default_executor`，`$CLI setup validate --file ./moox.toml` 通过。
-2. **进程与库**：`$CLI setup status --file ./moox.toml`、`$CLI doctor bootstrap --file ./moox.toml` 的组件清单里没有 `cloudfunction`、`console-proxy`、`web-host`。控制机上没有 `moox-cloudfunction` 进程，11401、11411 没有监听：
+2. **进程与库**：`$CLI setup status --file ./moox.toml`、`$CLI doctor diagnose --file ./moox.toml --node control` 的组件清单里没有 `cloudfunction`、`console-proxy`、`web-host`。控制机上没有 `moox-cloudfunction` 进程，11401、11411 没有监听：
    ```bash
    $CLI host exec --host control -- sh -c 'pgrep -fl moox-cloudfunction; ss -ltn | grep -E ":(11401|11411) "; true'
    ```
@@ -172,7 +174,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 3. **云账号与代码包**：`$CLI collector account list` 有一条云账号；`$CLI collector package list --space-id stockcn` 有可用（`available`）的代码包，每个配置了云函数的空间各查一次。
 4. **自动接管与计划外函数**（验收前先不清腾讯云上的旧函数）：
    ```bash
-   $CLI setup start --file ./moox.toml --space-id stockcn
+   $CLI setup start --file ./moox.toml --source-dir $WT --space-id stockcn
    $CLI collector fetch-plan --space-id stockcn
    $CLI collector function list --space-id stockcn
    ```

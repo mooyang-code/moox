@@ -101,7 +101,7 @@ func setupInstallSteps(manifest *topology.Config, spaceID string) []setupInstall
 		setupInstallStep{Kind: installReady, Command: "moox-cli setup status"},
 		setupInstallStep{Kind: installInit, Command: "moox-cli setup init --storage-host " + storage},
 		setupInstallStep{Kind: installBackup, Command: "moox-cli config backup"},
-		setupInstallStep{Kind: installStart, Command: "moox-cli setup start --space-id " + spaceID + " --yes"},
+		setupInstallStep{Kind: installStart, Command: "moox-cli setup start --space-id " + spaceID},
 		setupInstallStep{Kind: installVerify, Command: "moox-cli setup verify --space-id " + spaceID},
 	)
 }
@@ -115,6 +115,7 @@ func newSetupInstallCommand(deps setupDeps) *cobra.Command {
 带 --yes 按顺序执行：控制机先装 Admin、主机网关与 HostAgent，再装带 EventBus、Storage 的主机，导入业务空间与元数据，
 然后装控制机其余组件和其余主机，统一等一次全部就绪，再做完整初始化、备份配置、启动空间和验收。
 中途失败直接重跑同一条命令：每一步都可以重做，没有变化的组件不会重启。
+配置模板、云函数代码包、元数据种子、默认因子任务和默认策略都从 --source-dir（默认当前目录）取：要装哪个分支或工作副本的代码，就在那里运行或把它指过去。
 目标机装过时默认原地重新部署（升级）；要彻底清空后重装，带 --wipe <预检输出的清空摘要>。进度逐行输出到标准错误。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -139,7 +140,7 @@ func newSetupInstallCommand(deps setupDeps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&options.file, "file", defaultSetupFile, "moox.toml 的路径（同目录要有 moox.secrets.toml）")
-	cmd.Flags().StringVar(&options.configDir, "config-dir", defaultSetupConfigDir, "元数据等种子目录")
+	cmd.Flags().StringVar(&options.configDir, "config-dir", defaultSetupConfigDir, "元数据等种子目录（不写时取 --source-dir 下的 config/setup）")
 	cmd.Flags().StringVar(&options.spaceID, "space-id", "", "安装后启动的空间，比如 crypto")
 	cmd.Flags().BoolVar(&options.yes, "yes", false, "确认执行，不加只预检")
 	cmd.Flags().StringVar(&options.wipe, "wipe", "", "预检输出的清空摘要：带上就先彻底清空再装，范围变了会拒绝")
@@ -222,7 +223,7 @@ func executeSetupInstallStep(cmd *cobra.Command, deps setupDeps, snapshot *setup
 		_, err := deps.deployHost(ctx, options.source.deployOptions(cmd, snapshot, options.file, step.Host, step.Components))
 		return err
 	case installInitMetadata:
-		bundle, err := deps.loadInitBundle(options.configDir)
+		bundle, err := deps.loadInitBundle(options.source.configDir(cmd, options.configDir))
 		if err != nil {
 			return err
 		}
@@ -231,11 +232,11 @@ func executeSetupInstallStep(cmd *cobra.Command, deps setupDeps, snapshot *setup
 	case installReady:
 		return waitSetupAllReady(ctx, deps, snapshot)
 	case installInit:
-		bundle, err := deps.loadInitBundle(options.configDir)
+		bundle, err := deps.loadInitBundle(options.source.configDir(cmd, options.configDir))
 		if err != nil {
 			return err
 		}
-		_, err = deps.initStorage(ctx, snapshot, storageHost, bundle)
+		_, err = deps.initStorage(ctx, snapshot, storageHost, options.source.root, bundle)
 		return err
 	case installBackup:
 		return deps.backupConfig(ctx, options.file)

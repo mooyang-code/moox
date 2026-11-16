@@ -811,10 +811,18 @@ func advance(calendar, bar string, at time.Time, n int) (time.Time, error) {
 type CatchupProgress struct {
 	// Latest 是实例已处理到的最后一根（BarEnd），没有记录为零；Expected 是 now 之前最近一根已收盘的 bar。
 	Latest, Expected time.Time
+	// SessionStart 是实例当前会话的开始时刻。
+	SessionStart time.Time
 }
 
 // CaughtUp 报告实例已处理到最新已收盘的 bar（含追赶期间只记录的周期）。
-func (p CatchupProgress) CaughtUp() bool { return !p.Expected.IsZero() && !p.Latest.Before(p.Expected) }
+// 最新已收盘的 bar 在会话开始之前收盘时（比如收盘后才启用，下一期要等下个交易日），实例还没有任何应处理的期，也算追平。
+func (p CatchupProgress) CaughtUp() bool {
+	if p.Expected.IsZero() {
+		return false
+	}
+	return p.Expected.Before(p.SessionStart) || !p.Latest.Before(p.Expected)
+}
 
 // CatchupProgress 读取实例的追赶进度。追赶期间到达的因子完成事件都会作为 skipped(catchup) 记录下来，
 // 所以「已处理到最新已收盘的 bar」同时说明：输入因子已追平、策略自己的消费也没有积压，相邻周期的版本记录已补齐。
@@ -848,7 +856,7 @@ func (h *Handler) CatchupProgress(ctx context.Context, instanceID string, now ti
 	if err != nil {
 		return CatchupProgress{}, err
 	}
-	out := CatchupProgress{Expected: closed.BarEnd}
+	out := CatchupProgress{Expected: closed.BarEnd, SessionStart: time.UnixMilli(rt.sessionStartedAt).UTC()}
 	latest, has, err := h.Store.LatestProcessed(ctx, instanceID, rt.sessionID)
 	if err != nil {
 		return CatchupProgress{}, err

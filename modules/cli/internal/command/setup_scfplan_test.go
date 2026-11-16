@@ -10,7 +10,7 @@ import (
 )
 
 func TestDefaultSetupEnsureSCFPlanIsANoopWhenDisabled(t *testing.T) {
-	summary, err := defaultSetupEnsureSCFPlan(context.Background(), &setupSnapshot{Manifest: &topology.Config{}})
+	summary, err := defaultSetupEnsureSCFPlan(context.Background(), &setupSnapshot{Manifest: &topology.Config{}}, "")
 	require.NoError(t, err)
 	require.Nil(t, summary)
 }

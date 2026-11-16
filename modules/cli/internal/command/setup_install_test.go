@@ -73,6 +73,8 @@ type installHarness struct {
 	reports  []deployscan.HostReport
 	operator string
 	source   string
+	// seedDirs 是读种子用过的目录，initSources 是完整初始化收到的源目录。
+	seedDirs, initSources []string
 }
 
 func newInstallHarness(t *testing.T) *installHarness {
@@ -96,8 +98,11 @@ func newInstallHarness(t *testing.T) *installHarness {
 		return nil
 	}
 	h.deps = setupDeps{
-		load:           func(string) (*setupSnapshot, error) { return h.snapshot, nil },
-		loadInitBundle: func(string) (setupInitBundle, error) { return setupInitBundle{}, nil },
+		load: func(string) (*setupSnapshot, error) { return h.snapshot, nil },
+		loadInitBundle: func(dir string) (setupInitBundle, error) {
+			h.seedDirs = append(h.seedDirs, dir)
+			return setupInitBundle{}, nil
+		},
 		scanDeployment: func(_ context.Context, _ *setupSnapshot, options deployscan.Options) ([]deployscan.HostReport, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
@@ -132,7 +137,8 @@ func newInstallHarness(t *testing.T) *installHarness {
 		initMetadata: func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error) {
 			return setupInitStorageSummary{}, record("init-metadata")
 		},
-		initStorage: func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitSummary, error) {
+		initStorage: func(_ context.Context, _ *setupSnapshot, _, sourceRoot string, _ setupInitBundle) (setupInitSummary, error) {
+			h.initSources = append(h.initSources, sourceRoot)
 			return setupInitSummary{}, record("init")
 		},
 		openInitFactor: func(context.Context, *setupSnapshot) (setupInitFactor, error) { return &fakeSetupInitFactor{}, nil },
@@ -456,4 +462,35 @@ func TestSetupLogsReadsOneComponentOrWholeHost(t *testing.T) {
 	require.Contains(t, got, "storage-view")
 	_, err = h.run("logs", "--host", "storage", "--component", "trade")
 	require.ErrorContains(t, err, "主机 storage 上没有组件 trade")
+}
+
+// 一次安装里的种子、云函数代码包都取自 --source-dir，不看运行命令时的当前目录；预检给出的启动命令不带 setup start 没有的 --yes。
+func TestSetupInstallUsesOneSourceDirectory(t *testing.T) {
+	h := newInstallHarness(t)
+	_, err := h.run("install", "--space-id", "crypto", "--yes")
+	require.NoError(t, err)
+	root, err := filepath.Abs(h.source)
+	require.NoError(t, err)
+	require.Equal(t, []string{root}, h.initSources)
+	require.Equal(t, []string{filepath.Join(root, "config", "setup"), filepath.Join(root, "config", "setup")}, h.seedDirs)
+
+	for _, step := range setupInstallSteps(h.snapshot.Manifest, "crypto") {
+		if step.Kind == installStart {
+			require.Equal(t, "moox-cli setup start --space-id crypto", step.Command)
+		}
+	}
+}
+
+// setup init 的 --source-dir 传到完整初始化；写了 --config-dir 时种子按它读。
+func TestSetupInitPassesSourceDirectory(t *testing.T) {
+	h := newInstallHarness(t)
+	source := t.TempDir()
+	_, err := h.run("init", "--source-dir", source)
+	require.NoError(t, err)
+	require.Equal(t, []string{source}, h.initSources)
+	require.Equal(t, []string{filepath.Join(source, "config", "setup")}, h.seedDirs)
+
+	_, err = h.run("init", "--source-dir", source, "--config-dir", "seeds")
+	require.NoError(t, err)
+	require.Equal(t, "seeds", h.seedDirs[len(h.seedDirs)-1])
 }

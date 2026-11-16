@@ -75,6 +75,7 @@ type setupInitStorageSummary struct {
 
 func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	var file, configDir, storageHost, stage string
+	var source setupSource
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "导入默认空间与元数据，写入初始秘密（管理员、云密钥、交易所密钥、告警渠道，只建不改）",
@@ -83,13 +84,18 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 管理员、腾讯云密钥、交易所密钥在管理台已有时以管理台为准，已在管理台删除的交易所密钥不重建；
 告警渠道只在 Monitor 还没有任何渠道时写入一次（在管理台把渠道全删掉之后重跑，会把秘密文件里的渠道写回）。
 还会登记云账户、开通日志服务；因子任务由 setup start 导入。已经做过的步骤不会重复写入。
+云函数代码包从 --source-dir（默认当前目录）下的 modules/collector 构建，元数据种子默认读它下面的 config/setup：
+要装哪个分支或工作副本的代码，就把 --source-dir 指到那里，并和 setup deploy、setup start 用同一个目录。
 交易所密钥在 Trade 部署好之后用 moox-cli trade inspect-credential 检测。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if stage != "" && stage != "storage" {
 				return errors.New("setup init --stage 只支持 storage")
 			}
-			bundle, err := deps.loadInitBundle(configDir)
+			if err := source.resolve(); err != nil {
+				return err
+			}
+			bundle, err := deps.loadInitBundle(source.configDir(cmd, configDir))
 			if err != nil {
 				return err
 			}
@@ -108,7 +114,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 				}
 				return writeSetupJSON(cmd, result)
 			}
-			result, err := deps.initStorage(cmd.Context(), snapshot, storageHost, bundle)
+			result, err := deps.initStorage(cmd.Context(), snapshot, storageHost, source.root, bundle)
 			if err != nil {
 				return err
 			}
@@ -116,7 +122,8 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 的路径（同目录要有 moox.secrets.toml）")
-	cmd.Flags().StringVar(&configDir, "config-dir", defaultSetupConfigDir, "默认配置目录")
+	cmd.Flags().StringVar(&configDir, "config-dir", defaultSetupConfigDir, "默认配置目录（不写时取 --source-dir 下的 config/setup）")
+	cmd.Flags().StringVar(&source.sourceDir, "source-dir", "", "源码或产物包目录（默认当前目录）：云函数代码包和元数据种子从这里取")
 	cmd.Flags().StringVar(&storageHost, "storage-host", "", "部署了 Storage 的主机 ID（默认取 moox.toml 里 storage-primary 所在的主机）")
 	cmd.Flags().StringVar(&stage, "stage", "", "只做哪个阶段：storage 只写业务空间、初始秘密与元数据；不填做全部初始化")
 	return cmd
@@ -172,7 +179,7 @@ func runSetupInit(
 	ctx context.Context,
 	deps setupDeps,
 	snapshot *setupSnapshot,
-	storageHost string,
+	storageHost, sourceRoot string,
 	bundle setupInitBundle,
 ) (setupInitSummary, error) {
 	// Open the cloud ingress required by every configured public runtime endpoint
@@ -211,7 +218,7 @@ func runSetupInit(
 	}
 	// Timer 采集计划：保证每个空间有可用代码包（没有则构建上传）。Collector 的采集计划配置由部署渲染，
 	// 代码包按名称取最新版本，所以这里不需要改任何配置；失败不阻断，记入摘要。
-	scfPlan, err := deps.ensureSCFPlan(ctx, snapshot)
+	scfPlan, err := deps.ensureSCFPlan(ctx, snapshot, sourceRoot)
 	if err != nil {
 		return setupInitSummary{}, err
 	}

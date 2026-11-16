@@ -42,13 +42,15 @@ type setupDeps struct {
 	statusSpaces          func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.StatusResult, error)
 	registerCloudAccounts func(context.Context, *setupSnapshot) (*setupCloudAccountSummary, error)
 	provisionCLS          func(context.Context, *setupSnapshot) (*setupCLSSummary, error)
-	ensureSCFPlan         func(context.Context, *setupSnapshot) (*setupSCFPlanSummary, error)
-	login                 func(context.Context, *setupSnapshot) (setupclient.LoginResult, error)
-	openInitStorage       func(context.Context, *setupSnapshot, string) (setupInitStorage, error)
-	openInitFactor        func(context.Context, *setupSnapshot) (setupInitFactor, error)
+	// ensureSCFPlan 的最后一个参数是源码或产物包目录：云函数代码包从它下面的 modules/collector 构建。
+	ensureSCFPlan   func(context.Context, *setupSnapshot, string) (*setupSCFPlanSummary, error)
+	login           func(context.Context, *setupSnapshot) (setupclient.LoginResult, error)
+	openInitStorage func(context.Context, *setupSnapshot, string) (setupInitStorage, error)
+	openInitFactor  func(context.Context, *setupSnapshot) (setupInitFactor, error)
 	// ensureNotification 在 Monitor 还没有任何告警渠道时写入初始渠道（只建不改）；测试里替换。
-	ensureNotification  func(context.Context, *setupSnapshot) (*setupNotificationSummary, error)
-	initStorage         func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitSummary, error)
+	ensureNotification func(context.Context, *setupSnapshot) (*setupNotificationSummary, error)
+	// initStorage 的参数依次是存储机、源码或产物包目录、种子。
+	initStorage         func(context.Context, *setupSnapshot, string, string, setupInitBundle) (setupInitSummary, error)
 	initMetadata        func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error)
 	importMetadata      func(context.Context, *setupSnapshot, string, string, []string) (metadataImportSummary, error)
 	exportSkillConfig   func(context.Context, *setupSnapshot, string) (dataAccessConfig, error)
@@ -544,8 +546,8 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.verifySpace, defaults.verifySpace)
 	fillSetupDep(&deps.regionCloud, defaults.regionCloud)
 	if deps.initStorage == nil {
-		deps.initStorage = func(ctx context.Context, snapshot *setupSnapshot, storageHost string, bundle setupInitBundle) (setupInitSummary, error) {
-			return runSetupInit(ctx, deps, snapshot, storageHost, bundle)
+		deps.initStorage = func(ctx context.Context, snapshot *setupSnapshot, storageHost, sourceRoot string, bundle setupInitBundle) (setupInitSummary, error) {
+			return runSetupInit(ctx, deps, snapshot, storageHost, sourceRoot, bundle)
 		}
 	}
 	if deps.initMetadata == nil {

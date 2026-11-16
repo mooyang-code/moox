@@ -35,6 +35,15 @@ func (s *setupSource) flags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&s.operatorDir, "operator-dir", "", "这台电脑的操作员身份目录（默认 ~/.config/moox）")
 }
 
+// configDir 返回种子目录：命令行写了 --config-dir 就用它，否则取源目录下的 config/setup，
+// 保证种子和其余安装内容来自同一个源目录。要在 resolve 之后调用。
+func (s *setupSource) configDir(cmd *cobra.Command, explicit string) string {
+	if cmd.Flags().Changed("config-dir") {
+		return explicit
+	}
+	return filepath.Join(s.root, filepath.FromSlash(defaultSetupConfigDir))
+}
+
 // resolve 把目录补成绝对路径，并在源目录是解压后的产物包时读它的清单。
 func (s *setupSource) resolve() error {
 	source := s.sourceDir
