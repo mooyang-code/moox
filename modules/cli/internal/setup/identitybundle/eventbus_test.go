@@ -16,10 +16,9 @@ import (
 )
 
 func TestEventBusClientRelayPinsFilesAndRejectsBrokerKeysAndChangedBytes(t *testing.T) {
-	f := newFixture(t, "control", false)
 	roles := []string{"hostagent-publisher", "metrics-publisher"}
-	metadata := hostbundle.ClientMetadata{Version: 1, Status: "ok", OutputDir: "/control/material-exports/client-only", Roles: roles, CA: digest(f.files[hostbundle.CAFile])}
-	files := map[string][]byte{"ca.pem": f.files[hostbundle.CAFile], "hostagent-publisher.yaml": []byte("synthetic-private-host-token\n"), "metrics-publisher.yaml": []byte("synthetic-private-metrics-token\n")}
+	metadata := hostbundle.ClientMetadata{Version: 1, Status: "ok", OutputDir: "/control/material-exports/client-only", Roles: roles}
+	files := map[string][]byte{"hostagent-publisher.yaml": []byte("synthetic-private-host-token\n"), "metrics-publisher.yaml": []byte("synthetic-private-metrics-token\n")}
 	for name, raw := range files {
 		metadata.Files = append(metadata.Files, hostbundle.File{Path: name, SHA256: digest(raw), Size: int64(len(raw))})
 	}
@@ -47,7 +46,7 @@ func TestEventBusClientRelayPinsFilesAndRejectsBrokerKeysAndChangedBytes(t *test
 	require.NoError(t, LoadEventBusClientsAt(t.Context(), metadata, roles, destination))
 	entries, err := os.ReadDir(destination)
 	require.NoError(t, err)
-	require.Len(t, entries, 4)
+	require.Len(t, entries, 3)
 	files["hostagent-publisher.yaml"][0] = 'X'
 	refused := filepath.Join(privateParent(t), "refused")
 	require.Error(t, FetchEventBusClients(t.Context(), download, metadata, roles, refused))
@@ -60,20 +59,18 @@ func TestEventBusClientRelayPinsFilesAndRejectsBrokerKeysAndChangedBytes(t *test
 	}, metadata, roles, refused))
 }
 
-// 服务端导出（给运行 broker 的主机）多带证书、私钥和用户表；缺一个、多一个或清单没有声明 Server 都必须被拒绝，
-// 普通的客户端导出也不能夹带这三个文件。
+// 服务端导出（给运行 broker 的主机）多带用户表；缺了它、清单没有声明 Server 却带了它，或者夹带证书、私钥都必须被拒绝。
 func TestEventBusServerExportCarriesBrokerMaterialOnlyWhenDeclared(t *testing.T) {
-	f := newFixture(t, "storage", false)
 	roles := []string{"eventbus-internal-admin", "metrics-publisher"}
 	build := func(server bool, extra map[string][]byte) (hostbundle.ClientMetadata, map[string][]byte) {
-		files := map[string][]byte{"ca.pem": f.files[hostbundle.CAFile], "eventbus-internal-admin.yaml": []byte("synthetic-internal-admin\n"), "metrics-publisher.yaml": []byte("synthetic-metrics\n")}
+		files := map[string][]byte{"eventbus-internal-admin.yaml": []byte("synthetic-internal-admin\n"), "metrics-publisher.yaml": []byte("synthetic-metrics\n")}
 		if server {
-			files["server.pem"], files["server-key.pem"], files["users.yaml"] = []byte("cert\n"), []byte("key\n"), []byte("users:\n")
+			files["users.yaml"] = []byte("users:\n")
 		}
 		for name, raw := range extra {
 			files[name] = raw
 		}
-		metadata := hostbundle.ClientMetadata{Version: 1, Status: "ok", OutputDir: "/storage/material-exports/eventbus", Roles: roles, CA: digest(f.files[hostbundle.CAFile]), Server: server}
+		metadata := hostbundle.ClientMetadata{Version: 1, Status: "ok", OutputDir: "/storage/material-exports/eventbus", Roles: roles, Server: server}
 		for name, raw := range files {
 			metadata.Files = append(metadata.Files, hostbundle.File{Path: name, SHA256: digest(raw), Size: int64(len(raw))})
 		}
@@ -98,16 +95,20 @@ func TestEventBusServerExportCarriesBrokerMaterialOnlyWhenDeclared(t *testing.T)
 	metadata, files := build(true, nil)
 	require.NoError(t, load(metadata, files))
 
-	// 清单声明了 Server，却少了一个服务端文件。
+	// 清单声明了 Server，却少了用户表。
 	short := metadata
 	short.Files = slices.DeleteFunc(slices.Clone(metadata.Files), func(f hostbundle.File) bool { return f.Path == "users.yaml" })
 	require.Error(t, load(short, files))
 
-	// 普通客户端导出里夹带服务端文件：清单没有声明 Server，文件数对不上。
-	plain, plainFiles := build(false, map[string][]byte{"server-key.pem": []byte("key\n")})
+	// 普通客户端导出里夹带用户表（清单没有声明 Server），或者任何一种导出夹带证书、私钥：文件对不上清单。
+	plain, plainFiles := build(false, map[string][]byte{"users.yaml": []byte("users:\n")})
 	require.Error(t, load(plain, plainFiles))
+	for _, name := range []string{"ca.pem", "server.pem", "server-key.pem"} {
+		extra, extraFiles := build(true, map[string][]byte{name: []byte("x\n")})
+		require.Error(t, load(extra, extraFiles), name)
+	}
 
-	// 普通客户端导出仍然只有 CA 和所选角色。
+	// 普通客户端导出只有所选角色。
 	plain, plainFiles = build(false, nil)
 	require.NoError(t, load(plain, plainFiles))
 }

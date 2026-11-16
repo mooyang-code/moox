@@ -96,6 +96,10 @@ func TestPersistentCAReuseIssuanceAndPrivateTrust(t *testing.T) {
 	for _, identity := range []string{host.HostID, host.Address, host.PrivateAddress} {
 		require.NoError(t, leaf.VerifyHostname(identity))
 	}
+	// 回环地址也在 SAN 里：EventBus 用所在主机的主机证书，同机组件经 127.0.0.1 连它。
+	for _, loopback := range []string{"127.0.0.1", "::1", "localhost"} {
+		require.NoError(t, leaf.VerifyHostname(loopback))
+	}
 	require.Error(t, leaf.VerifyHostname("other-host"))
 	pool := x509.NewCertPool()
 	require.True(t, pool.AppendCertsFromPEM(certBefore))

@@ -37,10 +37,11 @@ func TestEventBusClientExportContainsOnlyRequestedRolesAndDoesNotRotate(t *testi
 	var metadata eventBusClientsResult
 	require.NoError(t, json.Unmarshal(output.Bytes(), &metadata))
 	require.Equal(t, []string{"hostagent-publisher", "metrics-publisher"}, metadata.Roles)
-	require.Len(t, metadata.Files, 3)
+	// 只有两个角色文件，没有证书；目录里另有清单 clients.json。
+	require.Len(t, metadata.Files, 2)
 	entries, err := os.ReadDir(clientDir)
 	require.NoError(t, err)
-	require.Len(t, entries, 4)
+	require.Len(t, entries, 3)
 	for _, file := range metadata.Files {
 		raw, err := os.ReadFile(filepath.Join(clientDir, file.Path))
 		require.NoError(t, err)
@@ -62,8 +63,8 @@ func TestEventBusClientExportContainsOnlyRequestedRolesAndDoesNotRotate(t *testi
 	}
 }
 
-// --server 只给运行 broker 的主机：多出服务端证书、私钥和用户表，清单里标记 Server；
-// 不带 --server 的导出永远不含这三个文件；--server 只能用于 export-clients。
+// --server 只给运行 broker 的主机：多出用户表，清单里标记 Server；不带 --server 的导出永远不含用户表；
+// 两种导出都没有证书（服务端用所在主机的主机证书）；--server 只能用于 export-clients。
 func TestEventBusClientExportServerFlagAddsBrokerMaterial(t *testing.T) {
 	directory, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -91,7 +92,7 @@ func TestEventBusClientExportServerFlagAddsBrokerMaterial(t *testing.T) {
 	plain, plainDir, err := export("plain")
 	require.NoError(t, err)
 	require.False(t, plain.Server)
-	for _, name := range []string{"server.pem", "server-key.pem", "users.yaml"} {
+	for _, name := range []string{"ca.pem", "server.pem", "server-key.pem", "users.yaml"} {
 		_, statErr := os.Lstat(filepath.Join(plainDir, name))
 		require.True(t, os.IsNotExist(statErr), name)
 	}
@@ -99,11 +100,10 @@ func TestEventBusClientExportServerFlagAddsBrokerMaterial(t *testing.T) {
 	server, serverDir, err := export("server", "--server")
 	require.NoError(t, err)
 	require.True(t, server.Server)
-	require.Len(t, server.Files, 2+1+3)
-	for _, name := range []string{"server.pem", "server-key.pem", "users.yaml"} {
-		raw, readErr := os.ReadFile(filepath.Join(serverDir, name))
-		require.NoError(t, readErr, name)
-		require.NotEmpty(t, raw)
+	require.Len(t, server.Files, 2+1)
+	for _, name := range []string{"ca.pem", "server.pem", "server-key.pem"} {
+		_, statErr := os.Lstat(filepath.Join(serverDir, name))
+		require.True(t, os.IsNotExist(statErr), name)
 	}
 	users, err := os.ReadFile(filepath.Join(serverDir, "users.yaml"))
 	require.NoError(t, err)

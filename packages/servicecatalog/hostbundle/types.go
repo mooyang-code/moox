@@ -52,23 +52,20 @@ type File struct {
 	Size   int64  `json:"size"`
 }
 
-// ClientMetadata inventories an immutable EventBus export. By default it holds
-// client roles and the public CA only. Server marks the export for the host that
-// runs the broker: it additionally carries server.pem, server-key.pem and
-// users.yaml, and only the eventbus unit may consume such an export.
-// CA is the SHA256 of the original public ca.pem bytes, not a signing key.
+// ClientMetadata 是一次 EventBus 导出的清单：默认只有客户端角色文件。Server 为真表示这份导出给 EventBus 所在主机，
+// 另带 broker 的用户表 users.yaml，只有 eventbus 组件能用。导出里没有证书：EventBus 的服务端证书就是所在主机的
+// 主机证书，客户端用身份包里的 MooX CA 根证书校验。
 type ClientMetadata struct {
 	Version   int      `json:"version"`
 	Status    string   `json:"status"`
 	OutputDir string   `json:"output_dir"`
 	Roles     []string `json:"roles"`
-	CA        string   `json:"ca_sha256"`
 	Server    bool     `json:"server,omitempty"`
 	Files     []File   `json:"files"`
 }
 
-// ServerFiles are the extra files of a Server export, in sorted order.
-var ServerFiles = []string{"server-key.pem", "server.pem", "users.yaml"}
+// UsersFile 是 Server 导出里多出来的 broker 用户表。
+const UsersFile = "users.yaml"
 
 // 身份包里的文件名。host.key、scf-collector.key 只在这次新签发了对应私钥时才有。
 const (

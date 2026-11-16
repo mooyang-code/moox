@@ -16,6 +16,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"gopkg.in/yaml.v3"
 )
@@ -46,7 +47,8 @@ type Identity struct {
 	// Secrets 是 secrets/ 下这次要写的文件（相对路径 → 内容）：moox-ca.crt、host.crt、host.tls.key，新签发时的 host.key 与
 	// scf-collector.key。
 	Secrets map[string][]byte
-	// EventBus 是导出的 EventBus 材料（文件名 → 内容）：ca.pem、<角色>.yaml，EventBus 所在主机另有 server.pem、server-key.pem、users.yaml。
+	// EventBus 是导出的 EventBus 材料（文件名 → 内容）：<角色>.yaml，EventBus 所在主机另有 users.yaml。
+	// 证书不在这里：EventBus 用 Secrets 里的主机证书，客户端用根证书校验。
 	EventBus map[string][]byte
 }
 
@@ -138,7 +140,7 @@ func (r *renderer) use(component, name string) {
 }
 
 // fingerprint 对组件用到的文件（路径、权限、内容）、单元文件和它签名用的公钥算摘要。主机证书每次签发都不同，不算在内，
-// 否则每次部署都会重启主机网关；证书本身照常覆盖。私钥文件只在新签发时才在包里，所以算公钥、不算私钥文件：
+// 否则每次部署都会重启主机网关和 EventBus；证书本身照常覆盖，下次重启时生效。私钥文件只在新签发时才在包里，所以算公钥、不算私钥文件：
 // 密钥没换时指纹不变，换了就变。
 func (r *renderer) fingerprint(component string) string {
 	names := slices.Clone(r.used[component])
@@ -218,7 +220,8 @@ func (r *renderer) secretsOf(component servicecatalog.Component) []string {
 		return nil
 	}
 	names := []string{"secrets/moox-ca.crt"}
-	if component.ID == "host-gateway" {
+	// 主机证书是主机网关和 EventBus 的服务端证书。
+	if component.ID == "host-gateway" || component.ID == "eventbus" {
 		names = append(names, "secrets/host.crt", "secrets/host.tls.key")
 	}
 	return names
@@ -232,11 +235,6 @@ func (r *renderer) eventBus(component servicecatalog.Component, environment map[
 	}
 	url := r.Config.EventBusURLFor(r.Host.Name)
 	directory := r.layout.Secret("eventbus")
-	ca, ok := r.Identity.EventBus["ca.pem"]
-	if !ok {
-		return errors.New("身份材料里没有 EventBus 的 CA")
-	}
-	r.put(component.ID, "secrets/eventbus/ca.pem", ca, 0o600)
 	for _, role := range roles {
 		raw, ok := r.Identity.EventBus[role+".yaml"]
 		if !ok {
@@ -246,7 +244,7 @@ func (r *renderer) eventBus(component servicecatalog.Component, environment map[
 		if err != nil {
 			return fmt.Errorf("EventBus 角色 %s: %w", role, err)
 		}
-		if err := errors.Join(setPath(document, "urls", []string{url}, false), setPath(document, "ca_file", path.Join(directory, "ca.pem"), false)); err != nil {
+		if err := errors.Join(setPath(document, "urls", []string{url}, false), setPath(document, "ca_file", r.layout.Secret(hostbundle.CAFile), false)); err != nil {
 			return fmt.Errorf("EventBus 角色 %s: %w", role, err)
 		}
 		rendered, err := encodeYAML(document)
@@ -270,13 +268,11 @@ func (r *renderer) eventBus(component servicecatalog.Component, environment map[
 		}
 	}
 	if component.ID == "eventbus" {
-		for _, name := range []string{"server.pem", "server-key.pem", "users.yaml"} {
-			raw, ok := r.Identity.EventBus[name]
-			if !ok {
-				return fmt.Errorf("身份材料里没有 EventBus 服务端的 %s", name)
-			}
-			r.put(component.ID, "secrets/eventbus/"+name, raw, 0o600)
+		raw, ok := r.Identity.EventBus[hostbundle.UsersFile]
+		if !ok {
+			return errors.New("身份材料里没有 EventBus 的用户表")
 		}
+		r.put(component.ID, "secrets/eventbus/"+hostbundle.UsersFile, raw, 0o600)
 	}
 	return nil
 }
@@ -398,8 +394,9 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			set("broker.server_name", "eventbus-"+r.Host.Name)
 			set("broker.store_dir", path.Join(data, "jetstream"))
 			set("broker.auth", map[string]any{"enabled": true, "users_file": path.Join(directory, "users.yaml")})
-			set("broker.tls", map[string]any{"enabled": true, "cert_file": path.Join(directory, "server.pem"), "key_file": path.Join(directory, "server-key.pem"), "ca_file": path.Join(directory, "ca.pem")})
-			set("internal_client", map[string]string{"credential_file": credential, "tls_ca_file": path.Join(directory, "ca.pem")})
+			// 服务端证书就是这台主机的主机证书，客户端（含 EventBus 自己的内部连接）用 MooX CA 根证书校验。
+			set("broker.tls", map[string]any{"enabled": true, "cert_file": layout.Secret(hostbundle.HostCertificateFile), "key_file": layout.Secret(hostbundle.HostTLSKeyFile), "ca_file": layout.Secret(hostbundle.CAFile)})
+			set("internal_client", map[string]string{"credential_file": credential})
 		case "monitor":
 			set("database.path", path.Join(data, "monitor.db"))
 			set("observability.eventbus_urls", []string{url})

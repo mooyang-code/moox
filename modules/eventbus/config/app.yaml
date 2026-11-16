@@ -20,7 +20,6 @@ broker:
 
 internal_client:
   credential_file: ""
-  tls_ca_file: ""
 
 streams:
   - name: MOOX_STORAGE

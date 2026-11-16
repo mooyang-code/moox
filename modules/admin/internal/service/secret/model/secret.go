@@ -29,7 +29,7 @@ const ConfigBackupID = "moox-config-backup"
 // SystemSpacePrefix 是系统内部空间的前缀：EventBus 内部凭据等由部署工具在系统空间（systemspace.ID）下生成，属于本环境。
 const SystemSpacePrefix = systemspace.ID
 
-// EventBus 内部凭据（TLS 证书与各角色令牌）的分类与提供方，由 eventbus-credentials ensure 生成，按 key_id 读取。
+// EventBus 内部凭据（各角色令牌）的分类与提供方，由 eventbus-credentials ensure 生成，按 key_id 读取。
 const (
 	EventBusCategory = "eventbus"
 	EventBusProvider = "moox_eventbus"

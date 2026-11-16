@@ -78,7 +78,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 ### EventBus 凭据
 
 EventBus 凭据只通过 `skills/moox/scripts/eventbus-credentials.sh` 签发与轮换，发布包和仓库里的 YAML 不含凭据。
-CA 或角色令牌轮换后要同步到所有客户端（控制面服务、Storage、每台主机的 Host Agent、SCF）才算完成，按 [`references/eventbus-credentials.md`](references/eventbus-credentials.md) 执行。
+角色令牌轮换后要同步到所有客户端（控制面服务、Storage、每台主机的 Host Agent、SCF）才算完成，按 [`references/eventbus-credentials.md`](references/eventbus-credentials.md) 执行。
 Control `export` does not update Host Agents on other machines：控制机上的 export 不会更新其他主机的 Host Agent。
 
 ### Tencent Private Network

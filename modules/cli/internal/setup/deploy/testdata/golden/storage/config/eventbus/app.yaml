@@ -11,13 +11,12 @@ broker:
     enabled: true
     users_file: /data/moox/secrets/eventbus/users.yaml
   tls:
-    ca_file: /data/moox/secrets/eventbus/ca.pem
-    cert_file: /data/moox/secrets/eventbus/server.pem
+    ca_file: /data/moox/secrets/moox-ca.crt
+    cert_file: /data/moox/secrets/host.crt
     enabled: true
-    key_file: /data/moox/secrets/eventbus/server-key.pem
+    key_file: /data/moox/secrets/host.tls.key
 internal_client:
   credential_file: /data/moox/secrets/eventbus/internal-admin.yaml
-  tls_ca_file: /data/moox/secrets/eventbus/ca.pem
 streams:
   - name: MOOX_STORAGE
     subjects:

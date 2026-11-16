@@ -2,22 +2,18 @@ package identitybundle
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"path"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 )
 
-// FetchEventBusClients relays only the inventoried client roles and public CA.
-// A Server export additionally carries the broker certificate, key and user table
-// (the eventbus unit's own material); CA signing keys are never accepted.
+// FetchEventBusClients 只取清单里列出的客户端角色文件；Server 导出另带 broker 的用户表（eventbus 组件自己用）。
+// 导出里没有证书：EventBus 用所在主机的主机证书，根证书在主机身份包里。
 func FetchEventBusClients(ctx context.Context, download Download, metadata hostbundle.ClientMetadata, roles []string, destination string) error {
 	if download == nil {
 		return errors.New("EventBus clients require verified SSH")
@@ -32,29 +28,24 @@ func FetchEventBusClients(ctx context.Context, download Download, metadata hostb
 	return err
 }
 
-func serverFileCount(metadata hostbundle.ClientMetadata) int {
-	if metadata.Server {
-		return len(hostbundle.ServerFiles)
-	}
-	return 0
-}
-
 func readEventBusClients(ctx context.Context, metadata hostbundle.ClientMetadata, roles []string, read func(string, int64) ([]byte, error)) (map[string][]byte, error) {
 	fail := func() (map[string][]byte, error) {
 		return nil, errors.New("EventBus client inventory or material is invalid")
 	}
-	if metadata.Version != 1 || metadata.Status != "ok" || !path.IsAbs(metadata.OutputDir) || path.Clean(metadata.OutputDir) != metadata.OutputDir || len(roles) == 0 || len(roles) > 16 || !slices.Equal(metadata.Roles, roles) || !slices.IsSorted(roles) || len(slices.Compact(slices.Clone(roles))) != len(roles) || len(metadata.Files) != len(roles)+1+serverFileCount(metadata) {
-		return fail()
-	}
-	wanted := []string{"ca.pem"}
+	var wanted []string
 	if metadata.Server {
-		wanted = append(wanted, hostbundle.ServerFiles...)
+		wanted = append(wanted, hostbundle.UsersFile)
+	}
+	for _, role := range roles {
+		wanted = append(wanted, role+".yaml")
+	}
+	if metadata.Version != 1 || metadata.Status != "ok" || !path.IsAbs(metadata.OutputDir) || path.Clean(metadata.OutputDir) != metadata.OutputDir || len(roles) == 0 || len(roles) > 16 || !slices.Equal(metadata.Roles, roles) || !slices.IsSorted(roles) || len(slices.Compact(slices.Clone(roles))) != len(roles) || len(metadata.Files) != len(wanted) {
+		return fail()
 	}
 	for _, role := range roles {
 		if role == "" || len(role) > 64 || strings.ContainsFunc(role, func(r rune) bool { return r != '-' && (r < 'a' || r > 'z') && (r < '0' || r > '9') }) {
 			return fail()
 		}
-		wanted = append(wanted, role+".yaml")
 	}
 	slices.Sort(wanted)
 	files := map[string][]byte{}
@@ -73,18 +64,6 @@ func readEventBusClients(ctx context.Context, metadata hostbundle.ClientMetadata
 			return fail()
 		}
 		files[item.Path] = raw
-	}
-	ca := files["ca.pem"]
-	if digest(ca) != metadata.CA {
-		return fail()
-	}
-	block, rest := pem.Decode(ca)
-	if block == nil || block.Type != "CERTIFICATE" || len(strings.TrimSpace(string(rest))) != 0 {
-		return fail()
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil || !cert.IsCA || cert.CheckSignatureFrom(cert) != nil || time.Now().Before(cert.NotBefore) || !time.Now().Before(cert.NotAfter) {
-		return fail()
 	}
 	raw, err := read("clients.json", 128<<10)
 	if err != nil {

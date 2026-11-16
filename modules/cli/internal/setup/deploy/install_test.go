@@ -101,7 +101,7 @@ func applyEntries(list string, keep ...string) map[string]File {
 		"config/host-agent/app.yaml":      {Data: []byte("version: 1\n"), Mode: 0o600},
 		"secrets/host.key":                {Data: []byte("secret\n"), Mode: 0o600},
 		"secrets/env/host-agent.env":      {Data: []byte("MOOX_NODE_ID=\"control\"\n"), Mode: 0o600},
-		"secrets/eventbus/ca.pem":         {Data: []byte("ca\n"), Mode: 0o600},
+		"secrets/moox-ca.crt":             {Data: []byte("ca\n"), Mode: 0o600},
 		"units/moox-host-gateway.service": {Data: []byte("[Unit]\nDescription=MooX host-gateway\n"), Mode: 0o644},
 		"units/moox-host-agent.service":   {Data: []byte("[Unit]\nDescription=MooX host-agent\n"), Mode: 0o644},
 	}

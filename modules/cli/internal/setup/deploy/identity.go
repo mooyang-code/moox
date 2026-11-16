@@ -135,7 +135,7 @@ func bootstrapControl(ctx context.Context, control setupssh.Client, cfg *topolog
 		Status string `json:"status"`
 	}
 	if err := runAdmin(ctx, control, "生成 EventBus 凭据", []string{paths.binary, "eventbus-credentials", "ensure", "--db-path", paths.database,
-		"--encryption-key-file", paths.master, "--node-id", plan.ControlHostID}, nil, &ensured); err != nil || ensured.Status != "ok" {
+		"--encryption-key-file", paths.master}, nil, &ensured); err != nil || ensured.Status != "ok" {
 		return metadata, errors.Join(err, errors.New("control_admin_failed: 控制机上没有生成 EventBus 凭据"))
 	}
 	if err := admin.Validate(); err != nil {
@@ -167,7 +167,8 @@ func exportHostBundle(ctx context.Context, control setupssh.Client, cfg *topolog
 	return metadata, err
 }
 
-// exportEventBus 让控制机导出一组 EventBus 客户端角色；server 为真时带上 broker 的证书、私钥和用户表（只给 EventBus 所在主机）。
+// exportEventBus 让控制机导出一组 EventBus 客户端角色；server 为真时带上 broker 的用户表（只给 EventBus 所在主机）。
+// 导出里没有证书：EventBus 用所在主机的主机证书，客户端用身份包里的根证书校验。
 func exportEventBus(ctx context.Context, control setupssh.Client, cfg *topology.Config, roles []string, server bool, stage string) (hostbundle.ClientMetadata, error) {
 	var metadata hostbundle.ClientMetadata
 	paths := controlAdminPaths(Layout{Root: cfg.Paths.DeployRoot})

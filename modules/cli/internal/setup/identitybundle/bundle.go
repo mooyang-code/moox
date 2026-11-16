@@ -233,7 +233,8 @@ func verifyCertificates(metadata hostbundle.Metadata, files map[string][]byte, o
 	if !slices.Equal(leaf.ExtKeyUsage, usages) || len(leaf.UnknownExtKeyUsage) != 0 {
 		return errors.New("host material leaf certificate key usage does not match the host reachability")
 	}
-	names, ips := []string{options.HostID}, []string{}
+	// 回环地址每张主机证书都有：EventBus 用所在主机的主机证书，同机组件经 127.0.0.1 连它。
+	names, ips := []string{options.HostID, "localhost"}, []string{"127.0.0.1", "::1"}
 	for _, address := range []string{options.Address, options.PrivateAddress} {
 		if address == "" {
 			continue

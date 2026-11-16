@@ -75,7 +75,7 @@ func newFixture(t *testing.T, host string, collector bool) *fixture {
 	}
 	f.leafKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	f.leaf = &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: host}, DNSNames: []string{host}, IPAddresses: []net.IP{net.ParseIP("192.0.2.2"), net.ParseIP("10.0.0.2")},
+	f.leaf = &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: host}, DNSNames: []string{host, "localhost"}, IPAddresses: []net.IP{net.ParseIP("192.0.2.2"), net.ParseIP("10.0.0.2"), net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	f.signLeaf(t)
 	f.inventory()

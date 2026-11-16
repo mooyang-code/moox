@@ -45,14 +45,14 @@ func TestLoadCredentialFileRequiresPrivateRegularFile(t *testing.T) {
 func TestApplyCredentialFileResolvesRelativeCA(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "strategy.yaml")
-	if err := os.WriteFile(path, []byte("version: 1\nusername: strategy-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("version: 1\nusername: strategy-eventbus\ntoken: secret\nca_file: ../moox-ca.crt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var config Config
 	if err := config.ApplyCredentialFile(path); err != nil {
 		t.Fatal(err)
 	}
-	if config.Username != "strategy-eventbus" || config.Password != "secret" || config.TLSCAFile != filepath.Join(dir, "ca.pem") {
+	if config.Username != "strategy-eventbus" || config.Password != "secret" || config.TLSCAFile != filepath.Join(dir, "..", "moox-ca.crt") {
 		t.Fatalf("config=%+v", config)
 	}
 }
@@ -60,7 +60,7 @@ func TestApplyCredentialFileResolvesRelativeCA(t *testing.T) {
 func TestApplyCredentialFilePreservesExplicitEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "trade.yaml")
-	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://127.0.0.1:4222\nusername: trade-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://127.0.0.1:4222\nusername: trade-eventbus\ntoken: secret\nca_file: ../moox-ca.crt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config := Config{URLs: []string{"tls://203.0.113.10:4222"}}
@@ -75,7 +75,7 @@ func TestApplyCredentialFilePreservesExplicitEndpoint(t *testing.T) {
 func TestApplyCredentialFileReplacesLoopbackWithRoutableRoleURL(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "factor-eventbus.yaml")
-	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://203.0.113.10:4222\nusername: factor-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://203.0.113.10:4222\nusername: factor-eventbus\ntoken: secret\nca_file: ../moox-ca.crt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config := Config{URLs: []string{"nats://127.0.0.1:4222"}}
@@ -90,7 +90,7 @@ func TestApplyCredentialFileReplacesLoopbackWithRoutableRoleURL(t *testing.T) {
 func TestApplyCredentialFileKeepsMatchingLoopbackRoleURL(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "factor-eventbus.yaml")
-	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://127.0.0.1:4222\nusername: factor-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://127.0.0.1:4222\nusername: factor-eventbus\ntoken: secret\nca_file: ../moox-ca.crt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config := Config{URLs: []string{"nats://127.0.0.1:4222"}}
@@ -108,11 +108,11 @@ func TestApplyCredentialFilePreservesConfiguredCAWhenCredentialOmitsCA(t *testin
 	if err := os.WriteFile(path, []byte("version: 1\nusername: storage-eventbus\ntoken: secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	config := Config{TLSCAFile: filepath.Join(dir, "ca.pem")}
+	config := Config{TLSCAFile: filepath.Join(dir, "..", "moox-ca.crt")}
 	if err := config.ApplyCredentialFile(path); err != nil {
 		t.Fatal(err)
 	}
-	if config.TLSCAFile != filepath.Join(dir, "ca.pem") {
+	if config.TLSCAFile != filepath.Join(dir, "..", "moox-ca.crt") {
 		t.Fatalf("configured CA was cleared: %+v", config)
 	}
 }
@@ -120,14 +120,14 @@ func TestApplyCredentialFilePreservesConfiguredCAWhenCredentialOmitsCA(t *testin
 func TestApplyCredentialFilePrefersExplicitCredentialCAOverEmbeddedCA(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "collector.yaml")
-	if err := os.WriteFile(path, []byte("version: 1\nusername: collector-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("version: 1\nusername: collector-eventbus\ntoken: secret\nca_file: ../moox-ca.crt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config := Config{TLSCAPEMBase64: "ZW1iZWRkZWQtY2E="}
 	if err := config.ApplyCredentialFile(path); err != nil {
 		t.Fatal(err)
 	}
-	if config.TLSCAFile != filepath.Join(dir, "ca.pem") || config.TLSCAPEMBase64 != "" {
+	if config.TLSCAFile != filepath.Join(dir, "..", "moox-ca.crt") || config.TLSCAPEMBase64 != "" {
 		t.Fatalf("explicit credential CA did not win: %+v", config)
 	}
 }

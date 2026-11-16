@@ -138,9 +138,10 @@ func connect(ctx context.Context, rawURL string, cfg *config.Config) (*nats.Conn
 			return nil, err
 		}
 		username, password = credentials.Username, credentials.Password
-		caFile = internalClientCAFile(cfg.InternalClient.TLSCAFile, credentials.CAFile, caFile)
-	} else if cfg.InternalClient.TLSCAFile != "" {
-		caFile = cfg.InternalClient.TLSCAFile
+		// 角色文件里写了根证书位置就用它；没写时用 broker 自己的 ca_file（部署时两者都是 MooX CA 根证书）。
+		if credentials.CAFile != "" {
+			caFile = credentials.CAFile
+		}
 	}
 	if username != "" || password != "" {
 		opts = append(opts, nats.UserInfo(username, password))
@@ -152,18 +153,6 @@ func connect(ctx context.Context, rawURL string, cfg *config.Config) (*nats.Conn
 		opts = append(opts, nats.Secure(), nats.TLSHandshakeFirst())
 	}
 	return nats.Connect(rawURL, opts...)
-}
-
-func internalClientCAFile(configuredCAFile, credentialCAFile, fallbackCAFile string) string {
-	if strings.TrimSpace(configuredCAFile) != "" {
-		// Deployments inject the absolute CA explicitly so it wins over the
-		// relative path retained in the credential bundle.
-		return configuredCAFile
-	}
-	if strings.TrimSpace(credentialCAFile) != "" {
-		return credentialCAFile
-	}
-	return fallbackCAFile
 }
 
 type internalCredentials struct {

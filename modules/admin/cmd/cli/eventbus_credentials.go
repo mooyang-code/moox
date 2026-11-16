@@ -4,24 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/rsa"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"math/big"
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -29,6 +20,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"gorm.io/gorm"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -36,13 +28,9 @@ import (
 var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus", "callback-dispatcher-eventbus"}
 var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade", "collector-eventbus": "eventbus_collector", "callback-dispatcher-eventbus": "eventbus_callback_dispatcher"}
 
-type eventbusBundle struct {
-	CA        string    `json:"ca"`
-	Cert      string    `json:"cert"`
-	Key       string    `json:"key"`
-	NATSURL   string    `json:"nats_url"`
-	CreatedAt time.Time `json:"created_at"`
-}
+// eventBusCAFile 是角色文件里写的根证书位置：角色文件在 secrets/eventbus/ 下，MooX CA 根证书在上一级的 secrets/ 下。
+// EventBus 的服务端证书就是它所在主机的主机证书，客户端用这张根证书校验。
+const eventBusCAFile = "../" + hostbundle.CAFile
 
 func isEventBusCredentialsCommand(args []string) bool {
 	return len(args) > 1 && args[1] == "eventbus-credentials"
@@ -57,12 +45,12 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	confirm, server := false, false
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&keyFile, "encryption-key-file", "", "0600 encryption key file")
-	fs.StringVar(&nodeID, "node-id", "", "registered control host (the Admin host); the EventBus location is read from the deployment records")
+	fs.StringVar(&nodeID, "node-id", "", "registered control host (the Admin host); export and export-clients read the EventBus location from the deployment records")
 	fs.StringVar(&outputDir, "output-dir", "", "credential output directory")
 	fs.StringVar(&credential, "credential", "", "role token to rotate")
 	fs.StringVar(&roles, "roles", "", "comma-separated canonical client roles for export-clients")
-	fs.BoolVar(&server, "server", false, "export-clients only: also export the broker certificate, key and user table for the host that runs EventBus")
-	fs.BoolVar(&confirm, "confirm", false, "confirm rotation (rotate: immediate token invalidation; rotate-tls: new CA)")
+	fs.BoolVar(&server, "server", false, "export-clients only: also export the broker user table for the host that runs EventBus")
+	fs.BoolVar(&confirm, "confirm", false, "confirm rotation (the old token is invalidated immediately)")
 	sub := args[1]
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
@@ -73,10 +61,7 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	if server && sub != "export-clients" {
 		return errors.New("--server is only valid for export-clients")
 	}
-	// A control-plane reset removes admin.db, while an externally managed
-	// EventBus keeps its role files. Reconcile only users.yaml from those
-	// existing tokens so newly introduced subjects are authorized without
-	// rotating the TLS bundle or role credentials.
+	// reconcile 只按现有角色文件里的令牌重写 users.yaml，让新增的主题拿到授权，不动任何令牌。
 	if sub == "reconcile" {
 		if outputDir == "" {
 			return errors.New("--output-dir is required")
@@ -96,13 +81,9 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	case "export-clients":
 		return exportEventBusClients(context.Background(), db, nodeID, outputDir, roles, server, stdout)
 	case "ensure":
-		natsURL, err := eventBusNATSURL(db, nodeID)
-		if err != nil {
-			return err
-		}
 		var metadata bytes.Buffer
 		if err := db.Transaction(func(tx *gorm.DB) error {
-			return ensureEventBus(dao.NewSecretDAO(tx), natsURL, &metadata)
+			return ensureEventBus(dao.NewSecretDAO(tx), &metadata)
 		}); err != nil {
 			return err
 		}
@@ -119,19 +100,6 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 		return exportEventBus(secretDAO, outputDir, natsURL, stdout)
 	case "rotate":
 		return rotateEventBus(secretDAO, credential, confirm, stdout)
-	case "rotate-tls":
-		natsURL, err := eventBusNATSURL(db, nodeID)
-		if err != nil {
-			return err
-		}
-		var metadata bytes.Buffer
-		if err := db.Transaction(func(tx *gorm.DB) error {
-			return rotateEventBusTLS(dao.NewSecretDAO(tx), natsURL, confirm, &metadata)
-		}); err != nil {
-			return err
-		}
-		_, err = stdout.Write(metadata.Bytes())
-		return err
 	default:
 		return fmt.Errorf("unknown eventbus-credentials subcommand %q", sub)
 	}
@@ -202,9 +170,6 @@ func loadCLIKey(dbPath, keyFile string) error {
 	}
 	raw, err := os.ReadFile(keyFile)
 	if os.IsNotExist(err) {
-		if !os.IsNotExist(err) {
-			return err
-		}
 		if info != nil {
 			return errors.New("admin database exists but encryption key is missing")
 		}
@@ -229,43 +194,15 @@ func loadCLIKey(dbPath, keyFile string) error {
 	return os.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", strings.TrimSpace(string(raw)))
 }
 
-func ensureEventBus(d *dao.SecretDAO, natsURL string, out io.Writer) error {
+// ensureEventBus 给缺少的角色生成令牌，已有的原样保留。EventBus 没有自己的证书：服务端用所在主机的主机证书。
+func ensureEventBus(d *dao.SecretDAO, out io.Writer) error {
 	ctx := trpc.BackgroundContext()
-	existing, err := listEventbus(d, ctx)
-	if err != nil {
-		return err
-	}
-	_, hasCA := existing["eventbus_tls_ca"]
-	_, hasServer := existing["eventbus_tls_server"]
-	if hasCA != hasServer {
-		return errors.New("EventBus TLS identity is incomplete; restore the original paired state")
-	}
-	if hasCA {
-		if err := validateEventBusTLS(existing, natsURL); err != nil {
-			return err
-		}
-	}
 	for _, role := range eventBusRoles {
-		key := eventBusKeys[role]
-		if _, err := ensureToken(ctx, d, key, role); err != nil {
+		if _, err := ensureToken(ctx, d, eventBusKeys[role], role); err != nil {
 			return err
 		}
 	}
-	if !hasCA {
-		bundle, err := makeTLSBundle(natsURL)
-		if err != nil {
-			return err
-		}
-		extra, _ := json.Marshal(map[string]string{"nats_url": natsURL})
-		if err := d.Create(ctx, &model.Secret{SpaceID: events.SystemSpaceID, SecretID: uuid.New().String(), Name: "EventBus TLS CA", Description: "private EventBus CA bundle", Category: "eventbus", Provider: "moox_eventbus", SecretType: "certificate", KeyID: "eventbus_tls_ca", SecretValue: bundle.CA, ExtraConfig: string(extra)}); err != nil {
-			return err
-		}
-		serverValue, _ := json.Marshal(map[string]string{"cert": bundle.Cert, "key": bundle.Key})
-		if err := d.Create(ctx, &model.Secret{SpaceID: events.SystemSpaceID, SecretID: uuid.New().String(), Name: "EventBus TLS server", Description: "private EventBus server bundle", Category: "eventbus", Provider: "moox_eventbus", SecretType: "certificate", KeyID: "eventbus_tls_server", SecretValue: string(serverValue), ExtraConfig: string(extra)}); err != nil {
-			return err
-		}
-	}
-	return writeJSON(out, map[string]any{"status": "ok", "roles": eventBusRoles, "tls": true})
+	return writeJSON(out, map[string]any{"status": "ok", "roles": eventBusRoles})
 }
 func ensureToken(ctx context.Context, d *dao.SecretDAO, key, role string) (string, error) {
 	records, err := listEventbus(d, ctx)
@@ -301,9 +238,6 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 	if err != nil {
 		return err
 	}
-	if err := validateEventBusTLS(rows, natsURL); err != nil {
-		return err
-	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -329,74 +263,12 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 			field = "monitor_eventbus_token"
 		}
 		// 导出里写的是对外地址；各单元安装时会按"与 EventBus 是否同机"改写成实际使用的地址。
-		content := fmt.Sprintf("version: 1\nurls:\n  - %s\nusername: %s\n%s: %s\nca_file: ca.pem\n", natsURL, role, field, tokens[role])
+		content := fmt.Sprintf("version: 1\nurls:\n  - %s\nusername: %s\n%s: %s\nca_file: %s\n", natsURL, role, field, tokens[role], eventBusCAFile)
 		if err := atomicSecretFile(filepath.Join(dir, name), []byte(content)); err != nil {
 			return err
 		}
 	}
-	ca, ok := rows["eventbus_tls_ca"]
-	if !ok {
-		return errors.New("missing EventBus TLS CA; run ensure first")
-	}
-	server, ok := rows["eventbus_tls_server"]
-	if !ok {
-		return errors.New("missing EventBus TLS server; run ensure first")
-	}
-	if err := atomicSecretFile(filepath.Join(dir, "ca.pem"), []byte(ca.SecretValue)); err != nil {
-		return err
-	}
-	var serverParts map[string]string
-	if err := json.Unmarshal([]byte(server.SecretValue), &serverParts); err != nil {
-		return fmt.Errorf("decode EventBus TLS server bundle: %w", err)
-	}
-	if serverParts["cert"] == "" || serverParts["key"] == "" {
-		return errors.New("EventBus TLS server identity is incomplete")
-	}
-	if err := atomicSecretFile(filepath.Join(dir, "server.pem"), []byte(serverParts["cert"])); err != nil {
-		return err
-	}
-	if err := atomicSecretFile(filepath.Join(dir, "server-key.pem"), []byte(serverParts["key"])); err != nil {
-		return err
-	}
 	return writeJSON(out, map[string]any{"status": "ok", "output_dir": dir, "roles": eventBusRoles})
-}
-
-func validateEventBusTLS(rows map[string]model.Secret, natsURL string) error {
-	ca, hasCA := rows["eventbus_tls_ca"]
-	server, hasServer := rows["eventbus_tls_server"]
-	if !hasCA || !hasServer {
-		return errors.New("EventBus TLS identity is incomplete; restore the original paired state")
-	}
-	var extra map[string]string
-	if json.Unmarshal([]byte(ca.ExtraConfig), &extra) != nil || extra["nats_url"] != natsURL {
-		return errors.New("EventBus TLS certificate host differs from the service directory; explicit identity rotation is required")
-	}
-	var parts struct {
-		Cert string `json:"cert"`
-		Key  string `json:"key"`
-	}
-	if json.Unmarshal([]byte(server.SecretValue), &parts) != nil {
-		return errors.New("EventBus TLS server identity is invalid")
-	}
-	pair, err := tls.X509KeyPair([]byte(parts.Cert), []byte(parts.Key))
-	if err != nil {
-		return errors.New("EventBus TLS server identity is invalid")
-	}
-	certificate, err := x509.ParseCertificate(pair.Certificate[0])
-	if err != nil {
-		return errors.New("EventBus TLS server certificate is invalid")
-	}
-	trust := x509.NewCertPool()
-	endpoint, err := validateEventBusNATSURL(natsURL)
-	if err != nil || !trust.AppendCertsFromPEM([]byte(ca.SecretValue)) {
-		return errors.New("EventBus TLS trust or endpoint is invalid")
-	}
-	for _, host := range []string{endpoint.Hostname(), "127.0.0.1"} {
-		if _, err := certificate.Verify(x509.VerifyOptions{Roots: trust, DNSName: host}); err != nil {
-			return errors.New("EventBus TLS server certificate does not verify for its endpoints")
-		}
-	}
-	return nil
 }
 
 func eventBusRoleFiles() map[string]string {
@@ -507,40 +379,6 @@ func atomicSecretFile(path string, data []byte) error {
 }
 func writeJSON(w io.Writer, value any) error { return json.NewEncoder(w).Encode(value) }
 
-func makeTLSBundle(natsURL string) (eventbusBundle, error) {
-	now := time.Now()
-	caKey, _ := rsa.GenerateKey(rand.Reader, 3072)
-	caTmpl := &x509.Certificate{SerialNumber: newSerial(), Subject: pkix.Name{CommonName: "MooX EventBus Private CA"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(10 * 365 * 24 * time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	if err != nil {
-		return eventbusBundle{}, err
-	}
-	serverKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	serverTmpl := &x509.Certificate{SerialNumber: newSerial(), Subject: pkix.Name{CommonName: "MooX EventBus"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(5 * 365 * 24 * time.Hour), DNSNames: []string{"localhost"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}, KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
-	parsed, err := url.Parse(natsURL)
-	if err != nil {
-		return eventbusBundle{}, err
-	}
-	host := parsed.Hostname()
-	if ip := net.ParseIP(host); ip != nil {
-		serverTmpl.IPAddresses = append(serverTmpl.IPAddresses, ip)
-	} else if host != "localhost" {
-		serverTmpl.DNSNames = append(serverTmpl.DNSNames, host)
-	}
-	serverDER, err := x509.CreateCertificate(rand.Reader, serverTmpl, caTmpl, &serverKey.PublicKey, caKey)
-	if err != nil {
-		return eventbusBundle{}, err
-	}
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverKey)})
-	return eventbusBundle{CA: string(caPEM), Cert: string(certPEM), Key: string(keyPEM), NATSURL: natsURL, CreatedAt: now}, nil
-}
-func newSerial() *big.Int {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return new(big.Int).SetBytes(b)
-}
 func rotateEventBus(d *dao.SecretDAO, credential string, confirm bool, out io.Writer) error {
 	if !confirm {
 		return errors.New("rotation requires --confirm; old token is invalidated immediately")
@@ -566,48 +404,4 @@ func rotateEventBus(d *dao.SecretDAO, credential string, confirm bool, out io.Wr
 		return err
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "rotated": credential, "warning": "redeploy affected clients now; old token is invalid"})
-}
-
-// rotateEventBusTLS 按当前部署记录得出的地址重新生成 EventBus 的 CA 与服务端证书，角色令牌不变。
-// TLS 身份与地址绑定（记在 CA 记录的 nats_url 里），EventBus 换主机后 ensure、export 都会拒绝旧身份，必须先轮换。
-// CA 私钥签完即丢弃，所以只能连 CA 一起换：之后所有客户端和 broker 都要重新部署，才能拿到新 CA。
-func rotateEventBusTLS(d *dao.SecretDAO, natsURL string, confirm bool, out io.Writer) error {
-	if !confirm {
-		return errors.New("TLS rotation requires --confirm; the old CA stops being trusted once clients are redeployed")
-	}
-	ctx := trpc.BackgroundContext()
-	rows, err := listEventbus(d, ctx)
-	if err != nil {
-		return err
-	}
-	ca, hasCA := rows["eventbus_tls_ca"]
-	server, hasServer := rows["eventbus_tls_server"]
-	if !hasCA && !hasServer {
-		return errors.New("EventBus TLS identity is not provisioned; run ensure first")
-	}
-	if hasCA != hasServer {
-		return errors.New("EventBus TLS identity is incomplete; restore the original paired state")
-	}
-	if _, err := validateEventBusNATSURL(natsURL); err != nil {
-		return err
-	}
-	bundle, err := makeTLSBundle(natsURL)
-	if err != nil {
-		return err
-	}
-	extra, _ := json.Marshal(map[string]string{"nats_url": natsURL})
-	ca.SecretValue, ca.ExtraConfig = bundle.CA, string(extra)
-	if err := d.Update(ctx, &ca); err != nil {
-		return err
-	}
-	serverValue, _ := json.Marshal(map[string]string{"cert": bundle.Cert, "key": bundle.Key})
-	server.SecretValue, server.ExtraConfig = string(serverValue), string(extra)
-	if err := d.Update(ctx, &server); err != nil {
-		return err
-	}
-	return writeJSON(out, map[string]any{"status": "ok", "rotated": "tls", "nats_url": natsURL, "warning": "redeploy the EventBus broker and every client now; the old CA is no longer valid"})
-}
-
-func validateEventBusNATSURL(raw string) (*url.URL, error) {
-	return sysdeploy.ValidateEventBusNATSURL(raw)
 }

@@ -21,7 +21,7 @@ Host Agent 与 Host Gateway 是每台主机都有的主机级组件，不写在 
 
 ## 凭据轮换
 
-EventBus CA 或 `hostagent-publisher` 口令轮换会立刻让旧副本失效。只升级 Host Agent 二进制、只在 control 上 `export`、
+`hostagent-publisher` 口令轮换会立刻让旧副本失效（EventBus 没有单独的 CA，用所在主机的主机证书）。只升级 Host Agent 二进制、只在 control 上 `export`、
 或只重启 EventBus，都不够。完整副本清单和验收步骤见 [`eventbus-credentials.md`](eventbus-credentials.md)。
 
 对 **moox.toml 里每一台主机** 都要重新部署（`setup deploy --host <主机ID>`），包括海外机、因子机等只出站的主机。确认 Monitor 收到新样本，

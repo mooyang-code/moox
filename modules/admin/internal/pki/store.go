@@ -251,7 +251,9 @@ func (s *Store) Issue(host HostIdentity, outputDir string) (IssuedCertificate, e
 		NotBefore: now.Add(-5 * time.Minute), NotAfter: notAfter,
 		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:    []string{host.HostID},
+		// 回环地址也写进 SAN：EventBus 直接用所在主机的主机证书，同机组件经 127.0.0.1 连它。
+		DNSNames:    []string{host.HostID, "localhost"},
+		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
 	}
 	if host.Outbound {
 		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageClientAuth)

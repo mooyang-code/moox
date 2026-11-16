@@ -26,17 +26,11 @@ const (
 	certificateExpiryWarning     = 90 * 24 * time.Hour
 )
 
-type certificateWatchFile struct {
-	Name string
-	Path string
-}
-
 // Only fixed public certificate paths are read. The watcher never initializes
 // PKI, reads private keys, signs certificates or repairs a missing trust root.
 type certificateWatch struct {
 	PKIDir string
 	Hosts  func(context.Context) ([]pki.HostIdentity, error)
-	Files  []certificateWatchFile
 	Now    func() time.Time
 	// Senders 每次巡检时取一次告警渠道；为空或返回空时只记录不推送。
 	Senders func() []notification.Sender
@@ -68,9 +62,6 @@ func newCertificateWatchFromEnvironment(db *gorm.DB) certificateWatch {
 		}
 		return hosts, nil
 	}}
-	if path := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_CA_FILE")); path != "" {
-		watch.Files = []certificateWatchFile{{Name: "eventbus_ca", Path: path}}
-	}
 	if path := strings.TrimSpace(os.Getenv("MOOX_HOST_POLICY_FILE")); path != "" {
 		watch.Senders = func() []notification.Sender { return hostPolicySenders(path) }
 	}
@@ -154,6 +145,7 @@ func (w certificateWatch) Validate(ctx context.Context) error {
 					continue
 				}
 				seen[host.HostID] = true
+				// 主机证书同时是这台主机上主机网关与 EventBus 的服务端证书。
 				name := "host_gateway@" + host.HostID
 				certificates, err := readPublicCertificateBundle(root, "hosts/"+host.HostID+".crt")
 				if err != nil {
@@ -179,20 +171,6 @@ func (w certificateWatch) Validate(ctx context.Context) error {
 					}
 				}
 			}
-		}
-	}
-	for _, file := range w.Files {
-		parent, err := os.OpenRoot(filepath.Dir(file.Path))
-		if err != nil {
-			fail(file.Name, errors.New("public certificate directory is unavailable"))
-			continue
-		}
-		certificates, err := readPublicCertificateBundle(parent, filepath.Base(file.Path))
-		parent.Close()
-		if err != nil {
-			fail(file.Name, err)
-		} else {
-			inspect(file.Name, certificates)
 		}
 	}
 	w.notify(ctx, notification.SeverityCritical, failures)

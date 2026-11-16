@@ -30,7 +30,6 @@ type AuthConfig struct {
 
 type InternalClientConfig struct {
 	CredentialFile string `yaml:"credential_file"`
-	TLSCAFile      string `yaml:"tls_ca_file"`
 }
 
 type TLSConfig struct {

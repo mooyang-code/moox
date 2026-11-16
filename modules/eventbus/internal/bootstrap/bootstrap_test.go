@@ -50,7 +50,7 @@ func TestStartOrdersBrokerRegistryAndHealth(t *testing.T) {
 func TestReadInternalCredentialsResolvesRelativeCAFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "internal-admin.yaml")
-	if err := os.WriteFile(path, []byte("username: eventbus-internal-admin\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("username: eventbus-internal-admin\ntoken: secret\nca_file: ../moox-ca.crt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -58,17 +58,8 @@ func TestReadInternalCredentialsResolvesRelativeCAFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if credentials.CAFile != filepath.Join(dir, "ca.pem") {
-		t.Fatalf("CAFile = %q, want %q", credentials.CAFile, filepath.Join(dir, "ca.pem"))
-	}
-}
-
-func TestInternalClientCAFilePrefersConfiguredDeploymentCA(t *testing.T) {
-	if got := internalClientCAFile("/etc/moox/eventbus/ca.pem", "/tmp/credential-dir/ca.pem", "/etc/moox/broker-ca.pem"); got != "/etc/moox/eventbus/ca.pem" {
-		t.Fatalf("configured CA = %q", got)
-	}
-	if got := internalClientCAFile("", "/tmp/credential-dir/ca.pem", "/etc/moox/broker-ca.pem"); got != "/tmp/credential-dir/ca.pem" {
-		t.Fatalf("credential CA = %q", got)
+	if credentials.CAFile != filepath.Join(dir, "..", "moox-ca.crt") {
+		t.Fatalf("CAFile = %q, want %q", credentials.CAFile, filepath.Join(dir, "..", "moox-ca.crt"))
 	}
 }
 

@@ -37,7 +37,7 @@ func exampleConfig(t *testing.T, extra string) *topology.Config {
 // fakeIdentity 造一份形状和真的一样的身份材料：新签发的主机签名私钥、证书、根证书，内容是固定的假值。
 func fakeIdentity(t *testing.T, cfg *topology.Config, catalog servicecatalog.Catalog, host string, components []string) Identity {
 	t.Helper()
-	identity := Identity{SignPublicKey: "public-key-of-" + host, Secrets: map[string][]byte{}, EventBus: map[string][]byte{"ca.pem": []byte("fake-eventbus-ca\n")}}
+	identity := Identity{SignPublicKey: "public-key-of-" + host, Secrets: map[string][]byte{}, EventBus: map[string][]byte{}}
 	identity.Secrets["host.key"] = []byte("private-key-of-" + host + "\n")
 	if slices.Contains(components, "collector") {
 		identity.SCFCollectorPublicKey = "public-key-of-scf-collector"
@@ -47,12 +47,10 @@ func fakeIdentity(t *testing.T, cfg *topology.Config, catalog servicecatalog.Cat
 	for _, id := range components {
 		component, _ := catalog.Component(id)
 		for _, role := range component.EventBusRoles() {
-			identity.EventBus[role+".yaml"] = []byte("version: 1\nurls:\n  - tls://203.0.113.11:4222\nusername: " + role + "\ntoken: fake-token-" + role + "\nca_file: ca.pem\n")
+			identity.EventBus[role+".yaml"] = []byte("version: 1\nurls:\n  - tls://203.0.113.11:4222\nusername: " + role + "\ntoken: fake-token-" + role + "\nca_file: ../moox-ca.crt\n")
 		}
 	}
-	for _, name := range []string{"server.pem", "server-key.pem", "users.yaml"} {
-		identity.EventBus[name] = []byte("fake " + name + "\n")
-	}
+	identity.EventBus["users.yaml"] = []byte("fake users.yaml\n")
 	return identity
 }
 
@@ -208,7 +206,15 @@ func TestRenderWritesIdentityAndRuntimeEnvironment(t *testing.T) {
 	}
 	storage, _ := renderHost(t, cfg, "storage")
 	require.Contains(t, string(storage.Files["secrets/env/storage-primary.env"].Data), `MOOX_EVENTBUS_URL="tls://127.0.0.1:4222"`, "和 EventBus 同机用回环地址")
-	require.Contains(t, string(storage.Files["secrets/eventbus/storage-eventbus.yaml"].Data), "ca_file: /data/moox/secrets/eventbus/ca.pem")
+	require.Contains(t, string(storage.Files["secrets/eventbus/storage-eventbus.yaml"].Data), "ca_file: /data/moox/secrets/moox-ca.crt", "角色文件指向 MooX CA 根证书")
+	// EventBus 没有自己的证书：服务端用所在主机的主机证书。
+	bus := string(storage.Files["config/eventbus/app.yaml"].Data)
+	require.Contains(t, bus, "cert_file: /data/moox/secrets/host.crt")
+	require.Contains(t, bus, "key_file: /data/moox/secrets/host.tls.key")
+	require.Contains(t, bus, "ca_file: /data/moox/secrets/moox-ca.crt")
+	for _, name := range []string{"secrets/eventbus/ca.pem", "secrets/eventbus/server.pem", "secrets/eventbus/server-key.pem"} {
+		require.NotContains(t, storage.Files, name)
+	}
 	require.Contains(t, storage.Files, "secrets/eventbus/users.yaml")
 	require.NotContains(t, output.Files, "secrets/eventbus/users.yaml", "broker 的用户表只在 EventBus 所在主机")
 	// 主机网关配置里的路径换成新布局。

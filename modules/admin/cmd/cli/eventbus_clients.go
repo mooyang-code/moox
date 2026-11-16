@@ -27,11 +27,9 @@ func eventBusClientDigest(raw []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// exportEventBusClients takes one database snapshot and publishes only selected
-// client roles plus the public CA. The CA private key never enters this export,
-// and neither do broker ACLs or the server key — unless server is set, which is
-// for the one host that runs the EventBus broker: that export also carries the
-// broker certificate, key and user table. It does not create or rotate credentials.
+// exportEventBusClients 在一次数据库快照里导出选定的客户端角色文件；server 为真时（只给 EventBus 所在主机）
+// 另带 broker 的用户表。导出里没有任何证书：EventBus 的服务端证书就是所在主机的主机证书，
+// 客户端用身份包里的 MooX CA 根证书校验。这条命令不生成也不轮换凭据。
 func exportEventBusClients(ctx context.Context, db *gorm.DB, nodeID, directory, requested string, server bool, stdout io.Writer) error {
 	roles := strings.Split(requested, ",")
 	files := eventBusRoleFiles()
@@ -58,12 +56,7 @@ func exportEventBusClients(ctx context.Context, db *gorm.DB, nodeID, directory, 
 		if err != nil {
 			return err
 		}
-		if err := validateEventBusTLS(rows, endpoint); err != nil {
-			return err
-		}
-		ca := []byte(rows["eventbus_tls_ca"].SecretValue)
-		payloads["ca.pem"] = ca
-		result = eventBusClientsResult{Version: 1, Status: "ok", OutputDir: directory, Roles: roles, CA: eventBusClientDigest(ca), Server: server}
+		result = eventBusClientsResult{Version: 1, Status: "ok", OutputDir: directory, Roles: roles, Server: server}
 		if server {
 			tokens := map[string]string{}
 			for _, role := range eventBusRoles {
@@ -73,14 +66,7 @@ func exportEventBusClients(ctx context.Context, db *gorm.DB, nodeID, directory, 
 				}
 				tokens[role] = row.SecretValue
 			}
-			var parts struct {
-				Cert string `json:"cert"`
-				Key  string `json:"key"`
-			}
-			if json.Unmarshal([]byte(rows["eventbus_tls_server"].SecretValue), &parts) != nil || parts.Cert == "" || parts.Key == "" {
-				return errors.New("EventBus TLS server identity is incomplete")
-			}
-			payloads["server.pem"], payloads["server-key.pem"], payloads["users.yaml"] = []byte(parts.Cert), []byte(parts.Key), []byte(usersYAML(tokens))
+			payloads[hostbundle.UsersFile] = []byte(usersYAML(tokens))
 		}
 		for _, name := range roles {
 			role := canonical[name]
@@ -96,7 +82,7 @@ func exportEventBusClients(ctx context.Context, db *gorm.DB, nodeID, directory, 
 				HostToken    string   `yaml:"eventbus_token,omitempty"`
 				MonitorToken string   `yaml:"monitor_eventbus_token,omitempty"`
 				CAFile       string   `yaml:"ca_file"`
-			}{Version: 1, URLs: []string{endpoint}, Username: role, CAFile: "ca.pem"}
+			}{Version: 1, URLs: []string{endpoint}, Username: role, CAFile: eventBusCAFile}
 			switch role {
 			case "hostagent-publisher":
 				credential.HostToken = row.SecretValue

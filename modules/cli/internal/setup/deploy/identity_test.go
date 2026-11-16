@@ -101,7 +101,7 @@ func (a *fakeAdmin) issue(hostID string, argv []string) hostbundle.Metadata {
 	}
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(a.t, err)
-	leaf := &x509.Certificate{SerialNumber: big.NewInt(int64(100 + a.bundles)), Subject: pkix.Name{CommonName: hostID}, DNSNames: []string{hostID},
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(int64(100 + a.bundles)), Subject: pkix.Name{CommonName: hostID}, DNSNames: []string{hostID, "localhost"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	if host.Reachability != "" {
 		leaf.ExtKeyUsage = append(leaf.ExtKeyUsage, x509.ExtKeyUsageClientAuth)
