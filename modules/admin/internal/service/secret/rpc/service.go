@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"reflect"
 	"strings"
 	"time"
@@ -16,8 +17,10 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gorm.io/gorm"
 
+	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -111,7 +114,25 @@ func (s *Service) GetSecretValue(ctx context.Context, req *pb.GetSecretValueReq)
 	if secretRecord.Status != "" && secretRecord.Status != "active" {
 		return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥未启用")}, nil
 	}
+	if componentCaller(ctx) != "" && secretRecord.Category != "exchange" {
+		return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "组件只能读取类别为 exchange 的秘钥")}, nil
+	}
 	return &pb.GetSecretValueRsp{RetInfo: retOK(), Secret: secretModelToPlainPB(secretRecord)}, nil
+}
+
+// hostGatewayCaller 是外部身份（moox-cli）的请求经别的主机网关转来时网关验到的签名方：它不是组件。
+const hostGatewayCaller = "host-gateway"
+
+// componentCaller 返回经主机网关以组件身份调用时网关验过签的调用方名字（目前只有 trade 在 GetSecretValue 的名单上）；
+// 控制台、moox-cli 与控制机上的同机直连没有这个头，返回空。头由本机网关在验签后写入，外面带进来的同名头在网关入口被剥掉。
+// 组件调用方只给交易所密钥：别的主机上的进程拿着主机密钥以 trade 的身份签名，也取不走云账号等其他类别的密钥。
+func componentCaller(ctx context.Context) string {
+	for key, value := range codec.Message(ctx).ServerMetaData() {
+		if http.CanonicalHeaderKey(key) == gatewayauth.HeaderVerifiedCaller && string(value) != hostGatewayCaller {
+			return string(value)
+		}
+	}
+	return ""
 }
 
 // ReadonlyExchangeKeyID 返回只读交易所 Key 的固定秘钥 ID：exchange-<交易所>-production-readonly（setup apply 按 moox.toml 的
@@ -121,8 +142,7 @@ func ReadonlyExchangeKeyID(exchange string) string {
 }
 
 // GetReadonlyExchangeKey 只返回只读交易所 Key 的公开标识 key_id，不返回秘钥值与额外配置。
-// 它是给 Collector 的专用方法：网关转发会丢掉调用方元数据，不能在 GetSecretValue 里按调用方限定，
-// 所以靠服务目录“按方法授权”，Collector 只被放行这一个方法，拿不到 Trade 的交易密钥。
+// 它是给 Collector 的专用方法：靠服务目录“按方法授权”，Collector 只被放行这一个方法，拿不到 Trade 的交易密钥。
 func (s *Service) GetReadonlyExchangeKey(ctx context.Context, req *pb.GetReadonlyExchangeKeyReq) (*pb.GetReadonlyExchangeKeyRsp, error) {
 	exchange := req.GetExchange()
 	if exchange != "binance" && exchange != "okx" {

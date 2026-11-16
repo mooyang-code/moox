@@ -180,6 +180,8 @@ components:
             callers: [trade]
           - name: GetSecret
             read_only: true
+          # 组件里只有 trade 能调，并且只拿得到交易所密钥：网关把验过签的调用方名字写给 SecretMgr，
+          # 服务端对组件调用方只返回类别为 exchange 的秘钥（控制台与 moox-cli 不受这条限制）。
           - name: GetSecretValue
             read_only: true
             callers: [trade]
@@ -192,8 +194,7 @@ components:
             operators: [console]
           - name: ImportSecrets
             operators: [console]
-          # Collector 只能读固定 ID 只读 Key 的公开标识；网关转发会丢掉调用方元数据，
-          # GetSecretValue 没法按调用方限定，所以用专用方法授权，Collector 拿不到 Trade 的交易密钥。
+          # Collector 只能读固定 ID 只读 Key 的公开标识：用专用方法授权，Collector 拿不到 Trade 的交易密钥。
           - name: GetReadonlyExchangeKey
             read_only: true
             callers: [collector]

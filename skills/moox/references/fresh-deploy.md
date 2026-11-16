@@ -71,6 +71,9 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linux --space-id crypto --yes
 ```
 
+下文单独出现的 `setup deploy`、`setup install` 都要带这三个参数（`--file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linux`，记作 `$SRC`）：
+源码部署没有产物包清单，缺了 `--binary-dir` 找不到二进制，缺了 `--source-dir` 会按当前目录取模板与云函数代码。表格里的步骤是 `setup install` 自己执行的，已经带上。
+
 预检输出安装步骤（`steps`），每一步带可以单独运行的命令。带 `--yes` 后依次：
 
 | 步 | 做什么 | 备注 |
@@ -94,7 +97,7 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
   `$CLI trade inspect-credential --exchange EXCHANGE_BINANCE --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-main`
   （固定 ID 是 `exchange-<交易所>-<环境>-<名称>`，OKX 用 `EXCHANGE_OKX`，测试网用 `ACCOUNT_ENVIRONMENT_TESTNET`），看 `blockers` 有无阻断项；`检测没有完成` 只是交易所接口暂时不可用，稍后重试。
 - 因子引擎的窗口与内存：模板默认回看 50000 根、计算内存 4GiB、进程预算不限。要调就在因子机上运行 `/data/moox/bin/moox-factor-engine tune --config /data/moox/config/factor-engine/engine.yaml` 看建议值，
-  写进 `moox.toml` 的 `[overrides."factor-engine"."engine.yaml"]`，再 `setup deploy --host factor --component factor-engine`。不要直接改目标机上的配置文件，下次部署会被覆盖。
+  写进 `moox.toml` 的 `[overrides."factor-engine"."engine.yaml"]`，再 `$CLI setup deploy $SRC --host factor --component factor-engine`。不要直接改目标机上的配置文件，下次部署会被覆盖。
 
 ### 信任 MooX CA（用户自己做）
 
@@ -278,11 +281,11 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 31. **因子引擎重启与本地写入**：`$CLI setup restart --host factor --component factor-engine --yes` 后 `$CLI factor task status`，载入期间显示未通过的检查项，之后自动开始计算；
     `$CLI import --pack <导入包> --target factor --dry-run` 通过，再实际导入一个小包（经引擎的入站服务）。`$CLI storage repair-view …` 的预览里停启 storage-view 用的是 systemd。
 32. **升级与重跑**：
-    - 改一行日志后重新构建，`$CLI setup deploy --host overseas --component trade`：只重启 Trade，`version.json` 更新，数据目录没动。
+    - 改一行日志后重新构建，`$CLI setup deploy $SRC --host overseas --component trade`：只重启 Trade，`version.json` 更新，数据目录没动。
     - 给某个服务加一个方法后只部署该组件：这台主机的 `host-gateway` 被一起升级并重启。
-    - 再跑一次 `$CLI setup install --space-id crypto --yes`：不报错，没有组件被重启，操作电脑的 `~/.config/moox/moox-cli.key` 没有变。
+    - 再跑一次 `$CLI setup install $SRC --space-id crypto --yes`：不报错，没有组件被重启，操作电脑的 `~/.config/moox/moox-cli.key` 没有变（它会再执行一次 `setup start`，手工停用过的内置采集任务与默认因子任务成员会被重新启用；只升级用逐台 `setup deploy`）。
     - 在控制机第一次装完、存储机装到一半时中断安装，重跑同一条命令能接着装完。
-33. **换电脑与清空预览**：另一台电脑上放两份配置文件、SSH 私钥、解密密钥，`$CLI setup operator --register` 再 `$CLI setup deploy --host control`、`$CLI setup status` 成功，原电脑的调用被拒（先问用户，做完要在原电脑上重新登记）。
+33. **换电脑与清空预览**：另一台电脑上放两份配置文件、SSH 私钥、解密密钥，`$CLI setup operator --register` 再 `$CLI setup deploy $SRC --host control`、`$CLI setup status` 成功，原电脑的调用被拒（先问用户，做完要在原电脑上重新登记）。
     `$CLI setup wipe` 的预览单独列出归档文件与 SeaweedFS 数据的大小，并提醒先导出管理台里的密钥。
 
 ## 7. 踩坑清单
@@ -294,7 +297,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 | `not_ready`，某个组件一直 `readyz 503` 或健康端口连不上 | 组件启动失败或依赖没起来 | `setup logs --host <主机> --component <组件> --journal` 看启动输出，再看文件日志 |
 | 控制机第一次部署时 `control_admin_failed` | `moox-admin-cli bootstrap` 失败 | 看报错最后一行；多半是配置里的主机地址、组件不满足服务目录的要求 |
 | `operator_trust_failed` | 这台电脑记着上一套部署的控制机根证书（上次没用 `setup wipe` 清空） | 按报错删掉 `~/.config/moox` 下列出的两个文件再重跑 |
-| 管理台打开是“前端没有打包进这个程序” | moox-admin 编译时没有带上前端 | 按第 2 节重新构建 admin 后 `setup deploy --host control --component admin` |
+| 管理台打开是“前端没有打包进这个程序” | moox-admin 编译时没有带上前端 | 按第 2 节重新构建 admin 后 `$CLI setup deploy $SRC --host control --component admin` |
 | `setup trust-browser` 报 `browser_trust_manual` | 没有终端或 sudo 失败 | 把错误里的命令交给用户在自己的终端运行 |
 | `setup start` 报 `CreateFactorTask failed ... metadata row not found` | 种子里有源数据集不存在的因子任务 | 见第 4 节“`setup start` 的已知限制” |
 | 因子 `factor_memory_budget_exceeded`、`status=degraded rows=0` | 引擎 `compute.max_memory` 装不下一期计算 | 按第 4 节用 `tune` 的建议值写 `[overrides]` 后重新部署因子引擎 |
@@ -303,7 +306,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 
 ## 8. 收尾
 
-- `setup wipe` 默认不清理腾讯云上的函数：同名的由 Collector 接管，计划外的按第 6 节第 4 步用 `collector function delete` 清掉（先预览、给用户确认）；换过云账号的，旧账号下的函数用 `setup inspect-scf` 查出来，提醒用户到腾讯云控制台删除。
+- `setup wipe` 默认不清理腾讯云上的函数：同名的由 Collector 接管，计划外的按第 6 节第 4 步用 `collector function delete` 清掉（先预览、给用户确认）；换过云账号的，提醒用户到腾讯云控制台按 `moox-fetch-plan-` 前缀找出旧账号下的函数并删除。
 - 汇报：做了什么、验收结果、没做的事（第 5 节）、重建后丢失的手工配置、需要用户做的事（清理旧 CA 等）。
 - 把发布过程中临时改过的代码或脚本提交并推送；配置有变更时提醒用户 `moox-cli config backup`（两份文件一起备份）。
 - 更新记忆（部署状态、踩坑）。

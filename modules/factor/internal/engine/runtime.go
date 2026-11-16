@@ -272,7 +272,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, follower.Run)
 	r.replays = newReplayManager(ReplayDeps{
 		Sets: r.catalog, Source: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
-		Pin: r.pinTaskModules, Synced: synced.Subjects,
+		ComputeReserve: int64(cfg.Compute.MaxMemory),
+		Pin:            r.pinTaskModules, Synced: synced.Subjects,
 	})
 	r.goRun(appCtx, r.replays.Run)
 	r.goRun(appCtx, func(ctx context.Context) { r.life.Run(ctx, cfg.Lifecycle.Interval) })
@@ -311,6 +312,8 @@ func (r *Runtime) reconcileConsumer() {
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
 			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate, CatchupGate: r.catchupGate,
 			OnBackfilled: r.onBackfilled,
+			// 模块在运行、任务还没就绪（窗口载入中、检查未通过）时到达的周期只记追赶目标（算过的任务）；暂停期间不记。
+			NoteWhenClosed: func(string) bool { return r.moduleRunning() },
 			Begin: func(ctx context.Context, taskID string, live bool) (func(), bool) {
 				return r.beginWrite(ctx, taskID, true, !live)
 			},

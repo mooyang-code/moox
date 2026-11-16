@@ -21,7 +21,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
+# 端口探测用 bash 自带的 /dev/tcp：编译镜像和精简的 CI 环境里没有 nc。
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+if port_open "$PORT"; then
   echo "port ${PORT} is already in use" >&2
   exit 1
 fi
@@ -36,7 +39,7 @@ fi
 NATS_PID=$!
 
 for _ in $(seq 1 120); do
-  if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
+  if port_open "$PORT"; then
     break
   fi
   if ! kill -0 "$NATS_PID" 2>/dev/null; then
@@ -45,7 +48,7 @@ for _ in $(seq 1 120); do
   fi
   sleep 0.1
 done
-if ! nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
+if ! port_open "$PORT"; then
   cat "$WORK_DIR/nats.log" >&2
   echo "embedded NATS did not become ready" >&2
   exit 1

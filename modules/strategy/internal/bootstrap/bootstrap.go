@@ -129,6 +129,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err != nil {
 		return nil, nil, fmt.Errorf("打开策略生命周期状态：%w", err)
 	}
+	observer.SetHalted(life.Halted)
 	if inputClient != nil {
 		meta := input.NewMetaCache()
 		meta.Ages = db

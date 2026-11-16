@@ -23,6 +23,7 @@ const (
 	Enabled                   = "enabled"
 	Disabled                  = "disabled"
 	GatewayControlPath        = "trpc.moox.admin.GatewayControl"
+	SecretMgrPath             = "trpc.moox.ops.SecretMgr"
 	DefaultTimeoutMS    int64 = 5000
 	DefaultMaxBodyBytes int64 = 4 << 20
 )

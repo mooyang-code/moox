@@ -208,6 +208,12 @@ func TestProxyStripsGatewayHeadersAndTellsGatewayControlTheVerifiedHost(t *testi
 	// 非主机身份没有签名主机：头在，值为空，GatewayControl 据此拒绝。
 	forwarded = upstreamMetadata(servicecatalog.GatewayControlPath, gatewayauth.Claims{Caller: "moox-cli"}, inbound)
 	require.Equal(t, "", string(forwarded[gatewayauth.HeaderVerifiedHost]))
+	// SecretMgr 收到验过签的调用方名字；外面带进来的同名头不往后传，别的服务收不到这个头。
+	inbound[gatewayauth.HeaderVerifiedCaller] = []byte("console")
+	forwarded = upstreamMetadata(servicecatalog.SecretMgrPath, gatewayauth.Claims{Caller: "trade", Host: "overseas"}, inbound)
+	require.Equal(t, codec.MetaData{gatewayauth.HeaderVerifiedCaller: []byte("trade"), "trace": []byte("kept")}, forwarded)
+	forwarded = upstreamMetadata("trpc.moox.storage.PrimaryStore", gatewayauth.Claims{Caller: "trade", Host: "overseas"}, inbound)
+	require.Equal(t, codec.MetaData{"trace": []byte("kept")}, forwarded)
 }
 
 // 快照换了就立即生效，不用重启：组件从它所在的主机撤走后不能再用那台主机的密钥签名；本机的部署停用后路由消失。

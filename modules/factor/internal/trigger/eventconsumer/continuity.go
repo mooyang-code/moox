@@ -138,18 +138,33 @@ func (c *Continuity) ratioFor(taskID string) float64 {
 
 // onEvent 记下事件带来的最新周期与期望标的，然后推进。
 func (c *Continuity) onEvent(ctx context.Context, h *Handler, set domain.FactorTask, members []domain.MemberDef, event periodEvent) error {
+	step, err := c.note(set, event, true)
+	if err != nil {
+		return err
+	}
+	return c.advance(ctx, h, set, members, step, &event)
+}
+
+// note 只记下事件带来的最新周期（追赶目标）与期望序列，不推进；返回任务的周期步长。
+// 任务还没就绪（例如引擎重启后窗口载入中）时到达的实时事件只调用它（create 为 false）：就绪之后由追赶循环从水位下一期补算，
+// 不必等下一条实时事件。create 为 false 时不给还没有水位记录的任务建立记录（与 NoteTarget 同一条规则）：
+// 从没算过的任务，连续性从它就绪后的第一条实时事件起保证，之前的历史用补算作业。
+func (c *Continuity) note(set domain.FactorTask, event periodEvent, create bool) (time.Duration, error) {
 	// 连续水位全部在轴上：事件周期在入口已换到轴上，轴是连续的。
 	clock := periodclock.Continuous{}
 	step, err := clock.Duration(set.Freq)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	period, err := clock.Align(event.periodTime, set.Freq)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	state, ok := c.cfg.Store.Get(set.TaskID)
 	if !ok || state.CommittedThrough.IsZero() {
+		if !create {
+			return step, nil
+		}
 		// 第一次见到这个任务：从这一期起保证连续，不回头补历史（历史用补算作业）。
 		state = watermark.State{TaskID: set.TaskID, CommittedThrough: period.Add(-step)}
 	}
@@ -161,9 +176,9 @@ func (c *Continuity) onEvent(ctx context.Context, h *Handler, set domain.FactorT
 		state.UniverseSeries = append([]seriesset.Series(nil), event.universeSeries...)
 	}
 	if err := c.cfg.Store.Put(state); err != nil {
-		return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
+		return 0, fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
 	}
-	return c.advance(ctx, h, set, members, step, &event)
+	return step, nil
 }
 
 // NoteTarget 显式把任务的追赶目标推到 period（取已有目标与 period 中较晚的）。

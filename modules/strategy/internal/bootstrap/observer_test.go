@@ -199,3 +199,40 @@ func TestInstanceObserverGivesNewInstanceFirstPeriodGrace(t *testing.T) {
 		t.Fatalf("重启后宽限起点不应后移：%v，期望 %d", got, enabledAt)
 	}
 }
+
+// 模块暂停（含恢复追赶）时期望清单带暂停标记：实例的 enabled 序列为 0，Monitor 不报“运行过期”；放行后恢复为 1。
+func TestInstanceObserverMarksExpectationsPausedWhileHalted(t *testing.T) {
+	repo := openStore(t)
+	seedEnabled(t, repo, "i1", nil, resolvedJSON)
+	registry := prometheus.NewRegistry()
+	observer, err := newInstanceObserver(repo, registry, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	halted := true
+	observer.SetHalted(func() bool { return halted })
+	enabled := func() float64 {
+		t.Helper()
+		if err := observer.refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		families, err := registry.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, family := range families {
+			if family.GetName() == "moox_strategy_dataset_enabled" && len(family.GetMetric()) == 1 {
+				return family.GetMetric()[0].GetGauge().GetValue()
+			}
+		}
+		t.Fatal("没有上报实例的 enabled 序列")
+		return -1
+	}
+	if got := enabled(); got != 0 || !observer.expected["i1"].Paused {
+		t.Fatalf("暂停时应带暂停标记、enabled=0，实际 enabled=%v paused=%t", got, observer.expected["i1"].Paused)
+	}
+	halted = false
+	if got := enabled(); got != 1 || observer.expected["i1"].Paused {
+		t.Fatalf("放行后应恢复 enabled=1，实际 enabled=%v paused=%t", got, observer.expected["i1"].Paused)
+	}
+}

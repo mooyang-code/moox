@@ -54,7 +54,10 @@ type ReplayDeps struct {
 	Synced func(context.Context, seriesstore.Source) ([]string, error)
 	Runner *pipeline.Runner
 	Admit  *memadmit.Admitter
-	Now    func() time.Time
+	// ComputeReserve 是要给实时计算留出的内存（compute.max_memory）：快照整段占住预留直到会话结束，
+	// 超过“进程预算 − 常驻 − ComputeReserve”的会话直接拒绝。进程预算为 0（不限制）时不检查。
+	ComputeReserve int64
+	Now            func() time.Time
 	// Pin 非空时在会话建立期间固定任务引用的自定义算子模块（返回释放函数）：从读取任务到会话登记之间目录可能切换版本，
 	// 没有它，这段时间里的回收会把会话马上要用的版本卸载。
 	Pin func(set domain.EngineTask) func()
@@ -335,6 +338,12 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	need := int64(len(subjects)+len(history)) * int64(rowsPerSubject) * int64(len(numeric)*8+9)
 	release := func() {}
 	if m.deps.Admit != nil {
+		if stats := m.deps.Admit.Stats(); stats.Budget > 0 {
+			if limit := stats.Budget - stats.Resident - m.deps.ComputeReserve; need > limit {
+				return ReplayOpenResponse{}, replayFail(commonpb.ErrorCode_CONFLICT, "回放快照需要约 %d 字节内存，超过可用于回放的 %d 字节（memory.total_budget − 常驻内存 − compute.max_memory）：请缩短回放区间",
+					need, max(limit, 0))
+			}
+		}
 		waitCtx, cancel := context.WithTimeout(memadmit.WithPriority(ctx, memadmit.PriorityBackground), replayReserveWait)
 		release, err = m.deps.Admit.Reserve(waitCtx, need)
 		cancel()

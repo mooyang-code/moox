@@ -14,11 +14,9 @@ import (
 
 // moduleHealthNames names each built-in module health check for people.
 var moduleHealthNames = map[string]string{
-	"collector-market-data": "行情采集",
-	"factor-calculation":    "因子计算",
-	"strategy-targets":      "策略目标生成",
-	"trade-rebalance":       "交易调仓",
-	"monitor-metrics":       "监控指标接收",
+	"strategy-targets": "策略目标生成",
+	"trade-rebalance":  "交易调仓",
+	"monitor-metrics":  "监控指标接收",
 }
 
 // moduleIdleAfter 是最近一次失败之后多久没有新的运行就算模块闲下来了。取 1 小时而不是 MaxLag：

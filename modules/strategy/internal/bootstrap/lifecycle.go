@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -199,6 +200,8 @@ func waitOutboxDrained(ctx context.Context, reader outboxStatsReader) error {
 // catchup 报告恢复追赶进度：模块自检通过，并且每个启用、有会话的实例都已处理到最新已收盘的 bar（输入因子追平、策略自己的消费
 // 没有积压、相邻周期的版本记录已补齐），才算追平。追赶期间到达的因子完成事件都按 skipped(catchup) 记录。
 // 策略池预热失败的实例要人工修复后重新启用，它的事件被直接确认掉、永远追不平，不参与追赶。
+// 读不出追赶进度的实例（绑定快照无法解析、日历换算失败等，它的事件同样只会被丢弃）只写进说明、不挡放行：
+// 否则一个坏实例会让整个系统恢复（含 Trade）一直等下去。
 func (d lifecycleDeps) catchup(ctx context.Context, since time.Time) (lifecycle.Catchup, error) {
 	out := lifecycle.Catchup{Since: since, CaughtUp: true}
 	if !d.ready.Ready() {
@@ -223,6 +226,7 @@ func (d lifecycleDeps) catchup(ctx context.Context, since time.Time) (lifecycle.
 		return out, nil
 	}
 	now := time.Now().UTC()
+	var unreadable []string
 	for _, instance := range list {
 		if instance.SessionID == nil || *instance.SessionID == "" {
 			continue
@@ -237,7 +241,7 @@ func (d lifecycleDeps) catchup(ctx context.Context, since time.Time) (lifecycle.
 		message := ""
 		switch {
 		case err != nil:
-			message = "读取追赶进度失败：" + err.Error()
+			unreadable = append(unreadable, "实例 "+instance.InstanceID+" 读取追赶进度失败："+err.Error())
 		case progress.CaughtUp():
 			out.Done++
 		default:
@@ -249,6 +253,9 @@ func (d lifecycleDeps) catchup(ctx context.Context, since time.Time) (lifecycle.
 		if message != "" && out.CaughtUp {
 			out.CaughtUp, out.BlockedBy, out.Message = false, "实例 "+instance.InstanceID, message
 		}
+	}
+	if out.CaughtUp && len(unreadable) > 0 {
+		out.Message = strings.Join(unreadable, "；")
 	}
 	return out, nil
 }

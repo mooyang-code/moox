@@ -95,10 +95,10 @@ func TestBuilderMarksDisabledAsNotExpectedAndStorageDeferred(t *testing.T) {
 			{ComponentId: "factor-mgr", HostId: "node-a", Status: "disabled"},
 			{ComponentId: "storage-primary", HostId: "node-a", Status: "enabled"},
 		}},
-		HealthChecks: []report.ModuleHealthCheck{{ID: "factor-calculation", Module: "factor", MaxLag: time.Minute, Enabled: true}},
+		HealthChecks: []report.ModuleHealthCheck{{ID: "strategy-targets", Module: "strategy", MaxLag: time.Minute, Enabled: true}},
 		Now:          func() time.Time { return time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC) },
 	}
-	got, err := builder.Build(context.Background(), "node-a", []string{"factor-mgr", "storage-primary"}, []string{"factor-calculation"})
+	got, err := builder.Build(context.Background(), "node-a", []string{"factor-mgr", "storage-primary"}, []string{"strategy-targets"})
 	require.NoError(t, err)
 	require.Len(t, got.ExpectedComponents, 2)
 	byID := map[string]ExpectedComponent{}

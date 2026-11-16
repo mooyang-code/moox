@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/timerjob"
 
@@ -32,6 +33,10 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 		DoctorContext: doctorContext,
 		HealthView:    health,
 		Lifecycle:     runtime.life.Load,
+		EvaluationStale: func() string {
+			_, reason := evaluationFresh(runtime, time.Now().UTC())
+			return reason
+		},
 	}))
 }
 

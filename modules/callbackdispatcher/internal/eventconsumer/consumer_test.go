@@ -116,6 +116,8 @@ func TestEventBusStartedLateStillDeliversEarlierDelistEvent(t *testing.T) {
 	}
 	require.GreaterOrEqual(t, int(configCalls.Load()), 3)
 	require.Eventually(t, connected.Load, time.Second, 10*time.Millisecond)
+	// 消费者都建起来之后不再算停着：即使按很久以后的时刻判断也是正常。
+	require.Eventually(t, func() bool { return supervisor.Stalled(time.Now().Add(time.Hour)) == "" }, 5*time.Second, 10*time.Millisecond)
 
 	// 每个事件一个固定的 durable，名字与凭据里授权的一致。
 	for _, event := range events.CallbackDispatcherEvents {
@@ -145,4 +147,27 @@ func TestEventBusStartedLateStillDeliversEarlierDelistEvent(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("没有收到第二个标的的通知")
 	}
+}
+
+// 一直连不上 EventBus（消费者建不起来）：刚启动时不算，超过 ConsumerDownAfter 之后判为停滞，事件中心据此置为未就绪。
+func TestSupervisorReportsStalledConsumersAfterThreshold(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var attempts atomic.Int32
+	supervisor := &Supervisor{
+		Config: func() (jetstream.Config, error) {
+			attempts.Add(1)
+			return jetstream.Config{}, errors.New("EventBus 还没起来")
+		},
+		ReconnectInterval: 10 * time.Millisecond, RetryInterval: 10 * time.Millisecond,
+	}
+	require.Empty(t, supervisor.Stalled(time.Now().Add(time.Hour)), "还没开始运行时不判断")
+	done := make(chan struct{})
+	go func() { defer close(done); _ = supervisor.Run(ctx) }()
+	require.Eventually(t, func() bool { return attempts.Load() >= 2 }, 5*time.Second, 5*time.Millisecond)
+	require.Empty(t, supervisor.Stalled(time.Now()), "不满 3 分钟不算")
+	require.Empty(t, supervisor.Stalled(time.Now().Add(ConsumerDownAfter-time.Minute)))
+	require.Contains(t, supervisor.Stalled(time.Now().Add(ConsumerDownAfter+time.Minute)), "的消费者已有")
+	cancel()
+	<-done
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
@@ -484,4 +485,22 @@ func TestReplayCrossSectionWithEarlyEndedSeries(t *testing.T) {
 	require.Equal(t, map[string]float64{"A": 1, "B": 0.5}, swapRanks(after), "C 的永续已经结束，不算缺失")
 	require.Equal(t, "complete", after.GetStates()["rk"].GetStatus())
 	require.Nil(t, replayRowOf(after, "C", "swap"))
+}
+
+// 快照整段占住内存预留直到会话结束：超过“进程预算 − 常驻 − compute.max_memory”的会话直接拒绝并提示缩短区间；预算为 0 时不限制。
+func TestOpenReplayRejectsSnapshotBeyondReplayBudget(t *testing.T) {
+	m, _ := newReplayManagerForTest(t)
+	m.deps.Admit = memadmit.New(1 << 20)
+	m.deps.Admit.SetResident("window", 512<<10)
+	m.deps.ComputeReserve = 512 << 10
+	rsp := openReplay(t, m, replayOpenReq("r-budget", 10, 15, 0, "bias"))
+	require.Equal(t, commonpb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "请缩短回放区间")
+	require.Zero(t, m.deps.Admit.Stats().Reserved, "拒绝的会话不占预留")
+
+	m.deps.ComputeReserve = 0
+	mustOpenReplay(t, m, replayOpenReq("r-fits", 10, 15, 0, "bias"))
+
+	m.deps.Admit, m.deps.ComputeReserve = memadmit.New(0), 4<<30
+	mustOpenReplay(t, m, replayOpenReq("r-unlimited", 10, 15, 0, "bias"))
 }

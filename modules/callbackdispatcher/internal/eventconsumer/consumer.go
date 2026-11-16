@@ -4,6 +4,7 @@ package eventconsumer
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -59,6 +60,47 @@ type Supervisor struct {
 	FetchMaxWait time.Duration
 	// RetryInterval 是消费者创建或运行失败后重新创建前的等待。
 	RetryInterval time.Duration
+
+	// downSince 记录每个事件的消费者从什么时候起没有在运行（连不上 EventBus、建不起来、运行中停止）；在运行的事件不在表里。
+	mu        sync.Mutex
+	downSince map[string]time.Time
+}
+
+// ConsumerDownAfter 内消费者一直没有运行起来，事件中心判为未就绪：进程活着、数据库正常，但收不到事件，规则不会触发。
+const ConsumerDownAfter = 3 * time.Minute
+
+// markDown 记下事件的消费者没有在运行（已经记过的保留最早的时刻）；markUp 清除。
+func (s *Supervisor) markDown(event string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.downSince == nil {
+		s.downSince = map[string]time.Time{}
+	}
+	if _, down := s.downSince[event]; !down {
+		s.downSince[event] = time.Now()
+	}
+}
+
+func (s *Supervisor) markUp(event string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.downSince, event)
+}
+
+// Stalled 返回消费者连续超过 ConsumerDownAfter 没有运行的事件说明（取停得最久的一个），都正常时为空。
+func (s *Supervisor) Stalled(now time.Time) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	worst, since := "", time.Time{}
+	for event, at := range s.downSince {
+		if now.Sub(at) > ConsumerDownAfter && (worst == "" || at.Before(since)) {
+			worst, since = event, at
+		}
+	}
+	if worst == "" {
+		return ""
+	}
+	return fmt.Sprintf("事件 %s 的消费者已有 %s 没有运行", worst, now.Sub(since).Truncate(time.Second))
 }
 
 func (s *Supervisor) setConnected(connected bool) {
@@ -70,6 +112,10 @@ func (s *Supervisor) setConnected(connected bool) {
 // Run 一直维护到 ctx 结束。
 func (s *Supervisor) Run(ctx context.Context) error {
 	defer s.setConnected(false)
+	// 启动时所有事件都还没有消费者：从现在起算，一直连不上 EventBus 也会在 ConsumerDownAfter 之后判为未就绪。
+	for _, entry := range catalog.Subscribable() {
+		s.markDown(entry.Name())
+	}
 	for ctx.Err() == nil {
 		client, err := s.connect(ctx)
 		if err != nil {
@@ -124,6 +170,7 @@ func (s *Supervisor) runEvent(ctx context.Context, client *jetstream.Client, ent
 		})
 		if err != nil {
 			failures++
+			s.markDown(entry.Name())
 			log.WarnContextf(ctx, "创建事件 %s 的消费者 %s 失败: %v", entry.Name(), name, err)
 			// 连接可能已经失效（EventBus 重启后订阅一直无效），连续失败几次就整体重连。
 			if failures >= 3 {
@@ -138,6 +185,7 @@ func (s *Supervisor) runEvent(ctx context.Context, client *jetstream.Client, ent
 			continue
 		}
 		failures = 0
+		s.markUp(entry.Name())
 		runner := jetstream.NewRunner(consumer, s.Handler, jetstream.RunnerConfig{
 			BatchSize: 16,
 			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
@@ -145,6 +193,7 @@ func (s *Supervisor) runEvent(ctx context.Context, client *jetstream.Client, ent
 			}),
 		})
 		runErr := runner.Run(ctx)
+		s.markDown(entry.Name())
 		_ = consumer.Close()
 		if ctx.Err() != nil {
 			return

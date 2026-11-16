@@ -182,7 +182,7 @@ func TestPauseStopsAtStrategyWhenItsTargetsAreNotPublished(t *testing.T) {
 	require.Equal(t, []string{Strategy, Trade, FactorEngine, Collector}, result.Paused)
 }
 
-// 恢复：上游追平后才启动下游；所有模块追平前谁也不放行；放行顺序上游到下游、Trade 先于策略。
+// 恢复：采集追平后因子才启动，策略与 Trade 一开始就追赶；所有模块追平前谁也不放行；放行顺序上游到下游、Trade 先于策略。
 func TestResumeWaitsForUpstreamAndReleasesBehindABarrier(t *testing.T) {
 	f := newFixture(t, all...)
 	ctx := context.Background()
@@ -207,10 +207,10 @@ func TestResumeWaitsForUpstreamAndReleasesBehindABarrier(t *testing.T) {
 	require.Equal(t, []string{Collector, FactorEngine, Trade, Strategy}, result.Released, "放行顺序：上游到下游，Trade 先于策略")
 	require.Empty(t, result.Pending)
 
-	// 下游在上游追平后才启动：因子在采集追平之后，策略在因子追平之后；Trade 与采集同时启动。
+	// 因子在采集追平之后启动；策略、Trade 与采集同时启动（策略要记下因子补算暂停区间时发出的完成事件）。
 	require.Less(t, f.index("trade:resume"), f.index("factor-engine:resume"), "Trade 一开始就追赶")
 	require.Less(t, f.index("collector:resume"), f.index("factor-engine:resume"))
-	require.Less(t, f.index("factor-engine:resume"), f.index("strategy:resume"))
+	require.Less(t, f.index("strategy:resume"), f.index("factor-engine:resume"), "策略一开始就追赶")
 	// 采集没有副作用，补齐暂停区间就自己放行（恢复实时采集），不发 release，也不等栅栏。
 	require.Equal(t, -1, f.index("collector:release"), "采集自行放行")
 	// 栅栏：所有有副作用的模块都 resume 并追平之后才有 release，release 之间按顺序。

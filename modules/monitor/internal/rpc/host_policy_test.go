@@ -33,6 +33,20 @@ func TestGetHostPolicyReturnsChannels(t *testing.T) {
 	require.Equal(t, "wecom", policy.GetChannels()[0].GetChannelType())
 	require.Equal(t, wecom, policy.GetChannels()[0].GetWebhookUrl())
 
+	// 检查评估停滞时返回失败（HostAgent 连续拉取失败后直推告警）；恢复后照常返回。
+	stale := "last complete business evaluation was 5m0s ago"
+	service.evalStale = func() string { return stale }
+	stalled, err := service.GetHostPolicy(t.Context(), &monitorpb.GetHostPolicyReq{})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, stalled.GetRetInfo().GetCode())
+	require.Contains(t, stalled.GetRetInfo().GetMsg(), "检查评估停滞")
+	require.Empty(t, stalled.GetChannels())
+	stale = ""
+	recovered, err := service.GetHostPolicy(t.Context(), &monitorpb.GetHostPolicyReq{})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, recovered.GetRetInfo().GetCode())
+	require.Len(t, recovered.GetChannels(), 1)
+
 	unavailable, err := (&Service{}).GetHostPolicy(t.Context(), &monitorpb.GetHostPolicyReq{})
 	require.NoError(t, err)
 	require.NotEqual(t, commonpb.ErrorCode_SUCCESS, unavailable.GetRetInfo().GetCode())

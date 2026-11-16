@@ -384,3 +384,44 @@ func TestAdvanceFollowsCatchupGateWhenRealtimeGateClosed(t *testing.T) {
 	require.Greater(t, len(h.runner.plans), computed, "追赶门禁放行：只靠追赶补算历史周期")
 	require.Equal(t, minuteAt(4), h.state().CommittedThrough)
 }
+
+// 模块在运行、任务还没就绪（引擎重启后窗口载入中）时到达的周期：本期不算，但记下追赶目标；就绪后追赶循环直接补算，不等下一条实时事件。
+// 模块暂停时（noteWhenClosed 返回 false）不记目标；从没算过的任务不建水位记录。
+func TestNotReadyEventIsNotedAndCaughtUpAfterReady(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(20)
+	ready, running := false, false
+	h.handler.SetGate(func(string) bool { return ready })
+	h.handler.SetNoteWhenClosed(func(string) bool { return running })
+
+	running = true
+	require.Equal(t, jetstream.ACK, h.event(0, universe, nil).Decision)
+	_, noted := h.store.Get(h.taskID)
+	require.False(t, noted, "从没算过的任务不建水位记录：连续性从就绪后的第一条实时事件起保证")
+
+	// 任务算过一期（有水位记录）之后引擎重启、窗口重新载入：载入期间到达的周期只记目标。
+	ready = true
+	require.Equal(t, jetstream.ACK, h.event(0, universe, nil).Decision)
+	require.Equal(t, []time.Time{minuteAt(0)}, h.computed())
+	ready = false
+	h.rows.set(minuteAt(1), universe...)
+	h.rows.set(minuteAt(2), universe...)
+	h.rows.set(minuteAt(3), universe...)
+	require.Equal(t, jetstream.ACK, h.event(1, universe, nil).Decision)
+	require.Equal(t, jetstream.ACK, h.event(2, universe, nil).Decision)
+	require.Len(t, h.runner.plans, 1, "任务没就绪：本期不算")
+	require.Equal(t, minuteAt(2), h.state().Target)
+	require.Equal(t, minuteAt(0), h.state().CommittedThrough)
+
+	running = false
+	require.Equal(t, jetstream.ACK, h.event(3, universe, nil).Decision)
+	require.Equal(t, minuteAt(2), h.state().Target, "模块暂停：不记追赶目标，由恢复追赶显式建立")
+	running = true
+	require.NoError(t, h.handler.Advance(context.Background(), h.taskID))
+	require.Len(t, h.runner.plans, 1, "没就绪时追赶循环也不算")
+
+	ready = true
+	require.NoError(t, h.handler.Advance(context.Background(), h.taskID))
+	require.Equal(t, []time.Time{minuteAt(0), minuteAt(1), minuteAt(2)}, h.computed(), "就绪后追赶循环补算载入期间到达的周期")
+	require.Equal(t, minuteAt(2), h.state().CommittedThrough)
+}

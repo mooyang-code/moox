@@ -150,7 +150,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 
 	service := &rpc.Service{Store: dbStore, Sender: sender, Actions: actions}
 	pb.RegisterCallbackDispatcherServiceService(s.Service("trpc.moox.callbackdispatcher.CallbackDispatcherService"), service)
-	healthState, err := registerHealth(s, dbStore, actions, &eventBusConnected)
+	healthState, err := registerHealth(s, dbStore, actions, &eventBusConnected, supervisor.Stalled)
 	if err != nil {
 		return nil, err
 	}
@@ -190,18 +190,28 @@ func registerMetricsReporter(s *server.Server, readiness func(context.Context) (
 	return nil
 }
 
-func registerHealth(s *server.Server, dbStore *store.Store, actions *action.Registry, eventBusConnected *atomic.Bool) (*health.State, error) {
+// healthSnapshot 生成健康快照：数据库可用、事件消费者没有长时间停着才算就绪。收不到事件时进程和数据库都正常，
+// 但规则不会触发，必须体现在就绪位上（Monitor 据此告警）。
+func healthSnapshot(state *health.State, databaseReady, eventBusConnected bool, systemActions []string, stalled string) healthz.Response {
+	ready := databaseReady && stalled == ""
+	state.SetReady(ready)
+	response := healthz.Base("callback-dispatcher", "callback-dispatcher", "", "", state.StartedAt, ready)
+	response.Details = map[string]any{
+		"database":       databaseReady,
+		"eventbus":       eventBusConnected,
+		"system_actions": systemActions,
+	}
+	if stalled != "" {
+		response.Details["consumer_error"] = stalled
+	}
+	return response
+}
+
+// registerHealth 注册健康检查；consumersStalled 返回事件消费者长时间没有运行的说明（eventconsumer.Supervisor.Stalled），正常时为空。
+func registerHealth(s *server.Server, dbStore *store.Store, actions *action.Registry, eventBusConnected *atomic.Bool, consumersStalled func(time.Time) string) (*health.State, error) {
 	state := health.New("callback-dispatcher", "callback-dispatcher", "", "")
 	state.SnapshotFunc = func(ctx context.Context) healthz.Response {
-		databaseReady := dbStore.Ping(ctx) == nil
-		state.SetReady(databaseReady)
-		response := healthz.Base("callback-dispatcher", "callback-dispatcher", "", "", state.StartedAt, databaseReady)
-		response.Details = map[string]any{
-			"database":       databaseReady,
-			"eventbus":       eventBusConnected.Load(),
-			"system_actions": actions.Actions(),
-		}
-		return response
+		return healthSnapshot(state, dbStore.Ping(ctx) == nil, eventBusConnected.Load(), actions.Actions(), consumersStalled(time.Now()))
 	}
 	if err := health.Register(s.Service("trpc.moox.callbackdispatcher.Health"), state); err != nil {
 		return nil, fmt.Errorf("注册健康检查失败: %w", err)

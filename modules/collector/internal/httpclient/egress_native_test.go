@@ -146,7 +146,8 @@ func TestEgressTransportNativeLocalDirect(t *testing.T) {
 	root := t.TempDir()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(&fixtureListener{Listener: listener}), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName(fixtureService))
+	fixture := &fixtureListener{Listener: listener}
+	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(fixture), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName(fixtureService))
 	backend := &egressFixture{}
 	require.NoError(t, service.Register(&egresspb.ProxyServer_ServiceDesc, backend))
 	served := make(chan error, 1)
@@ -226,6 +227,8 @@ func TestEgressTransportNativeLocalDirect(t *testing.T) {
 			if serialization == codec.SerializationTypeJSON {
 				require.NoError(t, service.Close(nil))
 				backendClosed = true
+				// 显式关掉监听和已建立的连接：不依赖服务关闭时是否及时关监听，下一次调用一定连不上。
+				require.NoError(t, fixture.Close())
 				now = now.Add(time.Hour)
 				failureCtx, cancelFailure := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancelFailure()

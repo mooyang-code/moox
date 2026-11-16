@@ -116,7 +116,9 @@ func newSetupInstallCommand(deps setupDeps) *cobra.Command {
 然后装控制机其余组件和其余主机，统一等一次全部就绪，再做完整初始化、备份配置、启动空间和验收。
 中途失败直接重跑同一条命令：每一步都可以重做，没有变化的组件不会重启。
 配置模板、云函数代码包、元数据种子、默认因子任务和默认策略都从 --source-dir（默认当前目录）取：要装哪个分支或工作副本的代码，就在那里运行或把它指过去。
-目标机装过时默认原地重新部署（升级）；要彻底清空后重装，带 --wipe <预检输出的清空摘要>。进度逐行输出到标准错误。`,
+目标机装过时默认原地重新部署（升级）；要彻底清空后重装，带 --wipe <预检输出的清空摘要>。进度逐行输出到标准错误。
+重跑会再执行一次 setup start：手工停用的内置采集任务与默认因子任务成员会被重新启用，走云函数的空间会重建云函数。
+只升级请逐台 setup deploy（控制机先），不要重跑 setup install。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(options.spaceID) == "" {
@@ -177,7 +179,8 @@ func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupSnapshot
 		preview := map[string]any{"action": "install", "route": status.Route, "steps": steps, "manual_steps": status.ManualSteps, "warnings": status.Warnings}
 		if status.Route == deployscan.RouteInstalled {
 			preview["wipe"] = plan
-			preview["note"] = "目标机装过：不带 --wipe 是原地重新部署（升级），数据保留；带 --wipe <wipe.digest> 是彻底清空后重装"
+			preview["note"] = "目标机装过：不带 --wipe 是原地重新部署（升级），数据保留；带 --wipe <wipe.digest> 是彻底清空后重装。" +
+				"不带 --wipe 重跑会再执行一次 setup start：手工停用的内置采集任务与默认因子任务成员会被重新启用，走云函数的空间会重建云函数；只升级请逐台 setup deploy"
 			if note := wipeTradeNote(snapshot.Manifest, plan); note != "" {
 				preview["note"] = preview["note"].(string) + "。" + note
 			}

@@ -211,10 +211,10 @@ func TestCatchupWaitsForEveryEnabledInstance(t *testing.T) {
 	}
 	connected.Store(true)
 	ready.Refresh(ctx)
-	// 测试库里的绑定快照没有周期，读不出进度：按没追平处理，原因写进进度里。
+	// 测试库里的绑定快照没有周期，读不出进度：这样的实例只写进说明，不挡放行（它的事件本来就只会被丢弃）。
 	got, err = deps.catchup(ctx, time.Now())
-	if err != nil || got.CaughtUp || got.BlockedBy != "实例 b" || got.Total != 1 || !strings.Contains(got.Message, "读取追赶进度失败") {
-		t.Fatalf("被没追平的实例 b 挡住，预热失败的 a 与停用的实例不参与：%+v err=%v", got, err)
+	if err != nil || !got.CaughtUp || got.BlockedBy != "" || got.Total != 1 || got.Done != 0 || !strings.Contains(got.Message, "实例 b 读取追赶进度失败") {
+		t.Fatalf("读不出进度的实例 b 只写进说明，预热失败的 a 与停用的实例不参与：%+v err=%v", got, err)
 	}
 	warm["b"] = warmup.StatusFailed
 	got, err = deps.catchup(ctx, time.Now())

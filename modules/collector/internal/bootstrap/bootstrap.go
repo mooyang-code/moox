@@ -99,14 +99,6 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*Runt
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector dataset metrics: %w", err)
 	}
-	// 模块指标只注册（保持 /metrics 的指标名不变），Collector 里目前没有往里写的地方。
-	if _, err := report.NewModuleMetrics(
-		prometheus.DefaultRegisterer,
-		"collector",
-		report.HealthCheckIDsForModule("collector"),
-	); err != nil {
-		return nil, fmt.Errorf("initialize collector module metrics: %w", err)
-	}
 	realtimeInventory := collectorobservability.NewRealtimeInventory(dbm.Tasks(), datasetMetrics)
 	realtimeInventory.SetResampleEnabled(cfg.KlineResample.Enabled)
 	if err := realtimeInventory.Refresh(ctx); err != nil {
