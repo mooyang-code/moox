@@ -81,7 +81,6 @@ func TestFactorEngineSectionIsRejectedWithMigrationHint(t *testing.T) {
 		root := t.TempDir()
 		_, err := Load(writeManifest(t, root, validManifest+"[factor_engine]\nhost = \""+value+"\"\n", 0o600), root)
 		require.ErrorContains(t, err, "[factor_engine] 已取消")
-		require.ErrorContains(t, err, "config migrate")
 	}
 }
 
@@ -167,7 +166,6 @@ ssh = { username = "ubuntu" }
 	root := t.TempDir()
 	_, err := Load(writeManifest(t, root, validManifest+"[egress_proxy.dns]\ndomains = ['api.binance.com']\n", 0o600), root)
 	require.ErrorContains(t, err, "[egress_proxy.dns] 已删除")
-	require.ErrorContains(t, err, "config migrate")
 }
 
 // 客户端与 EventBus 同机用回环地址，其余主机用 EventBus 所在主机的对外地址；

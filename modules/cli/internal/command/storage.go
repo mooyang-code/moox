@@ -159,15 +159,16 @@ func runStorageMaintenance(cmd *cobra.Command, action storageMaintenanceAction, 
 		return err
 	}
 	defer remote.Close()
-	paths := remote.manifest.Paths.Resolved()
+	// 这两个维护命令还按旧部署的发布目录（{部署根}/storage/current）找存储程序，T13 改成 systemd。
+	storageRoot := path.Join(remote.manifest.Paths.DeployRoot, "storage")
 	if hostID == "" {
 		hostID = remote.manifest.ComponentHost("storage-primary")
 	}
 	if hostID == "" {
 		return errors.New("moox.toml 里没有部署 storage-primary，请用 --host 指定存储机")
 	}
-	root := path.Join(paths.StorageRoot, "current")
-	argv := []string{"sh", "-c", storageRemoteScript, "sh", path.Join(paths.StorageRoot, "maintenance"), action.Action,
+	root := path.Join(storageRoot, "current")
+	argv := []string{"sh", "-c", storageRemoteScript, "sh", path.Join(storageRoot, "maintenance"), action.Action,
 		path.Join(root, "bin", "moox-storage-cli"), action.Action}
 	argv = append(argv, storageRemoteArgs(action, root, args)...)
 	ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Hour)

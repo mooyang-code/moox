@@ -84,9 +84,10 @@ func newSetupStartCommand(deps setupDeps) *cobra.Command {
 	var options unitdeploy.DeployOptions
 	cmd := &cobra.Command{
 		Use:   "start",
-		Short: "启动一个空间：启用采集任务，导入因子，创建默认示例策略",
-		Long:  "crypto 走 collector-stream 和出口代理，其他空间要配 [scf_plan]。重复运行不会重复创建。没有因子机时跳过因子和默认策略。",
-		Args:  cobra.NoArgs,
+		Short: "启动一个空间：启用采集任务，导入默认因子任务，创建默认示例策略",
+		Long: "crypto 走 collector-stream 和出口代理，其他空间要配 [scf_plan]。默认因子任务取自 config/setup/factor-tasks.yaml 里这个空间的任务，" +
+			"只建不改：线上已有且内容不同时逐项列出差异、不写入（自己的任务用 moox-cli factor task apply --file 导入）。重复运行不会重复创建。没有因子机时跳过因子和默认策略。",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(spaceID) == "" {
 				return errors.New("setup start 要带 --space-id")
@@ -107,7 +108,7 @@ func newSetupStartCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer closeClient()
-			summary, err := runSetupStart(cmd.Context(), deps, client, snapshot, filepath.Dir(file), options.RepositoryRoot, spaceID, setupStartPollDefault)
+			summary, err := runSetupStart(cmd.Context(), deps, client, snapshot, options.RepositoryRoot, spaceID, setupStartPollDefault)
 			if err != nil {
 				return err
 			}
@@ -138,7 +139,7 @@ func setupStartPrerequisites(manifest setupconfig.Manifest, spaceID string) erro
 	return fmt.Errorf("start_prerequisite_missing: %s 目前只能走云函数，要在 [scf_plan] 里配置这个空间", spaceID)
 }
 
-func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient, snapshot *setupconfig.Snapshot, configRoot, repository, spaceID string, poll time.Duration) (setupStartSummary, error) {
+func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient, snapshot *setupconfig.Snapshot, repository, spaceID string, poll time.Duration) (setupStartSummary, error) {
 	summary := setupStartSummary{Status: "started", SpaceID: spaceID, Strategy: "skipped"}
 	manifest := snapshot.Manifest
 	tasks, err := client.Tasks(ctx, spaceID)
@@ -180,16 +181,16 @@ func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient,
 		summary.Notes = append(summary.Notes, "没有部署因子引擎，跳过因子和默认策略")
 		return summary, nil
 	}
-	imported, err := setupStartFactors(ctx, deps, snapshot, configRoot, spaceID)
+	factorTasks, err := setupStartFactors(ctx, deps, snapshot, repository, spaceID)
 	if err != nil {
 		return summary, err
 	}
-	if !imported {
-		summary.Notes = append(summary.Notes, "配置里没有这个空间的因子任务，或 [factors] 没有打开，跳过因子和默认策略")
+	if len(factorTasks) == 0 {
+		summary.Notes = append(summary.Notes, defaultFactorSeed+" 里没有这个空间的因子任务，跳过因子和默认策略")
 		return summary, nil
 	}
 	example, ok := spaceExamples[spaceID]
-	if !ok || !slices.ContainsFunc(manifest.Factors.Tasks, func(task setupconfig.FactorSetupTask) bool { return task.ID == example.FactorTask }) {
+	if !ok || !slices.Contains(factorTasks, example.FactorTask) {
 		return summary, nil
 	}
 	summary.Strategy, err = setupStartStrategy(ctx, client, repository, spaceID, example)
@@ -283,23 +284,29 @@ func setupStartWaitPlan(ctx context.Context, client setupStartClient, spaceID st
 	}
 }
 
-// setupStartFactors 导入这个空间的因子任务，定义是全局的，一起导入。
-func setupStartFactors(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, configRoot, spaceID string) (bool, error) {
-	plan, err := loadSetupFactors(snapshot.Manifest, configRoot)
+// setupStartFactors 导入种子文件里这个空间的因子任务（定义是全局的，一起导入），返回导入的任务 ID。
+func setupStartFactors(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, repository, spaceID string) ([]string, error) {
+	plan, err := loadFactorPlan(filepath.Join(repository, filepath.FromSlash(defaultFactorSeed)), snapshot.Manifest.StoragePolicy(), spaceID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	plan.Tasks = slices.DeleteFunc(plan.Tasks, func(task setupFactorTask) bool { return task.SpaceID != spaceID })
 	reportFactorWarnings(plan.Warnings)
 	if len(plan.Tasks) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	service, err := deps.openInitFactor(ctx, snapshot)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	_, applyErr := service.Apply(ctx, plan)
-	return true, errors.Join(applyErr, service.Close())
+	if err := errors.Join(applyErr, service.Close()); err != nil {
+		return nil, err
+	}
+	tasks := make([]string, 0, len(plan.Tasks))
+	for _, task := range plan.Tasks {
+		tasks = append(tasks, task.TaskID)
+	}
+	return tasks, nil
 }
 
 // setupStartStrategy 创建空间的默认示例并启用。默认示例不写 factor_params，不独占关联因子任务，
@@ -335,7 +342,7 @@ func setupStartStrategy(ctx context.Context, client setupStartClient, repository
 type gatewayStartClient struct{ gateway setupVerifyGateway }
 
 func defaultSetupOpenStart(ctx context.Context, file string, snapshot *setupconfig.Snapshot) (setupStartClient, func(), error) {
-	gateway, err := openCommandGateway(ctx, file, snapshot)
+	gateway, err := openCommandGateway(ctx, file, snapshot.Config())
 	if err != nil {
 		return nil, nil, err
 	}

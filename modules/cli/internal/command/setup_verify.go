@@ -71,7 +71,7 @@ K 线缺失不超过 5% 算通过：到截止时间就带缺口结算，缺口�
 
 // runSetupVerifySpace 验收一个空间，通过时写记录。检查项有失败时同时返回 checks 和错误。
 func runSetupVerifySpace(ctx context.Context, file string, snapshot *setupconfig.Snapshot, options unitdeploy.DeployOptions, spaceID string, timeout time.Duration) ([]verify.Check, error) {
-	gateway, err := openCommandGateway(ctx, file, snapshot)
+	gateway, err := openCommandGateway(ctx, file, snapshot.Config())
 	if err != nil {
 		return nil, err
 	}

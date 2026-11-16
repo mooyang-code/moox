@@ -11,14 +11,13 @@ import (
 	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/spf13/cobra"
@@ -43,21 +42,16 @@ type archiveImportRemote interface {
 
 // openArchiveImportRemote 读 moox.toml，返回经 SSH 访问主机的连接层与 archive-worker 所在主机（[deployments] 里唯一的一台）。
 var openArchiveImportRemote = func(file string) (archiveImportRemote, string, error) {
-	absolute, err := filepath.Abs(defaultFlag(file, "./moox.toml"))
+	cfg, err := topology.Load(defaultFlag(file, defaultSetupFile))
 	if err != nil {
 		return nil, "", err
 	}
-	snapshot, err := setupconfig.Load(absolute, filepath.Dir(absolute))
-	if err != nil {
-		return nil, "", err
-	}
-	host := snapshot.Manifest.ComponentHost(archiveWorkerComponent)
+	host := cfg.ComponentHost(archiveWorkerComponent)
 	if host == "" {
-		clearSetupSecrets(snapshot)
 		return nil, "", fmt.Errorf("moox.toml 的 [deployments] 里没有唯一一台部署了 %s 的主机", archiveWorkerComponent)
 	}
-	// 本节点 ID 留空：worker 所在主机一律经 SSH 访问（与 deploy-unit 的前提相同）。
-	return newHostRemoteFromSnapshot(snapshot, ""), host, nil
+	// 本节点 ID 留空：worker 所在主机一律经 SSH 访问。
+	return newHostRemote(cfg, ""), host, nil
 }
 
 // archiveSleep 是 --wait 轮询的等待（测试替换）。

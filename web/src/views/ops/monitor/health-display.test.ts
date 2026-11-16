@@ -42,9 +42,9 @@ describe("health display", () => {
     expect(missing).toContain("moox-cli config edit");
     expect(missing).toContain("正式环境");
     expect(missing).toContain("名称填 readonly");
-    expect(missing).toContain("moox-cli setup apply");
+    expect(missing).toContain("moox-cli setup init");
     expect(deleted).toContain("删除过");
-    expect(deleted).toContain("setup apply 不会重建");
+    expect(deleted).toContain("setup init 不会重建");
     expect(manual).toContain("moox-cli collector delist register");
     expect(manual).toContain("事件中心");
     expect(note?.lines.join("")).not.toContain("生产环境");

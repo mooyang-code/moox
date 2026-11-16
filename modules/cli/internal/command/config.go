@@ -9,15 +9,15 @@ func init() {
 func newConfigCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "管理本机的 moox.toml 与告警渠道",
-		Long: `config init 在本机打开一次性表单，填写部署信息并生成加密保存的 moox.toml；
-config edit 在本机打开配置页，查看并修改 moox.toml（保存后重新加密）；
-config encrypt 把明文保存的 moox.toml 加密保存；
-config migrate 把 moox.toml 改写成当前格式（默认只预览，加 --yes 写回）；
-config backup 把配置用管理员密码加密备份到管理后台，config restore 换电脑时从管理台恢复；
-config notification 对比 moox.toml 与 Monitor 的告警渠道（唯一来源），确认后写入 Monitor，并显示各主机策略缓存的版本。`,
+		Short: "管理本机的 moox.toml 与 moox.secrets.toml",
+		Long: `部署配置拆成两份文件，放在同一目录：明文的 moox.toml（拓扑与部署参数，直接编辑即可）和加密的 moox.secrets.toml（秘密的初始值）。
+config init 在本机打开一次性表单，填写部署信息，生成这两份文件；
+config edit 在本机打开配置页，查看并修改两份文件（秘密文件保存后重新加密）；
+config get / config set 读取、修改其中一份里的单个值（--file 指定哪一份，秘密默认打码）；
+config encrypt 把明文保存的 moox.secrets.toml 加密保存；
+config backup 把两份文件用管理员密码加密备份到管理后台，config restore 换电脑时从管理台恢复。`,
 		SilenceUsage: true,
 	}
-	cmd.AddCommand(newConfigInitCommand(), newConfigEditCommand(), newConfigEncryptCommand(), newConfigMigrateCommand(), newConfigGetCommand(), newConfigSetCommand(), newConfigBackupCommand(), newConfigRestoreCommand(), newConfigNotificationCommand(defaultNotificationDeps()))
+	cmd.AddCommand(newConfigInitCommand(), newConfigEditCommand(), newConfigEncryptCommand(), newConfigGetCommand(), newConfigSetCommand(), newConfigBackupCommand(), newConfigRestoreCommand())
 	return cmd
 }

@@ -1,8 +1,9 @@
-package config
+package topology
 
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,9 +11,9 @@ import (
 )
 
 func TestRenderEgressAndCollectorSeparatePolicyFromRouting(t *testing.T) {
-	snapshot := &Snapshot{Manifest: Manifest{EgressProxy: EgressProxy{
+	snapshot := &Config{EgressProxy: EgressProxy{
 		HTTPDomains: []string{"*.binance.com", "data-api.binance.vision"},
-	}}}
+	}}
 	raw, err := RenderEgressConfig(snapshot, []byte("unrelated: keep\n"))
 	require.NoError(t, err)
 	var got map[string]any
@@ -28,9 +29,9 @@ func TestRenderEgressAndCollectorSeparatePolicyFromRouting(t *testing.T) {
 }
 
 func TestRenderCollectorRuntimeConfigIncludesRetentionPolicy(t *testing.T) {
-	snapshot := &Snapshot{Manifest: Manifest{CollectorRetention: CollectorRetention{
+	snapshot := &Config{CollectorRetention: CollectorRetention{
 		MaintenanceInterval: "2m", MaintenanceOffset: "10s", MaintenanceTimeout: "30s", MaxRowsPerPass: 25000,
-	}}}
+	}}
 	rendered, err := RenderCollectorRuntimeConfig(snapshot, []byte("database:\n  path: ./collector.db\n"))
 	require.NoError(t, err)
 	var got map[string]any
@@ -52,7 +53,7 @@ func TestRenderCollectorDelistAutoDetectFollowsEgressProxy(t *testing.T) {
 		"有海外机":  {map[string][]string{"control": {"admin", "collector"}, "overseas": {"egress-proxy", "trade"}}, true},
 		"没配海外机": {map[string][]string{"control": {"admin", "collector"}}, false},
 	} {
-		rendered, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: Manifest{Deployments: tc.deployments}}, template)
+		rendered, err := RenderCollectorRuntimeConfig(&Config{Deployments: tc.deployments}, template)
 		require.NoError(t, err, name)
 		var got map[string]any
 		require.NoError(t, yaml.Unmarshal(rendered, &got), name)
@@ -72,7 +73,7 @@ func TestRenderCollectorDelistFromShippedTemplate(t *testing.T) {
 		"有海外机":  {map[string][]string{"control": {"admin", "collector"}, "overseas": {"egress-proxy", "trade"}}, true},
 		"没配海外机": {map[string][]string{"control": {"admin", "collector"}}, false},
 	} {
-		rendered, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: Manifest{Deployments: tc.deployments}}, template)
+		rendered, err := RenderCollectorRuntimeConfig(&Config{Deployments: tc.deployments}, template)
 		require.NoError(t, err, name)
 		var got map[string]any
 		require.NoError(t, yaml.Unmarshal(rendered, &got), name)
@@ -83,7 +84,7 @@ func TestRenderCollectorDelistFromShippedTemplate(t *testing.T) {
 // 旧版 Collector 的配置没有 delist 段：渲染不新增，免得还没换二进制的 Collector 读到不认识的键。
 func TestRenderCollectorDoesNotAddDelistToOldConfig(t *testing.T) {
 	deployments := map[string][]string{"control": {"admin", "collector"}, "overseas": {"egress-proxy", "trade"}}
-	rendered, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: Manifest{Deployments: deployments}}, []byte("database:\n  path: ./collector.db\n"))
+	rendered, err := RenderCollectorRuntimeConfig(&Config{Deployments: deployments}, []byte("database:\n  path: ./collector.db\n"))
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, yaml.Unmarshal(rendered, &got))
@@ -91,15 +92,27 @@ func TestRenderCollectorDoesNotAddDelistToOldConfig(t *testing.T) {
 	require.Equal(t, "./collector.db", got["database"].(map[string]any)["path"])
 }
 
-func TestWriteRenderedRuntimeConfigPreservesModeAndReplacesAtomically(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "trade", "app.yaml")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte("old\n"), 0o600))
-	require.NoError(t, WriteRenderedRuntimeConfig(path, []byte("new\n")))
-	raw, err := os.ReadFile(path)
+// 出口与 Collector 的契约（scripts/test/contract/test-egress-collector-contract.sh 调用）：用仓库里的示例配置和随发布的模板渲染，
+// 白名单两边一致，不渲染 DNS 快照与旧的路由字段，输出里没有任何密钥字段。
+func TestRenderedRuntimeConfigFromShippedTemplates(t *testing.T) {
+	example, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "moox.toml.example"))
 	require.NoError(t, err)
-	require.Equal(t, "new\n", string(raw))
-	info, err := os.Stat(path)
+	cfg, err := Parse(example)
 	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	egressTemplate, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "egressproxy", "config", "app.yaml"))
+	require.NoError(t, err)
+	collectorTemplate, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "collector", "config", "app.yaml"))
+	require.NoError(t, err)
+	egress, err := RenderEgressConfig(&cfg, egressTemplate)
+	require.NoError(t, err)
+	collector, err := RenderCollectorRuntimeConfig(&cfg, collectorTemplate)
+	require.NoError(t, err)
+	require.Contains(t, string(egress), "data-api.binance.vision")
+	var parsed map[string]any
+	require.NoError(t, yaml.Unmarshal(collector, &parsed))
+	require.Equal(t, map[string]any{"domains": []any{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}}, parsed["egress_proxy"])
+	forbidden := regexp.MustCompile(`(?m)(^|[^A-Za-z0-9_])(dns|target|node_id|dns_resolver|secret_id|secret_key):`)
+	for _, rendered := range []string{string(egress), string(collector)} {
+		require.Empty(t, forbidden.FindAllString(rendered, -1))
+	}
 }

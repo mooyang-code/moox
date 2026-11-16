@@ -15,17 +15,18 @@ import (
 	"testing"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 type editorHarness struct {
 	t       *testing.T
-	backups []string // 每次同步时的明文配置
+	backups []ConfigPair // 每次同步时的两份配置
 	syncErr error
 	base    string
 	host    string
 	path    string
+	secrets string
 	keys    *configcrypt.MemoryStore
 	done    chan editorOutcome
 }
@@ -35,34 +36,19 @@ type editorOutcome struct {
 	err    error
 }
 
-// sampleText 是一份合法的明文配置（与 sampleRequest 同构）。
-// sampleText 是一份用 SSH 密码登录的配置：录入页生成的配置只用 MooX 密钥，
-// 但手写或旧的配置仍可以用密码，编辑页两种都要支持。
-func sampleText(t *testing.T) string {
+// startEditor 写出两份文件（秘密文件先明文保存）再打开配置页；rendered 为空时用 sampleRequest 渲染的结果。
+func startEditor(t *testing.T, rendered *Rendered) *editorHarness {
 	t.Helper()
-	_, text := renderWith(t, sampleRequest(), nil)
-	passwords := map[string]string{"control": "pw-control", "storage": "pw-storage", "overseas": "pw-compute"}
-	var out []string
-	host := ""
-	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(line, "[hosts.") {
-			host = strings.TrimSuffix(strings.TrimPrefix(line, "[hosts."), "]")
-		}
-		if strings.HasPrefix(line, "ssh = ") {
-			line = strings.Replace(line, "private_key_file = "+tomlString(sshKeyTOMLPath), "password = "+tomlString(passwords[host]), 1)
-		}
-		out = append(out, line)
+	dir := t.TempDir()
+	h := &editorHarness{t: t, path: filepath.Join(dir, "moox.toml"), secrets: filepath.Join(dir, topology.SecretsFileName), keys: &configcrypt.MemoryStore{}, done: make(chan editorOutcome, 1)}
+	if rendered == nil {
+		sample := sampleRendered(t)
+		rendered = &sample
 	}
-	return strings.Join(out, "\n")
-}
-
-func startEditor(t *testing.T, content []byte) *editorHarness {
-	t.Helper()
-	h := &editorHarness{t: t, path: filepath.Join(t.TempDir(), "moox.toml"), keys: &configcrypt.MemoryStore{}, done: make(chan editorOutcome, 1)}
-	if content == nil {
-		content = []byte(sampleText(t))
+	if err := os.WriteFile(h.path, rendered.Config, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(h.path, content, 0o600); err != nil {
+	if err := os.WriteFile(h.secrets, rendered.Secrets, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	urls := make(chan string, 1)
@@ -70,8 +56,8 @@ func startEditor(t *testing.T, content []byte) *editorHarness {
 	t.Cleanup(cancel)
 	go func() {
 		result, err := RunEditor(ctx, EditorOptions{File: h.path, Timeout: time.Minute, KeyStore: h.keys, Open: func(u string) error { urls <- u; return nil },
-			Backup: func(_ context.Context, plain []byte, _ setupconfig.Manifest) (BackupResult, error) {
-				h.backups = append(h.backups, string(plain))
+			Backup: func(_ context.Context, pair ConfigPair) (BackupResult, error) {
+				h.backups = append(h.backups, pair)
 				return BackupResult{}, h.syncErr
 			}})
 		h.done <- editorOutcome{result, err}
@@ -108,9 +94,20 @@ func (h *editorHarness) call(path string, body any, mutate func(*http.Request)) 
 	return resp.StatusCode, reply, string(text)
 }
 
-func (h *editorHarness) plain() string {
+// config 是 moox.toml 的当前内容（明文）。
+func (h *editorHarness) config() string {
 	h.t.Helper()
 	raw, err := os.ReadFile(h.path)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// plain 是秘密文件的当前明文（加密的先解开）。
+func (h *editorHarness) plain() string {
+	h.t.Helper()
+	raw, err := os.ReadFile(h.secrets)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -122,6 +119,16 @@ func (h *editorHarness) plain() string {
 		h.t.Fatal(err)
 	}
 	return string(plain)
+}
+
+// pair 用 CLI 自己的校验解析两份文件的当前内容。
+func (h *editorHarness) pair() ConfigPair {
+	h.t.Helper()
+	pair, err := parsePair([]byte(h.config()), []byte(h.plain()))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return pair
 }
 
 func TestEditorPageAndOverviewNeverCarrySecrets(t *testing.T) {
@@ -139,7 +146,7 @@ func TestEditorPageAndOverviewNeverCarrySecrets(t *testing.T) {
 	if status != http.StatusOK || reply.Overview == nil {
 		t.Fatalf("概览: %d %s", status, text)
 	}
-	for _, secret := range []string{"Adm1n-P@ss", "key-example", "pw-storage", "pw-control", "AKIDexample", "webhook/send"} {
+	for _, secret := range []string{"Adm1n-P@ss", "key-example", "AKIDexample", "webhook/send"} {
 		if strings.Contains(text, secret) || strings.Contains(string(page), secret) {
 			t.Fatalf("页面或概览里不应出现秘密 %q", secret)
 		}
@@ -151,7 +158,7 @@ func TestEditorPageAndOverviewNeverCarrySecrets(t *testing.T) {
 	uses := map[string]string{}
 	for _, server := range view.Servers {
 		uses[server.ID] = strings.Join(server.Uses, ",")
-		if !server.HasPassword || server.Region == "" {
+		if server.Region == "" {
 			t.Fatalf("主机概览 = %+v", server)
 		}
 	}
@@ -164,36 +171,39 @@ func TestEditorRevealsOneSecretAtATime(t *testing.T) {
 	h := startEditor(t, nil)
 	for field, want := range map[string]string{
 		"admin.password": "Adm1n-P@ss", "tencent.secret_key": "key-example", "tencent.secret_id": "AKIDexample",
-		"hosts.storage.password": "pw-storage", "notification.webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc",
+		"notification.webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc",
 	} {
 		status, reply, _ := h.call("config/reveal", map[string]string{"field": field}, nil)
 		if status != http.StatusOK || reply.Value != want {
 			t.Fatalf("%s: %d %q", field, status, reply.Value)
 		}
 	}
-	for _, field := range []string{"hosts.missing.password", "eventbus.port", ""} {
+	for _, field := range []string{"hosts.storage.password", "eventbus.port", ""} {
 		if status, _, _ := h.call("config/reveal", map[string]string{"field": field}, nil); status != http.StatusNotFound {
 			t.Fatalf("%q 应返回 404，实际 %d", field, status)
 		}
 	}
 }
 
-func TestEditorEncryptsAPlaintextConfigInPlace(t *testing.T) {
-	original := sampleText(t)
-	h := startEditor(t, []byte(original))
+func TestEditorEncryptsAPlaintextSecretsFileInPlace(t *testing.T) {
+	rendered := sampleRendered(t)
+	h := startEditor(t, &rendered)
 	status, reply, text := h.call("config/encrypt", struct{}{}, nil)
 	if status != http.StatusOK || reply.Overview == nil || !reply.Overview.Encrypted {
 		t.Fatalf("加密: %d %s", status, text)
 	}
-	raw, _ := os.ReadFile(h.path)
+	raw, _ := os.ReadFile(h.secrets)
 	if !configcrypt.IsEncrypted(raw) || strings.Contains(string(raw), "Adm1n-P@ss") {
-		t.Fatal("文件应加密保存")
+		t.Fatal("秘密文件应加密保存")
 	}
-	if h.plain() != original {
-		t.Fatal("加密不应改变配置内容")
+	if h.plain() != string(rendered.Secrets) {
+		t.Fatal("加密不应改变秘密文件的内容")
+	}
+	if h.config() != string(rendered.Config) {
+		t.Fatal("moox.toml 是明文，加密不动它")
 	}
 	if runtime.GOOS != "windows" {
-		if info, _ := os.Stat(h.path); info.Mode().Perm() != 0o600 {
+		if info, _ := os.Stat(h.secrets); info.Mode().Perm() != 0o600 {
 			t.Fatalf("权限 = %v，应为 0600", info.Mode().Perm())
 		}
 	}
@@ -209,7 +219,7 @@ func TestEditorFormShowsTheCommonSettings(t *testing.T) {
 	if form.Admin.Username != "admin" || form.Admin.Password != "Adm1n-P@ss" || form.Tencent.SecretKey != "key-example" || form.Notification.ChannelType != "wecom" {
 		t.Fatalf("账号与通知 = %+v %+v %+v", form.Admin, form.Tencent, form.Notification)
 	}
-	if len(form.Hosts) != 3 || form.Hosts[0].ID != "control" || form.Hosts[0].SSHUser != "ubuntu" || form.Hosts[0].SSHPassword != "pw-control" || form.Hosts[0].Address == "" {
+	if len(form.Hosts) != 3 || form.Hosts[0].ID != "control" || form.Hosts[0].SSHUser != "ubuntu" || form.Hosts[0].Address == "" {
 		t.Fatalf("主机 = %+v", form.Hosts)
 	}
 	if form.Retention.ViewBars != 10000 || form.Retention.Defaults["1m"] != "35d" || len(form.Retention.Frequencies) != 10 {
@@ -222,16 +232,14 @@ func TestEditorFormShowsTheCommonSettings(t *testing.T) {
 	if names["stockcn"] != "A 股" {
 		t.Fatalf("空间 = %v", names)
 	}
-	if form.Logs.MaxSizeMB != 50 || form.Logs.BackupCount != 5 {
-		t.Fatalf("日志 = %+v", form.Logs)
-	}
 }
 
+// 表单按项写回两份文件：账号与密钥进秘密文件（重新加密），主机与保留期进 moox.toml；注释和没动的设置原样保留。
 func TestEditorSavesFormChangesLineByLine(t *testing.T) {
 	h := startEditor(t, nil)
 	_, reply, _ := h.call("config/form", struct{}{}, nil)
 	form := *reply.Form
-	before := h.plain()
+	beforeConfig, beforeSecrets := h.config(), h.plain()
 
 	bad := form
 	bad.Retention = form.Retention
@@ -245,12 +253,12 @@ func TestEditorSavesFormChangesLineByLine(t *testing.T) {
 	if status, _, _ := h.call("config/update", unknown, nil); status != http.StatusUnprocessableEntity {
 		t.Fatal("表单里多出的主机应拒绝")
 	}
-	if h.plain() != before {
+	if h.config() != beforeConfig || h.plain() != beforeSecrets {
 		t.Fatal("校验不过时文件不能变")
 	}
 
 	form.Admin.Username, form.Admin.Password = "admin123", "Live-P@ss"
-	form.Hosts[1].SSHPort, form.Hosts[1].SSHPassword = 2222, "" // storage 改用密钥登录
+	form.Hosts[1].SSHPort = 2222
 	form.Retention.ViewBars = 5500
 	form.Retention.Defaults["1m"] = "14d"
 	for i := range form.Retention.Spaces {
@@ -258,40 +266,47 @@ func TestEditorSavesFormChangesLineByLine(t *testing.T) {
 			form.Retention.Spaces[i].Values["1m"] = "" // 跟随默认
 		}
 	}
-	form.Logs.MaxSizeMB, form.Logs.BackupCount = 100, 3
 	status, saved, text := h.call("config/update", form, nil)
 	if status != http.StatusOK || saved.Overview == nil || saved.Overview.Admin != "admin123" || !saved.Overview.Encrypted {
 		t.Fatalf("保存: %d %s", status, text)
 	}
-	after := h.plain()
-	manifest, err := setupconfig.Parse([]byte(after))
-	if err != nil {
-		t.Fatal(err)
+	pair := h.pair()
+	storage := pair.Config.HostCatalog["storage"]
+	if pair.Secrets.Admin.Password != "Live-P@ss" || storage.SSH.Port != 2222 || storage.SSH.PrivateKeyFile != sshKeyTOMLPath {
+		t.Fatalf("账号或主机没有写对: %+v %+v", pair.Secrets.Admin, storage.SSH)
 	}
-	storage := manifest.HostCatalog["storage"]
-	if manifest.Admin.Password != "Live-P@ss" || storage.SSH.Port != 2222 || storage.SSH.Password != "" || manifest.HostCatalog["control"].SSH.Password != "pw-control" {
-		t.Fatalf("账号或主机没有写对: %+v %+v", manifest.Admin, storage.SSH)
+	if pair.Config.StorageRetention.ViewBars != 5500 || pair.Config.StorageRetention.Defaults["1m"] != "14d" {
+		t.Fatalf("保留期没有写对: %+v", pair.Config.StorageRetention)
 	}
-	if manifest.StorageRetention.ViewBars != 5500 || manifest.StorageRetention.Defaults["1m"] != "14d" || manifest.LocalLogs.MaxSizeMB != 100 || manifest.LocalLogs.BackupCount != 3 {
-		t.Fatalf("保留期或日志没有写对: %+v %+v", manifest.StorageRetention, manifest.LocalLogs)
+	if _, ok := pair.Config.StorageRetention.Spaces["stockcn"]["1m"]; ok || pair.Config.StorageRetention.Spaces["stockcn"]["5m"] != "300d" {
+		t.Fatalf("留空的格子应删掉，其余不变: %+v", pair.Config.StorageRetention.Spaces["stockcn"])
 	}
-	if _, ok := manifest.StorageRetention.Spaces["stockcn"]["1m"]; ok || manifest.StorageRetention.Spaces["stockcn"]["5m"] != "300d" {
-		t.Fatalf("留空的格子应删掉，其余不变: %+v", manifest.StorageRetention.Spaces["stockcn"])
+	config := h.config()
+	if configcrypt.IsEncrypted([]byte(config)) || strings.Contains(config, "Live-P@ss") || strings.Contains(config, "admin123") {
+		t.Fatal("moox.toml 仍是明文，账号不能写进去")
 	}
 	// 只改目标行：注释和没动的设置原样保留。
-	for _, kept := range []string{"# View 只按根数保留", "view_rows_per_series = 5500   # 每个序列 View 保留最近 N 根", "[factors]", "maintenance_offset = \"35s\""} {
-		if !strings.Contains(after, kept) {
-			t.Fatalf("应保留 %q", kept)
+	for _, kept := range []string{"# View 只按根数保留", "view_rows_per_series = 5500   # 每个序列 View 保留最近 N 根", "[collector_retention]", "maintenance_offset = \"35s\""} {
+		if !strings.Contains(config, kept) {
+			t.Fatalf("moox.toml 应保留 %q", kept)
 		}
 	}
-	if len(h.backups) != 1 || h.backups[0] != after || !strings.Contains(saved.Sync, "已同步") {
-		t.Fatalf("保存后应同步到管理后台: %d 次, %q", len(h.backups), saved.Sync)
+	if !strings.Contains(h.plain(), "# 告警渠道的初始值") {
+		t.Fatal("秘密文件里的注释应保留")
 	}
+	if len(h.backups) != 1 || string(h.backups[0].ConfigText) != config || string(h.backups[0].SecretsText) != h.plain() || !strings.Contains(saved.Sync, "已同步") {
+		t.Fatalf("保存后应把两份文件同步到管理后台: %d 次, %q", len(h.backups), saved.Sync)
+	}
+	// 只改拓扑时不重写秘密文件。
+	sealed, _ := os.ReadFile(h.secrets)
 	h.syncErr = errors.New("连不上管理台")
-	form.Logs.BackupCount = 4
+	form.Retention.ViewBars = 6000
 	status, saved, _ = h.call("config/update", form, nil)
-	if status != http.StatusOK || !strings.Contains(saved.Sync, "本机已保存") || !strings.Contains(h.plain(), "backup_count = 4") {
+	if status != http.StatusOK || !strings.Contains(saved.Sync, "本机已保存") || !strings.Contains(h.config(), "view_rows_per_series = 6000") {
 		t.Fatalf("同步失败不影响本机保存: %d %q", status, saved.Sync)
+	}
+	if again, _ := os.ReadFile(h.secrets); !bytes.Equal(again, sealed) {
+		t.Fatal("秘密没有变化时不应重写秘密文件")
 	}
 	if status, _, _ := h.call("close", struct{}{}, nil); status != http.StatusOK {
 		t.Fatal("关闭失败")
@@ -310,7 +325,7 @@ func TestEditorSavesFormChangesLineByLine(t *testing.T) {
 func TestEditorKeepsOutsideChangesToOtherSettings(t *testing.T) {
 	h := startEditor(t, nil)
 	_, reply, _ := h.call("config/form", struct{}{}, nil)
-	outside := strings.Replace(h.plain(), `region = "ap-guangzhou"`, `region = "ap-shanghai"`, 1)
+	outside := strings.Replace(h.config(), `region = "ap-guangzhou"`, `region = "ap-shanghai"`, 1)
 	if err := os.WriteFile(h.path, []byte(outside), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +334,7 @@ func TestEditorKeepsOutsideChangesToOtherSettings(t *testing.T) {
 	if status, _, text := h.call("config/update", form, nil); status != http.StatusOK {
 		t.Fatalf("保存: %d %s", status, text)
 	}
-	if after := h.plain(); !strings.Contains(after, `region = "ap-shanghai"`) || !strings.Contains(after, `username = "owner"`) {
+	if !strings.Contains(h.config(), `region = "ap-shanghai"`) || !strings.Contains(h.plain(), `username = "owner"`) {
 		t.Fatal("别处改动的设置应保留，表单里的修改应写入")
 	}
 }
@@ -338,47 +353,62 @@ func TestRunEditorRefusesUnreadableOrInsecureFiles(t *testing.T) {
 	if _, err := RunEditor(context.Background(), EditorOptions{File: filepath.Join(dir, "moox.toml"), KeyStore: &configcrypt.MemoryStore{}}); err == nil {
 		t.Fatal("文件不存在时应报错")
 	}
+	rendered := sampleRendered(t)
+	path := filepath.Join(dir, "moox.toml")
+	if err := os.WriteFile(path, rendered.Config, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RunEditor(context.Background(), EditorOptions{File: path, KeyStore: &configcrypt.MemoryStore{}}); err == nil || !strings.Contains(err.Error(), topology.SecretsFileName) {
+		t.Fatalf("缺秘密文件时应报错，实际 %v", err)
+	}
 	if runtime.GOOS == "windows" {
 		return
 	}
-	path := filepath.Join(dir, "moox.toml")
-	if err := os.WriteFile(path, []byte(sampleText(t)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, topology.SecretsFileName), rendered.Secrets, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := RunEditor(context.Background(), EditorOptions{File: path, KeyStore: &configcrypt.MemoryStore{}}); err == nil || !strings.Contains(err.Error(), "0600") {
-		t.Fatalf("别人可读的配置应拒绝，实际 %v", err)
+		t.Fatalf("别人可读的秘密文件应拒绝，实际 %v", err)
 	}
 }
 
 func TestEncryptFileIsIdempotent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "moox.toml")
-	text := sampleText(t)
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+	rendered := sampleRendered(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "moox.toml")
+	secrets := filepath.Join(dir, topology.SecretsFileName)
+	if err := os.WriteFile(path, rendered.Config, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secrets, rendered.Secrets, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	keys := &configcrypt.MemoryStore{}
 	already, err := EncryptFile(path, keys)
 	if err != nil || already {
-		t.Fatalf("第一次应加密: %v %v", already, err)
+		t.Fatalf("第一次应加密秘密文件: %v %v", already, err)
 	}
-	raw, _ := os.ReadFile(path)
-	if plain, err := configcrypt.Decrypt(raw, keys); err != nil || string(plain) != text {
+	raw, _ := os.ReadFile(secrets)
+	if plain, err := configcrypt.Decrypt(raw, keys); err != nil || string(plain) != string(rendered.Secrets) {
 		t.Fatal("加密后应能解开且内容不变")
 	}
-	already, err = EncryptFile(path, keys)
+	if config, _ := os.ReadFile(path); string(config) != string(rendered.Config) {
+		t.Fatal("moox.toml 不加密")
+	}
+	already, err = EncryptFile(secrets, keys)
 	if err != nil || !already {
 		t.Fatalf("已加密的文件只核对: %v %v", already, err)
 	}
-	if again, _ := os.ReadFile(path); !bytes.Equal(again, raw) {
+	if again, _ := os.ReadFile(secrets); !bytes.Equal(again, raw) {
 		t.Fatal("已加密的文件不应被改动")
 	}
 	if _, err := EncryptFile(path, &configcrypt.MemoryStore{}); !errors.Is(err, configcrypt.ErrKeyMissing) {
 		t.Fatalf("换一台电脑（没有密钥）时应提示，实际 %v", err)
 	}
-	broken := filepath.Join(t.TempDir(), "moox.toml")
+	broken := filepath.Join(t.TempDir(), topology.SecretsFileName)
 	_ = os.WriteFile(broken, []byte("unknown = 1\n"), 0o600)
 	if _, err := EncryptFile(broken, keys); err == nil {
-		t.Fatal("校验不过的配置不应加密")
+		t.Fatal("校验不过的秘密文件不应加密")
 	}
 }
 
@@ -425,10 +455,7 @@ func TestEditorSavesRecommendedValuesForASpaceMissingFromTheConfig(t *testing.T)
 	if status != http.StatusOK {
 		t.Fatalf("保存: %d %s", status, text)
 	}
-	manifest, err := setupconfig.Parse([]byte(h.plain()))
-	if err != nil {
-		t.Fatal(err)
-	}
+	manifest := h.pair().Config
 	if manifest.StorageRetention.Spaces["stockhk"]["1m"] != rec.Spaces["stockhk"]["1m"] || manifest.StorageRetention.Defaults["1h"] != "10080h" || manifest.StorageRetention.ViewBars != 10000 || manifest.StorageView.MaxViewFileBytes != 4294967296 {
 		t.Fatalf("推荐值没有写进配置: %+v", manifest.StorageRetention)
 	}
@@ -450,15 +477,14 @@ func TestEditorPageHasASaveSuccessDialog(t *testing.T) {
 
 // 录入页生成的配置用 MooX 密钥登录，编辑页保存时要原样保留 private_key_file。
 func TestEditorKeepsThePrivateKeyFile(t *testing.T) {
-	_, generated := renderWith(t, sampleRequest(), nil)
-	h := startEditor(t, []byte(generated))
+	h := startEditor(t, nil)
 	_, reply, _ := h.call("config/form", struct{}{}, nil)
 	form := *reply.Form
 	form.Hosts[0].SSHPort = 2200
 	if status, reply, _ := h.call("config/update", form, nil); status != http.StatusOK {
 		t.Fatalf("保存: %d %+v", status, reply)
 	}
-	plain := h.plain()
+	plain := h.config()
 	if strings.Count(plain, "private_key_file = "+tomlString(sshKeyTOMLPath)) != 3 || !strings.Contains(plain, "port = 2200") {
 		t.Fatalf("保存后应保留每台主机的私钥路径:\n%s", plain)
 	}
@@ -472,7 +498,7 @@ func TestEditorAddsAndDropsTheArchiveObjectStoreSection(t *testing.T) {
 	if os := form.ArchiveObjectStore; os.Enabled || os.Prefix != "moox-archive/" || os.URLStyle != "virtual" || !os.UseTLS || os.StorageClass != "STANDARD_IA" {
 		t.Fatalf("没配时的默认值 = %+v", os)
 	}
-	before := h.plain()
+	before := h.config()
 	bad := form
 	bad.ArchiveObjectStore = FormObjectStore{Enabled: true, Endpoint: "https://cos.ap-nanjing.myqcloud.com", Region: "ap-nanjing", Bucket: "b-1", URLStyle: "virtual", SecretID: "s3-1"}
 	if status, reply, _ := h.call("config/update", bad, nil); status != http.StatusUnprocessableEntity || !strings.Contains(reply.Message, "endpoint") {
@@ -482,7 +508,7 @@ func TestEditorAddsAndDropsTheArchiveObjectStoreSection(t *testing.T) {
 	if status, reply, _ := h.call("config/update", bad, nil); status != http.StatusUnprocessableEntity || !strings.Contains(reply.Message, "secret_id") {
 		t.Fatalf("缺 secret_id 应拒绝: %d %+v", status, reply)
 	}
-	if h.plain() != before {
+	if h.config() != before {
 		t.Fatal("校验不过时文件不能变")
 	}
 
@@ -491,11 +517,7 @@ func TestEditorAddsAndDropsTheArchiveObjectStoreSection(t *testing.T) {
 	if status, _, text := h.call("config/update", form, nil); status != http.StatusOK {
 		t.Fatalf("保存: %d %s", status, text)
 	}
-	manifest, err := setupconfig.Parse([]byte(h.plain()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := manifest.ArchiveObjectStore
+	got := h.pair().Config.ArchiveObjectStore
 	if got == nil || got.Endpoint != "cos.ap-nanjing.myqcloud.com" || got.Bucket != "moox-archive-1250000000" || !got.TLS() || got.StorageClass != "STANDARD_IA" || got.SecretID != "secret_s3_writer" || got.URLStyle != "virtual" {
 		t.Fatalf("写入的段 = %+v", got)
 	}
@@ -508,11 +530,11 @@ func TestEditorAddsAndDropsTheArchiveObjectStoreSection(t *testing.T) {
 	if status, _, text := h.call("config/update", form, nil); status != http.StatusOK {
 		t.Fatalf("关闭: %d %s", status, text)
 	}
-	after := h.plain()
+	after := h.config()
 	if strings.Contains(after, "\n[archive_object_store]") || strings.Contains(after, "secret_s3_writer") || !strings.Contains(after, "# [archive_object_store]") {
 		t.Fatalf("关闭后应整段删除:\n%s", after)
 	}
-	if manifest, err := setupconfig.Parse([]byte(after)); err != nil || manifest.ArchiveObjectStore != nil {
-		t.Fatalf("关闭后 = %+v %v", manifest.ArchiveObjectStore, err)
+	if cfg, err := topology.Parse([]byte(after)); err != nil || cfg.ArchiveObjectStore != nil {
+		t.Fatalf("关闭后 = %+v %v", cfg.ArchiveObjectStore, err)
 	}
 }

@@ -66,13 +66,13 @@ button.plain { background: var(--panel); color: var(--ink); border-color: var(--
       </div>
       <div class="trust" id="trust" hidden></div>
       <button type="button" id="restore">登录并恢复</button>
-      <p class="note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span>密码只用来登录你自己的管理台、在这台电脑上解开备份，<b>不会发给 AI，也不会发给 MooX 开发者</b>。恢复后的配置会加密保存在这台电脑上（解密密钥存放在<span id="key-store">系统钥匙串</span>）。</span></p>
+      <p class="note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span>密码只用来登录你自己的管理台、在这台电脑上解开备份，<b>不会发给 AI，也不会发给 MooX 开发者</b>。恢复后的两份配置保存在这台电脑上，密码和密钥加密保存（解密密钥存放在<span id="key-store">系统钥匙串</span>）。</span></p>
     </div>
   </section>
   <section class="done" id="done-page" hidden>
     <div class="mark">✓</div>
     <h1>配置已恢复</h1>
-    <p class="lede">配置已加密保存在这台电脑上。可以关闭这个页面，回到 Agent 继续。</p>
+    <p class="lede">配置已保存在这台电脑上（密码和密钥加密保存）。可以关闭这个页面，回到 Agent 继续。</p>
   </section>
 </main>
 

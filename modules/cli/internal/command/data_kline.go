@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/seriesset"
@@ -34,12 +34,11 @@ func defaultDataKlineDeps() dataKlineDeps {
 	return dataKlineDeps{
 		loadConfig: loadDataAccessConfig,
 		newReader: func(ctx context.Context, file string, _ dataAccessConfig, _ string) (timeSeriesReader, io.Closer, error) {
-			snapshot, err := setupconfig.Load(file, filepath.Dir(file))
+			cfg, err := topology.Load(file)
 			if err != nil {
 				return nil, nil, err
 			}
-			defer clearSetupSecrets(snapshot)
-			gateway, err := gatewayio.Open(ctx, snapshot)
+			gateway, err := gatewayio.Open(ctx, cfg)
 			if err != nil {
 				return nil, nil, err
 			}

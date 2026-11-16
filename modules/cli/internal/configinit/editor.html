@@ -142,18 +142,18 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
       <p class="lede">这是 MooX 正在使用的配置。密码和密钥默认隐藏，点「显示」才会出现在这个页面上。</p>
       <div class="status" id="status"></div>
       <div class="block"><h2>服务器</h2>
-        <table id="servers"><thead><tr><th>用途</th><th>IP 地址</th><th>地域</th><th>SSH 登录</th><th>SSH 密码</th></tr></thead><tbody></tbody></table>
+        <table id="servers"><thead><tr><th>用途</th><th>IP 地址</th><th>地域</th><th>SSH 登录</th></tr></thead><tbody></tbody></table>
       </div>
       <div class="block"><h2>账号与通知</h2><table class="kv" id="accounts"></table></div>
       <div class="block" id="xkeys-block" hidden><h2>交易所密钥</h2>
         <table id="xkeys"><thead><tr><th>名称</th><th>交易所 · 环境</th><th>固定 ID</th><th>API Key</th><th>Secret Key</th><th>Passphrase</th></tr></thead><tbody></tbody></table>
-        <p class="desc">写进密钥管理（apply）之后以管理台为准：这里改了不会覆盖已有的密钥，要换密钥请到管理台「设置 › 秘钥管理」。部署完成后在海外机上检测：<span class="mono">moox-cli trade inspect-credential</span>。</p>
+        <p class="desc">写进密钥管理（setup init）之后以管理台为准：这里改了不会覆盖已有的密钥，要换密钥请到管理台「设置 › 秘钥管理」。部署完成后在海外机上检测：<span class="mono">moox-cli trade inspect-credential</span>。</p>
       </div>
     </section>
 
     <section id="page-edit" hidden>
       <h1>修改配置</h1>
-      <p class="lede">修改常用设置。保存前会完整校验，有错误不会保存；保存后重新加密写回，并同步备份到你的管理后台。</p>
+      <p class="lede">修改常用设置。保存前会完整校验，有错误不会保存；保存后写回两份文件（秘密文件重新加密），并同步备份到你的管理后台。</p>
       <div id="form"></div>
       <div class="row">
         <button type="button" class="primary" id="save">保存修改</button>
@@ -211,7 +211,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
   // 本机保存成功后，再说明有没有同步到管理后台的备份。
   function showSaved(sync) {
     var failed = sync && sync.indexOf('暂时没能') >= 0;
-    var text = '已校验并加密保存在这台电脑上。' + (sync && !failed ? sync : '');
+    var text = '已校验并保存在这台电脑上。' + (sync && !failed ? sync : '');
     showAlert(text, 'ok');
     if (failed) showAlert(sync, 'warn');
     // 保存成功用弹窗明确告诉用户（顶部提示条在页面滚动到下面时容易看不到）。
@@ -244,7 +244,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     var status = $('status');
     if (view.encrypted) {
       status.className = 'status ok';
-      status.replaceChildren(icon(LOCK), el('span', { text: '已加密保存在这台电脑上，解密用的密钥存放在' + view.key_store + '。' }));
+      status.replaceChildren(icon(LOCK), el('span', { text: '秘密文件已加密保存在这台电脑上，解密用的密钥存放在' + view.key_store + '。' }));
     } else {
       var encrypt = el('button', { type: 'button', text: '加密保存' });
       encrypt.addEventListener('click', function () {
@@ -252,7 +252,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
         post('config/encrypt').then(function (data) { renderOverview(data.overview); showSaved(data.sync); }, function (err) { showAlert(err.message); encrypt.disabled = false; });
       });
       status.className = 'status warn';
-      status.replaceChildren(icon(WARN), el('span', { text: '这份配置目前是明文保存的。加密后，密钥会存放在' + view.key_store + '，文件被拷走也无法读取。' }), encrypt);
+      status.replaceChildren(icon(WARN), el('span', { text: '秘密文件目前是明文保存的。加密后，密钥会存放在' + view.key_store + '，文件被拷走也无法读取。' }), encrypt);
     }
     var body = $('servers').tBodies[0];
     body.replaceChildren();
@@ -262,8 +262,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
         el('td', {}, [uses]),
         el('td', { class: 'mono', text: server.address }),
         el('td', { class: server.region ? '' : 'muted', text: server.region || '—' }),
-        el('td', { class: 'mono', text: server.ssh_user + (server.ssh_port && server.ssh_port !== 22 ? ' · 端口 ' + server.ssh_port : '') }),
-        el('td', {}, [server.has_password ? secret('hosts.' + server.id + '.password') : el('span', { class: 'muted', text: '用密钥登录' })])
+        el('td', { class: 'mono', text: server.ssh_user + (server.ssh_port && server.ssh_port !== 22 ? ' · 端口 ' + server.ssh_port : '') })
       ]));
     });
     var rows = [
@@ -294,8 +293,8 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     $('xkeys-block').hidden = !(view.exchange_keys || []).length;
     var privacy = $('privacy');
     privacy.replaceChildren(icon(LOCK), el('span', {}, view.encrypted
-      ? ['配置加密保存在这台电脑上，密钥存放在' + view.key_store + '，', el('b', { text: '不会发给 AI，也不会发给 MooX 开发者' }), '。保存时会用管理员密码加密备份到你自己的管理后台，换电脑时可以恢复。']
-      : ['配置保存在这台电脑上，', el('b', { text: '不会发给 AI，也不会发给 MooX 开发者' }), '。建议加密保存。']));
+      ? ['配置保存在这台电脑上，秘密文件加密保存，密钥存放在' + view.key_store + '，', el('b', { text: '不会发给 AI，也不会发给 MooX 开发者' }), '。保存时会用管理员密码加密备份到你自己的管理后台，换电脑时可以恢复。']
+      : ['配置保存在这台电脑上，', el('b', { text: '不会发给 AI，也不会发给 MooX 开发者' }), '。建议把秘密文件加密保存。']));
   }
 
   function show(page) {
@@ -421,18 +420,17 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     (form.exchange_keys || []).forEach(xkeyRow);
     xempty.hidden = ctl.xkeys.length > 0;
     xadd.addEventListener('click', function () { xkeyRow({}).name.focus(); state.dirty = true; });
-    root.append(block('交易所密钥', '写进密钥管理（setup apply）之后以管理台为准：这里改了不会覆盖已有的密钥，只在新增、或管理台里没有这把密钥时才会写入；删掉这里的条目也不会删除管理台里的密钥。部署完成后在海外机上检测密钥。',
+    root.append(block('交易所密钥', '写进密钥管理（setup init）之后以管理台为准：这里改了不会覆盖已有的密钥，只在新增、或管理台里没有这把密钥时才会写入；删掉这里的条目也不会删除管理台里的密钥。部署完成后在海外机上检测密钥。',
       el('div', {}, [xkeys, xempty, el('div', { class: 'row' }, [xadd])])));
 
     var hosts = el('div');
     form.hosts.forEach(function (host) {
       var user = input({}, host.ssh_user), port = input({ type: 'number', min: '1', max: '65535' }, host.ssh_port || 22);
-      var pass = secretInput(host.ssh_password);
-      ctl.hosts.push({ id: host.id, user: user, port: port, pass: pass.input });
+      ctl.hosts.push({ id: host.id, user: user, port: port });
       var head = el('div', { class: 'host-head' }, [el('b', { text: (host.uses && host.uses.length ? host.uses.join('、') : '服务器') }), host.address + (host.region ? ' · ' + host.region : '')]);
-      hosts.append(el('div', { class: 'host' }, [head, el('div', { class: 'fields' }, [field('SSH 用户名', user), field('端口', port), field('SSH 密码', pass.node, '用密钥登录时留空')])]));
+      hosts.append(el('div', { class: 'host' }, [head, el('div', { class: 'fields' }, [field('SSH 用户名', user), field('端口', port)])]));
     });
-    root.append(block('服务器登录', 'IP 和用途不能在这里改（需要重新部署）；可以修改 SSH 登录方式。', hosts));
+    root.append(block('服务器登录', 'IP 和用途不能在这里改（需要重新部署）；可以修改 SSH 用户名和端口，登录用这台电脑上的 MooX 密钥。', hosts));
 
     var r = form.retention;
     ctl.viewBars = input({ type: 'number', min: '1' }, r.view_rows_per_series);
@@ -468,11 +466,6 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     });
     root.append(block('数据保留', '原始数据按频率保留的时长：小时写 h、天写 d，例如 48h、7d，永久保留写 forever。市场一栏留空表示跟随默认。缩短保留期会删除数据。',
       el('div', {}, [el('div', { class: 'fields two' }, [field('每个序列保留的 K 线根数', ctl.viewBars, '给策略和管理台查询用的最近数据'), field('单个 View 文件上限（字节）', ctl.viewFileBytes, '超过后 View 会整理，推荐 4294967296（4 GiB）')]), el('p', {}, [restore]), el('div', { class: 'scroll' }, [table])])));
-
-    ctl.logSize = input({ type: 'number', min: '1' }, form.logs.max_size_mb);
-    ctl.logCount = input({ type: 'number', min: '0' }, form.logs.backup_count);
-    root.append(block('本地日志', '各服务器上日志文件的大小上限，超过后保留尾部并截断。',
-      el('div', { class: 'fields two' }, [field('单个日志上限（MB）', ctl.logSize), field('保留份数', ctl.logCount)])));
   }
   function loadForm() {
     post('config/form').then(function (data) { renderForm(data.form); }, function (err) { showAlert(err.message); });
@@ -493,7 +486,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
       exchange_keys: ctl.xkeys.map(function (k) {
         return { name: k.name.value.trim(), exchange: k.exchange.value, environment: k.environment.value, api_key: k.apiKey.value.trim(), secret_key: k.secretKey.value, passphrase: k.exchange.value === 'okx' ? k.passphrase.value : '', readonly: k.readonly.checked };
       }),
-      hosts: ctl.hosts.map(function (h) { return { id: h.id, ssh_user: h.user.value.trim(), ssh_port: num(h.port), ssh_password: h.pass.value }; }),
+      hosts: ctl.hosts.map(function (h) { return { id: h.id, ssh_user: h.user.value.trim(), ssh_port: num(h.port) }; }),
       retention: {
         view_rows_per_series: num(ctl.viewBars), max_view_file_bytes: num(ctl.viewFileBytes), defaults: defaults,
         spaces: ctl.spaces.map(function (sp) {
@@ -501,8 +494,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
           Object.keys(sp.cells).forEach(function (freq) { values[freq] = sp.cells[freq].value.trim(); });
           return { id: sp.id, values: values };
         })
-      },
-      logs: { max_size_mb: num(ctl.logSize), backup_count: num(ctl.logCount) }
+      }
     };
   }
 

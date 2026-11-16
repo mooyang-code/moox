@@ -38,7 +38,7 @@ func newSetupRemoveHostCommand(deps setupDeps) *cobra.Command {
 			if _, configured := snapshot.Manifest.HostCatalog[host]; configured {
 				return fmt.Errorf("主机 %s 还在 moox.toml 里；先把它从 moox.toml 去掉或改名，再删除 Admin 里的登记", host)
 			}
-			gateway, err := openCommandGateway(cmd.Context(), file, snapshot)
+			gateway, err := openCommandGateway(cmd.Context(), file, snapshot.Config())
 			if err != nil {
 				return err
 			}

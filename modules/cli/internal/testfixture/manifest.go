@@ -1,21 +1,20 @@
 package testfixture
 
-import setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+import "github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
-// SetHost installs a runtime SSH fixture using the canonical manifest model.
-func SetHost(manifest *setupconfig.Manifest, host setupconfig.Host, components ...string) {
-	if manifest.HostCatalog == nil {
-		manifest.HostCatalog = make(map[string]setupconfig.HostDefinition)
+// SetHost 把一台 SSH 夹具主机写进配置，可选地给它部署组件。
+func SetHost(cfg *topology.Config, host topology.Host, components ...string) {
+	if cfg.HostCatalog == nil {
+		cfg.HostCatalog = make(map[string]topology.HostDefinition)
 	}
-	manifest.HostCatalog[host.Name] = setupconfig.HostDefinition{
-		Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region,
-		Provider: host.Provider,
-		SSH:      setupconfig.SSHConfig{Port: host.Port, Username: host.Username, Password: host.Password},
+	cfg.HostCatalog[host.Name] = topology.HostDefinition{
+		Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Provider: host.Provider,
+		SSH: topology.SSHConfig{Port: host.Port, Username: host.Username, PrivateKeyFile: host.PrivateKeyFile},
 	}
 	if components != nil {
-		if manifest.Deployments == nil {
-			manifest.Deployments = make(map[string][]string)
+		if cfg.Deployments == nil {
+			cfg.Deployments = make(map[string][]string)
 		}
-		manifest.Deployments[host.Name] = components
+		cfg.Deployments[host.Name] = components
 	}
 }

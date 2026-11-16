@@ -5,12 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,7 +54,7 @@ func (g *rpcFakeGateway) Close() error { g.closed = true; return nil }
 func useRPCGateway(t *testing.T, gateway *rpcFakeGateway) {
 	t.Helper()
 	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return gateway, nil }
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return gateway, nil }
 	t.Cleanup(func() { openCommandGateway = previous })
 }
 

@@ -617,7 +617,7 @@ http_domains = ["*.binance.com", "data-api.binance.vision"]
 	require.Equal(t, []string{"*.binance.com", "data-api.binance.vision"}, snapshot.Manifest.EgressProxy.HTTPDomains)
 	cfg := snapshot.Manifest.EgressProxy
 	cfg.HTTPDomains = []string{"https://binance.com"}
-	require.Error(t, validateEgressProxy(&cfg))
+	require.Error(t, cfg.Validate())
 }
 func TestDeploymentsRejectAmbiguousOrInvalidComponents(t *testing.T) {
 	m := Manifest{HostCatalog: map[string]HostDefinition{
@@ -693,7 +693,7 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{"admin missing", strings.Replace(validManifest, `"admin", `, "", 1), "control host must exist"},
 		{"unknown deployment", validManifest + "unknown = [\"trade\"]\n", "deployments host ID"},
 		{"automatic component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "由系统自动部署"},
-		{"retired component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "storage-node"`, 1), "config migrate --yes"},
+		{"retired component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "storage-node"`, 1), "不在服务目录里"},
 		{"unknown field", "unexpected = true\n" + validManifest, "unknown field"},
 		{"retired factor engine section", validManifest + "[factor_engine]\nhost = \"missing\"\n", "[factor_engine] 已取消"},
 		{"duplicate address", validManifest + "[hosts.compute]\naddress = \"192.0.2.10\"\nssh = { username = \"ubuntu\" }\n", "duplicates hosts."},
@@ -858,5 +858,5 @@ func TestRetiredTLSModeSuggestsMigrate(t *testing.T) {
 	root := t.TempDir()
 	body := strings.Replace(validManifest, "[hosts.control]", "[hosts.control]\ntls_mode = \"auto\"", 1)
 	_, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.ErrorContains(t, err, "config migrate")
+	require.ErrorContains(t, err, "已删除")
 }

@@ -126,7 +126,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			if remote := loadHostRemote(file, doctorCfg.NodeID); remote != nil {
 				defer remote.Close()
 				systemd, probe = remote.Systemd(), remote.HealthProbe()
-				deployRoot = remote.manifest.Paths.Resolved().DeployRoot
+				deployRoot = remote.manifest.Paths.DeployRoot
 			}
 			var reportValue core.Report
 			switch mode {

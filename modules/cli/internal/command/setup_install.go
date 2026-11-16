@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -327,7 +326,7 @@ func executeSetupInstallStep(ctx context.Context, deps setupDeps, snapshot *setu
 			return err
 		}
 		defer closeClient()
-		summary, err := runSetupStart(ctx, deps, client, snapshot, filepath.Dir(options.file), deploy.RepositoryRoot, step.Space, setupStartPollDefault)
+		summary, err := runSetupStart(ctx, deps, client, snapshot, deploy.RepositoryRoot, step.Space, setupStartPollDefault)
 		if err != nil {
 			return err
 		}

@@ -107,6 +107,6 @@ func mountCommands(root *cobra.Command) {
 		if err != nil || task == root {
 			panic("命令组 factor task 不存在")
 		}
-		task.AddCommand(newFactorTaskStatusCommand())
+		task.AddCommand(newFactorTaskStatusCommand(), newFactorTaskApplyCommand())
 	})
 }

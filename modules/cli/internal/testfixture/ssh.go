@@ -1,32 +1,47 @@
 package testfixture
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/pem"
 	"errors"
 	"fmt"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	"github.com/stretchr/testify/require"
-	xssh "golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+	xssh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 // Each fixture represents a different SSH host; only the real loopback gateway
 // destination is accepted, then mapped to its test server's ephemeral port.
-func GatewaySSH(t *testing.T, name, backend, knownHostsPath string) setupconfig.Host {
+// 登录只接受夹具自己生成的私钥（写在临时目录、0600），和真实部署一样是免密的密钥登录。
+func GatewaySSH(t *testing.T, name, backend, knownHostsPath string) topology.Host {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	signer, err := xssh.NewSignerFromKey(private)
 	require.NoError(t, err)
-	config := &xssh.ServerConfig{PasswordCallback: func(_ xssh.ConnMetadata, password []byte) (*xssh.Permissions, error) {
-		if string(password) != "fixture-password" {
+	_, clientPrivate, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	clientSigner, err := xssh.NewSignerFromKey(clientPrivate)
+	require.NoError(t, err)
+	block, err := xssh.MarshalPrivateKey(clientPrivate, "")
+	require.NoError(t, err)
+	keyFile := filepath.Join(t.TempDir(), "id_fixture")
+	require.NoError(t, os.WriteFile(keyFile, pem.EncodeToMemory(block), 0o600))
+	allowed := clientSigner.PublicKey().Marshal()
+	config := &xssh.ServerConfig{PublicKeyCallback: func(_ xssh.ConnMetadata, key xssh.PublicKey) (*xssh.Permissions, error) {
+		if !bytes.Equal(key.Marshal(), allowed) {
 			return nil, errors.New("denied")
 		}
 		return nil, nil
@@ -105,5 +120,5 @@ func GatewaySSH(t *testing.T, name, backend, knownHostsPath string) setupconfig.
 	require.NoError(t, err)
 	number, err := strconv.Atoi(port)
 	require.NoError(t, err)
-	return setupconfig.Host{Name: name, Address: host, Port: number, Username: "fixture", Password: "fixture-password"}
+	return topology.Host{Name: name, Address: host, Port: number, Username: "fixture", PrivateKeyFile: keyFile}
 }

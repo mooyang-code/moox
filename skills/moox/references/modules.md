@@ -94,7 +94,7 @@
 - **在哪**：因子管理（factor-mgr）在管理台机；因子引擎在因子机（systemd 用户服务），另在本机 `11423` 上提供 EngineControl 服务，只给策略回放的“因子现算”调用（经因子机主机网关的反向中转，不需要另开端口）。
 - **常用**：写因子与转换 Python 因子按 [`factor-dsl.md`](factor-dsl.md)；
   - 定义与分类：`factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign`；
-  - 任务与成员：`factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`；批量配置写进 `moox.toml` 的 `[factors]` 后 `./bin/moox-cli setup factors`；
+  - 任务与成员：`factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`；批量配置写成因子任务文件后 `./bin/moox-cli factor task apply --file <文件>`；
   - 补算与状态：`factor recalc submit|list|show|cancel`（左闭右开）、`factor status`；
   - 任务能不能计算：`./bin/moox-cli factor task status [--task-id <任务>]`，列出引擎计算前的逐项检查与处理办法；任务不需要生命周期命令，检查通过就自动计算；
   - 模块级生命周期：`./bin/moox-cli lifecycle status|pause|resume|release|catchup`，默认连因子引擎，`--module` 换模块；`resume --manual-release` 追平后停在待放行，等 `release`；
@@ -143,7 +143,7 @@
 - **做什么**：组件健康、数据新鲜度、主机资源、告警推送（企业微信、飞书、钉钉、通用 Webhook）。管理台首页的“需要处理”来自这里。
 - **常用**：`./bin/moox-cli doctor alerts`（[`monitor-attention.md`](monitor-attention.md)）、`doctor bootstrap`、`doctor diagnose`；
   `monitor health|arrival|hosts|host-metrics` 看总览、数据到达历史与主机资源曲线；`monitor mute|unmute|mute-status` 临时屏蔽推送；
-  告警渠道以 `moox.toml` 为准，`config notification` 同步。
+  告警渠道以管理台「监控 › 告警渠道」为准；初始渠道由 `setup init` 在 Monitor 还没有渠道时从 `moox.secrets.toml` 写入一次。
 
 ## 网关与接入
 
@@ -160,7 +160,7 @@
 - 升级已安装的单元：[`native-release.md`](native-release.md)；主机代理：[`host-agent.md`](host-agent.md)。
 - 腾讯云：`setup firewall`（按拓扑放行所需端口）、`ops tencent lighthouse firewall add|open`（单独加规则；`open` 用控制面登记的云账户凭证，凭证不打印）、`setup reboot-host`（重启无响应的主机）、
   `setup attach-scf-vpc`（为函数绑定 VPC 子网）、`setup inspect-scf|invoke-scf`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|prepare|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
-- 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup render-runtime-config` 从 `moox.toml` 渲染 Egress、Collector 运行配置；`setup package inspect <包>` 校验部署包的组件边界、平台与摘要。
+- 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup package inspect <包>` 校验部署包的组件边界、平台与摘要。
 
 ## 归档
 

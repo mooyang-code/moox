@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -63,7 +64,7 @@ func TestSetupWatchdogRemoveOnlyPreviewsWithoutYes(t *testing.T) {
 func TestSetupSyncDeploymentsOnlyPreviewsWithoutYes(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) {
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) {
 		t.Fatal("预览不能连接网关")
 		return nil, nil
 	}

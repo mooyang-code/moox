@@ -3,11 +3,11 @@ package command
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"sync"
 	"testing"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -45,7 +45,7 @@ func (g *lifecycleGateway) add(t *testing.T, name string, hooks lifecycle.Hooks)
 func (g *lifecycleGateway) use(t *testing.T) {
 	t.Helper()
 	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return g, nil }
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return g, nil }
 	t.Cleanup(func() { openCommandGateway = previous })
 	interval := systemPollInterval
 	systemPollInterval = time.Millisecond

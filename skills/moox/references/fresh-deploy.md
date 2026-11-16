@@ -49,11 +49,9 @@ cd <主仓库根> && $WT/bin/moox-cli setup build-linux --module storage --sourc
 
 因子机的 `/data/moox/import` 也会被清除，要留下先挪走：`mkdir -p ~/moox-import-keep && mv /data/moox/import/* ~/moox-import-keep/`。
 
-先用新的 `moox-cli` 迁移旧配置，再清理：旧 `moox.toml` 里还有 `[egress_proxy.dns]` 等已删除的段时，`setup wipe` 第一步就会拒绝配置（`config_invalid`）。
+旧 `moox.toml` 里还有已删除的段时，`setup wipe` 第一步就会拒绝配置（`config_invalid`），报错写明是哪一段，先删掉它再清理。
 
 ```bash
-$CLI config migrate                                                  # 预览要删改的段
-$CLI config migrate --yes                                            # 写回
 $CLI setup wipe --file ./moox.toml                                   # 预览：主机、目录、不认识的条目、digest
 $CLI setup wipe --file ./moox.toml --yes --expect <预览里的 plan.digest>
 $CLI setup validate --file ./moox.toml                               # deployment.route 应为 fresh
@@ -61,11 +59,11 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 中途失败后再运行一次会接着清。CLI 不清理云函数：重装后 Collector 按函数名接管同名函数，计划外的旧函数被停掉定时器、等人工删除，见第 6 节“全新部署后的验收”第 4 步。
 
-从批 1（Storage 合并与 View 跟随变更日志）之前的版本重装时，**先**运行 `moox-cli config migrate --yes` 删掉 `[deployments]` 里的 `storage-node`（留着它 `setup wipe` 也会拒绝配置），**再** `setup wipe`；然后按 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 1 全新部署注意”核对其余项（两段 `mooxsys` 保留期可删）和归档 worker 配置；因子机本地库被清空后要重新做初始数据导入。
+从批 1（Storage 合并与 View 跟随变更日志）之前的版本重装时，**先**删掉 `[deployments]` 里的 `storage-node`（留着它 `setup wipe` 也会拒绝配置），**再** `setup wipe`；然后按 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 1 全新部署注意”核对其余项（两段 `mooxsys` 保留期可删）和归档 worker 配置；因子机本地库被清空后要重新做初始数据导入。
 
-从批 4 三进程合一之前的版本重装时同样**先** `config migrate --yes`：它删掉 `[deployments] control` 里的 `console-proxy`、`web-host`（已并入 admin），留着它们所有命令都会拒绝配置。
+从批 4 三进程合一之前的版本重装时同样**先**删掉 `[deployments] control` 里的 `console-proxy`、`web-host`（已并入 admin），留着它们所有命令都会拒绝配置。
 
-从批 2（采集改造）之前的版本重装时同样**先** `config migrate --yes`：它删掉 `[deployments]` 里的 `cloudfunction`（以及更早的 `cloudnode`）和 `[[scf_plan.spaces]]` 下的 `default_ingest`、`default_executor`，留着它们所有命令都会拒绝配置；其余项见 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 2 全新部署注意”。
+从批 2（采集改造）之前的版本重装时同样**先**删掉 `[deployments]` 里的 `cloudfunction`（以及更早的 `cloudnode`）和 `[[scf_plan.spaces]]` 下的 `default_ingest`、`default_executor`，留着它们所有命令都会拒绝配置；其余项见 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“批 2 全新部署注意”。
 
 ### 本机状态
 
@@ -88,7 +86,7 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 | 7 | `$CLI setup bootstrap --stage control` | 控制机其余组件；管理台 9527 由 Admin 自己监听（第 1 步起就有），证书用 MooX CA 签；失败的发布目录由下一次尝试自动清理 |
 | 8 | `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 云账户、日志服务和默认因子任务；业务空间和元数据第 5 步已写入，这里只核对 |
 | 9 | `$CLI setup deploy-unit --host overseas --profile collector-stream`，再 `--profile trade` | 必须在 control 就绪之后：collector-stream 启动后向 Collector 发心跳。`[deployments]` 里登记了 `callback-dispatcher`（事件中心）的主机，再 `--profile callback-dispatcher`（也在 trade 之后；它连 EventBus，不依赖 control） |
-| 9b | `$CLI trade inspect-credential --exchange EXCHANGE_BINANCE --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-main` | 仅当 `moox.toml` 里有 `[[exchange_keys]]`，且在 `trade` 部署之后：`setup apply` 排在 Trade 部署之前，它当时只写入密钥、不检测。**逐把检测 `readonly = true` 以外的密钥**（固定 ID 是 `exchange-<交易所>-<环境>-<名称>`，OKX 用 `EXCHANGE_OKX`，测试网用 `ACCOUNT_ENVIRONMENT_TESTNET`），在海外机上经 Trade 检测，不向交易所下单；看 `blockers` 有无阻断项。输出里 `检测没有完成` 只是交易所接口暂时不可用，稍后重试，不代表密钥有问题 |
+| 9b | `$CLI trade inspect-credential --exchange EXCHANGE_BINANCE --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-main` | 仅当 `moox.toml` 里有 `[[exchange_keys]]`，且在 `trade` 部署之后：`setup init` 排在 Trade 部署之前，它只写入密钥、不检测。**逐把检测 `readonly = true` 以外的密钥**（固定 ID 是 `exchange-<交易所>-<环境>-<名称>`，OKX 用 `EXCHANGE_OKX`，测试网用 `ACCOUNT_ENVIRONMENT_TESTNET`），在海外机上经 Trade 检测，不向交易所下单；看 `blockers` 有无阻断项。输出里 `检测没有完成` 只是交易所接口暂时不可用，稍后重试，不代表密钥有问题 |
 | 10 | `$CLI setup sync-deployments --host factor --yes`，再 `deploy-unit --host factor --profile factor-engine`，再 `--profile archive-worker` | 因子机外部程序，systemd 用户服务；引擎安装时自动按本机内存校准窗口与内存预算（`tune --write`） |
 
 ### 信任 MooX CA（用户自己做）
@@ -103,8 +101,8 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 ### 步骤 8 的已知限制
 
-`setup start` 会逐项导入 `moox.toml` 里这个空间的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认有三个因子任务：crypto 的 `ftask_spot_1m`、`ftask_swap_1m` 与 A 股的 `ftask_cn_5m`（源数据集都由 Collector 的默认采集任务创建）；`config init` 在没有因子机时关闭 `factors.enabled`；有因子机、没有海外机时保留因子，只去掉读 crypto 数据的任务。
-`moox.toml` 里指向自定义数据集的任务（例如手工建的 5m 采集任务的数据集）在全新系统里没有源数据，会让 init 在那里失败；先把它们从导入范围中拿掉，建好对应采集任务后再 `setup factors` 补导入。
+`setup start` 会逐项导入 `config/setup/factor-tasks.yaml` 里这个空间的因子任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认有三个因子任务：crypto 的 `ftask_spot_1m`、`ftask_swap_1m` 与 A 股的 `ftask_cn_5m`（源数据集都由 Collector 的默认采集任务创建）；没有因子机时跳过因子；crypto 要海外机，没有海外机时 `setup start --space-id crypto` 本来就不能运行。
+自己的因子任务文件里指向自定义数据集的任务（例如手工建的 5m 采集任务的数据集）在全新系统里没有源数据；建好对应采集任务后再 `factor task apply --file` 导入。
 
 ## 5. 默认初始化的范围
 
@@ -158,7 +156,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 `CLI` 同第 4 节，`STOCKCN_DATASET`、`CRYPTO_1H_DATASET` 与 `<…>` 换成实际的 ID，时间用 RFC3339。写操作照常先预览、给用户确认后再加 `--yes`；
 第 8、9 步要在腾讯云控制台动手，第 21 步会真实下单、只在测试网或模拟盘账户上做，这几步都先问用户。
 
-1. **配置**：`$CLI config migrate --file ./moox.toml` 的预览里没有要删的 `removed_components`、`removed_ingest_defaults`（`[deployments]` 里没有 `cloudfunction`、`cloudnode`，`[[scf_plan.spaces]]` 里没有 `default_ingest`、`default_executor`），`$CLI setup validate --file ./moox.toml` 通过。
+1. **配置**：`[deployments]` 里没有 `cloudfunction`、`cloudnode`，`[[scf_plan.spaces]]` 里没有 `default_ingest`、`default_executor`，`$CLI setup validate --file ./moox.toml` 通过。
 2. **进程与库**：`$CLI setup status --file ./moox.toml`、`$CLI doctor bootstrap --file ./moox.toml` 的组件清单里没有 `cloudfunction`。控制机上没有 `moox-cloudfunction` 进程，11401、11411 没有监听：
    ```bash
    $CLI host exec --host control -- sh -c 'pgrep -fl moox-cloudfunction; ss -ltn | grep -E ":(11401|11411) "; true'

@@ -14,7 +14,7 @@ const (
 var handWrittenCoverage = map[string]string{
 	"trpc.moox.admin.ActivityLog/ListActivityLogs": "activity list",
 
-	"trpc.moox.admin.Setup/ApplySetup":      "setup apply",
+	"trpc.moox.admin.Setup/ApplySetup":      "setup init",
 	"trpc.moox.admin.Setup/GetSetupStatus":  "setup status",
 	"trpc.moox.admin.Setup/PutConfigBackup": "config backup",
 	"trpc.moox.admin.Setup/GetConfigBackup": "config restore",
@@ -65,11 +65,10 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.factor.FactorMgr/GetUdf":      "udf show",
 	"trpc.moox.factor.FactorMgr/ActivateUdf": "udf activate",
 
-	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels":  "config notification",
-	"trpc.moox.monitor.MonitorMgr/AddNotificationChannel":    "config notification",
-	"trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel": "config notification",
-	"trpc.moox.monitor.MonitorMgr/GetAlertMute":              "monitor mute-status",
-	"trpc.moox.monitor.MonitorMgr/GetDoctorContext":          "doctor diagnose",
+	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels": "setup init",
+	"trpc.moox.monitor.MonitorMgr/AddNotificationChannel":   "setup init",
+	"trpc.moox.monitor.MonitorMgr/GetAlertMute":             "monitor mute-status",
+	"trpc.moox.monitor.MonitorMgr/GetDoctorContext":         "doctor diagnose",
 
 	// 模块生命周期（设计 3.7）：管理台只读；暂停、恢复、放行只给命令行（见 cliOnlyCoverage）。
 	"trpc.moox.collector.CollectMgr/GetLifecycle":      "lifecycle status",
@@ -119,6 +118,8 @@ var consoleOnly = map[string]string{
 	"trpc.moox.ops.Ssh/SftpDelete":        sshReason,
 
 	"trpc.moox.callbackdispatcher.CallbackDispatcherService/CreateEventRule": "返回验证密钥明文，请在管理台「事件中心」的“订阅”页签新建，密钥只在那里显示一次，不经过 Agent",
+
+	"trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel": "告警渠道的增删改在管理台「监控 › 告警渠道」做；初始渠道由 setup init 在 Monitor 还没有渠道时写入一次",
 
 	"trpc.moox.ops.SecretMgr/CreateSecret":       secretWriteReason,
 	"trpc.moox.ops.SecretMgr/UpdateSecret":       secretWriteReason,

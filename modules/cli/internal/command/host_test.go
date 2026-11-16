@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"io"
 	"io/fs"
 	"net"
@@ -11,7 +12,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,11 +62,11 @@ func (h *hostFakeSSH) Close() error { h.closed = true; return nil }
 
 func useHostFake(t *testing.T, fake *hostFakeSSH) *hostRemote {
 	t.Helper()
-	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{
-		"storage": {Address: "198.51.100.20", SSH: setupconfig.SSHConfig{Port: 22, Username: "ubuntu"}},
+	manifest := &topology.Config{Paths: topology.Paths{DeployRoot: topology.DefaultDeployRoot}, HostCatalog: map[string]topology.HostDefinition{
+		"storage": {Address: "198.51.100.20", SSH: topology.SSHConfig{Port: 22, Username: "ubuntu"}},
 	}}
 	remote := newHostRemote(manifest, "")
-	remote.dial = func(context.Context, setupconfig.Host) (setupssh.Client, error) { return fake, nil }
+	remote.dial = func(context.Context, topology.Host) (setupssh.Client, error) { return fake, nil }
 	previous := openHostRemoteForCommand
 	openHostRemoteForCommand = func(string) (*hostRemote, error) { return remote, nil }
 	t.Cleanup(func() { openHostRemoteForCommand = previous })

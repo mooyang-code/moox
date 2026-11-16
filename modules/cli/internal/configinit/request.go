@@ -8,12 +8,12 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-// Request 是录入页提交的内容。其中的密码和密钥只用来渲染 moox.toml，不写日志、不回显、不出现在错误信息里。
+// Request 是录入页提交的内容。其中的密码和密钥只用来渲染 moox.secrets.toml，不写日志、不回显、不出现在错误信息里。
 type Request struct {
 	Admin struct {
 		Username string `json:"username"`
@@ -95,7 +95,7 @@ func (env Environment) requireLogin(ctx context.Context, title string, target SS
 
 const maxFieldBytes = 512
 
-// normalize 检查填写内容，并借助 env 把服务器换算成主机与组件部署；格式与拓扑的语义校验交给 config.Parse。
+// normalize 检查填写内容，并借助 env 把服务器换算成主机与组件部署；格式与拓扑的语义校验交给 topology.Parse。
 // 秘密字段原样保留（密码里的空格是有意义的），只拒绝控制字符与超长。
 func (r *Request) normalize(ctx context.Context, env Environment) error {
 	r.Admin.Username = strings.TrimSpace(r.Admin.Username)
@@ -117,7 +117,7 @@ func (r *Request) normalize(ctx context.Context, env Environment) error {
 		}
 	}
 	if r.Logging.RetentionDays == 0 {
-		r.Logging.RetentionDays = setupconfig.DefaultLogRetentionDays
+		r.Logging.RetentionDays = topology.DefaultLogRetentionDays
 	}
 	if r.Logging.RetentionDays < 1 || r.Logging.RetentionDays > 3600 {
 		return errors.New("日志保留天数要在 1 到 3600 之间")

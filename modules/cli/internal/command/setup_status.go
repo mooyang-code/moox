@@ -253,7 +253,7 @@ func changeDeploymentStatus(ctx context.Context, env statusEnv, hostID, componen
 
 // defaultStatusEnv 用操作员网关与已核验的 SSH 装配启停环境；返回的 close 释放网关。
 func defaultStatusEnv(ctx context.Context, file string, snapshot *setupconfig.Snapshot) (statusEnv, func(), error) {
-	gateway, err := openCommandGateway(ctx, file, snapshot)
+	gateway, err := openCommandGateway(ctx, file, snapshot.Config())
 	if err != nil {
 		return statusEnv{}, nil, err
 	}

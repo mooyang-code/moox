@@ -2,7 +2,9 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
@@ -55,9 +58,16 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	target := startAdminGateway(t, &adminRPCWire{})
 	home, manifest := writeKlineOperator(t, target)
 	t.Setenv("HOME", home)
-	snapshot, err := setupconfig.Load(manifest, filepath.Dir(manifest))
+	cfg, err := topology.Load(manifest)
 	require.NoError(t, err)
-	gateway, err := gatewayio.Open(t.Context(), snapshot)
+	// setup 下的客户端还读旧格式的 moox.toml（T12 改到新配置包）：另写一份旧格式的，主机与新格式的一致。
+	legacy := t.TempDir()
+	host := cfg.ControlHost()
+	legacyRaw := fmt.Sprintf("[admin]\nusername='admin'\npassword='admin-test'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-test'\n[eventbus]\nport=4222\ntls_enabled=true\n[hosts.%s]\naddress='127.0.0.1'\n[hosts.%s.ssh]\nport=%d\nusername='%s'\nprivate_key_file='%s'\n[deployments]\n%s=['admin','eventbus']\n", host.Name, host.Name, host.Port, host.Username, host.PrivateKeyFile, host.Name)
+	require.NoError(t, os.WriteFile(filepath.Join(legacy, "moox.toml"), []byte(legacyRaw), 0o600))
+	snapshot, err := setupconfig.Load(filepath.Join(legacy, "moox.toml"), legacy)
+	require.NoError(t, err)
+	gateway, err := gatewayio.Open(t.Context(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
 	client := &adminclient.Client{Gateway: gateway, SpaceID: "crypto"}

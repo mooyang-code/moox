@@ -1,13 +1,13 @@
 # 系统初始化配置
 
-这个目录是发布包和 `moox-cli setup init --config-dir` 使用的版本化初始化种子，包含三个固定种子文件；
-因子由用户配置文件 `moox.toml` 的 `[factors]` 配置控制：
+这个目录是发布包和 `moox-cli setup init --config-dir` 使用的版本化初始化种子，包含四个固定种子文件：
 
 | 文件 | 消费方 | 内容 |
 | --- | --- | --- |
 | `metadata.yaml` | `moox-cli setup init` | Admin 业务 Space 与 Storage 元数据 |
 | `dataset-health-policy.yaml` | Monitor | 实时 Dataset 健康阈值 |
 | `collection-tasks.yaml` | Collector | 默认采集任务 |
+| `factor-tasks.yaml` | `moox-cli setup start` | 默认因子定义与因子任务 |
 
 `metadata.yaml` 的 Space 包含 `stockcn`、`stockhk`、`stockus` 和 `crypto`，都是业务空间；主机快照存在 Monitor 自己的库里，Storage 没有系统空间。
 
@@ -35,11 +35,11 @@ moox-cli setup init \
 启用 SCF 时，每个采集地域都要有一台同地域、带私网地址的 Access 主机；函数在该地域 VPC 里经
 Access 私网地址认领和写入，规则见 `skills/moox/references/private-network.md`。
 
-因子配置示例位于仓库根目录的 `moox.toml.example`：`[[factors.tasks]]` 声明因子任务（`id`、`name`、`space_id`、`source_dataset_id`、`freq`），
-任务的成员用内嵌的 `members` 数组写：`{ factor = "ema", params = { span = 20, warmup = 50000 } }` 是固定成员，`{ factor = "ma_fast", var = true }` 是可变成员（由关联的策略逐期提交参数）；
-`[[factors.definitions]]` 声明因子定义（`factor_id` 加因子库文件）。示例把币安现货、合约 1m 采集任务结果（`dataset_dasftksvjhj2jom4vhd0`、`dataset_dasftksvjhj2jom4vhdg`）
-各接一个因子任务。将示例复制为 `moox.toml` 后，`setup init` 会导入因子定义、创建任务与成员并启用它们；因子库文件路径相对
-`factors.source_dir` 解析。若不需要因子，设置 `factors.enabled = false`。如果 Storage
-已存在且 `setup init` 因元数据契约差异停止，可改用 `moox-cli setup factors --file ./moox.toml`
-单独导入因子。`setup factors` 按任务 ID 查找或创建任务，按推导出的成员键查找或加入成员，逐项报告「已存在 / 新建 / 冲突」并打印每个成员的成员键与列名；
-配置里已经去掉的成员只报告、不自动移除，某一项冲突不影响其余项。
+默认因子任务在 `factor-tasks.yaml`：`tasks` 声明因子任务（`id`、`name`、`space_id`、`source_dataset_id`、`freq`），
+任务的成员用内嵌的 `members` 写：`{factor: ema, params: {span: 20, warmup: 50000}}` 是固定成员，`{factor: ma, var: true}` 是可变成员（由关联的策略逐期提交参数）；
+`definitions` 声明因子定义（`factor_id` 加因子库文件，路径相对 `source_dir`，`source_dir` 相对这个文件所在的目录）。
+`setup start --space-id <空间>` 导入这个空间的任务（定义全部导入），没有因子机时跳过。
+自己的任务写成同样格式的 yaml，用 `moox-cli factor task apply --file <文件>` 导入。两者都只建不改：先只读核对线上已有的分类、定义、任务和成员，
+线上已有且内容不同时逐项列出差异、一项都不写，退出码非 0；内容相同算已存在；线上任务里多出来的成员只报告、不移除。
+核对通过后的写入不是一个事务：写到一半失败（网络断开、成员参数被 FactorMgr 拒绝等）会留下已建好的部分，修好原因后重跑同一条命令，已建的算已存在，接着补齐。
+唯一的例外是中断在“成员已加入、还没按文件启用”之间（新成员先以停用状态加入）：重跑会报这个成员“状态不同”，用 `moox-cli factor member enable` 启用后再重跑。

@@ -3,11 +3,10 @@ package command
 import (
 	"context"
 	"io"
-	"path/filepath"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
@@ -17,18 +16,14 @@ type commandGateway interface {
 	io.Closer
 }
 
-var openCommandGateway = func(ctx context.Context, file string, snapshot *setupconfig.Snapshot) (commandGateway, error) {
-	if snapshot == nil {
-		file = defaultFlag(file, "./moox.toml")
-		absolute, err := filepath.Abs(file)
+// openCommandGateway 经 SSH 隧道连到各主机网关。cfg 为空时读 file 指向的 moox.toml（只读拓扑，不碰秘密文件）。
+var openCommandGateway = func(ctx context.Context, file string, cfg *topology.Config) (commandGateway, error) {
+	if cfg == nil {
+		loaded, err := topology.Load(defaultFlag(file, defaultSetupFile))
 		if err != nil {
 			return nil, err
 		}
-		snapshot, err = setupconfig.Load(absolute, filepath.Dir(absolute))
-		if err != nil {
-			return nil, err
-		}
-		defer clearSetupSecrets(snapshot)
+		cfg = loaded
 	}
 	// Commands own the connection lifetime explicitly. A fenced cleanup may
 	// continue after the operation context is canceled; individual RPCs still
@@ -36,5 +31,5 @@ var openCommandGateway = func(ctx context.Context, file string, snapshot *setupc
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return gatewayio.Open(context.WithoutCancel(ctx), snapshot)
+	return gatewayio.Open(context.WithoutCancel(ctx), cfg)
 }

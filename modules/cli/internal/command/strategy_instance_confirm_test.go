@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
@@ -43,7 +43,7 @@ func (g *confirmGateway) Close() error { return nil }
 func runConfirmCommand(t *testing.T, gateway *confirmGateway, args ...string) string {
 	t.Helper()
 	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return gateway, nil }
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return gateway, nil }
 	t.Cleanup(func() { openCommandGateway = previous })
 	cmd := buildRPCCommand(specByPath(t, "strategy", "instance", "confirm"))
 	var out bytes.Buffer

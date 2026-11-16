@@ -27,7 +27,7 @@ func newSetupSyncDeploymentsCommand(deps setupDeps) *cobra.Command {
 			if !yes {
 				return writePreview(cmd, map[string]any{"action": "sync_deployments", "host": host, "components": snapshot.Manifest.Deployments[host]})
 			}
-			gateway, err := openCommandGateway(cmd.Context(), file, snapshot)
+			gateway, err := openCommandGateway(cmd.Context(), file, snapshot.Config())
 			if err != nil {
 				return err
 			}

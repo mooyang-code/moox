@@ -16,17 +16,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	"github.com/BurntSushi/toml"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/factorname"
-	"github.com/mooyang-code/moox/packages/notification"
-	"github.com/mooyang-code/moox/packages/security/domainpolicy"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
@@ -115,11 +113,6 @@ func (p Paths) Resolved() Paths {
 	return p
 }
 
-type Admin struct {
-	Username string `toml:"username"`
-	Password string `toml:"password"`
-}
-
 type TencentCloud struct {
 	SecretID  string `toml:"secret_id"`
 	SecretKey string `toml:"secret_key"`
@@ -136,92 +129,34 @@ type Observability struct {
 	DeliverPolicy string `toml:"deliver_policy"`
 }
 
+// 与新格式共用的段直接用新包的类型（T11 起渲染函数也在新包里），旧包随旧部署代码在 T13 删除。
+type (
+	EgressProxy           = topology.EgressProxy
+	StorageRetention      = topology.StorageRetention
+	ViewMaxAge            = topology.ViewMaxAge
+	StorageView           = topology.StorageView
+	CollectorRetention    = topology.CollectorRetention
+	ArchiveObjectStore    = topology.ArchiveObjectStore
+	SCFPlan               = topology.SCFPlan
+	SCFPlanRegion         = topology.SCFPlanRegion
+	SCFPlanSpace          = topology.SCFPlanSpace
+	SCFCloudAccountConfig = topology.SCFCloudAccountConfig
+	Admin                 = topology.Admin
+	Notification          = topology.Notification
+	ExchangeKey           = topology.ExchangeKey
+)
+
 // DefaultEgressHTTPDomains 是 moox.toml 没写 [egress_proxy] http_domains 时使用的出口代理 HTTP 白名单。
-func DefaultEgressHTTPDomains() []string {
-	return []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}
-}
+func DefaultEgressHTTPDomains() []string { return topology.DefaultEgressHTTPDomains() }
 
-// EgressProxy separates upstream policy from service deployment.
-type EgressProxy struct {
-	HTTPDomains []string `toml:"http_domains"`
-}
-
-// StorageRetention is the [storage_retention] table: how long each
-// time-series Dataset keeps its rows, by space and frequency, and how many
-// bars a View keeps. An omitted defaults or spaces table takes the
-// recommended values from storagepolicy.Default; a given table is used as is,
-// so defaults must cover every standard frequency.
-type StorageRetention struct {
-	ViewBars uint64                       `toml:"view_rows_per_series" json:"view_rows_per_series"`
-	Defaults map[string]string            `toml:"defaults" json:"defaults"`
-	Spaces   map[string]map[string]string `toml:"spaces" json:"spaces"`
-}
-
-// ViewMaxAge is the [storage_view.max_age] table: how many days of history a
-// View keeps by space and frequency. Rows older than that are not written to
-// the View, whatever brought them in (backfill, import, factor recompute);
-// Datasets are unaffected. An omitted table takes the recommended values from
-// storagepolicy.Default; a given defaults table must cover every standard
-// frequency.
-type ViewMaxAge struct {
-	Defaults map[string]string            `toml:"defaults" json:"defaults"`
-	Spaces   map[string]map[string]string `toml:"spaces" json:"spaces"`
-}
-
-// StorageView is the [storage_view] table: the View maintenance schedule,
-// the View file size limit and the per-frequency maximum age.
-type StorageView struct {
-	MaxAge                   ViewMaxAge `toml:"max_age" json:"max_age"`
-	MaintenanceCheckInterval string     `toml:"maintenance_check_interval" json:"maintenance_check_interval"`
-	MaxViewFileBytes         int64      `toml:"max_view_file_bytes" json:"max_view_file_bytes"`
-}
-
-// StoragePolicy renders storage-policy.json, the file storage-primary and
-// storage-view load at startup.
-// RecommendedSpaceRetention 是各空间推荐的保留期，只用于 moox.toml 缺省与配置页的「恢复推荐值」；
-// Storage 不认识这些空间。交易时段市场同样的根数要保留更多自然天。
+// RecommendedSpaceRetention 是各空间推荐的保留期。
 func RecommendedSpaceRetention() map[string]map[string]string {
-	sessionMarket := func(minute string) map[string]string {
-		return map[string]string{
-			"1m": minute, "5m": "300d", "15m": "900d",
-			"30m": storagepolicy.Forever, "1h": storagepolicy.Forever, "4h": storagepolicy.Forever,
-		}
-	}
-	return map[string]map[string]string{
-		"stockcn": sessionMarket("60d"),
-		"stockhk": sessionMarket("45d"),
-		"stockus": sessionMarket("40d"),
-	}
+	return topology.RecommendedSpaceRetention()
 }
 
+// StoragePolicy 是 storage-policy.json 的内容（storage-primary 与 storage-view 启动时读它）。
 func (m Manifest) StoragePolicy() storagepolicy.Policy {
-	return storagepolicy.Policy{
-		Retention: storagepolicy.Retention{Defaults: m.StorageRetention.Defaults, Spaces: m.StorageRetention.Spaces},
-		View: storagepolicy.View{
-			MaxAge:                   storagepolicy.Retention{Defaults: m.StorageView.MaxAge.Defaults, Spaces: m.StorageView.MaxAge.Spaces},
-			Bars:                     m.StorageRetention.ViewBars,
-			MaintenanceCheckInterval: m.StorageView.MaintenanceCheckInterval,
-			MaxViewFileBytes:         m.StorageView.MaxViewFileBytes,
-		},
-	}
-}
-
-// CollectorRetention describes the Collector maintenance worker and terminal
-// execution-history retention windows rendered into the Collector config.
-type CollectorRetention struct {
-	MaintenanceInterval string `toml:"maintenance_interval" json:"maintenance_interval"`
-	MaintenanceOffset   string `toml:"maintenance_offset" json:"maintenance_offset"`
-	MaintenanceTimeout  string `toml:"maintenance_timeout" json:"maintenance_timeout"`
-	MaxRowsPerPass      int    `toml:"max_rows_per_pass" json:"max_rows_per_pass"`
-}
-
-// RequireNotification 要求 moox.toml 里已配置告警推送地址。
-// 初始化和部署不要求（用户可以稍后在管理台添加渠道），只有把 moox.toml 的渠道同步到 Monitor 的命令需要它。
-func (m Manifest) RequireNotification() error {
-	if strings.TrimSpace(m.Notification.WebhookURL) == "" {
-		return fmt.Errorf("config_invalid: notification.webhook_url is required: moox.toml 的 [notification] 没有配置%s的 webhook 地址；可以先用 config set 填写，或直接在管理台“监控 › 告警渠道”里添加", notification.ChannelLabel(m.Notification.ChannelType))
-	}
-	return nil
+	return topology.StoragePolicyFor(m.StorageRetention, m.StorageView)
 }
 
 // Logging 是 [logging]：服务日志的去向。重要日志（Error 及以上、关键事件）总是发给 Monitor，不需要配置。
@@ -286,77 +221,6 @@ func (c *LoggingCLS) validate() error {
 	return nil
 }
 
-type Notification struct {
-	ChannelType string `toml:"channel_type"`
-	WebhookURL  string `toml:"webhook_url"`
-	// Secret 选填：飞书机器人的签名校验密钥、钉钉机器人的加签密钥，或通用 Webhook 的签名密钥。
-	Secret string `toml:"secret"`
-}
-
-// ExchangeKey 是一条 [[exchange_keys]]：交易所 API 密钥。setup apply 把它写进 SecretMgr（只建不改，见 ID）。
-// 字段名必须是 api_key、secret_key、passphrase：config get 按这些名字自动打码。
-type ExchangeKey struct {
-	// Name 只允许 [a-z0-9-]，是固定 ID 的最后一段。
-	Name string `toml:"name"`
-	// Exchange 是小写交易所名：binance、okx。
-	Exchange string `toml:"exchange"`
-	// Environment 是 production 或 testnet。
-	Environment string `toml:"environment"`
-	APIKey      string `toml:"api_key"`
-	SecretKey   string `toml:"secret_key"`
-	// Passphrase 只有 OKX 用。
-	Passphrase string `toml:"passphrase"`
-	// ReadOnly 为 true 表示只读密钥（例如 Collector 检测币安现货下架用的那把）：不能用来建执行账户，apply 后也不做交易账户检测。
-	ReadOnly bool `toml:"readonly"`
-}
-
-// ID 是密钥在 SecretMgr 里的固定秘钥 ID：exchange-<交易所>-<环境>-<名称>，三段一律小写。
-// Collector 读币安只读 Key 用的 exchange-binance-production-readonly 就是它；规则与 Admin 的 ExchangeSecretID 一致。
-func (k ExchangeKey) ID() string {
-	return strings.ToLower("exchange-" + k.Exchange + "-" + k.Environment + "-" + k.Name)
-}
-
-var exchangeKeyNamePattern = regexp.MustCompile(`^[a-z0-9-]{1,40}$`)
-
-// validateExchangeKeys 规整并校验 [[exchange_keys]]：交易所、环境小写化；名称只允许 [a-z0-9-]（不替用户改大小写）；
-// 固定 ID 不能重复；OKX 必须有 passphrase（Trade 遇到缺 passphrase 的 OKX 密钥会拒绝启动）。
-func validateExchangeKeys(keys []ExchangeKey) error {
-	seen := map[string]int{}
-	for i := range keys {
-		key := &keys[i]
-		key.Name = strings.TrimSpace(key.Name)
-		key.Exchange = strings.ToLower(strings.TrimSpace(key.Exchange))
-		key.Environment = strings.ToLower(strings.TrimSpace(key.Environment))
-		key.APIKey = strings.TrimSpace(key.APIKey)
-		where := fmt.Sprintf("exchange_keys[%d]", i)
-		if !exchangeKeyNamePattern.MatchString(key.Name) {
-			return fmt.Errorf("config_invalid: %s.name 只允许小写字母、数字和连字符（1～40 个字符）", where)
-		}
-		if key.Exchange != "binance" && key.Exchange != "okx" {
-			return fmt.Errorf("config_invalid: %s.exchange 只能是 binance 或 okx", where)
-		}
-		if key.Environment != "production" && key.Environment != "testnet" {
-			return fmt.Errorf("config_invalid: %s.environment 只能是 production 或 testnet", where)
-		}
-		if key.APIKey == "" || key.SecretKey == "" {
-			return fmt.Errorf("config_invalid: %s 的 api_key 与 secret_key 都必须填写", where)
-		}
-		if key.Exchange == "okx" && key.Passphrase == "" {
-			return fmt.Errorf("config_invalid: %s 是 OKX 密钥，必须填写 passphrase", where)
-		}
-		for _, field := range []struct{ name, value string }{{"api_key", key.APIKey}, {"secret_key", key.SecretKey}, {"passphrase", key.Passphrase}} {
-			if len(field.value) > 512 || strings.ContainsAny(field.value, "\x00\r\n") {
-				return fmt.Errorf("config_invalid: %s.%s 含有换行或超过 512 字节", where, field.name)
-			}
-		}
-		if previous, dup := seen[key.ID()]; dup {
-			return fmt.Errorf("config_invalid: %s 与 exchange_keys[%d] 重复：同一交易所、环境下的 name 不能相同（固定 ID 是 %s）", where, previous, key.ID())
-		}
-		seen[key.ID()] = i
-	}
-	return nil
-}
-
 // Host is an execution target projected from one canonical host definition.
 // It is not a TOML input or an independently mutable deployment record.
 type Host struct {
@@ -400,16 +264,7 @@ type HostDefinition struct {
 	SSH          SSHConfig `toml:"ssh"`
 }
 
-type SCFCloudAccountConfig struct {
-	AccountID          string `toml:"account_id"`
-	AccountName        string `toml:"account_name"`
-	CredentialSecretID string `toml:"credential_secret_id"`
-	AppID              string `toml:"app_id"`
-	COSRegion          string `toml:"cos_region"`
-	COSBucket          string `toml:"cos_bucket"`
-}
-
-// FactorSetup 描述由 `moox-cli setup init` 或 `setup factors` 导入的因子：定义来自 YAML 因子库文件（全局），
+// FactorSetup 是旧格式 moox.toml 的 [factors]：新代码不再读它（因子任务改由 config/setup/factor-tasks.yaml 与 factor task apply 导入），只为旧文件还能解析而保留；定义来自 YAML 因子库文件（全局），
 // 因子任务内嵌自己的成员（设计 12）。
 type FactorSetup struct {
 	Enabled     bool                    `toml:"enabled"`
@@ -529,6 +384,10 @@ func Load(path, repositoryRoot string) (*Snapshot, error) {
 		return nil, fmt.Errorf("config_invalid: moox.toml must be in repository root")
 	}
 
+	if _, err := os.Lstat(topology.SecretsPathFor(resolvedPath)); err == nil {
+		// 新格式拆成两份文件，旧包不读：setup 下的旧部署命令只认单份加密的旧 moox.toml。
+		return nil, fmt.Errorf("config_invalid: 同目录有 %s，这是新格式的配置；这条 setup 命令还只认旧格式（单份加密的 moox.toml）", topology.SecretsFileName)
+	}
 	info, raw, err := readSecureFile(resolvedPath)
 	if err != nil {
 		return nil, err
@@ -631,13 +490,13 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		}
 		first := keys[0].String()
 		if len(keys[0]) == 3 && keys[0][0] == "hosts" && keys[0][2] == "tls_mode" {
-			return fmt.Errorf("config_invalid: %s 已删除，管理台只用内部证书；运行 moox-cli config migrate --yes 去掉它", first)
+			return fmt.Errorf("config_invalid: %s 已删除，管理台只用内部证书，删掉它", first)
 		}
 		if len(keys[0]) >= 2 && keys[0][0] == "egress_proxy" && keys[0][1] == "dns" {
-			return fmt.Errorf("config_invalid: [egress_proxy.dns] 已删除，DNS 快照不再使用；运行 moox-cli config migrate --yes 去掉它")
+			return fmt.Errorf("config_invalid: [egress_proxy.dns] 已删除，DNS 快照不再使用，删掉它")
 		}
 		if last := keys[0][len(keys[0])-1]; keys[0][0] == "scf_plan" && (last == "default_ingest" || last == "default_executor") {
-			return fmt.Errorf("config_invalid: %s 已删除：采集方式记在采集任务上，默认值在各市场的 market.yaml，用 moox-cli collector ingest-mode set 切换；运行 moox-cli config migrate --yes 去掉它", first)
+			return fmt.Errorf("config_invalid: %s 已删除：采集方式记在采集任务上，默认值在各市场的 market.yaml，用 moox-cli collector ingest-mode set 切换，删掉它", first)
 		}
 		section := string(keys[0][0])
 		switch section {
@@ -654,9 +513,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		case "compile_host":
 			return fmt.Errorf("config_invalid: [compile_host] is retired; builds run on the local machine (see docs/构建手册.md); remove [compile_host] and any host that was only used for compiling")
 		case "placements":
-			return fmt.Errorf("config_invalid: [placements] 已改名为 [deployments]；运行 moox-cli config migrate 转换")
+			return fmt.Errorf("config_invalid: [placements] 已改名为 [deployments]")
 		case "factor_engine":
-			return fmt.Errorf("config_invalid: [factor_engine] 已取消：因子机是普通主机，请在 [hosts.<主机ID>] 设置 reachability = \"outbound\"，并在 [deployments] 里为它部署 factor-engine 与 archive-worker；运行 moox-cli config migrate 转换")
+			return fmt.Errorf("config_invalid: [factor_engine] 已取消：因子机是普通主机，请在 [hosts.<主机ID>] 设置 reachability = \"outbound\"，并在 [deployments] 里为它部署 factor-engine 与 archive-worker")
 		}
 		return fmt.Errorf("config_invalid: unknown field %s", first)
 	}
@@ -744,15 +603,8 @@ func validate(manifest *Manifest) error {
 	if err := validatePaths(&manifest.Paths); err != nil {
 		return err
 	}
-	manifest.Admin.Username = strings.TrimSpace(manifest.Admin.Username)
-	if manifest.Admin.Username == "" {
-		return fmt.Errorf("config_invalid: admin.username is required")
-	}
-	if manifest.Admin.Password == "" {
-		return fmt.Errorf("config_invalid: admin.password is required")
-	}
-	if len([]byte(manifest.Admin.Password)) > 72 {
-		return fmt.Errorf("config_invalid: admin.password must not exceed 72 bytes")
+	if err := manifest.Admin.Validate(); err != nil {
+		return err
 	}
 	manifest.TencentCloud.SecretID = strings.TrimSpace(manifest.TencentCloud.SecretID)
 	if manifest.TencentCloud.SecretID == "" {
@@ -779,20 +631,10 @@ func validate(manifest *Manifest) error {
 	if err := manifest.Logging.validate(); err != nil {
 		return err
 	}
-	manifest.Notification.ChannelType = strings.TrimSpace(manifest.Notification.ChannelType)
-	if manifest.Notification.ChannelType == "" {
-		manifest.Notification.ChannelType = "wecom"
+	if err := manifest.Notification.Validate(); err != nil {
+		return err
 	}
-	if !notification.ValidChannelType(manifest.Notification.ChannelType) {
-		return fmt.Errorf("config_invalid: notification.channel_type must be wecom, feishu, dingtalk or webhook")
-	}
-	manifest.Notification.WebhookURL = strings.TrimSpace(manifest.Notification.WebhookURL)
-	manifest.Notification.Secret = strings.TrimSpace(manifest.Notification.Secret)
-	channel := notification.ChannelConfig{Type: notification.ChannelType(manifest.Notification.ChannelType), WebhookURL: manifest.Notification.WebhookURL, Secret: manifest.Notification.Secret}
-	if err := channel.Validate(); err != nil {
-		return fmt.Errorf("config_invalid: notification.webhook_url 必须是%s的 HTTPS 地址（通用 Webhook 不限域名）；notification.secret 企业微信不能填: %v", notification.ChannelLabel(manifest.Notification.ChannelType), err)
-	}
-	if err := validateExchangeKeys(manifest.ExchangeKeys); err != nil {
+	if err := topology.ValidateExchangeKeys(manifest.ExchangeKeys); err != nil {
 		return err
 	}
 	if err := validateFactorSetup(&manifest.Factors); err != nil {
@@ -811,7 +653,7 @@ func validate(manifest *Manifest) error {
 	if errs, _ := policy.Coverage(); len(errs) > 0 {
 		return fmt.Errorf("config_invalid: storage policy: %s", strings.Join(errs, "; "))
 	}
-	if err := validateCollectorRetention(&manifest.CollectorRetention); err != nil {
+	if err := manifest.CollectorRetention.Validate(); err != nil {
 		return err
 	}
 	if manifest.LocalLogs.MaxSizeMB < 1 || manifest.LocalLogs.MaxSizeMB > 10240 {
@@ -827,7 +669,7 @@ func validate(manifest *Manifest) error {
 		return err
 	}
 
-	if err := validateEgressProxy(&manifest.EgressProxy); err != nil {
+	if err := manifest.EgressProxy.Validate(); err != nil {
 		return err
 	}
 	if err := validateDeployments(manifest); err != nil {
@@ -887,34 +729,6 @@ func pathContains(parent, child string) bool {
 	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
-func validateCollectorRetention(cfg *CollectorRetention) error {
-	interval, err := time.ParseDuration(strings.TrimSpace(cfg.MaintenanceInterval))
-	if err != nil || interval <= 0 || interval > 24*time.Hour {
-		return fmt.Errorf("config_invalid: collector_retention.maintenance_interval must be greater than 0 and at most 24h")
-	}
-	offset, err := time.ParseDuration(strings.TrimSpace(cfg.MaintenanceOffset))
-	if err != nil || offset < 0 || offset >= interval {
-		return fmt.Errorf("config_invalid: collector_retention.maintenance_offset must be at least 0 and less than maintenance_interval")
-	}
-	timeout, err := time.ParseDuration(strings.TrimSpace(cfg.MaintenanceTimeout))
-	if err != nil || timeout <= 0 || offset+timeout > interval {
-		// Each pass must end before the next interval boundary, where the
-		// Collector market tick owns its single SQLite connection.
-		return fmt.Errorf("config_invalid: collector_retention.maintenance_timeout must be positive and maintenance_offset + maintenance_timeout must not exceed maintenance_interval")
-	}
-	if cfg.MaxRowsPerPass < 1 || cfg.MaxRowsPerPass > 50000 {
-		return fmt.Errorf("config_invalid: collector_retention.max_rows_per_pass must be between 1 and 50000")
-	}
-	return nil
-}
-
-func validateEgressProxy(cfg *EgressProxy) error {
-	if _, err := domainpolicy.New(cfg.HTTPDomains); err != nil {
-		return fmt.Errorf("config_invalid: egress_proxy.http_domains: %w", err)
-	}
-	return nil
-}
-
 // ComponentHost returns the selected host for a single component. Multi-copy
 // components are addressed through the compiled Directory instead.
 func (m Manifest) ComponentHost(component string) string {
@@ -944,7 +758,7 @@ func validateDeployments(m *Manifest) error {
 		for _, id := range m.Deployments[host] {
 			component, ok := catalog.Component(id)
 			if !ok {
-				return fmt.Errorf("config_invalid: [deployments] 主机 %s 的组件 %q 不在服务目录里；已下线或改名的组件运行 moox-cli config migrate --yes 处理", host, id)
+				return fmt.Errorf("config_invalid: [deployments] 主机 %s 的组件 %q 不在服务目录里", host, id)
 			}
 			if component.Scope == servicecatalog.ScopeHost {
 				return fmt.Errorf("config_invalid: [deployments] 主机 %s 的组件 %q 由系统自动部署到每台主机，不要写在 [deployments] 里", host, id)

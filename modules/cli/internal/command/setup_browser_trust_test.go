@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -18,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	"github.com/stretchr/testify/require"
 )
@@ -75,7 +75,7 @@ func TestSetupBrowserTrustWithoutTerminalPrintsManualCommand(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	refresh, terminal := refreshSetupConsoleCA, setupHasTerminal
 	t.Cleanup(func() { refreshSetupConsoleCA, setupHasTerminal = refresh, terminal })
-	refreshSetupConsoleCA = func(context.Context, setupconfig.Manifest) error { return nil }
+	refreshSetupConsoleCA = func(context.Context, *topology.Config) error { return nil }
 	setupHasTerminal = func() bool { return false }
 	snapshot := setupSnapshot(t)
 	err := ensureSetupBrowserCATrust(context.Background(), snapshot)
@@ -88,7 +88,7 @@ func TestEnsureSetupBrowserCATrustRefreshesNativeControlCA(t *testing.T) {
 	original := refreshSetupConsoleCA
 	t.Cleanup(func() { refreshSetupConsoleCA = original })
 	calls := 0
-	refreshSetupConsoleCA = func(context.Context, setupconfig.Manifest) error {
+	refreshSetupConsoleCA = func(context.Context, *topology.Config) error {
 		calls++
 		return errors.New("ssh unavailable")
 	}

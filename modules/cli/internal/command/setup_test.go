@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"net"
 	"os"
 	"path/filepath"
@@ -31,9 +31,6 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
 		},
 		trustHost: func(context.Context, *setupconfig.Snapshot, string, string) error { return nil },
-		apply: func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error) {
-			return setupclient.ApplyResult{Action: "created", Users: 1, Secrets: 1}, nil
-		},
 		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
 			return setupclient.StatusResult{State: "completed", Users: 1, Secrets: 1}, nil
 		},
@@ -49,7 +46,6 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 	}{
 		{name: "validate", args: []string{"validate", "--file", "moox.toml"}, key: "checks"},
 		{name: "trust", args: []string{"trust-host", "--file", "moox.toml", "--host", "control", "--fingerprint", "SHA256:test"}, key: "status"},
-		{name: "apply", args: []string{"apply", "--file", "moox.toml"}, key: "login_api"},
 		{name: "status", args: []string{"status", "--file", "moox.toml"}, key: "state"},
 	}
 	for _, test := range tests {
@@ -70,7 +66,7 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 			require.NotContains(t, combined, "将使用默认配置")
 		})
 	}
-	require.Equal(t, 2, validateCalls, "validate and apply must validate the full manifest")
+	require.Equal(t, 1, validateCalls, "validate must validate the full manifest")
 }
 
 func TestSetupHelpListsWorkflowCommands(t *testing.T) {
@@ -80,10 +76,13 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "build-linux", "apply", "status", "deploy-host", "deploy-unit", "bootstrap", "release", "watchdog", "metadata-import", "export-skill-config", "firewall"} {
+	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "build-linux", "status", "deploy-host", "deploy-unit", "bootstrap", "release", "watchdog", "metadata-import", "export-skill-config", "firewall"} {
 		require.Contains(t, output.String(), name)
 	}
-	require.Contains(t, output.String(), "render-runtime-config")
+	// 已删除的命令：初始秘密由 setup init 写入，因子任务由 setup start 与 factor task apply 导入，运行配置由部署渲染。
+	for _, removed := range []string{"apply ", "factors ", "render-runtime-config"} {
+		require.NotContains(t, output.String(), "  "+removed)
+	}
 }
 
 func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
@@ -99,7 +98,7 @@ func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 	t.Cleanup(func() { refreshSetupConsoleCA, setupHasTerminal = original, terminal })
 	setupHasTerminal = func() bool { return true }
 	refreshed := 0
-	refreshSetupConsoleCA = func(context.Context, setupconfig.Manifest) error {
+	refreshSetupConsoleCA = func(context.Context, *topology.Config) error {
 		refreshed++
 		return nil
 	}
@@ -111,28 +110,6 @@ func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 	require.Equal(t, 1, refreshed)
 	require.FileExists(t, marker)
 	require.Contains(t, output.String(), `"status":"trusted"`)
-}
-
-func TestSetupRenderRuntimeConfigUsesOneSnapshot(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	egressPath := filepath.Join(t.TempDir(), "egress-proxy", "app.yaml")
-	collectorPath := filepath.Join(t.TempDir(), "collector", "app.yaml")
-	require.NoError(t, os.MkdirAll(filepath.Dir(egressPath), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Dir(collectorPath), 0o755))
-	require.NoError(t, os.WriteFile(egressPath, []byte("database:\n  path: ./egress.db\n"), 0o644))
-	require.NoError(t, os.WriteFile(collectorPath, []byte("database:\n  path: ./collector.db\n"), 0o644))
-	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
-	var output bytes.Buffer
-	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"render-runtime-config", "--file", "moox.toml", "--egress-output", egressPath, "--collector-output", collectorPath})
-	require.NoError(t, cmd.Execute())
-	require.JSONEq(t, fmt.Sprintf(`{"status":"rendered","egress_output":%q,"collector_output":%q}`, egressPath, collectorPath), output.String())
-	egressRaw, err := os.ReadFile(egressPath)
-	require.NoError(t, err)
-	require.Contains(t, string(egressRaw), "domains:")
-	collectorRaw, err := os.ReadFile(collectorPath)
-	require.NoError(t, err)
-	require.Contains(t, string(collectorRaw), "egress_proxy:")
 }
 
 func TestSetupHostsListsSanitizedManifestHosts(t *testing.T) {
@@ -376,35 +353,4 @@ compute = []
 	snapshot, err := setupconfig.Load(path, dir)
 	require.NoError(t, err)
 	return snapshot
-}
-
-// 管理员以管理台为准保留（管理台改过密码）时，moox.toml 的密码登不上是正常的：apply 不再做登录校验，照常成功并说明原因。
-func TestSetupApplySkipsLoginWhenTheAdministratorIsKept(t *testing.T) {
-	t.Parallel()
-	snapshot := setupSnapshot(t)
-	loginCalls := 0
-	deps := setupDeps{
-		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		validate: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
-			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
-		},
-		apply: func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error) {
-			return setupclient.ApplyResult{Action: "created", Users: 1, Secrets: 2, Kept: []string{"admin"}}, nil
-		},
-		login: func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
-			loginCalls++
-			return setupclient.LoginResult{}, errors.New("login_failed")
-		},
-	}
-	cmd := newSetupCommand(deps)
-	var stdout bytes.Buffer
-	cmd.SetOut(&stdout)
-	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"apply", "--file", "moox.toml"})
-	require.NoError(t, cmd.Execute())
-	require.Zero(t, loginCalls)
-	var result map[string]any
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
-	require.Equal(t, []any{"admin"}, result["kept"])
-	require.Contains(t, result["login_skipped"], "管理台")
 }

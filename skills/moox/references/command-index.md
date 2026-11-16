@@ -82,19 +82,17 @@
 | `collector task show` | 查看一个采集任务 |
 | `collector task update` | 修改采集任务的名称、说明或启用状态 |
 
-## config：管理本机的 moox.toml 与告警渠道
+## config：管理本机的 moox.toml 与 moox.secrets.toml
 
 | 命令 | 说明 |
 | --- | --- |
-| `config backup` | 把 moox.toml 加密备份到自己的管理后台 |
-| `config edit` | 在本机打开配置页，查看并修改 moox.toml |
-| `config encrypt` | 把明文保存的 moox.toml 加密保存 |
-| `config get` | 读取 moox.toml 里的配置（密钥类默认打码） |
-| `config init` | 在本机打开一次性表单，填写部署信息，生成 moox.toml |
-| `config migrate` | 把 moox.toml 改写成当前格式（默认只预览） |
-| `config notification` | 对比 moox.toml 与 Monitor 的告警渠道，确认后写入 Monitor，并显示各主机缓存版本 |
-| `config restore` | 换电脑时从管理台恢复 moox.toml |
-| `config set` | 修改 moox.toml 里一个已有的单值配置（默认只预览） |
+| `config backup` | 把 moox.toml 与 moox.secrets.toml 加密备份到自己的管理后台 |
+| `config edit` | 在本机打开配置页，查看并修改两份配置 |
+| `config encrypt` | 把明文保存的 moox.secrets.toml 加密保存 |
+| `config get` | 读取 moox.toml 或 moox.secrets.toml 里的配置（--file 指定哪一份，密钥类默认打码） |
+| `config init` | 在本机打开一次性表单，填写部署信息，生成 moox.toml 与 moox.secrets.toml |
+| `config restore` | 换电脑时从管理台恢复两份配置 |
+| `config set` | 修改 moox.toml 或 moox.secrets.toml 里一个已有的单值配置（默认只预览） |
 
 ## data：量化数据读写工具
 
@@ -168,7 +166,8 @@
 | `factor recalc submit` | 提交历史补算（时间左闭右开；不给 --request-id 时自动生成） |
 | `factor show` | 查看一个因子定义 |
 | `factor status` | 因子运行状态（各任务的预热、排队、暂停与计算前检查；单个任务的检查看 factor task status） |
-| `factor task create` | 创建计算任务（源数据集 + 频率 → 结果数据集）；批量配置优先写进 moox.toml 后用 setup factors |
+| `factor task apply` | 按因子任务文件新建因子定义、任务与成员（只建不改；线上已有且内容不同时逐项列出差异，一项都不写） |
+| `factor task create` | 创建计算任务（源数据集 + 频率 → 结果数据集）；批量配置优先写成因子任务文件后用 factor task apply |
 | `factor task delete` | 删除计算任务（--purge 连结果一起删，不可恢复；默认只预览，--yes 才执行） |
 | `factor task disable` | 停用计算任务（默认只预览，--yes 才执行） |
 | `factor task enable` | 启用计算任务 |
@@ -301,7 +300,6 @@
 
 | 命令 | 说明 |
 | --- | --- |
-| `setup apply` | 写入初始用户、云凭据与交易所密钥（`[[exchange_keys]]`，只建不改）；Trade 已部署时逐把检测（只读和已在管理台删除的跳过，检测没完成只提示稍后重试，不影响退出码），没部署时提示部署后用 `trade inspect-credential` |
 | `setup attach-scf-vpc` | 为腾讯云函数绑定 VPC 子网（默认只预览，--yes 才绑定） |
 | `setup bootstrap` | 通过已核验 SSH 初始化核心或完整控制服务 |
 | `setup build-linux` | 在本机 Docker 里构建需要 CGO 的 Linux 二进制 |
@@ -310,13 +308,12 @@
 | `setup deployment disable` | 停用部署：外部程序先停服务并核对已停止，再改登记；普通组件只改登记 |
 | `setup deployment enable` | 启用部署：外部程序要求主机已启用，先改登记再启动服务；普通组件只改登记 |
 | `setup export-skill-config` | 导出 Skill 使用的最小数据访问配置 |
-| `setup factors` | 按 moox.toml 的 [[factors.definitions]] 与 [[factors.tasks]] 补齐因子定义、任务与成员（只补缺不删除） |
 | `setup firewall` | 初始化所有目标主机的腾讯云防火墙端口（默认只预览，--yes 才执行） |
 | `setup host disable` | 停用主机：先停掉它上面启用的外部程序，全部成功后才改登记（网关路由随之撤销） |
 | `setup host enable` | 启用主机：先改登记，再只启动启用部署的外部程序（单独停用的程序保持停用） |
 | `setup host-diagnostics` | 检查远端主机磁盘和服务进程 |
 | `setup hosts` | 列出可选的部署主机（不输出密码） |
-| `setup init` | 导入默认空间、数据集、字段和因子 |
+| `setup init` | 导入默认空间与元数据，写入初始秘密（管理员、云密钥、交易所密钥、告警渠道，只建不改） |
 | `setup verify` | 验收一个空间：K 线入库、因子前进、策略在运行才算通过，只读 |
 | `setup logs` | 只读查看组件在主机上的日志，包括失败回滚的发布目录，密钥字段已遮掉 |
 | `setup inspect-scf` | 检查腾讯云函数网络配置 |
@@ -328,9 +325,8 @@
 | `setup release build` | 在本机构建并打包一个版本的全部纯 Go 单元 |
 | `setup release fetch` | 用当前产物包登记一个版本，目标机部署时下载 |
 | `setup remove-host` | 从 Admin 删除一台已不在 moox.toml 里的主机（默认只预览） |
-| `setup render-runtime-config` | 从 moox.toml 渲染 Egress/Collector 运行配置 |
 | `setup restart` | 重启主机上的单个组件（默认只预览，--yes 才重启） |
-| `setup start` | 启动一个空间：启用采集任务，导入因子，创建默认示例策略 |
+| `setup start` | 启动一个空间：启用采集任务，导入默认因子任务，创建默认示例策略 |
 | `setup status` | 检查初始化记录状态 |
 | `setup sync-deployments` | 把 moox.toml 中指定主机的组件部署同步给 Admin（生成网关路由；默认只预览，--yes 才执行） |
 | `setup trust-browser` | 检查并安装管理台浏览器证书信任 |

@@ -15,11 +15,10 @@ import (
 	"testing"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
-
 	"github.com/mooyang-code/moox/modules/cli/internal/consoleclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 // fakeConsole 按真实协议实现管理台的登录（下发会话 Cookie）、Cookie 与 Origin 校验和配置备份接口。
@@ -100,15 +99,7 @@ func useFakeConsole(t *testing.T, console *fakeConsole, trust bool) {
 
 func writeConfig(t *testing.T, keys configcrypt.KeyStore) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "moox.toml")
-	sealed, err := configcrypt.Encrypt([]byte(sampleText(t)), keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, sealed, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return writePairFiles(t, t.TempDir(), sampleRendered(t), keys)
 }
 
 func TestBackupUploadsAnEnvelopeOnlyTheAdminPasswordOpens(t *testing.T) {
@@ -122,12 +113,17 @@ func TestBackupUploadsAnEnvelopeOnlyTheAdminPasswordOpens(t *testing.T) {
 	if result.UpdatedAt.Unix() != 1700000100 || console.authenticated != 1 {
 		t.Fatalf("结果 = %+v，带会话的请求 %d 次", result, console.authenticated)
 	}
-	if strings.Contains(console.envelope, "Adm1n-P@ss") || strings.Contains(console.envelope, "[admin]") {
+	if strings.Contains(console.envelope, "Adm1n-P@ss") || strings.Contains(console.envelope, "[admin]") || strings.Contains(console.envelope, "[hosts.") {
 		t.Fatal("服务端收到的备份不应含明文")
 	}
 	plain, err := configcrypt.OpenBackup(console.envelope, "Adm1n-P@ss")
-	if err != nil || string(plain) != sampleText(t) {
+	if err != nil {
 		t.Fatalf("备份应能用管理员密码解开: %v", err)
+	}
+	var bundle backupBundle
+	rendered := sampleRendered(t)
+	if err := json.Unmarshal(plain, &bundle); err != nil || bundle.Config != string(rendered.Config) || bundle.Secrets != string(rendered.Secrets) {
+		t.Fatalf("备份里应原样带上两份文件: %v", err)
 	}
 	if _, err := BackupFile(context.Background(), writeConfig(t, keys), &configcrypt.MemoryStore{}); err == nil {
 		t.Fatal("这台电脑没有密钥时不能备份")
@@ -190,11 +186,8 @@ func (h *restoreHarness) restore(t *testing.T, body map[string]string) (int, res
 
 func TestRestoreConfirmsTheCertificateThenWritesAnEncryptedConfig(t *testing.T) {
 	console := newFakeConsole(t, "Adm1n-P@ss")
-	envelope, err := configcrypt.SealBackup([]byte(sampleText(t)), "Adm1n-P@ss")
-	if err != nil {
-		t.Fatal(err)
-	}
-	console.envelope = envelope
+	rendered := sampleRendered(t)
+	console.envelope = sealedBundle(t, rendered, "Adm1n-P@ss")
 	useFakeConsole(t, console, false) // 新电脑不信任管理台的自签证书
 	h := startRestore(t)
 	form := map[string]string{"address": "198.51.100.10", "username": "admin", "password": "Adm1n-P@ss"}
@@ -222,13 +215,17 @@ func TestRestoreConfirmsTheCertificateThenWritesAnEncryptedConfig(t *testing.T) 
 	if err := <-h.done; err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(h.output)
+	config, err := os.ReadFile(h.output)
+	if err != nil || string(config) != string(rendered.Config) {
+		t.Fatal("恢复后的 moox.toml 应是备份里的明文")
+	}
+	raw, err := os.ReadFile(topology.SecretsPathFor(h.output))
 	if err != nil || !configcrypt.IsEncrypted(raw) {
-		t.Fatal("恢复后的配置应加密保存")
+		t.Fatal("恢复后的秘密文件应加密保存")
 	}
 	plain, err := configcrypt.Decrypt(raw, h.keys)
-	if err != nil || string(plain) != sampleText(t) {
-		t.Fatal("恢复后的配置应与备份一致，并能用这台电脑的密钥解开")
+	if err != nil || string(plain) != string(rendered.Secrets) {
+		t.Fatal("恢复后的秘密文件应与备份一致，并能用这台电脑的密钥解开")
 	}
 }
 
@@ -240,8 +237,10 @@ func TestRestoreExplainsAMissingBackup(t *testing.T) {
 	if status != http.StatusUnprocessableEntity || !strings.Contains(reply.Message, "还没有配置备份") {
 		t.Fatalf("没有备份时应说明: %d %+v", status, reply)
 	}
-	if _, err := os.Stat(h.output); !os.IsNotExist(err) {
-		t.Fatal("没有恢复成功时不能写文件")
+	for _, path := range []string{h.output, topology.SecretsPathFor(h.output)} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("没有恢复成功时不能写文件")
+		}
 	}
 }
 
@@ -253,10 +252,10 @@ func TestBackupRefreshesAStaleConsoleCA(t *testing.T) {
 	original := refreshConsoleCA
 	t.Cleanup(func() { refreshConsoleCA = original })
 	refreshed := 0
-	refreshConsoleCA = func(_ context.Context, manifest setupconfig.Manifest) error {
+	refreshConsoleCA = func(_ context.Context, cfg *topology.Config) error {
 		refreshed++
 		pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: console.server.Certificate().Raw})
-		return tlstrust.FileCAStore{}.Save(manifest.ControlHost().Address, pemBytes)
+		return tlstrust.FileCAStore{}.Save(cfg.ControlHost().Address, pemBytes)
 	}
 	keys := &configcrypt.MemoryStore{}
 	if _, err := BackupFile(context.Background(), writeConfig(t, keys), keys); err != nil {

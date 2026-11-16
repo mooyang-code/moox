@@ -2,11 +2,10 @@ package command
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
@@ -21,7 +20,7 @@ func newControlFixtureServer(t *testing.T, handler http.Handler) *httptest.Serve
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) {
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) {
 		return testfixture.HandlerGateway{Handler: handler}, nil
 	}
 	t.Cleanup(func() { openCommandGateway = previous })

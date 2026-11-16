@@ -26,7 +26,8 @@ type KeyStore interface {
 
 const (
 	keyringService = "MooX"
-	keyringUser    = "moox.toml 加密密钥"
+	// keyringUser 是钥匙串条目名，沿用最早的名字，改了会找不到已经保存的密钥。
+	keyringUser = "moox.toml 加密密钥"
 )
 
 var (

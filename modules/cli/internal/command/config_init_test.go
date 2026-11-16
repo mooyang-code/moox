@@ -17,7 +17,7 @@ func TestConfigInitCommandReportsOnlyStatusAndUsesDefaults(t *testing.T) {
 	var got configinit.Options
 	runConfigInit = func(_ context.Context, options configinit.Options) (configinit.Result, error) {
 		got = options
-		return configinit.Result{Path: "/work/moox.toml", Hosts: []string{"control", "storage"}}, nil
+		return configinit.Result{Path: "/work/moox.toml", SecretsPath: "/work/moox.secrets.toml", Hosts: []string{"control", "storage"}}, nil
 	}
 	cmd := newConfigInitCommand()
 	var stdout, stderr bytes.Buffer
@@ -30,7 +30,7 @@ func TestConfigInitCommandReportsOnlyStatusAndUsesDefaults(t *testing.T) {
 	if got.Output != "./moox.toml" || got.Timeout != configinit.DefaultTimeout || got.Notice == nil {
 		t.Fatalf("默认选项 = %+v", got)
 	}
-	for _, want := range []string{`"status":"written"`, `"path":"/work/moox.toml"`, `"hosts":["control","storage"]`, "仓库根目录且名为 moox.toml", "moox-cli setup validate"} {
+	for _, want := range []string{`"status":"written"`, `"path":"/work/moox.toml"`, `"secrets_path":"/work/moox.secrets.toml"`, `"hosts":["control","storage"]`, "moox-cli setup validate"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("输出缺少 %q: %s", want, stdout.String())
 		}
@@ -71,9 +71,14 @@ func TestConfigCommandRegistersInitEditAndEncrypt(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names[sub.Name()] = true
 	}
-	for _, want := range []string{"init", "edit", "encrypt", "backup", "restore", "notification"} {
+	for _, want := range []string{"init", "edit", "encrypt", "get", "set", "backup", "restore"} {
 		if !names[want] {
 			t.Fatalf("config 命令下应有 %s", want)
+		}
+	}
+	for _, removed := range []string{"migrate", "notification"} {
+		if names[removed] {
+			t.Fatalf("config %s 已删除", removed)
 		}
 	}
 }

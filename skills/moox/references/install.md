@@ -121,7 +121,7 @@ cd moox-${VER}
 - 币安只读 Key（可选）：Collector 的下架检测用它读币安现货下架计划，固定读名称为 `readonly` 的币安生产环境只读密钥（`exchange = "binance"`、`environment = "production"`、`name = "readonly"`、`readonly = true`，ID `exchange-binance-production-readonly`）。
   不配也能装完：Monitor 只报一条 warning“下架检测缺少币安只读 Key”，不挡 `setup verify`；缺这把 Key 时现货下架只能手工登记：`moox-cli collector delist register`（默认只预览，`--yes` 才执行），或管理台「事件中心」“事件”页签里“标的即将下架”一行的“手工登记”。
   登记后到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（只平模拟盘组合，但同样全局禁止买入这个标的，直到演练记录结束）。
-  要补就让用户 `config edit` 加上，再 `setup apply` 写入，下一轮检测自动恢复。
+  要补就让用户 `config edit` 加上，再 `setup init` 写入，下一轮检测自动恢复。
 - 不配海外机（没有出口代理）时 Collector 连不上币安、OKX，安装渲染会把 Collector 的 `delist.auto_detect` 设为 false，不自动检测下架，手工登记照常可用；配了海外机时为 true。
 - 免密登录开通后，Agent 就能通过 `moox-cli` 登录这些服务器完成后续所有步骤。
 - MooX 密钥不是 OpenSSH 的默认身份文件。手工验证要写 `ssh -i ~/.ssh/moox_ed25519 <用户>@<IP>`，普通 `ssh` 询问密码不代表公钥没装上。
@@ -259,7 +259,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `target_port_in_use` | 端口被其他程序占用，括号里有端口和程序名 | 问用户能否停掉那个程序，不要手动杀进程。部署目录里的残留进程 CLI 会自动清理，不会报这个错 |
 | `target_subset_installed`、`target_identity_differs`、`target_binding_missing`、`target_partial_install`、`target_directory_invalid` | 目标机的状态和这次操作不符，比如机器不是空机 | 不要重试，也不要手动上机；回到 `setup validate` 按 `route` 处理 |
 | `target_rejected` | 目标机失败，没有已知原因 | 不要重试；用 `setup logs` 看相关组件的日志。还看不出来时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
-| `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错处理：能补的运行 `config migrate --add-deployment`；要重新生成的先把旧 `moox.toml` 改名，再 `config init`。然后 `setup validate` |
+| `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错处理：能补的直接编辑 `moox.toml` 的 `[deployments]`；要重新生成的先把旧 `moox.toml` 改名，再 `config init`。然后 `setup validate` |
 | `disk_insufficient` | 目标机磁盘不够（失败尝试的残留已算入总量，下一次部署会自动清掉；但上传安装包至少要 1 GB 真实可用空间） | 告诉用户腾出空间或换大磁盘 |
 | `start_prerequisite_missing` | crypto 缺 collector-stream 或出口代理，其他空间没配 `[scf_plan]` | 告诉用户缺什么，按 `setup validate` 处理 |
 | `no_collection_tasks` | 这个空间没有任何 K 线任务，`--space-id` 写错或种子没写入（任务都停用时验收跳过，不报错） | 核对空间，看 `collector task list`；不要手工改数据库 |

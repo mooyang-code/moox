@@ -502,9 +502,9 @@ func TestScfPlanFetchYAMLNotBeforeOverride(t *testing.T) {
 	require.Zero(t, fetch.StandbyMS)
 }
 
-// CLI 渲染测试生成的真实产物（modules/cli/.../testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。
+// CLI 渲染测试生成的真实产物（modules/cli/internal/setup/topology/testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。
 func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
-	raw, err := os.ReadFile("../../../cli/internal/setup/config/testdata/scf_plan_rendered.yaml")
+	raw, err := os.ReadFile("../../../cli/internal/setup/topology/testdata/scf_plan_rendered.yaml")
 	require.NoError(t, err)
 	cfg, err := Load(writeCollectorConfig(t, string(raw)))
 	require.NoError(t, err)

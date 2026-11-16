@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"io"
 	"net"
 	"net/http"
@@ -11,7 +12,6 @@ import (
 	"testing"
 
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,16 +31,16 @@ func (r *remoteSSH) Run(_ context.Context, argv []string, _ io.Reader) (setupssh
 func (r *remoteSSH) Close() error { r.closed = true; return nil }
 
 func hostRemoteFixture() (*hostRemote, *remoteSSH, *[]string) {
-	manifest := setupconfig.Manifest{
-		HostCatalog: map[string]setupconfig.HostDefinition{
-			"control": {Address: "198.51.100.10", SSH: setupconfig.SSHConfig{Port: 22, Username: "ubuntu"}},
-			"factor":  {Address: "192.168.0.103", Reachability: "outbound", SSH: setupconfig.SSHConfig{Port: 22, Username: "builder"}},
+	manifest := &topology.Config{
+		HostCatalog: map[string]topology.HostDefinition{
+			"control": {Address: "198.51.100.10", SSH: topology.SSHConfig{Port: 22, Username: "ubuntu"}},
+			"factor":  {Address: "192.168.0.103", Reachability: "outbound", SSH: topology.SSHConfig{Port: 22, Username: "builder"}},
 		},
 	}
 	ssh := &remoteSSH{stdout: "enabled=enabled\nactive=active\nlinger=yes\n"}
 	var local []string
 	remote := newHostRemote(manifest, "control")
-	remote.dial = func(context.Context, setupconfig.Host) (setupssh.Client, error) { return ssh, nil }
+	remote.dial = func(context.Context, topology.Host) (setupssh.Client, error) { return ssh, nil }
 	remote.runLocal = func(_ context.Context, argv []string) (string, error) {
 		local = append(local, argv[len(argv)-1])
 		return "enabled=enabled\nactive=active\nlinger=yes\n", nil
@@ -70,22 +70,6 @@ func TestHostRemoteRunsLocalNodeLocallyAndOthersOverSSH(t *testing.T) {
 	_, _ = check(t.Context(), "factor", "moox-archive-worker")
 	remote.Close()
 	assert.True(t, ssh.closed)
-}
-
-// 诊断要用 SSH 密码连接主机：快照里的凭据被清掉后，远程执行器仍保留主机目录里的密码，直到关闭。
-func TestHostRemoteKeepsHostPasswordsUntilClose(t *testing.T) {
-	definition := setupconfig.HostDefinition{}
-	definition.SSH.Password = "ssh-secret"
-	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"storage": definition}}}
-	snapshot.Manifest.Admin.Password = "admin-secret"
-
-	remote := newHostRemoteFromSnapshot(snapshot, "control")
-	assert.Empty(t, snapshot.Manifest.Admin.Password, "其余凭据照常清掉")
-	assert.Empty(t, snapshot.Manifest.HostCatalog["storage"].SSH.Password, "快照里的 SSH 密码被清掉")
-	assert.Equal(t, "ssh-secret", remote.manifest.HostCatalog["storage"].SSH.Password, "远程执行器建连时还要用")
-
-	remote.Close()
-	assert.Empty(t, remote.manifest.HostCatalog["storage"].SSH.Password, "关闭后清除")
 }
 
 // forwardSSH 模拟 SSH 的本地转发：把本地端口转到 target（代表目标机上的 127.0.0.1:{端口}）。
@@ -131,7 +115,7 @@ func TestHostRemoteHealthProbeForwardsToTheTargetLoopbackOverSSH(t *testing.T) {
 	defer server.Close()
 	ssh := &forwardSSH{target: server.Listener.Addr().String()}
 	remote, _, _ := hostRemoteFixture()
-	remote.dial = func(context.Context, setupconfig.Host) (setupssh.Client, error) { return ssh, nil }
+	remote.dial = func(context.Context, topology.Host) (setupssh.Client, error) { return ssh, nil }
 	defer remote.Close()
 	probe := remote.HealthProbe()
 
@@ -153,7 +137,7 @@ func TestHostRemoteHealthProbeForwardsToTheTargetLoopbackOverSSH(t *testing.T) {
 // 只能出站的主机 SSH 连不上时：探测报不可达（诊断记为无法判断），错误里写明只能在局域网里检查和不在局域网时看什么。
 func TestHostRemoteExplainsOutboundHostsAreLANOnly(t *testing.T) {
 	remote, _, _ := hostRemoteFixture()
-	remote.dial = func(context.Context, setupconfig.Host) (setupssh.Client, error) {
+	remote.dial = func(context.Context, topology.Host) (setupssh.Client, error) {
 		return nil, errors.New("dial timeout")
 	}
 	defer remote.Close()
@@ -166,7 +150,7 @@ func TestHostRemoteExplainsOutboundHostsAreLANOnly(t *testing.T) {
 	_, err = remote.Systemd()(t.Context(), "factor", "moox-factor-engine")
 	assert.ErrorContains(t, err, "局域网", "systemd 检查同样经 SSH，提示一致")
 
-	remote.manifest.HostCatalog["storage"] = setupconfig.HostDefinition{Address: "198.51.100.11"}
+	remote.manifest.HostCatalog["storage"] = topology.HostDefinition{Address: "198.51.100.11"}
 	_, err = remote.HealthProbe()(t.Context(), "storage", 20210, "/readyz")
 	require.ErrorIs(t, err, doctorcli.ErrNodeUnreachable)
 	assert.NotContains(t, err.Error(), "局域网", "直连主机不加出站提示")

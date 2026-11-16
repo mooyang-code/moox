@@ -5,16 +5,15 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"maps"
 	"net"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
@@ -26,20 +25,26 @@ import (
 
 // hostRemote 是诊断用的远程能力；close 释放 SSH 连接。
 type hostRemote struct {
-	manifest    setupconfig.Manifest
+	manifest    *topology.Config
 	localNodeID string
-	dial        func(context.Context, setupconfig.Host) (setupssh.Client, error)
+	dial        func(context.Context, topology.Host) (setupssh.Client, error)
 	runLocal    func(ctx context.Context, argv []string) (string, error)
 
 	mu      sync.Mutex
 	clients map[string]setupssh.Client
 }
 
-func newHostRemote(manifest setupconfig.Manifest, localNodeID string) *hostRemote {
+func newHostRemote(manifest *topology.Config, localNodeID string) *hostRemote {
 	return &hostRemote{
-		manifest: manifest, localNodeID: localNodeID, dial: dialSetupHost, runLocal: runLocalCommand,
+		manifest: manifest, localNodeID: localNodeID, dial: dialHost, runLocal: runLocalCommand,
 		clients: map[string]setupssh.Client{},
 	}
+}
+
+// dialHost 用 moox.toml 里这台主机的密钥登录方式连 SSH：配了 private_key_file 就用它，没配用 ssh-agent 与默认私钥。
+func dialHost(ctx context.Context, host topology.Host) (setupssh.Client, error) {
+	target := setupssh.Target{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username}
+	return setupssh.Dial(ctx, target, "", setupssh.Options{Timeout: 15 * time.Second, IdentityFiles: host.IdentityFiles()})
 }
 
 func runLocalCommand(ctx context.Context, argv []string) (string, error) {
@@ -152,10 +157,6 @@ func (r *hostRemote) HealthProbe() doctorcli.HealthProbe {
 func (r *hostRemote) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for id, definition := range r.manifest.HostCatalog {
-		definition.SSH.Password = ""
-		r.manifest.HostCatalog[id] = definition
-	}
 	for id, client := range r.clients {
 		_ = client.Close()
 		delete(r.clients, id)
@@ -164,15 +165,11 @@ func (r *hostRemote) Close() {
 
 // openHostRemote 读取 moox.toml 装配连接层；读不到配置时返回错误。
 func openHostRemote(file string, localNodeID string) (*hostRemote, error) {
-	absolute, err := filepath.Abs(defaultFlag(file, "./moox.toml"))
+	cfg, err := topology.Load(defaultFlag(file, defaultSetupFile))
 	if err != nil {
 		return nil, err
 	}
-	snapshot, err := setupconfig.Load(absolute, filepath.Dir(absolute))
-	if err != nil {
-		return nil, err
-	}
-	return newHostRemoteFromSnapshot(snapshot, localNodeID), nil
+	return newHostRemote(cfg, localNodeID), nil
 }
 
 // loadHostRemote 同 openHostRemote，读不到配置时返回 nil（诊断退回只用 Monitor 事实与本机探测）。
@@ -182,14 +179,4 @@ func loadHostRemote(file string, localNodeID string) *hostRemote {
 		return nil
 	}
 	return remote
-}
-
-// newHostRemoteFromSnapshot 先复制主机目录（SSH 密码要留到建立连接时使用），再清掉快照里的其余凭据；
-// 复制出来的密码在 Close 时清除。
-func newHostRemoteFromSnapshot(snapshot *setupconfig.Snapshot, localNodeID string) *hostRemote {
-	manifest := snapshot.Manifest
-	catalog := maps.Clone(manifest.HostCatalog)
-	clearSetupSecrets(snapshot)
-	manifest.HostCatalog = catalog
-	return newHostRemote(manifest, localNodeID)
 }

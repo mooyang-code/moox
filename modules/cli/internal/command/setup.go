@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -28,34 +27,33 @@ import (
 const defaultSetupFile = "./moox.toml"
 
 type setupDeps struct {
-	bootstrapAdmin   setupAdminBootstrap
-	bootstrapControl setupControlBootstrap
-	deployHost       setupHostDeploy
-	deployUnit       setupUnitDeploy
-	buildRelease     setupReleaseBuild
-	load             func(string) (*setupconfig.Snapshot, error)
-	loadInitBundle   func(string) (setupInitBundle, error)
-	validate         func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
-	trustHost        func(context.Context, *setupconfig.Snapshot, string, string) error
-	apply            func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
-	status           func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
-	applySpaces      func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error)
-	statusSpaces     func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
-	// inspectExchangeKey 经网关调 Trade 检测一把交易所密钥，返回原始响应；测试里替换。
-	inspectExchangeKey    func(context.Context, *setupconfig.Snapshot, setupconfig.ExchangeKey) ([]byte, error)
+	bootstrapAdmin        setupAdminBootstrap
+	bootstrapControl      setupControlBootstrap
+	deployHost            setupHostDeploy
+	deployUnit            setupUnitDeploy
+	buildRelease          setupReleaseBuild
+	load                  func(string) (*setupconfig.Snapshot, error)
+	loadInitBundle        func(string) (setupInitBundle, error)
+	validate              func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
+	trustHost             func(context.Context, *setupconfig.Snapshot, string, string) error
+	status                func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
+	applySpaces           func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error)
+	statusSpaces          func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
 	registerCloudAccounts func(context.Context, *setupconfig.Snapshot) (*setupCloudAccountSummary, error)
 	provisionCLS          func(context.Context, *setupconfig.Snapshot) (*setupCLSSummary, error)
 	ensureSCFPlan         func(context.Context, *setupconfig.Snapshot) (*setupSCFPlanSummary, error)
 	login                 func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
 	openInitStorage       func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
 	openInitFactor        func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error)
-	initStorage           func(context.Context, *setupconfig.Snapshot, string, string, string, setupInitBundle) (setupInitSummary, error)
-	initMetadata          func(context.Context, *setupconfig.Snapshot, string, setupInitBundle) (setupInitStorageSummary, error)
-	installWatchdog       func(context.Context, *setupconfig.Snapshot, setupconfig.Host, bool) (json.RawMessage, error)
-	importMetadata        func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
-	exportSkillConfig     func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
-	ensureFirewall        func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
-	ensureRelayFirewall   func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
+	// ensureNotification 在 Monitor 还没有任何告警渠道时写入初始渠道（只建不改）；测试里替换。
+	ensureNotification  func(context.Context, *setupconfig.Snapshot) (*setupNotificationSummary, error)
+	initStorage         func(context.Context, *setupconfig.Snapshot, string, string, string, setupInitBundle) (setupInitSummary, error)
+	initMetadata        func(context.Context, *setupconfig.Snapshot, string, setupInitBundle) (setupInitStorageSummary, error)
+	installWatchdog     func(context.Context, *setupconfig.Snapshot, setupconfig.Host, bool) (json.RawMessage, error)
+	importMetadata      func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
+	exportSkillConfig   func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
+	ensureFirewall      func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
+	ensureRelayFirewall func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
 	// scanDeployment 检测目标机器的部署情况；测试里为空时跳过检测。
 	scanDeployment   func(context.Context, *setupconfig.Snapshot, deployscan.Options) ([]deployscan.HostReport, error)
 	wipeHost         func(context.Context, setupconfig.Host, string, []string, bool) (deployscan.HostResult, error)
@@ -91,7 +89,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupStartCommand(deps),
 		newSetupInstallCommand(deps),
 		newSetupVerifyCommand(deps),
-		newSetupFactorsCommand(deps),
 		newSetupHostsCommand(deps),
 		newSetupSyncDeploymentsCommand(deps),
 		newSetupRemoveHostCommand(deps),
@@ -104,8 +101,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupDeployUnitCommand(deps),
 		newSetupReleaseCommand(deps),
 		newSetupPackageCommand(),
-		newSetupRenderRuntimeConfigCommand(deps),
-		newSetupApplyCommand(deps),
 		newSetupStatusCommand(deps),
 		newSetupRebootHostCommand(deps),
 		newSetupHostDiagnosticsCommand(deps),
@@ -421,106 +416,6 @@ done
 	return cmd
 }
 
-func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
-	var file, egressOutput, collectorOutput string
-	cmd := &cobra.Command{
-		Use:   "render-runtime-config",
-		Short: "从 moox.toml 渲染 Egress/Collector 运行配置",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			egressOutput = strings.TrimSpace(egressOutput)
-			collectorOutput = strings.TrimSpace(collectorOutput)
-			if egressOutput == "" && collectorOutput == "" {
-				return fmt.Errorf("runtime_config: at least one output path is required")
-			}
-			if egressOutput != "" && collectorOutput != "" {
-				egressCanonical, err := canonicalRuntimeOutputPath(egressOutput)
-				if err != nil {
-					return err
-				}
-				collectorCanonical, err := canonicalRuntimeOutputPath(collectorOutput)
-				if err != nil {
-					return err
-				}
-				if egressCanonical == collectorCanonical {
-					return fmt.Errorf("runtime_config: egress and collector outputs must be different")
-				}
-			}
-			snapshot, err := deps.load(file)
-			if err != nil {
-				return err
-			}
-			defer clearSetupSecrets(snapshot)
-
-			// Render both files before mutating either one. The deployment script
-			// can therefore fail before a service restart if moox.toml or YAML
-			// validation is invalid.
-			var egressRaw, collectorRaw []byte
-			if egressOutput != "" {
-				egressRaw, err = readRuntimeConfigFile(egressOutput)
-				if err != nil {
-					return err
-				}
-				egressRaw, err = setupconfig.RenderEgressConfig(snapshot, egressRaw)
-				if err != nil {
-					return err
-				}
-			}
-			if collectorOutput != "" {
-				collectorRaw, err = readRuntimeConfigFile(collectorOutput)
-				if err != nil {
-					return err
-				}
-				collectorRaw, err = setupconfig.RenderCollectorRuntimeConfig(snapshot, collectorRaw)
-				if err != nil {
-					return err
-				}
-			}
-			if err := snapshot.VerifyUnchanged(); err != nil {
-				return fmt.Errorf("config_changed")
-			}
-			if egressOutput != "" {
-				if err := setupconfig.WriteRenderedRuntimeConfig(egressOutput, egressRaw); err != nil {
-					return err
-				}
-			}
-			if collectorOutput != "" {
-				if err := setupconfig.WriteRenderedRuntimeConfig(collectorOutput, collectorRaw); err != nil {
-					return err
-				}
-			}
-			// 不再输出 Trade 的地址与端口：11200 只听本机，外面连不上。
-			return writeSetupJSON(cmd, map[string]any{
-				"status":           "rendered",
-				"egress_output":    egressOutput,
-				"collector_output": collectorOutput,
-			})
-		},
-	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&egressOutput, "egress-output", "", "Egress app.yaml 输出路径")
-	cmd.Flags().StringVar(&collectorOutput, "collector-output", "", "Collector app.yaml 输出路径")
-	return cmd
-}
-
-func canonicalRuntimeOutputPath(path string) (string, error) {
-	abs, err := filepath.Abs(filepath.Clean(path))
-	if err != nil {
-		return "", fmt.Errorf("runtime_config: resolve output %q: %w", path, err)
-	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved, nil
-	}
-	return abs, nil
-}
-
-func readRuntimeConfigFile(path string) ([]byte, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("runtime_config: read %s: %w", path, err)
-	}
-	return raw, nil
-}
-
 type setupHostChoice struct {
 	Name     string `json:"name"`
 	Address  string `json:"address"`
@@ -645,43 +540,6 @@ func newSetupTrustBrowserCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
-func newSetupApplyCommand(deps setupDeps) *cobra.Command {
-	var file string
-	cmd := &cobra.Command{Use: "apply", Short: "写入初始用户、云凭据与交易所密钥（Trade 已部署时再检测交易所密钥）", RunE: func(cmd *cobra.Command, _ []string) error {
-		snapshot, err := deps.load(file)
-		if err != nil {
-			return err
-		}
-		defer clearSetupSecrets(snapshot)
-		if _, err := deps.validate(cmd.Context(), snapshot); err != nil {
-			return err
-		}
-		applied, err := deps.apply(cmd.Context(), snapshot)
-		if err != nil {
-			return err
-		}
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
-		}
-		login, loginSkipped, err := verifySetupLogin(cmd.Context(), deps, snapshot, applied.Kept)
-		if err != nil {
-			return err
-		}
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
-		}
-		// 交易所密钥写入后再检测：检测结果只展示，不影响退出码（密钥已经写入，检测只说明它能不能建执行账户）。
-		return writeSetupJSON(cmd, struct {
-			setupclient.ApplyResult
-			LoginAPI         string             `json:"login_api"`
-			LoginSkipped     string             `json:"login_skipped,omitempty"`
-			ExchangeKeyCheck []exchangeKeyCheck `json:"exchange_key_checks,omitempty"`
-		}{ApplyResult: applied, LoginAPI: login.LoginAPI, LoginSkipped: loginSkipped, ExchangeKeyCheck: inspectApplied(cmd.Context(), deps, snapshot, applied.ExchangeKeys)})
-	}}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	return cmd
-}
-
 func newSetupStatusCommand(deps setupDeps) *cobra.Command {
 	var file string
 	cmd := &cobra.Command{Use: "status", Short: "检查初始化记录状态", RunE: func(cmd *cobra.Command, _ []string) error {
@@ -770,9 +628,6 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.trustHost == nil {
 		deps.trustHost = defaults.trustHost
 	}
-	if deps.apply == nil {
-		deps.apply = defaults.apply
-	}
 	if deps.status == nil {
 		deps.status = defaults.status
 	}
@@ -781,9 +636,6 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	}
 	if deps.statusSpaces == nil {
 		deps.statusSpaces = defaults.statusSpaces
-	}
-	if deps.inspectExchangeKey == nil {
-		deps.inspectExchangeKey = defaults.inspectExchangeKey
 	}
 	if deps.registerCloudAccounts == nil {
 		deps.registerCloudAccounts = defaults.registerCloudAccounts
@@ -802,6 +654,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	}
 	if deps.openInitFactor == nil {
 		deps.openInitFactor = defaults.openInitFactor
+	}
+	if deps.ensureNotification == nil {
+		deps.ensureNotification = defaults.ensureNotification
 	}
 	if deps.initStorage == nil {
 		deps.initStorage = func(ctx context.Context, snapshot *setupconfig.Snapshot, file, configDir, storageHost string, bundle setupInitBundle) (setupInitSummary, error) {
@@ -865,26 +720,27 @@ func defaultSetupDeps() setupDeps {
 		openStart:             defaultSetupOpenStart,
 		validate:              defaultSetupValidate,
 		trustHost:             defaultSetupTrustHost,
-		apply:                 defaultSetupApply,
 		status:                defaultSetupStatus,
 		applySpaces:           defaultSetupApplyWithSpaces,
 		statusSpaces:          defaultSetupStatusWithSpaces,
-		inspectExchangeKey:    defaultInspectExchangeKey,
 		registerCloudAccounts: defaultSetupRegisterCloudAccounts,
 		provisionCLS:          defaultSetupProvisionCLS,
 		ensureSCFPlan:         defaultSetupEnsureSCFPlan,
 		openInitStorage:       defaultOpenSetupInitStorage,
-		openInitFactor:        defaultOpenSetupFactor,
-		initStorage:           nil,
-		installWatchdog:       defaultSetupInstallWatchdog,
-		importMetadata:        defaultSetupImportMetadata,
-		exportSkillConfig:     defaultSetupExportSkillConfig,
-		ensureFirewall:        defaultSetupEnsureFirewall,
-		ensureRelayFirewall:   setupEnsureRelayFirewall,
+		openInitFactor: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupInitFactor, error) {
+			return defaultOpenSetupFactor(ctx, snapshot.Config())
+		},
+		ensureNotification:  defaultSetupEnsureNotification,
+		initStorage:         nil,
+		installWatchdog:     defaultSetupInstallWatchdog,
+		importMetadata:      defaultSetupImportMetadata,
+		exportSkillConfig:   defaultSetupExportSkillConfig,
+		ensureFirewall:      defaultSetupEnsureFirewall,
+		ensureRelayFirewall: setupEnsureRelayFirewall,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost().Address)
 			// 这里只校验登录，用取回的根证书连接，不碰本机信任库。
-			if err := refreshSetupConsoleCA(ctx, snapshot.Manifest); err != nil {
+			if err := refreshSetupConsoleCA(ctx, snapshot.Config()); err != nil {
 				return setupclient.LoginResult{}, fmt.Errorf("browser_ca_trust_failed: 无法从管理台服务器取回 MooX CA 根证书: %w", err)
 			}
 			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
@@ -925,7 +781,7 @@ func defaultSetupImportMetadata(ctx context.Context, snapshot *setupconfig.Snaps
 	if err != nil {
 		return metadataImportSummary{}, err
 	}
-	gateway, err := openCommandGateway(ctx, "", snapshot)
+	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
 	if err != nil {
 		return metadataImportSummary{}, err
 	}
@@ -1040,7 +896,7 @@ func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupconfig.Snapsh
 	host := snapshot.Manifest.ControlHost()
 	// 管理台的 HTTPS 证书由 MooX CA 签发；先经 SSH 从控制机取回 MooX CA 根证书到本机缓存再安装信任，
 	// 不依赖本机残留的旧证书副本。
-	if err := refreshSetupConsoleCA(ctx, snapshot.Manifest); err != nil {
+	if err := refreshSetupConsoleCA(ctx, snapshot.Config()); err != nil {
 		return fmt.Errorf("browser_ca_trust_failed: 无法从管理台服务器取回 MooX CA 根证书: %w", err)
 	}
 	caPath := tlstrust.CAPath(host.Address)
@@ -1075,17 +931,8 @@ func manualBrowserTrustCommand(caPath string) string {
 // refreshSetupConsoleCA 在测试里替换。
 var refreshSetupConsoleCA = configinit.RefreshConsoleCA
 
-func defaultSetupApply(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.ApplyResult, error) {
-	gateway, err := openCommandGateway(ctx, "", snapshot)
-	if err != nil {
-		return setupclient.ApplyResult{}, err
-	}
-	defer gateway.Close()
-	return setupclient.New(gateway).Apply(ctx, snapshot)
-}
-
 func defaultSetupStatus(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.StatusResult, error) {
-	gateway, err := openCommandGateway(ctx, "", snapshot)
+	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
 	if err != nil {
 		return setupclient.StatusResult{}, err
 	}
@@ -1098,7 +945,7 @@ func defaultSetupApplyWithSpaces(
 	snapshot *setupconfig.Snapshot,
 	spaces []setupclient.Space,
 ) (setupclient.ApplyResult, error) {
-	gateway, err := openCommandGateway(ctx, "", snapshot)
+	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
 	if err != nil {
 		return setupclient.ApplyResult{}, err
 	}
@@ -1111,7 +958,7 @@ func defaultSetupStatusWithSpaces(
 	snapshot *setupconfig.Snapshot,
 	spaces []setupclient.Space,
 ) (setupclient.StatusResult, error) {
-	gateway, err := openCommandGateway(ctx, "", snapshot)
+	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
 	if err != nil {
 		return setupclient.StatusResult{}, err
 	}

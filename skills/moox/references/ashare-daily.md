@@ -175,7 +175,7 @@ output: fin_net_profit_parent_ttm / fin_equity_parent
 - 成员加入时是停用的，`factor member enable` 之后才计算。启用不会自动补算历史，需要历史因子值时用 `factor recalc submit --space-id stockcn --task-id <任务> --from 2025-11-01T00:00:00Z --to 2026-11-11T00:00:00Z`（`--from`、`--to` 只接受 RFC3339，左闭右开，不能只写日期）。
 - 前复权价本身（以当前这一根为基准）：k 根之前的前复权收盘价是 `delay(close, k) * delay(adj_factor, k) / adj_factor`。只算涨幅、偏离这类比值时用后复权价即可，结果相同。
 - 财务字段为空（金融类公司没有的科目、缺上年数据的滚动值）时因子值也为空。
-- 把这个因子任务和成员同步写进 `moox.toml`，以后重装时 `setup factors` 才会带上它。`mom_adj`、`roe_ttm` 已在内置因子库 `modules/factor/factors/stockcn_daily.yaml` 里（库里还有下面“内置的估值与筹码因子”列出的 9 个）。写一份只含这个任务和两个定义的样例文件，再用 `config migrate` 复制进去（先不带 `--yes` 预览）：
+- 把这个因子任务和成员写进自己的因子任务文件，以后重装时用 `factor task apply --file` 导入。`mom_adj`、`roe_ttm` 已在内置因子库 `modules/factor/factors/stockcn_daily.yaml` 里（库里还有下面“内置的估值与筹码因子”列出的 9 个）。格式同 `config/setup/factor-tasks.yaml`（键名与下面的 TOML 写法一致，改成 yaml），再导入：
 
   ```toml
   [[factors.tasks]]
@@ -199,7 +199,7 @@ output: fin_net_profit_parent_ttm / fin_equity_parent
   ```
 
   ```bash
-  ./bin/moox-cli config migrate --add-factor-task <日线因子任务> --example-file daily-task.toml --yes
+  ./bin/moox-cli factor task apply --file ./my-factors.yaml
   ```
 
   自己写的因子不在因子库里时，先把它加进 `factors.source_dir` 下的库文件，否则校验报“因子库里没有因子”。

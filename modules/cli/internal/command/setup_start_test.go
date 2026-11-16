@@ -105,7 +105,7 @@ func startClient() *fakeStartClient {
 func TestSetupStartEnablesAllTasksThenTriggersOnce(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	client := startClient()
-	summary, err := runSetupStart(context.Background(), setupDeps{}, client, snapshot, t.TempDir(), startRepository(t), "crypto", time.Millisecond)
+	summary, err := runSetupStart(context.Background(), setupDeps{}, client, snapshot, startRepository(t), "crypto", time.Millisecond)
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "b"}, client.enabled)
 	require.Equal(t, 1, client.triggers)
@@ -116,19 +116,19 @@ func TestSetupStartEnablesAllTasksThenTriggersOnce(t *testing.T) {
 func TestSetupStartSkipsManualStartTasks(t *testing.T) {
 	client := startClient()
 	client.tasks = append(client.tasks, adminclient.CollectionTaskSummary{TaskID: "m", TaskName: "手动任务"})
-	summary, err := runSetupStart(context.Background(), setupDeps{}, client, setupSnapshot(t), t.TempDir(), startRepository(t), "crypto", time.Millisecond)
+	summary, err := runSetupStart(context.Background(), setupDeps{}, client, setupSnapshot(t), startRepository(t), "crypto", time.Millisecond)
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "b"}, client.enabled, "start: manual 的任务不启用；别的空间的同名标记不影响")
 	require.Equal(t, 2, summary.TasksEnabled)
 	require.Contains(t, strings.Join(summary.Notes, "\n"), "手动任务（m）需手动启用")
 
 	// 读不到内置任务文件时不猜，直接报错。
-	_, err = runSetupStart(context.Background(), setupDeps{}, startClient(), setupSnapshot(t), t.TempDir(), t.TempDir(), "crypto", time.Millisecond)
+	_, err = runSetupStart(context.Background(), setupDeps{}, startClient(), setupSnapshot(t), t.TempDir(), "crypto", time.Millisecond)
 	require.ErrorContains(t, err, "请在产物包目录或源码仓库根目录运行")
 }
 
 func TestSetupStartWithoutTasksFails(t *testing.T) {
-	_, err := runSetupStart(context.Background(), setupDeps{}, &fakeStartClient{online: true}, setupSnapshot(t), t.TempDir(), t.TempDir(), "crypto", time.Millisecond)
+	_, err := runSetupStart(context.Background(), setupDeps{}, &fakeStartClient{online: true}, setupSnapshot(t), t.TempDir(), "crypto", time.Millisecond)
 	require.ErrorContains(t, err, "no_collection_tasks")
 }
 
@@ -185,4 +185,31 @@ func TestSetupStartStockCNExampleUsesItsOwnTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "created", status)
 	require.Equal(t, []setupStartInstance{{InstanceID: "default_dual_ma_cn_5m", StrategyID: "default_dual_ma_cn_5m", SpaceID: "stockcn", FactorTasks: map[string]string{"equity": "ftask_cn_5m"}, Enabled: true}}, client.instances)
+}
+
+// 有因子引擎时导入种子文件里这个空间的任务（别的空间的不导入，定义全部带上）；种子里没有默认示例用的任务时不建示例策略。
+func TestSetupStartImportsOnlyThisSpaceFromTheFactorSeed(t *testing.T) {
+	repository := startRepository(t)
+	seedDir := filepath.Join(repository, "config", "setup")
+	writeLibrary(t, filepath.Join(seedDir, "factors"), "lib.yaml")
+	require.NoError(t, os.WriteFile(filepath.Join(seedDir, "factor-tasks.yaml"), []byte(testSeed), 0o600))
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.Deployments["compute"] = []string{"factor-engine"}
+	factor := &fakeSetupInitFactor{}
+	deps := setupDeps{openInitFactor: func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error) { return factor, nil }}
+	client := startClient()
+	summary, err := runSetupStart(context.Background(), deps, client, snapshot, repository, "crypto", time.Millisecond)
+	require.NoError(t, err)
+	require.Len(t, factor.plan.Tasks, 1)
+	require.Equal(t, "ftask_prices_1m", factor.plan.Tasks[0].TaskID)
+	require.Len(t, factor.plan.Definitions, 2)
+	require.Equal(t, "skipped", summary.Strategy, "种子里没有 ftask_swap_1m，不建默认示例")
+	require.Zero(t, client.created)
+
+	empty := &fakeSetupInitFactor{}
+	deps.openInitFactor = func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error) { return empty, nil }
+	summary, err = runSetupStart(context.Background(), deps, startClient(), snapshot, repository, "stockhk", time.Millisecond)
+	require.NoError(t, err)
+	require.Empty(t, empty.plan.Tasks, "种子里没有这个空间的任务时不导入")
+	require.Contains(t, strings.Join(summary.Notes, "\n"), "factor-tasks.yaml 里没有这个空间的因子任务")
 }

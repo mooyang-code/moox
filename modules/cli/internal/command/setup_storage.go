@@ -15,5 +15,5 @@ func openRemoteStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name
 	if _, err := resolveStorageDeploymentHost(snapshot.Manifest, name); err != nil {
 		return nil, err
 	}
-	return openCommandGateway(ctx, "", snapshot)
+	return openCommandGateway(ctx, "", snapshot.Config())
 }

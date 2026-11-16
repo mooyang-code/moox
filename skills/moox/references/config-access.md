@@ -1,9 +1,9 @@
-# 读取与修改 moox.toml（加密文件）
+# 读取与修改 moox.toml 与 moox.secrets.toml
 
-`moox.toml` 默认是加密保存的（整份 AES-256-GCM，密钥在本机钥匙串，文件里只有信封）。
-**Agent 不能 `cat`、`grep`、用 Python 解析它，也不要 `source` 或复制它**，一律通过 `moox-cli config` 的子命令。
-下面的命令都在放着 `moox.toml` 的目录（主仓库根目录）里执行，或加 `--file <路径>`。
-主仓库的工作副本要和 main 同步：改写命令会按 `factors.source_dir` 去因子库里核对因子，副本落后会报“因子库里没有因子 X”。
+部署配置是同一目录里的两份文件：`moox.toml` 是明文，只有拓扑与部署参数，不含秘密；
+`moox.secrets.toml` 是秘密（管理员、腾讯云密钥、告警渠道、CLS 写入密钥、交易所密钥），整份 AES-256-GCM 加密，密钥在本机钥匙串，文件里只有信封。
+**Agent 不能 `cat`、`grep`、用 Python 解析秘密文件，也不要 `source` 或复制它**，一律通过 `moox-cli config` 的子命令，用 `--file ./moox.secrets.toml` 指定它。
+下面的命令都在放着这两份文件的目录（主仓库根目录）里执行，或加 `--file <路径>`。
 
 ## 读：`moox-cli config get`
 
@@ -11,8 +11,8 @@
 moox-cli config get                                   # 整份配置（JSON，密钥已打码）
 moox-cli config get hosts.storage                     # 一个表
 moox-cli config get storage_retention.defaults.5m     # 一个值
-moox-cli config get factors.tasks.0                   # 数组用序号，从 0 开始
-moox-cli config get exchange_keys.0                   # 第一把交易所密钥：api_key、secret_key、passphrase 显示为 ***
+moox-cli config get deployments.control.0            # 数组用序号，从 0 开始
+moox-cli config get --file ./moox.secrets.toml exchange_keys.0   # 第一把交易所密钥：api_key、secret_key、passphrase 显示为 ***
 moox-cli config get hosts.storage.address
 ```
 
@@ -30,44 +30,30 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
 
 - 写法 `表名.键=值`，根部的键直接写键名。值按 `true`/`false`、整数、小数识别，其余按字符串。
 - 只改**已有的单值键**，只动那一行，注释与其余内容原样保留；表或键不存在、表是 `[[数组表]]`、键的现值是数组或多行值，都会报错，不会凭空创建。
-- 改后先按当前格式校验，通过且带 `--yes` 才写回：原文件备份为 `moox.toml.bak-<时间>`，新内容重新加密。预览与写回的输出里都没有配置值。
+- 改后先按这份文件的格式校验，通过且带 `--yes` 才写回：原文件备份为 `<文件名>.bak-<时间>`，秘密文件的新内容重新加密。预览与写回的输出里都没有配置值。
 - 写回后提醒用户跑一次 `moox-cli config backup`（用管理员密码加密备份到管理台；Agent 不代跑）。
 - 改的是本机文件；要让线上生效，还得按各项的说明重装或重启对应单元（见下表）。
 
-## 专用改写：`moox-cli config migrate`
+## 结构性改动：直接编辑 `moox.toml`
 
-`set` 管不了的结构性改动用 `migrate` 的专用参数；默认只预览，加 `--yes` 写回，写回规则同上。
-
-| 参数 | 作用 |
-|---|---|
-| `--set-retention defaults.5m=240d` 或 `<空间>.<频率>=<时长>` | 改保留期（目标表必须已存在）；**生效要重装 Storage 单元** |
-| `--set-factors-enabled true|false` | `[factors] enabled` |
-| `--set-reachability 主机ID=direct|outbound` | 主机可达性 |
-| `--add-deployment 主机ID=组件ID[,组件ID]` | 把组件并入主机的 `[deployments]` |
-| `--add-egress-domain <域名>`（可重复） | 把域名追加到 `[egress_proxy] http_domains`（已在名单里或被 `*.` 后缀覆盖的不重复；没写这项时从默认名单开始追加）；**生效要重新渲染并发布出口代理与 Collector** |
-| `--rename-host 旧ID=新ID` | 主机改名（主机表、`[deployments]`、引用一起改） |
-| `--import-scf <JSON>` | 整体替换 `[scf_plan]` |
-| `--add-factor-task <任务ID>`（可重复），可选 `--example-file <样例>` | 从配置样例（默认仓库根的 `moox.toml.example`）复制这个 `[[factors.tasks]]`，成员用到而配置里没有的 `[[factors.definitions]]` 一并复制；已有同 ID 的任务时报错。样例里没有的任务（例如线上手工建的）先写一份只含这个任务和所需定义的样例文件，用 `--example-file` 指过去 |
-| `--remove-factor-task <任务ID>`、`--remove-factor <因子ID>`（都可重复） | 删除因子任务、因子定义；因子仍被留下的任务引用时报错。只改本机配置，线上已有的任务不动 |
-
-不带任何参数的 `migrate` 把旧格式改成当前格式（因子定义、主机中文名、旧组件名）。
+`moox.toml` 是明文、不含秘密：数组（`[deployments]`、`http_domains`）、`[scf_plan]`、主机改名这类 `set` 管不了的改动，直接编辑这份文件，改完用 `config get` 核对，再按下表重新部署对应主机生效。因子任务不在配置文件里，用 `factor task apply --file` 导入。
 
 ## 其余情况
 
-- 数组、数组表、大段结构（例如 `[[factors.tasks]]`）：让用户跑 `moox-cli config edit` 在本机网页里改，Agent 不填也不读。
-- 交易所密钥 `[[exchange_keys]]` 是数组表，`config set` 改不了：让用户在 `config init` 录入页（配了海外服务器时有“交易所密钥”一步）或 `config edit` 的“交易所密钥”里填写，Agent 只用 `config get exchange_keys.<序号>` 看有哪几把（名称、交易所、环境、是否只读；密钥值默认打码，不要 `--reveal`）。
+- 秘密文件里的数组表：让用户跑 `moox-cli config edit` 在本机网页里改，Agent 不填也不读。
+- 交易所密钥 `[[exchange_keys]]` 是数组表，`config set` 改不了：让用户在 `config init` 录入页（配了海外服务器时有“交易所密钥”一步）或 `config edit` 的“交易所密钥”里填写，Agent 只用 `config get --file ./moox.secrets.toml exchange_keys.<序号>` 看有哪几把（名称、交易所、环境、是否只读；密钥值默认打码，不要 `--reveal`）。
   字段：`name`（只允许小写字母、数字、连字符）、`exchange`（`binance`、`okx`）、`environment`（`production`、`testnet`）、`api_key`、`secret_key`、`passphrase`（OKX 必填）、`readonly`（可选，默认 false）。
-  `setup apply` 把它们写进密钥管理，固定 ID 为 `exchange-<交易所>-<环境>-<名称>`；**只建不改**：管理台里已有这个 ID 的不覆盖（以管理台为准），已在管理台删除的不重建，从 `moox.toml` 删掉条目也不会删除管理台里的密钥。部署 Trade 之后用 `trade inspect-credential` 检测。
-- 手写的明文 `moox.toml`：`moox-cli config encrypt` 加密。
+  `setup init` 把它们写进密钥管理，固定 ID 为 `exchange-<交易所>-<环境>-<名称>`；**只建不改**：管理台里已有这个 ID 的不覆盖（以管理台为准），已在管理台删除的不重建，从秘密文件删掉条目也不会删除管理台里的密钥。部署 Trade 之后用 `trade inspect-credential` 检测。
+- 手写的明文 `moox.secrets.toml`：`moox-cli config encrypt` 加密。
 - 新电脑：`moox-cli config restore` 从管理台恢复。
-- `config get` 报“这台电脑上没有解密 moox.toml 的密钥”：文件来自另一台电脑或钥匙串条目被删，用 `config restore`；不要重新生成密钥覆盖。
+- `config get` 报“这台电脑上没有解密秘密文件的密钥”：文件来自另一台电脑或钥匙串条目被删，用 `config restore`；不要重新生成密钥覆盖。
 
 ## 例子：把 5m 保留期调到 240 天
 
 ```bash
 moox-cli config get storage_retention.defaults.5m                         # 先看现值
-moox-cli config migrate --set-retention defaults.5m=240d                  # 预览
-moox-cli config migrate --set-retention defaults.5m=240d --yes            # 写回
+moox-cli config set storage_retention.defaults.5m=240d                    # 预览
+moox-cli config set storage_retention.defaults.5m=240d --yes              # 写回
 ```
 
-之后重装 Storage 单元让保留期生效；线上已经手工改过策略文件时，要让两边一致，否则下次重装会改回去。
+之后重新部署存储机让保留期生效；线上已经手工改过策略文件时，要让两边一致，否则下次重装会改回去。

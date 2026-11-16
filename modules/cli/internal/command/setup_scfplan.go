@@ -46,7 +46,7 @@ func defaultSetupEnsureSCFPlan(ctx context.Context, snapshot *setupconfig.Snapsh
 	if !snapshot.Manifest.SCFPlan.Enabled {
 		return nil, nil
 	}
-	gateway, err := openCommandGateway(ctx, "", snapshot)
+	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
 	if err != nil {
 		return &setupSCFPlanSummary{Enabled: true, Status: "failed", Spaces: []setupSCFPlanSpaceResult{{Action: "failed", Warning: "open gateway failed"}}}, nil
 	}

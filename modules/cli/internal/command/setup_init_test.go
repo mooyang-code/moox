@@ -5,6 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
+	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
@@ -27,7 +31,7 @@ type fakeSetupInitFactor struct {
 
 func (f *fakeSetupInitFactor) Apply(_ context.Context, plan setupFactorPlan) (setupFactorSummary, error) {
 	f.plan = plan
-	return setupFactorSummary{Enabled: true, Definitions: len(plan.Definitions), Tasks: len(plan.Tasks), Members: plan.memberCount(), Imported: len(plan.Definitions), MembersAdded: plan.memberCount()}, nil
+	return setupFactorSummary{Definitions: len(plan.Definitions), Tasks: len(plan.Tasks), Members: plan.memberCount(), DefinitionsCreated: len(plan.Definitions), MembersCreated: plan.memberCount()}, nil
 }
 
 func (f *fakeSetupInitFactor) Close() error { return nil }
@@ -55,34 +59,6 @@ func TestSetupInitRequiresStorageHost(t *testing.T) {
 	cmd := newSetupCommand(setupDeps{})
 	cmd.SetArgs([]string{"init"})
 	require.Error(t, cmd.Execute())
-}
-
-func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	snapshot.Manifest.Factors.Enabled = true
-	snapshot.Manifest.Factors.SourceDir = "../../../../examples/factors"
-	snapshot.Manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "bias", File: "timeseries.yaml"}}
-	snapshot.Manifest.Factors.Tasks = []setupconfig.FactorSetupTask{{
-		ID: "ftask_binance_kline_1m", Name: "行情因子", SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m",
-		Members: []setupconfig.FactorSetupMember{{Factor: "bias", Status: "enabled"}},
-	}}
-	factor := &fakeSetupInitFactor{}
-	cmd := newSetupCommand(setupDeps{
-		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		openInitFactor: func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error) { return factor, nil },
-	})
-	var output bytes.Buffer
-	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"factors", "--file", "moox.toml"})
-	require.NoError(t, cmd.Execute())
-	require.Len(t, factor.plan.Definitions, 1)
-	require.Len(t, factor.plan.Tasks, 1)
-	require.Len(t, factor.plan.Tasks[0].Members, 1)
-	assert.Equal(t, "bias", factor.plan.Definitions[0].FactorID)
-	assert.Equal(t, "ftask_binance_kline_1m", factor.plan.Tasks[0].TaskID)
-	assert.Equal(t, "行情因子", factor.plan.Tasks[0].Name)
-	assert.Equal(t, "bias", factor.plan.Tasks[0].Members[0].FactorID)
-	assert.Contains(t, output.String(), `"status":"ready"`)
 }
 
 func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
@@ -139,6 +115,10 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 			require.Equal(t, spaces, got)
 			return setupclient.StatusResult{State: "completed", Spaces: 1}, nil
 		},
+		ensureNotification: func(context.Context, *setupconfig.Snapshot) (*setupNotificationSummary, error) {
+			stages = append(stages, "notification")
+			return &setupNotificationSummary{Status: notificationKept, Existing: 1}, nil
+		},
 		registerCloudAccounts: func(context.Context, *setupconfig.Snapshot) (*setupCloudAccountSummary, error) {
 			stages = append(stages, "cloud-accounts")
 			return &setupCloudAccountSummary{Enabled: true, Planned: 1, Registered: 1}, nil
@@ -162,6 +142,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"firewall",
 		"admin-apply",
 		"admin-status",
+		"notification",
 		"cloud-accounts",
 		"login",
 		"storage-apply",
@@ -180,6 +161,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"business_spaces":1,
 		"business_space_ids":["crypto"],
 		"admin":{"action":"created","users":0,"secrets":0,"spaces":1,"spaces_created":1,"spaces_unchanged":0},
+		"notification":{"status":"kept","existing":1},
 		"cloud_accounts":{"enabled":true,"planned":1,"registered":1,"unchanged":0},
 		"admin_state":"completed",
 		"login_api":"valid",
@@ -408,6 +390,7 @@ func testCanonicalTimeSeriesView(spaceID, viewID, datasetID string) seedView {
 func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	storage := &fakeSetupInitStorage{}
+	monitor := useFakeMonitorChannels(t, 0)
 	cmd := newSetupCommand(setupDeps{
 		loadInitBundle: func(string) (setupInitBundle, error) { return setupInitBundle{}, nil },
 		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -434,11 +417,109 @@ func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	for _, secret := range []string{
 		"admin-test-password", "control-ssh-password", "other-ssh-password",
-		"AKID-test-secret", "cloud-test-secret",
+		"AKID-test-secret", "cloud-test-secret", "key=test",
 	} {
 		assert.NotContains(t, output.String(), secret)
 	}
+	require.Len(t, monitor.added, 1, "Monitor 没有渠道时写入秘密文件里的初始渠道")
+	assert.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", monitor.added[0].GetWebhookUrl())
+	assert.Contains(t, output.String(), `"notification":{"status":"created","type":"wecom","webhook":"https://qyapi.weixin.qq.com/…test"}`)
 }
+
+// 管理台已有渠道、密钥时 setup init 不改写：Monitor 已有任何渠道就不加；管理员、云密钥、交易所密钥由 ApplySetup 只建不改
+// （服务端返回 kept / exists），CLI 不另外写，也不拿秘密文件里的密码去校验登录。
+func TestSetupInitKeepsExistingChannelsAndSecrets(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	monitor := useFakeMonitorChannels(t, 2)
+	applied, logins := 0, 0
+	cmd := newSetupCommand(setupDeps{
+		loadInitBundle: func(string) (setupInitBundle, error) { return setupInitBundle{}, nil },
+		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		ensureFirewall: func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
+			return setupFirewallSummary{Status: "ready"}, nil
+		},
+		applySpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+			applied++
+			return setupclient.ApplyResult{Action: "unchanged", Kept: []string{"admin", "tencent_cloud"},
+				ExchangeKeys: []setupclient.ExchangeKeyResult{{SecretID: "exchange-binance-production-main", State: setupclient.ExchangeKeyExists}}}, nil
+		},
+		statusSpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error) {
+			return setupclient.StatusResult{State: "completed"}, nil
+		},
+		login: func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
+			logins++
+			return setupclient.LoginResult{}, errors.New("login_failed")
+		},
+		openInitStorage: func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error) {
+			return &fakeSetupInitStorage{}, nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"init", "--storage-host", "compute"})
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, 1, applied, "初始秘密只经 ApplySetup 写一次")
+	assert.Empty(t, monitor.added, "Monitor 已有渠道时不写")
+	assert.Zero(t, logins, "管理员以管理台为准时不校验登录")
+	var summary struct {
+		Admin        setupclient.ApplyResult  `json:"admin"`
+		Notification setupNotificationSummary `json:"notification"`
+		LoginSkipped string                   `json:"login_skipped"`
+	}
+	require.NoError(t, json.Unmarshal(output.Bytes(), &summary))
+	assert.Equal(t, []string{"admin", "tencent_cloud"}, summary.Admin.Kept)
+	assert.Equal(t, setupclient.ExchangeKeyExists, summary.Admin.ExchangeKeys[0].State)
+	assert.Equal(t, setupNotificationSummary{Status: notificationKept, Existing: 2, Note: "Monitor 已有告警渠道，以管理台为准，没有写入"}, summary.Notification)
+	assert.Contains(t, summary.LoginSkipped, "管理台")
+}
+
+// 秘密文件里没填 Webhook 地址时不连 Monitor。
+func TestInitialNotificationIsSkippedWithoutAWebhook(t *testing.T) {
+	summary, err := ensureInitialNotification(context.Background(), nil, topology.Notification{ChannelType: "wecom"})
+	require.NoError(t, err)
+	assert.Equal(t, notificationSkipped, summary.Status)
+}
+
+// fakeMonitorChannels 是 Monitor 告警渠道接口的替身：existing 是已有渠道数，added 记下写入的渠道。
+type fakeMonitorChannels struct {
+	existing int
+	added    []*monitorpb.AddNotificationChannelReq
+}
+
+func useFakeMonitorChannels(t *testing.T, existing int) *fakeMonitorChannels {
+	t.Helper()
+	fake := &fakeMonitorChannels{existing: existing}
+	previous := openCommandGateway
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return fake, nil }
+	t.Cleanup(func() { openCommandGateway = previous })
+	return fake
+}
+
+func (f *fakeMonitorChannels) Invoke(_ context.Context, service, method string, req, rsp any) error {
+	if service != monitorService {
+		return errors.New("unexpected service " + service)
+	}
+	switch method {
+	case "ListNotificationChannels":
+		response := rsp.(*monitorpb.ListNotificationChannelsRsp)
+		response.RetInfo = &commonpb.RetInfo{}
+		for i := 0; i < f.existing; i++ {
+			response.Channels = append(response.Channels, &monitorpb.NotificationChannel{ChannelId: fmt.Sprint(i), ChannelType: "feishu"})
+		}
+	case "AddNotificationChannel":
+		f.added = append(f.added, req.(*monitorpb.AddNotificationChannelReq))
+		rsp.(*monitorpb.AddNotificationChannelRsp).RetInfo = &commonpb.RetInfo{}
+	default:
+		return errors.New("unexpected method " + method)
+	}
+	return nil
+}
+
+func (f *fakeMonitorChannels) Forward(context.Context, string, string, int, []byte) ([]byte, error) {
+	return nil, errors.New("not used")
+}
+
+func (f *fakeMonitorChannels) Close() error { return nil }
 
 func TestProvisionSetupCLSReportsReadyAndNeverBlocksInit(t *testing.T) {
 	ready := provisionSetupCLS(context.Background(), clsAccountSource{}, func(string, string) (tencent.CLSAPI, error) { return clsReadyAPI{}, nil }, "", 0)

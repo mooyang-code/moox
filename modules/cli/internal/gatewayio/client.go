@@ -16,6 +16,7 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
@@ -34,21 +35,46 @@ type Client struct {
 	err     error
 }
 
-func Open(ctx context.Context, snapshot *setupconfig.Snapshot) (*Client, error) {
+// sshHost 是建 SSH 隧道要用的一台主机。
+type sshHost struct {
+	name, address, username string
+	port                    int
+	// password 只有旧格式的 moox.toml 会有（T13 随旧部署代码删除）；新格式只支持密钥登录。
+	password      string
+	identityFiles []string
+}
+
+// Open 按 moox.toml 的主机经 SSH 隧道连到各主机网关，使用本机 ~/.config/moox 下的操作员身份。
+func Open(ctx context.Context, cfg *topology.Config) (*Client, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-	return open(ctx, snapshot, filepath.Join(home, ".config", "moox", "gateway-client.yaml"), setupssh.Options{Timeout: 5 * time.Second})
+	if cfg == nil {
+		return nil, errors.New("gateway tunnel requires a live context and setup configuration")
+	}
+	hosts := make([]sshHost, 0, len(cfg.HostCatalog))
+	for _, host := range cfg.Hosts() {
+		hosts = append(hosts, sshHost{name: host.Name, address: host.Address, username: host.Username, port: host.Port, identityFiles: host.IdentityFiles()})
+	}
+	options := setupssh.Options{Timeout: 5 * time.Second}
+	return open(ctx, hosts, cfg.ControlHost().Name, filepath.Join(home, ".config", "moox", "gateway-client.yaml"), options)
 }
 
-// OpenWithIdentity uses an explicitly selected native operator identity.
+// OpenWithIdentity 用指定的操作员身份打开，给还读旧格式 moox.toml 的旧部署代码用（T13 删除）。
 func OpenWithIdentity(ctx context.Context, snapshot *setupconfig.Snapshot, identityPath string, options setupssh.Options) (*Client, error) {
-	return open(ctx, snapshot, identityPath, options)
+	if snapshot == nil {
+		return nil, errors.New("gateway tunnel requires a live context and setup configuration")
+	}
+	hosts := make([]sshHost, 0, len(snapshot.Manifest.HostCatalog))
+	for _, host := range snapshot.Manifest.Hosts() {
+		hosts = append(hosts, sshHost{name: host.Name, address: host.Address, username: host.Username, port: host.Port, password: host.Password, identityFiles: options.IdentityFiles})
+	}
+	return open(ctx, hosts, snapshot.Manifest.ControlHost().Name, identityPath, options)
 }
 
-func open(ctx context.Context, snapshot *setupconfig.Snapshot, identityPath string, options setupssh.Options) (*Client, error) {
-	if snapshot == nil || ctx == nil || ctx.Err() != nil {
+func open(ctx context.Context, hosts []sshHost, control, identityPath string, options setupssh.Options) (*Client, error) {
+	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("gateway tunnel requires a live context and setup configuration")
 	}
 	identity, err := loadIdentity(identityPath)
@@ -64,15 +90,15 @@ func open(ctx context.Context, snapshot *setupconfig.Snapshot, identityPath stri
 		return nil, fmt.Errorf("load operator signing key: %w", err)
 	}
 	lifetime, cancel := context.WithCancel(ctx)
-	resolver := &tunnels{ctx: lifetime, cancel: cancel, options: options, hosts: make(map[string]setupconfig.Host), connections: make(map[string]*tunnel)}
-	for _, host := range snapshot.Manifest.Hosts() {
-		if _, exists := resolver.hosts[host.Name]; exists {
+	resolver := &tunnels{ctx: lifetime, cancel: cancel, options: options, hosts: make(map[string]sshHost), connections: make(map[string]*tunnel)}
+	for _, host := range hosts {
+		if _, exists := resolver.hosts[host.name]; exists {
 			cancel()
-			return nil, fmt.Errorf("duplicate configured SSH host %q", host.Name)
+			return nil, fmt.Errorf("duplicate configured SSH host %q", host.name)
 		}
-		resolver.hosts[host.Name] = host
+		resolver.hosts[host.name] = host
 	}
-	source := &directorySource{control: snapshot.Manifest.ControlHost().Name, tunnels: resolver}
+	source := &directorySource{control: control, tunnels: resolver}
 	// 安装操作端身份时一并保存的 MooX CA；连接只能出站的主机（经 control 中转）时用它校验证书。
 	caFile := filepath.Join(filepath.Dir(identityPath), OperatorCAFile)
 	if _, err := os.Stat(caFile); err != nil {
@@ -142,7 +168,7 @@ type tunnels struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	options     setupssh.Options
-	hosts       map[string]setupconfig.Host
+	hosts       map[string]sshHost
 	mu          sync.Mutex
 	connections map[string]*tunnel
 	closed      bool
@@ -183,7 +209,9 @@ func (t *tunnels) forward(ctx context.Context, key, hostID, remote string) (stri
 		_ = connection.ssh.Close()
 		delete(t.connections, key)
 	}
-	transport, err := setupssh.Dial(ctx, setupssh.Target{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username}, host.Password, t.options)
+	options := t.options
+	options.IdentityFiles = host.identityFiles
+	transport, err := setupssh.Dial(ctx, setupssh.Target{Name: host.name, Address: host.address, Port: host.port, Username: host.username}, host.password, options)
 	if err != nil {
 		return "", fmt.Errorf("open gateway SSH tunnel for %s: %w", hostID, err)
 	}

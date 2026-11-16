@@ -69,20 +69,22 @@ type setupCloudAccountSummary struct {
 }
 
 type setupInitSummary struct {
-	Status           string                    `json:"status"`
-	Firewall         setupFirewallSummary      `json:"firewall"`
-	BusinessSpaces   int                       `json:"business_spaces"`
-	BusinessSpaceIDs []string                  `json:"business_space_ids"`
-	Admin            setupclient.ApplyResult   `json:"admin"`
-	CloudAccounts    *setupCloudAccountSummary `json:"cloud_accounts,omitempty"`
-	CLS              *setupCLSSummary          `json:"cls,omitempty"`
-	SCFPlan          *setupSCFPlanSummary      `json:"scf_plan,omitempty"`
-	AdminState       string                    `json:"admin_state"`
-	LoginAPI         string                    `json:"login_api"`
-	LoginSkipped     string                    `json:"login_skipped,omitempty"`
-	Metadata         setupInitMetadataCounts   `json:"metadata"`
-	Verification     setupInitMetadataCounts   `json:"verification"`
-	BrowserTrust     *setupBrowserTrustSummary `json:"browser_trust,omitempty"`
+	Status           string                  `json:"status"`
+	Firewall         setupFirewallSummary    `json:"firewall"`
+	BusinessSpaces   int                     `json:"business_spaces"`
+	BusinessSpaceIDs []string                `json:"business_space_ids"`
+	Admin            setupclient.ApplyResult `json:"admin"`
+	// Notification 是告警渠道初始值的处理结果：Monitor 没有任何渠道时才写入。
+	Notification  *setupNotificationSummary `json:"notification,omitempty"`
+	CloudAccounts *setupCloudAccountSummary `json:"cloud_accounts,omitempty"`
+	CLS           *setupCLSSummary          `json:"cls,omitempty"`
+	SCFPlan       *setupSCFPlanSummary      `json:"scf_plan,omitempty"`
+	AdminState    string                    `json:"admin_state"`
+	LoginAPI      string                    `json:"login_api"`
+	LoginSkipped  string                    `json:"login_skipped,omitempty"`
+	Metadata      setupInitMetadataCounts   `json:"metadata"`
+	Verification  setupInitMetadataCounts   `json:"verification"`
+	BrowserTrust  *setupBrowserTrustSummary `json:"browser_trust,omitempty"`
 }
 
 // setupInitStorageSummary 是 setup init --stage storage 的结果。
@@ -98,9 +100,12 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	var options unitdeploy.DeployOptions
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "导入默认空间、数据集、字段和因子",
+		Short: "导入默认空间与元数据，写入初始秘密（管理员、云密钥、交易所密钥、告警渠道，只建不改）",
 		Long: `--stage storage 在装管理台之前运行：只写业务空间、导入元数据，管理台的服务要等这些就绪才能启动。
-不带 --stage 在管理台装好后运行：完成全部初始化，包括云账户和日志服务；因子任务由 setup start 导入，已经做过的步骤不会重复写入。`,
+不带 --stage 在管理台装好后运行：完成全部初始化。初始秘密取自秘密文件，规则都是只建不改：
+管理员、腾讯云密钥、交易所密钥在管理台已有时以管理台为准，已在管理台删除的交易所密钥不重建；
+告警渠道只在 Monitor 还没有任何渠道时写入一次。还会登记云账户、开通日志服务；因子任务由 setup start 导入。
+已经做过的步骤不会重复写入。交易所密钥在 Trade 部署好之后用 moox-cli trade inspect-credential 检测。`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if stage != "" && stage != "storage" {
 				return errors.New("setup init --stage 只支持 storage")
@@ -252,6 +257,10 @@ func runSetupInit(
 	if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
 		return setupInitSummary{}, fmt.Errorf("setup_incomplete")
 	}
+	notification, err := deps.ensureNotification(ctx, snapshot)
+	if err != nil {
+		return setupInitSummary{}, fmt.Errorf("notification: %w", err)
+	}
 	cloudAccounts, err := deps.registerCloudAccounts(ctx, snapshot)
 	if err != nil {
 		return setupInitSummary{}, err
@@ -292,7 +301,7 @@ func runSetupInit(
 	}
 	return setupInitSummary{
 		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
-		Admin: admin, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, AdminState: adminStatus.State, LoginAPI: login.LoginAPI, LoginSkipped: loginSkipped,
+		Admin: admin, Notification: notification, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, AdminState: adminStatus.State, LoginAPI: login.LoginAPI, LoginSkipped: loginSkipped,
 		Metadata: setupInitMetadataCounts{
 			Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
 		},
@@ -325,7 +334,7 @@ func defaultSetupProvisionCLS(ctx context.Context, snapshot *setupconfig.Snapsho
 	if !snapshot.Manifest.SCFEnabled() {
 		return nil, nil
 	}
-	gateway, err := openCommandGateway(ctx, "", snapshot)
+	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
 	if err != nil {
 		return &setupCLSSummary{Enabled: true, Status: "failed", Warning: "open gateway failed"}, nil
 	}
@@ -363,7 +372,7 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfi
 		return nil, nil
 	}
 
-	gateway, err := openCommandGateway(ctx, "", snapshot)
+	gateway, err := openCommandGateway(ctx, "", snapshot.Config())
 	if err != nil {
 		return nil, fmt.Errorf("cloud_accounts: open gateway: %w", err)
 	}
@@ -409,57 +418,6 @@ func sameSetupCloudAccount(account adminclient.CloudAccount, input adminclient.C
 	return account.AccountID == input.AccountID && account.AccountName == input.AccountName &&
 		account.Provider == input.Provider && account.CredentialSecretID == input.CredentialSecretID &&
 		account.AppID == input.AppID && account.COSRegion == input.COSRegion && account.COSBucket == input.COSBucket
-}
-
-// newSetupFactorsCommand imports the repository's YAML factor library definitions
-// without touching Storage metadata.  It is useful when metadata has already
-// been initialized (possibly from an older seed) and a full setup init would
-// correctly refuse to overwrite that existing contract.
-func newSetupFactorsCommand(deps setupDeps) *cobra.Command {
-	var file string
-	cmd := &cobra.Command{
-		Use:   "factors",
-		Short: "按 moox.toml 的 [[factors.definitions]] 与 [[factors.tasks]] 补齐因子定义、任务与成员（只补缺不删除）",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			snapshot, err := deps.load(file)
-			if err != nil {
-				return err
-			}
-			defer clearSetupSecrets(snapshot)
-			plan, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
-			if err != nil {
-				return err
-			}
-			summary := setupFactorSummary{Enabled: !plan.empty(), Definitions: len(plan.Definitions), Tasks: len(plan.Tasks), Members: plan.memberCount()}
-			reportFactorWarnings(plan.Warnings)
-			if !plan.empty() {
-				service, openErr := deps.openInitFactor(cmd.Context(), snapshot)
-				if openErr != nil {
-					return openErr
-				}
-				var applyErr error
-				summary, applyErr = service.Apply(cmd.Context(), plan)
-				closeErr := service.Close()
-				summary.Warnings = plan.Warnings
-				if applyErr != nil {
-					// 冲突时也输出逐项结果，再以错误结束。
-					if len(summary.Items) > 0 {
-						_ = writeSetupJSON(cmd, map[string]any{"status": "failed", "factors": summary})
-					}
-					return applyErr
-				}
-				if closeErr != nil {
-					return closeErr
-				}
-			}
-			if err := snapshot.VerifyUnchanged(); err != nil {
-				return fmt.Errorf("config_changed")
-			}
-			return writeSetupJSON(cmd, map[string]any{"status": "ready", "factors": summary})
-		},
-	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	return cmd
 }
 
 func setupSpaceIDs(spaces []setupclient.Space) []string {
