@@ -81,6 +81,7 @@ func (d *TopologyDAO) Read(ctx context.Context) (hosts []HostRecord, deployments
 	return
 }
 
+// Compile 按登记的部署与服务目录算一台主机的路由与目录，只用于展示和校验；网关自己按快照算。
 func (d *TopologyDAO) Compile(ctx context.Context, hostID string) (servicecatalog.CompiledHost, error) {
 	hosts, deployments, err := d.Read(ctx)
 	if err != nil {
@@ -89,7 +90,12 @@ func (d *TopologyDAO) Compile(ctx context.Context, hostID string) (servicecatalo
 	if !slices.ContainsFunc(hosts, func(h HostRecord) bool { return h.HostID == hostID }) {
 		return servicecatalog.CompiledHost{}, gorm.ErrRecordNotFound
 	}
-	return d.catalog.Compile(d.topology(hosts, deployments), hostID)
+	// 网关那一侧的 Compile 不校验拓扑（它信任 Admin）；Admin 自己算之前校验一遍。
+	topology := d.topology(hosts, deployments)
+	if err := d.catalog.ValidateTopology(topology); err != nil {
+		return servicecatalog.CompiledHost{}, err
+	}
+	return d.catalog.Compile(topology, hostID)
 }
 
 func (d *TopologyDAO) GetGatewayStatus(ctx context.Context, hostID string) (*HostGatewayStatus, error) {

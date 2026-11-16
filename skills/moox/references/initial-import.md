@@ -98,7 +98,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline check --deep --file ./
 
 `--target factor` 经操作员网关调因子引擎 `trpc.moox.factor.EngineControl` 的 `WriteSeries`（因子机只能出站时经 control 中转），
 文件留在操作机上，不传到因子机，也不在因子机上运行 moox-cli：导入由操作机上的 moox-cli 用操作员网关签名发出。
-（因子机网关的快照缓存里本来就有 moox-cli 的校验密钥，因子机上的进程能经它调到 moox-cli 能调的方法，见[主机网关](../../../docs/模块/主机网关.md)；每台主机一把密钥之后才收紧。）
+（因子机上的进程只能以因子机上的组件身份签名，调不了只给 moox-cli 的方法，见[主机网关](../../../docs/模块/主机网关.md)。）
 
 数据从操作机经 control 绕到因子机，**中转没有限速**：control 的出口与采集写 Storage 走的是同一条跨地域公网，一路 TCP 就可能把它占满，挤占生产采集
 （先例：从海外机 rsync 一个 81 MB 的文件让 1m 因子晚了 8 分钟）。`xargs -P` 限制的是进程数，不是带宽。所以：

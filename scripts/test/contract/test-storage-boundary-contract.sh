@@ -115,6 +115,6 @@ write_batch=$(awk '/^type ViewIndexWriteBatch struct \{/{inside=1; next} inside 
 for field in 'ViewRevision +uint64' 'ViewSchemaHash +string'; do
   grep -Eq "^[[:space:]]+${field}$" <<<"${write_batch}" || fail "ViewIndexWriteBatch field is missing: ${field}"
 done
-rg -n 'AllowedCallers|allowed_callers|AllowsCaller' packages/gatewayroute modules/admin/internal/service/sysdeploy modules/hostgateway/internal >/dev/null || fail 'Gateway caller ACL is not present'
+rg -n 'routeCallers|route\.Callers' packages/servicecatalog modules/hostgateway/internal >/dev/null || fail 'Gateway caller ACL is not present'
 
 echo 'storage boundary contract passed'

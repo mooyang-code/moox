@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
 	"trpc.group/trpc-go/trpc-go/transport"
@@ -40,8 +42,9 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.False(t, db.Migrator().HasTable("t_service_deployments"))
 	require.False(t, db.Migrator().HasTable("t_gateway_nodes"))
 	methods := pb.File_sysdeploy_service_proto.Services().ByName("SysDeploy").Methods()
-	require.Equal(t, 9, methods.Len())
+	require.Equal(t, 8, methods.Len())
 	require.Nil(t, methods.ByName("ListServiceDeployments"))
+	require.Nil(t, methods.ByName("GetDirectory"), "目录不再由 Admin 展开下发")
 
 	service := sysdeploy.NewService(manager, "control")
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -97,45 +100,79 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	deployments, err := proxy.ListDeployments(ctx, &pb.ListDeploymentsReq{HostId: "storage"})
 	check(deployments.GetRetInfo(), err)
 	require.Len(t, deployments.GetDeployments(), 3, "two host components are maintained automatically")
-	directory, err := proxy.GetDirectory(ctx, &pb.GetDirectoryReq{})
-	check(directory.GetRetInfo(), err)
-	require.Contains(t, directory.GetDirectory().GetServices(), "trpc.moox.storage.Metadata")
+	topology, err := sysdeploy.NewTopologyDAO(db, "control")
+	require.NoError(t, err)
+	// 路由与目录都按登记的部署和内嵌目录现算：routedServices 是一台主机路由里出现的服务。
+	routedServices := func(routes *pb.GetHostRoutesRsp) map[string]bool {
+		services := map[string]bool{}
+		for _, route := range routes.GetRoutes() {
+			services[route.GetServicePath()] = true
+		}
+		return services
+	}
+	compiled, err := topology.Compile(ctx, "control")
+	require.NoError(t, err)
+	require.Equal(t, []string{"storage"}, compiled.Directory.Services["trpc.moox.storage.Metadata"])
 	routes, err := proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "storage"})
 	check(routes.GetRetInfo(), err)
-	require.NotEmpty(t, routes.GetDefinitionHash())
-	require.EqualValues(t, 1, routes.GetSnapshotSchemaVersion())
+	require.Equal(t, "storage", routes.GetHostId())
+	require.EqualValues(t, 2, routes.GetSnapshotSchemaVersion())
+	require.Contains(t, routedServices(routes), "trpc.moox.storage.Metadata")
+	require.NotContains(t, routedServices(routes), "trpc.moox.ops.SysDeploy", "路由只列本机部署的服务")
+	for _, route := range routes.GetRoutes() {
+		require.NotEmpty(t, route.GetCallers(), route.GetMethod())
+		require.Positive(t, route.GetTimeoutMs())
+		require.Positive(t, route.GetMaxBodyBytes())
+		require.True(t, strings.HasPrefix(route.GetAddress(), "127.0.0.1:"), route.GetAddress())
+	}
 	compiledAt, err := time.Parse(time.RFC3339Nano, routes.GetCompiledAt())
 	require.NoError(t, err)
 	require.WithinDuration(t, time.Now(), compiledAt, 5*time.Second)
 	require.NotEmpty(t, routes.GetRoutes())
 	require.NotEmpty(t, routes.GetGatewayStatus().GetExpectedHash())
-	require.NotEqual(t, routes.GetDefinitionHash(), routes.GetGatewayStatus().GetExpectedHash(), "definition hash must not stand in for the final snapshot hash, which covers the public keys")
 	require.Empty(t, routes.GetGatewayStatus().GetLastSeenAt(), "reading desired state must not create a heartbeat")
-	definitionHash, expectedHash := routes.GetDefinitionHash(), routes.GetGatewayStatus().GetExpectedHash()
+	// 期望哈希就是快照哈希，全部主机相同。
+	controlRoutes, err := proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "control"})
+	check(controlRoutes.GetRetInfo(), err)
+	require.Equal(t, routes.GetGatewayStatus().GetExpectedHash(), controlRoutes.GetGatewayStatus().GetExpectedHash())
+	require.Contains(t, routedServices(controlRoutes), "trpc.moox.ops.SysDeploy")
+	require.NotContains(t, routedServices(controlRoutes), "trpc.moox.storage.Metadata")
+	previousRoutes, expectedHash := routes.GetRoutes(), routes.GetGatewayStatus().GetExpectedHash()
 	require.NoError(t, keyStore.SetHostPublicKey(ctx, "storage", publicKey("host/storage-rotated")))
 	routes, err = proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "storage"})
 	check(routes.GetRetInfo(), err)
-	require.Equal(t, definitionHash, routes.GetDefinitionHash(), "key rotation does not change route definitions")
+	require.Len(t, routes.GetRoutes(), len(previousRoutes))
+	for i, route := range routes.GetRoutes() {
+		require.True(t, proto.Equal(previousRoutes[i], route), "key rotation does not change route definitions")
+	}
 	require.NotEqual(t, expectedHash, routes.GetGatewayStatus().GetExpectedHash(), "desired hash must include key rotation before the next gateway heartbeat")
 	require.Empty(t, routes.GetGatewayStatus().GetLastSeenAt())
-	topology, err := sysdeploy.NewTopologyDAO(db, "control")
-	require.NoError(t, err)
-	_, snapshot, err := topology.CompileSnapshot(ctx, "storage")
+	snapshot, err := topology.Snapshot(ctx)
 	require.NoError(t, err)
 	require.Equal(t, snapshot.GetHash(), routes.GetGatewayStatus().GetExpectedHash())
+	require.Equal(t, snapshot.GetSchemaVersion(), routes.GetSnapshotSchemaVersion())
 	routes, err = proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "unknown"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, routes.GetRetInfo().GetCode())
 	deployment, err := proxy.SetDeploymentStatus(ctx, &pb.SetDeploymentStatusReq{HostId: "storage", ComponentId: "storage-primary", Status: "disabled"})
 	check(deployment.GetRetInfo(), err)
-	directory, err = proxy.GetDirectory(ctx, &pb.GetDirectoryReq{})
-	check(directory.GetRetInfo(), err)
-	require.NotContains(t, directory.GetDirectory().GetServices(), "trpc.moox.storage.Metadata")
+	compiled, err = topology.Compile(ctx, "control")
+	require.NoError(t, err)
+	require.NotContains(t, compiled.Directory.Services, "trpc.moox.storage.Metadata")
+	require.Contains(t, compiled.Directory.Hosts, "storage")
+	routes, err = proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "storage"})
+	check(routes.GetRetInfo(), err)
+	require.NotContains(t, routedServices(routes), "trpc.moox.storage.Metadata", "停用的部署撤掉路由")
+	require.NotEmpty(t, routes.GetRoutes(), "主机上其余组件的路由还在")
+	require.NotEqual(t, snapshot.GetHash(), routes.GetGatewayStatus().GetExpectedHash(), "部署变了，期望哈希跟着变")
 	host, err := proxy.SetHostStatus(ctx, &pb.SetHostStatusReq{HostId: "storage", Status: "disabled"})
 	check(host.GetRetInfo(), err)
-	directory, err = proxy.GetDirectory(ctx, &pb.GetDirectoryReq{})
-	check(directory.GetRetInfo(), err)
-	require.NotContains(t, directory.GetDirectory().GetHosts(), "storage")
+	compiled, err = topology.Compile(ctx, "control")
+	require.NoError(t, err)
+	require.NotContains(t, compiled.Directory.Hosts, "storage")
+	routes, err = proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "storage"})
+	check(routes.GetRetInfo(), err)
+	require.Empty(t, routes.GetRoutes(), "停用的主机没有路由")
 	refused, err := proxy.DeleteHost(ctx, &pb.DeleteDeploymentHostReq{HostId: "storage"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, refused.GetRetInfo().GetCode(), "disabled business deployments still prevent deletion")

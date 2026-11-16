@@ -12,9 +12,9 @@ import (
 	"maps"
 	"math/big"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +27,7 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -37,7 +38,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-// strategyGatewayWire 模拟主机网关背后的 Storage、Factor 与 Trade：校验调用方签名、服务目录里的 ACL 与 Storage 角色鉴权。
+// strategyGatewayWire 同时充当本机网关的目录服务与同机的 Storage、Factor、Trade：策略直连它们的服务端口，
+// 这里核对请求不带签名头、调用的方法都在服务目录的名单里（跨主机时由网关按名单把关）、请求空间没有变。
 type strategyGatewayWire struct {
 	factorpb.UnimplementedFactorMgr
 	factorpb.UnimplementedEngineControl
@@ -45,13 +47,10 @@ type strategyGatewayWire struct {
 	storagepb.UnimplementedMetadata
 	storagepb.UnimplementedDataView
 	directorypb.UnimplementedDirectory
-	credentials gatewayauth.Credentials
-	directory   servicecatalog.Directory
-	catalog     servicecatalog.Catalog
-	mu          sync.Mutex
-	nonces      map[string]bool
-	calls       map[string]int
-	refreshes   int
+	catalog   servicecatalog.Catalog
+	mu        sync.Mutex
+	calls     map[string]int
+	refreshes int
 	// closedThrough 是 Trade 替身记下的“关闭到”时刻。
 	closedThrough int64
 	// deadlines 记下 EngineControl 各方法收到的剩余超时：回放“因子现算”不能被 factor.timeout（5 秒）掐断。
@@ -71,43 +70,33 @@ func (w *strategyGatewayWire) GetDirectory(_ context.Context, req *directorypb.G
 	w.mu.Lock()
 	w.refreshes++
 	w.mu.Unlock()
-	if req.GetCurrentVersion() == w.directory.Version {
-		return &directorypb.GetDirectoryRsp{Version: w.directory.Version}, nil
+	if req.GetCurrentVersion() == strategyDirectoryVersion {
+		return &directorypb.GetDirectoryRsp{Version: strategyDirectoryVersion}, nil
 	}
-	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version,
-		Services: map[string]*directorypb.ServiceHosts{
-			"trpc.moox.trade.TradeConsoleService": {HostIds: []string{"control"}},
-			"trpc.moox.factor.FactorMgr":          {HostIds: []string{"control"}},
-			"trpc.moox.factor.EngineControl":      {HostIds: []string{"control"}},
-			"trpc.moox.storage.Metadata":          {HostIds: []string{"control"}},
-			"trpc.moox.storage.DataView":          {HostIds: []string{"control"}},
-		}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
+	// 目录只有主机与部署：策略与 Trade、Factor、Storage 同机。
+	rsp := &directorypb.GetDirectoryRsp{Changed: true, Version: strategyDirectoryVersion,
+		Hosts: []*directorypb.DirectoryHost{{HostId: "control", Address: "control.example.test", Reachability: "direct", Enabled: true}}}
+	for _, component := range []string{"strategy", "trade", "factor-mgr", "factor-engine", "storage-primary", "storage-view"} {
+		rsp.Deployments = append(rsp.Deployments, &directorypb.DirectoryDeployment{HostId: "control", ComponentId: component, Enabled: true})
+	}
+	return rsp, nil
 }
 
-func (w *strategyGatewayWire) verify(ctx context.Context, service, method string, request proto.Message) (gatewayauth.Claims, error) {
+const strategyDirectoryVersion = "v1"
+
+func (w *strategyGatewayWire) verify(ctx context.Context, service, method string, _ proto.Message) error {
 	if !w.catalog.Allowed("strategy", service, method) {
-		return gatewayauth.Claims{}, fmt.Errorf("strategy 调用 %s/%s 不在服务目录的 ACL 里", service, method)
+		return fmt.Errorf("strategy 调用 %s/%s 不在服务目录的 ACL 里", service, method)
 	}
-	headers := http.Header{}
-	for key, value := range codec.Message(ctx).ServerMetaData() {
-		headers.Set(key, string(value))
-	}
-	body, err := proto.Marshal(request)
-	if err != nil {
-		return gatewayauth.Claims{}, err
-	}
-	claims, err := authtest.Verify(w.credentials, gatewayauth.Request{TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
-	if err != nil {
-		return gatewayauth.Claims{}, err
+	for name := range codec.Message(ctx).ServerMetaData() {
+		if strings.HasPrefix(strings.ToLower(name), "x-moox-") {
+			return fmt.Errorf("同机直连的请求带了签名头 %s", name)
+		}
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.nonces[claims.Nonce] {
-		return gatewayauth.Claims{}, errors.New("strategy 签名 nonce 被重放")
-	}
-	w.nonces[claims.Nonce] = true
 	w.calls[service+"/"+method]++
-	return claims, nil
+	return nil
 }
 
 type strategyStorageRequest interface {
@@ -116,7 +105,7 @@ type strategyStorageRequest interface {
 }
 
 func (w *strategyGatewayWire) verifyStorage(ctx context.Context, service, method string, req strategyStorageRequest) error {
-	if _, err := w.verify(ctx, "trpc.moox.storage."+service, method, req); err != nil {
+	if err := w.verify(ctx, "trpc.moox.storage."+service, method, req); err != nil {
 		return err
 	}
 	if req.GetSpaceId() != "crypto" {
@@ -126,7 +115,7 @@ func (w *strategyGatewayWire) verifyStorage(ctx context.Context, service, method
 }
 
 func (w *strategyGatewayWire) GetFactor(ctx context.Context, req *factorpb.GetFactorReq) (*factorpb.GetFactorRsp, error) {
-	if _, err := w.verify(ctx, "trpc.moox.factor.FactorMgr", "GetFactor", req); err != nil {
+	if err := w.verify(ctx, "trpc.moox.factor.FactorMgr", "GetFactor", req); err != nil {
 		return nil, err
 	}
 	return &factorpb.GetFactorRsp{RetInfo: &commonpb.RetInfo{}, Factor: &factorpb.FactorDef{FactorId: req.GetFactorId(), DefinitionHash: "sha256:fixture"}}, nil
@@ -134,7 +123,7 @@ func (w *strategyGatewayWire) GetFactor(ctx context.Context, req *factorpb.GetFa
 
 // engineCall 校验 EngineControl 的调用并记下剩余超时。
 func (w *strategyGatewayWire) engineCall(ctx context.Context, method string, req proto.Message) error {
-	if _, err := w.verify(ctx, "trpc.moox.factor.EngineControl", method, req); err != nil {
+	if err := w.verify(ctx, "trpc.moox.factor.EngineControl", method, req); err != nil {
 		return err
 	}
 	remaining := time.Duration(0)
@@ -238,9 +227,9 @@ func (w *strategyGatewayWire) QueryTimeSeriesRows(ctx context.Context, req *stor
 		Rows: []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{SubjectId: "BTC", DataTime: req.GetTimeRange().GetStartTime()}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "123.45"}}}}}}}, nil
 }
 
-// verifyTrade 校验 Trade 调用：签名、ACL，以及网关转发的可信空间。
+// verifyTrade 校验 Trade 调用：不带签名头、在名单里，并带着调用方给出的空间。
 func (w *strategyGatewayWire) verifyTrade(ctx context.Context, method string, req proto.Message) error {
-	if _, err := w.verify(ctx, "trpc.moox.trade.TradeConsoleService", method, req); err != nil {
+	if err := w.verify(ctx, "trpc.moox.trade.TradeConsoleService", method, req); err != nil {
 		return err
 	}
 	if space := string(codec.Message(ctx).ServerMetaData()["X-Space-Id"]); space != "crypto" {
@@ -287,14 +276,22 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	directory := servicecatalog.Directory{Services: map[string][]string{
-		"trpc.moox.trade.TradeConsoleService": {"control"}, "trpc.moox.factor.FactorMgr": {"control"}, "trpc.moox.factor.EngineControl": {"control"}, "trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.DataView": {"control"},
-	}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
-	directory.Version, err = directory.VersionHash()
-	require.NoError(t, err)
+	// 策略与这些服务同机：直连服务目录里各服务的回环端口，这里都指到同一个假服务上。
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	wire := &strategyGatewayWire{credentials: credentials, directory: directory, catalog: catalog, nonces: map[string]bool{}, calls: map[string]int{}}
+	servicePorts := map[int]bool{}
+	for _, path := range []string{"trpc.moox.trade.TradeConsoleService", "trpc.moox.factor.FactorMgr", "trpc.moox.factor.EngineControl", "trpc.moox.storage.Metadata", "trpc.moox.storage.DataView"} {
+		spec, ok := catalog.Service(path)
+		require.True(t, ok, path)
+		servicePorts[spec.Port] = true
+	}
+	t.Cleanup(gatewayclient.SetLocalServiceAddressForTest(func(port int) string {
+		if !servicePorts[port] {
+			return "127.0.0.1:1"
+		}
+		return listener.Addr().String()
+	}))
+	wire := &strategyGatewayWire{catalog: catalog, calls: map[string]int{}}
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	factorpb.RegisterFactorMgrService(svc, wire)
 	factorpb.RegisterEngineControlService(svc, wire)
@@ -314,7 +311,7 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	return cfg, wire
 }
 
-// Storage、Factor 与 Trade 的全部调用都经共享的部署网关：签名、服务目录的 ACL、Storage 角色鉴权与可信空间都由网关桩校验。
+// Storage、Factor 与 Trade 的全部调用都经共享的网关客户端：同机时直连服务端口、不带签名头；调用的方法都在服务目录的名单里，空间照常带到。
 func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	for _, name := range []string{"MOOX_SERVICE_GATEWAY_TARGET", "MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET"} {
 		t.Setenv(name, "ip://192.0.2.99:11003")

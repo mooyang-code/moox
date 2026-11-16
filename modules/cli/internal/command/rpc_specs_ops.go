@@ -42,7 +42,6 @@ func init() {
 		rpcSpec{Path: []string{"host", "routes"}, Short: "查看一台主机的网关路由", Service: sysDeploySvc, Method: "GetHostRoutes", NoSpace: true,
 			Flags: []rpcFlag{reqFlag("host-id", "host_id", "主机 ID")}},
 		rpcSpec{Path: []string{"host", "catalog"}, Short: "服务目录：组件、端口与服务", Service: sysDeploySvc, Method: "GetCatalog", NoSpace: true},
-		rpcSpec{Path: []string{"host", "directory"}, Short: "服务目录的路由视图：每个服务部署在哪些主机", Service: sysDeploySvc, Method: "GetDirectory", NoSpace: true},
 
 		rpcSpec{Path: []string{"host", "agent", "status"}, HostRequired: true, Short: "主机代理的采集与上报状态", Service: hostAgentSvc, Method: "GetStatus", NoSpace: true, Host: true},
 		rpcSpec{Path: []string{"host", "agent", "snapshot"}, HostRequired: true, Short: "主机代理最近一次的资源快照", Service: hostAgentSvc, Method: "GetSnapshot", NoSpace: true, Host: true},

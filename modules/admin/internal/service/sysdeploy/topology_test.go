@@ -64,11 +64,16 @@ func TestTopologySyncPreservesStateAndRebuildsDirectory(t *testing.T) {
 	require.NoError(t, compiled.Directory.Validate())
 	require.NotContains(t, compiled.Directory.Hosts, "overseas")
 	require.NotContains(t, compiled.Directory.Services, "trpc.moox.collector.CollectMgr")
+	before, err := dao.Snapshot(ctx)
+	require.NoError(t, err)
 	// The same offline DAO is used to recover a disabled deployment.
 	require.NoError(t, dao.SetDeploymentStatus(ctx, "control", "collector", servicecatalog.Enabled))
 	recovered, err := dao.Compile(ctx, "control")
 	require.NoError(t, err)
-	require.NotEqual(t, compiled.Directory.Version, recovered.Directory.Version)
+	require.Equal(t, []string{"control"}, recovered.Directory.Services["trpc.moox.collector.CollectMgr"])
+	after, err := dao.Snapshot(ctx)
+	require.NoError(t, err)
+	require.NotEqual(t, before.Hash, after.Hash, "恢复部署要换快照哈希，网关与客户端据此重新取")
 	require.NoError(t, dao.SyncHosts(ctx, []HostSpec{control, compute}))
 }
 

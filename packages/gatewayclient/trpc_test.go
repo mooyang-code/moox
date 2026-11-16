@@ -245,3 +245,62 @@ func TestRealTRPCZstdCompressionKeepsSignedBodyAndShrinksWire(t *testing.T) {
 	require.Less(t, zstdRead*5, plainRead, "请求方向应显著缩小")
 	require.Less(t, zstdWritten*5, plainWritten, "响应方向应随请求压缩类型一并压缩")
 }
+
+// 真实 tRPC 链路上的本机直连：请求原样到达本机服务，线上没有任何签名头、不压缩，只带调用元数据；
+// 调用方不在方法名单里也能调（本机服务自己的端口本来就对同机进程开放）。
+func TestRealTRPCLocalDirectCallCarriesNoSignature(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	type received struct {
+		rpc      string
+		headers  http.Header
+		compress int
+	}
+	var mu sync.Mutex
+	var calls []received
+	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithCurrentSerializationType(codec.SerializationTypeNoop), server.WithServiceName(secretService))
+	desc := &server.ServiceDesc{ServiceName: secretService, HandlerType: ((*interface{})(nil)), Methods: []server.Method{{Name: "*", Func: func(_ interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+		request := &codec.Body{}
+		filters, err := f(request)
+		if err != nil {
+			return nil, err
+		}
+		return filters.Filter(ctx, request, func(ctx context.Context, input interface{}) (interface{}, error) {
+			message := codec.Message(ctx)
+			headers := http.Header{}
+			for key, value := range message.ServerMetaData() {
+				headers.Set(key, string(value))
+			}
+			mu.Lock()
+			calls = append(calls, received{rpc: message.ServerRPCName(), headers: headers, compress: message.CompressType()})
+			mu.Unlock()
+			return &codec.Body{Data: input.(*codec.Body).Data}, nil
+		})
+	}}}}
+	require.NoError(t, svc.Register(desc, struct{}{}))
+	go func() { _ = svc.Serve() }()
+	t.Cleanup(func() { _ = svc.Close(nil) })
+
+	var ports []int
+	t.Cleanup(SetLocalServiceAddressForTest(func(port int) string {
+		ports = append(ports, port)
+		return listener.Addr().String()
+	}))
+	c := newTestClient(t, internalConfig(t, &sourceStub{directory: testDirectory(t, "storage")}, "storage"))
+	require.False(t, c.catalog.Allowed("monitor", secretService, "UpdateSecret"))
+	body := []byte(`{"rows":"` + strings.Repeat("kline-row-0123456789,", 400) + `"}`)
+	ctx := WithCallMetadata(context.Background(), CallMetadata{SpaceID: "space-1", UserID: "user-1", TraceID: "trace-1"})
+	response, err := c.Forward(ctx, secretService, "UpdateSecret", codec.SerializationTypeJSON, body)
+	require.NoError(t, err)
+	require.Equal(t, body, response)
+	require.Equal(t, []int{11108}, ports, "按服务目录里的服务端口取直连地址")
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, calls, 1)
+	require.Equal(t, "/"+secretService+"/UpdateSecret", calls[0].rpc)
+	require.Empty(t, signatureHeaders(calls[0].headers), "本机直连的线上请求不带签名头")
+	require.Equal(t, "space-1", calls[0].headers.Get("X-Space-Id"))
+	require.Equal(t, "user-1", calls[0].headers.Get("X-User-Id"))
+	require.Equal(t, "trace-1", calls[0].headers.Get("X-Trace-Id"))
+	require.Equal(t, codec.CompressTypeNoop, calls[0].compress, "本机直连不压缩")
+}

@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
 
@@ -84,13 +85,56 @@ func hostContext(host string) context.Context {
 	return context.WithValue(context.Background(), verifiedHost{}, host)
 }
 
-func verificationKey(snapshot *pb.HostGatewaySnapshot, host, identity string) *pb.GatewayVerificationKey {
-	for _, key := range snapshot.VerificationKeys {
-		if key.HostId == host && key.Identity == identity {
-			return key
+func snapshotHost(snapshot *pb.HostGatewaySnapshot, id string) *pb.SnapshotHost {
+	for _, host := range snapshot.Hosts {
+		if host.HostId == id {
+			return host
 		}
 	}
 	return nil
+}
+
+func snapshotIdentity(snapshot *pb.HostGatewaySnapshot, identity string) *pb.SnapshotIdentity {
+	for _, entry := range snapshot.Identities {
+		if entry.Identity == identity {
+			return entry
+		}
+	}
+	return nil
+}
+
+func snapshotDeployment(snapshot *pb.HostGatewaySnapshot, host, component string) *pb.SnapshotDeployment {
+	for _, deployment := range snapshot.Deployments {
+		if deployment.HostId == host && deployment.ComponentId == component {
+			return deployment
+		}
+	}
+	return nil
+}
+
+// snapshotTopology 照网关的做法把快照里的主机与部署还原成拓扑。
+func snapshotTopology(t *testing.T, snapshot *pb.HostGatewaySnapshot) servicecatalog.Topology {
+	t.Helper()
+	status := map[bool]string{true: servicecatalog.Enabled, false: servicecatalog.Disabled}
+	var hosts []servicecatalog.Host
+	for _, host := range snapshot.Hosts {
+		reachability, ok := servicecatalog.ParseReachability(host.Reachability)
+		require.True(t, ok, host.Reachability)
+		hosts = append(hosts, servicecatalog.Host{ID: host.HostId, Address: host.Address, PrivateAddress: host.PrivateAddress, Status: status[host.Enabled], Reachability: reachability})
+	}
+	var deployments []servicecatalog.Deployment
+	for _, deployment := range snapshot.Deployments {
+		deployments = append(deployments, servicecatalog.Deployment{HostID: deployment.HostId, ComponentID: deployment.ComponentId, Status: status[deployment.Enabled]})
+	}
+	return servicecatalog.NewTopology(hosts, deployments)
+}
+
+// signingCallers 是各网关拿到快照后按内嵌目录算出的、每台主机上可以用主机密钥签名的调用方。
+func signingCallers(t *testing.T, snapshot *pb.HostGatewaySnapshot) map[string][]string {
+	t.Helper()
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	return catalog.SigningCallers(snapshotTopology(t, snapshot))
 }
 
 func (f *controlFixture) snapshot(t *testing.T, host string) *pb.HostGatewaySnapshot {
@@ -103,20 +147,58 @@ func (f *controlFixture) snapshot(t *testing.T, host string) *pb.HostGatewaySnap
 	return rsp.Snapshot
 }
 
-// 快照里只有公钥：每台主机一把，连同部署在它上面的调用方；外加不属于主机的身份。换公钥就换快照，没有新旧并存。
-func TestSnapshotsCarryPublicKeysByHostAndIdentity(t *testing.T) {
+// 快照原样带出登记的主机、部署与公钥，全部主机拿到同一份，不含路由；网关按内嵌目录从中算出每台主机可签名的调用方。
+// 换公钥就换快照，没有新旧并存。
+func TestSnapshotsCarryHostsDeploymentsAndPublicKeys(t *testing.T) {
 	f := newControlFixture(t)
 	ctx := context.Background()
 	storage := f.snapshot(t, "storage")
 	require.NotEmpty(t, storage.Hash)
-	require.Len(t, storage.VerificationKeys, 4)
-	control := verificationKey(storage, "control", "")
-	require.Equal(t, publicKey("host/control"), gatewayauth.EncodePublicKey(control.PublicKey))
-	require.Equal(t, []string{"admin", "collector", "console", "host-agent", "host-gateway"}, control.Callers)
-	require.Equal(t, []string{"access", "host-agent", "host-gateway", "trade"}, verificationKey(storage, "overseas", "").Callers)
-	require.Equal(t, publicKey("moox-cli"), gatewayauth.EncodePublicKey(verificationKey(storage, "", "moox-cli").PublicKey))
-	for _, key := range storage.VerificationKeys {
-		require.NotContains(t, key.Callers, "moox-cli", "非主机身份不能出现在主机的调用方里")
+	hash, err := pb.SnapshotHash(storage)
+	require.NoError(t, err)
+	require.Equal(t, hash, storage.Hash)
+	require.EqualValues(t, sysdeploy.SnapshotSchemaVersion, storage.SchemaVersion)
+	require.EqualValues(t, 2, storage.SchemaVersion)
+	require.True(t, proto.Equal(storage, f.snapshot(t, "control")), "全部主机拿到同一份快照")
+	require.True(t, proto.Equal(storage, f.snapshot(t, "overseas")), "全部主机拿到同一份快照")
+
+	require.Len(t, storage.Hosts, 3)
+	control := snapshotHost(storage, "control")
+	require.Equal(t, "control.example.test", control.Address)
+	require.Equal(t, servicecatalog.ReachabilityDirect, control.Reachability)
+	require.True(t, control.Enabled)
+	require.Equal(t, publicKey("host/control"), gatewayauth.EncodePublicKey(control.SignPublicKey))
+	require.Equal(t, publicKey("host/overseas"), gatewayauth.EncodePublicKey(snapshotHost(storage, "overseas").SignPublicKey))
+	// 部署原样列出：登记的组件加每台主机自动带的网关与 host-agent。
+	require.Len(t, storage.Deployments, 2+2+2+3*2)
+	for host, components := range map[string][]string{
+		"control": {"admin", "collector", "host-agent", "host-gateway"}, "storage": {"storage-primary", "storage-view", "host-agent", "host-gateway"},
+		"overseas": {"access", "trade", "host-agent", "host-gateway"},
+	} {
+		for _, component := range components {
+			deployment := snapshotDeployment(storage, host, component)
+			require.NotNil(t, deployment, "%s/%s", host, component)
+			require.True(t, deployment.Enabled)
+		}
+	}
+	require.Len(t, storage.Identities, 1)
+	require.Equal(t, publicKey("moox-cli"), gatewayauth.EncodePublicKey(snapshotIdentity(storage, "moox-cli").SignPublicKey))
+	// 网关据此算出的调用名单：主机密钥只能替部署在它上面的调用方签名，console 只在部署了 admin 的主机上。
+	callers := signingCallers(t, storage)
+	require.Equal(t, []string{"admin", "collector", "console", "host-agent", "host-gateway"}, callers["control"])
+	require.Equal(t, []string{"access", "host-agent", "host-gateway", "trade"}, callers["overseas"])
+	for host, list := range callers {
+		require.NotContains(t, list, "moox-cli", "非主机身份不能出现在主机 %s 的调用方里", host)
+	}
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	topology := snapshotTopology(t, storage)
+	require.Equal(t, "control", topology.ControlHostID)
+	for _, host := range storage.Hosts {
+		compiled, err := catalog.Compile(topology, host.HostId)
+		require.NoError(t, err)
+		require.Empty(t, compiled.Unknown)
+		require.NotEmpty(t, compiled.Routes, "网关要能从快照算出 %s 的路由", host.HostId)
 	}
 	unchanged, err := f.service.PullSnapshot(hostContext("storage"), &pb.PullSnapshotReq{HostId: "storage", CurrentHash: storage.Hash})
 	require.NoError(t, err)
@@ -127,34 +209,49 @@ func TestSnapshotsCarryPublicKeysByHostAndIdentity(t *testing.T) {
 	require.NoError(t, f.keys.SetIdentity(ctx, "moox-cli", publicKey("moox-cli-new")))
 	replaced := f.snapshot(t, "storage")
 	require.NotEqual(t, storage.Hash, replaced.Hash)
-	require.Len(t, replaced.VerificationKeys, 4)
-	require.Equal(t, publicKey("moox-cli-new"), gatewayauth.EncodePublicKey(verificationKey(replaced, "", "moox-cli").PublicKey))
+	require.Len(t, replaced.Identities, 1)
+	require.Equal(t, publicKey("moox-cli-new"), gatewayauth.EncodePublicKey(snapshotIdentity(replaced, "moox-cli").SignPublicKey))
 	// 换主机密钥同理。
 	require.NoError(t, f.keys.SetHostPublicKey(ctx, "overseas", publicKey("host/overseas-new")))
 	rotated := f.snapshot(t, "storage")
 	require.NotEqual(t, replaced.Hash, rotated.Hash)
-	require.Equal(t, publicKey("host/overseas-new"), gatewayauth.EncodePublicKey(verificationKey(rotated, "overseas", "").PublicKey))
+	require.Equal(t, publicKey("host/overseas-new"), gatewayauth.EncodePublicKey(snapshotHost(rotated, "overseas").SignPublicKey))
 	// 外部身份的公钥也在快照里（外部入口并入网关后要用）；主机网关上它们仍然调不了任何方法。
 	require.NoError(t, f.keys.SetIdentity(ctx, "moox-skill", publicKey("moox-skill")))
-	require.NotNil(t, verificationKey(f.snapshot(t, "storage"), "", "moox-skill"))
-	// 还没签发过身份包的主机没有公钥。
+	require.NotNil(t, snapshotIdentity(f.snapshot(t, "storage"), "moox-skill"))
+	// 还没签发过身份包的主机没有公钥，但主机本身仍在快照里。
 	require.NoError(t, f.db.Exec("UPDATE t_hosts SET c_sign_public_key = '' WHERE c_host_id = 'overseas'").Error)
-	require.Nil(t, verificationKey(f.snapshot(t, "storage"), "overseas", ""))
+	require.Empty(t, snapshotHost(f.snapshot(t, "storage"), "overseas").SignPublicKey)
 	require.NoError(t, f.keys.SetHostPublicKey(ctx, "overseas", publicKey("host/overseas")))
 
-	// 停用的主机：别的主机快照里它只剩网关这一个调用方（它还要验签取“已停用”的快照），它上面的组件不能再签名。
+	// 停用的主机：它仍能取到快照（从中得知自己已停用），部署原样保留；网关算出它只剩 host-gateway 这一个调用方，它上面的组件不能再签名。
+	before := f.snapshot(t, "storage")
 	require.NoError(t, f.topology.SetHostStatus(ctx, "storage", servicecatalog.Disabled))
 	disabled := f.snapshot(t, "storage")
-	require.True(t, disabled.Disabled)
-	require.Empty(t, disabled.Routes)
-	require.NotContains(t, disabled.Directory.Hosts, "storage")
-	require.Equal(t, []string{"host-gateway"}, verificationKey(f.snapshot(t, "control"), "storage", "").Callers)
+	require.NotEqual(t, before.Hash, disabled.Hash)
+	require.False(t, snapshotHost(disabled, "storage").Enabled)
+	require.True(t, snapshotHost(disabled, "control").Enabled)
+	require.NotNil(t, snapshotDeployment(disabled, "storage", "storage-primary"))
+	require.NotEmpty(t, snapshotHost(disabled, "storage").SignPublicKey)
+	require.Equal(t, []string{"host-gateway"}, signingCallers(t, disabled)["storage"])
+	compiled, err := catalog.Compile(snapshotTopology(t, disabled), "storage")
+	require.NoError(t, err)
+	require.True(t, compiled.Disabled)
+	require.Empty(t, compiled.Routes)
+	require.NotContains(t, compiled.Directory.Hosts, "storage")
 
-	// 一台主机只能取自己的快照；没有验过的签名主机时拒绝。
+	// 一台主机只能以自己的名义取快照；没有验过的签名主机时拒绝；没登记的主机拿不到。
 	_, err = f.service.PullSnapshot(hostContext("control"), &pb.PullSnapshotReq{HostId: "storage"})
 	require.Error(t, err)
 	_, err = f.service.PullSnapshot(ctx, &pb.PullSnapshotReq{HostId: "control"})
 	require.Error(t, err)
+	unknown, err := f.service.PullSnapshot(hostContext("ghost"), &pb.PullSnapshotReq{HostId: "ghost"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NOT_FOUND, unknown.GetRetInfo().GetCode())
+	require.Nil(t, unknown.Snapshot)
+	report, err := f.service.ReportStatus(hostContext("ghost"), &pb.ReportStatusReq{HostId: "ghost", InstanceId: "G", Version: "v1"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NOT_FOUND, report.GetRetInfo().GetCode())
 }
 
 func TestSnapshotReadsTopologyAndKeysFromOneDatabaseState(t *testing.T) {
@@ -180,11 +277,13 @@ func TestSnapshotReadsTopologyAndKeysFromOneDatabaseState(t *testing.T) {
 	t.Cleanup(func() { _ = f.db.Callback().Query().Remove("fixture:rotate-after-topology") })
 	during := f.snapshot(t, "storage")
 	require.True(t, changed.Load())
-	require.Equal(t, before.Hash, during.Hash, "mid-read commits must not mix old routes with new directory/keys")
+	require.Equal(t, before.Hash, during.Hash, "mid-read commits must not mix old hosts with new keys")
 	after := f.snapshot(t, "storage")
 	require.NotEqual(t, before.Hash, after.Hash)
-	require.Equal(t, "new.storage.example.test", after.Directory.Hosts["storage"].Address)
-	require.Greater(t, len(after.VerificationKeys), len(before.VerificationKeys))
+	require.Equal(t, "storage.example.test", snapshotHost(during, "storage").Address)
+	require.Nil(t, snapshotIdentity(during, "moox-skill"))
+	require.Equal(t, "new.storage.example.test", snapshotHost(after, "storage").Address)
+	require.NotNil(t, snapshotIdentity(after, "moox-skill"))
 }
 
 func (f *controlFixture) report(t *testing.T, instance string) {
@@ -306,12 +405,15 @@ func TestNewHostWithoutKeyDoesNotBlockSnapshots(t *testing.T) {
 	require.NoError(t, f.topology.SyncHostDeployments(ctx, sysdeploy.HostSpec{HostID: "new-host", Address: "new.example.test"}))
 	pending := f.snapshot(t, "control")
 	require.NotEqual(t, before.Hash, pending.Hash)
-	require.Nil(t, verificationKey(pending, "new-host", ""))
+	require.NotNil(t, snapshotHost(pending, "new-host"))
+	require.Empty(t, snapshotHost(pending, "new-host").SignPublicKey)
 	key, err := f.keys.HostPublicKey(ctx, "new-host")
 	require.NoError(t, err)
 	require.Empty(t, key, "读快照不生成密钥")
 	require.NoError(t, f.keys.SetHostPublicKey(ctx, "new-host", publicKey("host/new-host")))
-	require.Equal(t, []string{"host-agent", "host-gateway"}, verificationKey(f.snapshot(t, "control"), "new-host", "").Callers)
+	issued := f.snapshot(t, "control")
+	require.Equal(t, publicKey("host/new-host"), gatewayauth.EncodePublicKey(snapshotHost(issued, "new-host").SignPublicKey))
+	require.Equal(t, []string{"host-agent", "host-gateway"}, signingCallers(t, issued)["new-host"])
 	_, err = NewService(f.db, "old_node")
 	require.Error(t, err)
 }

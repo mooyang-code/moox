@@ -8,12 +8,15 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -171,10 +174,13 @@ func TestProxyDropsExternalUserAuthorizationAndRejectsAmbiguousMetadata(t *testi
 	require.Equal(t, 1, called)
 }
 
-type directorySource struct{ directory servicecatalog.Directory }
+// directorySource 下发固定的目录（主机加部署）。
+type directorySource struct{ update gatewayclient.DirectoryUpdate }
 
 func (s directorySource) Fetch(_ context.Context, version string) (gatewayclient.DirectoryUpdate, error) {
-	return gatewayclient.DirectoryUpdate{Changed: version != s.directory.Version, Directory: s.directory}, nil
+	update := s.update
+	update.Changed = version != update.Version
+	return update, nil
 }
 
 func signingCA(t *testing.T) string {
@@ -189,22 +195,42 @@ func signingCA(t *testing.T) string {
 	return path
 }
 
+// 外部身份经 Access 调到服务：Access 验外部签名后用共享的内部客户端转发。这里被调的服务都和 Access 同机，
+// 内部一跳直连服务端口、不带签名头，字节原样到达。
 func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T) {
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"storage": {Address: "storage.example.test"}}, Services: map[string][]string{}}
+	// 目录只有主机与部署：外部身份能调到的服务所在的组件都部署在 Access 这台主机上。
+	directory := gatewayclient.DirectoryUpdate{Version: "v1",
+		Hosts:       []servicecatalog.Host{{ID: "storage", Address: "storage.example.test", Status: servicecatalog.Enabled}},
+		Deployments: []servicecatalog.Deployment{{HostID: "storage", ComponentID: "access", Status: servicecatalog.Enabled}}}
+	servicePorts, deployed := map[int]bool{}, map[string]bool{}
 	credentials := []gatewayauth.Credentials{}
 	for _, principal := range catalog.ExternalIdentities() {
 		credentials = append(credentials, authtest.Identity(principal))
 		for _, grant := range catalog.Grants(principal) {
-			directory.Services[grant.Service] = []string{"storage"}
+			spec, ok := catalog.Service(grant.Service)
+			require.True(t, ok, grant.Service)
+			servicePorts[spec.Port] = true
+			for _, component := range catalog.Components {
+				if !deployed[component.ID] && slices.ContainsFunc(component.Services, func(service servicecatalog.Service) bool { return service.Path == grant.Service }) {
+					deployed[component.ID] = true
+					directory.Deployments = append(directory.Deployments, servicecatalog.Deployment{HostID: "storage", ComponentID: component.ID, Status: servicecatalog.Enabled})
+				}
+			}
 		}
 	}
-	directory.Version, err = directory.VersionHash()
-	require.NoError(t, err)
+	require.NotEmpty(t, servicePorts)
 	internal := authtest.Component("access", "storage")
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	t.Cleanup(gatewayclient.SetLocalServiceAddressForTest(func(port int) string {
+		if !servicePorts[port] {
+			return "127.0.0.1:1"
+		}
+		return listener.Addr().String()
+	}))
+	var upstreamCalls atomic.Int32
 	upstream := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
 	require.NoError(t, upstream.Register(&server.ServiceDesc{ServiceName: "trpc.moox.test.Upstream", HandlerType: ((*interface{})(nil)), Methods: []server.Method{{Name: "*", Func: func(_ interface{}, ctx context.Context, decode server.FilterFunc) (interface{}, error) {
 		request := &codec.Body{}
@@ -219,9 +245,11 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 			for key, value := range message.ServerMetaData() {
 				headers.Add(key, string(value))
 			}
-			_, err := authtest.Verify(internal, gatewayauth.Request{TargetNode: "storage", Callee: service, Func: method, Body: request.Data}, headers, time.Now())
-			if err != nil {
-				return nil, err
+			upstreamCalls.Add(1)
+			for name := range headers {
+				if strings.HasPrefix(strings.ToLower(name), "x-moox-") {
+					return nil, fmt.Errorf("direct local call carries signature header %s", name)
+				}
 			}
 			require.True(t, catalog.Allowed("access", service, method))
 			require.Equal(t, "crypto", headers.Get("X-Space-Id"))
@@ -231,7 +259,7 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 	}}}}, struct{}{}))
 	go func() { _ = upstream.Serve() }()
 	t.Cleanup(func() { _ = upstream.Close(nil) })
-	gateway, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: internal, LocalHostID: "storage", LocalAddress: listener.Addr().String(), CAFile: signingCA(t), Source: directorySource{directory}})
+	gateway, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: internal, LocalHostID: "storage", CAFile: signingCA(t), Source: directorySource{directory}})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
 	proxy, _ := fixtureProxy(t, gateway)
@@ -242,6 +270,7 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 	require.NoError(t, RegisterAccessService(access, proxy))
 	go func() { _ = access.Serve() }()
 	t.Cleanup(func() { _ = access.Close(nil) })
+	forwarded := int32(0)
 	for index, principal := range catalog.ExternalIdentities() {
 		external, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.External, Credentials: credentials[index], AccessAddress: accessListener.Addr().String(), AccessInstanceID: "access@storage"})
 		require.NoError(t, err)
@@ -260,10 +289,13 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 					response, err := external.Forward(ctx, grant.Service, method, request.encoding, request.body)
 					require.NoError(t, err, "%s %s/%s", principal, grant.Service, method)
 					require.Equal(t, request.body, response)
+					forwarded++
 				}
 			}
 		}
 	}
+	require.Positive(t, forwarded)
+	require.Equal(t, forwarded, upstreamCalls.Load(), "每次外部调用都到达本机服务一次")
 }
 
 // Access 只转发原始字节，不知道空间：入站帧的压缩类型（字典）要沿用到出站一跳。

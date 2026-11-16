@@ -194,7 +194,6 @@
 | `host agent status` | 主机代理的采集与上报状态 |
 | `host catalog` | 服务目录：组件、端口与服务 |
 | `host deployments` | 列出组件部署 |
-| `host directory` | 服务目录的路由视图：每个服务部署在哪些主机 |
 | `host exec` | 经 SSH 在 moox.toml 登记的主机上执行一条命令 |
 | `host get` | 把主机上的文件下载到本地（本地已存在时需要 --yes 覆盖） |
 | `host list` | 列出 Admin 登记的主机（moox.toml 里的候选主机用 setup hosts） |

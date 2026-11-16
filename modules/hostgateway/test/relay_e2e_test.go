@@ -28,10 +28,29 @@ import (
 	"trpc.group/trpc-go/trpc-go/codec"
 )
 
-type staticDirectory struct{ directory servicecatalog.Directory }
+// snapshotDirectory 像网关的本机目录那样下发快照里的主机与部署，调用方按内嵌的服务目录自己展开。
+type snapshotDirectory struct{ view *snapshot.View }
 
-func (s staticDirectory) Fetch(_ context.Context, current string) (gatewayclient.DirectoryUpdate, error) {
-	return gatewayclient.DirectoryUpdate{Changed: current != s.directory.Version, Directory: s.directory}, nil
+func (s snapshotDirectory) Fetch(_ context.Context, current string) (gatewayclient.DirectoryUpdate, error) {
+	raw := s.view.Proto()
+	update := gatewayclient.DirectoryUpdate{Changed: current != raw.Hash, Version: raw.Hash}
+	if !update.Changed {
+		return update, nil
+	}
+	status := func(enabled bool) string {
+		if enabled {
+			return servicecatalog.Enabled
+		}
+		return servicecatalog.Disabled
+	}
+	for _, host := range raw.Hosts {
+		reachability, _ := servicecatalog.ParseReachability(host.Reachability)
+		update.Hosts = append(update.Hosts, servicecatalog.Host{ID: host.HostId, Address: host.Address, PrivateAddress: host.PrivateAddress, Status: status(host.Enabled), Reachability: reachability})
+	}
+	for _, deployment := range raw.Deployments {
+		update.Deployments = append(update.Deployments, servicecatalog.Deployment{HostID: deployment.HostId, ComponentID: deployment.ComponentId, Status: status(deployment.Enabled)})
+	}
+	return update, nil
 }
 
 // relayTunnels 模拟操作端：没有到出站主机的 SSH，只有到 control 跨主机端口的本地转发。
@@ -116,21 +135,20 @@ func TestRelayRPCThroughControlCarriesOnlyCiphertext(t *testing.T) {
 		return len(status) == 1 && status[0].Online
 	}, 5*time.Second, 10*time.Millisecond)
 
-	// 调用方的目录里该服务只在 home 上，确保请求走中转。
-	directory := view.Directory()
-	directory.Services["trpc.moox.hostagent.HostAgentMgr"] = []string{"home"}
-	directory.Version, err = directory.VersionHash()
-	require.NoError(t, err)
+	// host-agent 每台主机都有：调用方指定发到 home，目录里它只能出站，请求经 control 中转。
+	require.Equal(t, "control", view.Directory().Hosts["home"].Relay)
+	require.Contains(t, view.Directory().Services["trpc.moox.hostagent.HostAgentMgr"], "home")
 	caller, err := gatewayclient.New(gatewayclient.Config{
 		Mode: gatewayclient.Tunnel, Credentials: testsnapshot.Credential("moox-cli", ""), CAFile: homePaths.CAFile,
-		Source: staticDirectory{directory: directory}, Tunnels: relayTunnels{control: opened.Remote.Addr().String()},
+		Source: snapshotDirectory{view: view}, Tunnels: relayTunnels{control: opened.Remote.Addr().String()},
 		Serialization: codec.SerializationTypeJSON,
 	})
 	require.NoError(t, err)
 	defer caller.Close()
 	marker := []byte(`{"marker":"relay-plaintext-must-not-appear"}`)
+	toHome := gatewayclient.WithCallMetadata(t.Context(), gatewayclient.CallMetadata{HostID: "home"})
 	for range 2 {
-		response, err := caller.Forward(t.Context(), "trpc.moox.hostagent.HostAgentMgr", "GetStatus", codec.SerializationTypeJSON, marker)
+		response, err := caller.Forward(toHome, "trpc.moox.hostagent.HostAgentMgr", "GetStatus", codec.SerializationTypeJSON, marker)
 		require.NoError(t, err)
 		require.Equal(t, marker, response)
 	}

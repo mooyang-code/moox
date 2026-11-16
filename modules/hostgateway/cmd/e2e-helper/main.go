@@ -1,4 +1,4 @@
-// Command e2e-helper 给跨模块测试起一个只有路由层的主机网关：验签、防重放、调用名单都走真实代码，
+// Command e2e-helper 给跨模块测试起一个只有路由层的主机网关：验签、防重放、调用名单、按部署算路由都走真实代码，
 // 上游地址换成测试给的回环地址。测试调用方的公钥从环境变量 MOOX_GATEWAY_E2E_PUBLIC_KEY 读（base64）；
 // moox-cli 按非主机身份登记，其余调用方按“部署在本机、用本机的主机密钥签名”登记。生产不用它。
 package main
@@ -12,8 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -22,8 +20,6 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
-	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -32,65 +28,31 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "kline-native", "access-native, kline-native, storage-native, egress-native, doctor-native or admin-native")
+	mode := flag.String("mode", "kline-native", "access-native, kline-native, storage-native, doctor-native or admin-native")
 	nodeID := flag.String("node-id", "", "test host ID")
 	upstream := flag.String("upstream-addr", "", "loopback fixture upstream")
 	address := flag.String("listen-addr", "127.0.0.1:0", "fixture listener")
 	ready := flag.String("ready-file", "", "fixture readiness file")
 	flag.Parse()
-	var err error
-	switch *mode {
-	case "access-native":
-		err = runAccessNative(*nodeID, *upstream, *address, *ready, os.Getenv("MOOX_GATEWAY_E2E_PUBLIC_KEY"))
-	case "kline-native":
-		err = runKlineNative(*nodeID, *upstream, *address, *ready, os.Getenv("MOOX_GATEWAY_E2E_PUBLIC_KEY"))
-	case "storage-native":
-		err = runComponentsNative([]string{"storage-primary", "storage-view"}, *nodeID, *upstream, *address, *ready, os.Getenv("MOOX_GATEWAY_E2E_PUBLIC_KEY"))
-	case "egress-native":
-		err = runComponentsNative([]string{"egress-proxy"}, *nodeID, *upstream, *address, *ready, os.Getenv("MOOX_GATEWAY_E2E_PUBLIC_KEY"))
-	case "doctor-native":
-		err = runComponentsNative([]string{"admin", "monitor"}, *nodeID, *upstream, *address, *ready, os.Getenv("MOOX_GATEWAY_E2E_PUBLIC_KEY"))
-	case "admin-native":
-		err = runAdminNative(*nodeID, *upstream, *address, *ready, os.Getenv("MOOX_GATEWAY_E2E_PUBLIC_KEY"))
-	default:
-		err = errors.New("unsupported native fixture mode")
+	// 每种模式是“本机部署了哪些组件”加“谁来调”：路由由网关按部署自己算。
+	modes := map[string]struct {
+		components []string
+		caller     string
+	}{
+		"access-native":  {[]string{"storage-primary"}, "access"},
+		"kline-native":   {[]string{"storage-primary"}, servicecatalog.OperatorMooxCLI},
+		"storage-native": {[]string{"storage-primary", "storage-view"}, servicecatalog.OperatorMooxCLI},
+		"doctor-native":  {[]string{"admin", "monitor"}, servicecatalog.OperatorMooxCLI},
+		"admin-native":   {[]string{"admin"}, servicecatalog.OperatorMooxCLI},
+	}
+	err := errors.New("unsupported native fixture mode")
+	if selected, ok := modes[*mode]; ok {
+		err = run(*nodeID, selected.components, selected.caller, *upstream, *address, *ready, os.Getenv("MOOX_GATEWAY_E2E_PUBLIC_KEY"))
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-func runAccessNative(hostID, storageAddress, listenAddress, readyFile, publicKey string) error {
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return err
-	}
-	var routes []gatewayroute.Route
-	for _, selected := range []struct{ id, path, address string }{
-		{"storage-primary", "trpc.moox.storage.PrimaryStore", storageAddress},
-	} {
-		if selected.address == "" {
-			continue
-		}
-		spec, _ := catalog.Service(selected.path)
-		var methods []string
-		for _, method := range spec.MethodNames() {
-			if catalog.Allowed("access", selected.path, method) {
-				methods = append(methods, method)
-			}
-		}
-		routes = append(routes, gatewayroute.Route{ServiceID: selected.id, ServicePath: selected.path, Address: selected.address, AllowedMethods: methods, AllowedCallers: []string{"access"}})
-	}
-	if len(routes) == 0 {
-		return errors.New("Access fixture requires at least one upstream")
-	}
-	return runNativeRoutes(hostID, routes, "access", listenAddress, readyFile, publicKey)
-}
-
-func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, publicKey string) error {
-	return runNativeRoutes(nodeID, []gatewayroute.Route{{ServiceID: "storage-primary", Address: upstreamAddress, ServicePath: "trpc.moox.storage.PrimaryStore",
-		AllowedMethods: []string{"ReadTimeSeriesRows", "UpsertFields"}, AllowedCallers: []string{"moox-cli"}}}, "moox-cli", listenAddress, readyFile, publicKey)
 }
 
 type fixtureForwarder struct {
@@ -103,7 +65,7 @@ func (f fixtureForwarder) Forward(ctx context.Context, route servicecatalog.Rout
 	return f.upstream.Forward(ctx, route, serialization, body, metadata)
 }
 
-func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenAddress, readyFile, publicKey string) error {
+func run(hostID string, components []string, caller, upstreamAddress, listenAddress, readyFile, publicKey string) error {
 	if !servicecatalog.ValidHostID(hostID) {
 		return errors.New("native gateway identity: canonical host ID required")
 	}
@@ -111,56 +73,31 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 	if err != nil {
 		return fmt.Errorf("native gateway identity: %w", err)
 	}
+	if host, _, err := net.SplitHostPort(upstreamAddress); err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+		return errors.New("fixture upstream must be literal loopback")
+	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return err
 	}
-	dir := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{hostID: {Address: "127.0.0.1"}}, Services: map[string][]string{}}
-	raw := &pb.HostGatewaySnapshot{SchemaVersion: 1, HostId: hostID}
+	raw := &pb.HostGatewaySnapshot{SchemaVersion: snapshot.SchemaVersion, Hosts: []*pb.SnapshotHost{{HostId: hostID, Address: "127.0.0.1", Reachability: servicecatalog.ReachabilityDirect, Enabled: true}}}
 	addresses := map[string]string{}
-	for _, selected := range routes {
-		host, _, err := net.SplitHostPort(selected.Address)
-		if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
-			return errors.New("fixture upstream must be literal loopback")
-		}
-		service, ok := catalog.Service(selected.ServicePath)
+	for _, id := range components {
+		component, ok := catalog.Component(id)
 		if !ok {
-			return errors.New("fixture service absent from catalog")
+			return errors.New("fixture component absent from catalog")
 		}
-		componentID := ""
-		for _, c := range catalog.Components {
-			for _, candidate := range c.Services {
-				if candidate.Path == service.Path {
-					componentID = c.ID
-				}
-			}
+		raw.Deployments = append(raw.Deployments, &pb.SnapshotDeployment{HostId: hostID, ComponentId: id, Enabled: true})
+		for _, service := range component.Services {
+			addresses[service.Path] = upstreamAddress
 		}
-		dir.Services[service.Path] = []string{hostID}
-		addresses[service.Path] = selected.Address
-		limit := service.MaxBodyBytes
-		if limit == 0 {
-			limit = servicecatalog.DefaultMaxBodyBytes
-		}
-		for _, method := range selected.AllowedMethods {
-			if !catalog.Allowed(caller, service.Path, method) {
-				return errors.New("fixture caller/method absent from catalog")
-			}
-			raw.Routes = append(raw.Routes, &pb.HostGatewayRoute{ComponentId: componentID, ServicePath: service.Path, Method: method,
-				Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMs: service.TimeoutFor(method), MaxBodyBytes: limit, ReadOnly: catalog.ReadOnly(service.Path, method), Callers: []string{caller}})
-		}
-	}
-	dir.Version, err = dir.VersionHash()
-	if err != nil {
-		return err
-	}
-	raw.Directory = &directorypb.ServiceDirectory{Version: dir.Version, Hosts: map[string]*directorypb.DirectoryHost{hostID: {Address: "127.0.0.1"}}, Services: map[string]*directorypb.ServiceHosts{}}
-	for path, hosts := range dir.Services {
-		raw.Directory.Services[path] = &directorypb.ServiceHosts{HostIds: hosts}
 	}
 	if caller == servicecatalog.OperatorMooxCLI {
-		raw.VerificationKeys = []*pb.GatewayVerificationKey{{Identity: caller, PublicKey: public}}
+		raw.Identities = []*pb.SnapshotIdentity{{Identity: caller, SignPublicKey: public}}
 	} else {
-		raw.VerificationKeys = []*pb.GatewayVerificationKey{{HostId: hostID, PublicKey: public, Callers: []string{caller}}}
+		// 调用方也算部署在本机，用本机的主机密钥签名。
+		raw.Hosts[0].SignPublicKey = public
+		raw.Deployments = append(raw.Deployments, &pb.SnapshotDeployment{HostId: hostID, ComponentId: caller, Enabled: true})
 	}
 	raw.Hash, err = pb.SnapshotHash(raw)
 	if err != nil {
@@ -191,10 +128,8 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 	if err := proxy.Register(service); err != nil {
 		return err
 	}
-	if caller == "moox-cli" || caller == "access" {
-		if err := directory.Register(service, state); err != nil {
-			return err
-		}
+	if err := directory.Register(service, state); err != nil {
+		return err
 	}
 	if err := writeReadyFile(readyFile, "ip://"+listener.Addr().String()); err != nil {
 		return err
@@ -218,37 +153,4 @@ func writeReadyFile(path, value string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(value), 0o600)
-}
-
-func runAdminNative(nodeID, upstreamAddress, listenAddress, readyFile, publicKey string) error {
-	return runComponentsNative([]string{"admin"}, nodeID, upstreamAddress, listenAddress, readyFile, publicKey)
-}
-
-func runComponentsNative(components []string, nodeID, upstreamAddress, listenAddress, readyFile, publicKey string) error {
-	caller := "moox-cli"
-	if slices.Contains(components, "egress-proxy") {
-		caller = "collector"
-	}
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return err
-	}
-	var routes []gatewayroute.Route
-	for _, component := range catalog.Components {
-		if !slices.Contains(components, component.ID) {
-			continue
-		}
-		for _, spec := range component.Services {
-			var methods []string
-			for _, method := range spec.MethodNames() {
-				if catalog.Allowed(caller, spec.Path, method) {
-					methods = append(methods, method)
-				}
-			}
-			if len(methods) > 0 {
-				routes = append(routes, gatewayroute.Route{ServiceID: component.ID, Address: upstreamAddress, ServicePath: spec.Path, AllowedMethods: methods, AllowedCallers: []string{caller}})
-			}
-		}
-	}
-	return runNativeRoutes(nodeID, routes, caller, listenAddress, readyFile, publicKey)
 }

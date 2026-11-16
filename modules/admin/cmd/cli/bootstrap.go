@@ -187,8 +187,11 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 		if material.keys, err = ensureSigningKeys(ctx, store, control, opts.current, false); err != nil {
 			return err
 		}
-		// 拓扑和公钥要能编出控制机的快照，否则不提交。
-		if _, _, err := dao.CompileSnapshot(ctx, control.HostID); err != nil {
+		// 拓扑要合法、能算出控制机的路由，公钥要能拼出快照，否则不提交。
+		if _, err := dao.Compile(ctx, control.HostID); err != nil {
+			return err
+		}
+		if _, err := dao.Snapshot(ctx); err != nil {
 			return err
 		}
 		ca, err = pki.Open(opts.pkiDir)

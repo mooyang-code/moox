@@ -8,11 +8,12 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -35,48 +37,41 @@ type factorGatewayWire struct {
 	storagepb.UnimplementedMetadata
 	storagepb.UnimplementedPrimaryStore
 	directorypb.UnimplementedDirectory
-	credentials gatewayauth.Credentials
-	directory   servicecatalog.Directory
-	mu          sync.Mutex
-	nonces      map[string]bool
-	reads       int
-	writes      int
-	refreshes   int
+	mu        sync.Mutex
+	calls     int
+	reads     int
+	writes    int
+	refreshes int
 }
+
+const factorDirectoryVersion = "v1"
 
 func (w *factorGatewayWire) GetDirectory(_ context.Context, req *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
 	w.mu.Lock()
 	w.refreshes++
 	w.mu.Unlock()
-	if req.GetCurrentVersion() == w.directory.Version {
-		return &directorypb.GetDirectoryRsp{Version: w.directory.Version}, nil
+	if req.GetCurrentVersion() == factorDirectoryVersion {
+		return &directorypb.GetDirectoryRsp{Version: factorDirectoryVersion}, nil
 	}
-	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version,
-		Services: map[string]*directorypb.ServiceHosts{
-			"trpc.moox.storage.Metadata":     {HostIds: []string{"control"}},
-			"trpc.moox.storage.PrimaryStore": {HostIds: []string{"control"}},
-		}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
+	// 目录只有主机与部署：factor-mgr 与 Storage 同机。
+	return &directorypb.GetDirectoryRsp{Changed: true, Version: factorDirectoryVersion,
+		Hosts: []*directorypb.DirectoryHost{{HostId: "control", Address: "control.example.test", Reachability: "direct", Enabled: true}},
+		Deployments: []*directorypb.DirectoryDeployment{
+			{HostId: "control", ComponentId: "factor-mgr", Enabled: true},
+			{HostId: "control", ComponentId: "storage-primary", Enabled: true},
+		}}, nil
 }
 
-func (w *factorGatewayWire) verify(ctx context.Context, service, method string, request proto.Message) error {
-	headers := http.Header{}
-	for key, value := range codec.Message(ctx).ServerMetaData() {
-		headers.Set(key, string(value))
-	}
-	body, err := proto.Marshal(request)
-	if err != nil {
-		return err
-	}
-	claims, err := authtest.Verify(w.credentials, gatewayauth.Request{TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
-	if err != nil {
-		return err
+// verify 核对同机直连的请求不带任何签名头。
+func (w *factorGatewayWire) verify(ctx context.Context, _, _ string, _ proto.Message) error {
+	for name := range codec.Message(ctx).ServerMetaData() {
+		if strings.HasPrefix(strings.ToLower(name), "x-moox-") {
+			return fmt.Errorf("direct local call carries signature header %s", name)
+		}
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.nonces[claims.Nonce] {
-		return errors.New("factor-mgr call reused a signing nonce")
-	}
-	w.nonces[claims.Nonce] = true
+	w.calls++
 	return nil
 }
 
@@ -142,12 +137,22 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	directory := servicecatalog.Directory{Services: map[string][]string{
-		"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"},
-	}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
-	directory.Version, err = directory.VersionHash()
+	wire := &factorGatewayWire{}
+	// factor-mgr 与 Storage 同机：直连服务目录里 Storage 各服务的回环端口，这里都指到同一个假服务上。
+	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	wire := &factorGatewayWire{credentials: credentials, directory: directory, nonces: map[string]bool{}}
+	servicePorts := map[int]bool{}
+	for _, path := range []string{"trpc.moox.storage.Metadata", "trpc.moox.storage.PrimaryStore"} {
+		spec, ok := catalog.Service(path)
+		require.True(t, ok, path)
+		servicePorts[spec.Port] = true
+	}
+	t.Cleanup(gatewayclient.SetLocalServiceAddressForTest(func(port int) string {
+		if !servicePorts[port] {
+			return "127.0.0.1:1"
+		}
+		return listener.Addr().String()
+	}))
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	storagepb.RegisterMetadataService(svc, wire)
 	storagepb.RegisterPrimaryStoreService(svc, wire)
@@ -174,7 +179,7 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.reads)
 	require.Equal(t, 2, wire.writes)
-	require.Len(t, wire.nonces, 4)
+	require.Equal(t, 4, wire.calls)
 	require.GreaterOrEqual(t, wire.refreshes, 2)
 	wire.mu.Unlock()
 	cache, err := os.Stat(filepath.Join(data, "gatewayclient", "directory.json"))

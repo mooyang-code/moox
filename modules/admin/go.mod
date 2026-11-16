@@ -149,7 +149,6 @@ replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 
 replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
 
-replace github.com/mooyang-code/moox/packages/gatewayroute => ../../packages/gatewayroute
 
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 

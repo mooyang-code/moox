@@ -3,7 +3,6 @@ syntax = "proto3";
 package trpc.moox.ops;
 
 import "moox_common.proto";
-import "directory.proto";
 import "gatewaycontrol.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
@@ -85,26 +84,30 @@ message ListDeploymentsRsp {
   trpc.moox.common.PageResult page_result = 3;
 }
 
+// 一条路由是一个方法和能调它的调用方：Admin 按登记的部署与服务目录算出来给人看，网关自己也这样算，不随快照下发。
+message HostGatewayRoute {
+  string component_id = 1;
+  string service_path = 2;
+  string method = 3;
+  string address = 4;
+  int64 timeout_ms = 5;
+  int64 max_body_bytes = 6;
+  repeated string callers = 7;
+  bool read_only = 8;
+}
+
 message GetHostRoutesReq {
   string host_id = 1;
 }
 message GetHostRoutesRsp {
   trpc.moox.common.RetInfo ret_info = 1;
   string host_id = 2;
-  // Definition hash excludes keys; the final snapshot hash is in gateway_status.
-  string definition_hash = 3;
-  repeated trpc.moox.admin.HostGatewayRoute routes = 4;
-  HostGatewayRuntimeStatus gateway_status = 5;
-  uint32 snapshot_schema_version = 6;
-  // Time this response's desired snapshot was actually compiled, not a
-  // gateway application time or a persisted configuration revision time.
-  string compiled_at = 7;
-}
-
-message GetDirectoryReq {}
-message GetDirectoryRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-  trpc.moox.hostgateway.ServiceDirectory directory = 2;
+  repeated HostGatewayRoute routes = 3;
+  // expected_hash 是当前登记内容对应的快照哈希，全部主机相同。
+  HostGatewayRuntimeStatus gateway_status = 4;
+  uint32 snapshot_schema_version = 5;
+  // 这次响应实际计算的时间，不是网关应用快照的时间。
+  string compiled_at = 6;
 }
 
 message SetHostStatusReq {
@@ -158,7 +161,6 @@ service SysDeploy {
   rpc ListHosts(ListDeploymentHostsReq) returns (ListDeploymentHostsRsp);
   rpc ListDeployments(ListDeploymentsReq) returns (ListDeploymentsRsp);
   rpc GetHostRoutes(GetHostRoutesReq) returns (GetHostRoutesRsp);
-  rpc GetDirectory(GetDirectoryReq) returns (GetDirectoryRsp);
   rpc SetHostStatus(SetHostStatusReq) returns (SetHostStatusRsp);
   rpc SetDeploymentStatus(SetDeploymentStatusReq) returns (SetDeploymentStatusRsp);
   rpc SyncHostDeployments(SyncHostDeploymentsReq) returns (SyncHostDeploymentsRsp);

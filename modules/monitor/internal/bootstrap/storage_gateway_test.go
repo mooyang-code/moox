@@ -10,11 +10,12 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -44,49 +46,42 @@ type monitorGatewayWire struct {
 	collectorpb.UnimplementedCollectMgr
 	storagepb.UnimplementedPrimaryStore
 	directorypb.UnimplementedDirectory
-	credentials gatewayauth.Credentials
-	directory   servicecatalog.Directory
-	mu          sync.Mutex
-	nonces      map[string]bool
-	reads       int
-	refreshes   int
+	mu        sync.Mutex
+	calls     int
+	reads     int
+	refreshes int
+	// statusChanges 记下到达本机 SysDeploy 的 SetDeploymentStatus 次数。
+	statusChanges int
 }
+
+const monitorDirectoryVersion = "v1"
 
 func (w *monitorGatewayWire) GetDirectory(_ context.Context, req *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
 	w.mu.Lock()
 	w.refreshes++
 	w.mu.Unlock()
-	if req.GetCurrentVersion() == w.directory.Version {
-		return &directorypb.GetDirectoryRsp{Version: w.directory.Version}, nil
+	if req.GetCurrentVersion() == monitorDirectoryVersion {
+		return &directorypb.GetDirectoryRsp{Version: monitorDirectoryVersion}, nil
 	}
-	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version,
-		Services: map[string]*directorypb.ServiceHosts{
-			"trpc.moox.collector.CollectMgr": {HostIds: []string{"control"}},
-			"trpc.moox.ops.SysDeploy":        {HostIds: []string{"control"}},
-			"trpc.moox.storage.Metadata":     {HostIds: []string{"control"}},
-			"trpc.moox.storage.PrimaryStore": {HostIds: []string{"control"}},
-		}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
+	// 目录只有主机与部署：Monitor 与 Admin、Collector、Storage 同机。
+	rsp := &directorypb.GetDirectoryRsp{Changed: true, Version: monitorDirectoryVersion,
+		Hosts: []*directorypb.DirectoryHost{{HostId: "control", Address: "control.example.test", Reachability: "direct", Enabled: true}}}
+	for _, component := range []string{"admin", "collector", "monitor", "storage-primary"} {
+		rsp.Deployments = append(rsp.Deployments, &directorypb.DirectoryDeployment{HostId: "control", ComponentId: component, Enabled: true})
+	}
+	return rsp, nil
 }
 
-func (w *monitorGatewayWire) verify(ctx context.Context, service, method string, request proto.Message) error {
-	headers := http.Header{}
-	for key, value := range codec.Message(ctx).ServerMetaData() {
-		headers.Set(key, string(value))
-	}
-	body, err := proto.Marshal(request)
-	if err != nil {
-		return err
-	}
-	claims, err := authtest.Verify(w.credentials, gatewayauth.Request{TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
-	if err != nil {
-		return err
+// verify 核对同机直连的请求不带任何签名头。
+func (w *monitorGatewayWire) verify(ctx context.Context, _, _ string, _ proto.Message) error {
+	for name := range codec.Message(ctx).ServerMetaData() {
+		if strings.HasPrefix(strings.ToLower(name), "x-moox-") {
+			return fmt.Errorf("direct local call carries signature header %s", name)
+		}
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.nonces[claims.Nonce] {
-		return errors.New("monitor call reused a signing nonce")
-	}
-	w.nonces[claims.Nonce] = true
+	w.calls++
 	return nil
 }
 
@@ -144,12 +139,22 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	directory := servicecatalog.Directory{Services: map[string][]string{
-		"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.collector.CollectMgr": {"control"}, "trpc.moox.ops.SysDeploy": {"control"},
-	}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
-	directory.Version, err = directory.VersionHash()
+	wire := &monitorGatewayWire{}
+	// Monitor 与这些服务同机：直连服务目录里各服务的回环端口，这里都指到同一个假服务上。
+	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	wire := &monitorGatewayWire{credentials: credentials, directory: directory, nonces: map[string]bool{}}
+	servicePorts := map[int]bool{}
+	for _, path := range []string{"trpc.moox.storage.Metadata", "trpc.moox.storage.PrimaryStore", "trpc.moox.collector.CollectMgr", "trpc.moox.ops.SysDeploy"} {
+		spec, ok := catalog.Service(path)
+		require.True(t, ok, path)
+		servicePorts[spec.Port] = true
+	}
+	t.Cleanup(gatewayclient.SetLocalServiceAddressForTest(func(port int) string {
+		if !servicePorts[port] {
+			return "127.0.0.1:1"
+		}
+		return listener.Addr().String()
+	}))
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	collectorpb.RegisterCollectMgrService(svc, wire)
 	adminpb.RegisterSysDeployService(svc, &monitorSysDeployWire{wire: wire})
@@ -186,13 +191,18 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	gatewayStatus, err := source.GatewayStatus(t.Context(), "control")
 	require.NoError(t, err)
 	require.Equal(t, "control-instance", gatewayStatus.GetInstanceId())
-	var forbidden adminpb.SetDeploymentStatusRsp
-	require.Error(t, runtime.Gateway.Invoke(t.Context(), "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", &adminpb.SetDeploymentStatusReq{}, &forbidden))
+	// Monitor 不在 SetDeploymentStatus 的调用方名单里。同机直连不查名单（名单由网关在跨主机调用时把关），请求会到达本机服务。
+	embedded, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	require.False(t, embedded.Allowed("monitor", "trpc.moox.ops.SysDeploy", "SetDeploymentStatus"))
+	var unlisted adminpb.SetDeploymentStatusRsp
+	require.NoError(t, runtime.Gateway.Invoke(t.Context(), "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", &adminpb.SetDeploymentStatusReq{}, &unlisted))
 	wire.mu.Lock()
-	reads, nonces, refreshes := wire.reads, len(wire.nonces), wire.refreshes
+	reads, calls, refreshes, statusChanges := wire.reads, wire.calls, wire.refreshes, wire.statusChanges
 	wire.mu.Unlock()
 	require.Equal(t, 2, reads)
-	require.Equal(t, 8, nonces)
+	require.Equal(t, 9, calls)
+	require.Equal(t, 1, statusChanges)
 	require.GreaterOrEqual(t, refreshes, 2)
 	_, err = runtime.StorageGateway.GetDataset(t.Context(), &storagepb.GetDatasetReq{SpaceId: "crypto"}, client.WithTarget("ip://192.0.2.99:20200"))
 	require.ErrorContains(t, err, "instead of tRPC client options")
@@ -210,6 +220,16 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 type monitorSysDeployWire struct {
 	adminpb.UnimplementedSysDeploy
 	wire *monitorGatewayWire
+}
+
+func (w monitorSysDeployWire) SetDeploymentStatus(ctx context.Context, req *adminpb.SetDeploymentStatusReq) (*adminpb.SetDeploymentStatusRsp, error) {
+	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", req); err != nil {
+		return nil, err
+	}
+	w.wire.mu.Lock()
+	w.wire.statusChanges++
+	w.wire.mu.Unlock()
+	return &adminpb.SetDeploymentStatusRsp{RetInfo: &adminpb.RetInfo{}}, nil
 }
 
 func (w monitorSysDeployWire) GetCatalog(ctx context.Context, req *adminpb.GetCatalogReq) (*adminpb.GetCatalogRsp, error) {

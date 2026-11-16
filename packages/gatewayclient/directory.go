@@ -15,9 +15,13 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
+// DirectoryUpdate 是下发的目录：版本加登记的主机与部署。客户端按内嵌的服务目录把它展开成“每个服务在哪些主机上”。
+// Changed 为假时只有 Version 有意义。落盘缓存存的也是这一份，升级后的进程按自己的服务目录重新展开。
 type DirectoryUpdate struct {
-	Changed   bool
-	Directory servicecatalog.Directory
+	Changed     bool                        `json:"-"`
+	Version     string                      `json:"version"`
+	Hosts       []servicecatalog.Host       `json:"hosts"`
+	Deployments []servicecatalog.Deployment `json:"deployments"`
 }
 
 // DirectorySource must honor ctx. It may fetch from a local listener or an SSH
@@ -54,53 +58,67 @@ func (s *LocalDirectorySource) Fetch(ctx context.Context, version string) (Direc
 	if rsp == nil {
 		return DirectoryUpdate{}, fmt.Errorf("empty directory response")
 	}
-	d := servicecatalog.Directory{Version: rsp.GetVersion()}
-	if rsp.GetChanged() {
-		d.Hosts = make(map[string]servicecatalog.DirectoryHost, len(rsp.GetHosts()))
-		d.Services = make(map[string][]string, len(rsp.GetServices()))
-		for id, host := range rsp.GetHosts() {
-			if host == nil {
-				return DirectoryUpdate{}, fmt.Errorf("empty directory host")
-			}
-			d.Hosts[id] = servicecatalog.DirectoryHost{Address: host.GetAddress(), PrivateAddress: host.GetPrivateAddress(), Region: host.GetRegion(), Relay: host.GetRelay()}
-		}
-		for path, hosts := range rsp.GetServices() {
-			if hosts == nil {
-				return DirectoryUpdate{}, fmt.Errorf("empty directory service")
-			}
-			d.Services[path] = append([]string{}, hosts.GetHostIds()...)
-		}
+	update := DirectoryUpdate{Changed: rsp.GetChanged(), Version: rsp.GetVersion()}
+	if !update.Changed {
+		return update, nil
 	}
-	return DirectoryUpdate{Changed: rsp.GetChanged(), Directory: d}, nil
+	for _, host := range rsp.GetHosts() {
+		reachability, ok := servicecatalog.ParseReachability(host.GetReachability())
+		if !ok {
+			return DirectoryUpdate{}, fmt.Errorf("directory host %s has an unknown reachability", host.GetHostId())
+		}
+		update.Hosts = append(update.Hosts, servicecatalog.Host{ID: host.GetHostId(), Address: host.GetAddress(), PrivateAddress: host.GetPrivateAddress(), Status: statusName(host.GetEnabled()), Reachability: reachability})
+	}
+	for _, deployment := range rsp.GetDeployments() {
+		update.Deployments = append(update.Deployments, servicecatalog.Deployment{HostID: deployment.GetHostId(), ComponentID: deployment.GetComponentId(), Status: statusName(deployment.GetEnabled())})
+	}
+	return update, nil
 }
 
-func readCache(filename string) (servicecatalog.Directory, error) {
+func statusName(enabled bool) string {
+	if enabled {
+		return servicecatalog.Enabled
+	}
+	return servicecatalog.Disabled
+}
+
+// resolve 按内嵌的服务目录把主机与部署展开成目录；内嵌目录不认识的组件忽略。
+func resolve(catalog servicecatalog.Catalog, update DirectoryUpdate) (servicecatalog.Directory, error) {
+	if update.Version == "" || len(update.Hosts) == 0 {
+		return servicecatalog.Directory{}, fmt.Errorf("directory has no version or no hosts")
+	}
+	directory, _ := catalog.Resolve(servicecatalog.NewTopology(update.Hosts, update.Deployments))
+	directory.Version = update.Version
+	return directory, directory.Validate()
+}
+
+func readCache(filename string) (DirectoryUpdate, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		return servicecatalog.Directory{}, err
+		return DirectoryUpdate{}, err
 	}
 	defer file.Close()
 	raw, err := io.ReadAll(io.LimitReader(file, (4<<20)+1))
 	if err != nil {
-		return servicecatalog.Directory{}, err
+		return DirectoryUpdate{}, err
 	}
 	if len(raw) > 4<<20 {
-		return servicecatalog.Directory{}, fmt.Errorf("directory cache exceeds 4 MiB")
+		return DirectoryUpdate{}, fmt.Errorf("directory cache exceeds 4 MiB")
 	}
-	var directory servicecatalog.Directory
+	var directory DirectoryUpdate
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&directory); err != nil {
-		return servicecatalog.Directory{}, fmt.Errorf("decode directory cache: %w", err)
+		return DirectoryUpdate{}, fmt.Errorf("decode directory cache: %w", err)
 	}
 	var extra interface{}
 	if err := decoder.Decode(&extra); err != io.EOF {
-		return servicecatalog.Directory{}, fmt.Errorf("directory cache must contain one document")
+		return DirectoryUpdate{}, fmt.Errorf("directory cache must contain one document")
 	}
-	return directory, directory.Validate()
+	return directory, nil
 }
 
-func writeCache(filename string, directory servicecatalog.Directory) error {
+func writeCache(filename string, directory DirectoryUpdate) error {
 	if filename == "" {
 		return nil
 	}

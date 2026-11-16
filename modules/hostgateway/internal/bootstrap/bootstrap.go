@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -109,6 +110,10 @@ func (r *Runtime) Refresh(ctx context.Context) error {
 
 func (r *Runtime) apply(view *snapshot.View) {
 	r.state.Apply(view)
+	// 每份新快照只在应用时记一次：Admin 比这台网关新时会出现，被忽略的组件要等网关升级后才有路由。
+	if unknown := view.Unknown(); len(unknown) != 0 {
+		r.warn("host gateway ignored components missing from its embedded catalog: host_id=" + r.hostID + " components=" + strings.Join(unknown, ","))
+	}
 	r.health.ApplyRoutes(view.Hash(), view.Count(), view.Disabled())
 }
 

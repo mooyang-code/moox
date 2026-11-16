@@ -22,9 +22,12 @@ import (
 func TestSkillUsesProductionAccessWithoutOperatorFiles(t *testing.T) {
 	storage := &klineStorageStub{requests: make(chan *pb.ReadTimeSeriesRowsReq, 4)}
 	credential := authtest.Identity("moox-skill")
+	// Access 与 Storage 同机：Access 直连服务目录里 PrimaryStore 的固定回环端口，假 Storage 就监听在那里（端口被占用时跳过）。
+	// 夹具网关只给 Access 提供目录。T16 把夹具改成带外部入口的网关后不再占固定端口。
+	storageAddress := serveKlineStorage(t, storage, accesskit.LocalStorageListener(t))
 	access := accesskit.StartAccess(t, accesskit.AccessOptions{
 		AccessBinary: buildAccessServer(t), GatewayBinary: buildGatewayE2EHelper(t), HostID: klineGatewayNode,
-		StorageAddress: startKlineStorage(t, storage), ExternalCredentials: []gatewayauth.Credentials{credential},
+		StorageAddress: storageAddress, ExternalCredentials: []gatewayauth.Credentials{credential},
 	})
 	configPath := writeKlineConfig(t)
 	keyPath := filepath.Join(filepath.Dir(configPath), "assigned-skill.key")

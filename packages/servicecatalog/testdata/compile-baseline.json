@@ -1,5 +1,5 @@
 {
-  "note": "批 4 记下的路由编译基线：compileBaselineTopology 下每台主机 Compile 的路由（服务、方法、端口、包体上限、超时、调用方）、校验名单与中转许可。生成与用法见 baseline_gen_test.go。",
+  "note": "批 4 记下的路由编译基线：compileBaselineTopology 下每台主机 Compile 的路由（服务、方法、端口、包体上限、超时、调用方）、可用主机密钥签名的调用方与中转许可。生成与用法见 baseline_gen_test.go。",
   "topology": {
     "control_host_id": "control",
     "hosts": [
@@ -39,20 +39,17 @@
   "hosts": [
     {
       "host_id": "control",
-      "verification_callers": [
-        "access",
+      "signing_callers": [
+        "admin",
         "archive-mgr",
-        "archive-worker",
         "collector",
-        "collector-stream",
         "console",
-        "factor-engine",
+        "eventbus",
+        "factor-mgr",
         "host-agent",
         "host-gateway",
         "monitor",
-        "moox-cli",
-        "strategy",
-        "trade"
+        "strategy"
       ],
       "relays": [
         {
@@ -247,7 +244,6 @@
         {"service":"trpc.moox.ops.Ssh","method":"SftpMkdir","component":"admin","port":11106,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["console"]},
         {"service":"trpc.moox.ops.SysDeploy","method":"DeleteHost","component":"admin","port":11109,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["moox-cli"]},
         {"service":"trpc.moox.ops.SysDeploy","method":"GetCatalog","component":"admin","port":11109,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","monitor","moox-cli"]},
-        {"service":"trpc.moox.ops.SysDeploy","method":"GetDirectory","component":"admin","port":11109,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.ops.SysDeploy","method":"GetHostRoutes","component":"admin","port":11109,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","monitor","moox-cli"]},
         {"service":"trpc.moox.ops.SysDeploy","method":"ListDeployments","component":"admin","port":11109,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","monitor","moox-cli"]},
         {"service":"trpc.moox.ops.SysDeploy","method":"ListHosts","component":"admin","port":11109,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","monitor","moox-cli"]},
@@ -283,18 +279,12 @@
     },
     {
       "host_id": "storage",
-      "verification_callers": [
+      "signing_callers": [
         "access",
-        "archive-mgr",
-        "archive-worker",
-        "collector",
-        "collector-stream",
-        "console",
-        "factor-engine",
-        "factor-mgr",
-        "monitor",
-        "moox-cli",
-        "strategy"
+        "host-agent",
+        "host-gateway",
+        "storage-primary",
+        "storage-view"
       ],
       "relays": [],
       "routes": [
@@ -367,13 +357,14 @@
     },
     {
       "host_id": "overseas",
-      "verification_callers": [
+      "signing_callers": [
+        "access",
         "callback-dispatcher",
-        "collector",
-        "console",
-        "monitor",
-        "moox-cli",
-        "strategy"
+        "collector-stream",
+        "egress-proxy",
+        "host-agent",
+        "host-gateway",
+        "trade"
       ],
       "relays": [],
       "routes": [
@@ -445,10 +436,11 @@
     },
     {
       "host_id": "factor",
-      "verification_callers": [
-        "monitor",
-        "moox-cli",
-        "strategy"
+      "signing_callers": [
+        "archive-worker",
+        "factor-engine",
+        "host-agent",
+        "host-gateway"
       ],
       "relays": [],
       "routes": [

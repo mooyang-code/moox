@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -28,7 +29,7 @@ type Service struct {
 	now           func() time.Time
 }
 
-func (*Service) String() string     { return "GatewayControl{per-host snapshots}" }
+func (*Service) String() string     { return "GatewayControl{snapshots}" }
 func (s *Service) GoString() string { return s.String() }
 
 func NewService(db *gorm.DB, controlHostID string) (*Service, error) {
@@ -74,9 +75,13 @@ func (s *Service) PullSnapshot(ctx context.Context, req *pb.PullSnapshotReq) (*p
 	if err != nil {
 		return &pb.PullSnapshotRsp{RetInfo: result(err)}, nil
 	}
-	_, snapshot, err := dao.CompileSnapshot(ctx, req.GetHostId())
+	snapshot, err := dao.Snapshot(ctx)
 	if err != nil {
 		return &pb.PullSnapshotRsp{RetInfo: result(err)}, nil
+	}
+	// 快照对全部主机相同；没登记的主机拿不到。
+	if !slices.ContainsFunc(snapshot.Hosts, func(host *pb.SnapshotHost) bool { return host.HostId == req.GetHostId() }) {
+		return &pb.PullSnapshotRsp{RetInfo: result(gorm.ErrRecordNotFound)}, nil
 	}
 	if snapshot.Hash == req.GetCurrentHash() {
 		return &pb.PullSnapshotRsp{RetInfo: success()}, nil
@@ -138,9 +143,12 @@ func (s *Service) ReportStatus(ctx context.Context, req *pb.ReportStatusReq) (*p
 		if err != nil {
 			return err
 		}
-		_, snapshot, err := dao.CompileSnapshot(ctx, req.GetHostId())
+		snapshot, err := dao.Snapshot(ctx)
 		if err != nil {
 			return err
+		}
+		if !slices.ContainsFunc(snapshot.Hosts, func(host *pb.SnapshotHost) bool { return host.HostId == req.GetHostId() }) {
+			return gorm.ErrRecordNotFound
 		}
 		status := sysdeploy.HostGatewayStatus{HostID: req.GetHostId()}
 		err = tx.Where("c_host_id = ?", req.GetHostId()).First(&status).Error

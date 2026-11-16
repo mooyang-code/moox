@@ -89,6 +89,8 @@ type CallFailure struct {
 type endpoint struct {
 	address, target, caFile, serverName string
 	compress                            bool
+	// direct 表示目标服务在本机：直接连它的回环端口，不签名、不压缩，也不查方法名单。
+	direct bool
 	// relay 非空时经 control 网关中转：address 是只在本进程内使用的合成地址，拨号时先连 control 再连目标。
 	relay *relayRoute
 }
@@ -139,10 +141,12 @@ func (c *Client) DialRelay(ctx context.Context, hostID string, port int) (net.Co
 type invokeFunc func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error)
 
 type Client struct {
-	config      Config
-	catalog     servicecatalog.Catalog
-	mu          sync.RWMutex
-	directory   servicecatalog.Directory
+	config    Config
+	catalog   servicecatalog.Catalog
+	mu        sync.RWMutex
+	directory servicecatalog.Directory
+	// source 是 directory 展开之前的那一份，落盘缓存写它。
+	source      DirectoryUpdate
 	refresh     chan struct{}
 	invoke      invokeFunc
 	pool        *rpcPool
@@ -239,7 +243,9 @@ func New(config Config) (*Client, error) {
 	if config.Mode != External {
 		if config.CachePath != "" {
 			if cached, err := readCache(config.CachePath); err == nil {
-				c.directory = cached
+				if directory, err := resolve(catalog, cached); err == nil {
+					c.directory, c.source = directory, cached
+				}
 			}
 		}
 		err := c.Refresh(context.Background())
@@ -288,33 +294,35 @@ func (c *Client) Refresh(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	current := c.Directory().Version
+	c.mu.RLock()
+	current, source := c.directory.Version, c.source
+	c.mu.RUnlock()
 	update, err := c.config.Source.Fetch(ctx, current)
 	if err != nil {
 		return err
 	}
 	if !update.Changed {
-		if current == "" || update.Directory.Version != current {
+		if current == "" || update.Version != current {
 			return fmt.Errorf("unchanged directory has an unexpected version")
 		}
 		// 上次落盘失败时，目录版本不变也要补写，否则缓存会一直停留在旧版本。
 		if c.unpersisted {
-			if err := writeCache(c.config.CachePath, c.Directory()); err != nil {
+			if err := writeCache(c.config.CachePath, source); err != nil {
 				return fmt.Errorf("persist directory: %w", err)
 			}
 			c.unpersisted = false
 		}
 		return nil
 	}
-	if err := update.Directory.Validate(); err != nil {
+	directory, err := resolve(c.catalog, update)
+	if err != nil {
 		return err
 	}
-	directory := update.Directory.Clone()
 	c.mu.Lock()
-	c.directory = directory
+	c.directory, c.source = directory, update
 	c.mu.Unlock()
 	// A disk failure must not keep a disabled host in the active in-memory map.
-	if err := writeCache(c.config.CachePath, directory); err != nil {
+	if err := writeCache(c.config.CachePath, update); err != nil {
 		c.unpersisted = true
 		return fmt.Errorf("persist directory: %w", err)
 	}
@@ -391,9 +399,6 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 	if c.config.Mode == External {
 		allowed = c.catalog.PrincipalAllowed(c.config.Credentials.Caller, service, method)
 	}
-	if !allowed {
-		return nil, fmt.Errorf("gateway caller is not allowed for this method")
-	}
 	spec, _ := c.catalog.Service(service)
 	limit := spec.MaxBodyBytes
 	if limit == 0 {
@@ -415,9 +420,15 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 		if err != nil {
 			return nil, err
 		}
-		headers, err := gatewayauth.Sign(c.config.Credentials, gatewayauth.Request{TargetNode: ep.target, Callee: service, Func: method, Body: body}, time.Now())
-		if err != nil {
-			return nil, err
+		// 目标在本机时直连服务的回环端口：不签名，也不查方法名单（同一台主机、同一个系统用户，本来就能连这些端口）。
+		headers := http.Header{}
+		if !ep.direct {
+			if !allowed {
+				return nil, fmt.Errorf("gateway caller is not allowed for this method")
+			}
+			if headers, err = gatewayauth.Sign(c.config.Credentials, gatewayauth.Request{TargetNode: ep.target, Callee: service, Func: method, Body: body}, time.Now()); err != nil {
+				return nil, err
+			}
 		}
 		metadata := CallMetadataFromContext(ctx)
 		for name, value := range map[string]string{
@@ -456,8 +467,9 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 		code := errs.Code(err)
 		// 网关（或外部入口）自己拒签：验签在转发之前，请求没有到达服务，对所有方法（包括写）都重新签名重发一次。
 		// 常见原因是网关刚重启（早于它启动时间的签名被拒）或部署刚变、快照还没跟上，所以先刷新目录。
-		// 服务自己返回的鉴权类错误是别的错误码，不走这里。
-		if code == gatewayauth.RetRejected {
+		// 只认网关自己发的拒签：它是框架错误，客户端解出来是“被调方框架错误”；下游服务透传回来的同码错误经网关编码后是业务错误，
+		// 那时请求已经到过服务，不能重发。直连本机服务的调用没有签名，也不走这里。
+		if !ep.direct && rejectedByGateway(err) {
 			giveUp := resigned || ctx.Err() != nil || noRetry(ctx) || remainingBudget(ctx) < minRetryRemaining
 			c.reportFailure(CallFailure{Service: service, Method: method, Target: ep.target, Attempt: attempt, Retrying: !giveUp, Remaining: remainingBudget(ctx), Err: err})
 			if giveUp {
@@ -524,7 +536,11 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 	if chosen == previous && len(hosts) > 1 {
 		chosen = hosts[1]
 	}
-	if relayHost := directory.Hosts[chosen].Relay; relayHost != "" && chosen != c.config.LocalHostID {
+	if chosen == c.config.LocalHostID {
+		spec, _ := c.catalog.Service(service)
+		return endpoint{address: localServiceAddress(spec.Port), target: chosen, direct: true}, nil
+	}
+	if relayHost := directory.Hosts[chosen].Relay; relayHost != "" {
 		return c.relayEndpoint(ctx, directory, chosen, relayHost)
 	}
 	if c.config.Mode == Tunnel {
@@ -537,9 +553,6 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 		}
 		// 隧道的本地端口只是 SSH 转发入口，实际经公网到达目标主机，按跨主机调用压缩。
 		return endpoint{address: address, target: chosen, compress: true}, nil
-	}
-	if chosen == c.config.LocalHostID {
-		return endpoint{address: c.config.LocalAddress, target: chosen}, nil
 	}
 	host := directory.Hosts[chosen]
 	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen, compress: true}, nil
@@ -577,6 +590,12 @@ func (c *Client) relayEndpoint(ctx context.Context, directory servicecatalog.Dir
 		route.controlAddress = net.JoinHostPort(control.Address, port)
 	}
 	return endpoint{address: relayAddress(target), target: target, caFile: c.config.CAFile, serverName: target, compress: true, relay: route}, nil
+}
+
+// rejectedByGateway 报告错误是不是网关（或外部入口）自己拒签。
+func rejectedByGateway(err error) bool {
+	var frame *errs.Error
+	return errors.As(err, &frame) && frame.Type == errs.ErrorTypeCalleeFramework && int(frame.Code) == gatewayauth.RetRejected
 }
 
 func validAddress(address string) bool {

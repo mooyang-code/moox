@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -127,7 +126,7 @@ func TestProxyRejectsExternalIdentityEvenWithRegisteredKey(t *testing.T) {
 	}))
 	raw := state.Load().Proto()
 	skill := testsnapshot.Credential("moox-skill", "")
-	raw.VerificationKeys = append(raw.VerificationKeys, &pb.GatewayVerificationKey{Identity: "moox-skill", PublicKey: skill.PublicKey()})
+	raw.Identities = append(raw.Identities, &pb.SnapshotIdentity{Identity: "moox-skill", SignPublicKey: skill.PublicKey()})
 	applySnapshot(t, state, raw)
 	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signedBy(t, skill, "ReadTimeSeriesRows", nil))
 	requireRejected(t, err, "moox-skill 直接到主机网关")
@@ -169,11 +168,7 @@ func TestProxyRejectsOldKeyAfterRotation(t *testing.T) {
 	rotated := authtest.Component("collector", "rotated-control")
 	rotated.Host = "control"
 	raw := state.Load().Proto()
-	for _, key := range raw.VerificationKeys {
-		if key.HostId == "control" {
-			key.PublicKey = rotated.PublicKey()
-		}
-	}
+	testsnapshot.Host(t, raw, "control").SignPublicKey = rotated.PublicKey()
 	applySnapshot(t, state, raw)
 	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "collector", "ReadTimeSeriesRows", nil))
 	requireRejected(t, err, "旧私钥")
@@ -215,43 +210,73 @@ func TestProxyStripsGatewayHeadersAndTellsGatewayControlTheVerifiedHost(t *testi
 	require.Equal(t, "", string(forwarded[gatewayauth.HeaderVerifiedHost]))
 }
 
-func TestProxyAppliesCallerChangesWithoutRestart(t *testing.T) {
+// 快照换了就立即生效，不用重启：组件从它所在的主机撤走后不能再用那台主机的密钥签名；本机的部署停用后路由消失。
+func TestProxyAppliesDeploymentChangesWithoutRestart(t *testing.T) {
 	p, state := proxyFixture(t, forwardFunc(func(_ context.Context, _ servicecatalog.Route, _ int, body []byte, _ codec.MetaData) ([]byte, error) {
 		return body, nil
 	}))
 	original := state.Load().Proto()
-	revoked := state.Load().Proto()
-	for _, route := range revoked.Routes {
-		var callers []string
-		for _, caller := range route.Callers {
-			if caller != "factor-mgr" {
-				callers = append(callers, caller)
-			}
-		}
-		route.Callers = callers
-	}
-	// factor-mgr 从它所在主机上撤走：路由的名单与签名主机上的调用方里都不再有它。
-	for _, key := range revoked.VerificationKeys {
-		key.Callers = slices.DeleteFunc(key.Callers, func(caller string) bool { return caller == "factor-mgr" })
-	}
-	applySnapshot(t, state, revoked)
 	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "factor-mgr", "ReadTimeSeriesRows", nil))
+	require.NoError(t, err)
+	// factor-mgr 从 control 上撤走：路由名单里还有它，但 control 的主机密钥不能再替它签名。
+	revoked := state.Load().Proto()
+	testsnapshot.Deployment(t, revoked, "control", "factor-mgr").Enabled = false
+	applySnapshot(t, state, revoked)
+	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "factor-mgr", "ReadTimeSeriesRows", nil))
 	requireRejected(t, err, "撤走的组件")
+	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "collector", "ReadTimeSeriesRows", nil))
+	require.NoError(t, err, "同一台主机上别的组件不受影响")
 	applySnapshot(t, state, original)
 	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "factor-mgr", "ReadTimeSeriesRows", nil))
 	require.NoError(t, err)
+	// 本机的 storage-primary 停用：路由没了。
 	removed := state.Load().Proto()
-	var routes []*pb.HostGatewayRoute
-	for _, route := range removed.Routes {
-		if route.Method != "ReadTimeSeriesRows" {
-			routes = append(routes, route)
-		}
-	}
-	removed.Routes = routes
+	testsnapshot.Deployment(t, removed, "storage", "storage-primary").Enabled = false
 	applySnapshot(t, state, removed)
 	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "collector", "ReadTimeSeriesRows", nil))
 	require.ErrorContains(t, err, "not deployed")
 	require.Equal(t, errs.RetServerNoService, errs.Code(err), "客户端依赖该错误码刷新目录并重试")
+}
+
+// 快照里有本进程不认识的组件（两边版本不一致）：忽略它，认识的组件照常验签、转发。
+func TestProxyForwardsKnownRoutesWhenSnapshotHasUnknownComponent(t *testing.T) {
+	var calls atomic.Int32
+	p, state := proxyFixture(t, forwardFunc(func(_ context.Context, route servicecatalog.Route, _ int, body []byte, _ codec.MetaData) ([]byte, error) {
+		calls.Add(1)
+		require.Equal(t, "storage-primary", route.ComponentID)
+		require.Equal(t, "127.0.0.1:20102", route.Address)
+		return body, nil
+	}))
+	raw := state.Load().Proto()
+	raw.Deployments = append(raw.Deployments,
+		&pb.SnapshotDeployment{HostId: "storage", ComponentId: "from-the-future", Enabled: true},
+		&pb.SnapshotDeployment{HostId: "control", ComponentId: "from-the-future", Enabled: true},
+	)
+	applySnapshot(t, state, raw)
+	require.Equal(t, []string{"from-the-future"}, state.Load().Unknown())
+	body := []byte{0x0a, 1, 'a'}
+	response, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", body, signed(t, "collector", "ReadTimeSeriesRows", body))
+	require.NoError(t, err)
+	require.Equal(t, body, response)
+	require.EqualValues(t, 1, calls.Load())
+	// 不认识的组件名不是合法调用方。
+	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "from-the-future", "ReadTimeSeriesRows", nil))
+	requireRejected(t, err, "不认识的组件")
+	require.EqualValues(t, 1, calls.Load())
+}
+
+// 本机被停用：没有路由，签名正确的请求也到不了上游。
+func TestProxyHasNoRoutesWhenLocalHostDisabled(t *testing.T) {
+	p, state := proxyFixture(t, forwardFunc(func(context.Context, servicecatalog.Route, int, []byte, codec.MetaData) ([]byte, error) {
+		t.Fatal("停用主机上的请求不应到达上游")
+		return nil, nil
+	}))
+	raw := state.Load().Proto()
+	testsnapshot.Host(t, raw, "storage").Enabled = false
+	applySnapshot(t, state, raw)
+	require.True(t, state.Load().Disabled())
+	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "collector", "ReadTimeSeriesRows", nil))
+	require.Error(t, err)
 }
 
 func TestProxyBodyLimitsAndDeadlines(t *testing.T) {

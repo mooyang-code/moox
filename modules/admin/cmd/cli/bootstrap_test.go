@@ -20,6 +20,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/stretchr/testify/require"
 )
@@ -163,18 +164,33 @@ func TestBootstrapEmptyEnvironmentIssuesHostKeyAndRegistersOperator(t *testing.T
 			require.NotContains(t, string(raw), strings.TrimSpace(string(secret)), file)
 		}
 	}
-	// 快照里是公钥：控制机的主机密钥连同它上面的调用方，加两个非主机身份。
+	// 快照里是公钥：控制机的主机密钥，加两个非主机身份；网关按快照里的部署算出控制机上可签名的调用方。
 	db, err := openAdminCLIDB(opts.dbPath)
 	require.NoError(t, err)
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	_, snapshot, err := dao.CompileSnapshot(context.Background(), "control")
+	snapshot, err := dao.Snapshot(context.Background())
 	require.NoError(t, err)
-	require.Len(t, snapshot.VerificationKeys, 3)
-	index := slices.IndexFunc(snapshot.VerificationKeys, func(key *pb.GatewayVerificationKey) bool { return key.HostId == "control" })
-	require.Equal(t, result.SignPublicKey, gatewayauth.EncodePublicKey(snapshot.VerificationKeys[index].PublicKey))
-	require.Equal(t, []string{"admin", "collector", "console", "host-agent", "host-gateway"}, snapshot.VerificationKeys[index].Callers)
+	require.Len(t, snapshot.Identities, 2)
+	index := slices.IndexFunc(snapshot.Hosts, func(host *pb.SnapshotHost) bool { return host.HostId == "control" })
+	require.GreaterOrEqual(t, index, 0)
+	require.Equal(t, result.SignPublicKey, gatewayauth.EncodePublicKey(snapshot.Hosts[index].SignPublicKey))
+	for _, host := range snapshot.Hosts {
+		require.Equal(t, host.HostId == "control", len(host.SignPublicKey) != 0, "只有控制机签发过身份包：%s", host.HostId)
+	}
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	status := map[bool]string{true: servicecatalog.Enabled, false: servicecatalog.Disabled}
+	var snapshotHosts []servicecatalog.Host
+	for _, host := range snapshot.Hosts {
+		snapshotHosts = append(snapshotHosts, servicecatalog.Host{ID: host.HostId, Address: host.Address, Status: status[host.Enabled]})
+	}
+	var snapshotDeployments []servicecatalog.Deployment
+	for _, deployment := range snapshot.Deployments {
+		snapshotDeployments = append(snapshotDeployments, servicecatalog.Deployment{HostID: deployment.HostId, ComponentID: deployment.ComponentId, Status: status[deployment.Enabled]})
+	}
+	require.Equal(t, []string{"admin", "collector", "console", "host-agent", "host-gateway"}, catalog.SigningCallers(servicecatalog.NewTopology(snapshotHosts, snapshotDeployments))["control"])
 }
 
 // 重跑（例行升级、续证书）：目标机上的私钥和登记的一致就不换密钥，包里没有私钥；主密钥、CA、停用状态、已登记的操作电脑公钥都不变。

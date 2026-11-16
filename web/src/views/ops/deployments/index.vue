@@ -148,8 +148,8 @@
               >
             </p>
             <p class="hashes">
-              路由定义 {{ currentRoutes.definition_hash }}<br />期望快照 {{ currentRoutes.gateway_status?.expected_hash || "暂无"
-              }}<br />已应用快照 {{ currentRoutes.gateway_status?.applied_hash || "暂无" }}
+              期望快照 {{ currentRoutes.gateway_status?.expected_hash || "暂无" }}<br />已应用快照
+              {{ currentRoutes.gateway_status?.applied_hash || "暂无" }}
             </p>
             <p v-if="currentRoutes.gateway_status?.last_error" class="error">{{ currentRoutes.gateway_status.last_error }}</p>
           </div>

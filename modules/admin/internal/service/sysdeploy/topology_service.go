@@ -10,7 +10,6 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gorm.io/gorm"
 )
@@ -97,18 +96,6 @@ func (s *ServiceImpl) ListDeployments(ctx context.Context, req *pb.ListDeploymen
 	return response, nil
 }
 
-func (s *ServiceImpl) GetDirectory(ctx context.Context, _ *pb.GetDirectoryReq) (*pb.GetDirectoryRsp, error) {
-	dao, err := s.topologyDAO()
-	if err != nil {
-		return &pb.GetDirectoryRsp{RetInfo: topologyRet(err)}, nil
-	}
-	compiled, err := dao.Compile(ctx, dao.controlHostID)
-	if err != nil {
-		return &pb.GetDirectoryRsp{RetInfo: topologyRet(err)}, nil
-	}
-	return &pb.GetDirectoryRsp{RetInfo: retOK(), Directory: directoryToProto(compiled.Directory)}, nil
-}
-
 func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesReq) (*pb.GetHostRoutesRsp, error) {
 	if req.GetHostId() == "" {
 		return &pb.GetHostRoutesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "host_id is required")}, nil
@@ -117,7 +104,12 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
-	compiled, snapshot, err := dao.CompileSnapshot(ctx, req.GetHostId())
+	// 路由不随快照下发：这里和网关一样按登记的部署与服务目录算一遍，只给人看。
+	compiled, err := dao.Compile(ctx, req.GetHostId())
+	if err != nil {
+		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
+	}
+	snapshot, err := dao.Snapshot(ctx)
 	compiledAt := time.Now().UTC().Format(time.RFC3339Nano)
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
@@ -129,12 +121,11 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
-	// Always show the current desired snapshot, including rotations/withdrawals
-	// since the latest heartbeat. The gateway cannot choose its expected hash.
+	// 期望哈希总是按当前登记的内容给出，包含上次心跳之后的变更；网关不能自己决定期望哈希。
 	status.ExpectedHash = snapshot.Hash
-	response := &pb.GetHostRoutesRsp{RetInfo: retOK(), HostId: compiled.HostID, DefinitionHash: compiled.Hash, GatewayStatus: statusToProto(status), SnapshotSchemaVersion: snapshot.SchemaVersion, CompiledAt: compiledAt}
+	response := &pb.GetHostRoutesRsp{RetInfo: retOK(), HostId: compiled.HostID, GatewayStatus: statusToProto(status), SnapshotSchemaVersion: snapshot.SchemaVersion, CompiledAt: compiledAt}
 	for _, route := range compiled.Routes {
-		response.Routes = append(response.Routes, routeToProto(route))
+		response.Routes = append(response.Routes, &pb.HostGatewayRoute{ComponentId: route.ComponentID, ServicePath: route.ServicePath, Method: route.Method, Address: route.Address, TimeoutMs: route.TimeoutMS, MaxBodyBytes: route.MaxBodyBytes, Callers: route.Callers, ReadOnly: route.ReadOnly})
 	}
 	return response, nil
 }
@@ -196,33 +187,6 @@ func (s *ServiceImpl) DeleteHost(ctx context.Context, req *pb.DeleteDeploymentHo
 		s.closeHostSessions(req.GetHostId())
 	}
 	return &pb.DeleteDeploymentHostRsp{RetInfo: topologyRet(err)}, nil
-}
-
-func directoryToProto(d servicecatalog.Directory) *directorypb.ServiceDirectory {
-	result := &directorypb.ServiceDirectory{Version: d.Version, Hosts: map[string]*directorypb.DirectoryHost{}, Services: map[string]*directorypb.ServiceHosts{}}
-	for id, host := range d.Hosts {
-		result.Hosts[id] = &directorypb.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Relay: host.Relay}
-	}
-	for path, hosts := range d.Services {
-		result.Services[path] = &directorypb.ServiceHosts{HostIds: append([]string{}, hosts...)}
-	}
-	return result
-}
-
-func relaysToProto(relays []servicecatalog.RelayTarget) []*pb.HostGatewayRelay {
-	var result []*pb.HostGatewayRelay
-	for _, relay := range relays {
-		item := &pb.HostGatewayRelay{HostId: relay.HostID}
-		for _, port := range relay.Ports {
-			item.Ports = append(item.Ports, &pb.HostGatewayRelayPort{Port: int32(port.Port), Callers: slices.Clone(port.Callers)})
-		}
-		result = append(result, item)
-	}
-	return result
-}
-
-func routeToProto(route servicecatalog.Route) *pb.HostGatewayRoute {
-	return &pb.HostGatewayRoute{ComponentId: route.ComponentID, ServicePath: route.ServicePath, Method: route.Method, Address: route.Address, TimeoutMs: route.TimeoutMS, MaxBodyBytes: route.MaxBodyBytes, Callers: append([]string{}, route.Callers...), ReadOnly: route.ReadOnly}
 }
 
 func statusToProto(status *HostGatewayStatus) *pb.HostGatewayRuntimeStatus {

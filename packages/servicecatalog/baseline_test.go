@@ -175,7 +175,7 @@ func checkACLBaseline(t *testing.T, c Catalog) {
 	t.Logf("核对 Allowed %d 个组合（%d 个方法），PrincipalAllowed %d 个组合", checked, len(all), principalChecked)
 }
 
-// 固定拓扑下每台主机编译出的路由（服务、方法、端口、包体上限、超时、只读、调用方）、校验名单与中转许可要与基线一致。
+// 固定拓扑下每台主机编译出的路由（服务、方法、端口、包体上限、超时、只读、调用方）、可用主机密钥签名的调用方与中转许可要与基线一致。
 func TestCompileMatchesBaseline(t *testing.T) {
 	var baseline compileBaselineFile
 	readBaseline(t, "compile-baseline.json", &baseline)
@@ -195,8 +195,8 @@ func TestCompileMatchesBaseline(t *testing.T) {
 		if host.HostID != want.HostID {
 			t.Fatalf("主机顺序变了：%s，基线 %s", host.HostID, want.HostID)
 		}
-		if !slices.Equal(host.VerificationCallers, want.VerificationCallers) {
-			t.Errorf("%s 校验名单 %v，基线 %v", host.HostID, host.VerificationCallers, want.VerificationCallers)
+		if !slices.Equal(host.SigningCallers, want.SigningCallers) {
+			t.Errorf("%s 签名调用方 %v，基线 %v", host.HostID, host.SigningCallers, want.SigningCallers)
 		}
 		if !reflect.DeepEqual(host.Relays, want.Relays) {
 			t.Errorf("%s 中转许可 %+v，基线 %+v", host.HostID, host.Relays, want.Relays)

@@ -8,8 +8,7 @@ import type {
   DeploymentStatus,
   HostRoutesResponse,
   PageReq,
-  PageResult,
-  ServiceDirectory
+  PageResult
 } from "./types";
 
 /** 后台轮询的读取传 { silentError: true }：失败不弹全局提示，由页面自己显示。 */
@@ -37,9 +36,6 @@ export function listDeployments(
 }
 export function getHostRoutes(hostId: string, options: ReadOptions = {}) {
   return callControl<{ host_id: string }, HostRoutesResponse>("sysdeploy", "GetHostRoutes", { host_id: hostId }, options);
-}
-export function getDirectory() {
-  return callControl<Record<string, never>, { directory?: ServiceDirectory }>("sysdeploy", "GetDirectory", {});
 }
 // Admin caps each page at 100. Do not silently hide later hosts or deployments.
 async function allPages<T>(read: (page: number) => Promise<{ items: T[]; page_result?: PageResult }>, key: (row: T) => string) {

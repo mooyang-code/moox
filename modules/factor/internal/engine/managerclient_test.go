@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -20,7 +21,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -32,11 +32,17 @@ import (
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-// managerDirectory 是固定的服务目录：测试里 factor-mgr 的服务就在引擎所在的主机上，请求经本机网关入口进来。
-type managerDirectory struct{ directory servicecatalog.Directory }
+// managerDirectory 是固定的目录：测试里 factor-mgr 就部署在引擎所在的主机上，引擎直连它的回环端口。
+type managerDirectory struct{}
 
-func (d managerDirectory) Fetch(_ context.Context, version string) (gatewayclient.DirectoryUpdate, error) {
-	return gatewayclient.DirectoryUpdate{Changed: version != d.directory.Version, Directory: d.directory}, nil
+func (managerDirectory) Fetch(_ context.Context, version string) (gatewayclient.DirectoryUpdate, error) {
+	const current = "v1"
+	return gatewayclient.DirectoryUpdate{Changed: version != current, Version: current,
+		Hosts: []servicecatalog.Host{{ID: "factor", Address: "factor.example.test", Status: servicecatalog.Enabled}},
+		Deployments: []servicecatalog.Deployment{
+			{HostID: "factor", ComponentID: "factor-mgr", Status: servicecatalog.Enabled},
+			{HostID: "factor", ComponentID: "factor-engine", Status: servicecatalog.Enabled},
+		}}, nil
 }
 
 func testCAFile(t *testing.T) string {
@@ -55,8 +61,18 @@ func managerClientFor(t *testing.T, handler func(context.Context, string, []byte
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	// 引擎是普通调用方：用所在主机（factor）的密钥、以自己的组件 ID 签名。
+	// 引擎是普通调用方：身份是所在主机（factor）的密钥加自己的组件 ID；同机调用不签名，跨主机才用它签名。
 	credentials := authtest.Component("factor-engine", "factor")
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	spec, ok := catalog.Service(managerServicePath)
+	require.True(t, ok)
+	t.Cleanup(gatewayclient.SetLocalServiceAddressForTest(func(port int) string {
+		if port != spec.Port {
+			return "127.0.0.1:1"
+		}
+		return listener.Addr().String()
+	}))
 	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithCurrentSerializationType(codec.SerializationTypeNoop), server.WithServiceName(managerServicePath))
 	require.NoError(t, service.Register(&server.ServiceDesc{ServiceName: managerServicePath, HandlerType: ((*interface{})(nil)), Methods: []server.Method{{Name: "*", Func: func(_ interface{}, ctx context.Context, decode server.FilterFunc) (interface{}, error) {
 		request := &codec.Body{}
@@ -71,9 +87,10 @@ func managerClientFor(t *testing.T, handler func(context.Context, string, []byte
 			for key, value := range message.ServerMetaData() {
 				headers.Add(key, string(value))
 			}
-			_, err := authtest.Verify(credentials, gatewayauth.Request{TargetNode: "factor", Callee: managerServicePath, Func: method, Body: request.Data}, headers, time.Now())
-			if err != nil {
-				return nil, err
+			for name := range headers {
+				if strings.HasPrefix(strings.ToLower(name), "x-moox-") {
+					return nil, fmt.Errorf("direct local call carries signature header %s", name)
+				}
 			}
 			response, err := handler(ctx, method, request.Data)
 			if err != nil {
@@ -85,11 +102,8 @@ func managerClientFor(t *testing.T, handler func(context.Context, string, []byte
 	}}}}, struct{}{}))
 	go func() { _ = service.Serve() }()
 	t.Cleanup(func() { _ = service.Close(nil) })
-	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"factor": {Address: "127.0.0.1"}}, Services: map[string][]string{managerServicePath: {"factor"}}}
-	directory.Version, err = directory.VersionHash()
-	require.NoError(t, err)
-	gateway, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: credentials, LocalHostID: "factor", LocalAddress: listener.Addr().String(),
-		CAFile: testCAFile(t), Source: managerDirectory{directory}, Serialization: codec.SerializationTypePB})
+	gateway, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: credentials, LocalHostID: "factor",
+		CAFile: testCAFile(t), Source: managerDirectory{}, Serialization: codec.SerializationTypePB})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
 	client, err := NewManagerClient(gateway, 5*time.Second, domain.EngineIdentity{EngineID: "factor-engine@mac", BootID: "boot", Version: "v1"})
@@ -97,7 +111,8 @@ func managerClientFor(t *testing.T, handler func(context.Context, string, []byte
 	return client
 }
 
-func TestManagerClientSignsNativeRequestsAsHostComponent(t *testing.T) {
+// 引擎与 factor-mgr 同机时直连它的服务端口，请求不带签名头。
+func TestManagerClientCallsLocalManagerDirectlyWithoutSignature(t *testing.T) {
 	client := managerClientFor(t, func(_ context.Context, method string, body []byte) (proto.Message, error) {
 		require.Equal(t, "SyncEngineCatalog", method)
 		var req factorpb.SyncEngineCatalogReq

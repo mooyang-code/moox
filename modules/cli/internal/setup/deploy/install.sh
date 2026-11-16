@@ -188,6 +188,19 @@ storage_init() {
     --schema-path "${root}/config/storage-primary/metadata.sql" >/dev/null) || fail "Storage 元数据库初始化失败"
 }
 
+# 重启正在运行的主机网关之后，等它的本机入口重新开始监听再重启后面的组件：它们启动时要从这里取目录，取不到就退出、等 systemd 再拉起。
+# 最多等 30 秒，到时限不算失败（部署最后统一等各组件就绪）。首次启动不等：控制机的网关要等后面的 Admin 起来才能就绪。
+gateway_wait() {
+  local addr
+  addr="$(sed -n 's/^[[:space:]]*local_addr:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "${root}/config/host-gateway/app.yaml" 2>/dev/null | head -n 1 || true)"
+  [[ "${addr}" =~ ^[0-9.]+:[0-9]+$ ]] || return 0
+  for _ in $(seq 1 30); do
+    if (exec 3<>"/dev/tcp/${addr%:*}/${addr##*:}") 2>/dev/null; then return 0; fi
+    sleep 1
+  done
+  return 0
+}
+
 # ---------------------------------------------------------------- 按启动顺序启动
 # components.list 每行：<组件> <是否有变化 0|1> <上次部署记录里有没有它 0|1>，已按启动顺序排好。
 while read -r component changed known; do
@@ -208,6 +221,7 @@ while read -r component changed known; do
     systemctl_user enable "${unit}" >/dev/null 2>&1 || fail "启用 ${unit} 失败"
     systemctl_user restart "${unit}" || fail "启动 ${unit} 失败：journalctl --user -u ${unit} -n 50"
     if [[ "${active}" -eq 1 ]]; then echo "component ${component} restarted"; else echo "component ${component} started"; fi
+    [[ "${component}" != "host-gateway" || "${active}" -eq 0 ]] || gateway_wait
   else
     systemctl_user enable "${unit}" >/dev/null 2>&1 || true
     echo "component ${component} unchanged"

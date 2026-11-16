@@ -1,4 +1,4 @@
-// Package directory serves public service-discovery metadata on loopback only.
+// Package directory 在本机回环端口上提供目录：登记的主机与部署，不含公钥与调用名单。
 package directory
 
 import (
@@ -42,15 +42,15 @@ func Register(local server.Service, state *snapshot.State) error {
 				if view == nil {
 					return nil, errors.New("local directory is not initialized")
 				}
-				d := view.Directory()
-				rsp := &pb.GetDirectoryRsp{Version: d.Version, Changed: req.CurrentVersion != d.Version}
+				// 目录就是快照里的主机与部署，版本用快照哈希；调用方按内嵌的服务目录自己展开。
+				snapshot := view.Proto()
+				rsp := &pb.GetDirectoryRsp{Version: snapshot.Hash, Changed: req.CurrentVersion != snapshot.Hash}
 				if rsp.Changed {
-					rsp.Hosts, rsp.Services = map[string]*pb.DirectoryHost{}, map[string]*pb.ServiceHosts{}
-					for id, host := range d.Hosts {
-						rsp.Hosts[id] = &pb.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Relay: host.Relay}
+					for _, host := range snapshot.Hosts {
+						rsp.Hosts = append(rsp.Hosts, &pb.DirectoryHost{HostId: host.HostId, Address: host.Address, PrivateAddress: host.PrivateAddress, Reachability: host.Reachability, Enabled: host.Enabled})
 					}
-					for path, hosts := range d.Services {
-						rsp.Services[path] = &pb.ServiceHosts{HostIds: hosts}
+					for _, deployment := range snapshot.Deployments {
+						rsp.Deployments = append(rsp.Deployments, &pb.DirectoryDeployment{HostId: deployment.HostId, ComponentId: deployment.ComponentId, Enabled: deployment.Enabled})
 					}
 				}
 				encoded, err := codec.Marshal(serialization, rsp)

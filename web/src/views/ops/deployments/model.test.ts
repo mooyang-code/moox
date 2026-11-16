@@ -24,7 +24,6 @@ const component: CatalogComponent = {
 };
 const snapshot: HostRoutesResponse = {
   host_id: "a",
-  definition_hash: "definition",
   snapshot_schema_version: 1,
   compiled_at: "2026-10-09T12:00:00Z",
   gateway_status: { expected_hash: "new", applied_hash: "old", last_seen_at: "2026-10-09T12:00:00Z" }

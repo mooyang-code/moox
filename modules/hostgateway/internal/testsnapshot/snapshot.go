@@ -1,4 +1,4 @@
-// Package testsnapshot builds catalog-derived, synthetic test snapshots.
+// Package testsnapshot 给测试拼一份快照：主机、部署与测试用的公钥，路由由被测代码按内嵌目录自己算。
 package testsnapshot
 
 import (
@@ -9,7 +9,6 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
@@ -24,79 +23,39 @@ func NewWithOutbound(t testing.TB, hostID, outbound string, components ...string
 	return build(t, hostID, outbound, components)
 }
 
+// build 的拓扑：control 加被测主机（加可选的出站主机）。components 部署在被测主机上；其余组件都放在 control 上，
+// 这样测试里“控制机上的某个组件”都能用控制机的主机密钥签名。每台主机都有公钥，非主机身份只有 moox-cli。
 func build(t testing.TB, hostID, outbound string, components []string) *pb.HostGatewaySnapshot {
 	t.Helper()
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		t.Fatal(err)
 	}
-	topology := servicecatalog.Topology{ControlHostID: "control", Hosts: []servicecatalog.Host{{ID: "control", Address: "192.0.2.1", Status: servicecatalog.Enabled}}}
+	raw := &pb.HostGatewaySnapshot{SchemaVersion: 2}
+	addHost := func(id, address, reachability string) {
+		raw.Hosts = append(raw.Hosts, &pb.SnapshotHost{HostId: id, Address: address, Reachability: reachability, Enabled: true, SignPublicKey: HostKey(id).Public().(ed25519.PublicKey)})
+	}
+	addHost("control", "192.0.2.1", servicecatalog.ReachabilityDirect)
 	if hostID != "control" && hostID != outbound {
-		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: hostID, Address: "192.0.2.2", Status: servicecatalog.Enabled})
+		addHost(hostID, "192.0.2.2", servicecatalog.ReachabilityDirect)
 	}
 	if outbound != "" {
-		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: outbound, Address: "192.168.0.103", Status: servicecatalog.Enabled, Reachability: servicecatalog.ReachabilityOutbound})
-	}
-	seen := map[string]bool{}
-	add := func(host, component string) {
-		key := host + "/" + component
-		if !seen[key] {
-			topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host, ComponentID: component, Status: servicecatalog.Enabled})
-			seen[key] = true
-		}
-	}
-	for _, c := range catalog.Components {
-		if c.Scope == servicecatalog.ScopeHost {
-			for _, h := range topology.Hosts {
-				add(h.ID, c.ID)
-			}
-		}
-		if c.Scope == servicecatalog.ScopeControl && c.Protected {
-			add("control", c.ID)
-		}
+		addHost(outbound, "192.168.0.103", servicecatalog.ReachabilityOutbound)
 	}
 	for _, c := range components {
-		add(hostID, c)
+		raw.Deployments = append(raw.Deployments, &pb.SnapshotDeployment{HostId: hostID, ComponentId: c, Enabled: true})
 	}
-	compiled, err := catalog.Compile(topology, hostID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw := &pb.HostGatewaySnapshot{SchemaVersion: 1, HostId: hostID, Disabled: compiled.Disabled,
-		Directory: &directorypb.ServiceDirectory{Version: compiled.Directory.Version, Hosts: map[string]*directorypb.DirectoryHost{}, Services: map[string]*directorypb.ServiceHosts{}}}
-	for id, host := range compiled.Directory.Hosts {
-		raw.Directory.Hosts[id] = &directorypb.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Relay: host.Relay}
-	}
-	for path, ids := range compiled.Directory.Services {
-		raw.Directory.Services[path] = &directorypb.ServiceHosts{HostIds: ids}
-	}
-	for _, route := range compiled.Routes {
-		raw.Routes = append(raw.Routes, &pb.HostGatewayRoute{ComponentId: route.ComponentID, ServicePath: route.ServicePath, Method: route.Method, Address: route.Address,
-			TimeoutMs: route.TimeoutMS, MaxBodyBytes: route.MaxBodyBytes, Callers: route.Callers, ReadOnly: route.ReadOnly})
-	}
-	for _, relay := range compiled.Relays {
-		item := &pb.HostGatewayRelay{HostId: relay.HostID}
-		for _, port := range relay.Ports {
-			item.Ports = append(item.Ports, &pb.HostGatewayRelayPort{Port: int32(port.Port), Callers: port.Callers})
-		}
-		raw.Relays = append(raw.Relays, item)
-	}
-	// 每台主机一把校验公钥，连同部署在它上面的调用方；非主机身份只有 moox-cli。
-	signing := catalog.SigningCallers(topology)
-	// 测试拓扑只部署了被测主机要的组件。为了让别的调用方也能签名，夹具把其余组件（与 console）都算作部署在 control 上；
-	// “调用方必须在签名主机上”另有专门的测试。
-	for _, component := range catalog.Components {
-		if !component.ThirdParty {
-			signing["control"] = append(signing["control"], component.ID)
+	for _, c := range catalog.Components {
+		switch {
+		case c.Scope == servicecatalog.ScopeHost:
+			for _, h := range raw.Hosts {
+				raw.Deployments = append(raw.Deployments, &pb.SnapshotDeployment{HostId: h.HostId, ComponentId: c.ID, Enabled: true})
+			}
+		case !c.ThirdParty && !slices.Contains(components, c.ID):
+			raw.Deployments = append(raw.Deployments, &pb.SnapshotDeployment{HostId: "control", ComponentId: c.ID, Enabled: true})
 		}
 	}
-	signing["control"] = append(signing["control"], servicecatalog.OperatorConsole)
-	slices.Sort(signing["control"])
-	signing["control"] = slices.Compact(signing["control"])
-	for _, host := range topology.Hosts {
-		raw.VerificationKeys = append(raw.VerificationKeys, &pb.GatewayVerificationKey{HostId: host.ID, PublicKey: HostKey(host.ID).Public().(ed25519.PublicKey), Callers: signing[host.ID]})
-	}
-	raw.VerificationKeys = append(raw.VerificationKeys, &pb.GatewayVerificationKey{Identity: "moox-cli", PublicKey: Credential("moox-cli", "").PublicKey()})
+	raw.Identities = []*pb.SnapshotIdentity{{Identity: "moox-cli", SignPublicKey: Credential("moox-cli", "").PublicKey()}}
 	Rehash(t, raw)
 	return raw
 }
@@ -123,4 +82,28 @@ func Rehash(t testing.TB, raw *pb.HostGatewaySnapshot) {
 		t.Fatal(err)
 	}
 	raw.Hash = hash
+}
+
+// Host 返回快照里的一台主机，测试改它之后要 Rehash。
+func Host(t testing.TB, raw *pb.HostGatewaySnapshot, hostID string) *pb.SnapshotHost {
+	t.Helper()
+	for _, host := range raw.Hosts {
+		if host.HostId == hostID {
+			return host
+		}
+	}
+	t.Fatalf("快照里没有主机 %s", hostID)
+	return nil
+}
+
+// Deployment 返回快照里的一条部署，测试改它之后要 Rehash。
+func Deployment(t testing.TB, raw *pb.HostGatewaySnapshot, hostID, componentID string) *pb.SnapshotDeployment {
+	t.Helper()
+	for _, deployment := range raw.Deployments {
+		if deployment.HostId == hostID && deployment.ComponentId == componentID {
+			return deployment
+		}
+	}
+	t.Fatalf("快照里没有部署 %s/%s", hostID, componentID)
+	return nil
 }

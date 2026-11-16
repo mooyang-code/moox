@@ -219,8 +219,6 @@ components:
           - name: GetHostRoutes
             read_only: true
             callers: [monitor]
-          - name: GetDirectory
-            read_only: true
           - name: SetHostStatus
             operators: [moox-cli]
           - name: SetDeploymentStatus

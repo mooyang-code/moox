@@ -3,9 +3,9 @@
   "summary": {
     "components": 19,
     "services": 26,
-    "methods": 336,
-    "read_only_methods": 153,
-    "retryable_methods": 154,
+    "methods": 335,
+    "read_only_methods": 152,
+    "retryable_methods": 153,
     "callers": 24,
     "principals": 3
   },
@@ -1318,12 +1318,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "GetDirectory",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
           "name": "GetHostRoutes",
           "read_only": true,
           "retryable": true,
@@ -2433,7 +2427,6 @@
       "trpc.moox.ops.Ssh/SftpList",
       "trpc.moox.ops.Ssh/SftpMkdir",
       "trpc.moox.ops.SysDeploy/GetCatalog",
-      "trpc.moox.ops.SysDeploy/GetDirectory",
       "trpc.moox.ops.SysDeploy/GetHostRoutes",
       "trpc.moox.ops.SysDeploy/ListDeployments",
       "trpc.moox.ops.SysDeploy/ListHosts",
@@ -2826,7 +2819,6 @@
       "trpc.moox.ops.SecretMgr/UpdateSecret",
       "trpc.moox.ops.SysDeploy/DeleteHost",
       "trpc.moox.ops.SysDeploy/GetCatalog",
-      "trpc.moox.ops.SysDeploy/GetDirectory",
       "trpc.moox.ops.SysDeploy/GetHostRoutes",
       "trpc.moox.ops.SysDeploy/ListDeployments",
       "trpc.moox.ops.SysDeploy/ListHosts",

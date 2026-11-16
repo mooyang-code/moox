@@ -4,36 +4,36 @@ package trpc.moox.hostgateway;
 
 option go_package = "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen;gatewayroutepb";
 
+// 一台登记的主机。
 message DirectoryHost {
-  string address = 1;
-  string private_address = 2;
-  string region = 3;
-  // 非空表示只能出站的主机：调用方经该主机（control）的网关打开中转流再连接它。
-  string relay = 4;
+  string host_id = 1;
+  string address = 2;
+  string private_address = 3;
+  // direct / outbound。outbound 的主机只能出站，进入它的连接经控制机的网关中转。
+  string reachability = 4;
+  bool enabled = 5;
 }
 
-message ServiceHosts {
-  repeated string host_ids = 1;
-}
-
-message ServiceDirectory {
-  string version = 1;
-  map<string, ServiceHosts> services = 2;
-  map<string, DirectoryHost> hosts = 3;
+// 一个组件部署在一台主机上。
+message DirectoryDeployment {
+  string host_id = 1;
+  string component_id = 2;
+  bool enabled = 3;
 }
 
 message GetDirectoryReq {
   string current_version = 1;
 }
 
+// 目录只有主机与部署：端口、超时、请求体上限、谁能调都由调用方按内嵌的服务目录自己算。
 message GetDirectoryRsp {
   bool changed = 1;
   string version = 2;
-  map<string, ServiceHosts> services = 3;
-  map<string, DirectoryHost> hosts = 4;
+  repeated DirectoryHost hosts = 3;
+  repeated DirectoryDeployment deployments = 4;
 }
 
-// Local bootstrap discovery; this service is registered on loopback only.
+// 只在本机回环端口上提供。
 service Directory {
   rpc GetDirectory(GetDirectoryReq) returns (GetDirectoryRsp);
 }

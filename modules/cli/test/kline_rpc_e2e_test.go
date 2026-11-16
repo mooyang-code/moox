@@ -147,6 +147,12 @@ func startKlineStorage(t *testing.T, stub *klineStorageStub) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	return serveKlineStorage(t, stub, listener)
+}
+
+// serveKlineStorage 在给定的监听上起假 Storage。
+func serveKlineStorage(t *testing.T, stub *klineStorageStub, listener net.Listener) string {
+	t.Helper()
 	service := server.New(
 		server.WithNetwork("tcp"),
 		server.WithProtocol("trpc"),

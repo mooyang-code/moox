@@ -19,7 +19,8 @@ func TestCompleteSnapshotPersistenceAndCorruption(t *testing.T) {
 	require.NoError(t, cache.Save(view))
 	loaded, err := cache.Load()
 	require.NoError(t, err)
-	require.True(t, proto.Equal(view.Proto(), loaded.Proto()), "routes, directory and every verifier key must survive restart")
+	require.True(t, proto.Equal(view.Proto(), loaded.Proto()), "hosts, deployments and every public key must survive restart")
+	require.Equal(t, view.Routes(), loaded.Routes(), "重启后按同一份快照算出同样的路由")
 	require.NoError(t, cache.Check())
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(cache.Path())
@@ -30,7 +31,7 @@ func TestCompleteSnapshotPersistenceAndCorruption(t *testing.T) {
 		require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
 	}
 	raw := view.Proto()
-	raw.VerificationKeys[0].PublicKey[0] ^= 1
+	raw.Hosts[0].SignPublicKey[0] ^= 1
 	encoded, err := proto.Marshal(raw)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cache.Path(), encoded, 0o600))

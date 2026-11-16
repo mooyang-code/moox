@@ -136,13 +136,28 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 	require.NoError(t, err)
 	_ = ready.Body.Close()
 	require.Equal(t, http.StatusOK, ready.StatusCode)
+	// 本机的调用方（storage 上的 monitor）从本机网关拿目录，目标服务就在本机：直连它的回环端口，不经网关。
 	client, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, LocalHostID: "storage", LocalAddress: cfg.Server.LocalAddr, CAFile: cfg.TLS.CAFile,
 		Credentials: testsnapshot.Credential("monitor", "storage"), Serialization: codec.SerializationTypePB, Timeout: 3 * time.Second})
 	require.NoError(t, err)
 	defer client.Close()
+	require.Equal(t, []string{"storage"}, client.Directory().Services["trpc.moox.storage.PrimaryStore"], "客户端按内嵌目录把主机与部署展开")
+	require.Contains(t, client.Directory().Hosts, "control")
 	object := &wrapperspb.StringValue{}
 	require.NoError(t, client.Invoke(context.Background(), "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", wrapperspb.String("PB object"), object))
 	require.Equal(t, "PB object", object.Value)
+	require.EqualValues(t, 1, calls.Load())
+	// 直连不查方法名单：monitor 不在 RegisterSeriesSnapshot 的名单里，经网关会被拒（见下），同机直连照样到达服务。
+	headers, err := testrpc.Signed(testsnapshot.Credential("monitor", "storage"), "storage", "trpc.moox.storage.PrimaryStore", "RegisterSeriesSnapshot", nil)
+	require.NoError(t, err)
+	_, err = testrpc.Call(context.Background(), cfg.Server.LocalAddr, nil, "trpc.moox.storage.PrimaryStore", "RegisterSeriesSnapshot", codec.SerializationTypePB, nil, headers)
+	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "monitor 经网关调不了 RegisterSeriesSnapshot")
+	require.EqualValues(t, 1, calls.Load())
+	object.Reset()
+	require.NoError(t, client.Invoke(context.Background(), "trpc.moox.storage.PrimaryStore", "RegisterSeriesSnapshot", wrapperspb.String("direct"), object))
+	require.Equal(t, "direct", object.Value)
+	require.EqualValues(t, 2, calls.Load())
+	// 别的主机上的调用方（control 上的 collector）经网关：跨主机端口走 TLS，签名、防重放、调用名单都在网关上。
 	material, err := tlsconfig.Load("storage", cfg.TLS)
 	require.NoError(t, err)
 	trust, err := material.Client("storage")
@@ -165,7 +180,7 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 		}
 	}
 	before := calls.Load()
-	for _, denied := range []struct{ caller, service, method string }{{"console", "trpc.moox.storage.PrimaryStore", "CollectGarbage"}, {"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows"}, {"collector", "trpc.moox.ops.SecretMgr", "GetSecretValue"}} {
+	for _, denied := range []struct{ caller, service, method string }{{"trade", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows"}, {"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows"}, {"collector", "trpc.moox.ops.SecretMgr", "GetSecretValue"}} {
 		host := "control"
 		if denied.caller == "moox-skill" {
 			host = ""

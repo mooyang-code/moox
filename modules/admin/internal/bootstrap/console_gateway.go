@@ -18,19 +18,30 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Read the authoritative Admin database directly. Admin must start before a
-// gateway can pull its first snapshot, so its directory cannot come from 11002.
+// adminDirectorySource 直接读 Admin 自己的库：Admin 要先于网关启动（网关的第一份快照就来自它），目录不能从 11002 取。
+// 给出的内容与网关目录相同：登记的主机与部署，版本用快照哈希；客户端按内嵌的服务目录展开，目标在本机的直连回环端口。
 type adminDirectorySource struct {
 	topology *sysdeploy.TopologyDAO
-	hostID   string
 }
 
 func (s adminDirectorySource) Fetch(ctx context.Context, version string) (gatewayclient.DirectoryUpdate, error) {
-	compiled, err := s.topology.Compile(ctx, s.hostID)
+	snapshot, err := s.topology.Snapshot(ctx)
 	if err != nil {
 		return gatewayclient.DirectoryUpdate{}, err
 	}
-	return gatewayclient.DirectoryUpdate{Changed: compiled.Directory.Version != version, Directory: compiled.Directory}, nil
+	update := gatewayclient.DirectoryUpdate{Changed: snapshot.Hash != version, Version: snapshot.Hash}
+	if !update.Changed {
+		return update, nil
+	}
+	enabled := map[bool]string{true: servicecatalog.Enabled, false: servicecatalog.Disabled}
+	for _, host := range snapshot.Hosts {
+		reachability, _ := servicecatalog.ParseReachability(host.Reachability)
+		update.Hosts = append(update.Hosts, servicecatalog.Host{ID: host.HostId, Address: host.Address, PrivateAddress: host.PrivateAddress, Status: enabled[host.Enabled], Reachability: reachability})
+	}
+	for _, deployment := range snapshot.Deployments {
+		update.Deployments = append(update.Deployments, servicecatalog.Deployment{HostID: deployment.HostId, ComponentID: deployment.ComponentId, Status: enabled[deployment.Enabled]})
+	}
+	return update, nil
 }
 
 // hostKeyFile 是本机的主机签名私钥：MOOX_ADMIN_HOST_KEY_FILE；没设时用 Admin 主密钥同目录下的 host.key。
@@ -57,7 +68,7 @@ func newConsoleGateway(db *gorm.DB, hostID, keyFile string) (*gatewayclient.Clie
 	return gatewayclient.New(gatewayclient.Config{Serialization: codec.SerializationTypePB,
 		Mode: gatewayclient.Internal, Credentials: gatewayauth.Credentials{Caller: servicecatalog.OperatorConsole, Host: hostID, Key: key}, LocalHostID: hostID,
 		CAFile:         filepath.Join(newCertificateWatchFromEnvironment(db).PKIDir, "ca.crt"),
-		Source:         adminDirectorySource{topology: topology, hostID: hostID},
+		Source:         adminDirectorySource{topology: topology},
 		OnRefreshError: func(err error) { log.Warnf("console directory refresh failed: %v", err) },
 	})
 }

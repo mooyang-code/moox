@@ -6,7 +6,7 @@ package servicecatalog
 //   - testdata/acl-baseline.json：每个服务、方法的只读、可重试、超时，以及每个调用方 Allowed 为真、
 //     每个外部身份 PrincipalAllowed 为真的“服务/方法”集合；
 //   - testdata/compile-baseline.json：compileBaselineTopology 这个固定拓扑下每台主机 Compile 的结果
-//     （每条路由的服务、方法、端口、包体上限、超时、调用方，校验名单，以及 control 上的中转许可）。
+//     （每条路由的服务、方法、端口、包体上限、超时、调用方，可用主机密钥签名的调用方，以及 control 上的中转许可）。
 //
 // 用法：每次改 catalog.yaml 或编译逻辑之后，在本目录执行
 //
@@ -196,10 +196,11 @@ type compileBaselineRoute struct {
 }
 
 type compileBaselineHost struct {
-	HostID              string                 `json:"host_id"`
-	VerificationCallers []string               `json:"verification_callers"`
-	Relays              []RelayTarget          `json:"relays"`
-	Routes              []compileBaselineRoute `json:"routes"`
+	HostID string `json:"host_id"`
+	// SigningCallers 是这台主机上可以用主机密钥签名的调用方，各主机网关按它核对调用方属于哪台主机。
+	SigningCallers []string               `json:"signing_callers"`
+	Relays         []RelayTarget          `json:"relays"`
+	Routes         []compileBaselineRoute `json:"routes"`
 }
 
 type compileBaselineFile struct {
@@ -212,15 +213,22 @@ type compileBaselineFile struct {
 func compileBaseline(c Catalog) (compileBaselineFile, error) {
 	topology := compileBaselineTopology()
 	out := compileBaselineFile{
-		Note:     "批 4 记下的路由编译基线：compileBaselineTopology 下每台主机 Compile 的路由（服务、方法、端口、包体上限、超时、调用方）、校验名单与中转许可。生成与用法见 baseline_gen_test.go。",
+		Note:     "批 4 记下的路由编译基线：compileBaselineTopology 下每台主机 Compile 的路由（服务、方法、端口、包体上限、超时、调用方）、可用主机密钥签名的调用方与中转许可。生成与用法见 baseline_gen_test.go。",
 		Topology: topology,
 	}
+	if err := c.ValidateTopology(topology); err != nil {
+		return compileBaselineFile{}, err
+	}
+	signing := c.SigningCallers(topology)
 	for _, host := range topology.Hosts {
 		compiled, err := c.Compile(topology, host.ID)
 		if err != nil {
 			return compileBaselineFile{}, err
 		}
-		entry := compileBaselineHost{HostID: host.ID, VerificationCallers: compiled.VerificationCallers, Relays: compiled.Relays, Routes: []compileBaselineRoute{}}
+		if len(compiled.Unknown) > 0 {
+			return compileBaselineFile{}, fmt.Errorf("基线拓扑里有目录不认识的组件：%v", compiled.Unknown)
+		}
+		entry := compileBaselineHost{HostID: host.ID, SigningCallers: signing[host.ID], Relays: compiled.Relays, Routes: []compileBaselineRoute{}}
 		if entry.Relays == nil {
 			entry.Relays = []RelayTarget{}
 		}
@@ -283,7 +291,7 @@ func encodeCompileBaseline(f compileBaselineFile) ([]byte, error) {
 	for i, host := range f.Hosts {
 		b.WriteString("    {\n")
 		field("      ", "host_id", host.HostID, false)
-		field("      ", "verification_callers", host.VerificationCallers, false)
+		field("      ", "signing_callers", host.SigningCallers, false)
 		field("      ", "relays", host.Relays, false)
 		lines("      ", "routes", len(host.Routes), func(j int) any { return host.Routes[j] }, true)
 		b.WriteString("    }")

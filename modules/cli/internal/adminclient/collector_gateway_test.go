@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -30,9 +29,10 @@ type collectorWire struct {
 }
 
 func (w *collectorWire) GetDirectory(_ context.Context, _ *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
-	d := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "public-must-not-be-dialed.example.test"}}, Services: map[string][]string{"trpc.moox.collector.CollectMgr": {"control"}}}
-	version, err := d.VersionHash()
-	return &directorypb.GetDirectoryRsp{Changed: true, Version: version, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: d.Hosts["control"].Address}}, Services: map[string]*directorypb.ServiceHosts{"trpc.moox.collector.CollectMgr": {HostIds: []string{"control"}}}}, err
+	// 目录只有主机与部署，CLI 按内嵌的服务目录自己展开出 CollectMgr 在 control 上。
+	return &directorypb.GetDirectoryRsp{Changed: true, Version: "v1",
+		Hosts:       []*directorypb.DirectoryHost{{HostId: "control", Address: "public-must-not-be-dialed.example.test", Reachability: "direct", Enabled: true}},
+		Deployments: []*directorypb.DirectoryDeployment{{HostId: "control", ComponentId: "admin", Enabled: true}, {HostId: "control", ComponentId: "collector", Enabled: true}}}, nil
 }
 
 func (w *collectorWire) CreateTask(_ context.Context, req *pb.CreateTaskReq) (*pb.CreateTaskRsp, error) {

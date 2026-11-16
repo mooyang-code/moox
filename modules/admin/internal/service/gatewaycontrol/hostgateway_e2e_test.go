@@ -45,6 +45,8 @@ const primaryPath = "trpc.moox.storage.PrimaryStore"
 // SQLite topology/public-key store and deployment PKI. 调用方用所在主机的测试密钥签名：control 上是 collector，
 // storage 上是 monitor。 Separate Linux
 // loopback IPs preserve the canonical remote port without endpoint overrides.
+// 快照只带主机、部署与公钥，路由、调用名单由网关进程按内嵌目录自己算。客户端的目标服务在本机时直连服务端口
+// （不签名、不经本机网关），跨主机才经对端网关的 11003 验签；本机网关的回环端口仍然验签转发，这里用原始请求覆盖它。
 // Both pure Go executables may be cross-compiled on the developer's machine.
 // closeE2EClient 关掉测试里的网关客户端。场景里网关进程重启过，客户端池里留着的旧 TLS 连接对端已经不在，
 // 关闭时发 close_notify 会报 broken pipe 或连接被重置：连接本来就要关，这类错误不算失败。
@@ -119,9 +121,14 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { closeE2EClient(t, c) })
 		clients[host] = c
+		// PrimaryStore 在 storage 上：control 的客户端跨主机经 storage 网关的 11003 验签转发；
+		// storage 的客户端直连本机服务端口，不经网关。两条路都到同一个假服务。
+		require.Equal(t, []string{"storage"}, c.Directory().Services[primaryPath])
+		reached := backendCalls.Load()
 		var result wrapperspb.StringValue
 		require.NoError(t, c.Invoke(ctx, primaryPath, "ReadTimeSeriesRows", wrapperspb.String("object through "+host), &result))
 		require.Equal(t, "object through "+host, result.Value)
+		require.Equal(t, reached+1, backendCalls.Load())
 		for _, payload := range []struct {
 			serialization int
 			raw           []byte
@@ -145,10 +152,29 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		require.Equal(t, raw, resultJSON)
 		require.NoError(t, browser.Close())
 	}
+	// 同机直连不查方法名单：storage 上的 host-agent 不在 PrimaryStore 任何方法的调用名单里，直连本机服务端口照样能调；
+	// 同一个请求签了名送到本机网关的回环端口，网关按名单拒绝。
+	require.False(t, mustE2ECatalog(t).Allowed("host-agent", primaryPath, "ReadTimeSeriesRows"))
+	agent := authtest.Component("host-agent", "storage")
+	direct, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: agent, LocalHostID: "storage", LocalAddress: configs["storage"].Server.LocalAddr, CAFile: configs["storage"].TLS.CAFile, Serialization: codec.SerializationTypePB, Timeout: 2 * time.Second})
+	require.NoError(t, err)
+	body := []byte{0x0a, 1, 'x'}
+	reached := backendCalls.Load()
+	echoed, err := direct.Forward(ctx, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body)
+	require.NoError(t, err)
+	require.Equal(t, body, echoed)
+	require.Equal(t, reached+1, backendCalls.Load())
+	require.NoError(t, direct.Close())
+	_, err = e2eRawCall(configs["storage"].Server.LocalAddr, nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, agent, "storage", primaryPath, "ReadTimeSeriesRows", body))
+	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "本机网关仍按调用名单拒绝")
+	// 本机网关的回环端口仍然验签转发：monitor 用 storage 的主机密钥签名。
+	echoed, err = e2eRawCall(configs["storage"].Server.LocalAddr, nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, local["storage"], "storage", primaryPath, "ReadTimeSeriesRows", body))
+	require.NoError(t, err)
+	require.Equal(t, body, echoed)
+	require.Equal(t, reached+2, backendCalls.Load())
 	t.Log("SCENARIO PASS object-and-exact-raw-pb-json-local-and-tls")
 
 	storageTLS := e2eTrust(t, configs["storage"].TLS.CAFile, "storage")
-	body := []byte{0x0a, 1, 'x'}
 	headers := signedE2E(t, collector, "storage", primaryPath, "ReadTimeSeriesRows", body)
 	_, err = e2eRawCall(configs["storage"].Server.RemoteAddr, storageTLS, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, headers)
 	require.NoError(t, err)
@@ -190,7 +216,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 			return false
 		}
 		var rsp pb.PullSnapshotRsp
-		return codec.Unmarshal(codec.SerializationTypePB, raw, &rsp) == nil && rsp.Changed && rsp.Snapshot.GetHostId() == "joining"
+		return codec.Unmarshal(codec.SerializationTypePB, raw, &rsp) == nil && rsp.Changed && snapshotHost(rsp.GetSnapshot(), "joining") != nil
 	})
 	controlStatus, err := f.topology.GetGatewayStatus(ctx, "control")
 	require.NoError(t, err)
@@ -206,6 +232,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-view", "monitor"}},
 		{HostID: "control", Address: "127.0.0.1", Components: append(slices.Clone(controlSpec.Components), "storage-primary")},
 	}))
+	// PrimaryStore 换到 control：control 的客户端改成直连本机服务端口，storage 的客户端改成跨主机经 control 网关的 11003。
 	waitForE2E(t, 15*time.Second, "existing clients automatically switch deployment target", func() bool {
 		for _, c := range clients {
 			if !slices.Equal(c.Directory().Services[primaryPath], []string{"control"}) {
@@ -243,6 +270,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 
 	// Keep control's business route active, but stop the actual Admin control
 	// listener. Both gateways retain their previously authenticated snapshots.
+	// storage 的客户端跨主机经 control 网关调到 PrimaryStore：验签与路由都靠 control 网关手里的快照。
 	require.NoError(t, controlService.Close(nil))
 	require.Equal(t, http.StatusOK, e2eHealth(t, configs["control"].Server.HealthAddr))
 	before := backendCalls.Load()
@@ -259,15 +287,37 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	controlProcess.stop(t)
 	controlProcess = startGatewayExecutable(t, binary, framework, configs["control"])
 	require.Equal(t, http.StatusServiceUnavailable, e2eHealth(t, configs["control"].Server.HealthAddr))
-	// A fresh client reads the restarted gateway's cached Directory, then uses
-	// cached routes and verification keys while Admin is still unavailable.
+	// Admin 仍然不可用：重启后的 control 网关从落盘的快照重新算出路由与调用名单。
+	// 新建的本机客户端读到它缓存的目录，目标在本机，直连服务端口。
 	restarted, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: collector, LocalHostID: "control", LocalAddress: configs["control"].Server.LocalAddr, CAFile: configs["control"].TLS.CAFile, Serialization: codec.SerializationTypePB, Timeout: 2 * time.Second})
 	require.NoError(t, err)
 	defer restarted.Close()
+	require.Equal(t, []string{"control"}, restarted.Directory().Services[primaryPath])
 	result, err = restarted.Forward(ctx, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body)
 	require.NoError(t, err)
 	require.Equal(t, body, result)
+	// 跨主机的调用要经重启后的 control 网关验签转发：storage 的客户端（旧连接已断，重连）与一条原始签名请求都要通过，
+	// 不在名单里的调用方照样被拒。
+	before = backendCalls.Load()
+	waitForE2E(t, 10*time.Second, "existing client reconnects to the restarted control gateway", func() bool {
+		result, err := clients["storage"].Forward(ctx, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body)
+		return err == nil && slices.Equal(result, body)
+	})
+	controlTLS := e2eTrust(t, configs["control"].TLS.CAFile, "control")
+	result, err = e2eRawCall(configs["control"].Server.RemoteAddr, controlTLS, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, local["storage"], "control", primaryPath, "ReadTimeSeriesRows", body))
+	require.NoError(t, err)
+	require.Equal(t, body, result)
+	require.GreaterOrEqual(t, backendCalls.Load(), before+2)
+	_, err = e2eRawCall(configs["control"].Server.RemoteAddr, controlTLS, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, agent, "control", primaryPath, "ReadTimeSeriesRows", body))
+	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "重启后的网关仍按调用名单拒绝")
 	t.Log("SCENARIO PASS offline-routing-90-second-readiness-and-cache-restart")
+}
+
+func mustE2ECatalog(t *testing.T) servicecatalog.Catalog {
+	t.Helper()
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	return catalog
 }
 
 func requiredE2EFile(t *testing.T, name string) string {

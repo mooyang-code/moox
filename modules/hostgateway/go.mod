@@ -10,7 +10,6 @@ require (
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/gatewayroute v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
@@ -94,7 +93,6 @@ replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gate
 
 replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
 
-replace github.com/mooyang-code/moox/packages/gatewayroute => ../../packages/gatewayroute
 
 replace github.com/mooyang-code/moox/packages/trpcretry => ../../packages/trpcretry
 

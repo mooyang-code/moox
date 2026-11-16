@@ -144,6 +144,7 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 其余主机先把登记同步到 Admin，再向控制机要身份材料。只部署个别组件时，服务目录变了会把这台主机的主机网关一起升级。
 每台主机有一把签名私钥（secrets/host.key），本机全部组件共用，Admin 只登记公钥。例行部署不换它：目标机上的私钥和登记的公钥一致就沿用，
 只重新签发主机证书；私钥丢了或对不上时会签发新的。--rotate-host-key 显式换掉它：旧私钥立即作废，这台主机上的组件全部重启。
+换密钥（显式要求，或发现私钥丢了、对不上）时按整台部署处理，--component 不起作用。
 在源码目录里要用 --binary-dir 指定预先编译好的 Linux 二进制；在产物包目录里目标机按清单下载组件包。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

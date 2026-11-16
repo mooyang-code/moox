@@ -57,9 +57,7 @@ func testFileConfigDeployment(t *testing.T, relativeCA bool) {
 		if req.GetCurrentVersion() == directory.Version {
 			return &directorypb.GetDirectoryRsp{Version: directory.Version}, nil
 		}
-		return &directorypb.GetDirectoryRsp{Changed: true, Version: directory.Version,
-			Services: map[string]*directorypb.ServiceHosts{secretService: {HostIds: []string{"storage"}}},
-			Hosts:    map[string]*directorypb.DirectoryHost{"storage": {Address: "storage.example.test"}}}, nil
+		return directoryResponse(directory), nil
 	}))
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
@@ -78,7 +76,8 @@ func testFileConfigDeployment(t *testing.T, relativeCA bool) {
 	require.Equal(t, "storage", client.config.LocalHostID)
 	require.Equal(t, listener.Addr().String(), client.config.LocalAddress)
 	require.Equal(t, ca, client.config.CAFile)
-	require.Equal(t, directory, client.Directory())
+	require.Equal(t, resolved(t, directory), client.Directory())
+	require.Equal(t, []string{"storage"}, client.Directory().Services[secretService])
 	require.Equal(t, filepath.Join(data, "gatewayclient", "directory.json"), client.config.CachePath)
 	require.NoError(t, client.Close())
 	require.NoError(t, svc.Close(nil))
@@ -88,7 +87,7 @@ func testFileConfigDeployment(t *testing.T, relativeCA bool) {
 	client, err = config.OpenInternal(moduleConfig, data, nil)
 	require.NoError(t, err)
 	require.Less(t, time.Since(start), 7*time.Second)
-	require.Equal(t, directory, client.Directory())
+	require.Equal(t, resolved(t, directory), client.Directory())
 	require.NoError(t, client.Close())
 
 	missing := config

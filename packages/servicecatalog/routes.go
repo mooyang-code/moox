@@ -1,9 +1,6 @@
 package servicecatalog
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net"
 	"slices"
@@ -50,6 +47,9 @@ func ReachabilityName(value string) string {
 // HostGatewayRemotePort 是主机网关的跨主机 TLS 端口。
 const HostGatewayRemotePort = 11003
 
+// adminComponent 只部署在控制机上：按它认控制机，部署了它的主机另有 console 这个调用方。
+const adminComponent = "admin"
+
 type Deployment struct {
 	HostID      string `json:"host_id"`
 	ComponentID string `json:"component_id"`
@@ -62,22 +62,33 @@ type Topology struct {
 	Deployments   []Deployment `json:"deployments"`
 }
 
+// NewTopology 用快照或目录下发的主机与部署拼出拓扑。控制机不随快照下发：它就是部署了 admin 的那台。
+func NewTopology(hosts []Host, deployments []Deployment) Topology {
+	t := Topology{Hosts: hosts, Deployments: deployments}
+	for _, deployment := range deployments {
+		if deployment.ComponentID == adminComponent {
+			t.ControlHostID = deployment.HostID
+		}
+	}
+	return t
+}
+
+// DirectoryHost 是目录里一台启用的主机。
 type DirectoryHost struct {
 	Address        string `json:"address"`
 	PrivateAddress string `json:"private_address,omitempty"`
-	Region         string `json:"region,omitempty"`
 	// Relay 非空时该主机只能出站，调用方要经这台主机（control）的网关打开中转流再连接它。
 	Relay string `json:"relay,omitempty"`
 }
 
+// Directory 是主机与部署按内嵌目录展开后的结果：每个服务在哪些主机上、主机怎么连。Version 由下发方给出，只用来判断有没有变化。
 type Directory struct {
 	Version  string                   `json:"version"`
 	Services map[string][]string      `json:"services"`
 	Hosts    map[string]DirectoryHost `json:"hosts"`
 }
 
-// Route grants callers to exactly one service and method. Merging ACL groups
-// into separate method/caller sets would accidentally widen permissions.
+// Route 是一个方法和能调它的调用方，各主机的网关按拓扑与内嵌目录自己算，不随快照下发。
 type Route struct {
 	ComponentID  string   `json:"component_id"`
 	ServicePath  string   `json:"service_path"`
@@ -89,18 +100,16 @@ type Route struct {
 	Callers      []string `json:"callers"`
 }
 
-// CompiledHost is a definition, not the final signed-key snapshot. The control
-// plane must hash the actual verification key IDs/material along with this
-// definition so a key rotation changes the snapshot even without route changes.
+// CompiledHost 是一台主机按拓扑与内嵌目录算出的本机视图。
 type CompiledHost struct {
-	HostID              string    `json:"host_id"`
-	Disabled            bool      `json:"disabled"`
-	Routes              []Route   `json:"routes"`
-	Directory           Directory `json:"directory"`
-	VerificationCallers []string  `json:"verification_callers"`
-	// Relays 只出现在 control 的快照里：每台已启用的出站主机允许打开中转流的端口与调用方。没有出站主机时为空、不参与序列化。
-	Relays []RelayTarget `json:"relays,omitempty"`
-	Hash   string        `json:"hash"`
+	HostID    string
+	Disabled  bool
+	Routes    []Route
+	Directory Directory
+	// Relays 只有 control 才有：每台已启用的出站主机允许打开中转流的端口与调用方。
+	Relays []RelayTarget
+	// Unknown 是拓扑里本进程的内嵌目录不认识的组件（两边版本不一致时出现），它们被忽略，其余照常生效。
+	Unknown []string
 }
 
 // RelayTarget 是一台出站主机的中转许可。
@@ -130,7 +139,7 @@ func (c Catalog) ValidateTopology(t Topology) error {
 		if ip := net.ParseIP(host.Address); ip != nil {
 			key = ip.String()
 		}
-		if !validDirectoryHost(host.ID, DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}) || !validStatus(host.Status) || host.Reachability != "" && host.Reachability != ReachabilityOutbound {
+		if !validDirectoryHost(host.ID, DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress}) || len(host.Region) > 128 || !validStatus(host.Status) || host.Reachability != "" && host.Reachability != ReachabilityOutbound {
 			return fmt.Errorf("invalid host %q", host.ID)
 		}
 		if _, exists := hosts[host.ID]; exists || addresses[key] {
@@ -218,66 +227,68 @@ func componentPorts(component Component) []int {
 	return ports
 }
 
-func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
-	if err := c.ValidateTopology(t); err != nil {
-		return CompiledHost{}, err
-	}
-	var current Host
-	directory := Directory{Services: map[string][]string{}, Hosts: map[string]DirectoryHost{}}
-	hosts := map[string]Host{}
+// Resolve 把主机与部署展开成目录：只算启用主机上启用的部署，出站主机由控制机中转。不认识的组件跳过，随 unknown 返回（排序、去重）。
+func (c Catalog) Resolve(t Topology) (directory Directory, unknown []string) {
+	directory = Directory{Services: map[string][]string{}, Hosts: map[string]DirectoryHost{}}
 	for _, host := range t.Hosts {
-		hosts[host.ID] = host
-		if host.ID == hostID {
-			current = host
-		}
-		if host.Status == Enabled {
-			entry := DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}
-			if host.Reachability == ReachabilityOutbound {
-				entry.Relay = t.ControlHostID
-			}
-			directory.Hosts[host.ID] = entry
-		}
-	}
-	if current.ID == "" {
-		return CompiledHost{}, fmt.Errorf("unknown host %q", hostID)
-	}
-	compiled := CompiledHost{HostID: hostID, Disabled: current.Status != Enabled, Routes: []Route{}, VerificationCallers: []string{}}
-	verification := map[string]bool{}
-	for _, deployment := range t.Deployments {
-		if deployment.Status != Enabled || hosts[deployment.HostID].Status != Enabled {
+		if host.Status != Enabled {
 			continue
 		}
-		component, _ := c.Component(deployment.ComponentID)
+		entry := DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress}
+		if host.Reachability == ReachabilityOutbound {
+			entry.Relay = t.ControlHostID
+		}
+		directory.Hosts[host.ID] = entry
+	}
+	for _, deployment := range t.Deployments {
+		component, ok := c.Component(deployment.ComponentID)
+		if !ok {
+			unknown = append(unknown, deployment.ComponentID)
+			continue
+		}
+		if _, enabled := directory.Hosts[deployment.HostID]; !enabled || deployment.Status != Enabled {
+			continue
+		}
 		for _, service := range component.Services {
 			directory.Services[service.Path] = append(directory.Services[service.Path], deployment.HostID)
-			if deployment.HostID != hostID {
-				continue
-			}
-			for _, method := range service.Methods {
-				callers := c.routeCallers(method)
-				if len(callers) == 0 {
-					continue
-				}
-				timeout, limit := service.TimeoutFor(method.Name), service.MaxBodyBytes
-				if limit == 0 {
-					limit = DefaultMaxBodyBytes
-				}
-				compiled.Routes = append(compiled.Routes, Route{ComponentID: component.ID, ServicePath: service.Path, Method: method.Name, Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMS: timeout, MaxBodyBytes: limit, ReadOnly: method.ReadOnly, Callers: callers})
-				for _, caller := range callers {
-					verification[caller] = true
-				}
-			}
 		}
 	}
 	for _, ids := range directory.Services {
 		sort.Strings(ids)
 	}
-	version, err := contentHash(directory)
-	if err != nil {
-		return CompiledHost{}, err
+	sort.Strings(unknown)
+	return directory, slices.Compact(unknown)
+}
+
+// Compile 算出一台主机的本机视图。拓扑的合法性由 Admin 在写入时校验（ValidateTopology），这里不再校验；
+// 不认识的组件忽略，其余路由照常生效。
+func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
+	current := slices.IndexFunc(t.Hosts, func(host Host) bool { return host.ID == hostID })
+	if current < 0 {
+		return CompiledHost{}, fmt.Errorf("unknown host %q", hostID)
 	}
-	directory.Version = version
-	compiled.Directory = directory
+	compiled := CompiledHost{HostID: hostID, Disabled: t.Hosts[current].Status != Enabled, Routes: []Route{}}
+	compiled.Directory, compiled.Unknown = c.Resolve(t)
+	if compiled.Disabled {
+		return compiled, nil
+	}
+	for _, deployment := range t.Deployments {
+		component, ok := c.Component(deployment.ComponentID)
+		if !ok || deployment.HostID != hostID || deployment.Status != Enabled {
+			continue
+		}
+		for _, service := range component.Services {
+			limit := service.MaxBodyBytes
+			if limit == 0 {
+				limit = DefaultMaxBodyBytes
+			}
+			for _, method := range service.Methods {
+				if callers := c.routeCallers(method); len(callers) > 0 {
+					compiled.Routes = append(compiled.Routes, Route{ComponentID: component.ID, ServicePath: service.Path, Method: method.Name, Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMS: service.TimeoutFor(method.Name), MaxBodyBytes: limit, ReadOnly: method.ReadOnly, Callers: callers})
+				}
+			}
+		}
+	}
 	sort.Slice(compiled.Routes, func(i, j int) bool {
 		left, right := compiled.Routes[i], compiled.Routes[j]
 		if left.ServicePath != right.ServicePath {
@@ -286,28 +297,15 @@ func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
 		return left.Method < right.Method
 	})
 	if hostID == t.ControlHostID {
-		compiled.Relays = c.relayTargets(t, hosts)
-		// control 要校验打开中转流的签名，所以这些调用方也要在 control 的校验名单里。
-		for _, relay := range compiled.Relays {
-			for _, port := range relay.Ports {
-				for _, caller := range port.Callers {
-					verification[caller] = true
-				}
-			}
-		}
+		compiled.Relays = c.relayTargets(t)
 	}
-	for caller := range verification {
-		compiled.VerificationCallers = append(compiled.VerificationCallers, caller)
-	}
-	sort.Strings(compiled.VerificationCallers)
-	compiled.Hash, err = contentHash(compiled)
-	return compiled, err
+	return compiled, nil
 }
 
 // relayTargets 计算各台已启用出站主机的中转许可：跨主机端口的调用方是该主机上全部路由调用方的并集，
 // relay_http 端口只允许声明的调用方。组件健康端口不经中转（组件健康只看上报，设计 3.8）。
 // 跨主机端口在前，其余端口按端口号升序。
-func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
+func (c Catalog) relayTargets(t Topology) []RelayTarget {
 	var relays []RelayTarget
 	for _, host := range t.Hosts {
 		if host.Reachability != ReachabilityOutbound || host.Status != Enabled {
@@ -319,7 +317,7 @@ func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 			if deployment.HostID != host.ID || deployment.Status != Enabled {
 				continue
 			}
-			component, _ := c.Component(deployment.ComponentID)
+			component, _ := c.Component(deployment.ComponentID) // 不认识的组件是零值：没有端口，也没有服务
 			if component.RelayHTTP != nil {
 				local[component.RelayHTTP.Port] = relayHTTPCallers(*component.RelayHTTP)
 			}
@@ -353,41 +351,11 @@ func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 	return relays
 }
 
-// relayHTTPCallers 返回 relay_http 端口的中转调用方（排序后的副本），编译与 ValidRelay 用同一个顺序。
+// relayHTTPCallers 返回 relay_http 端口的中转调用方（排序后的副本）。
 func relayHTTPCallers(relay RelayHTTP) []string {
 	callers := slices.Clone(relay.Callers)
 	sort.Strings(callers)
 	return callers
-}
-
-// ValidRelay 校验一条中转许可：端口不重复，跨主机端口的调用方是合法 ID 且不重复；
-// 其余端口只能是某个外部程序的 relay_http 端口，并且只对它声明的调用方开放。
-func (c Catalog) ValidRelay(r RelayTarget) bool {
-	if !ValidHostID(r.HostID) || len(r.Ports) > 64 {
-		return false
-	}
-	seen := map[int]bool{}
-	for _, port := range r.Ports {
-		if seen[port.Port] || len(port.Callers) == 0 || len(port.Callers) > 2048 {
-			return false
-		}
-		seen[port.Port] = true
-		if port.Port != HostGatewayRemotePort {
-			callers, relayHTTP := c.RelayHTTPCallers(port.Port)
-			if !relayHTTP || !slices.Equal(port.Callers, callers) {
-				return false
-			}
-			continue
-		}
-		callers := map[string]bool{}
-		for _, caller := range port.Callers {
-			if caller == "" || len(caller) > 128 || callers[caller] {
-				return false
-			}
-			callers[caller] = true
-		}
-	}
-	return true
 }
 
 // RelayHTTPCallers 返回端口作为某个外部程序 relay_http 端口时的中转调用方（排序后）；不是时 ok 为假。
@@ -453,7 +421,7 @@ func (c Catalog) SigningCallers(t Topology) map[string][]string {
 			continue
 		}
 		callers[deployment.HostID] = append(callers[deployment.HostID], component.ID)
-		if component.ID == "admin" {
+		if component.ID == adminComponent {
 			callers[deployment.HostID] = append(callers[deployment.HostID], OperatorConsole)
 		}
 	}
@@ -462,13 +430,4 @@ func (c Catalog) SigningCallers(t Topology) map[string][]string {
 		callers[id] = slices.Compact(callers[id])
 	}
 	return callers
-}
-
-func contentHash(value any) (string, error) {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return "", fmt.Errorf("hash catalog definition: %w", err)
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
 }

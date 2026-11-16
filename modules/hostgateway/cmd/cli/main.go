@@ -102,7 +102,7 @@ func printRoutes(arguments []string, output io.Writer) error {
 	}
 	encoder := json.NewEncoder(output)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(map[string]any{"host_id": view.HostID(), "hash": view.Hash(), "disabled": view.Disabled(), "routes": view.Proto().Routes, "directory": view.Directory()})
+	return encoder.Encode(map[string]any{"host_id": view.HostID(), "hash": view.Hash(), "disabled": view.Disabled(), "routes": view.Routes(), "directory": view.Directory(), "unknown_components": view.Unknown()})
 }
 
 func checkHealth(arguments []string, output io.Writer) error {

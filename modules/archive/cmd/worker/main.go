@@ -1,6 +1,7 @@
-// Command moox-archive-worker 是归档 worker：经 Access 领取运行，读取 Storage 的时间区间数据，
+// Command moox-archive-worker 是归档 worker：作为普通调用方（所在主机的密钥、archive-worker 的身份）从本机网关取目录，
+// 直连控制机的主机网关领取运行，读取 Storage 的时间区间数据，
 // 写入本地 SQLite 暂存区，导出 CSV 分区文件，配置了对象存储时再把文件传一份到标准 S3 接口的对象存储。
-// 它只出站，可以部署在任何能访问 Access 的 Linux 或 macOS 机器上。
+// 它只出站，部署在能访问控制机与存储机 11003 的登记主机上。
 package main
 
 import (

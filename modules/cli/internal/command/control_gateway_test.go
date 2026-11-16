@@ -15,7 +15,6 @@ import (
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/server"
 	"trpc.group/trpc-go/trpc-go/transport"
@@ -27,9 +26,10 @@ type cleanupGatewayWire struct {
 }
 
 func (cleanupGatewayWire) GetDirectory(context.Context, *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
-	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "unused.example.test"}}, Services: map[string][]string{"trpc.moox.collector.CollectMgr": {"control"}}}
-	version, err := directory.VersionHash()
-	return &directorypb.GetDirectoryRsp{Changed: true, Version: version, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "unused.example.test"}}, Services: map[string]*directorypb.ServiceHosts{"trpc.moox.collector.CollectMgr": {HostIds: []string{"control"}}}}, err
+	// 目录只有主机与部署，CLI 按内嵌的服务目录自己展开出 CollectMgr 在 control 上。
+	return &directorypb.GetDirectoryRsp{Changed: true, Version: "v1",
+		Hosts:       []*directorypb.DirectoryHost{{HostId: "control", Address: "unused.example.test", Reachability: "direct", Enabled: true}},
+		Deployments: []*directorypb.DirectoryDeployment{{HostId: "control", ComponentId: "admin", Enabled: true}, {HostId: "control", ComponentId: "collector", Enabled: true}}}, nil
 }
 func (cleanupGatewayWire) ListCloudAccounts(context.Context, *collectorpb.ListCloudAccountsReq) (*collectorpb.ListCloudAccountsRsp, error) {
 	return &collectorpb.ListCloudAccountsRsp{RetInfo: &commonpb.RetInfo{}, Accounts: []*collectorpb.CloudAccount{{AccountId: "account-1", Provider: "tencent"}}}, nil

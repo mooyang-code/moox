@@ -123,14 +123,8 @@ export interface HostGatewayRoute {
 }
 export interface HostRoutesResponse {
   host_id: string;
-  definition_hash: string;
   routes?: HostGatewayRoute[];
   gateway_status?: HostGatewayRuntimeStatus;
   snapshot_schema_version: number;
   compiled_at: string;
-}
-export interface ServiceDirectory {
-  version?: string;
-  services?: Record<string, { host_ids?: string[] }>;
-  hosts?: Record<string, { address?: string; private_address?: string; region?: string; relay?: string }>;
 }

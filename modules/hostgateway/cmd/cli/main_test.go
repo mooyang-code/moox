@@ -36,10 +36,18 @@ func TestCLIValidatesNewIdentityAndPrintsPublicSnapshotOnly(t *testing.T) {
 	output.Reset()
 	require.Zero(t, run([]string{"routes", "--config", path}, &output))
 	require.Contains(t, output.String(), "trpc.moox.storage.PrimaryStore")
-	require.NotContains(t, output.String(), "verification_keys")
+	require.Contains(t, output.String(), "ReadTimeSeriesRows")
+	require.NotContains(t, output.String(), "sign_public_key")
+	require.NotContains(t, output.String(), "signPublicKey")
 	require.NotContains(t, output.String(), signing)
-	for _, key := range view.Proto().VerificationKeys {
-		require.NotContains(t, output.String(), string(key.PublicKey))
+	for _, host := range view.Proto().Hosts {
+		require.NotEmpty(t, host.SignPublicKey)
+		require.NotContains(t, output.String(), string(host.SignPublicKey))
+		require.NotContains(t, output.String(), gatewayauth.EncodePublicKey(host.SignPublicKey))
+	}
+	for _, identity := range view.Proto().Identities {
+		require.NotContains(t, output.String(), string(identity.SignPublicKey))
+		require.NotContains(t, output.String(), gatewayauth.EncodePublicKey(identity.SignPublicKey))
 	}
 	require.NoError(t, os.WriteFile(store.NewSnapshots(cfg.Store.Path, cfg.Host.ID).Path(), []byte("corrupt"), 0o600))
 	output.Reset()

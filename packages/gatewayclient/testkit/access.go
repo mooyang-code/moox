@@ -1,5 +1,10 @@
 // Package testkit runs the production Access binary against the native host
 // gateway test router. It is used only by cross-module integration tests.
+//
+// T15～T16 之间的过渡：Access 与 storage-primary 部署在同一台主机上，网关客户端对同机服务直连
+// 127.0.0.1 加服务目录里的服务端口，测试缝（SetLocalServiceAddressForTest）进不了 Access 这个子进程。
+// 所以夹具网关只给 Access 提供目录，测试里的假 Storage 必须监听目录里那个固定的回环端口（LocalStorageListener）。
+// T16 删掉 Access、把夹具改成带外部入口的网关之后，这里的固定端口随之去掉。
 package testkit
 
 import (
@@ -11,6 +16,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -18,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -25,6 +32,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -32,8 +40,10 @@ import (
 type AccessOptions struct {
 	AccessBinary, GatewayBinary string
 	HostID                      string
-	StorageAddress              string
-	ExternalCredentials         []gatewayauth.Credentials
+	// StorageAddress 是假 Storage 的地址，必须来自 LocalStorageListener：Access 直连的是目录里的固定端口，
+	// 夹具网关只把它登记成本机 storage-primary 的上游（Access 的调用不经过夹具网关）。
+	StorageAddress      string
+	ExternalCredentials []gatewayauth.Credentials
 	// SCF publication forbids loopback endpoints. Use a local interface in its
 	// runtime integration tests, while keeping the internal gateway on loopback.
 	SCF bool
@@ -42,6 +52,25 @@ type AccessOptions struct {
 type Access struct {
 	Address, InstanceID string
 }
+
+// LocalStorageListener 监听 Access 直连本机 Storage 用的回环端口：127.0.0.1 加服务目录里 PrimaryStore 的服务端口。
+// 端口是固定的，被别的进程占用（例如本机正跑着真实的 Storage）时跳过测试。
+func LocalStorageListener(t *testing.T) net.Listener {
+	t.Helper()
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	service, ok := catalog.Service(storagePrimaryService)
+	require.True(t, ok)
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port))
+	listener, err := net.Listen("tcp", address)
+	if errors.Is(err, syscall.EADDRINUSE) {
+		t.Skipf("跳过：Access 与 Storage 同机时直连固定端口 %s，测试里的假 Storage 必须监听它，但它已被别的进程占用（T16 改成带外部入口的网关后不再需要固定端口）", address)
+	}
+	require.NoError(t, err)
+	return listener
+}
+
+const storagePrimaryService = "trpc.moox.storage.PrimaryStore"
 
 func StartAccess(t *testing.T, options AccessOptions) Access {
 	t.Helper()

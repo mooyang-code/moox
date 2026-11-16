@@ -3,52 +3,41 @@ syntax = "proto3";
 package trpc.moox.admin;
 
 import "moox_common.proto";
-import "directory.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
-// One route represents exactly one method and its permitted callers.
-message HostGatewayRoute {
-  string component_id = 1;
-  string service_path = 2;
-  string method = 3;
-  string address = 4;
-  int64 timeout_ms = 5;
-  int64 max_body_bytes = 6;
-  repeated string callers = 7;
-  bool read_only = 8;
-}
-
-// 一把校验公钥，快照里没有秘密。host_id 非空是主机密钥：这台主机上的组件共用，callers 是部署在这台主机上、
-// 可以用它签名的调用方；host_id 为空是不属于主机的身份（moox-cli 等），identity 是身份名。
-message GatewayVerificationKey {
-  string host_id = 1;
-  string identity = 2;
-  // ed25519 公钥，32 字节。
-  bytes public_key = 3;
-  repeated string callers = 4;
-}
-
-// 一台出站主机允许经 control 中转连接的端口与调用方，只出现在 control 的快照里。
-message HostGatewayRelayPort {
-  int32 port = 1;
-  repeated string callers = 2;
-}
-
-message HostGatewayRelay {
-  string host_id = 1;
-  repeated HostGatewayRelayPort ports = 2;
-}
-
+// 全部主机拿到同一份快照：登记的主机（连同签名公钥）、部署、不属于主机的身份的公钥。快照里没有秘密，也没有路由：
+// 各网关按内嵌的服务目录自己算本机路由、谁能调、出站主机的中转许可。
 message HostGatewaySnapshot {
   uint32 schema_version = 1;
-  string host_id = 2;
-  string hash = 3;
-  bool disabled = 4;
-  repeated HostGatewayRoute routes = 5;
-  trpc.moox.hostgateway.ServiceDirectory directory = 6;
-  repeated GatewayVerificationKey verification_keys = 7;
-  repeated HostGatewayRelay relays = 8;
+  string hash = 2;
+  repeated SnapshotHost hosts = 3;
+  repeated SnapshotDeployment deployments = 4;
+  repeated SnapshotIdentity identities = 5;
+}
+
+message SnapshotHost {
+  string host_id = 1;
+  string address = 2;
+  string private_address = 3;
+  // direct / outbound
+  string reachability = 4;
+  bool enabled = 5;
+  // ed25519 公钥，32 字节；还没签发过身份包的主机为空，它的请求在各网关上验不过。
+  bytes sign_public_key = 6;
+}
+
+message SnapshotDeployment {
+  string host_id = 1;
+  string component_id = 2;
+  bool enabled = 3;
+}
+
+// 不属于主机的身份：moox-cli、scf-collector、moox-skill、collector-operator。
+message SnapshotIdentity {
+  string identity = 1;
+  // ed25519 公钥，32 字节。
+  bytes sign_public_key = 2;
 }
 
 message PullSnapshotReq {

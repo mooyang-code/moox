@@ -97,6 +97,24 @@ func (o Options) logf(format string, args ...any) {
 	}
 }
 
+// scope 决定这次部署哪些组件、是不是整台部署。换主机签名密钥时按整台部署处理：指纹里有签名公钥，本机每个组件的配置都变了，
+// 要按启动顺序（网关在前）重启并记进 version.json，否则下一次整台部署会把没选中的组件再重启一遍。
+func (o Options) scope(hostName string, hostComponents []string) (selected []string, full bool, err error) {
+	if len(o.Components) == 0 {
+		return hostComponents, true, nil
+	}
+	for _, id := range o.Components {
+		if !slices.Contains(hostComponents, id) {
+			return nil, false, fmt.Errorf("component_not_on_host: 主机 %s 上没有组件 %s（这台主机有：%s）", hostName, id, strings.Join(hostComponents, "、"))
+		}
+	}
+	if o.RotateHostKey {
+		o.logf("%s: 要换主机签名密钥，按整台部署处理（忽略 --component）", hostName)
+		return hostComponents, true, nil
+	}
+	return slices.Clone(o.Components), false, nil
+}
+
 // LingerCommand 是没开 linger 时要用户在目标机上执行的命令。
 func LingerCommand(user string) string { return "sudo loginctl enable-linger " + user }
 
@@ -119,14 +137,9 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 		return result, err
 	}
 	host, control, layout := cfg.HostByID(options.HostID), cfg.ControlHost(), Layout{Root: cfg.Paths.DeployRoot}
-	selected, full := hostComponents, len(options.Components) == 0
-	if !full {
-		for _, id := range options.Components {
-			if !slices.Contains(hostComponents, id) {
-				return result, fmt.Errorf("component_not_on_host: 主机 %s 上没有组件 %s（这台主机有：%s）", host.Name, id, strings.Join(hostComponents, "、"))
-			}
-		}
-		selected = slices.Clone(options.Components)
+	selected, full, err := options.scope(host.Name, hostComponents)
+	if err != nil {
+		return result, err
 	}
 
 	// 预检：linger 没开就停下；journald 没持久化只提醒。
@@ -188,6 +201,13 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 	identity, issued, err := options.identity(ctx, target, catalog, host, control, selected, existing == nil)
 	if err != nil {
 		return result, err
+	}
+	// 只部署个别组件时发现目标机的私钥丢了或对不上、签发了新的：同样要整台部署，从头按整台再做一遍
+	//（新私钥还没落到目标机，那一遍会再签发一次）。
+	if issued.hostKey && !full {
+		options.logf("%s: 签发了新的主机签名密钥，改为整台部署", host.Name)
+		options.Components = nil
+		return Deploy(ctx, options)
 	}
 	result.Warnings = append(result.Warnings, issued.warnings...)
 	request := Request{Config: cfg, Catalog: catalog, Host: host, Components: selected, HostComponents: hostComponents, ReadSource: options.readSource, Identity: identity}
@@ -263,27 +283,6 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 		}
 		result.Components = append(result.Components, ComponentResult{ID: id, Action: action})
 		options.logf("%s %s: %s", host.Name, id, action)
-	}
-	// 主机签名密钥换了：这次没部署、但已经装着的组件还拿着旧私钥，一并重启（只重启正在运行的）。
-	if issued.hostKey && existing != nil {
-		others := []string{}
-		for id := range existing.Components {
-			if slices.Contains(hostComponents, id) && !slices.Contains(selected, id) {
-				others = append(others, id)
-			}
-		}
-		if others, err = catalog.StartOrder(others); err != nil {
-			return result, err
-		}
-		for _, id := range others {
-			if component, _ := catalog.Component(id); component.ThirdParty {
-				continue
-			}
-			options.logf("%s %s: 主机签名密钥换了，重启", host.Name, id)
-			if output, err := target.Run(ctx, []string{"systemctl", "--user", "try-restart", UnitName(id)}, nil); err != nil {
-				return result, fmt.Errorf("restart_failed: 主机 %s 的签名密钥换了，但组件 %s 没有重启成功：%s", host.Name, id, lastLine(output.Stderr))
-			}
-		}
 	}
 	return result, waitComponents(ctx, target, catalog, host.Name, &result, options.ReadyTimeout)
 }

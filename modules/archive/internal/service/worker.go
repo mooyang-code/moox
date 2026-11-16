@@ -14,7 +14,7 @@ import (
 
 var _ archivepb.ArchiveWorkerService = (*WorkerService)(nil)
 
-// WorkerService 实现 trpc.moox.archive.ArchiveWorker，只有外部身份 archive-worker 可以调用。
+// WorkerService 实现 trpc.moox.archive.ArchiveWorker，只有调用方 archive-worker（普通组件，用所在主机的密钥签名）可以调用。
 type WorkerService struct{ svc *Service }
 
 func (w *WorkerService) ArchiveWorkerHeartbeat(ctx context.Context, req *archivepb.ArchiveWorkerHeartbeatReq) (*archivepb.ArchiveWorkerHeartbeatRsp, error) {
