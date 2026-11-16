@@ -272,7 +272,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     要在真机上做时，在因子机上用本机主机密钥对海外机 `11003` 发 Trade 下单请求，四次都应被拒：以 `factor-engine` 身份，被调用名单拒绝；
     以 `host-gateway` 身份带 `X-Moox-Origin-Caller: moox-cli` 或 `scf-collector`，原因都是 `origin_host`（先判签名主机，因子机不是入口主机）；
     在存储机上以 `host-gateway` 身份带 `X-Moox-Origin-Caller: moox-cli`，原因是 `origin_identity`。原因看目标主机网关 `/metrics` 的 `moox_gateway_external_denials_total{reason=…}`。
-29. **系统暂停与恢复**（先问用户）：`$CLI system pause --yes`，等过一个 1m 周期，`$CLI system resume`：采集、因子、策略依次追平后放行（实测 7～10 分钟，因子追赶可能要等一次 5 分钟的缺口巡检），期间没有下单，“K 线结果”“行情探针”不出新告警；首页依次显示全部暂停、恢复追赶、正常。
+29. **系统暂停与恢复**（先问用户）：`$CLI system pause --yes`，等过一个 1m 周期，`$CLI system resume`：采集、因子、策略依次追平后放行（实测 7～12 分钟，因子追赶可能要等一次 5 分钟的缺口巡检），期间没有下单，“K 线结果”“行情探针”不出新告警；首页依次显示全部暂停、恢复追赶、正常。
 30. **健康上报与直推**（在测试窗口内做，先问用户；每一项做完恢复再做下一项）：
     - 停掉海外机的 `egress-proxy` 两分钟（`setup stop` / `setup start-component`）：Monitor 报“停止上报”，恢复后自动消除。
     - 停掉存储机的 `eventbus` 五分钟：只收到一条“观测输入中断”，没有逐个组件的“停止上报”（K 线确实停产，“K 线结果”可能另有告警）。
