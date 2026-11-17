@@ -87,12 +87,14 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 	return quantity, nil
 }
 
-// stockBuyCapacity 给模拟盘 A 股买单把容量收到费用也付得起：佣金有最低 5 元，花费和数量不成正比，
-// 按比例算出的数量可能差几块钱，这里按 StockFee 逐个步长往下减到付得起（和预留、扣费用同一个函数）。
+// stockBuyCapacity 给模拟盘里有自己费用函数的场所（A 股、港股）的买单把容量收到费用也付得起：佣金有最低值（港股还有
+// 最低结算费、印花税取整），花费和数量不成正比，按比例算出的数量可能差几块钱，这里按场所的费用函数逐个步长往下减到
+// 付得起（和预留、扣费用同一个函数）。
 func stockBuyCapacity(validation Validation, spec orderdomain.OrderSpec, quantity, step, available shared.Decimal) shared.Decimal {
 	account := validation.Account
+	rule := exchange.RuleAt(account.Exchange, validation.Instrument.MarketType)
 	if spec.Side != exchange.SideBuy || account.ExecutionMode != exchange.ExecutionModePaper || account.Paper == nil ||
-		!exchange.RuleFor(validation.Instrument.MarketType).StockFees || validation.ReservedQuantity.IsZero() {
+		rule.Fee == nil || validation.ReservedQuantity.IsZero() {
 		return quantity
 	}
 	unit := spec.ReferencePrice
@@ -102,7 +104,7 @@ func stockBuyCapacity(validation Validation, spec orderdomain.OrderSpec, quantit
 		unit = paperSlippagePrice(unit, spec.Side, account.Paper.SlippageBPS)
 	}
 	for quantity.Cmp(shared.Zero()) > 0 &&
-		exchange.StockBuyCost(quantity.Mul(unit), account.Paper.TakerFeeRate).Cmp(available) > 0 {
+		rule.BuyCost(quantity.Mul(unit), account.Paper.TakerFeeRate).Cmp(available) > 0 {
 		quantity = quantity.Sub(step)
 	}
 	if quantity.IsNegative() {
@@ -142,10 +144,10 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 	return availableFunds(validation.Account, market, validation.ReservedAsset).Sub(unreflected), nil
 }
 
-// paperT1Locked 是模拟盘卖单当天还不能卖的数量：T+1 市场（股票）当日买入的部分。买单和其他市场返回 0。
+// paperT1Locked 是模拟盘卖单当天还不能卖的数量：T+1 的场所（A 股）当日买入的部分。买单和其他场所（港股 T+0、加密货币）返回 0。
 func paperT1Locked(tx *store.Tx, validation Validation) (shared.Decimal, error) {
 	instrument := validation.Instrument
-	if !exchange.RuleFor(instrument.MarketType).T1 || validation.ReservedAsset == "" || validation.ReservedAsset != instrument.BaseAsset {
+	if !exchange.RuleAt(validation.Account.Exchange, instrument.MarketType).T1 || validation.ReservedAsset == "" || validation.ReservedAsset != instrument.BaseAsset {
 		return shared.Zero(), nil
 	}
 	bought, err := tx.PaperT1Bought(validation.Account.SpaceID, validation.Account.ID, exchange.T1Since(time.Now()).UnixMilli())

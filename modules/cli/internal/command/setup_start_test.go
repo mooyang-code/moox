@@ -187,6 +187,26 @@ func TestSetupStartStockCNExampleUsesItsOwnTask(t *testing.T) {
 	require.Equal(t, []setupStartInstance{{InstanceID: "default_dual_ma_cn_5m", StrategyID: "default_dual_ma_cn_5m", SpaceID: "stockcn", FactorTasks: map[string]string{"equity": "ftask_cn_5m"}, Enabled: true}}, client.instances)
 }
 
+// 港股的默认示例读港股自己的因子任务，策略文件是分批换仓、留 2% 现金的低换手写法（可以直接挂港股模拟盘）。
+func TestSetupStartStockHKExampleUsesItsOwnTask(t *testing.T) {
+	example := spaceExamples["stockhk"]
+	require.Equal(t, "ftask_hk_5m", example.FactorTask)
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), filepath.FromSlash(example.DSL)))
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "name: dual_ma_hk_5m")
+	require.Contains(t, string(raw), "holding: {bars: 12, offsets: [0, 6]}")
+	require.Contains(t, string(raw), "total: 0.98")
+	require.NotContains(t, string(raw), "top: 10000", "港股默认策略不能照搬每根全体重选的写法")
+
+	repository := startRepository(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repository, filepath.FromSlash(example.DSL)), raw, 0o600))
+	client := startClient()
+	status, err := setupStartStrategy(context.Background(), client, repository, "stockhk", example)
+	require.NoError(t, err)
+	require.Equal(t, "created", status)
+	require.Equal(t, []setupStartInstance{{InstanceID: "default_dual_ma_hk_5m", StrategyID: "default_dual_ma_hk_5m", SpaceID: "stockhk", FactorTasks: map[string]string{"equity": "ftask_hk_5m"}, Enabled: true}}, client.instances)
+}
+
 // 有因子引擎时导入种子文件里这个空间的任务（别的空间的不导入，定义全部带上）；种子里没有默认示例用的任务时不建示例策略。
 func TestSetupStartImportsOnlyThisSpaceFromTheFactorSeed(t *testing.T) {
 	repository := startRepository(t)

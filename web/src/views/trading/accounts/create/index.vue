@@ -35,7 +35,9 @@
         <a-radio-group v-model="form.exchange" type="button" @change="onExchangeChange">
           <a-radio :value="1">币安</a-radio>
           <a-radio :value="2">OKX</a-radio>
-          <a-radio v-if="form.kind === 'paper'" :value="ASHARE">A 股</a-radio>
+          <template v-if="form.kind === 'paper'">
+            <a-radio v-for="stock in stockExchanges" :key="stock.exchange" :value="stock.exchange">{{ stock.label }}</a-radio>
+          </template>
         </a-radio-group>
       </a-form-item>
       <a-form-item v-if="form.kind !== 'paper'" label="交易所密钥" extra="先在「系统设置 / 密钥管理」里录入，这里只选名称">
@@ -57,7 +59,7 @@
 
     <!-- 3 市场与参数 -->
     <a-form v-else-if="form.step === 2" :model="form" layout="vertical">
-      <a-form-item v-if="aShare" label="开通的市场" extra="A 股只开股票，按人民币结算，整手买卖、当日买入次日可卖">
+      <a-form-item v-if="stockExchange" label="开通的市场" :extra="stockExchange.marketsExtra">
         <span>股票</span>
       </a-form-item>
       <a-form-item v-else label="开通的市场" :extra="marketsExtra">
@@ -77,7 +79,7 @@
         </a-space>
       </a-form-item>
       <a-form-item label="结算资产">
-        <a-input v-model="form.settlementAsset" :disabled="form.markets.includes(2) || aShare" />
+        <a-input v-model="form.settlementAsset" :disabled="form.markets.includes(2) || Boolean(stockExchange)" />
       </a-form-item>
       <!-- 实盘：按所选市场再检测一次（万向划转权限、双向持仓等和市场有关的阻断项），通过才能继续 -->
       <InspectionPreview
@@ -93,16 +95,14 @@
           <a-form-item label="初始资金"><a-input v-model="form.initialBalance" /></a-form-item>
           <a-form-item label="滑点（基点）"><a-input v-model="form.slippageBps" /></a-form-item>
         </div>
-        <div v-if="aShare" class="row">
+        <div v-if="stockExchange" class="row">
           <a-form-item label="佣金"><a-input v-model="form.takerFeeRate" @input="form.feesEdited = true" /></a-form-item>
         </div>
         <div v-else class="row">
           <a-form-item label="挂单费率"><a-input v-model="form.makerFeeRate" @input="form.feesEdited = true" /></a-form-item>
           <a-form-item label="吃单费率"><a-input v-model="form.takerFeeRate" @input="form.feesEdited = true" /></a-form-item>
         </div>
-        <p v-if="aShare" class="hint">
-          这些参数创建后不能改。佣金按成交额的比例收取，每笔最低 5 元；卖出另收 0.05% 印花税，买卖都收 0.001% 过户费。
-        </p>
+        <p v-if="stockExchange" class="hint">这些参数创建后不能改。{{ stockExchange.feeHint }}</p>
         <p v-else class="hint">
           这些参数创建后不能改。费率默认按普通用户的水平给出，可以按自己的实际费率修改。模拟账户用一个资金池同时撮合开通的各个市场。
         </p>
@@ -200,17 +200,17 @@ import { ADOPT_EFFECT_TEXT } from "../shared/risky-actions";
 import { accountMapOf } from "../account-list";
 import type { TradingAccount } from "@/api/trade";
 import {
-  ASHARE,
   applyExchangeDefaults,
   buildLiveRequest,
   buildPaperRequest,
   createDefaultForm,
   createKinds,
   defaultFees,
-  isAShare,
   restrictMarkets,
   retryWhileSessionStarting,
   stepTitles,
+  stockExchangeOf,
+  stockExchanges,
   toggleMarket,
   validateStep
 } from "./create-model";
@@ -241,7 +241,7 @@ function newCreated() {
 // 账户已经建成：前面几步的参数锁定，重试沿用已创建的账户和组合
 const locked = computed(() => Boolean(created.value.accountId));
 const selectedKind = computed(() => createKinds.find(item => item.key === form.kind));
-const aShare = computed(() => isAShare(form));
+const stockExchange = computed(() => stockExchangeOf(form));
 const joinable = computed(() => joinableLogicals(props.logicals, accountMapOf(props.accounts), form.kind, form.settlementAsset));
 
 const nextDisabled = computed(() => {
@@ -273,8 +273,8 @@ watch(
   () => form.kind,
   () => {
     form.secretId = "";
-    // A 股只开放模拟盘：换成测试网、生产环境时回到币安
-    if (form.kind !== "paper" && isAShare(form)) {
+    // 股票场所（A 股、港股）只开放模拟盘：换成测试网、生产环境时回到币安
+    if (form.kind !== "paper" && stockExchangeOf(form)) {
       form.exchange = 1;
       applyExchangeDefaults(form);
     }
@@ -363,7 +363,7 @@ function setMarket(market: MarketType, on: boolean) {
 function syncMarketDefaults() {
   if (form.markets.includes(2)) form.settlementAsset = "USDT";
   if (!form.feesEdited) {
-    const fees = defaultFees(form.markets);
+    const fees = defaultFees(form.markets, form.exchange);
     form.makerFeeRate = fees.maker;
     form.takerFeeRate = fees.taker;
   }

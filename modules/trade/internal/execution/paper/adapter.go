@@ -220,9 +220,10 @@ type t1Source interface {
 	PaperT1Bought(ctx context.Context, spaceID, accountID string, since int64) (map[string]shared.Decimal, error)
 }
 
-// applyT1 从可用数量里扣掉当日买入（北京时间当天）的股票：T+1，当天买的次日才能卖。执行器的可卖数量取自这里。
+// applyT1 从可用数量里扣掉当日买入（北京时间当天）的股票：T+1（A 股），当天买的次日才能卖。执行器的可卖数量取自这里。
+// 港股等 T+0 的场所不扣。
 func (a *Adapter) applyT1(ctx context.Context, account store.TradingAccountRecord, rows []exchange.AssetBalance) error {
-	if !slices.ContainsFunc(account.Markets, func(market string) bool { return exchange.RuleFor(market).T1 }) {
+	if !slices.ContainsFunc(account.Markets, func(market string) bool { return exchange.RuleAt(account.Exchange, market).T1 }) {
 		return nil
 	}
 	source, ok := a.Store.(t1Source)

@@ -99,6 +99,8 @@ func (f *fakeFactorMgr) CallGatewayJSON(_ context.Context, service string, metho
 		f.tasks[id] = setupFactorTask{TaskID: id, Name: create["name"].(string), SpaceID: create["space_id"].(string),
 			SourceDatasetID: create["source_dataset_id"].(string), Freq: create["freq"].(string)}
 		f.taskStatus[id] = "enabled"
+		// 与 FactorMgr 一致：结果数据集 ID 由任务 ID 派生（ftask_x → dataset_factor_x）。
+		result.FactorTask.TaskID, result.FactorTask.ResultDatasetID = id, "dataset_factor_"+strings.TrimPrefix(id, "ftask_")
 	case "GetFactor":
 		def, ok := f.definitions[request["factor_id"].(string)]
 		if !ok {
@@ -296,7 +298,7 @@ func TestLoadFactorPlanRejectsSymlinkEscape(t *testing.T) {
 	require.ErrorContains(t, err, "must stay under source_dir")
 }
 
-// 仓库里的默认种子：能读出来，按空间拆开后 crypto 两个任务、A 股一个，默认保留期装得下全部回看。
+// 仓库里的默认种子：能读出来，按空间拆开后 crypto 两个任务、A 股与港股各一个，默认保留期装得下全部回看。
 func TestRepositoryFactorSeedLoads(t *testing.T) {
 	path := filepath.Join(repoRoot(t), filepath.FromSlash(defaultFactorSeed))
 	plan, err := loadFactorPlan(path, storagepolicy.Default(), "")
@@ -306,7 +308,7 @@ func TestRepositoryFactorSeedLoads(t *testing.T) {
 	for _, task := range plan.Tasks {
 		ids = append(ids, task.TaskID)
 	}
-	require.Equal(t, []string{"ftask_cn_5m", "ftask_spot_1m", "ftask_swap_1m"}, ids)
+	require.Equal(t, []string{"ftask_cn_5m", "ftask_hk_5m", "ftask_spot_1m", "ftask_swap_1m"}, ids)
 	crypto, err := loadFactorPlan(path, storagepolicy.Default(), "crypto")
 	require.NoError(t, err)
 	require.Len(t, crypto.Tasks, 2)
@@ -354,6 +356,17 @@ func TestFactorTaskApplyCreatesWhatIsMissing(t *testing.T) {
 	}, result.Items)
 	require.Equal(t, "enabled", fake.members["ftask_prices_1m"][0].Status)
 	require.Contains(t, out.String(), "因子成员 ftask_prices_1m/bias：新建，成员键 bias，列 bias")
+	// 新建的任务：结果数据集还没有归档任务，给出建归档任务的命令（不代建）。
+	require.Len(t, result.NextSteps, 1)
+	require.Contains(t, result.NextSteps[0], "moox-cli archive tasks create --space-id "+testSetupPlan().Tasks[0].SpaceID+" --dataset-id dataset_factor_prices_1m")
+	require.Contains(t, out.String(), "下一步：因子任务 ftask_prices_1m 的结果数据集 dataset_factor_prices_1m 还没有归档任务")
+
+	// 再导入一次：任务已存在，不再提示。
+	again, againOut := newApplier(fake)
+	repeated, err := again.Apply(context.Background(), testSetupPlan())
+	require.NoError(t, err)
+	require.Empty(t, repeated.NextSteps)
+	require.NotContains(t, againOut.String(), "下一步")
 }
 
 // 已存在相同：再导入一次全部是“已存在”，一个写调用都不发。

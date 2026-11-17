@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/hkex"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -46,31 +47,40 @@ type stockFixture struct {
 	orders *targetOrderServiceStub
 	quotes stockQuoteStub
 	now    time.Time
+	// exchangeName 是账户所在的场所（A 股 ASHARE、港股 HKEX），交易时段按它取。
+	exchangeName exchange.Exchange
 }
 
 func newStockFixture(t *testing.T) *stockFixture {
 	t.Helper()
+	return newStockExchangeFixture(t, exchange.ExchangeAShare, "CNY", stockNow,
+		stockInstrument("600519.XSHG", "100", "100"), stockInstrument("688981.XSHG", "1", "200"))
+}
+
+// newStockExchangeFixture 建一个股票场所的模拟账户、组合和标的表；now 是夹具的当前时刻（也是账户快照的时间）。
+func newStockExchangeFixture(t *testing.T, exchangeName exchange.Exchange, settlement string, now time.Time, instruments ...store.InstrumentRecord) *stockFixture {
+	t.Helper()
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
-	fixture := &stockFixture{store: tradeStore, orders: &targetOrderServiceStub{}, quotes: stockQuoteStub{}, now: stockNow}
+	fixture := &stockFixture{store: tradeStore, orders: &targetOrderServiceStub{}, quotes: stockQuoteStub{}, now: now, exchangeName: exchangeName}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "stock-a", Name: "stock-a",
-			Exchange: "ASHARE", Markets: []string{"STOCK"}, ExecutionMode: "PAPER", Environment: "PAPER",
-			SettlementAsset: "CNY", Status: "ENABLED", Ready: true,
+			Exchange: string(exchangeName), Markets: []string{"STOCK"}, ExecutionMode: "PAPER", Environment: "PAPER",
+			SettlementAsset: settlement, Status: "ENABLED", Ready: true,
 			Snapshot: store.TradingAccountSnapshot{
 				AvailableFunds: "50000000",
-				Balances:       []store.AssetBalance{{Wallet: "UNIFIED", Asset: "CNY", Available: "50000000", Total: "50000000"}},
+				Balances:       []store.AssetBalance{{Wallet: "UNIFIED", Asset: settlement, Available: "50000000", Total: "50000000"}},
 			},
-			LastSyncAt: stockNow.UnixMilli(), SnapshotSourceTime: stockNow.UnixMilli(),
+			LastSyncAt: now.UnixMilli(), SnapshotSourceTime: now.UnixMilli(),
 		}); err != nil {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
 			ExecutionMode:   "PAPER",
-			SettlementAsset: "CNY", OrderSettingsJSON: legacyOrderSettings,
+			SettlementAsset: settlement, OrderSettingsJSON: legacyOrderSettings,
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -80,10 +90,7 @@ func newStockFixture(t *testing.T) *stockFixture {
 		}); err != nil {
 			return err
 		}
-		for _, instrument := range []store.InstrumentRecord{
-			stockInstrument("600519.XSHG", "100", "100"),
-			stockInstrument("688981.XSHG", "1", "200"),
-		} {
+		for _, instrument := range instruments {
 			if err := tx.UpsertInstrument(instrument); err != nil {
 				return err
 			}
@@ -103,11 +110,15 @@ func stockInstrument(id, step, minimum string) store.InstrumentRecord {
 }
 
 func (f *stockFixture) executor(t *testing.T) *Executor {
-	session, err := ashare.NewSession()
+	newSession := ashare.NewSession
+	if f.exchangeName == exchange.ExchangeHKEX {
+		newSession = hkex.NewSession
+	}
+	session, err := newSession()
 	require.NoError(t, err)
 	return &Executor{
 		Store: f.store, Orders: f.orders, Prices: f.quotes,
-		Exchanges: stockCatalog{exchange.ExchangeAShare: {Exchange: exchange.ExchangeAShare, Session: session}},
+		Exchanges: stockCatalog{f.exchangeName: {Exchange: f.exchangeName, Session: session}},
 		Now:       func() time.Time { return f.now },
 	}
 }

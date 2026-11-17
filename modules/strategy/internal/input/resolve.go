@@ -313,10 +313,10 @@ func resolveView(ctx context.Context, client Client, spaceID, taskID, bar string
 			return resolvedView{}, err
 		}
 	}
-	if calendarOf(item) == "cn_stock" {
+	if calendarID := calendarOf(item); SessionCalendar(calendarID) {
 		for _, alignment := range []string{item.dataset.Alignment, item.source.Alignment} {
 			if strings.EqualFold(strings.TrimSpace(alignment), "epoch_utc") {
-				return resolvedView{}, fmt.Errorf("数据集 %s 的行按 UTC 零点对齐（alignment=epoch_utc），不能使用 A 股日历 cn_stock", view.DatasetID)
+				return resolvedView{}, fmt.Errorf("数据集 %s 的行按 UTC 零点对齐（alignment=epoch_utc），不能使用%s日历 %s", view.DatasetID, loadedSessionMarket(calendarID).spacedName(), calendarID)
 			}
 		}
 	}
@@ -535,8 +535,8 @@ func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int, now time
 	start, latest := coverageStart(bounds, view, resolved, time.Time{}), bounds.To
 	target, err := HistoryStart(resolved.Calendar, resolved.Bar, latest, minAgeBars)
 	if errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
-		return fmt.Errorf("%s 需要追溯到 A 股内嵌交易日历的起点之前，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小括号里的字段",
-			need, view.ViewID, label(start), label(latest))
+		return fmt.Errorf("%s 需要追溯到%s内嵌交易日历的起点之前，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小括号里的字段",
+			need, loadedSessionMarket(resolved.Calendar).spacedName(), view.ViewID, label(start), label(latest))
 	}
 	if err != nil {
 		return err
@@ -583,6 +583,7 @@ func knownMarketType(value string) bool {
 }
 
 // StockTradingDaysPerYear 是 A 股一年的交易日数（与回放年化口径一致），用于把自然时长折算为交易日根数。
+// 港股约 246 天、美股约 252 天，折算与年化都只是估算，共用这个数。
 const StockTradingDaysPerYear = 244
 
 // retentionBars 把数据集保留期（"<n>h" 或 "forever"）换算为根数；A 股先按交易日折算，再乘每个交易日的根数（日线 1，

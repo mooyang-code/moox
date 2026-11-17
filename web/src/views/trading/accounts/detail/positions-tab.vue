@@ -201,7 +201,7 @@ const filters = computed(() => [
   { key: "holding" as const, label: "有持仓", count: filterCoinRows(coinRows.value, "holding", "").length }
 ]);
 const rows = computed(() => filterCoinRows(coinRows.value, filter.value, search.value));
-// A 股组合：一列股票、加“可卖”列，没有永续
+// 股票组合（A 股、港股）：一列股票、加“可卖”列，没有永续
 const stockMode = computed(() => Boolean(logical.value.markets?.includes(3)));
 const spotTitle = computed(() => (stockMode.value ? "股票" : "现货"));
 // 组合里完全没有现货（或永续）一侧的目标和持仓时，不显示那一侧的列

@@ -74,6 +74,8 @@ const (
 	ExchangeOKX         Exchange = "OKX"
 	// ExchangeAShare 是 A 股（沪深北三所），按市场命名，不按券商命名：模拟盘走 Trade 内的撮合，实盘走 QMT 执行端。
 	ExchangeAShare Exchange = "ASHARE"
+	// ExchangeHKEX 是港股（香港交易所主板与创业板），同样按市场命名：只有模拟盘，走 Trade 内的撮合，没有实盘通道。
+	ExchangeHKEX Exchange = "HKEX"
 )
 
 // Valid 只检查非空。是否支持由 execution.Registry 判断，新增场所不用改这里。
@@ -342,7 +344,7 @@ type Instrument struct {
 // 没有（OKX）就用最小下单量折算：minSz × 合约面值 × 价格（现货合约面值为 1；永续要乘 ctVal，漏掉会差几个数量级）。
 // 最小下单量和合约面值缺失时返回 0，表示没有可用的下限。
 func (i Instrument) MinNotionalAt(price shared.Decimal) shared.Decimal {
-	// 整手交易的市场（A 股）没有最小名义金额：零股卖单的金额本来就低于“最小数量 × 价格”。
+	// 整手交易的市场（股票）没有最小名义金额：零股卖单的金额本来就低于“最小数量 × 价格”。
 	if RuleFor(i.MarketType).BoardLot {
 		return shared.Zero()
 	}

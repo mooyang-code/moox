@@ -8,7 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
-// A 股（市场规则里有涨跌停、T+1、整手的市场）只能顺延的原因。顺延不算阻塞，不触发“目标持续阻塞”告警，
+// 股票（市场规则里有停牌与涨跌停、T+1、整手的市场）只能顺延的原因。顺延不算阻塞，不触发“目标持续阻塞”告警，
 // 也不算“持仓未到位”：Converge 和 HasDifference 都按 deferralReason 判断，口径一致。
 // marketDeferralRetry 是有按市场规则顺延的项时，再看一次的间隔。
 const marketDeferralRetry = 60 * time.Second
@@ -24,10 +24,12 @@ const (
 //   - 停牌：不能下单；
 //   - 涨停时买、跌停时卖：现价已经在涨跌停价、对手方没有挂单，价格截在涨跌停价上也成交不了，提高滑点没用，
 //     交给伪市价的次数上限会被记成“未到位”；
-//   - 只因为 T+1 卖不出：当日买入的部分次日才能卖。
+//   - 只因为 T+1 卖不出：当日买入的部分次日才能卖（A 股；港股 T+0 没有这一项）。
+//
+// 港股的报价没有涨跌停价，只有停牌会顺延。
 func deferralReason(action laneAction, quote Quote) string {
-	rule := exchange.RuleFor(action.instrument.MarketType)
-	if rule.PriceLimits {
+	rule := exchange.RuleAt(action.instrument.Exchange, action.instrument.MarketType)
+	if rule.QuoteGuards {
 		buying := !action.delta.IsNegative()
 		switch {
 		case quote.Halted:
@@ -51,7 +53,7 @@ func deferralReason(action laneAction, quote Quote) string {
 func t1Locked(action laneAction) bool {
 	id := action.instrument.InstrumentID
 	bought := action.member.t1[id]
-	if !exchange.RuleFor(action.instrument.MarketType).T1 || bought.Cmp(shared.Zero()) <= 0 {
+	if !exchange.RuleAt(action.instrument.Exchange, action.instrument.MarketType).T1 || bought.Cmp(shared.Zero()) <= 0 {
 		return false
 	}
 	want := action.delta.Abs()
@@ -68,7 +70,7 @@ func sellQuantity(action laneAction, quantity shared.Decimal) (shared.Decimal, b
 }
 
 // SellQuantity 把一笔持仓来自余额的卖单截到可卖数量，目标执行器和手动清仓共用：
-//   - 整手交易的市场（A 股）：要卖的数量不小于全部可卖数量时，直接卖出全部可卖数量，允许零股（oddFull 为真）；
+//   - 整手交易的市场（股票）：要卖的数量不小于全部可卖数量时，直接卖出全部可卖数量，允许零股（oddFull 为真）；
 //   - 否则按步长取整；取整后低于最小数量返回 0。
 func SellQuantity(instrument store.InstrumentRecord, quantity, sellable shared.Decimal) (shared.Decimal, bool) {
 	if sellable.Cmp(shared.Zero()) <= 0 {
@@ -97,7 +99,7 @@ func oddLotFullSell(action laneAction) bool {
 	return sellable.Cmp(shared.Zero()) > 0 && action.delta.Abs().Cmp(sellable) >= 0
 }
 
-// boardLotLane 报告标的是否按整手交易（A 股）：看成员标的表里的市场，买入不足一手的差额视为已满足。
+// boardLotLane 报告标的是否按整手交易（股票）：看成员标的表里的市场，买入不足一手的差额视为已满足。
 func boardLotLane(members []memberState, instrumentID string) bool {
 	for _, member := range members {
 		if instrument, ok := member.instruments[instrumentID]; ok {

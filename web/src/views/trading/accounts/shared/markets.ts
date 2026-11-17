@@ -10,9 +10,9 @@ export function marketsText(markets: readonly number[] | undefined): string {
   return markets?.length ? markets.map(marketLabel).join("、") : "-";
 }
 
-/** A 股组合：按结算币判断（人民币结算只有 A 股），不看成员开通的市场——成员全停用时市场并集是空的。 */
-export function isAShareLogical(logical: { settlement_asset?: string }): boolean {
-  return logical.settlement_asset === "CNY";
+/** 股票组合（A 股、港股）：按结算币判断（人民币结算只有 A 股，港元结算只有港股），不看成员开通的市场——成员全停用时市场并集是空的。 */
+export function isStockLogical(logical: { settlement_asset?: string }): boolean {
+  return logical.settlement_asset === "CNY" || logical.settlement_asset === "HKD";
 }
 
 /** 持仓数的合计说明，按实际开通的市场写：现货合计、股票合计、现货和永续合计；没有市场时为空串。 */
@@ -37,7 +37,7 @@ export function coinOf(instrumentId: string): string {
   return instrumentName(instrumentId).split("-")[0];
 }
 
-/** 只开通了股票市场（A 股组合）。 */
+/** 只开通了股票市场（A 股、港股组合）。 */
 export function isStockOnly(markets: readonly number[]): boolean {
   return markets.length === 1 && markets[0] === 3;
 }

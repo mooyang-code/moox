@@ -233,13 +233,13 @@ func (s *Service) flattenSpot(
 		}
 		var quantity shared.Decimal
 		if exchange.RuleFor(instrument.MarketType).BoardLot {
-			// 整手市场（A 股）：和目标执行器同一个卖出规则，卖出全部可卖数量时零股一次卖完；只因 T+1 卖不出的部分
+			// 整手市场（股票）：和目标执行器同一个卖出规则，卖出全部可卖数量时零股一次卖完；T+1 的场所（A 股）只因 T+1 卖不出的部分
 			// （当日买入 = 总数 − 冻结 − 可卖）这一轮不再重试，原因写明。
 			quantity, _ = targetapp.SellQuantity(instrument, total, available)
 			if quantity.IsZero() {
 				locked, _ := decimalOrZero(balance.Locked)
 				bought := balanceTotal.Sub(locked).Sub(available)
-				if later, _ := targetapp.SellQuantity(instrument, total, available.Add(bought)); exchange.RuleFor(instrument.MarketType).T1 &&
+				if later, _ := targetapp.SellQuantity(instrument, total, available.Add(bought)); exchange.RuleAt(instrument.Exchange, instrument.MarketType).T1 &&
 					bought.Cmp(shared.Zero()) > 0 && !later.IsZero() {
 					reasons[key] = flattenReason{text: "当日买入，次日可卖", final: true}
 					continue
@@ -307,11 +307,11 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 ) error {
 	// 下架清仓用伪市价单（限价 + IOC，滑点 3%）：每一轮按最新报价重新下，零成交的 IOC 单不算终结。
 	delist := command.actionType() == operatordomain.ActionDelistFlatten
-	// stockIOC：A 股没有市价单，清仓、减仓也发限价 IOC。
-	stockIOC := exchange.RuleFor(instrument.MarketType).PriceLimits
+	// stockIOC：股票没有市价单，清仓、减仓也发限价 IOC。
+	stockIOC := exchange.RuleFor(instrument.MarketType).QuoteGuards
 	// 所有市场的子单号都带上第几次尝试：零成交的子单（已过期、已撤销、本地校验没过）结束后同一个动作号换号再下，
 	// 不会撞上上一笔已结束的子单；交易所明确拒绝的才终结。
-	// 下架清仓和 A 股数本动作在这个标的上已结束的全部子单；加密市场清仓、减仓只数零成交的：
+	// 下架清仓和股票数本动作在这个标的上已结束的全部子单；加密市场清仓、减仓只数零成交的：
 	// 有成交的子单（含部分成交）结束后，持仓还没同步时按旧数量再下会命中原号而不下单，同步后数量变了自然换号。
 	history, err := s.loadDelistHistory(ctx, command, account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 	if err != nil {
@@ -391,11 +391,12 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 		},
 	}
 	spec.PositionSide = exchange.RuleFor(instrument.MarketType).PositionSide
-	if delist || exchange.RuleFor(instrument.MarketType).PriceLimits {
+	if delist || exchange.RuleFor(instrument.MarketType).QuoteGuards {
 		// 3% 滑点可能超出交易所的价格偏离限制（币安 PERCENT_PRICE、A 股价格笼子），和目标执行器的伪市价单用同一个夹价函数，免得被拒。
-		// A 股没有市价单：清仓同样发限价 IOC，再截到涨跌停价之间。
+		// 股票没有市价单：清仓同样发限价 IOC，再截到涨跌停价之间（A 股），并对齐到价位表（港股）。
 		limit := targetapp.ClampToPriceBand(delistLimitPrice(quote.Price, side, instrument.PriceTick), targetapp.CageBasis(quote, side), side, instrument)
 		limit = targetapp.ClampToPriceLimits(limit, quote)
+		limit = exchange.RuleAt(instrument.Exchange, instrument.MarketType).SnapPrice(limit, side)
 		spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
 	}
 	placed, err := s.Orders.Place(ctx, command.SpaceID, spec)

@@ -84,16 +84,17 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 		}
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("创建实例失败：%w", err))}, nil
 	}
-	// 创建已持久化；之后的启用失败也要返回实例身份，便于用 SetStrategyInstanceEnabled 恢复。
+	// 创建已持久化；之后的启用失败也要返回实例身份，并在报错里说明“已创建但未启用”和下一步命令：
+	// 调用方（strategy instance create --enable）只看到一个失败，不说明的话会以为没建成、换个参数再 create 一次。
 	createdFailure := func(err error) *strategypb.CreateStrategyInstanceRsp {
 		current, getErr := s.Store.GetInstance(ctx, instanceID)
 		if getErr != nil {
 			return &strategypb.CreateStrategyInstanceRsp{
-				RetInfo:  invalid(fmt.Errorf("实例 %q 已创建但状态不可读，请先查看实例再用 SetStrategyInstanceEnabled 启用：%w", instanceID, errors.Join(err, fmt.Errorf("读取已创建的实例：%w", getErr)))),
+				RetInfo:  invalid(fmt.Errorf("实例 %q 已创建但未启用，而且读不出它的状态；不要再次 create，先 moox-cli strategy instance show 查看，再用 moox-cli strategy instance enable --instance-id %s 启用：%w", instanceID, instanceID, errors.Join(err, fmt.Errorf("读取已创建的实例：%w", getErr)))),
 				Instance: &strategypb.StrategyInstance{InstanceId: instanceID, StrategyId: instance.StrategyID, SpaceId: instance.SpaceID, FactorTasks: instance.FactorTasks},
 			}
 		}
-		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("实例 %q 已创建；请查看实例并用 SetStrategyInstanceEnabled 启用：%w", instanceID, err)), Instance: instanceProto(current)}
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("实例 %q 已创建但未启用（启用失败）：%w。不要再次 create；修好原因后用 moox-cli strategy instance enable --instance-id %s 启用，不要了就用 strategy instance delete 删除", instanceID, err, instanceID)), Instance: instanceProto(current)}
 	}
 	if v.GetEnabled() {
 		if _, err := s.enable(ctx, instance); err != nil {
@@ -356,12 +357,9 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 	return reload(), nil
 }
 
-// checkLiveCalendar 拒绝在 A 股内嵌日历过了可用截止日后启用实例：此后每一期都推算不出有效期，结果都会被丢弃。
+// checkLiveCalendar 拒绝在股票市场的内嵌日历过了可用截止日后启用实例：此后每一期都推算不出有效期，结果都会被丢弃。
 func checkLiveCalendar(resolved input.Resolved, now time.Time) error {
-	if !strings.EqualFold(resolved.Calendar, "cn_stock") {
-		return nil
-	}
-	if err := input.StockCalendarReadiness(now, 0, trigger.ValidBars); err != nil {
+	if err := input.StockCalendarReadiness(resolved.Calendar, now, 0, trigger.ValidBars); err != nil {
 		return fmt.Errorf("不能启用实例：%w", err)
 	}
 	return nil

@@ -61,8 +61,8 @@ func (s ExchangePriceSource) LatestPrice(
 	if err != nil {
 		return Quote{}, err
 	}
-	if exchange.RuleFor(key.Market).PriceLimits {
-		// 有涨跌停的市场一次取全：参考价、涨跌停价、买一卖一、停牌都来自同一份快照。
+	if exchange.RuleFor(key.Market).QuoteGuards {
+		// 报价带停牌和涨跌停的市场（股票）一次取全：参考价、涨跌停价、买一卖一、停牌都来自同一份快照。
 		quote, err := adapter.GetQuote(ctx, key)
 		if err != nil {
 			return Quote{}, err

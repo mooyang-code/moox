@@ -1,5 +1,5 @@
-// Package cnstock 是 A 股公共行情的抓取与解析：腾讯实时快照、东方财富标的列表，以及代码与标的 ID 的互转。
-// 只依赖标准库，Collector 和 Trade 共用。
+// Package cnstock 是 A 股与港股公共行情的抓取与解析：腾讯实时快照、东方财富 A 股标的列表、恒生指数成分列表，
+// 以及代码与标的 ID 的互转。港股部分在 hk.go。只依赖标准库，Collector 和 Trade 共用。
 package cnstock
 
 import (

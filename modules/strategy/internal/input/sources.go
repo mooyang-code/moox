@@ -267,14 +267,14 @@ func bindReferences(ctx context.Context, client Client, spaceID string, resolved
 }
 
 // checkSourceBar 校验来源周期与主帧的关系：日历相同；加密（定长周期）要求来源周期是主帧的整数倍且更长，收盘时刻才能对齐；
-// A 股的来源只能是日线，且主帧必须是日内周期。
+// 股票市场（A 股、港股等）的来源只能是日线，且主帧必须是日内周期。
 func checkSourceBar(name, calendar, mainBar, sourceBar string) error {
 	if err := CheckCalendar(calendar, sourceBar); err != nil {
 		return fmt.Errorf("来源 %s 的周期 %s 在日历 %s 上不受支持：%w", name, sourceBar, calendar, err)
 	}
-	if normalizeCalendar(calendar) == "cn_stock" {
+	if market := loadedSessionMarket(calendar); market != nil {
 		if sourceBar != "1d" || mainBar == "1d" {
-			return fmt.Errorf("A 股的附加来源只能是 1d，且主帧必须是日内周期：来源 %s 是 %s，主帧是 %s", name, sourceBar, mainBar)
+			return fmt.Errorf("%s的附加来源只能是 1d，且主帧必须是日内周期：来源 %s 是 %s，主帧是 %s", market.name(), name, sourceBar, mainBar)
 		}
 		return nil
 	}

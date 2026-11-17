@@ -32,38 +32,88 @@ export interface CreateForm {
   adoptExisting: boolean;
 }
 
-/** A 股场所（ASHARE）：只开股票、按人民币结算；模拟盘只有一个佣金比例，最低 5 元、印花税、过户费由后端按常量计算。 */
 export const ASHARE: Exchange = 3;
+export const HKEX: Exchange = 4;
 export const STOCK: MarketType = 3;
-export const ASHARE_DEFAULT_BALANCE = "50000000";
-export const ASHARE_DEFAULT_COMMISSION = "0.00025";
 
-export function isAShare(form: Pick<CreateForm, "exchange">): boolean {
-  return form.exchange === ASHARE;
+/**
+ * 股票场所（A 股 ASHARE、港股 HKEX）：只开股票、按本币结算、只有模拟盘；模拟盘只有一个佣金比例，
+ * 最低佣金、印花税等其余费用由后端按常量计算。新增股票场所在这里加一项。
+ */
+export interface StockExchange {
+  exchange: Exchange;
+  label: string;
+  /** 结算资产和它的中文名 */
+  settlement: string;
+  currencyName: string;
+  defaultBalance: string;
+  defaultCommission: string;
+  /** “开通的市场”下面的说明 */
+  marketsExtra: string;
+  /** 佣金输入框下面的费用说明 */
+  feeHint: string;
+  /** 选了实盘时的提示 */
+  liveError: string;
 }
 
-export function defaultFees(markets: readonly MarketType[]): { maker: string; taker: string } {
-  if (markets.includes(STOCK)) return { maker: ASHARE_DEFAULT_COMMISSION, taker: ASHARE_DEFAULT_COMMISSION };
+export const stockExchanges: readonly StockExchange[] = [
+  {
+    exchange: ASHARE,
+    label: "A 股",
+    settlement: "CNY",
+    currencyName: "人民币",
+    defaultBalance: "50000000",
+    defaultCommission: "0.00025",
+    marketsExtra: "A 股只开股票，按人民币结算，整手买卖、当日买入次日可卖",
+    feeHint: "佣金按成交额的比例收取，每笔最低 5 元；卖出另收 0.05% 印花税，买卖都收 0.001% 过户费。",
+    liveError: "A 股实盘要通过 QMT 执行端下单，还没有接入"
+  },
+  {
+    exchange: HKEX,
+    label: "港股",
+    settlement: "HKD",
+    currencyName: "港元",
+    defaultBalance: "10000000",
+    defaultCommission: "0.0003",
+    marketsExtra: "港股只开股票，按港元结算（不换算汇率），整手买卖（每手股数逐只不同）、当日买入可卖，没有涨跌停",
+    feeHint:
+      "佣金按成交额的比例收取，每笔最低 3 港元；买卖都另收 0.1% 印花税（向上取整到元）、0.00565% 交易费、0.0027% 和 0.00015% 两项交易征费、0.002% 结算费（最低 2、最高 100 港元）。按 2026 年公开费率，模拟盘口径。",
+    liveError: "港股只支持模拟盘，没有实盘下单通道"
+  }
+];
+
+/** 表单选的场所是股票场所时返回它的参数，否则返回 undefined。 */
+export function stockExchangeOf(form: Pick<CreateForm, "exchange">): StockExchange | undefined {
+  return stockExchanges.find(stock => stock.exchange === form.exchange);
+}
+
+/** 默认费率：股票取场所的默认佣金（没指明场所时按 A 股）；只开现货和带永续的默认费率不同。 */
+export function defaultFees(markets: readonly MarketType[], exchange: Exchange = ASHARE): { maker: string; taker: string } {
+  if (markets.includes(STOCK)) {
+    const commission = (stockExchangeOf({ exchange }) ?? stockExchanges[0]).defaultCommission;
+    return { maker: commission, taker: commission };
+  }
   const spotOnly = markets.length > 0 && markets.every(market => market === 1);
   return spotOnly ? { maker: "0.001", taker: "0.001" } : { maker: "0.0002", taker: "0.0005" };
 }
 
 /**
- * 切换场所后重设和场所绑定的参数：A 股市场固定为股票、人民币结算、默认 5000 万元和佣金 0.025%；
- * 换回加密货币时恢复默认的永续、USDT 和费率。
+ * 切换场所后重设和场所绑定的参数：股票场所市场固定为股票、按本币结算，用场所的默认初始资金和佣金
+ * （A 股 5000 万元、0.025%；港股 1000 万港元、0.03%）；换回加密货币时恢复默认的永续、USDT 和费率。
  */
 export function applyExchangeDefaults(form: CreateForm): void {
   const defaults = createDefaultForm(form.kind);
-  if (isAShare(form)) {
+  const stock = stockExchangeOf(form);
+  if (stock) {
     form.markets = [STOCK];
-    form.settlementAsset = "CNY";
-    form.initialBalance = ASHARE_DEFAULT_BALANCE;
+    form.settlementAsset = stock.settlement;
+    form.initialBalance = stock.defaultBalance;
   } else if (form.markets.includes(STOCK)) {
     form.markets = defaults.markets;
     form.settlementAsset = defaults.settlementAsset;
     form.initialBalance = defaults.initialBalance;
   }
-  const fees = defaultFees(form.markets);
+  const fees = defaultFees(form.markets, form.exchange);
   form.makerFeeRate = fees.maker;
   form.takerFeeRate = fees.taker;
   form.feesEdited = false;
@@ -125,17 +175,21 @@ export function validateStep(form: CreateForm, step: number): string {
     return createKinds.find(item => item.key === form.kind)?.open ? "" : "这个环境还没有开放";
   }
   if (step === 1) {
-    if (isAShare(form) && form.kind !== "paper") return "A 股实盘要通过 QMT 执行端下单，还没有接入";
+    const stock = stockExchangeOf(form);
+    if (stock && form.kind !== "paper") return stock.liveError;
     if (!form.name.trim()) return "请输入账户名称";
     if (form.kind !== "paper" && !form.secretId) return "请选择交易所密钥";
     return "";
   }
   if (step === 2) {
-    if (isAShare(form)) {
-      if (form.markets.length !== 1 || form.markets[0] !== STOCK) return "A 股只能开通股票市场";
-      if (form.settlementAsset.trim().toUpperCase() !== "CNY") return "A 股按人民币（CNY）结算";
+    const stock = stockExchangeOf(form);
+    if (stock) {
+      if (form.markets.length !== 1 || form.markets[0] !== STOCK) return `${stock.label}只能开通股票市场`;
+      if (form.settlementAsset.trim().toUpperCase() !== stock.settlement) {
+        return `${stock.label}按${stock.currencyName}（${stock.settlement}）结算`;
+      }
     } else if (form.markets.includes(STOCK)) {
-      return "股票市场只能在 A 股场所开通";
+      return "股票市场只能在 A 股、港股场所开通";
     }
     if (!form.markets.length) return "至少开通一个市场";
     if (form.kind === "testnet" && form.exchange === 1 && form.markets.length > 1) return "币安测试网一个账户只能开通一个市场";
@@ -170,8 +224,8 @@ export function buildPaperRequest(form: CreateForm): CreatePaperSimulationReq {
     settlement_asset: form.settlementAsset.trim().toUpperCase(),
     margin_mode: swap ? "CROSS" : "",
     initial_balance: form.initialBalance.trim(),
-    // A 股只有一个佣金比例：挂单、吃单相同
-    maker_fee_rate: isAShare(form) ? form.takerFeeRate.trim() : form.makerFeeRate.trim(),
+    // 股票场所只有一个佣金比例：挂单、吃单相同
+    maker_fee_rate: stockExchangeOf(form) ? form.takerFeeRate.trim() : form.makerFeeRate.trim(),
     taker_fee_rate: form.takerFeeRate.trim(),
     slippage_bps: form.slippageBps.trim()
   };

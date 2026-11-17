@@ -32,6 +32,7 @@ type spaceExample struct {
 var spaceExamples = map[string]spaceExample{
 	"crypto":  {StrategyID: "default_dual_ma_swap_1m", InstanceID: "default_dual_ma_swap_1m", Market: "swap", FactorTask: "ftask_swap_1m", DSL: "examples/strategies/dual_ma_swap_1m.yaml"},
 	"stockcn": {StrategyID: "default_dual_ma_cn_5m", InstanceID: "default_dual_ma_cn_5m", Market: "equity", FactorTask: "ftask_cn_5m", DSL: "examples/strategies/dual_ma_cn_5m.yaml"},
+	"stockhk": {StrategyID: "default_dual_ma_hk_5m", InstanceID: "default_dual_ma_hk_5m", Market: "equity", FactorTask: "ftask_hk_5m", DSL: "examples/strategies/dual_ma_hk_5m.yaml"},
 }
 
 const (

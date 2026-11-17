@@ -281,6 +281,16 @@ func TestPoolEnableAfterAccountCheckFailureStartsWarmUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "p1")
+	// 创建带启用、启用失败：实例已经建出来（停用），报错里要说清“已创建但未启用”和接着用哪条命令启用，免得再 create 一次。
+	message := rsp.GetRetInfo().GetMsg()
+	for _, want := range []string{"已创建但未启用", "Trade 账户读取超时", "不要再次 create", "moox-cli strategy instance enable --instance-id p1"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("启用失败的报错应包含 %q：%s", want, message)
+		}
+	}
+	if rsp.GetInstance().GetInstanceId() != "p1" || rsp.GetInstance().GetEnabled() {
+		t.Fatalf("响应里带上已创建、未启用的实例：%+v", rsp.GetInstance())
+	}
 	if rsp.GetInstance().GetSessionId() != "" || len(warmer.started) != 0 {
 		t.Fatalf("核对没过时不写会话、不预热：%q %v", rsp.GetInstance().GetSessionId(), warmer.started)
 	}

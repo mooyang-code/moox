@@ -282,10 +282,10 @@ func TestStorageErrorsAreChinese(t *testing.T) {
 
 // 启用前的日历截止日检查在输入层由 StockCalendarReadiness 完成：过了截止日返回 ErrCalendarExpired。
 func TestStockCalendarReadinessCutoff(t *testing.T) {
-	if err := StockCalendarReadiness(time.Date(2027, 12, 30, 10, 0, 0, 0, shanghai(t)), 0, 2); !errors.Is(err, ErrCalendarExpired) {
+	if err := StockCalendarReadiness("cn_stock", time.Date(2027, 12, 30, 10, 0, 0, 0, shanghai(t)), 0, 2); !errors.Is(err, ErrCalendarExpired) {
 		t.Fatalf("过了可用截止日应返回过期：%v", err)
 	}
-	if err := StockCalendarReadiness(time.Date(2027, 12, 29, 10, 0, 0, 0, shanghai(t)), 0, 2); err != nil {
+	if err := StockCalendarReadiness("cn_stock", time.Date(2027, 12, 29, 10, 0, 0, 0, shanghai(t)), 0, 2); err != nil {
 		t.Fatalf("截止日当天仍可用：%v", err)
 	}
 }

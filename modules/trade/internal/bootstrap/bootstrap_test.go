@@ -13,6 +13,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/hkex"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/stockfeed"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
@@ -78,7 +80,7 @@ func TestExchangeCredentialPropagatesSingleSecretReadError(t *testing.T) {
 
 func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 	registry := execution.NewRegistry()
-	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil)))
+	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
 	for _, name := range []exchange.Exchange{
 		exchange.ExchangeBinance,
 		exchange.ExchangeOKX,
@@ -114,7 +116,7 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 // A 股：模拟盘绑定公共行情适配器；实盘在 QMT 执行端接入前直接报错；建账户时校验场所与市场、结算资产。
 func TestRegisterBuiltinsAShare(t *testing.T) {
 	registry := execution.NewRegistry()
-	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil)))
+	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeAShare,
 		Markets:       []exchange.MarketType{exchange.MarketTypeStock},
@@ -122,7 +124,7 @@ func TestRegisterBuiltinsAShare(t *testing.T) {
 	}
 	adapter, err := registry.Bind(config, exchange.Credential{})
 	require.NoError(t, err)
-	_, isPublic := adapter.(*ashare.Adapter)
+	_, isPublic := adapter.(*stockfeed.Adapter)
 	require.True(t, isPublic)
 
 	config.ExecutionMode, config.Environment = exchange.ExecutionModeLive, exchange.AccountEnvironmentTestnet
@@ -139,9 +141,42 @@ func TestRegisterBuiltinsAShare(t *testing.T) {
 	require.NoError(t, execution.ValidateAccount(registry, exchange.ExchangeOKX, spot, "USDT", exchange.ExecutionModeLive))
 }
 
+// 港股：只有模拟盘，绑定公共行情适配器；建实盘账户和绑定实盘都直接报错；只开股票、按 HKD 结算；登记了交易时段和标的范围说明。
+func TestRegisterBuiltinsHKEX(t *testing.T) {
+	registry := execution.NewRegistry()
+	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
+	config := exchange.AccountConfig{
+		TradingAccountID: "account-hk", Exchange: exchange.ExchangeHKEX,
+		Markets:       []exchange.MarketType{exchange.MarketTypeStock},
+		ExecutionMode: exchange.ExecutionModePaper, Environment: exchange.AccountEnvironmentProduction, SettlementAsset: "HKD",
+	}
+	adapter, err := registry.Bind(config, exchange.Credential{})
+	require.NoError(t, err)
+	public, isPublic := adapter.(*stockfeed.Adapter)
+	require.True(t, isPublic)
+	require.Equal(t, exchange.ExchangeHKEX, public.Exchange())
+
+	config.ExecutionMode = exchange.ExecutionModeLive
+	_, err = registry.Bind(config, exchange.Credential{})
+	require.ErrorContains(t, err, "港股只支持模拟盘")
+
+	stock := []exchange.MarketType{exchange.MarketTypeStock}
+	require.NoError(t, execution.ValidateAccount(registry, exchange.ExchangeHKEX, stock, "HKD", exchange.ExecutionModePaper))
+	require.ErrorContains(t, execution.ValidateAccount(registry, exchange.ExchangeHKEX, stock, "CNY", exchange.ExecutionModePaper), "结算资产只能是 HKD")
+	require.ErrorContains(t, execution.ValidateAccount(registry, exchange.ExchangeHKEX, []exchange.MarketType{exchange.MarketTypeSpot}, "HKD", exchange.ExecutionModePaper), "不支持开通市场")
+	require.ErrorContains(t, execution.ValidateAccount(registry, exchange.ExchangeHKEX, stock, "HKD", exchange.ExecutionModeLive), "港股只支持模拟盘")
+
+	descriptor, ok := registry.Descriptor(exchange.ExchangeHKEX)
+	require.True(t, ok)
+	require.NotNil(t, descriptor.Session)
+	require.Contains(t, descriptor.SessionHours, "09:30-12:00")
+	require.Contains(t, execution.InstrumentScope(registry, "HKEX"), "恒生指数成分")
+	require.Empty(t, execution.InstrumentScope(registry, "ASHARE"))
+}
+
 func TestBinanceLiveProductionRequiresInspectedAccountMode(t *testing.T) {
 	registry := execution.NewRegistry()
-	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil)))
+	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance,
 		Markets:       []exchange.MarketType{exchange.MarketTypeSpot},
@@ -165,7 +200,7 @@ func TestBinanceLiveProductionRequiresInspectedAccountMode(t *testing.T) {
 // 统一账户整个账户一个适配器；普通账户按市场拆开再合成。
 func TestBindChoosesAdapterByInspectedAccountMode(t *testing.T) {
 	registry := execution.NewRegistry()
-	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil)))
+	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
 	both := []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance, Markets: both, MarginMode: exchange.MarginModeCross,

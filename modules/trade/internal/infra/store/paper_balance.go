@@ -201,13 +201,14 @@ func (s *Store) PaperT1Bought(ctx context.Context, spaceID, accountID string, si
 // PaperT1Bought 是 Store.PaperT1Bought 的事务内版本：下单资金检查在写事务里读余额，T+1 也要在同一个事务里扣。
 func (tx *Tx) PaperT1Bought(spaceID, accountID string, since int64) (map[string]shared.Decimal, error) {
 	result := make(map[string]shared.Decimal)
-	markets := exchange.MarketsWhere(func(rule exchange.MarketRule) bool { return rule.T1 })
-	if len(markets) == 0 {
-		return result, nil
-	}
 	identity, err := tx.accountIdentity(spaceID, accountID)
 	if err != nil {
 		return nil, err
+	}
+	// 只有账户所在场所有 T+1 的市场才查（A 股）；港股、加密货币当日买入可卖。
+	markets := exchange.MarketsWhere(identity.Exchange, func(rule exchange.ExchangeRule) bool { return rule.T1 })
+	if len(markets) == 0 {
+		return result, nil
 	}
 	names := make([]string, len(markets))
 	for i, market := range markets {

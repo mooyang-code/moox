@@ -13,8 +13,9 @@ import (
 
 // 换仓时钟（holding.anchor 与 holding.calendar）：引擎是纯函数，交易日历的换算都在输入层完成，实时、回放、预热共用这里。
 //
-// 交易日序号：加密按 UTC 自然日（1970-01-01 为 0，每天都是交易日），A 股按内嵌交易日历（首个交易日为 0）。
-// bar 序号与 PeriodBoundaries.BarIndex 一致：加密是 bar_end ÷ 周期，A 股日线是交易日序号，A 股日内是“交易日序号 × 每日根数 + 日内序号”。
+// 交易日序号：加密按 UTC 自然日（1970-01-01 为 0，每天都是交易日），股票市场按内嵌交易日历（首个交易日为 0）。
+// bar 序号与 PeriodBoundaries.BarIndex 一致：加密是 bar_end ÷ 周期，股票市场日线是交易日序号，日内是 barclock 的交易序号
+// （没有半日市的市场等于“交易日序号 × 每日根数 + 日内序号”；有半日市的市场那一天的根数更少，按当天实际的根数累计）。
 
 // maxCalendarScan 是日历写法向前找最近一个建仓日时最多回看的交易日数：超过一年仍找不到（例如每周第 7 个交易日在 A 股不存在），
 // 视为还没有过应建仓 bar。
@@ -47,9 +48,9 @@ func dayAxisFor(calendarID, frequency string) (dayAxis, error) {
 		}
 		return cryptoAxis{perDay: int64(24 * time.Hour / typed.duration)}, nil
 	case stockDailyClock:
-		return stockAxis{calendar: typed.calendar, perDay: 1}, nil
+		return stockAxis{market: typed.market, calendar: typed.calendar, perDay: 1}, nil
 	case *stockSessionClock:
-		return stockAxis{calendar: typed.calendar, perDay: int64(typed.perDay)}, nil
+		return stockAxis{market: typed.market, calendar: typed.calendar, perDay: int64(typed.perDay), session: typed}, nil
 	}
 	return nil, fmt.Errorf("%w：日历 %q 不支持换仓时钟", ErrUnsupportedCalendar, calendarID)
 }
@@ -99,17 +100,29 @@ func (cryptoAxis) position(date marketcalendar.CivilDate, period marketcalendar.
 func (a cryptoAxis) firstBar(index int64) int64 { return index*a.perDay + 1 }
 func (a cryptoAxis) lastBar(index int64) int64  { return (index + 1) * a.perDay }
 
-// stockAxis 是 A 股：按内嵌交易日历，日线每日一根，日内每日 perDay 根。
+// stockAxis 是股票市场：按内嵌交易日历，日线每日一根；日内（session 不为空）完整交易日 perDay 根，半日市当天更少，
+// bar 与交易日之间按 bar 的当地日期和当天实际的根数换算。
 type stockAxis struct {
+	market   *sessionMarket
 	calendar marketcalendar.TradingCalendar
 	perDay   int64
+	session  *stockSessionClock
 }
 
 func (a stockAxis) dayOf(bar PeriodBoundaries) (marketcalendar.CivilDate, int64, error) {
+	if a.session != nil {
+		// 日内的 bar_start 是真实的开盘时刻：按市场时区取日期，再查它是第几个交易日。
+		date, err := localDay(bar.StorageStart, a.session.location)
+		if err != nil {
+			return marketcalendar.CivilDate{}, 0, err
+		}
+		index, err := a.dayIndex(date)
+		return date, index, err
+	}
 	index := bar.BarIndex / a.perDay
 	date, err := a.calendar.TradingDayAt(int(index))
 	if err != nil {
-		return marketcalendar.CivilDate{}, 0, translateCalendarError(err)
+		return marketcalendar.CivilDate{}, 0, translateCalendarError(a.market, err)
 	}
 	return date, index, nil
 }
@@ -117,7 +130,7 @@ func (a stockAxis) dayOf(bar PeriodBoundaries) (marketcalendar.CivilDate, int64,
 func (a stockAxis) dayIndex(date marketcalendar.CivilDate) (int64, error) {
 	index, err := a.calendar.TradingDayIndex(date)
 	if err != nil {
-		return 0, stockDayError(date, err)
+		return 0, stockDayError(a.market, date, err)
 	}
 	return int64(index), nil
 }
@@ -128,7 +141,7 @@ func (a stockAxis) previous(date marketcalendar.CivilDate, index int64) (marketc
 		return marketcalendar.CivilDate{}, 0, false, nil
 	}
 	if err != nil {
-		return marketcalendar.CivilDate{}, 0, false, stockDayError(date, err)
+		return marketcalendar.CivilDate{}, 0, false, stockDayError(a.market, date, err)
 	}
 	return previous, index - 1, true, nil
 }
@@ -136,13 +149,29 @@ func (a stockAxis) previous(date marketcalendar.CivilDate, index int64) (marketc
 func (a stockAxis) position(date marketcalendar.CivilDate, period marketcalendar.Period) (int, int, error) {
 	position, total, err := a.calendar.PeriodPosition(date, period)
 	if err != nil {
-		return 0, 0, stockDayError(date, err)
+		return 0, 0, stockDayError(a.market, date, err)
 	}
 	return position, total, nil
 }
 
-func (a stockAxis) firstBar(index int64) int64 { return index * a.perDay }
-func (a stockAxis) lastBar(index int64) int64  { return index*a.perDay + a.perDay - 1 }
+// firstBar、lastBar：日内按当天实际的根数取（半日市）；序号越过日历首尾时退回按完整交易日折算，只用来比较先后。
+func (a stockAxis) firstBar(index int64) int64 {
+	if a.session != nil {
+		if first, _, ok := a.session.dayBars(index); ok {
+			return first
+		}
+	}
+	return index * a.perDay
+}
+
+func (a stockAxis) lastBar(index int64) int64 {
+	if a.session != nil {
+		if _, last, ok := a.session.dayBars(index); ok {
+			return last
+		}
+	}
+	return index*a.perDay + a.perDay - 1
+}
 
 // anchorBar 把 holding.anchor 换成 bar 序号：交易日期取该日第一根；RFC3339 时刻必须恰好是某根的 bar_start。
 func anchorBar(calendarID, frequency string, axis dayAxis, text string) (int64, error) {
@@ -237,7 +266,7 @@ func checkCalendarDays(axis dayAxis, holding *dsl.Holding) error {
 	limit := stock.calendar.MaxPeriodTradingDays(period)
 	for _, day := range holding.Days {
 		if day > limit || -day > limit {
-			return fmt.Errorf("holding.days 的 %d 在 A 股交易日历上不存在：一%s最多 %d 个交易日，这个批次永远不会重建", day, name, limit)
+			return fmt.Errorf("holding.days 的 %d 在%s交易日历上不存在：一%s最多 %d 个交易日，这个批次永远不会重建", day, stock.market.spacedName(), name, limit)
 		}
 	}
 	return nil

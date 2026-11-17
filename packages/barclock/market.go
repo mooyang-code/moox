@@ -18,14 +18,17 @@ type Market struct {
 	CalendarID string
 	Timezone   string
 	Sessions   []string
+	// Name 是给人看的市场名（“A 股”“港股”），ZoneName 是给人看的时区名（“上海”“香港”）；写进报错与周期标识。
+	Name     string
+	ZoneName string
 }
 
 // 当前登记的市场：空间 ID 即市场 ID。
 var markets = map[string]Market{
 	"crypto":  {ID: "crypto", Alignment: AlignmentEpochUTC},
-	"stockcn": {ID: "stockcn", Alignment: AlignmentSession, CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}},
-	"stockhk": {ID: "stockhk", Alignment: AlignmentSession, CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: []string{"09:30-12:00", "13:00-16:00"}},
-	"stockus": {ID: "stockus", Alignment: AlignmentSession, CalendarID: "us_stock", Timezone: "America/New_York", Sessions: []string{"09:30-16:00"}},
+	"stockcn": {ID: "stockcn", Alignment: AlignmentSession, CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, Name: "A 股", ZoneName: "上海"},
+	"stockhk": {ID: "stockhk", Alignment: AlignmentSession, CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: []string{"09:30-12:00", "13:00-16:00"}, Name: "港股", ZoneName: "香港"},
+	"stockus": {ID: "stockus", Alignment: AlignmentSession, CalendarID: "us_stock", Timezone: "America/New_York", Sessions: []string{"09:30-16:00"}, Name: "美股", ZoneName: "纽约"},
 }
 
 // Markets 返回全部已登记的市场，按 ID 排序。
@@ -45,6 +48,42 @@ func MarketFor(id string) (Market, error) {
 		return Market{}, fmt.Errorf("%w：%q 没有登记交易日历，不能合成", ErrUnknownMarket, id)
 	}
 	return market, nil
+}
+
+// MarketForCalendar 按交易日历 ID 返回使用它的 session 市场（cn_stock → stockcn）；没有市场使用这份日历时 ok 为假。
+func MarketForCalendar(calendarID string) (Market, bool) {
+	calendarID = strings.ToLower(strings.TrimSpace(calendarID))
+	if calendarID == "" {
+		return Market{}, false
+	}
+	for _, market := range Markets() {
+		if market.Alignment == AlignmentSession && market.CalendarID == calendarID {
+			return market, true
+		}
+	}
+	return Market{}, false
+}
+
+// RegularClose 返回 session 市场完整交易日的收市时刻（距本地零点的时长），即最后一个交易时段的收盘。
+func (m Market) RegularClose() (time.Duration, error) {
+	spans, err := parseSpans(m.Sessions)
+	if err != nil {
+		return 0, err
+	}
+	return spans[len(spans)-1].close, nil
+}
+
+// FullDayBuckets 返回 session 市场完整交易日（不提前收市）一天的日内桶数；周期不整除交易时段时按能放下的整根数算。
+func (m Market) FullDayBuckets(period time.Duration) int {
+	spans, err := parseSpans(m.Sessions)
+	if err != nil || period <= 0 {
+		return 0
+	}
+	total := 0
+	for _, item := range spans {
+		total += int(item.length() / period)
+	}
+	return total
 }
 
 // Clock 返回该市场某个周期的时钟。

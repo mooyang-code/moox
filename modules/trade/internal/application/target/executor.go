@@ -595,7 +595,7 @@ func (e *Executor) loadMembers(
 					return nil, parseErr
 				}
 				sellable[instrumentID] = sellable[instrumentID].Add(available)
-				if exchange.RuleFor(instruments[instrumentID].MarketType).T1 {
+				if instrument := instruments[instrumentID]; exchange.RuleAt(instrument.Exchange, instrument.MarketType).T1 {
 					locked, lockedErr := shared.ParseDecimal(balance.Locked)
 					if lockedErr != nil {
 						locked = shared.Zero()
@@ -1022,7 +1022,7 @@ func (e *Executor) checkCandidate(
 		return candidateCheck{}, placement{}, true, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
 	}
 	// 停牌、涨停时买、跌停时卖：整个标的顺延，不换成员（停牌和涨跌停是标的本身的状态）。
-	if exchange.RuleFor(candidate.instrument.MarketType).PriceLimits {
+	if exchange.RuleFor(candidate.instrument.MarketType).QuoteGuards {
 		if reason := deferralReason(laneAction{instrument: candidate.instrument, delta: candidate.delta}, quote); reason != "" {
 			return candidateCheck{}, placement{deferReason: reason}, true, nil
 		}
@@ -1191,6 +1191,8 @@ func (e *Executor) submitCandidate(
 		limit = ClampToPriceBand(limit, CageBasis(quote, spec.Side), spec.Side, candidate.instrument)
 		// 涨跌停是绝对价：截在涨停价、跌停价之间（A 股；没有涨跌停的市场原样返回）。
 		limit = ClampToPriceLimits(limit, quote)
+		// 按价位分档的场所（港股）：限价对齐到价格所在档位的最小价位，买入向上、卖出向下。
+		limit = exchange.RuleAt(candidate.instrument.Exchange, candidate.instrument.MarketType).SnapPrice(limit, spec.Side)
 		spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
 	}
 	if candidate.resting {

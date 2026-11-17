@@ -7,7 +7,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
 
-func TestStockFee(t *testing.T) {
+func TestAShareFee(t *testing.T) {
 	rate := shared.MustDecimal("0.00025")
 	for _, tc := range []struct {
 		side     Side
@@ -20,12 +20,12 @@ func TestStockFee(t *testing.T) {
 		{SideSell, "1000000", "760"}, // 再加印花税 500
 		{SideBuy, "0", "0"},          // 没有成交不收最低佣金
 	} {
-		if got := StockFee(tc.side, shared.MustDecimal(tc.notional), rate).String(); got != tc.want {
-			t.Fatalf("StockFee(%s, %s) = %s，期望 %s", tc.side, tc.notional, got, tc.want)
+		if got := AShareFee(tc.side, shared.MustDecimal(tc.notional), rate).String(); got != tc.want {
+			t.Fatalf("AShareFee(%s, %s) = %s，期望 %s", tc.side, tc.notional, got, tc.want)
 		}
 	}
-	if got := StockBuyCost(shared.MustDecimal("1000"), rate).String(); got != "1005.01" {
-		t.Fatalf("StockBuyCost = %s", got)
+	if got := RuleAt(ExchangeAShare, MarketTypeStock).BuyCost(shared.MustDecimal("1000"), rate).String(); got != "1005.01" {
+		t.Fatalf("A 股买入花费 = %s", got)
 	}
 }
 

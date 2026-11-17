@@ -20,7 +20,9 @@ import (
 )
 
 const (
-	fakeExchangeName = exchange.Exchange("FAKE_EXCHANGE")
+	// 假券商用 A 股的场所名：T+1、费用这些各场所不同的规则按“场所 + 市场”取（exchange.RuleAt），场所按市场命名、不按券商命名，
+	// 换一家券商接 A 股只注册适配器和描述信息，规则不用再登记。
+	fakeExchangeName = exchange.ExchangeAShare
 	fakeInstrument   = "600519.XSHG"
 )
 

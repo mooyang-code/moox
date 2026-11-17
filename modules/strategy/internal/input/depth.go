@@ -59,10 +59,10 @@ func CoverageBounds(view ViewInfo, resolved Resolved, now time.Time) (Bounds, er
 	if to.Before(from) {
 		// 日历规整后最早一根晚于最晚一根：索引里的行之间没有一个完整的周期。
 		if stockDaily(resolved.Calendar, resolved.Bar) {
-			return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）都不在 A 股交易日上", label(view.IndexedFrom), label(view.IndexedTo))
+			return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）都不在%s交易日上", label(view.IndexedFrom), label(view.IndexedTo), loadedSessionMarket(resolved.Calendar).spacedName())
 		}
 		if stockIntraday(resolved.Calendar, resolved.Bar) {
-			return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）都不在 A 股交易时段的 bar 上", label(view.IndexedFrom), label(view.IndexedTo))
+			return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）都不在%s交易时段的 bar 上", label(view.IndexedFrom), label(view.IndexedTo), loadedSessionMarket(resolved.Calendar).spacedName())
 		}
 		return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）没有落在完整的 bar 上", label(view.IndexedFrom), label(view.IndexedTo))
 	}
@@ -93,9 +93,9 @@ func checkStockCoverageKey(at time.Time, resolved Resolved) error {
 	return checkStockRowKey(at)
 }
 
-// barsBeyondStockCalendar 在 now 已过 A 股内嵌日历最后一天的收盘时，返回行键 at 晚于日历最后一天的最多根数：自然日数
+// barsBeyondStockCalendar 在 now 已过股票市场内嵌日历最后一天的收盘时，返回行键 at 晚于日历最后一天的最多根数：自然日数
 // （不超过 now 当天）× 每个交易日的根数（日线 1）；其余情况为 0。now 还在日历之内时，日历之外的行只能是误写的未来数据，
-// 不算超出日历。日线与日内都在 15:00 收盘。
+// 不算超出日历。日线与日内都在当天的收盘时刻收盘。
 func barsBeyondStockCalendar(resolved Resolved, at, now time.Time) int {
 	perDay := 1
 	if !stockDaily(resolved.Calendar, resolved.Bar) {
@@ -104,13 +104,14 @@ func barsBeyondStockCalendar(resolved Resolved, at, now time.Time) int {
 		}
 		perDay = TradingDayBars(resolved.Calendar, resolved.Bar)
 	}
-	calendar, location, err := stockCalendar()
-	if err != nil {
+	market := loadedSessionMarket(resolved.Calendar)
+	if market == nil {
 		return 0
 	}
-	last := calendar.LastDate()
+	location := market.location
+	last := market.calendar.LastDate()
 	lastMidnight := time.Date(last.Year(), last.Month(), last.Day(), 0, 0, 0, 0, location)
-	if !now.After(lastMidnight.Add(15 * time.Hour)) {
+	if !now.After(market.closeAt(last)) {
 		return 0
 	}
 	day, err := localDay(at, location)

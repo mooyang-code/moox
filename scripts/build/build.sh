@@ -8,7 +8,11 @@ VERSION="${VERSION:-dev}"
 BUILD_TIME="$(date +"%Y-%m-%d_%H:%M:%S")"
 GIT_COMMIT="${GIT_COMMIT:-$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 BIN_DIR="${BIN_DIR:-${ROOT}/bin}"
-LDFLAGS="-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}"
+# 版本号写两处：main.Version（有这个变量的 main 包：CLI、因子引擎、归档 worker 等）和 packages/report.BuildVersion
+# （各组件经 report 上报给 Monitor 的版本；tRPC 服务的 main 包没有 Version 变量，只写前者时它们上报的都是 dev）。
+# -X 指向没有链接进来的包或不存在的变量时会被忽略，所以两项对所有目标都带上。
+REPORT_VERSION_VAR="github.com/mooyang-code/moox/packages/report.BuildVersion"
+LDFLAGS="-X main.Version=${VERSION} -X ${REPORT_VERSION_VAR}=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}"
 # GO_STRIP=1 去掉符号表与调试信息（发布产物用，体积约减半；panic 堆栈仍然完整）。
 if [[ "${GO_STRIP:-}" == "1" ]]; then LDFLAGS="-s -w ${LDFLAGS}"; fi
 TARGET_GOOS="${TARGET_GOOS:-${GOOS:-$(go env GOOS)}}"

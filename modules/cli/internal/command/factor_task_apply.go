@@ -389,7 +389,9 @@ func newFactorTaskApplyCommand() *cobra.Command {
 - 线上没有的新建；已有且内容相同的算已存在；
 - 已有但内容不同（定义的名称、表达式或分类，任务的空间、源数据集、频率或名称，成员的状态或可变成员的默认参数）时，逐项列出差异，一项都不写，退出码非 0；
 - 线上任务里有、文件里没有的成员只报告，不移除。
-导入前按 moox.toml 的 [storage_retention] 核对：保留期必须装得下因子的最大回看根数。逐项结果打到标准错误，摘要（JSON）打到标准输出。`,
+导入前按 moox.toml 的 [storage_retention] 核对：保留期必须装得下因子的最大回看根数。逐项结果打到标准错误，摘要（JSON）打到标准输出。
+新建的任务会建出一个结果数据集；它还没有归档任务，装了数据归档时 Monitor 会报“未归档的数据集”。命令结束时逐个给出
+建归档任务的命令（摘要的 next_steps），不代建：moox-cli archive tasks create --space-id <空间> --dataset-id <结果数据集>。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
@@ -464,6 +466,8 @@ type setupFactorSummary struct {
 	Items []setupFactorItem `json:"items,omitempty"`
 	// Warnings 是配置关联的提醒，不阻止导入。
 	Warnings []string `json:"warnings,omitempty"`
+	// NextSteps 是导入后要接着做的事：新建任务的结果数据集还没有归档任务，给出建归档任务的命令。
+	NextSteps []string `json:"next_steps,omitempty"`
 }
 
 type setupInitFactor interface {
@@ -546,6 +550,7 @@ type factorAPIResponse struct {
 		Freq            string `json:"freq"`
 		Status          string `json:"status"`
 		BoundInstanceID string `json:"bound_instance_id"`
+		ResultDatasetID string `json:"result_dataset_id"`
 	} `json:"factor_task"`
 	// Members 是 GetFactorTask 返回的任务成员；Member 是 AddTaskMember、SetTaskMemberStatus 返回的成员。
 	Members    []factorAPIMember   `json:"members"`
@@ -618,6 +623,7 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 	}
 	err = r.write(ctx, writes, &summary)
 	r.reportAll(summary.Items)
+	r.reportNextSteps(summary.NextSteps)
 	return summary, err
 }
 
@@ -859,6 +865,9 @@ func (r *remoteSetupFactor) write(ctx context.Context, writes factorWrites, summ
 			}
 			if !write.resume {
 				summary.TasksCreated++
+				if step := archiveTaskNextStep(task, created.FactorTask.ResultDatasetID); step != "" {
+					summary.NextSteps = append(summary.NextSteps, step)
+				}
 			}
 		}
 		for _, planned := range write.members {
@@ -895,6 +904,29 @@ func (r *remoteSetupFactor) write(ctx context.Context, writes factorWrites, summ
 		}
 	}
 	return nil
+}
+
+// archiveTaskNextStep 是新建因子任务后的提示：结果数据集是有限保留期的时序数据集，装了数据归档（archive-mgr）而没给它建
+// 归档任务时，Monitor 会立刻报 critical 的“未归档的数据集”。归档任务要用户自己决定建不建（目录、回补范围），这里只给出命令，不代建。
+// 响应里没有结果数据集 ID（老版本的 FactorMgr）时不提示。
+func archiveTaskNextStep(task setupFactorTask, resultDatasetID string) string {
+	if resultDatasetID == "" {
+		return ""
+	}
+	return fmt.Sprintf("因子任务 %s 的结果数据集 %s 还没有归档任务：装了数据归档时 Monitor 会报“未归档的数据集”，过保留期的结果会被删除。"+
+		"要归档就运行 moox-cli archive tasks create --space-id %s --dataset-id %s",
+		task.TaskID, resultDatasetID, task.SpaceID, resultDatasetID)
+}
+
+// reportNextSteps 把导入后的下一步逐行打到 out（默认 stderr）。
+func (r *remoteSetupFactor) reportNextSteps(steps []string) {
+	out := r.out
+	if out == nil {
+		out = os.Stderr
+	}
+	for _, step := range steps {
+		fmt.Fprintln(out, "下一步："+step)
+	}
 }
 
 var factorItemLabels = map[string]string{itemExists: "已存在", itemCreated: "新建", itemConflict: "与线上不同", itemOrphan: "文件里没有", itemNotWritten: "线上没有（因有冲突未写入）", itemEnabled: "接着启用"}

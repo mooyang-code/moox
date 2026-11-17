@@ -83,7 +83,7 @@ func normalQuote(now time.Time) execution.MarketQuote {
 	}
 }
 
-// 模拟盘 A 股买单的预留 = 成交额 + StockFee（佣金最低 5 元、过户费）：和撮合扣费同一个函数。
+// 模拟盘 A 股买单的预留 = 成交额 + AShareFee（佣金最低 5 元、过户费）：和撮合扣费同一个函数。
 func TestStockBuyReservationUsesStockFee(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	validation, err := stockValidator("0", normalQuote(now), now).Validate(context.Background(), "space-1", stockSpec(exchange.SideBuy, "100", "10.2", now))
@@ -91,7 +91,7 @@ func TestStockBuyReservationUsesStockFee(t *testing.T) {
 	require.Equal(t, "CNY", validation.ReservedAsset)
 	// 成交额 1020：佣金 0.255 不足 5 元按 5 元，过户费 0.0102。
 	require.Equal(t, "1025.0102", validation.ReservedQuantity.String())
-	require.Equal(t, exchange.StockBuyCost(shared.MustDecimal("1020"), shared.MustDecimal("0.00025")).String(), validation.ReservedQuantity.String())
+	require.Equal(t, exchange.RuleAt(exchange.ExchangeAShare, exchange.MarketTypeStock).BuyCost(shared.MustDecimal("1020"), shared.MustDecimal("0.00025")).String(), validation.ReservedQuantity.String())
 }
 
 // 卖出数量要么满足整手规则，要么卖完后余下的持仓满足整手规则（零股一次卖完）。

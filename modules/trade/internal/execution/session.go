@@ -9,8 +9,9 @@ import (
 // TradingSession 是场所的交易时段。没有登记时段的场所（加密货币）全天交易。
 //
 // 有两种口径：
-//   - 市场时段（InSession）：交易所撮合的时段，A 股是 09:30-11:30、13:00-15:00。报价新鲜度、模拟撮合、收盘撤单按它判断。
-//   - 下单时段（CanOrder）：Trade 自己发新单的时段，A 股在 14:57 截止（之后是收盘集合竞价，撤不了单）。
+//   - 市场时段（InSession）：交易所撮合的时段，A 股是 09:30-11:30、13:00-15:00，港股是 09:30-12:00、13:00-16:00
+//     （半日市只有上午）。报价新鲜度、模拟撮合、收盘撤单按它判断。
+//   - 下单时段（CanOrder）：Trade 自己发新单的时段，A 股在 14:57 截止（之后是收盘集合竞价，撤不了单）；港股与市场时段相同。
 type TradingSession interface {
 	// InSession 报告 t 是否在市场时段内；交易日历不覆盖 t 时按不在时段内处理。
 	InSession(t time.Time) bool
@@ -55,6 +56,18 @@ func SessionHours(exchanges ExchangeCatalog, name string) string {
 		return ""
 	}
 	return descriptor.SessionHours
+}
+
+// InstrumentScope 返回场所登记的标的范围说明（标的表不是全市场时才有），没有登记时为空串。
+func InstrumentScope(exchanges ExchangeCatalog, name string) string {
+	if exchanges == nil {
+		return ""
+	}
+	descriptor, ok := exchanges.Descriptor(exchange.Exchange(name))
+	if !ok {
+		return ""
+	}
+	return descriptor.InstrumentScope
 }
 
 // CanOrder 报告账户所在场所当前能否发新单；没有登记时段的场所全天可以。

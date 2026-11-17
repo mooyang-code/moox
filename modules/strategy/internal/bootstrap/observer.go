@@ -272,13 +272,13 @@ func (o *instanceObserver) graceNewInstancesLocked(ctx context.Context, instance
 	}
 }
 
-// loadBases 为还没有载入过基准的 A 股实例从库里取最近处理的一根与最近一个 ok 的一根（不分会话）：进程重启或重新启用后，
+// loadBases 为还没有载入过基准的股票市场实例从库里取最近处理的一根与最近一个 ok 的一根（不分会话）：进程重启或重新启用后，
 // Monitor 里上次运行与成功的时间仍在，期望间隔要以同样的基准计算，否则周末重启后周一跳过一根就会报 success stale。
 // 与进程内已记下的基准取较晚者（重启后第一批积压事件可能先于第一次刷新到达）；读取失败时留到下一次刷新。
 func (o *instanceObserver) loadBases(ctx context.Context, instances []store.Instance) {
 	for _, instance := range instances {
 		resolved, err := input.ParseResolved(instance.ResolvedJSON)
-		if err != nil || !strings.EqualFold(strings.TrimSpace(resolved.Calendar), "cn_stock") {
+		if err != nil || !input.SessionCalendar(resolved.Calendar) {
 			continue
 		}
 		o.mu.Lock()
@@ -311,12 +311,12 @@ const (
 	successMissedIntervals = 3
 )
 
-// runIntervalLocked 返回实例的期望运行间隔。crypto 是 bar 时长。A 股相邻交易日之间隔着周末与长假，按交易日折算：
+// runIntervalLocked 返回实例的期望运行间隔。crypto 是 bar 时长。股票市场相邻交易日之间隔着周末与长假，按交易日折算：
 // 运行口径取“最近处理的一根到其后第 2 根”的间隔的一半，成功口径取“最近一个 ok 的一根到其后第 3 根”的间隔的三分之一，
 // 两者取较大者——Monitor 的两种滞后都乘同一个间隔，只按运行口径时，周末后第一根跳过会让间隔缩短、立即报 success
 // stale。还没处理过时以最近闭合一根的上一根为基准（偏宽），还没有 ok 时成功口径与运行口径同一基准。调用方持有 o.mu。
 func (o *instanceObserver) runIntervalLocked(instanceID, calendar, bar string, nominal time.Duration) time.Duration {
-	if !strings.EqualFold(strings.TrimSpace(calendar), "cn_stock") {
+	if !input.SessionCalendar(calendar) {
 		return nominal
 	}
 	reference, ok := o.lastBarEnd[instanceID]
@@ -432,8 +432,8 @@ func (o *instanceObserver) accumulatingLocked(instance store.Instance, bar strin
 		if expectation, valid := datasetKey(instance, bar); valid {
 			limit = max(limit, warmupPeriods*expectation.Interval)
 		}
-		// A 股攒够 warmupPeriods 根要跨午休、隔夜或周末：按交易日历往后数，而不是按墙钟。
-		if resolved, err := input.ParseResolved(instance.ResolvedJSON); err == nil && strings.EqualFold(strings.TrimSpace(resolved.Calendar), "cn_stock") {
+		// 股票市场攒够 warmupPeriods 根要跨午休、隔夜或周末：按交易日历往后数，而不是按墙钟。
+		if resolved, err := input.ParseResolved(instance.ResolvedJSON); err == nil && input.SessionCalendar(resolved.Calendar) {
 			if period, err := input.ClosedPeriod(resolved.Calendar, bar, since); err == nil {
 				if after, err := input.AdvanceBarEnd(resolved.Calendar, bar, period.BarEnd, warmupPeriods); err == nil {
 					limit = max(limit, after.Sub(since))
