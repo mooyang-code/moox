@@ -6,7 +6,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
 
-// 港股费用各项（佣金费率 0.03%）：印花税双边、向上取整到元、最低 1 港元；结算费最低 2、最高 100 港元；佣金最低 3 港元。
+// 港股费用各项（佣金费率 0.03%）：印花税双边、向上取整到元、最低 1 港元；股份交收费 0.0042%、没有最低最高；佣金最低 3 港元。
 func TestHKFee(t *testing.T) {
 	rate := shared.MustDecimal("0.0003")
 	for _, tc := range []struct {
@@ -14,16 +14,16 @@ func TestHKFee(t *testing.T) {
 		notional string
 		want     string
 	}{
-		// 佣金 11.28 + 印花税 ceil(37.6)=38 + 交易费 2.1244 + 证监会征费 1.0152 + 会财局征费 0.0564 + 结算费 0.752→2
-		{"一手腾讯", "37600", "54.476"},
-		// 佣金 0.15→3 + 印花税 0.5→1 + 0.02825 + 0.0135 + 0.00075 + 结算费 0.01→2
-		{"各项都取最低", "500", "6.0425"},
+		// 佣金 11.28 + 印花税 ceil(37.6)=38 + 交易费 2.1244 + 证监会征费 1.0152 + 会财局征费 0.0564 + 交收费 1.5792
+		{"一手腾讯", "37600", "54.0552"},
+		// 佣金 0.15→3 + 印花税 0.5→1 + 0.02825 + 0.0135 + 0.00075 + 交收费 0.021
+		{"佣金和印花税取最低", "500", "4.0635"},
 		// 印花税正好 1 港元不再进位：3 + 1 + 0.0565 + 0.027 + 0.0015 + 2
-		{"印花税正好整元", "1000", "6.085"},
+		{"印花税正好整元", "1000", "4.127"},
 		// 印花税 1.001 进到 2：3 + 2 + 0.0565565 + 0.027027 + 0.0015015 + 2
-		{"印花税向上取整", "1001", "7.085085"},
-		// 佣金 3000 + 印花税 10000 + 565 + 270 + 15 + 结算费 200→100
-		{"结算费封顶", "10000000", "13950"},
+		{"印花税向上取整", "1001", "5.127127"},
+		// 佣金 3000 + 印花税 10000 + 565 + 270 + 15 + 交收费 420（不封顶）
+		{"大额成交交收费不封顶", "10000000", "14270"},
 		{"没有成交不收最低费用", "0", "0"},
 	} {
 		for _, side := range []Side{SideBuy, SideSell} {
@@ -33,7 +33,7 @@ func TestHKFee(t *testing.T) {
 		}
 	}
 	rule := RuleAt(ExchangeHKEX, MarketTypeStock)
-	if got := rule.BuyCost(shared.MustDecimal("37600"), rate).String(); got != "37654.476" {
+	if got := rule.BuyCost(shared.MustDecimal("37600"), rate).String(); got != "37654.0552" {
 		t.Fatalf("港股买入花费 = %s", got)
 	}
 }
@@ -90,7 +90,7 @@ func TestRuleAtSeparatesStockExchanges(t *testing.T) {
 		t.Fatalf("港股：T+0、没有价格笼子、按价位分档：T1=%v cage=%d", hk.T1, hk.PriceCageTicks)
 	}
 	rate, notional := shared.MustDecimal("0.0003"), shared.MustDecimal("1000")
-	if a, h := ashare.Fee(SideBuy, notional, rate).String(), hk.Fee(SideBuy, notional, rate).String(); a != "5.01" || h != "6.085" {
+	if a, h := ashare.Fee(SideBuy, notional, rate).String(), hk.Fee(SideBuy, notional, rate).String(); a != "5.01" || h != "4.127" {
 		t.Fatalf("两个场所的费用函数不同：A 股 %s、港股 %s", a, h)
 	}
 	// 没有单独登记的场所只有市场类型共有的规则；未知市场是零值。

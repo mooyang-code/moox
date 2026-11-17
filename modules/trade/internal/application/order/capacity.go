@@ -88,7 +88,7 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 }
 
 // stockBuyCapacity 给模拟盘里有自己费用函数的场所（A 股、港股）的买单把容量收到费用也付得起：佣金有最低值（港股还有
-// 最低结算费、印花税取整），花费和数量不成正比，按比例算出的数量可能差几块钱，这里按场所的费用函数逐个步长往下减到
+// 印花税取整），花费和数量不成正比，按比例算出的数量可能差几块钱，这里按场所的费用函数逐个步长往下减到
 // 付得起（和预留、扣费用同一个函数）。
 func stockBuyCapacity(validation Validation, spec orderdomain.OrderSpec, quantity, step, available shared.Decimal) shared.Decimal {
 	account := validation.Account

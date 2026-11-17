@@ -150,7 +150,7 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	notional := price.Mul(shared.MustDecimal(candidate.Quantity))
 	fee = notional.Mul(feeRate)
 	if rule.Fee != nil {
-		// 场所有自己的费用函数（A 股：最低佣金、卖出印花税、过户费；港股：最低佣金、双边印花税、交易费、征费、结算费）：
+		// 场所有自己的费用函数（A 股：最低佣金、卖出印花税、过户费；港股：最低佣金、双边印花税、交易费、征费、股份交收费）：
 		// 佣金比例取 taker 费率字段，和下单预留、下单容量用同一个函数。
 		takerRate, rateErr := shared.ParseDecimal(paperConfig.TakerFeeRate)
 		if rateErr != nil || takerRate.IsNegative() {

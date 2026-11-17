@@ -72,8 +72,8 @@ func TestHKBuyReservationUsesHKFee(t *testing.T) {
 	validation, err := hkValidator("0", hkOrderQuote(now), now).Validate(context.Background(), "space-1", hkSpec(exchange.SideBuy, "400", "139", now))
 	require.NoError(t, err)
 	require.Equal(t, "HKD", validation.ReservedAsset)
-	// 成交额 55600：佣金 16.68 + 印花税 ceil(55.6)=56 + 交易费 3.1414 + 征费 1.5012、0.0834 + 结算费 1.112→2。
-	require.Equal(t, "55679.406", validation.ReservedQuantity.String())
+	// 成交额 55600：佣金 16.68 + 印花税 ceil(55.6)=56 + 交易费 3.1414 + 征费 1.5012、0.0834 + 交收费 2.3352。
+	require.Equal(t, "55679.7412", validation.ReservedQuantity.String())
 	require.Equal(t, exchange.RuleAt(exchange.ExchangeHKEX, exchange.MarketTypeStock).BuyCost(shared.MustDecimal("55600"), shared.MustDecimal("0.0003")).String(), validation.ReservedQuantity.String())
 }
 
@@ -101,15 +101,15 @@ func TestHKQuantityAndHaltValidation(t *testing.T) {
 	require.NotErrorIs(t, err, ErrPriceLimit, "港股没有涨跌停价")
 }
 
-// 下单容量：最低佣金、最低结算费和印花税取整让花费和数量不成正比，容量要收到连费用一起付得起。
+// 下单容量：最低佣金和印花税取整让花费和数量不成正比，容量要收到连费用一起付得起。
 func TestHKBuyCapacityCoversMinimumFees(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	validation := Validation{Account: hkAccount("0"), Instrument: hkInstrumentForOrder(), ReservedQuantity: shared.MustDecimal("1")}
 	spec := hkSpec(exchange.SideBuy, "800", "10", now)
-	// 800 股 × 10 = 8000：佣金 2.4→3 + 印花税 8 + 0.452 + 0.216 + 0.012 + 结算费 0.16→2 = 13.68，共 8013.68。
-	got := stockBuyCapacity(validation, spec, shared.MustDecimal("800"), shared.MustDecimal("400"), shared.MustDecimal("8013.67"))
+	// 800 股 × 10 = 8000：佣金 2.4→3 + 印花税 8 + 0.452 + 0.216 + 0.012 + 交收费 0.336 = 12.016，共 8012.016。
+	got := stockBuyCapacity(validation, spec, shared.MustDecimal("800"), shared.MustDecimal("400"), shared.MustDecimal("8012.015"))
 	require.Equal(t, "400", got.String())
-	got = stockBuyCapacity(validation, spec, shared.MustDecimal("800"), shared.MustDecimal("400"), shared.MustDecimal("8013.68"))
+	got = stockBuyCapacity(validation, spec, shared.MustDecimal("800"), shared.MustDecimal("400"), shared.MustDecimal("8012.016"))
 	require.Equal(t, "800", got.String())
 }
 

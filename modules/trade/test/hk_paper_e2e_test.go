@@ -233,7 +233,7 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	require.True(t, limit.Cmp(decimal("376")) >= 0)
 	require.True(t, limit.Div(exchange.HKPriceTick(limit)).IsInteger(), "限价 %s 要落在价位表上（200～500 港元一档 0.2）", limit)
 
-	// 成交：按卖一 376 成交 200 股，费用按港股规则（佣金 22.56 + 印花税 76 + 交易费 4.2488 + 征费 2.0304、0.1128 + 结算费 2）。
+	// 成交：按卖一 376 成交 200 股，费用按港股规则（佣金 22.56 + 印花税 76 + 交易费 4.2488 + 征费 2.0304、0.1128 + 交收费 3.1584）。
 	match()
 	buy = orders()[0]
 	require.Equal(t, "FILLED", buy.State)
@@ -242,15 +242,15 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fills, 1)
 	require.Equal(t, "376", decimal(fills[0].Price).String())
-	require.Equal(t, "106.952", decimal(fills[0].Fee).String())
+	require.Equal(t, "108.1104", decimal(fills[0].Fee).String())
 	require.Equal(t, "HKD", fills[0].FeeAsset)
 
-	// 持仓与现金：200 股当日就可卖（T+0）；现金 = 1000000 − 75200 − 106.952。
+	// 持仓与现金：200 股当日就可卖（T+0）；现金 = 1000000 − 75200 − 108.1104。
 	account := syncAccount()
 	holding := balance(account, "00700.XHKG")
 	require.Equal(t, "200", decimal(holding.Total).String())
 	require.Equal(t, "200", decimal(holding.Available).String(), "港股 T+0：当日买入可卖")
-	require.Equal(t, "924693.048", decimal(balance(account, "HKD").Total).String())
+	require.Equal(t, "924691.8896", decimal(balance(account, "HKD").Total).String())
 	current = converge()
 	require.Equal(t, targetapp.StatusConverged, current.Status, "不足一手的差额视为已满足")
 	require.Len(t, orders(), 1)
@@ -274,8 +274,8 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	match()
 	account = syncAccount()
 	require.True(t, decimal(balance(account, "00700.XHKG").Total).IsZero())
-	// 卖出按买一 375.8 成交：成交额 75160，费用 22.548 + 76 + 4.24654 + 2.02932 + 0.11274 + 2 = 106.9366（港股印花税买卖都收）。
-	require.Equal(t, "999746.1114", decimal(balance(account, "HKD").Total).String())
+	// 卖出按买一 375.8 成交：成交额 75160，费用 22.548 + 76 + 4.24654 + 2.02932 + 0.11274 + 3.15672 = 108.09332（港股印花税买卖都收）。
+	require.Equal(t, "999743.79628", decimal(balance(account, "HKD").Total).String())
 
 	// 流水：两笔成交各一条手续费，币种 HKD。
 	page, err := adapter.ListLedger(ctx, exchange.LedgerQuery{Start: now.Add(-time.Hour), End: now.Add(time.Hour), Limit: 10})
@@ -289,5 +289,5 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 		require.Equal(t, "00700.XHKG", entry.ExchangeSymbol)
 		fees[entry.Amount.String()] = true
 	}
-	require.Equal(t, map[string]bool{"-106.952": true, "-106.9366": true}, fees)
+	require.Equal(t, map[string]bool{"-108.1104": true, "-108.09332": true}, fees)
 }
